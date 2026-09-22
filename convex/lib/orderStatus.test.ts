@@ -2,6 +2,8 @@ import { describe, expect, test } from "vitest";
 import {
 	defaultStatusLabel,
 	displayStatusLabel,
+	FLOW_PRESETS,
+	orderFlowKind,
 	type OrderStatus,
 	resolveStatusLabel,
 	type ResolveOpts,
@@ -622,5 +624,69 @@ describe("displayStatusLabel — counter completion", () => {
 		expect(
 			displayStatusLabel({ status: "confirmed", source: "counter" }, "Confirmed"),
 		).toBe("Confirmed");
+	});
+});
+
+describe("event flow kind (`z8r3fdff9u`) — the registry's fourth entry", () => {
+	test("orderFlowKind: the frozen marker outranks the stored method", () => {
+		expect(orderFlowKind({ deliveryMethod: "delivery" })).toBe("delivery");
+		expect(orderFlowKind({ deliveryMethod: "self_collect" })).toBe(
+			"self_collect",
+		);
+		expect(orderFlowKind({ deliveryMethod: "booking" })).toBe("booking");
+		// An RSVP is STORED self_collect (venue pickup) — the marker decides.
+		expect(
+			orderFlowKind({ deliveryMethod: "self_collect", eventRsvp: true }),
+		).toBe("event");
+		expect(orderFlowKind({})).toBe("delivery");
+	});
+
+	test("an RSVP's pipeline is Confirmed → Checked In — no Packed, no Ready", () => {
+		const stages = synthesizeDefaultStages({ deliveryMethod: "event" });
+		expect(stages.map((s) => s.anchor)).toEqual(["confirmed", "delivered"]);
+		expect(stages.map((s) => s.label.en)).toEqual(["Confirmed", "Checked In"]);
+		expect(stages[1].label.ms).toBe("Daftar Masuk");
+	});
+
+	test("events never take configured custom stages (the booking rule)", () => {
+		const custom: OrderStage[] = [
+			{
+				id: "s1",
+				anchor: "packed",
+				label: { en: "Baking" },
+				sortOrder: 0,
+			},
+		];
+		const resolved = resolveStages({
+			orderStages: custom,
+			deliveryMethod: "event",
+		});
+		// Synthesized event stages, not the cake shop's flow.
+		expect(resolved.map((s) => s.anchor)).toEqual(["confirmed", "delivered"]);
+		// A delivery order still takes them — the gate is per kind.
+		expect(
+			resolveStages({ orderStages: custom, deliveryMethod: "delivery" }).map(
+				(s) => s.id,
+			),
+		).toEqual(["s1"]);
+	});
+
+	test("a checked-in RSVP sold at the counter reads Checked In, never Completed", () => {
+		expect(
+			displayStatusLabel(
+				{ status: "delivered", source: "counter", eventRsvp: true },
+				"Checked In",
+			),
+		).toBe("Checked In");
+		// The counter override itself is untouched for a plain counter sale.
+		expect(
+			displayStatusLabel({ status: "delivered", source: "counter" }, "Collected"),
+		).toBe("Completed");
+	});
+
+	test("FLOW_PRESETS carries the bulk-action skip list per kind", () => {
+		expect(FLOW_PRESETS.event.skippedAnchors).toEqual(["packed", "shipped"]);
+		expect(FLOW_PRESETS.booking.skippedAnchors).toEqual(["packed"]);
+		expect(FLOW_PRESETS.delivery.skippedAnchors).toEqual([]);
 	});
 });

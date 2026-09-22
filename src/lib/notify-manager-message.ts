@@ -8,6 +8,7 @@
 // point), omitted only for an order with no date.
 
 import { formatFulfilmentDateTime } from "../../convex/lib/fulfilmentDate";
+import { formatEventMoment } from "../../convex/lib/productEvent";
 import type { PickupSnapshot } from "../../convex/lib/whatsappCopy";
 import { formatPhone } from "./customer";
 import { formatPrice } from "./format";
@@ -22,6 +23,7 @@ export function buildNotifyManagerMessage({
 	currency,
 	fulfilmentDate,
 	fulfilmentTimeMinutes,
+	event,
 }: {
 	shortId: string;
 	location: PickupSnapshot;
@@ -37,23 +39,40 @@ export function buildNotifyManagerMessage({
 	currency: string;
 	fulfilmentDate?: number;
 	fulfilmentTimeMinutes?: number;
+	/** RSVP to a fixed-date event (`z8r3fdff9u`) — the message speaks guest
+	 * language: nothing is packed for collection, someone is coming. */
+	event?: { name: string; endDate?: number };
 }): string {
 	const lines: string[] = [];
-	lines.push(`📦 New pickup order ${shortId} — ${location.label}`);
-	if (fulfilmentDate !== undefined) {
-		const verb =
-			location.locationType === "drop_off" ? "Meet on" : "Collect on";
-		lines.push(
-			`${verb}: ${formatFulfilmentDateTime(fulfilmentDate, fulfilmentTimeMinutes)}`,
-		);
+	if (event) {
+		lines.push(`🎟️ New RSVP ${shortId} — ${event.name}`);
+		if (fulfilmentDate !== undefined) {
+			lines.push(
+				`Event: ${formatEventMoment({
+					date: fulfilmentDate,
+					timeMinutes: fulfilmentTimeMinutes,
+					endDate: event.endDate,
+				})} at ${location.label}`,
+			);
+		}
+	} else {
+		lines.push(`📦 New pickup order ${shortId} — ${location.label}`);
+		if (fulfilmentDate !== undefined) {
+			const verb =
+				location.locationType === "drop_off" ? "Meet on" : "Collect on";
+			lines.push(
+				`${verb}: ${formatFulfilmentDateTime(fulfilmentDate, fulfilmentTimeMinutes)}`,
+			);
+		}
 	}
+	const who = event ? "Guest" : "Customer";
 	const customerLine = customerName
 		? customerWaPhone
-			? `Customer: ${customerName} (${formatPhone(customerWaPhone)})`
-			: `Customer: ${customerName}`
+			? `${who}: ${customerName} (${formatPhone(customerWaPhone)})`
+			: `${who}: ${customerName}`
 		: customerWaPhone
-			? `Customer: ${formatPhone(customerWaPhone)}`
-			: "Customer: Anonymous";
+			? `${who}: ${formatPhone(customerWaPhone)}`
+			: `${who}: Anonymous`;
 	lines.push(customerLine);
 	lines.push("");
 	lines.push("Items:");
@@ -68,6 +87,10 @@ export function buildNotifyManagerMessage({
 	lines.push("");
 	lines.push(`Total: ${formatPrice(total, currency)}`);
 	lines.push("");
-	lines.push("Please prepare for collection.");
+	lines.push(
+		event
+			? "Please add them to the guest list."
+			: "Please prepare for collection.",
+	);
 	return lines.join("\n");
 }

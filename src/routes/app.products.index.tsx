@@ -663,8 +663,28 @@ function ProductCard({
 				{/* Stock state as a colour word — the number a home seller actually
 				    protects. Archived rows use the slot for their status instead. */}
 				<span className="truncate text-[12.5px] font-semibold">
+					{/* An EVENT's third line is its date, not a stock word — the date
+					    is what the product IS, and it lives in the flexible left
+					    column so a long range truncates instead of crushing the
+					    name (the first cut put it in the shrink-0 chip column,
+					    which rendered the name at 0px). "Ended" keeps history
+					    legible; the storefront has already dropped the listing. */}
 					{!p.active ? (
 						<span className="font-normal text-muted-foreground">Archived</span>
+					) : p.event ? (
+						<span
+							className={`inline-flex max-w-full items-center gap-1 ${
+								isEventPassed(p.event)
+									? "font-normal text-muted-foreground"
+									: "text-accent-emphasis"
+							}`}
+						>
+							<CalendarClock className="size-3 shrink-0" aria-hidden />
+							<span className="truncate">
+								{isEventPassed(p.event) ? "Ended" : "Event"} ·{" "}
+								{formatEventBadge(p.event)}
+							</span>
+						</span>
 					) : outOfStock ? (
 						<span className="text-red-600 dark:text-red-400">Sold out</span>
 					) : lowStock ? (
@@ -677,25 +697,6 @@ function ProductCard({
 				</span>
 			</div>
 			<div className="flex shrink-0 flex-col items-end gap-1">
-				{/* The event marker leads the chip stack — it's what the product IS,
-				    where Min/Hidden are rules on it. Without this the list read
-				    "RM 0.00 · In stock" and the one product with a date attached was
-				    indistinguishable from a mispriced tin of biscuits. A finished
-				    event says "Ended" (seller lists keep history; the storefront has
-				    already dropped it). */}
-				{p.event ? (
-					<span
-						className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-							isEventPassed(p.event)
-								? "bg-muted text-muted-foreground"
-								: "bg-accent/15 text-accent-emphasis"
-						}`}
-					>
-						<CalendarClock className="size-3" aria-hidden />
-						{isEventPassed(p.event) ? "Ended" : "Event"} ·{" "}
-						{formatEventBadge(p.event)}
-					</span>
-				) : null}
 				{p.active && (p.minQuantity ?? 0) >= 2 ? (
 					// Minimum-order-quantity rule — flagged on the list so the seller
 					// can see at a glance which products carry it. See minOrderRules.

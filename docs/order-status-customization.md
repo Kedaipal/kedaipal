@@ -439,3 +439,17 @@ decisions/deviations recorded:
   rate-limit / per-tier cost work" resolved to one message per order, so the cap
   has nothing left to count. See _Phase 2 — as shipped → Limits_ and
   [`one-message-per-order.md`](./one-message-per-order.md).
+
+## Flow kinds (`z8r3fdff9u`)
+
+The resolvers are driven by `FLOW_PRESETS` in `orderStatus.ts` — one entry per
+`OrderFlowKind` (`delivery`, `self_collect`, `booking`, `event`) declaring the
+kind's label overrides, the anchors its synthesized pipeline skips, and
+whether configured custom stages apply. Booking (skip "Packed", fixed
+milestones) and event RSVPs (skip "Packed" **and** "Ready for Pickup":
+Confirmed → Checked In) both live there; bulk status actions read the same
+skip list and refuse-with-a-named-count instead of moving an order into a
+stage its kind doesn't have. An order's kind comes from `orderFlowKind(order)`
+— `deliveryMethod`, with the frozen `orders.eventRsvp` marker outranking it.
+Adding a kind = one registry entry; nothing else forks. Tagging *custom*
+stages per product kind is a ticketed follow-up.

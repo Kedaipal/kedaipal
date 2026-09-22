@@ -582,7 +582,10 @@ function OrderDetailRoute() {
 	const stages = resolveStages({
 		orderStages: order.orderStages,
 		labels: order.statusLabels,
-		deliveryMethod,
+		// An RSVP runs the event vocabulary: Confirmed → Checked In, no Packed,
+		// no Ready for Pickup — the pipeline header and the advance CTA both
+		// come from this list. `eventLocked` covers pre-flag rows too.
+		deliveryMethod: order.eventLocked ? "event" : deliveryMethod,
 		bookingPackaged: order.bookingPackaged,
 	});
 	const currentStage = resolveCurrentStage(
@@ -1704,15 +1707,19 @@ function OrderDetailRoute() {
 				!isDefaultedCounterDate(order) ? (
 					<div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 border-t border-border pt-3">
 						<span className="text-xs text-muted-foreground">
-							{isBooking
-								? "Check-in"
-								: isSelfCollect
-									? order.pickupSnapshot?.locationType === "drop_off"
-										? "Meet on"
-										: "Collect on"
-									: collectionService
-										? "Collect on"
-										: "Deliver on"}
+							{/* An RSVP's moment is the EVENT's — "Collect on" would
+							    misdescribe it, and the buyer's page says "Event" too. */}
+							{order.eventLocked
+								? "Event"
+								: isBooking
+									? "Check-in"
+									: isSelfCollect
+										? order.pickupSnapshot?.locationType === "drop_off"
+											? "Meet on"
+											: "Collect on"
+										: collectionService
+											? "Collect on"
+											: "Deliver on"}
 						</span>
 						<FulfilmentDateBadge
 							epoch={order.fulfilmentDate}
@@ -1722,6 +1729,14 @@ function OrderDetailRoute() {
 						{order.fulfilmentTimeMinutes !== undefined ? (
 							<span className="text-sm font-medium whitespace-nowrap">
 								{formatFulfilmentTime(order.fulfilmentTimeMinutes)}
+							</span>
+						) : null}
+						{/* A multi-day event names its LAST day here too — the buyer's
+						    page shows the whole range, and the seller must never know
+						    less than the guest. Read live off the product. */}
+						{order.eventLocked && order.eventEndDate !== undefined ? (
+							<span className="text-sm font-medium">
+								to {formatFulfilmentDate(order.eventEndDate)}
 							</span>
 						) : null}
 					</div>
@@ -1942,6 +1957,16 @@ function OrderDetailRoute() {
 					currency={order.currency}
 					fulfilmentDate={order.fulfilmentDate}
 					fulfilmentTimeMinutes={order.fulfilmentTimeMinutes}
+					event={
+						order.eventLocked
+							? {
+									// The frozen item name IS the event's name — an order
+									// holds at most one event product by construction.
+									name: order.items[0]?.name ?? "Event",
+									endDate: order.eventEndDate,
+								}
+							: undefined
+					}
 				/>
 			) : null}
 
@@ -2818,6 +2843,7 @@ function NotifyManagerCard({
 	currency,
 	fulfilmentDate,
 	fulfilmentTimeMinutes,
+	event,
 }: {
 	shortId: string;
 	location: PickupSnapshot;
@@ -2840,6 +2866,7 @@ function NotifyManagerCard({
 	currency: string;
 	fulfilmentDate?: number;
 	fulfilmentTimeMinutes?: number;
+	event?: { name: string; endDate?: number };
 }) {
 	const [copied, setCopied] = useState(false);
 	// Fetch live manager contact. Skipped when there's no pickupLocationId on
@@ -2868,6 +2895,7 @@ function NotifyManagerCard({
 		currency,
 		fulfilmentDate,
 		fulfilmentTimeMinutes,
+		event,
 	});
 
 	const notifyHref = hasManagerPhone

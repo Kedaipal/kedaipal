@@ -600,6 +600,151 @@ describe("event RSVP — the storefront hides a finished event", () => {
 	});
 });
 
+describe("event RSVP — its own status pipeline (`z8r3fdff9u` stages)", () => {
+	test("an RSVP is born with the frozen eventRsvp marker — both doors", async () => {
+		const t = setup();
+		const { asUser, retailer, pickupLocationId } = await seedStore(t);
+		const productId = await seedEventProduct(t, retailer._id);
+		const { shortId } = await rsvp(t, {
+			retailerId: retailer._id,
+			variantId: await variantFor(t, productId, "A"),
+			pickupLocationId,
+		});
+		expect((await orderByShortId(t, shortId))?.eventRsvp).toBe(true);
+
+		// Counter door stamps it too.
+		const { sessionId } = await asUser.mutation(
+			api.counterCheckout.bindSessionManualPhone,
+			{ waPhone: "60123456789", name: "Aina Hamzah" },
+		);
+		const counter = await asUser.mutation(
+			api.counterCheckout.createOrderFromSession,
+			{
+				sessionId,
+				items: [{ variantId: await variantFor(t, productId, "B"), quantity: 1 }],
+				paidInPerson: false,
+			},
+		);
+		expect((await orderByShortId(t, counter.shortId))?.eventRsvp).toBe(true);
+		// A plain sale is NOT marked — the marker means exactly one thing.
+		const plainId = await asUser.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Plain tote",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 1,
+			options: [],
+			variants: [{ optionValues: [], price: 1200, onHand: 5 }],
+		});
+		const plainVariant = await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", plainId))
+				.collect();
+			return rows[0]._id;
+		});
+		const { sessionId: s2 } = await asUser.mutation(
+			api.counterCheckout.bindSessionManualPhone,
+			{ waPhone: "60123456780", name: "Ben" },
+		);
+		const plain = await asUser.mutation(
+			api.counterCheckout.createOrderFromSession,
+			{
+				sessionId: s2,
+				items: [{ variantId: plainVariant, quantity: 1 }],
+				paidInPerson: true,
+			},
+		);
+		expect((await orderByShortId(t, plain.shortId))?.eventRsvp).toBeUndefined();
+	});
+
+	test("a FREE counter RSVP records NO payment, whatever the client sent", async () => {
+		// The round-2 live finding: RM0 RSVP rung up as "Paid now · Cash" showed
+		// "PAYMENT RECEIVED · Cash" directly under "Free order — there's nothing
+		// to collect". The server now refuses to write the contradiction.
+		const t = setup();
+		const { asUser, retailer } = await seedStore(t);
+		const productId = await seedEventProduct(t, retailer._id);
+		const { sessionId } = await asUser.mutation(
+			api.counterCheckout.bindSessionManualPhone,
+			{ waPhone: "60123456789", name: "Aina Hamzah" },
+		);
+		const { shortId } = await asUser.mutation(
+			api.counterCheckout.createOrderFromSession,
+			{
+				sessionId,
+				items: [{ variantId: await variantFor(t, productId, "A"), quantity: 1 }],
+				paidInPerson: true,
+				paymentMethod: "cash",
+			},
+		);
+		const order = await orderByShortId(t, shortId);
+		expect(order?.total).toBe(0);
+		expect(order?.paymentStatus).toBe("unpaid");
+		expect(order?.paymentMethod).toBeUndefined();
+		expect(order?.paymentReceivedAt).toBeUndefined();
+	});
+
+	test("the stepper advances Confirmed → Checked In — Packed never exists", async () => {
+		const t = setup();
+		const { asUser, retailer, pickupLocationId } = await seedStore(t);
+		const productId = await seedEventProduct(t, retailer._id);
+		const { shortId } = await rsvp(t, {
+			retailerId: retailer._id,
+			variantId: await variantFor(t, productId, "A"),
+			pickupLocationId,
+		});
+		const order = await orderByShortId(t, shortId);
+		if (!order) throw new Error("order missing");
+
+		// The event pipeline has exactly two stages, so the packed stage id the
+		// delivery flow would offer is UNKNOWN here — the vocabulary is real,
+		// not a relabel.
+		await expect(
+			asUser.mutation(api.orders.advanceToStage, {
+				orderId: order._id,
+				stageId: "default:packed",
+			}),
+		).rejects.toThrow(/unknown stage/i);
+
+		await asUser.mutation(api.orders.advanceToStage, {
+			orderId: order._id,
+			stageId: "default:delivered",
+		});
+		expect((await orderByShortId(t, shortId))?.status).toBe("delivered");
+	});
+
+	test("bulk actions skip an RSVP for stages its flow doesn't have — and say so", async () => {
+		const t = setup();
+		const { asUser, retailer, pickupLocationId } = await seedStore(t);
+		const productId = await seedEventProduct(t, retailer._id);
+		const { shortId } = await rsvp(t, {
+			retailerId: retailer._id,
+			variantId: await variantFor(t, productId, "A"),
+			pickupLocationId,
+		});
+		const order = await orderByShortId(t, shortId);
+		if (!order) throw new Error("order missing");
+
+		const res = await asUser.mutation(api.orders.bulkUpdateStatus, {
+			orderIds: [order._id],
+			status: "packed",
+		});
+		expect(res.updated).toBe(0);
+		expect(res.skipped).toBe(1);
+		expect(res.skippedNoSuchStage).toBe(1);
+		// Untouched — this storefront order was born pending and stays there.
+		expect((await orderByShortId(t, shortId))?.status).toBe("pending");
+
+		// Cancelling in bulk still works — cancellation belongs to every kind.
+		const cancel = await asUser.mutation(api.orders.bulkUpdateStatus, {
+			orderIds: [order._id],
+			status: "cancelled",
+		});
+		expect(cancel.updated).toBe(1);
+	});
+});
+
 describe("event RSVP — the other checkout doors", () => {
 	test("a claim link refuses an event product at the seller's door", async () => {
 		const t = setup();

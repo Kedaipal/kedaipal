@@ -577,7 +577,10 @@ function TrackingRoute() {
 	const stages = resolveStages({
 		orderStages: order.orderStages,
 		labels: order.statusLabels,
-		deliveryMethod,
+		// An RSVP's timeline is Order Received → Confirmed → Checked In — no
+		// Packed, no Ready for Pickup. Same registry the seller's stepper uses,
+		// so the two sides can never tell different stories.
+		deliveryMethod: order.eventLocked ? "event" : deliveryMethod,
 		bookingPackaged: order.bookingPackaged,
 	});
 	const currentStage = resolveCurrentStage(

@@ -1676,6 +1676,12 @@ export default defineSchema({
 		// every consumer treats "no time" as the old date-only behaviour. Drives the Lalamove
 		// scheduled booking default (past moments book "now").
 		fulfilmentTimeMinutes: v.optional(v.number()),
+		// Born as an RSVP to a fixed-date event (`z8r3fdff9u`). FROZEN at create
+		// (all doors that can hold an event line stamp it) and never patched —
+		// the sync flow-kind marker for `orderFlowKind`, which picks the event
+		// status vocabulary (Confirmed → Checked In) on every surface. The
+		// event's own details (endDate) are still read live from the product.
+		eventRsvp: v.optional(v.boolean()),
 		// The seller MOVED this order's moment (z8r3fdff97 test round). The
 		// buyer is never messaged about a reschedule — the dialog says so and
 		// tells the seller to agree it in chat — so `/track` is the only place

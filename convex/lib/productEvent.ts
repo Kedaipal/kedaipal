@@ -189,6 +189,8 @@ export function formatEventBadge(
 	).getUTCFullYear();
 	const yearOf = (epoch: number) =>
 		new Date(epoch + MYT_OFFSET_MS).getUTCFullYear();
+	const monthOf = (epoch: number) =>
+		new Date(epoch + MYT_OFFSET_MS).getUTCMonth();
 	// Years are dropped only when EVERY day shown is this year — a camp from
 	// 30 Dec to 1 Jan must name both years or the range reads backwards.
 	const dropYear =
@@ -198,13 +200,22 @@ export function formatEventBadge(
 		const full = formatFulfilmentDate(epoch).replace(",", "");
 		return dropYear ? full.replace(` ${yearOf(epoch)}`, "") : full;
 	};
-	const start =
-		event.timeMinutes === undefined
+	if (event.endDate === undefined) {
+		return event.timeMinutes === undefined
 			? day(event.date)
 			: `${day(event.date)} · ${formatFulfilmentTime(event.timeMinutes)}`;
-	return event.endDate === undefined
-		? start
-		: `${start} to ${day(event.endDate)}`;
+	}
+	// Multi-day: the badge is a RANGE and drops the start time — on a grid
+	// card the span is the fact, the hour is the product page's job
+	// (`formatEventMoment` keeps it). Same month elides it from the start
+	// ("Fri 4 – Sun 6 Dec"), so the chip fits one line on a 375px card.
+	const sameMonth =
+		monthOf(event.date) === monthOf(event.endDate) &&
+		yearOf(event.date) === yearOf(event.endDate);
+	const start = sameMonth
+		? day(event.date).split(" ").slice(0, 2).join(" ")
+		: day(event.date);
+	return `${start} – ${day(event.endDate)}`;
 }
 
 /**

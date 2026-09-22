@@ -214,11 +214,24 @@ describe("multi-day events — endDate (Helinox, 4 to 6 Dec)", () => {
 		expect(hiddenFromStorefront({ event: camp }, dayAfter)).toBe(true);
 	});
 
-	test("badge reads as a range; the start time rides the first day", () => {
-		expect(formatEventBadge(camp, NOW_2026)).toBe("Fri 4 Dec to Sun 6 Dec");
+	test("badge is a compact range — same month elided, time left to the moment", () => {
+		// The chip must fit one line on a 375px card, so a multi-day badge
+		// drops the start time (formatEventMoment carries it wherever the
+		// guest commits) and says the month once.
+		expect(formatEventBadge(camp, NOW_2026)).toBe("Fri 4 – Sun 6 Dec");
 		expect(formatEventBadge({ ...camp, timeMinutes: 14 * 60 }, NOW_2026)).toBe(
-			"Fri 4 Dec · 2:00 PM to Sun 6 Dec",
+			"Fri 4 – Sun 6 Dec",
 		);
+		// Cross-month keeps both months.
+		expect(
+			formatEventBadge(
+				{
+					date: mytMidnightFromYmd("2026-11-28"),
+					endDate: mytMidnightFromYmd("2026-12-01"),
+				},
+				NOW_2026,
+			),
+		).toBe("Sat 28 Nov – Tue 1 Dec");
 	});
 
 	test("a range crossing New Year names both years", () => {

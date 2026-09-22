@@ -64,6 +64,7 @@ import {
 	EventFields,
 	eventSubmitValue,
 } from "./event-fields";
+import { formatEventBadge } from "../../../convex/lib/productEvent";
 import {
 	buildSubmitVariants,
 	collectOptionIssues,
@@ -2624,9 +2625,24 @@ export function ProductWizard({
 								<span className="flex min-w-0 flex-col">
 									<span className="text-sm font-semibold">More options</span>
 									<span className="truncate text-xs text-muted-foreground">
+										{/* When the event is ON, the closed drawer leads with it —
+										    the one live setting in here the seller must be able to
+										    see without opening anything. Off, "events" still
+										    appears in the list so the capability is discoverable. */}
 										{[
+											// A dateless draft can't render a badge — name the state
+											// instead of printing NaN.
+											state.event.on
+												? (() => {
+														const value = eventSubmitValue(state.event);
+														return value
+															? `Event · ${formatEventBadge(value)}`
+															: "Event (date not set)";
+													})()
+												: null,
 											anyMto && !isBooking ? MOCKUP_APPROVAL_COPY.teaser : null,
 											madeToOrder || isBooking ? null : CUSTOM_LINE_COPY.teaser,
+											state.event.on || isBooking ? null : "events",
 											isBooking ? null : "order rules",
 											"full editor",
 										]

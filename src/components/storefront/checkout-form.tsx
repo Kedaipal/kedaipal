@@ -675,8 +675,7 @@ export function CheckoutPage({
 					// undefined = direct. Server re-sanitizes; never blocks the order.
 					attributionSource: readAttributionSource(storeSlug),
 				});
-				if (effectiveMethod === "delivery")
-					saveAddress(country, value.address);
+				if (effectiveMethod === "delivery") saveAddress(country, value.address);
 				setSubmitted(true);
 				cart.clearCart();
 				form.reset();
@@ -794,9 +793,7 @@ export function CheckoutPage({
 	// biome-ignore lint/correctness/useExhaustiveDependencies: form identity is stable; values read fresh inside.
 	useEffect(() => {
 		setTimeMove(null);
-		const dayEpoch = watchedDate
-			? mytMidnightFromYmd(watchedDate)
-			: Number.NaN;
+		const dayEpoch = watchedDate ? mytMidnightFromYmd(watchedDate) : Number.NaN;
 		const repair = () => {
 			setClockTick((t) => t + 1);
 			if (!repairTimed || Number.isNaN(dayEpoch)) return;
@@ -1200,9 +1197,17 @@ export function CheckoutPage({
 	const finePrint = (
 		<>
 			<p className="text-center text-xs text-muted-foreground">
-				{confirmPushEnabled
-					? `Your order goes straight to ${storeName} — one confirmation lands in your WhatsApp, with a link to follow it. Nothing is paid yet.`
-					: `Opens WhatsApp to confirm with ${storeName} — nothing is paid yet.`}
+				{/* A FREE order (an RM0 RSVP) must not imply a payment is coming —
+				    "nothing is paid yet" reads as "you'll pay later". An unquoted
+				    custom line is NOT free (the quote is pending), so it keeps the
+				    payment wording. */}
+				{cart.total === 0 && !hasCustomLine
+					? confirmPushEnabled
+						? `Your order goes straight to ${storeName} — one confirmation lands in your WhatsApp, with a link to follow it. There's nothing to pay.`
+						: `Opens WhatsApp to confirm with ${storeName} — there's nothing to pay.`
+					: confirmPushEnabled
+						? `Your order goes straight to ${storeName} — one confirmation lands in your WhatsApp, with a link to follow it. Nothing is paid yet.`
+						: `Opens WhatsApp to confirm with ${storeName} — nothing is paid yet.`}
 			</p>
 			<p className="text-center text-xs text-muted-foreground">
 				By placing this order, you agree to our {privacyPolicyLink}.

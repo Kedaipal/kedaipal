@@ -77,8 +77,10 @@ last day.
   tracking page and the WhatsApp RSVP label read it live from the product
   rather than freezing it onto the order.
 
-Spelling: the glanceable badge is `Fri 4 Dec · 2:00 PM to Sun 6 Dec` (years
-dropped only when both days are this year, so a New Year's range names both).
+Spelling: the glanceable badge is the compact range `Fri 4 – Sun 6 Dec` —
+the month said once, the start time dropped (a multi-day chip must fit one
+line on a 375px card; the time is the moment's job). Years appear only when a
+day is outside the current year, so a New Year's range names both.
 The full spelling, from `formatEventMoment()`, is used wherever a guest commits
 or checks in: the checkout banner and read-back, the counter, the track page,
 the seller's RSVPs panel and the WhatsApp label. One helper, so no surface can
@@ -191,6 +193,42 @@ recomputed when an event retires, so a category can over-count by one until the
 product is archived. Making it exact needs the daily cron this design exists to
 avoid; the storefront grid itself is always right.
 
+## The RSVP status pipeline (`orderFlowKind` + `FLOW_PRESETS`)
+
+An RSVP's lifecycle is **Confirmed → Checked In** — nothing is packed, nothing
+is ready for pickup; a guest registers and then walks in. Rather than
+special-casing that, `orderStatus.ts` grew a **flow-kind registry**:
+`OrderFlowKind = delivery | self_collect | booking | event`, and one
+`FLOW_PRESETS` entry per kind declaring its label overrides, the anchors its
+pipeline skips, and whether seller-configured custom stages apply. Booking's
+existing behaviour (skip "Packed", never take custom stages) moved into the
+same table, so **a future kind is one registry entry**, not a fork in five
+resolvers.
+
+- **`orders.eventRsvp`** is the frozen at-birth marker (stamped by both create
+  doors), because every surface — the inbox chip, the stepper, bulk actions —
+  needs the kind *synchronously*. The event's own details (endDate) are still
+  read live from the product; the marker is never patched. `orderFlowKind`
+  derives the kind, with the marker outranking the stored `self_collect`.
+- **Both steppers** (seller pipeline header + buyer timeline) resolve stages
+  with the event kind: Order Received → Confirmed → Checked In, and the
+  advance CTA reads **Mark as Checked In**. `default:packed` is an *unknown
+  stage* for an RSVP — vocabulary, not a relabel.
+- **Bulk actions skip** an order whose flow kind lacks the target anchor
+  (booking + "Packed", event + "Packed"/"Ready for Pickup"), counted and named
+  in the toast (`skippedNoSuchStage`) — never a silent no-op. Cancel still
+  reaches every kind.
+- **The counter's "Completed" override doesn't apply**: a walk-in RSVP isn't
+  complete at the counter — the guest attends later — so its terminal state
+  stays "Checked In". The counter's done screen also drops the one-tap "Mark
+  as completed" for RSVPs.
+- **The inbox chip** resolves per-row flow kind (this fixed bookings' chips in
+  passing — a checked-out stay used to read "Collected" at the retailer
+  grain).
+- **Custom stages** (Settings → Order status) never apply to events, said in
+  the settings note for sellers who run events (`products.hasEventListings`).
+  Tagging custom stages per product kind is ticketed separately.
+
 ## Free events (`isFreeOrder`)
 
 A total of 0 is **not enough on its own** to say an order is free, and that's
@@ -202,6 +240,13 @@ why `isFreeOrder` is a shared predicate rather than an inline `total === 0`:
 Both are "price not settled yet" — the exact opposite of "free". Telling those
 buyers their order costs nothing is how a seller ends up doing RM400 of catering
 for free. `isFreeOrder` = zero **AND** no outstanding price to name.
+
+A **free counter order records no payment**, whatever the client sent —
+"Paid now · Cash" on an RM0 RSVP wrote a payment-received event that the order
+page then contradicted with "Free order". The counter hides the payment card
+for a free cart, the confirm dialog says "Free order — nothing to collect",
+and `createOrderFromSession` enforces the same rule server-side (counter
+totals carry no unsettled price, so zero there is a real zero).
 
 It drives: the confirmation template's money parameter (`NO_PAYMENT_LABEL`,
 "no payment needed" — a parameter VALUE, so **no Meta re-approval**), the
@@ -258,10 +303,11 @@ posture. The pickup note stays — it's an instruction, not a timing rule.
 
 ### Where the seller SEES that a product is an event
 
-- **The product list card** leads its chip stack with an accent
-  `Event · Fri 26 Sep` chip — `Ended · …` (muted) once it's passed. Without it,
-  an event is indistinguishable from a plain product at the one place the
-  seller scans everything she sells.
+- **The product list card's third line** IS the event line — `Event ·
+  Fri 4 – Sun 6 Dec` in accent (`Ended · …` muted once passed) in place of the
+  stock word. It lives in the card's flexible left column so a long range
+  truncates; the first cut put it in the `shrink-0` chip column, which kept
+  its own width and crushed the product name to 0px (found by rendering).
 - **The form's summary strip** and `describeProduct` prefix the same
   `Event · …` first — it changes what the product is, so it outranks
   stock/price in the sentence.

@@ -693,10 +693,27 @@ export const listForCounter = query({
 				// date-range UI. A walk-in guest books on the storefront instead —
 				// revisit only if a real seller asks for counter bookings.
 				.filter((row) => effectiveKind(row.kind) !== "booking")
-				.map((row) =>
+				.map(async (row) => {
 					// Owner-gated read (counter checkout), so seller-only fields are safe.
-					productWithVariants(ctx, row, { activeOnly: true, forOwner: true }),
-				),
+					const product = await productWithVariants(ctx, row, {
+						activeOnly: true,
+						forOwner: true,
+					});
+					// An event product's binding number at the counter is SEATS, not
+					// stock — the rows show min(stock, seats) and the stepper stops
+					// there, so a walk-in cart never gets built past the cap only to
+					// be refused at create. Same tally the storefront reads.
+					if (row.event === undefined) return product;
+					const tally = await tallyEventSeats(ctx, {
+						retailerId,
+						productId: row._id,
+						date: row.event.date,
+					});
+					return {
+						...product,
+						eventSeatsLeft: seatsLeft(row.event, tally.taken),
+					};
+				}),
 		);
 	},
 });
@@ -709,6 +726,26 @@ export const listForCounter = query({
  * would be absurd. The products list keeps deriving it from the `listAll` it
  * already holds; both go through `productCapState`, so the flags can't drift.
  */
+/**
+ * Does this store have any live event listing? Drives the Order-status
+ * settings note that events keep their fixed Confirmed → Checked In pipeline
+ * (the booking-note pattern) — the exemption must be visible to exactly the
+ * sellers it applies to, and invisible noise to everyone else.
+ */
+export const hasEventListings = query({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<boolean> => {
+		await requireRetailerOwnership(ctx, retailerId);
+		const rows = await ctx.db
+			.query("products")
+			.withIndex("by_retailer_active", (q) =>
+				q.eq("retailerId", retailerId).eq("active", true),
+			)
+			.collect();
+		return rows.some((p) => p.event !== undefined);
+	},
+});
+
 export const capState = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }) => {

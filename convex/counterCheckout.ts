@@ -922,6 +922,12 @@ export const createOrderFromSession = mutation({
 			throw new ConvexError("Failed to generate order ID, please retry");
 
 		const customerName = session.waProfileName;
+		// A FREE order records no payment, whatever the client sent — "Paid now ·
+		// Cash" on an RM0 RSVP would contradict the "Free order — nothing to
+		// collect" the order page correctly shows. Counter orders never carry an
+		// unsettled price (customs are priced by the seller, no mockup gate), so
+		// zero here is a real zero (`isFreeOrder`'s counter shape).
+		const paidInPerson = args.paidInPerson && total > 0;
 		const orderId = await ctx.db.insert("orders", {
 			retailerId: retailer._id,
 			shortId,
@@ -937,11 +943,11 @@ export const createOrderFromSession = mutation({
 			deliveryMethod: "self_collect", // collected at the counter
 			fulfilmentDate: sanitizedFulfilmentDate,
 			fulfilmentTimeMinutes: sanitizedFulfilmentTime,
-			paymentStatus: args.paidInPerson ? "received" : "unpaid",
-			paymentReceivedAt: args.paidInPerson ? now : undefined,
-			paymentMethod: args.paidInPerson
-				? (args.paymentMethod ?? "cash")
-				: undefined,
+			// Frozen flow-kind marker — a walk-in RSVP (see schema comment).
+			eventRsvp: eventLock !== undefined ? true : undefined,
+			paymentStatus: paidInPerson ? "received" : "unpaid",
+			paymentReceivedAt: paidInPerson ? now : undefined,
+			paymentMethod: paidInPerson ? (args.paymentMethod ?? "cash") : undefined,
 			statusChangedAt: now,
 			createdAt: now,
 			updatedAt: now,
@@ -953,7 +959,7 @@ export const createOrderFromSession = mutation({
 			note: "counter_checkout",
 			createdAt: now,
 		});
-		if (args.paidInPerson) {
+		if (paidInPerson) {
 			await ctx.db.insert("orderEvents", {
 				orderId,
 				status: "confirmed",

@@ -16,7 +16,7 @@ import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
 import { formatPrepDuration } from "../../../convex/lib/fulfilmentDate";
-import { formatEventBadge } from "../../../convex/lib/productEvent";
+import { formatEventMoment } from "../../../convex/lib/productEvent";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
 import { cn } from "../../lib/utils";
@@ -587,7 +587,9 @@ export function EventNotice({ pp }: { pp: ProductPurchase }) {
 		<div className="mt-3 flex flex-col gap-1.5 rounded-xl border border-accent/30 bg-accent/5 px-3 py-2.5">
 			<p className="flex items-center gap-2 text-sm font-semibold">
 				<CalendarClock className="size-4 shrink-0 text-accent" aria-hidden />
-				{formatEventBadge(event)}
+				{/* The FULL spelling — this card is where the guest decides, and a
+				    multi-day badge drops the start time the decision needs. */}
+				{formatEventMoment(event)}
 			</p>
 			<p className="text-xs leading-relaxed text-muted-foreground">
 				{pp.eventFull
@@ -597,7 +599,7 @@ export function EventNotice({ pp }: { pp: ProductPurchase }) {
 						: ""}
 				{pp.eventFull
 					? " Message the store to ask about a cancellation."
-					: "RSVP and you're booked for this date — it's collected at the venue, so there's no delivery and no date to pick at checkout."}
+					: `RSVP and you're booked for ${event.endDate !== undefined ? "these dates" : "this date"} — it's collected at the venue, so there's no delivery and no date to pick at checkout.`}
 			</p>
 		</div>
 	);
@@ -623,15 +625,32 @@ export function PurchaseHints({ pp }: { pp: ProductPurchase }) {
 	if (!product) return null;
 	return (
 		<>
-			{/* Stock hint — only meaningful for hard-block variants. */}
+			{/* Stock hint — only meaningful for hard-block variants. On an EVENT
+			    the seats chip above already carries availability, so this line
+			    speaks only when THIS option's stock binds tighter than the seat
+			    pool ("50 in stock" under "10 seats left" was two numbers telling
+			    two stories) — and then in per-option words. */}
 			{pp.selectedVariant && pp.variantBlocks ? (
-				<p className="mt-3 text-xs text-muted-foreground">
-					{pp.selectedVariant.onHand <= 0
-						? "Out of stock"
-						: pp.selectedVariant.onHand <= 5
-							? `Only ${pp.selectedVariant.onHand} left`
-							: `${pp.selectedVariant.onHand} in stock`}
-				</p>
+				product.event !== undefined ? (
+					pp.selectedVariant.onHand <= 0 ? (
+						<p className="mt-3 text-xs text-muted-foreground">
+							This option is fully taken
+						</p>
+					) : pp.eventSeatsLeft === undefined ||
+						pp.selectedVariant.onHand < pp.eventSeatsLeft ? (
+						<p className="mt-3 text-xs text-muted-foreground">
+							{`Only ${pp.selectedVariant.onHand} of this option left`}
+						</p>
+					) : null
+				) : (
+					<p className="mt-3 text-xs text-muted-foreground">
+						{pp.selectedVariant.onHand <= 0
+							? "Out of stock"
+							: pp.selectedVariant.onHand <= 5
+								? `Only ${pp.selectedVariant.onHand} left`
+								: `${pp.selectedVariant.onHand} in stock`}
+					</p>
+				)
 			) : null}
 
 			{pp.minQuantity >= 2 ? (

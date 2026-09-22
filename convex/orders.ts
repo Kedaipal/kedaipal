@@ -140,7 +140,10 @@ import {
 	anchorOrdinal,
 	type Locale,
 	type OrderStage,
+	FLOW_PRESETS,
+	orderFlowKind,
 	resolveStages,
+	type StageAnchor,
 	stageLabel,
 	type StatusLabels,
 } from "./lib/orderStatus";
@@ -1467,6 +1470,8 @@ export const create = mutation({
 			deliveryFeePendingReason,
 			fulfilmentDate: sanitizedFulfilmentDate,
 			fulfilmentTimeMinutes: sanitizedFulfilmentTime,
+			// Frozen flow-kind marker — this order is an RSVP for good (see schema).
+			eventRsvp: eventLock !== undefined ? true : undefined,
 			customerNote: sanitizedCustomerNote,
 			// Only keep the buyer image when the order actually has a custom line —
 			// guards a stray id on a non-custom order.
@@ -1871,8 +1876,11 @@ export const get = query({
 			// `undefined` (not `false`) on a normal order: one spelling for "no".
 			...(await (async () => {
 				const event = await orderEvent(ctx, order);
+				// Flag OR lookup: rows created before `eventRsvp` existed (dev
+				// only — the feature never shipped) still resolve via the product.
 				return {
-					eventLocked: event !== undefined || undefined,
+					eventLocked:
+						order.eventRsvp === true || event !== undefined || undefined,
 					eventEndDate: event?.endDate,
 				};
 			})()),
@@ -3511,6 +3519,10 @@ export const bulkUpdateStatus = mutation({
 		 * stock has already been returned. Named for the same reason as the two
 		 * above: a silent skip is hidden behaviour (86eypn8ye). */
 		skippedCancelled: number;
+		/** Of `skipped`, how many were orders whose flow kind has no such stage
+		 * — e.g. "Mark as Packed" on a booking or an event RSVP. Named so the
+		 * toast can say why nothing moved (the house no-silent-skip rule). */
+		skippedNoSuchStage: number;
 	}> => {
 		if (orderIds.length === 0)
 			return {
@@ -3519,6 +3531,7 @@ export const bulkUpdateStatus = mutation({
 				skippedAwaitingCollection: 0,
 				skippedRiderManaged: 0,
 				skippedCancelled: 0,
+				skippedNoSuchStage: 0,
 			};
 		if (orderIds.length > 100)
 			throw new ConvexError("Too many orders selected (max 100)");
@@ -3528,6 +3541,7 @@ export const bulkUpdateStatus = mutation({
 		let skippedAwaitingCollection = 0;
 		let skippedRiderManaged = 0;
 		let skippedCancelled = 0;
+		let skippedNoSuchStage = 0;
 		// The inbox multi-select is single-retailer, so every id resolves to the
 		// same access descriptor; keep the last one for a single batch audit row.
 		let batchAccess: RetailerAccess | undefined;
@@ -3570,6 +3584,22 @@ export const bulkUpdateStatus = mutation({
 			// skips it rather than confirming a stay with no guest message.
 			if (order.status === "booking_requested" && status !== "cancelled") {
 				skipped++;
+				continue;
+			}
+			// An anchor the order's flow kind SKIPS isn't a state it can be in:
+			// a booking is never "Packed", an RSVP is never "Packed" or "Ready
+			// for Pickup" (its pipeline is Confirmed → Checked In). Bulk-moving
+			// one there would strand it outside its own vocabulary, so it's
+			// skipped and counted — never a silent no-op. Registry-driven
+			// (FLOW_PRESETS), so a future kind's skips apply here for free.
+			if (
+				status !== "cancelled" &&
+				FLOW_PRESETS[orderFlowKind(order)].skippedAnchors.includes(
+					status as StageAnchor,
+				)
+			) {
+				skipped++;
+				skippedNoSuchStage++;
 				continue;
 			}
 			if (status === "packed" && isMockupGateClosed(order)) {
@@ -3617,6 +3647,7 @@ export const bulkUpdateStatus = mutation({
 			skippedAwaitingCollection,
 			skippedRiderManaged,
 			skippedCancelled,
+			skippedNoSuchStage,
 		};
 	},
 });
@@ -3834,15 +3865,17 @@ export const advanceToStage = mutation({
 			);
 		}
 
+		// The order's flow kind picks its stage vocabulary — an RSVP advances
+		// Confirmed → Checked In, never through Packed. The flag is the sync
+		// marker; the product lookup keeps pre-flag dev rows advancing too.
+		const isEventOrder =
+			order.eventRsvp === true || (await orderEvent(ctx, order)) !== undefined;
 		const stages = resolveStages({
 			orderStages: retailer.orderStages as OrderStage[] | undefined,
 			labels: retailer.statusLabels as StatusLabels | undefined,
-			deliveryMethod:
-				(order.deliveryMethod as
-					| "delivery"
-					| "self_collect"
-					| "booking"
-					| undefined) ?? "delivery",
+			deliveryMethod: isEventOrder
+				? "event"
+				: orderFlowKind({ deliveryMethod: order.deliveryMethod }),
 			// A fixed-length package's milestones are Active/Ended, not
 			// Checked In/Checked Out — the stepper's button copy comes from here.
 			bookingPackaged: order.bookingPackaged,

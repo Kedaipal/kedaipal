@@ -118,6 +118,10 @@ type CreatedOrder = {
 	shortId: string;
 	orderId: Id<"orders">;
 	paidInPerson: boolean;
+	/** The order is an RSVP (`z8r3fdff9u`) — the done screen must not offer
+	 * "Mark as completed": the guest attends LATER; the RSVP completes at the
+	 * event ("Checked In"), not at the counter. */
+	eventRsvp?: boolean;
 };
 
 function CounterCheckoutRoute() {
@@ -239,6 +243,7 @@ function ActiveSession({
 				shortId={created?.shortId}
 				orderId={created?.orderId ?? session.orderId}
 				paidInPerson={created?.paidInPerson ?? false}
+				eventRsvp={created?.eventRsvp}
 				buyerName={session.displayName}
 				anonymous={!session.waPhone}
 				onBackToList={onBackToList}
@@ -868,6 +873,7 @@ function DoneScreen({
 	shortId,
 	orderId,
 	paidInPerson,
+	eventRsvp,
 	buyerName,
 	anonymous,
 	onBackToList,
@@ -875,6 +881,8 @@ function DoneScreen({
 	shortId: string | undefined;
 	orderId: Id<"orders"> | undefined;
 	paidInPerson: boolean;
+	/** RSVP — completion happens at the event, so the one-tap close is hidden. */
+	eventRsvp?: boolean;
 	buyerName: string | undefined;
 	// Anonymous cash sale — no buyer to notify (86ey8vqp6), so not even the one
 	// confirmation goes out and the document below is their only copy.
@@ -889,7 +897,7 @@ function DoneScreen({
 	// taken the item, so the seller can close it out here instead of clicking
 	// through the status pipeline. Optional, not automatic: a paid deposit on an
 	// item that isn't ready yet is left as a normal confirmed order.
-	const canComplete = paidInPerson && !!orderId && !completed;
+	const canComplete = paidInPerson && !eventRsvp && !!orderId && !completed;
 
 	// Say exactly what left the building. A counter order sends the buyer ONE
 	// WhatsApp (86eyd63r8) — the confirmation, carrying the link to their order
@@ -1294,9 +1302,9 @@ function ProductVariantRows({
 
 				// Stock is stated on the row and enforced on the control, so the
 				// seller never builds a cart the server will refuse (Zaki, 27 Aug).
-				const stockNote = variantStockNote(vr);
-				const sellable = canAddToCounterCart(vr);
-				const maxQty = maxAddableQty(vr);
+				const stockNote = variantStockNote(vr, product.eventSeatsLeft);
+				const sellable = canAddToCounterCart(vr, product.eventSeatsLeft);
+				const maxQty = maxAddableQty(vr, product.eventSeatsLeft);
 				return (
 					<div
 						key={vr._id}
@@ -1405,6 +1413,7 @@ function BuildOrderScreen({
 		shortId: string;
 		orderId: Id<"orders">;
 		paidInPerson: boolean;
+		eventRsvp?: boolean;
 	}) => void;
 	// Cancel the whole checkout (customer walked / changed their mind). Drops the
 	// session + any items and returns to the open-checkouts list.
@@ -1695,6 +1704,9 @@ function BuildOrderScreen({
 		setSubmitting(true);
 		try {
 			const fulfilmentEpoch = mytMidnightFromYmd(fulfilmentDate);
+			// A FREE order records no payment — the server enforces the same rule,
+			// this just keeps the client's story identical.
+			const effectivePaid = paid && total > 0;
 			const { shortId, orderId } = await createOrder({
 				sessionId,
 				items: cartEntries.map(([variantId, l]) => ({
@@ -1702,13 +1714,18 @@ function BuildOrderScreen({
 					quantity: l.qty,
 					unitPrice: l.isCustom || isAdjusted(l) ? l.price : undefined,
 				})),
-				paidInPerson: paid,
-				paymentMethod: paid ? method : undefined,
+				paidInPerson: effectivePaid,
+				paymentMethod: effectivePaid ? method : undefined,
 				fulfilmentDate: Number.isNaN(fulfilmentEpoch)
 					? undefined
 					: fulfilmentEpoch,
 			});
-			onCreated({ shortId, orderId, paidInPerson: paid });
+			onCreated({
+				shortId,
+				orderId,
+				paidInPerson: effectivePaid,
+				eventRsvp: cartEvent !== undefined || undefined,
+			});
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -1861,8 +1878,15 @@ function BuildOrderScreen({
 											) : null}
 											{/* Sold out veils the tile instead of hiding it: the
 											    seller still needs to open it — to see WHICH size
-											    ran out, or to sell a made-to-order sibling. */}
-											{soldOut ? (
+											    ran out, or to sell a made-to-order sibling. A full
+											    event gets the same veil in its own word. */}
+											{p.eventSeatsLeft === 0 ? (
+												<span className="absolute inset-0 flex items-center justify-center bg-background/65">
+													<span className="rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-destructive">
+														Fully booked
+													</span>
+												</span>
+											) : soldOut ? (
 												<span className="absolute inset-0 flex items-center justify-center bg-background/65">
 													<span className="rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-destructive">
 														Sold out
@@ -1926,7 +1950,11 @@ function BuildOrderScreen({
 												) : null}
 												{/* Every choice is at zero — say it on the closed row,
 												    not at checkout with a customer waiting. */}
-												{soldOut ? (
+												{p.eventSeatsLeft === 0 ? (
+													<span className="inline-flex shrink-0 items-center rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-destructive">
+														Fully booked
+													</span>
+												) : soldOut ? (
 													<span className="inline-flex shrink-0 items-center rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-destructive">
 														Sold out
 													</span>
@@ -1935,6 +1963,11 @@ function BuildOrderScreen({
 											<p className="text-xs text-muted-foreground">
 												{p.variants.length} option
 												{p.variants.length === 1 ? "" : "s"} · {priceLabel}
+												{/* The event's binding number, said at the product
+												    grain — the per-option rows show the same ceiling. */}
+												{p.eventSeatsLeft !== undefined && p.eventSeatsLeft > 0
+													? ` · ${p.eventSeatsLeft} seat${p.eventSeatsLeft === 1 ? "" : "s"} left`
+													: null}
 											</p>
 										</div>
 										<div className="flex shrink-0 items-center gap-2">
@@ -2188,56 +2221,69 @@ function BuildOrderScreen({
 									<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 										Payment
 									</p>
-									<div className="mt-3 grid gap-2">
-										<ChoiceCard
-											active={paid}
-											onSelect={() => setPaidInPerson(true)}
-											icon={Banknote}
-											title="Paid now"
-											subtitle="Settled at counter"
-										/>
-										<ChoiceCard
-											active={!paid}
-											disabled={anonymous}
-											reason="A cash sale has no buyer to send a payment link to."
-											onSelect={() => setPaidInPerson(false)}
-											icon={Clock}
-											title="Pay later"
-											subtitle="Send payment link"
-										/>
-									</div>
-
-									{anonymous ? (
+									{total <= 0 ? (
+										/* A FREE order (an RM0 RSVP, a comp'd item) has no payment
+										   to ask about — "Paid now · Cash" on it would write a
+										   payment record the order page then contradicts with
+										   "Free order". The server enforces the same rule. */
 										<p className="mt-3 rounded-xl bg-background px-3 py-2 text-xs text-muted-foreground">
-											Cash sale — no contact on file, so it's settled in person
-											and no WhatsApp is sent.
+											Free order — there&apos;s nothing to collect, and no
+											payment is recorded.
 										</p>
-									) : null}
-
-									{paid ? (
-										<label className="mt-3 block">
-											<span className="text-xs font-medium text-muted-foreground">
-												Payment method
-											</span>
-											<select
-												value={method}
-												onChange={(e) =>
-													setMethod(e.target.value as OrderPaymentMethod)
-												}
-												className="mt-1 min-h-11 w-full rounded-xl border border-input bg-background px-4 text-base font-medium outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-											>
-												{methodChoices.map((m) => (
-													<option key={m} value={m}>
-														{PAYMENT_METHOD_LABELS[m]}
-													</option>
-												))}
-											</select>
-										</label>
 									) : (
-										<p className="mt-3 rounded-xl bg-background px-3 py-2 text-xs text-muted-foreground">
-											We'll send one WhatsApp with how to pay and a link to
-											track the order.
-										</p>
+										<>
+											<div className="mt-3 grid gap-2">
+												<ChoiceCard
+													active={paid}
+													onSelect={() => setPaidInPerson(true)}
+													icon={Banknote}
+													title="Paid now"
+													subtitle="Settled at counter"
+												/>
+												<ChoiceCard
+													active={!paid}
+													disabled={anonymous}
+													reason="A cash sale has no buyer to send a payment link to."
+													onSelect={() => setPaidInPerson(false)}
+													icon={Clock}
+													title="Pay later"
+													subtitle="Send payment link"
+												/>
+											</div>
+
+											{anonymous ? (
+												<p className="mt-3 rounded-xl bg-background px-3 py-2 text-xs text-muted-foreground">
+													Cash sale — no contact on file, so it's settled in
+													person and no WhatsApp is sent.
+												</p>
+											) : null}
+
+											{paid ? (
+												<label className="mt-3 block">
+													<span className="text-xs font-medium text-muted-foreground">
+														Payment method
+													</span>
+													<select
+														value={method}
+														onChange={(e) =>
+															setMethod(e.target.value as OrderPaymentMethod)
+														}
+														className="mt-1 min-h-11 w-full rounded-xl border border-input bg-background px-4 text-base font-medium outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+													>
+														{methodChoices.map((m) => (
+															<option key={m} value={m}>
+																{PAYMENT_METHOD_LABELS[m]}
+															</option>
+														))}
+													</select>
+												</label>
+											) : (
+												<p className="mt-3 rounded-xl bg-background px-3 py-2 text-xs text-muted-foreground">
+													We'll send one WhatsApp with how to pay and a link to
+													track the order.
+												</p>
+											)}
+										</>
 									)}
 								</div>
 							</>
@@ -2472,9 +2518,11 @@ function BuildOrderScreen({
 					return Number.isNaN(e) ? "—" : formatFulfilmentDate(e);
 				})()}
 				paymentLabel={
-					paid
-						? `Paid now · ${PAYMENT_METHOD_LABELS[method]}`
-						: "Pay later — we send the buyer a payment link on WhatsApp"
+					total <= 0
+						? "Free order — nothing to collect"
+						: paid
+							? `Paid now · ${PAYMENT_METHOD_LABELS[method]}`
+							: "Pay later — we send the buyer a payment link on WhatsApp"
 				}
 				submitting={submitting}
 				onConfirm={submit}

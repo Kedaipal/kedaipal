@@ -102,15 +102,15 @@ export function ProductCard({
 	// it leads the chip row rather than sitting among the micro-rules.
 	const event = product.event;
 	const seatsLeft = product.eventSeatsLeft;
-	const eventFull = event !== undefined && seatsLeft !== undefined && seatsLeft <= 0;
+	const eventFull =
+		event !== undefined && seatsLeft !== undefined && seatsLeft <= 0;
 	// A live custom line keeps Choose usable (its own CTA on the page is exempt
 	// from the minimum) even when the standard variants can't reach it.
 	const chooseDisabled =
 		outOfStock || eventFull || (minUnreachable && !hasCustom);
 	// Does the bottom-left overlay row render at all? Drives the no-photo
 	// placeholder's clearance — see the tile below.
-	const hasBottomChips =
-		event !== undefined || hasCustom || minQuantity >= 2;
+	const hasBottomChips = event !== undefined || hasCustom || minQuantity >= 2;
 	const pageLink = {
 		to: "/$slug/p/$productSlug",
 		params: { slug: storeSlug, productSlug: product.slug },
@@ -319,7 +319,9 @@ export function ProductCard({
 						className="mt-auto h-11 w-full rounded-xl"
 					>
 						{paused ? null : <Plus className="size-4" />}
-						{paused ? ORDERING_PAUSED_CTA : "Add"}
+						{/* An event's quick-add is an RSVP — the product page's CTA
+						    already says so, and one action must keep one name. */}
+						{paused ? ORDERING_PAUSED_CTA : event ? "RSVP" : "Add"}
 					</Button>
 				)}
 			</div>

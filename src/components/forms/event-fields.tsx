@@ -318,9 +318,12 @@ export function EventFields({
 								Guests RSVP for{" "}
 								{Number.isFinite(dateEpoch) ? (
 									<strong className="font-semibold text-foreground">
-										{formatEventBadge(
-											eventSubmitValue(draft) ?? { date: dateEpoch },
-										)}
+										{/* An end date the field is rejecting must not be read
+										    back ("6 Dec to 4 Dec") — drop it until it's valid. */}
+										{formatEventBadge({
+											...(eventSubmitValue(draft) ?? { date: dateEpoch }),
+											...(endDateIssue !== null ? { endDate: undefined } : {}),
+										})}
 									</strong>
 								) : (
 									"the date you set above"

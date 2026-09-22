@@ -353,7 +353,9 @@ export const Route = createFileRoute("/app/settings")({
 			// HitPay redirect returns (86eyb6z4r): back from the auto-renewal
 			// authorisation page / from an invoice's hosted checkout. The billing
 			// tab reconciles once and then clears the flag from the URL.
-			...(search.autorenew === "return" ? { autorenew: "return" as const } : {}),
+			...(search.autorenew === "return"
+				? { autorenew: "return" as const }
+				: {}),
 			...(search.paid === "return" ? { paid: "return" as const } : {}),
 		};
 	},
@@ -439,6 +441,15 @@ function SettingsRoute() {
 		useQuery(
 			convexQuery(
 				api.bookingBlocks.hasBookingListings,
+				retailer ? { retailerId: retailer._id } : "skip",
+			),
+		).data === true;
+	// Same reason as bookings: the "events keep their own pipeline" note only
+	// renders for sellers who actually run events.
+	const hasEventListings =
+		useQuery(
+			convexQuery(
+				api.products.hasEventListings,
 				retailer ? { retailerId: retailer._id } : "skip",
 			),
 		).data === true;
@@ -1034,14 +1045,22 @@ function SettingsRoute() {
 						    keep their own three milestones. Without this line the rule
 						    would be invisible until a seller wondered why their campsite
 						    order ignored the flow they'd just built. */}
-						{hasBookingListings ? (
+						{hasBookingListings || hasEventListings ? (
 							<p className="rounded-xl border border-border bg-muted/40 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
 								<span className="font-semibold text-foreground">
-									Bookings don&apos;t use these steps.
+									{hasBookingListings && hasEventListings
+										? "Bookings and events don't use these steps."
+										: hasBookingListings
+											? "Bookings don't use these steps."
+											: "Events don't use these steps."}
 								</span>{" "}
-								A stay always runs Confirmed → Checked in → Checked out, and a
-								fixed-length package Confirmed → Active → Ended. What you set
-								here applies to your product orders.
+								{hasBookingListings
+									? "A stay always runs Confirmed → Checked in → Checked out, and a fixed-length package Confirmed → Active → Ended. "
+									: ""}
+								{hasEventListings
+									? "An event RSVP always runs Confirmed → Checked in. "
+									: ""}
+								What you set here applies to your product orders.
 							</p>
 						) : null}
 
