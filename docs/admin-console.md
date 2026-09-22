@@ -21,16 +21,70 @@ login or screen-share, neither of which scales.
 
 ## The two halves
 
-1. **Seller directory** — `/app/admin/sellers` (`src/routes/app.admin.sellers.tsx`). Lists
-   every store (name, slug, owner, founding rank, subscription status), admin-gated
-   server-side by `requireAdmin` and hidden client-side behind `billing.amIAdmin`. Sorted
-   Founding Members first (by rank), then newest. Each row carries ONE control —
-   a **Manage menu** (owner decision, 20 Sep 2026) holding every per-store action
-   with its consequence written under it: **Open store** (starts the act-as
-   session via `setActAs(id)` and opens `/app`), **comp upgrade** (the dialog
-   below), and **Delete store** (dev only; hidden entirely where the purge flag
-   is off). The row used to BE the act-as button with two bare icons beside it —
-   three targets, two unlabelled, and a mis-tap entered act-as.
+1. **Seller directory** — `/app/admin/sellers` (`src/routes/app.admin.sellers.tsx`,
+   redesigned in ClickUp `z8r3fdh37c`, 22 Sep 2026). Every store with the facts an
+   admin used to open a second tab for: **owner contact** (login email, store
+   WhatsApp — each with a one-tap copy and a `wa.me` link), **status with its
+   reason** ("KP-0142 unpaid", "Comp upgrade turned off", "Auto-renew failed ×2 ·
+   retry …", "Off-season since …"), **plan and rail** (cycle + how money arrives:
+   auto-renew card, Pay-now link, free period, held, manual), and **expires /
+   renews** worded per state — *Renews 14 Oct*, *Trial ends 28 Sep*, *Invoice due*,
+   *Was due 3 Sep · 19 days overdue*, *Comp off 1 Sep · 21 days locked*, *Hold
+   renews*, *Ended*, *No expiry* (comped), *— · Never billed* (admin) — amber inside
+   a week, red once past. Admin-gated server-side by `requireAdmin` and hidden
+   client-side behind `billing.amIAdmin`.
+   - **Shape:** a table at `lg+` (`useIsDesktop`, a JS gate so a phone never
+     carries 500 rows of hidden table DOM), cards below it — both render the
+     same cells from `src/components/admin/seller-cells.tsx`, and every derived
+     fact comes from one pure module, **`src/lib/admin-seller-view.ts`**
+     (`sellerExpiry`, `sellerReason`, `sellerRail`, `sellerBucket`, the sorts,
+     the search, the summary text, the CSV), so the table, the cards, the sheet
+     and the export cannot disagree.
+   - **Find:** search matches name, slug, email and both phones (a query with
+     three or more digits is matched against the stored digits, so "018-7" finds
+     `60187…`). **Status chips** (`FilterChip`, with counts) — All · Past due ·
+     Trialing · Active · On hold · Cancelled · Comped · Admin (· No subscription,
+     only when non-zero); Past due sits first after All because it is the urgent
+     bucket. **Sort:** Founding rank (default, unchanged), Expiry · soonest first,
+     Newest store, Name A–Z. Filter, sort and search ride the URL
+     (`?status=past_due&sort=expiry&q=…`, validated by `validateSearch`) so a
+     filtered view is a link; defaults are omitted so the plain route stays
+     `/app/admin/sellers`.
+   - **Detail sheet:** the store's name opens a read-only `Sheet side="right"`
+     (a drawer beside the table at `sm+`, a bottom sheet on a phone —
+     `src/components/admin/seller-sheet.tsx`) with every fact and its own copy
+     control: login email, store and alerts WhatsApp, storefront link, country ·
+     currency, status, plan, expiry (the date copies in full), free-period end
+     and reason, open invoice, last paid invoice, auto-renew method, comp state
+     and note, joined, signup source and referrer, founding rank, and **last
+     opened by an admin** (`adminAuditLog` `actAs.sessionStart`). **Copy
+     summary** writes a plain-text block — name, link, email, WhatsApp, plan,
+     expiry — for a WhatsApp message. **Open store** in the sheet header is the
+     same act-as door as the menu (`useOpenStore`).
+   - **Export CSV** (header action) writes the *visible* rows with every sheet
+     column (`sellersToCsv`, `downloadCsv`); disabled-with-reason when nothing
+     matches. **Invite seller** links to the Billing page's onboard card
+     (`/app/admin/billing#onboard`) — the form stays there because it needs the
+     founding-spot count and the invoice picker beside it.
+   - **One door per row** (owner decision, 20 Sep 2026): the **Manage menu**
+     (`src/components/admin/seller-manage-menu.tsx`) holds every per-store action
+     with its consequence written under it — **Open store** (starts the act-as
+     session via `setActAs(id)` and opens `/app`), **View details** (the sheet),
+     **comp upgrade** (`comp-dialog.tsx`), and **Delete store** (dev only; hidden
+     entirely where the purge flag is off). The row itself is inert: the name
+     opens the read-only sheet, the copy buttons copy, nothing on it enters
+     act-as. The row used to BE the act-as button with two bare icons beside it
+     — three targets, two unlabelled, and a mis-tap entered act-as.
+   - **The query** (`admin.listSellersForAdmin`) grew the contact + billing
+     fields: `ownerEmail` is `retailers.notifyEmail` (Clerk's identity email is
+     never stored; `createRetailer` prefills it from Clerk and
+     `ensureNotifyEmailFromIdentity` backfills), the two phones, country and
+     currency, the subscription's cycle / trial end / free-period end /
+     period end / cancelled / held / auto-renew dunning state, the **open
+     invoice** and **last paid invoice** (`invoices.by_retailer`, first hit per
+     status — never a collect over a store's billing history) and
+     `lastActAsAt`. No schema change. Absent facts stay absent and the UI says
+     so ("No email on file", "Never paid", "Never") rather than leaving a blank.
 2. **Act-as context** — selecting a seller renders the ordinary dashboard against that
    `retailerId`. All reads/writes target it; the admin identity is the actor on every write;
    a persistent **"Acting as {store} — admin"** banner shows across every screen with a
