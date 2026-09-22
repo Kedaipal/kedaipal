@@ -356,7 +356,13 @@ describe("buildWizardSubmitValues", () => {
 			...browniesState(),
 			minNoticeDays: "3",
 			prepMinutes: "45",
-			event: { on: true, date: "2099-01-05", time: "08:00", seats: "30" },
+			event: {
+				on: true,
+				date: "2099-01-05",
+				endDate: "",
+				time: "08:00",
+				seats: "30",
+			},
 		});
 		expect(values.minNoticeDays).toBeUndefined();
 		expect(values.prepMinutes).toBeUndefined();

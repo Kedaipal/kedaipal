@@ -9,8 +9,10 @@ import {
 	daysUntilEvent,
 	describeEvent,
 	formatEventBadge,
+	formatEventMoment,
 	hiddenFromStorefront,
 	isEventPassed,
+	MAX_EVENT_DAYS,
 	MAX_EVENT_SEATS,
 	sanitizeEvent,
 	seatsLeft,
@@ -162,5 +164,77 @@ describe("formatEventBadge / describeEvent", () => {
 		// print the day before for every Malaysian event.
 		expect(new Date(SEP_25_2026 + MYT_OFFSET_MS).getUTCDate()).toBe(25);
 		expect(formatEventBadge({ date: SEP_25_2026 }, NOW_2026)).toContain("25 Sep");
+	});
+});
+
+describe("multi-day events — endDate (Helinox, 4 to 6 Dec)", () => {
+	const DEC_4 = mytMidnightFromYmd("2026-12-04");
+	const DEC_6 = mytMidnightFromYmd("2026-12-06");
+	const camp = { date: DEC_4, endDate: DEC_6 };
+
+	test("sanitizer keeps a later last day, normalizes the same day to unset", () => {
+		expect(sanitizeEvent(camp, { now: NOW_2026 })?.endDate).toBe(DEC_6);
+		// One spelling for "one day": endDate === date is the same as no endDate.
+		expect(
+			sanitizeEvent({ date: DEC_4, endDate: DEC_4 }, { now: NOW_2026 })
+				?.endDate,
+		).toBeUndefined();
+	});
+
+	test("sanitizer refuses a last day before the start, off-midnight, or too long", () => {
+		expect(() =>
+			sanitizeEvent({ date: DEC_6, endDate: DEC_4 }, { now: NOW_2026 }),
+		).toThrow(/before its start/i);
+		expect(() =>
+			sanitizeEvent({ date: DEC_4, endDate: DEC_6 + 1 }, { now: NOW_2026 }),
+		).toThrow(/calendar day/i);
+		// MAX_EVENT_DAYS counts both ends: day 1..31 is fine, day 32 is not.
+		const lastOk = DEC_4 + (MAX_EVENT_DAYS - 1) * DAY_MS;
+		expect(
+			sanitizeEvent({ date: DEC_4, endDate: lastOk }, { now: NOW_2026 })
+				?.endDate,
+		).toBe(lastOk);
+		expect(() =>
+			sanitizeEvent(
+				{ date: DEC_4, endDate: lastOk + DAY_MS },
+				{ now: NOW_2026 },
+			),
+		).toThrow(/at most/i);
+	});
+
+	test("the listing stays up through the LAST day, not just the first", () => {
+		// The bug Arif's ask prevents: a 3-day camp vanishing on its 2nd morning.
+		const day2 = DEC_4 + DAY_MS + 9 * 60 * 60 * 1000;
+		const day3Late = DEC_6 + 23 * 60 * 60 * 1000;
+		const dayAfter = DEC_6 + DAY_MS + 60 * 1000;
+		expect(isEventPassed(camp, day2)).toBe(false);
+		expect(hiddenFromStorefront({ event: camp }, day2)).toBe(false);
+		expect(isEventPassed(camp, day3Late)).toBe(false);
+		expect(isEventPassed(camp, dayAfter)).toBe(true);
+		expect(hiddenFromStorefront({ event: camp }, dayAfter)).toBe(true);
+	});
+
+	test("badge reads as a range; the start time rides the first day", () => {
+		expect(formatEventBadge(camp, NOW_2026)).toBe("Fri 4 Dec to Sun 6 Dec");
+		expect(formatEventBadge({ ...camp, timeMinutes: 14 * 60 }, NOW_2026)).toBe(
+			"Fri 4 Dec · 2:00 PM to Sun 6 Dec",
+		);
+	});
+
+	test("a range crossing New Year names both years", () => {
+		const nye = {
+			date: mytMidnightFromYmd("2026-12-30"),
+			endDate: mytMidnightFromYmd("2027-01-01"),
+		};
+		const badge = formatEventBadge(nye, NOW_2026);
+		expect(badge).toContain("30 Dec 2026");
+		expect(badge).toContain("1 Jan 2027");
+	});
+
+	test("the full spelling names the last day; one-day events are unchanged", () => {
+		expect(formatEventMoment({ ...camp, timeMinutes: 14 * 60 })).toBe(
+			"Fri, 4 Dec 2026 · 2:00 PM to Sun, 6 Dec 2026",
+		);
+		expect(formatEventMoment({ date: DEC_4 })).toBe("Fri, 4 Dec 2026");
 	});
 });

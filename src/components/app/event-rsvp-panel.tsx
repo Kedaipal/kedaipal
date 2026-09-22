@@ -1,11 +1,12 @@
 import { Link } from "@tanstack/react-router";
 import { CalendarClock, Inbox, Users } from "lucide-react";
-import { formatFulfilmentDateTime } from "../../../convex/lib/fulfilmentDate";
+import { formatEventMoment } from "../../../convex/lib/productEvent";
 
 export type EventHeadcount = {
 	date: number;
 	timeMinutes?: number;
 	seats?: number;
+	endDate?: number;
 	taken: number;
 	left?: number;
 	passed: boolean;
@@ -32,10 +33,7 @@ export function EventRsvpPanel({
 	productName: string;
 }) {
 	const { taken, seats, left, passed, options } = headcount;
-	const moment = formatFulfilmentDateTime(
-		headcount.date,
-		headcount.timeMinutes,
-	);
+	const moment = formatEventMoment(headcount);
 	const full = left !== undefined && left <= 0;
 	// One option with no label = a single-variant event (no food choice to make).
 	// Its tally is just the total, so the breakdown would repeat itself.

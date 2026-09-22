@@ -1046,6 +1046,11 @@ export default defineSchema({
 				// stock still applies). 0 normalizes to unset at the sanitizer, so
 				// "no limit" has one spelling and can never read as "sold out".
 				seats: v.optional(v.number()),
+				// LAST day of a multi-day event (MYT midnight, after `date`) —
+				// display + listing lifetime only. RSVPs still freeze `date` (the
+				// check-in day), so the seat tally's key never moves. Unset = one
+				// day; the same-day value normalizes to unset.
+				endDate: v.optional(v.number()),
 			}),
 		),
 		// DEPRECATED — moved to productVariants.requiresProof (per-variant).

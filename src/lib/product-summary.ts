@@ -16,7 +16,12 @@ export type SummaryInput = {
 	/** Fixed event config (`z8r3fdff9u`), or null/absent for a normal product.
 	 * Leads the strip ("Event · Fri 25 Sep · 8:00 AM · 30 seats") because it's
 	 * what the product IS — the choices and stock words describe the rest. */
-	event?: { date: number; timeMinutes?: number; seats?: number } | null;
+	event?: {
+		date: number;
+		timeMinutes?: number;
+		seats?: number;
+		endDate?: number;
+	} | null;
 	options: { name: string; values: string[] }[];
 	rows: {
 		optionValues: string[];

@@ -38,11 +38,11 @@ import type { Country } from "../../convex/lib/country";
 import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
 import {
 	formatFulfilmentDate,
-	formatFulfilmentDateTime,
 	fulfilmentDateBounds,
 	mytMidnightFromYmd,
 	ymdFromEpoch,
 } from "../../convex/lib/fulfilmentDate";
+import { formatEventMoment } from "../../convex/lib/productEvent";
 import {
 	CLAIM_SOURCE_CHOICES,
 	CLAIM_WINDOW_CHOICES_MINUTES,
@@ -1734,7 +1734,7 @@ function BuildOrderScreen({
 	}, [products, cart]);
 	const collectionEpoch = mytMidnightFromYmd(fulfilmentDate);
 	const collectionLabel = cartEvent
-		? formatFulfilmentDateTime(cartEvent.date, cartEvent.timeMinutes)
+		? formatEventMoment(cartEvent)
 		: Number.isNaN(collectionEpoch) || fulfilmentDate === minYmd
 			? "Today / now"
 			: formatFulfilmentDate(collectionEpoch);
@@ -2467,11 +2467,7 @@ function BuildOrderScreen({
 				fulfilmentLabel={(() => {
 					// The review the seller reads to the buyer must state the date the
 					// ORDER will carry — for an RSVP that's the event's, not the panel's.
-					if (cartEvent)
-						return formatFulfilmentDateTime(
-							cartEvent.date,
-							cartEvent.timeMinutes,
-						);
+					if (cartEvent) return formatEventMoment(cartEvent);
 					const e = mytMidnightFromYmd(fulfilmentDate);
 					return Number.isNaN(e) ? "—" : formatFulfilmentDate(e);
 				})()}

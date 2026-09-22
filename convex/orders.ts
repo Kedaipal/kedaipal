@@ -1635,26 +1635,27 @@ export const countActionable = query({
 // `locale` so the client resolver (src/lib/orderStatus.ts) has everything to
 // render relabelled stages. See docs/order-status-customization.md.
 /**
- * Is this order an RSVP to a fixed-date event (`z8r3fdff9u`)?
+ * The fixed-date event this order is an RSVP to (`z8r3fdff9u`), or undefined.
  *
  * Asked by looking the products up rather than by denormalizing a flag onto the
  * order: an order carries at most a handful of lines, both callers already run
  * per-order work, and a stored copy would be one more thing to keep true
  * through every write. (The seat TALLY keys on `fulfilmentDate`, which IS
- * frozen — this only answers "is it locked?", not "which event".)
+ * frozen — this answers "is it locked?" and, for a multi-day event, "until
+ * when?", read live so a seller extending a camp by a day reaches every guest.)
  */
-async function orderHoldsEvent(
+async function orderEvent(
 	ctx: QueryCtx | MutationCtx,
 	order: Doc<"orders">,
-): Promise<boolean> {
+): Promise<ProductEvent | undefined> {
 	const seen = new Set<string>();
 	for (const item of order.items) {
 		if (seen.has(item.productId)) continue;
 		seen.add(item.productId);
 		const product = await ctx.db.get(item.productId);
-		if (product?.event !== undefined) return true;
+		if (product?.event !== undefined) return product.event;
 	}
-	return false;
+	return undefined;
 }
 
 export type OrderWithStatusLabels = Doc<"orders"> & {
@@ -1662,6 +1663,10 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 	 * not to this order, so the reschedule affordance disables with the reason
 	 * (and the buyer's tracking page says the date is the event's). */
 	eventLocked?: boolean;
+	/** LAST day of a multi-day event this order RSVPs to — the tracking page
+	 * reads "Fri 4 Dec · 2:00 PM to Sun 6 Dec" instead of only the check-in
+	 * day the order froze. Undefined for a one-day event or a normal order. */
+	eventEndDate?: number;
 	// Booking capacity context (S3) — SELLER path only, for the approve card's
 	// "N of M sites already booked those nights" line. Never on the buyer/token
 	// path: per-night counts don't cross the public wire (locked).
@@ -1864,7 +1869,13 @@ export const get = query({
 			// disables with the reason instead of erroring on submit, and the
 			// buyer's tracking page says the date is the event's, not theirs.
 			// `undefined` (not `false`) on a normal order: one spelling for "no".
-			eventLocked: (await orderHoldsEvent(ctx, order)) || undefined,
+			...(await (async () => {
+				const event = await orderEvent(ctx, order);
+				return {
+					eventLocked: event !== undefined || undefined,
+					eventEndDate: event?.endDate,
+				};
+			})()),
 			deliverySnapshot: isBuyerRead ? undefined : order.deliverySnapshot,
 			// Meta's message id has no buyer use and this read is unauthenticated —
 			// strip it on the token path alongside the delivery snapshot. The
@@ -4367,7 +4378,7 @@ export const rescheduleFulfilment = mutation({
 		// headcount (which keys on the event date) while telling them to turn up
 		// on a day nobody else is coming. The seller moves the event, or cancels
 		// this RSVP — both of which say so to everyone affected.
-		if (await orderHoldsEvent(ctx, order))
+		if ((await orderEvent(ctx, order)) !== undefined)
 			throw new ConvexError(
 				"This is an RSVP — its date is set by the event. Change the event's date, or cancel this RSVP.",
 			);

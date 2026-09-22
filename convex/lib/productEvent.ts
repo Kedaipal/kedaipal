@@ -19,6 +19,7 @@ import {
 	MINUTES_PER_DAY,
 	MYT_OFFSET_MS,
 	formatFulfilmentDate,
+	formatFulfilmentDateTime,
 	formatFulfilmentTime,
 	isMytMidnight,
 	todayMytMidnight,
@@ -30,6 +31,14 @@ import {
  * at the form rather than silently promising a hall we know she doesn't have.
  */
 export const MAX_EVENT_SEATS = 500;
+
+/**
+ * Longest event a single listing can span, in days (first to last day
+ * inclusive). A weekend camp is 3, a festival a week; 31 exists only so a
+ * fat-fingered year on the end date is caught at the form instead of keeping
+ * the listing up for twelve months.
+ */
+export const MAX_EVENT_DAYS = 31;
 
 /**
  * A fixed-date event on a product.
@@ -48,12 +57,18 @@ export type ProductEvent = {
 	timeMinutes?: number;
 	/** Total seats across ALL options. Unset = uncapped. */
 	seats?: number;
+	/** LAST day of a multi-day event (MYT midnight, after `date`). Display +
+	 * listing lifetime only: every RSVP's `fulfilmentDate` stays `date` (the
+	 * check-in day), so the seat tally never changes key. Unset = a one-day
+	 * event — the same-day value normalizes to unset, so it has one spelling. */
+	endDate?: number;
 };
 
 export type EventInput = {
 	date?: number;
 	timeMinutes?: number;
 	seats?: number;
+	endDate?: number;
 };
 
 /**
@@ -107,23 +122,44 @@ export function sanitizeEvent(
 		seats = raw.seats;
 	}
 
-	return { date: raw.date, timeMinutes, seats };
+	let endDate: number | undefined;
+	if (raw.endDate !== undefined && raw.endDate !== raw.date) {
+		if (!Number.isFinite(raw.endDate) || !isMytMidnight(raw.endDate))
+			throw new Error("Event end date must be a calendar day");
+		if (raw.endDate < raw.date)
+			throw new Error("Event end date can't be before its start date");
+		if (Math.round((raw.endDate - raw.date) / DAY_MS) + 1 > MAX_EVENT_DAYS)
+			throw new Error(
+				`An event can run for at most ${MAX_EVENT_DAYS} days — check the end date`,
+			);
+		endDate = raw.endDate;
+	}
+
+	return { date: raw.date, timeMinutes, seats, endDate };
+}
+
+/** The event's last day — `endDate` for a multi-day event, else `date`. */
+export function eventLastDay(
+	event: Pick<ProductEvent, "date" | "endDate">,
+): number {
+	return event.endDate ?? event.date;
 }
 
 /**
  * Has this event finished?
  *
- * TRUE from MYT midnight on the day AFTER the event — so the listing stays up
- * for the whole event day (a guest checking the venue at 7 AM for an 8 AM
- * breakfast still finds it), and disappears from the storefront by itself the
- * next morning. No cron, no seller action: the seller of a one-off event is
- * the last person who should have to remember to unpublish it.
+ * TRUE from MYT midnight on the day AFTER the event's LAST day — so the
+ * listing stays up for the whole event (a guest checking the venue at 7 AM for
+ * an 8 AM breakfast still finds it, and a 3-day camp doesn't vanish on its
+ * second morning), and disappears from the storefront by itself afterwards. No
+ * cron, no seller action: the seller of a one-off event is the last person who
+ * should have to remember to unpublish it.
  */
 export function isEventPassed(
-	event: Pick<ProductEvent, "date">,
+	event: Pick<ProductEvent, "date" | "endDate">,
 	now: number = Date.now(),
 ): boolean {
-	return todayMytMidnight(now) > event.date;
+	return todayMytMidnight(now) > eventLastDay(event);
 }
 
 /** Days until the event (0 = today, negative = past). Drives the seller-side
@@ -151,14 +187,41 @@ export function formatEventBadge(
 	const thisYear = new Date(
 		todayMytMidnight(now) + MYT_OFFSET_MS,
 	).getUTCFullYear();
-	const eventYear = new Date(event.date + MYT_OFFSET_MS).getUTCFullYear();
+	const yearOf = (epoch: number) =>
+		new Date(epoch + MYT_OFFSET_MS).getUTCFullYear();
+	// Years are dropped only when EVERY day shown is this year — a camp from
+	// 30 Dec to 1 Jan must name both years or the range reads backwards.
+	const dropYear =
+		yearOf(event.date) === thisYear && yearOf(eventLastDay(event)) === thisYear;
 	// "Thu, 25 Sep 2026" → "Thu 25 Sep" (comma dropped: a badge, not a sentence).
-	const full = formatFulfilmentDate(event.date).replace(",", "");
-	const date =
-		eventYear === thisYear ? full.replace(` ${eventYear}`, "") : full;
-	return event.timeMinutes === undefined
-		? date
-		: `${date} · ${formatFulfilmentTime(event.timeMinutes)}`;
+	const day = (epoch: number) => {
+		const full = formatFulfilmentDate(epoch).replace(",", "");
+		return dropYear ? full.replace(` ${yearOf(epoch)}`, "") : full;
+	};
+	const start =
+		event.timeMinutes === undefined
+			? day(event.date)
+			: `${day(event.date)} · ${formatFulfilmentTime(event.timeMinutes)}`;
+	return event.endDate === undefined
+		? start
+		: `${start} to ${day(event.endDate)}`;
+}
+
+/**
+ * The FULL spelling of an event's moment, for every surface where a guest
+ * commits or checks in — the checkout banner and read-back, the tracking page,
+ * the seller's RSVPs panel and the WhatsApp RSVP confirm: "Fri, 4 Dec 2026
+ * · 2:00 PM to Sun, 6 Dec 2026". Always spells the year (the
+ * `formatFulfilmentDateTime` rule). One helper so a multi-day event can't read
+ * as one day on the one surface that forgot the end date.
+ */
+export function formatEventMoment(
+	event: Pick<ProductEvent, "date" | "timeMinutes" | "endDate">,
+): string {
+	const start = formatFulfilmentDateTime(event.date, event.timeMinutes);
+	return event.endDate === undefined
+		? start
+		: `${start} to ${formatFulfilmentDate(event.endDate)}`;
 }
 
 /**
@@ -201,7 +264,7 @@ export function describeEvent(
  * is a question about history.
  */
 export function hiddenFromStorefront(
-	product: { event?: Pick<ProductEvent, "date"> },
+	product: { event?: Pick<ProductEvent, "date" | "endDate"> },
 	now: number = Date.now(),
 ): boolean {
 	return product.event !== undefined && isEventPassed(product.event, now);

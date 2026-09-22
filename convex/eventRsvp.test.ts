@@ -526,6 +526,43 @@ describe("event RSVP — the storefront hides a finished event", () => {
 		).toBeNull();
 	});
 
+	test("a multi-day event stays up — and keeps taking RSVPs — until its LAST day", async () => {
+		// Helinox's 3-day camp: on day 2 the listing must not have vanished, a
+		// late registrant must still get in, and their order keeps the CHECK-IN
+		// day (endDate is display-only, never the tally's key).
+		const t = setup();
+		const { retailer, pickupLocationId } = await seedStore(t);
+		const productId = await seedEventProduct(t, retailer._id);
+		const checkIn = todayMytMidnight() - DAY_MS;
+		const lastDay = todayMytMidnight() + DAY_MS;
+		await t.run(async (ctx) => {
+			await ctx.db.patch(productId, {
+				event: { date: checkIn, timeMinutes: EVENT_TIME, endDate: lastDay },
+			});
+		});
+
+		const listed = await t.query(api.products.list, {
+			retailerId: retailer._id,
+		});
+		expect(listed.map((p) => p._id)).toContain(productId);
+
+		const { shortId } = await rsvp(t, {
+			retailerId: retailer._id,
+			variantId: await variantFor(t, productId, "A"),
+			pickupLocationId,
+		});
+		const order = await orderByShortId(t, shortId);
+		expect(order?.fulfilmentDate).toBe(checkIn);
+
+		// The buyer's tracking read carries the last day, so the page reads the
+		// whole range rather than only the check-in day the order froze.
+		const tracked = await t.query(api.orders.get, {
+			token: order?.trackingToken,
+		});
+		expect(tracked?.eventLocked).toBe(true);
+		expect(tracked?.eventEndDate).toBe(lastDay);
+	});
+
 	test("the seller still sees it, with the tally — history is a real question", async () => {
 		const t = setup();
 		const { asUser, retailer, pickupLocationId } = await seedStore(t);

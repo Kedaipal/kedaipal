@@ -1,9 +1,6 @@
 import ExcelJS from "exceljs";
 import Papa from "papaparse";
-import {
-	hhmmFromMinutes,
-	ymdFromEpoch,
-} from "../../convex/lib/fulfilmentDate";
+import { hhmmFromMinutes, ymdFromEpoch } from "../../convex/lib/fulfilmentDate";
 import { VARIANT_IMPORT_COLUMNS } from "./product-import";
 
 /**
@@ -50,6 +47,7 @@ export const REPORT_COLUMNS = [
 	// above. Export-only; the import ignores them (an event is created by hand,
 	// never bulk-loaded) and the import screen says so rather than no-op'ing.
 	"event_date",
+	"event_end_date",
 	"event_time",
 	"event_seats",
 	"stock_policy",
@@ -138,7 +136,12 @@ export interface ExportableProduct {
 	 * a setting the seller can't see. */
 	kind?: string;
 	/** Fixed event config (`z8r3fdff9u`). Absent on every normal product. */
-	event?: { date: number; timeMinutes?: number; seats?: number };
+	event?: {
+		date: number;
+		timeMinutes?: number;
+		seats?: number;
+		endDate?: number;
+	};
 	imageCount?: number;
 }
 
@@ -204,6 +207,8 @@ function productToExportRows(p: ExportableProduct): ExportRow[] {
 		// spreadsheets and scripts, which sort "2026-09-25" correctly and
 		// "Thu 25 Sep" not at all.
 		event_date: p.event ? ymdFromEpoch(p.event.date) : "",
+		event_end_date:
+			p.event?.endDate === undefined ? "" : ymdFromEpoch(p.event.endDate),
 		event_time:
 			p.event?.timeMinutes === undefined
 				? ""

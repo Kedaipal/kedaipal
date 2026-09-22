@@ -255,7 +255,12 @@ interface ProductFormProps {
 		pickupNote?: string;
 		minQuantity?: number;
 		/** Stored event config (`z8r3fdff9u`) — seeds the toggle + three inputs. */
-		event?: { date: number; timeMinutes?: number; seats?: number };
+		event?: {
+			date: number;
+			timeMinutes?: number;
+			seats?: number;
+			endDate?: number;
+		};
 		/** Event block as an already-built draft — the wizard handoff's spelling,
 		 * which must survive a round-trip with half-typed values intact. Wins
 		 * over `event` when both are present. */
@@ -663,7 +668,12 @@ function ProductSummaryStrip({
 	editor: VariantEditorState;
 	currency: string;
 	/** Fixed event config — leads the strip ("Event · Fri 25 Sep …"). */
-	event?: { date: number; timeMinutes?: number; seats?: number } | null;
+	event?: {
+		date: number;
+		timeMinutes?: number;
+		seats?: number;
+		endDate?: number;
+	} | null;
 	/** Booking kind + its capacity draft — flips the strip to booking words. */
 	booking?: {
 		capacityPerNight: string;

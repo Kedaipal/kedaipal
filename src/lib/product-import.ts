@@ -54,6 +54,7 @@ const EXPORT_ONLY_COLUMN_NAMES = [
 	"min_order_qty",
 	"min_notice_days",
 	"event_date",
+	"event_end_date",
 	"event_time",
 	"event_seats",
 	"stock_policy",

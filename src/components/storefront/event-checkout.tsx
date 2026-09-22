@@ -1,6 +1,8 @@
 import { CalendarClock } from "lucide-react";
-import { formatFulfilmentDateTime } from "../../../convex/lib/fulfilmentDate";
-import type { ProductEvent } from "../../../convex/lib/productEvent";
+import {
+	formatEventMoment,
+	type ProductEvent,
+} from "../../../convex/lib/productEvent";
 
 /**
  * The two checkout surfaces an RSVP replaces (`z8r3fdff9u`), lifted out of
@@ -35,7 +37,7 @@ export function EventLockBanner({
 				    moment row sits on this same screen, and one date in two formats
 				    400px apart is how a page starts looking like two pages. Browsing
 				    is where brevity wins; this is where the buyer commits. */}
-				RSVP for {formatFulfilmentDateTime(event.date, event.timeMinutes)}
+				RSVP for {formatEventMoment(event)}
 			</p>
 			<p className="text-xs leading-relaxed text-muted-foreground">
 				{mixedCart
@@ -73,7 +75,7 @@ export function EventMomentRow({
 			<CalendarClock className="size-5 shrink-0 text-accent" aria-hidden />
 			<div className="min-w-0">
 				<p className="text-sm font-semibold leading-tight">
-					{formatFulfilmentDateTime(event.date, event.timeMinutes)}
+					{formatEventMoment(event)}
 				</p>
 				<p className="mt-0.5 text-xs text-muted-foreground">
 					Set by {storeName} for this event — the same for every guest.

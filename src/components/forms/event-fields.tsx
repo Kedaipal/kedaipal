@@ -1,5 +1,6 @@
 import { CalendarClock } from "lucide-react";
 import {
+	DAY_MS,
 	hhmmFromMinutes,
 	mytMidnightFromYmd,
 	timeMinutesFromHhmm,
@@ -8,6 +9,7 @@ import {
 } from "../../../convex/lib/fulfilmentDate";
 import {
 	formatEventBadge,
+	MAX_EVENT_DAYS,
 	MAX_EVENT_SEATS,
 } from "../../../convex/lib/productEvent";
 import { ProBadge } from "../app/pro-gate";
@@ -24,6 +26,8 @@ export type EventDraft = {
 	on: boolean;
 	/** "YYYY-MM-DD" — the native date input's own value shape. */
 	date: string;
+	/** "YYYY-MM-DD" or "" — the LAST day of a multi-day event; blank = one day. */
+	endDate: string;
 	/** "HH:MM" or "" — blank means an all-day event. */
 	time: string;
 	/** Seat cap as typed; blank = no limit. */
@@ -33,6 +37,7 @@ export type EventDraft = {
 export const EMPTY_EVENT_DRAFT: EventDraft = {
 	on: false,
 	date: "",
+	endDate: "",
 	time: "",
 	seats: "",
 };
@@ -41,12 +46,15 @@ export const EMPTY_EVENT_DRAFT: EventDraft = {
  * event). Shared by the form and the wizard's handoff so a round-trip through
  * either can't lose a value. */
 export function eventDraftFrom(
-	event: { date: number; timeMinutes?: number; seats?: number } | undefined,
+	event:
+		| { date: number; timeMinutes?: number; seats?: number; endDate?: number }
+		| undefined,
 ): EventDraft {
 	if (!event) return { ...EMPTY_EVENT_DRAFT };
 	return {
 		on: true,
 		date: ymdFromEpoch(event.date),
+		endDate: event.endDate === undefined ? "" : ymdFromEpoch(event.endDate),
 		time:
 			event.timeMinutes === undefined ? "" : hhmmFromMinutes(event.timeMinutes),
 		seats: event.seats === undefined ? "" : String(event.seats),
@@ -57,7 +65,31 @@ export type EventSubmitValue = {
 	date: number;
 	timeMinutes?: number;
 	seats?: number;
+	endDate?: number;
 } | null;
+
+/** The draft's last day as an epoch: `undefined` when blank or the same day as
+ * the start (one spelling for "one day", mirroring `sanitizeEvent`), NaN when
+ * unparseable. */
+function draftEndDate(draft: EventDraft, date: number): number | undefined {
+	if (draft.endDate.trim().length === 0) return undefined;
+	const end = mytMidnightFromYmd(draft.endDate);
+	return end === date ? undefined : end;
+}
+
+/** Seller-facing problem with the draft's last day, or null. Shared by the
+ * inline error and `eventDraftValid` so the two can't disagree. */
+export function eventEndDateIssue(draft: EventDraft): string | null {
+	if (draft.date.trim().length === 0) return null;
+	const date = mytMidnightFromYmd(draft.date);
+	const end = draftEndDate(draft, date);
+	if (end === undefined || !Number.isFinite(date)) return null;
+	if (!Number.isFinite(end)) return "Pick a valid last day, or leave it blank.";
+	if (end < date) return "The last day can't be before the event date.";
+	if (Math.round((end - date) / DAY_MS) + 1 > MAX_EVENT_DAYS)
+		return `An event can run for at most ${MAX_EVENT_DAYS} days — check the last day.`;
+	return null;
+}
 
 /**
  * Draft → what `products.create`/`update` take. `null` (not `undefined`) when
@@ -68,10 +100,14 @@ export function eventSubmitValue(draft: EventDraft): EventSubmitValue {
 	if (!draft.on || draft.date.trim().length === 0) return null;
 	const timeMinutes = timeMinutesFromHhmm(draft.time);
 	const seats = Number.parseInt(draft.seats.trim(), 10);
+	const date = mytMidnightFromYmd(draft.date);
+	const endDate = draftEndDate(draft, date);
 	return {
-		date: mytMidnightFromYmd(draft.date),
+		date,
 		timeMinutes: Number.isNaN(timeMinutes) ? undefined : timeMinutes,
 		seats: Number.isInteger(seats) && seats > 0 ? seats : undefined,
+		endDate:
+			endDate !== undefined && Number.isFinite(endDate) ? endDate : undefined,
 	};
 }
 
@@ -86,6 +122,7 @@ export function eventDraftValid(
 	const date = mytMidnightFromYmd(draft.date);
 	if (!Number.isFinite(date)) return false;
 	if (!opts.allowPastDate && date < todayMytMidnight(opts.now)) return false;
+	if (eventEndDateIssue(draft) !== null) return false;
 	const seatsRaw = draft.seats.trim();
 	if (seatsRaw.length > 0) {
 		const seats = Number.parseInt(seatsRaw, 10);
@@ -139,6 +176,7 @@ export function EventFields({
 	// refuse people who are already on the list. Refused at the server too.
 	const seatsBelowTaken =
 		seatsValid && seatsRaw.length > 0 && seatsParsed < taken;
+	const endDateIssue = eventEndDateIssue(draft);
 
 	return (
 		<div className="flex flex-col gap-4">
@@ -153,7 +191,7 @@ export function EventFields({
 							? "Events are part of the Pro plan. Upgrade in Settings → Billing to take RSVPs."
 							: hasRsvps
 								? `${taken} ${taken === 1 ? "guest has" : "guests have"} RSVP'd — cancel or archive this event instead of turning it off.`
-								: "Guests RSVP to one fixed date instead of picking their own. Collected at your pickup point, and the listing comes off your storefront by itself the day after."}
+								: "Guests RSVP to one fixed date instead of picking their own. Collected at your pickup point, and the listing comes off your storefront by itself the day after it ends."}
 					</p>
 				</div>
 				<ToggleSwitch
@@ -180,6 +218,28 @@ export function EventFields({
 								variant="field"
 								disabled={locked || hasRsvps}
 								isError={dateInPast}
+								className="w-44"
+							/>
+						</div>
+						{/* A multi-day event (a weekend camp): display + how long the
+						    listing stays up. Stays editable with guests booked — every
+						    RSVP keeps the check-in day, so this never moves a seat. */}
+						<div className="flex flex-col gap-1.5">
+							<label htmlFor="event-end-date" className="text-sm font-medium">
+								Last day{" "}
+								<span className="font-normal text-muted-foreground">
+									(optional)
+								</span>
+							</label>
+							<Input
+								id="event-end-date"
+								type="date"
+								min={draft.date || todayYmd}
+								value={draft.endDate}
+								onChange={(e) => set({ endDate: e.target.value })}
+								variant="field"
+								disabled={locked}
+								isError={endDateIssue !== null}
 								className="w-44"
 							/>
 						</div>
@@ -230,6 +290,9 @@ export function EventFields({
 							that has passed.
 						</p>
 					) : null}
+					{endDateIssue !== null ? (
+						<p className="text-xs text-destructive">{endDateIssue}</p>
+					) : null}
 					{!seatsValid ? (
 						<p className="text-xs text-destructive">
 							Enter a whole number between 1 and {MAX_EVENT_SEATS}, or leave
@@ -252,7 +315,7 @@ export function EventFields({
 							<span>
 								{/* A full sentence in EVERY state: before a date exists the
 								    line used to open mid-sentence ("they can't pick…"). */}
-								Guests RSVP to{" "}
+								Guests RSVP for{" "}
 								{Number.isFinite(dateEpoch) ? (
 									<strong className="font-semibold text-foreground">
 										{formatEventBadge(
@@ -274,7 +337,7 @@ export function EventFields({
 									: seatsRaw.length > 0
 										? ` RSVPs stop at ${seatsParsed} seats.`
 										: " No seat limit — per-option stock still applies."}{" "}
-								The listing hides itself the day after.
+								The listing hides itself the day after it ends.
 							</span>
 						</p>
 					</div>

@@ -809,6 +809,7 @@ export const create = mutation({
 				date: v.number(),
 				timeMinutes: v.optional(v.number()),
 				seats: v.optional(v.number()),
+				endDate: v.optional(v.number()),
 			}),
 		),
 		// Kind + booking config land together at create and the kind is immutable
@@ -1130,6 +1131,7 @@ export const update = mutation({
 					date: v.number(),
 					timeMinutes: v.optional(v.number()),
 					seats: v.optional(v.number()),
+					endDate: v.optional(v.number()),
 				}),
 				v.null(),
 			),
@@ -2447,6 +2449,7 @@ export const eventHeadcount = query({
 		date: number;
 		timeMinutes?: number;
 		seats?: number;
+		endDate?: number;
 		taken: number;
 		left?: number;
 		passed: boolean;
@@ -2463,6 +2466,7 @@ export const eventHeadcount = query({
 			date: product.event.date,
 			timeMinutes: product.event.timeMinutes,
 			seats: product.event.seats,
+			endDate: product.event.endDate,
 			taken: tally.taken,
 			left: seatsLeft(product.event, tally.taken),
 			passed: isEventPassed(product.event),

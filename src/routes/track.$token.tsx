@@ -42,6 +42,7 @@ import {
 import { describeGatewayMethods } from "../../convex/lib/hitpay";
 import { orderPickupNotes } from "../../convex/lib/pickupNote";
 import { isFreeOrder, isMockupGateClosed } from "../../convex/lib/order";
+import { formatEventMoment } from "../../convex/lib/productEvent";
 import { paymentDeadlineApplies } from "../../convex/lib/orderClaims";
 import { isOrderDocPaid } from "../../convex/lib/orderDocument";
 import { paymentMethodLabel } from "../../convex/lib/paymentMethod";
@@ -1580,10 +1581,16 @@ function TrackingRoute() {
 										: "We collect on "
 									: "Delivery on "}
 						<span className="font-semibold">
-							{formatFulfilmentDateTime(
-								order.fulfilmentDate,
-								order.fulfilmentTimeMinutes,
-							)}
+							{order.eventLocked
+								? formatEventMoment({
+										date: order.fulfilmentDate,
+										timeMinutes: order.fulfilmentTimeMinutes,
+										endDate: order.eventEndDate,
+									})
+								: formatFulfilmentDateTime(
+										order.fulfilmentDate,
+										order.fulfilmentTimeMinutes,
+									)}
 						</span>
 						{order.eventLocked ? (
 							<span className="mt-0.5 block text-xs font-normal text-muted-foreground">

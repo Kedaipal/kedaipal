@@ -39,6 +39,7 @@ event?: {
   date: number          // MYT midnight epoch (isMytMidnight)
   timeMinutes?: number  // 0..1439; unset = an all-day event
   seats?: number        // total cap across ALL options; unset = uncapped
+  endDate?: number      // LAST day of a multi-day event; unset = one day
 }
 ```
 
@@ -50,6 +51,39 @@ needs, and no new index was required.
 `seats: 0` normalizes to **unset** at the sanitizer, so "no limit" has one
 spelling. A stored 0 would read as "sold out" to `seatsLeft` and render an
 uncapped event as fully booked from the first paint.
+
+## Multi-day events (`endDate`)
+
+Added 22 Sep 2026 for the second seller, Helinox Community Malaysia's
+*Into The Falls* camp (4–6 Dec, 90–110 participants). Packages and tent type
+are two option axes, the RSVPs panel's per-option tally is the tent lot plan,
+and the seat cap is the participant limit, so the only missing piece was a
+last day.
+
+`endDate` is **display and listing lifetime only**:
+
+- Every RSVP still freezes `fulfilmentDate = event.date` (the check-in day), so
+  the seat tally's key never moves and nothing else in the order flow changes.
+- `isEventPassed` (and so `hiddenFromStorefront` and the passed-event refusal
+  in `orders.create` and the counter) runs off `eventLastDay()`. The listing
+  stays up, and keeps taking late registrations, until the day after the
+  LAST day, so a camp doesn't vanish on its second morning.
+- It's validated in `sanitizeEvent`: a calendar day, not before `date`, and at
+  most `MAX_EVENT_DAYS` (31) including both ends, which catches a mistyped
+  year. The same day as `date` normalizes to **unset**, so "one day" has one
+  spelling.
+- It **stays editable while guests are booked**, unlike the date. It moves no
+  seat, and extending a camp by a day should reach every guest. That's why the
+  tracking page and the WhatsApp RSVP label read it live from the product
+  rather than freezing it onto the order.
+
+Spelling: the glanceable badge is `Fri 4 Dec · 2:00 PM to Sun 6 Dec` (years
+dropped only when both days are this year, so a New Year's range names both).
+The full spelling, from `formatEventMoment()`, is used wherever a guest commits
+or checks in: the checkout banner and read-back, the counter, the track page,
+the seller's RSVPs panel and the WhatsApp label. One helper, so no surface can
+forget the last day. The seller sets it as **Last day (optional)** beside
+**Event date**.
 
 ## The two modules
 
@@ -196,7 +230,7 @@ Paid events run the normal handshake unchanged.
 | Seller product page | The **RSVPs panel**, above the form: total, per-option tally, seats left, and a link into the inbox searching the product's frozen item name (the inbox's `from`/`to` bind to createdAt, and no arbitrary fulfilment-day filter exists) |
 | Seller product form | Its own **Event** card above "Order rules" (see below) |
 | `/track/<token>` | "Event: Fri 25 Sep · 8:00 AM — set by the store for this event" |
-| Product CSV export | `event_date`, `event_time`, `event_seats` (export-only) |
+| Product CSV export | `event_date`, `event_end_date`, `event_time`, `event_seats` (export-only; the import names them as ignored) |
 
 ### Why the Event card sits above "Order rules"
 

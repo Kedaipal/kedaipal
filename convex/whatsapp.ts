@@ -32,6 +32,7 @@ import {
 	pushOwnsTheMessage,
 } from "./lib/confirmationPush";
 import { formatFulfilmentDateTime } from "./lib/fulfilmentDate";
+import { formatEventMoment } from "./lib/productEvent";
 import { type GuardedSender, makeGuardedSender } from "./wabaProtection";
 import { stampRetailerActivation } from "./lib/activation";
 import { classifyOptOutKeyword } from "./lib/wabaLimits";
@@ -297,10 +298,13 @@ async function resolveEventLabel(
 	for (const item of order.items) {
 		const product = await ctx.db.get(item.productId);
 		if (product?.event === undefined) continue;
-		return `${item.name} · ${formatFulfilmentDateTime(
-			order.fulfilmentDate,
-			order.fulfilmentTimeMinutes,
-		)}`;
+		// The moment is the ORDER's frozen check-in; only a multi-day event's
+		// last day is read live from the product (display-only, never a key).
+		return `${item.name} · ${formatEventMoment({
+			date: order.fulfilmentDate,
+			timeMinutes: order.fulfilmentTimeMinutes,
+			endDate: product.event.endDate,
+		})}`;
 	}
 	return undefined;
 }
