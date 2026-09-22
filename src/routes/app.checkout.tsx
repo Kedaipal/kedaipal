@@ -122,6 +122,9 @@ type CreatedOrder = {
 	 * "Mark as completed": the guest attends LATER; the RSVP completes at the
 	 * event ("Checked In"), not at the counter. */
 	eventRsvp?: boolean;
+	/** RM0 with nothing unsettled — the push said "no payment needed", so the
+	 * done screen must not claim it said "how to pay". */
+	free?: boolean;
 };
 
 function CounterCheckoutRoute() {
@@ -244,6 +247,7 @@ function ActiveSession({
 				orderId={created?.orderId ?? session.orderId}
 				paidInPerson={created?.paidInPerson ?? false}
 				eventRsvp={created?.eventRsvp}
+				free={created?.free}
 				buyerName={session.displayName}
 				anonymous={!session.waPhone}
 				onBackToList={onBackToList}
@@ -874,6 +878,7 @@ function DoneScreen({
 	orderId,
 	paidInPerson,
 	eventRsvp,
+	free,
 	buyerName,
 	anonymous,
 	onBackToList,
@@ -883,6 +888,8 @@ function DoneScreen({
 	paidInPerson: boolean;
 	/** RSVP — completion happens at the event, so the one-tap close is hidden. */
 	eventRsvp?: boolean;
+	/** Free order — the WhatsApp said "no payment needed", not "how to pay". */
+	free?: boolean;
 	buyerName: string | undefined;
 	// Anonymous cash sale — no buyer to notify (86ey8vqp6), so not even the one
 	// confirmation goes out and the document below is their only copy.
@@ -907,7 +914,9 @@ function DoneScreen({
 		? "is confirmed. Cash sale with no contact, so nothing was sent."
 		: paidInPerson
 			? "is confirmed. We sent the buyer one WhatsApp with a link to their order."
-			: "is confirmed. We sent the buyer one WhatsApp with how to pay and a link to their order.";
+			: free
+				? "is confirmed. We sent the buyer one WhatsApp with a link to their order — nothing to pay."
+				: "is confirmed. We sent the buyer one WhatsApp with how to pay and a link to their order.";
 
 	async function markCompleted() {
 		if (!orderId) return;
@@ -1414,6 +1423,7 @@ function BuildOrderScreen({
 		orderId: Id<"orders">;
 		paidInPerson: boolean;
 		eventRsvp?: boolean;
+		free?: boolean;
 	}) => void;
 	// Cancel the whole checkout (customer walked / changed their mind). Drops the
 	// session + any items and returns to the open-checkouts list.
@@ -1725,6 +1735,7 @@ function BuildOrderScreen({
 				orderId,
 				paidInPerson: effectivePaid,
 				eventRsvp: cartEvent !== undefined || undefined,
+				free: total <= 0 || undefined,
 			});
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -2221,7 +2232,7 @@ function BuildOrderScreen({
 									<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 										Payment
 									</p>
-									{total <= 0 ? (
+									{cartEntries.length > 0 && total <= 0 ? (
 										/* A FREE order (an RM0 RSVP, a comp'd item) has no payment
 										   to ask about — "Paid now · Cash" on it would write a
 										   payment record the order page then contradicts with

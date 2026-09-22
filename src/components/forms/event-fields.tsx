@@ -9,7 +9,7 @@ import {
 } from "../../../convex/lib/fulfilmentDate";
 import {
 	formatEventBadge,
-	MAX_EVENT_DAYS,
+	LONG_EVENT_WARN_DAYS,
 	MAX_EVENT_SEATS,
 } from "../../../convex/lib/productEvent";
 import { ProBadge } from "../app/pro-gate";
@@ -86,9 +86,26 @@ export function eventEndDateIssue(draft: EventDraft): string | null {
 	if (end === undefined || !Number.isFinite(date)) return null;
 	if (!Number.isFinite(end)) return "Pick a valid last day, or leave it blank.";
 	if (end < date) return "The last day can't be before the event date.";
-	if (Math.round((end - date) / DAY_MS) + 1 > MAX_EVENT_DAYS)
-		return `An event can run for at most ${MAX_EVENT_DAYS} days — check the last day.`;
 	return null;
+}
+
+/**
+ * Amber nudge for an unusually long event — a typo'd month or year on the
+ * last day keeps the listing up (and taking RSVPs) long after the event, so
+ * past `LONG_EVENT_WARN_DAYS` the form asks for a second look. A WARNING, not
+ * a block: Save stays enabled, because a real 6-week class series is allowed
+ * (the server enforces only "a calendar day, not before the start").
+ */
+export function eventEndDateWarning(draft: EventDraft): string | null {
+	if (eventEndDateIssue(draft) !== null) return null;
+	if (draft.date.trim().length === 0) return null;
+	const date = mytMidnightFromYmd(draft.date);
+	const end = draftEndDate(draft, date);
+	if (end === undefined || !Number.isFinite(date) || !Number.isFinite(end))
+		return null;
+	const days = Math.round((end - date) / DAY_MS) + 1;
+	if (days <= LONG_EVENT_WARN_DAYS) return null;
+	return `That's a ${days}-day event — double-check the last day.`;
 }
 
 /**
@@ -177,6 +194,7 @@ export function EventFields({
 	const seatsBelowTaken =
 		seatsValid && seatsRaw.length > 0 && seatsParsed < taken;
 	const endDateIssue = eventEndDateIssue(draft);
+	const endDateWarning = eventEndDateWarning(draft);
 
 	return (
 		<div className="flex flex-col gap-4">
@@ -292,6 +310,14 @@ export function EventFields({
 					) : null}
 					{endDateIssue !== null ? (
 						<p className="text-xs text-destructive">{endDateIssue}</p>
+					) : null}
+					{/* Amber, not red — Save stays enabled. A 6-week series is real;
+					    this only asks for a second look at a span a typo'd month or
+					    year would produce. */}
+					{endDateWarning !== null ? (
+						<p className="text-xs text-amber-600 dark:text-amber-500">
+							{endDateWarning}
+						</p>
 					) : null}
 					{!seatsValid ? (
 						<p className="text-xs text-destructive">

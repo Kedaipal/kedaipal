@@ -625,7 +625,14 @@ describe("event RSVP — its own status pipeline (`z8r3fdff9u` stages)", () => {
 				paidInPerson: false,
 			},
 		);
-		expect((await orderByShortId(t, counter.shortId))?.eventRsvp).toBe(true);
+		const counterOrder = await orderByShortId(t, counter.shortId);
+		expect(counterOrder?.eventRsvp).toBe(true);
+		// The VENUE rides a counter RSVP too — the guest leaves and comes back
+		// on the event day, and their order page's event note points at the
+		// pickup card. A plain counter sale keeps no pickup card (handed over
+		// at the counter), which the plain-sale assertion below pins.
+		expect(counterOrder?.pickupSnapshot?.label).toBe("The Studio");
+		expect(counterOrder?.pickupLocationId).toBeDefined();
 		// A plain sale is NOT marked — the marker means exactly one thing.
 		const plainId = await asUser.mutation(api.products.create, {
 			retailerId: retailer._id,
@@ -655,7 +662,29 @@ describe("event RSVP — its own status pipeline (`z8r3fdff9u` stages)", () => {
 				paidInPerson: true,
 			},
 		);
-		expect((await orderByShortId(t, plain.shortId))?.eventRsvp).toBeUndefined();
+		const plainOrder = await orderByShortId(t, plain.shortId);
+		expect(plainOrder?.eventRsvp).toBeUndefined();
+		expect(plainOrder?.pickupSnapshot).toBeUndefined();
+	});
+
+	test("a counter RSVP with NO active pickup point refuses — in seller words", async () => {
+		const t = setup();
+		const { asUser, retailer, pickupLocationId } = await seedStore(t);
+		const productId = await seedEventProduct(t, retailer._id);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(pickupLocationId, { isActive: false });
+		});
+		const { sessionId } = await asUser.mutation(
+			api.counterCheckout.bindSessionManualPhone,
+			{ waPhone: "60123456789", name: "Aina Hamzah" },
+		);
+		await expect(
+			asUser.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId: await variantFor(t, productId, "A"), quantity: 1 }],
+				paidInPerson: false,
+			}),
+		).rejects.toThrow(/venue.*pickup point/i);
 	});
 
 	test("a FREE counter RSVP records NO payment, whatever the client sent", async () => {

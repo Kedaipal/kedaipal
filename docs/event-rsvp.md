@@ -68,9 +68,16 @@ last day.
   in `orders.create` and the counter) runs off `eventLastDay()`. The listing
   stays up, and keeps taking late registrations, until the day after the
   LAST day, so a camp doesn't vanish on its second morning.
-- It's validated in `sanitizeEvent`: a calendar day, not before `date`, and at
-  most `MAX_EVENT_DAYS` (31) including both ends, which catches a mistyped
-  year. The same day as `date` normalizes to **unset**, so "one day" has one
+- It's validated in `sanitizeEvent` with **the ticket's rules only**: a
+  calendar day, not before `date`. There is deliberately **no length cap**
+  (revised 23 Sep — the first build's 31-day block was not ticket scope): a
+  real 6-week class series must save, and a cap's only workaround — leaving
+  the last day blank — reintroduces the vanishing-listing bug the field fixes.
+  The typo guard is the form: past `LONG_EVENT_WARN_DAYS` (14) an **amber
+  warning** asks "That's a 43-day event — double-check the last day" with Save
+  enabled, and the read-back range names both years across a boundary. (The
+  500-seat ceiling stays: `1..500` is in the ticket's acceptance criteria.)
+  The same day as `date` normalizes to **unset**, so "one day" has one
   spelling.
 - It **stays editable while guests are booked**, unlike the date. It moves no
   seat, and extending a camp by a day should reach every guest. That's why the
@@ -135,7 +142,11 @@ For a cart holding any event line:
   (rather than refused — the counter's date field is a convenience the seller
   may simply not have filled, and there's exactly one date the order can mean)
   and the seat cap is counted the same way. A seat sold at the counter is a seat
-  the storefront can no longer sell. The counter's Collection panel **reads the
+  the storefront can no longer sell. The **venue is frozen onto a counter RSVP
+  too** (first active pickup point; refused in seller words when none exists) —
+  a plain counter sale is handed over at the counter and keeps no pickup card,
+  but an RSVP's guest leaves and comes back, and their order page's event note
+  points at the pickup card. The counter's Collection panel **reads the
   event moment back** ("Set by the event…") instead of offering the date
   editor, the confirm dialog names it, and the **Send-link mode refuses an
   event cart with the event's own reason** (share the storefront link instead)

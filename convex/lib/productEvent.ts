@@ -33,12 +33,17 @@ import {
 export const MAX_EVENT_SEATS = 500;
 
 /**
- * Longest event a single listing can span, in days (first to last day
- * inclusive). A weekend camp is 3, a festival a week; 31 exists only so a
- * fat-fingered year on the end date is caught at the form instead of keeping
- * the listing up for twelve months.
+ * Length (days, inclusive) past which the FORM shows an amber "double-check
+ * the last day" warning — a typo'd year on the end date keeps the listing up
+ * and taking RSVPs long after the event, so an unusually long span is worth a
+ * second look. Deliberately a warning, not a cap (Zaki, 23 Sep, reversing the
+ * first build's hard 31-day block): a real 6-week class series must save, the
+ * form already prints the whole range back (a cross-year range names both
+ * years), and a hard cap's only workaround — leaving the last day blank —
+ * reintroduces the exact vanishing-listing bug this field fixes. The server
+ * enforces only the ticket's rules: a calendar day, not before the start.
  */
-export const MAX_EVENT_DAYS = 31;
+export const LONG_EVENT_WARN_DAYS = 14;
 
 /**
  * A fixed-date event on a product.
@@ -128,14 +133,17 @@ export function sanitizeEvent(
 			throw new Error("Event end date must be a calendar day");
 		if (raw.endDate < raw.date)
 			throw new Error("Event end date can't be before its start date");
-		if (Math.round((raw.endDate - raw.date) / DAY_MS) + 1 > MAX_EVENT_DAYS)
-			throw new Error(
-				`An event can run for at most ${MAX_EVENT_DAYS} days — check the end date`,
-			);
 		endDate = raw.endDate;
 	}
 
 	return { date: raw.date, timeMinutes, seats, endDate };
+}
+
+/** Inclusive length of the event in days (1 for a one-day event). */
+export function eventLengthDays(
+	event: Pick<ProductEvent, "date" | "endDate">,
+): number {
+	return Math.round((eventLastDay(event) - event.date) / DAY_MS) + 1;
 }
 
 /** The event's last day — `endDate` for a multi-day event, else `date`. */

@@ -12,7 +12,7 @@ import {
 	formatEventMoment,
 	hiddenFromStorefront,
 	isEventPassed,
-	MAX_EVENT_DAYS,
+	eventLengthDays,
 	MAX_EVENT_SEATS,
 	sanitizeEvent,
 	seatsLeft,
@@ -181,25 +181,24 @@ describe("multi-day events — endDate (Helinox, 4 to 6 Dec)", () => {
 		).toBeUndefined();
 	});
 
-	test("sanitizer refuses a last day before the start, off-midnight, or too long", () => {
+	test("sanitizer refuses a last day before the start or off-midnight — and NOTHING else", () => {
 		expect(() =>
 			sanitizeEvent({ date: DEC_6, endDate: DEC_4 }, { now: NOW_2026 }),
 		).toThrow(/before its start/i);
 		expect(() =>
 			sanitizeEvent({ date: DEC_4, endDate: DEC_6 + 1 }, { now: NOW_2026 }),
 		).toThrow(/calendar day/i);
-		// MAX_EVENT_DAYS counts both ends: day 1..31 is fine, day 32 is not.
-		const lastOk = DEC_4 + (MAX_EVENT_DAYS - 1) * DAY_MS;
-		expect(
-			sanitizeEvent({ date: DEC_4, endDate: lastOk }, { now: NOW_2026 })
-				?.endDate,
-		).toBe(lastOk);
-		expect(() =>
-			sanitizeEvent(
-				{ date: DEC_4, endDate: lastOk + DAY_MS },
-				{ now: NOW_2026 },
-			),
-		).toThrow(/at most/i);
+		// No length cap (Zaki, 23 Sep — the ticket's rules only): a 6-week
+		// series saves; the FORM warns past LONG_EVENT_WARN_DAYS instead, and
+		// the read-back range (with both years across a boundary) is the typo
+		// guard. A 90-day span must sanitize clean.
+		const lastFar = DEC_4 + 89 * DAY_MS;
+		const long = sanitizeEvent(
+			{ date: DEC_4, endDate: lastFar },
+			{ now: NOW_2026 },
+		);
+		expect(long?.endDate).toBe(lastFar);
+		expect(eventLengthDays({ date: DEC_4, endDate: lastFar })).toBe(90);
 	});
 
 	test("the listing stays up through the LAST day, not just the first", () => {

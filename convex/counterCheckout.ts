@@ -65,6 +65,8 @@ import {
 	generateTrackingToken,
 } from "./lib/order";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
+import type { PickupSnapshot } from "./lib/whatsappCopy";
+import { buildPickupSnapshot } from "./orders";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidWaPhone, assertValidWaPhoneForCountry } from "./lib/slug";
 import { variantLabel } from "./lib/variant";
@@ -871,6 +873,8 @@ export const createOrderFromSession = mutation({
 		// filled, and there is exactly one date this order can mean.
 		let sanitizedFulfilmentTime: number | undefined;
 		const eventLock = [...eventProducts.values()][0]?.event;
+		let eventPickupLocationId: Id<"pickupLocations"> | undefined;
+		let eventPickupSnapshot: PickupSnapshot | undefined;
 		if (eventLock !== undefined) {
 			if (
 				new Set([...eventProducts.values()].map((e) => e.event.date)).size > 1
@@ -884,6 +888,24 @@ export const createOrderFromSession = mutation({
 				);
 			sanitizedFulfilmentDate = eventLock.date;
 			sanitizedFulfilmentTime = eventLock.timeMinutes;
+			// The VENUE rides the RSVP here too. A plain counter sale is handed
+			// over at the counter and needs no pickup card — but an RSVP's guest
+			// leaves and comes back on the event day, and their order page says
+			// "where to go is in the pickup card". The storefront door refuses an
+			// event with no venue; the counter does the same, in seller words
+			// (the seller is the one looking at this screen and can fix it).
+			const venue = await ctx.db
+				.query("pickupLocations")
+				.withIndex("by_retailer_active", (q) =>
+					q.eq("retailerId", retailer._id).eq("isActive", true),
+				)
+				.first();
+			if (venue === null)
+				throw new ConvexError(
+					"An RSVP needs a venue on the guest's order page — add an active pickup point in Settings → Fulfilment first.",
+				);
+			eventPickupLocationId = venue._id;
+			eventPickupSnapshot = buildPickupSnapshot(venue);
 		}
 		for (const [productId, { event, name }] of eventProducts) {
 			if (event.seats === undefined) continue;
@@ -941,6 +963,10 @@ export const createOrderFromSession = mutation({
 			source: "counter",
 			customer: { name: customerName, waPhone: session.waPhone },
 			deliveryMethod: "self_collect", // collected at the counter
+			// An RSVP freezes its venue (see the event branch above); a plain
+			// counter sale keeps no pickup card — it is handed over right here.
+			pickupLocationId: eventPickupLocationId,
+			pickupSnapshot: eventPickupSnapshot,
 			fulfilmentDate: sanitizedFulfilmentDate,
 			fulfilmentTimeMinutes: sanitizedFulfilmentTime,
 			// Frozen flow-kind marker — a walk-in RSVP (see schema comment).
