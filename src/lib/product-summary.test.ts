@@ -19,6 +19,22 @@ function row(
 }
 
 describe("describeProduct", () => {
+	it("an event leads the summary — it changes what the product IS", () => {
+		// 5 Jan 2099 MYT midnight (UTC+8).
+		const date = Date.UTC(2099, 0, 4, 16, 0, 0);
+		expect(
+			describeProduct(
+				{
+					options: [],
+					rows: [row({ price: "18.00" })],
+					customLine: null,
+					event: { date, timeMinutes: 480, seats: 30 },
+				},
+				"RM",
+			).startsWith("Event · "),
+		).toBe(true);
+	});
+
 	it("describes a single tracked item with one price", () => {
 		expect(
 			describeProduct(

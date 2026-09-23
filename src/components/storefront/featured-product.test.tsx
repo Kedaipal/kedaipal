@@ -87,7 +87,11 @@ const makeProduct = (
 function makeCart(): UseCart {
 	return {
 		items: [],
-		addItem: vi.fn(),
+		// Honors the real contract: addItem returns a result the add helper
+		// reads (`z8r3fdff9u` — the cart can refuse a second event date). A bare
+		// vi.fn() returned undefined and threw inside the click handler, which
+		// vitest reported as an unhandled error while every assertion passed.
+		addItem: vi.fn(() => ({ ok: true as const })),
 		quantityForProduct: () => 0,
 		subtotalForProduct: () => 0,
 	} as unknown as UseCart;

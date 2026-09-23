@@ -41,7 +41,8 @@ import {
 } from "../../convex/lib/fulfilmentDate";
 import { describeGatewayMethods } from "../../convex/lib/hitpay";
 import { orderPickupNotes } from "../../convex/lib/pickupNote";
-import { isMockupGateClosed } from "../../convex/lib/order";
+import { isFreeOrder, isMockupGateClosed } from "../../convex/lib/order";
+import { formatEventMoment } from "../../convex/lib/productEvent";
 import { paymentDeadlineApplies } from "../../convex/lib/orderClaims";
 import { isOrderDocPaid } from "../../convex/lib/orderDocument";
 import { paymentMethodLabel } from "../../convex/lib/paymentMethod";
@@ -406,7 +407,12 @@ function TrackingRoute() {
 		order.status !== "cancelled" &&
 		(order.paymentStatus ?? "unpaid") !== "received" &&
 		!isMockupGateClosed(order) &&
-		order.deliveryFeePending !== true;
+		order.deliveryFeePending !== true &&
+		// A genuinely free order (`z8r3fdff9u` — the RM0 RSVP) has nothing to
+		// pay: without this, the page told a guest to bank-transfer RM 0.00 and
+		// attach the receipt. isFreeOrder, never a bare total check — an
+		// unquoted mockup order also sits at 0 and must keep its (held) ask.
+		!isFreeOrder(order);
 	const paymentInfo = useQuery(
 		convexQuery(
 			api.orders.getPaymentMethods,
@@ -571,7 +577,10 @@ function TrackingRoute() {
 	const stages = resolveStages({
 		orderStages: order.orderStages,
 		labels: order.statusLabels,
-		deliveryMethod,
+		// An RSVP's timeline is Order Received → Confirmed → Checked In — no
+		// Packed, no Ready for Pickup. Same registry the seller's stepper uses,
+		// so the two sides can never tell different stories.
+		deliveryMethod: order.eventLocked ? "event" : deliveryMethod,
 		bookingPackaged: order.bookingPackaged,
 	});
 	const currentStage = resolveCurrentStage(
@@ -708,6 +717,7 @@ function TrackingRoute() {
 					<ConfirmationSentCard
 						ms={order.retailerLocale === "ms"}
 						checkoutPhone={order.checkoutPhone}
+						free={isFreeOrder(order)}
 					/>
 				) : null
 			) : null}
@@ -821,8 +831,12 @@ function TrackingRoute() {
 
 			{/* Payment card — independent of fulfilment status. Hidden once cancelled,
 			    and held back on a booking REQUEST: nothing is payable until the seller
-			    approves (the awaiting card above says so). */}
-			{!isCancelled && order.status !== "booking_requested" ? (
+			    approves (the awaiting card above says so). A FREE order drops the
+			    whole card: "Payment Unpaid" over an RM 0.00 total is a claim about a
+			    debt that doesn't exist, and every control inside is a dead end. */}
+			{!isCancelled &&
+			order.status !== "booking_requested" &&
+			!isFreeOrder(order) ? (
 				<section
 					className={`mt-4 flex flex-col gap-3 rounded-2xl border p-4 ${paymentConfig.tone}`}
 				>
@@ -1552,22 +1566,41 @@ function TrackingRoute() {
 			    A booking's fulfilmentDate IS its check-in, already printed above
 			    under its own word, so this would duplicate it as "Delivery on". */}
 			{!isBooking && order.fulfilmentDate !== undefined ? (
-				<div className="mt-2 flex items-center gap-2 rounded-xl bg-accent/5 px-3 py-2 text-sm font-medium text-foreground">
-					<CalendarDays className="size-4 text-accent" />
-					{isSelfCollect
-						? order.pickupSnapshot?.locationType === "drop_off"
-							? "Meet on "
-							: "Collect on "
-						: isCollection
-							? order.collectedAt !== undefined
-								? "Collected on "
-								: "We collect on "
-							: "Delivery on "}
-					<span className="font-semibold">
-						{formatFulfilmentDateTime(
-							order.fulfilmentDate,
-							order.fulfilmentTimeMinutes,
-						)}
+				<div className="mt-2 flex items-start gap-2 rounded-xl bg-accent/5 px-3 py-2 text-sm font-medium text-foreground">
+					<CalendarDays className="mt-0.5 size-4 shrink-0 text-accent" />
+					<span>
+						{/* An RSVP's moment is the EVENT's (`z8r3fdff9u`), not a slot
+						    the guest picked — "Collect on" would misdescribe it, and
+						    "Event" is the word they'll be looking for on this page. */}
+						{order.eventLocked
+							? "Event: "
+							: isSelfCollect
+								? order.pickupSnapshot?.locationType === "drop_off"
+									? "Meet on "
+									: "Collect on "
+								: isCollection
+									? order.collectedAt !== undefined
+										? "Collected on "
+										: "We collect on "
+									: "Delivery on "}
+						<span className="font-semibold">
+							{order.eventLocked
+								? formatEventMoment({
+										date: order.fulfilmentDate,
+										timeMinutes: order.fulfilmentTimeMinutes,
+										endDate: order.eventEndDate,
+									})
+								: formatFulfilmentDateTime(
+										order.fulfilmentDate,
+										order.fulfilmentTimeMinutes,
+									)}
+						</span>
+						{order.eventLocked ? (
+							<span className="mt-0.5 block text-xs font-normal text-muted-foreground">
+								Set by the store for this event — same for every guest. Where to
+								go is in the pickup card above.
+							</span>
+						) : null}
 					</span>
 				</div>
 			) : null}
@@ -1883,9 +1916,12 @@ type TrackedOrder = NonNullable<FunctionReturnType<typeof api.orders.get>>;
 function ConfirmationSentCard({
 	ms,
 	checkoutPhone,
+	free,
 }: {
 	ms: boolean;
 	checkoutPhone: string;
+	/** `isFreeOrder` — a free RSVP has no "how to pay" for this card to point at. */
+	free: boolean;
 }) {
 	return (
 		<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-accent/40 bg-accent/5 p-4">
@@ -1904,8 +1940,12 @@ function ConfirmationSentCard({
 			</div>
 			<p className="text-sm text-muted-foreground">
 				{ms
-					? "Tak perlu hantar apa-apa. Itulah satu-satunya mesej yang kami hantar — selebihnya ada di sini: cara membayar, status terkini dan resit anda. Simpan pautan ini."
-					: "Nothing to send. That's the only message we'll send you — everything else is here: how to pay, your latest status, and your receipt. Keep this link."}
+					? free
+						? "Tak perlu hantar apa-apa dan tiada bayaran diperlukan. Itulah satu-satunya mesej yang kami hantar — status terkini dan resit anda ada di sini. Simpan pautan ini."
+						: "Tak perlu hantar apa-apa. Itulah satu-satunya mesej yang kami hantar — selebihnya ada di sini: cara membayar, status terkini dan resit anda. Simpan pautan ini."
+					: free
+						? "Nothing to send and nothing to pay. That's the only message we'll send you — your latest status and your receipt live here. Keep this link."
+						: "Nothing to send. That's the only message we'll send you — everything else is here: how to pay, your latest status, and your receipt. Keep this link."}
 			</p>
 			<Button asChild variant="outline" className="h-11 w-full">
 				<a

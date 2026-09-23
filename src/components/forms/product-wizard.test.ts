@@ -3,6 +3,7 @@ import type { ProductFormDraft } from "./product-form";
 import {
 	buildWizardSubmitValues,
 	emptyWizardState,
+	kindFromCard,
 	formDraftToWizardState,
 	skuConflictTarget,
 	type WizardState,
@@ -346,6 +347,32 @@ describe("buildWizardSubmitValues", () => {
 		const noRules = buildWizardSubmitValues(browniesState());
 		expect(noRules.minQuantity).toBeUndefined();
 		expect(noRules.minNoticeDays).toBeUndefined();
+	});
+
+	it("an EVENT drops min notice and prep time — a stale typed value never rides along", () => {
+		// The drawer hides both inputs while the event toggle is on, so a value
+		// typed BEFORE toggling would otherwise submit invisibly (`z8r3fdff9u`
+		// follow-up: prep/notice don't apply to a fixed-date RSVP).
+		const values = buildWizardSubmitValues({
+			...browniesState(),
+			minNoticeDays: "3",
+			prepMinutes: "45",
+			event: {
+				on: true,
+				venueId: "",
+				date: "2099-01-05",
+				endDate: "",
+				time: "08:00",
+				seats: "30",
+			},
+		});
+		expect(values.minNoticeDays).toBeUndefined();
+		expect(values.prepMinutes).toBeUndefined();
+		expect(values.event).toEqual({
+			date: expect.any(Number),
+			timeMinutes: 480,
+			seats: 30,
+		});
 	});
 
 	it("carries the review-step publish settings (hidden + categories)", () => {
@@ -790,5 +817,110 @@ describe("wizard — made-to-order product type", () => {
 			},
 		};
 		expect(formDraftToWizardState(draft).shape).toBe("single");
+	});
+});
+
+describe("the Event card — a router with its own route (`z8r3fdff9u` round 4)", () => {
+	/** The camp, entered through the front door this time. */
+	function eventState(overrides: Partial<WizardState> = {}): WizardState {
+		return {
+			...browniesState(),
+			kindCard: "event",
+			name: "Into The Falls Camp",
+			event: {
+				on: true,
+				venueId: "",
+				date: "2099-12-04",
+				endDate: "2099-12-06",
+				time: "14:00",
+				seats: "10",
+			},
+			...overrides,
+		};
+	}
+
+	it("routes to `physical` like Food — the card is vocabulary, not schema", () => {
+		expect(kindFromCard("event")).toBe("physical");
+		expect(kindFromCard("food")).toBe("physical");
+	});
+
+	it("walks its own steps: When is it? right after the name, no step dropped silently", () => {
+		expect(wizardSteps("choices", "physical", true)).toEqual([
+			0, 1, 6, 2, 3, 4, 5,
+		]);
+		// Other routes are untouched.
+		expect(wizardSteps("choices", "physical")).toEqual([0, 1, 2, 3, 4, 5]);
+		expect(wizardSteps(null, "booking")).toEqual([0, 1, 3, 5]);
+	});
+
+	it("a multi-outlet store's When-is-it step demands the venue", () => {
+		expect(
+			wizardStepIssues(eventState(), 6, { requireEventVenue: true })[0]
+				?.message,
+		).toMatch(/which pickup point hosts/i);
+		expect(
+			wizardStepIssues(
+				eventState({
+					event: { ...eventState().event, venueId: "loc_abc" },
+				}),
+				6,
+				{ requireEventVenue: true },
+			),
+		).toHaveLength(0);
+	});
+
+	it("the When-is-it step blocks on a missing or backwards date — on ITS step", () => {
+		const noDate = eventState({
+			event: {
+				on: true,
+				date: "",
+				endDate: "",
+				time: "",
+				seats: "",
+				venueId: "",
+			},
+		});
+		expect(wizardStepIssues(noDate, 6).map((i) => i.message)).toEqual([
+			"Pick the event date.",
+		]);
+		const backwards = eventState({
+			event: {
+				on: true,
+				venueId: "",
+				date: "2099-12-06",
+				endDate: "2099-12-04",
+				time: "",
+				seats: "",
+			},
+		});
+		expect(wizardStepIssues(backwards, 6)[0].message).toMatch(
+			/before the event date/i,
+		);
+		expect(wizardStepIssues(eventState(), 6)).toHaveLength(0);
+	});
+
+	it("a restored event draft with no date opens ON the When-is-it step", () => {
+		const state = eventState({
+			event: {
+				on: true,
+				date: "",
+				endDate: "",
+				time: "",
+				seats: "",
+				venueId: "",
+			},
+		});
+		expect(wizardInitialStep(state)).toBe(6);
+	});
+
+	it("submits as a physical product carrying the event — the flag, not a kind", () => {
+		const values = buildWizardSubmitValues(eventState());
+		expect(values.kind).toBe("physical");
+		expect(values.event).toMatchObject({ timeMinutes: 14 * 60, seats: 10 });
+		expect(values.event?.endDate).toBeDefined();
+		// The event route still drops the timing rules a stale draft may carry.
+		expect(
+			buildWizardSubmitValues(eventState({ minNoticeDays: "3" })).minNoticeDays,
+		).toBeUndefined();
 	});
 });

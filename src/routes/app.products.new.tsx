@@ -68,6 +68,10 @@ function NewProductRoute() {
 
 	const categoriesLocked =
 		!retailer.actingAsAdmin && !hasFeature(retailer.subscription, "categories");
+	// Same client mirror for events (`z8r3fdff9u`) — the toggle disables with
+	// the Pro hint rather than erroring on save.
+	const eventsLocked =
+		!retailer.actingAsAdmin && !hasFeature(retailer.subscription, "events");
 
 	async function handleCreate(values: ProductFormSubmitValues) {
 		if (!retailer) return;
@@ -92,6 +96,13 @@ function NewProductRoute() {
 				prepMinutes: values.prepMinutes,
 				pickupNote: values.pickupNote,
 				minQuantity: values.minQuantity,
+				// The form says null for "toggle off"; on CREATE there is nothing to
+				// clear, and the create validator takes an object or nothing — so
+				// null converts to undefined here. (This line vanished once in the
+				// T2 rebase — git kept both sides quietly and every convex test
+				// stayed green because they call the API directly. The payload scan
+				// test now pins it.)
+				event: values.event ?? undefined,
 				variants: values.variants,
 			}));
 		createdProductId.current = productId;
@@ -166,6 +177,7 @@ function NewProductRoute() {
 				<ProductWizard
 					retailerId={retailer._id}
 					categoriesLocked={categoriesLocked}
+					eventsLocked={eventsLocked}
 					currency={retailer.currency}
 					defaultKind={retailer.storeType}
 					initialState={wizardReturn}
@@ -206,6 +218,7 @@ function NewProductRoute() {
 			<ProductForm
 				retailerId={retailer._id}
 				categoriesLocked={categoriesLocked}
+				eventsLocked={eventsLocked}
 				initialValues={wizardDraft?.initialValues}
 				initialEditor={wizardDraft?.initialEditor}
 				mode="create"

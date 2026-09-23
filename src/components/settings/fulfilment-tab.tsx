@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import {
+	CalendarClock,
 	Clock,
 	ExternalLink,
 	FlaskConical,
@@ -267,6 +268,22 @@ export function FulfilmentTab({
 	const ring = (anchor: string): FixHighlight | undefined =>
 		target?.anchor === anchor ? target.highlight : undefined;
 	const setActive = useMutation(api.pickupLocations.setActive);
+	// Which points host a live event (`z8r3fdff9u`). A point can be hidden
+	// from standard orders yet still be an event's venue (an RSVP-only
+	// location), so the row that hides it must SAY it hosts events — "hide"
+	// must never look like it made the point disappear everywhere.
+	const venueUsage = useQuery(
+		convexQuery(api.products.eventVenueUsage, { retailerId }),
+	).data;
+	const eventNamesByVenue = useMemo(() => {
+		const map = new Map<string, string[]>();
+		for (const u of venueUsage ?? []) {
+			const names = map.get(u.venueId) ?? [];
+			names.push(u.name);
+			map.set(u.venueId, names);
+		}
+		return map;
+	}, [venueUsage]);
 	const reorder = useMutation(api.pickupLocations.reorder);
 	const markPickupSetupSeen = useMutation(api.retailers.markPickupSetupSeen);
 	const actAsRetailerId = useActAsRetailerId();
@@ -338,8 +355,16 @@ export function FulfilmentTab({
 	) {
 		try {
 			await setActive({ pickupLocationId: location._id, isActive: next });
+			// Hiding a point removes it from the standard-order picker, never
+			// from an event it hosts — say so in the same breath, or "hidden"
+			// reads as "gone everywhere".
+			const hostsEvents = eventNamesByVenue.has(location._id);
 			toast.success(
-				next ? `“${location.label}” restored.` : `“${location.label}” hidden.`,
+				next
+					? `“${location.label}” restored.`
+					: hostsEvents
+						? `“${location.label}” hidden from standard orders. Events it hosts keep sending guests here.`
+						: `“${location.label}” hidden.`,
 			);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -557,6 +582,7 @@ export function FulfilmentTab({
 										onEdit={() => setEditing(loc)}
 										onToggleActive={(next) => handleToggleActive(loc, next)}
 										dragHandle={handle}
+										eventNames={eventNamesByVenue.get(loc._id)}
 									/>
 								</div>
 							)
@@ -584,6 +610,7 @@ export function FulfilmentTab({
 										currency={currency}
 										onEdit={() => setEditing(loc)}
 										onToggleActive={(next) => handleToggleActive(loc, next)}
+										eventNames={eventNamesByVenue.get(loc._id)}
 									/>
 								))}
 							</ul>
@@ -3270,12 +3297,16 @@ function LocationRowBody({
 	onEdit,
 	onToggleActive,
 	dragHandle,
+	eventNames,
 }: {
 	location: Doc<"pickupLocations">;
 	currency: string;
 	onEdit: () => void;
 	onToggleActive: (next: boolean) => void;
 	dragHandle?: ReactNode;
+	/** Live events this point hosts as their venue (`z8r3fdff9u`). Stated on
+	 * the row because hiding the point does NOT unhost them. */
+	eventNames?: string[];
 }) {
 	return (
 		<>
@@ -3306,6 +3337,26 @@ function LocationRowBody({
 						<p className="flex items-center gap-1 text-xs font-medium text-accent">
 							<Clock className="size-3 shrink-0" aria-hidden="true" />
 							<span>{location.scheduleNote}</span>
+						</p>
+					) : null}
+					{/* An event's venue rides this point (`z8r3fdff9u`) — named here
+					    so "hide" is never mistaken for "gone everywhere": a hidden
+					    point still hosts its events. */}
+					{eventNames !== undefined && eventNames.length > 0 ? (
+						<p className="flex items-start gap-1 text-xs font-medium text-accent">
+							<CalendarClock
+								className="mt-0.5 size-3 shrink-0"
+								aria-hidden="true"
+							/>
+							<span>
+								Event venue: {eventNames.slice(0, 2).join(", ")}
+								{eventNames.length > 2
+									? ` +${eventNames.length - 2} more`
+									: ""}
+								{location.isActive
+									? ""
+									: " — guests are still sent here while it's hidden."}
+							</span>
 						</p>
 					) : null}
 					{(() => {
@@ -3383,11 +3434,13 @@ function LocationRow({
 	currency,
 	onEdit,
 	onToggleActive,
+	eventNames,
 }: {
 	location: Doc<"pickupLocations">;
 	currency: string;
 	onEdit: () => void;
 	onToggleActive: (next: boolean) => void;
+	eventNames?: string[];
 }) {
 	return (
 		<li className="flex flex-col gap-3 rounded-xl border border-border bg-background p-4 opacity-60">
@@ -3396,6 +3449,7 @@ function LocationRow({
 				currency={currency}
 				onEdit={onEdit}
 				onToggleActive={onToggleActive}
+				eventNames={eventNames}
 			/>
 		</li>
 	);

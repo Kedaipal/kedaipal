@@ -42,6 +42,7 @@ import {
 	mytMidnightFromYmd,
 	ymdFromEpoch,
 } from "../../convex/lib/fulfilmentDate";
+import { formatEventMoment } from "../../convex/lib/productEvent";
 import {
 	CLAIM_SOURCE_CHOICES,
 	CLAIM_WINDOW_CHOICES_MINUTES,
@@ -117,6 +118,13 @@ type CreatedOrder = {
 	shortId: string;
 	orderId: Id<"orders">;
 	paidInPerson: boolean;
+	/** The order is an RSVP (`z8r3fdff9u`) — the done screen must not offer
+	 * "Mark as completed": the guest attends LATER; the RSVP completes at the
+	 * event ("Checked In"), not at the counter. */
+	eventRsvp?: boolean;
+	/** RM0 with nothing unsettled — the push said "no payment needed", so the
+	 * done screen must not claim it said "how to pay". */
+	free?: boolean;
 };
 
 function CounterCheckoutRoute() {
@@ -238,6 +246,8 @@ function ActiveSession({
 				shortId={created?.shortId}
 				orderId={created?.orderId ?? session.orderId}
 				paidInPerson={created?.paidInPerson ?? false}
+				eventRsvp={created?.eventRsvp}
+				free={created?.free}
 				buyerName={session.displayName}
 				anonymous={!session.waPhone}
 				onBackToList={onBackToList}
@@ -867,6 +877,8 @@ function DoneScreen({
 	shortId,
 	orderId,
 	paidInPerson,
+	eventRsvp,
+	free,
 	buyerName,
 	anonymous,
 	onBackToList,
@@ -874,6 +886,10 @@ function DoneScreen({
 	shortId: string | undefined;
 	orderId: Id<"orders"> | undefined;
 	paidInPerson: boolean;
+	/** RSVP — completion happens at the event, so the one-tap close is hidden. */
+	eventRsvp?: boolean;
+	/** Free order — the WhatsApp said "no payment needed", not "how to pay". */
+	free?: boolean;
 	buyerName: string | undefined;
 	// Anonymous cash sale — no buyer to notify (86ey8vqp6), so not even the one
 	// confirmation goes out and the document below is their only copy.
@@ -888,7 +904,7 @@ function DoneScreen({
 	// taken the item, so the seller can close it out here instead of clicking
 	// through the status pipeline. Optional, not automatic: a paid deposit on an
 	// item that isn't ready yet is left as a normal confirmed order.
-	const canComplete = paidInPerson && !!orderId && !completed;
+	const canComplete = paidInPerson && !eventRsvp && !!orderId && !completed;
 
 	// Say exactly what left the building. A counter order sends the buyer ONE
 	// WhatsApp (86eyd63r8) — the confirmation, carrying the link to their order
@@ -898,7 +914,9 @@ function DoneScreen({
 		? "is confirmed. Cash sale with no contact, so nothing was sent."
 		: paidInPerson
 			? "is confirmed. We sent the buyer one WhatsApp with a link to their order."
-			: "is confirmed. We sent the buyer one WhatsApp with how to pay and a link to their order.";
+			: free
+				? "is confirmed. We sent the buyer one WhatsApp with a link to their order — nothing to pay."
+				: "is confirmed. We sent the buyer one WhatsApp with how to pay and a link to their order.";
 
 	async function markCompleted() {
 		if (!orderId) return;
@@ -1293,9 +1311,9 @@ function ProductVariantRows({
 
 				// Stock is stated on the row and enforced on the control, so the
 				// seller never builds a cart the server will refuse (Zaki, 27 Aug).
-				const stockNote = variantStockNote(vr);
-				const sellable = canAddToCounterCart(vr);
-				const maxQty = maxAddableQty(vr);
+				const stockNote = variantStockNote(vr, product.eventSeatsLeft);
+				const sellable = canAddToCounterCart(vr, product.eventSeatsLeft);
+				const maxQty = maxAddableQty(vr, product.eventSeatsLeft);
 				return (
 					<div
 						key={vr._id}
@@ -1404,6 +1422,8 @@ function BuildOrderScreen({
 		shortId: string;
 		orderId: Id<"orders">;
 		paidInPerson: boolean;
+		eventRsvp?: boolean;
+		free?: boolean;
 	}) => void;
 	// Cancel the whole checkout (customer walked / changed their mind). Drops the
 	// session + any items and returns to the open-checkouts list.
@@ -1694,6 +1714,9 @@ function BuildOrderScreen({
 		setSubmitting(true);
 		try {
 			const fulfilmentEpoch = mytMidnightFromYmd(fulfilmentDate);
+			// A FREE order records no payment — the server enforces the same rule,
+			// this just keeps the client's story identical.
+			const effectivePaid = paid && total > 0;
 			const { shortId, orderId } = await createOrder({
 				sessionId,
 				items: cartEntries.map(([variantId, l]) => ({
@@ -1701,13 +1724,19 @@ function BuildOrderScreen({
 					quantity: l.qty,
 					unitPrice: l.isCustom || isAdjusted(l) ? l.price : undefined,
 				})),
-				paidInPerson: paid,
-				paymentMethod: paid ? method : undefined,
+				paidInPerson: effectivePaid,
+				paymentMethod: effectivePaid ? method : undefined,
 				fulfilmentDate: Number.isNaN(fulfilmentEpoch)
 					? undefined
 					: fulfilmentEpoch,
 			});
-			onCreated({ shortId, orderId, paidInPerson: paid });
+			onCreated({
+				shortId,
+				orderId,
+				paidInPerson: effectivePaid,
+				eventRsvp: cartEvent !== undefined || undefined,
+				free: total <= 0 || undefined,
+			});
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -1716,9 +1745,25 @@ function BuildOrderScreen({
 	}
 
 	const totalItems = cartEntries.reduce((s, [, l]) => s + l.qty, 0);
+	// The cart's EVENT, if any line is an RSVP (`z8r3fdff9u`) — the server will
+	// force the order onto this moment whatever date the panel holds, so every
+	// date this screen SAYS must be the event's. Before this, the Collection
+	// panel read "Today / now" and the review dialog told the walk-in guest
+	// "Collection: today" while the order landed on the event day.
+	const cartEvent = useMemo(() => {
+		if (!products) return undefined;
+		for (const p of products) {
+			if (p.event === undefined) continue;
+			for (const vr of p.variants) {
+				if (cart.has(vr._id)) return { name: p.name, ...p.event };
+			}
+		}
+		return undefined;
+	}, [products, cart]);
 	const collectionEpoch = mytMidnightFromYmd(fulfilmentDate);
-	const collectionLabel =
-		Number.isNaN(collectionEpoch) || fulfilmentDate === minYmd
+	const collectionLabel = cartEvent
+		? formatEventMoment(cartEvent)
+		: Number.isNaN(collectionEpoch) || fulfilmentDate === minYmd
 			? "Today / now"
 			: formatFulfilmentDate(collectionEpoch);
 
@@ -1844,8 +1889,15 @@ function BuildOrderScreen({
 											) : null}
 											{/* Sold out veils the tile instead of hiding it: the
 											    seller still needs to open it — to see WHICH size
-											    ran out, or to sell a made-to-order sibling. */}
-											{soldOut ? (
+											    ran out, or to sell a made-to-order sibling. A full
+											    event gets the same veil in its own word. */}
+											{p.eventSeatsLeft === 0 ? (
+												<span className="absolute inset-0 flex items-center justify-center bg-background/65">
+													<span className="rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-destructive">
+														Fully booked
+													</span>
+												</span>
+											) : soldOut ? (
 												<span className="absolute inset-0 flex items-center justify-center bg-background/65">
 													<span className="rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-destructive">
 														Sold out
@@ -1909,7 +1961,11 @@ function BuildOrderScreen({
 												) : null}
 												{/* Every choice is at zero — say it on the closed row,
 												    not at checkout with a customer waiting. */}
-												{soldOut ? (
+												{p.eventSeatsLeft === 0 ? (
+													<span className="inline-flex shrink-0 items-center rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-destructive">
+														Fully booked
+													</span>
+												) : soldOut ? (
 													<span className="inline-flex shrink-0 items-center rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-destructive">
 														Sold out
 													</span>
@@ -1918,6 +1974,11 @@ function BuildOrderScreen({
 											<p className="text-xs text-muted-foreground">
 												{p.variants.length} option
 												{p.variants.length === 1 ? "" : "s"} · {priceLabel}
+												{/* The event's binding number, said at the product
+												    grain — the per-option rows show the same ceiling. */}
+												{p.eventSeatsLeft !== undefined && p.eventSeatsLeft > 0
+													? ` · ${p.eventSeatsLeft} seat${p.eventSeatsLeft === 1 ? "" : "s"} left`
+													: null}
 											</p>
 										</div>
 										<div className="flex shrink-0 items-center gap-2">
@@ -2101,106 +2162,139 @@ function BuildOrderScreen({
 
 						{showsSellerPaymentControls(payMode) ? (
 							<>
-								<div className="rounded-xl border border-border bg-muted/20 p-3">
-									<button
-										type="button"
-										onClick={() => setDateOpen((open) => !open)}
-										className="flex w-full items-center justify-between gap-3 text-left"
-									>
-										<span>
-											<span className="block text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-												Collection
-											</span>
-											<span className="block text-sm font-medium">
-												{collectionLabel}
-											</span>
-											<span className="block text-xs text-muted-foreground">
-												Optional: open this only for preorder or later
-												collection.
-											</span>
+								{/* An RSVP's collection moment belongs to the EVENT — the
+								    server forces it whatever this panel holds, so the panel
+								    reads it back instead of offering a date the order will
+								    ignore. Everything the seller says out loud at the counter
+								    should be what the order stores. */}
+								{cartEvent ? (
+									<div className="rounded-xl border border-border bg-muted/20 p-3">
+										<span className="block text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+											Collection
 										</span>
-										<ChevronDown
-											className={cn(
-												"size-4 shrink-0 text-muted-foreground transition-transform",
-												dateOpen && "rotate-180",
-											)}
-										/>
-									</button>
-									{dateOpen ? (
-										<div className="mt-3 border-t border-border pt-3">
-											<label
-												htmlFor="counter-fulfilment-date"
-												className="text-xs font-medium text-muted-foreground"
-											>
-												Change collection date
-											</label>
-											<input
-												id="counter-fulfilment-date"
-												type="date"
-												value={fulfilmentDate}
-												min={minYmd}
-												max={maxYmd}
-												onChange={(e) => setFulfilmentDate(e.target.value)}
-												className="mt-1 h-11 w-full rounded-xl border border-input bg-background px-4 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+										<span className="block text-sm font-medium">
+											{collectionLabel}
+										</span>
+										<span className="block text-xs text-muted-foreground">
+											Set by the event &ldquo;{cartEvent.name}&rdquo; — the same
+											for every guest.
+										</span>
+									</div>
+								) : (
+									<div className="rounded-xl border border-border bg-muted/20 p-3">
+										<button
+											type="button"
+											onClick={() => setDateOpen((open) => !open)}
+											className="flex w-full items-center justify-between gap-3 text-left"
+										>
+											<span>
+												<span className="block text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+													Collection
+												</span>
+												<span className="block text-sm font-medium">
+													{collectionLabel}
+												</span>
+												<span className="block text-xs text-muted-foreground">
+													Optional: open this only for preorder or later
+													collection.
+												</span>
+											</span>
+											<ChevronDown
+												className={cn(
+													"size-4 shrink-0 text-muted-foreground transition-transform",
+													dateOpen && "rotate-180",
+												)}
 											/>
-										</div>
-									) : null}
-								</div>
+										</button>
+										{dateOpen ? (
+											<div className="mt-3 border-t border-border pt-3">
+												<label
+													htmlFor="counter-fulfilment-date"
+													className="text-xs font-medium text-muted-foreground"
+												>
+													Change collection date
+												</label>
+												<input
+													id="counter-fulfilment-date"
+													type="date"
+													value={fulfilmentDate}
+													min={minYmd}
+													max={maxYmd}
+													onChange={(e) => setFulfilmentDate(e.target.value)}
+													className="mt-1 h-11 w-full rounded-xl border border-input bg-background px-4 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+												/>
+											</div>
+										) : null}
+									</div>
+								)}
 
 								<div className="rounded-xl border border-border bg-muted/20 p-3">
 									<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 										Payment
 									</p>
-									<div className="mt-3 grid gap-2">
-										<ChoiceCard
-											active={paid}
-											onSelect={() => setPaidInPerson(true)}
-											icon={Banknote}
-											title="Paid now"
-											subtitle="Settled at counter"
-										/>
-										<ChoiceCard
-											active={!paid}
-											disabled={anonymous}
-											reason="A cash sale has no buyer to send a payment link to."
-											onSelect={() => setPaidInPerson(false)}
-											icon={Clock}
-											title="Pay later"
-											subtitle="Send payment link"
-										/>
-									</div>
-
-									{anonymous ? (
+									{cartEntries.length > 0 && total <= 0 ? (
+										/* A FREE order (an RM0 RSVP, a comp'd item) has no payment
+										   to ask about — "Paid now · Cash" on it would write a
+										   payment record the order page then contradicts with
+										   "Free order". The server enforces the same rule. */
 										<p className="mt-3 rounded-xl bg-background px-3 py-2 text-xs text-muted-foreground">
-											Cash sale — no contact on file, so it's settled in person
-											and no WhatsApp is sent.
+											Free order — there&apos;s nothing to collect, and no
+											payment is recorded.
 										</p>
-									) : null}
-
-									{paid ? (
-										<label className="mt-3 block">
-											<span className="text-xs font-medium text-muted-foreground">
-												Payment method
-											</span>
-											<select
-												value={method}
-												onChange={(e) =>
-													setMethod(e.target.value as OrderPaymentMethod)
-												}
-												className="mt-1 min-h-11 w-full rounded-xl border border-input bg-background px-4 text-base font-medium outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-											>
-												{methodChoices.map((m) => (
-													<option key={m} value={m}>
-														{PAYMENT_METHOD_LABELS[m]}
-													</option>
-												))}
-											</select>
-										</label>
 									) : (
-										<p className="mt-3 rounded-xl bg-background px-3 py-2 text-xs text-muted-foreground">
-											We'll send one WhatsApp with how to pay and a link to
-											track the order.
-										</p>
+										<>
+											<div className="mt-3 grid gap-2">
+												<ChoiceCard
+													active={paid}
+													onSelect={() => setPaidInPerson(true)}
+													icon={Banknote}
+													title="Paid now"
+													subtitle="Settled at counter"
+												/>
+												<ChoiceCard
+													active={!paid}
+													disabled={anonymous}
+													reason="A cash sale has no buyer to send a payment link to."
+													onSelect={() => setPaidInPerson(false)}
+													icon={Clock}
+													title="Pay later"
+													subtitle="Send payment link"
+												/>
+											</div>
+
+											{anonymous ? (
+												<p className="mt-3 rounded-xl bg-background px-3 py-2 text-xs text-muted-foreground">
+													Cash sale — no contact on file, so it's settled in
+													person and no WhatsApp is sent.
+												</p>
+											) : null}
+
+											{paid ? (
+												<label className="mt-3 block">
+													<span className="text-xs font-medium text-muted-foreground">
+														Payment method
+													</span>
+													<select
+														value={method}
+														onChange={(e) =>
+															setMethod(e.target.value as OrderPaymentMethod)
+														}
+														className="mt-1 min-h-11 w-full rounded-xl border border-input bg-background px-4 text-base font-medium outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+													>
+														{methodChoices.map((m) => (
+															<option key={m} value={m}>
+																{PAYMENT_METHOD_LABELS[m]}
+															</option>
+														))}
+													</select>
+												</label>
+											) : (
+												<p className="mt-3 rounded-xl bg-background px-3 py-2 text-xs text-muted-foreground">
+													We'll send one WhatsApp with how to pay and a link to
+													track the order.
+												</p>
+											)}
+										</>
 									)}
 								</div>
 							</>
@@ -2320,6 +2414,10 @@ function BuildOrderScreen({
 								// A claim freezes prices at send, so an unpriced line
 								// would lock a zero.
 								unpriced: cartEntries.some(([, l]) => l.price <= 0),
+								// Blocks SEND with the event's own words (a claim lets the
+								// buyer pick a date and holds no seat) — outranks `unpriced`,
+								// or a free RSVP line reads as an unpriced custom item.
+								eventName: cartEvent?.name,
 								money: formatPrice(total, currency),
 								windowMinutes,
 								buyerName: buyer.displayName,
@@ -2424,13 +2522,18 @@ function BuildOrderScreen({
 				total={total}
 				currency={currency}
 				fulfilmentLabel={(() => {
+					// The review the seller reads to the buyer must state the date the
+					// ORDER will carry — for an RSVP that's the event's, not the panel's.
+					if (cartEvent) return formatEventMoment(cartEvent);
 					const e = mytMidnightFromYmd(fulfilmentDate);
 					return Number.isNaN(e) ? "—" : formatFulfilmentDate(e);
 				})()}
 				paymentLabel={
-					paid
-						? `Paid now · ${PAYMENT_METHOD_LABELS[method]}`
-						: "Pay later — we send the buyer a payment link on WhatsApp"
+					total <= 0
+						? "Free order — nothing to collect"
+						: paid
+							? `Paid now · ${PAYMENT_METHOD_LABELS[method]}`
+							: "Pay later — we send the buyer a payment link on WhatsApp"
 				}
 				submitting={submitting}
 				onConfirm={submit}

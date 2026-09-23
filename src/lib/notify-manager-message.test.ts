@@ -61,3 +61,21 @@ describe("buildNotifyManagerMessage", () => {
 		expect(out).toContain("Please prepare for collection.");
 	});
 });
+
+describe("event RSVPs speak guest language (`z8r3fdff9u`)", () => {
+	it("names the event, the whole range and the guest — and never says collection", () => {
+		const out = buildNotifyManagerMessage({
+			...base,
+			fulfilmentDate: THU_SEP_18,
+			fulfilmentTimeMinutes: 8 * 60,
+			event: { name: "BNI Breakfast", endDate: THU_SEP_18 + 2 * 86_400_000 },
+		});
+		const lines = out.split("\n");
+		expect(lines[0]).toBe("🎟️ New RSVP ORD-7Q2K — BNI Breakfast");
+		expect(lines[1]).toMatch(/^Event: Fri, 18 Sep 2026 · 8:00 AM to Sun, 20 Sep 2026 at /);
+		expect(lines[2]).toMatch(/^Guest: /);
+		expect(out).toContain("Please add them to the guest list.");
+		expect(out).not.toContain("prepare for collection");
+		expect(out).not.toContain("Collect on");
+	});
+});

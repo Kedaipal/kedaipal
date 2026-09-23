@@ -52,6 +52,17 @@ import {
 } from "./lib/fulfilmentDate";
 import { asksForTime, fulfilmentKind } from "./lib/fulfilmentShape";
 import { orderPrepFloorIssue, slowestPrep } from "./lib/prepFloor";
+import {
+	seatsExhaustedMessage,
+	seatsRequested,
+	tallyEventSeats,
+} from "./lib/eventSeats";
+import {
+	formatEventBadge,
+	isEventPassed,
+	type ProductEvent,
+	seatsLeft,
+} from "./lib/productEvent";
 import { assertWithinOpeningHours } from "./lib/openingHours";
 import { orderingPausedMessage } from "./lib/seasonalHold";
 import { orderDocumentTitle } from "./lib/orderDocument";
@@ -129,7 +140,10 @@ import {
 	anchorOrdinal,
 	type Locale,
 	type OrderStage,
+	FLOW_PRESETS,
+	orderFlowKind,
 	resolveStages,
+	type StageAnchor,
 	stageLabel,
 	type StatusLabels,
 } from "./lib/orderStatus";
@@ -377,6 +391,42 @@ export async function loadCheckoutDeliveryQuote(
 		considered: row.considered,
 		quotedAt: row.quotedAt,
 	};
+}
+
+/**
+ * The pickup location HOSTING an event, at order time (round 4): the event's
+ * own `venueId`, WHATEVER its active state — hiding a point removes it from
+ * the buyer's standard-order choice, never from an event it hosts (an
+ * RSVP-only location IS a hidden point; rerouting guests to the "first
+ * active" outlet would be a wrong address, strictly worse). Unset venue
+ * (legacy events) falls back to the store's first active point, else the
+ * first point at all — a fallback, never a refusal. Returns null only when
+ * the store has NO point whatsoever, which each door refuses in its own
+ * words. Shared by `orders.create` and the counter, so the two can never
+ * seat the same event at different venues.
+ */
+export async function resolveEventVenue(
+	ctx: QueryCtx | MutationCtx,
+	retailerId: Id<"retailers">,
+	event: { venueId?: string },
+): Promise<Doc<"pickupLocations"> | null> {
+	if (event.venueId !== undefined) {
+		const venue = await ctx.db.get(
+			event.venueId as Id<"pickupLocations">,
+		);
+		if (venue && venue.retailerId === retailerId) return venue;
+	}
+	const active = await ctx.db
+		.query("pickupLocations")
+		.withIndex("by_retailer_active", (q) =>
+			q.eq("retailerId", retailerId).eq("isActive", true),
+		)
+		.first();
+	if (active) return active;
+	return ctx.db
+		.query("pickupLocations")
+		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+		.first();
 }
 
 export function buildPickupSnapshot(
@@ -924,36 +974,11 @@ export const create = mutation({
 			throw new ConvexError("This store isn't offering delivery right now");
 		}
 
-		// Self-collect pickup resolution. The storefront only surfaces self-collect
-		// when (offerSelfCollect && ≥1 active location), so the strict branch fires
-		// whenever both gates are open server-side; when either is closed we
-		// preserve the original behaviour (no pickup info on the order).
+		// Pickup resolution happens AFTER the item loop (below) — an event cart
+		// resolves its venue from the EVENT, and event-ness is only known once
+		// items resolve to products.
 		let sanitizedPickupSnapshot: PickupSnapshot | undefined;
 		let resolvedPickupLocationId: Id<"pickupLocations"> | undefined;
-		if (effectiveDeliveryMethod === "self_collect" && retailer.offerSelfCollect === true) {
-			const activeCount = await ctx.db
-				.query("pickupLocations")
-				.withIndex("by_retailer_active", (q) =>
-					q.eq("retailerId", args.retailerId).eq("isActive", true),
-				)
-				.first();
-			if (activeCount !== null) {
-				if (!args.pickupLocationId) {
-					throw new ConvexError(
-						"Pick a pickup location to continue with self-collect",
-					);
-				}
-				const location = await ctx.db.get(args.pickupLocationId);
-				if (!location || location.retailerId !== args.retailerId) {
-					throw new ConvexError("Pickup location not found");
-				}
-				if (!location.isActive) {
-					throw new ConvexError("That pickup location is no longer available");
-				}
-				resolvedPickupLocationId = location._id;
-				sanitizedPickupSnapshot = buildPickupSnapshot(location);
-			}
-		}
 
 		if (args.items.length === 0)
 			throw new ConvexError("Order must have at least one item");
@@ -978,6 +1003,13 @@ export const create = mutation({
 		// sets its DATE floor, and its name is what the refusal quotes. The same
 		// helper the claim commit and the storefront checkout use.
 		const prepLines: { name: string; prepMinutes?: number }[] = [];
+		// Event lines (`z8r3fdff9u`), keyed by product so a two-line RSVP (Set A
+		// ×1 + Set B ×2) counts as ONE event needing ONE date lock, and its seats
+		// are tallied once. Populated in the loop, acted on right after it.
+		const eventProducts = new Map<
+			Id<"products">,
+			{ event: ProductEvent; name: string }
+		>();
 		// Minimum-order-rule inputs (86ey9unyx), collected alongside the snapshot:
 		// per-line product id/name/qty + the flags the shared rules need. Checked
 		// after the loop (the rules judge summed quantities + the subtotal).
@@ -1024,6 +1056,14 @@ export const create = mutation({
 				maxItemNoticeDays = product.minNoticeDays ?? 0;
 			}
 			prepLines.push({ name: product.name, prepMinutes: product.prepMinutes });
+			// An event product fixes the whole order's fulfilment moment (see the
+			// lock below), so its notice override is irrelevant — the seller
+			// already chose the date.
+			if (product.event !== undefined)
+				eventProducts.set(variant.productId, {
+					event: product.event,
+					name: product.name,
+				});
 			const variantId = variant._id;
 			// The custom line has no optionValues — label it with its custom name so
 			// the order, WhatsApp confirm, and seller dashboard show "… (Custom)"
@@ -1123,11 +1163,109 @@ export const create = mutation({
 			);
 		}
 
+		// Self-collect pickup resolution — STANDARD orders only (an event cart's
+		// venue is resolved from the event, just below). The storefront only
+		// surfaces self-collect when (offerSelfCollect && ≥1 active location), so
+		// the strict branch fires whenever both gates are open server-side; when
+		// either is closed we preserve the original behaviour (no pickup info on
+		// the order).
+		if (
+			effectiveDeliveryMethod === "self_collect" &&
+			retailer.offerSelfCollect === true &&
+			eventProducts.size === 0
+		) {
+			const activeCount = await ctx.db
+				.query("pickupLocations")
+				.withIndex("by_retailer_active", (q) =>
+					q.eq("retailerId", args.retailerId).eq("isActive", true),
+				)
+				.first();
+			if (activeCount !== null) {
+				if (!args.pickupLocationId) {
+					throw new ConvexError(
+						"Pick a pickup location to continue with self-collect",
+					);
+				}
+				const location = await ctx.db.get(args.pickupLocationId);
+				if (!location || location.retailerId !== args.retailerId) {
+					throw new ConvexError("Pickup location not found");
+				}
+				if (!location.isActive) {
+					throw new ConvexError("That pickup location is no longer available");
+				}
+				resolvedPickupLocationId = location._id;
+				sanitizedPickupSnapshot = buildPickupSnapshot(location);
+			}
+		}
+
+		// ── Event lock (`z8r3fdff9u`) ──────────────────────────────────────────
+		// An event product carries a FIXED date the seller chose, so this order's
+		// fulfilment moment is not the buyer's to pick. Everything below is the
+		// server half of that promise; the checkout renders the date read-only and
+		// hides the delivery option, but a stale tab or a direct call must land in
+		// exactly the same place.
+		const eventLock = [...eventProducts.values()][0]?.event;
+		if (eventLock !== undefined) {
+			// ONE event per cart, keyed on the PRODUCT — two same-day events at
+			// different outlets share a date but not a venue, and the lock below
+			// resolves from whichever landed first, so a date-keyed check would
+			// confirm one event's guests at the other's address. Refused at
+			// add-to-cart too; this is the stale-tab backstop. (`eventProducts`
+			// is keyed by productId, so several lines of ONE event — Set A +
+			// Set B — are still a single entry.)
+			if (eventProducts.size > 1)
+				throw new ConvexError(
+					"This cart has RSVPs for two different events — check them out one at a time.",
+				);
+			// A finished event still reachable from a stale tab. The storefront
+			// already dropped it (`hiddenFromStorefront`); this is the door.
+			if (isEventPassed(eventLock))
+				throw new ConvexError(
+					`This event (${formatEventBadge(eventLock)}) has already taken place.`,
+				);
+			// Self-collect only: an event happens AT the venue, so a courier
+			// dropping a bento at the guest's house is not the thing being sold.
+			// Refused rather than silently rewritten — by this point the address
+			// has been sanitized and a delivery quote resolved, and flipping the
+			// method here would leave an order carrying delivery state it should
+			// never have had.
+			if (effectiveDeliveryMethod !== "self_collect")
+				throw new ConvexError(
+					"An event RSVP is collected at the venue — please choose self-collect.",
+				);
+			// The venue is the EVENT's, forced like its date — never the buyer's
+			// pick (round 4: on a multi-outlet store the generic pickup picker
+			// would let a guest choose an outlet the event isn't at). A HIDDEN
+			// point is a valid venue — hiding removes it from the standard-order
+			// picker, never from an event it hosts. Refuses only when the store
+			// has no point at all: a confirmation that never says where to go is
+			// a dead end.
+			const venue = await resolveEventVenue(
+				ctx,
+				args.retailerId,
+				[...eventProducts.values()][0]?.event ?? {},
+			);
+			if (venue === null)
+				throw new ConvexError(
+					"This event doesn't have a venue set yet — please contact the store.",
+				);
+			resolvedPickupLocationId = venue._id;
+			sanitizedPickupSnapshot = buildPickupSnapshot(venue);
+		}
+
 		// Fulfilment date: validated against the EFFECTIVE notice window — the
 		// store-level setting raised by any cart item's per-product override
 		// (custom cakes need lead time; ready stock doesn't). Applies to BOTH
 		// delivery and self-collect. Counter checkout doesn't run this path.
-		if (args.fulfilmentDate !== undefined) {
+		//
+		// An event cart SKIPS both this window and the opening-hours check below:
+		// the seller fixed the moment when she published the event, and holding
+		// her own date to her own "2 days' notice" rule (or refusing it because
+		// the shop is shut on a Sunday she's catering anyway) would refuse guests
+		// for a date she chose on purpose.
+		if (eventLock !== undefined) {
+			sanitizedFulfilmentDate = eventLock.date;
+		} else if (args.fulfilmentDate !== undefined) {
 			try {
 				sanitizedFulfilmentDate = assertValidFulfilmentDate(
 					args.fulfilmentDate,
@@ -1147,7 +1285,11 @@ export const create = mutation({
 		// moment simply books "now" — a strict server check here would let
 		// clock skew or a long-idle form reject a legitimate checkout.
 		let sanitizedFulfilmentTime: number | undefined;
-		if (
+		if (eventLock !== undefined) {
+			// Frozen from the event, never from the client — the guest is told
+			// 8:00 AM on the card and 8:00 AM is what the order says.
+			sanitizedFulfilmentTime = eventLock.timeMinutes;
+		} else if (
 			args.fulfilmentTimeMinutes !== undefined &&
 			sanitizedFulfilmentDate !== undefined &&
 			// Self-collect joined delivery here (z8r3fdff97): a buyer collecting
@@ -1182,16 +1324,18 @@ export const create = mutation({
 		//    the service is prepared after that, so a prep floor on the
 		//    collection time would refuse something the seller never needed;
 		//  - counter checkout never reaches this path (seller-fixed moment);
-		//  - an EVENT order (ClickUp z8r3fdff9u, landing after this) must add
-		//    `&& eventLock === undefined` here — the seller set that time
-		//    herself, the same reason min-notice and opening hours exempt it.
+		//  - an EVENT order (ClickUp z8r3fdff9u) is exempt: the seller fixed that
+		//    moment herself when she set the event, so holding her RSVPs to a
+		//    prep window would refuse seats at her own event — the same reason
+		//    min-notice and opening hours exempt it just below.
 		const cartPrep = slowestPrep(prepLines);
 		const orderFulfilmentKind = fulfilmentKind(
 			effectiveDeliveryMethod,
 			retailer.deliveryBooking?.deliveryDirection === "collection",
 		);
 		const isCollectionTrip = orderFulfilmentKind === "collection";
-		const prepFloorApplies = cartPrep.minutes > 0 && !isCollectionTrip;
+		const prepFloorApplies =
+			cartPrep.minutes > 0 && !isCollectionTrip && eventLock === undefined;
 		if (prepFloorApplies && sanitizedFulfilmentDate !== undefined) {
 			const issue = orderPrepFloorIssue({
 				hours: retailer.openingHours,
@@ -1226,7 +1370,7 @@ export const create = mutation({
 		// a stale tab or a direct call. Counter checkout doesn't run this path
 		// (the seller is standing there — the min-notice posture). Unset hours
 		// = open 24/7, the check no-ops.
-		if (sanitizedFulfilmentDate !== undefined) {
+		if (sanitizedFulfilmentDate !== undefined && eventLock === undefined) {
 			try {
 				assertWithinOpeningHours(
 					retailer.openingHours,
@@ -1236,6 +1380,26 @@ export const create = mutation({
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
 			}
+		}
+
+		// Seat cap (`z8r3fdff9u`). Counted HERE, inside the mutation, which is
+		// what makes it atomic: Convex mutations are OCC transactions, so two
+		// guests racing for the last seat serialise — the second one's tally
+		// already includes the first one's order and it refuses. No reservation
+		// table, no lock row (the `findFullNights` posture).
+		//
+		// Runs per distinct event product, so a cart holding Set A ×1 and Set B
+		// ×2 is judged as three seats against one cap, not two independent lines.
+		for (const [productId, { event, name }] of eventProducts) {
+			if (event.seats === undefined) continue; // uncapped — variant stock rules
+			const tally = await tallyEventSeats(ctx, {
+				retailerId: args.retailerId,
+				productId,
+				date: event.date,
+			});
+			const left = seatsLeft(event, tally.taken) ?? 0;
+			const wanted = seatsRequested(snapshotItems, productId);
+			if (wanted > left) throw new ConvexError(seatsExhaustedMessage(name, left));
 		}
 
 		// Delivery charge (86extzdr8): resolved server-side at create — the
@@ -1362,6 +1526,8 @@ export const create = mutation({
 			deliveryFeePendingReason,
 			fulfilmentDate: sanitizedFulfilmentDate,
 			fulfilmentTimeMinutes: sanitizedFulfilmentTime,
+			// Frozen flow-kind marker — this order is an RSVP for good (see schema).
+			eventRsvp: eventLock !== undefined ? true : undefined,
 			customerNote: sanitizedCustomerNote,
 			// Only keep the buyer image when the order actually has a custom line —
 			// guards a stray id on a non-custom order.
@@ -1529,7 +1695,39 @@ export const countActionable = query({
 // already carries `deliveryMethod`; we fold in the retailer's `statusLabels` +
 // `locale` so the client resolver (src/lib/orderStatus.ts) has everything to
 // render relabelled stages. See docs/order-status-customization.md.
+/**
+ * The fixed-date event this order is an RSVP to (`z8r3fdff9u`), or undefined.
+ *
+ * Asked by looking the products up rather than by denormalizing a flag onto the
+ * order: an order carries at most a handful of lines, both callers already run
+ * per-order work, and a stored copy would be one more thing to keep true
+ * through every write. (The seat TALLY keys on `fulfilmentDate`, which IS
+ * frozen — this answers "is it locked?" and, for a multi-day event, "until
+ * when?", read live so a seller extending a camp by a day reaches every guest.)
+ */
+async function orderEvent(
+	ctx: QueryCtx | MutationCtx,
+	order: Doc<"orders">,
+): Promise<ProductEvent | undefined> {
+	const seen = new Set<string>();
+	for (const item of order.items) {
+		if (seen.has(item.productId)) continue;
+		seen.add(item.productId);
+		const product = await ctx.db.get(item.productId);
+		if (product?.event !== undefined) return product.event;
+	}
+	return undefined;
+}
+
 export type OrderWithStatusLabels = Doc<"orders"> & {
+	/** RSVP to a fixed-date event — the fulfilment moment belongs to the event,
+	 * not to this order, so the reschedule affordance disables with the reason
+	 * (and the buyer's tracking page says the date is the event's). */
+	eventLocked?: boolean;
+	/** LAST day of a multi-day event this order RSVPs to — the tracking page
+	 * reads "Fri 4 Dec · 2:00 PM to Sun 6 Dec" instead of only the check-in
+	 * day the order froze. Undefined for a one-day event or a normal order. */
+	eventEndDate?: number;
 	// Booking capacity context (S3) — SELLER path only, for the approve card's
 	// "N of M sites already booked those nights" line. Never on the buyer/token
 	// path: per-night counts don't cross the public wire (locked).
@@ -1728,6 +1926,20 @@ export const get = query({
 			podImageUrls,
 			collectionRider,
 			bookingContext,
+			// RSVP (`z8r3fdff9u`) — both sides need it: the seller's Reschedule
+			// disables with the reason instead of erroring on submit, and the
+			// buyer's tracking page says the date is the event's, not theirs.
+			// `undefined` (not `false`) on a normal order: one spelling for "no".
+			...(await (async () => {
+				const event = await orderEvent(ctx, order);
+				// Flag OR lookup: rows created before `eventRsvp` existed (dev
+				// only — the feature never shipped) still resolve via the product.
+				return {
+					eventLocked:
+						order.eventRsvp === true || event !== undefined || undefined,
+					eventEndDate: event?.endDate,
+				};
+			})()),
 			deliverySnapshot: isBuyerRead ? undefined : order.deliverySnapshot,
 			// Meta's message id has no buyer use and this read is unauthenticated —
 			// strip it on the token path alongside the delivery snapshot. The
@@ -3363,6 +3575,10 @@ export const bulkUpdateStatus = mutation({
 		 * stock has already been returned. Named for the same reason as the two
 		 * above: a silent skip is hidden behaviour (86eypn8ye). */
 		skippedCancelled: number;
+		/** Of `skipped`, how many were orders whose flow kind has no such stage
+		 * — e.g. "Mark as Packed" on a booking or an event RSVP. Named so the
+		 * toast can say why nothing moved (the house no-silent-skip rule). */
+		skippedNoSuchStage: number;
 	}> => {
 		if (orderIds.length === 0)
 			return {
@@ -3371,6 +3587,7 @@ export const bulkUpdateStatus = mutation({
 				skippedAwaitingCollection: 0,
 				skippedRiderManaged: 0,
 				skippedCancelled: 0,
+				skippedNoSuchStage: 0,
 			};
 		if (orderIds.length > 100)
 			throw new ConvexError("Too many orders selected (max 100)");
@@ -3380,6 +3597,7 @@ export const bulkUpdateStatus = mutation({
 		let skippedAwaitingCollection = 0;
 		let skippedRiderManaged = 0;
 		let skippedCancelled = 0;
+		let skippedNoSuchStage = 0;
 		// The inbox multi-select is single-retailer, so every id resolves to the
 		// same access descriptor; keep the last one for a single batch audit row.
 		let batchAccess: RetailerAccess | undefined;
@@ -3422,6 +3640,22 @@ export const bulkUpdateStatus = mutation({
 			// skips it rather than confirming a stay with no guest message.
 			if (order.status === "booking_requested" && status !== "cancelled") {
 				skipped++;
+				continue;
+			}
+			// An anchor the order's flow kind SKIPS isn't a state it can be in:
+			// a booking is never "Packed", an RSVP is never "Packed" or "Ready
+			// for Pickup" (its pipeline is Confirmed → Checked In). Bulk-moving
+			// one there would strand it outside its own vocabulary, so it's
+			// skipped and counted — never a silent no-op. Registry-driven
+			// (FLOW_PRESETS), so a future kind's skips apply here for free.
+			if (
+				status !== "cancelled" &&
+				FLOW_PRESETS[orderFlowKind(order)].skippedAnchors.includes(
+					status as StageAnchor,
+				)
+			) {
+				skipped++;
+				skippedNoSuchStage++;
 				continue;
 			}
 			if (status === "packed" && isMockupGateClosed(order)) {
@@ -3469,6 +3703,7 @@ export const bulkUpdateStatus = mutation({
 			skippedAwaitingCollection,
 			skippedRiderManaged,
 			skippedCancelled,
+			skippedNoSuchStage,
 		};
 	},
 });
@@ -3686,15 +3921,17 @@ export const advanceToStage = mutation({
 			);
 		}
 
+		// The order's flow kind picks its stage vocabulary — an RSVP advances
+		// Confirmed → Checked In, never through Packed. The flag is the sync
+		// marker; the product lookup keeps pre-flag dev rows advancing too.
+		const isEventOrder =
+			order.eventRsvp === true || (await orderEvent(ctx, order)) !== undefined;
 		const stages = resolveStages({
 			orderStages: retailer.orderStages as OrderStage[] | undefined,
 			labels: retailer.statusLabels as StatusLabels | undefined,
-			deliveryMethod:
-				(order.deliveryMethod as
-					| "delivery"
-					| "self_collect"
-					| "booking"
-					| undefined) ?? "delivery",
+			deliveryMethod: isEventOrder
+				? "event"
+				: orderFlowKind({ deliveryMethod: order.deliveryMethod }),
 			// A fixed-length package's milestones are Active/Ended, not
 			// Checked In/Checked Out — the stepper's button copy comes from here.
 			bookingPackaged: order.bookingPackaged,
@@ -4225,6 +4462,15 @@ export const rescheduleFulfilment = mutation({
 		// backstop, so a stale tab can't move the date under a paying buyer.
 		if (isPaymentWindowLocked(order))
 			throw new ConvexError(PAYMENT_WINDOW_LOCK_REASON);
+		// An RSVP's date belongs to the EVENT, not to this order (`z8r3fdff9u`).
+		// Moving one guest to a different day would drop them out of the event's
+		// headcount (which keys on the event date) while telling them to turn up
+		// on a day nobody else is coming. The seller moves the event, or cancels
+		// this RSVP — both of which say so to everyone affected.
+		if ((await orderEvent(ctx, order)) !== undefined)
+			throw new ConvexError(
+				"This is an RSVP — its date is set by the event. Change the event's date, or cancel this RSVP.",
+			);
 		// An ACTIVE rider booking is frozen against Lalamove's quotationId and
 		// will NOT follow the order — rescheduling under it would desync the
 		// buyer's promise from the trip actually booked. The dialog says so and
