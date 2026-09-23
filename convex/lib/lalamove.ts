@@ -13,6 +13,7 @@
 //    1dp precision) — converted to integer sen at this boundary, like every
 //    other money field in the repo.
 
+import { toDomesticContactPhone } from "./courierContact";
 import { decryptSecret } from "./credentialCrypto";
 import type { DeliveryJobStatus } from "./deliveryJobs";
 import { EARLIEST_FULFILMENT_LEAD_MINUTES } from "./fulfilmentDate";
@@ -242,23 +243,12 @@ export function toLalamoveCoordinates(c: {
 }
 
 /** Our WhatsApp phones are stored as bare digits ("60123456789"); Lalamove
- * wants E.164. Malaysian numbers only — everything in the repo already is. */
+ * wants E.164. Formatting only — whether a number may be a Lalamove CONTACT
+ * at all is `toLalamoveContactPhone`'s question. */
 export function toLalamovePhone(waPhone: string): string {
 	const digits = waPhone.replace(/\D/g, "");
 	return `+${digits}`;
 }
-
-/** What each market will accept as a contact number, in stored bare-digit
- * form. Lengths INCLUDE the country code. */
-const MARKET_PHONE: Record<
-	LalamoveMarket,
-	{ prefix: string; minDigits: number; maxDigits: number }
-> = {
-	// MY mobiles are 60 + 9–11 digits.
-	MY: { prefix: "60", minDigits: 11, maxDigits: 13 },
-	// SG mobiles are 65 + exactly 8.
-	SG: { prefix: "65", minDigits: 10, maxDigits: 10 },
-};
 
 /**
  * Normalize a stored WhatsApp number to an E.164 phone the given market will
@@ -267,21 +257,16 @@ const MARKET_PHONE: Record<
  * Lalamove validates the AREA CODE per market, so a number from the wrong
  * country is a 422 at booking time rather than a soft failure — returning
  * null lets dispatch fall back to the seller's own number as the rider
- * contact instead. A +65 buyer on a Johor store was always a real case; a +60
- * buyer on a Singapore store now is too, and the old MY-only helper would
- * have accepted exactly the wrong one of those.
+ * contact instead. Buyers can type a WhatsApp number from any country
+ * (z8r3fdh274), so that fallback is an everyday path, not a Johor edge case.
+ * The rule itself is provider-neutral and lives in `./courier` — Delyva
+ * applies the same one.
  */
 export function toLalamoveContactPhone(
 	waPhone: string | undefined,
 	market: LalamoveMarket,
 ): string | null {
-	if (!waPhone) return null;
-	const digits = waPhone.replace(/\D/g, "");
-	const rule = MARKET_PHONE[market];
-	if (!digits.startsWith(rule.prefix)) return null;
-	if (digits.length < rule.minDigits || digits.length > rule.maxDigits)
-		return null;
-	return `+${digits}`;
+	return toDomesticContactPhone(waPhone, market);
 }
 
 export type LalamoveStop = {

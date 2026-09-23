@@ -44,8 +44,10 @@ export function InputPrefixFrame({
 			)}
 		>
 			{/* `select-none` so a drag-select of the value doesn't sweep the fixed
-			    part into the copy. */}
-			<span className="flex select-none items-center gap-1.5 self-stretch border-r border-input bg-muted/60 px-3 text-muted-foreground">
+			    part into the copy. `relative` so a plate that hosts a control (the
+			    buyer phone picker's overlaid <select>) can cover all of it,
+			    padding included — the whole 44px plate is the tap target. */}
+			<span className="relative flex select-none items-center gap-1.5 self-stretch border-r border-input bg-muted/60 px-3 text-muted-foreground">
 				{prefix}
 			</span>
 			{children}
