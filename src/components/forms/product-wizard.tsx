@@ -2395,8 +2395,9 @@ export function ProductWizard({
 						</h3>
 						{state.kindCard === "event" ? (
 							<p className="-mt-2 text-sm text-muted-foreground">
-								The seat limit (from the date step) caps the whole event either
-								way — this is only about individual choices running out.
+								{state.event.seats.trim()
+									? `Your ${state.event.seats.trim()}-seat limit caps the whole event either way — this is only about individual choices running out.`
+									: "The seat limit (from the date step) caps the whole event either way — this is only about individual choices running out."}
 							</p>
 						) : null}
 						<div className="flex flex-col gap-2.5">
@@ -2501,7 +2502,9 @@ export function ProductWizard({
 						{state.fulfilmentAnswered && anyTrack ? (
 							<div className="flex flex-col gap-3 border-t border-border pt-3">
 								<span className="text-sm font-medium">
-									How many do you have right now?
+									{state.kindCard === "event"
+										? "How many of each choice?"
+										: "How many do you have right now?"}
 								</span>
 								{rows.map((row, i) => {
 									if (!row.blockWhenOutOfStock) return null;
@@ -2525,8 +2528,34 @@ export function ProductWizard({
 									);
 								})}
 								<p className="text-xs text-muted-foreground">
-									When a choice hits 0, buyers see "Sold out" until you restock.
+									{state.kindCard === "event"
+										? "When a choice hits 0, guests see it as fully taken. These are per-choice ceilings — your seat limit still caps the total across all choices."
+										: 'When a choice hits 0, buyers see "Sold out" until you restock.'}
 								</p>
+								{/* The one arithmetic trap: per-choice caps summing BELOW the
+								    seat limit make some seats unreachable — a seller reading
+								    "50 seats" would wait for guests who can never RSVP. Said
+								    here, where both numbers are on screen; never enforced
+								    (caps above the limit are normal — any mix up to the
+								    seats is the Helinox shape). */}
+								{(() => {
+									if (state.kindCard !== "event") return null;
+									const seats = Number.parseInt(state.event.seats.trim(), 10);
+									if (!Number.isInteger(seats) || seats < 1) return null;
+									if (!rows.every((r) => r.blockWhenOutOfStock)) return null;
+									const capSum = rows.reduce((sum, r) => {
+										const n = Number.parseInt(r.stock.trim(), 10);
+										return Number.isInteger(n) && n >= 0 ? sum + n : Number.NaN;
+									}, 0);
+									if (!Number.isInteger(capSum) || capSum >= seats) return null;
+									return (
+										<p className="text-xs text-amber-600 dark:text-amber-500">
+											These add up to {capSum} — below your {seats}-seat limit,
+											so at most {capSum} guest{capSum === 1 ? "" : "s"} can
+											RSVP.
+										</p>
+									);
+								})()}
 							</div>
 						) : null}
 					</>
