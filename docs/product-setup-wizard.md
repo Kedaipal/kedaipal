@@ -188,9 +188,24 @@ edit page uses (`validateSearch` on the route), seeded with the whole wizard
 draft; "← Prefer the guided setup? Switch back" returns losslessly. The
 import flow is untouched — bulk sellers never see the wizard.
 
+**Deep link to a step-0 card** (`z8r3fdhkr7`): `/app/products/new?card=event`
+(any of `food` · `physical` · `service` · `booking` · `event`) opens the
+wizard with that card already selected — how the v2026.09.7 "Host an event"
+note lands the seller on Event instead of a page ringing their own store
+type. The card is applied by `withKindCard`, the SAME pure transition a tap
+runs, so a link can't open a state a tap wouldn't; `openingWizard` derives
+the opening state at mount (a lazy initialiser, never an effect — the first
+paint is already right). A link to Event on a plan without `events` keeps
+the store-type default and shows the tap's Pro refusal from the first paint.
+`form=full` drops `card` in `validateSearch`: the full form has no step 0,
+and a param that silently does nothing is worse than none. Unknown values
+are dropped, never honoured. A restored draft (switch back from the full
+form) outranks the link — that draft is the seller's own answer.
+
 Pure, unit-tested helpers (`product-wizard.test.ts`): `wizardStepIssues`,
 `buildWizardSubmitValues`, `wizardHandoff`, `formDraftToWizardState`,
-`wizardInitialStep`, `wizardPriceLabel`.
+`wizardInitialStep`, `wizardPriceLabel`, `withKindCard`, `openingWizard`,
+`isKindCard`.
 
 ## Edit = the question-first full form
 
@@ -371,7 +386,8 @@ surface:
 - `src/components/forms/product-images-field.tsx` — shared photo grid
 - `src/components/forms/category-picker.tsx` — `embedded` variant
 - `src/lib/product-summary.ts` (+ `.test.ts`) — summary strip derivation
-- `src/routes/app.products.new.tsx` — wizard route + `?form=full`
+- `src/routes/app.products.new.tsx` (+ `.test.ts`) — wizard route, `?form=full`, `?card=`
+- `src/components/forms/product-wizard-card-link.test.tsx` — the `?card=` arrival, rendered
 
 ## Follow-ups (named, not hidden)
 

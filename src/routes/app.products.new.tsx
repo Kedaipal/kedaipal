@@ -14,6 +14,8 @@ import {
 } from "../components/forms/product-form";
 import {
 	formDraftToWizardState,
+	isKindCard,
+	type KindCard,
 	ProductWizard,
 	type WizardState,
 	type wizardHandoff,
@@ -29,16 +31,26 @@ import { hasFeature } from "../lib/subscription";
  * (`wizardHandoff` / `formDraftToWizardState`) — no capability gap, nothing
  * to confirm. Drafts ride in memory only; a refresh starts the chosen view
  * blank. See docs/product-setup-wizard.md.
+ *
+ * `?card=<food|physical|service|booking|event>` (`z8r3fdhkr7`) pre-selects
+ * step 0's card — how a What's-new note says "Create an event" and lands on
+ * Event rather than the store's own type. It answers the WIZARD's first
+ * question, so `form=full` drops it: the full form has no step 0, and a
+ * param that silently does nothing is worse than none.
  */
 export const Route = createFileRoute("/app/products/new")({
-	validateSearch: (search: Record<string, unknown>): { form?: "full" } =>
-		search.form === "full" ? { form: "full" } : {},
+	validateSearch: (
+		search: Record<string, unknown>,
+	): { form?: "full"; card?: KindCard } => {
+		if (search.form === "full") return { form: "full" };
+		return isKindCard(search.card) ? { card: search.card } : {};
+	},
 	component: NewProductRoute,
 });
 
 function NewProductRoute() {
 	const navigate = useNavigate();
-	const { form } = Route.useSearch();
+	const { form, card } = Route.useSearch();
 	const retailer = useDashboardRetailer();
 	// Room to save? Checked BEFORE the wizard renders — letting a seller build a
 	// whole product and only then bounce off the server gate is the dead end this
@@ -181,6 +193,7 @@ function NewProductRoute() {
 					currency={retailer.currency}
 					defaultKind={retailer.storeType}
 					initialState={wizardReturn}
+					initialCard={card}
 					onSubmit={handleCreate}
 					onSkipToFullForm={openFullForm}
 					onOpenFullForm={openFullForm}

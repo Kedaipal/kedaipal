@@ -334,13 +334,18 @@ the card is a *router*, not a stored kind — it lands as `physical` + the
 event flag armed, and walks its own route: **When is it?** (date, last day,
 time, seats — right after the name, because the date is the product's
 identity) → guest-choice vocabulary on the type step (food set / package /
-tent type; made-to-order hidden) → price (with the "RM 0 = free RSVP" hint)
+tent type; made-to-order hidden) → price (with the "RM 0 / S$ 0 = free RSVP" hint, in the store's own symbol)
 → **Cap each choice separately?** (the preparation step re-worded: per-choice
 caps are how Helinox limits tent slots per type) → review. Selecting the card
 arms `event.on`; switching away disarms it, keeping typed values. On the
 event route the review drawer hides the event fields (the step owns them —
 one editor, three doors: step, drawer, full form). The Pro gate refuses at
-the card **with the reason**, never opening a flow that can't publish. Why
+the card **with the reason**, never opening a flow that can't publish.
+`/app/products/new?card=event` (`z8r3fdhkr7`) opens step 0 with the Event
+card already selected — the "Create an event" link in the v2026.09.7
+What's-new note — through the same transition as the tap, and the same
+refusal (shown on arrival) on a locked plan. See
+[`product-setup-wizard.md`](./product-setup-wizard.md). Why
 NOT a fourth kind, even ignoring cost: kind answers *what is sold*, the event
 flag answers *how its date works* — orthogonal axes (a breakfast is food AND
 an event); the flag is reversible where kind is immutable; and booking earned

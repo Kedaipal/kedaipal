@@ -45,6 +45,7 @@ import {
 import { asPackageUnit } from "../../lib/package-unit";
 import {
 	convexErrorMessage,
+	currencySymbol,
 	normalizePriceInput,
 	parsePriceInput,
 } from "../../lib/format";
@@ -143,7 +144,22 @@ export type ProductShape = "single" | "choices" | "made_to_order";
  * physical's semantics are the superset; the choice is near-invisible while
  * the event is on (delivery, prep and notice are all suppressed).
  */
-export type KindCard = "food" | "physical" | "service" | "booking" | "event";
+export const KIND_CARDS = [
+	"food",
+	"physical",
+	"service",
+	"booking",
+	"event",
+] as const;
+export type KindCard = (typeof KIND_CARDS)[number];
+
+/** Guards `?card=` on `/app/products/new` (`z8r3fdhkr7`) — a closed union, so
+ * a hand-typed value can never select something step 0 doesn't render. */
+export function isKindCard(value: unknown): value is KindCard {
+	return (
+		typeof value === "string" && (KIND_CARDS as readonly string[]).includes(value)
+	);
+}
 
 /** Card → stored kind. Food and Event are routers: they store as physical. */
 export function kindFromCard(card: KindCard): ProductKind {
@@ -256,6 +272,113 @@ export function wizardKind(state: WizardState): ProductKind {
 }
 
 export type WizardIssue = { field: string; message: string };
+
+/** Step 0's refusal for a seller whose plan can't publish an event — said at
+ * the card (never a flow that dead-ends at Publish), and on arrival when a
+ * `?card=event` link brought them there. One message, both doors. */
+export const EVENTS_LOCKED_ISSUE: WizardIssue = {
+	field: "kind",
+	message:
+		"Events are part of the Pro plan — upgrade in Settings → Billing to take RSVPs.",
+};
+
+/**
+ * Step 0's card, applied to a draft — the ONE transition behind both a card
+ * tap and a `?card=` deep link (`z8r3fdhkr7`), so a linked card can never
+ * open a state the tap wouldn't have produced.
+ *
+ * Food ⟷ Physical is a pure relabel (same stored kind, same route). The Event
+ * card IS the event toggle: selecting it arms the flag the submit values
+ * read, leaving it disarms — typed values are kept (the EventDraft posture:
+ * toggling off doesn't erase a typed date). Crossing the booking boundary
+ * rebuilds the selling substrate: INTO booking, one implicit
+ * never-stock-blocked row (capacity governs availability — S2's module, not
+ * the stock counter) with no axes and no bespoke line; OUT of booking, both
+ * questions return unanswered and the per-night price carries onto the fresh
+ * row so the seller doesn't retype.
+ *
+ * Pure — whether that rebuild needs the seller's say-so first is the caller's
+ * question (`switchKind` asks; an untouched opening draft has nothing to lose).
+ */
+export function withKindCard(state: WizardState, card: KindCard): WizardState {
+	if (state.kindCard === card) return state;
+	const event =
+		card === "event"
+			? { ...state.event, on: true }
+			: state.kindCard === "event"
+				? { ...state.event, on: false }
+				: state.event;
+	const nextBooking = kindFromCard(card) === "booking";
+	if (nextBooking === (wizardKind(state) === "booking")) {
+		return { ...state, kindCard: card, event };
+	}
+	const rows = state.editor.rows;
+	if (nextBooking) {
+		return {
+			...state,
+			kindCard: card,
+			event,
+			shape: null,
+			fulfilmentAnswered: true,
+			editor: {
+				options: [],
+				customLine: null,
+				rows: [
+					{
+						...(rows[0] ?? emptyRow([])),
+						optionValues: [],
+						sku: "",
+						imageStorageIds: [],
+						imageUrl: undefined,
+						active: true,
+						blockWhenOutOfStock: false,
+						requiresProof: false,
+					},
+				],
+			},
+		};
+	}
+	return {
+		...state,
+		kindCard: card,
+		event,
+		shape: null,
+		fulfilmentAnswered: false,
+		editor: {
+			options: [],
+			customLine: null,
+			rows: [{ ...emptyRow([]), price: rows[0]?.price ?? "" }],
+		},
+	};
+}
+
+/**
+ * How a fresh wizard opens: blank, pre-answered by the store type, then — for
+ * a `?card=` deep link (`z8r3fdhkr7`) — that card applied through the same
+ * `withKindCard` a tap runs. A What's-new note that says "Create an event"
+ * lands with Event already selected instead of on a page ringing the store's
+ * Food or Booking card.
+ *
+ * A link to a card the plan can't publish is refused exactly like the tap:
+ * the store-type default stays, and the reason is on screen from the first
+ * paint — never a silently ignored link, never a flow that can't publish.
+ */
+export function openingWizard({
+	defaultKind,
+	card,
+	eventsLocked,
+}: {
+	defaultKind?: ProductKind;
+	card?: KindCard;
+	eventsLocked: boolean;
+}): { state: WizardState; issues: WizardIssue[] } {
+	const blank = emptyWizardState(defaultKind);
+	if (card === undefined) return { state: blank, issues: [] };
+	if (card === "event" && eventsLocked) {
+		return { state: blank, issues: [EVENTS_LOCKED_ISSUE] };
+	}
+	return { state: withKindCard(blank, card), issues: [] };
+}
 
 /**
  * **The one shape derivation.** `state.shape` is the step-2 affordance; the
@@ -967,6 +1090,7 @@ export function ProductWizard({
 	onOpenFullForm,
 	onExit,
 	initialState,
+	initialCard,
 }: {
 	/** Owning retailer — feeds the review step's category picker. */
 	retailerId: Id<"retailers">;
@@ -989,14 +1113,23 @@ export function ProductWizard({
 	/** Restored draft from the full form's "switch back to guided setup" —
 	 * the wizard opens at the first unanswered step, every value in place. */
 	initialState?: WizardState;
+	/** A deep link's step-0 card (`?card=`, `z8r3fdhkr7`) — pre-selected
+	 * through the same transition a tap uses (`openingWizard`). A restored
+	 * `initialState` outranks it: that draft is the seller's own answer. */
+	initialCard?: KindCard;
 }) {
 	const [step, setStep] = useState(() =>
 		initialState ? wizardInitialStep(initialState) : 0,
 	);
-	const [state, setStateRaw] = useState<WizardState>(
-		() => initialState ?? emptyWizardState(defaultKind),
+	// Derived once, at mount — a lazy initialiser, not an effect, so the first
+	// paint already shows the linked card (or the refusal) with no flicker.
+	const [opening] = useState(() =>
+		initialState
+			? { state: initialState, issues: [] }
+			: openingWizard({ defaultKind, card: initialCard, eventsLocked }),
 	);
-	const [issues, setIssues] = useState<WizardIssue[]>([]);
+	const [state, setStateRaw] = useState<WizardState>(opening.state);
+	const [issues, setIssues] = useState<WizardIssue[]>(opening.issues);
 	const [uploading, setUploading] = useState(false);
 	const [submitting, setSubmitting] = useState(false);
 	// The one destructive answer the wizard ever asks for — a type switch that
@@ -1332,74 +1465,23 @@ export function ProductWizard({
 	}
 
 	/**
-	 * Step 0's card tap. Food ⟷ Physical is a pure relabel (same stored kind,
-	 * same route). Crossing the booking boundary rebuilds the selling substrate:
-	 * INTO booking, the product becomes one implicit never-stock-blocked row
-	 * (capacity governs availability — S2's module, not the stock counter) with
-	 * no axes and no bespoke line, and the Choices/Preparation steps drop out of
-	 * the route; OUT of booking, both questions return unanswered. Typed
-	 * prices/stock are guarded by the same confirm the shape switchers use.
+	 * Step 0's card tap — `withKindCard` does the switching (shared with the
+	 * `?card=` deep link, so the two can't drift). What only a TAP has is the
+	 * question: crossing the booking boundary rebuilds the selling substrate,
+	 * so typed prices/stock are guarded by the same confirm the shape
+	 * switchers use.
 	 */
 	function switchKind(card: KindCard) {
 		if (state.kindCard === card) return;
-		// The Event card IS the event toggle: selecting it arms the flag the
-		// submit values read, leaving it disarms — so a seller who tries Event
-		// and backs out to Food never ships an accidental event. Values are
-		// kept (the EventDraft posture: toggling off doesn't erase a typed
-		// date).
-		const eventPatch =
-			card === "event"
-				? { event: { ...state.event, on: true } }
-				: state.kindCard === "event"
-					? { event: { ...state.event, on: false } }
-					: {};
-		const nextBooking = kindFromCard(card) === "booking";
-		const wasBooking = isBooking;
-		if (nextBooking === wasBooking) {
-			patch({ kindCard: card, ...eventPatch });
-			return;
-		}
-		askBeforeLosingChoices(() => {
-			if (nextBooking) {
-				patch({
-					kindCard: card,
-					...eventPatch,
-					shape: null,
-					fulfilmentAnswered: true,
-					editor: {
-						options: [],
-						customLine: null,
-						rows: [
-							{
-								...(rows[0] ?? emptyRow([])),
-								optionValues: [],
-								sku: "",
-								imageStorageIds: [],
-								imageUrl: undefined,
-								active: true,
-								blockWhenOutOfStock: false,
-								requiresProof: false,
-							},
-						],
-					},
-				});
-			} else {
-				// Leaving booking: the per-night price carries onto the fresh row so
-				// the seller doesn't retype; shape + preparation are re-asked.
-				patch({
-					kindCard: card,
-					...eventPatch,
-					shape: null,
-					fulfilmentAnswered: false,
-					editor: {
-						options: [],
-						customLine: null,
-						rows: [{ ...emptyRow([]), price: rows[0]?.price ?? "" }],
-					},
-				});
-			}
-			setValueDrafts([]);
-		});
+		const crossesBooking = (kindFromCard(card) === "booking") !== isBooking;
+		const apply = () => {
+			setStateRaw((prev) => withKindCard(prev, card));
+			setIssues([]);
+			setServerError(null);
+			if (crossesBooking) setValueDrafts([]);
+		};
+		if (crossesBooking) askBeforeLosingChoices(apply);
+		else apply();
 	}
 
 	// --- Custom line ---------------------------------------------------------
@@ -1737,13 +1819,7 @@ export function ProductWizard({
 											// Events are Pro: the card refuses WITH the reason
 											// instead of opening a flow that can't publish.
 											if (card === "event" && eventsLocked) {
-												setIssues([
-													{
-														field: "kind",
-														message:
-															"Events are part of the Pro plan — upgrade in Settings → Billing to take RSVPs.",
-													},
-												]);
+												setIssues([EVENTS_LOCKED_ISSUE]);
 												return;
 											}
 											switchKind(card);
@@ -1793,8 +1869,8 @@ export function ProductWizard({
 								</span>{" "}
 								— no calendar, no approval. They pick a food set or package if
 								you offer choices, seats cap the room, and the listing takes
-								itself off your storefront after the event. RM 0 makes it a free
-								RSVP.
+								itself off your storefront after the event.{" "}
+								{currencySymbol(currency)} 0 makes it a free RSVP.
 							</p>
 						) : null}
 						<IssueText message={issueFor("kind")} />
