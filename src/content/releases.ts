@@ -202,6 +202,21 @@ export const RELEASES: Release[] = [
 				icon: "calendar-clock",
 			},
 			{
+				// The first fix: it reaches every seller who adds or edits a
+				// product (#298), where the two below reach counter and booking
+				// sellers.
+				kind: "fix",
+				title: {
+					en: "Your product editor quotes RM, not MYR",
+				},
+				body: {
+					// currency-literal-ok: the note quotes the old and new spelling on purpose.
+					en: "Price fields and summaries in the product editor printed your currency's code — \"Price (MYR)\", \"MYR 12–28\" — where the rest of Kedaipal says RM\u00a012. They now read RM, or S$ for a Singapore store, and so does the deposit limit. On every plan.",
+				},
+				href: "/app/products",
+				hrefLabel: { en: "Open products" },
+			},
+			{
 				kind: "fix",
 				title: {
 					en: "Counter preorders show the day they're collected",
