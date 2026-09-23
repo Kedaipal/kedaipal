@@ -42,7 +42,6 @@ import {
 	mytMidnightFromYmd,
 	ymdFromEpoch,
 } from "../../convex/lib/fulfilmentDate";
-import { formatEventMoment } from "../../convex/lib/productEvent";
 import {
 	CLAIM_SOURCE_CHOICES,
 	CLAIM_WINDOW_CHOICES_MINUTES,
@@ -54,8 +53,10 @@ import {
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 } from "../../convex/lib/paymentMethod";
+import { formatEventMoment } from "../../convex/lib/productEvent";
 import { ClaimsPanel } from "../components/claim/send-claim";
 import { WaitingOnBuyerScreen } from "../components/claim/waiting-on-buyer";
+import { ManualBindDialog } from "../components/counter/manual-bind-dialog";
 import { BRAND_GLYPHS } from "../components/dashboard/brand-icons";
 import { OrderDocumentActions } from "../components/order/order-document-actions";
 import { AppImage } from "../components/ui/app-image";
@@ -466,29 +467,15 @@ function EmptyCheckouts() {
  *   3. Cash sale — fully anonymous, no WhatsApp (86ey8vqp6).
  * Management (rotate / print the poster) lives on /app/poster.
  */
-
-// Manual-bind copy per store country (SG-lite, 86eynw28q). "We'll add the
-// country code automatically" is the loose server normalizer's promise: MY
-// bridges `012…`→`60…`, SG bridges a bare 8-digit `8/9…`→`65…` — while a
-// number typed WITH its own country code (a foreign walk-in) passes through.
-const MANUAL_BIND_PLACEHOLDER: Record<Country, string> = {
-	MY: "e.g. 012-345 6789",
-	SG: "e.g. 9123 4567",
-};
-const MANUAL_BIND_HELP: Record<Country, string> = {
-	MY: "Malaysian mobile number. We'll add the country code automatically.",
-	SG: "Singapore mobile number. We'll add the country code automatically.",
-};
 function CounterCheckoutActions({
 	onStarted,
 }: {
 	onStarted: (sessionId: string) => void;
 }) {
 	const actAsRetailerId = useActAsRetailerId();
-	// Store country drives the manual-bind helper copy + example (SG-lite). The
-	// input itself stays deliberately loose and plate-less — a cashier may key
-	// a foreign number for a walk-in — but the copy should name the store's own
-	// country, and the server prefixes bare local numbers with its dial code.
+	// Store country is the manual bind's picker default (z8r3fdh274). It reads
+	// "MY" while the retailer loads, which is why the dialog derives from it on
+	// every render instead of copying it into state.
 	const retailer = useDashboardRetailer();
 	const country = retailer?.country ?? "MY";
 
@@ -511,11 +498,8 @@ function CounterCheckoutActions({
 	const [qrOpen, setQrOpen] = useState(false);
 
 	// --- No-scan escape hatches: manual phone bind + anonymous cash sale ---
-	const bindManual = useMutation(api.counterCheckout.bindSessionManualPhone);
 	const startAnon = useMutation(api.counterCheckout.startAnonymousSession);
 	const [phoneOpen, setPhoneOpen] = useState(false);
-	const [name, setName] = useState("");
-	const [phone, setPhone] = useState("");
 	const [busy, setBusy] = useState(false);
 
 	// Auto-provision the counter QR token on first mount so the "Show store QR"
@@ -555,38 +539,6 @@ function CounterCheckoutActions({
 	// without a WHATSAPP_CHECKOUT_PHONE it never does, so we hide just that item
 	// (the phone + cash paths stay available) rather than the whole control.
 	const qrReady = Boolean(storeQr?.waUrl);
-
-	function changePhone(next: boolean) {
-		setPhoneOpen(next);
-		if (!next) {
-			setName("");
-			setPhone("");
-			setBusy(false);
-		}
-	}
-
-	// A name is at least 3 chars (a single letter isn't a name) — mirrors the
-	// storefront checkout + the server validator. Phone: enough digits to be
-	// plausible; the server does the authoritative MY normalization + validation.
-	const nameReady = name.trim().length >= 3;
-	const phoneReady = phone.replace(/\D/g, "").length >= 8;
-
-	async function submitPhone() {
-		if (busy || !phoneReady || !nameReady) return;
-		setBusy(true);
-		try {
-			const { sessionId } = await bindManual({
-				retailerId: actAsRetailerId,
-				waPhone: phone,
-				name,
-			});
-			changePhone(false);
-			onStarted(sessionId);
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-			setBusy(false);
-		}
-	}
 
 	async function submitAnonymous() {
 		if (busy) return;
@@ -689,74 +641,13 @@ function CounterCheckoutActions({
 			</Dialog>
 
 			{/* Manual phone bind — buyer still gets the one WhatsApp confirmation. */}
-			<Dialog open={phoneOpen} onOpenChange={changePhone}>
-				<DialogContent className="sm:max-w-sm">
-					<DialogHeader>
-						<DialogTitle>Enter buyer's number</DialogTitle>
-						<DialogDescription>
-							We'll send one WhatsApp confirming the order, with a link to their
-							order page — no scan needed. That message includes our
-							privacy-policy link.
-						</DialogDescription>
-					</DialogHeader>
-					<div className="flex flex-col gap-3">
-						<label className="block">
-							<span className="text-xs font-medium text-muted-foreground">
-								Buyer's name
-							</span>
-							<Input
-								type="text"
-								autoComplete="off"
-								autoFocus
-								value={name}
-								onChange={(e) => setName(e.target.value)}
-								placeholder="e.g. Aiman"
-								className="mt-1 h-12 text-base"
-							/>
-						</label>
-						<label className="block">
-							<span className="text-xs font-medium text-muted-foreground">
-								WhatsApp number
-							</span>
-							<Input
-								type="tel"
-								inputMode="tel"
-								autoComplete="off"
-								value={phone}
-								onChange={(e) => setPhone(e.target.value)}
-								onKeyDown={(e) => {
-									if (e.key === "Enter" && phoneReady && nameReady)
-										void submitPhone();
-								}}
-								placeholder={MANUAL_BIND_PLACEHOLDER[country]}
-								className="mt-1 h-12 text-base"
-							/>
-							<span className="mt-1 block text-xs text-muted-foreground">
-								{MANUAL_BIND_HELP[country]}
-							</span>
-						</label>
-						<DialogFooter className="gap-2 sm:gap-2">
-							<Button
-								type="button"
-								variant="outline"
-								onClick={() => changePhone(false)}
-								className="h-11"
-							>
-								Cancel
-							</Button>
-							<Button
-								type="button"
-								onClick={submitPhone}
-								isLoading={busy}
-								disabled={busy || !phoneReady || !nameReady}
-								className="h-11"
-							>
-								Start checkout
-							</Button>
-						</DialogFooter>
-					</div>
-				</DialogContent>
-			</Dialog>
+			<ManualBindDialog
+				open={phoneOpen}
+				onOpenChange={setPhoneOpen}
+				retailerId={actAsRetailerId}
+				storeCountry={country}
+				onStarted={onStarted}
+			/>
 		</>
 	);
 }

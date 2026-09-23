@@ -50,6 +50,7 @@ import { sanitizeAttributionSource } from "./lib/attribution";
 import { logAdminAction, requireRetailerAccess } from "./lib/auth";
 import { assertSubscriptionActive } from "./subscriptions";
 import { type Country, DEFAULT_COUNTRY } from "./lib/country";
+import { storeBooksCouriers } from "./lib/courierBooking";
 import { getDisplayName, requireCustomerName } from "./lib/customer";
 import type { CartWeightItem } from "./lib/delivery";
 import {
@@ -487,6 +488,11 @@ export interface ClaimPagePayload {
 		offerDelivery: boolean;
 		offerSelfCollect: boolean;
 		collectsFromCustomer: boolean;
+		/** The store hands delivery orders to a courier (z8r3fdh274) — the page
+		 * tells a buyer whose number is from another country that the rider
+		 * will phone the store instead. One bit, like `collectsFromCustomer`;
+		 * the courier config itself never leaves the owner reads. */
+		booksCouriers: boolean;
 		/** max(store notice, strictest per-product override on the claim). */
 		minNoticeDays: number;
 		openingHours?: OpeningHours;
@@ -577,6 +583,7 @@ export const getByToken = query({
 				offerSelfCollect: retailer.offerSelfCollect === true,
 				collectsFromCustomer:
 					retailer.deliveryBooking?.deliveryDirection === "collection",
+				booksCouriers: storeBooksCouriers(retailer),
 				minNoticeDays,
 				openingHours: retailer.openingHours as OpeningHours | undefined,
 				confirmPushEnabled: orderConfirmTemplateName() !== undefined,

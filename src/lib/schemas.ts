@@ -1,10 +1,15 @@
 import { z } from "zod";
 import { postcodeRule } from "../../convex/lib/address";
 import {
+	parseBuyerWaPhone,
+	UNKNOWN_DIAL_COUNTRY_MESSAGE,
+} from "../../convex/lib/buyerPhone";
+import {
 	COUNTRIES,
-	type Country,
 	COUNTRY_LABELS,
+	type Country,
 } from "../../convex/lib/country";
+import { isDialIso } from "../../convex/lib/phoneDial";
 import {
 	MOBILE_EXAMPLE,
 	MOBILE_KIND,
@@ -18,15 +23,19 @@ import {
 /**
  * Client-side Zod schemas for forms. The phone schemas are BUILT FROM the
  * server validators' own patterns, messages, and normalizer (`convex/lib/
- * slug.ts` — pure, importable from the client) so we fail fast in the UI with
- * exactly the acceptance the server enforces; the other schemas mirror their
- * server counterparts by hand. Server still re-validates — never trust the
- * client.
+ * slug.ts` and `convex/lib/buyerPhone.ts` — pure, importable from the client)
+ * so we fail fast in the UI with exactly the acceptance the server enforces;
+ * the other schemas mirror their server counterparts by hand. Server still
+ * re-validates — never trust the client.
  */
 
-// The one mobile schema per country, sharing the server's
-// `assertValidMobileForCountry` pieces (86eyf1rck buyer checkout; extended to
-// every plated field by 86eyknr2r; per-country since SG-lite 86eynw28q).
+// The one SELLER-side mobile schema per country, sharing the server's
+// `assertValidMobileForCountry` pieces (86eyf1rck; extended to every plated
+// field by 86eyknr2r; per-country since SG-lite 86eynw28q). The name is
+// historical: since z8r3fdh274 buyer fields — the storefront checkout below
+// included — are judged by `parseBuyerWaPhone` against the country the buyer
+// PICKED, and this arm guards only the store's own numbers (the seller alert
+// mobile, onboarding's contact), which stay locked to the store's country.
 // Normalizes the way a local actually types — MY `0xx…`/bare `1xx…`/full
 // `60xx…`, SG bare `9xxx xxxx`/full `65xx…` — then requires that country's
 // MOBILE shape. An MY landline (`03-…`) clears a bare digit count but can
@@ -39,7 +48,7 @@ import {
 // number.
 //
 // A Record keyed by the RETAILER's country, never a permissive both-countries
-// schema: an SG store rejects `+60` buyers with the SG message and vice versa,
+// schema: an SG store rejects `+60` numbers with the SG message and vice versa,
 // keeping each side's typo protection as strict as when the app was MY-only.
 // Rejection copy is computed per VALUE, not fixed per schema (z8r3fdbmc9): a
 // number that cleanly matches the other supported country gets the
@@ -50,7 +59,9 @@ function buildWaPhoneCheckoutSchema(country: Country) {
 	return z
 		.string()
 		.superRefine((s, ctx) => {
-			if (STORED_MOBILE_PATTERN[country].test(normalizeMobileDigits(s, country)))
+			if (
+				STORED_MOBILE_PATTERN[country].test(normalizeMobileDigits(s, country))
+			)
 				return;
 			ctx.addIssue({
 				code: z.ZodIssueCode.custom,
@@ -69,7 +80,8 @@ export const waPhoneCheckoutSchema: Record<
 };
 
 // Optional variant for a FORM field (blank is fine, anything typed must be a
-// mobile in the store's country). Deliberately a `refine`, not
+// mobile in the store's country) — the pickup manager's number, a SELLER-side
+// contact that stays store-locked (z8r3fdh274). Deliberately a `refine`, not
 // `.optional().transform(…)`: TanStack Form validates without replacing state,
 // so a schema whose input type is `string | undefined` no longer matches a
 // field that is always a string — and a transform here would describe a
@@ -102,8 +114,8 @@ export const waPhoneFormOptionalSchema: Record<
 // the WhatsApp tab — home checklist step 1, the first field a store created on
 // the wrong country funnels into — and the seller HAS the fix in reach (the
 // country control on the Store tab). So a cross-country rejection here names
-// the fix path, where the shared checkout schema (also worn by buyer fields)
-// stays neutral.
+// the fix path, where the shared seller arm above (worn by fields whose
+// owner may not be the one who can change the country) stays neutral.
 function buildSettingsWaPhoneSchema(country: Country) {
 	return z.object({
 		waPhone: z
@@ -283,9 +295,15 @@ function buildCheckoutFormSchema(country: Country) {
 				.min(3, "Your name must be at least 3 characters")
 				.max(60, "Name must be at most 60 characters"),
 			// Required so the order is reachable the moment it's placed — the
-			// confirmation lands in THIS number's WhatsApp (86eyf1rck). Judged by
-			// the STORE's country (SG-lite) — same arm the server applies.
-			waPhone: waPhoneCheckoutSchema[country],
+			// confirmation lands in THIS number's WhatsApp (86eyf1rck). Any
+			// country (z8r3fdh274): judged in the refinement below against the
+			// plate's pick, the same parse the server's assertValidBuyerWaPhone
+			// runs. Kept as the raw text — the server normalizes.
+			waPhone: z.string(),
+			// The plate's picked dial country (ISO2), defaulting to the store's.
+			// A plain string in form state; the refinement refuses one the dial
+			// table doesn't know, as the server does.
+			waDialCountry: z.string(),
 			deliveryMethod: deliveryMethodSchema,
 			address: addressFormFieldsSchema,
 			// Convex id of the chosen pickup location when deliveryMethod is
@@ -310,6 +328,18 @@ function buildCheckoutFormSchema(country: Country) {
 			note: z.string().max(500, "Note must be at most 500 characters"),
 		})
 		.superRefine((val, ctx) => {
+			// Object-level because the answer reads two fields. Zod 4 still runs
+			// this while other fields hold (continuable) issues — a blank name must
+			// not hide a bad number until the second submit (pinned in
+			// schemas.test.ts).
+			const phoneIssue = buyerPhoneIssue(val.waPhone, val.waDialCountry);
+			if (phoneIssue) {
+				ctx.addIssue({
+					code: z.ZodIssueCode.custom,
+					message: phoneIssue,
+					path: ["waPhone"],
+				});
+			}
 			if (val.deliveryMethod !== "delivery") return;
 			const result = strictAddressSchemaFor(country).safeParse(val.address);
 			if (result.success) return;
@@ -321,6 +351,18 @@ function buildCheckoutFormSchema(country: Country) {
 				});
 			}
 		});
+}
+
+/** The buyer phone's rejection copy under the picked dial country, or null
+ * when it parses. The message is the server's own (`parseBuyerWaPhone`), so a
+ * number the form lets through is one `orders.create` accepts. */
+function buyerPhoneIssue(
+	waPhone: string,
+	waDialCountry: string,
+): string | null {
+	if (!isDialIso(waDialCountry)) return UNKNOWN_DIAL_COUNTRY_MESSAGE;
+	const parsed = parseBuyerWaPhone(waPhone, waDialCountry);
+	return parsed.ok ? null : parsed.message;
 }
 
 // One schema instance per country, built once at module load — the checkout

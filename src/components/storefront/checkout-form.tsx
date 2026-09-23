@@ -17,6 +17,7 @@ import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { PublicDeliveryQuote } from "../../../convex/delivery";
 import { SG_STATE_LABEL } from "../../../convex/lib/address";
+import { parseBuyerWaPhone } from "../../../convex/lib/buyerPhone";
 import type { Country } from "../../../convex/lib/country";
 import {
 	assertValidFulfilmentDate,
@@ -39,6 +40,7 @@ import {
 	type OpeningHours,
 	selectableTimeWindow,
 } from "../../../convex/lib/openingHours";
+import { type DialIso, isDialIso } from "../../../convex/lib/phoneDial";
 import { distinctPickupNotes } from "../../../convex/lib/pickupNote";
 import { slowestPrep } from "../../../convex/lib/prepFloor";
 import type { UseCart } from "../../hooks/useCart";
@@ -71,19 +73,24 @@ import {
 	timeMovedCopy,
 } from "../../lib/fulfilment-time-issue";
 import { composeCustomerNote } from "../../lib/order-note";
+import { overseasCourierNote } from "../../lib/overseas-courier-note";
 import { loadSavedAddress, saveAddress } from "../../lib/saved-address";
 import {
 	type CheckoutAddressValues,
 	checkoutFormSchemaFor,
-	waPhoneCheckoutSchema,
 } from "../../lib/schemas";
 import { useLiveDeliveryQuote } from "../../lib/use-live-delivery-quote";
 import { submitThenFocusError } from "../forms/focus-error";
-import { CopyText, DayWindowsInline } from "../hours/hours-text";
 import { useAppForm } from "../forms/form";
+import { CopyText, DayWindowsInline } from "../hours/hours-text";
 import { PickupNotes } from "../order/pickup-notes";
 import { Button } from "../ui/button";
-import { MOBILE_PLACEHOLDER, MyPhonePrefix } from "../ui/my-phone-input";
+import {
+	applyBuyerPhoneKeystroke,
+	BuyerPhoneCountrySwitch,
+	BuyerPhonePrefix,
+	buyerPhonePlaceholder,
+} from "../ui/my-phone-input";
 import { AddressFieldset } from "./address-fieldset";
 import { CheckoutHint } from "./checkout-hint";
 import {
@@ -115,9 +122,10 @@ interface CheckoutPageProps {
 	/** Store locale — localizes the buyer-facing PDPA line under the phone
 	 * field (the rest of checkout is EN pending the storefront i18n phase). */
 	locale: string;
-	/** The store's country (SG-lite, 86eynw28q + 86eynw29u) — keys the phone
-	 * plate/validator arm AND the address variant (schema arm, fieldset shape,
-	 * Places region, saved-address namespace). From the resolved
+	/** The store's country (SG-lite, 86eynw28q + 86eynw29u) — the phone
+	 * picker's default (the buyer may pick any country, z8r3fdh274) AND the
+	 * address variant (schema arm, fieldset shape, Places region,
+	 * saved-address namespace). From the resolved
 	 * `getRetailerBySlug` payload (undefined never reaches here — the read
 	 * resolves it to MY); must match what the server enforces in orders.create,
 	 * which reads the same retailer field. */
@@ -132,6 +140,11 @@ interface CheckoutPageProps {
 	 * collection wording so the buyer isn't told something is being sent to
 	 * them. Public flag `deliveryCollectsFromCustomer` on the slug payload. */
 	collectsFromCustomer: boolean;
+	/** The store hands delivery orders to a courier (z8r3fdh274) — public bit
+	 * `booksCouriers` on the slug payload. A buyer whose WhatsApp number is
+	 * from another country is told, on the delivery step, that the rider will
+	 * phone the store instead: couriers only take a local contact number. */
+	booksCouriers: boolean;
 	minFulfilmentNoticeDays: number | undefined;
 	/** Store opening hours (86eyp5rav) — closed days are unselectable and the
 	 * time clamps to the day's window (delivery always; pickup whenever it asks
@@ -220,6 +233,7 @@ export function CheckoutPage({
 	offerSelfCollect,
 	offerDelivery,
 	collectsFromCustomer,
+	booksCouriers,
 	minFulfilmentNoticeDays,
 	openingHours,
 	minOrderValue,
@@ -381,9 +395,7 @@ export function CheckoutPage({
 			eventLock
 				? {
 						slug: storeSlug,
-						venueId: eventLock.venueId as
-							| Id<"pickupLocations">
-							| undefined,
+						venueId: eventLock.venueId as Id<"pickupLocations"> | undefined,
 					}
 				: "skip",
 		),
@@ -478,6 +490,9 @@ export function CheckoutPage({
 	const defaultYmd = eventLock
 		? ymdFromEpoch(eventLock.date)
 		: firstSelectableYmd(defaultSchedule);
+	// Typed as the form's `string`, not `Country`: the picker writes any dial
+	// country, and the form's value type is inferred from these defaults.
+	const storeDialCountry: string = country;
 
 	const form = useAppForm({
 		defaultValues: {
@@ -485,6 +500,10 @@ export function CheckoutPage({
 			// Buyer's WhatsApp number (86eyf1rck) — required: the confirmation
 			// push (or the wa.me fallback) is how the order reaches a chat at all.
 			waPhone: "",
+			// The plate's picked dial country (z8r3fdh274) — the store's own until
+			// the buyer picks another or types a `+CC`. A plain string in form
+			// state, like every other value; the schema refuses an unknown one.
+			waDialCountry: storeDialCountry,
 			deliveryMethod: defaultMethod,
 			// Saved per country (SG-lite) — an MY address can't leak a state or a
 			// 5-digit postcode into an SG form, and vice versa.
@@ -677,10 +696,11 @@ export function CheckoutPage({
 					customer: {
 						name: value.name?.trim() || undefined,
 						// Raw as typed — the server normalizes ("012-345 6789" →
-						// "60123456789", "9123 4567" → "6591234567") by the store's
-						// country via assertValidMobileForCountry, the same bridge the
-						// counter manual bind uses.
+						// "60123456789", "07911 123456" under GB → "447911123456")
+						// against the picked dial country via assertValidBuyerWaPhone,
+						// the same parse the form's schema ran (z8r3fdh274).
 						waPhone: value.waPhone.trim(),
+						waDialCountry: value.waDialCountry,
 					},
 					deliveryMethod: effectiveMethod,
 					deliveryAddress: sanitizedAddress,
@@ -748,6 +768,30 @@ export function CheckoutPage({
 			form.setFieldValue("fulfilmentDate", floorYmd);
 		}
 	}, [minYmd, floorYmd]);
+
+	// The phone plate's pick (z8r3fdh274). Only the picker and the `+CC`
+	// auto-switch write it, both with a known country — the store-country
+	// fallback narrows the form's plain string, it is not a state anyone reaches.
+	const watchedDialCountry = useStore(
+		form.store,
+		(s) => s.values.waDialCountry,
+	);
+	const dialCountry: DialIso = isDialIso(watchedDialCountry)
+		? watchedDialCountry
+		: country;
+	// A courier only takes a contact number from the store's country, so a
+	// buyer who picked another one is told on the delivery step that the rider
+	// will phone the store instead. Null — nothing rendered — for every local
+	// buyer and every store that doesn't book couriers.
+	const overseasNote = overseasCourierNote({
+		booksCouriers,
+		deliveryMethod: watchedMethod,
+		localNumber: dialCountry === country,
+		collectsFromCustomer,
+		storeCountry: country,
+		storeName,
+		locale,
+	});
 
 	function handleSubmit(e: FormEvent) {
 		submitThenFocusError(form, e);
@@ -1469,7 +1513,26 @@ export function CheckoutPage({
 								/>
 							)}
 						</form.AppField>
-						<form.AppField name="waPhone">
+						<form.AppField
+							name="waPhone"
+							listeners={{
+								// Auto-switch (z8r3fdh274): a typed or autofilled `+CC…`
+								// moves the picker to that country and leaves only the
+								// national part in the box — BuyerPhoneInput's keystroke
+								// rule, so both hosts behave alike. The rewrite doesn't
+								// re-run this listener: one keystroke, one application.
+								onChange: ({ value }) => {
+									const next = applyBuyerPhoneKeystroke(value, dialCountry);
+									if (next.value === value) return;
+									if (next.dialCountry !== dialCountry) {
+										form.setFieldValue("waDialCountry", next.dialCountry);
+									}
+									form.setFieldValue("waPhone", next.value, {
+										dontRunListeners: true,
+									});
+								},
+							}}
+						>
 							{(field) => (
 								<field.TextField
 									label="WhatsApp number"
@@ -1477,13 +1540,23 @@ export function CheckoutPage({
 									inputMode="tel"
 									autoComplete="tel"
 									// The plate says the country code is handled, so the
-									// placeholder shows the rest. A buyer who ignores it and
-									// types the full local/international form is still normalized
-									// to the same number — see waPhoneCheckoutSchema. Plate +
-									// schema share the store's country, so the badge never
-									// promises a shape the validator rejects.
-									prefix={<MyPhonePrefix country={country} />}
-									placeholder={MOBILE_PLACEHOLDER[country]}
+									// placeholder shows the rest. The buyer's number can be
+									// from any country (z8r3fdh274): the plate carries a
+									// picker defaulting to the store's, and the schema judges
+									// the number by the PICK with the server's own parse —
+									// so the badge never promises a shape the validator
+									// rejects. A full local/international form typed anyway
+									// still normalizes to the same number.
+									prefix={
+										<BuyerPhonePrefix
+											storeCountry={country}
+											dialCountry={dialCountry}
+											onDialCountryChange={(iso) =>
+												form.setFieldValue("waDialCountry", iso)
+											}
+										/>
+									}
+									placeholder={buyerPhonePlaceholder(dialCountry)}
 									required
 									description={
 										// ONE message per order (86eyd63r8) — the confirmation.
@@ -1501,14 +1574,30 @@ export function CheckoutPage({
 						    and the realistic failure is a transposed digit — which the
 						    buyer can only catch if they see the number grouped the way
 						    they'd read it. Costs nothing and blocks nobody (a genuinely
-						    unreachable number still degrades to the recovery card). */}
-						<form.Subscribe selector={(s) => s.values.waPhone}>
-							{(typed) => {
-								const parsed = waPhoneCheckoutSchema[country].safeParse(
-									typed ?? "",
-								);
-								if (!parsed.success) return null;
-								const pretty = formatMobile(parsed.data);
+						    unreachable number still degrades to the recovery card).
+						    Until it parses, the same slot holds the rejection's one-tap
+						    fix: digits that fit the OTHER store country ("9123 4567"
+						    under +60) get a "Switch to Singapore (+65)" button — shown
+						    with the field's error (touched or submitted), never while
+						    the buyer is still on their first keystrokes. */}
+						<form.Subscribe
+							selector={(s) => ({
+								typed: s.values.waPhone,
+								touched: s.fieldMeta.waPhone?.isTouched ?? false,
+							})}
+						>
+							{({ typed, touched }) => {
+								const parsed = parseBuyerWaPhone(typed ?? "", dialCountry);
+								if (!parsed.ok) {
+									return parsed.suggest && touched ? (
+										<BuyerPhoneCountrySwitch
+											suggest={parsed.suggest}
+											onSwitch={(c) => form.setFieldValue("waDialCountry", c)}
+											locale={locale}
+										/>
+									) : null;
+								}
+								const pretty = formatMobile(parsed.digits);
 								return (
 									// MASK_PII: the one storefront surface that echoes the
 									// buyer's phone back as rendered text (inputs are already
@@ -1709,6 +1798,14 @@ export function CheckoutPage({
 														? "Collection is by rider, so the fee depends on your address — you'll see it here once you pick a suggestion. Addresses outside the rider's coverage can't be collected from"
 														: "Delivery is by rider, so the fee depends on your address — you'll see it here once you pick a suggestion. Addresses outside the rider's coverage can't be delivered"}
 													{selfCollectAvailable ? " — pick up instead" : ""}.
+												</p>
+											) : null}
+											{/* Overseas WhatsApp number at a courier-booking store
+											    (z8r3fdh274): the rider is handed the store's number,
+											    and the buyer learns it here rather than at the door. */}
+											{overseasNote ? (
+												<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+													{overseasNote}
 												</p>
 											) : null}
 										</div>

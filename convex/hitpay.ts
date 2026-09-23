@@ -25,6 +25,7 @@ import {
 	internalMutation,
 	internalQuery,
 } from "./_generated/server";
+import { type Country, DEFAULT_COUNTRY } from "./lib/country";
 import {
 	buildPaymentRequestParams,
 	decimalStringToSen,
@@ -61,6 +62,8 @@ type CheckoutContext = {
 	customerName: string | undefined;
 	customerWaPhone: string | undefined;
 	storeName: string;
+	/** Gates which buyer numbers ride the request (`buildPaymentRequestParams`). */
+	storeCountry: Country;
 	credentials: HitpayCredentials | null;
 	enabled: boolean;
 	existing: {
@@ -103,6 +106,7 @@ export const getCheckoutContext = internalQuery({
 			customerName: order.customer.name,
 			customerWaPhone: order.customer.waPhone,
 			storeName: retailer.storeName,
+			storeCountry: retailer.country ?? DEFAULT_COUNTRY,
 			credentials: resolveHitpayCredentials(hitpay),
 			enabled: hitpay?.enabled === true,
 			existing:
@@ -400,6 +404,7 @@ export const createCheckout = action({
 			webhookUrl: siteUrl ? `${siteUrl}/webhook/hitpay` : "",
 			buyerName: context.customerName,
 			buyerPhone: context.customerWaPhone,
+			storeCountry: context.storeCountry,
 		});
 		if (!siteUrl) params.delete("webhook");
 

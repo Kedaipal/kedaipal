@@ -5,7 +5,7 @@
 // convex/lib/lalamove.test.ts; signature auth in lalamoveSignature.test.ts.
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
@@ -923,6 +923,32 @@ describe("updateSettings — deliveryBooking guards", () => {
 		});
 		expect(dispatch?.blockReason).toBeNull();
 		expect(dispatch?.bookingEnabled).toBe(true);
+	});
+
+	test("bookingEnabled stays false while rider booking is off — a stored key is not a setup", async () => {
+		// Pins the shared armed predicate (lalamoveBookingArmed) the card's bit
+		// now comes from: keys on the row but the toggle off must read false.
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				waPhone: "60123456789",
+				businessAddress: ADDRESS,
+				deliveryBooking: {
+					enabled: false,
+					vehicleType: "MOTORCYCLE" as const,
+					apiKey: "pk_byo_abcd",
+					apiSecret: "sk_byo_secret",
+				},
+			});
+		});
+		const orderId = await seedOrder(t, retailer._id);
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		const dispatch = await asUser(t).query(api.lalamove.getDeliveryJob, {
+			shortId: order?.shortId ?? "",
+		});
+		expect(dispatch?.bookingEnabled).toBe(false);
+		expect(dispatch?.blockReason).toBe("booking_disabled");
 	});
 
 	test("re-saving without keys keeps the stored ones; empty string clears", async () => {
@@ -2040,5 +2066,194 @@ describe("scheduled dispatch (86eyg0n8e follow-up)", () => {
 			return jobs[0];
 		});
 		expect(jobB?.scheduledAt).toBeUndefined();
+	});
+});
+
+describe("overseas buyer numbers (z8r3fdh274) — the rider calls the store", () => {
+	// Buyers may type a WhatsApp number from any country, but Lalamove 422s a
+	// contact from outside the booking's market. The buyer-side stop therefore
+	// gets the SELLER's number, and the buyer's real one rides the remarks —
+	// on both trip directions. Until this block nothing pinned that fallback.
+	const asUser = (t: ReturnType<typeof setup>) =>
+		t.withIdentity({ subject: USER });
+	const UK_BUYER = "447700900123";
+	const MY_BUYER_ADDRESS = {
+		line1: "12 Jln Mawar 3",
+		city: "Petaling Jaya",
+		state: "Selangor",
+		postcode: "47301",
+		latitude: 3.1073,
+		longitude: 101.6067,
+	};
+	const SG_BUYER_ADDRESS = {
+		line1: "10 Bayfront Ave",
+		city: "Singapore",
+		state: "Singapore",
+		postcode: "018956",
+		latitude: 1.2838,
+		longitude: 103.8591,
+	};
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	/** A bookable rider store — MY (+60 seller) unless `country` says SG
+	 * (+65 seller), standard direction unless `collection`. */
+	async function seedRiderStore(
+		t: ReturnType<typeof setup>,
+		opts: { country?: "SG"; collection?: boolean } = {},
+	) {
+		const retailer = await seedRetailer(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				...(opts.country === "SG"
+					? { country: "SG" as const, waPhone: "6581815321" }
+					: { waPhone: "60198765432" }),
+				businessAddress: {
+					label: "Fruit Hut Outlet",
+					latitude: opts.country === "SG" ? 1.3 : 3.139,
+					longitude: opts.country === "SG" ? 103.85 : 101.6869,
+				},
+				deliveryBooking: {
+					enabled: true,
+					vehicleType: "MOTORCYCLE" as const,
+					apiKey: "pk_test_overseas",
+					apiSecret: "sk_test_overseas",
+					...(opts.collection
+						? { deliveryDirection: "collection" as const }
+						: {}),
+				},
+			});
+		});
+		return retailer;
+	}
+
+	async function seedBuyerOrder(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		waPhone: string,
+		overrides: Partial<Doc<"orders">> = {},
+	): Promise<string> {
+		const orderId = await seedOrder(t, retailerId, {
+			customer: { name: "Aisha", waPhone },
+			deliveryAddress: MY_BUYER_ADDRESS,
+			...overrides,
+		});
+		return t.run(async (ctx) => (await ctx.db.get(orderId))?.shortId ?? "");
+	}
+
+	async function dispatchContext(t: ReturnType<typeof setup>, shortId: string) {
+		const context = await asUser(t).query(
+			internal.lalamove.getDispatchContext,
+			{ shortId },
+		);
+		if (!context.ok) throw new Error(`expected ok, got ${context.reason}`);
+		return context;
+	}
+
+	test("a UK buyer: the rider gets the store's number, the buyer's rides the remarks", async () => {
+		const t = setup();
+		const retailer = await seedRiderStore(t);
+		const shortId = await seedBuyerOrder(t, retailer._id, UK_BUYER);
+
+		const context = await dispatchContext(t, shortId);
+		// Store → buyer; the buyer's stop is the recipient.
+		expect(context.sender).toEqual({ name: "Fruit Hut", phone: "+60198765432" });
+		expect(context.recipient.name).toBe("Aisha");
+		expect(context.recipient.phone).toBe("+60198765432");
+		expect(context.recipient.remarks).toContain(`Buyer WhatsApp: +${UK_BUYER}`);
+		expect(context.buyerContactFallback).toBe(true);
+	});
+
+	test("the JB cross-border +65 buyer on a Malaysian store falls back the same way", async () => {
+		const t = setup();
+		const retailer = await seedRiderStore(t);
+		const shortId = await seedBuyerOrder(t, retailer._id, "6581815321");
+
+		const context = await dispatchContext(t, shortId);
+		expect(context.recipient.phone).toBe("+60198765432");
+		expect(context.recipient.remarks).toContain("Buyer WhatsApp: +6581815321");
+		expect(context.buyerContactFallback).toBe(true);
+	});
+
+	test("a local buyer keeps their own number — no fallback, no remark", async () => {
+		const t = setup();
+		const retailer = await seedRiderStore(t);
+		const shortId = await seedBuyerOrder(t, retailer._id, "60123456789");
+
+		const context = await dispatchContext(t, shortId);
+		expect(context.recipient.phone).toBe("+60123456789");
+		expect(context.recipient.remarks).not.toContain("Buyer WhatsApp");
+		expect(context.buyerContactFallback).toBe(false);
+	});
+
+	test("collection: the rider collecting from an overseas buyer gets the store's number at the pickup", async () => {
+		// The buyer's stop is the SENDER on a collection trip. Remarks only
+		// exist on the recipient (the store) in Lalamove v3, so that is where
+		// the buyer's real number goes.
+		const t = setup();
+		const retailer = await seedRiderStore(t, { collection: true });
+		const shortId = await seedBuyerOrder(t, retailer._id, UK_BUYER, {
+			deliveryDirection: "collection",
+		});
+
+		const context = await dispatchContext(t, shortId);
+		expect(context.deliveryDirection).toBe("collection");
+		expect(context.sender).toEqual({ name: "Aisha", phone: "+60198765432" });
+		expect(context.recipient).toMatchObject({
+			name: "Fruit Hut",
+			phone: "+60198765432",
+		});
+		expect(context.recipient.remarks).toContain(`Buyer WhatsApp: +${UK_BUYER}`);
+		expect(context.buyerContactFallback).toBe(true);
+	});
+
+	test("a long address note can't cut the buyer's number out of the 400-char remarks", async () => {
+		const t = setup();
+		const retailer = await seedRiderStore(t);
+		const shortId = await seedBuyerOrder(t, retailer._id, UK_BUYER, {
+			deliveryAddress: { ...MY_BUYER_ADDRESS, notes: "x".repeat(600) },
+		});
+
+		const context = await dispatchContext(t, shortId);
+		expect(context.recipient.remarks).toHaveLength(400);
+		expect(context.recipient.remarks).toContain(`Buyer WhatsApp: +${UK_BUYER}`);
+	});
+
+	test("prepareBooking names the market, so an SG store's dialog says 'Singapore' for a +60 buyer", async () => {
+		// The card can't tell the market from the order (currency may diverge
+		// from the store's country), and the old copy hardcoded "+60" — wrong
+		// on every Singapore store.
+		const t = setup();
+		const retailer = await seedRiderStore(t, { country: "SG" });
+		const shortId = await seedBuyerOrder(t, retailer._id, "60123456789", {
+			currency: "SGD",
+			deliveryAddress: SG_BUYER_ADDRESS,
+		});
+		const fetchMock = vi.fn(
+			async () =>
+				new Response(
+					JSON.stringify({
+						data: {
+							quotationId: "q-sg-1",
+							priceBreakdown: { total: "12.50", currency: "SGD" },
+							stops: [{ stopId: "stop-a" }, { stopId: "stop-b" }],
+						},
+					}),
+					{ status: 201 },
+				),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		const quote = await asUser(t).action(api.lalamove.prepareBooking, {
+			shortId,
+		});
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(quote).toMatchObject({
+			ok: true,
+			market: "SG",
+			buyerContactFallback: true,
+		});
 	});
 });

@@ -17,6 +17,10 @@ import { useMemo, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { splitNightsByRate } from "../../../convex/lib/bookingAvailability";
+import {
+	type DialIso,
+	parseBuyerWaPhone,
+} from "../../../convex/lib/buyerPhone";
 import type { Country } from "../../../convex/lib/country";
 import {
 	DAY_MS,
@@ -26,6 +30,7 @@ import {
 import type { Locale } from "../../../convex/lib/locale";
 import { weekendDaysLabel } from "../../../convex/lib/productKind";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
+import { MASK_PII } from "../../lib/analytics-privacy";
 import {
 	addMytMonths,
 	type BookingSelection,
@@ -39,15 +44,15 @@ import {
 	packageEnd,
 	type SelectionContext,
 } from "../../lib/booking-dates";
+import { buyerPhoneRejection } from "../../lib/buyer-phone-rejection";
 import {
 	convexErrorMessage,
 	formatMobile,
 	formatPrice,
 } from "../../lib/format";
-import { waPhoneCheckoutSchema } from "../../lib/schemas";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { MyPhoneInput } from "../ui/my-phone-input";
+import { BuyerPhoneCountrySwitch, BuyerPhoneInput } from "../ui/my-phone-input";
 import { Skeleton } from "../ui/skeleton";
 import { BookingCalendar, BookingCalendarLegend } from "./booking-calendar";
 import { CheckoutSection } from "./checkout-form";
@@ -67,8 +72,9 @@ export function BookingCheckoutForm({
 	storeSlug: string;
 	productSlug: string;
 	locale?: Locale;
-	/** The store's country (SG-lite) — keys the phone plate + validator so a
-	 * booking checkout accepts exactly what the ordinary checkout does. */
+	/** The store's country (SG-lite) — the phone picker's default, and the
+	 * country an untouched picker is judged by, so a booking checkout accepts
+	 * exactly what the ordinary checkout does. */
 	country: Country;
 }) {
 	const navigate = useNavigate();
@@ -118,6 +124,15 @@ export function BookingCheckoutForm({
 	const [packages, setPackages] = useState(1);
 	const [name, setName] = useState("");
 	const [phone, setPhone] = useState("");
+	// The buyer's own country, picked on the plate (z8r3fdh274). Null until they
+	// touch the picker, so the default is DERIVED from the store's country rather
+	// than copied into state once.
+	const [pickedDialCountry, setPickedDialCountry] = useState<DialIso | null>(
+		null,
+	);
+	// Left the field once — until then the rejection stays quiet
+	// (`buyerPhoneRejection`: a complaint on the first digit is noise).
+	const [phoneTouched, setPhoneTouched] = useState(false);
 	const [note, setNote] = useState("");
 	const [submitting, setSubmitting] = useState(false);
 	const [serverError, setServerError] = useState<string | null>(null);
@@ -234,7 +249,11 @@ export function BookingCheckoutForm({
 			? conflictCeiling(selection.checkIn, ctx)
 			: null;
 
-	const parsedPhone = waPhoneCheckoutSchema[country].safeParse(phone);
+	const dialCountry = pickedDialCountry ?? country;
+	const parsedPhone = parseBuyerWaPhone(phone, dialCountry);
+	const phoneEntered = /\d/.test(phone);
+	// The reason, under the field — the CTA hint below only says WHERE to look.
+	const phoneRejection = buyerPhoneRejection(parsedPhone, phone, phoneTouched);
 	const nameOk = name.trim().length >= 3;
 	const rangeOk = nights >= 1 && !packageOutgrewStart;
 	const blockedReason = packageOutgrewStart
@@ -247,8 +266,10 @@ export function BookingCheckoutForm({
 					: "Pick your check-out date"
 			: !nameOk
 				? "Enter your name"
-				: !parsedPhone.success
-					? "Enter your WhatsApp number"
+				: !parsedPhone.ok
+					? phoneEntered
+						? "Check your WhatsApp number"
+						: "Enter your WhatsApp number"
 					: null;
 
 	async function submit() {
@@ -266,7 +287,11 @@ export function BookingCheckoutForm({
 				// the 30-day price. The COUNT it derives from is clamped there too.
 				checkOut: isPackage ? undefined : checkOut,
 				packageQuantity: isPackage ? packages : undefined,
-				customer: { name: name.trim(), waPhone: phone },
+				customer: {
+					name: name.trim(),
+					waPhone: phone,
+					waDialCountry: dialCountry,
+				},
 				customerNote: note.trim().length > 0 ? note.trim() : undefined,
 			});
 			// Straight to the order page — a request has no wa.me handoff and no
@@ -473,22 +498,55 @@ export function BookingCheckoutForm({
 				</label>
 				<div className="flex flex-col gap-1.5 text-sm font-medium">
 					<label htmlFor="booking-wa-phone">WhatsApp number</label>
-					<MyPhoneInput
-						country={country}
+					{/* The buyer plate: a country picker defaulting to the store's
+					    country, judged by the country PICKED — the same authority
+					    (`parseBuyerWaPhone`) requestBooking runs. Its placeholder
+					    follows the pick, so an SG store no longer shows an MY-shaped
+					    example. */}
+					<BuyerPhoneInput
 						id="booking-wa-phone"
+						aria-describedby="booking-wa-phone-hint"
+						storeCountry={country}
+						dialCountry={dialCountry}
+						onDialCountryChange={setPickedDialCountry}
 						value={phone}
 						onChange={setPhone}
-						placeholder="12-345 6789"
-						autoComplete="tel"
+						onBlur={() => setPhoneTouched(true)}
+						isError={phoneRejection !== null}
 					/>
-					{parsedPhone.success ? (
-						<span className="text-sm font-medium text-accent-emphasis">
+					{parsedPhone.ok ? (
+						// MASK_PII: echoes the buyer's number as rendered text, which
+						// Clarity would otherwise record on this storefront page.
+						<span
+							{...MASK_PII}
+							id="booking-wa-phone-hint"
+							className="text-sm font-medium text-accent-emphasis"
+						>
 							{ms
-								? `Keputusan tempahan akan dihantar ke ${formatMobile(parsedPhone.data)} — pastikan nombor ini betul.`
-								: `We'll WhatsApp the decision to ${formatMobile(parsedPhone.data)} — check it's right.`}
+								? `Keputusan tempahan akan dihantar ke ${formatMobile(parsedPhone.digits)} — pastikan nombor ini betul.`
+								: `We'll WhatsApp the decision to ${formatMobile(parsedPhone.digits)} — check it's right.`}
 						</span>
+					) : phoneRejection ? (
+						<>
+							<span
+								id="booking-wa-phone-hint"
+								className="text-xs font-medium text-destructive"
+							>
+								{phoneRejection.message}
+							</span>
+							{phoneRejection.suggest ? (
+								<BuyerPhoneCountrySwitch
+									suggest={phoneRejection.suggest}
+									onSwitch={setPickedDialCountry}
+									locale={locale}
+								/>
+							) : null}
+						</>
 					) : (
-						<span className="text-xs font-normal text-muted-foreground">
+						<span
+							id="booking-wa-phone-hint"
+							className="text-xs font-normal text-muted-foreground"
+						>
 							{ms
 								? "Kelulusan dan bayaran untuk tempahan ini dihantar ke WhatsApp anda."
 								: "The approval and payment ask for this booking land in this WhatsApp."}

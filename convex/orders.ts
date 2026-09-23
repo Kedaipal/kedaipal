@@ -164,7 +164,10 @@ import {
 	mapHitpayPaymentType,
 } from "./lib/hitpay";
 import { rateLimiter } from "./lib/rateLimiter";
-import { assertValidMobileForCountry } from "./lib/slug";
+import {
+	assertValidBuyerWaPhone,
+	resolveBuyerDialCountry,
+} from "./lib/buyerPhone";
 import {
 	orderConfirmTemplateName,
 	paymentReminderTemplateName,
@@ -729,8 +732,15 @@ export const markConfirmationPushFailed = internalMutation({
  * so the buyer gets their confirmation without doing anything else.
  */
 export const updateBuyerPhone = mutation({
-	args: { token: v.string(), waPhone: v.string() },
-	handler: async (ctx, { token, waPhone }): Promise<void> => {
+	args: {
+		token: v.string(),
+		waPhone: v.string(),
+		// The country picked on the repair field's plate (z8r3fdh274). Absent =
+		// the store's country, so a track page loaded before the picker shipped
+		// keeps repairing exactly as it did.
+		waDialCountry: v.optional(v.string()),
+	},
+	handler: async (ctx, { token, waPhone, waDialCountry }): Promise<void> => {
 		// Each accepted save costs an outbound template send.
 		await rateLimiter.limit(ctx, "buyerPhoneUpdate", {
 			key: token,
@@ -745,14 +755,18 @@ export const updateBuyerPhone = mutation({
 			);
 		}
 
-		// The repair field wears the same country plate as the checkout field it
-		// fixes — judge the new number by the STORE's country (SG-lite).
+		// The repair field wears the same country picker as the checkout field it
+		// fixes, so it is judged by the same authority: the country the buyer
+		// picked, defaulting to the STORE's (z8r3fdh274).
 		const orderRetailer = await ctx.db.get(order.retailerId);
 		let normalized: string;
 		try {
-			normalized = assertValidMobileForCountry(
+			normalized = assertValidBuyerWaPhone(
 				waPhone,
-				orderRetailer?.country ?? DEFAULT_COUNTRY,
+				resolveBuyerDialCountry(
+					waDialCountry,
+					orderRetailer?.country ?? DEFAULT_COUNTRY,
+				),
 			);
 		} catch (err) {
 			throw new ConvexError((err as Error).message);
@@ -802,6 +816,10 @@ export const create = mutation({
 		customer: v.object({
 			name: v.optional(v.string()),
 			waPhone: v.optional(v.string()),
+			// ISO code of the country picked on the phone field's plate
+			// (z8r3fdh274) — judged against the dial table in the handler, never
+			// stored. Absent = the store's country.
+			waDialCountry: v.optional(v.string()),
 		}),
 		deliveryMethod: v.optional(
 			v.union(v.literal("delivery"), v.literal("self_collect")),
@@ -892,8 +910,8 @@ export const create = mutation({
 			);
 		}
 		// Loaded before the address + phone checks below — the store's country
-		// picks the address shape AND which validator arm judges the buyer's
-		// number (SG-lite, 86eynw28q + 86eynw29u).
+		// picks the address shape (SG-lite, 86eynw29u) AND is the buyer phone
+		// picker's default when the client sends no dial country (z8r3fdh274).
 		const retailer = await ctx.db.get(args.retailerId);
 		if (!retailer) throw new ConvexError("Retailer not found");
 		// Off-Season Hold (z8r3fday24): the seller's own "ordering is paused"
@@ -923,16 +941,20 @@ export const create = mutation({
 		// the protocol level so legacy callers/tests keep working; a phone-less
 		// order simply rides the old buyer-sends-first wa.me flow, where the
 		// WhatsApp webhook stamps the number on the inbound message.
-		// Country-aware normalization (assertValidMobileForCountry, keyed off
-		// the STORE's country): buyers type local numbers ("012-345 6789" /
-		// "9123 4567"), and the stored form must match what Meta delivers
-		// inbound (60… / 65…) or the customer record would fork.
+		// Judged by the country the buyer PICKED on the field's plate
+		// (`customer.waDialCountry`, z8r3fdh274): a buyer's number is theirs,
+		// not the store's, so a Singaporean at a Johor cake shop or a Japanese
+		// event participant gets through. Absent (a client from before the
+		// picker) = the store's country, the picker's own default. MY/SG picks
+		// keep the strict mobile arm byte for byte; either way the number is
+		// stored as the E.164 digits Meta delivers inbound (60… / 65… / 44…),
+		// or the customer record would fork.
 		let customerWaPhone: string | undefined;
 		if (args.customer.waPhone) {
 			try {
-				customerWaPhone = assertValidMobileForCountry(
+				customerWaPhone = assertValidBuyerWaPhone(
 					args.customer.waPhone,
-					retailerCountry,
+					resolveBuyerDialCountry(args.customer.waDialCountry, retailerCountry),
 				);
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
@@ -941,6 +963,9 @@ export const create = mutation({
 		// Name is required at checkout (≥3 chars) — enforced server-side here, not
 		// just in the storefront form, so a direct mutation call can't create a
 		// nameless/1-char order. Same rule + shared validator as the counter paths.
+		// Built field by field, never spread from `args.customer`:
+		// `orders.customer` is a strict schema object, and `waDialCountry` is an
+		// input to the validator above, not something the order remembers.
 		const sanitizedCustomer = {
 			name: requireCustomerName(args.customer.name),
 			waPhone: customerWaPhone,

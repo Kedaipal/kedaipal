@@ -213,3 +213,17 @@ describe("picker copy", () => {
 		}
 	});
 });
+
+describe("parseBuyerWaPhone — typed, but not a number", () => {
+	test("letters get the picked country's copy, not 'enter your number'", () => {
+		expect(parseBuyerWaPhone("abc", "MY")).toEqual({
+			ok: false,
+			message: MOBILE_MESSAGE.MY,
+		});
+		expect(parseBuyerWaPhone("abc", "JP")).toEqual({
+			ok: false,
+			message:
+				"Enter a valid Japan mobile number (+81), or change the country",
+		});
+	});
+});

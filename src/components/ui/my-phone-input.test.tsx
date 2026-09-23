@@ -1,8 +1,17 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+	type DialIso,
+	parseBuyerWaPhone,
+} from "../../../convex/lib/buyerPhone";
+import { COUNTRIES, type Country } from "../../../convex/lib/country";
 import { waPhoneCheckoutSchema } from "../../lib/schemas";
 import {
+	BuyerPhoneCountrySwitch,
+	BuyerPhoneInput,
+	buyerPhonePlaceholder,
 	MOBILE_PLACEHOLDER,
 	MyPhoneInput,
 	MyPhonePrefix,
@@ -98,5 +107,231 @@ describe("MyPhonePrefix", () => {
 		render(<MyPhonePrefix country="SG" />);
 		expect(screen.getByText("+65")).toBeDefined();
 		expect(screen.getByRole("img", { name: "Singapore" })).toBeDefined();
+	});
+});
+
+/**
+ * The buyer variant (z8r3fdh274): the same plate carrying a country picker,
+ * because a buyer's number is per-person, not per-store. These pin the
+ * plate's promise for the picker — it opens on the store's country, what it
+ * shows is what `parseBuyerWaPhone` judges by, and a typed `+CC` moves it —
+ * plus the accessibility of a control that is two elements under one border.
+ */
+describe("BuyerPhoneInput", () => {
+	afterEach(cleanup);
+
+	/** A controlled host, like every real caller: value + pick in state. */
+	function Host({
+		storeCountry,
+		onChange,
+		onDialCountryChange,
+	}: {
+		storeCountry: Country;
+		onChange?: (value: string) => void;
+		onDialCountryChange?: (iso: DialIso) => void;
+	}) {
+		const [value, setValue] = useState("");
+		const [dialCountry, setDialCountry] = useState<DialIso>(storeCountry);
+		return (
+			<BuyerPhoneInput
+				value={value}
+				onChange={(next) => {
+					setValue(next);
+					onChange?.(next);
+				}}
+				storeCountry={storeCountry}
+				dialCountry={dialCountry}
+				onDialCountryChange={(iso) => {
+					setDialCountry(iso);
+					onDialCountryChange?.(iso);
+				}}
+			/>
+		);
+	}
+
+	const picker = () =>
+		screen.getByRole("combobox", {
+			name: "Country of your WhatsApp number",
+		}) as HTMLSelectElement;
+
+	it.each([
+		["MY", "+60", "Malaysia"],
+		["SG", "+65", "Singapore"],
+	] as const)("opens on the store's country (%s)", (country, code, name) => {
+		render(<Host storeCountry={country} />);
+		expect(picker().value).toBe(country);
+		expect(screen.getByText(code)).toBeDefined();
+		// The flag is decoration beside a select that already announces the
+		// country — hidden from the accessibility tree, not read twice.
+		expect(screen.queryByRole("img", { name })).toBeNull();
+		expect(screen.getByRole("textbox").getAttribute("placeholder")).toBe(
+			MOBILE_PLACEHOLDER[country],
+		);
+	});
+
+	it("lists the store's country first", () => {
+		render(<Host storeCountry="SG" />);
+		expect(picker().options[0]?.value).toBe("SG");
+	});
+
+	it("is one text input and one select — nothing else to tab through", () => {
+		const { container } = render(<Host storeCountry="MY" />);
+		expect(container.querySelectorAll("input")).toHaveLength(1);
+		expect(container.querySelectorAll("select")).toHaveLength(1);
+	});
+
+	it("marks the number invalid, never the picker", () => {
+		// The error belongs to the digits: focus-on-error must land in the input,
+		// and a screen reader must not hear the country called invalid.
+		render(
+			<BuyerPhoneInput
+				value="123"
+				onChange={() => {}}
+				storeCountry="MY"
+				dialCountry="MY"
+				onDialCountryChange={() => {}}
+				isError
+			/>,
+		);
+		expect(screen.getByRole("textbox").getAttribute("aria-invalid")).toBe(
+			"true",
+		);
+		expect(picker().hasAttribute("aria-invalid")).toBe(false);
+	});
+
+	it("reports a pick from the select", () => {
+		const onDialCountryChange = vi.fn();
+		render(
+			<Host storeCountry="MY" onDialCountryChange={onDialCountryChange} />,
+		);
+		fireEvent.change(picker(), { target: { value: "BN" } });
+		expect(onDialCountryChange).toHaveBeenCalledWith("BN");
+		expect(picker().value).toBe("BN");
+	});
+
+	it("a typed or pasted +CC moves the picker and keeps only the national part", () => {
+		// Otherwise the plate would read `+60 | +81 90…` — two country codes.
+		const onChange = vi.fn();
+		const onDialCountryChange = vi.fn();
+		render(
+			<Host
+				storeCountry="MY"
+				onChange={onChange}
+				onDialCountryChange={onDialCountryChange}
+			/>,
+		);
+		fireEvent.change(screen.getByRole("textbox"), {
+			target: { value: "+81 90-1234-5678" },
+		});
+		expect(onDialCountryChange).toHaveBeenCalledWith("JP");
+		expect(onChange).toHaveBeenCalledWith("90-1234-5678");
+		expect(picker().value).toBe("JP");
+		expect((screen.getByRole("textbox") as HTMLInputElement).value).toBe(
+			"90-1234-5678",
+		);
+	});
+
+	it("bare digits are never sniffed — the pick stays where it was", () => {
+		const onDialCountryChange = vi.fn();
+		render(
+			<Host storeCountry="MY" onDialCountryChange={onDialCountryChange} />,
+		);
+		fireEvent.change(screen.getByRole("textbox"), {
+			target: { value: "9123 4567" },
+		});
+		expect(onDialCountryChange).not.toHaveBeenCalled();
+		expect(picker().value).toBe("MY");
+	});
+
+	it("a country without an inline flag shows its ISO badge and a neutral placeholder", () => {
+		// No made-up example for 239 countries: a format the buyer then can't
+		// match would be worse than none.
+		render(<Host storeCountry="MY" />);
+		fireEvent.change(picker(), { target: { value: "JP" } });
+		expect(screen.getByText("JP")).toBeDefined();
+		expect(screen.getByText("+81")).toBeDefined();
+		expect(screen.getByRole("textbox").getAttribute("placeholder")).toBe(
+			"Mobile number",
+		);
+	});
+
+	it.each(
+		COUNTRIES,
+	)("the %s placeholder is a number the buyer parser accepts for that country", (country) => {
+		// The plate's promise, for the buyer variant: the example it shows must
+		// parse under the country it shows.
+		expect(parseBuyerWaPhone(buyerPhonePlaceholder(country), country).ok).toBe(
+			true,
+		);
+	});
+
+	it("carries the tel keyboard hints and the tel autofill by default", () => {
+		render(<Host storeCountry="MY" />);
+		const input = screen.getByRole("textbox");
+		expect(input.getAttribute("type")).toBe("tel");
+		expect(input.getAttribute("inputmode")).toBe("tel");
+		expect(input.getAttribute("autocomplete")).toBe("tel");
+	});
+
+	it("lets a host turn autofill off (a cashier typing someone else's number)", () => {
+		render(
+			<BuyerPhoneInput
+				value=""
+				onChange={() => {}}
+				storeCountry="MY"
+				dialCountry="MY"
+				onDialCountryChange={() => {}}
+				autoComplete="off"
+			/>,
+		);
+		expect(screen.getByRole("textbox").getAttribute("autocomplete")).toBe(
+			"off",
+		);
+	});
+
+	it("disables the picker with the field", () => {
+		render(
+			<BuyerPhoneInput
+				value=""
+				onChange={() => {}}
+				storeCountry="MY"
+				dialCountry="MY"
+				onDialCountryChange={() => {}}
+				disabled
+			/>,
+		);
+		expect(picker().disabled).toBe(true);
+		expect((screen.getByRole("textbox") as HTMLInputElement).disabled).toBe(
+			true,
+		);
+	});
+});
+
+describe("BuyerPhoneCountrySwitch", () => {
+	afterEach(cleanup);
+
+	it("names the country it switches to and hands it back on tap", () => {
+		const onSwitch = vi.fn();
+		render(<BuyerPhoneCountrySwitch suggest="SG" onSwitch={onSwitch} />);
+		fireEvent.click(
+			screen.getByRole("button", { name: "Switch to Singapore (+65)" }),
+		);
+		expect(onSwitch).toHaveBeenCalledWith("SG");
+	});
+
+	it("speaks the store's language on an ms store", () => {
+		const onSwitch = vi.fn();
+		render(
+			<BuyerPhoneCountrySwitch suggest="MY" onSwitch={onSwitch} locale="ms" />,
+		);
+		fireEvent.click(
+			screen.getByRole("button", { name: "Tukar ke Malaysia (+60)" }),
+		);
+		expect(onSwitch).toHaveBeenCalledWith("MY");
+	});
+
+	it("is never a submit button — tapping it inside a form must not send", () => {
+		render(<BuyerPhoneCountrySwitch suggest="SG" onSwitch={() => {}} />);
+		expect(screen.getByRole("button").getAttribute("type")).toBe("button");
 	});
 });

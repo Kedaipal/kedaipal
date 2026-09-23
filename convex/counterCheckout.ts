@@ -27,6 +27,10 @@ import {
 } from "./_generated/server";
 import { linkOrderToCustomer, refreshWaProfileName } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
+import {
+	assertValidBuyerWaPhone,
+	resolveBuyerDialCountry,
+} from "./lib/buyerPhone";
 import { DEFAULT_COUNTRY } from "./lib/country";
 import { stampProductsOrdered } from "./lib/productOrdered";
 import { orderingPausedMessage } from "./lib/seasonalHold";
@@ -68,7 +72,7 @@ import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 import type { PickupSnapshot } from "./lib/whatsappCopy";
 import { buildPickupSnapshot, resolveEventVenue } from "./orders";
 import { rateLimiter } from "./lib/rateLimiter";
-import { assertValidWaPhone, assertValidWaPhoneForCountry } from "./lib/slug";
+import { assertValidWaPhone } from "./lib/slug";
 import { variantLabel } from "./lib/variant";
 import { type Locale, pickLocale } from "./lib/whatsappCopy";
 
@@ -340,41 +344,54 @@ export const getCheckoutSession = query({
 
 /**
  * Bind a walk-in session to a manually-keyed buyer phone — the "buyer won't/can't
- * scan" path. Normalizes to the SAME E.164 digits an inbound scan produces
- * (assertValidWaPhoneForCountry, keyed off the store's country — an SG store's
- * bare `81234567` is prefixed to `6581234567`, the form Meta delivers inbound),
- * so it resolves-or-creates the exact same `(retailerId, waPhone)` customer as
- * a scan would — a returning buyer is recognised, never duplicated. Stays
- * deliberately loose beyond that bridging: a cashier may legitimately key a
- * foreign number for a walk-in, so no mobile-shape gate applies here.
- * Re-claims an already-open session for that phone
- * (whether from an earlier manual bind or a scan) instead of forking a second
- * one. Owner-or-admin, admin-audited. Cashier-authenticated, so no public
- * rate-limit/cap applies (those guard the public poster token, not a logged-in
- * seller).
+ * scan" path. The number is a BUYER's, so it is judged by the same authority as
+ * every buyer phone field (`assertValidBuyerWaPhone`, z8r3fdh274) against the
+ * country the cashier picked on the field's plate — absent = the store's
+ * country. That covers the walk-in from anywhere (a Bruneian tourist, a UK
+ * visitor) without the old loose pass-through, which also let MY landlines
+ * and 8–15-digit junk in and stored a bare MY national number unprefixed. An
+ * MY/SG pick takes the strict mobile arm; any other country goes through the
+ * dial table. Either way the result is the SAME E.164 digits an inbound scan
+ * produces (an SG store's bare `81234567` → `6581234567`, a UK `07911 123456`
+ * → `447911123456`), so it resolves-or-creates the exact same
+ * `(retailerId, waPhone)` customer a scan would — a returning buyer is
+ * recognised, never duplicated. Re-claims an already-open session for that
+ * phone (whether from an earlier manual bind or a scan) instead of forking a
+ * second one. Owner-or-admin, admin-audited. Cashier-authenticated, so no
+ * public rate-limit/cap applies (those guard the public poster token, not a
+ * logged-in seller).
  */
 export const bindSessionManualPhone = mutation({
 	args: {
 		retailerId: v.optional(v.id("retailers")),
 		waPhone: v.string(),
+		// The country picked on the field's plate (z8r3fdh274). Absent = the
+		// store's country, so a counter screen loaded before the picker shipped
+		// keeps binding local numbers exactly as it did.
+		waDialCountry: v.optional(v.string()),
 		// The buyer's name — required for a manual bind (the cashier is keying the
 		// order for a named person; it seeds the CRM row + the order/receipt).
 		name: v.string(),
 	},
 	handler: async (
 		ctx,
-		{ retailerId, waPhone, name },
+		{ retailerId, waPhone, waDialCountry, name },
 	): Promise<{ sessionId: Id<"counterCheckoutSessions">; reclaimed: boolean }> => {
 		const access = await requireCounterRetailer(ctx, retailerId);
 		await assertSubscriptionActive(ctx, access.retailer._id);
 		const retailer = access.retailer;
 		assertOrderingNotPaused(retailer);
 
+		// Only after the store-level gates above: a paused or lapsed store says so
+		// before any complaint about the number (pinned by seasonalHold.test.ts).
 		let normalizedPhone: string;
 		try {
-			normalizedPhone = assertValidWaPhoneForCountry(
+			normalizedPhone = assertValidBuyerWaPhone(
 				waPhone,
-				retailer.country ?? DEFAULT_COUNTRY,
+				resolveBuyerDialCountry(
+					waDialCountry,
+					retailer.country ?? DEFAULT_COUNTRY,
+				),
 			);
 		} catch (err) {
 			throw new ConvexError((err as Error).message);
@@ -1343,7 +1360,9 @@ export const startSessionFromStoreQr = internalMutation({
 		const locale = pickLocale(retailer.locale);
 		const now = Date.now();
 
-		// Normalize the inbound phone the same way the bind flow does.
+		// Meta's own digits for this buyer (`from`) — loose on purpose: a number
+		// WhatsApp just delivered can't be refused. The manual bind stores the
+		// same E.164 digits via the buyer validator, so the two re-claim each other.
 		let normalizedPhone: string;
 		try {
 			normalizedPhone = assertValidWaPhone(waPhone);

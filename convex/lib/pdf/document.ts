@@ -10,6 +10,7 @@
 // Money is stored in MINOR units (sen) everywhere — see src/lib/format.ts — so
 // every amount here is sen and `formatMoney` divides by 100.
 
+import { formatPhone } from "../customer";
 import { isOrderDocPaid } from "../orderDocument";
 import { printable } from "./latin1";
 
@@ -298,7 +299,9 @@ export function orderToReceiptData(args: {
 		// is non-empty here and blank on paper, so testing the raw string leaves a
 		// labelled field with nothing in it. Same rule as the despatch label.
 		customerName: printable(order.customer.name),
-		customerPhone: printable(order.customer.waPhone),
+		// Formatted like the despatch label (`+60 123456789`, `+44 7911123456`)
+		// — the raw stored digits carry no `+`, which reads as a local number.
+		customerPhone: printable(formatPhone(order.customer.waPhone ?? "")),
 		items: order.items.map((it) => ({
 			name: printable(it.name) ?? "Item",
 			variantLabel: printable(it.variantLabel),

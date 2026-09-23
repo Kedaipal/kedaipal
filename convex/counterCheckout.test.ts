@@ -6,6 +6,7 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 import { OPEN_SESSION_TTL_MS } from "./counterCheckout";
+import { UNKNOWN_DIAL_COUNTRY_MESSAGE } from "./lib/buyerPhone";
 
 const modules = import.meta.glob("./**/*.ts");
 
@@ -1398,9 +1399,11 @@ describe("counterCheckout — SG store manual phone (SG-lite, 86eynw28q)", () =>
 		expect(session?.customerId).toBeDefined();
 	});
 
-	test("a foreign number still passes through for a walk-in from anywhere", async () => {
-		// The counter bind stays loose on purpose — an MY tourist at an SG stall
-		// keys their full international number and it is stored as typed.
+	test("an explicit +CC typed for a walk-in is honoured over the store's country", async () => {
+		// The cashier TYPED the country code, so it wins over the +65 default
+		// even from a counter screen that sends no dial country (z8r3fdh274) —
+		// an MY tourist at an SG stall still binds. Bare digits are never
+		// sniffed; that is what the picker is for.
 		const t = setup();
 		await seedSgRetailer(t);
 		const { sessionId } = await t
@@ -1411,5 +1414,99 @@ describe("counterCheckout — SG store manual phone (SG-lite, 86eynw28q)", () =>
 			});
 		const session = await t.run((ctx) => ctx.db.get(sessionId));
 		expect(session?.waPhone).toBe("60123456789");
+	});
+});
+
+describe("counterCheckout — manual phone from any country (z8r3fdh274)", () => {
+	// The manual bind now runs the BUYER validator against the country the
+	// cashier picked (absent = the store's). That opens the walk-in from
+	// anywhere without the old loose pass-through — which also let landlines
+	// and junk in, and stored a bare MY national number unprefixed.
+
+	function bind(
+		t: ReturnType<typeof setup>,
+		args: { waPhone: string; waDialCountry?: string; name?: string },
+	) {
+		return t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.bindSessionManualPhone, {
+				name: "Walk-in Buyer",
+				...args,
+			});
+	}
+
+	test("a UK walk-in binds with the picked country, stored as Meta delivers it", async () => {
+		const t = setup();
+		await seedRetailer(t, USER_A);
+		const { sessionId } = await bind(t, {
+			waPhone: "07911 123456",
+			waDialCountry: "GB",
+		});
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.waPhone).toBe("447911123456");
+	});
+
+	test("a 7-digit Brunei number binds — the old >= 8-digit rule would have refused it", async () => {
+		const t = setup();
+		await seedRetailer(t, USER_A);
+		const { sessionId } = await bind(t, {
+			waPhone: "712 3456",
+			waDialCountry: "BN",
+		});
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.waPhone).toBe("6737123456");
+	});
+
+	test("an MY landline is refused now — it can never receive the confirmation", async () => {
+		// Intended tightening: the loose arm stored this as 60312345678.
+		const t = setup();
+		await seedRetailer(t, USER_A);
+		await expect(bind(t, { waPhone: "03-1234 5678" })).rejects.toThrow(
+			/Malaysian mobile/,
+		);
+	});
+
+	test("a bare MY national number folds to the inbound form instead of forking the CRM", async () => {
+		// The loose arm stored "123456789" as typed, while Meta delivers the same
+		// buyer as "60123456789" — a second customer row and a dead number.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await seedCustomer(t, retailer._id, "60123456789", "Aiman");
+		const { sessionId } = await bind(t, { waPhone: "12-345 6789" });
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.waPhone).toBe("60123456789");
+		expect(session?.isNewCustomer).toBe(false);
+	});
+
+	test("an unknown dial country is refused", async () => {
+		const t = setup();
+		await seedRetailer(t, USER_A);
+		await expect(
+			bind(t, { waPhone: "07911 123456", waDialCountry: "XX" }),
+		).rejects.toThrow(UNKNOWN_DIAL_COUNTRY_MESSAGE);
+	});
+
+	test("a foreign manual bind is re-claimed by that buyer's store-QR scan", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const { token } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.ensureCounterQrToken, {});
+		const { sessionId } = await bind(t, {
+			waPhone: "07911 123456",
+			waDialCountry: "GB",
+		});
+
+		// The same buyer scans the poster; Meta hands us their bare E.164 digits.
+		const res = await t.mutation(
+			internal.counterCheckout.startSessionFromStoreQr,
+			{ token, waPhone: "447911123456", profileName: "Oliver" },
+		);
+		expect(res.result === "started" && res.reclaimed).toBe(true);
+		expect(await openSessionsForPhone(t, retailer._id, "447911123456")).toBe(
+			1,
+		);
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.status).toBe("buyer_identified");
 	});
 });

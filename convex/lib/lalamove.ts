@@ -259,7 +259,7 @@ export function toLalamovePhone(waPhone: string): string {
  * null lets dispatch fall back to the seller's own number as the rider
  * contact instead. Buyers can type a WhatsApp number from any country
  * (z8r3fdh274), so that fallback is an everyday path, not a Johor edge case.
- * The rule itself is provider-neutral and lives in `./courier` — Delyva
+ * The rule itself is provider-neutral and lives in `./courierContact` — Delyva
  * applies the same one.
  */
 export function toLalamoveContactPhone(

@@ -299,17 +299,21 @@ export function BuyerPhonePrefix({
 	dialCountry,
 	onDialCountryChange,
 	disabled = false,
+	countryLabel = "Country of your WhatsApp number",
 }: {
 	storeCountry: Country;
 	dialCountry: DialIso;
 	onDialCountryChange: (iso: DialIso) => void;
 	disabled?: boolean;
+	/** The select's accessible name — "your" on the buyer's own screens; the
+	 * counter, where a cashier keys someone else's number, says "the buyer's". */
+	countryLabel?: string;
 }) {
 	const nearby = NEARBY_DIAL_COUNTRIES[storeCountry];
 	return (
 		<>
 			<select
-				aria-label="Country of your WhatsApp number"
+				aria-label={countryLabel}
 				value={dialCountry}
 				disabled={disabled}
 				onChange={(e) => onDialCountryChange(e.target.value as DialIso)}
@@ -373,6 +377,8 @@ type BuyerPhoneInputProps = Omit<
 	dialCountry: DialIso;
 	onDialCountryChange: (iso: DialIso) => void;
 	isError?: boolean;
+	/** Accessible name of the country picker (see `BuyerPhonePrefix`). */
+	countryLabel?: string;
 };
 
 /**
@@ -395,6 +401,7 @@ export function BuyerPhoneInput({
 	disabled = false,
 	className,
 	placeholder,
+	countryLabel,
 	...props
 }: BuyerPhoneInputProps) {
 	return (
@@ -405,6 +412,7 @@ export function BuyerPhoneInput({
 					dialCountry={dialCountry}
 					onDialCountryChange={onDialCountryChange}
 					disabled={disabled}
+					countryLabel={countryLabel}
 				/>
 			}
 			invalid={isError}

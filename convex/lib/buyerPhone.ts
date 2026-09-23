@@ -225,8 +225,18 @@ function parseSupported(
 export function parseBuyerWaPhone(raw: string, picked: DialIso): BuyerPhoneParse {
 	const typed = raw.trim();
 	const digits = typed.replace(/\D/g, "");
-	if (digits.length === 0) {
+	if (typed.length === 0) {
 		return { ok: false, message: BUYER_PHONE_EMPTY_MESSAGE };
+	}
+	if (digits.length === 0) {
+		// Something was typed, just not a number ("abc") — say what the field
+		// wants for the picked country, not "enter your number".
+		return {
+			ok: false,
+			message: isCountry(picked)
+				? MOBILE_MESSAGE[picked]
+				: foreignMessage(dialRow(picked)),
+		};
 	}
 
 	const explicit = typed.startsWith("+")

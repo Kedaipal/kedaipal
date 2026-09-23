@@ -62,7 +62,10 @@ import {
 import { stampProductsOrdered } from "./lib/productOrdered";
 import { rateLimiter } from "./lib/rateLimiter";
 import { DEFAULT_COUNTRY } from "./lib/country";
-import { assertValidMobileForCountry } from "./lib/slug";
+import {
+	assertValidBuyerWaPhone,
+	resolveBuyerDialCountry,
+} from "./lib/buyerPhone";
 import { orderConfirmTemplateName } from "./lib/whatsapp";
 import {
 	applyStatusTransition,
@@ -255,6 +258,10 @@ export const requestBooking = mutation({
 			// payment ask, declined-with-reason, expiry) reaches the guest on
 			// WhatsApp — a phone-less request would dead-end at approval.
 			waPhone: v.optional(v.string()),
+			// The country picked on the phone field's plate (z8r3fdh274), same
+			// contract as orders.create: absent = the store's country, never
+			// stored.
+			waDialCountry: v.optional(v.string()),
 		}),
 		customerNote: v.optional(v.string()),
 	},
@@ -279,19 +286,23 @@ export const requestBooking = mutation({
 		}
 
 		// Guest identity — name required (same rule as every checkout) and a
-		// reachable MY WhatsApp mobile required (see the args comment).
+		// reachable WhatsApp mobile required (see the args comment), from any
+		// country: a guest's number is theirs, not the store's (z8r3fdh274).
 		const name = requireCustomerName(args.customer.name);
 		if (!args.customer.waPhone) {
 			throw new ConvexError("A WhatsApp number is required to request a booking");
 		}
 		let waPhone: string;
 		try {
-			// Judged by the STORE's country (SG-lite) — the same bridge
-			// orders.create uses, so a booking checkout can't reject a number
-			// the ordinary checkout would accept.
-			waPhone = assertValidMobileForCountry(
+			// Judged by the country the guest picked (absent = the store's) —
+			// the same authority orders.create uses, so a booking checkout can't
+			// reject a number the ordinary checkout would accept.
+			waPhone = assertValidBuyerWaPhone(
 				args.customer.waPhone,
-				retailer.country ?? DEFAULT_COUNTRY,
+				resolveBuyerDialCountry(
+					args.customer.waDialCountry,
+					retailer.country ?? DEFAULT_COUNTRY,
+				),
 			);
 		} catch (err) {
 			throw new ConvexError((err as Error).message);

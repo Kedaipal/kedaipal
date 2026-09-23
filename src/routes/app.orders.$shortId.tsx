@@ -1071,9 +1071,10 @@ function OrderDetailRoute() {
 							<p className="mt-1 text-sm text-amber-950 dark:text-amber-100">
 								The confirmation to{" "}
 								<b>{formatPhone(order.customer.waPhone ?? "")}</b> didn't
-								deliver — that number may have a typo or no WhatsApp. It's the
-								only message this order sends, so they have nothing in chat to
-								come back to. Their order page offers an &ldquo;Update my
+								deliver — that number may have a typo, no WhatsApp, or be in a
+								country our WhatsApp account can't message yet. It's the only
+								message this order sends, so they have nothing in chat to come
+								back to. Their order page offers an &ldquo;Update my
 								number&rdquo; fix; if they reach you another way, check the
 								number with them.
 							</p>
