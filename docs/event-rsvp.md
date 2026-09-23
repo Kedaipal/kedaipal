@@ -122,9 +122,21 @@ For a cart holding any event line:
    flipping the method there would leave an order carrying delivery state it
    should never have had. The checkout hides the delivery option, so reaching
    this means a stale tab.
-4. **A venue is required.** An event whose store has no active pickup point
-   would confirm a guest with no idea where to go, so it refuses. The storefront
-   gates the RSVP on the same condition.
+4. **The venue is the EVENT's, forced like its date** (round 4:
+   `event.venueId`). A guest choosing the venue is as wrong as a guest
+   choosing the day — on a multi-outlet store the generic pickup picker would
+   offer outlets the event isn't at. Checkout shows the venue as a read-back
+   titled **Venue** ("set by the store, the same for every guest"), and
+   `orders.create` overrides whatever pickup id the client sent via
+   `resolveEventVenue` (the event's pick when still active, else the first
+   active point — a venue deactivated after RSVPs opened degrades, never
+   strands a guest). The counter runs the same resolver, so the two doors can
+   never seat one event at different venues. **Save-time rules**: a
+   single-outlet store never picks (unset = the only point, stated read-only
+   in the form so the default isn't silent); a multi-outlet store must name
+   the venue — refused at save, required on the form/wizard with the reason.
+   A store with NO active point still refuses the RSVP outright: a
+   confirmation that never says where to go is a dead end.
 5. **`fulfilmentDate` = `event.date`, `fulfilmentTimeMinutes` = `event.timeMinutes`,**
    forced — never read from the client.
 6. **Minimum notice and opening hours are SKIPPED.** The seller fixed the moment

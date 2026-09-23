@@ -66,7 +66,12 @@ export type CartItem = {
 	// persisted carts and on every normal product. The server re-reads the live
 	// event at create — this copy exists so the checkout can render the lock
 	// without a product join.
-	event?: { date: number; timeMinutes?: number; endDate?: number };
+	event?: {
+		date: number;
+		timeMinutes?: number;
+		endDate?: number;
+		venueId?: string;
+	};
 };
 
 type CartState = {

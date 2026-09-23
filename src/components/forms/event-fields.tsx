@@ -1,4 +1,5 @@
 import { CalendarClock } from "lucide-react";
+import type { Id } from "../../../convex/_generated/dataModel";
 import {
 	DAY_MS,
 	hhmmFromMinutes,
@@ -28,6 +29,9 @@ export type EventDraft = {
 	date: string;
 	/** "YYYY-MM-DD" or "" — the LAST day of a multi-day event; blank = one day. */
 	endDate: string;
+	/** Pickup location id hosting the event; "" = unset (single-point stores
+	 * never pick — the only active point is the venue). */
+	venueId: string;
 	/** "HH:MM" or "" — blank means an all-day event. */
 	time: string;
 	/** Seat cap as typed; blank = no limit. */
@@ -40,6 +44,7 @@ export const EMPTY_EVENT_DRAFT: EventDraft = {
 	endDate: "",
 	time: "",
 	seats: "",
+	venueId: "",
 };
 
 /** Seed the draft from a saved product (or the empty draft when it isn't an
@@ -47,7 +52,13 @@ export const EMPTY_EVENT_DRAFT: EventDraft = {
  * either can't lose a value. */
 export function eventDraftFrom(
 	event:
-		| { date: number; timeMinutes?: number; seats?: number; endDate?: number }
+		| {
+				date: number;
+				timeMinutes?: number;
+				seats?: number;
+				endDate?: number;
+				venueId?: string;
+		  }
 		| undefined,
 ): EventDraft {
 	if (!event) return { ...EMPTY_EVENT_DRAFT };
@@ -55,6 +66,7 @@ export function eventDraftFrom(
 		on: true,
 		date: ymdFromEpoch(event.date),
 		endDate: event.endDate === undefined ? "" : ymdFromEpoch(event.endDate),
+		venueId: event.venueId ?? "",
 		time:
 			event.timeMinutes === undefined ? "" : hhmmFromMinutes(event.timeMinutes),
 		seats: event.seats === undefined ? "" : String(event.seats),
@@ -66,6 +78,9 @@ export type EventSubmitValue = {
 	timeMinutes?: number;
 	seats?: number;
 	endDate?: number;
+	/** Branded here (the draft holds a plain string) so the create/update
+	 * calls need no cast; the server re-validates ownership regardless. */
+	venueId?: Id<"pickupLocations">;
 } | null;
 
 /** The draft's last day as an epoch: `undefined` when blank or the same day as
@@ -125,6 +140,9 @@ export function eventSubmitValue(draft: EventDraft): EventSubmitValue {
 		seats: Number.isInteger(seats) && seats > 0 ? seats : undefined,
 		endDate:
 			endDate !== undefined && Number.isFinite(endDate) ? endDate : undefined,
+		venueId: draft.venueId.trim()
+			? (draft.venueId as Id<"pickupLocations">)
+			: undefined,
 	};
 }
 
@@ -132,9 +150,16 @@ export function eventSubmitValue(draft: EventDraft): EventSubmitValue {
  * the form can't offer a Save that the mutation then refuses. */
 export function eventDraftValid(
 	draft: EventDraft,
-	opts: { allowPastDate?: boolean; now?: number } = {},
+	opts: {
+		allowPastDate?: boolean;
+		now?: number;
+		/** The store has several active pickup points, so the event must say
+		 * which one hosts it (the server refuses the save otherwise). */
+		requireVenue?: boolean;
+	} = {},
 ): boolean {
 	if (!draft.on) return true;
+	if (opts.requireVenue && draft.venueId.trim().length === 0) return false;
 	if (draft.date.trim().length === 0) return false;
 	const date = mytMidnightFromYmd(draft.date);
 	if (!Number.isFinite(date)) return false;
@@ -166,6 +191,7 @@ export function EventFields({
 	 * Undefined on create (nothing can have RSVP'd yet). */
 	rsvpCount,
 	noToggle,
+	venues,
 }: {
 	draft: EventDraft;
 	onChange: (next: EventDraft) => void;
@@ -176,6 +202,11 @@ export function EventFields({
 	 * toggle, so the header row (title + switch) drops and the fields render
 	 * unconditionally. The drawer/full-form rendering is unchanged. */
 	noToggle?: boolean;
+	/** The store's ACTIVE pickup points. One = the venue is a stated fact;
+	 * several = the seller must pick which hosts the event (a guest choosing
+	 * the venue is as wrong as a guest choosing the date). Undefined while
+	 * loading — the selector simply hasn't rendered yet. */
+	venues?: ReadonlyArray<{ _id: string; label: string }>;
 }) {
 	const taken = rsvpCount ?? 0;
 	const hasRsvps = taken > 0;
@@ -313,7 +344,54 @@ export function EventFields({
 								className="w-28"
 							/>
 						</div>
+						{/* The VENUE — the event's property, like its date. With one
+						    active point there is nothing to choose, but the fact is
+						    still stated (a silent default is a hidden decision); with
+						    several the pick is required, because the guest never
+						    chooses and order time must not pick arbitrarily. */}
+						{venues !== undefined && venues.length > 1 ? (
+							<div className="flex flex-col gap-1.5">
+								<label htmlFor="event-venue" className="text-sm font-medium">
+									Venue
+								</label>
+								<select
+									id="event-venue"
+									value={draft.venueId}
+									onChange={(e) => set({ venueId: e.target.value })}
+									disabled={locked}
+									className={`h-11 w-56 rounded-xl border bg-background px-3 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50 ${
+										draft.venueId.trim() === ""
+											? "border-destructive"
+											: "border-input"
+									}`}
+								>
+									<option value="">Pick a pickup point…</option>
+									{venues.map((v) => (
+										<option key={v._id} value={v._id}>
+											{v.label}
+										</option>
+									))}
+								</select>
+							</div>
+						) : null}
 					</div>
+					{venues !== undefined &&
+					venues.length > 1 &&
+					!draft.venueId.trim() ? (
+						<p className="text-xs text-destructive">
+							Pick which pickup point hosts the event — guests are sent there,
+							not to a point of their choosing.
+						</p>
+					) : null}
+					{venues !== undefined && venues.length === 1 ? (
+						<p className="text-xs text-muted-foreground">
+							Venue:{" "}
+							<span className="font-medium text-foreground">
+								{venues[0].label}
+							</span>{" "}
+							— your pickup point. Guests are sent there.
+						</p>
+					) : null}
 
 					{dateInPast ? (
 						<p className="text-xs text-destructive">

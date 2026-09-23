@@ -847,6 +847,7 @@ export const create = mutation({
 				timeMinutes: v.optional(v.number()),
 				seats: v.optional(v.number()),
 				endDate: v.optional(v.number()),
+				venueId: v.optional(v.id("pickupLocations")),
 			}),
 		),
 		// Kind + booking config land together at create and the kind is immutable
@@ -966,7 +967,7 @@ export const create = mutation({
 		// a food choice off (docs/booking.md S1, the whole reason events aren't
 		// bookings). Pro-gated like `categories`; admin act-as bypasses so
 		// white-glove onboarding can set one up on a Starter store.
-		let event: ProductEvent | undefined;
+		let event: StoredProductEvent | undefined;
 		if (args.event !== undefined) {
 			if (effectiveKind(kind) === "booking")
 				throw new ConvexError(
@@ -974,11 +975,14 @@ export const create = mutation({
 				);
 			if (!access.actingAsAdmin)
 				await assertPlanFeature(ctx, args.retailerId, "events");
+			let sanitized: ProductEvent | undefined;
 			try {
-				event = sanitizeEvent(args.event);
+				sanitized = sanitizeEvent(args.event);
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
 			}
+			if (sanitized !== undefined)
+				event = await validateEventVenue(ctx, args.retailerId, sanitized);
 		}
 
 		// Cross-variant SKU uniqueness against the rest of this retailer's catalog.
@@ -1081,7 +1085,7 @@ async function resolveEventUpdate(
 	product: Doc<"products">,
 	access: RetailerAccess,
 	next: EventInput | null,
-): Promise<ProductEvent | undefined> {
+): Promise<StoredProductEvent | undefined> {
 	const current = product.event;
 	const live = current
 		? await tallyEventSeats(ctx, {
@@ -1130,7 +1134,48 @@ async function resolveEventUpdate(
 		throw new ConvexError(
 			`${guestsAlready(taken)} already RSVP'd — the seat cap can't go below ${taken}.`,
 		);
-	return event;
+	return validateEventVenue(ctx, product.retailerId, event);
+}
+
+/**
+ * Save-time venue rules (round 4): the venue is the EVENT's property. A
+ * single-outlet store never picks (unset = the only active point); a
+ * multi-outlet store MUST say which point hosts it — an unset venue there
+ * would leave order time picking arbitrarily. The id is re-branded here
+ * after the ownership/active check, because the pure sanitizer can't hold
+ * Convex types. Order-time resolution (`resolveEventVenue` in orders.ts)
+ * still carries a first-active fallback, so a venue deactivated AFTER save
+ * degrades instead of stranding guests.
+ */
+/** `ProductEvent` with the venue id re-branded for storage. */
+type StoredProductEvent = Omit<ProductEvent, "venueId"> & {
+	venueId?: Id<"pickupLocations">;
+};
+
+async function validateEventVenue(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	event: ProductEvent,
+): Promise<StoredProductEvent> {
+	if (event.venueId !== undefined) {
+		const venue = await ctx.db.get(event.venueId as Id<"pickupLocations">);
+		if (!venue || venue.retailerId !== retailerId || !venue.isActive)
+			throw new ConvexError(
+				"That pickup point isn't available — pick the event's venue again.",
+			);
+		return { ...event, venueId: venue._id };
+	}
+	const active = await ctx.db
+		.query("pickupLocations")
+		.withIndex("by_retailer_active", (q) =>
+			q.eq("retailerId", retailerId).eq("isActive", true),
+		)
+		.take(2);
+	if (active.length > 1)
+		throw new ConvexError(
+			"This store has more than one pickup point — pick which one hosts the event.",
+		);
+	return { ...event, venueId: undefined };
 }
 
 /** "18 guests have" / "1 guest has" — the subject of every event-edit refusal,
@@ -1169,6 +1214,7 @@ export const update = mutation({
 					timeMinutes: v.optional(v.number()),
 					seats: v.optional(v.number()),
 					endDate: v.optional(v.number()),
+					venueId: v.optional(v.id("pickupLocations")),
 				}),
 				v.null(),
 			),

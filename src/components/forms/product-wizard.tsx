@@ -341,6 +341,11 @@ export function skuConflictTarget(
 export function wizardStepIssues(
 	state: WizardState,
 	step: number,
+	opts: {
+		/** The store has several active pickup points, so an armed event must
+		 * name its venue (the server refuses the save otherwise). */
+		requireEventVenue?: boolean;
+	} = {},
 ): WizardIssue[] {
 	const issues: WizardIssue[] = [];
 	const { customLine } = state.editor;
@@ -379,6 +384,14 @@ export function wizardStepIssues(
 		const endIssue = eventEndDateIssue(state.event);
 		if (state.event.date.trim().length === 0) {
 			issues.push({ field: "event", message: "Pick the event date." });
+		} else if (
+			opts.requireEventVenue &&
+			state.event.venueId.trim().length === 0
+		) {
+			issues.push({
+				field: "event",
+				message: "Pick which pickup point hosts the event.",
+			});
 		} else if (endIssue !== null) {
 			// The specific problem beats the generic sentence — "the last day
 			// can't be before the event date" tells the seller which field.
@@ -603,7 +616,11 @@ export function wizardStepIssues(
 		}
 		// Nothing can have RSVP'd to a product that doesn't exist yet, so the
 		// wizard never allows a past date.
-		if (!eventDraftValid(state.event)) {
+		if (
+			!eventDraftValid(state.event, {
+				requireVenue: opts.requireEventVenue,
+			})
+		) {
 			issues.push({
 				field: "event",
 				message:
@@ -823,7 +840,10 @@ export function formDraftToWizardState(draft: ProductFormDraft): WizardState {
  * Where a restored wizard should open: the first step that still needs an
  * answer (structural nulls included), else the review step.
  */
-export function wizardInitialStep(state: WizardState): number {
+export function wizardInitialStep(
+	state: WizardState,
+	opts: { requireEventVenue?: boolean } = {},
+): number {
 	const steps = wizardSteps(
 		effectiveShape(state),
 		wizardKind(state),
@@ -831,7 +851,7 @@ export function wizardInitialStep(state: WizardState): number {
 	);
 	// Every step but the last (Review) — Review is where an answered draft lands.
 	for (const s of steps.slice(0, -1)) {
-		if (wizardStepIssues(state, s).length > 0) return s;
+		if (wizardStepIssues(state, s, opts).length > 0) return s;
 	}
 	return REVIEW_STEP;
 }
@@ -1025,6 +1045,16 @@ export function ProductWizard({
 	const [valueDrafts, setValueDrafts] = useState<string[]>(() =>
 		(initialState?.editor.options ?? []).map(() => ""),
 	);
+	// ACTIVE pickup points — the event venue selector (round 4). Same adapter
+	// read the categories use; one query serves the When-is-it step, the
+	// drawer's EventFields and the venue-required validation.
+	const pickupRows = useQuery(
+		convexQuery(api.pickupLocations.listForRetailer, { retailerId }),
+	).data;
+	const eventVenues = pickupRows
+		?.filter((r) => r.isActive)
+		.map((r) => ({ _id: r._id as string, label: r.label }));
+	const requireEventVenue = (eventVenues?.length ?? 0) > 1;
 	// Categories are only offered on review when the store actually has some —
 	// a brand-new seller shouldn't meet a whole new concept mid-wizard.
 	const categories = useQuery(
@@ -1443,7 +1473,7 @@ export function ProductWizard({
 	const stepPos = Math.max(steps.indexOf(step), 0);
 
 	function goNext() {
-		const found = wizardStepIssues(state, step);
+		const found = wizardStepIssues(state, step, { requireEventVenue });
 		if (found.length > 0) {
 			setIssues(found);
 			return;
@@ -1470,7 +1500,7 @@ export function ProductWizard({
 		// edits jump around, so a hole could otherwise slip through). Walks the
 		// product's OWN sequence — a skipped step has no answer to check.
 		for (const s of steps) {
-			const found = wizardStepIssues(state, s);
+			const found = wizardStepIssues(state, s, { requireEventVenue });
 			if (found.length > 0) {
 				setIssues(found);
 				setStep(s);
@@ -1846,6 +1876,7 @@ export function ProductWizard({
 							onChange={(event) => patch({ event })}
 							locked={eventsLocked}
 							noToggle
+							venues={eventVenues}
 						/>
 						<IssueText message={issueFor("event")} />
 					</>
@@ -3003,6 +3034,7 @@ export function ProductWizard({
 												draft={state.event}
 												onChange={(event) => patch({ event })}
 												locked={eventsLocked}
+												venues={eventVenues}
 											/>
 											<IssueText message={issueFor("event")} />
 										</div>

@@ -66,7 +66,7 @@ import {
 } from "./lib/order";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 import type { PickupSnapshot } from "./lib/whatsappCopy";
-import { buildPickupSnapshot } from "./orders";
+import { buildPickupSnapshot, resolveEventVenue } from "./orders";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidWaPhone, assertValidWaPhoneForCountry } from "./lib/slug";
 import { variantLabel } from "./lib/variant";
@@ -891,15 +891,11 @@ export const createOrderFromSession = mutation({
 			// The VENUE rides the RSVP here too. A plain counter sale is handed
 			// over at the counter and needs no pickup card — but an RSVP's guest
 			// leaves and comes back on the event day, and their order page says
-			// "where to go is in the pickup card". The storefront door refuses an
-			// event with no venue; the counter does the same, in seller words
-			// (the seller is the one looking at this screen and can fix it).
-			const venue = await ctx.db
-				.query("pickupLocations")
-				.withIndex("by_retailer_active", (q) =>
-					q.eq("retailerId", retailer._id).eq("isActive", true),
-				)
-				.first();
+			// "where to go is in the pickup card". Same resolver as the
+			// storefront door (the event's own venue, first-active fallback), so
+			// the two doors can never seat one event at different venues. The
+			// refusal is in seller words — the seller is at this screen.
+			const venue = await resolveEventVenue(ctx, retailer._id, eventLock);
 			if (venue === null)
 				throw new ConvexError(
 					"An RSVP needs a venue on the guest's order page — add an active pickup point in Settings → Fulfilment first.",

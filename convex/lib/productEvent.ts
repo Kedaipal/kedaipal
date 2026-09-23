@@ -67,6 +67,15 @@ export type ProductEvent = {
 	 * check-in day), so the seat tally never changes key. Unset = a one-day
 	 * event — the same-day value normalizes to unset, so it has one spelling. */
 	endDate?: number;
+	/** The pickup location HOSTING the event (round 4: the venue is the
+	 * event's property, exactly like its date — a guest choosing the venue is
+	 * as wrong as a guest choosing the day). Unset = the store's only active
+	 * point (single-outlet stores never pick); REQUIRED at save when the
+	 * store has more than one. Ownership/active checks live in `products.ts`
+	 * (this module is pure); resolution at order time falls back to the
+	 * first active point so a venue deactivated later never strands a guest
+	 * mid-RSVP. Stored as the id string to keep this module Convex-free. */
+	venueId?: string;
 };
 
 export type EventInput = {
@@ -74,6 +83,7 @@ export type EventInput = {
 	timeMinutes?: number;
 	seats?: number;
 	endDate?: number;
+	venueId?: string;
 };
 
 /**
@@ -136,7 +146,9 @@ export function sanitizeEvent(
 		endDate = raw.endDate;
 	}
 
-	return { date: raw.date, timeMinutes, seats, endDate };
+	const venueId = raw.venueId?.trim() ? raw.venueId : undefined;
+
+	return { date: raw.date, timeMinutes, seats, endDate, venueId };
 }
 
 /** Inclusive length of the event in days (1 for a one-day event). */

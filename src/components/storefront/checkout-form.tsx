@@ -395,6 +395,15 @@ export function CheckoutPage({
 	);
 	const singlePickup =
 		sortedPickups.length === 1 ? sortedPickups[0] : undefined;
+	// The EVENT's venue (round 4) — the event's own pick when it's still
+	// listed, else the first point (mirrors the server's resolveEventVenue,
+	// which forces the venue regardless of what this client sends). A guest
+	// never chooses: on a multi-outlet store the radio picker would offer
+	// outlets the event isn't at.
+	const eventVenue = eventLock
+		? (sortedPickups.find((p) => p._id === eventLock.venueId) ??
+			sortedPickups[0])
+		: undefined;
 	// How the "when" step behaves for a method + pickup point (z8r3fdff97):
 	// which verbs it speaks, which prep floors it, and whether it asks for a
 	// TIME — delivery always; pickup when the store keeps hours or the cart
@@ -535,7 +544,10 @@ export function CheckoutPage({
 			// we never asked the buyer to pick — auto-fill from the (only) option.
 			let resolvedPickupLocationId: Id<"pickupLocations"> | undefined;
 			if (effectiveMethod === "self_collect" && selfCollectAvailable) {
-				if (singlePickup) {
+				if (eventVenue) {
+					// The event's venue, mirrored server-side (forced there too).
+					resolvedPickupLocationId = eventVenue._id;
+				} else if (singlePickup) {
 					resolvedPickupLocationId = singlePickup._id;
 				} else {
 					const chosen = sortedPickups.find(
@@ -1545,13 +1557,15 @@ export function CheckoutPage({
 					<CheckoutSection
 						step={2}
 						title={
-							bothAvailable
-								? "How do you want to get it?"
-								: deliveryAvailable
-									? collectsFromCustomer
-										? "Collection address"
-										: "Delivery address"
-									: "Pickup point"
+							eventLock
+								? "Venue"
+								: bothAvailable
+									? "How do you want to get it?"
+									: deliveryAvailable
+										? collectsFromCustomer
+											? "Collection address"
+											: "Delivery address"
+										: "Pickup point"
 						}
 					>
 						{/* Method picker only when BOTH methods are offered. With a
@@ -1655,7 +1669,18 @@ export function CheckoutPage({
 										</div>
 									) : selfCollectAvailable ? (
 										<div className="flex flex-col gap-2">
-											{singlePickup ? (
+											{eventVenue ? (
+												<>
+													<PickupSummaryCard
+														location={eventVenue}
+														currency={cart.currency}
+													/>
+													<p className="text-xs text-muted-foreground">
+														Where the event happens — set by the store, the same
+														for every guest.
+													</p>
+												</>
+											) : singlePickup ? (
 												<PickupSummaryCard
 													location={singlePickup}
 													currency={cart.currency}

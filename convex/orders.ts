@@ -393,6 +393,36 @@ export async function loadCheckoutDeliveryQuote(
 	};
 }
 
+/**
+ * The pickup location HOSTING an event, at order time (round 4): the event's
+ * own `venueId` when it's still active, else the store's first active point.
+ * A fallback, never a refusal — a venue deactivated after RSVPs opened must
+ * degrade (the seller is warned at save time and the guest's page shows
+ * whatever venue the order froze), not strand a guest mid-checkout. Returns
+ * null only when the store has NO active point at all, which each door
+ * refuses in its own words. Shared by `orders.create` and the counter, so
+ * the two can never seat the same event at different venues.
+ */
+export async function resolveEventVenue(
+	ctx: QueryCtx | MutationCtx,
+	retailerId: Id<"retailers">,
+	event: { venueId?: string },
+): Promise<Doc<"pickupLocations"> | null> {
+	if (event.venueId !== undefined) {
+		const venue = await ctx.db.get(
+			event.venueId as Id<"pickupLocations">,
+		);
+		if (venue && venue.retailerId === retailerId && venue.isActive)
+			return venue;
+	}
+	return ctx.db
+		.query("pickupLocations")
+		.withIndex("by_retailer_active", (q) =>
+			q.eq("retailerId", retailerId).eq("isActive", true),
+		)
+		.first();
+}
+
 export function buildPickupSnapshot(
 	location: Doc<"pickupLocations">,
 ): PickupSnapshot {
@@ -1186,15 +1216,23 @@ export const create = mutation({
 				throw new ConvexError(
 					"An event RSVP is collected at the venue — please choose self-collect.",
 				);
-			// The venue IS the store's pickup point. Without one the guest gets a
-			// confirmation that never says where to go, so this refuses rather
-			// than confirming a dead end. The storefront gates the RSVP on the
-			// same condition, and the seller's product page says what to fix, so
-			// reaching here means a stale tab.
-			if (sanitizedPickupSnapshot === undefined)
+			// The venue is the EVENT's, forced like its date — never the buyer's
+			// pick (round 4: on a multi-outlet store the generic pickup picker
+			// would let a guest choose an outlet the event isn't at). Refuses
+			// only when the store has no active point at all: a confirmation
+			// that never says where to go is a dead end, and the storefront
+			// gates the RSVP on the same condition.
+			const venue = await resolveEventVenue(
+				ctx,
+				args.retailerId,
+				[...eventProducts.values()][0]?.event ?? {},
+			);
+			if (venue === null)
 				throw new ConvexError(
 					"This event doesn't have a venue set yet — please contact the store.",
 				);
+			resolvedPickupLocationId = venue._id;
+			sanitizedPickupSnapshot = buildPickupSnapshot(venue);
 		}
 
 		// Fulfilment date: validated against the EFFECTIVE notice window — the

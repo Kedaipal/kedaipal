@@ -774,6 +774,94 @@ describe("event RSVP — its own status pipeline (`z8r3fdff9u` stages)", () => {
 	});
 });
 
+describe("event RSVP — the venue is the event's, never the guest's (round 4)", () => {
+	test("a multi-outlet store must name the venue at save; the pick then wins every door", async () => {
+		const t = setup();
+		const { asUser, retailer, pickupLocationId } = await seedStore(t);
+		const { pickupLocationId: outletB } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Outlet B",
+				address: "88 Jalan Dua, 50000 KL",
+			},
+		);
+
+		// Saving an event WITHOUT a venue on a two-outlet store refuses.
+		await expect(seedEventProduct(t, retailer._id)).rejects.toThrow(
+			/which one hosts/i,
+		);
+
+		// With the venue named, the save lands and the order FORCES it — a
+		// guest (or stale tab) sending the other outlet is overridden, the
+		// exact posture the date lock takes.
+		const productId = await asUser.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "BNI Breakfast",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [{ name: "Set", values: ["A", "B"] }],
+			event: {
+				date: EVENT_DATE,
+				timeMinutes: EVENT_TIME,
+				venueId: pickupLocationId,
+			},
+			variants: [
+				{ optionValues: ["A"], price: 0, onHand: 0 },
+				{ optionValues: ["B"], price: 0, onHand: 0 },
+			],
+		});
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [
+				{ variantId: await variantFor(t, productId, "A"), quantity: 1 },
+			],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			pickupLocationId: outletB, // the wrong outlet, on purpose
+		});
+		const order = await orderByShortId(t, shortId);
+		expect(order?.pickupLocationId).toBe(pickupLocationId);
+		expect(order?.pickupSnapshot?.label).toBe("The Studio");
+
+		// The counter seats the same event at the same venue.
+		const { sessionId } = await asUser.mutation(
+			api.counterCheckout.bindSessionManualPhone,
+			{ waPhone: "60123456789", name: "Aina Hamzah" },
+		);
+		const counter = await asUser.mutation(
+			api.counterCheckout.createOrderFromSession,
+			{
+				sessionId,
+				items: [
+					{ variantId: await variantFor(t, productId, "B"), quantity: 1 },
+				],
+				paidInPerson: false,
+			},
+		);
+		expect(
+			(await orderByShortId(t, counter.shortId))?.pickupSnapshot?.label,
+		).toBe("The Studio");
+	});
+
+	test("single-outlet stores never pick — unset venue resolves to the only point", async () => {
+		const t = setup();
+		const { retailer, pickupLocationId } = await seedStore(t);
+		const productId = await seedEventProduct(t, retailer._id);
+		const { shortId } = await rsvp(t, {
+			retailerId: retailer._id,
+			variantId: await variantFor(t, productId, "A"),
+			pickupLocationId,
+		});
+		expect((await orderByShortId(t, shortId))?.pickupSnapshot?.label).toBe(
+			"The Studio",
+		);
+	});
+});
+
 describe("event RSVP — the other checkout doors", () => {
 	test("a claim link refuses an event product at the seller's door", async () => {
 		const t = setup();

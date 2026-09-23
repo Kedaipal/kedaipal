@@ -1,3 +1,6 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "../../../convex/_generated/api";
 import { Link } from "@tanstack/react-router";
 import {
 	CalendarClock,
@@ -855,6 +858,18 @@ export function ProductForm({
 	const [minQty, setMinQty] = useState(
 		initialValues?.minQuantity ? String(initialValues.minQuantity) : "",
 	);
+	// ACTIVE pickup points — the event's venue selector (round 4). Adapter
+	// read per the standing rule; skipped entirely for booking listings,
+	// which can never be events.
+	const pickupRows = useQuery(
+		convexQuery(
+			api.pickupLocations.listForRetailer,
+			isBooking ? "skip" : { retailerId },
+		),
+	).data;
+	const eventVenues = pickupRows
+		?.filter((r) => r.isActive)
+		.map((r) => ({ _id: r._id as string, label: r.label }));
 	const [eventDraft, setEventDraft] = useState<EventDraft>(
 		() =>
 			initialValues?.eventDraft ??
@@ -930,6 +945,7 @@ export function ProductForm({
 			if (
 				!eventDraftValid(eventDraft, {
 					allowPastDate: (eventRsvpCount ?? 0) > 0,
+					requireVenue: (eventVenues?.length ?? 0) > 1,
 				})
 			)
 				return;
@@ -1543,6 +1559,7 @@ export function ProductForm({
 						onChange={setEventDraft}
 						locked={eventsLocked}
 						rsvpCount={eventRsvpCount}
+						venues={eventVenues}
 					/>
 				</ProductStepCard>
 			)}

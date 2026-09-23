@@ -359,6 +359,7 @@ describe("buildWizardSubmitValues", () => {
 			prepMinutes: "45",
 			event: {
 				on: true,
+				venueId: "",
 				date: "2099-01-05",
 				endDate: "",
 				time: "08:00",
@@ -828,6 +829,7 @@ describe("the Event card — a router with its own route (`z8r3fdff9u` round 4)"
 			name: "Into The Falls Camp",
 			event: {
 				on: true,
+				venueId: "",
 				date: "2099-12-04",
 				endDate: "2099-12-06",
 				time: "14:00",
@@ -851,9 +853,32 @@ describe("the Event card — a router with its own route (`z8r3fdff9u` round 4)"
 		expect(wizardSteps(null, "booking")).toEqual([0, 1, 3, 5]);
 	});
 
+	it("a multi-outlet store's When-is-it step demands the venue", () => {
+		expect(
+			wizardStepIssues(eventState(), 6, { requireEventVenue: true })[0]
+				?.message,
+		).toMatch(/which pickup point hosts/i);
+		expect(
+			wizardStepIssues(
+				eventState({
+					event: { ...eventState().event, venueId: "loc_abc" },
+				}),
+				6,
+				{ requireEventVenue: true },
+			),
+		).toHaveLength(0);
+	});
+
 	it("the When-is-it step blocks on a missing or backwards date — on ITS step", () => {
 		const noDate = eventState({
-			event: { on: true, date: "", endDate: "", time: "", seats: "" },
+			event: {
+				on: true,
+				date: "",
+				endDate: "",
+				time: "",
+				seats: "",
+				venueId: "",
+			},
 		});
 		expect(wizardStepIssues(noDate, 6).map((i) => i.message)).toEqual([
 			"Pick the event date.",
@@ -861,6 +886,7 @@ describe("the Event card — a router with its own route (`z8r3fdff9u` round 4)"
 		const backwards = eventState({
 			event: {
 				on: true,
+				venueId: "",
 				date: "2099-12-06",
 				endDate: "2099-12-04",
 				time: "",
@@ -875,7 +901,14 @@ describe("the Event card — a router with its own route (`z8r3fdff9u` round 4)"
 
 	it("a restored event draft with no date opens ON the When-is-it step", () => {
 		const state = eventState({
-			event: { on: true, date: "", endDate: "", time: "", seats: "" },
+			event: {
+				on: true,
+				date: "",
+				endDate: "",
+				time: "",
+				seats: "",
+				venueId: "",
+			},
 		});
 		expect(wizardInitialStep(state)).toBe(6);
 	});

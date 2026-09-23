@@ -1051,6 +1051,11 @@ export default defineSchema({
 				// check-in day), so the seat tally's key never moves. Unset = one
 				// day; the same-day value normalizes to unset.
 				endDate: v.optional(v.number()),
+				// The pickup location HOSTING the event — the venue is the event's
+				// property, never the guest's pick. Unset = the store's only
+				// active point; required at save when there are several. Order
+				// time resolves with a first-active fallback (see resolveEventVenue).
+				venueId: v.optional(v.id("pickupLocations")),
 			}),
 		),
 		// DEPRECATED — moved to productVariants.requiresProof (per-variant).

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	EMPTY_EVENT_DRAFT,
+	eventDraftValid,
 	eventEndDateIssue,
 	eventEndDateWarning,
 	eventSubmitValue,
@@ -39,5 +40,18 @@ describe("last-day guard rails (`z8r3fdff9u`, revised 23 Sep)", () => {
 		const backwards = draft("2026-12-01");
 		expect(eventEndDateIssue(backwards)).toMatch(/before the event date/i);
 		expect(eventEndDateWarning(backwards)).toBeNull();
+	});
+});
+
+describe("the venue is the event's (round 4)", () => {
+	it("multi-outlet stores must name it; single-outlet stores never pick", () => {
+		const noVenue = draft("2026-12-06");
+		expect(eventDraftValid(noVenue, { requireVenue: true })).toBe(false);
+		expect(eventDraftValid(noVenue)).toBe(true);
+		const withVenue = { ...noVenue, venueId: "loc_abc" };
+		expect(eventDraftValid(withVenue, { requireVenue: true })).toBe(true);
+		// The pick rides the submit value; blank stays unset.
+		expect(eventSubmitValue(withVenue)?.venueId).toBe("loc_abc");
+		expect(eventSubmitValue(noVenue)?.venueId).toBeUndefined();
 	});
 });
