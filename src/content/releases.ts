@@ -194,7 +194,10 @@ export const RELEASES: Release[] = [
 				body: {
 					en: "A monthly networking breakfast, a Saturday baking class, a three-day camp: the RSVPs used to live in a WhatsApp thread while you counted by hand. Now pick Event when you add a product, then set the date (a last day too, if it runs longer), the time and how many seats. Guests RSVP on your storefront or at your counter and pick their set, package or tent, and the product page tallies each choice, so you know what to prepare. The date and venue are yours to set, never theirs to pick. RSVPs stop at your seat cap, and the day after it ends the listing leaves your storefront by itself. Price it at zero for a free RSVP. Events are on Pro.",
 				},
-				href: "/app/products/new",
+				// `?card=event` opens the wizard with Event already selected
+				// (z8r3fdhkr7) — not on the store's own type. Harmless before that
+				// ships: the route drops a `card` it doesn't know.
+				href: "/app/products/new?card=event",
 				hrefLabel: { en: "Create an event" },
 				icon: "calendar-clock",
 			},
