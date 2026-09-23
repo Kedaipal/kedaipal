@@ -172,6 +172,7 @@ function SellerSheetBody({
 					</Row>
 					<Row label="Country · currency">
 						<Plain>
+							{/* currency-literal-ok: the store's currency SETTING (admin console) */}
 							{COUNTRY_LABELS[seller.country]} · {seller.currency}
 						</Plain>
 					</Row>
