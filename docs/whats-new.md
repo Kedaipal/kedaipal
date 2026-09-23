@@ -147,6 +147,20 @@ worse than no entry at all. Keep them apart.
    | --- | --- | --- |
    | Weekend rate | `spotlightHref("weekend_rate")` | `/app/products` |
 
+   **A card in the new-product wizard — `?card=`, not `?spot=`.** A feature
+   whose door is step 0 of `/app/products/new` (the Event card) is reached
+   with `/app/products/new?card=<card>`, which opens the wizard with that
+   card already **selected** (`z8r3fdhkr7`). A spotlight ring would be the
+   wrong tool there: step 0 pre-selects the store's own type with the same
+   mint border, so a ring on Event would sit beside a lit Food card and the
+   seller couldn't tell which one the note meant. Selecting it answers the
+   question instead of pointing at it, and a locked plan gets the tap's
+   refusal on arrival rather than a dead-end flow.
+
+   | feature | ✅ | ❌ |
+   | --- | --- | --- |
+   | Events | `/app/products/new?card=event` | `/app/products/new` |
+
    Adding a key: give the card an `id={SPOTLIGHT_ANCHOR.<key>.anchor}` and
    thread `highlight` to it (every settings tab takes a `target: CardTarget`
    prop for this; `ProductStepCard` takes `id` + `highlight`), then add the
