@@ -600,8 +600,8 @@ describe("wizardInitialStep", () => {
 
 describe("wizardPriceLabel", () => {
 	it("shows a single price or a range, dropping trailing .00", () => {
-		expect(wizardPriceLabel(singleFromStock(), "RM")).toBe("RM 5.50");
-		expect(wizardPriceLabel(browniesState(), "RM")).toBe("RM 12–28.50");
+		expect(wizardPriceLabel(singleFromStock(), "MYR")).toBe("RM\u00a05.50");
+		expect(wizardPriceLabel(browniesState(), "MYR")).toBe("RM\u00a012–28.50");
 		const s = browniesState();
 		expect(
 			wizardPriceLabel(
@@ -612,9 +612,9 @@ describe("wizardPriceLabel", () => {
 						rows: s.editor.rows.map((r) => ({ ...r, price: "18.00" })),
 					},
 				},
-				"RM",
+				"MYR",
 			),
-		).toBe("RM 18");
+		).toBe("RM\u00a018");
 	});
 
 	it("ignores deactivated choices", () => {
@@ -632,9 +632,9 @@ describe("wizardPriceLabel", () => {
 						],
 					},
 				},
-				"RM",
+				"MYR",
 			),
-		).toBe("RM 12–28.50");
+		).toBe("RM\u00a012–28.50");
 	});
 });
 
@@ -741,7 +741,7 @@ describe("wizard — made-to-order product type", () => {
 	// review preview says what the storefront prints: "From RM 120" (86eyhn4mr).
 	it("labels the review as a quote, or a starting price once one is typed", () => {
 		const s = madeToOrderState();
-		expect(wizardPriceLabel(s, "RM")).toBe("Price on quote");
+		expect(wizardPriceLabel(s, "MYR")).toBe("Price on quote");
 		expect(
 			wizardPriceLabel(
 				{
@@ -751,9 +751,9 @@ describe("wizard — made-to-order product type", () => {
 						customLine: { ...bespokeLine, price: "120" },
 					},
 				},
-				"RM",
+				"MYR",
 			),
-		).toBe("From RM 120");
+		).toBe("From RM\u00a0120");
 	});
 
 	it("opens an answered draft on Review, never on the skipped step", () => {
@@ -926,6 +926,39 @@ describe("the Event card — a router with its own route (`z8r3fdff9u` round 4)"
 		expect(
 			buildWizardSubmitValues(eventState({ minNoticeDays: "3" })).minNoticeDays,
 		).toBeUndefined();
+	});
+});
+
+describe("the wizard's money reads in the store's symbol", () => {
+	const NB = "\u00a0";
+
+	it("wizardPriceLabel spells an SG store's prices with S$, never SGD", () => {
+		expect(wizardPriceLabel(browniesState(), "SGD")).toBe(`S$${NB}12–28.50`);
+	});
+
+	it("the deposit ceiling message names the store's symbol when the caller passes it", () => {
+		const stay: WizardState = {
+			...emptyWizardState("booking"),
+			name: "Riverside plot",
+			editor: {
+				options: [],
+				customLine: null,
+				rows: [row({ price: "80", blockWhenOutOfStock: false })],
+			},
+			securityDeposit: "20000",
+		};
+		const onScreen = wizardStepIssues(stay, 3, { currency: "SGD" }).find(
+			(i) => i.field === "securityDeposit",
+		);
+		expect(onScreen?.message).toBe(
+			`Enter an amount between S$${NB}0 and S$${NB}10,000, or leave blank.`,
+		);
+		// At the ceiling it passes — the server's own MAX_SECURITY_DEPOSIT.
+		expect(
+			wizardStepIssues({ ...stay, securityDeposit: "10000" }, 3, {
+				currency: "SGD",
+			}).some((i) => i.field === "securityDeposit"),
+		).toBe(false);
 	});
 });
 

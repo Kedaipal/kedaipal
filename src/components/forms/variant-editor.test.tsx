@@ -21,7 +21,7 @@ afterEach(cleanup);
 /** Controlled wrapper so toggles reflect back into state during the test. */
 function Harness({ initial }: { initial: VariantEditorState }) {
 	const [state, setState] = useState(initial);
-	return <VariantEditor value={state} onChange={setState} currency="RM" />;
+	return <VariantEditor value={state} onChange={setState} currency="MYR" />;
 }
 
 const singleVariant: VariantEditorState = {
@@ -349,7 +349,7 @@ describe("VariantEditor — Advanced disclosure", () => {
 					},
 				}}
 				onChange={() => {}}
-				currency="RM"
+				currency="MYR"
 				issues={[
 					{
 						where: "custom",
@@ -425,7 +425,7 @@ describe("VariantEditor — inline submit issues", () => {
 					rows: [{ ...singleVariant.rows[0], price: "", stock: "" }],
 				}}
 				onChange={() => {}}
-				currency="RM"
+				currency="MYR"
 				issues={[
 					{
 						where: "row",
@@ -458,7 +458,7 @@ describe("VariantEditor — inline submit issues", () => {
 			<VariantEditor
 				value={withOptions}
 				onChange={() => {}}
-				currency="RM"
+				currency="MYR"
 				issues={[
 					{
 						where: "row",
@@ -485,7 +485,7 @@ describe("VariantEditor — inline submit issues", () => {
 					rows: [],
 				}}
 				onChange={() => {}}
-				currency="RM"
+				currency="MYR"
 				issues={[
 					{
 						where: "option",
@@ -529,7 +529,7 @@ describe("stock left the product save (86eypn8ye)", () => {
 			<VariantEditor
 				value={singleVariant}
 				onChange={() => {}}
-				currency="RM"
+				currency="MYR"
 				liveStock={live}
 				productName="Keropok Lekor"
 			/>,
@@ -550,7 +550,7 @@ describe("stock left the product save (86eypn8ye)", () => {
 		// control beside it, and the name/description fields above it, were all
 		// h-11. Also the mobile-first tap-target floor.
 		render(
-			<VariantEditor value={singleVariant} onChange={() => {}} currency="RM" />,
+			<VariantEditor value={singleVariant} onChange={() => {}} currency="MYR" />,
 		);
 		const price = screen.getByPlaceholderText("0.00");
 		expect(price.className).toContain("min-h-11");
@@ -565,7 +565,7 @@ describe("stock left the product save (86eypn8ye)", () => {
 		// No liveStock entry means the grid is INSERTING this combination: it has
 		// no stock of its own to protect, so the typed number is the only truth.
 		render(
-			<VariantEditor value={singleVariant} onChange={() => {}} currency="RM" />,
+			<VariantEditor value={singleVariant} onChange={() => {}} currency="MYR" />,
 		);
 		expect(screen.getByText("In stock now")).toBeTruthy();
 		expect(screen.getByLabelText("Stock on hand")).toBeTruthy();
@@ -580,7 +580,7 @@ describe("stock left the product save (86eypn8ye)", () => {
 			<VariantEditor
 				value={withOptions}
 				onChange={() => {}}
-				currency="RM"
+				currency="MYR"
 				liveStock={[
 					{ variantId: "vS" as never, optionValues: ["S"], onHand: 7 },
 				]}

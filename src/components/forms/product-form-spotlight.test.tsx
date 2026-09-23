@@ -65,7 +65,7 @@ function renderForm({
 			retailerId={"r1" as never}
 			categoriesLocked={false}
 			eventsLocked={false}
-			currency="RM"
+			currency="MYR"
 			submitLabel="Save"
 			onSubmit={vi.fn()}
 			mode="edit"

@@ -257,6 +257,44 @@ export function currencySymbol(currency: string): string {
 	}
 }
 
+/**
+ * A seller-TYPED amount (major units, already parsed by `parsePriceInput`)
+ * for the product wizard and edit form's summaries and review rows — "RM 12",
+ * "S$ 1,250.50". Spelled the way `formatPrice` spells money (the store's
+ * symbol from its ISO code, a non-breaking space, en-MY grouping) minus a
+ * trailing ".00", so a summary line reads like speech rather than a receipt.
+ *
+ * Exists because both product forms printed their `currency` prop — the
+ * retailer's ISO code — raw: sellers read "MYR 12" where every other
+ * dashboard surface says "RM 12", and an SG store read "SGD" for "S$".
+ * Stored minor-unit amounts keep `formatPrice`.
+ */
+export function formatDraftPrice(major: number, currency: string): string {
+	return `${currencySymbol(currency)}${NBSP}${formatDraftAmount(major)}`;
+}
+
+/** The number half of `formatDraftPrice` — "1,250" / "12.50", no symbol.
+ * For the far end of a range, where the symbol is said once. */
+export function formatDraftAmount(major: number): string {
+	return new Intl.NumberFormat("en-MY", {
+		minimumFractionDigits: Number.isInteger(major) ? 0 : 2,
+		maximumFractionDigits: 2,
+	}).format(major);
+}
+
+/** "RM 12" when the ends meet, "RM 12–28.50" when they don't — the symbol
+ * once, like speech. Shared by the wizard's review and the edit form's
+ * summary strip so the two can't describe the same prices differently. */
+export function formatDraftPriceRange(
+	min: number,
+	max: number,
+	currency: string,
+): string {
+	return min === max
+		? formatDraftPrice(min, currency)
+		: `${formatDraftPrice(min, currency)}–${formatDraftAmount(max)}`;
+}
+
 export function formatPrice(minorUnits: number, currency: string): string {
 	const major = minorUnits / 100;
 	const symbol = CURRENCY_SYMBOL_OVERRIDE[currency];

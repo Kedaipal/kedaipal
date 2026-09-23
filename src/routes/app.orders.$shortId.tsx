@@ -2741,7 +2741,7 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 					<div className="flex items-center gap-2">
 						<div className="relative flex-1">
 							<span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-								{order.currency}
+								{currencySymbol(order.currency)}
 							</span>
 							<Input
 								id="mockup-quote"
