@@ -18,7 +18,34 @@ import { LOCALES, type Locale } from "../../convex/lib/locale";
 
 export type { Locale } from "../../convex/lib/locale";
 
-export type DeliveryMethod = "delivery" | "self_collect" | "booking";
+/**
+ * The order FLOW KINDS — one entry per fulfilment story the status pipeline
+ * can tell (`z8r3fdff9u` made this a registry). "delivery" / "self_collect"
+ * are stored on `orders.deliveryMethod`; "booking" is too (a booking order is
+ * born with it); "event" is DERIVED — an RSVP is stored `self_collect` (it is
+ * collected at the venue) and carries the frozen `orders.eventRsvp` marker
+ * instead. Derive with `orderFlowKind`, never by re-reading products.
+ *
+ * Adding a kind = one entry in `FLOW_PRESETS` (labels, skipped anchors,
+ * whether seller-configured stages apply) — nothing else forks.
+ */
+export type OrderFlowKind = "delivery" | "self_collect" | "booking" | "event";
+
+/** Historical name — the stage resolvers grew out of the delivery-method
+ * presets, and ~20 call sites annotate with it. Same union. */
+export type DeliveryMethod = OrderFlowKind;
+
+/** The flow kind of one order row. Order matters: an RSVP is stored
+ * `self_collect`, so the event marker outranks the delivery method. */
+export function orderFlowKind(order: {
+	deliveryMethod?: string;
+	eventRsvp?: boolean;
+}): OrderFlowKind {
+	if (order.eventRsvp) return "event";
+	if (order.deliveryMethod === "booking") return "booking";
+	if (order.deliveryMethod === "self_collect") return "self_collect";
+	return "delivery";
+}
 
 /** The six canonical statuses a label can be attached to. */
 export type OrderStatus =
@@ -154,6 +181,69 @@ const BOOKING_PACKAGE_DEFAULTS: Record<
 	},
 };
 
+// Event RSVP preset (`z8r3fdff9u`) — a guest RSVPs, then turns up. Only the
+// terminal stage needs its own word: "Delivered"/"Collected" imply goods
+// changing hands, and what actually happens is the guest walking in. ZH uses
+// the event sign-in word (已签到), not the lodging check-in (已入住).
+const EVENT_DEFAULTS: Record<Locale, Partial<Record<OrderStatus, string>>> = {
+	en: {
+		delivered: "Checked In",
+	},
+	ms: {
+		delivered: "Daftar Masuk",
+	},
+	zh: {
+		delivered: "已签到",
+	},
+};
+
+/** What one flow kind does to the shared pipeline. THE place a new kind
+ * registers itself — every resolver below reads from here. */
+type FlowPreset = {
+	/** Label overrides on the base (delivery) wording, per locale. */
+	labels: Record<Locale, Partial<Record<OrderStatus, string>>>;
+	/** Anchors the synthesized pipeline skips — a booking is never "Packed",
+	 * an RSVP is never "Packed" or "Ready for Pickup". Also the anchors bulk
+	 * actions refuse to move these orders into. */
+	skippedAnchors: readonly StageAnchor[];
+	/** Whether a seller's configured custom stages apply. Custom stages
+	 * describe how a seller PREPARES something ("Baking → Ready"); a stay or
+	 * an RSVP is not prepared, so those kinds keep their fixed milestones. */
+	takesCustomStages: boolean;
+};
+
+const NO_OVERRIDES: Record<Locale, Partial<Record<OrderStatus, string>>> = {
+	en: {},
+	ms: {},
+	zh: {},
+};
+
+export const FLOW_PRESETS: Record<OrderFlowKind, FlowPreset> = {
+	delivery: {
+		labels: NO_OVERRIDES,
+		skippedAnchors: [],
+		takesCustomStages: true,
+	},
+	self_collect: {
+		labels: SELF_COLLECT_DEFAULTS,
+		skippedAnchors: [],
+		takesCustomStages: true,
+	},
+	// `bookingPackaged` swaps in BOOKING_PACKAGE_DEFAULTS at resolve time — a
+	// modifier on the booking kind, not a fifth kind (a package is still a
+	// booking everywhere else: same request flow, same calendar).
+	booking: {
+		labels: BOOKING_DEFAULTS,
+		skippedAnchors: ["packed"],
+		takesCustomStages: false,
+	},
+	event: {
+		labels: EVENT_DEFAULTS,
+		skippedAnchors: ["packed", "shipped"],
+		takesCustomStages: false,
+	},
+};
+
 // Buttons are imperative; labels are nouns. Most transitions render as
 // "Mark as {label}"; confirm/cancel keep dedicated system verbs so we never put
 // a bare noun like "Washing" on an action button.
@@ -190,17 +280,11 @@ export function defaultStatusLabel(
 	locale: Locale = "en",
 	bookingPackaged = false,
 ): string {
-	if (deliveryMethod === "self_collect") {
-		const preset = SELF_COLLECT_DEFAULTS[locale][status];
-		if (preset) return preset;
-	}
-	if (deliveryMethod === "booking") {
-		const preset = (
-			bookingPackaged ? BOOKING_PACKAGE_DEFAULTS : BOOKING_DEFAULTS
-		)[locale][status];
-		if (preset) return preset;
-	}
-	return BASE_DEFAULTS[locale][status];
+	const flowLabels =
+		deliveryMethod === "booking" && bookingPackaged
+			? BOOKING_PACKAGE_DEFAULTS
+			: FLOW_PRESETS[deliveryMethod].labels;
+	return flowLabels[locale][status] ?? BASE_DEFAULTS[locale][status];
 }
 
 /**
@@ -318,15 +402,13 @@ export function synthesizeDefaultStages(opts: {
 	deliveryMethod?: DeliveryMethod;
 	bookingPackaged?: boolean;
 }): OrderStage[] {
-	// A booking's default flow is Confirmed → Checked In → Checked Out (or
-	// Confirmed → Active → Ended for a fixed-length package) — "Packed" is
-	// meaningless either way, so the synthesized route skips that anchor. This is
-	// now THE route for every booking: `resolveStages` never hands one a
-	// seller's configured stages.
-	const anchors =
-		opts.deliveryMethod === "booking"
-			? STAGE_ANCHORS.filter((anchor) => anchor !== "packed")
-			: STAGE_ANCHORS;
+	// Each flow kind skips the anchors that would lie about it — a booking is
+	// never "Packed", an RSVP is never "Packed" or "Ready for Pickup"
+	// (Confirmed → Checked In is its whole story). Registry-driven, so a new
+	// kind declares its skips in FLOW_PRESETS and this code never forks.
+	const skipped =
+		FLOW_PRESETS[opts.deliveryMethod ?? "delivery"].skippedAnchors;
+	const anchors = STAGE_ANCHORS.filter((anchor) => !skipped.includes(anchor));
 	return anchors.map((anchor, i) => ({
 		id: defaultStageId(anchor),
 		anchor,
@@ -352,7 +434,8 @@ export function synthesizeDefaultStages(opts: {
  * The retailer's effective ordered stage list: their configured `orderStages`
  * if any, otherwise the synthesized defaults. Always sorted by `sortOrder`.
  *
- * **Bookings never take configured stages.** Custom stages describe how a
+ * **Bookings and event RSVPs never take configured stages** (per
+ * `FLOW_PRESETS[kind].takesCustomStages`). Custom stages describe how a
  * seller PREPARES something — "Baking → Decorating → Ready" — which is exactly
  * why made-to-order keeps them. A stay or a membership isn't prepared; it is
  * booked, occupied and finished, and the booking route already has the right
@@ -370,7 +453,7 @@ export function resolveStages(opts: {
 	bookingPackaged?: boolean;
 }): OrderStage[] {
 	if (
-		opts.deliveryMethod !== "booking" &&
+		FLOW_PRESETS[opts.deliveryMethod ?? "delivery"].takesCustomStages &&
 		opts.orderStages &&
 		opts.orderStages.length > 0
 	) {
@@ -576,11 +659,17 @@ const COUNTER_COMPLETED_LABEL: Record<Locale, string> = {
 };
 
 export function displayStatusLabel(
-	order: { status: OrderStatus; source?: string },
+	order: { status: OrderStatus; source?: string; eventRsvp?: boolean },
 	resolved: string,
 	locale: Locale = "en",
 ): string {
-	if (order.source === "counter" && order.status === "delivered") {
+	// A walk-in RSVP is NOT complete at the counter — the guest still attends
+	// later, so its terminal state stays the event vocabulary ("Checked In").
+	if (
+		order.source === "counter" &&
+		order.status === "delivered" &&
+		!order.eventRsvp
+	) {
 		return COUNTER_COMPLETED_LABEL[locale];
 	}
 	return resolved;

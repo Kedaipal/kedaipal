@@ -15,6 +15,7 @@ import {
 	UNIT_LINE_MAX_LENGTH,
 } from "./lib/address";
 import { type Country, DEFAULT_COUNTRY } from "./lib/country";
+import { resolveEventVenue } from "./orders";
 import { assertValidMobileForCountry } from "./lib/slug";
 import { assertPlanFeature, assertSubscriptionActive } from "./subscriptions";
 
@@ -248,6 +249,51 @@ export const listForRetailer = query({
 	},
 });
 
+/** The buyer-safe projection of a pickup location — everything a storefront
+ * surface may see, none of the internal flags. ONE author, shared by the
+ * standard-order picker (`listActivePublicBySlug`) and the event-venue read
+ * (`eventVenuePublicBySlug`), so the two can't drift. */
+export type PublicPickupPoint = {
+	_id: Id<"pickupLocations">;
+	label: string;
+	address: string;
+	locationType: "self_collect" | "drop_off";
+	scheduleNote?: string;
+	mapsUrl?: string;
+	notes?: string;
+	latitude?: number;
+	longitude?: number;
+	placeId?: string;
+	/** Flat fee (minor units) added to the order total when the buyer
+	 * picks this point. Undefined = free. Public by design — the buyer
+	 * must see the charge in the picker before choosing. */
+	fee?: number;
+	sortOrder: number;
+};
+
+function toPublicPickup(r: Doc<"pickupLocations">): PublicPickupPoint {
+	return {
+		_id: r._id,
+		label: r.label,
+		// The unit line is COMPOSED here, at the buyer boundary
+		// (z8r3fdff8r) — the storefront picker, checkout and every
+		// downstream snapshot read one address string, so the door
+		// detail needs no plumbing of its own.
+		address: formatPickupAddress(r),
+		// Legacy rows (created before drop-off) read as self-collect so
+		// the storefront never groups them under a blank/wrong heading.
+		locationType: r.locationType ?? "self_collect",
+		scheduleNote: r.scheduleNote,
+		mapsUrl: r.mapsUrl,
+		notes: r.notes,
+		latitude: r.latitude,
+		longitude: r.longitude,
+		placeId: r.placeId,
+		fee: r.fee,
+		sortOrder: r.sortOrder,
+	};
+}
+
 /**
  * Public, unauthed list of active pickup locations for a storefront slug.
  * Returns only public-safe fields so the storefront picker doesn't leak
@@ -255,28 +301,7 @@ export const listForRetailer = query({
  */
 export const listActivePublicBySlug = query({
 	args: { slug: v.string() },
-	handler: async (
-		ctx,
-		{ slug },
-	): Promise<
-		Array<{
-			_id: Id<"pickupLocations">;
-			label: string;
-			address: string;
-			locationType: "self_collect" | "drop_off";
-			scheduleNote?: string;
-			mapsUrl?: string;
-			notes?: string;
-			latitude?: number;
-			longitude?: number;
-			placeId?: string;
-			/** Flat fee (minor units) added to the order total when the buyer
-			 * picks this point. Undefined = free. Public by design — the buyer
-			 * must see the charge in the picker before choosing. */
-			fee?: number;
-			sortOrder: number;
-		}>
-	> => {
+	handler: async (ctx, { slug }): Promise<Array<PublicPickupPoint>> => {
 		const normalized = slug.trim().toLowerCase();
 		if (normalized.length === 0) return [];
 		const retailer = await ctx.db
@@ -293,26 +318,57 @@ export const listActivePublicBySlug = query({
 			.collect();
 		return rows
 			.sort((a, b) => a.sortOrder - b.sortOrder)
-			.map((r) => ({
-				_id: r._id,
-				label: r.label,
-				// The unit line is COMPOSED here, at the buyer boundary
-				// (z8r3fdff8r) — the storefront picker, checkout and every
-				// downstream snapshot read one address string, so the door
-				// detail needs no plumbing of its own.
-				address: formatPickupAddress(r),
-				// Legacy rows (created before drop-off) read as self-collect so
-				// the storefront never groups them under a blank/wrong heading.
-				locationType: r.locationType ?? "self_collect",
-				scheduleNote: r.scheduleNote,
-				mapsUrl: r.mapsUrl,
-				notes: r.notes,
-				latitude: r.latitude,
-				longitude: r.longitude,
-				placeId: r.placeId,
-				fee: r.fee,
-				sortOrder: r.sortOrder,
-			}));
+			.map(toPublicPickup);
+	},
+});
+
+/**
+ * Public, unauthed read of the venue HOSTING an event (`z8r3fdff9u`): the
+ * buyer checkout's venue card. An event's venue may be a HIDDEN point (an
+ * RSVP-only location), so it's absent from `listActivePublicBySlug` — this
+ * query is how the storefront still shows its address. Same resolver as
+ * order time (`resolveEventVenue`), so what the checkout shows is what the
+ * order will freeze. Gated: a hidden point's address is served only when
+ * some LIVE event product of this store actually names it as its venue —
+ * a bare id fished from anywhere else answers null.
+ */
+export const eventVenuePublicBySlug = query({
+	args: {
+		slug: v.string(),
+		venueId: v.optional(v.id("pickupLocations")),
+	},
+	handler: async (
+		ctx,
+		{ slug, venueId },
+	): Promise<PublicPickupPoint | null> => {
+		const normalized = slug.trim().toLowerCase();
+		if (normalized.length === 0) return null;
+		const retailer = await ctx.db
+			.query("retailers")
+			.withIndex("by_slug", (q) => q.eq("slug", normalized))
+			.first();
+		if (!retailer) return null;
+
+		// The gate: only venues (or fallbacks) of a live event product are
+		// public. One retailer's active products, capped small — cheap. The
+		// unset branch requires an event that actually RESOLVES by fallback
+		// (venueId unset) — "any event exists" would let the fallback serve a
+		// hidden point that no event is at.
+		const products = await ctx.db
+			.query("products")
+			.withIndex("by_retailer_active", (q) =>
+				q.eq("retailerId", retailer._id).eq("active", true),
+			)
+			.collect();
+		const referenced = venueId
+			? products.some((p) => p.event?.venueId === venueId)
+			: products.some(
+					(p) => p.event !== undefined && p.event.venueId === undefined,
+				);
+		if (!referenced) return null;
+
+		const venue = await resolveEventVenue(ctx, retailer._id, { venueId });
+		return venue ? toPublicPickup(venue) : null;
 	},
 });
 

@@ -16,6 +16,7 @@ import {
 	internalMutation,
 	internalQuery,
 	mutation,
+	type QueryCtx,
 	query,
 } from "./_generated/server";
 import {
@@ -23,6 +24,11 @@ import {
 	logDestructiveAdminAction,
 	requireAdmin,
 } from "./lib/auth";
+import {
+	COUNTRY_CURRENCY,
+	type Country,
+	DEFAULT_COUNTRY,
+} from "./lib/country";
 import {
 	BUSINESS_REPORT_ORDER_SCAN_CAP,
 	type BusinessReport,
@@ -88,7 +94,124 @@ export type AdminSellerRow = {
 	/** A dev-only purge cascade is running (z8r3fdbmc9) — the directory locks
 	 * the row (no Manage, no second purge) until it disappears. */
 	purging: boolean;
+	// --- Contact + billing facts (z8r3fdh37c) ------------------------------
+	// Everything an admin used to open a second tab for. All of it already
+	// lived on `retailers` / `subscriptions` / `invoices` / `adminAuditLog`;
+	// the directory just never carried it.
+	/** The owner's email. Clerk's identity email is never stored, so this is
+	 * `retailers.notifyEmail` — prefilled from Clerk at createRetailer and
+	 * backfilled by `ensureNotifyEmailFromIdentity`. Absent = the seller cleared
+	 * it, so the row says "no email on file" rather than showing nothing. */
+	ownerEmail?: string;
+	/** Buyer-facing store WhatsApp (`retailers.waPhone`), stored digits. */
+	waPhone?: string;
+	/** Where seller order alerts go (`retailers.notifyWaPhone`), stored digits.
+	 * Often the same number as `waPhone`; the sheet collapses the duplicate. */
+	notifyWaPhone?: string;
+	country: Country;
+	currency: string;
+	billingCycle?: Doc<"subscriptions">["billingCycle"];
+	/** The free period's backstop deadline — what "trial ends" means while the
+	 * row is `trialing` and no invoice has been issued yet. */
+	trialEndsAt?: number;
+	/** When the free period actually ended (first order or the backstop) — set
+	 * once the first invoice is issued; absent = still free. */
+	freePeriodEndedAt?: number;
+	freePeriodEndReason?: Doc<"subscriptions">["freePeriodEndReason"];
+	/** What an `active` row renews at, and what an `on_hold` row's next hold
+	 * period bills at. */
+	currentPeriodEnd?: number;
+	cancelledAt?: number;
+	/** When the current Off-Season Hold began (z8r3fday24). */
+	heldAt?: number;
+	/** Saved auto-renew method (86eyb6z4r) — the rail, plus dunning state so
+	 * "card failing ×2" reads on the row instead of in a webhook log. */
+	autoRenew?: {
+		method: string;
+		methodLabel?: string;
+		attachedAt: number;
+		failedAttempts?: number;
+		nextRetryAt?: number;
+	};
+	/** The open bill, if any — the thing to chase on a past-due row. */
+	pendingInvoice?: {
+		invoiceNumber: string;
+		dueDate: number;
+		total: number;
+		currency: string;
+		hasPayNowLink: boolean;
+	};
+	/** The most recently settled bill — "when did they last pay, how much". */
+	lastPaidInvoice?: {
+		invoiceNumber: string;
+		paidAt: number;
+		total: number;
+		currency: string;
+	};
+	/** When a Kedaipal admin last opened this store in act-as mode
+	 * (`adminAuditLog` `actAs.sessionStart`). Absent = never. */
+	lastActAsAt?: number;
 };
+
+/** The two per-store invoice facts the directory shows: the open bill and the
+ * last settled one. Both are index reads that stop at the first hit — never a
+ * collect over a store's whole billing history. */
+async function loadInvoiceFacts(
+	ctx: QueryCtx,
+	retailerId: Id<"retailers">,
+): Promise<
+	Pick<AdminSellerRow, "pendingInvoice" | "lastPaidInvoice">
+> {
+	const pending = await ctx.db
+		.query("invoices")
+		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+		.order("desc")
+		.filter((q) => q.eq(q.field("status"), "pending"))
+		.first();
+	const paid = await ctx.db
+		.query("invoices")
+		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+		.order("desc")
+		.filter((q) => q.eq(q.field("status"), "paid"))
+		.first();
+	return {
+		...(pending
+			? {
+					pendingInvoice: {
+						invoiceNumber: pending.invoiceNumber,
+						dueDate: pending.dueDate,
+						total: pending.total,
+						currency: pending.currency,
+						hasPayNowLink: pending.gatewayPayment !== undefined,
+					},
+				}
+			: {}),
+		...(paid?.markedPaidAt !== undefined
+			? {
+					lastPaidInvoice: {
+						invoiceNumber: paid.invoiceNumber,
+						paidAt: paid.markedPaidAt,
+						total: paid.total,
+						currency: paid.currency,
+					},
+				}
+			: {}),
+	};
+}
+
+/** The last time an admin entered this store (read-side trail). */
+async function loadLastActAs(
+	ctx: QueryCtx,
+	retailerId: Id<"retailers">,
+): Promise<number | undefined> {
+	const row = await ctx.db
+		.query("adminAuditLog")
+		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+		.order("desc")
+		.filter((q) => q.eq(q.field("action"), "actAs.sessionStart"))
+		.first();
+	return row?.ts;
+}
 
 /**
  * Every seller, for the admin act-as directory. Richer than
@@ -114,6 +237,9 @@ export const listSellersForAdmin = query({
 			const referrer = r.signupReferrerId
 				? await ctx.db.get(r.signupReferrerId)
 				: null;
+			const invoiceFacts = await loadInvoiceFacts(ctx, r._id);
+			const lastActAsAt = await loadLastActAs(ctx, r._id);
+			const country = r.country ?? DEFAULT_COUNTRY;
 			rows.push({
 				_id: r._id,
 				storeName: r.storeName,
@@ -146,6 +272,29 @@ export const listSellersForAdmin = query({
 					: {}),
 				createdAt: r._creationTime,
 				purging: r.purgeStartedAt !== undefined,
+				ownerEmail: r.notifyEmail,
+				waPhone: r.waPhone,
+				notifyWaPhone: r.notifyWaPhone,
+				country,
+				currency: r.currency ?? COUNTRY_CURRENCY[country],
+				billingCycle: sub?.billingCycle,
+				trialEndsAt: sub?.trialEndsAt,
+				freePeriodEndedAt: sub?.freePeriodEndedAt,
+				freePeriodEndReason: sub?.freePeriodEndReason,
+				currentPeriodEnd: sub?.currentPeriodEnd,
+				cancelledAt: sub?.cancelledAt,
+				heldAt: sub?.heldAt,
+				autoRenew: sub?.autoRenew
+					? {
+							method: sub.autoRenew.method,
+							methodLabel: sub.autoRenew.methodLabel,
+							attachedAt: sub.autoRenew.attachedAt,
+							failedAttempts: sub.autoRenew.failedAttempts,
+							nextRetryAt: sub.autoRenew.nextRetryAt,
+						}
+					: undefined,
+				...invoiceFacts,
+				lastActAsAt,
 			});
 		}
 		rows.sort((a, b) => {

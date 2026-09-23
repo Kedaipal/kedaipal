@@ -78,6 +78,7 @@ describe("resolveAccess (pure)", () => {
 			radiusDelivery: false,
 			delivery: false,
 			onlinePayments: false,
+			events: false,
 			waOrderAlerts: false,
 		});
 		expect(resolveAccess(sub({ plan: "pro" })).features).toEqual({
@@ -89,6 +90,7 @@ describe("resolveAccess (pure)", () => {
 			radiusDelivery: true,
 			delivery: true,
 			onlinePayments: true,
+			events: true,
 			waOrderAlerts: true,
 		});
 		// Fail safe: a missing row gets Pro features, never a lockout.
@@ -101,6 +103,7 @@ describe("resolveAccess (pure)", () => {
 			radiusDelivery: true,
 			delivery: true,
 			onlinePayments: true,
+			events: true,
 			waOrderAlerts: true,
 		});
 	});
@@ -120,6 +123,7 @@ describe("resolveAccess (pure)", () => {
 			radiusDelivery: true,
 		delivery: true,
 		onlinePayments: true,
+		events: true,
 		waOrderAlerts: true,
 		});
 		expect(a.active).toBe(true);

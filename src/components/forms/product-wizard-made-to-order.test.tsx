@@ -60,7 +60,8 @@ function renderWizard(state: WizardState) {
 		<ProductWizard
 			retailerId={"r1" as never}
 			categoriesLocked={false}
-			currency="RM"
+			eventsLocked={false}
+			currency="MYR"
 			onSubmit={vi.fn()}
 			onSkipToFullForm={vi.fn()}
 			onOpenFullForm={vi.fn()}

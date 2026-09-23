@@ -1020,6 +1020,44 @@ export default defineSchema({
 				weekendDays: v.optional(v.array(v.number())),
 			}),
 		),
+		// Event RSVP config (`z8r3fdff9u`): a FIXED fulfilment date this product's
+		// orders lock to, instead of each buyer picking their own at checkout.
+		// Present = this product is an event ("BNI Breakfast · 25 Sep"); absent =
+		// every existing product, zero migration.
+		//
+		// An event is deliberately a FLAG on a normal physical/service product,
+		// not a fourth `kind` and not variants-on-booking: the food choice is the
+		// product's existing option axes, the per-dish headcount is derived from
+		// `orders.items[].variantLabel`, and a booking listing has no variants to
+		// hang a choice off (docs/booking.md S1). Refused on `kind === "booking"`.
+		//
+		// Public-safe — buyers read the date, the time and the seats-left count.
+		// See convex/lib/productEvent.ts + docs/event-rsvp.md.
+		event: v.optional(
+			v.object({
+				// MYT midnight epoch (`isMytMidnight`). Immutable once a live
+				// (non-cancelled) RSVP exists — moving the date under 18 guests who
+				// already confirmed a Thursday is not an edit, it's a new event.
+				date: v.number(),
+				// 0..1439. Display + frozen onto every RSVP's
+				// `fulfilmentTimeMinutes`. Unset = an all-day event (date only).
+				timeMinutes: v.optional(v.number()),
+				// Total seats across ALL options; unset = uncapped (per-variant
+				// stock still applies). 0 normalizes to unset at the sanitizer, so
+				// "no limit" has one spelling and can never read as "sold out".
+				seats: v.optional(v.number()),
+				// LAST day of a multi-day event (MYT midnight, after `date`) —
+				// display + listing lifetime only. RSVPs still freeze `date` (the
+				// check-in day), so the seat tally's key never moves. Unset = one
+				// day; the same-day value normalizes to unset.
+				endDate: v.optional(v.number()),
+				// The pickup location HOSTING the event — the venue is the event's
+				// property, never the guest's pick. Unset = the store's only
+				// active point; required at save when there are several. Order
+				// time resolves with a first-active fallback (see resolveEventVenue).
+				venueId: v.optional(v.id("pickupLocations")),
+			}),
+		),
 		// DEPRECATED — moved to productVariants.requiresProof (per-variant).
 		requiresProof: v.optional(v.boolean()),
 		// When this product first appeared on a real order (set-if-unset at both
@@ -1643,6 +1681,12 @@ export default defineSchema({
 		// every consumer treats "no time" as the old date-only behaviour. Drives the Lalamove
 		// scheduled booking default (past moments book "now").
 		fulfilmentTimeMinutes: v.optional(v.number()),
+		// Born as an RSVP to a fixed-date event (`z8r3fdff9u`). FROZEN at create
+		// (all doors that can hold an event line stamp it) and never patched —
+		// the sync flow-kind marker for `orderFlowKind`, which picks the event
+		// status vocabulary (Confirmed → Checked In) on every surface. The
+		// event's own details (endDate) are still read live from the product.
+		eventRsvp: v.optional(v.boolean()),
 		// The seller MOVED this order's moment (z8r3fdff97 test round). The
 		// buyer is never messaged about a reschedule — the dialog says so and
 		// tells the seller to agree it in chat — so `/track` is the only place

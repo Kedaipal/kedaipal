@@ -14,6 +14,7 @@ import {
 	OptionPills,
 	PriceLabel,
 	PurchaseActions,
+	EventNotice,
 	PurchaseHints,
 	type StorefrontVariant,
 	TotalPreviewRow,
@@ -152,7 +153,8 @@ export function ProductDetailSheet({
 						) : (
 							<>
 								<OptionPills pp={pp} />
-								<PurchaseHints pp={pp} />
+								<EventNotice pp={pp} />
+							<PurchaseHints pp={pp} />
 								<CustomOrderCard pp={pp} onAdd={onAdd} />
 							</>
 						)}

@@ -124,6 +124,7 @@ import { summarizeOrderCardItems, withLineKeys } from "../lib/order-card-items";
 import {
 	type DeliveryMethod,
 	displayStatusLabel,
+	orderFlowKind,
 	type OrderStatus,
 	resolveAnchorLabel,
 	resolveCurrentStage,
@@ -654,6 +655,7 @@ function OrdersRoute() {
 	if (!retailer) return <OrdersInboxSkeleton />;
 
 	const labels = retailer.statusLabels as StatusLabels | undefined;
+	const retailerOrderStages = retailer.orderStages;
 	const retailerMethod: DeliveryMethod = retailer.offerSelfCollect
 		? "self_collect"
 		: "delivery";
@@ -695,25 +697,46 @@ function OrdersRoute() {
 		currentStageId?: string;
 		deliveryMethod?: string;
 		source?: string;
+		eventRsvp?: boolean;
+		bookingPackaged?: boolean;
 	}): string {
+		// The ROW's flow kind picks its vocabulary — a checked-in RSVP reads
+		// "Checked In", a stay "Checked Out", never the retailer's delivery
+		// wording. Custom stages only apply to kinds that take them, and
+		// `resolveStages` already knows, so handing it the row's kind is the
+		// whole fix. Synthesis is a cheap pure map; rows that use the
+		// retailer-grain `stages` (the common delivery/self-collect case whose
+		// kind matches) keep the prebuilt list.
+		const kind = orderFlowKind(o);
+		const rowStages =
+			kind === "booking" || kind === "event"
+				? resolveStages({
+						orderStages: retailerOrderStages,
+						labels,
+						deliveryMethod: kind,
+						bookingPackaged: o.bookingPackaged,
+					})
+				: stages;
 		const cs = resolveCurrentStage(
 			{ status: o.status as OrderStatus, currentStageId: o.currentStageId },
-			stages,
+			rowStages,
 		);
 		const resolved = cs
 			? stageLabel(cs, "en")
 			: resolveAnchorLabel(o.status as OrderStatus, {
-					stages,
+					stages: rowStages,
 					labels,
-					deliveryMethod: (o.deliveryMethod ?? "delivery") as DeliveryMethod,
+					deliveryMethod: kind,
 					locale: "en",
 				});
 		// Counter sales complete "at the counter", not via delivery — their done
-		// state reads "Completed", never "Delivered".
+		// state reads "Completed", never "Delivered". (An RSVP sold at the
+		// counter is exempt inside displayStatusLabel — the guest attends later.)
 		return displayStatusLabel(
 			{
 				status: o.status as OrderStatus,
 				source: o.source as "storefront" | "counter" | "claim" | undefined,
+				eventRsvp: o.eventRsvp,
 			},
 			resolved,
 		);
@@ -1121,6 +1144,11 @@ function OrdersRoute() {
 				// re-selecting the same rows and watching nothing happen.
 				res.skippedCancelled > 0
 					? `${res.skippedCancelled} already cancelled`
+					: null,
+				// A booking is never "Packed"; an RSVP is never "Packed" or
+				// "Ready for Pickup" — those stages don't exist for them.
+				res.skippedNoSuchStage > 0
+					? `${res.skippedNoSuchStage} without that stage (bookings/RSVPs)`
 					: null,
 			].filter(Boolean);
 			toast.success(

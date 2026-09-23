@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer } from "react";
 import type { Id } from "../../convex/_generated/dataModel";
 import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
+import { formatEventBadge } from "../../convex/lib/productEvent";
 
 /**
  * Cart state for the public storefront. Persisted to localStorage and keyed
@@ -59,6 +60,18 @@ export type CartItem = {
 	// storage id; serializable so it survives cart persistence) and passed to
 	// orders.create at checkout. See docs/custom-option.md.
 	customImageStorageId?: string;
+	// The product's fixed event moment (`z8r3fdff9u`), frozen at add time like
+	// price and name. Present = this line is an RSVP, which locks the WHOLE
+	// order's fulfilment date and forces self-collect. Absent on legacy
+	// persisted carts and on every normal product. The server re-reads the live
+	// event at create — this copy exists so the checkout can render the lock
+	// without a product join.
+	event?: {
+		date: number;
+		timeMinutes?: number;
+		endDate?: number;
+		venueId?: string;
+	};
 };
 
 type CartState = {
@@ -196,10 +209,52 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 		}
 	}, [retailerId, state.items, state.hydratedFor]);
 
+	// The ONE event this cart is RSVPing to, or undefined. Derived rather than
+	// stored so it can never drift from the lines — removing the last event line
+	// releases the lock by construction.
+	const cartEvent = useMemo(
+		() => state.items.find((i) => i.event !== undefined)?.event,
+		[state.items],
+	);
+	const cartEventName = useMemo(
+		() => state.items.find((i) => i.event !== undefined)?.name,
+		[state.items],
+	);
+	// The event PRODUCT holding the lock — identity, not date: two same-day
+	// events at different outlets share a date but not a venue, so the
+	// one-event rule keys on the product (mirrors orders.create).
+	const cartEventProductId = useMemo(
+		() => state.items.find((i) => i.event !== undefined)?.productId,
+		[state.items],
+	);
+
+	// Adding to the cart can REFUSE (`z8r3fdff9u`): an order carries one
+	// fulfilment date, so two events can't share a cart. Returns a result the
+	// caller surfaces inline — the alternative is a silent no-op, which reads as
+	// a broken button.
+	//
+	// Mixing an event with NORMAL products is allowed on purpose (she sells
+	// puffs at her own event); the checkout says loudly that the whole order is
+	// then locked to the event date and venue, and offers a one-tap escape.
 	const addItem = useCallback(
-		(item: Omit<CartItem, "quantity">, quantity = 1) =>
-			dispatch({ type: "ADD", item, quantity }),
-		[],
+		(
+			item: Omit<CartItem, "quantity">,
+			quantity = 1,
+		): { ok: true } | { ok: false; reason: string } => {
+			if (
+				item.event !== undefined &&
+				cartEvent !== undefined &&
+				cartEventProductId !== item.productId
+			) {
+				return {
+					ok: false,
+					reason: `Your cart already has an RSVP for ${formatEventBadge(cartEvent)} — check that one out first.`,
+				};
+			}
+			dispatch({ type: "ADD", item, quantity });
+			return { ok: true };
+		},
+		[cartEvent, cartEventProductId],
 	);
 	const updateQuantity = useCallback(
 		(variantId: Id<"productVariants">, quantity: number) =>
@@ -212,6 +267,15 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 		[],
 	);
 	const clearCart = useCallback(() => dispatch({ type: "CLEAR" }), []);
+	// Drop every RSVP line in one tap (`z8r3fdff9u`) — the escape hatch from the
+	// checkout's event lock. Removing the event releases the date + pickup
+	// lock by construction, since `cartEvent` is derived from the lines.
+	const removeEventLines = useCallback(() => {
+		for (const item of state.items) {
+			if (item.event !== undefined)
+				dispatch({ type: "REMOVE", variantId: item.variantId });
+		}
+	}, [state.items]);
 
 	const { itemCount, total, currency } = useMemo(() => {
 		let count = 0;
@@ -267,12 +331,17 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 	return {
 		hydrated,
 		items: state.items,
+		// The event this cart is RSVPing to (undefined for a normal cart), plus
+		// the product name that carries it — the checkout's lock banner needs both.
+		cartEvent,
+		cartEventName,
 		itemCount,
 		total,
 		currency,
 		addItem,
 		updateQuantity,
 		removeItem,
+		removeEventLines,
 		clearCart,
 		quantityForProduct,
 		subtotalForProduct,

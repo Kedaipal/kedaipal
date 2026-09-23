@@ -6251,6 +6251,7 @@ describe("orders — Lalamove rider gate on manual advances", () => {
 			skipped: 1,
 			skippedAwaitingCollection: 0,
 			skippedRiderManaged: 1,
+			skippedNoSuchStage: 0,
 			skippedCancelled: 0,
 		});
 		expect((await t.run((ctx) => ctx.db.get(gated._id)))?.status).toBe("packed");

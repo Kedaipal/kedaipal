@@ -428,6 +428,22 @@ describe("PurchaseHints — prep window + pickup note (z8r3fdff97)", () => {
 		expect(screen.queryByText(/Ready in/)).toBeNull();
 	});
 
+	it("hides the chip on an EVENT product — its moment is the seller's", () => {
+		// Found rebasing z8r3fdff9u onto this: an event's date is fixed and the
+		// prep floor is exempt server-side, so "Ready in ~2 hours" answers a
+		// question the guest isn't asking — beside a badge that already says
+		// when it happens. Same reasoning as the notice case above.
+		render(
+			<Hints
+				product={puff({
+					prepMinutes: 120,
+					event: { date: Date.now() + 7 * 86_400_000 },
+				})}
+			/>,
+		);
+		expect(screen.queryByText(/Ready in/)).toBeNull();
+	});
+
 	it("shows the collection note under a self-qualifying heading", () => {
 		render(<Hints product={puff({ pickupNote: "Bring an ice bag." })} />);
 		expect(screen.getByText("Collecting?")).toBeTruthy();

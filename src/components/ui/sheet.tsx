@@ -7,9 +7,22 @@ import { cn } from "#/lib/utils";
 // A bottom-anchored sheet (mobile-first) built on radix Dialog — the same
 // behaviour/a11y as Dialog but sliding up from the bottom edge with rounded top
 // corners and safe-area padding. Used for the Insights date-range picker on
-// mobile; on desktop the same content can live in a popover. Only `side="bottom"`
-// is implemented (the one case the app needs); add sides if a future flow wants
-// them rather than pulling in a second modal implementation.
+// mobile; on desktop the same content can live in a popover.
+//
+// Two sides, both bottom sheets on a phone — the side only says what happens
+// at `sm+`: `"bottom"` (default) becomes a centred dialog, `"right"` becomes a
+// full-height drawer from the right edge, for a record's detail panel beside
+// the list it came from (the admin seller sheet, z8r3fdh37c). Add sides here
+// rather than pulling in a second modal implementation.
+
+const SIDE_CLASSES = {
+	bottom:
+		"data-open:slide-in-from-bottom data-closed:slide-out-to-bottom sm:inset-x-auto sm:left-1/2 sm:bottom-auto sm:top-1/2 sm:max-w-sm sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl sm:border",
+	right:
+		"max-sm:data-open:slide-in-from-bottom max-sm:data-closed:slide-out-to-bottom sm:inset-x-auto sm:inset-y-0 sm:right-0 sm:h-dvh sm:max-h-none sm:w-full sm:max-w-md sm:rounded-none sm:rounded-l-2xl sm:border-l sm:border-t-0 sm:pb-5 sm:data-open:slide-in-from-right sm:data-closed:slide-out-to-right",
+} as const;
+
+export type SheetSide = keyof typeof SIDE_CLASSES;
 
 function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
 	return <SheetPrimitive.Root data-slot="sheet" {...props} />;
@@ -47,17 +60,21 @@ function SheetContent({
 	className,
 	children,
 	showCloseButton = true,
+	side = "bottom",
 	...props
 }: React.ComponentProps<typeof SheetPrimitive.Content> & {
 	showCloseButton?: boolean;
+	side?: SheetSide;
 }) {
 	return (
 		<SheetPrimitive.Portal>
 			<SheetOverlay />
 			<SheetPrimitive.Content
 				data-slot="sheet-content"
+				data-side={side}
 				className={cn(
-					"fixed inset-x-0 bottom-0 z-50 flex max-h-[90dvh] flex-col gap-4 overflow-y-auto rounded-t-2xl border-t border-border bg-popover p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] text-popover-foreground shadow-lg duration-200 outline-none data-open:animate-in data-open:slide-in-from-bottom data-closed:animate-out data-closed:slide-out-to-bottom sm:inset-x-auto sm:left-1/2 sm:bottom-auto sm:top-1/2 sm:max-w-sm sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl sm:border",
+					"fixed inset-x-0 bottom-0 z-50 flex max-h-[90dvh] flex-col gap-4 overflow-y-auto rounded-t-2xl border-t border-border bg-popover p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] text-popover-foreground shadow-lg duration-200 outline-none data-open:animate-in data-closed:animate-out",
+					SIDE_CLASSES[side],
 					className,
 				)}
 				{...props}

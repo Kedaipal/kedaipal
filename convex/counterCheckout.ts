@@ -45,6 +45,17 @@ import {
 } from "./lib/customer";
 import { assertValidFulfilmentDate } from "./lib/fulfilmentDate";
 import {
+	seatsExhaustedMessage,
+	seatsRequested,
+	tallyEventSeats,
+} from "./lib/eventSeats";
+import {
+	formatEventBadge,
+	isEventPassed,
+	type ProductEvent,
+	seatsLeft,
+} from "./lib/productEvent";
+import {
 	effectiveClaimStatus,
 	SESSION_CLAIM_LOCK_REASON,
 } from "./lib/orderClaims";
@@ -54,6 +65,8 @@ import {
 	generateTrackingToken,
 } from "./lib/order";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
+import type { PickupSnapshot } from "./lib/whatsappCopy";
+import { buildPickupSnapshot, resolveEventVenue } from "./orders";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidWaPhone, assertValidWaPhoneForCountry } from "./lib/slug";
 import { variantLabel } from "./lib/variant";
@@ -772,6 +785,13 @@ export const createOrderFromSession = mutation({
 			Id<"productVariants">,
 			{ qty: number; block: boolean; onHand: number }
 		>();
+		// Walk-in RSVPs (`z8r3fdff9u`): a guest who turns up at the counter and
+		// signs up for the event is the same RSVP as one from the storefront, so
+		// it takes the event's date and counts against the same seat cap.
+		const eventProducts = new Map<
+			Id<"products">,
+			{ event: ProductEvent; name: string }
+		>();
 		for (const item of args.items) {
 			if (!Number.isInteger(item.quantity) || item.quantity < 1)
 				throw new ConvexError("Quantity must be a positive integer");
@@ -811,6 +831,11 @@ export const createOrderFromSession = mutation({
 			} else {
 				unitPrice = variant.price;
 			}
+			if (product.event !== undefined)
+				eventProducts.set(variant.productId, {
+					event: product.event,
+					name: product.name,
+				});
 			const block =
 				(variant.blockWhenOutOfStock ?? product.blockWhenOutOfStock) === true;
 			const prior = requestedByVariant.get(item.variantId);
@@ -835,6 +860,61 @@ export const createOrderFromSession = mutation({
 				price: unitPrice,
 				quantity: item.quantity,
 			});
+		}
+
+		// Event lock + seat cap for a walk-in RSVP (`z8r3fdff9u`). The counter is
+		// exempt from min-notice and opening hours (the seller is standing there),
+		// but NOT from the event's own date or its cap: a seat sold at the counter
+		// is a seat the storefront can no longer sell, and the seller keying it in
+		// is the one person who must not be able to oversell her own room.
+		//
+		// The date is FORCED here rather than refused, unlike the storefront: the
+		// counter's date field is a convenience the seller may simply not have
+		// filled, and there is exactly one date this order can mean.
+		let sanitizedFulfilmentTime: number | undefined;
+		const eventLock = [...eventProducts.values()][0]?.event;
+		let eventPickupLocationId: Id<"pickupLocations"> | undefined;
+		let eventPickupSnapshot: PickupSnapshot | undefined;
+		if (eventLock !== undefined) {
+			// Keyed on the PRODUCT, not the date — two same-day events at
+			// different outlets would otherwise merge under whichever venue
+			// landed first (mirrors orders.create).
+			if (eventProducts.size > 1)
+				throw new ConvexError(
+					"This order has RSVPs for two different events — ring them up separately.",
+				);
+			if (isEventPassed(eventLock))
+				throw new ConvexError(
+					`This event (${formatEventBadge(eventLock)}) has already taken place.`,
+				);
+			sanitizedFulfilmentDate = eventLock.date;
+			sanitizedFulfilmentTime = eventLock.timeMinutes;
+			// The VENUE rides the RSVP here too. A plain counter sale is handed
+			// over at the counter and needs no pickup card — but an RSVP's guest
+			// leaves and comes back on the event day, and their order page says
+			// "where to go is in the pickup card". Same resolver as the
+			// storefront door (the event's own venue whatever its active state,
+			// first-point fallback), so the two doors can never seat one event
+			// at different venues. The refusal is in seller words — the seller
+			// is at this screen.
+			const venue = await resolveEventVenue(ctx, retailer._id, eventLock);
+			if (venue === null)
+				throw new ConvexError(
+					"An RSVP needs a venue on the guest's order page — add a pickup point in Settings → Fulfilment first.",
+				);
+			eventPickupLocationId = venue._id;
+			eventPickupSnapshot = buildPickupSnapshot(venue);
+		}
+		for (const [productId, { event, name }] of eventProducts) {
+			if (event.seats === undefined) continue;
+			const tally = await tallyEventSeats(ctx, {
+				retailerId: retailer._id,
+				productId,
+				date: event.date,
+			});
+			const left = seatsLeft(event, tally.taken) ?? 0;
+			if (seatsRequested(snapshotItems, productId) > left)
+				throw new ConvexError(seatsExhaustedMessage(name, left));
 		}
 
 		const { subtotal, total } = computeOrderTotals(snapshotItems);
@@ -862,6 +942,12 @@ export const createOrderFromSession = mutation({
 			throw new ConvexError("Failed to generate order ID, please retry");
 
 		const customerName = session.waProfileName;
+		// A FREE order records no payment, whatever the client sent — "Paid now ·
+		// Cash" on an RM0 RSVP would contradict the "Free order — nothing to
+		// collect" the order page correctly shows. Counter orders never carry an
+		// unsettled price (customs are priced by the seller, no mockup gate), so
+		// zero here is a real zero (`isFreeOrder`'s counter shape).
+		const paidInPerson = args.paidInPerson && total > 0;
 		const orderId = await ctx.db.insert("orders", {
 			retailerId: retailer._id,
 			shortId,
@@ -875,12 +961,17 @@ export const createOrderFromSession = mutation({
 			source: "counter",
 			customer: { name: customerName, waPhone: session.waPhone },
 			deliveryMethod: "self_collect", // collected at the counter
+			// An RSVP freezes its venue (see the event branch above); a plain
+			// counter sale keeps no pickup card — it is handed over right here.
+			pickupLocationId: eventPickupLocationId,
+			pickupSnapshot: eventPickupSnapshot,
 			fulfilmentDate: sanitizedFulfilmentDate,
-			paymentStatus: args.paidInPerson ? "received" : "unpaid",
-			paymentReceivedAt: args.paidInPerson ? now : undefined,
-			paymentMethod: args.paidInPerson
-				? (args.paymentMethod ?? "cash")
-				: undefined,
+			fulfilmentTimeMinutes: sanitizedFulfilmentTime,
+			// Frozen flow-kind marker — a walk-in RSVP (see schema comment).
+			eventRsvp: eventLock !== undefined ? true : undefined,
+			paymentStatus: paidInPerson ? "received" : "unpaid",
+			paymentReceivedAt: paidInPerson ? now : undefined,
+			paymentMethod: paidInPerson ? (args.paymentMethod ?? "cash") : undefined,
 			statusChangedAt: now,
 			createdAt: now,
 			updatedAt: now,
@@ -892,7 +983,7 @@ export const createOrderFromSession = mutation({
 			note: "counter_checkout",
 			createdAt: now,
 		});
-		if (args.paidInPerson) {
+		if (paidInPerson) {
 			await ctx.db.insert("orderEvents", {
 				orderId,
 				status: "confirmed",

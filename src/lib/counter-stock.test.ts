@@ -105,3 +105,43 @@ describe("productSoldOut", () => {
 		expect(productSoldOut({ variants: [] })).toBe(false);
 	});
 });
+
+describe("event seats fold into the counter numbers (`z8r3fdff9u`)", () => {
+	it("the row shows ONE ceiling — min(stock, seats)", () => {
+		// 50 in stock but 8 seats left: "48 left" beside an 8-seat event was
+		// two numbers telling two stories; the binding one wins.
+		expect(variantStockNote(tracked(50), 8)).toEqual({
+			text: "8 left",
+			tone: "muted",
+		});
+		// Stock binds tighter than seats → stock's number, seats' tone rules.
+		expect(variantStockNote(tracked(2), 8)).toEqual({
+			text: "Only 2 left",
+			tone: "warn",
+		});
+		// A made-to-order option under a seat cap is still capped by seats.
+		expect(variantStockNote(madeToOrder(), 8)).toEqual({
+			text: "8 left",
+			tone: "muted",
+		});
+	});
+
+	it("zero seats reads Fully booked; zero stock with seats open stays Sold out", () => {
+		expect(variantStockNote(tracked(50), 0)).toEqual({
+			text: "Fully booked",
+			tone: "danger",
+		});
+		expect(variantStockNote(tracked(0), 8)).toEqual({
+			text: "Sold out",
+			tone: "danger",
+		});
+	});
+
+	it("the stepper and Add stop at the seat pool", () => {
+		expect(maxAddableQty(tracked(50), 8)).toBe(8);
+		expect(maxAddableQty(tracked(2), 8)).toBe(2);
+		expect(maxAddableQty(madeToOrder(), 8)).toBe(8);
+		expect(canAddToCounterCart(tracked(50), 0)).toBe(false);
+		expect(canAddToCounterCart(tracked(50), 8)).toBe(true);
+	});
+});

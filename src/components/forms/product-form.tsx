@@ -1,5 +1,9 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "../../../convex/_generated/api";
 import { Link } from "@tanstack/react-router";
 import {
+	CalendarClock,
 	Camera,
 	CheckCircle2,
 	ClipboardList,
@@ -25,11 +29,11 @@ import {
 	MAX_PREP_MINUTES,
 	parsePrepMinutesText,
 } from "../../../convex/lib/fulfilmentDate";
+import { MIN_QUANTITY_MAX } from "../../../convex/lib/minOrderRules";
 import {
 	MAX_PICKUP_NOTE_LENGTH,
 	pickupNoteFits,
 } from "../../../convex/lib/pickupNote";
-import { MIN_QUANTITY_MAX } from "../../../convex/lib/minOrderRules";
 import {
 	DEFAULT_WEEKEND_DAYS,
 	MAX_CAPACITY_PER_NIGHT,
@@ -43,11 +47,17 @@ import {
 	highlightRingClass,
 	scrollToAnchor,
 } from "../../lib/country-setup-copy";
+import {
+	convexErrorMessage,
+	currencySymbol,
+	parsePriceInput,
+} from "../../lib/format";
 import { asPackageUnit } from "../../lib/package-unit";
-import { convexErrorMessage, parsePriceInput } from "../../lib/format";
 import { PRODUCT_WEIGHT_MAX } from "../../lib/product-import";
 import {
 	describeProduct,
+	isSecurityDepositInRange,
+	securityDepositRangeMessage,
 	weekendRateConsequence,
 } from "../../lib/product-summary";
 import { productDetailsSchema } from "../../lib/schemas";
@@ -78,11 +88,20 @@ export const PREP_PRESETS = [
 	{ minutes: 120, label: "2 hours" },
 	{ minutes: 240, label: "4 hours" },
 ] as const;
+
 import { CategoryPicker } from "./category-picker";
+import {
+	EMPTY_EVENT_DRAFT,
+	type EventDraft,
+	EventFields,
+	type EventSubmitValue,
+	eventDraftFrom,
+	eventDraftValid,
+	eventSubmitValue,
+} from "./event-fields";
 import { submitThenFocusError } from "./focus-error";
 import { useAppForm } from "./form";
 import { type ProductImage, ProductImagesField } from "./product-images-field";
-import { WeekdayPicker } from "./weekday-picker";
 import {
 	type CustomLineDraft,
 	type LiveVariantStock,
@@ -92,6 +111,7 @@ import {
 	type VariantIssue,
 	type VariantRow,
 } from "./variant-editor";
+import { WeekdayPicker } from "./weekday-picker";
 
 export interface ProductFormSubmitValues {
 	name: string;
@@ -128,6 +148,10 @@ export interface ProductFormSubmitValues {
 	// Minimum order quantity (summed across variants). undefined = no minimum;
 	// the caller sends 0 to clear on edit. See convex/lib/minOrderRules.ts.
 	minQuantity?: number;
+	// Fixed event date (`z8r3fdff9u`). `null` CLEARS a stored event (the toggle
+	// turned off); an object sets/replaces it. Never `undefined` from this form
+	// — that spelling means "no change", which would strand a cleared event.
+	event: EventSubmitValue;
 	// FULL category membership (the picker's staged selection) — the caller
 	// diffs it via categories.setProductCategories. See docs/product-categories.md.
 	categoryIds: Id<"categories">[];
@@ -197,6 +221,9 @@ export type ProductFormDraft = {
 	minNoticeDays: string;
 	prepMinutes: string;
 	pickupNote: string;
+	/** Event block, as typed. Optional so pre-event draft literals (tests,
+	 * stored wizard handoffs) stay valid. */
+	event?: EventDraft;
 };
 
 interface ProductFormProps {
@@ -205,6 +232,12 @@ interface ProductFormProps {
 	/** Client mirror of the `categories` plan gate: when true, the picker only
 	 * allows deselection (server enforces the same add-gated rule). */
 	categoriesLocked: boolean;
+	/** Client mirror of the `events` plan gate (`z8r3fdff9u`): when true the
+	 * "This is an event" toggle disables with the Pro hint. Server enforces it. */
+	eventsLocked: boolean;
+	/** Live (non-cancelled) RSVPs on this product — locks the date + the toggle
+	 * once > 0, matching the server's refusal. Undefined on create. */
+	eventRsvpCount?: number;
 	initialValues?: {
 		name?: string;
 		description?: string;
@@ -220,16 +253,27 @@ interface ProductFormProps {
 		packageLength?: string;
 		packageUnit?: PackageUnit;
 		autoAccept?: boolean;
-		/** Booking security deposit as an RM string draft ("100") — wizard
+		/** Booking security deposit as a major-unit string draft ("100") — wizard
 		 * handoff + edit seed. Blank/undefined = none. */
 		securityDeposit?: string;
-		/** Weekend per-night rate as an RM string draft + its nights (S13). */
+		/** Weekend per-night rate as a major-unit string draft + its nights (S13). */
 		weekendPrice?: string;
 		weekendDays?: number[];
 		minNoticeDays?: number;
 		prepMinutes?: number;
 		pickupNote?: string;
 		minQuantity?: number;
+		/** Stored event config (`z8r3fdff9u`) — seeds the toggle + three inputs. */
+		event?: {
+			date: number;
+			timeMinutes?: number;
+			seats?: number;
+			endDate?: number;
+		};
+		/** Event block as an already-built draft — the wizard handoff's spelling,
+		 * which must survive a round-trip with half-typed values intact. Wins
+		 * over `event` when both are present. */
+		eventDraft?: EventDraft;
 		categoryIds?: Id<"categories">[];
 		// Deprecated product-level defaults — used only to seed per-variant flags
 		// for legacy products whose variants predate the per-variant columns.
@@ -254,6 +298,8 @@ interface ProductFormProps {
 			customPrompt?: string;
 		}[];
 	};
+	/** The retailer's ISO code (`MYR`, `SGD`). Labels wear `currencySymbol`
+	 * of it; the summary helpers take the code itself. */
 	currency: string;
 	submitLabel: string;
 	onSubmit: (values: ProductFormSubmitValues) => Promise<void>;
@@ -627,10 +673,18 @@ function ProductSummaryStrip({
 	editor,
 	currency,
 	booking = null,
+	event = null,
 }: {
 	name: string;
 	editor: VariantEditorState;
 	currency: string;
+	/** Fixed event config — leads the strip ("Event · Fri 25 Sep …"). */
+	event?: {
+		date: number;
+		timeMinutes?: number;
+		seats?: number;
+		endDate?: number;
+	} | null;
 	/** Booking kind + its capacity draft — flips the strip to booking words. */
 	booking?: {
 		capacityPerNight: string;
@@ -643,6 +697,7 @@ function ProductSummaryStrip({
 }) {
 	const summary = describeProduct(
 		{
+			event,
 			options: editor.options,
 			rows: editor.rows,
 			customLine: editor.customLine,
@@ -723,6 +778,8 @@ function VisibilityControl({
 export function ProductForm({
 	retailerId,
 	categoriesLocked,
+	eventsLocked,
+	eventRsvpCount,
 	initialValues,
 	currency,
 	submitLabel,
@@ -809,6 +866,27 @@ export function ProductForm({
 	const [minQty, setMinQty] = useState(
 		initialValues?.minQuantity ? String(initialValues.minQuantity) : "",
 	);
+	// EVERY pickup point, hidden ones included — the event's venue selector
+	// (round 4). A point hidden from standard orders can still host an event
+	// (an RSVP-only location IS a hidden point). Adapter read per the standing
+	// rule; skipped entirely for booking listings, which can never be events.
+	const pickupRows = useQuery(
+		convexQuery(
+			api.pickupLocations.listForRetailer,
+			isBooking ? "skip" : { retailerId },
+		),
+	).data;
+	const eventVenues = pickupRows?.map((r) => ({
+		_id: r._id as string,
+		label: r.label,
+		isActive: r.isActive,
+	}));
+	const [eventDraft, setEventDraft] = useState<EventDraft>(
+		() =>
+			initialValues?.eventDraft ??
+			eventDraftFrom(initialValues?.event) ??
+			EMPTY_EVENT_DRAFT,
+	);
 	const [categoryIds, setCategoryIds] = useState<Id<"categories">[]>(
 		initialValues?.categoryIds ?? [],
 	);
@@ -868,7 +946,20 @@ export function ProductForm({
 			// `issues` empty ⇒ built carries the variants.
 			const variants = "variants" in built ? built.variants : [];
 			// Min-quantity / capacity input invalid → inline error already on screen.
-			if (!minQtyValid || !prepValid || !pickupNoteValid) return;
+			// Prep is exempt while the event toggle is on: the field is hidden
+			// there, so a stale half-typed value must not block the save.
+			if (!minQtyValid || (!eventDraft.on && !prepValid) || !pickupNoteValid)
+				return;
+			// An event that already has guests may be re-saved on its own past
+			// date (the seller fixing a seat cap the morning after) — the same
+			// allowance the server makes.
+			if (
+				!eventDraftValid(eventDraft, {
+					allowPastDate: (eventRsvpCount ?? 0) > 0,
+					requireVenue: (eventVenues?.length ?? 0) > 1,
+				})
+			)
+				return;
 			if (
 				isBooking &&
 				(!capacityValid || !depositValid || !packageValid || !weekendValid)
@@ -911,14 +1002,19 @@ export function ProductForm({
 									packageTrimmed.length === 0 ? weekendDays : undefined,
 							}
 						: undefined,
-					minNoticeDays:
-						Number.isInteger(minNoticeParsed) && minNoticeParsed > 0
+					// An EVENT clears both timing rules (the booking posture): guests
+					// RSVP to the fixed date, so notice has no date to push and prep
+					// has no time to floor — their inputs are hidden, and a hidden
+					// field must never keep stale config alive on the row.
+					minNoticeDays: eventDraft.on
+						? 0
+						: Number.isInteger(minNoticeParsed) && minNoticeParsed > 0
 							? Math.min(minNoticeParsed, MAX_NOTICE_DAYS)
 							: 0,
 					// 0 clears on the server (one spelling for "no window"), and a
 					// booking listing never carries one — request-to-book IS the
 					// preparation, so its input is not rendered.
-					prepMinutes: isBooking ? 0 : prepParsed,
+					prepMinutes: isBooking || eventDraft.on ? 0 : prepParsed,
 					// "" clears. Still sent when the store has self-collect OFF —
 					// the note is already written and turning collection back on
 					// should not find it silently dropped — but never for a
@@ -927,6 +1023,9 @@ export function ProductForm({
 					// 0 = no minimum (blank input) — the server normalizes 0/1 to unset.
 					// A booking listing never carries one (its input isn't rendered).
 					minQuantity: isBooking ? 0 : minQtyParsed,
+					// `null` when off — the spelling that CLEARS. A booking listing
+					// never renders the block, so it always sends null.
+					event: isBooking ? null : eventSubmitValue(eventDraft),
 					categoryIds,
 					imageStorageIds: images.map((i) => i.id),
 					// Derived from the SAME reconciled pair as `variants` above, so the
@@ -965,6 +1064,7 @@ export function ProductForm({
 			minNoticeDays: minNoticeDraft,
 			prepMinutes: prepDraft,
 			pickupNote: pickupNoteDraft,
+			event: eventDraft,
 		});
 		return () => {
 			draftRef.current = null;
@@ -1004,14 +1104,14 @@ export function ProductForm({
 	const packageLengthNum =
 		packageValid && packageTrimmed.length > 0 ? packageParsed : undefined;
 
-	// Booking security deposit — blank = none; else a price 0..RM10,000
-	// (mirrors the server's sanitizeSecurityDeposit ceiling).
+	// Booking security deposit — blank = none; else inside the server's own
+	// sanitizeSecurityDeposit ceiling (`isSecurityDepositInRange`, shared with
+	// the wizard so the two can't drift).
 	const depositTrimmed = depositDraft.trim();
 	const depositParsed =
 		depositTrimmed.length === 0 ? 0 : parsePriceInput(depositTrimmed);
 	const depositValid =
-		depositTrimmed.length === 0 ||
-		(depositParsed !== null && depositParsed >= 0 && depositParsed <= 10_000);
+		depositTrimmed.length === 0 || isSecurityDepositInRange(depositParsed);
 
 	// Weekend rate (S13) — blank = one rate; else a price in (0, RM 100,000]
 	// with at least one night and never all seven (mirrors
@@ -1069,8 +1169,7 @@ export function ProductForm({
 	// prep value inert. Said out loud rather than enforced: a seller loosening
 	// notice back to 0 should find their prep window still there.
 	const prepInertUnderNotice =
-		prepParsed > 0 &&
-		Number.parseInt(minNoticeDraft, 10) > 0;
+		prepParsed > 0 && Number.parseInt(minNoticeDraft, 10) > 0;
 	const pickupNoteLength = pickupNoteDraft.replace(/\s+/g, " ").trim().length;
 	const pickupNoteValid = pickupNoteFits(pickupNoteDraft);
 
@@ -1091,6 +1190,7 @@ export function ProductForm({
 							name={name}
 							editor={editor}
 							currency={currency}
+							event={eventSubmitValue(eventDraft)}
 							booking={
 								isBooking
 									? {
@@ -1252,7 +1352,7 @@ export function ProductForm({
 					<div className="flex flex-col gap-1.5 border-t border-border pt-4">
 						<label htmlFor="booking-price" className="text-sm font-medium">
 							Price per {bookingSpanNoun(packageLengthNum, packageUnit)} (
-							{currency})
+							{currencySymbol(currency)})
 						</label>
 						<Input
 							id="booking-price"
@@ -1302,7 +1402,7 @@ export function ProductForm({
 									htmlFor="booking-weekend"
 									className="text-sm font-medium"
 								>
-									Weekend rate ({currency}){" "}
+									Weekend rate ({currencySymbol(currency)}){" "}
 									<span className="font-normal text-muted-foreground">
 										(optional)
 									</span>
@@ -1397,7 +1497,7 @@ export function ProductForm({
 					</div>
 					<div className="flex flex-col gap-1.5 border-t border-border pt-4">
 						<label htmlFor="booking-deposit" className="text-sm font-medium">
-							Security deposit ({currency}){" "}
+							Security deposit ({currencySymbol(currency)}){" "}
 							<span className="font-normal text-muted-foreground">
 								(optional)
 							</span>
@@ -1414,7 +1514,7 @@ export function ProductForm({
 						/>
 						{!depositValid ? (
 							<p className="text-xs text-destructive">
-								Enter an amount between RM 0 and RM 10,000, or leave blank.
+								{securityDepositRangeMessage(currency)}
 							</p>
 						) : null}
 						<p className="text-xs leading-relaxed text-muted-foreground">
@@ -1449,6 +1549,29 @@ export function ProductForm({
 						<Info className="size-3.5" aria-hidden />
 						Currency is set in Settings
 					</Link>
+				</ProductStepCard>
+			)}
+
+			{/* Event mode (`z8r3fdff9u`). Its OWN card, above Order rules, because
+			    it isn't a limit on how a buyer may order — it changes what the
+			    product is (a date, a venue, a seat count, and a listing that
+			    retires itself). It also overrides the minimum notice in the card
+			    below, which is why it comes first and says so. Never on a booking
+			    listing: a stay already takes its own dates. */}
+			{isBooking ? null : (
+				<ProductStepCard
+					icon={<CalendarClock className="size-5" />}
+					kicker="Selling"
+					title="Event"
+					description="Turn this into a fixed-date event guests RSVP to."
+				>
+					<EventFields
+						draft={eventDraft}
+						onChange={setEventDraft}
+						locked={eventsLocked}
+						rsvpCount={eventRsvpCount}
+						venues={eventVenues}
+					/>
 				</ProductStepCard>
 			)}
 
@@ -1515,38 +1638,54 @@ export function ProductForm({
 					) : null}
 				</div>
 
+				{/* On an EVENT the two timing rules disappear rather than sit greyed
+				    out: both are dead for the same reason (guests RSVP to the fixed
+				    date — no date for notice to push, no time for prep to floor), so
+				    two disabled fields would be two things to wonder about where one
+				    sentence answers it. Their stored values are cleared on save, so
+				    nothing hidden lives on the row. Min quantity and the pickup note
+				    stay — both still bind on an RSVP. */}
+				{eventDraft.on && !isBooking ? (
+					<p className="border-t border-border pt-4 text-xs leading-relaxed text-muted-foreground">
+						Minimum notice and prep time don&apos;t apply to an event — guests
+						RSVP to the fixed date and time you set above, so there&apos;s
+						nothing for either rule to move.
+					</p>
+				) : null}
+
 				{/* Per-product fulfilment notice (made-to-order lead time). Buyers
 				    see the effect as a raised earliest-date floor at checkout, which
 				    is why the helper spells the interaction out. On a booking listing
 				    it's the card's only control — no divider above it. */}
-				<div
-					className={
-						isBooking
-							? "flex flex-col gap-2"
-							: "flex flex-col gap-2 border-t border-border pt-4"
-					}
-				>
-					<div className="flex flex-col gap-1.5">
-						<label htmlFor="min-notice-days" className="text-sm font-medium">
-							Minimum notice{" "}
-							<span className="font-normal text-muted-foreground">
-								(optional)
-							</span>
-						</label>
-						<div className="flex items-center gap-1.5">
-							<Input
-								id="min-notice-days"
-								type="number"
-								inputMode="numeric"
-								min={0}
-								max={MAX_NOTICE_DAYS}
-								value={minNoticeDraft}
-								onChange={(e) => setMinNoticeDraft(e.target.value)}
-								placeholder="0"
-								variant="field"
-								className="w-24 text-center"
-							/>
-							{/* Notice is measured in DAYS, full stop (`minNoticeDays`,
+				{eventDraft.on && !isBooking ? null : (
+					<div
+						className={
+							isBooking
+								? "flex flex-col gap-2"
+								: "flex flex-col gap-2 border-t border-border pt-4"
+						}
+					>
+						<div className="flex flex-col gap-1.5">
+							<label htmlFor="min-notice-days" className="text-sm font-medium">
+								Minimum notice{" "}
+								<span className="font-normal text-muted-foreground">
+									(optional)
+								</span>
+							</label>
+							<div className="flex items-center gap-1.5">
+								<Input
+									id="min-notice-days"
+									type="number"
+									inputMode="numeric"
+									min={0}
+									max={MAX_NOTICE_DAYS}
+									value={minNoticeDraft}
+									onChange={(e) => setMinNoticeDraft(e.target.value)}
+									placeholder="0"
+									variant="field"
+									className="w-24 text-center"
+								/>
+								{/* Notice is measured in DAYS, full stop (`minNoticeDays`,
 							    `MAX_NOTICE_DAYS`). A copy-paste had left the PACKAGE LENGTH's
 							    unit dropdown sitting in this row — bound to `packageUnit`, so a
 							    seller adjusting their notice period silently flipped a 1-month
@@ -1554,21 +1693,23 @@ export function ProductForm({
 							    the save path drops on the floor. The wizard was swept for this;
 							    THIS form was missed — and it is the copy a seller editing a live
 							    product actually meets. */}
-							<span className="text-sm text-muted-foreground">days</span>
+								<span className="text-sm text-muted-foreground">days</span>
+							</div>
 						</div>
+						<p className="text-xs leading-relaxed text-muted-foreground">
+							{isBooking
+								? "Days of lead time a booking needs — guests can't request a check-in sooner than this. Leave 0 to allow same-day requests."
+								: "Days of lead time this product needs (custom / made-to-order items). Buyers can't pick a delivery or pickup date sooner than this — it raises your store-level notice when higher, and the strictest item in a cart sets the whole order's earliest date. Leave 0 for no extra notice."}
+						</p>
 					</div>
-					<p className="text-xs leading-relaxed text-muted-foreground">
-						{isBooking
-							? "Days of lead time a booking needs — guests can't request a check-in sooner than this. Leave 0 to allow same-day requests."
-							: "Days of lead time this product needs (custom / made-to-order items). Buyers can't pick a delivery or pickup date sooner than this — it raises your store-level notice when higher, and the strictest item in a cart sets the whole order's earliest date. Leave 0 for no extra notice."}
-					</p>
-				</div>
+				)}
 
 				{/* Prep time — notice's hours-scale sibling, so it sits directly
 				    under it rather than anywhere else in the card. A booking
 				    listing never shows it: request-to-book IS the preparation,
-				    and the seller accepts when they're ready. */}
-				{isBooking ? null : (
+				    and the seller accepts when they're ready. Hidden on an event
+				    alongside notice — see the note above the pair. */}
+				{isBooking || eventDraft.on ? null : (
 					<div className="flex flex-col gap-2 border-t border-border pt-4">
 						<div className="flex flex-col gap-1.5">
 							<label htmlFor="prep-minutes" className="text-sm font-medium">
@@ -1623,8 +1764,8 @@ export function ProductForm({
 						<p className="text-xs leading-relaxed text-muted-foreground">
 							How long you need to make this once an order comes in. Buyers
 							can&apos;t pick a pickup or delivery <em>time</em> sooner than
-							this, and the longest prep time in a cart sets the whole order.
-							Up to 24 hours — for anything longer, use the notice days above.
+							this, and the longest prep time in a cart sets the whole order. Up
+							to 24 hours — for anything longer, use the notice days above.
 							Leave blank if it&apos;s ready to hand over. Counter checkout
 							ignores it.
 						</p>
