@@ -383,7 +383,7 @@ export const bindSessionManualPhone = mutation({
 		assertOrderingNotPaused(retailer);
 
 		// Only after the store-level gates above: a paused or lapsed store says so
-		// before any complaint about the number (pinned by seasonalHold.test.ts).
+		// before any complaint about the number (pinned by seasonalHold.test.ts for the pause and counterCheckout.test.ts for the lapse).
 		let normalizedPhone: string;
 		try {
 			normalizedPhone = assertValidBuyerWaPhone(

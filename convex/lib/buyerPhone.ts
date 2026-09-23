@@ -8,15 +8,25 @@
  * `src/components/ui/my-phone-input.tsx`), defaulting to the store's country,
  * and is judged here by the country that was PICKED:
  *
- *   - MY / SG → the existing strict arm (`assertValidMobileForCountry`), byte
- *     for byte: bare national number, trunk `0`, `60…`/`65…`, landlines
- *     refused. A local buyer who never touches the picker sees no change.
- *   - any other country → the generated table (`./dialCodes`): strip the
- *     country's own trunk prefix (never a blanket "leading 0" — Italy and Côte
- *     d'Ivoire keep theirs), check the national length against that country's
- *     mobile lengths, and store `dial + national` — the exact digits Meta
- *     delivers inbound, so the `(retailerId, waPhone)` customer row never
- *     forks between a typed number and the same buyer messaging us.
+ *   - MY / SG → the existing strict arm (`assertValidMobileForCountry`): bare
+ *     national number, trunk `0`, `60…`/`65…`, landlines refused. Everything it
+ *     accepted before is still accepted with the same digits (a `+` written in
+ *     front of a local number included); only its rejection copy changed, to
+ *     point at the picker. A local buyer who never touches the picker sees no
+ *     change.
+ *   - any other country → the generated tables (`./dialCodes`,
+ *     `./dialMobilePatterns`), libphonenumber's data: every reading of the
+ *     typed digits (as typed, without the country's OWN trunk prefix — never a
+ *     blanket "leading 0", Italy and Côte d'Ivoire keep theirs — via its
+ *     trunk-parsing rule, without a calling code typed sans `+`) is tried, and
+ *     the one that matches the country's MOBILE pattern wins; if none does, the
+ *     mobile LENGTH decides, so a range newer than the metadata still gets
+ *     through. The result is stored as `dial + national` — E.164, which is what
+ *     Meta delivers inbound for nearly every country, so the
+ *     `(retailerId, waPhone)` customer row doesn't fork between a typed number
+ *     and the same buyer messaging us. Known exceptions, where WhatsApp's own id
+ *     differs from E.164 (Mexico's legacy `521…`, pre-9th-digit Brazilian
+ *     accounts): see docs/phone-numbers.md, "Known limitations".
  *
  * An explicit `+CC` / `00CC` in what was typed is honoured over the pick. That
  * is not sniffing — the person typed the country code — and it is what the
@@ -40,7 +50,9 @@ import {
 	isCountry,
 } from "./country";
 import { DIAL_COUNTRY_NAMES } from "./dialCountryNames";
+import { DIAL_MOBILE_PATTERNS, DIAL_TRUNK_RULES } from "./dialMobilePatterns";
 import {
+	cleanPhoneInput,
 	type DialIso,
 	type DialRow,
 	dialRow,
@@ -88,6 +100,11 @@ export const NEARBY_DIAL_COUNTRIES: Record<Country, readonly DialIso[]> = {
 	SG: ["MY", "ID", "BN", "TH", "PH", "VN"],
 };
 
+/** Every country pinned under some store's own — where a mis-tap lands. */
+const NEARBY_ANY: ReadonlySet<DialIso> = new Set(
+	Object.values(NEARBY_DIAL_COUNTRIES).flat(),
+);
+
 /**
  * The picker's default and the mutation arg's meaning when it is absent: the
  * store's own country. An unknown code is refused rather than quietly read as
@@ -131,12 +148,35 @@ function switchMessage(country: Country): string {
 	return `That looks like a ${MOBILE_KIND[country]} number — switch the country to +${COUNTRY_DIAL_CODE[country]}`;
 }
 
+/** The strict arm's copy, plus where the fix is: a buyer on the default pick
+ * whose number is from somewhere else needs to hear that the plate changes. */
+function supportedMessage(country: Country): string {
+	return `${MOBILE_MESSAGE[country]}, or tap +${COUNTRY_DIAL_CODE[country]} to change the country`;
+}
+
 function foreignMessage(row: DialRow): string {
-	return `Enter a valid ${DIAL_COUNTRY_NAMES[row.iso]} mobile number (+${row.dial}), or change the country`;
+	return `Enter a valid ${DIAL_COUNTRY_NAMES[row.iso]} mobile number, or tap +${row.dial} to change the country`;
 }
 
 const fits = (row: DialRow, national: string) =>
 	(row.lengths as readonly number[]).includes(national.length);
+
+const MOBILE_RE = new Map<DialIso, RegExp | null>();
+
+/** The country's mobile pattern, anchored — compiled on first use. */
+function mobilePattern(row: DialRow): RegExp | null {
+	let re = MOBILE_RE.get(row.iso);
+	if (re === undefined) {
+		const source = DIAL_MOBILE_PATTERNS[row.iso];
+		re = source ? new RegExp(`^(?:${source})$`) : null;
+		MOBILE_RE.set(row.iso, re);
+	}
+	return re;
+}
+
+/** A national number that IS a mobile there, by libphonenumber's pattern. */
+const isMobile = (row: DialRow, national: string) =>
+	fits(row, national) && (mobilePattern(row)?.test(national) ?? false);
 
 /** Drop the country's trunk prefix — only its own, and only when what is left
  * is a valid national length (a Russian `812…` landline starts with the `8`
@@ -162,17 +202,86 @@ function startsLikeATrunk(row: DialRow, national: string): boolean {
 	);
 }
 
-/** The generic arm: any country outside the strict MY/SG arms. */
+const TRUNK_RULE_RE = new Map<DialIso, RegExp>();
+
+/**
+ * libphonenumber's own trunk-parsing rule, applied the way it applies it: the
+ * rule's match is dropped — or, where the country has a transform and the
+ * rule captured something, rewritten (Argentina's "0 11 15 2345-6789" →
+ * "9 11 2345 6789"). Null when the country has no such rule or it didn't match.
+ */
+function applyTrunkRule(row: DialRow, national: string): string | null {
+	const rule = DIAL_TRUNK_RULES[row.iso];
+	if (!rule) return null;
+	let re = TRUNK_RULE_RE.get(row.iso);
+	if (!re) {
+		re = new RegExp(`^(?:${rule.parse})`);
+		TRUNK_RULE_RE.set(row.iso, re);
+	}
+	const match = re.exec(national);
+	if (!match) return null;
+	const lastGroup = match.length > 1 ? match[match.length - 1] : undefined;
+	return rule.transform && lastGroup
+		? national.replace(re, rule.transform)
+		: national.slice(match[0].length);
+}
+
+/**
+ * Every way the typed digits could be the national number: as typed, without
+ * the country's trunk prefix (its plain prefix and libphonenumber's parsing
+ * rule), and — when no `+` was typed — without a leading calling code too
+ * ("62 812…" with Indonesia picked is the wa.me habit).
+ */
+function readingsOf(
+	row: DialRow,
+	national: string,
+	explicitCode: boolean,
+): string[] {
+	const readings: string[] = [];
+	const push = (n: string | null) => {
+		if (n && !readings.includes(n)) readings.push(n);
+	};
+	const add = (n: string) => {
+		push(n);
+		if (row.trunk && n.startsWith(row.trunk)) push(n.slice(row.trunk.length));
+		push(applyTrunkRule(row, n));
+	};
+	add(national);
+	if (!explicitCode && national.startsWith(row.dial)) {
+		add(national.slice(row.dial.length));
+	}
+	return readings;
+}
+
+/**
+ * The generic arm: any country outside the strict MY/SG arms. `confident` says
+ * whether the country's mobile PATTERN vouched for the number, or only its
+ * length did.
+ */
 function parseForeign(
 	row: DialRow,
 	national: string,
 	explicitCode: boolean,
-): BuyerPhoneParse {
+): { result: BuyerPhoneParse; confident: boolean } {
+	// 1. A reading that IS a mobile there is the answer, whichever way it was
+	//    typed. Length alone can't decide this: "628123456789" under Indonesia
+	//    is 12 digits — a valid Indonesian length — yet it's the calling code
+	//    typed without its `+`, and only the pattern (Indonesian mobiles start
+	//    8) says to peel it rather than store 62628123456789.
+	const mobile = readingsOf(row, national, explicitCode).find((n) =>
+		isMobile(row, n),
+	);
+	if (mobile) {
+		return {
+			result: { ok: true, digits: `${row.dial}${mobile}`, iso: row.iso },
+			confident: true,
+		};
+	}
+	// 2. Nothing matched the pattern: judge by length, as the pattern may
+	//    post-date a newly opened range, and refusing a real buyer is worse
+	//    than a push the track page can repair. The caller still refuses when
+	//    these digits are plainly another supported country's mobile.
 	let n = national;
-	// The calling code typed WITHOUT its `+` ("44 7911 123456" with United
-	// Kingdom picked). Only peeled when the digits don't already fit as typed,
-	// so a national number that happens to begin with the code's digits is
-	// left alone.
 	if (!explicitCode && n.startsWith(row.dial)) {
 		const peeled = n.slice(row.dial.length);
 		if (
@@ -190,31 +299,51 @@ function parseForeign(
 		startsLikeATrunk(row, n) ||
 		digits.length > E164_MAX_DIGITS
 	) {
-		return { ok: false, message: foreignMessage(row) };
+		return {
+			result: { ok: false, message: foreignMessage(row) },
+			confident: false,
+		};
 	}
-	return { ok: true, digits, iso: row.iso };
+	return { result: { ok: true, digits, iso: row.iso }, confident: false };
 }
 
 /** The strict arm, with the buyer's version of its rejection copy. */
 function parseSupported(
-	raw: string,
+	typed: string,
 	country: Country,
 	picked: DialIso,
 ): BuyerPhoneParse {
 	try {
 		return {
 			ok: true,
-			digits: assertValidMobileForCountry(raw, country),
+			digits: assertValidMobileForCountry(typed, country),
 			iso: country,
 		};
 	} catch {
 		// The seller-side copy says "this store takes Malaysian numbers", which
 		// is no longer true of a buyer field — point at the picker instead.
-		const suggest = suggestSupportedCountry(raw, picked);
+		const suggest = suggestSupportedCountry(typed, picked);
 		return suggest
 			? { ok: false, message: switchMessage(suggest), suggest }
-			: { ok: false, message: MOBILE_MESSAGE[country] };
+			: { ok: false, message: supportedMessage(country) };
 	}
+}
+
+/** The typed code, read as international (`+CC…` / `00CC…`). */
+function parseExplicit(explicit: string, picked: DialIso): BuyerPhoneParse {
+	// The typed code wins over the pick (see the module header). A shared code
+	// keeps the pick when the pick answers to it (+1 with Canada picked stays
+	// Canada — same rules either way).
+	for (let len = 1; len <= 3 && len < explicit.length; len++) {
+		const rows = rowsForDialCode(explicit.slice(0, len));
+		if (!rows.length) continue;
+		const row = rows.find((r) => r.iso === picked) ?? rows[0];
+		if (isCountry(row.iso)) {
+			return parseSupported(`+${explicit}`, row.iso, row.iso);
+		}
+		return parseForeign(row, explicit.slice(len), true).result;
+	}
+	return { ok: false, message: UNKNOWN_DIAL_CODE_MESSAGE };
 }
 
 /**
@@ -223,7 +352,7 @@ function parseSupported(
  * copy and the one-tap fix.
  */
 export function parseBuyerWaPhone(raw: string, picked: DialIso): BuyerPhoneParse {
-	const typed = raw.trim();
+	const typed = cleanPhoneInput(raw).trim();
 	const digits = typed.replace(/\D/g, "");
 	if (typed.length === 0) {
 		return { ok: false, message: BUYER_PHONE_EMPTY_MESSAGE };
@@ -234,7 +363,7 @@ export function parseBuyerWaPhone(raw: string, picked: DialIso): BuyerPhoneParse
 		return {
 			ok: false,
 			message: isCountry(picked)
-				? MOBILE_MESSAGE[picked]
+				? supportedMessage(picked)
 				: foreignMessage(dialRow(picked)),
 		};
 	}
@@ -245,25 +374,28 @@ export function parseBuyerWaPhone(raw: string, picked: DialIso): BuyerPhoneParse
 			? digits.slice(2)
 			: null;
 	if (explicit !== null) {
-		// The typed code wins over the pick (see the module header). A shared
-		// code keeps the pick when the pick answers to it (+1 with Canada
-		// picked stays Canada — same rules either way).
-		for (let len = 1; len <= 3 && len < explicit.length; len++) {
-			const rows = rowsForDialCode(explicit.slice(0, len));
-			if (!rows.length) continue;
-			const row = rows.find((r) => r.iso === picked) ?? rows[0];
-			if (isCountry(row.iso)) {
-				return parseSupported(`+${explicit}`, row.iso, row.iso);
-			}
-			return parseForeign(row, explicit.slice(len), true);
-		}
-		return { ok: false, message: UNKNOWN_DIAL_CODE_MESSAGE };
+		const result = parseExplicit(explicit, picked);
+		if (result.ok || !isCountry(picked)) return result;
+		// A Malaysian or Singaporean who habitually writes a `+` before their
+		// local number ("+012-345 6789") was accepted by the strict arm before
+		// this picker existed; the typed code didn't read as a number, so give
+		// the pick's own arm the same chance it always had.
+		const local = parseSupported(typed, picked, picked);
+		return local.ok ? local : result;
 	}
 
 	if (isCountry(picked)) return parseSupported(typed, picked, picked);
-	const result = parseForeign(dialRow(picked), digits, false);
-	if (result.ok) return result;
-	const suggest = suggestSupportedCountry(typed, picked);
+	const { result, confident } = parseForeign(dialRow(picked), digits, false);
+	// A number only a LENGTH vouches for, under one of the Nearby countries
+	// pinned right below the store's own, that is plainly a Malaysian or
+	// Singapore mobile, is a mis-tap in the list — not a new foreign range. Say
+	// so, with the one-tap fix. Only there: far away the same digits are a
+	// real number (Buenos Aires' 11 2345-6789 is also the shape of a Malaysian
+	// 011 mobile), and offering "switch to +60" would store a stranger's.
+	const suggest =
+		result.ok && (confident || !NEARBY_ANY.has(picked))
+			? undefined
+			: suggestSupportedCountry(typed, picked);
 	return suggest
 		? { ok: false, message: switchMessage(suggest), suggest }
 		: result;

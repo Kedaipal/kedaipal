@@ -779,6 +779,13 @@ export function CheckoutPage({
 	const dialCountry: DialIso = isDialIso(watchedDialCountry)
 		? watchedDialCountry
 		: country;
+	// The phone box's value as the waPhone listener last left it — the
+	// "previous" `applyBuyerPhoneKeystroke` judges a change against, since a
+	// TanStack listener is handed only the new value. Every edit of the box
+	// passes through that listener, which records its own rewrite too; the one
+	// other write, `form.reset()` after a placed order, is followed by
+	// navigation away, so the ref never goes stale while the field is in use.
+	const lastWaPhoneRef = useRef(form.state.values.waPhone);
 	// A courier only takes a contact number from the store's country, so a
 	// buyer who picked another one is told on the delivery step that the rider
 	// will phone the store instead. Null — nothing rendered — for every local
@@ -1516,13 +1523,24 @@ export function CheckoutPage({
 						<form.AppField
 							name="waPhone"
 							listeners={{
-								// Auto-switch (z8r3fdh274): a typed or autofilled `+CC…`
-								// moves the picker to that country and leaves only the
-								// national part in the box — BuyerPhoneInput's keystroke
-								// rule, so both hosts behave alike. The rewrite doesn't
-								// re-run this listener: one keystroke, one application.
+								// Auto-switch (z8r3fdh274): a `+CC…` typed from the start,
+								// pasted or autofilled moves the picker to that country and
+								// leaves only the national part in the box —
+								// BuyerPhoneInput's keystroke rule, so both hosts behave
+								// alike. The rule needs the value being REPLACED (a `+`
+								// slipped before digits already there must not switch),
+								// and a listener only sees the new one, hence the ref. The
+								// rewrite doesn't re-run this listener: one keystroke, one
+								// application.
 								onChange: ({ value }) => {
-									const next = applyBuyerPhoneKeystroke(value, dialCountry);
+									const next = applyBuyerPhoneKeystroke(
+										value,
+										dialCountry,
+										lastWaPhoneRef.current,
+									);
+									// What the box holds after this change — the rewrite
+									// when there is one — is what the next keystroke edits.
+									lastWaPhoneRef.current = next.value;
 									if (next.value === value) return;
 									if (next.dialCountry !== dialCountry) {
 										form.setFieldValue("waDialCountry", next.dialCountry);
@@ -1577,9 +1595,17 @@ export function CheckoutPage({
 						    unreachable number still degrades to the recovery card).
 						    Until it parses, the same slot holds the rejection's one-tap
 						    fix: digits that fit the OTHER store country ("9123 4567"
-						    under +60) get a "Switch to Singapore (+65)" button — shown
-						    with the field's error (touched or submitted), never while
-						    the buyer is still on their first keystrokes. */}
+						    under +60) get a "Switch to Singapore (+65)" button, gated
+						    on the same `isTouched` as the field's error so the two
+						    always appear together. On this form that is from the first
+						    keystroke: TanStack's setFieldValue marks a field touched on
+						    every change, so the phone error — like every checkout
+						    TextField's — shows as the buyer types. That is the checkout
+						    form's house rule; the plain-state buyer hosts (booking, the
+						    number repair, the counter) hold a plain rejection until
+						    blur instead — src/lib/buyer-phone-rejection.ts. Pressing
+						    the switch unmounts it, so it hands focus back to the phone
+						    input. */}
 						<form.Subscribe
 							selector={(s) => ({
 								typed: s.values.waPhone,
@@ -1594,6 +1620,8 @@ export function CheckoutPage({
 											suggest={parsed.suggest}
 											onSwitch={(c) => form.setFieldValue("waDialCountry", c)}
 											locale={locale}
+											// TextField gives its input the field's name as id.
+											inputId="waPhone"
 										/>
 									) : null;
 								}

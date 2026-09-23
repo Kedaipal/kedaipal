@@ -539,6 +539,7 @@ export function BookingCheckoutForm({
 									suggest={phoneRejection.suggest}
 									onSwitch={setPickedDialCountry}
 									locale={locale}
+									inputId="booking-wa-phone"
 								/>
 							) : null}
 						</>

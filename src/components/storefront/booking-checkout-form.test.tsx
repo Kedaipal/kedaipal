@@ -133,13 +133,11 @@ describe("BookingCheckoutForm — WhatsApp number", () => {
 	it("a bad number says why under the field once the buyer leaves it", () => {
 		renderForm();
 		typePhone("123");
-		expect(
-			screen.queryByText("Enter a Malaysian mobile number (e.g. 012-345 6789)"),
-		).toBeNull();
+		const reason =
+			"Enter a Malaysian mobile number (e.g. 012-345 6789), or tap +60 to change the country";
+		expect(screen.queryByText(reason)).toBeNull();
 		fireEvent.blur(phoneInput());
-		expect(
-			screen.getByText("Enter a Malaysian mobile number (e.g. 012-345 6789)"),
-		).toBeTruthy();
+		expect(screen.getByText(reason)).toBeTruthy();
 		expect(phoneInput().getAttribute("aria-invalid")).toBe("true");
 	});
 
@@ -162,13 +160,18 @@ describe("BookingCheckoutForm — WhatsApp number", () => {
 	it("digits that fit Singapore at an MY store get the one-tap switch", () => {
 		renderForm("MY");
 		typePhone("9123 4567");
-		fireEvent.click(
-			screen.getByRole("button", { name: "Switch to Singapore (+65)" }),
-		);
+		const switchButton = screen.getByRole("button", {
+			name: "Switch to Singapore (+65)",
+		});
+		switchButton.focus();
+		fireEvent.click(switchButton);
 		expect(picker().value).toBe("SG");
 		expect(
 			screen.queryByRole("button", { name: "Switch to Singapore (+65)" }),
 		).toBeNull();
+		// The button unmounts with the fix — focus lands back in the number,
+		// not at the top of the page.
+		expect(document.activeElement).toBe(phoneInput());
 	});
 
 	it("the echo of the buyer's number is masked from session replay", () => {

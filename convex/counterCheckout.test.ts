@@ -1486,6 +1486,29 @@ describe("counterCheckout — manual phone from any country (z8r3fdh274)", () =>
 		).rejects.toThrow(UNKNOWN_DIAL_COUNTRY_MESSAGE);
 	});
 
+	test("a lapsed store's cashier hears the lock before any complaint about the number", async () => {
+		// The store-level gates run first (the pause is pinned the same way in
+		// seasonalHold.test.ts): fixing the number wouldn't help a view-only
+		// store, so it must not be what the cashier is told. Unusable numbers on
+		// purpose — a valid one couldn't tell which check ran first.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.first();
+			if (!sub) throw new Error("no subscription row");
+			await ctx.db.patch(sub._id, { status: "past_due" });
+		});
+		for (const phone of [
+			{ waPhone: "123" },
+			{ waPhone: "07911 123456", waDialCountry: "XX" },
+		]) {
+			await expect(bind(t, phone)).rejects.toThrow(/past due/);
+		}
+	});
+
 	test("a foreign manual bind is re-claimed by that buyer's store-QR scan", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);

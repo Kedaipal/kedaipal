@@ -31,13 +31,24 @@ error, never a silent MY fallback (the `Locale` posture).
 - **Owner + admin reads** (`getMyRetailer` / `getRetailerForAdmin`): resolved
   `country` on `RetailerPublic`.
 - **Public storefront read** (`getRetailerBySlug`): same resolved field —
-  checkout keys the phone plate/validator arm and address variant off it.
-  Public-safe: which country a storefront operates in is not seller data.
+  checkout keys the address variant off it, and the buyer phone picker
+  defaults to it (the buyer may pick any other country since
+  [`z8r3fdh274`](https://app.clickup.com/t/z8r3fdh274) — see
+  [`phone-numbers.md`](./phone-numbers.md)). Public-safe: which country a
+  storefront operates in is not seller data.
+- **`booksCouriers`** on the same payload (z8r3fdh274) — one bit, "a courier
+  will be handed this store's delivery orders" (`storeBooksCouriers`: Lalamove
+  or Delyva booking armed for the store's country). Checkout uses it to tell a
+  buyer with an overseas WhatsApp number that the rider will phone the store
+  instead. Public-safe for the same reason as `deliveryCollectsFromCustomer`:
+  a yes/no about the service, derived from owner-only config (keys, customer
+  ids) that never crosses to the public payload. The claim page gets the same
+  bit on `orderClaims.getByToken`'s `store` block.
 - **Order-token read** (`orders.get` payload, `retailerCountry`): the tracking
-  page's ONLY retailer read — the buyer phone-repair flow and the address-edit
-  dialog can't see `getRetailerBySlug`, so the field rides the order payload
-  too. Both plumbing paths must stay in sync when country-driven behaviour
-  grows.
+  page's ONLY retailer read — the buyer phone-repair flow (its picker's
+  fallback default) and the address-edit dialog can't see
+  `getRetailerBySlug`, so the field rides the order payload too. Both plumbing
+  paths must stay in sync when country-driven behaviour grows.
 
 ### Where it's settable
 
@@ -177,51 +188,79 @@ current zones are sets of MY states), and Delyva/courier-registry SG entries.
 
 ## Phone (+65) — `86eynw28q` + `86eynw2dy`
 
-The MY phone validation grew a country-keyed SG arm. **Which arm applies is
-always the retailer's country** — never a permissive both-countries regex and
-never sniffing the typed digits — so each side keeps its full typo protection:
-an SG store's checkout rejects a `+60` buyer with the SG message
+> **Since [`z8r3fdh274`](https://app.clickup.com/t/z8r3fdh274) the store's
+> country locks SELLER numbers only.** A buyer's number — storefront and
+> booking checkout, the track page's repair, the counter's manual bind — can
+> come from any country: the plate carries a country picker defaulting to the
+> store's, and `assertValidBuyerWaPhone` judges the number by the country
+> **picked**, handing an MY/SG pick to the strict arm below byte for byte. The
+> rules for every kind of number — buyer, seller, Meta-inbound — now live in
+> [`phone-numbers.md`](./phone-numbers.md); this section keeps the MY/SG arms
+> and their history.
+
+The MY phone validation grew a country-keyed SG arm. For **seller numbers**
+(the store's contact, the alert number, pickup managers) **which arm applies
+is always the retailer's country** — never a permissive both-countries regex
+and never sniffing the typed digits — so each keeps its full typo protection:
+an SG store's contact field rejects a `+60` number with the SG message
 ("Enter a Singapore mobile number (e.g. 9123 4567)"), an MY store rejects
-`+65` exactly as before. SG mobiles are 8 digits starting 8 or 9, stored as
-`65[89]\d{7}` (the form Meta delivers inbound); accepted input shapes are
-`+65 9123 4567`, `65…`, and the bare `9123 4567` the plate asks for (SG has no
-trunk 0; a bare `6…` is invalid).
+`+65` exactly as before. A buyer field applies the same arm to the country the
+buyer picked, and bare digits are still never sniffed for acceptance. SG
+mobiles are 8 digits starting 8 or 9, stored as `65[89]\d{7}` (the form Meta
+delivers inbound); accepted input shapes are `+65 9123 4567`, `65…`, and the
+bare `9123 4567` the plate asks for (SG has no trunk 0; a bare `6…` is
+invalid).
 
 ### One normalization author
 
-`convex/lib/slug.ts` now owns everything, per country, and the client imports
+`convex/lib/slug.ts` owns the MY/SG arms, per country, and the client imports
 it (it's a pure module — the `convex/lib/country.ts` precedent), so the
 client-fails-fast schemas and the server authority literally share code and
-cannot drift (the tickets' named danger zone):
+cannot drift (the tickets' named danger zone). The any-country buyer parse is
+its own pure module, `convex/lib/buyerPhone.ts` (z8r3fdh274), which delegates
+MY/SG picks back here.
 
 - `STORED_MOBILE_PATTERN` / `MOBILE_MESSAGE` — `Record<Country, …>` of the
   accept shape + rejection copy (the message previously lived in four places).
-- `assertValidWaPhoneForCountry` — the LOOSE arm (counter manual bind): brings
-  local forms to international digits, passes anything else through (a cashier
-  may key a foreign walk-in's number). **The M3 CRM-fork fix lives here**: an
-  SG store's bare `81234567` is prefixed to `6581234567`; before, it was
-  stored unprefixed while an inbound scan stored `6581234567`, forking the
-  `(retailerId, waPhone)` customer. MY's loose arm is byte-identical to before
-  (trunk-0 bridge only — deliberately no bare-NSN fold there).
-- `assertValidMobileForCountry` — the STRICT arm behind every plated field
-  (checkout, buyer repair, seller `waPhone`/`notifyWaPhone`, pickup manager
-  contact): loose bridging + the country's mobile shape, one message.
+- `assertValidWaPhoneForCountry` — the LOOSE bridge: brings local forms to
+  international digits and passes anything else through. **The M3 CRM-fork
+  fix lives here**: an SG store's bare `81234567` is prefixed to
+  `6581234567`; before, it was stored unprefixed while an inbound scan stored
+  `6581234567`, forking the `(retailerId, waPhone)` customer. MY's loose arm is
+  byte-identical to before (trunk-0 bridge only — deliberately no bare-NSN fold
+  there). It was the counter manual bind's whole validator until z8r3fdh274;
+  no mutation calls it directly now — it is the first step of the strict arm,
+  exported for the tests that pin the bridge on its own.
+- `assertValidMobileForCountry` — the STRICT arm: loose bridging + the
+  country's mobile shape, one message. Directly behind every seller plate
+  (`waPhone`/`notifyWaPhone`, pickup manager contact), and behind every MY/SG
+  buyer pick through the buyer validator (checkout, booking, buyer repair,
+  counter manual bind).
 - `normalizeMobileDigits` — the non-throwing sibling the client schemas and
   dirty-checks run.
-- `assertValidMyWaPhone` / `assertValidMyMobile` survive as MY-fixed
-  delegates for Kedaipal's own always-Malaysian numbers (the support line in
-  `convex/lib/contact.ts` stays MY on purpose — platform data, not seller
-  data).
+- `assertValidMyMobile` survives as an MY-fixed delegate for Kedaipal's own
+  always-Malaysian numbers (the support line in `convex/lib/contact.ts` stays
+  MY on purpose — platform data, not seller data). Its loose twin
+  `assertValidMyWaPhone` was deleted in z8r3fdh274 — nothing outside its own
+  tests called it any more.
 
-### Server consumers (each resolves the retailer's country)
+### Server consumers
 
-`orders.create` (retailer row now loads before the phone check),
-`orders.updateBuyerPhone` (via the order's retailer),
-`counterCheckout.bindSessionManualPhone` (loose arm),
+**Seller numbers — each resolves the retailer's country:**
 `retailers.createRetailer` (**the same-call `args.country`** — the row doesn't
 exist yet), `retailers.updateSettings` (`args.country ?? retailer.country ??
 "MY"`, so "switch to SG + save the SG number" in one call validates
 coherently), and `pickupLocations` create/update (manager contact — audit M9).
+
+**Buyer numbers — judged by the picked country** (the optional
+`waDialCountry` arg; absent = the retailer's country, so older clients are
+unchanged — see [`phone-numbers.md` § The server contract](./phone-numbers.md#the-server-contract)):
+`orders.create` (the retailer row loads before the phone check — its country
+is the default), `bookings.requestBooking`, `orders.updateBuyerPhone` (via the
+order's retailer), and `counterCheckout.bindSessionManualPhone` — the loose arm
+until z8r3fdh274, which let MY landlines and 8–15-digit junk through and
+stored a bare MY national number unprefixed.
+
 The WABA send path is phone-agnostic (sends whatever's stored) and was
 verified to re-validate nothing.
 
@@ -231,34 +270,49 @@ verified to re-validate nothing.
   untouched call sites compile unchanged): SG flag SVG, `+65` plate,
   `MOBILE_PLACEHOLDER` record ("9123 4567"). The plate remains a promise —
   every call site threads the same retailer country the save path validates
-  by. Threaded at: storefront checkout (retailer payload), the track page's
-  number repair (`order.retailerCountry`), Settings → WhatsApp contact +
-  WA-order-alerts card + pickup-point manager field, onboarding (reacts live
-  to the country picker), and the admin Onboard-client card (follows its
-  toggle).
+  by. Threaded at: Settings → WhatsApp contact + WA-order-alerts card +
+  pickup-point manager field, onboarding (reacts live to the country picker),
+  and the admin Onboard-client card (follows its toggle). The two buyer fields
+  that wore it — storefront checkout and the track page's repair — moved to
+  the buyer plate (`BuyerPhonePrefix`/`BuyerPhoneInput`) in z8r3fdh274; the
+  retailer country (retailer payload / `order.retailerCountry`) is still
+  threaded there, as the picker's default.
 - `src/lib/schemas.ts`: `waPhoneCheckoutSchema` / `waPhoneFormOptionalSchema` /
-  `settingsWaPhoneFormSchema` / `checkoutFormSchema` are now
-  `Record<Country, schema>` maps built from the server's own
-  patterns/messages/normalizer.
+  `settingsWaPhoneFormSchema` are `Record<Country, schema>` maps built from the
+  server's own patterns/messages/normalizer — seller-side since z8r3fdh274
+  (the `waPhoneCheckoutSchema` name is historical). `checkoutFormSchemaFor`
+  judges the buyer's number with `parseBuyerWaPhone` against the picked
+  country.
 - `src/lib/phone.ts`: re-exports `normalizeMobileDigits`;
-  `toNationalPhoneInput(value, country)` peels only the plate's own dial code
-  (M5 — a stored `6591234567` renders as `9123 4567` beside a `+65` plate),
-  and a number from the *other* country falls through as bare digits so a
-  country switch never silently reshapes a stored value.
+  `toNationalPhoneInput(value, country)` seeds **seller** fields only (a buyer
+  field has no single plate to peel). It peels only the plate's own dial code
+  from a recognised mobile (M5 — a stored `6591234567` renders as `9123 4567`
+  beside a `+65` plate); a number from the *other* country, or an MY/SG
+  landline, falls through as bare digits so a country switch never silently
+  reshapes a stored value.
 - `src/lib/format.ts`: `formatMyMobile` → `formatMobile` with an SG grouping
-  arm (`6591234567` → `+65 9123 4567`). Display keys off the STORED digits,
-  not a country parameter — a stored number already says what it is, so the
-  checkout echo / failed-push card / alerts card stay truthful even for a
-  number saved before a country switch. Same for the hand-mirrored
-  `formatPhone` pair (`src/lib/customer.ts` + `convex/lib/customer.ts`, audit
-  M7 — both updated).
-- Counter manual bind stays **loose and plate-less** (cashiers key foreign
-  numbers); its helper copy + placeholder are country-aware records.
+  arm (`6591234567` → `+65 9123 4567`); any other country reads `+CC NATIONAL`
+  since z8r3fdh274. Display keys off the STORED digits, not a country
+  parameter — a stored number already says what it is, so the checkout echo /
+  failed-push card / alerts card stay truthful even for a number saved before a
+  country switch. Same for `formatPhone` — a hand-mirrored pair
+  (`src/lib/customer.ts` + `convex/lib/customer.ts`, audit M7) until
+  z8r3fdh274 made it one implementation in `convex/lib/customer.ts` that
+  `src/lib/customer.ts` re-exports.
+- The counter's manual bind was **loose and plate-less** here, a bare input
+  that took a foreign number with nothing on screen saying so
+  ([`86eyqug8w`](https://app.clickup.com/t/86eyqug8w)). Since z8r3fdh274 it
+  wears the buyer picker like every other buyer field
+  (`src/components/counter/manual-bind-dialog.tsx`).
 
 ### Cross-country rejection copy — `z8r3fdbmc9`
 
-Cross-country numbers stay **rejected** (the no-sniffing rule above is about
-acceptance and is untouched), but the rejection now says what it saw. One
+On seller fields, cross-country numbers stay **rejected** (the no-sniffing rule
+above is about acceptance and is untouched), but the rejection now says what it
+saw. (Buyer fields left this section in z8r3fdh274: the buyer picks the
+country, and a buyer's MY/SG rejection points at the picker with a one-tap
+**Switch to Singapore (+65)** instead — see
+[`phone-numbers.md`](./phone-numbers.md#the-picker).) One
 author, `mobileRejectionMessage` in `convex/lib/slug.ts`: when the refused
 digits cleanly match the OTHER supported country (`otherCountryMobile` —
 detection for copy, never for acceptance), the message becomes the
@@ -268,11 +322,13 @@ can't drift.
 
 Three copy tiers, by what fix the reader can reach:
 
-- **Neutral** (the shared schemas — buyer checkout, track repair, alerts
-  card, pickup manager field): *"That looks like a Singapore mobile number
-  (+65) — this store takes Malaysian mobile numbers (e.g. 012-345 6789)"*.
-  No fix path, because the same schema serves buyers who can't change the
-  store's country.
+- **Neutral** (the shared seller schemas — alerts card, pickup manager
+  field): *"That looks like a Singapore mobile number (+65) — this store takes
+  Malaysian mobile numbers (e.g. 012-345 6789)"*. No fix path, because the
+  person typing may not be the one who can change the store's country. Until
+  z8r3fdh274 the same schema also served buyer checkout and the track repair,
+  which is where the rule came from; buyers now get picker-pointing copy
+  instead.
 - **Settings contact card** (`settingsWaPhoneFormSchema`, pointed): names
   the Store tab. This is home-checklist step 1 — the first field a store
   created on the wrong country funnels into, so the copy names the cause
@@ -423,12 +479,22 @@ currency (or a mixed flag) is the real fix.
 
 - `convex/lib/contact.ts` — Kedaipal's own support line (platform, not seller
   data).
-- **Lalamove** (`toLalamoveMyPhone`) — the integration is Lalamove MALAYSIA
-  and validates area codes per market; `6581234567` → `null` routes dispatch
-  to the seller-contact fallback instead of a 422. Pinned by a regression test
-  in `convex/lib/lalamove.test.ts` so a future sweep can't "fix" it.
-- Rider copy in `src/lib/dispatch-block.ts` / the Lalamove error strings — the
-  `+60` requirement there is Lalamove-true.
+
+Two entries used to sit here and no longer belong:
+
+- **Courier contact numbers** are per market, not MY. `toLalamoveMyPhone`
+  became `toLalamoveContactPhone(phone, market)` when Lalamove opened SG
+  (z8r3fdch3r), and since z8r3fdh274 both couriers share the provider-neutral
+  `toDomesticContactPhone` (`convex/lib/courierContact.ts`): a contact must
+  come from the booking's own market (+60 in MY, +65 in SG), and a foreign
+  buyer number routes dispatch to the store's number with the buyer's real one
+  in the notes — never a 422. Regression tests in `convex/lib/lalamove.test.ts`
+  and `convex/lib/courierContact.test.ts` keep a future "accept everything"
+  sweep out. See
+  [`phone-numbers.md` § Couriers](./phone-numbers.md#couriers--the-stores-number-when-the-buyers-is-foreign).
+- **Rider copy** in `src/lib/dispatch-block.ts` and the Lalamove error strings
+  is market-neutral (`country_unsupported`, `no_seller_phone`, `bad_phone`) or
+  names the store's own market (`riderContactFallbackCopy`).
 
 ## Payment rails — `86eyph341`
 
@@ -544,3 +610,13 @@ the schema/copy/flag records in `src/lib/schemas.ts`, `src/lib/format.ts`, and
 `STRICT_ADDRESS_SCHEMAS` + the server `assertValidState` switch) and widen the
 inline `v.union(v.literal(…))` country validators on `retailers` and
 `google.autocompleteAddress`.
+
+**Buyer dial countries are a separate table.** `convex/lib/dialCodes.ts` is
+generated from libphonenumber and already lists every country a buyer's number
+can come from, the new one included — adding a STORE country needs no change
+to it (see [`phone-numbers.md` § Two kinds of "country"](./phone-numbers.md#two-kinds-of-country)).
+The `Record<Country, …>` maps z8r3fdh274 added — `NEARBY_DIAL_COUNTRIES`
+(`convex/lib/buyerPhone.ts`), `DOMESTIC_PHONE` (`convex/lib/courierContact.ts`),
+`MARKET_NUMBER_ADJECTIVE` (`src/lib/dispatch-block.ts`) and `COUNTRY_NAME_MS`
+(`src/lib/overseas-courier-note.ts`) — surface with the rest of the compile
+errors.

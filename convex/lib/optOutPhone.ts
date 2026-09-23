@@ -8,7 +8,11 @@
  * STOP, the stored order number for a checkout — or an opt-out suppresses
  * nothing while the panel claims it does (PR #191 review). This is the one
  * phone field in the app with no store behind it and no picker beside it, so
- * the arms are tried in a fixed order, most specific first:
+ * the arms are tried in a fixed order, most specific first — on the typed
+ * text after `cleanPhoneInput` (`./phoneDial`), the same cleaning every buyer
+ * field gets, so a number pasted out of WhatsApp (wrapped in invisible bidi
+ * marks) or written in another script's digits (`٠١٢…`, full-width `０１２…`)
+ * keys exactly as it would at checkout instead of losing its `+` or its digits:
  *
  *   1. MY strict, 2. SG strict (`assertValidMobileForCountry`) — byte-identical
  *      to the MY/SG-only panel: every local spelling (`012-345 6789`,
@@ -33,7 +37,7 @@
 
 import { parseBuyerWaPhone } from "./buyerPhone";
 import { COUNTRIES, DEFAULT_COUNTRY } from "./country";
-import type { DialIso } from "./phoneDial";
+import { cleanPhoneInput, type DialIso } from "./phoneDial";
 import {
 	assertValidMobileForCountry,
 	MOBILE_EXAMPLE,
@@ -68,10 +72,15 @@ export type OptOutPhone = {
  * throw.
  */
 export function readOptOutPhone(raw: string): OptOutPhone | null {
+	// Cleaned BEFORE any arm: the strict arms strip every non-ASCII digit, so a
+	// script digit would vanish there and a different number — or none — would
+	// be keyed; and a bidi mark in front of a `00` would hide the international
+	// prefix from the check below.
+	const typed = cleanPhoneInput(raw).trim();
 	for (const country of COUNTRIES) {
 		try {
 			return {
-				digits: assertValidMobileForCountry(raw, country),
+				digits: assertValidMobileForCountry(typed, country),
 				iso: country,
 			};
 		} catch {
@@ -80,7 +89,6 @@ export function readOptOutPhone(raw: string): OptOutPhone | null {
 	}
 	// Arm 3 keeps the prefix that was typed; arm 4 reads bare digits as if a
 	// `+` had been typed in front of them.
-	const typed = raw.trim();
 	const international =
 		typed.startsWith("+") || typed.startsWith("00")
 			? typed

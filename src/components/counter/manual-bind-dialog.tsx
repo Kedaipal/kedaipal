@@ -33,9 +33,11 @@ import { BuyerPhoneCountrySwitch, BuyerPhoneInput } from "../ui/my-phone-input";
  * country picker defaulting to the store's country, judged by
  * `parseBuyerWaPhone` — the same parser `bindSessionManualPhone` runs — against
  * the country PICKED. A Bruneian tourist or a UK visitor is one tap on the
- * plate (or one `+CC` typed) away, and the rejection names its reason under
- * the field, with a one-tap switch when the digits fit the other supported
- * country. See docs/counter-checkout.md §Manual entry.
+ * plate (or one `+CC` typed) away — a hint under the field says so. A
+ * rejection takes the hint's place, and names the same way out ("…or tap +60
+ * to change the country"), with a one-tap switch when the digits fit the other
+ * supported country. See docs/counter-checkout.md
+ * §Manual entry.
  *
  * Its own component (it lived inline in `app.checkout.tsx`) so the picker,
  * the inline rejection and the reset-on-close have a test.
@@ -184,7 +186,9 @@ function ManualBindForm({
 				</label>
 				<BuyerPhoneInput
 					id="manual-bind-phone"
-					aria-describedby="manual-bind-phone-hint"
+					aria-describedby={
+						rejection ? "manual-bind-phone-error" : "manual-bind-phone-hint"
+					}
 					// The cashier is keying SOMEONE ELSE's number — the plate's `tel`
 					// default would have the browser offer the seller's own.
 					autoComplete="off"
@@ -202,9 +206,14 @@ function ManualBindForm({
 					// Matches the name field's 48px row above it.
 					className="min-h-12"
 				/>
+				{/* One line under the field: the picker hint, or — once the number
+				    is refused — the reason in its place. The buyer rejection names
+				    the picker itself ("…or tap +60 to change the country"), so the
+				    likeliest refusal here, a visitor's number keyed without its
+				    code, still points at the way out; saying it twice would not. */}
 				{rejection ? (
 					<p
-						id="manual-bind-phone-hint"
+						id="manual-bind-phone-error"
 						className="text-xs font-medium text-destructive"
 					>
 						{rejection.message}
@@ -221,6 +230,7 @@ function ManualBindForm({
 					<BuyerPhoneCountrySwitch
 						suggest={rejection.suggest}
 						onSwitch={setPickedDialCountry}
+						inputId="manual-bind-phone"
 					/>
 				) : null}
 			</div>

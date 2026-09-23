@@ -107,7 +107,9 @@ describe("BuyerPhoneRepairForm — saving", () => {
 		save();
 		expect(state.update).not.toHaveBeenCalled();
 		expect(
-			screen.getByText("Enter a Malaysian mobile number (e.g. 012-345 6789)"),
+			screen.getByText(
+				"Enter a Malaysian mobile number (e.g. 012-345 6789), or tap +60 to change the country",
+			),
 		).toBeTruthy();
 		expect(phoneInput().getAttribute("aria-invalid")).toBe("true");
 		// Inline, not a toast: the reason sits under the field it's about.
@@ -140,10 +142,15 @@ describe("BuyerPhoneRepairForm — saving", () => {
 				"That looks like a Singapore mobile number — switch the country to +65",
 			),
 		).toBeTruthy();
-		fireEvent.click(
-			screen.getByRole("button", { name: "Switch to Singapore (+65)" }),
-		);
+		const switchButton = screen.getByRole("button", {
+			name: "Switch to Singapore (+65)",
+		});
+		switchButton.focus();
+		fireEvent.click(switchButton);
 		expect(picker().value).toBe("SG");
+		// The button unmounts with the fix — focus lands back in the number,
+		// not at the top of the page.
+		expect(document.activeElement).toBe(phoneInput());
 		save();
 		await waitFor(() => expect(state.update).toHaveBeenCalled());
 		expect(state.update.mock.calls[0]?.[0]).toMatchObject({

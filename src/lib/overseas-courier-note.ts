@@ -10,8 +10,13 @@
  * door, so the buyer is told where they choose delivery — never enforced
  * silently.
  *
- * What it must NOT say: that order updates may not reach them. WhatsApp
- * reaches every country; only the rider's phone call is rerouted.
+ * What it must NOT say, either way round:
+ *  - that order updates may not reach them — WhatsApp reaches every country;
+ *    only the rider's phone call is rerouted;
+ *  - that updates "still come" to their WhatsApp — an order sends the buyer
+ *    ONE message (docs/one-message-per-order.md), and some stores send none,
+ *    so a stream of updates is a promise nothing keeps. The store can still
+ *    reach them on WhatsApp; the order page is where every update lives.
  *
  * Renders nothing on the local-buyer happy path — an MY buyer at an MY store
  * sees exactly the page they saw before.
@@ -50,10 +55,11 @@ export function overseasCourierNote(args: {
 
 	const { storeName, storeCountry } = args;
 	if (args.locale === "ms") {
-		return `Nombor WhatsApp anda dari luar ${COUNTRY_NAME_MS[storeCountry]}, jadi penghantar akan menghubungi ${storeName}, bukan anda. Kemas kini pesanan tetap dihantar ke WhatsApp anda.`;
+		return `Nombor WhatsApp anda dari luar ${COUNTRY_NAME_MS[storeCountry]}, jadi penghantar akan menghubungi ${storeName}, bukan anda. ${storeName} masih boleh menghubungi anda di WhatsApp, dan halaman pesanan anda menunjukkan setiap kemas kini.`;
 	}
 	const country = COUNTRY_LABELS[storeCountry];
-	return args.collectsFromCustomer
-		? `Your WhatsApp number is from outside ${country}, so the rider collecting from you will contact ${storeName} instead of you. Order updates still come to your WhatsApp.`
-		: `Your WhatsApp number is from outside ${country}, so the rider will contact ${storeName} instead of you. Order updates still come to your WhatsApp.`;
+	const rider = args.collectsFromCustomer
+		? "the rider collecting from you"
+		: "the rider";
+	return `Your WhatsApp number is from outside ${country}, so ${rider} will contact ${storeName} instead of you. ${storeName} can still reach you on WhatsApp, and your order page shows every update.`;
 }

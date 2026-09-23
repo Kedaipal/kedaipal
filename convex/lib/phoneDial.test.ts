@@ -4,6 +4,7 @@ import { COUNTRIES, COUNTRY_DIAL_CODE } from "./country";
 import { DIAL_ROWS } from "./dialCodes";
 import { DIAL_COUNTRY_NAMES } from "./dialCountryNames";
 import {
+	cleanPhoneInput,
 	detectTypedDialCode,
 	dialRow,
 	E164_MAX_DIGITS,
@@ -90,6 +91,11 @@ describe("splitStoredPhone / formatInternational", () => {
 		expect(formatInternational("819012345678")).toBe("+81 9012345678");
 		expect(formatInternational("")).toBeNull();
 	});
+	test("a malformed legacy row isn't dressed up as a foreign number (review)", () => {
+		// A bare MY NSN stored before normalization: "1" is +1, but 159399791 is
+		// no US length — render it plainly rather than as "+1 159399791".
+		expect(formatInternational("1159399791")).toBeNull();
+	});
 });
 
 describe("detectTypedDialCode — the picker's auto-switch", () => {
@@ -121,5 +127,18 @@ describe("detectTypedDialCode — the picker's auto-switch", () => {
 	test("an unknown code or stray character gives up", () => {
 		expect(detectTypedDialCode("+999 1", "MY")).toBeNull();
 		expect(detectTypedDialCode("+a1", "MY")).toBeNull();
+	});
+});
+
+describe("cleanPhoneInput", () => {
+	test("strips bidi marks and maps script digits to ASCII", () => {
+		expect(cleanPhoneInput("‪+44 7911‬")).toBe("+44 7911");
+		expect(cleanPhoneInput("٠١٢٣")).toBe("0123");
+		expect(cleanPhoneInput("۰۱۲")).toBe("012");
+		expect(cleanPhoneInput("０１２")).toBe("012");
+		expect(cleanPhoneInput("+60 12-345")).toBe("+60 12-345");
+	});
+	test("the auto-switch sees a + behind a bidi mark", () => {
+		expect(detectTypedDialCode("‪+44 7911 123456", "MY")?.iso).toBe("GB");
 	});
 });

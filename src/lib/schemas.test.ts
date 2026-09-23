@@ -221,14 +221,19 @@ describe("checkoutFormSchemaFor — the buyer phone follows the picked country",
 			.filter((issue) => issue.path.join(".") === "waPhone")
 			.map((issue) => issue.message);
 
-	it("a local buyer who never touches the picker is judged exactly as before", () => {
+	// Acceptance is the strict arm's, unchanged; only the refusal copy moved —
+	// "this store takes Malaysian numbers" stopped being true of a buyer, so it
+	// names the plate a foreign buyer has to tap.
+	it("a local buyer who never touches the picker is judged as before; the refusal names the picker", () => {
 		const schema = checkoutFormSchemaFor("MY");
 		expect(schema.safeParse(pickupForm("012-345 6789", "MY")).success).toBe(
 			true,
 		);
 		expect(
 			phoneMessages(schema.safeParse(pickupForm("03-1234 5678", "MY"))),
-		).toEqual(["Enter a Malaysian mobile number (e.g. 012-345 6789)"]);
+		).toEqual([
+			"Enter a Malaysian mobile number (e.g. 012-345 6789), or tap +60 to change the country",
+		]);
 	});
 
 	it("any picked country is accepted — an SG buyer at an MY store, a UK buyer", () => {
@@ -264,7 +269,9 @@ describe("checkoutFormSchemaFor — the buyer phone follows the picked country",
 			phoneMessages(
 				checkoutFormSchemaFor("SG").safeParse(pickupForm("7911 12", "GB")),
 			)[0],
-		).toMatch(/United Kingdom mobile number \(\+44\), or change the country/);
+		).toBe(
+			"Enter a valid United Kingdom mobile number, or tap +44 to change the country",
+		);
 	});
 
 	it("an empty number and an unknown pick are both refused on the phone field", () => {

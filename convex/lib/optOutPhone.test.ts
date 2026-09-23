@@ -90,6 +90,44 @@ describe("readOptOutPhone — any other country (z8r3fdh274)", () => {
 	});
 });
 
+// The admin pastes numbers out of WhatsApp and the register. The input gets
+// the same cleaning as every buyer field (`cleanPhoneInput`), before ANY arm —
+// the strict MY/SG arms included — so the key can't depend on invisible marks
+// or on which script the digits were written in.
+describe("readOptOutPhone — pasted and non-ASCII input keys like typed input", () => {
+	test("bidi marks from a WhatsApp/contacts copy are ignored", () => {
+		for (const [pasted, key] of [
+			["\u202A+44 7911 123456\u202C", "447911123456"],
+			// A mark in front of `00` hid the international prefix: the bare
+			// digits then read as `+0044…`, which no calling code starts.
+			["\u202A0044 7911 123456\u202C", "447911123456"],
+			["\u2066+65 9123 4567\u2069", "6591234567"],
+			["\u200E012-345 6789", "60123456789"],
+		] as const) {
+			expect(canonicalOptOutPhone(pasted), JSON.stringify(pasted)).toBe(key);
+		}
+	});
+
+	test("script and full-width digits read as the same number — on the strict arms too", () => {
+		// Arabic-Indic, Devanagari and full-width forms of numbers the ASCII tests
+		// above key. Unmapped, the strict arms' non-digit strip DROPS them.
+		expect(readOptOutPhone("٠١٢-٣٤٥ ٦٧٨٩")).toEqual({
+			digits: "60123456789",
+			iso: "MY",
+		});
+		expect(readOptOutPhone("९१२३ ४५६७")).toEqual({
+			digits: "6591234567",
+			iso: "SG",
+		});
+		expect(readOptOutPhone("＋４４ ７９１１ １２３４５６")).toEqual({
+			digits: "447911123456",
+			iso: "GB",
+		});
+		// Read, then judged like any other input: a landline stays refused.
+		expect(canonicalOptOutPhone("٠٣-١٢٣٤ ٥٦٧٨")).toBeNull();
+	});
+});
+
 describe("OPT_OUT_PHONE_MESSAGE", () => {
 	// Copy that demonstrates a format the save then refuses is worse than none.
 	test("every example it shows is one the panel accepts", () => {

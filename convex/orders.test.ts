@@ -9141,7 +9141,42 @@ describe("orders — buyer numbers from any country (z8r3fdh274)", () => {
 				api.orders.create,
 				myOrderArgs(retailer._id, productId, "07911 1234", "GB"),
 			),
-		).rejects.toThrow(/valid United Kingdom mobile number \(\+44\)/);
+		).rejects.toThrow(
+			/valid United Kingdom mobile number, or tap \+44 to change the country/,
+		);
+	});
+
+	test("a Malaysian number under a neighbour's pick is refused with the fix, never stored as that country's", async () => {
+		// Thailand sits in the picker's Nearby group, a slip of the thumb from
+		// Malaysia, and "012-345 6789" without its 0 is a Thai-LENGTH number. Only a length vouches for it
+		// there, and it is plainly a Malaysian mobile: a wrong pick, not a new
+		// Thai range — the order would otherwise store 66123456789 and the
+		// confirmation push would go to a stranger.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await expect(
+			t.mutation(
+				api.orders.create,
+				myOrderArgs(retailer._id, productId, "012-345 6789", "TH"),
+			),
+		).rejects.toThrow(
+			"That looks like a Malaysian mobile number — switch the country to +60",
+		);
+	});
+
+	test("a calling code typed without its + is peeled once — the mobile pattern decides, not the length", async () => {
+		// "628123456789" under Indonesia is 12 digits, itself a valid Indonesian
+		// length; only the mobile pattern (Indonesian mobiles start 8) says the
+		// 62 is the code the wa.me habit writes, not part of the number.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(
+			api.orders.create,
+			myOrderArgs(retailer._id, productId, "628123456789", "ID"),
+		);
+		expect(await storedPhone(t, shortId)).toBe("628123456789");
 	});
 
 	test("no dial country keeps the store country's arm — a local MY number still lands", async () => {

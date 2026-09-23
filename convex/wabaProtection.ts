@@ -47,6 +47,7 @@ import {
 	mytMonthKey,
 } from "./lib/retention";
 import { configuredTemplates } from "./lib/whatsapp";
+import { cleanPhoneInput } from "./lib/phoneDial";
 import { normalizeWaPhone } from "./lib/slug";
 import { resolveAccess, loadSubscription } from "./subscriptions";
 import {
@@ -555,7 +556,9 @@ async function findLiveOptOut(
 	const canonical = canonicalOptOutPhone(raw);
 	const row = canonical ? await liveOptOut(ctx, canonical) : null;
 	if (row) return { canonical, row };
-	const exact = normalizeWaPhone(raw);
+	// Cleaned first, like every other arm — script digits would otherwise be
+	// dropped by the digit strip and look up a different number.
+	const exact = normalizeWaPhone(cleanPhoneInput(raw));
 	return {
 		canonical,
 		row: exact && exact !== canonical ? await liveOptOut(ctx, exact) : null,

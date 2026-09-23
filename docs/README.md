@@ -29,12 +29,15 @@ How the product actually works. Read in this order.
 | [delivery-live-pricing.md](./delivery-live-pricing.md) | **What the buyer pays for delivery when a store books couriers live:** the provider-aware rule (quote every armed provider, charge the higher), why min-pricing was rejected, cold-cart handling, and the cross-currency guard. |
 | [delivery-lalamove.md](./delivery-lalamove.md) | Intra-city rider booking: live checkout quotes, the confirm-and-dispatch flow, webhook-driven status, and the disabled-with-reason taxonomy. |
 | [delivery-delyva.md](./delivery-delyva.md) | Nationwide parcel + cold-chain courier booking: one-key connect, the service picker, webhooks, demo/sandbox detection, and the per-country tenancy facts. |
+| [counter-checkout.md](./counter-checkout.md) | In-person orders at the counter: the store-QR scan, the manual-number bind (any country) and anonymous cash sales, all converging on one `buyer_identified` session; the build screen, receipt and invoice. |
 | [claim-links.md](./claim-links.md) | Claim links (TikTok Live): seller-keyed, price-locked checkout the buyer completes under a fixed window; resend guard, expiry, commit rules. |
 | [powered-by-badge.md](./powered-by-badge.md) | The buyer-facing "Powered by Kedaipal" growth loop: which surfaces carry the badge (storefront, order page, claim page, receipt PDF, despatch label, WhatsApp line), the one link builder + per-surface tags, and how a click lands on `retailers.signupSource` / `signupReferrerId`. |
 | [despatch-labels.md](./despatch-labels.md) | The printed parcel label: per-store template config, A6 vs A4 4-up, single + bulk + one-click "ready to ship" printing, skip rules, and the in-repo QR / Code 128 encoders. |
 | [event-rsvp.md](./event-rsvp.md) | Fixed-date events guests RSVP to: the ONE new primitive (`products.event`), why an event is neither a booking nor a new product kind, the checkout date lock, the in-transaction seat cap, the live headcount, the self-retiring listing, and what "free" means (`isFreeOrder`). |
 | [product-variants.md](./product-variants.md) | Option-axes + variant-rows model: `productVariants` table, storefront pickers + grey-out, per-variant made-to-order + mockup-approval flags, variant-grid editor. |
 | [landing-video-demo.md](./landing-video-demo.md) | The five-seller demo on `/` in two cuts (16:9, and 9:16 for a phone held upright): why it sits directly under the hero, the JS source swap and why it's a remount, the encode recipe for both cuts, the `preload="none"` loading posture, the mute control, and the player's autoplay/pause/reduced-motion rules. |
+| [sg-lite.md](./sg-lite.md) | Singapore stores: the one `retailers.country` switch, currency born from the country, the SG address variant, the MY/SG strict phone arms, switching an existing store's country, and the per-country payment rails. |
+| [phone-numbers.md](./phone-numbers.md) | **Whose number it is decides the rule:** buyer numbers from any country (the plate's country picker, judged by the picked country), seller numbers locked to the store's country, Meta's inbound numbers loose; the generated dial table; and what couriers, HitPay, opt-outs, display and search do with a foreign number. |
 | [validation-and-rate-limits.md](./validation-and-rate-limits.md) | Trust boundaries, rate limits, input validation, mirrored validators, legal consent. |
 
 ## Architecture & security
@@ -42,6 +45,7 @@ How the product actually works. Read in this order.
 | Doc | What it covers |
 |---|---|
 | [messaging-channels.md](./messaging-channels.md) | ChannelAdapter seam — WhatsApp as one of N channels; how a 2nd channel lands. |
+| [waba-protection.md](./waba-protection.md) | The gateway that keeps the shared WhatsApp number safe: the category policy (transactional bypasses everything), kill switch, per-seller caps, global opt-outs and the admin opt-out panel, and the quality auto-throttle. |
 | [vendor-identity.md](./vendor-identity.md) | The three store IDs (`userId` / `slug` / `_id`) and what is unique; **reserved handles** — the route-tree namespace a slug can never take, one shared module, machine-checked. |
 | [whatsapp-webhook-security.md](./whatsapp-webhook-security.md) | Inbound webhook signature verification (HMAC-SHA256), fail-closed. |
 | [dependency-security.md](./dependency-security.md) | `pnpm audit` policy, current advisory posture, why Clerk + TanStack are exact-pinned. |

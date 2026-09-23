@@ -9,6 +9,7 @@ import {
 import { COUNTRIES, type Country } from "../../../convex/lib/country";
 import { waPhoneCheckoutSchema } from "../../lib/schemas";
 import {
+	applyBuyerPhoneKeystroke,
 	BuyerPhoneCountrySwitch,
 	BuyerPhoneInput,
 	buyerPhonePlaceholder,
@@ -123,14 +124,16 @@ describe("BuyerPhoneInput", () => {
 	/** A controlled host, like every real caller: value + pick in state. */
 	function Host({
 		storeCountry,
+		initialValue = "",
 		onChange,
 		onDialCountryChange,
 	}: {
 		storeCountry: Country;
+		initialValue?: string;
 		onChange?: (value: string) => void;
 		onDialCountryChange?: (iso: DialIso) => void;
 	}) {
-		const [value, setValue] = useState("");
+		const [value, setValue] = useState(initialValue);
 		const [dialCountry, setDialCountry] = useState<DialIso>(storeCountry);
 		return (
 			<BuyerPhoneInput
@@ -167,6 +170,48 @@ describe("BuyerPhoneInput", () => {
 		expect(screen.getByRole("textbox").getAttribute("placeholder")).toBe(
 			MOBILE_PLACEHOLDER[country],
 		);
+	});
+
+	it("names the picker for whose number it is", () => {
+		// The counter keys someone else's number; "your" would be wrong there.
+		render(
+			<BuyerPhoneInput
+				value=""
+				onChange={() => {}}
+				storeCountry="MY"
+				dialCountry="MY"
+				onDialCountryChange={() => {}}
+				countryLabel="Country of the buyer's WhatsApp number"
+			/>,
+		);
+		expect(
+			screen.getByRole("combobox", {
+				name: "Country of the buyer's WhatsApp number",
+			}),
+		).toBeDefined();
+		expect(
+			screen.queryByRole("combobox", {
+				name: "Country of your WhatsApp number",
+			}),
+		).toBeNull();
+	});
+
+	it("shows keyboard focus on the plate — the select itself is invisible", () => {
+		// A Tab onto an opacity-0 select would otherwise land nowhere visible.
+		// The wash span right after it is its `peer`, and paints the ring.
+		render(<Host storeCountry="MY" />);
+		const select = picker();
+		expect(select.classList.contains("peer")).toBe(true);
+		const wash = select.nextElementSibling as HTMLElement;
+		expect(wash.getAttribute("aria-hidden")).toBe("true");
+		for (const cls of [
+			"peer-focus-visible:bg-muted",
+			"peer-focus-visible:ring-2",
+			"peer-focus-visible:ring-ring",
+			"peer-focus-visible:ring-inset",
+		]) {
+			expect(wash.classList.contains(cls)).toBe(true);
+		}
 	});
 
 	it("lists the store's country first", () => {
@@ -229,6 +274,50 @@ describe("BuyerPhoneInput", () => {
 		expect((screen.getByRole("textbox") as HTMLInputElement).value).toBe(
 			"90-1234-5678",
 		);
+	});
+
+	it("a code typed from the start switches once it's complete", () => {
+		const onDialCountryChange = vi.fn();
+		render(
+			<Host storeCountry="MY" onDialCountryChange={onDialCountryChange} />,
+		);
+		const input = screen.getByRole("textbox") as HTMLInputElement;
+		fireEvent.change(input, { target: { value: "+" } });
+		fireEvent.change(input, { target: { value: "+4" } });
+		// "+4" is no country's code yet — nothing moves on a half-typed one.
+		expect(onDialCountryChange).not.toHaveBeenCalled();
+		expect(input.value).toBe("+4");
+		fireEvent.change(input, { target: { value: "+44" } });
+		expect(onDialCountryChange).toHaveBeenCalledWith("GB");
+		expect(picker().value).toBe("GB");
+		// The code went to the plate; the box is left for the national number.
+		expect(input.value).toBe("");
+	});
+
+	it("a paste over what was there switches — the code arrived with the number", () => {
+		render(<Host storeCountry="MY" initialValue="12-345" />);
+		const input = screen.getByRole("textbox") as HTMLInputElement;
+		fireEvent.change(input, { target: { value: "+81 90-1234-5678" } });
+		expect(picker().value).toBe("JP");
+		expect(input.value).toBe("90-1234-5678");
+	});
+
+	it("a '+' slipped in front of a local number moves nothing and eats no digit", () => {
+		// Calling codes are prefix-free: read as typed, "+12-345 6789" is "+1"
+		// — the plate would jump to the United States and swallow the 1.
+		const onDialCountryChange = vi.fn();
+		render(
+			<Host
+				storeCountry="MY"
+				initialValue="12-345 6789"
+				onDialCountryChange={onDialCountryChange}
+			/>,
+		);
+		const input = screen.getByRole("textbox") as HTMLInputElement;
+		fireEvent.change(input, { target: { value: "+12-345 6789" } });
+		expect(onDialCountryChange).not.toHaveBeenCalled();
+		expect(picker().value).toBe("MY");
+		expect(input.value).toBe("+12-345 6789");
 	});
 
 	it("bare digits are never sniffed — the pick stays where it was", () => {
@@ -312,7 +401,13 @@ describe("BuyerPhoneCountrySwitch", () => {
 
 	it("names the country it switches to and hands it back on tap", () => {
 		const onSwitch = vi.fn();
-		render(<BuyerPhoneCountrySwitch suggest="SG" onSwitch={onSwitch} />);
+		render(
+			<BuyerPhoneCountrySwitch
+				suggest="SG"
+				onSwitch={onSwitch}
+				inputId="wa-phone"
+			/>,
+		);
 		fireEvent.click(
 			screen.getByRole("button", { name: "Switch to Singapore (+65)" }),
 		);
@@ -322,7 +417,12 @@ describe("BuyerPhoneCountrySwitch", () => {
 	it("speaks the store's language on an ms store", () => {
 		const onSwitch = vi.fn();
 		render(
-			<BuyerPhoneCountrySwitch suggest="MY" onSwitch={onSwitch} locale="ms" />,
+			<BuyerPhoneCountrySwitch
+				suggest="MY"
+				onSwitch={onSwitch}
+				locale="ms"
+				inputId="wa-phone"
+			/>,
 		);
 		fireEvent.click(
 			screen.getByRole("button", { name: "Tukar ke Malaysia (+60)" }),
@@ -331,7 +431,71 @@ describe("BuyerPhoneCountrySwitch", () => {
 	});
 
 	it("is never a submit button — tapping it inside a form must not send", () => {
-		render(<BuyerPhoneCountrySwitch suggest="SG" onSwitch={() => {}} />);
+		render(
+			<BuyerPhoneCountrySwitch
+				suggest="SG"
+				onSwitch={() => {}}
+				inputId="wa-phone"
+			/>,
+		);
 		expect(screen.getByRole("button").getAttribute("type")).toBe("button");
+	});
+
+	it("hands focus back to the number — the fix unmounts the button", () => {
+		/** Like every host: the switch shows only while the rejection does. */
+		function Host() {
+			const [switched, setSwitched] = useState(false);
+			return (
+				<>
+					<input id="wa-phone" aria-label="WhatsApp number" />
+					{switched ? null : (
+						<BuyerPhoneCountrySwitch
+							suggest="SG"
+							onSwitch={() => setSwitched(true)}
+							inputId="wa-phone"
+						/>
+					)}
+				</>
+			);
+		}
+		render(<Host />);
+		const button = screen.getByRole("button", {
+			name: "Switch to Singapore (+65)",
+		});
+		button.focus();
+		fireEvent.click(button);
+		expect(screen.queryByRole("button")).toBeNull();
+		expect(document.activeElement).toBe(
+			screen.getByRole("textbox", { name: "WhatsApp number" }),
+		);
+	});
+});
+
+describe("applyBuyerPhoneKeystroke — when a typed code moves the picker", () => {
+	it("a paste that replaces the whole box switches, even at a similar length", () => {
+		// Select-all over "7911 123456" (11 chars) and paste "+60123456789"
+		// (12): no common prefix, everything inserted — the code arrived.
+		expect(
+			applyBuyerPhoneKeystroke("+60123456789", "GB", "7911 123456"),
+		).toEqual({ value: "123456789", dialCountry: "MY" });
+	});
+
+	it("the space typed right after a code the plate absorbed doesn't lead the box", () => {
+		// "+44" moved to the plate and emptied the box; the next keystroke is
+		// the space the buyer types after a country code.
+		expect(applyBuyerPhoneKeystroke(" ", "GB", "")).toEqual({
+			value: "",
+			dialCountry: "GB",
+		});
+		expect(applyBuyerPhoneKeystroke(" 7", "GB", " ")).toEqual({
+			value: "7",
+			dialCountry: "GB",
+		});
+	});
+
+	it("a single + slipped in front of existing digits never switches", () => {
+		expect(
+			applyBuyerPhoneKeystroke("+12-345 6789", "MY", "12-345 6789"),
+		).toEqual({ value: "+12-345 6789", dialCountry: "MY" });
 	});
 });

@@ -61,9 +61,55 @@ describe("parseBuyerWaPhone — any country (z8r3fdh274)", () => {
 		expect(assertValidBuyerWaPhone("0707123456", "CI")).toBe("2250707123456");
 	});
 
-	test("a trunk digit that is part of the number is kept (Russian 8 12 is not a trunk 8)", () => {
-		// 10 digits starting 9: a mobile with no trunk prefix typed.
+	test("Russia's trunk is 8, stripped only when what's left is the number", () => {
 		expect(assertValidBuyerWaPhone("912 345 67 89", "RU")).toBe("79123456789");
+		expect(assertValidBuyerWaPhone("8 912 345 67 89", "RU")).toBe(
+			"79123456789",
+		);
+	});
+
+	test("the calling code typed without + is peeled when the PATTERN says so, not the length (review: ID/NL/AT)", () => {
+		// "62" + a 10-digit Indonesian mobile is itself 12 digits — a valid
+		// Indonesian length — so length alone stored 62628123456789.
+		expect(assertValidBuyerWaPhone("628123456789", "ID")).toBe("628123456789");
+		expect(assertValidBuyerWaPhone("31612345678", "NL")).toBe("31612345678");
+		expect(assertValidBuyerWaPhone("436641234567", "AT")).toBe("436641234567");
+	});
+
+	test("libphonenumber's trunk-parsing rules: Argentina's 15 → mobile 9, Belarus's 8 0", () => {
+		expect(assertValidBuyerWaPhone("011 15-2345-6789", "AR")).toBe(
+			"5491123456789",
+		);
+		expect(assertValidBuyerWaPhone("8 029 491-19-11", "BY")).toBe(
+			"375294911911",
+		);
+	});
+
+	test("a pasted number keeps its + through invisible bidi marks (review)", () => {
+		// WhatsApp and the contacts app wrap a copied number in U+202A…U+202C.
+		expect(parseBuyerWaPhone("\u202A+44 7911 123456\u202C", "MY")).toEqual({
+			ok: true,
+			digits: "447911123456",
+			iso: "GB",
+		});
+		expect(parseBuyerWaPhone("\u2066+81 90-1234-5678\u2069", "MY")).toMatchObject({
+			ok: true,
+			iso: "JP",
+		});
+	});
+
+	test("script and full-width digits are read, never silently dropped (review)", () => {
+		// Arabic-Indic, as a UAE phone shows it.
+		expect(assertValidBuyerWaPhone("٠٥٠١٢٣٤٥٦٧", "AE")).toBe("971501234567");
+		// Full-width, as some IMEs type it.
+		expect(assertValidBuyerWaPhone("０１２－３４５ ６７８９", "MY")).toBe(
+			"60123456789",
+		);
+		// A mixed-script number is read whole, not with a digit missing.
+		expect(parseBuyerWaPhone("+49 1512 345678٩", "MY")).toMatchObject({
+			ok: true,
+			digits: "4915123456789",
+		});
 	});
 
 	test("the calling code typed without its + is peeled, not doubled", () => {
@@ -120,12 +166,12 @@ describe("parseBuyerWaPhone — any country (z8r3fdh274)", () => {
 		expect(result).toEqual({
 			ok: false,
 			message:
-				"Enter a valid Japan mobile number (+81), or change the country",
+				"Enter a valid Japan mobile number, or tap +81 to change the country",
 		});
 	});
 
-	test("never exceeds E.164's 15 digits", () => {
-		// Indonesia's longest mobile NSN is 12 → 14 digits; anything longer fails.
+	test("a number longer than any mobile there is refused", () => {
+		// Indonesia's longest mobile NSN is 12 digits; 15 typed is refused.
 		expect(parseBuyerWaPhone("0812 3456 7890 123", "ID").ok).toBe(false);
 	});
 
@@ -154,11 +200,25 @@ describe("parseBuyerWaPhone — MY/SG keep the strict arm byte for byte", () => 
 		);
 	});
 
-	test("an MY landline is still refused with the MY copy", () => {
+	test("an MY landline is still refused — the MY copy, plus where the picker is", () => {
 		expect(parseBuyerWaPhone("03-1234 5678", "MY")).toEqual({
 			ok: false,
-			message: MOBILE_MESSAGE.MY,
+			message: `${MOBILE_MESSAGE.MY}, or tap +60 to change the country`,
 		});
+	});
+
+	test("a foreign number typed under the default +60 is told where the fix is (review)", () => {
+		for (const typed of ["0812 3456 7890", "07911 123456", "447911123456"]) {
+			const result = parseBuyerWaPhone(typed, "MY");
+			expect(result.ok).toBe(false);
+			if (!result.ok) expect(result.message).toMatch(/tap \+60 to change the country/);
+		}
+	});
+
+	test("a local who writes + before their number is accepted as before (review: byte-identical)", () => {
+		expect(assertValidBuyerWaPhone("+012-345 6789", "MY")).toBe("60123456789");
+		expect(assertValidBuyerWaPhone("+12-345 6789", "MY")).toBe("60123456789");
+		expect(assertValidBuyerWaPhone("+9123 4567", "SG")).toBe("6591234567");
 	});
 
 	test("bare digits of the OTHER supported country are refused — with a one-tap switch", () => {
@@ -181,6 +241,29 @@ describe("parseBuyerWaPhone — MY/SG keep the strict arm byte for byte", () => 
 			ok: false,
 			suggest: "MY",
 		});
+	});
+
+	test("…even under a Nearby neighbour whose LENGTH it happens to fit (review: TH/VN/ID/PH)", () => {
+		// Thailand sits right under Malaysia in the picker. "012-345 6789" is a
+		// valid Thai length but no Thai mobile — it's a wrong pick, not a number.
+		for (const iso of ["TH", "VN", "ID", "PH"] as const) {
+			expect(parseBuyerWaPhone("012-345 6789", iso)).toMatchObject({
+				ok: false,
+				suggest: "MY",
+			});
+		}
+		expect(parseBuyerWaPhone("011-2345 6789", "PH")).toMatchObject({
+			ok: false,
+			suggest: "MY",
+		});
+	});
+
+	test("…but never far away, where the same digits are a real local number (review: Buenos Aires)", () => {
+		// "11 2345-6789" is a Buenos Aires number AND the shape of a Malaysian
+		// 011 mobile. Offering "switch to +60" there would store a stranger's
+		// Malaysian number, so a far pick is judged on its own terms.
+		const result = parseBuyerWaPhone("11 2345-6789", "AR");
+		expect(result).toMatchObject({ ok: true, digits: "541123456789" });
 	});
 });
 
@@ -218,12 +301,12 @@ describe("parseBuyerWaPhone — typed, but not a number", () => {
 	test("letters get the picked country's copy, not 'enter your number'", () => {
 		expect(parseBuyerWaPhone("abc", "MY")).toEqual({
 			ok: false,
-			message: MOBILE_MESSAGE.MY,
+			message: `${MOBILE_MESSAGE.MY}, or tap +60 to change the country`,
 		});
 		expect(parseBuyerWaPhone("abc", "JP")).toEqual({
 			ok: false,
 			message:
-				"Enter a valid Japan mobile number (+81), or change the country",
+				"Enter a valid Japan mobile number, or tap +81 to change the country",
 		});
 	});
 });

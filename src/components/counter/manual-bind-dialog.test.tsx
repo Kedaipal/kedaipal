@@ -58,9 +58,14 @@ function Host({
 }
 
 function openDialog(props: Parameters<typeof Host>[0] = {}) {
-	render(<Host {...props} />);
+	const view = render(<Host {...props} />);
 	fireEvent.click(screen.getByRole("button", { name: "Enter phone number" }));
+	return view;
 }
+
+const MY_REJECTION =
+	"Enter a Malaysian mobile number (e.g. 012-345 6789), or tap +60 to change the country";
+const MY_HINT = "Serving a visitor? Tap +60 to pick their country.";
 
 const picker = () =>
 	screen.getByRole("combobox", {
@@ -92,6 +97,28 @@ describe("ManualBindDialog — the picker", () => {
 		// chevron alone.
 		expect(
 			screen.getByText(`Serving a visitor? Tap ${code} to pick their country.`),
+		).toBeTruthy();
+	});
+
+	it("follows a store country that arrives late — the default is derived, never seeded", () => {
+		// The dashboard retailer reads "MY" until it loads. An SG store's cashier
+		// who opens the dialog in that window must still land on +65.
+		const { rerender } = openDialog({ storeCountry: "MY" });
+		expect(picker().value).toBe("MY");
+		rerender(<Host storeCountry="SG" />);
+		expect(picker().value).toBe("SG");
+		expect(
+			screen.getByText("Serving a visitor? Tap +65 to pick their country."),
+		).toBeTruthy();
+	});
+
+	it("a cashier's pick survives the store country re-rendering under it", () => {
+		const { rerender } = openDialog({ storeCountry: "MY" });
+		fireEvent.change(picker(), { target: { value: "JP" } });
+		rerender(<Host storeCountry="SG" />);
+		expect(picker().value).toBe("JP");
+		expect(
+			screen.getByText("Number from Japan — tap +81 to change it."),
 		).toBeTruthy();
 	});
 
@@ -152,17 +179,13 @@ describe("ManualBindDialog — rejection", () => {
 		typeName("Aiman Hakim");
 		typePhone("123");
 		// Quiet while typing…
-		expect(
-			screen.queryByText("Enter a Malaysian mobile number (e.g. 012-345 6789)"),
-		).toBeNull();
+		expect(screen.queryByText(MY_REJECTION)).toBeNull();
 		expect(
 			screen.getByText("Finish their WhatsApp number to start."),
 		).toBeTruthy();
 		// …then the reason, once the cashier leaves the field.
 		fireEvent.blur(phoneInput());
-		expect(
-			screen.getByText("Enter a Malaysian mobile number (e.g. 012-345 6789)"),
-		).toBeTruthy();
+		expect(screen.getByText(MY_REJECTION)).toBeTruthy();
 		expect(phoneInput().getAttribute("aria-invalid")).toBe("true");
 		expect(startButton().disabled).toBe(true);
 		// Enter doesn't route around the disabled button.
@@ -170,14 +193,31 @@ describe("ManualBindDialog — rejection", () => {
 		expect(state.bind).not.toHaveBeenCalled();
 	});
 
+	it("a rejection takes the hint's place — and still names the way out", () => {
+		// A visitor's UK number keyed without its code, the store's +60 still
+		// on: the likeliest rejection at this counter. The reason replaces the
+		// hint and itself points at the plate, so the fix isn't said twice.
+		openDialog();
+		typeName("Oliver Smith");
+		typePhone("7911 123456");
+		fireEvent.blur(phoneInput());
+		const reason = screen.getByText(MY_REJECTION);
+		expect(reason.textContent).toMatch(/tap \+60 to change the country/);
+		expect(screen.queryByText(MY_HINT)).toBeNull();
+		expect(phoneInput().getAttribute("aria-describedby")).toBe(reason.id);
+		// Once the number is valid the reason goes and the hint is back.
+		typePhone("12-345 6789");
+		expect(screen.queryByText(MY_REJECTION)).toBeNull();
+		const hint = screen.getByText(MY_HINT);
+		expect(phoneInput().getAttribute("aria-describedby")).toBe(hint.id);
+	});
+
 	it("Enter on an unfinished number shows the reason instead of waiting for a blur", () => {
 		openDialog();
 		typeName("Aiman Hakim");
 		typePhone("123");
 		fireEvent.keyDown(phoneInput(), { key: "Enter" });
-		expect(
-			screen.getByText("Enter a Malaysian mobile number (e.g. 012-345 6789)"),
-		).toBeTruthy();
+		expect(screen.getByText(MY_REJECTION)).toBeTruthy();
 		expect(state.bind).not.toHaveBeenCalled();
 	});
 
@@ -205,13 +245,18 @@ describe("ManualBindDialog — rejection", () => {
 			),
 		).toBeTruthy();
 		expect(startButton().disabled).toBe(true);
-		fireEvent.click(
-			screen.getByRole("button", { name: "Switch to Singapore (+65)" }),
-		);
+		const switchButton = screen.getByRole("button", {
+			name: "Switch to Singapore (+65)",
+		});
+		switchButton.focus();
+		fireEvent.click(switchButton);
 		expect(picker().value).toBe("SG");
 		expect(
 			screen.queryByRole("button", { name: "Switch to Singapore (+65)" }),
 		).toBeNull();
+		// The button unmounts with the fix — focus lands back in the number,
+		// not on the dialog's frame.
+		expect(document.activeElement).toBe(phoneInput());
 		expect(startButton().disabled).toBe(false);
 		fireEvent.click(startButton());
 		await waitFor(() => expect(state.bind).toHaveBeenCalled());

@@ -140,6 +140,7 @@ export function BuyerPhoneRepairForm({
 							suggest={rejection.suggest}
 							onSwitch={setPickedDialCountry}
 							locale={locale}
+							inputId="repair-wa-phone"
 						/>
 					) : null}
 				</>

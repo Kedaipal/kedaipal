@@ -14,7 +14,7 @@ const BASE = {
 describe("overseasCourierNote — only when a courier would be handed the store's number", () => {
 	it("a foreign number on a courier-booking delivery gets the note", () => {
 		expect(overseasCourierNote(BASE)).toBe(
-			"Your WhatsApp number is from outside Malaysia, so the rider will contact Kek Mama instead of you. Order updates still come to your WhatsApp.",
+			"Your WhatsApp number is from outside Malaysia, so the rider will contact Kek Mama instead of you. Kek Mama can still reach you on WhatsApp, and your order page shows every update.",
 		);
 	});
 
@@ -34,7 +34,7 @@ describe("overseasCourierNote — only when a courier would be handed the store'
 
 	it("a collection store says the rider is collecting from the buyer", () => {
 		expect(overseasCourierNote({ ...BASE, collectsFromCustomer: true })).toBe(
-			"Your WhatsApp number is from outside Malaysia, so the rider collecting from you will contact Kek Mama instead of you. Order updates still come to your WhatsApp.",
+			"Your WhatsApp number is from outside Malaysia, so the rider collecting from you will contact Kek Mama instead of you. Kek Mama can still reach you on WhatsApp, and your order page shows every update.",
 		);
 	});
 
@@ -46,7 +46,7 @@ describe("overseasCourierNote — only when a courier would be handed the store'
 
 	it("Malay stores read Malay, with the Malay country name", () => {
 		expect(overseasCourierNote({ ...BASE, locale: "ms" })).toBe(
-			"Nombor WhatsApp anda dari luar Malaysia, jadi penghantar akan menghubungi Kek Mama, bukan anda. Kemas kini pesanan tetap dihantar ke WhatsApp anda.",
+			"Nombor WhatsApp anda dari luar Malaysia, jadi penghantar akan menghubungi Kek Mama, bukan anda. Kek Mama masih boleh menghubungi anda di WhatsApp, dan halaman pesanan anda menunjukkan setiap kemas kini.",
 		);
 		expect(
 			overseasCourierNote({ ...BASE, locale: "ms", storeCountry: "SG" }),
@@ -59,13 +59,38 @@ describe("overseasCourierNote — only when a courier would be handed the store'
 		);
 	});
 
+	/** Every rendered variant: both locales × both rider wordings × both store
+	 * countries. */
+	const everyVariant = () =>
+		["en", "ms"].flatMap((locale) =>
+			[false, true].flatMap((collectsFromCustomer) =>
+				(["MY", "SG"] as const).map(
+					(storeCountry) =>
+						overseasCourierNote({
+							...BASE,
+							locale,
+							collectsFromCustomer,
+							storeCountry,
+						}) ?? "",
+				),
+			),
+		);
+
 	it("never tells the buyer their updates might not arrive", () => {
-		for (const locale of ["en", "ms"]) {
-			for (const collectsFromCustomer of [false, true]) {
-				const note =
-					overseasCourierNote({ ...BASE, locale, collectsFromCustomer }) ?? "";
-				expect(note).not.toMatch(/may not|might not|won't|tidak akan/i);
-			}
+		for (const note of everyVariant()) {
+			expect(note).not.toMatch(/may not|might not|won't|tidak akan/i);
+		}
+	});
+
+	it("never promises a stream of WhatsApp updates — an order sends ONE message", () => {
+		// docs/one-message-per-order.md: the confirmation is the only proactive
+		// buyer message, and some stores send none. Updates live on the order
+		// page; the note may only say the store can still reach them.
+		for (const note of everyVariant()) {
+			expect(note).not.toBe("");
+			expect(note).not.toMatch(/still come|tetap dihantar/i);
+			expect(note).not.toMatch(/updates? (?:come|arrive|are sent)/i);
+			expect(note).toMatch(/order page|halaman pesanan/);
 		}
 	});
 });

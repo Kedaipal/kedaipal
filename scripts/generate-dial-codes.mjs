@@ -4,12 +4,17 @@
 //
 // Usage: node scripts/generate-dial-codes.mjs
 //
-// Writes two checked-in modules (never hand-edit them — re-run this instead):
+// Writes three checked-in modules (never hand-edit them — re-run this instead):
 //   convex/lib/dialCodes.ts         dial code, trunk prefix, mobile NSN lengths
 //                                   and the main country of a shared code, per
 //                                   ISO country. Imported by the validator and
 //                                   the display helpers, so it stays small: no
 //                                   names.
+//   convex/lib/dialMobilePatterns.ts  each country's MOBILE national-number
+//                                   pattern — what disambiguates a typed
+//                                   number (was that "62…" the calling code or
+//                                   the number?). Validator-only, so the display
+//                                   bundles never carry it.
 //   convex/lib/dialCountryNames.ts  English display names, frozen here rather
 //                                   than read from `Intl.DisplayNames` at
 //                                   runtime so the Worker and every browser
@@ -18,8 +23,9 @@
 //                                   picker imports it.
 //
 // Re-run after bumping `libphonenumber-js` (a numbering plan changed) and
-// review the diff — the tests in convex/lib/dialCodes.test.ts pin the rows the
-// product leans on (MY, SG, the trunk-prefix edge cases).
+// review the diff — convex/lib/phoneDial.test.ts pins the rows the product
+// leans on (MY, SG, the trunk-prefix edge cases) and convex/lib/buyerPhone.test.ts
+// pins parses against libphonenumber's own answers.
 //
 // See docs/phone-numbers.md.
 
@@ -61,8 +67,23 @@ const rows = getCountries()
 		// Mobile lengths when the plan lists them (a WhatsApp number is a
 		// mobile), else the country's general lengths — libphonenumber stores a
 		// type with no lengths of its own that way.
-		const mobile = plan.type("MOBILE")?.possibleLengths();
+		const mobileType = plan.type("MOBILE");
+		const mobile = mobileType?.possibleLengths();
 		const lengths = mobile?.length ? mobile : plan.possibleLengths();
+		// +1 countries (and Tristan da Cunha) publish no separate mobile
+		// pattern — their numbers are FIXED_LINE_OR_MOBILE — so the country's
+		// general pattern stands in.
+		const mobilePattern =
+			mobileType?.pattern() || plan.nationalNumberPattern() || null;
+		// Where a local's trunk habit is more than a plain prefix — Argentina's
+		// "0 11 15 …" (the 15 becomes the mobile 9), Belarus's "8 0…" — keep
+		// libphonenumber's own parsing rule and its transform.
+		const trunkParse = plan.nationalPrefixForParsing() || null;
+		const trunkTransform = plan.nationalPrefixTransformRule() || null;
+		const trunkRule =
+			trunkParse && (trunkParse !== plan.nationalPrefix() || trunkTransform)
+				? { parse: trunkParse, ...(trunkTransform ? { transform: trunkTransform } : {}) }
+				: null;
 		return {
 			iso,
 			dial,
@@ -70,6 +91,8 @@ const rows = getCountries()
 			lengths,
 			main: (callingCodes[dial] ?? [])[0] === iso,
 			name: names.of(iso),
+			mobilePattern,
+			trunkRule,
 		};
 	})
 	.sort((a, b) => a.name.localeCompare(b.name, "en"));
@@ -112,7 +135,41 @@ ${rows.map((r) => `\t${r.iso}: ${JSON.stringify(r.name)},`).join("\n")}
 };
 `;
 
+const dialPatterns = `${banner("Mobile national-number patterns, one per country — validator-only.")}
+import type { DialIso } from "./dialCodes";
+
+/**
+ * libphonenumber's MOBILE pattern for each country's national significant
+ * number (anchored by the caller). \`convex/lib/buyerPhone.ts\` uses it to pick
+ * the right READING of what a buyer typed — calling code or not, trunk prefix
+ * or not — and to spot a number that belongs to another country. It does not
+ * reject a length-valid number that misses it: a newly opened mobile range can
+ * post-date the metadata, and blocking a real buyer is worse than a failed
+ * confirmation push (which the track page's repair recovers).
+ */
+export const DIAL_MOBILE_PATTERNS: Record<DialIso, string> = {
+${rows.map((r) => `\t${r.iso}: ${JSON.stringify(r.mobilePattern ?? "")},`).join("\n")}
+};
+
+/**
+ * libphonenumber's national-prefix PARSING rule, for the countries where a
+ * local's trunk habit is more than dropping \`trunk\` (\`./dialCodes\`): a
+ * regex matched at the start of the national digits, and — where the number
+ * itself changes — the transform that replaces the match (\`$1\`… are its
+ * groups). Argentina's "0 11 15 2345-6789" → "9 11 2345 6789".
+ */
+export const DIAL_TRUNK_RULES: Partial<
+	Record<DialIso, { parse: string; transform?: string }>
+> = {
+${rows
+	.filter((r) => r.trunkRule)
+	.map((r) => `\t${r.iso}: ${JSON.stringify(r.trunkRule)},`)
+	.join("\n")}
+};
+`;
+
 await writeFile(path.join(root, "convex/lib/dialCodes.ts"), dialCodes);
+await writeFile(path.join(root, "convex/lib/dialMobilePatterns.ts"), dialPatterns);
 await writeFile(path.join(root, "convex/lib/dialCountryNames.ts"), dialNames);
 console.log(
 	`libphonenumber-js ${version}: wrote ${rows.length} countries (excluded ${[...WHATSAPP_UNREACHABLE].join(", ")})`,

@@ -180,6 +180,18 @@ Six fixes from the 31 Jul release, all on this page:
   `+1` is 11 digits) can never be silently rewritten to a Malaysian one. The
   loose `assertValidMyWaPhone` is untouched — the counter's manual bind may
   legitimately key a foreign number.
+  > **Later (2026-09-23, [`z8r3fdh274`](https://app.clickup.com/t/z8r3fdh274)):**
+  > the "one valid answer" premise held for the store's own numbers, never for
+  > a buyer's. This field now wears the buyer plate — the same plate with a
+  > native country picker defaulting to the store's country — and is judged by
+  > `assertValidBuyerWaPhone` against the country picked, so a buyer's number
+  > can be from any country. Still no flag barrel and no combobox. Names above
+  > are as of this entry: the strict arm is now country-keyed
+  > (`assertValidMobileForCountry`, with `assertValidMyMobile` left only as the
+  > MY alias for Kedaipal's support line), `myWaPhoneCheckoutSchema` became
+  > the seller-side `waPhoneCheckoutSchema` record, and `assertValidMyWaPhone`
+  > is gone — the counter's manual bind wears the buyer picker too. See
+  > [`phone-numbers.md`](./phone-numbers.md).
 - **Caret on every receipt row.** The rows have been tappable since PR1, but
   the only cue was a caption under the whole list. The chevron sits on the LEFT
   so the money column stays flush, and its ~1rem footprint matches the `pl-4`

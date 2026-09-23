@@ -26,7 +26,18 @@ describe("buyerPhoneRejection", () => {
 
 	it("says why once the field has been left", () => {
 		expect(judge("123", true)).toEqual({
-			message: "Enter a Malaysian mobile number (e.g. 012-345 6789)",
+			message:
+				"Enter a Malaysian mobile number (e.g. 012-345 6789), or tap +60 to change the country",
+		});
+	});
+
+	it("a foreign pick's reason names the country and where to change it", () => {
+		const typed = "123";
+		expect(
+			buyerPhoneRejection(parseBuyerWaPhone(typed, "JP"), typed, true),
+		).toEqual({
+			message:
+				"Enter a valid Japan mobile number, or tap +81 to change the country",
 		});
 	});
 

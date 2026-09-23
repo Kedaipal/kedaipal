@@ -45,6 +45,33 @@ const MAX_DIAL_LENGTH = 3;
 /** E.164 caps a full international number at 15 digits. */
 export const E164_MAX_DIGITS = 15;
 
+/**
+ * What a person pasted or typed, made safe to read as a phone number:
+ *   - invisible format characters removed — WhatsApp and the phone's contacts
+ *     app wrap a copied number in bidi marks (U+202A…U+202C, U+2066…U+2069,
+ *     U+200E), which would otherwise hide a leading `+`;
+ *   - every decimal digit mapped to ASCII — full-width `０１２` (NFKC) and
+ *     script digits (Arabic-Indic `٠١٢`, Persian, Devanagari, Thai…), which a
+ *     bare `\D` strip would silently DROP, turning one number into another.
+ * Everything else (spaces, dashes, a `+`, letters) is left for the caller.
+ */
+export function cleanPhoneInput(raw: string): string {
+	return raw
+		.normalize("NFKC")
+		.replace(/\p{Cf}/gu, "")
+		.replace(/\p{Nd}/gu, (ch) => {
+			const cp = ch.codePointAt(0) as number;
+			if (cp <= 0x39) return ch;
+			// Unicode encodes each script's digits 0–9 contiguously; walk back
+			// to that run's zero.
+			let zero = cp;
+			while (zero > cp - 9 && /\p{Nd}/u.test(String.fromCodePoint(zero - 1))) {
+				zero--;
+			}
+			return String(cp - zero);
+		});
+}
+
 export function isDialIso(value: string): value is DialIso {
 	return BY_ISO.has(value);
 }
@@ -88,11 +115,18 @@ export function splitStoredPhone(
 /**
  * `+CC NATIONAL` for a stored number whose code is known — the readable
  * fallback for numbers the MY/SG groupings don't cover (`+44 7911123456`
- * instead of one unbroken run). Null when no code matches.
+ * instead of one unbroken run). Null when no code matches, or when the part
+ * after the code isn't a mobile length there — a malformed legacy row (a bare
+ * `1159399791` from before numbers were normalized) must not be dressed up as
+ * a US number; the caller's plain `+digits` fallback is the honest render.
  */
 export function formatInternational(value: string): string | null {
 	const split = splitStoredPhone(value);
-	return split ? `+${split.dial} ${split.national}` : null;
+	if (!split) return null;
+	const lengths: readonly number[] = dialRow(split.iso).lengths;
+	return lengths.includes(split.national.length)
+		? `+${split.dial} ${split.national}`
+		: null;
 }
 
 /**
@@ -111,7 +145,7 @@ export function detectTypedDialCode(
 	raw: string,
 	current: DialIso,
 ): { iso: DialIso; dial: string; rest: string } | null {
-	const typed = raw.trimStart();
+	const typed = cleanPhoneInput(raw).trimStart();
 	let pos: number;
 	if (typed.startsWith("+")) pos = 1;
 	else if (typed.startsWith("00")) pos = 2;

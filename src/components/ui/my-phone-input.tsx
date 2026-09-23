@@ -250,19 +250,59 @@ export function buyerPhonePlaceholder(dialCountry: DialIso): string {
 }
 
 /**
- * What a keystroke does to a buyer phone field: a typed or pasted `+CC…` /
- * `00CC…` moves the picker to that country and leaves only the national part
- * in the box (so the plate never reads `+81 | +81 90…`). Everything else is
- * kept exactly as typed. Both hosts route `onChange` through this.
+ * What a keystroke does to a buyer phone field: a `+CC…` / `00CC…` typed from
+ * the start, pasted, or autofilled moves the picker to that country and leaves
+ * only the national part in the box (so the plate never reads `+81 | +81 90…`).
+ * Everything else is kept exactly as typed. Both hosts route `onChange`
+ * through this, with the value it is replacing.
+ *
+ * Only when the code ARRIVES as the start of the number: typing on from the
+ * end, or a bulk insert (paste/autofill). A single `+` slipped in front of
+ * digits already there is left alone — calling codes are prefix-free, so
+ * "+12-345 6789" would otherwise complete "+1" on the spot, jump the plate to
+ * the United States and eat the 1. The submit-time parse still reads an
+ * explicit code there, and falls back to the local reading when it isn't one.
  */
 export function applyBuyerPhoneKeystroke(
 	typed: string,
 	dialCountry: DialIso,
+	previous: string,
 ): { value: string; dialCountry: DialIso } {
-	const detected = detectTypedDialCode(typed, dialCountry);
+	const detected = codeArrived(typed, previous)
+		? detectTypedDialCode(typed, dialCountry)
+		: null;
 	return detected
 		? { value: detected.rest, dialCountry: detected.iso }
-		: { value: typed, dialCountry };
+		: // Nothing before the number is ever meaningful — after "+44" moved to
+			// the plate, the space typed next would otherwise lead the box.
+			{ value: typed.trimStart(), dialCountry };
+}
+
+/**
+ * Did this edit bring a code in at the START of the number? Yes when the
+ * person is typing on from the end, or when the edit inserted two or more
+ * characters at the front (a paste or autofill — including one that replaced
+ * the whole box with a number of similar length). No for a single `+` slipped
+ * in front of digits already there.
+ */
+function codeArrived(typed: string, previous: string): boolean {
+	if (typed.startsWith(previous)) return true;
+	let prefix = 0;
+	while (
+		prefix < typed.length &&
+		prefix < previous.length &&
+		typed[prefix] === previous[prefix]
+	)
+		prefix++;
+	if (prefix > 0) return false;
+	let suffix = 0;
+	while (
+		suffix < typed.length &&
+		suffix < previous.length &&
+		typed[typed.length - 1 - suffix] === previous[previous.length - 1 - suffix]
+	)
+		suffix++;
+	return typed.length - suffix >= 2;
 }
 
 /** Flag-sized ISO badge for the countries without an inline flag — same 28×14
@@ -340,7 +380,9 @@ export function BuyerPhonePrefix({
 			    this is what says "tap me" on desktop. */}
 			<span
 				aria-hidden
-				className="pointer-events-none absolute inset-0 transition-colors peer-hover:bg-muted peer-disabled:bg-transparent"
+				// …and the keyboard's: the select itself is invisible, so a Tab onto
+				// it must show on the plate, distinct from the input's focus ring.
+				className="pointer-events-none absolute inset-0 transition-colors peer-hover:bg-muted peer-focus-visible:bg-muted peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-focus-visible:ring-inset peer-disabled:bg-transparent"
 			/>
 			<span className="relative flex items-center gap-1.5">
 				{/* The select already announces the country; the flag is decoration
@@ -429,7 +471,11 @@ export function BuyerPhoneInput({
 				placeholder={placeholder ?? buyerPhonePlaceholder(dialCountry)}
 				value={value}
 				onChange={(e) => {
-					const next = applyBuyerPhoneKeystroke(e.target.value, dialCountry);
+					const next = applyBuyerPhoneKeystroke(
+						e.target.value,
+						dialCountry,
+						value,
+					);
 					if (next.dialCountry !== dialCountry)
 						onDialCountryChange(next.dialCountry);
 					onChange(next.value);
@@ -450,10 +496,15 @@ export function BuyerPhoneCountrySwitch({
 	suggest,
 	onSwitch,
 	locale,
+	inputId,
 }: {
 	suggest: Country;
 	onSwitch: (country: Country) => void;
 	locale?: string;
+	/** The phone input's id. The switch fixes the number, so this button
+	 * unmounts the moment it's pressed — focus goes back to the field rather
+	 * than falling to the top of the page. */
+	inputId: string;
 }) {
 	const label = `${COUNTRY_LABELS[suggest]} (+${COUNTRY_DIAL_CODE[suggest]})`;
 	return (
@@ -462,7 +513,10 @@ export function BuyerPhoneCountrySwitch({
 			variant="outline"
 			size="sm"
 			className="tap-target self-start"
-			onClick={() => onSwitch(suggest)}
+			onClick={() => {
+				onSwitch(suggest);
+				document.getElementById(inputId)?.focus();
+			}}
 		>
 			{locale === "ms" ? `Tukar ke ${label}` : `Switch to ${label}`}
 		</Button>
