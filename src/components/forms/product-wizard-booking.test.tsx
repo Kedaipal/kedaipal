@@ -38,7 +38,7 @@ function renderWizard({
 			retailerId={"r1" as never}
 			categoriesLocked={false}
 			eventsLocked={false}
-			currency="RM"
+			currency="MYR"
 			defaultKind={defaultKind}
 			onSubmit={onSubmit as never}
 			onSkipToFullForm={vi.fn()}
