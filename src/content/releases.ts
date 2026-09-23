@@ -220,8 +220,10 @@ export const RELEASES: Release[] = [
 				body: {
 					en: "A guest who'd checked in could read \"Shipped\" or \"Ready for Pickup\" in the order list, and a finished stay \"Delivered\" — your shop's wording, borrowed for a campsite. Each row now speaks its own: Checked In and Checked Out, or Active and Ended for a package. And on Pro, bulk-marking a mix of orders as Packed now leaves bookings alone, since a stay is never packed, and the toast says how many it skipped.",
 				},
-				href: "/app/orders",
-				hrefLabel: { en: "Open orders" },
+				// No link: a booking seller already works out of Orders, and a
+				// second "Open orders" straight under the counter note's reads as
+				// filler. The counter note keeps it — that seller lives on the
+				// counter screen, so the link actually takes them somewhere.
 			},
 		],
 	},
