@@ -4,6 +4,7 @@ import { Link, useLocation } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import {
 	ArrowRight,
+	CalendarClock,
 	CalendarRange,
 	ChartLine,
 	Check,
@@ -211,6 +212,7 @@ const ENTRY_ICONS: Record<ReleaseIconName, LucideIcon> = {
 	chart: ChartLine,
 	table: Rows3,
 	calendar: CalendarRange,
+	"calendar-clock": CalendarClock,
 };
 
 /**
