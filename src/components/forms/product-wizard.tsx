@@ -45,10 +45,17 @@ import {
 import { asPackageUnit } from "../../lib/package-unit";
 import {
 	convexErrorMessage,
+	currencySymbol,
+	formatDraftPrice,
+	formatDraftPriceRange,
 	normalizePriceInput,
 	parsePriceInput,
 } from "../../lib/format";
-import { weekendRateConsequence } from "../../lib/product-summary";
+import {
+	isSecurityDepositInRange,
+	securityDepositRangeMessage,
+	weekendRateConsequence,
+} from "../../lib/product-summary";
 import { cn } from "../../lib/utils";
 import { cartesian, type OptionAxis, variantLabel } from "../../lib/variant";
 import { Button } from "../ui/button";
@@ -345,6 +352,10 @@ export function wizardStepIssues(
 		/** The store has several pickup points (hidden ones count), so an armed
 		 * event must name its venue (the server refuses the save otherwise). */
 		requireEventVenue?: boolean;
+		/** The retailer's ISO code, so a money message names the store's own
+		 * symbol ("S$ 10,000"). Only the on-screen callers need it — a caller
+		 * that just counts issues can leave it off. */
+		currency?: string;
 	} = {},
 ): WizardIssue[] {
 	const issues: WizardIssue[] = [];
@@ -442,12 +453,10 @@ export function wizardStepIssues(
 		}
 		const depositRaw = state.securityDeposit.trim();
 		if (depositRaw.length > 0) {
-			const dep = parsePriceInput(depositRaw);
-			if (dep === null || dep < 0 || dep > 10_000) {
+			if (!isSecurityDepositInRange(parsePriceInput(depositRaw))) {
 				issues.push({
 					field: "securityDeposit",
-					message:
-						"Enter an amount between RM 0 and RM 10,000, or leave blank.",
+					message: securityDepositRangeMessage(opts.currency),
 				});
 			}
 		}
@@ -856,7 +865,9 @@ export function wizardInitialStep(
 	return REVIEW_STEP;
 }
 
-/** Compact "RM 12" / "RM 12–28" label for the review preview. */
+/** Compact "RM 12" / "RM 12–28" label for the review preview. `currency` is
+ * the retailer's ISO code — spelled by `formatDraftPrice`, the same helper as
+ * the edit form's summary strip, so the two can't disagree. */
 export function wizardPriceLabel(state: WizardState, currency: string): string {
 	// A booking listing has one implicit row; the suffix names its span through
 	// the SAME author the storefront card and product page use, so the preview
@@ -869,15 +880,16 @@ export function wizardPriceLabel(state: WizardState, currency: string): string {
 			? Number.parseInt(state.packageLength.trim(), 10)
 			: undefined;
 		const suffix = bookingPriceSuffix(length, state.packageUnit);
-		return `${currency} ${p % 1 === 0 ? String(p) : p.toFixed(2)}${suffix}`;
+		return `${formatDraftPrice(p, currency)}${suffix}`;
 	}
 	// Made to order has no matrix — its price lives on the bespoke line, and is
 	// a STARTING price the mockup quote lands on top of, so the preview says
-	// exactly what the storefront prints: "From RM 40" (86eyhn4mr).
+	// "From" like the storefront does (86eyhn4mr) — "From RM 40" in the
+	// summary spelling, where the storefront card prints "From RM 40.00".
 	if (effectiveShape(state) === "made_to_order") {
 		const base = parsePriceInput(state.editor.customLine?.price.trim() ?? "");
 		return base && base > 0
-			? `From ${currency} ${base % 1 === 0 ? String(base) : base.toFixed(2)}`
+			? `From ${formatDraftPrice(base, currency)}`
 			: "Price on quote";
 	}
 	const parsed = state.editor.rows
@@ -885,12 +897,11 @@ export function wizardPriceLabel(state: WizardState, currency: string): string {
 		.map((r) => parsePriceInput(r.price.trim()))
 		.filter((p): p is number => p !== null);
 	if (parsed.length === 0) return "";
-	const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
-	const min = Math.min(...parsed);
-	const max = Math.max(...parsed);
-	return min === max
-		? `${currency} ${fmt(min)}`
-		: `${currency} ${fmt(min)}–${fmt(max)}`;
+	return formatDraftPriceRange(
+		Math.min(...parsed),
+		Math.max(...parsed),
+		currency,
+	);
 }
 
 // Titles are deliberately short — the header also carries a back button,
@@ -1102,6 +1113,18 @@ export function ProductWizard({
 	const shape = effectiveShape(state);
 	const kind = wizardKind(state);
 	const isBooking = kind === "booking";
+	// `currency` is the retailer's ISO code, which sellers never read — every
+	// money plate and label wears the store's own symbol ("RM", "S$").
+	const moneySymbol = currencySymbol(currency);
+	// A typed amount for a review row, spelled like the summary strip. A value
+	// that doesn't parse can't reach review (its step blocks), but if one did
+	// it's echoed as typed rather than dropped.
+	const draftMoney = (raw: string) => {
+		const n = parsePriceInput(raw.trim());
+		return n === null
+			? `${moneySymbol} ${raw.trim()}`
+			: formatDraftPrice(n, currency);
+	};
 	// A booking listing's package length, as a number — drives the price label
 	// and the capacity wording live, while the seller is still typing it.
 	const packageLengthNum = /^\d+$/.test(state.packageLength.trim())
@@ -1477,7 +1500,10 @@ export function ProductWizard({
 	const stepPos = Math.max(steps.indexOf(step), 0);
 
 	function goNext() {
-		const found = wizardStepIssues(state, step, { requireEventVenue });
+		const found = wizardStepIssues(state, step, {
+			requireEventVenue,
+			currency,
+		});
 		if (found.length > 0) {
 			setIssues(found);
 			return;
@@ -1504,7 +1530,10 @@ export function ProductWizard({
 		// edits jump around, so a hole could otherwise slip through). Walks the
 		// product's OWN sequence — a skipped step has no answer to check.
 		for (const s of steps) {
-			const found = wizardStepIssues(state, s, { requireEventVenue });
+			const found = wizardStepIssues(state, s, {
+				requireEventVenue,
+				currency,
+			});
 			if (found.length > 0) {
 				setIssues(found);
 				setStep(s);
@@ -1793,8 +1822,8 @@ export function ProductWizard({
 								</span>{" "}
 								— no calendar, no approval. They pick a food set or package if
 								you offer choices, seats cap the room, and the listing takes
-								itself off your storefront after the event. RM 0 makes it a free
-								RSVP.
+								itself off your storefront after the event.{" "}
+								{currencySymbol(currency)} 0 makes it a free RSVP.
 							</p>
 						) : null}
 						<IssueText message={issueFor("kind")} />
@@ -2062,7 +2091,9 @@ export function ProductWizard({
 							<span className="min-w-0 flex-1">
 								Price per {bookingSpanNoun(packageLengthNum, state.packageUnit)}
 							</span>
-							<span className="text-sm text-muted-foreground">{currency}</span>
+							<span className="text-sm text-muted-foreground">
+								{moneySymbol}
+							</span>
 							<PriceInput
 								value={rows[0]?.price ?? ""}
 								onChange={(v) => setRow(0, { price: v })}
@@ -2093,7 +2124,7 @@ export function ProductWizard({
 										</span>
 									</span>
 									<span className="text-sm text-muted-foreground">
-										{currency}
+										{moneySymbol}
 									</span>
 									<PriceInput
 										value={state.weekendPrice}
@@ -2188,7 +2219,7 @@ export function ProductWizard({
 							</span>
 							<span className="flex items-center gap-3">
 								<span className="text-sm text-muted-foreground">
-									{currency}
+									{moneySymbol}
 								</span>
 								<PriceInput
 									value={state.securityDeposit}
@@ -2263,7 +2294,7 @@ export function ProductWizard({
 								<p className="-mt-2 text-sm text-muted-foreground">
 									Optional. Leave it blank and buyers see &ldquo;Price on
 									quote&rdquo; — you set the real price when you send them a
-									mockup. Enter an amount and buyers see &ldquo;From {currency}{" "}
+									mockup. Enter an amount and buyers see &ldquo;From {moneySymbol}{" "}
 									…&rdquo;, so nobody mistakes it for the final price.
 								</p>
 								<label className="flex items-center gap-3 text-sm font-medium">
@@ -2271,7 +2302,7 @@ export function ProductWizard({
 										{state.name.trim() || "This item"}
 									</span>
 									<span className="text-sm text-muted-foreground">
-										{currency}
+										{moneySymbol}
 									</span>
 									<PriceInput
 										value={customLine?.price ?? ""}
@@ -2336,7 +2367,7 @@ export function ProductWizard({
 												) : null}
 											</span>
 											<span className="text-sm text-muted-foreground">
-												{currency}
+												{moneySymbol}
 											</span>
 											<PriceInput
 												value={row.price}
@@ -2732,7 +2763,7 @@ export function ProductWizard({
 												? [
 														{
 															label: "Weekend rate",
-															value: `${currency} ${state.weekendPrice.trim()} on ${weekendDaysLabel(state.weekendDays)} nights`,
+															value: `${draftMoney(state.weekendPrice)} on ${weekendDaysLabel(state.weekendDays)} nights`,
 															step: 3,
 														},
 													]
@@ -2741,9 +2772,9 @@ export function ProductWizard({
 												? [
 														{
 															label: "Deposit",
-															// The store's currency, not a hardcoded RM — an SG
-															// store's review row said "RM" here (S13 fix-in-passing).
-															value: `${currency} ${state.securityDeposit.trim()} (refundable)`,
+															// The store's symbol, never a hardcoded RM (S13)
+															// nor the raw ISO code ("SGD 50").
+															value: `${draftMoney(state.securityDeposit)} (refundable)`,
 															step: 3,
 														},
 													]
@@ -2993,7 +3024,7 @@ export function ProductWizard({
 														</label>
 													</div>
 													<label className="flex flex-col gap-1 text-sm font-medium">
-														Starting price ({currency}){" "}
+														Starting price ({moneySymbol}){" "}
 														<span className="font-normal text-muted-foreground">
 															(optional — blank shows “Price on quote”)
 														</span>

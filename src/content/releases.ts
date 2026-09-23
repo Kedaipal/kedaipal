@@ -325,6 +325,7 @@ export const RELEASES: Release[] = [
 					en: "New monthly order allowances, and a new price for Scale",
 				},
 				body: {
+					// currency-literal-ok: Kedaipal's OWN plan prices (MY + SG), not store money.
 					en: "Two changes to plans, and we would rather you heard them here than on an invoice. The monthly order allowance is now 200 on Pro and 400 on Scale. It stays a soft line: passing it never stops an order, never closes your storefront and never turns a buyer away — it shows in your usage and we talk about the right plan. Scale moves to RM399 (S$149) from your next invoice; Starter and Pro keep their prices, and founding members keep their discount on the new numbers.",
 				},
 				href: spotlightHref("plan_change"),
@@ -348,6 +349,7 @@ export const RELEASES: Release[] = [
 					en: "Going quiet for the season? Pause instead of cancelling",
 				},
 				body: {
+					// currency-literal-ok: Kedaipal's OWN hold price (MY + SG), not store money.
 					en: "The durian's done, the school holidays are over, the night market shuts for a month — whatever your quiet season looks like, you can park your subscription at RM19 a month (S$9) instead of paying the full tier or cancelling and losing the lot. Products, orders and customers all stay exactly where you left them, and your storefront tells buyers you are on a break. Resume whenever. We say what a pause and a resume will bill before you tap either.",
 				},
 				href: spotlightHref("seasonal_hold"),

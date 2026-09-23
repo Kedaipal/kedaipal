@@ -47,11 +47,17 @@ import {
 	highlightRingClass,
 	scrollToAnchor,
 } from "../../lib/country-setup-copy";
-import { convexErrorMessage, parsePriceInput } from "../../lib/format";
+import {
+	convexErrorMessage,
+	currencySymbol,
+	parsePriceInput,
+} from "../../lib/format";
 import { asPackageUnit } from "../../lib/package-unit";
 import { PRODUCT_WEIGHT_MAX } from "../../lib/product-import";
 import {
 	describeProduct,
+	isSecurityDepositInRange,
+	securityDepositRangeMessage,
 	weekendRateConsequence,
 } from "../../lib/product-summary";
 import { productDetailsSchema } from "../../lib/schemas";
@@ -247,10 +253,10 @@ interface ProductFormProps {
 		packageLength?: string;
 		packageUnit?: PackageUnit;
 		autoAccept?: boolean;
-		/** Booking security deposit as an RM string draft ("100") — wizard
+		/** Booking security deposit as a major-unit string draft ("100") — wizard
 		 * handoff + edit seed. Blank/undefined = none. */
 		securityDeposit?: string;
-		/** Weekend per-night rate as an RM string draft + its nights (S13). */
+		/** Weekend per-night rate as a major-unit string draft + its nights (S13). */
 		weekendPrice?: string;
 		weekendDays?: number[];
 		minNoticeDays?: number;
@@ -292,6 +298,8 @@ interface ProductFormProps {
 			customPrompt?: string;
 		}[];
 	};
+	/** The retailer's ISO code (`MYR`, `SGD`). Labels wear `currencySymbol`
+	 * of it; the summary helpers take the code itself. */
 	currency: string;
 	submitLabel: string;
 	onSubmit: (values: ProductFormSubmitValues) => Promise<void>;
@@ -1096,14 +1104,14 @@ export function ProductForm({
 	const packageLengthNum =
 		packageValid && packageTrimmed.length > 0 ? packageParsed : undefined;
 
-	// Booking security deposit — blank = none; else a price 0..RM10,000
-	// (mirrors the server's sanitizeSecurityDeposit ceiling).
+	// Booking security deposit — blank = none; else inside the server's own
+	// sanitizeSecurityDeposit ceiling (`isSecurityDepositInRange`, shared with
+	// the wizard so the two can't drift).
 	const depositTrimmed = depositDraft.trim();
 	const depositParsed =
 		depositTrimmed.length === 0 ? 0 : parsePriceInput(depositTrimmed);
 	const depositValid =
-		depositTrimmed.length === 0 ||
-		(depositParsed !== null && depositParsed >= 0 && depositParsed <= 10_000);
+		depositTrimmed.length === 0 || isSecurityDepositInRange(depositParsed);
 
 	// Weekend rate (S13) — blank = one rate; else a price in (0, RM 100,000]
 	// with at least one night and never all seven (mirrors
@@ -1344,7 +1352,7 @@ export function ProductForm({
 					<div className="flex flex-col gap-1.5 border-t border-border pt-4">
 						<label htmlFor="booking-price" className="text-sm font-medium">
 							Price per {bookingSpanNoun(packageLengthNum, packageUnit)} (
-							{currency})
+							{currencySymbol(currency)})
 						</label>
 						<Input
 							id="booking-price"
@@ -1394,7 +1402,7 @@ export function ProductForm({
 									htmlFor="booking-weekend"
 									className="text-sm font-medium"
 								>
-									Weekend rate ({currency}){" "}
+									Weekend rate ({currencySymbol(currency)}){" "}
 									<span className="font-normal text-muted-foreground">
 										(optional)
 									</span>
@@ -1489,7 +1497,7 @@ export function ProductForm({
 					</div>
 					<div className="flex flex-col gap-1.5 border-t border-border pt-4">
 						<label htmlFor="booking-deposit" className="text-sm font-medium">
-							Security deposit ({currency}){" "}
+							Security deposit ({currencySymbol(currency)}){" "}
 							<span className="font-normal text-muted-foreground">
 								(optional)
 							</span>
@@ -1506,7 +1514,7 @@ export function ProductForm({
 						/>
 						{!depositValid ? (
 							<p className="text-xs text-destructive">
-								Enter an amount between RM 0 and RM 10,000, or leave blank.
+								{securityDepositRangeMessage(currency)}
 							</p>
 						) : null}
 						<p className="text-xs leading-relaxed text-muted-foreground">

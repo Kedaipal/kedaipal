@@ -2714,7 +2714,7 @@ function CartLineEditDialog({
 						)}
 						{!validPrice ? (
 							<span className="mt-1 block text-xs text-destructive">
-								Enter a price above RM 0.00 to save.
+								Enter a price above {formatPrice(0, currency)} to save.
 							</span>
 						) : null}
 					</label>

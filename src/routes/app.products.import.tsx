@@ -351,6 +351,7 @@ function ImportProductsRoute() {
 						only if you tick <strong>Update stock too</strong> after the
 						preview, so a sheet you exported hours ago can't undo sales made
 						since. Images aren't imported — add them per product. Prices use{" "}
+						{/* currency-literal-ok: names the currency SETTING the sheet uses */}
 						{retailer.currency}.
 					</span>
 				</div>
