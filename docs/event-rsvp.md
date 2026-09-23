@@ -114,8 +114,13 @@ standing in the room.
 
 For a cart holding any event line:
 
-1. **One event per cart** — two different event dates need two fulfilment dates
-   and an order carries one. Refused at add-to-cart; this is the stale-tab door.
+1. **One event per cart, keyed on the PRODUCT** (PR-review fix) — not the
+   date: two same-day events at different outlets share a date but not a
+   venue, and the lock resolves from whichever product landed first, so a
+   date-keyed check would confirm one event's guests at the other's address.
+   Several lines of ONE event (Set A + Set B) stay a single entry. Refused at
+   add-to-cart (`useCart.addItem` compares `productId`) and at both server
+   doors; the server checks are the stale-tab backstop.
 2. **A finished event refuses** new RSVPs.
 3. **Self-collect is asserted, not silently rewritten.** By the time the cart
    resolves, the address has been sanitized and a delivery quote resolved —
@@ -208,6 +213,7 @@ two test RSVPs permanently unable to fix it.
 |---|---|
 | The date, with live RSVPs | Refused — "18 guests have already RSVP'd for …" |
 | Turning the event OFF, with live RSVPs | Refused, same reason |
+| Moving the VENUE, with live RSVPs | Refused (PR-review fix) — every RSVP froze the old address onto its order page, so a move splits one event across two addresses with no send path to tell anyone. Compared on the **effective** venue, so re-saving the same venue (raising the cap) and NAMING a legacy blank venue where it already resolves both stay allowed; the form disables the select with the reason, keeping a blank venue pickable |
 | Raising the seat cap | Always allowed |
 | Lowering the seat cap | Only to ≥ what's taken |
 | Re-saving on its own past date | Allowed (`allowPastDate`) — fixing a cap the morning after |

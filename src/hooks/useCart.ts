@@ -220,6 +220,13 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 		() => state.items.find((i) => i.event !== undefined)?.name,
 		[state.items],
 	);
+	// The event PRODUCT holding the lock — identity, not date: two same-day
+	// events at different outlets share a date but not a venue, so the
+	// one-event rule keys on the product (mirrors orders.create).
+	const cartEventProductId = useMemo(
+		() => state.items.find((i) => i.event !== undefined)?.productId,
+		[state.items],
+	);
 
 	// Adding to the cart can REFUSE (`z8r3fdff9u`): an order carries one
 	// fulfilment date, so two events can't share a cart. Returns a result the
@@ -237,7 +244,7 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 			if (
 				item.event !== undefined &&
 				cartEvent !== undefined &&
-				cartEvent.date !== item.event.date
+				cartEventProductId !== item.productId
 			) {
 				return {
 					ok: false,
@@ -247,7 +254,7 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 			dispatch({ type: "ADD", item, quantity });
 			return { ok: true };
 		},
-		[cartEvent],
+		[cartEvent, cartEventProductId],
 	);
 	const updateQuantity = useCallback(
 		(variantId: Id<"productVariants">, quantity: number) =>

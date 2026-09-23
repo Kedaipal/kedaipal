@@ -350,7 +350,10 @@ export function EventFields({
 						    active point there is nothing to choose, but the fact is
 						    still stated (a silent default is a hidden decision); with
 						    several the pick is required, because the guest never
-						    chooses and order time must not pick arbitrarily. */}
+						    chooses and order time must not pick arbitrarily. Locked
+						    with guests booked, like the date: every RSVP froze this
+						    address onto its order page, so moving it would split one
+						    event across two addresses. */}
 						{venues !== undefined && venues.length > 1 ? (
 							<div className="flex flex-col gap-1.5">
 								<label htmlFor="event-venue" className="text-sm font-medium">
@@ -360,7 +363,10 @@ export function EventFields({
 									id="event-venue"
 									value={draft.venueId}
 									onChange={(e) => set({ venueId: e.target.value })}
-									disabled={locked}
+									// A BLANK venue (saved before venues existed) stays
+									// pickable — naming where the event already is isn't a
+									// move, and the server refuses an actual move anyway.
+									disabled={locked || (hasRsvps && draft.venueId.trim() !== "")}
 									className={`h-11 w-56 rounded-xl border bg-background px-3 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50 ${
 										draft.venueId.trim() === ""
 											? "border-destructive"
@@ -383,6 +389,18 @@ export function EventFields({
 						<p className="text-xs text-destructive">
 							Pick which pickup point hosts the event — guests are sent there,
 							not to a point of their choosing.
+						</p>
+					) : null}
+					{/* Disabled-with-reason: the frozen venue must say WHY it won't
+					    change, in the same breath as the date lock does. */}
+					{venues !== undefined &&
+					venues.length > 1 &&
+					hasRsvps &&
+					draft.venueId.trim() !== "" ? (
+						<p className="text-xs text-muted-foreground">
+							{taken} {taken === 1 ? "guest has" : "guests have"} RSVP&apos;d to
+							this address — the venue can&apos;t move under them. Cancel or
+							archive the event instead.
 						</p>
 					) : null}
 					{/* Picking a hidden point is a feature (an RSVP-only venue),

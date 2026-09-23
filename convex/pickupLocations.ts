@@ -350,7 +350,10 @@ export const eventVenuePublicBySlug = query({
 		if (!retailer) return null;
 
 		// The gate: only venues (or fallbacks) of a live event product are
-		// public. One retailer's active products, capped small — cheap.
+		// public. One retailer's active products, capped small — cheap. The
+		// unset branch requires an event that actually RESOLVES by fallback
+		// (venueId unset) — "any event exists" would let the fallback serve a
+		// hidden point that no event is at.
 		const products = await ctx.db
 			.query("products")
 			.withIndex("by_retailer_active", (q) =>
@@ -359,7 +362,9 @@ export const eventVenuePublicBySlug = query({
 			.collect();
 		const referenced = venueId
 			? products.some((p) => p.event?.venueId === venueId)
-			: products.some((p) => p.event !== undefined);
+			: products.some(
+					(p) => p.event !== undefined && p.event.venueId === undefined,
+				);
 		if (!referenced) return null;
 
 		const venue = await resolveEventVenue(ctx, retailer._id, { venueId });

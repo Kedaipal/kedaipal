@@ -1206,13 +1206,14 @@ export const create = mutation({
 		// exactly the same place.
 		const eventLock = [...eventProducts.values()][0]?.event;
 		if (eventLock !== undefined) {
-			// Two different events in one cart would need two fulfilment dates and
-			// an order carries one. Refused at add-to-cart too; this is the
-			// stale-tab backstop.
-			const distinctDates = new Set(
-				[...eventProducts.values()].map((e) => e.event.date),
-			);
-			if (distinctDates.size > 1)
+			// ONE event per cart, keyed on the PRODUCT — two same-day events at
+			// different outlets share a date but not a venue, and the lock below
+			// resolves from whichever landed first, so a date-keyed check would
+			// confirm one event's guests at the other's address. Refused at
+			// add-to-cart too; this is the stale-tab backstop. (`eventProducts`
+			// is keyed by productId, so several lines of ONE event — Set A +
+			// Set B — are still a single entry.)
+			if (eventProducts.size > 1)
 				throw new ConvexError(
 					"This cart has RSVPs for two different events — check them out one at a time.",
 				);

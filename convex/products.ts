@@ -28,6 +28,7 @@ import {
 } from "./lib/categoryCounts";
 import { sanitizeMinQuantity } from "./lib/minOrderRules";
 import { tallyEventSeats } from "./lib/eventSeats";
+import { resolveEventVenue } from "./orders";
 import {
 	type EventInput,
 	hiddenFromStorefront,
@@ -1163,6 +1164,26 @@ async function resolveEventUpdate(
 		throw new ConvexError(
 			`${guestsAlready(taken)} already RSVP'd — the seat cap can't go below ${taken}.`,
 		);
+
+	// The venue is immutable under guests, exactly like the date: every RSVP
+	// froze the old address onto its order page ("where to go is in the pickup
+	// card"), so moving the venue would split one event across two addresses —
+	// earlier guests at the old one, later guests at the new — with no send
+	// path to tell anyone. Compared on the EFFECTIVE venue (what order time
+	// resolves), not the raw id, so a seller who gained a second point and now
+	// must name the venue can still name the one it always was — and still
+	// raise the seat cap — without tripping this.
+	if (current !== undefined && taken > 0) {
+		const wasAt = await resolveEventVenue(ctx, product.retailerId, current);
+		const movesTo =
+			event.venueId !== undefined
+				? event.venueId
+				: (await resolveEventVenue(ctx, product.retailerId, event))?._id;
+		if (wasAt !== null && movesTo !== wasAt._id)
+			throw new ConvexError(
+				`${guestsAlready(taken)} already RSVP'd for ${wasAt.label} — the venue can't move under them. Cancel or archive this event instead.`,
+			);
+	}
 	return validateEventVenue(ctx, product.retailerId, event);
 }
 

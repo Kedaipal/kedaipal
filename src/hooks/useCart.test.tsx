@@ -167,3 +167,44 @@ describe("useCart — hydration signal (checkout's empty-vs-unknown guard)", () 
 		expect(result.current.itemCount).toBe(2);
 	});
 });
+
+describe("useCart — one event per cart, keyed on the PRODUCT (z8r3fdff9u)", () => {
+	// Two same-day events at different outlets share a date but not a venue —
+	// a date-keyed check would merge them under whichever venue landed first.
+	const EVENT_DATE = Date.UTC(2099, 10, 7);
+	const eventItem = (
+		variantId: string,
+		productId: string,
+	): Omit<CartItem, "quantity"> => ({
+		variantId: variantId as unknown as Id<"productVariants">,
+		productId: productId as unknown as Id<"products">,
+		name: "Event",
+		price: 0,
+		currency: "MYR",
+		event: { date: EVENT_DATE },
+	});
+
+	it("refuses a SECOND event product even on the same date", () => {
+		const { result } = renderHook(() => useCart(RID));
+		act(() => {
+			expect(result.current.addItem(eventItem("v1", "pA")).ok).toBe(true);
+		});
+		let refusal: ReturnType<typeof result.current.addItem> | undefined;
+		act(() => {
+			refusal = result.current.addItem(eventItem("v2", "pB"));
+		});
+		expect(refusal).toMatchObject({ ok: false });
+		expect(result.current.items).toHaveLength(1);
+	});
+
+	it("still allows a second line of the SAME event (Set A + Set B)", () => {
+		const { result } = renderHook(() => useCart(RID));
+		act(() => {
+			expect(result.current.addItem(eventItem("v1", "pA")).ok).toBe(true);
+		});
+		act(() => {
+			expect(result.current.addItem(eventItem("v2", "pA")).ok).toBe(true);
+		});
+		expect(result.current.items).toHaveLength(2);
+	});
+});

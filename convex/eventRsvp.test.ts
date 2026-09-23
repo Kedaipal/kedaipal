@@ -952,6 +952,165 @@ describe("event RSVP — the venue is the event's, never the guest's (round 4)",
 				retailerId: retailer._id,
 			}),
 		).toEqual([{ venueId: hiddenHall, name: "BNI Breakfast" }]);
+
+		// THE FALLBACK GATE: with every live event NAMING its venue, the
+		// unset-venue public read answers nothing — it must never serve a
+		// point no event actually resolves to.
+		expect(
+			await t.query(api.pickupLocations.eventVenuePublicBySlug, {
+				slug: "huff-and-puff",
+			}),
+		).toBeNull();
+	});
+
+	test("the venue is immutable under guests — like the date (PR review)", async () => {
+		const t = setup();
+		const { asUser, retailer, pickupLocationId } = await seedStore(t);
+		const { pickupLocationId: outletB } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Outlet B",
+				address: "88 Jalan Dua, 50000 KL",
+			},
+		);
+		const productId = await asUser.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "BNI Breakfast",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [{ name: "Set", values: ["A", "B"] }],
+			event: {
+				date: EVENT_DATE,
+				timeMinutes: EVENT_TIME,
+				venueId: pickupLocationId,
+			},
+			variants: [
+				{ optionValues: ["A"], price: 0, onHand: 0 },
+				{ optionValues: ["B"], price: 0, onHand: 0 },
+			],
+		});
+		await rsvp(t, {
+			retailerId: retailer._id,
+			variantId: await variantFor(t, productId, "A"),
+			pickupLocationId,
+		});
+
+		// Moving the venue would split one event across two addresses — every
+		// existing RSVP froze the old one onto its order page.
+		await expect(
+			asUser.mutation(api.products.update, {
+				productId,
+				event: {
+					date: EVENT_DATE,
+					timeMinutes: EVENT_TIME,
+					venueId: outletB,
+				},
+			}),
+		).rejects.toThrow(/venue can't move/i);
+
+		// Re-saving the SAME venue is not a move — raising the seat cap under
+		// guests must stay possible.
+		await asUser.mutation(api.products.update, {
+			productId,
+			event: {
+				date: EVENT_DATE,
+				timeMinutes: EVENT_TIME,
+				venueId: pickupLocationId,
+				seats: 40,
+			},
+		});
+		const saved = await t.run(async (ctx) => ctx.db.get(productId));
+		expect(saved?.event?.seats).toBe(40);
+	});
+
+	test("a legacy unset venue can be NAMED under guests — but only where the event already is", async () => {
+		const t = setup();
+		const { asUser, retailer, pickupLocationId } = await seedStore(t);
+		// Saved while the store had ONE point, so the venue stayed unset.
+		const productId = await seedEventProduct(t, retailer._id);
+		await rsvp(t, {
+			retailerId: retailer._id,
+			variantId: await variantFor(t, productId, "A"),
+			pickupLocationId,
+		});
+		// A second outlet appears AFTER guests booked — edits now must name
+		// the venue, and the only nameable one is where those guests were sent.
+		const { pickupLocationId: outletB } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Outlet B",
+				address: "88 Jalan Dua, 50000 KL",
+			},
+		);
+		await expect(
+			asUser.mutation(api.products.update, {
+				productId,
+				event: { date: EVENT_DATE, timeMinutes: EVENT_TIME, venueId: outletB },
+			}),
+		).rejects.toThrow(/venue can't move/i);
+		await asUser.mutation(api.products.update, {
+			productId,
+			event: {
+				date: EVENT_DATE,
+				timeMinutes: EVENT_TIME,
+				venueId: pickupLocationId,
+			},
+		});
+		const saved = await t.run(async (ctx) => ctx.db.get(productId));
+		expect(saved?.event?.venueId).toBe(pickupLocationId);
+	});
+
+	test("two SAME-DAY events never share a cart — either door (PR review)", async () => {
+		const t = setup();
+		const { asUser, retailer, pickupLocationId } = await seedStore(t);
+		const productA = await seedEventProduct(t, retailer._id);
+		const productB = await asUser.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Sunrise Yoga",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 1,
+			options: [{ name: "Set", values: ["A", "B"] }],
+			event: { date: EVENT_DATE, timeMinutes: EVENT_TIME },
+			variants: [
+				{ optionValues: ["A"], price: 0, onHand: 0 },
+				{ optionValues: ["B"], price: 0, onHand: 0 },
+			],
+		});
+		// Same date, two different events — a date-keyed check would confirm
+		// one event's guests at the other's venue.
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [
+					{ variantId: await variantFor(t, productA, "A"), quantity: 1 },
+					{ variantId: await variantFor(t, productB, "A"), quantity: 1 },
+				],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryMethod: "self_collect",
+				pickupLocationId,
+			}),
+		).rejects.toThrow(/two different events/i);
+
+		const { sessionId } = await asUser.mutation(
+			api.counterCheckout.bindSessionManualPhone,
+			{ waPhone: "60123456789", name: "Aina Hamzah" },
+		);
+		await expect(
+			asUser.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [
+					{ variantId: await variantFor(t, productA, "B"), quantity: 1 },
+					{ variantId: await variantFor(t, productB, "B"), quantity: 1 },
+				],
+				paidInPerson: false,
+			}),
+		).rejects.toThrow(/two different events/i);
 	});
 });
 

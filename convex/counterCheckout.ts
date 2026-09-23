@@ -876,9 +876,10 @@ export const createOrderFromSession = mutation({
 		let eventPickupLocationId: Id<"pickupLocations"> | undefined;
 		let eventPickupSnapshot: PickupSnapshot | undefined;
 		if (eventLock !== undefined) {
-			if (
-				new Set([...eventProducts.values()].map((e) => e.event.date)).size > 1
-			)
+			// Keyed on the PRODUCT, not the date — two same-day events at
+			// different outlets would otherwise merge under whichever venue
+			// landed first (mirrors orders.create).
+			if (eventProducts.size > 1)
 				throw new ConvexError(
 					"This order has RSVPs for two different events — ring them up separately.",
 				);
