@@ -122,7 +122,11 @@ export type ReleaseIconName =
 	// Same reasoning as "table": the glyph the Calendar segment of the orders
 	// view switch actually uses (CalendarRange), so the booking announcements
 	// point at the control they are announcing.
-	| "calendar";
+	| "calendar"
+	// Same reasoning again: the glyph on the new-product wizard's Event card
+	// (CalendarClock), so the events announcement's tile is the card the
+	// seller taps — and not the Booking card's CalendarRange one row above it.
+	| "calendar-clock";
 
 export interface ReleaseEntry {
 	/**
@@ -170,6 +174,54 @@ export interface Release {
  * entry would make "everything newer than X" return the wrong set.
  */
 export const RELEASES: Release[] = [
+	{
+		version: "2026.09.7",
+		date: "2026-09-23",
+		// Notable, on the "whole new way of selling" trigger: a seller who
+		// reads nothing will keep collecting RSVPs in a WhatsApp thread and
+		// counting dishes by hand, because the Event card is the fifth of five
+		// in the new-product wizard and nothing else in the app points at it.
+		// The counter-argument (put to Zaki in the release PR): events are Pro,
+		// so a Starter seller is interrupted for something behind a wall — the
+		// body names the plan, and the Event card itself says "Pro" and why.
+		notable: true,
+		entries: [
+			{
+				kind: "feature",
+				title: {
+					en: "Host an event — guests RSVP, and the headcount counts itself",
+				},
+				body: {
+					en: "A monthly networking breakfast, a Saturday baking class, a three-day camp: the RSVPs used to live in a WhatsApp thread while you counted by hand. Now pick Event when you add a product, then set the date (a last day too, if it runs longer), the time and how many seats. Guests RSVP on your storefront or at your counter and pick their set, package or tent, and the product page tallies each choice, so you know what to prepare. The date and venue are yours to set, never theirs to pick. RSVPs stop at your seat cap, and the day after it ends the listing leaves your storefront by itself. Price it at zero for a free RSVP. Events are on Pro.",
+				},
+				href: "/app/products/new",
+				hrefLabel: { en: "Create an event" },
+				icon: "calendar-clock",
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "Counter preorders show the day they're collected",
+				},
+				body: {
+					en: "Take an order at the counter for Saturday and the day you picked used to vanish — the order list and the order itself hid every counter date, on the guess that it was just today's default. Now only that default stays hidden. A day you chose shows on the order card and inside the order, like any storefront order. On every plan.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "Bookings in your order list use booking words",
+				},
+				body: {
+					en: "A guest who'd checked in could read \"Shipped\" or \"Ready for Pickup\" in the order list, and a finished stay \"Delivered\" — your shop's wording, borrowed for a campsite. Each row now speaks its own: Checked In and Checked Out, or Active and Ended for a package. And on Pro, bulk-marking a mix of orders as Packed now leaves bookings alone, since a stay is never packed, and the toast says how many it skipped.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+		],
+	},
 	{
 		version: "2026.09.6",
 		date: "2026-09-20",
