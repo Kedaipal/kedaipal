@@ -128,15 +128,29 @@ For a cart holding any event line:
    offer outlets the event isn't at. Checkout shows the venue as a read-back
    titled **Venue** ("set by the store, the same for every guest"), and
    `orders.create` overrides whatever pickup id the client sent via
-   `resolveEventVenue` (the event's pick when still active, else the first
-   active point — a venue deactivated after RSVPs opened degrades, never
-   strands a guest). The counter runs the same resolver, so the two doors can
-   never seat one event at different venues. **Save-time rules**: a
-   single-outlet store never picks (unset = the only point, stated read-only
-   in the form so the default isn't silent); a multi-outlet store must name
-   the venue — refused at save, required on the form/wizard with the reason.
-   A store with NO active point still refuses the RSVP outright: a
-   confirmation that never says where to go is a dead end.
+   `resolveEventVenue`. The counter runs the same resolver, so the two doors
+   can never seat one event at different venues. **A HIDDEN pickup point is a
+   first-class venue** (round 5): `isActive: false` removes a point from the
+   buyer's standard-order choice, never from an event it hosts — an
+   *RSVP-only location* IS a hidden point, so no separate "event locations"
+   table/section exists. The resolver honours the named venue whatever its
+   active state (rerouting guests to the "first active" outlet would be a
+   wrong address, strictly worse than a hidden one); the fallback for
+   legacy/unset venues is first active point, else first point at all. The
+   checkout reads the venue through its own public query
+   (`pickupLocations.eventVenuePublicBySlug` — same resolver, buyer-safe
+   shape, gated so only a venue some live event actually names is served),
+   because the active-only public list rightly omits a hidden venue. The
+   Settings → Fulfilment row of a hosting point carries an "Event venue:
+   <names>" line (plus "guests are still sent here" when hidden), and the
+   hide-toast names the consequence — hiding must never read as "gone
+   everywhere". **Save-time rules**: a single-point store never picks (unset
+   = the only point, stated read-only in the form so the default isn't
+   silent); with more than one point — hidden ones count — the seller must
+   name the venue, refused at save, required on the form/wizard with the
+   reason, hidden options suffixed "— hidden from buyers". A store with NO
+   point at all still refuses the RSVP outright: a confirmation that never
+   says where to go is a dead end.
 5. **`fulfilmentDate` = `event.date`, `fulfilmentTimeMinutes` = `event.timeMinutes`,**
    forced — never read from the client.
 6. **Minimum notice and opening hours are SKIPPED.** The seller fixed the moment

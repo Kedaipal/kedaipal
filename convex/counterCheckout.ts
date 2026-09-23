@@ -892,13 +892,14 @@ export const createOrderFromSession = mutation({
 			// over at the counter and needs no pickup card — but an RSVP's guest
 			// leaves and comes back on the event day, and their order page says
 			// "where to go is in the pickup card". Same resolver as the
-			// storefront door (the event's own venue, first-active fallback), so
-			// the two doors can never seat one event at different venues. The
-			// refusal is in seller words — the seller is at this screen.
+			// storefront door (the event's own venue whatever its active state,
+			// first-point fallback), so the two doors can never seat one event
+			// at different venues. The refusal is in seller words — the seller
+			// is at this screen.
 			const venue = await resolveEventVenue(ctx, retailer._id, eventLock);
 			if (venue === null)
 				throw new ConvexError(
-					"An RSVP needs a venue on the guest's order page — add an active pickup point in Settings → Fulfilment first.",
+					"An RSVP needs a venue on the guest's order page — add a pickup point in Settings → Fulfilment first.",
 				);
 			eventPickupLocationId = venue._id;
 			eventPickupSnapshot = buildPickupSnapshot(venue);

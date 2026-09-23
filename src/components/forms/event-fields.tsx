@@ -153,8 +153,8 @@ export function eventDraftValid(
 	opts: {
 		allowPastDate?: boolean;
 		now?: number;
-		/** The store has several active pickup points, so the event must say
-		 * which one hosts it (the server refuses the save otherwise). */
+		/** The store has several pickup points (hidden ones count), so the
+		 * event must say which one hosts it (the server refuses otherwise). */
 		requireVenue?: boolean;
 	} = {},
 ): boolean {
@@ -202,11 +202,13 @@ export function EventFields({
 	 * toggle, so the header row (title + switch) drops and the fields render
 	 * unconditionally. The drawer/full-form rendering is unchanged. */
 	noToggle?: boolean;
-	/** The store's ACTIVE pickup points. One = the venue is a stated fact;
-	 * several = the seller must pick which hosts the event (a guest choosing
-	 * the venue is as wrong as a guest choosing the date). Undefined while
-	 * loading — the selector simply hasn't rendered yet. */
-	venues?: ReadonlyArray<{ _id: string; label: string }>;
+	/** EVERY pickup point of the store — hidden ones included, because a
+	 * venue that buyers can't pick for standard orders is still a place an
+	 * event happens (an RSVP-only location IS a hidden point). One = the venue
+	 * is a stated fact; several = the seller must pick which hosts the event
+	 * (a guest choosing the venue is as wrong as a guest choosing the date).
+	 * Undefined while loading — the selector simply hasn't rendered yet. */
+	venues?: ReadonlyArray<{ _id: string; label: string; isActive: boolean }>;
 }) {
 	const taken = rsvpCount ?? 0;
 	const hasRsvps = taken > 0;
@@ -368,7 +370,7 @@ export function EventFields({
 									<option value="">Pick a pickup point…</option>
 									{venues.map((v) => (
 										<option key={v._id} value={v._id}>
-											{v.label}
+											{v.isActive ? v.label : `${v.label} — hidden from buyers`}
 										</option>
 									))}
 								</select>
@@ -383,13 +385,26 @@ export function EventFields({
 							not to a point of their choosing.
 						</p>
 					) : null}
+					{/* Picking a hidden point is a feature (an RSVP-only venue),
+					    not an accident — but say what it means where it happens. */}
+					{venues !== undefined &&
+					venues.length > 1 &&
+					venues.find((v) => v._id === draft.venueId)?.isActive === false ? (
+						<p className="text-xs text-muted-foreground">
+							This point is hidden from standard orders — guests of this event
+							still see its address on their RSVP.
+						</p>
+					) : null}
 					{venues !== undefined && venues.length === 1 ? (
 						<p className="text-xs text-muted-foreground">
 							Venue:{" "}
 							<span className="font-medium text-foreground">
 								{venues[0].label}
 							</span>{" "}
-							— your pickup point. Guests are sent there.
+							—{" "}
+							{venues[0].isActive
+								? "your pickup point. Guests are sent there."
+								: "your pickup point (hidden from standard orders). Guests of this event still see its address."}
 						</p>
 					) : null}
 

@@ -746,6 +746,35 @@ export const hasEventListings = query({
 	},
 });
 
+/**
+ * Which pickup points host a live event, by name (`z8r3fdff9u`): the
+ * Settings → Fulfilment badge. A point can be hidden from standard orders
+ * yet still be an event's venue (an RSVP-only location), so the row that
+ * hides it must SAY it hosts events — otherwise "hide" looks like it made
+ * the point disappear everywhere, which is false. Explicitly named venues
+ * only: a legacy event with no venue isn't tied to any one point.
+ */
+export const eventVenueUsage = query({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<Array<{ venueId: Id<"pickupLocations">; name: string }>> => {
+		await requireRetailerOwnership(ctx, retailerId);
+		const rows = await ctx.db
+			.query("products")
+			.withIndex("by_retailer_active", (q) =>
+				q.eq("retailerId", retailerId).eq("active", true),
+			)
+			.collect();
+		return rows.flatMap((p) =>
+			p.event?.venueId !== undefined
+				? [{ venueId: p.event.venueId, name: p.name }]
+				: [],
+		);
+	},
+});
+
 export const capState = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }) => {
@@ -1139,13 +1168,15 @@ async function resolveEventUpdate(
 
 /**
  * Save-time venue rules (round 4): the venue is the EVENT's property. A
- * single-outlet store never picks (unset = the only active point); a
- * multi-outlet store MUST say which point hosts it — an unset venue there
- * would leave order time picking arbitrarily. The id is re-branded here
- * after the ownership/active check, because the pure sanitizer can't hold
- * Convex types. Order-time resolution (`resolveEventVenue` in orders.ts)
- * still carries a first-active fallback, so a venue deactivated AFTER save
- * degrades instead of stranding guests.
+ * single-point store never picks (unset = the only point); a store with
+ * several points MUST say which one hosts it — an unset venue there would
+ * leave order time picking arbitrarily. HIDDEN (inactive) points count and
+ * are pickable on purpose: hiding a point removes it from the buyer's
+ * standard-order choice, but an event's venue is never the buyer's choice —
+ * an RSVP-only location IS a hidden point. The id is re-branded here after
+ * the ownership check, because the pure sanitizer can't hold Convex types.
+ * Order-time resolution (`resolveEventVenue` in orders.ts) honours the named
+ * venue whatever its active state.
  */
 /** `ProductEvent` with the venue id re-branded for storage. */
 type StoredProductEvent = Omit<ProductEvent, "venueId"> & {
@@ -1159,19 +1190,17 @@ async function validateEventVenue(
 ): Promise<StoredProductEvent> {
 	if (event.venueId !== undefined) {
 		const venue = await ctx.db.get(event.venueId as Id<"pickupLocations">);
-		if (!venue || venue.retailerId !== retailerId || !venue.isActive)
+		if (!venue || venue.retailerId !== retailerId)
 			throw new ConvexError(
 				"That pickup point isn't available — pick the event's venue again.",
 			);
 		return { ...event, venueId: venue._id };
 	}
-	const active = await ctx.db
+	const points = await ctx.db
 		.query("pickupLocations")
-		.withIndex("by_retailer_active", (q) =>
-			q.eq("retailerId", retailerId).eq("isActive", true),
-		)
+		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 		.take(2);
-	if (active.length > 1)
+	if (points.length > 1)
 		throw new ConvexError(
 			"This store has more than one pickup point — pick which one hosts the event.",
 		);

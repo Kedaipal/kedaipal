@@ -1311,3 +1311,90 @@ describe("Business address — unit / floor line (z8r3fdff8r test round)", () =>
 		expect(saveAddress().hasAttribute("disabled")).toBe(true);
 	});
 });
+
+describe("event-venue badge on pickup points (z8r3fdff9u round 5)", () => {
+	// A hidden point can still be an event's venue — the row must SAY so, or
+	// "hide" reads as "gone everywhere" and the seller wonders why guests are
+	// still being sent to a point she thought she removed.
+	const VENUE_USAGE = getFunctionName(api.products.eventVenueUsage);
+
+	const LOCATIONS = [
+		{
+			_id: "loc_active",
+			label: "The Studio",
+			address: "12 Jln Tun Razak, 50400 KL",
+			isActive: true,
+			sortOrder: 0,
+		},
+		{
+			_id: "loc_hidden",
+			label: "The Hall",
+			address: "5 Jalan Acara, 50480 KL",
+			isActive: false,
+			sortOrder: 1,
+		},
+	];
+
+	beforeEach(() => {
+		vi.mocked(useQuery).mockImplementation(((opts: {
+			__fn: FunctionReference<"query">;
+		}) => {
+			const name = getFunctionName(opts.__fn);
+			if (name === NAME.listLocations)
+				return { data: LOCATIONS, isPending: false };
+			if (name === VENUE_USAGE)
+				return {
+					data: [
+						{ venueId: "loc_hidden", name: "Card Check Camp" },
+						{ venueId: "loc_hidden", name: "Sunrise Yoga" },
+						{ venueId: "loc_hidden", name: "BNI Breakfast" },
+					],
+					isPending: false,
+				};
+			return { data: undefined, isPending: false };
+		}) as never);
+		vi.mocked(useMutation).mockImplementation((() =>
+			vi.fn().mockResolvedValue(undefined)) as never);
+	});
+
+	afterEach(() => {
+		cleanup();
+		window.sessionStorage.clear();
+	});
+
+	function renderTab() {
+		return render(
+			<ActAsProvider>
+				<FulfilmentTab
+					retailerId={SELLER_ID as never}
+					country="MY"
+					currency="MYR"
+					offerSelfCollect={true}
+					offerDelivery={true}
+					deliveryConfig={undefined}
+					businessAddress={undefined}
+					deliveryBooking={undefined}
+					minFulfilmentNoticeDays={undefined}
+					openingHours={undefined}
+					minOrderValue={undefined}
+					awbConfig={undefined}
+					subscription={undefined}
+				/>
+			</ActAsProvider>,
+		);
+	}
+
+	it("names the events a HIDDEN point hosts, with the guests-still-sent-here note and a +N overflow", () => {
+		renderTab();
+		fireEvent.click(screen.getByRole("button", { name: /Show inactive/ }));
+		const badge = screen.getByText(
+			/Event venue: Card Check Camp, Sunrise Yoga \+1 more/,
+		);
+		expect(badge.textContent).toMatch(/guests are still sent here/i);
+	});
+
+	it("a point hosting nothing carries no badge", () => {
+		renderTab();
+		expect(screen.queryByText(/Event venue:/)).toBeNull();
+	});
+});

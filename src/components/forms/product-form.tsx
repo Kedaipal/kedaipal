@@ -858,18 +858,21 @@ export function ProductForm({
 	const [minQty, setMinQty] = useState(
 		initialValues?.minQuantity ? String(initialValues.minQuantity) : "",
 	);
-	// ACTIVE pickup points — the event's venue selector (round 4). Adapter
-	// read per the standing rule; skipped entirely for booking listings,
-	// which can never be events.
+	// EVERY pickup point, hidden ones included — the event's venue selector
+	// (round 4). A point hidden from standard orders can still host an event
+	// (an RSVP-only location IS a hidden point). Adapter read per the standing
+	// rule; skipped entirely for booking listings, which can never be events.
 	const pickupRows = useQuery(
 		convexQuery(
 			api.pickupLocations.listForRetailer,
 			isBooking ? "skip" : { retailerId },
 		),
 	).data;
-	const eventVenues = pickupRows
-		?.filter((r) => r.isActive)
-		.map((r) => ({ _id: r._id as string, label: r.label }));
+	const eventVenues = pickupRows?.map((r) => ({
+		_id: r._id as string,
+		label: r.label,
+		isActive: r.isActive,
+	}));
 	const [eventDraft, setEventDraft] = useState<EventDraft>(
 		() =>
 			initialValues?.eventDraft ??

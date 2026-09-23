@@ -369,10 +369,29 @@ export function CheckoutPage({
 	// AND has at least one active pickup location. Both gates must be open or
 	// the buyer never sees a non-functional option.
 	const selfCollectAvailable = offerSelfCollect && pickupLocations.length > 0;
+	// The EVENT's venue, from the server — the same resolver order time uses,
+	// so what this card shows is what the order will freeze. Fetched (not read
+	// off the standard picker list) because an event's venue may be a point the
+	// seller HIDES from standard orders (an RSVP-only location), which the
+	// public active list deliberately omits. undefined = loading, null = the
+	// store truly has no point to host at.
+	const eventVenue = useQuery(
+		convexQuery(
+			api.pickupLocations.eventVenuePublicBySlug,
+			eventLock
+				? {
+						slug: storeSlug,
+						venueId: eventLock.venueId as
+							| Id<"pickupLocations">
+							| undefined,
+					}
+				: "skip",
+		),
+	).data;
 	// An event with nowhere to collect from is a dead end for the guest — the
 	// server refuses it too. Surfaced as its own explained state rather than a
-	// silent failure at submit.
-	const eventVenueMissing = eventLocked && !selfCollectAvailable;
+	// silent failure at submit. `undefined` is still loading, NOT missing.
+	const eventVenueMissing = eventLocked && eventVenue === null;
 	// Delivery is zero-config (buyer types an address) so it only depends on the
 	// retailer's opt-in. The settings invariant guarantees at least one of these
 	// is true, so `neitherAvailable` is a defensive fallback, not a normal state.
@@ -395,15 +414,6 @@ export function CheckoutPage({
 	);
 	const singlePickup =
 		sortedPickups.length === 1 ? sortedPickups[0] : undefined;
-	// The EVENT's venue (round 4) — the event's own pick when it's still
-	// listed, else the first point (mirrors the server's resolveEventVenue,
-	// which forces the venue regardless of what this client sends). A guest
-	// never chooses: on a multi-outlet store the radio picker would offer
-	// outlets the event isn't at.
-	const eventVenue = eventLock
-		? (sortedPickups.find((p) => p._id === eventLock.venueId) ??
-			sortedPickups[0])
-		: undefined;
 	// How the "when" step behaves for a method + pickup point (z8r3fdff97):
 	// which verbs it speaks, which prep floors it, and whether it asks for a
 	// TIME — delivery always; pickup when the store keeps hours or the cart
@@ -543,11 +553,15 @@ export function CheckoutPage({
 			// Resolve the chosen pickup location id. For the single-location case
 			// we never asked the buyer to pick — auto-fill from the (only) option.
 			let resolvedPickupLocationId: Id<"pickupLocations"> | undefined;
-			if (effectiveMethod === "self_collect" && selfCollectAvailable) {
-				if (eventVenue) {
-					// The event's venue, mirrored server-side (forced there too).
-					resolvedPickupLocationId = eventVenue._id;
-				} else if (singlePickup) {
+			if (eventLock) {
+				// The event's venue, mirrored server-side (forced there too) —
+				// independent of the standard self-collect gates, because a hidden
+				// venue never appears in that picker. Send it when we have it;
+				// while the venue read is still loading the server resolves it
+				// alone, so a fast submit is never refused for a race.
+				if (eventVenue) resolvedPickupLocationId = eventVenue._id;
+			} else if (effectiveMethod === "self_collect" && selfCollectAvailable) {
+				if (singlePickup) {
 					resolvedPickupLocationId = singlePickup._id;
 				} else {
 					const chosen = sortedPickups.find(
@@ -1424,7 +1438,7 @@ export function CheckoutPage({
 						/>
 					) : null}
 
-					{/* An event whose store has no active pickup point can't say where
+					{/* An event whose store has no pickup point at all can't say where
 					    to go. Refused here with the cause named, so the seller can be
 					    told what to fix — never a silent failure at submit. */}
 					{eventVenueMissing ? (
@@ -1618,7 +1632,38 @@ export function CheckoutPage({
 							</form.AppField>
 						) : null}
 
-						{neitherAvailable ? (
+						{/* An EVENT order answers this section by itself: the venue is
+						    the event's, fetched by its own read (it may be a point the
+						    seller hides from standard orders), so neither the method
+						    machinery nor the "not accepting orders" state applies. */}
+						{eventLock ? (
+							<div className="flex flex-col gap-2">
+								{eventVenue ? (
+									<>
+										<PickupSummaryCard
+											location={eventVenue}
+											currency={cart.currency}
+										/>
+										<p className="text-xs text-muted-foreground">
+											Where the event happens — set by the store, the same for
+											every guest.
+										</p>
+									</>
+								) : eventVenue === undefined && !eventVenueMissing ? (
+									<p className="text-xs text-muted-foreground">
+										Loading the venue…
+									</p>
+								) : null}
+								{/* The seller's collection instructions (z8r3fdff97),
+								    deduped across the cart — the same block WhatsApp and
+								    the order page carry, read BEFORE the buyer commits. */}
+								<PickupNotes
+									audience="buyer"
+									locale={pickLocale(locale)}
+									notes={cartPickupNotes}
+								/>
+							</div>
+						) : neitherAvailable ? (
 							<p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
 								This store isn&apos;t accepting orders right now. Please check
 								back soon or message the store owner.
@@ -1669,18 +1714,7 @@ export function CheckoutPage({
 										</div>
 									) : selfCollectAvailable ? (
 										<div className="flex flex-col gap-2">
-											{eventVenue ? (
-												<>
-													<PickupSummaryCard
-														location={eventVenue}
-														currency={cart.currency}
-													/>
-													<p className="text-xs text-muted-foreground">
-														Where the event happens — set by the store, the same
-														for every guest.
-													</p>
-												</>
-											) : singlePickup ? (
+											{singlePickup ? (
 												<PickupSummaryCard
 													location={singlePickup}
 													currency={cart.currency}

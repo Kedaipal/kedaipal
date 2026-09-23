@@ -342,8 +342,8 @@ export function wizardStepIssues(
 	state: WizardState,
 	step: number,
 	opts: {
-		/** The store has several active pickup points, so an armed event must
-		 * name its venue (the server refuses the save otherwise). */
+		/** The store has several pickup points (hidden ones count), so an armed
+		 * event must name its venue (the server refuses the save otherwise). */
 		requireEventVenue?: boolean;
 	} = {},
 ): WizardIssue[] {
@@ -1045,15 +1045,19 @@ export function ProductWizard({
 	const [valueDrafts, setValueDrafts] = useState<string[]>(() =>
 		(initialState?.editor.options ?? []).map(() => ""),
 	);
-	// ACTIVE pickup points — the event venue selector (round 4). Same adapter
-	// read the categories use; one query serves the When-is-it step, the
-	// drawer's EventFields and the venue-required validation.
+	// EVERY pickup point, hidden ones included — the event venue selector
+	// (round 4). A point hidden from standard orders can still host an event
+	// (an RSVP-only location IS a hidden point). Same adapter read the
+	// categories use; one query serves the When-is-it step, the drawer's
+	// EventFields and the venue-required validation.
 	const pickupRows = useQuery(
 		convexQuery(api.pickupLocations.listForRetailer, { retailerId }),
 	).data;
-	const eventVenues = pickupRows
-		?.filter((r) => r.isActive)
-		.map((r) => ({ _id: r._id as string, label: r.label }));
+	const eventVenues = pickupRows?.map((r) => ({
+		_id: r._id as string,
+		label: r.label,
+		isActive: r.isActive,
+	}));
 	const requireEventVenue = (eventVenues?.length ?? 0) > 1;
 	// Categories are only offered on review when the store actually has some —
 	// a brand-new seller shouldn't meet a whole new concept mid-wizard.

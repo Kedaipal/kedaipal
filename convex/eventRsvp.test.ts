@@ -667,10 +667,12 @@ describe("event RSVP — its own status pipeline (`z8r3fdff9u` stages)", () => {
 		expect(plainOrder?.pickupSnapshot).toBeUndefined();
 	});
 
-	test("a counter RSVP with NO active pickup point refuses — in seller words", async () => {
+	test("a counter RSVP resolves a HIDDEN venue; refuses only with no point at all", async () => {
 		const t = setup();
 		const { asUser, retailer, pickupLocationId } = await seedStore(t);
 		const productId = await seedEventProduct(t, retailer._id);
+		// Hiding the point removes it from standard orders, never from the
+		// event it hosts (an RSVP-only location IS a hidden point).
 		await t.run(async (ctx) => {
 			await ctx.db.patch(pickupLocationId, { isActive: false });
 		});
@@ -678,10 +680,31 @@ describe("event RSVP — its own status pipeline (`z8r3fdff9u` stages)", () => {
 			api.counterCheckout.bindSessionManualPhone,
 			{ waPhone: "60123456789", name: "Aina Hamzah" },
 		);
-		await expect(
-			asUser.mutation(api.counterCheckout.createOrderFromSession, {
+		const counter = await asUser.mutation(
+			api.counterCheckout.createOrderFromSession,
+			{
 				sessionId,
 				items: [{ variantId: await variantFor(t, productId, "A"), quantity: 1 }],
+				paidInPerson: false,
+			},
+		);
+		expect(
+			(await orderByShortId(t, counter.shortId))?.pickupSnapshot?.label,
+		).toBe("The Studio");
+
+		// With the point GONE the RSVP has nowhere to point a guest — refused
+		// in seller words (the seller is at this screen).
+		await t.run(async (ctx) => {
+			await ctx.db.delete(pickupLocationId);
+		});
+		const { sessionId: s2 } = await asUser.mutation(
+			api.counterCheckout.bindSessionManualPhone,
+			{ waPhone: "60123456780", name: "Ben" },
+		);
+		await expect(
+			asUser.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId: s2,
+				items: [{ variantId: await variantFor(t, productId, "B"), quantity: 1 }],
 				paidInPerson: false,
 			}),
 		).rejects.toThrow(/venue.*pickup point/i);
@@ -859,6 +882,76 @@ describe("event RSVP — the venue is the event's, never the guest's (round 4)",
 		expect((await orderByShortId(t, shortId))?.pickupSnapshot?.label).toBe(
 			"The Studio",
 		);
+	});
+
+	test("a HIDDEN point is a first-class venue — countable, nameable, honoured, published (round 5)", async () => {
+		const t = setup();
+		const { asUser, retailer, pickupLocationId } = await seedStore(t);
+		// A second point, hidden from standard orders — the RSVP-only location.
+		const { pickupLocationId: hiddenHall } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "The Hall",
+				address: "5 Jalan Acara, 50480 KL",
+			},
+		);
+		await asUser.mutation(api.pickupLocations.setActive, {
+			pickupLocationId: hiddenHall,
+			isActive: false,
+		});
+
+		// COUNTABLE: one active + one hidden is still "more than one point",
+		// so an unset venue refuses at save — order time must never pick.
+		await expect(seedEventProduct(t, retailer._id)).rejects.toThrow(
+			/which one hosts/i,
+		);
+
+		// NAMEABLE + HONOURED: the hidden point saves as the venue and the
+		// order lands there — never rerouted to the "first active" outlet.
+		const productId = await asUser.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "BNI Breakfast",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [{ name: "Set", values: ["A", "B"] }],
+			event: { date: EVENT_DATE, timeMinutes: EVENT_TIME, venueId: hiddenHall },
+			variants: [
+				{ optionValues: ["A"], price: 0, onHand: 0 },
+				{ optionValues: ["B"], price: 0, onHand: 0 },
+			],
+		});
+		const { shortId } = await rsvp(t, {
+			retailerId: retailer._id,
+			variantId: await variantFor(t, productId, "A"),
+			pickupLocationId, // the active outlet — a stale pick, overridden
+		});
+		const order = await orderByShortId(t, shortId);
+		expect(order?.pickupLocationId).toBe(hiddenHall);
+		expect(order?.pickupSnapshot?.label).toBe("The Hall");
+
+		// PUBLISHED: the buyer checkout reads the hidden venue through its own
+		// public query (the active list rightly omits it) — but ONLY because a
+		// live event names it. An unreferenced hidden point stays private.
+		const venue = await t.query(api.pickupLocations.eventVenuePublicBySlug, {
+			slug: "huff-and-puff",
+			venueId: hiddenHall,
+		});
+		expect(venue?.label).toBe("The Hall");
+		expect(
+			await t.query(api.pickupLocations.eventVenuePublicBySlug, {
+				slug: "huff-and-puff",
+				venueId: pickupLocationId, // real point, but no event names it
+			}),
+		).toBeNull();
+
+		// SAID IN SETTINGS: the fulfilment tab's badge data names the event.
+		expect(
+			await asUser.query(api.products.eventVenueUsage, {
+				retailerId: retailer._id,
+			}),
+		).toEqual([{ venueId: hiddenHall, name: "BNI Breakfast" }]);
 	});
 });
 

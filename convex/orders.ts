@@ -395,13 +395,15 @@ export async function loadCheckoutDeliveryQuote(
 
 /**
  * The pickup location HOSTING an event, at order time (round 4): the event's
- * own `venueId` when it's still active, else the store's first active point.
- * A fallback, never a refusal — a venue deactivated after RSVPs opened must
- * degrade (the seller is warned at save time and the guest's page shows
- * whatever venue the order froze), not strand a guest mid-checkout. Returns
- * null only when the store has NO active point at all, which each door
- * refuses in its own words. Shared by `orders.create` and the counter, so
- * the two can never seat the same event at different venues.
+ * own `venueId`, WHATEVER its active state — hiding a point removes it from
+ * the buyer's standard-order choice, never from an event it hosts (an
+ * RSVP-only location IS a hidden point; rerouting guests to the "first
+ * active" outlet would be a wrong address, strictly worse). Unset venue
+ * (legacy events) falls back to the store's first active point, else the
+ * first point at all — a fallback, never a refusal. Returns null only when
+ * the store has NO point whatsoever, which each door refuses in its own
+ * words. Shared by `orders.create` and the counter, so the two can never
+ * seat the same event at different venues.
  */
 export async function resolveEventVenue(
 	ctx: QueryCtx | MutationCtx,
@@ -412,14 +414,18 @@ export async function resolveEventVenue(
 		const venue = await ctx.db.get(
 			event.venueId as Id<"pickupLocations">,
 		);
-		if (venue && venue.retailerId === retailerId && venue.isActive)
-			return venue;
+		if (venue && venue.retailerId === retailerId) return venue;
 	}
-	return ctx.db
+	const active = await ctx.db
 		.query("pickupLocations")
 		.withIndex("by_retailer_active", (q) =>
 			q.eq("retailerId", retailerId).eq("isActive", true),
 		)
+		.first();
+	if (active) return active;
+	return ctx.db
+		.query("pickupLocations")
+		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 		.first();
 }
 
@@ -968,36 +974,11 @@ export const create = mutation({
 			throw new ConvexError("This store isn't offering delivery right now");
 		}
 
-		// Self-collect pickup resolution. The storefront only surfaces self-collect
-		// when (offerSelfCollect && ≥1 active location), so the strict branch fires
-		// whenever both gates are open server-side; when either is closed we
-		// preserve the original behaviour (no pickup info on the order).
+		// Pickup resolution happens AFTER the item loop (below) — an event cart
+		// resolves its venue from the EVENT, and event-ness is only known once
+		// items resolve to products.
 		let sanitizedPickupSnapshot: PickupSnapshot | undefined;
 		let resolvedPickupLocationId: Id<"pickupLocations"> | undefined;
-		if (effectiveDeliveryMethod === "self_collect" && retailer.offerSelfCollect === true) {
-			const activeCount = await ctx.db
-				.query("pickupLocations")
-				.withIndex("by_retailer_active", (q) =>
-					q.eq("retailerId", args.retailerId).eq("isActive", true),
-				)
-				.first();
-			if (activeCount !== null) {
-				if (!args.pickupLocationId) {
-					throw new ConvexError(
-						"Pick a pickup location to continue with self-collect",
-					);
-				}
-				const location = await ctx.db.get(args.pickupLocationId);
-				if (!location || location.retailerId !== args.retailerId) {
-					throw new ConvexError("Pickup location not found");
-				}
-				if (!location.isActive) {
-					throw new ConvexError("That pickup location is no longer available");
-				}
-				resolvedPickupLocationId = location._id;
-				sanitizedPickupSnapshot = buildPickupSnapshot(location);
-			}
-		}
 
 		if (args.items.length === 0)
 			throw new ConvexError("Order must have at least one item");
@@ -1182,6 +1163,41 @@ export const create = mutation({
 			);
 		}
 
+		// Self-collect pickup resolution — STANDARD orders only (an event cart's
+		// venue is resolved from the event, just below). The storefront only
+		// surfaces self-collect when (offerSelfCollect && ≥1 active location), so
+		// the strict branch fires whenever both gates are open server-side; when
+		// either is closed we preserve the original behaviour (no pickup info on
+		// the order).
+		if (
+			effectiveDeliveryMethod === "self_collect" &&
+			retailer.offerSelfCollect === true &&
+			eventProducts.size === 0
+		) {
+			const activeCount = await ctx.db
+				.query("pickupLocations")
+				.withIndex("by_retailer_active", (q) =>
+					q.eq("retailerId", args.retailerId).eq("isActive", true),
+				)
+				.first();
+			if (activeCount !== null) {
+				if (!args.pickupLocationId) {
+					throw new ConvexError(
+						"Pick a pickup location to continue with self-collect",
+					);
+				}
+				const location = await ctx.db.get(args.pickupLocationId);
+				if (!location || location.retailerId !== args.retailerId) {
+					throw new ConvexError("Pickup location not found");
+				}
+				if (!location.isActive) {
+					throw new ConvexError("That pickup location is no longer available");
+				}
+				resolvedPickupLocationId = location._id;
+				sanitizedPickupSnapshot = buildPickupSnapshot(location);
+			}
+		}
+
 		// ── Event lock (`z8r3fdff9u`) ──────────────────────────────────────────
 		// An event product carries a FIXED date the seller chose, so this order's
 		// fulfilment moment is not the buyer's to pick. Everything below is the
@@ -1218,10 +1234,11 @@ export const create = mutation({
 				);
 			// The venue is the EVENT's, forced like its date — never the buyer's
 			// pick (round 4: on a multi-outlet store the generic pickup picker
-			// would let a guest choose an outlet the event isn't at). Refuses
-			// only when the store has no active point at all: a confirmation
-			// that never says where to go is a dead end, and the storefront
-			// gates the RSVP on the same condition.
+			// would let a guest choose an outlet the event isn't at). A HIDDEN
+			// point is a valid venue — hiding removes it from the standard-order
+			// picker, never from an event it hosts. Refuses only when the store
+			// has no point at all: a confirmation that never says where to go is
+			// a dead end.
 			const venue = await resolveEventVenue(
 				ctx,
 				args.retailerId,
