@@ -42,6 +42,7 @@ import {
 	bookingSpanCounted,
 	bookingSpanNoun,
 } from "../../lib/booking-dates";
+import type { KindCard } from "../../lib/kind-card";
 import { asPackageUnit } from "../../lib/package-unit";
 import {
 	convexErrorMessage,
@@ -52,6 +53,7 @@ import {
 import { weekendRateConsequence } from "../../lib/product-summary";
 import { cn } from "../../lib/utils";
 import { cartesian, type OptionAxis, variantLabel } from "../../lib/variant";
+import { ProFeatureTease } from "../app/pro-gate";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 import { Input } from "../ui/input";
@@ -126,40 +128,6 @@ const MAX_VARIANTS = 50;
  * `madeToOrder` below — so this field can never contradict the payload.
  */
 export type ProductShape = "single" | "choices" | "made_to_order";
-
-/**
- * Step 0's card — "What are you selling?" (86eyj70z1 decision 5). FIVE cards
- * but only THREE stored kinds: Food and Event are ROUTERS that land as
- * `physical` and re-shape the questions, never stored values. The card is
- * tracked (not just the derived kind) so the Food card stays lit for a food
- * seller instead of silently jumping to "Physical goods".
- *
- * "Event" (`z8r3fdff9u` round 4) routes to `physical` + `state.event.on` and
- * walks its own step sequence (When is it? → choices → price → caps). It is
- * deliberately NOT a stored kind: kind answers WHAT is sold (food vs a
- * service) while the event flag answers HOW its date works — two orthogonal
- * axes (a breakfast is food AND an event), and the flag is reversible where a
- * kind is immutable. `physical` is the underlying kind because every event
- * hands something over at the venue (a food set, a pack, a badge) and
- * physical's semantics are the superset; the choice is near-invisible while
- * the event is on (delivery, prep and notice are all suppressed).
- */
-export const KIND_CARDS = [
-	"food",
-	"physical",
-	"service",
-	"booking",
-	"event",
-] as const;
-export type KindCard = (typeof KIND_CARDS)[number];
-
-/** Guards `?card=` on `/app/products/new` (`z8r3fdhkr7`) — a closed union, so
- * a hand-typed value can never select something step 0 doesn't render. */
-export function isKindCard(value: unknown): value is KindCard {
-	return (
-		typeof value === "string" && (KIND_CARDS as readonly string[]).includes(value)
-	);
-}
 
 /** Card → stored kind. Food and Event are routers: they store as physical. */
 export function kindFromCard(card: KindCard): ProductKind {
@@ -273,13 +241,20 @@ export function wizardKind(state: WizardState): ProductKind {
 
 export type WizardIssue = { field: string; message: string };
 
-/** Step 0's refusal for a seller whose plan can't publish an event — said at
- * the card (never a flow that dead-ends at Publish), and on arrival when a
- * `?card=event` link brought them there. One message, both doors. */
+/** Step 0's refusal for a seller whose plan can't publish an event — said
+ * at the card (never a flow that dead-ends at Publish), and on arrival when a
+ * `?card=event` link brought them there. One message, both doors.
+ *
+ * Its own field, not step 0's generic "kind": it renders directly UNDER the
+ * Event card as the house upsell strip (`ProFeatureTease`, with its Upgrade
+ * button), while "Pick one to continue." keeps the slot below the list. Below
+ * the list it sat under a phone's sticky Continue and read as nothing
+ * happening (#297 review, measured at 375×812). */
 export const EVENTS_LOCKED_ISSUE: WizardIssue = {
-	field: "kind",
-	message:
-		"Events are part of the Pro plan — upgrade in Settings → Billing to take RSVPs.",
+	field: "kind:events-locked",
+	// Short on purpose: it sits beside the strip's own Upgrade button in a
+	// ~150px column on a phone — a longer sentence wrapped to four lines.
+	message: "Events are part of the Pro plan.",
 };
 
 /**
@@ -1090,7 +1065,7 @@ export function ProductWizard({
 	onOpenFullForm,
 	onExit,
 	initialState,
-	initialCard,
+	linkedCard,
 }: {
 	/** Owning retailer — feeds the review step's category picker. */
 	retailerId: Id<"retailers">;
@@ -1113,10 +1088,13 @@ export function ProductWizard({
 	/** Restored draft from the full form's "switch back to guided setup" —
 	 * the wizard opens at the first unanswered step, every value in place. */
 	initialState?: WizardState;
-	/** A deep link's step-0 card (`?card=`, `z8r3fdhkr7`) — pre-selected
-	 * through the same transition a tap uses (`openingWizard`). A restored
-	 * `initialState` outranks it: that draft is the seller's own answer. */
-	initialCard?: KindCard;
+	/** The step-0 card a `?card=` link asks for (`z8r3fdhkr7`). At mount it's
+	 * pre-selected through the same transition a tap uses (`openingWizard`);
+	 * if it CHANGES while the wizard is open — What's new reopened mid-draft —
+	 * it's applied once more, as a tap (see `pickCard`). A restored
+	 * `initialState` outranks it at mount: that draft is the seller's own
+	 * answer. */
+	linkedCard?: KindCard;
 }) {
 	const [step, setStep] = useState(() =>
 		initialState ? wizardInitialStep(initialState) : 0,
@@ -1126,10 +1104,36 @@ export function ProductWizard({
 	const [opening] = useState(() =>
 		initialState
 			? { state: initialState, issues: [] }
-			: openingWizard({ defaultKind, card: initialCard, eventsLocked }),
+			: openingWizard({ defaultKind, card: linkedCard, eventsLocked }),
 	);
 	const [state, setStateRaw] = useState<WizardState>(opening.state);
 	const [issues, setIssues] = useState<WizardIssue[]>(opening.issues);
+	// The link value last applied — so a `?card=` that changes while the
+	// wizard is open is applied exactly once, and a re-render never re-applies
+	// it (see the adjustment just above the render).
+	const [appliedLink, setAppliedLink] = useState(linkedCard);
+	// A card a link just chose, waiting to be scrolled into view. On a phone
+	// step 0's fifth card sits under the sticky Continue (#297 review: 610–686
+	// under 628–700 at 360×780), so an arrival that only SETS the answer
+	// looks like nothing happened. The first paint is already the right state;
+	// this only moves the scroll position, once.
+	const [reveal, setReveal] = useState<KindCard | null>(() =>
+		initialState === undefined && linkedCard !== undefined ? linkedCard : null,
+	);
+	const revealRef = useRef<HTMLElement | null>(null);
+	// One callback ref for whichever element is the target (a card's wrapper
+	// or the event hint) — a RefObject would be typed to a single tag.
+	const setRevealTarget = (el: HTMLElement | null) => {
+		revealRef.current = el;
+	};
+	useEffect(() => {
+		if (reveal === null) return;
+		// `nearest` + the target's phone-only scroll margin (clears the sticky
+		// Continue and the bottom nav): scrolls only when the answer is covered,
+		// so a desktop page that already shows it never jumps.
+		revealRef.current?.scrollIntoView({ block: "nearest" });
+		setReveal(null);
+	}, [reveal]);
 	const [uploading, setUploading] = useState(false);
 	const [submitting, setSubmitting] = useState(false);
 	// The one destructive answer the wizard ever asks for — a type switch that
@@ -1484,6 +1488,17 @@ export function ProductWizard({
 		else apply();
 	}
 
+	/** Step 0's card, chosen — by a tap, or by a `?card=` link that changed
+	 * while the wizard was open. Events are Pro: the card refuses WITH the
+	 * reason instead of opening a flow that can't publish. */
+	function pickCard(card: KindCard) {
+		if (card === "event" && eventsLocked) {
+			setIssues([EVENTS_LOCKED_ISSUE]);
+			return;
+		}
+		switchKind(card);
+	}
+
 	// --- Custom line ---------------------------------------------------------
 	function patchCustom(partial: Partial<CustomLineDraft>) {
 		if (!customLine) return;
@@ -1712,6 +1727,36 @@ export function ProductWizard({
 		);
 	}
 
+	// A `?card=` that changed while the wizard is open (What's new reopened
+	// mid-draft, "Create an event" tapped): apply it once, exactly as a tap on
+	// step 0 would — the lock refuses with its reason, a booking switch asks
+	// before dropping typed prices — and show step 0 so the seller sees what
+	// changed. Adjusted during render (React's "store the previous prop"
+	// pattern), never by remounting: a remount would silently throw the draft
+	// away. Before this the URL changed and nothing on screen did.
+	if (linkedCard !== appliedLink) {
+		setAppliedLink(linkedCard);
+		if (linkedCard !== undefined) {
+			setStep(0);
+			pickCard(linkedCard);
+			setReveal(linkedCard);
+		}
+	}
+
+	// What a link's reveal scrolls to: the refusal under the Event card when
+	// the plan is locked, the event hint (just under the Event card) on the
+	// event route, else the chosen card itself.
+	const revealKey: KindCard | "event-hint" | null = issueFor(
+		EVENTS_LOCKED_ISSUE.field,
+	)
+		? "event"
+		: state.kindCard === "event"
+			? "event-hint"
+			: state.kindCard;
+	// Phone-only: the sticky Continue and the bottom nav cover the bottom of
+	// the screen there; from `lg` the CTA is static and nothing is covered.
+	const revealMargin = "scroll-mb-56 lg:scroll-mb-0";
+
 	return (
 		<div className="flex flex-col gap-4">
 			{/* Header: back + step title + progress dots + cancel. Four items on one
@@ -1809,21 +1854,17 @@ export function ProductWizard({
 									description: string;
 								}[]
 							).map(({ card, icon, title, description }) => (
-								<div key={card} className="relative">
+								<div
+									key={card}
+									ref={revealKey === card ? setRevealTarget : undefined}
+									className={cn("relative", revealMargin)}
+								>
 									<AnswerCard
 										selected={state.kindCard === card}
 										icon={icon}
 										title={title}
 										description={description}
-										onClick={() => {
-											// Events are Pro: the card refuses WITH the reason
-											// instead of opening a flow that can't publish.
-											if (card === "event" && eventsLocked) {
-												setIssues([EVENTS_LOCKED_ISSUE]);
-												return;
-											}
-											switchKind(card);
-										}}
+										onClick={() => pickCard(card)}
 									/>
 									{card === "event" && eventsLocked ? (
 										<span className="pointer-events-none absolute right-3 top-3 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-bold text-accent-emphasis">
@@ -1837,6 +1878,16 @@ export function ProductWizard({
 										<span className="pointer-events-none absolute right-3 top-3 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-bold text-accent-emphasis">
 											Your store type
 										</span>
+									) : null}
+									{/* The refusal sits UNDER the card it refuses, with the
+									    way forward — not below the list, where a phone's
+									    sticky Continue hid it. */}
+									{card === "event" && issueFor(EVENTS_LOCKED_ISSUE.field) ? (
+										<div role="alert" className="mt-2">
+											<ProFeatureTease
+												message={EVENTS_LOCKED_ISSUE.message}
+											/>
+										</div>
 									) : null}
 								</div>
 							))}
@@ -1862,7 +1913,13 @@ export function ProductWizard({
 							</p>
 						) : null}
 						{state.kindCard === "event" ? (
-							<p className="rounded-xl bg-accent/5 px-3 py-2 text-xs text-muted-foreground">
+							<p
+								ref={revealKey === "event-hint" ? setRevealTarget : undefined}
+								className={cn(
+									"rounded-xl bg-accent/5 px-3 py-2 text-xs text-muted-foreground",
+									revealMargin,
+								)}
+							>
 								Guests{" "}
 								<span className="font-medium text-foreground">
 									RSVP to one date you fix

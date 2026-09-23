@@ -14,14 +14,13 @@ import {
 } from "../components/forms/product-form";
 import {
 	formDraftToWizardState,
-	isKindCard,
-	type KindCard,
 	ProductWizard,
 	type WizardState,
 	type wizardHandoff,
 } from "../components/forms/product-wizard";
 import { Button } from "../components/ui/button";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { isKindCard, type KindCard } from "../lib/kind-card";
 import { hasFeature } from "../lib/subscription";
 
 /**
@@ -193,7 +192,7 @@ function NewProductRoute() {
 					currency={retailer.currency}
 					defaultKind={retailer.storeType}
 					initialState={wizardReturn}
-					initialCard={card}
+					linkedCard={card}
 					onSubmit={handleCreate}
 					onSkipToFullForm={openFullForm}
 					onOpenFullForm={openFullForm}

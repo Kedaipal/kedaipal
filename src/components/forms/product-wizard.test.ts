@@ -4,8 +4,6 @@ import {
 	buildWizardSubmitValues,
 	EVENTS_LOCKED_ISSUE,
 	emptyWizardState,
-	isKindCard,
-	KIND_CARDS,
 	kindFromCard,
 	formDraftToWizardState,
 	openingWizard,
@@ -18,6 +16,7 @@ import {
 	wizardSteps,
 	withKindCard,
 } from "./product-wizard";
+import { isKindCard, KIND_CARDS } from "../../lib/kind-card";
 import { rebuildRows, type VariantRow } from "./variant-editor";
 
 function row(partial: Partial<VariantRow> = {}): VariantRow {

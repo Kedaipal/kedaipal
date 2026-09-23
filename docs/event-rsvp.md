@@ -343,8 +343,10 @@ one editor, three doors: step, drawer, full form). The Pro gate refuses at
 the card **with the reason**, never opening a flow that can't publish.
 `/app/products/new?card=event` (`z8r3fdhkr7`) opens step 0 with the Event
 card already selected — the "Create an event" link in the v2026.09.7
-What's-new note — through the same transition as the tap, and the same
-refusal (shown on arrival) on a locked plan. See
+What's-new note — through the same transition as the tap, and brings it
+into view on a phone. On a locked plan the same refusal shows on arrival,
+**under the Event card** as the house Upgrade strip (`ProFeatureTease`),
+never below the list where the sticky Continue hid it. See
 [`product-setup-wizard.md`](./product-setup-wizard.md). Why
 NOT a fourth kind, even ignoring cost: kind answers *what is sold*, the event
 flag answers *how its date works* — orthogonal axes (a breakfast is food AND
