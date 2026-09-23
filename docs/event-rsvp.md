@@ -295,9 +295,26 @@ event changes **what the product is** — it gains a date, a venue, a seat count
 and a listing that retires itself. It also *overrides* the minimum notice below
 it, which is why it comes first.
 
-In the wizard it lives in the review step's "More options" drawer, not as a
-step: the wizard's steps are the questions every product must answer, and "is
-this an event?" is no for almost all of them.
+In the wizard the event has a **front door** (round 4, Zaki's live-test
+finding — the drawer-only entry was invisible to the exact persona the
+feature serves): step 0 gains an **Event card** next to Booking. Like Food,
+the card is a *router*, not a stored kind — it lands as `physical` + the
+event flag armed, and walks its own route: **When is it?** (date, last day,
+time, seats — right after the name, because the date is the product's
+identity) → guest-choice vocabulary on the type step (food set / package /
+tent type; made-to-order hidden) → price (with the "RM 0 = free RSVP" hint)
+→ **Cap each choice separately?** (the preparation step re-worded: per-choice
+caps are how Helinox limits tent slots per type) → review. Selecting the card
+arms `event.on`; switching away disarms it, keeping typed values. On the
+event route the review drawer hides the event fields (the step owns them —
+one editor, three doors: step, drawer, full form). The Pro gate refuses at
+the card **with the reason**, never opening a flow that can't publish. Why
+NOT a fourth kind, even ignoring cost: kind answers *what is sold*, the event
+flag answers *how its date works* — orthogonal axes (a breakfast is food AND
+an event); the flag is reversible where kind is immutable; and booking earned
+its kind by forking the data model (no variants, own index) while an event
+forks nothing. The toggle in the drawer / full form remains for turning an
+EXISTING product into an event.
 
 ### Min notice + prep time HIDE while the event toggle is on
 

@@ -165,12 +165,17 @@ export function EventFields({
 	/** Live RSVPs already taken — the date and the toggle lock once this is > 0.
 	 * Undefined on create (nothing can have RSVP'd yet). */
 	rsvpCount,
+	noToggle,
 }: {
 	draft: EventDraft;
 	onChange: (next: EventDraft) => void;
 	/** Client mirror of the `events` plan gate — the server enforces it too. */
 	locked: boolean;
 	rsvpCount?: number;
+	/** Wizard EVENT-FLOW step (`z8r3fdff9u` round 4): the flow itself is the
+	 * toggle, so the header row (title + switch) drops and the fields render
+	 * unconditionally. The drawer/full-form rendering is unchanged. */
+	noToggle?: boolean;
 }) {
 	const taken = rsvpCount ?? 0;
 	const hasRsvps = taken > 0;
@@ -198,30 +203,38 @@ export function EventFields({
 
 	return (
 		<div className="flex flex-col gap-4">
-			<div className="flex items-start justify-between gap-4">
-				<div className="min-w-0">
-					<h4 className="flex items-center gap-2 text-sm font-semibold leading-tight">
-						This is an event
-						{locked ? <ProBadge /> : null}
-					</h4>
-					<p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-						{locked
-							? "Events are part of the Pro plan. Upgrade in Settings → Billing to take RSVPs."
-							: hasRsvps
-								? `${taken} ${taken === 1 ? "guest has" : "guests have"} RSVP'd — cancel or archive this event instead of turning it off.`
-								: "Guests RSVP to one fixed date instead of picking their own. Collected at your pickup point, and the listing comes off your storefront by itself the day after it ends."}
-					</p>
+			{noToggle ? null : (
+				<div className="flex items-start justify-between gap-4">
+					<div className="min-w-0">
+						<h4 className="flex items-center gap-2 text-sm font-semibold leading-tight">
+							This is an event
+							{locked ? <ProBadge /> : null}
+						</h4>
+						<p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+							{locked
+								? "Events are part of the Pro plan. Upgrade in Settings → Billing to take RSVPs."
+								: hasRsvps
+									? `${taken} ${taken === 1 ? "guest has" : "guests have"} RSVP'd — cancel or archive this event instead of turning it off.`
+									: "Guests RSVP to one fixed date instead of picking their own. Collected at your pickup point, and the listing comes off your storefront by itself the day after it ends."}
+						</p>
+					</div>
+					<ToggleSwitch
+						on={draft.on}
+						onChange={(on) => set({ on })}
+						disabled={locked || hasRsvps}
+						label="This product is an event"
+					/>
 				</div>
-				<ToggleSwitch
-					on={draft.on}
-					onChange={(on) => set({ on })}
-					disabled={locked || hasRsvps}
-					label="This product is an event"
-				/>
-			</div>
+			)}
 
-			{draft.on ? (
-				<div className="flex flex-col gap-4 border-t border-border pt-4">
+			{draft.on || noToggle ? (
+				<div
+					className={
+						noToggle
+							? "flex flex-col gap-4"
+							: "flex flex-col gap-4 border-t border-border pt-4"
+					}
+				>
 					<div className="flex flex-wrap items-start gap-4">
 						<div className="flex flex-col gap-1.5">
 							<label htmlFor="event-date" className="text-sm font-medium">

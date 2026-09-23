@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
 	CalendarRange,
 	ChefHat,
+	CalendarClock,
 	ChevronLeft,
 	EyeOff,
 	ImagePlus,
@@ -61,6 +62,7 @@ import {
 	EMPTY_EVENT_DRAFT,
 	type EventDraft,
 	eventDraftValid,
+	eventEndDateIssue,
 	EventFields,
 	eventSubmitValue,
 } from "./event-fields";
@@ -125,21 +127,33 @@ const MAX_VARIANTS = 50;
 export type ProductShape = "single" | "choices" | "made_to_order";
 
 /**
- * Step 0's card — "What are you selling?" (86eyj70z1 decision 5). FOUR cards
- * but only THREE stored kinds: Food is a router that lands as `physical` and
- * re-words the preparation question, never a stored value. The card is
+ * Step 0's card — "What are you selling?" (86eyj70z1 decision 5). FIVE cards
+ * but only THREE stored kinds: Food and Event are ROUTERS that land as
+ * `physical` and re-shape the questions, never stored values. The card is
  * tracked (not just the derived kind) so the Food card stays lit for a food
  * seller instead of silently jumping to "Physical goods".
+ *
+ * "Event" (`z8r3fdff9u` round 4) routes to `physical` + `state.event.on` and
+ * walks its own step sequence (When is it? → choices → price → caps). It is
+ * deliberately NOT a stored kind: kind answers WHAT is sold (food vs a
+ * service) while the event flag answers HOW its date works — two orthogonal
+ * axes (a breakfast is food AND an event), and the flag is reversible where a
+ * kind is immutable. `physical` is the underlying kind because every event
+ * hands something over at the venue (a food set, a pack, a badge) and
+ * physical's semantics are the superset; the choice is near-invisible while
+ * the event is on (delivery, prep and notice are all suppressed).
  */
-export type KindCard = "food" | "physical" | "service" | "booking";
+export type KindCard = "food" | "physical" | "service" | "booking" | "event";
 
-/** Card → stored kind. Food is the router: it stores as physical. */
+/** Card → stored kind. Food and Event are routers: they store as physical. */
 export function kindFromCard(card: KindCard): ProductKind {
-	return card === "food" ? "physical" : card;
+	return card === "food" || card === "event" ? "physical" : card;
 }
 
 /** Stored kind → the card to light. `physical` lights "Physical goods" —
- * the food identity is a wizard-session affordance, not stored (locked). */
+ * the food and event identities are wizard-session affordances, not stored
+ * (a form draft coming back with `event.on` keeps the DRAWER flow, which
+ * edits the same state — no dead end, just a different door). */
 export function cardFromKind(kind: ProductKind): KindCard {
 	return kind;
 }
@@ -282,8 +296,14 @@ export function effectiveShape(state: WizardState): ProductShape | null {
 export function wizardSteps(
 	shape: ProductShape | null,
 	kind: ProductKind = "physical",
+	/** The step-0 Event card is selected — the flow gains "When is it?" (6)
+	 * right after the name (the date IS the product's identity), keeps the
+	 * choices and price steps (food sets / packages), and keeps the caps step
+	 * reworded (per-choice caps are how Helinox limits tent slots per type). */
+	eventFlow = false,
 ): number[] {
 	if (kind === "booking") return [0, 1, 3, 5];
+	if (eventFlow) return [0, 1, 6, 2, 3, 4, 5];
 	return shape === "made_to_order" ? [0, 1, 2, 3, 5] : [0, 1, 2, 3, 4, 5];
 }
 
@@ -350,6 +370,25 @@ export function wizardStepIssues(
 	if (step === 0) {
 		if (state.kindCard === null) {
 			issues.push({ field: "kind", message: "Pick one to continue." });
+		}
+	}
+	// The event flow's "When is it?" step — same rules the review-step check
+	// below enforces (and the server re-enforces), addressed here so the
+	// seller is stopped ON the step that owns the fields.
+	if (step === 6) {
+		const endIssue = eventEndDateIssue(state.event);
+		if (state.event.date.trim().length === 0) {
+			issues.push({ field: "event", message: "Pick the event date." });
+		} else if (endIssue !== null) {
+			// The specific problem beats the generic sentence — "the last day
+			// can't be before the event date" tells the seller which field.
+			issues.push({ field: "event", message: endIssue });
+		} else if (!eventDraftValid(state.event)) {
+			issues.push({
+				field: "event",
+				message:
+					"Set an event date of today or later, and a seat limit between 1 and 500 (or leave it blank).",
+			});
 		}
 	}
 	if (step === 1) {
@@ -785,7 +824,11 @@ export function formDraftToWizardState(draft: ProductFormDraft): WizardState {
  * answer (structural nulls included), else the review step.
  */
 export function wizardInitialStep(state: WizardState): number {
-	const steps = wizardSteps(effectiveShape(state), wizardKind(state));
+	const steps = wizardSteps(
+		effectiveShape(state),
+		wizardKind(state),
+		state.kindCard === "event",
+	);
 	// Every step but the last (Review) — Review is where an answered draft lands.
 	for (const s of steps.slice(0, -1)) {
 		if (wizardStepIssues(state, s).length > 0) return s;
@@ -838,6 +881,7 @@ export function wizardPriceLabel(state: WizardState, currency: string): string {
 const STEP_TITLES: Record<number, string> = {
 	0: "Selling",
 	1: "Name it",
+	6: "The date",
 	2: "Type",
 	3: "Price",
 	4: "Preparation",
@@ -1264,16 +1308,28 @@ export function ProductWizard({
 	 */
 	function switchKind(card: KindCard) {
 		if (state.kindCard === card) return;
+		// The Event card IS the event toggle: selecting it arms the flag the
+		// submit values read, leaving it disarms — so a seller who tries Event
+		// and backs out to Food never ships an accidental event. Values are
+		// kept (the EventDraft posture: toggling off doesn't erase a typed
+		// date).
+		const eventPatch =
+			card === "event"
+				? { event: { ...state.event, on: true } }
+				: state.kindCard === "event"
+					? { event: { ...state.event, on: false } }
+					: {};
 		const nextBooking = kindFromCard(card) === "booking";
 		const wasBooking = isBooking;
 		if (nextBooking === wasBooking) {
-			patch({ kindCard: card });
+			patch({ kindCard: card, ...eventPatch });
 			return;
 		}
 		askBeforeLosingChoices(() => {
 			if (nextBooking) {
 				patch({
 					kindCard: card,
+					...eventPatch,
 					shape: null,
 					fulfilmentAnswered: true,
 					editor: {
@@ -1298,6 +1354,7 @@ export function ProductWizard({
 				// the seller doesn't retype; shape + preparation are re-asked.
 				patch({
 					kindCard: card,
+					...eventPatch,
 					shape: null,
 					fulfilmentAnswered: false,
 					editor: {
@@ -1382,7 +1439,7 @@ export function ProductWizard({
 	// made-to-order skips Preparation. Recomputed per render off the live
 	// answer, so changing the kind/type mid-wizard re-plans the remaining route
 	// instead of stranding the seller on a dropped step.
-	const steps = wizardSteps(shape, kind);
+	const steps = wizardSteps(shape, kind, state.kindCard === "event");
 	const stepPos = Math.max(steps.indexOf(step), 0);
 
 	function goNext() {
@@ -1623,6 +1680,12 @@ export function ProductWizard({
 										title: "Booking",
 										description: "Campsite, venue, homestay, rental",
 									},
+									{
+										card: "event" as const,
+										icon: <CalendarClock className="size-5" aria-hidden />,
+										title: "Event",
+										description: "Class, workshop, camp — guests RSVP",
+									},
 								] satisfies {
 									card: KindCard;
 									icon: ReactNode;
@@ -1636,8 +1699,27 @@ export function ProductWizard({
 										icon={icon}
 										title={title}
 										description={description}
-										onClick={() => switchKind(card)}
+										onClick={() => {
+											// Events are Pro: the card refuses WITH the reason
+											// instead of opening a flow that can't publish.
+											if (card === "event" && eventsLocked) {
+												setIssues([
+													{
+														field: "kind",
+														message:
+															"Events are part of the Pro plan — upgrade in Settings → Billing to take RSVPs.",
+													},
+												]);
+												return;
+											}
+											switchKind(card);
+										}}
 									/>
+									{card === "event" && eventsLocked ? (
+										<span className="pointer-events-none absolute right-3 top-3 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-bold text-accent-emphasis">
+											Pro
+										</span>
+									) : null}
 									{/* Why this card is pre-ringed — the storeType default. */}
 									{defaultKind !== undefined &&
 									cardFromKind(defaultKind) === card &&
@@ -1669,6 +1751,18 @@ export function ProductWizard({
 								each night holds.
 							</p>
 						) : null}
+						{state.kindCard === "event" ? (
+							<p className="rounded-xl bg-accent/5 px-3 py-2 text-xs text-muted-foreground">
+								Guests{" "}
+								<span className="font-medium text-foreground">
+									RSVP to one date you fix
+								</span>{" "}
+								— no calendar, no approval. They pick a food set or package if
+								you offer choices, seats cap the room, and the listing takes
+								itself off your storefront after the event. RM 0 makes it a free
+								RSVP.
+							</p>
+						) : null}
 						<IssueText message={issueFor("kind")} />
 					</>
 				) : null}
@@ -1678,9 +1772,11 @@ export function ProductWizard({
 						<h3 className="text-xl font-bold leading-tight">
 							{isBooking
 								? "Name this listing"
-								: kind === "service"
-									? "Name your service"
-									: "Name your product"}
+								: state.kindCard === "event"
+									? "Name your event"
+									: kind === "service"
+										? "Name your service"
+										: "Name your product"}
 						</h3>
 						<label className="flex flex-col gap-1.5 text-sm font-medium">
 							Name
@@ -1689,9 +1785,11 @@ export function ProductWizard({
 								placeholder={
 									isBooking
 										? "e.g. Riverside Standard Plot"
-										: kind === "service"
-											? "e.g. Tent deep-clean (2-man)"
-											: "e.g. Chocolate fudge brownies"
+										: state.kindCard === "event"
+											? "e.g. BNI Breakfast · October"
+											: kind === "service"
+												? "e.g. Tent deep-clean (2-man)"
+												: "e.g. Chocolate fudge brownies"
 								}
 								value={state.name}
 								maxLength={120}
@@ -1733,10 +1831,32 @@ export function ProductWizard({
 					</>
 				) : null}
 
+				{step === 6 ? (
+					<>
+						<h3 className="text-xl font-bold leading-tight">When is it?</h3>
+						<p className="-mt-2 text-sm text-muted-foreground">
+							Guests RSVP to this exact moment — they never pick a date, and
+							delivery is off for the whole order.
+						</p>
+						{/* The step IS the toggle (the Event card armed it), so the
+						    fields render headerless. Same component, same state as the
+						    drawer and the full form — three doors, one editor. */}
+						<EventFields
+							draft={state.event}
+							onChange={(event) => patch({ event })}
+							locked={eventsLocked}
+							noToggle
+						/>
+						<IssueText message={issueFor("event")} />
+					</>
+				) : null}
+
 				{step === 2 ? (
 					<>
 						<h3 className="text-xl font-bold leading-tight">
-							What kind of product is it?
+							{state.kindCard === "event"
+								? "Do guests pick an option?"
+								: "What kind of product is it?"}
 						</h3>
 						<p className="-mt-2 text-sm text-muted-foreground">
 							This decides what we ask you for next.
@@ -1745,27 +1865,47 @@ export function ProductWizard({
 							<AnswerCard
 								selected={shape === "single"}
 								icon={<PackageCheck className="size-5" aria-hidden />}
-								title="Just one item"
-								description="One name, one price. e.g. Nasi lemak bungkus"
+								title={
+									state.kindCard === "event"
+										? "One ticket for everyone"
+										: "Just one item"
+								}
+								description={
+									state.kindCard === "event"
+										? "Every guest gets the same thing at one price."
+										: "One name, one price. e.g. Nasi lemak bungkus"
+								}
 								onClick={switchToSingle}
 							/>
 							<AnswerCard
 								selected={showAxes}
 								icon={<ChefHat className="size-5" aria-hidden />}
-								title="Buyer picks a choice"
-								description="A size, flavour or weight — each with its own price. e.g. Small / Medium / Large"
+								title={
+									state.kindCard === "event"
+										? "Guests pick a choice"
+										: "Buyer picks a choice"
+								}
+								description={
+									state.kindCard === "event"
+										? "A food set, package or tent type — each with its own price. e.g. Set A / Set B"
+										: "A size, flavour or weight — each with its own price. e.g. Small / Medium / Large"
+								}
 								onClick={switchToChoices}
 							/>
 							{/* Third type (86eyfq04j) — the bespoke seller's product. No
 							    choices to set up and no price to commit to; the price step
-							    that follows is optional. */}
-							<AnswerCard
-								selected={madeToOrder}
-								icon={<Sparkles className="size-5" aria-hidden />}
-								title="Made to order"
-								description="Buyer tells you what they want; you quote a price and get a mockup approved. e.g. a custom cake"
-								onClick={switchToMadeToOrder}
-							/>
+							    that follows is optional. Not offered on the EVENT route: a
+							    quote-and-mockup round-trip has no place in an RSVP (the
+							    full form can still compose the two). */}
+							{state.kindCard === "event" ? null : (
+								<AnswerCard
+									selected={madeToOrder}
+									icon={<Sparkles className="size-5" aria-hidden />}
+									title="Made to order"
+									description="Buyer tells you what they want; you quote a price and get a mockup approved. e.g. a custom cake"
+									onClick={switchToMadeToOrder}
+								/>
+							)}
 						</div>
 						{madeToOrder ? (
 							<p className="rounded-xl bg-accent/5 px-3 py-2 text-xs text-muted-foreground">
@@ -2072,6 +2212,13 @@ export function ProductWizard({
 									? "Do you have a starting price?"
 									: "Set your price"}
 						</h3>
+						{state.kindCard === "event" ? (
+							<p className="-mt-2 text-sm text-muted-foreground">
+								Type 0 for a free RSVP — guests confirm without being asked to
+								pay. (A blank price means "not priced yet", so the 0 is
+								explicit.)
+							</p>
+						) : null}
 						{/* Made to order edits its OWN line — the product has no matrix to
 						    price. Both fields are optional: a blank price is the storefront's
 						    "Price on quote", and the prompt becomes the placeholder in the
@@ -2242,8 +2389,16 @@ export function ProductWizard({
 				{step === 4 ? (
 					<>
 						<h3 className="text-xl font-bold leading-tight">
-							How do you prepare orders?
+							{state.kindCard === "event"
+								? "Cap each choice separately?"
+								: "How do you prepare orders?"}
 						</h3>
+						{state.kindCard === "event" ? (
+							<p className="-mt-2 text-sm text-muted-foreground">
+								The seat limit (from the date step) caps the whole event either
+								way — this is only about individual choices running out.
+							</p>
+						) : null}
 						<div className="flex flex-col gap-2.5">
 							{/* "Made fresh", not "Made to order" — that names a product TYPE
 							    in step 2 now, and two differently-meaning controls with one
@@ -2251,8 +2406,16 @@ export function ProductWizard({
 							<AnswerCard
 								selected={state.fulfilmentAnswered && allMto}
 								icon={<ChefHat className="size-5" aria-hidden />}
-								title="Made fresh"
-								description="You make each order fresh. Never marked sold out."
+								title={
+									state.kindCard === "event"
+										? "No per-choice cap"
+										: "Made fresh"
+								}
+								description={
+									state.kindCard === "event"
+										? "Any choice can go to any guest — only the seat limit caps RSVPs."
+										: "You make each order fresh. Never marked sold out."
+								}
 								onClick={() => {
 									bulkFlag("blockWhenOutOfStock", false);
 									patch({ fulfilmentAnswered: true });
@@ -2261,8 +2424,14 @@ export function ProductWizard({
 							<AnswerCard
 								selected={state.fulfilmentAnswered && allTrack}
 								icon={<PackageCheck className="size-5" aria-hidden />}
-								title="From stock"
-								description="You have ready items. Orders stop when you run out."
+								title={
+									state.kindCard === "event" ? "Cap each choice" : "From stock"
+								}
+								description={
+									state.kindCard === "event"
+										? "e.g. only 20 tent slots for Set A — that choice closes when they're gone."
+										: "You have ready items. Orders stop when you run out."
+								}
 								onClick={() => {
 									bulkFlag("blockWhenOutOfStock", true);
 									patch({ fulfilmentAnswered: true });
@@ -2324,10 +2493,9 @@ export function ProductWizard({
 						) : null}
 						{state.fulfilmentAnswered && allMto ? (
 							<p className="rounded-xl bg-accent/10 px-3 py-2.5 text-sm leading-relaxed text-accent-emphasis">
-								Nice — buyers can always order. No stock counting, nothing ever
-								shows "sold out". You'll see the day's orders in your inbox. If
-								each one takes time to make, set a prep time under More options
-								on the last step — buyers then can't pick a time sooner.
+								{state.kindCard === "event"
+									? "Nice — no counting per choice. The seat limit (if you set one) is the only ceiling, and you'll see every RSVP in your inbox."
+									: "Nice — buyers can always order. No stock counting, nothing ever shows \"sold out\". You'll see the day's orders in your inbox. If each one takes time to make, set a prep time under More options on the last step — buyers then can't pick a time sooner."}
 							</p>
 						) : null}
 						{state.fulfilmentAnswered && anyTrack ? (
@@ -2795,10 +2963,12 @@ export function ProductWizard({
 
 									{/* Event (`z8r3fdff9u`) — above Order rules for the same
 									    reason the full form puts it in its own card first: it
-									    overrides the minimum notice below it. Optional config,
-									    so it lives in this drawer rather than costing every
-									    seller a wizard step. Never on a booking listing. */}
-									{isBooking ? null : (
+									    overrides the minimum notice below it. On the EVENT
+									    route the "When is it?" step owns these fields (and the
+									    teaser above summarizes them), so the drawer copy would
+									    be a second editor for the same state — hidden there.
+									    Never on a booking listing. */}
+									{isBooking || state.kindCard === "event" ? null : (
 										<div className="flex flex-col gap-3 border-t border-border pt-3">
 											<EventFields
 												draft={state.event}
