@@ -216,6 +216,7 @@ describe("BookDeliveryCard — dispatch dialog vehicle choice", () => {
 			buyerPaidFee: 1110,
 			vehicleType: "MOTORCYCLE",
 			buyerContactFallback: false,
+			market: "MY",
 		});
 		state.action = prepare;
 		state.dispatch = {
@@ -244,6 +245,83 @@ describe("BookDeliveryCard — dispatch dialog vehicle choice", () => {
 				vehicleType: "CAR",
 			}),
 		);
+	});
+});
+
+describe("BookDeliveryCard — overseas buyer number (z8r3fdh274)", () => {
+	// A buyer may type a WhatsApp number from any country; Lalamove only takes
+	// a contact from the booking's own market, so the rider gets the STORE's
+	// number. The dialog says so, naming the store's market — the old line
+	// hardcoded "Malaysian … +60", which was false on every Singapore store.
+	const confirmedOrder = {
+		...deliveredOrder,
+		status: "confirmed",
+	} as unknown as Doc<"orders">;
+
+	async function openDialog(
+		quote: { buyerContactFallback: boolean; market: "MY" | "SG" },
+		deliveryDirection: "standard" | "collection" = "standard",
+	) {
+		state.action = vi.fn().mockResolvedValue({
+			ok: true,
+			quotationId: "q1",
+			senderStopId: "s1",
+			recipientStopId: "s2",
+			fee: 1110,
+			buyerPaidFee: 1110,
+			vehicleType: "MOTORCYCLE",
+			...quote,
+		});
+		state.dispatch = {
+			promptBookOnPacked: false,
+			bookingEnabled: true,
+			deliveryDirection,
+			blockReason: null,
+			job: null,
+		};
+		render(<BookDeliveryCard order={confirmedOrder} />);
+		fireEvent.click(
+			screen.getByText(
+				deliveryDirection === "collection"
+					? "Send rider to collect"
+					: "Book delivery",
+			),
+		);
+		// The dialog has rendered once the quote's price row is on screen.
+		await screen.findByRole("button", { name: /Motorcycle/ });
+	}
+
+	it("names Malaysia on an MY store: the rider gets the store's number", async () => {
+		await openDialog({ buyerContactFallback: true, market: "MY" });
+		expect(
+			screen.getByText(
+				"This buyer's WhatsApp number isn't a Malaysian number, and Lalamove only takes Malaysian contacts — the rider gets your store's number instead, with the buyer's real number in the rider notes.",
+			),
+		).toBeTruthy();
+	});
+
+	it("names Singapore on an SG store — never '+60'", async () => {
+		await openDialog({ buyerContactFallback: true, market: "SG" });
+		const notice = screen.getByText(/isn't a Singapore number/);
+		expect(notice.textContent).toContain("only takes Singapore contacts");
+		expect(notice.textContent).not.toMatch(/Malaysia|\+60/);
+	});
+
+	it("on a collection store it's the rider collecting FROM the buyer who calls the store", async () => {
+		await openDialog(
+			{ buyerContactFallback: true, market: "MY" },
+			"collection",
+		);
+		expect(
+			screen.getByText(
+				/the rider collecting from the buyer gets your store's number instead/,
+			),
+		).toBeTruthy();
+	});
+
+	it("says nothing when the buyer's number is local", async () => {
+		await openDialog({ buyerContactFallback: false, market: "MY" });
+		expect(screen.queryByText(/isn't a Malaysian number/)).toBeNull();
 	});
 });
 
@@ -629,6 +707,7 @@ describe("BookDeliveryCard — manual advance opens the booking modal", () => {
 		buyerPaidFee: 1110,
 		vehicleType: "MOTORCYCLE",
 		buyerContactFallback: false,
+		market: "MY",
 	};
 	const packedOrder = {
 		shortId: "ORD-JXHF",
@@ -791,6 +870,7 @@ describe("BookDeliveryCard — rebook date/time + order sync (86eyp63xn)", () =>
 			buyerPaidFee: 1200,
 			vehicleType: "MOTORCYCLE",
 			buyerContactFallback: false,
+			market: "MY",
 			scheduledFor: undefined,
 			buyerRequestedMoment: undefined,
 			...overrides,
@@ -976,6 +1056,7 @@ describe("BookDeliveryCard — past pickup moments are refused (86eyp63xn follow
 			buyerPaidFee: 1200,
 			vehicleType: "MOTORCYCLE",
 			buyerContactFallback: false,
+			market: "MY",
 			scheduledFor: undefined,
 			buyerRequestedMoment: undefined,
 			...overrides,
@@ -1067,6 +1148,7 @@ describe("BookDeliveryCard — sandbox keys", () => {
 			buyerPaidFee: 2740,
 			vehicleType: "MOTORCYCLE",
 			buyerContactFallback: false,
+			market: "MY",
 		});
 		render(<BookDeliveryCard order={bookableOrder} />);
 
@@ -1117,6 +1199,7 @@ describe("BookDeliveryCard — a failed confirm never traps the seller", () => {
 				buyerPaidFee: 2740,
 				vehicleType: "MOTORCYCLE",
 				buyerContactFallback: false,
+				market: "MY",
 			});
 		});
 	}
@@ -1179,6 +1262,7 @@ describe("BookDeliveryCard — a failed confirm never traps the seller", () => {
 			buyerPaidFee: 2740,
 			vehicleType: "MOTORCYCLE",
 			buyerContactFallback: false,
+			market: "MY",
 		});
 		fireEvent.click(fresh);
 		await waitFor(() =>
@@ -1207,6 +1291,7 @@ describe("BookDeliveryCard — dispatch can't be tapped by accident (86eypjfuf)"
 			buyerPaidFee: 2740,
 			vehicleType: "MOTORCYCLE",
 			buyerContactFallback: false,
+			market: "MY",
 		});
 		state.action = action;
 		render(<BookDeliveryCard order={bookableOrder} />);

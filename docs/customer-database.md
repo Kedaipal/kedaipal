@@ -34,12 +34,12 @@ Indexes: `by_retailer`, `by_retailer_phone`, `by_retailer_lastOrder`, `by_retail
 
 | Path | Purpose |
 |---|---|
-| `convex/lib/customer.ts` | Pure helpers — `getDisplayName`, `formatPhone`, `buildSearchText` (no Convex imports, unit-tested) |
+| `convex/lib/customer.ts` | Pure helpers — `getDisplayName`, `formatPhone`, `orderCustomerLabel`, `buildSearchText`, the name validators (only Convex import: the `ConvexError` class; unit-tested). The one implementation the dashboard also uses |
 | `convex/customers.ts` | Queries (`list`, `get`, `ordersByCustomer`, `search`), mutations (`updateNotes`, `updateName`), linking helpers (`linkOrderToCustomer`, `refreshWaProfileName`, `decrementAggregatesForCancel`), and the `backfillCustomers` migration |
 | `convex/lib/whatsappWebhook.ts` | Pure inbound-payload parser — `extractInboundMessages` (now also captures `contacts[].profile.name`) |
 | `convex/customers.test.ts` | 18 integration tests (linking, aggregates, late-bind, pushname precedence, search, cancellation, backfill) |
 | `convex/lib/customer.test.ts`, `convex/lib/whatsappWebhook.test.ts` | Pure-helper unit tests |
-| `src/lib/customer.ts` | Frontend mirror of `getDisplayName`/`formatPhone` (kept in sync with the Convex copy — slug.ts pattern) |
+| `src/lib/customer.ts` | Re-exports `getDisplayName`/`formatPhone`/`orderCustomerLabel` from `convex/lib/customer.ts` for the dashboard — one implementation, no mirror (z8r3fdh274) |
 | `src/hooks/useDebounce.ts` | Debounce for the search input |
 | `src/components/dashboard/customer-card.tsx` | Mobile customer card |
 | `src/components/dashboard/customer-list.tsx` | Desktop sortable table (TanStack Table) + mobile card list |
@@ -55,7 +55,9 @@ Indexes: `by_retailer`, `by_retailer_phone`, `by_retailer_lastOrder`, `by_retail
 retailer-edited name  →  WhatsApp pushname  →  formatted phone number
 ```
 
-Blank/whitespace values fall through. The rule is mirrored byte-for-byte in `convex/lib/customer.ts` and `src/lib/customer.ts` (the Convex bundle and the frontend bundle can't share a module).
+Blank/whitespace values fall through. The rule has **one implementation**, in `convex/lib/customer.ts`; the dashboard imports it through `src/lib/customer.ts`, which only re-exports it. (It used to be a hand-kept byte-for-byte mirror, on the belief that the two bundles couldn't share a module — they can: the module is pure, and its only Convex import is the `ConvexError` class the client already bundles. z8r3fdh274 collapsed it before the phone format's first change could make the two drift.)
+
+The phone fallback is `formatPhone`: `+60 …` / `+65 …`, any other country split at its calling code and grouped (`+44 791 112 3456` — buyers may give a number from any country, see [`phone-numbers.md`](./phone-numbers.md)), and a bare `+<digits>` when no code matches.
 
 ### Order-linking lifecycle
 

@@ -192,12 +192,15 @@ follow-up ticket; until it lands, an opted-in seller gets both.
 
 ### Config + settings surface
 
-- Schema: `retailers.notifyWaPhone` (normalized `60…` MY mobile — deliberately
+- Schema: `retailers.notifyWaPhone` (normalized `60…`/`65…` mobile of the
+  store's country — deliberately
   separate from `waPhone`, the buyer-facing store contact / wa.me fallback /
   Lalamove sender, same split as `notifyEmail` vs the Clerk email) +
   `retailers.orderWaAlerts` (opt-in, off by default). Dev-only widen.
-- `updateSettings`: number validated via `assertValidMyMobile` (landlines
-  rejected) and refused if it equals `WHATSAPP_CHECKOUT_PHONE` (the WABA can't
+- `updateSettings`: number validated via `assertValidMobileForCountry` under
+  the store's country (landlines rejected; a seller-side number, so it stays
+  store-locked — see [`phone-numbers.md`](./phone-numbers.md)) and refused if
+  it equals `WHATSAPP_CHECKOUT_PHONE` (the WABA can't
   message itself). **Enabling is Pro-gated** (`PLAN_FEATURES.waOrderAlerts`,
   admin act-as bypasses); disabling and clearing are un-gated (downgrade never
   traps). Clearing the number switches the toggle off with it.

@@ -1,4 +1,5 @@
 import type { DispatchBlock } from "../../convex/lalamove";
+import type { Country } from "../../convex/lib/country";
 
 /**
  * Why a Lalamove rider can't be booked on an order right now, in the seller's
@@ -13,11 +14,13 @@ import type { DispatchBlock } from "../../convex/lalamove";
  * (the posture the `Locale` sweep set for exhaustive lookups).
  */
 const BLOCK_COPY: Record<DispatchBlock, string> = {
-	// The only reason with no fix to offer: our Lalamove integration is a
-	// Malaysian market one. Surfaces that can hide themselves (the dispatch
-	// card) do; this line is the fallback for the ones that can't.
+	// The only reason with no fix to offer: rider booking isn't served in the
+	// store's country (COUNTRY_RIDER_BOOKING — every country we sell in today,
+	// so this guards the next one; naming a country here would go stale the
+	// day it launches). Surfaces that can hide themselves (the dispatch card)
+	// do; this line is the fallback for the ones that can't.
 	country_unsupported:
-		"Lalamove rider booking is only available for Malaysian stores right now — mark this order shipped yourself once it's on its way.",
+		"Lalamove rider booking isn't available for stores in your country yet — mark this order shipped yourself once it's on its way.",
 	not_delivery:
 		"This is a self-collect order — there's nothing to send a rider for.",
 	bad_status:
@@ -47,4 +50,34 @@ export function dispatchBlockCopy(
 	reason: DispatchBlock | "not_found" | string,
 ): string {
 	return BLOCK_COPY[reason as DispatchBlock] ?? UNKNOWN_BLOCK_COPY;
+}
+
+/**
+ * The adjective a courier-contact notice names the store's market with
+ * ("isn't a Malaysian number"). Not `MOBILE_KIND` ("Malaysian mobile"): a
+ * courier takes a local landline contact too, so "mobile" would be false. Not
+ * `COUNTRY_LABELS` ("Malaysia"): that is the noun. Shared with the Delyva
+ * card's notice (`delyva-dispatch-block.ts`), so the two can't drift.
+ */
+export const MARKET_NUMBER_ADJECTIVE: Record<Country, string> = {
+	MY: "Malaysian",
+	SG: "Singapore",
+};
+
+/**
+ * The confirm dialog's line when a booking falls back to the store's number
+ * for the buyer's stop (z8r3fdh274): the buyer's WhatsApp is from outside the
+ * store's market, which Lalamove refuses as a contact. Direction-aware — on a
+ * collection trip the buyer's stop is the PICKUP, so the rider who can't call
+ * the buyer is the one coming to collect from them.
+ */
+export function riderContactFallbackCopy(
+	market: Country,
+	collection: boolean,
+): string {
+	const kind = MARKET_NUMBER_ADJECTIVE[market];
+	const rider = collection
+		? "the rider collecting from the buyer"
+		: "the rider";
+	return `This buyer's WhatsApp number isn't a ${kind} number, and Lalamove only takes ${kind} contacts — ${rider} gets your store's number instead, with the buyer's real number in the rider notes.`;
 }

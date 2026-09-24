@@ -5,6 +5,7 @@ import {
 	internalAction,
 	internalMutation,
 	internalQuery,
+	type QueryCtx,
 } from "./_generated/server";
 import {
 	linkOrderToCustomer,
@@ -32,15 +33,20 @@ import {
 	pushOwnsTheMessage,
 } from "./lib/confirmationPush";
 import { formatFulfilmentDateTime } from "./lib/fulfilmentDate";
+import { formatEventMoment } from "./lib/productEvent";
 import { type GuardedSender, makeGuardedSender } from "./wabaProtection";
 import { stampRetailerActivation } from "./lib/activation";
 import { classifyOptOutKeyword } from "./lib/wabaLimits";
 import { redactPhone } from "./lib/logRedaction";
-import { isMockupGateClosed, isMockupPriceUnsettled } from "./lib/order";
+import {
+	isFreeOrder,
+	isMockupGateClosed,
+	isMockupPriceUnsettled,
+} from "./lib/order";
 import { orderPickupNotes } from "./lib/pickupNote";
-import type { OrderStage, StatusLabels } from "./lib/orderStatus";
 import { assertValidWaPhone } from "./lib/slug";
 import {
+	NO_PAYMENT_LABEL,
 	PENDING_TOTAL_LABEL,
 	pickLocale,
 	poweredByLine,
@@ -213,11 +219,6 @@ export const getOrderWithRetailer = internalQuery({
 		currency: string;
 		locale: Locale;
 		messageTemplates: MessageTemplates | undefined;
-		// Phase 2: stage config + this order's current stage, for stage-update
-		// notifications (notifyStageEntry).
-		orderStages: OrderStage[] | undefined;
-		statusLabels: StatusLabels | undefined;
-		currentStageId: string | undefined;
 		// Lets an in-flight confirmation-push retry bail out when the buyer has
 		// already been reached (86eyf1rck).
 		confirmationPushStatus: Doc<"orders">["confirmationPushStatus"];
@@ -228,6 +229,13 @@ export const getOrderWithRetailer = internalQuery({
 		// `changes_requested` both carry a real total.
 		mockupPriceUnsettled: boolean;
 		deliveryFeePending: boolean;
+		// Event RSVP (`z8r3fdff9u`). `isFree` decides the money parameter (see
+		// NO_PAYMENT_LABEL) and whether a payment block is appended at all;
+		// `eventLabel` names the moment on the free-form RSVP confirm. Derived
+		// from the order's FROZEN fulfilment fields + its first event line, so a
+		// later product edit never rewrites what the guest was told.
+		isFree: boolean;
+		eventLabel: string | undefined;
 	} | null> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) return null;
@@ -255,15 +263,43 @@ export const getOrderWithRetailer = internalQuery({
 			messageTemplates: retailer.messageTemplates as
 				| MessageTemplates
 				| undefined,
-			orderStages: retailer.orderStages as OrderStage[] | undefined,
-			statusLabels: retailer.statusLabels as StatusLabels | undefined,
-			currentStageId: order.currentStageId,
 			confirmationPushStatus: order.confirmationPushStatus,
 			mockupPriceUnsettled: isMockupPriceUnsettled(order),
 			deliveryFeePending: order.deliveryFeePending === true,
+			isFree: isFreeOrder(order),
+			eventLabel: await resolveEventLabel(ctx, order),
 		};
 	},
 });
+
+/**
+ * "BNI Breakfast · Thu 25 Sep · 8:00 AM" for an order that RSVP'd to an event,
+ * or undefined for every normal order.
+ *
+ * The NAME comes from the order's frozen item snapshot and the MOMENT from the
+ * order's own `fulfilmentDate`/`fulfilmentTimeMinutes` — both stamped at
+ * create — so this never re-reads a product the seller may have edited since.
+ * The product row is consulted only to answer "was this an event at all?", the
+ * one bit the order doesn't carry.
+ */
+async function resolveEventLabel(
+	ctx: QueryCtx,
+	order: Doc<"orders">,
+): Promise<string | undefined> {
+	if (order.fulfilmentDate === undefined) return undefined;
+	for (const item of order.items) {
+		const product = await ctx.db.get(item.productId);
+		if (product?.event === undefined) continue;
+		// The moment is the ORDER's frozen check-in; only a multi-day event's
+		// last day is read live from the product (display-only, never a key).
+		return `${item.name} · ${formatEventMoment({
+			date: order.fulfilmentDate,
+			timeMinutes: order.fulfilmentTimeMinutes,
+			endDate: product.event.endDate,
+		})}`;
+	}
+	return undefined;
+}
 
 export const getRetailerLocaleForOrder = internalQuery({
 	args: { shortId: v.string() },
@@ -298,6 +334,10 @@ export const getRetailerLocaleForOrder = internalQuery({
 		// confirmation-push template, so this inbound reply must stay silent —
 		// see the `pushOwnsTheMessage` guard in handleInbound.
 		confirmationPushStatus: ConfirmationPushStatus | undefined;
+		// Event RSVP (`z8r3fdff9u`): a free event's reply names the moment and
+		// skips the payment block entirely. See `resolveEventLabel`.
+		isFree: boolean;
+		eventLabel: string | undefined;
 	} | null> => {
 		const order = await ctx.db
 			.query("orders")
@@ -326,6 +366,8 @@ export const getRetailerLocaleForOrder = internalQuery({
 			currency: order.currency,
 			mockupPending: isMockupGateClosed(order),
 			deliveryFeePending: order.deliveryFeePending === true,
+			isFree: isFreeOrder(order),
+			eventLabel: await resolveEventLabel(ctx, order),
 		};
 	},
 });
@@ -713,6 +755,24 @@ export const handleInbound = internalAction({
 				} catch (textErr) {
 					console.error("WA fee-held confirm send failed", textErr);
 				}
+			}
+		} else if (meta?.isFree && meta.eventLabel) {
+			// A free RSVP (`z8r3fdff9u`): nothing to pay, so the normal confirm's
+			// payment block would ask for a transfer that doesn't exist. Names the
+			// event and the moment instead, and links the page carrying the venue
+			// and the option the guest picked.
+			const rsvpBody =
+				renderSystemMessage(locale, "rsvpFreeConfirm", {
+					shortId,
+					storeName,
+					contactPhone,
+					trackingUrl,
+					eventLabel: meta.eventLabel,
+				}) + poweredByLine(locale);
+			try {
+				await sellerWa.send(fromPhone, { kind: "text", body: rsvpBody });
+			} catch (err) {
+				console.error("WA RSVP confirm send failed", err);
 			}
 		} else {
 			const confirmBody = renderMessage(
@@ -1557,10 +1617,16 @@ export const notifyStorefrontOrderCreated = internalAction({
 		// the order page most (they approve their mockup on it) with no link to it
 		// at all, sometimes for days. Now the message always goes out on time and
 		// the money parameter tells the truth about itself.
+		// A free order says so in words (`z8r3fdff9u`). "MYR 0.00" on a
+		// confirmation reads as a failed price lookup, and the guest messages the
+		// seller to ask — exactly the question this product exists to remove.
+		// A parameter value, not a template change: no Meta re-approval needed.
 		const money =
 			meta.mockupPriceUnsettled || meta.deliveryFeePending
 				? PENDING_TOTAL_LABEL[locale]
-				: `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
+				: meta.isFree
+					? NO_PAYMENT_LABEL[locale]
+					: `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
 
 		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");
 		try {

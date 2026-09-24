@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
+import { isKindCard, KIND_CARDS } from "../../lib/kind-card";
 import type { ProductFormDraft } from "./product-form";
 import {
 	buildWizardSubmitValues,
+	EVENTS_LOCKED_ISSUE,
 	emptyWizardState,
 	formDraftToWizardState,
+	kindFromCard,
+	openingWizard,
 	skuConflictTarget,
 	type WizardState,
+	withKindCard,
 	wizardHandoff,
 	wizardInitialStep,
 	wizardPriceLabel,
@@ -348,6 +353,32 @@ describe("buildWizardSubmitValues", () => {
 		expect(noRules.minNoticeDays).toBeUndefined();
 	});
 
+	it("an EVENT drops min notice and prep time — a stale typed value never rides along", () => {
+		// The drawer hides both inputs while the event toggle is on, so a value
+		// typed BEFORE toggling would otherwise submit invisibly (`z8r3fdff9u`
+		// follow-up: prep/notice don't apply to a fixed-date RSVP).
+		const values = buildWizardSubmitValues({
+			...browniesState(),
+			minNoticeDays: "3",
+			prepMinutes: "45",
+			event: {
+				on: true,
+				venueId: "",
+				date: "2099-01-05",
+				endDate: "",
+				time: "08:00",
+				seats: "30",
+			},
+		});
+		expect(values.minNoticeDays).toBeUndefined();
+		expect(values.prepMinutes).toBeUndefined();
+		expect(values.event).toEqual({
+			date: expect.any(Number),
+			timeMinutes: 480,
+			seats: 30,
+		});
+	});
+
 	it("carries the review-step publish settings (hidden + categories)", () => {
 		const values = buildWizardSubmitValues({
 			...singleFromStock(),
@@ -569,8 +600,8 @@ describe("wizardInitialStep", () => {
 
 describe("wizardPriceLabel", () => {
 	it("shows a single price or a range, dropping trailing .00", () => {
-		expect(wizardPriceLabel(singleFromStock(), "RM")).toBe("RM 5.50");
-		expect(wizardPriceLabel(browniesState(), "RM")).toBe("RM 12–28.50");
+		expect(wizardPriceLabel(singleFromStock(), "MYR")).toBe("RM\u00a05.50");
+		expect(wizardPriceLabel(browniesState(), "MYR")).toBe("RM\u00a012–28.50");
 		const s = browniesState();
 		expect(
 			wizardPriceLabel(
@@ -581,9 +612,9 @@ describe("wizardPriceLabel", () => {
 						rows: s.editor.rows.map((r) => ({ ...r, price: "18.00" })),
 					},
 				},
-				"RM",
+				"MYR",
 			),
-		).toBe("RM 18");
+		).toBe("RM\u00a018");
 	});
 
 	it("ignores deactivated choices", () => {
@@ -601,9 +632,9 @@ describe("wizardPriceLabel", () => {
 						],
 					},
 				},
-				"RM",
+				"MYR",
 			),
-		).toBe("RM 12–28.50");
+		).toBe("RM\u00a012–28.50");
 	});
 });
 
@@ -710,7 +741,7 @@ describe("wizard — made-to-order product type", () => {
 	// review preview says what the storefront prints: "From RM 120" (86eyhn4mr).
 	it("labels the review as a quote, or a starting price once one is typed", () => {
 		const s = madeToOrderState();
-		expect(wizardPriceLabel(s, "RM")).toBe("Price on quote");
+		expect(wizardPriceLabel(s, "MYR")).toBe("Price on quote");
 		expect(
 			wizardPriceLabel(
 				{
@@ -720,9 +751,9 @@ describe("wizard — made-to-order product type", () => {
 						customLine: { ...bespokeLine, price: "120" },
 					},
 				},
-				"RM",
+				"MYR",
 			),
-		).toBe("From RM 120");
+		).toBe("From RM\u00a0120");
 	});
 
 	it("opens an answered draft on Review, never on the skipped step", () => {
@@ -790,5 +821,278 @@ describe("wizard — made-to-order product type", () => {
 			},
 		};
 		expect(formDraftToWizardState(draft).shape).toBe("single");
+	});
+});
+
+describe("the Event card — a router with its own route (`z8r3fdff9u` round 4)", () => {
+	/** The camp, entered through the front door this time. */
+	function eventState(overrides: Partial<WizardState> = {}): WizardState {
+		return {
+			...browniesState(),
+			kindCard: "event",
+			name: "Into The Falls Camp",
+			event: {
+				on: true,
+				venueId: "",
+				date: "2099-12-04",
+				endDate: "2099-12-06",
+				time: "14:00",
+				seats: "10",
+			},
+			...overrides,
+		};
+	}
+
+	it("routes to `physical` like Food — the card is vocabulary, not schema", () => {
+		expect(kindFromCard("event")).toBe("physical");
+		expect(kindFromCard("food")).toBe("physical");
+	});
+
+	it("walks its own steps: When is it? right after the name, no step dropped silently", () => {
+		expect(wizardSteps("choices", "physical", true)).toEqual([
+			0, 1, 6, 2, 3, 4, 5,
+		]);
+		// Other routes are untouched.
+		expect(wizardSteps("choices", "physical")).toEqual([0, 1, 2, 3, 4, 5]);
+		expect(wizardSteps(null, "booking")).toEqual([0, 1, 3, 5]);
+	});
+
+	it("a multi-outlet store's When-is-it step demands the venue", () => {
+		expect(
+			wizardStepIssues(eventState(), 6, { requireEventVenue: true })[0]
+				?.message,
+		).toMatch(/which pickup point hosts/i);
+		expect(
+			wizardStepIssues(
+				eventState({
+					event: { ...eventState().event, venueId: "loc_abc" },
+				}),
+				6,
+				{ requireEventVenue: true },
+			),
+		).toHaveLength(0);
+	});
+
+	it("the When-is-it step blocks on a missing or backwards date — on ITS step", () => {
+		const noDate = eventState({
+			event: {
+				on: true,
+				date: "",
+				endDate: "",
+				time: "",
+				seats: "",
+				venueId: "",
+			},
+		});
+		expect(wizardStepIssues(noDate, 6).map((i) => i.message)).toEqual([
+			"Pick the event date.",
+		]);
+		const backwards = eventState({
+			event: {
+				on: true,
+				venueId: "",
+				date: "2099-12-06",
+				endDate: "2099-12-04",
+				time: "",
+				seats: "",
+			},
+		});
+		expect(wizardStepIssues(backwards, 6)[0].message).toMatch(
+			/before the event date/i,
+		);
+		expect(wizardStepIssues(eventState(), 6)).toHaveLength(0);
+	});
+
+	it("a restored event draft with no date opens ON the When-is-it step", () => {
+		const state = eventState({
+			event: {
+				on: true,
+				date: "",
+				endDate: "",
+				time: "",
+				seats: "",
+				venueId: "",
+			},
+		});
+		expect(wizardInitialStep(state)).toBe(6);
+	});
+
+	it("submits as a physical product carrying the event — the flag, not a kind", () => {
+		const values = buildWizardSubmitValues(eventState());
+		expect(values.kind).toBe("physical");
+		expect(values.event).toMatchObject({ timeMinutes: 14 * 60, seats: 10 });
+		expect(values.event?.endDate).toBeDefined();
+		// The event route still drops the timing rules a stale draft may carry.
+		expect(
+			buildWizardSubmitValues(eventState({ minNoticeDays: "3" })).minNoticeDays,
+		).toBeUndefined();
+	});
+});
+
+describe("the wizard's money reads in the store's symbol", () => {
+	const NB = "\u00a0";
+
+	it("wizardPriceLabel spells an SG store's prices with S$, never SGD", () => {
+		expect(wizardPriceLabel(browniesState(), "SGD")).toBe(`S$${NB}12–28.50`);
+	});
+
+	it("the deposit ceiling message names the store's symbol when the caller passes it", () => {
+		const stay: WizardState = {
+			...emptyWizardState("booking"),
+			name: "Riverside plot",
+			editor: {
+				options: [],
+				customLine: null,
+				rows: [row({ price: "80", blockWhenOutOfStock: false })],
+			},
+			securityDeposit: "20000",
+		};
+		const onScreen = wizardStepIssues(stay, 3, { currency: "SGD" }).find(
+			(i) => i.field === "securityDeposit",
+		);
+		expect(onScreen?.message).toBe(
+			`Enter an amount between S$${NB}0 and S$${NB}10,000, or leave blank.`,
+		);
+		// At the ceiling it passes — the server's own MAX_SECURITY_DEPOSIT.
+		expect(
+			wizardStepIssues({ ...stay, securityDeposit: "10000" }, 3, {
+				currency: "SGD",
+			}).some((i) => i.field === "securityDeposit"),
+		).toBe(false);
+	});
+});
+
+describe("a `?card=` deep link opens on its card (`z8r3fdhkr7`)", () => {
+	it("admits the five step-0 cards and nothing else", () => {
+		for (const card of KIND_CARDS) expect(isKindCard(card)).toBe(true);
+		for (const junk of [
+			"",
+			"Event",
+			"events",
+			"toString",
+			1,
+			null,
+			undefined,
+		]) {
+			expect(isKindCard(junk)).toBe(false);
+		}
+	});
+
+	it("no link = today's opening: blank, pre-answered by the store type", () => {
+		for (const defaultKind of [
+			undefined,
+			"physical",
+			"service",
+			"booking",
+		] as const) {
+			expect(openingWizard({ defaultKind, eventsLocked: false })).toEqual({
+				state: emptyWizardState(defaultKind),
+				issues: [],
+			});
+		}
+	});
+
+	it("an Event link lands exactly where the Event TAP does — whatever the store type", () => {
+		for (const defaultKind of [
+			undefined,
+			"physical",
+			"service",
+			"booking",
+		] as const) {
+			const opened = openingWizard({
+				defaultKind,
+				card: "event",
+				eventsLocked: false,
+			});
+			expect(opened.issues).toEqual([]);
+			expect(opened.state).toEqual(
+				withKindCard(emptyWizardState(defaultKind), "event"),
+			);
+			expect(opened.state.kindCard).toBe("event");
+			expect(opened.state.event.on).toBe(true);
+		}
+	});
+
+	it("from a BOOKING store, the linked event gets a normal selling substrate, not a stay's", () => {
+		// The booking default seeds one never-stock-blocked row and pre-answers
+		// preparation; an event is `physical`, so both must come back — the
+		// same rebuild the tap does after its (here empty) confirm.
+		const { state } = openingWizard({
+			defaultKind: "booking",
+			card: "event",
+			eventsLocked: false,
+		});
+		expect(state.fulfilmentAnswered).toBe(false);
+		expect(state.shape).toBeNull();
+		expect(state.editor.rows).toHaveLength(1);
+		expect(state.editor.rows[0].blockWhenOutOfStock).toBe(true);
+	});
+
+	it("a locked plan keeps the store-type default and says why on arrival", () => {
+		const opened = openingWizard({
+			defaultKind: "booking",
+			card: "event",
+			eventsLocked: true,
+		});
+		expect(opened.state).toEqual(emptyWizardState("booking"));
+		expect(opened.state.event.on).toBe(false);
+		expect(opened.issues).toEqual([EVENTS_LOCKED_ISSUE]);
+		expect(opened.issues[0].message).toMatch(/pro plan/i);
+	});
+
+	it("the lock is about EVENTS only — any other linked card is honoured", () => {
+		const opened = openingWizard({ card: "food", eventsLocked: true });
+		expect(opened.state.kindCard).toBe("food");
+		expect(opened.issues).toEqual([]);
+	});
+
+	it("leaving Event disarms the flag but keeps the typed date (the tap posture)", () => {
+		const armed = withKindCard(emptyWizardState(), "event");
+		const typed = { ...armed, event: { ...armed.event, date: "2099-12-04" } };
+		const left = withKindCard(typed, "food");
+		expect(left.kindCard).toBe("food");
+		expect(left.event.on).toBe(false);
+		expect(left.event.date).toBe("2099-12-04");
+		// Re-selecting the same card is a no-op, not a rebuild.
+		expect(withKindCard(left, "food")).toBe(left);
+	});
+});
+
+describe("open-days packages in the wizard (z8r3fdhpm7)", () => {
+	const course = (over: Partial<WizardState> = {}): WizardState => ({
+		...emptyWizardState("booking"),
+		name: "5-day kayak course",
+		packageLength: "5",
+		packageUnit: "day",
+		skipsClosedDays: true,
+		editor: {
+			options: [],
+			customLine: null,
+			rows: [row({ price: "500", blockWhenOutOfStock: false })],
+		},
+		...over,
+	});
+
+	it("sends 'only days you're open' for a DAY package", () => {
+		expect(buildWizardSubmitValues(course()).booking?.skipsClosedDays).toBe(
+			true,
+		);
+	});
+
+	it("never sends it for a month or night package, or with no length — a kept value doesn't ride along", () => {
+		for (const over of [
+			{ packageUnit: "month" as const },
+			{ packageUnit: "night" as const },
+			{ packageLength: "" },
+		]) {
+			expect(
+				buildWizardSubmitValues(course(over)).booking?.skipsClosedDays,
+			).toBeUndefined();
+		}
+	});
+
+	it("round-trips through the full-form handoff", () => {
+		const handoff = wizardHandoff(course());
+		expect(handoff.initialValues.skipsClosedDays).toBe(true);
 	});
 });

@@ -56,7 +56,8 @@ function renderForm({
 		<ProductForm
 			retailerId={"r1" as never}
 			categoriesLocked={false}
-			currency="RM"
+			eventsLocked={false}
+			currency="MYR"
 			submitLabel="Save"
 			mode="edit"
 			offerSelfCollect={offerSelfCollect}

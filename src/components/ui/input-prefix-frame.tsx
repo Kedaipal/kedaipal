@@ -38,14 +38,19 @@ export function InputPrefixFrame({
 			className={cn(
 				"flex min-h-11 items-center overflow-hidden rounded-xl border border-input bg-transparent transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50 dark:bg-input/30",
 				disabled && "cursor-not-allowed bg-input/50 opacity-50",
+				// Invalid keeps its red border and ring under focus too — the
+				// focus-within classes above would otherwise repaint it mint and hide
+				// the error exactly while the user is fixing it.
 				invalid &&
-					"border-destructive ring-3 ring-destructive/20 dark:border-destructive/50 dark:ring-destructive/40",
+					"border-destructive ring-3 ring-destructive/20 focus-within:border-destructive focus-within:ring-destructive/20 dark:border-destructive/50 dark:ring-destructive/40 dark:focus-within:border-destructive/50 dark:focus-within:ring-destructive/40",
 				className,
 			)}
 		>
 			{/* `select-none` so a drag-select of the value doesn't sweep the fixed
-			    part into the copy. */}
-			<span className="flex select-none items-center gap-1.5 self-stretch border-r border-input bg-muted/60 px-3 text-muted-foreground">
+			    part into the copy. `relative` so a plate that hosts a control (the
+			    buyer phone picker's overlaid <select>) can cover all of it,
+			    padding included — the whole 44px plate is the tap target. */}
+			<span className="relative flex select-none items-center gap-1.5 self-stretch border-r border-input bg-muted/60 px-3 text-muted-foreground">
 				{prefix}
 			</span>
 			{children}

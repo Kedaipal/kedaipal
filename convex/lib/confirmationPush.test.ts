@@ -52,7 +52,10 @@ describe("classifyPushFailure — retryable classes", () => {
 
 describe("classifyPushFailure — permanent rejects terminate on the first try", () => {
 	test("unreachable recipient blames the number (buyer can repair it)", () => {
-		for (const metaCode of [131026, 131030, 131047, 131051]) {
+		// 130497 — the whole country is barred for our WhatsApp account
+		// (z8r3fdh274: buyers can pick any country). No retry helps; another
+		// number does, which is the repair `system` would hide.
+		for (const metaCode of [130497, 131026, 131030, 131047, 131051]) {
 			expect(
 				classifyPushFailure({ httpStatus: 400, metaCode, responded: true }, 1),
 			).toEqual({ retry: false, kind: "unreachable" });

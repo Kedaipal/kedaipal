@@ -70,6 +70,7 @@ Multi-channel is currently **out of scope** on the roadmap, so the data-layer ge
 ### Known channel-specific bits to generalize in Phase 5+
 
 - `assertValidWaPhone` (`convex/lib/slug.ts`) — phone validation; a Telegram user id is not a phone. Route identity validation through the adapter.
-- `getDisplayName` / `formatPhone` (`convex/lib/customer.ts` + mirrored `src/lib/customer.ts`) — assume a WhatsApp phone.
+- `getDisplayName` / `formatPhone` (`convex/lib/customer.ts`, re-exported by `src/lib/customer.ts`) — assume a WhatsApp phone.
+- The buyer phone fields and their validator (`assertValidBuyerWaPhone`, `convex/lib/buyerPhone.ts` — any country, see [`phone-numbers.md`](./phone-numbers.md)) — a buyer's contact on another channel is not a phone number at all.
 - `contactLine` in `convex/lib/whatsappCopy.ts` — hardcoded `wa.me/{phone}` deep link.
 - `WHATSAPP_CHECKOUT_PHONE` (`convex/retailers.ts`) — the WhatsApp checkout entry point.

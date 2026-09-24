@@ -3,6 +3,11 @@ import { type ReactNode, useState } from "react";
 import type { PublicDeliveryQuote } from "../../../convex/delivery";
 import type { CartItem, UseCart } from "../../hooks/useCart";
 import { formatPrice } from "../../lib/format";
+import {
+	RECEIPT_LABEL_CLASS,
+	RECEIPT_VARIANT_CLASS,
+	receiptLineLabel,
+} from "../../lib/receipt-line";
 
 /**
  * The checkout page's order summary — the "Order Ticket" from the storefront
@@ -47,9 +52,16 @@ function receiptAmount(sen: number): string {
 	return (sen / 100).toFixed(2);
 }
 
-/** "1× Kek Batik · 1kg" — the receipt line's left column. */
+/**
+ * "1× Kek Batik" — the receipt line's name column.
+ *
+ * Built by the shared `receiptLineLabel`, which the claim checkout's identical
+ * ticket also uses: the variant is deliberately NOT joined on (it renders as
+ * its own muted sub-line) and the quantity leads, so neither can be the part a
+ * narrow column cuts. See `src/lib/receipt-line.ts` for the why (`z8r3fdhpaj`).
+ */
 function receiptLabel(item: CartItem): string {
-	return `${item.quantity}× ${item.name}${item.optionLabel ? ` · ${item.optionLabel}` : ""}`;
+	return receiptLineLabel(item.quantity, item.name);
 }
 
 interface CheckoutSummaryProps {
@@ -143,20 +155,36 @@ export function CheckoutSummary({
 											prev === item.variantId ? null : item.variantId,
 										)
 									}
-									className="flex min-h-8 w-full items-baseline gap-2 py-1 text-left font-mono text-[13px] leading-6"
+									className="flex w-full items-baseline gap-2 py-2.5 text-left font-mono text-[13px] leading-6"
 								>
 									{/* Disclosure caret — these rows have been tappable since the
 									    ticket redesign, but the only hint was a caption under the
 									    whole list. Sits on the LEFT so the money column stays
-									    flush; its ~1rem footprint matches the `pl-4` the note /
-									    attachment sub-lines already indent by. */}
+									    flush; its 12px plus the row's 8px gap is the 20px the note
+									    / attachment sub-lines indent by (`pl-5`). */}
 									<ChevronDown
 										aria-hidden
 										className={`size-3 shrink-0 translate-y-0.5 text-muted-foreground transition-transform motion-reduce:transition-none ${
 											expanded ? "rotate-180" : ""
 										}`}
 									/>
-									<span className="min-w-0 truncate">{receiptLabel(item)}</span>
+									{/* Wraps, never truncates — this is the last screen before the
+									    wa.me handoff, so every character of the name and the option
+									    has to be readable without tapping (`z8r3fdhpaj`). The class
+									    and the reasoning are shared with the claim ticket. */}
+									<span className={RECEIPT_LABEL_CLASS}>
+										{receiptLabel(item)}
+										{item.optionLabel ? (
+											<span className={RECEIPT_VARIANT_CLASS}>
+												{item.optionLabel}
+											</span>
+										) : null}
+									</span>
+									{/* The dotted leader takes the space left over — which is how it
+									    bows out on its own when the name is long enough to wrap: a
+									    `flex-1` item with a 0 basis simply has nothing to grow into
+									    once the label has claimed the row. Baseline alignment keeps
+									    the caret and the amount on the label's FIRST line. */}
 									<span
 										aria-hidden
 										className="flex-1 border-b-2 border-dotted border-border"
@@ -174,12 +202,12 @@ export function CheckoutSummary({
 								</button>
 
 								{item.note ? (
-									<p className="mb-1 truncate pl-4 font-mono text-[11px] text-muted-foreground">
+									<p className="mb-1 whitespace-pre-line pl-5 font-mono text-[11px] text-muted-foreground wrap-anywhere">
 										📝 {item.note}
 									</p>
 								) : null}
 								{item.customImageStorageId ? (
-									<p className="mb-1 pl-4 font-mono text-[11px] text-muted-foreground">
+									<p className="mb-1 pl-5 font-mono text-[11px] text-muted-foreground">
 										📎 Reference photo attached
 									</p>
 								) : null}

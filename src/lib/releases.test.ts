@@ -6,6 +6,7 @@ import { compareCalendarVersions } from "../../convex/lib/appVersion";
 import type { Release } from "../content/releases";
 import { RELEASE_KIND_LABELS, RELEASES } from "../content/releases";
 import { isCalendarVersion } from "./app-version";
+import { isKindCard } from "./kind-card";
 import {
 	localized,
 	PANEL_RELEASE_LIMIT,
@@ -394,6 +395,29 @@ describe("the shipped RELEASES content", () => {
 					params.get("tab"),
 					`${e.href}: spot "${spot}" lives on the ${target.tab} tab`,
 				).toBe(target.tab);
+			}
+		}
+	});
+
+	test("every `?card=` deep link names a real step-0 card, on the new-product route", () => {
+		// `/app/products/new` DROPS a card it doesn't know (a hand-typed value
+		// must never select something step 0 doesn't render) — so a typo like
+		// `?card=events` wouldn't fail anywhere: the note would just open the
+		// wizard on the store's own type, the exact miss `?card=` exists to
+		// prevent (z8r3fdhkr7). This is where the typo fails instead.
+		for (const r of RELEASES) {
+			for (const e of r.entries) {
+				const [path, query] = (e.href ?? "").split("?");
+				const card = new URLSearchParams(query ?? "").get("card");
+				if (card === null) continue;
+				expect(
+					path,
+					`${e.href}: \`?card=\` only means something on the new-product wizard`,
+				).toBe("/app/products/new");
+				expect(
+					isKindCard(card),
+					`${e.href}: "${card}" is not a step-0 card`,
+				).toBe(true);
 			}
 		}
 	});

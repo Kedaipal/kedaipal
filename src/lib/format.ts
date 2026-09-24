@@ -8,7 +8,12 @@
 
 import { isRateLimitError } from "@convex-dev/rate-limiter";
 import { ConvexError } from "convex/values";
-import { COUNTRIES, type Country } from "../../convex/lib/country";
+import {
+	COUNTRIES,
+	COUNTRY_DIAL_CODE,
+	type Country,
+} from "../../convex/lib/country";
+import { formatInternational } from "../../convex/lib/phoneDial";
 import { STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
 
 /**
@@ -139,9 +144,9 @@ const MOBILE_GROUPING: Record<Country, (digits: string) => string> = {
  * Purpose is **typo-spotting**, not decoration: checkout echoes the number back
  * to the buyer before they commit (86eyf1rck), and a transposed digit is only
  * catchable when the grouping matches how they typed it. Deliberately separate
- * from `formatPhone` (src/lib/customer.ts), which renders one ungrouped run
- * (`+60 1159399791`) and is mirrored into `convex/` for the seller dashboard —
- * regrouping that shared helper is a cross-surface change, not this field's job.
+ * from `formatPhone` (`convex/lib/customer.ts`), which renders one ungrouped
+ * run (`+60 1159399791`) on the seller dashboard and the PDFs — regrouping
+ * that shared helper is a cross-surface change, not this field's job.
  *
  * Keys off the STORED digits, not a country parameter, on purpose: the input
  * validators must branch on the retailer's country (typed input is ambiguous),
@@ -149,7 +154,15 @@ const MOBILE_GROUPING: Record<Country, (digits: string) => string> = {
  * truthful by reading it — e.g. an MY number a store saved before switching its
  * country to SG still renders as the MY number it is.
  *
- * Unrecognised shapes fall back to `+<digits>` rather than guessing.
+ * Any other country's number (buyers can pick any country, z8r3fdh274) reads
+ * `+CC NATIONAL` — `+44 7911123456` — so the code the buyer picked stands
+ * apart from the number they typed; per-country grouping would need every
+ * country's numbering plan, and the split is what makes a wrong code visible.
+ * An MY/SG number that isn't a mobile (a landline, a legacy row) stays one
+ * unbroken `+60312345678`: `toNationalPhoneInput` (`./phone.ts`) peels a
+ * seller field's `+60 `/`+65 ` plate by string prefix, so splitting it would
+ * seed the field with the national part and silently drop the country code.
+ * Anything with no known code falls back to `+<digits>` rather than guessing.
  */
 export function formatMobile(waPhone: string): string {
 	const digits = waPhone.replace(/\D/g, "");
@@ -162,7 +175,12 @@ export function formatMobile(waPhone: string): string {
 			return MOBILE_GROUPING[country](digits);
 		}
 	}
-	return `+${digits}`;
+	// A supported country's non-mobile stays unbroken (see above).
+	const supportedCode = COUNTRIES.some((country) =>
+		digits.startsWith(COUNTRY_DIAL_CODE[country]),
+	);
+	if (supportedCode) return `+${digits}`;
+	return formatInternational(digits) ?? `+${digits}`;
 }
 
 /**
@@ -255,6 +273,44 @@ export function currencySymbol(currency: string): string {
 		// Unknown code — mirror formatPrice's fallback and show the code itself.
 		return currency;
 	}
+}
+
+/**
+ * A seller-TYPED amount (major units, already parsed by `parsePriceInput`)
+ * for the product wizard and edit form's summaries and review rows — "RM 12",
+ * "S$ 1,250.50". Spelled the way `formatPrice` spells money (the store's
+ * symbol from its ISO code, a non-breaking space, en-MY grouping) minus a
+ * trailing ".00", so a summary line reads like speech rather than a receipt.
+ *
+ * Exists because both product forms printed their `currency` prop — the
+ * retailer's ISO code — raw: sellers read "MYR 12" where every other
+ * dashboard surface says "RM 12", and an SG store read "SGD" for "S$".
+ * Stored minor-unit amounts keep `formatPrice`.
+ */
+export function formatDraftPrice(major: number, currency: string): string {
+	return `${currencySymbol(currency)}${NBSP}${formatDraftAmount(major)}`;
+}
+
+/** The number half of `formatDraftPrice` — "1,250" / "12.50", no symbol.
+ * For the far end of a range, where the symbol is said once. */
+export function formatDraftAmount(major: number): string {
+	return new Intl.NumberFormat("en-MY", {
+		minimumFractionDigits: Number.isInteger(major) ? 0 : 2,
+		maximumFractionDigits: 2,
+	}).format(major);
+}
+
+/** "RM 12" when the ends meet, "RM 12–28.50" when they don't — the symbol
+ * once, like speech. Shared by the wizard's review and the edit form's
+ * summary strip so the two can't describe the same prices differently. */
+export function formatDraftPriceRange(
+	min: number,
+	max: number,
+	currency: string,
+): string {
+	return min === max
+		? formatDraftPrice(min, currency)
+		: `${formatDraftPrice(min, currency)}–${formatDraftAmount(max)}`;
 }
 
 export function formatPrice(minorUnits: number, currency: string): string {

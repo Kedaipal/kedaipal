@@ -469,6 +469,7 @@ const FEATURE_LABEL: Record<PlanFeature, string> = {
 	radiusDelivery: "Distance-based delivery pricing",
 	delivery: "Lalamove delivery booking",
 	onlinePayments: "Online payments (HitPay)",
+	events: "Event RSVPs",
 	waOrderAlerts: "WhatsApp order alerts",
 };
 

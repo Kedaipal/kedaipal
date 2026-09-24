@@ -33,6 +33,12 @@ export interface PrimaryActionInput {
 	 * send, so an unpriced line would lock a zero. The counter path resolves
 	 * price at create and its own review dialog catches it. */
 	unpriced: boolean;
+	/** Name of an EVENT product in the cart (`z8r3fdff9u`), if any. Blocks SEND
+	 * with the event's own reason — a claim lets the buyer pick a date and holds
+	 * no seat, both of which an RSVP forbids. Checked BEFORE `unpriced`: a free
+	 * event line is also RM0, and "set a price for every custom item" would
+	 * misname what the seller is looking at. */
+	eventName?: string;
 	/** Formatted money for the label, e.g. "RM 20.00". */
 	money: string;
 	windowMinutes: number;
@@ -54,13 +60,16 @@ export interface PrimaryAction {
  * full-width buttons in the same slot is what made the old panel ambiguous.
  */
 export function counterPrimaryAction(input: PrimaryActionInput): PrimaryAction {
-	const { mode, empty, unpriced, money, windowMinutes, buyerName } = input;
+	const { mode, empty, unpriced, money, windowMinutes, buyerName, eventName } =
+		input;
 	if (mode === "send") {
 		const reason = empty
 			? "Add an item first"
-			: unpriced
-				? "Set a price for every custom item first"
-				: undefined;
+			: eventName !== undefined
+				? `"${eventName}" is an event — share its storefront link so guests RSVP to the fixed date`
+				: unpriced
+					? "Set a price for every custom item first"
+					: undefined;
 		const runwayMinutes = Math.round(CLAIM_PAYMENT_RUNWAY_MS / 60_000);
 		return {
 			// Shows the MONEY, mirroring the counter primary: the price is what a

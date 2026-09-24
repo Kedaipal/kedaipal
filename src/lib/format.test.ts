@@ -3,6 +3,9 @@ import { describe, expect, it, test } from "vitest";
 import {
 	convexErrorMessage,
 	currencySymbol,
+	formatDraftAmount,
+	formatDraftPrice,
+	formatDraftPriceRange,
 	formatMobile,
 	formatOrderTimestamp,
 	formatPrice,
@@ -176,9 +179,24 @@ describe("formatMobile", () => {
 	});
 
 	it("falls back to a plain +digits for unexpected shapes", () => {
+		// Unbroken on purpose, even though the code is known: `toNationalPhoneInput`
+		// peels a seller field's plate by string prefix, and "+60 312345678"
+		// would seed the field with the country code dropped.
 		expect(formatMobile("60312345678")).toBe("+60312345678"); // MY landline
 		expect(formatMobile("6512345678")).toBe("+6512345678"); // not an 8/9 SG mobile
 		expect(formatMobile("")).toBe("");
+	});
+
+	it("splits any other country's number as +CC NATIONAL (z8r3fdh274)", () => {
+		// Buyers can pick any country — the code they picked reads apart from
+		// the number they typed, so a wrong code is visible at a glance.
+		expect(formatMobile("447911123456")).toBe("+44 791 112 3456");
+		expect(formatMobile("14155550123")).toBe("+1 415 555 0123");
+		expect(formatMobile("+81 90-1234-5678")).toBe("+81 901 234 5678");
+	});
+
+	it("an unknown calling code still falls back to +digits", () => {
+		expect(formatMobile("99912345678")).toBe("+99912345678");
 	});
 });
 
@@ -267,5 +285,36 @@ describe("currencySymbol", () => {
 		// Mirrors formatPrice's fallback — an input prefixed with a made-up
 		// symbol would be worse than one prefixed with the code.
 		expect(currencySymbol("ZZZ")).toBe("ZZZ");
+	});
+});
+
+describe("formatDraftPrice — seller-typed amounts in summaries", () => {
+	const NB = "\u00a0";
+
+	test("the store's SYMBOL from its ISO code, never the code itself", () => {
+		// The bug this exists for: both product forms printed "MYR 12".
+		expect(formatDraftPrice(12, "MYR")).toBe(`RM${NB}12`);
+		expect(formatDraftPrice(12, "SGD")).toBe(`S$${NB}12`);
+	});
+
+	test("spelled like formatPrice — same prefix, same grouping — minus a trailing .00", () => {
+		for (const currency of ["MYR", "SGD"]) {
+			const draft = formatDraftPrice(1250, currency);
+			const stored = formatPrice(125_000, currency);
+			expect(stored.startsWith(draft)).toBe(true); // "RM 1,250" ⊂ "RM 1,250.00"
+		}
+		expect(formatDraftPrice(12.5, "MYR")).toBe(`RM${NB}12.50`);
+		expect(formatDraftPrice(0, "SGD")).toBe(`S$${NB}0`);
+	});
+
+	test("the number half groups, and keeps sen only when there are some", () => {
+		expect(formatDraftAmount(10_000)).toBe("10,000");
+		expect(formatDraftAmount(28.5)).toBe("28.50");
+		expect(formatDraftAmount(28)).toBe("28");
+	});
+
+	test("a range says the symbol once; meeting ends collapse to one price", () => {
+		expect(formatDraftPriceRange(12, 28.5, "MYR")).toBe(`RM${NB}12–28.50`);
+		expect(formatDraftPriceRange(12, 12, "SGD")).toBe(`S$${NB}12`);
 	});
 });

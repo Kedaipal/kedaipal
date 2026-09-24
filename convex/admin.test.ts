@@ -334,6 +334,70 @@ describe("admin console reads", () => {
 		expect(rows.find((r) => r.ownerUserId === ADMIN)?.ownerIsAdmin).toBe(true);
 	});
 
+	test("listSellersForAdmin carries the contact + billing facts the directory shows (z8r3fdh37c)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, OWNER);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				notifyEmail: "owner@example.com",
+				waPhone: "60123456789",
+				notifyWaPhone: "60198765432",
+			});
+		});
+		const rows = await t
+			.withIdentity({ subject: ADMIN })
+			.query(api.admin.listSellersForAdmin, {});
+		const mine = rows.find((r) => r.ownerUserId === OWNER);
+		expect(mine).toMatchObject({
+			ownerEmail: "owner@example.com",
+			waPhone: "60123456789",
+			notifyWaPhone: "60198765432",
+			country: "MY",
+			currency: "MYR",
+			subscriptionStatus: "trialing",
+		});
+		// A fresh store's free period has a backstop date and no invoice yet.
+		expect(typeof mine?.trialEndsAt).toBe("number");
+		expect(mine?.pendingInvoice).toBeUndefined();
+		expect(mine?.lastPaidInvoice).toBeUndefined();
+		expect(mine?.lastActAsAt).toBeUndefined();
+	});
+
+	test("listSellersForAdmin surfaces the open bill, then the last settled one, and the last act-as entry", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, OWNER);
+		const admin = t.withIdentity({ subject: ADMIN });
+		const { invoiceId } = await admin.mutation(api.invoices.issueInvoice, {
+			retailerId: retailer._id,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		const pending = (
+			await admin.query(api.admin.listSellersForAdmin, {})
+		).find((r) => r.ownerUserId === OWNER);
+		expect(pending?.pendingInvoice).toMatchObject({
+			hasPayNowLink: false,
+			currency: "MYR",
+		});
+		expect(pending?.pendingInvoice?.invoiceNumber).toMatch(/\S/);
+		expect(typeof pending?.pendingInvoice?.dueDate).toBe("number");
+
+		await admin.mutation(api.invoices.markPaid, { invoiceId });
+		await admin.mutation(api.admin.startActAsSession, { retailerId: retailer._id });
+		const paid = (
+			await admin.query(api.admin.listSellersForAdmin, {})
+		).find((r) => r.ownerUserId === OWNER);
+		expect(paid?.pendingInvoice).toBeUndefined();
+		expect(paid?.lastPaidInvoice?.invoiceNumber).toBe(
+			pending?.pendingInvoice?.invoiceNumber,
+		);
+		expect(typeof paid?.lastPaidInvoice?.paidAt).toBe("number");
+		expect(paid?.subscriptionStatus).toBe("active");
+		expect(typeof paid?.currentPeriodEnd).toBe("number");
+		expect(typeof paid?.lastActAsAt).toBe("number");
+	});
+
 	test("recentAuditForRetailer is admin-only", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, OWNER);

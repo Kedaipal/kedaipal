@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
 	describeProduct,
+	isSecurityDepositInRange,
+	securityDepositRangeMessage,
 	type SummaryInput,
 	weekendRateConsequence,
 } from "./product-summary";
@@ -19,13 +21,29 @@ function row(
 }
 
 describe("describeProduct", () => {
+	it("an event leads the summary — it changes what the product IS", () => {
+		// 5 Jan 2099 MYT midnight (UTC+8).
+		const date = Date.UTC(2099, 0, 4, 16, 0, 0);
+		expect(
+			describeProduct(
+				{
+					options: [],
+					rows: [row({ price: "18.00" })],
+					customLine: null,
+					event: { date, timeMinutes: 480, seats: 30 },
+				},
+				"MYR",
+			).startsWith("Event · "),
+		).toBe(true);
+	});
+
 	it("describes a single tracked item with one price", () => {
 		expect(
 			describeProduct(
 				{ options: [], rows: [row({ price: "18.00" })], customLine: null },
-				"RM",
+				"MYR",
 			),
-		).toBe("One item · From stock · RM 18");
+		).toBe("One item · From stock · RM\u00a018");
 	});
 
 	it("describes the ICP case: choices by Size, made fresh, price range", () => {
@@ -52,9 +70,9 @@ describe("describeProduct", () => {
 					],
 					customLine: null,
 				},
-				"RM",
+				"MYR",
 			),
-		).toBe("3 choices by Size · Made fresh · RM 12–28.50");
+		).toBe("3 choices by Size · Made fresh · RM\u00a012–28.50");
 	});
 
 	it("joins two axes with × and flags mixed fulfilment", () => {
@@ -74,9 +92,9 @@ describe("describeProduct", () => {
 					],
 					customLine: null,
 				},
-				"RM",
+				"MYR",
 			),
-		).toBe("2 choices by Size × Flavour · Mixed fulfilment · RM 10");
+		).toBe("2 choices by Size × Flavour · Mixed fulfilment · RM\u00a010");
 	});
 
 	it("ignores deactivated rows for fulfilment and price", () => {
@@ -95,16 +113,16 @@ describe("describeProduct", () => {
 					],
 					customLine: null,
 				},
-				"RM",
+				"MYR",
 			),
-		).toBe("2 choices by Size · From stock · RM 12");
+		).toBe("2 choices by Size · From stock · RM\u00a012");
 	});
 
 	it("notes a missing price and a custom line", () => {
 		expect(
 			describeProduct(
 				{ options: [], rows: [row({ price: "" })], customLine: { price: "" } },
-				"RM",
+				"MYR",
 			),
 		).toBe("One item · From stock · No price yet · + custom option");
 	});
@@ -121,7 +139,7 @@ describe("describeProduct — made-to-order products (86eyfq04j)", () => {
 	};
 
 	it("reads as a quote, not as a missing price", () => {
-		expect(describeProduct(madeToOrder, "RM")).toBe(
+		expect(describeProduct(madeToOrder, "MYR")).toBe(
 			"Made to order · Price on quote",
 		);
 	});
@@ -130,9 +148,9 @@ describe("describeProduct — made-to-order products (86eyfq04j)", () => {
 		expect(
 			describeProduct(
 				{ ...madeToOrder, rows: [{ ...madeToOrder.rows[0], price: "120" }] },
-				"RM",
+				"MYR",
 			),
-		).toBe("Made to order · RM 120");
+		).toBe("Made to order · RM\u00a0120");
 	});
 
 	// The shape the editor's "Made to order" mode actually writes: no matrix at
@@ -141,16 +159,16 @@ describe("describeProduct — made-to-order products (86eyfq04j)", () => {
 		expect(
 			describeProduct(
 				{ options: [], rows: [], customLine: { price: "40" } },
-				"RM",
+				"MYR",
 			),
-		).toBe("Made to order · From RM 40");
+		).toBe("Made to order · From RM\u00a040");
 	});
 
 	it("still reads as a quote when the bespoke line has no price", () => {
 		expect(
 			describeProduct(
 				{ options: [], rows: [], customLine: { price: "" } },
-				"RM",
+				"MYR",
 			),
 		).toBe("Made to order · Price on quote");
 	});
@@ -163,9 +181,9 @@ describe("describeProduct — made-to-order products (86eyfq04j)", () => {
 					rows: [row({ price: "12", blockWhenOutOfStock: false })],
 					customLine: null,
 				},
-				"RM",
+				"MYR",
 			),
-		).toBe("One item · Made fresh · RM 12");
+		).toBe("One item · Made fresh · RM\u00a012");
 	});
 
 	it("speaks booking vocabulary for a booking listing", () => {
@@ -179,9 +197,9 @@ describe("describeProduct — made-to-order products (86eyfq04j)", () => {
 					customLine: null,
 					booking: { capacityPerNight: "5" },
 				},
-				"RM",
+				"MYR",
 			),
-		).toBe("Booking · 5 spots/night · RM 80/night");
+		).toBe("Booking · 5 spots/night · RM\u00a080/night");
 		expect(
 			describeProduct(
 				{
@@ -190,7 +208,7 @@ describe("describeProduct — made-to-order products (86eyfq04j)", () => {
 					customLine: null,
 					booking: { capacityPerNight: "1" },
 				},
-				"RM",
+				"MYR",
 			),
 		).toBe("Booking · 1 spot/night · No price yet");
 	});
@@ -210,9 +228,9 @@ describe("describeProduct — weekend rate (S13)", () => {
 						weekendDays: [5, 6],
 					},
 				},
-				"RM",
+				"MYR",
 			),
-		).toBe("Booking · 5 spots/night · RM 80/night · RM 120 Fri & Sat");
+		).toBe("Booking · 5 spots/night · RM\u00a080/night · RM\u00a0120 Fri & Sat");
 	});
 
 	it("a package never shows it — one flat price", () => {
@@ -229,9 +247,9 @@ describe("describeProduct — weekend rate (S13)", () => {
 						weekendDays: [5, 6],
 					},
 				},
-				"RM",
+				"MYR",
 			),
-		).toBe("Booking · 30-day package · Unlimited spots · RM 150/30 days");
+		).toBe("Booking · 30-day package · Unlimited spots · RM\u00a0150/30 days");
 	});
 
 	it("blank rate or no nights adds nothing", () => {
@@ -243,18 +261,18 @@ describe("describeProduct — weekend rate (S13)", () => {
 		expect(
 			describeProduct(
 				{ ...base, booking: { capacityPerNight: "1", weekendPrice: "" } },
-				"RM",
+				"MYR",
 			),
-		).toBe("Booking · 1 spot/night · RM 80/night");
+		).toBe("Booking · 1 spot/night · RM\u00a080/night");
 		expect(
 			describeProduct(
 				{
 					...base,
 					booking: { capacityPerNight: "1", weekendPrice: "120", weekendDays: [] },
 				},
-				"RM",
+				"MYR",
 			),
-		).toBe("Booking · 1 spot/night · RM 80/night");
+		).toBe("Booking · 1 spot/night · RM\u00a080/night");
 	});
 });
 
@@ -263,28 +281,28 @@ describe("weekendRateConsequence", () => {
 		expect(
 			weekendRateConsequence(
 				{ basePrice: "80", weekendPrice: "120", weekendDays: [5, 6] },
-				"RM",
+				"MYR",
 			),
-		).toBe("Fri and Sat nights charge RM 120, other nights RM 80.");
+		).toBe("Fri and Sat nights charge RM\u00a0120, other nights RM\u00a080.");
 		expect(
 			weekendRateConsequence(
 				{ basePrice: "", weekendPrice: "45.50", weekendDays: [0] },
-				"S$",
+				"SGD",
 			),
-		).toBe("Sun nights charge S$ 45.50.");
+		).toBe("Sun nights charge S$\u00a045.50.");
 	});
 
 	it("is silent when blank, and explains an empty or full night set", () => {
 		expect(
 			weekendRateConsequence(
 				{ basePrice: "80", weekendPrice: "", weekendDays: [5, 6] },
-				"RM",
+				"MYR",
 			),
 		).toBeNull();
 		expect(
 			weekendRateConsequence(
 				{ basePrice: "80", weekendPrice: "120", weekendDays: [] },
-				"RM",
+				"MYR",
 			),
 		).toMatch(/at least one night/);
 		expect(
@@ -294,7 +312,7 @@ describe("weekendRateConsequence", () => {
 					weekendPrice: "120",
 					weekendDays: [0, 1, 2, 3, 4, 5, 6],
 				},
-				"RM",
+				"MYR",
 			),
 		).toMatch(/every night/);
 	});
@@ -323,7 +341,9 @@ describe("describeProduct — a package names its UNIT (hotfix to #280)", () => 
 				},
 				"MYR",
 			),
-		).toBe("Booking · 1-month package · 1 at a time · MYR 100/month");
+		// The strip wears the store's symbol — this case once pinned the raw
+		// ISO code ("MYR 100/month") as correct.
+		).toBe("Booking · 1-month package · 1 at a time · RM 100/month");
 	});
 
 	it("a multi-month package pluralises the price span, not the adjective", () => {
@@ -337,9 +357,9 @@ describe("describeProduct — a package names its UNIT (hotfix to #280)", () => 
 						packageUnit: "month",
 					},
 				},
-				"RM",
+				"MYR",
 			),
-		).toBe("Booking · 3-month package · 20 at a time · RM 100/3 months");
+		).toBe("Booking · 3-month package · 20 at a time · RM\u00a0100/3 months");
 	});
 
 	it("a night package says nights", () => {
@@ -353,9 +373,9 @@ describe("describeProduct — a package names its UNIT (hotfix to #280)", () => 
 						packageUnit: "night",
 					},
 				},
-				"RM",
+				"MYR",
 			),
-		).toBe("Booking · 2-night package · 2 at a time · RM 100/2 nights");
+		).toBe("Booking · 2-night package · 2 at a time · RM\u00a0100/2 nights");
 	});
 
 	it("no stored unit reads as days — the pre-units default isMonthlyUnit uses", () => {
@@ -365,9 +385,9 @@ describe("describeProduct — a package names its UNIT (hotfix to #280)", () => 
 					...base,
 					booking: { capacityPerNight: "5", packageLength: "7" },
 				},
-				"RM",
+				"MYR",
 			),
-		).toBe("Booking · 7-day package · 5 at a time · RM 100/7 days");
+		).toBe("Booking · 7-day package · 5 at a time · RM\u00a0100/7 days");
 	});
 
 	it("a free-range stay is untouched — still per night", () => {
@@ -377,9 +397,9 @@ describe("describeProduct — a package names its UNIT (hotfix to #280)", () => 
 					...base,
 					booking: { capacityPerNight: "5", packageUnit: "month" },
 				},
-				"RM",
+				"MYR",
 			),
-		).toBe("Booking · 5 spots/night · RM 100/night");
+		).toBe("Booking · 5 spots/night · RM\u00a0100/night");
 	});
 
 	it("never says 'per package' again", () => {
@@ -389,9 +409,55 @@ describe("describeProduct — a package names its UNIT (hotfix to #280)", () => 
 					...base,
 					booking: { capacityPerNight: "", packageLength: "1", packageUnit },
 				},
-				"RM",
+				"MYR",
 			);
 			expect(out).not.toMatch(/per package|-day package.*month/);
 		}
+	});
+});
+
+describe("security deposit ceiling — shared by the wizard and the edit form", () => {
+	const NB = "\u00a0";
+
+	it("the bounds are the server's own (0 … 10,000 in major units)", () => {
+		expect(isSecurityDepositInRange(0)).toBe(true);
+		expect(isSecurityDepositInRange(10_000)).toBe(true);
+		expect(isSecurityDepositInRange(10_000.01)).toBe(false);
+		expect(isSecurityDepositInRange(-1)).toBe(false);
+		// Unparseable input is out, never silently "no deposit".
+		expect(isSecurityDepositInRange(null)).toBe(false);
+	});
+
+	it("the message names the store's own symbol — both forms hardcoded RM", () => {
+		expect(securityDepositRangeMessage("SGD")).toBe(
+			`Enter an amount between S$${NB}0 and S$${NB}10,000, or leave blank.`,
+		);
+		expect(securityDepositRangeMessage("MYR")).toBe(
+			`Enter an amount between RM${NB}0 and RM${NB}10,000, or leave blank.`,
+		);
+	});
+
+	it("without a currency it names the numbers alone rather than guess a symbol", () => {
+		expect(securityDepositRangeMessage()).toBe(
+			"Enter an amount between 0 and 10,000, or leave blank.",
+		);
+	});
+});
+
+describe("describeProduct — an SG store reads S$, never SGD", () => {
+	it("a price range", () => {
+		const summary = describeProduct(
+			{
+				options: [{ name: "Size", values: ["S", "L"] }],
+				rows: [
+					{ optionValues: ["S"], price: "12", active: true, blockWhenOutOfStock: true, requiresProof: false },
+					{ optionValues: ["L"], price: "28.50", active: true, blockWhenOutOfStock: true, requiresProof: false },
+				],
+				customLine: null,
+			},
+			"SGD",
+		);
+		expect(summary).toContain("S$\u00a012–28.50");
+		expect(summary).not.toMatch(/SGD/);
 	});
 });

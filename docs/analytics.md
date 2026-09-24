@@ -293,7 +293,9 @@ dashboard setting for that subtree:
 | Done screen — download/share button labels + helper copy | `src/components/order/order-document-actions.tsx` |
 | Lalamove rider name/plate (third-party PII) | `src/components/order/book-delivery-card.tsx` |
 | Pickup-point manager name + phone (third-party PII) | `src/components/settings/fulfilment-tab.tsx` |
-| Storefront checkout — the phone-echo line (the one rendered-text PII on the storefront; inputs are auto-masked) | `src/components/storefront/checkout-form.tsx` |
+| Storefront checkout — the phone-echo line (inputs are auto-masked) | `src/components/storefront/checkout-form.tsx` |
+| Booking checkout — the phone-echo line ("We'll WhatsApp the decision to …"; shipped unmasked on `/$slug/checkout`, where Clarity boots, until z8r3fdh274 rewrote that line) | `src/components/storefront/booking-checkout-form.tsx` |
+| Claim links — the buyer's name and phone on the claim page (belt-and-braces: `/claim` doesn't boot Clarity at all), and the buyer on the seller's send / waiting-on-buyer cards in the dashboard | `src/routes/claim.$token.tsx`, `src/components/claim/claim-checkout-page.tsx`, `src/components/claim/send-claim.tsx`, `src/components/claim/waiting-on-buyer.tsx` |
 
 `grep -rn MASK_PII src` audits coverage, and
 `src/lib/analytics-privacy.test.tsx` **pins a minimum spread count per file**

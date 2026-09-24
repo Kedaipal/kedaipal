@@ -17,6 +17,11 @@ import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { PublicDeliveryQuote } from "../../../convex/delivery";
 import { SG_STATE_LABEL } from "../../../convex/lib/address";
+import { parseBuyerWaPhone } from "../../../convex/lib/buyerPhone";
+import {
+	type ClosedDateRange,
+	closureOn,
+} from "../../../convex/lib/closedDates";
 import type { Country } from "../../../convex/lib/country";
 import {
 	assertValidFulfilmentDate,
@@ -39,6 +44,7 @@ import {
 	type OpeningHours,
 	selectableTimeWindow,
 } from "../../../convex/lib/openingHours";
+import { type DialIso, isDialIso } from "../../../convex/lib/phoneDial";
 import { distinctPickupNotes } from "../../../convex/lib/pickupNote";
 import { slowestPrep } from "../../../convex/lib/prepFloor";
 import type { UseCart } from "../../hooks/useCart";
@@ -71,19 +77,24 @@ import {
 	timeMovedCopy,
 } from "../../lib/fulfilment-time-issue";
 import { composeCustomerNote } from "../../lib/order-note";
+import { overseasCourierNote } from "../../lib/overseas-courier-note";
 import { loadSavedAddress, saveAddress } from "../../lib/saved-address";
 import {
 	type CheckoutAddressValues,
 	checkoutFormSchemaFor,
-	waPhoneCheckoutSchema,
 } from "../../lib/schemas";
 import { useLiveDeliveryQuote } from "../../lib/use-live-delivery-quote";
 import { submitThenFocusError } from "../forms/focus-error";
-import { CopyText, DayWindowsInline } from "../hours/hours-text";
 import { useAppForm } from "../forms/form";
+import { CopyText, DayWindowsInline } from "../hours/hours-text";
 import { PickupNotes } from "../order/pickup-notes";
 import { Button } from "../ui/button";
-import { MOBILE_PLACEHOLDER, MyPhonePrefix } from "../ui/my-phone-input";
+import {
+	applyBuyerPhoneKeystroke,
+	BuyerPhoneCountrySwitch,
+	BuyerPhonePrefix,
+	buyerPhonePlaceholder,
+} from "../ui/my-phone-input";
 import { AddressFieldset } from "./address-fieldset";
 import { CheckoutHint } from "./checkout-hint";
 import {
@@ -91,6 +102,7 @@ import {
 	CheckoutTotals,
 	pendingTotalParts,
 } from "./checkout-summary";
+import { EventLockBanner, EventMomentRow } from "./event-checkout";
 import {
 	PickupLocationRadioList,
 	PickupSummaryCard,
@@ -114,9 +126,10 @@ interface CheckoutPageProps {
 	/** Store locale — localizes the buyer-facing PDPA line under the phone
 	 * field (the rest of checkout is EN pending the storefront i18n phase). */
 	locale: string;
-	/** The store's country (SG-lite, 86eynw28q + 86eynw29u) — keys the phone
-	 * plate/validator arm AND the address variant (schema arm, fieldset shape,
-	 * Places region, saved-address namespace). From the resolved
+	/** The store's country (SG-lite, 86eynw28q + 86eynw29u) — the phone
+	 * picker's default (the buyer may pick any country, z8r3fdh274) AND the
+	 * address variant (schema arm, fieldset shape, Places region,
+	 * saved-address namespace). From the resolved
 	 * `getRetailerBySlug` payload (undefined never reaches here — the read
 	 * resolves it to MY); must match what the server enforces in orders.create,
 	 * which reads the same retailer field. */
@@ -131,12 +144,20 @@ interface CheckoutPageProps {
 	 * collection wording so the buyer isn't told something is being sent to
 	 * them. Public flag `deliveryCollectsFromCustomer` on the slug payload. */
 	collectsFromCustomer: boolean;
+	/** The store hands delivery orders to a courier (z8r3fdh274) — public bit
+	 * `booksCouriers` on the slug payload. A buyer whose WhatsApp number is
+	 * from another country is told, on the delivery step, that the rider will
+	 * phone the store instead: couriers only take a local contact number. */
+	booksCouriers: boolean;
 	minFulfilmentNoticeDays: number | undefined;
 	/** Store opening hours (86eyp5rav) — closed days are unselectable and the
 	 * time clamps to the day's window (delivery always; pickup whenever it asks
 	 * for a time, z8r3fdff97). Undefined = open 24/7. The server re-enforces
 	 * via the same shared module. */
 	openingHours: OpeningHours | undefined;
+	/** Store closed dates (z8r3fdhpm7) — never offered as chips, explained
+	 * inline when typed, refused by the server in the same words. */
+	closedDates: ReadonlyArray<ClosedDateRange> | undefined;
 	/** Store-wide minimum order value (minor units) — checkout blocks below it.
 	 * See convex/lib/minOrderRules.ts. */
 	minOrderValue: number | undefined;
@@ -219,8 +240,10 @@ export function CheckoutPage({
 	offerSelfCollect,
 	offerDelivery,
 	collectsFromCustomer,
+	booksCouriers,
 	minFulfilmentNoticeDays,
 	openingHours,
+	closedDates,
 	minOrderValue,
 	pickupLocations,
 }: CheckoutPageProps) {
@@ -357,14 +380,45 @@ export function CheckoutPage({
 		};
 	}, [noticeDays, nowDayKey]);
 	const noCheckoutPhone = !checkoutPhone;
+	// Event lock (`z8r3fdff9u`). One RSVP line in the cart fixes the WHOLE
+	// order's fulfilment moment and forces self-collect — the venue is the
+	// store's pickup point. Derived from the cart lines, so removing the RSVP
+	// releases the lock with no extra state to reset.
+	const eventLock = cart.cartEvent;
+	const eventLocked = eventLock !== undefined;
+
 	// Self-collect surfaces on the storefront only when the retailer opted in
 	// AND has at least one active pickup location. Both gates must be open or
 	// the buyer never sees a non-functional option.
 	const selfCollectAvailable = offerSelfCollect && pickupLocations.length > 0;
+	// The EVENT's venue, from the server — the same resolver order time uses,
+	// so what this card shows is what the order will freeze. Fetched (not read
+	// off the standard picker list) because an event's venue may be a point the
+	// seller HIDES from standard orders (an RSVP-only location), which the
+	// public active list deliberately omits. undefined = loading, null = the
+	// store truly has no point to host at.
+	const eventVenue = useQuery(
+		convexQuery(
+			api.pickupLocations.eventVenuePublicBySlug,
+			eventLock
+				? {
+						slug: storeSlug,
+						venueId: eventLock.venueId as Id<"pickupLocations"> | undefined,
+					}
+				: "skip",
+		),
+	).data;
+	// An event with nowhere to collect from is a dead end for the guest — the
+	// server refuses it too. Surfaced as its own explained state rather than a
+	// silent failure at submit. `undefined` is still loading, NOT missing.
+	const eventVenueMissing = eventLocked && eventVenue === null;
 	// Delivery is zero-config (buyer types an address) so it only depends on the
 	// retailer's opt-in. The settings invariant guarantees at least one of these
 	// is true, so `neitherAvailable` is a defensive fallback, not a normal state.
-	const deliveryAvailable = offerDelivery;
+	// An event order is collected at the venue, so delivery is off the table
+	// regardless of what the store offers — the method picker disappears rather
+	// than offering a choice the server would refuse.
+	const deliveryAvailable = offerDelivery && !eventLocked;
 	const bothAvailable = deliveryAvailable && selfCollectAvailable;
 	const neitherAvailable = !deliveryAvailable && !selfCollectAvailable;
 	// Default to delivery when offered, otherwise self-collect — so a pickup-only
@@ -420,6 +474,7 @@ export function CheckoutPage({
 		if (Number.isNaN(epoch)) return false;
 		return isFulfilmentDaySelectable({
 			hours: openingHours,
+			closedDates,
 			dateEpoch: epoch,
 			now,
 			prep: schedule.prep,
@@ -437,7 +492,16 @@ export function CheckoutPage({
 		return minYmd;
 	};
 	const defaultSchedule = scheduleFor(defaultMethod, "");
-	const defaultYmd = firstSelectableYmd(defaultSchedule);
+	// An event's date isn't a default, it's the ANSWER — and it deliberately
+	// ignores opening hours, the notice window and the cart's prep, exactly as
+	// orders.create does (the seller fixed this moment when she published the
+	// event, the same authority that exempts her own reschedules).
+	const defaultYmd = eventLock
+		? ymdFromEpoch(eventLock.date)
+		: firstSelectableYmd(defaultSchedule);
+	// Typed as the form's `string`, not `Country`: the picker writes any dial
+	// country, and the form's value type is inferred from these defaults.
+	const storeDialCountry: string = country;
 
 	const form = useAppForm({
 		defaultValues: {
@@ -445,6 +509,10 @@ export function CheckoutPage({
 			// Buyer's WhatsApp number (86eyf1rck) — required: the confirmation
 			// push (or the wa.me fallback) is how the order reaches a chat at all.
 			waPhone: "",
+			// The plate's picked dial country (z8r3fdh274) — the store's own until
+			// the buyer picks another or types a `+CC`. A plain string in form
+			// state, like every other value; the schema refuses an unknown one.
+			waDialCountry: storeDialCountry,
 			deliveryMethod: defaultMethod,
 			// Saved per country (SG-lite) — an MY address can't leak a state or a
 			// 5-digit postcode into an SG form, and vice versa.
@@ -499,15 +567,28 @@ export function CheckoutPage({
 				);
 				return;
 			}
+			// An RSVP is always collected at the venue (`z8r3fdff9u`), whatever
+			// the form last held — derive the method ONCE here so the address,
+			// the pickup point and the submitted value can't disagree about it.
+			const effectiveMethod: "delivery" | "self_collect" = eventLock
+				? "self_collect"
+				: value.deliveryMethod;
 			const sanitizedAddress =
-				value.deliveryMethod === "delivery"
+				effectiveMethod === "delivery"
 					? sanitizeAddress(value.address, country)
 					: undefined;
 
 			// Resolve the chosen pickup location id. For the single-location case
 			// we never asked the buyer to pick — auto-fill from the (only) option.
 			let resolvedPickupLocationId: Id<"pickupLocations"> | undefined;
-			if (value.deliveryMethod === "self_collect" && selfCollectAvailable) {
+			if (eventLock) {
+				// The event's venue, mirrored server-side (forced there too) —
+				// independent of the standard self-collect gates, because a hidden
+				// venue never appears in that picker. Send it when we have it;
+				// while the venue read is still loading the server resolves it
+				// alone, so a fast submit is never refused for a race.
+				if (eventVenue) resolvedPickupLocationId = eventVenue._id;
+			} else if (effectiveMethod === "self_collect" && selfCollectAvailable) {
 				if (singlePickup) {
 					resolvedPickupLocationId = singlePickup._id;
 				} else {
@@ -528,60 +609,76 @@ export function CheckoutPage({
 			// non-empty string; here we convert to a MYT-midnight epoch and confirm
 			// it's inside the live [min, max] window before sending. Mirrors the
 			// server (which re-validates) so the buyer sees the error inline.
-			const fulfilmentEpoch = mytMidnightFromYmd(value.fulfilmentDate);
+			//
+			// An event REPLACES this entirely (`z8r3fdff9u`): the date comes from
+			// the RSVP rather than the picker, and both the notice window and the
+			// opening-hours check are skipped — exactly what the server does,
+			// because the seller fixed this moment when she published the event.
+			// Read from the cart, never from the form, so a buyer who chose
+			// delivery and a date BEFORE adding an RSVP can't send stale values.
+			const fulfilmentEpoch = eventLock
+				? eventLock.date
+				: mytMidnightFromYmd(value.fulfilmentDate);
 			if (Number.isNaN(fulfilmentEpoch)) {
 				refuseFulfilment("That date isn't valid — pick a day from the picker.");
 				return;
 			}
-			try {
-				// The effective notice — store AND cart, the max orders.create
-				// applies (the store notice alone let a cart item's stricter
-				// notice through to a server refusal).
-				assertValidFulfilmentDate(fulfilmentEpoch, noticeDays);
-			} catch (err) {
-				refuseFulfilment((err as Error).message);
-				return;
-			}
-			// The day, then the time, in the words the inline notice already
-			// showed: opening hours (a closed day rejects for every method), the
-			// cart's prep window, and the day's pickable slots — T1's shared
-			// ladder (`fulfilmentTimeIssue`) with the prep floor threaded in
-			// (src/lib/checkout-fulfilment.ts). A time is judged whenever this
-			// fulfilment asks for one: delivery, and pickup when it matters
-			// (z8r3fdff97). The dispatch rule absorbs near-past moments (books
-			// "now"), so only what's nonsense to promise is refused, and the
-			// input's own min/max never gets to speak for us.
-			const schedule = scheduleFor(
-				value.deliveryMethod,
-				value.pickupLocationId,
-			);
-			const judged = {
-				hours: openingHours,
-				dateEpoch: fulfilmentEpoch,
-				now: Date.now(),
-				prep: schedule.prep,
-				kind: schedule.kind,
-				storeName,
-			};
-			const dayCopy = fulfilmentDayCopy({ ...judged, timed: schedule.timed });
-			if (dayCopy) {
-				refuseFulfilment(dayCopy);
-				return;
-			}
+			// An EVENT order's moment is the seller's, not the buyer's: the server
+			// overwrites both from the lock, and hours, notice and prep are all
+			// exempt there (z8r3fdff9u). Judging a pick the buyer never made would
+			// refuse her own event — so the whole ladder sits behind this.
 			let fulfilmentTimeMinutes: number | undefined;
-			if (schedule.timed) {
-				const parsed = timeMinutesFromHhmm(value.fulfilmentTime);
-				const timeCopy = fulfilmentTimeCopy({
-					...judged,
-					timeMinutes: Number.isNaN(parsed) ? undefined : parsed,
-				});
-				if (timeCopy) {
-					// Parts, never flattened: T1 keeps the CTA line's copy whole on a
-					// phone, and a prep refusal carries a time too.
-					refuseFulfilment(timeCopy);
+			if (!eventLock) {
+				try {
+					// The effective notice — store AND cart, the max orders.create
+					// applies (the store notice alone let a cart item's stricter
+					// notice through to a server refusal).
+					assertValidFulfilmentDate(fulfilmentEpoch, noticeDays);
+				} catch (err) {
+					refuseFulfilment((err as Error).message);
 					return;
 				}
-				fulfilmentTimeMinutes = parsed;
+				// The day, then the time, in the words the inline notice already
+				// showed: opening hours (a closed day rejects for every method), the
+				// cart's prep window, and the day's pickable slots — T1's shared
+				// ladder (`fulfilmentTimeIssue`) with the prep floor threaded in
+				// (src/lib/checkout-fulfilment.ts). A time is judged whenever this
+				// fulfilment asks for one: delivery, and pickup when it matters
+				// (z8r3fdff97). The dispatch rule absorbs near-past moments (books
+				// "now"), so only what's nonsense to promise is refused, and the
+				// input's own min/max never gets to speak for us.
+				const schedule = scheduleFor(
+					value.deliveryMethod,
+					value.pickupLocationId,
+				);
+				const judged = {
+					hours: openingHours,
+					closedDates,
+					dateEpoch: fulfilmentEpoch,
+					now: Date.now(),
+					prep: schedule.prep,
+					kind: schedule.kind,
+					storeName,
+				};
+				const dayCopy = fulfilmentDayCopy({ ...judged, timed: schedule.timed });
+				if (dayCopy) {
+					refuseFulfilment(dayCopy);
+					return;
+				}
+				if (schedule.timed) {
+					const parsed = timeMinutesFromHhmm(value.fulfilmentTime);
+					const timeCopy = fulfilmentTimeCopy({
+						...judged,
+						timeMinutes: Number.isNaN(parsed) ? undefined : parsed,
+					});
+					if (timeCopy) {
+						// Parts, never flattened: T1 keeps the CTA line's copy whole on a
+						// phone, and a prep refusal carries a time too.
+						refuseFulfilment(timeCopy);
+						return;
+					}
+					fulfilmentTimeMinutes = parsed;
+				}
 			}
 
 			const trimmedNote = value.note?.trim();
@@ -609,12 +706,13 @@ export function CheckoutPage({
 					customer: {
 						name: value.name?.trim() || undefined,
 						// Raw as typed — the server normalizes ("012-345 6789" →
-						// "60123456789", "9123 4567" → "6591234567") by the store's
-						// country via assertValidMobileForCountry, the same bridge the
-						// counter manual bind uses.
+						// "60123456789", "07911 123456" under GB → "447911123456")
+						// against the picked dial country via assertValidBuyerWaPhone,
+						// the same parse the form's schema ran (z8r3fdh274).
 						waPhone: value.waPhone.trim(),
+						waDialCountry: value.waDialCountry,
 					},
-					deliveryMethod: value.deliveryMethod,
+					deliveryMethod: effectiveMethod,
 					deliveryAddress: sanitizedAddress,
 					pickupLocationId: resolvedPickupLocationId,
 					fulfilmentDate: fulfilmentEpoch,
@@ -626,15 +724,14 @@ export function CheckoutPage({
 					// the server refuses the order (strict: no quote, no order — the
 					// submit gate above should never let that happen).
 					deliveryQuoteId:
-						value.deliveryMethod === "delivery" && liveQuote.state === "quoted"
+						effectiveMethod === "delivery" && liveQuote.state === "quoted"
 							? liveQuote.quoteId
 							: undefined,
 					// The session's captured ?src=/utm_source tag (86eyq0eq9) —
 					// undefined = direct. Server re-sanitizes; never blocks the order.
 					attributionSource: readAttributionSource(storeSlug),
 				});
-				if (value.deliveryMethod === "delivery")
-					saveAddress(country, value.address);
+				if (effectiveMethod === "delivery") saveAddress(country, value.address);
 				setSubmitted(true);
 				cart.clearCart();
 				form.reset();
@@ -681,6 +778,37 @@ export function CheckoutPage({
 			form.setFieldValue("fulfilmentDate", floorYmd);
 		}
 	}, [minYmd, floorYmd]);
+
+	// The phone plate's pick (z8r3fdh274). Only the picker and the `+CC`
+	// auto-switch write it, both with a known country — the store-country
+	// fallback narrows the form's plain string, it is not a state anyone reaches.
+	const watchedDialCountry = useStore(
+		form.store,
+		(s) => s.values.waDialCountry,
+	);
+	const dialCountry: DialIso = isDialIso(watchedDialCountry)
+		? watchedDialCountry
+		: country;
+	// The phone box's value as the waPhone listener last left it — the
+	// "previous" `applyBuyerPhoneKeystroke` judges a change against, since a
+	// TanStack listener is handed only the new value. Every edit of the box
+	// passes through that listener, which records its own rewrite too; the one
+	// other write, `form.reset()` after a placed order, is followed by
+	// navigation away, so the ref never goes stale while the field is in use.
+	const lastWaPhoneRef = useRef(form.state.values.waPhone);
+	// A courier only takes a contact number from the store's country, so a
+	// buyer who picked another one is told on the delivery step that the rider
+	// will phone the store instead. Null — nothing rendered — for every local
+	// buyer and every store that doesn't book couriers.
+	const overseasNote = overseasCourierNote({
+		booksCouriers,
+		deliveryMethod: watchedMethod,
+		localNumber: dialCountry === country,
+		collectsFromCustomer,
+		storeCountry: country,
+		storeName,
+		locale,
+	});
 
 	function handleSubmit(e: FormEvent) {
 		submitThenFocusError(form, e);
@@ -752,9 +880,7 @@ export function CheckoutPage({
 	// biome-ignore lint/correctness/useExhaustiveDependencies: form identity is stable; values read fresh inside.
 	useEffect(() => {
 		setTimeMove(null);
-		const dayEpoch = watchedDate
-			? mytMidnightFromYmd(watchedDate)
-			: Number.NaN;
+		const dayEpoch = watchedDate ? mytMidnightFromYmd(watchedDate) : Number.NaN;
 		const repair = () => {
 			setClockTick((t) => t + 1);
 			if (!repairTimed || Number.isNaN(dayEpoch)) return;
@@ -793,6 +919,7 @@ export function CheckoutPage({
 		if (Number.isNaN(dateEpoch)) return null;
 		return fulfilmentDayCopy({
 			hours: openingHours,
+			closedDates,
 			dateEpoch,
 			now: Date.now(),
 			prep: watchedSchedule.prep,
@@ -802,6 +929,7 @@ export function CheckoutPage({
 		});
 	}, [
 		openingHours,
+		closedDates,
 		watchedDate,
 		watchedSchedule.prep,
 		watchedSchedule.timed,
@@ -823,6 +951,7 @@ export function CheckoutPage({
 		if (Number.isNaN(dateEpoch)) return null;
 		return fulfilmentTimeCopy({
 			hours: openingHours,
+			closedDates,
 			dateEpoch,
 			now: Date.now(),
 			prep: watchedSchedule.prep,
@@ -832,6 +961,7 @@ export function CheckoutPage({
 		});
 	}, [
 		openingHours,
+		closedDates,
 		watchedDate,
 		watchedSchedule.prep,
 		watchedSchedule.timed,
@@ -843,6 +973,7 @@ export function CheckoutPage({
 	// Why today's slots start later than usual — or why today is gone.
 	const cartPrepHint = prepHint({
 		hours: openingHours,
+		closedDates,
 		now,
 		prep: watchedSchedule.prep,
 		kind: watchedSchedule.kind,
@@ -1158,9 +1289,17 @@ export function CheckoutPage({
 	const finePrint = (
 		<>
 			<p className="text-center text-xs text-muted-foreground">
-				{confirmPushEnabled
-					? `Your order goes straight to ${storeName} — one confirmation lands in your WhatsApp, with a link to follow it. Nothing is paid yet.`
-					: `Opens WhatsApp to confirm with ${storeName} — nothing is paid yet.`}
+				{/* A FREE order (an RM0 RSVP) must not imply a payment is coming —
+				    "nothing is paid yet" reads as "you'll pay later". An unquoted
+				    custom line is NOT free (the quote is pending), so it keeps the
+				    payment wording. */}
+				{cart.total === 0 && !hasCustomLine
+					? confirmPushEnabled
+						? `Your order goes straight to ${storeName} — one confirmation lands in your WhatsApp, with a link to follow it. There's nothing to pay.`
+						: `Opens WhatsApp to confirm with ${storeName} — there's nothing to pay.`
+					: confirmPushEnabled
+						? `Your order goes straight to ${storeName} — one confirmation lands in your WhatsApp, with a link to follow it. Nothing is paid yet.`
+						: `Opens WhatsApp to confirm with ${storeName} — nothing is paid yet.`}
 			</p>
 			<p className="text-center text-xs text-muted-foreground">
 				By placing this order, you agree to our {privacyPolicyLink}.
@@ -1351,6 +1490,33 @@ export function CheckoutPage({
 
 				{/* Form sections — small numbered decisions instead of a field wall. */}
 				<div className="flex min-w-0 flex-1 flex-col gap-4 lg:order-1">
+					{/* The event lock, stated FIRST (`z8r3fdff9u`). Adding an RSVP
+					    changes the terms of the whole order — the date stops being
+					    the buyer's to pick and delivery disappears — so a buyer who
+					    also has two boxes of puffs in the cart must be told at the
+					    top, not left to notice a missing date picker. The escape is
+					    in the same sentence as the constraint. */}
+					{eventLock ? (
+						<EventLockBanner
+							event={eventLock}
+							mixedCart={cart.items.some((i) => i.event === undefined)}
+							onRemove={cart.removeEventLines}
+						/>
+					) : null}
+
+					{/* An event whose store has no pickup point at all can't say where
+					    to go. Refused here with the cause named, so the seller can be
+					    told what to fix — never a silent failure at submit. */}
+					{eventVenueMissing ? (
+						<p
+							role="alert"
+							className="rounded-2xl bg-destructive/10 px-4 py-3 text-sm text-destructive"
+						>
+							This event doesn&apos;t have a collection point set up yet, so
+							RSVPs can&apos;t be taken. Please message {storeName}.
+						</p>
+					) : null}
+
 					<CheckoutSection step={1} title="Who's ordering?">
 						<form.AppField name="name">
 							{(field) => (
@@ -1369,7 +1535,37 @@ export function CheckoutPage({
 								/>
 							)}
 						</form.AppField>
-						<form.AppField name="waPhone">
+						<form.AppField
+							name="waPhone"
+							listeners={{
+								// Auto-switch (z8r3fdh274): a `+CC…` typed from the start,
+								// pasted or autofilled moves the picker to that country and
+								// leaves only the national part in the box —
+								// BuyerPhoneInput's keystroke rule, so both hosts behave
+								// alike. The rule needs the value being REPLACED (a `+`
+								// slipped before digits already there must not switch),
+								// and a listener only sees the new one, hence the ref. The
+								// rewrite doesn't re-run this listener: one keystroke, one
+								// application.
+								onChange: ({ value }) => {
+									const next = applyBuyerPhoneKeystroke(
+										value,
+										dialCountry,
+										lastWaPhoneRef.current,
+									);
+									// What the box holds after this change — the rewrite
+									// when there is one — is what the next keystroke edits.
+									lastWaPhoneRef.current = next.value;
+									if (next.value === value) return;
+									if (next.dialCountry !== dialCountry) {
+										form.setFieldValue("waDialCountry", next.dialCountry);
+									}
+									form.setFieldValue("waPhone", next.value, {
+										dontRunListeners: true,
+									});
+								},
+							}}
+						>
 							{(field) => (
 								<field.TextField
 									label="WhatsApp number"
@@ -1377,13 +1573,23 @@ export function CheckoutPage({
 									inputMode="tel"
 									autoComplete="tel"
 									// The plate says the country code is handled, so the
-									// placeholder shows the rest. A buyer who ignores it and
-									// types the full local/international form is still normalized
-									// to the same number — see waPhoneCheckoutSchema. Plate +
-									// schema share the store's country, so the badge never
-									// promises a shape the validator rejects.
-									prefix={<MyPhonePrefix country={country} />}
-									placeholder={MOBILE_PLACEHOLDER[country]}
+									// placeholder shows the rest. The buyer's number can be
+									// from any country (z8r3fdh274): the plate carries a
+									// picker defaulting to the store's, and the schema judges
+									// the number by the PICK with the server's own parse —
+									// so the badge never promises a shape the validator
+									// rejects. A full local/international form typed anyway
+									// still normalizes to the same number.
+									prefix={
+										<BuyerPhonePrefix
+											storeCountry={country}
+											dialCountry={dialCountry}
+											onDialCountryChange={(iso) =>
+												form.setFieldValue("waDialCountry", iso)
+											}
+										/>
+									}
+									placeholder={buyerPhonePlaceholder(dialCountry)}
 									required
 									description={
 										// ONE message per order (86eyd63r8) — the confirmation.
@@ -1401,14 +1607,40 @@ export function CheckoutPage({
 						    and the realistic failure is a transposed digit — which the
 						    buyer can only catch if they see the number grouped the way
 						    they'd read it. Costs nothing and blocks nobody (a genuinely
-						    unreachable number still degrades to the recovery card). */}
-						<form.Subscribe selector={(s) => s.values.waPhone}>
-							{(typed) => {
-								const parsed = waPhoneCheckoutSchema[country].safeParse(
-									typed ?? "",
-								);
-								if (!parsed.success) return null;
-								const pretty = formatMobile(parsed.data);
+						    unreachable number still degrades to the recovery card).
+						    Until it parses, the same slot holds the rejection's one-tap
+						    fix: digits that fit the OTHER store country ("9123 4567"
+						    under +60) get a "Switch to Singapore (+65)" button, gated
+						    on the same `isTouched` as the field's error so the two
+						    always appear together. On this form that is from the first
+						    keystroke: TanStack's setFieldValue marks a field touched on
+						    every change, so the phone error — like every checkout
+						    TextField's — shows as the buyer types. That is the checkout
+						    form's house rule; the plain-state buyer hosts (booking, the
+						    number repair, the counter) hold a plain rejection until
+						    blur instead — src/lib/buyer-phone-rejection.ts. Pressing
+						    the switch unmounts it, so it hands focus back to the phone
+						    input. */}
+						<form.Subscribe
+							selector={(s) => ({
+								typed: s.values.waPhone,
+								touched: s.fieldMeta.waPhone?.isTouched ?? false,
+							})}
+						>
+							{({ typed, touched }) => {
+								const parsed = parseBuyerWaPhone(typed ?? "", dialCountry);
+								if (!parsed.ok) {
+									return parsed.suggest && touched ? (
+										<BuyerPhoneCountrySwitch
+											suggest={parsed.suggest}
+											onSwitch={(c) => form.setFieldValue("waDialCountry", c)}
+											locale={locale}
+											// TextField gives its input the field's name as id.
+											inputId="waPhone"
+										/>
+									) : null;
+								}
+								const pretty = formatMobile(parsed.digits);
 								return (
 									// MASK_PII: the one storefront surface that echoes the
 									// buyer's phone back as rendered text (inputs are already
@@ -1471,13 +1703,15 @@ export function CheckoutPage({
 					<CheckoutSection
 						step={2}
 						title={
-							bothAvailable
-								? "How do you want to get it?"
-								: deliveryAvailable
-									? collectsFromCustomer
-										? "Collection address"
-										: "Delivery address"
-									: "Pickup point"
+							eventLock
+								? "Venue"
+								: bothAvailable
+									? "How do you want to get it?"
+									: deliveryAvailable
+										? collectsFromCustomer
+											? "Collection address"
+											: "Delivery address"
+										: "Pickup point"
 						}
 					>
 						{/* Method picker only when BOTH methods are offered. With a
@@ -1530,7 +1764,38 @@ export function CheckoutPage({
 							</form.AppField>
 						) : null}
 
-						{neitherAvailable ? (
+						{/* An EVENT order answers this section by itself: the venue is
+						    the event's, fetched by its own read (it may be a point the
+						    seller hides from standard orders), so neither the method
+						    machinery nor the "not accepting orders" state applies. */}
+						{eventLock ? (
+							<div className="flex flex-col gap-2">
+								{eventVenue ? (
+									<>
+										<PickupSummaryCard
+											location={eventVenue}
+											currency={cart.currency}
+										/>
+										<p className="text-xs text-muted-foreground">
+											Where the event happens — set by the store, the same for
+											every guest.
+										</p>
+									</>
+								) : eventVenue === undefined && !eventVenueMissing ? (
+									<p className="text-xs text-muted-foreground">
+										Loading the venue…
+									</p>
+								) : null}
+								{/* The seller's collection instructions (z8r3fdff97),
+								    deduped across the cart — the same block WhatsApp and
+								    the order page carry, read BEFORE the buyer commits. */}
+								<PickupNotes
+									audience="buyer"
+									locale={pickLocale(locale)}
+									notes={cartPickupNotes}
+								/>
+							</div>
+						) : neitherAvailable ? (
 							<p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
 								This store isn&apos;t accepting orders right now. Please check
 								back soon or message the store owner.
@@ -1576,6 +1841,14 @@ export function CheckoutPage({
 														? "Collection is by rider, so the fee depends on your address — you'll see it here once you pick a suggestion. Addresses outside the rider's coverage can't be collected from"
 														: "Delivery is by rider, so the fee depends on your address — you'll see it here once you pick a suggestion. Addresses outside the rider's coverage can't be delivered"}
 													{selfCollectAvailable ? " — pick up instead" : ""}.
+												</p>
+											) : null}
+											{/* Overseas WhatsApp number at a courier-booking store
+											    (z8r3fdh274): the rider is handed the store's number,
+											    and the buyer learns it here rather than at the door. */}
+											{overseasNote ? (
+												<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+													{overseasNote}
 												</p>
 											) : null}
 										</div>
@@ -1639,6 +1912,24 @@ export function CheckoutPage({
 								const schedule = scheduleFor(deliveryMethod, pickupLocationId);
 								const selectedPickup = schedule.point;
 								const isDropOff = schedule.isDropOff;
+								// The event answers this section rather than asking it:
+								// the moment is read back, not picked. The picker, the
+								// quick-day chips and the notice copy are all replaced —
+								// leaving a disabled picker would still read as a choice.
+								if (eventLock) {
+									return (
+										<CheckoutSection step={3} title="When it happens">
+											<EventMomentRow event={eventLock} storeName={storeName} />
+											{selectedPickup?.scheduleNote ? (
+												<p className="text-xs text-muted-foreground">
+													{selectedPickup.label} is normally available{" "}
+													{selectedPickup.scheduleNote} — the event date above
+													takes precedence.
+												</p>
+											) : null}
+										</CheckoutSection>
+									);
+								}
 								return (
 									<CheckoutSection
 										step={3}
@@ -1763,9 +2054,14 @@ export function CheckoutPage({
 																	now,
 																	schedule.prep.minutes,
 																);
-														const day = Number.isNaN(dayEpoch)
-															? null
-															: hoursForDate(openingHours, dayEpoch);
+														// A closed date (z8r3fdhpm7) reads like a
+														// weekly day off: no window to clamp to, and
+														// the date notice above says why.
+														const day =
+															Number.isNaN(dayEpoch) ||
+															closureOn(closedDates, dayEpoch)
+																? null
+																: hoursForDate(openingHours, dayEpoch);
 														const constrained = day !== null && !isAllDay(day);
 														return (
 															<form.AppField name="fulfilmentTime">

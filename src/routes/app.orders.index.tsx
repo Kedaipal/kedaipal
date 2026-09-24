@@ -113,6 +113,7 @@ import {
 	formatOrderTimestamp,
 	formatPrice,
 } from "../lib/format";
+import { type BulkVocab, buildBulkTargets } from "../lib/inbox-bulk-targets";
 import { type InboxEmptyCopy, inboxEmptyCopy } from "../lib/inbox-empty-copy";
 import {
 	statusChipSelected as chipSelected,
@@ -124,7 +125,9 @@ import { summarizeOrderCardItems, withLineKeys } from "../lib/order-card-items";
 import {
 	type DeliveryMethod,
 	displayStatusLabel,
+	type OrderFlowKind,
 	type OrderStatus,
+	orderFlowKind,
 	resolveAnchorLabel,
 	resolveCurrentStage,
 	resolveStages,
@@ -657,11 +660,39 @@ function OrdersRoute() {
 	const retailerMethod: DeliveryMethod = retailer.offerSelfCollect
 		? "self_collect"
 		: "delivery";
-	const stages = resolveStages({
-		orderStages: retailer.orderStages,
-		labels,
-		deliveryMethod: retailerMethod,
-	});
+	// Stages are per flow kind now (z8r3fdh3w1), and one inbox mixes kinds, so
+	// the list is resolved per kind and memoized rather than resolved once for
+	// the store. `stages` stays the RETAILER-GRAIN list — the store's primary
+	// product flow — because the controls that read it (bulk actions, the
+	// status filter, the column header) are store-grain, one control for rows
+	// of every kind. Per-ROW wording comes from `stagesForKind` below.
+	const orderFlows = retailer.orderFlows;
+	const legacyStages = retailer.orderStages;
+	const stagesByKind = new Map<
+		OrderFlowKind,
+		ReturnType<typeof resolveStages>
+	>();
+	function stagesForKind(
+		kind: OrderFlowKind,
+		bookingPackaged?: boolean,
+	): ReturnType<typeof resolveStages> {
+		// A package's defaults differ from a stay's (Active/Ended vs Checked
+		// in/out), so it can't share the booking entry unless the kind is
+		// customised — in which case one config covers both by design.
+		const cacheable = !(kind === "booking" && bookingPackaged);
+		const hit = cacheable ? stagesByKind.get(kind) : undefined;
+		if (hit) return hit;
+		const resolved = resolveStages({
+			orderFlows,
+			orderStages: legacyStages,
+			labels,
+			deliveryMethod: kind,
+			bookingPackaged,
+		});
+		if (cacheable) stagesByKind.set(kind, resolved);
+		return resolved;
+	}
+	const stages = stagesForKind(retailerMethod);
 
 	const loading = result === undefined;
 	// The query returns the whole filtered window, newest-first. We apply the sort
@@ -695,25 +726,38 @@ function OrdersRoute() {
 		currentStageId?: string;
 		deliveryMethod?: string;
 		source?: string;
+		eventRsvp?: boolean;
+		bookingPackaged?: boolean;
 	}): string {
+		// The ROW's flow kind picks its vocabulary — a checked-in RSVP reads
+		// "Checked In", a stay "Checked Out", never the retailer's delivery
+		// wording. Every kind can carry its own configured flow now, so this
+		// asks for the row's kind unconditionally instead of special-casing the
+		// two that used to be exempt; the memo keeps it to one resolve per kind
+		// per render.
+		const kind = orderFlowKind(o);
+		const rowStages = stagesForKind(kind, o.bookingPackaged);
 		const cs = resolveCurrentStage(
 			{ status: o.status as OrderStatus, currentStageId: o.currentStageId },
-			stages,
+			rowStages,
 		);
 		const resolved = cs
 			? stageLabel(cs, "en")
 			: resolveAnchorLabel(o.status as OrderStatus, {
-					stages,
+					stages: rowStages,
 					labels,
-					deliveryMethod: (o.deliveryMethod ?? "delivery") as DeliveryMethod,
+					orderFlows,
+					deliveryMethod: kind,
 					locale: "en",
 				});
 		// Counter sales complete "at the counter", not via delivery — their done
-		// state reads "Completed", never "Delivered".
+		// state reads "Completed", never "Delivered". (An RSVP sold at the
+		// counter is exempt inside displayStatusLabel — the guest attends later.)
 		return displayStatusLabel(
 			{
 				status: o.status as OrderStatus,
 				source: o.source as "storefront" | "counter" | "claim" | undefined,
+				eventRsvp: o.eventRsvp,
 			},
 			resolved,
 		);
@@ -1049,6 +1093,7 @@ function OrdersRoute() {
 		bookingCheckIn?: number;
 		bookingCheckOut?: number;
 		bookingPackaged?: boolean;
+		bookingSkippedDays?: number[];
 		status: string;
 	}): string | null => describeBookingPeriod(o);
 
@@ -1075,21 +1120,35 @@ function OrdersRoute() {
 		setSelected(allSelected ? new Set() : new Set(visibleIds));
 	}
 
-	// Bulk targets — the canonical forward transitions (resolved to the retailer's
-	// labels, matching the row badges) then the destructive Cancel, all in one
-	// "Update status" dropdown. No primary/overflow split.
-	const bulkActions: BulkAction[] = (
-		["confirmed", "packed", "shipped", "delivered"] as const
-	)
-		.map((s) => ({
-			status: s as BulkAction["status"],
-			label: resolveAnchorLabel(s as OrderStatus, {
-				stages,
-				labels,
-				deliveryMethod: retailerMethod,
-				locale: "en",
+	// Bulk targets — the canonical forward transitions then the destructive
+	// Cancel, all in one "Update status" dropdown. No primary/overflow split.
+	// The list speaks the SELECTION, not the store — see buildBulkTargets.
+	const selectedOrders = orderedOrders.filter((o) => selected.has(o._id));
+	const selectionVocabs = new Map<string, BulkVocab>();
+	for (const o of selectedOrders) {
+		const kind = orderFlowKind(o);
+		const packaged = kind === "booking" && o.bookingPackaged === true;
+		const key = `${kind}:${packaged}`;
+		if (!selectionVocabs.has(key)) {
+			selectionVocabs.set(key, {
+				kind,
+				stages: stagesForKind(kind, packaged || undefined),
+			});
+		}
+	}
+	const { targets, note: bulkActionsNote } = buildBulkTargets(
+		[...selectionVocabs.values()],
+		stages,
+	);
+	const bulkActions: BulkAction[] = targets
+		.map(
+			(t): BulkAction => ({
+				status: t.anchor,
+				label: t.label,
+				disabled: t.disabled,
+				reason: t.reason,
 			}),
-		}))
+		)
 		.concat([
 			{ status: "cancelled", label: "Cancel orders", destructive: true },
 		] as BulkAction[]);
@@ -1121,6 +1180,11 @@ function OrdersRoute() {
 				// re-selecting the same rows and watching nothing happen.
 				res.skippedCancelled > 0
 					? `${res.skippedCancelled} already cancelled`
+					: null,
+				// A booking is never "Packed"; an RSVP is never "Packed" or
+				// "Ready for Pickup" — those stages don't exist for them.
+				res.skippedNoSuchStage > 0
+					? `${res.skippedNoSuchStage} without that stage (bookings/RSVPs)`
 					: null,
 			].filter(Boolean);
 			toast.success(
@@ -1954,6 +2018,7 @@ function OrdersRoute() {
 				<OrderBulkBar
 					count={selected.size}
 					actions={bulkActions}
+					actionsNote={bulkActionsNote}
 					allSelected={allSelected}
 					onApply={applyBulk}
 					onDelete={canHardDelete ? applyBulkDelete : undefined}

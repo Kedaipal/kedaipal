@@ -24,13 +24,7 @@ import {
 	Truck,
 	XCircle,
 } from "lucide-react";
-import {
-	type FormEvent,
-	type ReactNode,
-	useEffect,
-	useRef,
-	useState,
-} from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { isSafeTrackingUrl } from "../../convex/lib/couriers";
@@ -40,29 +34,31 @@ import {
 	formatFulfilmentDateTime,
 } from "../../convex/lib/fulfilmentDate";
 import { describeGatewayMethods } from "../../convex/lib/hitpay";
-import { orderPickupNotes } from "../../convex/lib/pickupNote";
-import { isMockupGateClosed } from "../../convex/lib/order";
+import { isFreeOrder, isMockupGateClosed } from "../../convex/lib/order";
 import { paymentDeadlineApplies } from "../../convex/lib/orderClaims";
 import { isOrderDocPaid } from "../../convex/lib/orderDocument";
 import { paymentMethodLabel } from "../../convex/lib/paymentMethod";
+import { orderPickupNotes } from "../../convex/lib/pickupNote";
+import { formatEventMoment } from "../../convex/lib/productEvent";
 import {
 	type OrderBookingSpan,
 	OrderItemLine,
 } from "../components/order/order-item-line";
 import { PaymentDueCountdown } from "../components/order/payment-due-countdown";
 import { PickupNotes } from "../components/order/pickup-notes";
-import { RescheduledNote } from "../components/order/rescheduled-note";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
+import { RescheduledNote } from "../components/order/rescheduled-note";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
+import { BuyerPhoneRepairForm } from "../components/storefront/buyer-phone-repair-form";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
 import { ManualPaymentDialog } from "../components/storefront/manual-payment-dialog";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { CopyButton } from "../components/ui/copy-button";
-import { MyPhoneInput } from "../components/ui/my-phone-input";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
+import { bookingLengthLabel } from "../lib/booking-dates";
 import { getConvexHttpClient } from "../lib/convex-server";
 import { shipsAsParcel } from "../lib/dispatch-surface";
 import { convexErrorMessage, formatMobile, formatPrice } from "../lib/format";
@@ -75,6 +71,8 @@ import { withLineKeys } from "../lib/order-card-items";
 import {
 	anchorOrdinal,
 	type Locale,
+	type OrderFlowKind,
+	type OrderFlows,
 	type OrderStatus,
 	resolveCurrentStage,
 	resolveStages,
@@ -236,7 +234,11 @@ export const Route = createFileRoute("/track/$token")({
 	component: TrackingRoute,
 });
 
-type DeliveryMethod = "delivery" | "self_collect" | "booking";
+// The flow kinds this page renders. Canonical union (convex/lib/orderStatus)
+// rather than a local copy — the local one still read
+// "delivery | self_collect | booking" after the event kind shipped, so an
+// RSVP's own vocabulary couldn't be passed here at all.
+type DeliveryMethod = OrderFlowKind;
 
 type StatusCfg = { label: string; icon: ReactNode; color: string };
 
@@ -247,9 +249,17 @@ function getStatusConfig(
 	method: DeliveryMethod,
 	labels: StatusLabels | undefined,
 	locale: Locale,
+	bookingPackaged?: boolean,
+	orderFlows?: OrderFlows,
 ): Record<string, StatusCfg> {
 	const label = (status: OrderStatus) =>
-		resolveStatusLabel(status, { labels, deliveryMethod: method, locale });
+		resolveStatusLabel(status, {
+			labels,
+			orderFlows,
+			deliveryMethod: method,
+			locale,
+			bookingPackaged,
+		});
 	return {
 		pending: {
 			label: label("pending"),
@@ -406,7 +416,12 @@ function TrackingRoute() {
 		order.status !== "cancelled" &&
 		(order.paymentStatus ?? "unpaid") !== "received" &&
 		!isMockupGateClosed(order) &&
-		order.deliveryFeePending !== true;
+		order.deliveryFeePending !== true &&
+		// A genuinely free order (`z8r3fdff9u` — the RM0 RSVP) has nothing to
+		// pay: without this, the page told a guest to bank-transfer RM 0.00 and
+		// attach the receipt. isFreeOrder, never a bare total check — an
+		// unquoted mockup order also sits at 0 and must keep its (held) ask.
+		!isFreeOrder(order);
 	const paymentInfo = useQuery(
 		convexQuery(
 			api.orders.getPaymentMethods,
@@ -486,6 +501,7 @@ function TrackingRoute() {
 					checkOut: order.bookingCheckOut,
 					packaged: isBookingPackage,
 					weekendDays: order.bookingWeekendDays,
+					skippedDays: order.bookingSkippedDays,
 				}
 			: undefined;
 	const ms = order.retailerLocale === "ms";
@@ -493,10 +509,17 @@ function TrackingRoute() {
 	// up FROM this buyer's address — every "Deliver…" label flips to collection
 	// wording so the page never claims something is being sent to them.
 	const isCollection = order.deliveryDirection === "collection";
+	// The order's FLOW KIND, not its raw delivery method — an RSVP is stored
+	// self_collect, so passing the method would hand a guest pickup wording.
+	// Only `pending`/`booking_requested`/`cancelled` read their label from here
+	// (every other status resolves through the stage list below), but those are
+	// exactly the ones no stage can correct, so they get the right kind too.
 	const statusConfig = getStatusConfig(
-		deliveryMethod,
+		order.eventLocked ? "event" : deliveryMethod,
 		order.statusLabels,
 		order.retailerLocale,
+		order.bookingPackaged,
+		order.orderFlows,
 	);
 	const config = statusConfig[order.status];
 	const isCancelled = order.status === "cancelled";
@@ -569,9 +592,13 @@ function TrackingRoute() {
 	// in at the production boundary (before the first packed-or-later stage).
 	const stageLocale = order.retailerLocale;
 	const stages = resolveStages({
+		orderFlows: order.orderFlows,
 		orderStages: order.orderStages,
 		labels: order.statusLabels,
-		deliveryMethod,
+		// An RSVP's timeline is Order Received → Confirmed → Checked In — no
+		// Packed, no Ready for Pickup. Same registry the seller's stepper uses,
+		// so the two sides can never tell different stories.
+		deliveryMethod: order.eventLocked ? "event" : deliveryMethod,
 		bookingPackaged: order.bookingPackaged,
 	});
 	const currentStage = resolveCurrentStage(
@@ -708,6 +735,7 @@ function TrackingRoute() {
 					<ConfirmationSentCard
 						ms={order.retailerLocale === "ms"}
 						checkoutPhone={order.checkoutPhone}
+						free={isFreeOrder(order)}
 					/>
 				) : null
 			) : null}
@@ -821,8 +849,12 @@ function TrackingRoute() {
 
 			{/* Payment card — independent of fulfilment status. Hidden once cancelled,
 			    and held back on a booking REQUEST: nothing is payable until the seller
-			    approves (the awaiting card above says so). */}
-			{!isCancelled && order.status !== "booking_requested" ? (
+			    approves (the awaiting card above says so). A FREE order drops the
+			    whole card: "Payment Unpaid" over an RM 0.00 total is a claim about a
+			    debt that doesn't exist, and every control inside is a dead end. */}
+			{!isCancelled &&
+			order.status !== "booking_requested" &&
+			!isFreeOrder(order) ? (
 				<section
 					className={`mt-4 flex flex-col gap-3 rounded-2xl border p-4 ${paymentConfig.tone}`}
 				>
@@ -1304,23 +1336,10 @@ function TrackingRoute() {
 							</span>
 						</div>
 						<p className="text-xs text-muted-foreground">
-							{(() => {
-								// "2 night(s)" was the only place the app hedged its
-								// plural instead of counting — every other surface says
-								// "2 nights" / "1 night". Malay doesn't inflect, so only
-								// the EN branch takes the count.
-								const n = Math.round(
-									(order.bookingCheckOut - order.bookingCheckIn) / DAY_MS,
-								);
-								const unit = isBookingPackage
-									? ms
-										? "hari"
-										: `day${n === 1 ? "" : "s"}`
-									: ms
-										? "malam"
-										: `night${n === 1 ? "" : "s"}`;
-								return `${n} ${unit}`;
-							})()} ·{" "}
+							{/* Counted the way it was sold — "4 open days" for an
+							    open-days package, never the calendar span (it said
+							    "7 days" under a receipt that said 4, z8r3fdhpm7). */}
+							{bookingLengthLabel(order, ms ? "ms" : "en")} ·{" "}
 							{order.items[0]?.name ?? (ms ? "penyenaraian" : "listing")}
 						</p>
 					</div>
@@ -1552,22 +1571,41 @@ function TrackingRoute() {
 			    A booking's fulfilmentDate IS its check-in, already printed above
 			    under its own word, so this would duplicate it as "Delivery on". */}
 			{!isBooking && order.fulfilmentDate !== undefined ? (
-				<div className="mt-2 flex items-center gap-2 rounded-xl bg-accent/5 px-3 py-2 text-sm font-medium text-foreground">
-					<CalendarDays className="size-4 text-accent" />
-					{isSelfCollect
-						? order.pickupSnapshot?.locationType === "drop_off"
-							? "Meet on "
-							: "Collect on "
-						: isCollection
-							? order.collectedAt !== undefined
-								? "Collected on "
-								: "We collect on "
-							: "Delivery on "}
-					<span className="font-semibold">
-						{formatFulfilmentDateTime(
-							order.fulfilmentDate,
-							order.fulfilmentTimeMinutes,
-						)}
+				<div className="mt-2 flex items-start gap-2 rounded-xl bg-accent/5 px-3 py-2 text-sm font-medium text-foreground">
+					<CalendarDays className="mt-0.5 size-4 shrink-0 text-accent" />
+					<span>
+						{/* An RSVP's moment is the EVENT's (`z8r3fdff9u`), not a slot
+						    the guest picked — "Collect on" would misdescribe it, and
+						    "Event" is the word they'll be looking for on this page. */}
+						{order.eventLocked
+							? "Event: "
+							: isSelfCollect
+								? order.pickupSnapshot?.locationType === "drop_off"
+									? "Meet on "
+									: "Collect on "
+								: isCollection
+									? order.collectedAt !== undefined
+										? "Collected on "
+										: "We collect on "
+									: "Delivery on "}
+						<span className="font-semibold">
+							{order.eventLocked
+								? formatEventMoment({
+										date: order.fulfilmentDate,
+										timeMinutes: order.fulfilmentTimeMinutes,
+										endDate: order.eventEndDate,
+									})
+								: formatFulfilmentDateTime(
+										order.fulfilmentDate,
+										order.fulfilmentTimeMinutes,
+									)}
+						</span>
+						{order.eventLocked ? (
+							<span className="mt-0.5 block text-xs font-normal text-muted-foreground">
+								Set by the store for this event — same for every guest. Where to
+								go is in the pickup card above.
+							</span>
+						) : null}
 					</span>
 				</div>
 			) : null}
@@ -1883,9 +1921,12 @@ type TrackedOrder = NonNullable<FunctionReturnType<typeof api.orders.get>>;
 function ConfirmationSentCard({
 	ms,
 	checkoutPhone,
+	free,
 }: {
 	ms: boolean;
 	checkoutPhone: string;
+	/** `isFreeOrder` — a free RSVP has no "how to pay" for this card to point at. */
+	free: boolean;
 }) {
 	return (
 		<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-accent/40 bg-accent/5 p-4">
@@ -1904,8 +1945,12 @@ function ConfirmationSentCard({
 			</div>
 			<p className="text-sm text-muted-foreground">
 				{ms
-					? "Tak perlu hantar apa-apa. Itulah satu-satunya mesej yang kami hantar — selebihnya ada di sini: cara membayar, status terkini dan resit anda. Simpan pautan ini."
-					: "Nothing to send. That's the only message we'll send you — everything else is here: how to pay, your latest status, and your receipt. Keep this link."}
+					? free
+						? "Tak perlu hantar apa-apa dan tiada bayaran diperlukan. Itulah satu-satunya mesej yang kami hantar — status terkini dan resit anda ada di sini. Simpan pautan ini."
+						: "Tak perlu hantar apa-apa. Itulah satu-satunya mesej yang kami hantar — selebihnya ada di sini: cara membayar, status terkini dan resit anda. Simpan pautan ini."
+					: free
+						? "Nothing to send and nothing to pay. That's the only message we'll send you — your latest status and your receipt live here. Keep this link."
+						: "Nothing to send. That's the only message we'll send you — everything else is here: how to pay, your latest status, and your receipt. Keep this link."}
 			</p>
 			<Button asChild variant="outline" className="h-11 w-full">
 				<a
@@ -1957,7 +2002,8 @@ function PushSendingCard({
  * The confirmation push gave up (86eyf1rck). Two very different truths behind
  * one status, so two very different asks:
  *
- *  - `unreachable` — the number can't receive WhatsApp (typo'd, no account).
+ *  - `unreachable` — the number can't receive WhatsApp (typo'd, no account,
+ *    or a country Meta won't let us message — error 130497).
  *    Only the buyer can fix that, so the primary action is **editing the
  *    number**, which re-sends immediately. The wa.me send stays as a quiet
  *    secondary route (it also repairs the number, via the inbound path).
@@ -1983,36 +2029,7 @@ function PushFailedCard({
 	const pretty = order.customer.waPhone
 		? formatMobile(order.customer.waPhone)
 		: "";
-	const updatePhone = useMutation(api.orders.updateBuyerPhone);
 	const [editing, setEditing] = useState(false);
-	const [value, setValue] = useState("");
-	const [busy, setBusy] = useState(false);
-	// Focus on open rather than autoFocus: the field only mounts when the buyer
-	// taps "Update my number", so this is a response to their action, not a
-	// page-load surprise. One-shot — a callback ref would re-fire every keystroke.
-	const phoneInputRef = useRef<HTMLInputElement>(null);
-	useEffect(() => {
-		if (editing) phoneInputRef.current?.focus();
-	}, [editing]);
-
-	async function handleSave(e: FormEvent) {
-		e.preventDefault();
-		setBusy(true);
-		try {
-			await updatePhone({ token, waPhone: value.trim() });
-			toast.success(
-				ms
-					? "Nombor dikemas kini — pengesahan sedang dihantar"
-					: "Number updated — sending your confirmation now",
-			);
-			setEditing(false);
-			setValue("");
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setBusy(false);
-		}
-	}
 
 	return (
 		<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-800 dark:bg-amber-950/50">
@@ -2036,8 +2053,8 @@ function PushFailedCard({
 			<p className="text-sm text-amber-950/90 dark:text-amber-100/90">
 				{unreachable
 					? ms
-						? `Kami tak dapat hantar ke ${pretty} — nombor itu mungkin tersilap taip atau tiada WhatsApp. Pesanan anda tetap disahkan dan butiran di bawah adalah muktamad. Simpan pautan ini — ini halaman pesanan anda.`
-						: `We couldn't deliver it to ${pretty} — that number may have a typo, or no WhatsApp account. Your order is still confirmed and everything below is final. Keep this link — this page is your order.`
+						? `Kami tak dapat hantar ke ${pretty} — nombor itu mungkin tersilap taip, tiada WhatsApp, atau dari negara yang belum boleh kami hantar mesej WhatsApp. Pesanan anda tetap disahkan dan butiran di bawah adalah muktamad. Simpan pautan ini — ini halaman pesanan anda.`
+						: `We couldn't deliver it to ${pretty} — that number may have a typo, no WhatsApp account, or be in a country we can't message on WhatsApp yet. Your order is still confirmed and everything below is final. Keep this link — this page is your order.`
 					: ms
 						? `Masalah di pihak kami, bukan nombor anda. Pesanan anda telah disahkan dan ${storeName} sudah menerimanya — anda masih boleh membayar di bawah. Simpan pautan ini — ini halaman pesanan anda.`
 						: `That's a problem on our side, not with your number. Your order is confirmed and ${storeName} already has it — you can still pay below. Keep this link — this page is your order.`}
@@ -2045,55 +2062,21 @@ function PushFailedCard({
 
 			{unreachable ? (
 				editing ? (
-					<form onSubmit={handleSave} className="flex flex-col gap-2">
-						<label
-							htmlFor="repair-wa-phone"
-							className="text-xs font-medium text-amber-950 dark:text-amber-100"
-						>
-							{ms ? "Nombor WhatsApp anda" : "Your WhatsApp number"}
-						</label>
-						{/* Same plated control as the storefront checkout field this is
-						    repairing — the buyer has already met it once, and it's the
-						    only shape `assertValidMobileForCountry` behind it accepts
-						    (judged by the store's country, which rides the order
-						    payload). Its own neutral chrome inside the amber card, so
-						    the control reads as a control and not as part of the
-						    warning. */}
-						<MyPhoneInput
-							id="repair-wa-phone"
-							ref={phoneInputRef}
-							value={value}
-							onChange={setValue}
-							country={order.retailerCountry}
-							className="bg-white dark:bg-amber-950"
-						/>
-						<div className="flex gap-2">
-							<Button
-								type="submit"
-								isLoading={busy}
-								disabled={busy || value.trim().length === 0}
-								className="h-11 flex-1"
-							>
-								{ms ? "Simpan & hantar" : "Save & resend"}
-							</Button>
-							<Button
-								type="button"
-								variant="outline"
-								onClick={() => setEditing(false)}
-								disabled={busy}
-								className="h-11"
-							>
-								{ms ? "Batal" : "Cancel"}
-							</Button>
-						</div>
-					</form>
+					// Mounted per edit, so each attempt starts clean. It judges the
+					// number with the same buyer picker + parser as checkout, and
+					// never spends a server try on a number that can't parse.
+					<BuyerPhoneRepairForm
+						token={token}
+						failedWaPhone={order.customer.waPhone}
+						storeCountry={order.retailerCountry}
+						locale={order.retailerLocale}
+						onSaved={() => setEditing(false)}
+						onCancel={() => setEditing(false)}
+					/>
 				) : (
 					<Button
 						type="button"
-						onClick={() => {
-							setValue("");
-							setEditing(true);
-						}}
+						onClick={() => setEditing(true)}
 						className="h-12 w-full text-base"
 					>
 						{ms ? "Kemas kini nombor" : "Update my number"}

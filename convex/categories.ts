@@ -15,6 +15,7 @@ import {
 } from "./lib/categoryCounts";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidCategorySlug } from "./lib/slug";
+import { hiddenFromStorefront } from "./lib/productEvent";
 import { productWithVariants } from "./products";
 import { assertPlanFeature, assertSubscriptionActive } from "./subscriptions";
 
@@ -233,8 +234,10 @@ export const getPublicPage = query({
 		const products = [];
 		for (const junction of junctions) {
 			const product = await ctx.db.get(junction.productId);
-			// Same visibility rules as products.list: active + not hidden.
+			// Same visibility rules as products.list: active, not hidden, and not
+			// a finished event (which takes itself off the storefront).
 			if (!product || !product.active || product.hidden === true) continue;
+			if (hiddenFromStorefront(product)) continue;
 			products.push(
 				await productWithVariants(ctx, product, { activeOnly: true }),
 			);

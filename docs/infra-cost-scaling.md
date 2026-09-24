@@ -90,6 +90,17 @@ Meta bills **by message category**, not by raw count:
 | **Utility template** | transactional notification *outside* the 24h window | ~USD 0.015 (~RM0.07) |
 | **Marketing template** | promotional / broadcast | ~USD 0.06 (~RM0.28) |
 
+> **Meta bills per RECIPIENT country, not per store.** The rates above are
+> Malaysia's. Since [`z8r3fdh274`](https://app.clickup.com/t/z8r3fdh274) a
+> buyer can give a WhatsApp number from any country
+> ([`phone-numbers.md`](./phone-numbers.md)), so an order's confirmation
+> template to the UK, India or Indonesia is priced at that country's rate — and
+> it always goes out, because transactional sends bypass the WABA gate. Nothing
+> meters spend per recipient country yet; `outboundMessageLog.toWaPhone`
+> carries the recipient's calling code, so a per-country breakdown can be
+> derived (within the log's retention window) when the Credits COGS model
+> needs it.
+
 **The entire core order flow is free.** When a buyer taps the `wa.me` link, they
 open a 24h service window; the confirm reply, payment ask, QR, and in-window
 status updates all cost nothing. This is why the WhatsApp wedge is cheap to run.

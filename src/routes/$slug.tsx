@@ -2,8 +2,10 @@ import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import { api } from "../../convex/_generated/api";
+import type { ClosedDateRange } from "../../convex/lib/closedDates";
 import { type Locale, OG_LOCALE } from "../../convex/lib/locale";
 import {
+	closedDatesSpecification,
 	type OpeningHours,
 	openingHoursSpecification,
 } from "../../convex/lib/openingHours";
@@ -49,6 +51,9 @@ interface StorefrontLoaderData {
 	// Store opening hours (86eyp5rav) — feeds the Store JSON-LD's
 	// openingHoursSpecification (local SEO). Undefined = open 24/7, no block.
 	openingHours: OpeningHours | undefined;
+	// Closed dates (z8r3fdhpm7) — the JSON-LD's holiday hours
+	// (specialOpeningHoursSpecification). Undefined = none.
+	closedDates: ClosedDateRange[] | undefined;
 }
 
 export const Route = createFileRoute("/$slug")({
@@ -120,6 +125,7 @@ export const Route = createFileRoute("/$slug")({
 				: undefined,
 			coverImageUrl: retailer.coverImageUrl ?? undefined,
 			openingHours: retailer.openingHours,
+			closedDates: retailer.closedDates,
 		};
 	},
 	head: ({ loaderData }) => {
@@ -133,6 +139,7 @@ export const Route = createFileRoute("/$slug")({
 			checkoutPhone,
 			locale,
 			openingHours,
+			closedDates,
 		} = loaderData;
 		const title = `${storeName} — Order on WhatsApp | Kedaipal`;
 		const ogLocale = OG_LOCALE[locale];
@@ -176,6 +183,14 @@ export const Route = createFileRoute("/$slug")({
 			...(openingHours
 				? {
 						openingHoursSpecification: openingHoursSpecification(openingHours),
+					}
+				: {}),
+			// Upcoming closed dates as schema.org holiday hours (z8r3fdhpm7) —
+			// search shows "Closed" on Raya instead of the weekly hours.
+			...(closedDatesSpecification(closedDates).length > 0
+				? {
+						specialOpeningHoursSpecification:
+							closedDatesSpecification(closedDates),
 					}
 				: {}),
 		};

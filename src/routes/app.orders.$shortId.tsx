@@ -33,7 +33,6 @@ import type { Doc, Id } from "../../convex/_generated/dataModel";
 import { attributionBucket, sourceLabel } from "../../convex/lib/attribution";
 import { DEFAULT_COUNTRY } from "../../convex/lib/country";
 import {
-	DAY_MS,
 	formatFulfilmentDate,
 	formatFulfilmentTime,
 } from "../../convex/lib/fulfilmentDate";
@@ -42,7 +41,11 @@ import {
 	isRiderManagedTransition,
 	riderDrivesOrderStatus,
 } from "../../convex/lib/lalamove";
-import { isMockupGateClosed } from "../../convex/lib/order";
+import {
+	isDefaultedCounterDate,
+	isFreeOrder,
+	isMockupGateClosed,
+} from "../../convex/lib/order";
 import { isOrderDocPaid } from "../../convex/lib/orderDocument";
 import {
 	COUNTRY_PAYMENT_METHODS,
@@ -108,7 +111,7 @@ import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { useStoreLock } from "../hooks/useStoreLock";
 import { canHardDeleteOrders } from "../lib/admin-actions";
 import { MASK_PII } from "../lib/analytics-privacy";
-import { describeBookingSpan } from "../lib/booking-dates";
+import { bookingFulfilmentLine } from "../lib/booking-dates";
 import { formatPhone, orderCustomerLabel } from "../lib/customer";
 import { shipsAsParcel } from "../lib/dispatch-surface";
 import {
@@ -134,30 +137,6 @@ import {
 import { suppressNextOrderConfirmedToast } from "../lib/orderToastSuppression";
 import { isCrmLocked, isOrderInboxLocked } from "../lib/subscription";
 import { cn } from "../lib/utils";
-
-/**
- * The fulfilment card's one-line summary of a booking. A fixed-length package
- * (S7, frozen `bookingPackageDays`) reads as a validity window in DAYS; a
- * free-range stay reads as check-in → check-out in NIGHTS.
- */
-function bookingFulfilmentLine(order: {
-	bookingCheckIn?: number;
-	bookingCheckOut?: number;
-	bookingPackageDays?: number;
-}): string {
-	if (order.bookingCheckIn === undefined || order.bookingCheckOut === undefined)
-		return "Booking";
-	const span = Math.round(
-		(order.bookingCheckOut - order.bookingCheckIn) / DAY_MS,
-	);
-	const isPackage = order.bookingPackageDays !== undefined;
-	const unit = isPackage ? "day" : "night";
-	return `Booking · ${span} ${unit}${span === 1 ? "" : "s"} · ${describeBookingSpan(
-		order.bookingCheckIn,
-		order.bookingCheckOut,
-		{ isPackage, format: formatFulfilmentDate },
-	)}`;
-}
 
 export const Route = createFileRoute("/app/orders/$shortId")({
 	component: OrderDetailRoute,
@@ -371,6 +350,7 @@ function OrderDetailRoute() {
 					checkOut: order.bookingCheckOut,
 					packaged: order.bookingPackaged === true,
 					weekendDays: order.bookingWeekendDays,
+					skippedDays: order.bookingSkippedDays,
 				}
 			: undefined;
 	const orderId = order?._id;
@@ -569,6 +549,7 @@ function OrderDetailRoute() {
 	// The buyer tracking page resolves in the store's locale instead.
 	const statusLabelOpts = {
 		labels: order.statusLabels,
+		orderFlows: order.orderFlows,
 		deliveryMethod,
 		locale: "en" as const,
 	};
@@ -576,9 +557,13 @@ function OrderDetailRoute() {
 	// synthesized defaults — same path), the order's current stage, and the next
 	// stage to advance into. Dashboard chrome is EN.
 	const stages = resolveStages({
+		orderFlows: order.orderFlows,
 		orderStages: order.orderStages,
 		labels: order.statusLabels,
-		deliveryMethod,
+		// An RSVP runs the event vocabulary: Confirmed → Checked In, no Packed,
+		// no Ready for Pickup — the pipeline header and the advance CTA both
+		// come from this list. `eventLocked` covers pre-flag rows too.
+		deliveryMethod: order.eventLocked ? "event" : deliveryMethod,
 		bookingPackaged: order.bookingPackaged,
 	});
 	const currentStage = resolveCurrentStage(
@@ -1064,9 +1049,10 @@ function OrderDetailRoute() {
 							<p className="mt-1 text-sm text-amber-950 dark:text-amber-100">
 								The confirmation to{" "}
 								<b>{formatPhone(order.customer.waPhone ?? "")}</b> didn't
-								deliver — that number may have a typo or no WhatsApp. It's the
-								only message this order sends, so they have nothing in chat to
-								come back to. Their order page offers an &ldquo;Update my
+								deliver — that number may have a typo, no WhatsApp, or be in a
+								country our WhatsApp account can't message yet. It's the only
+								message this order sends, so they have nothing in chat to come
+								back to. Their order page offers an &ldquo;Update my
 								number&rdquo; fix; if they reach you another way, check the
 								number with them.
 							</p>
@@ -1309,8 +1295,30 @@ function OrderDetailRoute() {
 				</section>
 			) : null}
 
+			{/* A FREE order (`z8r3fdff9u` — the RM0 RSVP) says so instead of asking
+			    the seller to collect: the unpaid card below would offer "Mark
+			    payment received" and promise a day-11 reminder for a debt that
+			    doesn't exist. Same predicate as the buyer's page, so the two sides
+			    can never disagree about whether money is owed. */}
+			{isFreeOrder(order) && order.status !== "cancelled" ? (
+				<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+					<div className="flex items-center gap-2">
+						<HandCoins className="size-4 text-muted-foreground" />
+						<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+							Payment
+						</p>
+					</div>
+					<p className="text-sm text-muted-foreground">
+						Free order — there&apos;s nothing to collect, and the buyer
+						isn&apos;t asked to pay.
+					</p>
+				</section>
+			) : null}
+
 			{/* Unpaid → retailer can confirm directly without waiting for shopper claim. */}
-			{paymentStatus === "unpaid" && order.status !== "cancelled" ? (
+			{paymentStatus === "unpaid" &&
+			order.status !== "cancelled" &&
+			!isFreeOrder(order) ? (
 				<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 					<div className="flex items-center gap-2">
 						<HandCoins className="size-4 text-amber-600" />
@@ -1636,7 +1644,7 @@ function OrderDetailRoute() {
 							{isBooking
 								? order.bookingCheckIn !== undefined &&
 									order.bookingCheckOut !== undefined
-									? bookingFulfilmentLine(order)
+									? bookingFulfilmentLine(order, formatFulfilmentDate)
 									: "Booking"
 								: isSelfCollect
 									? order.pickupSnapshot?.locationType === "drop_off"
@@ -1654,24 +1662,46 @@ function OrderDetailRoute() {
 					    capacity check — rescheduling one without the other would
 					    desync them. Changing a stay's dates is decline + re-request
 					    until the booking-aware reschedule ships. */}
-					{isBooking ? null : (
+					{/* An RSVP's date belongs to the EVENT (`z8r3fdff9u`) — moving one
+					    guest would drop them out of the headcount and send them on a
+					    day nobody else is coming. Disabled WITH the reason and the
+					    two real ways out, never a dialog that errors on submit. The
+					    server refuses it too. */}
+					{isBooking ? null : order.eventLocked ? (
+						<p className="ml-auto max-w-56 shrink-0 text-right text-xs leading-relaxed text-muted-foreground">
+							Date set by the event — change the event&apos;s date, or cancel
+							this RSVP.
+						</p>
+					) : (
 						<div className="ml-auto shrink-0">
 							<RescheduleFulfilmentDialog order={order} />
 						</div>
 					)}
 				</div>
-				{order.fulfilmentDate !== undefined && order.source !== "counter" ? (
+				{/* A counter order's date row only hides while the date is the
+				    defaulted "today" — a REAL date (an event's, or one the seller
+				    picked) is a promise the seller must see. Shared predicate with
+				    the inbox badge. */}
+				{order.fulfilmentDate !== undefined &&
+				!isDefaultedCounterDate(order) ? (
 					<div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 border-t border-border pt-3">
 						<span className="text-xs text-muted-foreground">
-							{isBooking
-								? "Check-in"
-								: isSelfCollect
-									? order.pickupSnapshot?.locationType === "drop_off"
-										? "Meet on"
-										: "Collect on"
-									: collectionService
-										? "Collect on"
-										: "Deliver on"}
+							{/* An RSVP's moment is the EVENT's — "Collect on" would
+							    misdescribe it, and the buyer's page says "Event" too. */}
+							{order.eventLocked
+								? "Event"
+								: isBooking
+									? // A package starts; only a stay checks in.
+										order.bookingPackaged
+										? "Starts"
+										: "Check-in"
+									: isSelfCollect
+										? order.pickupSnapshot?.locationType === "drop_off"
+											? "Meet on"
+											: "Collect on"
+										: collectionService
+											? "Collect on"
+											: "Deliver on"}
 						</span>
 						<FulfilmentDateBadge
 							epoch={order.fulfilmentDate}
@@ -1681,6 +1711,14 @@ function OrderDetailRoute() {
 						{order.fulfilmentTimeMinutes !== undefined ? (
 							<span className="text-sm font-medium whitespace-nowrap">
 								{formatFulfilmentTime(order.fulfilmentTimeMinutes)}
+							</span>
+						) : null}
+						{/* A multi-day event names its LAST day here too — the buyer's
+						    page shows the whole range, and the seller must never know
+						    less than the guest. Read live off the product. */}
+						{order.eventLocked && order.eventEndDate !== undefined ? (
+							<span className="text-sm font-medium">
+								to {formatFulfilmentDate(order.eventEndDate)}
 							</span>
 						) : null}
 					</div>
@@ -1901,6 +1939,16 @@ function OrderDetailRoute() {
 					currency={order.currency}
 					fulfilmentDate={order.fulfilmentDate}
 					fulfilmentTimeMinutes={order.fulfilmentTimeMinutes}
+					event={
+						order.eventLocked
+							? {
+									// The frozen item name IS the event's name — an order
+									// holds at most one event product by construction.
+									name: order.items[0]?.name ?? "Event",
+									endDate: order.eventEndDate,
+								}
+							: undefined
+					}
 				/>
 			) : null}
 
@@ -2675,7 +2723,7 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 					<div className="flex items-center gap-2">
 						<div className="relative flex-1">
 							<span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-								{order.currency}
+								{currencySymbol(order.currency)}
 							</span>
 							<Input
 								id="mockup-quote"
@@ -2777,6 +2825,7 @@ function NotifyManagerCard({
 	currency,
 	fulfilmentDate,
 	fulfilmentTimeMinutes,
+	event,
 }: {
 	shortId: string;
 	location: PickupSnapshot;
@@ -2799,6 +2848,7 @@ function NotifyManagerCard({
 	currency: string;
 	fulfilmentDate?: number;
 	fulfilmentTimeMinutes?: number;
+	event?: { name: string; endDate?: number };
 }) {
 	const [copied, setCopied] = useState(false);
 	// Fetch live manager contact. Skipped when there's no pickupLocationId on
@@ -2827,6 +2877,7 @@ function NotifyManagerCard({
 		currency,
 		fulfilmentDate,
 		fulfilmentTimeMinutes,
+		event,
 	});
 
 	const notifyHref = hasManagerPhone

@@ -14,15 +14,23 @@
 // days carry a small dot (never a fill — the fill vocabulary is taken by the
 // stay band and the unavailable state) and the legend names the rate, so a
 // guest sees WHICH nights cost more before the receipt does the arithmetic.
+//
+// Store closed dates (z8r3fdhpm7) get their own mark: a light hatch laid over
+// whatever else the day is. A closure is PUBLIC — the storefront header names
+// it — so unlike a seller's block it may be shown for what it is. On a stay
+// listing the day is also unavailable (the hatch explains why); on a package
+// the weekly day off is hatched too, no package can START on a hatched day,
+// and the hatch shows through the selected band so the buyer sees the closed
+// days INSIDE their term.
 
 import { useMemo } from "react";
 import { weekdayIndexMyt } from "../../../convex/lib/fulfilmentDate";
 import {
+	type BookingSelection,
 	calendarDateFromMytEpoch,
 	canCheckIn,
 	latestCheckOutFor,
 	mytEpochFromCalendarDate,
-	type BookingSelection,
 	type SelectionContext,
 } from "../../lib/booking-dates";
 import { Calendar } from "../ui/calendar";
@@ -37,6 +45,7 @@ export function BookingCalendar({
 	maxMonth,
 	disabled = false,
 	weekendDays,
+	closedDays,
 }: {
 	selection: BookingSelection;
 	onSelect: (day: number) => void;
@@ -54,6 +63,8 @@ export function BookingCalendar({
 	/** The nights that charge the weekend rate (0 = Sun), or undefined when the
 	 * listing has one rate for every night — no dots, no legend row. */
 	weekendDays?: readonly number[];
+	/** The store's closed dates on screen (z8r3fdhpm7), MYT midnights. */
+	closedDays?: ReadonlySet<number>;
 }) {
 	const pickingCheckOut =
 		selection.checkIn !== undefined && selection.checkOut === undefined;
@@ -71,6 +82,8 @@ export function BookingCalendar({
 		const unavailable = [...ctx.unavailable].map(calendarDateFromMytEpoch);
 		return {
 			unavailable,
+			store_closed: (date: Date) =>
+				closedDays?.has(mytEpochFromCalendarDate(date)) ?? false,
 			// Bookable weekend nights only — dotting the past would be noise.
 			weekend_night: (date: Date) => {
 				if (!weekendSet) return false;
@@ -111,84 +124,105 @@ export function BookingCalendar({
 		selection.checkOut,
 		checkoutCeiling,
 		weekendSet,
+		closedDays,
 	]);
 
 	return (
 		<div
 			className={
-				disabled ? "pointer-events-none opacity-55 transition-opacity" : undefined
+				disabled
+					? "pointer-events-none opacity-55 transition-opacity"
+					: undefined
 			}
 			aria-busy={disabled || undefined}
 		>
-		<Calendar
-			// Monday start: Sat+Sun sit adjacent for weekend-led booking.
-			weekStartsOn={1}
-			month={calendarDateFromMytEpoch(month)}
-			onMonthChange={(m) => onMonthChange(mytEpochFromCalendarDate(m))}
-			startMonth={calendarDateFromMytEpoch(minMonth)}
-			endMonth={calendarDateFromMytEpoch(maxMonth)}
-			className="w-full"
-			classNames={{
-				month_grid: "w-full border-collapse",
-				weekdays: "grid grid-cols-7",
-				weekday: "w-auto text-[11px] font-medium text-muted-foreground",
-				week: "mt-1 grid w-full grid-cols-7 gap-0",
-				day: "relative p-0 text-center text-sm",
-			}}
-			modifiers={modifiers}
-			modifiersClassNames={{
-				unavailable:
-					"[&>button]:text-muted-foreground/60 [&>button]:line-through [&>button]:decoration-muted-foreground/50 [&>button]:bg-muted [&>button]:rounded-lg [&>button]:hover:bg-muted",
-				stay_start:
-					"[&>button]:!bg-primary [&>button]:!text-primary-foreground [&>button]:font-semibold [&>button]:!rounded-lg",
-				stay_end:
-					"[&>button]:!bg-primary [&>button]:!text-primary-foreground [&>button]:font-semibold [&>button]:!rounded-lg [&>button]:!no-underline",
-				stay_middle:
-					"[&>button]:bg-accent/15 [&>button]:text-accent-emphasis [&>button]:font-semibold [&>button]:rounded-lg",
-				checkout_only:
-					"[&>button]:border [&>button]:border-dashed [&>button]:border-ring [&>button]:!bg-transparent [&>button]:!text-muted-foreground [&>button]:!line-through",
-				// A dot under the number. `bg-current` so it stays legible on the
-				// navy stay band (white) and on a plain day (foreground).
-				weekend_night:
-					"[&>button]:relative [&>button]:after:absolute [&>button]:after:bottom-1 [&>button]:after:left-1/2 [&>button]:after:size-1 [&>button]:after:-translate-x-1/2 [&>button]:after:rounded-full [&>button]:after:bg-current [&>button]:after:opacity-70 [&>button]:after:content-['']",
-			}}
-			disabled={(date) => {
-				const day = mytEpochFromCalendarDate(date);
-				if (pickingCheckOut && selection.checkIn !== undefined) {
-					// Phase 2: earlier days stay enabled ONLY where they could start a
-					// fresh stay (a tap restarts there); later days cap at the ceiling.
-					if (day > selection.checkIn) {
-						return checkoutCeiling !== undefined && day > checkoutCeiling;
+			<Calendar
+				// Monday start: Sat+Sun sit adjacent for weekend-led booking.
+				weekStartsOn={1}
+				month={calendarDateFromMytEpoch(month)}
+				onMonthChange={(m) => onMonthChange(mytEpochFromCalendarDate(m))}
+				startMonth={calendarDateFromMytEpoch(minMonth)}
+				endMonth={calendarDateFromMytEpoch(maxMonth)}
+				className="w-full"
+				classNames={{
+					month_grid: "w-full border-collapse",
+					weekdays: "grid grid-cols-7",
+					weekday: "w-auto text-[11px] font-medium text-muted-foreground",
+					week: "mt-1 grid w-full grid-cols-7 gap-0",
+					day: "relative p-0 text-center text-sm",
+				}}
+				modifiers={modifiers}
+				modifiersClassNames={{
+					unavailable:
+						"[&>button]:text-muted-foreground/60 [&>button]:line-through [&>button]:decoration-muted-foreground/50 [&>button]:bg-muted [&>button]:rounded-lg [&>button]:hover:bg-muted",
+					stay_start:
+						"[&>button]:!bg-primary [&>button]:!text-primary-foreground [&>button]:font-semibold [&>button]:!rounded-lg",
+					stay_end:
+						"[&>button]:!bg-primary [&>button]:!text-primary-foreground [&>button]:font-semibold [&>button]:!rounded-lg [&>button]:!no-underline",
+					stay_middle:
+						"[&>button]:bg-accent/15 [&>button]:text-accent-emphasis [&>button]:font-semibold [&>button]:rounded-lg",
+					checkout_only:
+						"[&>button]:border [&>button]:border-dashed [&>button]:border-ring [&>button]:!bg-transparent [&>button]:!text-muted-foreground [&>button]:!line-through",
+					// A hatch as a BACKGROUND IMAGE, so it composes with whatever
+					// background COLOUR the day already has — the unavailable grey, the
+					// stay band, the check-in pill. `var(--muted-foreground)` is already a
+					// complete colour in this project (never wrap it in hsl()).
+					store_closed: CLOSED_HATCH,
+					// A dot under the number. `bg-current` so it stays legible on the
+					// navy stay band (white) and on a plain day (foreground).
+					weekend_night:
+						"[&>button]:relative [&>button]:after:absolute [&>button]:after:bottom-1 [&>button]:after:left-1/2 [&>button]:after:size-1 [&>button]:after:-translate-x-1/2 [&>button]:after:rounded-full [&>button]:after:bg-current [&>button]:after:opacity-70 [&>button]:after:content-['']",
+				}}
+				disabled={(date) => {
+					const day = mytEpochFromCalendarDate(date);
+					if (pickingCheckOut && selection.checkIn !== undefined) {
+						// Phase 2: earlier days stay enabled ONLY where they could start a
+						// fresh stay (a tap restarts there); later days cap at the ceiling.
+						if (day > selection.checkIn) {
+							return checkoutCeiling !== undefined && day > checkoutCeiling;
+						}
+						return !canCheckIn(day, ctx);
 					}
 					return !canCheckIn(day, ctx);
-				}
-				return !canCheckIn(day, ctx);
-			}}
-			onDayClick={(date, dayModifiers) => {
-				if (dayModifiers.disabled) return;
-				onSelect(mytEpochFromCalendarDate(date));
-			}}
-			// Day cells stretch to the grid columns (the wrapper's size-9 is for
-			// the compact insights picker; checkout wants the full card width with
-			// ≥44px touch targets).
-			styles={{ day_button: { width: "100%", minHeight: "2.75rem" } }}
-		/>
+				}}
+				onDayClick={(date, dayModifiers) => {
+					if (dayModifiers.disabled) return;
+					onSelect(mytEpochFromCalendarDate(date));
+				}}
+				// Day cells stretch to the grid columns (the wrapper's size-9 is for
+				// the compact insights picker; checkout wants the full card width with
+				// ≥44px touch targets).
+				styles={{ day_button: { width: "100%", minHeight: "2.75rem" } }}
+			/>
 		</div>
 	);
 }
 
+/** The closed-day hatch, shared by the day cells and the legend swatch. */
+const CLOSED_HATCH =
+	"[&>button]:bg-[repeating-linear-gradient(135deg,color-mix(in_oklab,var(--muted-foreground)_35%,transparent)_0_1.5px,transparent_1.5px_6px)]";
+
 /** The legend under the calendar — states only, never the blocked/full split.
  * `weekendLabel` ("Fri & Sat · RM 120/night") adds the dotted-night row when
- * the listing prices weekend nights differently. */
+ * the listing prices weekend nights differently; `showClosed` adds the store
+ * closed row whenever a hatched day is on screen (z8r3fdhpm7);
+ * `selectionLabel` names the band — "Your package" for a package. */
 export function BookingCalendarLegend({
 	weekendLabel,
+	showClosed = false,
+	selectionLabel = "Your stay",
 }: {
 	weekendLabel?: string;
+	showClosed?: boolean;
+	selectionLabel?: string;
 } = {}) {
 	return (
 		<div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
 			<span className="flex items-center gap-1.5">
-				<i className="size-3.5 rounded border border-border bg-card" aria-hidden />
+				<i
+					className="size-3.5 rounded border border-border bg-card"
+					aria-hidden
+				/>
 				Available
 			</span>
 			<span className="flex items-center gap-1.5">
@@ -197,7 +231,7 @@ export function BookingCalendarLegend({
 			</span>
 			<span className="flex items-center gap-1.5">
 				<i className="size-3.5 rounded bg-primary" aria-hidden />
-				Your stay
+				{selectionLabel}
 			</span>
 			{weekendLabel ? (
 				<span className="flex items-center gap-1.5">
@@ -206,6 +240,15 @@ export function BookingCalendarLegend({
 						aria-hidden
 					/>
 					{weekendLabel}
+				</span>
+			) : null}
+			{showClosed ? (
+				<span className="flex items-center gap-1.5">
+					<i
+						className="size-3.5 rounded border border-border bg-card bg-[repeating-linear-gradient(135deg,color-mix(in_oklab,var(--muted-foreground)_35%,transparent)_0_1.5px,transparent_1.5px_6px)]"
+						aria-hidden
+					/>
+					Store closed
 				</span>
 			) : null}
 		</div>

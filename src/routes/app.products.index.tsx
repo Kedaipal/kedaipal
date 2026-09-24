@@ -4,6 +4,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useConvex, useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import {
+	CalendarClock,
 	ChevronRight,
 	Download,
 	EyeOff,
@@ -21,14 +22,15 @@ import {
 	productCapBlockReason,
 	productCapState,
 } from "../../convex/lib/productCap";
+import { formatEventBadge, isEventPassed } from "../../convex/lib/productEvent";
 import { ProBadge } from "../components/app/pro-gate";
 import { PageHeader } from "../components/dashboard/page-header";
-import { ProductSpotlightBanner } from "../components/products/product-spotlight-banner";
 import {
 	StockAdjustDialog,
 	type StockLine,
 	StockSheet,
 } from "../components/product/stock-adjust";
+import { ProductSpotlightBanner } from "../components/products/product-spotlight-banner";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { FilterChip, FilterChipRow } from "../components/ui/filter-chip";
@@ -43,12 +45,12 @@ import { SortableList } from "../components/ui/sortable-list";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { BULK_IO_ENABLED } from "../lib/feature-flags";
 import { convexErrorMessage, formatPrice } from "../lib/format";
-import { PRODUCT_SPOTLIGHT } from "../lib/product-spotlight";
 import {
 	downloadProductsCsv,
 	downloadProductsXlsx,
 	type ExportableProduct,
 } from "../lib/product-export";
+import { PRODUCT_SPOTLIGHT } from "../lib/product-spotlight";
 import { reorderByIds } from "../lib/reorder";
 import {
 	isProductSpotlightKey,
@@ -344,6 +346,7 @@ function ProductsRoute() {
 				prepMinutes: p.prepMinutes,
 				pickupNote: p.pickupNote,
 				kind: p.kind,
+				event: p.event,
 				imageCount: p.imageUrls?.length ?? 0,
 				variants: p.variants.map((vr) => ({
 					optionValues: vr.optionValues,
@@ -660,8 +663,28 @@ function ProductCard({
 				{/* Stock state as a colour word — the number a home seller actually
 				    protects. Archived rows use the slot for their status instead. */}
 				<span className="truncate text-[12.5px] font-semibold">
+					{/* An EVENT's third line is its date, not a stock word — the date
+					    is what the product IS, and it lives in the flexible left
+					    column so a long range truncates instead of crushing the
+					    name (the first cut put it in the shrink-0 chip column,
+					    which rendered the name at 0px). "Ended" keeps history
+					    legible; the storefront has already dropped the listing. */}
 					{!p.active ? (
 						<span className="font-normal text-muted-foreground">Archived</span>
+					) : p.event ? (
+						<span
+							className={`inline-flex max-w-full items-center gap-1 ${
+								isEventPassed(p.event)
+									? "font-normal text-muted-foreground"
+									: "text-accent-emphasis"
+							}`}
+						>
+							<CalendarClock className="size-3 shrink-0" aria-hidden />
+							<span className="truncate">
+								{isEventPassed(p.event) ? "Ended" : "Event"} ·{" "}
+								{formatEventBadge(p.event)}
+							</span>
+						</span>
 					) : outOfStock ? (
 						<span className="text-red-600 dark:text-red-400">Sold out</span>
 					) : lowStock ? (

@@ -181,9 +181,9 @@ export function riderBookingAllowed(country: Country): boolean {
  * Whether a store COUNTRY may connect Delyva courier booking (86eyjpv6z).
  * Its own table for the same reason as COUNTRY_RIDER_BOOKING above — booking
  * capabilities are decided per provider, never derived from a pricing-mode
- * list. Note this is the one place the two providers DISAGREE: Lalamove is
- * MY-only, Delyva serves both, and deriving either from the other would have
- * made that impossible to express.
+ * list. The two providers have disagreed before (Lalamove was MY-only until
+ * z8r3fdch3r opened SG) and may again; deriving either from the other would
+ * make that impossible to express.
  */
 export const COUNTRY_DELYVA_BOOKING: Record<Country, boolean> = {
 	MY: true,

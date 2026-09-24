@@ -41,6 +41,11 @@ export type CopyVars = {
 	amount?: string;
 	/** Short human pairing code (e.g. "K7") the walk-in buyer shows the cashier. */
 	code?: string;
+	/** Event name + moment for an RSVP confirmation, pre-formatted by the caller
+	 * ("BNI Breakfast · Thu 25 Sep · 8:00 AM"). One string rather than three
+	 * vars so the date formatting stays in `productEvent`, where the storefront
+	 * badge reads it from too. */
+	eventLabel?: string;
 };
 
 /** True when the order is fulfilled at a drop-off point (meetup), not the seller's place. */
@@ -178,6 +183,27 @@ export const TEMPLATE_LANGUAGE: Record<Locale, "en" | "ms"> = {
  * Not sent again when the price settles: the button in this same message opens
  * the order page, which carries the live total from that moment on.
  */
+/**
+ * The confirmation template's money parameter when there is genuinely nothing
+ * to pay (`z8r3fdff9u` — a free RSVP event).
+ *
+ * Printing "MYR 0.00" is technically true and reads as a bug: a guest who sees
+ * a zero total on a confirmation assumes the price failed to load and messages
+ * the seller to ask. Saying it in words removes the question. This is a
+ * parameter VALUE, not a template change, so it needs no Meta re-approval.
+ *
+ * Gated on `isFreeOrder`, never on a bare `total === 0` — a made-to-order line
+ * sits at zero until the seller quotes it, and that buyer must read
+ * `PENDING_TOTAL_LABEL` instead.
+ */
+export const NO_PAYMENT_LABEL: Record<Locale, string> = {
+	en: "no payment needed",
+	ms: "tiada bayaran diperlukan",
+	// zh stores ride the EN template (TEMPLATE_LANGUAGE), so this must read
+	// correctly inside an English sentence.
+	zh: "no payment needed",
+};
+
 export const PENDING_TOTAL_LABEL: Record<Locale, string> = {
 	en: "to be confirmed",
 	ms: "akan disahkan",
@@ -204,7 +230,8 @@ export type SystemMessageKey =
 	| "storeQrBusy"
 	| "counterOrderConfirmedPaid"
 	| "counterOrderConfirmedUnpaid"
-	| "paymentReminderIntro";
+	| "paymentReminderIntro"
+	| "rsvpFreeConfirm";
 
 type SystemCopy = {
 	transferReferenceLine: (v: CopyVars) => string;
@@ -234,6 +261,12 @@ type SystemCopy = {
 	// docs/payment-reminder.md). Seller-initiated per tap, never automatic, and
 	// sent as a gated `session_message` so caps/opt-outs apply.
 	paymentReminderIntro: (v: CopyVars) => string;
+	// Event RSVP (`z8r3fdff9u`): the free-form confirmation for a FREE event,
+	// used on the legacy inbound-confirm path (no push template configured).
+	// Names the moment and the venue, because "where and when" is the only
+	// thing a guest needs and the one thing a generic confirm doesn't say.
+	// Paid events fall through to the normal confirm + payment block.
+	rsvpFreeConfirm: (v: CopyVars) => string;
 };
 
 export const systemMessages: Record<Locale, SystemCopy> = {
@@ -268,6 +301,10 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			} is still awaiting payment.${
 				trackingUrl ? `\n\n📋 View your order details: ${trackingUrl}` : ""
 			}`,
+		rsvpFreeConfirm: ({ shortId, storeName, eventLabel, trackingUrl, contactPhone }) =>
+			`🎟️ You're in! RSVP ${shortId} for *${eventLabel}* at ${storeName} is confirmed — no payment needed.${
+				trackingUrl ? `\n\nWhere to go and what you picked: ${trackingUrl}` : ""
+			}${contactLine(contactPhone, "en")}`,
 	},
 	ms: {
 		transferReferenceLine: ({ shortId }) =>
@@ -300,6 +337,10 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			} masih menunggu pembayaran.${
 				trackingUrl ? `\n\n📋 Lihat butiran pesanan anda: ${trackingUrl}` : ""
 			}`,
+		rsvpFreeConfirm: ({ shortId, storeName, eventLabel, trackingUrl, contactPhone }) =>
+			`🎟️ Anda sudah didaftarkan! RSVP ${shortId} untuk *${eventLabel}* di ${storeName} telah disahkan — tiada bayaran diperlukan.${
+				trackingUrl ? `\n\nLokasi dan pilihan anda: ${trackingUrl}` : ""
+			}${contactLine(contactPhone, "ms")}`,
 	},
 	zh: {
 		transferReferenceLine: ({ shortId }) =>
@@ -332,6 +373,10 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			}还在等待付款。${
 				trackingUrl ? `\n\n📋 查看订单详情：${trackingUrl}` : ""
 			}`,
+		rsvpFreeConfirm: ({ shortId, storeName, eventLabel, trackingUrl, contactPhone }) =>
+			`🎟️ 报名成功！您在 ${storeName} 的 *${eventLabel}* 报名 ${shortId} 已确认 —— 无需付款。${
+				trackingUrl ? `\n\n地点和您的选择：${trackingUrl}` : ""
+			}${contactLine(contactPhone, "zh")}`,
 	},
 };
 

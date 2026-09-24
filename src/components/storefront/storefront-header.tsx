@@ -1,7 +1,8 @@
+import type { ClosedDateRange } from "../../../convex/lib/closedDates";
 import type { OpeningHours } from "../../../convex/lib/openingHours";
 import { AppImage } from "../ui/app-image";
 import { FoundingMemberBadge } from "./founding-member-badge";
-import { OpeningHoursLine } from "./opening-hours-line";
+import { hasHoursLine, OpeningHoursLine } from "./opening-hours-line";
 
 /** The public-safe retailer fields the header renders — a structural subset of
  * `getRetailerBySlug`'s payload so both the home and category routes can pass
@@ -16,6 +17,9 @@ export interface StorefrontHeaderRetailer {
 	/** Store opening hours (86eyp5rav) — renders the live "Open now / Closed"
 	 * line + weekly schedule. Undefined (open 24/7) renders nothing. */
 	openingHours?: OpeningHours;
+	/** Closed dates (z8r3fdhpm7) — "Closed today · Hari Raya" on the day and a
+	 * heads-up for one starting soon, even on a 24/7 store. */
+	closedDates?: ClosedDateRange[];
 }
 
 /**
@@ -129,12 +133,14 @@ export function StorefrontHeader({
 							Browse &amp; order on WhatsApp
 						</p>
 					)}
-					{retailer.openingHours ? (
+					{hasHoursLine(retailer.openingHours, retailer.closedDates) ? (
 						// Live open/closed status + tap-for-weekly-schedule
-						// (86eyp5rav). Only stores that configured hours show it —
-						// the 24/7 default stays clutter-free.
+						// (86eyp5rav). Only stores that configured hours — or have
+						// a closed date running or coming up (z8r3fdhpm7) — show
+						// it; the 24/7 default stays clutter-free.
 						<OpeningHoursLine
 							hours={retailer.openingHours}
+							closedDates={retailer.closedDates}
 							onCover={hasCover}
 						/>
 					) : null}

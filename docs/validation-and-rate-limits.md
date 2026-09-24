@@ -56,9 +56,17 @@ Defined in [`convex/lib/rateLimiter.ts`](../convex/lib/rateLimiter.ts) using `@c
 
 > Expanding markets: replace `MY_STATES` with a country-keyed map and accept a country code on the address object (noted in the file header).
 
-### Phone (`assertValidWaPhone`, [`convex/lib/slug.ts`](../convex/lib/slug.ts))
+### Phone — three validators, by whose number it is
 
-Normalizes to an E.164-ish form (8–15 digits). Optional at checkout — the WhatsApp webhook stamps `customer.waPhone` later if missing. Mirrored on the frontend in [`src/lib/slug.ts`](../src/lib/slug.ts).
+The full rules: [`phone-numbers.md`](./phone-numbers.md).
+
+| Kind | Validator | Rule |
+|---|---|---|
+| **Buyer** (checkout, booking, track repair, counter manual bind) | `assertValidBuyerWaPhone` ([`convex/lib/buyerPhone.ts`](../convex/lib/buyerPhone.ts)) | Any country, judged by the country picked on the field (`waDialCountry`; absent = the store's). MY/SG picks take the strict mobile arm; other countries the generated dial table (trunk prefix + mobile lengths). Stored as E.164 digits, the form Meta delivers inbound. |
+| **Seller / platform** (store contact, alert number, pickup manager, support line) | `assertValidMobileForCountry` ([`convex/lib/slug.ts`](../convex/lib/slug.ts)) | A mobile of the store's country; landlines refused. |
+| **Machine-inbound** (Meta's `from`, the counter's store-QR scan, opt-out keys) | `assertValidWaPhone` / `normalizeWaPhone` (`convex/lib/slug.ts`) | Loose E.164-ish, 8–15 digits — never refuses a number WhatsApp just delivered. |
+
+Optional at `orders.create` at the protocol level (the storefront form requires it); the WhatsApp webhook stamps `customer.waPhone` later if missing. **Not mirrored** — the client imports the server's own pure modules (`src/lib/schemas.ts` and `src/lib/phone.ts` import from `convex/lib/slug.ts` and `convex/lib/buyerPhone.ts`), so a client gate and the server validator can't disagree.
 
 ### Payment reference (`claimPayment`)
 
@@ -66,16 +74,18 @@ Trimmed; capped at 80 chars (`PAYMENT_REFERENCE_MAX`). See [`payment-handshake.m
 
 ## The mirrored-validation pattern
 
-Helpers that run on **both** backend and frontend are duplicated (not imported) because Convex bundles from `convex/` and the app bundles from `src/`:
+Some helpers that run on **both** backend and frontend are duplicated (not imported):
 
 | Concern | Backend (security boundary) | Frontend (UX) |
 |---|---|---|
-| Slug / phone / email | [`convex/lib/slug.ts`](../convex/lib/slug.ts) | [`src/lib/slug.ts`](../src/lib/slug.ts) |
+| Slug / store-name shape | [`convex/lib/slug.ts`](../convex/lib/slug.ts) | [`src/lib/slug.ts`](../src/lib/slug.ts) (shape rules only; reserved handles are imported from `convex/lib/reservedSlugs.ts`) |
+| Email | [`convex/lib/slug.ts`](../convex/lib/slug.ts) `assertValidEmail` | [`src/lib/schemas.ts`](../src/lib/schemas.ts) (Zod) |
 | Address | [`convex/lib/address.ts`](../convex/lib/address.ts) | [`src/lib/schemas.ts`](../src/lib/schemas.ts) (Zod) |
 | Legal versions | [`convex/lib/legal.ts`](../convex/lib/legal.ts) | [`src/lib/legal.ts`](../src/lib/legal.ts) |
-| Customer display name | [`convex/lib/customer.ts`](../convex/lib/customer.ts) | [`src/lib/customer.ts`](../src/lib/customer.ts) |
 
 **Rule:** change one side → change the mirror in the same PR. The backend copy is authoritative; never rely on frontend validation alone.
+
+**Prefer importing to mirroring.** A pure module in `convex/lib/` (no Convex runtime imports beyond the `ConvexError` class) can be imported by `src/` directly, which removes the drift instead of policing it. Phone validation (`convex/lib/slug.ts`, `convex/lib/buyerPhone.ts`) and the customer display helpers (`convex/lib/customer.ts`, re-exported by `src/lib/customer.ts` since z8r3fdh274 — it used to be a hand-kept mirror) already work that way.
 
 ## Legal consent
 

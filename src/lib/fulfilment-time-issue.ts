@@ -25,6 +25,11 @@
  */
 
 import {
+	type ClosedDateRange,
+	closedDateMessage,
+	closureOn,
+} from "../../convex/lib/closedDates";
+import {
 	formatFulfilmentTime,
 	hhmmFromMinutes,
 	minSelectableTimeMinutes,
@@ -64,6 +69,9 @@ export interface PrepCause {
 export type TimeIssue =
 	/** The store doesn't open that weekday. */
 	| { kind: "no_slot"; reason: "closed_day"; weekday: number }
+	/** The date is one of the store's closed dates (z8r3fdhpm7) — Raya, a
+	 * break. Carries the range so the sentence can name all of it and why. */
+	| { kind: "no_slot"; reason: "closed_date"; closure: ClosedDateRange }
 	/** Nothing left to pick TODAY, and why, because they call for different
 	 * words: `closed` once it's past the day's last closing time; `too_late`
 	 * while the store is still open but the checkout lead — or, with `prep`,
@@ -82,6 +90,9 @@ export type TimeIssue =
 
 interface TimeContext {
 	hours: OpeningHours | undefined;
+	/** The store's closed dates (z8r3fdhpm7). A covered day is refused before
+	 * anything else is judged — the orders.create order. */
+	closedDates?: ReadonlyArray<ClosedDateRange>;
 	dayEpoch: number;
 	now?: number;
 	/** The cart's prep floor (z8r3fdff97). Optional, and 0 changes nothing. */
@@ -111,12 +122,17 @@ export function fulfilmentTimeIssue(
 ): TimeIssue | null {
 	const {
 		hours,
+		closedDates,
 		dayEpoch,
 		timeMinutes,
 		now = Date.now(),
 		prepMinutes = 0,
 		prepItemName = "",
 	} = args;
+	// A closed date first — the truest reason, and the one the server judges
+	// first too (`closedDateIssue` runs before prep and hours in orders.create).
+	const closure = closureOn(closedDates, dayEpoch);
+	if (closure) return { kind: "no_slot", reason: "closed_date", closure };
 	// Whether PREP is the reason is decided by `prepFloorProblem` — the same
 	// function behind orders.create's refusal — so the checkout can never blame
 	// prep for a moment the server would refuse for another reason, or miss one
@@ -250,6 +266,11 @@ export function timeIssueCopy(
 ): CopyPart[] {
 	switch (issue.kind) {
 		case "no_slot":
+			if (issue.reason === "closed_date") {
+				// The server's sentence (`closedDateMessage`) with the store's
+				// name and a period — one sentence both sides.
+				return [`${closedDateMessage(issue.closure, ctx.storeName)}.`];
+			}
 			if (issue.reason === "closed_day") {
 				return [
 					`${ctx.storeName} is closed on ${WEEKDAY_NAMES[issue.weekday]}s — pick another day.`,

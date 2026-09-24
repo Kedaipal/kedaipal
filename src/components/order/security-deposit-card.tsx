@@ -11,7 +11,12 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
-import { convexErrorMessage, formatPrice, parsePriceInput } from "../../lib/format";
+import {
+	convexErrorMessage,
+	currencySymbol,
+	formatPrice,
+	parsePriceInput,
+} from "../../lib/format";
 import { Button } from "../ui/button";
 import {
 	Dialog,
@@ -191,7 +196,7 @@ export function SecurityDepositCard({ order }: { order: DepositOrder }) {
 							className="flex flex-col gap-1.5 text-sm font-medium"
 							htmlFor="deposit-keep-amount"
 						>
-							Amount to keep ({order.currency})
+							Amount to keep ({currencySymbol(order.currency)})
 							<Input
 								id="deposit-keep-amount"
 								inputMode="decimal"

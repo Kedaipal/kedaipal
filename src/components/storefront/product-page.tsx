@@ -20,6 +20,7 @@ import {
 	OptionPills,
 	PriceLabel,
 	PurchaseActions,
+	EventNotice,
 	PurchaseHints,
 	ShareLinkChip,
 	TotalPreviewRow,
@@ -185,6 +186,7 @@ export function ProductPageView({
 					) : (
 						<>
 							<OptionPills pp={pp} />
+							<EventNotice pp={pp} />
 							<PurchaseHints pp={pp} />
 							<CustomOrderCard
 								pp={pp}

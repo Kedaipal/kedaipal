@@ -1,6 +1,6 @@
 {
   "name": "kedaipal",
-  "version": "2026.09.6",
+  "version": "2026.09.7",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.18.0",
@@ -87,6 +87,7 @@
     "concurrently": "^9.2.1",
     "convex-test": "^0.0.47",
     "jsdom": "^28.1.0",
+    "libphonenumber-js": "1.13.13",
     "sharp": "^0.34.5",
     "typescript": "^5.7.2",
     "vite": "^7.3.1",

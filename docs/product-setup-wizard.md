@@ -188,9 +188,56 @@ edit page uses (`validateSearch` on the route), seeded with the whole wizard
 draft; "← Prefer the guided setup? Switch back" returns losslessly. The
 import flow is untouched — bulk sellers never see the wizard.
 
+**Deep link to a step-0 card** (`z8r3fdhkr7`): `/app/products/new?card=event`
+(any of `food` · `physical` · `service` · `booking` · `event`) opens the
+wizard with that card already selected — how the v2026.09.7 "Host an event"
+note lands the seller on Event instead of a page ringing their own store
+type. The card is applied by `withKindCard`, the SAME pure transition a tap
+runs, so a link can't open a state a tap wouldn't; `openingWizard` derives
+the opening state at mount (a lazy initialiser, never an effect — the first
+paint is already right). A link to Event on a plan without `events` keeps
+the store-type default and shows the tap's Pro refusal from the first paint.
+`form=full` drops `card` in `validateSearch`: the full form has no step 0,
+and a param that silently does nothing is worse than none. Unknown values
+are dropped, never honoured. A restored draft (switch back from the full
+form) outranks the link — that draft is the seller's own answer.
+
+**On a phone the answer must be ON screen, not just selected** (#297
+review, measured at 360×780 and 375×667). Step 0's fifth card sits under
+the sticky Continue and the bottom nav, so an arrival that only set the
+answer looked like nothing happened. Three things close it:
+
+- **The Event refusal sits under the Event card.** It's the house
+  `ProFeatureTease` strip: the reason plus an **Upgrade** button, never a
+  dead end. It has its own issue field (`kind:events-locked`), so step 0's
+  "Pick one to continue." keeps its slot below the list. Below the list it
+  was hidden, on the tap path as much as the link.
+- **A link's arrival scrolls the answer into view once.** That's the event
+  hint on the event route (it sits directly under the Event card), the
+  refusal on a locked plan, else the chosen card. It uses
+  `scrollIntoView({ block: "nearest" })` with a phone-only
+  `scroll-mb-56 lg:scroll-mb-0`, so it scrolls only when the sticky bars
+  cover the target, and a desktop page that already shows it never jumps.
+  The first paint is still derived. The effect moves only the scroll
+  position.
+- **A link that changes while the wizard is open** (What's new reopened
+  mid-draft) is applied once, as a tap (`pickCard`): back to step 0, the
+  lock refusing with its reason, a booking switch asking before it drops
+  typed prices. React's "store the previous prop" pattern does this during
+  render, **never by remounting**, which would throw the draft away.
+
+Other doors use it: "Create a booking listing" (Settings → Bookings, the
+orders calendar) and the weekend-rate spotlight's "+ New product" open on
+**Booking** (`createCard` on its `PRODUCT_SPOTLIGHT` row) instead of telling
+the seller to find the Booking kind. The card list lives in
+`src/lib/kind-card.ts`, because it is the `?card=` contract as well as the
+wizard's. `releases.test.ts` fails a release note whose `?card=` isn't a
+real card, since the route would silently drop the typo.
+
 Pure, unit-tested helpers (`product-wizard.test.ts`): `wizardStepIssues`,
 `buildWizardSubmitValues`, `wizardHandoff`, `formDraftToWizardState`,
-`wizardInitialStep`, `wizardPriceLabel`.
+`wizardInitialStep`, `wizardPriceLabel`, `withKindCard`, `openingWizard`,
+`isKindCard`.
 
 ## Edit = the question-first full form
 
@@ -371,7 +418,8 @@ surface:
 - `src/components/forms/product-images-field.tsx` — shared photo grid
 - `src/components/forms/category-picker.tsx` — `embedded` variant
 - `src/lib/product-summary.ts` (+ `.test.ts`) — summary strip derivation
-- `src/routes/app.products.new.tsx` — wizard route + `?form=full`
+- `src/routes/app.products.new.tsx` (+ `.test.ts`) — wizard route, `?form=full`, `?card=`
+- `src/components/forms/product-wizard-card-link.test.tsx` — the `?card=` arrival, rendered
 
 ## Follow-ups (named, not hidden)
 

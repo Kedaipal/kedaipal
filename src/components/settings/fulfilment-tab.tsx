@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import {
+	CalendarClock,
 	Clock,
 	ExternalLink,
 	FlaskConical,
@@ -35,6 +36,7 @@ import {
 	resolveAwbConfig,
 	type StoredAwbConfig,
 } from "../../../convex/lib/awbConfig";
+import type { ClosedDateRange } from "../../../convex/lib/closedDates";
 import type { Country } from "../../../convex/lib/country";
 import type {
 	DeliveryConfig,
@@ -71,40 +73,43 @@ import { MASK_PII } from "../../lib/analytics-privacy";
 import {
 	type CardTarget,
 	type FixHighlight,
-	highlightRingClass,
 	SETTINGS_ANCHOR,
 	scrollToAnchor,
 } from "../../lib/country-setup-copy";
 import { formatPhone } from "../../lib/customer";
-import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
-import { cn } from "../../lib/utils";
 import {
 	convexErrorMessage,
 	currencySymbol,
+	formatDraftPrice,
 	formatPrice,
 	normalizePriceInput,
 	parsePriceInput,
 } from "../../lib/format";
 import { deriveMapsUrl } from "../../lib/google-address";
+import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import { hasFeature, type SubscriptionView } from "../../lib/subscription";
+import { cn } from "../../lib/utils";
 import { jntSeedZones } from "../../lib/weight-zone-seed";
 import { ProBadge } from "../app/pro-gate";
 import {
 	GoogleAddressAutocomplete,
 	type GoogleSelectedAddress,
 } from "../forms/google-address-autocomplete";
+import { DayWindowsStacked, TimeRange } from "../hours/hours-text";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { FilterChip } from "../ui/filter-chip";
 import { Input } from "../ui/input";
+import { ModeButton, ModeRadioDot } from "../ui/mode-button";
 import { Skeleton } from "../ui/skeleton";
 import { SortableList } from "../ui/sortable-list";
 import { TimePicker } from "../ui/time-picker";
 import { ToggleSwitch } from "../ui/toggle-switch";
+import { ClosedDatesCard } from "./closed-dates-card";
 import { CourierBookingSection } from "./courier-booking-section";
 import { DespatchLabelCard } from "./despatch-label-card";
-import { DayWindowsStacked, TimeRange } from "../hours/hours-text";
 import { PickupLocationEditDialog } from "./pickup-location-edit-dialog";
+import { Card, SectionHeading } from "./settings-primitives";
 
 /** Owner-only business address (the radius-pricing origin) — mirrors the
  * retailers.businessAddress payload field. */
@@ -159,6 +164,11 @@ interface FulfilmentTabProps {
 	/** Store opening hours (86eyp5rav) — undefined = open 24/7. Buyers can only
 	 * pick fulfilment dates/times inside them. See convex/lib/openingHours.ts. */
 	openingHours: OpeningHours | undefined;
+	/** Closed dates (z8r3fdhpm7) — the weekly schedule's exceptions. */
+	closedDates: ClosedDateRange[] | undefined;
+	/** The store sells booking listings — the Closed dates card then says what
+	 * a closure does to them (z8r3fdhpm7). */
+	hasBookingListings: boolean;
 	/** Store-wide minimum order value (minor units, 86ey9unyx) — undefined =
 	 * no minimum. See convex/lib/minOrderRules.ts. */
 	minOrderValue: number | undefined;
@@ -169,55 +179,6 @@ interface FulfilmentTabProps {
 	subscription: SubscriptionView | undefined;
 }
 
-/**
- * `id` is the deep-link anchor: the post-switch checklist links to the exact
- * card that fixes a row, and `highlight` rings it so the seller lands on the
- * thing rather than the top of a long tab (86eyqgujv).
- *
- * `scroll-mt-24` keeps the sticky header off the card once scrolled to.
- */
-function Card({
-	children,
-	id,
-	highlight,
-}: {
-	children: ReactNode;
-	id?: string;
-	highlight?: FixHighlight;
-}) {
-	return (
-		<section
-			id={id}
-			data-fix-highlight={highlight ?? undefined}
-			className={`flex flex-col gap-4 rounded-2xl border bg-background p-5 scroll-mt-24 lg:p-6 ${highlightRingClass(highlight)}`}
-		>
-			{children}
-		</section>
-	);
-}
-
-function SectionHeading({
-	title,
-	description,
-}: {
-	title: string;
-	description?: string;
-}) {
-	return (
-		<div className="flex flex-col gap-1">
-			<h3 className="text-sm font-semibold text-foreground">{title}</h3>
-			{description ? (
-				<p className="text-xs text-muted-foreground leading-relaxed">
-					{description}
-				</p>
-			) : null}
-		</div>
-	);
-}
-
-/** Seller-facing kind chip on each pickup-point row. Same vocabulary as the
- *  buyer storefront ("Self-collect" / "Drop-off") so there's one language for
- *  the two kinds across the whole product. */
 function PickupKindBadge({ kind }: { kind: "self_collect" | "drop_off" }) {
 	return (
 		<span className="shrink-0 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
@@ -254,6 +215,8 @@ export function FulfilmentTab({
 	deliveryBooking,
 	minFulfilmentNoticeDays,
 	openingHours,
+	closedDates,
+	hasBookingListings,
 	minOrderValue,
 	awbConfig,
 	subscription,
@@ -267,6 +230,22 @@ export function FulfilmentTab({
 	const ring = (anchor: string): FixHighlight | undefined =>
 		target?.anchor === anchor ? target.highlight : undefined;
 	const setActive = useMutation(api.pickupLocations.setActive);
+	// Which points host a live event (`z8r3fdff9u`). A point can be hidden
+	// from standard orders yet still be an event's venue (an RSVP-only
+	// location), so the row that hides it must SAY it hosts events — "hide"
+	// must never look like it made the point disappear everywhere.
+	const venueUsage = useQuery(
+		convexQuery(api.products.eventVenueUsage, { retailerId }),
+	).data;
+	const eventNamesByVenue = useMemo(() => {
+		const map = new Map<string, string[]>();
+		for (const u of venueUsage ?? []) {
+			const names = map.get(u.venueId) ?? [];
+			names.push(u.name);
+			map.set(u.venueId, names);
+		}
+		return map;
+	}, [venueUsage]);
 	const reorder = useMutation(api.pickupLocations.reorder);
 	const markPickupSetupSeen = useMutation(api.retailers.markPickupSetupSeen);
 	const actAsRetailerId = useActAsRetailerId();
@@ -338,8 +317,16 @@ export function FulfilmentTab({
 	) {
 		try {
 			await setActive({ pickupLocationId: location._id, isActive: next });
+			// Hiding a point removes it from the standard-order picker, never
+			// from an event it hosts — say so in the same breath, or "hidden"
+			// reads as "gone everywhere".
+			const hostsEvents = eventNamesByVenue.has(location._id);
 			toast.success(
-				next ? `“${location.label}” restored.` : `“${location.label}” hidden.`,
+				next
+					? `“${location.label}” restored.`
+					: hostsEvents
+						? `“${location.label}” hidden from standard orders. Events it hosts keep sending guests here.`
+						: `“${location.label}” hidden.`,
 			);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -399,6 +386,14 @@ export function FulfilmentTab({
 			<OpeningHoursCard
 				initial={openingHours}
 				highlight={ring(SPOTLIGHT_ANCHOR.opening_hours.anchor)}
+			/>
+			{/* Directly under the weekly hours: closed dates are that
+			    schedule's exceptions (z8r3fdhpm7). */}
+			<ClosedDatesCard
+				retailerId={retailerId}
+				closedDates={closedDates}
+				hasBookingListings={hasBookingListings}
+				highlight={ring(SPOTLIGHT_ANCHOR.closed_dates.anchor)}
 			/>
 			<MinNoticeCard initial={minFulfilmentNoticeDays} />
 			<MinOrderValueCard initial={minOrderValue} currency={currency} />
@@ -557,6 +552,7 @@ export function FulfilmentTab({
 										onEdit={() => setEditing(loc)}
 										onToggleActive={(next) => handleToggleActive(loc, next)}
 										dragHandle={handle}
+										eventNames={eventNamesByVenue.get(loc._id)}
 									/>
 								</div>
 							)
@@ -584,6 +580,7 @@ export function FulfilmentTab({
 										currency={currency}
 										onEdit={() => setEditing(loc)}
 										onToggleActive={(next) => handleToggleActive(loc, next)}
+										eventNames={eventNamesByVenue.get(loc._id)}
 									/>
 								))}
 							</ul>
@@ -669,53 +666,6 @@ function blankZoneDraft(): ZoneDraft {
 	};
 }
 
-/** Segmented mode button — same visual language as the pickup KindButton. */
-function ModeButton({
-	active,
-	disabled,
-	onClick,
-	title,
-	subtitle,
-	badge,
-}: {
-	active: boolean;
-	disabled?: boolean;
-	onClick: () => void;
-	title: string;
-	subtitle: string;
-	badge?: ReactNode;
-}) {
-	return (
-		<button
-			type="button"
-			onClick={onClick}
-			disabled={disabled}
-			aria-pressed={active}
-			className={`relative flex flex-col items-start gap-0.5 rounded-xl border-2 py-2.5 pl-3 pr-9 text-left transition-colors ${
-				active
-					? "border-accent bg-accent/5"
-					: "border-border bg-card hover:border-accent/40"
-			} ${disabled ? "cursor-not-allowed opacity-60" : ""}`}
-		>
-			<span
-				className={`flex items-center gap-1.5 text-sm font-semibold ${active ? "text-accent" : "text-foreground"}`}
-			>
-				{title}
-				{badge}
-			</span>
-			<span className="text-xs text-muted-foreground">{subtitle}</span>
-			<ModeRadioDot active={active} />
-		</button>
-	);
-}
-
-/**
- * Radio-style indicator in a mode card's corner. These grids choose exactly
- * ONE option, but the tinted-border selected state alone read as "these might
- * all be on" (Zaki, 27 Jul) — an explicit empty-ring vs filled-dot makes the
- * pick-one semantics visible at a glance. Decorative only: the button itself
- * carries aria-pressed.
- */
 /** One provider line in the live-mode "Priced by" block: logo, name, a
  * five-word detail, and a STATUS CHIP instead of a paragraph. The chip is the
  * whole point — connection state used to live in a separate Lalamove-only
@@ -788,19 +738,6 @@ function ProviderPricingRow({
 				</Link>
 			</span>
 		</div>
-	);
-}
-
-function ModeRadioDot({ active }: { active: boolean }) {
-	return (
-		<span
-			aria-hidden="true"
-			className={`absolute bottom-2.5 right-2.5 flex size-4 items-center justify-center rounded-full border-2 transition-colors ${
-				active ? "border-accent" : "border-border"
-			}`}
-		>
-			{active ? <span className="size-2 rounded-full bg-accent" /> : null}
-		</span>
 	);
 }
 
@@ -1651,8 +1588,8 @@ function DeliveryChargeSection({
 						<p className="text-xs text-muted-foreground leading-relaxed">
 							Distances are straight-line (&ldquo;as the crow flies&rdquo;) from
 							your business address, not driving routes — pad your bands a
-							little to cover real roads. A band fee of RM0 means free within
-							that distance.
+							little to cover real roads. A band fee of{" "}
+							{formatDraftPrice(0, currency)} means free within that distance.
 						</p>
 					</div>
 
@@ -1715,10 +1652,10 @@ function DeliveryChargeSection({
 					</p>
 					<p className="rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
 						A band works like a box tier —{" "}
-						<b>&ldquo;up to 5 kg = RM30&rdquo;</b> (S 5 kg / M 10 kg / L 20 kg).
-						Rates use <b>actual weight only</b>; if your courier bills
-						volumetric (size-based) weight, pick the safer band when you copy
-						your card over.
+						<b>&ldquo;up to 5 kg = {formatDraftPrice(30, currency)}&rdquo;</b>{" "}
+						(S 5 kg / M 10 kg / L 20 kg). Rates use <b>actual weight only</b>;
+						if your courier bills volumetric (size-based) weight, pick the safer
+						band when you copy your card over.
 					</p>
 
 					{zones.length === 0 ? (
@@ -2084,8 +2021,8 @@ function WeightZoneCard({
 				) : null}
 				<p className="text-xs leading-relaxed text-muted-foreground">
 					An order at exactly a band&apos;s weight is inside it. Heavier than
-					your last band follows the rule below. A band fee of RM0 means free up
-					to that weight.
+					your last band follows the rule below. A band fee of{" "}
+					{formatDraftPrice(0, currency)} means free up to that weight.
 				</p>
 			</div>
 
@@ -2301,7 +2238,8 @@ function SecondWindowButton({
 	onClick: () => void;
 }) {
 	const Icon = action === "add" ? Plus : X;
-	const label = action === "add" ? "Add a second window" : "Remove second window";
+	const label =
+		action === "add" ? "Add a second window" : "Remove second window";
 	return (
 		<div className="flex flex-col gap-1">
 			<button
@@ -3150,9 +3088,9 @@ function BusinessAddressCard({
 				>
 					{hasAddress ? (
 						<>
-							Rides in front of the address above, everywhere it&apos;s
-							printed — the part Google&apos;s suggestion leaves out, and the
-							reason riders end up phoning you from the car park. Up to{" "}
+							Rides in front of the address above, everywhere it&apos;s printed
+							— the part Google&apos;s suggestion leaves out, and the reason
+							riders end up phoning you from the car park. Up to{" "}
 							{UNIT_LINE_MAX_LENGTH} characters.
 						</>
 					) : (
@@ -3270,12 +3208,16 @@ function LocationRowBody({
 	onEdit,
 	onToggleActive,
 	dragHandle,
+	eventNames,
 }: {
 	location: Doc<"pickupLocations">;
 	currency: string;
 	onEdit: () => void;
 	onToggleActive: (next: boolean) => void;
 	dragHandle?: ReactNode;
+	/** Live events this point hosts as their venue (`z8r3fdff9u`). Stated on
+	 * the row because hiding the point does NOT unhost them. */
+	eventNames?: string[];
 }) {
 	return (
 		<>
@@ -3306,6 +3248,24 @@ function LocationRowBody({
 						<p className="flex items-center gap-1 text-xs font-medium text-accent">
 							<Clock className="size-3 shrink-0" aria-hidden="true" />
 							<span>{location.scheduleNote}</span>
+						</p>
+					) : null}
+					{/* An event's venue rides this point (`z8r3fdff9u`) — named here
+					    so "hide" is never mistaken for "gone everywhere": a hidden
+					    point still hosts its events. */}
+					{eventNames !== undefined && eventNames.length > 0 ? (
+						<p className="flex items-start gap-1 text-xs font-medium text-accent">
+							<CalendarClock
+								className="mt-0.5 size-3 shrink-0"
+								aria-hidden="true"
+							/>
+							<span>
+								Event venue: {eventNames.slice(0, 2).join(", ")}
+								{eventNames.length > 2 ? ` +${eventNames.length - 2} more` : ""}
+								{location.isActive
+									? ""
+									: " — guests are still sent here while it's hidden."}
+							</span>
 						</p>
 					) : null}
 					{(() => {
@@ -3383,11 +3343,13 @@ function LocationRow({
 	currency,
 	onEdit,
 	onToggleActive,
+	eventNames,
 }: {
 	location: Doc<"pickupLocations">;
 	currency: string;
 	onEdit: () => void;
 	onToggleActive: (next: boolean) => void;
+	eventNames?: string[];
 }) {
 	return (
 		<li className="flex flex-col gap-3 rounded-xl border border-border bg-background p-4 opacity-60">
@@ -3396,6 +3358,7 @@ function LocationRow({
 				currency={currency}
 				onEdit={onEdit}
 				onToggleActive={onToggleActive}
+				eventNames={eventNames}
 			/>
 		</li>
 	);

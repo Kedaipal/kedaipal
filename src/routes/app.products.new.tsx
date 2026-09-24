@@ -20,6 +20,7 @@ import {
 } from "../components/forms/product-wizard";
 import { Button } from "../components/ui/button";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { isKindCard, type KindCard } from "../lib/kind-card";
 import { hasFeature } from "../lib/subscription";
 
 /**
@@ -29,16 +30,26 @@ import { hasFeature } from "../lib/subscription";
  * (`wizardHandoff` / `formDraftToWizardState`) — no capability gap, nothing
  * to confirm. Drafts ride in memory only; a refresh starts the chosen view
  * blank. See docs/product-setup-wizard.md.
+ *
+ * `?card=<food|physical|service|booking|event>` (`z8r3fdhkr7`) pre-selects
+ * step 0's card — how a What's-new note says "Create an event" and lands on
+ * Event rather than the store's own type. It answers the WIZARD's first
+ * question, so `form=full` drops it: the full form has no step 0, and a
+ * param that silently does nothing is worse than none.
  */
 export const Route = createFileRoute("/app/products/new")({
-	validateSearch: (search: Record<string, unknown>): { form?: "full" } =>
-		search.form === "full" ? { form: "full" } : {},
+	validateSearch: (
+		search: Record<string, unknown>,
+	): { form?: "full"; card?: KindCard } => {
+		if (search.form === "full") return { form: "full" };
+		return isKindCard(search.card) ? { card: search.card } : {};
+	},
 	component: NewProductRoute,
 });
 
 function NewProductRoute() {
 	const navigate = useNavigate();
-	const { form } = Route.useSearch();
+	const { form, card } = Route.useSearch();
 	const retailer = useDashboardRetailer();
 	// Room to save? Checked BEFORE the wizard renders — letting a seller build a
 	// whole product and only then bounce off the server gate is the dead end this
@@ -68,6 +79,10 @@ function NewProductRoute() {
 
 	const categoriesLocked =
 		!retailer.actingAsAdmin && !hasFeature(retailer.subscription, "categories");
+	// Same client mirror for events (`z8r3fdff9u`) — the toggle disables with
+	// the Pro hint rather than erroring on save.
+	const eventsLocked =
+		!retailer.actingAsAdmin && !hasFeature(retailer.subscription, "events");
 
 	async function handleCreate(values: ProductFormSubmitValues) {
 		if (!retailer) return;
@@ -92,6 +107,13 @@ function NewProductRoute() {
 				prepMinutes: values.prepMinutes,
 				pickupNote: values.pickupNote,
 				minQuantity: values.minQuantity,
+				// The form says null for "toggle off"; on CREATE there is nothing to
+				// clear, and the create validator takes an object or nothing — so
+				// null converts to undefined here. (This line vanished once in the
+				// T2 rebase — git kept both sides quietly and every convex test
+				// stayed green because they call the API directly. The payload scan
+				// test now pins it.)
+				event: values.event ?? undefined,
 				variants: values.variants,
 			}));
 		createdProductId.current = productId;
@@ -166,9 +188,15 @@ function NewProductRoute() {
 				<ProductWizard
 					retailerId={retailer._id}
 					categoriesLocked={categoriesLocked}
+					eventsLocked={eventsLocked}
 					currency={retailer.currency}
 					defaultKind={retailer.storeType}
+					storeSchedule={{
+						openingHours: retailer.openingHours,
+						closedDates: retailer.closedDates,
+					}}
 					initialState={wizardReturn}
+					linkedCard={card}
 					onSubmit={handleCreate}
 					onSkipToFullForm={openFullForm}
 					onOpenFullForm={openFullForm}
@@ -206,6 +234,7 @@ function NewProductRoute() {
 			<ProductForm
 				retailerId={retailer._id}
 				categoriesLocked={categoriesLocked}
+				eventsLocked={eventsLocked}
 				initialValues={wizardDraft?.initialValues}
 				initialEditor={wizardDraft?.initialEditor}
 				mode="create"
@@ -213,6 +242,10 @@ function NewProductRoute() {
 				currency={retailer.currency}
 				submitLabel="Create product"
 				weightMode={retailer.deliveryConfig?.mode === "weight"}
+				storeSchedule={{
+					openingHours: retailer.openingHours,
+					closedDates: retailer.closedDates,
+				}}
 				offerSelfCollect={retailer.offerSelfCollect !== false}
 				onSubmit={handleCreate}
 			/>

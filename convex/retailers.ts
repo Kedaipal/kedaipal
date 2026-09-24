@@ -69,6 +69,18 @@ const orderStagesValidator = v.array(
 	}),
 );
 
+// Per-flow-kind stages (z8r3fdh3w1). A key PRESENT is an answer for that kind
+// — including `[]`, which is "reset to defaults" and must outrank the legacy
+// flat list. A key ABSENT means "no change" on the patch, so the settings UI
+// can save one kind's card without touching the others.
+const orderFlowsValidator = v.object({
+	delivery: v.optional(orderStagesValidator),
+	self_collect: v.optional(orderStagesValidator),
+	booking: v.optional(orderStagesValidator),
+	event: v.optional(orderStagesValidator),
+});
+
+
 // Loose wire shape (id/sortOrder optional) before sanitize normalizes it.
 type OrderStageInput = {
 	id?: string;
@@ -87,6 +99,39 @@ type OrderStageInput = {
  * undefined, which makes the retailer fall back to synthesized default stages.
  * Throws a plain Error on a rule violation; the mutation wraps it in ConvexError.
  */
+/**
+ * Sanitize one kind's stage list, PRESERVING an empty array.
+ *
+ * `sanitizeOrderStages` folds empty to `undefined` because on the legacy flat
+ * field "no stages" and "no config" were the same thing. Under `orderFlows`
+ * they are not: `[]` is the seller pressing "Reset to defaults", an explicit
+ * answer that has to beat the legacy fallback. Same rules otherwise — this
+ * just declines to throw the distinction away.
+ */
+function sanitizeFlowStages(input: OrderStageInput[]): OrderStage[] {
+	return input.length === 0 ? [] : (sanitizeOrderStages(input) ?? []);
+}
+
+/**
+ * Apply an incoming per-kind patch to the stored `orderFlows`. Kinds the
+ * caller omitted are left exactly as they were, so saving the Delivery card
+ * can never disturb the Pickup one. Validation is per kind (each list gets its
+ * own cap / monotonic-anchor / label checks), which is the point: one kind's
+ * bad edit doesn't reject another kind's good config.
+ */
+function mergeOrderFlows(
+	current: OrderFlows | undefined,
+	incoming: Partial<Record<OrderFlowKind, OrderStageInput[]>>,
+): OrderFlows {
+	const next: OrderFlows = { ...(current ?? {}) };
+	for (const kind of FLOW_KINDS) {
+		const rows = incoming[kind];
+		if (rows === undefined) continue;
+		next[kind] = sanitizeFlowStages(rows);
+	}
+	return next;
+}
+
 function sanitizeOrderStages(
 	input: OrderStageInput[] | undefined,
 ): OrderStage[] | undefined {
@@ -200,6 +245,7 @@ import {
 	PAGINATED_PHASES,
 	runDeletionPhase,
 } from "./lib/accountDeletion";
+import type { ClosedDateRange } from "./lib/closedDates";
 import {
 	type OpeningHours,
 	sanitizeOpeningHours,
@@ -220,6 +266,7 @@ import {
 	riderBookingAllowed,
 	sanitizeDeliveryConfig,
 } from "./lib/delivery";
+import { storeBooksCouriers } from "./lib/courierBooking";
 import { isEncrypted } from "./lib/credentialCrypto";
 import {
 	ackableKeys,
@@ -276,6 +323,9 @@ import {
 } from "./lib/payment";
 import {
 	assertValidOrderStages,
+	FLOW_KINDS,
+	type OrderFlowKind,
+	type OrderFlows,
 	ORDER_STATUS_KEYS,
 	type OrderStage,
 	type StageAnchor,
@@ -757,6 +807,14 @@ type RetailerPublic = {
 	// data; derived from deliveryBooking.deliveryDirection, which itself never
 	// crosses to the public payload. Only the by-slug payload sets it.
 	deliveryCollectsFromCustomer?: boolean;
+	// The store hands delivery orders to a courier — Lalamove or Delyva booking
+	// armed (z8r3fdh274, `storeBooksCouriers`). Checkout tells a buyer with an
+	// overseas WhatsApp number that the rider will phone the store instead
+	// (couriers only take a local contact). Public-safe for the same reason as
+	// the bit above: one yes/no about the service, derived from owner-only
+	// config (keys, customer ids) that never crosses to the public payload.
+	// Only the by-slug payload sets it.
+	booksCouriers?: boolean;
 	logoStorageId?: string;
 	logoUrl?: string;
 	// Wide cover/banner. Public-safe — the storefront header hero and the PRIMARY
@@ -774,9 +832,12 @@ type RetailerPublic = {
 	// Per-retailer SHORT status labels (tracking timeline / dashboard). Omitted
 	// keys fall back to defaults at render time via convex/lib/orderStatus.ts.
 	statusLabels?: StatusLabels;
-	// Phase 2 custom stages (ordered). Undefined => the resolver synthesizes the
-	// default stages from statusLabels. Surfaced for the settings stage editor.
+	// LEGACY flat stage list (z8r3fdh3w1) — still surfaced so the resolvers can
+	// fall back for un-migrated delivery/pickup rows, and so the settings editor
+	// can seed a kind's first customisation from it.
 	orderStages?: OrderStage[];
+	// Per-flow-kind stages. THE field Settings → Order status reads and writes.
+	orderFlows?: OrderFlows;
 	// Resolved payment methods (legacy-aware) with each QR storage id turned into
 	// a viewable URL — what the settings UI renders + edits. Omitted from the
 	// public storefront payload (only `getMyRetailer` populates it).
@@ -816,6 +877,10 @@ type RetailerPublic = {
 	// Undefined = open 24/7. Surfaced on both the owner read and the by-slug
 	// payload. See convex/lib/openingHours.ts.
 	openingHours?: OpeningHours;
+	// Closed dates (z8r3fdhpm7) — the weekly schedule's exceptions. Public-safe
+	// (the label is written for buyers and the field says so): checkout skips
+	// them, the header names them. On both reads. See convex/lib/closedDates.ts.
+	closedDates?: ClosedDateRange[];
 	// Despatch-label template (86eyp63mp) — OWNER-only: it says nothing a buyer
 	// needs, and the footer line is the seller's own returns copy. Undefined =
 	// every default. See convex/lib/awbConfig.ts.
@@ -975,6 +1040,7 @@ async function buildRetailerPublic(
 		messageTemplates: row.messageTemplates as MessageTemplatesShape | undefined,
 		statusLabels: row.statusLabels as StatusLabels | undefined,
 		orderStages: row.orderStages as OrderStage[] | undefined,
+		orderFlows: row.orderFlows as OrderFlows | undefined,
 		paymentMethods,
 		offerSelfCollect: row.offerSelfCollect,
 		offerDelivery: row.offerDelivery,
@@ -985,6 +1051,7 @@ async function buildRetailerPublic(
 		hitpay: summarizeHitpay(row.hitpay as HitpayConfig | undefined),
 		minFulfilmentNoticeDays: row.minFulfilmentNoticeDays,
 		openingHours: row.openingHours,
+		closedDates: row.closedDates,
 		awbConfig: row.awbConfig,
 		minOrderValue: row.minOrderValue,
 		pickupSetupSeen: row.pickupSetupSeen,
@@ -1131,6 +1198,9 @@ export const getRetailerBySlug = query({
 					deliveryCollectsFromCustomer:
 						(active.deliveryBooking as DeliveryBooking | undefined)
 							?.deliveryDirection === "collection",
+					// One bit from the courier config, never the config — see the
+					// RetailerPublic comment.
+					booksCouriers: storeBooksCouriers(active),
 					logoStorageId: active.logoStorageId,
 					logoUrl,
 					coverImageStorageId: active.coverImageStorageId,
@@ -1146,6 +1216,7 @@ export const getRetailerBySlug = query({
 					offerDelivery: active.offerDelivery,
 					minFulfilmentNoticeDays: active.minFulfilmentNoticeDays,
 					openingHours: active.openingHours,
+					closedDates: active.closedDates,
 					minOrderValue: active.minOrderValue,
 					// Founding badge is public-safe; subscription state is NOT included.
 					isFoundingMember: active.isFoundingMember,
@@ -1530,8 +1601,13 @@ export const updateSettings = mutation({
 			),
 		),
 		messageTemplates: v.optional(messageTemplatesValidator),
+		// LEGACY, retired at the narrow (z8r3fdh3w1) — no screen has written
+		// either since the per-kind editor shipped. Still accepted so the
+		// migration's own tests can author pre-`orderFlows` rows.
 		statusLabels: v.optional(statusLabelsValidator),
 		orderStages: v.optional(orderStagesValidator),
+		// Per-kind stages — what Settings → Order status writes today.
+		orderFlows: v.optional(orderFlowsValidator),
 		paymentInstructions: v.optional(paymentInstructionsValidator),
 		// Multi-method payment config. When provided, supersedes (and clears) the
 		// legacy single `paymentInstructions` object on this retailer.
@@ -1624,6 +1700,7 @@ export const updateSettings = mutation({
 			messageTemplates: MessageTemplatesShape | undefined;
 			statusLabels: StatusLabels | undefined;
 			orderStages: OrderStage[] | undefined;
+			orderFlows: OrderFlows | undefined;
 			paymentInstructions: PaymentInstructionsShape | undefined;
 			paymentMethods: PaymentMethod[] | undefined;
 			offerSelfCollect: boolean;
@@ -1773,6 +1850,16 @@ export const updateSettings = mutation({
 		if (args.orderStages !== undefined) {
 			try {
 				patch.orderStages = sanitizeOrderStages(args.orderStages);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
+		if (args.orderFlows !== undefined) {
+			try {
+				patch.orderFlows = mergeOrderFlows(
+					retailer.orderFlows as OrderFlows | undefined,
+					args.orderFlows,
+				);
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
 			}

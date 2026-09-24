@@ -335,6 +335,64 @@ describe("calendarFeed — every order, not just bookings", () => {
 	});
 });
 
+describe("calendarFeed — an open-days package (z8r3fdhpm7)", () => {
+	test("is drawn only on the days it counts — one event per run, matching the grid", async () => {
+		const ctx = await seedBookingStore(setup());
+		const productId = await ctx.asOwner.mutation(api.products.create, {
+			retailerId: ctx.retailer._id,
+			name: "Kayak course",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 1,
+			kind: "booking" as const,
+			booking: {
+				capacityPerNight: 4,
+				packageLength: 3,
+				packageUnit: "day",
+				skipsClosedDays: true,
+				autoAccept: true,
+			},
+			variants: [{ optionValues: [], price: 30000, onHand: 0 }],
+		});
+		await ctx.asOwner.mutation(api.closedDates.add, {
+			retailerId: ctx.retailer._id,
+			startDate: day(5),
+			endDate: day(5),
+			label: "Hari Raya",
+		});
+		// Counts days 4, 6, 7 — steps over the closure on day 5.
+		const { shortId } = await ctx.t.mutation(api.bookings.requestBooking, {
+			retailerId: ctx.retailer._id,
+			productId,
+			checkIn: day(4),
+			customer: { name: "Aisyah", waPhone: "0123456781" },
+		});
+		const token = await ctx.asOwner.mutation(
+			api.calendarFeed.ensureCalendarFeedToken,
+			{ retailerId: ctx.retailer._id },
+		);
+		const feed = await ctx.t.query(internal.calendarFeed.feedByToken, {
+			token,
+		});
+		if (feed === null) throw new Error("feed missing");
+		const events = feed
+			.split("BEGIN:VEVENT")
+			.slice(1)
+			.filter((chunk) => chunk.includes(`UID:booking-${shortId}`));
+		const ymd = (epoch: number) =>
+			new Date(epoch + 8 * 3_600_000).toISOString().slice(0, 10).replaceAll("-", "");
+		expect(events).toHaveLength(2);
+		expect(events[0]).toContain(`UID:booking-${shortId}-1@kedaipal.com`);
+		expect(events[0]).toContain(`DTSTART;VALUE=DATE:${ymd(day(4))}`);
+		expect(events[0]).toContain(`DTEND;VALUE=DATE:${ymd(day(5))}`);
+		expect(events[1]).toContain(`UID:booking-${shortId}-2@kedaipal.com`);
+		expect(events[1]).toContain(`DTSTART;VALUE=DATE:${ymd(day(6))}`);
+		expect(events[1]).toContain(`DTEND;VALUE=DATE:${ymd(day(8))}`);
+		// Nothing drawn on the closed day itself.
+		expect(feed).not.toContain(`DTSTART;VALUE=DATE:${ymd(day(5))}`);
+	});
+});
+
 describe("calendarFeed look-back bound", () => {
 	/**
 	 * Place an existing booking's stay in the PAST. `requestBooking` rightly

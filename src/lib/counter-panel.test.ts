@@ -59,6 +59,28 @@ describe("counterPrimaryAction", () => {
 		).toBe(false);
 	});
 
+	test("an event line blocks SEND with the EVENT's reason, outranking 'unpriced'", () => {
+		// A free RSVP line is also RM0, so without the ordering this would read
+		// "set a price for every custom item" — misnaming what the seller sees.
+		const send = counterPrimaryAction({
+			...base,
+			mode: "send",
+			unpriced: true,
+			eventName: "BNI Breakfast",
+		});
+		expect(send.disabled).toBe(true);
+		expect(send.reason).toContain('"BNI Breakfast" is an event');
+		expect(send.reason).toMatch(/RSVP to the fixed date/);
+		// The counter path takes walk-in RSVPs — never blocked by the event.
+		expect(
+			counterPrimaryAction({
+				...base,
+				mode: "counter",
+				eventName: "BNI Breakfast",
+			}).disabled,
+		).toBe(false);
+	});
+
 	test("the send helper names the buyer, the window AND the payment runway", () => {
 		const a = counterPrimaryAction({ ...base, mode: "send" });
 		expect(a.helper).toContain("Zaki");

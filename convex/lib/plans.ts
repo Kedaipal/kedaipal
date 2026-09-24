@@ -97,6 +97,14 @@ export type PlanFeatures = {
 	 * un-gated (downgrade never traps), and a connected store's buyer-facing
 	 * Pay-now keeps working on every tier (buyer flow never varies by plan). */
 	onlinePayments: boolean;
+	/** Event RSVP (`z8r3fdff9u`): publishing a product with a FIXED event date,
+	 * so guests RSVP to one moment instead of each picking their own fulfilment
+	 * date, with a seat cap and a per-option headcount. Pro because it's a
+	 * made-to-order/catering capability (Arif's 14 Sep 2026 call). Gates only
+	 * SETTING the event config — an event that already exists keeps taking
+	 * RSVPs, the headcount keeps totalling and the buyer flow never varies by
+	 * seller plan, so a downgrade never strands guests mid-RSVP. */
+	events: boolean;
 	/** Seller WhatsApp order alerts (86eyhw9zy): a WA template to the seller's
 	 * own number on new order + payment claim. Pro because each alert is a
 	 * billable Meta send (absorbed into the plan — decided 7 Aug 2026, no
@@ -117,6 +125,7 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		radiusDelivery: false,
 		delivery: false,
 		onlinePayments: false,
+		events: false,
 		waOrderAlerts: false,
 	},
 	pro: {
@@ -128,6 +137,7 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		radiusDelivery: true,
 		delivery: true,
 		onlinePayments: true,
+		events: true,
 		waOrderAlerts: true,
 	},
 	scale: {
@@ -139,6 +149,7 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		radiusDelivery: true,
 		delivery: true,
 		onlinePayments: true,
+		events: true,
 		waOrderAlerts: true,
 	},
 };
