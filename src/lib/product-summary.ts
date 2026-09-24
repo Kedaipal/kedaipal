@@ -58,6 +58,8 @@ export type SummaryInput = {
 		packageLength?: string;
 		packageUnit?: PackageUnit;
 		autoAccept?: boolean;
+		/** "Only days you're open" (z8r3fdhpm7) — named on a day package. */
+		skipsClosedDays?: boolean;
 		/** Weekend per-night rate as typed (major units) + the nights it covers (S13).
 		 * Blank/absent = one rate; ignored on a package. */
 		weekendPrice?: string;
@@ -146,7 +148,16 @@ export function describeProduct(
 		const parts = ["Booking"];
 		// Hyphenated adjective, singular unit: "1-month package", "30-day
 		// package", "2-night package" — the shape packageCountLabel already uses.
-		if (isPackage) parts.push(`${length}-${unit} package`);
+		if (isPackage) {
+			parts.push(
+				// The counting rule is part of what's sold (z8r3fdhpm7): a 5-day
+				// course that skips closed days is a different product from five
+				// days in a row, so the strip says which.
+				unit === "day" && booking.skipsClosedDays
+					? `${length}-day package (open days only)`
+					: `${length}-${unit} package`,
+			);
+		}
 		// Blank capacity = unlimited (S7); saying "1 spot/night" there would be
 		// a different product from the one the seller configured. A package is
 		// counted AT A TIME, not per night — the words the capacity field and

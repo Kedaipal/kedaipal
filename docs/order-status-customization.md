@@ -1,7 +1,9 @@
 # Order Status Customization (Per-Retailer Stages)
 
 **Status:** Phase 1 **shipped** (14 Jun 2026); Phase 2 **shipped** (14 Jun 2026);
-per-stage WhatsApp notification **removed** (4 Aug 2026, `86eyd63r8`).
+per-stage WhatsApp notification **removed** (4 Aug 2026, `86eyd63r8`);
+Phase 3 — **stages per flow kind** — shipped (24 Sep 2026, `z8r3fdh3w1`),
+which retires Phase 1's global `statusLabels` (see the Phase 3 section).
 **Date:** 13 Jun 2026 (Phase 1 + 2 shipped 14 Jun 2026)
 **Related:** [`order-lifecycle.md`](./order-lifecycle.md) · [`one-message-per-order.md`](./one-message-per-order.md) · [`proof-approval.md`](./proof-approval.md) · [`messaging-channels.md`](./messaging-channels.md)
 **ClickUp:** Bearcamp onboarding [`86exxt0g4`](https://app.clickup.com/t/86exxt0g4) · Discussion [`86exxt46h`](https://app.clickup.com/t/86exxt46h)
@@ -152,9 +154,11 @@ are **untouched**.
     copy. **Buttons are imperative, labels are nouns** — render as
     `"Mark as {label}"` (or keep the existing system verbs for `confirmed` /
     `cancelled`), never a bare noun like "Washing" on a button.
-- `src/lib/orderStatus.ts` _(new, mirror)_ — same logic for the client, following
-  the `convex/lib/customer.ts` ↔ `src/lib/customer.ts` mirroring convention. Keep
-  the two in lockstep with a shared test table.
+- `src/lib/orderStatus.ts` _(new, mirror)_ — same logic for the client. Keep
+  the two in lockstep with a shared test table. (This plan cited the
+  `convex/lib/customer.ts` ↔ `src/lib/customer.ts` mirror as its convention;
+  that pair has since collapsed to one implementation that `src/` re-exports —
+  z8r3fdh274 — which is the better model if this mirror is ever revisited.)
 
 ### Touch points
 
@@ -445,11 +449,216 @@ decisions/deviations recorded:
 The resolvers are driven by `FLOW_PRESETS` in `orderStatus.ts` — one entry per
 `OrderFlowKind` (`delivery`, `self_collect`, `booking`, `event`) declaring the
 kind's label overrides, the anchors its synthesized pipeline skips, and
-whether configured custom stages apply. Booking (skip "Packed", fixed
-milestones) and event RSVPs (skip "Packed" **and** "Ready for Pickup":
-Confirmed → Checked In) both live there; bulk status actions read the same
-skip list and refuse-with-a-named-count instead of moving an order into a
-stage its kind doesn't have. An order's kind comes from `orderFlowKind(order)`
-— `deliveryMethod`, with the frozen `orders.eventRsvp` marker outranking it.
-Adding a kind = one registry entry; nothing else forks. Tagging *custom*
-stages per product kind is a ticketed follow-up.
+whether the legacy global vocabulary may speak for it. Booking (skip "Packed")
+and event RSVPs (skip "Packed" **and** "Ready for Pickup": Confirmed → Checked
+In) both live there. An order's kind comes from `orderFlowKind(order)` —
+`deliveryMethod`, with the frozen `orders.eventRsvp` marker outranking it.
+Adding a kind = one registry entry; nothing else forks.
+
+## Phase 3 — Stages are configured per flow kind (`z8r3fdh3w1`)
+
+**Shipped 24 Sep 2026.** `retailers.orderFlows` holds one stage list **per
+`OrderFlowKind`**. The flat `retailers.orderStages` and the global
+`retailers.statusLabels` are LEGACY: still read, for `delivery` +
+`self_collect` only, until the backfill and narrow land.
+
+### The bug it fixes
+
+`resolveStatusLabel` resolved **seller rename → flow-kind preset → base
+default**, and `statusLabels` was one global map with **no write UI since 14
+Jun** (`e99dbd3` shipped it; Phase 2 superseded it; nothing has written it
+since, though `retailers.update` still accepts the arg). So a store's rename
+outranked every kind's own words, permanently and invisibly:
+
+- Seen live on dev: IndoMart renamed Confirmed → "Ok go", and its booking
+  `#ORD-XD7G` read "Ok go" in the order list.
+- A renamed `delivered` printed on a finished stay instead of **Checked Out**,
+  and on a checked-in RSVP instead of **Checked In**.
+- Settings told those stores "A stay always runs Confirmed → Checked in →
+  Checked out", which was false for them.
+
+It reached the inbox chip, the stepper and advance CTA, Home and the `/track`
+timeline. **Not** WhatsApp — the ticket listed it, but stage/status sends were
+deleted in `86eyd63r8`; `whatsapp.ts` merely carried `orderStages` /
+`statusLabels` / `currentStageId` in its order snapshot with **no reader**, and
+that dead payload was removed here.
+
+### A rename IS a stage list
+
+There is no per-kind *rename* field, because one would be a second mechanism
+for the thing stages already do: a stage anchored to `shipped` and labelled
+"Ready to collect" **is** the `shipped` rename (this doc already said as much —
+"a Phase-1 relabel is exactly a 5-stage Phase-2 config"). So `statusLabels`
+is not replaced; it is migrated into per-kind stage lists and deleted.
+
+### The three states of a kind
+
+`configuredStages(orderFlows, legacyStages, kind)` is the ONE place this lives:
+
+| `orderFlows[kind]` | Means | Resolves to |
+| --- | --- | --- |
+| absent | no answer for this kind | LEGACY flat list **and** LEGACY renames (delivery/pickup only), else the kind's preset |
+| `[]` | **"Reset to defaults"** — an explicit answer | the kind's preset, with **all** legacy wording retired for that kind |
+| `[…]` | this kind's own flow | itself, with all legacy wording retired for that kind |
+
+The empty-array sentinel is load-bearing: without it a seller who reset pickup
+would silently get their old flat list back — a reset button that doesn't
+reset. It stops mattering once the narrow drops the legacy fields.
+
+**An answer retires the whole legacy map for that kind, not just its stage
+list** — `legacyLabelsApply(orderFlows, kind)` is the one rule, and every
+resolver goes through it.
+
+> **Caught by hands-on testing, not by the suite (24 Sep).** The first cut
+> gated the legacy renames on KIND alone, so a reset cleared the stage list and
+> left the rename speaking: on dev store `herb`, the card badge flipped to
+> **DEFAULT** and the toast said *"Every order flow is back to its default
+> steps"* while every chain still read the seller's **"Ok go"** — settings
+> card, Home, inbox and the buyer `/track` page alike. The confirm dialog had
+> named a chain the reset did not produce, and the store could not clear the
+> rename at all, which is the exact failure this ticket exists to end.
+> Deleting the fixed guard now turns **5** tests red.
+
+This is also why an answer clears `pending` and `cancelled`. Those two can
+never be stages (DECISION 3), so gating only the four anchor statuses would
+leave a permanently unclearable two-word remnant — the same bug, narrower.
+
+### Every kind takes custom stages now
+
+Bookings and RSVPs used to be exempt wholesale (`takesCustomStages: false`).
+The reason was that ONE list served the whole store, so a campsite stay
+inherited a cake shop's "Baking → Decorating → Ready". Per-kind config removes
+that reason, and the `≤5 notify stages` cost cap that argued for restraint no
+longer exists. A campsite that writes "Confirmed → Site prepared → Checked in →
+Checked out" is describing its own flow.
+
+Consequently **`skippedAnchors` seeds the defaults; it does not forbid a step.**
+Bulk actions no longer refuse on the preset's skip list — they refuse when no
+stage in *that order's resolved list* carries the target anchor (`hasAnchor`),
+which answers both cases with one check and keeps `skippedNoSuchStage` honest.
+
+One booking config covers **stays and fixed-length packages**. While the kind
+is on defaults the two differ (Checked in/out vs Active/Ended, per
+`bookingPackaged`); once the seller writes their own words those words answer
+for both, and the settings card says so.
+
+### Settings → Order status
+
+One card per kind the store **uses** (`offerDelivery` / `offerSelfCollect` /
+`hasBookingListings` / `hasEventListings`) — a delivery-only seller sees one
+card and nothing about bookings. A kind that is customised but no longer
+offered still shows, labelled, so a config can never become invisible and
+unclearable (the failure mode this whole ticket exists to end).
+
+Each card states its current flow as a chain in the seller's own words, a
+Default / Your steps badge, and two controls: **Customise steps** / **Edit
+steps**, and **Reset to defaults** (confirm-gated, naming what it reverts to).
+A **Reset all** appears once more than one kind is customised. Pickup that
+currently matches delivery — the state every both-kinds store lands in after
+the migration — says so rather than making the seller compare two lists. A
+booking card on defaults prints **both** the stay and package chains, so the
+copy is true by construction.
+
+### Migration (widen → migrate → narrow)
+
+1. **Widen (this change):** `orderFlows` added; resolvers prefer it and fall
+   back to the legacy pair for `delivery`/`self_collect` only. **The bug fix is
+   live on deploy with no backfill** — bookings and RSVPs stop reading the
+   global rename the moment this ships.
+2. **Migrate (operator, `npx convex run migrations:backfillOrderFlows`):**
+   copies each store's effective list onto `orderFlows.delivery` +
+   `orderFlows.self_collect` (the only kinds those fields could have meant).
+   Idempotent; never overwrites a kind the seller already answered; leaves the
+   legacy fields in place so it stays reversible.
+3. **Narrow — [`z8r3fdhq1x`](https://app.clickup.com/t/z8r3fdhq1x), a separate
+   PR after the backfill:** drop `retailers.statusLabels`,
+   `retailers.orderStages`, the `statusLabels` / `orderStages` args on
+   `retailers.updateSettings`, `FlowPreset.takesLegacyLabels`,
+   `legacyLabelsApply`, and the `labels` / `orderStages` options on
+   `resolveStages`.
+
+   **It cannot ride along with the widen.** Convex validates every existing
+   document against the schema being pushed, and 5 prod stores still carry an
+   `orderStages` list — dropping the field before those rows are converted
+   fails the deploy. That is what makes this two deploys rather than one.
+
+   Until it lands, `legacy-status-fields.test.ts` keeps the fields
+   **write-dead** from the frontend, so the set of legacy rows can only shrink
+   and the backfill converges. That test is deleted by the narrow.
+
+> ### ✅ Measured on prod (24 Sep 2026): nothing is at risk
+>
+> The concern below was sized before it was measured. The read-only prod count
+> has now been run, and it is empty:
+>
+> | | Prod (35 retailers) |
+> | --- | --- |
+> | Any `statusLabels` rename | **0** |
+> | Renamed `pending` / `cancelled` | **0** |
+> | Custom flat `orderStages` | 5 |
+> | Already has `orderFlows` | 0 |
+>
+> So: **no prod store loses a single word.** The backfill's only real work is
+> the 5 stores with a flat `orderStages` list, which carries over verbatim to
+> `delivery` + `self_collect`. The `pending`/`cancelled` gap is real in the
+> code but has no subject in the data, and building a per-kind home for those
+> two statuses would be speculative — leave it until a seller asks.
+>
+> It also means **the narrow is free**: `statusLabels` is dead data in prod, so
+> dropping it carries no migration risk at all. And v2026.09.7's "bookings use
+> booking words" note needed no qualifier — no prod store had a rename to leak.
+>
+> **What the backfill KEEPS vs drops** — it is a migration, not a reset:
+>
+> | Status | After the backfill |
+> | --- | --- |
+> | `confirmed` `packed` `shipped` `delivered` | **Kept verbatim**, as stages on delivery + pickup |
+> | `pending` `cancelled` | Back to the default wording — no structural home (no prod store affected) |
+>
+> Verified on dev `herb`, which had renamed `confirmed → "Ok go"` and
+> `pending → "Incoming"`: after the backfill its delivery flow reads
+> `confirmed → "Ok go"`, `packed → "Packed"`, `shipped → "On the Way"`,
+> `delivered → "Delivered"`. Only "Incoming" was lost — and no prod store has
+> that shape.
+>
+> **Release-note copy, ready to lift** (kind: `Enhancement`) when the release
+> PR is prepped — do NOT write it into `releases.ts` before then, the version
+> test pins notes to the shipped version:
+>
+> > *Order steps are now set per kind of order — delivery, pickup, bookings and
+> > events each get their own, so a booking never shows delivery wording again.
+> > Any step names you have already set carry over to your delivery and pickup
+> > orders.*
+>
+> (No "if you renamed Order Received" caveat: the prod count says nobody did.)
+
+### The bulk menu speaks the SELECTION
+
+`buildBulkTargets` (`src/lib/inbox-bulk-targets.ts`, pure + unit-tested) builds
+the "Update status" list from the selected rows, not from the store:
+
+- **One vocabulary** → its own words ("Checked In" for a stay).
+- **Several that agree** → the shared word, so the common delivery + pickup mix
+  keeps the seller's familiar "Confirmed"/"Packed".
+- **Several that disagree** → the shared MILESTONE names (`ANCHOR_UI_LABELS`),
+  the vocabulary Settings already teaches under "Counts as", with a one-line
+  note saying why. No store word is true for every selected row, so none is
+  used.
+- **A milestone no selected row has a step for** → offered but **disabled, with
+  the reason inline**, instead of applying and reporting a skip afterwards.
+
+Found by testing: the menu read the store's primary flow, so selecting a
+campsite booking offered "Ready for Pickup" and "Collected" — pickup words on a
+stay, for an action the server would then skip.
+
+### Surfaces that stay retailer-grain
+
+The inbox status filter, its column header and Home's badges are **store-grain
+controls over rows of every kind**, so they keep speaking the store's primary
+product flow (`offerSelfCollect ? self_collect : delivery`) — unchanged from
+before. (The bulk menu used to be in this list; it isn't any more, because it
+acts on a selection rather than describing the list.) Per-ROW wording is per kind: the inbox
+resolves a list per kind and memoizes it. Status filtering itself is unaffected
+— it runs on the leaf partition (`orderLeaf`), not on labels, so "Ready"
+selects delivery-Ready and booking-Checked-In alike, which is correct for one
+axis of leaves.

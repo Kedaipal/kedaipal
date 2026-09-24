@@ -1041,6 +1041,45 @@ describe("storefront confirmation push (86eyf1rck)", () => {
 		fetchMock.restore();
 	});
 
+	test("a foreign buyer's push goes to their stored E.164 digits, in the STORE's language", async () => {
+		// z8r3fdh274: the template language keys off the store's locale, never
+		// the buyer's country — a UK buyer of a BM store gets the BM template.
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = TEMPLATE;
+		const t = setup();
+		const fetchMock = installWamidFetchMock("wamid.PUSH_GB");
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "ms");
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: {
+				name: "Oliver",
+				waPhone: "07911 123456",
+				waDialCountry: "GB",
+			},
+			deliveryAddress: {
+				line1: "12 Jln Mawar 3",
+				city: "Petaling Jaya",
+				state: "Selangor",
+				postcode: "47301",
+			},
+		});
+		const orderId = await orderIdOf(t, shortId);
+
+		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, { orderId });
+
+		const wa = fetchMock.waCalls();
+		expect(wa).toHaveLength(1);
+		const body = wa[0].body as {
+			to: string;
+			template: { language: { code: string } };
+		};
+		expect(body.to).toBe("447911123456");
+		expect(body.template.language.code).toBe("ms");
+		fetchMock.restore();
+	});
+
 	/** Stub graph.facebook.com with a fixed failure response. */
 	function installFailingFetch(status: number, body: string) {
 		const original = globalThis.fetch;

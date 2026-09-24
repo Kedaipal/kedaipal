@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+	BUYER_PHONE_EMPTY_MESSAGE,
+	UNKNOWN_DIAL_COUNTRY_MESSAGE,
+} from "../../convex/lib/buyerPhone";
+import {
 	checkoutFormSchemaFor,
 	settingsWaPhoneFormSchema,
 	strictAddressSchemaFor,
@@ -8,9 +12,9 @@ import {
 } from "./schemas";
 
 // Built from convex/lib/slug.ts's own patterns + normalizer, then requires the
-// country's MOBILE shape — the checkout gate for the WABA confirmation push
-// (86eyf1rck; per-country since SG-lite 86eynw28q). The server re-validates on
-// create with the same country arm.
+// country's MOBILE shape (86eyf1rck; per-country since SG-lite 86eynw28q). The
+// SELLER-side arm since z8r3fdh274 — buyer fields are judged by the picked
+// country instead (see the checkoutFormSchemaFor buyer-phone block below).
 describe("waPhoneCheckoutSchema.MY", () => {
 	it("normalizes local formats to the inbound (60…) form", () => {
 		expect(waPhoneCheckoutSchema.MY.parse("0123456789")).toBe("60123456789");
@@ -135,12 +139,12 @@ describe("strictAddressSchemaFor", () => {
 });
 
 describe("checkoutFormSchemaFor — the address arm follows the country", () => {
-	// The phone arm is country-keyed too (no cross-accept), so each country's
-	// form carries a phone its own arm accepts — these tests isolate the
-	// ADDRESS arm.
+	// Each country's form carries a phone its default pick (the store's own
+	// country) accepts — these tests isolate the ADDRESS arm.
 	const formFor = (country: "MY" | "SG") => ({
 		name: "Tan Wei Ming",
 		waPhone: country === "MY" ? "0123456789" : "9123 4567",
+		waDialCountry: country,
 		deliveryMethod: "delivery" as const,
 		address: {
 			line1: "12 Bedok North Ave 3",
@@ -180,6 +184,125 @@ describe("checkoutFormSchemaFor — the address arm follows the country", () => 
 				true,
 			);
 		}
+	});
+});
+
+// The buyer's number is judged by the country PICKED on the plate
+// (z8r3fdh274), with the server's own parse and copy — the store's country is
+// only the pick's default.
+describe("checkoutFormSchemaFor — the buyer phone follows the picked country", () => {
+	const pickupForm = (waPhone: string, waDialCountry: string) => ({
+		name: "Tan Wei Ming",
+		waPhone,
+		waDialCountry,
+		deliveryMethod: "self_collect" as const,
+		address: {
+			line1: "",
+			line2: "",
+			city: "",
+			state: "",
+			postcode: "",
+			notes: "",
+			mapsUrl: "",
+			latitude: "",
+			longitude: "",
+			placeId: "",
+		},
+		pickupLocationId: "",
+		fulfilmentDate: "2026-08-21",
+		fulfilmentTime: "10:00",
+		note: "",
+	});
+	const phoneMessages = (result: {
+		success: boolean;
+		error?: { issues: Array<{ path: PropertyKey[]; message: string }> };
+	}) =>
+		(result.error?.issues ?? [])
+			.filter((issue) => issue.path.join(".") === "waPhone")
+			.map((issue) => issue.message);
+
+	// Acceptance is the strict arm's, unchanged; only the refusal copy moved —
+	// "this store takes Malaysian numbers" stopped being true of a buyer, so it
+	// names the plate a foreign buyer has to tap.
+	it("a local buyer who never touches the picker is judged as before; the refusal names the picker", () => {
+		const schema = checkoutFormSchemaFor("MY");
+		expect(schema.safeParse(pickupForm("012-345 6789", "MY")).success).toBe(
+			true,
+		);
+		expect(
+			phoneMessages(schema.safeParse(pickupForm("03-1234 5678", "MY"))),
+		).toEqual([
+			"Enter a Malaysian mobile number (e.g. 012-345 6789), or tap +60 to change the country",
+		]);
+	});
+
+	it("any picked country is accepted — an SG buyer at an MY store, a UK buyer", () => {
+		const schema = checkoutFormSchemaFor("MY");
+		expect(schema.safeParse(pickupForm("9123 4567", "SG")).success).toBe(true);
+		expect(schema.safeParse(pickupForm("07911 123456", "GB")).success).toBe(
+			true,
+		);
+		expect(schema.safeParse(pickupForm("090-1234-5678", "JP")).success).toBe(
+			true,
+		);
+	});
+
+	it("an explicit +CC typed is honoured over the pick, as on the server", () => {
+		expect(
+			checkoutFormSchemaFor("MY").safeParse(pickupForm("+44 7911 123456", "MY"))
+				.success,
+		).toBe(true);
+	});
+
+	it("a number that fits the other store country points at the picker", () => {
+		expect(
+			phoneMessages(
+				checkoutFormSchemaFor("MY").safeParse(pickupForm("9123 4567", "MY")),
+			),
+		).toEqual([
+			"That looks like a Singapore mobile number — switch the country to +65",
+		]);
+	});
+
+	it("a wrong-length foreign number names the picked country", () => {
+		expect(
+			phoneMessages(
+				checkoutFormSchemaFor("SG").safeParse(pickupForm("7911 12", "GB")),
+			)[0],
+		).toBe(
+			"Enter a valid United Kingdom mobile number, or tap +44 to change the country",
+		);
+	});
+
+	it("an empty number and an unknown pick are both refused on the phone field", () => {
+		const schema = checkoutFormSchemaFor("MY");
+		expect(phoneMessages(schema.safeParse(pickupForm("", "MY")))).toEqual([
+			BUYER_PHONE_EMPTY_MESSAGE,
+		]);
+		expect(
+			phoneMessages(schema.safeParse(pickupForm("012-345 6789", "ZZ"))),
+		).toEqual([UNKNOWN_DIAL_COUNTRY_MESSAGE]);
+	});
+
+	// Zod 4: an object refinement is skipped only after a NON-continuable issue
+	// (a wrong type). A too-short name or a missing date is continuable, so the
+	// phone is still judged on the same pass — the buyer sees every problem at
+	// once rather than the phone error surfacing on the second submit.
+	it("the phone is still judged while other fields are invalid", () => {
+		const result = checkoutFormSchemaFor("MY").safeParse({
+			...pickupForm("9123", "MY"),
+			name: "",
+			fulfilmentDate: "",
+		});
+		const paths = (result.error?.issues ?? []).map((i) => i.path.join("."));
+		expect(paths).toEqual(
+			expect.arrayContaining(["name", "fulfilmentDate", "waPhone"]),
+		);
+	});
+
+	it("keeps one schema instance per store country (stable validator identity)", () => {
+		expect(checkoutFormSchemaFor("MY")).toBe(checkoutFormSchemaFor("MY"));
+		expect(checkoutFormSchemaFor("SG")).toBe(checkoutFormSchemaFor("SG"));
 	});
 });
 
@@ -272,9 +395,7 @@ describe("cross-country rejection copy rides the phone schemas", () => {
 		const junk = settingsWaPhoneFormSchema.SG.safeParse({ waPhone: "12345" });
 		expect(junk.success).toBe(false);
 		if (!junk.success) {
-			expect(junk.error.issues[0].message).toContain(
-				"Singapore mobile number",
-			);
+			expect(junk.error.issues[0].message).toContain("Singapore mobile number");
 			expect(junk.error.issues[0].message).not.toMatch(/Store tab/);
 		}
 		expect(

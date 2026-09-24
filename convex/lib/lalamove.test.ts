@@ -465,6 +465,15 @@ describe("toLalamoveContactPhone", () => {
 		expect(toLalamoveContactPhone("60123456789", "SG")).toBeNull();
 	});
 
+	test("an overseas buyer from anywhere is foreign in both markets (z8r3fdh274)", () => {
+		// Buyers may now type a number from any country. Each one must route
+		// to the store-number fallback, never reach Lalamove as a contact.
+		expect(toLalamoveContactPhone("447700900123", "MY")).toBeNull();
+		expect(toLalamoveContactPhone("447700900123", "SG")).toBeNull();
+		expect(toLalamoveContactPhone("+81 90-1234-5678", "MY")).toBeNull();
+		expect(toLalamoveContactPhone("6281234567890", "SG")).toBeNull();
+	});
+
 	test("SG length is exact — 65 plus eight digits, no more", () => {
 		expect(toLalamoveContactPhone("658181532", "SG")).toBeNull();
 		expect(toLalamoveContactPhone("65818153210", "SG")).toBeNull();

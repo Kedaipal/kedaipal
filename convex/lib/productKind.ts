@@ -118,6 +118,39 @@ export function sanitizePackageLength(
 }
 
 
+/**
+ * Validate "Only days you're open" (z8r3fdhpm7) — a DAY package counted in
+ * open days, so the store's weekly day off and its closed dates are stepped
+ * over and the term ends later. Refused, never stored-and-ignored, on every
+ * shape it can't mean anything for (the weekend-rate-on-package precedent):
+ * a free range has no fixed count to extend, a month runs by the calendar, and
+ * a package of nights is a stay — closed dates already stop those nights.
+ * `false` / unset normalize to undefined: "every day in a row" has one
+ * spelling. Throws seller-facing copy.
+ */
+export function sanitizeSkipsClosedDays(
+	value: boolean | undefined,
+	opts: { packageLength?: number; packageUnit?: PackageUnit },
+): true | undefined {
+	if (value !== true) return undefined;
+	if (opts.packageLength === undefined || opts.packageLength <= 0) {
+		throw new Error(
+			"Only a fixed-length package can skip the days you're closed — set a package length first",
+		);
+	}
+	if (opts.packageUnit === "month") {
+		throw new Error(
+			"A monthly package runs by the calendar — skipping closed days only works on a package counted in days",
+		);
+	}
+	if (opts.packageUnit === "night") {
+		throw new Error(
+			"A package of nights is a stay — your closed dates already stop stays on those nights",
+		);
+	}
+	return true;
+}
+
 /** Ceiling on the refundable security deposit (sen) — RM 10,000, the same
  * fat-finger guard as sanitizeFee's fee ceiling. */
 export const MAX_SECURITY_DEPOSIT = 1_000_000;

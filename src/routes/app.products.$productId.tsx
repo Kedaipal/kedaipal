@@ -14,6 +14,7 @@ import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { EventRsvpPanel } from "../components/app/event-rsvp-panel";
 import {
 	PageHeader,
 	PageHeaderSkeleton,
@@ -22,7 +23,6 @@ import {
 	ProductForm,
 	type ProductFormDraft,
 } from "../components/forms/product-form";
-import { EventRsvpPanel } from "../components/app/event-rsvp-panel";
 import { ProductDetailSheet } from "../components/storefront/product-detail-sheet";
 import { Button } from "../components/ui/button";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
@@ -325,6 +325,7 @@ function EditProductRoute() {
 					// edit. Found while adding the weekend rate (S13).
 					packageUnit: product.booking?.packageUnit,
 					autoAccept: product.booking?.autoAccept === true,
+					skipsClosedDays: product.booking?.skipsClosedDays === true,
 					weekendPrice: product.booking?.weekendPrice
 						? (product.booking.weekendPrice / 100).toFixed(2)
 						: undefined,
@@ -359,6 +360,10 @@ function EditProductRoute() {
 				// a first-class field in the editor — a weightless item strands that
 				// store's checkout on "missing weights".
 				weightMode={retailer.deliveryConfig?.mode === "weight"}
+				storeSchedule={{
+					openingHours: retailer.openingHours,
+					closedDates: retailer.closedDates,
+				}}
 				// Legacy stores have the flag unset and DO offer collection, so
 				// only an explicit false hides the pickup note.
 				offerSelfCollect={retailer.offerSelfCollect !== false}

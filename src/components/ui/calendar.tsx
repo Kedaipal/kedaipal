@@ -21,6 +21,7 @@ export type CalendarProps = React.ComponentProps<typeof DayPicker>;
 export function Calendar({
 	className,
 	classNames,
+	modifiersClassNames,
 	showOutsideDays = true,
 	...props
 }: CalendarProps) {
@@ -72,8 +73,6 @@ export function Calendar({
 				day: cn(
 					defaults.day,
 					"relative size-9 p-0 text-center text-sm [&:has(button)]:hover:bg-transparent",
-					// Range band — a soft mint fill behind the middle days.
-					"[&.rdp-range_middle]:bg-accent/12 [&.rdp-range_start]:rounded-l-full [&.rdp-range_end]:rounded-r-full [&.rdp-range_middle]:rounded-none",
 				),
 				day_button: cn(
 					defaults.day_button,
@@ -89,13 +88,29 @@ export function Calendar({
 				hidden: cn(defaults.hidden, "invisible"),
 				...classNames,
 			}}
+			// The range band lives HERE, on the modifier classes, and nowhere else.
+			// It used to be `[&.rdp-range_middle]:bg-accent/12` on the day, which
+			// never rendered: Tailwind reads `_` in an arbitrary variant as a space,
+			// so the selector compiled to `&.rdp-range middle` and matched nothing
+			// — and a `modifiersClassNames` entry REPLACES react-day-picker's own
+			// `rdp-range_start/end` class, so the rounded-end rules had nothing to
+			// hook onto either. The picked middle days showed as plain dates
+			// (z8r3fdhpm7, found rendering the closed-dates sheet; the Insights
+			// custom range had the same flat look).
 			modifiersClassNames={{
-				// The endpoints get the filled mint pill (overrides the hover state).
+				// The endpoints get the filled mint pill (overrides the hover
+				// state), rounded on their outer side so the band reads as one
+				// shape; a one-day range is both, so it is a full circle.
 				range_start:
-					"!bg-accent !text-primary-foreground hover:!bg-accent font-semibold",
+					"rounded-l-full !bg-accent !text-primary-foreground hover:!bg-accent font-semibold",
 				range_end:
-					"!bg-accent !text-primary-foreground hover:!bg-accent font-semibold",
+					"rounded-r-full !bg-accent !text-primary-foreground hover:!bg-accent font-semibold",
+				// A soft mint fill behind the days in between.
+				range_middle: "rounded-none bg-accent/12",
 				selected: "font-semibold",
+				// MERGED, never replacing: a caller adding its own modifier (the
+				// closed-dates sheet's hatch) must not wipe the band above.
+				...modifiersClassNames,
 			}}
 			components={{ Chevron: CalendarChevron }}
 			{...props}

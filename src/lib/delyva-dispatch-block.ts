@@ -1,4 +1,6 @@
 import type { DelyvaDispatchBlock } from "../../convex/delyva";
+import type { Country } from "../../convex/lib/country";
+import { MARKET_NUMBER_ADJECTIVE } from "./dispatch-block";
 
 /**
  * Why a Delyva courier can't be booked on an order right now, in the seller's
@@ -10,11 +12,11 @@ import type { DelyvaDispatchBlock } from "../../convex/delyva";
  */
 const BLOCK_COPY: Record<DelyvaDispatchBlock, string> = {
 	// The only reason with no fix to offer — the card hides itself for this one;
-	// the line is the fallback for surfaces that can't.
+	// the line is the fallback for surfaces that can't. Market-neutral on
+	// purpose: COUNTRY_DELYVA_BOOKING serves every country we sell in today.
 	country_unsupported:
-		"Delyva courier booking is only available for Malaysian stores right now — arrange the courier yourself and add the tracking number below.",
-	not_delivery:
-		"This is a self-collect order — there's no parcel to send out.",
+		"Delyva courier booking isn't available for stores in your country yet — arrange the courier yourself and add the tracking number below.",
+	not_delivery: "This is a self-collect order — there's no parcel to send out.",
 	bad_status:
 		"A courier can only be booked while the order is confirmed or packed.",
 	job_active: "A courier is already booked on this order.",
@@ -38,9 +40,17 @@ export const UNKNOWN_DELYVA_BLOCK_COPY =
 export function delyvaBlockCopy(
 	reason: DelyvaDispatchBlock | "not_found" | string,
 ): string {
-	return (
-		BLOCK_COPY[reason as DelyvaDispatchBlock] ?? UNKNOWN_DELYVA_BLOCK_COPY
-	);
+	return BLOCK_COPY[reason as DelyvaDispatchBlock] ?? UNKNOWN_DELYVA_BLOCK_COPY;
+}
+
+/**
+ * The card's line when a booking would hand the courier the store's number for
+ * the buyer's stop (z8r3fdh274) — the Lalamove confirm dialog's sibling
+ * (`riderContactFallbackCopy`). Delyva has no collection direction, so the
+ * buyer's stop is always the drop-off.
+ */
+export function courierContactFallbackCopy(country: Country): string {
+	return `This buyer's WhatsApp number isn't a ${MARKET_NUMBER_ADJECTIVE[country]} number, so the courier gets your store's number instead, with the buyer's real number in the booking note.`;
 }
 
 /** Normalized job status → what the seller should understand is happening.

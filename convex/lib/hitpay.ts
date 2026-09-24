@@ -25,8 +25,10 @@
  *    API-key salt (the value shown beside the API key in the dashboard).
  */
 
+import type { Country } from "./country";
 import { decryptSecret } from "./credentialCrypto";
 import type { OrderPaymentMethod } from "./paymentMethod";
+import { STORED_MOBILE_PATTERN } from "./slug";
 
 export type HitpayMode = "sandbox" | "production";
 
@@ -240,7 +242,11 @@ export type PaymentRequestInputs = {
 	/** Absolute URL for the v1 completion webhook. */
 	webhookUrl: string;
 	buyerName?: string;
+	/** Stored digits (`60123456789`). Sent only when a mobile of `storeCountry`
+	 * — see `buildPaymentRequestParams`. */
 	buyerPhone?: string;
+	/** The store's country — the HitPay account's home market. */
+	storeCountry: Country;
 };
 
 const HITPAY_PURPOSE_MAX = 255;
@@ -269,7 +275,20 @@ export function buildPaymentRequestParams(
 	params.set("send_email", "false");
 	params.set("expires_after", HITPAY_REQUEST_EXPIRES_AFTER);
 	if (inputs.buyerName) params.set("name", inputs.buyerName);
-	if (inputs.buyerPhone) params.set("phone", inputs.buyerPhone);
+	// Phone only when it is a mobile of the store's OWN country — exactly the
+	// set every checkout number belonged to before buyers could pick any
+	// country (z8r3fdh274), and the only set a sandbox run has verified. HitPay
+	// documents just "E.164" and how it validates other countries is unknown:
+	// a 422 over a foreign (or cross MY↔SG) number would surface as GATEWAY_DOWN
+	// and kill Pay-now for that order. The phone buys us nothing to risk that
+	// for — HitPay's SMS is off (`send_sms` above) and we never read it back —
+	// so a number outside the store's country is simply left off the request.
+	if (
+		inputs.buyerPhone &&
+		STORED_MOBILE_PATTERN[inputs.storeCountry].test(inputs.buyerPhone)
+	) {
+		params.set("phone", inputs.buyerPhone);
+	}
 	return params;
 }
 

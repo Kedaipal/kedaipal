@@ -20,6 +20,8 @@ import {
 	type OpeningHours,
 	openingHoursSpecification,
 	openNowStatus,
+	closedDatesSpecification,
+	isStoreClosedOn,
 	sanitizeOpeningHours,
 	selectableTimeWindow,
 	selectableTimeWindows,
@@ -257,7 +259,7 @@ describe("openNowStatus", () => {
 		const status = openNowStatus(week({ 5: { open: 600, close: 1080 } }), NOW);
 		expect(status).toEqual({
 			open: false,
-			nextOpen: { daysAhead: 0, openMinutes: 600 },
+			nextOpen: { daysAhead: 0, openMinutes: 600, allDay: false },
 		});
 	});
 
@@ -272,7 +274,7 @@ describe("openNowStatus", () => {
 		);
 		expect(status).toEqual({
 			open: false,
-			nextOpen: { daysAhead: 2, openMinutes: 8 * 60 },
+			nextOpen: { daysAhead: 2, openMinutes: 8 * 60, allDay: false },
 		});
 	});
 
@@ -560,7 +562,7 @@ describe("openNowStatus across a break", () => {
 		const status = openNowStatus(week({ 5: SPLIT_DAY }), elevenAm);
 		expect(status).toEqual({
 			open: false,
-			nextOpen: { daysAhead: 0, openMinutes: 12 * 60 },
+			nextOpen: { daysAhead: 0, openMinutes: 12 * 60, allDay: false },
 		});
 	});
 
@@ -579,7 +581,7 @@ describe("openNowStatus across a break", () => {
 		);
 		expect(status).toEqual({
 			open: false,
-			nextOpen: { daysAhead: 1, openMinutes: 9 * 60 },
+			nextOpen: { daysAhead: 1, openMinutes: 9 * 60, allDay: false },
 		});
 	});
 });
@@ -779,5 +781,80 @@ describe("nextSelectableTime — a repair only ever moves forward", () => {
 		expect(
 			nextSelectableTime(week({ 5: SPLIT_DAY }), FRI_JUN_26, 9 * 60, NOW),
 		).toBe(9 * 60 + 15);
+	});
+});
+
+describe("closed dates (z8r3fdhpm7)", () => {
+	const raya = {
+		startDate: SAT_JUN_27,
+		endDate: SUN_JUN_28,
+		label: "Hari Raya",
+	};
+
+	test("isStoreClosedOn answers for a weekly day off OR a closed date", () => {
+		const hours = week({ 1: { ...NINE_TO_SIX, closed: true } }); // Mondays off
+		const MON_JUN_29 = SUN_JUN_28 + 86_400_000;
+		expect(isStoreClosedOn(hours, [raya], FRI_JUN_26)).toBe(false);
+		expect(isStoreClosedOn(hours, [raya], SAT_JUN_27)).toBe(true);
+		expect(isStoreClosedOn(hours, [raya], MON_JUN_29)).toBe(true);
+		// A 24/7 store with no closures is never closed.
+		expect(isStoreClosedOn(undefined, undefined, SAT_JUN_27)).toBe(false);
+		expect(isStoreClosedOn(undefined, [raya], SAT_JUN_27)).toBe(true);
+	});
+
+	test("open now, and a closure tomorrow doesn't change today", () => {
+		const status = openNowStatus(week({ 5: NINE_TO_SIX }), NOW, [raya]);
+		expect(status.open).toBe(true);
+	});
+
+	test("closed today says WHY and skips every closed date to the next opening", () => {
+		const fridayClosed = { startDate: FRI_JUN_26, endDate: SUN_JUN_28, label: "Hari Raya" };
+		const status = openNowStatus(week({ 1: NINE_TO_SIX }), NOW, [fridayClosed]);
+		// Fri, Sat, Sun closed → Monday (3 days ahead) at 9:00 AM.
+		expect(status).toEqual({
+			open: false,
+			closure: fridayClosed,
+			nextOpen: { daysAhead: 3, openMinutes: 9 * 60, allDay: false },
+		});
+	});
+
+	test("a 24/7 store closed today reopens on an all-day day", () => {
+		const status = openNowStatus(undefined, NOW, [
+			{ startDate: FRI_JUN_26, endDate: FRI_JUN_26 },
+		]);
+		expect(status).toEqual({
+			open: false,
+			closure: { startDate: FRI_JUN_26, endDate: FRI_JUN_26 },
+			nextOpen: { daysAhead: 1, openMinutes: 0, allDay: true },
+		});
+	});
+
+	test("after closing, 'opens tomorrow' is never said about a closed tomorrow", () => {
+		const sevenPm = Date.UTC(2026, 5, 26, 11, 0, 0);
+		const status = openNowStatus(week({ 5: NINE_TO_SIX }), sevenPm, [raya]);
+		// Sat + Sun closed for Raya → next opening Monday.
+		expect(status).toEqual({
+			open: false,
+			nextOpen: { daysAhead: 3, openMinutes: 0, allDay: true },
+		});
+	});
+
+	test("JSON-LD: upcoming closures become schema.org closed-all-day rows", () => {
+		expect(closedDatesSpecification([raya], NOW)).toEqual([
+			{
+				"@type": "OpeningHoursSpecification",
+				opens: "00:00",
+				closes: "00:00",
+				validFrom: "2026-06-27",
+				validThrough: "2026-06-28",
+			},
+		]);
+		// An ended closure is not advertised.
+		expect(
+			closedDatesSpecification(
+				[{ startDate: FRI_JUN_26 - 3 * 86_400_000, endDate: FRI_JUN_26 - 86_400_000 }],
+				NOW,
+			),
+		).toEqual([]);
 	});
 });

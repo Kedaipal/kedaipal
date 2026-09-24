@@ -10,6 +10,7 @@ credentials come from flags or env vars at run time.
 | `lalamove-simulate-webhook.mjs` | Replays a **signed** Lalamove webhook to the dev deployment so a booking can be walked through its lifecycle without a real rider | Testing the Lalamove delivery flow locally |
 | `generate-og-image.mjs` | Regenerates the social-share OG image (1200×630) at `public/og-image.png` from the brand lockup | After changing the hero headline or brand assets |
 | `optimize-images.mjs` | Emits responsive AVIF/WebP variants of landing-page assets from `assets/landing/` into `public/img/landing/` (`pnpm optimize:images`) | After adding/updating a landing asset |
+| `generate-dial-codes.mjs` | Regenerates the buyer phone picker's country table — `convex/lib/dialCodes.ts` (dial code, trunk prefix, mobile lengths, main country of a shared code) and `convex/lib/dialCountryNames.ts` (frozen English names) — from libphonenumber metadata | After bumping the `libphonenumber-js` devDependency |
 
 ## `lalamove-simulate-webhook.mjs`
 
@@ -92,3 +93,29 @@ The **real** rider photo appearing end-to-end (via the actual `GET /v3/orders`
 fetch) remains a first-prod-booking check.
 
 Full feature context: [`delivery-lalamove.md`](./delivery-lalamove.md).
+
+## `generate-dial-codes.mjs`
+
+```bash
+node scripts/generate-dial-codes.mjs
+```
+
+Reads Google's libphonenumber metadata through the `libphonenumber-js`
+**devDependency** (exact-pinned; only this script imports it, so it never
+reaches a bundle) and rewrites two checked-in modules. Both carry an
+`@generated` banner — **never hand-edit them**; re-run the script instead.
+
+- It **excludes CU, IR, KP and SY** — the countries the WhatsApp Business
+  Platform cannot message at all — so the picker never offers a buyer a number
+  that could never receive the confirmation.
+- Country names come from the **running Node's** `Intl.DisplayNames` (its
+  ICU/CLDR data) and are frozen into the module, so the Worker and every
+  browser render the same label. A different Node version can therefore rename
+  rows ("Turkey" vs "Türkiye") — read the diff before committing.
+- The rows the product leans on (MY, SG, the trunk-prefix edge cases, the
+  exclusions) are pinned by `convex/lib/phoneDial.test.ts`, and the parse by
+  the libphonenumber fixtures in `convex/lib/buyerPhone.test.ts` — run both
+  after regenerating.
+
+What each field means and why trunk prefixes are per country:
+[`phone-numbers.md` § The generated dial table](./phone-numbers.md#the-generated-dial-table).

@@ -487,27 +487,145 @@ describe("admin manual opt-out (86eyn25gu)", () => {
 		expect(rows[0].reactivatedAt).toEqual(expect.any(Number));
 	});
 
-	test("input matching no country's mobile shape is invalid: status says so, register refuses", async () => {
+	test("input that reads as no country's mobile is invalid: status says so, register refuses", async () => {
 		const t = setup();
 		process.env.ADMIN_USER_IDS = USER;
 		const asAdmin = t.withIdentity({ subject: USER });
 
 		// An MY landline: 8–15 digits, so the loose rule accepts it, but it can
 		// never receive WhatsApp. The panel disables with reason instead of
-		// registering a key no send-gate check would ever match.
-		expect(
-			await asAdmin.query(api.wabaProtection.adminOptOutStatus, {
-				waPhone: "03-1234 5678",
-			}),
-		).toMatchObject({ optedOut: false, invalid: true });
-		await expect(
-			asAdmin.mutation(api.wabaProtection.adminRegisterOptOut, {
-				waPhone: "03-1234 5678",
-			}),
-		).rejects.toThrow();
+		// registering a key no send-gate check would ever match. The any-country
+		// arms (z8r3fdh274) must not rescue it: typed with its `+60` it lands
+		// back on the strict MY arm, not the foreign one.
+		for (const waPhone of ["03-1234 5678", "+60 3-1234 5678", "not-a-phone"]) {
+			expect(
+				await asAdmin.query(api.wabaProtection.adminOptOutStatus, { waPhone }),
+			).toMatchObject({ optedOut: false, invalid: true });
+			await expect(
+				asAdmin.mutation(api.wabaProtection.adminRegisterOptOut, { waPhone }),
+			).rejects.toThrow(/any other country's WhatsApp number/);
+		}
 		expect(
 			await t.run(async (ctx) => ctx.db.query("optOuts").collect()),
 		).toHaveLength(0);
+	});
+
+	// z8r3fdh274: a buyer's number can now be from any country, and so can the
+	// STOP that follows it. The panel must register, find and re-activate them.
+	test("a foreign number typed with its country code opts out under the digits Meta delivers", async () => {
+		const t = setup();
+		process.env.ADMIN_USER_IDS = USER;
+		const asAdmin = t.withIdentity({ subject: USER });
+
+		await asAdmin.mutation(api.wabaProtection.adminRegisterOptOut, {
+			waPhone: "+44 7911 123456",
+		});
+
+		const rows = await t.run(async (ctx) => ctx.db.query("optOuts").collect());
+		expect(rows).toHaveLength(1);
+		expect(rows[0].waPhone).toBe("447911123456");
+
+		// Every spelling of the number agrees — including the bare digits the
+		// register's copy button puts on the clipboard.
+		for (const waPhone of [
+			"+44 7911 123456",
+			"0044 7911 123456",
+			"447911123456",
+		]) {
+			expect(
+				await asAdmin.query(api.wabaProtection.adminOptOutStatus, { waPhone }),
+			).toMatchObject({ optedOut: true, source: "manual_admin" });
+		}
+
+		// Audited with the last four digits only, same as a local number.
+		const audits = await t.run(async (ctx) =>
+			ctx.db.query("adminAuditLog").collect(),
+		);
+		expect(
+			audits.find((a) => a.action === "wabaProtection.manualOptOut")?.targetId,
+		).toBe("…3456");
+	});
+
+	// The live bug this ticket found: a STOP from outside MY/SG was registered
+	// (the keyword path keys on whatever Meta sends) and listed in the register,
+	// but its Re-activate button re-parsed the number through the MY/SG-only
+	// canonicalizer and threw "Enter a Malaysian … or Singapore … number".
+	test("a foreign STOP re-activates from the register", async () => {
+		const t = setup();
+		process.env.ADMIN_USER_IDS = USER;
+		const asAdmin = t.withIdentity({ subject: USER });
+
+		await t.mutation(internal.wabaProtection.registerOptOut, {
+			waPhone: "447911123456",
+			source: "stop_keyword",
+		});
+		const [row] = (await asAdmin.query(api.wabaProtection.adminOptOutList, {}))
+			.rows;
+		expect(row).toMatchObject({ waPhone: "447911123456", masked: "…3456" });
+
+		// Exactly what the register's button sends: the row's own digits.
+		await asAdmin.mutation(api.wabaProtection.adminReactivateOptIn, {
+			waPhone: row.waPhone,
+		});
+
+		expect(
+			(await asAdmin.query(api.wabaProtection.adminOptOutList, {})).rows,
+		).toHaveLength(0);
+		const audits = await t.run(async (ctx) =>
+			ctx.db.query("adminAuditLog").collect(),
+		);
+		expect(
+			audits.find((a) => a.action === "wabaProtection.manualOptIn")?.targetId,
+		).toBe("…3456");
+	});
+
+	// Meta's wa_id isn't always what any parser produces — Mexico's legacy
+	// `521…` mobile prefix is 11 national digits where a Mexican number has 10.
+	// Such a row can never be canonicalized, so it is found by its exact key.
+	test("a STOP under a key no parser produces is still found and re-activated by its exact digits", async () => {
+		const t = setup();
+		process.env.ADMIN_USER_IDS = USER;
+		const asAdmin = t.withIdentity({ subject: USER });
+		const waId = "5215512345678";
+
+		// Not registrable by hand — nothing canonical to key it on.
+		await expect(
+			asAdmin.mutation(api.wabaProtection.adminRegisterOptOut, {
+				waPhone: waId,
+			}),
+		).rejects.toThrow();
+
+		await t.mutation(internal.wabaProtection.registerOptOut, {
+			waPhone: waId,
+			source: "stop_keyword",
+		});
+
+		// The lookup agrees with the register instead of calling it invalid.
+		expect(
+			await asAdmin.query(api.wabaProtection.adminOptOutStatus, {
+				waPhone: waId,
+			}),
+		).toMatchObject({ optedOut: true, source: "stop_keyword" });
+
+		await asAdmin.mutation(api.wabaProtection.adminReactivateOptIn, {
+			waPhone: waId,
+		});
+		const rows = await t.run(async (ctx) => ctx.db.query("optOuts").collect());
+		expect(rows).toHaveLength(1);
+		expect(rows[0].reactivatedAt).toEqual(expect.any(Number));
+
+		// Once re-activated, the verbatim key has nothing to find: the input is
+		// invalid again, and re-activating it is refused rather than silent.
+		expect(
+			await asAdmin.query(api.wabaProtection.adminOptOutStatus, {
+				waPhone: waId,
+			}),
+		).toMatchObject({ optedOut: false, invalid: true });
+		await expect(
+			asAdmin.mutation(api.wabaProtection.adminReactivateOptIn, {
+				waPhone: waId,
+			}),
+		).rejects.toThrow();
 	});
 });
 

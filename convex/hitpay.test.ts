@@ -466,6 +466,56 @@ describe("hitpay.createCheckout", () => {
 		const row = await t.run(async (ctx) => ctx.db.get(orderId));
 		expect(row?.gatewayRequestId).toBeUndefined();
 	});
+
+	// z8r3fdh274: buyers can hold any country's number. HitPay's validation of
+	// a number outside the account's market is unverified and a 422 would kill
+	// Pay-now, so only a mobile of the STORE's country rides the request.
+	test("sends the buyer's phone only when it is a mobile of the store's country", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await connectHitpay(t, USER_A);
+		const local = await seedOrder(t, retailer._id, productId);
+		const foreign = await seedOrder(t, retailer._id, productId);
+		const crossBorder = await seedOrder(t, retailer._id, productId);
+		await t.run(async (ctx) => {
+			const row = await ctx.db.get(foreign.orderId);
+			if (!row) throw new Error("order missing");
+			await ctx.db.patch(foreign.orderId, {
+				customer: { ...row.customer, waPhone: "447911123456" },
+			});
+		});
+
+		const phones: Array<string | null> = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_url: unknown, init?: RequestInit) => {
+				const body = new URLSearchParams(String(init?.body));
+				phones.push(body.get("phone"));
+				const id = `req_phone_${phones.length}`;
+				return new Response(
+					JSON.stringify({
+						id,
+						url: `https://checkout.sandbox.hit-pay.com/${id}`,
+						status: "pending",
+						amount: body.get("amount"),
+						currency: "myr",
+					}),
+					{ status: 201 },
+				);
+			}),
+		);
+
+		await t.action(api.hitpay.createCheckout, { token: local.token });
+		await t.action(api.hitpay.createCheckout, { token: foreign.token });
+		// The same MY buyer, once the store is Singaporean.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, { country: "SG" });
+		});
+		await t.action(api.hitpay.createCheckout, { token: crossBorder.token });
+
+		expect(phones).toEqual(["60123456789", null, null]);
+	});
 });
 
 describe("POST /webhook/hitpay", () => {

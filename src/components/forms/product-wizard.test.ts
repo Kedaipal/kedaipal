@@ -1,22 +1,22 @@
 import { describe, expect, it } from "vitest";
+import { isKindCard, KIND_CARDS } from "../../lib/kind-card";
 import type { ProductFormDraft } from "./product-form";
 import {
 	buildWizardSubmitValues,
 	EVENTS_LOCKED_ISSUE,
 	emptyWizardState,
-	kindFromCard,
 	formDraftToWizardState,
+	kindFromCard,
 	openingWizard,
 	skuConflictTarget,
 	type WizardState,
+	withKindCard,
 	wizardHandoff,
 	wizardInitialStep,
 	wizardPriceLabel,
 	wizardStepIssues,
 	wizardSteps,
-	withKindCard,
 } from "./product-wizard";
-import { isKindCard, KIND_CARDS } from "../../lib/kind-card";
 import { rebuildRows, type VariantRow } from "./variant-editor";
 
 function row(partial: Partial<VariantRow> = {}): VariantRow {
@@ -965,13 +965,26 @@ describe("the wizard's money reads in the store's symbol", () => {
 describe("a `?card=` deep link opens on its card (`z8r3fdhkr7`)", () => {
 	it("admits the five step-0 cards and nothing else", () => {
 		for (const card of KIND_CARDS) expect(isKindCard(card)).toBe(true);
-		for (const junk of ["", "Event", "events", "toString", 1, null, undefined]) {
+		for (const junk of [
+			"",
+			"Event",
+			"events",
+			"toString",
+			1,
+			null,
+			undefined,
+		]) {
 			expect(isKindCard(junk)).toBe(false);
 		}
 	});
 
 	it("no link = today's opening: blank, pre-answered by the store type", () => {
-		for (const defaultKind of [undefined, "physical", "service", "booking"] as const) {
+		for (const defaultKind of [
+			undefined,
+			"physical",
+			"service",
+			"booking",
+		] as const) {
 			expect(openingWizard({ defaultKind, eventsLocked: false })).toEqual({
 				state: emptyWizardState(defaultKind),
 				issues: [],
@@ -980,10 +993,21 @@ describe("a `?card=` deep link opens on its card (`z8r3fdhkr7`)", () => {
 	});
 
 	it("an Event link lands exactly where the Event TAP does — whatever the store type", () => {
-		for (const defaultKind of [undefined, "physical", "service", "booking"] as const) {
-			const opened = openingWizard({ defaultKind, card: "event", eventsLocked: false });
+		for (const defaultKind of [
+			undefined,
+			"physical",
+			"service",
+			"booking",
+		] as const) {
+			const opened = openingWizard({
+				defaultKind,
+				card: "event",
+				eventsLocked: false,
+			});
 			expect(opened.issues).toEqual([]);
-			expect(opened.state).toEqual(withKindCard(emptyWizardState(defaultKind), "event"));
+			expect(opened.state).toEqual(
+				withKindCard(emptyWizardState(defaultKind), "event"),
+			);
 			expect(opened.state.kindCard).toBe("event");
 			expect(opened.state.event.on).toBe(true);
 		}
@@ -1031,5 +1055,44 @@ describe("a `?card=` deep link opens on its card (`z8r3fdhkr7`)", () => {
 		expect(left.event.date).toBe("2099-12-04");
 		// Re-selecting the same card is a no-op, not a rebuild.
 		expect(withKindCard(left, "food")).toBe(left);
+	});
+});
+
+describe("open-days packages in the wizard (z8r3fdhpm7)", () => {
+	const course = (over: Partial<WizardState> = {}): WizardState => ({
+		...emptyWizardState("booking"),
+		name: "5-day kayak course",
+		packageLength: "5",
+		packageUnit: "day",
+		skipsClosedDays: true,
+		editor: {
+			options: [],
+			customLine: null,
+			rows: [row({ price: "500", blockWhenOutOfStock: false })],
+		},
+		...over,
+	});
+
+	it("sends 'only days you're open' for a DAY package", () => {
+		expect(buildWizardSubmitValues(course()).booking?.skipsClosedDays).toBe(
+			true,
+		);
+	});
+
+	it("never sends it for a month or night package, or with no length — a kept value doesn't ride along", () => {
+		for (const over of [
+			{ packageUnit: "month" as const },
+			{ packageUnit: "night" as const },
+			{ packageLength: "" },
+		]) {
+			expect(
+				buildWizardSubmitValues(course(over)).booking?.skipsClosedDays,
+			).toBeUndefined();
+		}
+	});
+
+	it("round-trips through the full-form handoff", () => {
+		const handoff = wizardHandoff(course());
+		expect(handoff.initialValues.skipsClosedDays).toBe(true);
 	});
 });

@@ -687,6 +687,93 @@ needs a day uses notice); a drop-off point's schedule note is advisory, not
 enforced; and the Meta confirmation template carries no pickup notes — `/track`
 and the order page are the surfaces guaranteed to show them.
 
+## Update (2026-09-24, z8r3fdhpm7): store closed dates
+
+Opening hours knew only weekdays; holiday/exception dates were deferred twice
+(v1 above, and booking S13). So a seller closing for Raya had no way to stop
+buyers picking Raya day, short of pausing the whole store. **Closed dates** are
+that exception list.
+
+### Shape
+
+`retailers.closedDates`: a short list of `{ startDate, endDate, label? }`.
+Dates are MYT midnights and **`endDate` is inclusive** (a closed day has no
+leaving morning, the `bookingBlocks` posture). The **label is public**: buyers
+read it at checkout and in the storefront header, and the settings field says
+so. The list is **bounded** (≤ 50 upcoming ranges, one range ≤ 366 days, label
+≤ 60 chars) and **self-pruning**: every write drops ranges that already ended.
+Reads never filter by the clock, because `closureOn` answers for one date at a
+time, so an ended range is inert. Overlaps are legal and unioned at read. A
+labelled range wins the overlap, so the buyer reads the reason. Unset = no
+closures (zero migration). All-tier.
+
+One pure author, `convex/lib/closedDates.ts`: the sanitizer, `closureOn`,
+`upcomingClosures`, the range spellings, and **`closedDateMessage`**, the one
+refusal sentence both sides use. The combined "is the store shut all day?"
+question lives in `openingHours.ts` as `isStoreClosedOn` (weekly day off OR a
+closed date). It also has a predicate form, `storeClosedOn(closedWeekdays,
+closures)`, built from the two facts a buyer surface is sent, so an open-days
+booking term resolves identically on both sides (see `docs/booking.md`).
+
+### Where it applies
+
+- **Storefront checkout and claim links refuse it first.**
+  `orders.create`/`orderClaims.commit` run `closedDateIssue` before prep and
+  hours. It's the truest reason: "the cake needs 2 hours" on a day the shop is
+  shut sends the buyer to the wrong fix. The checkout mirrors it through
+  `fulfilmentTimeIssue` (a `closed_date` reason carrying the range). The day
+  chips skip it, the default date is the first open day, and a closed date
+  typed into the native input gets the server's sentence inline: "Kek Mama is
+  closed Thu, 1 Oct – Sat, 3 Oct 2026 (Hari Raya) — pick another day."
+  `DayArgs.closedDates` is **required**, so a new checkout can't silently skip
+  closures.
+- **Exempt**, the same as opening hours: counter checkout (the seller is
+  standing there), seller reschedule and dispatch (vendor authority), and event
+  dates (the seller chose them).
+- **Storefront header.** `openNowStatus` reads closures: "Closed today · Hari
+  Raya · opens 9:00 AM Mon". The next opening skips every closed date, and a
+  24-hour reopening says "reopens" rather than "opens 12:00 AM". A closure
+  starting within two weeks gets a heads-up line ("Closed 1–3 Oct · Hari
+  Raya"), **even on a 24/7 store**, which otherwise shows no hours line. The
+  schedule dialog lists upcoming closures. The store's JSON-LD gains
+  `specialOpeningHoursSpecification` rows (schema.org's closed-all-day shape).
+- **Bookings**: per-shape rules, see `docs/booking.md`. A stay can't sleep on
+  a closed date; a membership absorbs it; an open-days package skips it; and
+  no package STARTS on a shut day.
+
+### Seller surface
+
+Settings → Fulfilment → **Closed dates**, directly under Opening hours (they
+are that schedule's exceptions). Each add or reopen is an immediate write
+(`closedDates.add` / `remove`, owner-or-admin, soft-locked, act-as audited),
+never part of a draft. The add sheet (`AddClosedDatesSheet`, also opened by the
+booking calendar's "Mark the store closed instead") has:
+
+- a range calendar, with the days already closed hatched;
+- the public reason;
+- an **impact line** read from `closedDates.impact` before saving: open orders
+  due on those dates plus bookings that run through them, with links. Nothing
+  already placed is ever moved. A store that sells bookings is also told what
+  a closure does to them (stays can't book, no package starts on one, each
+  package counts or skips it per its own setting). An exact repeat of an
+  existing closure is disabled with the reason — the server refuses it too.
+- a fixed height with the confirm pinned under the content: a centred sheet
+  that grows re-centres, which moved the calendar between the two taps.
+
+Reopen is one tap with an **Undo** in the toast. A closure that is already
+running re-adds from today, because "today or later" is the add rule. At the
+cap, the Add button is disabled with the reason beside it. Spotlight key
+`closed_dates`.
+
+### Deliberately not done
+
+- **No built-in public-holiday list.** Holidays differ by state, Raya depends
+  on moon sighting, cuti peristiwa comes at short notice, and closing is the
+  business's own call. A wrong automatic skip would move a paid end date. A
+  "pre-fill my state's holidays" shortcut can sit on top of this later.
+- **No recurring closures** ("every first Monday"). The weekly schedule plus
+  dated ranges cover every case seen so far.
+
 ## Seller reschedule (19 Aug 2026, ClickUp 86eyp5qd1)
 
 The escape hatch the 3 AM advance order exposed: a buyer scheduled a delivery
