@@ -23,6 +23,7 @@ import {
 	sellerPaymentReceivedTemplateName,
 	WhatsAppSendError,
 } from "./lib/whatsapp";
+import { storeOwnerIsAdmin } from "./lib/auth";
 import {
 	describeClaimWindow,
 	effectiveClaimStatus,
@@ -1972,6 +1973,9 @@ export const getInvoiceForBillingAlert = internalQuery({
 		storeName: string;
 		notifyWaPhone: string | undefined;
 		locale: Locale;
+		/** An admin's own store is never soft-locked (see storeOwnerIsAdmin) —
+		 * telling them their dashboard is locked would be false. */
+		ownerIsAdmin: boolean;
 	} | null> => {
 		const invoice = await ctx.db.get(invoiceId);
 		if (!invoice) return null;
@@ -1989,6 +1993,7 @@ export const getInvoiceForBillingAlert = internalQuery({
 			storeName: templateParam(retailer.storeName, "your store"),
 			notifyWaPhone: retailer.notifyWaPhone,
 			locale: pickLocale(retailer.locale),
+			ownerIsAdmin: storeOwnerIsAdmin(retailer),
 		};
 	},
 });
@@ -2030,6 +2035,8 @@ export const notifyBillingPastDue = internalAction({
 				return null;
 			});
 		if (!meta || !meta.notifyWaPhone) return;
+		// Never tell an operator their own dashboard is locked — it isn't.
+		if (meta.ownerIsAdmin) return;
 		// Paid between the flip and this send (a retry, or a settle racing the
 		// cron) — telling a paid-up seller they're locked is worse than silence.
 		if (meta.status !== "pending") return;

@@ -1708,6 +1708,35 @@ describe("post-lock recovery chain (z8r3fdg3mh)", () => {
 		expect((await getInvoice(t, invoiceId))?.recoveryStage).toBeUndefined();
 	});
 
+	test("an ADMIN's own store is never chased — it is never actually locked", async () => {
+		// The second way `frozen` can be false at `past_due` (comped is the
+		// first): resolveAccess forces active/unfrozen for a store whose OWNER
+		// is allow-listed, and the billing tab tells them admins have no
+		// invoices to settle. Chasing them contradicts the product to its own
+		// operators. Found in the Chrome round — the chain emailed the admin
+		// store "your dashboard is locked, pay RM149" twice.
+		const t = setup();
+		const { retailerId, invoiceId } = await seedLocked(t, ADMIN, "rec-admin", 5);
+		const res = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(res.recoveryNudges).toBe(0);
+		expect((await getInvoice(t, invoiceId))?.recoveryStage).toBeUndefined();
+		expect(retailerId).toBeDefined();
+	});
+
+	test("a non-admin store with the same shape IS chased — the guard is not a blanket skip", async () => {
+		const t = setup();
+		const { invoiceId } = await seedLocked(t, "u_notadmin", "rec-notadmin", 5);
+		const res = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(res.recoveryNudges).toBe(1);
+		expect((await getInvoice(t, invoiceId))?.recoveryStage).toBe(1);
+	});
+
 	test("an overdue invoice on a still-ACTIVE sub locks first, and is not chased in the same run", async () => {
 		// Ordering guard: the lock transition owns day 0 (it sends invoiceOverdue
 		// + the WhatsApp). The ladder must not also fire on that same pass.

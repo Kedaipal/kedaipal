@@ -503,6 +503,53 @@ describe("post-lock recovery chain (z8r3fdg3mh)", () => {
 		).toContain("Jeda pelan anda");
 	});
 
+	it("the nudge states the lock ONCE — no repeat, no capital mid-sentence", () => {
+		const { html } = renderBillingEmail("en", "recoveryNudge", overdue);
+		// The intro used to add its own "you can't edit your store…" clause and
+		// then append storeStaysLive, which ends with the same fact — the seller
+		// read the lock twice in one sentence, the second time starting with a
+		// stray capital after an em-dash.
+		expect(html).not.toMatch(/— Your storefront/);
+		expect(html).toMatch(/Hi Mak Kuih, invoice INV-202607-AB12 is 3 days past due\./);
+		expect((html.match(/view-only until you pay/g) ?? []).length).toBe(1);
+	});
+
+	it("the hold offer is a PANEL with its own price and button, not buried prose", () => {
+		const { html } = renderBillingEmail("en", "recoveryFinal", {
+			...overdue,
+			daysPastDue: 7,
+			holdPriceFormatted: "MYR 19.00",
+		});
+		// In-app this offer is a card with a price chip and a button; an email
+		// that demotes it to a mid-paragraph clause contradicts the product.
+		expect(html).toMatch(/Pause instead of cancelling · MYR 19\.00/);
+		expect(html).toMatch(/See the pause option/);
+		// …and it is no longer sitting inside the intro paragraph.
+		const intro = html.split("Pause instead of cancelling")[0];
+		expect(intro).not.toMatch(/Pause your plan for/);
+	});
+
+	it("no hold price ⇒ no panel at all, and the rest still renders", () => {
+		const { html } = renderBillingEmail("en", "recoveryFinal", {
+			...overdue,
+			daysPastDue: 7,
+		});
+		expect(html).not.toMatch(/Pause instead of cancelling/);
+		expect(html).not.toMatch(/See the pause option/);
+		expect(html).toMatch(/last automatic reminder/);
+	});
+
+	it("the plain-text body keeps the capital, because it starts its own line", () => {
+		const { text } = renderBillingEmail("en", "recoveryNudge", overdue);
+		expect(text).toMatch(/\nInvoice INV-202607-AB12 is 3 days past due\./);
+	});
+
+	it("Chinese is never case-folded — it has no letter case to fold", () => {
+		const { html } = renderBillingEmail("zh", "recoveryNudge", overdue);
+		expect(html).toContain("已逾期 3 天");
+		expect(html).not.toContain("undefined");
+	});
+
 	it("the recovery pair is tonally red, like the overdue notice it follows", () => {
 		const overdueHtml = renderBillingEmail("en", "invoiceOverdue", base).html;
 		for (const key of ["recoveryNudge", "recoveryFinal"] as const) {

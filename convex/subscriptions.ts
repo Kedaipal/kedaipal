@@ -31,6 +31,7 @@ import {
 	logAdminAction,
 	requireAdmin,
 	requireRetailerAccess,
+	storeOwnerIsAdmin,
 } from "./lib/auth";
 import { COMP_LABEL_MAX, COMP_NOTE_MAX, type CompKind } from "./lib/comp";
 import { rateLimiter } from "./lib/rateLimiter";
@@ -1365,6 +1366,12 @@ export const internalDailyBillingStatus = internalMutation({
 					lockSub.comped === true
 				)
 					continue;
+				// …and the OTHER way `frozen` is false at `past_due`: the store is
+				// an admin's own. They are never soft-locked and the billing tab
+				// tells them admins have no invoices to settle, so chasing them
+				// would contradict the product to its own operators.
+				const lockRetailer = await ctx.db.get(inv.retailerId);
+				if (!lockRetailer || storeOwnerIsAdmin(lockRetailer)) continue;
 				const daysPastDue = Math.floor((now - inv.dueDate) / DAY_MS);
 				// Send only the HIGHEST stage that's due and stamp it, skipping any
 				// it passed. A cron outage that leaves an invoice at day 9 with no

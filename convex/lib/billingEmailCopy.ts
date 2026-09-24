@@ -89,6 +89,8 @@ const t = {
 		holdOffer:
 			"Between seasons? Pause your plan for {holdPrice} a month instead of cancelling. Your storefront, catalog and order history all stay — new orders just close until you resume.",
 		needHelp: "Stuck on something? Reply to this email and we'll sort it out.",
+		holdHeading: "Pause instead of cancelling",
+		holdCta: "See the pause option",
 	},
 	ms: {
 		bank: "Bank",
@@ -121,6 +123,8 @@ const t = {
 			"Antara musim? Jeda pelan anda pada {holdPrice} sebulan daripada membatalkannya. Storefront, katalog dan sejarah pesanan anda semuanya kekal — cuma pesanan baharu ditutup sehingga anda sambung semula.",
 		needHelp:
 			"Ada masalah? Balas e-mel ini dan kami akan bantu selesaikan.",
+		holdHeading: "Jeda, jangan batalkan",
+		holdCta: "Lihat pilihan jeda",
 	},
 	zh: {
 		bank: "银行",
@@ -151,6 +155,8 @@ const t = {
 		holdOffer:
 			"季节之间的空档？与其取消，不如以每月 {holdPrice} 暂停您的套餐。您的商店、商品目录和订单记录都会保留 —— 只是暂停接收新订单，直到您恢复。",
 		needHelp: "遇到问题？直接回复这封邮件，我们会帮您处理。",
+		holdHeading: "暂停，而不是取消",
+		holdCta: "查看暂停选项",
 	},
 } as const;
 
@@ -160,6 +166,34 @@ function contactForPaymentLine(locale: Locale, v: BillingEmailVars): string {
 		"{invoiceNumber}",
 		v.invoiceNumber,
 	);
+}
+
+/** The past-due fact as a MID-SENTENCE clause. The HTML intro glues it after
+ * "Hi {store}, ", where a capitalised standalone sentence reads as a typo —
+ * but the plain-text body puts it on its own line, where the capital is
+ * right. Chinese has no letter case, so it passes through untouched. */
+function lowerFirst(locale: Locale, line: string): string {
+	if (locale === "zh") return line;
+	return line.charAt(0).toLowerCase() + line.slice(1);
+}
+
+/** The Off-Season Hold offer as its own panel (z8r3fdg3mh).
+ *
+ * It was a clause in the middle of `recoveryFinal`'s intro paragraph, which
+ * buried the one thing in that email that can save the account: in-app the
+ * same offer gets its own card, a price chip and a button, so a grey
+ * mid-paragraph sentence is the email contradicting the product. Rendered
+ * only when a price was passed — a seller already ON hold has no cheaper
+ * door to be pointed at. */
+function holdBlock(locale: Locale, v: BillingEmailVars): string {
+	if (!v.holdPriceFormatted) return "";
+	const L = t[locale];
+	const body = L.holdOffer.replace("{holdPrice}", v.holdPriceFormatted);
+	return `<div style="border:1px solid #c7d2fe;background:#eef2ff;border-radius:16px;padding:16px;margin:0 0 12px 0;">
+<p style="margin:0 0 6px 0;font-size:13px;font-weight:800;color:#3730a3;">${escapeHtml(L.holdHeading)} · ${escapeHtml(v.holdPriceFormatted)}</p>
+<p style="margin:0 0 12px 0;font-size:13px;line-height:1.6;color:#3730a3;">${escapeHtml(body)}</p>
+<a href="${escapeHtml(v.billingUrl)}" style="display:inline-block;background:#4338ca;color:#ffffff;text-decoration:none;font-size:14px;font-weight:800;padding:10px 16px;border-radius:10px;">${escapeHtml(L.holdCta)}</a>
+</div>`;
 }
 
 /** "Invoice INV-2609-0007 is 3 days past due." — the recovery chain states the
@@ -330,6 +364,9 @@ ${discountHtml(locale, v)}
 <tr><td style="padding:20px 28px 0 28px;">
 ${paymentPanel(locale, v)}
 </td></tr>
+<tr><td style="padding:12px 28px 0 28px;">
+${holdBlock(locale, v)}
+</td></tr>
 <tr><td style="padding:24px 28px 30px 28px;">
 <a href="${safeUrl}" style="display:inline-block;background:#0f172a;color:#ffffff;text-decoration:none;font-size:15px;font-weight:800;padding:13px 18px;border-radius:12px;">${escapeHtml(ctaLabel)}</a>
 </td></tr>
@@ -420,7 +457,7 @@ const render: Record<
 				"en",
 				"recoveryNudge",
 				"Your dashboard is still locked",
-				`Hi ${escapeHtml(v.storeName)}, ${escapeHtml(pastDueLine("en", v))} Until it's settled you can't edit your store or manage orders from the dashboard — ${escapeHtml(t.en.storeStaysLive)}`,
+				`Hi ${escapeHtml(v.storeName)}, ${escapeHtml(lowerFirst("en", pastDueLine("en", v)))} ${escapeHtml(t.en.storeStaysLive)}`,
 				v,
 				t.en.cta,
 			);
@@ -429,9 +466,11 @@ const render: Record<
 		},
 		recoveryFinal: (v) => {
 			const subject = `Last reminder — ${v.invoiceNumber} is still unpaid`;
-			// The hold offer only renders when a price was passed — a row that is
-			// already on hold has no cheaper option to move to, and inventing one
-			// would send a seller to a button that refuses them.
+			// Plain-text bodies have no panels, so the hold offer stays a line
+			// there; the HTML renders it as `holdBlock` instead. Both are absent
+			// when no price was passed — a row already ON hold has no cheaper
+			// option to move to, and inventing one would send a seller to a
+			// button that refuses them.
 			const holdLine = v.holdPriceFormatted
 				? t.en.holdOffer.replace("{holdPrice}", v.holdPriceFormatted)
 				: "";
@@ -439,7 +478,7 @@ const render: Record<
 				"en",
 				"recoveryFinal",
 				"One last reminder",
-				`Hi ${escapeHtml(v.storeName)}, ${escapeHtml(pastDueLine("en", v))} ${escapeHtml(t.en.lastReminder)}${holdLine ? ` ${escapeHtml(holdLine)}` : ""} ${escapeHtml(t.en.needHelp)}`,
+				`Hi ${escapeHtml(v.storeName)}, ${escapeHtml(lowerFirst("en", pastDueLine("en", v)))} ${escapeHtml(t.en.lastReminder)} ${escapeHtml(t.en.needHelp)}`,
 				v,
 				t.en.cta,
 			);
@@ -522,7 +561,7 @@ const render: Record<
 				"ms",
 				"recoveryNudge",
 				"Dashboard anda masih dikunci",
-				`Hai ${escapeHtml(v.storeName)}, ${escapeHtml(pastDueLine("ms", v))} Sehingga ia dijelaskan, anda tidak boleh menyunting kedai atau menguruskan pesanan dari dashboard — ${escapeHtml(t.ms.storeStaysLive)}`,
+				`Hai ${escapeHtml(v.storeName)}, ${escapeHtml(lowerFirst("ms", pastDueLine("ms", v)))} ${escapeHtml(t.ms.storeStaysLive)}`,
 				v,
 				t.ms.cta,
 			);
@@ -531,9 +570,11 @@ const render: Record<
 		},
 		recoveryFinal: (v) => {
 			const subject = `Peringatan terakhir — ${v.invoiceNumber} masih belum dijelaskan`;
-			// The hold offer only renders when a price was passed — a row that is
-			// already on hold has no cheaper option to move to, and inventing one
-			// would send a seller to a button that refuses them.
+			// Plain-text bodies have no panels, so the hold offer stays a line
+			// there; the HTML renders it as `holdBlock` instead. Both are absent
+			// when no price was passed — a row already ON hold has no cheaper
+			// option to move to, and inventing one would send a seller to a
+			// button that refuses them.
 			const holdLine = v.holdPriceFormatted
 				? t.ms.holdOffer.replace("{holdPrice}", v.holdPriceFormatted)
 				: "";
@@ -541,7 +582,7 @@ const render: Record<
 				"ms",
 				"recoveryFinal",
 				"Peringatan terakhir",
-				`Hai ${escapeHtml(v.storeName)}, ${escapeHtml(pastDueLine("ms", v))} ${escapeHtml(t.ms.lastReminder)}${holdLine ? ` ${escapeHtml(holdLine)}` : ""} ${escapeHtml(t.ms.needHelp)}`,
+				`Hai ${escapeHtml(v.storeName)}, ${escapeHtml(lowerFirst("ms", pastDueLine("ms", v)))} ${escapeHtml(t.ms.lastReminder)} ${escapeHtml(t.ms.needHelp)}`,
 				v,
 				t.ms.cta,
 			);
@@ -624,7 +665,7 @@ const render: Record<
 				"zh",
 				"recoveryNudge",
 				"您的管理后台仍处于锁定状态",
-				`您好 ${escapeHtml(v.storeName)}，${escapeHtml(pastDueLine("zh", v))} 在付清之前，您无法在管理后台编辑店铺或处理订单 —— ${escapeHtml(t.zh.storeStaysLive)}`,
+				`您好 ${escapeHtml(v.storeName)}，${escapeHtml(pastDueLine("zh", v))} ${escapeHtml(t.zh.storeStaysLive)}`,
 				v,
 				t.zh.cta,
 			);
@@ -633,9 +674,11 @@ const render: Record<
 		},
 		recoveryFinal: (v) => {
 			const subject = `最后提醒 —— ${v.invoiceNumber} 仍未付款`;
-			// The hold offer only renders when a price was passed — a row that is
-			// already on hold has no cheaper option to move to, and inventing one
-			// would send a seller to a button that refuses them.
+			// Plain-text bodies have no panels, so the hold offer stays a line
+			// there; the HTML renders it as `holdBlock` instead. Both are absent
+			// when no price was passed — a row already ON hold has no cheaper
+			// option to move to, and inventing one would send a seller to a
+			// button that refuses them.
 			const holdLine = v.holdPriceFormatted
 				? t.zh.holdOffer.replace("{holdPrice}", v.holdPriceFormatted)
 				: "";
@@ -643,7 +686,7 @@ const render: Record<
 				"zh",
 				"recoveryFinal",
 				"最后一次提醒",
-				`您好 ${escapeHtml(v.storeName)}，${escapeHtml(pastDueLine("zh", v))} ${escapeHtml(t.zh.lastReminder)}${holdLine ? ` ${escapeHtml(holdLine)}` : ""} ${escapeHtml(t.zh.needHelp)}`,
+				`您好 ${escapeHtml(v.storeName)}，${escapeHtml(pastDueLine("zh", v))} ${escapeHtml(t.zh.lastReminder)} ${escapeHtml(t.zh.needHelp)}`,
 				v,
 				t.zh.cta,
 			);
