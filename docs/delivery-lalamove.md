@@ -327,16 +327,43 @@ doesn't fire the dialog (no modal-spam). This replaced the briefly-built
 silent auto-book (`autoBookForOrder`/`getAutoBookContext`, removed) — see
 git history if a zero-tap option is ever wanted for high-volume sellers.
 
-### Phones — Lalamove MY only accepts +60
+### Phones — contacts come from the booking's market
 
-Lalamove validates the rider-contact area code per market (a +65 buyer
-422'd in testing — real JB cross-border case). `toLalamoveMyPhone`
-normalizes to `+60…` or returns null: a non-MY **buyer** number falls back
-to the seller as rider contact (buyer's real number in the rider remarks;
-the confirm dialog says so up front), while a non-MY **seller** number
-blocks dispatch with "add a Malaysian (+60) WhatsApp number in Settings →
-Store". `friendlyBookingError` names phone rejections honestly if one ever
-slips through.
+Lalamove validates the contact's area code per market (a +65 buyer 422'd on a
+Malaysian booking in testing — the real JB cross-border case — and a +60 one
+fails the same way on a Singapore booking). Buyers can give a WhatsApp number
+from any country ([`z8r3fdh274`](https://app.clickup.com/t/z8r3fdh274), see
+[`phone-numbers.md`](./phone-numbers.md)), so a foreign buyer number is an
+everyday path, not an edge case. `toLalamoveContactPhone(phone, market)`
+delegates to the provider-neutral `toDomesticContactPhone`
+(`convex/lib/courierContact.ts` — Delyva applies the same rule): `+60…` with
+60 + 9–11 digits in MY, `+65…` with exactly 8 in SG, else null. It is a
+country check, not a mobile check — a rider can phone a landline.
+
+- **A foreign buyer number** falls back to the **store's** number as the
+  buyer-side contact, and `Buyer WhatsApp: +…` rides the remarks second, right
+  after the order ref, so the 400-character cut can never reach it. In
+  **collection** mode the buyer's stop is the pickup, so the fallback lands on
+  the sender; the remarks still ride the **recipient** stop — the only remarks
+  slot in v3 — which on a collection trip is the store.
+- **The confirm dialog says so before the tap**, naming the store's own market
+  and the direction (`riderContactFallbackCopy`, `src/lib/dispatch-block.ts`):
+  *"This buyer's WhatsApp number isn't a Malaysian number, and Lalamove only
+  takes Malaysian contacts — the rider gets your store's number instead, with
+  the buyer's real number in the rider notes."* — "a Singapore number" on an SG
+  store, "the rider collecting from the buyer" on a collection trip.
+  `prepareBooking` returns the booking's `market` for it, because the client
+  can't read the market off the order (its currency can diverge from the
+  store's country).
+- **A non-domestic seller number** blocks dispatch with `no_seller_phone` —
+  "Add a local WhatsApp number for your store's country in Settings → Store
+  first (+60 in Malaysia, +65 in Singapore)".
+- `friendlyBookingError` names phone rejections honestly (`bad_phone`) if one
+  ever slips through.
+
+The buyer hears about the reroute too: a store that books couriers shows an
+overseas buyer a note on the checkout's delivery step (`booksCouriers` —
+[`phone-numbers.md` § Telling the buyer](./phone-numbers.md#telling-the-buyer-at-checkout--bookscouriers)).
 
 ### Webhook
 
@@ -580,8 +607,10 @@ Three freezes, one setting:
 - **`deliveryJobs.deliveryDirection`** — snapshotted at `reserveBooking` so
   the webhook obeys what was BOOKED, not the live setting.
 - **Dispatch swap** — `dispatchContextForOrder` swaps stops AND contacts:
-  origin/sender = buyer (same +60 fallback → seller number, buyer's real
-  number in remarks), destination/recipient = the outlet. The checkout
+  origin/sender = buyer (same store-number fallback when the buyer's number
+  isn't from the store's market, buyer's real number in the remarks — which
+  ride the recipient stop, here the outlet), destination/recipient = the
+  outlet. The checkout
   quote (`quoteForCheckout`) prices the same buyer→store direction (route
   prices aren't guaranteed symmetric), so buyer-paid fee and dispatch
   re-quote can't systematically drift.
@@ -923,7 +952,10 @@ the remarks). The old helper's test carried a warning that a future "accept
 +65 everywhere" sweep would break real bookings; that warning still holds and
 is honoured — **+65 is accepted in SG and still rejected in MY**, and the
 mirror case (+60 in SG) now fails the same way. The Johor cross-border buyer
-exists in both directions.
+exists in both directions. (Since z8r3fdh274 the rule itself is the
+provider-neutral `toDomesticContactPhone` in `convex/lib/courierContact.ts`,
+which this helper delegates to — see
+[§ Phones](#phones--contacts-come-from-the-bookings-market).)
 
 ### Swept late: the quotation locale
 

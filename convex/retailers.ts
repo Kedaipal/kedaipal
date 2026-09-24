@@ -220,6 +220,7 @@ import {
 	riderBookingAllowed,
 	sanitizeDeliveryConfig,
 } from "./lib/delivery";
+import { storeBooksCouriers } from "./lib/courierBooking";
 import { isEncrypted } from "./lib/credentialCrypto";
 import {
 	ackableKeys,
@@ -757,6 +758,14 @@ type RetailerPublic = {
 	// data; derived from deliveryBooking.deliveryDirection, which itself never
 	// crosses to the public payload. Only the by-slug payload sets it.
 	deliveryCollectsFromCustomer?: boolean;
+	// The store hands delivery orders to a courier — Lalamove or Delyva booking
+	// armed (z8r3fdh274, `storeBooksCouriers`). Checkout tells a buyer with an
+	// overseas WhatsApp number that the rider will phone the store instead
+	// (couriers only take a local contact). Public-safe for the same reason as
+	// the bit above: one yes/no about the service, derived from owner-only
+	// config (keys, customer ids) that never crosses to the public payload.
+	// Only the by-slug payload sets it.
+	booksCouriers?: boolean;
 	logoStorageId?: string;
 	logoUrl?: string;
 	// Wide cover/banner. Public-safe — the storefront header hero and the PRIMARY
@@ -1131,6 +1140,9 @@ export const getRetailerBySlug = query({
 					deliveryCollectsFromCustomer:
 						(active.deliveryBooking as DeliveryBooking | undefined)
 							?.deliveryDirection === "collection",
+					// One bit from the courier config, never the config — see the
+					// RetailerPublic comment.
+					booksCouriers: storeBooksCouriers(active),
 					logoStorageId: active.logoStorageId,
 					logoUrl,
 					coverImageStorageId: active.coverImageStorageId,

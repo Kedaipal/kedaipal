@@ -85,8 +85,10 @@ nothing here gets rebuilt.
    `send_sms/send_email = false` (**SMS defaults ON upstream** — never drop
    that override). Lazy minting is why held orders (mockup /
    `deliveryFeePending`) can't be paid early and why a request always
-   prices the current total. Buyer `name`/`phone` are passed; `email` is
-   not (we don't collect it — see Known limitations).
+   prices the current total. Buyer `name` is passed; `phone` only when it is
+   a mobile of the **store's own country** (`STORED_MOBILE_PATTERN[storeCountry]`
+   — see Known limitations); `email` is not (we don't collect it — see Known
+   limitations).
 4. **Settle.** Two independent, idempotent paths funnel into
    `orders.receiveGatewayPayment`:
    - **Webhook** `POST /webhook/hitpay` — form-encoded v1 callback. The
@@ -282,6 +284,20 @@ reload.
   page. TODO: check Settings → Checkout Customisation for an email-optional
   toggle / ask HitPay support; revisit passing email if checkout ever
   collects it.
+- **The buyer's phone rides the request only for a store-country mobile**
+  (`buildPaymentRequestParams`, `convex/lib/hitpay.ts`; the country is threaded
+  from `retailer.country` via `getCheckoutContext`). Buyers can give a WhatsApp
+  number from any country since
+  [`z8r3fdh274`](https://app.clickup.com/t/z8r3fdh274)
+  ([`phone-numbers.md`](./phone-numbers.md)), but HitPay documents the field
+  only as "E.164" and the only case a sandbox run has verified is an MY number
+  on an MY account (sent as bare digits). How HitPay validates anything else is
+  unknown, and a 422 would surface as `GATEWAY_DOWN` and kill Pay-now for that
+  order. The phone buys us nothing to risk that for — HitPay's SMS is off
+  (`send_sms=false`) and we never read it back — so a foreign number, or an MY
+  number on an SG store (and vice versa), is simply left off. Revisit only
+  with a sandbox run of a
+  foreign number (`+447911123456` and the bare form) on each market's account.
 - **Platform layer** (OAuth connect instead of key-pasting, unified
   `charge.*` webhooks, commission %) waits on HitPay enabling Kedaipal's
   platform account (86eyb6z2d) — additive: swap the connect card's input

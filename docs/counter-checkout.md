@@ -632,8 +632,10 @@ items, each with a one-line "what happens next":
    the moment the buyer scans). Hidden — just this item — while the store's `wa.me`
    deep link hasn't resolved (no `WHATSAPP_CHECKOUT_PHONE`), so the phone + cash
    paths stay usable.
-2. **Enter phone number** — opens the manual-phone bind form directly (the old
-   two-step "choose → phone" chooser is gone; the menu *is* the chooser).
+2. **Enter phone number** — opens the manual-phone bind dialog ("Enter buyer's
+   number") directly (the old two-step "choose → phone" chooser is gone; the
+   menu *is* the chooser). The number can be from any country — the field's
+   plate carries a country picker (see §Manual entry below).
 3. **Cash sale — no contact** — fires `startAnonymousSession` straight from the item.
 
 Behaviour is unchanged from the two-button version — pure IA/UX consolidation. The
@@ -673,13 +675,40 @@ required-in-UI pattern — `orders.create` keeps `customer.name` optional for
 legacy/other callers).
 
 **Manual phone** — `counterCheckout.bindSessionManualPhone` (owner-or-admin,
-admin-audited). The cashier types the buyer's number + name; the number is
-normalized by
-`assertValidMyWaPhone` (`convex/lib/slug.ts`) to the **same E.164 digits an inbound
-scan produces** (`0xx…` → `60xx…`; `60…`/`+60…` kept) so it resolves-or-creates the
-exact same `(retailerId, waPhone)` customer — a returning buyer is recognised, never
-forked. The bind is direct (no webhook, no rate-limit/cap — those guard the public
-poster token, not a logged-in seller). The buyer still gets the one WhatsApp
+admin-audited), from the `ManualBindDialog`
+(`src/components/counter/manual-bind-dialog.tsx`). The cashier types the buyer's
+number + name. The number is a **buyer's**, so since
+[`z8r3fdh274`](https://app.clickup.com/t/z8r3fdh274) it wears the buyer plate: a
+country picker defaulting to the store's country (a Bruneian tourist or a UK
+visitor is one tap on the plate, or one typed `+CC`, away), judged by the same
+`assertValidBuyerWaPhone` as every buyer field against the country picked
+(`waDialCountry`; absent = the store's, so a counter tab loaded before the
+picker binds exactly as it did). An MY/SG pick takes the strict mobile arm —
+`012-345 6789`, the bare `12-345 6789` (folded to `60…`) or `+60…`; landlines
+and junk refused — and any other country goes through the generated dial
+table. Either way it normalizes to the **same E.164 digits an inbound scan
+produces** (`012…` → `6012…`, a UK `07911 123456` → `447911123456`), so it
+resolves-or-creates the exact same `(retailerId, waPhone)` customer — a
+returning buyer is recognised, never forked. The rules:
+[`phone-numbers.md`](./phone-numbers.md).
+
+Until z8r3fdh274 this path was the loose, plate-less exception: a bare input
+through `assertValidWaPhoneForCountry` that passed any 8–15 digits — MY
+landlines and junk included — stored a bare MY national number unprefixed, and
+never told the cashier a foreign number was welcome at all
+([`86eyqug8w`](https://app.clickup.com/t/86eyqug8w), folded in). The dialog now
+says so where the cashier is looking — "Serving a visitor? Tap +60 to pick
+their country.", then "Number from Japan — tap +81 to change it." after a pick
+— replaces that hint with the rejection when a number is refused (the buyer
+copy itself names the way out, "…or tap +60 to change the country", plus a
+one-tap **Switch to Singapore (+65)** when the digits fit the other supported
+country), states why **Start
+checkout** is disabled, submits on Enter, turns browser autofill off (it would
+offer the cashier's own number), and starts clean on every open (the form
+unmounts with the dialog, so the last buyer's country never leaks into the
+next bind). The bind is direct (no webhook, no rate-limit/cap — those guard the
+public poster token, not a logged-in seller); a paused or lapsed store says so
+before any complaint about the number. The buyer still gets the one WhatsApp
 confirmation (and a CRM row); the receipt/invoice is on the order page it links
 to, not in the chat (`86eyd63r8`). **PDPA:** the buyer never scanned, so the confirmation
 is our first message to them — it carries the same notice-at-collection line as the
@@ -704,8 +733,8 @@ optional), **no customer aggregate is touched**, and **no WhatsApp is scheduled*
 phone). Anonymous **forces paid-in-person** — there's nobody to send a pay-later link
 to — enforced server-side and surfaced as a disabled-with-reason "Pay later" toggle.
 Anonymous orders render **"Walk-in customer"** everywhere a name shows (inbox card,
-order detail, CSV export) via the shared `orderCustomerLabel` (`convex/lib/customer.ts`
-↔ `src/lib/customer.ts`) — never blank/crash. The Done screen hides the "sent to buyer"
+order detail, CSV export) via the shared `orderCustomerLabel` (one implementation in
+`convex/lib/customer.ts`, re-exported by `src/lib/customer.ts`) — never blank/crash. The Done screen hides the "sent to buyer"
 framing and offers **Download / Share only**.
 
 **Re-claim safety** — if a manually-bound buyer later scans the store QR with the same

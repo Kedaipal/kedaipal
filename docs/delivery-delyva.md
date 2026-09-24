@@ -67,6 +67,14 @@ impossible to express, which is why each provider owns its own table.
 this they had *no* courier automation at all — every parcel arranged by hand
 with the tracking number typed in. Delyva is that market's whole answer.
 
+> **Superseded on both halves (Sep 2026)** — kept as the reasoning of the time.
+> Lalamove opened Singapore
+> ([`z8r3fdch3r`](https://app.clickup.com/t/z8r3fdch3r),
+> `COUNTRY_RIDER_BOOKING.SG = true`), and Delyva's SG tenant turned out to ship
+> an **empty** service catalogue in practice (no SG sandbox, bring-your-own
+> courier) — so an SG store can connect Delyva and quote nothing. The current
+> truth is the comment on `COUNTRY_DELYVA_BOOKING` in `convex/lib/delivery.ts`.
+
 What is country-shaped, and where it comes from:
 
 - **Postal codes.** MY is 5 digits and called a *postcode*; SG is 6 and called
@@ -160,6 +168,45 @@ assumed: the waypoint address rides *inside* `contact` (a top-level
 `address1` is rejected), `inventory` is required on **both** waypoints, and
 `POST /order/{id}/cancel` is the working cancel path (the ms2781 variant also
 exists; both return `statusCode: 900`).
+
+### Contact phones
+
+Buyers can give a WhatsApp number from any country
+([`z8r3fdh274`](https://app.clickup.com/t/z8r3fdh274) —
+[`phone-numbers.md`](./phone-numbers.md)), but a Delyva booking lives inside the
+store's country (one tenant per country), and a domestic courier handed an
+overseas number may not be able to call it. So Delyva follows the rule Lalamove
+dispatch already did, from the same provider-neutral helper
+(`toDomesticContactPhone`, `convex/lib/courierContact.ts`):
+
+- **Destination phone** (`buyerContactPhone` in `convex/delyva.ts`, bare digits —
+  Delyva takes MSISDNs without the `+`): the buyer's number when it belongs to
+  the store's country; the **store's** number when it doesn't.
+- **The buyer's real number leads the note.** On a fallback,
+  `Buyer WhatsApp: +<digits>` goes **first** in the booking note, ahead of the
+  address notes and the customer note — `buildCreateOrderBody` cuts the note at
+  400 characters, and a long address note must never push out the one way to
+  reach the buyer.
+- **A store with no number keeps the buyer's**: a foreign contact beats an
+  empty one. An order with **no** buyer number isn't treated as overseas — the
+  destination takes the store's number as it always did (`buyer || seller`).
+- **The card says so before the first quote.** `getDispatchState` returns the
+  store's `country` and `buyerContactFallback`; while the order is bookable the
+  dispatch card shows *"This buyer's WhatsApp number isn't a Malaysian number,
+  so the courier gets your store's number instead, with the buyer's real number
+  in the booking note."* (`courierContactFallbackCopy`,
+  `src/lib/delyva-dispatch-block.ts` — "a Singapore number" on an SG store; no
+  collection wording, because Delyva has no collection direction). It shows no
+  phone number, so it needs no `MASK_PII`.
+- **This also covers orders that already existed.** Inbound-WhatsApp orders
+  could always carry a +65 or other foreign number, and Delyva used to hand it
+  to the courier as-is. Whether Delyva or its downstream couriers ever refused
+  a foreign number is unverified; the fallback applies either way.
+
+`bookingEnabled` on the dispatch state now reads the shared
+`delyvaBookingArmed` (`convex/lib/courierBooking.ts`) — identical semantics
+(credentials, enabled, `delyvaBookingAllowed`) — which also feeds the public
+`booksCouriers` bit behind the checkout's overseas-number note.
 
 ## Webhook (`POST /webhook/delyva`)
 

@@ -15,6 +15,7 @@ import {
 	maxPackageQuantity,
 } from "./lib/bookingAvailability";
 import { revenueExcludingDeposit } from "./lib/order";
+import { UNKNOWN_DIAL_COUNTRY_MESSAGE } from "./lib/buyerPhone";
 import {
 	addMytCalendarMonths,
 	DAY_MS,
@@ -191,6 +192,72 @@ describe("bookings.requestBooking", () => {
 				customer: { name: "Nameful Guest" },
 			}),
 		).rejects.toThrow(/WhatsApp number/);
+	});
+
+	test("a guest's number can come from any country — stored as Meta delivers it", async () => {
+		// z8r3fdh274: same authority and contract as orders.create — the picked
+		// country rides `customer.waDialCountry`, the trunk 0 is the country's
+		// own to drop, and the stored digits match the inbound form.
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup());
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(3),
+			checkOut: day(5),
+			customer: {
+				name: "Haruto Sato",
+				waPhone: "090-1234-5678",
+				waDialCountry: "JP",
+			},
+		});
+		const order = await asOwner.query(api.orders.get, { shortId });
+		expect(order?.customer.waPhone).toBe("819012345678");
+	});
+
+	test("no dial country keeps the store's arm — bare SG digits at an MY store are refused, never sniffed", async () => {
+		const { t, retailer, productId } = await seedBookingStore(setup());
+		await expect(
+			t.mutation(api.bookings.requestBooking, {
+				retailerId: retailer._id,
+				productId,
+				checkIn: day(3),
+				checkOut: day(5),
+				customer: { name: "Wei Ling", waPhone: "9123 4567" },
+			}),
+		).rejects.toThrow(/switch the country to \+65/);
+	});
+
+	test("junk and an unknown dial country are refused", async () => {
+		const { t, retailer, productId } = await seedBookingStore(setup());
+		const request = (customer: {
+			name: string;
+			waPhone: string;
+			waDialCountry?: string;
+		}) =>
+			t.mutation(api.bookings.requestBooking, {
+				retailerId: retailer._id,
+				productId,
+				checkIn: day(3),
+				checkOut: day(5),
+				customer,
+			});
+		await expect(
+			request({ name: "Nameful Guest", waPhone: "12345" }),
+		).rejects.toThrow(/Malaysian mobile/);
+		await expect(
+			request({
+				name: "Nameful Guest",
+				waPhone: "7911 1234",
+				waDialCountry: "GB",
+			}),
+		).rejects.toThrow(/United Kingdom mobile/);
+		await expect(
+			request({
+				name: "Nameful Guest",
+				waPhone: "012-345 6789",
+				waDialCountry: "XX",
+			}),
+		).rejects.toThrow(UNKNOWN_DIAL_COUNTRY_MESSAGE);
 	});
 
 	test("holds capacity from the request — the last spot can't double-book", async () => {

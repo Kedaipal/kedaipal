@@ -152,9 +152,11 @@ are **untouched**.
     copy. **Buttons are imperative, labels are nouns** — render as
     `"Mark as {label}"` (or keep the existing system verbs for `confirmed` /
     `cancelled`), never a bare noun like "Washing" on a button.
-- `src/lib/orderStatus.ts` _(new, mirror)_ — same logic for the client, following
-  the `convex/lib/customer.ts` ↔ `src/lib/customer.ts` mirroring convention. Keep
-  the two in lockstep with a shared test table.
+- `src/lib/orderStatus.ts` _(new, mirror)_ — same logic for the client. Keep
+  the two in lockstep with a shared test table. (This plan cited the
+  `convex/lib/customer.ts` ↔ `src/lib/customer.ts` mirror as its convention;
+  that pair has since collapsed to one implementation that `src/` re-exports —
+  z8r3fdh274 — which is the better model if this mirror is ever revisited.)
 
 ### Touch points
 

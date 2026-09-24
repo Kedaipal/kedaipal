@@ -15,6 +15,7 @@ import {
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { PublicDeliveryQuote } from "../../../convex/delivery";
+import { toDomesticContactPhone } from "../../../convex/lib/courierContact";
 import {
 	assertValidFulfilmentDate,
 	defaultFulfilmentTimeMinutes,
@@ -59,6 +60,7 @@ import {
 	type TimeMove,
 	timeMovedCopy,
 } from "../../lib/fulfilment-time-issue";
+import { overseasCourierNote } from "../../lib/overseas-courier-note";
 import { claimFormSchemaFor } from "../../lib/schemas";
 import { useLiveDeliveryQuote } from "../../lib/use-live-delivery-quote";
 import { submitThenFocusError } from "../forms/focus-error";
@@ -66,8 +68,8 @@ import { useAppForm } from "../forms/form";
 import { CopyText, DayWindowsInline } from "../hours/hours-text";
 import { PickupNotes } from "../order/pickup-notes";
 import { AddressFieldset } from "../storefront/address-fieldset";
-import { CheckoutHint } from "../storefront/checkout-hint";
 import { sanitizeAddress } from "../storefront/checkout-form";
+import { CheckoutHint } from "../storefront/checkout-hint";
 import {
 	PickupLocationRadioList,
 	PickupSummaryCard,
@@ -165,6 +167,7 @@ export function ClaimCheckoutPage({
 		storeName,
 		country,
 		collectsFromCustomer,
+		booksCouriers,
 		minNoticeDays,
 		openingHours,
 	} = store;
@@ -419,6 +422,19 @@ export function ClaimCheckoutPage({
 		}
 	}, [minYmd, floorYmd]);
 
+	// The storefront checkout's overseas-number note (z8r3fdh274). Here the
+	// number is KNOWN — the claim froze the WhatsApp it was sent to — so the
+	// test is the courier's own: can a courier in the store's country phone it?
+	const overseasNote = overseasCourierNote({
+		booksCouriers,
+		deliveryMethod: watchedMethod,
+		localNumber: toDomesticContactPhone(open.waPhone, country) !== null,
+		collectsFromCustomer,
+		storeCountry: country,
+		storeName,
+		locale: store.locale,
+	});
+
 	function handleSubmit(e: FormEvent) {
 		submitThenFocusError(form, e);
 	}
@@ -461,9 +477,7 @@ export function ClaimCheckoutPage({
 	// biome-ignore lint/correctness/useExhaustiveDependencies: form identity is stable; values read fresh inside.
 	useEffect(() => {
 		setTimeMove(null);
-		const dayEpoch = watchedDate
-			? mytMidnightFromYmd(watchedDate)
-			: Number.NaN;
+		const dayEpoch = watchedDate ? mytMidnightFromYmd(watchedDate) : Number.NaN;
 		const repair = () => {
 			setClockTick((t) => t + 1);
 			if (!repairTimed || Number.isNaN(dayEpoch)) return;
@@ -909,6 +923,11 @@ export function ClaimCheckoutPage({
 														? "Collection is by rider, so the fee depends on your address — you'll see it here once you pick a suggestion"
 														: "Delivery is by rider, so the fee depends on your address — you'll see it here once you pick a suggestion"}
 													{selfCollectAvailable ? " — pick up instead" : ""}.
+												</p>
+											) : null}
+											{overseasNote ? (
+												<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+													{overseasNote}
 												</p>
 											) : null}
 										</div>

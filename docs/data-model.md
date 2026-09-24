@@ -181,7 +181,7 @@ First-class CRM entity, **keyed by `(retailerId, waPhone)`**. Full lifecycle in 
 | `searchText` | string | Lowercase haystack (name + pushname + phone) powering the search index. |
 | `orderCount`, `totalSpent`, `firstOrderAt`, `lastOrderAt` | number | **Denormalized aggregates**, refreshed on order create/cancel. |
 
-Display name resolves `name → waProfileName → formatted phone` via `getDisplayName` (mirrored in [`convex/lib/customer.ts`](../convex/lib/customer.ts) + [`src/lib/customer.ts`](../src/lib/customer.ts)).
+Display name resolves `name → waProfileName → formatted phone` via `getDisplayName` — one implementation in [`convex/lib/customer.ts`](../convex/lib/customer.ts), re-exported for the dashboard by [`src/lib/customer.ts`](../src/lib/customer.ts). `waPhone` is E.164 digits without the `+` (`60123456789`, `447911123456`), exactly Meta's inbound `from` — buyers may give a number from any country, so no country column exists or is needed; see [`phone-numbers.md`](./phone-numbers.md).
 
 **Indexes:** `by_retailer`, `by_retailer_phone` (find-or-create key), `by_retailer_lastOrder` (recency sort), `by_retailer_ltv` (lifetime-value sort), `by_retailer_orderCount` (order-count sort). **Search index:** `search_customers` (filtered by `retailerId`).
 
@@ -218,14 +218,16 @@ Immutable append-only audit log. One row per status transition or notable action
 
 ## The mirrored-validation pattern
 
-Validation helpers that must run on **both** the Convex backend and the React frontend are duplicated, not shared, because Convex bundles from `convex/` and the frontend bundles from `src/`:
+Some validation helpers that run on **both** the Convex backend and the React frontend are duplicated rather than shared:
 
 | Concern | Backend | Frontend |
 |---|---|---|
-| Slug / phone / email | [`convex/lib/slug.ts`](../convex/lib/slug.ts) | [`src/lib/slug.ts`](../src/lib/slug.ts) |
-| Customer display name | [`convex/lib/customer.ts`](../convex/lib/customer.ts) | [`src/lib/customer.ts`](../src/lib/customer.ts) |
+| Slug / store-name shape | [`convex/lib/slug.ts`](../convex/lib/slug.ts) | [`src/lib/slug.ts`](../src/lib/slug.ts) |
+| Email | [`convex/lib/slug.ts`](../convex/lib/slug.ts) | [`src/lib/schemas.ts`](../src/lib/schemas.ts) |
 | Variant helpers (label, cartesian, caps) | [`convex/lib/variant.ts`](../convex/lib/variant.ts) | [`src/lib/variant.ts`](../src/lib/variant.ts) |
 | Legal versions | [`convex/lib/legal.ts`](../convex/lib/legal.ts) | [`src/lib/legal.ts`](../src/lib/legal.ts) |
 | Address (backend) / form schema (frontend) | [`convex/lib/address.ts`](../convex/lib/address.ts) | [`src/lib/schemas.ts`](../src/lib/schemas.ts) |
 
 **Rule:** when you change one side, change the mirror in the same PR. The backend copy is the security boundary; the frontend copy is UX.
+
+Phone validation and the customer display helpers are **not** mirrored: the client imports the server's own pure modules (`convex/lib/slug.ts`, `convex/lib/buyerPhone.ts`, and `convex/lib/customer.ts` via its `src/lib/customer.ts` re-export), so the two sides can't drift. See [`validation-and-rate-limits.md`](./validation-and-rate-limits.md#the-mirrored-validation-pattern).

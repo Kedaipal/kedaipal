@@ -280,6 +280,7 @@ function CheckoutRoute() {
 						collectsFromCustomer={
 							retailer.deliveryCollectsFromCustomer ?? false
 						}
+						booksCouriers={retailer.booksCouriers ?? false}
 						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
 						openingHours={retailer.openingHours}
 						minOrderValue={retailer.minOrderValue}

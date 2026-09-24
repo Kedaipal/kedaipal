@@ -977,7 +977,7 @@ Sellers can optionally attach a `managerName` + `managerWaPhone` to each pickup 
 
 - **Not frozen onto the order snapshot** — fetched live at order detail render time via `pickupLocations.getOwnedById`. Reason: if a seller swaps managers, today's pending pickup orders should route to the *new* manager. Snapshot pattern only applies to buyer-facing data (label, address, lat/lng).
 - **Not exposed on the public storefront query** — `listActivePublicBySlug` filters them out. Manager info is operational, not buyer-facing.
-- **Validated server-side** — `managerWaPhone` runs through the same `assertValidWaPhone` used by the retailer's primary contact number (8–15 digits, country code required). `managerName` trimmed, ≤60 chars.
+- **Validated server-side** — `managerWaPhone` runs through the same `assertValidMobileForCountry` as the retailer's primary contact number: a mobile of the **store's** country (a seller-side number, so it stays store-locked even though buyers may give any country's — see [`phone-numbers.md`](./phone-numbers.md)); the field wears the store's fixed plate. `managerName` trimmed, ≤60 chars.
 - **Empty string = clear** on `update`, matching the existing optional-field convention.
 - **Phone is the gate, name is cosmetic.** The Notify button on the order detail page renders whenever `managerWaPhone` is set — the wa.me link only needs the phone. `managerName` is purely the button label: present → "Notify Aishah on WhatsApp", absent → "Notify on WhatsApp". The two fields are independently optional; sellers can set either, both, or neither.
 

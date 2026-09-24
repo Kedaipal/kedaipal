@@ -24,13 +24,7 @@ import {
 	Truck,
 	XCircle,
 } from "lucide-react";
-import {
-	type FormEvent,
-	type ReactNode,
-	useEffect,
-	useRef,
-	useState,
-} from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { isSafeTrackingUrl } from "../../convex/lib/couriers";
@@ -40,28 +34,28 @@ import {
 	formatFulfilmentDateTime,
 } from "../../convex/lib/fulfilmentDate";
 import { describeGatewayMethods } from "../../convex/lib/hitpay";
-import { orderPickupNotes } from "../../convex/lib/pickupNote";
 import { isFreeOrder, isMockupGateClosed } from "../../convex/lib/order";
-import { formatEventMoment } from "../../convex/lib/productEvent";
 import { paymentDeadlineApplies } from "../../convex/lib/orderClaims";
 import { isOrderDocPaid } from "../../convex/lib/orderDocument";
 import { paymentMethodLabel } from "../../convex/lib/paymentMethod";
+import { orderPickupNotes } from "../../convex/lib/pickupNote";
+import { formatEventMoment } from "../../convex/lib/productEvent";
 import {
 	type OrderBookingSpan,
 	OrderItemLine,
 } from "../components/order/order-item-line";
 import { PaymentDueCountdown } from "../components/order/payment-due-countdown";
 import { PickupNotes } from "../components/order/pickup-notes";
-import { RescheduledNote } from "../components/order/rescheduled-note";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
+import { RescheduledNote } from "../components/order/rescheduled-note";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
+import { BuyerPhoneRepairForm } from "../components/storefront/buyer-phone-repair-form";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
 import { ManualPaymentDialog } from "../components/storefront/manual-payment-dialog";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { CopyButton } from "../components/ui/copy-button";
-import { MyPhoneInput } from "../components/ui/my-phone-input";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { getConvexHttpClient } from "../lib/convex-server";
@@ -1997,7 +1991,8 @@ function PushSendingCard({
  * The confirmation push gave up (86eyf1rck). Two very different truths behind
  * one status, so two very different asks:
  *
- *  - `unreachable` — the number can't receive WhatsApp (typo'd, no account).
+ *  - `unreachable` — the number can't receive WhatsApp (typo'd, no account,
+ *    or a country Meta won't let us message — error 130497).
  *    Only the buyer can fix that, so the primary action is **editing the
  *    number**, which re-sends immediately. The wa.me send stays as a quiet
  *    secondary route (it also repairs the number, via the inbound path).
@@ -2023,36 +2018,7 @@ function PushFailedCard({
 	const pretty = order.customer.waPhone
 		? formatMobile(order.customer.waPhone)
 		: "";
-	const updatePhone = useMutation(api.orders.updateBuyerPhone);
 	const [editing, setEditing] = useState(false);
-	const [value, setValue] = useState("");
-	const [busy, setBusy] = useState(false);
-	// Focus on open rather than autoFocus: the field only mounts when the buyer
-	// taps "Update my number", so this is a response to their action, not a
-	// page-load surprise. One-shot — a callback ref would re-fire every keystroke.
-	const phoneInputRef = useRef<HTMLInputElement>(null);
-	useEffect(() => {
-		if (editing) phoneInputRef.current?.focus();
-	}, [editing]);
-
-	async function handleSave(e: FormEvent) {
-		e.preventDefault();
-		setBusy(true);
-		try {
-			await updatePhone({ token, waPhone: value.trim() });
-			toast.success(
-				ms
-					? "Nombor dikemas kini — pengesahan sedang dihantar"
-					: "Number updated — sending your confirmation now",
-			);
-			setEditing(false);
-			setValue("");
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setBusy(false);
-		}
-	}
 
 	return (
 		<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-800 dark:bg-amber-950/50">
@@ -2076,8 +2042,8 @@ function PushFailedCard({
 			<p className="text-sm text-amber-950/90 dark:text-amber-100/90">
 				{unreachable
 					? ms
-						? `Kami tak dapat hantar ke ${pretty} — nombor itu mungkin tersilap taip atau tiada WhatsApp. Pesanan anda tetap disahkan dan butiran di bawah adalah muktamad. Simpan pautan ini — ini halaman pesanan anda.`
-						: `We couldn't deliver it to ${pretty} — that number may have a typo, or no WhatsApp account. Your order is still confirmed and everything below is final. Keep this link — this page is your order.`
+						? `Kami tak dapat hantar ke ${pretty} — nombor itu mungkin tersilap taip, tiada WhatsApp, atau dari negara yang belum boleh kami hantar mesej WhatsApp. Pesanan anda tetap disahkan dan butiran di bawah adalah muktamad. Simpan pautan ini — ini halaman pesanan anda.`
+						: `We couldn't deliver it to ${pretty} — that number may have a typo, no WhatsApp account, or be in a country we can't message on WhatsApp yet. Your order is still confirmed and everything below is final. Keep this link — this page is your order.`
 					: ms
 						? `Masalah di pihak kami, bukan nombor anda. Pesanan anda telah disahkan dan ${storeName} sudah menerimanya — anda masih boleh membayar di bawah. Simpan pautan ini — ini halaman pesanan anda.`
 						: `That's a problem on our side, not with your number. Your order is confirmed and ${storeName} already has it — you can still pay below. Keep this link — this page is your order.`}
@@ -2085,55 +2051,21 @@ function PushFailedCard({
 
 			{unreachable ? (
 				editing ? (
-					<form onSubmit={handleSave} className="flex flex-col gap-2">
-						<label
-							htmlFor="repair-wa-phone"
-							className="text-xs font-medium text-amber-950 dark:text-amber-100"
-						>
-							{ms ? "Nombor WhatsApp anda" : "Your WhatsApp number"}
-						</label>
-						{/* Same plated control as the storefront checkout field this is
-						    repairing — the buyer has already met it once, and it's the
-						    only shape `assertValidMobileForCountry` behind it accepts
-						    (judged by the store's country, which rides the order
-						    payload). Its own neutral chrome inside the amber card, so
-						    the control reads as a control and not as part of the
-						    warning. */}
-						<MyPhoneInput
-							id="repair-wa-phone"
-							ref={phoneInputRef}
-							value={value}
-							onChange={setValue}
-							country={order.retailerCountry}
-							className="bg-white dark:bg-amber-950"
-						/>
-						<div className="flex gap-2">
-							<Button
-								type="submit"
-								isLoading={busy}
-								disabled={busy || value.trim().length === 0}
-								className="h-11 flex-1"
-							>
-								{ms ? "Simpan & hantar" : "Save & resend"}
-							</Button>
-							<Button
-								type="button"
-								variant="outline"
-								onClick={() => setEditing(false)}
-								disabled={busy}
-								className="h-11"
-							>
-								{ms ? "Batal" : "Cancel"}
-							</Button>
-						</div>
-					</form>
+					// Mounted per edit, so each attempt starts clean. It judges the
+					// number with the same buyer picker + parser as checkout, and
+					// never spends a server try on a number that can't parse.
+					<BuyerPhoneRepairForm
+						token={token}
+						failedWaPhone={order.customer.waPhone}
+						storeCountry={order.retailerCountry}
+						locale={order.retailerLocale}
+						onSaved={() => setEditing(false)}
+						onCancel={() => setEditing(false)}
+					/>
 				) : (
 					<Button
 						type="button"
-						onClick={() => {
-							setValue("");
-							setEditing(true);
-						}}
+						onClick={() => setEditing(true)}
 						className="h-12 w-full text-base"
 					>
 						{ms ? "Kemas kini nombor" : "Update my number"}
