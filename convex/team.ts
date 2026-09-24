@@ -79,8 +79,10 @@ function mintInviteToken(): { token: string; hash: string } {
 }
 
 /** "a•••@gmail.com" — enough for the holder of a link to recognise which
- * inbox was invited, useless to anyone else. */
-function maskEmail(email: string): string {
+ * inbox was invited, useless to anyone else. Exported for the order
+ * timeline's actor names (convex/orders.getTimeline), which fall back to the
+ * same masking when a member never set a display name. */
+export function maskEmail(email: string): string {
 	const at = email.indexOf("@");
 	if (at <= 1) return `•••${email.slice(at)}`;
 	return `${email[0]}•••${email.slice(at)}`;

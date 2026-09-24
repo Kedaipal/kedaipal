@@ -140,11 +140,15 @@ caller). Each carries a "do not fix to resolveMyRetailer" comment naming why.
 - Meta templates: none. `PRIVACY_VERSION`: no bump (member emails/names are
   seller-side users on the same basis as owners) — note in the release PR.
 
-## Follow-ups landing in PR2/PR3 (stacked)
+## The three PRs (stacked; review #302 → #304 → #305)
 
-PR2: Team tab + permission matrix UI (presets "Front-desk helper" / "Store
-manager"), `/join/$token` route states, onboarding banners (pending invite /
-removed / leave-team confirm), member chrome (locked tabs with "ask {owner}",
-hidden consent banner, sign-in redirect fix so an existing account's sign-in
-doesn't eat the invite link). PR3: timeline "· by {name}", admin sellers Seats
-column, pricing copy ("You + 2 teammates", drop the Soon badge), shipped-log.
+PR1 `#302`: everything above the UI line. PR2 `#304`: Team tab + matrix +
+presets, `/join/$token` states, onboarding banners + `confirmLeaveTeam`
+confirm, member chrome (AreaGate over every settings tab, RouteAreaGuard
+around the shell's Outlet, nav gating, hidden consent banner, the sign-in
+`forceRedirectUrl` fix). PR3 `#305`: the order **Activity card** (the home of
+"· by Aina / by you" — removed members still resolve because their row is
+kept), the admin directory's Seats fact (table column + card + sheet + Copy
+summary + CSV via `sellerSeatsLabel`, one author), and the pricing page's
+promise going LIVE ("1 seat — just you" / "You + 2 teammates", comparison row
+1/3/6, Soon badges and the FAQ's coming-soon line removed, en/ms/zh).

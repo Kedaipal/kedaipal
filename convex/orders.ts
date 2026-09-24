@@ -34,6 +34,7 @@ import {
 	recordOrderCancelled,
 	recordOrderCreated,
 } from "./subscriptionUsage";
+import { maskEmail } from "./team";
 import {
 	isAdmin,
 	logAdminAction,
@@ -2923,6 +2924,72 @@ async function assertExportAccess(
 	if (!access.actingAsAdmin)
 		await assertPlanFeature(ctx, retailerId, "orderInbox");
 }
+
+/**
+ * The order's event timeline for the SELLER detail page (86exr91r4) — the
+ * surface where attribution finally shows. Actor names resolve server-side
+ * from `retailerMembers` (REMOVED rows included — that's why removal keeps
+ * the row), the owner reads as the owner, and the caller as "you"; system
+ * and buyer events carry no actor. Newest first. Buyer surfaces never see
+ * this query — the tracking page has its own, name-free timeline.
+ */
+export const getTimeline = query({
+	args: { orderId: v.id("orders") },
+	handler: async (
+		ctx,
+		{ orderId },
+	): Promise<
+		Array<{
+			id: Id<"orderEvents">;
+			status: Doc<"orderEvents">["status"];
+			stageLabel?: string;
+			note?: string;
+			createdAt: number;
+			/** Present only for seller-side events. */
+			actor?: { name: string; you: boolean; isOwner: boolean };
+		}>
+	> => {
+		const { order, access } = await requireOrderAccess(ctx, orderId, {
+			area: "orders",
+			level: "read",
+		});
+		const events = await ctx.db
+			.query("orderEvents")
+			.withIndex("by_order", (q) => q.eq("orderId", order._id))
+			.collect();
+		// Per-store name map — bounded by the seat cap (removed rows included so
+		// history keeps resolving after someone leaves).
+		const members = await ctx.db
+			.query("retailerMembers")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", order.retailerId))
+			.collect();
+		const names = new Map<string, string>();
+		for (const m of members) {
+			if (m.userId) names.set(m.userId, m.displayName ?? maskEmail(m.email));
+		}
+		const ownerUserId = access.retailer.userId;
+		return events
+			.sort((a, b) => b.createdAt - a.createdAt)
+			.map((e) => ({
+				id: e._id,
+				status: e.status,
+				stageLabel: e.stageLabel,
+				note: e.note,
+				createdAt: e.createdAt,
+				actor:
+					e.actorUserId === undefined
+						? undefined
+						: {
+								you: e.actorUserId === access.userId,
+								isOwner: e.actorUserId === ownerUserId,
+								name:
+									e.actorUserId === ownerUserId
+										? "the owner"
+										: (names.get(e.actorUserId) ?? "a former teammate"),
+							},
+			}));
+	},
+});
 
 /**
  * Seller-side access to a single order: the store's owner, a member whose

@@ -98,6 +98,7 @@ function seller(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 		slug: "mak-kuih",
 		ownerUserId: "u_owner",
 		ownerIsAdmin: false,
+		seats: { active: 1, cap: 3, capUnlimited: false, invited: 0 },
 		isFoundingMember: false,
 		subscriptionStatus: "trialing",
 		plan: "pro",

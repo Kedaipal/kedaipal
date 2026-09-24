@@ -89,6 +89,7 @@ import {
 	type ShipmentFields,
 	ShipmentTrackingCard,
 } from "../components/order/shipment-tracking";
+import { ActivityCard } from "../components/order/activity-card";
 import {
 	DeliveryAddressDisplay,
 	formatAddressInline,
@@ -2159,6 +2160,11 @@ function OrderDetailRoute() {
 					</>
 				) : null}
 			</section>
+
+			{/* Order activity (86exr91r4) — the event history with attribution
+			    ("by Aina" / "by you"), the visible payoff of team seats. LAST of
+			    the cards on purpose: it's reference material, not an action. */}
+			<ActivityCard orderId={order._id} />
 
 			{nextStage ? (
 				<MarkShippedDialog

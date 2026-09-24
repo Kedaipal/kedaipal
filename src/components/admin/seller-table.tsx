@@ -8,6 +8,7 @@ import {
 	sellerBucket,
 	sellerExpiry,
 	sellerPlanLabel,
+	sellerSeatsLabel,
 	sellerRail,
 	sellerReason,
 } from "../../lib/admin-seller-view";
@@ -51,10 +52,11 @@ export function SellerTable({
 		>
 			<TableHeader>
 				<TableRow className="bg-muted/40 hover:bg-muted/40">
-					<TableHead className="w-[23%] pl-4">Store</TableHead>
-					<TableHead className="w-[27%]">Owner contact</TableHead>
-					<TableHead className="w-[14%]">Status</TableHead>
-					<TableHead className="w-[12%]">Plan</TableHead>
+					<TableHead className="w-[22%] pl-4">Store</TableHead>
+					<TableHead className="w-[25%]">Owner contact</TableHead>
+					<TableHead className="w-[13%]">Status</TableHead>
+					<TableHead className="w-[11%]">Plan</TableHead>
+					<TableHead className="w-[8%]">Seats</TableHead>
 					<TableHead className="w-[16%]">Expires / renews</TableHead>
 					<TableHead className="w-[112px] pr-4 text-right">
 						<span className="sr-only">Actions</span>
@@ -150,6 +152,9 @@ function SellerTableRow({
 						{sellerRail(seller)}
 					</span>
 				</div>
+			</TableCell>
+			<TableCell className="py-3">
+				<span className="text-sm">{sellerSeatsLabel(seller)}</span>
 			</TableCell>
 			<TableCell className="py-3">
 				<ExpiryText expiry={expiry} />
