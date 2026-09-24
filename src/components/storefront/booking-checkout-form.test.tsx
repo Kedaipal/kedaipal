@@ -202,3 +202,20 @@ describe("BookingCheckoutForm — WhatsApp number", () => {
 		});
 	});
 });
+
+/**
+ * The stay/package summary is the third surface that carried the truncated
+ * name (`z8r3fdhpaj`): same `min-w-0 truncate` label, same `flex-1` dotted
+ * leader as the two Order Tickets.
+ */
+describe("stay summary — a long listing name wraps instead of truncating", () => {
+	it("does not truncate the product name", () => {
+		renderForm();
+		// The name appears in the header too — take the summary's own label cell.
+		const label = [
+			...document.querySelectorAll<HTMLElement>("span.wrap-anywhere"),
+		].find((s) => s.textContent === PRODUCT.name);
+		expect(label).toBeTruthy();
+		expect(label?.className).not.toContain("truncate");
+	});
+});

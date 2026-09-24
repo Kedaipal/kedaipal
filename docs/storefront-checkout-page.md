@@ -85,10 +85,12 @@ chosen design (Zaki, 30 Jul — "follow the design closely, down to the font"):
   letterspaced mono `ORDER TICKET · DRAFT` line.
 - **Receipt lines in monospace** with dotted leaders and **bare amounts**
   (`5× Quantity item ······ 250.00`) — no thumbnails, RM appears only on the
-  TOTAL row, like a printed kedai receipt. Charges (pickup/delivery fees,
-  FREE-threshold, pending, calculating) print as muted receipt lines in the
-  same block; there is **no Subtotal row** (the items above sum in plain
-  sight — per the design).
+  TOTAL row, like a printed kedai receipt. The **variant sits on its own muted
+  line** under the name and the label **wraps** rather than truncating (see
+  [Long names](#long-names-wrap-they-never-truncate-z8r3fdhpaj) below).
+  Charges (pickup/delivery fees, FREE-threshold, pending, calculating) print
+  as muted receipt lines in the same block; there is **no Subtotal row** (the
+  items above sum in plain sight — per the design).
 - **Tap a line to edit** (the design's own caption): the quantity stepper +
   unit price reveal inline; custom lines reveal a Remove chip. A permanent
   mono hint ("TAP AN ITEM TO EDIT") keeps it discoverable, and a line with a
@@ -222,6 +224,82 @@ Six fixes from the 31 Jul release, all on this page:
   number; the glyphs alone are the control now (hover fill only). The 44px tap
   target is unchanged — `tap-target` sizes the hit area, the border was
   decoration. Same treatment on the custom line's Remove.
+
+## Long names wrap — they never truncate (`z8r3fdhpaj`)
+
+The receipt is the **last screen before the `wa.me` handoff**, so every
+character of what the buyer is about to order has to be readable there without
+tapping anything. It wasn't: the label was one `truncate`d string built as
+`` `${qty}× ${name} · ${optionLabel}` ``, so a long name ate the variant off
+the end — and for a made-to-order seller (a cake with a size, a flavour and a
+name piped on it) **the variant _is_ the order**. There was no tooltip, and the
+stepper the row opens doesn't repeat the name, so the text was simply gone.
+
+What the rows do now:
+
+- **The variant left the name string.** `receiptLabel()` returns `1× Kek Batik`
+  and nothing else; `optionLabel` renders as its own muted line beneath. No
+  amount of name length can push it out of view, and it no longer matters that
+  `optionLabel` contains its own `·` separators.
+- **The label wraps with `wrap-anywhere`, not `break-words`.** Only
+  `overflow-wrap: anywhere` shrinks a flex item's **min-content** size, so a
+  60-char SKU-style name breaks mid-word instead of forcing the whole ticket to
+  scroll sideways. `break-words` looks equivalent and isn't.
+- **The dotted leader bows out on its own.** It is a `flex-1` item with a `0`
+  basis, so once a long label claims the row there is no free space left for it
+  to grow into — it collapses to zero width with no JS and no measuring, and
+  comes back the moment the name is short enough. `items-baseline` keeps the
+  caret and the amount on the label's **first** line, so the money column still
+  lines up with the fee rows below it whether the name is one line or five.
+- **The note wraps in full** (`whitespace-pre-line wrap-anywhere`) — it is
+  usually the instructions the buyer typed themselves, which is the last text
+  that should be cut. Deliberately not clamped: "readable without tapping" is
+  the point.
+- **44px tap target** (`py-2.5` on a `leading-6` row, replacing `min-h-8`'s
+  32px), and the note/attachment sub-lines moved `pl-4` → `pl-5` so every
+  sub-line shares one text column with the label (the caret's 12px plus the
+  row's 8px gap).
+
+`FeeLine` keeps `truncate` **for the reading, not because the text is short** —
+one charge, one line, is what makes the fee block scannable under the items.
+Its labels are not all fixed: `Pickup · {pickupFeeLabel}` carries a
+seller-authored pickup-point name (up to `LABEL_MAX` = 60 chars,
+`convex/pickupLocations.ts`), so about 33 characters fit at 360px and a long
+point name *is* cut there. That's accepted because the full name is rendered
+unwrapped in the pickup picker directly above it
+(`pickup-location-options.tsx`), so the buyer has already read it in full and
+the fee row is only echoing which one they chose.
+
+The same fix lands on two more surfaces that rendered the identical
+`min-w-0 truncate` + leader row:
+
+- the **booking/stay summary** (`booking-checkout-form.tsx` — "Your stay" /
+  "Your package");
+- the **claim ticket** (`claim/claim-ticket.tsx`) — see below.
+
+### The claim ticket is the second Order Ticket (`z8r3fdhpaj`, PR review)
+
+`/claim/<token>` renders a byte-identical Order Ticket from its own component:
+same mono type, same dotted leaders, masthead reading `Order ticket · To
+complete`. The first pass of this fix swept the booking checkout and **missed
+it**, and there the bug was worse — the label was
+`` `${name} (${variantLabel})` `` plus a **trailing** `` ×${quantity} ``, so a
+long name ate the option *and* how many the buyer was buying, on the last
+screen before they commit to a seller-sent link.
+
+Two changes stop it recurring:
+
+- **One definition.** `src/lib/receipt-line.ts` owns `receiptLineLabel()` plus
+  `RECEIPT_LABEL_CLASS` / `RECEIPT_VARIANT_CLASS`, and both tickets build their
+  label from it. The quantity **leads** there (`4× Name`, always printed,
+  including `1×`) precisely because a trailing `×4` is the first thing a narrow
+  column cuts. A test asserts both tickets use it and that neither re-joins the
+  variant into the name.
+- **The claim ticket became a pure component** (`ClaimTicket`), like
+  `CheckoutSummary` already was. It had drifted *because* it lived inside a
+  page that pulls live quotes, a calendar and a form — the page cannot be
+  rendered in a unit test (it OOMs), so nothing could ever have caught this.
+  `ClaimTicket` takes resolved props and has its own test.
 
 ## Follow-ups (PR2 / PR3 of 86eybrhrt)
 
