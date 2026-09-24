@@ -47,9 +47,17 @@ function receiptAmount(sen: number): string {
 	return (sen / 100).toFixed(2);
 }
 
-/** "1× Kek Batik · 1kg" — the receipt line's left column. */
+/**
+ * "1× Kek Batik" — the receipt line's name column.
+ *
+ * The variant is deliberately NOT joined on here. It used to be (`name · 1kg`
+ * in one truncated string), which made the option the first thing a narrow
+ * screen cut off — and for a made-to-order seller the option IS the order
+ * (`z8r3fdhpaj`). It now renders as its own muted sub-line, so no amount of
+ * name length can push it out of view.
+ */
 function receiptLabel(item: CartItem): string {
-	return `${item.quantity}× ${item.name}${item.optionLabel ? ` · ${item.optionLabel}` : ""}`;
+	return `${item.quantity}× ${item.name}`;
 }
 
 interface CheckoutSummaryProps {
@@ -143,7 +151,7 @@ export function CheckoutSummary({
 											prev === item.variantId ? null : item.variantId,
 										)
 									}
-									className="flex min-h-8 w-full items-baseline gap-2 py-1 text-left font-mono text-[13px] leading-6"
+									className="flex w-full items-baseline gap-2 py-2.5 text-left font-mono text-[13px] leading-6"
 								>
 									{/* Disclosure caret — these rows have been tappable since the
 									    ticket redesign, but the only hint was a caption under the
@@ -156,7 +164,26 @@ export function CheckoutSummary({
 											expanded ? "rotate-180" : ""
 										}`}
 									/>
-									<span className="min-w-0 truncate">{receiptLabel(item)}</span>
+									{/* Wraps, never truncates — this is the last screen before the
+									    wa.me handoff, so every character of the name and the option
+									    has to be readable without tapping (`z8r3fdhpaj`).
+									    `wrap-anywhere`, not `break-words`: only `overflow-wrap:
+									    anywhere` shrinks the flex item's min-content size, so a
+									    60-char unbroken name breaks instead of forcing the ticket
+									    to scroll sideways. */}
+									<span className="min-w-0 wrap-anywhere">
+										{receiptLabel(item)}
+										{item.optionLabel ? (
+											<span className="block text-muted-foreground">
+												{item.optionLabel}
+											</span>
+										) : null}
+									</span>
+									{/* The dotted leader takes the space left over — which is how it
+									    bows out on its own when the name is long enough to wrap: a
+									    `flex-1` item with a 0 basis simply has nothing to grow into
+									    once the label has claimed the row. Baseline alignment keeps
+									    the caret and the amount on the label's FIRST line. */}
 									<span
 										aria-hidden
 										className="flex-1 border-b-2 border-dotted border-border"
@@ -174,12 +201,12 @@ export function CheckoutSummary({
 								</button>
 
 								{item.note ? (
-									<p className="mb-1 truncate pl-4 font-mono text-[11px] text-muted-foreground">
+									<p className="mb-1 whitespace-pre-line pl-5 font-mono text-[11px] text-muted-foreground wrap-anywhere">
 										📝 {item.note}
 									</p>
 								) : null}
 								{item.customImageStorageId ? (
-									<p className="mb-1 pl-4 font-mono text-[11px] text-muted-foreground">
+									<p className="mb-1 pl-5 font-mono text-[11px] text-muted-foreground">
 										📎 Reference photo attached
 									</p>
 								) : null}
