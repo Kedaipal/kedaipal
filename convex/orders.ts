@@ -45,7 +45,6 @@ import {
 import {
 	assertValidFulfilmentDate,
 	assertValidFulfilmentTime,
-	DAY_MS,
 	hhmmFromMinutes,
 	matchesFulfilmentWindow,
 	ymdFromEpoch,
@@ -63,6 +62,7 @@ import {
 	type ProductEvent,
 	seatsLeft,
 } from "./lib/productEvent";
+import { closedDateIssue } from "./lib/closedDates";
 import { assertWithinOpeningHours } from "./lib/openingHours";
 import { orderingPausedMessage } from "./lib/seasonalHold";
 import { orderDocumentTitle } from "./lib/orderDocument";
@@ -70,6 +70,7 @@ import { matchesBookingPeriod } from "./lib/bookingPeriod";
 import {
 	countBookedPerNight,
 	holdsCapacity,
+	occupiesNight,
 } from "./lib/bookingAvailability";
 import {
 	collectMinQuantityShortfalls,
@@ -1334,6 +1335,20 @@ export const create = mutation({
 				throw new ConvexError((err as Error).message);
 			}
 		}
+		// Closed dates (z8r3fdhpm7): a fulfilment date on one of the store's
+		// closed dates is refused FIRST — before prep and hours, because it is
+		// the truest reason (telling a buyer the cake needs 2 hours on a day the
+		// shop is shut sends them to the wrong fix). The checkout mirrors this
+		// with the same sentence (`closedDateMessage`). Exempt exactly where the
+		// opening hours are: an event's date is the seller's own, and counter
+		// checkout never reaches this path.
+		if (sanitizedFulfilmentDate !== undefined && eventLock === undefined) {
+			const closed = closedDateIssue(
+				retailer.closedDates,
+				sanitizedFulfilmentDate,
+			);
+			if (closed !== null) throw new ConvexError(closed);
+		}
 		// Prep floor (z8r3fdff97): the slowest item in the cart decides the
 		// earliest moment this order can be handed over. Re-derived from the
 		// live products, never trusted from the client — the cart line carries a
@@ -1761,7 +1776,6 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 		/** Absent = unlimited capacity (S7) — no denominator to show. */
 		capacityPerNight?: number;
 		peakOtherBookings: number;
-		nights: number;
 	};
 	// LEGACY pair (z8r3fdh3w1), still sent so un-migrated delivery/pickup rows
 	// resolve identically on the client. Both are ignored for bookings/RSVPs by
@@ -1921,7 +1935,6 @@ export const get = query({
 			| {
 					capacityPerNight?: number;
 					peakOtherBookings: number;
-					nights: number;
 			  }
 			| undefined;
 		if (
@@ -1940,15 +1953,16 @@ export const get = query({
 			);
 			const ownHold = holdsCapacity(order.status) ? 1 : 0;
 			let peak = 0;
-			for (const count of counts.values()) {
+			for (const [night, count] of counts) {
+				// Only the days THIS booking uses (z8r3fdhpm7): on a day an open-days
+				// package skips it holds nothing, so subtracting its own hold there
+				// would hide a neighbour — and a busy skipped day isn't its problem.
+				if (!occupiesNight(order, night)) continue;
 				peak = Math.max(peak, count - ownHold);
 			}
 			bookingContext = {
 				capacityPerNight: listing?.booking?.capacityPerNight,
 				peakOtherBookings: peak,
-				nights: Math.round(
-					(order.bookingCheckOut - order.bookingCheckIn) / DAY_MS,
-				),
 			};
 		}
 		return {

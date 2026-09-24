@@ -31,6 +31,8 @@ import {
 	assertValidBookingRange,
 	BOOKING_HORIZON_DAYS,
 	BOOKING_REQUEST_TTL_MS,
+	type ClosureRule,
+	closureRule,
 	findFullNights,
 	MAX_AVAILABILITY_WINDOW_DAYS,
 	MAX_BOOKING_NIGHTS,
@@ -40,6 +42,8 @@ import {
 	nightsBetween,
 	splitNightsByRate,
 } from "./lib/bookingAvailability";
+import { type ClosedDateRange, upcomingClosures } from "./lib/closedDates";
+import { closedWeekdays, storeClosedOn } from "./lib/openingHours";
 import { requireCustomerName } from "./lib/customer";
 import {
 	DAY_MS,
@@ -195,6 +199,20 @@ export const availability = query({
 		 * rate for every night. */
 		weekendPrice?: number;
 		weekendDays?: number[];
+		/** The store's upcoming closed dates (z8r3fdhpm7) — public (the label
+		 * is written for buyers). The calendar marks them, and a package that
+		 * absorbs them names the ones inside the buyer's term. */
+		closures: ClosedDateRange[];
+		/** What a closure does to THIS listing (`closureRule`): unavailable
+		 * nights for a stay, absorbed by an access package, skipped by an
+		 * open-days package. */
+		closureRule: ClosureRule;
+		/** Package listings only: the store's weekly days off. With `closures`
+		 * it is everything the calendar needs to answer "is the store shut?"
+		 * exactly as `requestBooking` will (`storeClosedOn`) — no package starts
+		 * on a shut day, and an open-days one steps over them. Empty for a stay,
+		 * which the weekly day off never touches. */
+		closedWeekdays: number[];
 	} | null> => {
 		if (!isMytMidnight(args.from) || !isMytMidnight(args.to)) {
 			throw new ConvexError("Availability window must be calendar days");
@@ -232,6 +250,12 @@ export const availability = query({
 			maxPackageQuantity: maxPackageQuantity(product.booking),
 			weekendPrice: product.booking?.weekendPrice,
 			weekendDays: product.booking?.weekendDays,
+			closures: upcomingClosures(retailer.closedDates),
+			closureRule: closureRule(product.booking),
+			closedWeekdays:
+				closureRule(product.booking) === "unavailable"
+					? []
+					: closedWeekdays(retailer.openingHours),
 		};
 	},
 });
@@ -338,12 +362,21 @@ export const requestBooking = mutation({
 			: 1;
 		let checkIn: number;
 		let checkOut: number;
+		// The shut days an OPEN-DAYS package steps over (z8r3fdhpm7) — empty for
+		// every other shape. Built from the same two facts the buyer calendar
+		// is sent, so the term the buyer was shown is the term charged. The same
+		// schedule refuses ANY package starting on a shut day.
+		let skipped: number[];
 		try {
-			({ checkIn, checkOut } = resolveBookingRange(
+			({ checkIn, checkOut, skipped } = resolveBookingRange(
 				product.booking,
 				args.checkIn,
 				args.checkOut,
 				packageQuantity,
+				storeClosedOn(
+					closedWeekdays(retailer.openingHours),
+					retailer.closedDates,
+				),
 			));
 		} catch (err) {
 			throw new ConvexError((err as Error).message);
@@ -373,7 +406,12 @@ export const requestBooking = mutation({
 		// (Convex serializes, so two buyers racing for the last spot can't both
 		// pass; a block/booking landing mid-checkout surfaces here as the
 		// friendly retry, never a silent failure).
-		const fullNights = await findFullNights(ctx, product, checkIn, checkOut);
+		// An open-days package is judged on the days it COUNTS: a block or a
+		// full night on a day it skips is a day the buyer never uses.
+		const skippedSet = new Set(skipped);
+		const fullNights = (
+			await findFullNights(ctx, product, checkIn, checkOut)
+		).filter((night) => !skippedSet.has(night));
 		if (fullNights.length > 0) {
 			throw new ConvexError(
 				`${formatFulfilmentDate(fullNights[0])} is no longer available — pick different dates`,
@@ -478,6 +516,10 @@ export const requestBooking = mutation({
 				!isPackageListing && product.booking?.weekendPrice !== undefined
 					? product.booking.weekendDays
 					: undefined,
+			// Frozen beside the span it explains (z8r3fdhpm7): which days inside
+			// an open-days term weren't counted. A later hours edit never
+			// re-describes a paid package.
+			bookingSkippedDays: skipped.length > 0 ? skipped : undefined,
 			securityDeposit,
 			// The check-in day IS the order's due date — the inbox sort, due-today
 			// strip and urgency badges all read fulfilmentDate, so a request for

@@ -21,13 +21,22 @@ import {
 	type DialIso,
 	parseBuyerWaPhone,
 } from "../../../convex/lib/buyerPhone";
+import {
+	closedDaysBetween,
+	closedRangeDays,
+	closureOn,
+	closuresWithin,
+	describeClosure,
+} from "../../../convex/lib/closedDates";
 import type { Country } from "../../../convex/lib/country";
 import {
 	DAY_MS,
 	formatFulfilmentDate,
+	MYT_OFFSET_MS,
 	todayMytMidnight,
 } from "../../../convex/lib/fulfilmentDate";
 import type { Locale } from "../../../convex/lib/locale";
+import { storeClosedOn } from "../../../convex/lib/openingHours";
 import { weekendDaysLabel } from "../../../convex/lib/productKind";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { MASK_PII } from "../../lib/analytics-privacy";
@@ -38,10 +47,12 @@ import {
 	bookingSpanNoun,
 	canCheckIn,
 	conflictCeiling,
+	describeNights,
+	formatNight,
 	mytMonthStart,
 	nextBookingSelection,
 	packageCountLabel,
-	packageEnd,
+	packageTerm,
 	type SelectionContext,
 } from "../../lib/booking-dates";
 import { buyerPhoneRejection } from "../../lib/buyer-phone-rejection";
@@ -58,6 +69,14 @@ import { BookingCalendar, BookingCalendarLegend } from "./booking-calendar";
 import { CheckoutSection } from "./checkout-form";
 
 const NOTE_MAX = 500;
+
+/** "September" — the visible month, named for the no-start-dates hint. */
+function monthName(monthStart: number): string {
+	return new Date(monthStart + MYT_OFFSET_MS).toLocaleDateString("en-MY", {
+		month: "long",
+		timeZone: "UTC",
+	});
+}
 
 export function BookingCheckoutForm({
 	retailerId,
@@ -92,9 +111,13 @@ export function BookingCheckoutForm({
 	// its spillover rows. Stable MYT anchors, so the reactive query caches per
 	// window as the buyer pages.
 	const todayMonth = mytMonthStart(todayMytMidnight(Date.now()));
-	const [month, setMonth] = useState(todayMonth);
-	const windowFrom = month;
-	const windowTo = addMytMonths(month, 2);
+	// The month the BUYER paged to. Null until they page: the calendar opens on
+	// the first month that has a start date in it (derived below, never synced
+	// into state) — an open-days package with a long closure used to open on a
+	// fully greyed month with nothing to say where the dates went.
+	const [pickedMonth, setPickedMonth] = useState<number | null>(null);
+	const windowFrom = pickedMonth ?? todayMonth;
+	const windowTo = addMytMonths(windowFrom, 2);
 	// `placeholderData: keepPreviousData` is load-bearing here, exactly as it is
 	// on the seller's inbox. Paging the month rewrites the query ARGS, which
 	// makes a new TanStack Query key, which makes `data` undefined until the new
@@ -141,6 +164,13 @@ export function BookingCheckoutForm({
 	const today = todayMytMidnight(Date.now());
 	const ctx: SelectionContext | null = useMemo(() => {
 		if (!availability) return null;
+		// The store's "shut all day?" — for a package only: no package starts on
+		// a shut day (owner call, 24 Sep), and an open-days one steps over them.
+		// A stay never reads the weekly day off.
+		const shut =
+			availability.closureRule === "unavailable"
+				? undefined
+				: storeClosedOn(availability.closedWeekdays, availability.closures);
 		return {
 			unavailable: new Set(availability.unavailable),
 			earliestCheckIn: today + availability.noticeDays * DAY_MS,
@@ -152,8 +182,48 @@ export function BookingCheckoutForm({
 			// three months needs three months of free nights, so raising it can
 			// legitimately close start dates that a single package could use.
 			packageQuantity: packages,
+			// An open-days package (z8r3fdhpm7) resolves each start's term from
+			// the same two facts the server uses, so the promised last day is the
+			// one charged.
+			isClosed: availability.closureRule === "skipped" ? shut : undefined,
+			startClosed: shut,
 		};
 	}, [availability, today, packages]);
+	// The first day in the loaded window that can start a booking — where the
+	// calendar opens, and what the "nothing left this month" hint points to.
+	const firstStart = useMemo(() => {
+		if (!ctx) return null;
+		for (let day = ctx.earliestCheckIn; day < windowTo; day += DAY_MS) {
+			if (canCheckIn(day, ctx)) return day;
+		}
+		return null;
+	}, [ctx, windowTo]);
+	const nextOfTodayMonth = addMytMonths(todayMonth, 1);
+	const autoAdvanced =
+		pickedMonth === null &&
+		firstStart !== null &&
+		firstStart >= nextOfTodayMonth;
+	const month = pickedMonth ?? (autoAdvanced ? nextOfTodayMonth : todayMonth);
+	// The shut days on the month in view (z8r3fdhpm7) — the calendar's hatch.
+	// Closed dates always; for a package the weekly day off too, because no
+	// package starts on one (and an open-days term steps over it). From today
+	// on only — hatching last month's Sundays is noise.
+	const closedDaySet = useMemo(() => {
+		// The grid also paints the neighbouring months' days in its first and
+		// last rows (at most six) — a closed 1 Oct under September must be
+		// hatched too.
+		const from = Math.max(month - 7 * DAY_MS, today);
+		const to = addMytMonths(month, 1) + 7 * DAY_MS;
+		const shut = ctx?.startClosed;
+		if (!shut) {
+			return new Set(closedDaysBetween(availability?.closures, from, to));
+		}
+		const days = new Set<number>();
+		for (let day = from; day < to; day += DAY_MS) {
+			if (shut(day)) days.add(day);
+		}
+		return days;
+	}, [availability?.closures, ctx, month, today]);
 
 	// A vanished/unbookable listing (archived, hidden, kind changed) — send the
 	// buyer back to the store rather than a dead form. `undefined` = loading.
@@ -211,13 +281,29 @@ export function BookingCheckoutForm({
 	// For a package the check-OUT is never stored, only derived — otherwise
 	// bumping the count from 1 to 3 would leave a stale end date sitting next to
 	// a tripled price. One source of truth: the start the buyer tapped.
-	const checkOut =
+	// The term, with the days an open-days package steps over (z8r3fdhpm7).
+	// `null` when the start can't carry it (then `packageOutgrewStart` speaks).
+	const term =
 		isPackage && selection.checkIn !== undefined
-			? packageEnd(selection.checkIn, packageLength, packageUnit, packages)
-			: selection.checkOut;
+			? packageTerm(selection.checkIn, ctx)
+			: null;
+	const checkOut = isPackage ? term?.checkOut : selection.checkOut;
+	const skippedDays = term?.skipped ?? [];
+	// What the calendar paints. A package is a validity WINDOW, so its band
+	// ends on the LAST USABLE day — the exclusive check-out painted as the end
+	// promised a day the buyer doesn't have ("Valid 2 – 9 Oct" beside a band
+	// to 10 Oct), the S7 rule the receipt already keeps. A stay keeps its
+	// check-out morning: that IS the day the guest taps and leaves.
 	const effectiveSelection: BookingSelection =
 		isPackage && selection.checkIn !== undefined
-			? { checkIn: selection.checkIn, checkOut }
+			? {
+					checkIn: selection.checkIn,
+					// No term (an open-days start the skips can't carry): mark the
+					// start alone — never a half-selection the calendar would read
+					// as "now pick a check-out".
+					checkOut:
+						checkOut !== undefined ? checkOut - DAY_MS : selection.checkIn,
+				}
 			: selection;
 	// Raising the count can legitimately close a start that a single package
 	// could use — three months needs three months of free nights. Say so rather
@@ -248,6 +334,54 @@ export function BookingCheckoutForm({
 		!isPackage && selection.checkIn !== undefined && checkOut === undefined
 			? conflictCeiling(selection.checkIn, ctx)
 			: null;
+	// What stops that stay, when it's the store being shut rather than full —
+	// a closure is public, so it's named ("booked out" was false, z8r3fdhpm7).
+	const conflictClosure = conflict
+		? closureOn(availability.closures, conflict.latestCheckOut)
+		: null;
+	// Nothing on the month in view can start a booking — said, with where the
+	// first one is, rather than left as a grid of grey days.
+	const nextMonthStart = addMytMonths(month, 1);
+	let monthHasStart = false;
+	for (
+		let day = Math.max(month, ctx.earliestCheckIn);
+		day < nextMonthStart && !monthHasStart;
+		day += DAY_MS
+	) {
+		monthHasStart = canCheckIn(day, ctx);
+	}
+	const startNoun = isPackage ? "start dates" : "check-in dates";
+	const noStartHint =
+		selection.checkIn !== undefined || availabilityStale
+			? null
+			: autoAdvanced
+				? `No ${startNoun} left in ${monthName(todayMonth)} — the first is ${formatFulfilmentDate(firstStart ?? month)}.`
+				: !monthHasStart
+					? `No ${startNoun} left in ${monthName(month)}${
+							firstStart !== null && firstStart >= nextMonthStart
+								? ` — the first is ${formatFulfilmentDate(firstStart)}`
+								: ""
+						}.`
+					: null;
+	// Store closed dates (z8r3fdhpm7): the ones on the month in view (marked
+	// and named under the grid), and — for a package that absorbs them — the
+	// ones inside the buyer's term.
+	// Whole ranges, never clipped to the month: a closure running 30 Sep –
+	// 1 Oct clipped to "Wed, 30 Sep" would tell the buyer 1 Oct is fine.
+	const monthClosures = (availability.closures ?? []).filter(
+		(range) => range.startDate < nextMonthStart && range.endDate >= month,
+	);
+	const termClosures =
+		isPackage &&
+		availability.closureRule === "absorbed" &&
+		selection.checkIn !== undefined &&
+		checkOut !== undefined
+			? closuresWithin(availability.closures, selection.checkIn, checkOut)
+			: [];
+	const termClosureDays = termClosures.reduce(
+		(sum, range) => sum + closedRangeDays(range),
+		0,
+	);
 
 	const dialCountry = pickedDialCountry ?? country;
 	const parsedPhone = parseBuyerWaPhone(phone, dialCountry);
@@ -366,12 +500,26 @@ export function BookingCheckoutForm({
 									: `${formatFulfilmentDate(selection.checkIn)} → ${formatFulfilmentDate(checkOut)}`}
 							</span>
 							<span className="flex-1 border-b-2 border-dotted border-border" />
-							<span className="font-medium">
+							{/* The count never wraps: "5 open / days" split across two
+							    lines reads as two figures beside a wrapped date. */}
+							<span className="shrink-0 whitespace-nowrap font-medium">
 								{isPackage
-									? `${nights} ${ms ? "hari" : "days"}`
+									? skippedDays.length > 0
+										? `${nights - skippedDays.length} ${ms ? "hari buka" : "open days"}`
+										: `${nights} ${ms ? "hari" : "days"}`
 									: `${nights} night${nights === 1 ? "" : "s"}`}
 							</span>
 						</div>
+						{/* An open-days package names the shut days it steps over
+						    (z8r3fdhpm7) — the reason its last day is later than the
+						    count suggests, stated before the request, not after. */}
+						{skippedDays.length > 0 ? (
+							<p className="text-xs text-muted-foreground">
+								{ms ? "Tidak dikira" : "Skips"}{" "}
+								{describeNights(skippedDays, formatNight, "day")}{" "}
+								{ms ? "(kedai tutup)" : "(store closed)"}
+							</p>
+						) : null}
 						{/* The split, itemised — exactly the two lines the order will
 						    carry, so "why is it RM 400?" is answered before the request
 						    is made. Only the kinds that occur; a stay that is all one
@@ -601,7 +749,7 @@ export function BookingCheckoutForm({
 					ctx={ctx}
 					month={month}
 					onMonthChange={(next) =>
-						setMonth(
+						setPickedMonth(
 							Math.min(
 								Math.max(next, todayMonth),
 								mytMonthStart(ctx.latestCheckIn),
@@ -611,6 +759,7 @@ export function BookingCheckoutForm({
 					minMonth={todayMonth}
 					maxMonth={mytMonthStart(ctx.latestCheckIn)}
 					weekendDays={hasWeekendRate ? weekendDays : undefined}
+					closedDays={closedDaySet}
 				/>
 				<BookingCalendarLegend
 					weekendLabel={
@@ -618,7 +767,38 @@ export function BookingCheckoutForm({
 							? `${weekendDaysLabel(weekendDays)} · ${formatPrice(weekendPrice, product.currency)}/night`
 							: undefined
 					}
+					// Whenever a hatched day is on screen — a weekly day off
+					// counts, not only a closed date.
+					showClosed={closedDaySet.size > 0}
+					selectionLabel={isPackage ? "Your package" : "Your stay"}
 				/>
+				{noStartHint ? (
+					<p className="text-xs font-medium text-foreground">{noStartHint}</p>
+				) : null}
+				{/* Why the hatched days are hatched — the reason the seller gave,
+				    for the closures on screen (z8r3fdhpm7). */}
+				{monthClosures.length > 0 ? (
+					<p className="text-xs text-muted-foreground">
+						{storeName} is closed{" "}
+						{monthClosures.map((range) => describeClosure(range)).join("; ")}
+						{availability.closureRule === "unavailable"
+							? " — no stays those nights."
+							: "."}
+					</p>
+				) : null}
+				{/* A package that ABSORBS closures (a month, an every-day pass) still
+				    sells through them — so the buyer is told which days inside their
+				    term the store is shut, before they pay, not after. */}
+				{termClosures.length > 0 ? (
+					<p className="rounded-xl border border-border bg-muted/60 px-3 py-2 text-xs leading-relaxed text-foreground">
+						<span className="font-semibold">
+							{storeName} is closed{" "}
+							{termClosures.map((range) => describeClosure(range)).join("; ")}
+						</span>{" "}
+						— {termClosureDays === 1 ? "that day is" : "those days are"} still
+						part of your package.
+					</p>
+				) : null}
 				{/* How many packages. A stepper, not a calendar drag: dragging
 				    across a package boundary is ambiguous (what does 3 days mean on
 				    a 2-day package?) and drag fights scroll on mobile — the reason
@@ -659,7 +839,7 @@ export function BookingCheckoutForm({
 						</div>
 						<p className="text-xs text-muted-foreground">
 							{selection.checkIn !== undefined && checkOut !== undefined
-								? `Runs ${formatFulfilmentDate(selection.checkIn)} – ${formatFulfilmentDate(checkOut - DAY_MS)}, paid as one booking.`
+								? `Runs ${formatFulfilmentDate(selection.checkIn)} – ${formatFulfilmentDate(checkOut - DAY_MS)}${skippedDays.length > 0 ? `, skipping ${skippedDays.length} closed day${skippedDays.length === 1 ? "" : "s"}` : ""}, paid as one booking.`
 								: `Take up to ${maxPackages} at once and pay as one booking.`}
 						</p>
 					</div>
@@ -676,8 +856,9 @@ export function BookingCheckoutForm({
 				) : null}
 				{conflict ? (
 					<p className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-foreground">
-						{formatFulfilmentDate(conflict.latestCheckOut)} onwards is booked
-						out. From this check-in you can stay{" "}
+						{conflictClosure
+							? `${storeName} is closed ${describeClosure(conflictClosure)}, so from this check-in you can stay `
+							: `${formatFulfilmentDate(conflict.latestCheckOut)} onwards is booked out. From this check-in you can stay `}
 						<span className="font-semibold">
 							{conflict.maxStayNights} night
 							{conflict.maxStayNights === 1 ? "" : "s"}
@@ -692,11 +873,26 @@ export function BookingCheckoutForm({
 						check-out day.
 					</p>
 				) : null}
+				{/* The rule itself, stated where the dates are picked (z8r3fdhpm7):
+				    an open-days package counts only the days the store is open. */}
+				{availability.closureRule === "skipped" ? (
+					<p className="text-xs text-muted-foreground">
+						This package counts only the days {storeName} is open — closed days
+						(hatched) are skipped, so it ends later.
+					</p>
+				) : availability.closureRule === "absorbed" &&
+					(availability.closedWeekdays.length > 0 ||
+						availability.closures.length > 0) ? (
+					<p className="text-xs text-muted-foreground">
+						A package starts on a day {storeName} is open — closed days
+						(hatched) after that still count toward it.
+					</p>
+				) : null}
 				{availability.noticeDays > 0 ? (
 					<p className="text-xs text-muted-foreground">
 						{storeName} needs {availability.noticeDays} day
-						{availability.noticeDays === 1 ? "" : "s"}&apos; notice before a
-						check-in.
+						{availability.noticeDays === 1 ? "" : "s"}&apos; notice before a{" "}
+						{isPackage ? "start date" : "check-in"}.
 					</p>
 				) : null}
 			</CheckoutSection>

@@ -1,6 +1,5 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "../../../convex/_generated/api";
 import { Link } from "@tanstack/react-router";
 import {
 	CalendarClock,
@@ -23,6 +22,7 @@ import {
 	useLayoutEffect,
 	useState,
 } from "react";
+import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import {
 	MAX_NOTICE_DAYS,
@@ -45,7 +45,7 @@ import { bookingSpanCounted, bookingSpanNoun } from "../../lib/booking-dates";
 import {
 	type FixHighlight,
 	highlightRingClass,
-	scrollToAnchor,
+	revealAnchorWhenMounted,
 } from "../../lib/country-setup-copy";
 import {
 	convexErrorMessage,
@@ -101,6 +101,7 @@ import {
 } from "./event-fields";
 import { submitThenFocusError } from "./focus-error";
 import { useAppForm } from "./form";
+import { PackageDayCounting, type StoreSchedule } from "./package-day-counting";
 import { type ProductImage, ProductImagesField } from "./product-images-field";
 import {
 	type CustomLineDraft,
@@ -131,6 +132,9 @@ export interface ProductFormSubmitValues {
 		packageLength?: number;
 		packageUnit?: PackageUnit;
 		autoAccept?: boolean;
+		/** "Only days you're open" (z8r3fdhpm7) — sent only with a day
+		 * package; absent clears it. */
+		skipsClosedDays?: boolean;
 		/** Weekend per-night rate (sen; S13) + the nights it covers. 0 clears
 		 * (server normalizes); omitted whenever a package length is set. */
 		weekendPrice?: number;
@@ -207,6 +211,8 @@ export type ProductFormDraft = {
 	packageUnit?: PackageUnit;
 	/** Instant book — skip the approval step. */
 	autoAccept?: boolean;
+	/** "Only days you're open" on a day package (z8r3fdhpm7). */
+	skipsClosedDays?: boolean;
 	/** Booking security deposit (RM, as typed; blank/absent = none). Optional
 	 * so pre-S5 draft literals (tests, stored handoffs) stay valid. */
 	securityDeposit?: string;
@@ -253,6 +259,7 @@ interface ProductFormProps {
 		packageLength?: string;
 		packageUnit?: PackageUnit;
 		autoAccept?: boolean;
+		skipsClosedDays?: boolean;
 		/** Booking security deposit as a major-unit string draft ("100") — wizard
 		 * handoff + edit seed. Blank/undefined = none. */
 		securityDeposit?: string;
@@ -306,6 +313,9 @@ interface ProductFormProps {
 	/** The store prices delivery by weight/zone (86eyeea1n) — promotes the
 	 * variant parcel-weight inputs out of Advanced (see VariantEditor). */
 	weightMode?: boolean;
+	/** The store's opening hours + closed dates (z8r3fdhpm7) — the "How are
+	 * the days counted?" example is built from them. */
+	storeSchedule?: StoreSchedule;
 	/** The store actually offers self-collect (`retailers.offerSelfCollect`).
 	 * The pickup note is written FOR a collecting buyer, so on a
 	 * delivery-only store the input would invite a seller to write something
@@ -691,6 +701,7 @@ function ProductSummaryStrip({
 		packageLength?: string;
 		packageUnit?: PackageUnit;
 		autoAccept?: boolean;
+		skipsClosedDays?: boolean;
 		weekendPrice?: string;
 		weekendDays?: readonly number[];
 	} | null;
@@ -785,6 +796,7 @@ export function ProductForm({
 	submitLabel,
 	onSubmit,
 	weightMode = false,
+	storeSchedule,
 	offerSelfCollect = true,
 	liveStock,
 	stickyAction,
@@ -809,8 +821,7 @@ export function ProductForm({
 		spotlightAnchor === anchor ? "spotlight" : undefined;
 	useEffect(() => {
 		if (!spotlightAnchor) return;
-		const frame = requestAnimationFrame(() => scrollToAnchor(spotlightAnchor));
-		return () => cancelAnimationFrame(frame);
+		return revealAnchorWhenMounted(spotlightAnchor);
 	}, [spotlightAnchor]);
 
 	const [images, setImages] = useState<ProductImage[]>(
@@ -842,6 +853,12 @@ export function ProductForm({
 	);
 	const [autoAccept, setAutoAccept] = useState(
 		initialValues?.autoAccept === true,
+	);
+	// "Only days you're open" (z8r3fdhpm7). Kept while the seller flips the
+	// unit about, but only SENT for a day package — the server refuses it on
+	// any other shape, so a hidden value never rides along.
+	const [skipsClosedDays, setSkipsClosedDays] = useState(
+		initialValues?.skipsClosedDays === true,
 	);
 	// Weekend rate (S13) — RM draft + the nights it covers. Defaults to Fri +
 	// Sat so a seller who only types the rate gets the campsite norm.
@@ -984,6 +1001,7 @@ export function ProductForm({
 									packageTrimmed.length > 0 ? Number(packageTrimmed) : 0,
 								packageUnit,
 								autoAccept,
+								skipsClosedDays: countsOpenDays ? true : undefined,
 								// Sen; 0 = clear (the server normalizes 0 → unset).
 								securityDeposit:
 									depositParsed !== null && depositParsed > 0
@@ -1055,6 +1073,7 @@ export function ProductForm({
 			packageLength: packageDraft,
 			packageUnit,
 			autoAccept,
+			skipsClosedDays,
 			weekendPrice: weekendDraft,
 			weekendDays,
 			categoryIds,
@@ -1103,6 +1122,11 @@ export function ProductForm({
 	// through nonsense like "per 0 months".
 	const packageLengthNum =
 		packageValid && packageTrimmed.length > 0 ? packageParsed : undefined;
+	// "Only days you're open" (z8r3fdhpm7) is a question only a DAY package
+	// answers — a month runs by the calendar, a night package is a stay.
+	const offersDayCounting =
+		packageUnit === "day" && packageLengthNum !== undefined;
+	const countsOpenDays = offersDayCounting && skipsClosedDays;
 
 	// Booking security deposit — blank = none; else inside the server's own
 	// sanitizeSecurityDeposit ceiling (`isSecurityDepositInRange`, shared with
@@ -1198,6 +1222,7 @@ export function ProductForm({
 											packageLength: packageDraft,
 											packageUnit,
 											autoAccept,
+											skipsClosedDays: countsOpenDays,
 											weekendPrice: weekendDraft,
 											weekendDays,
 										}
@@ -1349,6 +1374,16 @@ export function ProductForm({
 								: "Leave blank and buyers pick their own check-in and check-out, priced per night. Set it (e.g. 1 month) to sell a fixed-length package at one flat price."}
 						</p>
 					</div>
+					{/* A DAY package decides what a store closure does to it
+					    (z8r3fdhpm7) — asked right under the length it counts. */}
+					{offersDayCounting && packageLengthNum !== undefined ? (
+						<PackageDayCounting
+							packageLength={packageLengthNum}
+							skipsClosedDays={skipsClosedDays}
+							onChange={setSkipsClosedDays}
+							schedule={storeSchedule}
+						/>
+					) : null}
 					<div className="flex flex-col gap-1.5 border-t border-border pt-4">
 						<label htmlFor="booking-price" className="text-sm font-medium">
 							Price per {bookingSpanNoun(packageLengthNum, packageUnit)} (

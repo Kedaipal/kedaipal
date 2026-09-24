@@ -58,6 +58,7 @@ import { Button } from "../components/ui/button";
 import { CopyButton } from "../components/ui/copy-button";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
+import { bookingLengthLabel } from "../lib/booking-dates";
 import { getConvexHttpClient } from "../lib/convex-server";
 import { shipsAsParcel } from "../lib/dispatch-surface";
 import { convexErrorMessage, formatMobile, formatPrice } from "../lib/format";
@@ -500,6 +501,7 @@ function TrackingRoute() {
 					checkOut: order.bookingCheckOut,
 					packaged: isBookingPackage,
 					weekendDays: order.bookingWeekendDays,
+					skippedDays: order.bookingSkippedDays,
 				}
 			: undefined;
 	const ms = order.retailerLocale === "ms";
@@ -1334,23 +1336,10 @@ function TrackingRoute() {
 							</span>
 						</div>
 						<p className="text-xs text-muted-foreground">
-							{(() => {
-								// "2 night(s)" was the only place the app hedged its
-								// plural instead of counting — every other surface says
-								// "2 nights" / "1 night". Malay doesn't inflect, so only
-								// the EN branch takes the count.
-								const n = Math.round(
-									(order.bookingCheckOut - order.bookingCheckIn) / DAY_MS,
-								);
-								const unit = isBookingPackage
-									? ms
-										? "hari"
-										: `day${n === 1 ? "" : "s"}`
-									: ms
-										? "malam"
-										: `night${n === 1 ? "" : "s"}`;
-								return `${n} ${unit}`;
-							})()} ·{" "}
+							{/* Counted the way it was sold — "4 open days" for an
+							    open-days package, never the calendar span (it said
+							    "7 days" under a receipt that said 4, z8r3fdhpm7). */}
+							{bookingLengthLabel(order, ms ? "ms" : "en")} ·{" "}
 							{order.items[0]?.name ?? (ms ? "penyenaraian" : "listing")}
 						</p>
 					</div>

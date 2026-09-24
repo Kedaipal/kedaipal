@@ -72,6 +72,7 @@ import {
 } from "./lib/order";
 import { asksForTime, fulfilmentKind } from "./lib/fulfilmentShape";
 import type { OpeningHours } from "./lib/openingHours";
+import { type ClosedDateRange, closedDateIssue } from "./lib/closedDates";
 import { assertWithinOpeningHours } from "./lib/openingHours";
 import { orderPrepFloorIssue, slowestPrep } from "./lib/prepFloor";
 import {
@@ -496,6 +497,9 @@ export interface ClaimPagePayload {
 		/** max(store notice, strictest per-product override on the claim). */
 		minNoticeDays: number;
 		openingHours?: OpeningHours;
+		/** Closed dates (z8r3fdhpm7) — skipped by the date picker, refused by
+		 * commit with the same sentence. */
+		closedDates?: ClosedDateRange[];
 		confirmPushEnabled: boolean;
 		/** Off-Season Hold (z8r3fday24): the store paused ordering after this
 		 * link was sent. The page renders a dead end instead of the form — the
@@ -586,6 +590,7 @@ export const getByToken = query({
 				booksCouriers: storeBooksCouriers(retailer),
 				minNoticeDays,
 				openingHours: retailer.openingHours as OpeningHours | undefined,
+				closedDates: retailer.closedDates,
 				confirmPushEnabled: orderConfirmTemplateName() !== undefined,
 				orderingPaused: retailer.orderingPausedAt !== undefined,
 			},
@@ -866,6 +871,15 @@ export const commit = mutation({
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
 			}
+		}
+		// Closed dates (z8r3fdhpm7) — orders.create's rule, word for word:
+		// judged before prep and hours, the truest reason a date can't work.
+		if (sanitizedFulfilmentDate !== undefined) {
+			const closed = closedDateIssue(
+				retailer.closedDates,
+				sanitizedFulfilmentDate,
+			);
+			if (closed !== null) throw new ConvexError(closed);
 		}
 		// Prep floor — orders.create's rule, word for word (convex/lib/prepFloor):
 		// the slowest line decides the earliest moment, a collection trip is

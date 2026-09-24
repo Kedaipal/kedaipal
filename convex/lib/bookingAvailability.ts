@@ -27,6 +27,7 @@ import {
 	todayMytMidnight,
 	weekdayIndexMyt,
 } from "./fulfilmentDate";
+import { type ClosedDateRange, isClosedDate } from "./closedDates";
 import {
 	isMonthlyUnit,
 	MAX_PACKAGE_DAYS,
@@ -84,6 +85,64 @@ export function nightsBetween(checkIn: number, checkOut: number): number {
 	return Math.round((checkOut - checkIn) / DAY_MS);
 }
 
+/**
+ * How many days of [checkIn, checkOut) a booking actually USES — the span
+ * minus the shut days an open-days package stepped over (z8r3fdhpm7,
+ * `orders.bookingSkippedDays`). Every other booking has no skipped days, so
+ * this is the plain span for them.
+ *
+ * The one count every "N days" on an order reads. Counting the span instead
+ * told a buyer who bought 4 open days that their package was "7 days", and the
+ * seller's approve card said "7 nights" beside a receipt that said 4.
+ */
+export function countedDays(
+	checkIn: number,
+	checkOut: number,
+	skipped: readonly number[] | undefined,
+): number {
+	const inside = (skipped ?? []).filter(
+		(day) => day >= checkIn && day < checkOut,
+	).length;
+	return nightsBetween(checkIn, checkOut) - inside;
+}
+
+/**
+ * The unbroken runs of days a booking actually USES, as `[start,
+ * endExclusive)` spans. One span for every booking except an open-days package
+ * (z8r3fdhpm7), which is cut at each shut day it stepped over — Sat 3, then
+ * Mon 5, then Thu 8–Fri 9.
+ *
+ * For the seller's Google Calendar feed: the in-app grid drops a member on the
+ * days their package skips (`occupiesNight`), so the feed must not draw them
+ * there either — one continuous event said "Aisyah — Kayak course" on the
+ * Sunday the shop is shut.
+ */
+export function usedDayRuns(
+	checkIn: number,
+	checkOut: number,
+	skipped: readonly number[] | undefined,
+): Array<{ start: number; endExclusive: number }> {
+	const shut = new Set(skipped ?? []);
+	if (shut.size === 0) return [{ start: checkIn, endExclusive: checkOut }];
+	const runs: Array<{ start: number; endExclusive: number }> = [];
+	let runStart: number | null = null;
+	for (let day = checkIn; day < checkOut; day += DAY_MS) {
+		if (shut.has(day)) {
+			if (runStart !== null) runs.push({ start: runStart, endExclusive: day });
+			runStart = null;
+		} else if (runStart === null) {
+			runStart = day;
+		}
+	}
+	if (runStart !== null) runs.push({ start: runStart, endExclusive: checkOut });
+	return runs;
+}
+
+/** A package can't START on a day the store is shut — the one sentence, so
+ * the resolver's refusal and the buyer calendar's reason can't drift. */
+export const CLOSED_START_MESSAGE =
+	"The store is closed on that day — start on a day it's open";
+
 /** Every night [checkIn, checkOut) as MYT midnights. */
 export function eachNight(checkIn: number, checkOut: number): number[] {
 	const nights: number[] = [];
@@ -101,6 +160,27 @@ export function staysOverlap(
 	to: number,
 ): boolean {
 	return checkIn < to && checkOut > from;
+}
+
+/**
+ * Does this booking actually USE `night`? Inside [checkIn, checkOut) and not
+ * one of the shut days an open-days package stepped over (z8r3fdhpm7,
+ * `orders.bookingSkippedDays`) — a skipped Sunday is a day the member is never
+ * there, so it holds no capacity and puts no name on the seller's grid. Every
+ * other booking has no skipped days, so this is plain span overlap for them.
+ */
+export function occupiesNight(
+	order: Pick<
+		Doc<"orders">,
+		"bookingCheckIn" | "bookingCheckOut" | "bookingSkippedDays"
+	>,
+	night: number,
+): boolean {
+	const checkIn = order.bookingCheckIn;
+	const checkOut = order.bookingCheckOut;
+	if (checkIn === undefined || checkOut === undefined) return false;
+	if (night < checkIn || night >= checkOut) return false;
+	return !(order.bookingSkippedDays ?? []).includes(night);
 }
 
 /** A booking order still occupying its nights. `cancelled` is the ONLY
@@ -172,6 +252,7 @@ export async function countBookedPerNight(
 			night < Math.min(checkOut, to);
 			night += DAY_MS
 		) {
+			if (!occupiesNight(order, night)) continue;
 			counts.set(night, (counts.get(night) ?? 0) + 1);
 		}
 	}
@@ -266,8 +347,97 @@ export function isNightBlocked(
 }
 
 /**
+ * What a store CLOSED DATE does to this listing (z8r3fdhpm7) — the one author
+ * of the per-shape rule, read by the availability authority below, the buyer
+ * calendar and the seller calendar alike. A closure is NOT a block: a block
+ * says "this can't be booked", a closure says "the store isn't operating that
+ * day", and those mean different things depending on what is being sold.
+ *
+ *  - `"unavailable"` — the listing sells NIGHTS (a free-range stay, or a
+ *    night-counted package like a 3D2N): a guest sleeps there, so if the whole
+ *    place is shut nobody can stay. A closed date joins the unavailable nights,
+ *    exactly like a store-wide block.
+ *  - `"absorbed"` — a month package, or a day package counted every day in a
+ *    row: ACCESS time. A gym closed on Raya doesn't extend anyone's month —
+ *    closures are priced in, the industry norm. A closure inside the term
+ *    never refuses the package; the buyer is told which days are closed. Only
+ *    the START must be a day the store is open (owner call, 24 Sep): a term
+ *    starting on a shut day — or made of nothing but shut days — sold the
+ *    buyer days they could never use.
+ *  - `"skipped"` — a day package the seller counts in OPEN days
+ *    (`skipsClosedDays`): DAYS OF SERVICE — a 5-day course, a kids' camp, a
+ *    class pass. A day the store is shut delivers nothing, so it isn't
+ *    counted: the term runs past it (`resolveOpenDaysTerm`), and the weekly
+ *    day off is skipped too, because it is just as undelivered.
+ *
+ * Stays never read the weekly day off (a campsite hosts overnight while
+ * reception is shut). Both package rules do, for the start day; only the
+ * open-days rule also steps over it inside the term.
+ */
+export type ClosureRule = "unavailable" | "absorbed" | "skipped";
+
+export function closureRule(
+	booking:
+		| {
+				packageLength?: number;
+				packageUnit?: PackageUnit;
+				skipsClosedDays?: boolean;
+		  }
+		| undefined,
+): ClosureRule {
+	const isPackage = (booking?.packageLength ?? 0) > 0;
+	if (!isPackage) return "unavailable";
+	if (booking?.packageUnit === "night") return "unavailable";
+	if (booking?.skipsClosedDays === true && !isMonthlyUnit(booking.packageUnit)) {
+		return "skipped";
+	}
+	return "absorbed";
+}
+
+/**
+ * The term of an OPEN-DAYS package (`closureRule` "skipped", z8r3fdhpm7):
+ * `openDays` days the store is open, counted from `checkIn`, stepping over
+ * every day `isClosed` says is shut — a weekly day off or a closed date. ONE
+ * author, run by the buyer calendar, the checkout preview and
+ * `requestBooking`, so the promised last day and the charged one can't differ.
+ *
+ * `checkOut` is exclusive (the day after the last counted day), like every
+ * booking; `skipped` is the shut days INSIDE the term, which the order freezes
+ * so the receipt keeps naming them after the store edits its hours.
+ *
+ * Throws with buyer-facing copy when the start itself is shut (day 1 must be a
+ * day the service happens) or when the skips would stretch the term past
+ * `MAX_PACKAGE_DAYS` — that bound keeps the capacity scans' look-back honest
+ * (the bug class `bookingsOverlapping` exists for), so it is refused, never
+ * truncated.
+ */
+export function resolveOpenDaysTerm(
+	checkIn: number,
+	openDays: number,
+	isClosed: (day: number) => boolean,
+): { checkOut: number; skipped: number[] } {
+	if (isClosed(checkIn)) throw new Error(CLOSED_START_MESSAGE);
+	const skipped: number[] = [];
+	const ceiling = checkIn + MAX_PACKAGE_DAYS * DAY_MS;
+	let counted = 0;
+	let day = checkIn;
+	while (counted < openDays) {
+		if (day >= ceiling) {
+			throw new Error(
+				"With the store's closed days skipped, that package would run longer than a year — take fewer",
+			);
+		}
+		if (isClosed(day)) skipped.push(day);
+		else counted += 1;
+		day += DAY_MS;
+	}
+	return { checkOut: day, skipped };
+}
+
+/**
  * The nights of [checkIn, checkOut) this listing can NOT take another booking
- * on — at capacity OR seller-blocked, evaluated in ONE place (86eyj70z1
+ * on — at capacity OR seller-blocked OR, for a night-selling listing, a store
+ * closed date (`closureRule`, z8r3fdhpm7) — evaluated in ONE place (86eyj70z1
  * decision 8) so `requestBooking`, the buyer calendar and the seller calendar
  * can never disagree, and so buyers can never tell blocked from full. Empty
  * array = the whole stay fits. The authoritative check `requestBooking` runs
@@ -280,6 +450,13 @@ export async function findFullNights(
 	checkIn: number,
 	checkOut: number,
 ): Promise<number[]> {
+	// Closed dates (z8r3fdhpm7) close a NIGHT only where the listing sells
+	// nights — read here, inside the one authority, so the buyer calendar, the
+	// seller calendar and `requestBooking` can't disagree about a closure.
+	const closedDates: ReadonlyArray<ClosedDateRange> | undefined =
+		closureRule(product.booking) === "unavailable"
+			? (await ctx.db.get(product.retailerId))?.closedDates
+			: undefined;
 	// UNDEFINED capacity = unlimited (S7) — a gym has no daily member cap, so
 	// only the seller's own blocks can close a night. Never `?? 1` here: that
 	// would read "unlimited" as "one spot" and refuse the second member.
@@ -301,7 +478,8 @@ export async function findFullNights(
 			(capacity !== undefined &&
 				counts !== null &&
 				(counts.get(night) ?? 0) >= capacity) ||
-			isNightBlocked(blocks, night, product._id),
+			isNightBlocked(blocks, night, product._id) ||
+			isClosedDate(closedDates, night),
 	);
 }
 
@@ -313,15 +491,38 @@ export async function findFullNights(
  */
 export function resolveBookingRange(
 	booking:
-		| { packageLength?: number; packageUnit?: PackageUnit }
+		| {
+				packageLength?: number;
+				packageUnit?: PackageUnit;
+				skipsClosedDays?: boolean;
+		  }
 		| undefined,
 	checkIn: number,
 	checkOut?: number,
 	packageQuantity = 1,
-): { checkIn: number; checkOut: number } {
+	/** The store's "shut all day?" answer — REQUIRED for an open-days package
+	 * (`closureRule` "skipped"); for an every-day or month package it refuses
+	 * a START on a shut day. Ignored for a stay. */
+	isClosed?: (day: number) => boolean,
+): { checkIn: number; checkOut: number; skipped: number[] } {
 	const length = booking?.packageLength;
 	if (length !== undefined && length > 0) {
 		const quantity = normalizePackageQuantity(packageQuantity, booking);
+		const rule = closureRule(booking);
+		// Day one has to be a day the store is open, whichever way the term
+		// counts — the open-days resolver below says the same thing itself.
+		if (rule === "absorbed" && isClosed?.(checkIn)) {
+			throw new Error(CLOSED_START_MESSAGE);
+		}
+		if (rule === "skipped") {
+			if (!isClosed) {
+				// A programming error, not a buyer one: resolving an open-days term
+				// without the schedule would silently count shut days.
+				throw new Error("An open-days package needs the store's schedule");
+			}
+			const term = resolveOpenDaysTerm(checkIn, length * quantity, isClosed);
+			return { checkIn, checkOut: term.checkOut, skipped: term.skipped };
+		}
 		// The whole term is computed IN ONE STEP — `length * quantity` — never by
 		// adding one package at a time. Calendar-month clamping is lossy and
 		// compounds: 31 Jan stepped three times is 28 Feb → 28 Mar → 28 Apr,
@@ -335,12 +536,13 @@ export function resolveBookingRange(
 				isMonthlyUnit(booking?.packageUnit)
 					? addMytCalendarMonths(checkIn, length * quantity)
 					: checkIn + length * quantity * DAY_MS,
+			skipped: [],
 		};
 	}
 	if (checkOut === undefined) {
 		throw new Error("Pick your check-out date");
 	}
-	return { checkIn, checkOut };
+	return { checkIn, checkOut, skipped: [] };
 }
 
 /** The rate-relevant slice of a listing's booking config. */

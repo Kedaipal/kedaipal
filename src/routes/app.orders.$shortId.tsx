@@ -33,7 +33,6 @@ import type { Doc, Id } from "../../convex/_generated/dataModel";
 import { attributionBucket, sourceLabel } from "../../convex/lib/attribution";
 import { DEFAULT_COUNTRY } from "../../convex/lib/country";
 import {
-	DAY_MS,
 	formatFulfilmentDate,
 	formatFulfilmentTime,
 } from "../../convex/lib/fulfilmentDate";
@@ -112,7 +111,7 @@ import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { useStoreLock } from "../hooks/useStoreLock";
 import { canHardDeleteOrders } from "../lib/admin-actions";
 import { MASK_PII } from "../lib/analytics-privacy";
-import { describeBookingSpan } from "../lib/booking-dates";
+import { bookingFulfilmentLine } from "../lib/booking-dates";
 import { formatPhone, orderCustomerLabel } from "../lib/customer";
 import { shipsAsParcel } from "../lib/dispatch-surface";
 import {
@@ -138,30 +137,6 @@ import {
 import { suppressNextOrderConfirmedToast } from "../lib/orderToastSuppression";
 import { isCrmLocked, isOrderInboxLocked } from "../lib/subscription";
 import { cn } from "../lib/utils";
-
-/**
- * The fulfilment card's one-line summary of a booking. A fixed-length package
- * (S7, frozen `bookingPackageDays`) reads as a validity window in DAYS; a
- * free-range stay reads as check-in → check-out in NIGHTS.
- */
-function bookingFulfilmentLine(order: {
-	bookingCheckIn?: number;
-	bookingCheckOut?: number;
-	bookingPackageDays?: number;
-}): string {
-	if (order.bookingCheckIn === undefined || order.bookingCheckOut === undefined)
-		return "Booking";
-	const span = Math.round(
-		(order.bookingCheckOut - order.bookingCheckIn) / DAY_MS,
-	);
-	const isPackage = order.bookingPackageDays !== undefined;
-	const unit = isPackage ? "day" : "night";
-	return `Booking · ${span} ${unit}${span === 1 ? "" : "s"} · ${describeBookingSpan(
-		order.bookingCheckIn,
-		order.bookingCheckOut,
-		{ isPackage, format: formatFulfilmentDate },
-	)}`;
-}
 
 export const Route = createFileRoute("/app/orders/$shortId")({
 	component: OrderDetailRoute,
@@ -375,6 +350,7 @@ function OrderDetailRoute() {
 					checkOut: order.bookingCheckOut,
 					packaged: order.bookingPackaged === true,
 					weekendDays: order.bookingWeekendDays,
+					skippedDays: order.bookingSkippedDays,
 				}
 			: undefined;
 	const orderId = order?._id;
@@ -1668,7 +1644,7 @@ function OrderDetailRoute() {
 							{isBooking
 								? order.bookingCheckIn !== undefined &&
 									order.bookingCheckOut !== undefined
-									? bookingFulfilmentLine(order)
+									? bookingFulfilmentLine(order, formatFulfilmentDate)
 									: "Booking"
 								: isSelfCollect
 									? order.pickupSnapshot?.locationType === "drop_off"
@@ -1715,7 +1691,10 @@ function OrderDetailRoute() {
 							{order.eventLocked
 								? "Event"
 								: isBooking
-									? "Check-in"
+									? // A package starts; only a stay checks in.
+										order.bookingPackaged
+										? "Starts"
+										: "Check-in"
 									: isSelfCollect
 										? order.pickupSnapshot?.locationType === "drop_off"
 											? "Meet on"

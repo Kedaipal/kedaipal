@@ -283,6 +283,7 @@ function CheckoutRoute() {
 						booksCouriers={retailer.booksCouriers ?? false}
 						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
 						openingHours={retailer.openingHours}
+						closedDates={retailer.closedDates}
 						minOrderValue={retailer.minOrderValue}
 						pickupLocations={pickupLocations ?? []}
 					/>

@@ -18,6 +18,10 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import type { PublicDeliveryQuote } from "../../../convex/delivery";
 import { SG_STATE_LABEL } from "../../../convex/lib/address";
 import { parseBuyerWaPhone } from "../../../convex/lib/buyerPhone";
+import {
+	type ClosedDateRange,
+	closureOn,
+} from "../../../convex/lib/closedDates";
 import type { Country } from "../../../convex/lib/country";
 import {
 	assertValidFulfilmentDate,
@@ -151,6 +155,9 @@ interface CheckoutPageProps {
 	 * for a time, z8r3fdff97). Undefined = open 24/7. The server re-enforces
 	 * via the same shared module. */
 	openingHours: OpeningHours | undefined;
+	/** Store closed dates (z8r3fdhpm7) — never offered as chips, explained
+	 * inline when typed, refused by the server in the same words. */
+	closedDates: ReadonlyArray<ClosedDateRange> | undefined;
 	/** Store-wide minimum order value (minor units) — checkout blocks below it.
 	 * See convex/lib/minOrderRules.ts. */
 	minOrderValue: number | undefined;
@@ -236,6 +243,7 @@ export function CheckoutPage({
 	booksCouriers,
 	minFulfilmentNoticeDays,
 	openingHours,
+	closedDates,
 	minOrderValue,
 	pickupLocations,
 }: CheckoutPageProps) {
@@ -466,6 +474,7 @@ export function CheckoutPage({
 		if (Number.isNaN(epoch)) return false;
 		return isFulfilmentDaySelectable({
 			hours: openingHours,
+			closedDates,
 			dateEpoch: epoch,
 			now,
 			prep: schedule.prep,
@@ -644,6 +653,7 @@ export function CheckoutPage({
 				);
 				const judged = {
 					hours: openingHours,
+					closedDates,
 					dateEpoch: fulfilmentEpoch,
 					now: Date.now(),
 					prep: schedule.prep,
@@ -909,6 +919,7 @@ export function CheckoutPage({
 		if (Number.isNaN(dateEpoch)) return null;
 		return fulfilmentDayCopy({
 			hours: openingHours,
+			closedDates,
 			dateEpoch,
 			now: Date.now(),
 			prep: watchedSchedule.prep,
@@ -918,6 +929,7 @@ export function CheckoutPage({
 		});
 	}, [
 		openingHours,
+		closedDates,
 		watchedDate,
 		watchedSchedule.prep,
 		watchedSchedule.timed,
@@ -939,6 +951,7 @@ export function CheckoutPage({
 		if (Number.isNaN(dateEpoch)) return null;
 		return fulfilmentTimeCopy({
 			hours: openingHours,
+			closedDates,
 			dateEpoch,
 			now: Date.now(),
 			prep: watchedSchedule.prep,
@@ -948,6 +961,7 @@ export function CheckoutPage({
 		});
 	}, [
 		openingHours,
+		closedDates,
 		watchedDate,
 		watchedSchedule.prep,
 		watchedSchedule.timed,
@@ -959,6 +973,7 @@ export function CheckoutPage({
 	// Why today's slots start later than usual — or why today is gone.
 	const cartPrepHint = prepHint({
 		hours: openingHours,
+		closedDates,
 		now,
 		prep: watchedSchedule.prep,
 		kind: watchedSchedule.kind,
@@ -2039,9 +2054,14 @@ export function CheckoutPage({
 																	now,
 																	schedule.prep.minutes,
 																);
-														const day = Number.isNaN(dayEpoch)
-															? null
-															: hoursForDate(openingHours, dayEpoch);
+														// A closed date (z8r3fdhpm7) reads like a
+														// weekly day off: no window to clamp to, and
+														// the date notice above says why.
+														const day =
+															Number.isNaN(dayEpoch) ||
+															closureOn(closedDates, dayEpoch)
+																? null
+																: hoursForDate(openingHours, dayEpoch);
 														const constrained = day !== null && !isAllDay(day);
 														return (
 															<form.AppField name="fulfilmentTime">

@@ -584,7 +584,6 @@ describe("approve / decline (S3)", () => {
 		expect(sellerRead?.bookingContext).toEqual({
 			capacityPerNight: 5,
 			peakOtherBookings: 2,
-			nights: 1,
 		});
 		const buyerRead = await t.query(api.orders.get, {
 			token: third.trackingToken,

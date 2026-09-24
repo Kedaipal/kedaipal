@@ -73,6 +73,22 @@ describe("OrderItemLine", () => {
 		expect(detail.textContent).not.toContain("×");
 	});
 
+	it("an open-days package names the shut days it skipped, after its window (z8r3fdhpm7)", () => {
+		line({
+			quantity: 1,
+			unitPrice: 50000,
+			lineTotal: 50000,
+			booking: {
+				checkIn: day(0),
+				checkOut: day(7),
+				packaged: true,
+				skippedDays: [day(1), day(4)],
+			},
+		});
+		const detail = screen.getByText(/Valid/);
+		expect(detail.textContent).toMatch(/· skips .+, .+$/);
+	});
+
 	it("names the kind of night on a split stay, without repeating the label (S13)", () => {
 		// Thu 10 → Mon 14 Sep: the weekend line charges 2 of the 4 nights.
 		const thu = Date.UTC(2026, 8, 10) - MYT_OFFSET_MS;

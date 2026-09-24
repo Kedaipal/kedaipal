@@ -17,7 +17,13 @@ import {
 	vi,
 } from "vitest";
 import type { Id } from "../../../convex/_generated/dataModel";
+import type { ClosedDateRange } from "../../../convex/lib/closedDates";
 import type { Country } from "../../../convex/lib/country";
+import {
+	DAY_MS,
+	todayMytMidnight,
+	ymdFromEpoch,
+} from "../../../convex/lib/fulfilmentDate";
 import type { UseCart } from "../../hooks/useCart";
 import { CheckoutPage } from "./checkout-form";
 import type { PublicPickupLocation } from "./pickup-location-options";
@@ -137,6 +143,7 @@ function renderCheckout(
 		country?: Country;
 		booksCouriers?: boolean;
 		method?: "delivery" | "pickup";
+		closedDates?: ClosedDateRange[];
 	} = {},
 ) {
 	const pickupOnly = opts.method === "pickup";
@@ -156,6 +163,7 @@ function renderCheckout(
 			booksCouriers={opts.booksCouriers ?? false}
 			minFulfilmentNoticeDays={undefined}
 			openingHours={undefined}
+			closedDates={opts.closedDates}
 			minOrderValue={undefined}
 			pickupLocations={pickupOnly ? [PICKUP] : []}
 		/>,
@@ -322,5 +330,41 @@ describe("CheckoutPage — submit", () => {
 		const [args] = state.createOrder.mock.calls[0];
 		expect(args.customer.waDialCountry).toBe("MY");
 		expect(args.customer.waPhone).toBe("012-345 6789");
+	});
+});
+
+describe("CheckoutPage — closed dates (z8r3fdhpm7)", () => {
+	// Read after `beforeEach` fakes the clock — "today" is the faked one.
+	let today = 0;
+	let raya: ClosedDateRange;
+	beforeEach(() => {
+		today = todayMytMidnight(Date.now());
+		raya = { startDate: today, endDate: today + DAY_MS, label: "Hari Raya" };
+	});
+
+	it("never offers a closed date: no Today/Tomorrow chip, and the default is the first open day", async () => {
+		renderCheckout({ method: "pickup", closedDates: [raya] });
+		expect(screen.queryByRole("button", { name: "Today" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Tomorrow" })).toBeNull();
+		fireEvent.change(screen.getByRole("textbox", { name: /^Your name/ }), {
+			target: { value: "Aisyah Rahman" },
+		});
+		changePhone("012-345 6789");
+		fireEvent.click(screen.getAllByRole("button", { name: "Place order" })[0]);
+		await waitFor(() => expect(state.createOrder).toHaveBeenCalledTimes(1));
+		const [args] = state.createOrder.mock.calls[0];
+		expect(args.fulfilmentDate).toBe(today + 2 * DAY_MS);
+	});
+
+	it("a closed date typed into the date field is explained in the server's words", async () => {
+		renderCheckout({ method: "pickup", closedDates: [raya] });
+		fireEvent.change(screen.getByLabelText(/^Date/), {
+			target: { value: ymdFromEpoch(today + DAY_MS) },
+		});
+		expect(
+			await screen.findByText(
+				/Kek Mama is closed .*\(Hari Raya\) — pick another day\./,
+			),
+		).toBeTruthy();
 	});
 });
