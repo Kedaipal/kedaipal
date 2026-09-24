@@ -17,6 +17,7 @@
 
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { useAction } from "convex/react";
 import {
 	CircleAlert,
@@ -27,17 +28,17 @@ import {
 	Truck,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import { isActiveJobStatus } from "../../../convex/lib/deliveryJobs";
 import type { DelyvaItemType, DelyvaService } from "../../../convex/lib/delyva";
-import { delyvaSurface } from "../../lib/dispatch-surface";
 import {
+	courierContactFallbackCopy,
 	delyvaBlockCopy,
 	delyvaStatusLabel,
 } from "../../lib/delyva-dispatch-block";
+import { delyvaSurface } from "../../lib/dispatch-surface";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { ProBadge } from "../app/pro-gate";
 import { Button } from "../ui/button";
@@ -105,7 +106,10 @@ export function DelyvaDispatchCard({
 	const job = dispatch.job;
 	const activeJob = job && isActiveJobStatus(job.status) ? job : null;
 	const failedJob =
-		job && (job.status === "canceled" || job.status === "expired" || job.status === "rejected")
+		job &&
+		(job.status === "canceled" ||
+			job.status === "expired" ||
+			job.status === "rejected")
 			? job
 			: null;
 	const completedJob = job?.status === "completed" ? job : null;
@@ -253,7 +257,9 @@ export function DelyvaDispatchCard({
 				<p className="flex items-start gap-2 rounded-xl bg-amber-100 px-3 py-2.5 text-sm text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
 					<FlaskConical className="mt-0.5 size-4 shrink-0" />
 					<span>
-						<span className="font-medium">Test mode — no courier will come.</span>{" "}
+						<span className="font-medium">
+							Test mode — no courier will come.
+						</span>{" "}
 						Your Delyva key is a demo-account key, so any booking here is
 						simulated and nothing is really charged. Connect your live key in{" "}
 						<Link
@@ -274,8 +280,8 @@ export function DelyvaDispatchCard({
 					<CircleAlert className="mt-0.5 size-4 shrink-0" />
 					<span>
 						<span className="font-medium">Booking didn&apos;t go through</span>
-						{failedJob.failureReason ? ` — ${failedJob.failureReason}` : ""}. Your
-						buyer was not notified; the order is unchanged.
+						{failedJob.failureReason ? ` — ${failedJob.failureReason}` : ""}.
+						Your buyer was not notified; the order is unchanged.
 					</span>
 				</p>
 			) : null}
@@ -308,8 +314,8 @@ export function DelyvaDispatchCard({
 					) : (
 						<p className="text-muted-foreground">
 							Booked — waiting for {job.serviceName ?? "the courier"} to issue a
-							tracking number. It appears here and on your buyer&apos;s order page
-							by itself.
+							tracking number. It appears here and on your buyer&apos;s order
+							page by itself.
 						</p>
 					)}
 
@@ -365,6 +371,15 @@ export function DelyvaDispatchCard({
 							>
 								Edit
 							</Link>
+						</p>
+					) : null}
+
+					{/* Who the courier will phone at the buyer's end — said before the
+					    first quote, so a seller isn't surprised when the courier calls
+					    the store about an overseas buyer (z8r3fdh274). */}
+					{dispatch.buyerContactFallback ? (
+						<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+							{courierContactFallbackCopy(dispatch.country)}
 						</p>
 					) : null}
 
@@ -524,10 +539,9 @@ export function DelyvaDispatchCard({
 								isn&apos;t the address or the weight.
 							</p>
 							<p className="text-sm text-muted-foreground">
-								Ask Delyva to enable a cold-chain service on your account —
-								then re-quote here. If these goods aren&apos;t
-								temperature-sensitive after all, switch the parcel type to{" "}
-								<b>Parcel</b> above.
+								Ask Delyva to enable a cold-chain service on your account — then
+								re-quote here. If these goods aren&apos;t temperature-sensitive
+								after all, switch the parcel type to <b>Parcel</b> above.
 							</p>
 							<button
 								type="button"
@@ -579,9 +593,11 @@ export function DelyvaDispatchCard({
 									    Singapore store), and "buyer paid S$6.00" next to
 									    "RM 0.10" invites a margin call out of thin air. */}
 									{services.some((s) => s.currency !== order.currency) ? (
-										<>Quoted in {services[0]?.currency} — buyer paid{" "}
-										{formatPrice(order.deliveryFee ?? 0, order.currency)}, so
-										these prices aren&apos;t directly comparable</>
+										<>
+											Quoted in {services[0]?.currency} — buyer paid{" "}
+											{formatPrice(order.deliveryFee ?? 0, order.currency)}, so
+											these prices aren&apos;t directly comparable
+										</>
 									) : (
 										<>
 											Buyer paid{" "}
@@ -733,9 +749,7 @@ function serviceMeta(service: DelyvaService): string {
 				: service.serviceType === "NDD"
 					? "Next-day"
 					: null;
-	const cold = service.itemTypes?.some(
-		(t) => t === "CHILLED" || t === "FROZEN",
-	)
+	const cold = service.itemTypes?.some((t) => t === "CHILLED" || t === "FROZEN")
 		? "Cold chain"
 		: null;
 	return [cold, speed, service.companyName].filter(Boolean).join(" · ");

@@ -179,9 +179,24 @@ describe("formatMobile", () => {
 	});
 
 	it("falls back to a plain +digits for unexpected shapes", () => {
+		// Unbroken on purpose, even though the code is known: `toNationalPhoneInput`
+		// peels a seller field's plate by string prefix, and "+60 312345678"
+		// would seed the field with the country code dropped.
 		expect(formatMobile("60312345678")).toBe("+60312345678"); // MY landline
 		expect(formatMobile("6512345678")).toBe("+6512345678"); // not an 8/9 SG mobile
 		expect(formatMobile("")).toBe("");
+	});
+
+	it("splits any other country's number as +CC NATIONAL (z8r3fdh274)", () => {
+		// Buyers can pick any country — the code they picked reads apart from
+		// the number they typed, so a wrong code is visible at a glance.
+		expect(formatMobile("447911123456")).toBe("+44 791 112 3456");
+		expect(formatMobile("14155550123")).toBe("+1 415 555 0123");
+		expect(formatMobile("+81 90-1234-5678")).toBe("+81 901 234 5678");
+	});
+
+	it("an unknown calling code still falls back to +digits", () => {
+		expect(formatMobile("99912345678")).toBe("+99912345678");
 	});
 });
 

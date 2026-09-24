@@ -191,6 +191,10 @@ function NewProductRoute() {
 					eventsLocked={eventsLocked}
 					currency={retailer.currency}
 					defaultKind={retailer.storeType}
+					storeSchedule={{
+						openingHours: retailer.openingHours,
+						closedDates: retailer.closedDates,
+					}}
 					initialState={wizardReturn}
 					linkedCard={card}
 					onSubmit={handleCreate}
@@ -238,6 +242,10 @@ function NewProductRoute() {
 				currency={retailer.currency}
 				submitLabel="Create product"
 				weightMode={retailer.deliveryConfig?.mode === "weight"}
+				storeSchedule={{
+					openingHours: retailer.openingHours,
+					closedDates: retailer.closedDates,
+				}}
 				offerSelfCollect={retailer.offerSelfCollect !== false}
 				onSubmit={handleCreate}
 			/>

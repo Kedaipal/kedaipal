@@ -123,6 +123,26 @@ describe("describeBookingPeriod — the reception-desk line", () => {
 		expect(describeBookingPeriod(pkg, NOW)).toBe("Active · 2 days left");
 	});
 
+	it("an OPEN-DAYS package counts the days the member can still come (z8r3fdhpm7)", () => {
+		// Started 2 days ago, last day in 6 — but three of those six are days the
+		// package skips, so three visits are left, not "6 days".
+		const course = {
+			...order(day(-2), day(7)),
+			bookingPackaged: true,
+			bookingSkippedDays: [day(-1), day(2), day(3), day(5)],
+		};
+		expect(describeBookingPeriod(course, NOW)).toBe(
+			"Active · 3 open days left",
+		);
+		// Every remaining day skipped: today is the last visit.
+		expect(
+			describeBookingPeriod(
+				{ ...course, bookingSkippedDays: [1, 2, 3, 4, 5, 6].map(day) },
+				NOW,
+			),
+		).toBe("Active · ends today");
+	});
+
 	it("reads naturally at the edges", () => {
 		expect(
 			describeBookingPeriod({ ...order(day(-2), day(1)), bookingPackaged: true }, NOW),

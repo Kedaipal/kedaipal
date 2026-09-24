@@ -240,9 +240,9 @@ describe("RescheduleFulfilmentDialog — self-collect pickup time (z8r3fdff97)",
 		render(<RescheduleFulfilmentDialog order={order} />);
 		fireEvent.click(screen.getByText("Reschedule"));
 
-		expect((screen.getByLabelText(/Pickup time/) as HTMLInputElement).value).toBe(
-			"",
-		);
+		expect(
+			(screen.getByLabelText(/Pickup time/) as HTMLInputElement).value,
+		).toBe("");
 		expect(screen.queryByRole("button", { name: "Clear time" })).toBeNull();
 		expect(screen.queryByText(/Removes the/)).toBeNull();
 		fireEvent.click(screen.getByText("Save changes"));
@@ -333,6 +333,7 @@ describe("RescheduleFulfilmentDialog — Lalamove slot-price preview", () => {
 			buyerPaidFee: 400,
 			vehicleType: "MOTORCYCLE",
 			buyerContactFallback: false,
+			market: "MY",
 			scheduledFor: Date.now() + 24 * 60 * 60 * 1000,
 			buyerRequestedMoment: Date.now() + 24 * 60 * 60 * 1000,
 		});
@@ -481,6 +482,7 @@ describe("RescheduleFulfilmentDialog — PR #201 review regressions", () => {
 				buyerPaidFee: 400,
 				vehicleType: "MOTORCYCLE",
 				buyerContactFallback: false,
+				market: "MY",
 				scheduledFor: Date.now() + 24 * 60 * 60 * 1000,
 				buyerRequestedMoment: undefined,
 			});

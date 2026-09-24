@@ -8,7 +8,12 @@
 
 import { isRateLimitError } from "@convex-dev/rate-limiter";
 import { ConvexError } from "convex/values";
-import { COUNTRIES, type Country } from "../../convex/lib/country";
+import {
+	COUNTRIES,
+	COUNTRY_DIAL_CODE,
+	type Country,
+} from "../../convex/lib/country";
+import { formatInternational } from "../../convex/lib/phoneDial";
 import { STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
 
 /**
@@ -139,9 +144,9 @@ const MOBILE_GROUPING: Record<Country, (digits: string) => string> = {
  * Purpose is **typo-spotting**, not decoration: checkout echoes the number back
  * to the buyer before they commit (86eyf1rck), and a transposed digit is only
  * catchable when the grouping matches how they typed it. Deliberately separate
- * from `formatPhone` (src/lib/customer.ts), which renders one ungrouped run
- * (`+60 1159399791`) and is mirrored into `convex/` for the seller dashboard —
- * regrouping that shared helper is a cross-surface change, not this field's job.
+ * from `formatPhone` (`convex/lib/customer.ts`), which renders one ungrouped
+ * run (`+60 1159399791`) on the seller dashboard and the PDFs — regrouping
+ * that shared helper is a cross-surface change, not this field's job.
  *
  * Keys off the STORED digits, not a country parameter, on purpose: the input
  * validators must branch on the retailer's country (typed input is ambiguous),
@@ -149,7 +154,15 @@ const MOBILE_GROUPING: Record<Country, (digits: string) => string> = {
  * truthful by reading it — e.g. an MY number a store saved before switching its
  * country to SG still renders as the MY number it is.
  *
- * Unrecognised shapes fall back to `+<digits>` rather than guessing.
+ * Any other country's number (buyers can pick any country, z8r3fdh274) reads
+ * `+CC NATIONAL` — `+44 7911123456` — so the code the buyer picked stands
+ * apart from the number they typed; per-country grouping would need every
+ * country's numbering plan, and the split is what makes a wrong code visible.
+ * An MY/SG number that isn't a mobile (a landline, a legacy row) stays one
+ * unbroken `+60312345678`: `toNationalPhoneInput` (`./phone.ts`) peels a
+ * seller field's `+60 `/`+65 ` plate by string prefix, so splitting it would
+ * seed the field with the national part and silently drop the country code.
+ * Anything with no known code falls back to `+<digits>` rather than guessing.
  */
 export function formatMobile(waPhone: string): string {
 	const digits = waPhone.replace(/\D/g, "");
@@ -162,7 +175,12 @@ export function formatMobile(waPhone: string): string {
 			return MOBILE_GROUPING[country](digits);
 		}
 	}
-	return `+${digits}`;
+	// A supported country's non-mobile stays unbroken (see above).
+	const supportedCode = COUNTRIES.some((country) =>
+		digits.startsWith(COUNTRY_DIAL_CODE[country]),
+	);
+	if (supportedCode) return `+${digits}`;
+	return formatInternational(digits) ?? `+${digits}`;
 }
 
 /**

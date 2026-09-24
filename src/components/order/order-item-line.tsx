@@ -29,6 +29,7 @@ import {
 import {
 	describeBookingSpan,
 	describeNights,
+	describeSkippedDays,
 	formatNight,
 } from "../../lib/booking-dates";
 import { formatPrice } from "../../lib/format";
@@ -44,6 +45,10 @@ export type OrderBookingSpan = {
 	 * split line name ITS OWN nights instead of repeating the whole stay.
 	 * Absent on a single-rate booking and on every pre-S13 one. */
 	weekendDays?: readonly number[];
+	/** Frozen shut days an open-days package stepped over (z8r3fdhpm7,
+	 * `orders.bookingSkippedDays`) — named after the window, so the buyer and
+	 * the seller both see why it ends when it does. */
+	skippedDays?: readonly number[];
 };
 
 export function OrderItemLine({
@@ -130,9 +135,11 @@ function bookingLineDetail(
 		// of one, so "3 × RM 450.00" is exactly the arithmetic — no need to store
 		// the package length on the order to say something true. A single package
 		// says only its window: "1 ×" is noise.
+		const skips = describeSkippedDays(booking.skippedDays);
+		const window = skips ? `${span} · ${skips}` : span;
 		return quantity > 1
-			? `${quantity} × ${formatPrice(unitPrice, currency)} · ${span}`
-			: span;
+			? `${quantity} × ${formatPrice(unitPrice, currency)} · ${window}`
+			: window;
 	}
 	// `quantity` is the night count, but derive from the dates as the fallback
 	// so a line whose quantity was ever touched still reads truthfully. (On a

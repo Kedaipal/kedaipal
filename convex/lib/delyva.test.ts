@@ -265,6 +265,19 @@ describe("buildCreateOrderBody", () => {
 		expect(body.note).toHaveLength(400);
 		expect(body.destination.contact.email).toBeUndefined();
 	});
+
+	test("an overseas buyer's number leading the note survives the 400-char cut (z8r3fdh274)", () => {
+		// Dispatch puts it FIRST when the courier was handed the store's number
+		// instead; a long address note must only ever lose its own tail.
+		const lead = "Buyer WhatsApp: +447700900123";
+		const body = buildCreateOrderBody({
+			...args,
+			destination: { ...args.destination, phone: "60123456789" },
+			note: `${lead} · ${"x".repeat(500)}`,
+		}) as { note: string };
+		expect(body.note).toHaveLength(400);
+		expect(body.note.startsWith(lead)).toBe(true);
+	});
 });
 
 describe("parseOrderResponse", () => {

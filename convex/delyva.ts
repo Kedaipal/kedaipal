@@ -50,6 +50,8 @@ import { encryptSecret } from "./lib/credentialCrypto";
 import { postcodeRule, SG_STATE_LABEL } from "./lib/address";
 import { isColdItemType } from "./lib/liveQuote";
 import { DEFAULT_COUNTRY, type Country } from "./lib/country";
+import { delyvaBookingArmed } from "./lib/courierBooking";
+import { toDomesticContactPhone } from "./lib/courierContact";
 import {
 	type CartWeightItem,
 	delyvaBookingAllowed,
@@ -944,6 +946,40 @@ function formatBuyerAddress(
 	};
 }
 
+/**
+ * The phone a booking hands the courier for the BUYER's stop (z8r3fdh274).
+ * Buyers may type a WhatsApp number from any country, but a Delyva booking
+ * lives inside the store's country (one tenant per country), and a domestic
+ * courier handed an overseas number may not be able to call it (whether every
+ * downstream courier would even accept one is unverified) — so a foreign
+ * buyer number gives the courier the STORE's number instead, the rule
+ * Lalamove dispatch already follows (`./lib/courierContact`). The buyer's
+ * real number then rides in the booking note (the caller puts it first).
+ *
+ * A store with no number of its own keeps the buyer's: a foreign contact beats
+ * an empty one. Inputs and output are bare digits — Delyva takes MSISDNs
+ * without the '+'.
+ */
+function buyerContactPhone(
+	buyerPhone: string,
+	sellerPhone: string,
+	country: Country,
+): { phone: string; fallback: boolean } {
+	const fallback =
+		buyerPhone !== "" &&
+		sellerPhone !== "" &&
+		toDomesticContactPhone(buyerPhone, country) === null;
+	return {
+		phone: fallback ? sellerPhone : buyerPhone || sellerPhone,
+		fallback,
+	};
+}
+
+/** Stored phone → the bare digits Delyva wants ("" when there is none). */
+function phoneDigits(waPhone: string | undefined): string {
+	return (waPhone ?? "").replace(/\D/g, "");
+}
+
 /** The order's parcel weight through the SAME summariser the weight/zone
  * pricing uses, with the weight-mode snapshot as a fallback for orders whose
  * variants have since been deleted. */
@@ -992,6 +1028,10 @@ type DelyvaDispatchContext =
 			buyerPaidFee: number;
 			currency: string;
 			note?: string;
+			/** The buyer's number isn't from the store's country, so the
+			 * destination contact is the STORE's number and the buyer's real
+			 * one leads the note (see buyerContactPhone). */
+			buyerContactFallback: boolean;
 			/** The demo-vs-live lookup never ran for this row — prepareBooking
 			 * schedules the heal so the badge appears without a reconnect. */
 			environmentUnknown: boolean;
@@ -1006,8 +1046,9 @@ function dispatchBlockReason(args: {
 }): DelyvaDispatchBlock | null {
 	const { order, retailer, activeJob, credentials, planOk } = args;
 	const config = retailer.delyva as DelyvaConfig | undefined;
-	// Country first — every reason below names a fix; outside Malaysia there
-	// is none to name (the Lalamove 86eyqgujv lesson).
+	// Country first — every reason below names a fix; in a country Delyva
+	// booking doesn't serve there is none to name (the Lalamove 86eyqgujv
+	// lesson).
 	if (!delyvaBookingAllowed(retailer.country ?? DEFAULT_COUNTRY))
 		return "country_unsupported";
 	if (order.deliveryMethod !== "delivery") return "not_delivery";
@@ -1076,8 +1117,13 @@ export const getDispatchContext = internalQuery({
 		const weight = await resolveOrderWeightKg(ctx, order);
 		const storeCountry = retailer.country ?? DEFAULT_COUNTRY;
 		const buyerAddress = formatBuyerAddress(order.deliveryAddress, storeCountry);
-		const buyerPhone = (order.customer.waPhone ?? "").replace(/\D/g, "");
-		const sellerPhone = (retailer.waPhone ?? "").replace(/\D/g, "");
+		const buyerPhone = phoneDigits(order.customer.waPhone);
+		const sellerPhone = phoneDigits(retailer.waPhone);
+		const buyerContact = buyerContactPhone(
+			buyerPhone,
+			sellerPhone,
+			storeCountry,
+		);
 		const inventory: DelyvaInventoryLine[] = await Promise.all(
 			order.items.map(async (item): Promise<DelyvaInventoryLine> => {
 				const variant = item.variantId
@@ -1093,7 +1139,11 @@ export const getDispatchContext = internalQuery({
 				};
 			}),
 		);
+		// The buyer's real number FIRST when the courier got the store's:
+		// buildCreateOrderBody cuts the note at 400 chars, and a long address
+		// note must never be what pushes the one way to reach the buyer out.
 		const noteParts = [
+			buyerContact.fallback ? `Buyer WhatsApp: +${buyerPhone}` : undefined,
 			order.deliveryAddress.notes,
 			order.customerNote,
 		].filter((p): p is string => !!p && p.trim().length > 0);
@@ -1114,7 +1164,7 @@ export const getDispatchContext = internalQuery({
 			destination: {
 				...buyerAddress,
 				name: order.customer.name ?? "Customer",
-				phone: buyerPhone || sellerPhone,
+				phone: buyerContact.phone,
 			},
 			inventory,
 			computedWeightKg: weight.kind === "ok" ? weight.kg : null,
@@ -1123,6 +1173,7 @@ export const getDispatchContext = internalQuery({
 			buyerPaidFee: order.deliveryFee ?? 0,
 			currency: order.currency,
 			note: noteParts.length ? noteParts.join(" · ") : undefined,
+			buyerContactFallback: buyerContact.fallback,
 			environmentUnknown: config.isDemo === undefined,
 		};
 	},
@@ -1878,6 +1929,14 @@ export const getDispatchState = query({
 		blockReason: DelyvaDispatchBlock | null;
 		/** The store has a working, enabled Delyva connection. */
 		bookingEnabled: boolean;
+		/** The store's country — the market its Delyva tenant books in, and
+		 * the noun the buyer-contact notice names. */
+		country: Country;
+		/** A booking would hand the courier the STORE's number for the buyer's
+		 * stop, because the buyer's WhatsApp isn't from `country` (see
+		 * buyerContactPhone) — said on the card before the first quote, so
+		 * nobody is surprised when the courier calls the store. */
+		buyerContactFallback: boolean;
 		defaultItemType: DelyvaItemType;
 		/** One-line render of the stored pickup address ("55 Jln Eco Majestic,
 		 * 43700 Beranang") — the dispatch card shows it before the first quote
@@ -1933,6 +1992,7 @@ export const getDispatchState = query({
 			planOk,
 		});
 		const weight = await resolveOrderWeightKg(ctx, order);
+		const country = retailer.country ?? DEFAULT_COUNTRY;
 		return {
 			job: latest
 				? {
@@ -1949,10 +2009,13 @@ export const getDispatchState = query({
 					}
 				: null,
 			blockReason,
-			bookingEnabled:
-				credentials !== null &&
-				config?.enabled === true &&
-				delyvaBookingAllowed(retailer.country ?? DEFAULT_COUNTRY),
+			bookingEnabled: delyvaBookingArmed(retailer),
+			country,
+			buyerContactFallback: buyerContactPhone(
+				phoneDigits(order.customer.waPhone),
+				phoneDigits(retailer.waPhone),
+				country,
+			).fallback,
 			defaultItemType: config?.defaultItemType ?? "PARCEL",
 			pickupSummary: config?.pickupAddress
 				? [

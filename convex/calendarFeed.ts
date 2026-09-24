@@ -19,6 +19,7 @@ import { assertSubscriptionActive } from "./subscriptions";
 import {
 	bookingsOverlapping,
 	loadBlocksForWindow,
+	usedDayRuns,
 } from "./lib/bookingAvailability";
 import { DAY_MS, todayMytMidnight } from "./lib/fulfilmentDate";
 import {
@@ -217,13 +218,28 @@ export const feedByToken = internalQuery({
 				// one extra exclusion: it self-destructs on a 24h clock, and
 				// Google refreshes about daily, so it would mostly be dead noise.
 				if (order.status === "booking_requested") continue;
-				events.push({
-					uid: `booking-${order.shortId}`,
-					summary: `${order.customer.name?.trim() || "Guest"} — ${listing.name}`,
-					start: order.bookingCheckIn as number,
-					endExclusive: order.bookingCheckOut as number,
-					createdAt: order.createdAt,
-					url: orderUrl(order.shortId),
+				// An open-days package (z8r3fdhpm7) is drawn only on the days it
+				// counts — one event per unbroken run, matching the in-app grid,
+				// which drops the member on a skipped day. Everything else is one
+				// run, so its UID is unchanged and nothing already on a seller's
+				// calendar moves.
+				const runs = usedDayRuns(
+					order.bookingCheckIn as number,
+					order.bookingCheckOut as number,
+					order.bookingSkippedDays,
+				);
+				runs.forEach((run, index) => {
+					events.push({
+						uid:
+							runs.length === 1
+								? `booking-${order.shortId}`
+								: `booking-${order.shortId}-${index + 1}`,
+						summary: `${order.customer.name?.trim() || "Guest"} — ${listing.name}`,
+						start: run.start,
+						endExclusive: run.endExclusive,
+						createdAt: order.createdAt,
+						url: orderUrl(order.shortId),
+					});
 				});
 			}
 		}

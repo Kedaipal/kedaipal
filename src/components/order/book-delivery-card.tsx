@@ -26,9 +26,13 @@ import {
 	todayMytMidnight,
 	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
+import type { LalamoveMarket } from "../../../convex/lib/lalamove";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import { formatCountdown } from "../../lib/countdown";
-import { dispatchBlockCopy } from "../../lib/dispatch-block";
+import {
+	dispatchBlockCopy,
+	riderContactFallbackCopy,
+} from "../../lib/dispatch-block";
 import { lalamoveSurface } from "../../lib/dispatch-surface";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { ProBadge } from "../app/pro-gate";
@@ -62,6 +66,9 @@ type QuoteState = {
 	buyerPaidFee: number;
 	vehicleType: string;
 	buyerContactFallback: boolean;
+	/** The store's Lalamove market — the country the `buyerContactFallback`
+	 * notice names (z8r3fdh274). */
+	market: LalamoveMarket;
 	/** The pickup moment this quote is scheduled for — undefined = the rider
 	 * comes now (86eyg0n8e follow-up). */
 	scheduledFor?: number;
@@ -318,11 +325,12 @@ export function BookDeliveryCard({
 		!["completed", "canceled", "expired", "rejected"].includes(job.status)
 			? job
 			: null;
-	// Lalamove is a Malaysian market for us. On a Singapore store the card has
-	// nothing true to offer — not a Book button, and not the "set Lalamove up"
-	// hint either, since there is no setup that would work. A completed or
-	// failed Malaysian trip belongs on the order timeline rather than under a
-	// live dispatch card that would re-offer a booking (86eyqgujv).
+	// In a country rider booking doesn't serve (COUNTRY_RIDER_BOOKING — MY and
+	// SG both do today) the card has nothing true to offer — not a Book button,
+	// and not the "set Lalamove up" hint either, since there is no setup that
+	// would work. A completed or failed trip from before a country switch
+	// belongs on the order timeline rather than under a live dispatch card that
+	// would re-offer a booking (86eyqgujv). `lalamoveSurface` above decides it.
 	//
 	// But NEVER while a rider is still out (PR #221 review). Cancelling is the
 	// seller's only way to stop a trip they are being billed for, and the
@@ -1150,10 +1158,7 @@ export function BookDeliveryCard({
 							) : null}
 							{quote.buyerContactFallback ? (
 								<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-									This buyer&apos;s WhatsApp isn&apos;t a Malaysian number, and
-									Lalamove only accepts +60 contacts — the rider will get{" "}
-									<span className="font-medium">your store&apos;s number</span>{" "}
-									instead, with the buyer&apos;s real number in the rider notes.
+									{riderContactFallbackCopy(quote.market, collection)}
 								</p>
 							) : null}
 							{variance !== 0 ? (
