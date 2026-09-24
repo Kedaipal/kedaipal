@@ -77,6 +77,7 @@ import {
 	anchorOrdinal,
 	type Locale,
 	type OrderFlowKind,
+	type OrderFlows,
 	type OrderStatus,
 	resolveCurrentStage,
 	resolveStages,
@@ -254,10 +255,12 @@ function getStatusConfig(
 	labels: StatusLabels | undefined,
 	locale: Locale,
 	bookingPackaged?: boolean,
+	orderFlows?: OrderFlows,
 ): Record<string, StatusCfg> {
 	const label = (status: OrderStatus) =>
 		resolveStatusLabel(status, {
 			labels,
+			orderFlows,
 			deliveryMethod: method,
 			locale,
 			bookingPackaged,
@@ -520,6 +523,7 @@ function TrackingRoute() {
 		order.statusLabels,
 		order.retailerLocale,
 		order.bookingPackaged,
+		order.orderFlows,
 	);
 	const config = statusConfig[order.status];
 	const isCancelled = order.status === "cancelled";

@@ -308,6 +308,12 @@ const SYSTEM_VERBS: Record<Locale, { confirmed: string; cancelled: string }> = {
 
 export type ResolveOpts = {
 	labels?: StatusLabels;
+	/** The per-kind config, read ONLY to answer "has this kind been answered?".
+	 * An entry — including an empty one from "Reset to defaults" — retires the
+	 * LEGACY rename map for that kind. Without this, a reset cleared the stage
+	 * list and left the rename speaking, so the card read DEFAULT above the
+	 * seller's own word and the confirm dialog promised a reset it didn't do. */
+	orderFlows?: OrderFlows;
 	deliveryMethod?: DeliveryMethod;
 	locale?: Locale;
 	/** Booking orders only — this one is a fixed-length PACKAGE (S7), so its
@@ -347,12 +353,19 @@ export function resolveStatusLabel(
 ): string {
 	const locale = opts.locale ?? "en";
 	const deliveryMethod = opts.deliveryMethod ?? "delivery";
-	// LEGACY renames speak only for the kinds they could ever have meant
-	// (`z8r3fdh3w1`). Gating here rather than at the ~8 call sites is the whole
-	// point: every surface that resolves a label — inbox chip, stepper, advance
-	// CTA, Home, /track — is fixed by this one line, and a future call site
-	// cannot reintroduce the leak.
-	if (FLOW_PRESETS[deliveryMethod].takesLegacyLabels) {
+	// LEGACY renames speak only for a kind that (a) could ever have meant them
+	// and (b) has not answered for itself yet (`z8r3fdh3w1`). Gating here rather
+	// than at the ~8 call sites is the whole point: every surface that resolves
+	// a label — inbox chip, stepper, advance CTA, Home, /track, the settings
+	// card — is fixed by this one place, and a future call site cannot
+	// reintroduce the leak.
+	//
+	// Condition (b) is what makes "Reset to defaults" true. A reset writes an
+	// EMPTY entry, which retires the whole legacy map for that kind rather than
+	// only its stage list. Found by testing: the reset flipped the badge to
+	// DEFAULT and the toast said so, while the chain still read the seller's
+	// "Ok go" — a store could not clear the rename at all.
+	if (legacyLabelsApply(opts.orderFlows, deliveryMethod)) {
 		const override = opts.labels?.[locale]?.[status]?.trim();
 		if (override) return override;
 	}
@@ -485,6 +498,27 @@ export function configuredStages(
 	return [];
 }
 
+/**
+ * Whether the LEGACY global rename map may still speak for a kind.
+ *
+ * Two conditions, and the second is the one a reset turns off:
+ *   1. the kind could ever have meant it (delivery / self_collect only), and
+ *   2. the kind has NOT answered for itself — no `orderFlows[kind]` entry.
+ *
+ * `[]` counts as an answer, so "Reset to defaults" clears the rename too. That
+ * covers `pending` and `cancelled`, which are system-managed and cannot be
+ * stages: they are the seller's words too, and leaving them behind would keep
+ * exactly the unclearable remnant this ticket exists to remove.
+ */
+export function legacyLabelsApply(
+	orderFlows: OrderFlows | undefined,
+	kind: OrderFlowKind = "delivery",
+): boolean {
+	return (
+		FLOW_PRESETS[kind].takesLegacyLabels && orderFlows?.[kind] === undefined
+	);
+}
+
 /** Whether a kind is running the seller's own flow rather than its preset.
  * Drives the Default / Customised state on each settings card. */
 export function isFlowCustomised(
@@ -533,6 +567,9 @@ export function hasAnchor(stages: OrderStage[], anchor: StageAnchor): boolean {
  */
 export function synthesizeDefaultStages(opts: {
 	labels?: StatusLabels;
+	/** Passed through so the legacy-rename gate sees whether this kind has
+	 * answered — a reset must synthesize the PRESET, not the old rename. */
+	orderFlows?: OrderFlows;
 	deliveryMethod?: DeliveryMethod;
 	bookingPackaged?: boolean;
 }): OrderStage[] {
@@ -550,12 +587,14 @@ export function synthesizeDefaultStages(opts: {
 		label: {
 			en: resolveStatusLabel(anchor, {
 				labels: opts.labels,
+				orderFlows: opts.orderFlows,
 				deliveryMethod: opts.deliveryMethod,
 				bookingPackaged: opts.bookingPackaged,
 				locale: "en",
 			}),
 			ms: resolveStatusLabel(anchor, {
 				labels: opts.labels,
+				orderFlows: opts.orderFlows,
 				deliveryMethod: opts.deliveryMethod,
 				bookingPackaged: opts.bookingPackaged,
 				locale: "ms",
@@ -566,6 +605,7 @@ export function synthesizeDefaultStages(opts: {
 			// `stageLabel`'s EN fallback to paper over.
 			zh: resolveStatusLabel(anchor, {
 				labels: opts.labels,
+				orderFlows: opts.orderFlows,
 				deliveryMethod: opts.deliveryMethod,
 				bookingPackaged: opts.bookingPackaged,
 				locale: "zh",
@@ -769,6 +809,9 @@ export function resolveAnchorLabel(
 	opts: {
 		stages?: OrderStage[];
 		labels?: StatusLabels;
+		/** Same passthrough as everywhere else — the fallback below resolves a
+		 * label, so it needs the gate too. */
+		orderFlows?: OrderFlows;
 		deliveryMethod?: DeliveryMethod;
 		locale?: Locale;
 	} = {},
@@ -779,6 +822,7 @@ export function resolveAnchorLabel(
 	}
 	return resolveStatusLabel(status, {
 		labels: opts.labels,
+		orderFlows: opts.orderFlows,
 		deliveryMethod: opts.deliveryMethod,
 		locale: opts.locale,
 	});

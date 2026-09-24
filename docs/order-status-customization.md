@@ -495,13 +495,31 @@ is not replaced; it is migrated into per-kind stage lists and deleted.
 
 | `orderFlows[kind]` | Means | Resolves to |
 | --- | --- | --- |
-| absent | no answer for this kind | LEGACY flat list (delivery/pickup only), else the kind's preset |
-| `[]` | **"Reset to defaults"** — an explicit answer | the kind's preset, **outranking** the legacy list |
-| `[…]` | this kind's own flow | itself |
+| absent | no answer for this kind | LEGACY flat list **and** LEGACY renames (delivery/pickup only), else the kind's preset |
+| `[]` | **"Reset to defaults"** — an explicit answer | the kind's preset, with **all** legacy wording retired for that kind |
+| `[…]` | this kind's own flow | itself, with all legacy wording retired for that kind |
 
 The empty-array sentinel is load-bearing: without it a seller who reset pickup
 would silently get their old flat list back — a reset button that doesn't
 reset. It stops mattering once the narrow drops the legacy fields.
+
+**An answer retires the whole legacy map for that kind, not just its stage
+list** — `legacyLabelsApply(orderFlows, kind)` is the one rule, and every
+resolver goes through it.
+
+> **Caught by hands-on testing, not by the suite (24 Sep).** The first cut
+> gated the legacy renames on KIND alone, so a reset cleared the stage list and
+> left the rename speaking: on dev store `herb`, the card badge flipped to
+> **DEFAULT** and the toast said *"Every order flow is back to its default
+> steps"* while every chain still read the seller's **"Ok go"** — settings
+> card, Home, inbox and the buyer `/track` page alike. The confirm dialog had
+> named a chain the reset did not produce, and the store could not clear the
+> rename at all, which is the exact failure this ticket exists to end.
+> Deleting the fixed guard now turns **5** tests red.
+
+This is also why an answer clears `pending` and `cancelled`. Those two can
+never be stages (DECISION 3), so gating only the four anchor statuses would
+leave a permanently unclearable two-word remnant — the same bug, narrower.
 
 ### Every kind takes custom stages now
 
@@ -555,27 +573,31 @@ copy is true by construction.
    `retailers.update`, `FlowPreset.takesLegacyLabels`, and the `labels` /
    `orderStages` options on `resolveStages`.
 
-> ### ⚠️ The narrow must decide what happens to `pending` / `cancelled` renames
+> ### ⚠️ The BACKFILL drops `pending` / `cancelled` renames — size it first
 >
-> Stages span the `confirmed → delivered` band only: `pending` and `cancelled`
-> are system-managed and have never been expressible as stages (DECISION 3).
-> So a legacy `statusLabels.pending` rename **cannot** be carried into
-> `orderFlows`, and the backfill does not try.
+> Stages span the `confirmed → delivered` band only, so a legacy
+> `statusLabels.pending` rename cannot be carried into `orderFlows`. Since an
+> answer retires the whole legacy map for that kind (above), **the moment the
+> backfill writes `orderFlows.delivery` / `.self_collect` for a store, its
+> `pending` and `cancelled` renames stop rendering** and those two statuses
+> read the defaults again.
 >
-> **Nothing is lost today** — `resolveStatusLabel` still reads the legacy map
-> for `pending`/`cancelled` on delivery/pickup orders, backfilled or not. It is
-> the **narrow** that would silently drop those words.
+> This is deliberate — the alternative is a two-word remnant no screen can show
+> or clear — but it is a **buyer-visible copy change on backfill**, not on
+> deploy, and it is the one part of this migration that is not
+> behaviour-preserving.
 >
-> Real example on dev: store `herb` carries
-> `statusLabels.en = { confirmed: "Ok go", pending: "Incoming" }`. The backfill
-> moved "Ok go" into both product kinds' stage lists; **"Incoming" has no
-> home**, and after the narrow that store's buyers read "Order Received" again.
+> Real example on dev: `herb` carried
+> `statusLabels.en = { confirmed: "Ok go", pending: "Incoming" }`. After the
+> backfill "Ok go" lives on as a stage; **"Incoming" is gone** and the buyer
+> page reads "Order Received".
 >
-> The prod `statusLabels` count (see the ticket — a read-only dashboard query,
-> not yet run) is what sizes this. If `pending`/`cancelled` renames are in real
-> use, the narrow needs a per-kind home for those two statuses before it can
-> land; if nobody uses them, the narrow just deletes them and says so in the
-> release notes. **Do not run the narrow without answering this.**
+> **Run the prod `statusLabels` count (the read-only query in the ticket)
+> before the backfill** and check whether any store renamed `pending` or
+> `cancelled`. If none did, this is a non-event. If some did, it belongs in the
+> release notes — or the backfill waits while those two statuses get a home.
+> The **narrow itself is no longer blocked**: once every store is backfilled,
+> nothing reads `statusLabels`.
 
 ### Surfaces that stay retailer-grain
 

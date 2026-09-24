@@ -16,6 +16,7 @@ import {
 	type OrderStatus,
 	resolveCurrentStage,
 	type ResolveOpts,
+	legacyLabelsApply,
 	resolveStages,
 	resolveStatusLabel,
 	resolveTransitionLabel,
@@ -714,9 +715,12 @@ const CAKE_FLOW: OrderStage[] = [
 	stage({ id: "c3", anchor: "delivered", sortOrder: 2, label: { en: "Collected" } }),
 ];
 
-/** The rename seen live on dev: IndoMart's "Ok go", plus a Delivered rename. */
+/** The rename seen live on dev (store `herb`/IndoMart), verbatim plus a
+ * Delivered rename. `pending` is deliberately included: it can never be a
+ * stage, so it is the case that proves a reset clears the WHOLE legacy map and
+ * not just the part stages happen to cover. */
 const LEGACY_RENAMES: StatusLabels = {
-	en: { confirmed: "Ok go", delivered: "Dah siap" },
+	en: { confirmed: "Ok go", pending: "Incoming", delivered: "Dah siap" },
 };
 
 describe("legacy renames are scoped to the kinds that could have meant them", () => {
@@ -934,5 +938,105 @@ describe("synthesized defaults are filled in every locale", () => {
 			"已入住",
 			"已退房",
 		]);
+	});
+});
+
+describe("an explicit answer for a kind retires its legacy rename", () => {
+	// Found by hands-on test, not by the suite: the original gate was keyed on
+	// KIND alone, so "Reset to defaults" cleared the stage list and left the
+	// rename speaking. The card read DEFAULT above the seller's own word, the
+	// toast claimed the flow was back to defaults, and the confirm dialog named
+	// a chain the reset did not produce. The store could not clear it at all.
+	test("a reset ([]) makes the kind read its PRESET, not the old rename", () => {
+		const reset = { delivery: [] };
+		expect(
+			resolveStatusLabel("confirmed", {
+				labels: LEGACY_RENAMES,
+				orderFlows: reset,
+				deliveryMethod: "delivery",
+			}),
+		).toBe("Confirmed");
+		// …and through the stage list every surface actually renders from.
+		expect(
+			resolveStages({
+				orderFlows: reset,
+				labels: LEGACY_RENAMES,
+				deliveryMethod: "delivery",
+			}).map((s) => s.label.en),
+		).toEqual(["Confirmed", "Packed", "On the Way", "Delivered"]);
+	});
+
+	test("the reset clears pending/cancelled too — they are the seller's words as well", () => {
+		// These two can never be stages (DECISION 3), so if a reset left them
+		// alone they would be a permanently unclearable remnant: the exact bug
+		// this ticket exists to remove, just narrowed to two statuses.
+		expect(
+			resolveStatusLabel("pending", {
+				labels: LEGACY_RENAMES,
+				orderFlows: { delivery: [] },
+				deliveryMethod: "delivery",
+			}),
+		).toBe("Order Received");
+	});
+
+	test("resetting ONE kind leaves the other kind's legacy wording alone", () => {
+		const opts = { labels: LEGACY_RENAMES, orderFlows: { delivery: [] } };
+		expect(
+			resolveStatusLabel("confirmed", { ...opts, deliveryMethod: "delivery" }),
+		).toBe("Confirmed");
+		expect(
+			resolveStatusLabel("confirmed", {
+				...opts,
+				deliveryMethod: "self_collect",
+			}),
+		).toBe("Ok go");
+	});
+
+	test("a CUSTOM list also retires the rename — the seller's words are the list now", () => {
+		expect(
+			resolveStages({
+				orderFlows: { delivery: CAKE_FLOW },
+				labels: LEGACY_RENAMES,
+				deliveryMethod: "delivery",
+			}).map((s) => s.label.en),
+		).toEqual(["Order in", "Baking", "Collected"]);
+	});
+
+	test("an UNANSWERED kind still reads the rename (no change before migration)", () => {
+		expect(
+			resolveStatusLabel("confirmed", {
+				labels: LEGACY_RENAMES,
+				orderFlows: { self_collect: [] },
+				deliveryMethod: "delivery",
+			}),
+		).toBe("Ok go");
+		expect(
+			resolveStatusLabel("confirmed", {
+				labels: LEGACY_RENAMES,
+				deliveryMethod: "delivery",
+			}),
+		).toBe("Ok go");
+	});
+
+	test("legacyLabelsApply is the single rule behind all of the above", () => {
+		expect(legacyLabelsApply(undefined, "delivery")).toBe(true);
+		expect(legacyLabelsApply({ delivery: [] }, "delivery")).toBe(false);
+		expect(legacyLabelsApply({ delivery: CAKE_FLOW }, "delivery")).toBe(false);
+		expect(legacyLabelsApply({ delivery: [] }, "self_collect")).toBe(true);
+		// A booking never took them, answered or not.
+		expect(legacyLabelsApply(undefined, "booking")).toBe(false);
+	});
+
+	test("the anchor-label fallback (Home, bulk menu, inbox) honours the reset", () => {
+		// The bulk "Update status" menu offered "Ok go" after a reset because
+		// this fallback resolved without the gate.
+		expect(
+			resolveAnchorLabel("confirmed", {
+				stages: [],
+				labels: LEGACY_RENAMES,
+				orderFlows: { delivery: [] },
+				deliveryMethod: "delivery",
+			}),
+		).toBe("Confirmed");
 	});
 });

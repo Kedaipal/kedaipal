@@ -883,6 +883,7 @@ function DashboardHome() {
 													return cs
 														? stageLabel(cs, "en")
 														: resolveAnchorLabel(order.status as OrderStatus, {
+																orderFlows: retailer.orderFlows,
 																stages,
 																labels: statusLabels,
 																deliveryMethod: (order.deliveryMethod ??

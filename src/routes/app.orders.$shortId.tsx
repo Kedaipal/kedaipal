@@ -573,6 +573,7 @@ function OrderDetailRoute() {
 	// The buyer tracking page resolves in the store's locale instead.
 	const statusLabelOpts = {
 		labels: order.statusLabels,
+		orderFlows: order.orderFlows,
 		deliveryMethod,
 		locale: "en" as const,
 	};

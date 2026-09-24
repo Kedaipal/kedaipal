@@ -745,6 +745,7 @@ function OrdersRoute() {
 			: resolveAnchorLabel(o.status as OrderStatus, {
 					stages: rowStages,
 					labels,
+					orderFlows,
 					deliveryMethod: kind,
 					locale: "en",
 				});
@@ -1128,6 +1129,7 @@ function OrdersRoute() {
 			label: resolveAnchorLabel(s as OrderStatus, {
 				stages,
 				labels,
+				orderFlows,
 				deliveryMethod: retailerMethod,
 				locale: "en",
 			}),
