@@ -34,7 +34,13 @@ cards and table search identically and the export matches what's on screen.
 Two deliberate details:
 
 - **Phone keeps its own rule** — trailing-digit matching, so `123456789` finds
-  `+60123456789` however it was stored or typed. Plain substring can't do that.
+  the stored `60123456789` with or without its country code. Plain substring
+  can't do that. The typed digits are also tried **without leading zeros** (at
+  least 4 left), because a local number is usually typed with its trunk `0`:
+  a UK buyer's `07911 123456` finds the stored `447911123456` (buyers can give
+  a number from any country since `z8r3fdh274` — see
+  [`phone-numbers.md`](./phone-numbers.md)). Malaysia only ever matched by luck
+  — `60` ends in the trunk `0` — and Singapore has no trunk at all.
 - **Categories participate**, because they are frozen onto the order at checkout
   (see below). That was the one column a live lookup could never have covered.
   Orders placed *before* the field existed need

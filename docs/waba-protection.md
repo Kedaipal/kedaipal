@@ -137,24 +137,65 @@ the `manual_admin` source declared in the schema from day one) or re-activates
 it (`adminReactivateOptIn`). Same scope as a STOP; idempotent both ways.
 
 **Input is canonicalized to the international form the send gate keys on**
-(`60…` / `65…`) via `assertValidMobileForCountry` (PR #191 review). Every key
-the send gate checks is international (Meta's inbound `from`, checkout/counter
-numbers), so an opt-out keyed on a bare local-digits strip would never match
-`isOptedOut` and fail silently while the panel claimed otherwise. Input that
-matches no country's **mobile** shape (an MY landline, a partial number)
-disables the button with a reason instead of registering an unmatchable key;
-canonicalization also keeps buyer-texted `START` able to undo an admin opt-out
-(one key, both paths — pinned by test).
+(`60…`, `65…`, `44…` — PR #191 review). Every key the send gate checks is
+international (Meta's inbound `from`, checkout/counter numbers), so an opt-out
+keyed on a bare local-digits strip would never match `isOptedOut` and fail
+silently while the panel claimed otherwise. Input that reads as no number (an
+MY landline, a partial number, letters) disables the button with a reason
+instead of registering an unmatchable key; canonicalization also keeps
+buyer-texted `START` able to undo an admin opt-out (one key, both paths —
+pinned by test).
 
-This is the one phone field with **no retailer behind it**, so unlike every
-plated field (whose country comes from the retailer row — see `slug.ts`) it
-tries **each country in `COUNTRIES`** in turn. `optOuts` is global to the
-shared number, so an SG store's buyer holds their opt-out under `65…`; a
-MY-only canonicalizer could neither find that row nor register a new one — a
-withdrawal request we could not honour. Trying each arm is unambiguous rather
-than permissive: the mobile NSN windows are disjoint (MY starts `1`, SG starts
-`8`/`9`) and stored patterns carry the dial code, so no input satisfies two
-arms. MY is tried first, keeping every pre-SG input byte-identical.
+**Any country since [`z8r3fdh274`](https://app.clickup.com/t/z8r3fdh274).**
+Buyers can give a WhatsApp number from any country
+([`phone-numbers.md`](./phone-numbers.md)), and anyone can text STOP to the
+shared number, so an MY/SG-only panel could neither register a foreign
+buyer's opt-out nor undo a foreign STOP. This is the one buyer-number field
+with **no retailer behind it and no picker beside it**, so
+`readOptOutPhone` (`convex/lib/optOutPhone.ts` — pure, shared by the server
+and the panel, which used to hand-copy the rejection message) first cleans the
+input exactly as every buyer field does (`cleanPhoneInput`,
+`convex/lib/phoneDial.ts`): invisible bidi marks — which WhatsApp and the
+contacts app wrap a copied number in, and which hid a leading `00` from the
+international arm — are removed, and full-width or script digits (`٠١٢…`,
+`０１２…`) are mapped to ASCII instead of being dropped by the strict arms'
+non-digit strip. So a number pasted out of a chat keys like the same number
+typed. Then it tries fixed arms, most specific first:
+
+1. **MY strict**, 2. **SG strict** (`assertValidMobileForCountry`) —
+   byte-identical to the MY/SG panel, so every existing key is unchanged: every
+   local spelling (`012-345 6789`, `9123 4567`, `60…`, `+65…`) keys as before
+   and a landline is refused. The two are disjoint (MY mobiles start `1`, SG
+   `8`/`9`).
+3. **An explicit international prefix** (`+44 …`, `0044 …`) → the buyer
+   parser (`parseBuyerWaPhone`) under the TYPED code's country, so the key is
+   exactly the digits a buyer's checkout stores and Meta delivers. A `+60`/`+65`
+   lands back on the strict arm in there, which is why `+60 3-1234 5678` is
+   still a landline.
+4. **Bare digits** (`447911123456`) → parsed as if typed with a `+` — the form
+   the register's Copy button hands back, so a copied row round-trips. A
+   `60…`/`65…` routes back to the strict arm that already refused it.
+
+Arms 3–4 run only after 1–2 refuse, so they never re-key a number the panel
+already accepted. What they cost is the old "no input satisfies two arms"
+guarantee: a mistyped number can now read as a real foreign one
+(`61234567890` is an Australian mobile). So **the status line names the country
+it read the number as** — *"This United Kingdom (+44) number is not currently
+opted out."* — before anything is registered. Country only, never digits. The
+rejection copy (`OPT_OUT_PHONE_MESSAGE`) is built from the strict arms' own
+kinds and examples plus the any-country rule, and a test pins that every
+example it shows is accepted.
+
+**Status and Re-activate also look the typed digits up VERBATIM** when the
+canonical key finds nothing (`findLiveOptOut`). A STOP is keyed on whatever
+Meta delivered (`registerOptOut` → `normalizeWaPhone`), and for a few countries
+that `wa_id` is a form no parser produces — Mexico's legacy `521…` mobile
+prefix — so the register could list a row the canonicalizer can't reach, and
+that row's **Re-activate** (which sends the row's own digits back) threw "enter
+a valid number" at the admin. Before z8r3fdh274 that was every non-MY/SG STOP
+row. The verbatim lookup only ever FINDS an existing row: **registering still
+demands a canonical number**, so an unmatchable key is never written. The audit
+entry takes its last four digits from the row's own key.
 
 **The register lists who is currently opted out** (`adminOptOutList`), because
 the lookup field structurally cannot: it answers "is THIS number opted out?"

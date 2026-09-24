@@ -5,7 +5,6 @@ import { BRAND_NAME_MESSAGE } from "./reservedSlugs";
 import {
 	assertValidMobileForCountry,
 	assertValidMyMobile,
-	assertValidMyWaPhone,
 	assertValidStoreName,
 	assertValidWaPhone,
 	assertValidWaPhoneForCountry,
@@ -15,42 +14,54 @@ import {
 	otherCountryMobile,
 } from "./slug";
 
-describe("assertValidMyWaPhone", () => {
+// The MY loose bridge — the first half of the strict arm. These pins used to
+// sit on the MY-fixed `assertValidMyWaPhone` alias, deleted in z8r3fdh274 with
+// zero production callers left; the bridge they describe is unchanged.
+describe("assertValidWaPhoneForCountry — MY loose arm", () => {
 	test("converts a local 0-prefixed number to E.164 (drops trunk 0, adds 60)", () => {
-		expect(assertValidMyWaPhone("0123456789")).toBe("60123456789");
+		expect(assertValidWaPhoneForCountry("0123456789", "MY")).toBe(
+			"60123456789",
+		);
 	});
 
-	test("strips separators a cashier types before normalizing", () => {
-		expect(assertValidMyWaPhone("012-345 6789")).toBe("60123456789");
+	test("strips the separators people type before normalizing", () => {
+		expect(assertValidWaPhoneForCountry("012-345 6789", "MY")).toBe(
+			"60123456789",
+		);
 	});
 
 	test("keeps an already-international 60 number unchanged", () => {
-		expect(assertValidMyWaPhone("60123456789")).toBe("60123456789");
+		expect(assertValidWaPhoneForCountry("60123456789", "MY")).toBe(
+			"60123456789",
+		);
 	});
 
 	test("accepts a +60 number and strips the plus", () => {
-		expect(assertValidMyWaPhone("+60 12-345 6789")).toBe("60123456789");
+		expect(assertValidWaPhoneForCountry("+60 12-345 6789", "MY")).toBe(
+			"60123456789",
+		);
 	});
 
 	test("normalizes to the SAME digits an inbound scan produces (keying parity)", () => {
-		// The scan path stores what Meta delivers (assertValidWaPhone on "60…"); a
-		// cashier typing the local form must land on the identical customer key.
-		expect(assertValidMyWaPhone("0123456789")).toBe(
+		// The scan path stores what Meta delivers (assertValidWaPhone on "60…");
+		// the local form typed into a field must land on the identical customer
+		// key.
+		expect(assertValidWaPhoneForCountry("0123456789", "MY")).toBe(
 			assertValidWaPhone("60123456789"),
 		);
 	});
 
 	test("rejects a number that's too short to be valid", () => {
-		expect(() => assertValidMyWaPhone("12345")).toThrow();
+		expect(() => assertValidWaPhoneForCountry("12345", "MY")).toThrow();
 	});
 
 	test("rejects non-numeric junk", () => {
-		expect(() => assertValidMyWaPhone("not a phone")).toThrow();
+		expect(() => assertValidWaPhoneForCountry("not a phone", "MY")).toThrow();
 	});
 });
 
 describe("assertValidMyMobile", () => {
-	test("normalizes the same shapes as assertValidMyWaPhone", () => {
+	test("normalizes the same shapes as the MY loose arm", () => {
 		expect(assertValidMyMobile("012-345 6789")).toBe("60123456789");
 		expect(assertValidMyMobile("60123456789")).toBe("60123456789");
 		expect(assertValidMyMobile("+60 12-345 6789")).toBe("60123456789");
@@ -83,13 +94,14 @@ describe("assertValidMyMobile", () => {
 
 // --- SG arms (SG-lite, 86eynw28q/86eynw2dy) --------------------------------
 // The MY suites above double as the byte-identity pin for the MY arm — the
-// legacy names now delegate to the country-parameterized validators.
+// MY-fixed `assertValidMyMobile` delegates to the country-parameterized
+// validator, and the loose MY bridge is pinned directly.
 
 describe("assertValidWaPhoneForCountry — SG loose arm", () => {
 	test("prefixes a bare 8-digit mobile with 65 (the M3 CRM-fork fix)", () => {
-		// A cashier at an SG counter keys the natural local form. Unprefixed it
-		// would be stored as "81234567" while Meta delivers the same buyer
-		// inbound as "6581234567" — forking the (retailerId, waPhone) customer.
+		// The natural SG local form. Unprefixed it would be stored as
+		// "81234567" while Meta delivers the same buyer inbound as
+		// "6581234567" — forking the (retailerId, waPhone) customer.
 		expect(assertValidWaPhoneForCountry("81234567", "SG")).toBe("6581234567");
 		expect(assertValidWaPhoneForCountry("9123 4567", "SG")).toBe("6591234567");
 	});
@@ -104,8 +116,8 @@ describe("assertValidWaPhoneForCountry — SG loose arm", () => {
 	});
 
 	test("SG has no trunk 0 — a 0-prefixed number is NOT rewritten", () => {
-		// Stays loose: passed through (assume it carries meaning we can't infer)
-		// and judged only by the 8–15-digit rule.
+		// The bridge passes it through, judged only by the 8–15-digit rule;
+		// the strict arm's mobile shape is what refuses it.
 		expect(assertValidWaPhoneForCountry("0123456789", "SG")).toBe(
 			"0123456789",
 		);
@@ -115,7 +127,7 @@ describe("assertValidWaPhoneForCountry — SG loose arm", () => {
 		expect(assertValidWaPhoneForCountry("61234567", "SG")).toBe("61234567");
 	});
 
-	test("passes a foreign number through for a walk-in from anywhere", () => {
+	test("passes a number it can't bridge through unchanged (the strict arm judges it)", () => {
 		expect(assertValidWaPhoneForCountry("60123456789", "SG")).toBe(
 			"60123456789",
 		);

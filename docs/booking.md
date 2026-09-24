@@ -164,7 +164,13 @@ same libs: `computeOrderTotals`, id generation, usage metering, CRM linking,
   surface (totals, CSV, insights, receipts) reads "listing × nights" with no
   special-casing. No stock is moved (capacity, not stock, governs).
 - Phone **required server-side** (unlike the storefront's protocol-optional
-  phone): the whole request lifecycle reaches the guest on WhatsApp.
+  phone): the whole request lifecycle reaches the guest on WhatsApp. Judged by
+  the same authority as `orders.create` — `assertValidBuyerWaPhone` against the
+  country the guest picked on the field's plate (`customer.waDialCountry`;
+  absent = the store's country), so any country is accepted and a booking
+  checkout can never reject a number the ordinary checkout would take
+  ([`z8r3fdh274`](https://app.clickup.com/t/z8r3fdh274),
+  [`phone-numbers.md`](./phone-numbers.md)).
 
 ### One availability authority
 
@@ -191,8 +197,10 @@ escalation (amber 4 h / red 24 h) now doubles as the seller's countdown.
 ### Buyer surfaces (Variant A, locked 16 Aug)
 
 - **`/{slug}/checkout?booking=<productSlug>`** → `BookingCheckoutForm`
-  replaces the cart checkout: 1 Who's booking (name + required MY WhatsApp +
-  PDPA line, EN/MS) → 2 When is your stay (the calendar) → optional note.
+  replaces the cart checkout: 1 Who's booking (name + required WhatsApp — any
+  country, on the buyer phone picker since z8r3fdh274, with its echo line
+  masked for Clarity — + PDPA line, EN/MS) → 2 When is your stay (the
+  calendar) → optional note.
   Ticket-skin receipt ("RM80/night → nights → **Total when approved**"),
   disabled-with-reason CTA **"Request to book"**, and the honesty pair —
   "Nothing is charged now" + "{store} confirms within 24 hours" — at the

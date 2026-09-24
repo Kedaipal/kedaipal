@@ -3,9 +3,14 @@
  * and the denormalized search haystack. Reused from queries, mutations, and the
  * backfill migration. The only Convex dependency is `ConvexError` (a plain error
  * class) so validators surface a clean, user-facing message to the client.
+ *
+ * Also the dashboard's copy: `src/lib/customer.ts` re-exports the display
+ * helpers from here, so the seller's screen and the PDFs/server can't render
+ * the same buyer differently (it used to be a hand-kept mirror).
  */
 
 import { ConvexError } from "convex/values";
+import { formatInternational } from "./phoneDial";
 
 /** Min/max length for a buyer name — one rule for every capture point. */
 export const MIN_CUSTOMER_NAME = 3;
@@ -62,7 +67,9 @@ export type DisplayableCustomer = {
 /**
  * Format a digits-only WhatsApp phone for display. Malaysian (country code 60)
  * and Singaporean (65 — SG-lite, 86eynw2dy) numbers get a "+60 " / "+65 "
- * prefix; everything else is prefixed with a bare "+". Keyed off the STORED
+ * prefix; any other country's number — buyers can pick any country since
+ * z8r3fdh274 — is split at its calling code the same way (`+44 7911123456`).
+ * A number with no known code falls back to a bare "+". Keyed off the STORED
  * digits, not a country setting — a stored number already says what it is.
  * Returns an empty string for empty input.
  */
@@ -71,7 +78,7 @@ export function formatPhone(waPhone: string): string {
 	if (digits.length === 0) return "";
 	if (digits.startsWith("60")) return `+60 ${digits.slice(2)}`;
 	if (digits.startsWith("65")) return `+65 ${digits.slice(2)}`;
-	return `+${digits}`;
+	return formatInternational(digits) ?? `+${digits}`;
 }
 
 /**

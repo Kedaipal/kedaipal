@@ -4,8 +4,7 @@
  *
  * IMPORTANT: Keep in sync with `convex/lib/orderStatus.ts`. Both files must stay
  * identical in logic — they exist separately because Convex functions bundle
- * from the `convex/` directory and the frontend bundles from `src/`. (Same
- * convention as `convex/lib/customer.ts` ↔ `src/lib/customer.ts`.)
+ * from the `convex/` directory and the frontend bundles from `src/`.
  *
  * Phase 1 of per-retailer status customization: a retailer can rename the five
  * visible pipeline stages (EN + MS). Unset keys fall back to the

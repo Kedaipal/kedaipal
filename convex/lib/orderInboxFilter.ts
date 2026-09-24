@@ -291,6 +291,8 @@ export function buildInboxPredicate(
 ): (o: FilterableOrder) => boolean {
 	const term = (args.searchText ?? "").trim().toLowerCase();
 	const digits = term.replace(/\D/g, "");
+	// The same digits without a leading trunk 0 — see the phone rule below.
+	const trunkless = digits.replace(/^0+/, "");
 	const payset =
 		args.paymentStatuses && args.paymentStatuses.length > 0
 			? new Set(args.paymentStatuses)
@@ -381,11 +383,16 @@ export function buildInboxPredicate(
 		}
 		if (term.length > 0) {
 			// Phone keeps its own rule: match on TRAILING digits, so "123456789"
-			// finds "+60123456789" however the seller stored or typed it. Plain
+			// finds "60123456789" with or without its country code. Plain
 			// substring matching can't do that, which is why it survives the
-			// move to the column haystack.
+			// move to the column haystack. A local number typed with its trunk 0
+			// is tried without it too: MY only matched by luck (`60` ends in the
+			// trunk `0`), so a foreign buyer's "07911 123456" missed the stored
+			// "447911123456" (z8r3fdh274).
 			const phone = (o.customer.waPhone ?? "").replace(/\D/g, "");
-			const phoneHit = digits.length >= 4 && phone.endsWith(digits);
+			const phoneHit =
+				(digits.length >= 4 && phone.endsWith(digits)) ||
+				(trunkless.length >= 4 && phone.endsWith(trunkless));
 			if (!phoneHit && !searchHaystack(o).includes(term)) return false;
 		}
 		return true;

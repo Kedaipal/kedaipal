@@ -3272,3 +3272,88 @@ describe("orderFlows — per-flow-kind stages (z8r3fdh3w1)", () => {
 		]);
 	});
 });
+
+describe("public booksCouriers bit (z8r3fdh274)", () => {
+	// Checkout tells a buyer with an overseas WhatsApp number that the rider
+	// will phone the store instead — but only at a store that actually hands
+	// orders to a courier. One bit on the storefront payload; the courier
+	// config it is derived from stays owner-only.
+	async function booksCouriers(
+		t: ReturnType<typeof setup>,
+		slug: string,
+	): Promise<boolean | undefined> {
+		const pub = await t.query(api.retailers.getRetailerBySlug, { slug });
+		if (pub.status !== "ok") throw new Error("store not found");
+		expect(pub.retailer).not.toHaveProperty("deliveryBooking");
+		expect(pub.retailer).not.toHaveProperty("delyva");
+		return pub.retailer.booksCouriers;
+	}
+
+	async function retailerIdOf(t: ReturnType<typeof setup>, slug: string) {
+		const row = await t.run((ctx) =>
+			ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", slug))
+				.first(),
+		);
+		if (!row) throw new Error("no retailer");
+		return row._id;
+	}
+
+	test("a store with no courier booking reads false — never absent", async () => {
+		const t = setup();
+		await seed(t, USER_A, "no-couriers");
+		expect(await booksCouriers(t, "no-couriers")).toBe(false);
+	});
+
+	test("Lalamove booking switched on reads true, and off again reads false", async () => {
+		const t = setup();
+		await seed(t, USER_A, "lalamove-couriers");
+		const retailerId = await retailerIdOf(t, "lalamove-couriers");
+		// Patched, not saved through updateSettings: the save schedules the
+		// key-encryption action, and the bit reads only the stored flag.
+		await t.run((ctx) =>
+			ctx.db.patch(retailerId, {
+				deliveryBooking: {
+					enabled: true,
+					vehicleType: "MOTORCYCLE",
+					apiKey: "enc:v1:ciphertext",
+				},
+			}),
+		);
+		expect(await booksCouriers(t, "lalamove-couriers")).toBe(true);
+
+		await t.run((ctx) =>
+			ctx.db.patch(retailerId, {
+				deliveryBooking: { enabled: false, vehicleType: "MOTORCYCLE" },
+			}),
+		);
+		expect(await booksCouriers(t, "lalamove-couriers")).toBe(false);
+	});
+
+	test("Delyva reads true only when connected AND switched on", async () => {
+		const t = setup();
+		await seed(t, USER_A, "delyva-couriers");
+		const retailerId = await retailerIdOf(t, "delyva-couriers");
+		const connected = {
+			enabled: true,
+			apiKey: "enc:v1:ciphertext",
+			customerId: 4321,
+		};
+
+		await t.run((ctx) =>
+			ctx.db.patch(retailerId, { delyva: { ...connected, enabled: false } }),
+		);
+		expect(await booksCouriers(t, "delyva-couriers")).toBe(false);
+
+		await t.run((ctx) =>
+			ctx.db.patch(retailerId, {
+				delyva: { enabled: true, customerId: 4321 },
+			}),
+		);
+		expect(await booksCouriers(t, "delyva-couriers")).toBe(false);
+
+		await t.run((ctx) => ctx.db.patch(retailerId, { delyva: connected }));
+		expect(await booksCouriers(t, "delyva-couriers")).toBe(true);
+	});
+});

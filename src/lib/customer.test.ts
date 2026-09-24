@@ -1,52 +1,14 @@
 import { describe, expect, test } from "vitest";
-import { formatPhone, getDisplayName } from "./customer";
+import * as server from "../../convex/lib/customer";
+import { formatPhone, getDisplayName, orderCustomerLabel } from "./customer";
 
-describe("formatPhone", () => {
-	test("formats a Malaysian number with +60 prefix", () => {
-		expect(formatPhone("60123456789")).toBe("+60 123456789");
-	});
-
-	test("strips non-digit characters before formatting", () => {
-		expect(formatPhone("+60 12-345 6789")).toBe("+60 123456789");
-	});
-
-	test("formats a Singaporean number with +65 prefix (SG-lite)", () => {
-		expect(formatPhone("6591234567")).toBe("+65 91234567");
-	});
-
-	test("prefixes a bare + for other countries' numbers", () => {
-		expect(formatPhone("14155550123")).toBe("+14155550123");
-	});
-
-	test("returns empty string for empty input", () => {
-		expect(formatPhone("")).toBe("");
-	});
-});
-
-describe("getDisplayName", () => {
-	test("prefers retailer-edited name", () => {
-		expect(
-			getDisplayName({
-				name: "Aisha (VIP)",
-				waProfileName: "Aisha Cakes",
-				waPhone: "60123456789",
-			}),
-		).toBe("Aisha (VIP)");
-	});
-
-	test("falls back to waProfileName when name is unset", () => {
-		expect(
-			getDisplayName({ waProfileName: "Aisha Cakes", waPhone: "60123456789" }),
-		).toBe("Aisha Cakes");
-	});
-
-	test("falls back to formatted phone when name and profile name are unset", () => {
-		expect(getDisplayName({ waPhone: "60123456789" })).toBe("+60 123456789");
-	});
-
-	test("treats a blank name as unset", () => {
-		expect(getDisplayName({ name: "  ", waPhone: "60123456789" })).toBe(
-			"+60 123456789",
-		);
+// The behaviour is tested once, beside its author (`convex/lib/customer.test.ts`).
+// What this pins is that the dashboard renders through THAT code — a hand copy
+// creeping back in would fork the seller's screen from the PDFs and the server.
+describe("dashboard customer helpers", () => {
+	test("are the server's own functions, not a mirror", () => {
+		expect(formatPhone).toBe(server.formatPhone);
+		expect(getDisplayName).toBe(server.getDisplayName);
+		expect(orderCustomerLabel).toBe(server.orderCustomerLabel);
 	});
 });
