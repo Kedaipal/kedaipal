@@ -17,6 +17,7 @@ import {
 	closureRule,
 	countedDays,
 	resolveOpenDaysTerm,
+	usedDayRuns,
 } from "./bookingAvailability";
 import {
 	addMytCalendarMonths,
@@ -448,5 +449,25 @@ describe("countedDays — the one count every \"N days\" on an order reads", () 
 		expect(countedDays(day(0), day(7), [day(1), day(4)])).toBe(5);
 		expect(countedDays(day(0), day(7), [day(-1), day(7)])).toBe(7);
 		expect(countedDays(day(0), day(2), undefined)).toBe(2);
+	});
+});
+
+describe("usedDayRuns — the days a booking is actually there, as unbroken runs", () => {
+	it("an open-days package is cut at each day it skips", () => {
+		// Sat 3 (day 0) → Fri 9 (day 6), skipping Sun 4, Tue 6, Wed 7.
+		expect(usedDayRuns(day(0), day(7), [day(1), day(3), day(4)])).toEqual([
+			{ start: day(0), endExclusive: day(1) },
+			{ start: day(2), endExclusive: day(3) },
+			{ start: day(5), endExclusive: day(7) },
+		]);
+	});
+
+	it("everything else is one run — the span itself", () => {
+		expect(usedDayRuns(day(0), day(3), undefined)).toEqual([
+			{ start: day(0), endExclusive: day(3) },
+		]);
+		expect(usedDayRuns(day(0), day(3), [])).toEqual([
+			{ start: day(0), endExclusive: day(3) },
+		]);
 	});
 });

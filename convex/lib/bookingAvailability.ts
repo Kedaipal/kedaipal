@@ -106,6 +106,38 @@ export function countedDays(
 	return nightsBetween(checkIn, checkOut) - inside;
 }
 
+/**
+ * The unbroken runs of days a booking actually USES, as `[start,
+ * endExclusive)` spans. One span for every booking except an open-days package
+ * (z8r3fdhpm7), which is cut at each shut day it stepped over — Sat 3, then
+ * Mon 5, then Thu 8–Fri 9.
+ *
+ * For the seller's Google Calendar feed: the in-app grid drops a member on the
+ * days their package skips (`occupiesNight`), so the feed must not draw them
+ * there either — one continuous event said "Aisyah — Kayak course" on the
+ * Sunday the shop is shut.
+ */
+export function usedDayRuns(
+	checkIn: number,
+	checkOut: number,
+	skipped: readonly number[] | undefined,
+): Array<{ start: number; endExclusive: number }> {
+	const shut = new Set(skipped ?? []);
+	if (shut.size === 0) return [{ start: checkIn, endExclusive: checkOut }];
+	const runs: Array<{ start: number; endExclusive: number }> = [];
+	let runStart: number | null = null;
+	for (let day = checkIn; day < checkOut; day += DAY_MS) {
+		if (shut.has(day)) {
+			if (runStart !== null) runs.push({ start: runStart, endExclusive: day });
+			runStart = null;
+		} else if (runStart === null) {
+			runStart = day;
+		}
+	}
+	if (runStart !== null) runs.push({ start: runStart, endExclusive: checkOut });
+	return runs;
+}
+
 /** A package can't START on a day the store is shut — the one sentence, so
  * the resolver's refusal and the buyer calendar's reason can't drift. */
 export const CLOSED_START_MESSAGE =

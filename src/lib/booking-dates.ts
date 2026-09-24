@@ -162,6 +162,10 @@ export function packageEnd(
  * judged on the days it counts — its term steps over shut days, so a block
  * on one of those stops nothing, and a start further back can still reach a
  * blocked day that an every-day count would have missed.
+ *
+ * COST: up to ~400 candidate starts, each resolving a term of up to a year.
+ * Fine once, when the seller confirms a block range — never call it per cell
+ * or per render (the grid has its own occupancy data).
  */
 export function packageStartsCoveringRange(
 	listing: { packageLength?: number; packageUnit?: PackageUnit },

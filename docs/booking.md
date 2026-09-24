@@ -1664,6 +1664,13 @@ around them didn't. What it found, and what changed:
   "7:30 AM" on one line; the approve card's capacity figure ignores days the
   booking skips (and its dead `nights` field is gone).
 
+**PR review follow-up:** the Google Calendar feed (`calendarFeed.ts`) drew an
+open-days package as one continuous event, so a seller's phone showed the
+member on the days the grid drops them. It now emits one event per unbroken
+run of counted days (`usedDayRuns`), UIDs `booking-<shortId>-1…n`; every other
+booking is still one event with its unchanged UID, so nothing already in a
+seller's calendar moves.
+
 ### Tests
 
 `convex/lib/closedDates.test.ts`, `convex/lib/bookingAvailability.test.ts`
