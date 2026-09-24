@@ -43,16 +43,23 @@
  * window later is a schema widen plus one line in `dayWindows`, not a branch
  * in eight functions.
  *
+ * CLOSED DATES (z8r3fdhpm7): the weekly schedule's exceptions — Hari Raya, a
+ * balik-kampung week — live in `closedDates.ts` and are stored beside the
+ * hours on the retailer. `isStoreClosedOn` is the one combined question ("is
+ * the store shut all day on this date?"), and `openNowStatus` reads both, so
+ * the header never says "Open now" on a closed date.
+ *
  * v1 limits (each a follow-up if a real seller asks): at most two windows per
- * day, no overnight wrap (a mamak open 6 PM – 2 AM), no holiday/exception
- * dates.
+ * day, no overnight wrap (a mamak open 6 PM – 2 AM).
  *
  * No Convex imports — pure functions shared by the server gate
  * (orders.create, retailers.updateSettings) and the client (checkout date/
  * time UI, settings editor, storefront header), the fulfilmentDate.ts way.
  */
 
+import { type ClosedDateRange, closureOn, upcomingClosures } from "./closedDates";
 import {
+	DAY_MS,
 	MINUTES_PER_DAY,
 	formatFulfilmentTime,
 	hhmmFromMinutes,
@@ -60,6 +67,7 @@ import {
 	mytMinutesOfDay,
 	todayMytMidnight,
 	weekdayIndexMyt,
+	ymdFromEpoch,
 } from "./fulfilmentDate";
 
 export interface DayHours {
@@ -143,6 +151,22 @@ export function isOpenOnDate(
 	dateEpoch: number,
 ): boolean {
 	return hoursForDate(hours, dateEpoch) !== null;
+}
+
+/**
+ * Is the store shut ALL DAY on this date — its weekly day off, or one of its
+ * closed dates (z8r3fdhpm7)? The one combined question, so a surface that
+ * cares about "can anything happen that day" never checks only half of it.
+ */
+export function isStoreClosedOn(
+	hours: OpeningHours | undefined,
+	closedDates: ReadonlyArray<ClosedDateRange> | undefined,
+	dateEpoch: number,
+): boolean {
+	return (
+		hoursForDate(hours, dateEpoch) === null ||
+		closureOn(closedDates, dateEpoch) !== null
+	);
 }
 
 /** Whether a day's window is the full 24 hours. The all-day spelling is
@@ -498,12 +522,24 @@ export function defaultTimeWithinHours(
  * carries the next opening, which on a split day may be later TODAY
  * (daysAhead 0). `nextOpen` is null only for a schedule with no open day,
  * which the sanitizer forbids (defensive for hand-edited data).
+ *
+ * `closure` (z8r3fdhpm7) is set when TODAY is one of the store's closed dates
+ * — the header then says why ("Closed today · Hari Raya") instead of implying
+ * the weekly schedule shut it, and `nextOpen` skips every closed date too, so
+ * "opens tomorrow" is never said about the second day of a three-day closure.
+ * `allDay` marks a next opening on a 24-hour day, where "opens 12:00 AM"
+ * would be true but useless — the header says "reopens" instead.
  */
 export type OpenNowStatus =
 	| { open: true; day: DayHours; until: number }
 	| {
 			open: false;
-			nextOpen: { daysAhead: number; openMinutes: number } | null;
+			closure?: ClosedDateRange;
+			nextOpen: {
+				daysAhead: number;
+				openMinutes: number;
+				allDay: boolean;
+			} | null;
 	  };
 
 /**
@@ -527,13 +563,41 @@ export function openingHoursSpecification(
 	);
 }
 
-export function openNowStatus(
-	hours: OpeningHours,
+/**
+ * schema.org `specialOpeningHoursSpecification` rows for the store's upcoming
+ * closed dates (z8r3fdhpm7) — schema.org spells "closed all day" as a row
+ * whose `opens` and `closes` are both 00:00, bounded by `validFrom` /
+ * `validThrough` (ISO dates, inclusive). Google reads these as holiday hours.
+ */
+export function closedDatesSpecification(
+	closedDates: ReadonlyArray<ClosedDateRange> | undefined,
 	now: number = Date.now(),
+): Array<Record<string, string>> {
+	return upcomingClosures(closedDates, now).map((range) => ({
+		"@type": "OpeningHoursSpecification",
+		opens: "00:00",
+		closes: "00:00",
+		validFrom: ymdFromEpoch(range.startDate),
+		validThrough: ymdFromEpoch(range.endDate),
+	}));
+}
+
+/**
+ * How far `openNowStatus` looks for the next opening. A week covers every
+ * weekly schedule (the sanitizer forbids an all-closed one); the closed-date
+ * ceiling on top covers the longest single closure plus a week after it.
+ */
+const NEXT_OPEN_HORIZON_DAYS = 366 + DAYS_PER_WEEK;
+
+export function openNowStatus(
+	hours: OpeningHours | undefined,
+	now: number = Date.now(),
+	closedDates?: ReadonlyArray<ClosedDateRange>,
 ): OpenNowStatus {
 	const today = todayMytMidnight(now);
 	const nowMinutes = mytMinutesOfDay(now);
-	const todayHours = hoursForDate(hours, today);
+	const closure = closureOn(closedDates, today) ?? undefined;
+	const todayHours = closure ? null : hoursForDate(hours, today);
 	if (todayHours !== null) {
 		const current = dayWindows(todayHours).find(
 			(window) => nowMinutes >= window.open && nowMinutes <= window.close,
@@ -550,19 +614,25 @@ export function openNowStatus(
 		if (next) {
 			return {
 				open: false,
-				nextOpen: { daysAhead: 0, openMinutes: next.open },
+				nextOpen: { daysAhead: 0, openMinutes: next.open, allDay: false },
 			};
 		}
 	}
-	const DAY_MS = MINUTES_PER_DAY * 60 * 1000;
-	for (let ahead = 1; ahead <= DAYS_PER_WEEK; ahead++) {
-		const day = hoursForDate(hours, today + ahead * DAY_MS);
+	for (let ahead = 1; ahead <= NEXT_OPEN_HORIZON_DAYS; ahead++) {
+		const date = today + ahead * DAY_MS;
+		if (closureOn(closedDates, date)) continue;
+		const day = hoursForDate(hours, date);
 		if (day !== null) {
 			return {
 				open: false,
-				nextOpen: { daysAhead: ahead, openMinutes: day.open },
+				...(closure ? { closure } : {}),
+				nextOpen: {
+					daysAhead: ahead,
+					openMinutes: day.open,
+					allDay: isAllDay(day),
+				},
 			};
 		}
 	}
-	return { open: false, nextOpen: null };
+	return { open: false, ...(closure ? { closure } : {}), nextOpen: null };
 }

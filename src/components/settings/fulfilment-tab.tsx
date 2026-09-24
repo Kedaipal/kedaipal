@@ -36,6 +36,7 @@ import {
 	resolveAwbConfig,
 	type StoredAwbConfig,
 } from "../../../convex/lib/awbConfig";
+import type { ClosedDateRange } from "../../../convex/lib/closedDates";
 import type { Country } from "../../../convex/lib/country";
 import type {
 	DeliveryConfig,
@@ -72,13 +73,10 @@ import { MASK_PII } from "../../lib/analytics-privacy";
 import {
 	type CardTarget,
 	type FixHighlight,
-	highlightRingClass,
 	SETTINGS_ANCHOR,
 	scrollToAnchor,
 } from "../../lib/country-setup-copy";
 import { formatPhone } from "../../lib/customer";
-import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
-import { cn } from "../../lib/utils";
 import {
 	convexErrorMessage,
 	currencySymbol,
@@ -88,13 +86,16 @@ import {
 	parsePriceInput,
 } from "../../lib/format";
 import { deriveMapsUrl } from "../../lib/google-address";
+import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import { hasFeature, type SubscriptionView } from "../../lib/subscription";
+import { cn } from "../../lib/utils";
 import { jntSeedZones } from "../../lib/weight-zone-seed";
 import { ProBadge } from "../app/pro-gate";
 import {
 	GoogleAddressAutocomplete,
 	type GoogleSelectedAddress,
 } from "../forms/google-address-autocomplete";
+import { DayWindowsStacked, TimeRange } from "../hours/hours-text";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { FilterChip } from "../ui/filter-chip";
@@ -103,10 +104,11 @@ import { Skeleton } from "../ui/skeleton";
 import { SortableList } from "../ui/sortable-list";
 import { TimePicker } from "../ui/time-picker";
 import { ToggleSwitch } from "../ui/toggle-switch";
+import { ClosedDatesCard } from "./closed-dates-card";
 import { CourierBookingSection } from "./courier-booking-section";
 import { DespatchLabelCard } from "./despatch-label-card";
-import { DayWindowsStacked, TimeRange } from "../hours/hours-text";
 import { PickupLocationEditDialog } from "./pickup-location-edit-dialog";
+import { Card, SectionHeading } from "./settings-primitives";
 
 /** Owner-only business address (the radius-pricing origin) — mirrors the
  * retailers.businessAddress payload field. */
@@ -161,6 +163,8 @@ interface FulfilmentTabProps {
 	/** Store opening hours (86eyp5rav) — undefined = open 24/7. Buyers can only
 	 * pick fulfilment dates/times inside them. See convex/lib/openingHours.ts. */
 	openingHours: OpeningHours | undefined;
+	/** Closed dates (z8r3fdhpm7) — the weekly schedule's exceptions. */
+	closedDates: ClosedDateRange[] | undefined;
 	/** Store-wide minimum order value (minor units, 86ey9unyx) — undefined =
 	 * no minimum. See convex/lib/minOrderRules.ts. */
 	minOrderValue: number | undefined;
@@ -171,55 +175,6 @@ interface FulfilmentTabProps {
 	subscription: SubscriptionView | undefined;
 }
 
-/**
- * `id` is the deep-link anchor: the post-switch checklist links to the exact
- * card that fixes a row, and `highlight` rings it so the seller lands on the
- * thing rather than the top of a long tab (86eyqgujv).
- *
- * `scroll-mt-24` keeps the sticky header off the card once scrolled to.
- */
-function Card({
-	children,
-	id,
-	highlight,
-}: {
-	children: ReactNode;
-	id?: string;
-	highlight?: FixHighlight;
-}) {
-	return (
-		<section
-			id={id}
-			data-fix-highlight={highlight ?? undefined}
-			className={`flex flex-col gap-4 rounded-2xl border bg-background p-5 scroll-mt-24 lg:p-6 ${highlightRingClass(highlight)}`}
-		>
-			{children}
-		</section>
-	);
-}
-
-function SectionHeading({
-	title,
-	description,
-}: {
-	title: string;
-	description?: string;
-}) {
-	return (
-		<div className="flex flex-col gap-1">
-			<h3 className="text-sm font-semibold text-foreground">{title}</h3>
-			{description ? (
-				<p className="text-xs text-muted-foreground leading-relaxed">
-					{description}
-				</p>
-			) : null}
-		</div>
-	);
-}
-
-/** Seller-facing kind chip on each pickup-point row. Same vocabulary as the
- *  buyer storefront ("Self-collect" / "Drop-off") so there's one language for
- *  the two kinds across the whole product. */
 function PickupKindBadge({ kind }: { kind: "self_collect" | "drop_off" }) {
 	return (
 		<span className="shrink-0 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
@@ -256,6 +211,7 @@ export function FulfilmentTab({
 	deliveryBooking,
 	minFulfilmentNoticeDays,
 	openingHours,
+	closedDates,
 	minOrderValue,
 	awbConfig,
 	subscription,
@@ -426,6 +382,9 @@ export function FulfilmentTab({
 				initial={openingHours}
 				highlight={ring(SPOTLIGHT_ANCHOR.opening_hours.anchor)}
 			/>
+			{/* Directly under the weekly hours: closed dates are that
+			    schedule's exceptions (z8r3fdhpm7). */}
+			<ClosedDatesCard retailerId={retailerId} closedDates={closedDates} />
 			<MinNoticeCard initial={minFulfilmentNoticeDays} />
 			<MinOrderValueCard initial={minOrderValue} currency={currency} />
 			<BusinessAddressCard
@@ -1744,10 +1703,9 @@ function DeliveryChargeSection({
 					<p className="rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
 						A band works like a box tier —{" "}
 						<b>&ldquo;up to 5 kg = {formatDraftPrice(30, currency)}&rdquo;</b>{" "}
-						(S 5 kg / M 10 kg / L 20 kg).
-						Rates use <b>actual weight only</b>; if your courier bills
-						volumetric (size-based) weight, pick the safer band when you copy
-						your card over.
+						(S 5 kg / M 10 kg / L 20 kg). Rates use <b>actual weight only</b>;
+						if your courier bills volumetric (size-based) weight, pick the safer
+						band when you copy your card over.
 					</p>
 
 					{zones.length === 0 ? (
@@ -2330,7 +2288,8 @@ function SecondWindowButton({
 	onClick: () => void;
 }) {
 	const Icon = action === "add" ? Plus : X;
-	const label = action === "add" ? "Add a second window" : "Remove second window";
+	const label =
+		action === "add" ? "Add a second window" : "Remove second window";
 	return (
 		<div className="flex flex-col gap-1">
 			<button
@@ -3179,9 +3138,9 @@ function BusinessAddressCard({
 				>
 					{hasAddress ? (
 						<>
-							Rides in front of the address above, everywhere it&apos;s
-							printed — the part Google&apos;s suggestion leaves out, and the
-							reason riders end up phoning you from the car park. Up to{" "}
+							Rides in front of the address above, everywhere it&apos;s printed
+							— the part Google&apos;s suggestion leaves out, and the reason
+							riders end up phoning you from the car park. Up to{" "}
 							{UNIT_LINE_MAX_LENGTH} characters.
 						</>
 					) : (
@@ -3352,9 +3311,7 @@ function LocationRowBody({
 							/>
 							<span>
 								Event venue: {eventNames.slice(0, 2).join(", ")}
-								{eventNames.length > 2
-									? ` +${eventNames.length - 2} more`
-									: ""}
+								{eventNames.length > 2 ? ` +${eventNames.length - 2} more` : ""}
 								{location.isActive
 									? ""
 									: " — guests are still sent here while it's hidden."}

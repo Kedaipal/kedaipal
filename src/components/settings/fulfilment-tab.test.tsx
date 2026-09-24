@@ -99,6 +99,7 @@ describe("FulfilmentTab act-as wiring", () => {
 					deliveryBooking={undefined}
 					minFulfilmentNoticeDays={undefined}
 					openingHours={undefined}
+					closedDates={undefined}
 					minOrderValue={undefined}
 					awbConfig={undefined}
 					subscription={undefined}
@@ -206,6 +207,7 @@ describe("Collection service toggle (86eyg0n8e)", () => {
 					}}
 					minFulfilmentNoticeDays={undefined}
 					openingHours={undefined}
+					closedDates={undefined}
 					minOrderValue={undefined}
 					awbConfig={undefined}
 					subscription={undefined}
@@ -308,6 +310,7 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 					deliveryBooking={undefined}
 					minFulfilmentNoticeDays={undefined}
 					openingHours={openingHours}
+					closedDates={undefined}
 					minOrderValue={undefined}
 					awbConfig={undefined}
 					subscription={undefined}
@@ -413,10 +416,14 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 	const SPLIT = { open: 450, close: 600, open2: 720, close2: 1080 };
 
 	it("same-every-day: ONE 'Add a second window' splits the whole week", async () => {
-		renderWithHours(Array.from({ length: 7 }, () => ({ open: 450, close: 600 })));
+		renderWithHours(
+			Array.from({ length: 7 }, () => ({ open: 450, close: 600 })),
+		);
 		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
 		// The bulk affordance: seven days, one click — not seven.
-		fireEvent.click(screen.getByRole("button", { name: /Add a second window/ }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /Add a second window/ }),
+		);
 		// Suggested break: two hours after close, six hours long. The range is its
 		// own unbreakable span, so match on the whole line's text.
 		expect(
@@ -602,7 +609,9 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 		).toBeTruthy();
 		expect(screen.getByText("Fix the hours for Monday to save.")).toBeTruthy();
 		expect(
-			screen.getByRole("button", { name: "Save hours" }).hasAttribute("disabled"),
+			screen
+				.getByRole("button", { name: "Save hours" })
+				.hasAttribute("disabled"),
 		).toBe(true);
 	});
 
@@ -705,10 +714,14 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 		// The live-test case: the SAVED week is uniform, so Cancel — all the old
 		// note offered — could only ever restore that, and the per-day hours
 		// typed since were lost while the note promised to keep them.
-		renderWithHours(Array.from({ length: 7 }, () => ({ open: 600, close: 1200 })));
+		renderWithHours(
+			Array.from({ length: 7 }, () => ({ open: 600, close: 1200 })),
+		);
 		fireEvent.click(screen.getByRole("button", { name: "Edit hours" }));
 		fireEvent.click(screen.getByRole("button", { name: /Different per day/ }));
-		fireEvent.click(screen.getByRole("button", { name: "Monday opening time" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: "Monday opening time" }),
+		);
 		fireEvent.click(await screen.findByRole("button", { name: "8:00 AM" }));
 		fireEvent.click(screen.getByRole("button", { name: /Same every day/ }));
 		expect(
@@ -843,6 +856,7 @@ describe("SG delivery-charge modes (SG-lite, 86eynw29u)", () => {
 					deliveryBooking={undefined}
 					minFulfilmentNoticeDays={undefined}
 					openingHours={undefined}
+					closedDates={undefined}
 					minOrderValue={undefined}
 					awbConfig={undefined}
 					subscription={undefined}
@@ -947,6 +961,7 @@ describe("SG delivery-charge modes (SG-lite, 86eynw29u)", () => {
 					deliveryBooking={undefined}
 					minFulfilmentNoticeDays={undefined}
 					openingHours={undefined}
+					closedDates={undefined}
 					minOrderValue={undefined}
 					awbConfig={undefined}
 					subscription={undefined}
@@ -1038,6 +1053,7 @@ describe("live courier pricing (z8r3fdbvdy)", () => {
 					}
 					minFulfilmentNoticeDays={undefined}
 					openingHours={undefined}
+					closedDates={undefined}
 					minOrderValue={undefined}
 					awbConfig={undefined}
 					subscription={undefined}
@@ -1048,7 +1064,9 @@ describe("live courier pricing (z8r3fdbvdy)", () => {
 
 	it("saves the provider-aware mode, not the Lalamove one", async () => {
 		renderLive();
-		fireEvent.click(screen.getByRole("button", { name: /live courier price/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /live courier price/i }),
+		);
 		fireEvent.click(screen.getByRole("button", { name: "Save live pricing" }));
 		await waitFor(() => expect(updateSettings).toHaveBeenCalled());
 		expect(updateSettings.mock.calls[0][0].deliveryConfig).toEqual({
@@ -1075,21 +1093,27 @@ describe("live courier pricing (z8r3fdbvdy)", () => {
 
 	it("names both providers on the tile — not just the rider one", () => {
 		const { container } = renderLive();
-		fireEvent.click(screen.getByRole("button", { name: /live courier price/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /live courier price/i }),
+		);
 		expect(container.querySelector('img[alt="Delyva"]')).toBeTruthy();
 		expect(container.querySelector('img[alt="Lalamove"]')).toBeTruthy();
 	});
 
 	it("says what will be quoted, and refuses when nothing is connected", () => {
 		const { container } = renderLive({ hasKeys: false });
-		fireEvent.click(screen.getByRole("button", { name: /live courier price/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /live courier price/i }),
+		);
 		expect(container.textContent).toContain("Nothing can quote yet");
 		expect(container.textContent).toContain("Integrations");
 	});
 
 	it("shows a status chip per provider, not a Lalamove-only section", () => {
 		const { container } = renderLive({ hasKeys: false });
-		fireEvent.click(screen.getByRole("button", { name: /live courier price/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /live courier price/i }),
+		);
 		// Both providers get a row and a chip even when unarmed — connection
 		// state was previously a Lalamove-only section a screen away.
 		expect(container.textContent).toContain("Riders");
@@ -1102,13 +1126,17 @@ describe("live courier pricing (z8r3fdbvdy)", () => {
 		// with a stale env stamp warned about Lalamove test keys on a store
 		// that only had Delyva.
 		const { container } = renderLive({ hasKeys: false });
-		fireEvent.click(screen.getByRole("button", { name: /live courier price/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /live courier price/i }),
+		);
 		expect(container.textContent).not.toContain("Test mode");
 	});
 
 	it("hides the rider-only controls when no rider bids", () => {
 		const { container } = renderLive({ hasKeys: false });
-		fireEvent.click(screen.getByRole("button", { name: /live courier price/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /live courier price/i }),
+		);
 		// The vehicle picker is a Lalamove setting — meaningless for a
 		// parcel-only store, and it used to render regardless.
 		expect(container.textContent).not.toContain("Default vehicle");
@@ -1116,10 +1144,12 @@ describe("live courier pricing (z8r3fdbvdy)", () => {
 
 	it("keeps the rider controls when Lalamove is connected", () => {
 		const { container } = renderLive();
-		fireEvent.click(screen.getByRole("button", { name: /live courier price/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /live courier price/i }),
+		);
 		expect(container.textContent).toContain("Default vehicle");
 	});
-})
+});
 
 describe("live-mode saves respect the toggles (Zaki, 6 Sep)", () => {
 	let updateSettings: ReturnType<typeof vi.fn>;
@@ -1165,6 +1195,7 @@ describe("live-mode saves respect the toggles (Zaki, 6 Sep)", () => {
 					}}
 					minFulfilmentNoticeDays={undefined}
 					openingHours={undefined}
+					closedDates={undefined}
 					minOrderValue={undefined}
 					awbConfig={undefined}
 					subscription={undefined}
@@ -1190,8 +1221,7 @@ describe("live-mode saves respect the toggles (Zaki, 6 Sep)", () => {
 			"Turn on at least one service under Courier booking",
 		);
 	});
-})
-
+});
 
 describe("Business address — unit / floor line (z8r3fdff8r test round)", () => {
 	let updateSettings: ReturnType<typeof vi.fn>;
@@ -1240,6 +1270,7 @@ describe("Business address — unit / floor line (z8r3fdff8r test round)", () =>
 					deliveryBooking={undefined}
 					minFulfilmentNoticeDays={undefined}
 					openingHours={undefined}
+					closedDates={undefined}
 					minOrderValue={undefined}
 					awbConfig={undefined}
 					subscription={undefined}
@@ -1257,7 +1288,9 @@ describe("Business address — unit / floor line (z8r3fdff8r test round)", () =>
 		render(tab(undefined));
 		expect(unitInput().disabled).toBe(true);
 		expect(
-			screen.getByText("Pick your address first — the unit rides in front of it."),
+			screen.getByText(
+				"Pick your address first — the unit rides in front of it.",
+			),
 		).toBeTruthy();
 	});
 
@@ -1269,7 +1302,11 @@ describe("Business address — unit / floor line (z8r3fdff8r test round)", () =>
 	});
 
 	it("saving stores the SERVER's spelling, shows it back, and Save goes quiet", async () => {
-		const stored = { label: "12 Jln Tun Razak", latitude: 3.1, longitude: 101.6 };
+		const stored = {
+			label: "12 Jln Tun Razak",
+			latitude: 3.1,
+			longitude: 101.6,
+		};
 		const { rerender } = render(tab(stored));
 		fireEvent.change(unitInput(), {
 			target: { value: "  Unit 3-1,    Block B  " },
@@ -1376,6 +1413,7 @@ describe("event-venue badge on pickup points (z8r3fdff9u round 5)", () => {
 					deliveryBooking={undefined}
 					minFulfilmentNoticeDays={undefined}
 					openingHours={undefined}
+					closedDates={undefined}
 					minOrderValue={undefined}
 					awbConfig={undefined}
 					subscription={undefined}

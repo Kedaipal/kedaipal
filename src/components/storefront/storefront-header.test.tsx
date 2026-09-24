@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
+import { DAY_MS, todayMytMidnight } from "../../../convex/lib/fulfilmentDate";
 import { StorefrontHeader } from "./storefront-header";
 
 afterEach(cleanup);
@@ -66,5 +67,58 @@ describe("StorefrontHeader — opening hours line (86eyp5rav)", () => {
 	it("renders nothing for the 24/7 default (no configured hours)", () => {
 		render(<StorefrontHeader retailer={retailer} />);
 		expect(screen.queryByText(/Open 24 hours|Closed ·|Open now/)).toBeNull();
+	});
+});
+
+describe("StorefrontHeader — closed dates (z8r3fdhpm7)", () => {
+	// Clock-independent: every range is built from the real "today".
+	const today = todayMytMidnight(Date.now());
+
+	it("on a closed date, a 24/7 store says so — with the reason and when it reopens", () => {
+		render(
+			<StorefrontHeader
+				retailer={{
+					...retailer,
+					closedDates: [
+						{ startDate: today, endDate: today, label: "Hari Raya" },
+					],
+				}}
+			/>,
+		);
+		expect(
+			screen.getByText("Closed today · Hari Raya · reopens tomorrow"),
+		).toBeTruthy();
+	});
+
+	it("warns about a closure starting within two weeks, before the buyer picks a date", () => {
+		const start = today + 3 * DAY_MS;
+		render(
+			<StorefrontHeader
+				retailer={{
+					...retailer,
+					closedDates: [
+						{
+							startDate: start,
+							endDate: start + DAY_MS,
+							label: "Balik kampung",
+						},
+					],
+				}}
+			/>,
+		);
+		expect(screen.getByText(/^Closed .* · Balik kampung$/)).toBeTruthy();
+	});
+
+	it("stays silent for a 24/7 store whose only closure is far off", () => {
+		const start = today + 40 * DAY_MS;
+		render(
+			<StorefrontHeader
+				retailer={{
+					...retailer,
+					closedDates: [{ startDate: start, endDate: start }],
+				}}
+			/>,
+		);
+		expect(screen.queryByText(/Closed/)).toBeNull();
 	});
 });

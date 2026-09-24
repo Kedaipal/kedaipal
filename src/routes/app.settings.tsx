@@ -115,8 +115,8 @@ import {
 import { validateStoreName } from "../lib/slug";
 import {
 	isSettingsSpotlightKey,
-	SPOTLIGHT_ANCHOR,
 	type SettingsSpotlightKey,
+	SPOTLIGHT_ANCHOR,
 } from "../lib/spotlight";
 import { hasFeature, tierPill } from "../lib/subscription";
 import { cn } from "../lib/utils";
@@ -985,6 +985,7 @@ function SettingsRoute() {
 						deliveryBooking={retailer.deliveryBooking}
 						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
 						openingHours={retailer.openingHours}
+						closedDates={retailer.closedDates}
 						minOrderValue={retailer.minOrderValue}
 						awbConfig={retailer.awbConfig}
 						subscription={retailer.subscription}
@@ -2944,8 +2945,8 @@ function CurrencyForm({
 				const synced = result?.productsCurrencySynced ?? 0;
 				toast.success(
 					synced > 0
-						// currency-literal-ok: names the currency SETTING the seller just saved.
-						? `Currency saved — ${synced} product${synced === 1 ? "" : "s"} switched to ${value.currency}. Prices kept their numbers, so re-check them.`
+						? // currency-literal-ok: names the currency SETTING the seller just saved.
+							`Currency saved — ${synced} product${synced === 1 ? "" : "s"} switched to ${value.currency}. Prices kept their numbers, so re-check them.`
 						: "Currency saved.",
 				);
 			} catch (err) {

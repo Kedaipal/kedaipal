@@ -666,6 +666,26 @@ export default defineSchema({
 				}),
 			),
 		),
+		// Closed dates (z8r3fdhpm7) — the weekly schedule's exceptions: Raya, a
+		// balik-kampung week, a renovation. MYT midnights, `endDate` INCLUSIVE
+		// (a closed day has no leaving morning — the bookingBlocks posture).
+		// `label` is PUBLIC (buyers read it at checkout + in the header), ≤60
+		// chars. Bounded (≤50 ranges) and self-pruning: every write drops the
+		// ranges that already ended. Overlaps tolerated, unioned at read.
+		// Undefined = no closures (every pre-existing store, zero migration).
+		// Refuses those dates at storefront + claim checkout, makes them
+		// unavailable nights on stay listings, and is skipped by open-days
+		// packages; counter checkout, seller reschedules and event dates are
+		// exempt. See convex/lib/closedDates.ts.
+		closedDates: v.optional(
+			v.array(
+				v.object({
+					startDate: v.number(),
+					endDate: v.number(),
+					label: v.optional(v.string()),
+				}),
+			),
+		),
 		// Despatch-label template (86eyp63mp) — what this store's printed parcel
 		// label shows, and on what paper. Undefined = every default (a4-4up,
 		// logo/COD/weight/note on, contents off) — every pre-existing store, zero

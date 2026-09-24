@@ -63,6 +63,7 @@ import {
 	type ProductEvent,
 	seatsLeft,
 } from "./lib/productEvent";
+import { closedDateIssue } from "./lib/closedDates";
 import { assertWithinOpeningHours } from "./lib/openingHours";
 import { orderingPausedMessage } from "./lib/seasonalHold";
 import { orderDocumentTitle } from "./lib/orderDocument";
@@ -1332,6 +1333,20 @@ export const create = mutation({
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
 			}
+		}
+		// Closed dates (z8r3fdhpm7): a fulfilment date on one of the store's
+		// closed dates is refused FIRST — before prep and hours, because it is
+		// the truest reason (telling a buyer the cake needs 2 hours on a day the
+		// shop is shut sends them to the wrong fix). The checkout mirrors this
+		// with the same sentence (`closedDateMessage`). Exempt exactly where the
+		// opening hours are: an event's date is the seller's own, and counter
+		// checkout never reaches this path.
+		if (sanitizedFulfilmentDate !== undefined && eventLock === undefined) {
+			const closed = closedDateIssue(
+				retailer.closedDates,
+				sanitizedFulfilmentDate,
+			);
+			if (closed !== null) throw new ConvexError(closed);
 		}
 		// Prep floor (z8r3fdff97): the slowest item in the cart decides the
 		// earliest moment this order can be handed over. Re-derived from the

@@ -200,6 +200,7 @@ import {
 	PAGINATED_PHASES,
 	runDeletionPhase,
 } from "./lib/accountDeletion";
+import type { ClosedDateRange } from "./lib/closedDates";
 import {
 	type OpeningHours,
 	sanitizeOpeningHours,
@@ -825,6 +826,10 @@ type RetailerPublic = {
 	// Undefined = open 24/7. Surfaced on both the owner read and the by-slug
 	// payload. See convex/lib/openingHours.ts.
 	openingHours?: OpeningHours;
+	// Closed dates (z8r3fdhpm7) — the weekly schedule's exceptions. Public-safe
+	// (the label is written for buyers and the field says so): checkout skips
+	// them, the header names them. On both reads. See convex/lib/closedDates.ts.
+	closedDates?: ClosedDateRange[];
 	// Despatch-label template (86eyp63mp) — OWNER-only: it says nothing a buyer
 	// needs, and the footer line is the seller's own returns copy. Undefined =
 	// every default. See convex/lib/awbConfig.ts.
@@ -994,6 +999,7 @@ async function buildRetailerPublic(
 		hitpay: summarizeHitpay(row.hitpay as HitpayConfig | undefined),
 		minFulfilmentNoticeDays: row.minFulfilmentNoticeDays,
 		openingHours: row.openingHours,
+		closedDates: row.closedDates,
 		awbConfig: row.awbConfig,
 		minOrderValue: row.minOrderValue,
 		pickupSetupSeen: row.pickupSetupSeen,
@@ -1158,6 +1164,7 @@ export const getRetailerBySlug = query({
 					offerDelivery: active.offerDelivery,
 					minFulfilmentNoticeDays: active.minFulfilmentNoticeDays,
 					openingHours: active.openingHours,
+					closedDates: active.closedDates,
 					minOrderValue: active.minOrderValue,
 					// Founding badge is public-safe; subscription state is NOT included.
 					isFoundingMember: active.isFoundingMember,

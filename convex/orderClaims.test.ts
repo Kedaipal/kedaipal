@@ -874,6 +874,32 @@ describe("orderClaims — prep time + pickup note (z8r3fdff97)", () => {
 		}
 	});
 
+	test("a closed date is refused at commit, in orders.create's words (z8r3fdhpm7)", async () => {
+		const t = setup();
+		const { retailer, claimId, token } = await sendPuffs(t);
+		const tomorrow =
+			Math.floor((Date.now() + 8 * 3600_000) / DAY) * DAY - 8 * 3600_000 + DAY;
+		await t.withIdentity({ subject: USER_A }).mutation(api.closedDates.add, {
+			retailerId: retailer._id,
+			startDate: tomorrow,
+			endDate: tomorrow,
+			label: "Hari Raya",
+		});
+		await expect(
+			t.mutation(api.orderClaims.commit, {
+				token,
+				deliveryMethod: "self_collect",
+				fulfilmentDate: tomorrow,
+			}),
+		).rejects.toThrow(/The store is closed .*\(Hari Raya\) — pick another day/);
+		await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: tomorrow + DAY,
+		});
+		expect((await orderOf(t, claimId))?.fulfilmentDate).toBe(tomorrow + DAY);
+	});
+
 	test("a DATE-ONLY commit's prep runs to midnight — closing time can't hide a day-long prep", async () => {
 		// orders.create's rule: no time sent, so prep is judged to the end of
 		// the day. At 8 PM a 9-to-6 store had no slots with prep AND none

@@ -15,6 +15,7 @@ import {
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { PublicDeliveryQuote } from "../../../convex/delivery";
+import { closureOn } from "../../../convex/lib/closedDates";
 import { toDomesticContactPhone } from "../../../convex/lib/courierContact";
 import {
 	assertValidFulfilmentDate,
@@ -170,6 +171,7 @@ export function ClaimCheckoutPage({
 		booksCouriers,
 		minNoticeDays,
 		openingHours,
+		closedDates,
 	} = store;
 
 	// The claim's order rules, read live at load (z8r3fdff97): the slowest
@@ -243,6 +245,7 @@ export function ClaimCheckoutPage({
 		if (Number.isNaN(epoch)) return false;
 		return isFulfilmentDaySelectable({
 			hours: openingHours,
+			closedDates,
 			dateEpoch: epoch,
 			now,
 			prep: schedule.prep,
@@ -345,6 +348,7 @@ export function ClaimCheckoutPage({
 			);
 			const judged = {
 				hours: openingHours,
+				closedDates,
 				dateEpoch: fulfilmentEpoch,
 				now: Date.now(),
 				prep: schedule.prep,
@@ -512,6 +516,7 @@ export function ClaimCheckoutPage({
 		if (Number.isNaN(dateEpoch)) return null;
 		return fulfilmentDayCopy({
 			hours: openingHours,
+			closedDates,
 			dateEpoch,
 			now: Date.now(),
 			prep: watchedSchedule.prep,
@@ -521,6 +526,7 @@ export function ClaimCheckoutPage({
 		});
 	}, [
 		openingHours,
+		closedDates,
 		watchedDate,
 		watchedSchedule.prep,
 		watchedSchedule.timed,
@@ -536,6 +542,7 @@ export function ClaimCheckoutPage({
 		if (Number.isNaN(dateEpoch)) return null;
 		return fulfilmentTimeCopy({
 			hours: openingHours,
+			closedDates,
 			dateEpoch,
 			now: Date.now(),
 			prep: watchedSchedule.prep,
@@ -545,6 +552,7 @@ export function ClaimCheckoutPage({
 		});
 	}, [
 		openingHours,
+		closedDates,
 		watchedDate,
 		watchedSchedule.prep,
 		watchedSchedule.timed,
@@ -555,6 +563,7 @@ export function ClaimCheckoutPage({
 	]);
 	const claimPrepHint = prepHint({
 		hours: openingHours,
+		closedDates,
 		now,
 		prep: watchedSchedule.prep,
 		kind: watchedSchedule.kind,
@@ -1063,9 +1072,12 @@ export function ClaimCheckoutPage({
 													now,
 													watchedSchedule.prep.minutes,
 												);
-										const day = Number.isNaN(dayEpoch)
-											? null
-											: hoursForDate(openingHours, dayEpoch);
+										// A closed date (z8r3fdhpm7) reads like a weekly
+										// day off: no window, the date notice says why.
+										const day =
+											Number.isNaN(dayEpoch) || closureOn(closedDates, dayEpoch)
+												? null
+												: hoursForDate(openingHours, dayEpoch);
 										const constrained = day !== null && !isAllDay(day);
 										return (
 											<form.AppField name="fulfilmentTime">
