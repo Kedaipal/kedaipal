@@ -412,7 +412,16 @@ export const resyncSubscriptionCaps = internalMutation({
  * never overwritten, so a re-run after a crash resumes cleanly and a seller who
  * customised a kind between batches keeps their edit.
  *
- * Run: `npx convex run migrations:backfillOrderFlows`
+ * Run on dev:  `npx convex run migrations:backfillOrderFlows`
+ * Run on PROD: `npx convex run migrations:backfillOrderFlows --prod`
+ *
+ * **Write `--prod` yourself.** The bare command runs against DEV and reports
+ * success, which reads exactly like a prod run that worked
+ * (docs/release-checklist.md calls this out as the standing trap).
+ *
+ * Not release-blocking: the resolver falls back to the legacy pair for
+ * delivery/self_collect, so stores behave correctly un-migrated. This is the
+ * prerequisite for the NARROW (`z8r3fdhq1x`), which drops those fields.
  */
 export const backfillOrderFlows = internalMutation({
 	args: { cursor: v.optional(v.union(v.string(), v.null())) },
