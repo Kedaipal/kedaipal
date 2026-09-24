@@ -464,6 +464,38 @@ any currency literal outside an allowlist of surfaces that price **Kedaipal's
 own subscription** (landing, `/pricing`, cost calculator, billing tab, admin
 console — genuinely MYR). That scan found two sites the ticket's list missed.
 
+**The scan's two blind spots, closed (24 Sep 2026).** It only saw a
+bare "RM" on its own line (an input plate), so two other shapes got through:
+
+- **Money written into a sentence.** Both product forms said "between RM 0 and
+  RM 10,000", the delivery bands said "A band fee of RM0 means free", and the
+  counter's price check said "Enter a price above RM 0.00". Rule:
+  `no hardcoded RM / S$ amount in copy`.
+- **The ISO code rendered as if it were a symbol.** `currency` props carry the
+  retailer's code, and every product form printed it raw ("Price (MYR)",
+  "MYR 12"), as did the order page's mockup-quote plate and the deposit
+  dialog. Rule: `never renders a raw currency code where a symbol belongs`
+  catches `{currency}` as a JSX child or `${currency} 12` in a string. Prop
+  pass-throughs and call arguments never match.
+
+Both rules skip comments. A line that names a currency **on purpose** (the
+Currency card's "yours is set to SGD", a release note quoting Kedaipal's own
+plan price) carries a `currency-literal-ok: <why>` comment on or directly
+above it, which excuses that one line instead of allowlisting a whole file.
+
+The render tests never caught any of this because every one of them passed a
+fake `currency="RM"`, and `currencySymbol` echoes an unknown code back
+unchanged. They now pass real codes, and `product-forms-currency.test.tsx`
+asserts page-wide that neither `MYR` nor `SGD` reaches the seller.
+
+**Typed amounts: `formatDraftPrice`.** Seller-typed amounts in the product
+summaries (the edit form's strip, the wizard review, the weekend-rate line,
+the deposit ceiling) are spelled like `formatPrice` (symbol, non-breaking
+space, en-MY grouping) minus a trailing `.00`, so a summary reads like speech:
+"RM 12–28.50", "S$ 1,250". `formatDraftPriceRange` says the symbol once. The
+deposit ceiling comes from the server's own `MAX_SECURITY_DEPOSIT`
+(`isSecurityDepositInRange`) rather than two hardcoded `10_000`s.
+
 Order-level money reads `order.currency`, not the store's: an order keeps the
 currency it was **placed** in, which the store's current setting cannot follow.
 

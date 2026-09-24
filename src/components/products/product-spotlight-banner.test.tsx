@@ -11,16 +11,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("@tanstack/react-router", () => ({
 	Link: ({
 		to,
+		search,
 		children,
 		...rest
 	}: {
 		to: string;
+		search?: Record<string, string>;
 		children: React.ReactNode;
-	}) => (
-		<a href={to} {...rest}>
-			{children}
-		</a>
-	),
+	}) => {
+		const query = new URLSearchParams(search ?? {}).toString();
+		return (
+			<a href={query ? `${to}?${query}` : to} {...rest}>
+				{children}
+			</a>
+		);
+	},
 }));
 
 import { PRODUCT_SPOTLIGHT } from "../../lib/product-spotlight";
@@ -53,6 +58,22 @@ describe("ProductSpotlightBanner", () => {
 			/>,
 		);
 		expect(screen.getByText(PRODUCT_SPOTLIGHT.weekend_rate.empty)).toBeTruthy();
+		// Only a stay can carry a weekend rate, so the wizard opens ON Booking
+		// (`?card=`, z8r3fdhkr7) instead of telling the seller to go find it.
+		expect(
+			screen.getByRole("link", { name: /new product/i }).getAttribute("href"),
+		).toBe("/app/products/new?card=booking");
+	});
+
+	it("a key any kind can carry opens the wizard on the store's own type", () => {
+		render(
+			<ProductSpotlightBanner
+				spot="prep_time"
+				eligibleCount={0}
+				canCreate
+				onDismiss={vi.fn()}
+			/>,
+		);
 		expect(
 			screen.getByRole("link", { name: /new product/i }).getAttribute("href"),
 		).toBe("/app/products/new");

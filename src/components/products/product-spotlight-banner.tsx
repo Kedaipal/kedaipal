@@ -47,7 +47,12 @@ export function ProductSpotlightBanner({
 			<div className="flex shrink-0 items-center gap-2">
 				{!hasEligible && canCreate ? (
 					<Button asChild className="h-11 sm:h-10">
-						<Link to="/app/products/new">+ New product</Link>
+						<Link
+							to="/app/products/new"
+							search={copy.createCard ? { card: copy.createCard } : {}}
+						>
+							+ New product
+						</Link>
 					</Button>
 				) : null}
 				<Button variant="ghost" className="h-11 sm:h-10" onClick={onDismiss}>

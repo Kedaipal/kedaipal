@@ -70,11 +70,13 @@ export function BookingsTab({ retailerId }: { retailerId: Id<"retailers"> }) {
 					</p>
 					<p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
 						This section holds the Google Calendar feed for listings sold by
-						date. Create a product and pick the Booking kind first.
+						date. Create one first — it opens with Booking already picked.
 					</p>
 				</div>
 				<Button asChild variant="outline" className="tap-target">
-					<Link to="/app/products/new">Create a booking listing</Link>
+					<Link to="/app/products/new" search={{ card: "booking" }}>
+						Create a booking listing
+					</Link>
 				</Button>
 			</section>
 		);

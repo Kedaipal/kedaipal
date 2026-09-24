@@ -82,6 +82,7 @@ import { cn } from "../../lib/utils";
 import {
 	convexErrorMessage,
 	currencySymbol,
+	formatDraftPrice,
 	formatPrice,
 	normalizePriceInput,
 	parsePriceInput,
@@ -1678,8 +1679,8 @@ function DeliveryChargeSection({
 						<p className="text-xs text-muted-foreground leading-relaxed">
 							Distances are straight-line (&ldquo;as the crow flies&rdquo;) from
 							your business address, not driving routes — pad your bands a
-							little to cover real roads. A band fee of RM0 means free within
-							that distance.
+							little to cover real roads. A band fee of{" "}
+							{formatDraftPrice(0, currency)} means free within that distance.
 						</p>
 					</div>
 
@@ -1742,7 +1743,8 @@ function DeliveryChargeSection({
 					</p>
 					<p className="rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
 						A band works like a box tier —{" "}
-						<b>&ldquo;up to 5 kg = RM30&rdquo;</b> (S 5 kg / M 10 kg / L 20 kg).
+						<b>&ldquo;up to 5 kg = {formatDraftPrice(30, currency)}&rdquo;</b>{" "}
+						(S 5 kg / M 10 kg / L 20 kg).
 						Rates use <b>actual weight only</b>; if your courier bills
 						volumetric (size-based) weight, pick the safer band when you copy
 						your card over.
@@ -2111,8 +2113,8 @@ function WeightZoneCard({
 				) : null}
 				<p className="text-xs leading-relaxed text-muted-foreground">
 					An order at exactly a band&apos;s weight is inside it. Heavier than
-					your last band follows the rule below. A band fee of RM0 means free up
-					to that weight.
+					your last band follows the rule below. A band fee of{" "}
+					{formatDraftPrice(0, currency)} means free up to that weight.
 				</p>
 			</div>
 

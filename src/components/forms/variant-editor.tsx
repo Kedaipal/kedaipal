@@ -16,6 +16,7 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import { useRevealOnAdd } from "../../hooks/useRevealOnAdd";
 import {
 	convexErrorMessage,
+	currencySymbol,
 	normalizePriceInput,
 	sanitizeIntInput,
 } from "../../lib/format";
@@ -122,6 +123,7 @@ export type LiveVariantStock = {
 interface VariantEditorProps {
 	value: VariantEditorState;
 	onChange: (next: VariantEditorState) => void;
+	/** The retailer's ISO code (`MYR`, `SGD`) — labels wear its symbol. */
 	currency: string;
 	/** Submit-time issues to render inline (cleared by the parent on any edit). */
 	issues?: VariantIssue[];
@@ -634,6 +636,9 @@ export function VariantEditor({
 	productName = "This product",
 }: VariantEditorProps) {
 	const { options, rows, customLine } = value;
+	// Every price label wears the store's symbol ("RM", "S$") — `currency` is
+	// the ISO code, which a seller never reads.
+	const moneySymbol = currencySymbol(currency);
 	// The variant whose stock the seller asked to move. Held here (not per row)
 	// so one dialog serves every row and there is one author for the copy.
 	const [adjusting, setAdjusting] = useState<StockLine | null>(null);
@@ -1228,7 +1233,7 @@ export function VariantEditor({
 					{/* "Starting price", not "Price" — the same field as the bespoke
 					    line under Advanced, and the buyer sees it as "From RM 40". */}
 					<label className="flex flex-col gap-1 text-sm font-medium">
-						Starting price ({currency}){" "}
+						Starting price ({moneySymbol}){" "}
 						<span className="font-normal text-muted-foreground">
 							(optional)
 						</span>
@@ -1239,7 +1244,7 @@ export function VariantEditor({
 						/>
 						<IssueText message={issueFor("custom", 0, "price")} />
 						<span className="text-xs font-normal text-muted-foreground">
-							Buyers see “From {currency} …”, so they know the final price comes
+							Buyers see “From {moneySymbol} …”, so they know the final price comes
 							with the mockup. Leave blank to show “Price on quote” instead.
 						</span>
 					</label>
@@ -1272,7 +1277,7 @@ export function VariantEditor({
 			) : !hasOptions ? (
 				<div className="grid grid-cols-2 gap-3">
 					<label className="flex flex-col gap-1 text-sm font-medium">
-						Price ({currency})
+						Price ({moneySymbol})
 						<PriceInput
 							value={rows[0]?.price ?? ""}
 							onChange={(v) => setRow(0, { price: v })}
@@ -1437,7 +1442,7 @@ export function VariantEditor({
 										</div>
 										<div className="grid grid-cols-2 gap-2">
 											<label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
-												Price ({currency})
+												Price ({moneySymbol})
 												<PriceInput
 													value={row.price}
 													onChange={(v) => setRow(i, { price: v })}
@@ -1711,7 +1716,7 @@ export function VariantEditor({
 										</div>
 
 										<label className="flex flex-col gap-1 text-sm font-medium">
-											Starting price ({currency}){" "}
+											Starting price ({moneySymbol}){" "}
 											<span className="font-normal text-muted-foreground">
 												(optional)
 											</span>
@@ -1722,7 +1727,7 @@ export function VariantEditor({
 											/>
 											<IssueText message={issueFor("custom", 0, "price")} />
 											<span className="text-xs font-normal text-muted-foreground">
-												Buyers see “From {currency} …”, so they know the final
+												Buyers see “From {moneySymbol} …”, so they know the final
 												price comes with the mockup. Leave blank to show “Price
 												on quote” instead.
 											</span>

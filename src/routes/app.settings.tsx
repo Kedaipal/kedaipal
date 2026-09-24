@@ -2882,6 +2882,7 @@ function CountryForm({
 							{expectedCurrency !== currency ? (
 								<p className="rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
 									Stores in {COUNTRY_LABELS[picked]} usually price in{" "}
+									{/* currency-literal-ok: compares currency SETTINGS, not amounts */}
 									{expectedCurrency} — yours is set to {currency}. Change it in
 									the Currency card below if that's not intentional.
 								</p>
@@ -2943,6 +2944,7 @@ function CurrencyForm({
 				const synced = result?.productsCurrencySynced ?? 0;
 				toast.success(
 					synced > 0
+						// currency-literal-ok: names the currency SETTING the seller just saved.
 						? `Currency saved — ${synced} product${synced === 1 ? "" : "s"} switched to ${value.currency}. Prices kept their numbers, so re-check them.`
 						: "Currency saved.",
 				);
@@ -2964,6 +2966,7 @@ function CurrencyForm({
 						label="Storefront currency"
 						options={CURRENCY_OPTIONS}
 						required
+						// currency-literal-ok: the switch explainer names both currencies on purpose.
 						description="Used for product prices and order totals. Changing it switches every product to the new currency — amounts keep their numbers (RM 12 becomes S$ 12), so re-check your prices after switching. Orders already placed keep the currency they were placed in, but Insights and customer lifetime totals add those older amounts up as plain numbers, so totals that span the change won't convert."
 					/>
 				)}

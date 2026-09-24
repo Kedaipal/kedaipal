@@ -3,6 +3,9 @@ import { describe, expect, it, test } from "vitest";
 import {
 	convexErrorMessage,
 	currencySymbol,
+	formatDraftAmount,
+	formatDraftPrice,
+	formatDraftPriceRange,
 	formatMobile,
 	formatOrderTimestamp,
 	formatPrice,
@@ -282,5 +285,36 @@ describe("currencySymbol", () => {
 		// Mirrors formatPrice's fallback — an input prefixed with a made-up
 		// symbol would be worse than one prefixed with the code.
 		expect(currencySymbol("ZZZ")).toBe("ZZZ");
+	});
+});
+
+describe("formatDraftPrice — seller-typed amounts in summaries", () => {
+	const NB = "\u00a0";
+
+	test("the store's SYMBOL from its ISO code, never the code itself", () => {
+		// The bug this exists for: both product forms printed "MYR 12".
+		expect(formatDraftPrice(12, "MYR")).toBe(`RM${NB}12`);
+		expect(formatDraftPrice(12, "SGD")).toBe(`S$${NB}12`);
+	});
+
+	test("spelled like formatPrice — same prefix, same grouping — minus a trailing .00", () => {
+		for (const currency of ["MYR", "SGD"]) {
+			const draft = formatDraftPrice(1250, currency);
+			const stored = formatPrice(125_000, currency);
+			expect(stored.startsWith(draft)).toBe(true); // "RM 1,250" ⊂ "RM 1,250.00"
+		}
+		expect(formatDraftPrice(12.5, "MYR")).toBe(`RM${NB}12.50`);
+		expect(formatDraftPrice(0, "SGD")).toBe(`S$${NB}0`);
+	});
+
+	test("the number half groups, and keeps sen only when there are some", () => {
+		expect(formatDraftAmount(10_000)).toBe("10,000");
+		expect(formatDraftAmount(28.5)).toBe("28.50");
+		expect(formatDraftAmount(28)).toBe("28");
+	});
+
+	test("a range says the symbol once; meeting ends collapse to one price", () => {
+		expect(formatDraftPriceRange(12, 28.5, "MYR")).toBe(`RM${NB}12–28.50`);
+		expect(formatDraftPriceRange(12, 12, "SGD")).toBe(`S$${NB}12`);
 	});
 });
