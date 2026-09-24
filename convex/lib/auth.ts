@@ -23,6 +23,24 @@ export function adminUserIds(): string[] {
 		.filter((s) => s.length > 0);
 }
 
+/**
+ * True when this STORE'S OWNER is an allow-listed admin — an identity check on
+ * the row, not on the caller, so a cron can ask it (z8r3fdg3mh).
+ *
+ * An admin runs their own store free with the highest tier unlocked, and
+ * `resolveAccess` forces `active: true, frozen: false` for them. So a
+ * `past_due` subscription on an admin's store is bookkeeping, NOT a lockout:
+ * their dashboard keeps working and the billing tab tells them plainly that
+ * admins have "no trial, tier or invoices to settle". Anything that then
+ * emails or WhatsApps them "your dashboard is locked, pay this invoice" is
+ * simply false. This is the second way `frozen` can be false at `past_due` —
+ * `comped` is the first — so every send that speaks about a lock must check
+ * BOTH.
+ */
+export function storeOwnerIsAdmin(retailer: { userId: string }): boolean {
+	return adminUserIds().includes(retailer.userId);
+}
+
 export async function isAdmin(ctx: AuthCtx): Promise<boolean> {
 	const identity = await ctx.auth.getUserIdentity();
 	if (!identity) return false;

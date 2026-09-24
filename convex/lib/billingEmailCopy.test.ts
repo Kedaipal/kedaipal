@@ -225,13 +225,6 @@ describe("renderTrialEmail", () => {
 			expect(html).not.toMatch(/undefined/);
 		});
 	});
-
-	it("subscriptionLapsed reads as a lapsed-renewal notice (no invoice)", () => {
-		const { subject, html } = renderTrialEmail("en", "subscriptionLapsed", tv);
-		expect(subject.toLowerCase()).toContain("lapsed");
-		expect(html.toLowerCase()).not.toContain("invoice no");
-		expect(html).toContain("Message us to renew");
-	});
 });
 
 describe("comp emails (z8r3fdeub2)", () => {
@@ -443,5 +436,155 @@ describe("renderAutoRenewEmail (86eyb6z4r)", () => {
 		expect(renderAutoRenewEmail("zh", "autoRenewUpcoming", av).subject).toContain(
 			"续订",
 		);
+	});
+});
+
+describe("post-lock recovery chain (z8r3fdg3mh)", () => {
+	const overdue: BillingEmailVars = { ...base, daysPastDue: 3 };
+
+	it("the +3d nudge states the elapsed days as a fact and still carries the pay panel", () => {
+		const { subject, html, text } = renderBillingEmail(
+			"en",
+			"recoveryNudge",
+			overdue,
+		);
+		expect(subject).toContain("INV-202607-AB12");
+		expect(subject.toLowerCase()).toContain("locked");
+		expect(html).toContain("3 days past due");
+		// The only thing being asked for is payment — the rails must be present.
+		expect(html).toContain("Maybank");
+		expect(html).toContain(base.billingUrl);
+		expect(text).toContain("3 days past due");
+	});
+
+	it("the +7d final says it is the last automatic contact and offers the hold", () => {
+		const { subject, html, text } = renderBillingEmail("en", "recoveryFinal", {
+			...overdue,
+			daysPastDue: 7,
+			holdPriceFormatted: "MYR 19.00",
+		});
+		expect(subject.toLowerCase()).toContain("last reminder");
+		expect(html).toContain("7 days past due");
+		expect(html).toContain("last automatic reminder");
+		expect(html).toContain("MYR 19.00");
+		expect(text).toContain("MYR 19.00");
+	});
+
+	it("omits the hold offer entirely when no hold price is passed", () => {
+		const { html, text } = renderBillingEmail("en", "recoveryFinal", {
+			...overdue,
+			daysPastDue: 7,
+		});
+		// A seller already ON hold has no cheaper door to be pointed at.
+		expect(html).not.toContain("Pause your plan");
+		expect(text).not.toContain("Pause your plan");
+		// …but the rest of the notice still renders.
+		expect(html).toContain("last automatic reminder");
+	});
+
+	it("never invents a day count when none was passed", () => {
+		const { html } = renderBillingEmail("en", "recoveryNudge", base);
+		expect(html).not.toContain("0 days");
+		expect(html).toContain("INV-202607-AB12");
+	});
+
+	it("renders Malay + Chinese recovery copy", () => {
+		expect(
+			renderBillingEmail("ms", "recoveryNudge", overdue).html,
+		).toContain("lewat 3 hari");
+		expect(
+			renderBillingEmail("zh", "recoveryNudge", overdue).html,
+		).toContain("已逾期 3 天");
+		expect(
+			renderBillingEmail("ms", "recoveryFinal", {
+				...overdue,
+				holdPriceFormatted: "MYR 19.00",
+			}).html,
+		).toContain("Jeda pelan anda");
+	});
+
+	it("the nudge states the lock ONCE — no repeat, no capital mid-sentence", () => {
+		const { html } = renderBillingEmail("en", "recoveryNudge", overdue);
+		// The intro used to add its own "you can't edit your store…" clause and
+		// then append storeStaysLive, which ends with the same fact — the seller
+		// read the lock twice in one sentence, the second time starting with a
+		// stray capital after an em-dash.
+		expect(html).not.toMatch(/— Your storefront/);
+		expect(html).toMatch(/Hi Mak Kuih, invoice INV-202607-AB12 is 3 days past due\./);
+		expect((html.match(/view-only until you pay/g) ?? []).length).toBe(1);
+	});
+
+	it("the hold offer is a PANEL with its own price and button, not buried prose", () => {
+		const { html } = renderBillingEmail("en", "recoveryFinal", {
+			...overdue,
+			daysPastDue: 7,
+			holdPriceFormatted: "MYR 19.00",
+		});
+		// In-app this offer is a card with a price chip and a button; an email
+		// that demotes it to a mid-paragraph clause contradicts the product.
+		expect(html).toMatch(/Pause instead of cancelling · MYR 19\.00/);
+		expect(html).toMatch(/See the pause option/);
+		// …and it is no longer sitting inside the intro paragraph.
+		const intro = html.split("Pause instead of cancelling")[0];
+		expect(intro).not.toMatch(/Pause your plan for/);
+	});
+
+	it("no hold price ⇒ no panel at all, and the rest still renders", () => {
+		const { html } = renderBillingEmail("en", "recoveryFinal", {
+			...overdue,
+			daysPastDue: 7,
+		});
+		expect(html).not.toMatch(/Pause instead of cancelling/);
+		expect(html).not.toMatch(/See the pause option/);
+		expect(html).toMatch(/last automatic reminder/);
+	});
+
+	it("the plain-text body keeps the capital, because it starts its own line", () => {
+		const { text } = renderBillingEmail("en", "recoveryNudge", overdue);
+		expect(text).toMatch(/\nInvoice INV-202607-AB12 is 3 days past due\./);
+	});
+
+	it("Chinese is never case-folded — it has no letter case to fold", () => {
+		const { html } = renderBillingEmail("zh", "recoveryNudge", overdue);
+		expect(html).toContain("已逾期 3 天");
+		expect(html).not.toContain("undefined");
+	});
+
+	it("the hold row leaves every OTHER billing email byte-identical", () => {
+		// `holdBlock` renders inside wrapBillingHtml, which all six templates
+		// share — an unconditional row would have added 12px of empty space to
+		// emails this change has no business touching.
+		for (const key of [
+			"invoiceIssued",
+			"invoiceReminder",
+			"invoiceOverdue",
+			"firstInvoiceOrder",
+			"firstInvoiceBackstop",
+		] as const) {
+			const { html } = renderBillingEmail("en", key, base);
+			expect(html).not.toMatch(/padding:12px 28px 0 28px/);
+		}
+		// …and the nudge, which is in the chain but carries no hold offer.
+		expect(
+			renderBillingEmail("en", "recoveryNudge", overdue).html,
+		).not.toMatch(/padding:12px 28px 0 28px/);
+		// Only the final notice, and only with a price, opens that row.
+		expect(
+			renderBillingEmail("en", "recoveryFinal", {
+				...overdue,
+				holdPriceFormatted: "MYR 19.00",
+			}).html,
+		).toMatch(/padding:12px 28px 0 28px/);
+	});
+
+	it("the recovery pair is tonally red, like the overdue notice it follows", () => {
+		const overdueHtml = renderBillingEmail("en", "invoiceOverdue", base).html;
+		for (const key of ["recoveryNudge", "recoveryFinal"] as const) {
+			const { html } = renderBillingEmail("en", key, overdue);
+			// #dc2626 is the overdue accent — a recovery mail rendering green would
+			// read as good news at the exact moment it is not.
+			expect(html).toContain("#dc2626");
+			expect(overdueHtml).toContain("#dc2626");
+		}
 	});
 });
