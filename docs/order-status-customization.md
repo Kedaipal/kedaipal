@@ -575,36 +575,40 @@ copy is true by construction.
    `retailers.update`, `FlowPreset.takesLegacyLabels`, and the `labels` /
    `orderStages` options on `resolveStages`.
 
-> ### ⚠️ The BACKFILL drops `pending` / `cancelled` renames — size it first
+> ### ✅ Measured on prod (24 Sep 2026): nothing is at risk
 >
-> Stages span the `confirmed → delivered` band only, so a legacy
-> `statusLabels.pending` rename cannot be carried into `orderFlows`. Since an
-> answer retires the whole legacy map for that kind (above), **the moment the
-> backfill writes `orderFlows.delivery` / `.self_collect` for a store, its
-> `pending` and `cancelled` renames stop rendering** and those two statuses
-> read the defaults again.
+> The concern below was sized before it was measured. The read-only prod count
+> has now been run, and it is empty:
 >
-> This is deliberate — the alternative is a two-word remnant no screen can show
-> or clear — but it is a **buyer-visible copy change on backfill**, not on
-> deploy, and it is the one part of this migration that is not
-> behaviour-preserving.
+> | | Prod (35 retailers) |
+> | --- | --- |
+> | Any `statusLabels` rename | **0** |
+> | Renamed `pending` / `cancelled` | **0** |
+> | Custom flat `orderStages` | 5 |
+> | Already has `orderFlows` | 0 |
 >
-> Real example on dev: `herb` carried
-> `statusLabels.en = { confirmed: "Ok go", pending: "Incoming" }`. After the
-> backfill "Ok go" lives on as a stage; **"Incoming" is gone** and the buyer
-> page reads "Order Received".
+> So: **no prod store loses a single word.** The backfill's only real work is
+> the 5 stores with a flat `orderStages` list, which carries over verbatim to
+> `delivery` + `self_collect`. The `pending`/`cancelled` gap is real in the
+> code but has no subject in the data, and building a per-kind home for those
+> two statuses would be speculative — leave it until a seller asks.
+>
+> It also means **the narrow is free**: `statusLabels` is dead data in prod, so
+> dropping it carries no migration risk at all. And v2026.09.7's "bookings use
+> booking words" note needed no qualifier — no prod store had a rename to leak.
 >
 > **What the backfill KEEPS vs drops** — it is a migration, not a reset:
 >
 > | Status | After the backfill |
 > | --- | --- |
 > | `confirmed` `packed` `shipped` `delivered` | **Kept verbatim**, as stages on delivery + pickup |
-> | `pending` `cancelled` | **Back to the default wording** — no structural home |
+> | `pending` `cancelled` | Back to the default wording — no structural home (no prod store affected) |
 >
-> Verified on dev `herb`: it had renamed `confirmed → "Ok go"` and
-> `pending → "Incoming"`. After the backfill its delivery flow reads
+> Verified on dev `herb`, which had renamed `confirmed → "Ok go"` and
+> `pending → "Incoming"`: after the backfill its delivery flow reads
 > `confirmed → "Ok go"`, `packed → "Packed"`, `shipped → "On the Way"`,
-> `delivered → "Delivered"`. Only "Incoming" was lost.
+> `delivered → "Delivered"`. Only "Incoming" was lost — and no prod store has
+> that shape.
 >
 > **Release-note copy, ready to lift** (kind: `Enhancement`) when the release
 > PR is prepped — do NOT write it into `releases.ts` before then, the version
@@ -612,21 +616,10 @@ copy is true by construction.
 >
 > > *Order steps are now set per kind of order — delivery, pickup, bookings and
 > > events each get their own, so a booking never shows delivery wording again.
-> > Any step names you had already set carry over to your delivery and pickup
-> > orders. If you had renamed "Order Received" or "Cancelled", just those two
-> > go back to their standard wording.*
+> > Any step names you have already set carry over to your delivery and pickup
+> > orders.*
 >
-> **A release note alone is not enough for an affected store.** The What's-new
-> modal only reaches sellers stamped by the PREVIOUS release, so a store that
-> renamed those two may never see it. If the prod count below is small (likely
-> a handful), tell those sellers directly instead of relying on the modal.
->
-> **Run the prod `statusLabels` count (the read-only query in the ticket)
-> before the backfill** and check whether any store renamed `pending` or
-> `cancelled`. If none did, this is a non-event. If some did, it belongs in the
-> release notes — or the backfill waits while those two statuses get a home.
-> The **narrow itself is no longer blocked**: once every store is backfilled,
-> nothing reads `statusLabels`.
+> (No "if you renamed Order Received" caveat: the prod count says nobody did.)
 
 ### The bulk menu speaks the SELECTION
 
