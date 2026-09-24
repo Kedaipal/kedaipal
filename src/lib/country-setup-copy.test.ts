@@ -44,6 +44,22 @@ describe("revealAnchorWhenMounted", () => {
 		expect(card.scrollIntoView).not.toHaveBeenCalled();
 	});
 
+	it("a hidden tab (a cmd-clicked link) jumps — its smooth scroll would never run", async () => {
+		const visibility = vi
+			.spyOn(document, "visibilityState", "get")
+			.mockReturnValue("hidden");
+		const card = mountCard("closed-dates");
+		const stop = revealAnchorWhenMounted("closed-dates");
+		document.body.append(document.createElement("div"));
+		await new Promise((r) => setTimeout(r, 0));
+		expect(card.scrollIntoView).toHaveBeenCalledWith({
+			behavior: "auto",
+			block: "start",
+		});
+		stop();
+		visibility.mockRestore();
+	});
+
 	it("cleanup stops the watch", async () => {
 		const stop = revealAnchorWhenMounted("closed-dates");
 		stop();

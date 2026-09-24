@@ -69,7 +69,13 @@ describe("ClosedDatesCard", () => {
 			/>,
 		);
 		expect(screen.getByText("No closed dates")).toBeTruthy();
-		expect(screen.getByText(/Closing for Raya or a break\?/)).toBeTruthy();
+		// Exact for every store — a package keeps selling through a closure, so
+		// "buyers can't pick them" alone over-claimed on a booking store.
+		expect(
+			screen.getByText(
+				/Closing for Raya or a break\? Add the dates — buyers can't pick them for delivery or pickup/,
+			),
+		).toBeTruthy();
 		expect(
 			(
 				screen.getByRole("button", {

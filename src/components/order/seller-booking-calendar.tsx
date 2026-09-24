@@ -113,12 +113,12 @@ function closedDayEffects(
  */
 function closeInsteadEffect(rules: ReadonlySet<ClosureRule>): string {
 	if (rules.has("absorbed") && rules.has("skipped")) {
-		return "packages keep selling — every-day ones count the closed days, open-days ones skip them";
+		return "packages keep selling: every-day ones count the closed days, open-days ones skip them";
 	}
 	if (rules.has("skipped")) {
-		return "packages keep selling — they skip the closed days and run a day longer";
+		return "packages keep selling: they skip the closed days and run a day longer";
 	}
-	return "packages keep selling — the closed days stay part of the term and buyers are told; only a start on a closed day is refused";
+	return "packages keep selling: the closed days stay part of the term and buyers are told; only a start on a closed day is refused";
 }
 
 /** The named guests on a pending block, with the overflow counted. */
@@ -956,7 +956,11 @@ export function SellerBookingCalendar({
 								}}
 							>
 								<Ban className="size-4" aria-hidden />
-								Block this night
+								{/* A package sells days, not nights. */}
+								{selectedListing &&
+								closureRule(selectedListing) !== "unavailable"
+									? "Block this day"
+									: "Block this night"}
 							</Button>
 						) : null}
 					</div>

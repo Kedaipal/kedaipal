@@ -152,8 +152,9 @@ export function ClosedDatesCard({
 					/>
 					<p className="text-sm font-semibold">No closed dates</p>
 					<p className="max-w-xs text-xs leading-relaxed text-muted-foreground">
-						Closing for Raya or a break? Add the dates and buyers can't pick
-						them. Orders already placed stay as they are.
+						Closing for Raya or a break? Add the dates — buyers can&apos;t pick
+						them for delivery or pickup, and orders already placed stay as they
+						are.
 					</p>
 				</div>
 			) : (
@@ -429,8 +430,9 @@ function AddClosedDatesForm({
 			) : null}
 
 			{/* Pinned to the sheet's bottom edge, covering its padding, so the one
-			    action is on screen however long the impact list gets. */}
-			<div className="sticky bottom-[calc(-1*max(1.25rem,env(safe-area-inset-bottom)))] z-10 -mx-5 mt-auto border-t border-border bg-popover px-5 pt-3 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
+			    action is on screen however long the impact list gets — and sits
+			    in the same place whether the sheet scrolls or not. */}
+			<div className="sticky bottom-[calc(-1*max(1.25rem,env(safe-area-inset-bottom)))] z-10 -mx-5 mt-auto -mb-[max(1.25rem,env(safe-area-inset-bottom))] border-t border-border bg-popover px-5 pt-3 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
 				<Button
 					className="tap-target w-full"
 					disabled={!range || duplicate || saving}

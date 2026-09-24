@@ -1522,7 +1522,10 @@ closed START for `absorbed` with the same sentence the open-days resolver uses
 (`CLOSED_START_MESSAGE`), and the buyer calendar mirrors it through
 `SelectionContext.startClosed`. The availability payload therefore sends
 `closedWeekdays` for every package, not just open-days ones. Only the closed
-days themselves drop out as starts, so the FS Fitness trap stays fixed.
+days themselves drop out as starts, so the FS Fitness trap stays fixed. **This
+changes live listings**: an existing gym month or every-day pass on a store
+with a weekly day off loses that weekday as a start (terms still run through
+it; placed bookings are untouched) — worth a line in the release notes.
 
 ### Open-days packages
 
@@ -1651,9 +1654,12 @@ around them didn't. What it found, and what changed:
   package" on a package.
 - **Settings deep links never scrolled** when the card mounted after the first
   frame (always, behind the skeleton) — `revealAnchorWhenMounted` waits for
-  it. Predates this ticket; every `?spot=`/`?fix=` link benefits.
+  it, and jumps instead of smooth-scrolling in a hidden tab (a cmd-clicked
+  link never runs the animation). Predates this ticket; every `?spot=`/`?fix=`
+  link benefits.
 - In passing: the day sheet printed the raw status ("Booking_requested"), now
-  the resolved label; the shared `Calendar` merges a caller's
+  the resolved label, and its block button says "Block this day" for a
+  package; the shared `Calendar` merges a caller's
   `modifiersClassNames` instead of replacing its range band; the header keeps
   "7:30 AM" on one line; the approve card's capacity figure ignores days the
   booking skips (and its dead `nights` field is gone).

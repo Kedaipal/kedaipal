@@ -244,8 +244,11 @@ export function scrollToAnchor(anchorId: string): boolean {
 	const reduced =
 		typeof window !== "undefined" &&
 		window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+	// A hidden tab (a cmd-clicked deep link) never runs a smooth scroll's
+	// animation — it would open at the top. Jump instead.
+	const hidden = document.visibilityState === "hidden";
 	el.scrollIntoView({
-		behavior: reduced ? "auto" : "smooth",
+		behavior: reduced || hidden ? "auto" : "smooth",
 		block: "start",
 	});
 	return true;

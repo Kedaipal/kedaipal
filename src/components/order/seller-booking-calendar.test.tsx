@@ -249,6 +249,8 @@ describe("SellerBookingCalendar — an OPEN-DAYS listing (herb's week: shut Sun,
 				"The store is closed that day, so nothing new can start on it.",
 			),
 		).toBeTruthy();
+		// A package sells days, not nights.
+		expect(screen.getByRole("button", { name: /Block this day/ })).toBeTruthy();
 	});
 
 	it("a row counts the days the member comes, and speaks the seller's status words", () => {
