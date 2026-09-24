@@ -279,7 +279,12 @@ async function assertBatchAccess(
 	ctx: QueryCtx,
 	retailerId: Id<"retailers">,
 ): Promise<Doc<"retailers">> {
-	const access = await requireRetailerAccess(ctx, retailerId);
+	// Printing labels projects order data onto paper — read level is enough;
+	// the shipping status moves themselves stay behind orders:write.
+	const access = await requireRetailerAccess(ctx, retailerId, {
+		area: "orders",
+		level: "read",
+	});
 	if (!access.actingAsAdmin)
 		await assertPlanFeature(ctx, retailerId, "orderInbox");
 	return access.retailer;

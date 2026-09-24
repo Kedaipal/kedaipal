@@ -38,7 +38,11 @@ export type PlanCaps = {
 	 * While a subscription is ON HOLD the EFFECTIVE cap is 0 (ordering off) —
 	 * resolved by `resolveAccess`, never stored, so resuming needs no rewrite. */
 	orderCap: number;
-	/** Hard cap on dashboard users. */
+	/** Hard cap on dashboard users — TOTAL people incl. the owner, so member
+	 * seats = `userCap - 1` (see convex/lib/seats.ts). Starter 1 / Pro 3 /
+	 * Scale 6 = "You + 0/2/5 teammates" (Zaki, 24 Sep 2026, 86exr91r4).
+	 * Denormalized onto subscription rows like orderCap — changing these
+	 * numbers needs `migrations.resyncSubscriptionCaps` on prod. */
 	userCap: number;
 	/** Monthly broadcast quota (hard, seller-side). */
 	broadcastQuota: number;
@@ -47,8 +51,8 @@ export type PlanCaps = {
 // Per CLAUDE.md pricing table.
 export const PLAN_CAPS: Record<Plan, PlanCaps> = {
 	starter: { orderCap: 100, userCap: 1, broadcastQuota: 0 },
-	pro: { orderCap: 200, userCap: 2, broadcastQuota: 100 },
-	scale: { orderCap: 400, userCap: 5, broadcastQuota: 500 },
+	pro: { orderCap: 200, userCap: 3, broadcastQuota: 100 },
+	scale: { orderCap: 400, userCap: 6, broadcastQuota: 500 },
 };
 
 /** Boolean feature entitlements per plan — the pricing table's ✓/– rows for

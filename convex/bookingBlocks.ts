@@ -39,7 +39,10 @@ const GUESTS_PER_NIGHT = 3;
 export const hasBookingListings = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }): Promise<boolean> => {
-		const access = await requireRetailerAccess(ctx, retailerId);
+		const access = await requireRetailerAccess(ctx, retailerId, {
+			area: "bookings",
+			level: "read",
+		});
 		const products = await ctx.db
 			.query("products")
 			.withIndex("by_retailer_active", (q) =>
@@ -66,7 +69,10 @@ export const blockDays = mutation({
 		note: v.optional(v.string()),
 	},
 	handler: async (ctx, args): Promise<Id<"bookingBlocks">> => {
-		const access = await requireRetailerAccess(ctx, args.retailerId);
+		const access = await requireRetailerAccess(ctx, args.retailerId, {
+			area: "bookings",
+			level: "write",
+		});
 		if (!access.actingAsAdmin)
 			await assertSubscriptionActive(ctx, args.retailerId);
 
@@ -117,7 +123,10 @@ export const unblock = mutation({
 	handler: async (ctx, { blockId }): Promise<void> => {
 		const block = await ctx.db.get(blockId);
 		if (!block) return; // already gone — unblock is idempotent
-		const access = await requireRetailerAccess(ctx, block.retailerId);
+		const access = await requireRetailerAccess(ctx, block.retailerId, {
+			area: "bookings",
+			level: "write",
+		});
 		if (!access.actingAsAdmin)
 			await assertSubscriptionActive(ctx, block.retailerId);
 		await ctx.db.delete(blockId);
@@ -177,7 +186,10 @@ export const sellerCalendar = query({
 			packageUnit?: PackageUnit;
 		}>;
 	}> => {
-		const access = await requireRetailerAccess(ctx, args.retailerId);
+		const access = await requireRetailerAccess(ctx, args.retailerId, {
+			area: "bookings",
+			level: "read",
+		});
 		if (!isMytMidnight(args.from) || !isMytMidnight(args.to)) {
 			throw new ConvexError("Calendar window must be calendar days");
 		}
@@ -330,7 +342,10 @@ export const blockImpact = query({
 		count: number;
 		samples: Array<{ shortId: string; customerName?: string }>;
 	}> => {
-		const access = await requireRetailerAccess(ctx, args.retailerId);
+		const access = await requireRetailerAccess(ctx, args.retailerId, {
+			area: "bookings",
+			level: "read",
+		});
 		if (!isMytMidnight(args.startDate) || !isMytMidnight(args.endDate)) {
 			throw new ConvexError("Blocked days must be calendar days");
 		}
@@ -413,7 +428,10 @@ export const dayBookings = query({
 			packaged: boolean;
 		}>
 	> => {
-		const access = await requireRetailerAccess(ctx, args.retailerId);
+		const access = await requireRetailerAccess(ctx, args.retailerId, {
+			area: "bookings",
+			level: "read",
+		});
 		if (!isMytMidnight(args.date)) {
 			throw new ConvexError("Pick a calendar day");
 		}

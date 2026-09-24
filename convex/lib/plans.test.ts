@@ -230,16 +230,19 @@ describe("plans — gating helpers", () => {
 		});
 		// Pro 200 / Scale 400 — the allowances /pricing had advertised ahead of
 		// enforcement (86eye2ccu), landed with the pricing reset (z8r3fday24).
+		// userCap is TOTAL people incl. the owner: Pro = "You + 2 teammates",
+		// Scale = "You + 5" (team seats, 86exr91r4). Changing these needs
+		// migrations.resyncSubscriptionCaps on prod (caps are denormalized).
 		expect(capsForPlan("pro")).toEqual({
 			orderCap: 200,
-			userCap: 2,
+			userCap: 3,
 			broadcastQuota: 100,
 		});
 		// Scale's "unlimited" was dropped for finite soft caps (Arif 2026-06-28);
 		// broadcasts stay 500/mo (~5× Pro). All finite.
 		expect(capsForPlan("scale")).toEqual({
 			orderCap: 400,
-			userCap: 5,
+			userCap: 6,
 			broadcastQuota: 500,
 		});
 	});

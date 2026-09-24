@@ -32,7 +32,11 @@ import {
 	type MutationCtx,
 	query,
 } from "./_generated/server";
-import { requireAdmin, requireRetailerAccess } from "./lib/auth";
+import {
+	requireAdmin,
+	requireRetailerAccess,
+	resolveMyRetailerFor,
+} from "./lib/auth";
 import {
 	decimalStringToSen,
 	HITPAY_API_BASE,
@@ -150,12 +154,15 @@ export const billingGatewayAvailable = query({
 	} | null> => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) return null;
-		const retailer = retailerId
-			? (await requireRetailerAccess(ctx, retailerId)).retailer
-			: await ctx.db
-					.query("retailers")
-					.withIndex("by_user", (q) => q.eq("userId", identity.subject))
-					.first();
+		// Billing READ is grantable (86exr91r4): a member with billing:read sees
+		// the same billing tab the owner does; without it, null → tab locked.
+		const access = retailerId
+			? await requireRetailerAccess(ctx, retailerId, {
+					area: "billing",
+					level: "read",
+				})
+			: await resolveMyRetailerFor(ctx, { area: "billing", level: "read" });
+		const retailer = access?.retailer ?? null;
 		if (!retailer) return null;
 		const sub = await ctx.db
 			.query("subscriptions")

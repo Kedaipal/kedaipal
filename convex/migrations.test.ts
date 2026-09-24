@@ -501,7 +501,7 @@ describe("resyncSubscriptionCaps (z8r3fday24 — Pro 200 / Scale 400)", () => {
 		expect(first).toEqual({ scanned: 1, patched: 1 });
 		const after = await t.run((ctx) => ctx.db.get(subId));
 		expect(after?.orderCap).toBe(200);
-		expect(after?.userCap).toBe(2);
+		expect(after?.userCap).toBe(3);
 		expect(after?.broadcastQuota).toBe(100);
 		expect(after?.updatedAt).toBe(flippedAt);
 

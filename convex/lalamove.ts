@@ -11,6 +11,7 @@
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
+import { requireRetailerAccess } from "./lib/auth";
 import {
 	action,
 	internalAction,
@@ -966,12 +967,16 @@ export const getDispatchContext = internalQuery({
 		const retailer = await ctx.db.get(order.retailerId);
 		if (!retailer) return { ok: false, reason: "not_found" };
 
-		// Plan gate — admin act-as bypasses (white-glove), mirroring updateSettings.
-		const identity = await ctx.auth.getUserIdentity();
-		const actingAsAdmin =
-			identity !== null && retailer.userId !== identity.subject;
+		// The caller's REAL role from the gate (86exr91r4 audit fix): "not the
+		// owner" used to read as acting-admin here, which would have handed every
+		// team member the admin plan-gate bypass. Booking a rider is orders work,
+		// so the write level applies; only a true admin skips the plan gate.
+		const access = await requireRetailerAccess(ctx, retailer._id, {
+			area: "orders",
+			level: "write",
+		});
 		let planOk = true;
-		if (!actingAsAdmin) {
+		if (access.role !== "admin") {
 			try {
 				await assertPlanFeature(ctx, retailer._id, "delivery");
 			} catch {
@@ -1802,11 +1807,15 @@ export const getDeliveryJob = query({
 			retailer.deliveryBooking as BookingConfig | undefined,
 			retailer.country,
 		);
-		const identity = await ctx.auth.getUserIdentity();
-		const actingAsAdmin =
-			identity !== null && retailer.userId !== identity.subject;
+		// Real role from the gate (86exr91r4) — read level: this is the dispatch
+		// card's state, booking itself re-gates at write. Only a true admin
+		// skips the plan gate.
+		const access = await requireRetailerAccess(ctx, retailer._id, {
+			area: "orders",
+			level: "read",
+		});
 		let planOk = true;
-		if (!actingAsAdmin) {
+		if (access.role !== "admin") {
 			try {
 				await assertPlanFeature(ctx, retailer._id, "delivery");
 			} catch {

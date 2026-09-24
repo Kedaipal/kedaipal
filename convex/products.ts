@@ -17,11 +17,12 @@ import {
 	type QueryCtx,
 } from "./_generated/server";
 import {
-	adminUserIds,
 	logAdminAction,
 	type RetailerAccess,
 	requireRetailerAccess,
+	tryRetailerAccess,
 } from "./lib/auth";
+import type { PermissionLevel } from "./lib/permissions";
 import {
 	bumpCategoryCountsForProduct,
 	isProductVisible,
@@ -184,11 +185,14 @@ async function requireUserId(ctx: QueryCtx | MutationCtx): Promise<string> {
 // Owner-OR-admin retailer access (see convex/lib/auth.ts). Kept as a thin local
 // alias so every call site in this file reads uniformly and returns the
 // `actingAsAdmin` flag the mutations use to skip the soft-lock + write audit rows.
+// "Ownership" = the ROW belongs to the store; WHO may act is the `level` on the
+// products grant (owner/admin always; members per convex/lib/permissions.ts).
 async function requireRetailerOwnership(
 	ctx: QueryCtx | MutationCtx,
 	retailerId: Id<"retailers">,
+	level: PermissionLevel,
 ): Promise<RetailerAccess> {
-	return requireRetailerAccess(ctx, retailerId);
+	return requireRetailerAccess(ctx, retailerId, { area: "products", level });
 }
 
 // Widened to accept a QueryCtx (the `requireRetailerOwnership` shape) so
@@ -197,20 +201,28 @@ async function requireRetailerOwnership(
 async function requireProductOwnership(
 	ctx: QueryCtx | MutationCtx,
 	productId: Id<"products">,
+	level: PermissionLevel,
 ): Promise<{ product: Doc<"products">; access: RetailerAccess }> {
 	const product = await ctx.db.get(productId);
 	if (!product) throw new Error("Product not found");
-	const access = await requireRetailerAccess(ctx, product.retailerId);
+	const access = await requireRetailerAccess(ctx, product.retailerId, {
+		area: "products",
+		level,
+	});
 	return { product, access };
 }
 
 async function requireVariantOwnership(
 	ctx: MutationCtx,
 	variantId: Id<"productVariants">,
+	level: PermissionLevel,
 ): Promise<{ variant: Doc<"productVariants">; access: RetailerAccess }> {
 	const variant = await ctx.db.get(variantId);
 	if (!variant) throw new Error("Variant not found");
-	const access = await requireRetailerAccess(ctx, variant.retailerId);
+	const access = await requireRetailerAccess(ctx, variant.retailerId, {
+		area: "products",
+		level,
+	});
 	return { variant, access };
 }
 
@@ -679,7 +691,13 @@ export const list = query({
 export const listForCounter = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }) => {
-		await requireRetailerOwnership(ctx, retailerId);
+		// The counter's product picker rides the ORDERS grant: ringing up what's
+		// on the shelf is selling, not catalog management — a front-desk member
+		// without the products grant must still be able to run the counter.
+		await requireRetailerAccess(ctx, retailerId, {
+			area: "orders",
+			level: "read",
+		});
 		const rows = await ctx.db
 			.query("products")
 			.withIndex("by_retailer_active", (q) =>
@@ -736,7 +754,7 @@ export const listForCounter = query({
 export const hasEventListings = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }): Promise<boolean> => {
-		await requireRetailerOwnership(ctx, retailerId);
+		await requireRetailerOwnership(ctx, retailerId, "read");
 		const rows = await ctx.db
 			.query("products")
 			.withIndex("by_retailer_active", (q) =>
@@ -761,7 +779,7 @@ export const eventVenueUsage = query({
 		ctx,
 		{ retailerId },
 	): Promise<Array<{ venueId: Id<"pickupLocations">; name: string }>> => {
-		await requireRetailerOwnership(ctx, retailerId);
+		await requireRetailerOwnership(ctx, retailerId, "read");
 		const rows = await ctx.db
 			.query("products")
 			.withIndex("by_retailer_active", (q) =>
@@ -779,7 +797,7 @@ export const eventVenueUsage = query({
 export const capState = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }) => {
-		const access = await requireRetailerOwnership(ctx, retailerId);
+		const access = await requireRetailerOwnership(ctx, retailerId, "read");
 		return productCapState(
 			await countProductsForRetailer(ctx, retailerId),
 			access.actingAsAdmin,
@@ -790,7 +808,7 @@ export const capState = query({
 export const listAll = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }) => {
-		await requireRetailerOwnership(ctx, retailerId);
+		await requireRetailerOwnership(ctx, retailerId, "read");
 		const rows = await ctx.db
 			.query("products")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
@@ -810,16 +828,15 @@ export const get = query({
 	handler: async (ctx, { productId }) => {
 		const row = await ctx.db.get(productId);
 		if (!row) return null;
-		// Inactive variants (price/stock/SKU) are owner-only. The owning retailer —
-		// or a Kedaipal admin operating the store (act-as) — editing in the dashboard
-		// sees the full set; any other caller, including an unauthenticated direct
-		// query, gets active variants only.
-		const identity = await ctx.auth.getUserIdentity();
-		const owner = await ctx.db.get(row.retailerId);
+		// Inactive variants (price/stock/SKU) are seller-side data. The owner, a
+		// member with the products grant, or a Kedaipal admin (act-as) editing in
+		// the dashboard sees the full set; any other caller, including an
+		// unauthenticated direct query, gets active variants only.
 		const canEdit =
-			identity !== null &&
-			(owner?.userId === identity.subject ||
-				adminUserIds().includes(identity.subject));
+			(await tryRetailerAccess(ctx, row.retailerId, {
+				area: "products",
+				level: "read",
+			})) !== null;
 		// Off-storefront products are counter-only — a non-owner caller (incl. an
 		// unauthenticated direct query) must not read one, matching the promise
 		// that they never leak through a public query. Both the seller's own
@@ -917,7 +934,7 @@ export const create = mutation({
 	handler: async (ctx, args): Promise<Id<"products">> => {
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
-		const access = await requireRetailerOwnership(ctx, args.retailerId);
+		const access = await requireRetailerOwnership(ctx, args.retailerId, "write");
 		// Soft-lock: a past_due seller can't grow their catalog (storefront + order
 		// pipeline stay live). Admins onboarding a store (act-as) bypass it —
 		// white-glove happens before the seller has paid. See docs/manual-subscription.md.
@@ -1311,6 +1328,7 @@ export const update = mutation({
 		const { product: ownedProduct, access } = await requireProductOwnership(
 			ctx,
 			productId,
+			"write",
 		);
 		if (!access.actingAsAdmin)
 			await assertSubscriptionActive(ctx, ownedProduct.retailerId);
@@ -1438,6 +1456,7 @@ export const saveVariantGrid = mutation({
 		const { product, access } = await requireProductOwnership(
 			ctx,
 			args.productId,
+			"write",
 		);
 		if (!access.actingAsAdmin)
 			await assertSubscriptionActive(ctx, product.retailerId);
@@ -1583,6 +1602,7 @@ export const updateVariant = mutation({
 		const { variant: existing, access } = await requireVariantOwnership(
 			ctx,
 			variantId,
+			"write",
 		);
 		await assertSubscriptionActive(ctx, existing.retailerId);
 
@@ -1705,6 +1725,7 @@ export const adjustStock = mutation({
 			const { variant, access } = await requireVariantOwnership(
 				ctx,
 				adjustment.variantId,
+				"write",
 			);
 			if (!access.actingAsAdmin)
 				await assertSubscriptionActive(ctx, variant.retailerId);
@@ -1768,7 +1789,11 @@ export const archive = mutation({
 	handler: async (ctx, { productId }): Promise<void> => {
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
-		const { product, access } = await requireProductOwnership(ctx, productId);
+		const { product, access } = await requireProductOwnership(
+			ctx,
+			productId,
+			"write",
+		);
 		await assertSubscriptionActive(ctx, product.retailerId);
 		const wasVisible = isProductVisible(product);
 		await ctx.db.patch(productId, {
@@ -1806,7 +1831,11 @@ export const deletePermanently = mutation({
 	handler: async (ctx, { productId }): Promise<void> => {
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
-		const { product, access } = await requireProductOwnership(ctx, productId);
+		const { product, access } = await requireProductOwnership(
+			ctx,
+			productId,
+			"write",
+		);
 		await assertSubscriptionActive(ctx, product.retailerId);
 
 		if (product.orderedAt !== undefined)
@@ -2065,7 +2094,7 @@ export const bulkUpsert = mutation({
 	handler: async (ctx, args): Promise<{ created: number; updated: number }> => {
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productBulkImport", { key: userId, throws: true });
-		const access = await requireRetailerOwnership(ctx, args.retailerId);
+		const access = await requireRetailerOwnership(ctx, args.retailerId, "write");
 		await assertSubscriptionActive(ctx, args.retailerId);
 
 		const products = args.products as ImportProduct[];
@@ -2302,7 +2331,7 @@ export const bulkUpsertPreview = query({
 		products: v.array(importProductValidator),
 	},
 	handler: async (ctx, args) => {
-		const access = await requireRetailerOwnership(ctx, args.retailerId);
+		const access = await requireRetailerOwnership(ctx, args.retailerId, "write");
 		const products = args.products as ImportProduct[];
 		if (totalImportVariants(products) > MAX_BULK_IMPORT_BATCH)
 			throw new ConvexError(
@@ -2476,7 +2505,7 @@ export const reorder = mutation({
 	handler: async (ctx, { retailerId, orderedIds }): Promise<void> => {
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
-		const access = await requireRetailerOwnership(ctx, retailerId);
+		const access = await requireRetailerOwnership(ctx, retailerId, "write");
 		await assertSubscriptionActive(ctx, retailerId);
 
 		const rows = await ctx.db
@@ -2588,7 +2617,7 @@ export const eventHeadcount = query({
 		passed: boolean;
 		options: Array<{ label: string; seats: number }>;
 	} | null> => {
-		const { product } = await requireProductOwnership(ctx, productId);
+		const { product } = await requireProductOwnership(ctx, productId, "read");
 		if (product.event === undefined) return null;
 		const tally = await tallyEventSeats(ctx, {
 			retailerId: product.retailerId,

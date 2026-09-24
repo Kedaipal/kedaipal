@@ -69,7 +69,10 @@ export const getCalendarFeed = query({
 		ctx,
 		{ retailerId },
 	): Promise<{ token: string | null; hasBookingListings: boolean }> => {
-		const access = await requireRetailerAccess(ctx, retailerId);
+		const access = await requireRetailerAccess(ctx, retailerId, {
+			area: "bookings",
+			level: "read",
+		});
 		const products = await ctx.db
 			.query("products")
 			.withIndex("by_retailer_active", (q) =>
@@ -92,7 +95,12 @@ export const getCalendarFeed = query({
 export const ensureCalendarFeedToken = mutation({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }): Promise<string> => {
-		const access = await requireRetailerAccess(ctx, retailerId);
+		// Minting the feed URL hands booking data to an external calendar, so it
+		// needs the write level even though it looks like a read.
+		const access = await requireRetailerAccess(ctx, retailerId, {
+			area: "bookings",
+			level: "write",
+		});
 		const existing = access.retailer.calendarFeedToken;
 		if (existing) return existing;
 		const token = generateTrackingToken();
@@ -118,7 +126,10 @@ export const ensureCalendarFeedToken = mutation({
 export const rotateCalendarFeedToken = mutation({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }): Promise<string> => {
-		const access = await requireRetailerAccess(ctx, retailerId);
+		const access = await requireRetailerAccess(ctx, retailerId, {
+			area: "bookings",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, retailerId);
 		if (!access.retailer.calendarFeedToken) {
 			throw new ConvexError("Connect the calendar first");
