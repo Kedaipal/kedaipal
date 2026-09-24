@@ -14,6 +14,8 @@ import {
 	resolveBookingRange,
 	splitNightsByRate,
 	staysOverlap,
+	closureRule,
+	resolveOpenDaysTerm,
 } from "./bookingAvailability";
 import {
 	addMytCalendarMonths,
@@ -319,5 +321,104 @@ describe("partitionNights (S13 — which nights, not just how many)", () => {
 		);
 		expect(counts.weekdayNights).toBe(weekday.length);
 		expect(counts.weekendNights).toBe(weekend.length);
+	});
+});
+
+describe("closureRule (z8r3fdhpm7) — what a store closure does to a listing", () => {
+	it("stays and night packages: the night is unavailable", () => {
+		expect(closureRule(undefined)).toBe("unavailable");
+		expect(closureRule({})).toBe("unavailable");
+		expect(closureRule({ packageLength: 2, packageUnit: "night" })).toBe(
+			"unavailable",
+		);
+		// A night package can't skip — the flag is meaningless there.
+		expect(
+			closureRule({ packageLength: 2, packageUnit: "night", skipsClosedDays: true }),
+		).toBe("unavailable");
+	});
+
+	it("month and every-day packages absorb it; an open-days day package skips it", () => {
+		expect(closureRule({ packageLength: 1, packageUnit: "month" })).toBe(
+			"absorbed",
+		);
+		expect(closureRule({ packageLength: 5, packageUnit: "day" })).toBe(
+			"absorbed",
+		);
+		expect(closureRule({ packageLength: 5 })).toBe("absorbed");
+		expect(
+			closureRule({ packageLength: 5, packageUnit: "day", skipsClosedDays: true }),
+		).toBe("skipped");
+		// A month never skips — it runs by the calendar.
+		expect(
+			closureRule({ packageLength: 1, packageUnit: "month", skipsClosedDays: true }),
+		).toBe("absorbed");
+	});
+});
+
+describe("resolveOpenDaysTerm (z8r3fdhpm7)", () => {
+	// Wed 30 Sep 2026 start; closed Thu 1 Oct (a date) and Sundays (weekly).
+	const WED_30_SEP = Date.UTC(2026, 8, 30) - MYT_OFFSET_MS;
+	const d = (n: number) => WED_30_SEP + n * DAY_MS;
+	const closed = (day: number) =>
+		day === d(1) || new Date(day + MYT_OFFSET_MS).getUTCDay() === 0;
+
+	it("counts five OPEN days and names the two it stepped over (the ticket's done criterion)", () => {
+		expect(resolveOpenDaysTerm(d(0), 5, closed)).toEqual({
+			// Wed 30, Fri 2, Sat 3, Mon 5, Tue 6 → leaves Wed 7 (exclusive).
+			checkOut: d(7),
+			skipped: [d(1), d(4)],
+		});
+	});
+
+	it("a store with nothing closed runs the plain every-day term", () => {
+		expect(resolveOpenDaysTerm(d(0), 5, () => false)).toEqual({
+			checkOut: d(5),
+			skipped: [],
+		});
+	});
+
+	it("can't start on a shut day — day one must be a day the service happens", () => {
+		expect(() => resolveOpenDaysTerm(d(1), 5, closed)).toThrow(
+			/closed on that day/,
+		);
+	});
+
+	it("refuses (never truncates) a term the skips stretch past the scan bound", () => {
+		// Open one day a week: 60 open days need ~420 calendar days.
+		const oncePerWeek = (day: number) =>
+			new Date(day + MYT_OFFSET_MS).getUTCDay() !== 3;
+		expect(() => resolveOpenDaysTerm(d(0), 60, oncePerWeek)).toThrow(
+			/longer than a year/,
+		);
+	});
+
+	it("resolveBookingRange routes an open-days package through it — and demands the schedule", () => {
+		const booking = {
+			packageLength: 5,
+			packageUnit: "day" as const,
+			skipsClosedDays: true,
+		};
+		expect(resolveBookingRange(booking, d(0), undefined, 1, closed)).toEqual({
+			checkIn: d(0),
+			checkOut: d(7),
+			skipped: [d(1), d(4)],
+		});
+		// Two packages = ten open days, counted in ONE step.
+		expect(
+			resolveBookingRange(booking, d(0), undefined, 2, closed).skipped,
+		).toEqual([d(1), d(4), d(11)]);
+		expect(() => resolveBookingRange(booking, d(0))).toThrow(
+			/needs the store's schedule/,
+		);
+		// An every-day package ignores the schedule entirely.
+		expect(
+			resolveBookingRange(
+				{ packageLength: 5, packageUnit: "day" },
+				d(0),
+				undefined,
+				1,
+				closed,
+			),
+		).toEqual({ checkIn: d(0), checkOut: d(5), skipped: [] });
 	});
 });

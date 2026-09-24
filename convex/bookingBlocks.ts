@@ -14,6 +14,7 @@ import { requireRetailerAccess, logAdminAction } from "./lib/auth";
 import {
 	bookingsOverlapping,
 	eachNight,
+	occupiesNight,
 	isNightBlocked,
 	loadBlocksForWindow,
 	MAX_BLOCK_DAYS,
@@ -236,6 +237,9 @@ export const sellerCalendar = query({
 					night < Math.min(checkOut, args.to);
 					night += DAY_MS
 				) {
+					// A day an open-days package skips isn't one the member is
+					// there (z8r3fdhpm7) — no count, no name on the grid.
+					if (!occupiesNight(order, night)) continue;
 					totals.set(night, (totals.get(night) ?? 0) + 1);
 					const named = guestsByNight.get(night) ?? [];
 					if (named.length < GUESTS_PER_NIGHT) {
@@ -462,6 +466,8 @@ export const dayBookings = query({
 				args.date + DAY_MS,
 			);
 			for (const order of holders) {
+				// Nobody on an open-days package is here on a day it skips.
+				if (!occupiesNight(order, args.date)) continue;
 				rows.push({
 					shortId: order.shortId,
 					customerName: order.customer.name,

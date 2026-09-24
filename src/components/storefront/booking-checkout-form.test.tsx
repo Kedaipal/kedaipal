@@ -252,3 +252,54 @@ describe("BookingCheckoutForm — store closed dates (z8r3fdhpm7)", () => {
 		expect(screen.queryByText(/is closed/)).toBeNull();
 	});
 });
+
+describe("BookingCheckoutForm — open-days package (z8r3fdhpm7)", () => {
+	const SEP = (d: number) => Date.UTC(2026, 8, d) - 8 * 3_600_000;
+
+	it("states the rule, skips the shut days, and prices the OPEN days", () => {
+		// Closed Sundays (weekly) and Tue 15 Sep (a closed date).
+		state.availability = {
+			...AVAILABILITY,
+			packageLength: 5,
+			packageUnit: "day",
+			closures: [{ startDate: SEP(15), endDate: SEP(15), label: "Hari Raya" }],
+			closureRule: "skipped",
+			closedWeekdays: [0],
+		};
+		renderForm();
+		expect(
+			screen.getByText(/counts only the days Lembah Riverside is open/),
+		).toBeTruthy();
+		// Start Fri 11 Sep: Fri 11, Sat 12, (Sun 13), Mon 14, (Tue 15), Wed 16,
+		// Thu 17 → last day Thu 17 Sep.
+		tapDay("11");
+		// The summary renders twice (phone + desktop) — both must agree.
+		expect(
+			screen.getAllByText(/Fri, 11 Sep 2026 – Thu, 17 Sep 2026/).length,
+		).toBeGreaterThan(0);
+		expect(screen.getAllByText("5 open days").length).toBeGreaterThan(0);
+		expect(
+			screen.getAllByText("Skips Sun 13 Sep, Tue 15 Sep (store closed)").length,
+		).toBeGreaterThan(0);
+	});
+
+	it("a shut day can't start the package", () => {
+		state.availability = {
+			...AVAILABILITY,
+			packageLength: 5,
+			packageUnit: "day",
+			closures: [],
+			closureRule: "skipped",
+			closedWeekdays: [0],
+		};
+		renderForm();
+		const sunday = screen
+			.getAllByRole("gridcell")
+			.find((c) => c.textContent === "13");
+		expect(
+			within(sunday as HTMLElement)
+				.getByRole("button")
+				.hasAttribute("disabled"),
+		).toBe(true);
+	});
+});

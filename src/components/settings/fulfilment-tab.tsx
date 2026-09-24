@@ -100,6 +100,7 @@ import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { FilterChip } from "../ui/filter-chip";
 import { Input } from "../ui/input";
+import { ModeButton, ModeRadioDot } from "../ui/mode-button";
 import { Skeleton } from "../ui/skeleton";
 import { SortableList } from "../ui/sortable-list";
 import { TimePicker } from "../ui/time-picker";
@@ -660,53 +661,6 @@ function blankZoneDraft(): ZoneDraft {
 	};
 }
 
-/** Segmented mode button — same visual language as the pickup KindButton. */
-function ModeButton({
-	active,
-	disabled,
-	onClick,
-	title,
-	subtitle,
-	badge,
-}: {
-	active: boolean;
-	disabled?: boolean;
-	onClick: () => void;
-	title: string;
-	subtitle: string;
-	badge?: ReactNode;
-}) {
-	return (
-		<button
-			type="button"
-			onClick={onClick}
-			disabled={disabled}
-			aria-pressed={active}
-			className={`relative flex flex-col items-start gap-0.5 rounded-xl border-2 py-2.5 pl-3 pr-9 text-left transition-colors ${
-				active
-					? "border-accent bg-accent/5"
-					: "border-border bg-card hover:border-accent/40"
-			} ${disabled ? "cursor-not-allowed opacity-60" : ""}`}
-		>
-			<span
-				className={`flex items-center gap-1.5 text-sm font-semibold ${active ? "text-accent" : "text-foreground"}`}
-			>
-				{title}
-				{badge}
-			</span>
-			<span className="text-xs text-muted-foreground">{subtitle}</span>
-			<ModeRadioDot active={active} />
-		</button>
-	);
-}
-
-/**
- * Radio-style indicator in a mode card's corner. These grids choose exactly
- * ONE option, but the tinted-border selected state alone read as "these might
- * all be on" (Zaki, 27 Jul) — an explicit empty-ring vs filled-dot makes the
- * pick-one semantics visible at a glance. Decorative only: the button itself
- * carries aria-pressed.
- */
 /** One provider line in the live-mode "Priced by" block: logo, name, a
  * five-word detail, and a STATUS CHIP instead of a paragraph. The chip is the
  * whole point — connection state used to live in a separate Lalamove-only
@@ -779,19 +733,6 @@ function ProviderPricingRow({
 				</Link>
 			</span>
 		</div>
-	);
-}
-
-function ModeRadioDot({ active }: { active: boolean }) {
-	return (
-		<span
-			aria-hidden="true"
-			className={`absolute bottom-2.5 right-2.5 flex size-4 items-center justify-center rounded-full border-2 transition-colors ${
-				active ? "border-accent" : "border-border"
-			}`}
-		>
-			{active ? <span className="size-2 rounded-full bg-accent" /> : null}
-		</span>
 	);
 }
 

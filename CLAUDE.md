@@ -194,6 +194,8 @@ Tracked in [ClickUp Product Roadmap](https://app.clickup.com/90182681518/v/li/90
 - Customer payment gateway is **retailer-owned** (HitPay Connect / Billplz / Stripe Connect) — Kedaipal is never the merchant of record for shopper transactions
 - **The buyer's no-auth tracking page (`/track/<token>`) is capability-secured by `orders.trackingToken`** (high-entropy, crypto-random), NOT the human `shortId` (which is short + enumerable, so never a secret). Public buyer endpoints key on the token; endpoints shared with the seller dashboard (`orders.get`/`getMockupUrls`/`getCustomerImageUrl`) accept the token (buyer, unauth) **or** an authenticated + ownership-checked `shortId` (seller) via `resolveSharedOrder`. New order data/mutations exposed to buyers must key on the token. See [`docs/infra-cost-scaling.md` §6](./docs/infra-cost-scaling.md).
 
+- **A store CLOSED DATE is not a booking BLOCK.** A block means "can't be booked"; a closed date (`retailers.closedDates`, one author `convex/lib/closedDates.ts`) means "the store isn't operating", and what that does to a listing is decided in ONE place, `closureRule` in `convex/lib/bookingAvailability.ts`: unavailable for stays, absorbed by month/every-day packages, skipped by open-days packages (`resolveOpenDaysTerm`). Any new date-picking surface asks `isStoreClosedOn`/`storeClosedOn`, never the weekly hours alone. See [`docs/booking.md`](./docs/booking.md) + [`docs/fulfilment-date.md`](./docs/fulfilment-date.md).
+
 Competitive positioning vs Orderla: see [`PROJECT_CONTEXT.md`](./PROJECT_CONTEXT.md#competitive-landscape).
 
 ## Out of Scope (current sprint horizon)

@@ -1,9 +1,9 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import {
+	CalendarClock,
 	CalendarRange,
 	ChefHat,
-	CalendarClock,
 	ChevronLeft,
 	EyeOff,
 	ImagePlus,
@@ -24,17 +24,18 @@ import {
 	MAX_PREP_MINUTES,
 	parsePrepMinutesText,
 } from "../../../convex/lib/fulfilmentDate";
+import { MIN_QUANTITY_MAX } from "../../../convex/lib/minOrderRules";
 import {
 	MAX_PICKUP_NOTE_LENGTH,
 	pickupNoteFits,
 } from "../../../convex/lib/pickupNote";
-import { MIN_QUANTITY_MAX } from "../../../convex/lib/minOrderRules";
+import { formatEventBadge } from "../../../convex/lib/productEvent";
 import {
 	DEFAULT_WEEKEND_DAYS,
 	MAX_CAPACITY_PER_NIGHT,
+	type PackageUnit,
 	type ProductKind,
 	packageUnitMax,
-	type PackageUnit,
 	weekendDaysLabel,
 } from "../../../convex/lib/productKind";
 import {
@@ -42,8 +43,6 @@ import {
 	bookingSpanCounted,
 	bookingSpanNoun,
 } from "../../lib/booking-dates";
-import type { KindCard } from "../../lib/kind-card";
-import { asPackageUnit } from "../../lib/package-unit";
 import {
 	convexErrorMessage,
 	currencySymbol,
@@ -52,6 +51,8 @@ import {
 	normalizePriceInput,
 	parsePriceInput,
 } from "../../lib/format";
+import type { KindCard } from "../../lib/kind-card";
+import { asPackageUnit } from "../../lib/package-unit";
 import {
 	isSecurityDepositInRange,
 	securityDepositRangeMessage,
@@ -70,12 +71,12 @@ import { CategoryPicker } from "./category-picker";
 import {
 	EMPTY_EVENT_DRAFT,
 	type EventDraft,
+	EventFields,
 	eventDraftValid,
 	eventEndDateIssue,
-	EventFields,
 	eventSubmitValue,
 } from "./event-fields";
-import { formatEventBadge } from "../../../convex/lib/productEvent";
+import { PackageDayCounting, type StoreSchedule } from "./package-day-counting";
 import {
 	buildSubmitVariants,
 	collectOptionIssues,
@@ -85,7 +86,6 @@ import {
 	type ProductFormSubmitValues,
 } from "./product-form";
 import { type ProductImage, ProductImagesField } from "./product-images-field";
-import { WeekdayPicker } from "./weekday-picker";
 import {
 	AXIS_PRESETS,
 	type CustomLineDraft,
@@ -101,6 +101,7 @@ import {
 	type VariantRow,
 } from "./variant-editor";
 import { VariantImageCell } from "./variant-image-cell";
+import { WeekdayPicker } from "./weekday-picker";
 
 // Mirrors the server caps in convex/lib/variant.ts.
 const MAX_AXES = 2;
@@ -166,6 +167,9 @@ export type WizardState = {
 	packageUnit: PackageUnit;
 	/** Booking kind only — skip the approval step (S7). */
 	autoAccept: boolean;
+	/** Booking kind, DAY package only — "Only days you're open" (z8r3fdhpm7):
+	 * the term skips the store's closed days. Sent only for a day package. */
+	skipsClosedDays: boolean;
 	/** Booking kind only — refundable security deposit (RM, as typed; blank =
 	 * none). Collected with the payment, returned after check-out (S5). */
 	securityDeposit: string;
@@ -215,6 +219,7 @@ export function emptyWizardState(defaultKind?: ProductKind): WizardState {
 		packageLength: "",
 		packageUnit: "month",
 		autoAccept: false,
+		skipsClosedDays: false,
 		securityDeposit: "",
 		weekendPrice: "",
 		weekendDays: [...DEFAULT_WEEKEND_DAYS],
@@ -791,6 +796,14 @@ export function buildWizardSubmitValues(
 						packageUnit:
 							packageLengthValue !== undefined ? state.packageUnit : undefined,
 						autoAccept: state.autoAccept || undefined,
+						// Only a DAY package can skip closed days (z8r3fdhpm7) — a
+						// value kept while the unit said "month" never rides along.
+						skipsClosedDays:
+							packageLengthValue !== undefined &&
+							state.packageUnit === "day" &&
+							state.skipsClosedDays
+								? true
+								: undefined,
 						securityDeposit: (() => {
 							const dep = parsePriceInput(state.securityDeposit.trim());
 							return dep !== null && dep > 0
@@ -875,6 +888,7 @@ export function wizardHandoff(state: WizardState): {
 			packageLength: state.packageLength,
 			packageUnit: state.packageUnit,
 			autoAccept: state.autoAccept,
+			skipsClosedDays: state.skipsClosedDays,
 			securityDeposit: state.securityDeposit,
 			weekendPrice: state.weekendPrice,
 			weekendDays: state.weekendDays,
@@ -916,6 +930,7 @@ export function formDraftToWizardState(draft: ProductFormDraft): WizardState {
 		packageLength: draft.packageLength ?? "",
 		packageUnit: draft.packageUnit ?? "month",
 		autoAccept: draft.autoAccept === true,
+		skipsClosedDays: draft.skipsClosedDays === true,
 		securityDeposit: draft.securityDeposit ?? "",
 		weekendPrice: draft.weekendPrice ?? "",
 		weekendDays: draft.weekendDays ?? [...DEFAULT_WEEKEND_DAYS],
@@ -1076,6 +1091,7 @@ export function ProductWizard({
 	onExit,
 	initialState,
 	linkedCard,
+	storeSchedule,
 }: {
 	/** Owning retailer — feeds the review step's category picker. */
 	retailerId: Id<"retailers">;
@@ -1105,6 +1121,9 @@ export function ProductWizard({
 	 * `initialState` outranks it at mount: that draft is the seller's own
 	 * answer. */
 	linkedCard?: KindCard;
+	/** The store's opening hours + closed dates (z8r3fdhpm7) — the day
+	 * package's "How are the days counted?" example is built from them. */
+	storeSchedule?: StoreSchedule;
 }) {
 	const [step, setStep] = useState(() =>
 		initialState ? wizardInitialStep(initialState) : 0,
@@ -1912,9 +1931,7 @@ export function ProductWizard({
 									    sticky Continue hid it. */}
 									{card === "event" && issueFor(EVENTS_LOCKED_ISSUE.field) ? (
 										<div role="alert" className="mt-2">
-											<ProFeatureTease
-												message={EVENTS_LOCKED_ISSUE.message}
-											/>
+											<ProFeatureTease message={EVENTS_LOCKED_ISSUE.message} />
 										</div>
 									) : null}
 								</div>
@@ -2216,6 +2233,19 @@ export function ProductWizard({
 									: "Leave blank and buyers pick their own check-in and check-out, priced per night. Set it (e.g. 1 month, or 2 nights) to sell a fixed-length package at one flat price."}
 							</span>
 						</label>
+						{/* A DAY package decides what a store closure does to it
+						    (z8r3fdhpm7) — the product form's own field, so both doors
+						    ask the same question in the same words. */}
+						{state.packageUnit === "day" &&
+						packageLengthNum !== undefined &&
+						packageLengthNum > 0 ? (
+							<PackageDayCounting
+								packageLength={packageLengthNum}
+								skipsClosedDays={state.skipsClosedDays}
+								onChange={(next) => patch({ skipsClosedDays: next })}
+								schedule={storeSchedule}
+							/>
+						) : null}
 						<label className="flex items-center gap-3 text-sm font-medium">
 							{/* The label names the SPAN the seller just chose, so the number
 							    they type is unambiguous: "Price per month", not "per night"
@@ -2426,8 +2456,9 @@ export function ProductWizard({
 								<p className="-mt-2 text-sm text-muted-foreground">
 									Optional. Leave it blank and buyers see &ldquo;Price on
 									quote&rdquo; — you set the real price when you send them a
-									mockup. Enter an amount and buyers see &ldquo;From {moneySymbol}{" "}
-									…&rdquo;, so nobody mistakes it for the final price.
+									mockup. Enter an amount and buyers see &ldquo;From{" "}
+									{moneySymbol} …&rdquo;, so nobody mistakes it for the final
+									price.
 								</p>
 								<label className="flex items-center gap-3 text-sm font-medium">
 									<span className="min-w-0 flex-1 truncate">
@@ -2876,7 +2907,7 @@ export function ProductWizard({
 												? [
 														{
 															label: "Package",
-															value: `${state.packageLength.trim()} ${state.packageUnit}${state.packageLength.trim() === "1" ? "" : "s"}, flat price`,
+															value: `${state.packageLength.trim()} ${state.packageUnit}${state.packageLength.trim() === "1" ? "" : "s"}${state.packageUnit === "day" && state.skipsClosedDays ? " (open days only)" : ""}, flat price`,
 															step: 3,
 														},
 													]

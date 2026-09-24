@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DAY_MS, MYT_OFFSET_MS } from "../../convex/lib/fulfilmentDate";
 import {
+	bookingFulfilmentLine,
 	bookingPriceSuffix,
 	bookingSpanCounted,
 	bookingSpanNoun,
@@ -9,6 +10,7 @@ import {
 	conflictCeiling,
 	describeBookingSpan,
 	describeNights,
+	describeSkippedDays,
 	formatNight,
 	latestCheckOutFor,
 	mytEpochFromCalendarDate,
@@ -16,8 +18,8 @@ import {
 	nextBookingSelection,
 	packageCountLabel,
 	packageEnd,
-	packageNights,
 	packageStartsCoveringRange,
+	packageTerm,
 	type SelectionContext,
 	weekendRateSuffix,
 } from "./booking-dates";
@@ -138,8 +140,34 @@ describe("fixed-length packages (S7)", () => {
 		expect(canCheckIn(day(2), c)).toBe(true);
 	});
 
-	it("packageNights lists exactly the days occupied", () => {
-		expect(packageNights(day(0), 3)).toEqual([day(0), day(1), day(2)]);
+	it("packageTerm runs exactly the days occupied, skipping nothing on an every-day package", () => {
+		expect(packageTerm(day(0), { packageLength: 3 })).toEqual({
+			checkOut: day(3),
+			skipped: [],
+		});
+	});
+
+	it("an OPEN-DAYS package (z8r3fdhpm7) counts open days, can't start shut, and is judged on counted days", () => {
+		// Shut on day 2 and day 4.
+		const isClosed = (d: number) => d === day(2) || d === day(4);
+		const c = pkg({ packageLength: 3, isClosed });
+		expect(packageTerm(day(1), c)).toEqual({
+			checkOut: day(6),
+			skipped: [day(2), day(4)],
+		});
+		expect(canCheckIn(day(2), c)).toBe(false);
+		// A full/blocked night on a SKIPPED day never stops the start…
+		expect(canCheckIn(day(1), { ...c, unavailable: new Set([day(2)]) })).toBe(
+			true,
+		);
+		// …one on a COUNTED day does.
+		expect(canCheckIn(day(1), { ...c, unavailable: new Set([day(3)]) })).toBe(
+			false,
+		);
+		expect(nextBookingSelection({}, day(1), c)).toEqual({
+			checkIn: day(1),
+			checkOut: day(6),
+		});
 	});
 
 	it("crossing a month boundary lands on the right calendar day", () => {
@@ -351,5 +379,52 @@ describe("packageStartsCoveringRange (z8r3fdhpm7)", () => {
 				TODAY,
 			),
 		).toBeNull();
+	});
+});
+
+describe("order-page booking lines (z8r3fdhpm7)", () => {
+	const D = (n: number) => Date.UTC(2026, 8, 30) - MYT_OFFSET_MS + n * DAY_MS; // Wed 30 Sep
+	const fmt = (e: number) => formatNight(e);
+
+	it("a PACKAGE reads as a validity window in days — the field S7 renamed, read right at last", () => {
+		expect(
+			bookingFulfilmentLine(
+				{ bookingCheckIn: D(0), bookingCheckOut: D(5), bookingPackaged: true },
+				fmt,
+			),
+		).toBe("Booking · 5 days · Valid Wed 30 Sep – Sun 4 Oct");
+	});
+
+	it("an OPEN-DAYS package counts its open days and names what it skipped", () => {
+		expect(
+			bookingFulfilmentLine(
+				{
+					bookingCheckIn: D(0),
+					bookingCheckOut: D(7),
+					bookingPackaged: true,
+					bookingSkippedDays: [D(1), D(4)],
+				},
+				fmt,
+			),
+		).toBe(
+			"Booking · 5 open days · Valid Wed 30 Sep – Tue 6 Oct · skips Thu 1 Oct, Sun 4 Oct",
+		);
+	});
+
+	it("a stay stays in nights, check-in → check-out", () => {
+		expect(
+			bookingFulfilmentLine(
+				{ bookingCheckIn: D(0), bookingCheckOut: D(2) },
+				fmt,
+			),
+		).toBe("Booking · 2 nights · Wed 30 Sep → Fri 2 Oct");
+		expect(bookingFulfilmentLine({}, fmt)).toBe("Booking");
+	});
+
+	it("skipped days: three named, then counted in days", () => {
+		expect(describeSkippedDays(undefined)).toBe("");
+		expect(describeSkippedDays([D(1), D(4), D(11), D(18)])).toBe(
+			"skips Thu 1 Oct, Sun 4 Oct +2 more days",
+		);
 	});
 });

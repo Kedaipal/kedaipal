@@ -494,3 +494,185 @@ describe("closed dates in bookings — closed ≠ blocked", () => {
 		expect(month.closures).toHaveLength(1);
 	});
 });
+
+describe("open-days packages — 'Only days you're open'", () => {
+	const guest = { name: "Guest", waPhone: "0123456781" };
+	/** MYT weekday (0 = Sunday) of a midnight — inline, clock-independent. */
+	const weekdayOf = (epoch: number) => new Date(epoch + 8 * 3_600_000).getUTCDay();
+
+	async function course(t: ReturnType<typeof setup>) {
+		const { asOwner, retailer } = await seedStore(t);
+		const productId = await asOwner.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "5-day kayak course",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 1,
+			kind: "booking" as const,
+			booking: {
+				capacityPerNight: 4,
+				packageLength: 5,
+				packageUnit: "day",
+				skipsClosedDays: true,
+				autoAccept: true,
+			},
+			variants: [{ optionValues: [], price: 50000, onHand: 0 }],
+		});
+		// Shut on day(5)'s weekday every week, and on day(3) for Raya.
+		await asOwner.mutation(api.retailers.updateSettings, {
+			openingHours: Array.from({ length: 7 }, (_, i) =>
+				i === weekdayOf(day(5))
+					? { open: 540, close: 1080, closed: true }
+					: { open: 540, close: 1080 },
+			),
+		});
+		await asOwner.mutation(api.closedDates.add, {
+			retailerId: retailer._id,
+			startDate: day(3),
+			endDate: day(3),
+			label: "Hari Raya",
+		});
+		return { asOwner, retailer, productId };
+	}
+
+	test("the flag is refused on every shape it can't mean anything for", async () => {
+		const t = setup();
+		const { asOwner, retailer } = await seedStore(t);
+		const make = (booking: Record<string, unknown>) =>
+			asOwner.mutation(api.products.create, {
+				retailerId: retailer._id,
+				name: "X",
+				currency: "MYR",
+				imageStorageIds: [],
+				sortOrder: 1,
+				kind: "booking" as const,
+				booking: { skipsClosedDays: true, ...booking },
+				variants: [{ optionValues: [], price: 100, onHand: 0 }],
+			});
+		await expect(make({})).rejects.toThrow(/set a package length first/);
+		await expect(
+			make({ packageLength: 1, packageUnit: "month" }),
+		).rejects.toThrow(/runs by the calendar/);
+		await expect(
+			make({ packageLength: 2, packageUnit: "night" }),
+		).rejects.toThrow(/package of nights is a stay/);
+		// false has one spelling: unset.
+		const id = await asOwner.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Y",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 2,
+			kind: "booking" as const,
+			booking: { packageLength: 5, packageUnit: "day", skipsClosedDays: false },
+			variants: [{ optionValues: [], price: 100, onHand: 0 }],
+		});
+		const stored = await t.run((ctx) => ctx.db.get(id));
+		expect(stored?.booking?.skipsClosedDays).toBeUndefined();
+	});
+
+	test("five OPEN days: the term runs past the closures, and the order freezes what it skipped", async () => {
+		const t = setup();
+		const { retailer, productId } = await course(t);
+		const window = await t.query(api.bookings.availability, {
+			productId,
+			from: day(0),
+			to: day(20),
+		});
+		expect(window?.closureRule).toBe("skipped");
+		expect(window?.closedWeekdays).toEqual([weekdayOf(day(5))]);
+		// Starting day 1: counts 1, 2, 4, 6, 7 — steps over 3 (Raya) and 5.
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(1),
+			customer: guest,
+		});
+		const order = await t.run((ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		expect(order?.bookingCheckIn).toBe(day(1));
+		expect(order?.bookingCheckOut).toBe(day(8));
+		expect(order?.bookingSkippedDays).toEqual([day(3), day(5)]);
+		// A later edit to the hours never re-describes the paid package.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, { openingHours: undefined });
+		});
+		const again = await t.run((ctx) => ctx.db.get(order!._id));
+		expect(again?.bookingSkippedDays).toEqual([day(3), day(5)]);
+	});
+
+	test("the seller's grid doesn't put a member on a day their package skips", async () => {
+		const t = setup();
+		const { asOwner, retailer, productId } = await course(t);
+		await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(1),
+			customer: guest,
+		});
+		const month = await asOwner.query(api.bookingBlocks.sellerCalendar, {
+			retailerId: retailer._id,
+			from: day(0),
+			to: day(10),
+			productId,
+		});
+		const booked = (d: number) =>
+			month.days.find((row) => row.date === d)?.booked;
+		expect(booked(day(4))).toBe(1);
+		expect(booked(day(5))).toBe(0); // the weekly day off it stepped over
+		expect(booked(day(3))).toBe(0); // Raya
+		expect(
+			await asOwner.query(api.bookingBlocks.dayBookings, {
+				retailerId: retailer._id,
+				date: day(5),
+			}),
+		).toEqual([]);
+	});
+
+	test("can't start on a shut day — the buyer is told to pick an open one", async () => {
+		const t = setup();
+		const { retailer, productId } = await course(t);
+		await expect(
+			t.mutation(api.bookings.requestBooking, {
+				retailerId: retailer._id,
+				productId,
+				checkIn: day(3),
+				customer: guest,
+			}),
+		).rejects.toThrow(/closed on that day — start on a day it's open/);
+	});
+
+	test("a block on a SKIPPED day doesn't refuse the course; one on a counted day does", async () => {
+		const t = setup();
+		const { asOwner, retailer, productId } = await course(t);
+		// The weekly day off inside the term, blocked too — never used, so fine.
+		await asOwner.mutation(api.bookingBlocks.blockDays, {
+			retailerId: retailer._id,
+			startDate: day(5),
+			endDate: day(5),
+		});
+		await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(1),
+			customer: guest,
+		});
+		await asOwner.mutation(api.bookingBlocks.blockDays, {
+			retailerId: retailer._id,
+			startDate: day(6),
+			endDate: day(6),
+		});
+		await expect(
+			t.mutation(api.bookings.requestBooking, {
+				retailerId: retailer._id,
+				productId,
+				checkIn: day(1),
+				customer: { name: "Second", waPhone: "0123456782" },
+			}),
+		).rejects.toThrow(/no longer available/);
+	});
+});

@@ -1018,6 +1018,13 @@ export default defineSchema({
 						v.literal("month"),
 					),
 				),
+				// "Only days you're open" (z8r3fdhpm7): a DAY package counted in
+				// open days — a course, a camp, a class pass — skips the store's
+				// weekly day off and its closed dates, so the term ends later.
+				// Only with packageLength + a "day" unit (refused otherwise, never
+				// stored-and-ignored). Unset = every day in a row (every existing
+				// listing). See closureRule / resolveOpenDaysTerm.
+				skipsClosedDays: v.optional(v.boolean()),
 				// "Instant book" (S7 — the spec's named follow-up): set = a request
 				// lands `confirmed` with the payment ask firing straight away,
 				// skipping `booking_requested`. Unset = request-to-book.
@@ -1448,6 +1455,13 @@ export default defineSchema({
 		// The frozen `variantLabel` ("Weekend nights (Fri & Sat)") names the same
 		// set in prose for the CSV and the PDF; this is that set, machine-readable.
 		bookingWeekendDays: v.optional(v.array(v.number())),
+		// The shut days an OPEN-DAYS package stepped over (z8r3fdhpm7), frozen
+		// at create — the same display-snapshot posture as `bookingWeekendDays`.
+		// The term itself is already frozen in bookingCheckIn/Out; this says
+		// WHICH days inside it weren't counted, so the receipt and order pages
+		// keep naming them after the store edits its hours or closures. Unset
+		// when nothing was skipped (and on every other booking shape).
+		bookingSkippedDays: v.optional(v.array(v.number())),
 		// HOW a request left `booking_requested` when it didn't get approved —
 		// "declined" (seller said no, reason below) or "expired" (the 24 h window
 		// lapsed). Both land the order in `cancelled`; this marker is what lets

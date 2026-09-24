@@ -153,6 +153,30 @@ export function isOpenOnDate(
 	return hoursForDate(hours, dateEpoch) !== null;
 }
 
+/** The weekdays the store never opens (0 = Sunday), ascending. Empty for a
+ * 24/7 store — the one fact about the weekly schedule an open-days package
+ * needs, so it is what a buyer surface is sent (z8r3fdhpm7). */
+export function closedWeekdays(hours: OpeningHours | undefined): number[] {
+	if (!hours) return [];
+	return hours.flatMap((day, i) => (day.closed ? [i] : []));
+}
+
+/**
+ * "Is the store shut all day?" as a predicate, built from the two facts a
+ * buyer surface is actually sent — the weekly days off and the closed dates.
+ * The server builds it from the SAME two facts (`closedWeekdays` of its stored
+ * hours), so an open-days package term resolves identically on both sides.
+ */
+export function storeClosedOn(
+	weekdaysOff: readonly number[],
+	closedDates: ReadonlyArray<ClosedDateRange> | undefined,
+): (dateEpoch: number) => boolean {
+	const off = new Set(weekdaysOff);
+	return (dateEpoch) =>
+		off.has(weekdayIndexMyt(dateEpoch)) ||
+		closureOn(closedDates, dateEpoch) !== null;
+}
+
 /**
  * Is the store shut ALL DAY on this date — its weekly day off, or one of its
  * closed dates (z8r3fdhpm7)? The one combined question, so a surface that

@@ -5,6 +5,7 @@
 // night being a valid LEAVING morning, conflict ceilings) are unit-tested
 // rather than eyeballed.
 
+import { resolveOpenDaysTerm } from "../../convex/lib/bookingAvailability";
 import {
 	addMytCalendarMonths,
 	DAY_MS,
@@ -80,7 +81,45 @@ export type SelectionContext = {
 	 * to 1. It belongs in the SELECTION context because it changes which start
 	 * days are offerable at all — a longer term has more nights to clear. */
 	packageQuantity?: number;
+	/** Open-days package only (`closureRule` "skipped", z8r3fdhpm7): is the
+	 * store shut all day? Set = the term counts OPEN days and steps over the
+	 * rest (`resolveOpenDaysTerm`, the server's own resolver). Unset = every
+	 * day in a row. */
+	isClosed?: (day: number) => boolean;
 };
+
+/**
+ * The term a package starting on `day` would run — the one place the client
+ * derives it for a SELECTION (it knows about open-days packages; `packageEnd`
+ * is the plain every-day arithmetic). `null` when the start can't carry the
+ * term at all: an open-days package starting on a shut day, or one whose skips
+ * would outrun the scan bound — both refused by the server with words.
+ */
+export function packageTerm(
+	day: number,
+	ctx: Pick<
+		SelectionContext,
+		"packageLength" | "packageUnit" | "packageQuantity" | "isClosed"
+	>,
+): { checkOut: number; skipped: number[] } | null {
+	const length = ctx.packageLength;
+	if (length === undefined || length <= 0) return null;
+	if (ctx.isClosed) {
+		try {
+			return resolveOpenDaysTerm(
+				day,
+				length * Math.max(1, ctx.packageQuantity ?? 1),
+				ctx.isClosed,
+			);
+		} catch {
+			return null;
+		}
+	}
+	return {
+		checkOut: packageEnd(day, length, ctx.packageUnit, ctx.packageQuantity),
+		skipped: [],
+	};
+}
 
 /** The exclusive end of a package starting on `day` — the one place the
  * client derives it, matching the server's `resolveBookingRange`. */
@@ -135,36 +174,23 @@ export function packageStartsCoveringRange(
 	return first > to ? null : { first, last: to };
 }
 
-/** Every night a stay starting on `day` would occupy, for a fixed-length
- * package. Derived from the real end, so a month package covers exactly the
- * days that month has. */
-export function packageNights(
-	day: number,
-	length: number,
-	unit: PackageUnit = "day",
-	quantity = 1,
-): number[] {
-	const nights: number[] = [];
-	for (let n = day; n < packageEnd(day, length, unit, quantity); n += DAY_MS) {
-		nights.push(n);
-	}
-	return nights;
-}
-
 /** Can this day START a stay? Its own night must be free and inside the
  * bookable window. */
 export function canCheckIn(day: number, ctx: SelectionContext): boolean {
 	if (day < ctx.earliestCheckIn || day > ctx.latestCheckIn) return false;
 	// A package is all-or-nothing: the buyer can't shorten it around a busy
 	// night, so EVERY night it would occupy has to be free before the start
-	// day is offered at all (the server re-checks the same span).
+	// day is offered at all (the server re-checks the same span). An open-days
+	// package is judged on the days it COUNTS — a skipped day is never used —
+	// and can't start on a shut day at all.
 	if (ctx.packageLength !== undefined && ctx.packageLength > 0) {
-		return !packageNights(
-			day,
-			ctx.packageLength,
-			ctx.packageUnit,
-			ctx.packageQuantity,
-		).some((night) => ctx.unavailable.has(night));
+		const term = packageTerm(day, ctx);
+		if (term === null) return false;
+		const skipped = new Set(term.skipped);
+		for (let night = day; night < term.checkOut; night += DAY_MS) {
+			if (!skipped.has(night) && ctx.unavailable.has(night)) return false;
+		}
+		return true;
 	}
 	return !ctx.unavailable.has(day);
 }
@@ -203,17 +229,8 @@ export function nextBookingSelection(
 	// A fixed-length package is a ONE-tap pick: the start is the only choice,
 	// the end derives (S7). Never a partial selection to complete.
 	if (ctx.packageLength !== undefined && ctx.packageLength > 0) {
-		return canCheckIn(day, ctx)
-			? {
-					checkIn: day,
-					checkOut: packageEnd(
-						day,
-						ctx.packageLength,
-						ctx.packageUnit,
-						ctx.packageQuantity,
-					),
-				}
-			: current;
+		const term = canCheckIn(day, ctx) ? packageTerm(day, ctx) : null;
+		return term ? { checkIn: day, checkOut: term.checkOut } : current;
 	}
 	const pickingCheckOut =
 		current.checkIn !== undefined && current.checkOut === undefined;
@@ -359,6 +376,9 @@ const MAX_NAMED_NIGHTS = 3;
 export function describeNights(
 	nights: readonly number[],
 	format: (epoch: number) => string,
+	/** What the overflow counts — nights for a stay's rate lines, days for an
+	 * open-days package's skipped days (z8r3fdhpm7). */
+	noun: "night" | "day" = "night",
 ): string {
 	if (nights.length === 0) return "";
 	if (nights.length <= MAX_NAMED_NIGHTS) return nights.map(format).join(", ");
@@ -367,7 +387,7 @@ export function describeNights(
 		.map(format)
 		.join(", ");
 	const rest = nights.length - (MAX_NAMED_NIGHTS - 1);
-	return `${shown} +${rest} more night${rest === 1 ? "" : "s"}`;
+	return `${shown} +${rest} more ${noun}${rest === 1 ? "" : "s"}`;
 }
 
 /**
@@ -415,4 +435,56 @@ export function describeBookingSpan(
 	return opts.isPackage
 		? `Valid ${opts.format(checkIn)} – ${opts.format(checkOut - DAY_MS)}`
 		: `${opts.format(checkIn)} → ${opts.format(checkOut)}`;
+}
+
+/**
+ * "Skips Thu 1 Oct, Sun 4 Oct" — the shut days an open-days package stepped
+ * over (z8r3fdhpm7, frozen `orders.bookingSkippedDays`), or "" when none. The
+ * one spelling on every order surface, so the receipt, the seller's page and
+ * the buyer's page name them alike.
+ */
+export function describeSkippedDays(
+	skipped: readonly number[] | undefined,
+): string {
+	if (!skipped || skipped.length === 0) return "";
+	return `skips ${describeNights(skipped, formatNight, "day")}`;
+}
+
+/**
+ * The seller order page's one-line booking summary. A fixed-length package
+ * reads as a validity window in DAYS — OPEN days when it skipped any — and a
+ * free-range stay as check-in → check-out in NIGHTS.
+ *
+ * Moved here from the route (z8r3fdhpm7) because the inline copy read
+ * `bookingPackageDays`, the field S7 renamed to `bookingPackaged`: nothing
+ * complained (it was typed optional), so every package order's summary said
+ * "30 nights · 1 Sep → 1 Oct". Pure and tested now.
+ */
+export function bookingFulfilmentLine(
+	order: {
+		bookingCheckIn?: number;
+		bookingCheckOut?: number;
+		bookingPackaged?: boolean;
+		bookingSkippedDays?: readonly number[];
+	},
+	format: (epoch: number) => string,
+): string {
+	const { bookingCheckIn: checkIn, bookingCheckOut: checkOut } = order;
+	if (checkIn === undefined || checkOut === undefined) return "Booking";
+	const isPackage = order.bookingPackaged === true;
+	const span = Math.round((checkOut - checkIn) / DAY_MS);
+	const skipped = order.bookingSkippedDays ?? [];
+	const count = isPackage
+		? skipped.length > 0
+			? `${span - skipped.length} open day${span - skipped.length === 1 ? "" : "s"}`
+			: `${span} day${span === 1 ? "" : "s"}`
+		: `${span} night${span === 1 ? "" : "s"}`;
+	const parts = [
+		"Booking",
+		count,
+		describeBookingSpan(checkIn, checkOut, { isPackage, format }),
+	];
+	const skips = describeSkippedDays(skipped);
+	if (skips) parts.push(skips);
+	return parts.join(" · ");
 }

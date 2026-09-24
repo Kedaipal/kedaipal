@@ -34,6 +34,7 @@ import {
 	todayMytMidnight,
 } from "../../../convex/lib/fulfilmentDate";
 import type { Locale } from "../../../convex/lib/locale";
+import { storeClosedOn } from "../../../convex/lib/openingHours";
 import { weekendDaysLabel } from "../../../convex/lib/productKind";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { MASK_PII } from "../../lib/analytics-privacy";
@@ -44,10 +45,12 @@ import {
 	bookingSpanNoun,
 	canCheckIn,
 	conflictCeiling,
+	describeNights,
+	formatNight,
 	mytMonthStart,
 	nextBookingSelection,
 	packageCountLabel,
-	packageEnd,
+	packageTerm,
 	type SelectionContext,
 } from "../../lib/booking-dates";
 import { buyerPhoneRejection } from "../../lib/buyer-phone-rejection";
@@ -158,20 +161,30 @@ export function BookingCheckoutForm({
 			// three months needs three months of free nights, so raising it can
 			// legitimately close start dates that a single package could use.
 			packageQuantity: packages,
+			// An open-days package (z8r3fdhpm7) resolves each start's term from
+			// the same two facts the server uses, so the promised last day is the
+			// one charged.
+			isClosed:
+				availability.closureRule === "skipped"
+					? storeClosedOn(availability.closedWeekdays, availability.closures)
+					: undefined,
 		};
 	}, [availability, today, packages]);
-	// The closed days on the month in view (z8r3fdhpm7) — the calendar's hatch.
-	const closedDaySet = useMemo(
-		() =>
-			new Set(
-				closedDaysBetween(
-					availability?.closures,
-					month,
-					addMytMonths(month, 1),
-				),
-			),
-		[availability?.closures, month],
-	);
+	// The shut days on the month in view (z8r3fdhpm7) — the calendar's hatch.
+	// Closed dates always; the weekly day off too for an open-days package,
+	// because there it's a day the term steps over.
+	const closedDaySet = useMemo(() => {
+		const from = month;
+		const to = addMytMonths(month, 1);
+		if (!ctx?.isClosed) {
+			return new Set(closedDaysBetween(availability?.closures, from, to));
+		}
+		const days = new Set<number>();
+		for (let day = from; day < to; day += DAY_MS) {
+			if (ctx.isClosed(day)) days.add(day);
+		}
+		return days;
+	}, [availability?.closures, ctx, month]);
 
 	// A vanished/unbookable listing (archived, hidden, kind changed) — send the
 	// buyer back to the store rather than a dead form. `undefined` = loading.
@@ -229,10 +242,14 @@ export function BookingCheckoutForm({
 	// For a package the check-OUT is never stored, only derived — otherwise
 	// bumping the count from 1 to 3 would leave a stale end date sitting next to
 	// a tripled price. One source of truth: the start the buyer tapped.
-	const checkOut =
+	// The term, with the days an open-days package steps over (z8r3fdhpm7).
+	// `null` when the start can't carry it (then `packageOutgrewStart` speaks).
+	const term =
 		isPackage && selection.checkIn !== undefined
-			? packageEnd(selection.checkIn, packageLength, packageUnit, packages)
-			: selection.checkOut;
+			? packageTerm(selection.checkIn, ctx)
+			: null;
+	const checkOut = isPackage ? term?.checkOut : selection.checkOut;
+	const skippedDays = term?.skipped ?? [];
 	const effectiveSelection: BookingSelection =
 		isPackage && selection.checkIn !== undefined
 			? { checkIn: selection.checkIn, checkOut }
@@ -402,10 +419,22 @@ export function BookingCheckoutForm({
 							<span className="flex-1 border-b-2 border-dotted border-border" />
 							<span className="font-medium">
 								{isPackage
-									? `${nights} ${ms ? "hari" : "days"}`
+									? skippedDays.length > 0
+										? `${nights - skippedDays.length} ${ms ? "hari buka" : "open days"}`
+										: `${nights} ${ms ? "hari" : "days"}`
 									: `${nights} night${nights === 1 ? "" : "s"}`}
 							</span>
 						</div>
+						{/* An open-days package names the shut days it steps over
+						    (z8r3fdhpm7) — the reason its last day is later than the
+						    count suggests, stated before the request, not after. */}
+						{skippedDays.length > 0 ? (
+							<p className="text-xs text-muted-foreground">
+								{ms ? "Tidak dikira" : "Skips"}{" "}
+								{describeNights(skippedDays, formatNight, "day")}{" "}
+								{ms ? "(kedai tutup)" : "(store closed)"}
+							</p>
+						) : null}
 						{/* The split, itemised — exactly the two lines the order will
 						    carry, so "why is it RM 400?" is answered before the request
 						    is made. Only the kinds that occur; a stay that is all one
@@ -719,7 +748,7 @@ export function BookingCheckoutForm({
 						</div>
 						<p className="text-xs text-muted-foreground">
 							{selection.checkIn !== undefined && checkOut !== undefined
-								? `Runs ${formatFulfilmentDate(selection.checkIn)} – ${formatFulfilmentDate(checkOut - DAY_MS)}, paid as one booking.`
+								? `Runs ${formatFulfilmentDate(selection.checkIn)} – ${formatFulfilmentDate(checkOut - DAY_MS)}${skippedDays.length > 0 ? `, skipping ${skippedDays.length} closed day${skippedDays.length === 1 ? "" : "s"}` : ""}, paid as one booking.`
 								: `Take up to ${maxPackages} at once and pay as one booking.`}
 						</p>
 					</div>
@@ -750,6 +779,14 @@ export function BookingCheckoutForm({
 					<p className="text-xs text-muted-foreground">
 						Check-in {formatFulfilmentDate(selection.checkIn)} — now tap your
 						check-out day.
+					</p>
+				) : null}
+				{/* The rule itself, stated where the dates are picked (z8r3fdhpm7):
+				    an open-days package counts only the days the store is open. */}
+				{availability.closureRule === "skipped" ? (
+					<p className="text-xs text-muted-foreground">
+						This package counts only the days {storeName} is open — closed days
+						(hatched) are skipped, so it ends later.
 					</p>
 				) : null}
 				{availability.noticeDays > 0 ? (
