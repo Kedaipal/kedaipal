@@ -57,7 +57,7 @@ retailer-edited name  →  WhatsApp pushname  →  formatted phone number
 
 Blank/whitespace values fall through. The rule has **one implementation**, in `convex/lib/customer.ts`; the dashboard imports it through `src/lib/customer.ts`, which only re-exports it. (It used to be a hand-kept byte-for-byte mirror, on the belief that the two bundles couldn't share a module — they can: the module is pure, and its only Convex import is the `ConvexError` class the client already bundles. z8r3fdh274 collapsed it before the phone format's first change could make the two drift.)
 
-The phone fallback is `formatPhone`: `+60 …` / `+65 …`, any other country split at its calling code (`+44 7911123456` — buyers may give a number from any country, see [`phone-numbers.md`](./phone-numbers.md)), and a bare `+<digits>` when no code matches.
+The phone fallback is `formatPhone`: `+60 …` / `+65 …`, any other country split at its calling code and grouped (`+44 791 112 3456` — buyers may give a number from any country, see [`phone-numbers.md`](./phone-numbers.md)), and a bare `+<digits>` when no code matches.
 
 ### Order-linking lifecycle
 

@@ -187,9 +187,9 @@ describe("formatMobile", () => {
 	it("splits any other country's number as +CC NATIONAL (z8r3fdh274)", () => {
 		// Buyers can pick any country — the code they picked reads apart from
 		// the number they typed, so a wrong code is visible at a glance.
-		expect(formatMobile("447911123456")).toBe("+44 7911123456");
-		expect(formatMobile("14155550123")).toBe("+1 4155550123");
-		expect(formatMobile("+81 90-1234-5678")).toBe("+81 9012345678");
+		expect(formatMobile("447911123456")).toBe("+44 791 112 3456");
+		expect(formatMobile("14155550123")).toBe("+1 415 555 0123");
+		expect(formatMobile("+81 90-1234-5678")).toBe("+81 901 234 5678");
 	});
 
 	it("an unknown calling code still falls back to +digits", () => {

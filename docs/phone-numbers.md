@@ -502,14 +502,21 @@ possibility ("…or be in a country we can't message on WhatsApp yet"). See
 
 - **`formatMobile`** (`src/lib/format.ts`, the typo-spotting echo lines): MY
   and SG mobiles grouped (`+60 12-345 6789`, `+65 9123 4567`); any other
-  country `+CC NATIONAL` (`+44 7911123456`), which makes a wrong code visible
-  without needing every country's grouping rules; an MY/SG **non-mobile** stays
+  country `+CC NATIONAL` with the national part broken into **3–4 digit
+  groups** (`+44 791 112 3456`), which makes a wrong code visible and keeps the
+  run short enough to check a digit at a time — the echo exists to catch a
+  transposed digit, which an unbroken ten-digit run defeats. The grouping is a
+  reading aid, deliberately NOT a national convention: those disagree at the
+  same length (a 10-digit UK mobile reads `7911 123456`, a Japanese one
+  `90 1234 5678`), and shipping libphonenumber's per-country format rules would
+  put them in every bundle that renders a phone number. A national part of 5
+  digits or fewer is left whole. An MY/SG **non-mobile** stays
   one unbroken `+60312345678`, so `toNationalPhoneInput` can never seed a
   seller field with its country code silently dropped; no known code →
   `+<digits>`.
 - **`formatPhone`** (seller dashboard, CRM, the receipt and invoice PDFs):
-  `+60 …` / `+65 …`, `+CC NATIONAL` for any other country, `+<digits>` as the
-  fallback. **One implementation** in `convex/lib/customer.ts`;
+  `+60 …` / `+65 …`, grouped `+CC NATIONAL` for any other country,
+  `+<digits>` as the fallback. **One implementation** in `convex/lib/customer.ts`;
   `src/lib/customer.ts` re-exports it. The hand-kept mirror is gone — it would
   have drifted the first time the phone format changed.
 

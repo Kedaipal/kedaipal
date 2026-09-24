@@ -63,6 +63,19 @@ export function BuyerPhoneRepairForm({
 	const [busy, setBusy] = useState(false);
 	const parsed = parseBuyerWaPhone(value, dialCountry);
 	const rejection = buyerPhoneRejection(parsed, value, touched);
+	// Why "Save & resend" is disabled, said where the buyer is looking — the
+	// same rule the counter's bind uses, so the two buyer fields behave alike.
+	// A visible rejection already says it, so it isn't repeated here.
+	const blockedReason =
+		parsed.ok || rejection
+			? null
+			: /\d/.test(value)
+				? ms
+					? "Lengkapkan nombor WhatsApp anda."
+					: "Finish your WhatsApp number to resend."
+				: ms
+					? "Masukkan nombor WhatsApp anda."
+					: "Enter your WhatsApp number to resend.";
 
 	// Focus on mount rather than autoFocus: the form only mounts when the buyer
 	// taps "Update my number", so this is a response to their action, not a
@@ -121,6 +134,12 @@ export function BuyerPhoneRepairForm({
 				value={value}
 				onChange={setValue}
 				onBlur={() => setTouched(true)}
+				// A disabled submit button swallows the form's own Enter, so say
+				// the precise reason here instead of leaving the key inert — the
+				// counter's bind does the same.
+				onKeyDown={(e) => {
+					if (e.key === "Enter" && !parsed.ok) setTouched(true);
+				}}
 				storeCountry={storeCountry}
 				dialCountry={dialCountry}
 				onDialCountryChange={setPickedDialCountry}
@@ -145,11 +164,16 @@ export function BuyerPhoneRepairForm({
 					) : null}
 				</>
 			) : null}
+			{blockedReason ? (
+				<p className="text-xs text-amber-950/80 dark:text-amber-100/80">
+					{blockedReason}
+				</p>
+			) : null}
 			<div className="flex gap-2">
 				<Button
 					type="submit"
 					isLoading={busy}
-					disabled={busy || value.trim().length === 0}
+					disabled={busy || !parsed.ok}
 					className="h-11 flex-1"
 				>
 					{ms ? "Simpan & hantar" : "Save & resend"}

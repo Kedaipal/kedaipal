@@ -88,7 +88,7 @@ describe("splitStoredPhone / formatInternational", () => {
 		expect(splitStoredPhone("999")).toBeNull();
 	});
 	test("formats +CC NATIONAL", () => {
-		expect(formatInternational("819012345678")).toBe("+81 9012345678");
+		expect(formatInternational("819012345678")).toBe("+81 901 234 5678");
 		expect(formatInternational("")).toBeNull();
 	});
 	test("a malformed legacy row isn't dressed up as a foreign number (review)", () => {
@@ -140,5 +140,34 @@ describe("cleanPhoneInput", () => {
 	});
 	test("the auto-switch sees a + behind a bidi mark", () => {
 		expect(detectTypedDialCode("‪+44 7911 123456", "MY")?.iso).toBe("GB");
+	});
+});
+
+describe("groupNational (via formatInternational) — the echo has to be checkable", () => {
+	test("every group is 3–4 digits, never an orphan", () => {
+		// 7911123456 as one run defeats the echo line's whole job: spotting a
+		// transposed digit. Lengths are the national part after the code.
+		const cases: [string, string][] = [
+			["6737123456", "+673 712 3456"], // 7 → 3+4
+			["85298765432", "+852 9876 5432"], // 8 → 4+4
+			["628123456789", "+62 812 345 6789"], // 10 → 3+3+4
+			["447911123456", "+44 791 112 3456"], // 10 → 3+3+4
+			["919876543210", "+91 987 654 3210"], // 10 → 3+3+4
+		];
+		for (const [stored, formatted] of cases) {
+			expect(formatInternational(stored)).toBe(formatted);
+		}
+		for (const [stored] of cases) {
+			const groups = (formatInternational(stored) as string)
+				.split(" ")
+				.slice(1);
+			for (const g of groups) expect(g.length).toBeGreaterThanOrEqual(3);
+			for (const g of groups) expect(g.length).toBeLessThanOrEqual(4);
+		}
+	});
+
+	test("a short national number is left whole rather than split oddly", () => {
+		// Niue (+683) mobiles are 4 digits — "88 88" would read as a mistake.
+		expect(formatInternational("6831234")).toBe("+683 1234");
 	});
 });

@@ -101,11 +101,25 @@ describe("BuyerPhoneRepairForm — the picker's default", () => {
 });
 
 describe("BuyerPhoneRepairForm — saving", () => {
-	it("a number the parser refuses never spends a server try, and says why", () => {
+	it("a number the parser refuses can't be sent, and says why — disabled, not a dead click", () => {
+		// Same rule as the counter's bind: the button is out while the number
+		// can't be sent, and a line says what's missing. Nothing reaches the
+		// server, so a typo never spends one of the 2-per-10-min tries.
 		renderForm();
 		typePhone("123");
+		const button = screen.getByRole("button", {
+			name: "Save & resend",
+		}) as HTMLButtonElement;
+		expect(button.disabled).toBe(true);
+		expect(
+			screen.getByText("Finish your WhatsApp number to resend."),
+		).toBeTruthy();
 		save();
 		expect(state.update).not.toHaveBeenCalled();
+
+		// Enter asks to send, so it earns the precise reason — the disabled
+		// button would otherwise swallow the key and answer nothing.
+		fireEvent.keyDown(phoneInput(), { key: "Enter" });
 		expect(
 			screen.getByText(
 				"Enter a Malaysian mobile number (e.g. 012-345 6789), or tap +60 to change the country",
@@ -114,6 +128,20 @@ describe("BuyerPhoneRepairForm — saving", () => {
 		expect(phoneInput().getAttribute("aria-invalid")).toBe("true");
 		// Inline, not a toast: the reason sits under the field it's about.
 		expect(toast.error).not.toHaveBeenCalled();
+	});
+
+	it("an empty field asks for the number rather than complaining about it", () => {
+		renderForm();
+		expect(
+			screen.getByText("Enter your WhatsApp number to resend."),
+		).toBeTruthy();
+		expect(
+			(
+				screen.getByRole("button", {
+					name: "Save & resend",
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(true);
 	});
 
 	it("sends the picked country with the number", async () => {

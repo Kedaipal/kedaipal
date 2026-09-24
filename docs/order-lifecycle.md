@@ -238,6 +238,9 @@ aggregates off the wrong record onto the right one):
    checked with `parseBuyerWaPhone` before the server call, and the rejection
    shows under the field (the shared `buyerPhoneRejection` rule,
    `src/lib/buyer-phone-rejection.ts`) — only server-side refusals are toasts.
+   **Save is disabled while the number can't be sent**, with a line saying what
+   is missing, the same rule the counter's bind uses; Enter asks to send, so it
+   earns the precise reason rather than being swallowed by the disabled button.
    This repair is also the backstop for what length-only validation can't
    catch: a foreign landline accepted at checkout, or a country the shared
    number can't message (130497 — the card says so: "…or be in a country we

@@ -113,19 +113,45 @@ export function splitStoredPhone(
 }
 
 /**
+ * Break a national number into 3–4 digit groups, never leaving an orphan of
+ * one or two: as many 3s as possible, with the remainder carried by one or two
+ * 4s at the end (10 → `791 112 3456`, 8 → `1234 5678`).
+ *
+ * A reading aid, NOT a national convention — those disagree at the same length
+ * (a 10-digit UK mobile reads `7911 123456`, a Japanese one `90 1234 5678`),
+ * and shipping libphonenumber's per-country format rules would put them in
+ * every bundle that renders a phone number. What matters here is that the run
+ * is short enough to check a digit at a time: MY and SG get their real
+ * grouping from `formatMobile`, and this is what everyone else gets.
+ */
+function groupNational(national: string): string {
+	if (national.length <= 5) return national;
+	const fours = national.length % 3 === 0 ? 0 : national.length % 3 === 1 ? 1 : 2;
+	const threes = (national.length - fours * 4) / 3;
+	const groups: string[] = [];
+	let at = 0;
+	for (let i = 0; i < threes; i++, at += 3) groups.push(national.slice(at, at + 3));
+	for (let i = 0; i < fours; i++, at += 4) groups.push(national.slice(at, at + 4));
+	return groups.join(" ");
+}
+
+/**
  * `+CC NATIONAL` for a stored number whose code is known — the readable
- * fallback for numbers the MY/SG groupings don't cover (`+44 7911123456`
- * instead of one unbroken run). Null when no code matches, or when the part
- * after the code isn't a mobile length there — a malformed legacy row (a bare
- * `1159399791` from before numbers were normalized) must not be dressed up as
- * a US number; the caller's plain `+digits` fallback is the honest render.
+ * fallback for numbers the MY/SG groupings don't cover (`+44 791 112 3456`
+ * instead of one unbroken run). The echo under a buyer's phone field exists so
+ * a transposed digit is catchable, which an unbroken ten-digit run defeats.
+ *
+ * Null when no code matches, or when the part after the code isn't a mobile
+ * length there — a malformed legacy row (a bare `1159399791` from before
+ * numbers were normalized) must not be dressed up as a US number; the caller's
+ * plain `+digits` fallback is the honest render.
  */
 export function formatInternational(value: string): string | null {
 	const split = splitStoredPhone(value);
 	if (!split) return null;
 	const lengths: readonly number[] = dialRow(split.iso).lengths;
 	return lengths.includes(split.national.length)
-		? `+${split.dial} ${split.national}`
+		? `+${split.dial} ${groupNational(split.national)}`
 		: null;
 }
 

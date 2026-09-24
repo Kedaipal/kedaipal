@@ -24,8 +24,8 @@ describe("formatPhone", () => {
 	});
 
 	test("splits any other country's number at its calling code (z8r3fdh274)", () => {
-		expect(formatPhone("447911123456")).toBe("+44 7911123456");
-		expect(formatPhone("14155550123")).toBe("+1 4155550123");
+		expect(formatPhone("447911123456")).toBe("+44 791 112 3456");
+		expect(formatPhone("14155550123")).toBe("+1 415 555 0123");
 	});
 
 	test("prefixes a bare + when no calling code matches", () => {

@@ -178,7 +178,7 @@ describe("orderToReceiptData", () => {
 				paymentMethods: [],
 			}).customerPhone;
 		expect(phone("+60123456789")).toBe("+60 123456789");
-		expect(phone("447911123456")).toBe("+44 7911123456");
+		expect(phone("447911123456")).toBe("+44 791 112 3456");
 		// No phone (an anonymous counter sale) → no line, never a bare "+".
 		expect(phone(undefined)).toBeUndefined();
 	});
