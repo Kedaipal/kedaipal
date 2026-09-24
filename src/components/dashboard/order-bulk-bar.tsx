@@ -8,6 +8,14 @@ export type BulkAction = {
 	status: "confirmed" | "packed" | "shipped" | "delivered" | "cancelled";
 	label: string;
 	destructive?: boolean;
+	/** No selected order has a step at this milestone, so the action would skip
+	 * every one of them. Offered-but-disabled rather than hidden: "why can't I
+	 * mark these as packed?" needs an answer, and a silently missing row isn't
+	 * one (z8r3fdh3w1). */
+	disabled?: boolean;
+	/** Why it's disabled — rendered under the label, so the constraint is
+	 * surfaced where the seller is clicking rather than enforced in silence. */
+	reason?: string;
 };
 
 /**
@@ -52,6 +60,7 @@ export type BulkAction = {
 export function OrderBulkBar({
 	count,
 	actions,
+	actionsNote,
 	allSelected,
 	onApply,
 	onDelete,
@@ -64,6 +73,10 @@ export function OrderBulkBar({
 	count: number;
 	/** Every bulk transition, in order; the destructive one(s) sort last. */
 	actions: BulkAction[];
+	/** One line under the "Mark N orders as" heading, for when the selection
+	 * spans kinds whose words differ and the list falls back to the shared
+	 * milestone names. */
+	actionsNote?: string;
 	/** Whether every visible order is already selected (drives Select all/Clear). */
 	allSelected: boolean;
 	// May return a promise — the destructive confirm awaits it so the confirm
@@ -91,6 +104,7 @@ export function OrderBulkBar({
 	const hasSelection = count > 0;
 
 	function handleAction(a: BulkAction) {
+		if (a.disabled) return;
 		setOpen(false);
 		if (a.destructive) setPendingDestructive(a);
 		// Forward transitions apply immediately and fire-and-forget — the apply
@@ -168,6 +182,11 @@ export function OrderBulkBar({
 						<p className="px-3 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
 							Mark {count} {orderWord} as
 						</p>
+						{actionsNote ? (
+							<p className="px-3 pb-1.5 text-[11px] leading-snug text-muted-foreground">
+								{actionsNote}
+							</p>
+						) : null}
 						<div className="flex flex-col">
 							{actions.map((a, i) => {
 								const prevDestructive =
@@ -177,9 +196,14 @@ export function OrderBulkBar({
 										key={a.status}
 										type="button"
 										onClick={() => handleAction(a)}
+										disabled={a.disabled}
 										className={cn(
-											"flex h-11 items-center gap-2 rounded-md px-3 text-left text-sm transition-colors hover:bg-muted",
+											"flex min-h-11 items-center gap-2 rounded-md px-3 py-1.5 text-left text-sm transition-colors",
+											a.disabled
+												? "cursor-not-allowed text-muted-foreground"
+												: "hover:bg-muted",
 											a.destructive &&
+												!a.disabled &&
 												"text-destructive hover:bg-destructive/10",
 											prevDestructive && "mt-1 border-t border-border pt-2",
 										)}
@@ -189,7 +213,14 @@ export function OrderBulkBar({
 										) : (
 											<Check className="size-4 shrink-0" aria-hidden="true" />
 										)}
-										{a.label}
+										<span className="min-w-0 flex-1">
+											{a.label}
+											{a.reason ? (
+												<span className="block text-[11px] leading-snug text-muted-foreground">
+													{a.reason}
+												</span>
+											) : null}
+										</span>
 									</button>
 								);
 							})}

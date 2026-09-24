@@ -43,7 +43,6 @@ import {
 	isMockupPriceUnsettled,
 } from "./lib/order";
 import { orderPickupNotes } from "./lib/pickupNote";
-import type { OrderStage, StatusLabels } from "./lib/orderStatus";
 import { assertValidWaPhone } from "./lib/slug";
 import {
 	NO_PAYMENT_LABEL,
@@ -219,11 +218,6 @@ export const getOrderWithRetailer = internalQuery({
 		currency: string;
 		locale: Locale;
 		messageTemplates: MessageTemplates | undefined;
-		// Phase 2: stage config + this order's current stage, for stage-update
-		// notifications (notifyStageEntry).
-		orderStages: OrderStage[] | undefined;
-		statusLabels: StatusLabels | undefined;
-		currentStageId: string | undefined;
 		// Lets an in-flight confirmation-push retry bail out when the buyer has
 		// already been reached (86eyf1rck).
 		confirmationPushStatus: Doc<"orders">["confirmationPushStatus"];
@@ -268,9 +262,6 @@ export const getOrderWithRetailer = internalQuery({
 			messageTemplates: retailer.messageTemplates as
 				| MessageTemplates
 				| undefined,
-			orderStages: retailer.orderStages as OrderStage[] | undefined,
-			statusLabels: retailer.statusLabels as StatusLabels | undefined,
-			currentStageId: order.currentStageId,
 			confirmationPushStatus: order.confirmationPushStatus,
 			mockupPriceUnsettled: isMockupPriceUnsettled(order),
 			deliveryFeePending: order.deliveryFeePending === true,

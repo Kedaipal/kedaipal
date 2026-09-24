@@ -3138,6 +3138,141 @@ describe("retailers businessIdentity", () => {
 	});
 });
 
+describe("orderFlows — per-flow-kind stages (z8r3fdh3w1)", () => {
+	const DELIVERY_FLOW = [
+		{ anchor: "confirmed" as const, label: { en: "Order in" } },
+		{ anchor: "packed" as const, label: { en: "Baking" } },
+		{ anchor: "delivered" as const, label: { en: "Handed over" } },
+	];
+	const BOOKING_FLOW = [
+		{ anchor: "confirmed" as const, label: { en: "Booked" } },
+		{ anchor: "delivered" as const, label: { en: "Departed" } },
+	];
+
+	test("saves one kind's steps and mints ids + sortOrder", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "flows-save");
+		await asA.mutation(api.retailers.updateSettings, {
+			orderFlows: { delivery: DELIVERY_FLOW },
+		});
+
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.orderFlows?.delivery?.map((s) => s.label.en)).toEqual([
+			"Order in",
+			"Baking",
+			"Handed over",
+		]);
+		expect(me?.orderFlows?.delivery?.map((s) => s.sortOrder)).toEqual([0, 1, 2]);
+		expect(me?.orderFlows?.delivery?.every((s) => s.id.length > 0)).toBe(true);
+		// Kinds the seller didn't send stay absent — one card's save is one
+		// card's save.
+		expect(me?.orderFlows?.self_collect).toBeUndefined();
+		expect(me?.orderFlows?.booking).toBeUndefined();
+	});
+
+	test("saving a second kind MERGES — it never clobbers the first", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "flows-merge");
+		await asA.mutation(api.retailers.updateSettings, {
+			orderFlows: { delivery: DELIVERY_FLOW },
+		});
+		await asA.mutation(api.retailers.updateSettings, {
+			orderFlows: { booking: BOOKING_FLOW },
+		});
+
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.orderFlows?.delivery?.map((s) => s.label.en)).toEqual([
+			"Order in",
+			"Baking",
+			"Handed over",
+		]);
+		expect(me?.orderFlows?.booking?.map((s) => s.label.en)).toEqual([
+			"Booked",
+			"Departed",
+		]);
+	});
+
+	test("reset writes an EMPTY list — the explicit 'on defaults' answer", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "flows-reset");
+		await asA.mutation(api.retailers.updateSettings, {
+			orderFlows: { delivery: DELIVERY_FLOW, booking: BOOKING_FLOW },
+		});
+		await asA.mutation(api.retailers.updateSettings, {
+			orderFlows: { delivery: [] },
+		});
+
+		const me = await asA.query(api.retailers.getMyRetailer);
+		// Empty, NOT undefined: undefined would fall back to the legacy flat
+		// list, so a reset would silently restore what it just cleared.
+		expect(me?.orderFlows?.delivery).toEqual([]);
+		// The other kind is untouched by a reset of this one.
+		expect(me?.orderFlows?.booking?.length).toBe(2);
+	});
+
+	test("an empty reset outranks a legacy flat list on the same store", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "flows-reset-legacy");
+		// A pre-z8r3fdh3w1 store: one flat list, no per-kind config.
+		await asA.mutation(api.retailers.updateSettings, {
+			orderStages: DELIVERY_FLOW,
+		});
+		await asA.mutation(api.retailers.updateSettings, {
+			orderFlows: { delivery: [] },
+		});
+
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.orderFlows?.delivery).toEqual([]);
+		// The legacy field is left alone — pickup still reads from it until the
+		// backfill runs, so day-1 behaviour for un-touched kinds is unchanged.
+		expect(me?.orderStages?.length).toBe(3);
+	});
+
+	test("validation runs per kind — a bad booking list doesn't reject a good delivery one", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "flows-validate");
+		await expect(
+			asA.mutation(api.retailers.updateSettings, {
+				orderFlows: {
+					delivery: DELIVERY_FLOW,
+					// Two "Done" milestones — the boundary-singleton rule.
+					booking: [
+						{ anchor: "delivered" as const, label: { en: "Departed" } },
+						{ anchor: "delivered" as const, label: { en: "Also departed" } },
+					],
+				},
+			}),
+		).rejects.toThrow(/Only one/);
+
+		// The whole patch is one transaction, so nothing landed.
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.orderFlows).toBeUndefined();
+	});
+
+	test("a booking flow may use an anchor the booking PRESET skips", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "flows-booking-packed");
+		// "Site prepared" counts as In production — meaningless on the default
+		// stay pipeline, deliberate once the seller writes it themselves.
+		await asA.mutation(api.retailers.updateSettings, {
+			orderFlows: {
+				booking: [
+					{ anchor: "confirmed" as const, label: { en: "Booked" } },
+					{ anchor: "packed" as const, label: { en: "Site prepared" } },
+					{ anchor: "delivered" as const, label: { en: "Departed" } },
+				],
+			},
+		});
+
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.orderFlows?.booking?.map((s) => s.anchor)).toEqual([
+			"confirmed",
+			"packed",
+			"delivered",
+		]);
+	});
+});
+
 describe("public booksCouriers bit (z8r3fdh274)", () => {
 	// Checkout tells a buyer with an overseas WhatsApp number that the rider
 	// will phone the store instead — but only at a store that actually hands
