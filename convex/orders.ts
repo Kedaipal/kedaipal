@@ -141,9 +141,10 @@ import {
 	anchorOrdinal,
 	type Locale,
 	type OrderStage,
-	FLOW_PRESETS,
 	orderFlowKind,
 	resolveStages,
+	hasAnchor,
+	type OrderFlows,
 	type StageAnchor,
 	stageLabel,
 	type StatusLabels,
@@ -1777,11 +1778,15 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 		peakOtherBookings: number;
 		nights: number;
 	};
+	// LEGACY pair (z8r3fdh3w1), still sent so un-migrated delivery/pickup rows
+	// resolve identically on the client. Both are ignored for bookings/RSVPs by
+	// the resolver itself, never here.
 	statusLabels?: StatusLabels;
-	// Phase 2: the retailer's configured stages (undefined => buyer/seller
-	// resolve the synthesized defaults from statusLabels). Drives the tracking
-	// timeline + the seller's dynamic advance buttons.
 	orderStages?: OrderStage[];
+	// Per-flow-kind stages — what the tracking timeline and the seller's
+	// advance buttons resolve from. The client picks THIS order's kind out of
+	// it, so a delivery flow can never word a stay.
+	orderFlows?: OrderFlows;
 	retailerLocale: Locale;
 	// Store country (SG-lite), resolved (undefined rows read as "MY"). The track
 	// page keys the buyer phone-repair plate/validator arm and the address-edit
@@ -1989,6 +1994,7 @@ export const get = query({
 				: order.confirmationPushWamid,
 			statusLabels: retailer?.statusLabels as StatusLabels | undefined,
 			orderStages: retailer?.orderStages as OrderStage[] | undefined,
+			orderFlows: retailer?.orderFlows as OrderFlows | undefined,
 			retailerLocale: (retailer?.locale ?? "en") as Locale,
 			retailerCountry: retailer?.country ?? DEFAULT_COUNTRY,
 			storeName: retailer?.storeName ?? "",
@@ -3641,6 +3647,9 @@ export const bulkUpdateStatus = mutation({
 		// The inbox multi-select is single-retailer, so every id resolves to the
 		// same access descriptor; keep the last one for a single batch audit row.
 		let batchAccess: RetailerAccess | undefined;
+		// Single-retailer by construction (same comment as `batchAccess`), so the
+		// stage config is one read for the whole batch rather than one per order.
+		let retailer: Doc<"retailers"> | null = null;
 		for (const orderId of orderIds) {
 			const order = await ctx.db.get(orderId);
 			if (!order) throw new ConvexError("Order not found");
@@ -3658,6 +3667,7 @@ export const bulkUpdateStatus = mutation({
 			// reads for one refusal. The admin bypass lives inside the guard.
 			if (firstResolve)
 				await assertSubscriptionActive(ctx, order.retailerId);
+			if (firstResolve) retailer = await ctx.db.get(order.retailerId);
 
 			// Skip no-ops + transitions blocked by the mockup gate (don't fail the
 			// whole batch on one ineligible order).
@@ -3682,15 +3692,26 @@ export const bulkUpdateStatus = mutation({
 				skipped++;
 				continue;
 			}
-			// An anchor the order's flow kind SKIPS isn't a state it can be in:
-			// a booking is never "Packed", an RSVP is never "Packed" or "Ready
-			// for Pickup" (its pipeline is Confirmed → Checked In). Bulk-moving
-			// one there would strand it outside its own vocabulary, so it's
-			// skipped and counted — never a silent no-op. Registry-driven
-			// (FLOW_PRESETS), so a future kind's skips apply here for free.
+			// An anchor no stage in THIS order's own flow carries isn't a state
+			// it can be in: "Mark as Packed" on a booking whose flow runs
+			// Confirmed → Checked in → Checked out would strand it outside its
+			// own vocabulary. Skipped and counted — never a silent no-op.
+			//
+			// The rule is the RESOLVED LIST, not `FLOW_PRESETS[...].skippedAnchors`
+			// (z8r3fdh3w1). Skipped anchors now only seed a kind's DEFAULTS, so a
+			// campsite that deliberately added a "Site prepared" step anchored to
+			// `packed` must be bulk-movable into it. Asking the list answers both
+			// cases with one check.
 			if (
 				status !== "cancelled" &&
-				FLOW_PRESETS[orderFlowKind(order)].skippedAnchors.includes(
+				!hasAnchor(
+					resolveStages({
+						orderFlows: retailer?.orderFlows as OrderFlows | undefined,
+						orderStages: retailer?.orderStages as OrderStage[] | undefined,
+						labels: retailer?.statusLabels as StatusLabels | undefined,
+						deliveryMethod: orderFlowKind(order),
+						bookingPackaged: order.bookingPackaged,
+					}),
 					status as StageAnchor,
 				)
 			) {
@@ -3967,6 +3988,7 @@ export const advanceToStage = mutation({
 		const isEventOrder =
 			order.eventRsvp === true || (await orderEvent(ctx, order)) !== undefined;
 		const stages = resolveStages({
+			orderFlows: retailer.orderFlows as OrderFlows | undefined,
 			orderStages: retailer.orderStages as OrderStage[] | undefined,
 			labels: retailer.statusLabels as StatusLabels | undefined,
 			deliveryMethod: isEventOrder

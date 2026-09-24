@@ -388,7 +388,10 @@ export function BookingCheckoutForm({
 			</h2>
 			<div className="flex flex-col gap-2 border-t-2 border-dashed border-border pt-3 text-sm tabular-nums">
 				<div className="flex items-baseline gap-1.5">
-					<span className="min-w-0 truncate">{product.name}</span>
+					{/* Wraps rather than truncating — a long stay/package name is the
+					    one thing the buyer is confirming here (`z8r3fdhpaj`). The
+					    leader bows out on its own once the name claims the row. */}
+					<span className="min-w-0 wrap-anywhere">{product.name}</span>
 					<span className="flex-1 border-b-2 border-dotted border-border" />
 					<span className="font-medium">
 						{formatPrice(unitPrice, product.currency)}

@@ -257,6 +257,7 @@ function DashboardHome() {
 		? "self_collect"
 		: "delivery";
 	const stages = resolveStages({
+		orderFlows: retailer.orderFlows,
 		orderStages: retailer.orderStages,
 		labels: statusLabels,
 		deliveryMethod: retailerMethod,
@@ -882,6 +883,7 @@ function DashboardHome() {
 													return cs
 														? stageLabel(cs, "en")
 														: resolveAnchorLabel(order.status as OrderStatus, {
+																orderFlows: retailer.orderFlows,
 																stages,
 																labels: statusLabels,
 																deliveryMethod: (order.deliveryMethod ??

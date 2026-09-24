@@ -4,6 +4,42 @@ import { countryValidator } from "./lib/country";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 
 /**
+ * One buyer-visible order stage, pinned to a canonical anchor. Shared by the
+ * LEGACY flat `retailers.orderStages` and every key of `retailers.orderFlows`,
+ * so the five lists can never drift apart. Mirrors `OrderStage` in
+ * convex/lib/orderStatus.ts; `sanitizeOrderStages` enforces the rules the
+ * validator can't (cap, monotonic anchors, label lengths).
+ */
+const orderStageEntry = v.object({
+	id: v.string(),
+	anchor: v.union(
+		v.literal("confirmed"),
+		v.literal("packed"),
+		v.literal("shipped"),
+		v.literal("delivered"),
+	),
+	label: v.object({
+		en: v.string(),
+		ms: v.optional(v.string()),
+		zh: v.optional(v.string()),
+	}),
+	description: v.optional(
+		v.object({
+			en: v.optional(v.string()),
+			ms: v.optional(v.string()),
+			zh: v.optional(v.string()),
+		}),
+	),
+	// DEPRECATED (86eyd63r8) — the per-stage "WhatsApp the buyer" toggle is
+	// gone: an order sends exactly ONE message (the confirmation push) and
+	// stages are a seller/timeline vocabulary only. Kept optional so
+	// already-saved lists still validate; nothing writes it any more
+	// (sanitizeOrderStages drops it), so it decays to absent on the next save.
+	notify: v.optional(v.boolean()),
+	sortOrder: v.number(),
+});
+
+/**
  * Multi-tenant core. Every order/inventory entity that lands later MUST carry
  * a `channel` field so future marketplace connectors (Shopee, Lazada, TikTok
  * Shop, StoreHub) slot in without schema rewrites.
@@ -161,15 +197,14 @@ export default defineSchema({
 				),
 			}),
 		),
-		// Per-retailer overrides for the SHORT status labels shown on the buyer
-		// tracking-page timeline/pills + the seller dashboard (badges, tabs,
-		// transition buttons). Distinct from `messageTemplates` above, which is
-		// the full WhatsApp message body. Any key omitted (or blank after trim)
-		// falls back to the delivery-method preset, then the base default —
-		// resolved at render time in convex/lib/orderStatus.ts. Phase 1 of
-		// per-retailer status customization; presentation only, the canonical
-		// `orders.status` union is untouched. See
-		// docs/order-status-customization.md.
+		// LEGACY (z8r3fdh3w1) — superseded by `orderFlows` below. A GLOBAL set of
+		// per-status renames with no write UI since 14 Jun (e99dbd3), which made
+		// it permanent and invisible: it outranked every flow kind's own
+		// vocabulary, so a renamed "Delivered" read on a finished stay and a
+		// renamed "Confirmed" on an RSVP. Now read for `delivery`/`self_collect`
+		// ONLY (FLOW_PRESETS[kind].takesLegacyLabels) while un-migrated rows
+		// exist, never written; dropped at the narrow along with the
+		// `statusLabels` arg on `retailers.update`.
 		statusLabels: v.optional(
 			v.object({
 				en: v.optional(
@@ -204,46 +239,41 @@ export default defineSchema({
 				),
 			}),
 		),
-		// Phase 2 of order-status customization: a seller-defined, ordered list of
-		// buyer-visible stages (cap 20), each pinned to ONE canonical anchor
-		// (confirmed/packed/shipped/delivered). `orders.currentStageId` points at
-		// the seller's stage; the canonical `orders.status` is DERIVED from the
-		// stage's anchor. Absent => the resolver synthesizes the 5 default stages
-		// from `statusLabels` (so an un-configured retailer flows through the SAME
-		// stage code path). pending/cancelled are system-managed, never stages.
-		// Bounded (≤20) so it's safe to embed. See docs/order-status-customization.md.
-		orderStages: v.optional(
-			v.array(
-				v.object({
-					id: v.string(),
-					anchor: v.union(
-						v.literal("confirmed"),
-						v.literal("packed"),
-						v.literal("shipped"),
-						v.literal("delivered"),
-					),
-					label: v.object({
-						en: v.string(),
-						ms: v.optional(v.string()),
-						zh: v.optional(v.string()),
-					}),
-					description: v.optional(
-						v.object({
-							en: v.optional(v.string()),
-							ms: v.optional(v.string()),
-							zh: v.optional(v.string()),
-						}),
-					),
-					// DEPRECATED (86eyd63r8) — the per-stage "WhatsApp the buyer" toggle
-					// is gone: an order sends exactly ONE message (the confirmation
-					// push) and stages are a seller/timeline vocabulary only. Widened to
-					// optional so already-saved stage lists still validate; nothing
-					// writes it any more (sanitizeOrderStages drops it), so it decays to
-					// absent on the seller's next save. Narrow it away later.
-					notify: v.optional(v.boolean()),
-					sortOrder: v.number(),
-				}),
-			),
+		// LEGACY (z8r3fdh3w1) — superseded by `orderFlows` below, which holds the
+		// SAME stage shape once per flow kind. This flat list was one flow for the
+		// whole store: it applied to delivery + self-collect orders and was
+		// ignored by bookings/RSVPs. Still READ (for those two kinds only) while
+		// un-migrated rows exist, never written; dropped at the narrow. See the
+		// three-state rule on `OrderFlows` in convex/lib/orderStatus.ts.
+		orderStages: v.optional(v.array(orderStageEntry)),
+		// Per-flow-kind order stages (z8r3fdh3w1) — the seller's own words for the
+		// steps an order goes through, held ONCE PER KIND so one kind's wording can
+		// never reach another. Replaces the `orderStages` + `statusLabels` pair
+		// above, which were a single set of words for the whole store: a cake
+		// shop's "Confirmed → Ok go" rename landed on its campsite bookings, and
+		// no screen could see or clear it.
+		//
+		// A rename IS a one-stage-per-anchor list, so renames and custom steps are
+		// the same mechanism here — there is no second rename field.
+		//
+		// Three states per kind, all load-bearing (see `OrderFlows`):
+		//   absent => no answer for this kind; fall through to the legacy pair
+		//             (delivery/self_collect only), then the kind's preset.
+		//   []     => "Reset to defaults" — an explicit answer that BEATS the
+		//             legacy fallback, so a reset can't silently restore it.
+		//   [...]  => this kind's custom flow.
+		//
+		// Bounded: ≤20 stages per kind (MAX_ORDER_STAGES) × 4 kinds, safe to embed.
+		orderFlows: v.optional(
+			v.object({
+				delivery: v.optional(v.array(orderStageEntry)),
+				self_collect: v.optional(v.array(orderStageEntry)),
+				// One booking config covers stays AND fixed-length packages; the
+				// package's Active/Ended preset applies only while the kind is on
+				// defaults. The settings card states that.
+				booking: v.optional(v.array(orderStageEntry)),
+				event: v.optional(v.array(orderStageEntry)),
+			}),
 		),
 		// DEPRECATED — superseded by `paymentMethods` (multi-method). Kept readable
 		// during the widen→backfill→narrow migration so un-migrated rows still
@@ -415,9 +445,7 @@ export default defineSchema({
 						v.object({
 							name: v.string(),
 							states: v.array(v.string()),
-							bands: v.array(
-								v.object({ maxKg: v.number(), fee: v.number() }),
-							),
+							bands: v.array(v.object({ maxKg: v.number(), fee: v.number() })),
 							freeAbove: v.optional(v.number()),
 						}),
 					),
@@ -484,9 +512,7 @@ export default defineSchema({
 				// surface that spends money has to be able to say so. Undefined =
 				// not yet stamped (pre-backfill row), which the UI treats as
 				// "unknown", never as "production".
-				env: v.optional(
-					v.union(v.literal("sandbox"), v.literal("production")),
-				),
+				env: v.optional(v.union(v.literal("sandbox"), v.literal("production"))),
 				// Opt-in convenience: when the seller marks a paid, due-today
 				// delivery order PACKED, the order page auto-opens the "book a
 				// rider now?" confirm dialog (today's price shown before any
@@ -699,9 +725,7 @@ export default defineSchema({
 		// See convex/lib/awbConfig.ts + docs/despatch-labels.md.
 		awbConfig: v.optional(
 			v.object({
-				paperSize: v.optional(
-					v.union(v.literal("a6"), v.literal("a4-4up")),
-				),
+				paperSize: v.optional(v.union(v.literal("a6"), v.literal("a4-4up"))),
 				showLogo: v.optional(v.boolean()),
 				showItems: v.optional(v.boolean()),
 				showCod: v.optional(v.boolean()),
@@ -1012,11 +1036,7 @@ export default defineSchema({
 				packageUnit: v.optional(
 					// `night` is `day` arithmetic with the accommodation word — a
 					// widening, so every existing row stays valid.
-					v.union(
-						v.literal("day"),
-						v.literal("night"),
-						v.literal("month"),
-					),
+					v.union(v.literal("day"), v.literal("night"), v.literal("month")),
 				),
 				// "Only days you're open" (z8r3fdhpm7): a DAY package counted in
 				// open days — a course, a camp, a class pass — skips the store's
@@ -1638,10 +1658,7 @@ export default defineSchema({
 				quotesConsidered: v.optional(
 					v.array(
 						v.object({
-							provider: v.union(
-								v.literal("lalamove"),
-								v.literal("delyva"),
-							),
+							provider: v.union(v.literal("lalamove"), v.literal("delyva")),
 							fee: v.number(),
 							currency: v.string(),
 						}),
@@ -1773,11 +1790,7 @@ export default defineSchema({
 		// A future PSP webhook can short-circuit straight to "received" without
 		// the manual claim step — same end state.
 		paymentStatus: v.optional(
-			v.union(
-				v.literal("unpaid"),
-				v.literal("claimed"),
-				v.literal("received"),
-			),
+			v.union(v.literal("unpaid"), v.literal("claimed"), v.literal("received")),
 		),
 		paymentReference: v.optional(v.string()),
 		// How the order was settled (cash / duitnow / tng / bank_transfer / card /
@@ -2137,9 +2150,7 @@ export default defineSchema({
 		// provider-aware. Rows are transient (consumed at create, purged daily),
 		// so this narrows to required on its own within a day of deploy —
 		// widen → migrate → narrow, with the migration being the clock.
-		provider: v.optional(
-			v.union(v.literal("lalamove"), v.literal("delyva")),
-		),
+		provider: v.optional(v.union(v.literal("lalamove"), v.literal("delyva"))),
 		// Lalamove quotation id — reused at create for the snapshot audit trail.
 		// Optional since z8r3fdbvdy: a Delyva quote has no id to bind to (its
 		// prices are indicative and never expire; dispatch re-prices anyway).
@@ -2324,9 +2335,7 @@ export default defineSchema({
 		// store poster (`KPS-`, 86ey5m35w). Undefined → "cashier" (legacy-safe,
 		// same posture as pickupSnapshot.locationType). Drives the "Walk-in scan"
 		// badge; `cashier` only appears on legacy rows from the removed flow.
-		origin: v.optional(
-			v.union(v.literal("cashier"), v.literal("store_qr")),
-		),
+		origin: v.optional(v.union(v.literal("cashier"), v.literal("store_qr"))),
 		// Short human pairing code (e.g. "K7") shown to the buyer on connect AND on
 		// the cashier's open-checkouts list, so the cashier matches "who's this?"
 		// at a glance (there's no order number yet — the order is created later).
@@ -2710,11 +2719,7 @@ export default defineSchema({
 		periodStart: v.number(),
 		periodEnd: v.number(),
 		dueDate: v.number(),
-		status: v.union(
-			v.literal("pending"),
-			v.literal("paid"),
-			v.literal("void"),
-		),
+		status: v.union(v.literal("pending"), v.literal("paid"), v.literal("void")),
 		markedPaidAt: v.optional(v.number()),
 		markedPaidBy: v.optional(v.string()), // admin Clerk subject
 		paymentMethod: v.optional(v.string()), // "duitnow" / "bank_transfer" — freeform v1
@@ -2764,10 +2769,7 @@ export default defineSchema({
 		// billing console.
 		gatewayIssue: v.optional(
 			v.object({
-				kind: v.union(
-					v.literal("amount_mismatch"),
-					v.literal("late_payment"),
-				),
+				kind: v.union(v.literal("amount_mismatch"), v.literal("late_payment")),
 				paymentId: v.string(),
 				amountSen: v.optional(v.number()),
 				at: v.number(),

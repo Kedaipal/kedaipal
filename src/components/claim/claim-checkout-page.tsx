@@ -78,6 +78,7 @@ import {
 	pickupFeeOf,
 } from "../storefront/pickup-location-options";
 import { Button } from "../ui/button";
+import { ClaimTicket } from "./claim-ticket";
 
 /**
  * The buyer's claim-link checkout (86eyq0epn, docs/claim-links.md) — a
@@ -94,8 +95,6 @@ import { Button } from "../ui/button";
  * stock caps (commit re-checks stock server-side), phone entry (the claim
  * froze the number the link was sent to), custom-line plumbing.
  */
-
-const CLAIM_LINES_TICKET = "font-mono text-[13px] leading-6";
 
 /** What the time field asks, per fulfilment — the storefront checkout's words. */
 const TIME_DESCRIPTION: Record<FulfilmentKind, string> = {
@@ -731,84 +730,35 @@ export function ClaimCheckoutPage({
 
 	// --- The read-only ticket ------------------------------------------------
 	const ticket = (
-		<section
-			aria-label="Order summary"
-			className="rounded-t-xl bg-card px-4 pb-3 pt-4 shadow-[0_2px_12px_rgba(15,23,42,0.08)] ring-1 ring-border/40"
-		>
-			<div className="pb-3 text-center">
-				<h2 className="font-heading text-base font-extrabold uppercase tracking-[0.06em]">
-					{storeName}
-				</h2>
-				<p className="mt-1 font-mono text-[10px] uppercase tracking-[0.3em] text-muted-foreground">
-					Order ticket · To complete
-				</p>
-			</div>
-			<div className="border-t-2 border-dashed border-border" aria-hidden />
-			<ul className="py-2">
-				{open.lines.map((line, i) => (
-					<li
-						// biome-ignore lint/suspicious/noArrayIndexKey: frozen list, never reordered.
-						key={`${line.variantId}-${i}`}
-						className={`flex items-baseline gap-2 py-1 ${CLAIM_LINES_TICKET}`}
-					>
-						<span className="min-w-0 truncate">
-							{line.variantLabel
-								? `${line.name} (${line.variantLabel})`
-								: line.name}
-							{line.quantity > 1 ? ` ×${line.quantity}` : ""}
-						</span>
-						<span
-							aria-hidden
-							className="flex-1 border-b-2 border-dotted border-border"
-						/>
-						<span className="shrink-0 tabular-nums">
-							{((line.price * line.quantity) / 100).toFixed(2)}
-						</span>
-					</li>
-				))}
-				<li
-					className={`flex items-baseline gap-2 py-1 text-muted-foreground ${CLAIM_LINES_TICKET}`}
-				>
-					<span className="min-w-0 truncate">
-						{watchedMethod === "self_collect"
-							? "Pickup"
-							: collectsFromCustomer
-								? "Collection"
-								: "Delivery"}
-					</span>
-					<span
-						aria-hidden
-						className="flex-1 border-b-2 border-dotted border-border"
-					/>
-					<span className="shrink-0 tabular-nums">
-						{watchedMethod === "self_collect"
-							? pickupFee > 0
-								? (pickupFee / 100).toFixed(2)
-								: "free"
-							: quoteForDelivery?.kind === "fee"
-								? (quoteForDelivery.fee / 100).toFixed(2)
-								: quoteForDelivery?.kind === "free"
-									? "free"
-									: quoteForDelivery?.kind === "calculating"
-										? "calculating…"
-										: quoteForDelivery?.kind === "pending"
-											? "store confirms"
-											: "after address"}
-					</span>
-				</li>
-			</ul>
-			<div className="flex items-baseline gap-2 border-t-2 border-dashed border-border pt-2.5">
-				<p className="font-heading flex-1 text-sm font-extrabold uppercase tracking-[0.04em]">
-					{feeSettled ? "Total" : "Items total"}
-				</p>
-				<p className="font-mono text-lg font-bold tabular-nums">
-					{formatPrice(displayTotal, store.currency)}
-				</p>
-			</div>
-			<p className="mt-2 text-center font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-				Price set by {storeName} · items can't be changed
-			</p>
-		</section>
+		<ClaimTicket
+			storeName={storeName}
+			currency={store.currency}
+			lines={open.lines}
+			fulfilmentLabel={
+				watchedMethod === "self_collect"
+					? "Pickup"
+					: collectsFromCustomer
+						? "Collection"
+						: "Delivery"
+			}
+			fulfilmentAmount={
+				watchedMethod === "self_collect"
+					? pickupFee > 0
+						? (pickupFee / 100).toFixed(2)
+						: "free"
+					: quoteForDelivery?.kind === "fee"
+						? (quoteForDelivery.fee / 100).toFixed(2)
+						: quoteForDelivery?.kind === "free"
+							? "free"
+							: quoteForDelivery?.kind === "calculating"
+								? "calculating…"
+								: quoteForDelivery?.kind === "pending"
+									? "store confirms"
+									: "after address"
+			}
+			feeSettled={feeSettled}
+			displayTotal={displayTotal}
+		/>
 	);
 
 	return (
