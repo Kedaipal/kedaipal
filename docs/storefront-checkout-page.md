@@ -260,12 +260,46 @@ What the rows do now:
   sub-line shares one text column with the label (the caret's 12px plus the
   row's 8px gap).
 
-`FeeLine` keeps `truncate` on purpose: its labels are short, fixed strings, and
-a wrapping fee row would break the one-line-per-charge reading.
+`FeeLine` keeps `truncate` **for the reading, not because the text is short** —
+one charge, one line, is what makes the fee block scannable under the items.
+Its labels are not all fixed: `Pickup · {pickupFeeLabel}` carries a
+seller-authored pickup-point name (up to `LABEL_MAX` = 60 chars,
+`convex/pickupLocations.ts`), so about 33 characters fit at 360px and a long
+point name *is* cut there. That's accepted because the full name is rendered
+unwrapped in the pickup picker directly above it
+(`pickup-location-options.tsx`), so the buyer has already read it in full and
+the fee row is only echoing which one they chose.
 
-The same fix lands on the booking/stay summary
-(`booking-checkout-form.tsx` — "Your stay" / "Your package"), which had the
-identical `min-w-0 truncate` + leader row.
+The same fix lands on two more surfaces that rendered the identical
+`min-w-0 truncate` + leader row:
+
+- the **booking/stay summary** (`booking-checkout-form.tsx` — "Your stay" /
+  "Your package");
+- the **claim ticket** (`claim/claim-ticket.tsx`) — see below.
+
+### The claim ticket is the second Order Ticket (`z8r3fdhpaj`, PR review)
+
+`/claim/<token>` renders a byte-identical Order Ticket from its own component:
+same mono type, same dotted leaders, masthead reading `Order ticket · To
+complete`. The first pass of this fix swept the booking checkout and **missed
+it**, and there the bug was worse — the label was
+`` `${name} (${variantLabel})` `` plus a **trailing** `` ×${quantity} ``, so a
+long name ate the option *and* how many the buyer was buying, on the last
+screen before they commit to a seller-sent link.
+
+Two changes stop it recurring:
+
+- **One definition.** `src/lib/receipt-line.ts` owns `receiptLineLabel()` plus
+  `RECEIPT_LABEL_CLASS` / `RECEIPT_VARIANT_CLASS`, and both tickets build their
+  label from it. The quantity **leads** there (`4× Name`, always printed,
+  including `1×`) precisely because a trailing `×4` is the first thing a narrow
+  column cuts. A test asserts both tickets use it and that neither re-joins the
+  variant into the name.
+- **The claim ticket became a pure component** (`ClaimTicket`), like
+  `CheckoutSummary` already was. It had drifted *because* it lived inside a
+  page that pulls live quotes, a calendar and a form — the page cannot be
+  rendered in a unit test (it OOMs), so nothing could ever have caught this.
+  `ClaimTicket` takes resolved props and has its own test.
 
 ## Follow-ups (PR2 / PR3 of 86eybrhrt)
 

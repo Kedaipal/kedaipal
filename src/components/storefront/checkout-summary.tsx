@@ -3,6 +3,11 @@ import { type ReactNode, useState } from "react";
 import type { PublicDeliveryQuote } from "../../../convex/delivery";
 import type { CartItem, UseCart } from "../../hooks/useCart";
 import { formatPrice } from "../../lib/format";
+import {
+	RECEIPT_LABEL_CLASS,
+	RECEIPT_VARIANT_CLASS,
+	receiptLineLabel,
+} from "../../lib/receipt-line";
 
 /**
  * The checkout page's order summary — the "Order Ticket" from the storefront
@@ -50,14 +55,13 @@ function receiptAmount(sen: number): string {
 /**
  * "1× Kek Batik" — the receipt line's name column.
  *
- * The variant is deliberately NOT joined on here. It used to be (`name · 1kg`
- * in one truncated string), which made the option the first thing a narrow
- * screen cut off — and for a made-to-order seller the option IS the order
- * (`z8r3fdhpaj`). It now renders as its own muted sub-line, so no amount of
- * name length can push it out of view.
+ * Built by the shared `receiptLineLabel`, which the claim checkout's identical
+ * ticket also uses: the variant is deliberately NOT joined on (it renders as
+ * its own muted sub-line) and the quantity leads, so neither can be the part a
+ * narrow column cuts. See `src/lib/receipt-line.ts` for the why (`z8r3fdhpaj`).
  */
 function receiptLabel(item: CartItem): string {
-	return `${item.quantity}× ${item.name}`;
+	return receiptLineLabel(item.quantity, item.name);
 }
 
 interface CheckoutSummaryProps {
@@ -156,8 +160,8 @@ export function CheckoutSummary({
 									{/* Disclosure caret — these rows have been tappable since the
 									    ticket redesign, but the only hint was a caption under the
 									    whole list. Sits on the LEFT so the money column stays
-									    flush; its ~1rem footprint matches the `pl-4` the note /
-									    attachment sub-lines already indent by. */}
+									    flush; its 12px plus the row's 8px gap is the 20px the note
+									    / attachment sub-lines indent by (`pl-5`). */}
 									<ChevronDown
 										aria-hidden
 										className={`size-3 shrink-0 translate-y-0.5 text-muted-foreground transition-transform motion-reduce:transition-none ${
@@ -166,15 +170,12 @@ export function CheckoutSummary({
 									/>
 									{/* Wraps, never truncates — this is the last screen before the
 									    wa.me handoff, so every character of the name and the option
-									    has to be readable without tapping (`z8r3fdhpaj`).
-									    `wrap-anywhere`, not `break-words`: only `overflow-wrap:
-									    anywhere` shrinks the flex item's min-content size, so a
-									    60-char unbroken name breaks instead of forcing the ticket
-									    to scroll sideways. */}
-									<span className="min-w-0 wrap-anywhere">
+									    has to be readable without tapping (`z8r3fdhpaj`). The class
+									    and the reasoning are shared with the claim ticket. */}
+									<span className={RECEIPT_LABEL_CLASS}>
 										{receiptLabel(item)}
 										{item.optionLabel ? (
-											<span className="block text-muted-foreground">
+											<span className={RECEIPT_VARIANT_CLASS}>
 												{item.optionLabel}
 											</span>
 										) : null}
