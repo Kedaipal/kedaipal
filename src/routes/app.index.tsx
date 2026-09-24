@@ -257,6 +257,7 @@ function DashboardHome() {
 		? "self_collect"
 		: "delivery";
 	const stages = resolveStages({
+		orderFlows: retailer.orderFlows,
 		orderStages: retailer.orderStages,
 		labels: statusLabels,
 		deliveryMethod: retailerMethod,

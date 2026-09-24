@@ -10536,3 +10536,112 @@ describe("per-product prep time (z8r3fdff97)", () => {
 		expect(lines).toContain(`${deliveryId},,`);
 	});
 });
+
+describe("bulk actions ask the order's OWN flow, not the kind's preset (z8r3fdh3w1)", () => {
+	const asA = (t: ReturnType<typeof setup>) =>
+		t.withIdentity({ subject: USER_A });
+
+	/** A confirmed order, forced onto a flow kind. */
+	async function bookingOrder(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Aisha", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		const order = await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			if (!o) throw new Error("no order");
+			await ctx.db.patch(o._id, {
+				deliveryMethod: "booking",
+				status: "confirmed",
+			});
+			return o;
+		});
+		return { retailer, order };
+	}
+
+	test("a booking on DEFAULTS is still skipped for an anchor its flow has no step for", async () => {
+		const t = setup();
+		const { order } = await bookingOrder(t);
+		const res = await asA(t).mutation(api.orders.bulkUpdateStatus, {
+			orderIds: [order._id],
+			status: "packed",
+		});
+		expect(res.updated).toBe(0);
+		expect(res.skippedNoSuchStage).toBe(1);
+		expect((await t.run((ctx) => ctx.db.get(order._id)))?.status).toBe(
+			"confirmed",
+		);
+	});
+
+	test("a booking whose OWN flow has that step is moved, not skipped", async () => {
+		const t = setup();
+		const { retailer, order } = await bookingOrder(t);
+		// The campsite writes its own flow, deliberately including a step that
+		// counts as "In production". The preset skips that anchor; the seller's
+		// flow does not, and the seller's flow is what the order runs.
+		await t.run((ctx) =>
+			ctx.db.patch(retailer._id, {
+				orderFlows: {
+					booking: [
+						{
+							id: "b1",
+							anchor: "confirmed",
+							label: { en: "Booked" },
+							sortOrder: 0,
+						},
+						{
+							id: "b2",
+							anchor: "packed",
+							label: { en: "Site prepared" },
+							sortOrder: 1,
+						},
+						{
+							id: "b3",
+							anchor: "delivered",
+							label: { en: "Departed" },
+							sortOrder: 2,
+						},
+					],
+				},
+			}),
+		);
+
+		const res = await asA(t).mutation(api.orders.bulkUpdateStatus, {
+			orderIds: [order._id],
+			status: "packed",
+		});
+		expect(res.updated).toBe(1);
+		expect(res.skippedNoSuchStage).toBe(0);
+		expect((await t.run((ctx) => ctx.db.get(order._id)))?.status).toBe("packed");
+	});
+
+	test("a cake shop's flat legacy list never makes a booking bulk-movable", async () => {
+		const t = setup();
+		const { retailer, order } = await bookingOrder(t);
+		await t.run((ctx) =>
+			ctx.db.patch(retailer._id, {
+				orderStages: [
+					{ id: "c1", anchor: "confirmed", label: { en: "Order in" }, sortOrder: 0 },
+					{ id: "c2", anchor: "packed", label: { en: "Baking" }, sortOrder: 1 },
+					{ id: "c3", anchor: "delivered", label: { en: "Collected" }, sortOrder: 2 },
+				],
+			}),
+		);
+
+		const res = await asA(t).mutation(api.orders.bulkUpdateStatus, {
+			orderIds: [order._id],
+			status: "packed",
+		});
+		expect(res.updated).toBe(0);
+		expect(res.skippedNoSuchStage).toBe(1);
+	});
+});

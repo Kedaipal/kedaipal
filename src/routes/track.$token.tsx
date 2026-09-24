@@ -76,6 +76,7 @@ import { withLineKeys } from "../lib/order-card-items";
 import {
 	anchorOrdinal,
 	type Locale,
+	type OrderFlowKind,
 	type OrderStatus,
 	resolveCurrentStage,
 	resolveStages,
@@ -237,7 +238,11 @@ export const Route = createFileRoute("/track/$token")({
 	component: TrackingRoute,
 });
 
-type DeliveryMethod = "delivery" | "self_collect" | "booking";
+// The flow kinds this page renders. Canonical union (convex/lib/orderStatus)
+// rather than a local copy — the local one still read
+// "delivery | self_collect | booking" after the event kind shipped, so an
+// RSVP's own vocabulary couldn't be passed here at all.
+type DeliveryMethod = OrderFlowKind;
 
 type StatusCfg = { label: string; icon: ReactNode; color: string };
 
@@ -248,9 +253,15 @@ function getStatusConfig(
 	method: DeliveryMethod,
 	labels: StatusLabels | undefined,
 	locale: Locale,
+	bookingPackaged?: boolean,
 ): Record<string, StatusCfg> {
 	const label = (status: OrderStatus) =>
-		resolveStatusLabel(status, { labels, deliveryMethod: method, locale });
+		resolveStatusLabel(status, {
+			labels,
+			deliveryMethod: method,
+			locale,
+			bookingPackaged,
+		});
 	return {
 		pending: {
 			label: label("pending"),
@@ -499,10 +510,16 @@ function TrackingRoute() {
 	// up FROM this buyer's address — every "Deliver…" label flips to collection
 	// wording so the page never claims something is being sent to them.
 	const isCollection = order.deliveryDirection === "collection";
+	// The order's FLOW KIND, not its raw delivery method — an RSVP is stored
+	// self_collect, so passing the method would hand a guest pickup wording.
+	// Only `pending`/`booking_requested`/`cancelled` read their label from here
+	// (every other status resolves through the stage list below), but those are
+	// exactly the ones no stage can correct, so they get the right kind too.
 	const statusConfig = getStatusConfig(
-		deliveryMethod,
+		order.eventLocked ? "event" : deliveryMethod,
 		order.statusLabels,
 		order.retailerLocale,
+		order.bookingPackaged,
 	);
 	const config = statusConfig[order.status];
 	const isCancelled = order.status === "cancelled";
@@ -575,6 +592,7 @@ function TrackingRoute() {
 	// in at the production boundary (before the first packed-or-later stage).
 	const stageLocale = order.retailerLocale;
 	const stages = resolveStages({
+		orderFlows: order.orderFlows,
 		orderStages: order.orderStages,
 		labels: order.statusLabels,
 		// An RSVP's timeline is Order Received → Confirmed → Checked In — no

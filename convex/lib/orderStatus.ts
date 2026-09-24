@@ -198,14 +198,25 @@ const EVENT_DEFAULTS: Record<Locale, Partial<Record<OrderStatus, string>>> = {
 type FlowPreset = {
 	/** Label overrides on the base (delivery) wording, per locale. */
 	labels: Record<Locale, Partial<Record<OrderStatus, string>>>;
-	/** Anchors the synthesized pipeline skips — a booking is never "Packed",
-	 * an RSVP is never "Packed" or "Ready for Pickup". Also the anchors bulk
-	 * actions refuse to move these orders into. */
+	/** Anchors this kind's SYNTHESIZED default pipeline leaves out — a stay is
+	 * never "Packed", an RSVP is never "Packed" or "Ready for Pickup".
+	 *
+	 * This is the SEED for the defaults, not a prohibition (`z8r3fdh3w1`).
+	 * Stages are configured per kind now, so a campsite that deliberately adds
+	 * a "Site prepared" step anchored to `packed` gets it. What bulk actions
+	 * refuse is an anchor no stage in THAT order's resolved list carries —
+	 * see `hasAnchor`. */
 	skippedAnchors: readonly StageAnchor[];
-	/** Whether a seller's configured custom stages apply. Custom stages
-	 * describe how a seller PREPARES something ("Baking → Ready"); a stay or
-	 * an RSVP is not prepared, so those kinds keep their fixed milestones. */
-	takesCustomStages: boolean;
+	/** LEGACY — deleted at the narrow (`z8r3fdh3w1`). Whether the retailer's
+	 * pre-`orderFlows` GLOBAL `statusLabels` renames and flat `orderStages`
+	 * list may speak for this kind. True for exactly the pair those fields
+	 * could ever have meant: `delivery` + `self_collect`, the only kinds the
+	 * seller could see when they wrote them.
+	 *
+	 * This one flag is the bug fix. Before it, a store that renamed Confirmed
+	 * to "Ok go" saw "Ok go" on its campsite bookings, because the rename
+	 * outranked every kind's own vocabulary and no screen could clear it. */
+	takesLegacyLabels: boolean;
 };
 
 const NO_OVERRIDES: Record<Locale, Partial<Record<OrderStatus, string>>> = {
@@ -218,25 +229,65 @@ export const FLOW_PRESETS: Record<OrderFlowKind, FlowPreset> = {
 	delivery: {
 		labels: NO_OVERRIDES,
 		skippedAnchors: [],
-		takesCustomStages: true,
+		takesLegacyLabels: true,
 	},
 	self_collect: {
 		labels: SELF_COLLECT_DEFAULTS,
 		skippedAnchors: [],
-		takesCustomStages: true,
+		takesLegacyLabels: true,
 	},
 	// `bookingPackaged` swaps in BOOKING_PACKAGE_DEFAULTS at resolve time — a
 	// modifier on the booking kind, not a fifth kind (a package is still a
-	// booking everywhere else: same request flow, same calendar).
+	// booking everywhere else: same request flow, same calendar). A seller who
+	// customises the booking flow customises it for stays AND packages: one
+	// card, one answer, and the settings copy says so.
 	booking: {
 		labels: BOOKING_DEFAULTS,
 		skippedAnchors: ["packed"],
-		takesCustomStages: false,
+		takesLegacyLabels: false,
 	},
 	event: {
 		labels: EVENT_DEFAULTS,
 		skippedAnchors: ["packed", "shipped"],
-		takesCustomStages: false,
+		takesLegacyLabels: false,
+	},
+};
+
+/** Display order for the per-kind settings cards + any other kind-grain list.
+ * Product flows first (what most stores live in), then the booked kinds. */
+export const FLOW_KINDS: readonly OrderFlowKind[] = [
+	"delivery",
+	"self_collect",
+	"booking",
+	"event",
+];
+
+/** Seller-facing name for a flow kind, and the one-line "what is this" the
+ * settings card shows under it. Lives beside the registry so a new kind
+ * declares its wording in the same place as its behaviour. */
+export const FLOW_KIND_UI: Record<
+	OrderFlowKind,
+	{ name: string; short: string; blurb: string }
+> = {
+	delivery: {
+		name: "Delivery orders",
+		short: "delivery",
+		blurb: "Orders you send out to the buyer.",
+	},
+	self_collect: {
+		name: "Pickup orders",
+		short: "pickup",
+		blurb: "Orders the buyer collects from you.",
+	},
+	booking: {
+		name: "Bookings",
+		short: "booking",
+		blurb: "Stays and fixed-length packages.",
+	},
+	event: {
+		name: "Event RSVPs",
+		short: "event RSVP",
+		blurb: "Guests who reserved a spot at an event.",
 	},
 };
 
@@ -296,8 +347,15 @@ export function resolveStatusLabel(
 ): string {
 	const locale = opts.locale ?? "en";
 	const deliveryMethod = opts.deliveryMethod ?? "delivery";
-	const override = opts.labels?.[locale]?.[status]?.trim();
-	if (override) return override;
+	// LEGACY renames speak only for the kinds they could ever have meant
+	// (`z8r3fdh3w1`). Gating here rather than at the ~8 call sites is the whole
+	// point: every surface that resolves a label — inbox chip, stepper, advance
+	// CTA, Home, /track — is fixed by this one line, and a future call site
+	// cannot reintroduce the leak.
+	if (FLOW_PRESETS[deliveryMethod].takesLegacyLabels) {
+		const override = opts.labels?.[locale]?.[status]?.trim();
+		if (override) return override;
+	}
 	return defaultStatusLabel(
 		status,
 		deliveryMethod,
@@ -386,23 +444,105 @@ export function defaultStageId(anchor: StageAnchor): string {
 }
 
 /**
- * The 5-default-stages-from-Phase-1 path, but rendered as Layer-2 stages: one
- * stage per band anchor, label resolved through the Phase-1 resolver (so a
- * retailer's `statusLabels` relabel + the delivery/self_collect presets carry
- * straight in). This is THE general model — a retailer who never configures
- * stages flows through the exact same stage code as one who does (no legacy
- * branch).
+ * Per-flow-kind stage configuration — THE home for a seller's own words
+ * (`z8r3fdh3w1`). One key per `OrderFlowKind`; a key's value is that kind's
+ * ordered stage list.
+ *
+ * Three states, and the distinction between the last two is load-bearing:
+ *   - key ABSENT       — the seller has not answered for this kind. Falls
+ *                        through to the LEGACY flat list (delivery/pickup
+ *                        only), then to the kind's preset.
+ *   - key = `[]`       — "Reset to defaults". An explicit answer, so it BEATS
+ *                        the legacy fallback: a seller who resets pickup must
+ *                        not silently get their old flat list back.
+ *   - key = `[...]`    — this kind's custom flow.
+ *
+ * Replaces the global `retailers.statusLabels` + flat `retailers.orderStages`
+ * pair, which were one set of words for every kind at once. A rename IS a
+ * one-stage-per-anchor list (docs/order-status-customization.md), so renames
+ * and custom steps are the SAME mechanism here — there is no second rename
+ * field to keep in sync, and nothing a seller cannot see and clear.
+ */
+export type OrderFlows = Partial<Record<OrderFlowKind, OrderStage[]>>;
+
+/**
+ * The stage list a kind is CONFIGURED with — empty when it has no answer and
+ * should fall through to its preset defaults.
+ *
+ * The one place the three-state rule above lives. Every resolver goes through
+ * it, so "does an empty array mean reset or mean nothing?" is answered once.
+ */
+export function configuredStages(
+	orderFlows: OrderFlows | undefined,
+	legacyStages: OrderStage[] | undefined,
+	kind: OrderFlowKind = "delivery",
+): OrderStage[] {
+	const own = orderFlows?.[kind];
+	if (own !== undefined) return own;
+	// LEGACY (deleted at the narrow): the flat list could only ever have meant
+	// the product kinds, so it never speaks for a booking or an RSVP again.
+	if (FLOW_PRESETS[kind].takesLegacyLabels && legacyStages) return legacyStages;
+	return [];
+}
+
+/** Whether a kind is running the seller's own flow rather than its preset.
+ * Drives the Default / Customised state on each settings card. */
+export function isFlowCustomised(
+	orderFlows: OrderFlows | undefined,
+	legacyStages: OrderStage[] | undefined,
+	kind: OrderFlowKind = "delivery",
+): boolean {
+	return configuredStages(orderFlows, legacyStages, kind).length > 0;
+}
+
+/** Whether two stage lists say the same thing to a buyer — same anchors, same
+ * words, same order. Used to tell a seller "Pickup currently matches delivery"
+ * instead of making them read two lists side by side. */
+export function sameStages(a: OrderStage[], b: OrderStage[]): boolean {
+	if (a.length !== b.length) return false;
+	const key = (s: OrderStage) =>
+		JSON.stringify([
+			s.anchor,
+			s.label.en?.trim() ?? "",
+			s.label.ms?.trim() ?? "",
+			s.label.zh?.trim() ?? "",
+			s.description?.en?.trim() ?? "",
+			s.description?.ms?.trim() ?? "",
+			s.description?.zh?.trim() ?? "",
+		]);
+	const sa = [...a].sort((x, y) => x.sortOrder - y.sortOrder).map(key);
+	const sb = [...b].sort((x, y) => x.sortOrder - y.sortOrder).map(key);
+	return sa.every((v, i) => v === sb[i]);
+}
+
+/** Whether a resolved stage list can hold an order at this anchor. THE rule
+ * bulk actions refuse on: not "does this kind skip the anchor by default", but
+ * "is there a stage to land on in the flow THIS order actually runs" — which
+ * stays correct now that a seller can add a `packed` step to a booking. */
+export function hasAnchor(stages: OrderStage[], anchor: StageAnchor): boolean {
+	return stages.some((s) => s.anchor === anchor);
+}
+
+/**
+ * The preset pipeline for a flow kind, rendered as Layer-2 stages: one stage
+ * per anchor the kind uses, label resolved through the Phase-1 resolver (so
+ * the delivery / self_collect / booking / event presets carry straight in, and
+ * — until the narrow — a LEGACY rename does too, but only for the kinds that
+ * take it). This is THE general model: a retailer who never configures stages
+ * flows through the exact same stage code as one who does (no legacy branch).
  */
 export function synthesizeDefaultStages(opts: {
 	labels?: StatusLabels;
 	deliveryMethod?: DeliveryMethod;
 	bookingPackaged?: boolean;
 }): OrderStage[] {
-	// Each flow kind skips the anchors that would lie about it — a booking is
+	// Each flow kind leaves out the anchors that would lie about it — a stay is
 	// never "Packed", an RSVP is never "Packed" or "Ready for Pickup"
 	// (Confirmed → Checked In is its whole story). Registry-driven, so a new
-	// kind declares its skips in FLOW_PRESETS and this code never forks.
-	const skipped = FLOW_PRESETS[opts.deliveryMethod ?? "delivery"].skippedAnchors;
+	// kind declares its skips in FLOW_PRESETS and this code never forks. These
+	// are the DEFAULTS only: a seller may add such a step deliberately.
+	const skipped =
+		FLOW_PRESETS[opts.deliveryMethod ?? "delivery"].skippedAnchors;
 	const anchors = STAGE_ANCHORS.filter((anchor) => !skipped.includes(anchor));
 	return anchors.map((anchor, i) => ({
 		id: defaultStageId(anchor),
@@ -420,39 +560,52 @@ export function synthesizeDefaultStages(opts: {
 				bookingPackaged: opts.bookingPackaged,
 				locale: "ms",
 			}),
+			// ZH defaults exist in BASE_DEFAULTS/the presets but were never
+			// synthesized, so a 中文 store's timeline fell back to the English
+			// stage names it had no reason to. Filled here rather than left for
+			// `stageLabel`'s EN fallback to paper over.
+			zh: resolveStatusLabel(anchor, {
+				labels: opts.labels,
+				deliveryMethod: opts.deliveryMethod,
+				bookingPackaged: opts.bookingPackaged,
+				locale: "zh",
+			}),
 		},
 		sortOrder: i,
 	}));
 }
 
 /**
- * The retailer's effective ordered stage list: their configured `orderStages`
- * if any, otherwise the synthesized defaults. Always sorted by `sortOrder`.
+ * The retailer's effective ordered stage list FOR ONE ORDER'S FLOW KIND: that
+ * kind's configured stages if it has any, otherwise the kind's synthesized
+ * preset. Always sorted by `sortOrder`.
  *
- * **Bookings and event RSVPs never take configured stages** (per
- * `FLOW_PRESETS[kind].takesCustomStages`). Custom stages describe how a
- * seller PREPARES something — "Baking → Decorating → Ready" — which is exactly
- * why made-to-order keeps them. A stay or a membership isn't prepared; it is
- * booked, occupied and finished, and the booking route already has the right
- * three milestones. Without this gate the short-circuit below fired for every
- * order the moment a seller configured anything, so a campsite booking
- * inherited "Packed" from a cake shop's flow and the booking-aware branch in
- * `synthesizeDefaultStages` became unreachable for exactly the sellers who had
- * touched the setting. Surfaced to the seller in the Order stages settings
- * card, so the exemption isn't silent.
+ * Every kind takes custom stages now (`z8r3fdh3w1`). Bookings and RSVPs used
+ * to be exempt wholesale, because there was ONE list for the whole store and
+ * applying a cake shop's "Baking → Decorating → Ready" to a campsite stay was
+ * worse than ignoring it. Per-kind config removes that reason: a campsite that
+ * wants "Confirmed → Site prepared → Checked in → Checked out" is describing
+ * its own flow, not inheriting someone else's. What no longer happens is one
+ * kind's words reaching another.
  */
 export function resolveStages(opts: {
+	/** Per-kind config — the home for a seller's own words. */
+	orderFlows?: OrderFlows;
+	/** LEGACY flat list, read only for `delivery`/`self_collect` and only when
+	 * `orderFlows` has no answer for the kind. Deleted at the narrow. */
 	orderStages?: OrderStage[];
+	/** LEGACY global renames, same rule. Deleted at the narrow. */
 	labels?: StatusLabels;
 	deliveryMethod?: DeliveryMethod;
 	bookingPackaged?: boolean;
 }): OrderStage[] {
-	if (
-		FLOW_PRESETS[opts.deliveryMethod ?? "delivery"].takesCustomStages &&
-		opts.orderStages &&
-		opts.orderStages.length > 0
-	) {
-		return [...opts.orderStages].sort((a, b) => a.sortOrder - b.sortOrder);
+	const configured = configuredStages(
+		opts.orderFlows,
+		opts.orderStages,
+		opts.deliveryMethod ?? "delivery",
+	);
+	if (configured.length > 0) {
+		return [...configured].sort((a, b) => a.sortOrder - b.sortOrder);
 	}
 	return synthesizeDefaultStages(opts);
 }

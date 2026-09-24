@@ -580,6 +580,7 @@ function OrderDetailRoute() {
 	// synthesized defaults — same path), the order's current stage, and the next
 	// stage to advance into. Dashboard chrome is EN.
 	const stages = resolveStages({
+		orderFlows: order.orderFlows,
 		orderStages: order.orderStages,
 		labels: order.statusLabels,
 		// An RSVP runs the event vocabulary: Confirmed → Checked In, no Packed,

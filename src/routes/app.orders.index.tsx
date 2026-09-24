@@ -125,6 +125,7 @@ import {
 	type DeliveryMethod,
 	displayStatusLabel,
 	orderFlowKind,
+	type OrderFlowKind,
 	type OrderStatus,
 	resolveAnchorLabel,
 	resolveCurrentStage,
@@ -655,15 +656,42 @@ function OrdersRoute() {
 	if (!retailer) return <OrdersInboxSkeleton />;
 
 	const labels = retailer.statusLabels as StatusLabels | undefined;
-	const retailerOrderStages = retailer.orderStages;
 	const retailerMethod: DeliveryMethod = retailer.offerSelfCollect
 		? "self_collect"
 		: "delivery";
-	const stages = resolveStages({
-		orderStages: retailer.orderStages,
-		labels,
-		deliveryMethod: retailerMethod,
-	});
+	// Stages are per flow kind now (z8r3fdh3w1), and one inbox mixes kinds, so
+	// the list is resolved per kind and memoized rather than resolved once for
+	// the store. `stages` stays the RETAILER-GRAIN list — the store's primary
+	// product flow — because the controls that read it (bulk actions, the
+	// status filter, the column header) are store-grain, one control for rows
+	// of every kind. Per-ROW wording comes from `stagesForKind` below.
+	const orderFlows = retailer.orderFlows;
+	const legacyStages = retailer.orderStages;
+	const stagesByKind = new Map<
+		OrderFlowKind,
+		ReturnType<typeof resolveStages>
+	>();
+	function stagesForKind(
+		kind: OrderFlowKind,
+		bookingPackaged?: boolean,
+	): ReturnType<typeof resolveStages> {
+		// A package's defaults differ from a stay's (Active/Ended vs Checked
+		// in/out), so it can't share the booking entry unless the kind is
+		// customised — in which case one config covers both by design.
+		const cacheable = !(kind === "booking" && bookingPackaged);
+		const hit = cacheable ? stagesByKind.get(kind) : undefined;
+		if (hit) return hit;
+		const resolved = resolveStages({
+			orderFlows,
+			orderStages: legacyStages,
+			labels,
+			deliveryMethod: kind,
+			bookingPackaged,
+		});
+		if (cacheable) stagesByKind.set(kind, resolved);
+		return resolved;
+	}
+	const stages = stagesForKind(retailerMethod);
 
 	const loading = result === undefined;
 	// The query returns the whole filtered window, newest-first. We apply the sort
@@ -702,21 +730,12 @@ function OrdersRoute() {
 	}): string {
 		// The ROW's flow kind picks its vocabulary — a checked-in RSVP reads
 		// "Checked In", a stay "Checked Out", never the retailer's delivery
-		// wording. Custom stages only apply to kinds that take them, and
-		// `resolveStages` already knows, so handing it the row's kind is the
-		// whole fix. Synthesis is a cheap pure map; rows that use the
-		// retailer-grain `stages` (the common delivery/self-collect case whose
-		// kind matches) keep the prebuilt list.
+		// wording. Every kind can carry its own configured flow now, so this
+		// asks for the row's kind unconditionally instead of special-casing the
+		// two that used to be exempt; the memo keeps it to one resolve per kind
+		// per render.
 		const kind = orderFlowKind(o);
-		const rowStages =
-			kind === "booking" || kind === "event"
-				? resolveStages({
-						orderStages: retailerOrderStages,
-						labels,
-						deliveryMethod: kind,
-						bookingPackaged: o.bookingPackaged,
-					})
-				: stages;
+		const rowStages = stagesForKind(kind, o.bookingPackaged);
 		const cs = resolveCurrentStage(
 			{ status: o.status as OrderStatus, currentStageId: o.currentStageId },
 			rowStages,

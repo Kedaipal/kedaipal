@@ -1,14 +1,31 @@
 import { describe, expect, test } from "vitest";
 import {
+	anchorOrdinal,
+	assertValidOrderStages,
+	collectStageConfigErrors,
+	configuredStages,
+	defaultStageId,
 	defaultStatusLabel,
 	displayStatusLabel,
 	FLOW_PRESETS,
+	hasAnchor,
+	isFlowCustomised,
+	MAX_ORDER_STAGES,
 	orderFlowKind,
+	type OrderStage,
 	type OrderStatus,
+	resolveCurrentStage,
 	type ResolveOpts,
+	resolveStages,
 	resolveStatusLabel,
 	resolveTransitionLabel,
+	sameStages,
+	STAGE_DESCRIPTION_MAX_LENGTH,
+	STAGE_LABEL_MAX_LENGTH,
+	stageDescription,
+	stageLabel,
 	type StatusLabels,
+	synthesizeDefaultStages,
 	type TransitionTarget,
 } from "./orderStatus";
 
@@ -210,21 +227,6 @@ describe("resolveTransitionLabel", () => {
 });
 
 // --- Phase 2: anchored custom stages ---------------------------------------
-import {
-	anchorOrdinal,
-	assertValidOrderStages,
-	collectStageConfigErrors,
-	defaultStageId,
-	MAX_ORDER_STAGES,
-	type OrderStage,
-	resolveCurrentStage,
-	resolveStages,
-	STAGE_DESCRIPTION_MAX_LENGTH,
-	STAGE_LABEL_MAX_LENGTH,
-	stageDescription,
-	stageLabel,
-	synthesizeDefaultStages,
-} from "./orderStatus";
 
 function stage(
 	over: Partial<OrderStage> & Pick<OrderStage, "id" | "anchor" | "sortOrder">,
@@ -282,12 +284,17 @@ describe("resolveStages", () => {
 		]);
 	});
 
-	test("a BOOKING ignores configured stages entirely", () => {
+	test("a BOOKING ignores the LEGACY flat stage list", () => {
 		// The bug this pins: the configured-stages short-circuit ran before any
 		// booking check, so the moment a seller customised their flow for cakes,
 		// every campsite booking inherited it — "Mark as Packed" on a stay — and
 		// the booking-aware synthesized route became unreachable for exactly the
 		// sellers who had touched the setting.
+		//
+		// Since z8r3fdh3w1 a booking CAN carry a flow — its OWN, under
+		// `orderFlows.booking` (see "a customised booking flow DOES word
+		// bookings" below). What it can never do is inherit the flat list,
+		// which only ever meant the product kinds.
 		const configured = [
 			stage({ id: "cfg-a", anchor: "confirmed", sortOrder: 0 }),
 			stage({ id: "cfg-b", anchor: "packed", sortOrder: 1 }),
@@ -307,9 +314,10 @@ describe("resolveStages", () => {
 
 		// …while every other method still honours the seller's own flow.
 		expect(
-			resolveStages({ orderStages: configured, deliveryMethod: "delivery" }).map(
-				(x) => x.id,
-			),
+			resolveStages({
+				orderStages: configured,
+				deliveryMethod: "delivery",
+			}).map((x) => x.id),
 		).toEqual(["cfg-a", "cfg-b", "cfg-c"]);
 		expect(
 			resolveStages({
@@ -740,7 +748,7 @@ describe("event flow kind (`z8r3fdff9u`) — the registry's fourth entry", () =>
 		expect(stages[1].label.ms).toBe("Daftar Masuk");
 	});
 
-	test("events never take configured custom stages (the booking rule)", () => {
+	test("events never take the LEGACY flat stage list (the booking rule)", () => {
 		const custom: OrderStage[] = [
 			{
 				id: "s1",
@@ -753,7 +761,8 @@ describe("event flow kind (`z8r3fdff9u`) — the registry's fourth entry", () =>
 			orderStages: custom,
 			deliveryMethod: "event",
 		});
-		// Synthesized event stages, not the cake shop's flow.
+		// Synthesized event stages, not the cake shop's flow. An event with its
+		// own `orderFlows.event` is a different question — and a yes.
 		expect(resolved.map((s) => s.anchor)).toEqual(["confirmed", "delivered"]);
 		// A delivery order still takes them — the gate is per kind.
 		expect(
@@ -772,7 +781,10 @@ describe("event flow kind (`z8r3fdff9u`) — the registry's fourth entry", () =>
 		).toBe("Checked In");
 		// The counter override itself is untouched for a plain counter sale.
 		expect(
-			displayStatusLabel({ status: "delivered", source: "counter" }, "Collected"),
+			displayStatusLabel(
+				{ status: "delivered", source: "counter" },
+				"Collected",
+			),
 		).toBe("Completed");
 	});
 
@@ -780,5 +792,279 @@ describe("event flow kind (`z8r3fdff9u`) — the registry's fourth entry", () =>
 		expect(FLOW_PRESETS.event.skippedAnchors).toEqual(["packed", "shipped"]);
 		expect(FLOW_PRESETS.booking.skippedAnchors).toEqual(["packed"]);
 		expect(FLOW_PRESETS.delivery.skippedAnchors).toEqual([]);
+	});
+});
+
+// ===========================================================================
+// Per-flow-kind stage configuration (z8r3fdh3w1)
+//
+// The bug this replaced: ONE global rename map + ONE flat stage list spoke for
+// every kind at once, so a store that renamed "Confirmed" to "Ok go" read
+// "Ok go" on its campsite bookings, and no screen could see or clear it.
+// ===========================================================================
+
+/** A cake shop's flow, as the old flat list would have held it. */
+const CAKE_FLOW: OrderStage[] = [
+	stage({
+		id: "c1",
+		anchor: "confirmed",
+		sortOrder: 0,
+		label: { en: "Order in" },
+	}),
+	stage({ id: "c2", anchor: "packed", sortOrder: 1, label: { en: "Baking" } }),
+	stage({
+		id: "c3",
+		anchor: "delivered",
+		sortOrder: 2,
+		label: { en: "Collected" },
+	}),
+];
+
+/** The rename seen live on dev: IndoMart's "Ok go", plus a Delivered rename. */
+const LEGACY_RENAMES: StatusLabels = {
+	en: { confirmed: "Ok go", delivered: "Dah siap" },
+};
+
+describe("legacy renames are scoped to the kinds that could have meant them", () => {
+	test("a global rename still speaks for delivery and pickup (no change on deploy)", () => {
+		for (const kind of ["delivery", "self_collect"] as const) {
+			expect(
+				resolveStatusLabel("confirmed", {
+					labels: LEGACY_RENAMES,
+					deliveryMethod: kind,
+				}),
+			).toBe("Ok go");
+		}
+	});
+
+	test("a global rename NEVER reaches a booking or an event RSVP", () => {
+		// The live symptom: booking #ORD-XD7G reading "Ok go" in the order list.
+		expect(
+			resolveStatusLabel("confirmed", {
+				labels: LEGACY_RENAMES,
+				deliveryMethod: "booking",
+			}),
+		).toBe("Confirmed");
+		expect(
+			resolveStatusLabel("confirmed", {
+				labels: LEGACY_RENAMES,
+				deliveryMethod: "event",
+			}),
+		).toBe("Confirmed");
+		// A renamed Delivered used to overwrite a stay's "Checked Out" and an
+		// RSVP's "Checked In" — the two the ticket called out from the code.
+		expect(
+			resolveStatusLabel("delivered", {
+				labels: LEGACY_RENAMES,
+				deliveryMethod: "booking",
+			}),
+		).toBe("Checked Out");
+		expect(
+			resolveStatusLabel("delivered", {
+				labels: LEGACY_RENAMES,
+				deliveryMethod: "event",
+			}),
+		).toBe("Checked In");
+	});
+
+	test("the synthesized stage list carries the same scoping", () => {
+		// The stepper, the /track timeline and the inbox chip all read stages,
+		// so the leak had to be closed here too, not only on the raw resolver.
+		const stay = synthesizeDefaultStages({
+			labels: LEGACY_RENAMES,
+			deliveryMethod: "booking",
+		});
+		expect(stay.map((s) => s.label.en)).toEqual([
+			"Confirmed",
+			"Checked In",
+			"Checked Out",
+		]);
+		const parcel = synthesizeDefaultStages({
+			labels: LEGACY_RENAMES,
+			deliveryMethod: "delivery",
+		});
+		expect(parcel[0].label.en).toBe("Ok go");
+	});
+
+	test("the registry, not a hardcoded pair, decides who takes legacy labels", () => {
+		expect(FLOW_PRESETS.delivery.takesLegacyLabels).toBe(true);
+		expect(FLOW_PRESETS.self_collect.takesLegacyLabels).toBe(true);
+		expect(FLOW_PRESETS.booking.takesLegacyLabels).toBe(false);
+		expect(FLOW_PRESETS.event.takesLegacyLabels).toBe(false);
+	});
+});
+
+describe("configuredStages — the three-state rule", () => {
+	test("key absent falls through to the LEGACY flat list, for its kinds only", () => {
+		expect(configuredStages(undefined, CAKE_FLOW, "delivery")).toEqual(
+			CAKE_FLOW,
+		);
+		expect(configuredStages(undefined, CAKE_FLOW, "self_collect")).toEqual(
+			CAKE_FLOW,
+		);
+		// A stay never inherits the cake shop's "Baking".
+		expect(configuredStages(undefined, CAKE_FLOW, "booking")).toEqual([]);
+		expect(configuredStages(undefined, CAKE_FLOW, "event")).toEqual([]);
+	});
+
+	test("an EMPTY array is 'reset to defaults' and BEATS the legacy fallback", () => {
+		// Without this, a seller who reset pickup would silently get their old
+		// flat list back — a reset button that doesn't reset.
+		expect(
+			configuredStages({ self_collect: [] }, CAKE_FLOW, "self_collect"),
+		).toEqual([]);
+		// …and only for the kind they reset.
+		expect(
+			configuredStages({ self_collect: [] }, CAKE_FLOW, "delivery"),
+		).toEqual(CAKE_FLOW);
+	});
+
+	test("a kind's own list wins over the legacy one", () => {
+		const own = [stage({ id: "d1", anchor: "confirmed", sortOrder: 0 })];
+		expect(configuredStages({ delivery: own }, CAKE_FLOW, "delivery")).toEqual(
+			own,
+		);
+	});
+
+	test("isFlowCustomised reads the same rule", () => {
+		expect(isFlowCustomised(undefined, CAKE_FLOW, "delivery")).toBe(true);
+		expect(isFlowCustomised(undefined, CAKE_FLOW, "booking")).toBe(false);
+		expect(isFlowCustomised({ delivery: [] }, CAKE_FLOW, "delivery")).toBe(
+			false,
+		);
+	});
+});
+
+describe("one kind's words never reach another", () => {
+	const flows = {
+		delivery: CAKE_FLOW,
+		booking: [
+			stage({
+				id: "b1",
+				anchor: "confirmed",
+				sortOrder: 0,
+				label: { en: "Booked" },
+			}),
+			stage({
+				id: "b2",
+				anchor: "shipped",
+				sortOrder: 1,
+				label: { en: "Arrived" },
+			}),
+			stage({
+				id: "b3",
+				anchor: "delivered",
+				sortOrder: 2,
+				label: { en: "Departed" },
+			}),
+		],
+	};
+
+	test("a delivery flow words delivery orders and nothing else", () => {
+		expect(
+			resolveStages({ orderFlows: flows, deliveryMethod: "delivery" }).map(
+				(s) => s.label.en,
+			),
+		).toEqual(["Order in", "Baking", "Collected"]);
+		// An RSVP has no flow of its own here → its own preset, not the cake one.
+		expect(
+			resolveStages({ orderFlows: flows, deliveryMethod: "event" }).map(
+				(s) => s.label.en,
+			),
+		).toEqual(["Confirmed", "Checked In"]);
+	});
+
+	test("a customised booking flow DOES word bookings", () => {
+		expect(
+			resolveStages({ orderFlows: flows, deliveryMethod: "booking" }).map(
+				(s) => s.label.en,
+			),
+		).toEqual(["Booked", "Arrived", "Departed"]);
+	});
+
+	test("one booking config covers stays and fixed-length packages alike", () => {
+		// On DEFAULTS the two differ — a membership is Active/Ended, not
+		// Checked in/out…
+		expect(
+			resolveStages({ deliveryMethod: "booking", bookingPackaged: true }).map(
+				(s) => s.label.en,
+			),
+		).toEqual(["Confirmed", "Active", "Ended"]);
+		// …but once the seller has written their own words, those words are the
+		// answer for both. One card, one answer (the settings copy says so).
+		expect(
+			resolveStages({
+				orderFlows: flows,
+				deliveryMethod: "booking",
+				bookingPackaged: true,
+			}).map((s) => s.label.en),
+		).toEqual(["Booked", "Arrived", "Departed"]);
+	});
+});
+
+describe("skippedAnchors seed the defaults — they do not forbid a step", () => {
+	test("a booking's DEFAULT pipeline still skips packed", () => {
+		expect(
+			resolveStages({ deliveryMethod: "booking" }).map((s) => s.anchor),
+		).toEqual(["confirmed", "shipped", "delivered"]);
+		expect(
+			hasAnchor(resolveStages({ deliveryMethod: "booking" }), "packed"),
+		).toBe(false);
+	});
+
+	test("a campsite that deliberately adds a 'Site prepared' step gets it", () => {
+		const prepared = resolveStages({
+			orderFlows: {
+				booking: [
+					stage({ id: "p1", anchor: "confirmed", sortOrder: 0 }),
+					stage({
+						id: "p2",
+						anchor: "packed",
+						sortOrder: 1,
+						label: { en: "Site prepared" },
+					}),
+					stage({ id: "p3", anchor: "delivered", sortOrder: 2 }),
+				],
+			},
+			deliveryMethod: "booking",
+		});
+		// The rule bulk actions ask is the RESOLVED list, so this booking is
+		// bulk-movable into "In production" even though the kind's preset skips
+		// that anchor.
+		expect(hasAnchor(prepared, "packed")).toBe(true);
+	});
+});
+
+describe("sameStages", () => {
+	test("true when two lists say the same thing to a buyer", () => {
+		expect(
+			sameStages(
+				CAKE_FLOW,
+				CAKE_FLOW.map((s) => ({ ...s })),
+			),
+		).toBe(true);
+		// sortOrder decides reading order, not array order.
+		expect(sameStages(CAKE_FLOW, [...CAKE_FLOW].reverse())).toBe(true);
+	});
+
+	test("false on a different word, a different anchor, or a different length", () => {
+		expect(
+			sameStages(CAKE_FLOW, [
+				...CAKE_FLOW.slice(0, 2),
+				{ ...CAKE_FLOW[2], label: { en: "Picked up" } },
+			]),
+		).toBe(false);
+		expect(sameStages(CAKE_FLOW, CAKE_FLOW.slice(0, 2))).toBe(false);
+	});
+});
+
+describe("synthesized defaults are filled in every locale", () => {
+	test("zh stage names come from the zh defaults, not the EN fallback", () => {
+		const s = synthesizeDefaultStages({ deliveryMethod: "booking" });
+		expect(s.map((x) => stageLabel(x, "zh"))).toEqual([
+			"已确认",
+			"已入住",
+			"已退房",
+		]);
 	});
 });
