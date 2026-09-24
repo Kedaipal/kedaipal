@@ -550,6 +550,33 @@ describe("post-lock recovery chain (z8r3fdg3mh)", () => {
 		expect(html).not.toContain("undefined");
 	});
 
+	it("the hold row leaves every OTHER billing email byte-identical", () => {
+		// `holdBlock` renders inside wrapBillingHtml, which all six templates
+		// share — an unconditional row would have added 12px of empty space to
+		// emails this change has no business touching.
+		for (const key of [
+			"invoiceIssued",
+			"invoiceReminder",
+			"invoiceOverdue",
+			"firstInvoiceOrder",
+			"firstInvoiceBackstop",
+		] as const) {
+			const { html } = renderBillingEmail("en", key, base);
+			expect(html).not.toMatch(/padding:12px 28px 0 28px/);
+		}
+		// …and the nudge, which is in the chain but carries no hold offer.
+		expect(
+			renderBillingEmail("en", "recoveryNudge", overdue).html,
+		).not.toMatch(/padding:12px 28px 0 28px/);
+		// Only the final notice, and only with a price, opens that row.
+		expect(
+			renderBillingEmail("en", "recoveryFinal", {
+				...overdue,
+				holdPriceFormatted: "MYR 19.00",
+			}).html,
+		).toMatch(/padding:12px 28px 0 28px/);
+	});
+
 	it("the recovery pair is tonally red, like the overdue notice it follows", () => {
 		const overdueHtml = renderBillingEmail("en", "invoiceOverdue", base).html;
 		for (const key of ["recoveryNudge", "recoveryFinal"] as const) {

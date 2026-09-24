@@ -215,6 +215,16 @@ export function BillingTab({
 	// due" framing below swaps for "your sponsored access ended — choose a plan".
 	const compEnded =
 		sub?.status === "past_due" && !sub.comped ? sub.compEnded : undefined;
+	// Will the lockout WhatsApp ACTUALLY reach this seller (z8r3fdg3mh)? All
+	// three have to hold: an approved template on this deployment, a saved
+	// alert number, and no global STOP on it — otherwise whatsapp.ts returns
+	// early or the gateway suppresses the send, and the past-due line below
+	// must not promise a message that will never arrive. Mirrors the reach
+	// predicate the order-alerts card already applies.
+	const billingWaWillReach =
+		retailer.billingWaAlertAvailable === true &&
+		(retailer.notifyWaPhone?.length ?? 0) > 0 &&
+		retailer.notifyWaPhoneOptedOut !== true;
 	const statusLine = (() => {
 		if (!sub) return "Active";
 		if (sub.status === "trialing") {
@@ -396,9 +406,12 @@ export function BillingTab({
 					{sub?.status === "past_due" && !sub?.comped && !compEnded ? (
 						<p className="text-xs text-muted-foreground">
 							Your storefront and existing orders stay live — only editing your
-							store is paused until this is settled. We'll follow up by email,
-							and once on WhatsApp at your alert number. Billing reminders can't
-							be switched off, but they stop the moment you pay.
+							store is paused until this is settled. We'll follow up by email
+							{billingWaWillReach
+								? ", and once on WhatsApp at your alert number"
+								: ""}
+							. Billing reminders can't be switched off, but they stop the
+							moment you pay.
 						</p>
 					) : null}
 					{freePeriod.kind === "free" ? (

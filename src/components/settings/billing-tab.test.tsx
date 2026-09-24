@@ -1899,13 +1899,66 @@ describe("BillingTab past-due follow-up line (z8r3fdg3mh)", () => {
 			},
 		} as unknown as Partial<Retailer>);
 
-	it("a locked seller is told the chain exists: email + one WhatsApp, not switch-off-able, stops on payment", () => {
+	it("a locked seller is told the chain exists, that it can't be switched off, and that paying ends it", () => {
+		// The WhatsApp half is conditional (see below) — these three are not.
 		mockQueries({ isAdmin: false });
 		render(<BillingTab retailer={pastDue()} />);
 		const line = screen.getByText(/We'll follow up by email/);
-		expect(line.textContent).toMatch(/once on WhatsApp/);
+		expect(line.textContent).toMatch(
+			/storefront and existing orders stay live/,
+		);
 		expect(line.textContent).toMatch(/can't\s+be switched off/);
 		expect(line.textContent).toMatch(/stop the moment you pay/);
+	});
+
+	it("promises the WhatsApp only when it can actually arrive", () => {
+		mockQueries({ isAdmin: false });
+		render(
+			<BillingTab
+				retailer={
+					{
+						...pastDue(),
+						billingWaAlertAvailable: true,
+						notifyWaPhone: "60123456789",
+					} as unknown as Retailer
+				}
+			/>,
+		);
+		expect(
+			screen.getByText(/once on WhatsApp at your alert number/),
+		).toBeTruthy();
+	});
+
+	it.each([
+		[
+			"no approved template on this deployment",
+			{ billingWaAlertAvailable: false, notifyWaPhone: "60123456789" },
+		],
+		[
+			"no alert number saved",
+			{ billingWaAlertAvailable: true, notifyWaPhone: undefined },
+		],
+		[
+			"the saved number holds a global STOP",
+			{
+				billingWaAlertAvailable: true,
+				notifyWaPhone: "60123456789",
+				notifyWaPhoneOptedOut: true,
+			},
+		],
+	])("drops the WhatsApp clause when %s", (_label, extra) => {
+		// Each of these makes the send return early or be suppressed. Promising
+		// a message that never comes is worse than saying nothing — and this is
+		// the only surface where the chain is disclosed at all.
+		mockQueries({ isAdmin: false });
+		render(
+			<BillingTab
+				retailer={{ ...pastDue(), ...extra } as unknown as Retailer}
+			/>,
+		);
+		expect(screen.queryByText(/once on WhatsApp/)).toBeNull();
+		// …the rest of the sentence still stands.
+		expect(screen.getByText(/We'll follow up by email/)).toBeTruthy();
 	});
 
 	it("a comp-ended seller never sees it — no invoice exists, so nothing will chase and nothing is payable", () => {

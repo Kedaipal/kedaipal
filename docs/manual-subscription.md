@@ -631,9 +631,13 @@ conversation). But three premises above changed when HitPay recurring landed:
 - **No cancellation flow.** The `cancelled` status exists but nothing reaches it; a churning
   vendor just stops paying and sits at `past_due` (auto-renewal itself is always cancellable —
   that kills the *charge*, not the subscription). A real "cancel my subscription" flow is
-  still an open follow-up. **Partly mitigated by z8r3fdg3mh:** they no longer sit there in
-  silence — the post-lock recovery chain below chases them twice and then stops. What is
-  still missing is a terminal state and a seller-initiated exit.
+  still an open follow-up — scoped as
+  [`z8r3fdet8t`](https://app.clickup.com/t/z8r3fdet8t) (self-serve cancellation, a 3-step
+  save flow that writes the `cancelled` literal nothing has ever written, and has the daily
+  cron flip due rows at `currentPeriodEnd`). **Partly mitigated by z8r3fdg3mh:** they no
+  longer sit there in silence — the post-lock recovery chain below chases them twice and
+  then stops. What is still missing is the terminal state and the seller-initiated exit,
+  both of which are that ticket.
 - ~~No self-serve plan picker~~ — **closed by 86eyb6z4r**: with the payment gateway
   configured, trial-ended / lapsed / cancelled vendors pick a plan + cycle in the billing tab
   (`invoices.subscribeSelf`) and pay the invoice online. Without gateway credentials the old
@@ -693,7 +697,13 @@ that earns a template is the one where the seller actually lost something.
 
 | Env var | Template (suggested name) | Body params (in order) | URL button |
 | --- | --- | --- | --- |
-| `WHATSAPP_BILLING_PAST_DUE_TEMPLATE` | `billing_past_due_utility` | store name, invoice number, amount (e.g. `MYR 79.00`) | `https://kedaipal.com/app/settings{{1}}` ← `?tab=billing` |
+| `WHATSAPP_BILLING_PAST_DUE_TEMPLATE` | `billing_past_due_utility` | store name, invoice number, amount (e.g. `MYR 79.00`) | `https://kedaipal.com/app/settings?tab={{1}}` ← the value `billing` |
+
+The variable is a plain **value** (`billing`), not a `?tab=billing` fragment
+glued to the base. Every other dynamic URL param in this codebase — tracking
+token, shortId, claim token — is an opaque path segment, so a suffix carrying
+`?` and `=` would be the first of its kind here; that is not a thing to find
+out from a Meta rejection.
 
 Unset ⇒ nothing is attempted and every email path is byte-identical, so this
 ships decoupled from Meta template review. Failures do **not** fall back to
@@ -705,6 +715,15 @@ It is **not** gated on `retailers.orderWaAlerts` — see
 [`order-notifications.md`](./order-notifications.md) for why. The seller is told
 this in the billing tab's past-due helper line, which states that billing
 reminders can't be switched off and stop the moment they pay.
+
+That line only **promises** the WhatsApp when it can actually arrive:
+`billingWaAlertAvailable` (an approved template on this deployment) **and** a
+saved `notifyWaPhone` **and** no global STOP on it. Miss any one and the send
+returns early or the gateway suppresses it, and the copy drops the clause
+rather than promising a message that never comes — the same reach test the
+order-alerts card applies. On merge day the template is unset, so every seller
+reads the email-only sentence; the clause turns itself on when Arif's template
+goes live, with no code change.
 
 ## Soft-lock (`past_due`)
 

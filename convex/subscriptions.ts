@@ -1352,6 +1352,24 @@ export const internalDailyBillingStatus = internalMutation({
 				// Locked moments ago by the loops above — that notice is enough
 				// for today; the ladder picks up from the next daily run.
 				if (lockedThisRun.has(inv._id)) continue;
+				const daysPastDue = Math.floor((now - inv.dueDate) / DAY_MS);
+				// Send only the HIGHEST stage that's due and stamp it, skipping any
+				// it passed. A cron outage that leaves an invoice at day 9 with no
+				// stage must produce one final notice, not a +3d today and a +7d
+				// tomorrow — the seller would read that as a system flailing.
+				const stage =
+					daysPastDue >= RECOVERY_FINAL_DAYS
+						? 2
+						: daysPastDue >= RECOVERY_NUDGE_DAYS
+							? 1
+							: 0;
+				// Decided BEFORE any lookup: an invoice with nothing left to send
+				// is the steady state of this loop forever. `cancelled` is never
+				// reached, so every seller who walked away is parked at stage 2 and
+				// re-scanned daily for the life of the deployment — reading two
+				// documents each time to reach the same `continue` would make the
+				// ladder's cost grow with lifetime churn rather than with work.
+				if (stage <= (inv.recoveryStage ?? 0)) continue;
 				// The chain speaks in the first person about a LOCKED dashboard, so
 				// it must only run where a lock actually happened. An overdue
 				// pending invoice is not sufficient on its own: the loops above
@@ -1372,26 +1390,13 @@ export const internalDailyBillingStatus = internalMutation({
 				// would contradict the product to its own operators.
 				const lockRetailer = await ctx.db.get(inv.retailerId);
 				if (!lockRetailer || storeOwnerIsAdmin(lockRetailer)) continue;
-				const daysPastDue = Math.floor((now - inv.dueDate) / DAY_MS);
-				// Send only the HIGHEST stage that's due and stamp it, skipping any
-				// it passed. A cron outage that leaves an invoice at day 9 with no
-				// stage must produce one final notice, not a +3d today and a +7d
-				// tomorrow — the seller would read that as a system flailing.
-				const stage =
-					daysPastDue >= RECOVERY_FINAL_DAYS
-						? 2
-						: daysPastDue >= RECOVERY_NUDGE_DAYS
-							? 1
-							: 0;
-				if (stage > (inv.recoveryStage ?? 0)) {
-					await ctx.db.patch(inv._id, { recoveryStage: stage });
-					await ctx.scheduler.runAfter(
-						0,
-						internal.billingEmail.notifyInvoiceRecovery,
-						{ invoiceId: inv._id, stage: stage as 1 | 2, daysPastDue },
-					);
-					recoveryNudges++;
-				}
+				await ctx.db.patch(inv._id, { recoveryStage: stage });
+				await ctx.scheduler.runAfter(
+					0,
+					internal.billingEmail.notifyInvoiceRecovery,
+					{ invoiceId: inv._id, stage: stage as 1 | 2, daysPastDue },
+				);
+				recoveryNudges++;
 				continue;
 			}
 			if (inv.reminderSentAt !== undefined) continue;

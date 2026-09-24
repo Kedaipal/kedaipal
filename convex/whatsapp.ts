@@ -2049,10 +2049,15 @@ export const notifyBillingPastDue = internalAction({
 				templateName,
 				languageCode: TEMPLATE_LANGUAGE[meta.locale],
 				bodyParams: [meta.storeName, meta.invoiceNumber, money],
-				// Approved button URL is https://kedaipal.com/app/settings{{1}} —
-				// Meta appends ONLY this suffix. The seller is authenticated, so no
-				// capability token is involved.
-				urlButtonParam: "?tab=billing",
+				// Approved button URL is
+				// https://kedaipal.com/app/settings?tab={{1}} — the variable is a
+				// plain VALUE, not a "?tab=billing" fragment. Every other dynamic
+				// URL param in this codebase (trackingToken, shortId, claim token)
+				// is an opaque path segment, and a suffix carrying `?` and `=` is
+				// unlike anything Meta has approved for us — not worth discovering
+				// at review time. The seller is authenticated, so no capability
+				// token is involved.
+				urlButtonParam: "billing",
 			});
 			if (receipt?.blocked) {
 				// Gateway refused (opt-out / cap / quality pause). It logged the

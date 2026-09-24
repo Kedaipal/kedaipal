@@ -335,6 +335,9 @@ function wrapBillingHtml(
 	const L = t[locale];
 	const tone = invoiceStatusTone(key);
 	const safeUrl = escapeHtml(v.billingUrl);
+	// Empty for every key but `recoveryFinal` — and when empty its whole row is
+	// omitted, so the six pre-existing billing emails keep their exact spacing.
+	const hold = holdBlock(locale, v);
 	return `<!doctype html><html><body style="margin:0;padding:0;background:#f6f8fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f6f8fb;padding:28px 14px;">
 <tr><td align="center">
@@ -364,9 +367,7 @@ ${discountHtml(locale, v)}
 <tr><td style="padding:20px 28px 0 28px;">
 ${paymentPanel(locale, v)}
 </td></tr>
-<tr><td style="padding:12px 28px 0 28px;">
-${holdBlock(locale, v)}
-</td></tr>
+${hold ? `<tr><td style="padding:12px 28px 0 28px;">${hold}</td></tr>` : ""}
 <tr><td style="padding:24px 28px 30px 28px;">
 <a href="${safeUrl}" style="display:inline-block;background:#0f172a;color:#ffffff;text-decoration:none;font-size:15px;font-weight:800;padding:13px 18px;border-radius:12px;">${escapeHtml(ctaLabel)}</a>
 </td></tr>

@@ -132,10 +132,13 @@ export function paymentReminderTemplateName(): string | undefined {
  * from Meta template review.
  *
  * Body params are {{1}} store name, {{2}} invoice number, {{3}} amount (e.g.
- * "MYR 79.00"); the button URL base is `https://kedaipal.com/app/settings{{1}}`
- * ← the `?tab=billing` suffix (the seller is authenticated, so no capability
- * token is involved). Added via Meta's **Add variable** control, never
- * hand-typed braces.
+ * "MYR 79.00"); the button URL base is
+ * `https://kedaipal.com/app/settings?tab={{1}}` ← the value `billing` (the
+ * seller is authenticated, so no capability token is involved). The variable
+ * is a plain value rather than a `?tab=billing` fragment: every other dynamic
+ * URL param here is an opaque path segment, and a suffix carrying `?` and `=`
+ * is not a shape Meta has approved for us before. Added via Meta's **Add
+ * variable** control, never hand-typed braces.
  */
 export function billingPastDueTemplateName(): string | undefined {
 	const name = process.env.WHATSAPP_BILLING_PAST_DUE_TEMPLATE;
