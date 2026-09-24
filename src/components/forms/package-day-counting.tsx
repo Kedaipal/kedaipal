@@ -124,7 +124,7 @@ export function PackageDayCounting({
 						Your store is open every day with no closed dates, so both read the
 						same today.{" "}
 						{skipsClosedDays
-							? "Days you close later will be skipped automatically — "
+							? "Days you close later will be skipped automatically. "
 							: ""}
 						Set your days off in{" "}
 						<Link

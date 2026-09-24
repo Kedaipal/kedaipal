@@ -1577,6 +1577,28 @@ It moved to `src/lib/booking-dates.ts` (pure, tested) and now reads the frozen
 shape, plus open days and skips. `packageNights` became dead once `canCheckIn`
 went through `packageTerm`, so it was removed.
 
+The visual pass (rendering every surface, headless Chrome and a throwaway
+harness for the Clerk-gated ones) found four more:
+
+- **The shared `ui/calendar.tsx` range band never painted.** It lived in
+  `[&.rdp-range_middle]:bg-accent/12`. Tailwind reads `_` in an arbitrary
+  variant as a space, so it compiled to `&.rdp-range middle` and matched
+  nothing. `modifiersClassNames` also replaced the `rdp-range_start/end`
+  classes the rounded ends hooked onto. The Insights custom range had the same
+  flat look. The band now sits on the modifier classes, pinned by
+  `calendar.test.tsx`.
+- **A package's band ended on the exclusive check-out** (a 2–9 Oct package
+  lit up 10 Oct), contradicting the S7 "validity window" rule the receipt
+  already kept. The calendar now paints to the last usable day.
+- The header status wraps once it names a closure, and a `<button>` centres
+  its text: it's now left-aligned with the icon on the first line. The
+  schedule dialog's today row said "open 7:30 AM" above a list saying the
+  store was shut, so it now reads "Closed today".
+- Neighbouring-month days in the booking grid weren't hatched, and the note
+  under the grid clipped a 30 Sep – 1 Oct closure to "30 Sep". Both fixed. On
+  a phone, a closed seller cell WITH bookings had lost its closed mark (the
+  count pill is desktop-only), so the icon shows there now.
+
 ### Tests
 
 `convex/lib/closedDates.test.ts`, `convex/lib/bookingAvailability.test.ts`

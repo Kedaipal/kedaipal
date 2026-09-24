@@ -150,6 +150,19 @@ export function BookingDayCell({
 					<Ban className="size-3 text-muted-foreground" aria-hidden />
 				) : closed && booked === 0 ? (
 					<CalendarOff className="size-3 text-muted-foreground" aria-hidden />
+				) : closed ? (
+					// Closed WITH bookings: the phone has no room for the count pill,
+					// so it keeps the closed mark; the desktop shows the count, and
+					// the "Closed" chip below says the rest.
+					<>
+						<CalendarOff
+							className="size-3 text-muted-foreground lg:hidden"
+							aria-hidden
+						/>
+						<span className="hidden rounded-full bg-accent/10 px-1.5 text-[10px] font-bold leading-tight tabular-nums text-accent-emphasis lg:inline">
+							{capacity !== undefined ? `${booked}/${capacity}` : booked}
+						</span>
+					</>
 				) : booked > 0 ? (
 					<span
 						className={cn(

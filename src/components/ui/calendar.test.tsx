@@ -38,4 +38,30 @@ describe("Calendar", () => {
 		const buttons = container.querySelectorAll(".rdp-nav button");
 		expect(buttons.length).toBe(2);
 	});
+
+	/**
+	 * The range band (z8r3fdhpm7). It used to live in arbitrary variants like
+	 * `[&.rdp-range_middle]:bg-accent/12`, which Tailwind compiles with the
+	 * underscore turned into a SPACE — `&.rdp-range middle` — so the band never
+	 * painted, and a `modifiersClassNames` entry replaced the `rdp-range_start`
+	 * class the rounded ends hooked onto. Found rendering the closed-dates
+	 * sheet. jsdom has no Tailwind, so this pins what the fix relies on: the
+	 * band classes sit directly on the modifier, and no variant keyed on a
+	 * `rdp-range_*` class name remains to silently compile to nothing.
+	 */
+	it("paints the range band through modifier classes, never an underscore variant", () => {
+		const from = new Date(2026, 9, 1);
+		const to = new Date(2026, 9, 3);
+		const { container } = render(
+			<Calendar mode="range" selected={{ from, to }} defaultMonth={from} />,
+		);
+		const cell = (day: string) =>
+			[...container.querySelectorAll("[role=gridcell]")].find(
+				(c) => c.textContent?.trim() === day,
+			) as HTMLElement;
+		expect(cell("1").className).toContain("rounded-l-full");
+		expect(cell("2").className).toContain("bg-accent/12");
+		expect(cell("3").className).toContain("rounded-r-full");
+		expect(container.innerHTML).not.toMatch(/\[&\.rdp-range_/);
+	});
 });

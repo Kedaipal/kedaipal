@@ -143,11 +143,14 @@ export function OpeningHoursLine({
 			<DialogTrigger asChild>
 				<button
 					type="button"
-					className={`mt-0.5 flex items-center gap-1.5 self-start text-sm underline-offset-2 hover:underline ${
+					// `text-left` + `items-start`: a closure's status can wrap to two
+					// lines on a phone, and a <button> centres its text by default —
+					// the icon then floated beside the middle of a centred block.
+					className={`mt-0.5 flex items-start gap-1.5 self-start text-left text-sm underline-offset-2 hover:underline ${
 						onCover ? "text-white/90 drop-shadow" : "text-muted-foreground"
 					}`}
 				>
-					<Clock className="size-3.5 shrink-0" aria-hidden="true" />
+					<Clock className="mt-[3px] size-3.5 shrink-0" aria-hidden="true" />
 					<span suppressHydrationWarning className="flex flex-col">
 						{text ? <span>{text}</span> : null}
 						{/* A closure ahead is the one thing a buyer choosing a
@@ -175,6 +178,11 @@ export function OpeningHoursLine({
 						{[1, 2, 3, 4, 5, 6, 0].map((i) => {
 							const day = hours[i];
 							const isToday = i === todayIndex;
+							// Today's weekly hours don't apply when a closed date
+							// covers today — the row must not read "open" above a
+							// list that says the store is shut (z8r3fdhpm7).
+							const closedToday =
+								isToday && !status.open && status.closure !== undefined;
 							return (
 								<li
 									key={WEEKDAY_NAMES[i]}
@@ -192,9 +200,11 @@ export function OpeningHoursLine({
 								    settings summary, so both sides read the week alike
 								    (z8r3fdff8r). */}
 									<span
-										className={`text-right ${day?.closed ? "text-muted-foreground" : ""}`}
+										className={`text-right ${day?.closed || closedToday ? "text-muted-foreground" : ""}`}
 									>
-										{!day || day.closed ? (
+										{closedToday ? (
+											"Closed today"
+										) : !day || day.closed ? (
 											"Closed"
 										) : (
 											<DayWindowsStacked day={day} />

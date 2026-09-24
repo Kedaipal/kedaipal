@@ -328,6 +328,9 @@ function AddClosedDatesForm({
 			<div className="flex justify-center">
 				<Calendar
 					mode="range"
+					// Monday first — the seller's booking calendar and the opening
+					// hours list read the week the same way.
+					weekStartsOn={1}
 					selected={picked}
 					onSelect={setPicked}
 					defaultMonth={picked?.from ?? calendarDateFromMytEpoch(today)}

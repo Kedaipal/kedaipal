@@ -246,6 +246,27 @@ describe("BookingCheckoutForm — store closed dates (z8r3fdhpm7)", () => {
 		).toBeTruthy();
 	});
 
+	it("a closure running into next month is named whole, never clipped to the month on screen", () => {
+		state.availability = {
+			...AVAILABILITY,
+			unavailable: [SEP(30), Date.UTC(2026, 9, 1) - 8 * 3_600_000],
+			closures: [
+				{
+					startDate: SEP(30),
+					endDate: Date.UTC(2026, 9, 1) - 8 * 3_600_000,
+					label: "Hari Raya",
+				},
+			],
+			closureRule: "unavailable",
+		};
+		renderForm();
+		expect(
+			screen.getByText(
+				"Lembah Riverside is closed Wed, 30 Sep – Thu, 1 Oct 2026 (Hari Raya) — no stays those nights.",
+			),
+		).toBeTruthy();
+	});
+
 	it("no closure, no clutter", () => {
 		renderForm();
 		expect(screen.queryByText("Store closed")).toBeNull();
@@ -281,6 +302,12 @@ describe("BookingCheckoutForm — open-days package (z8r3fdhpm7)", () => {
 		expect(
 			screen.getAllByText("Skips Sun 13 Sep, Tue 15 Sep (store closed)").length,
 		).toBeGreaterThan(0);
+		// The band ends on the LAST USABLE day (Thu 17), never on the exclusive
+		// check-out (Fri 18) — a package is a validity window.
+		const cell = (d: string) =>
+			screen.getAllByRole("gridcell").find((c) => c.textContent === d);
+		expect(cell("17")?.className).toContain("!no-underline");
+		expect(cell("18")?.className ?? "").not.toContain("!no-underline");
 	});
 
 	it("a shut day can't start the package", () => {

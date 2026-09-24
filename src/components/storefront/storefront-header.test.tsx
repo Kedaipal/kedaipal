@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { DAY_MS, todayMytMidnight } from "../../../convex/lib/fulfilmentDate";
 import { StorefrontHeader } from "./storefront-header";
@@ -120,5 +126,34 @@ describe("StorefrontHeader — closed dates (z8r3fdhpm7)", () => {
 			/>,
 		);
 		expect(screen.queryByText(/Closed/)).toBeNull();
+	});
+
+	it("the schedule dialog never shows today's weekly hours as open on a closed date", () => {
+		const allDayWeek = Array.from({ length: 7 }, () => ({
+			open: 0,
+			close: 1439,
+		}));
+		render(
+			<StorefrontHeader
+				retailer={{
+					...retailer,
+					openingHours: allDayWeek,
+					closedDates: [
+						{ startDate: today, endDate: today, label: "Hari Raya" },
+					],
+				}}
+			/>,
+		);
+		const trigger = screen.getByRole("button", { name: /Closed today/ });
+		// A wrapped status stays left-aligned beside its icon (a <button>
+		// centres by default).
+		expect(trigger.className).toContain("text-left");
+		fireEvent.click(trigger);
+		const dialog = screen.getByRole("dialog");
+		const todayRow = within(dialog)
+			.getByText(/· Today/)
+			.closest("li");
+		expect(todayRow?.textContent).toContain("Closed today");
+		expect(within(dialog).getByText("Closed dates")).toBeTruthy();
 	});
 });

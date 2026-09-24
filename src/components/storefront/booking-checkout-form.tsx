@@ -174,8 +174,10 @@ export function BookingCheckoutForm({
 	// Closed dates always; the weekly day off too for an open-days package,
 	// because there it's a day the term steps over.
 	const closedDaySet = useMemo(() => {
-		const from = month;
-		const to = addMytMonths(month, 1);
+		// The grid also paints the neighbouring months' days in its first and
+		// last rows — a closed 1 Oct under September must be hatched too.
+		const from = month - 7 * DAY_MS;
+		const to = addMytMonths(month, 1) + 14 * DAY_MS;
 		if (!ctx?.isClosed) {
 			return new Set(closedDaysBetween(availability?.closures, from, to));
 		}
@@ -250,9 +252,21 @@ export function BookingCheckoutForm({
 			: null;
 	const checkOut = isPackage ? term?.checkOut : selection.checkOut;
 	const skippedDays = term?.skipped ?? [];
+	// What the calendar paints. A package is a validity WINDOW, so its band
+	// ends on the LAST USABLE day — the exclusive check-out painted as the end
+	// promised a day the buyer doesn't have ("Valid 2 – 9 Oct" beside a band
+	// to 10 Oct), the S7 rule the receipt already keeps. A stay keeps its
+	// check-out morning: that IS the day the guest taps and leaves.
 	const effectiveSelection: BookingSelection =
 		isPackage && selection.checkIn !== undefined
-			? { checkIn: selection.checkIn, checkOut }
+			? {
+					checkIn: selection.checkIn,
+					// No term (an open-days start the skips can't carry): mark the
+					// start alone — never a half-selection the calendar would read
+					// as "now pick a check-out".
+					checkOut:
+						checkOut !== undefined ? checkOut - DAY_MS : selection.checkIn,
+				}
 			: selection;
 	// Raising the count can legitimately close a start that a single package
 	// could use — three months needs three months of free nights. Say so rather
@@ -286,10 +300,11 @@ export function BookingCheckoutForm({
 	// Store closed dates (z8r3fdhpm7): the ones on the month in view (marked
 	// and named under the grid), and — for a package that absorbs them — the
 	// ones inside the buyer's term.
-	const monthClosures = closuresWithin(
-		availability.closures,
-		month,
-		addMytMonths(month, 1),
+	// Whole ranges, never clipped to the month: a closure running 30 Sep –
+	// 1 Oct clipped to "Wed, 30 Sep" would tell the buyer 1 Oct is fine.
+	const nextMonth = addMytMonths(month, 1);
+	const monthClosures = (availability.closures ?? []).filter(
+		(range) => range.startDate < nextMonth && range.endDate >= month,
 	);
 	const termClosures =
 		isPackage &&
@@ -417,7 +432,9 @@ export function BookingCheckoutForm({
 									: `${formatFulfilmentDate(selection.checkIn)} → ${formatFulfilmentDate(checkOut)}`}
 							</span>
 							<span className="flex-1 border-b-2 border-dotted border-border" />
-							<span className="font-medium">
+							{/* The count never wraps: "5 open / days" split across two
+							    lines reads as two figures beside a wrapped date. */}
+							<span className="shrink-0 whitespace-nowrap font-medium">
 								{isPackage
 									? skippedDays.length > 0
 										? `${nights - skippedDays.length} ${ms ? "hari buka" : "open days"}`
