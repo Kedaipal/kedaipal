@@ -594,6 +594,33 @@ copy is true by construction.
 > backfill "Ok go" lives on as a stage; **"Incoming" is gone** and the buyer
 > page reads "Order Received".
 >
+> **What the backfill KEEPS vs drops** — it is a migration, not a reset:
+>
+> | Status | After the backfill |
+> | --- | --- |
+> | `confirmed` `packed` `shipped` `delivered` | **Kept verbatim**, as stages on delivery + pickup |
+> | `pending` `cancelled` | **Back to the default wording** — no structural home |
+>
+> Verified on dev `herb`: it had renamed `confirmed → "Ok go"` and
+> `pending → "Incoming"`. After the backfill its delivery flow reads
+> `confirmed → "Ok go"`, `packed → "Packed"`, `shipped → "On the Way"`,
+> `delivered → "Delivered"`. Only "Incoming" was lost.
+>
+> **Release-note copy, ready to lift** (kind: `Enhancement`) when the release
+> PR is prepped — do NOT write it into `releases.ts` before then, the version
+> test pins notes to the shipped version:
+>
+> > *Order steps are now set per kind of order — delivery, pickup, bookings and
+> > events each get their own, so a booking never shows delivery wording again.
+> > Any step names you had already set carry over to your delivery and pickup
+> > orders. If you had renamed "Order Received" or "Cancelled", just those two
+> > go back to their standard wording.*
+>
+> **A release note alone is not enough for an affected store.** The What's-new
+> modal only reaches sellers stamped by the PREVIOUS release, so a store that
+> renamed those two may never see it. If the prod count below is small (likely
+> a handful), tell those sellers directly instead of relying on the modal.
+>
 > **Run the prod `statusLabels` count (the read-only query in the ticket)
 > before the backfill** and check whether any store renamed `pending` or
 > `cancelled`. If none did, this is a non-event. If some did, it belongs in the
