@@ -74,6 +74,9 @@ export const ENDING_SOON_DAYS = 7;
 export type PeriodOrder = {
 	bookingCheckIn?: number;
 	bookingCheckOut?: number;
+	/** The shut days an open-days package steps over (z8r3fdhpm7) — the
+	 * "days left" line counts only the days the member can still come. */
+	bookingSkippedDays?: readonly number[];
 	status: string;
 };
 
@@ -165,6 +168,19 @@ export function describeBookingPeriod(
 	// Active. A package's last usable day is the night before check-out; a
 	// stay's check-out morning is a day the guest is still there.
 	const lastDay = order.bookingPackaged === true ? checkOut - DAY_MS : checkOut;
+	const skipped = order.bookingSkippedDays ?? [];
+	if (skipped.length > 0) {
+		// An open-days package (z8r3fdhpm7): what's left is the days the member
+		// can still COME. Counting the calendar span said "6 days left" to a
+		// member with three classes to go.
+		const shut = new Set(skipped);
+		let open = 0;
+		for (let day = today + DAY_MS; day <= lastDay; day += DAY_MS) {
+			if (!shut.has(day)) open += 1;
+		}
+		if (open === 0) return "Active · ends today";
+		return `Active · ${open} open day${open === 1 ? "" : "s"} left`;
+	}
 	const left = daysFromToday(lastDay, now);
 	if (left <= 0) return "Active · ends today";
 	return left === 1 ? "Active · ends tomorrow" : `Active · ${left} days left`;

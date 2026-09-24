@@ -103,6 +103,10 @@ describe("MASK_PII sweep coverage (86eyn25g9)", () => {
 		["src/components/order/book-delivery-card.tsx", 2],
 		["src/components/settings/fulfilment-tab.tsx", 1],
 		["src/components/storefront/checkout-form.tsx", 1],
+		// The booking checkout echoes the buyer's number back ("We'll WhatsApp
+		// the decision to +60 12-345 6789") on /$slug/checkout, where Clarity
+		// boots — it shipped unmasked until z8r3fdh274 rewrote that line.
+		["src/components/storefront/booking-checkout-form.tsx", 1],
 		// Claim links (86eyq0epn). The BUYER-facing two shipped unmasked (PR #227
 		// review): with Clarity booting on /claim, Balanced mode records every
 		// rendered string verbatim, so the buyer's name and phone landed in

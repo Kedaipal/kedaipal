@@ -78,8 +78,8 @@ Public mutation (no auth — the storefront is anonymous). Steps, in order ([`co
 
 1. **Rate limit first** — two limiters, both keyed by `retailerId`, throttling before any DB reads: `orderCreate` (burst 60, 120/min — sized for a live drop) and `orderCreateDaily` (500/day — bounds the confirmation-push spend an attacker can drive, since that template send bypasses WABA gating as `transactional`). See [`validation-and-rate-limits.md`](./validation-and-rate-limits.md).
 2. **Delivery-method invariant** — `delivery` requires `deliveryAddress`; `self_collect` forbids it. Default method is `delivery`.
-3. **Address validation** — `assertValidAddress` (Malaysia-only) sanitizes and trims.
-4. **Phone validation** — `assertValidMyMobile` if a phone was provided (MY-aware: a local `012-345 6789` normalizes to the `60…` form Meta delivers inbound, so the customer record can't fork). The storefront form **requires** the phone (86eyf1rck — the confirmation push needs a reachable number, gated client-side by the mirrored `myWaPhoneCheckoutSchema`; both require a MY **mobile** shape, since a landline can never receive WhatsApp); the arg stays optional at the protocol level so legacy callers/tests ride the old flow.
+3. **Address validation** — `assertValidAddress(addr, country)` sanitizes and trims, keyed by the store's country (MY states + 5-digit postcode, or the SG 6-digit postal code — see [`sg-lite.md`](./sg-lite.md#address-sg-variant--86eynw29u)).
+4. **Phone validation** — `assertValidBuyerWaPhone` if a phone was provided, judged by the country the buyer **picked** on the field's plate (`customer.waDialCountry`, never stored; absent = the store's country — [`z8r3fdh274`](https://app.clickup.com/t/z8r3fdh274)). Any country is accepted: an MY/SG pick takes the strict mobile arm byte for byte (a local `012-345 6789` → `60123456789`; landlines refused, since a landline can never receive WhatsApp), any other pick goes through the generated dial table (a UK `07911 123456` → `447911123456`). Either way the stored digits are the E.164 form Meta delivers inbound, so the customer record can't fork. The storefront form **requires** the phone (86eyf1rck — the confirmation push needs a reachable number), gated client-side by `checkoutFormSchemaFor` running the same `parseBuyerWaPhone`; the arg stays optional at the protocol level so legacy callers/tests ride the old flow. Rules: [`phone-numbers.md`](./phone-numbers.md).
 5. **Item validation** — 1–100 items. Each item names a **variant** by `variantId` (preferred) or a single-variant product's `productId` (resolved to its sole variant; ambiguous for multi-variant products → rejected). The variant + its parent product must belong to the retailer, both be `active`, and match the order currency. **Stock is enforced only when the variant hard-blocks** — `variant.blockWhenOutOfStock ?? product.blockWhenOutOfStock` resolves true. Made-to-order variants (frozen pack-to-order, metal prints, a "Custom" size) never block, even when a sibling variant in the same listing does. Quantities for the same variant across multiple line items are summed before the (conditional) `onHand` check. Each line snapshots `{productId, variantId, name, variantLabel, price, quantity}`.
 6. **Compute totals** — `computeOrderTotals` (currently `total === subtotal`).
 7. **Reserve stock** — for **hard-block variants only** (resolved per-variant), patch each variant's `onHand` down within the same transaction (atomic; rolls back on any failure). Variants are re-fetched fresh to avoid stale values. Made-to-order variants are never decremented.
@@ -98,12 +98,16 @@ WhatsApp thread hits a "Continue to chat" interstitial when it tries to bounce
 back via `wa.me` — buyers bail and the order strands as `pending` with no
 phone. So the storefront no longer depends on the buyer's send at all:
 
-- **Checkout requires a MY WhatsApp mobile number** ("Who's ordering?" card,
-  echoed back formatted for typo-spotting, PDPA notice line beneath, EN/BM by
-  store locale). Client gate `myWaPhoneCheckoutSchema` (`src/lib/schemas.ts`),
-  server re-validates with `assertValidMyMobile` — the stricter sibling of
-  `assertValidMyWaPhone` that also demands a MY **mobile** prefix, because a
-  landline satisfies the 8–15-digit rule but can never receive WhatsApp.
+- **Checkout requires a WhatsApp number — from any country** ("Who's
+  ordering?" card, echoed back formatted for typo-spotting, PDPA notice line
+  beneath, EN/BM by store locale). The field's plate carries a country picker
+  defaulting to the store's country (`BuyerPhonePrefix`, z8r3fdh274). Client
+  gate `checkoutFormSchemaFor` (`src/lib/schemas.ts`), server re-validates with
+  `assertValidBuyerWaPhone` (`convex/lib/buyerPhone.ts`) — one parser, both
+  sides, judged by the picked country. An MY/SG pick demands that country's
+  **mobile** shape, because a landline satisfies a bare digit count but can
+  never receive WhatsApp; other countries are checked against their mobile
+  lengths. See [`phone-numbers.md`](./phone-numbers.md).
 - **Every storefront order takes this path, and every one of them pushes at
   `orders.create`** — including custom/made-to-order and fee-pending orders.
   There is no deferral and no timing question (86eyd63r8, superseding
@@ -205,7 +209,7 @@ unit-tested, and splits three ways:
 | Cause | Behaviour |
 | --- | --- |
 | No response / 5xx / 408 / 429 / throttle codes (130429, 131048, 131056, 80007) | Retry, then give up as `system` |
-| Unreachable recipient (131026, 131030, 131047, 131051) | Terminal immediately, `unreachable` |
+| Unreachable recipient (131026, 131030, 131047, 131051), or a country the shared number may not message (130497) | Terminal immediately, `unreachable` |
 | Template problems (132000/132001/132005/132007/132012/132015/132016/…) | Terminal immediately, `system` |
 | Any other 4xx | Terminal, `system` |
 
@@ -225,6 +229,22 @@ aggregates off the wrong record onto the right one):
    there's no reason to rewrite a healthy order's number, and the narrow window
    means a leaked token can't quietly redirect a seller's order messages.
    Rate-limited (`buyerPhoneUpdate`) because every accepted save costs a send.
+   The field (`src/components/storefront/buyer-phone-repair-form.tsx`, mounted
+   by the track page's `PushFailedCard` only while the buyer edits) wears the
+   same country picker as the checkout field it repairs, and the mutation takes
+   the same optional `waDialCountry` (absent = the store's country), so the
+   corrected number can be from **any country** (z8r3fdh274). The picker opens
+   on the country of the number that failed, else the store's; the number is
+   checked with `parseBuyerWaPhone` before the server call, and the rejection
+   shows under the field (the shared `buyerPhoneRejection` rule,
+   `src/lib/buyer-phone-rejection.ts`) — only server-side refusals are toasts.
+   **Save is disabled while the number can't be sent**, with a line saying what
+   is missing, the same rule the counter's bind uses; Enter asks to send, so it
+   earns the precise reason rather than being swallowed by the disabled button.
+   This repair is also the backstop for what length-only validation can't
+   catch: a foreign landline accepted at checkout, or a country the shared
+   number can't message (130497 — the card says so: "…or be in a country we
+   can't message on WhatsApp yet").
 2. **Inbound ORD message** — `confirmOrderFromWhatsApp` treats an ORD ref sent
    to the shared number, for an order whose push *failed*, as proof of
    ownership and adopts the sender's number. Deliberately narrow: a healthy

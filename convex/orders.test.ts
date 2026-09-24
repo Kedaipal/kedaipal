@@ -5,6 +5,7 @@ import { convexTest } from "convex-test";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { UNKNOWN_DIAL_COUNTRY_MESSAGE } from "./lib/buyerPhone";
 import { todayMytMidnight } from "./lib/fulfilmentDate";
 import { rateLimiter } from "./lib/rateLimiter";
 import { sortInboxOrders } from "./lib/orderInboxFilter";
@@ -814,6 +815,9 @@ describe("orders", () => {
 	});
 
 	test("rejects when customer waPhone is invalid", async () => {
+		// Letters carry no number at all, so the buyer is asked for one
+		// (z8r3fdh274); digits of the wrong shape get the country's mobile copy
+		// (the confirmation-push suite pins that).
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const productId = await seedProduct(t, USER_A, retailer._id);
@@ -6576,9 +6580,11 @@ describe("orders — confirmation push at create (86eyf1rck)", () => {
 	});
 
 	test("junk phone is rejected, and never told to add a country code", async () => {
-		// The field wears a fixed `+60` plate, so "8–15 digits, with country code"
-		// (the loose normalizer's own message) would contradict the badge the
-		// buyer is looking at. `assertValidMyMobile` owns one message (86eyknr2r).
+		// The field's plate carries the country code (a picker defaulting to the
+		// store's +60, z8r3fdh274), so "8–15 digits, with country code" (the
+		// loose normalizer's own message) would contradict what the buyer is
+		// looking at. Wrong-shape digits — and a value with no digits at all —
+		// get the picked country's mobile copy.
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const productId = await seedProduct(t, USER_A, retailer._id);
@@ -8837,47 +8843,48 @@ describe("SG addresses (SG-lite, 86eynw29u)", () => {
 	});
 });
 
+/** An SG store (born SGD) + one SGD product — orders.create hard-throws on
+ * an order-vs-product currency mismatch, so the whole chain must be SGD. */
+async function seedSgStore(t: ReturnType<typeof setup>) {
+	const asUser = t.withIdentity({ subject: USER_A });
+	await asUser.mutation(api.retailers.createRetailer, {
+		storeName: "SG Store",
+		slug: "sg-store-phones",
+		country: "SG",
+	});
+	const retailer = await asUser.query(api.retailers.getMyRetailer);
+	if (!retailer) throw new Error("seed failed");
+	const productId = await seedProduct(t, USER_A, retailer._id, {
+		currency: "SGD",
+	});
+	return { retailer, productId };
+}
+
+function sgOrderArgs(
+	retailerId: Id<"retailers">,
+	productId: Id<"products">,
+	waPhone: string,
+	waDialCountry?: string,
+) {
+	return {
+		retailerId,
+		items: [{ productId, quantity: 1 }],
+		currency: "SGD",
+		channel: "whatsapp" as const,
+		customer: { name: "Wei Ling", waPhone, waDialCountry },
+		// SG-shaped — the address arm (86eynw29u) judges by the STORE's country,
+		// so an MY `validAddress` would fail first and mask the phone assertion
+		// under test.
+		deliveryAddress: {
+			line1: "12 Bedok North Ave 3",
+			city: "Singapore",
+			state: "Singapore",
+			postcode: "238859",
+		},
+	};
+}
+
 describe("orders — SG store phone arms (SG-lite, 86eynw28q)", () => {
-	/** An SG store (born SGD) + one SGD product — orders.create hard-throws on
-	 * an order-vs-product currency mismatch, so the whole chain must be SGD. */
-	async function seedSgStore(t: ReturnType<typeof setup>) {
-		const asUser = t.withIdentity({ subject: USER_A });
-		await asUser.mutation(api.retailers.createRetailer, {
-			storeName: "SG Store",
-			slug: "sg-store-phones",
-			country: "SG",
-		});
-		const retailer = await asUser.query(api.retailers.getMyRetailer);
-		if (!retailer) throw new Error("seed failed");
-		const productId = await seedProduct(t, USER_A, retailer._id, {
-			currency: "SGD",
-		});
-		return { retailer, productId };
-	}
-
-	function sgOrderArgs(
-		retailerId: Id<"retailers">,
-		productId: Id<"products">,
-		waPhone: string,
-	) {
-		return {
-			retailerId,
-			items: [{ productId, quantity: 1 }],
-			currency: "SGD",
-			channel: "whatsapp" as const,
-			customer: { name: "Wei Ling", waPhone },
-			// SG-shaped — the address arm (86eynw29u) judges by the SAME retailer
-			// country as the phone arm, so an MY `validAddress` would fail first
-			// and mask the phone assertion under test.
-			deliveryAddress: {
-				line1: "12 Bedok North Ave 3",
-				city: "Singapore",
-				state: "Singapore",
-				postcode: "238859",
-			},
-		};
-	}
-
 	test("accepts a +65 buyer and stores the inbound (65…) form", async () => {
 		const t = setup();
 		const { retailer, productId } = await seedSgStore(t);
@@ -8910,7 +8917,11 @@ describe("orders — SG store phone arms (SG-lite, 86eynw28q)", () => {
 		expect(order?.customer.waPhone).toBe("6581234567");
 	});
 
-	test("rejects an MY buyer number with the SG message — no cross-accept", async () => {
+	test("bare MY digits on the SG default are still refused — the copy points at the picker", async () => {
+		// No cross-accept by sniffing: with no dial country sent, bare digits
+		// are judged by the store's +65 (z8r3fdh274). What changed is the copy —
+		// "this store takes Singapore numbers" stopped being true of a buyer, so
+		// it names the fix instead (the one-tap switch on the client).
 		const t = setup();
 		const { retailer, productId } = await seedSgStore(t);
 		await expect(
@@ -8918,10 +8929,35 @@ describe("orders — SG store phone arms (SG-lite, 86eynw28q)", () => {
 				api.orders.create,
 				sgOrderArgs(retailer._id, productId, "012-345 6789"),
 			),
-		).rejects.toThrow(/Singapore mobile/i);
+		).rejects.toThrow(/Malaysian mobile number — switch the country to \+60/);
 	});
 
-	test("an MY store keeps rejecting +65 buyers exactly as before", async () => {
+	test("an explicit +65 typed at an MY store is honoured — typed, not sniffed", async () => {
+		// Before z8r3fdh274 this was refused with the Malaysian copy. The buyer
+		// TYPED the country code, which is what the picker's auto-switch reads
+		// too, so the server honours it even from a client that sends no dial
+		// country — the bare-digits test below is the one that must stay red.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "+65 9123 4567" },
+			deliveryAddress: validAddress,
+		});
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		expect(order?.customer.waPhone).toBe("6591234567");
+	});
+
+	test("bare SG digits at an MY store with no dial country are refused, never sniffed", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const productId = await seedProduct(t, USER_A, retailer._id);
@@ -8931,10 +8967,10 @@ describe("orders — SG store phone arms (SG-lite, 86eynw28q)", () => {
 				items: [{ productId, quantity: 1 }],
 				currency: "MYR",
 				channel: "whatsapp",
-				customer: { name: "Ali", waPhone: "+65 9123 4567" },
+				customer: { name: "Ali", waPhone: "9123 4567" },
 				deliveryAddress: validAddress,
 			}),
-		).rejects.toThrow(/Malaysian mobile/i);
+		).rejects.toThrow(/Singapore mobile number — switch the country to \+65/);
 	});
 
 	test("updateBuyerPhone on an SG store repairs with the SG arm", async () => {
@@ -8958,13 +8994,14 @@ describe("orders — SG store phone arms (SG-lite, 86eynw28q)", () => {
 			});
 		});
 
-		// An MY number is refused with the SG copy…
+		// Bare MY digits on the store's +65 default are refused, pointing at
+		// the picker (z8r3fdh274)…
 		await expect(
 			t.mutation(api.orders.updateBuyerPhone, {
 				token: await tk(t, shortId),
 				waPhone: "012-345 6789",
 			}),
-		).rejects.toThrow(/Singapore mobile/i);
+		).rejects.toThrow(/switch the country to \+60/);
 
 		// …and the bare SG national form lands in the stored shape.
 		await t.mutation(api.orders.updateBuyerPhone, {
@@ -8979,6 +9016,261 @@ describe("orders — SG store phone arms (SG-lite, 86eynw28q)", () => {
 		);
 		expect(order?.customer.waPhone).toBe("6591234567");
 		expect(order?.confirmationPushStatus).toBe("sending");
+	});
+});
+
+describe("orders — buyer numbers from any country (z8r3fdh274)", () => {
+	// A buyer's WhatsApp number is theirs, not the store's: the phone field wears
+	// a country picker (default = the store's country) and the picked ISO rides
+	// `customer.waDialCountry`. Stored form is always the E.164 digits Meta
+	// delivers inbound, so the customer row keyed on them never forks.
+
+	function myOrderArgs(
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+		waPhone: string,
+		waDialCountry?: string,
+	) {
+		return {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp" as const,
+			customer: { name: "Ali", waPhone, waDialCountry },
+			deliveryAddress: validAddress,
+		};
+	}
+
+	async function storedPhone(t: ReturnType<typeof setup>, shortId: string) {
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		return order?.customer.waPhone;
+	}
+
+	test("an MY store takes a Singapore buyer who picked +65", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(
+			api.orders.create,
+			myOrderArgs(retailer._id, productId, "9123 4567", "SG"),
+		);
+		expect(await storedPhone(t, shortId)).toBe("6591234567");
+	});
+
+	test("an SG store takes a Malaysian buyer who picked +60", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedSgStore(t);
+		const { shortId } = await t.mutation(
+			api.orders.create,
+			sgOrderArgs(retailer._id, productId, "012-345 6789", "MY"),
+		);
+		expect(await storedPhone(t, shortId)).toBe("60123456789");
+	});
+
+	test("a UK number drops its trunk 0 and is stored as Meta delivers it", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(
+			api.orders.create,
+			myOrderArgs(retailer._id, productId, "07911 123456", "GB"),
+		);
+		expect(await storedPhone(t, shortId)).toBe("447911123456");
+	});
+
+	test("a Japanese number typed the local way is stored in E.164 digits", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(
+			api.orders.create,
+			myOrderArgs(retailer._id, productId, "090-1234-5678", "JP"),
+		);
+		expect(await storedPhone(t, shortId)).toBe("819012345678");
+	});
+
+	test("the customer row is keyed by the E.164 digits — the same key an inbound message uses", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(
+			api.orders.create,
+			myOrderArgs(retailer._id, productId, "07911 123456", "GB"),
+		);
+		const { order, customer } = await t.run(async (ctx) => {
+			const order = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			const customer = await ctx.db
+				.query("customers")
+				.withIndex("by_retailer_phone", (q) =>
+					q.eq("retailerId", retailer._id).eq("waPhone", "447911123456"),
+				)
+				.unique();
+			return { order, customer };
+		});
+		expect(customer).not.toBeNull();
+		expect(order?.customerId).toBe(customer?._id);
+		expect(customer?.orderCount).toBe(1);
+	});
+
+	test("an unknown dial country is refused, never read as the store's", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await expect(
+			t.mutation(
+				api.orders.create,
+				myOrderArgs(retailer._id, productId, "012-345 6789", "XX"),
+			),
+		).rejects.toThrow(UNKNOWN_DIAL_COUNTRY_MESSAGE);
+	});
+
+	test("a foreign number of the wrong length is refused, naming the picked country", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await expect(
+			t.mutation(
+				api.orders.create,
+				myOrderArgs(retailer._id, productId, "07911 1234", "GB"),
+			),
+		).rejects.toThrow(
+			/valid United Kingdom mobile number, or tap \+44 to change the country/,
+		);
+	});
+
+	test("a Malaysian number under a neighbour's pick is refused with the fix, never stored as that country's", async () => {
+		// Thailand sits in the picker's Nearby group, a slip of the thumb from
+		// Malaysia, and "012-345 6789" without its 0 is a Thai-LENGTH number. Only a length vouches for it
+		// there, and it is plainly a Malaysian mobile: a wrong pick, not a new
+		// Thai range — the order would otherwise store 66123456789 and the
+		// confirmation push would go to a stranger.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await expect(
+			t.mutation(
+				api.orders.create,
+				myOrderArgs(retailer._id, productId, "012-345 6789", "TH"),
+			),
+		).rejects.toThrow(
+			"That looks like a Malaysian mobile number — switch the country to +60",
+		);
+	});
+
+	test("a calling code typed without its + is peeled once — the mobile pattern decides, not the length", async () => {
+		// "628123456789" under Indonesia is 12 digits, itself a valid Indonesian
+		// length; only the mobile pattern (Indonesian mobiles start 8) says the
+		// 62 is the code the wa.me habit writes, not part of the number.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(
+			api.orders.create,
+			myOrderArgs(retailer._id, productId, "628123456789", "ID"),
+		);
+		expect(await storedPhone(t, shortId)).toBe("628123456789");
+	});
+
+	test("no dial country keeps the store country's arm — a local MY number still lands", async () => {
+		// An older client (no picker) sends no waDialCountry: MY stays MY.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(
+			api.orders.create,
+			myOrderArgs(retailer._id, productId, "012-345 6789"),
+		);
+		expect(await storedPhone(t, shortId)).toBe("60123456789");
+		// …and a UK number typed bare is judged as Malaysian, so it is refused.
+		await expect(
+			t.mutation(
+				api.orders.create,
+				myOrderArgs(retailer._id, productId, "07911 123456"),
+			),
+		).rejects.toThrow(/Malaysian mobile/);
+	});
+
+	describe("the track-page repair takes the picked country too", () => {
+		/** An MY-store order whose push failed against a typo'd MY number. */
+		async function seedFailedMyPush(t: ReturnType<typeof setup>) {
+			const retailer = await seedRetailer(t, USER_A);
+			const productId = await seedProduct(t, USER_A, retailer._id);
+			const { shortId } = await t.mutation(
+				api.orders.create,
+				myOrderArgs(retailer._id, productId, "0199999999"),
+			);
+			// Stamped directly: the push pipeline is covered by the 86eyf1rck
+			// suites above.
+			await t.run(async (ctx) => {
+				const o = await ctx.db
+					.query("orders")
+					.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+					.first();
+				await ctx.db.patch(o!._id, {
+					confirmationPushStatus: "failed",
+					confirmationPushFailureKind: "unreachable",
+				});
+			});
+			return { retailer, shortId };
+		}
+
+		test("repairs to a UK number, moves the CRM row onto it, and re-queues the push", async () => {
+			const t = setup();
+			const { retailer, shortId } = await seedFailedMyPush(t);
+			await t.mutation(api.orders.updateBuyerPhone, {
+				token: await tk(t, shortId),
+				waPhone: "07911 123456",
+				waDialCountry: "GB",
+			});
+			const { order, customer } = await t.run(async (ctx) => {
+				const order = await ctx.db
+					.query("orders")
+					.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+					.first();
+				const customer = await ctx.db
+					.query("customers")
+					.withIndex("by_retailer_phone", (q) =>
+						q.eq("retailerId", retailer._id).eq("waPhone", "447911123456"),
+					)
+					.unique();
+				return { order, customer };
+			});
+			expect(order?.customer.waPhone).toBe("447911123456");
+			expect(order?.confirmationPushStatus).toBe("sending");
+			expect(order?.customerId).toBe(customer?._id);
+			expect(customer?.orderCount).toBe(1);
+		});
+
+		test("no dial country = the store's: the same UK digits are refused as Malaysian", async () => {
+			const t = setup();
+			const { shortId } = await seedFailedMyPush(t);
+			await expect(
+				t.mutation(api.orders.updateBuyerPhone, {
+					token: await tk(t, shortId),
+					waPhone: "07911 123456",
+				}),
+			).rejects.toThrow(/Malaysian mobile/);
+		});
+
+		test("an unknown dial country is refused", async () => {
+			const t = setup();
+			const { shortId } = await seedFailedMyPush(t);
+			await expect(
+				t.mutation(api.orders.updateBuyerPhone, {
+					token: await tk(t, shortId),
+					waPhone: "07911 123456",
+					waDialCountry: "XX",
+				}),
+			).rejects.toThrow(UNKNOWN_DIAL_COUNTRY_MESSAGE);
+		});
 	});
 });
 
@@ -10534,5 +10826,114 @@ describe("per-product prep time (z8r3fdff97)", () => {
 			`${collectId},11:30 AM,"Side counter, ring the bell."`,
 		);
 		expect(lines).toContain(`${deliveryId},,`);
+	});
+});
+
+describe("bulk actions ask the order's OWN flow, not the kind's preset (z8r3fdh3w1)", () => {
+	const asA = (t: ReturnType<typeof setup>) =>
+		t.withIdentity({ subject: USER_A });
+
+	/** A confirmed order, forced onto a flow kind. */
+	async function bookingOrder(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Aisha", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		const order = await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			if (!o) throw new Error("no order");
+			await ctx.db.patch(o._id, {
+				deliveryMethod: "booking",
+				status: "confirmed",
+			});
+			return o;
+		});
+		return { retailer, order };
+	}
+
+	test("a booking on DEFAULTS is still skipped for an anchor its flow has no step for", async () => {
+		const t = setup();
+		const { order } = await bookingOrder(t);
+		const res = await asA(t).mutation(api.orders.bulkUpdateStatus, {
+			orderIds: [order._id],
+			status: "packed",
+		});
+		expect(res.updated).toBe(0);
+		expect(res.skippedNoSuchStage).toBe(1);
+		expect((await t.run((ctx) => ctx.db.get(order._id)))?.status).toBe(
+			"confirmed",
+		);
+	});
+
+	test("a booking whose OWN flow has that step is moved, not skipped", async () => {
+		const t = setup();
+		const { retailer, order } = await bookingOrder(t);
+		// The campsite writes its own flow, deliberately including a step that
+		// counts as "In production". The preset skips that anchor; the seller's
+		// flow does not, and the seller's flow is what the order runs.
+		await t.run((ctx) =>
+			ctx.db.patch(retailer._id, {
+				orderFlows: {
+					booking: [
+						{
+							id: "b1",
+							anchor: "confirmed",
+							label: { en: "Booked" },
+							sortOrder: 0,
+						},
+						{
+							id: "b2",
+							anchor: "packed",
+							label: { en: "Site prepared" },
+							sortOrder: 1,
+						},
+						{
+							id: "b3",
+							anchor: "delivered",
+							label: { en: "Departed" },
+							sortOrder: 2,
+						},
+					],
+				},
+			}),
+		);
+
+		const res = await asA(t).mutation(api.orders.bulkUpdateStatus, {
+			orderIds: [order._id],
+			status: "packed",
+		});
+		expect(res.updated).toBe(1);
+		expect(res.skippedNoSuchStage).toBe(0);
+		expect((await t.run((ctx) => ctx.db.get(order._id)))?.status).toBe("packed");
+	});
+
+	test("a cake shop's flat legacy list never makes a booking bulk-movable", async () => {
+		const t = setup();
+		const { retailer, order } = await bookingOrder(t);
+		await t.run((ctx) =>
+			ctx.db.patch(retailer._id, {
+				orderStages: [
+					{ id: "c1", anchor: "confirmed", label: { en: "Order in" }, sortOrder: 0 },
+					{ id: "c2", anchor: "packed", label: { en: "Baking" }, sortOrder: 1 },
+					{ id: "c3", anchor: "delivered", label: { en: "Collected" }, sortOrder: 2 },
+				],
+			}),
+		);
+
+		const res = await asA(t).mutation(api.orders.bulkUpdateStatus, {
+			orderIds: [order._id],
+			status: "packed",
+		});
+		expect(res.updated).toBe(0);
+		expect(res.skippedNoSuchStage).toBe(1);
 	});
 });

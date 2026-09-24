@@ -471,6 +471,20 @@ outcome.
   `src/lib/checkout-fulfilment.ts` — a pickup time when the store keeps hours
   or a line needs prep, the prep hint, the pickup point's schedule hint, and
   the "Before you collect" block — see [`fulfilment-date.md`](./fulfilment-date.md).
+- **Overseas-number delivery note** (`z8r3fdh274`): the claim's number comes
+  from the counter session — a scan, or a manual bind that takes any country —
+  so it can be foreign, and a courier only takes a contact number from the
+  store's own country. When the store books couriers and the buyer picks
+  delivery, the delivery section says the rider will contact the store instead
+  of them, that the store can still reach them on WhatsApp, and that their
+  order page shows every update — never a promise of a stream of WhatsApp
+  updates (one message per order); collection wording and BM included. The number is already known here, so the test is the
+  courier's own (`toDomesticContactPhone`), not a picker. `getByToken` carries
+  **`store.booksCouriers`** beside `collectsFromCustomer` — one bit
+  (`storeBooksCouriers`: Lalamove or Delyva booking armed); the courier config
+  never leaves the owner reads. Shared helper with the storefront checkout:
+  `src/lib/overseas-courier-note.ts`; rules in
+  [`phone-numbers.md`](./phone-numbers.md#telling-the-buyer-at-checkout--bookscouriers).
 - **After commit** the buyer lands on `/track/<token>`, where the SAME
   deadline keeps counting (`PaymentDueCountdown`, above the payment card)
   until real money — see the timer section for the pause/extension rules.

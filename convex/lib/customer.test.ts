@@ -23,8 +23,13 @@ describe("formatPhone", () => {
 		expect(formatPhone("6591234567")).toBe("+65 91234567");
 	});
 
-	test("prefixes a bare + for other countries' numbers", () => {
-		expect(formatPhone("14155550123")).toBe("+14155550123");
+	test("splits any other country's number at its calling code (z8r3fdh274)", () => {
+		expect(formatPhone("447911123456")).toBe("+44 791 112 3456");
+		expect(formatPhone("14155550123")).toBe("+1 415 555 0123");
+	});
+
+	test("prefixes a bare + when no calling code matches", () => {
+		expect(formatPhone("99912345678")).toBe("+99912345678");
 	});
 
 	test("returns empty string for empty input", () => {
@@ -51,6 +56,12 @@ describe("getDisplayName", () => {
 
 	test("falls back to formatted phone when name and profile name are unset", () => {
 		expect(getDisplayName({ waPhone: "60123456789" })).toBe("+60 123456789");
+	});
+
+	test("a blank name with no profile name falls all the way to the phone", () => {
+		expect(getDisplayName({ name: "  ", waPhone: "60123456789" })).toBe(
+			"+60 123456789",
+		);
 	});
 
 	test("treats a blank/whitespace name as unset", () => {

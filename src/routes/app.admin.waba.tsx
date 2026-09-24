@@ -21,6 +21,13 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { dialCodeLabel, dialCountryName } from "../../convex/lib/buyerPhone";
+import {
+	OPT_OUT_FOREIGN_EXAMPLE,
+	OPT_OUT_PHONE_MESSAGE,
+	readOptOutPhone,
+} from "../../convex/lib/optOutPhone";
+import { MOBILE_EXAMPLE } from "../../convex/lib/slug";
 import type {
 	AdminOptOutRow,
 	AdminTemplateRow,
@@ -38,14 +45,14 @@ import {
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { MASK_PII } from "../lib/analytics-privacy";
+import { convexErrorMessage } from "../lib/format";
 import {
 	categoryChip,
 	qualityTone,
 	statusTone,
-	type Tone,
 	TONE_CLASS,
+	type Tone,
 } from "../lib/waba-template-chips";
-import { convexErrorMessage } from "../lib/format";
 
 export const Route = createFileRoute("/app/admin/waba")({
 	component: AdminWabaRoute,
@@ -267,11 +274,20 @@ function GlobalOptOutPanel() {
 	const registerOptOut = useMutation(api.wabaProtection.adminRegisterOptOut);
 	const reactivate = useMutation(api.wabaProtection.adminReactivateOptIn);
 	const [submitting, setSubmitting] = useState(false);
-	// The server is the judge of what counts as a valid mobile (PR #191 review —
-	// the key must canonicalize to the international form the send gate checks,
-	// in whichever supported country's shape the number fits).
+	// The server is the judge of what counts as a valid number (PR #191 review —
+	// the key must canonicalize to the international form the send gate checks).
+	// It also finds a register row by its exact digits when no parse can reach
+	// it, which the client can't see — so validity is read from `status`.
 	const invalid =
 		status !== undefined && !status.optedOut && status.invalid === true;
+	// The country the number READS as — the same shared parse the server keys
+	// on. Named in the status line because any country is accepted now, so a
+	// mistyped number can read as a real foreign one (`61…` is Australian); an
+	// admin sees that before registering anything. Country only, never digits.
+	const read = valid ? readOptOutPhone(phone) : null;
+	const subject = read
+		? `This ${dialCountryName(read.iso)} (${dialCodeLabel(read.iso)}) number`
+		: "This number";
 
 	async function act() {
 		if (!status) return;
@@ -300,7 +316,8 @@ function GlobalOptOutPanel() {
 					number the cashier typed. Suppresses marketing/broadcast sends from
 					every store on the shared number; the confirmation for an order they
 					placed still delivers. The buyer can reply START (or be re-activated
-					here) to undo it.
+					here) to undo it. Malaysian and Singapore numbers can be typed the
+					local way; any other country's number needs its country code.
 				</p>
 			</div>
 			<div className="flex flex-col gap-2 sm:flex-row">
@@ -309,7 +326,8 @@ function GlobalOptOutPanel() {
 					inputMode="tel"
 					value={phone}
 					onChange={(e) => setPhone(e.target.value)}
-					placeholder="Buyer's WhatsApp number, e.g. 012-345 6789"
+					aria-label="Buyer's WhatsApp number"
+					placeholder={`e.g. ${MOBILE_EXAMPLE.MY} or ${OPT_OUT_FOREIGN_EXAMPLE}`}
 					className="sm:max-w-xs"
 				/>
 				<Button
@@ -331,12 +349,12 @@ function GlobalOptOutPanel() {
 			{valid && status ? (
 				<p className="text-xs text-muted-foreground">
 					{status.optedOut
-						? `Currently opted out (${SOURCE_LABEL[status.source]}, since ${new Date(
+						? `${subject} is opted out (${SOURCE_LABEL[status.source]}, since ${new Date(
 								status.since,
 							).toLocaleDateString("en-MY")}).`
 						: invalid
-							? "Enter a Malaysian (e.g. 012-345 6789) or Singapore (e.g. 9123 4567) mobile number."
-							: "This number is not currently opted out."}
+							? `${OPT_OUT_PHONE_MESSAGE}.`
+							: `${subject} is not currently opted out.`}
 				</p>
 			) : null}
 			<OptOutRegister />

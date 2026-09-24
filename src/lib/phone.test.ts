@@ -80,6 +80,17 @@ describe("toNationalPhoneInput — MY plate", () => {
 		expect(toNationalPhoneInput("6581234567", "MY")).toBe("6581234567");
 	});
 
+	test("keeps a stored MY landline's country code (z8r3fdh274)", () => {
+		// A legacy row from before seller fields were mobile-only. Its display
+		// form must not look plated: were it split as "+60 312345678", the
+		// prefix peel would seed "312345678" and the save would drop the 60.
+		expect(toNationalPhoneInput("60312345678", "MY")).toBe("60312345678");
+	});
+
+	test("shows a foreign number as bare digits, never under the +60 plate", () => {
+		expect(toNationalPhoneInput("447911123456", "MY")).toBe("447911123456");
+	});
+
 	test("is empty-safe", () => {
 		expect(toNationalPhoneInput("", "MY")).toBe("");
 		expect(toNationalPhoneInput(undefined, "MY")).toBe("");
@@ -102,6 +113,10 @@ describe("toNationalPhoneInput — SG plate (86eynw2dy)", () => {
 
 	test("shows a stored MY number as bare digits instead of peeling the wrong plate", () => {
 		expect(toNationalPhoneInput("60123456789", "SG")).toBe("60123456789");
+	});
+
+	test("keeps a stored SG non-mobile's country code (z8r3fdh274)", () => {
+		expect(toNationalPhoneInput("6561234567", "SG")).toBe("6561234567");
 	});
 });
 

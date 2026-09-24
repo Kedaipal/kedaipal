@@ -77,10 +77,10 @@ describe("CheckoutSummary (order ticket)", () => {
 		renderSummary(cart);
 		expect(screen.getByText("Sue Chef Kitchen")).toBeTruthy();
 		expect(screen.getByText("Order ticket · Draft")).toBeTruthy();
-		// "2× Kek Batik · 1kg …… 90.00" — RM only appears on the TOTAL row.
-		expect(
-			screen.getByRole("button", { name: /2× Kek Batik · 1kg/ }),
-		).toBeTruthy();
+		// "2× Kek Batik …… 90.00" with "1kg" on its own line under it — RM only
+		// appears on the TOTAL row.
+		expect(screen.getByRole("button", { name: /2× Kek Batik/ })).toBeTruthy();
+		expect(screen.getByText("1kg")).toBeTruthy();
 		expect(screen.getByText("90.00")).toBeTruthy();
 	});
 
@@ -361,5 +361,86 @@ describe("checkout summary — 31 Jul bug fixes (86eyfq04j)", () => {
 			<CheckoutTotals subtotal={9000} currency="MYR" pickupFee={200} />,
 		);
 		expect(container.querySelector("svg.lucide-package")).toBeTruthy();
+	});
+});
+
+describe("checkout receipt — long names stay readable (z8r3fdhpaj)", () => {
+	const LONG_NAME =
+		"Kek Coklat Moist Premium Extra Large Special Edition Hari Raya Aidilfitri";
+	const LONG_NOTE =
+		"Tulis 'Happy Birthday Amirul Hakim' guna buttercream putih, jangan letak topper plastik sebab budak alah";
+
+	/** The receipt row's label cell — the span the amount is measured against. */
+	function labelCell(container: HTMLElement): HTMLElement {
+		const cell = container.querySelector<HTMLElement>(
+			"li button > span.min-w-0",
+		);
+		if (!cell) throw new Error("no receipt label cell");
+		return cell;
+	}
+
+	it("prints a long name, its variant and its note in full", () => {
+		const { container } = renderSummary(
+			makeCart([
+				makeItem({
+					variantId: "v1",
+					quantity: 2,
+					name: LONG_NAME,
+					optionLabel: "8 inch · Tulisan nama · Buttercream",
+					note: LONG_NOTE,
+				}),
+			]),
+		);
+		// Every character is on the page, uncollapsed — this is the last screen
+		// before the wa.me handoff, so nothing may need a tap to be read.
+		expect(screen.getByText(`2× ${LONG_NAME}`)).toBeTruthy();
+		expect(
+			screen.getByText("8 inch · Tulisan nama · Buttercream"),
+		).toBeTruthy();
+		expect(screen.getByText(`📝 ${LONG_NOTE}`)).toBeTruthy();
+
+		// ...and nothing that carries buyer-authored text clips it. `truncate`
+		// is what shipped the bug: it cut the variant off the end of the name.
+		const cell = labelCell(container);
+		expect(cell.className).not.toContain("truncate");
+		expect(cell.className).toContain("wrap-anywhere");
+		const note = screen.getByText(`📝 ${LONG_NOTE}`);
+		expect(note.className).not.toContain("truncate");
+	});
+
+	it("keeps the variant out of the name string, so length can never push it out of view", () => {
+		renderSummary(
+			makeCart([
+				makeItem({ variantId: "v1", name: LONG_NAME, optionLabel: "1kg" }),
+			]),
+		);
+		// The two are separate elements now, not one "name · variant" string:
+		// an exact-text match on the name alone would fail if they were joined.
+		expect(screen.getByText(`1× ${LONG_NAME}`)).toBeTruthy();
+		expect(screen.getByText("1kg")).toBeTruthy();
+	});
+
+	it("breaks an unbroken SKU-style name instead of letting the ticket scroll sideways", () => {
+		// `break-words` would NOT do this: only `overflow-wrap: anywhere` lets the
+		// flex item shrink below the long word, which is what stops the overflow.
+		const { container } = renderSummary(
+			makeCart([
+				makeItem({
+					variantId: "v1",
+					name: "KEKCOKLATMOISTPREMIUMEXTRALARGESPECIALEDITION2026MY01",
+				}),
+			]),
+		);
+		expect(labelCell(container).className).toContain("wrap-anywhere");
+	});
+
+	it("gives every receipt row a 44px tap target, however long the name", () => {
+		const { container } = renderSummary(
+			makeCart([makeItem({ variantId: "v1", name: LONG_NAME })]),
+		);
+		// py-2.5 on a leading-6 line = 44px, the mobile floor. jsdom lays out
+		// nothing, so the class is the contract.
+		const row = container.querySelector("li button");
+		expect(row?.className).toContain("py-2.5");
 	});
 });

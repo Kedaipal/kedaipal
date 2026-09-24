@@ -166,6 +166,23 @@ describe("orderToReceiptData", () => {
 		]);
 	});
 
+	test("prints the buyer's phone formatted, with its country code (z8r3fdh274)", () => {
+		const phone = (waPhone?: string) =>
+			orderToReceiptData({
+				order: {
+					...baseOrder,
+					customer: { name: "Aisha", waPhone },
+					paymentStatus: "unpaid",
+				},
+				storeName: "Sweet Co",
+				paymentMethods: [],
+			}).customerPhone;
+		expect(phone("+60123456789")).toBe("+60 123456789");
+		expect(phone("447911123456")).toBe("+44 791 112 3456");
+		// No phone (an anonymous counter sale) → no line, never a bare "+".
+		expect(phone(undefined)).toBeUndefined();
+	});
+
 	test("a claimed-but-unconfirmed payment is still an invoice (not paid)", () => {
 		const data = orderToReceiptData({
 			order: { ...baseOrder, paymentStatus: "claimed" },

@@ -43,6 +43,7 @@ import {
 	sanitizeCapacityPerNight,
 	sanitizePackageLength,
 	sanitizeSecurityDeposit,
+	sanitizeSkipsClosedDays,
 	sanitizeWeekendRate,
 	type PackageUnit,
 } from "./lib/productKind";
@@ -927,6 +928,9 @@ export const create = mutation({
 				// = one rate; 0 clears. Refused on a package listing.
 				weekendPrice: v.optional(v.number()),
 				weekendDays: v.optional(v.array(v.number())),
+				// "Only days you're open" (z8r3fdhpm7) — a DAY package that skips
+				// the store's closed days. Refused on any other shape.
+				skipsClosedDays: v.optional(v.boolean()),
 			}),
 		),
 		variants: v.array(variantInputValidator),
@@ -971,6 +975,7 @@ export const create = mutation({
 					autoAccept?: boolean;
 					weekendPrice?: number;
 					weekendDays?: number[];
+					skipsClosedDays?: true;
 			  }
 			| undefined;
 		if (kind === "booking") {
@@ -992,6 +997,10 @@ export const create = mutation({
 					packageLength,
 					packageUnit: args.booking.packageUnit,
 					autoAccept: args.booking.autoAccept === true ? true : undefined,
+					skipsClosedDays: sanitizeSkipsClosedDays(
+						args.booking.skipsClosedDays,
+						{ packageLength, packageUnit: args.booking.packageUnit },
+					),
 					// Free-range only — a package refuses the pair (S13).
 					...sanitizeWeekendRate(
 						args.booking.weekendPrice,
@@ -1319,6 +1328,9 @@ export const update = mutation({
 				// = one rate; 0 clears. Refused on a package listing.
 				weekendPrice: v.optional(v.number()),
 				weekendDays: v.optional(v.array(v.number())),
+				// "Only days you're open" (z8r3fdhpm7) — a DAY package that skips
+				// the store's closed days. Refused on any other shape.
+				skipsClosedDays: v.optional(v.boolean()),
 			}),
 		),
 	},
@@ -1395,6 +1407,10 @@ export const update = mutation({
 					packageLength,
 					packageUnit: fields.booking.packageUnit,
 					autoAccept: fields.booking.autoAccept === true ? true : undefined,
+					skipsClosedDays: sanitizeSkipsClosedDays(
+						fields.booking.skipsClosedDays,
+						{ packageLength, packageUnit: fields.booking.packageUnit },
+					),
 					// Free-range only — a package refuses the pair (S13).
 					...sanitizeWeekendRate(
 						fields.booking.weekendPrice,

@@ -46,7 +46,6 @@ import {
 import {
 	assertValidFulfilmentDate,
 	assertValidFulfilmentTime,
-	DAY_MS,
 	hhmmFromMinutes,
 	matchesFulfilmentWindow,
 	ymdFromEpoch,
@@ -64,6 +63,7 @@ import {
 	type ProductEvent,
 	seatsLeft,
 } from "./lib/productEvent";
+import { closedDateIssue } from "./lib/closedDates";
 import { assertWithinOpeningHours } from "./lib/openingHours";
 import { orderingPausedMessage } from "./lib/seasonalHold";
 import { orderDocumentTitle } from "./lib/orderDocument";
@@ -71,6 +71,7 @@ import { matchesBookingPeriod } from "./lib/bookingPeriod";
 import {
 	countBookedPerNight,
 	holdsCapacity,
+	occupiesNight,
 } from "./lib/bookingAvailability";
 import {
 	collectMinQuantityShortfalls,
@@ -141,9 +142,10 @@ import {
 	anchorOrdinal,
 	type Locale,
 	type OrderStage,
-	FLOW_PRESETS,
 	orderFlowKind,
 	resolveStages,
+	hasAnchor,
+	type OrderFlows,
 	type StageAnchor,
 	stageLabel,
 	type StatusLabels,
@@ -165,7 +167,10 @@ import {
 	mapHitpayPaymentType,
 } from "./lib/hitpay";
 import { rateLimiter } from "./lib/rateLimiter";
-import { assertValidMobileForCountry } from "./lib/slug";
+import {
+	assertValidBuyerWaPhone,
+	resolveBuyerDialCountry,
+} from "./lib/buyerPhone";
 import {
 	orderConfirmTemplateName,
 	paymentReminderTemplateName,
@@ -730,8 +735,15 @@ export const markConfirmationPushFailed = internalMutation({
  * so the buyer gets their confirmation without doing anything else.
  */
 export const updateBuyerPhone = mutation({
-	args: { token: v.string(), waPhone: v.string() },
-	handler: async (ctx, { token, waPhone }): Promise<void> => {
+	args: {
+		token: v.string(),
+		waPhone: v.string(),
+		// The country picked on the repair field's plate (z8r3fdh274). Absent =
+		// the store's country, so a track page loaded before the picker shipped
+		// keeps repairing exactly as it did.
+		waDialCountry: v.optional(v.string()),
+	},
+	handler: async (ctx, { token, waPhone, waDialCountry }): Promise<void> => {
 		// Each accepted save costs an outbound template send.
 		await rateLimiter.limit(ctx, "buyerPhoneUpdate", {
 			key: token,
@@ -746,14 +758,18 @@ export const updateBuyerPhone = mutation({
 			);
 		}
 
-		// The repair field wears the same country plate as the checkout field it
-		// fixes — judge the new number by the STORE's country (SG-lite).
+		// The repair field wears the same country picker as the checkout field it
+		// fixes, so it is judged by the same authority: the country the buyer
+		// picked, defaulting to the STORE's (z8r3fdh274).
 		const orderRetailer = await ctx.db.get(order.retailerId);
 		let normalized: string;
 		try {
-			normalized = assertValidMobileForCountry(
+			normalized = assertValidBuyerWaPhone(
 				waPhone,
-				orderRetailer?.country ?? DEFAULT_COUNTRY,
+				resolveBuyerDialCountry(
+					waDialCountry,
+					orderRetailer?.country ?? DEFAULT_COUNTRY,
+				),
 			);
 		} catch (err) {
 			throw new ConvexError((err as Error).message);
@@ -803,6 +819,10 @@ export const create = mutation({
 		customer: v.object({
 			name: v.optional(v.string()),
 			waPhone: v.optional(v.string()),
+			// ISO code of the country picked on the phone field's plate
+			// (z8r3fdh274) — judged against the dial table in the handler, never
+			// stored. Absent = the store's country.
+			waDialCountry: v.optional(v.string()),
 		}),
 		deliveryMethod: v.optional(
 			v.union(v.literal("delivery"), v.literal("self_collect")),
@@ -893,8 +913,8 @@ export const create = mutation({
 			);
 		}
 		// Loaded before the address + phone checks below — the store's country
-		// picks the address shape AND which validator arm judges the buyer's
-		// number (SG-lite, 86eynw28q + 86eynw29u).
+		// picks the address shape (SG-lite, 86eynw29u) AND is the buyer phone
+		// picker's default when the client sends no dial country (z8r3fdh274).
 		const retailer = await ctx.db.get(args.retailerId);
 		if (!retailer) throw new ConvexError("Retailer not found");
 		// Off-Season Hold (z8r3fday24): the seller's own "ordering is paused"
@@ -924,16 +944,20 @@ export const create = mutation({
 		// the protocol level so legacy callers/tests keep working; a phone-less
 		// order simply rides the old buyer-sends-first wa.me flow, where the
 		// WhatsApp webhook stamps the number on the inbound message.
-		// Country-aware normalization (assertValidMobileForCountry, keyed off
-		// the STORE's country): buyers type local numbers ("012-345 6789" /
-		// "9123 4567"), and the stored form must match what Meta delivers
-		// inbound (60… / 65…) or the customer record would fork.
+		// Judged by the country the buyer PICKED on the field's plate
+		// (`customer.waDialCountry`, z8r3fdh274): a buyer's number is theirs,
+		// not the store's, so a Singaporean at a Johor cake shop or a Japanese
+		// event participant gets through. Absent (a client from before the
+		// picker) = the store's country, the picker's own default. MY/SG picks
+		// keep the strict mobile arm byte for byte; either way the number is
+		// stored as the E.164 digits Meta delivers inbound (60… / 65… / 44…),
+		// or the customer record would fork.
 		let customerWaPhone: string | undefined;
 		if (args.customer.waPhone) {
 			try {
-				customerWaPhone = assertValidMobileForCountry(
+				customerWaPhone = assertValidBuyerWaPhone(
 					args.customer.waPhone,
-					retailerCountry,
+					resolveBuyerDialCountry(args.customer.waDialCountry, retailerCountry),
 				);
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
@@ -942,6 +966,9 @@ export const create = mutation({
 		// Name is required at checkout (≥3 chars) — enforced server-side here, not
 		// just in the storefront form, so a direct mutation call can't create a
 		// nameless/1-char order. Same rule + shared validator as the counter paths.
+		// Built field by field, never spread from `args.customer`:
+		// `orders.customer` is a strict schema object, and `waDialCountry` is an
+		// input to the validator above, not something the order remembers.
 		const sanitizedCustomer = {
 			name: requireCustomerName(args.customer.name),
 			waPhone: customerWaPhone,
@@ -1308,6 +1335,20 @@ export const create = mutation({
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
 			}
+		}
+		// Closed dates (z8r3fdhpm7): a fulfilment date on one of the store's
+		// closed dates is refused FIRST — before prep and hours, because it is
+		// the truest reason (telling a buyer the cake needs 2 hours on a day the
+		// shop is shut sends them to the wrong fix). The checkout mirrors this
+		// with the same sentence (`closedDateMessage`). Exempt exactly where the
+		// opening hours are: an event's date is the seller's own, and counter
+		// checkout never reaches this path.
+		if (sanitizedFulfilmentDate !== undefined && eventLock === undefined) {
+			const closed = closedDateIssue(
+				retailer.closedDates,
+				sanitizedFulfilmentDate,
+			);
+			if (closed !== null) throw new ConvexError(closed);
 		}
 		// Prep floor (z8r3fdff97): the slowest item in the cart decides the
 		// earliest moment this order can be handed over. Re-derived from the
@@ -1739,13 +1780,16 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 		/** Absent = unlimited capacity (S7) — no denominator to show. */
 		capacityPerNight?: number;
 		peakOtherBookings: number;
-		nights: number;
 	};
+	// LEGACY pair (z8r3fdh3w1), still sent so un-migrated delivery/pickup rows
+	// resolve identically on the client. Both are ignored for bookings/RSVPs by
+	// the resolver itself, never here.
 	statusLabels?: StatusLabels;
-	// Phase 2: the retailer's configured stages (undefined => buyer/seller
-	// resolve the synthesized defaults from statusLabels). Drives the tracking
-	// timeline + the seller's dynamic advance buttons.
 	orderStages?: OrderStage[];
+	// Per-flow-kind stages — what the tracking timeline and the seller's
+	// advance buttons resolve from. The client picks THIS order's kind out of
+	// it, so a delivery flow can never word a stay.
+	orderFlows?: OrderFlows;
 	retailerLocale: Locale;
 	// Store country (SG-lite), resolved (undefined rows read as "MY"). The track
 	// page keys the buyer phone-repair plate/validator arm and the address-edit
@@ -1895,7 +1939,6 @@ export const get = query({
 			| {
 					capacityPerNight?: number;
 					peakOtherBookings: number;
-					nights: number;
 			  }
 			| undefined;
 		if (
@@ -1914,15 +1957,16 @@ export const get = query({
 			);
 			const ownHold = holdsCapacity(order.status) ? 1 : 0;
 			let peak = 0;
-			for (const count of counts.values()) {
+			for (const [night, count] of counts) {
+				// Only the days THIS booking uses (z8r3fdhpm7): on a day an open-days
+				// package skips it holds nothing, so subtracting its own hold there
+				// would hide a neighbour — and a busy skipped day isn't its problem.
+				if (!occupiesNight(order, night)) continue;
 				peak = Math.max(peak, count - ownHold);
 			}
 			bookingContext = {
 				capacityPerNight: listing?.booking?.capacityPerNight,
 				peakOtherBookings: peak,
-				nights: Math.round(
-					(order.bookingCheckOut - order.bookingCheckIn) / DAY_MS,
-				),
 			};
 		}
 		return {
@@ -1953,6 +1997,7 @@ export const get = query({
 				: order.confirmationPushWamid,
 			statusLabels: retailer?.statusLabels as StatusLabels | undefined,
 			orderStages: retailer?.orderStages as OrderStage[] | undefined,
+			orderFlows: retailer?.orderFlows as OrderFlows | undefined,
 			retailerLocale: (retailer?.locale ?? "en") as Locale,
 			retailerCountry: retailer?.country ?? DEFAULT_COUNTRY,
 			storeName: retailer?.storeName ?? "",
@@ -3642,6 +3687,9 @@ export const bulkUpdateStatus = mutation({
 		// The inbox multi-select is single-retailer, so every id resolves to the
 		// same access descriptor; keep the last one for a single batch audit row.
 		let batchAccess: RetailerAccess | undefined;
+		// Single-retailer by construction (same comment as `batchAccess`), so the
+		// stage config is one read for the whole batch rather than one per order.
+		let retailer: Doc<"retailers"> | null = null;
 		for (const orderId of orderIds) {
 			const order = await ctx.db.get(orderId);
 			if (!order) throw new ConvexError("Order not found");
@@ -3662,6 +3710,7 @@ export const bulkUpdateStatus = mutation({
 			// reads for one refusal. The admin bypass lives inside the guard.
 			if (firstResolve)
 				await assertSubscriptionActive(ctx, order.retailerId);
+			if (firstResolve) retailer = await ctx.db.get(order.retailerId);
 
 			// Skip no-ops + transitions blocked by the mockup gate (don't fail the
 			// whole batch on one ineligible order).
@@ -3686,15 +3735,26 @@ export const bulkUpdateStatus = mutation({
 				skipped++;
 				continue;
 			}
-			// An anchor the order's flow kind SKIPS isn't a state it can be in:
-			// a booking is never "Packed", an RSVP is never "Packed" or "Ready
-			// for Pickup" (its pipeline is Confirmed → Checked In). Bulk-moving
-			// one there would strand it outside its own vocabulary, so it's
-			// skipped and counted — never a silent no-op. Registry-driven
-			// (FLOW_PRESETS), so a future kind's skips apply here for free.
+			// An anchor no stage in THIS order's own flow carries isn't a state
+			// it can be in: "Mark as Packed" on a booking whose flow runs
+			// Confirmed → Checked in → Checked out would strand it outside its
+			// own vocabulary. Skipped and counted — never a silent no-op.
+			//
+			// The rule is the RESOLVED LIST, not `FLOW_PRESETS[...].skippedAnchors`
+			// (z8r3fdh3w1). Skipped anchors now only seed a kind's DEFAULTS, so a
+			// campsite that deliberately added a "Site prepared" step anchored to
+			// `packed` must be bulk-movable into it. Asking the list answers both
+			// cases with one check.
 			if (
 				status !== "cancelled" &&
-				FLOW_PRESETS[orderFlowKind(order)].skippedAnchors.includes(
+				!hasAnchor(
+					resolveStages({
+						orderFlows: retailer?.orderFlows as OrderFlows | undefined,
+						orderStages: retailer?.orderStages as OrderStage[] | undefined,
+						labels: retailer?.statusLabels as StatusLabels | undefined,
+						deliveryMethod: orderFlowKind(order),
+						bookingPackaged: order.bookingPackaged,
+					}),
 					status as StageAnchor,
 				)
 			) {
@@ -3985,6 +4045,7 @@ export const advanceToStage = mutation({
 		const isEventOrder =
 			order.eventRsvp === true || (await orderEvent(ctx, order)) !== undefined;
 		const stages = resolveStages({
+			orderFlows: retailer.orderFlows as OrderFlows | undefined,
 			orderStages: retailer.orderStages as OrderStage[] | undefined,
 			labels: retailer.statusLabels as StatusLabels | undefined,
 			deliveryMethod: isEventOrder
