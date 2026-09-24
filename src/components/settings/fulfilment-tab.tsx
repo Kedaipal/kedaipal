@@ -166,6 +166,9 @@ interface FulfilmentTabProps {
 	openingHours: OpeningHours | undefined;
 	/** Closed dates (z8r3fdhpm7) — the weekly schedule's exceptions. */
 	closedDates: ClosedDateRange[] | undefined;
+	/** The store sells booking listings — the Closed dates card then says what
+	 * a closure does to them (z8r3fdhpm7). */
+	hasBookingListings: boolean;
 	/** Store-wide minimum order value (minor units, 86ey9unyx) — undefined =
 	 * no minimum. See convex/lib/minOrderRules.ts. */
 	minOrderValue: number | undefined;
@@ -213,6 +216,7 @@ export function FulfilmentTab({
 	minFulfilmentNoticeDays,
 	openingHours,
 	closedDates,
+	hasBookingListings,
 	minOrderValue,
 	awbConfig,
 	subscription,
@@ -388,6 +392,7 @@ export function FulfilmentTab({
 			<ClosedDatesCard
 				retailerId={retailerId}
 				closedDates={closedDates}
+				hasBookingListings={hasBookingListings}
 				highlight={ring(SPOTLIGHT_ANCHOR.closed_dates.anchor)}
 			/>
 			<MinNoticeCard initial={minFulfilmentNoticeDays} />

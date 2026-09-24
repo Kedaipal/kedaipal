@@ -97,6 +97,10 @@ export function OpeningHoursLine({
 	const now = Date.now();
 	const today = todayMytMidnight(now);
 	const status = openNowStatus(hours, now, closedDates);
+	// "7:30 AM" as ONE unit — on a phone the line broke as "opens 7:30 / AM
+	// tomorrow", a time split from its half of the day.
+	const time = (minutes: number) =>
+		formatFulfilmentTime(minutes).replace(" ", "\u00A0");
 	const todayIndex = weekdayIndexMyt(today);
 	const headsUp = closureHeadsUp(closedDates, now);
 	const closures = upcomingClosures(closedDates, now);
@@ -112,7 +116,7 @@ export function OpeningHoursLine({
 		if (hours) {
 			text = isAllDay(status.day)
 				? "Open 24 hours today"
-				: `Open now · closes ${formatFulfilmentTime(status.until)}`;
+				: `Open now · closes ${time(status.until)}`;
 		}
 	} else if (status.nextOpen) {
 		// daysAhead 0 is "before we open" — which on a split day also covers the
@@ -123,7 +127,7 @@ export function OpeningHoursLine({
 		const when = whenAhead(today, daysAhead);
 		const reopens = allDay
 			? `reopens ${when}`
-			: `opens ${formatFulfilmentTime(openMinutes)} ${when}`;
+			: `opens ${time(openMinutes)} ${when}`;
 		text = status.closure
 			? ["Closed today", status.closure.label, reopens]
 					.filter(Boolean)

@@ -451,6 +451,68 @@ describe("closed dates in bookings — closed ≠ blocked", () => {
 		expect(shortId).toMatch(/^ORD-/);
 	});
 
+	test("…but no package STARTS on a shut day — a closed date or the weekly day off (owner call, 24 Sep)", async () => {
+		const t = setup();
+		const { asOwner, retailer, productId, close } = await listing(t, {
+			packageLength: 1,
+			packageUnit: "month",
+			autoAccept: true,
+		});
+		await close(day(20), day(20));
+		const weekdayOf = (epoch: number) =>
+			new Date(epoch + 8 * 3_600_000).getUTCDay();
+		await asOwner.mutation(api.retailers.updateSettings, {
+			openingHours: Array.from({ length: 7 }, (_, i) =>
+				i === weekdayOf(day(12))
+					? { open: 540, close: 1080, closed: true }
+					: { open: 540, close: 1080 },
+			),
+		});
+		// The calendar is sent the weekly day off so it can refuse the start too.
+		const window = await t.query(api.bookings.availability, {
+			productId,
+			from: day(0),
+			to: day(40),
+		});
+		expect(window?.closedWeekdays).toEqual([weekdayOf(day(12))]);
+		for (const checkIn of [day(20), day(12)]) {
+			await expect(
+				t.mutation(api.bookings.requestBooking, {
+					retailerId: retailer._id,
+					productId,
+					checkIn,
+					customer: guest,
+				}),
+			).rejects.toThrow(/closed on that day — start on a day it's open/);
+		}
+		// Starting on an open day and running THROUGH both still sells.
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(11),
+			customer: guest,
+		});
+		expect(shortId).toMatch(/^ORD-/);
+	});
+
+	test("a stay is never sent the weekly day off — it doesn't touch stays", async () => {
+		const t = setup();
+		const { asOwner, productId } = await listing(t, { capacityPerNight: 2 });
+		await asOwner.mutation(api.retailers.updateSettings, {
+			openingHours: Array.from({ length: 7 }, (_, i) =>
+				i === 0
+					? { open: 540, close: 1080, closed: true }
+					: { open: 540, close: 1080 },
+			),
+		});
+		const window = await t.query(api.bookings.availability, {
+			productId,
+			from: day(0),
+			to: day(10),
+		});
+		expect(window?.closedWeekdays).toEqual([]);
+	});
+
 	test("a BLOCK still refuses the package — blocked keeps meaning 'can't be booked'", async () => {
 		const t = setup();
 		const { asOwner, retailer, productId } = await listing(t, {
@@ -631,6 +693,70 @@ describe("open-days packages — 'Only days you're open'", () => {
 				date: day(5),
 			}),
 		).toEqual([]);
+	});
+
+	test("the seller calendar knows the listing counts open days, and the day sheet counts them", async () => {
+		const t = setup();
+		const { asOwner, retailer, productId } = await course(t);
+		await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(1),
+			customer: guest,
+		});
+		const month = await asOwner.query(api.bookingBlocks.sellerCalendar, {
+			retailerId: retailer._id,
+			from: day(0),
+			to: day(10),
+			productId,
+		});
+		// Without the flag the client read this listing as an every-day one.
+		expect(month.listings[0]?.skipsClosedDays).toBe(true);
+		expect(month.closedWeekdays).toEqual([weekdayOf(day(5))]);
+		const [row] = await asOwner.query(api.bookingBlocks.dayBookings, {
+			retailerId: retailer._id,
+			date: day(4),
+		});
+		expect(row?.skippedDays).toEqual([day(3), day(5)]);
+		// The status as the seller's pages name it — never the raw key.
+		expect(row?.statusLabel).toBe("Confirmed");
+	});
+
+	test("the approve card's capacity line ignores the days this booking skips", async () => {
+		const t = setup();
+		const { asOwner, retailer, productId } = await course(t);
+		const request = (name: string, waPhone: string) =>
+			t.mutation(api.bookings.requestBooking, {
+				retailerId: retailer._id,
+				productId,
+				checkIn: day(1),
+				customer: { name, waPhone },
+			});
+		const mine = await request("Mine", "0123456781");
+		// Two others who are ONLY there on day 3 — a day mine skips (Raya).
+		for (const [name, phone] of [
+			["Other A", "0123456782"],
+			["Other B", "0123456783"],
+		] as const) {
+			const other = await request(name, phone);
+			await t.run(async (ctx) => {
+				const row = await ctx.db
+					.query("orders")
+					.withIndex("by_shortId", (q) => q.eq("shortId", other.shortId))
+					.first();
+				if (!row) throw new Error("missing");
+				await ctx.db.patch(row._id, {
+					bookingCheckIn: day(3),
+					bookingCheckOut: day(4),
+					bookingSkippedDays: undefined,
+				});
+			});
+		}
+		const read = await asOwner.query(api.orders.get, {
+			shortId: mine.shortId,
+		});
+		// Nobody shares a day mine is actually there.
+		expect(read?.bookingContext?.peakOtherBookings).toBe(0);
 	});
 
 	test("can't start on a shut day — the buyer is told to pick an open one", async () => {

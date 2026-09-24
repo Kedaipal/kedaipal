@@ -19,8 +19,9 @@
 // whatever else the day is. A closure is PUBLIC — the storefront header names
 // it — so unlike a seller's block it may be shown for what it is. On a stay
 // listing the day is also unavailable (the hatch explains why); on a package
-// that absorbs closures it stays pickable, and the hatch shows through the
-// selected band so the buyer sees the closed day INSIDE their term.
+// the weekly day off is hatched too, no package can START on a hatched day,
+// and the hatch shows through the selected band so the buyer sees the closed
+// days INSIDE their term.
 
 import { useMemo } from "react";
 import { weekdayIndexMyt } from "../../../convex/lib/fulfilmentDate";
@@ -204,13 +205,16 @@ const CLOSED_HATCH =
 /** The legend under the calendar — states only, never the blocked/full split.
  * `weekendLabel` ("Fri & Sat · RM 120/night") adds the dotted-night row when
  * the listing prices weekend nights differently; `showClosed` adds the store
- * closed row when a closed date is on screen (z8r3fdhpm7). */
+ * closed row whenever a hatched day is on screen (z8r3fdhpm7);
+ * `selectionLabel` names the band — "Your package" for a package. */
 export function BookingCalendarLegend({
 	weekendLabel,
 	showClosed = false,
+	selectionLabel = "Your stay",
 }: {
 	weekendLabel?: string;
 	showClosed?: boolean;
+	selectionLabel?: string;
 } = {}) {
 	return (
 		<div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
@@ -227,7 +231,7 @@ export function BookingCalendarLegend({
 			</span>
 			<span className="flex items-center gap-1.5">
 				<i className="size-3.5 rounded bg-primary" aria-hidden />
-				Your stay
+				{selectionLabel}
 			</span>
 			{weekendLabel ? (
 				<span className="flex items-center gap-1.5">

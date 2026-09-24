@@ -250,3 +250,47 @@ export function scrollToAnchor(anchorId: string): boolean {
 	});
 	return true;
 }
+
+/**
+ * Scroll to a deep-linked card ONCE it is on the page — the one way a `?spot=`
+ * / `?fix=` link reveals its target.
+ *
+ * The old caller tried a single frame after mount and gave up. On Settings the
+ * tab body renders behind a skeleton until the store loads, so the card
+ * usually wasn't there yet: the ring pulsed below the fold and the seller
+ * landed on the top of the tab (z8r3fdhpm7 — the booking calendar's "Manage"
+ * link). This watches the DOM until the anchor appears, scrolls once, and
+ * gives up after `timeoutMs` so a card that never renders can't yank the page
+ * later. Returns the cleanup for an effect.
+ */
+export function revealAnchorWhenMounted(
+	anchorId: string,
+	timeoutMs = 5000,
+): () => void {
+	if (typeof document === "undefined") return () => {};
+	let done = false;
+	let observer: MutationObserver | undefined;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const stop = () => {
+		done = true;
+		observer?.disconnect();
+		if (timer !== undefined) clearTimeout(timer);
+	};
+	const attempt = () => {
+		if (!done && document.getElementById(anchorId)) {
+			stop();
+			scrollToAnchor(anchorId);
+		}
+	};
+	// A frame first: the target usually mounts in the same commit.
+	const frame = requestAnimationFrame(attempt);
+	if (typeof MutationObserver !== "undefined") {
+		observer = new MutationObserver(attempt);
+		observer.observe(document.body, { childList: true, subtree: true });
+	}
+	timer = setTimeout(stop, timeoutMs);
+	return () => {
+		cancelAnimationFrame(frame);
+		stop();
+	};
+}

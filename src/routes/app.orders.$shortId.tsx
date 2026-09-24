@@ -1691,7 +1691,10 @@ function OrderDetailRoute() {
 							{order.eventLocked
 								? "Event"
 								: isBooking
-									? "Check-in"
+									? // A package starts; only a stay checks in.
+										order.bookingPackaged
+										? "Starts"
+										: "Check-in"
 									: isSelfCollect
 										? order.pickupSnapshot?.locationType === "drop_off"
 											? "Meet on"

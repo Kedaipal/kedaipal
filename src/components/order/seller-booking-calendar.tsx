@@ -20,16 +20,22 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
-import { closureRule } from "../../../convex/lib/bookingAvailability";
+import {
+	type ClosureRule,
+	closureRule,
+} from "../../../convex/lib/bookingAvailability";
 import { closureOn, formatClosedRange } from "../../../convex/lib/closedDates";
 import {
 	DAY_MS,
 	formatFulfilmentDate,
 	MYT_OFFSET_MS,
 	todayMytMidnight,
+	weekdayIndexMyt,
 } from "../../../convex/lib/fulfilmentDate";
+import { storeClosedOn } from "../../../convex/lib/openingHours";
 import {
 	addMytMonths,
+	bookingDayPosition,
 	calendarDateFromMytEpoch,
 	describeBookingSpan,
 	mytMonthStart,
@@ -75,19 +81,44 @@ function guestInitials(name?: string): string {
 }
 
 /**
- * Where THIS night sits in the stay — "arrives today", "night 3 of 7",
- * "leaves tomorrow". The seller is looking at one date; a bare range makes
- * them do the arithmetic themselves.
+ * What a store closure does to the listings in view, as clauses — named for
+ * the one listing when a listing is picked, by kind on the all-listings view.
+ * The closed day's sheet said "stays can't book it" above "This night is open
+ * to requests" whatever was selected (z8r3fdhpm7); this is the one author of
+ * that sentence, so it can only say what `closureRule` does.
  */
-function nightPosition(
-	row: { checkIn: number; checkOut: number },
-	date: number,
-): string {
-	if (row.checkIn === date) return "arrives today";
-	const total = Math.round((row.checkOut - row.checkIn) / DAY_MS);
-	const nth = Math.round((date - row.checkIn) / DAY_MS) + 1;
-	if (date + DAY_MS >= row.checkOut) return "leaves tomorrow";
-	return `night ${nth} of ${total}`;
+function closedDayEffects(
+	listings: ReadonlyArray<{ name: string; rule: ClosureRule }>,
+): string[] {
+	if (listings.length === 1) {
+		const [{ name, rule }] = listings;
+		if (rule === "unavailable") return [`${name} can't be booked that night`];
+		if (rule === "absorbed")
+			return [`${name} still runs through it, but can't start on it`];
+		return [`${name} skips it, so packages run a day longer`];
+	}
+	const rules = new Set(listings.map((l) => l.rule));
+	const effects: string[] = [];
+	if (rules.has("unavailable")) effects.push("stays can't book it");
+	if (rules.has("absorbed"))
+		effects.push("every-day packages run through it but can't start on it");
+	if (rules.has("skipped")) effects.push("open-days packages skip it");
+	return effects;
+}
+
+/**
+ * The block sheet's "close instead" promise, for the packages the block would
+ * stop — true to each one's rule. It used to say "the closed days are part of
+ * the term" to an open-days listing, which skips them.
+ */
+function closeInsteadEffect(rules: ReadonlySet<ClosureRule>): string {
+	if (rules.has("absorbed") && rules.has("skipped")) {
+		return "packages keep selling — every-day ones count the closed days, open-days ones skip them";
+	}
+	if (rules.has("skipped")) {
+		return "packages keep selling — they skip the closed days and run a day longer";
+	}
+	return "packages keep selling — the closed days stay part of the term and buyers are told; only a start on a closed day is refused";
 }
 
 /** The named guests on a pending block, with the overflow counted. */
@@ -248,6 +279,22 @@ export function SellerBookingCalendar({
 		return closureOn(calendar?.closures, date);
 	}
 
+	// The store's "shut all day?" — what the buyer calendar asks before it
+	// offers a package start, so the block sheet can quote the same starts.
+	const storeShut = storeClosedOn(calendar.closedWeekdays, calendar.closures);
+	// A weekly day off is a day an OPEN-DAYS listing steps over: nobody on it is
+	// there, so the grid says why the names vanish (z8r3fdhpm7). Only when that
+	// listing is the one in view — stays and every-day packages run through it.
+	const skipsDaysOff =
+		selectedListing !== undefined && closureRule(selectedListing) === "skipped";
+	function isDayOff(date: number): boolean {
+		return (
+			skipsDaysOff &&
+			calendar?.closedWeekdays.includes(weekdayIndexMyt(date)) === true &&
+			!closureForDay(date)
+		);
+	}
+
 	// Month grid, Monday-start (weekend-led business, same as the buyer side).
 	const firstDate = calendarDateFromMytEpoch(month);
 	const lead = (firstDate.getDay() + 6) % 7;
@@ -257,6 +304,7 @@ export function SellerBookingCalendar({
 		...Array.from({ length: daysInMonth }, (_, i) => month + i * DAY_MS),
 	];
 	while (cells.length % 7 !== 0) cells.push(null);
+	const monthHasDayOff = cells.some((d) => d !== null && isDayOff(d));
 
 	function tapDay(date: number) {
 		if (blockSel !== null && blockSel.end === undefined) {
@@ -330,22 +378,29 @@ export function SellerBookingCalendar({
 		blockScope,
 		listingId,
 	);
+	// Judged exactly as the buyer calendar judges a start: never on a shut
+	// day, and an open-days listing only on the days its term counts.
 	const packageStops =
 		blockSel !== null && blockSel.start !== null && blockSel.end !== undefined
 			? listings
 					.filter(
 						(l) =>
 							(blockScopeId === undefined || l._id === blockScopeId) &&
-							closureRule(l) === "absorbed",
+							closureRule(l) !== "unavailable",
 					)
 					.flatMap((l) => {
+						const rule = closureRule(l);
 						const starts = packageStartsCoveringRange(
 							l,
 							blockSel.start as number,
 							blockSel.end as number,
 							today,
+							{
+								isClosed: rule === "skipped" ? storeShut : undefined,
+								startClosed: storeShut,
+							},
 						);
-						return starts ? [{ listing: l, ...starts }] : [];
+						return starts ? [{ listing: l, rule, ...starts }] : [];
 					})
 			: [];
 	// A closed date can't start in the past; the steer offers today onward.
@@ -357,7 +412,14 @@ export function SellerBookingCalendar({
 			? { startDate: Math.max(blockSel.start, today), endDate: blockSel.end }
 			: null;
 	const sheetClosure = sheetDate !== null ? closureForDay(sheetDate) : null;
-	const hasStayListing = listings.some((l) => closureRule(l) === "unavailable");
+	const sheetDayOff = sheetDate !== null && isDayOff(sheetDate);
+	// The listings the day sheet speaks for: the picked one, or all of them.
+	const sheetEffects = closedDayEffects(
+		(selectedListing ? [selectedListing] : listings).map((l) => ({
+			name: l.name,
+			rule: closureRule(l),
+		})),
+	);
 	const sheetBlocks =
 		sheetDate !== null
 			? calendar.blocks.filter(
@@ -455,6 +517,7 @@ export function SellerBookingCalendar({
 								capacity={capacity}
 								isToday={date === today}
 								isPast={date < today}
+								dayOff={isDayOff(date)}
 								inBlockSelection={
 									blockSel !== null &&
 									blockSel.start !== null &&
@@ -493,6 +556,15 @@ export function SellerBookingCalendar({
 						<span className="flex items-center gap-1.5">
 							<CalendarOff className="size-3" aria-hidden />
 							Store closed
+						</span>
+					) : null}
+					{monthHasDayOff ? (
+						<span className="flex items-center gap-1.5">
+							<i
+								className="size-3 rounded border border-dashed border-muted-foreground/40"
+								aria-hidden
+							/>
+							Weekly day off — {selectedListing?.name} skips it
 						</span>
 					) : null}
 					{capacity === undefined && listings.length > 1 ? (
@@ -645,8 +717,7 @@ export function SellerBookingCalendar({
 									<span className="font-semibold">
 										This also stops package sign-ups.
 									</span>{" "}
-									A block refuses any package that runs through a blocked day,
-									so{" "}
+									A block refuses any package that uses a blocked day, so{" "}
 									<span className="font-semibold">
 										{packageStops[0].listing.name}
 									</span>{" "}
@@ -661,10 +732,12 @@ export function SellerBookingCalendar({
 								{closeInsteadRange ? (
 									<>
 										<p className="text-muted-foreground">
-											Just closed on these days? Mark the store closed instead —
-											packages keep selling (the closed days are part of the
-											term, and buyers are told), and nobody can pick these
-											dates for pickup or delivery either.
+											Just closed on these days? Mark the store closed instead —{" "}
+											{closeInsteadEffect(
+												new Set(packageStops.map((stop) => stop.rule)),
+											)}
+											, and nobody can pick these dates for pickup or delivery
+											either.
 										</p>
 										<Button
 											variant="outline"
@@ -737,7 +810,10 @@ export function SellerBookingCalendar({
 									<span className="block text-muted-foreground">
 										{formatClosedRange(sheetClosure)}. Buyers can&apos;t pick it
 										for pickup or delivery
-										{hasStayListing ? ", and stays can't book it" : ""}.
+										{sheetEffects.length > 0
+											? `; ${sheetEffects.join("; ")}`
+											: ""}
+										.
 									</span>
 								</span>
 								<Link
@@ -746,6 +822,28 @@ export function SellerBookingCalendar({
 									className="tap-target inline-flex shrink-0 items-center rounded-lg border border-border bg-background px-3 font-medium hover:bg-muted"
 								>
 									Manage
+								</Link>
+							</div>
+						) : null}
+						{/* A weekly day off on an open-days listing — why nobody on
+						    its packages is here today. */}
+						{sheetDayOff ? (
+							<div className="flex items-center justify-between gap-2 rounded-xl border border-dashed border-muted-foreground/40 bg-muted/40 px-3 py-2 text-xs">
+								<span className="min-w-0">
+									<span className="flex items-center gap-1.5 font-semibold">
+										<CalendarOff className="size-3.5 shrink-0" aria-hidden />
+										Weekly day off
+									</span>
+									<span className="block text-muted-foreground">
+										{sheetEffects.join("; ")}.
+									</span>
+								</span>
+								<Link
+									to="/app/settings"
+									search={{ tab: "fulfilment", spot: "opening_hours" }}
+									className="tap-target inline-flex shrink-0 items-center rounded-lg border border-border bg-background px-3 font-medium hover:bg-muted"
+								>
+									Hours
 								</Link>
 							</div>
 						) : null}
@@ -790,8 +888,11 @@ export function SellerBookingCalendar({
 								/>
 								<p className="text-sm font-semibold">Nobody booked in yet</p>
 								<p className="text-xs leading-relaxed text-muted-foreground">
-									This night is open to requests. Block it if you&apos;re not
-									taking guests.
+									{sheetClosure || sheetDayOff
+										? // Never "open to requests" under a closure — nothing
+											// new can start on a shut day, whatever the listing.
+											"The store is closed that day, so nothing new can start on it."
+										: "This night is open to requests. Block it if you're not taking guests."}
 								</p>
 							</div>
 						) : (
@@ -801,41 +902,46 @@ export function SellerBookingCalendar({
 										key={row.shortId}
 										to="/app/orders/$shortId"
 										params={{ shortId: row.shortId }}
-										className="flex items-center gap-3 py-2.5"
+										className="flex items-start gap-3 py-2.5"
 									>
 										<span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary text-[11px] font-bold text-primary-foreground">
 											{guestInitials(row.customerName)}
 										</span>
-										<div className="min-w-0 flex-1">
+										{/* The badges sit UNDER the name: beside it they took the
+										    width and cut the row to "Zaki …" / "Valid …". */}
+										<div className="flex min-w-0 flex-1 flex-col gap-1">
 											<p className="truncate text-sm font-medium">
 												{row.customerName ?? "Guest"}
 											</p>
 											{/* Enough to decide WHICH order to open without
-											     opening them all: where in the stay tonight is,
+											     opening them all: where in the booking today is,
 											     and — on an all-listings view — whose plot. */}
-											<p className="truncate text-xs text-muted-foreground tabular-nums">
+											<p className="text-xs text-muted-foreground tabular-nums">
 												{describeBookingSpan(row.checkIn, row.checkOut, {
 													isPackage: row.packaged,
 													format: formatFulfilmentDate,
 												})}
 												{sheetDate !== null
-													? ` · ${nightPosition(row, sheetDate)}`
+													? ` · ${bookingDayPosition(row, sheetDate)}`
 													: ""}
 												{listingId === "all" ? ` · ${row.listingName}` : ""}
 											</p>
+											<span className="flex flex-wrap items-center gap-1.5">
+												<StatusBadge
+													status={row.status}
+													label={row.statusLabel}
+												/>
+												{row.paymentStatus !== "received" ? (
+													<span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-400">
+														Unpaid
+													</span>
+												) : null}
+											</span>
 										</div>
-										<div className="flex shrink-0 items-center gap-2">
-											{row.paymentStatus !== "received" ? (
-												<span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-400">
-													Unpaid
-												</span>
-											) : null}
-											<StatusBadge status={row.status} />
-											<ChevronRight
-												className="size-4 text-muted-foreground"
-												aria-hidden
-											/>
-										</div>
+										<ChevronRight
+											className="mt-2.5 size-4 shrink-0 text-muted-foreground"
+											aria-hidden
+										/>
 									</Link>
 								))}
 							</div>
@@ -867,6 +973,8 @@ export function SellerBookingCalendar({
 					if (!open) setCloseInstead(null);
 				}}
 				existing={calendar.closures}
+				// This calendar only exists for a store that sells bookings.
+				hasBookingListings
 				initialRange={closeInstead ?? undefined}
 			/>
 		</div>

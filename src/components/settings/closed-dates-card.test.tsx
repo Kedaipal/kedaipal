@@ -61,7 +61,13 @@ afterEach(() => {
 
 describe("ClosedDatesCard", () => {
 	it("empty: says what the card is for, and offers the add", () => {
-		render(<ClosedDatesCard retailerId={RETAILER} closedDates={undefined} />);
+		render(
+			<ClosedDatesCard
+				retailerId={RETAILER}
+				closedDates={undefined}
+				hasBookingListings={false}
+			/>,
+		);
 		expect(screen.getByText("No closed dates")).toBeTruthy();
 		expect(screen.getByText(/Closing for Raya or a break\?/)).toBeTruthy();
 		expect(
@@ -77,6 +83,7 @@ describe("ClosedDatesCard", () => {
 		render(
 			<ClosedDatesCard
 				retailerId={RETAILER}
+				hasBookingListings={false}
 				closedDates={[
 					raya,
 					{ startDate: today - 5 * DAY_MS, endDate: today - DAY_MS },
@@ -92,7 +99,13 @@ describe("ClosedDatesCard", () => {
 	});
 
 	it("Reopen removes that exact range and offers an Undo that puts it back", async () => {
-		render(<ClosedDatesCard retailerId={RETAILER} closedDates={[raya]} />);
+		render(
+			<ClosedDatesCard
+				retailerId={RETAILER}
+				closedDates={[raya]}
+				hasBookingListings={false}
+			/>,
+		);
 		fireEvent.click(screen.getByRole("button", { name: "Reopen" }));
 		await waitFor(() =>
 			expect(state.remove).toHaveBeenCalledWith({
@@ -113,7 +126,13 @@ describe("ClosedDatesCard", () => {
 			endDate: today + DAY_MS,
 			label: "Renovation",
 		};
-		render(<ClosedDatesCard retailerId={RETAILER} closedDates={[running]} />);
+		render(
+			<ClosedDatesCard
+				retailerId={RETAILER}
+				closedDates={[running]}
+				hasBookingListings={false}
+			/>,
+		);
 		fireEvent.click(screen.getByRole("button", { name: "Reopen" }));
 		await waitFor(() => expect(state.toast.success).toHaveBeenCalled());
 		state.toast.success.mock.calls[0][1].action.onClick();
@@ -130,7 +149,13 @@ describe("ClosedDatesCard", () => {
 			startDate: today + (i + 1) * DAY_MS,
 			endDate: today + (i + 1) * DAY_MS,
 		}));
-		render(<ClosedDatesCard retailerId={RETAILER} closedDates={full} />);
+		render(
+			<ClosedDatesCard
+				retailerId={RETAILER}
+				closedDates={full}
+				hasBookingListings={false}
+			/>,
+		);
 		expect(
 			(
 				screen.getByRole("button", {
@@ -143,17 +168,26 @@ describe("ClosedDatesCard", () => {
 });
 
 describe("AddClosedDatesSheet", () => {
-	function renderSheet(initialRange?: { startDate: number; endDate: number }) {
+	function renderSheet(
+		initialRange?: { startDate: number; endDate: number },
+		hasBookingListings = false,
+	) {
 		render(
 			<AddClosedDatesSheet
 				retailerId={RETAILER}
 				open
 				onOpenChange={() => {}}
 				existing={[raya]}
+				hasBookingListings={hasBookingListings}
 				initialRange={initialRange}
 			/>,
 		);
 	}
+	/** Three fresh days, clear of the existing Raya closure. */
+	const later = {
+		startDate: raya.startDate + 10 * DAY_MS,
+		endDate: raya.startDate + 12 * DAY_MS,
+	};
 
 	it("the CTA is disabled with the reason until days are picked", () => {
 		renderSheet();
@@ -162,7 +196,7 @@ describe("AddClosedDatesSheet", () => {
 	});
 
 	it("the CTA carries its consequence, and the save sends the range + trimmed reason", async () => {
-		renderSheet({ startDate: raya.startDate, endDate: raya.endDate });
+		renderSheet(later);
 		fireEvent.change(screen.getByPlaceholderText("e.g. Hari Raya"), {
 			target: { value: "  Hari Raya  " },
 		});
@@ -170,14 +204,28 @@ describe("AddClosedDatesSheet", () => {
 		await waitFor(() =>
 			expect(state.add).toHaveBeenCalledWith({
 				retailerId: RETAILER,
-				startDate: raya.startDate,
-				endDate: raya.endDate,
+				...later,
 				label: "Hari Raya",
 			}),
 		);
 	});
 
+	it('an exact repeat of a closure is refused HERE, disabled with the reason — never "that\'s fine" and then an error', () => {
+		renderSheet({ startDate: raya.startDate, endDate: raya.endDate });
+		const cta = screen.getByRole("button", { name: "Already closed" });
+		expect((cta as HTMLButtonElement).disabled).toBe(true);
+		expect(screen.getByText("Those dates are already closed.")).toBeTruthy();
+		expect(screen.queryByText(/Overlaps a closure/)).toBeNull();
+		fireEvent.click(cta);
+		expect(state.add).not.toHaveBeenCalled();
+	});
+
 	it("states what's already on the dates before saving — nothing is moved", () => {
+		// One day before Raya through its end: overlapping, not a repeat.
+		const overlapping = {
+			startDate: raya.startDate - DAY_MS,
+			endDate: raya.endDate,
+		};
 		state.impact = {
 			orders: 2,
 			ordersCapped: false,
@@ -187,7 +235,7 @@ describe("AddClosedDatesSheet", () => {
 				{ shortId: "ORD-CD34", kind: "booking" },
 			],
 		};
-		renderSheet({ startDate: raya.startDate, endDate: raya.endDate });
+		renderSheet(overlapping);
 		expect(
 			screen.getByText(
 				"2 orders are due, and 1 booking runs through them on these dates.",
@@ -211,6 +259,39 @@ describe("AddClosedDatesSheet", () => {
 		).toBeTruthy();
 		expect(
 			screen.getByRole("button", { name: /^Close .*20\d\d$/ }),
+		).toBeTruthy();
+		// A store with no bookings isn't told about stays and packages.
+		expect(screen.queryByText(/stays can't book/)).toBeNull();
+	});
+
+	it('a store that sells bookings is told what a closure does to them — not "buyers can\'t pick them", which a package contradicts', () => {
+		renderSheet(later, true);
+		expect(
+			screen.getByText(
+				/can't pick them for delivery or pickup; stays can't book those nights and no package can start on one/,
+			),
+		).toBeTruthy();
+	});
+
+	it("days already closed are hatched and the legend says so", () => {
+		renderSheet(later);
+		expect(screen.getByText("Hatched days are already closed")).toBeTruthy();
+	});
+});
+
+describe("ClosedDatesCard — a booking store", () => {
+	it("the card says what closures do to stays and packages", () => {
+		render(
+			<ClosedDatesCard
+				retailerId={RETAILER}
+				closedDates={undefined}
+				hasBookingListings
+			/>,
+		);
+		expect(
+			screen.getByText(
+				/For bookings, stays can't book those nights and no package can start on one/,
+			),
 		).toBeTruthy();
 	});
 });

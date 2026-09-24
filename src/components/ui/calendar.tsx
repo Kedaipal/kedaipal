@@ -21,6 +21,7 @@ export type CalendarProps = React.ComponentProps<typeof DayPicker>;
 export function Calendar({
 	className,
 	classNames,
+	modifiersClassNames,
 	showOutsideDays = true,
 	...props
 }: CalendarProps) {
@@ -107,6 +108,9 @@ export function Calendar({
 				// A soft mint fill behind the days in between.
 				range_middle: "rounded-none bg-accent/12",
 				selected: "font-semibold",
+				// MERGED, never replacing: a caller adding its own modifier (the
+				// closed-dates sheet's hatch) must not wipe the band above.
+				...modifiersClassNames,
 			}}
 			components={{ Chevron: CalendarChevron }}
 			{...props}

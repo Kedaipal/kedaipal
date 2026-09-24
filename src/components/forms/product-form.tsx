@@ -45,7 +45,7 @@ import { bookingSpanCounted, bookingSpanNoun } from "../../lib/booking-dates";
 import {
 	type FixHighlight,
 	highlightRingClass,
-	scrollToAnchor,
+	revealAnchorWhenMounted,
 } from "../../lib/country-setup-copy";
 import {
 	convexErrorMessage,
@@ -821,8 +821,7 @@ export function ProductForm({
 		spotlightAnchor === anchor ? "spotlight" : undefined;
 	useEffect(() => {
 		if (!spotlightAnchor) return;
-		const frame = requestAnimationFrame(() => scrollToAnchor(spotlightAnchor));
-		return () => cancelAnimationFrame(frame);
+		return revealAnchorWhenMounted(spotlightAnchor);
 	}, [spotlightAnchor]);
 
 	const [images, setImages] = useState<ProductImage[]>(

@@ -1508,12 +1508,21 @@ the one author:
 | Listing | Rule | What a closed date does |
 | --- | --- | --- |
 | Free-range stay, **night** package (3D2N) | `unavailable` | A guest sleeps there; a shut place hosts nobody. It joins `findFullNights` like a store-wide block. The leaving morning is still fine. |
-| **Month** package, **day** package counted every day in a row | `absorbed` | Access time. A gym closed on Raya doesn't extend anyone's month (industry norm). Never refuses; the buyer is told which closed dates fall inside their term. |
+| **Month** package, **day** package counted every day in a row | `absorbed` | Access time. A gym closed on Raya doesn't extend anyone's month (industry norm). A closure INSIDE the term never refuses it; the buyer is told which closed dates fall inside their term. It can't START on a shut day (below). |
 | **Day** package with `skipsClosedDays` | `skipped` | Days of service (a course, a camp, a class pass). The shut day isn't delivered, so it isn't counted and the term runs past it. The weekly day off is skipped too. |
 
-The **weekly day off** is read only by the open-days rule. It is unchanged for
-stays (a campsite hosts overnight while reception is shut) and priced into
-access packages.
+The **weekly day off** never touches stays (a campsite hosts overnight while
+reception is shut). Both package rules read it for the start day; only the
+open-days rule also steps over it inside the term.
+
+**No package starts on a shut day** (owner call, 24 Sep, after the Chrome
+test). An every-day package could be bought for a term made entirely of closed
+days — RM 150 for two days the site was shut. `resolveBookingRange` refuses a
+closed START for `absorbed` with the same sentence the open-days resolver uses
+(`CLOSED_START_MESSAGE`), and the buyer calendar mirrors it through
+`SelectionContext.startClosed`. The availability payload therefore sends
+`closedWeekdays` for every package, not just open-days ones. Only the closed
+days themselves drop out as starts, so the FS Fitness trap stays fixed.
 
 ### Open-days packages
 
@@ -1599,6 +1608,56 @@ harness for the Clerk-gated ones) found four more:
   a phone, a closed seller cell WITH bookings had lost its closed mark (the
   count pill is desktop-only), so the icon shows there now.
 
+### Hands-on test round (24 Sep, Zaki's Chrome)
+
+Driven end to end on herb (closed Sun/Tue/Wed). The rules held; the words
+around them didn't. What it found, and what changed:
+
+- **Every "N days" on an open-days order counted the span.** The receipt said
+  "4 open days"; the track page said "7 days", the seller's approve card said
+  "Check-out Sat 10 Oct · 7 nights", the day sheet "night 3 of 7", and the
+  inbox would have said "Active · 6 days left". One count now:
+  `countedDays` (server) → `bookingLengthLabel` / `bookingDayPosition`
+  (client), and `describeBookingPeriod` counts open days left. The approve
+  card also learned package vocabulary at all — it never had it (Starts /
+  Last day / days), predating this ticket.
+- **A stay cut short by a closure said "booked out".** It now names the
+  closure. A full or blocked night still reads booked out (never told apart).
+- **The seller calendar misread every open-days listing as every-day**: its
+  `listings` payload had no `skipsClosedDays`, so `closureRule` on the client
+  fell through. The block sheet quoted the wrong starts ("from Sun 4", a day
+  that can't start) and promised "the closed days are part of the term" to a
+  listing that skips them. The payload carries the flag and `closedWeekdays`;
+  `packageStartsCoveringRange` takes the store's schedule and judges starts
+  exactly as the buyer calendar does; the promise is per rule.
+- **A closed day's sheet said "Store closed" above "This night is open to
+  requests".** The closure row now speaks per listing (`closedDayEffects`),
+  and the empty state never contradicts it.
+- **Weekly days off on an open-days listing looked like empty open days**, so
+  members vanished mid-package. Those cells read "Day off" (only while empty —
+  a booking from before the switch keeps its names), with a legend entry and a
+  day-sheet row.
+- **Closed dates sheet**: an exact repeat said "that's fine, both count" and
+  the server then refused it — now disabled with the reason. The sheet has a
+  fixed height (a centred sheet re-centred as the impact line appeared,
+  moving the calendar ~44px between taps) with the confirm pinned below; days
+  already closed are hatched; the order chips are 44px on a phone. A booking
+  store is told what a closure does to stays and packages — "buyers can't pick
+  them" alone was false for a package.
+- **Buyer calendar**: a month with no startable day opens on the first month
+  that has one, and says so ("No start dates left in September — the first is
+  Thu, 1 Oct"); the legend shows "Store closed" whenever a hatch is on screen
+  (a weekly day off counts); past days aren't hatched; the band is "Your
+  package" on a package.
+- **Settings deep links never scrolled** when the card mounted after the first
+  frame (always, behind the skeleton) — `revealAnchorWhenMounted` waits for
+  it. Predates this ticket; every `?spot=`/`?fix=` link benefits.
+- In passing: the day sheet printed the raw status ("Booking_requested"), now
+  the resolved label; the shared `Calendar` merges a caller's
+  `modifiersClassNames` instead of replacing its range band; the header keeps
+  "7:30 AM" on one line; the approve card's capacity figure ignores days the
+  booking skips (and its dead `nights` field is gone).
+
 ### Tests
 
 `convex/lib/closedDates.test.ts`, `convex/lib/bookingAvailability.test.ts`
@@ -1607,7 +1666,10 @@ harness for the Clerk-gated ones) found four more:
 blocked on every shape, open-days end to end incl. a block on a skipped day and
 the grid), `src/lib/booking-dates.test.ts` (packageTerm, block coverage,
 order lines), and the component tests for the buyer checkout, the seller
-calendar, the settings card and the day-counting field. The gates were
+calendar, the settings card and the day-counting field. The Chrome round added
+`booking-request-card.test.tsx`, `src/lib/country-setup-copy.test.ts`, the
+start-on-a-shut-day rule on both sides, open-days block starts, counted-day
+labels, the day-off grid, and the approve card's capacity line. The gates were
 mutation-checked: removing any of them turns its test red.
 
 ### Deliberately NOT done

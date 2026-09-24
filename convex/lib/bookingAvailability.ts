@@ -85,6 +85,32 @@ export function nightsBetween(checkIn: number, checkOut: number): number {
 	return Math.round((checkOut - checkIn) / DAY_MS);
 }
 
+/**
+ * How many days of [checkIn, checkOut) a booking actually USES — the span
+ * minus the shut days an open-days package stepped over (z8r3fdhpm7,
+ * `orders.bookingSkippedDays`). Every other booking has no skipped days, so
+ * this is the plain span for them.
+ *
+ * The one count every "N days" on an order reads. Counting the span instead
+ * told a buyer who bought 4 open days that their package was "7 days", and the
+ * seller's approve card said "7 nights" beside a receipt that said 4.
+ */
+export function countedDays(
+	checkIn: number,
+	checkOut: number,
+	skipped: readonly number[] | undefined,
+): number {
+	const inside = (skipped ?? []).filter(
+		(day) => day >= checkIn && day < checkOut,
+	).length;
+	return nightsBetween(checkIn, checkOut) - inside;
+}
+
+/** A package can't START on a day the store is shut — the one sentence, so
+ * the resolver's refusal and the buyer calendar's reason can't drift. */
+export const CLOSED_START_MESSAGE =
+	"The store is closed on that day — start on a day it's open";
+
 /** Every night [checkIn, checkOut) as MYT midnights. */
 export function eachNight(checkIn: number, checkOut: number): number[] {
 	const nights: number[] = [];
@@ -301,17 +327,20 @@ export function isNightBlocked(
  *    exactly like a store-wide block.
  *  - `"absorbed"` — a month package, or a day package counted every day in a
  *    row: ACCESS time. A gym closed on Raya doesn't extend anyone's month —
- *    closures are priced in, the industry norm. A closure never refuses the
- *    package; the buyer is told which days inside their term are closed.
+ *    closures are priced in, the industry norm. A closure inside the term
+ *    never refuses the package; the buyer is told which days are closed. Only
+ *    the START must be a day the store is open (owner call, 24 Sep): a term
+ *    starting on a shut day — or made of nothing but shut days — sold the
+ *    buyer days they could never use.
  *  - `"skipped"` — a day package the seller counts in OPEN days
  *    (`skipsClosedDays`): DAYS OF SERVICE — a 5-day course, a kids' camp, a
  *    class pass. A day the store is shut delivers nothing, so it isn't
  *    counted: the term runs past it (`resolveOpenDaysTerm`), and the weekly
  *    day off is skipped too, because it is just as undelivered.
  *
- * Only the open-days rule reads the weekly day off. It is unchanged for
- * stays (a campsite hosts overnight while reception is shut) and priced into
- * access packages.
+ * Stays never read the weekly day off (a campsite hosts overnight while
+ * reception is shut). Both package rules do, for the start day; only the
+ * open-days rule also steps over it inside the term.
  */
 export type ClosureRule = "unavailable" | "absorbed" | "skipped";
 
@@ -355,11 +384,7 @@ export function resolveOpenDaysTerm(
 	openDays: number,
 	isClosed: (day: number) => boolean,
 ): { checkOut: number; skipped: number[] } {
-	if (isClosed(checkIn)) {
-		throw new Error(
-			"The store is closed on that day — start on a day it's open",
-		);
-	}
+	if (isClosed(checkIn)) throw new Error(CLOSED_START_MESSAGE);
 	const skipped: number[] = [];
 	const ceiling = checkIn + MAX_PACKAGE_DAYS * DAY_MS;
 	let counted = 0;
@@ -444,13 +469,20 @@ export function resolveBookingRange(
 	checkOut?: number,
 	packageQuantity = 1,
 	/** The store's "shut all day?" answer — REQUIRED for an open-days package
-	 * (`closureRule` "skipped"), ignored otherwise. */
+	 * (`closureRule` "skipped"); for an every-day or month package it refuses
+	 * a START on a shut day. Ignored for a stay. */
 	isClosed?: (day: number) => boolean,
 ): { checkIn: number; checkOut: number; skipped: number[] } {
 	const length = booking?.packageLength;
 	if (length !== undefined && length > 0) {
 		const quantity = normalizePackageQuantity(packageQuantity, booking);
-		if (closureRule(booking) === "skipped") {
+		const rule = closureRule(booking);
+		// Day one has to be a day the store is open, whichever way the term
+		// counts — the open-days resolver below says the same thing itself.
+		if (rule === "absorbed" && isClosed?.(checkIn)) {
+			throw new Error(CLOSED_START_MESSAGE);
+		}
+		if (rule === "skipped") {
 			if (!isClosed) {
 				// A programming error, not a buyer one: resolving an open-days term
 				// without the schedule would silently count shut days.

@@ -5,7 +5,10 @@
 // night being a valid LEAVING morning, conflict ceilings) are unit-tested
 // rather than eyeballed.
 
-import { resolveOpenDaysTerm } from "../../convex/lib/bookingAvailability";
+import {
+	countedDays,
+	resolveOpenDaysTerm,
+} from "../../convex/lib/bookingAvailability";
 import {
 	addMytCalendarMonths,
 	DAY_MS,
@@ -86,6 +89,10 @@ export type SelectionContext = {
 	 * rest (`resolveOpenDaysTerm`, the server's own resolver). Unset = every
 	 * day in a row. */
 	isClosed?: (day: number) => boolean;
+	/** Every package listing: is the store shut all day? A package can't
+	 * START on a day it says yes to — the same refusal `resolveBookingRange`
+	 * makes — whether the term then counts every day or only open ones. */
+	startClosed?: (day: number) => boolean;
 };
 
 /**
@@ -140,38 +147,70 @@ export function packageEnd(
 
 /**
  * The start dates a BLOCK over [from, to] (both inclusive) takes off sale for
- * a package listing — every start whose term would run through a blocked day,
- * clipped to today. `null` for a free-range listing or when nothing sellable
- * is hit. Judged for ONE package, the shortest term a buyer can take (more
- * packages reach further back, so this is the floor, stated as such).
+ * a package listing — every start whose term would USE a blocked day, clipped
+ * to today. `null` for a free-range listing or when nothing sellable is hit.
+ * Judged for ONE package, the shortest term a buyer can take (more packages
+ * reach further back, so this is the floor, stated as such).
  *
  * It exists for the block sheet (z8r3fdhpm7): a block refuses a package that
  * covers ANY blocked day, so blocking one Raya day on a monthly membership
  * silently stops a month of sign-ups. The sheet states it and offers a
- * closed date instead, which a month package absorbs.
+ * closed date instead, which a package takes in its stride.
+ *
+ * `schedule` makes the answer the one the buyer calendar gives: a shut day is
+ * never a start (`startClosed`), and an open-days listing (`isClosed`) is
+ * judged on the days it counts — its term steps over shut days, so a block
+ * on one of those stops nothing, and a start further back can still reach a
+ * blocked day that an every-day count would have missed.
  */
 export function packageStartsCoveringRange(
 	listing: { packageLength?: number; packageUnit?: PackageUnit },
 	from: number,
 	to: number,
 	today: number,
+	schedule: {
+		isClosed?: (day: number) => boolean;
+		startClosed?: (day: number) => boolean;
+	} = {},
 ): { first: number; last: number } | null {
 	const length = listing.packageLength;
 	if (length === undefined || length <= 0) return null;
-	// A start ON a blocked day covers it; walking back, a term's end only
-	// shrinks, so the first start whose term no longer reaches `from` ends the
-	// scan (bounded by the longest term there is).
-	let first = from;
+	const ctx = {
+		packageLength: length,
+		packageUnit: listing.packageUnit,
+		isClosed: schedule.isClosed,
+	};
+	let first: number | null = null;
+	let last: number | null = null;
+	// Walk BACK from the block's last day. A term's end only moves earlier as
+	// its start does (skips included), so the first start whose term ends
+	// before `from` ends the scan — bounded by the longest term there is.
 	for (
-		let start = from - DAY_MS;
-		start >= from - (MAX_PACKAGE_DAYS + 31) * DAY_MS;
+		let start = to;
+		start >= from - (MAX_PACKAGE_DAYS + 31) * DAY_MS && start >= today;
 		start -= DAY_MS
 	) {
-		if (packageEnd(start, length, listing.packageUnit, 1) <= from) break;
+		if (schedule.startClosed?.(start)) continue;
+		const term = packageTerm(start, ctx);
+		if (term === null) continue;
+		if (term.checkOut <= from) break;
+		const skipped = new Set(term.skipped);
+		let usesBlockedDay = false;
+		for (
+			let day = Math.max(start, from);
+			day <= to && day < term.checkOut;
+			day += DAY_MS
+		) {
+			if (!skipped.has(day)) {
+				usesBlockedDay = true;
+				break;
+			}
+		}
+		if (!usesBlockedDay) continue;
 		first = start;
+		last ??= start;
 	}
-	first = Math.max(first, today);
-	return first > to ? null : { first, last: to };
+	return first === null || last === null ? null : { first, last };
 }
 
 /** Can this day START a stay? Its own night must be free and inside the
@@ -184,6 +223,8 @@ export function canCheckIn(day: number, ctx: SelectionContext): boolean {
 	// package is judged on the days it COUNTS — a skipped day is never used —
 	// and can't start on a shut day at all.
 	if (ctx.packageLength !== undefined && ctx.packageLength > 0) {
+		// No package starts on a day the store is shut (owner call, 24 Sep).
+		if (ctx.startClosed?.(day)) return false;
 		const term = packageTerm(day, ctx);
 		if (term === null) return false;
 		const skipped = new Set(term.skipped);
@@ -451,6 +492,74 @@ export function describeSkippedDays(
 }
 
 /**
+ * How long a placed booking is, counted the way it was sold — "4 open days"
+ * for an open-days package (z8r3fdhpm7), "30 days" for any other package,
+ * "2 nights" for a stay. `null` without dates.
+ *
+ * The one author of that count: the track page, the seller's approve card and
+ * the order summary each did the span arithmetic themselves, so an open-days
+ * package read "4 open days" on the receipt and "7 days" / "7 nights" on the
+ * next two screens.
+ */
+export function bookingLengthLabel(
+	order: {
+		bookingCheckIn?: number;
+		bookingCheckOut?: number;
+		bookingPackaged?: boolean;
+		bookingSkippedDays?: readonly number[];
+	},
+	locale: "en" | "ms" = "en",
+): string | null {
+	const { bookingCheckIn: checkIn, bookingCheckOut: checkOut } = order;
+	if (checkIn === undefined || checkOut === undefined) return null;
+	const n = countedDays(checkIn, checkOut, order.bookingSkippedDays);
+	const plural = n === 1 ? "" : "s";
+	if (order.bookingPackaged !== true) {
+		return locale === "ms" ? `${n} malam` : `${n} night${plural}`;
+	}
+	if ((order.bookingSkippedDays ?? []).length > 0) {
+		return locale === "ms" ? `${n} hari buka` : `${n} open day${plural}`;
+	}
+	return locale === "ms" ? `${n} hari` : `${n} day${plural}`;
+}
+
+/**
+ * Where ONE day sits in a booking, for the seller's day sheet — "arrives
+ * today", "night 3 of 7", "leaves tomorrow" for a stay; "starts today",
+ * "day 2 of 4", "last day" for a package. A bare range makes the seller do
+ * the arithmetic; for an open-days package they couldn't (z8r3fdhpm7): the
+ * old span count said "night 3 of 7" on day 2 of a 4-open-day course.
+ */
+export function bookingDayPosition(
+	row: {
+		checkIn: number;
+		checkOut: number;
+		packaged: boolean;
+		skippedDays?: readonly number[];
+	},
+	date: number,
+): string {
+	if (!row.packaged) {
+		if (row.checkIn === date) return "arrives today";
+		if (date + DAY_MS >= row.checkOut) return "leaves tomorrow";
+		const total = Math.round((row.checkOut - row.checkIn) / DAY_MS);
+		const nth = Math.round((date - row.checkIn) / DAY_MS) + 1;
+		return `night ${nth} of ${total}`;
+	}
+	const shut = new Set(row.skippedDays ?? []);
+	const days: number[] = [];
+	for (let day = row.checkIn; day < row.checkOut; day += DAY_MS) {
+		if (!shut.has(day)) days.push(day);
+	}
+	const index = days.indexOf(date);
+	if (index === -1) return "a day it skips";
+	if (days.length === 1) return "its only day";
+	if (index === 0) return "starts today";
+	if (index === days.length - 1) return "last day";
+	return `day ${index + 1} of ${days.length}`;
+}
+
+/**
  * The seller order page's one-line booking summary. A fixed-length package
  * reads as a validity window in DAYS — OPEN days when it skipped any — and a
  * free-range stay as check-in → check-out in NIGHTS.
@@ -470,21 +579,17 @@ export function bookingFulfilmentLine(
 	format: (epoch: number) => string,
 ): string {
 	const { bookingCheckIn: checkIn, bookingCheckOut: checkOut } = order;
-	if (checkIn === undefined || checkOut === undefined) return "Booking";
+	const count = bookingLengthLabel(order);
+	if (checkIn === undefined || checkOut === undefined || count === null) {
+		return "Booking";
+	}
 	const isPackage = order.bookingPackaged === true;
-	const span = Math.round((checkOut - checkIn) / DAY_MS);
-	const skipped = order.bookingSkippedDays ?? [];
-	const count = isPackage
-		? skipped.length > 0
-			? `${span - skipped.length} open day${span - skipped.length === 1 ? "" : "s"}`
-			: `${span} day${span === 1 ? "" : "s"}`
-		: `${span} night${span === 1 ? "" : "s"}`;
 	const parts = [
 		"Booking",
 		count,
 		describeBookingSpan(checkIn, checkOut, { isPackage, format }),
 	];
-	const skips = describeSkippedDays(skipped);
+	const skips = describeSkippedDays(order.bookingSkippedDays);
 	if (skips) parts.push(skips);
 	return parts.join(" · ");
 }

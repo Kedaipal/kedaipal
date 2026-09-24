@@ -207,10 +207,11 @@ export const availability = query({
 		 * nights for a stay, absorbed by an access package, skipped by an
 		 * open-days package. */
 		closureRule: ClosureRule;
-		/** Open-days package only (`closureRule` "skipped"): the store's weekly
-		 * days off. With `closures` it is everything the calendar needs to
-		 * resolve each start's term exactly as `requestBooking` will
-		 * (`storeClosedOn`). Empty for every other shape. */
+		/** Package listings only: the store's weekly days off. With `closures`
+		 * it is everything the calendar needs to answer "is the store shut?"
+		 * exactly as `requestBooking` will (`storeClosedOn`) — no package starts
+		 * on a shut day, and an open-days one steps over them. Empty for a stay,
+		 * which the weekly day off never touches. */
 		closedWeekdays: number[];
 	} | null> => {
 		if (!isMytMidnight(args.from) || !isMytMidnight(args.to)) {
@@ -252,9 +253,9 @@ export const availability = query({
 			closures: upcomingClosures(retailer.closedDates),
 			closureRule: closureRule(product.booking),
 			closedWeekdays:
-				closureRule(product.booking) === "skipped"
-					? closedWeekdays(retailer.openingHours)
-					: [],
+				closureRule(product.booking) === "unavailable"
+					? []
+					: closedWeekdays(retailer.openingHours),
 		};
 	},
 });
@@ -363,7 +364,8 @@ export const requestBooking = mutation({
 		let checkOut: number;
 		// The shut days an OPEN-DAYS package steps over (z8r3fdhpm7) — empty for
 		// every other shape. Built from the same two facts the buyer calendar
-		// is sent, so the term the buyer was shown is the term charged.
+		// is sent, so the term the buyer was shown is the term charged. The same
+		// schedule refuses ANY package starting on a shut day.
 		let skipped: number[];
 		try {
 			({ checkIn, checkOut, skipped } = resolveBookingRange(

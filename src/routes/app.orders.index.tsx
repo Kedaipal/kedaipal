@@ -1093,6 +1093,7 @@ function OrdersRoute() {
 		bookingCheckIn?: number;
 		bookingCheckOut?: number;
 		bookingPackaged?: boolean;
+		bookingSkippedDays?: number[];
 		status: string;
 	}): string | null => describeBookingPeriod(o);
 

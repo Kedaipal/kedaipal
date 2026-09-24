@@ -149,7 +149,7 @@ export function PackageDayCounting({
 						"Your closed days are skipped, so the package ends later. Buyers see the skipped days before they book, and can't start on a day you're closed."
 					)
 				) : (
-					`Runs ${span} in a row from the start date. Days you're closed still count, and buyers are told about any closed dates inside their package.`
+					`Runs ${span} in a row from the start date. Days you're closed after it still count, and buyers are told about any closed dates inside their package — it just can't start on a day you're closed.`
 				)}
 			</p>
 		</div>

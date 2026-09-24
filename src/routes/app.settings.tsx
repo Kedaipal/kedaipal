@@ -68,7 +68,6 @@ import { FulfilmentTab } from "../components/settings/fulfilment-tab";
 import { IntegrationsTab } from "../components/settings/integrations-tab";
 import { NotificationsCard } from "../components/settings/notifications-card";
 import { OrderFlowsSection } from "../components/settings/order-flows-card";
-import type { StatusLabels } from "../lib/orderStatus";
 import {
 	Card,
 	InfoBanner,
@@ -96,11 +95,12 @@ import {
 	type CardTarget,
 	type FixHighlight,
 	highlightFor,
+	revealAnchorWhenMounted,
 	SETTINGS_ANCHOR,
-	scrollToAnchor,
 } from "../lib/country-setup-copy";
 import { convexErrorMessage } from "../lib/format";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
+import type { StatusLabels } from "../lib/orderStatus";
 import { normalizeMobileDigits, toNationalPhoneInput } from "../lib/phone";
 import { reorderByIds } from "../lib/reorder";
 import {
@@ -421,10 +421,9 @@ function SettingsRoute() {
 		cardTarget?.anchor === anchor ? cardTarget.highlight : undefined;
 	useEffect(() => {
 		if (!targetAnchor) return;
-		// The tab body mounts in this same commit, so the target doesn't exist
-		// until after paint — wait a frame rather than racing it.
-		const frame = requestAnimationFrame(() => scrollToAnchor(targetAnchor));
-		return () => cancelAnimationFrame(frame);
+		// The tab body renders behind a skeleton until the store loads, so the
+		// card can mount well after this effect — wait for IT, not a frame.
+		return revealAnchorWhenMounted(targetAnchor);
 	}, [targetAnchor]);
 
 	if (!retailer) return <SettingsSkeleton />;
@@ -923,6 +922,7 @@ function SettingsRoute() {
 						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
 						openingHours={retailer.openingHours}
 						closedDates={retailer.closedDates}
+						hasBookingListings={hasBookingListings}
 						minOrderValue={retailer.minOrderValue}
 						awbConfig={retailer.awbConfig}
 						subscription={retailer.subscription}

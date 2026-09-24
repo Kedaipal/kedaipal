@@ -738,7 +738,8 @@ booking term resolves identically on both sides (see `docs/booking.md`).
   schedule dialog lists upcoming closures. The store's JSON-LD gains
   `specialOpeningHoursSpecification` rows (schema.org's closed-all-day shape).
 - **Bookings**: per-shape rules, see `docs/booking.md`. A stay can't sleep on
-  a closed date; a membership absorbs it; an open-days package skips it.
+  a closed date; a membership absorbs it; an open-days package skips it; and
+  no package STARTS on a shut day.
 
 ### Seller surface
 
@@ -748,11 +749,16 @@ are that schedule's exceptions). Each add or reopen is an immediate write
 never part of a draft. The add sheet (`AddClosedDatesSheet`, also opened by the
 booking calendar's "Mark the store closed instead") has:
 
-- a range calendar;
+- a range calendar, with the days already closed hatched;
 - the public reason;
 - an **impact line** read from `closedDates.impact` before saving: open orders
   due on those dates plus bookings that run through them, with links. Nothing
-  already placed is ever moved.
+  already placed is ever moved. A store that sells bookings is also told what
+  a closure does to them (stays can't book, no package starts on one, each
+  package counts or skips it per its own setting). An exact repeat of an
+  existing closure is disabled with the reason — the server refuses it too.
+- a fixed height with the confirm pinned under the content: a centred sheet
+  that grows re-centres, which moved the calendar between the two taps.
 
 Reopen is one tap with an **Undo** in the toast. A closure that is already
 running re-adds from today, because "today or later" is the add rule. At the

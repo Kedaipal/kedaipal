@@ -15,6 +15,7 @@ import {
 	splitNightsByRate,
 	staysOverlap,
 	closureRule,
+	countedDays,
 	resolveOpenDaysTerm,
 } from "./bookingAvailability";
 import {
@@ -410,7 +411,7 @@ describe("resolveOpenDaysTerm (z8r3fdhpm7)", () => {
 		expect(() => resolveBookingRange(booking, d(0))).toThrow(
 			/needs the store's schedule/,
 		);
-		// An every-day package ignores the schedule entirely.
+		// An every-day package runs straight through the shut days in its term.
 		expect(
 			resolveBookingRange(
 				{ packageLength: 5, packageUnit: "day" },
@@ -420,5 +421,32 @@ describe("resolveOpenDaysTerm (z8r3fdhpm7)", () => {
 				closed,
 			),
 		).toEqual({ checkIn: d(0), checkOut: d(5), skipped: [] });
+	});
+
+	it("NO package starts on a shut day — every-day and month ones too (owner call, 24 Sep)", () => {
+		// Thu 1 Oct is closed: a term starting there sold days nobody could use.
+		for (const booking of [
+			{ packageLength: 5, packageUnit: "day" as const },
+			{ packageLength: 1, packageUnit: "month" as const },
+		]) {
+			expect(() =>
+				resolveBookingRange(booking, d(1), undefined, 1, closed),
+			).toThrow(/closed on that day — start on a day it's open/);
+		}
+		// A stay never reads the weekly day off or a start rule — its closed
+		// nights are refused by `findFullNights` instead.
+		expect(resolveBookingRange({}, d(1), d(2), 1, closed)).toEqual({
+			checkIn: d(1),
+			checkOut: d(2),
+			skipped: [],
+		});
+	});
+});
+
+describe("countedDays — the one count every \"N days\" on an order reads", () => {
+	it("the span minus the days an open-days package skipped, and only those inside it", () => {
+		expect(countedDays(day(0), day(7), [day(1), day(4)])).toBe(5);
+		expect(countedDays(day(0), day(7), [day(-1), day(7)])).toBe(7);
+		expect(countedDays(day(0), day(2), undefined)).toBe(2);
 	});
 });

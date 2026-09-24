@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { DAY_MS, MYT_OFFSET_MS } from "../../convex/lib/fulfilmentDate";
 import {
+	bookingDayPosition,
 	bookingFulfilmentLine,
+	bookingLengthLabel,
 	bookingPriceSuffix,
 	bookingSpanCounted,
 	bookingSpanNoun,
@@ -379,6 +381,128 @@ describe("packageStartsCoveringRange (z8r3fdhpm7)", () => {
 				TODAY,
 			),
 		).toBeNull();
+	});
+
+	// Tue 1 Sep is TODAY; the store is shut Sun, Tue and Wed (herb's week).
+	const shut = (day: number) =>
+		[0, 2, 3].includes(new Date(day + 8 * 3_600_000).getUTCDay());
+
+	it("an OPEN-DAYS package is judged on the days it counts — a block on Mon 7 stops Sat 5 (Sat + Mon) and Mon 7, never Sun 6", () => {
+		// Counted every day in a row this would have said "from Sun 6" — a day
+		// that can't even be a start.
+		expect(
+			packageStartsCoveringRange(
+				{ packageLength: 2, packageUnit: "day" },
+				D(6),
+				D(6),
+				TODAY,
+				{ isClosed: shut, startClosed: shut },
+			),
+		).toEqual({ first: D(4), last: D(6) });
+	});
+
+	it("an open-days package stops nothing when the block sits on a day it skips", () => {
+		expect(
+			packageStartsCoveringRange(
+				{ packageLength: 2, packageUnit: "day" },
+				D(5),
+				D(5), // Sun 6 Sep
+				TODAY,
+				{ isClosed: shut, startClosed: shut },
+			),
+		).toBeNull();
+	});
+
+	it("an every-day package never counts a shut day as a start it loses", () => {
+		// Blocking Thu 3: starts Thu 3 and the day before — but Wed 2 is shut,
+		// so the only start the block takes is Thu 3 itself.
+		expect(
+			packageStartsCoveringRange(
+				{ packageLength: 2, packageUnit: "day" },
+				D(2),
+				D(2),
+				TODAY,
+				{ startClosed: shut },
+			),
+		).toEqual({ first: D(2), last: D(2) });
+	});
+});
+
+describe("no package starts on a shut day (owner call, 24 Sep)", () => {
+	const shutOnDay3 = (d: number) => d === day(3);
+
+	it("an every-day package can't start on it, but can run through it", () => {
+		const c = ctx({
+			packageLength: 2,
+			packageUnit: "day",
+			startClosed: shutOnDay3,
+		});
+		expect(canCheckIn(day(3), c)).toBe(false);
+		// Day 2 + day 3: runs THROUGH the shut day — fine.
+		expect(canCheckIn(day(2), c)).toBe(true);
+		expect(nextBookingSelection({}, day(3), c)).toEqual({});
+	});
+
+	it("a stay never reads it", () => {
+		expect(canCheckIn(day(3), ctx({ startClosed: undefined }))).toBe(true);
+	});
+});
+
+describe("bookingLengthLabel — one count for every order surface (z8r3fdhpm7)", () => {
+	const D = (n: number) => day(n);
+	it("an open-days package counts the days it uses, not its span", () => {
+		const order = {
+			bookingCheckIn: D(2),
+			bookingCheckOut: D(9),
+			bookingPackaged: true,
+			bookingSkippedDays: [D(3), D(5), D(6)],
+		};
+		expect(bookingLengthLabel(order)).toBe("4 open days");
+		expect(bookingLengthLabel(order, "ms")).toBe("4 hari buka");
+	});
+
+	it("a package is days, a stay is nights, and nothing without dates", () => {
+		expect(
+			bookingLengthLabel({
+				bookingCheckIn: D(0),
+				bookingCheckOut: D(1),
+				bookingPackaged: true,
+			}),
+		).toBe("1 day");
+		expect(
+			bookingLengthLabel({ bookingCheckIn: D(0), bookingCheckOut: D(2) }),
+		).toBe("2 nights");
+		expect(
+			bookingLengthLabel({ bookingCheckIn: D(0), bookingCheckOut: D(2) }, "ms"),
+		).toBe("2 malam");
+		expect(bookingLengthLabel({})).toBeNull();
+	});
+});
+
+describe("bookingDayPosition — where one day sits in a booking", () => {
+	const row = (partial: Partial<Parameters<typeof bookingDayPosition>[0]>) => ({
+		checkIn: day(2),
+		checkOut: day(9),
+		packaged: true,
+		...partial,
+	});
+
+	it("an open-days package counts only the days the member comes", () => {
+		const r = row({ skippedDays: [day(3), day(5), day(6)] });
+		expect(bookingDayPosition(r, day(2))).toBe("starts today");
+		expect(bookingDayPosition(r, day(4))).toBe("day 2 of 4");
+		expect(bookingDayPosition(r, day(8))).toBe("last day");
+		expect(bookingDayPosition(r, day(3))).toBe("a day it skips");
+	});
+
+	it("a one-day package, and a stay's nights", () => {
+		expect(bookingDayPosition(row({ checkOut: day(3) }), day(2))).toBe(
+			"its only day",
+		);
+		const stay = row({ packaged: false, checkOut: day(6) });
+		expect(bookingDayPosition(stay, day(2))).toBe("arrives today");
+		expect(bookingDayPosition(stay, day(3))).toBe("night 2 of 4");
+		expect(bookingDayPosition(stay, day(5))).toBe("leaves tomorrow");
 	});
 });
 

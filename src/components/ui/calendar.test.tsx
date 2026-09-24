@@ -64,4 +64,27 @@ describe("Calendar", () => {
 		expect(cell("3").className).toContain("rounded-r-full");
 		expect(container.innerHTML).not.toMatch(/\[&\.rdp-range_/);
 	});
+
+	it("a caller's own modifier classes ADD to the band, never replace it", () => {
+		// The closed-dates sheet hatches already-closed days; passing that one
+		// entry used to replace the whole map, and the band vanished again.
+		const from = new Date(2026, 9, 1);
+		const to = new Date(2026, 9, 3);
+		const { container } = render(
+			<Calendar
+				mode="range"
+				selected={{ from, to }}
+				defaultMonth={from}
+				modifiers={{ marked: new Date(2026, 9, 2) }}
+				modifiersClassNames={{ marked: "hatch-me" }}
+			/>,
+		);
+		const cell = (day: string) =>
+			[...container.querySelectorAll("[role=gridcell]")].find(
+				(c) => c.textContent?.trim() === day,
+			) as HTMLElement;
+		expect(cell("2").className).toContain("hatch-me");
+		expect(cell("2").className).toContain("bg-accent/12");
+		expect(cell("1").className).toContain("rounded-l-full");
+	});
 });

@@ -86,6 +86,22 @@ describe("PackageDayCounting", () => {
 		).toBe("true");
 	});
 
+	it("every day in a row: closed days still count — but it can't START on one", () => {
+		render(
+			<PackageDayCounting
+				packageLength={5}
+				skipsClosedDays={false}
+				onChange={() => {}}
+				schedule={{ openingHours: SUNDAYS_OFF }}
+			/>,
+		);
+		expect(
+			screen.getByText(
+				/Days you're closed after it still count.*it just can't start on a day you're closed\./,
+			),
+		).toBeTruthy();
+	});
+
 	it("open days: a worked example from THIS store's schedule", () => {
 		render(
 			<PackageDayCounting

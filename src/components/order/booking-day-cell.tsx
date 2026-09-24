@@ -24,7 +24,9 @@
 // third thing — the whole store is shut, whatever the listing — so it gets its
 // own look (dashed, the closed-sign icon, the public reason) and keeps the
 // booked count visible: bookings on a day the store closes are exactly what
-// the seller needs to see and handle.
+// the seller needs to see and handle. A weekly DAY OFF on an open-days listing
+// is quieter still — a dashed outline and "Day off" — because it's routine,
+// but without it the listing's members vanish from the grid with no reason.
 
 import { Ban, CalendarOff } from "lucide-react";
 import { calendarDateFromMytEpoch } from "../../lib/booking-dates";
@@ -59,6 +61,7 @@ export function BookingDayCell({
 	capacity,
 	isToday,
 	isPast,
+	dayOff = false,
 	inBlockSelection,
 	blockNote,
 	closedLabel,
@@ -71,6 +74,8 @@ export function BookingDayCell({
 	capacity?: number;
 	isToday: boolean;
 	isPast: boolean;
+	/** The store's weekly day off, on a listing whose packages skip it. */
+	dayOff?: boolean;
 	inBlockSelection: boolean;
 	/** The seller's own note on the block covering this day, if any. */
 	blockNote?: string;
@@ -83,6 +88,9 @@ export function BookingDayCell({
 	// the day sheet lists the block beneath it anyway.
 	const closed = info?.closed === true;
 	const blocked = info?.blocked === true && !closed;
+	// Only while empty: a booking placed before the listing switched to open
+	// days still runs every day, and its names must not hide behind "Day off".
+	const offDay = dayOff && !closed && !blocked && booked === 0;
 	const full = capacity !== undefined && booked >= capacity;
 	const guests = info?.guests ?? [];
 	const overflow = booked - guests.length;
@@ -106,7 +114,11 @@ export function BookingDayCell({
 			type="button"
 			onClick={onClick}
 			aria-label={`${calendarDateFromMytEpoch(date).getDate()} — ${
-				closed ? `store closed${closedLabel ? ` (${closedLabel})` : ""}, ` : ""
+				closed
+					? `store closed${closedLabel ? ` (${closedLabel})` : ""}, `
+					: offDay
+						? "weekly day off, "
+						: ""
 			}${
 				blocked
 					? "blocked"
@@ -127,9 +139,11 @@ export function BookingDayCell({
 						"border-border bg-[repeating-linear-gradient(135deg,var(--muted)_0_6px,var(--card)_6px_12px)]"
 					: closed
 						? "border-dashed border-muted-foreground/40 bg-muted/40"
-						: full
-							? "border-foreground/20 bg-muted/50"
-							: "border-border bg-card hover:border-accent/60",
+						: offDay
+							? "border-dashed border-border bg-muted/20"
+							: full
+								? "border-foreground/20 bg-muted/50"
+								: "border-border bg-card hover:border-accent/60",
 				isPast && "opacity-50",
 				isToday && !inBlockSelection && "border-accent ring-3 ring-accent/15",
 				inBlockSelection && "!border-primary bg-primary/8 ring-2 ring-primary",
@@ -140,7 +154,7 @@ export function BookingDayCell({
 					className={cn(
 						"text-[11px] font-bold leading-none tabular-nums",
 						isToday ? "text-accent-emphasis" : "text-foreground",
-						(blocked || closed) && "text-muted-foreground",
+						(blocked || closed || offDay) && "text-muted-foreground",
 					)}
 				>
 					{calendarDateFromMytEpoch(date).getDate()}
@@ -199,6 +213,10 @@ export function BookingDayCell({
 						</span>
 					) : null}
 				</>
+			) : offDay ? (
+				<span className="mt-auto hidden text-[10px] font-semibold text-muted-foreground lg:block">
+					Day off
+				</span>
 			) : blocked ? (
 				<span className="mt-auto hidden rounded-md border border-border bg-card/90 px-1.5 py-0.5 lg:block">
 					<span className="block text-[10px] font-bold text-muted-foreground">

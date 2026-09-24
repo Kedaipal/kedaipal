@@ -12,7 +12,9 @@
  * What it tells the seller, because a closure touches more than the date
  * picker: buyers can't pick those dates, the storefront shows them with the
  * reason, and nothing already placed is moved — the add sheet counts what is
- * already due or booked on those dates BEFORE the seller commits.
+ * already due or booked on those dates BEFORE the seller commits. A store that
+ * sells bookings is also told what a closure does to them — it is NOT "buyers
+ * can't pick them" there: packages keep selling through a closure.
  */
 
 import { convexQuery } from "@convex-dev/react-query";
@@ -29,9 +31,11 @@ import {
 	type ClosedDateRange,
 	closedRangeDays,
 	formatClosedRange,
+	isClosedDate,
 	MAX_CLOSED_LABEL_CHARS,
 	MAX_CLOSED_RANGE_DAYS,
 	MAX_CLOSED_RANGES,
+	sameClosedRange,
 	upcomingClosures,
 } from "../../../convex/lib/closedDates";
 import { DAY_MS, todayMytMidnight } from "../../../convex/lib/fulfilmentDate";
@@ -58,6 +62,17 @@ function dayCount(days: number): string {
 	return `${days} day${days === 1 ? "" : "s"}`;
 }
 
+/** The hatch the buyer's calendar uses for a closed day, so "already closed"
+ * reads the same in the seller's picker. */
+const CLOSED_HATCH =
+	"bg-[repeating-linear-gradient(135deg,color-mix(in_oklab,var(--muted-foreground)_35%,transparent)_0_1.5px,transparent_1.5px_6px)]";
+
+/** What a closure does to a store's bookings, in one clause — only for a store
+ * that sells them. "Buyers can't pick them" alone was false for a package,
+ * which keeps selling through a closure (z8r3fdhpm7). */
+const BOOKINGS_CLAUSE =
+	"stays can't book those nights and no package can start on one — each package's own setting decides whether it counts closed days or skips them";
+
 /** The re-add an Undo performs. A closure that is already RUNNING began
  * before today, and "today or later" is the add rule — so its undo reopens
  * from today, which is everything the removal actually changed. */
@@ -68,10 +83,14 @@ function undoRange(range: ClosedDateRange, today: number): ClosedDateRange {
 export function ClosedDatesCard({
 	retailerId,
 	closedDates,
+	hasBookingListings,
 	highlight,
 }: {
 	retailerId: Id<"retailers">;
 	closedDates: ClosedDateRange[] | undefined;
+	/** The store sells booking listings — the card then says what a closure
+	 * does to them. */
+	hasBookingListings: boolean;
 	/** Ring from a deep link (`?spot=closed_dates`) — the booking calendar's
 	 * "Manage closed dates" and a What's-new note both land here. */
 	highlight?: FixHighlight;
@@ -119,7 +138,9 @@ export function ClosedDatesCard({
 			<div className="flex items-start justify-between gap-4">
 				<SectionHeading
 					title="Closed dates"
-					description="Days you're shut on top of your weekly hours — Raya, a balik-kampung week, a renovation. Buyers can't pick them for delivery or pickup, and your storefront shows the dates with your reason."
+					description={`Days you're shut on top of your weekly hours — Raya, a balik-kampung week, a renovation. Buyers can't pick them for delivery or pickup, and your storefront shows the dates with your reason.${
+						hasBookingListings ? ` For bookings, ${BOOKINGS_CLAUSE}.` : ""
+					}`}
 				/>
 			</div>
 
@@ -197,6 +218,7 @@ export function ClosedDatesCard({
 				open={sheetOpen}
 				onOpenChange={setSheetOpen}
 				existing={closures}
+				hasBookingListings={hasBookingListings}
 			/>
 		</Card>
 	);
@@ -214,6 +236,7 @@ export function AddClosedDatesSheet({
 	open,
 	onOpenChange,
 	existing,
+	hasBookingListings,
 	initialRange,
 	onAdded,
 }: {
@@ -222,16 +245,22 @@ export function AddClosedDatesSheet({
 	onOpenChange: (open: boolean) => void;
 	/** Upcoming closures, to say when the pick overlaps one. */
 	existing: ReadonlyArray<ClosedDateRange>;
+	hasBookingListings: boolean;
 	initialRange?: { startDate: number; endDate: number };
 	onAdded?: () => void;
 }) {
 	return (
 		<Sheet open={open} onOpenChange={onOpenChange}>
-			<SheetContent className="sm:max-w-md">
+			{/* A FIXED height, not a grown one: a centred sheet re-centres as it
+			    grows, and the impact line appearing after the first tap moved the
+			    calendar ~44px under the finger before the second. Taller content
+			    scrolls, and the confirm stays pinned below it. */}
+			<SheetContent className="h-[min(44rem,90dvh)] sm:max-w-md">
 				{open ? (
 					<AddClosedDatesForm
 						retailerId={retailerId}
 						existing={existing}
+						hasBookingListings={hasBookingListings}
 						initialRange={initialRange}
 						onDone={() => {
 							onOpenChange(false);
@@ -247,11 +276,13 @@ export function AddClosedDatesSheet({
 function AddClosedDatesForm({
 	retailerId,
 	existing,
+	hasBookingListings,
 	initialRange,
 	onDone,
 }: {
 	retailerId: Id<"retailers">;
 	existing: ReadonlyArray<ClosedDateRange>;
+	hasBookingListings: boolean;
 	initialRange?: { startDate: number; endDate: number };
 	onDone: () => void;
 }) {
@@ -283,11 +314,16 @@ function AddClosedDatesForm({
 			? { startDate, endDate }
 			: null;
 	const days = range ? closedRangeDays(range) : 0;
+	// The server refuses an exact repeat ("Those dates are already closed") —
+	// said here first, with the button disabled, never "that's fine" followed
+	// by an error toast.
+	const duplicate =
+		range !== null && existing.some((other) => sameClosedRange(other, range));
 
 	const impact = useQuery(
 		convexQuery(
 			api.closedDates.impact,
-			range ? { retailerId, ...range } : "skip",
+			range && !duplicate ? { retailerId, ...range } : "skip",
 		),
 	).data;
 	const overlaps = range
@@ -337,8 +373,26 @@ function AddClosedDatesForm({
 					max={MAX_CLOSED_RANGE_DAYS}
 					disabled={{ before: calendarDateFromMytEpoch(today) }}
 					showOutsideDays={false}
+					// Days already closed wear the buyer calendar's hatch — the
+					// seller sees what's shut before picking, not after.
+					modifiers={{
+						already_closed: (date: Date) =>
+							isClosedDate(existing, mytEpochFromCalendarDate(date)),
+					}}
+					modifiersClassNames={{
+						already_closed: `rounded-full ${CLOSED_HATCH}`,
+					}}
 				/>
 			</div>
+			{existing.length > 0 ? (
+				<p className="-mt-2 flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground">
+					<i
+						className={`size-3.5 rounded-full border border-border ${CLOSED_HATCH}`}
+						aria-hidden
+					/>
+					Hatched days are already closed
+				</p>
+			) : null}
 			<p className="text-center text-sm font-medium" aria-live="polite">
 				{range
 					? `${formatClosedRange(range)} · ${dayCount(days)}`
@@ -368,23 +422,31 @@ function AddClosedDatesForm({
 				<ImpactLine
 					impact={impact}
 					overlaps={overlaps}
+					duplicate={duplicate}
 					endsAfterToday={range.endDate >= today + DAY_MS}
+					hasBookingListings={hasBookingListings}
 				/>
 			) : null}
 
-			<Button
-				className="tap-target w-full"
-				disabled={!range || saving}
-				onClick={save}
-			>
-				{!range
-					? "Pick the dates to close"
-					: saving
-						? "Closing…"
-						: days === 1
-							? `Close ${formatClosedRange(range)}`
-							: `Close ${dayCount(days)}`}
-			</Button>
+			{/* Pinned to the sheet's bottom edge, covering its padding, so the one
+			    action is on screen however long the impact list gets. */}
+			<div className="sticky bottom-[calc(-1*max(1.25rem,env(safe-area-inset-bottom)))] z-10 -mx-5 mt-auto border-t border-border bg-popover px-5 pt-3 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
+				<Button
+					className="tap-target w-full"
+					disabled={!range || duplicate || saving}
+					onClick={save}
+				>
+					{!range
+						? "Pick the dates to close"
+						: duplicate
+							? "Already closed"
+							: saving
+								? "Closing…"
+								: days === 1
+									? `Close ${formatClosedRange(range)}`
+									: `Close ${dayCount(days)}`}
+				</Button>
+			</div>
 		</>
 	);
 }
@@ -394,7 +456,9 @@ function AddClosedDatesForm({
 function ImpactLine({
 	impact,
 	overlaps,
+	duplicate,
 	endsAfterToday,
+	hasBookingListings,
 }: {
 	impact:
 		| {
@@ -409,8 +473,20 @@ function ImpactLine({
 		  }
 		| undefined;
 	overlaps: ReadonlyArray<ClosedDateRange>;
+	duplicate: boolean;
 	endsAfterToday: boolean;
+	hasBookingListings: boolean;
 }) {
+	if (duplicate) {
+		return (
+			<p className="rounded-xl bg-muted px-4 py-3 text-xs leading-relaxed text-muted-foreground">
+				<span className="font-semibold text-foreground">
+					Those dates are already closed.
+				</span>{" "}
+				Pick different dates, or reopen them from the list.
+			</p>
+		);
+	}
 	const parts: string[] = [];
 	if (impact) {
 		if (impact.orders > 0) {
@@ -430,10 +506,9 @@ function ImpactLine({
 				<p>Checking what's already on these dates…</p>
 			) : parts.length === 0 ? (
 				<p>
-					Nothing is due or booked on these dates.{" "}
-					{endsAfterToday
-						? "Buyers won't be able to pick them from now on."
-						: "Buyers won't be able to pick today."}
+					Nothing is due or booked on these dates. From now on buyers can&apos;t
+					pick {endsAfterToday ? "them" : "today"} for delivery or pickup
+					{hasBookingListings ? `; ${BOOKINGS_CLAUSE}` : ""}.
 				</p>
 			) : (
 				<>
@@ -450,7 +525,7 @@ function ImpactLine({
 								<Link
 									to="/app/orders/$shortId"
 									params={{ shortId: sample.shortId }}
-									className="inline-flex min-h-8 items-center rounded-full border border-border bg-background px-2.5 font-medium text-foreground hover:bg-muted"
+									className="inline-flex min-h-11 items-center rounded-full border border-border bg-background px-3 font-medium text-foreground hover:bg-muted sm:min-h-8 sm:px-2.5"
 								>
 									{sample.shortId}
 									{sample.customerName ? ` · ${sample.customerName}` : ""}
@@ -463,8 +538,8 @@ function ImpactLine({
 			{overlaps.length > 0 ? (
 				<p>
 					Overlaps a closure you already have (
-					{overlaps.map((other) => formatClosedRange(other)).join("; ")}) —
-					that's fine, both count.
+					{overlaps.map((other) => formatClosedRange(other)).join("; ")}). Both
+					stay on the list — reopening one leaves the other.
 				</p>
 			) : null}
 		</div>

@@ -61,6 +61,10 @@ const AVAILABILITY = {
 	maxPackageQuantity: 1,
 	weekendPrice: undefined,
 	weekendDays: undefined,
+	// The payload always carries these (z8r3fdhpm7) — empty when nothing's shut.
+	closures: [],
+	closureRule: "unavailable",
+	closedWeekdays: [],
 };
 
 beforeAll(() => {
@@ -328,6 +332,127 @@ describe("BookingCheckoutForm — open-days package (z8r3fdhpm7)", () => {
 				.getByRole("button")
 				.hasAttribute("disabled"),
 		).toBe(true);
+	});
+});
+
+describe("BookingCheckoutForm — found in the Chrome test (z8r3fdhpm7)", () => {
+	const SEP = (d: number) => Date.UTC(2026, 8, d) - 8 * 3_600_000;
+	const raya = { startDate: SEP(20), endDate: SEP(20), label: "Hari Raya" };
+	/** The legend's labels — the summary heading says "Your package" too. */
+	const legendLabels = () =>
+		[...document.querySelectorAll("span:has(> i[aria-hidden])")].map(
+			(el) => el.textContent,
+		);
+	const cellButton = (d: string) =>
+		within(
+			screen
+				.getAllByRole("gridcell")
+				.find((c) => c.textContent === d) as HTMLElement,
+		).getByRole("button");
+
+	it("an every-day package can't START on a shut day, and says so — but runs through one", () => {
+		state.availability = {
+			...AVAILABILITY,
+			packageLength: 2,
+			packageUnit: "day",
+			closures: [raya],
+			closureRule: "absorbed",
+			closedWeekdays: [0],
+		};
+		renderForm();
+		// Sun 20 is Raya AND a Sunday; Sun 13 is only the weekly day off.
+		expect(cellButton("20").hasAttribute("disabled")).toBe(true);
+		expect(cellButton("13").hasAttribute("disabled")).toBe(true);
+		// Sat 19 → Sun 20: starts open, runs through the closed day.
+		expect(cellButton("19").hasAttribute("disabled")).toBe(false);
+		expect(
+			screen.getByText(
+				/A package starts on a day Lembah Riverside is open — closed days\s+\(hatched\) after that still count toward it\./,
+			),
+		).toBeTruthy();
+		expect(screen.getByText("Store closed")).toBeTruthy();
+		expect(legendLabels()).toContain("Your package");
+	});
+
+	it("a stay cut short by a closure names the closure — never 'booked out'", () => {
+		state.availability = {
+			...AVAILABILITY,
+			unavailable: [SEP(20)],
+			closures: [raya],
+			closureRule: "unavailable",
+		};
+		renderForm();
+		tapDay("18");
+		expect(
+			screen.getByText(
+				/Lembah Riverside is closed Sun, 20 Sep 2026 \(Hari Raya\), so from this check-in you can stay/,
+			),
+		).toBeTruthy();
+		expect(screen.queryByText(/booked out/)).toBeNull();
+	});
+
+	it("a full night still reads 'booked out' — full and blocked are never told apart", () => {
+		state.availability = { ...AVAILABILITY, unavailable: [SEP(20)] };
+		renderForm();
+		tapDay("18");
+		expect(screen.getByText(/onwards is booked out/)).toBeTruthy();
+	});
+
+	it("nothing left to start this month: it opens on the first month that has one, and says why", () => {
+		state.availability = {
+			...AVAILABILITY,
+			packageLength: 2,
+			packageUnit: "day",
+			// Shut from today to the end of September.
+			closures: [{ startDate: SEP(10), endDate: SEP(30), label: "Renovation" }],
+			closureRule: "skipped",
+			closedWeekdays: [],
+		};
+		renderForm();
+		expect(screen.getByText("October 2026")).toBeTruthy();
+		expect(
+			screen.getByText(
+				"No start dates left in September — the first is Thu, 1 Oct 2026.",
+			),
+		).toBeTruthy();
+	});
+
+	it("paged back to a month with no starts, it says so and points forward", () => {
+		state.availability = {
+			...AVAILABILITY,
+			packageLength: 2,
+			packageUnit: "day",
+			closures: [{ startDate: SEP(10), endDate: SEP(30), label: "Renovation" }],
+			closureRule: "skipped",
+			closedWeekdays: [],
+		};
+		renderForm();
+		fireEvent.click(screen.getByRole("button", { name: /previous month/i }));
+		expect(screen.getByText("September 2026")).toBeTruthy();
+		expect(
+			screen.getByText(
+				"No start dates left in September — the first is Thu, 1 Oct 2026.",
+			),
+		).toBeTruthy();
+	});
+
+	it("the legend names the hatch whenever one is on screen — a weekly day off counts", () => {
+		state.availability = {
+			...AVAILABILITY,
+			packageLength: 2,
+			packageUnit: "day",
+			closures: [],
+			closureRule: "skipped",
+			closedWeekdays: [0],
+		};
+		renderForm();
+		expect(screen.getByText("Store closed")).toBeTruthy();
+	});
+
+	it("a stay keeps its words: no hatch for the weekly day off, 'Your stay'", () => {
+		renderForm();
+		expect(screen.queryByText("Store closed")).toBeNull();
+		expect(legendLabels()).toContain("Your stay");
 	});
 });
 

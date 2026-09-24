@@ -25,6 +25,12 @@ import {
 	upcomingClosures,
 } from "./lib/closedDates";
 import { DAY_MS, isMytMidnight } from "./lib/fulfilmentDate";
+import { closedWeekdays } from "./lib/openingHours";
+import {
+	type OrderFlows,
+	resolveStatusLabel,
+	type StatusLabels,
+} from "./lib/orderStatus";
 import { effectiveKind, type PackageUnit } from "./lib/productKind";
 import { assertSubscriptionActive } from "./subscriptions";
 
@@ -178,6 +184,11 @@ export const sellerCalendar = query({
 		 * the day sheet's "why", and the overlap note when the seller closes
 		 * more dates from here. */
 		closures: ClosedDateRange[];
+		/** The store's weekly days off (0 = Sun). A package can't start on one,
+		 * and an open-days listing steps over them — so the seller's grid marks
+		 * them where the selected listing skips them, and the block sheet
+		 * judges starts with them. */
+		closedWeekdays: number[];
 		listings: Array<{
 			_id: Id<"products">;
 			name: string;
@@ -189,6 +200,10 @@ export const sellerCalendar = query({
 			capacityPerNight?: number;
 			packageLength?: number;
 			packageUnit?: PackageUnit;
+			/** Counts only open days (z8r3fdhpm7). Without it `closureRule` on
+			 * the client read every open-days listing as an every-day one, so the
+			 * block sheet quoted the wrong starts and the wrong rule. */
+			skipsClosedDays?: boolean;
 		}>;
 	}> => {
 		const access = await requireRetailerAccess(ctx, args.retailerId);
@@ -297,6 +312,7 @@ export const sellerCalendar = query({
 				note: b.note,
 			})),
 			closures: upcomingClosures(access.retailer.closedDates),
+			closedWeekdays: closedWeekdays(access.retailer.openingHours),
 			listings: await Promise.all(
 				bookingListings.map(async (p) => ({
 					_id: p._id,
@@ -313,6 +329,7 @@ export const sellerCalendar = query({
 					capacityPerNight: p.booking?.capacityPerNight,
 					packageLength: p.booking?.packageLength,
 					packageUnit: p.booking?.packageUnit,
+					skipsClosedDays: p.booking?.skipsClosedDays,
 				})),
 			),
 		};
@@ -421,6 +438,9 @@ export const dayBookings = query({
 			checkIn: number;
 			checkOut: number;
 			status: Doc<"orders">["status"];
+			/** The status as the seller's own order pages name it (their renames,
+			 * the package vocabulary) — the raw key rendered "Booking_requested". */
+			statusLabel: string;
 			/** Paid or not — the sheet exists to help the seller decide WHICH
 			 * order to open, and "has this one paid" is the question they open it
 			 * for most often. */
@@ -430,6 +450,9 @@ export const dayBookings = query({
 			listingName: string;
 			/** A package reads as a validity window, a stay as check-in → out. */
 			packaged: boolean;
+			/** The shut days an open-days package steps over, so "day 2 of 4"
+			 * counts the days the member actually comes. */
+			skippedDays?: number[];
 		}>
 	> => {
 		const access = await requireRetailerAccess(ctx, args.retailerId);
@@ -453,9 +476,11 @@ export const dayBookings = query({
 			checkIn: number;
 			checkOut: number;
 			status: Doc<"orders">["status"];
+			statusLabel: string;
 			paymentStatus?: Doc<"orders">["paymentStatus"];
 			listingName: string;
 			packaged: boolean;
+			skippedDays?: number[];
 		}> = [];
 		for (const listing of scoped) {
 			// THE shared bounded scan — never a hand-rolled look-back here again.
@@ -474,9 +499,17 @@ export const dayBookings = query({
 					checkIn: order.bookingCheckIn as number,
 					checkOut: order.bookingCheckOut as number,
 					status: order.status,
+					statusLabel: resolveStatusLabel(order.status, {
+						labels: access.retailer.statusLabels as StatusLabels | undefined,
+						orderFlows: access.retailer.orderFlows as OrderFlows | undefined,
+						deliveryMethod: "booking",
+						bookingPackaged: order.bookingPackaged === true,
+						locale: "en",
+					}),
 					paymentStatus: order.paymentStatus,
 					listingName: listing.name,
 					packaged: order.bookingPackaged === true,
+					skippedDays: order.bookingSkippedDays,
 				});
 			}
 		}

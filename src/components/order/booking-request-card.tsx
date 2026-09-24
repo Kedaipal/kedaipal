@@ -15,6 +15,10 @@ import {
 	DAY_MS,
 	formatFulfilmentDate,
 } from "../../../convex/lib/fulfilmentDate";
+import {
+	bookingLengthLabel,
+	describeSkippedDays,
+} from "../../lib/booking-dates";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { Button } from "../ui/button";
 import {
@@ -36,21 +40,24 @@ const QUICK_REASONS = [
 /**
  * The seller's capacity context for these nights. An UNLIMITED listing (S7 —
  * a gym) has no denominator, so it states the neighbours without inventing a
- * ceiling; a capped listing quotes "N of M".
+ * ceiling; a capped listing quotes "N of M". A package speaks in days.
  */
-function bookingCapacityLine(context: {
-	capacityPerNight?: number;
-	peakOtherBookings: number;
-}): string {
+function bookingCapacityLine(
+	context: {
+		capacityPerNight?: number;
+		peakOtherBookings: number;
+	},
+	unit: "nights" | "days",
+): string {
 	const { capacityPerNight: cap, peakOtherBookings: others } = context;
 	if (cap === undefined) {
 		return others > 0
-			? `${others} other booking${others === 1 ? "" : "s"} on those nights (no limit set). `
-			: "No other bookings on those nights. ";
+			? `${others} other booking${others === 1 ? "" : "s"} on those ${unit} (no limit set). `
+			: `No other bookings on those ${unit}. `;
 	}
 	return others > 0
-		? `${others} of ${cap} spot${cap === 1 ? "" : "s"} already booked on those nights. `
-		: `No other bookings on those nights (capacity ${cap}). `;
+		? `${others} of ${cap} spot${cap === 1 ? "" : "s"} already booked on those ${unit}. `
+		: `No other bookings on those ${unit} (capacity ${cap}). `;
 }
 
 export function BookingRequestCard({
@@ -65,10 +72,13 @@ export function BookingRequestCard({
 		currency: string;
 		bookingCheckIn?: number;
 		bookingCheckOut?: number;
+		/** A fixed-length package (S7) — a validity window, not a stay. */
+		bookingPackaged?: boolean;
+		/** The shut days an open-days package steps over (z8r3fdhpm7). */
+		bookingSkippedDays?: number[];
 		bookingContext?: {
 			capacityPerNight?: number;
 			peakOtherBookings: number;
-			nights: number;
 		};
 		items: { name: string }[];
 	};
@@ -79,10 +89,12 @@ export function BookingRequestCard({
 	const [declineOpen, setDeclineOpen] = useState(false);
 	const [reason, setReason] = useState("");
 
-	const nights =
-		order.bookingCheckIn !== undefined && order.bookingCheckOut !== undefined
-			? Math.round((order.bookingCheckOut - order.bookingCheckIn) / DAY_MS)
-			: 0;
+	// The request speaks the listing's own vocabulary. It said "Check-out" and
+	// "7 nights" for every package — a gym month, a 4-open-day course — while
+	// the order summary under it said the true thing (z8r3fdhpm7).
+	const isPackage = order.bookingPackaged === true;
+	const length = bookingLengthLabel(order);
+	const skips = describeSkippedDays(order.bookingSkippedDays);
 	// The 24 h promise, counted from the request — red once it's about to lapse
 	// (the expiry cron releases the hold at zero).
 	const msLeft = order.createdAt + BOOKING_REQUEST_TTL_MS - Date.now();
@@ -139,29 +151,44 @@ export function BookingRequestCard({
 			order.bookingCheckOut !== undefined ? (
 				<div className="flex flex-col gap-1.5 border-y-2 border-dashed border-border py-3 text-sm tabular-nums">
 					<div className="flex items-baseline gap-1.5">
-						<span className="font-medium">Check-in</span>
+						<span className="font-medium">
+							{isPackage ? "Starts" : "Check-in"}
+						</span>
 						<span className="flex-1 border-b-2 border-dotted border-border" />
 						<span className="font-semibold">
 							{formatFulfilmentDate(order.bookingCheckIn)}
 						</span>
 					</div>
 					<div className="flex items-baseline gap-1.5">
-						<span className="font-medium">Check-out</span>
+						<span className="font-medium">
+							{isPackage ? "Last day" : "Check-out"}
+						</span>
 						<span className="flex-1 border-b-2 border-dotted border-border" />
 						<span className="font-semibold">
-							{formatFulfilmentDate(order.bookingCheckOut)}
+							{/* A package's last usable day is the night before its
+							    exclusive check-out — the date the buyer was sold. */}
+							{formatFulfilmentDate(
+								isPackage
+									? order.bookingCheckOut - DAY_MS
+									: order.bookingCheckOut,
+							)}
 						</span>
 					</div>
 					<div className="flex items-baseline gap-1.5">
 						<span className="text-muted-foreground">
-							{order.items[0]?.name ?? "Listing"} · {nights} night
-							{nights === 1 ? "" : "s"}
+							{order.items[0]?.name ?? "Listing"} · {length}
 						</span>
 						<span className="flex-1 border-b-2 border-dotted border-border" />
 						<span className="font-heading font-extrabold">
 							{formatPrice(order.total, order.currency)}
 						</span>
 					</div>
+					{skips ? (
+						<p className="text-xs text-muted-foreground">
+							{skips.charAt(0).toUpperCase()}
+							{skips.slice(1)} (store closed)
+						</p>
+					) : null}
 					{(order.securityDeposit ?? 0) > 0 ? (
 						<p className="text-xs text-muted-foreground">
 							incl. {formatPrice(order.securityDeposit ?? 0, order.currency)}{" "}
@@ -172,7 +199,9 @@ export function BookingRequestCard({
 			) : null}
 
 			<p className="text-xs leading-relaxed text-muted-foreground">
-				{context ? bookingCapacityLine(context) : null}
+				{context
+					? bookingCapacityLine(context, isPackage ? "days" : "nights")
+					: null}
 				Approving confirms the booking and unlocks payment on the guest&apos;s
 				order page. Nothing has been charged yet; unanswered requests release
 				automatically after 24 hours.
