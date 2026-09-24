@@ -599,12 +599,32 @@ copy is true by construction.
 > The **narrow itself is no longer blocked**: once every store is backfilled,
 > nothing reads `statusLabels`.
 
+### The bulk menu speaks the SELECTION
+
+`buildBulkTargets` (`src/lib/inbox-bulk-targets.ts`, pure + unit-tested) builds
+the "Update status" list from the selected rows, not from the store:
+
+- **One vocabulary** → its own words ("Checked In" for a stay).
+- **Several that agree** → the shared word, so the common delivery + pickup mix
+  keeps the seller's familiar "Confirmed"/"Packed".
+- **Several that disagree** → the shared MILESTONE names (`ANCHOR_UI_LABELS`),
+  the vocabulary Settings already teaches under "Counts as", with a one-line
+  note saying why. No store word is true for every selected row, so none is
+  used.
+- **A milestone no selected row has a step for** → offered but **disabled, with
+  the reason inline**, instead of applying and reporting a skip afterwards.
+
+Found by testing: the menu read the store's primary flow, so selecting a
+campsite booking offered "Ready for Pickup" and "Collected" — pickup words on a
+stay, for an action the server would then skip.
+
 ### Surfaces that stay retailer-grain
 
-The inbox status filter, its column header, the bulk-action labels and Home's
-badges are **store-grain controls over rows of every kind**, so they keep
-speaking the store's primary product flow (`offerSelfCollect ? self_collect :
-delivery`) — unchanged from before. Per-ROW wording is per kind: the inbox
+The inbox status filter, its column header and Home's badges are **store-grain
+controls over rows of every kind**, so they keep speaking the store's primary
+product flow (`offerSelfCollect ? self_collect : delivery`) — unchanged from
+before. (The bulk menu used to be in this list; it isn't any more, because it
+acts on a selection rather than describing the list.) Per-ROW wording is per kind: the inbox
 resolves a list per kind and memoizes it. Status filtering itself is unaffected
 — it runs on the leaf partition (`orderLeaf`), not on labels, so "Ready"
 selects delivery-Ready and booking-Checked-In alike, which is correct for one

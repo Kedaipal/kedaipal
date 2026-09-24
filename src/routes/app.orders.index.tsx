@@ -113,6 +113,7 @@ import {
 	formatOrderTimestamp,
 	formatPrice,
 } from "../lib/format";
+import { type BulkVocab, buildBulkTargets } from "../lib/inbox-bulk-targets";
 import { type InboxEmptyCopy, inboxEmptyCopy } from "../lib/inbox-empty-copy";
 import {
 	statusChipSelected as chipSelected,
@@ -124,9 +125,9 @@ import { summarizeOrderCardItems, withLineKeys } from "../lib/order-card-items";
 import {
 	type DeliveryMethod,
 	displayStatusLabel,
-	orderFlowKind,
 	type OrderFlowKind,
 	type OrderStatus,
+	orderFlowKind,
 	resolveAnchorLabel,
 	resolveCurrentStage,
 	resolveStages,
@@ -1118,22 +1119,35 @@ function OrdersRoute() {
 		setSelected(allSelected ? new Set() : new Set(visibleIds));
 	}
 
-	// Bulk targets — the canonical forward transitions (resolved to the retailer's
-	// labels, matching the row badges) then the destructive Cancel, all in one
-	// "Update status" dropdown. No primary/overflow split.
-	const bulkActions: BulkAction[] = (
-		["confirmed", "packed", "shipped", "delivered"] as const
-	)
-		.map((s) => ({
-			status: s as BulkAction["status"],
-			label: resolveAnchorLabel(s as OrderStatus, {
-				stages,
-				labels,
-				orderFlows,
-				deliveryMethod: retailerMethod,
-				locale: "en",
+	// Bulk targets — the canonical forward transitions then the destructive
+	// Cancel, all in one "Update status" dropdown. No primary/overflow split.
+	// The list speaks the SELECTION, not the store — see buildBulkTargets.
+	const selectedOrders = orderedOrders.filter((o) => selected.has(o._id));
+	const selectionVocabs = new Map<string, BulkVocab>();
+	for (const o of selectedOrders) {
+		const kind = orderFlowKind(o);
+		const packaged = kind === "booking" && o.bookingPackaged === true;
+		const key = `${kind}:${packaged}`;
+		if (!selectionVocabs.has(key)) {
+			selectionVocabs.set(key, {
+				kind,
+				stages: stagesForKind(kind, packaged || undefined),
+			});
+		}
+	}
+	const { targets, note: bulkActionsNote } = buildBulkTargets(
+		[...selectionVocabs.values()],
+		stages,
+	);
+	const bulkActions: BulkAction[] = targets
+		.map(
+			(t): BulkAction => ({
+				status: t.anchor,
+				label: t.label,
+				disabled: t.disabled,
+				reason: t.reason,
 			}),
-		}))
+		)
 		.concat([
 			{ status: "cancelled", label: "Cancel orders", destructive: true },
 		] as BulkAction[]);
@@ -2003,6 +2017,7 @@ function OrdersRoute() {
 				<OrderBulkBar
 					count={selected.size}
 					actions={bulkActions}
+					actionsNote={bulkActionsNote}
 					allSelected={allSelected}
 					onApply={applyBulk}
 					onDelete={canHardDelete ? applyBulkDelete : undefined}
