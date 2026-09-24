@@ -573,6 +573,7 @@ function OrderDetailRoute() {
 	// The buyer tracking page resolves in the store's locale instead.
 	const statusLabelOpts = {
 		labels: order.statusLabels,
+		orderFlows: order.orderFlows,
 		deliveryMethod,
 		locale: "en" as const,
 	};
@@ -580,6 +581,7 @@ function OrderDetailRoute() {
 	// synthesized defaults — same path), the order's current stage, and the next
 	// stage to advance into. Dashboard chrome is EN.
 	const stages = resolveStages({
+		orderFlows: order.orderFlows,
 		orderStages: order.orderStages,
 		labels: order.statusLabels,
 		// An RSVP runs the event vocabulary: Confirmed → Checked In, no Packed,

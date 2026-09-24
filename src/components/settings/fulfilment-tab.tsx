@@ -72,7 +72,6 @@ import { MASK_PII } from "../../lib/analytics-privacy";
 import {
 	type CardTarget,
 	type FixHighlight,
-	highlightRingClass,
 	SETTINGS_ANCHOR,
 	scrollToAnchor,
 } from "../../lib/country-setup-copy";
@@ -91,6 +90,7 @@ import { deriveMapsUrl } from "../../lib/google-address";
 import { hasFeature, type SubscriptionView } from "../../lib/subscription";
 import { jntSeedZones } from "../../lib/weight-zone-seed";
 import { ProBadge } from "../app/pro-gate";
+import { Card, SectionHeading } from "./settings-primitives";
 import {
 	GoogleAddressAutocomplete,
 	type GoogleSelectedAddress,
@@ -171,55 +171,6 @@ interface FulfilmentTabProps {
 	subscription: SubscriptionView | undefined;
 }
 
-/**
- * `id` is the deep-link anchor: the post-switch checklist links to the exact
- * card that fixes a row, and `highlight` rings it so the seller lands on the
- * thing rather than the top of a long tab (86eyqgujv).
- *
- * `scroll-mt-24` keeps the sticky header off the card once scrolled to.
- */
-function Card({
-	children,
-	id,
-	highlight,
-}: {
-	children: ReactNode;
-	id?: string;
-	highlight?: FixHighlight;
-}) {
-	return (
-		<section
-			id={id}
-			data-fix-highlight={highlight ?? undefined}
-			className={`flex flex-col gap-4 rounded-2xl border bg-background p-5 scroll-mt-24 lg:p-6 ${highlightRingClass(highlight)}`}
-		>
-			{children}
-		</section>
-	);
-}
-
-function SectionHeading({
-	title,
-	description,
-}: {
-	title: string;
-	description?: string;
-}) {
-	return (
-		<div className="flex flex-col gap-1">
-			<h3 className="text-sm font-semibold text-foreground">{title}</h3>
-			{description ? (
-				<p className="text-xs text-muted-foreground leading-relaxed">
-					{description}
-				</p>
-			) : null}
-		</div>
-	);
-}
-
-/** Seller-facing kind chip on each pickup-point row. Same vocabulary as the
- *  buyer storefront ("Self-collect" / "Drop-off") so there's one language for
- *  the two kinds across the whole product. */
 function PickupKindBadge({ kind }: { kind: "self_collect" | "drop_off" }) {
 	return (
 		<span className="shrink-0 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
