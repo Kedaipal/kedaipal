@@ -39,7 +39,9 @@ import {
 	calendarDateFromMytEpoch,
 	mytEpochFromCalendarDate,
 } from "../../lib/booking-dates";
+import type { FixHighlight } from "../../lib/country-setup-copy";
 import { convexErrorMessage } from "../../lib/format";
+import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import { Button } from "../ui/button";
 import { Calendar } from "../ui/calendar";
 import { Input } from "../ui/input";
@@ -66,9 +68,13 @@ function undoRange(range: ClosedDateRange, today: number): ClosedDateRange {
 export function ClosedDatesCard({
 	retailerId,
 	closedDates,
+	highlight,
 }: {
 	retailerId: Id<"retailers">;
 	closedDates: ClosedDateRange[] | undefined;
+	/** Ring from a deep link (`?spot=closed_dates`) — the booking calendar's
+	 * "Manage closed dates" and a What's-new note both land here. */
+	highlight?: FixHighlight;
 }) {
 	const add = useMutation(api.closedDates.add);
 	const remove = useMutation(api.closedDates.remove);
@@ -109,7 +115,7 @@ export function ClosedDatesCard({
 	}
 
 	return (
-		<Card id="closed-dates">
+		<Card id={SPOTLIGHT_ANCHOR.closed_dates.anchor} highlight={highlight}>
 			<div className="flex items-start justify-between gap-4">
 				<SectionHeading
 					title="Closed dates"

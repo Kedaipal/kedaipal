@@ -27,6 +27,7 @@ import {
 	todayMytMidnight,
 	weekdayIndexMyt,
 } from "./fulfilmentDate";
+import { type ClosedDateRange, isClosedDate } from "./closedDates";
 import {
 	isMonthlyUnit,
 	MAX_PACKAGE_DAYS,
@@ -266,8 +267,41 @@ export function isNightBlocked(
 }
 
 /**
+ * What a store CLOSED DATE does to this listing (z8r3fdhpm7) — the one author
+ * of the per-shape rule, read by the availability authority below, the buyer
+ * calendar and the seller calendar alike. A closure is NOT a block: a block
+ * says "this can't be booked", a closure says "the store isn't operating that
+ * day", and those mean different things depending on what is being sold.
+ *
+ *  - `"unavailable"` — the listing sells NIGHTS (a free-range stay, or a
+ *    night-counted package like a 3D2N): a guest sleeps there, so if the whole
+ *    place is shut nobody can stay. A closed date joins the unavailable nights,
+ *    exactly like a store-wide block.
+ *  - `"absorbed"` — a month package, or a day package counted every day in a
+ *    row: ACCESS time. A gym closed on Raya doesn't extend anyone's month —
+ *    closures are priced in, the industry norm. A closure never refuses the
+ *    package; the buyer is told which days inside their term are closed.
+ *
+ * Deliberately NOT here: the weekly day off. It is unchanged for stays (a
+ * campsite hosts overnight while reception is shut) and priced into access
+ * packages the same way.
+ */
+export type ClosureRule = "unavailable" | "absorbed";
+
+export function closureRule(
+	booking:
+		| { packageLength?: number; packageUnit?: PackageUnit }
+		| undefined,
+): ClosureRule {
+	const isPackage = (booking?.packageLength ?? 0) > 0;
+	if (!isPackage) return "unavailable";
+	return booking?.packageUnit === "night" ? "unavailable" : "absorbed";
+}
+
+/**
  * The nights of [checkIn, checkOut) this listing can NOT take another booking
- * on — at capacity OR seller-blocked, evaluated in ONE place (86eyj70z1
+ * on — at capacity OR seller-blocked OR, for a night-selling listing, a store
+ * closed date (`closureRule`, z8r3fdhpm7) — evaluated in ONE place (86eyj70z1
  * decision 8) so `requestBooking`, the buyer calendar and the seller calendar
  * can never disagree, and so buyers can never tell blocked from full. Empty
  * array = the whole stay fits. The authoritative check `requestBooking` runs
@@ -280,6 +314,13 @@ export async function findFullNights(
 	checkIn: number,
 	checkOut: number,
 ): Promise<number[]> {
+	// Closed dates (z8r3fdhpm7) close a NIGHT only where the listing sells
+	// nights — read here, inside the one authority, so the buyer calendar, the
+	// seller calendar and `requestBooking` can't disagree about a closure.
+	const closedDates: ReadonlyArray<ClosedDateRange> | undefined =
+		closureRule(product.booking) === "unavailable"
+			? (await ctx.db.get(product.retailerId))?.closedDates
+			: undefined;
 	// UNDEFINED capacity = unlimited (S7) — a gym has no daily member cap, so
 	// only the seller's own blocks can close a night. Never `?? 1` here: that
 	// would read "unlimited" as "one spot" and refuse the second member.
@@ -301,7 +342,8 @@ export async function findFullNights(
 			(capacity !== undefined &&
 				counts !== null &&
 				(counts.get(night) ?? 0) >= capacity) ||
-			isNightBlocked(blocks, night, product._id),
+			isNightBlocked(blocks, night, product._id) ||
+			isClosedDate(closedDates, night),
 	);
 }
 

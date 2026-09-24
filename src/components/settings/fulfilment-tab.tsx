@@ -384,7 +384,11 @@ export function FulfilmentTab({
 			/>
 			{/* Directly under the weekly hours: closed dates are that
 			    schedule's exceptions (z8r3fdhpm7). */}
-			<ClosedDatesCard retailerId={retailerId} closedDates={closedDates} />
+			<ClosedDatesCard
+				retailerId={retailerId}
+				closedDates={closedDates}
+				highlight={ring(SPOTLIGHT_ANCHOR.closed_dates.anchor)}
+			/>
 			<MinNoticeCard initial={minFulfilmentNoticeDays} />
 			<MinOrderValueCard initial={minOrderValue} currency={currency} />
 			<BusinessAddressCard

@@ -24,7 +24,10 @@ import { BookingCheckoutForm } from "./booking-checkout-form";
 // Reads go via `useQuery(convexQuery(api.x, args)).data` — mock the adapter
 // pair, not `convex/react` (docs/frontend-caching.md, send-claim.test.tsx),
 // answering by function name: the listing, then its availability window.
-const state = vi.hoisted(() => ({ request: vi.fn() }));
+const state = vi.hoisted(() => ({
+	request: vi.fn(),
+	availability: undefined as Record<string, unknown> | undefined,
+}));
 vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
 }));
@@ -33,7 +36,10 @@ vi.mock("@tanstack/react-query", () => ({
 	useQuery: ({ fn }: { fn: Parameters<typeof getFunctionName>[0] }) =>
 		getFunctionName(fn) === "products:getPublicBySlug"
 			? { data: PRODUCT }
-			: { data: AVAILABILITY, isPlaceholderData: false },
+			: {
+					data: state.availability ?? AVAILABILITY,
+					isPlaceholderData: false,
+				},
 }));
 vi.mock("convex/react", () => ({ useMutation: () => state.request }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
@@ -78,6 +84,7 @@ afterEach(() => {
 	cleanup();
 	vi.useRealTimers();
 	vi.clearAllMocks();
+	state.availability = undefined;
 });
 
 /**
@@ -200,5 +207,48 @@ describe("BookingCheckoutForm — WhatsApp number", () => {
 			waPhone: "90-1234-5678",
 			waDialCountry: "JP",
 		});
+	});
+});
+
+describe("BookingCheckoutForm — store closed dates (z8r3fdhpm7)", () => {
+	// Faked "today" is Thu 10 Sep 2026 (MYT); the month on screen is September.
+	const SEP = (d: number) => Date.UTC(2026, 8, d) - 8 * 3_600_000;
+	const raya = { startDate: SEP(20), endDate: SEP(20), label: "Hari Raya" };
+
+	it("a stay listing names the closure under the grid — no stays those nights", () => {
+		state.availability = {
+			...AVAILABILITY,
+			unavailable: [SEP(20)],
+			closures: [raya],
+			closureRule: "unavailable",
+		};
+		renderForm();
+		expect(
+			screen.getByText(
+				"Lembah Riverside is closed Sun, 20 Sep 2026 (Hari Raya) — no stays those nights.",
+			),
+		).toBeTruthy();
+		expect(screen.getByText("Store closed")).toBeTruthy();
+	});
+
+	it("a month package that absorbs the closure says it's inside the buyer's term", () => {
+		state.availability = {
+			...AVAILABILITY,
+			packageLength: 1,
+			packageUnit: "month",
+			closures: [raya],
+			closureRule: "absorbed",
+		};
+		renderForm();
+		tapDay("12");
+		expect(
+			screen.getByText(/that day is still\s+part of your package\./),
+		).toBeTruthy();
+	});
+
+	it("no closure, no clutter", () => {
+		renderForm();
+		expect(screen.queryByText("Store closed")).toBeNull();
+		expect(screen.queryByText(/is closed/)).toBeNull();
 	});
 });

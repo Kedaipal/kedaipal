@@ -18,6 +18,11 @@ import {
 	loadBlocksForWindow,
 	MAX_BLOCK_DAYS,
 } from "./lib/bookingAvailability";
+import {
+	type ClosedDateRange,
+	isClosedDate,
+	upcomingClosures,
+} from "./lib/closedDates";
 import { DAY_MS, isMytMidnight } from "./lib/fulfilmentDate";
 import { effectiveKind, type PackageUnit } from "./lib/productKind";
 import { assertSubscriptionActive } from "./subscriptions";
@@ -147,6 +152,10 @@ export const sellerCalendar = query({
 			date: number;
 			booked: number;
 			blocked: boolean;
+			/** A store closed date covers this day (z8r3fdhpm7). Store-wide, so
+			 * it is set whatever listing is in scope — the seller sees the
+			 * closure on every view of the month. */
+			closed: boolean;
 			/** Who is on this night, in check-in order, capped at
 			 * `GUESTS_PER_NIGHT` with the rest carried in `booked`. The desktop
 			 * grid's whole job is seeing WHO is booked at a glance; a bare count
@@ -164,6 +173,10 @@ export const sellerCalendar = query({
 			endDate: number;
 			note?: string;
 		}>;
+		/** The store's upcoming closed dates (z8r3fdhpm7): the cells' labels,
+		 * the day sheet's "why", and the overlap note when the seller closes
+		 * more dates from here. */
+		closures: ClosedDateRange[];
 		listings: Array<{
 			_id: Id<"products">;
 			name: string;
@@ -259,6 +272,7 @@ export const sellerCalendar = query({
 					: visibleBlocks.some(
 							(b) => date >= b.startDate && date <= b.endDate,
 						),
+			closed: isClosedDate(access.retailer.closedDates, date),
 		}));
 
 		return {
@@ -278,6 +292,7 @@ export const sellerCalendar = query({
 				endDate: b.endDate,
 				note: b.note,
 			})),
+			closures: upcomingClosures(access.retailer.closedDates),
 			listings: await Promise.all(
 				bookingListings.map(async (p) => ({
 					_id: p._id,

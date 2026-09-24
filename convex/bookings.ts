@@ -31,6 +31,8 @@ import {
 	assertValidBookingRange,
 	BOOKING_HORIZON_DAYS,
 	BOOKING_REQUEST_TTL_MS,
+	type ClosureRule,
+	closureRule,
 	findFullNights,
 	MAX_AVAILABILITY_WINDOW_DAYS,
 	MAX_BOOKING_NIGHTS,
@@ -40,6 +42,7 @@ import {
 	nightsBetween,
 	splitNightsByRate,
 } from "./lib/bookingAvailability";
+import { type ClosedDateRange, upcomingClosures } from "./lib/closedDates";
 import { requireCustomerName } from "./lib/customer";
 import {
 	DAY_MS,
@@ -195,6 +198,13 @@ export const availability = query({
 		 * rate for every night. */
 		weekendPrice?: number;
 		weekendDays?: number[];
+		/** The store's upcoming closed dates (z8r3fdhpm7) — public (the label
+		 * is written for buyers). The calendar marks them, and a package that
+		 * absorbs them names the ones inside the buyer's term. */
+		closures: ClosedDateRange[];
+		/** What a closure does to THIS listing (`closureRule`): unavailable
+		 * nights for a stay, absorbed by an access package. */
+		closureRule: ClosureRule;
 	} | null> => {
 		if (!isMytMidnight(args.from) || !isMytMidnight(args.to)) {
 			throw new ConvexError("Availability window must be calendar days");
@@ -232,6 +242,8 @@ export const availability = query({
 			maxPackageQuantity: maxPackageQuantity(product.booking),
 			weekendPrice: product.booking?.weekendPrice,
 			weekendDays: product.booking?.weekendDays,
+			closures: upcomingClosures(retailer.closedDates),
+			closureRule: closureRule(product.booking),
 		};
 	},
 });

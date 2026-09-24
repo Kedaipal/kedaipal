@@ -9,11 +9,19 @@ import { convexQuery } from "@convex-dev/react-query";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
-import { Ban, CalendarRange, ChevronLeft, ChevronRight } from "lucide-react";
+import {
+	Ban,
+	CalendarOff,
+	CalendarRange,
+	ChevronLeft,
+	ChevronRight,
+} from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { closureRule } from "../../../convex/lib/bookingAvailability";
+import { closureOn, formatClosedRange } from "../../../convex/lib/closedDates";
 import {
 	DAY_MS,
 	formatFulfilmentDate,
@@ -25,10 +33,12 @@ import {
 	calendarDateFromMytEpoch,
 	describeBookingSpan,
 	mytMonthStart,
+	packageStartsCoveringRange,
 } from "../../lib/booking-dates";
 import { convexErrorMessage } from "../../lib/format";
 import { cn } from "../../lib/utils";
 import { StatusBadge } from "../dashboard/status-badge";
+import { AddClosedDatesSheet } from "../settings/closed-dates-card";
 import { Button } from "../ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../ui/sheet";
 import { Skeleton } from "../ui/skeleton";
@@ -120,6 +130,13 @@ export function SellerBookingCalendar({
 	const [blockScope, setBlockScope] = useState<"store" | "listing">("store");
 	const [blockNote, setBlockNote] = useState("");
 	const [saving, setSaving] = useState(false);
+	// "Mark the store closed instead" (z8r3fdhpm7): the range the seller was
+	// about to block, handed to the closed-dates sheet. The block sheet closes
+	// first — two stacked sheets would leave the seller unsure which one saves.
+	const [closeInstead, setCloseInstead] = useState<{
+		startDate: number;
+		endDate: number;
+	} | null>(null);
 
 	const blockDays = useMutation(api.bookingBlocks.blockDays);
 	const unblock = useMutation(api.bookingBlocks.unblock);
@@ -200,6 +217,7 @@ export function SellerBookingCalendar({
 			map.set(d.date, {
 				booked: d.booked,
 				blocked: d.blocked,
+				closed: d.closed,
 				guests: d.guests,
 			});
 		}
@@ -214,14 +232,20 @@ export function SellerBookingCalendar({
 	// Nothing booked and nothing blocked all month — an empty grid on its own
 	// looks like a failure to load.
 	const monthIsEmpty = calendar.days.every(
-		(d) => d.booked === 0 && !d.blocked,
+		(d) => d.booked === 0 && !d.blocked && !d.closed,
 	);
+	const monthHasClosure = calendar.days.some((d) => d.closed);
 	/** The seller's own note on whichever block covers this day — shown IN the
 	 * cell, because a bare ✗ makes them tap to remember why they closed it. */
 	function noteForDay(date: number): string | undefined {
 		return calendar?.blocks.find(
 			(b) => date >= b.startDate && date <= b.endDate && b.note,
 		)?.note;
+	}
+
+	/** The store closed date covering this day, if any (z8r3fdhpm7). */
+	function closureForDay(date: number) {
+		return closureOn(calendar?.closures, date);
 	}
 
 	// Month grid, Monday-start (weekend-led business, same as the buyer side).
@@ -296,6 +320,44 @@ export function SellerBookingCalendar({
 		blockSel?.end !== undefined && blockSel.start !== null
 			? Math.round((blockSel.end - blockSel.start) / DAY_MS) + 1
 			: 0;
+	// What a block would take OFF SALE on package listings that absorb store
+	// closures (z8r3fdhpm7). A block refuses any package whose term runs
+	// through a blocked day, so one blocked Raya day on a monthly membership
+	// stops a month of sign-ups — the trap this line exists to name. Same
+	// scope author as the write, so the warning and the row agree.
+	const blockScopeId = blockScopeProductId(
+		onlyListing?._id,
+		blockScope,
+		listingId,
+	);
+	const packageStops =
+		blockSel !== null && blockSel.start !== null && blockSel.end !== undefined
+			? listings
+					.filter(
+						(l) =>
+							(blockScopeId === undefined || l._id === blockScopeId) &&
+							closureRule(l) === "absorbed",
+					)
+					.flatMap((l) => {
+						const starts = packageStartsCoveringRange(
+							l,
+							blockSel.start as number,
+							blockSel.end as number,
+							today,
+						);
+						return starts ? [{ listing: l, ...starts }] : [];
+					})
+			: [];
+	// A closed date can't start in the past; the steer offers today onward.
+	const closeInsteadRange =
+		blockSel !== null &&
+		blockSel.start !== null &&
+		blockSel.end !== undefined &&
+		blockSel.end >= today
+			? { startDate: Math.max(blockSel.start, today), endDate: blockSel.end }
+			: null;
+	const sheetClosure = sheetDate !== null ? closureForDay(sheetDate) : null;
+	const hasStayListing = listings.some((l) => closureRule(l) === "unavailable");
 	const sheetBlocks =
 		sheetDate !== null
 			? calendar.blocks.filter(
@@ -402,6 +464,7 @@ export function SellerBookingCalendar({
 										: date <= blockSel.end)
 								}
 								blockNote={noteForDay(date)}
+								closedLabel={closureForDay(date)?.label}
 								onClick={() => tapDay(date)}
 							/>
 						),
@@ -426,6 +489,12 @@ export function SellerBookingCalendar({
 						<Ban className="size-3" aria-hidden />
 						Blocked by you
 					</span>
+					{monthHasClosure ? (
+						<span className="flex items-center gap-1.5">
+							<CalendarOff className="size-3" aria-hidden />
+							Store closed
+						</span>
+					) : null}
 					{capacity === undefined && listings.length > 1 ? (
 						<span>Pick a listing above to see how full each night is.</span>
 					) : null}
@@ -530,7 +599,7 @@ export function SellerBookingCalendar({
 								<span className="font-semibold text-foreground">
 									{onlyListing.name}
 								</span>
-								 — your only booking listing.
+								— your only booking listing.
 							</p>
 						) : listingId !== "all" ? (
 							<div className="flex gap-1 rounded-xl bg-muted p-1">
@@ -570,6 +639,49 @@ export function SellerBookingCalendar({
 						    seller closing for a flood must not be told to cancel their
 						    guests first. "Bookings already on these nights stay" is true
 						    but leaves them guessing whether that means nobody or forty. */}
+						{packageStops.length > 0 ? (
+							<div className="flex flex-col gap-2 rounded-xl border border-border bg-muted/60 px-3 py-2.5 text-xs leading-relaxed text-foreground">
+								<p>
+									<span className="font-semibold">
+										This also stops package sign-ups.
+									</span>{" "}
+									A block refuses any package that runs through a blocked day,
+									so{" "}
+									<span className="font-semibold">
+										{packageStops[0].listing.name}
+									</span>{" "}
+									can&apos;t be bought for any start from{" "}
+									{formatFulfilmentDate(packageStops[0].first)} to{" "}
+									{formatFulfilmentDate(packageStops[0].last)}
+									{packageStops.length > 1
+										? ` — and ${packageStops.length - 1} more package listing${packageStops.length === 2 ? "" : "s"} the same way`
+										: ""}
+									.
+								</p>
+								{closeInsteadRange ? (
+									<>
+										<p className="text-muted-foreground">
+											Just closed on these days? Mark the store closed instead —
+											packages keep selling (the closed days are part of the
+											term, and buyers are told), and nobody can pick these
+											dates for pickup or delivery either.
+										</p>
+										<Button
+											variant="outline"
+											className="tap-target w-full"
+											onClick={() => {
+												setCloseInstead(closeInsteadRange);
+												setBlockSel(null);
+												setBlockNote("");
+											}}
+										>
+											<CalendarOff className="size-4" aria-hidden />
+											Mark the store closed instead
+										</Button>
+									</>
+								) : null}
+							</div>
+						) : null}
 						{impact && impact.count > 0 ? (
 							<p className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-foreground">
 								<span className="font-semibold">
@@ -612,6 +724,31 @@ export function SellerBookingCalendar({
 						</SheetTitle>
 					</SheetHeader>
 					<div className="flex flex-col gap-3 px-4 pb-4">
+						{/* The store is closed that day (z8r3fdhpm7) — say so first,
+						    with the reason buyers see and where to change it. */}
+						{sheetClosure ? (
+							<div className="flex items-center justify-between gap-2 rounded-xl border border-dashed border-muted-foreground/40 bg-muted/40 px-3 py-2 text-xs">
+								<span className="min-w-0">
+									<span className="flex items-center gap-1.5 font-semibold">
+										<CalendarOff className="size-3.5 shrink-0" aria-hidden />
+										Store closed
+										{sheetClosure.label ? ` — ${sheetClosure.label}` : ""}
+									</span>
+									<span className="block text-muted-foreground">
+										{formatClosedRange(sheetClosure)}. Buyers can&apos;t pick it
+										for pickup or delivery
+										{hasStayListing ? ", and stays can't book it" : ""}.
+									</span>
+								</span>
+								<Link
+									to="/app/settings"
+									search={{ tab: "fulfilment", spot: "closed_dates" }}
+									className="tap-target inline-flex shrink-0 items-center rounded-lg border border-border bg-background px-3 font-medium hover:bg-muted"
+								>
+									Manage
+								</Link>
+							</div>
+						) : null}
 						{sheetBlocks.map((block) => (
 							<div
 								key={block._id}
@@ -719,6 +856,19 @@ export function SellerBookingCalendar({
 					</div>
 				</SheetContent>
 			</Sheet>
+
+			{/* "Mark the store closed instead" — the Settings card's own sheet,
+			    so a closure is written from ONE place whichever door the seller
+			    came in by (z8r3fdhpm7). */}
+			<AddClosedDatesSheet
+				retailerId={retailerId}
+				open={closeInstead !== null}
+				onOpenChange={(open) => {
+					if (!open) setCloseInstead(null);
+				}}
+				existing={calendar.closures}
+				initialRange={closeInstead ?? undefined}
+			/>
 		</div>
 	);
 }

@@ -338,3 +338,159 @@ describe("closedDates.impact", () => {
 		]);
 	});
 });
+
+describe("closed dates in bookings — closed ≠ blocked", () => {
+	async function listing(
+		t: ReturnType<typeof setup>,
+		booking: {
+			capacityPerNight?: number;
+			packageLength?: number;
+			packageUnit?: "day" | "night" | "month";
+			autoAccept?: boolean;
+		},
+	) {
+		const { asOwner, retailer } = await seedStore(t);
+		const productId = await asOwner.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Listing",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 1,
+			kind: "booking" as const,
+			booking,
+			variants: [{ optionValues: [], price: 15000, onHand: 0 }],
+		});
+		const close = (from: number, to: number) =>
+			asOwner.mutation(api.closedDates.add, {
+				retailerId: retailer._id,
+				startDate: from,
+				endDate: to,
+				label: "Hari Raya",
+			});
+		return { asOwner, retailer, productId, close };
+	}
+	const guest = { name: "Guest", waPhone: "0123456781" };
+
+	test("a STAY listing: a closed date is an unavailable night — the leaving morning still works", async () => {
+		const t = setup();
+		const { retailer, productId, close } = await listing(t, {
+			capacityPerNight: 3,
+		});
+		await close(day(5), day(5));
+		const window = await t.query(api.bookings.availability, {
+			productId,
+			from: day(0),
+			to: day(10),
+		});
+		expect(window?.unavailable).toEqual([day(5)]);
+		expect(window?.closureRule).toBe("unavailable");
+		expect(window?.closures).toEqual([
+			{ startDate: day(5), endDate: day(5), label: "Hari Raya" },
+		]);
+		await expect(
+			t.mutation(api.bookings.requestBooking, {
+				retailerId: retailer._id,
+				productId,
+				checkIn: day(4),
+				checkOut: day(6),
+				customer: guest,
+			}),
+		).rejects.toThrow(/no longer available/);
+		// Checking OUT on the closed morning sleeps no closed night.
+		await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(3),
+			checkOut: day(5),
+			customer: guest,
+		});
+	});
+
+	test("a NIGHT package (3D2N) treats a closure like a stay", async () => {
+		const t = setup();
+		const { retailer, productId, close } = await listing(t, {
+			packageLength: 2,
+			packageUnit: "night",
+		});
+		await close(day(6), day(6));
+		await expect(
+			t.mutation(api.bookings.requestBooking, {
+				retailerId: retailer._id,
+				productId,
+				checkIn: day(5),
+				customer: guest,
+			}),
+		).rejects.toThrow(/no longer available/);
+	});
+
+	test("a MONTH package absorbs a closure: every start stays bookable (the FS Fitness trap)", async () => {
+		const t = setup();
+		const { retailer, productId, close } = await listing(t, {
+			packageLength: 1,
+			packageUnit: "month",
+			autoAccept: true,
+		});
+		await close(day(20), day(20));
+		const window = await t.query(api.bookings.availability, {
+			productId,
+			from: day(0),
+			to: day(40),
+		});
+		// Nothing is unavailable — the closure is priced into the month…
+		expect(window?.unavailable).toEqual([]);
+		expect(window?.closureRule).toBe("absorbed");
+		// …but it IS on the payload, so the buyer can be told.
+		expect(window?.closures).toHaveLength(1);
+		// A membership whose month runs straight through the closed day sells.
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(10),
+			customer: guest,
+		});
+		expect(shortId).toMatch(/^ORD-/);
+	});
+
+	test("a BLOCK still refuses the package — blocked keeps meaning 'can't be booked'", async () => {
+		const t = setup();
+		const { asOwner, retailer, productId } = await listing(t, {
+			packageLength: 1,
+			packageUnit: "month",
+		});
+		await asOwner.mutation(api.bookingBlocks.blockDays, {
+			retailerId: retailer._id,
+			startDate: day(20),
+			endDate: day(20),
+		});
+		await expect(
+			t.mutation(api.bookings.requestBooking, {
+				retailerId: retailer._id,
+				productId,
+				checkIn: day(10),
+				customer: guest,
+			}),
+		).rejects.toThrow(/no longer available/);
+	});
+
+	test("the seller calendar marks the closure on every view, whatever listing is in scope", async () => {
+		const t = setup();
+		const { asOwner, retailer, productId, close } = await listing(t, {
+			packageLength: 1,
+			packageUnit: "month",
+		});
+		await close(day(3), day(4));
+		const month = await asOwner.query(api.bookingBlocks.sellerCalendar, {
+			retailerId: retailer._id,
+			from: day(0),
+			to: day(10),
+			productId,
+		});
+		expect(month.days.filter((d) => d.closed).map((d) => d.date)).toEqual([
+			day(3),
+			day(4),
+		]);
+		// Closed is not blocked: the block flag stays the seller's own.
+		expect(month.days.some((d) => d.blocked)).toBe(false);
+		expect(month.closures).toHaveLength(1);
+	});
+});

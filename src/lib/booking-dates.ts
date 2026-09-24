@@ -12,6 +12,7 @@ import {
 } from "../../convex/lib/fulfilmentDate";
 import {
 	isMonthlyUnit,
+	MAX_PACKAGE_DAYS,
 	type PackageUnit,
 	weekendDaysLabel,
 } from "../../convex/lib/productKind";
@@ -96,6 +97,42 @@ export function packageEnd(
 	return isMonthlyUnit(unit)
 		? addMytCalendarMonths(day, total)
 		: day + total * DAY_MS;
+}
+
+/**
+ * The start dates a BLOCK over [from, to] (both inclusive) takes off sale for
+ * a package listing — every start whose term would run through a blocked day,
+ * clipped to today. `null` for a free-range listing or when nothing sellable
+ * is hit. Judged for ONE package, the shortest term a buyer can take (more
+ * packages reach further back, so this is the floor, stated as such).
+ *
+ * It exists for the block sheet (z8r3fdhpm7): a block refuses a package that
+ * covers ANY blocked day, so blocking one Raya day on a monthly membership
+ * silently stops a month of sign-ups. The sheet states it and offers a
+ * closed date instead, which a month package absorbs.
+ */
+export function packageStartsCoveringRange(
+	listing: { packageLength?: number; packageUnit?: PackageUnit },
+	from: number,
+	to: number,
+	today: number,
+): { first: number; last: number } | null {
+	const length = listing.packageLength;
+	if (length === undefined || length <= 0) return null;
+	// A start ON a blocked day covers it; walking back, a term's end only
+	// shrinks, so the first start whose term no longer reaches `from` ends the
+	// scan (bounded by the longest term there is).
+	let first = from;
+	for (
+		let start = from - DAY_MS;
+		start >= from - (MAX_PACKAGE_DAYS + 31) * DAY_MS;
+		start -= DAY_MS
+	) {
+		if (packageEnd(start, length, listing.packageUnit, 1) <= from) break;
+		first = start;
+	}
+	first = Math.max(first, today);
+	return first > to ? null : { first, last: to };
 }
 
 /** Every night a stay starting on `day` would occupy, for a fixed-length

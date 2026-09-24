@@ -1,22 +1,23 @@
 import { describe, expect, it } from "vitest";
 import { DAY_MS, MYT_OFFSET_MS } from "../../convex/lib/fulfilmentDate";
 import {
-	calendarDateFromMytEpoch,
-	canCheckIn,
-	conflictCeiling,
-	latestCheckOutFor,
-	mytEpochFromCalendarDate,
-	mytMonthStart,
 	bookingPriceSuffix,
 	bookingSpanCounted,
 	bookingSpanNoun,
+	calendarDateFromMytEpoch,
+	canCheckIn,
+	conflictCeiling,
 	describeBookingSpan,
 	describeNights,
 	formatNight,
+	latestCheckOutFor,
+	mytEpochFromCalendarDate,
+	mytMonthStart,
 	nextBookingSelection,
 	packageCountLabel,
 	packageEnd,
 	packageNights,
+	packageStartsCoveringRange,
 	type SelectionContext,
 	weekendRateSuffix,
 } from "./booking-dates";
@@ -60,11 +61,7 @@ describe("two-tap selection", () => {
 
 	it("an earlier tap during check-out picking restarts from that day", () => {
 		const c = ctx();
-		const sel = nextBookingSelection(
-			{ checkIn: day(24) },
-			day(20),
-			c,
-		);
+		const sel = nextBookingSelection({ checkIn: day(24) }, day(20), c);
 		expect(sel).toEqual({ checkIn: day(20) });
 	});
 
@@ -217,9 +214,9 @@ describe("package count label (the 'How many 2 dayss?' bug)", () => {
 
 describe("weekendRateSuffix (S13)", () => {
 	it("names the nights after the per-night unit", () => {
-		expect(weekendRateSuffix({ weekendPrice: 12_000, weekendDays: [5, 6] })).toBe(
-			"/night Fri & Sat",
-		);
+		expect(
+			weekendRateSuffix({ weekendPrice: 12_000, weekendDays: [5, 6] }),
+		).toBe("/night Fri & Sat");
 		expect(
 			weekendRateSuffix({ weekendPrice: 12_000, weekendDays: [0, 5, 6] }),
 		).toBe("/night Fri, Sat & Sun");
@@ -229,7 +226,9 @@ describe("weekendRateSuffix (S13)", () => {
 		expect(weekendRateSuffix(undefined)).toBeNull();
 		expect(weekendRateSuffix({})).toBeNull();
 		expect(weekendRateSuffix({ weekendPrice: 12_000 })).toBeNull();
-		expect(weekendRateSuffix({ weekendPrice: 12_000, weekendDays: [] })).toBeNull();
+		expect(
+			weekendRateSuffix({ weekendPrice: 12_000, weekendDays: [] }),
+		).toBeNull();
 		expect(
 			weekendRateSuffix({
 				weekendPrice: 12_000,
@@ -302,5 +301,55 @@ describe("bookingSpanCounted — the span with its count, always", () => {
 				expect(out).not.toMatch(/\(s\)|1 [a-z]+s$|ss$/);
 			}
 		}
+	});
+});
+
+describe("packageStartsCoveringRange (z8r3fdhpm7)", () => {
+	const TODAY = Date.UTC(2026, 8, 1) - 8 * 3_600_000; // Tue 1 Sep 2026 MYT
+	const D = (n: number) => TODAY + n * 86_400_000;
+
+	it("a 5-day package: the four starts before the blocked day, and the day itself", () => {
+		expect(
+			packageStartsCoveringRange(
+				{ packageLength: 5, packageUnit: "day" },
+				D(20),
+				D(20),
+				TODAY,
+			),
+		).toEqual({ first: D(16), last: D(20) });
+	});
+
+	it("a 1-month package: blocking one day takes a month of starts off sale", () => {
+		const range = packageStartsCoveringRange(
+			{ packageLength: 1, packageUnit: "month" },
+			D(40),
+			D(40),
+			TODAY,
+		);
+		// Starts from ~a month before the blocked day up to the day itself.
+		expect(range?.last).toBe(D(40));
+		expect(
+			Math.round(((range?.last ?? 0) - (range?.first ?? 0)) / 86_400_000),
+		).toBeGreaterThanOrEqual(27);
+	});
+
+	it("clipped to today, and null for free-range stays or nothing sellable", () => {
+		expect(
+			packageStartsCoveringRange(
+				{ packageLength: 30, packageUnit: "day" },
+				D(3),
+				D(3),
+				TODAY,
+			),
+		).toEqual({ first: TODAY, last: D(3) });
+		expect(packageStartsCoveringRange({}, D(3), D(3), TODAY)).toBeNull();
+		expect(
+			packageStartsCoveringRange(
+				{ packageLength: 2, packageUnit: "day" },
+				D(-5),
+				D(-3),
+				TODAY,
+			),
+		).toBeNull();
 	});
 });

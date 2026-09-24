@@ -20,15 +20,21 @@
 //
 // Full and blocked are different states and look different: full is the
 // listing selling out (navy, earned), blocked is the seller's own doing
-// (hatched, with the reason they typed).
+// (hatched, with the reason they typed). A store CLOSED DATE (z8r3fdhpm7) is a
+// third thing — the whole store is shut, whatever the listing — so it gets its
+// own look (dashed, the closed-sign icon, the public reason) and keeps the
+// booked count visible: bookings on a day the store closes are exactly what
+// the seller needs to see and handle.
 
-import { Ban } from "lucide-react";
+import { Ban, CalendarOff } from "lucide-react";
 import { calendarDateFromMytEpoch } from "../../lib/booking-dates";
 import { cn } from "../../lib/utils";
 
 export type DayCellInfo = {
 	booked: number;
 	blocked: boolean;
+	/** A store closed date covers this day (z8r3fdhpm7). */
+	closed: boolean;
 	guests: Array<{ shortId: string; name: string }>;
 };
 
@@ -55,6 +61,7 @@ export function BookingDayCell({
 	isPast,
 	inBlockSelection,
 	blockNote,
+	closedLabel,
 	onClick,
 }: {
 	date: number;
@@ -67,10 +74,15 @@ export function BookingDayCell({
 	inBlockSelection: boolean;
 	/** The seller's own note on the block covering this day, if any. */
 	blockNote?: string;
+	/** The reason on the closed date covering this day, if any. */
+	closedLabel?: string;
 	onClick: () => void;
 }) {
 	const booked = info?.booked ?? 0;
-	const blocked = info?.blocked === true;
+	// A closure outranks a block on the cell: it's store-wide and public, and
+	// the day sheet lists the block beneath it anyway.
+	const closed = info?.closed === true;
+	const blocked = info?.blocked === true && !closed;
 	const full = capacity !== undefined && booked >= capacity;
 	const guests = info?.guests ?? [];
 	const overflow = booked - guests.length;
@@ -94,6 +106,8 @@ export function BookingDayCell({
 			type="button"
 			onClick={onClick}
 			aria-label={`${calendarDateFromMytEpoch(date).getDate()} — ${
+				closed ? `store closed${closedLabel ? ` (${closedLabel})` : ""}, ` : ""
+			}${
 				blocked
 					? "blocked"
 					: booked === 0
@@ -104,16 +118,18 @@ export function BookingDayCell({
 				"relative flex min-h-16 flex-col rounded-xl border p-1.5 text-left transition-colors lg:min-h-[5rem]",
 				blocked
 					? // `var(--muted)`, NOT `hsl(var(--muted))`. This project's tokens are
-					// already complete `hsl(...)` values, so wrapping them again yields
-					// `hsl(hsl(210 40% 96%))` — invalid, which drops the WHOLE gradient
-					// and computes to `background-image: none`. The S4 cell carried the
-					// same double-wrap with a flat `bg-muted/60` beside it, so the
-					// stripes never rendered and the flat fill hid it. Verified against
-					// the running stylesheet, not by eye.
-					"border-border bg-[repeating-linear-gradient(135deg,var(--muted)_0_6px,var(--card)_6px_12px)]"
-					: full
-						? "border-foreground/20 bg-muted/50"
-						: "border-border bg-card hover:border-accent/60",
+						// already complete `hsl(...)` values, so wrapping them again yields
+						// `hsl(hsl(210 40% 96%))` — invalid, which drops the WHOLE gradient
+						// and computes to `background-image: none`. The S4 cell carried the
+						// same double-wrap with a flat `bg-muted/60` beside it, so the
+						// stripes never rendered and the flat fill hid it. Verified against
+						// the running stylesheet, not by eye.
+						"border-border bg-[repeating-linear-gradient(135deg,var(--muted)_0_6px,var(--card)_6px_12px)]"
+					: closed
+						? "border-dashed border-muted-foreground/40 bg-muted/40"
+						: full
+							? "border-foreground/20 bg-muted/50"
+							: "border-border bg-card hover:border-accent/60",
 				isPast && "opacity-50",
 				isToday && !inBlockSelection && "border-accent ring-3 ring-accent/15",
 				inBlockSelection && "!border-primary bg-primary/8 ring-2 ring-primary",
@@ -124,7 +140,7 @@ export function BookingDayCell({
 					className={cn(
 						"text-[11px] font-bold leading-none tabular-nums",
 						isToday ? "text-accent-emphasis" : "text-foreground",
-						blocked && "text-muted-foreground",
+						(blocked || closed) && "text-muted-foreground",
 					)}
 				>
 					{calendarDateFromMytEpoch(date).getDate()}
@@ -132,6 +148,8 @@ export function BookingDayCell({
 				</span>
 				{blocked ? (
 					<Ban className="size-3 text-muted-foreground" aria-hidden />
+				) : closed && booked === 0 ? (
+					<CalendarOff className="size-3 text-muted-foreground" aria-hidden />
 				) : booked > 0 ? (
 					<span
 						className={cn(
@@ -146,7 +164,29 @@ export function BookingDayCell({
 				) : null}
 			</span>
 
-			{blocked ? (
+			{closed ? (
+				<>
+					<span className="mt-auto hidden rounded-md border border-dashed border-muted-foreground/40 bg-card/90 px-1.5 py-0.5 lg:block">
+						<span className="block text-[10px] font-bold text-muted-foreground">
+							Closed
+						</span>
+						{closedLabel ? (
+							<span className="block truncate text-[10px] text-muted-foreground">
+								{closedLabel}
+							</span>
+						) : null}
+					</span>
+					{/* Phone: the closed-sign icon marks it; bookings still show. */}
+					{booked > 0 ? (
+						<span className="mt-auto block h-1 w-full overflow-hidden rounded-full bg-muted lg:hidden">
+							<span
+								className="block h-full rounded-full bg-muted-foreground/60"
+								style={{ width: `${Math.max(12, fillPct)}%` }}
+							/>
+						</span>
+					) : null}
+				</>
+			) : blocked ? (
 				<span className="mt-auto hidden rounded-md border border-border bg-card/90 px-1.5 py-0.5 lg:block">
 					<span className="block text-[10px] font-bold text-muted-foreground">
 						Blocked
@@ -184,7 +224,9 @@ export function BookingDayCell({
 								{full ? "Full · " : ""}+{hiddenCount} more
 							</span>
 						) : full ? (
-							<span className="pl-1 text-[9px] font-bold leading-none">Full</span>
+							<span className="pl-1 text-[9px] font-bold leading-none">
+								Full
+							</span>
 						) : null}
 					</span>
 					{/* Phone: how full. */}

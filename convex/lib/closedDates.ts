@@ -247,6 +247,42 @@ export function closureHeadsUp(
 	);
 }
 
+/**
+ * The closures that overlap [from, toExclusive), each CLIPPED to it — "which
+ * closed days fall inside this package term / this month on screen". Earliest
+ * first; the label rides along so the reason can be named.
+ */
+export function closuresWithin(
+	closedDates: ReadonlyArray<ClosedDateRange> | undefined,
+	from: number,
+	toExclusive: number,
+): ClosedDateRange[] {
+	if (!closedDates) return [];
+	const last = toExclusive - DAY_MS;
+	return closedDates
+		.filter((range) => range.startDate <= last && range.endDate >= from)
+		.map((range) => ({
+			...range,
+			startDate: Math.max(range.startDate, from),
+			endDate: Math.min(range.endDate, last),
+		}))
+		.sort(byStart);
+}
+
+/** Every closed day in [from, toExclusive), as MYT midnights, ascending. */
+export function closedDaysBetween(
+	closedDates: ReadonlyArray<ClosedDateRange> | undefined,
+	from: number,
+	toExclusive: number,
+): number[] {
+	const days: number[] = [];
+	if (!closedDates || closedDates.length === 0) return days;
+	for (let day = from; day < toExclusive; day += DAY_MS) {
+		if (closureOn(closedDates, day)) days.push(day);
+	}
+	return days;
+}
+
 /** "Thu, 1 Oct 2026 (Hari Raya)" — the range and, when given, why. */
 export function describeClosure(range: ClosedDateRange): string {
 	const when = formatClosedRange(range);

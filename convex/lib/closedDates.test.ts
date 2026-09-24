@@ -3,6 +3,8 @@ import {
 	CLOSURE_HEADS_UP_DAYS,
 	type ClosedDateRange,
 	closedDateIssue,
+	closedDaysBetween,
+	closuresWithin,
 	closureHeadsUp,
 	formatClosedRangeShort,
 	closedDateMessage,
@@ -213,5 +215,27 @@ describe("header heads-up", () => {
 		expect(closureHeadsUp([far, raya, running], NOW)).toBe(raya);
 		expect(closureHeadsUp([far, running], NOW)).toBeNull();
 		expect(closureHeadsUp(undefined, NOW)).toBeNull();
+	});
+});
+
+describe("closures inside a window", () => {
+	test("clipped to the window, earliest first, label kept", () => {
+		const early: ClosedDateRange = {
+			startDate: TODAY + DAY_MS,
+			endDate: TODAY + DAY_MS,
+		};
+		// Window = 2 Oct .. 4 Oct (exclusive) — Raya is clipped to 2–3 Oct.
+		const from = THU_1_OCT + DAY_MS;
+		expect(closuresWithin([raya, early], from, from + 2 * DAY_MS)).toEqual([
+			{ startDate: from, endDate: SAT_3_OCT, label: "Hari Raya" },
+		]);
+		expect(closuresWithin(undefined, from, from + DAY_MS)).toEqual([]);
+	});
+
+	test("every closed day in a window, as dates", () => {
+		expect(closedDaysBetween([raya], THU_1_OCT - DAY_MS, SAT_3_OCT)).toEqual([
+			THU_1_OCT,
+			THU_1_OCT + DAY_MS,
+		]);
 	});
 });

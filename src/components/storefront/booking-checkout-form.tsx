@@ -21,6 +21,12 @@ import {
 	type DialIso,
 	parseBuyerWaPhone,
 } from "../../../convex/lib/buyerPhone";
+import {
+	closedDaysBetween,
+	closedRangeDays,
+	closuresWithin,
+	describeClosure,
+} from "../../../convex/lib/closedDates";
 import type { Country } from "../../../convex/lib/country";
 import {
 	DAY_MS,
@@ -154,6 +160,18 @@ export function BookingCheckoutForm({
 			packageQuantity: packages,
 		};
 	}, [availability, today, packages]);
+	// The closed days on the month in view (z8r3fdhpm7) — the calendar's hatch.
+	const closedDaySet = useMemo(
+		() =>
+			new Set(
+				closedDaysBetween(
+					availability?.closures,
+					month,
+					addMytMonths(month, 1),
+				),
+			),
+		[availability?.closures, month],
+	);
 
 	// A vanished/unbookable listing (archived, hidden, kind changed) — send the
 	// buyer back to the store rather than a dead form. `undefined` = loading.
@@ -248,6 +266,25 @@ export function BookingCheckoutForm({
 		!isPackage && selection.checkIn !== undefined && checkOut === undefined
 			? conflictCeiling(selection.checkIn, ctx)
 			: null;
+	// Store closed dates (z8r3fdhpm7): the ones on the month in view (marked
+	// and named under the grid), and — for a package that absorbs them — the
+	// ones inside the buyer's term.
+	const monthClosures = closuresWithin(
+		availability.closures,
+		month,
+		addMytMonths(month, 1),
+	);
+	const termClosures =
+		isPackage &&
+		availability.closureRule === "absorbed" &&
+		selection.checkIn !== undefined &&
+		checkOut !== undefined
+			? closuresWithin(availability.closures, selection.checkIn, checkOut)
+			: [];
+	const termClosureDays = termClosures.reduce(
+		(sum, range) => sum + closedRangeDays(range),
+		0,
+	);
 
 	const dialCountry = pickedDialCountry ?? country;
 	const parsedPhone = parseBuyerWaPhone(phone, dialCountry);
@@ -608,6 +645,7 @@ export function BookingCheckoutForm({
 					minMonth={todayMonth}
 					maxMonth={mytMonthStart(ctx.latestCheckIn)}
 					weekendDays={hasWeekendRate ? weekendDays : undefined}
+					closedDays={closedDaySet}
 				/>
 				<BookingCalendarLegend
 					weekendLabel={
@@ -615,7 +653,32 @@ export function BookingCheckoutForm({
 							? `${weekendDaysLabel(weekendDays)} · ${formatPrice(weekendPrice, product.currency)}/night`
 							: undefined
 					}
+					showClosed={monthClosures.length > 0}
 				/>
+				{/* Why the hatched days are hatched — the reason the seller gave,
+				    for the closures on screen (z8r3fdhpm7). */}
+				{monthClosures.length > 0 ? (
+					<p className="text-xs text-muted-foreground">
+						{storeName} is closed{" "}
+						{monthClosures.map((range) => describeClosure(range)).join("; ")}
+						{availability.closureRule === "unavailable"
+							? " — no stays those nights."
+							: "."}
+					</p>
+				) : null}
+				{/* A package that ABSORBS closures (a month, an every-day pass) still
+				    sells through them — so the buyer is told which days inside their
+				    term the store is shut, before they pay, not after. */}
+				{termClosures.length > 0 ? (
+					<p className="rounded-xl border border-border bg-muted/60 px-3 py-2 text-xs leading-relaxed text-foreground">
+						<span className="font-semibold">
+							{storeName} is closed{" "}
+							{termClosures.map((range) => describeClosure(range)).join("; ")}
+						</span>{" "}
+						— {termClosureDays === 1 ? "that day is" : "those days are"} still
+						part of your package.
+					</p>
+				) : null}
 				{/* How many packages. A stepper, not a calendar drag: dragging
 				    across a package boundary is ambiguous (what does 3 days mean on
 				    a 2-day package?) and drag fights scroll on mobile — the reason
