@@ -570,10 +570,21 @@ copy is true by construction.
    `orderFlows.self_collect` (the only kinds those fields could have meant).
    Idempotent; never overwrites a kind the seller already answered; leaves the
    legacy fields in place so it stays reversible.
-3. **Narrow (separate PR, after the backfill):** drop `retailers.statusLabels`,
+3. **Narrow — [`z8r3fdhq1x`](https://app.clickup.com/t/z8r3fdhq1x), a separate
+   PR after the backfill:** drop `retailers.statusLabels`,
    `retailers.orderStages`, the `statusLabels` / `orderStages` args on
-   `retailers.update`, `FlowPreset.takesLegacyLabels`, and the `labels` /
-   `orderStages` options on `resolveStages`.
+   `retailers.updateSettings`, `FlowPreset.takesLegacyLabels`,
+   `legacyLabelsApply`, and the `labels` / `orderStages` options on
+   `resolveStages`.
+
+   **It cannot ride along with the widen.** Convex validates every existing
+   document against the schema being pushed, and 5 prod stores still carry an
+   `orderStages` list — dropping the field before those rows are converted
+   fails the deploy. That is what makes this two deploys rather than one.
+
+   Until it lands, `legacy-status-fields.test.ts` keeps the fields
+   **write-dead** from the frontend, so the set of legacy rows can only shrink
+   and the backfill converges. That test is deleted by the narrow.
 
 > ### ✅ Measured on prod (24 Sep 2026): nothing is at risk
 >
