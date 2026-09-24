@@ -19,6 +19,7 @@ import {
 	ReceiptText,
 	ShieldCheck,
 	Store,
+	UsersRound,
 	Trash2,
 	UtensilsCrossed,
 	Wrench,
@@ -63,6 +64,8 @@ import { TierPill } from "../components/dashboard/tier-pill";
 import { submitThenFocusError } from "../components/forms/focus-error";
 import { useAppForm } from "../components/forms/form";
 import { BillingTab } from "../components/settings/billing-tab";
+import { TeamTab } from "../components/settings/team-tab";
+import { AreaGate } from "../components/app/area-gate";
 import { BookingsTab } from "../components/settings/bookings-tab";
 import { CountrySetupPanel } from "../components/settings/country-setup-panel";
 import { FulfilmentTab } from "../components/settings/fulfilment-tab";
@@ -147,6 +150,7 @@ const LOCALE_LABELS: Record<Locale, string> = {
 
 type SettingsTab =
 	| "store"
+	| "team"
 	| "billing"
 	| "whatsapp"
 	| "payments"
@@ -173,6 +177,14 @@ const SETTINGS_TABS: ReadonlyArray<{
 		label: "Store",
 		description: "Name, logo, URL and currency",
 		icon: <Store className="size-4" />,
+	},
+	// Team sits between the store's identity and its money (Store group): who
+	// operates the store is an account-level fact, not a "how you sell" one.
+	{
+		id: "team",
+		label: "Team",
+		description: "Invite helpers & control what they can access",
+		icon: <UsersRound className="size-4" />,
 	},
 	{
 		id: "billing",
@@ -235,7 +247,7 @@ const SETTINGS_GROUPS: ReadonlyArray<{
 	label: string;
 	tabs: SettingsTab[];
 }> = [
-	{ label: "Store", tabs: ["store", "billing"] },
+	{ label: "Store", tabs: ["store", "team", "billing"] },
 	{
 		label: "Selling",
 		tabs: [
@@ -750,6 +762,7 @@ function SettingsRoute() {
 				}
 			>
 				{activeTab === "store" ? (
+					<AreaGate area="store_settings">
 					<div className="flex flex-col gap-6 pt-2">
 						<Card>
 							<StoreNameForm
@@ -855,9 +868,18 @@ function SettingsRoute() {
 							/>
 						</Card>
 					</div>
+					</AreaGate>
+				) : null}
+
+				{activeTab === "team" ? (
+					<TeamTab
+						retailerId={retailer._id}
+						storeName={retailer.storeName}
+					/>
 				) : null}
 
 				{activeTab === "billing" ? (
+					<AreaGate area="billing">
 					<BillingTab
 						retailer={retailer}
 						target={cardTarget}
@@ -872,9 +894,11 @@ function SettingsRoute() {
 							navigate({ search: { tab: "billing" }, replace: true })
 						}
 					/>
+					</AreaGate>
 				) : null}
 
 				{activeTab === "whatsapp" ? (
+					<AreaGate area="store_settings" ownerOnly>
 					<div className="flex flex-col gap-6 pt-2">
 						<InfoBanner title="How WhatsApp works on Kedaipal">
 							<p>
@@ -928,9 +952,11 @@ function SettingsRoute() {
 							/>
 						</Card>
 					</div>
+					</AreaGate>
 				) : null}
 
 				{activeTab === "payments" ? (
+					<AreaGate area="payments_settings">
 					<div className="flex flex-col gap-6 pt-2">
 						<Card
 							id={SETTINGS_ANCHOR.payment_methods}
@@ -970,9 +996,11 @@ function SettingsRoute() {
 							until day 14) — sending it is always your call.
 						</p>
 					</div>
+					</AreaGate>
 				) : null}
 
 				{activeTab === "fulfilment" ? (
+					<AreaGate area="fulfilment">
 					<FulfilmentTab
 						target={cardTarget}
 						currency={retailer.currency}
@@ -989,9 +1017,11 @@ function SettingsRoute() {
 						awbConfig={retailer.awbConfig}
 						subscription={retailer.subscription}
 					/>
+					</AreaGate>
 				) : null}
 
 				{activeTab === "integrations" ? (
+					<AreaGate area="integrations">
 					<IntegrationsTab
 						target={cardTarget}
 						retailerId={retailer._id}
@@ -1001,15 +1031,19 @@ function SettingsRoute() {
 						subscription={retailer.subscription}
 						onSave={updateSettings}
 					/>
+					</AreaGate>
 				) : null}
 
 				{activeTab === "bookings" ? (
+					<AreaGate area="bookings">
 					<div className="flex flex-col gap-6 pt-2">
 						<BookingsTab retailerId={retailer._id} />
 					</div>
+					</AreaGate>
 				) : null}
 
 				{activeTab === "order-status" ? (
+					<AreaGate area="store_settings">
 					<div className="flex flex-col gap-6 pt-2">
 						<InfoBanner title="How order stages work">
 							<p>
@@ -1078,6 +1112,7 @@ function SettingsRoute() {
 							/>
 						</Card>
 					</div>
+					</AreaGate>
 				) : null}
 			</div>
 		</div>

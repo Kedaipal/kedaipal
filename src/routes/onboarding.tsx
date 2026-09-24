@@ -30,6 +30,7 @@ import {
 } from "../../convex/lib/slug";
 import { OnboardingTopBar } from "../components/onboarding/onboarding-top-bar";
 import { Button } from "../components/ui/button";
+import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import { Input } from "../components/ui/input";
 import { MyPhoneInput } from "../components/ui/my-phone-input";
 import { useLandingRegion } from "../hooks/useLandingRegion";
@@ -103,6 +104,15 @@ function OnboardingForm() {
 	const search = Route.useSearch();
 	const retailer = useQuery(convexQuery(api.retailers.getMyRetailer, {})).data;
 	const createRetailer = useMutation(api.retailers.createRetailer);
+	// Team states (86exr91r4): an ACTIVE membership means creating a store costs
+	// this login its seat — surfaced as an explicit confirm BEFORE submit, and
+	// the server refuses without the flag, so the seat can never vanish as a
+	// side effect. (A member never actually reaches this form via redirect —
+	// getMyRetailer resolves their team store — but the guard costs nothing.)
+	const membership = useQuery(
+		convexQuery(api.team.myMembershipState, {}),
+	).data;
+	const [confirmLeaveOpen, setConfirmLeaveOpen] = useState(false);
 
 	// Assisted = an admin-generated prefill link. Seed the fields, surface the WA
 	// number for review, and tell the client what's going on.
@@ -173,6 +183,10 @@ function OnboardingForm() {
 
 	async function handleSubmit(e: FormEvent) {
 		e.preventDefault();
+		await submitStore(false);
+	}
+
+	async function submitStore(confirmLeaveTeam: boolean) {
 		if (!nameCheck.ok) {
 			toast.error(nameCheck.message);
 			return;
@@ -200,6 +214,11 @@ function OnboardingForm() {
 			);
 			return;
 		}
+		if (membership?.active && !confirmLeaveTeam) {
+			// The cost is named in the dialog; submit resumes with the flag.
+			setConfirmLeaveOpen(true);
+			return;
+		}
 		setSubmitting(true);
 		try {
 			// The tag the session arrived with (marketing routes / powered-by
@@ -222,6 +241,7 @@ function OnboardingForm() {
 				...(signupSource !== undefined ? { signupSource } : {}),
 				...(signupReferrerSlug !== undefined ? { signupReferrerSlug } : {}),
 				...(gaClientId !== undefined ? { gaClientId } : {}),
+				...(confirmLeaveTeam ? { confirmLeaveTeam } : {}),
 			});
 			// The funnel's terminal key event — after the mutation succeeds, so a
 			// slug collision or validation error can't inflate conversions.
@@ -245,6 +265,12 @@ function OnboardingForm() {
 			    says whose app this is and which account the store will belong to
 			    (with the way out) before asking for anything. */}
 			<OnboardingTopBar />
+			{/* Team states (86exr91r4), ABOVE the wizard: a pending invitation is
+			    almost always why an invited helper is standing here (they signed up
+			    directly instead of tapping the email link), and a freshly-removed
+			    member deserves the explanation before a bare "create your store". */}
+			<PendingInvitesBanner />
+			<RemovedFromTeamBanner />
 			<header className="flex flex-col gap-2">
 				<p className="text-xs font-semibold uppercase tracking-widest text-accent">
 					Step 1 of 1
@@ -424,6 +450,15 @@ function OnboardingForm() {
 					</Button>
 				</div>
 			</div>
+			<ConfirmDialog
+				open={confirmLeaveOpen}
+				onOpenChange={setConfirmLeaveOpen}
+				title={`Leave the team at ${membership?.active?.storeName ?? "your current store"}?`}
+				description="Creating your own store means giving up your seat there — you lose access immediately and the owner is emailed that the seat is free. Their store and subscription are never touched."
+				confirmLabel="Leave & create my store"
+				destructive
+				onConfirm={() => void submitStore(true)}
+			/>
 		</main>
 	);
 }
@@ -470,5 +505,99 @@ function LoadingScreen() {
 			<OnboardingTopBar />
 			<p className="m-auto text-sm text-muted-foreground">Loading…</p>
 		</main>
+	);
+}
+
+// ---------------------------------------------------------------------------
+// Team banners (86exr91r4)
+// ---------------------------------------------------------------------------
+
+/** "You've been invited to {Store}" — the direct-signup path: the helper made
+ * an account without tapping the email link, so the invite must find THEM.
+ * Accepting here is safe without the token because the list only ever holds
+ * invites addressed to this login's verified email. */
+function PendingInvitesBanner() {
+	const navigate = useNavigate();
+	const invites = useQuery(convexQuery(api.team.myPendingInvites, {})).data;
+	const accept = useMutation(api.team.acceptPendingInvite);
+	const [joining, setJoining] = useState<string | null>(null);
+	if (!invites || invites.length === 0) return null;
+	return (
+		<div className="flex flex-col gap-3 rounded-2xl border border-accent/30 bg-accent/5 p-4">
+			{invites.map((invite) => (
+				<div
+					key={invite.memberId}
+					className="flex flex-wrap items-center gap-3"
+				>
+					<div className="min-w-0 flex-1 basis-48">
+						<p className="text-sm font-semibold">
+							You've been invited to {invite.storeName}
+						</p>
+						<p className="text-xs text-muted-foreground">
+							Join their team instead of creating a store — you'll work from
+							this login with the access they set.
+						</p>
+					</div>
+					<Button
+						className="h-10"
+						disabled={joining !== null}
+						onClick={async () => {
+							setJoining(invite.memberId);
+							try {
+								const result = await accept({ memberId: invite.memberId });
+								if (result.ok) {
+									toast.success(`Welcome to ${result.storeName}!`);
+									navigate({ to: "/app" });
+									return;
+								}
+								toast.error(
+									result.reason === "no_seat"
+										? `${invite.storeName} has no free seat any more — ask the owner to resend once one opens.`
+										: result.reason === "expired"
+											? "That invitation expired — ask the owner to resend it."
+											: "That invitation is no longer valid — ask the owner to resend it.",
+								);
+							} catch (err) {
+								toast.error(convexErrorMessage(err));
+							} finally {
+								setJoining(null);
+							}
+						}}
+					>
+						{joining === invite.memberId ? "Joining…" : "Join"}
+					</Button>
+				</div>
+			))}
+		</div>
+	);
+}
+
+/** The removed state: without this, a helper the owner removed lands on a bare
+ * "create your store" wizard with no idea why — the one screen the spec says
+ * must explain itself. */
+function RemovedFromTeamBanner() {
+	const membership = useQuery(
+		convexQuery(api.team.myMembershipState, {}),
+	).data;
+	const removed = membership?.removed;
+	if (!removed) return null;
+	const why =
+		removed.reason === "plan_change"
+			? `${removed.storeName} moved to a plan with fewer team seats, so your seat was released.`
+			: removed.reason === "store_deleted"
+				? `${removed.storeName} closed their Kedaipal store.`
+				: `The owner of ${removed.storeName} removed your team access.`;
+	return (
+		<div className="rounded-2xl border border-border bg-muted/50 p-4">
+			<p className="text-sm font-semibold">
+				You no longer have access to {removed.storeName}
+			</p>
+			<p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+				{why}{" "}
+				{removed.reason === "removed_by_owner"
+					? "If that's a surprise, ask them directly — or start a store of your own below."
+					: "You can start a store of your own below, or ask the owner to re-invite you."}
+			</p>
+		</div>
 	);
 }

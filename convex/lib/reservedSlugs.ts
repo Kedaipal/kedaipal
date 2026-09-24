@@ -35,6 +35,7 @@ const LIVE_ROUTES = [
 	"app",
 	"claim",
 	"cost",
+	"join", // team invitations land here (86exr91r4)
 	"onboarding",
 	"pricing",
 	"privacy",
@@ -85,7 +86,6 @@ const AUTH = [
 	"account",
 	"forgot-password",
 	"invite",
-	"join",
 	"login",
 	"logout",
 	"password",

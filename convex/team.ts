@@ -595,7 +595,10 @@ export const getInviteContext = query({
 		{ token },
 	): Promise<
 		| { state: "invalid" }
-		| { state: "expired" | "used"; storeName: string }
+		// Separate members (not `"expired" | "used"` in one) so the client's
+		// ternary chain narrows all the way down to the valid shape.
+		| { state: "expired"; storeName: string }
+		| { state: "used"; storeName: string }
 		| {
 				state: "valid";
 				storeName: string;
