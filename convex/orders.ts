@@ -3014,7 +3014,14 @@ export const getTimeline = query({
 		}
 		const ownerUserId = access.retailer.userId;
 		return events
-			.sort((a, b) => b.createdAt - a.createdAt)
+			// Newest first, tie-broken by INSERTION order: an order's "placed"
+			// and "confirmed at checkout" rows share one `now`, and without the
+			// second key they rendered placed-above-confirmed — backwards in a
+			// newest-first list (seen on a real order, 25 Sep).
+			.sort(
+				(a, b) =>
+					b.createdAt - a.createdAt || b._creationTime - a._creationTime,
+			)
 			.map((e) => ({
 				id: e._id,
 				status: e.status,
