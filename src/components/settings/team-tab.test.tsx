@@ -160,6 +160,35 @@ describe("TeamTab states", () => {
 		expect(screen.getByText("(you)")).toBeTruthy();
 		// Colleague's email arrives masked from the server and renders as-is.
 		expect(screen.getByText("c•••@x.com")).toBeTruthy();
+		// One store per login is a rule the MEMBER lives under, so it is written
+		// where they are — leaving is the only route to a store of their own,
+		// and a destructive-looking button is not a route anyone finds by
+		// guessing.
+		expect(
+			screen.getByText(/An account can be in one store at a time/),
+		).toBeTruthy();
+	});
+
+	it("the one-store note is for members only — the owner never sees it", () => {
+		queryData.current = teamFixture({
+			memberLimit: 2,
+			members: [
+				{
+					memberId: "m1",
+					status: "active",
+					email: "helper@x.com",
+					displayName: "Aina",
+					permissions: { orders: "write" },
+					invitedAt: 1,
+					acceptedAt: 2,
+					isSelf: false,
+				},
+			],
+		});
+		mount();
+		expect(
+			screen.queryByText(/An account can be in one store at a time/),
+		).toBeNull();
 	});
 
 	it("pending invite row explains itself (expiry line), expired invite says resend", () => {

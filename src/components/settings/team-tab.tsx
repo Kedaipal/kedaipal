@@ -191,6 +191,18 @@ function TeamListCard({
 					your WhatsApp numbers and this page always stay yours.
 				</p>
 			) : null}
+
+			{/* The one-store rule, said where it bites. A teammate who wants a
+			    store of their own has exactly one route — Leave, right above —
+			    and without this line the only signal is a destructive-looking
+			    button, which nobody presses hoping to gain something. */}
+			{viewerIsPrivileged ? null : (
+				<p className="border-t border-border p-4 text-xs leading-relaxed text-muted-foreground">
+					An account can be in one store at a time. Want your own storefront?
+					Leave {storeName} first — then Kedaipal walks you through setting
+					it up.
+				</p>
+			)}
 		</section>
 	);
 }
@@ -374,7 +386,12 @@ function MemberRow({
 				open={confirming === "leave"}
 				onOpenChange={(open) => setConfirming(open ? "leave" : null)}
 				title={`Leave ${storeName}?`}
-				description="You lose access immediately and the owner is emailed. They'd have to invite you again to bring you back."
+				// Names BOTH sides of the door. One account can only be in one
+				// store, so leaving is also the only way a teammate ever gets a
+				// store of their own — and nothing else in the app says so, which
+				// would leave them guessing that the destructive-looking button is
+				// the route (86exr91r4).
+				description="You lose access immediately and the owner is emailed that the seat is free. They'd have to invite you again to bring you back — and once you've left, this account is free to start a store of its own."
 				confirmLabel="Leave team"
 				destructive
 				onConfirm={() =>

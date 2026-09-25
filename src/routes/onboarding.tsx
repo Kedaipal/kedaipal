@@ -30,7 +30,6 @@ import {
 } from "../../convex/lib/slug";
 import { OnboardingTopBar } from "../components/onboarding/onboarding-top-bar";
 import { Button } from "../components/ui/button";
-import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import { Input } from "../components/ui/input";
 import { MyPhoneInput } from "../components/ui/my-phone-input";
 import { useLandingRegion } from "../hooks/useLandingRegion";
@@ -104,16 +103,6 @@ function OnboardingForm() {
 	const search = Route.useSearch();
 	const retailer = useQuery(convexQuery(api.retailers.getMyRetailer, {})).data;
 	const createRetailer = useMutation(api.retailers.createRetailer);
-	// Team states (86exr91r4): an ACTIVE membership means creating a store costs
-	// this login its seat — surfaced as an explicit confirm BEFORE submit, and
-	// the server refuses without the flag, so the seat can never vanish as a
-	// side effect. (A member never actually reaches this form via redirect —
-	// getMyRetailer resolves their team store — but the guard costs nothing.)
-	const membership = useQuery(
-		convexQuery(api.team.myMembershipState, {}),
-	).data;
-	const [confirmLeaveOpen, setConfirmLeaveOpen] = useState(false);
-
 	// Assisted = an admin-generated prefill link. Seed the fields, surface the WA
 	// number for review, and tell the client what's going on.
 	const prefill = search.prefill;
@@ -183,10 +172,6 @@ function OnboardingForm() {
 
 	async function handleSubmit(e: FormEvent) {
 		e.preventDefault();
-		await submitStore(false);
-	}
-
-	async function submitStore(confirmLeaveTeam: boolean) {
 		if (!nameCheck.ok) {
 			toast.error(nameCheck.message);
 			return;
@@ -214,11 +199,6 @@ function OnboardingForm() {
 			);
 			return;
 		}
-		if (membership?.active && !confirmLeaveTeam) {
-			// The cost is named in the dialog; submit resumes with the flag.
-			setConfirmLeaveOpen(true);
-			return;
-		}
 		setSubmitting(true);
 		try {
 			// The tag the session arrived with (marketing routes / powered-by
@@ -241,7 +221,6 @@ function OnboardingForm() {
 				...(signupSource !== undefined ? { signupSource } : {}),
 				...(signupReferrerSlug !== undefined ? { signupReferrerSlug } : {}),
 				...(gaClientId !== undefined ? { gaClientId } : {}),
-				...(confirmLeaveTeam ? { confirmLeaveTeam } : {}),
 			});
 			// The funnel's terminal key event — after the mutation succeeds, so a
 			// slug collision or validation error can't inflate conversions.
@@ -450,15 +429,6 @@ function OnboardingForm() {
 					</Button>
 				</div>
 			</div>
-			<ConfirmDialog
-				open={confirmLeaveOpen}
-				onOpenChange={setConfirmLeaveOpen}
-				title={`Leave the team at ${membership?.active?.storeName ?? "your current store"}?`}
-				description="Creating your own store means giving up your seat there — you lose access immediately and the owner is emailed that the seat is free. Their store and subscription are never touched."
-				confirmLabel="Leave & create my store"
-				destructive
-				onConfirm={() => void submitStore(true)}
-			/>
 		</main>
 	);
 }
@@ -576,9 +546,7 @@ function PendingInvitesBanner() {
  * "create your store" wizard with no idea why — the one screen the spec says
  * must explain itself. */
 function RemovedFromTeamBanner() {
-	const membership = useQuery(
-		convexQuery(api.team.myMembershipState, {}),
-	).data;
+	const membership = useQuery(convexQuery(api.team.myMembershipState, {})).data;
 	const removed = membership?.removed;
 	if (!removed) return null;
 	const why =
