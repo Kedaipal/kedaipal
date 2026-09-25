@@ -377,7 +377,6 @@ export const leave = mutation({
 			memberName:
 				access.membership.displayName ?? access.membership.email,
 			memberEmail: access.membership.email,
-			leftReason: "left",
 		});
 		return null;
 	},
@@ -720,7 +719,7 @@ export const myMembershipState = query({
 		active: { retailerId: Id<"retailers">; storeName: string } | null;
 		removed: {
 			storeName: string;
-			reason: "removed_by_owner" | "left" | "left_to_create_store" | "plan_change" | "store_deleted";
+			reason: "removed_by_owner" | "left" | "plan_change" | "store_deleted";
 			removedAt: number;
 		} | null;
 	}> => {
@@ -824,9 +823,6 @@ export const sendTeamEmail = internalAction({
 		),
 		memberName: v.optional(v.string()),
 		memberEmail: v.optional(v.string()),
-		leftReason: v.optional(
-			v.union(v.literal("left"), v.literal("left_to_create_store")),
-		),
 		droppedNames: v.optional(v.array(v.string())),
 		storeNameOverride: v.optional(v.string()),
 		localeOverride: v.optional(
@@ -878,7 +874,6 @@ export const sendTeamEmail = internalAction({
 			revokeReason: args.revokeReason,
 			memberName: args.memberName,
 			memberEmail: args.memberEmail,
-			leftReason: args.leftReason,
 			droppedNames: args.droppedNames,
 		};
 		const { subject, html, text } = renderTeamEmail(

@@ -430,7 +430,10 @@ describe("member access through the gate", () => {
 });
 
 describe("create-store while on a team", () => {
-	test("requires the explicit confirm, then frees the seat", async () => {
+	// Leaving a team is its own act — `team.leave` is the ONE exit, so creating
+	// a store can never end a membership as a side effect. Delete the guard in
+	// retailers.createRetailer and the first half of this goes red.
+	test("is refused outright, and naming the way out is the whole message", async () => {
 		const t = setup();
 		const store = await seedStore(t);
 		await seedActiveMember(t, store._id);
@@ -440,11 +443,29 @@ describe("create-store while on a team", () => {
 				storeName: "Helper Store",
 				slug: "helper-store",
 			}),
-		).rejects.toThrow(/leaving that team/i);
+		).rejects.toThrow(/Leave that team first from Settings → Team/i);
+		// Refused means refused: no store of their own was half-created, and the
+		// seat they sit in is untouched. They still resolve the TEAM store —
+		// which is also why /onboarding redirects them and the old
+		// confirm-in-the-wizard could never have run.
+		const still = await asHelper.query(api.retailers.getMyRetailer);
+		expect(still?._id).toBe(store._id);
+		expect(still?.role).toBe("member");
+		const before = await t
+			.withIdentity(OWNER)
+			.query(api.team.list, { retailerId: store._id });
+		expect(before.seats.activeCount).toBe(1);
+	});
+
+	test("leaving first is what unblocks it, and it frees the seat", async () => {
+		const t = setup();
+		const store = await seedStore(t);
+		await seedActiveMember(t, store._id);
+		const asHelper = t.withIdentity(HELPER);
+		await asHelper.mutation(api.team.leave, { retailerId: store._id });
 		await asHelper.mutation(api.retailers.createRetailer, {
 			storeName: "Helper Store",
 			slug: "helper-store",
-			confirmLeaveTeam: true,
 		});
 		const mine = await asHelper.query(api.retailers.getMyRetailer);
 		expect(mine?.role).toBe("owner");
@@ -453,6 +474,20 @@ describe("create-store while on a team", () => {
 			.withIdentity(OWNER)
 			.query(api.team.list, { retailerId: store._id });
 		expect(list.seats.activeCount).toBe(0);
+	});
+
+	// A membership the member ENDED is not a removal to explain back to them —
+	// they were there when they clicked it — so the wizard they land on stays
+	// clean instead of opening with "you no longer have access".
+	test("the wizard after leaving carries no removed-from-team banner", async () => {
+		const t = setup();
+		const store = await seedStore(t);
+		await seedActiveMember(t, store._id);
+		const asHelper = t.withIdentity(HELPER);
+		await asHelper.mutation(api.team.leave, { retailerId: store._id });
+		const state = await asHelper.query(api.team.myMembershipState, {});
+		expect(state.active).toBeNull();
+		expect(state.removed).toBeNull();
 	});
 });
 
