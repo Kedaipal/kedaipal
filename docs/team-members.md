@@ -155,7 +155,8 @@ caller). Each carries a "do not fix to resolveMyRetailer" comment naming why.
 ## The three PRs (stacked; review #302 → #304 → #305)
 
 PR1 `#302`: everything above the UI line. PR2 `#304`: Team tab + matrix +
-presets, `/join/$token` states, onboarding banners, member chrome (AreaGate over every settings tab, RouteAreaGuard
+presets, `/join/$token` states, onboarding banners, member chrome (AreaGate
+over every settings tab, RouteAreaGuard
 around the shell's Outlet, nav gating, hidden consent banner, the sign-in
 `forceRedirectUrl` fix). PR3 `#305`: the order **Activity card** (the home of
 "· by Aina / by you" — removed members still resolve because their row is
