@@ -280,6 +280,7 @@ import {
 	resolveHitpayCredentials,
 } from "./lib/hitpay";
 import {
+	billingPastDueTemplateName,
 	orderConfirmTemplateName,
 	sellerNewOrderTemplateName,
 } from "./lib/whatsapp";
@@ -801,6 +802,14 @@ type RetailerPublic = {
 	orderWaAlerts?: boolean;
 	waOrderAlertsAvailable?: boolean;
 	notifyWaPhoneOptedOut?: boolean;
+	/** Billing lockout WhatsApp (z8r3fdg3mh) — whether an approved template is
+	 * configured on this deployment. Separate from `waOrderAlertsAvailable`:
+	 * the two are different Meta templates and either can be live without the
+	 * other, so the billing tab must never infer one from the other. The
+	 * past-due helper line only promises a WhatsApp when this is true AND a
+	 * usable number is saved — a promise the seller can't be paid is worse
+	 * than saying nothing. */
+	billingWaAlertAvailable?: boolean;
 	checkoutPhone?: string;
 	// Whether the storefront confirmation-push path is active (86eyf1rck —
 	// approved WA template configured): checkout then promises "confirmation
@@ -1054,6 +1063,7 @@ async function buildRetailerPublic(
 		notifyWaPhone: row.notifyWaPhone,
 		orderWaAlerts: row.orderWaAlerts,
 		waOrderAlertsAvailable: sellerNewOrderTemplateName() !== undefined,
+		billingWaAlertAvailable: billingPastDueTemplateName() !== undefined,
 		notifyWaPhoneOptedOut,
 		logoStorageId: row.logoStorageId,
 		logoUrl,
