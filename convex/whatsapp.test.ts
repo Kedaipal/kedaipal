@@ -1925,3 +1925,121 @@ describe("whatsapp confirm — pickup notes (z8r3fdff97)", () => {
 		fetchMock.restore();
 	});
 });
+
+/**
+ * The billing lockout WhatsApp (z8r3fdg3mh). The two lock loops schedule this
+ * action with NO admin check and NO status re-check, so the early returns in
+ * its body are the only protection — and they were shipped untested, which the
+ * repo's mutation rule forbids. Both cases drive the action directly.
+ */
+describe("notifyBillingPastDue — the guards inside the action", () => {
+	const ADMIN = "user_billing_admin";
+	const TEMPLATE = "billing_past_due_utility";
+	let prevAdmins: string | undefined;
+
+	beforeEach(() => {
+		prevAdmins = process.env.ADMIN_USER_IDS;
+		process.env.WHATSAPP_BILLING_PAST_DUE_TEMPLATE = TEMPLATE;
+	});
+	afterEach(() => {
+		process.env.ADMIN_USER_IDS = prevAdmins;
+		delete process.env.WHATSAPP_BILLING_PAST_DUE_TEMPLATE;
+	});
+
+	/** A store with a saved alert number and one pending overdue invoice. */
+	async function seedBillable(
+		t: ReturnType<typeof setup>,
+		userId: string,
+		slug: string,
+	): Promise<Id<"invoices">> {
+		const asUser = t.withIdentity({ subject: userId });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: `Store ${slug}`,
+			slug,
+		});
+		return await t.run(async (ctx) => {
+			const r = await ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", slug))
+				.first();
+			if (!r) throw new Error("no retailer");
+			await ctx.db.patch(r._id, { notifyWaPhone: "60123456789" });
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", r._id))
+				.first();
+			if (!sub) throw new Error("no sub");
+			await ctx.db.patch(sub._id, { status: "past_due" });
+			const now = Date.now();
+			return await ctx.db.insert("invoices", {
+				retailerId: r._id,
+				subscriptionId: sub._id,
+				invoiceNumber: `INV-WA-${slug}`,
+				amount: 14900,
+				total: 14900,
+				currency: "MYR",
+				periodStart: now,
+				periodEnd: now,
+				dueDate: now - 1000,
+				status: "pending",
+				createdAt: now,
+			});
+		});
+	}
+
+	test("an ordinary locked seller IS sent the alert (the guards aren't a blanket skip)", async () => {
+		const t = setup();
+		process.env.ADMIN_USER_IDS = ADMIN;
+		const invoiceId = await seedBillable(t, "user_wa_billing_1", "wa-bill-1");
+		const fetchMock = installFetchMock();
+		await t.action(internal.whatsapp.notifyBillingPastDue, { invoiceId });
+		expect(fetchMock.waCalls()).toHaveLength(1);
+		const body = fetchMock.waCalls()[0].body as {
+			type: string;
+			template: { name: string };
+		};
+		expect(body.type).toBe("template");
+		expect(body.template.name).toBe(TEMPLATE);
+		fetchMock.restore();
+	});
+
+	test("an ADMIN's own store is never WhatsApped — it is never actually locked", async () => {
+		// resolveAccess forces active/unfrozen for an admin's own store, and the
+		// billing tab tells them admins have no invoices to settle. The email
+		// ladder already skips them; this is the same rule for the WhatsApp,
+		// which the cron schedules without checking.
+		const t = setup();
+		process.env.ADMIN_USER_IDS = ADMIN;
+		const invoiceId = await seedBillable(t, ADMIN, "wa-bill-admin");
+		const fetchMock = installFetchMock();
+		await t.action(internal.whatsapp.notifyBillingPastDue, { invoiceId });
+		expect(fetchMock.waCalls()).toHaveLength(0);
+		fetchMock.restore();
+	});
+
+	test("an invoice paid between the flip and the send is not chased", async () => {
+		// The send can be retried minutes later (classifyPushFailure backoff);
+		// a seller who settled in the meantime must not be told they're locked.
+		const t = setup();
+		process.env.ADMIN_USER_IDS = ADMIN;
+		const invoiceId = await seedBillable(t, "user_wa_billing_2", "wa-bill-2");
+		await t.run(async (ctx) => {
+			await ctx.db.patch(invoiceId, { status: "paid" });
+		});
+		const fetchMock = installFetchMock();
+		await t.action(internal.whatsapp.notifyBillingPastDue, { invoiceId });
+		expect(fetchMock.waCalls()).toHaveLength(0);
+		fetchMock.restore();
+	});
+
+	test("no configured template ⇒ nothing is attempted at all", async () => {
+		const t = setup();
+		process.env.ADMIN_USER_IDS = ADMIN;
+		delete process.env.WHATSAPP_BILLING_PAST_DUE_TEMPLATE;
+		const invoiceId = await seedBillable(t, "user_wa_billing_3", "wa-bill-3");
+		const fetchMock = installFetchMock();
+		await t.action(internal.whatsapp.notifyBillingPastDue, { invoiceId });
+		expect(fetchMock.waCalls()).toHaveLength(0);
+		fetchMock.restore();
+	});
+});

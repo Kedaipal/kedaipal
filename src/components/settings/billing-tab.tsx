@@ -215,6 +215,16 @@ export function BillingTab({
 	// due" framing below swaps for "your sponsored access ended — choose a plan".
 	const compEnded =
 		sub?.status === "past_due" && !sub.comped ? sub.compEnded : undefined;
+	// Will the lockout WhatsApp ACTUALLY reach this seller (z8r3fdg3mh)? All
+	// three have to hold: an approved template on this deployment, a saved
+	// alert number, and no global STOP on it — otherwise whatsapp.ts returns
+	// early or the gateway suppresses the send, and the past-due line below
+	// must not promise a message that will never arrive. Mirrors the reach
+	// predicate the order-alerts card already applies.
+	const billingWaWillReach =
+		retailer.billingWaAlertAvailable === true &&
+		(retailer.notifyWaPhone?.length ?? 0) > 0 &&
+		retailer.notifyWaPhoneOptedOut !== true;
 	const statusLine = (() => {
 		if (!sub) return "Active";
 		if (sub.status === "trialing") {
@@ -382,6 +392,26 @@ export function BillingTab({
 						<p className="text-xs text-muted-foreground">
 							{HOLD_LABEL} — ordering is paused. Your {planLabel} plan comes
 							back with one tap below.
+						</p>
+					) : null}
+					{/* Past due (z8r3fdg3mh). The badge above says "Past due"; this
+					    says what that MEANS and what happens next, so neither the
+					    lock nor the reminders that follow it are a surprise. The
+					    chain is deliberately not opt-out-able, so it is stated
+					    rather than offered as a setting. NOT for a comp-ended row
+					    (z8r3fdeub2): that seller is `past_due` with NO invoice —
+					    nothing will chase them and there is nothing to "pay", so
+					    this copy would be false on both counts; the compEnded line
+					    above already tells their story. */}
+					{sub?.status === "past_due" && !sub?.comped && !compEnded ? (
+						<p className="text-xs text-muted-foreground">
+							Your storefront and existing orders stay live — only editing your
+							store is paused until this is settled. We'll follow up by email
+							{billingWaWillReach
+								? ", and once on WhatsApp at your alert number"
+								: ""}
+							. Billing reminders can't be switched off, but they stop the
+							moment you pay.
 						</p>
 					) : null}
 					{freePeriod.kind === "free" ? (
