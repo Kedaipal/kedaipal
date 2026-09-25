@@ -161,7 +161,19 @@ export function matchingPreset(
 	return "custom";
 }
 
-/** Short chips for a member row: first areas they can touch, "+N" overflow. */
+/**
+ * Short chips for a member row: first areas they can touch, "+N" overflow.
+ *
+ * A read-only grant says so. The chips used to name the area and nothing else,
+ * so a member holding `products: "read"` read "Products" here and then met
+ * "Ask the store owner for edit access to change products" on the button —
+ * two statements about the same grant, on the same screen, disagreeing (found
+ * driving Chrome as a member, 26 Sep). It matters most to the MEMBER, who has
+ * no Edit-access dialog to open: these chips are the only place they are told
+ * what they hold. Write stays bare, because it is the unsurprising half; the
+ * qualifier goes on the one that would otherwise be discovered by being
+ * refused.
+ */
 export function grantSummary(
 	grants: MemberPermissions | undefined,
 	max = 3,
@@ -169,7 +181,13 @@ export function grantSummary(
 	if (!grants) return { chips: [], more: 0 };
 	const held = PERMISSION_AREAS.filter((a) => grants[a] !== undefined);
 	return {
-		chips: held.slice(0, max).map((a) => AREA_COPY[a].label),
+		chips: held
+			.slice(0, max)
+			.map((a) =>
+				grants[a] === "read"
+					? `${AREA_COPY[a].label} · view`
+					: AREA_COPY[a].label,
+			),
 		more: Math.max(0, held.length - max),
 	};
 }
