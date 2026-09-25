@@ -361,6 +361,7 @@ function MemberRow({
 				title={`Cancel the invitation to ${member.email}?`}
 				description="Their link stops working and the seat frees up straight away."
 				confirmLabel="Cancel invitation"
+				cancelLabel="Keep invitation"
 				destructive
 				onConfirm={() =>
 					run(
@@ -444,12 +445,16 @@ function PermissionMatrix({
 						{group.areas.map((area, i) => {
 							const copy = AREA_COPY[area];
 							const level = value[area];
+							// Phone: label above, control below (wraps). Desktop: one row,
+							// control right-aligned and never wrapping — the stacked
+							// version at desktop width read as a tall, thin column
+							// (Zaki, 25 Sep).
 							return (
 								<div
 									key={area}
-									className={`flex min-h-11 flex-wrap items-center gap-x-3 gap-y-2 p-3 ${i > 0 ? "border-t border-border" : ""}`}
+									className={`flex min-h-11 flex-wrap items-center gap-x-4 gap-y-2 p-3 sm:flex-nowrap ${i > 0 ? "border-t border-border" : ""}`}
 								>
-									<div className="min-w-0 flex-1 basis-52">
+									<div className="min-w-0 flex-1 basis-full sm:basis-auto">
 										<p className="text-sm font-medium">{copy.label}</p>
 										<p className="text-xs leading-snug text-muted-foreground">
 											{copy.description}
@@ -509,7 +514,7 @@ function LevelSegment({
 	return (
 		<fieldset
 			aria-label={`${area} access`}
-			className="inline-flex overflow-hidden rounded-lg border border-border"
+			className="inline-flex shrink-0 overflow-hidden rounded-lg border border-border"
 		>
 			{options.map((opt, i) => {
 				const selected = current === opt.key;
@@ -608,7 +613,7 @@ function InviteCard({
 	const disabledReason = locked
 		? null // ViewOnlyNote above already explains; keep one voice.
 		: atCap
-			? `All ${team.seats.memberLimit} member seat${team.seats.memberLimit === 1 ? "" : "s"} are in use — remove someone or upgrade for more.`
+			? `All ${team.seats.memberLimit + 1} seats are in use — remove a teammate or upgrade for more.`
 			: null;
 
 	const submit = async () => {
@@ -724,7 +729,9 @@ function EditAccessDialog({
 
 	return (
 		<Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>
-			<DialogContent className="max-w-lg">
+			{/* Wide enough for label + description + control on ONE line at desktop;
+			    the phone keeps the stacked layout. */}
+			<DialogContent className="sm:max-w-2xl">
 				<DialogHeader>
 					<DialogTitle>Access for {name}</DialogTitle>
 					<DialogDescription>

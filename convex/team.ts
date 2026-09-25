@@ -210,8 +210,11 @@ export const invite = mutation({
 		if (!isUnlimited(limit) && active.length + invited.length >= limit) {
 			// The Team tab disables Invite with this reason before the request; the
 			// server repeats it because the client is a convenience, not the rule.
+			// Counted in PEOPLE, like the seat meter above it — "3 of 3 seats
+			// used" beside "all 2 member seats" read as two different limits.
+			const total = limit + 1;
 			throw new ConvexError(
-				`All ${limit} member seat${limit === 1 ? "" : "s"} are in use — remove someone or upgrade your plan.`,
+				`All ${total} seats are in use — remove a teammate or upgrade your plan for more.`,
 			);
 		}
 

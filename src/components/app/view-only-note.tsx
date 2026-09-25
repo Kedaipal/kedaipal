@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { Lock } from "lucide-react";
+import { useStoreRole } from "../../hooks/usePermission";
 import { useStoreLock } from "../../hooks/useStoreLock";
 
 /**
@@ -20,6 +21,9 @@ import { useStoreLock } from "../../hooks/useStoreLock";
  */
 export function ViewOnlyNote({ className }: { className?: string }) {
 	const { readOnly, reason } = useStoreLock();
+	// Billing is the owner's — a member is told who to ask, not sent to a tab
+	// they can't open (86exr91r4).
+	const isMember = useStoreRole() === "member";
 	if (!readOnly) return null;
 	return (
 		<div
@@ -27,14 +31,17 @@ export function ViewOnlyNote({ className }: { className?: string }) {
 		>
 			<Lock className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
 			<p className="text-xs leading-relaxed">
-				{reason}{" "}
-				<Link
-					to="/app/settings"
-					search={{ tab: "billing" }}
-					className="font-semibold text-foreground underline underline-offset-2"
-				>
-					Go to Billing
-				</Link>
+				{reason}
+				{isMember ? null : " "}
+				{isMember ? null : (
+					<Link
+						to="/app/settings"
+						search={{ tab: "billing" }}
+						className="font-semibold text-foreground underline underline-offset-2"
+					>
+						Go to Billing
+					</Link>
+				)}
 			</p>
 		</div>
 	);

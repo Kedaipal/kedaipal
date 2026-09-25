@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../../convex/_generated/api";
 import { isStoreReadOnly, storeReadOnlyReason } from "../lib/subscription";
 import { useDashboardRetailer } from "./useDashboardRetailer";
+import { useStoreRole } from "./usePermission";
 
 /**
  * Is the dashboard view-only right now, and why (z8r3fdeub2)?
@@ -16,9 +17,10 @@ import { useDashboardRetailer } from "./useDashboardRetailer";
  */
 export function useStoreLock(): { readOnly: boolean; reason: string } {
 	const retailer = useDashboardRetailer();
+	const isMember = useStoreRole() === "member";
 	const isAdmin = useQuery(convexQuery(api.billing.amIAdmin, {})).data === true;
 	return {
 		readOnly: isStoreReadOnly(retailer, isAdmin),
-		reason: storeReadOnlyReason(retailer?.subscription),
+		reason: storeReadOnlyReason(retailer?.subscription, isMember),
 	};
 }

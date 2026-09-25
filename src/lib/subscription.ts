@@ -143,7 +143,16 @@ export function isStoreReadOnly(
  * as the server's `ConvexError`, so a seller who sees both reads one message
  * twice rather than two rules.
  */
-export function storeReadOnlyReason(sub: SubscriptionView | undefined): string {
+export function storeReadOnlyReason(
+	sub: SubscriptionView | undefined,
+	/** A TEAMMATE can't settle the bill and can't open Billing (86exr91r4), so
+	 * they get the fact and who to ask — never an instruction they can't act on. */
+	isMember = false,
+): string {
+	if (isMember)
+		return sub?.compEnded
+			? "This store's sponsored access has ended, so the dashboard is view-only until the owner picks a plan."
+			: "This store's subscription is past due, so the dashboard is view-only until the owner renews.";
 	return sub?.compEnded
 		? "Your sponsored access has ended, so your store is view-only. Choose a plan to start working again."
 		: "Your subscription is past due, so your store is view-only. Pay your invoice to start working again.";
