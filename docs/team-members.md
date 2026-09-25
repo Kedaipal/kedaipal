@@ -95,8 +95,18 @@ acceptPendingInvite (onboarding banner) → updatePermissions/remove/leave`.
   verified email.
 - **One store per login**, both directions, one principle: *ending a store
   relationship is always an explicit act on the thing being left, never a side
-  effect.* A member may create their own store through the explicit
-  `confirmLeaveTeam` confirm on `createRetailer` (owner emailed, seat freed).
+  effect.* A member may absolutely become an owner — but the order is **leave,
+  then create**, never both in one form. `team.leave` is the ONE member-side
+  exit (it emails the owner that a seat freed); only once it has run is the
+  login storeless and `/onboarding` reachable at all. `createRetailer` refuses
+  an active member outright and names the route ("Leave that team first from
+  Settings → Team"), which is what a stale client or a direct API call meets.
+  A first pass gave `createRetailer` its own `confirmLeaveTeam` flag that ended
+  the membership inline; it was deleted, because it put a second exit from a
+  team in the codebase **and was unreachable anyway** — `getMyRetailer`
+  resolves a member's TEAM store, so `/onboarding` redirects them before any
+  confirm could fire. The Leave dialog and a member-only note under the roster
+  now say the one-store rule out loud, so the route isn't something to guess.
   An owner cannot accept an invite — `/join` explains and offers the
   WhatsApp-the-inviter CTA; closing their store first is the path, and
   **accepting a link never cancels a subscription**.
@@ -120,8 +130,10 @@ is not a teammate; `adminAuditLog` traces those.
 ## Emails (Resend, store's locale)
 
 `teamInvite` (accept link) · `teamAccessRevoked` (removed / plan_change /
-store_deleted variants) · `teamMemberJoined` · `teamMemberLeft` (incl.
-left-to-create-store) · `teamSeatSummary` (who a downgrade dropped). Owner
+store_deleted variants) · `teamMemberJoined` · `teamMemberLeft` ·
+`teamSeatSummary` (who a downgrade dropped). The "left" mail says only that
+they left and the seat is free — WHY someone left is theirs to tell, not a
+fact to forward to the team they just left. Owner
 alerts go to `notifyEmail`; `ensureNotifyEmailFromIdentity` stays strictly
 owner-keyed so a helper's sign-in can never become the store's alert address.
 
@@ -144,7 +156,7 @@ caller). Each carries a "do not fix to resolveMyRetailer" comment naming why.
 
 PR2: Team tab + permission matrix UI (presets "Front-desk helper" / "Store
 manager"), `/join/$token` route states, onboarding banners (pending invite /
-removed / leave-team confirm), member chrome (locked tabs with "ask {owner}",
+removed), member chrome (locked tabs with "ask {owner}",
 hidden consent banner, sign-in redirect fix so an existing account's sign-in
 doesn't eat the invite link). PR3: timeline "· by {name}", admin sellers Seats
 column, pricing copy ("You + 2 teammates", drop the Soon badge), shipped-log.

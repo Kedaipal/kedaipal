@@ -918,10 +918,10 @@ export default defineSchema({
 		removedReason: v.optional(
 			v.union(
 				v.literal("removed_by_owner"),
+				// The member's own act, via team.leave — the ONLY way a membership
+				// ends from the member's side, including when what they actually
+				// want is a store of their own (one store per login).
 				v.literal("left"),
-				// Left by creating their own store (one-store-per-login rule; the
-				// owner is emailed — never a silent seat change).
-				v.literal("left_to_create_store"),
 				// Dropped by enforceSeatCap after a plan change below the cap.
 				v.literal("plan_change"),
 				// The store (owner account) was deleted.
