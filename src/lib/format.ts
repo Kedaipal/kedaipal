@@ -17,10 +17,12 @@ import { formatInternational } from "../../convex/lib/phoneDial";
 import { STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
 
 /**
- * Extract a clean error message from a Convex mutation error.
- * Convex wraps plain Error messages with a `[CONVEX M(...)] Uncaught Error:`
- * prefix. Using ConvexError on the backend and this helper on the frontend
- * ensures users see only the original message.
+ * Extract a clean error message from a Convex mutation error — the one thing
+ * every `toast.error` / inline server error in the dashboard and the storefront
+ * passes through, so the machinery Convex wraps around a thrown message can
+ * never reach a person (see `unwrapServerError` below). `ConvexError` on the
+ * backend remains the way to put deliberate copy on screen; anything else
+ * degrades to a sentence rather than a stack trace.
  */
 export function convexErrorMessage(err: unknown): string {
 	// Checked FIRST: the rate limiter throws a STRUCTURED payload ({kind, name,
@@ -46,7 +48,49 @@ export function convexErrorMessage(err: unknown): string {
 	if (err instanceof ConvexError) {
 		return typeof err.data === "string" ? err.data : String(err.data);
 	}
-	return (err as Error).message;
+	return unwrapServerError(
+		err instanceof Error ? err.message : String(err ?? ""),
+	);
+}
+
+/**
+ * Convex hands a server-side failure to the client as ONE string with the
+ * machinery wrapped around the thrown message:
+ *
+ *   [CONVEX M(products:save)] [Request ID: 9c2f…] Server Error
+ *   Uncaught Error: Maps URL must use https
+ *       at assertValidMapsUrl (../convex/lib/mapsUrl.ts:54:9)
+ *
+ * so `err.message` in a toast puts a stack trace in front of a seller. That is
+ * what a refused teammate read during the 25 Sep Chrome round, and the same
+ * blob had been reachable for a while on every plain `throw new Error` the
+ * backend still has — the slug, maps-URL and opening-hours validators included.
+ * Unwrapping HERE, in the one helper every toast and inline error already
+ * calls, fixes all of them at once and costs a new call site nothing to
+ * remember.
+ *
+ * Which line survives is decided by the error's CLASS, never by how its words
+ * read: a plain `Error` (or a `ConvexError` whose class identity didn't
+ * survive the bundle boundary) is something we threw on purpose, so its
+ * sentence goes to the user. A `TypeError`/`RangeError`/… is the runtime
+ * reporting a bug of ours — nobody can act on "Cannot read properties of
+ * undefined", so it becomes the generic line and stays in the console, where
+ * the Convex client already logs the whole thing.
+ */
+const CONVEX_WRAPPED = /^\[CONVEX [^\]]*\]/;
+const THROWN_LINE = /^\s*Uncaught\s+(\w*Error):[ \t]*(.*)$/m;
+const DELIBERATE_THROW = new Set(["Error", "ConvexError"]);
+
+export const GENERIC_SERVER_FAILURE =
+	"Something went wrong on our side — please try again.";
+
+function unwrapServerError(message: string): string {
+	if (!CONVEX_WRAPPED.test(message)) return message;
+	const thrown = message.match(THROWN_LINE);
+	if (!thrown || !DELIBERATE_THROW.has(thrown[1]))
+		return GENERIC_SERVER_FAILURE;
+	const sentence = thrown[2].trim();
+	return sentence.length > 0 ? sentence : GENERIC_SERVER_FAILURE;
 }
 
 /**

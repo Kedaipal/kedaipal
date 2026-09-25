@@ -10,6 +10,7 @@ import {
 	formatOrderTimestamp,
 	formatPrice,
 	formatPriceCompact,
+	GENERIC_SERVER_FAILURE,
 	normalizePriceInput,
 	parsePriceInput,
 	sanitizeIntInput,
@@ -261,6 +262,82 @@ describe("convexErrorMessage — rate-limit payload", () => {
 	it("still passes a plain string payload straight through", () => {
 		expect(convexErrorMessage(new ConvexError("Only 2 in stock"))).toBe(
 			"Only 2 in stock",
+		);
+	});
+});
+
+describe("convexErrorMessage — the Convex server wrapper never reaches a person", () => {
+	// Exactly the shape the Convex client puts on `err.message` when a function
+	// throws. A teammate refused by a permission check read this, stack frames
+	// and all, in the 25 Sep Chrome round.
+	function wrapped(thrown: string, fn = "products:save") {
+		return new Error(
+			`[CONVEX M(${fn})] [Request ID: 9c2f8b1a] Server Error\n` +
+				`${thrown}\n` +
+				`    at requireRetailerAccess (../convex/lib/auth.ts:156:9)\n` +
+				`    at async handler (../convex/products.ts:220:3)\n\n` +
+				`  Called by client`,
+		);
+	}
+
+	it("keeps the sentence a deliberate throw carries, and nothing else", () => {
+		expect(
+			convexErrorMessage(wrapped("Uncaught Error: Maps URL must use https")),
+		).toBe("Maps URL must use https");
+	});
+
+	it("never leaks the request id, the frames or the word Uncaught", () => {
+		const msg = convexErrorMessage(
+			wrapped("Uncaught Error: Slug must be at most 32 characters"),
+		);
+		expect(msg).not.toContain("[CONVEX");
+		expect(msg).not.toContain("Request ID");
+		expect(msg).not.toContain("Uncaught");
+		expect(msg).not.toContain("    at ");
+		expect(msg).not.toContain("Called by client");
+	});
+
+	// A ConvexError thrown server-side normally arrives as a real ConvexError
+	// instance; if the class identity is ever lost crossing a bundle boundary,
+	// the copy still has to survive — that is the whole point of throwing it.
+	it("recovers a ConvexError's copy even without the class", () => {
+		expect(
+			convexErrorMessage(
+				wrapped(
+					"Uncaught ConvexError: You don't have permission to change products — ask the store owner for edit access from Settings → Team.",
+					"team:updatePermissions",
+				),
+			),
+		).toBe(
+			"You don't have permission to change products — ask the store owner for edit access from Settings → Team.",
+		);
+	});
+
+	// The CLASS decides, never the wording: a TypeError is the runtime telling
+	// us we have a bug, and "Cannot read properties of undefined" is not
+	// something a seller can act on.
+	it("turns a runtime crash into a sentence instead of repeating it", () => {
+		const msg = convexErrorMessage(
+			wrapped("Uncaught TypeError: Cannot read properties of undefined"),
+		);
+		expect(msg).toBe(GENERIC_SERVER_FAILURE);
+		expect(msg).not.toContain("undefined");
+	});
+
+	it("falls back when the wrapper carries no thrown line at all", () => {
+		expect(
+			convexErrorMessage(
+				new Error("[CONVEX M(products:save)] [Request ID: 9c2f] Server Error"),
+			),
+		).toBe(GENERIC_SERVER_FAILURE);
+	});
+
+	// Half the validators in convex/lib also run in the browser, where the throw
+	// never crosses the wire and the message is already clean. Unwrapping must
+	// not touch those.
+	it("leaves a client-side throw exactly as it is", () => {
+		expect(convexErrorMessage(new Error("Pick your check-out date"))).toBe(
+			"Pick your check-out date",
 		);
 	});
 });

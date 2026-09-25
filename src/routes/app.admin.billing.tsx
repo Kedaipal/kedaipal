@@ -1271,7 +1271,10 @@ function FoundingMembersList() {
 			setPending(null);
 			setNote("");
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : "Couldn't update");
+			// The lone hand-rolled reader left in the app — `err.message` here is
+			// the raw Convex wrapper, stack frames and all. Every other catch
+			// already goes through the shared unwrapper.
+			toast.error(convexErrorMessage(err));
 		} finally {
 			setBusy(false);
 		}
