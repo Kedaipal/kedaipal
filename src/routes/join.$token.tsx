@@ -1,4 +1,4 @@
-import { useClerk } from "@clerk/tanstack-react-start";
+import { useAuth, useClerk } from "@clerk/tanstack-react-start";
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
@@ -112,15 +112,24 @@ function ValidInvite({
 		};
 	};
 }) {
-	// One source of truth: the SERVER's view of the caller (context.viewer) —
-	// it and Clerk's client state describe the same identity, and rendering
-	// from both invites a mismatch window. Clerk is only used to ACT (sign out).
+	// The SERVER's view (context.viewer) is authoritative for every STORE fact —
+	// which store blocks the accept, whether the email matches. But it lags
+	// Clerk by however long the Convex client takes to attach the auth token,
+	// and during that window `viewer.signedIn` is false for a signed-IN person.
+	// Rendering the signed-out CTAs off it flashed "Create your login to accept"
+	// at the store's own owner for several seconds (found driving Chrome,
+	// 25 Sep). So Clerk answers "is anyone signed in?" — it knows first — and
+	// the server answers everything else, once it has caught up.
+	const { isLoaded, isSignedIn } = useAuth();
 	const { signOut } = useClerk();
 	const navigate = useNavigate();
 	const acceptInvite = useMutation(api.team.acceptInvite);
 	const [accepting, setAccepting] = useState(false);
 	const [refusal, setRefusal] = useState<string | null>(null);
 
+	// Settled = Clerk has loaded AND, if someone is signed in, the server can
+	// see them too. Until then we show a placeholder rather than a wrong door.
+	const authSettled = isLoaded && (!isSignedIn || context.viewer.signedIn);
 	const redirectBack = `/join/${token}`;
 	const waLink = context.ownerWaPhone
 		? `https://wa.me/${context.ownerWaPhone.replace(/\D/g, "")}?text=${encodeURIComponent(
@@ -146,7 +155,8 @@ function ValidInvite({
 						? `This invitation is for ${result.invitedEmail ?? context.invitedEmail}, but you're signed in with a different email. Sign out and use the invited inbox.`
 						: result.reason === "expired"
 							? "The invitation expired just now — ask the owner to resend it."
-							: result.reason === "own_store" || result.reason === "other_membership"
+							: result.reason === "own_store" ||
+									result.reason === "other_membership"
 								? conflictCopy(result.storeName, context.storeName)
 								: "This invitation is no longer valid — ask the owner to send a new one.",
 			);
@@ -191,7 +201,9 @@ function ValidInvite({
 					</p>
 				) : null}
 
-				{!context.viewer.signedIn ? (
+				{!authSettled ? (
+					<div className="h-24 animate-pulse rounded-xl bg-muted/50" />
+				) : !context.viewer.signedIn ? (
 					<>
 						{/* Plain <a>: Clerk's pages read ?redirect_url= from the URL, and
 						    these are full-page auth flows anyway. sign-in honours it now
@@ -249,11 +261,7 @@ function ValidInvite({
 						) : null}
 					</div>
 				) : (
-					<Button
-						className="h-11 w-full"
-						disabled={accepting}
-						onClick={accept}
-					>
+					<Button className="h-11 w-full" disabled={accepting} onClick={accept}>
 						{accepting ? "Joining…" : `Join ${context.storeName}`}
 						<ArrowRight className="size-4" />
 					</Button>

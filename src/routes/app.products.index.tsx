@@ -42,6 +42,7 @@ import {
 } from "../components/ui/popover";
 import { Skeleton } from "../components/ui/skeleton";
 import { SortableList } from "../components/ui/sortable-list";
+import { usePermission } from "../hooks/usePermission";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { BULK_IO_ENABLED } from "../lib/feature-flags";
 import { convexErrorMessage, formatPrice } from "../lib/format";
@@ -257,6 +258,13 @@ function ProductsRoute() {
 		counts.all,
 		retailer?.actingAsAdmin === true,
 	);
+	// Team members (86exr91r4): a read-only grant must not be handed
+	// create/reorder/export affordances that the server will refuse.
+	const productsPerm = usePermission("products");
+	const canExportProducts = usePermission("exports").canRead;
+	const writeBlockReason = productsPerm.canWrite
+		? null
+		: "Ask the store owner for edit access to change products.";
 	// How many rows the spotlight key applies to — decides whether the banner
 	// says "open one below" or "you don't have one yet". Counted over every
 	// row, not the filtered view, so a status filter can't make it lie.
@@ -291,8 +299,14 @@ function ProductsRoute() {
 	// Drag-to-reorder is enabled only in the unfiltered "All" view (the list is
 	// then the retailer's complete set). Needs 2+ active products — only active
 	// ones are draggable; archived sit in a fixed tail.
+	// …and only for someone allowed to change products: a read-only teammate
+	// dragging a card would snap back on the server's refusal (86exr91r4). The
+	// non-sortable branch below is the same grid without handles.
 	const canReorder =
-		status === "all" && query.trim() === "" && counts.active >= 2;
+		status === "all" &&
+		query.trim() === "" &&
+		counts.active >= 2 &&
+		productsPerm.canWrite;
 
 	if (!retailer) return null;
 
@@ -382,14 +396,14 @@ function ProductsRoute() {
 					<>
 						{BULK_IO_ENABLED ? (
 							<BulkIoMenu
-								canExport={counts.all > 0}
+								canExport={counts.all > 0 && canExportProducts}
 								exporting={exporting}
 								onExport={handleExport}
 							/>
 						) : null}
-						<CategoriesLink locked={categoriesLocked} />
+						<CategoriesLink locked={categoriesLocked || !productsPerm.canWrite} />
 						<NewProductButton
-							blockedReason={capBlockReason}
+							blockedReason={capBlockReason ?? writeBlockReason}
 							label="+ New product"
 							className="h-10"
 						/>
@@ -412,14 +426,14 @@ function ProductsRoute() {
 				<div className="flex shrink-0 items-center gap-2">
 					{BULK_IO_ENABLED ? (
 						<BulkIoMenu
-							canExport={counts.all > 0}
+							canExport={counts.all > 0 && canExportProducts}
 							exporting={exporting}
 							onExport={handleExport}
 						/>
 					) : null}
-					<CategoriesLink locked={categoriesLocked} mobile />
+					<CategoriesLink locked={categoriesLocked || !productsPerm.canWrite} mobile />
 					<NewProductButton
-						blockedReason={capBlockReason}
+						blockedReason={capBlockReason ?? writeBlockReason}
 						label="+ New"
 						className="h-11"
 					/>

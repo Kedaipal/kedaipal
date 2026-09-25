@@ -17,6 +17,13 @@ vi.mock("convex/react", () => ({ useMutation: () => vi.fn() }));
 vi.mock("../../hooks/useStoreLock", () => ({
 	useStoreLock: () => ({ readOnly: false, reason: "" }),
 }));
+// ViewOnlyNote (rendered at the top of the tab) now reads the caller's role so
+// it can stop telling a teammate to pay a bill they can't see (86exr91r4).
+vi.mock("../../hooks/usePermission", () => ({
+	useStoreRole: () => "owner",
+	useIsStoreOwner: () => true,
+	usePermission: () => ({ canRead: true, canWrite: true, role: "owner" }),
+}));
 vi.mock("../../hooks/useSupportWaNumber", () => ({
 	useSupportWaNumber: () => "60130000000",
 }));
@@ -117,7 +124,7 @@ describe("TeamTab states", () => {
 		const button = screen.getByText("Send invitation").closest("button");
 		expect(button?.disabled).toBe(true);
 		expect(
-			screen.getByText(/All 2 member seats are in use/),
+			screen.getByText(/All 3 seats are in use/),
 		).toBeTruthy();
 	});
 
