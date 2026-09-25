@@ -141,7 +141,7 @@ describe("invite lifecycle", () => {
 				email: "friend@example.com",
 				permissions: {},
 			}),
-		).rejects.toThrow("Forbidden");
+		).rejects.toThrow(/Only the store owner/);
 	});
 });
 
@@ -272,7 +272,7 @@ describe("member access through the gate", () => {
 		// products has no grant → Forbidden, not empty.
 		await expect(
 			asHelper.query(api.products.listAll, { retailerId: store._id }),
-		).rejects.toThrow("Forbidden");
+		).rejects.toThrow(/don't have access to products/);
 		// read never implies write: the same person can SEE an order but not
 		// rearrange the shared inbox (setPinned gates at orders:write).
 		const orderId = await t.run(async (ctx) =>
@@ -293,7 +293,23 @@ describe("member access through the gate", () => {
 		);
 		await expect(
 			asHelper.mutation(api.orders.setPinned, { orderId, pinned: true }),
+		).rejects.toThrow(/permission to change orders/);
+	});
+
+	test("a stranger gets the GENERIC refusal — copy naming areas is for teammates only", async () => {
+		const t = setup();
+		const store = await seedStore(t);
+		// OUTSIDER has no relationship to this store at all.
+		await expect(
+			t
+				.withIdentity(OUTSIDER)
+				.query(api.products.listAll, { retailerId: store._id }),
 		).rejects.toThrow("Forbidden");
+		await expect(
+			t
+				.withIdentity(OUTSIDER)
+				.query(api.products.listAll, { retailerId: store._id }),
+		).rejects.not.toThrow(/Settings → Team/);
 	});
 
 	test("updateSettings honors the field→area map", async () => {
@@ -348,7 +364,7 @@ describe("member access through the gate", () => {
 		});
 		await expect(
 			asHelper.query(api.orders.countActionable, { retailerId: store._id }),
-		).rejects.toThrow("Forbidden");
+		).rejects.toThrow(/don't have access to orders/);
 
 		await asOwner.mutation(api.team.updatePermissions, {
 			memberId,
@@ -359,6 +375,8 @@ describe("member access through the gate", () => {
 		).resolves.toBeDefined();
 
 		await asOwner.mutation(api.team.remove, { memberId });
+		// A removed person is no longer a teammate, so they get the GENERIC
+		// refusal — the copy that names areas is for people still on the team.
 		await expect(
 			asHelper.query(api.orders.countActionable, { retailerId: store._id }),
 		).rejects.toThrow("Forbidden");

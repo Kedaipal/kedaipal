@@ -142,9 +142,51 @@ export async function requireRetailerAccess(
 		identity.subject,
 		requirement,
 	);
-	if (!access) throw new Error("Forbidden");
-	return access;
+	if (access) return access;
+	// WHO is being refused decides what they are told. A TEAMMATE hitting a
+	// grant they don't hold is an ordinary, expected event — the most common
+	// refusal this feature creates — so it must read as copy, not as a crash:
+	// a bare `throw new Error` reaches the client as "Server Error … at
+	// requireRetailerAccess (convex/lib/auth.ts:145)", stack trace and all
+	// (seen in the 25 Sep Chrome test). A ConvexError carries the sentence
+	// instead. A caller with NO relationship to the store still gets the
+	// generic refusal — naming the area would confirm the store exists and
+	// describe its setup to a stranger.
+	const membership = await activeMembership(ctx, retailer._id, identity.subject);
+	if (!membership) throw new Error("Forbidden");
+	throw new ConvexError(refusalMessage(requirement));
 }
+
+/** The sentence a teammate reads when a grant is missing. Names the area and
+ * the way forward — the owner is the only one who can change it. */
+function refusalMessage(requirement: AccessRequirement): string {
+	if ("ownerOnly" in requirement)
+		return "Only the store owner can do this — ask them to make the change.";
+	if ("area" in requirement) {
+		const label = AREA_LABEL[requirement.area];
+		return requirement.level === "write"
+			? `You don't have permission to change ${label} — ask the store owner for edit access from Settings → Team.`
+			: `You don't have access to ${label} — ask the store owner to grant it from Settings → Team.`;
+	}
+	return "You don't have access to this store.";
+}
+
+/** Human names for the areas, for refusal copy. Kept beside the gate (the
+ * server must not import the client's copy module); `permissions.test.ts`
+ * pins that every area has one. */
+const AREA_LABEL: Record<PermissionArea, string> = {
+	orders: "orders",
+	products: "products",
+	customers: "customers",
+	bookings: "bookings",
+	insights: "business insights",
+	exports: "data export",
+	store_settings: "store settings",
+	fulfilment: "fulfilment settings",
+	payments_settings: "payment details",
+	integrations: "integrations",
+	billing: "billing",
+};
 
 /**
  * `requireRetailerAccess` that answers `null` instead of throwing on a denied
