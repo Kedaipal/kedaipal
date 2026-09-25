@@ -853,8 +853,6 @@ export type TeamEmailVars = {
 	/** Owner alerts: the teammate in question. */
 	memberName?: string;
 	memberEmail?: string;
-	/** teamMemberLeft: why they left. */
-	leftReason?: "left" | "left_to_create_store";
 	/** teamSeatSummary: display names of everyone dropped, newest first. */
 	droppedNames?: string[];
 };
@@ -867,8 +865,8 @@ const teamEn = {
 			`Accept below, then sign in with <strong>this email address</strong> — the invitation only works for the inbox it was sent to.`,
 			`The invitation expires in ${v.expiresDays ?? 7} days.`,
 		];
-		const html = wrapHtml("👥", `Join ${v.storeName} on Kedaipal`, lines, v.ctaUrl, "Accept invitation");
-		const text = `👥 ${v.inviterName ?? v.storeName} invited you to join the team at ${v.storeName} on Kedaipal.\nAccept the invitation, then sign in with this email address — it only works for the inbox it was sent to.\nExpires in ${v.expiresDays ?? 7} days.\n${v.ctaUrl}`;
+		const html = wrapHtml("🤝", `Join ${v.storeName} on Kedaipal`, lines, v.ctaUrl, "Accept invitation");
+		const text = `🤝 ${v.inviterName ?? v.storeName} invited you to join the team at ${v.storeName} on Kedaipal.\nAccept the invitation, then sign in with this email address — it only works for the inbox it was sent to.\nExpires in ${v.expiresDays ?? 7} days.\n${v.ctaUrl}`;
 		return { subject, html, text };
 	},
 	teamAccessRevoked: (v: TeamEmailVars): RenderedEmail => {
@@ -895,26 +893,23 @@ const teamEn = {
 		return { subject, html, text };
 	},
 	teamMemberJoined: (v: TeamEmailVars): RenderedEmail => {
-		const subject = `👥 ${v.memberName ?? v.memberEmail} joined your team at ${v.storeName}`;
+		const subject = `🎉 ${v.memberName ?? v.memberEmail} joined your team at ${v.storeName}`;
 		const lines = [
 			`<strong>${escapeHtml(v.memberName ?? "Your teammate")}</strong> (${escapeHtml(v.memberEmail ?? "")}) accepted your invitation and can now work in <strong>${escapeHtml(v.storeName)}</strong> with the access you set.`,
 			`You can review or change what they can do any time.`,
 		];
-		const html = wrapHtml("👥", `${v.memberName ?? "A teammate"} joined your team`, lines, v.ctaUrl, "Open Team settings");
-		const text = `👥 ${v.memberName ?? v.memberEmail} joined your team at ${v.storeName}.\nThey can now work in your store with the access you set. Review or change it any time.\n${v.ctaUrl}`;
+		const html = wrapHtml("🎉", `${v.memberName ?? "A teammate"} joined your team`, lines, v.ctaUrl, "Open Team settings");
+		const text = `🎉 ${v.memberName ?? v.memberEmail} joined your team at ${v.storeName}.\nThey can now work in your store with the access you set. Review or change it any time.\n${v.ctaUrl}`;
 		return { subject, html, text };
 	},
 	teamMemberLeft: (v: TeamEmailVars): RenderedEmail => {
-		const toOwnStore = v.leftReason === "left_to_create_store";
 		const subject = `${v.memberName ?? v.memberEmail} left your team at ${v.storeName}`;
 		const lines = [
-			toOwnStore
-				? `<strong>${escapeHtml(v.memberName ?? "Your teammate")}</strong> (${escapeHtml(v.memberEmail ?? "")}) left your team to start their own store on Kedaipal.`
-				: `<strong>${escapeHtml(v.memberName ?? "Your teammate")}</strong> (${escapeHtml(v.memberEmail ?? "")}) left your team.`,
+			`<strong>${escapeHtml(v.memberName ?? "Your teammate")}</strong> (${escapeHtml(v.memberEmail ?? "")}) left your team.`,
 			`Their seat is free again — you can invite someone else.`,
 		];
 		const html = wrapHtml("👋", `${v.memberName ?? "A teammate"} left your team`, lines, v.ctaUrl, "Open Team settings");
-		const text = `👋 ${v.memberName ?? v.memberEmail} left your team at ${v.storeName}${toOwnStore ? " to start their own store on Kedaipal" : ""}.\nTheir seat is free again — you can invite someone else.\n${v.ctaUrl}`;
+		const text = `👋 ${v.memberName ?? v.memberEmail} left your team at ${v.storeName}.\nTheir seat is free again — you can invite someone else.\n${v.ctaUrl}`;
 		return { subject, html, text };
 	},
 	teamSeatSummary: (v: TeamEmailVars): RenderedEmail => {
@@ -939,8 +934,8 @@ const teamMs = {
 			`Terima di bawah, kemudian log masuk dengan <strong>alamat e-mel ini</strong> — jemputan hanya sah untuk peti masuk yang menerimanya.`,
 			`Jemputan luput dalam ${v.expiresDays ?? 7} hari.`,
 		];
-		const html = wrapHtml("👥", `Sertai ${v.storeName} di Kedaipal`, lines, v.ctaUrl, "Terima jemputan");
-		const text = `👥 ${v.inviterName ?? v.storeName} menjemput anda menyertai pasukan ${v.storeName} di Kedaipal.\nTerima jemputan, kemudian log masuk dengan alamat e-mel ini — ia hanya sah untuk peti masuk yang menerimanya.\nLuput dalam ${v.expiresDays ?? 7} hari.\n${v.ctaUrl}`;
+		const html = wrapHtml("🤝", `Sertai ${v.storeName} di Kedaipal`, lines, v.ctaUrl, "Terima jemputan");
+		const text = `🤝 ${v.inviterName ?? v.storeName} menjemput anda menyertai pasukan ${v.storeName} di Kedaipal.\nTerima jemputan, kemudian log masuk dengan alamat e-mel ini — ia hanya sah untuk peti masuk yang menerimanya.\nLuput dalam ${v.expiresDays ?? 7} hari.\n${v.ctaUrl}`;
 		return { subject, html, text };
 	},
 	teamAccessRevoked: (v: TeamEmailVars): RenderedEmail => {
@@ -967,26 +962,23 @@ const teamMs = {
 		return { subject, html, text };
 	},
 	teamMemberJoined: (v: TeamEmailVars): RenderedEmail => {
-		const subject = `👥 ${v.memberName ?? v.memberEmail} menyertai pasukan ${v.storeName}`;
+		const subject = `🎉 ${v.memberName ?? v.memberEmail} menyertai pasukan ${v.storeName}`;
 		const lines = [
 			`<strong>${escapeHtml(v.memberName ?? "Ahli pasukan anda")}</strong> (${escapeHtml(v.memberEmail ?? "")}) menerima jemputan anda dan kini boleh bekerja di <strong>${escapeHtml(v.storeName)}</strong> dengan akses yang anda tetapkan.`,
 			`Anda boleh semak atau ubah akses mereka pada bila-bila masa.`,
 		];
-		const html = wrapHtml("👥", `${v.memberName ?? "Ahli pasukan"} menyertai pasukan anda`, lines, v.ctaUrl, "Buka tetapan Pasukan");
-		const text = `👥 ${v.memberName ?? v.memberEmail} menyertai pasukan ${v.storeName}.\nMereka kini boleh bekerja di kedai anda dengan akses yang anda tetapkan. Semak atau ubah pada bila-bila masa.\n${v.ctaUrl}`;
+		const html = wrapHtml("🎉", `${v.memberName ?? "Ahli pasukan"} menyertai pasukan anda`, lines, v.ctaUrl, "Buka tetapan Pasukan");
+		const text = `🎉 ${v.memberName ?? v.memberEmail} menyertai pasukan ${v.storeName}.\nMereka kini boleh bekerja di kedai anda dengan akses yang anda tetapkan. Semak atau ubah pada bila-bila masa.\n${v.ctaUrl}`;
 		return { subject, html, text };
 	},
 	teamMemberLeft: (v: TeamEmailVars): RenderedEmail => {
-		const toOwnStore = v.leftReason === "left_to_create_store";
 		const subject = `${v.memberName ?? v.memberEmail} meninggalkan pasukan ${v.storeName}`;
 		const lines = [
-			toOwnStore
-				? `<strong>${escapeHtml(v.memberName ?? "Ahli pasukan anda")}</strong> (${escapeHtml(v.memberEmail ?? "")}) meninggalkan pasukan anda untuk membuka kedai sendiri di Kedaipal.`
-				: `<strong>${escapeHtml(v.memberName ?? "Ahli pasukan anda")}</strong> (${escapeHtml(v.memberEmail ?? "")}) meninggalkan pasukan anda.`,
+			`<strong>${escapeHtml(v.memberName ?? "Ahli pasukan anda")}</strong> (${escapeHtml(v.memberEmail ?? "")}) meninggalkan pasukan anda.`,
 			`Tempat mereka kini kosong — anda boleh menjemput orang lain.`,
 		];
 		const html = wrapHtml("👋", `${v.memberName ?? "Ahli pasukan"} meninggalkan pasukan anda`, lines, v.ctaUrl, "Buka tetapan Pasukan");
-		const text = `👋 ${v.memberName ?? v.memberEmail} meninggalkan pasukan ${v.storeName}${toOwnStore ? " untuk membuka kedai sendiri di Kedaipal" : ""}.\nTempat mereka kini kosong — anda boleh menjemput orang lain.\n${v.ctaUrl}`;
+		const text = `👋 ${v.memberName ?? v.memberEmail} meninggalkan pasukan ${v.storeName}.\nTempat mereka kini kosong — anda boleh menjemput orang lain.\n${v.ctaUrl}`;
 		return { subject, html, text };
 	},
 	teamSeatSummary: (v: TeamEmailVars): RenderedEmail => {
@@ -1011,8 +1003,8 @@ const teamZh = {
 			`请点击下方按钮接受邀请，并使用<strong>此邮箱</strong>登录——邀请仅对收到它的邮箱有效。`,
 			`邀请将于 ${v.expiresDays ?? 7} 天后失效。`,
 		];
-		const html = wrapHtml("👥", `加入 Kedaipal 上的 ${v.storeName}`, lines, v.ctaUrl, "接受邀请");
-		const text = `👥 ${v.inviterName ?? v.storeName} 邀请你加入 Kedaipal 上 ${v.storeName} 的团队。\n请接受邀请并使用此邮箱登录——邀请仅对收到它的邮箱有效。\n${v.expiresDays ?? 7} 天后失效。\n${v.ctaUrl}`;
+		const html = wrapHtml("🤝", `加入 Kedaipal 上的 ${v.storeName}`, lines, v.ctaUrl, "接受邀请");
+		const text = `🤝 ${v.inviterName ?? v.storeName} 邀请你加入 Kedaipal 上 ${v.storeName} 的团队。\n请接受邀请并使用此邮箱登录——邀请仅对收到它的邮箱有效。\n${v.expiresDays ?? 7} 天后失效。\n${v.ctaUrl}`;
 		return { subject, html, text };
 	},
 	teamAccessRevoked: (v: TeamEmailVars): RenderedEmail => {
@@ -1036,26 +1028,23 @@ const teamZh = {
 		return { subject, html, text };
 	},
 	teamMemberJoined: (v: TeamEmailVars): RenderedEmail => {
-		const subject = `👥 ${v.memberName ?? v.memberEmail} 已加入 ${v.storeName} 的团队`;
+		const subject = `🎉 ${v.memberName ?? v.memberEmail} 已加入 ${v.storeName} 的团队`;
 		const lines = [
 			`<strong>${escapeHtml(v.memberName ?? "你的队友")}</strong>（${escapeHtml(v.memberEmail ?? "")}）已接受邀请，现在可以按你设置的权限在 <strong>${escapeHtml(v.storeName)}</strong> 工作。`,
 			`你可以随时查看或调整他们的权限。`,
 		];
-		const html = wrapHtml("👥", `${v.memberName ?? "队友"} 已加入你的团队`, lines, v.ctaUrl, "打开团队设置");
-		const text = `👥 ${v.memberName ?? v.memberEmail} 已加入 ${v.storeName} 的团队。\n他们现在可以按你设置的权限在店铺中工作。你可以随时查看或调整。\n${v.ctaUrl}`;
+		const html = wrapHtml("🎉", `${v.memberName ?? "队友"} 已加入你的团队`, lines, v.ctaUrl, "打开团队设置");
+		const text = `🎉 ${v.memberName ?? v.memberEmail} 已加入 ${v.storeName} 的团队。\n他们现在可以按你设置的权限在店铺中工作。你可以随时查看或调整。\n${v.ctaUrl}`;
 		return { subject, html, text };
 	},
 	teamMemberLeft: (v: TeamEmailVars): RenderedEmail => {
-		const toOwnStore = v.leftReason === "left_to_create_store";
 		const subject = `${v.memberName ?? v.memberEmail} 已离开 ${v.storeName} 的团队`;
 		const lines = [
-			toOwnStore
-				? `<strong>${escapeHtml(v.memberName ?? "你的队友")}</strong>（${escapeHtml(v.memberEmail ?? "")}）已离开团队，去 Kedaipal 开设自己的店铺。`
-				: `<strong>${escapeHtml(v.memberName ?? "你的队友")}</strong>（${escapeHtml(v.memberEmail ?? "")}）已离开你的团队。`,
+			`<strong>${escapeHtml(v.memberName ?? "你的队友")}</strong>（${escapeHtml(v.memberEmail ?? "")}）已离开你的团队。`,
 			`席位已空出——你可以邀请其他人。`,
 		];
 		const html = wrapHtml("👋", `${v.memberName ?? "队友"} 已离开你的团队`, lines, v.ctaUrl, "打开团队设置");
-		const text = `👋 ${v.memberName ?? v.memberEmail} 已离开 ${v.storeName} 的团队${toOwnStore ? "，去 Kedaipal 开设自己的店铺" : ""}。\n席位已空出——你可以邀请其他人。\n${v.ctaUrl}`;
+		const text = `👋 ${v.memberName ?? v.memberEmail} 已离开 ${v.storeName} 的团队。\n席位已空出——你可以邀请其他人。\n${v.ctaUrl}`;
 		return { subject, html, text };
 	},
 	teamSeatSummary: (v: TeamEmailVars): RenderedEmail => {

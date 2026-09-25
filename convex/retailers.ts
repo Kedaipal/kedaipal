@@ -1455,12 +1455,6 @@ export const createRetailer = mutation({
 		// server-side key events stitch to their client-side funnel. A hint like
 		// signupSource: validated here (wire format only), dropped otherwise.
 		gaClientId: v.optional(v.string()),
-		// Team members (86exr91r4): an ACTIVE member creating their own store
-		// gives up their seat (one store per login). The onboarding form learns
-		// about the seat via team.myMembershipState, shows the explicit "you'll
-		// lose access to {Store}" confirm, and passes true — the server refuses
-		// without it so the seat can never be lost as a silent side effect.
-		confirmLeaveTeam: v.optional(v.boolean()),
 	},
 	handler: async (ctx, args): Promise<{ slug: string }> => {
 		const identity = await ctx.auth.getUserIdentity();
@@ -1500,9 +1494,16 @@ export const createRetailer = mutation({
 			throw new ConvexError("You already have a store. Each account can own one retailer.");
 		}
 
-		// One store per login (86exr91r4): an ACTIVE team member may convert to
-		// an owner, but only through the explicit confirm — and the store owner
-		// is told a seat just freed, never left to notice silently.
+		// One store per login (86exr91r4). A member MAY become an owner — that was
+		// never in doubt — but LEAVING A TEAM IS ITS OWN ACT, never a side effect
+		// of filling in a different form. `team.leave` is the one exit: it emails
+		// the owner that a seat just freed, and only then does this login become
+		// storeless and reach the wizard. Creating a store used to be able to end
+		// a membership on its own (an extra `confirmLeaveTeam` flag), which put
+		// two ways out of a team in the codebase and left the second one
+		// unreachable anyway — an active member never gets here, because
+		// `getMyRetailer` resolves their team store and /onboarding redirects
+		// them. This refusal is what a stale client or a direct API call meets.
 		const memberships = await ctx.db
 			.query("retailerMembers")
 			.withIndex("by_user", (q) => q.eq("userId", userId))
@@ -1510,27 +1511,9 @@ export const createRetailer = mutation({
 		const activeMembership = memberships.find((m) => m.status === "active");
 		if (activeMembership) {
 			const teamStore = await ctx.db.get(activeMembership.retailerId);
-			if (!args.confirmLeaveTeam) {
-				throw new ConvexError(
-					`You're on the team at ${teamStore?.storeName ?? "another store"}. Creating your own store means leaving that team — confirm to continue.`,
-				);
-			}
-			await ctx.db.patch(activeMembership._id, {
-				status: "removed",
-				removedAt: Date.now(),
-				removedBy: userId,
-				removedReason: "left_to_create_store",
-			});
-			if (teamStore) {
-				await ctx.scheduler.runAfter(0, internal.team.sendTeamEmail, {
-					kind: "teamMemberLeft",
-					retailerId: teamStore._id,
-					memberName:
-						activeMembership.displayName ?? activeMembership.email,
-					memberEmail: activeMembership.email,
-					leftReason: "left_to_create_store",
-				});
-			}
+			throw new ConvexError(
+				`You're on the team at ${teamStore?.storeName ?? "another store"}, and an account can only be in one store. Leave that team first from Settings → Team, then create your own store.`,
+			);
 		}
 
 		const collision = await ctx.db
