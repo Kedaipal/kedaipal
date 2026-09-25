@@ -79,8 +79,10 @@ function mintInviteToken(): { token: string; hash: string } {
 }
 
 /** "a•••@gmail.com" — enough for the holder of a link to recognise which
- * inbox was invited, useless to anyone else. */
-function maskEmail(email: string): string {
+ * inbox was invited, useless to anyone else. Exported for the order
+ * timeline's actor names (convex/orders.getTimeline), which fall back to the
+ * same masking when a member never set a display name. */
+export function maskEmail(email: string): string {
 	const at = email.indexOf("@");
 	if (at <= 1) return `•••${email.slice(at)}`;
 	return `${email[0]}•••${email.slice(at)}`;
@@ -208,8 +210,11 @@ export const invite = mutation({
 		if (!isUnlimited(limit) && active.length + invited.length >= limit) {
 			// The Team tab disables Invite with this reason before the request; the
 			// server repeats it because the client is a convenience, not the rule.
+			// Counted in PEOPLE, like the seat meter above it — "3 of 3 seats
+			// used" beside "all 2 member seats" read as two different limits.
+			const total = limit + 1;
 			throw new ConvexError(
-				`All ${limit} member seat${limit === 1 ? "" : "s"} are in use — remove someone or upgrade your plan.`,
+				`All ${total} seats are in use — remove a teammate or upgrade your plan for more.`,
 			);
 		}
 
@@ -595,7 +600,10 @@ export const getInviteContext = query({
 		{ token },
 	): Promise<
 		| { state: "invalid" }
-		| { state: "expired" | "used"; storeName: string }
+		// Separate members (not `"expired" | "used"` in one) so the client's
+		// ternary chain narrows all the way down to the valid shape.
+		| { state: "expired"; storeName: string }
+		| { state: "used"; storeName: string }
 		| {
 				state: "valid";
 				storeName: string;
