@@ -169,6 +169,33 @@ describe("TeamTab states", () => {
 		).toBeTruthy();
 	});
 
+	// A chip that names an area the member can only READ used to read the same
+	// as one they can write, so the row said "Products" while the button said
+	// "ask the owner for edit access". The member has no Edit-access dialog, so
+	// the chips are the only place they are told what they hold.
+	it("a read-only grant is marked as view, a write grant is not", () => {
+		queryData.current = teamFixture({
+			viewerRole: "member",
+			memberLimit: 2,
+			members: [
+				{
+					memberId: "m1",
+					status: "active",
+					email: "helper@x.com",
+					displayName: "Aina",
+					permissions: { orders: "write", products: "read" },
+					invitedAt: 1,
+					acceptedAt: 2,
+					isSelf: true,
+				},
+			],
+		});
+		mount();
+		expect(screen.getByText("Products · view")).toBeTruthy();
+		expect(screen.getByText("Orders & counter")).toBeTruthy();
+		expect(screen.queryByText("Orders & counter · view")).toBeNull();
+	});
+
 	it("the one-store note is for members only — the owner never sees it", () => {
 		queryData.current = teamFixture({
 			memberLimit: 2,
