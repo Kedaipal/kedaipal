@@ -327,20 +327,24 @@ describe("member access through the gate", () => {
 				minFulfilmentNoticeDays: 3,
 			}),
 		).resolves.toMatchObject({ ok: true });
-		// payments_settings NOT granted → bank config refused.
+		// payments_settings NOT granted → bank config refused, and the refusal
+		// NAMES the area rather than arriving as a bare "Forbidden" (which the
+		// client renders as a stack trace — the thing refusalMessage exists to
+		// end). The caller is already known to be a member, so naming it leaks
+		// nothing.
 		await expect(
 			asHelper.mutation(api.retailers.updateSettings, {
 				retailerId: store._id,
 				paymentMethods: [],
 			}),
-		).rejects.toThrow("Forbidden");
-		// WhatsApp fields are owner-only whatever the grants (D2).
+		).rejects.toThrow(/payment details.*Settings → Team/);
+		// WhatsApp fields are owner-only whatever the grants (D2) — and say so.
 		await expect(
 			asHelper.mutation(api.retailers.updateSettings, {
 				retailerId: store._id,
 				notifyEmail: "helper@example.com",
 			}),
-		).rejects.toThrow("Forbidden");
+		).rejects.toThrow(/Only the store owner/);
 		// A mixed save is all-or-nothing: one refused field fails the call.
 		await expect(
 			asHelper.mutation(api.retailers.updateSettings, {
@@ -348,7 +352,7 @@ describe("member access through the gate", () => {
 				minFulfilmentNoticeDays: 2,
 				waPhone: "60123456789",
 			}),
-		).rejects.toThrow("Forbidden");
+		).rejects.toThrow(/Only the store owner/);
 	});
 
 	test("grant edits + removal take effect on the next request", async () => {
@@ -583,5 +587,147 @@ describe("admin act-as posture", () => {
 		await expect(
 			asAdmin.query(api.orders.countActionable, { retailerId: store._id }),
 		).resolves.toBeDefined();
+	});
+});
+
+describe("invitation email budgets (86exr91r4, PR review)", () => {
+	// The seat cap bounds how many invites can be OPEN, not how many can be
+	// SENT: `cancelInvite` deletes the row, which frees the seat, the duplicate
+	// check and the resend cooldown's anchor at once. Without a budget,
+	// invite → cancel → invite mails an arbitrary address from Kedaipal's own
+	// sending domain as fast as a script can loop. Delete either
+	// `spendInviteBudget` call and one of these goes red.
+	test("the invite→cancel→invite loop runs out of credits instead of running forever", async () => {
+		const t = setup();
+		const store = await seedStore(t);
+		const asOwner = t.withIdentity(OWNER);
+		const target = "target@example.com";
+		let sent = 0;
+		let refusal: unknown;
+		for (let i = 0; i < 12; i++) {
+			try {
+				const { memberId } = await asOwner.mutation(api.team.invite, {
+					retailerId: store._id,
+					email: target,
+					permissions: {},
+				});
+				sent++;
+				await asOwner.mutation(api.team.cancelInvite, { memberId });
+			} catch (err) {
+				refusal = err;
+				break;
+			}
+		}
+		expect(sent).toBeLessThan(12);
+		// And the refusal is a sentence, not the limiter's generic "busy".
+		expect(String((refusal as { data?: string })?.data ?? refusal)).toMatch(
+			/invitations today|invitations in a short time/i,
+		);
+	});
+
+	// The 60s cooldown shapes how FAST resends go out; it caps no total, so on
+	// its own it still allowed roughly a mail a minute at one address forever.
+	test("resend spends the same per-address budget the invite does", async () => {
+		const t = setup();
+		const store = await seedStore(t);
+		const asOwner = t.withIdentity(OWNER);
+		const { memberId } = await asOwner.mutation(api.team.invite, {
+			retailerId: store._id,
+			email: "target@example.com",
+			permissions: {},
+		});
+		let resent = 0;
+		let refusal: unknown;
+		for (let i = 0; i < 10; i++) {
+			// Move past the 60s cooldown each round so the ONLY thing that can
+			// stop the loop is the budget.
+			await t.run(async (ctx) => {
+				await ctx.db.patch(memberId, { lastInviteSentAt: 0 });
+			});
+			try {
+				await asOwner.mutation(api.team.resend, { memberId });
+				resent++;
+			} catch (err) {
+				refusal = err;
+				break;
+			}
+		}
+		expect(resent).toBeLessThan(10);
+		expect(String((refusal as { data?: string })?.data ?? refusal)).toMatch(
+			/invitations today|invitations in a short time/i,
+		);
+	});
+
+	// A refused invite must not cost a real seller a credit — otherwise a
+	// fat-fingered duplicate eats the budget for the person they meant to add.
+	test("an invite the server refuses spends nothing", async () => {
+		const t = setup();
+		const store = await seedStore(t);
+		const asOwner = t.withIdentity(OWNER);
+		for (let i = 0; i < 8; i++) {
+			await expect(
+				asOwner.mutation(api.team.invite, {
+					retailerId: store._id,
+					email: OWNER.email,
+					permissions: {},
+				}),
+			).rejects.toThrow(/own email/i);
+		}
+		// Budget untouched: the real invite still goes through.
+		const { memberId } = await asOwner.mutation(api.team.invite, {
+			retailerId: store._id,
+			email: "real@example.com",
+			permissions: {},
+		});
+		expect(memberId).toBeTruthy();
+	});
+});
+
+describe("accept requires a VERIFIED address", () => {
+	// "The token proves the link, the email proves the person" only holds if the
+	// address is confirmed. Clerk's email-code sign-in makes that true by
+	// configuration today; this makes it true in code, so enabling password
+	// sign-up later can't turn "registered the invited address first" into
+	// "took the seat". Delete the `emailVerified === false` line and this goes
+	// red.
+	test("an unverified identity is an email mismatch, on both accept paths", async () => {
+		const t = setup();
+		const store = await seedStore(t);
+		const asOwner = t.withIdentity(OWNER);
+		const { memberId } = await asOwner.mutation(api.team.invite, {
+			retailerId: store._id,
+			email: HELPER.email,
+			permissions: { orders: "write" },
+		});
+		const unverified = { ...HELPER, emailVerified: false };
+		expect(
+			await t
+				.withIdentity(unverified)
+				.mutation(api.team.acceptPendingInvite, { memberId }),
+		).toMatchObject({ ok: false, reason: "email_mismatch" });
+		// …and the same person, verified, still gets in.
+		expect(
+			await t
+				.withIdentity({ ...HELPER, emailVerified: true })
+				.mutation(api.team.acceptPendingInvite, { memberId }),
+		).toMatchObject({ ok: true });
+	});
+
+	// An ABSENT claim stays permissive on purpose: a JWT template may not carry
+	// `email_verified`, and reading "unknown" as "unverified" would lock every
+	// accept out on a harmless config change.
+	test("an identity with no emailVerified claim is unaffected", async () => {
+		const t = setup();
+		const store = await seedStore(t);
+		const { memberId } = await t.withIdentity(OWNER).mutation(api.team.invite, {
+			retailerId: store._id,
+			email: HELPER.email,
+			permissions: { orders: "write" },
+		});
+		expect(
+			await t
+				.withIdentity(HELPER)
+				.mutation(api.team.acceptPendingInvite, { memberId }),
+		).toMatchObject({ ok: true });
 	});
 });

@@ -51,6 +51,7 @@ import {
 	sanitizePermissions,
 } from "./lib/permissions";
 import { isUnlimited } from "./lib/plans";
+import { rateLimiter } from "./lib/rateLimiter";
 import { memberSeatLimit, seatRows } from "./lib/seats";
 import { sha256Hex } from "./lib/sha256";
 import { assertValidEmail } from "./lib/slug";
@@ -88,10 +89,29 @@ export function maskEmail(email: string): string {
 	return `${email[0]}•••${email.slice(at)}`;
 }
 
-/** The Clerk identity's verified email, normalized like invite emails are. */
+/**
+ * The Clerk identity's VERIFIED email, normalized like invite emails are.
+ *
+ * Verification is the whole basis for "the token proves the link, the email
+ * proves the person": a seat is bound to whoever controls the invited inbox,
+ * so an address the provider hasn't confirmed is not evidence of control.
+ * Today that holds by configuration — Clerk is on email-code sign-in, which
+ * can't complete on an unverified address — and this makes it hold by CODE, so
+ * enabling password sign-up later can't quietly turn "registered the invited
+ * address first" into "took the seat". The check lives here, at the one seam
+ * both accept paths and the pending-invite list share, rather than at three
+ * call sites one of which would eventually be forgotten.
+ *
+ * An ABSENT claim stays permissive: a JWT template may simply not carry
+ * `email_verified`, and reading "unknown" as "unverified" would lock every
+ * accept out on a config change in the harmless direction. Only an explicit
+ * `false` refuses.
+ */
 function identityEmail(identity: {
 	email?: unknown;
+	emailVerified?: unknown;
 }): string | undefined {
+	if (identity.emailVerified === false) return undefined;
 	return typeof identity.email === "string" && identity.email.trim().length > 0
 		? identity.email.trim().toLowerCase()
 		: undefined;
@@ -160,6 +180,43 @@ async function callerStoreTies(
 // Owner-side management
 // ---------------------------------------------------------------------------
 
+/**
+ * Spend the two invitation budgets, in the one place both mail-sending paths
+ * share (86exr91r4). The store-wide bucket bounds Kedaipal's shared Resend
+ * quota and sending reputation; the per-address bucket bounds what one inbox
+ * can be made to receive, which a store-wide limit alone never does.
+ *
+ * The address is HASHED into the key: the rate-limiter's rows outlive the
+ * invite (that's the point — they have to survive `cancelInvite` deleting the
+ * row), and an invited stranger's inbox has no business persisting in a table
+ * that isn't the invite itself.
+ *
+ * Refused in words, not in the limiter's generic "busy right now": at these
+ * ceilings the only person who reaches one is either a real seller with a
+ * genuine reason to slow down or someone using us to nag — and both need to
+ * read what to do next.
+ */
+async function spendInviteBudget(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	email: string,
+): Promise<void> {
+	const perStore = await rateLimiter.limit(ctx, "teamInvite", {
+		key: retailerId,
+	});
+	if (!perStore.ok)
+		throw new ConvexError(
+			"That's a lot of invitations in a short time — wait a few minutes before sending the next one.",
+		);
+	const perEmail = await rateLimiter.limit(ctx, "teamInviteEmail", {
+		key: `${retailerId}:${sha256Hex(email)}`,
+	});
+	if (!perEmail.ok)
+		throw new ConvexError(
+			"You've already sent that address several invitations today. Ask them to check their spam folder, or try again tomorrow.",
+		);
+}
+
 export const invite = mutation({
 	args: {
 		retailerId: v.id("retailers"),
@@ -218,6 +275,10 @@ export const invite = mutation({
 			);
 		}
 
+		// LAST, so the credits a seller spends are only the mails actually sent:
+		// a duplicate, an at-cap refusal or a locked store costs them nothing.
+		await spendInviteBudget(ctx, args.retailerId, email);
+
 		const now = Date.now();
 		const { token, hash } = mintInviteToken();
 		const memberId = await ctx.db.insert("retailerMembers", {
@@ -260,6 +321,10 @@ export const resend = mutation({
 			throw new ConvexError(
 				"Just sent — give it a minute before resending.",
 			);
+		// The same two budgets an invite spends: the cooldown above only shapes
+		// how FAST resends go out, it caps no total, so on its own it still
+		// allowed a mail a minute at one address forever.
+		await spendInviteBudget(ctx, row.retailerId, row.email);
 		// Rotate the token: the old link dies, the new email carries the only
 		// live one. Expiry restarts so a resent invite is a fresh 7-day offer.
 		const { token, hash } = mintInviteToken();
