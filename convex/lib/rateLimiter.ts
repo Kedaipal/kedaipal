@@ -28,6 +28,21 @@ import { components } from "../_generated/api";
  *   than a midnight window, so recovery is gradual and there's no reset to
  *   time an attack against. If a real store ever hits it, that's a support
  *   conversation, not a config tweak.
+ * - `teamInvite` + `teamInviteEmail`: the team-seat invitation (86exr91r4), the
+ *   only authenticated write that mails an arbitrary address from Kedaipal's
+ *   own sending domain. The seat cap bounds how many invites can be OPEN at
+ *   once, not how many can be SENT: `cancelInvite` deletes the row, freeing the
+ *   seat, the duplicate check and the resend cooldown's anchor in one go, so
+ *   `invite → cancel → invite` was an unbounded loop. Two ceilings because the
+ *   abuse has two shapes — `teamInvite` (keyed by retailerId) bounds what one
+ *   store can spend of the shared Resend quota and domain reputation, the same
+ *   shared-resource logic the WABA caps exist for; `teamInviteEmail` (keyed by
+ *   retailerId + a HASH of the address, so no inbox is stored here) bounds what
+ *   one person can be made to receive, which a store-wide limit alone doesn't.
+ *   Resend spends both too — its 60s cooldown throttles the rate but caps no
+ *   total, so on its own it still allowed ~60 mails/hour at one address.
+ *   Sized well above a real store: Scale is owner + 5, and a generous
+ *   onboarding is five invites, a few typo re-sends and a couple of nudges.
  * - `productWrite`: authenticated retailer mutations. Keyed by Clerk subject so
  *   a single user cannot bulk-trash inventory.
  * - `addressUpdate`: public mutation that lets a shopper edit their delivery
@@ -62,6 +77,18 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		rate: 500,
 		period: 24 * 60 * MINUTE,
 		capacity: 500,
+	},
+	teamInvite: {
+		kind: "token bucket",
+		rate: 20,
+		period: 60 * MINUTE,
+		capacity: 10,
+	},
+	teamInviteEmail: {
+		kind: "token bucket",
+		rate: 5,
+		period: 24 * 60 * MINUTE,
+		capacity: 3,
 	},
 	productWrite: {
 		kind: "fixed window",

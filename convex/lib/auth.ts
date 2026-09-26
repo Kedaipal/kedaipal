@@ -176,8 +176,14 @@ export async function requireRetailerAccess(
 }
 
 /** The sentence a teammate reads when a grant is missing. Names the area and
- * the way forward — the owner is the only one who can change it. */
-function refusalMessage(requirement: AccessRequirement): string {
+ * the way forward — the owner is the only one who can change it.
+ *
+ * Exported because the gate is not the only place a MEMBER can be refused:
+ * `updateSettings` splits one mutation across areas field by field, and its
+ * refusal has to read like every other one rather than like a crash. Only ever
+ * hand this to someone already known to be a member — naming an area to a
+ * stranger would describe a store's setup to them. */
+export function refusalMessage(requirement: AccessRequirement): string {
 	if ("ownerOnly" in requirement)
 		return "Only the store owner can do this — ask them to make the change.";
 	if ("area" in requirement) {

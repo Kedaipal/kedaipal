@@ -88,11 +88,27 @@ acceptPendingInvite (onboarding banner) → updatePermissions/remove/leave`.
   `crypto.subtle`; FIPS vectors pinned). Kept after accept so a re-clicked
   link honestly says "already used". 7-day expiry, resend rotates it (60s
   cooldown).
+- **Invitation mail has two budgets** (`teamInvite` per store, `teamInviteEmail`
+  per store + sha256 of the address). The seat cap bounds how many invites can
+  be OPEN, never how many can be SENT — `cancelInvite` deletes the row, freeing
+  the seat, the duplicate check and the resend cooldown's anchor at once, so
+  `invite → cancel → invite` was an unbounded loop mailing an arbitrary inbox
+  from Kedaipal's own sending domain. The store-wide bucket protects the shared
+  Resend quota and domain reputation (the WABA-cap logic); the per-address one
+  bounds what one person can be made to receive, which a store-wide limit never
+  does. Resend spends both — its 60s cooldown shapes the rate and caps no
+  total. Both are spent LAST, after every other check, so a duplicate or an
+  at-cap refusal costs a real seller nothing.
 - **The token proves the link; the EMAIL proves the person.** Accept requires
   the Clerk identity's verified email to equal the invite email — a forwarded
   link binds nobody. `acceptPendingInvite` needs no token for the same reason:
   the onboarding banner only lists invites addressed to the caller's own
-  verified email.
+  verified email. **Verified is enforced in code, not just by config**:
+  `identityEmail` returns undefined on an explicit `emailVerified === false`,
+  so enabling password sign-up later can't turn "registered the invited address
+  first" into "took the seat". An ABSENT claim stays permissive — a JWT
+  template may not carry it, and reading unknown as unverified would lock every
+  accept out on a harmless config change.
 - **One store per login**, both directions, one principle: *ending a store
   relationship is always an explicit act on the thing being left, never a side
   effect.* A member may absolutely become an owner — but the order is **leave,
