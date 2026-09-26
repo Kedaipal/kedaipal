@@ -238,7 +238,7 @@ describe("resolveBannerState", () => {
 				sub({
 					comped: true,
 					comp: { kind: "sponsor" },
-					caps: { orderCap: 200, userCap: 2, broadcastQuota: 100 },
+					caps: { orderCap: 200, userCap: 3, broadcastQuota: 100 },
 				}),
 				undefined,
 				NOW,
@@ -378,7 +378,7 @@ describe("resolveBannerState", () => {
 	});
 
 	test("on hold → held, below every payment deadline, above the cap nudge (which can't fire at cap 0)", () => {
-		const caps = { orderCap: 0, userCap: 2, broadcastQuota: 100 };
+		const caps = { orderCap: 0, userCap: 3, broadcastQuota: 100 };
 		expect(
 			resolveBannerState(
 				sub({ status: "on_hold", held: true, caps }),

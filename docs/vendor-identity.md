@@ -4,6 +4,14 @@ How a retailer ("vendor") is identified, what's unique, and the deliberate
 **1 login : 1 store** decision. Flagged here so the multi-store question is a
 conscious fork, not a surprise when a multi-brand seller hits the wall.
 
+> **Team members (86exr91r4, Sep 2026):** OWNERSHIP stays strictly 1:1 —
+> `retailers.userId` is one Clerk subject and everything below still holds.
+> What changed is *operating* access: a login now either owns one store OR
+> holds one active `retailerMembers` seat on someone else's (per-area grants,
+> see [`team-members.md`](./team-members.md)). "One store per login" now means
+> owned **or** joined; switching is always an explicit act (leave the team /
+> close the store), never a side effect of accepting an invite.
+
 ## The three IDs — don't conflate them
 
 | ID | What it is | Role |

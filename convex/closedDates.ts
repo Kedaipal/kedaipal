@@ -53,7 +53,12 @@ export const add = mutation({
 		label: v.optional(v.string()),
 	},
 	handler: async (ctx, args): Promise<ClosedDateRange> => {
-		const access = await requireRetailerAccess(ctx, args.retailerId);
+		const access = await requireRetailerAccess(ctx, args.retailerId, {
+			// A closure shuts the STORE on a date — the per-date counterpart of
+			// opening hours, so it rides the same grant (86exr91r4).
+			area: "store_settings",
+			level: "write",
+		});
 		// Soft-lock: a past_due seller can't edit store settings (growth-write);
 		// an admin onboarding the store bypasses it, the updateSettings posture.
 		if (!access.actingAsAdmin)
@@ -107,7 +112,12 @@ export const remove = mutation({
 		endDate: v.number(),
 	},
 	handler: async (ctx, args): Promise<void> => {
-		const access = await requireRetailerAccess(ctx, args.retailerId);
+		const access = await requireRetailerAccess(ctx, args.retailerId, {
+			// A closure shuts the STORE on a date — the per-date counterpart of
+			// opening hours, so it rides the same grant (86exr91r4).
+			area: "store_settings",
+			level: "write",
+		});
 		if (!access.actingAsAdmin)
 			await assertSubscriptionActive(ctx, args.retailerId);
 
@@ -156,7 +166,10 @@ export const impact = query({
 			kind: "order" | "booking";
 		}>;
 	}> => {
-		const access = await requireRetailerAccess(ctx, args.retailerId);
+		const access = await requireRetailerAccess(ctx, args.retailerId, {
+			area: "store_settings",
+			level: "read",
+		});
 		if (!isMytMidnight(args.startDate) || !isMytMidnight(args.endDate)) {
 			throw new ConvexError("Closed dates must be calendar days");
 		}

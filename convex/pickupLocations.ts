@@ -3,11 +3,12 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation, query } from "./_generated/server";
 import {
-	adminUserIds,
 	logAdminAction,
 	type RetailerAccess,
 	requireRetailerAccess,
+	tryRetailerAccess,
 } from "./lib/auth";
+import type { PermissionLevel } from "./lib/permissions";
 import { assertValidMapsUrl } from "./lib/mapsUrl";
 import {
 	formatPickupAddress,
@@ -47,22 +48,28 @@ export const PICKUP_FEE_MAX = 1_000_000;
 // search-and-replace.
 // ---------------------------------------------------------------------------
 
-// Owner-OR-admin access (see convex/lib/auth.ts) so a Kedaipal admin can set up
-// a seller's pickup points during white-glove onboarding.
+// Owner, member with the fulfilment grant, or admin act-as (convex/lib/auth.ts)
+// so a Kedaipal admin can set up a seller's pickup points during white-glove
+// onboarding and a trusted helper can maintain them day to day.
 async function requireRetailerOwner(
 	ctx: QueryCtx | MutationCtx,
 	retailerId: Id<"retailers">,
+	level: PermissionLevel,
 ): Promise<RetailerAccess> {
-	return requireRetailerAccess(ctx, retailerId);
+	return requireRetailerAccess(ctx, retailerId, { area: "fulfilment", level });
 }
 
 async function requireOwnedLocation(
 	ctx: QueryCtx | MutationCtx,
 	pickupLocationId: Id<"pickupLocations">,
+	level: PermissionLevel,
 ): Promise<{ location: Doc<"pickupLocations">; access: RetailerAccess }> {
 	const location = await ctx.db.get(pickupLocationId);
 	if (!location) throw new Error("Pickup location not found");
-	const access = await requireRetailerAccess(ctx, location.retailerId);
+	const access = await requireRetailerAccess(ctx, location.retailerId, {
+		area: "fulfilment",
+		level,
+	});
 	return { location, access };
 }
 
@@ -240,7 +247,7 @@ function sanitizeCoords(
 export const listForRetailer = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }): Promise<Doc<"pickupLocations">[]> => {
-		await requireRetailerOwner(ctx, retailerId);
+		await requireRetailerOwner(ctx, retailerId, "read");
 		const rows = await ctx.db
 			.query("pickupLocations")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
@@ -388,18 +395,15 @@ export const getOwnedById = query({
 		ctx,
 		{ pickupLocationId },
 	): Promise<Doc<"pickupLocations"> | null> => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) return null;
 		const location = await ctx.db.get(pickupLocationId);
 		if (!location) return null;
-		const retailer = await ctx.db.get(location.retailerId);
-		// Owner OR a Kedaipal admin operating this store (act-as).
-		if (
-			!retailer ||
-			(retailer.userId !== identity.subject &&
-				!adminUserIds().includes(identity.subject))
-		)
-			return null;
+		// Owner, member with fulfilment access, or admin act-as; null (not a
+		// throw) for everyone else — a stale/foreign id degrades quietly.
+		const access = await tryRetailerAccess(ctx, location.retailerId, {
+			area: "fulfilment",
+			level: "read",
+		});
+		if (!access) return null;
 		return location;
 	},
 });
@@ -411,7 +415,7 @@ export const getOwnedById = query({
 export const hasAnyActive = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }): Promise<{ hasAny: boolean }> => {
-		await requireRetailerOwner(ctx, retailerId);
+		await requireRetailerOwner(ctx, retailerId, "read");
 		const first = await ctx.db
 			.query("pickupLocations")
 			.withIndex("by_retailer_active", (q) =>
@@ -475,7 +479,7 @@ export const create = mutation({
 			fee,
 		},
 	): Promise<{ pickupLocationId: Id<"pickupLocations"> }> => {
-		const access = await requireRetailerOwner(ctx, retailerId);
+		const access = await requireRetailerOwner(ctx, retailerId, "write");
 		// Soft-lock: a past_due seller can't edit fulfilment setup (growth-write,
 		// same class as updateSettings). Admin act-as bypasses (white-glove).
 		if (!access.actingAsAdmin)
@@ -609,6 +613,7 @@ export const update = mutation({
 		const { location, access } = await requireOwnedLocation(
 			ctx,
 			pickupLocationId,
+			"write",
 		);
 		// Soft-lock (growth-write); admin act-as bypasses.
 		if (!access.actingAsAdmin)
@@ -725,6 +730,7 @@ export const setActive = mutation({
 		const { location, access } = await requireOwnedLocation(
 			ctx,
 			pickupLocationId,
+			"write",
 		);
 		// Soft-lock (growth-write); admin act-as bypasses.
 		if (!access.actingAsAdmin)
@@ -803,7 +809,7 @@ export const reorder = mutation({
 		orderedIds: v.array(v.id("pickupLocations")),
 	},
 	handler: async (ctx, { retailerId, orderedIds }): Promise<void> => {
-		const access = await requireRetailerOwner(ctx, retailerId);
+		const access = await requireRetailerOwner(ctx, retailerId, "write");
 		// Soft-lock (growth-write); admin act-as bypasses.
 		if (!access.actingAsAdmin)
 			await assertSubscriptionActive(ctx, retailerId);

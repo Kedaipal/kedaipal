@@ -617,7 +617,13 @@ function assertStillRequested(order: {
 export const approveBookingRequest = mutation({
 	args: { orderId: v.id("orders") },
 	handler: async (ctx, { orderId }): Promise<void> => {
-		const { order, access } = await requireOrderAccess(ctx, orderId);
+		// Booking approvals/settlement are order-pipeline work (the FS Fitness
+		// front-desk case), so they ride the orders grant — the `bookings` area
+		// covers the catalog side (listings, blocks, calendar), not order handling.
+		const { order, access } = await requireOrderAccess(ctx, orderId, {
+			area: "orders",
+			level: "write",
+		});
 		assertStillRequested(order);
 		if (!access.actingAsAdmin)
 			await assertSubscriptionActive(ctx, order.retailerId);
@@ -626,6 +632,7 @@ export const approveBookingRequest = mutation({
 		// notifyStatusChange skips `confirmed`, so nothing generic goes out.
 		await applyStatusTransition(ctx, order, "confirmed", {
 			note: "Booking approved",
+			actorUserId: access.role === "admin" ? undefined : access.userId,
 		});
 
 		// The confirm+pay message rides the EXACT storefront-push machinery
@@ -655,7 +662,13 @@ export const approveBookingRequest = mutation({
 export const declineBookingRequest = mutation({
 	args: { orderId: v.id("orders"), reason: v.string() },
 	handler: async (ctx, { orderId, reason }): Promise<void> => {
-		const { order, access } = await requireOrderAccess(ctx, orderId);
+		// Booking approvals/settlement are order-pipeline work (the FS Fitness
+		// front-desk case), so they ride the orders grant — the `bookings` area
+		// covers the catalog side (listings, blocks, calendar), not order handling.
+		const { order, access } = await requireOrderAccess(ctx, orderId, {
+			area: "orders",
+			level: "write",
+		});
 		assertStillRequested(order);
 		if (!access.actingAsAdmin)
 			await assertSubscriptionActive(ctx, order.retailerId);
@@ -685,7 +698,10 @@ export const declineBookingRequest = mutation({
 			ctx,
 			{ ...order, bookingResolution: "declined" },
 			"cancelled",
-			{ note: `Booking declined: ${trimmed}` },
+			{
+				note: `Booking declined: ${trimmed}`,
+				actorUserId: access.role === "admin" ? undefined : access.userId,
+			},
 		);
 		await logAdminAction(ctx, access, "bookings.decline", orderId);
 	},
@@ -709,7 +725,13 @@ export const settleSecurityDeposit = mutation({
 		reason: v.optional(v.string()),
 	},
 	handler: async (ctx, { orderId, keptAmount, reason }): Promise<void> => {
-		const { order, access } = await requireOrderAccess(ctx, orderId);
+		// Booking approvals/settlement are order-pipeline work (the FS Fitness
+		// front-desk case), so they ride the orders grant — the `bookings` area
+		// covers the catalog side (listings, blocks, calendar), not order handling.
+		const { order, access } = await requireOrderAccess(ctx, orderId, {
+			area: "orders",
+			level: "write",
+		});
 		if (!access.actingAsAdmin)
 			await assertSubscriptionActive(ctx, order.retailerId);
 

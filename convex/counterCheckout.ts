@@ -36,10 +36,11 @@ import { stampProductsOrdered } from "./lib/productOrdered";
 import { orderingPausedMessage } from "./lib/seasonalHold";
 import { recordOrderCreated } from "./subscriptionUsage";
 import {
-	adminUserIds,
 	logAdminAction,
+	resolveMyRetailer,
 	type RetailerAccess,
 	requireRetailerAccess,
+	tryRetailerAccess,
 } from "./lib/auth";
 import { assertSubscriptionActive } from "./subscriptions";
 import {
@@ -131,21 +132,31 @@ async function requireCounterRetailer(
 	ctx: QueryCtx | MutationCtx,
 	retailerId?: Id<"retailers">,
 ): Promise<RetailerAccess> {
-	if (retailerId) return requireRetailerAccess(ctx, retailerId);
-	const identity = await ctx.auth.getUserIdentity();
-	if (!identity) throw new ConvexError("Not authenticated");
-	const retailer = await ctx.db
-		.query("retailers")
-		.withIndex("by_user", (q) => q.eq("userId", identity.subject))
-		.unique();
-	if (!retailer) throw new ConvexError("No store found for this account");
-	return { retailer, actingAsAdmin: false, userId: identity.subject };
+	// Counter checkout IS the front-desk member's job (86exr91r4) — the whole
+	// surface rides the orders grant, and the zero-arg path resolves the store
+	// the caller WORKS IN (owner's own, else their active membership).
+	if (retailerId)
+		return requireRetailerAccess(ctx, retailerId, {
+			area: "orders",
+			level: "write",
+		});
+	const my = await resolveMyRetailer(ctx);
+	if (!my) {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new ConvexError("Not authenticated");
+		throw new ConvexError("No store found for this account");
+	}
+	return requireRetailerAccess(ctx, my.retailer._id, {
+		area: "orders",
+		level: "write",
+	});
 }
 
 /**
- * Access to an existing session by id: the caller must own the session's retailer
- * OR be a Kedaipal admin acting-as. Returns the session + access. Returns null
- * when the session is gone (callers decide throw-vs-null per their contract).
+ * Access to an existing session by id: the store's owner, a member with the
+ * orders grant, OR a Kedaipal admin acting-as. Returns the session + access.
+ * Returns null when the session is gone (callers decide throw-vs-null per
+ * their contract).
  */
 async function requireSessionAccess(
 	ctx: QueryCtx | MutationCtx,
@@ -153,7 +164,10 @@ async function requireSessionAccess(
 ): Promise<{ session: Doc<"counterCheckoutSessions">; access: RetailerAccess } | null> {
 	const session = await ctx.db.get(sessionId);
 	if (!session) return null;
-	const access = await requireRetailerAccess(ctx, session.retailerId);
+	const access = await requireRetailerAccess(ctx, session.retailerId, {
+		area: "orders",
+		level: "write",
+	});
 	return { session, access };
 }
 
@@ -258,18 +272,16 @@ export const getCheckoutSession = query({
 		if (!identity) throw new ConvexError("Not authenticated");
 		const session = await ctx.db.get(sessionId);
 		if (!session) return null;
-		const retailer = await ctx.db.get(session.retailerId);
-		// Not-found and not-owned both resolve to null (not a throw): the active
+		// Not-found and not-allowed both resolve to null (not a throw): the active
 		// session id is now URL-addressable, so a stale/foreign id must degrade to
 		// the friendly "checkout not found" screen, never an unhandled crash. null
-		// also avoids leaking whether another store's session exists. Owner OR a
-		// Kedaipal admin acting-as may read it.
-		if (
-			!retailer ||
-			(retailer.userId !== identity.subject &&
-				!adminUserIds().includes(identity.subject))
-		)
-			return null;
+		// also avoids leaking whether another store's session exists. Owner, a
+		// member with the orders grant, or a Kedaipal admin acting-as may read it.
+		const access = await tryRetailerAccess(ctx, session.retailerId, {
+			area: "orders",
+			level: "write",
+		});
+		if (!access) return null;
 
 		let displayName: string | undefined;
 		let customer: { orderCount: number; totalSpent: number; lastOrderAt: number } | null =
@@ -989,15 +1001,20 @@ export const createOrderFromSession = mutation({
 			paymentStatus: paidInPerson ? "received" : "unpaid",
 			paymentReceivedAt: paidInPerson ? now : undefined,
 			paymentMethod: paidInPerson ? (args.paymentMethod ?? "cash") : undefined,
+			// Who rang this up (86exr91r4) — owner or team member at the counter;
+			// admin act-as stays in adminAuditLog, never on the order.
+			createdByUserId: access.role === "admin" ? undefined : access.userId,
 			statusChangedAt: now,
 			createdAt: now,
 			updatedAt: now,
 		});
 
+		const actorUserId = access.role === "admin" ? undefined : access.userId;
 		await ctx.db.insert("orderEvents", {
 			orderId,
 			status: "confirmed",
 			note: "counter_checkout",
+			actorUserId,
 			createdAt: now,
 		});
 		if (paidInPerson) {
@@ -1005,6 +1022,7 @@ export const createOrderFromSession = mutation({
 				orderId,
 				status: "confirmed",
 				note: `payment_received: in-person (${args.paymentMethod ?? "cash"})`,
+				actorUserId,
 				createdAt: now,
 			});
 		}

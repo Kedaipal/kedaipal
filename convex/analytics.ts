@@ -184,7 +184,14 @@ export const getInsightsRange = query({
 		ctx,
 		{ retailerId, from, to, bucketing },
 	): Promise<InsightsRangeResult> => {
-		await requireRetailerAccess(ctx, retailerId);
+		// Insights carries the store's aggregates — its own grant (86exr91r4), so
+		// an owner can keep totals/trends to themselves while a helper works
+		// orders. Per-order amounts stay visible under the orders grant; the
+		// permission copy promises exactly that, no more.
+		await requireRetailerAccess(ctx, retailerId, {
+			area: "insights",
+			level: "read",
+		});
 		const access = await getAccess(ctx, retailerId);
 		if (!access.features.insights) return { gated: true };
 
@@ -240,7 +247,14 @@ export type InsightsTodayResult =
 export const getTodayStats = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }): Promise<InsightsTodayResult> => {
-		await requireRetailerAccess(ctx, retailerId);
+		// Insights carries the store's aggregates — its own grant (86exr91r4), so
+		// an owner can keep totals/trends to themselves while a helper works
+		// orders. Per-order amounts stay visible under the orders grant; the
+		// permission copy promises exactly that, no more.
+		await requireRetailerAccess(ctx, retailerId, {
+			area: "insights",
+			level: "read",
+		});
 		const access = await getAccess(ctx, retailerId);
 		if (!access.features.insights) return { gated: true };
 

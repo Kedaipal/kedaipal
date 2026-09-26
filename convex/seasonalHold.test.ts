@@ -58,7 +58,7 @@ function subDoc(partial: Partial<Doc<"subscriptions">>): Doc<"subscriptions"> {
 		billingCycle: "monthly",
 		status: "active",
 		orderCap: 200,
-		userCap: 2,
+		userCap: 3,
 		broadcastQuota: 100,
 		createdAt: 0,
 		updatedAt: 0,
@@ -75,7 +75,7 @@ describe("pure rules", () => {
 		expect(a.active).toBe(true);
 		expect(a.plan).toBe("pro");
 		expect(a.features.crm).toBe(true);
-		expect(a.caps).toEqual({ orderCap: 0, userCap: 2, broadcastQuota: 100 });
+		expect(a.caps).toEqual({ orderCap: 0, userCap: 3, broadcastQuota: 100 });
 		// Not held → the stored cap is what you get.
 		expect(resolveAccess(subDoc({ status: "active" })).caps.orderCap).toBe(200);
 		expect(resolveAccess(subDoc({ status: "active" })).held).toBe(false);

@@ -29,9 +29,11 @@ import {
 	adminUserIds,
 	isAdmin,
 	logAdminAction,
+	resolveMyRetailer,
 	requireAdmin,
 	requireRetailerAccess,
 	storeOwnerIsAdmin,
+	tryRetailerAccess,
 } from "./lib/auth";
 import { COMP_LABEL_MAX, COMP_NOTE_MAX, type CompKind } from "./lib/comp";
 import { rateLimiter } from "./lib/rateLimiter";
@@ -397,11 +399,11 @@ export async function assertOwnStoreActive(ctx: AnyCtx): Promise<void> {
 	if (await isAdmin(ctx)) return;
 	const identity = await ctx.auth.getUserIdentity();
 	if (!identity) return; // the caller's own auth check already refused
-	const retailer = await ctx.db
-		.query("retailers")
-		.withIndex("by_user", (q) => q.eq("userId", identity.subject))
-		.first();
-	if (retailer) await assertSubscriptionActive(ctx, retailer._id);
+	// Membership-aware (86exr91r4 audit fix #2): the lock must bind the store
+	// the caller WORKS IN, or a lapsed store's helper could keep writing what
+	// its owner cannot.
+	const my = await resolveMyRetailer(ctx);
+	if (my) await assertSubscriptionActive(ctx, my.retailer._id);
 }
 
 /**
@@ -430,8 +432,15 @@ export const assertWritable = internalQuery({
 	handler: async (ctx, { retailerId }): Promise<null> => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) return null;
-		const retailer = await ctx.db.get(retailerId);
-		if (!retailer || retailer.userId !== identity.subject) return null;
+		// Owner OR active member trips the lock (86exr91r4 audit fix #2) — a
+		// lapsed store's helper must not keep booking couriers/labels/reminders.
+		// Anonymous, foreign and admin callers still pass straight through to
+		// the action's own auth (the enumeration-oracle posture above), and the
+		// admin bypass inside assertSubscriptionActive is unchanged.
+		const access = await tryRetailerAccess(ctx, retailerId, {
+			anyMember: true,
+		});
+		if (!access || access.role === "admin") return null;
 		await assertSubscriptionActive(ctx, retailerId);
 		return null;
 	},
@@ -452,8 +461,12 @@ export const assertWritableForOrder = internalQuery({
 			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
 			.unique();
 		if (!order) return null;
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer || retailer.userId !== identity.subject) return null;
+		// Same member-aware lock trip as assertWritable above, resolved from the
+		// order's store.
+		const access = await tryRetailerAccess(ctx, order.retailerId, {
+			anyMember: true,
+		});
+		if (!access || access.role === "admin") return null;
 		await assertSubscriptionActive(ctx, order.retailerId);
 		return null;
 	},
@@ -578,7 +591,11 @@ export const setSeasonalHold = mutation({
 		ctx,
 		{ retailerId, hold },
 	): Promise<{ status: SubscriptionStatus; invoiceIssued: boolean }> => {
-		const access = await requireRetailerAccess(ctx, retailerId);
+		// Billing WRITE — owner-only in v1 (86exr91r4): pausing/resuming moves
+		// what the owner is billed, so no member grant reaches it.
+		const access = await requireRetailerAccess(ctx, retailerId, {
+			ownerOnly: true,
+		});
 		// Billing is view-only under admin act-as (Zaki, 17 Sep 2026): pausing
 		// voids and issues invoices on the SELLER's money, and every legitimate
 		// admin billing action already lives in Admin → Billing, audited. The
@@ -900,7 +917,7 @@ export const setComp = mutation({
 		// is by construction an admin acting on someone else's store.
 		await logAdminAction(
 			ctx,
-			{ retailer, actingAsAdmin: true, userId: adminSubject },
+			{ retailer, role: "admin", actingAsAdmin: true, userId: adminSubject },
 			"subscriptions.setComp",
 			retailerId,
 		);
@@ -927,7 +944,7 @@ export const revokeComp = mutation({
 		await endComp(ctx, sub, Date.now());
 		await logAdminAction(
 			ctx,
-			{ retailer, actingAsAdmin: true, userId: adminSubject },
+			{ retailer, role: "admin", actingAsAdmin: true, userId: adminSubject },
 			"subscriptions.revokeComp",
 			retailerId,
 		);
@@ -946,6 +963,10 @@ export const current = query({
 	handler: async (
 		ctx,
 	): Promise<(AccessState & { createdAt?: number }) | null> => {
+		// OWNER-ONLY BY CONSTRUCTION (by_user) — deliberate (86exr91r4): the
+		// dashboard chrome reads access state from the getMyRetailer embed, and
+		// members with billing:read use the billing queries; nothing member-
+		// facing reads this. Do not "fix" to resolveMyRetailer without a caller.
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) return null;
 		const retailer = await ctx.db

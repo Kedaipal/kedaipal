@@ -2,6 +2,7 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { countryValidator } from "./lib/country";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
+import { memberPermissionsValidator } from "./lib/permissions";
 
 /**
  * One buyer-visible order stage, pinned to a canonical anchor. Shared by the
@@ -866,6 +867,74 @@ export default defineSchema({
 		// assertValidEmail), so an equality lookup is exact. See docs/vendor-identity.md.
 		.index("by_notify_email", ["notifyEmail"]),
 
+	// --- Team members (ClickUp 86exr91r4, docs/team-members.md) ---------------
+	// One row per teammate relationship on a store. The OWNER is `retailers.
+	// userId` and is deliberately NOT a row here — ownership stays 1:1 and this
+	// table can never contradict it. A member's access is the per-area grants
+	// object (see convex/lib/permissions.ts): deny-by-default, owner-managed.
+	// No stored role field — presets in the Team UI are prefills of `permissions`,
+	// so a future "role" is a widen of that UI, not a migration.
+	//
+	// Lifecycle: `invited` (email sent, token live) → `active` (accepted, userId
+	// bound) → `removed`. Removed rows are KEPT, not deleted: the removed user's
+	// next load reads its own row to explain itself ("you no longer have access
+	// to {Store}"), and the order timeline still resolves the actor's name after
+	// removal. `removedReason` says which flow ended it.
+	retailerMembers: defineTable({
+		retailerId: v.id("retailers"),
+		// Invite target, normalized lowercase (assertValidEmail). Compared
+		// case-insensitively against the accepter's Clerk identity email — the
+		// token alone never binds an account (a forwarded link is useless to
+		// anyone but the invited inbox).
+		email: v.string(),
+		// Clerk subject, set on accept. Absent while invited.
+		userId: v.optional(v.string()),
+		// Snapshot of the Clerk identity's name at accept time — the order
+		// timeline's "· by {name}" resolves from here (works even after removal).
+		displayName: v.optional(v.string()),
+		// Per-area grants (convex/lib/permissions.ts). Absent key = no access.
+		// Server-sanitized on every write (sanitizePermissions) — the registry's
+		// MAX_GRANTABLE caps what can be stored, whatever a client sends.
+		permissions: memberPermissionsValidator,
+		status: v.union(
+			v.literal("invited"),
+			v.literal("active"),
+			v.literal("removed"),
+		),
+		// sha256 hex of the URL token (raw token never stored — a DB read must
+		// not mint access). Kept after accept so a re-clicked link can say "this
+		// invite was already used" instead of pretending it never existed.
+		inviteTokenHash: v.optional(v.string()),
+		// Invite expiry (7 days). Only meaningful while status === "invited".
+		expiresAt: v.optional(v.number()),
+		// Resend cooldown anchor (60s) — also what "Invited · sent 5m ago" reads.
+		lastInviteSentAt: v.optional(v.number()),
+		invitedBy: v.string(), // Clerk subject of the owner who invited
+		invitedAt: v.number(),
+		acceptedAt: v.optional(v.number()),
+		removedAt: v.optional(v.number()),
+		// Who ended it: the owner's subject, or the member's own on leave.
+		removedBy: v.optional(v.string()),
+		removedReason: v.optional(
+			v.union(
+				v.literal("removed_by_owner"),
+				// The member's own act, via team.leave — the ONLY way a membership
+				// ends from the member's side, including when what they actually
+				// want is a store of their own (one store per login).
+				v.literal("left"),
+				// Dropped by enforceSeatCap after a plan change below the cap.
+				v.literal("plan_change"),
+				// The store (owner account) was deleted.
+				v.literal("store_deleted"),
+			),
+		),
+	})
+		.index("by_retailer", ["retailerId"])
+		.index("by_retailer_status", ["retailerId", "status"])
+		.index("by_user", ["userId"])
+		.index("by_email", ["email"])
+		.index("by_token", ["inviteTokenHash"]),
+
 	slugHistory: defineTable({
 		oldSlug: v.string(),
 		retailerId: v.id("retailers"),
@@ -1304,6 +1373,11 @@ export default defineSchema({
 		// for orders that arrive without a phone (link-in-bio checkout); stamped
 		// once the (retailerId, waPhone) pair is known.
 		customerId: v.optional(v.id("customers")),
+		// Clerk subject of the SELLER-SIDE person who created this order (counter
+		// checkout / claim links, 86exr91r4) — with team members, "who rang this
+		// up" is real information. Unset for buyer-originated orders, everything
+		// pre-feature (no backfill), and admin act-as (adminAuditLog traces those).
+		createdByUserId: v.optional(v.string()),
 		items: v.array(
 			v.object({
 				productId: v.id("products"),
@@ -2130,6 +2204,12 @@ export default defineSchema({
 		stageId: v.optional(v.string()),
 		stageLabel: v.optional(v.string()),
 		note: v.optional(v.string()),
+		// Clerk subject of the SELLER-SIDE person who caused this event (owner or
+		// team member, 86exr91r4) — the timeline's "· by {name}". Unset for buyer-
+		// and system-originated events, for everything pre-feature (no backfill),
+		// and for admin act-as writes (an admin is not a teammate; adminAuditLog
+		// already traces those).
+		actorUserId: v.optional(v.string()),
 		createdAt: v.number(),
 	}).index("by_order", ["orderId"]),
 

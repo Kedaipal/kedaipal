@@ -27,7 +27,7 @@ function sub(partial: Partial<Doc<"subscriptions">>): Doc<"subscriptions"> {
 		billingCycle: "monthly",
 		status: "active",
 		orderCap: 500,
-		userCap: 2,
+		userCap: 3,
 		broadcastQuota: 100,
 		createdAt: 0,
 		updatedAt: 0,
@@ -155,7 +155,7 @@ describe("subscriptions — signup wiring", () => {
 		expect(access?.status).toBe("trialing");
 		expect(access?.plan).toBe("pro");
 		expect(access?.frozen).toBe(false);
-		expect(access?.caps).toEqual({ orderCap: 200, userCap: 2, broadcastQuota: 100 });
+		expect(access?.caps).toEqual({ orderCap: 200, userCap: 3, broadcastQuota: 100 });
 		// ~14 days out.
 		const days = ((access?.trialEndsAt ?? 0) - before) / (24 * 60 * 60 * 1000);
 		expect(days).toBeGreaterThan(13.9);

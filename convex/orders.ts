@@ -35,12 +35,13 @@ import {
 	recordOrderCreated,
 } from "./subscriptionUsage";
 import {
-	adminUserIds,
 	isAdmin,
 	logAdminAction,
 	logDestructiveAdminAction,
+	type AccessRequirement,
 	type RetailerAccess,
 	requireRetailerAccess,
+	tryRetailerAccess,
 } from "./lib/auth";
 import {
 	assertValidFulfilmentDate,
@@ -545,15 +546,15 @@ export async function resolveSharedOrder(
 			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
 			.first();
 		if (!order) return null;
-		const retailer = await ctx.db.get(order.retailerId);
-		// Owner OR a Kedaipal admin operating this store (act-as). Same rule the
-		// dashboard queries/mutations use — see convex/lib/auth.ts.
-		if (
-			!retailer ||
-			(retailer.userId !== identity.subject &&
-				!adminUserIds().includes(identity.subject))
-		)
-			throw new ConvexError("Forbidden");
+		// Owner, a member with the orders grant, or a Kedaipal admin (act-as).
+		// Same gate the dashboard queries/mutations use — convex/lib/auth.ts.
+		// Read level: this is the shared RESOLVE step; mutations that go on to
+		// change the order enforce their own write level on top.
+		const access = await tryRetailerAccess(ctx, order.retailerId, {
+			area: "orders",
+			level: "read",
+		});
+		if (!access) throw new ConvexError("Forbidden");
 		return order;
 	}
 	throw new ConvexError("Provide a tracking token or order ref");
@@ -1690,7 +1691,10 @@ export const countActionable = query({
 		confirmed: number;
 		mockupPending: number;
 	}> => {
-		await requireRetailerAccess(ctx, retailerId);
+		await requireRetailerAccess(ctx, retailerId, {
+			area: "orders",
+			level: "read",
+		});
 
 		const [pendingRows, confirmedRows, mockupRows] = await Promise.all([
 			ctx.db
@@ -2236,8 +2240,11 @@ export const getPaymentProofUrl = query({
 	handler: async (ctx, { orderId }): Promise<string | null> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) return null;
-		// Owner OR Kedaipal admin acting-as; throws Forbidden for anyone else.
-		await requireRetailerAccess(ctx, order.retailerId);
+		// Owner, member with orders access, or admin act-as; Forbidden otherwise.
+		await requireRetailerAccess(ctx, order.retailerId, {
+			area: "orders",
+			level: "read",
+		});
 
 		if (!order.paymentProofStorageId) return null;
 		return (await ctx.storage.getUrl(order.paymentProofStorageId)) ?? null;
@@ -2258,7 +2265,10 @@ export const listByRetailer = query({
 		ctx,
 		{ retailerId, status, mockupPending, paginationOpts },
 	) => {
-		await requireRetailerAccess(ctx, retailerId);
+		await requireRetailerAccess(ctx, retailerId, {
+			area: "orders",
+			level: "read",
+		});
 
 		if (mockupPending) {
 			// "changes_requested" and "pending" are adjacent on the index (nothing
@@ -2526,7 +2536,10 @@ export const searchOrders = query({
 			limit,
 		},
 	) => {
-		const access = await requireRetailerAccess(ctx, retailerId);
+		const access = await requireRetailerAccess(ctx, retailerId, {
+			area: "orders",
+			level: "read",
+		});
 
 		// Order Inbox plan gate (Pro+). The PLAIN list — default bucket, no
 		// filters, no search — stays available to every tier (that's the all-tier
@@ -2945,26 +2958,33 @@ async function assertExportAccess(
 	ctx: QueryCtx,
 	retailerId: Id<"retailers">,
 ): Promise<void> {
-	// Owner OR Kedaipal admin acting-as (see convex/lib/auth.ts).
-	const access = await requireRetailerAccess(ctx, retailerId);
+	// Data egress is its own grant (86exr91r4): a member can work the inbox all
+	// day and still not walk out with the order book. Owner/admin always pass.
+	const access = await requireRetailerAccess(ctx, retailerId, {
+		area: "exports",
+		level: "read",
+	});
 	// CSV export is part of the Order Inbox surface (Pro+); admin act-as bypasses.
 	if (!access.actingAsAdmin)
 		await assertPlanFeature(ctx, retailerId, "orderInbox");
 }
 
 /**
- * Seller-side access to a single order: the caller must own the order's retailer
- * OR be a Kedaipal admin operating that store (act-as). Returns the order + the
- * access descriptor so mutations can attribute admin-on-behalf writes. Throws
- * "Order not found" / "Forbidden" to match the pre-existing inline checks.
+ * Seller-side access to a single order: the store's owner, a member whose
+ * grants satisfy `requirement`, or a Kedaipal admin operating that store
+ * (act-as). Returns the order + the access descriptor so mutations can
+ * attribute writes (admin-on-behalf via the audit log, members via
+ * `orderEvents.actorUserId`). Throws "Order not found" / "Forbidden" to match
+ * the pre-existing inline checks.
  */
 export async function requireOrderAccess(
 	ctx: QueryCtx | MutationCtx,
 	orderId: Id<"orders">,
+	requirement: AccessRequirement,
 ): Promise<{ order: Doc<"orders">; access: RetailerAccess }> {
 	const order = await ctx.db.get(orderId);
 	if (!order) throw new Error("Order not found");
-	const access = await requireRetailerAccess(ctx, order.retailerId);
+	const access = await requireRetailerAccess(ctx, order.retailerId, requirement);
 	return { order, access };
 }
 
@@ -3280,6 +3300,12 @@ export async function applyStatusTransition(
 		carrierTrackingUrl?: string;
 		courierName?: string;
 		trackingNo?: string;
+		/** Clerk subject of the SELLER-SIDE person moving the order (86exr91r4)
+		 * — owner or team member, never an admin (act-as is traced in
+		 * adminAuditLog instead) and never set by system callers (webhooks,
+		 * expiry sweeps). Stamps cannot be backfilled, so they ship with the
+		 * backend even though the timeline renders them later. */
+		actorUserId?: string;
 	} = {},
 ): Promise<void> {
 	const now = Date.now();
@@ -3359,6 +3385,7 @@ export async function applyStatusTransition(
 		orderId: order._id,
 		status,
 		note: opts.note,
+		actorUserId: opts.actorUserId,
 		createdAt: now,
 	});
 
@@ -3396,7 +3423,12 @@ export async function applyStatusTransition(
 export const markSeen = mutation({
 	args: { orderId: v.id("orders") },
 	handler: async (ctx, { orderId }): Promise<void> => {
-		const { order } = await requireOrderAccess(ctx, orderId);
+		// Seen-stamps are part of VIEWING the inbox, so read-level is right —
+		// the write is a side effect of looking, not an order operation.
+		const { order } = await requireOrderAccess(ctx, orderId, {
+			area: "orders",
+			level: "read",
+		});
 		if (order.seenAt !== undefined) return;
 		// No updatedAt bump: "the seller looked at it" isn't an order change, and
 		// touching updatedAt would corrupt the time-in-status badge.
@@ -3423,7 +3455,12 @@ export const markSeen = mutation({
 export const setPinned = mutation({
 	args: { orderId: v.id("orders"), pinned: v.boolean() },
 	handler: async (ctx, { orderId, pinned }): Promise<void> => {
-		const { order, access } = await requireOrderAccess(ctx, orderId);
+		// Pins are STORE-level (everyone sees them), so rearranging the shared
+		// inbox is a write even though it changes no order data.
+		const { order, access } = await requireOrderAccess(ctx, orderId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, order.retailerId);
 		const isPinned = order.pinnedAt !== undefined;
 		if (isPinned === pinned) return;
@@ -3507,7 +3544,10 @@ export const updateStatus = mutation({
 			overrideRiderGate,
 		},
 	): Promise<void> => {
-		const { order, access } = await requireOrderAccess(ctx, orderId);
+		const { order, access } = await requireOrderAccess(ctx, orderId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, order.retailerId);
 
 		// Cancelled is TERMINAL — the same rule advanceToStage already enforces
@@ -3581,6 +3621,7 @@ export const updateStatus = mutation({
 			carrierTrackingUrl,
 			courierName,
 			trackingNo,
+			actorUserId: access.role === "admin" ? undefined : access.userId,
 		});
 		await logAdminAction(ctx, access, "orders.updateStatus", orderId);
 	},
@@ -3655,7 +3696,10 @@ export const bulkUpdateStatus = mutation({
 			// Owner OR admin acting-as is enforced for every order — a foreign id
 			// fails the batch (requireRetailerAccess throws Forbidden).
 			const firstResolve = batchAccess === undefined;
-			batchAccess = await requireRetailerAccess(ctx, order.retailerId);
+			batchAccess = await requireRetailerAccess(ctx, order.retailerId, {
+				area: "orders",
+				level: "write",
+			});
 			// Bulk actions are an Order Inbox surface (Pro+) — gate once on the
 			// first order (the selection is single-retailer); admin act-as bypasses.
 			if (firstResolve && !batchAccess.actingAsAdmin)
@@ -3752,7 +3796,10 @@ export const bulkUpdateStatus = mutation({
 					await ctx.db.patch(order._id, { cancellationNote: resolved });
 				}
 			}
-			await applyStatusTransition(ctx, order, status);
+			await applyStatusTransition(ctx, order, status, {
+				actorUserId:
+					batchAccess.role === "admin" ? undefined : batchAccess.userId,
+			});
 			updated++;
 		}
 		if (batchAccess)
@@ -3862,7 +3909,11 @@ async function deleteOrderCascade(
 export const deleteOrder = mutation({
 	args: { orderId: v.id("orders") },
 	handler: async (ctx, { orderId }): Promise<void> => {
-		const { order, access } = await requireOrderAccess(ctx, orderId);
+		// Hard delete is admin-only (86eyaqzpd) — ownerOnly spells out that no
+		// member grant can ever reach it; the isAdmin check below is the gate.
+		const { order, access } = await requireOrderAccess(ctx, orderId, {
+			ownerOnly: true,
+		});
 		if (!(await isAdmin(ctx))) throw new Error("Forbidden");
 		await deleteOrderCascade(ctx, order);
 		await logDestructiveAdminAction(ctx, access, "orders.hardDelete", orderId);
@@ -3899,7 +3950,11 @@ export const bulkDeleteOrders = mutation({
 		for (const orderId of orderIds) {
 			const order = await ctx.db.get(orderId);
 			if (!order) throw new ConvexError("Order not found");
-			const access = await requireRetailerAccess(ctx, order.retailerId);
+			// isAdmin already passed above — ownerOnly here just spells out that a
+			// member can never reach a hard delete, whatever their grants.
+			const access = await requireRetailerAccess(ctx, order.retailerId, {
+				ownerOnly: true,
+			});
 			await deleteOrderCascade(ctx, order);
 			await logDestructiveAdminAction(
 				ctx,
@@ -3965,7 +4020,10 @@ export const advanceToStage = mutation({
 			overrideRiderGate,
 		},
 	): Promise<void> => {
-		const { order, access } = await requireOrderAccess(ctx, orderId);
+		const { order, access } = await requireOrderAccess(ctx, orderId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, order.retailerId);
 		const retailer = access.retailer;
 
@@ -4097,6 +4155,7 @@ export const advanceToStage = mutation({
 			stageId: stage.id,
 			stageLabel: stageLabel(stage, "en"),
 			note,
+			actorUserId: access.role === "admin" ? undefined : access.userId,
 			createdAt: now,
 		});
 
@@ -4126,7 +4185,10 @@ export const setShipmentTracking = mutation({
 		ctx,
 		{ orderId, courierName, trackingNo, carrierTrackingUrl },
 	): Promise<void> => {
-		const { order, access } = await requireOrderAccess(ctx, orderId);
+		const { order, access } = await requireOrderAccess(ctx, orderId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, order.retailerId);
 
 		// All-blank input resolves to all-undefined = tracking cleared.
@@ -4374,7 +4436,10 @@ export const setDeliveryFee = mutation({
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
-		const access = await requireRetailerAccess(ctx, order.retailerId);
+		const access = await requireRetailerAccess(ctx, order.retailerId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, order.retailerId);
 		if ((order.deliveryMethod ?? "delivery") !== "delivery")
 			throw new ConvexError("Only delivery orders carry a delivery charge");
@@ -4432,6 +4497,7 @@ export const setDeliveryFee = mutation({
 			orderId,
 			status: order.status,
 			note: `delivery_fee_set (fee ${fee})`,
+			actorUserId: access.role === "admin" ? undefined : access.userId,
 			createdAt: now,
 		});
 		// No WhatsApp here (86eyd63r8). The buyer's one message went out at
@@ -4491,7 +4557,10 @@ export const rescheduleFulfilment = mutation({
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
-		const access = await requireRetailerAccess(ctx, order.retailerId);
+		const access = await requireRetailerAccess(ctx, order.retailerId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, order.retailerId);
 		if (order.status === "cancelled")
 			throw new ConvexError("This order was cancelled");
@@ -4601,6 +4670,7 @@ export const rescheduleFulfilment = mutation({
 			orderId,
 			status: order.status,
 			note: `fulfilment_rescheduled (from ${stamp(order.fulfilmentDate, order.fulfilmentTimeMinutes)} to ${stamp(sanitizedDate, nextTime)})`,
+			actorUserId: access.role === "admin" ? undefined : access.userId,
 			createdAt: now,
 		});
 		await logAdminAction(ctx, access, "orders.rescheduleFulfilment", orderId);
@@ -4810,9 +4880,12 @@ async function applyPaymentReceived(
 		noteDetail?: string;
 		/** Extra fields written in the same patch (gateway ids). */
 		extraPatch?: Partial<Doc<"orders">>;
+		/** Seller-side actor (owner/member) on the manual path; unset for the
+		 * gateway webhook — HitPay confirmed that one, not a person. */
+		actorUserId?: string;
 	},
 ): Promise<void> {
-	const { now, paymentMethod, noteDetail, extraPatch } = opts;
+	const { now, paymentMethod, noteDetail, extraPatch, actorUserId } = opts;
 	const shouldAutoConfirm = order.status === "pending";
 
 	const patch: Partial<Doc<"orders">> = {
@@ -4845,6 +4918,7 @@ async function applyPaymentReceived(
 			orderId: order._id,
 			status: "confirmed",
 			note: "payment_received_auto_confirm",
+			actorUserId,
 			createdAt: now,
 		});
 		// First order reaching confirmed activates the store (one-time stamp).
@@ -4856,6 +4930,7 @@ async function applyPaymentReceived(
 			note: noteDetail && noteDetail.length > 0
 				? `payment_received: ${noteDetail}`
 				: "payment_received",
+			actorUserId,
 			createdAt: now,
 		});
 	}
@@ -4876,7 +4951,10 @@ export const markPaymentReceived = mutation({
 		paymentMethod: v.optional(orderPaymentMethodValidator),
 	},
 	handler: async (ctx, { orderId, note, paymentMethod }): Promise<void> => {
-		const { order, access } = await requireOrderAccess(ctx, orderId);
+		const { order, access } = await requireOrderAccess(ctx, orderId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, order.retailerId);
 
 		if (order.paymentStatus === "received") {
@@ -4904,6 +4982,7 @@ export const markPaymentReceived = mutation({
 			now: Date.now(),
 			paymentMethod,
 			noteDetail: note?.trim(),
+			actorUserId: access.role === "admin" ? undefined : access.userId,
 		});
 		await logAdminAction(ctx, access, "orders.confirmPayment", orderId);
 	},
@@ -5092,7 +5171,10 @@ export const clearGatewayPaymentIssue = mutation({
 	handler: async (ctx, { orderId }): Promise<void> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
-		const access = await requireRetailerAccess(ctx, order.retailerId);
+		const access = await requireRetailerAccess(ctx, order.retailerId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, order.retailerId);
 		const issue = order.gatewayPaymentIssue;
 		if (!issue) return; // already resolved (e.g. a payment landed) — no-op
@@ -5110,6 +5192,7 @@ export const clearGatewayPaymentIssue = mutation({
 			orderId,
 			status: order.status,
 			note: `gateway_issue_resolved_by_seller: ${issue.kind}, paid ${(issue.paidAmountSen / 100).toFixed(2)} ${issue.paidCurrency} (hitpay ${issue.paymentId})`,
+			actorUserId: access.role === "admin" ? undefined : access.userId,
 			createdAt: now,
 		});
 		await logAdminAction(ctx, access, "orders.clearGatewayPaymentIssue", orderId);
@@ -5248,7 +5331,10 @@ export const generateMockupUploadUrl = mutation({
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
-		await requireRetailerAccess(ctx, order.retailerId);
+		await requireRetailerAccess(ctx, order.retailerId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
@@ -5269,7 +5355,10 @@ export const discardMockupUploads = mutation({
 		const order = await ctx.db.get(orderId);
 		if (!order) return; // order gone → nothing to protect; let the blobs GC
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
-		await requireRetailerAccess(ctx, order.retailerId);
+		await requireRetailerAccess(ctx, order.retailerId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, order.retailerId);
 		const referenced = new Set(resolveMockupImageIds(order));
 		for (const id of storageIds) {
@@ -5306,7 +5395,10 @@ export const submitMockup = mutation({
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
-		const access = await requireRetailerAccess(ctx, order.retailerId);
+		const access = await requireRetailerAccess(ctx, order.retailerId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
@@ -5362,6 +5454,7 @@ export const submitMockup = mutation({
 				effectiveQuote && effectiveQuote > 0
 					? `mockup_submitted (quote ${effectiveQuote})`
 					: "mockup_submitted",
+			actorUserId: access.role === "admin" ? undefined : access.userId,
 			createdAt: now,
 		});
 		// No WhatsApp here (86eyd63r8). The buyer already has this order's one
@@ -5391,7 +5484,10 @@ export const updateMockupQuote = mutation({
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
-		const access = await requireRetailerAccess(ctx, order.retailerId);
+		const access = await requireRetailerAccess(ctx, order.retailerId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
@@ -5431,6 +5527,7 @@ export const updateMockupQuote = mutation({
 				effectiveQuote && effectiveQuote > 0
 					? `mockup_quote_updated (quote ${effectiveQuote})`
 					: "mockup_quote_updated",
+			actorUserId: access.role === "admin" ? undefined : access.userId,
 			createdAt: now,
 		});
 		await logAdminAction(ctx, access, "orders.updateMockupQuote", orderId);
@@ -5514,7 +5611,10 @@ export const waiveMockup = mutation({
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
-		const access = await requireRetailerAccess(ctx, order.retailerId);
+		const access = await requireRetailerAccess(ctx, order.retailerId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
@@ -5533,6 +5633,7 @@ export const waiveMockup = mutation({
 			orderId,
 			status: order.status,
 			note: "mockup_waived",
+			actorUserId: access.role === "admin" ? undefined : access.userId,
 			createdAt: now,
 		});
 		await logAdminAction(ctx, access, "orders.waiveMockup", orderId);

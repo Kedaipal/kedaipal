@@ -299,10 +299,18 @@ import {
 import {
 	adminUserIds,
 	logAdminAction,
+	resolveMyRetailer,
 	type RetailerAccess,
+	type RetailerRole,
 	requireAdmin,
+	refusalMessage,
 	requireRetailerAccess,
 } from "./lib/auth";
+import {
+	hasPermission,
+	type MemberPermissions,
+	type PermissionArea,
+} from "./lib/permissions";
 import { STORE_DESCRIPTION_MAX } from "./lib/storeProfile";
 import {
 	assertValidEmail,
@@ -953,24 +961,38 @@ type RetailerPublic = {
 	// (not the owner). Drives the persistent "Acting as {store}" dashboard banner.
 	// Only ever set by the admin act-as read path. See docs/admin-console.md.
 	actingAsAdmin?: boolean;
+	// WHO the caller is to this store (86exr91r4): "owner" | "member" | "admin".
+	// Drives `useIsStoreOwner` + `usePermission` — a member's chrome renders
+	// owner-only tabs locked-with-reason, never missing. Absent on payloads that
+	// predate team members (client treats absent as "owner", the only role that
+	// existed).
+	role?: RetailerRole;
+	// A MEMBER's per-area grants (deny-by-default; convex/lib/permissions.ts).
+	// Absent for owner/admin — they hold every grant implicitly.
+	permissions?: MemberPermissions;
 };
 
 async function loadRetailerForUser(
 	ctx: QueryCtx,
-	userId: string,
 ): Promise<RetailerPublic | null> {
-	const row = await ctx.db
-		.query("retailers")
-		.withIndex("by_user", (q) => q.eq("userId", userId))
-		.first();
-	if (!row) return null;
+	// Membership-aware (86exr91r4): the store the caller WORKS IN — their own
+	// when they own one, else their active membership's. A member gets the same
+	// payload as the owner plus `role`/`permissions`, so the whole /app shell
+	// works unchanged and per-surface gates read the grants.
+	const access = await resolveMyRetailer(ctx);
+	if (!access) return null;
 	// A Kedaipal admin viewing their OWN store gets the highest tier unlocked in
-	// the payload (features/active), so no Pro wall or soft-lock renders. `userId`
-	// is the caller's identity AND the owner (by_user lookup), so this is strictly
-	// admin-on-own-store. The act-as read (`getRetailerForAdmin`) does NOT pass
-	// this — white-glove must see the seller's real tier. See docs/admin-console.md.
-	const adminFullAccess = adminUserIds().includes(userId);
-	return buildRetailerPublic(ctx, row, { adminFullAccess });
+	// the payload (features/active), so no Pro wall or soft-lock renders. This is
+	// strictly admin-on-own-store (role "owner"). The act-as read
+	// (`getRetailerForAdmin`) does NOT pass this — white-glove must see the
+	// seller's real tier. See docs/admin-console.md.
+	const adminFullAccess =
+		access.role === "owner" && adminUserIds().includes(access.userId);
+	return buildRetailerPublic(ctx, access.retailer, {
+		adminFullAccess,
+		role: access.role,
+		permissions: access.membership?.permissions,
+	});
 }
 
 /** Map a retailer row to the OWNER/admin dashboard payload (payment methods with
@@ -979,7 +1001,11 @@ async function loadRetailerForUser(
 async function buildRetailerPublic(
 	ctx: QueryCtx,
 	row: Doc<"retailers">,
-	opts?: { adminFullAccess?: boolean },
+	opts?: {
+		adminFullAccess?: boolean;
+		role?: RetailerRole;
+		permissions?: MemberPermissions;
+	},
 ): Promise<RetailerPublic> {
 	const resolvedMethods = resolvePaymentMethods(row);
 	const paymentMethods: Array<PaymentMethod & { qrImageUrl?: string }> = [];
@@ -1082,6 +1108,8 @@ async function buildRetailerPublic(
 		orderingPaused: row.orderingPausedAt !== undefined,
 		sendingPaused: !!sendingLimits?.pausedAt,
 		sendingPauseReason: sendingLimits?.pauseReason,
+		role: opts?.role,
+		permissions: opts?.permissions,
 	};
 }
 
@@ -1113,7 +1141,7 @@ export const getMyRetailer = query({
 	handler: async (ctx): Promise<RetailerPublic | null> => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) return null;
-		return loadRetailerForUser(ctx, identity.subject);
+		return loadRetailerForUser(ctx);
 	},
 });
 
@@ -1130,14 +1158,11 @@ export const getMyPlan = query({
 	handler: async (
 		ctx,
 	): Promise<Pick<AccessState, "plan" | "status" | "comped"> | null> => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) return null;
-		const retailer = await ctx.db
-			.query("retailers")
-			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
-			.first();
-		if (!retailer) return null;
-		const access = resolveAccess(await loadSubscription(ctx, retailer._id));
+		// Membership-aware (86exr91r4): the /pricing plan chip answers for the
+		// store the caller WORKS IN, member or owner alike.
+		const my = await resolveMyRetailer(ctx);
+		if (!my) return null;
+		const access = resolveAccess(await loadSubscription(ctx, my.retailer._id));
 		return { plan: access.plan, status: access.status, comped: access.comped };
 	},
 });
@@ -1157,7 +1182,10 @@ export const getRetailerForAdmin = query({
 		await requireAdmin(ctx);
 		const row = await ctx.db.get(retailerId);
 		if (!row) return null;
-		return { ...(await buildRetailerPublic(ctx, row)), actingAsAdmin: true };
+		return {
+			...(await buildRetailerPublic(ctx, row, { role: "admin" })),
+			actingAsAdmin: true,
+		};
 	},
 });
 
@@ -1477,6 +1505,28 @@ export const createRetailer = mutation({
 			throw new ConvexError("You already have a store. Each account can own one retailer.");
 		}
 
+		// One store per login (86exr91r4). A member MAY become an owner — that was
+		// never in doubt — but LEAVING A TEAM IS ITS OWN ACT, never a side effect
+		// of filling in a different form. `team.leave` is the one exit: it emails
+		// the owner that a seat just freed, and only then does this login become
+		// storeless and reach the wizard. Creating a store used to be able to end
+		// a membership on its own (an extra `confirmLeaveTeam` flag), which put
+		// two ways out of a team in the codebase and left the second one
+		// unreachable anyway — an active member never gets here, because
+		// `getMyRetailer` resolves their team store and /onboarding redirects
+		// them. This refusal is what a stale client or a direct API call meets.
+		const memberships = await ctx.db
+			.query("retailerMembers")
+			.withIndex("by_user", (q) => q.eq("userId", userId))
+			.collect();
+		const activeMembership = memberships.find((m) => m.status === "active");
+		if (activeMembership) {
+			const teamStore = await ctx.db.get(activeMembership.retailerId);
+			throw new ConvexError(
+				`You're on the team at ${teamStore?.storeName ?? "another store"}, and an account can only be in one store. Leave that team first from Settings → Team, then create your own store.`,
+			);
+		}
+
 		const collision = await ctx.db
 			.query("retailers")
 			.withIndex("by_slug", (q) => q.eq("slug", slug))
@@ -1572,13 +1622,16 @@ export const createRetailer = mutation({
 /**
  * Update retailer profile fields (store name, WhatsApp number).
  * Slug renames go through `renameSlug` which has its own history bookkeeping.
+ *
+ * Named (not inline) so `SETTINGS_FIELD_AREA` below can be typed exhaustively
+ * over its keys — a future settings field that ships without declaring who may
+ * edit it is a COMPILE error, not a permission hole (86exr91r4).
  */
-export const updateSettings = mutation({
-	args: {
-		// Admin act-as: when set, an allow-listed admin edits THIS store's settings
-		// (white-glove onboarding). Omitted → the caller edits their own store. See
-		// docs/admin-console.md.
-		retailerId: v.optional(v.id("retailers")),
+const updateSettingsArgs = {
+	// Admin act-as: when set, an allow-listed admin edits THIS store's settings
+	// (white-glove onboarding). Omitted → the caller edits their own store. See
+	// docs/admin-console.md.
+	retailerId: v.optional(v.id("retailers")),
 		storeName: v.optional(v.string()),
 		// Empty/blank clears the description. Undefined means "no change".
 		storeDescription: v.optional(v.string()),
@@ -1660,7 +1713,91 @@ export const updateSettings = mutation({
 		// Store-wide minimum order value (minor units). 0 clears (no minimum);
 		// undefined = no change. See convex/lib/minOrderRules.ts.
 		minOrderValue: v.optional(v.number()),
-	},
+};
+
+/**
+ * Who may edit each settings field — the ONE map that splits the settings
+ * mutation across permission areas (86exr91r4, docs/team-members.md):
+ *  - "owner": hard owner-only, whatever a member's grants. The WhatsApp tab
+ *    (store numbers + message templates — Arif D2), the store's country and
+ *    currency (a switch reprices the store), and the legal identity.
+ *  - an area: a member needs WRITE on it. Multiple fields in one save require
+ *    every touched area.
+ * Typed over the args keys, so adding a field without deciding who edits it
+ * does not compile. Owner and admin (act-as) always pass.
+ */
+const SETTINGS_FIELD_AREA: Record<
+	Exclude<keyof typeof updateSettingsArgs, "retailerId">,
+	PermissionArea | "owner"
+> = {
+	storeName: "store_settings",
+	storeDescription: "store_settings",
+	storeType: "store_settings",
+	locale: "store_settings",
+	logoStorageId: "store_settings",
+	coverImageStorageId: "store_settings",
+	openingHours: "store_settings",
+	// Buyer-facing order stages + labels live on the Order status tab, but
+	// they're store vocabulary, not money or credentials — store_settings.
+	statusLabels: "store_settings",
+	orderStages: "store_settings",
+	// Per-kind stage vocabulary (z8r3fdh3w1) — store words, like the two above.
+	orderFlows: "store_settings",
+	// WhatsApp tab (owner-only, Arif D2 — the store's numbers live here).
+	waPhone: "owner",
+	notifyEmail: "owner",
+	notifyWaPhone: "owner",
+	orderWaAlerts: "owner",
+	messageTemplates: "owner",
+	// Country/currency reprice the store; legal identity is the owner's entity.
+	currency: "owner",
+	country: "owner",
+	businessIdentity: "owner",
+	// What buyers pay INTO — the classic helper-swaps-the-bank fraud surface,
+	// so it's its own grant that presets leave off.
+	paymentInstructions: "payments_settings",
+	paymentMethods: "payments_settings",
+	offerSelfCollect: "fulfilment",
+	offerDelivery: "fulfilment",
+	deliveryConfig: "fulfilment",
+	businessAddress: "fulfilment",
+	minFulfilmentNoticeDays: "fulfilment",
+	awbConfig: "fulfilment",
+	minOrderValue: "fulfilment",
+	// Third-party accounts (credentials) — integrations.
+	deliveryBooking: "integrations",
+	hitpay: "integrations",
+};
+
+/**
+ * Enforce the field map for a MEMBER save: every field present in this call
+ * must be editable under their grants; "owner" fields never are. Owner and
+ * admin skip (the gate already admitted them for everything).
+ *
+ * Refuses in the gate's own words (`refusalMessage`), not with a bare Error:
+ * the caller here is always a MEMBER, and a member meeting a grant they don't
+ * hold is an ordinary event that must read as copy. A plain throw reaches the
+ * client as "Server Error … Uncaught Error: Forbidden" — the exact crash-style
+ * rendering the 25 Sep Chrome round flagged and `refusalMessage` was written
+ * to end. Naming the area leaks nothing: we already know who they are.
+ */
+function assertSettingsFieldAccess(
+	access: RetailerAccess,
+	args: Record<string, unknown>,
+): void {
+	if (access.role !== "member") return;
+	const grants = access.membership?.permissions ?? {};
+	for (const [key, area] of Object.entries(SETTINGS_FIELD_AREA)) {
+		if (args[key] === undefined) continue;
+		if (area === "owner")
+			throw new ConvexError(refusalMessage({ ownerOnly: true }));
+		if (!hasPermission(grants, area, "write"))
+			throw new ConvexError(refusalMessage({ area, level: "write" }));
+	}
+}
+
+export const updateSettings = mutation({
+	args: updateSettingsArgs,
 	handler: async (
 		ctx,
 		args,
@@ -1669,22 +1806,27 @@ export const updateSettings = mutation({
 		productsCurrencySynced: number;
 	}> => {
 		// Resolve the target store: an explicit `retailerId` is the admin act-as
-		// path (owner-or-admin); otherwise it's the caller's own store.
+		// path; otherwise the store the caller works in. Field-level enforcement
+		// (SETTINGS_FIELD_AREA) decides what a member may actually touch.
 		let retailer: Doc<"retailers">;
 		let access: RetailerAccess;
 		if (args.retailerId) {
-			access = await requireRetailerAccess(ctx, args.retailerId);
+			access = await requireRetailerAccess(ctx, args.retailerId, {
+				anyMember: true,
+			});
 			retailer = access.retailer;
 		} else {
-			const userId = await requireUserId(ctx);
-			const own = await ctx.db
-				.query("retailers")
-				.withIndex("by_user", (q) => q.eq("userId", userId))
-				.first();
-			if (!own) throw new ConvexError("No store to update");
-			retailer = own;
-			access = { retailer: own, actingAsAdmin: false, userId };
+			const my = await resolveMyRetailer(ctx);
+			if (!my) {
+				await requireUserId(ctx); // preserve "Not authenticated" for signed-out
+				throw new ConvexError("No store to update");
+			}
+			access = my;
+			retailer = my.retailer;
 		}
+		// Per-field permission split — a member needs write on every area their
+		// save touches, and owner-only fields refuse them outright.
+		assertSettingsFieldAccess(access, args);
 		// Soft-lock: a past_due seller can't edit store settings (growth-write).
 		// An admin onboarding the store (act-as) bypasses it — white-glove happens
 		// before the seller has paid. See docs/manual-subscription.md.
@@ -2466,6 +2608,10 @@ export const updateSettings = mutation({
 export const recordConsentAcceptance = mutation({
 	args: {},
 	handler: async (ctx): Promise<{ ok: true }> => {
+		// OWNER-ONLY BY CONSTRUCTION (by_user lookup) — deliberate (86exr91r4):
+		// terms/privacy/AUP bind the account holder, so a member must never
+		// accept them for the store. Do not "fix" this to resolveMyRetailer; the
+		// consent banner is hidden for members client-side instead.
 		const userId = await requireUserId(ctx);
 		const retailer = await ctx.db
 			.query("retailers")
@@ -2516,8 +2662,12 @@ export const countrySetup = query({
 		changedAt: number;
 		items: CountrySetupItem[];
 	} | null> => {
+		// Country-switch checklist is OWNER territory (a country change reprices
+		// the store) — members never see it, matching updateSettings' owner-only
+		// country field.
 		const retailer = args.retailerId
-			? (await requireRetailerAccess(ctx, args.retailerId)).retailer
+			? (await requireRetailerAccess(ctx, args.retailerId, { ownerOnly: true }))
+					.retailer
 			: await resolveOwnRetailer(ctx);
 		if (!retailer) return null;
 		if (retailer.countryChangedAt === undefined) return null;
@@ -2582,7 +2732,7 @@ export const ackCountrySetup = mutation({
 		// review). `logAdminAction` no-ops on an owner write, so the own-store
 		// path below needs no equivalent.
 		const access = args.retailerId
-			? await requireRetailerAccess(ctx, args.retailerId)
+			? await requireRetailerAccess(ctx, args.retailerId, { ownerOnly: true })
 			: null;
 		const retailer = access ? access.retailer : await resolveOwnRetailer(ctx);
 		if (!retailer || retailer.countryChangedAt === undefined) {
@@ -2639,13 +2789,10 @@ export const ackCountrySetup = mutation({
 export const markPickupSetupSeen = mutation({
 	args: {},
 	handler: async (ctx): Promise<{ updated: boolean }> => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) return { updated: false };
-		const retailer = await ctx.db
-			.query("retailers")
-			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
-			.first();
-		if (!retailer) return { updated: false };
+		// Any active teammate may stamp this (store-level checklist progress).
+		const my = await resolveMyRetailer(ctx);
+		if (!my) return { updated: false };
+		const retailer = my.retailer;
 		if (retailer.pickupSetupSeen === true) return { updated: false };
 		await ctx.db.patch(retailer._id, {
 			pickupSetupSeen: true,
@@ -2665,12 +2812,13 @@ export const markPickupSetupSeen = mutation({
 export const markGreetingSetupDone = mutation({
 	args: {},
 	handler: async (ctx): Promise<{ ok: true }> => {
-		const userId = await requireUserId(ctx);
-		const retailer = await ctx.db
-			.query("retailers")
-			.withIndex("by_user", (q) => q.eq("userId", userId))
-			.first();
-		if (!retailer) throw new ConvexError("No store to update");
+		// Any active teammate may stamp setup-checklist progress (86exr91r4) —
+		// the flags live on the retailer row, so the checklist tallies for
+		// everyone, and a helper finishing a step finishes it for the store.
+		await requireUserId(ctx);
+		const my = await resolveMyRetailer(ctx);
+		if (!my) throw new ConvexError("No store to update");
+		const retailer = my.retailer;
 
 		await ctx.db.patch(retailer._id, {
 			onboardingGreetingSetup: true,
@@ -2690,13 +2838,10 @@ export const markGreetingSetupDone = mutation({
 export const markLinkShared = mutation({
 	args: {},
 	handler: async (ctx): Promise<{ updated: boolean }> => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) return { updated: false };
-		const retailer = await ctx.db
-			.query("retailers")
-			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
-			.first();
-		if (!retailer) return { updated: false };
+		// Any active teammate may stamp this (store-level checklist progress).
+		const my = await resolveMyRetailer(ctx);
+		if (!my) return { updated: false };
+		const retailer = my.retailer;
 		if (retailer.linkSharedAt !== undefined) return { updated: false };
 		await ctx.db.patch(retailer._id, {
 			linkSharedAt: Date.now(),
@@ -2717,6 +2862,12 @@ export const markLinkShared = mutation({
 export const ensureNotifyEmailFromIdentity = mutation({
 	args: {},
 	handler: async (ctx): Promise<{ updated: boolean }> => {
+		// STRICTLY OWNER-KEYED (by_user), and it must stay that way (86exr91r4):
+		// the app shell fires this on every dashboard load, and it copies the
+		// CALLER's email onto the store. Resolved through membership, a helper's
+		// first sign-in would silently become the store's alert address and the
+		// owner's order emails would go to the helper. A member resolves no row
+		// here and no-ops — correct, not an oversight.
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) return { updated: false };
 		const retailer = await ctx.db
@@ -2763,9 +2914,15 @@ export const renameSlug = mutation({
 		let retailer: Doc<"retailers">;
 		let access: RetailerAccess;
 		if (retailerId) {
-			access = await requireRetailerAccess(ctx, retailerId);
+			// The slug is the store's public identity — hard owner-only
+			// (86exr91r4): no member grant reaches a rename; admin act-as passes.
+			access = await requireRetailerAccess(ctx, retailerId, {
+				ownerOnly: true,
+			});
 			retailer = access.retailer;
 		} else {
+			// Zero-arg path resolves by ownership (`by_user`), so it is owner-only
+			// by construction — a member never lands here.
 			const userId = await requireUserId(ctx);
 			const own = await ctx.db
 				.query("retailers")
@@ -2773,7 +2930,7 @@ export const renameSlug = mutation({
 				.first();
 			if (!own) throw new ConvexError("No store to rename");
 			retailer = own;
-			access = { retailer: own, actingAsAdmin: false, userId };
+			access = { retailer: own, role: "owner", actingAsAdmin: false, userId };
 		}
 		// Soft-lock: a past_due seller can't rename their public URL (growth-write,
 		// same class as updateSettings). Admin act-as bypasses — white-glove

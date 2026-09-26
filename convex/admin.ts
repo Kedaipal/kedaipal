@@ -611,6 +611,7 @@ export const purgeStoreForAdmin = mutation({
 			ctx,
 			{
 				retailer,
+				role: retailer.userId === adminUserId ? "owner" : "admin",
 				actingAsAdmin: retailer.userId !== adminUserId,
 				userId: adminUserId,
 			},
