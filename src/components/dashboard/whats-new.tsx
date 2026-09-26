@@ -18,6 +18,7 @@ import {
 	Settings,
 	Sparkles,
 	Truck,
+	UsersRound,
 	Wallet,
 	X,
 } from "lucide-react";
@@ -213,6 +214,7 @@ const ENTRY_ICONS: Record<ReleaseIconName, LucideIcon> = {
 	table: Rows3,
 	calendar: CalendarRange,
 	"calendar-clock": CalendarClock,
+	users: UsersRound,
 };
 
 /**
