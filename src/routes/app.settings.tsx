@@ -19,6 +19,7 @@ import {
 	ShieldCheck,
 	Store,
 	Trash2,
+	UsersRound,
 	UtensilsCrossed,
 	Wrench,
 } from "lucide-react";
@@ -54,6 +55,7 @@ import {
 	TEMPLATE_KEYS,
 	type TemplateKey,
 } from "../../convex/lib/whatsappCopy";
+import { AreaGate } from "../components/app/area-gate";
 import {
 	PageHeader,
 	PageHeaderSkeleton,
@@ -74,6 +76,7 @@ import {
 	SAVE_BTN_CLASS,
 	SectionHeading,
 } from "../components/settings/settings-primitives";
+import { TeamTab } from "../components/settings/team-tab";
 import { WaOrderAlertsCard } from "../components/settings/wa-order-alerts-card";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
@@ -142,6 +145,7 @@ const LOCALE_LABELS: Record<Locale, string> = {
 
 type SettingsTab =
 	| "store"
+	| "team"
 	| "billing"
 	| "whatsapp"
 	| "payments"
@@ -168,6 +172,14 @@ const SETTINGS_TABS: ReadonlyArray<{
 		label: "Store",
 		description: "Name, logo, URL and currency",
 		icon: <Store className="size-4" />,
+	},
+	// Team sits between the store's identity and its money (Store group): who
+	// operates the store is an account-level fact, not a "how you sell" one.
+	{
+		id: "team",
+		label: "Team",
+		description: "Invite helpers & control what they can access",
+		icon: <UsersRound className="size-4" />,
 	},
 	{
 		id: "billing",
@@ -230,7 +242,7 @@ const SETTINGS_GROUPS: ReadonlyArray<{
 	label: string;
 	tabs: SettingsTab[];
 }> = [
-	{ label: "Store", tabs: ["store", "billing"] },
+	{ label: "Store", tabs: ["store", "team", "billing"] },
 	{
 		label: "Selling",
 		tabs: [
@@ -686,282 +698,304 @@ function SettingsRoute() {
 				}
 			>
 				{activeTab === "store" ? (
-					<div className="flex flex-col gap-6 pt-2">
-						<Card>
-							<StoreNameForm
-								current={retailer.storeName}
-								onSave={(storeName) => updateSettings({ storeName })}
-							/>
-						</Card>
-						<Card
-							id={SPOTLIGHT_ANCHOR.business_details.anchor}
-							highlight={ringFor(SPOTLIGHT_ANCHOR.business_details.anchor)}
-						>
-							<BusinessIdentityForm
-								current={retailer.businessIdentity}
-								country={retailer.country}
-								onSave={(businessIdentity) =>
-									updateSettings({ businessIdentity })
-								}
-							/>
-						</Card>
-						<Card>
-							<NotificationsCard />
-						</Card>
-						{/* Notification surfaces live together: browser (above), WhatsApp,
-						    email (below). The WA card only mounts when the deployment has
-						    an approved seller template configured (86eyhw9zy). */}
-						{retailer.waOrderAlertsAvailable ? (
-							<Card
-								id={SETTINGS_ANCHOR.notify_wa_phone}
-								highlight={ringFor(SETTINGS_ANCHOR.notify_wa_phone)}
-							>
-								<WaOrderAlertsCard
-									enabled={retailer.orderWaAlerts === true}
-									currentPhone={retailer.notifyWaPhone ?? ""}
-									fallbackPhone={retailer.waPhone ?? ""}
-									optedOut={retailer.notifyWaPhoneOptedOut === true}
-									canUse={hasFeature(retailer.subscription, "waOrderAlerts")}
-									country={retailer.country}
-									onSave={(patch) => updateSettings(patch)}
+					<AreaGate area="store_settings">
+						<div className="flex flex-col gap-6 pt-2">
+							<Card>
+								<StoreNameForm
+									current={retailer.storeName}
+									onSave={(storeName) => updateSettings({ storeName })}
 								/>
 							</Card>
-						) : null}
-						<Card>
-							<NotifyEmailForm
-								current={retailer.notifyEmail ?? ""}
-								onSave={(notifyEmail) => updateSettings({ notifyEmail })}
-							/>
-						</Card>
-						<Card>
-							<StoreDescriptionForm
-								current={retailer.storeDescription ?? ""}
-								onSave={(storeDescription) =>
-									updateSettings({ storeDescription })
-								}
-							/>
-						</Card>
-						<Card>
-							<StoreTypeForm
-								current={retailer.storeType}
-								onSave={(storeType) => updateSettings({ storeType })}
-							/>
-						</Card>
-						{slugRenameForm}
-						<Card>
-							<LogoForm
-								currentLogoUrl={retailer.logoUrl}
-								onSave={(logoStorageId) => updateSettings({ logoStorageId })}
-							/>
-						</Card>
-						<Card>
-							<CoverImageForm
-								currentCoverUrl={retailer.coverImageUrl}
-								onSave={(coverImageStorageId) =>
-									updateSettings({ coverImageStorageId })
-								}
-							/>
-						</Card>
-						<Card
-							id={SPOTLIGHT_ANCHOR.store_country.anchor}
-							highlight={ringFor(SPOTLIGHT_ANCHOR.store_country.anchor)}
-						>
-							<CountryForm
-								current={retailer.country}
-								currency={retailer.currency}
-								deliveryConfig={retailer.deliveryConfig}
-								deliveryBooking={retailer.deliveryBooking}
-								waPhone={retailer.waPhone}
-								notifyWaPhone={retailer.notifyWaPhone}
-								onSave={(patch) => updateSettings(patch)}
-							/>
-							{/* Directly under the picker, so "what did that just do?"
+							<Card
+								id={SPOTLIGHT_ANCHOR.business_details.anchor}
+								highlight={ringFor(SPOTLIGHT_ANCHOR.business_details.anchor)}
+							>
+								<BusinessIdentityForm
+									current={retailer.businessIdentity}
+									country={retailer.country}
+									onSave={(businessIdentity) =>
+										updateSettings({ businessIdentity })
+									}
+								/>
+							</Card>
+							<Card>
+								<NotificationsCard />
+							</Card>
+							{/* Notification surfaces live together: browser (above), WhatsApp,
+						    email (below). The WA card only mounts when the deployment has
+						    an approved seller template configured (86eyhw9zy). */}
+							{retailer.waOrderAlertsAvailable ? (
+								<Card
+									id={SETTINGS_ANCHOR.notify_wa_phone}
+									highlight={ringFor(SETTINGS_ANCHOR.notify_wa_phone)}
+								>
+									<WaOrderAlertsCard
+										enabled={retailer.orderWaAlerts === true}
+										currentPhone={retailer.notifyWaPhone ?? ""}
+										fallbackPhone={retailer.waPhone ?? ""}
+										optedOut={retailer.notifyWaPhoneOptedOut === true}
+										canUse={hasFeature(retailer.subscription, "waOrderAlerts")}
+										country={retailer.country}
+										onSave={(patch) => updateSettings(patch)}
+									/>
+								</Card>
+							) : null}
+							<Card>
+								<NotifyEmailForm
+									current={retailer.notifyEmail ?? ""}
+									onSave={(notifyEmail) => updateSettings({ notifyEmail })}
+								/>
+							</Card>
+							<Card>
+								<StoreDescriptionForm
+									current={retailer.storeDescription ?? ""}
+									onSave={(storeDescription) =>
+										updateSettings({ storeDescription })
+									}
+								/>
+							</Card>
+							<Card>
+								<StoreTypeForm
+									current={retailer.storeType}
+									onSave={(storeType) => updateSettings({ storeType })}
+								/>
+							</Card>
+							{slugRenameForm}
+							<Card>
+								<LogoForm
+									currentLogoUrl={retailer.logoUrl}
+									onSave={(logoStorageId) => updateSettings({ logoStorageId })}
+								/>
+							</Card>
+							<Card>
+								<CoverImageForm
+									currentCoverUrl={retailer.coverImageUrl}
+									onSave={(coverImageStorageId) =>
+										updateSettings({ coverImageStorageId })
+									}
+								/>
+							</Card>
+							<Card
+								id={SPOTLIGHT_ANCHOR.store_country.anchor}
+								highlight={ringFor(SPOTLIGHT_ANCHOR.store_country.anchor)}
+							>
+								<CountryForm
+									current={retailer.country}
+									currency={retailer.currency}
+									deliveryConfig={retailer.deliveryConfig}
+									deliveryBooking={retailer.deliveryBooking}
+									waPhone={retailer.waPhone}
+									notifyWaPhone={retailer.notifyWaPhone}
+									onSave={(patch) => updateSettings(patch)}
+								/>
+								{/* Directly under the picker, so "what did that just do?"
 							    is answered where the question was asked. Renders
 							    nothing for a store that has never switched. */}
-							<CountrySetupPanel
-								onGoToFix={(tab, key) =>
-									navigate({ search: { tab, fix: key } })
-								}
-							/>
-						</Card>
-						<Card>
-							<CurrencyForm
-								current={retailer.currency}
-								onSave={(currency) => updateSettings({ currency })}
-							/>
-						</Card>
-					</div>
+								<CountrySetupPanel
+									onGoToFix={(tab, key) =>
+										navigate({ search: { tab, fix: key } })
+									}
+								/>
+							</Card>
+							<Card>
+								<CurrencyForm
+									current={retailer.currency}
+									onSave={(currency) => updateSettings({ currency })}
+								/>
+							</Card>
+						</div>
+					</AreaGate>
+				) : null}
+
+				{activeTab === "team" ? (
+					<TeamTab retailerId={retailer._id} storeName={retailer.storeName} />
 				) : null}
 
 				{activeTab === "billing" ? (
-					<BillingTab
-						retailer={retailer}
-						target={cardTarget}
-						billingReturn={
-							autorenew === "return"
-								? "autorenew"
-								: paid === "return"
-									? "paid"
-									: undefined
-						}
-						onBillingReturnHandled={() =>
-							navigate({ search: { tab: "billing" }, replace: true })
-						}
-					/>
+					<AreaGate area="billing">
+						<BillingTab
+							retailer={retailer}
+							target={cardTarget}
+							billingReturn={
+								autorenew === "return"
+									? "autorenew"
+									: paid === "return"
+										? "paid"
+										: undefined
+							}
+							onBillingReturnHandled={() =>
+								navigate({ search: { tab: "billing" }, replace: true })
+							}
+						/>
+					</AreaGate>
 				) : null}
 
 				{activeTab === "whatsapp" ? (
-					<div className="flex flex-col gap-6 pt-2">
-						<InfoBanner title="How WhatsApp works on Kedaipal">
-							<p>
-								Every order sends the buyer{" "}
-								<span className="font-medium text-foreground">
-									one WhatsApp message
-								</span>{" "}
-								— the confirmation — from{" "}
-								<span className="font-medium text-foreground">
-									Kedaipal's shared WhatsApp Business number
-								</span>{" "}
-								on your behalf, no Meta account needed.
-							</p>
-							<p>
-								That message links to the buyer's own order page, which updates
-								itself. Packing, shipping, payment and cancellation no longer
-								send a WhatsApp — the buyer sees them on that page.
-							</p>
-							<p>
-								Add your personal WhatsApp number below so buyers can reach you
-								directly. It appears as a tappable contact link on their order
-								page.
-							</p>
-						</InfoBanner>
+					<AreaGate area="store_settings" ownerOnly>
+						<div className="flex flex-col gap-6 pt-2">
+							<InfoBanner title="How WhatsApp works on Kedaipal">
+								<p>
+									Every order sends the buyer{" "}
+									<span className="font-medium text-foreground">
+										one WhatsApp message
+									</span>{" "}
+									— the confirmation — from{" "}
+									<span className="font-medium text-foreground">
+										Kedaipal's shared WhatsApp Business number
+									</span>{" "}
+									on your behalf, no Meta account needed.
+								</p>
+								<p>
+									That message links to the buyer's own order page, which
+									updates itself. Packing, shipping, payment and cancellation no
+									longer send a WhatsApp — the buyer sees them on that page.
+								</p>
+								<p>
+									Add your personal WhatsApp number below so buyers can reach
+									you directly. It appears as a tappable contact link on their
+									order page.
+								</p>
+							</InfoBanner>
 
-						<Card
-							id={SETTINGS_ANCHOR.wa_phone}
-							highlight={ringFor(SETTINGS_ANCHOR.wa_phone)}
-						>
-							<WaPhoneForm
-								current={retailer.waPhone ?? ""}
-								country={retailer.country}
-								onSave={(waPhone) => updateSettings({ waPhone })}
-							/>
-						</Card>
-						<Card>
-							<LocaleForm
-								current={retailer.locale}
-								onSave={(locale) => updateSettings({ locale })}
-							/>
-						</Card>
-						<Card
-							id={SETTINGS_ANCHOR.message_copy}
-							highlight={ringFor(SETTINGS_ANCHOR.message_copy)}
-						>
-							<MessageTemplatesForm
-								current={retailer.messageTemplates}
-								onSave={(messageTemplates) =>
-									updateSettings({ messageTemplates })
-								}
-							/>
-						</Card>
-					</div>
+							<Card
+								id={SETTINGS_ANCHOR.wa_phone}
+								highlight={ringFor(SETTINGS_ANCHOR.wa_phone)}
+							>
+								<WaPhoneForm
+									current={retailer.waPhone ?? ""}
+									country={retailer.country}
+									onSave={(waPhone) => updateSettings({ waPhone })}
+								/>
+							</Card>
+							<Card>
+								<LocaleForm
+									current={retailer.locale}
+									onSave={(locale) => updateSettings({ locale })}
+								/>
+							</Card>
+							<Card
+								id={SETTINGS_ANCHOR.message_copy}
+								highlight={ringFor(SETTINGS_ANCHOR.message_copy)}
+							>
+								<MessageTemplatesForm
+									current={retailer.messageTemplates}
+									onSave={(messageTemplates) =>
+										updateSettings({ messageTemplates })
+									}
+								/>
+							</Card>
+						</div>
+					</AreaGate>
 				) : null}
 
 				{activeTab === "payments" ? (
-					<div className="flex flex-col gap-6 pt-2">
-						<Card
-							id={SETTINGS_ANCHOR.payment_methods}
-							highlight={ringFor(SETTINGS_ANCHOR.payment_methods)}
-						>
-							<PaymentMethodsForm
-								current={retailer.paymentMethods ?? []}
-								country={retailer.country}
-								onSave={(paymentMethods) => updateSettings({ paymentMethods })}
-							/>
-						</Card>
-						{/* HitPay moved to Settings → Integrations (2 Sep IA rework) —
+					<AreaGate area="payments_settings">
+						<div className="flex flex-col gap-6 pt-2">
+							<Card
+								id={SETTINGS_ANCHOR.payment_methods}
+								highlight={ringFor(SETTINGS_ANCHOR.payment_methods)}
+							>
+								<PaymentMethodsForm
+									current={retailer.paymentMethods ?? []}
+									country={retailer.country}
+									onSave={(paymentMethods) =>
+										updateSettings({ paymentMethods })
+									}
+								/>
+							</Card>
+							{/* HitPay moved to Settings → Integrations (2 Sep IA rework) —
 						    one home for every third-party account. The pointer keeps the
 						    old home from reading as "online payments are gone". */}
-						<p className="px-1 text-xs text-muted-foreground">
-							Online payments (HitPay) moved to{" "}
-							<button
-								type="button"
-								onClick={() => navigate({ search: { tab: "integrations" } })}
-								className="font-medium text-accent hover:underline"
-							>
-								Settings → Integrations
-							</button>
-							— connect your account there; buyers keep seeing Pay now on their
-							orders as before.
-						</p>
-						{/* Says plainly that nothing chases the buyer automatically, and
+							<p className="px-1 text-xs text-muted-foreground">
+								Online payments (HitPay) moved to{" "}
+								<button
+									type="button"
+									onClick={() => navigate({ search: { tab: "integrations" } })}
+									className="font-medium text-accent hover:underline"
+								>
+									Settings → Integrations
+								</button>
+								— connect your account there; buyers keep seeing Pay now on
+								their orders as before.
+							</p>
+							{/* Says plainly that nothing chases the buyer automatically, and
 						    names the one manual tool that exists — so the behaviour is
 						    discoverable without a seller assuming a nudge went out that
 						    didn't (docs/payment-reminder.md). */}
-						<p className="px-1 text-xs text-muted-foreground">
-							Kedaipal doesn't chase unpaid orders automatically. Each order
-							gets one WhatsApp — the confirmation — and it links the buyer to
-							their order page, where these payment details and the “I've paid”
-							button live. If an order is still unpaid on day 11, a “Send
-							payment reminder” button appears on its order page (once per day,
-							until day 14) — sending it is always your call.
-						</p>
-					</div>
+							<p className="px-1 text-xs text-muted-foreground">
+								Kedaipal doesn't chase unpaid orders automatically. Each order
+								gets one WhatsApp — the confirmation — and it links the buyer to
+								their order page, where these payment details and the “I've
+								paid” button live. If an order is still unpaid on day 11, a
+								“Send payment reminder” button appears on its order page (once
+								per day, until day 14) — sending it is always your call.
+							</p>
+						</div>
+					</AreaGate>
 				) : null}
 
 				{activeTab === "fulfilment" ? (
-					<FulfilmentTab
-						target={cardTarget}
-						currency={retailer.currency}
-						retailerId={retailer._id}
-						country={retailer.country}
-						offerSelfCollect={retailer.offerSelfCollect ?? false}
-						offerDelivery={retailer.offerDelivery ?? true}
-						deliveryConfig={retailer.deliveryConfig}
-						businessAddress={retailer.businessAddress}
-						deliveryBooking={retailer.deliveryBooking}
-						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
-						openingHours={retailer.openingHours}
-						closedDates={retailer.closedDates}
-						hasBookingListings={hasBookingListings}
-						minOrderValue={retailer.minOrderValue}
-						awbConfig={retailer.awbConfig}
-						subscription={retailer.subscription}
-					/>
+					<AreaGate area="fulfilment">
+						<FulfilmentTab
+							target={cardTarget}
+							currency={retailer.currency}
+							retailerId={retailer._id}
+							country={retailer.country}
+							offerSelfCollect={retailer.offerSelfCollect ?? false}
+							offerDelivery={retailer.offerDelivery ?? true}
+							deliveryConfig={retailer.deliveryConfig}
+							businessAddress={retailer.businessAddress}
+							deliveryBooking={retailer.deliveryBooking}
+							minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
+							openingHours={retailer.openingHours}
+							closedDates={retailer.closedDates}
+							hasBookingListings={hasBookingListings}
+							minOrderValue={retailer.minOrderValue}
+							awbConfig={retailer.awbConfig}
+							subscription={retailer.subscription}
+						/>
+					</AreaGate>
 				) : null}
 
 				{activeTab === "integrations" ? (
-					<IntegrationsTab
-						target={cardTarget}
-						retailerId={retailer._id}
-						country={retailer.country}
-						deliveryBooking={retailer.deliveryBooking}
-						hitpay={retailer.hitpay}
-						subscription={retailer.subscription}
-						onSave={updateSettings}
-					/>
+					<AreaGate area="integrations">
+						<IntegrationsTab
+							target={cardTarget}
+							retailerId={retailer._id}
+							country={retailer.country}
+							deliveryBooking={retailer.deliveryBooking}
+							hitpay={retailer.hitpay}
+							subscription={retailer.subscription}
+							onSave={updateSettings}
+						/>
+					</AreaGate>
 				) : null}
 
 				{activeTab === "bookings" ? (
-					<div className="flex flex-col gap-6 pt-2">
-						<BookingsTab retailerId={retailer._id} />
-					</div>
+					<AreaGate area="bookings">
+						<div className="flex flex-col gap-6 pt-2">
+							<BookingsTab retailerId={retailer._id} />
+						</div>
+					</AreaGate>
 				) : null}
 
 				{activeTab === "order-status" ? (
-					<OrderFlowsSection
-						input={{
-							orderFlows: retailer.orderFlows,
-							orderStages: retailer.orderStages,
-							statusLabels: retailer.statusLabels as StatusLabels | undefined,
-							// Undefined reads as TRUE for delivery (legacy stores always had
-							// it) and as FALSE for pickup — same rule as the storefront.
-							offerDelivery: retailer.offerDelivery !== false,
-							offerSelfCollect: retailer.offerSelfCollect === true,
-							hasBookingListings,
-							hasEventListings,
-						}}
-						onSave={(orderFlows) => updateSettings({ orderFlows })}
-					/>
+					<AreaGate area="store_settings">
+						<OrderFlowsSection
+							input={{
+								orderFlows: retailer.orderFlows,
+								orderStages: retailer.orderStages,
+								statusLabels: retailer.statusLabels as StatusLabels | undefined,
+								// Undefined reads as TRUE for delivery (legacy stores always had
+								// it) and as FALSE for pickup — same rule as the storefront.
+								offerDelivery: retailer.offerDelivery !== false,
+								offerSelfCollect: retailer.offerSelfCollect === true,
+								hasBookingListings,
+								hasEventListings,
+							}}
+							onSave={(orderFlows) => updateSettings({ orderFlows })}
+						/>
+					</AreaGate>
 				) : null}
 			</div>
 		</div>

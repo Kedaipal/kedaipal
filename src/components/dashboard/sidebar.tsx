@@ -27,6 +27,7 @@ import { AppImage } from "../ui/app-image";
 import { AppVersionRow } from "./app-version-row";
 import { TierPill } from "./tier-pill";
 import { WhatsNewNavItem } from "./whats-new";
+import { usePermission } from "../../hooks/usePermission";
 
 type Retailer = NonNullable<
 	FunctionReturnType<typeof api.retailers.getMyRetailer>
@@ -51,6 +52,13 @@ export function Sidebar({
 	isAdmin,
 	adminBadge,
 }: SidebarProps) {
+	// Team members (86exr91r4): hide sections this MEMBER can't read — the
+	// nav shows their world; deep links still explain via RouteAreaGuard.
+	const ordersPerm = usePermission("orders");
+	const productsPerm = usePermission("products");
+	const customersPerm = usePermission("customers");
+	const insightsPerm = usePermission("insights");
+
 	const [collapsed, setCollapsed] = useSidebarCollapsed();
 	const { user } = useUser();
 	const userEmail = user?.primaryEmailAddress?.emailAddress ?? null;
@@ -131,12 +139,15 @@ export function Sidebar({
 							label="Home"
 							collapsed={collapsed}
 						/>
+						{productsPerm.canRead ? (
 						<SidebarLink
 							to="/app/products"
 							icon={Package}
 							label="Products"
 							collapsed={collapsed}
 						/>
+						) : null}
+						{ordersPerm.canRead ? (
 						<SidebarLink
 							to="/app/orders"
 							icon={ShoppingBag}
@@ -150,12 +161,16 @@ export function Sidebar({
 								newOrdersCount > 0 ? { bucket: ["new" as const] } : undefined
 							}
 						/>
+						) : null}
+						{ordersPerm.canWrite ? (
 						<SidebarLink
 							to="/app/checkout"
 							icon={QrCode}
 							label="Counter"
 							collapsed={collapsed}
 						/>
+						) : null}
+						{customersPerm.canRead ? (
 						<SidebarLink
 							to="/app/customers"
 							icon={Users}
@@ -168,6 +183,8 @@ export function Sidebar({
 								!hasFeature(retailer.subscription, "crm")
 							}
 						/>
+						) : null}
+						{insightsPerm.canRead ? (
 						<SidebarLink
 							to="/app/insights"
 							icon={LineChart}
@@ -180,6 +197,7 @@ export function Sidebar({
 								!hasFeature(retailer.subscription, "insights")
 							}
 						/>
+						) : null}
 						<SidebarLink
 							to="/app/settings"
 							search={{ tab: "store" }}

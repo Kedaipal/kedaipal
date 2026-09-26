@@ -12,6 +12,15 @@ const mocks = vi.hoisted(() => ({
 	changePlan: vi.fn(async () => ({ kind: "scheduled", effectiveAt: 0 })),
 	cancelPlanChange: vi.fn(async () => null),
 }));
+// OwnerOnlyNote (the reason beside a disabled option) reads WHO is looking —
+// an admin acting-as and a teammate with billing READ are both view-only here
+// but need different sentences (86exr91r4). Stub the hook rather than stand up
+// an ActAsProvider; these tests are about the card's own copy.
+vi.mock("../../hooks/usePermission", () => ({
+	useStoreRole: () => "admin",
+	useIsStoreOwner: () => true,
+	usePermission: () => ({ canRead: true, canWrite: true, role: "admin" }),
+}));
 vi.mock("convex/react", async () => {
 	const { getFunctionName } = await import("convex/server");
 	return {

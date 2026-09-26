@@ -23,6 +23,7 @@ import { Route as AppIndexRouteImport } from './routes/app.index'
 import { Route as TrackTokenRouteImport } from './routes/track.$token'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
+import { Route as JoinTokenRouteImport } from './routes/join.$token'
 import { Route as ClaimTokenRouteImport } from './routes/claim.$token'
 import { Route as AppSettingsRouteImport } from './routes/app.settings'
 import { Route as AppPosterRouteImport } from './routes/app.poster'
@@ -113,6 +114,11 @@ const SignUpSplatRoute = SignUpSplatRouteImport.update({
 const SignInSplatRoute = SignInSplatRouteImport.update({
   id: '/sign-in/$',
   path: '/sign-in/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const JoinTokenRoute = JoinTokenRouteImport.update({
+  id: '/join/$token',
+  path: '/join/$token',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ClaimTokenRoute = ClaimTokenRouteImport.update({
@@ -238,6 +244,7 @@ export interface FileRoutesByFullPath {
   '/app/poster': typeof AppPosterRoute
   '/app/settings': typeof AppSettingsRoute
   '/claim/$token': typeof ClaimTokenRoute
+  '/join/$token': typeof JoinTokenRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/track/$token': typeof TrackTokenRoute
@@ -274,6 +281,7 @@ export interface FileRoutesByTo {
   '/app/poster': typeof AppPosterRoute
   '/app/settings': typeof AppSettingsRoute
   '/claim/$token': typeof ClaimTokenRoute
+  '/join/$token': typeof JoinTokenRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/track/$token': typeof TrackTokenRoute
@@ -312,6 +320,7 @@ export interface FileRoutesById {
   '/app/poster': typeof AppPosterRoute
   '/app/settings': typeof AppSettingsRoute
   '/claim/$token': typeof ClaimTokenRoute
+  '/join/$token': typeof JoinTokenRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/track/$token': typeof TrackTokenRoute
@@ -351,6 +360,7 @@ export interface FileRouteTypes {
     | '/app/poster'
     | '/app/settings'
     | '/claim/$token'
+    | '/join/$token'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/track/$token'
@@ -387,6 +397,7 @@ export interface FileRouteTypes {
     | '/app/poster'
     | '/app/settings'
     | '/claim/$token'
+    | '/join/$token'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/track/$token'
@@ -424,6 +435,7 @@ export interface FileRouteTypes {
     | '/app/poster'
     | '/app/settings'
     | '/claim/$token'
+    | '/join/$token'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/track/$token'
@@ -458,6 +470,7 @@ export interface RootRouteChildren {
   TermsRoute: typeof TermsRoute
   SlugCheckoutRoute: typeof SlugCheckoutRoute
   ClaimTokenRoute: typeof ClaimTokenRoute
+  JoinTokenRoute: typeof JoinTokenRoute
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
   TrackTokenRoute: typeof TrackTokenRoute
@@ -563,6 +576,13 @@ declare module '@tanstack/react-router' {
       path: '/sign-in/$'
       fullPath: '/sign-in/$'
       preLoaderRoute: typeof SignInSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/join/$token': {
+      id: '/join/$token'
+      path: '/join/$token'
+      fullPath: '/join/$token'
+      preLoaderRoute: typeof JoinTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/claim/$token': {
@@ -772,6 +792,7 @@ const rootRouteChildren: RootRouteChildren = {
   TermsRoute: TermsRoute,
   SlugCheckoutRoute: SlugCheckoutRoute,
   ClaimTokenRoute: ClaimTokenRoute,
+  JoinTokenRoute: JoinTokenRoute,
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,
   TrackTokenRoute: TrackTokenRoute,

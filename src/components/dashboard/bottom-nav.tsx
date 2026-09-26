@@ -20,6 +20,7 @@ import { useEffect, useRef, useState } from "react";
 import { cn } from "../../lib/utils";
 import { AppVersionRow } from "./app-version-row";
 import { WhatsNewNavItem } from "./whats-new";
+import { usePermission } from "../../hooks/usePermission";
 
 export interface BottomNavProps {
 	// Orders the seller hasn't looked at yet (the inbox's "New" bucket). A badge
@@ -73,6 +74,12 @@ export function BottomNav({
 	crmLocked,
 	insightsLocked,
 }: BottomNavProps) {
+	// Team members (86exr91r4): a member's tabs are the areas they can read
+	// (Counter needs write — it exists to ring up sales). Deep links into a
+	// hidden section still explain themselves via RouteAreaGuard.
+	const ordersPerm = usePermission("orders");
+	const insightsPerm = usePermission("insights");
+
 	const [moreOpen, setMoreOpen] = useState(false);
 	const { pathname } = useLocation();
 	// The More tab reads active while the sheet is up OR while the seller is on
@@ -114,24 +121,38 @@ export function BottomNav({
 			]
 		: [
 				{ to: "/app", label: "Home", icon: Home, exact: true },
-				{
-					to: "/app/orders",
-					label: "Orders",
-					icon: ShoppingBag,
-					badge: newOrdersCount,
-					// A badge must land on exactly what it counted — an unfiltered
-					// inbox would make the seller re-find it. Only when there IS
-					// something new: otherwise the tab would filter the inbox down to
-					// an empty "New" list every time it's used for plain navigation.
-					search: newOrdersCount > 0 ? { bucket: ["new" as const] } : undefined,
-				},
-				{ to: "/app/checkout", label: "Counter", icon: QrCode },
-				{
-					to: "/app/insights",
-					label: "Insights",
-					icon: LineChart,
-					pro: insightsLocked,
-				},
+				...(ordersPerm.canRead
+					? [
+							{
+								to: "/app/orders",
+								label: "Orders",
+								icon: ShoppingBag,
+								badge: newOrdersCount,
+								// A badge must land on exactly what it counted — an
+								// unfiltered inbox would make the seller re-find it. Only
+								// when there IS something new: otherwise the tab would
+								// filter the inbox down to an empty "New" list every time
+								// it's used for plain navigation.
+								search:
+									newOrdersCount > 0
+										? { bucket: ["new" as const] }
+										: undefined,
+							} as Tab,
+						]
+					: []),
+				...(ordersPerm.canWrite
+					? [{ to: "/app/checkout", label: "Counter", icon: QrCode } as Tab]
+					: []),
+				...(insightsPerm.canRead
+					? [
+							{
+								to: "/app/insights",
+								label: "Insights",
+								icon: LineChart,
+								pro: insightsLocked,
+							} as Tab,
+						]
+					: []),
 			];
 
 	return (
@@ -259,6 +280,9 @@ function MoreTab({
 	active: boolean;
 	crmLocked?: boolean;
 }) {
+	const productsPerm = usePermission("products");
+	const customersPerm = usePermission("customers");
+
 	const close = () => onOpenChange(false);
 	return (
 		<MorePrimitive.Root open={open} onOpenChange={onOpenChange}>
@@ -281,21 +305,25 @@ function MoreTab({
 					style={{ bottom: "calc(var(--app-bottomnav-h, 4.75rem) + 0.5rem)" }}
 				>
 					<MorePrimitive.Title className="sr-only">More</MorePrimitive.Title>
-					<MoreRow
-						to="/app/products"
-						icon={Package}
-						label="Products"
-						sub="Catalog, stock & variants"
-						onNavigate={close}
-					/>
-					<MoreRow
-						to="/app/customers"
-						icon={Users}
-						label="Customers"
-						sub="Buyer history & notes"
-						pro={crmLocked}
-						onNavigate={close}
-					/>
+					{productsPerm.canRead ? (
+						<MoreRow
+							to="/app/products"
+							icon={Package}
+							label="Products"
+							sub="Catalog, stock & variants"
+							onNavigate={close}
+						/>
+					) : null}
+					{customersPerm.canRead ? (
+						<MoreRow
+							to="/app/customers"
+							icon={Users}
+							label="Customers"
+							sub="Buyer history & notes"
+							pro={crmLocked}
+							onNavigate={close}
+						/>
+					) : null}
 					<MoreRow
 						to="/app/poster"
 						icon={Printer}
