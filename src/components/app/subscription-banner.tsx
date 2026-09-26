@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../../lib/contact";
+import { useStoreRole } from "../../hooks/usePermission";
 import { formatPrice } from "../../lib/format";
 import {
 	resolveBannerState,
@@ -44,6 +45,8 @@ export function SubscriptionBanner({
 	ordersThisMonth?: number;
 	slug: string;
 }) {
+	// Who is reading this banner decides what it can ask them to do.
+	const isMember = useStoreRole() === "member";
 	const skipInvoice =
 		!subscription || subscription.comped || subscription.status === "past_due";
 	const pending = useQuery(
@@ -206,12 +209,23 @@ export function SubscriptionBanner({
 		);
 		return (
 			<div className="flex flex-col gap-2 border-b border-red-200 bg-red-50 px-5 py-3 dark:border-red-900 dark:bg-red-950/40 sm:flex-row sm:items-center sm:justify-between lg:px-8">
+				{/* A TEAMMATE cannot pay this bill — billing is the owner's (86exr91r4).
+				    Telling them "view-only until you pay" and handing them a billing
+				    link they can't open is an instruction they can't follow, so they
+				    get the fact and who to ask instead. */}
 				<p className="text-sm text-foreground/90">
-					<span className="font-medium">Your subscription is past due.</span>{" "}
-					Your dashboard is view-only until you pay — your storefront stays live
-					and buyers can still order.
+					<span className="font-medium">
+						{isMember
+							? "This store's subscription is past due."
+							: "Your subscription is past due."}
+					</span>{" "}
+					{isMember
+						? "The dashboard is view-only until the owner renews — the storefront stays live and buyers can still order."
+						: "Your dashboard is view-only until you pay — your storefront stays live and buyers can still order."}
 				</p>
-				<div className="flex shrink-0 items-center gap-2">
+				<div
+					className={`flex shrink-0 items-center gap-2 ${isMember ? "hidden" : ""}`}
+				>
 					<Link
 						to="/app/settings"
 						search={{ tab: "billing" }}

@@ -50,14 +50,22 @@ import { encryptSecret } from "./lib/credentialCrypto";
 import { postcodeRule, SG_STATE_LABEL } from "./lib/address";
 import { isColdItemType } from "./lib/liveQuote";
 import { DEFAULT_COUNTRY, type Country } from "./lib/country";
+import { delyvaBookingArmed } from "./lib/courierBooking";
+import { toDomesticContactPhone } from "./lib/courierContact";
 import {
 	type CartWeightItem,
 	delyvaBookingAllowed,
 	summarizeCartWeight,
 } from "./lib/delivery";
 import { findCourier } from "./lib/couriers";
-import { requireRetailerAccess, logAdminAction } from "./lib/auth";
+import {
+	logAdminAction,
+	requireRetailerAccess,
+	resolveMyRetailer,
+	tryRetailerAccess,
+} from "./lib/auth";
 import type { RetailerAccess } from "./lib/auth";
+import type { PermissionLevel } from "./lib/permissions";
 import { applyStatusTransition, resolveSharedOrder } from "./orders";
 import {
 	assertPlanFeature,
@@ -137,21 +145,30 @@ const pickupAddressValidator = v.object({
 // ---------------------------------------------------------------------------
 
 /** Resolve the target store for a settings-flavoured call: explicit
- * `retailerId` = admin act-as, absent = the caller's own store. Mirrors
- * retailers.updateSettings. */
+ * `retailerId` = admin act-as, absent = the store the caller works in (their
+ * own, else their active membership — 86exr91r4). Mirrors
+ * retailers.updateSettings. Courier accounts are third-party credentials, so
+ * every surface here sits behind the `integrations` grant. */
 async function resolveStoreAccess(
 	ctx: QueryCtx,
 	retailerId: Id<"retailers"> | undefined,
+	level: PermissionLevel,
 ): Promise<RetailerAccess> {
-	if (retailerId) return requireRetailerAccess(ctx, retailerId);
-	const identity = await ctx.auth.getUserIdentity();
-	if (!identity) throw new Error("Not authenticated");
-	const own = await ctx.db
-		.query("retailers")
-		.withIndex("by_user", (q) => q.eq("userId", identity.subject))
-		.first();
-	if (!own) throw new ConvexError("No store found");
-	return { retailer: own, actingAsAdmin: false, userId: identity.subject };
+	if (retailerId)
+		return requireRetailerAccess(ctx, retailerId, {
+			area: "integrations",
+			level,
+		});
+	const my = await resolveMyRetailer(ctx);
+	if (!my) {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Not authenticated");
+		throw new ConvexError("No store found");
+	}
+	return requireRetailerAccess(ctx, my.retailer._id, {
+		area: "integrations",
+		level,
+	});
 }
 
 /** Everything the connect action needs to know before touching the network. */
@@ -169,7 +186,7 @@ export const getConnectContext = internalQuery({
 				country: Country;
 		  }
 	> => {
-		const access = await resolveStoreAccess(ctx, retailerId);
+		const access = await resolveStoreAccess(ctx, retailerId, "write");
 		const country = access.retailer.country ?? DEFAULT_COUNTRY;
 		if (!delyvaBookingAllowed(country)) {
 			return {
@@ -538,7 +555,7 @@ export const getAccountContext = internalQuery({
 		 * refreshEnvironment has something to heal. */
 		environmentUnknown: boolean;
 	} | null> => {
-		const access = await resolveStoreAccess(ctx, retailerId);
+		const access = await resolveStoreAccess(ctx, retailerId, "write");
 		const config = access.retailer.delyva as DelyvaConfig | undefined;
 		const credentials = resolveDelyvaCredentials(config);
 		if (!credentials) return null;
@@ -747,7 +764,7 @@ export const updateSettings = mutation({
 		pickupAddress: v.optional(v.union(pickupAddressValidator, v.null())),
 	},
 	handler: async (ctx, args): Promise<{ ok: true }> => {
-		const access = await resolveStoreAccess(ctx, args.retailerId);
+		const access = await resolveStoreAccess(ctx, args.retailerId, "write");
 		if (!access.actingAsAdmin)
 			await assertSubscriptionActive(ctx, access.retailer._id);
 		const prev = access.retailer.delyva as DelyvaConfig | undefined;
@@ -808,6 +825,11 @@ export const updateSettings = mutation({
 
 /** Secret-free settings summary for the fulfilment card. Owner-or-admin. */
 export type DelyvaSummary = {
+	/** True when the CALLER may not see this store's courier account (a team
+	 * member without the integrations grant, 86exr91r4). Every other field is
+	 * zeroed — the tab renders a locked card instead of crashing, and no
+	 * credential hint leaks. Owner/admin never see this. */
+	locked?: true;
 	connected: boolean;
 	enabled: boolean;
 	apiKeyHint?: string;
@@ -830,10 +852,43 @@ export type DelyvaSummary = {
 	countryAllowed: boolean;
 };
 
+/** The zeroed summary a member without the integrations grant reads — no
+ * credential hints, nothing to render but the locked card. */
+function lockedDelyvaSummary(): DelyvaSummary {
+	return {
+		locked: true,
+		connected: false,
+		enabled: false,
+		defaultItemType: "PARCEL",
+		webhooksSubscribed: false,
+		countryAllowed: false,
+	};
+}
+
 export const getSettings = query({
 	args: { retailerId: v.optional(v.id("retailers")) },
 	handler: async (ctx, args): Promise<DelyvaSummary> => {
-		const access = await resolveStoreAccess(ctx, args.retailerId);
+		// A member without the integrations grant gets a LOCKED summary, never a
+		// throw — this read sits inside the Fulfilment tab, which members with
+		// the fulfilment grant legitimately open (audit fix #3, 86exr91r4).
+		let access: RetailerAccess;
+		if (args.retailerId) {
+			const attempt = await tryRetailerAccess(ctx, args.retailerId, {
+				area: "integrations",
+				level: "read",
+			});
+			if (!attempt) return lockedDelyvaSummary();
+			access = attempt;
+		} else {
+			const my = await resolveMyRetailer(ctx);
+			if (!my) throw new ConvexError("No store found");
+			const attempt = await tryRetailerAccess(ctx, my.retailer._id, {
+				area: "integrations",
+				level: "read",
+			});
+			if (!attempt) return lockedDelyvaSummary();
+			access = attempt;
+		}
 		const config = access.retailer.delyva as DelyvaConfig | undefined;
 		const connected = resolveDelyvaCredentials(config) !== null;
 		return {
@@ -891,6 +946,40 @@ function formatBuyerAddress(
 	};
 }
 
+/**
+ * The phone a booking hands the courier for the BUYER's stop (z8r3fdh274).
+ * Buyers may type a WhatsApp number from any country, but a Delyva booking
+ * lives inside the store's country (one tenant per country), and a domestic
+ * courier handed an overseas number may not be able to call it (whether every
+ * downstream courier would even accept one is unverified) — so a foreign
+ * buyer number gives the courier the STORE's number instead, the rule
+ * Lalamove dispatch already follows (`./lib/courierContact`). The buyer's
+ * real number then rides in the booking note (the caller puts it first).
+ *
+ * A store with no number of its own keeps the buyer's: a foreign contact beats
+ * an empty one. Inputs and output are bare digits — Delyva takes MSISDNs
+ * without the '+'.
+ */
+function buyerContactPhone(
+	buyerPhone: string,
+	sellerPhone: string,
+	country: Country,
+): { phone: string; fallback: boolean } {
+	const fallback =
+		buyerPhone !== "" &&
+		sellerPhone !== "" &&
+		toDomesticContactPhone(buyerPhone, country) === null;
+	return {
+		phone: fallback ? sellerPhone : buyerPhone || sellerPhone,
+		fallback,
+	};
+}
+
+/** Stored phone → the bare digits Delyva wants ("" when there is none). */
+function phoneDigits(waPhone: string | undefined): string {
+	return (waPhone ?? "").replace(/\D/g, "");
+}
+
 /** The order's parcel weight through the SAME summariser the weight/zone
  * pricing uses, with the weight-mode snapshot as a fallback for orders whose
  * variants have since been deleted. */
@@ -939,6 +1028,10 @@ type DelyvaDispatchContext =
 			buyerPaidFee: number;
 			currency: string;
 			note?: string;
+			/** The buyer's number isn't from the store's country, so the
+			 * destination contact is the STORE's number and the buyer's real
+			 * one leads the note (see buyerContactPhone). */
+			buyerContactFallback: boolean;
 			/** The demo-vs-live lookup never ran for this row — prepareBooking
 			 * schedules the heal so the badge appears without a reconnect. */
 			environmentUnknown: boolean;
@@ -953,8 +1046,9 @@ function dispatchBlockReason(args: {
 }): DelyvaDispatchBlock | null {
 	const { order, retailer, activeJob, credentials, planOk } = args;
 	const config = retailer.delyva as DelyvaConfig | undefined;
-	// Country first — every reason below names a fix; outside Malaysia there
-	// is none to name (the Lalamove 86eyqgujv lesson).
+	// Country first — every reason below names a fix; in a country Delyva
+	// booking doesn't serve there is none to name (the Lalamove 86eyqgujv
+	// lesson).
 	if (!delyvaBookingAllowed(retailer.country ?? DEFAULT_COUNTRY))
 		return "country_unsupported";
 	if (order.deliveryMethod !== "delivery") return "not_delivery";
@@ -984,11 +1078,16 @@ export const getDispatchContext = internalQuery({
 		const retailer = await ctx.db.get(order.retailerId);
 		if (!retailer) return { ok: false, reason: "not_found" };
 
-		const identity = await ctx.auth.getUserIdentity();
-		const actingAsAdmin =
-			identity !== null && retailer.userId !== identity.subject;
+		// The caller's REAL role from the gate (86exr91r4 audit fix): "not the
+		// owner" used to read as acting-admin here, which would have handed every
+		// team member the admin plan-gate bypass. Booking a courier is orders
+		// work, so the write level applies; only a true admin skips the plan gate.
+		const access = await requireRetailerAccess(ctx, retailer._id, {
+			area: "orders",
+			level: "write",
+		});
 		let planOk = true;
-		if (!actingAsAdmin) {
+		if (access.role !== "admin") {
 			try {
 				await assertPlanFeature(ctx, retailer._id, "delivery");
 			} catch {
@@ -1018,8 +1117,13 @@ export const getDispatchContext = internalQuery({
 		const weight = await resolveOrderWeightKg(ctx, order);
 		const storeCountry = retailer.country ?? DEFAULT_COUNTRY;
 		const buyerAddress = formatBuyerAddress(order.deliveryAddress, storeCountry);
-		const buyerPhone = (order.customer.waPhone ?? "").replace(/\D/g, "");
-		const sellerPhone = (retailer.waPhone ?? "").replace(/\D/g, "");
+		const buyerPhone = phoneDigits(order.customer.waPhone);
+		const sellerPhone = phoneDigits(retailer.waPhone);
+		const buyerContact = buyerContactPhone(
+			buyerPhone,
+			sellerPhone,
+			storeCountry,
+		);
 		const inventory: DelyvaInventoryLine[] = await Promise.all(
 			order.items.map(async (item): Promise<DelyvaInventoryLine> => {
 				const variant = item.variantId
@@ -1035,7 +1139,11 @@ export const getDispatchContext = internalQuery({
 				};
 			}),
 		);
+		// The buyer's real number FIRST when the courier got the store's:
+		// buildCreateOrderBody cuts the note at 400 chars, and a long address
+		// note must never be what pushes the one way to reach the buyer out.
 		const noteParts = [
+			buyerContact.fallback ? `Buyer WhatsApp: +${buyerPhone}` : undefined,
 			order.deliveryAddress.notes,
 			order.customerNote,
 		].filter((p): p is string => !!p && p.trim().length > 0);
@@ -1056,7 +1164,7 @@ export const getDispatchContext = internalQuery({
 			destination: {
 				...buyerAddress,
 				name: order.customer.name ?? "Customer",
-				phone: buyerPhone || sellerPhone,
+				phone: buyerContact.phone,
 			},
 			inventory,
 			computedWeightKg: weight.kind === "ok" ? weight.kg : null,
@@ -1065,6 +1173,7 @@ export const getDispatchContext = internalQuery({
 			buyerPaidFee: order.deliveryFee ?? 0,
 			currency: order.currency,
 			note: noteParts.length ? noteParts.join(" · ") : undefined,
+			buyerContactFallback: buyerContact.fallback,
 			environmentUnknown: config.isDemo === undefined,
 		};
 	},
@@ -1820,6 +1929,14 @@ export const getDispatchState = query({
 		blockReason: DelyvaDispatchBlock | null;
 		/** The store has a working, enabled Delyva connection. */
 		bookingEnabled: boolean;
+		/** The store's country — the market its Delyva tenant books in, and
+		 * the noun the buyer-contact notice names. */
+		country: Country;
+		/** A booking would hand the courier the STORE's number for the buyer's
+		 * stop, because the buyer's WhatsApp isn't from `country` (see
+		 * buyerContactPhone) — said on the card before the first quote, so
+		 * nobody is surprised when the courier calls the store. */
+		buyerContactFallback: boolean;
 		defaultItemType: DelyvaItemType;
 		/** One-line render of the stored pickup address ("55 Jln Eco Majestic,
 		 * 43700 Beranang") — the dispatch card shows it before the first quote
@@ -1852,11 +1969,15 @@ export const getDispatchState = query({
 			[...delyvaJobs].sort((a, b) => b.createdAt - a.createdAt)[0] ??
 			null;
 
-		const identity = await ctx.auth.getUserIdentity();
-		const actingAsAdmin =
-			identity !== null && retailer.userId !== identity.subject;
+		// Real role from the gate (86exr91r4) — read level: this is the dispatch
+		// card's state, booking itself re-gates at write. Only a true admin
+		// skips the plan gate.
+		const access = await requireRetailerAccess(ctx, retailer._id, {
+			area: "orders",
+			level: "read",
+		});
 		let planOk = true;
-		if (!actingAsAdmin) {
+		if (access.role !== "admin") {
 			try {
 				await assertPlanFeature(ctx, retailer._id, "delivery");
 			} catch {
@@ -1871,6 +1992,7 @@ export const getDispatchState = query({
 			planOk,
 		});
 		const weight = await resolveOrderWeightKg(ctx, order);
+		const country = retailer.country ?? DEFAULT_COUNTRY;
 		return {
 			job: latest
 				? {
@@ -1887,10 +2009,13 @@ export const getDispatchState = query({
 					}
 				: null,
 			blockReason,
-			bookingEnabled:
-				credentials !== null &&
-				config?.enabled === true &&
-				delyvaBookingAllowed(retailer.country ?? DEFAULT_COUNTRY),
+			bookingEnabled: delyvaBookingArmed(retailer),
+			country,
+			buyerContactFallback: buyerContactPhone(
+				phoneDigits(order.customer.waPhone),
+				phoneDigits(retailer.waPhone),
+				country,
+			).fallback,
 			defaultItemType: config?.defaultItemType ?? "PARCEL",
 			pickupSummary: config?.pickupAddress
 				? [

@@ -37,7 +37,10 @@ export const latestActivity = query({
 			reason?: string;
 		} | null;
 	}> => {
-		await requireRetailerAccess(ctx, retailerId);
+		await requireRetailerAccess(ctx, retailerId, {
+			area: "orders",
+			level: "read",
+		});
 
 		// Newest order — one indexed row.
 		const newest = await ctx.db

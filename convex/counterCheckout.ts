@@ -27,15 +27,20 @@ import {
 } from "./_generated/server";
 import { linkOrderToCustomer, refreshWaProfileName } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
+import {
+	assertValidBuyerWaPhone,
+	resolveBuyerDialCountry,
+} from "./lib/buyerPhone";
 import { DEFAULT_COUNTRY } from "./lib/country";
 import { stampProductsOrdered } from "./lib/productOrdered";
 import { orderingPausedMessage } from "./lib/seasonalHold";
 import { recordOrderCreated } from "./subscriptionUsage";
 import {
-	adminUserIds,
 	logAdminAction,
+	resolveMyRetailer,
 	type RetailerAccess,
 	requireRetailerAccess,
+	tryRetailerAccess,
 } from "./lib/auth";
 import { assertSubscriptionActive } from "./subscriptions";
 import {
@@ -68,7 +73,7 @@ import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 import type { PickupSnapshot } from "./lib/whatsappCopy";
 import { buildPickupSnapshot, resolveEventVenue } from "./orders";
 import { rateLimiter } from "./lib/rateLimiter";
-import { assertValidWaPhone, assertValidWaPhoneForCountry } from "./lib/slug";
+import { assertValidWaPhone } from "./lib/slug";
 import { variantLabel } from "./lib/variant";
 import { type Locale, pickLocale } from "./lib/whatsappCopy";
 
@@ -127,21 +132,31 @@ async function requireCounterRetailer(
 	ctx: QueryCtx | MutationCtx,
 	retailerId?: Id<"retailers">,
 ): Promise<RetailerAccess> {
-	if (retailerId) return requireRetailerAccess(ctx, retailerId);
-	const identity = await ctx.auth.getUserIdentity();
-	if (!identity) throw new ConvexError("Not authenticated");
-	const retailer = await ctx.db
-		.query("retailers")
-		.withIndex("by_user", (q) => q.eq("userId", identity.subject))
-		.unique();
-	if (!retailer) throw new ConvexError("No store found for this account");
-	return { retailer, actingAsAdmin: false, userId: identity.subject };
+	// Counter checkout IS the front-desk member's job (86exr91r4) — the whole
+	// surface rides the orders grant, and the zero-arg path resolves the store
+	// the caller WORKS IN (owner's own, else their active membership).
+	if (retailerId)
+		return requireRetailerAccess(ctx, retailerId, {
+			area: "orders",
+			level: "write",
+		});
+	const my = await resolveMyRetailer(ctx);
+	if (!my) {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new ConvexError("Not authenticated");
+		throw new ConvexError("No store found for this account");
+	}
+	return requireRetailerAccess(ctx, my.retailer._id, {
+		area: "orders",
+		level: "write",
+	});
 }
 
 /**
- * Access to an existing session by id: the caller must own the session's retailer
- * OR be a Kedaipal admin acting-as. Returns the session + access. Returns null
- * when the session is gone (callers decide throw-vs-null per their contract).
+ * Access to an existing session by id: the store's owner, a member with the
+ * orders grant, OR a Kedaipal admin acting-as. Returns the session + access.
+ * Returns null when the session is gone (callers decide throw-vs-null per
+ * their contract).
  */
 async function requireSessionAccess(
 	ctx: QueryCtx | MutationCtx,
@@ -149,7 +164,10 @@ async function requireSessionAccess(
 ): Promise<{ session: Doc<"counterCheckoutSessions">; access: RetailerAccess } | null> {
 	const session = await ctx.db.get(sessionId);
 	if (!session) return null;
-	const access = await requireRetailerAccess(ctx, session.retailerId);
+	const access = await requireRetailerAccess(ctx, session.retailerId, {
+		area: "orders",
+		level: "write",
+	});
 	return { session, access };
 }
 
@@ -254,18 +272,16 @@ export const getCheckoutSession = query({
 		if (!identity) throw new ConvexError("Not authenticated");
 		const session = await ctx.db.get(sessionId);
 		if (!session) return null;
-		const retailer = await ctx.db.get(session.retailerId);
-		// Not-found and not-owned both resolve to null (not a throw): the active
+		// Not-found and not-allowed both resolve to null (not a throw): the active
 		// session id is now URL-addressable, so a stale/foreign id must degrade to
 		// the friendly "checkout not found" screen, never an unhandled crash. null
-		// also avoids leaking whether another store's session exists. Owner OR a
-		// Kedaipal admin acting-as may read it.
-		if (
-			!retailer ||
-			(retailer.userId !== identity.subject &&
-				!adminUserIds().includes(identity.subject))
-		)
-			return null;
+		// also avoids leaking whether another store's session exists. Owner, a
+		// member with the orders grant, or a Kedaipal admin acting-as may read it.
+		const access = await tryRetailerAccess(ctx, session.retailerId, {
+			area: "orders",
+			level: "write",
+		});
+		if (!access) return null;
 
 		let displayName: string | undefined;
 		let customer: { orderCount: number; totalSpent: number; lastOrderAt: number } | null =
@@ -340,41 +356,54 @@ export const getCheckoutSession = query({
 
 /**
  * Bind a walk-in session to a manually-keyed buyer phone — the "buyer won't/can't
- * scan" path. Normalizes to the SAME E.164 digits an inbound scan produces
- * (assertValidWaPhoneForCountry, keyed off the store's country — an SG store's
- * bare `81234567` is prefixed to `6581234567`, the form Meta delivers inbound),
- * so it resolves-or-creates the exact same `(retailerId, waPhone)` customer as
- * a scan would — a returning buyer is recognised, never duplicated. Stays
- * deliberately loose beyond that bridging: a cashier may legitimately key a
- * foreign number for a walk-in, so no mobile-shape gate applies here.
- * Re-claims an already-open session for that phone
- * (whether from an earlier manual bind or a scan) instead of forking a second
- * one. Owner-or-admin, admin-audited. Cashier-authenticated, so no public
- * rate-limit/cap applies (those guard the public poster token, not a logged-in
- * seller).
+ * scan" path. The number is a BUYER's, so it is judged by the same authority as
+ * every buyer phone field (`assertValidBuyerWaPhone`, z8r3fdh274) against the
+ * country the cashier picked on the field's plate — absent = the store's
+ * country. That covers the walk-in from anywhere (a Bruneian tourist, a UK
+ * visitor) without the old loose pass-through, which also let MY landlines
+ * and 8–15-digit junk in and stored a bare MY national number unprefixed. An
+ * MY/SG pick takes the strict mobile arm; any other country goes through the
+ * dial table. Either way the result is the SAME E.164 digits an inbound scan
+ * produces (an SG store's bare `81234567` → `6581234567`, a UK `07911 123456`
+ * → `447911123456`), so it resolves-or-creates the exact same
+ * `(retailerId, waPhone)` customer a scan would — a returning buyer is
+ * recognised, never duplicated. Re-claims an already-open session for that
+ * phone (whether from an earlier manual bind or a scan) instead of forking a
+ * second one. Owner-or-admin, admin-audited. Cashier-authenticated, so no
+ * public rate-limit/cap applies (those guard the public poster token, not a
+ * logged-in seller).
  */
 export const bindSessionManualPhone = mutation({
 	args: {
 		retailerId: v.optional(v.id("retailers")),
 		waPhone: v.string(),
+		// The country picked on the field's plate (z8r3fdh274). Absent = the
+		// store's country, so a counter screen loaded before the picker shipped
+		// keeps binding local numbers exactly as it did.
+		waDialCountry: v.optional(v.string()),
 		// The buyer's name — required for a manual bind (the cashier is keying the
 		// order for a named person; it seeds the CRM row + the order/receipt).
 		name: v.string(),
 	},
 	handler: async (
 		ctx,
-		{ retailerId, waPhone, name },
+		{ retailerId, waPhone, waDialCountry, name },
 	): Promise<{ sessionId: Id<"counterCheckoutSessions">; reclaimed: boolean }> => {
 		const access = await requireCounterRetailer(ctx, retailerId);
 		await assertSubscriptionActive(ctx, access.retailer._id);
 		const retailer = access.retailer;
 		assertOrderingNotPaused(retailer);
 
+		// Only after the store-level gates above: a paused or lapsed store says so
+		// before any complaint about the number (pinned by seasonalHold.test.ts for the pause and counterCheckout.test.ts for the lapse).
 		let normalizedPhone: string;
 		try {
-			normalizedPhone = assertValidWaPhoneForCountry(
+			normalizedPhone = assertValidBuyerWaPhone(
 				waPhone,
-				retailer.country ?? DEFAULT_COUNTRY,
+				resolveBuyerDialCountry(
+					waDialCountry,
+					retailer.country ?? DEFAULT_COUNTRY,
+				),
 			);
 		} catch (err) {
 			throw new ConvexError((err as Error).message);
@@ -972,15 +1001,20 @@ export const createOrderFromSession = mutation({
 			paymentStatus: paidInPerson ? "received" : "unpaid",
 			paymentReceivedAt: paidInPerson ? now : undefined,
 			paymentMethod: paidInPerson ? (args.paymentMethod ?? "cash") : undefined,
+			// Who rang this up (86exr91r4) — owner or team member at the counter;
+			// admin act-as stays in adminAuditLog, never on the order.
+			createdByUserId: access.role === "admin" ? undefined : access.userId,
 			statusChangedAt: now,
 			createdAt: now,
 			updatedAt: now,
 		});
 
+		const actorUserId = access.role === "admin" ? undefined : access.userId;
 		await ctx.db.insert("orderEvents", {
 			orderId,
 			status: "confirmed",
 			note: "counter_checkout",
+			actorUserId,
 			createdAt: now,
 		});
 		if (paidInPerson) {
@@ -988,6 +1022,7 @@ export const createOrderFromSession = mutation({
 				orderId,
 				status: "confirmed",
 				note: `payment_received: in-person (${args.paymentMethod ?? "cash"})`,
+				actorUserId,
 				createdAt: now,
 			});
 		}
@@ -1343,7 +1378,9 @@ export const startSessionFromStoreQr = internalMutation({
 		const locale = pickLocale(retailer.locale);
 		const now = Date.now();
 
-		// Normalize the inbound phone the same way the bind flow does.
+		// Meta's own digits for this buyer (`from`) — loose on purpose: a number
+		// WhatsApp just delivered can't be refused. The manual bind stores the
+		// same E.164 digits via the buyer validator, so the two re-claim each other.
 		let normalizedPhone: string;
 		try {
 			normalizedPhone = assertValidWaPhone(waPhone);

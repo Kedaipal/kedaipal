@@ -20,6 +20,7 @@ import { Sidebar } from "../components/dashboard/sidebar";
 import { WhatsNewProvider } from "../components/dashboard/whats-new";
 import { ActAsProvider, useActAs } from "../hooks/useActAs";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { RouteAreaGuard } from "../components/app/route-area-guard";
 import { OrderNotificationsBridge } from "../hooks/useOrderNotifications";
 import { useOrderToastNotifications } from "../hooks/useOrderToastNotifications";
 import { hasFeature } from "../lib/subscription";
@@ -191,7 +192,12 @@ function AppShell() {
 						</div>
 					) : null}
 					<main className="flex-1 px-5 py-6 lg:mx-auto lg:w-full lg:max-w-6xl lg:px-8 lg:py-8 print:max-w-none print:p-0">
-						<Outlet />
+						{/* Team members (86exr91r4): the one route-level permission gate —
+						    deep links into sections a member can't read explain themselves
+						    instead of surfacing a raw Forbidden. */}
+						<RouteAreaGuard>
+							<Outlet />
+						</RouteAreaGuard>
 						{/* Invisible: browser order alerts (chime + system notification)
 					    for this device — see Settings → Store → Order alerts. */}
 						<OrderNotificationsBridge retailerId={retailer?._id} />

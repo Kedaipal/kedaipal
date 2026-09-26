@@ -9,6 +9,7 @@ import {
 	type RetailerAccess,
 	requireRetailerAccess,
 } from "./lib/auth";
+import type { PermissionLevel } from "./lib/permissions";
 import { buildSearchText } from "./lib/customer";
 import { revenueExcludingDeposit } from "./lib/order";
 import { assertValidWaPhone } from "./lib/slug";
@@ -44,8 +45,12 @@ const sortValidator = v.union(
 async function requireRetailerOwner(
 	ctx: QueryCtx | MutationCtx,
 	retailerId: Id<"retailers">,
+	level: PermissionLevel,
 ): Promise<RetailerAccess> {
-	const access = await requireRetailerAccess(ctx, retailerId);
+	const access = await requireRetailerAccess(ctx, retailerId, {
+		area: "customers",
+		level,
+	});
 	if (!access.actingAsAdmin) await assertPlanFeature(ctx, retailerId, "crm");
 	return access;
 }
@@ -58,10 +63,11 @@ async function requireRetailerOwner(
 async function requireOwnedCustomer(
 	ctx: QueryCtx | MutationCtx,
 	customerId: Id<"customers">,
+	level: PermissionLevel,
 ): Promise<{ customer: Doc<"customers">; access: RetailerAccess }> {
 	const customer = await ctx.db.get(customerId);
 	if (!customer) throw new Error("Customer not found");
-	const access = await requireRetailerOwner(ctx, customer.retailerId);
+	const access = await requireRetailerOwner(ctx, customer.retailerId, level);
 	return { customer, access };
 }
 
@@ -76,7 +82,7 @@ export const list = query({
 		paginationOpts: paginationOptsValidator,
 	},
 	handler: async (ctx, { retailerId, sort, paginationOpts }) => {
-		await requireRetailerOwner(ctx, retailerId);
+		await requireRetailerOwner(ctx, retailerId, "read");
 
 		const indexName =
 			sort === "ltv"
@@ -97,7 +103,7 @@ export const list = query({
 export const count = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }): Promise<number> => {
-		await requireRetailerOwner(ctx, retailerId);
+		await requireRetailerOwner(ctx, retailerId, "read");
 		const rows = await ctx.db
 			.query("customers")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
@@ -112,7 +118,7 @@ export const get = query({
 		ctx,
 		{ customerId },
 	): Promise<(Doc<"customers"> & { averageOrderValue: number }) | null> => {
-		const { customer } = await requireOwnedCustomer(ctx, customerId);
+		const { customer } = await requireOwnedCustomer(ctx, customerId, "read");
 		const averageOrderValue =
 			customer.orderCount > 0
 				? Math.round(customer.totalSpent / customer.orderCount)
@@ -127,7 +133,7 @@ export const ordersByCustomer = query({
 		paginationOpts: paginationOptsValidator,
 	},
 	handler: async (ctx, { customerId, paginationOpts }) => {
-		await requireOwnedCustomer(ctx, customerId);
+		await requireOwnedCustomer(ctx, customerId, "read");
 		return ctx.db
 			.query("orders")
 			.withIndex("by_customer", (q) => q.eq("customerId", customerId))
@@ -146,7 +152,7 @@ export const search = query({
 		ctx,
 		{ retailerId, term, limit },
 	): Promise<Doc<"customers">[]> => {
-		await requireRetailerOwner(ctx, retailerId);
+		await requireRetailerOwner(ctx, retailerId, "read");
 		const trimmed = term.trim();
 		if (trimmed.length === 0) return [];
 		// Clamp to [1, SEARCH_MAX_LIMIT] so a stray 0/negative from the UI can't
@@ -171,7 +177,7 @@ export const search = query({
 export const updateNotes = mutation({
 	args: { customerId: v.id("customers"), notes: v.string() },
 	handler: async (ctx, { customerId, notes }): Promise<void> => {
-		const { access } = await requireOwnedCustomer(ctx, customerId);
+		const { access } = await requireOwnedCustomer(ctx, customerId, "write");
 		await assertSubscriptionActive(ctx, access.retailer._id);
 		const trimmed = notes.trim();
 		if (trimmed.length > NOTES_MAX) {
@@ -188,7 +194,11 @@ export const updateNotes = mutation({
 export const updateName = mutation({
 	args: { customerId: v.id("customers"), name: v.string() },
 	handler: async (ctx, { customerId, name }): Promise<void> => {
-		const { customer, access } = await requireOwnedCustomer(ctx, customerId);
+		const { customer, access } = await requireOwnedCustomer(
+			ctx,
+			customerId,
+			"write",
+		);
 		await assertSubscriptionActive(ctx, access.retailer._id);
 		const trimmed = name.trim();
 		if (trimmed.length > NAME_MAX) {

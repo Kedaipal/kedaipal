@@ -97,7 +97,9 @@ describe("OrderBulkBar", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Cancel orders" }));
 		fireEvent.click(screen.getByRole("button", { name: /cancel 2 orders/i }));
 
-		await waitFor(() => expect(onApply).toHaveBeenCalledWith("cancelled", undefined));
+		await waitFor(() =>
+			expect(onApply).toHaveBeenCalledWith("cancelled", undefined),
+		);
 		// The apply rejected, so the dialog must stay open (not auto-close).
 		expect(screen.getByRole("dialog")).toBeTruthy();
 	});
@@ -177,5 +179,46 @@ describe("OrderBulkBar — bulk unpin (86eyrtz74)", () => {
 		fireEvent.click(screen.getByRole("button", { name: /update status/i }));
 		fireEvent.click(screen.getByRole("button", { name: /^unpin$/i }));
 		await waitFor(() => expect(onUnpin).toHaveBeenCalled());
+	});
+});
+
+describe("OrderBulkBar — a milestone the selection can't reach (z8r3fdh3w1)", () => {
+	const withDisabled: BulkAction[] = [
+		{ status: "confirmed", label: "Confirmed" },
+		{
+			status: "packed",
+			label: "In production",
+			disabled: true,
+			reason: "No step in the selected orders counts as this",
+		},
+		{ status: "cancelled", label: "Cancel orders", destructive: true },
+	];
+
+	it("renders the reason and refuses the click", async () => {
+		const onApply = vi.fn();
+		renderBar({ actions: withDisabled, onApply });
+		fireEvent.click(screen.getByRole("button", { name: /update status/i }));
+		const item = await screen.findByRole("button", { name: /In production/ });
+		// Disabled-with-reason beats wrong-but-enabled: the seller is told why
+		// here, where they are clicking, instead of getting a skip count after.
+		expect(item).toHaveProperty("disabled", true);
+		expect(
+			screen.getByText("No step in the selected orders counts as this"),
+		).toBeTruthy();
+		fireEvent.click(item);
+		expect(onApply).not.toHaveBeenCalled();
+	});
+
+	it("shows the mixed-kinds note only when one is given", async () => {
+		renderBar({ actions: withDisabled, actionsNote: "Shared milestones." });
+		fireEvent.click(screen.getByRole("button", { name: /update status/i }));
+		expect(await screen.findByText("Shared milestones.")).toBeTruthy();
+
+		cleanup();
+		renderBar({ actions: withDisabled });
+		fireEvent.click(screen.getByRole("button", { name: /update status/i }));
+		await waitFor(() =>
+			expect(screen.queryByText("Shared milestones.")).toBeNull(),
+		);
 	});
 });

@@ -67,8 +67,8 @@ export function lalamoveSurface(
 	if (!shipsAsParcel(order.deliveryMethod) || !dispatch) return "none";
 	const { job, blockReason } = dispatch;
 	const activeJob = job && isActiveJobStatus(job.status);
-	// No rider works in Singapore and none is out — a completed or failed
-	// Malaysian trip belongs on the timeline, not under a live dispatch card
+	// Rider booking isn't open in this store's country and none is out — a
+	// completed or failed trip from before (e.g. a store that switched country) belongs on the timeline, not under a live dispatch card
 	// that would re-offer a booking (86eyqgujv). Never while one is still out:
 	// cancel lives on that card.
 	if (blockReason === "country_unsupported" && !activeJob) return "none";

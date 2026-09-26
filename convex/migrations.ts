@@ -18,6 +18,10 @@ import { internalMutation } from "./_generated/server";
 import { generateTrackingToken } from "./lib/order";
 import { capsForPlan } from "./lib/plans";
 import { isOrderPaymentMethod } from "./lib/paymentMethod";
+import {
+	synthesizeDefaultStages,
+	type StatusLabels,
+} from "./lib/orderStatus";
 import { createCategoryNameMemo, resolveCategoryNames } from "./orders";
 
 const BATCH_SIZE = 50;
@@ -381,5 +385,98 @@ export const resyncSubscriptionCaps = internalMutation({
 			patched++;
 		}
 		return { scanned: subs.length, patched };
+	},
+});
+
+/**
+ * Move each retailer's global status vocabulary onto the per-kind `orderFlows`
+ * field (`z8r3fdh3w1`) — the *migrate* stage of widen→migrate→narrow.
+ *
+ * What changes on the seller's screen: **nothing**. The resolver already reads
+ * the legacy `orderStages` / `statusLabels` pair as a fallback for
+ * `delivery` + `self_collect`, so an un-migrated store behaves identically.
+ * This exists so the *narrow* (dropping both legacy fields and the
+ * `statusLabels` arg on `retailers.update`) has nothing left to break.
+ *
+ * The mapping is the only one the data supports: the flat list and the rename
+ * map could only ever have meant the two product kinds, because those were the
+ * only kinds a seller could see when they wrote them. Bookings and event RSVPs
+ * get nothing — which is the bug fix, and is already live via the resolver.
+ *
+ * Both product kinds receive the SAME list, because that is what they resolve
+ * to today; the seller can then diverge them per card. A store with no legacy
+ * config at all is skipped entirely rather than being pinned to four empty
+ * arrays — absent already means "on defaults" once the legacy fields are gone.
+ *
+ * Idempotent: a retailer that already carries an `orderFlows` key for a kind is
+ * never overwritten, so a re-run after a crash resumes cleanly and a seller who
+ * customised a kind between batches keeps their edit.
+ *
+ * Run on dev:  `npx convex run migrations:backfillOrderFlows`
+ * Run on PROD: `npx convex run migrations:backfillOrderFlows --prod`
+ *
+ * **Write `--prod` yourself.** The bare command runs against DEV and reports
+ * success, which reads exactly like a prod run that worked
+ * (docs/release-checklist.md calls this out as the standing trap).
+ *
+ * Not release-blocking: the resolver falls back to the legacy pair for
+ * delivery/self_collect, so stores behave correctly un-migrated. This is the
+ * prerequisite for the NARROW (`z8r3fdhq1x`), which drops those fields.
+ */
+export const backfillOrderFlows = internalMutation({
+	args: { cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (ctx, { cursor }) => {
+		const page = await ctx.db
+			.query("retailers")
+			.paginate({ numItems: BATCH_SIZE, cursor: cursor ?? null });
+
+		let patched = 0;
+		for (const retailer of page.page) {
+			const legacyStages = retailer.orderStages;
+			const legacyLabels = retailer.statusLabels;
+			const hasLegacy =
+				(legacyStages?.length ?? 0) > 0 ||
+				(legacyLabels !== undefined &&
+					Object.values(legacyLabels).some(
+						(perLocale) =>
+							perLocale && Object.values(perLocale).some((l) => l?.trim()),
+					));
+			if (!hasLegacy) continue;
+
+			// The list the two product kinds resolve to TODAY. When the seller
+			// configured stages that's their list; when they only renamed, it's
+			// the synthesized defaults with the renames folded in — which is
+			// exactly a rename expressed as stages (the two were always the same
+			// thing, see docs/order-status-customization.md).
+			const existing = retailer.orderFlows ?? {};
+			const next = { ...existing };
+			let changed = false;
+			for (const kind of ["delivery", "self_collect"] as const) {
+				if (next[kind] !== undefined) continue; // seller already answered
+				next[kind] =
+					legacyStages && legacyStages.length > 0
+						? legacyStages
+						: synthesizeDefaultStages({
+								labels: legacyLabels as StatusLabels | undefined,
+								deliveryMethod: kind,
+							});
+				changed = true;
+			}
+			if (!changed) continue;
+
+			// The legacy fields are deliberately LEFT IN PLACE. They stop being
+			// read the moment every kind has an answer, and the narrow deletes
+			// them — keeping them here means this migration is reversible by
+			// clearing `orderFlows`, with nothing lost in between.
+			await ctx.db.patch(retailer._id, { orderFlows: next });
+			patched++;
+		}
+
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(0, internal.migrations.backfillOrderFlows, {
+				cursor: page.continueCursor,
+			});
+		}
+		return { patched, isDone: page.isDone };
 	},
 });

@@ -34,18 +34,19 @@ import {
 	recordOrderCancelled,
 	recordOrderCreated,
 } from "./subscriptionUsage";
+import { maskEmail } from "./team";
 import {
-	adminUserIds,
 	isAdmin,
 	logAdminAction,
 	logDestructiveAdminAction,
+	type AccessRequirement,
 	type RetailerAccess,
 	requireRetailerAccess,
+	tryRetailerAccess,
 } from "./lib/auth";
 import {
 	assertValidFulfilmentDate,
 	assertValidFulfilmentTime,
-	DAY_MS,
 	hhmmFromMinutes,
 	matchesFulfilmentWindow,
 	ymdFromEpoch,
@@ -63,6 +64,7 @@ import {
 	type ProductEvent,
 	seatsLeft,
 } from "./lib/productEvent";
+import { closedDateIssue } from "./lib/closedDates";
 import { assertWithinOpeningHours } from "./lib/openingHours";
 import { orderingPausedMessage } from "./lib/seasonalHold";
 import { orderDocumentTitle } from "./lib/orderDocument";
@@ -70,6 +72,7 @@ import { matchesBookingPeriod } from "./lib/bookingPeriod";
 import {
 	countBookedPerNight,
 	holdsCapacity,
+	occupiesNight,
 } from "./lib/bookingAvailability";
 import {
 	collectMinQuantityShortfalls,
@@ -140,9 +143,10 @@ import {
 	anchorOrdinal,
 	type Locale,
 	type OrderStage,
-	FLOW_PRESETS,
 	orderFlowKind,
 	resolveStages,
+	hasAnchor,
+	type OrderFlows,
 	type StageAnchor,
 	stageLabel,
 	type StatusLabels,
@@ -164,7 +168,10 @@ import {
 	mapHitpayPaymentType,
 } from "./lib/hitpay";
 import { rateLimiter } from "./lib/rateLimiter";
-import { assertValidMobileForCountry } from "./lib/slug";
+import {
+	assertValidBuyerWaPhone,
+	resolveBuyerDialCountry,
+} from "./lib/buyerPhone";
 import {
 	orderConfirmTemplateName,
 	paymentReminderTemplateName,
@@ -540,15 +547,15 @@ export async function resolveSharedOrder(
 			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
 			.first();
 		if (!order) return null;
-		const retailer = await ctx.db.get(order.retailerId);
-		// Owner OR a Kedaipal admin operating this store (act-as). Same rule the
-		// dashboard queries/mutations use — see convex/lib/auth.ts.
-		if (
-			!retailer ||
-			(retailer.userId !== identity.subject &&
-				!adminUserIds().includes(identity.subject))
-		)
-			throw new ConvexError("Forbidden");
+		// Owner, a member with the orders grant, or a Kedaipal admin (act-as).
+		// Same gate the dashboard queries/mutations use — convex/lib/auth.ts.
+		// Read level: this is the shared RESOLVE step; mutations that go on to
+		// change the order enforce their own write level on top.
+		const access = await tryRetailerAccess(ctx, order.retailerId, {
+			area: "orders",
+			level: "read",
+		});
+		if (!access) throw new ConvexError("Forbidden");
 		return order;
 	}
 	throw new ConvexError("Provide a tracking token or order ref");
@@ -729,8 +736,15 @@ export const markConfirmationPushFailed = internalMutation({
  * so the buyer gets their confirmation without doing anything else.
  */
 export const updateBuyerPhone = mutation({
-	args: { token: v.string(), waPhone: v.string() },
-	handler: async (ctx, { token, waPhone }): Promise<void> => {
+	args: {
+		token: v.string(),
+		waPhone: v.string(),
+		// The country picked on the repair field's plate (z8r3fdh274). Absent =
+		// the store's country, so a track page loaded before the picker shipped
+		// keeps repairing exactly as it did.
+		waDialCountry: v.optional(v.string()),
+	},
+	handler: async (ctx, { token, waPhone, waDialCountry }): Promise<void> => {
 		// Each accepted save costs an outbound template send.
 		await rateLimiter.limit(ctx, "buyerPhoneUpdate", {
 			key: token,
@@ -745,14 +759,18 @@ export const updateBuyerPhone = mutation({
 			);
 		}
 
-		// The repair field wears the same country plate as the checkout field it
-		// fixes — judge the new number by the STORE's country (SG-lite).
+		// The repair field wears the same country picker as the checkout field it
+		// fixes, so it is judged by the same authority: the country the buyer
+		// picked, defaulting to the STORE's (z8r3fdh274).
 		const orderRetailer = await ctx.db.get(order.retailerId);
 		let normalized: string;
 		try {
-			normalized = assertValidMobileForCountry(
+			normalized = assertValidBuyerWaPhone(
 				waPhone,
-				orderRetailer?.country ?? DEFAULT_COUNTRY,
+				resolveBuyerDialCountry(
+					waDialCountry,
+					orderRetailer?.country ?? DEFAULT_COUNTRY,
+				),
 			);
 		} catch (err) {
 			throw new ConvexError((err as Error).message);
@@ -802,6 +820,10 @@ export const create = mutation({
 		customer: v.object({
 			name: v.optional(v.string()),
 			waPhone: v.optional(v.string()),
+			// ISO code of the country picked on the phone field's plate
+			// (z8r3fdh274) — judged against the dial table in the handler, never
+			// stored. Absent = the store's country.
+			waDialCountry: v.optional(v.string()),
 		}),
 		deliveryMethod: v.optional(
 			v.union(v.literal("delivery"), v.literal("self_collect")),
@@ -892,8 +914,8 @@ export const create = mutation({
 			);
 		}
 		// Loaded before the address + phone checks below — the store's country
-		// picks the address shape AND which validator arm judges the buyer's
-		// number (SG-lite, 86eynw28q + 86eynw29u).
+		// picks the address shape (SG-lite, 86eynw29u) AND is the buyer phone
+		// picker's default when the client sends no dial country (z8r3fdh274).
 		const retailer = await ctx.db.get(args.retailerId);
 		if (!retailer) throw new ConvexError("Retailer not found");
 		// Off-Season Hold (z8r3fday24): the seller's own "ordering is paused"
@@ -923,16 +945,20 @@ export const create = mutation({
 		// the protocol level so legacy callers/tests keep working; a phone-less
 		// order simply rides the old buyer-sends-first wa.me flow, where the
 		// WhatsApp webhook stamps the number on the inbound message.
-		// Country-aware normalization (assertValidMobileForCountry, keyed off
-		// the STORE's country): buyers type local numbers ("012-345 6789" /
-		// "9123 4567"), and the stored form must match what Meta delivers
-		// inbound (60… / 65…) or the customer record would fork.
+		// Judged by the country the buyer PICKED on the field's plate
+		// (`customer.waDialCountry`, z8r3fdh274): a buyer's number is theirs,
+		// not the store's, so a Singaporean at a Johor cake shop or a Japanese
+		// event participant gets through. Absent (a client from before the
+		// picker) = the store's country, the picker's own default. MY/SG picks
+		// keep the strict mobile arm byte for byte; either way the number is
+		// stored as the E.164 digits Meta delivers inbound (60… / 65… / 44…),
+		// or the customer record would fork.
 		let customerWaPhone: string | undefined;
 		if (args.customer.waPhone) {
 			try {
-				customerWaPhone = assertValidMobileForCountry(
+				customerWaPhone = assertValidBuyerWaPhone(
 					args.customer.waPhone,
-					retailerCountry,
+					resolveBuyerDialCountry(args.customer.waDialCountry, retailerCountry),
 				);
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
@@ -941,6 +967,9 @@ export const create = mutation({
 		// Name is required at checkout (≥3 chars) — enforced server-side here, not
 		// just in the storefront form, so a direct mutation call can't create a
 		// nameless/1-char order. Same rule + shared validator as the counter paths.
+		// Built field by field, never spread from `args.customer`:
+		// `orders.customer` is a strict schema object, and `waDialCountry` is an
+		// input to the validator above, not something the order remembers.
 		const sanitizedCustomer = {
 			name: requireCustomerName(args.customer.name),
 			waPhone: customerWaPhone,
@@ -1308,6 +1337,20 @@ export const create = mutation({
 				throw new ConvexError((err as Error).message);
 			}
 		}
+		// Closed dates (z8r3fdhpm7): a fulfilment date on one of the store's
+		// closed dates is refused FIRST — before prep and hours, because it is
+		// the truest reason (telling a buyer the cake needs 2 hours on a day the
+		// shop is shut sends them to the wrong fix). The checkout mirrors this
+		// with the same sentence (`closedDateMessage`). Exempt exactly where the
+		// opening hours are: an event's date is the seller's own, and counter
+		// checkout never reaches this path.
+		if (sanitizedFulfilmentDate !== undefined && eventLock === undefined) {
+			const closed = closedDateIssue(
+				retailer.closedDates,
+				sanitizedFulfilmentDate,
+			);
+			if (closed !== null) throw new ConvexError(closed);
+		}
 		// Prep floor (z8r3fdff97): the slowest item in the cart decides the
 		// earliest moment this order can be handed over. Re-derived from the
 		// live products, never trusted from the client — the cart line carries a
@@ -1649,7 +1692,10 @@ export const countActionable = query({
 		confirmed: number;
 		mockupPending: number;
 	}> => {
-		await requireRetailerAccess(ctx, retailerId);
+		await requireRetailerAccess(ctx, retailerId, {
+			area: "orders",
+			level: "read",
+		});
 
 		const [pendingRows, confirmedRows, mockupRows] = await Promise.all([
 			ctx.db
@@ -1735,13 +1781,16 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 		/** Absent = unlimited capacity (S7) — no denominator to show. */
 		capacityPerNight?: number;
 		peakOtherBookings: number;
-		nights: number;
 	};
+	// LEGACY pair (z8r3fdh3w1), still sent so un-migrated delivery/pickup rows
+	// resolve identically on the client. Both are ignored for bookings/RSVPs by
+	// the resolver itself, never here.
 	statusLabels?: StatusLabels;
-	// Phase 2: the retailer's configured stages (undefined => buyer/seller
-	// resolve the synthesized defaults from statusLabels). Drives the tracking
-	// timeline + the seller's dynamic advance buttons.
 	orderStages?: OrderStage[];
+	// Per-flow-kind stages — what the tracking timeline and the seller's
+	// advance buttons resolve from. The client picks THIS order's kind out of
+	// it, so a delivery flow can never word a stay.
+	orderFlows?: OrderFlows;
 	retailerLocale: Locale;
 	// Store country (SG-lite), resolved (undefined rows read as "MY"). The track
 	// page keys the buyer phone-repair plate/validator arm and the address-edit
@@ -1891,7 +1940,6 @@ export const get = query({
 			| {
 					capacityPerNight?: number;
 					peakOtherBookings: number;
-					nights: number;
 			  }
 			| undefined;
 		if (
@@ -1910,15 +1958,16 @@ export const get = query({
 			);
 			const ownHold = holdsCapacity(order.status) ? 1 : 0;
 			let peak = 0;
-			for (const count of counts.values()) {
+			for (const [night, count] of counts) {
+				// Only the days THIS booking uses (z8r3fdhpm7): on a day an open-days
+				// package skips it holds nothing, so subtracting its own hold there
+				// would hide a neighbour — and a busy skipped day isn't its problem.
+				if (!occupiesNight(order, night)) continue;
 				peak = Math.max(peak, count - ownHold);
 			}
 			bookingContext = {
 				capacityPerNight: listing?.booking?.capacityPerNight,
 				peakOtherBookings: peak,
-				nights: Math.round(
-					(order.bookingCheckOut - order.bookingCheckIn) / DAY_MS,
-				),
 			};
 		}
 		return {
@@ -1949,6 +1998,7 @@ export const get = query({
 				: order.confirmationPushWamid,
 			statusLabels: retailer?.statusLabels as StatusLabels | undefined,
 			orderStages: retailer?.orderStages as OrderStage[] | undefined,
+			orderFlows: retailer?.orderFlows as OrderFlows | undefined,
 			retailerLocale: (retailer?.locale ?? "en") as Locale,
 			retailerCountry: retailer?.country ?? DEFAULT_COUNTRY,
 			storeName: retailer?.storeName ?? "",
@@ -2191,8 +2241,11 @@ export const getPaymentProofUrl = query({
 	handler: async (ctx, { orderId }): Promise<string | null> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) return null;
-		// Owner OR Kedaipal admin acting-as; throws Forbidden for anyone else.
-		await requireRetailerAccess(ctx, order.retailerId);
+		// Owner, member with orders access, or admin act-as; Forbidden otherwise.
+		await requireRetailerAccess(ctx, order.retailerId, {
+			area: "orders",
+			level: "read",
+		});
 
 		if (!order.paymentProofStorageId) return null;
 		return (await ctx.storage.getUrl(order.paymentProofStorageId)) ?? null;
@@ -2213,7 +2266,10 @@ export const listByRetailer = query({
 		ctx,
 		{ retailerId, status, mockupPending, paginationOpts },
 	) => {
-		await requireRetailerAccess(ctx, retailerId);
+		await requireRetailerAccess(ctx, retailerId, {
+			area: "orders",
+			level: "read",
+		});
 
 		if (mockupPending) {
 			// "changes_requested" and "pending" are adjacent on the index (nothing
@@ -2481,7 +2537,10 @@ export const searchOrders = query({
 			limit,
 		},
 	) => {
-		const access = await requireRetailerAccess(ctx, retailerId);
+		const access = await requireRetailerAccess(ctx, retailerId, {
+			area: "orders",
+			level: "read",
+		});
 
 		// Order Inbox plan gate (Pro+). The PLAIN list — default bucket, no
 		// filters, no search — stays available to every tier (that's the all-tier
@@ -2900,26 +2959,106 @@ async function assertExportAccess(
 	ctx: QueryCtx,
 	retailerId: Id<"retailers">,
 ): Promise<void> {
-	// Owner OR Kedaipal admin acting-as (see convex/lib/auth.ts).
-	const access = await requireRetailerAccess(ctx, retailerId);
+	// Data egress is its own grant (86exr91r4): a member can work the inbox all
+	// day and still not walk out with the order book. Owner/admin always pass.
+	const access = await requireRetailerAccess(ctx, retailerId, {
+		area: "exports",
+		level: "read",
+	});
 	// CSV export is part of the Order Inbox surface (Pro+); admin act-as bypasses.
 	if (!access.actingAsAdmin)
 		await assertPlanFeature(ctx, retailerId, "orderInbox");
 }
 
 /**
- * Seller-side access to a single order: the caller must own the order's retailer
- * OR be a Kedaipal admin operating that store (act-as). Returns the order + the
- * access descriptor so mutations can attribute admin-on-behalf writes. Throws
- * "Order not found" / "Forbidden" to match the pre-existing inline checks.
+ * The order's event timeline for the SELLER detail page (86exr91r4) — the
+ * surface where attribution finally shows. Actor names resolve server-side
+ * from `retailerMembers` (REMOVED rows included — that's why removal keeps
+ * the row), the owner reads as the owner, and the caller as "you"; system
+ * and buyer events carry no actor. Newest first. Buyer surfaces never see
+ * this query — the tracking page has its own, name-free timeline.
+ */
+export const getTimeline = query({
+	args: { orderId: v.id("orders") },
+	handler: async (
+		ctx,
+		{ orderId },
+	): Promise<
+		Array<{
+			id: Id<"orderEvents">;
+			status: Doc<"orderEvents">["status"];
+			stageLabel?: string;
+			note?: string;
+			createdAt: number;
+			/** Present only for seller-side events. */
+			actor?: { name: string; you: boolean; isOwner: boolean };
+		}>
+	> => {
+		const { order, access } = await requireOrderAccess(ctx, orderId, {
+			area: "orders",
+			level: "read",
+		});
+		const events = await ctx.db
+			.query("orderEvents")
+			.withIndex("by_order", (q) => q.eq("orderId", order._id))
+			.collect();
+		// Per-store name map — bounded by the seat cap (removed rows included so
+		// history keeps resolving after someone leaves).
+		const members = await ctx.db
+			.query("retailerMembers")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", order.retailerId))
+			.collect();
+		const names = new Map<string, string>();
+		for (const m of members) {
+			if (m.userId) names.set(m.userId, m.displayName ?? maskEmail(m.email));
+		}
+		const ownerUserId = access.retailer.userId;
+		return events
+			// Newest first, tie-broken by INSERTION order: an order's "placed"
+			// and "confirmed at checkout" rows share one `now`, and without the
+			// second key they rendered placed-above-confirmed — backwards in a
+			// newest-first list (seen on a real order, 25 Sep).
+			.sort(
+				(a, b) =>
+					b.createdAt - a.createdAt || b._creationTime - a._creationTime,
+			)
+			.map((e) => ({
+				id: e._id,
+				status: e.status,
+				stageLabel: e.stageLabel,
+				note: e.note,
+				createdAt: e.createdAt,
+				actor:
+					e.actorUserId === undefined
+						? undefined
+						: {
+								you: e.actorUserId === access.userId,
+								isOwner: e.actorUserId === ownerUserId,
+								name:
+									e.actorUserId === ownerUserId
+										? "the owner"
+										: (names.get(e.actorUserId) ?? "a former teammate"),
+							},
+			}));
+	},
+});
+
+/**
+ * Seller-side access to a single order: the store's owner, a member whose
+ * grants satisfy `requirement`, or a Kedaipal admin operating that store
+ * (act-as). Returns the order + the access descriptor so mutations can
+ * attribute writes (admin-on-behalf via the audit log, members via
+ * `orderEvents.actorUserId`). Throws "Order not found" / "Forbidden" to match
+ * the pre-existing inline checks.
  */
 export async function requireOrderAccess(
 	ctx: QueryCtx | MutationCtx,
 	orderId: Id<"orders">,
+	requirement: AccessRequirement,
 ): Promise<{ order: Doc<"orders">; access: RetailerAccess }> {
 	const order = await ctx.db.get(orderId);
 	if (!order) throw new Error("Order not found");
-	const access = await requireRetailerAccess(ctx, order.retailerId);
+	const access = await requireRetailerAccess(ctx, order.retailerId, requirement);
 	return { order, access };
 }
 
@@ -3235,6 +3374,12 @@ export async function applyStatusTransition(
 		carrierTrackingUrl?: string;
 		courierName?: string;
 		trackingNo?: string;
+		/** Clerk subject of the SELLER-SIDE person moving the order (86exr91r4)
+		 * — owner or team member, never an admin (act-as is traced in
+		 * adminAuditLog instead) and never set by system callers (webhooks,
+		 * expiry sweeps). Stamps cannot be backfilled, so they ship with the
+		 * backend even though the timeline renders them later. */
+		actorUserId?: string;
 	} = {},
 ): Promise<void> {
 	const now = Date.now();
@@ -3314,6 +3459,7 @@ export async function applyStatusTransition(
 		orderId: order._id,
 		status,
 		note: opts.note,
+		actorUserId: opts.actorUserId,
 		createdAt: now,
 	});
 
@@ -3351,7 +3497,12 @@ export async function applyStatusTransition(
 export const markSeen = mutation({
 	args: { orderId: v.id("orders") },
 	handler: async (ctx, { orderId }): Promise<void> => {
-		const { order } = await requireOrderAccess(ctx, orderId);
+		// Seen-stamps are part of VIEWING the inbox, so read-level is right —
+		// the write is a side effect of looking, not an order operation.
+		const { order } = await requireOrderAccess(ctx, orderId, {
+			area: "orders",
+			level: "read",
+		});
 		if (order.seenAt !== undefined) return;
 		// No updatedAt bump: "the seller looked at it" isn't an order change, and
 		// touching updatedAt would corrupt the time-in-status badge.
@@ -3378,7 +3529,12 @@ export const markSeen = mutation({
 export const setPinned = mutation({
 	args: { orderId: v.id("orders"), pinned: v.boolean() },
 	handler: async (ctx, { orderId, pinned }): Promise<void> => {
-		const { order, access } = await requireOrderAccess(ctx, orderId);
+		// Pins are STORE-level (everyone sees them), so rearranging the shared
+		// inbox is a write even though it changes no order data.
+		const { order, access } = await requireOrderAccess(ctx, orderId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, order.retailerId);
 		const isPinned = order.pinnedAt !== undefined;
 		if (isPinned === pinned) return;
@@ -3462,7 +3618,10 @@ export const updateStatus = mutation({
 			overrideRiderGate,
 		},
 	): Promise<void> => {
-		const { order, access } = await requireOrderAccess(ctx, orderId);
+		const { order, access } = await requireOrderAccess(ctx, orderId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, order.retailerId);
 
 		// Cancelled is TERMINAL — the same rule advanceToStage already enforces
@@ -3536,6 +3695,7 @@ export const updateStatus = mutation({
 			carrierTrackingUrl,
 			courierName,
 			trackingNo,
+			actorUserId: access.role === "admin" ? undefined : access.userId,
 		});
 		await logAdminAction(ctx, access, "orders.updateStatus", orderId);
 	},
@@ -3601,13 +3761,19 @@ export const bulkUpdateStatus = mutation({
 		// The inbox multi-select is single-retailer, so every id resolves to the
 		// same access descriptor; keep the last one for a single batch audit row.
 		let batchAccess: RetailerAccess | undefined;
+		// Single-retailer by construction (same comment as `batchAccess`), so the
+		// stage config is one read for the whole batch rather than one per order.
+		let retailer: Doc<"retailers"> | null = null;
 		for (const orderId of orderIds) {
 			const order = await ctx.db.get(orderId);
 			if (!order) throw new ConvexError("Order not found");
 			// Owner OR admin acting-as is enforced for every order — a foreign id
 			// fails the batch (requireRetailerAccess throws Forbidden).
 			const firstResolve = batchAccess === undefined;
-			batchAccess = await requireRetailerAccess(ctx, order.retailerId);
+			batchAccess = await requireRetailerAccess(ctx, order.retailerId, {
+				area: "orders",
+				level: "write",
+			});
 			// Bulk actions are an Order Inbox surface (Pro+) — gate once on the
 			// first order (the selection is single-retailer); admin act-as bypasses.
 			if (firstResolve && !batchAccess.actingAsAdmin)
@@ -3618,6 +3784,7 @@ export const bulkUpdateStatus = mutation({
 			// reads for one refusal. The admin bypass lives inside the guard.
 			if (firstResolve)
 				await assertSubscriptionActive(ctx, order.retailerId);
+			if (firstResolve) retailer = await ctx.db.get(order.retailerId);
 
 			// Skip no-ops + transitions blocked by the mockup gate (don't fail the
 			// whole batch on one ineligible order).
@@ -3642,15 +3809,26 @@ export const bulkUpdateStatus = mutation({
 				skipped++;
 				continue;
 			}
-			// An anchor the order's flow kind SKIPS isn't a state it can be in:
-			// a booking is never "Packed", an RSVP is never "Packed" or "Ready
-			// for Pickup" (its pipeline is Confirmed → Checked In). Bulk-moving
-			// one there would strand it outside its own vocabulary, so it's
-			// skipped and counted — never a silent no-op. Registry-driven
-			// (FLOW_PRESETS), so a future kind's skips apply here for free.
+			// An anchor no stage in THIS order's own flow carries isn't a state
+			// it can be in: "Mark as Packed" on a booking whose flow runs
+			// Confirmed → Checked in → Checked out would strand it outside its
+			// own vocabulary. Skipped and counted — never a silent no-op.
+			//
+			// The rule is the RESOLVED LIST, not `FLOW_PRESETS[...].skippedAnchors`
+			// (z8r3fdh3w1). Skipped anchors now only seed a kind's DEFAULTS, so a
+			// campsite that deliberately added a "Site prepared" step anchored to
+			// `packed` must be bulk-movable into it. Asking the list answers both
+			// cases with one check.
 			if (
 				status !== "cancelled" &&
-				FLOW_PRESETS[orderFlowKind(order)].skippedAnchors.includes(
+				!hasAnchor(
+					resolveStages({
+						orderFlows: retailer?.orderFlows as OrderFlows | undefined,
+						orderStages: retailer?.orderStages as OrderStage[] | undefined,
+						labels: retailer?.statusLabels as StatusLabels | undefined,
+						deliveryMethod: orderFlowKind(order),
+						bookingPackaged: order.bookingPackaged,
+					}),
 					status as StageAnchor,
 				)
 			) {
@@ -3692,7 +3870,10 @@ export const bulkUpdateStatus = mutation({
 					await ctx.db.patch(order._id, { cancellationNote: resolved });
 				}
 			}
-			await applyStatusTransition(ctx, order, status);
+			await applyStatusTransition(ctx, order, status, {
+				actorUserId:
+					batchAccess.role === "admin" ? undefined : batchAccess.userId,
+			});
 			updated++;
 		}
 		if (batchAccess)
@@ -3802,7 +3983,11 @@ async function deleteOrderCascade(
 export const deleteOrder = mutation({
 	args: { orderId: v.id("orders") },
 	handler: async (ctx, { orderId }): Promise<void> => {
-		const { order, access } = await requireOrderAccess(ctx, orderId);
+		// Hard delete is admin-only (86eyaqzpd) — ownerOnly spells out that no
+		// member grant can ever reach it; the isAdmin check below is the gate.
+		const { order, access } = await requireOrderAccess(ctx, orderId, {
+			ownerOnly: true,
+		});
 		if (!(await isAdmin(ctx))) throw new Error("Forbidden");
 		await deleteOrderCascade(ctx, order);
 		await logDestructiveAdminAction(ctx, access, "orders.hardDelete", orderId);
@@ -3839,7 +4024,11 @@ export const bulkDeleteOrders = mutation({
 		for (const orderId of orderIds) {
 			const order = await ctx.db.get(orderId);
 			if (!order) throw new ConvexError("Order not found");
-			const access = await requireRetailerAccess(ctx, order.retailerId);
+			// isAdmin already passed above — ownerOnly here just spells out that a
+			// member can never reach a hard delete, whatever their grants.
+			const access = await requireRetailerAccess(ctx, order.retailerId, {
+				ownerOnly: true,
+			});
 			await deleteOrderCascade(ctx, order);
 			await logDestructiveAdminAction(
 				ctx,
@@ -3905,7 +4094,10 @@ export const advanceToStage = mutation({
 			overrideRiderGate,
 		},
 	): Promise<void> => {
-		const { order, access } = await requireOrderAccess(ctx, orderId);
+		const { order, access } = await requireOrderAccess(ctx, orderId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, order.retailerId);
 		const retailer = access.retailer;
 
@@ -3927,6 +4119,7 @@ export const advanceToStage = mutation({
 		const isEventOrder =
 			order.eventRsvp === true || (await orderEvent(ctx, order)) !== undefined;
 		const stages = resolveStages({
+			orderFlows: retailer.orderFlows as OrderFlows | undefined,
 			orderStages: retailer.orderStages as OrderStage[] | undefined,
 			labels: retailer.statusLabels as StatusLabels | undefined,
 			deliveryMethod: isEventOrder
@@ -4036,6 +4229,7 @@ export const advanceToStage = mutation({
 			stageId: stage.id,
 			stageLabel: stageLabel(stage, "en"),
 			note,
+			actorUserId: access.role === "admin" ? undefined : access.userId,
 			createdAt: now,
 		});
 
@@ -4065,7 +4259,10 @@ export const setShipmentTracking = mutation({
 		ctx,
 		{ orderId, courierName, trackingNo, carrierTrackingUrl },
 	): Promise<void> => {
-		const { order, access } = await requireOrderAccess(ctx, orderId);
+		const { order, access } = await requireOrderAccess(ctx, orderId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, order.retailerId);
 
 		// All-blank input resolves to all-undefined = tracking cleared.
@@ -4313,7 +4510,10 @@ export const setDeliveryFee = mutation({
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
-		const access = await requireRetailerAccess(ctx, order.retailerId);
+		const access = await requireRetailerAccess(ctx, order.retailerId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, order.retailerId);
 		if ((order.deliveryMethod ?? "delivery") !== "delivery")
 			throw new ConvexError("Only delivery orders carry a delivery charge");
@@ -4371,6 +4571,7 @@ export const setDeliveryFee = mutation({
 			orderId,
 			status: order.status,
 			note: `delivery_fee_set (fee ${fee})`,
+			actorUserId: access.role === "admin" ? undefined : access.userId,
 			createdAt: now,
 		});
 		// No WhatsApp here (86eyd63r8). The buyer's one message went out at
@@ -4430,7 +4631,10 @@ export const rescheduleFulfilment = mutation({
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
-		const access = await requireRetailerAccess(ctx, order.retailerId);
+		const access = await requireRetailerAccess(ctx, order.retailerId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, order.retailerId);
 		if (order.status === "cancelled")
 			throw new ConvexError("This order was cancelled");
@@ -4540,6 +4744,7 @@ export const rescheduleFulfilment = mutation({
 			orderId,
 			status: order.status,
 			note: `fulfilment_rescheduled (from ${stamp(order.fulfilmentDate, order.fulfilmentTimeMinutes)} to ${stamp(sanitizedDate, nextTime)})`,
+			actorUserId: access.role === "admin" ? undefined : access.userId,
 			createdAt: now,
 		});
 		await logAdminAction(ctx, access, "orders.rescheduleFulfilment", orderId);
@@ -4749,9 +4954,12 @@ async function applyPaymentReceived(
 		noteDetail?: string;
 		/** Extra fields written in the same patch (gateway ids). */
 		extraPatch?: Partial<Doc<"orders">>;
+		/** Seller-side actor (owner/member) on the manual path; unset for the
+		 * gateway webhook — HitPay confirmed that one, not a person. */
+		actorUserId?: string;
 	},
 ): Promise<void> {
-	const { now, paymentMethod, noteDetail, extraPatch } = opts;
+	const { now, paymentMethod, noteDetail, extraPatch, actorUserId } = opts;
 	const shouldAutoConfirm = order.status === "pending";
 
 	const patch: Partial<Doc<"orders">> = {
@@ -4784,6 +4992,7 @@ async function applyPaymentReceived(
 			orderId: order._id,
 			status: "confirmed",
 			note: "payment_received_auto_confirm",
+			actorUserId,
 			createdAt: now,
 		});
 		// First order reaching confirmed activates the store (one-time stamp).
@@ -4795,6 +5004,7 @@ async function applyPaymentReceived(
 			note: noteDetail && noteDetail.length > 0
 				? `payment_received: ${noteDetail}`
 				: "payment_received",
+			actorUserId,
 			createdAt: now,
 		});
 	}
@@ -4815,7 +5025,10 @@ export const markPaymentReceived = mutation({
 		paymentMethod: v.optional(orderPaymentMethodValidator),
 	},
 	handler: async (ctx, { orderId, note, paymentMethod }): Promise<void> => {
-		const { order, access } = await requireOrderAccess(ctx, orderId);
+		const { order, access } = await requireOrderAccess(ctx, orderId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, order.retailerId);
 
 		if (order.paymentStatus === "received") {
@@ -4843,6 +5056,7 @@ export const markPaymentReceived = mutation({
 			now: Date.now(),
 			paymentMethod,
 			noteDetail: note?.trim(),
+			actorUserId: access.role === "admin" ? undefined : access.userId,
 		});
 		await logAdminAction(ctx, access, "orders.confirmPayment", orderId);
 	},
@@ -5031,7 +5245,10 @@ export const clearGatewayPaymentIssue = mutation({
 	handler: async (ctx, { orderId }): Promise<void> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
-		const access = await requireRetailerAccess(ctx, order.retailerId);
+		const access = await requireRetailerAccess(ctx, order.retailerId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, order.retailerId);
 		const issue = order.gatewayPaymentIssue;
 		if (!issue) return; // already resolved (e.g. a payment landed) — no-op
@@ -5049,6 +5266,7 @@ export const clearGatewayPaymentIssue = mutation({
 			orderId,
 			status: order.status,
 			note: `gateway_issue_resolved_by_seller: ${issue.kind}, paid ${(issue.paidAmountSen / 100).toFixed(2)} ${issue.paidCurrency} (hitpay ${issue.paymentId})`,
+			actorUserId: access.role === "admin" ? undefined : access.userId,
 			createdAt: now,
 		});
 		await logAdminAction(ctx, access, "orders.clearGatewayPaymentIssue", orderId);
@@ -5187,7 +5405,10 @@ export const generateMockupUploadUrl = mutation({
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
-		await requireRetailerAccess(ctx, order.retailerId);
+		await requireRetailerAccess(ctx, order.retailerId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
@@ -5208,7 +5429,10 @@ export const discardMockupUploads = mutation({
 		const order = await ctx.db.get(orderId);
 		if (!order) return; // order gone → nothing to protect; let the blobs GC
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
-		await requireRetailerAccess(ctx, order.retailerId);
+		await requireRetailerAccess(ctx, order.retailerId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, order.retailerId);
 		const referenced = new Set(resolveMockupImageIds(order));
 		for (const id of storageIds) {
@@ -5245,7 +5469,10 @@ export const submitMockup = mutation({
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
-		const access = await requireRetailerAccess(ctx, order.retailerId);
+		const access = await requireRetailerAccess(ctx, order.retailerId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
@@ -5301,6 +5528,7 @@ export const submitMockup = mutation({
 				effectiveQuote && effectiveQuote > 0
 					? `mockup_submitted (quote ${effectiveQuote})`
 					: "mockup_submitted",
+			actorUserId: access.role === "admin" ? undefined : access.userId,
 			createdAt: now,
 		});
 		// No WhatsApp here (86eyd63r8). The buyer already has this order's one
@@ -5330,7 +5558,10 @@ export const updateMockupQuote = mutation({
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
-		const access = await requireRetailerAccess(ctx, order.retailerId);
+		const access = await requireRetailerAccess(ctx, order.retailerId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
@@ -5370,6 +5601,7 @@ export const updateMockupQuote = mutation({
 				effectiveQuote && effectiveQuote > 0
 					? `mockup_quote_updated (quote ${effectiveQuote})`
 					: "mockup_quote_updated",
+			actorUserId: access.role === "admin" ? undefined : access.userId,
 			createdAt: now,
 		});
 		await logAdminAction(ctx, access, "orders.updateMockupQuote", orderId);
@@ -5453,7 +5685,10 @@ export const waiveMockup = mutation({
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
 		// Owner OR admin acting-as (see convex/lib/auth.ts).
-		const access = await requireRetailerAccess(ctx, order.retailerId);
+		const access = await requireRetailerAccess(ctx, order.retailerId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
@@ -5472,6 +5707,7 @@ export const waiveMockup = mutation({
 			orderId,
 			status: order.status,
 			note: "mockup_waived",
+			actorUserId: access.role === "admin" ? undefined : access.userId,
 			createdAt: now,
 		});
 		await logAdminAction(ctx, access, "orders.waiveMockup", orderId);

@@ -29,8 +29,11 @@ import {
 	adminUserIds,
 	isAdmin,
 	logAdminAction,
+	resolveMyRetailer,
 	requireAdmin,
 	requireRetailerAccess,
+	storeOwnerIsAdmin,
+	tryRetailerAccess,
 } from "./lib/auth";
 import { COMP_LABEL_MAX, COMP_NOTE_MAX, type CompKind } from "./lib/comp";
 import { rateLimiter } from "./lib/rateLimiter";
@@ -396,11 +399,11 @@ export async function assertOwnStoreActive(ctx: AnyCtx): Promise<void> {
 	if (await isAdmin(ctx)) return;
 	const identity = await ctx.auth.getUserIdentity();
 	if (!identity) return; // the caller's own auth check already refused
-	const retailer = await ctx.db
-		.query("retailers")
-		.withIndex("by_user", (q) => q.eq("userId", identity.subject))
-		.first();
-	if (retailer) await assertSubscriptionActive(ctx, retailer._id);
+	// Membership-aware (86exr91r4 audit fix #2): the lock must bind the store
+	// the caller WORKS IN, or a lapsed store's helper could keep writing what
+	// its owner cannot.
+	const my = await resolveMyRetailer(ctx);
+	if (my) await assertSubscriptionActive(ctx, my.retailer._id);
 }
 
 /**
@@ -429,8 +432,15 @@ export const assertWritable = internalQuery({
 	handler: async (ctx, { retailerId }): Promise<null> => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) return null;
-		const retailer = await ctx.db.get(retailerId);
-		if (!retailer || retailer.userId !== identity.subject) return null;
+		// Owner OR active member trips the lock (86exr91r4 audit fix #2) — a
+		// lapsed store's helper must not keep booking couriers/labels/reminders.
+		// Anonymous, foreign and admin callers still pass straight through to
+		// the action's own auth (the enumeration-oracle posture above), and the
+		// admin bypass inside assertSubscriptionActive is unchanged.
+		const access = await tryRetailerAccess(ctx, retailerId, {
+			anyMember: true,
+		});
+		if (!access || access.role === "admin") return null;
 		await assertSubscriptionActive(ctx, retailerId);
 		return null;
 	},
@@ -451,8 +461,12 @@ export const assertWritableForOrder = internalQuery({
 			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
 			.unique();
 		if (!order) return null;
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer || retailer.userId !== identity.subject) return null;
+		// Same member-aware lock trip as assertWritable above, resolved from the
+		// order's store.
+		const access = await tryRetailerAccess(ctx, order.retailerId, {
+			anyMember: true,
+		});
+		if (!access || access.role === "admin") return null;
 		await assertSubscriptionActive(ctx, order.retailerId);
 		return null;
 	},
@@ -577,7 +591,11 @@ export const setSeasonalHold = mutation({
 		ctx,
 		{ retailerId, hold },
 	): Promise<{ status: SubscriptionStatus; invoiceIssued: boolean }> => {
-		const access = await requireRetailerAccess(ctx, retailerId);
+		// Billing WRITE — owner-only in v1 (86exr91r4): pausing/resuming moves
+		// what the owner is billed, so no member grant reaches it.
+		const access = await requireRetailerAccess(ctx, retailerId, {
+			ownerOnly: true,
+		});
 		// Billing is view-only under admin act-as (Zaki, 17 Sep 2026): pausing
 		// voids and issues invoices on the SELLER's money, and every legitimate
 		// admin billing action already lives in Admin → Billing, audited. The
@@ -899,7 +917,7 @@ export const setComp = mutation({
 		// is by construction an admin acting on someone else's store.
 		await logAdminAction(
 			ctx,
-			{ retailer, actingAsAdmin: true, userId: adminSubject },
+			{ retailer, role: "admin", actingAsAdmin: true, userId: adminSubject },
 			"subscriptions.setComp",
 			retailerId,
 		);
@@ -926,7 +944,7 @@ export const revokeComp = mutation({
 		await endComp(ctx, sub, Date.now());
 		await logAdminAction(
 			ctx,
-			{ retailer, actingAsAdmin: true, userId: adminSubject },
+			{ retailer, role: "admin", actingAsAdmin: true, userId: adminSubject },
 			"subscriptions.revokeComp",
 			retailerId,
 		);
@@ -945,6 +963,10 @@ export const current = query({
 	handler: async (
 		ctx,
 	): Promise<(AccessState & { createdAt?: number }) | null> => {
+		// OWNER-ONLY BY CONSTRUCTION (by_user) — deliberate (86exr91r4): the
+		// dashboard chrome reads access state from the getMyRetailer embed, and
+		// members with billing:read use the billing queries; nothing member-
+		// facing reads this. Do not "fix" to resolveMyRetailer without a caller.
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) return null;
 		const retailer = await ctx.db
@@ -1063,11 +1085,17 @@ export const internalBackfillSubscriptions = internalMutation({
  *    (`autoRenew.nextRetryAt`, lib/hitpayBilling.ts);
  *  - auto-renew sellers get a one-per-cycle "renewing soon" notice ahead of
  *    the charge (the no-surprise-MIT rule).
- * Plus the one-time pre-due-date reminder for pending invoices. Runs once
- * daily — a retailer keeps access up to ~24h past any boundary (acceptable
+ * Plus the one-time pre-due-date reminder for pending invoices, and — once an
+ * invoice is PAST due and its subscription actually locked — the post-lock
+ * recovery ladder at +3d / +7d (z8r3fdg3mh), which before now was silence.
+ * Runs once daily — a retailer keeps access up to ~24h past any boundary (acceptable
  * grace). See docs/manual-subscription.md + docs/hitpay-recurring.md.
  */
 const REMINDER_DAYS_BEFORE = 3;
+/** Post-lock recovery chain (z8r3fdg3mh): days PAST the due date at which each
+ * nudge fires. The lock itself (and `invoiceOverdue`) lands on day 0. */
+const RECOVERY_NUDGE_DAYS = 3;
+const RECOVERY_FINAL_DAYS = 7;
 
 export const internalDailyBillingStatus = internalMutation({
 	args: {},
@@ -1084,6 +1112,8 @@ export const internalDailyBillingStatus = internalMutation({
 		renewalNotices: number;
 		renewalsDue: number;
 		remindersSent: number;
+		/** Post-lock recovery nudges scheduled this run (z8r3fdg3mh). */
+		recoveryNudges: number;
 		trialReminders: number;
 	}> => {
 		const now = Date.now();
@@ -1095,6 +1125,16 @@ export const internalDailyBillingStatus = internalMutation({
 		let renewalNotices = 0;
 		let renewalsDue = 0;
 		let remindersSent = 0;
+		let recoveryNudges = 0;
+		// Invoices whose subscription LOCKED during this very run. The lock
+		// transition owns day 0 — it sends `invoiceOverdue` and the WhatsApp — so
+		// the recovery ladder below must not also chase them on the same pass.
+		// Normally moot (a daily cron catches an invoice <1 day overdue, which is
+		// under every threshold), but after a missed run the ladder would see a
+		// freshly-locked invoice already 5 days past due and fire a second,
+		// near-identical email the same minute. That is exactly the dunning spam
+		// this chain exists to avoid.
+		const lockedThisRun = new Set<string>();
 		let trialReminders = 0;
 
 		// Trials — start-when-you-sell (z8r3fday24). The free period ends at the
@@ -1160,6 +1200,15 @@ export const internalDailyBillingStatus = internalMutation({
 						internal.billingEmail.notifyInvoiceOverdue,
 						{ invoiceId: pending._id },
 					);
+					// …and the one WhatsApp of the whole billing chain (z8r3fdg3mh).
+					// Email is the channel that always works; this is the louder
+					// second tap for a cohort that lives in WhatsApp, not inboxes.
+					await ctx.scheduler.runAfter(
+						0,
+						internal.whatsapp.notifyBillingPastDue,
+						{ invoiceId: pending._id },
+					);
+					lockedThisRun.add(pending._id);
 				}
 				continue;
 			}
@@ -1213,6 +1262,13 @@ export const internalDailyBillingStatus = internalMutation({
 					internal.billingEmail.notifyInvoiceOverdue,
 					{ invoiceId: overduePending._id },
 				);
+				// …and the one WhatsApp of the whole billing chain (z8r3fdg3mh).
+				await ctx.scheduler.runAfter(
+					0,
+					internal.whatsapp.notifyBillingPastDue,
+					{ invoiceId: overduePending._id },
+				);
+				lockedThisRun.add(overduePending._id);
 				continue;
 			}
 			const pendingInvoice = invoices.find((inv) => inv.status === "pending");
@@ -1309,6 +1365,61 @@ export const internalDailyBillingStatus = internalMutation({
 			.withIndex("by_status", (q) => q.eq("status", "pending"))
 			.collect();
 		for (const inv of pending) {
+			// Post-lock recovery chain (z8r3fdg3mh): an invoice already PAST its
+			// due date is out of reminder territory — the seller is locked, and
+			// the ladder below is what chases them. Before this existed the
+			// `invoiceOverdue` mail on the flip was the last contact they ever got.
+			if (inv.dueDate < now) {
+				// Locked moments ago by the loops above — that notice is enough
+				// for today; the ladder picks up from the next daily run.
+				if (lockedThisRun.has(inv._id)) continue;
+				const daysPastDue = Math.floor((now - inv.dueDate) / DAY_MS);
+				// Send only the HIGHEST stage that's due and stamp it, skipping any
+				// it passed. A cron outage that leaves an invoice at day 9 with no
+				// stage must produce one final notice, not a +3d today and a +7d
+				// tomorrow — the seller would read that as a system flailing.
+				const stage =
+					daysPastDue >= RECOVERY_FINAL_DAYS
+						? 2
+						: daysPastDue >= RECOVERY_NUDGE_DAYS
+							? 1
+							: 0;
+				// Decided BEFORE any lookup: an invoice with nothing left to send
+				// is the steady state of this loop forever. `cancelled` is never
+				// reached, so every seller who walked away is parked at stage 2 and
+				// re-scanned daily for the life of the deployment — reading two
+				// documents each time to reach the same `continue` would make the
+				// ladder's cost grow with lifetime churn rather than with work.
+				if (stage <= (inv.recoveryStage ?? 0)) continue;
+				// The chain speaks in the first person about a LOCKED dashboard, so
+				// it must only run where a lock actually happened. An overdue
+				// pending invoice is not sufficient on its own: the loops above
+				// skip comped subscriptions entirely, so a store comped after its
+				// invoice was issued sits overdue forever with full access — and
+				// telling them they're locked would be flatly untrue. `past_due` +
+				// not-comped IS the soft-lock predicate (see accessFor).
+				const lockSub = await ctx.db.get(inv.subscriptionId);
+				if (
+					!lockSub ||
+					lockSub.status !== "past_due" ||
+					lockSub.comped === true
+				)
+					continue;
+				// …and the OTHER way `frozen` is false at `past_due`: the store is
+				// an admin's own. They are never soft-locked and the billing tab
+				// tells them admins have no invoices to settle, so chasing them
+				// would contradict the product to its own operators.
+				const lockRetailer = await ctx.db.get(inv.retailerId);
+				if (!lockRetailer || storeOwnerIsAdmin(lockRetailer)) continue;
+				await ctx.db.patch(inv._id, { recoveryStage: stage });
+				await ctx.scheduler.runAfter(
+					0,
+					internal.billingEmail.notifyInvoiceRecovery,
+					{ invoiceId: inv._id, stage: stage as 1 | 2, daysPastDue },
+				);
+				recoveryNudges++;
+				continue;
+			}
 			if (inv.reminderSentAt !== undefined) continue;
 			if (inv.dueDate <= reminderFrom || inv.dueDate > reminderTo) continue;
 			await ctx.db.patch(inv._id, { reminderSentAt: now });
@@ -1329,6 +1440,7 @@ export const internalDailyBillingStatus = internalMutation({
 			renewalNotices,
 			renewalsDue,
 			remindersSent,
+			recoveryNudges,
 			trialReminders,
 		};
 	},

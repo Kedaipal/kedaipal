@@ -459,6 +459,40 @@ describe("orderClaims — getByToken", () => {
 		expect(payload?.status).toBe("expired");
 		expect(payload?.open).toBeUndefined();
 	});
+
+	// The claim page's overseas-number delivery note (z8r3fdh274) needs to know
+	// whether a courier will be handed the buyer's contact — one bit beside
+	// `collectsFromCustomer`, never the courier config it is derived from.
+	test("the store block carries booksCouriers, and only the bit", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id);
+		const sessionId = await seedSession(t, USER_A);
+		const { token } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orderClaims.sendClaim, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				windowMinutes: 60,
+			});
+
+		let payload = await t.query(api.orderClaims.getByToken, { token });
+		expect(payload?.store.booksCouriers).toBe(false);
+
+		await t.run((ctx) =>
+			ctx.db.patch(retailer._id, {
+				deliveryBooking: {
+					enabled: true,
+					vehicleType: "MOTORCYCLE",
+					apiKey: "enc:v1:ciphertext",
+				},
+			}),
+		);
+		payload = await t.query(api.orderClaims.getByToken, { token });
+		expect(payload?.store.booksCouriers).toBe(true);
+		expect(payload?.store).not.toHaveProperty("deliveryBooking");
+		expect(payload?.store).not.toHaveProperty("delyva");
+	});
 });
 
 describe("orderClaims — commit", () => {
@@ -838,6 +872,32 @@ describe("orderClaims — prep time + pickup note (z8r3fdff97)", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	test("a closed date is refused at commit, in orders.create's words (z8r3fdhpm7)", async () => {
+		const t = setup();
+		const { retailer, claimId, token } = await sendPuffs(t);
+		const tomorrow =
+			Math.floor((Date.now() + 8 * 3600_000) / DAY) * DAY - 8 * 3600_000 + DAY;
+		await t.withIdentity({ subject: USER_A }).mutation(api.closedDates.add, {
+			retailerId: retailer._id,
+			startDate: tomorrow,
+			endDate: tomorrow,
+			label: "Hari Raya",
+		});
+		await expect(
+			t.mutation(api.orderClaims.commit, {
+				token,
+				deliveryMethod: "self_collect",
+				fulfilmentDate: tomorrow,
+			}),
+		).rejects.toThrow(/The store is closed .*\(Hari Raya\) — pick another day/);
+		await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: tomorrow + DAY,
+		});
+		expect((await orderOf(t, claimId))?.fulfilmentDate).toBe(tomorrow + DAY);
 	});
 
 	test("a DATE-ONLY commit's prep runs to midnight — closing time can't hide a day-long prep", async () => {

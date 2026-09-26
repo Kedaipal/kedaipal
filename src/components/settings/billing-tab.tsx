@@ -33,6 +33,7 @@ import {
 } from "../../../convex/lib/plans";
 import { HOLD_LABEL } from "../../../convex/lib/seasonalHold";
 import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
+import { usePermission, useStoreRole } from "../../hooks/usePermission";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { resolveAnnualOffer } from "../../lib/annual-billing";
 import { buildWaContactLink } from "../../lib/contact";
@@ -107,7 +108,16 @@ export function BillingTab({
 	// control stays visible but disabled with the reason; the self-serve
 	// writes resolve the caller's own store and `setSeasonalHold` refuses
 	// act-as server-side, so nothing here can reach the seller's billing.
-	const ownerOnly = actingAsAdmin;
+	// …and a TEAMMATE granted billing READ lands here on the same footing.
+	// Billing WRITE is owner-only by construction (MAX_GRANTABLE caps the
+	// area at read), so a member can be shown the bill but must never be
+	// handed the buttons that spend the owner's money — the server would
+	// refuse them, and an enabled-but-doomed control is the thing this
+	// codebase treats as a bug. `OwnerOnlyNote` beside each one renders for
+	// members only, so the owner's view is unchanged.
+	const canPayBills = usePermission("billing").canWrite;
+	const isMember = useStoreRole() === "member";
+	const ownerOnly = actingAsAdmin || !canPayBills;
 	// On founding pricing — SERVER-resolved, the only founding answer any price
 	// on this page may use (z8r3fdfty4). False until the gateway read lands, so
 	// every card that quotes a founding-sensitive price waits for it instead of
@@ -215,6 +225,16 @@ export function BillingTab({
 	// due" framing below swaps for "your sponsored access ended — choose a plan".
 	const compEnded =
 		sub?.status === "past_due" && !sub.comped ? sub.compEnded : undefined;
+	// Will the lockout WhatsApp ACTUALLY reach this seller (z8r3fdg3mh)? All
+	// three have to hold: an approved template on this deployment, a saved
+	// alert number, and no global STOP on it — otherwise whatsapp.ts returns
+	// early or the gateway suppresses the send, and the past-due line below
+	// must not promise a message that will never arrive. Mirrors the reach
+	// predicate the order-alerts card already applies.
+	const billingWaWillReach =
+		retailer.billingWaAlertAvailable === true &&
+		(retailer.notifyWaPhone?.length ?? 0) > 0 &&
+		retailer.notifyWaPhoneOptedOut !== true;
 	const statusLine = (() => {
 		if (!sub) return "Active";
 		if (sub.status === "trialing") {
@@ -382,6 +402,37 @@ export function BillingTab({
 						<p className="text-xs text-muted-foreground">
 							{HOLD_LABEL} — ordering is paused. Your {planLabel} plan comes
 							back with one tap below.
+						</p>
+					) : null}
+					{/* Past due (z8r3fdg3mh). The badge above says "Past due"; this
+					    says what that MEANS and what happens next, so neither the
+					    lock nor the reminders that follow it are a surprise. The
+					    chain is deliberately not opt-out-able, so it is stated
+					    rather than offered as a setting. NOT for a comp-ended row
+					    (z8r3fdeub2): that seller is `past_due` with NO invoice —
+					    nothing will chase them and there is nothing to "pay", so
+					    this copy would be false on both counts; the compEnded line
+					    above already tells their story. */}
+					{sub?.status === "past_due" && !sub?.comped && !compEnded ? (
+						<p className="text-xs text-muted-foreground">
+							{isMember ? (
+								<>
+									The storefront and existing orders stay live — only editing
+									the store is paused until the owner settles this. We're
+									following up with them; nothing here is yours to pay.
+								</>
+							) : (
+								<>
+									Your storefront and existing orders stay live — only editing
+									your store is paused until this is settled. We'll follow up by
+									email
+									{billingWaWillReach
+										? ", and once on WhatsApp at your alert number"
+										: ""}
+									. Billing reminders can't be switched off, but they stop the
+									moment you pay.
+								</>
+							)}
 						</p>
 					) : null}
 					{freePeriod.kind === "free" ? (

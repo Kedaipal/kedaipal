@@ -84,7 +84,7 @@ interface Tier {
 	name: string;
 	tagline: string;
 	orderCap: string;
-	users: number;
+	teammates: number;
 	popular: boolean;
 	cta: string;
 }
@@ -99,10 +99,12 @@ interface Tier {
  * the landing teaser's live-price + MY/SG posture. Founding fields are gone
  * with the Founding-10 program's landing presence (86eye4wtb).
  */
-const TIER_FACTS: readonly { id: Plan; name: string; users: number; popular: boolean }[] = [
-	{ id: "starter", name: "Starter", users: 1, popular: false },
-	{ id: "pro", name: "Pro", users: 2, popular: true },
-	{ id: "scale", name: "Scale", users: 5, popular: false },
+// `teammates` = MEMBER seats beside the owner ("You + 2"), the live promise
+// team seats ship with (86exr91r4) — userCap 1/3/6 total people server-side.
+const TIER_FACTS: readonly { id: Plan; name: string; teammates: number; popular: boolean }[] = [
+	{ id: "starter", name: "Starter", teammates: 0, popular: false },
+	{ id: "pro", name: "Pro", teammates: 2, popular: true },
+	{ id: "scale", name: "Scale", teammates: 5, popular: false },
 ];
 
 function useTiers(): Tier[] {
@@ -174,11 +176,11 @@ function useFeatures(): Feature[] {
 			scale: "400",
 		},
 		{
+			// LIVE since 86exr91r4 — counts are total people ("you + n").
 			label: m.pricingpage_feat_team_members(),
 			starter: "1",
-			pro: "2",
-			scale: "5",
-			comingSoon: true,
+			pro: "3",
+			scale: "6",
 		},
 		{
 			label: m.pricingpage_feat_outlets(),
@@ -539,12 +541,9 @@ function TierCard({
 				</li>
 				<li className="flex items-center gap-2 text-sm text-muted-foreground">
 					<Check className="size-4 shrink-0 text-muted-foreground/50" />
-					{tier.users === 1
-						? m.pricingpage_team_member_one({ count: tier.users })
-						: m.pricingpage_team_member_other({ count: tier.users })}
-					<span className="rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-400">
-						{m.pricingpage_soon()}
-					</span>
+					{tier.teammates === 0
+						? m.pricingpage_team_just_you()
+						: m.pricingpage_team_you_plus({ count: tier.teammates })}
 				</li>
 				{isScale && (
 					<>

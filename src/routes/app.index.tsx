@@ -44,6 +44,7 @@ import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { usePermission } from "../hooks/usePermission";
 import { MASK_PII } from "../lib/analytics-privacy";
 import {
 	formatPrice,
@@ -151,6 +152,8 @@ function DashboardSkeleton() {
 
 function DashboardHome() {
 	const retailer = useDashboardRetailer();
+	// A teammate only sees the Insights card if they can open it.
+	const canSeeInsights = usePermission("insights").canRead;
 	const navigate = useNavigate();
 	const products = useQuery(
 		convexQuery(
@@ -257,6 +260,7 @@ function DashboardHome() {
 		? "self_collect"
 		: "delivery";
 	const stages = resolveStages({
+		orderFlows: retailer.orderFlows,
 		orderStages: retailer.orderStages,
 		labels: statusLabels,
 		deliveryMethod: retailerMethod,
@@ -650,30 +654,35 @@ function DashboardHome() {
 			</Link>
 
 			{/* Insights — the "what actually sells / how much did I make" surface.
-			    Pro feature; Starter still sees the card (lock-badged) as the upsell. */}
-			<Link
-				to="/app/insights"
-				className="flex items-center gap-3 rounded-2xl border border-border bg-card px-3.5 py-3 transition-colors hover:bg-accent/5 lg:max-w-2xl"
-			>
-				<span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent">
-					<LineChart className="size-5" aria-hidden="true" />
-				</span>
-				<span className="flex min-w-0 flex-1 flex-col gap-0.5">
-					<span className="flex items-center gap-2">
-						<span className="text-sm font-semibold">Insights</span>
-						{hasFeature(retailer.subscription, "insights") ? null : (
-							<span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
-								<Lock className="size-2.5" />
-								Pro
-							</span>
-						)}
+			    Pro feature; Starter still sees the card (lock-badged) as the upsell.
+			    A TEAMMATE without the insights grant doesn't: the sidebar already
+			    hides it, and a card that routes them into the "ask the owner" wall
+			    is the same destination answering two different ways (86exr91r4). */}
+			{canSeeInsights ? (
+				<Link
+					to="/app/insights"
+					className="flex items-center gap-3 rounded-2xl border border-border bg-card px-3.5 py-3 transition-colors hover:bg-accent/5 lg:max-w-2xl"
+				>
+					<span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent">
+						<LineChart className="size-5" aria-hidden="true" />
 					</span>
-					<span className="text-xs text-muted-foreground">
-						Revenue, best sellers and trends at a glance
+					<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+						<span className="flex items-center gap-2">
+							<span className="text-sm font-semibold">Insights</span>
+							{hasFeature(retailer.subscription, "insights") ? null : (
+								<span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
+									<Lock className="size-2.5" />
+									Pro
+								</span>
+							)}
+						</span>
+						<span className="text-xs text-muted-foreground">
+							Revenue, best sellers and trends at a glance
+						</span>
 					</span>
-				</span>
-				<ArrowRight className="size-4 shrink-0 text-muted-foreground" />
-			</Link>
+					<ArrowRight className="size-4 shrink-0 text-muted-foreground" />
+				</Link>
+			) : null}
 
 			{/* How it works — only for brand-new users */}
 			{isNew ? (
@@ -882,6 +891,7 @@ function DashboardHome() {
 													return cs
 														? stageLabel(cs, "en")
 														: resolveAnchorLabel(order.status as OrderStatus, {
+																orderFlows: retailer.orderFlows,
 																stages,
 																labels: statusLabels,
 																deliveryMethod: (order.deliveryMethod ??

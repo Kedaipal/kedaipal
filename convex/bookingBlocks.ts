@@ -14,11 +14,23 @@ import { requireRetailerAccess, logAdminAction } from "./lib/auth";
 import {
 	bookingsOverlapping,
 	eachNight,
+	occupiesNight,
 	isNightBlocked,
 	loadBlocksForWindow,
 	MAX_BLOCK_DAYS,
 } from "./lib/bookingAvailability";
+import {
+	type ClosedDateRange,
+	isClosedDate,
+	upcomingClosures,
+} from "./lib/closedDates";
 import { DAY_MS, isMytMidnight } from "./lib/fulfilmentDate";
+import { closedWeekdays } from "./lib/openingHours";
+import {
+	type OrderFlows,
+	resolveStatusLabel,
+	type StatusLabels,
+} from "./lib/orderStatus";
 import { effectiveKind, type PackageUnit } from "./lib/productKind";
 import { assertSubscriptionActive } from "./subscriptions";
 
@@ -39,7 +51,10 @@ const GUESTS_PER_NIGHT = 3;
 export const hasBookingListings = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }): Promise<boolean> => {
-		const access = await requireRetailerAccess(ctx, retailerId);
+		const access = await requireRetailerAccess(ctx, retailerId, {
+			area: "bookings",
+			level: "read",
+		});
 		const products = await ctx.db
 			.query("products")
 			.withIndex("by_retailer_active", (q) =>
@@ -66,7 +81,10 @@ export const blockDays = mutation({
 		note: v.optional(v.string()),
 	},
 	handler: async (ctx, args): Promise<Id<"bookingBlocks">> => {
-		const access = await requireRetailerAccess(ctx, args.retailerId);
+		const access = await requireRetailerAccess(ctx, args.retailerId, {
+			area: "bookings",
+			level: "write",
+		});
 		if (!access.actingAsAdmin)
 			await assertSubscriptionActive(ctx, args.retailerId);
 
@@ -117,7 +135,10 @@ export const unblock = mutation({
 	handler: async (ctx, { blockId }): Promise<void> => {
 		const block = await ctx.db.get(blockId);
 		if (!block) return; // already gone — unblock is idempotent
-		const access = await requireRetailerAccess(ctx, block.retailerId);
+		const access = await requireRetailerAccess(ctx, block.retailerId, {
+			area: "bookings",
+			level: "write",
+		});
 		if (!access.actingAsAdmin)
 			await assertSubscriptionActive(ctx, block.retailerId);
 		await ctx.db.delete(blockId);
@@ -147,6 +168,10 @@ export const sellerCalendar = query({
 			date: number;
 			booked: number;
 			blocked: boolean;
+			/** A store closed date covers this day (z8r3fdhpm7). Store-wide, so
+			 * it is set whatever listing is in scope — the seller sees the
+			 * closure on every view of the month. */
+			closed: boolean;
 			/** Who is on this night, in check-in order, capped at
 			 * `GUESTS_PER_NIGHT` with the rest carried in `booked`. The desktop
 			 * grid's whole job is seeing WHO is booked at a glance; a bare count
@@ -164,6 +189,15 @@ export const sellerCalendar = query({
 			endDate: number;
 			note?: string;
 		}>;
+		/** The store's upcoming closed dates (z8r3fdhpm7): the cells' labels,
+		 * the day sheet's "why", and the overlap note when the seller closes
+		 * more dates from here. */
+		closures: ClosedDateRange[];
+		/** The store's weekly days off (0 = Sun). A package can't start on one,
+		 * and an open-days listing steps over them — so the seller's grid marks
+		 * them where the selected listing skips them, and the block sheet
+		 * judges starts with them. */
+		closedWeekdays: number[];
 		listings: Array<{
 			_id: Id<"products">;
 			name: string;
@@ -175,9 +209,16 @@ export const sellerCalendar = query({
 			capacityPerNight?: number;
 			packageLength?: number;
 			packageUnit?: PackageUnit;
+			/** Counts only open days (z8r3fdhpm7). Without it `closureRule` on
+			 * the client read every open-days listing as an every-day one, so the
+			 * block sheet quoted the wrong starts and the wrong rule. */
+			skipsClosedDays?: boolean;
 		}>;
 	}> => {
-		const access = await requireRetailerAccess(ctx, args.retailerId);
+		const access = await requireRetailerAccess(ctx, args.retailerId, {
+			area: "bookings",
+			level: "read",
+		});
 		if (!isMytMidnight(args.from) || !isMytMidnight(args.to)) {
 			throw new ConvexError("Calendar window must be calendar days");
 		}
@@ -223,6 +264,9 @@ export const sellerCalendar = query({
 					night < Math.min(checkOut, args.to);
 					night += DAY_MS
 				) {
+					// A day an open-days package skips isn't one the member is
+					// there (z8r3fdhpm7) — no count, no name on the grid.
+					if (!occupiesNight(order, night)) continue;
 					totals.set(night, (totals.get(night) ?? 0) + 1);
 					const named = guestsByNight.get(night) ?? [];
 					if (named.length < GUESTS_PER_NIGHT) {
@@ -259,6 +303,7 @@ export const sellerCalendar = query({
 					: visibleBlocks.some(
 							(b) => date >= b.startDate && date <= b.endDate,
 						),
+			closed: isClosedDate(access.retailer.closedDates, date),
 		}));
 
 		return {
@@ -278,6 +323,8 @@ export const sellerCalendar = query({
 				endDate: b.endDate,
 				note: b.note,
 			})),
+			closures: upcomingClosures(access.retailer.closedDates),
+			closedWeekdays: closedWeekdays(access.retailer.openingHours),
 			listings: await Promise.all(
 				bookingListings.map(async (p) => ({
 					_id: p._id,
@@ -294,6 +341,7 @@ export const sellerCalendar = query({
 					capacityPerNight: p.booking?.capacityPerNight,
 					packageLength: p.booking?.packageLength,
 					packageUnit: p.booking?.packageUnit,
+					skipsClosedDays: p.booking?.skipsClosedDays,
 				})),
 			),
 		};
@@ -330,7 +378,10 @@ export const blockImpact = query({
 		count: number;
 		samples: Array<{ shortId: string; customerName?: string }>;
 	}> => {
-		const access = await requireRetailerAccess(ctx, args.retailerId);
+		const access = await requireRetailerAccess(ctx, args.retailerId, {
+			area: "bookings",
+			level: "read",
+		});
 		if (!isMytMidnight(args.startDate) || !isMytMidnight(args.endDate)) {
 			throw new ConvexError("Blocked days must be calendar days");
 		}
@@ -402,6 +453,9 @@ export const dayBookings = query({
 			checkIn: number;
 			checkOut: number;
 			status: Doc<"orders">["status"];
+			/** The status as the seller's own order pages name it (their renames,
+			 * the package vocabulary) — the raw key rendered "Booking_requested". */
+			statusLabel: string;
 			/** Paid or not — the sheet exists to help the seller decide WHICH
 			 * order to open, and "has this one paid" is the question they open it
 			 * for most often. */
@@ -411,9 +465,15 @@ export const dayBookings = query({
 			listingName: string;
 			/** A package reads as a validity window, a stay as check-in → out. */
 			packaged: boolean;
+			/** The shut days an open-days package steps over, so "day 2 of 4"
+			 * counts the days the member actually comes. */
+			skippedDays?: number[];
 		}>
 	> => {
-		const access = await requireRetailerAccess(ctx, args.retailerId);
+		const access = await requireRetailerAccess(ctx, args.retailerId, {
+			area: "bookings",
+			level: "read",
+		});
 		if (!isMytMidnight(args.date)) {
 			throw new ConvexError("Pick a calendar day");
 		}
@@ -434,9 +494,11 @@ export const dayBookings = query({
 			checkIn: number;
 			checkOut: number;
 			status: Doc<"orders">["status"];
+			statusLabel: string;
 			paymentStatus?: Doc<"orders">["paymentStatus"];
 			listingName: string;
 			packaged: boolean;
+			skippedDays?: number[];
 		}> = [];
 		for (const listing of scoped) {
 			// THE shared bounded scan — never a hand-rolled look-back here again.
@@ -447,15 +509,25 @@ export const dayBookings = query({
 				args.date + DAY_MS,
 			);
 			for (const order of holders) {
+				// Nobody on an open-days package is here on a day it skips.
+				if (!occupiesNight(order, args.date)) continue;
 				rows.push({
 					shortId: order.shortId,
 					customerName: order.customer.name,
 					checkIn: order.bookingCheckIn as number,
 					checkOut: order.bookingCheckOut as number,
 					status: order.status,
+					statusLabel: resolveStatusLabel(order.status, {
+						labels: access.retailer.statusLabels as StatusLabels | undefined,
+						orderFlows: access.retailer.orderFlows as OrderFlows | undefined,
+						deliveryMethod: "booking",
+						bookingPackaged: order.bookingPackaged === true,
+						locale: "en",
+					}),
 					paymentStatus: order.paymentStatus,
 					listingName: listing.name,
 					packaged: order.bookingPackaged === true,
+					skippedDays: order.bookingSkippedDays,
 				});
 			}
 		}

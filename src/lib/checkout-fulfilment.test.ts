@@ -48,7 +48,7 @@ const CLOSED_FRIDAY = week({ open: hm(9), close: hm(18), closed: true });
 
 const PUFF = { minutes: 120, productName: "Ice Cream Puff" };
 const DAY_PREP = { minutes: 1440, productName: "Wedding tier" };
-const base = { storeName: "Huff & Puff" };
+const base = { storeName: "Huff & Puff", closedDates: undefined };
 
 describe("resolveLineRules — live first, the cart's snapshot as fallback", () => {
 	const line = {
@@ -160,6 +160,7 @@ describe("isFulfilmentDaySelectable", () => {
 		expect(
 			isFulfilmentDaySelectable({
 				hours: NINE_TO_SIX,
+				closedDates: undefined,
 				dateEpoch: FRI,
 				now: at(16, 30),
 				prep: PUFF,
@@ -169,6 +170,7 @@ describe("isFulfilmentDaySelectable", () => {
 		expect(
 			isFulfilmentDaySelectable({
 				hours: NINE_TO_SIX,
+				closedDates: undefined,
 				dateEpoch: SAT,
 				now: at(16, 30),
 				prep: PUFF,
@@ -182,6 +184,7 @@ describe("isFulfilmentDaySelectable", () => {
 		expect(
 			isFulfilmentDaySelectable({
 				hours: NINE_TO_SIX,
+				closedDates: undefined,
 				dateEpoch: FRI,
 				now: at(20),
 				prep: NO_CART_PREP,
@@ -193,6 +196,7 @@ describe("isFulfilmentDaySelectable", () => {
 	test("a date-only pickup today is withheld once prep outlasts the DAY, not the hours", () => {
 		const dateOnly = {
 			hours: NINE_TO_SIX,
+			closedDates: undefined,
 			dateEpoch: FRI,
 			timed: false,
 		};
@@ -352,6 +356,7 @@ describe("prepHint — the one line about today", () => {
 		text(
 			prepHint({
 				hours: NINE_TO_SIX,
+				closedDates: undefined,
 				now: at(9),
 				prep: PUFF,
 				kind: "pickup",
@@ -419,6 +424,7 @@ describe("times stay whole for the page", () => {
 		expect(
 			prepHint({
 				hours: NINE_TO_SIX,
+				closedDates: undefined,
 				now: at(9),
 				prep: PUFF,
 				kind: "pickup",
@@ -426,5 +432,64 @@ describe("times stay whole for the page", () => {
 				timed: true,
 			}),
 		).toContainEqual({ time: hm(11) });
+	});
+});
+
+describe("closed dates (z8r3fdhpm7)", () => {
+	const raya = { startDate: FRI, endDate: FRI, label: "Hari Raya" };
+
+	test("a closed date is never offered, timed or date-only", () => {
+		for (const timed of [true, false]) {
+			expect(
+				isFulfilmentDaySelectable({
+					hours: NINE_TO_SIX,
+					closedDates: [raya],
+					dateEpoch: FRI,
+					now: at(9),
+					prep: NO_CART_PREP,
+					timed,
+				}),
+			).toBe(false);
+		}
+		expect(
+			isFulfilmentDaySelectable({
+				hours: NINE_TO_SIX,
+				closedDates: [raya],
+				dateEpoch: SAT,
+				now: at(9),
+				prep: NO_CART_PREP,
+				timed: true,
+			}),
+		).toBe(true);
+	});
+
+	test("the day notice names the range and the reason, before prep speaks", () => {
+		const copy = fulfilmentDayCopy({
+			...base,
+			closedDates: [raya],
+			hours: NINE_TO_SIX,
+			dateEpoch: FRI,
+			now: at(16, 30),
+			prep: PUFF,
+			timed: true,
+			kind: "pickup",
+		});
+		expect(text(copy)).toMatch(
+			/^Huff & Puff is closed Fri, .* \(Hari Raya\) — pick another day\.$/,
+		);
+	});
+
+	test("the prep hint stays quiet on a closed today", () => {
+		expect(
+			prepHint({
+				hours: NINE_TO_SIX,
+				closedDates: [raya],
+				now: at(9),
+				prep: PUFF,
+				kind: "pickup",
+				noticeDays: 0,
+				timed: true,
+			}),
+		).toBeNull();
 	});
 });

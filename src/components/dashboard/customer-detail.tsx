@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import { currentBookingLine } from "../../../convex/lib/bookingPeriod";
+import { useAreaLock } from "../../hooks/useStoreLock";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import { formatPhone, getDisplayName } from "../../lib/customer";
 import {
@@ -209,6 +210,10 @@ function Metric({
 
 function NameEditor({ customer }: { customer: Doc<"customers"> }) {
 	const updateName = useMutation(api.customers.updateName);
+	// Both reasons this can't be saved right now: a lapsed store (the server
+	// has always refused it — the button just never said so) and a teammate
+	// holding view on customers without edit.
+	const { readOnly, reason } = useAreaLock("customers");
 	const [editing, setEditing] = useState(false);
 	const [value, setValue] = useState(customer.name ?? "");
 	const [saving, setSaving] = useState(false);
@@ -229,11 +234,13 @@ function NameEditor({ customer }: { customer: Doc<"customers"> }) {
 		return (
 			<button
 				type="button"
+				disabled={readOnly}
+				title={readOnly ? reason : undefined}
 				onClick={() => {
 					setValue(customer.name ?? "");
 					setEditing(true);
 				}}
-				className="flex w-fit items-center gap-1.5 text-xs font-medium text-accent hover:underline"
+				className="flex w-fit items-center gap-1.5 text-xs font-medium text-accent hover:underline disabled:cursor-not-allowed disabled:text-muted-foreground disabled:no-underline"
 			>
 				<Pencil className="size-3.5" />
 				{customer.name?.trim() ? "Edit name" : "Set a name"}
@@ -273,6 +280,7 @@ function NameEditor({ customer }: { customer: Doc<"customers"> }) {
 
 function NotesEditor({ customer }: { customer: Doc<"customers"> }) {
 	const updateNotes = useMutation(api.customers.updateNotes);
+	const { readOnly, reason } = useAreaLock("customers");
 	const [editing, setEditing] = useState(false);
 	const [value, setValue] = useState(customer.notes ?? "");
 	const [saving, setSaving] = useState(false);
@@ -304,12 +312,20 @@ function NotesEditor({ customer }: { customer: Doc<"customers"> }) {
 				{!editing ? (
 					<button
 						type="button"
+						disabled={readOnly}
+						title={readOnly ? reason : undefined}
 						onClick={() => {
 							setValue(customer.notes ?? "");
 							setEditing(true);
 						}}
-						aria-label={customer.notes?.trim() ? "Edit notes" : "Add notes"}
-						className="flex size-9 items-center justify-center rounded-full text-amber-700 transition-colors hover:bg-amber-100 dark:text-amber-400 dark:hover:bg-amber-900/40"
+						aria-label={
+							readOnly
+								? `${customer.notes?.trim() ? "Edit notes" : "Add notes"} — unavailable, ${reason}`
+								: customer.notes?.trim()
+									? "Edit notes"
+									: "Add notes"
+						}
+						className="flex size-9 items-center justify-center rounded-full text-amber-700 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:text-muted-foreground disabled:hover:bg-transparent dark:text-amber-400 dark:hover:bg-amber-900/40"
 					>
 						<Pencil className="size-4" />
 					</button>

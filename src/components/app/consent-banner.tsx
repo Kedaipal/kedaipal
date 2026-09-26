@@ -4,6 +4,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import { convexErrorMessage } from "../../lib/format";
+import { useStoreRole } from "../../hooks/usePermission";
 import { type AcceptedLegalVersions, consentIsStale } from "../../lib/legal";
 import { Button } from "../ui/button";
 
@@ -20,7 +21,11 @@ export function ConsentBanner({
 }) {
 	const recordConsent = useMutation(api.retailers.recordConsentAcceptance);
 	const [submitting, setSubmitting] = useState(false);
+	// Terms bind the ACCOUNT HOLDER — a team member can't accept them for the
+	// store (the server refuses by construction), so don't show them the ask.
+	const role = useStoreRole();
 
+	if (role === "member") return null;
 	if (!consentIsStale(versions)) return null;
 
 	async function handleAccept() {

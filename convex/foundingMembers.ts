@@ -437,6 +437,8 @@ export const myStatus = query({
 	} | null> => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) return null;
+		// OWNER-ONLY BY CONSTRUCTION (by_user) — deliberate (86exr91r4):
+		// founding rank/benefits belong to the account that paid, never a seat.
 		const retailer = await ctx.db
 			.query("retailers")
 			.withIndex("by_user", (q) => q.eq("userId", identity.subject))

@@ -37,6 +37,7 @@ function row(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 		slug: "bearcamp-malaysia",
 		ownerUserId: "u1",
 		ownerIsAdmin: false,
+		seats: { active: 1, cap: 3, capUnlimited: false, invited: 0 },
 		isFoundingMember: false,
 		comped: false,
 		createdAt: at(-180),
@@ -103,6 +104,19 @@ describe("describeDays", () => {
 		expect(describeDays(at(-19), NOW, "overdue")).toBe("19 days overdue");
 		expect(describeDays(at(-21), NOW, "locked")).toBe("21 days locked");
 		expect(describeDays(at(-52), NOW)).toBe("52 days ago");
+	});
+
+	it("a PAST date never claims a day that has not finished (z8r3fdg3mh)", () => {
+		// 10 days and 21 hours overdue is TEN days overdue — the calendar says
+		// so, and the seller's recovery email says so. Rounding made this
+		// console answer 11 and disagree with the email about one invoice.
+		expect(daysFromNow(at(-10.875), NOW)).toBe(-10);
+		expect(describeDays(at(-10.875), NOW, "overdue")).toBe("10 days overdue");
+		// Just past the due moment is not yet a whole day overdue.
+		expect(describeDays(at(-0.5), NOW, "overdue")).toBe("today");
+		// A future date still rounds — "in 6 days" for 5.5 is how people talk.
+		expect(daysFromNow(at(5.5), NOW)).toBe(6);
+		expect(daysFromNow(at(5.4), NOW)).toBe(5);
 	});
 });
 
@@ -449,6 +463,7 @@ describe("sellerSummaryText + CSV", () => {
 				"Email: hello@bearcamp.example",
 				"WhatsApp: +60 12-345 6789",
 				"Plan: Pro · Monthly · auto-renew Visa ·· 4242 · Active",
+				"Seats: 1/3",
 				`Renews ${formatDeadline(at(22), NOW)} · in 22 days`,
 			].join("\n"),
 		);

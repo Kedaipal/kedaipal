@@ -47,9 +47,14 @@ import { orderingPausedMessage } from "./lib/seasonalHold";
 import { recordOrderCreated } from "./subscriptionUsage";
 import { assertValidAddress } from "./lib/address";
 import { sanitizeAttributionSource } from "./lib/attribution";
-import { logAdminAction, requireRetailerAccess } from "./lib/auth";
+import {
+	logAdminAction,
+	requireRetailerAccess,
+	resolveMyRetailer,
+} from "./lib/auth";
 import { assertSubscriptionActive } from "./subscriptions";
 import { type Country, DEFAULT_COUNTRY } from "./lib/country";
+import { storeBooksCouriers } from "./lib/courierBooking";
 import { getDisplayName, requireCustomerName } from "./lib/customer";
 import type { CartWeightItem } from "./lib/delivery";
 import {
@@ -71,6 +76,7 @@ import {
 } from "./lib/order";
 import { asksForTime, fulfilmentKind } from "./lib/fulfilmentShape";
 import type { OpeningHours } from "./lib/openingHours";
+import { type ClosedDateRange, closedDateIssue } from "./lib/closedDates";
 import { assertWithinOpeningHours } from "./lib/openingHours";
 import { orderPrepFloorIssue, slowestPrep } from "./lib/prepFloor";
 import {
@@ -214,7 +220,10 @@ export const sendClaim = mutation({
 	}> => {
 		const session = await ctx.db.get(args.sessionId);
 		if (!session) throw new ConvexError("Session not found");
-		const access = await requireRetailerAccess(ctx, session.retailerId);
+		const access = await requireRetailerAccess(ctx, session.retailerId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, session.retailerId);
 		const retailer = access.retailer;
 		// Off-Season Hold (z8r3fday24): a paused store sends no claim links.
@@ -307,7 +316,10 @@ export const resendClaim = mutation({
 	handler: async (ctx, { claimId }): Promise<void> => {
 		const claim = await ctx.db.get(claimId);
 		if (!claim) throw new ConvexError("Claim not found");
-		const access = await requireRetailerAccess(ctx, claim.retailerId);
+		const access = await requireRetailerAccess(ctx, claim.retailerId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, claim.retailerId);
 		// Re-sending pushes a fresh link into the buyer's chat — a new order
 		// invitation, refused while paused exactly like sendClaim.
@@ -345,7 +357,10 @@ export const cancelClaim = mutation({
 	handler: async (ctx, { claimId }): Promise<void> => {
 		const claim = await ctx.db.get(claimId);
 		if (!claim) throw new ConvexError("Claim not found");
-		const access = await requireRetailerAccess(ctx, claim.retailerId);
+		const access = await requireRetailerAccess(ctx, claim.retailerId, {
+			area: "orders",
+			level: "write",
+		});
 		await assertSubscriptionActive(ctx, claim.retailerId);
 		if (effectiveClaimStatus(claim, Date.now()) !== "open") return; // already dead — idempotent
 		await ctx.db.patch(claimId, {
@@ -394,17 +409,21 @@ export const listClaims = query({
 		// explicit retailerId = admin act-as, otherwise the caller's own store.
 		let resolvedRetailerId: Id<"retailers">;
 		if (retailerId) {
-			const access = await requireRetailerAccess(ctx, retailerId);
+			const access = await requireRetailerAccess(ctx, retailerId, {
+				area: "orders",
+				level: "read",
+			});
 			resolvedRetailerId = access.retailer._id;
 		} else {
-			const identity = await ctx.auth.getUserIdentity();
-			if (!identity) throw new ConvexError("Not authenticated");
-			const retailer = await ctx.db
-				.query("retailers")
-				.withIndex("by_user", (q) => q.eq("userId", identity.subject))
-				.unique();
-			if (!retailer) throw new ConvexError("No store found for this account");
-			resolvedRetailerId = retailer._id;
+			// Membership-aware "my store" (86exr91r4): a team member's claim list
+			// is the store they work in, not a store they own.
+			const my = await resolveMyRetailer(ctx);
+			if (!my) throw new ConvexError("No store found for this account");
+			const access = await requireRetailerAccess(ctx, my.retailer._id, {
+				area: "orders",
+				level: "read",
+			});
+			resolvedRetailerId = access.retailer._id;
 		}
 
 		const now = Date.now();
@@ -487,9 +506,17 @@ export interface ClaimPagePayload {
 		offerDelivery: boolean;
 		offerSelfCollect: boolean;
 		collectsFromCustomer: boolean;
+		/** The store hands delivery orders to a courier (z8r3fdh274) — the page
+		 * tells a buyer whose number is from another country that the rider
+		 * will phone the store instead. One bit, like `collectsFromCustomer`;
+		 * the courier config itself never leaves the owner reads. */
+		booksCouriers: boolean;
 		/** max(store notice, strictest per-product override on the claim). */
 		minNoticeDays: number;
 		openingHours?: OpeningHours;
+		/** Closed dates (z8r3fdhpm7) — skipped by the date picker, refused by
+		 * commit with the same sentence. */
+		closedDates?: ClosedDateRange[];
 		confirmPushEnabled: boolean;
 		/** Off-Season Hold (z8r3fday24): the store paused ordering after this
 		 * link was sent. The page renders a dead end instead of the form — the
@@ -577,8 +604,10 @@ export const getByToken = query({
 				offerSelfCollect: retailer.offerSelfCollect === true,
 				collectsFromCustomer:
 					retailer.deliveryBooking?.deliveryDirection === "collection",
+				booksCouriers: storeBooksCouriers(retailer),
 				minNoticeDays,
 				openingHours: retailer.openingHours as OpeningHours | undefined,
+				closedDates: retailer.closedDates,
 				confirmPushEnabled: orderConfirmTemplateName() !== undefined,
 				orderingPaused: retailer.orderingPausedAt !== undefined,
 			},
@@ -859,6 +888,15 @@ export const commit = mutation({
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
 			}
+		}
+		// Closed dates (z8r3fdhpm7) — orders.create's rule, word for word:
+		// judged before prep and hours, the truest reason a date can't work.
+		if (sanitizedFulfilmentDate !== undefined) {
+			const closed = closedDateIssue(
+				retailer.closedDates,
+				sanitizedFulfilmentDate,
+			);
+			if (closed !== null) throw new ConvexError(closed);
 		}
 		// Prep floor — orders.create's rule, word for word (convex/lib/prepFloor):
 		// the slowest line decides the earliest moment, a collection trip is

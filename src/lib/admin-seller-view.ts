@@ -179,7 +179,16 @@ export function filterSellers(
 /** Whole days from `now` to `at`, rounded — a deadline at midnight read at
  * noon the week before says "in 6 days", not 5.5. */
 export function daysFromNow(at: number, now: number): number {
-	return Math.round((at - now) / DAY_MS);
+	const raw = (at - now) / DAY_MS;
+	// A FUTURE date rounds — "in 6 days" for 5.5 is what a person would say.
+	// A PAST one must not: rounding up overstated how overdue a bill was, so a
+	// 10-day-21-hour-old invoice read "11 days overdue" in this console while
+	// the seller's own recovery email said "10 days past due" (z8r3fdg3mh) —
+	// two Kedaipal surfaces disagreeing about one fact, with the calendar on
+	// the email's side. Truncating toward now never claims a day that has not
+	// finished. The existing tests only used whole-day offsets, which is why
+	// this survived.
+	return raw >= 0 ? Math.round(raw) : -Math.floor(-raw);
 }
 
 type PastWord = "ago" | "overdue" | "locked";
@@ -382,6 +391,15 @@ const PLAN_LABEL: Record<NonNullable<AdminSellerRow["plan"]>, string> = {
 	scale: "Scale",
 };
 
+/** Team seats, one spelling for every surface (86exr91r4): people with
+ * access over the plan's people-cap, pending invites appended.
+ * "2/3 · 1 invited", "1/∞" for comped/admin stores. */
+export function sellerSeatsLabel(row: AdminSellerRow): string {
+	const cap = row.seats.capUnlimited ? "∞" : String(row.seats.cap);
+	const base = `${row.seats.active}/${cap}`;
+	return row.seats.invited > 0 ? `${base} · ${row.seats.invited} invited` : base;
+}
+
 export function sellerPlanLabel(row: AdminSellerRow): string {
 	if (row.ownerIsAdmin) return "—";
 	return row.plan ? PLAN_LABEL[row.plan] : "—";
@@ -448,6 +466,7 @@ export function sellerSummaryText(
 		`Email: ${row.ownerEmail ?? "none on file"}`,
 		`WhatsApp: ${row.waPhone ? formatMobile(row.waPhone) : "none on file"}`,
 		`Plan: ${plan || "—"} · ${SELLER_STATUS_LABEL[sellerBucket(row)]}`,
+		`Seats: ${sellerSeatsLabel(row)}`,
 		`${expiry.headline}${expiry.detail ? ` · ${expiry.detail}` : ""}`,
 	].join("\n");
 }
@@ -460,6 +479,7 @@ const CSV_HEADER = [
 	"Reason",
 	"Plan",
 	"Billing",
+	"Seats",
 	"Expiry",
 	"Expiry date",
 	"Email",
@@ -490,6 +510,7 @@ function sellerToCsvRow(
 		sellerReason(row) ?? "",
 		sellerPlanLabel(row),
 		sellerRail(row),
+		sellerSeatsLabel(row),
 		expiry.headline,
 		csvDate(expiry.at),
 		row.ownerEmail ?? "",

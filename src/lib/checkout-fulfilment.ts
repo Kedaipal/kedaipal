@@ -16,6 +16,7 @@
  * The server stays the judge (`orders.create`, `orderClaims.commit`).
  */
 
+import { type ClosedDateRange, closureOn } from "../../convex/lib/closedDates";
 import {
 	formatPrepDuration,
 	todayMytMidnight,
@@ -108,6 +109,8 @@ export function prepForFulfilment(
 
 type DayArgs = {
 	hours: OpeningHours | undefined;
+	/** The store's closed dates (z8r3fdhpm7) — a covered day is never offered. */
+	closedDates: ReadonlyArray<ClosedDateRange> | undefined;
 	dateEpoch: number;
 	now: number;
 	prep: CartPrep;
@@ -129,6 +132,7 @@ type DayArgs = {
 function dayIssue(args: Omit<DayArgs, "kind" | "storeName">): TimeIssue | null {
 	const issue = fulfilmentTimeIssue({
 		hours: prepFloorHours(args.hours, args.timed),
+		closedDates: args.closedDates,
 		dayEpoch: args.dateEpoch,
 		timeMinutes: undefined,
 		now: args.now,
@@ -136,7 +140,12 @@ function dayIssue(args: Omit<DayArgs, "kind" | "storeName">): TimeIssue | null {
 		prepItemName: args.prep.productName,
 	});
 	if (issue?.kind !== "no_slot") return null;
-	if (!args.timed && issue.reason !== "closed_day" && !issue.prep) return null;
+	// A date-only day is ruled out only by being shut all day — a weekly day
+	// off or a closed date — or by prep outlasting today.
+	if (issue.reason === "closed_day" || issue.reason === "closed_date") {
+		return issue;
+	}
+	if (!args.timed && !issue.prep) return null;
 	return issue;
 }
 
@@ -172,6 +181,7 @@ export function fulfilmentTimeCopy(
 ): CopyPart[] | null {
 	const issue = fulfilmentTimeIssue({
 		hours: args.hours,
+		closedDates: args.closedDates,
 		dayEpoch: args.dateEpoch,
 		timeMinutes: args.timeMinutes,
 		now: args.now,
@@ -197,6 +207,7 @@ export function fulfilmentTimeCopy(
  */
 export function prepHint(args: {
 	hours: OpeningHours | undefined;
+	closedDates: ReadonlyArray<ClosedDateRange> | undefined;
 	now: number;
 	prep: CartPrep;
 	kind: FulfilmentKind;
@@ -204,9 +215,11 @@ export function prepHint(args: {
 	noticeDays: number;
 	timed: boolean;
 }): CopyPart[] | null {
-	const { hours, now, prep, kind, noticeDays, timed } = args;
+	const { hours, closedDates, now, prep, kind, noticeDays, timed } = args;
 	if (prep.minutes <= 0 || noticeDays >= 1) return null;
 	const today = todayMytMidnight(now);
+	// Today is a closed date: the day notice says so, and prep changes nothing.
+	if (closureOn(closedDates, today)) return null;
 	const judged = prepFloorHours(hours, timed);
 	const withoutPrep = selectableTimeWindows(judged, today, now, 0);
 	if (withoutPrep.length === 0) return null;

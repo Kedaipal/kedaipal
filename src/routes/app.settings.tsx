@@ -9,7 +9,6 @@ import {
 	ChevronRight,
 	ClipboardList,
 	CreditCard,
-	Info,
 	Landmark,
 	MapPinned,
 	MessageCircle,
@@ -20,6 +19,7 @@ import {
 	ShieldCheck,
 	Store,
 	Trash2,
+	UsersRound,
 	UtensilsCrossed,
 	Wrench,
 } from "lucide-react";
@@ -55,6 +55,7 @@ import {
 	TEMPLATE_KEYS,
 	type TemplateKey,
 } from "../../convex/lib/whatsappCopy";
+import { AreaGate } from "../components/app/area-gate";
 import {
 	PageHeader,
 	PageHeaderSkeleton,
@@ -68,6 +69,14 @@ import { CountrySetupPanel } from "../components/settings/country-setup-panel";
 import { FulfilmentTab } from "../components/settings/fulfilment-tab";
 import { IntegrationsTab } from "../components/settings/integrations-tab";
 import { NotificationsCard } from "../components/settings/notifications-card";
+import { OrderFlowsSection } from "../components/settings/order-flows-card";
+import {
+	Card,
+	InfoBanner,
+	SAVE_BTN_CLASS,
+	SectionHeading,
+} from "../components/settings/settings-primitives";
+import { TeamTab } from "../components/settings/team-tab";
 import { WaOrderAlertsCard } from "../components/settings/wa-order-alerts-card";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
@@ -89,23 +98,12 @@ import {
 	type CardTarget,
 	type FixHighlight,
 	highlightFor,
-	highlightRingClass,
+	revealAnchorWhenMounted,
 	SETTINGS_ANCHOR,
-	scrollToAnchor,
 } from "../lib/country-setup-copy";
 import { convexErrorMessage } from "../lib/format";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
-import {
-	ANCHOR_UI_LABELS,
-	collectStageConfigErrors,
-	MAX_ORDER_STAGES,
-	type OrderStage,
-	resolveStages,
-	STAGE_ANCHORS,
-	STAGE_DESCRIPTION_MAX_LENGTH,
-	STAGE_LABEL_MAX_LENGTH,
-	type StageAnchor,
-} from "../lib/orderStatus";
+import type { StatusLabels } from "../lib/orderStatus";
 import { normalizeMobileDigits, toNationalPhoneInput } from "../lib/phone";
 import { reorderByIds } from "../lib/reorder";
 import {
@@ -115,8 +113,8 @@ import {
 import { validateStoreName } from "../lib/slug";
 import {
 	isSettingsSpotlightKey,
-	SPOTLIGHT_ANCHOR,
 	type SettingsSpotlightKey,
+	SPOTLIGHT_ANCHOR,
 } from "../lib/spotlight";
 import { hasFeature, tierPill } from "../lib/subscription";
 import { cn } from "../lib/utils";
@@ -147,6 +145,7 @@ const LOCALE_LABELS: Record<Locale, string> = {
 
 type SettingsTab =
 	| "store"
+	| "team"
 	| "billing"
 	| "whatsapp"
 	| "payments"
@@ -173,6 +172,14 @@ const SETTINGS_TABS: ReadonlyArray<{
 		label: "Store",
 		description: "Name, logo, URL and currency",
 		icon: <Store className="size-4" />,
+	},
+	// Team sits between the store's identity and its money (Store group): who
+	// operates the store is an account-level fact, not a "how you sell" one.
+	{
+		id: "team",
+		label: "Team",
+		description: "Invite helpers & control what they can access",
+		icon: <UsersRound className="size-4" />,
 	},
 	{
 		id: "billing",
@@ -235,7 +242,7 @@ const SETTINGS_GROUPS: ReadonlyArray<{
 	label: string;
 	tabs: SettingsTab[];
 }> = [
-	{ label: "Store", tabs: ["store", "billing"] },
+	{ label: "Store", tabs: ["store", "team", "billing"] },
 	{
 		label: "Selling",
 		tabs: [
@@ -256,64 +263,6 @@ const SETTINGS_GROUPS: ReadonlyArray<{
  *
  * `scroll-mt-24` keeps the sticky header off the card once scrolled to.
  */
-function Card({
-	children,
-	id,
-	highlight,
-}: {
-	children: ReactNode;
-	id?: string;
-	highlight?: FixHighlight;
-}) {
-	return (
-		<section
-			id={id}
-			data-fix-highlight={highlight ?? undefined}
-			className={`flex flex-col gap-4 rounded-2xl border bg-background p-5 scroll-mt-24 lg:p-6 ${highlightRingClass(highlight)}`}
-		>
-			{children}
-		</section>
-	);
-}
-
-function SectionHeading({
-	title,
-	description,
-}: {
-	title: string;
-	description?: string;
-}) {
-	return (
-		<div className="flex flex-col gap-1">
-			<h3 className="text-sm font-semibold text-foreground">{title}</h3>
-			{description ? (
-				<p className="text-xs text-muted-foreground leading-relaxed">
-					{description}
-				</p>
-			) : null}
-		</div>
-	);
-}
-
-const SAVE_BTN_CLASS = "h-11 lg:h-10 lg:w-auto lg:self-end lg:min-w-[160px]";
-
-function InfoBanner({
-	title,
-	children,
-}: {
-	title: string;
-	children: ReactNode;
-}) {
-	return (
-		<div className="flex gap-3 rounded-xl border border-accent/20 bg-accent/5 px-4 py-3.5">
-			<Info className="size-4 shrink-0 text-accent mt-0.5" aria-hidden="true" />
-			<div className="flex flex-col gap-1.5 text-sm text-muted-foreground leading-relaxed">
-				<p className="font-medium text-foreground">{title}</p>
-				{children}
-			</div>
-		</div>
-	);
-}
 
 export const Route = createFileRoute("/app/settings")({
 	// `tab` stays optional: no tab = the grouped index on mobile (desktop falls
@@ -484,10 +433,9 @@ function SettingsRoute() {
 		cardTarget?.anchor === anchor ? cardTarget.highlight : undefined;
 	useEffect(() => {
 		if (!targetAnchor) return;
-		// The tab body mounts in this same commit, so the target doesn't exist
-		// until after paint — wait a frame rather than racing it.
-		const frame = requestAnimationFrame(() => scrollToAnchor(targetAnchor));
-		return () => cancelAnimationFrame(frame);
+		// The tab body renders behind a skeleton until the store loads, so the
+		// card can mount well after this effect — wait for IT, not a frame.
+		return revealAnchorWhenMounted(targetAnchor);
 	}, [targetAnchor]);
 
 	if (!retailer) return <SettingsSkeleton />;
@@ -750,334 +698,304 @@ function SettingsRoute() {
 				}
 			>
 				{activeTab === "store" ? (
-					<div className="flex flex-col gap-6 pt-2">
-						<Card>
-							<StoreNameForm
-								current={retailer.storeName}
-								onSave={(storeName) => updateSettings({ storeName })}
-							/>
-						</Card>
-						<Card
-							id={SPOTLIGHT_ANCHOR.business_details.anchor}
-							highlight={ringFor(SPOTLIGHT_ANCHOR.business_details.anchor)}
-						>
-							<BusinessIdentityForm
-								current={retailer.businessIdentity}
-								country={retailer.country}
-								onSave={(businessIdentity) =>
-									updateSettings({ businessIdentity })
-								}
-							/>
-						</Card>
-						<Card>
-							<NotificationsCard />
-						</Card>
-						{/* Notification surfaces live together: browser (above), WhatsApp,
-						    email (below). The WA card only mounts when the deployment has
-						    an approved seller template configured (86eyhw9zy). */}
-						{retailer.waOrderAlertsAvailable ? (
-							<Card
-								id={SETTINGS_ANCHOR.notify_wa_phone}
-								highlight={ringFor(SETTINGS_ANCHOR.notify_wa_phone)}
-							>
-								<WaOrderAlertsCard
-									enabled={retailer.orderWaAlerts === true}
-									currentPhone={retailer.notifyWaPhone ?? ""}
-									fallbackPhone={retailer.waPhone ?? ""}
-									optedOut={retailer.notifyWaPhoneOptedOut === true}
-									canUse={hasFeature(retailer.subscription, "waOrderAlerts")}
-									country={retailer.country}
-									onSave={(patch) => updateSettings(patch)}
+					<AreaGate area="store_settings">
+						<div className="flex flex-col gap-6 pt-2">
+							<Card>
+								<StoreNameForm
+									current={retailer.storeName}
+									onSave={(storeName) => updateSettings({ storeName })}
 								/>
 							</Card>
-						) : null}
-						<Card>
-							<NotifyEmailForm
-								current={retailer.notifyEmail ?? ""}
-								onSave={(notifyEmail) => updateSettings({ notifyEmail })}
-							/>
-						</Card>
-						<Card>
-							<StoreDescriptionForm
-								current={retailer.storeDescription ?? ""}
-								onSave={(storeDescription) =>
-									updateSettings({ storeDescription })
-								}
-							/>
-						</Card>
-						<Card>
-							<StoreTypeForm
-								current={retailer.storeType}
-								onSave={(storeType) => updateSettings({ storeType })}
-							/>
-						</Card>
-						{slugRenameForm}
-						<Card>
-							<LogoForm
-								currentLogoUrl={retailer.logoUrl}
-								onSave={(logoStorageId) => updateSettings({ logoStorageId })}
-							/>
-						</Card>
-						<Card>
-							<CoverImageForm
-								currentCoverUrl={retailer.coverImageUrl}
-								onSave={(coverImageStorageId) =>
-									updateSettings({ coverImageStorageId })
-								}
-							/>
-						</Card>
-						<Card
-							id={SPOTLIGHT_ANCHOR.store_country.anchor}
-							highlight={ringFor(SPOTLIGHT_ANCHOR.store_country.anchor)}
-						>
-							<CountryForm
-								current={retailer.country}
-								currency={retailer.currency}
-								deliveryConfig={retailer.deliveryConfig}
-								deliveryBooking={retailer.deliveryBooking}
-								waPhone={retailer.waPhone}
-								notifyWaPhone={retailer.notifyWaPhone}
-								onSave={(patch) => updateSettings(patch)}
-							/>
-							{/* Directly under the picker, so "what did that just do?"
+							<Card
+								id={SPOTLIGHT_ANCHOR.business_details.anchor}
+								highlight={ringFor(SPOTLIGHT_ANCHOR.business_details.anchor)}
+							>
+								<BusinessIdentityForm
+									current={retailer.businessIdentity}
+									country={retailer.country}
+									onSave={(businessIdentity) =>
+										updateSettings({ businessIdentity })
+									}
+								/>
+							</Card>
+							<Card>
+								<NotificationsCard />
+							</Card>
+							{/* Notification surfaces live together: browser (above), WhatsApp,
+						    email (below). The WA card only mounts when the deployment has
+						    an approved seller template configured (86eyhw9zy). */}
+							{retailer.waOrderAlertsAvailable ? (
+								<Card
+									id={SETTINGS_ANCHOR.notify_wa_phone}
+									highlight={ringFor(SETTINGS_ANCHOR.notify_wa_phone)}
+								>
+									<WaOrderAlertsCard
+										enabled={retailer.orderWaAlerts === true}
+										currentPhone={retailer.notifyWaPhone ?? ""}
+										fallbackPhone={retailer.waPhone ?? ""}
+										optedOut={retailer.notifyWaPhoneOptedOut === true}
+										canUse={hasFeature(retailer.subscription, "waOrderAlerts")}
+										country={retailer.country}
+										onSave={(patch) => updateSettings(patch)}
+									/>
+								</Card>
+							) : null}
+							<Card>
+								<NotifyEmailForm
+									current={retailer.notifyEmail ?? ""}
+									onSave={(notifyEmail) => updateSettings({ notifyEmail })}
+								/>
+							</Card>
+							<Card>
+								<StoreDescriptionForm
+									current={retailer.storeDescription ?? ""}
+									onSave={(storeDescription) =>
+										updateSettings({ storeDescription })
+									}
+								/>
+							</Card>
+							<Card>
+								<StoreTypeForm
+									current={retailer.storeType}
+									onSave={(storeType) => updateSettings({ storeType })}
+								/>
+							</Card>
+							{slugRenameForm}
+							<Card>
+								<LogoForm
+									currentLogoUrl={retailer.logoUrl}
+									onSave={(logoStorageId) => updateSettings({ logoStorageId })}
+								/>
+							</Card>
+							<Card>
+								<CoverImageForm
+									currentCoverUrl={retailer.coverImageUrl}
+									onSave={(coverImageStorageId) =>
+										updateSettings({ coverImageStorageId })
+									}
+								/>
+							</Card>
+							<Card
+								id={SPOTLIGHT_ANCHOR.store_country.anchor}
+								highlight={ringFor(SPOTLIGHT_ANCHOR.store_country.anchor)}
+							>
+								<CountryForm
+									current={retailer.country}
+									currency={retailer.currency}
+									deliveryConfig={retailer.deliveryConfig}
+									deliveryBooking={retailer.deliveryBooking}
+									waPhone={retailer.waPhone}
+									notifyWaPhone={retailer.notifyWaPhone}
+									onSave={(patch) => updateSettings(patch)}
+								/>
+								{/* Directly under the picker, so "what did that just do?"
 							    is answered where the question was asked. Renders
 							    nothing for a store that has never switched. */}
-							<CountrySetupPanel
-								onGoToFix={(tab, key) =>
-									navigate({ search: { tab, fix: key } })
-								}
-							/>
-						</Card>
-						<Card>
-							<CurrencyForm
-								current={retailer.currency}
-								onSave={(currency) => updateSettings({ currency })}
-							/>
-						</Card>
-					</div>
+								<CountrySetupPanel
+									onGoToFix={(tab, key) =>
+										navigate({ search: { tab, fix: key } })
+									}
+								/>
+							</Card>
+							<Card>
+								<CurrencyForm
+									current={retailer.currency}
+									onSave={(currency) => updateSettings({ currency })}
+								/>
+							</Card>
+						</div>
+					</AreaGate>
+				) : null}
+
+				{activeTab === "team" ? (
+					<TeamTab retailerId={retailer._id} storeName={retailer.storeName} />
 				) : null}
 
 				{activeTab === "billing" ? (
-					<BillingTab
-						retailer={retailer}
-						target={cardTarget}
-						billingReturn={
-							autorenew === "return"
-								? "autorenew"
-								: paid === "return"
-									? "paid"
-									: undefined
-						}
-						onBillingReturnHandled={() =>
-							navigate({ search: { tab: "billing" }, replace: true })
-						}
-					/>
+					<AreaGate area="billing">
+						<BillingTab
+							retailer={retailer}
+							target={cardTarget}
+							billingReturn={
+								autorenew === "return"
+									? "autorenew"
+									: paid === "return"
+										? "paid"
+										: undefined
+							}
+							onBillingReturnHandled={() =>
+								navigate({ search: { tab: "billing" }, replace: true })
+							}
+						/>
+					</AreaGate>
 				) : null}
 
 				{activeTab === "whatsapp" ? (
-					<div className="flex flex-col gap-6 pt-2">
-						<InfoBanner title="How WhatsApp works on Kedaipal">
-							<p>
-								Every order sends the buyer{" "}
-								<span className="font-medium text-foreground">
-									one WhatsApp message
-								</span>{" "}
-								— the confirmation — from{" "}
-								<span className="font-medium text-foreground">
-									Kedaipal's shared WhatsApp Business number
-								</span>{" "}
-								on your behalf, no Meta account needed.
-							</p>
-							<p>
-								That message links to the buyer's own order page, which updates
-								itself. Packing, shipping, payment and cancellation no longer
-								send a WhatsApp — the buyer sees them on that page.
-							</p>
-							<p>
-								Add your personal WhatsApp number below so buyers can reach you
-								directly. It appears as a tappable contact link on their order
-								page.
-							</p>
-						</InfoBanner>
+					<AreaGate area="store_settings" ownerOnly>
+						<div className="flex flex-col gap-6 pt-2">
+							<InfoBanner title="How WhatsApp works on Kedaipal">
+								<p>
+									Every order sends the buyer{" "}
+									<span className="font-medium text-foreground">
+										one WhatsApp message
+									</span>{" "}
+									— the confirmation — from{" "}
+									<span className="font-medium text-foreground">
+										Kedaipal's shared WhatsApp Business number
+									</span>{" "}
+									on your behalf, no Meta account needed.
+								</p>
+								<p>
+									That message links to the buyer's own order page, which
+									updates itself. Packing, shipping, payment and cancellation no
+									longer send a WhatsApp — the buyer sees them on that page.
+								</p>
+								<p>
+									Add your personal WhatsApp number below so buyers can reach
+									you directly. It appears as a tappable contact link on their
+									order page.
+								</p>
+							</InfoBanner>
 
-						<Card
-							id={SETTINGS_ANCHOR.wa_phone}
-							highlight={ringFor(SETTINGS_ANCHOR.wa_phone)}
-						>
-							<WaPhoneForm
-								current={retailer.waPhone ?? ""}
-								country={retailer.country}
-								onSave={(waPhone) => updateSettings({ waPhone })}
-							/>
-						</Card>
-						<Card>
-							<LocaleForm
-								current={retailer.locale}
-								onSave={(locale) => updateSettings({ locale })}
-							/>
-						</Card>
-						<Card
-							id={SETTINGS_ANCHOR.message_copy}
-							highlight={ringFor(SETTINGS_ANCHOR.message_copy)}
-						>
-							<MessageTemplatesForm
-								current={retailer.messageTemplates}
-								onSave={(messageTemplates) =>
-									updateSettings({ messageTemplates })
-								}
-							/>
-						</Card>
-					</div>
+							<Card
+								id={SETTINGS_ANCHOR.wa_phone}
+								highlight={ringFor(SETTINGS_ANCHOR.wa_phone)}
+							>
+								<WaPhoneForm
+									current={retailer.waPhone ?? ""}
+									country={retailer.country}
+									onSave={(waPhone) => updateSettings({ waPhone })}
+								/>
+							</Card>
+							<Card>
+								<LocaleForm
+									current={retailer.locale}
+									onSave={(locale) => updateSettings({ locale })}
+								/>
+							</Card>
+							<Card
+								id={SETTINGS_ANCHOR.message_copy}
+								highlight={ringFor(SETTINGS_ANCHOR.message_copy)}
+							>
+								<MessageTemplatesForm
+									current={retailer.messageTemplates}
+									onSave={(messageTemplates) =>
+										updateSettings({ messageTemplates })
+									}
+								/>
+							</Card>
+						</div>
+					</AreaGate>
 				) : null}
 
 				{activeTab === "payments" ? (
-					<div className="flex flex-col gap-6 pt-2">
-						<Card
-							id={SETTINGS_ANCHOR.payment_methods}
-							highlight={ringFor(SETTINGS_ANCHOR.payment_methods)}
-						>
-							<PaymentMethodsForm
-								current={retailer.paymentMethods ?? []}
-								country={retailer.country}
-								onSave={(paymentMethods) => updateSettings({ paymentMethods })}
-							/>
-						</Card>
-						{/* HitPay moved to Settings → Integrations (2 Sep IA rework) —
+					<AreaGate area="payments_settings">
+						<div className="flex flex-col gap-6 pt-2">
+							<Card
+								id={SETTINGS_ANCHOR.payment_methods}
+								highlight={ringFor(SETTINGS_ANCHOR.payment_methods)}
+							>
+								<PaymentMethodsForm
+									current={retailer.paymentMethods ?? []}
+									country={retailer.country}
+									onSave={(paymentMethods) =>
+										updateSettings({ paymentMethods })
+									}
+								/>
+							</Card>
+							{/* HitPay moved to Settings → Integrations (2 Sep IA rework) —
 						    one home for every third-party account. The pointer keeps the
 						    old home from reading as "online payments are gone". */}
-						<p className="px-1 text-xs text-muted-foreground">
-							Online payments (HitPay) moved to{" "}
-							<button
-								type="button"
-								onClick={() => navigate({ search: { tab: "integrations" } })}
-								className="font-medium text-accent hover:underline"
-							>
-								Settings → Integrations
-							</button>
-							— connect your account there; buyers keep seeing Pay now on their
-							orders as before.
-						</p>
-						{/* Says plainly that nothing chases the buyer automatically, and
+							<p className="px-1 text-xs text-muted-foreground">
+								Online payments (HitPay) moved to{" "}
+								<button
+									type="button"
+									onClick={() => navigate({ search: { tab: "integrations" } })}
+									className="font-medium text-accent hover:underline"
+								>
+									Settings → Integrations
+								</button>
+								— connect your account there; buyers keep seeing Pay now on
+								their orders as before.
+							</p>
+							{/* Says plainly that nothing chases the buyer automatically, and
 						    names the one manual tool that exists — so the behaviour is
 						    discoverable without a seller assuming a nudge went out that
 						    didn't (docs/payment-reminder.md). */}
-						<p className="px-1 text-xs text-muted-foreground">
-							Kedaipal doesn't chase unpaid orders automatically. Each order
-							gets one WhatsApp — the confirmation — and it links the buyer to
-							their order page, where these payment details and the “I've paid”
-							button live. If an order is still unpaid on day 11, a “Send
-							payment reminder” button appears on its order page (once per day,
-							until day 14) — sending it is always your call.
-						</p>
-					</div>
+							<p className="px-1 text-xs text-muted-foreground">
+								Kedaipal doesn't chase unpaid orders automatically. Each order
+								gets one WhatsApp — the confirmation — and it links the buyer to
+								their order page, where these payment details and the “I've
+								paid” button live. If an order is still unpaid on day 11, a
+								“Send payment reminder” button appears on its order page (once
+								per day, until day 14) — sending it is always your call.
+							</p>
+						</div>
+					</AreaGate>
 				) : null}
 
 				{activeTab === "fulfilment" ? (
-					<FulfilmentTab
-						target={cardTarget}
-						currency={retailer.currency}
-						retailerId={retailer._id}
-						country={retailer.country}
-						offerSelfCollect={retailer.offerSelfCollect ?? false}
-						offerDelivery={retailer.offerDelivery ?? true}
-						deliveryConfig={retailer.deliveryConfig}
-						businessAddress={retailer.businessAddress}
-						deliveryBooking={retailer.deliveryBooking}
-						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
-						openingHours={retailer.openingHours}
-						minOrderValue={retailer.minOrderValue}
-						awbConfig={retailer.awbConfig}
-						subscription={retailer.subscription}
-					/>
+					<AreaGate area="fulfilment">
+						<FulfilmentTab
+							target={cardTarget}
+							currency={retailer.currency}
+							retailerId={retailer._id}
+							country={retailer.country}
+							offerSelfCollect={retailer.offerSelfCollect ?? false}
+							offerDelivery={retailer.offerDelivery ?? true}
+							deliveryConfig={retailer.deliveryConfig}
+							businessAddress={retailer.businessAddress}
+							deliveryBooking={retailer.deliveryBooking}
+							minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
+							openingHours={retailer.openingHours}
+							closedDates={retailer.closedDates}
+							hasBookingListings={hasBookingListings}
+							minOrderValue={retailer.minOrderValue}
+							awbConfig={retailer.awbConfig}
+							subscription={retailer.subscription}
+						/>
+					</AreaGate>
 				) : null}
 
 				{activeTab === "integrations" ? (
-					<IntegrationsTab
-						target={cardTarget}
-						retailerId={retailer._id}
-						country={retailer.country}
-						deliveryBooking={retailer.deliveryBooking}
-						hitpay={retailer.hitpay}
-						subscription={retailer.subscription}
-						onSave={updateSettings}
-					/>
+					<AreaGate area="integrations">
+						<IntegrationsTab
+							target={cardTarget}
+							retailerId={retailer._id}
+							country={retailer.country}
+							deliveryBooking={retailer.deliveryBooking}
+							hitpay={retailer.hitpay}
+							subscription={retailer.subscription}
+							onSave={updateSettings}
+						/>
+					</AreaGate>
 				) : null}
 
 				{activeTab === "bookings" ? (
-					<div className="flex flex-col gap-6 pt-2">
-						<BookingsTab retailerId={retailer._id} />
-					</div>
+					<AreaGate area="bookings">
+						<div className="flex flex-col gap-6 pt-2">
+							<BookingsTab retailerId={retailer._id} />
+						</div>
+					</AreaGate>
 				) : null}
 
 				{activeTab === "order-status" ? (
-					<div className="flex flex-col gap-6 pt-2">
-						<InfoBanner title="How order stages work">
-							<p>
-								Build the steps your orders move through — name them however you
-								work. Buyers see them as a live timeline; you advance orders
-								step-by-step from the dashboard.
-							</p>
-							<p>
-								Every step maps to one of four built-in milestones via{" "}
-								<span className="font-medium text-foreground">“Counts as”</span>
-								, so payments, packing and tracking keep working:{" "}
-								<span className="font-medium text-foreground">Accepted</span> →{" "}
-								<span className="font-medium text-foreground">
-									In production
-								</span>{" "}
-								→ <span className="font-medium text-foreground">Ready</span> →{" "}
-								<span className="font-medium text-foreground">Done</span>.
-							</p>
-							<p>
-								<span className="font-medium text-foreground">
-									Your first step should count as “Accepted”, your last as
-									“Done”
-								</span>{" "}
-								— map the steps in between to whichever milestone fits. E.g. a
-								cake shop: “Order received” (Accepted) → “Baking” (In
-								production) → “Ready for pickup” (Ready) → “Collected” (Done).
-							</p>
-						</InfoBanner>
-
-						{/* The booking carve-out, stated where the seller configures the
-						    thing it carves out of. Custom steps describe how an order is
-						    PREPARED; a stay or a membership isn't prepared, so bookings
-						    keep their own three milestones. Without this line the rule
-						    would be invisible until a seller wondered why their campsite
-						    order ignored the flow they'd just built. */}
-						{hasBookingListings || hasEventListings ? (
-							<p className="rounded-xl border border-border bg-muted/40 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
-								<span className="font-semibold text-foreground">
-									{hasBookingListings && hasEventListings
-										? "Bookings and events don't use these steps."
-										: hasBookingListings
-											? "Bookings don't use these steps."
-											: "Events don't use these steps."}
-								</span>{" "}
-								{hasBookingListings
-									? "A stay always runs Confirmed → Checked in → Checked out, and a fixed-length package Confirmed → Active → Ended. "
-									: ""}
-								{hasEventListings
-									? "An event RSVP always runs Confirmed → Checked in. "
-									: ""}
-								What you set here applies to your product orders.
-							</p>
-						) : null}
-
-						<Card>
-							<StageEditor
-								seed={resolveStages({
-									orderStages: retailer.orderStages,
-									labels: retailer.statusLabels,
-									deliveryMethod: retailer.offerSelfCollect
-										? "self_collect"
-										: "delivery",
-								})}
-								isCustomized={Boolean(retailer.orderStages?.length)}
-								onSave={(orderStages) => updateSettings({ orderStages })}
-							/>
-						</Card>
-					</div>
+					<AreaGate area="store_settings">
+						<OrderFlowsSection
+							input={{
+								orderFlows: retailer.orderFlows,
+								orderStages: retailer.orderStages,
+								statusLabels: retailer.statusLabels as StatusLabels | undefined,
+								// Undefined reads as TRUE for delivery (legacy stores always had
+								// it) and as FALSE for pickup — same rule as the storefront.
+								offerDelivery: retailer.offerDelivery !== false,
+								offerSelfCollect: retailer.offerSelfCollect === true,
+								hasBookingListings,
+								hasEventListings,
+							}}
+							onSave={(orderFlows) => updateSettings({ orderFlows })}
+						/>
+					</AreaGate>
 				) : null}
 			</div>
 		</div>
@@ -2312,423 +2230,6 @@ function MessageTemplatesForm({
 	);
 }
 
-// One editable stage in the StageEditor. `_key` is a stable React key so drag
-// reordering doesn't remount inputs; `id` is the server id ("" = new stage).
-type StageDraft = {
-	_key: string;
-	id: string;
-	anchor: StageAnchor;
-	labelEn: string;
-	labelMs: string;
-	labelZh: string;
-	descEn: string;
-	descMs: string;
-	descZh: string;
-};
-
-function seedToDraft(s: OrderStage): StageDraft {
-	return {
-		_key: crypto.randomUUID(),
-		// Synthesized defaults ("default:<anchor>") aren't real ids — saving turns
-		// them into configured stages with fresh ids.
-		id: s.id.startsWith("default:") ? "" : s.id,
-		anchor: s.anchor,
-		labelEn: s.label.en,
-		labelMs: s.label.ms ?? "",
-		labelZh: s.label.zh ?? "",
-		descEn: s.description?.en ?? "",
-		descMs: s.description?.ms ?? "",
-		descZh: s.description?.zh ?? "",
-	};
-}
-
-// Map drafts to the wire/validation shape (stable id for dup-checking).
-function draftsToStages(drafts: StageDraft[]): OrderStage[] {
-	return drafts.map((d, i) => ({
-		id: d.id || d._key,
-		anchor: d.anchor,
-		label: {
-			en: d.labelEn.trim(),
-			...(d.labelMs.trim() ? { ms: d.labelMs.trim() } : {}),
-			...(d.labelZh.trim() ? { zh: d.labelZh.trim() } : {}),
-		},
-		...(d.descEn.trim() || d.descMs.trim() || d.descZh.trim()
-			? {
-					description: {
-						...(d.descEn.trim() ? { en: d.descEn.trim() } : {}),
-						...(d.descMs.trim() ? { ms: d.descMs.trim() } : {}),
-						...(d.descZh.trim() ? { zh: d.descZh.trim() } : {}),
-					},
-				}
-			: {}),
-		sortOrder: i,
-	}));
-}
-
-function StageEditor({
-	seed,
-	isCustomized,
-	onSave,
-}: {
-	seed: OrderStage[];
-	isCustomized: boolean;
-	onSave: (stages: OrderStage[]) => Promise<unknown>;
-}) {
-	const [drafts, setDrafts] = useState<StageDraft[]>(() =>
-		seed.map(seedToDraft),
-	);
-	const [saving, setSaving] = useState(false);
-	// Cards collapse to a one-line summary by default (a full stage card is tall on
-	// mobile, so the page reads better at a glance). Click a card to expand it.
-	// During a drag the row always renders compact (state.isSorting), and the
-	// expanded set is preserved so cards re-open exactly as they were afterwards.
-	const [expanded, setExpanded] = useState<Set<string>>(new Set());
-	const { markAdded, revealRef } = useRevealOnAdd();
-	function toggleExpand(key: string) {
-		setExpanded((prev) => {
-			const next = new Set(prev);
-			if (next.has(key)) next.delete(key);
-			else next.add(key);
-			return next;
-		});
-	}
-
-	function update(key: string, patch: Partial<StageDraft>) {
-		setDrafts((prev) =>
-			prev.map((d) => (d._key === key ? { ...d, ...patch } : d)),
-		);
-	}
-	function remove(key: string) {
-		setDrafts((prev) => prev.filter((d) => d._key !== key));
-	}
-	function addStage() {
-		if (drafts.length >= MAX_ORDER_STAGES) {
-			toast.error(`You can have at most ${MAX_ORDER_STAGES} stages.`);
-			return;
-		}
-		const key = crypto.randomUUID();
-		// Open the new (empty) stage so the seller can fill it in immediately, and
-		// reveal it (scroll + focus) — it appends below the fold on a phone.
-		setExpanded((prev) => new Set(prev).add(key));
-		markAdded(key);
-		setDrafts((prev) => [
-			...prev,
-			{
-				_key: key,
-				id: "",
-				// Default to the last stage's anchor so the monotonic rule holds and
-				// the seller usually doesn't need to touch the dropdown.
-				anchor: prev[prev.length - 1]?.anchor ?? "confirmed",
-				labelEn: "",
-				labelMs: "",
-				labelZh: "",
-				descEn: "",
-				descMs: "",
-				descZh: "",
-			},
-		]);
-	}
-
-	const errors = collectStageConfigErrors(draftsToStages(drafts));
-	const canSave = drafts.length > 0 && errors.length === 0 && !saving;
-
-	async function handleSave() {
-		setSaving(true);
-		try {
-			await onSave(draftsToStages(drafts));
-			toast.success("Order stages saved.");
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setSaving(false);
-		}
-	}
-
-	async function handleReset() {
-		setSaving(true);
-		try {
-			await onSave([]); // empty → server clears → synthesized defaults
-			toast.success("Reset to the default stages.");
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setSaving(false);
-		}
-	}
-
-	function stageCard(
-		d: StageDraft,
-		index: number,
-		handle: ReactNode,
-		state: { isSorting: boolean; isOverlay: boolean },
-	) {
-		const displayLabel = d.labelEn.trim() || `Stage ${index + 1}`;
-		if (state.isSorting) {
-			return (
-				<div
-					className={`flex items-center gap-2 rounded-xl border bg-card p-3 ${
-						state.isOverlay ? "border-accent shadow-lg" : "border-border"
-					}`}
-				>
-					{handle}
-					<span className="truncate text-sm font-medium">{displayLabel}</span>
-					<span className="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-						{ANCHOR_UI_LABELS[d.anchor]}
-					</span>
-				</div>
-			);
-		}
-
-		const isExpanded = expanded.has(d._key);
-		if (!isExpanded) {
-			// Collapsed-by-default summary — same info as the drag row; click to open.
-			return (
-				<div className="flex items-center gap-2 rounded-xl border border-border bg-card p-3">
-					{handle}
-					<button
-						type="button"
-						onClick={() => toggleExpand(d._key)}
-						aria-expanded={false}
-						className="flex min-w-0 flex-1 items-center gap-2 text-left"
-					>
-						<span className="truncate text-sm font-medium">{displayLabel}</span>
-						<span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-							{ANCHOR_UI_LABELS[d.anchor]}
-						</span>
-						<ChevronDown className="ml-auto size-4 shrink-0 text-muted-foreground" />
-					</button>
-				</div>
-			);
-		}
-
-		return (
-			<div
-				ref={revealRef(d._key)}
-				className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4"
-			>
-				{/* Header mirrors the collapsed row exactly (handle + label + chevron
-				    far-right) so the toggle target doesn't jump when expanding. */}
-				<div className="flex items-center gap-2">
-					{handle}
-					<button
-						type="button"
-						onClick={() => toggleExpand(d._key)}
-						aria-expanded={true}
-						className="flex min-w-0 flex-1 items-center gap-2 text-left"
-					>
-						<span className="truncate text-sm font-medium">{displayLabel}</span>
-						<ChevronDown className="ml-auto size-4 shrink-0 rotate-180 text-muted-foreground" />
-					</button>
-				</div>
-
-				{/* Stack on mobile (full-width, never misaligned); three columns at sm+
-				    where each label fits one line so the inputs line up. */}
-				<div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-					<label className="flex flex-col gap-1">
-						<span className="text-xs font-medium text-muted-foreground">
-							Label (English)
-						</span>
-						<Input
-							type="text"
-							variant="field"
-							maxLength={STAGE_LABEL_MAX_LENGTH}
-							value={d.labelEn}
-							onChange={(e) => update(d._key, { labelEn: e.target.value })}
-							placeholder="e.g. Sewing"
-						/>
-					</label>
-					<label className="flex flex-col gap-1">
-						<span className="text-xs font-medium text-muted-foreground">
-							Label (Bahasa Malaysia)
-						</span>
-						<Input
-							type="text"
-							variant="field"
-							maxLength={STAGE_LABEL_MAX_LENGTH}
-							value={d.labelMs}
-							onChange={(e) => update(d._key, { labelMs: e.target.value })}
-							placeholder="Optional"
-						/>
-					</label>
-					<label className="flex flex-col gap-1">
-						<span className="text-xs font-medium text-muted-foreground">
-							Label (中文)
-						</span>
-						<Input
-							type="text"
-							variant="field"
-							maxLength={STAGE_LABEL_MAX_LENGTH}
-							value={d.labelZh}
-							onChange={(e) => update(d._key, { labelZh: e.target.value })}
-							placeholder="Optional"
-						/>
-					</label>
-				</div>
-
-				<label className="flex flex-col gap-1">
-					<span className="text-xs font-medium text-muted-foreground">
-						Counts as{" "}
-						<span className="font-normal">
-							— which milestone this step represents
-						</span>
-					</span>
-					<select
-						value={d.anchor}
-						onChange={(e) =>
-							update(d._key, { anchor: e.target.value as StageAnchor })
-						}
-						className="min-h-11 rounded-xl border border-input bg-background px-4 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-					>
-						{STAGE_ANCHORS.map((a) => (
-							<option key={a} value={a}>
-								{ANCHOR_UI_LABELS[a]}
-							</option>
-						))}
-					</select>
-					<span className="text-xs text-muted-foreground">
-						{d.anchor === "confirmed"
-							? "The order has been accepted. Use this for your first step."
-							: d.anchor === "delivered"
-								? "The order is complete. Use this for your last step."
-								: "A step while you're fulfilling the order."}
-					</span>
-				</label>
-
-				<div className="grid grid-cols-1 gap-2">
-					<label className="flex flex-col gap-1">
-						<span className="text-xs font-medium text-muted-foreground">
-							Buyer note (optional) — English
-						</span>
-						<textarea
-							value={d.descEn}
-							onChange={(e) => update(d._key, { descEn: e.target.value })}
-							placeholder="e.g. Drying — usually 1–2 days depending on weather"
-							rows={2}
-							maxLength={STAGE_DESCRIPTION_MAX_LENGTH}
-							className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-						/>
-					</label>
-					<label className="flex flex-col gap-1">
-						<span className="text-xs font-medium text-muted-foreground">
-							Buyer note (optional) — Bahasa Malaysia
-						</span>
-						<textarea
-							value={d.descMs}
-							onChange={(e) => update(d._key, { descMs: e.target.value })}
-							placeholder="Pilihan"
-							rows={2}
-							maxLength={STAGE_DESCRIPTION_MAX_LENGTH}
-							className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-						/>
-					</label>
-					<label className="flex flex-col gap-1">
-						<span className="text-xs font-medium text-muted-foreground">
-							Buyer note (optional) — 中文
-						</span>
-						<textarea
-							value={d.descZh}
-							onChange={(e) => update(d._key, { descZh: e.target.value })}
-							placeholder="可选"
-							rows={2}
-							maxLength={STAGE_DESCRIPTION_MAX_LENGTH}
-							className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-						/>
-					</label>
-				</div>
-
-				{/* Destructive action lives at the bottom (out of the toggle header) so
-				    it can't be hit while quick-expanding/collapsing. */}
-				<button
-					type="button"
-					onClick={() => remove(d._key)}
-					className="flex h-9 items-center gap-1.5 self-start rounded-lg px-2 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10"
-				>
-					<Trash2 className="size-3.5" />
-					Remove stage
-				</button>
-			</div>
-		);
-	}
-
-	return (
-		<div className="flex flex-col gap-4">
-			<div className="flex items-center justify-between gap-2">
-				<SectionHeading
-					title="Stages"
-					description="Drag to reorder. Each stage must “count as” the same milestone as the one before it, or a later one."
-				/>
-				<Button
-					type="button"
-					variant="outline"
-					className="h-9 shrink-0"
-					onClick={addStage}
-					disabled={drafts.length >= MAX_ORDER_STAGES}
-				>
-					<Plus className="size-4" />
-					Add stage
-				</Button>
-			</div>
-
-			{/* Stages used to be able to fire a WhatsApp each. They can't any more, so
-			    say what they still do — otherwise a seller who relied on stage pings
-			    just sees the toggle gone. */}
-			<p className="text-xs text-muted-foreground leading-relaxed">
-				Stages are your own words for the steps an order goes through. They name
-				the steps on the buyer's order page too — advancing a stage updates that
-				page instantly, but doesn't send the buyer a WhatsApp.
-			</p>
-
-			{drafts.length === 0 ? (
-				<p className="rounded-xl border border-dashed border-input bg-muted/20 px-4 py-4 text-center text-sm text-muted-foreground">
-					No stages — add at least one, or reset to the defaults.
-				</p>
-			) : (
-				<SortableList
-					items={drafts}
-					getId={(d) => d._key}
-					onReorder={(ids) =>
-						setDrafts((prev) => reorderByIds(prev, ids, (d) => d._key))
-					}
-					renderItem={(d, handle, state) =>
-						stageCard(d, drafts.indexOf(d), handle, state)
-					}
-					className="flex flex-col gap-3"
-				/>
-			)}
-
-			{errors.length > 0 ? (
-				<ul className="flex flex-col gap-1 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-xs text-destructive">
-					{errors.map((e) => (
-						<li key={e}>• {e}</li>
-					))}
-				</ul>
-			) : null}
-
-			<div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-end">
-				{isCustomized ? (
-					<Button
-						type="button"
-						variant="ghost"
-						onClick={handleReset}
-						disabled={saving}
-						className="h-11 lg:h-10 lg:w-auto"
-					>
-						Reset to defaults
-					</Button>
-				) : null}
-				<Button
-					type="button"
-					onClick={handleSave}
-					disabled={!canSave}
-					className={SAVE_BTN_CLASS}
-				>
-					{saving ? "Saving…" : "Save stages"}
-				</Button>
-			</div>
-		</div>
-	);
-}
-
 function LocaleForm({
 	current,
 	onSave,
@@ -2944,8 +2445,8 @@ function CurrencyForm({
 				const synced = result?.productsCurrencySynced ?? 0;
 				toast.success(
 					synced > 0
-						// currency-literal-ok: names the currency SETTING the seller just saved.
-						? `Currency saved — ${synced} product${synced === 1 ? "" : "s"} switched to ${value.currency}. Prices kept their numbers, so re-check them.`
+						? // currency-literal-ok: names the currency SETTING the seller just saved.
+							`Currency saved — ${synced} product${synced === 1 ? "" : "s"} switched to ${value.currency}. Prices kept their numbers, so re-check them.`
 						: "Currency saved.",
 				);
 			} catch (err) {

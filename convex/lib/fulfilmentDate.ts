@@ -151,19 +151,21 @@ const MONTHS = [
 
 /**
  * Human label for a fulfilment date, e.g. "Sat, 28 Jun 2026". Pass
- * `{ weekday: false }` for "28 Jun 2026". Rendered in the WhatsApp message, the
- * email, the dashboard, and the tracking page.
+ * `{ weekday: false }` for "28 Jun 2026", and `{ year: false }` for the first
+ * half of a range whose second half carries the year ("Thu, 1 Oct – Sat, 3 Oct
+ * 2026"). Rendered in the WhatsApp message, the email, the dashboard, and the
+ * tracking page.
  */
 export function formatFulfilmentDate(
 	epoch: number,
-	opts: { weekday?: boolean } = {},
+	opts: { weekday?: boolean; year?: boolean } = {},
 ): string {
 	const d = new Date(epoch + MYT_OFFSET_MS);
 	const day = d.getUTCDate();
 	const mon = MONTHS[d.getUTCMonth()];
-	const year = d.getUTCFullYear();
-	if (opts.weekday === false) return `${day} ${mon} ${year}`;
-	return `${WEEKDAYS[d.getUTCDay()]}, ${day} ${mon} ${year}`;
+	const year = opts.year === false ? "" : ` ${d.getUTCFullYear()}`;
+	if (opts.weekday === false) return `${day} ${mon}${year}`;
+	return `${WEEKDAYS[d.getUTCDay()]}, ${day} ${mon}${year}`;
 }
 
 /**

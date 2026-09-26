@@ -7,6 +7,7 @@ import {
 	type RetailerAccess,
 	requireRetailerAccess,
 } from "./lib/auth";
+import type { PermissionLevel } from "./lib/permissions";
 import {
 	isProductVisible,
 	recomputeCategoryCount,
@@ -38,20 +39,27 @@ const CATEGORY_PAGE_PRODUCT_LIMIT = 100;
 
 // Owner-OR-admin access (see convex/lib/auth.ts) so a Kedaipal admin can set up
 // a seller's categories during white-glove onboarding.
+// Categories ride the PRODUCTS grant (86exr91r4) — they're catalog structure,
+// and a separate row on the permissions page would gate nothing meaningful.
 async function requireRetailerOwner(
 	ctx: QueryCtx | MutationCtx,
 	retailerId: Id<"retailers">,
+	level: PermissionLevel,
 ): Promise<RetailerAccess> {
-	return requireRetailerAccess(ctx, retailerId);
+	return requireRetailerAccess(ctx, retailerId, { area: "products", level });
 }
 
 async function requireOwnedCategory(
 	ctx: QueryCtx | MutationCtx,
 	categoryId: Id<"categories">,
+	level: PermissionLevel,
 ): Promise<{ category: Doc<"categories">; access: RetailerAccess }> {
 	const category = await ctx.db.get(categoryId);
 	if (!category) throw new Error("Category not found");
-	const access = await requireRetailerAccess(ctx, category.retailerId);
+	const access = await requireRetailerAccess(ctx, category.retailerId, {
+		area: "products",
+		level,
+	});
 	return { category, access };
 }
 
@@ -137,7 +145,7 @@ export const listForRetailer = query({
 	): Promise<
 		Array<Doc<"categories"> & { productCount: number; imageUrl: string | null }>
 	> => {
-		await requireRetailerOwner(ctx, retailerId);
+		await requireRetailerOwner(ctx, retailerId, "read");
 		const rows = await ctx.db
 			.query("categories")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
@@ -277,7 +285,7 @@ export const listProductsForCategory = query({
 			imageUrl: string | null;
 		}>
 	> => {
-		await requireOwnedCategory(ctx, categoryId);
+		await requireOwnedCategory(ctx, categoryId, "read");
 		const junctions = await ctx.db
 			.query("productCategories")
 			.withIndex("by_category_sort", (q) => q.eq("categoryId", categoryId))
@@ -327,7 +335,7 @@ export const listProductsForCategory = query({
 export const namesByProduct = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }): Promise<Record<string, string[]>> => {
-		await requireRetailerOwner(ctx, retailerId);
+		await requireRetailerOwner(ctx, retailerId, "read");
 		const joins = await ctx.db
 			.query("productCategories")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
@@ -354,7 +362,7 @@ export const getProductCategoryIds = query({
 	handler: async (ctx, { productId }): Promise<Id<"categories">[]> => {
 		const product = await ctx.db.get(productId);
 		if (!product) return [];
-		await requireRetailerOwner(ctx, product.retailerId);
+		await requireRetailerOwner(ctx, product.retailerId, "read");
 		const rows = await ctx.db
 			.query("productCategories")
 			.withIndex("by_product", (q) => q.eq("productId", productId))
@@ -386,7 +394,7 @@ export const create = mutation({
 		ctx,
 		{ retailerId, name, slug, description, imageStorageId },
 	): Promise<{ categoryId: Id<"categories"> }> => {
-		const access = await requireRetailerOwner(ctx, retailerId);
+		const access = await requireRetailerOwner(ctx, retailerId, "write");
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		// Soft-lock (growth-write); admin act-as bypasses (white-glove).
@@ -443,7 +451,11 @@ export const update = mutation({
 		ctx,
 		{ categoryId, name, slug, description, imageStorageId },
 	): Promise<void> => {
-		const { category, access } = await requireOwnedCategory(ctx, categoryId);
+		const { category, access } = await requireOwnedCategory(
+			ctx,
+			categoryId,
+			"write",
+		);
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		// Soft-lock (growth-write); admin act-as bypasses.
@@ -507,7 +519,11 @@ export const update = mutation({
 export const setActive = mutation({
 	args: { categoryId: v.id("categories"), active: v.boolean() },
 	handler: async (ctx, { categoryId, active }): Promise<void> => {
-		const { category, access } = await requireOwnedCategory(ctx, categoryId);
+		const { category, access } = await requireOwnedCategory(
+			ctx,
+			categoryId,
+			"write",
+		);
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		// Soft-lock (growth-write); admin act-as bypasses.
@@ -549,7 +565,7 @@ export const reorder = mutation({
 		orderedIds: v.array(v.id("categories")),
 	},
 	handler: async (ctx, { retailerId, orderedIds }): Promise<void> => {
-		const access = await requireRetailerOwner(ctx, retailerId);
+		const access = await requireRetailerOwner(ctx, retailerId, "write");
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		// Soft-lock (growth-write); admin act-as bypasses.
@@ -600,7 +616,11 @@ export const reorderProducts = mutation({
 		orderedProductIds: v.array(v.id("products")),
 	},
 	handler: async (ctx, { categoryId, orderedProductIds }): Promise<void> => {
-		const { category, access } = await requireOwnedCategory(ctx, categoryId);
+		const { category, access } = await requireOwnedCategory(
+			ctx,
+			categoryId,
+			"write",
+		);
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		// Soft-lock (growth-write); admin act-as bypasses.
@@ -661,7 +681,7 @@ export const setProductCategories = mutation({
 	handler: async (ctx, { productId, categoryIds }): Promise<void> => {
 		const product = await ctx.db.get(productId);
 		if (!product) throw new Error("Product not found");
-		const access = await requireRetailerOwner(ctx, product.retailerId);
+		const access = await requireRetailerOwner(ctx, product.retailerId, "write");
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		// Soft-lock (growth-write); admin act-as bypasses.
@@ -777,7 +797,11 @@ export const setProductCategories = mutation({
 export const setHidden = mutation({
 	args: { categoryId: v.id("categories"), hidden: v.boolean() },
 	handler: async (ctx, { categoryId, hidden }): Promise<void> => {
-		const { category, access } = await requireOwnedCategory(ctx, categoryId);
+		const { category, access } = await requireOwnedCategory(
+			ctx,
+			categoryId,
+			"write",
+		);
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		if (!access.actingAsAdmin)

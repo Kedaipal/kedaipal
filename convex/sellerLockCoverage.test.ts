@@ -108,6 +108,18 @@ const UNLOCKED: Record<string, string> = {
 	"orders.bulkDeleteOrders": "Kedaipal admin only (isAdmin check, Forbidden)",
 	"subscriptions.setSeasonalHold":
 		"billing, and already refused: canEnterHold turns down a lapsed, comped or comp-ended store with copy written for each — a second guard would only replace a good message with a generic one",
+
+	// 4. Team seats (86exr91r4) — EXITS are never locked. Adding/reshaping
+	// seats IS locked (invite, resend, updatePermissions carry the guard);
+	// taking access away or walking out must never require paying first.
+	"team.cancelInvite": "exit: withdraws a seat promise — never trap that",
+	"team.remove":
+		"exit + security: a lapsed owner must still be able to cut a helper off immediately",
+	"team.leave": "exit: a member walking out can never need the owner to pay",
+	"team.acceptInvite":
+		"consumes a seat already promised before the lapse; the member lands in the same view-only store the owner sees, and every write they then try hits the lock",
+	"team.acceptPendingInvite":
+		"same as acceptInvite — the onboarding-banner variant of the same accept",
 };
 
 const CONVEX = __dirname;

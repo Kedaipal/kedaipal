@@ -669,6 +669,19 @@ describe("buildInboxPredicate — search spans every column (86eyrtz74)", () => 
 		expect(hits("60123456789")).toBe(true);
 	});
 
+	test("a foreign number typed the local way, trunk 0 and all, finds the stored international form (z8r3fdh274)", () => {
+		const uk = order({ customer: { name: "Tom", waPhone: "447911123456" } });
+		const search = (term: string) =>
+			buildInboxPredicate({ searchText: term })(uk);
+		expect(search("07911 123456")).toBe(true);
+		expect(search("+44 7911 123456")).toBe(true);
+		expect(search("7911 123456")).toBe(true);
+		// Dropping the trunk never turns a genuine miss into a hit.
+		expect(search("07911 999999")).toBe(false);
+		// Nor widens a short term into a 3-digit tail match.
+		expect(search("0456")).toBe(false);
+	});
+
 	test("an order with none of those fields is unaffected", () => {
 		const plain = order({ shortId: "ORD-0002" });
 		expect(

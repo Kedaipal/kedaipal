@@ -14,6 +14,7 @@ import {
 } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
+import { todayMytMidnight } from "./lib/fulfilmentDate";
 import {
 	canEnterHold,
 	canResumeHold,
@@ -57,7 +58,7 @@ function subDoc(partial: Partial<Doc<"subscriptions">>): Doc<"subscriptions"> {
 		billingCycle: "monthly",
 		status: "active",
 		orderCap: 200,
-		userCap: 2,
+		userCap: 3,
 		broadcastQuota: 100,
 		createdAt: 0,
 		updatedAt: 0,
@@ -74,7 +75,7 @@ describe("pure rules", () => {
 		expect(a.active).toBe(true);
 		expect(a.plan).toBe("pro");
 		expect(a.features.crm).toBe(true);
-		expect(a.caps).toEqual({ orderCap: 0, userCap: 2, broadcastQuota: 100 });
+		expect(a.caps).toEqual({ orderCap: 0, userCap: 3, broadcastQuota: 100 });
 		// Not held → the stored cap is what you get.
 		expect(resolveAccess(subDoc({ status: "active" })).caps.orderCap).toBe(200);
 		expect(resolveAccess(subDoc({ status: "active" })).held).toBe(false);
@@ -194,13 +195,14 @@ const placeOrder = (
 	t: ReturnType<typeof setup>,
 	retailerId: Id<"retailers">,
 	productId: Id<"products">,
+	buyer: { name: string; waPhone: string; waDialCountry?: string } = customer,
 ) =>
 	t.mutation(api.orders.create, {
 		retailerId,
 		items: [{ productId, quantity: 1 }],
 		currency: "MYR",
 		channel: "whatsapp",
-		customer,
+		customer: buyer,
 		deliveryAddress: validAddress,
 	});
 const cron = (t: ReturnType<typeof setup>) =>
@@ -248,21 +250,51 @@ describe("pause — a paid seller paused through their paid period", () => {
 		const t = setup();
 		const s = await seedPaidSeller(t, "u_refuse");
 		const asUser = t.withIdentity({ subject: s.userId });
+		const listingId = await asUser.mutation(api.products.create, {
+			retailerId: s.retailerId,
+			name: "Riverside Plot",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 1,
+			kind: "booking" as const,
+			booking: { capacityPerNight: 1 },
+			variants: [{ optionValues: [], price: 8000, onHand: 0 }],
+		});
 		await asUser.mutation(api.subscriptions.setSeasonalHold, {
 			retailerId: s.retailerId,
 			hold: true,
 		});
-		await expect(placeOrder(t, s.retailerId, s.productId)).rejects.toThrow(
-			/seasonal break/,
-		);
+		const checkIn = todayMytMidnight(Date.now()) + 3 * DAY;
+
+		// The pause is the answer whatever the buyer typed: every path checks
+		// the STORE before the number, so a buyer who can't order anyway is never
+		// sent off to fix their phone first. Hence the unusable numbers — a valid
+		// one couldn't tell which check ran first.
+		for (const phone of [
+			{ waPhone: "123" }, // junk under the store's own +60
+			{ waPhone: "012-345 6789", waDialCountry: "XX" }, // an unknown pick
+		]) {
+			await expect(
+				placeOrder(t, s.retailerId, s.productId, { name: "Aisha", ...phone }),
+			).rejects.toThrow(/seasonal break/);
+			await expect(
+				t.mutation(api.bookings.requestBooking, {
+					retailerId: s.retailerId,
+					productId: listingId,
+					checkIn,
+					checkOut: checkIn + 2 * DAY,
+					customer: { name: "Aisha", ...phone },
+				}),
+			).rejects.toThrow(/seasonal break/);
+			await expect(
+				asUser.mutation(api.counterCheckout.bindSessionManualPhone, {
+					...phone,
+					name: "Walk-in",
+				}),
+			).rejects.toThrow(/seasonal break/);
+		}
 		await expect(
 			asUser.mutation(api.counterCheckout.startAnonymousSession, {}),
-		).rejects.toThrow(/seasonal break/);
-		await expect(
-			asUser.mutation(api.counterCheckout.bindSessionManualPhone, {
-				waPhone: "60123456789",
-				name: "Walk-in",
-			}),
 		).rejects.toThrow(/seasonal break/);
 		// Editing the store stays live — the hold is not a soft-lock.
 		await expect(

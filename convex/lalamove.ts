@@ -11,6 +11,7 @@
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
+import { requireRetailerAccess } from "./lib/auth";
 import {
 	action,
 	internalAction,
@@ -28,6 +29,7 @@ import {
 	isActiveJobStatus,
 	LALAMOVE_BASE_URL,
 	type LalamoveCredentials,
+	type LalamoveMarket,
 	lalamoveAmountToSen,
 	normalizeLalamoveStatus,
 	parseLalamoveEventTime,
@@ -44,6 +46,7 @@ import {
 } from "./lib/lalamove";
 import { formatBusinessAddress } from "./lib/address";
 import { DEFAULT_COUNTRY } from "./lib/country";
+import { lalamoveBookingArmed } from "./lib/courierBooking";
 import { riderBookingAllowed } from "./lib/delivery";
 import { rateLimiter } from "./lib/rateLimiter";
 import { composeFulfilmentMoment } from "./lib/fulfilmentDate";
@@ -809,9 +812,10 @@ type DispatchContext =
 			destination: { latitude: number; longitude: number; address: string };
 			sender: { name: string; phone: string };
 			recipient: { name: string; phone: string; remarks?: string };
-			/** True when the buyer's WhatsApp isn't a Malaysian number — the
-			 * rider contact fell back to the seller (surfaced in the confirm
-			 * dialog so nobody is surprised when the rider calls the store). */
+			/** True when the buyer's WhatsApp isn't from the store's market —
+			 * the buyer-side rider contact fell back to the seller, with the
+			 * buyer's real number in the remarks (surfaced in the confirm dialog
+			 * so nobody is surprised when the rider calls the store). */
 			buyerContactFallback: boolean;
 			vehicleType: string;
 			/** "collection" reverses the trip: origin/sender are the BUYER's
@@ -871,9 +875,12 @@ async function dispatchContextForOrder(
 	const businessAddress = retailer.businessAddress!;
 	// Lalamove rejects a phone from outside the request's market (422 on a
 	// +65 number in MY, and now on a +60 number in SG — the JB cross-border
-	// buyer, in both directions). The rider contact falls back to the SELLER
-	// when the buyer's number is foreign, with the buyer's actual number
-	// carried in remarks so the rider can still reach them via the seller.
+	// buyer, in both directions — and, since buyers may type a number from any
+	// country (z8r3fdh274), on every overseas number). The rider contact falls
+	// back to the SELLER when the buyer's number is foreign, and the buyer's
+	// actual number rides the remarks — second, right after the order ref, so
+	// the 400-char cut can't reach it — for the rider to reach them via the
+	// seller.
 	const sellerPhone = toLalamoveContactPhone(
 		retailer.waPhone,
 		credentials.market,
@@ -911,10 +918,10 @@ async function dispatchContextForOrder(
 		phone: buyerLocalPhone ?? sellerPhone,
 	};
 	// Collection service (86eyg0n8e): the whole trip reverses — rider collects
-	// at the BUYER's address (buyer becomes the sender contact, same +60
-	// fallback) and drops off at the store. Remarks always ride the recipient
-	// stop (the only remarks slot in Lalamove v3), which either way is the stop
-	// where the order ref matters at hand-over.
+	// at the BUYER's address (buyer becomes the sender contact, with the same
+	// store-number fallback) and drops off at the store. Remarks always ride
+	// the recipient stop (the only remarks slot in Lalamove v3), which either
+	// way is the stop where the order ref matters at hand-over.
 	const collection =
 		(retailer.deliveryBooking as BookingConfig).deliveryDirection ===
 		"collection";
@@ -966,12 +973,16 @@ export const getDispatchContext = internalQuery({
 		const retailer = await ctx.db.get(order.retailerId);
 		if (!retailer) return { ok: false, reason: "not_found" };
 
-		// Plan gate — admin act-as bypasses (white-glove), mirroring updateSettings.
-		const identity = await ctx.auth.getUserIdentity();
-		const actingAsAdmin =
-			identity !== null && retailer.userId !== identity.subject;
+		// The caller's REAL role from the gate (86exr91r4 audit fix): "not the
+		// owner" used to read as acting-admin here, which would have handed every
+		// team member the admin plan-gate bypass. Booking a rider is orders work,
+		// so the write level applies; only a true admin skips the plan gate.
+		const access = await requireRetailerAccess(ctx, retailer._id, {
+			area: "orders",
+			level: "write",
+		});
 		let planOk = true;
-		if (!actingAsAdmin) {
+		if (access.role !== "admin") {
 			try {
 				await assertPlanFeature(ctx, retailer._id, "delivery");
 			} catch {
@@ -1058,6 +1069,11 @@ export const prepareBooking = action({
 				buyerPaidFee: number;
 				vehicleType: string;
 				buyerContactFallback: boolean;
+				/** The market the booking is made in (the store's country) — lets
+				 * the confirm dialog name it when `buyerContactFallback` is set,
+				 * since the client can't tell the market from the order (its
+				 * currency can diverge from the store's country). */
+				market: LalamoveMarket;
 				/** The pickup moment this quotation was scheduled for — the
 				 * buyer's fulfilment date+time (or the seller's override,
 				 * 86eyp5qd1) when still ahead at prepare time. Undefined = the
@@ -1128,6 +1144,7 @@ export const prepareBooking = action({
 				buyerPaidFee: context.buyerPaidFee,
 				vehicleType,
 				buyerContactFallback: context.buyerContactFallback,
+				market: context.credentials.market,
 				scheduledFor,
 				buyerRequestedMoment: context.requestedMoment,
 				expiresAt: parsed.expiresAt
@@ -1802,11 +1819,15 @@ export const getDeliveryJob = query({
 			retailer.deliveryBooking as BookingConfig | undefined,
 			retailer.country,
 		);
-		const identity = await ctx.auth.getUserIdentity();
-		const actingAsAdmin =
-			identity !== null && retailer.userId !== identity.subject;
+		// Real role from the gate (86exr91r4) — read level: this is the dispatch
+		// card's state, booking itself re-gates at write. Only a true admin
+		// skips the plan gate.
+		const access = await requireRetailerAccess(ctx, retailer._id, {
+			area: "orders",
+			level: "read",
+		});
 		let planOk = true;
-		if (!actingAsAdmin) {
+		if (access.role !== "admin") {
 			try {
 				await assertPlanFeature(ctx, retailer._id, "delivery");
 			} catch {
@@ -1834,12 +1855,11 @@ export const getDeliveryJob = query({
 		return {
 			promptBookOnPacked,
 			env: (retailer.deliveryBooking as BookingConfig | undefined)?.env,
-			// Agrees with `blockReason` by construction: a stored `enabled` flag
-			// carried in from Malaysia is not a working booking setup, and the
+			// Agrees with `blockReason` by construction (the shared predicate
+			// reads the same country gate): a stored `enabled` flag carried
+			// across a country switch is not a working booking setup, and the
 			// mark-shipped prompt keys off this to decide rider-vs-courier.
-			bookingEnabled:
-				retailer.deliveryBooking?.enabled === true &&
-				riderBookingAllowed(retailer.country ?? DEFAULT_COUNTRY),
+			bookingEnabled: lalamoveBookingArmed(retailer),
 			riderOnlyStore:
 				retailer.deliveryConfig?.mode === "lalamove" &&
 				riderBookingAllowed(retailer.country ?? DEFAULT_COUNTRY),

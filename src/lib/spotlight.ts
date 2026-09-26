@@ -113,6 +113,14 @@ export const SPOTLIGHT_ANCHOR = {
 		tab: "fulfilment",
 		anchor: "settings-opening-hours",
 	},
+	// The Closed dates card (z8r3fdhpm7), directly under Opening hours — the
+	// booking calendar's "manage closed dates" link and a release note both
+	// land on it.
+	closed_dates: {
+		page: "settings",
+		tab: "fulfilment",
+		anchor: "settings-closed-dates",
+	},
 	// The Pricing & capacity card of a stay listing — where the weekend rate
 	// (S13, z8r3fddkp8) lives. The card, not the field: every spotlight rings
 	// a card, and the field is its third row, labelled "Weekend rate".

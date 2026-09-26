@@ -13,6 +13,7 @@ import {
 	refreshWaProfileName,
 } from "./customers";
 import {
+	billingPastDueTemplateName,
 	claimLinkTemplateName,
 	orderConfirmTemplateName,
 	paymentReminderTemplateName,
@@ -22,6 +23,7 @@ import {
 	sellerPaymentReceivedTemplateName,
 	WhatsAppSendError,
 } from "./lib/whatsapp";
+import { storeOwnerIsAdmin } from "./lib/auth";
 import {
 	describeClaimWindow,
 	effectiveClaimStatus,
@@ -43,7 +45,6 @@ import {
 	isMockupPriceUnsettled,
 } from "./lib/order";
 import { orderPickupNotes } from "./lib/pickupNote";
-import type { OrderStage, StatusLabels } from "./lib/orderStatus";
 import { assertValidWaPhone } from "./lib/slug";
 import {
 	NO_PAYMENT_LABEL,
@@ -219,11 +220,6 @@ export const getOrderWithRetailer = internalQuery({
 		currency: string;
 		locale: Locale;
 		messageTemplates: MessageTemplates | undefined;
-		// Phase 2: stage config + this order's current stage, for stage-update
-		// notifications (notifyStageEntry).
-		orderStages: OrderStage[] | undefined;
-		statusLabels: StatusLabels | undefined;
-		currentStageId: string | undefined;
 		// Lets an in-flight confirmation-push retry bail out when the buyer has
 		// already been reached (86eyf1rck).
 		confirmationPushStatus: Doc<"orders">["confirmationPushStatus"];
@@ -268,9 +264,6 @@ export const getOrderWithRetailer = internalQuery({
 			messageTemplates: retailer.messageTemplates as
 				| MessageTemplates
 				| undefined,
-			orderStages: retailer.orderStages as OrderStage[] | undefined,
-			statusLabels: retailer.statusLabels as StatusLabels | undefined,
-			currentStageId: order.currentStageId,
 			confirmationPushStatus: order.confirmationPushStatus,
 			mockupPriceUnsettled: isMockupPriceUnsettled(order),
 			deliveryFeePending: order.deliveryFeePending === true,
@@ -1954,6 +1947,150 @@ export const notifyClaimLink = internalAction({
 				claimId,
 				outcome: "failed",
 			});
+		}
+	},
+});
+
+// ---------------------------------------------------------------------------
+// Billing lockout alert (z8r3fdg3mh)
+// ---------------------------------------------------------------------------
+
+/** Everything the past-due WhatsApp needs, in one roundtrip. Returns null when
+ * the invoice or its retailer is gone; the caller treats that as "nothing to
+ * say" (unlike the ORDER alerts, there is no email to hand back to — the
+ * overdue email is scheduled independently and has already gone out). */
+export const getInvoiceForBillingAlert = internalQuery({
+	args: { invoiceId: v.id("invoices") },
+	handler: async (
+		ctx,
+		{ invoiceId },
+	): Promise<{
+		retailerId: Id<"retailers">;
+		invoiceNumber: string;
+		status: Doc<"invoices">["status"];
+		total: number;
+		currency: string;
+		storeName: string;
+		notifyWaPhone: string | undefined;
+		locale: Locale;
+		/** An admin's own store is never soft-locked (see storeOwnerIsAdmin) —
+		 * telling them their dashboard is locked would be false. */
+		ownerIsAdmin: boolean;
+	} | null> => {
+		const invoice = await ctx.db.get(invoiceId);
+		if (!invoice) return null;
+		const retailer = await ctx.db.get(invoice.retailerId);
+		if (!retailer) return null;
+		return {
+			retailerId: invoice.retailerId,
+			invoiceNumber: invoice.invoiceNumber,
+			status: invoice.status,
+			total: invoice.total,
+			currency: invoice.currency,
+			// Same Meta-param hygiene the order alerts apply: a store name with a
+			// tab or 4+ spaces in it is a terminal template rejection, and the
+			// seller types this string themselves in Settings.
+			storeName: templateParam(retailer.storeName, "your store"),
+			notifyWaPhone: retailer.notifyWaPhone,
+			locale: pickLocale(retailer.locale),
+			ownerIsAdmin: storeOwnerIsAdmin(retailer),
+		};
+	},
+});
+
+/**
+ * The ONE WhatsApp in the billing chain (z8r3fdg3mh): the seller's dashboard
+ * just locked. Scheduled beside `billingEmail.notifyInvoiceOverdue` at the two
+ * overdue-invoice lock transitions. The other `past_due` entry points send
+ * nothing here: the legacy comped flip is retired outright (z8r3fdeub2 —
+ * comped rows are skipped whole), and a comp turned off enters `past_due`
+ * with NO invoice, so its notice is the `compEnded` email, not a lockout
+ * alert about a bill that doesn't exist.
+ *
+ * Deliberately NOT gated on `retailers.orderWaAlerts`. That toggle is order-
+ * alert scope and defaults off, so hanging this off it would mean almost no
+ * seller is told they lost access; and a billing lockout is no more opt-out-
+ * able than the invoice email itself. The WABA global opt-out still applies —
+ * that one is a standing legal instruction, not a preference — along with the
+ * kill switch, per-seller caps and quality throttle, all via the gateway.
+ *
+ * No email fallback on failure (unlike the order alerts): the overdue EMAIL is
+ * scheduled unconditionally at the same moment, so the seller has already been
+ * told through the channel that always works. This is the louder second tap,
+ * not the only one.
+ */
+export const notifyBillingPastDue = internalAction({
+	args: {
+		invoiceId: v.id("invoices"),
+		attempt: v.optional(v.number()),
+	},
+	handler: async (ctx, { invoiceId, attempt: attemptArg }): Promise<void> => {
+		const attempt = attemptArg ?? 1;
+		const templateName = billingPastDueTemplateName();
+		if (!templateName) return; // alert path inactive — email carries it alone
+		const meta = await ctx
+			.runQuery(internal.whatsapp.getInvoiceForBillingAlert, { invoiceId })
+			.catch((err) => {
+				console.error("WA billing past-due lookup failed", err);
+				return null;
+			});
+		if (!meta || !meta.notifyWaPhone) return;
+		// Never tell an operator their own dashboard is locked — it isn't.
+		if (meta.ownerIsAdmin) return;
+		// Paid between the flip and this send (a retry, or a settle racing the
+		// cron) — telling a paid-up seller they're locked is worse than silence.
+		if (meta.status !== "pending") return;
+
+		const money = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
+		const wa = makeGuardedSender(ctx, meta.retailerId, "utility_template");
+		try {
+			const receipt = await wa.send(meta.notifyWaPhone, {
+				kind: "template",
+				templateName,
+				languageCode: TEMPLATE_LANGUAGE[meta.locale],
+				bodyParams: [meta.storeName, meta.invoiceNumber, money],
+				// Approved button URL is
+				// https://kedaipal.com/app/settings?tab={{1}} — the variable is a
+				// plain VALUE, not a "?tab=billing" fragment. Every other dynamic
+				// URL param in this codebase (trackingToken, shortId, claim token)
+				// is an opaque path segment, and a suffix carrying `?` and `=` is
+				// unlike anything Meta has approved for us — not worth discovering
+				// at review time. The seller is authenticated, so no capability
+				// token is involved.
+				urlButtonParam: "billing",
+			});
+			if (receipt?.blocked) {
+				// Gateway refused (opt-out / cap / quality pause). It logged the
+				// reason; the overdue email already went out, so we stop here.
+				console.warn("WA billing past-due suppressed by gateway", {
+					invoiceNumber: meta.invoiceNumber,
+					status: receipt.blocked,
+				});
+			}
+		} catch (err) {
+			const outcome = classifyPushFailure(
+				err instanceof WhatsAppSendError
+					? {
+							httpStatus: err.httpStatus,
+							metaCode: err.metaCode,
+							responded: err.responded,
+						}
+					: { responded: true },
+				attempt,
+			);
+			console.error("WA billing past-due alert failed", {
+				invoiceNumber: meta.invoiceNumber,
+				attempt,
+				outcome,
+				err,
+			});
+			if (outcome.retry) {
+				await ctx.scheduler.runAfter(
+					outcome.delayMs,
+					internal.whatsapp.notifyBillingPastDue,
+					{ invoiceId, attempt: attempt + 1 },
+				);
+			}
 		}
 	},
 });

@@ -41,7 +41,8 @@ import {
 	ADMIN_AUDIT_LOG_RETENTION_MS,
 	LOG_PURGE_PAGE_SIZE,
 } from "./lib/retention";
-import { loadSubscription } from "./subscriptions";
+import { isUnlimited } from "./lib/plans";
+import { loadSubscription, resolveAccess } from "./subscriptions";
 
 /** How many sellers the directory pulls. The Founding cohort is ~10 and the whole
  * book is small for a while yet; 500 is generous headroom without pagination. */
@@ -61,6 +62,10 @@ export type AdminSellerRow = {
 	 * trial/plan countdown would be misleading. A boolean only: the allowlist
 	 * itself never crosses to the client. See docs/admin-console.md. */
 	ownerIsAdmin: boolean;
+	/** Team seats (86exr91r4): people with access (owner + active members) over
+	 * the plan's total-people cap; `capUnlimited` for comped/admin stores.
+	 * Pending invites shown separately so "2/3 +1 invited" reads at a glance. */
+	seats: { active: number; cap: number; capUnlimited: boolean; invited: number };
 	isFoundingMember: boolean;
 	foundingMemberRank?: number;
 	subscriptionStatus?: Doc<"subscriptions">["status"];
@@ -239,6 +244,23 @@ export const listSellersForAdmin = query({
 				: null;
 			const invoiceFacts = await loadInvoiceFacts(ctx, r._id);
 			const lastActAsAt = await loadLastActAs(ctx, r._id);
+			// Seats (86exr91r4) — two short index reads per store; cap through
+			// resolveAccess so comped stores read as unlimited here too.
+			const activeMembers = await ctx.db
+				.query("retailerMembers")
+				.withIndex("by_retailer_status", (q) =>
+					q.eq("retailerId", r._id).eq("status", "active"),
+				)
+				.collect();
+			const invitedMembers = await ctx.db
+				.query("retailerMembers")
+				.withIndex("by_retailer_status", (q) =>
+					q.eq("retailerId", r._id).eq("status", "invited"),
+				)
+				.collect();
+			const seatCap = resolveAccess(sub, {
+				adminFullAccess: adminIds.has(r.userId),
+			}).caps.userCap;
 			const country = r.country ?? DEFAULT_COUNTRY;
 			rows.push({
 				_id: r._id,
@@ -246,6 +268,12 @@ export const listSellersForAdmin = query({
 				slug: r.slug,
 				ownerUserId: r.userId,
 				ownerIsAdmin: adminIds.has(r.userId),
+				seats: {
+					active: 1 + activeMembers.length,
+					cap: seatCap,
+					capUnlimited: isUnlimited(seatCap),
+					invited: invitedMembers.length,
+				},
 				isFoundingMember: r.isFoundingMember === true,
 				foundingMemberRank: r.foundingMemberRank,
 				subscriptionStatus: sub?.status,
@@ -611,6 +639,7 @@ export const purgeStoreForAdmin = mutation({
 			ctx,
 			{
 				retailer,
+				role: retailer.userId === adminUserId ? "owner" : "admin",
 				actingAsAdmin: retailer.userId !== adminUserId,
 				userId: adminUserId,
 			},

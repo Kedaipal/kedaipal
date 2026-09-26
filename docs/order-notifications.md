@@ -75,9 +75,18 @@ decoupled from Meta template review.
 The buyer-facing templates live beside these: `WHATSAPP_ORDER_CONFIRM_TEMPLATE`
 ([`one-message-per-order.md`](./one-message-per-order.md)),
 `WHATSAPP_PAYMENT_REMINDER_TEMPLATE` ([`payment-reminder.md`](./payment-reminder.md))
-and `WHATSAPP_CLAIM_LINK_TEMPLATE` ([`claim-links.md`](./claim-links.md)). All
-six are watched for post-approval pauses and category flips — see the template
-webhook section of [`waba-protection.md`](./waba-protection.md).
+and `WHATSAPP_CLAIM_LINK_TEMPLATE` ([`claim-links.md`](./claim-links.md)). One
+more sits outside the order flow entirely — `WHATSAPP_BILLING_PAST_DUE_TEMPLATE`,
+the seller's subscription lockout alert, specified in
+[`manual-subscription.md`](./manual-subscription.md#the-one-whatsapp). All
+seven are watched for post-approval pauses and category flips — see the
+template webhook section of [`waba-protection.md`](./waba-protection.md).
+
+Note what the billing alert deliberately does NOT share with the three above:
+it is not gated on `retailers.orderWaAlerts`. That toggle is order-alert scope
+and defaults off, so hanging a lockout notice off it would mean almost no
+seller is ever told they lost access — and a billing lockout is no more
+opt-out-able than the invoice email. The WABA global opt-out still applies.
 
 The received template's body must say the payment is **settled and needs no
 action**, and must name the gateway through a **variable**:
@@ -183,12 +192,15 @@ follow-up ticket; until it lands, an opted-in seller gets both.
 
 ### Config + settings surface
 
-- Schema: `retailers.notifyWaPhone` (normalized `60…` MY mobile — deliberately
+- Schema: `retailers.notifyWaPhone` (normalized `60…`/`65…` mobile of the
+  store's country — deliberately
   separate from `waPhone`, the buyer-facing store contact / wa.me fallback /
   Lalamove sender, same split as `notifyEmail` vs the Clerk email) +
   `retailers.orderWaAlerts` (opt-in, off by default). Dev-only widen.
-- `updateSettings`: number validated via `assertValidMyMobile` (landlines
-  rejected) and refused if it equals `WHATSAPP_CHECKOUT_PHONE` (the WABA can't
+- `updateSettings`: number validated via `assertValidMobileForCountry` under
+  the store's country (landlines rejected; a seller-side number, so it stays
+  store-locked — see [`phone-numbers.md`](./phone-numbers.md)) and refused if
+  it equals `WHATSAPP_CHECKOUT_PHONE` (the WABA can't
   message itself). **Enabling is Pro-gated** (`PLAN_FEATURES.waOrderAlerts`,
   admin act-as bypasses); disabling and clearing are un-gated (downgrade never
   traps). Clearing the number switches the toggle off with it.

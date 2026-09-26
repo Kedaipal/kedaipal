@@ -16,7 +16,12 @@ import {
 	type MutationCtx,
 	query,
 } from "./_generated/server";
-import { isAdmin, requireAdmin, requireRetailerAccess } from "./lib/auth";
+import {
+	isAdmin,
+	requireAdmin,
+	requireRetailerAccess,
+	resolveMyRetailerFor,
+} from "./lib/auth";
 import { gatewayPaymentMethodTag } from "./lib/hitpayBilling";
 import {
 	invoiceToSubscriptionData,
@@ -41,6 +46,7 @@ import {
 	renewalQuote,
 } from "./lib/plans";
 import { rateLimiter } from "./lib/rateLimiter";
+import { enforceSeatCap } from "./lib/seats";
 import { getPaymentProvider, type PaymentRecord } from "./payments/provider";
 import { reserveFoundingRank, stampFoundingPaid } from "./foundingMembers";
 import { defaultCapsForPlan } from "./subscriptions";
@@ -231,6 +237,17 @@ async function settleInvoicePaid(
 				}
 			: {}),
 	});
+
+	// 2b) Team seats (86exr91r4): this patch is the ONE place a subscription's
+	//     plan actually flips — every rail funnels here (manual mark-paid,
+	//     Pay-now, auto-renew, and a scheduled downgrade billed as the pending
+	//     plan's invoice). If the settled plan holds fewer people than the
+	//     store uses, over-cap seats drop now: pending invites first, then
+	//     newest members, each emailed, owner summarised (convex/lib/seats.ts).
+	//     A hold settle keeps the tier, so seats survive a hold by design.
+	if (!isHold && retailerForCarryover) {
+		await enforceSeatCap(ctx, retailerForCarryover, caps.userCap, now);
+	}
 
 	// 3) Founding — the slot is reserved at onboard (signup). For the
 	//    "promote a standard vendor" path (a founding invoice for someone not yet
@@ -1384,12 +1401,14 @@ export const myNextDueInvoice = query({
 	handler: async (
 		ctx,
 	): Promise<{ dueDate: number; total: number; currency: string } | null> => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) return null;
-		const retailer = await ctx.db
-			.query("retailers")
-			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
-			.first();
+		// Membership-aware with billing:read (86exr91r4): a member holding the
+		// grant sees the due-soon banner; without it the banner simply doesn't
+		// render for them — billing nags are the owner's business by default.
+		const access = await resolveMyRetailerFor(ctx, {
+			area: "billing",
+			level: "read",
+		});
+		const retailer = access?.retailer ?? null;
 		if (!retailer) return null;
 		const pending = await ctx.db
 			.query("invoices")
@@ -1417,12 +1436,15 @@ export const myInvoices = query({
 	handler: async (ctx, { retailerId }): Promise<Doc<"invoices">[]> => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) return [];
-		const retailer = retailerId
-			? (await requireRetailerAccess(ctx, retailerId)).retailer
-			: await ctx.db
-					.query("retailers")
-					.withIndex("by_user", (q) => q.eq("userId", identity.subject))
-					.first();
+		// Billing READ is grantable (86exr91r4) — a member with billing:read sees
+		// the invoice list; without the grant the tab renders locked (empty here).
+		const access = retailerId
+			? await requireRetailerAccess(ctx, retailerId, {
+					area: "billing",
+					level: "read",
+				})
+			: await resolveMyRetailerFor(ctx, { area: "billing", level: "read" });
+		const retailer = access?.retailer ?? null;
 		if (!retailer) return [];
 		return ctx.db
 			.query("invoices")

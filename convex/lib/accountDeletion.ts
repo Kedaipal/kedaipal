@@ -52,6 +52,7 @@ export const DELETION_PHASES = [
 	"subscriptions",
 	"subscriptionUsage",
 	"foundingMembers",
+	"retailerMembers",
 	"retailerSendingLimits",
 	"outboundMessageLog",
 	"slugHistory",
@@ -289,6 +290,31 @@ export async function runDeletionPhase(
 				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 				.take(limit);
 			for (const member of rows) await ctx.db.delete(member._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "retailerMembers": {
+			// Team seats (86exr91r4). Rows are DELETED, not marked — erasing the
+			// tenant erases its people-records (member email + name are PII), and
+			// a removed-marker would dangle once the retailer row goes. Each
+			// still-active member gets the "store closed" email with the store
+			// name SNAPSHOTTED into the args, because by send time there is no
+			// retailer row left to read.
+			const rows = await ctx.db
+				.query("retailerMembers")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const member of rows) {
+				if (member.status === "active") {
+					await ctx.scheduler.runAfter(0, internal.team.sendTeamEmail, {
+						kind: "teamAccessRevoked",
+						to: member.email,
+						revokeReason: "store_deleted",
+						storeNameOverride: retailer.storeName,
+						localeOverride: retailer.locale,
+					});
+				}
+				await ctx.db.delete(member._id);
+			}
 			return { processed: rows.length, done: rows.length < limit };
 		}
 		case "retailerSendingLimits": {
