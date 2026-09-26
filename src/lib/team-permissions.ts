@@ -57,7 +57,12 @@ export const AREA_COPY: Record<PermissionArea, AreaCopy> = {
 	},
 	exports: {
 		label: "Data export",
-		description: "Downloading orders, products and customers as CSV.",
+		// Says what this grant actually withholds. It gates the ORDER CSV — the
+		// server-enforced one, and the file that walks out with the whole order
+		// book. The product list downloads from data a products grant already
+		// hands over, and there is no customer export at all, so promising
+		// "orders, products and customers" described a fence that isn't there.
+		description: "Downloading the order book as a CSV file.",
 	},
 	store_settings: {
 		label: "Store settings",
@@ -87,7 +92,10 @@ export const AREA_GROUPS: ReadonlyArray<{
 	label: string;
 	areas: PermissionArea[];
 }> = [
-	{ label: "Day-to-day", areas: ["orders", "products", "customers", "bookings"] },
+	{
+		label: "Day-to-day",
+		areas: ["orders", "products", "customers", "bookings"],
+	},
 	{ label: "Store setup", areas: ["store_settings", "fulfilment"] },
 	{
 		label: "Sensitive",
@@ -148,7 +156,9 @@ export function grantsEqual(
 	a: MemberPermissions,
 	b: MemberPermissions,
 ): boolean {
-	return PERMISSION_AREAS.every((area) => (a[area] ?? null) === (b[area] ?? null));
+	return PERMISSION_AREAS.every(
+		(area) => (a[area] ?? null) === (b[area] ?? null),
+	);
 }
 
 /** Which preset a grants object matches, for the picker's selected state. */

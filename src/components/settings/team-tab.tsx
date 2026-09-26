@@ -26,8 +26,8 @@ import {
 	areaControl,
 	grantSummary,
 	MAX_GRANTABLE,
-	matchingPreset,
 	type MemberPermissions,
+	matchingPreset,
 	type PermissionArea,
 	TEAM_PRESETS,
 } from "../../lib/team-permissions";
@@ -80,9 +80,9 @@ export function TeamTab({
 	retailerId: Id<"retailers">;
 	storeName: string;
 }) {
-	const team = useQuery(
-		convexQuery(api.team.list, { retailerId }),
-	).data as TeamList | undefined;
+	const team = useQuery(convexQuery(api.team.list, { retailerId })).data as
+		| TeamList
+		| undefined;
 	const { readOnly } = useStoreLock();
 
 	if (team === undefined) {
@@ -186,9 +186,9 @@ function TeamListCard({
 
 			{team.members.length === 0 && viewerIsPrivileged ? (
 				<p className="border-t border-border p-4 text-xs leading-relaxed text-muted-foreground">
-					No teammates yet. Invite a helper below — you choose exactly what
-					they can open, and you can change or remove it any time. Billing,
-					your WhatsApp numbers and this page always stay yours.
+					No teammates yet. Invite a helper below — you choose exactly what they
+					can open, and you can change or remove it any time. Billing, your
+					WhatsApp numbers and this page always stay yours.
 				</p>
 			) : null}
 
@@ -199,8 +199,8 @@ function TeamListCard({
 			{viewerIsPrivileged ? null : (
 				<p className="border-t border-border p-4 text-xs leading-relaxed text-muted-foreground">
 					An account can be in one store at a time. Want your own storefront?
-					Leave {storeName} first — then Kedaipal walks you through setting
-					it up.
+					Leave {storeName} first — then Kedaipal walks you through setting it
+					up.
 				</p>
 			)}
 		</section>
@@ -510,7 +510,9 @@ function PermissionMatrix({
 }
 
 /** None / View / Edit — one control for one idea, reused on every row that
- * can hold a write grant, ≥44px targets on the phone. */
+ * can hold a write grant. The segments are the smallest targets on this page,
+ * so they carry the house 44px minimum outright rather than the 36px the
+ * `min-h-9` beside the other chips would have given them. */
 function LevelSegment({
 	area,
 	value,
@@ -542,7 +544,7 @@ function LevelSegment({
 						disabled={disabled}
 						aria-pressed={selected}
 						onClick={() => onChange(opt.key === "none" ? null : opt.key)}
-						className={`min-h-9 px-3 text-xs font-semibold transition-colors disabled:opacity-50 ${
+						className={`min-h-11 px-3 text-xs font-semibold transition-colors disabled:opacity-50 ${
 							i > 0 ? "border-l border-border" : ""
 						} ${
 							selected
@@ -565,9 +567,14 @@ function LevelSegment({
 function PresetPicker({
 	value,
 	onChange,
+	disabled = false,
 }: {
 	value: MemberPermissions;
 	onChange: (next: MemberPermissions) => void;
+	/** The one control in the invite form that used to ignore the lock: with
+	 * the email field and the matrix disabled, tapping a preset still moved
+	 * grants that could not be sent. */
+	disabled?: boolean;
 }) {
 	const active = matchingPreset(value);
 	return (
@@ -579,9 +586,10 @@ function PresetPicker({
 						key={preset.id}
 						type="button"
 						aria-pressed={selected}
+						disabled={disabled}
 						onClick={() => onChange({ ...preset.grants })}
 						title={preset.description}
-						className={`min-h-9 rounded-full border px-3.5 text-xs font-semibold transition-colors ${
+						className={`min-h-11 rounded-full border px-3.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
 							selected
 								? "border-accent bg-accent/12 text-accent"
 								: "border-border bg-background text-muted-foreground hover:bg-muted"
@@ -661,9 +669,9 @@ function InviteCard({
 						Invite a teammate
 					</h3>
 					<p className="text-xs text-muted-foreground">
-						They sign in with their own email — you control what they can
-						open. Teammates don't receive order alerts; those still go to the
-						store's own email and WhatsApp number.
+						They sign in with their own email — you control what they can open.
+						Teammates don't receive order alerts; those still go to the store's
+						own email and WhatsApp number.
 					</p>
 				</div>
 			</div>
@@ -679,7 +687,11 @@ function InviteCard({
 					disabled={locked || atCap}
 					onChange={(e) => setEmail(e.target.value)}
 				/>
-				<PresetPicker value={grants} onChange={setGrants} />
+				<PresetPicker
+					value={grants}
+					onChange={setGrants}
+					disabled={locked || atCap}
+				/>
 				<button
 					type="button"
 					className="self-start text-xs font-semibold text-accent underline underline-offset-2"
@@ -732,7 +744,10 @@ function EditAccessDialog({
 	const save = async () => {
 		setSaving(true);
 		try {
-			await updatePermissions({ memberId: member.memberId, permissions: grants });
+			await updatePermissions({
+				memberId: member.memberId,
+				permissions: grants,
+			});
 			toast.success(`Access updated for ${name}`, {
 				description: "Changes apply the next time they load a page.",
 			});
@@ -786,13 +801,16 @@ function LockedTeamTeaser({ storeName }: { storeName: string }) {
 	return (
 		<div className="relative overflow-hidden rounded-2xl border border-border">
 			{/* Blurred sample — Starter sees what the page becomes, never a wall of nothing. */}
-			<div aria-hidden="true" className="pointer-events-none select-none blur-[3px]">
+			<div
+				aria-hidden="true"
+				className="pointer-events-none select-none blur-[3px]"
+			>
 				<div className="flex flex-col gap-3 p-5">
 					{[
-					"Aina — Orders & counter",
-					"Farid — Store manager",
-					"Mira — Front-desk helper",
-				].map((row) => (
+						"Aina — Orders & counter",
+						"Farid — Store manager",
+						"Mira — Front-desk helper",
+					].map((row) => (
 						<div
 							key={row}
 							className="flex items-center gap-3 rounded-xl border border-border bg-card p-3"
@@ -816,8 +834,8 @@ function LockedTeamTeaser({ storeName }: { storeName: string }) {
 					</h3>
 					<p className="text-sm text-muted-foreground">
 						Invite up to 2 teammates on Pro (you + 2) to run orders and the
-						counter from their own logins — you choose exactly what each
-						person can open, and billing stays yours.
+						counter from their own logins — you choose exactly what each person
+						can open, and billing stays yours.
 					</p>
 					<a
 						href={upgradeUrl}

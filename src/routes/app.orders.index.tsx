@@ -102,7 +102,8 @@ import {
 	useInboxView,
 } from "../hooks/useInboxView";
 import { useOrderColumns } from "../hooks/useOrderColumns";
-import { useStoreLock } from "../hooks/useStoreLock";
+import { usePermission } from "../hooks/usePermission";
+import { useAreaLock } from "../hooks/useStoreLock";
 import { canHardDeleteOrders } from "../lib/admin-actions";
 import { MASK_PII } from "../lib/analytics-privacy";
 import { describeAwbPaper } from "../lib/awb-labels";
@@ -486,7 +487,18 @@ function OrdersRoute() {
 
 	const bulkUpdateStatus = useMutation(api.orders.bulkUpdateStatus);
 	// A lapsed store is view-only (z8r3fdeub2) — every bulk action is refused.
-	const { readOnly, reason } = useStoreLock();
+	// Orders is view-only for a lapsed store AND for a teammate granted view
+	// but not edit — one flag, so every disabled-with-reason control below
+	// (select mode, bulk actions, pin, status moves) covers both.
+	const { readOnly, reason } = useAreaLock("orders");
+	// Orders export is the ONE export the server genuinely gates (a teammate
+	// can work the inbox all day and still not walk out with the order book),
+	// and it is separate from orders itself — so the button asks the `exports`
+	// grant, not the orders one.
+	const canExport = usePermission("exports").canRead;
+	const exportBlockReason = canExport
+		? undefined
+		: "Ask the store owner for access to data export.";
 	const bulkDeleteOrders = useMutation(api.orders.bulkDeleteOrders);
 	const setPinned = useMutation(api.orders.setPinned);
 	const [pinBusyId, setPinBusyId] = useState<string | null>(null);
@@ -1386,11 +1398,14 @@ function OrdersRoute() {
 							variant="outline"
 							size="icon"
 							className="size-11 rounded-xl"
-							disabled={exporting}
+							disabled={exporting || !canExport}
+							title={exportBlockReason}
 							aria-label={
-								selected.size > 0
-									? `Export ${selected.size} selected orders`
-									: "Export CSV"
+								exportBlockReason
+									? `Export CSV — unavailable, ${exportBlockReason}`
+									: selected.size > 0
+										? `Export ${selected.size} selected orders`
+										: "Export CSV"
 							}
 						>
 							{exporting ? (
@@ -1416,11 +1431,14 @@ function OrdersRoute() {
 					size="icon"
 					className="size-11 rounded-xl"
 					onClick={() => void handleExport(false)}
-					disabled={exporting}
+					disabled={exporting || !canExport}
+					title={exportBlockReason}
 					aria-label={
-						selected.size > 0
-							? `Export ${selected.size} selected orders`
-							: "Export CSV"
+						exportBlockReason
+							? `Export CSV — unavailable, ${exportBlockReason}`
+							: selected.size > 0
+								? `Export ${selected.size} selected orders`
+								: "Export CSV"
 					}
 				>
 					{exporting ? (

@@ -109,7 +109,7 @@ import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
-import { useStoreLock } from "../hooks/useStoreLock";
+import { useAreaLock } from "../hooks/useStoreLock";
 import { canHardDeleteOrders } from "../lib/admin-actions";
 import { MASK_PII } from "../lib/analytics-privacy";
 import { bookingFulfilmentLine } from "../lib/booking-dates";
@@ -335,7 +335,10 @@ function OrderDetailRoute() {
 	const [pinBusy, setPinBusy] = useState(false);
 	// A lapsed store is view-only (z8r3fdeub2): the server refuses every action
 	// on this page, so the controls say so instead of failing on tap.
-	const { readOnly, reason } = useStoreLock();
+	// Both reasons an order can be read-only right now: the store lapsed, or
+	// this teammate holds view on orders and not edit. Sixteen controls on this
+	// page already branch on `readOnly`; they now cover the grant too.
+	const { readOnly, reason } = useAreaLock("orders");
 	// Line-item thumbnails (86eyrtz74): variant image, else product image, one
 	// entry per line IN LINE ORDER (the same product can appear twice). Resolved
 	// server-side in one batched read rather than a lookup per row.

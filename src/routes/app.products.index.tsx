@@ -42,8 +42,9 @@ import {
 } from "../components/ui/popover";
 import { Skeleton } from "../components/ui/skeleton";
 import { SortableList } from "../components/ui/sortable-list";
-import { usePermission } from "../hooks/usePermission";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { usePermission } from "../hooks/usePermission";
+import { writeBlockReason as areaWriteBlockReason } from "../hooks/useStoreLock";
 import { BULK_IO_ENABLED } from "../lib/feature-flags";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import {
@@ -262,9 +263,11 @@ function ProductsRoute() {
 	// create/reorder/export affordances that the server will refuse.
 	const productsPerm = usePermission("products");
 	const canExportProducts = usePermission("exports").canRead;
+	// One author for this sentence — `useStoreLock`'s `writeBlockReason`, which
+	// every other area-gated surface reads too, so the words can't drift.
 	const writeBlockReason = productsPerm.canWrite
 		? null
-		: "Ask the store owner for edit access to change products.";
+		: areaWriteBlockReason("products");
 	// How many rows the spotlight key applies to — decides whether the banner
 	// says "open one below" or "you don't have one yet". Counted over every
 	// row, not the filtered view, so a status filter can't make it lie.
@@ -401,7 +404,9 @@ function ProductsRoute() {
 								onExport={handleExport}
 							/>
 						) : null}
-						<CategoriesLink locked={categoriesLocked || !productsPerm.canWrite} />
+						<CategoriesLink
+							locked={categoriesLocked || !productsPerm.canWrite}
+						/>
 						<NewProductButton
 							blockedReason={capBlockReason ?? writeBlockReason}
 							label="+ New product"
@@ -431,7 +436,10 @@ function ProductsRoute() {
 							onExport={handleExport}
 						/>
 					) : null}
-					<CategoriesLink locked={categoriesLocked || !productsPerm.canWrite} mobile />
+					<CategoriesLink
+						locked={categoriesLocked || !productsPerm.canWrite}
+						mobile
+					/>
 					<NewProductButton
 						blockedReason={capBlockReason ?? writeBlockReason}
 						label="+ New"

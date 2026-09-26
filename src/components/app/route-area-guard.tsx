@@ -18,9 +18,16 @@ import { AREA_COPY } from "../../lib/team-permissions";
 const AREA_BY_PREFIX: ReadonlyArray<{
 	prefix: string;
 	area: PermissionArea;
+	/** What the SECTION needs, not merely what it displays. Defaults to
+	 * "read" — a section that only shows things. */
+	level?: "read" | "write";
 }> = [
 	{ prefix: "/app/orders", area: "orders" },
-	{ prefix: "/app/checkout", area: "orders" }, // counter IS orders work
+	// The counter TAKES an order — there is nothing here for a view-only
+	// teammate to do, every button on it is a write the server refuses, and
+	// the nav already hides it at read (bottom-nav asks for write). Guarding
+	// it at READ let a typed URL walk into a checkout that could never finish.
+	{ prefix: "/app/checkout", area: "orders", level: "write" },
 	{ prefix: "/app/products", area: "products" },
 	{ prefix: "/app/customers", area: "customers" },
 	{ prefix: "/app/insights", area: "insights" },
@@ -37,8 +44,10 @@ export function RouteAreaGuard({ children }: { children: React.ReactNode }) {
 	);
 	// Hooks can't be conditional — resolve the permission for the matched area
 	// (or a harmless default) and only then decide.
-	const { canRead, role } = usePermission(match?.area ?? "orders");
-	if (!match || role !== "member" || canRead) return <>{children}</>;
+	const { canRead, canWrite, role } = usePermission(match?.area ?? "orders");
+	const needsWrite = match?.level === "write";
+	const allowed = needsWrite ? canWrite : canRead;
+	if (!match || role !== "member" || allowed) return <>{children}</>;
 
 	const label = AREA_COPY[match.area].label;
 	return (
@@ -48,12 +57,14 @@ export function RouteAreaGuard({ children }: { children: React.ReactNode }) {
 					<Lock className="size-5" />
 				</span>
 				<h1 className="font-heading text-lg font-extrabold">
-					You don't have access to {label}
+					{needsWrite && canRead
+						? `You can view ${label}, but not add to them`
+						: `You don't have access to ${label}`}
 				</h1>
 				<p className="text-sm leading-relaxed text-muted-foreground">
-					The store owner controls what each teammate can open. Ask them to
-					grant you {label} from Settings → Team — changes apply the next time
-					you load the page.
+					{needsWrite && canRead
+						? "This page takes new orders, so it needs edit access. Ask the store owner for it from Settings → Team — changes apply the next time you load the page."
+						: `The store owner controls what each teammate can open. Ask them to grant you ${label} from Settings → Team — changes apply the next time you load the page.`}
 				</p>
 				<Link
 					to="/app"
