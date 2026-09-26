@@ -33,6 +33,7 @@ import {
 } from "../../../convex/lib/plans";
 import { HOLD_LABEL } from "../../../convex/lib/seasonalHold";
 import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
+import { usePermission, useStoreRole } from "../../hooks/usePermission";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { resolveAnnualOffer } from "../../lib/annual-billing";
 import { buildWaContactLink } from "../../lib/contact";
@@ -107,7 +108,16 @@ export function BillingTab({
 	// control stays visible but disabled with the reason; the self-serve
 	// writes resolve the caller's own store and `setSeasonalHold` refuses
 	// act-as server-side, so nothing here can reach the seller's billing.
-	const ownerOnly = actingAsAdmin;
+	// …and a TEAMMATE granted billing READ lands here on the same footing.
+	// Billing WRITE is owner-only by construction (MAX_GRANTABLE caps the
+	// area at read), so a member can be shown the bill but must never be
+	// handed the buttons that spend the owner's money — the server would
+	// refuse them, and an enabled-but-doomed control is the thing this
+	// codebase treats as a bug. `OwnerOnlyNote` beside each one renders for
+	// members only, so the owner's view is unchanged.
+	const canPayBills = usePermission("billing").canWrite;
+	const isMember = useStoreRole() === "member";
+	const ownerOnly = actingAsAdmin || !canPayBills;
 	// On founding pricing — SERVER-resolved, the only founding answer any price
 	// on this page may use (z8r3fdfty4). False until the gateway read lands, so
 	// every card that quotes a founding-sensitive price waits for it instead of
@@ -405,13 +415,24 @@ export function BillingTab({
 					    above already tells their story. */}
 					{sub?.status === "past_due" && !sub?.comped && !compEnded ? (
 						<p className="text-xs text-muted-foreground">
-							Your storefront and existing orders stay live — only editing your
-							store is paused until this is settled. We'll follow up by email
-							{billingWaWillReach
-								? ", and once on WhatsApp at your alert number"
-								: ""}
-							. Billing reminders can't be switched off, but they stop the
-							moment you pay.
+							{isMember ? (
+								<>
+									The storefront and existing orders stay live — only editing
+									the store is paused until the owner settles this. We're
+									following up with them; nothing here is yours to pay.
+								</>
+							) : (
+								<>
+									Your storefront and existing orders stay live — only editing
+									your store is paused until this is settled. We'll follow up by
+									email
+									{billingWaWillReach
+										? ", and once on WhatsApp at your alert number"
+										: ""}
+									. Billing reminders can't be switched off, but they stop the
+									moment you pay.
+								</>
+							)}
 						</p>
 					) : null}
 					{freePeriod.kind === "free" ? (
