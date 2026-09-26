@@ -303,6 +303,7 @@ import {
 	type RetailerAccess,
 	type RetailerRole,
 	requireAdmin,
+	refusalMessage,
 	requireRetailerAccess,
 } from "./lib/auth";
 import {
@@ -1771,8 +1772,14 @@ const SETTINGS_FIELD_AREA: Record<
 /**
  * Enforce the field map for a MEMBER save: every field present in this call
  * must be editable under their grants; "owner" fields never are. Owner and
- * admin skip (the gate already admitted them for everything). Throws the
- * standard "Forbidden" so the client's error path matches every other denial.
+ * admin skip (the gate already admitted them for everything).
+ *
+ * Refuses in the gate's own words (`refusalMessage`), not with a bare Error:
+ * the caller here is always a MEMBER, and a member meeting a grant they don't
+ * hold is an ordinary event that must read as copy. A plain throw reaches the
+ * client as "Server Error … Uncaught Error: Forbidden" — the exact crash-style
+ * rendering the 25 Sep Chrome round flagged and `refusalMessage` was written
+ * to end. Naming the area leaks nothing: we already know who they are.
  */
 function assertSettingsFieldAccess(
 	access: RetailerAccess,
@@ -1782,9 +1789,10 @@ function assertSettingsFieldAccess(
 	const grants = access.membership?.permissions ?? {};
 	for (const [key, area] of Object.entries(SETTINGS_FIELD_AREA)) {
 		if (args[key] === undefined) continue;
-		if (area === "owner" || !hasPermission(grants, area, "write")) {
-			throw new Error("Forbidden");
-		}
+		if (area === "owner")
+			throw new ConvexError(refusalMessage({ ownerOnly: true }));
+		if (!hasPermission(grants, area, "write"))
+			throw new ConvexError(refusalMessage({ area, level: "write" }));
 	}
 }
 
