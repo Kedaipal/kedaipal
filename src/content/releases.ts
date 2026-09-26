@@ -126,7 +126,10 @@ export type ReleaseIconName =
 	// Same reasoning again: the glyph on the new-product wizard's Event card
 	// (CalendarClock), so the events announcement's tile is the card the
 	// seller taps — and not the Booking card's CalendarRange one row above it.
-	| "calendar-clock";
+	| "calendar-clock"
+	// And again: the glyph Settings → Team carries in the tab nav (UsersRound),
+	// so the team announcement's tile is the tab the seller has to find.
+	| "users";
 
 export interface ReleaseEntry {
 	/**
@@ -174,6 +177,91 @@ export interface Release {
  * entry would make "everything newer than X" return the wrong set.
  */
 export const RELEASES: Release[] = [
+	{
+		version: "2026.09.8",
+		date: "2026-09-26",
+		// Notable on two of the three triggers at once. Something MOVED: there is
+		// a new Team tab in Settings, and a seller has no reason to open it.
+		// And a seller who reads nothing keeps handing their own login to the
+		// person packing boxes — one shared password, no way to see who did
+		// what, and nothing to take back when that person leaves. That is
+		// precisely what team seats exists to stop, so leaving it to the dot
+		// would leave the risk in place.
+		// The counter-argument (put to Zaki in the release PR, same shape as
+		// v2026.09.7's events note): teammates are Pro, so a Starter seller is
+		// interrupted for something behind a wall. Two things answer it — the
+		// body names the plan in its last line, and Settings → Team is a
+		// designed teaser for Starter (a blurred sample plus the upgrade path),
+		// never a dead end.
+		notable: true,
+		entries: [
+			{
+				kind: "feature",
+				title: {
+					en: "Bring your team in — and pick what each person can touch",
+				},
+				body: {
+					en: "A helper could only get in as you, on your password, seeing your bank details and your bill. Now invite them by email and choose area by area what they reach: orders only for whoever packs, orders and products for a manager, and nothing near your money unless you say so. They sign in as themselves, so the order timeline names who confirmed it and who rang it up at the counter. Remove someone and their history still reads — the name stays on what they did. Seats come with your plan: Pro is you plus 2 teammates, Scale you plus 5.",
+				},
+				href: "/app/settings?tab=team",
+				hrefLabel: { en: "Invite your team" },
+				icon: "users",
+			},
+			{
+				kind: "feature",
+				title: { en: "Close the shop for a date without editing your hours" },
+				body: {
+					en: "Balik kampung for a week, a public holiday, a day off for a wedding: the only way to stop orders was to rewrite your weekly hours and remember to put them back. Add the dates instead — they sit right under Opening hours, and each can carry a short reason your buyers see. Checkout turns those days down, your storefront says when you are back, and nights on a stay listing show unavailable. Past closures clear themselves. On every plan.",
+				},
+				href: spotlightHref("closed_dates"),
+				hrefLabel: { en: "Add a closed date" },
+				icon: "calendar",
+			},
+			{
+				kind: "feature",
+				title: { en: "A package that counts only the days you're open" },
+				body: {
+					en: "Sell a 10-day class pass and those ten days ran straight through your day off, so it ended while you were shut. A package priced by the day now asks how it counts: every day in a row, for a rental or a gym pass — or only the days you are open, which skips your days off and closed dates and ends later. The choice sits under Package length and shows a worked example before you save. Buyers see the skipped days before they book.",
+				},
+				// Deliberately the products LIST, not a `?spot=` ring. The choice is
+				// a field inside the Pricing & capacity card, not a card of its own,
+				// and that card already anchors `weekend_rate` — one element can't
+				// carry two ids, and spotlight.test.ts requires each key's own
+				// literal. Giving it a key therefore means restructuring a shipped
+				// card, which belongs to a design pass and not a notes PR. The body
+				// names where to look instead. Raised in the release PR.
+				href: "/app/products",
+				hrefLabel: { en: "Open your listings" },
+			},
+			{
+				kind: "feature",
+				title: { en: "Take orders from buyers with an overseas number" },
+				body: {
+					en: "Every phone field wore a fixed +60 plate, so a buyer whose WhatsApp is Singaporean, Indonesian or Japanese could fill the whole form in and still be refused when they pressed send. They now pick their own flag wherever you ask for a number, and it reads back in groups so a swapped digit is easy to catch. Your storefront, your counter and your tracking page already take it — nothing to switch on. On every plan.",
+				},
+				// No link: there is nothing to set up or find. A link here would take
+				// the seller somewhere only to show them a field that already works.
+			},
+			{
+				kind: "enhancement",
+				title: { en: "Your own words for each kind of order" },
+				body: {
+					en: "Renaming Confirmed to \"Ok go\" for your deliveries put those words on your campsite bookings too, and no screen was left that could show you that or undo it. Stages now belong to the kind of order: deliveries, self-collect, bookings and events each keep their own steps and wording, on their own card. Bookings and events take custom steps for the first time, and Reset to defaults is there when you want the standard set back. Bulk-marking a mixed selection now says what it skipped.",
+				},
+				href: "/app/settings?tab=order-status",
+				hrefLabel: { en: "Review your stages" },
+			},
+			{
+				kind: "fix",
+				title: { en: "An error tells you what went wrong" },
+				body: {
+					en: "When the app turned something down — a maps link that wasn't https, a change your plan doesn't allow — the reason came back wrapped in a request id and a stack trace, with the one useful sentence buried in the middle of it. Every message now shows just the sentence.",
+				},
+				// No link: this reaches the seller wherever they already were, so
+				// there is no destination to send them to.
+			},
+		],
+	},
 	{
 		version: "2026.09.7",
 		date: "2026-09-23",
