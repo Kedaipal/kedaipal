@@ -6,6 +6,7 @@ import {
 	sellerBucket,
 	sellerExpiry,
 	sellerPlanLabel,
+	sellerSeatsLabel,
 	sellerRail,
 	sellerReason,
 } from "../../lib/admin-seller-view";
@@ -68,6 +69,9 @@ export function SellerCard({
 			<div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[13px]">
 				<span className="font-semibold">{sellerPlanLabel(seller)}</span>
 				{rail ? <span className="text-muted-foreground">{rail}</span> : null}
+				<span className="text-muted-foreground">
+					· {sellerSeatsLabel(seller)} seats
+				</span>
 				{reason ? (
 					<span className="basis-full text-xs text-muted-foreground">
 						{reason}

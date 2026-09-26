@@ -391,6 +391,15 @@ const PLAN_LABEL: Record<NonNullable<AdminSellerRow["plan"]>, string> = {
 	scale: "Scale",
 };
 
+/** Team seats, one spelling for every surface (86exr91r4): people with
+ * access over the plan's people-cap, pending invites appended.
+ * "2/3 · 1 invited", "1/∞" for comped/admin stores. */
+export function sellerSeatsLabel(row: AdminSellerRow): string {
+	const cap = row.seats.capUnlimited ? "∞" : String(row.seats.cap);
+	const base = `${row.seats.active}/${cap}`;
+	return row.seats.invited > 0 ? `${base} · ${row.seats.invited} invited` : base;
+}
+
 export function sellerPlanLabel(row: AdminSellerRow): string {
 	if (row.ownerIsAdmin) return "—";
 	return row.plan ? PLAN_LABEL[row.plan] : "—";
@@ -457,6 +466,7 @@ export function sellerSummaryText(
 		`Email: ${row.ownerEmail ?? "none on file"}`,
 		`WhatsApp: ${row.waPhone ? formatMobile(row.waPhone) : "none on file"}`,
 		`Plan: ${plan || "—"} · ${SELLER_STATUS_LABEL[sellerBucket(row)]}`,
+		`Seats: ${sellerSeatsLabel(row)}`,
 		`${expiry.headline}${expiry.detail ? ` · ${expiry.detail}` : ""}`,
 	].join("\n");
 }
@@ -469,6 +479,7 @@ const CSV_HEADER = [
 	"Reason",
 	"Plan",
 	"Billing",
+	"Seats",
 	"Expiry",
 	"Expiry date",
 	"Email",
@@ -499,6 +510,7 @@ function sellerToCsvRow(
 		sellerReason(row) ?? "",
 		sellerPlanLabel(row),
 		sellerRail(row),
+		sellerSeatsLabel(row),
 		expiry.headline,
 		csvDate(expiry.at),
 		row.ownerEmail ?? "",

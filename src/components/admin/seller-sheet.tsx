@@ -14,6 +14,7 @@ import {
 	sellerBucket,
 	sellerExpiry,
 	sellerPlanLabel,
+	sellerSeatsLabel,
 	sellerRail,
 	sellerReason,
 	sellerSummaryText,
@@ -191,6 +192,9 @@ function SellerSheetBody({
 								.filter((p) => p && p !== "—")
 								.join(" · ") || "—"}
 						</Plain>
+					</Row>
+					<Row label="Seats">
+						<Plain>{sellerSeatsLabel(seller)}</Plain>
 					</Row>
 					<Row label="Expiry">
 						<div className="flex min-w-0 items-center gap-1.5">

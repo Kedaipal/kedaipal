@@ -10937,3 +10937,87 @@ describe("bulk actions ask the order's OWN flow, not the kind's preset (z8r3fdh3
 		expect(res.skippedNoSuchStage).toBe(1);
 	});
 });
+
+describe("orders.getTimeline — the seller Activity card (86exr91r4)", () => {
+	test("same-millisecond events keep insertion order, newest first", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		// An order's "placed" and "confirmed at checkout" rows are written in ONE
+		// mutation with a single `now`, so createdAt alone leaves them tied — and
+		// a tie rendered placed-above-confirmed, which reads backwards in a
+		// newest-first list (found on a real order driving Chrome).
+		const now = Date.now();
+		const orderId = await t.run(async (ctx) => {
+			const id = await ctx.db.insert("orders", {
+				retailerId: retailer._id,
+				shortId: "ORD-TIE1",
+				items: [],
+				subtotal: 0,
+				total: 0,
+				currency: "MYR",
+				status: "confirmed",
+				channel: "whatsapp",
+				customer: {},
+				statusChangedAt: now,
+				createdAt: now,
+				updatedAt: now,
+			});
+			await ctx.db.insert("orderEvents", {
+				orderId: id,
+				status: "pending",
+				createdAt: now,
+			});
+			await ctx.db.insert("orderEvents", {
+				orderId: id,
+				status: "confirmed",
+				note: "Confirmed at checkout",
+				createdAt: now,
+			});
+			return id;
+		});
+		const timeline = await asUser.query(api.orders.getTimeline, { orderId });
+		expect(timeline.map((e) => e.status)).toEqual(["confirmed", "pending"]);
+	});
+
+	test("an owner's move is attributed; buyer/system events are not", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const now = Date.now();
+		const orderId = await t.run(async (ctx) => {
+			const id = await ctx.db.insert("orders", {
+				retailerId: retailer._id,
+				shortId: "ORD-TIE2",
+				items: [],
+				subtotal: 0,
+				total: 0,
+				currency: "MYR",
+				status: "confirmed",
+				channel: "whatsapp",
+				customer: {},
+				statusChangedAt: now,
+				createdAt: now,
+				updatedAt: now,
+			});
+			await ctx.db.insert("orderEvents", {
+				orderId: id,
+				status: "pending",
+				createdAt: now - 1000,
+			});
+			await ctx.db.insert("orderEvents", {
+				orderId: id,
+				status: "packed",
+				actorUserId: USER_A,
+				createdAt: now,
+			});
+			return id;
+		});
+		const timeline = await asUser.query(api.orders.getTimeline, { orderId });
+		expect(timeline[0]).toMatchObject({
+			status: "packed",
+			actor: { you: true, isOwner: true },
+		});
+		expect(timeline[1].actor).toBeUndefined();
+	});
+});

@@ -37,6 +37,7 @@ function row(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 		slug: "bearcamp-malaysia",
 		ownerUserId: "u1",
 		ownerIsAdmin: false,
+		seats: { active: 1, cap: 3, capUnlimited: false, invited: 0 },
 		isFoundingMember: false,
 		comped: false,
 		createdAt: at(-180),
@@ -462,6 +463,7 @@ describe("sellerSummaryText + CSV", () => {
 				"Email: hello@bearcamp.example",
 				"WhatsApp: +60 12-345 6789",
 				"Plan: Pro · Monthly · auto-renew Visa ·· 4242 · Active",
+				"Seats: 1/3",
 				`Renews ${formatDeadline(at(22), NOW)} · in 22 days`,
 			].join("\n"),
 		);
