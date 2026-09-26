@@ -21,8 +21,24 @@ vi.mock("convex/react", () => ({
 	useAction: () => vi.fn(),
 	useMutation: () => vi.fn(),
 }));
+// WHO is reading the bill (86exr91r4). Billing WRITE is owner-only by
+// construction, but a teammate can be granted billing READ and lands on this
+// exact tab — so the role is a seam the tests can move, not a constant.
+const viewer = { role: "owner" as "owner" | "member" | "admin" };
+vi.mock("../../hooks/usePermission", () => ({
+	useStoreRole: () => viewer.role,
+	useIsStoreOwner: () => viewer.role !== "member",
+	usePermission: () => ({
+		canRead: true,
+		canWrite: viewer.role !== "member",
+		role: viewer.role,
+	}),
+}));
 
-afterEach(cleanup);
+afterEach(() => {
+	viewer.role = "owner";
+	cleanup();
+});
 
 type Retailer = Parameters<typeof BillingTab>[0]["retailer"];
 
@@ -564,7 +580,9 @@ describe("BillingTab comp accounts (z8r3fdeub2)", () => {
 	it("gateway off: the manual card asks them to choose a plan, not renew", () => {
 		mockQueries({ isAdmin: false });
 		render(<BillingTab retailer={ended()} />);
-		expect(screen.getByText("Choose a plan to start working again")).toBeTruthy();
+		expect(
+			screen.getByText("Choose a plan to start working again"),
+		).toBeTruthy();
 		expect(screen.queryByText("Renew your subscription")).toBeNull();
 		expect(waLinks().some((href) => href.includes("choose%20a%20plan"))).toBe(
 			true,
@@ -1763,6 +1781,24 @@ describe("BillingTab under admin act-as (z8r3fdfty4)", () => {
 			expect((args as { retailerId?: string }).retailerId).toBeUndefined();
 	});
 
+	// Same posture, different person: a teammate with billing READ. Billing
+	// WRITE is owner-only by construction, so an enabled control here is one the
+	// server is guaranteed to refuse.
+	it("a teammate with billing READ gets the same view-only posture, with the member's reason", () => {
+		viewer.role = "member";
+		mockQueries({ isAdmin: false, gateway: foundingSg });
+		render(<BillingTab retailer={retailer({ storeName: "Her Moolah" })} />);
+		expect(
+			screen.getAllByText(/Only the store owner can change billing/).length,
+		).toBeGreaterThan(0);
+		for (const btn of screen.getAllByRole("button")) {
+			const label = btn.textContent ?? "";
+			if (/Subscribe|Pay now|I've paid|Pause|Message us/i.test(label)) {
+				expect((btn as HTMLButtonElement).disabled).toBe(true);
+			}
+		}
+	});
+
 	it("billing is view-only: a banner says why, and every billing control is disabled beside its reason (Zaki, 17 Sep 2026)", () => {
 		const note = /View-only while you're acting as this store/;
 		/** Only the always-on support card may still open WhatsApp. */
@@ -1880,5 +1916,118 @@ describe("BillingTab under admin act-as (z8r3fdfty4)", () => {
 		);
 		expect(disabled(/Message us/)).toBe(true);
 		expect(billingWaLinks()).toEqual([]);
+	});
+});
+
+describe("BillingTab past-due follow-up line (z8r3fdg3mh)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+	const pastDue = () =>
+		retailer({
+			subscription: {
+				plan: "pro",
+				status: "past_due",
+				comped: false,
+				caps: { orderCap: 200, userCap: 2, broadcastQuota: 100 },
+				active: false,
+				frozen: true,
+			},
+		} as unknown as Partial<Retailer>);
+
+	it("a locked seller is told the chain exists, that it can't be switched off, and that paying ends it", () => {
+		// The WhatsApp half is conditional (see below) — these three are not.
+		mockQueries({ isAdmin: false });
+		render(<BillingTab retailer={pastDue()} />);
+		const line = screen.getByText(/We'll follow up by email/);
+		expect(line.textContent).toMatch(
+			/storefront and existing orders stay live/,
+		);
+		expect(line.textContent).toMatch(/can't\s+be switched off/);
+		expect(line.textContent).toMatch(/stop the moment you pay/);
+	});
+
+	// A teammate granted billing READ sees this same tab. Every word of the
+	// owner's version is addressed to the person who pays: "your store", "until
+	// this is settled", "the moment you pay" — none of which they can act on,
+	// and the server would refuse them anyway.
+	it("a teammate reading the bill is not told to pay it", () => {
+		viewer.role = "member";
+		mockQueries({ isAdmin: false });
+		render(<BillingTab retailer={pastDue()} />);
+		const line = screen.getByText(/storefront and existing orders stay live/);
+		expect(line.textContent).toMatch(/until the owner settles this/);
+		expect(line.textContent).toMatch(/nothing here is yours to pay/);
+		expect(line.textContent).not.toMatch(/moment you pay/);
+	});
+
+	it("promises the WhatsApp only when it can actually arrive", () => {
+		mockQueries({ isAdmin: false });
+		render(
+			<BillingTab
+				retailer={
+					{
+						...pastDue(),
+						billingWaAlertAvailable: true,
+						notifyWaPhone: "60123456789",
+					} as unknown as Retailer
+				}
+			/>,
+		);
+		expect(
+			screen.getByText(/once on WhatsApp at your alert number/),
+		).toBeTruthy();
+	});
+
+	it.each([
+		[
+			"no approved template on this deployment",
+			{ billingWaAlertAvailable: false, notifyWaPhone: "60123456789" },
+		],
+		[
+			"no alert number saved",
+			{ billingWaAlertAvailable: true, notifyWaPhone: undefined },
+		],
+		[
+			"the saved number holds a global STOP",
+			{
+				billingWaAlertAvailable: true,
+				notifyWaPhone: "60123456789",
+				notifyWaPhoneOptedOut: true,
+			},
+		],
+	])("drops the WhatsApp clause when %s", (_label, extra) => {
+		// Each of these makes the send return early or be suppressed. Promising
+		// a message that never comes is worse than saying nothing — and this is
+		// the only surface where the chain is disclosed at all.
+		mockQueries({ isAdmin: false });
+		render(
+			<BillingTab
+				retailer={{ ...pastDue(), ...extra } as unknown as Retailer}
+			/>,
+		);
+		expect(screen.queryByText(/once on WhatsApp/)).toBeNull();
+		// …the rest of the sentence still stands.
+		expect(screen.getByText(/We'll follow up by email/)).toBeTruthy();
+	});
+
+	it("a comp-ended seller never sees it — no invoice exists, so nothing will chase and nothing is payable", () => {
+		mockQueries({ isAdmin: false });
+		render(
+			<BillingTab
+				retailer={retailer({
+					subscription: {
+						plan: "pro",
+						status: "past_due",
+						comped: false,
+						compEnded: { at: Date.now() - DAY },
+						caps: { orderCap: 200, userCap: 2, broadcastQuota: 100 },
+						active: false,
+						frozen: true,
+					},
+				} as unknown as Partial<Retailer>)}
+			/>,
+		);
+		expect(screen.queryByText(/We'll follow up by email/)).toBeNull();
+		// Their story is the compEnded line instead.
+		expect(screen.getByText(/buyers can still order/)).toBeTruthy();
 	});
 });

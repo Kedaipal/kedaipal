@@ -179,7 +179,16 @@ export function filterSellers(
 /** Whole days from `now` to `at`, rounded — a deadline at midnight read at
  * noon the week before says "in 6 days", not 5.5. */
 export function daysFromNow(at: number, now: number): number {
-	return Math.round((at - now) / DAY_MS);
+	const raw = (at - now) / DAY_MS;
+	// A FUTURE date rounds — "in 6 days" for 5.5 is what a person would say.
+	// A PAST one must not: rounding up overstated how overdue a bill was, so a
+	// 10-day-21-hour-old invoice read "11 days overdue" in this console while
+	// the seller's own recovery email said "10 days past due" (z8r3fdg3mh) —
+	// two Kedaipal surfaces disagreeing about one fact, with the calendar on
+	// the email's side. Truncating toward now never claims a day that has not
+	// finished. The existing tests only used whole-day offsets, which is why
+	// this survived.
+	return raw >= 0 ? Math.round(raw) : -Math.floor(-raw);
 }
 
 type PastWord = "ago" | "overdue" | "locked";

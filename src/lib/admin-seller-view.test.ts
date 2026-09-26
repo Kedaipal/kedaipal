@@ -105,6 +105,19 @@ describe("describeDays", () => {
 		expect(describeDays(at(-21), NOW, "locked")).toBe("21 days locked");
 		expect(describeDays(at(-52), NOW)).toBe("52 days ago");
 	});
+
+	it("a PAST date never claims a day that has not finished (z8r3fdg3mh)", () => {
+		// 10 days and 21 hours overdue is TEN days overdue — the calendar says
+		// so, and the seller's recovery email says so. Rounding made this
+		// console answer 11 and disagree with the email about one invoice.
+		expect(daysFromNow(at(-10.875), NOW)).toBe(-10);
+		expect(describeDays(at(-10.875), NOW, "overdue")).toBe("10 days overdue");
+		// Just past the due moment is not yet a whole day overdue.
+		expect(describeDays(at(-0.5), NOW, "overdue")).toBe("today");
+		// A future date still rounds — "in 6 days" for 5.5 is how people talk.
+		expect(daysFromNow(at(5.5), NOW)).toBe(6);
+		expect(daysFromNow(at(5.4), NOW)).toBe(5);
+	});
 });
 
 describe("sellerExpiry — the wording follows the state", () => {
