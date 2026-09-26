@@ -1,7 +1,7 @@
 import { Lock } from "lucide-react";
-import type { PermissionArea } from "../../lib/team-permissions";
-import { AREA_COPY } from "../../lib/team-permissions";
 import { usePermission, useStoreRole } from "../../hooks/usePermission";
+import type { PermissionArea } from "../../lib/team-permissions";
+import { AREA_COPY, MAX_GRANTABLE } from "../../lib/team-permissions";
 
 /**
  * The member-facing sibling of ViewOnlyNote (86exr91r4): the in-place caption
@@ -38,10 +38,17 @@ export function NeedsAccessNote({
 	if (role !== "member") return null;
 	if (level === "write" ? canWrite : canRead) return null;
 	const label = AREA_COPY[area].label;
+	// Some areas are capped at VIEW by the registry (billing: plan changes and
+	// auto-renew spend the owner's money). "Ask the owner for edit access"
+	// would send a teammate after a grant the Team page cannot give — and it
+	// contradicts what the tab itself says once they're inside it.
+	const cappedAtRead = MAX_GRANTABLE[area] === "read";
 	return (
 		<Note className={className}>
 			{level === "write" && canRead
-				? `You can view ${label} but not change it — ask the owner for edit access.`
+				? cappedAtRead
+					? `${label[0].toUpperCase()}${label.slice(1)} is view-only for teammates — changes are the owner's to make.`
+					: `You can view ${label} but not change it — ask the owner for edit access.`
 				: `You don't have access to ${label} — ask the owner to grant it from Settings → Team.`}
 		</Note>
 	);

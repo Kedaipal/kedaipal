@@ -143,6 +143,35 @@ counter sale, payment confirm, mockup action, fee set and reschedule. NEVER
 stamped for buyers, system paths (webhooks, sweeps) or admin act-as — an admin
 is not a teammate; `adminAuditLog` traces those.
 
+## The client mirror: one flag per area, not a gate per control
+
+`useAreaLock(area)` is the frontend twin of the server gate. `useStoreLock`
+already answered "is the dashboard view-only, and why" for a lapsed
+subscription; a teammate holding VIEW on an area is view-only for a second,
+independent reason, and both end at the same place — a control that must say
+why before it is tapped. So they share one `{ readOnly, reason }` shape, and a
+surface gains permission gating by changing which hook it calls: every
+disabled-with-reason state it already designed keeps working, and nothing has
+to be threaded through 2,000 lines of JSX. Orders (list + detail), customers
+and products ride it. The **subscription wins** when both apply — it is the
+store-wide fact, it blocks the owner too, and "ask the owner for edit access"
+would send a teammate after a grant that still wouldn't let them save.
+
+Two rules the review surfaced, both now pinned by tests:
+
+- **A section can need WRITE, not just read.** `RouteAreaGuard` entries carry an
+  optional `level`; `/app/checkout` is `write`, because the counter TAKES an
+  order and every control on it is a write. At `read` a typed URL walked a
+  view-only teammate into a checkout that could never finish, while the nav
+  (which asks for write) correctly hid it.
+- **An area capped at READ can't be asked to grant edit.** `MAX_GRANTABLE`
+  caps billing at view, so "ask the owner for edit access" pointed at a control
+  the Team page does not have — and contradicted the tab's own note one line
+  below. `NeedsAccessNote` now says "Billing is view-only for teammates". And a
+  member with NO read gets the note ALONE: mounting the body would fire the
+  tab's own queries, which the server refuses for the same reason, so they'd
+  have read "you don't have access" above skeletons that never resolve.
+
 ## Emails (Resend, store's locale)
 
 `teamInvite` (accept link) · `teamAccessRevoked` (removed / plan_change /
