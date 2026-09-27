@@ -1063,6 +1063,102 @@ describe("event RSVP — the venue is the event's, never the guest's (round 4)",
 		expect(saved?.event?.venueId).toBe(pickupLocationId);
 	});
 
+	test("an RSVP never shares an order with a buyer-scheduled line — either door (z8r3fdhh45)", async () => {
+		const t = setup();
+		const { asUser, retailer, pickupLocationId } = await seedStore(t);
+		const eventId = await seedEventProduct(t, retailer._id);
+		// A perfectly ordinary product: its fulfilment moment is the BUYER's to
+		// pick, which is exactly what an event's fixed date cannot accommodate.
+		const mugId = await asUser.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Ceramic mug",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 1,
+			options: [],
+			variants: [{ optionValues: [], price: 1990, onHand: 5 }],
+		});
+		const mugVariant = await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", mugId))
+				.collect();
+			return rows[0]._id;
+		});
+
+		// Storefront door. The mug used to ride along and silently lose its
+		// delivery, its pickup choice and its date to the event's.
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [
+					{ variantId: await variantFor(t, eventId, "A"), quantity: 1 },
+					{ variantId: mugVariant, quantity: 1 },
+				],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryMethod: "self_collect",
+				pickupLocationId,
+			}),
+		).rejects.toThrow(/its own order/i);
+		// The refusal NAMES the line that can't come, so the buyer knows what to
+		// take out rather than being told their cart is wrong.
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [
+					{ variantId: await variantFor(t, eventId, "A"), quantity: 1 },
+					{ variantId: mugVariant, quantity: 1 },
+				],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryMethod: "self_collect",
+				pickupLocationId,
+			}),
+		).rejects.toThrow(/Ceramic mug/);
+
+		// Counter door — an order is an order whichever door it came through.
+		const { sessionId } = await asUser.mutation(
+			api.counterCheckout.bindSessionManualPhone,
+			{ waPhone: "60123456789", name: "Aina Hamzah" },
+		);
+		await expect(
+			asUser.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [
+					{ variantId: await variantFor(t, eventId, "B"), quantity: 1 },
+					{ variantId: mugVariant, quantity: 1 },
+				],
+				paidInPerson: false,
+			}),
+		).rejects.toThrow(/its own order/i);
+	});
+
+	test("several lines of the SAME event still share one order (Set A + Set B)", async () => {
+		const t = setup();
+		const { retailer, pickupLocationId } = await seedStore(t);
+		const eventId = await seedEventProduct(t, retailer._id, { seats: 10 });
+		// The standalone rule is about MIXING fulfilment contracts, not about
+		// one line per order: two sets at the same event are one RSVP, one
+		// date, one venue. Deleting the `product.event === undefined` arm of
+		// the refusal turns this red.
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [
+				{ variantId: await variantFor(t, eventId, "A"), quantity: 1 },
+				{ variantId: await variantFor(t, eventId, "B"), quantity: 2 },
+			],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			pickupLocationId,
+		});
+		expect(shortId).toMatch(/^ORD-/);
+	});
+
 	test("two SAME-DAY events never share a cart — either door (PR review)", async () => {
 		const t = setup();
 		const { asUser, retailer, pickupLocationId } = await seedStore(t);

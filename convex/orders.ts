@@ -1039,6 +1039,11 @@ export const create = mutation({
 			Id<"products">,
 			{ event: ProductEvent; name: string }
 		>();
+		// Lines whose fulfilment moment the BUYER picks — everything that isn't
+		// an event. Counted so an event sharing an order with one can be refused
+		// (`z8r3fdhh45`); the name is what that refusal quotes back.
+		let buyerScheduledLines = 0;
+		let firstBuyerScheduledName: string | undefined;
 		// Minimum-order-rule inputs (86ey9unyx), collected alongside the snapshot:
 		// per-line product id/name/qty + the flags the shared rules need. Checked
 		// after the loop (the rules judge summed quantities + the subtotal).
@@ -1088,11 +1093,15 @@ export const create = mutation({
 			// An event product fixes the whole order's fulfilment moment (see the
 			// lock below), so its notice override is irrelevant — the seller
 			// already chose the date.
-			if (product.event !== undefined)
+			if (product.event !== undefined) {
 				eventProducts.set(variant.productId, {
 					event: product.event,
 					name: product.name,
 				});
+			} else {
+				buyerScheduledLines += 1;
+				firstBuyerScheduledName ??= product.name;
+			}
 			const variantId = variant._id;
 			// The custom line has no optionValues — label it with its custom name so
 			// the order, WhatsApp confirm, and seller dashboard show "… (Custom)"
@@ -1245,6 +1254,20 @@ export const create = mutation({
 			if (eventProducts.size > 1)
 				throw new ConvexError(
 					"This cart has RSVPs for two different events — check them out one at a time.",
+				);
+			// An RSVP is its own order (`z8r3fdhh45`). An order carries exactly
+			// ONE fulfilment contract, and an event's is the seller's fixed date
+			// at the seller's venue — so anything whose date the BUYER picks
+			// cannot ride along. It used to: whichever line landed first decided
+			// the whole order, which silently stripped delivery, pickup and the
+			// date from every other item. The storefront no longer has a way to
+			// build such a cart (an RSVP has no add-to-cart, and persisted event
+			// lines are dropped on hydrate), so this is the stale-tab and
+			// direct-call backstop — and the copy has to say what to DO, because
+			// whoever hits it is holding a cart they can't check out.
+			if (buyerScheduledLines > 0)
+				throw new ConvexError(
+					`An RSVP is its own order — ${firstBuyerScheduledName ?? "the other items"} can't come along with it. RSVP on its own, then order the rest separately.`,
 				);
 			// A finished event still reachable from a stale tab. The storefront
 			// already dropped it (`hiddenFromStorefront`); this is the door.

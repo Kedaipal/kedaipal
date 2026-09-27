@@ -1,8 +1,8 @@
 import { useMutation } from "convex/react";
 import {
 	ArrowRight,
-	Clock,
 	CalendarClock,
+	Clock,
 	ImagePlus,
 	Link as LinkIcon,
 	Loader2,
@@ -14,9 +14,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
-import type { UseCart } from "../../hooks/useCart";
 import { formatPrepDuration } from "../../../convex/lib/fulfilmentDate";
 import { formatEventMoment } from "../../../convex/lib/productEvent";
+import type { UseCart } from "../../hooks/useCart";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
 import { cn } from "../../lib/utils";
@@ -412,7 +412,7 @@ export function addVariantToCart(
 	const updatingCustom =
 		variant.isCustom === true &&
 		cart.items.some((i) => i.variantId === variant._id);
-	const result = cart.addItem(
+	cart.addItem(
 		{
 			variantId: variant._id,
 			productId: p._id,
@@ -431,19 +431,9 @@ export function addVariantToCart(
 			minQuantity: p.minQuantity,
 			note: custom?.note,
 			customImageStorageId: custom?.imageStorageId,
-			// Frozen event moment (`z8r3fdff9u`) — makes this an RSVP, which locks
-			// the whole order's fulfilment date.
-			event: p.event,
 		},
 		qty,
 	);
-	// The cart can REFUSE: an order carries one fulfilment date, so a second
-	// event can't join one that's already in there. Surfaced as the toast the
-	// buyer was expecting anyway — never a silently dead button.
-	if (!result.ok) {
-		toast.error(result.reason);
-		return;
-	}
 	toast.success(
 		updatingCustom
 			? "Custom request updated"
@@ -472,18 +462,14 @@ export function quickAddProductToCart(cart: UseCart, p: StorefrontProduct) {
 		variant.blockWhenOutOfStock === true
 			? Math.max(1, variant.onHand - inCart)
 			: Number.POSITIVE_INFINITY;
-	// Seats cap the top-up the same way stock does (`z8r3fdff9u`) — a min-20
-	// event with 6 seats left must not put 20 in the cart for the server to
-	// refuse at checkout. Uncapped events return undefined, so no clamp.
-	const seatsLeft =
-		p.eventSeatsLeft === undefined
-			? Number.POSITIVE_INFINITY
-			: Math.max(1, p.eventSeatsLeft - inCart);
+	// No seat clamp here: an event is never quick-addable (`z8r3fdhh45`) — its
+	// card routes to the product page and from there to the standalone RSVP
+	// checkout, which owns the seat ceiling.
 	addVariantToCart(
 		cart,
 		p,
 		variant,
-		Math.max(1, Math.min(remainingToMin, stockLeft, seatsLeft)),
+		Math.max(1, Math.min(remainingToMin, stockLeft)),
 	);
 }
 
@@ -1017,13 +1003,13 @@ function AddToCartButton({
 	// Off-Season Hold (z8r3fday24): disabled-with-reason beats a button that
 	// adds to a cart nobody can check out.
 	const paused = useOrderingPaused();
-	// An RSVP's CTA says RSVP — "Add to cart" for a seat at a breakfast reads
-	// like a shipping product and is the wrong mental model for what happens next.
-	const isEvent = pp.product?.event !== undefined;
+	// No event branch here: an RSVP never reaches this button (`z8r3fdhh45`) —
+	// an event's CTA is a link into the standalone RSVP checkout, on every
+	// surface that has one.
 	return (
 		<Button
 			type="button"
-			disabled={paused || !pp.sellable || pp.minUnreachable || pp.eventFull}
+			disabled={paused || !pp.sellable || pp.minUnreachable}
 			onClick={() =>
 				pp.product &&
 				pp.selectedVariant &&
@@ -1033,19 +1019,15 @@ function AddToCartButton({
 		>
 			{paused
 				? ORDERING_PAUSED_CTA
-				: pp.eventFull
-					? "Fully booked"
-					: pp.minUnreachable
-						? "Not enough stock"
-						: !pp.selectedVariant
-							? pp.hasOptions
-								? "Select options"
-								: "Unavailable"
-							: !pp.sellable
-								? "Out of stock"
-								: isEvent
-									? "RSVP"
-									: "Add to cart"}
+				: pp.minUnreachable
+					? "Not enough stock"
+					: !pp.selectedVariant
+						? pp.hasOptions
+							? "Select options"
+							: "Unavailable"
+						: !pp.sellable
+							? "Out of stock"
+							: "Add to cart"}
 		</Button>
 	);
 }

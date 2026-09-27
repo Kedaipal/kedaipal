@@ -168,43 +168,59 @@ describe("useCart — hydration signal (checkout's empty-vs-unknown guard)", () 
 	});
 });
 
-describe("useCart — one event per cart, keyed on the PRODUCT (z8r3fdff9u)", () => {
-	// Two same-day events at different outlets share a date but not a venue —
-	// a date-keyed check would merge them under whichever venue landed first.
-	const EVENT_DATE = Date.UTC(2099, 10, 7);
-	const eventItem = (
-		variantId: string,
-		productId: string,
-	): Omit<CartItem, "quantity"> => ({
-		variantId: variantId as unknown as Id<"productVariants">,
-		productId: productId as unknown as Id<"products">,
-		name: "Event",
-		price: 0,
+describe("useCart — an RSVP can never be a cart line (z8r3fdhh45)", () => {
+	// An event carries its own fixed fulfilment moment, so it is checked out
+	// standalone (`?rsvp=`). Carts persisted BEFORE that change can still hold
+	// an RSVP line; hydrating one would strand the buyer with a basket
+	// `orders.create` refuses and no way to see why — so it is dropped here.
+	const KEY = `kedaipal:cart:${RID}`;
+	const normal = {
+		variantId: "vn",
+		productId: "p1",
+		name: "Ceramic mug",
+		price: 1990,
 		currency: "MYR",
-		event: { date: EVENT_DATE },
-	});
+		quantity: 1,
+	};
+	const rsvp = {
+		variantId: "ve",
+		productId: "pe",
+		name: "Baking class",
+		price: 500,
+		currency: "MYR",
+		quantity: 1,
+		event: { date: Date.UTC(2099, 10, 7) },
+	};
 
-	it("refuses a SECOND event product even on the same date", () => {
+	it("drops a persisted RSVP line and keeps the rest of the basket", () => {
+		localStorage.setItem(KEY, JSON.stringify([normal, rsvp]));
 		const { result } = renderHook(() => useCart(RID));
-		act(() => {
-			expect(result.current.addItem(eventItem("v1", "pA")).ok).toBe(true);
-		});
-		let refusal: ReturnType<typeof result.current.addItem> | undefined;
-		act(() => {
-			refusal = result.current.addItem(eventItem("v2", "pB"));
-		});
-		expect(refusal).toMatchObject({ ok: false });
 		expect(result.current.items).toHaveLength(1);
+		expect(result.current.items[0].name).toBe("Ceramic mug");
+		expect(result.current.itemCount).toBe(1);
 	});
 
-	it("still allows a second line of the SAME event (Set A + Set B)", () => {
+	it("leaves an RSVP-only cart empty rather than unusable", () => {
+		localStorage.setItem(KEY, JSON.stringify([rsvp]));
 		const { result } = renderHook(() => useCart(RID));
-		act(() => {
-			expect(result.current.addItem(eventItem("v1", "pA")).ok).toBe(true);
-		});
-		act(() => {
-			expect(result.current.addItem(eventItem("v2", "pA")).ok).toBe(true);
-		});
-		expect(result.current.items).toHaveLength(2);
+		expect(result.current.items).toHaveLength(0);
+		// Hydration still COMPLETED — the checkout must render its real empty
+		// state, not hold a skeleton forever.
+		expect(result.current.hydrated).toBe(true);
+	});
+
+	it("persists the healed cart, so the RSVP line cannot come back", async () => {
+		localStorage.setItem(KEY, JSON.stringify([normal, rsvp]));
+		const { result } = renderHook(() => useCart(RID));
+		// A write of any kind flushes the hydrated (healed) state back to storage.
+		act(() =>
+			result.current.updateQuantity(
+				"vn" as unknown as Id<"productVariants">,
+				2,
+			),
+		);
+		const stored = JSON.parse(localStorage.getItem(KEY) ?? "[]");
+		expect(stored).toHaveLength(1);
+		expect(stored[0]).not.toHaveProperty("event");
 	});
 });

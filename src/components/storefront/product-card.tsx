@@ -66,7 +66,12 @@ export function ProductCard({
 	const weekendSuffix = isBooking ? weekendRateSuffix(product.booking) : null;
 	const hasOptions = (product.options?.length ?? 0) > 0;
 	const hasCustom = product.variants.some((v) => v.isCustom);
-	const needsDetail = hasOptions || hasCustom || isBooking;
+	// An EVENT always routes to its page too (`z8r3fdhh45`): an RSVP is checked
+	// out standalone, so there is no cart line for a quick-add to make — and
+	// the page carries the terms (fixed date, venue, seats left) a guest has to
+	// read before committing.
+	const isEvent = product.event !== undefined;
+	const needsDetail = hasOptions || hasCustom || isBooking || isEvent;
 	// A product "can run out" if any of its variants hard-blocks (flags are now
 	// resolved per-variant server-side). Only then does the low-stock badge apply.
 	const canRunOut = product.variants.some(
@@ -288,10 +293,12 @@ export function ProductCard({
 						>
 							{isBooking ? (
 								<CalendarRange className="size-4" />
+							) : isEvent ? (
+								<CalendarClock className="size-4" />
 							) : (
 								<SlidersHorizontal className="size-4" />
 							)}
-							{isBooking ? "Book" : "Choose"}
+							{isBooking ? "Book" : isEvent ? "RSVP" : "Choose"}
 						</Button>
 					) : (
 						<Button
@@ -303,10 +310,12 @@ export function ProductCard({
 							<Link {...pageLink}>
 								{isBooking ? (
 									<CalendarRange className="size-4" />
+								) : isEvent ? (
+									<CalendarClock className="size-4" />
 								) : (
 									<SlidersHorizontal className="size-4" />
 								)}
-								{isBooking ? "Book" : "Choose"}
+								{isBooking ? "Book" : isEvent ? "RSVP" : "Choose"}
 							</Link>
 						</Button>
 					)
@@ -319,9 +328,7 @@ export function ProductCard({
 						className="mt-auto h-11 w-full rounded-xl"
 					>
 						{paused ? null : <Plus className="size-4" />}
-						{/* An event's quick-add is an RSVP — the product page's CTA
-						    already says so, and one action must keep one name. */}
-						{paused ? ORDERING_PAUSED_CTA : event ? "RSVP" : "Add"}
+						{paused ? ORDERING_PAUSED_CTA : "Add"}
 					</Button>
 				)}
 			</div>

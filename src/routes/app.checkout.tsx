@@ -1088,6 +1088,7 @@ function ProductVariantRows({
 	customPriceInput,
 	setCustomPriceInput,
 	setQty,
+	mixReason,
 	className,
 }: {
 	product: CounterProduct;
@@ -1098,10 +1099,20 @@ function ProductVariantRows({
 		React.SetStateAction<Record<string, string>>
 	>;
 	setQty: (variantId: string, line: CartLine, qty: number) => void;
+	/** Why this product can't JOIN the current cart (`z8r3fdhh45`) — an RSVP is
+	 * its own order. Blocks the Add buttons and says so once, above the rows.
+	 * Lines already in the cart keep their steppers: the seller has to be able
+	 * to remove the offending one, and a disabled row is a trap, not a guard. */
+	mixReason?: string;
 	className?: string;
 }) {
 	return (
 		<div className={cn("flex flex-col divide-y divide-border", className)}>
+			{mixReason ? (
+				<p className="py-2 text-xs leading-relaxed text-amber-600 dark:text-amber-500">
+					{mixReason}
+				</p>
+			) : null}
 			{product.variants.map((vr) => {
 				const isCustom = vr.isCustom === true;
 				const label = isCustom
@@ -1242,7 +1253,8 @@ function ProductVariantRows({
 						) : (
 							<Button
 								variant="secondary"
-								disabled={!sellable}
+								disabled={!sellable || mixReason !== undefined}
+								title={mixReason}
 								onClick={() =>
 									setQty(
 										vr._id,
@@ -1646,11 +1658,50 @@ function BuildOrderScreen({
 		for (const p of products) {
 			if (p.event === undefined) continue;
 			for (const vr of p.variants) {
-				if (cart.has(vr._id)) return { name: p.name, ...p.event };
+				if (cart.has(vr._id))
+					return { productId: p._id as string, name: p.name, ...p.event };
 			}
 		}
 		return undefined;
 	}, [products, cart]);
+	// The counter follows the storefront's rule (`z8r3fdhh45`): an RSVP is its
+	// own order. Named here so the catalog can DISABLE what would break it and
+	// the primary action can refuse a draft that already has.
+	const mixedRsvp = useMemo(() => {
+		if (!products || cartEvent === undefined) return undefined;
+		for (const p of products) {
+			if (p.event !== undefined) continue;
+			for (const vr of p.variants) {
+				if (cart.has(vr._id)) return p.name;
+			}
+		}
+		return undefined;
+	}, [products, cart, cartEvent]);
+	// Does the cart hold anything the BUYER would schedule? Then an event can't
+	// join it — the mirror of `mixedRsvp`, for the rows not yet added.
+	const cartHasBuyerScheduled = useMemo(() => {
+		if (!products) return false;
+		for (const p of products) {
+			if (p.event !== undefined) continue;
+			for (const vr of p.variants) {
+				if (cart.has(vr._id)) return true;
+			}
+		}
+		return false;
+	}, [products, cart]);
+	// Why this product can't join the cart as it stands. One author, read by
+	// both catalog surfaces (the list accordion and the grid's modal) so they
+	// can't disagree about what is addable.
+	const rsvpMixReason = (p: CounterProduct): string | undefined => {
+		if (cartEvent !== undefined) {
+			if (p.event !== undefined && (p._id as string) === cartEvent.productId)
+				return undefined;
+			return `This order is an RSVP for ${cartEvent.name} — everything else goes on a separate order.`;
+		}
+		if (p.event !== undefined && cartHasBuyerScheduled)
+			return "An RSVP is its own order — finish this one first, or clear the cart to ring up the event.";
+		return undefined;
+	};
 	const collectionEpoch = mytMidnightFromYmd(fulfilmentDate);
 	const collectionLabel = cartEvent
 		? formatEventMoment(cartEvent)
@@ -1894,6 +1945,7 @@ function BuildOrderScreen({
 											customPriceInput={customPriceInput}
 											setCustomPriceInput={setCustomPriceInput}
 											setQty={setQty}
+											mixReason={rsvpMixReason(p)}
 											className="rounded-b-2xl border-t border-border bg-muted/20 px-3 pb-1"
 										/>
 									) : null}
@@ -2309,6 +2361,9 @@ function BuildOrderScreen({
 								// buyer pick a date and holds no seat) — outranks `unpriced`,
 								// or a free RSVP line reads as an unpriced custom item.
 								eventName: cartEvent?.name,
+								// Refuses a mixed cart in BOTH modes (`z8r3fdhh45`) —
+								// `orders.create` rejects it at either door.
+								mixedRsvp,
 								money: formatPrice(total, currency),
 								windowMinutes,
 								buyerName: buyer.displayName,
@@ -2470,6 +2525,7 @@ function BuildOrderScreen({
 									customPriceInput={customPriceInput}
 									setCustomPriceInput={setCustomPriceInput}
 									setQty={setQty}
+									mixReason={rsvpMixReason(modalProduct)}
 								/>
 							</div>
 							<div className="shrink-0 border-t border-border p-3">
