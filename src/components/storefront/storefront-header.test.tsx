@@ -8,7 +8,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { DAY_MS, todayMytMidnight } from "../../../convex/lib/fulfilmentDate";
-import { StorefrontHeader } from "./storefront-header";
+import { StorefrontHeader, storeInitials } from "./storefront-header";
 
 afterEach(cleanup);
 
@@ -18,40 +18,56 @@ const retailer = {
 };
 
 describe("StorefrontHeader", () => {
-	// Every storefront page renders this block, but only the store home is
-	// *about* the store — so only there is the store name the page's <h1>.
-	// Without the distinction, checkout and the product page would each carry
-	// two <h1>s, and every page in the store would share one duplicated
-	// heading. See docs/storefront-checkout-page.md ("Heading rule").
-	it("makes the store name the page <h1> on the store home", () => {
+	// The full hero renders ONLY on the store home since z8r3fdegb5 (subpages
+	// carry the compact StorefrontAppBar), and the home is *about* the store —
+	// so the store name is unconditionally the page's <h1>.
+	it("makes the store name the page <h1>", () => {
 		render(<StorefrontHeader retailer={retailer} />);
 		const heading = screen.getByRole("heading", { level: 1 });
 		expect(heading.textContent).toBe("Dapur Nadia");
 	});
 
-	it("renders the store name as plain text on subpages", () => {
-		render(<StorefrontHeader retailer={retailer} asPageHeading={false} />);
-		// Present and readable — just not claiming to be the page's heading,
-		// which the subpage itself owns (category / product name, "Checkout").
-		expect(screen.getByText("Dapur Nadia").tagName).toBe("P");
-		expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
-	});
-
-	it("styles the store name identically either way — the prop is semantic only", () => {
-		const { container: home } = render(
-			<StorefrontHeader retailer={retailer} />,
-		);
-		const { container: sub } = render(
-			<StorefrontHeader retailer={retailer} asPageHeading={false} />,
-		);
-		expect(sub.querySelector("p")?.className).toBe(
-			home.querySelector("h1")?.className,
-		);
-	});
-
 	it("falls back to the generic tagline when the seller has no blurb", () => {
 		render(<StorefrontHeader retailer={{ storeName: "Lekor Mr Ganu" }} />);
 		expect(screen.getByText("Browse & order on WhatsApp")).toBeTruthy();
+	});
+
+	it("renders an initials tile when the store has no logo — never a hole", () => {
+		render(<StorefrontHeader retailer={retailer} />);
+		expect(screen.getByText("DN")).toBeTruthy();
+	});
+
+	it("offers Share store only when it has the slug to share", () => {
+		render(<StorefrontHeader retailer={retailer} slug="dapur-nadia" />);
+		expect(
+			screen.getByRole("button", { name: /share store/i }),
+		).toBeTruthy();
+		cleanup();
+		render(<StorefrontHeader retailer={retailer} />);
+		expect(screen.queryByRole("button", { name: /share store/i })).toBeNull();
+	});
+
+	it("carries no Kedaipal mark — the footer owns 'Powered by'", () => {
+		const { container } = render(<StorefrontHeader retailer={retailer} />);
+		const srcs = Array.from(container.querySelectorAll("img")).map((img) =>
+			img.getAttribute("src"),
+		);
+		expect(srcs).not.toContain("/logo-3.svg");
+		expect(srcs).not.toContain("/logo-dark.svg");
+	});
+});
+
+describe("storeInitials", () => {
+	it("takes the first letters of the first two words", () => {
+		expect(storeInitials("Kek Sayang Bakery")).toBe("KS");
+	});
+
+	it("takes two characters of a single-word name", () => {
+		expect(storeInitials("Hermoolah")).toBe("HE");
+	});
+
+	it("survives an empty name", () => {
+		expect(storeInitials("  ")).toBe("");
 	});
 });
 

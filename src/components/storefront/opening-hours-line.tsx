@@ -1,4 +1,3 @@
-import { Clock } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
 	type ClosedDateRange,
@@ -80,10 +79,19 @@ export function OpeningHoursLine({
 	hours,
 	closedDates,
 	onCover,
+	variant = "hero",
 }: {
 	hours: OpeningHours | undefined;
 	closedDates?: ReadonlyArray<ClosedDateRange>;
 	onCover: boolean;
+	/**
+	 * "hero" — status pill(s) on the store-home header (z8r3fdegb5): a
+	 * rounded chip with a live open/closed dot, glassy on a cover image.
+	 * "bar" — the compact subpage app bar's one-liner: 11px muted text with
+	 * the same dot, truncating to a single line. Both open the same weekly
+	 * schedule dialog.
+	 */
+	variant?: "hero" | "bar";
 }) {
 	// Re-render every minute so "Open now" flips without a reload. The state
 	// value is the clock itself; reading Date.now() at render keeps SSR and
@@ -142,30 +150,66 @@ export function OpeningHoursLine({
 			(headsUp.label ? ` · ${headsUp.label}` : "")
 		: null;
 
+	// The live open/closed signal — mint when open, dimmed when shut. It
+	// replaced the Clock glyph in the polish pass (z8r3fdegb5): a state dot
+	// says more than a static icon in the same 6px.
+	const statusDot = (
+		<span
+			aria-hidden
+			className={`size-1.5 shrink-0 rounded-full ${
+				status.open
+					? "bg-accent"
+					: onCover
+						? "bg-white/60"
+						: "bg-muted-foreground/60"
+			}`}
+		/>
+	);
+	const pillClass = onCover
+		? "flex items-center gap-1.5 rounded-full border border-white/25 bg-white/15 px-2.5 py-1 text-xs font-medium text-white backdrop-blur transition-colors hover:bg-white/25"
+		: "flex items-center gap-1.5 rounded-full border border-border bg-muted/60 px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted";
+
 	return (
 		<Dialog>
 			<DialogTrigger asChild>
-				<button
-					type="button"
-					// `text-left` + `items-start`: a closure's status can wrap to two
-					// lines on a phone, and a <button> centres its text by default —
-					// the icon then floated beside the middle of a centred block.
-					className={`mt-0.5 flex items-start gap-1.5 self-start text-left text-sm underline-offset-2 hover:underline ${
-						onCover ? "text-white/90 drop-shadow" : "text-muted-foreground"
-					}`}
-				>
-					<Clock className="mt-[3px] size-3.5 shrink-0" aria-hidden="true" />
-					<span suppressHydrationWarning className="flex flex-col">
-						{text ? <span>{text}</span> : null}
+				{variant === "bar" ? (
+					// One line only — the status wins; a heads-up-only 24/7 store
+					// shows its closure instead. The dialog carries the full list.
+					<button
+						type="button"
+						className="flex min-w-0 items-center gap-1.5 self-start text-left text-[11px] leading-tight text-muted-foreground underline-offset-2 hover:underline focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+					>
+						{statusDot}
+						<span suppressHydrationWarning className="truncate">
+							{text ?? headsUpText}
+						</span>
+					</button>
+				) : (
+					// `text-left` + wrap: a closure's status can run long on a phone;
+					// each line is its own pill so the lozenge shape survives a wrap.
+					<button
+						type="button"
+						className="mt-1 flex flex-wrap items-center gap-1.5 self-start rounded-full text-left focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+					>
+						{text ? (
+							<span className={pillClass}>
+								{statusDot}
+								<span suppressHydrationWarning>{text}</span>
+							</span>
+						) : null}
 						{/* A closure ahead is the one thing a buyer choosing a
 						    pre-order date needs before checkout tells them. */}
 						{headsUpText ? (
-							<span className={text ? "text-xs" : undefined}>
+							<span
+								suppressHydrationWarning
+								className={`${pillClass} ${text ? "text-[11px]" : ""}`}
+							>
+								{text ? null : statusDot}
 								{headsUpText}
 							</span>
 						) : null}
-					</span>
-				</button>
+					</button>
+				)}
 			</DialogTrigger>
 			<DialogContent className="sm:max-w-sm">
 				<DialogHeader>

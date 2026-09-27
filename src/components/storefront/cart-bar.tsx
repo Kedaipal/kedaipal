@@ -1,8 +1,7 @@
 import { useNavigate } from "@tanstack/react-router";
-import { PauseCircle, ShoppingBag } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import type { UseCart } from "../../hooks/useCart";
 import { formatPrice } from "../../lib/format";
-import { Button } from "../ui/button";
 import { ORDERING_PAUSED_CTA, useOrderingPaused } from "./seasonal-break";
 
 interface CartBarProps {
@@ -12,74 +11,63 @@ interface CartBarProps {
 }
 
 /**
- * The fixed bottom cart bar on the browse pages. Checkout is a real route now
- * (not a sheet this bar owns), so all the checkout plumbing that used to pass
- * through here — pickup locations, fulfilment settings, min-order rules —
- * lives with the checkout page instead.
+ * The floating cart pill on the browse pages (z8r3fdegb5) — a navy capsule
+ * inset from the screen edges with the running count, the money total and the
+ * checkout action, instead of the old full-width bottom strip. It appears the
+ * moment the first item lands and disappears with the last one: an empty cart
+ * has nothing to check out, and permanent chrome saying "Empty" taught
+ * nothing. Mobile floats it across the bottom; desktop parks the same pill
+ * bottom-right. Pages that render it keep ≥96px of bottom padding (`pb-28`)
+ * so the pill never sits on the footer.
+ *
+ * Off-Season Hold: the pill stays (the cart persists — nothing is lost when
+ * the store reopens) but checkout is disabled with the reason on it; the
+ * banner at the top of the page carries the full story.
  */
 export function CartBar({ cart, storeSlug }: CartBarProps) {
 	const navigate = useNavigate();
 	const paused = useOrderingPaused();
-	const empty = cart.itemCount === 0;
 
-	// Off-Season Hold: the bar stays (the cart persists — nothing is lost when
-	// the store reopens) but checkout is disabled with the reason on it.
-	if (paused) {
-		return (
-			<div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 px-5 py-3 shadow-[0_-12px_30px_rgba(15,23,42,0.08)] backdrop-blur pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-				<div className="mx-auto flex max-w-6xl items-center gap-3">
-					<div className="flex flex-1 items-center gap-3">
-						<div className="flex size-11 items-center justify-center rounded-full bg-accent/10">
-							<PauseCircle className="size-5 text-accent" aria-hidden />
-						</div>
-						<div className="flex flex-col">
-							<span className="text-[11px] uppercase tracking-wide text-muted-foreground">
-								Seasonal break
-							</span>
-							<span className="text-sm font-semibold">
-								Not taking orders right now
-							</span>
-						</div>
-					</div>
-					<Button type="button" disabled className="h-12 px-6 text-sm">
-						{ORDERING_PAUSED_CTA}
-					</Button>
-				</div>
-			</div>
-		);
-	}
+	if (cart.itemCount === 0) return null;
+
+	// Count badge caps at 99+ (design-system badge rule); the "N items" line
+	// beside it carries the exact number until it, too, gets silly.
+	const badge = cart.itemCount > 99 ? "99+" : String(cart.itemCount);
 
 	return (
-		<div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 px-5 py-3 shadow-[0_-12px_30px_rgba(15,23,42,0.08)] backdrop-blur pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-			<div className="mx-auto flex max-w-6xl items-center gap-3">
-				<div className="flex flex-1 items-center gap-3">
-					<div className="relative flex size-11 items-center justify-center rounded-full bg-muted">
-						<ShoppingBag className="size-5" />
-						{!empty ? (
-							<span className="absolute -right-1 -top-1 flex size-5 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
-								{cart.itemCount}
-							</span>
-						) : null}
-					</div>
-					<div className="flex flex-col">
-						<span className="text-[11px] uppercase tracking-wide text-muted-foreground">
-							Cart
-						</span>
-						<span className="text-sm font-semibold">
-							{empty ? "Empty" : formatPrice(cart.total, cart.currency)}
-						</span>
-					</div>
+		<div className="pointer-events-none fixed inset-x-4 bottom-[max(1rem,env(safe-area-inset-bottom))] z-30 lg:inset-x-auto lg:right-6 lg:bottom-6">
+			<div className="pointer-events-auto mx-auto flex h-14 max-w-md items-center gap-3 rounded-full bg-primary p-1.5 pl-2 text-primary-foreground shadow-lg shadow-primary/30 lg:mx-0 lg:w-auto lg:max-w-none">
+				<span
+					aria-hidden
+					className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent text-sm font-bold text-accent-foreground tabular-nums dark:bg-background dark:text-foreground"
+				>
+					{badge}
+				</span>
+				<div className="flex min-w-0 flex-1 flex-col lg:flex-initial">
+					<span className="text-[11px] leading-tight text-primary-foreground/70">
+						{cart.itemCount} {cart.itemCount === 1 ? "item" : "items"}
+					</span>
+					<span className="truncate text-sm font-bold leading-tight tabular-nums">
+						{formatPrice(cart.total, cart.currency)}
+					</span>
 				</div>
-				<Button
+				<button
 					type="button"
-					disabled={empty}
+					disabled={paused}
 					onClick={() =>
 						navigate({ to: "/$slug/checkout", params: { slug: storeSlug } })
 					}
-					className="h-12 px-6 text-sm"
+					className="flex h-11 shrink-0 items-center gap-1.5 rounded-full bg-accent px-4 text-sm font-semibold text-accent-foreground transition-colors hover:bg-accent/90 disabled:opacity-70 dark:bg-background dark:text-foreground dark:hover:bg-background/90"
 				>
-					Checkout
-				</Button>
+					{paused ? (
+						ORDERING_PAUSED_CTA
+					) : (
+						<>
+							Checkout
+							<ArrowRight className="size-4" aria-hidden />
+						</>
+					)}
+				</button>
 			</div>
 		</div>
 	);

@@ -6,7 +6,7 @@ import { AllProductsDivider } from "./product-grid";
 afterEach(cleanup);
 
 /**
- * The divider's *conditional* behaviour is pure CSS (`peer-[:not(:empty)]`
+ * The heading's *conditional* behaviour is pure CSS (`peer-[:not(:empty)]`
  * against the merchandising wrapper), and jsdom has no Tailwind stylesheet or
  * layout engine — asserting `display` here would assert nothing. That part is
  * verified in-browser across all four states (rail+shelf / rail-only /
@@ -17,23 +17,24 @@ afterEach(cleanup);
  * would notice the category tiles sitting on the product grid again.
  */
 describe("AllProductsDivider", () => {
-	it("labels the grid", () => {
-		render(<AllProductsDivider />);
-		expect(screen.getByText("All products")).toBeTruthy();
+	it("labels the grid with a real heading and the live count", () => {
+		render(<AllProductsDivider count={23} />);
+		expect(
+			screen.getByRole("heading", { level: 2, name: "All products" }),
+		).toBeTruthy();
+		expect(screen.getByText("23 items")).toBeTruthy();
+	});
+
+	it("singularises a one-product catalog", () => {
+		render(<AllProductsDivider count={1} />);
+		expect(screen.getByText("1 item")).toBeTruthy();
 	});
 
 	it("stays hidden unless the preceding merchandising wrapper is non-empty", () => {
-		const { container } = render(<AllProductsDivider />);
+		const { container } = render(<AllProductsDivider count={5} />);
 		const cls = container.firstElementChild?.className ?? "";
 		// Hidden by default, revealed only by the peer-empty check.
 		expect(cls).toContain("hidden");
-		expect(cls).toContain("peer-[:not(:empty)]:flex");
-	});
-
-	it("is decorative — the label is a visual rule, not a heading", () => {
-		const { container } = render(<AllProductsDivider />);
-		expect(container.firstElementChild?.getAttribute("aria-hidden")).toBe(
-			"true",
-		);
+		expect(cls).toContain("peer-[:not(:empty)]:block");
 	});
 });

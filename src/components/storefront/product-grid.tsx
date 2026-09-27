@@ -9,6 +9,7 @@ import type { UseCart } from "../../hooks/useCart";
 import { Input } from "../ui/input";
 import { ProductCard, type StorefrontProduct } from "./product-card";
 import { quickAddProductToCart } from "./product-purchase";
+import { SectionHeading } from "./section-heading";
 
 /** Product-card grid — 4 columns on desktop (86eybrhrt PR3). The old 5/6-col
  * density existed so cards never outweighed the category hero tiles; those
@@ -17,7 +18,10 @@ import { quickAddProductToCart } from "./product-purchase";
 const GRID_CLASS = "grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4";
 
 /**
- * The "All products" rule that hands merchandising over to the full catalog.
+ * The "All products" heading that hands merchandising over to the full
+ * catalog — since z8r3fdegb5 a real section heading with the live item count,
+ * not a hairline whisper (the three 11px caps eyebrows all read alike, so
+ * nothing ranked).
  *
  * It lives beside the grid it labels, NOT inside whichever section happens to
  * sit above it — it was briefly owned by the popular shelf, which meant it
@@ -25,24 +29,22 @@ const GRID_CLASS = "grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4";
  * threshold, leaving category tiles 4px from the first product row. That's not
  * an edge case: it's every newly-onboarded seller and every quiet week.
  *
- * Render it as the last child of `beforeGrid`, after a `peer`-marked wrapper
- * holding the merchandising sections. `peer-[:not(:empty)]` then shows it only
- * when at least one of those sections actually rendered — the wrapper is
- * genuinely `:empty` when they all return null (React renders no nodes, and
- * JSX drops the whitespace between them), so all four combinations are right
- * with no extra queries or prop-drilling.
+ * ProductGrid renders it right after `beforeGrid`, whose route-side wrapper is
+ * `peer`-marked around the merchandising sections. `peer-[:not(:empty)]` then
+ * shows it only when at least one of those sections actually rendered — the
+ * wrapper is genuinely `:empty` when they all return null (React renders no
+ * nodes, and JSX drops the whitespace between them), so all four combinations
+ * are right with no extra queries or prop-drilling. A store with no
+ * merchandising has nothing to hand over FROM — its grid follows the search
+ * bar directly, unlabelled.
  */
-export function AllProductsDivider() {
+export function AllProductsDivider({ count }: { count: number }) {
 	return (
-		<div
-			aria-hidden
-			className="hidden items-center gap-3 pb-4 pt-5 peer-[:not(:empty)]:flex"
-		>
-			<span className="h-px flex-1 bg-border" />
-			<span className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">
-				All products
-			</span>
-			<span className="h-px flex-1 bg-border" />
+		<div className="hidden pb-3 pt-6 peer-[:not(:empty)]:block">
+			<SectionHeading
+				title="All products"
+				context={`${count} item${count === 1 ? "" : "s"}`}
+			/>
 		</div>
 	);
 }
@@ -174,8 +176,17 @@ export function ProductGrid({
 			</div>
 
 			{/* Home page slots the category hero here; hidden while searching so
-			    results take the whole surface. */}
-			{searchQuery ? null : beforeGrid}
+			    results take the whole surface. The "All products" heading follows
+			    as a SIBLING of the route's peer-marked merchandising wrapper — the
+			    peer CSS shows it only when something actually rendered above. */}
+			{searchQuery ? null : (
+				<>
+					{beforeGrid}
+					{beforeGrid !== undefined ? (
+						<AllProductsDivider count={products.length} />
+					) : null}
+				</>
+			)}
 
 			{/* Matching categories — tappable doors above the product results. */}
 			{matchedCategories.length > 0 ? (
@@ -249,8 +260,8 @@ export function ProductGrid({
 							product={product}
 							storeSlug={storeSlug}
 							onQuickAdd={quickAdd}
+							onQuickRemove={(p) => cart.quickRemoveProduct(p._id)}
 							cartQuantity={cart.quantityForProduct(product._id)}
-							cartSubtotal={cart.subtotalForProduct(product._id)}
 							// Early cards are likely above-the-fold — eager-load their
 							// photo instead of lazy so the first paint isn't blank.
 							priority={index < 4}

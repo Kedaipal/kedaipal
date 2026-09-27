@@ -122,8 +122,8 @@ function cartStub(): UseCart {
 		removeItem: vi.fn(),
 		removeEventLines: vi.fn(),
 		clearCart: vi.fn(),
+		quickRemoveProduct: vi.fn(),
 		quantityForProduct: () => 1,
-		subtotalForProduct: () => 4500,
 	};
 }
 
