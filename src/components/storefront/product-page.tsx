@@ -1,5 +1,5 @@
 import { Link, useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, CalendarRange } from "lucide-react";
+import { CalendarRange } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
@@ -26,10 +26,8 @@ import {
 	TotalPreviewRow,
 	useProductPurchase,
 } from "./product-purchase";
-import {
-	StorefrontHeader,
-	type StorefrontHeaderRetailer,
-} from "./storefront-header";
+import { StorefrontAppBar } from "./storefront-app-bar";
+import type { StorefrontHeaderRetailer } from "./storefront-header";
 
 interface ProductPageViewProps {
 	product: StorefrontProduct;
@@ -89,27 +87,17 @@ export function ProductPageView({
 
 	return (
 		<>
-			{/* The same brand header the store home and category pages render —
-			    a buyer arriving from a shared WhatsApp link lands in the SELLER's
-			    store, not on an anonymous product card. */}
-			<StorefrontHeader retailer={retailer} asPageHeading={false} />
+			{/* Compact app bar (z8r3fdegb5) — the seller's identity, the way back
+			    and share, without the 176px cover hero: a buyer opening a shared
+			    WhatsApp link sees the product photo on the first screen. The bar
+			    owns "back", so the old "← All products" text link is gone; the
+			    cart lives in the sticky purchase bar below. */}
+			<StorefrontAppBar
+				retailer={retailer}
+				slug={storeSlug}
+				shareUrl={canonicalUrl}
+			/>
 			<SeasonalBreakNotice storeName={retailer.storeName} />
-
-			{/* Back to the catalog — mirrors the category page's affordance, so
-			    every level of the storefront has the same way out. The cart lives
-			    in the sticky purchase bar below (count + total + go to checkout),
-			    so there's no second cart chip up here saying the same thing. */}
-			<div className="px-5 pt-4 lg:px-8">
-				<Link
-					to="/$slug"
-					params={{ slug: storeSlug }}
-					activeOptions={{ exact: true }}
-					className="inline-flex w-fit items-center gap-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
-				>
-					<ArrowLeft className="size-4" aria-hidden />
-					All products
-				</Link>
-			</div>
 
 			<div className="mt-4 px-5 lg:flex lg:items-start lg:gap-10 lg:px-8">
 				{/* Gallery — snap carousel on mobile (the sheet's pattern), main

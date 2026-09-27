@@ -62,8 +62,8 @@ function renderCard(
 					product={product}
 					storeSlug="kfrozenfood"
 					onQuickAdd={vi.fn()}
+					onQuickRemove={vi.fn()}
 					cartQuantity={0}
-					cartSubtotal={0}
 					{...overrides}
 				/>
 				<Outlet />
@@ -98,26 +98,72 @@ function renderCard(
  */
 const nameLink = () => screen.getByRole("link", { name: "Ceramic mug" });
 
-describe("ProductCard — in-cart line", () => {
-	it("shows nothing when the product is not in the cart", async () => {
+describe("ProductCard — in-cart stepper (z8r3fdegb5)", () => {
+	it("shows the Add pill (no stepper) when the product is not in the cart", async () => {
 		renderCard();
 		await waitFor(() => expect(nameLink()).toBeTruthy());
+		expect(screen.getByRole("button", { name: "Add" })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /Remove one/ })).toBeNull();
+	});
+
+	it("swaps the Add pill for a −/n/+ stepper once in the cart", async () => {
+		renderCard({ cartQuantity: 3 });
+		await waitFor(() =>
+			expect(
+				screen.getByRole("button", { name: "Remove one Ceramic mug" }),
+			).toBeTruthy(),
+		);
+		expect(screen.getByText("3")).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "Add one more Ceramic mug" }),
+		).toBeTruthy();
+		// The stepper IS the in-cart affordance — no separate Add pill, no old
+		// "N in cart · RM" line.
+		expect(screen.queryByRole("button", { name: "Add" })).toBeNull();
 		expect(screen.queryByText(/in cart/i)).toBeNull();
 	});
 
-	it("shows count and running total once in the cart", async () => {
-		renderCard({ cartQuantity: 3, cartSubtotal: 15000 });
-		// Regex tolerates the NBSP Intl inserts between "RM" and the amount.
-		await waitFor(() =>
-			expect(screen.getByText(/^3 in cart · RM\s*150\.00$/)).toBeTruthy(),
+	it("wires − to onQuickRemove and + to onQuickAdd", async () => {
+		const onQuickAdd = vi.fn();
+		const onQuickRemove = vi.fn();
+		renderCard({ cartQuantity: 2, onQuickAdd, onQuickRemove });
+		const minus = await waitFor(() =>
+			screen.getByRole("button", { name: "Remove one Ceramic mug" }),
 		);
+		fireEvent.click(minus);
+		expect(onQuickRemove).toHaveBeenCalledTimes(1);
+		fireEvent.click(
+			screen.getByRole("button", { name: "Add one more Ceramic mug" }),
+		);
+		expect(onQuickAdd).toHaveBeenCalledTimes(1);
 	});
 
-	it("shows the count alone when everything in cart is quote-priced (subtotal 0)", async () => {
-		renderCard({ cartQuantity: 1, cartSubtotal: 0 });
-		await waitFor(() => expect(screen.getByText("1 in cart")).toBeTruthy());
-		// No stray "· RM" money fragment when there's no total to show.
-		expect(screen.queryByText(/·/)).toBeNull();
+	it("disables + at the hard-block stock cap so an enabled + always adds", async () => {
+		renderCard({
+			product: {
+				...product,
+				totalOnHand: 3,
+				variants: [
+					{ ...product.variants[0], onHand: 3, blockWhenOutOfStock: true },
+				],
+			} as unknown as StorefrontProduct,
+			cartQuantity: 3,
+		});
+		const plus = await waitFor(
+			() =>
+				screen.getByRole("button", {
+					name: "Add one more Ceramic mug",
+				}) as HTMLButtonElement,
+		);
+		expect(plus.disabled).toBe(true);
+		// − still works — the buyer can always back out of a full line.
+		expect(
+			(
+				screen.getByRole("button", {
+					name: "Remove one Ceramic mug",
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(false);
 	});
 });
 
@@ -196,20 +242,20 @@ describe("ProductCard — product page links", () => {
 		expect(decorative[0]?.tabIndex).toBe(-1);
 	});
 
-	it("gives a multi-variant product's Choose CTA the same href", async () => {
+	it("gives a multi-variant product's Options CTA the same href", async () => {
 		renderCard({
 			product: {
 				...product,
 				options: [{ name: "Size", values: ["S", "M"] }],
 			} as unknown as StorefrontProduct,
 		});
-		const choose = await waitFor(() =>
-			screen.getByRole("link", { name: /choose/i }),
+		const options = await waitFor(() =>
+			screen.getByRole("link", { name: /options/i }),
 		);
-		expect(choose.getAttribute("href")).toBe(HREF);
+		expect(options.getAttribute("href")).toBe(HREF);
 	});
 
-	it("renders Choose as a disabled button (not a link) when the product can't be ordered", async () => {
+	it("renders a disabled Notify pill when the product is out of stock", async () => {
 		renderCard({
 			product: {
 				...product,
@@ -218,11 +264,35 @@ describe("ProductCard — product page links", () => {
 			} as unknown as StorefrontProduct,
 		});
 		await waitFor(() => expect(screen.getByText("Out of stock")).toBeTruthy());
+		// The design's Notify affordance ships ahead of the feature — disabled,
+		// with the promise on the wrapper where a tooltip can carry it. No live
+		// Options link to an unorderable page.
+		const notify = screen.getByRole("button", { name: /notify/i });
+		expect(notify.hasAttribute("disabled")).toBe(true);
+		expect(notify.closest("[title='Coming soon']")).toBeTruthy();
+		expect(screen.queryByRole("link", { name: /options/i })).toBeNull();
+	});
+
+	it("renders Options as a disabled button (not a link) when the minimum can't be met", async () => {
+		renderCard({
+			product: {
+				...product,
+				options: [{ name: "Size", values: ["S", "M"] }],
+				minQuantity: 10,
+				totalOnHand: 4,
+				variants: [
+					{ ...product.variants[0], onHand: 4, blockWhenOutOfStock: true },
+				],
+			} as unknown as StorefrontProduct,
+		});
+		await waitFor(() =>
+			expect(screen.getByText("Not enough stock")).toBeTruthy(),
+		);
 		// Disabled-with-reason beats a link that leads to an unorderable page —
 		// and an <a> can't be disabled.
-		const choose = screen.getByRole("button", { name: /choose/i });
-		expect(choose.hasAttribute("disabled")).toBe(true);
-		expect(screen.queryByRole("link", { name: /choose/i })).toBeNull();
+		const options = screen.getByRole("button", { name: /options/i });
+		expect(options.hasAttribute("disabled")).toBe(true);
+		expect(screen.queryByRole("link", { name: /options/i })).toBeNull();
 	});
 
 	it("navigates to the product page when the name is clicked", async () => {

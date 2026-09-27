@@ -12,10 +12,7 @@ import {
 import { CartBar } from "../components/storefront/cart-bar";
 import { CategoryRail } from "../components/storefront/category-rail";
 import { FeaturedProduct } from "../components/storefront/featured-product";
-import {
-	AllProductsDivider,
-	ProductGrid,
-} from "../components/storefront/product-grid";
+import { ProductGrid } from "../components/storefront/product-grid";
 import {
 	OrderingPausedProvider,
 	SeasonalBreakNotice,
@@ -252,12 +249,13 @@ function StoreNotFound() {
 function StorefrontSkeleton() {
 	return (
 		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-32">
-			<header className="flex flex-col gap-4 bg-gradient-to-b from-accent/10 to-background px-5 pb-6 pt-10 lg:rounded-b-3xl lg:px-8">
-				<Skeleton className="h-5 w-24" />
-				<div className="flex items-center gap-4">
-					<Skeleton className="h-16 w-16 shrink-0 rounded-2xl" />
+			{/* Mirrors the new hero shape — logo tile beside a name + blurb stack,
+			    no Kedaipal mark (the footer carries "Powered by"). */}
+			<header className="flex flex-col justify-end bg-gradient-to-b from-accent/10 to-background px-5 pb-6 pt-9 lg:rounded-b-3xl lg:px-8">
+				<div className="flex items-end gap-3.5">
+					<Skeleton className="size-14 shrink-0 rounded-[18px]" />
 					<div className="flex flex-col gap-2">
-						<Skeleton className="h-7 w-40" />
+						<Skeleton className="h-6 w-40" />
 						<Skeleton className="h-4 w-48" />
 					</div>
 				</div>
@@ -301,10 +299,13 @@ function StorefrontRoute() {
 
 	return (
 		<OrderingPausedProvider paused={retailer.orderingPaused === true}>
-			<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-20">
-				{/* Shared brand header (cover/logo/name) — identical on the category
-			    pages so buyers always know whose store they're in. */}
-				<StorefrontHeader retailer={retailer} />
+			{/* pb-28 keeps ≥96px clear under the content for the floating cart
+			    pill (z8r3fdegb5) so it never sits on the footer. */}
+			<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-28">
+				{/* The full brand hero renders ONLY here (z8r3fdegb5) — subpages
+			    carry the compact StorefrontAppBar so deep links reach their
+			    subject on the first screen. */}
+				<StorefrontHeader retailer={retailer} slug={retailer.slug} />
 				{/* Off-Season Hold: the store is browsable, not orderable. */}
 				<SeasonalBreakNotice storeName={retailer.storeName} />
 
@@ -319,29 +320,25 @@ function StorefrontRoute() {
 						cart={cart}
 						storeSlug={retailer.slug}
 						beforeGrid={
-							<>
-								{/* `gap-6` owns the rhythm between the two lead sections
-							    rather than either one carrying a trailing margin: each
-							    renders null on a store with no categories / no qualifying
-							    orders, and a gap only applies between siblings that
-							    actually exist — so neither can leave a dangling space.
-							    `peer` lets the divider below detect whether either one
-							    rendered at all. */}
-								<div className="peer flex flex-col gap-6">
-									<CategoryRail
-										retailerId={retailer._id}
-										storeSlug={retailer.slug}
-									/>
-									<FeaturedProduct
-										retailerId={retailer._id}
-										storeSlug={retailer.slug}
-										cart={cart}
-									/>
-								</div>
-								{/* Shows only when something above it rendered — otherwise the
-							    grid follows the search bar directly. */}
-								<AllProductsDivider />
-							</>
+							// `gap-6` owns the rhythm between the two lead sections
+							// rather than either one carrying a trailing margin: each
+							// renders null on a store with no categories / no qualifying
+							// orders, and a gap only applies between siblings that
+							// actually exist — so neither can leave a dangling space.
+							// `peer` lets the grid's "All products" heading (rendered as
+							// this wrapper's next sibling) detect whether either one
+							// rendered at all.
+							<div className="peer flex flex-col gap-6">
+								<CategoryRail
+									retailerId={retailer._id}
+									storeSlug={retailer.slug}
+								/>
+								<FeaturedProduct
+									retailerId={retailer._id}
+									storeSlug={retailer.slug}
+									cart={cart}
+								/>
+							</div>
 						}
 					/>
 				</section>

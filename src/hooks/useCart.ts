@@ -261,6 +261,28 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 			dispatch({ type: "SET_QTY", variantId, quantity }),
 		[],
 	);
+	// The product card's stepper "−" (z8r3fdegb5). Steppers only render for
+	// quick-addable products (single variant, never custom), so the product
+	// resolves to exactly one line. Dropping below the product's minimum
+	// removes the line outright — symmetric with quick-add, whose first tap
+	// adds the whole minimum, and it keeps the card from manufacturing a
+	// shortfall it has no room to explain (checkout can, the card can't).
+	const quickRemoveProduct = useCallback(
+		(productId: Id<"products">) => {
+			const line = state.items.find(
+				(i) => i.productId === productId && !i.isCustom,
+			);
+			if (!line) return;
+			const min = Math.max(1, line.minQuantity ?? 1);
+			const next = line.quantity - 1;
+			dispatch({
+				type: "SET_QTY",
+				variantId: line.variantId,
+				quantity: next < min ? 0 : next,
+			});
+		},
+		[state.items],
+	);
 	const removeItem = useCallback(
 		(variantId: Id<"productVariants">) =>
 			dispatch({ type: "REMOVE", variantId }),
@@ -291,31 +313,22 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 		};
 	}, [state.items]);
 
-	// Per-product aggregates: the quantity drives the min-quantity-aware stepper
-	// default + quick-add top-up, and both quantity + subtotal drive the grid's
-	// "N in cart · RM total" affordance. Custom / made-to-order lines are excluded
-	// — they never count toward a minimum, and they're a separate quoted
-	// negotiation (price 0 in-cart until the seller quotes on the mockup), so
-	// folding them into a running money total would understate it. Built once per
-	// items change, then read per-card in O(1).
+	// Per-product quantity: drives the min-quantity-aware stepper default, the
+	// quick-add top-up, and the card's −/n/+ stepper (z8r3fdegb5). Custom /
+	// made-to-order lines are excluded — they never count toward a minimum, and
+	// they're a separate quoted negotiation. Built once per items change, then
+	// read per-card in O(1).
 	const byProduct = useMemo(() => {
-		const map = new Map<string, { quantity: number; subtotal: number }>();
+		const map = new Map<string, number>();
 		for (const i of state.items) {
 			if (i.isCustom) continue;
-			const agg = map.get(i.productId) ?? { quantity: 0, subtotal: 0 };
-			agg.quantity += i.quantity;
-			agg.subtotal += i.price * i.quantity;
-			map.set(i.productId, agg);
+			map.set(i.productId, (map.get(i.productId) ?? 0) + i.quantity);
 		}
 		return map;
 	}, [state.items]);
 
 	const quantityForProduct = useCallback(
-		(productId: Id<"products">) => byProduct.get(productId)?.quantity ?? 0,
-		[byProduct],
-	);
-	const subtotalForProduct = useCallback(
-		(productId: Id<"products">) => byProduct.get(productId)?.subtotal ?? 0,
+		(productId: Id<"products">) => byProduct.get(productId) ?? 0,
 		[byProduct],
 	);
 
@@ -340,11 +353,11 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 		currency,
 		addItem,
 		updateQuantity,
+		quickRemoveProduct,
 		removeItem,
 		removeEventLines,
 		clearCart,
 		quantityForProduct,
-		subtotalForProduct,
 	};
 }
 

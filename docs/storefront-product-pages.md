@@ -89,14 +89,18 @@ cart-line snapshots — grid quick-add, sheet and page all call it).
 - **`product-detail-sheet.tsx`** — now the **seller's draft preview only**
   (see above), a thin composition of the same pieces so what the seller
   previews is what the buyer gets.
-- **`product-page.tsx`** — the destination view. It renders the **shared
-  `StorefrontHeader`** — the same brand block (cover, logo, store name,
-  founding badge, blurb) as the store home and category pages — followed by
-  an "← All products" back link, mirroring the category page exactly. A buyer
-  arriving from a pasted WhatsApp link lands in the *seller's store*, not on
-  an anonymous product card. There's no cart chip in the header: the sticky
-  purchase bar below already carries count + total + "Go to checkout", and
-  saying it twice is the redundancy we removed from the checkout header.
+- **`product-page.tsx`** — the destination view. It renders the **compact
+  `StorefrontAppBar`** (`z8r3fdegb5` — back + 32px logo tile + store name +
+  founding badge + live hours + share; the bar OWNS back, so the old
+  "← All products" text link is gone). A buyer arriving from a pasted
+  WhatsApp link still lands in the *seller's* store — the identity is the
+  bar — but the product photo is now on the first screen instead of under a
+  176px cover, and `head()` **preloads the first product image** (proxied,
+  with the gallery's own `imagesrcset`/`imagesizes`) as the page's LCP
+  element; the cover preload stays home-only. There's no cart chip in the
+  bar: the sticky purchase bar below already carries count + total + "Go to
+  checkout", and saying it twice is the redundancy we removed from the
+  checkout header.
   Below that: gallery (mobile snap carousel; desktop hero + thumbnails,
   variant-aware), buy box with a **Copy link** chip, and purchase controls
   that are a fixed bottom bar on mobile and in-flow on desktop (`lg:static`).
