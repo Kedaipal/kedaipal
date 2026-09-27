@@ -24,7 +24,8 @@ import { EventRsvpCheckoutForm } from "./event-rsvp-checkout-form";
 // pair, not `convex/react` (docs/frontend-caching.md).
 const state = vi.hoisted(() => ({
 	create: vi.fn(),
-	product: undefined as Record<string, unknown> | undefined,
+	product: undefined as Record<string, unknown> | null | undefined,
+	loading: false,
 	venue: undefined as Record<string, unknown> | null | undefined,
 }));
 vi.mock("@convex-dev/react-query", () => ({
@@ -33,7 +34,13 @@ vi.mock("@convex-dev/react-query", () => ({
 vi.mock("@tanstack/react-query", () => ({
 	useQuery: ({ fn }: { fn: Parameters<typeof getFunctionName>[0] }) =>
 		getFunctionName(fn) === "products:getPublicBySlug"
-			? { data: state.product ?? PRODUCT }
+			? {
+					data: state.loading
+						? undefined
+						: state.product === undefined
+							? PRODUCT
+							: state.product,
+				}
 			: { data: state.venue === undefined ? VENUE : state.venue },
 }));
 vi.mock("convex/react", () => ({
@@ -64,6 +71,29 @@ const PRODUCT = {
 	eventSeatsLeft: 10,
 	pickupNote: "Bring a cooler bag — these melt in 20 minutes.",
 };
+/** An event with an unpicked axis — no variant resolves until a size is
+ * chosen, so there is no price for this guest yet. */
+const OPTIONED = {
+	...PRODUCT,
+	priceFrom: 300,
+	options: [{ name: "Size", values: ["Small", "Medium"] }],
+	variants: [
+		{
+			_id: "var_s",
+			optionValues: ["Small"],
+			price: 300,
+			onHand: 0,
+			imageUrls: [],
+		},
+		{
+			_id: "var_m",
+			optionValues: ["Medium"],
+			price: 500,
+			onHand: 0,
+			imageUrls: [],
+		},
+	],
+};
 const VENUE = {
 	_id: "pick_1",
 	label: "Matrep Store",
@@ -91,6 +121,7 @@ afterEach(() => {
 	vi.useRealTimers();
 	vi.clearAllMocks();
 	state.product = undefined;
+	state.loading = false;
 	state.venue = undefined;
 });
 
@@ -169,6 +200,72 @@ describe("EventRsvpCheckoutForm — the event answers, it doesn't ask", () => {
 		};
 		renderForm();
 		expect(screen.getByText(/already taken place/i)).toBeTruthy();
+	});
+});
+
+describe("EventRsvpCheckoutForm — an unsettled price is never quoted as a total", () => {
+	// Caught in Zaki's Chrome: with the Size unpicked the receipt read a firm
+	// "Total RM 3.00" and the CTA "RSVP · RM 3.00", but RM 3.00 is the listing
+	// FLOOR (`priceFrom`) — picking Medium jumps it to RM 5.00. A receipt may
+	// never quote a figure that changes under the buyer.
+	it("shows the floor as a FROM price, not a per-seat rate", () => {
+		state.product = OPTIONED;
+		renderForm();
+		expect(screen.getAllByText(/^From RM\s3\.00$/).length).toBeGreaterThan(0);
+		expect(screen.queryByText(/RM\s3\.00\/seat/)).toBeNull();
+	});
+
+	it("withholds the total and says why, rather than printing a wrong one", () => {
+		state.product = OPTIONED;
+		renderForm();
+		expect(screen.queryByText(/^Total$/)).toBeNull();
+		expect(
+			screen.getAllByText(/pick your size to see the total/i).length,
+		).toBeGreaterThan(0);
+	});
+
+	it("keeps money off the CTA until a variant resolves", () => {
+		state.product = OPTIONED;
+		renderForm();
+		expect(screen.getAllByRole("button", { name: /^RSVP$/ }).length).toBe(2);
+		expect(screen.queryByRole("button", { name: /RSVP · RM/ })).toBeNull();
+	});
+
+	it("settles everything the moment the option is picked", () => {
+		state.product = OPTIONED;
+		renderForm();
+		fireEvent.click(screen.getByRole("button", { name: "Medium" }));
+		expect(screen.getAllByText(/RM\s5\.00\/seat/).length).toBeGreaterThan(0);
+		expect(screen.getAllByText(/^Total$/).length).toBeGreaterThan(0);
+		expect(
+			screen.getAllByRole("button", { name: /RSVP · RM\s5\.00/ }).length,
+		).toBeGreaterThan(0);
+	});
+
+	it("a single-variant event settles immediately — no from-price detour", () => {
+		renderForm();
+		expect(screen.getAllByText(/RM\s5\.00\/seat/).length).toBeGreaterThan(0);
+		expect(screen.queryByText(/to see the total/i)).toBeNull();
+	});
+});
+
+describe("EventRsvpCheckoutForm — a gone event is not a loading event", () => {
+	it("offers a way back instead of a skeleton that never resolves", () => {
+		// `undefined` is loading; `null` is gone. Conflating them left a typo'd
+		// or stale `?rsvp=` link spinning forever with nothing to read.
+		state.product = null;
+		renderForm();
+		expect(screen.getByText(/isn't taking RSVPs right now/i)).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: /back to IndoMart/i }),
+		).toBeTruthy();
+	});
+
+	it("still shows the skeleton while the read is genuinely in flight", () => {
+		state.product = undefined;
+		state.loading = true;
+		renderForm();
+		expect(screen.queryByText(/isn't taking RSVPs right now/i)).toBeNull();
 	});
 });
 

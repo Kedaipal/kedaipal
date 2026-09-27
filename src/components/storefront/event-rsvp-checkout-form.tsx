@@ -133,7 +133,29 @@ export function EventRsvpCheckoutForm({
 		cartQuantity: 0,
 	});
 
-	if (!product) {
+	// A vanished/unreachable event — archived, hidden, a typo'd or stale shared
+	// link — sends the guest back to the store rather than a skeleton that never
+	// resolves. `undefined` is LOADING; `null` is gone. Conflating the two left
+	// a bad `?rsvp=` slug spinning forever with nothing to read and no way out
+	// (the booking flow has always distinguished them; this now matches).
+	if (product === null) {
+		return (
+			<div className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-5 text-center">
+				<p className="text-sm text-muted-foreground">
+					Sorry — this event isn&apos;t taking RSVPs right now.
+				</p>
+				<Button
+					variant="outline"
+					onClick={() =>
+						navigate({ to: "/$slug", params: { slug: storeSlug } })
+					}
+				>
+					Back to {storeName}
+				</Button>
+			</div>
+		);
+	}
+	if (product === undefined) {
 		return (
 			<div className="flex flex-col gap-4">
 				<Skeleton className="h-24 w-full rounded-2xl" />
@@ -186,9 +208,18 @@ export function EventRsvpCheckoutForm({
 
 	const variant = pp.selectedVariant;
 	const seats = pp.displayQuantity;
+	// Until an option resolves to a variant there is no price for THIS guest —
+	// only the listing's floor. Rendering that floor as "Total RM 3.00" quoted a
+	// figure that jumps the moment they pick (Medium is RM 5.00), which is the
+	// one thing a receipt may never do. The product page is honest about it
+	// ("From RM 3.00"); so is this now.
+	// `resolveVariant` returns NULL (not undefined) when the axes are unanswered,
+	// so this is a truthiness check — `!== undefined` read as "settled" on every
+	// unpicked multi-option event, which is exactly the bug it was added to fix.
+	const priceSettled = Boolean(variant);
 	const unitPrice = variant?.price ?? product.priceFrom ?? 0;
 	const total = unitPrice * seats;
-	const isFree = total === 0;
+	const isFree = priceSettled && total === 0;
 
 	// Which ceiling actually binds: the event's seat pool, or this option's
 	// stock. Stock only counts when the variant hard-blocks on it.
@@ -276,9 +307,10 @@ export function EventRsvpCheckoutForm({
 						    thing the guest is confirming here (`z8r3fdhpaj`). */}
 						<span className="min-w-0 wrap-anywhere">{product.name}</span>
 						<span className="flex-1 border-b-2 border-dotted border-border" />
-						<span className="font-medium">
-							{formatPrice(unitPrice, product.currency)}
-							{isFree ? "" : "/seat"}
+						<span className="shrink-0 whitespace-nowrap font-medium">
+							{priceSettled
+								? `${formatPrice(unitPrice, product.currency)}${isFree ? "" : "/seat"}`
+								: `From ${formatPrice(unitPrice, product.currency)}`}
 						</span>
 					</div>
 					{variant && variantLabel(variant.optionValues) ? (
@@ -286,22 +318,34 @@ export function EventRsvpCheckoutForm({
 							{variantLabel(variant.optionValues)}
 						</p>
 					) : null}
-					<div className="flex items-baseline gap-1.5">
-						<span>
-							{seats} {seats === 1 ? "seat" : "seats"}
-						</span>
-						<span className="flex-1 border-b-2 border-dotted border-border" />
-						<span className="font-medium">
-							{formatPrice(total, product.currency)}
-						</span>
-					</div>
-					<div className="flex items-baseline gap-1.5 border-t-2 border-dashed border-border pt-2 text-base font-bold">
-						<span>Total</span>
-						<span className="flex-1" />
-						<span>
-							{isFree ? "Free" : formatPrice(total, product.currency)}
-						</span>
-					</div>
+					{priceSettled ? (
+						<>
+							<div className="flex items-baseline gap-1.5">
+								<span>
+									{seats} {seats === 1 ? "seat" : "seats"}
+								</span>
+								<span className="flex-1 border-b-2 border-dotted border-border" />
+								<span className="font-medium">
+									{formatPrice(total, product.currency)}
+								</span>
+							</div>
+							<div className="flex items-baseline gap-1.5 border-t-2 border-dashed border-border pt-2 text-base font-bold">
+								<span>Total</span>
+								<span className="flex-1" />
+								<span>
+									{isFree ? "Free" : formatPrice(total, product.currency)}
+								</span>
+							</div>
+						</>
+					) : (
+						// No total yet, and it says so where the total would be — a
+						// blank row reads as RM 0.
+						<p className="border-t-2 border-dashed border-border pt-2 text-xs text-muted-foreground">
+							{unpickedAxis
+								? `Pick your ${unpickedAxis.name.toLowerCase()} to see the total.`
+								: "Pick an option to see the total."}
+						</p>
+					)}
 				</div>
 				<p className="flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
 					<CalendarClock
@@ -331,9 +375,11 @@ export function EventRsvpCheckoutForm({
 			>
 				{/* The action carries its consequence: how many seats, and what it
 				    costs — never a bare "RSVP". */}
-				{isFree
-					? `RSVP for ${seats} ${seats === 1 ? "seat" : "seats"}`
-					: `RSVP · ${formatPrice(total, product.currency)}`}
+				{!priceSettled
+					? "RSVP"
+					: isFree
+						? `RSVP for ${seats} ${seats === 1 ? "seat" : "seats"}`
+						: `RSVP · ${formatPrice(total, product.currency)}`}
 			</Button>
 			{/* The blocked reason always speaks — a dead button with no reason is
 			    the thing this whole bar exists to avoid. The reassurance that
