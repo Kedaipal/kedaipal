@@ -46,7 +46,6 @@ function makeCart(items: CartItem[]): UseCart {
 		removeItem: vi.fn(),
 		clearCart: vi.fn(),
 		quantityForProduct: vi.fn(() => 0),
-		subtotalForProduct: vi.fn(() => 0),
 	} as unknown as UseCart;
 }
 

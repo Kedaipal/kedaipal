@@ -18,9 +18,10 @@ see past. A route fixes the architecture, not just the paint:
   **sticky receipt summary** right with the CTA under the money it commits to.
 - **Mobile** stays single-column: summary first (this page IS the review),
   then the sections, with a **fixed bottom bar** (live total + CTA) always in
-  thumb reach — same `fixed inset-x-0 bottom-0` as `CartBar` and the product
-  page's purchase bar, so the powered-by footer floats above it exactly like
-  every other storefront page (design-system rule #4). An earlier pass tried
+  thumb reach — same `fixed inset-x-0 bottom-0` as the product page's
+  purchase bar (and the browse pages' floating cart pill, which is the same
+  out-of-flow rule in capsule form), so the powered-by footer floats above it
+  exactly like every other storefront page (design-system rule #4). An earlier pass tried
   `sticky` here on the theory that a form needs an in-flow bar; tested on a
   phone it just welded the badge to the bar and made checkout the odd page
   out. The route reserves the bar's **measured** height
@@ -121,13 +122,17 @@ its button (label now just "Checkout") navigates to the route. The product
 detail sheet's "Go to checkout" exit (86eybhqye) navigates there too, via the
 routes' `onRequestCheckout` seam.
 
-## Page chrome — the same header and footer as everywhere else
+## Page chrome — the same header and footer as every subpage
 
-Checkout renders the shared **`StorefrontHeader`** (cover, logo, store name,
-founding badge, blurb) and the **`StorefrontFooter`** badge, so all four
-storefront surfaces — store home, category, product, checkout — are the same
-page shape. It shipped without a header first and read as bare and off-brand
-next to the others.
+Checkout renders the compact **`StorefrontAppBar`** (`z8r3fdegb5` — back +
+logo tile + store name + founding badge + live hours + share) and the
+**`StorefrontFooter`** badge, so the three storefront subpages — category,
+product, checkout — are the same page shape; the full cover hero is the
+store home's alone. The bar owns "back", replacing the old round back button
+beside the "Checkout" heading; on the **booking flow** (`?booking=`) its
+back points at the *listing* instead of the store home — one back control
+per screen, one level up. (Checkout shipped without any header first and
+read as bare and off-brand next to the others.)
 
 The usual e-commerce instinct is the opposite: strip the chrome on checkout so
 nothing tempts the buyer out of the funnel. That rule is about **payment**
@@ -148,11 +153,12 @@ Two layout consequences:
 
 **Heading rule (applies to every storefront page):** each page's `<h1>` is its
 own subject — store name on the home, category name, product name, "Checkout".
-`StorefrontHeader` takes `asPageHeading` (default `true`, for the home) and
-renders the store name as a `<p>` on the subpages. Without it, adding the
-header here would have given checkout two `<h1>`s, and every page in the store
-would have shared one duplicated heading. Purely semantic — identical styling
-either way.
+The full `StorefrontHeader` renders only on the home, where the store name IS
+the `<h1>`; the subpages' `StorefrontAppBar` renders the store name as plain
+text, so no page ever carries two `<h1>`s or shares one duplicated heading.
+(The header's old `asPageHeading` prop existed to juggle this while every page
+rendered the hero; the home-only split made it dead code and it was removed
+in `z8r3fdegb5`.)
 
 The bottom CTA bar's stacking against the footer (fixed bar, measured
 clearance) is written up once in

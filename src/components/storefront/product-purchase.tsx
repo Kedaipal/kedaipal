@@ -19,6 +19,7 @@ import { formatEventMoment } from "../../../convex/lib/productEvent";
 import type { UseCart } from "../../hooks/useCart";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
+import { shareLink } from "../../lib/share";
 import { cn } from "../../lib/utils";
 import {
 	availableValuesPerAxis,
@@ -473,34 +474,12 @@ export function quickAddProductToCart(cart: UseCart, p: StorefrontProduct) {
 	);
 }
 
-/** Share/copy a product link: OS share sheet when available (the WhatsApp
- * path on mobile), clipboard + toast otherwise. `url` may be relative — it's
- * absolutized against the current origin at call time (SSR-safe: only ever
- * called from a click). */
-export async function shareProductLink(url: string) {
-	const absolute = new URL(url, window.location.origin).toString();
-	if (navigator.share) {
-		try {
-			await navigator.share({ url: absolute });
-			return;
-		} catch {
-			// Cancelled or unsupported payload — fall through to copy.
-		}
-	}
-	try {
-		await navigator.clipboard.writeText(absolute);
-		toast.success("Link copied — paste it anywhere");
-	} catch {
-		toast.error("Couldn't copy the link");
-	}
-}
-
 /** "🔗 Copy link" chip — the product page's share affordance. */
 export function ShareLinkChip({ url }: { url: string }) {
 	return (
 		<button
 			type="button"
-			onClick={() => void shareProductLink(url)}
+			onClick={() => void shareLink(url)}
 			className="tap-target flex w-fit items-center gap-1.5 rounded-full bg-accent/10 px-3 py-1 text-xs font-semibold text-accent-emphasis transition-colors hover:bg-accent/15"
 		>
 			<LinkIcon className="size-3.5" aria-hidden />

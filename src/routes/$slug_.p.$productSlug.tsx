@@ -7,14 +7,21 @@ import {
 	redirect,
 } from "@tanstack/react-router";
 import { api } from "../../convex/_generated/api";
-import { ProductPageView } from "../components/storefront/product-page";
+import {
+	GALLERY_PRELOAD_SIZES,
+	ProductPageView,
+} from "../components/storefront/product-page";
 import { OrderingPausedProvider } from "../components/storefront/seasonal-break";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
 import { useCaptureAttribution } from "../hooks/useSourceAttribution";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
-import { absoluteProxiedImageUrl } from "../lib/image-proxy";
+import {
+	absoluteProxiedImageUrl,
+	imageSrcSet,
+	proxiedImageUrl,
+} from "../lib/image-proxy";
 import { ssrRead } from "../lib/ssr-read";
 import { hasStartingPrice } from "../lib/variant";
 
@@ -36,6 +43,10 @@ interface ProductLoaderData {
 	/** The price is only a floor (custom line the seller quotes on top of) — the
 	 * offers block must not advertise it as the settled price. See 86eyhn4mr. */
 	startingPrice: boolean;
+	/** The gallery's first photo — this page's LCP element now that the app
+	 * bar replaced the cover hero (z8r3fdegb5), so head() preloads it. Raw
+	 * storage URL; head() mirrors the gallery's proxied srcset. */
+	firstImageUrl: string | undefined;
 }
 
 /**
@@ -115,6 +126,7 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 			inStock: product.inStock,
 			quoteOnly: product.hasQuotePricing && product.priceTo === 0,
 			startingPrice: hasStartingPrice(product.variants),
+			firstImageUrl: product.imageUrls[0],
 		};
 	},
 	head: ({ loaderData }) => {
@@ -131,6 +143,7 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 			inStock,
 			quoteOnly,
 			startingPrice,
+			firstImageUrl,
 		} = loaderData;
 		const title = `${productName} — ${storeName} | Kedaipal`;
 
@@ -199,7 +212,30 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 
 		return {
 			meta,
-			links: [{ rel: "canonical", href: canonicalUrl }],
+			links: [
+				{ rel: "canonical", href: canonicalUrl },
+				// LCP preload (z8r3fdegb5): with the cover hero gone from subpages,
+				// the gallery's first photo is this page's LCP element. The hint
+				// must name the same candidate the gallery will actually request —
+				// it renders through AppImage (proxied + srcset), so
+				// imagesrcset/imagesizes mirror the component's own sizes.
+				//
+				// `imagesizes` comes from the gallery itself (GALLERY_PRELOAD_SIZES)
+				// so the hint can never drift from the branch that paints — it
+				// covers the mobile carousel tile below lg AND the desktop hero
+				// above it. See that constant for what the drift cost.
+				...(firstImageUrl
+					? [
+							{
+								rel: "preload",
+								as: "image",
+								href: proxiedImageUrl(firstImageUrl),
+								imagesrcset: imageSrcSet(firstImageUrl) ?? undefined,
+								imagesizes: GALLERY_PRELOAD_SIZES,
+							},
+						]
+					: []),
+			],
 			scripts: [
 				{ type: "application/ld+json", children: JSON.stringify(jsonLd) },
 			],
@@ -236,15 +272,12 @@ function ProductNotFound() {
 function ProductSkeleton() {
 	return (
 		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-20">
-			{/* Mirrors the shared StorefrontHeader shape so the swap-in is seamless. */}
-			<header className="flex flex-col gap-4 bg-gradient-to-b from-accent/10 to-background px-5 pb-6 pt-10 lg:rounded-b-3xl lg:px-8">
-				<Skeleton className="h-5 w-24" />
-				<div className="flex items-center gap-4">
-					<Skeleton className="h-16 w-16 shrink-0 rounded-2xl" />
-					<div className="flex flex-col gap-2">
-						<Skeleton className="h-7 w-40" />
-						<Skeleton className="h-4 w-48" />
-					</div>
+			{/* Mirrors the compact StorefrontAppBar so the swap-in is seamless. */}
+			<header className="border-b border-border">
+				<div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-4 lg:h-16">
+					<Skeleton className="size-6 rounded-full" />
+					<Skeleton className="size-8 rounded-[10px]" />
+					<Skeleton className="h-4 w-32" />
 				</div>
 			</header>
 			<div className="mt-4 px-5 lg:flex lg:gap-10 lg:px-8">

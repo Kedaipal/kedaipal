@@ -121,6 +121,7 @@ export function ZoomableImage({
 	caption,
 	sizes,
 	sensitive,
+	priority,
 }: {
 	src: string;
 	alt: string;
@@ -130,6 +131,14 @@ export function ZoomableImage({
 	sizes?: string;
 	/** Order-owned/buyer-linked image — keep it off the resize proxy. See AppImage. */
 	sensitive?: boolean;
+	/**
+	 * Above-the-fold LCP candidate — forwards to AppImage's `priority`
+	 * (`loading="eager"` + `fetchPriority="high"`). Pass it ONLY on an image
+	 * that actually paints at the breakpoint you are optimising: eager loads
+	 * regardless of visibility, so setting it on a `display:none` branch
+	 * downloads bytes that branch never shows.
+	 */
+	priority?: boolean;
 	/** Classes for the wrapping button — use for layout (flex item, snap, etc.). */
 	wrapperClassName?: string;
 	/** Optional caption shown in the lightbox. */
@@ -156,6 +165,7 @@ export function ZoomableImage({
 					fill={false}
 					sizes={sizes}
 					sensitive={sensitive}
+					priority={priority}
 				/>
 			</button>
 			{/* The lightbox deliberately keeps the ORIGINAL, unproxied URL: it

@@ -117,7 +117,9 @@ describe("Off-Season Hold on the storefront (z8r3fday24)", () => {
 				}) as HTMLButtonElement
 			).disabled,
 		).toBe(true);
-		expect(screen.getByText("Not taking orders right now")).toBeTruthy();
+		// The pill keeps the basket's contents visible — nothing is lost when
+		// the store reopens; the page-top notice carries the full story.
+		expect(screen.getByText("2 items")).toBeTruthy();
 		expect(screen.queryByRole("button", { name: "Checkout" })).toBeNull();
 	});
 
@@ -136,8 +138,8 @@ describe("Off-Season Hold on the storefront (z8r3fday24)", () => {
 				product={product}
 				storeSlug="dapur-nadia"
 				onQuickAdd={vi.fn()}
+				onQuickRemove={vi.fn()}
 				cartQuantity={0}
-				cartSubtotal={0}
 			/>,
 		);
 		await waitFor(() =>

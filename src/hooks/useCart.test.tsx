@@ -50,7 +50,55 @@ describe("useCart — custom line is locked to qty 1", () => {
 	});
 });
 
-describe("useCart — per-product aggregates (grid 'N in cart · RM total')", () => {
+describe("useCart — quickRemoveProduct (card stepper −, z8r3fdegb5)", () => {
+	const P1 = "p1" as unknown as Id<"products">;
+	const line = (min?: number): Omit<CartItem, "quantity"> => ({
+		variantId: "vn" as unknown as Id<"productVariants">,
+		productId: P1,
+		name: "Tee",
+		price: 1000,
+		currency: "MYR",
+		minQuantity: min,
+	});
+
+	it("decrements the product's line by one", () => {
+		const { result } = renderHook(() => useCart(RID));
+		act(() => result.current.addItem(line(), 3));
+		act(() => result.current.quickRemoveProduct(P1));
+		expect(result.current.quantityForProduct(P1)).toBe(2);
+	});
+
+	it("removes the line when the last unit goes", () => {
+		const { result } = renderHook(() => useCart(RID));
+		act(() => result.current.addItem(line(), 1));
+		act(() => result.current.quickRemoveProduct(P1));
+		expect(result.current.items).toHaveLength(0);
+	});
+
+	it("drops the whole line below the product's minimum — symmetric with quick-add's min top-up", () => {
+		const { result } = renderHook(() => useCart(RID));
+		act(() => result.current.addItem(line(4), 4));
+		// 4 → "3" would be a shortfall trap the card can't explain; it goes to 0.
+		act(() => result.current.quickRemoveProduct(P1));
+		expect(result.current.items).toHaveLength(0);
+	});
+
+	it("steps normally above the minimum", () => {
+		const { result } = renderHook(() => useCart(RID));
+		act(() => result.current.addItem(line(4), 6));
+		act(() => result.current.quickRemoveProduct(P1));
+		expect(result.current.quantityForProduct(P1)).toBe(5);
+	});
+
+	it("never touches a custom line", () => {
+		const { result } = renderHook(() => useCart(RID));
+		act(() => result.current.addItem(customItem, 1));
+		act(() => result.current.quickRemoveProduct(customItem.productId));
+		expect(result.current.items).toHaveLength(1);
+	});
+});
+
+describe("useCart — per-product quantity (card stepper + quick-add top-up)", () => {
 	const P1 = "p1" as unknown as Id<"products">;
 	const P2 = "p2" as unknown as Id<"products">;
 	const variant = (
@@ -68,38 +116,33 @@ describe("useCart — per-product aggregates (grid 'N in cart · RM total')", ()
 	it("returns 0 for a product not in the cart", () => {
 		const { result } = renderHook(() => useCart(RID));
 		expect(result.current.quantityForProduct(P1)).toBe(0);
-		expect(result.current.subtotalForProduct(P1)).toBe(0);
 	});
 
-	it("sums quantity and subtotal across a product's variants", () => {
+	it("sums quantity across a product's variants", () => {
 		const { result } = renderHook(() => useCart(RID));
-		// Two distinct variants of P1 at different prices, plus another product.
-		act(() => result.current.addItem(variant("v1", P1, 5000), 2)); // 2 × RM50
-		act(() => result.current.addItem(variant("v2", P1, 3000), 1)); // 1 × RM30
+		// Two distinct variants of P1, plus another product.
+		act(() => result.current.addItem(variant("v1", P1, 5000), 2));
+		act(() => result.current.addItem(variant("v2", P1, 3000), 1));
 		act(() => result.current.addItem(variant("v3", P2, 1990), 4)); // other product
 
 		expect(result.current.quantityForProduct(P1)).toBe(3);
-		expect(result.current.subtotalForProduct(P1)).toBe(13000); // 100 + 30 → sen
 		// Other product is isolated.
 		expect(result.current.quantityForProduct(P2)).toBe(4);
-		expect(result.current.subtotalForProduct(P2)).toBe(7960);
 	});
 
-	it("excludes custom / made-to-order lines from both count and subtotal", () => {
+	it("excludes custom / made-to-order lines from the count", () => {
 		const { result } = renderHook(() => useCart(RID));
 		act(() => result.current.addItem(variant("v1", P1, 5000), 2)); // priced
 		act(() => result.current.addItem({ ...customItem, productId: P1 }, 1)); // custom, price 0
 
-		// The custom line is a separate quoted negotiation — not part of the
-		// running money total, so it must not inflate the count either.
+		// The custom line is a separate quoted negotiation, locked to qty 1 —
+		// it must not put the standard line's stepper at the wrong number.
 		expect(result.current.quantityForProduct(P1)).toBe(2);
-		expect(result.current.subtotalForProduct(P1)).toBe(10000);
 	});
 
 	it("reflects quantity changes and removals", () => {
 		const { result } = renderHook(() => useCart(RID));
 		act(() => result.current.addItem(variant("v1", P1, 5000), 2));
-		expect(result.current.subtotalForProduct(P1)).toBe(10000);
 
 		act(() =>
 			result.current.updateQuantity(
@@ -108,13 +151,11 @@ describe("useCart — per-product aggregates (grid 'N in cart · RM total')", ()
 			),
 		);
 		expect(result.current.quantityForProduct(P1)).toBe(5);
-		expect(result.current.subtotalForProduct(P1)).toBe(25000);
 
 		act(() =>
 			result.current.removeItem("v1" as unknown as Id<"productVariants">),
 		);
 		expect(result.current.quantityForProduct(P1)).toBe(0);
-		expect(result.current.subtotalForProduct(P1)).toBe(0);
 	});
 });
 

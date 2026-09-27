@@ -15,8 +15,8 @@ import {
 	OrderingPausedProvider,
 	SeasonalBreakNotice,
 } from "../components/storefront/seasonal-break";
+import { StorefrontAppBar } from "../components/storefront/storefront-app-bar";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
-import { StorefrontHeader } from "../components/storefront/storefront-header";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
 import { useCaptureAttribution } from "../hooks/useSourceAttribution";
@@ -118,22 +118,16 @@ function CheckoutNotFound() {
 function CheckoutSkeleton() {
 	return (
 		<div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col">
-			{/* Mirrors the shared StorefrontHeader shape so the swap-in is seamless. */}
-			<header className="flex flex-col gap-4 bg-gradient-to-b from-accent/10 to-background px-5 pb-6 pt-10 lg:rounded-b-3xl lg:px-8 lg:pb-8">
-				<Skeleton className="h-5 w-24" />
-				<div className="flex items-center gap-4">
-					<Skeleton className="h-16 w-16 shrink-0 rounded-2xl" />
-					<div className="flex flex-col gap-2">
-						<Skeleton className="h-7 w-40" />
-						<Skeleton className="h-4 w-48" />
-					</div>
+			{/* Mirrors the compact StorefrontAppBar so the swap-in is seamless. */}
+			<header className="border-b border-border">
+				<div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-4 lg:h-16">
+					<Skeleton className="size-6 rounded-full" />
+					<Skeleton className="size-8 rounded-[10px]" />
+					<Skeleton className="h-4 w-32" />
 				</div>
 			</header>
 			<div className="flex flex-col gap-4 px-5 pt-4 lg:px-8 lg:pt-6">
-				<div className="flex items-center gap-3">
-					<Skeleton className="size-9 rounded-full" />
-					<Skeleton className="h-7 w-32" />
-				</div>
+				<Skeleton className="h-7 w-32" />
 				<div className="flex flex-col gap-4 lg:flex-row lg:gap-8">
 					<Skeleton className="h-64 w-full rounded-2xl lg:order-2 lg:w-96" />
 					<div className="flex flex-1 flex-col gap-4 lg:order-1">
@@ -178,7 +172,7 @@ function CheckoutRoute() {
 		return (
 			<OrderingPausedProvider paused>
 				<div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col pb-10">
-					<StorefrontHeader retailer={retailer} asPageHeading={false} />
+					<StorefrontAppBar retailer={retailer} slug={retailer.slug} />
 					<SeasonalBreakNotice storeName={retailer.storeName} />
 					<div className="px-5 pt-4 lg:px-8 lg:pt-6">
 						<h1 className="font-heading text-xl font-extrabold tracking-tight">
@@ -208,21 +202,18 @@ function CheckoutRoute() {
 	if (booking) {
 		return (
 			<div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col pb-[var(--storefront-bar-h,12rem)] lg:pb-10">
-				<StorefrontHeader retailer={retailer} asPageHeading={false} />
+				{/* The app bar owns "back" — and here the page sits under a LISTING,
+				    so back leads to it rather than the store home (one back control
+				    per screen, pointing one level up). */}
+				<StorefrontAppBar
+					retailer={retailer}
+					slug={retailer.slug}
+					backToProductSlug={booking}
+				/>
 				<div className="px-5 pt-4 lg:px-8 lg:pt-6">
-					<div className="flex items-center gap-3">
-						<Link
-							to="/$slug/p/$productSlug"
-							params={{ slug: retailer.slug, productSlug: booking }}
-							aria-label="Back to the listing"
-							className="tap-target flex size-9 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors hover:text-foreground"
-						>
-							<ArrowLeft className="size-4" aria-hidden />
-						</Link>
-						<h1 className="font-heading text-xl font-extrabold tracking-tight">
-							Request to book
-						</h1>
-					</div>
+					<h1 className="font-heading text-xl font-extrabold tracking-tight">
+						Request to book
+					</h1>
 					<div className="mt-4">
 						<BookingCheckoutForm
 							retailerId={retailer._id}
@@ -243,21 +234,17 @@ function CheckoutRoute() {
 	if (rsvp) {
 		return (
 			<div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col pb-[var(--storefront-bar-h,12rem)] lg:pb-10">
-				<StorefrontHeader retailer={retailer} asPageHeading={false} />
+				{/* Same bar, same rule as the booking branch above: back leads to
+				    the EVENT this page is checking out, one level up. */}
+				<StorefrontAppBar
+					retailer={retailer}
+					slug={retailer.slug}
+					backToProductSlug={rsvp}
+				/>
 				<div className="px-5 pt-4 lg:px-8 lg:pt-6">
-					<div className="flex items-center gap-3">
-						<Link
-							to="/$slug/p/$productSlug"
-							params={{ slug: retailer.slug, productSlug: rsvp }}
-							aria-label="Back to the event"
-							className="tap-target flex size-9 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors hover:text-foreground"
-						>
-							<ArrowLeft className="size-4" aria-hidden />
-						</Link>
-						<h1 className="font-heading text-xl font-extrabold tracking-tight">
-							RSVP
-						</h1>
-					</div>
+					<h1 className="font-heading text-xl font-extrabold tracking-tight">
+						RSVP
+					</h1>
 					<div className="mt-4">
 						<EventRsvpCheckoutForm
 							retailerId={retailer._id}
@@ -277,44 +264,24 @@ function CheckoutRoute() {
 	}
 
 	return (
-		// No horizontal padding on the container: the brand header is full-bleed
-		// (its cover image must reach the edges) and each section below owns its
-		// own px — same structure as the store home, category and product pages.
-		// Stays max-w-5xl (they use 6xl) so the header's logo and store name line
-		// up with the checkout content beneath: capping the content narrower than
-		// the header instead left the two centred on different axes, and a brand
-		// block indented 64px off the page it heads reads as a bug. A slightly
-		// narrower header is the cheaper inconsistency, and suits a task page.
-		//
 		// The bottom padding reserves room for the FIXED mobile CTA bar (out of
 		// flow, so it would otherwise cover the footer) — the bar measures itself
 		// and publishes --storefront-bar-h, so this is exactly the bar and no
 		// dead space under the footer badge. The fallback only applies for the
 		// frame before the first measurement. Desktop has no fixed bar.
 		<div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col pb-[var(--storefront-bar-h,12rem)] lg:pb-10">
-			{/* The same brand header every other storefront page renders. Checkout
-			    is not a payment funnel — nothing is charged here and the only way
-			    out is back to the store (which keeps the cart) — so the usual
-			    "strip the chrome so buyers can't escape" rule doesn't apply, and
-			    the seller's brand belongs at the moment of ordering. */}
-			<StorefrontHeader retailer={retailer} asPageHeading={false} />
+			{/* The compact app bar every subpage renders (z8r3fdegb5). Checkout is
+			    not a payment funnel — nothing is charged here and the way out is
+			    back to the store (which keeps the cart) — so the seller's identity
+			    belongs at the moment of ordering; the bar carries it AND owns
+			    "back", replacing the old round back button beside the heading. */}
+			<StorefrontAppBar retailer={retailer} slug={retailer.slug} />
 
 			<div className="px-5 pt-4 lg:px-8 lg:pt-6">
-				<div className="flex items-center gap-3">
-					<Link
-						to="/$slug"
-						params={{ slug: retailer.slug }}
-						activeOptions={{ exact: true }}
-						aria-label={`Back to ${retailer.storeName}`}
-						className="tap-target flex size-9 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors hover:text-foreground"
-					>
-						<ArrowLeft className="size-4" aria-hidden />
-					</Link>
-					{/* This page's own subject, so it owns the <h1>. */}
-					<h1 className="font-heading text-xl font-extrabold tracking-tight">
-						Checkout
-					</h1>
-				</div>
+				{/* This page's own subject, so it owns the <h1>. */}
+				<h1 className="font-heading text-xl font-extrabold tracking-tight">
+					Checkout
+				</h1>
 
 				<div className="mt-4">
 					<CheckoutPage
