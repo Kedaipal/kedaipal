@@ -20,6 +20,43 @@ storefront always keeps at least one _working_ method.**
 > `retailers.minFulfilmentNoticeDays` setting lives in the same Fulfilment settings tab. The
 > per-product **pickup note** is below: [Per-product pickup note](#per-product-pickup-note-2026-09-17-clickup-z8r3fdff97).
 
+## One order, one fulfilment contract (`z8r3fdhh45`, 2026-09-28)
+
+The invariant every surface in this doc sits on: **an order carries exactly ONE
+fulfilment contract** — one method, one date, one place. `orders` has a single
+`deliveryMethod`, a single `fulfilmentDate`, a single address-or-pickup-point.
+There is no per-line fulfilment and none is planned.
+
+That makes the cart's membership rule a consequence rather than a policy:
+
+> **A product that carries its own FIXED fulfilment moment is checked out
+> standalone. It can never share an order with one whose moment the BUYER
+> picks.**
+
+| Carries its own moment → standalone | Buyer picks the moment → shares a cart |
+|---|---|
+| **Booking** — `?booking=`, its own date range, capacity and approval | Physical goods |
+| **Event RSVP** — `?rsvp=`, the seller's date at the seller's venue | Food (a wizard router onto `physical`, never a stored kind) |
+| | **Service** — fulfilment identical to a physical good's |
+| | Made-to-order / custom lines |
+
+**This is not a rule about `ProductKind`.** A service has no fulfilment
+semantics of its own — it has a date and delivery-or-pickup exactly like a mug
+— so forcing it standalone would split "wash my tent + buy a repair kit" into
+two orders with two payments and two tracking links, and would break
+`productKind.ts`'s invariant that kind is *"NEVER a behaviour fork into a
+second product system"*. Judge the **fulfilment moment**, not the kind. That is
+what tells you the answer for the next kind without re-litigating it.
+
+Enforcement is structural — a standalone flow simply has no add-to-cart — and
+backstopped at both order doors (`orders.create`,
+`counterCheckout.createOrderFromSession`) for stale tabs and direct calls. Both
+standalone checkouts share `StandaloneCheckoutLayout` and tell the buyer their
+basket is untouched (`BasketKeptNote`), because silence there reads as "my
+other items came along". Detail:
+[`event-rsvp.md`](./event-rsvp.md#an-rsvp-is-checked-out-standalone-z8r3fdhh45-28-sep-2026)
+and [`booking.md`](./booking.md).
+
 ## Delivery charge — flat fee + radius bands (2026-07-16, ClickUp `86extzdr8`)
 
 Delivery was free by definition until this: `total === subtotal` for every delivery order,

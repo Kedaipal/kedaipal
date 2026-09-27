@@ -72,7 +72,12 @@ export function ProductCard({
 	const weekendSuffix = isBooking ? weekendRateSuffix(product.booking) : null;
 	const hasOptions = (product.options?.length ?? 0) > 0;
 	const hasCustom = product.variants.some((v) => v.isCustom);
-	const needsDetail = hasOptions || hasCustom || isBooking;
+	// An EVENT always routes to its page too (`z8r3fdhh45`): an RSVP is checked
+	// out standalone, so there is no cart line for a quick-add to make — and
+	// the page carries the terms (fixed date, venue, seats left) a guest has to
+	// read before committing.
+	const isEvent = product.event !== undefined;
+	const needsDetail = hasOptions || hasCustom || isBooking || isEvent;
 	// A product "can run out" if any of its variants hard-blocks (flags are now
 	// resolved per-variant server-side). Only then does the low-stock badge apply.
 	const canRunOut = product.variants.some(
@@ -332,10 +337,12 @@ export function ProductCard({
 							>
 								{isBooking ? (
 									<CalendarRange className="size-4" aria-hidden />
+								) : isEvent ? (
+									<CalendarClock className="size-4" aria-hidden />
 								) : (
 									<SlidersHorizontal className="size-4" aria-hidden />
 								)}
-								{isBooking ? "Book" : "Options"}
+								{isBooking ? "Book" : isEvent ? "RSVP" : "Options"}
 							</Button>
 						) : (
 							<Button
@@ -347,10 +354,12 @@ export function ProductCard({
 								<Link {...pageLink}>
 									{isBooking ? (
 										<CalendarRange className="size-4" aria-hidden />
+									) : isEvent ? (
+										<CalendarClock className="size-4" aria-hidden />
 									) : (
 										<SlidersHorizontal className="size-4" aria-hidden />
 									)}
-									{isBooking ? "Book" : "Options"}
+									{isBooking ? "Book" : isEvent ? "RSVP" : "Options"}
 								</Link>
 							</Button>
 						)
@@ -388,17 +397,18 @@ export function ProductCard({
 							</button>
 						</div>
 					) : (
+						// An event never reaches this branch (`z8r3fdhh45`) — it is
+						// `needsDetail`, so it routes to its page and from there to the
+						// standalone RSVP checkout. No seat gate is needed here.
 						<Button
 							type="button"
 							onClick={() => onQuickAdd(product)}
-							disabled={minUnreachable || eventFull}
+							disabled={minUnreachable}
 							size="sm"
 							className={CTA_CLASS}
 						>
 							<Plus className="size-4" aria-hidden />
-							{/* An event's quick-add is an RSVP — the product page's CTA
-							    already says so, and one action must keep one name. */}
-							{event ? "RSVP" : "Add"}
+							Add
 						</Button>
 					)}
 				</div>

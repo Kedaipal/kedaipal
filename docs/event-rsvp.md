@@ -110,23 +110,96 @@ forget the last day. The seller sets it as **Last day (optional)** beside
 colleagues takes three seats, which is what "30 seats" means to the person
 standing in the room.
 
+## An RSVP is checked out STANDALONE (`z8r3fdhh45`, 28 Sep 2026)
+
+**The rule, and it is not about product kind:** *a product that carries its own
+fixed fulfilment moment can never share an order with one whose moment the
+buyer picks.* An order holds exactly ONE fulfilment contract — one method, one
+date, one place — and an event's is the seller's date at the seller's venue.
+Bookings and events carry their own moment; physical goods, food, services and
+made-to-order do not, so those share a cart freely. A **service is deliberately
+in the cart**: its fulfilment is identical to a physical good's, and
+`productKind.ts` forbids forking behaviour on kind.
+
+The RSVP flow therefore mirrors the booking flow exactly:
+
+| | Booking | Event RSVP |
+|---|---|---|
+| Route | `/$slug/checkout?booking=<slug>` | `/$slug/checkout?rsvp=<slug>` |
+| Form | `booking-checkout-form.tsx` | `event-rsvp-checkout-form.tsx` |
+| Cart | never enters it | never enters it |
+| Page skeleton | `StandaloneCheckoutLayout` | `StandaloneCheckoutLayout` |
+
+Every entry point routes there instead of adding to the cart: the product
+page's CTA, the detail sheet's (disabled) preview CTA, and the **grid card**,
+which previously said "RSVP" while quick-adding to the cart — the easiest of
+the four to miss. The RSVP page owns the option pick and the seat count, so it
+runs the *same* `useProductPurchase` hook and `OptionPills` the buy box does;
+one author for the axes, the variant resolution and the seat ceiling.
+
+### What this replaced, and why it was wrong
+
+Mixing an RSVP with normal products used to be allowed on purpose (Zaki's T3
+call: "allow the mix, with a loud checkout notice"). The whole order locked to
+the event's date and venue, `EventLockBanner` said so above section 1, and a
+one-tap "Remove the RSVP and order the rest normally" was the escape.
+
+It was reversed because **the mix never delivered the case it was allowed
+for.** It existed for "she sells puffs at her own event" — but the seller could
+never opt a product INTO an event, so any catalog item inherited the venue
+purely by being in the cart, nothing anywhere let her advertise it, and the
+v2026.09.7 release copy never mentioned it. Meanwhile a buyer who wanted a mug
+delivered had no route but emptying half their basket. A whole rules matrix,
+across `useCart`, the checkout, `orders.create` and the counter, for a
+capability nobody could reach.
+
+Two artifacts died with it: a NON-event product's `pickupNote` rendered under
+the event's Venue card as if the seller wrote it for the event
+(`distinctPickupNotes` aggregates across every line), and the order ticket
+marked neither line as the RSVP.
+
+**Deliberately not built:** event add-ons (the seller marking which products
+are collectable at her event). Build it when a seller asks.
+
+### How it is enforced
+
+Structurally first, then at the doors:
+
+1. **No add-to-cart exists** for an event, on any surface.
+2. **`CartItem.event` is gone.** `readPersisted` **drops any persisted line
+   carrying `event`** on hydrate — carts saved before this change would
+   otherwise strand a returning buyer with a basket `orders.create` refuses and
+   no way to see why. The invariant is written at the top of `useCart.ts`.
+3. **`orders.create` refuses** an event line alongside any buyer-scheduled
+   line, naming the product that can't come ("An RSVP is its own order —
+   *Ceramic mug* can't come along with it"). Stale tabs and direct calls.
+4. **`counterCheckout.createOrderFromSession` refuses the same** — an order is
+   an order whichever door it came through. The counter's catalog *disables*
+   the rows that would build such a cart (lines already in the cart keep their
+   steppers, so the seller can remove the offending one), and
+   `counterPrimaryAction` blocks **both** modes with the reason, catching a
+   session draft saved before the rule existed.
+
+The **same-day two-events** hole the 23 Sep audit left open closed by
+construction: you can only RSVP to one event at a time.
+
 ## The date lock (`orders.create`)
 
-For a cart holding any event line:
+For an RSVP order:
 
-1. **One event per cart, keyed on the PRODUCT** (PR-review fix) — not the
+1. **One event per order, keyed on the PRODUCT** (PR-review fix) — not the
    date: two same-day events at different outlets share a date but not a
    venue, and the lock resolves from whichever product landed first, so a
    date-keyed check would confirm one event's guests at the other's address.
-   Several lines of ONE event (Set A + Set B) stay a single entry. Refused at
-   add-to-cart (`useCart.addItem` compares `productId`) and at both server
-   doors; the server checks are the stale-tab backstop.
+   Several lines of ONE event (Set A + Set B) stay a single entry and remain
+   legal — the standalone rule is about mixing fulfilment contracts, not about
+   one line per order. Enforced at both server doors.
 2. **A finished event refuses** new RSVPs.
-3. **Self-collect is asserted, not silently rewritten.** By the time the cart
+3. **Self-collect is asserted, not silently rewritten.** By the time the order
    resolves, the address has been sanitized and a delivery quote resolved —
    flipping the method there would leave an order carrying delivery state it
-   should never have had. The checkout hides the delivery option, so reaching
-   this means a stale tab.
+   should never have had. The RSVP form sends `self_collect` and has no
+   delivery control at all, so reaching this means a stale tab.
 4. **The venue is the EVENT's, forced like its date** (round 4:
    `event.venueId`). A guest choosing the venue is as wrong as a guest
    choosing the day — on a multi-outlet store the generic pickup picker would

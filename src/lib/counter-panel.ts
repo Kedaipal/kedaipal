@@ -39,6 +39,15 @@ export interface PrimaryActionInput {
 	 * event line is also RM0, and "set a price for every custom item" would
 	 * misname what the seller is looking at. */
 	eventName?: string;
+	/** Name of a NON-event line sharing the cart with an RSVP (`z8r3fdhh45`),
+	 * if any. An order carries one fulfilment contract and an event's is the
+	 * seller's fixed date at her venue, so nothing whose date the buyer picks
+	 * can ride along — the same rule the storefront enforces structurally.
+	 * Blocks BOTH modes: `orders.create` refuses such an order at either door,
+	 * so an enabled button would be a lie whichever one is open. Reachable only
+	 * from a session draft saved before the rule existed, since the catalog
+	 * disables the rows that would build it. */
+	mixedRsvp?: string;
 	/** Formatted money for the label, e.g. "RM 20.00". */
 	money: string;
 	windowMinutes: number;
@@ -60,16 +69,26 @@ export interface PrimaryAction {
  * full-width buttons in the same slot is what made the old panel ambiguous.
  */
 export function counterPrimaryAction(input: PrimaryActionInput): PrimaryAction {
-	const { mode, empty, unpriced, money, windowMinutes, buyerName, eventName } =
-		input;
+	const {
+		mode,
+		empty,
+		unpriced,
+		money,
+		windowMinutes,
+		buyerName,
+		eventName,
+		mixedRsvp,
+	} = input;
 	if (mode === "send") {
 		const reason = empty
 			? "Add an item first"
-			: eventName !== undefined
-				? `"${eventName}" is an event — share its storefront link so guests RSVP to the fixed date`
-				: unpriced
-					? "Set a price for every custom item first"
-					: undefined;
+			: mixedRsvp !== undefined
+				? `An RSVP is its own order — remove "${mixedRsvp}" or ring it up separately`
+				: eventName !== undefined
+					? `"${eventName}" is an event — share its storefront link so guests RSVP to the fixed date`
+					: unpriced
+						? "Set a price for every custom item first"
+						: undefined;
 		const runwayMinutes = Math.round(CLAIM_PAYMENT_RUNWAY_MS / 60_000);
 		return {
 			// Shows the MONEY, mirroring the counter primary: the price is what a
@@ -85,9 +104,14 @@ export function counterPrimaryAction(input: PrimaryActionInput): PrimaryAction {
 				`${buyerName ? `${buyerName} gets` : "They get"} the link on WhatsApp and ${buyerName ? "has" : "have"} ${describeClaimWindow(windowMinutes)} to complete it, then at least ${runwayMinutes} minutes to pay. Nothing is charged until they pay.`,
 		};
 	}
+	const counterReason = empty
+		? "Add an item first"
+		: mixedRsvp !== undefined
+			? `An RSVP is its own order — remove "${mixedRsvp}" or ring it up separately`
+			: undefined;
 	return {
 		label: `Review order · ${money}`,
-		disabled: empty,
-		reason: empty ? "Add an item first" : undefined,
+		disabled: counterReason !== undefined,
+		reason: counterReason,
 	};
 }

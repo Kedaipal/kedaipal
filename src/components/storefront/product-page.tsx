@@ -1,5 +1,5 @@
 import { Link, useNavigate } from "@tanstack/react-router";
-import { CalendarRange } from "lucide-react";
+import { CalendarClock, CalendarRange } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
@@ -11,21 +11,21 @@ import { Button } from "../ui/button";
 import { Markdown } from "../ui/markdown";
 import { ZoomableImage } from "../ui/zoomable-image";
 import type { StorefrontProduct } from "./product-card";
-import { SeasonalBreakNotice } from "./seasonal-break";
 import {
 	addVariantToCart,
 	CustomOrderCard,
 	EmptyGallery,
+	EventNotice,
 	GoToCheckoutBar,
 	OptionPills,
 	PriceLabel,
 	PurchaseActions,
-	EventNotice,
 	PurchaseHints,
 	ShareLinkChip,
 	TotalPreviewRow,
 	useProductPurchase,
 } from "./product-purchase";
+import { SeasonalBreakNotice } from "./seasonal-break";
 import { StorefrontAppBar } from "./storefront-app-bar";
 import type { StorefrontHeaderRetailer } from "./storefront-header";
 
@@ -71,6 +71,11 @@ export function ProductPageView({
 	// the next step, so the whole cart machinery below (options, stepper,
 	// quick-add, go-to-checkout) is replaced by ONE door — "Request to book".
 	const isBooking = product.kind === "booking";
+	// An event RSVP is checked out STANDALONE (`z8r3fdhh45`), like a booking:
+	// it carries its own fixed moment and venue, so it can never share an order
+	// with cart lines whose date the buyer picks. The buy box is replaced by a
+	// CTA into `?rsvp=`, where the seat choice and the guest's details live.
+	const isEvent = product.event !== undefined;
 	// Instant book (S7): there is no approval step, so nothing on this page may
 	// promise one — the buyer books and pays straight away. Mirrors
 	// `booking-checkout-form.tsx`, which has always read this; the product page
@@ -171,10 +176,22 @@ export function ProductPageView({
 									: ", and nothing is paid until the seller approves your request."}
 							</p>
 						</div>
+					) : isEvent ? (
+						<>
+							<EventNotice pp={pp} />
+							{/* Where the rest of the decision lives. The option pills and
+							    the seat stepper moved to the RSVP page, so this page must
+							    say where they went — a buyer who saw pickers here before
+							    should not have to wonder. */}
+							<p className="mt-2 rounded-xl bg-accent/5 px-3 py-2.5 text-sm leading-relaxed text-muted-foreground">
+								{pp.hasOptions
+									? "Choose your option and how many seats on the next step."
+									: "Choose how many seats on the next step."}
+							</p>
+						</>
 					) : (
 						<>
 							<OptionPills pp={pp} />
-							<EventNotice pp={pp} />
 							<PurchaseHints pp={pp} />
 							<CustomOrderCard
 								pp={pp}
@@ -219,6 +236,32 @@ export function ProductPageView({
 										{instantBook
 											? "Confirmed instantly — payment details follow."
 											: "Seller confirms within 24 hours — nothing is paid yet."}
+									</p>
+								</div>
+							) : isEvent ? (
+								<div className="flex flex-col gap-1.5">
+									<Button
+										asChild={!pp.eventFull}
+										disabled={pp.eventFull}
+										className="tap-target h-12 w-full"
+									>
+										{pp.eventFull ? (
+											<span>Fully booked</span>
+										) : (
+											<Link
+												to="/$slug/checkout"
+												params={{ slug: storeSlug }}
+												search={{ rsvp: product.slug }}
+											>
+												<CalendarClock className="size-4" aria-hidden />
+												RSVP
+											</Link>
+										)}
+									</Button>
+									<p className="text-center text-xs text-muted-foreground">
+										{pp.eventFull
+											? "Every seat is taken — message the store to ask about a cancellation."
+											: "Your seat is held once you RSVP — nothing is paid on this page."}
 									</p>
 								</div>
 							) : (

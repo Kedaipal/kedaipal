@@ -10,6 +10,7 @@ import { ArrowLeft } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import { BookingCheckoutForm } from "../components/storefront/booking-checkout-form";
 import { CheckoutPage } from "../components/storefront/checkout-form";
+import { EventRsvpCheckoutForm } from "../components/storefront/event-rsvp-checkout-form";
 import {
 	OrderingPausedProvider,
 	SeasonalBreakNotice,
@@ -38,12 +39,25 @@ interface CheckoutLoaderData {
  */
 export const Route = createFileRoute("/$slug_/checkout")({
 	// ?booking=<productSlug> switches this page into the booking-request flow
-	// (S2 `86eyn4kbw`): calendar + guest details instead of the cart form. The
-	// cart itself is untouched either way — a stay never enters it.
-	validateSearch: (search: Record<string, unknown>): { booking?: string } =>
-		typeof search.booking === "string" && search.booking.length > 0
-			? { booking: search.booking }
-			: {},
+	// (S2 `86eyn4kbw`): calendar + guest details instead of the cart form.
+	// ?rsvp=<productSlug> does the same for an event RSVP (`z8r3fdhh45`).
+	// Both are STANDALONE checkouts — their product carries its own fixed
+	// fulfilment moment, so it can never share an order with cart lines whose
+	// date the buyer picks. The cart is untouched either way: neither a stay
+	// nor an RSVP ever enters it.
+	//
+	// Mutually exclusive by construction — one page can only check one thing
+	// out — and `booking` wins a malformed URL carrying both, so the branch
+	// below and this validator can never disagree.
+	validateSearch: (
+		search: Record<string, unknown>,
+	): { booking?: string; rsvp?: string } => {
+		if (typeof search.booking === "string" && search.booking.length > 0)
+			return { booking: search.booking };
+		if (typeof search.rsvp === "string" && search.rsvp.length > 0)
+			return { rsvp: search.rsvp };
+		return {};
+	},
 	loader: async ({ params }): Promise<CheckoutLoaderData | null> => {
 		const client = getConvexHttpClient();
 		const read = await ssrRead(() =>
@@ -128,7 +142,7 @@ function CheckoutSkeleton() {
 
 function CheckoutRoute() {
 	const { slug } = Route.useParams();
-	const { booking } = Route.useSearch();
+	const { booking, rsvp } = Route.useSearch();
 	// A tagged link can land straight on checkout — capture here too.
 	useCaptureAttribution(slug);
 	// Live query keeps the page reactive after the SSR'd loader response —
@@ -208,6 +222,39 @@ function CheckoutRoute() {
 							productSlug={booking}
 							locale={retailer.locale}
 							country={retailer.country}
+							cartItemCount={cart.itemCount}
+						/>
+					</div>
+				</div>
+				<StorefrontFooter slug={slug} />
+			</div>
+		);
+	}
+
+	if (rsvp) {
+		return (
+			<div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col pb-[var(--storefront-bar-h,12rem)] lg:pb-10">
+				{/* Same bar, same rule as the booking branch above: back leads to
+				    the EVENT this page is checking out, one level up. */}
+				<StorefrontAppBar
+					retailer={retailer}
+					slug={retailer.slug}
+					backToProductSlug={rsvp}
+				/>
+				<div className="px-5 pt-4 lg:px-8 lg:pt-6">
+					<h1 className="font-heading text-xl font-extrabold tracking-tight">
+						RSVP
+					</h1>
+					<div className="mt-4">
+						<EventRsvpCheckoutForm
+							retailerId={retailer._id}
+							storeName={retailer.storeName}
+							storeSlug={retailer.slug}
+							productSlug={rsvp}
+							locale={retailer.locale}
+							country={retailer.country}
+							confirmPushEnabled={retailer.confirmPushEnabled ?? false}
+							cartItemCount={cart.itemCount}
 						/>
 					</div>
 				</div>

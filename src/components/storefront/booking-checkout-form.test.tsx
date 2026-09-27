@@ -106,6 +106,7 @@ function renderForm(country: Country = "MY", locale?: "en" | "ms") {
 			storeSlug="lembah-riverside"
 			productSlug="riverside-chalet"
 			locale={locale}
+			cartItemCount={0}
 			country={country}
 		/>,
 	);
