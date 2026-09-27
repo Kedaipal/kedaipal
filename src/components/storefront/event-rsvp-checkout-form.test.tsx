@@ -249,6 +249,53 @@ describe("EventRsvpCheckoutForm — an unsettled price is never quoted as a tota
 	});
 });
 
+describe("EventRsvpCheckoutForm — an event with nothing bookable (PR #309 FYI 3)", () => {
+	// `resolveVariant` skips the custom line, so a made-to-order-only event can
+	// never resolve a variant: the pills answer nothing, the total never
+	// settles and the CTA never enables. Nothing refuses the combination at
+	// save, so the page has to say so rather than hang.
+	const madeToOrderOnly = {
+		...PRODUCT,
+		options: [],
+		variants: [
+			{
+				_id: "var_custom",
+				optionValues: [],
+				price: 0,
+				onHand: 0,
+				imageUrls: [],
+				isCustom: true,
+				customLabel: "Custom",
+				requiresProof: true,
+			},
+		],
+	};
+
+	it("states the dead end and points at the seller, instead of a form that can't finish", () => {
+		state.product = madeToOrderOnly;
+		renderForm();
+		expect(screen.getByText(/aren't open online/i)).toBeTruthy();
+		expect(screen.getByText(/message IndoMart/i)).toBeTruthy();
+		// And no unfinishable form behind it.
+		expect(screen.queryByRole("button", { name: /^RSVP$/ })).toBeNull();
+	});
+
+	it("an event with no variants at all lands in the same state", () => {
+		state.product = { ...PRODUCT, options: [], variants: [] };
+		renderForm();
+		expect(screen.getByText(/aren't open online/i)).toBeTruthy();
+	});
+
+	it("a finished event still says it has finished — that reason outranks", () => {
+		state.product = {
+			...madeToOrderOnly,
+			event: { date: Date.UTC(2020, 0, 1), timeMinutes: 8 * 60 },
+		};
+		renderForm();
+		expect(screen.getByText(/already taken place/i)).toBeTruthy();
+	});
+});
+
 describe("EventRsvpCheckoutForm — a gone event is not a loading event", () => {
 	it("offers a way back instead of a skeleton that never resolves", () => {
 		// `undefined` is loading; `null` is gone. Conflating them left a typo'd
@@ -309,7 +356,7 @@ describe("EventRsvpCheckoutForm — the CTA carries its consequence", () => {
 		renderForm();
 		const more = screen.getByRole("button", { name: /more seats/i });
 		fireEvent.click(more);
-		expect(screen.getByText(/that's every seat left/i)).toBeTruthy();
+		expect(screen.getByText(/that's all 2 seats/i)).toBeTruthy();
 		expect((more as HTMLButtonElement).disabled).toBe(true);
 	});
 
@@ -341,6 +388,25 @@ describe("EventRsvpCheckoutForm — the CTA carries its consequence", () => {
 		renderForm();
 		expect(screen.queryByText(/that's every seat left/i)).toBeNull();
 		expect(screen.getByText(/pick your size first/i)).toBeTruthy();
+	});
+
+	it("names the seat pool without reading as the room's capacity (PR #309 FYI 1)", () => {
+		// `eventSeatsLeft` is what REMAINS. "IndoMart has 2 for this event" read
+		// as the total capacity on a partially-booked event.
+		state.product = { ...PRODUCT, eventSeatsLeft: 2 };
+		renderForm();
+		fireEvent.click(screen.getByRole("button", { name: /more seats/i }));
+		expect(
+			screen.getByText("That's all 2 seats IndoMart has left for this event."),
+		).toBeTruthy();
+	});
+
+	it("says LAST seat, not 'all 1 seats'", () => {
+		state.product = { ...PRODUCT, eventSeatsLeft: 1 };
+		renderForm();
+		expect(
+			screen.getByText("That's the last seat IndoMart has for this event."),
+		).toBeTruthy();
 	});
 
 	it("refuses a full event outright", () => {

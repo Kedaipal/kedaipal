@@ -191,6 +191,26 @@ export function EventRsvpCheckoutForm({
 		);
 	}
 
+	// An event whose only line is made-to-order can NEVER resolve a variant —
+	// `resolveVariant` deliberately skips the custom line — so the option pills
+	// would have nothing to answer, the total would never settle and the CTA
+	// could never enable. The buy box has `sellsStandardLine` for exactly this
+	// shape and swaps in the custom card; an RSVP has no equivalent (a quoted
+	// price can't hold a seat), and nothing server-side refuses the combination
+	// at save. So it is stated, with the exit, instead of leaving the guest on
+	// a form they cannot finish. Also covers an event with no variants at all.
+	if (!pp.sellsStandardLine) {
+		return (
+			<p
+				role="alert"
+				className="rounded-2xl bg-muted px-4 py-3 text-sm text-muted-foreground"
+			>
+				RSVPs for {product.name} aren&apos;t open online — please message{" "}
+				{storeName} to ask for a place.
+			</p>
+		);
+	}
+
 	// An event with nowhere to collect from is a dead end for the guest — the
 	// server refuses it too. Its own explained state, never a silent failure at
 	// submit. `undefined` is still LOADING, not missing.
@@ -577,7 +597,9 @@ export function EventRsvpCheckoutForm({
 									: "That combination isn't available."
 								: seats >= pp.maxQty
 									? seatsBind
-										? `That's every seat left — ${storeName} has ${pp.eventSeatsLeft} for this event.`
+										? pp.eventSeatsLeft === 1
+											? `That's the last seat ${storeName} has for this event.`
+											: `That's all ${pp.eventSeatsLeft} seats ${storeName} has left for this event.`
 										: "That's all that's left of this option."
 									: pp.eventSeatsLeft !== undefined
 										? `${pp.eventSeatsLeft} ${pp.eventSeatsLeft === 1 ? "seat" : "seats"} left for this event.`
