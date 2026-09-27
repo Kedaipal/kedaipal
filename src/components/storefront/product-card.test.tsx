@@ -165,6 +165,34 @@ describe("ProductCard — in-cart stepper (z8r3fdegb5)", () => {
 			).disabled,
 		).toBe(false);
 	});
+
+	// A minus glyph labelled "Remove one" that silently clears four units is
+	// the button lying about its own consequence — and on a min-order product
+	// this is the DEFAULT state, since quick-add opens the line AT the minimum
+	// (PR #308 review). "A constraint is surfaced, never enforced silently."
+	it("on a min-order product, − says it clears the line rather than claiming 'one'", async () => {
+		renderCard({
+			product: { ...product, minQuantity: 4 } as unknown as StorefrontProduct,
+			cartQuantity: 4,
+		});
+		const label = "Remove Ceramic mug from cart — minimum order is 4";
+		const minus = await waitFor(() => screen.getByRole("button", { name: label }));
+		// `title` for the mouse, accessible name for everyone else.
+		expect(minus.getAttribute("title")).toBe(label);
+		expect(screen.queryByRole("button", { name: /Remove one/ })).toBeNull();
+	});
+
+	it("keeps the plain 'Remove one' label while the line stays above the minimum", async () => {
+		renderCard({
+			product: { ...product, minQuantity: 4 } as unknown as StorefrontProduct,
+			cartQuantity: 5,
+		});
+		const minus = await waitFor(() =>
+			screen.getByRole("button", { name: "Remove one Ceramic mug" }),
+		);
+		// Nothing to warn about — this tap really does remove one unit.
+		expect(minus.hasAttribute("title")).toBe(false);
+	});
 });
 
 describe("ProductCard — price label (86eyhn4mr)", () => {
@@ -267,8 +295,12 @@ describe("ProductCard — product page links", () => {
 		// The design's Notify affordance ships ahead of the feature — disabled,
 		// with the promise on the wrapper where a tooltip can carry it. No live
 		// Options link to an unorderable page.
-		const notify = screen.getByRole("button", { name: /notify/i });
+		const notify = screen.getByRole("button", {
+			name: "Notify me when Ceramic mug is back in stock — coming soon",
+		});
 		expect(notify.hasAttribute("disabled")).toBe(true);
+		// `title` is mouse-only, so the promise rides the accessible name too —
+		// otherwise a screen reader announces "Notify, dimmed" and nothing else.
 		expect(notify.closest("[title='Coming soon']")).toBeTruthy();
 		expect(screen.queryByRole("link", { name: /options/i })).toBeNull();
 	});

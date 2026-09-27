@@ -60,8 +60,15 @@ page follow separately):
   count tabular; − is `useCart.quickRemoveProduct`, which drops the whole
   line when a decrement would fall below the product's minimum — symmetric
   with quick-add's min top-up, and the card has no room to explain a
-  shortfall). `+` disables at the hard-block stock / event-seat cap, so an
-  enabled + always adds. Price sits on its own `whitespace-nowrap` line
+  shortfall). **When that tap will clear the line, the − says so**
+  ("Remove Kuih Lapis from cart — minimum order is 4", as both
+  `aria-label` and `title`): on a min-order product this is the DEFAULT
+  state, since quick-add opens the line AT the minimum, and a minus glyph
+  labelled "Remove one" that silently wipes four units is the button lying
+  about its own consequence (PR #308 review). `+` disables at the
+  hard-block stock / event-seat cap, so an enabled + always adds. The
+  disabled `Notify` carries its "coming soon" promise in the accessible
+  name as well as the wrapper's `title`, which only ever reaches a mouse. Price sits on its own `whitespace-nowrap` line
   (RM 9,999.99 stays whole). Photo inset `p-1.5` in an 18px-radius card;
   out-of-stock photos go `grayscale opacity-60` under a muted badge.
 
@@ -238,7 +245,12 @@ listing-back variant, initials tile, badge at 18px, one-line hours,
 44px share), `cart-bar.test.tsx` (empty → nothing, count/total, 99+ cap,
 checkout navigation, paused disabled-with-reason),
 `founding-member-badge.test.tsx` (labelled button, popover copy, cover/theme
-artwork, sm size), `product-card.test.tsx` (stepper swap + wiring + stock-cap
-disable, Notify on out-of-stock, disabled Options on a min-trapped product),
+artwork, sm size), `product-page.test.tsx` (the gallery's LCP preload contract: the hint covers
+the mobile branch, each branch requests the sizes the hint is built from, and
+only the first mobile tile is eager), `product-card.test.tsx` (stepper swap +
+wiring + stock-cap
+disable, the min-order − label stating that it clears the line, Notify on
+out-of-stock with its promise in the accessible name, disabled Options on a
+min-trapped product),
 `useCart.test.tsx` (`quickRemoveProduct`: decrement, remove-at-zero,
 below-minimum drop, custom-line immunity).

@@ -182,7 +182,9 @@ export function StorefrontHeader({
 					onCover={hasCover}
 				/>
 				<div className="flex min-w-0 flex-col gap-2">
-					<span className="flex items-center gap-2">
+					{/* A <div>, not a <span>: it wraps the <h1>, and flow content
+					    inside a phrasing element is an invalid content model. */}
+					<div className="flex items-center gap-2">
 						{/* The store home is *about* the store, so the name is the
 						    page's <h1> — subpages name their own subject and carry the
 						    compact app bar instead (see StorefrontAppBar). Wraps rather
@@ -200,7 +202,7 @@ export function StorefrontHeader({
 								onCover={hasCover}
 							/>
 						) : null}
-					</span>
+					</div>
 					{retailer.storeDescription ? (
 						// Seller's own blurb wins over the generic tagline. Plain text
 						// (escaped by React), newlines preserved, clamped to keep the

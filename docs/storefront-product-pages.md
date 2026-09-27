@@ -97,7 +97,17 @@ cart-line snapshots — grid quick-add, sheet and page all call it).
   bar — but the product photo is now on the first screen instead of under a
   176px cover, and `head()` **preloads the first product image** (proxied,
   with the gallery's own `imagesrcset`/`imagesizes`) as the page's LCP
-  element; the cover preload stays home-only. There's no cart chip in the
+  element; the cover preload stays home-only. **The hint's `imagesizes`
+  comes from the gallery itself** — `GALLERY_PRELOAD_SIZES` in
+  `product-page.tsx`, built from the mobile branch's own `sizes` — because
+  `PageGallery` renders two CSS-switched trees and a hint that names the
+  other one is worse than no hint: it shipped briefly with the desktop
+  string alone, so a 390px phone preloaded `w=960` while the carousel tile
+  it paints asked for `w=640` (PR #308 review). For the same reason only
+  the **first mobile tile** carries `priority` — `eager` downloads
+  regardless of visibility, so marking the `display:none` desktop hero
+  would make every phone fetch a hero it never shows; the hero stays lazy
+  and paints from the same preload. Pinned by `product-page.test.tsx`. There's no cart chip in the
   bar: the sticky purchase bar below already carries count + total + "Go to
   checkout", and saying it twice is the redundancy we removed from the
   checkout header.
@@ -116,8 +126,11 @@ cart-line snapshots — grid quick-add, sheet and page all call it).
   full text stays in the DOM (indexable, selectable) — only its height is
   bounded. Products with no description render nothing at all: no empty
   block, no stray gap.
-- **Share affordance**: `shareProductLink` uses the OS share sheet when
-  available (the WhatsApp path on mobile) and falls back to clipboard + toast.
+- **Share affordance**: `shareLink` (`src/lib/share.ts`) uses the OS share
+  sheet when available (the WhatsApp path on mobile) and falls back to
+  clipboard + toast. It moved out of `product-purchase.tsx` in `z8r3fdegb5`
+  so the app bar's share icon, the store hero's "Share store" chip and this
+  page's Copy-link chip all share one author.
 
 ### The reset effect keys on `_id`, never the product object
 

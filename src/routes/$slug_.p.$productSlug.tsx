@@ -7,7 +7,10 @@ import {
 	redirect,
 } from "@tanstack/react-router";
 import { api } from "../../convex/_generated/api";
-import { ProductPageView } from "../components/storefront/product-page";
+import {
+	GALLERY_PRELOAD_SIZES,
+	ProductPageView,
+} from "../components/storefront/product-page";
 import { OrderingPausedProvider } from "../components/storefront/seasonal-break";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { Skeleton } from "../components/ui/skeleton";
@@ -213,9 +216,14 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 				{ rel: "canonical", href: canonicalUrl },
 				// LCP preload (z8r3fdegb5): with the cover hero gone from subpages,
 				// the gallery's first photo is this page's LCP element. The hint
-				// must name the same candidate the gallery will request — it renders
-				// through AppImage (proxied + srcset), so imagesrcset/imagesizes
-				// mirror the component's own sizes.
+				// must name the same candidate the gallery will actually request —
+				// it renders through AppImage (proxied + srcset), so
+				// imagesrcset/imagesizes mirror the component's own sizes.
+				//
+				// `imagesizes` comes from the gallery itself (GALLERY_PRELOAD_SIZES)
+				// so the hint can never drift from the branch that paints — it
+				// covers the mobile carousel tile below lg AND the desktop hero
+				// above it. See that constant for what the drift cost.
 				...(firstImageUrl
 					? [
 							{
@@ -223,7 +231,7 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 								as: "image",
 								href: proxiedImageUrl(firstImageUrl),
 								imagesrcset: imageSrcSet(firstImageUrl) ?? undefined,
-								imagesizes: "(min-width: 1024px) 45vw, 100vw",
+								imagesizes: GALLERY_PRELOAD_SIZES,
 							},
 						]
 					: []),

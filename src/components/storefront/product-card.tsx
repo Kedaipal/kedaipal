@@ -123,6 +123,18 @@ export function ProductCard({
 			? seatsLeft
 			: Number.POSITIVE_INFINITY;
 	const atCap = cartQuantity >= Math.min(stockCap, seatCap);
+	// The stepper's "−" drops the WHOLE line when one unit off would fall below
+	// the product's minimum (`useCart.quickRemoveProduct`). On a min-order
+	// product that is the DEFAULT state, not an edge case — quick-add opens the
+	// line AT the minimum — so the control has to say what it does. A minus
+	// glyph labelled "Remove one" that silently clears four units is the button
+	// lying about its own consequence, and the card's own "Min N" chip only
+	// states the rule, not what this tap will do about it.
+	const stepDownClearsLine =
+		minQuantity >= 2 && cartQuantity <= Math.max(1, minQuantity);
+	const stepDownLabel = stepDownClearsLine
+		? `Remove ${product.name} from cart — minimum order is ${minQuantity}`
+		: `Remove one ${product.name}`;
 	// Does the bottom-left overlay row render at all? Drives the no-photo
 	// placeholder's clearance — see the tile below.
 	const hasBottomChips = event !== undefined || hasCustom || minQuantity >= 2;
@@ -288,13 +300,16 @@ export function ProductCard({
 					) : outOfStock ? (
 						// The design's "Notify" — a no-op for now (deliberate: ClickUp
 						// z8r3fdegb5 ships the affordance ahead of the feature), so it
-						// stays disabled with the promise where a tooltip can carry it.
+						// stays disabled with the promise attached. `title` only reaches
+						// a mouse, so the accessible name carries it too — otherwise a
+						// screen-reader user hears "Notify, dimmed" and is told nothing.
 						<span title="Coming soon" className="block">
 							<Button
 								type="button"
 								disabled
 								size="sm"
 								variant="outline"
+								aria-label={`Notify me when ${product.name} is back in stock — coming soon`}
 								className={CTA_CLASS}
 							>
 								<Bell className="size-4" aria-hidden />
@@ -349,7 +364,8 @@ export function ProductCard({
 							<button
 								type="button"
 								onClick={() => onQuickRemove(product)}
-								aria-label={`Remove one ${product.name}`}
+								aria-label={stepDownLabel}
+								title={stepDownClearsLine ? stepDownLabel : undefined}
 								className="flex h-full w-11 items-center justify-center rounded-full transition-colors hover:bg-accent-foreground/10"
 							>
 								<Minus className="size-4" aria-hidden />
