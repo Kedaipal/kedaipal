@@ -3,6 +3,7 @@
 // the originating mutation/cron never fails on an outbound issue — mirrors the
 // order-alert emails in convex/email.ts. Pure copy lives in lib/billingEmailCopy.ts.
 
+import { billingPageUrl } from "./lib/billingUrl";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -35,9 +36,6 @@ import {
 	renewalQuote,
 } from "./lib/plans";
 
-function billingPageUrl(): string {
-	return `${process.env.SITE_URL ?? "https://kedaipal.com"}/app/settings?tab=billing`;
-}
 
 const MONTHS = [
 	"Jan", "Feb", "Mar", "Apr", "May", "Jun",

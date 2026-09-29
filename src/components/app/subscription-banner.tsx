@@ -149,11 +149,13 @@ export function SubscriptionBanner({
 							: "You're out of credits"}
 						{waiting ? ` · ${waiting}` : ""}.
 					</span>{" "}
-					{isMember
-						? "Accepting and updating orders and editing products are paused until the owner adds credits. Orders keep coming in."
-						: "Accepting and updating orders and editing products are paused. Orders keep coming in, and you can still view, cancel and refund them."}
+					{/* A teammate who may buy packs can take the way back
+					    themselves (T2); one who can't is told who can. */}
+					{creditLock.canAct
+						? "Accepting and updating orders and editing products are paused. Orders keep coming in, and you can still view, cancel and refund them."
+						: "Accepting and updating orders and editing products are paused until the owner adds credits. Orders keep coming in."}
 				</p>
-				{isMember ? null : (
+				{!creditLock.canAct ? null : (
 					<Link
 						to="/app/settings"
 						search={cta.search}

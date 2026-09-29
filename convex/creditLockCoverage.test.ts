@@ -112,6 +112,19 @@ const OPEN_FUNCTIONS: Record<string, string> = {
  * links): none of their public writes may carry the credit guard. */
 const INTAKE_MODULES = ["counterCheckout", "orderClaims"];
 
+/** The WAYS BACK — topping up (T2), paying or changing a plan, resuming a
+ * hold, settings and the team: a locked store must always be able to reach
+ * every one of them, or the lock becomes a trap. None may carry the guard. */
+const WAY_BACK_MODULES = [
+	"creditPurchases",
+	"invoices",
+	"subscriptionPayments",
+	"subscriptions",
+	"billing",
+	"retailers",
+	"team",
+];
+
 const CONVEX = __dirname;
 const DEF =
 	/export const (\w+)\s*=\s*(mutation|action|query|internalMutation|internalQuery|internalAction)\(/g;
@@ -138,7 +151,12 @@ describe("the seller lock at zero credits covers every write it should", () => {
 				.filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
 				.map((f) => basename(f, ".ts")),
 		);
-		for (const mod of [...LOCKED_MODULES, ...MIXED_MODULES, ...INTAKE_MODULES])
+		for (const mod of [
+			...LOCKED_MODULES,
+			...MIXED_MODULES,
+			...INTAKE_MODULES,
+			...WAY_BACK_MODULES,
+		])
 			expect(files.has(mod)).toBe(true);
 	});
 
@@ -214,5 +232,17 @@ describe("the seller lock at zero credits covers every write it should", () => {
 			for (const [name, body] of publicWrites(mod))
 				if (guarded(body)) offenders.push(name);
 		expect(offenders).toEqual([]);
+	});
+
+	test("every way back stays open — top-up, billing, plans, settings, team", () => {
+		const offenders: string[] = [];
+		for (const mod of WAY_BACK_MODULES)
+			for (const [name, body] of publicWrites(mod))
+				if (guarded(body)) offenders.push(name);
+		expect(offenders).toEqual([]);
+		// Proof the scan reaches the one a locked seller needs most.
+		expect(publicWrites("creditPurchases").has("creditPurchases.createTopUp")).toBe(
+			true,
+		);
 	});
 });

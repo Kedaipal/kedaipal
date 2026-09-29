@@ -5,6 +5,11 @@ import { type FunctionReference, getFunctionName } from "convex/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../../convex/_generated/api";
 import type { CreditBalanceView } from "../../../convex/credits";
+import {
+	TOP_UP_VIEW_ONLY_MESSAGE,
+	type TopUpRefusal,
+	topUpRefusalMessage,
+} from "../../../convex/lib/creditPurchases";
 import { formatShortDate } from "../../lib/format";
 import { CreditMeter } from "./credit-meter";
 
@@ -102,17 +107,39 @@ function retailer({
 	} as unknown as Retailer;
 }
 
+/** T2's `topUpOptions` answer — only the fields the meter reads. */
+type TopUp = {
+	available: boolean;
+	refusal: TopUpRefusal | null;
+	refusalMessage: string | null;
+	viewOnly: "acting_as_admin" | "no_write" | null;
+};
+const CAN_BUY: TopUp = {
+	available: true,
+	refusal: null,
+	refusalMessage: null,
+	viewOnly: null,
+};
+/** The refusal exactly as the server words it for the owner. */
+function refused(refusal: TopUpRefusal): TopUp {
+	return {
+		...CAN_BUY,
+		refusal,
+		refusalMessage: topUpRefusalMessage(refusal, { audience: "owner" }),
+	};
+}
+
 function mockQueries({
 	bal,
-	payNow = true,
+	topUp = CAN_BUY,
 }: {
 	/** `undefined` = still loading; `null` = no Credits grant. */
 	bal: CreditBalanceView | null | undefined;
-	payNow?: boolean;
+	topUp?: TopUp;
 }) {
 	const NAME = {
 		balance: getFunctionName(api.credits.getBalance),
-		gateway: getFunctionName(api.subscriptionPayments.billingGatewayAvailable),
+		topUp: getFunctionName(api.creditPurchases.topUpOptions),
 		admin: getFunctionName(api.billing.amIAdmin),
 	};
 	vi.mocked(useQuery).mockImplementation(((opts: {
@@ -122,8 +149,8 @@ function mockQueries({
 		const data =
 			name === NAME.balance
 				? bal
-				: name === NAME.gateway
-					? { payNow }
+				: name === NAME.topUp
+					? topUp
 					: name === NAME.admin
 						? false
 						: undefined;
@@ -222,6 +249,7 @@ describe("CreditMeter — Billing (full)", () => {
 				plan: 170,
 				total: 170,
 			}),
+			topUp: refused("trialing"),
 		});
 		render(
 			<CreditMeter
@@ -234,16 +262,16 @@ describe("CreditMeter — Billing (full)", () => {
 		).toBeTruthy();
 		const topUp = screen.getByRole("button", { name: "Top up credits" });
 		expect((topUp as HTMLButtonElement).disabled).toBe(true);
+		// T2's own sentence — the meter and the pack picker never disagree.
 		expect(
-			screen.getByText(
-				"Pick a plan first — top-ups are for subscribed stores.",
-			),
+			screen.getByText(topUpRefusalMessage("trialing", { audience: "owner" })),
 		).toBeTruthy();
 	});
 
 	it("past due: pay the invoice, and top-up waits for it", () => {
 		mockQueries({
 			bal: balance({ regime: "none", nextGrant: null, plan: 4, total: 4 }),
+			topUp: refused("past_due"),
 		});
 		render(
 			<CreditMeter
@@ -257,9 +285,7 @@ describe("CreditMeter — Billing (full)", () => {
 			),
 		).toBeTruthy();
 		expect(
-			screen.getByText(
-				"Pay your open invoice first — this month's credits land with it.",
-			),
+			screen.getByText(topUpRefusalMessage("past_due", { audience: "owner" })),
 		).toBeTruthy();
 	});
 
@@ -327,7 +353,10 @@ describe("CreditMeter — Billing (full)", () => {
 	it("a teammate who can see credits but not buy them is told who can", () => {
 		viewer.role = "member";
 		viewer.canBuy = false;
-		mockQueries({ bal: balance() });
+		mockQueries({
+			bal: balance(),
+			topUp: { ...CAN_BUY, viewOnly: "no_write" },
+		});
 		render(<CreditMeter variant="full" retailer={retailer()} />);
 		expect(
 			(
@@ -336,15 +365,35 @@ describe("CreditMeter — Billing (full)", () => {
 				}) as HTMLButtonElement
 			).disabled,
 		).toBe(true);
+		expect(screen.getByText(/ask the owner for edit access/)).toBeTruthy();
+	});
+
+	it("a teammate holding Credits write buys packs themselves", () => {
+		viewer.role = "member";
+		viewer.canBuy = true;
+		mockQueries({ bal: balance() });
+		render(<CreditMeter variant="full" retailer={retailer()} />);
+		expect(screen.getByRole("link", { name: "Top up credits" })).toBeTruthy();
+	});
+
+	it("admin act-as: view-only, said with T2's sentence", () => {
+		mockQueries({
+			bal: balance(),
+			topUp: { ...CAN_BUY, viewOnly: "acting_as_admin" },
+		});
+		render(<CreditMeter variant="full" retailer={retailer()} />);
 		expect(
-			screen.getByText(
-				"Ask the store owner for edit access to Credits to buy packs.",
-			),
-		).toBeTruthy();
+			(
+				screen.getByRole("button", {
+					name: "Top up credits",
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(true);
+		expect(screen.getByText(TOP_UP_VIEW_ONLY_MESSAGE)).toBeTruthy();
 	});
 
 	it("no top-up where packs aren't sold", () => {
-		mockQueries({ bal: balance(), payNow: false });
+		mockQueries({ bal: balance(), topUp: { ...CAN_BUY, available: false } });
 		render(<CreditMeter variant="full" retailer={retailer()} />);
 		expect(screen.queryByText("Top up credits")).toBeNull();
 	});
@@ -381,8 +430,19 @@ describe("CreditMeter — dashboard home (card)", () => {
 		expect(screen.getByRole("link", { name: "Pick a plan" })).toBeTruthy();
 	});
 
-	it("locked, for a teammate: no button that isn't theirs", () => {
+	it("locked, for a teammate holding Credits write: the top-up is theirs to take", () => {
 		viewer.role = "member";
+		viewer.canBuy = true;
+		mockQueries({ bal: balance({ plan: 0, total: 0 }) });
+		render(
+			<CreditMeter variant="card" retailer={retailer({ locked: true })} />,
+		);
+		expect(screen.getByRole("link", { name: "Top up" })).toBeTruthy();
+	});
+
+	it("locked, for a teammate who can't buy: no button that isn't theirs", () => {
+		viewer.role = "member";
+		viewer.canBuy = false;
 		mockQueries({ bal: balance({ plan: 0, total: 0 }) });
 		render(
 			<CreditMeter variant="card" retailer={retailer({ locked: true })} />,

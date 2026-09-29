@@ -27,6 +27,7 @@ import {
 	internalMutation,
 	internalQuery,
 } from "./_generated/server";
+import { billingPageUrl } from "./lib/billingUrl";
 import { loadCreditAccount, projectedCredits } from "./credits";
 import { storeOwnerIsAdmin } from "./lib/auth";
 import { classifyPushFailure } from "./lib/confirmationPush";
@@ -235,10 +236,6 @@ export const noticeContext = internalQuery({
 	},
 });
 
-function billingPageUrl(): string {
-	return `${process.env.SITE_URL ?? "https://kedaipal.com"}/app/settings?tab=billing`;
-}
-
 const emailKeyValidator = v.union(
 	v.literal("low"),
 	v.literal("locked"),
@@ -275,12 +272,22 @@ export const sendNoticeEmail = internalAction({
 			retailerId: args.retailerId,
 		});
 		if (!meta?.notifyEmail) return;
+		const topUpAvailable =
+			resolveBillingGatewayCredentials(process.env) !== null;
+		// When a top-up is the way back, the email's button opens the pack
+		// picker itself (T2's `topup=1`) — one tap, not a hunt through Billing.
+		const opensPicker =
+			topUpAvailable &&
+			args.route === "topup" &&
+			(args.key === "low" ||
+				args.key === "locked" ||
+				args.key === "stillLocked");
 		const rendered = renderCreditEmail(meta.locale, args.key, {
 			storeName: meta.storeName,
-			billingUrl: billingPageUrl(),
+			billingUrl: billingPageUrl(opensPicker ? "topup=1" : undefined),
 			route: args.route as CreditUnlockRoute,
 			balance: args.balance,
-			topUpAvailable: resolveBillingGatewayCredentials(process.env) !== null,
+			topUpAvailable,
 			upgrade: args.upgrade,
 			expiring: args.expiring
 				? {

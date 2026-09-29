@@ -1,6 +1,6 @@
 # Kedaipal Credits — the order-credit ledger
 
-> **Status:** T1 (the ledger — ClickUp [`86eye2ccu`](https://app.clickup.com/t/86eye2ccu)) built. T2 top-up packs ([`z8r3fdf8ht`](https://app.clickup.com/t/z8r3fdf8ht)) built — see [Top-up packs (T2)](#top-up-packs-t2). T3 meter + seller lock + notices (`z8r3fdf8hy`), T4 auto top-up (`z8r3fdf8wa`) and T5 public surfaces + release pack (`z8r3fdfu31`) build on it and add their own sections below. Decision register: `z8r3fdf8j1` (Arif, locked 17 Sep 2026) — with **Zaki's 30 Sep 2026 overrides** (refund rule, trial allowance, team permission), marked below.
+> **Status:** T1 (the ledger — ClickUp [`86eye2ccu`](https://app.clickup.com/t/86eye2ccu)) built. T2 top-up packs ([`z8r3fdf8ht`](https://app.clickup.com/t/z8r3fdf8ht)) built — see [Top-up packs (T2)](#top-up-packs-t2). T3 meter + seller lock + notices ([`z8r3fdf8hy`](https://app.clickup.com/t/z8r3fdf8hy)) built — see [The meter, the seller lock and the notices (T3)](#the-meter-the-seller-lock-and-the-notices-t3). T4 auto top-up (`z8r3fdf8wa`) and T5 public surfaces + release pack (`z8r3fdfu31`) build on it and add their own sections below. Decision register: `z8r3fdf8j1` (Arif, locked 17 Sep 2026) — with **Zaki's 30 Sep 2026 overrides** (refund rule, trial allowance, team permission), marked below.
 
 **1 credit = 1 order.** Every plan includes credits each month; sellers can buy
 more. From 1 Oct 2026 every order carries a real Meta messaging cost, so a flat
@@ -43,7 +43,8 @@ order, and **the storefront never pauses** — running out locks the *seller*
 
 `PLAN_CREDIT_GRANT` in `convex/lib/plans.ts` is **the** per-plan order
 allowance — `PLAN_CAPS.orderCap` is derived from it ("one number, one source"),
-so the soft-cap meter and the ledger can't disagree. Scale moved from 400 to 500
+so the plan cards, the meter and the ledger can't disagree (the soft-cap meter
+it replaced is gone — T3). Scale moved from 400 to 500
 with this change; subscription rows carry `orderCap` denormalized, hence the
 `resyncSubscriptionCaps` step below.
 
@@ -187,7 +188,12 @@ the meter is right at 00:01.
 
 - `credits.getBalance` — the one read behind every meter: plan, purchased,
   total, period, `nextGrant`, `refreshesAt`, the next expiring lot,
-  `exhaustedAt`, seller refunds left, custom-grant flag.
+  `exhaustedAt`, seller refunds left, custom-grant flag, and
+  `ordersThisPeriod` (the `subscriptionUsage` count a plan change compares
+  against).
+- The dashboard payload (`getMyRetailer`) carries `creditLock` — locked, the
+  unlock route, since when, orders waiting — to **every** teammate: it has no
+  balance numbers, and everyone needs to know why a control is greyed out.
 - `credits.listActivity` — the ledger newest first (paginated), without admin
   notes. The seller's "Credit activity" list (T3) reads it.
 - `credits.adminGetAccount` / `adminListLedger` / `adminAdjust` /
@@ -490,3 +496,170 @@ refund, and one that slips through lands as `late_payment`.
 - **GA4:** mark `credits_topup_paid` as a key event (docs/analytics.md).
 - **Terms:** the picker links `/terms#credits` — T5's Credits clause. The
   picker must not be reachable in production before that clause is live.
+
+## The meter, the seller lock and the notices (T3)
+
+**ClickUp:** [`z8r3fdf8hy`](https://app.clickup.com/t/z8r3fdf8hy) · **Files:**
+`convex/creditLock.ts` (the lock resolver, the guard, the cancel outlook),
+`convex/creditNotices.ts` (the notice evaluator, its senders, the expiry
+heads-up), `convex/lib/credits.ts` (pure: unlock route, audience, the lock
+sentence, the typed refusal, `dueCreditNotice`), `convex/lib/creditEmailCopy.ts`
+(en/ms/zh), `src/components/credits/` (meter, lock note, activity, lock CTA),
+`src/hooks/useCreditLock.ts`, `src/lib/credits-ui.ts` (every display rule).
+
+Credits become visible inside the product and are enforced **on the seller
+side only**. The storefront never pauses; a buyer never sees or feels a
+seller's balance (a test reads the storefront, product page, categories and
+tracking page at +50 and −50 and asserts they're identical).
+
+### The meter
+
+One `CreditMeter`, two places (one control, one rule):
+
+- **Dashboard home** (`card`) — "42 orders left", the bar, the next refresh
+  ("200 more on 1 Nov"), and a way into Billing; when locked, the one button
+  that puts credits back.
+- **Settings → Billing** (`full`), right under the plan — both buckets
+  ("120 of 200" plan, bought), the next refresh, the rule in plain words (plan
+  credits refresh on the 1st and don't carry over; bought credits last 12
+  months; plan credits are used first; a cancelled never-accepted order gives
+  its credit back, up to 10 a month), the nearest bought-credit expiry when it
+  falls within 30 days, and **Top up credits** → T2's picker.
+
+Order counts only — "15 orders owed", never money. Amber in the last fifth of
+the month's grant (never below the 10-left line), red at 0. Every state is
+designed: loading, trial ("200 orders from your first order"), active, founding
+(the 300 badge), past due, on hold, comped ("never locked — here so you can see
+your volume"), custom allowance, at zero, below zero ("the 15 owed come off
+your next pack or your next monthly credits"). Top up is hidden where packs
+aren't sold and **disabled with T2's own sentence** everywhere else
+(`creditPurchases.topUpOptions` — credits-read gated, so a teammate with Credits
+write gets it without Billing access).
+
+T3 **replaced** the soft-cap surface: the "Orders this month" meter, the
+`orderCapNear`/`orderCapOver` banner states, `orderCapState` and
+`ordersThisMonth` on the dashboard payload are gone. The `subscriptionUsage`
+counter stays — it is `getBalance.ordersThisPeriod`, what a plan change compares
+the new allowance against.
+
+**Credit activity** (Billing) lists every movement as a sentence — "October
+credits from your plan", "Order ORD-7K2Q", "cancelled before you accepted it,
+credit returned", "Unused October plan credits — they don't carry over",
+"Bought credits expired (12 months)" — with the balance after it. No admin notes.
+
+### The seller lock
+
+- **Condition:** the projected total is **≤ 0** — the same projection the meter
+  reads (`projectedCredits`), so a store whose monthly refresh brings it back
+  above zero unlocks at its own midnight, not when the sweep runs. One check.
+- **Never locked:** comped and admin-owned stores, a store without a
+  subscription row or a credit account (fail open, like the past-due lock's
+  missing-row fail-safe). Kedaipal admins pass on their own store and in act-as.
+- **Locked** (server-enforced, `assertCreditsAvailable` / the two internal
+  queries for actions): editing the catalogue (products, variants, stock,
+  categories, import), accepting and moving an order on (`updateStatus` /
+  `bulkUpdateStatus` except to cancelled, `advanceToStage`, approving a
+  booking), marking payment received by hand, courier booking (Lalamove,
+  Delyva), despatch labels, the seller's receipt/invoice PDF, the payment
+  reminder, rescheduling, setting a delivery charge, and mockup work.
+- **Always open:** reading everything; cancelling and refunding (booking
+  decline, deposit settlement, courier cancel, clearing a gateway refund
+  issue); pinning; settings; billing, top-up, plan changes, resume; the team;
+  every buyer-side mutation; and **order intake on every channel** — storefront,
+  direct checkout, counter, claim links, bookings, RSVPs keep taking orders,
+  each using a credit, including below zero.
+- **Machine-enforced:** `creditLockCoverage.test.ts` classifies every public
+  write in the order-handling modules as locked or open (with a reason), fails
+  on a catalogue/despatch write without the guard, and fails if order intake or
+  a way back (`creditPurchases`, `invoices`, `subscriptionPayments`,
+  `subscriptions`, `billing`, `retailers`, `team`) ever carries it.
+- **A second, narrower lock** beside the past-due one (which makes a lapsed
+  store fully view-only). Where both apply the view-only one speaks: the banner
+  shows past due first, and the in-place credit note stands down.
+- **The typed refusal:** every locked write throws `ConvexError` with
+  `CreditLockErrorData` (`kind: "credits_locked"`, the sentence, the unlock
+  route, the audience) — so a save the lock refuses mid-edit shows the sentence
+  *with its way back* (`CreditLockCta`), never a dead end. `convexErrorMessage`
+  reads it as the sentence everywhere else.
+
+**The way back** (`creditUnlockRoute`, by subscription status): active → top
+up (or upgrade); trialing → pick a plan; past due → pay the invoice; on hold →
+resume; cancelled → choose a plan. **Who can take it** (`creditLockAudience`):
+the owner; a teammate holding **Credits write** when the way back is a top-up
+(they buy a pack on HitPay's page themselves — T2); every other teammate is
+told to ask the owner. The same sentence (`creditLockMessage`) is the server's
+refusal and every lock surface's copy.
+
+### What the seller sees
+
+- **The banner** (app shell, red, right after past due): "You're out of credits
+  · 3 new orders since you ran out" + the one button. **Low** (amber,
+  dismissable for the month) in the last fifth of the grant.
+- **`CreditLockNote`** in place on the orders inbox, the order page, the
+  products list, new/edit product, import and categories — what's paused, what
+  still works, the one button (or "ask the store owner").
+- **Every locked control greys out with its reason before the tap.** Primary
+  controls say it in the label ("Mark as Packed — out of credits"); the Lalamove
+  and Delyva cards keep their Book button, disabled, with the sentence under it,
+  and never auto-open a quote; the reschedule trigger stays tappable and opens
+  onto the reason (a tooltip is invisible on a phone); the inbox bulk bar keeps
+  Cancel and greys every forward move; the batch label dialog says why it
+  can't print. **Product forms keep their fields editable** — an edit already
+  under way survives, and saves the moment the lock lifts — with Save/Publish
+  disabled and the reason beside it; the variant editor's stock Adjust greys
+  out too (it is an immediate write). The same wiring covers the past-due
+  view-only lock and a view-only teammate, which several of these controls
+  never had.
+- **The cancel dialog** says what happens to *this* order's credit before the
+  tap (`creditLock.cancelOutlook`): it comes back (with how many more this
+  month), or it stays used because the order was accepted or the month's 10
+  are spent.
+- **The plan cards** state each plan's allowance, and what the choice does to
+  the balance before confirm: a trial converting ("your trial has used 140 of
+  its 200 orders — Starter includes 100 a month, you'd start with 100"), a
+  lapsed store paying (the month's credits land on payment, less anything
+  owed), an upgrade ("100 more land this month as soon as it's paid") and a
+  downgrade ("Starter includes 100 orders a month, from 1 Nov. You've had 140
+  so far this month"). "Credited" is no longer a plan-change word — unused
+  paid time "carries over as extra days".
+
+### The notices
+
+- **When:** `applyEntry` schedules `creditNotices.evaluate` five minutes after
+  the balance crosses a line (≤ 10, ≤ 0, back above 0); the monthly roll
+  schedules one for a store still at or below zero. The evaluator reads the
+  balance **when it runs**, so a burst from 12 to −3 is one "you're out", never
+  "10 left" then "out".
+- **Once:** `creditAccounts.notices` (`{periodKey, sent}`) — `low` once a
+  period, `locked` once per lock (the marker carries across the 1st, so a lock
+  that spans it gets `still_locked`, not a second `locked`), `unlocked` clears
+  it.
+- **What:** `low` (10 orders left — never for comped stores or a custom
+  allowance), `locked`, `still_locked` (a refresh left the store at or below
+  zero — says how many orders short, or "at 0"), `unlocked`, and `expiring`
+  (a bought lot expires within 14 days — once per lot via
+  `creditLots.expiryNoticeAt`, a daily 00:15 MYT sweep, one email per store).
+- **How:** **email always**, to `notifyEmail`, in the seller's language — not
+  subject to order-alert settings, because a lock must reach them; a top-up
+  notice's button opens the pack picker (`topup=1`). **WhatsApp** utility
+  templates through `makeGuardedSender(…, "utility_template")` once Meta has
+  approved them and the seller has an alert number — the louder second tap.
+  Every lock notice says what's paused and what still works, and names the one
+  way back; the upgrade line only for an ordinary Starter store.
+- **GA4:** `credits_low_nudge_sent`, `credits_seller_locked`,
+  `credits_seller_unlocked` (server-side, like `subscription_paid`).
+
+### Operator notes (T3)
+
+- **Env vars (optional, after Meta approval):** `WHATSAPP_CREDITS_LOW_TEMPLATE`,
+  `WHATSAPP_CREDITS_LOCKED_TEMPLATE`, `WHATSAPP_CREDITS_UNLOCKED_TEMPLATE` —
+  the approved template names. Absent ⇒ email only, nothing breaks.
+- **Meta template approvals:** the three utility templates (EN + BM),
+  registered by Zaki — list them under "Meta template approvals" in the
+  release PR.
+- **Crons:** new "credit expiry notices", daily 16:15 UTC (00:15 MYT).
+- **Schema:** nothing new — T1 pre-declared `creditAccounts.notices` and
+  `creditLots.expiryNoticeAt`.
+- **Behaviour change on release:** stores at or below zero lock the moment it
+  deploys; the backfill opens every account with its full grant, so nobody
+  starts locked.

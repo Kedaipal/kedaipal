@@ -32,6 +32,7 @@ import {
 	type MutationCtx,
 	query,
 } from "./_generated/server";
+import { billingPageUrl } from "./lib/billingUrl";
 import {
 	requireAdmin,
 	requireRetailerAccess,
@@ -72,11 +73,6 @@ import { HOLD_LABEL } from "./lib/seasonalHold";
 /** How long an unfinished authorisation session is offered for "resume" before
  * a new one is minted. */
 const SETUP_RESUME_WINDOW_MS = 24 * 60 * 60 * 1000;
-
-function billingPageUrl(extra?: string): string {
-	const base = `${process.env.SITE_URL ?? "https://kedaipal.com"}/app/settings?tab=billing`;
-	return extra ? `${base}&${extra}` : base;
-}
 
 // ---------------------------------------------------------------------------
 // Capability surface — what the billing tab may offer this seller

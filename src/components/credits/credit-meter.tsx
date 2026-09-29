@@ -4,9 +4,9 @@ import { Link } from "@tanstack/react-router";
 import type { FunctionReturnType } from "convex/server";
 import { Award, Gauge } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
-import { topUpBlock } from "../../../convex/lib/credits";
+import { TOP_UP_VIEW_ONLY_MESSAGE } from "../../../convex/lib/creditPurchases";
 import { useCreditLockFor } from "../../hooks/useCreditLock";
-import { usePermission } from "../../hooks/usePermission";
+import { TOP_UP_SEARCH } from "../../lib/credit-top-up";
 import {
 	type CreditTone,
 	creditTone,
@@ -14,6 +14,7 @@ import {
 	ordersBalanceLabel,
 } from "../../lib/credits-ui";
 import { formatShortDate } from "../../lib/format";
+import { NeedsAccessNote } from "../app/owner-only-note";
 import { Button } from "../ui/button";
 import { Skeleton } from "../ui/skeleton";
 
@@ -54,10 +55,11 @@ export function CreditMeter({
 		? { retailerId: actingAsAdmin ? retailer._id : undefined }
 		: "skip";
 	const balance = useQuery(convexQuery(api.credits.getBalance, storeArgs)).data;
-	const gateway = useQuery(
-		convexQuery(api.subscriptionPayments.billingGatewayAvailable, storeArgs),
+	// T2's own answer to "can this reader buy a pack?" — credits-read gated, so
+	// a teammate with Credits write gets it without Billing access.
+	const topUp = useQuery(
+		convexQuery(api.creditPurchases.topUpOptions, storeArgs),
 	).data;
-	const { canWrite: canBuy } = usePermission("credits");
 	const lock = useCreditLockFor(retailer);
 
 	if (balance === undefined)
@@ -86,23 +88,15 @@ export function CreditMeter({
 			? balance.nextExpiry
 			: null;
 
-	// Top-up (the pack picker is Credits T2): hidden where packs aren't sold,
-	// disabled WITH the reason everywhere else it can't be used.
-	const block = topUpBlock(sub?.status ?? null, comped);
-	const topUpReason = (() => {
-		if (block === "trialing")
-			return "Pick a plan first — top-ups are for subscribed stores.";
-		if (block === "past_due")
-			return "Pay your open invoice first — this month's credits land with it.";
-		if (block === "on_hold") return "Resume your plan first.";
-		if (block === "cancelled") return "Choose a plan first.";
-		if (actingAsAdmin)
-			return "Billing is view-only while you're acting as a store.";
-		if (!canBuy)
-			return "Ask the store owner for edit access to Credits to buy packs.";
-		return null;
-	})();
-	const showTopUp = gateway?.payNow === true;
+	// Top-up opens T2's pack picker: hidden where packs aren't sold, disabled
+	// WITH the reason everywhere else — T2's own sentences (`topUpOptions`), so
+	// the meter and the picker can never disagree about who may buy.
+	const showTopUp = topUp?.available === true;
+	const topUpReason =
+		topUp?.refusalMessage ??
+		(topUp?.viewOnly === "acting_as_admin" ? TOP_UP_VIEW_ONLY_MESSAGE : null);
+	const topUpNoWrite = topUp?.viewOnly === "no_write";
+	const canTopUp = topUpReason === null && !topUpNoWrite;
 
 	const stateLine = (() => {
 		if (lock.locked)
@@ -165,7 +159,7 @@ export function CreditMeter({
 			: null;
 
 	if (variant === "card") {
-		const cta = lock.locked && !lock.isMember ? lockCta(lock.route) : null;
+		const cta = lock.locked && lock.canAct ? lockCta(lock.route) : null;
 		return (
 			<section className="flex flex-col gap-3 rounded-2xl border border-input bg-background p-5">
 				{header}
@@ -251,14 +245,13 @@ export function CreditMeter({
 			{showTopUp ? (
 				<div className="flex flex-col gap-1.5">
 					<Button
-						asChild={topUpReason === null}
+						asChild={canTopUp}
 						size="lg"
 						className="h-11 w-full px-4 sm:h-9 sm:w-fit"
-						disabled={topUpReason !== null}
-						title={topUpReason ?? undefined}
+						disabled={!canTopUp}
 					>
-						{topUpReason === null ? (
-							<Link to="/app/settings" search={{ tab: "billing", topup: 1 }}>
+						{canTopUp ? (
+							<Link to="/app/settings" search={TOP_UP_SEARCH}>
 								Top up credits
 							</Link>
 						) : (
@@ -267,6 +260,8 @@ export function CreditMeter({
 					</Button>
 					{topUpReason ? (
 						<p className="text-xs text-muted-foreground">{topUpReason}</p>
+					) : topUpNoWrite ? (
+						<NeedsAccessNote area="credits" level="write" />
 					) : null}
 				</div>
 			) : null}

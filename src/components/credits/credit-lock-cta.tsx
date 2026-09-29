@@ -8,11 +8,11 @@ import { Button } from "../ui/button";
  * The way back, next to a save the credit lock refused (Credits T3). The
  * refusal is typed, so a form whose save couldn't land offers "Top up" (or
  * "Pick a plan", …) right under the sentence instead of ending in a dead end.
- * Renders nothing for any other error, or for a teammate — their sentence
- * already says to ask the owner, and billing isn't theirs.
+ * Renders nothing for any other error, or for a teammate who can't take the
+ * way back — their sentence already says to ask the owner.
  */
 export function CreditLockCta({ lock }: { lock: CreditLockErrorData | null }) {
-	if (!lock || lock.audience !== "owner") return null;
+	if (!lock || lock.audience === "member") return null;
 	const cta = lockCta(lock.unlockRoute);
 	return (
 		<Button asChild size="lg" className="mt-2 h-11 w-full px-4 sm:h-9 sm:w-fit">

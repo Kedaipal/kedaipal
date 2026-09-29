@@ -48,11 +48,11 @@ export function CreditLockNote({
 					</p>
 					<p className="text-muted-foreground">
 						{SCOPE_LINE[scope]}
-						{lock.isMember ? " Ask the store owner to add credits." : ""}
+						{lock.canAct ? "" : " Ask the store owner to add credits."}
 					</p>
 				</div>
 			</div>
-			{lock.isMember ? null : (
+			{!lock.canAct ? null : (
 				<Button asChild size="lg" className="h-11 w-full px-4 sm:h-9 sm:w-auto">
 					<Link to="/app/settings" search={cta.search}>
 						{cta.label}

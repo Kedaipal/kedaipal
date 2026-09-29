@@ -27,6 +27,7 @@ import {
 	type QueryCtx,
 	query,
 } from "./_generated/server";
+import { billingPageUrl } from "./lib/billingUrl";
 import { addPurchasedCredits } from "./credits";
 import {
 	type RetailerAccess,
@@ -529,7 +530,7 @@ export const createTopUp = action({
 			storeName: opened.storeName,
 			amountSen: opened.amountMinor,
 			currency: opened.currency,
-			redirectUrl: `${process.env.SITE_URL ?? "https://kedaipal.com"}/app/settings?tab=billing&topup=return`,
+			redirectUrl: billingPageUrl("topup=return"),
 			webhookUrl: siteUrl ? `${siteUrl}/webhook/hitpay` : "",
 			customerEmail: opened.customerEmail,
 		});

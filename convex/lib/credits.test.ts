@@ -4,10 +4,13 @@
 import { describe, expect, test } from "vitest";
 import {
 	cancelRefundDecision,
-	type CreditRegimeInputs,
+	creditLockAudience,
+	creditLockMessage,
 	creditRegime,
+	type CreditRegimeInputs,
 	creditsExhausted,
 	debitBucket,
+	dueCreditNotice,
 	monthlyCreditGrant,
 	refreshedPlanBalance,
 	sellerRefundsLeft,
@@ -233,5 +236,60 @@ describe("topUpBlock — credits top up a live subscription, never replace one",
 	test("trialing, past_due, on_hold and cancelled say why not", () => {
 		for (const status of ["trialing", "past_due", "on_hold", "cancelled"] as const)
 			expect(topUpBlock(status, false)).toBe(status);
+	});
+});
+
+describe("the lock sentence speaks to what the reader can do (Credits T3 × T2)", () => {
+	test("the owner gets every way back; a teammate who can only ask, the owner", () => {
+		expect(
+			creditLockAudience({ isMember: false, canBuyCredits: false, route: "topup" }),
+		).toBe("owner");
+		expect(
+			creditLockAudience({ isMember: true, canBuyCredits: false, route: "topup" }),
+		).toBe("member");
+		expect(creditLockMessage("topup", "member")).toMatch(
+			/^This store is out of credits.*Ask the store owner to add credits/,
+		);
+	});
+
+	test("a teammate who may buy packs tops up — but billing ways back stay the owner's", () => {
+		expect(
+			creditLockAudience({ isMember: true, canBuyCredits: true, route: "topup" }),
+		).toBe("member_topup");
+		expect(creditLockMessage("topup", "member_topup")).toMatch(
+			/^This store is out of credits.*Top up in Settings → Billing to carry on/,
+		);
+		for (const route of ["pick_plan", "pay_invoice", "resume", "subscribe"] as const)
+			expect(
+				creditLockAudience({ isMember: true, canBuyCredits: true, route }),
+			).toBe("member");
+	});
+
+	test("every version says what's paused and what still works", () => {
+		for (const audience of ["owner", "member_topup", "member"] as const) {
+			const m = creditLockMessage("topup", audience);
+			expect(m).toMatch(/accepting and updating orders and editing products are paused/);
+			expect(m).toMatch(/New orders keep coming in, and you can still view, cancel and refund them\./);
+		}
+	});
+});
+
+describe("dueCreditNotice — once per threshold, bursts collapse", () => {
+	const base = { sent: [] as string[], refreshedWhileLocked: false, customGrant: false };
+	test("12 → -3 in one burst is ONE lock notice, not low then locked", () => {
+		expect(dueCreditNotice({ ...base, total: -3 })).toBe("locked");
+	});
+	test("low fires once; a custom allowance is never nudged", () => {
+		expect(dueCreditNotice({ ...base, total: 10 })).toBe("low");
+		expect(dueCreditNotice({ ...base, total: 9, sent: ["low"] })).toBeNull();
+		expect(dueCreditNotice({ ...base, total: 5, customGrant: true })).toBeNull();
+	});
+	test("a refresh that leaves the store at or below zero says so once; back above zero unlocks", () => {
+		const locked = { ...base, sent: ["locked"] };
+		expect(dueCreditNotice({ ...locked, total: 0, refreshedWhileLocked: true })).toBe("still_locked");
+		expect(
+			dueCreditNotice({ ...locked, total: -4, refreshedWhileLocked: true, sent: ["locked", "still_locked"] }),
+		).toBeNull();
+		expect(dueCreditNotice({ ...locked, total: 1 })).toBe("unlocked");
 	});
 });

@@ -242,17 +242,41 @@ const LOCK_STILL_OPEN =
 	"New orders keep coming in, and you can still view, cancel and refund them.";
 
 /**
+ * Who is reading a lock sentence, by what they can do about it: the OWNER
+ * (every way back), a teammate who may buy packs (`member_topup` — Credits
+ * write, T2, and a top-up is the way back), or a teammate who can only ask.
+ */
+export type CreditLockAudience = "owner" | "member_topup" | "member";
+
+export function creditLockAudience(args: {
+	isMember: boolean;
+	/** Holds Credits WRITE — may buy a pack on HitPay's page (T2). */
+	canBuyCredits: boolean;
+	route: CreditUnlockRoute;
+}): CreditLockAudience {
+	if (!args.isMember) return "owner";
+	// Paying an invoice, picking or resuming a plan are billing writes —
+	// owner-only — so a pack is the only way back a teammate can take.
+	return args.canBuyCredits && args.route === "topup"
+		? "member_topup"
+		: "member";
+}
+
+/**
  * The ONE sentence a locked seller reads — the server's refusal and the
- * dashboard's lock banner both come from here, so they can't disagree. It says
- * what is paused, what still works, and the way out. A teammate can't top up,
- * so they're pointed at the owner.
+ * dashboard's lock surfaces both come from here, so they can't disagree. It
+ * says what is paused, what still works, and the way out THIS reader can take:
+ * a teammate who may buy packs is sent to top up; one who can't is pointed at
+ * the owner.
  */
 export function creditLockMessage(
 	route: CreditUnlockRoute,
-	audience: "owner" | "member",
+	audience: CreditLockAudience,
 ): string {
 	if (audience === "member")
 		return `This store is out of credits, so ${LOCK_PAUSED}. Ask the store owner to add credits. ${LOCK_STILL_OPEN}`;
+	if (audience === "member_topup")
+		return `This store is out of credits, so ${LOCK_PAUSED}. Top up in Settings → Billing to carry on. ${LOCK_STILL_OPEN}`;
 	switch (route) {
 		case "pick_plan":
 			return `Your trial's orders are used up, so ${LOCK_PAUSED}. Pick a plan in Settings → Billing to carry on. ${LOCK_STILL_OPEN}`;
@@ -272,18 +296,18 @@ export function creditLockMessage(
  * the dashboard can put the one way back next to the sentence instead of just
  * printing it — a product save that can't land offers "Top up" in place, never
  * a dead end. `message` is `creditLockMessage`; `audience` says whether the
- * reader can act on `unlockRoute` (a teammate can't — they ask the owner).
+ * reader can act on `unlockRoute` (`member` can't — they ask the owner).
  */
 export type CreditLockErrorData = {
 	kind: "credits_locked";
 	message: string;
 	unlockRoute: CreditUnlockRoute;
-	audience: "owner" | "member";
+	audience: CreditLockAudience;
 };
 
 export function creditLockErrorData(
 	route: CreditUnlockRoute,
-	audience: "owner" | "member",
+	audience: CreditLockAudience,
 ): CreditLockErrorData {
 	return {
 		kind: "credits_locked",

@@ -28,11 +28,17 @@ vi.mock("@tanstack/react-router", () => ({
 }));
 const state = {
 	role: "owner" as "owner" | "member",
+	/** Credits write — a teammate holding it may buy packs (T2). */
+	canBuy: true,
 	retailer: null as unknown,
 };
 vi.mock("../../hooks/usePermission", () => ({
 	useStoreRole: () => state.role,
-	usePermission: () => ({ canRead: true, canWrite: true, role: state.role }),
+	usePermission: () => ({
+		canRead: true,
+		canWrite: state.role === "owner" || state.canBuy,
+		role: state.role,
+	}),
 }));
 vi.mock("../../hooks/useDashboardRetailer", () => ({
 	useDashboardRetailer: () => state.retailer,
@@ -40,6 +46,7 @@ vi.mock("../../hooks/useDashboardRetailer", () => ({
 
 afterEach(() => {
 	state.role = "owner";
+	state.canBuy = true;
 	state.retailer = null;
 	vi.mocked(useQuery).mockImplementation((() => ({
 		data: false,
@@ -113,14 +120,39 @@ describe("CreditLockNote", () => {
 		expect(screen.queryByRole("link", { name: "Top up" })).toBeNull();
 	});
 
-	it("a teammate is told who to ask, with no button that isn't theirs", () => {
+	it("a teammate who can't buy is told who to ask, with no button that isn't theirs", () => {
 		state.role = "member";
+		state.canBuy = false;
 		state.retailer = store({ locked: true });
 		render(<CreditLockNote scope="orders" />);
 		expect(
 			screen.getByText(/Ask the store owner to add credits\./),
 		).toBeTruthy();
 		expect(screen.queryByRole("link")).toBeNull();
+	});
+
+	it("a teammate holding Credits write tops up themselves (T2)", () => {
+		state.role = "member";
+		state.canBuy = true;
+		state.retailer = store({ locked: true });
+		render(<CreditLockNote scope="orders" />);
+		expect(screen.getByRole("link", { name: "Top up" })).toBeTruthy();
+		expect(screen.queryByText(/Ask the store owner/)).toBeNull();
+	});
+
+	it("…but a way back that's billing (picking a plan) stays the owner's", () => {
+		state.role = "member";
+		state.canBuy = true;
+		state.retailer = store({
+			locked: true,
+			route: "pick_plan",
+			status: "trialing",
+		});
+		render(<CreditLockNote scope="orders" />);
+		expect(screen.queryByRole("link")).toBeNull();
+		expect(
+			screen.getByText(/Ask the store owner to add credits\./),
+		).toBeTruthy();
 	});
 
 	it("stands down while the whole store is view-only — that note says more", () => {

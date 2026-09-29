@@ -31,6 +31,7 @@ import {
 import {
 	type CreditUnlockRoute,
 	cancelRefundDecision,
+	creditLockAudience,
 	creditLockErrorData,
 	creditLockExempt,
 	creditUnlockRoute,
@@ -134,10 +135,23 @@ export async function assertCreditsAvailable(
 	const lock = await resolveCreditLock(ctx, retailer, Date.now());
 	if (!lock.locked) return;
 	const access = await tryRetailerAccess(ctx, retailerId, { anyMember: true });
+	const isMember = access?.role === "member";
+	// A teammate holding Credits write may buy a pack (T2), so for them a
+	// top-up is a way back they can take themselves.
+	const canBuyCredits =
+		!isMember ||
+		(await tryRetailerAccess(ctx, retailerId, {
+			area: "credits",
+			level: "write",
+		})) !== null;
 	throw new ConvexError(
 		creditLockErrorData(
 			lock.unlockRoute,
-			access?.role === "member" ? "member" : "owner",
+			creditLockAudience({
+				isMember,
+				canBuyCredits,
+				route: lock.unlockRoute,
+			}),
 		),
 	);
 }

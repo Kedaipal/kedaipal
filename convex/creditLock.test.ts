@@ -292,13 +292,30 @@ describe("the seller lock at zero credits", () => {
 			});
 	});
 
-	test("the storefront reads identically at +50 and −50 — buyers never feel a balance", async () => {
+	test("every buyer surface reads identically at +50 and −50 — buyers never feel a balance", async () => {
 		const t = setup();
 		const s = await store(t);
+		// A live order for the tracking page, placed before the balance moves.
+		const order = await storefrontOrder(t, s.retailerId, s.productId);
+		const product = await t.run((ctx) => ctx.db.get(s.productId));
+		const reads = async () => ({
+			store: await t.query(api.retailers.getRetailerBySlug, { slug: s.slug }),
+			products: await t.query(api.products.list, { retailerId: s.retailerId }),
+			product: await t.query(api.products.getPublicBySlug, {
+				retailerId: s.retailerId,
+				slug: product?.slug ?? "",
+			}),
+			categories: await t.query(api.categories.listActivePublic, {
+				retailerId: s.retailerId,
+			}),
+			tracking: await t.query(api.orders.get, { token: order.trackingToken }),
+		});
 		await setBalance(t, s.retailerId, 50);
-		const flush = await t.query(api.retailers.getRetailerBySlug, { slug: s.slug });
+		const flush = await reads();
 		await setBalance(t, s.retailerId, -50);
-		const owed = await t.query(api.retailers.getRetailerBySlug, { slug: s.slug });
+		const owed = await reads();
+		expect(flush.product).not.toBeNull();
+		expect(flush.tracking).not.toBeNull();
 		expect(owed).toEqual(flush);
 		expect(JSON.stringify(owed)).not.toMatch(/credit/i);
 	});
@@ -430,7 +447,7 @@ describe("the seller lock at zero credits", () => {
 		});
 	});
 
-	test("a teammate is told to ask the owner", async () => {
+	test("a teammate who can't buy packs is told to ask the owner", async () => {
 		const t = setup();
 		const s = await store(t);
 		await t.run((ctx) =>
@@ -451,6 +468,44 @@ describe("the seller lock at zero credits", () => {
 				productId: s.productId,
 			}),
 		).rejects.toThrow(/This store is out of credits.*Ask the store owner/);
+	});
+
+	// T2 lets a teammate holding Credits WRITE buy a pack on HitPay's page, so
+	// for them a top-up is a way back they can take — the refusal says so, and
+	// is typed `member_topup` so the dashboard offers the button.
+	test("a teammate holding Credits write is sent to top up, not to the owner", async () => {
+		const t = setup();
+		const s = await store(t);
+		await t.run((ctx) =>
+			ctx.db.insert("retailerMembers", {
+				retailerId: s.retailerId,
+				userId: MEMBER,
+				email: "m@example.com",
+				status: "active",
+				permissions: { products: "write", credits: "write" },
+				invitedBy: OWNER,
+				invitedAt: Date.now(),
+				acceptedAt: Date.now(),
+			}),
+		);
+		await setBalance(t, s.retailerId, 0);
+		const err = await t
+			.withIdentity({ subject: MEMBER })
+			.mutation(api.products.archive, { productId: s.productId })
+			.then(
+				() => null,
+				(e: unknown) => e,
+			);
+		let data: unknown = (err as ConvexError<Value>).data;
+		while (typeof data === "string") data = JSON.parse(data);
+		expect(data).toMatchObject({
+			kind: "credits_locked",
+			audience: "member_topup",
+			unlockRoute: "topup",
+		});
+		expect((data as { message: string }).message).toMatch(
+			/This store is out of credits.*Top up in Settings → Billing/,
+		);
 	});
 });
 

@@ -11,8 +11,10 @@ import {
 	LOW_CREDIT_THRESHOLD,
 } from "../../convex/lib/credits";
 import { SELLER_CANCEL_REFUNDS_PER_PERIOD } from "../../convex/lib/plans";
+import { TOP_UP_SEARCH } from "./credit-top-up";
 
 export {
+	creditLockAudience,
 	creditLockMessage,
 	LOW_CREDIT_THRESHOLD,
 } from "../../convex/lib/credits";
@@ -45,14 +47,15 @@ export function ordersBalanceLabel(total: number): string {
 }
 
 /** The one button a lock surface offers, by what puts credits back. Links to
- * Settings → Billing; `topup: 1` opens the pack picker (Credits T2). */
+ * Settings → Billing; a top-up opens T2's pack picker (`TOP_UP_SEARCH`, the
+ * one spelling of that URL contract). */
 export function lockCta(route: CreditUnlockRoute): {
 	label: string;
 	search: { tab: "billing"; topup?: 1 };
 } {
 	switch (route) {
 		case "topup":
-			return { label: "Top up", search: { tab: "billing", topup: 1 } };
+			return { label: "Top up", search: TOP_UP_SEARCH };
 		case "pick_plan":
 			return { label: "Pick a plan", search: { tab: "billing" } };
 		case "pay_invoice":

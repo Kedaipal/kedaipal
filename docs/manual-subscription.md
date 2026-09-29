@@ -834,6 +834,15 @@ showcases Pro).
 
 ## Order-usage meter + soft-cap nudge (Jul 2026)
 
+> **Superseded by Kedaipal Credits T3 (`z8r3fdf8hy`, Sep 2026).** The
+> "Orders this month" meter, the ≥80% / ≥100% banner nudges, `orderCapState`
+> and `ordersThisMonth` on the retailer payload are **gone** — the credit
+> balance is the meter now, and running out locks the seller's order work
+> instead of nudging (see [`credits.md`](./credits.md#the-meter-the-seller-lock-and-the-notices-t3)).
+> The `subscriptionUsage` counter itself stays: it is the "orders this month"
+> a plan change compares the new allowance against (`getBalance.ordersThisPeriod`).
+> The history below is kept for the record.
+
 The promised "X/100 orders used" surface behind the SOFT `orderCap`:
 
 - **`subscriptionUsage` table** — per-retailer × **MYT calendar month**

@@ -303,12 +303,13 @@ Presentation rules:
   read an enum; the landing teaser stays plan-agnostic (a lighter surface that
   links here).
 - **Order allowances are the credit grants.** One constant (`PLAN_CREDIT_GRANT`)
-  feeds the ledger, the soft-cap meter's denominator (`PLAN_CAPS.orderCap` is
-  derived from it) and the page — as a `{credits}` placeholder in every catalog
-  line, never a literal (`pricing-copy.test.ts` fails on one). Cap numbers stay
-  off the hero price; they live in the tier-card credits line ("{credits}
-  credits a month — 1 per order") and the comparison table's "Credits a month"
-  row, which reads PER MONTH in both toggle positions. The page never shows
+  feeds the ledger, the credit meter and the in-app plan cards' "{credits}
+  credits a month" lines (Credits T3 — `PLAN_CAPS.orderCap` is derived from
+  it) and the page — as a `{credits}` placeholder in every catalog line, never
+  a literal (`pricing-copy.test.ts` fails on one). Cap numbers stay off the
+  hero price; they live in the tier-card credits line ("{credits} credits a
+  month — 1 per order") and the comparison table's "Credits a month" row,
+  which reads PER MONTH in both toggle positions. The page never shows
   "Unlimited".
 - Each tier card carries **"Flat price. We never take a cut of your sales."** — the
   value posture vs the metered/commission competitors.
