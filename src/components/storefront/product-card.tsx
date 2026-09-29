@@ -1,9 +1,11 @@
 import { Link } from "@tanstack/react-router";
 import type { FunctionReturnType } from "convex/server";
 import {
+	Bell,
 	CalendarClock,
 	CalendarRange,
 	ImagePlus,
+	Minus,
 	Plus,
 	SlidersHorizontal,
 } from "lucide-react";
@@ -23,7 +25,7 @@ export type StorefrontProduct = FunctionReturnType<
 interface ProductCardProps {
 	product: StorefrontProduct;
 	/**
-	 * Store slug — the card's photo, name and "Choose" all resolve to the
+	 * Store slug — the card's photo, name and "Options" all resolve to the
 	 * product's own page, `/{storeSlug}/p/{productSlug}`. Real `<Link>`s, not
 	 * click handlers: an `<a href>` is the only thing a crawler can follow (the
 	 * page ships canonical + Product JSON-LD, which is inert without one), and
@@ -33,24 +35,28 @@ interface ProductCardProps {
 	 */
 	storeSlug: string;
 	onQuickAdd: (product: StorefrontProduct) => void;
-	/** Units of this product already in the cart (custom lines excluded). */
+	/** The stepper's "−" — one unit off this product's single cart line
+	 * (`useCart.quickRemoveProduct`). */
+	onQuickRemove: (product: StorefrontProduct) => void;
+	/** Units of this product already in the cart (custom lines excluded) —
+	 * `> 0` swaps the Add pill for the −/n/+ stepper. */
 	cartQuantity: number;
-	/**
-	 * Running money total (minor units) of those in-cart units. 0 when every
-	 * in-cart line is quote-priced, in which case only the count is shown.
-	 */
-	cartSubtotal: number;
 	/** Above-the-fold hint for early grid rows — the first product photo a
 	 * buyer sees is a common LCP element. See `product-grid.tsx`. */
 	priority?: boolean;
 }
 
+/** One full-width pill CTA per card, every state (z8r3fdegb5 — Arif's 12 Sep
+ * spec supersedes the price+round-button row: price sits on its own line so
+ * 4–5-digit prices never clip, and the CTA keeps one size in every state). */
+const CTA_CLASS = "h-9 w-full rounded-full text-[13px] font-semibold lg:h-10";
+
 export function ProductCard({
 	product,
 	storeSlug,
 	onQuickAdd,
+	onQuickRemove,
 	cartQuantity,
-	cartSubtotal,
 	priority = false,
 }: ProductCardProps) {
 	// Off-Season Hold (z8r3fday24): every quick-add flips together.
@@ -66,7 +72,12 @@ export function ProductCard({
 	const weekendSuffix = isBooking ? weekendRateSuffix(product.booking) : null;
 	const hasOptions = (product.options?.length ?? 0) > 0;
 	const hasCustom = product.variants.some((v) => v.isCustom);
-	const needsDetail = hasOptions || hasCustom || isBooking;
+	// An EVENT always routes to its page too (`z8r3fdhh45`): an RSVP is checked
+	// out standalone, so there is no cart line for a quick-add to make — and
+	// the page carries the terms (fixed date, venue, seats left) a guest has to
+	// read before committing.
+	const isEvent = product.event !== undefined;
+	const needsDetail = hasOptions || hasCustom || isBooking || isEvent;
 	// A product "can run out" if any of its variants hard-blocks (flags are now
 	// resolved per-variant server-side). Only then does the low-stock badge apply.
 	const canRunOut = product.variants.some(
@@ -95,7 +106,7 @@ export function ProductCard({
 	// Stock can no longer reach the minimum (all-hard-block, combined on-hand
 	// below it) → the standard line is unavailable-with-reason, never a stepper
 	// trap the buyer discovers at checkout. The custom line (its own CTA on the
-	// product page) is unaffected, so cards with one keep their Choose button live.
+	// product page) is unaffected, so cards with one keep their Options button live.
 	const minUnreachable = minQuantityUnreachable(minQuantity, product.variants);
 	// Event RSVP (`z8r3fdff9u`). The date IS the product's identity here — a
 	// guest scanning the grid decides on "Thu 25 Sep" before anything else — so
@@ -104,10 +115,31 @@ export function ProductCard({
 	const seatsLeft = product.eventSeatsLeft;
 	const eventFull =
 		event !== undefined && seatsLeft !== undefined && seatsLeft <= 0;
-	// A live custom line keeps Choose usable (its own CTA on the page is exempt
+	// A live custom line keeps Options usable (its own CTA on the page is exempt
 	// from the minimum) even when the standard variants can't reach it.
-	const chooseDisabled =
-		outOfStock || eventFull || (minUnreachable && !hasCustom);
+	const chooseDisabled = eventFull || (minUnreachable && !hasCustom);
+	// The stepper's "+" stops at what's actually addable: remaining hard-block
+	// stock, and remaining event seats net of what's already in the cart —
+	// the quick-add helper clamps the same way, so an enabled "+" always adds.
+	const stockCap =
+		canRunOut && !isBooking ? product.totalOnHand : Number.POSITIVE_INFINITY;
+	const seatCap =
+		event !== undefined && seatsLeft !== undefined
+			? seatsLeft
+			: Number.POSITIVE_INFINITY;
+	const atCap = cartQuantity >= Math.min(stockCap, seatCap);
+	// The stepper's "−" drops the WHOLE line when one unit off would fall below
+	// the product's minimum (`useCart.quickRemoveProduct`). On a min-order
+	// product that is the DEFAULT state, not an edge case — quick-add opens the
+	// line AT the minimum — so the control has to say what it does. A minus
+	// glyph labelled "Remove one" that silently clears four units is the button
+	// lying about its own consequence, and the card's own "Min N" chip only
+	// states the rule, not what this tap will do about it.
+	const stepDownClearsLine =
+		minQuantity >= 2 && cartQuantity <= Math.max(1, minQuantity);
+	const stepDownLabel = stepDownClearsLine
+		? `Remove ${product.name} from cart — minimum order is ${minQuantity}`
+		: `Remove one ${product.name}`;
 	// Does the bottom-left overlay row render at all? Drives the no-photo
 	// placeholder's clearance — see the tile below.
 	const hasBottomChips = event !== undefined || hasCustom || minQuantity >= 2;
@@ -119,11 +151,12 @@ export function ProductCard({
 	return (
 		// `h-full` so the card FILLS its track. Grid cells and the popular
 		// shelf's flex row both stretch, but without this the card was only as
-		// tall as its own content — so a two-line name, or the "N in cart" line
-		// appearing on some cards and not others, left a row of ragged tiles with
-		// their Add buttons at different heights. The body is already `flex-1`
+		// tall as its own content — so a two-line name left a row of ragged tiles
+		// with their CTAs at different heights. The body is already `flex-1`
 		// and the CTAs `mt-auto`, so filling is all that was missing.
-		<div className="group flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-card transition-shadow duration-200 hover:shadow-md">
+		// The photo is inset (`p-1.5` + its own radius) per the polish pass —
+		// the card reads as a tile holding a photo, not a photo with a caption.
+		<div className="group flex h-full flex-col overflow-hidden rounded-[18px] border border-border bg-card p-1.5 transition-shadow duration-200 hover:shadow-md">
 			<Link
 				{...pageLink}
 				// The photo is decorative here — the name link right below is the
@@ -131,7 +164,7 @@ export function ProductCard({
 				// destination twice.
 				tabIndex={-1}
 				aria-hidden
-				className="relative block aspect-square w-full overflow-hidden bg-muted text-left"
+				className="relative block aspect-square w-full overflow-hidden rounded-[13px] bg-muted text-left"
 			>
 				{/* The bottom-left chip row sits ON the image tile. With no photo the
 				    tile is the name placeholder instead, and the chips were painting
@@ -143,7 +176,9 @@ export function ProductCard({
 						src={firstImage}
 						alt={product.name}
 						aspect="absolute inset-0"
-						className="transition-transform duration-300 group-hover:scale-105"
+						className={`transition-transform duration-300 group-hover:scale-105 ${
+							outOfStock ? "grayscale opacity-60" : ""
+						}`}
 						priority={priority}
 						// Tracks GRID_CLASS in product-grid.tsx (2 / sm:3 / lg:4).
 						// These tiles are the bulk of a store home's payload — a
@@ -171,21 +206,21 @@ export function ProductCard({
 					// Outranks "Out of stock": the seats are the binding constraint on
 					// an event, and a guest reading "out of stock" would go looking for
 					// a restock that isn't what's happening.
-					<span className="absolute left-2 top-2 rounded-full bg-background/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground backdrop-blur-sm">
+					<span className="absolute left-2 top-2 rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
 						Fully booked
 					</span>
 				) : outOfStock ? (
-					<span className="absolute left-2 top-2 rounded-full bg-background/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground backdrop-blur-sm">
+					<span className="absolute left-2 top-2 rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
 						Out of stock
 					</span>
 				) : minUnreachable ? (
 					// Reads with the "Min N" chip below: stock exists but can't reach
 					// the minimum, so the standard line can't be ordered right now.
-					<span className="absolute left-2 top-2 rounded-full bg-background/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground backdrop-blur-sm">
+					<span className="absolute left-2 top-2 rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
 						Not enough stock
 					</span>
 				) : lowStock ? (
-					<span className="absolute left-2 top-2 rounded-full bg-accent/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent-foreground backdrop-blur-sm">
+					<span className="absolute left-2 top-2 rounded-full bg-accent px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent-foreground shadow-sm">
 						Low stock
 					</span>
 				) : null}
@@ -223,7 +258,7 @@ export function ProductCard({
 				) : null}
 			</Link>
 
-			<div className="flex flex-1 flex-col gap-2 p-3">
+			<div className="flex flex-1 flex-col gap-1 p-2">
 				{/* Fixed 2-line name zone: 1-line names reserve the second line so the
 				    price row sits at the same height on every card in a grid row. */}
 				<Link
@@ -232,7 +267,9 @@ export function ProductCard({
 				>
 					{product.name}
 				</Link>
-				<p className="text-base font-bold leading-tight tabular-nums">
+				{/* Price on its own line, never wrapping mid-figure — RM 9,999.99
+				    stays whole (Arif, 12 Sep). */}
+				<p className="overflow-hidden whitespace-nowrap text-[15px] font-bold leading-tight tabular-nums">
 					{allQuote ? (
 						<span className="text-sm font-semibold">Price on quote</span>
 					) : (
@@ -255,75 +292,126 @@ export function ProductCard({
 					)}
 				</p>
 				{weekendSuffix && product.booking?.weekendPrice !== undefined ? (
-					<p className="text-xs font-medium text-muted-foreground tabular-nums">
+					<p className="overflow-hidden whitespace-nowrap text-xs font-medium text-muted-foreground tabular-nums">
 						{formatPrice(product.booking.weekendPrice, product.currency)}
 						{weekendSuffix}
 					</p>
 				) : null}
-				{/* Running cart line — shows what the buyer has already committed for
-				    this product (updates as they add more). Only rendered once it's in
-				    the cart, so un-added tiles stay clean. The money total is dropped
-				    when everything in cart is quote-priced (subtotal 0). */}
-				{cartQuantity > 0 ? (
-					<p className="text-xs font-semibold text-accent tabular-nums">
-						{cartQuantity} in cart
-						{cartSubtotal > 0
-							? ` · ${formatPrice(cartSubtotal, product.currency)}`
-							: ""}
-					</p>
-				) : null}
-				{needsDetail ? (
-					// Disabled-with-reason wins over a link that goes nowhere useful:
-					// an unorderable product renders the inert button (an `<a>` can't
-					// be disabled), an orderable one renders the real link so the CTA
-					// is as copyable as the photo and the name. Booking listings say
-					// what the page does — dates, not options.
-					chooseDisabled ? (
+				<div className="mt-auto pt-1.5">
+					{paused ? (
+						<Button type="button" disabled size="sm" className={CTA_CLASS}>
+							{ORDERING_PAUSED_CTA}
+						</Button>
+					) : outOfStock ? (
+						// The design's "Notify" — a no-op for now (deliberate: ClickUp
+						// z8r3fdegb5 ships the affordance ahead of the feature), so it
+						// stays disabled with the promise attached. `title` only reaches
+						// a mouse, so the accessible name carries it too — otherwise a
+						// screen-reader user hears "Notify, dimmed" and is told nothing.
+						<span title="Coming soon" className="block">
+							<Button
+								type="button"
+								disabled
+								size="sm"
+								variant="outline"
+								aria-label={`Notify me when ${product.name} is back in stock — coming soon`}
+								className={CTA_CLASS}
+							>
+								<Bell className="size-4" aria-hidden />
+								Notify
+							</Button>
+						</span>
+					) : needsDetail ? (
+						// Disabled-with-reason wins over a link that goes nowhere useful:
+						// an unorderable product renders the inert button (an `<a>` can't
+						// be disabled), an orderable one renders the real link so the CTA
+						// is as copyable as the photo and the name. Booking listings say
+						// what the page does — dates, not options.
+						chooseDisabled ? (
+							<Button
+								type="button"
+								disabled
+								size="sm"
+								variant="outline"
+								className={CTA_CLASS}
+							>
+								{isBooking ? (
+									<CalendarRange className="size-4" aria-hidden />
+								) : isEvent ? (
+									<CalendarClock className="size-4" aria-hidden />
+								) : (
+									<SlidersHorizontal className="size-4" aria-hidden />
+								)}
+								{isBooking ? "Book" : isEvent ? "RSVP" : "Options"}
+							</Button>
+						) : (
+							<Button
+								asChild
+								size="sm"
+								variant="outline"
+								className={CTA_CLASS}
+							>
+								<Link {...pageLink}>
+									{isBooking ? (
+										<CalendarRange className="size-4" aria-hidden />
+									) : isEvent ? (
+										<CalendarClock className="size-4" aria-hidden />
+									) : (
+										<SlidersHorizontal className="size-4" aria-hidden />
+									)}
+									{isBooking ? "Book" : isEvent ? "RSVP" : "Options"}
+								</Link>
+							</Button>
+						)
+					) : cartQuantity > 0 ? (
+						// In the cart → the CTA becomes the quantity itself (replaces
+						// the old "N in cart · RM" line). Full-width mint stepper,
+						// count tabular so 100 sits as steady as 1.
+						<div
+							className={`flex items-center justify-between bg-accent text-accent-foreground ${CTA_CLASS}`}
+						>
+							<button
+								type="button"
+								onClick={() => onQuickRemove(product)}
+								aria-label={stepDownLabel}
+								title={stepDownClearsLine ? stepDownLabel : undefined}
+								className="flex h-full w-11 items-center justify-center rounded-full transition-colors hover:bg-accent-foreground/10"
+							>
+								<Minus className="size-4" aria-hidden />
+							</button>
+							<span
+								aria-live="polite"
+								className="min-w-6 text-center text-sm font-bold tabular-nums"
+							>
+								{cartQuantity}
+							</span>
+							<button
+								type="button"
+								onClick={() => onQuickAdd(product)}
+								disabled={atCap}
+								aria-label={`Add one more ${product.name}`}
+								title={atCap ? "No more stock" : undefined}
+								className="flex h-full w-11 items-center justify-center rounded-full transition-colors hover:bg-accent-foreground/10 disabled:opacity-40"
+							>
+								<Plus className="size-4" aria-hidden />
+							</button>
+						</div>
+					) : (
+						// An event never reaches this branch (`z8r3fdhh45`) — it is
+						// `needsDetail`, so it routes to its page and from there to the
+						// standalone RSVP checkout. No seat gate is needed here.
 						<Button
 							type="button"
-							disabled
+							onClick={() => onQuickAdd(product)}
+							disabled={minUnreachable}
 							size="sm"
-							variant="outline"
-							className="mt-auto h-11 w-full rounded-xl"
+							className={CTA_CLASS}
 						>
-							{isBooking ? (
-								<CalendarRange className="size-4" />
-							) : (
-								<SlidersHorizontal className="size-4" />
-							)}
-							{isBooking ? "Book" : "Choose"}
+							<Plus className="size-4" aria-hidden />
+							Add
 						</Button>
-					) : (
-						<Button
-							asChild
-							size="sm"
-							variant="outline"
-							className="mt-auto h-11 w-full rounded-xl"
-						>
-							<Link {...pageLink}>
-								{isBooking ? (
-									<CalendarRange className="size-4" />
-								) : (
-									<SlidersHorizontal className="size-4" />
-								)}
-								{isBooking ? "Book" : "Choose"}
-							</Link>
-						</Button>
-					)
-				) : (
-					<Button
-						type="button"
-						onClick={() => onQuickAdd(product)}
-						disabled={paused || outOfStock || minUnreachable}
-						size="sm"
-						className="mt-auto h-11 w-full rounded-xl"
-					>
-						{paused ? null : <Plus className="size-4" />}
-						{/* An event's quick-add is an RSVP — the product page's CTA
-						    already says so, and one action must keep one name. */}
-						{paused ? ORDERING_PAUSED_CTA : event ? "RSVP" : "Add"}
-					</Button>
-				)}
+					)}
+				</div>
 			</div>
 		</div>
 	);

@@ -38,7 +38,6 @@ import {
 import type { Locale } from "../../../convex/lib/locale";
 import { storeClosedOn } from "../../../convex/lib/openingHours";
 import { weekendDaysLabel } from "../../../convex/lib/productKind";
-import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import {
 	addMytMonths,
@@ -67,6 +66,10 @@ import { BuyerPhoneCountrySwitch, BuyerPhoneInput } from "../ui/my-phone-input";
 import { Skeleton } from "../ui/skeleton";
 import { BookingCalendar, BookingCalendarLegend } from "./booking-calendar";
 import { CheckoutSection } from "./checkout-form";
+import {
+	BasketKeptNote,
+	StandaloneCheckoutLayout,
+} from "./standalone-checkout-layout";
 
 const NOTE_MAX = 500;
 
@@ -85,12 +88,17 @@ export function BookingCheckoutForm({
 	productSlug,
 	locale,
 	country,
+	cartItemCount,
 }: {
 	retailerId: Id<"retailers">;
 	storeName: string;
 	storeSlug: string;
 	productSlug: string;
 	locale?: Locale;
+	/** How many lines the buyer's cart holds. A booking request is its own
+	 * order and never touches the cart (`z8r3fdhh45`) — the count is here only
+	 * so the page can SAY so rather than leave the buyer guessing. */
+	cartItemCount: number;
 	/** The store's country (SG-lite) — the phone picker's default, and the
 	 * country an untouched picker is judged by, so a booking checkout accepts
 	 * exactly what the ordinary checkout does. */
@@ -441,175 +449,178 @@ export function BookingCheckoutForm({
 	}
 
 	const summary = (
-		<div className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
-			<h2 className="font-heading text-sm font-bold">
-				{isPackage
-					? ms
-						? "Pakej anda"
-						: "Your package"
-					: ms
-						? "Penginapan anda"
-						: "Your stay"}
-			</h2>
-			<div className="flex flex-col gap-2 border-t-2 border-dashed border-border pt-3 text-sm tabular-nums">
-				<div className="flex items-baseline gap-1.5">
-					{/* Wraps rather than truncating — a long stay/package name is the
+		<>
+			<div className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+				<h2 className="font-heading text-sm font-bold">
+					{isPackage
+						? ms
+							? "Pakej anda"
+							: "Your package"
+						: ms
+							? "Penginapan anda"
+							: "Your stay"}
+				</h2>
+				<div className="flex flex-col gap-2 border-t-2 border-dashed border-border pt-3 text-sm tabular-nums">
+					<div className="flex items-baseline gap-1.5">
+						{/* Wraps rather than truncating — a long stay/package name is the
 					    one thing the buyer is confirming here (`z8r3fdhpaj`). The
 					    leader bows out on its own once the name claims the row. */}
-					<span className="min-w-0 wrap-anywhere">{product.name}</span>
-					<span className="flex-1 border-b-2 border-dotted border-border" />
-					<span className="font-medium">
-						{formatPrice(unitPrice, product.currency)}
-						{bookingPriceSuffix(packageLength, packageUnit)}
-					</span>
-				</div>
-				{hasWeekendRate && weekendPrice !== undefined ? (
-					// Both rates stated up front, before any date is picked.
-					<div className="flex items-baseline gap-1.5 text-muted-foreground">
-						<span className="min-w-0 truncate">
-							{weekendDaysLabel(weekendDays)}
-						</span>
+						<span className="min-w-0 wrap-anywhere">{product.name}</span>
 						<span className="flex-1 border-b-2 border-dotted border-border" />
 						<span className="font-medium">
-							{formatPrice(weekendPrice, product.currency)}/night
+							{formatPrice(unitPrice, product.currency)}
+							{bookingPriceSuffix(packageLength, packageUnit)}
 						</span>
 					</div>
-				) : null}
-				{nights > 0 &&
-				selection.checkIn !== undefined &&
-				checkOut !== undefined ? (
-					<>
-						{/* A package states WHAT WAS BOUGHT — "3 × 1 month" — above the
-						    window it produces. The nights count is arithmetic; the
-						    package count is the thing the buyer chose. */}
-						{isPackage && packages > 1 ? (
-							<div className="flex items-baseline gap-1.5">
-								<span>
-									{packages} × {bookingSpanNoun(packageLength, packageUnit)}
-								</span>
-								<span className="flex-1 border-b-2 border-dotted border-border" />
-								<span className="font-medium">
-									{formatPrice(unitPrice * packages, product.currency)}
-								</span>
-							</div>
-						) : null}
-						<div className="flex items-baseline gap-1.5">
-							<span>
-								{isPackage
-									? `${ms ? "Sah" : "Valid"} ${formatFulfilmentDate(selection.checkIn)} – ${formatFulfilmentDate(checkOut - DAY_MS)}`
-									: `${formatFulfilmentDate(selection.checkIn)} → ${formatFulfilmentDate(checkOut)}`}
+					{hasWeekendRate && weekendPrice !== undefined ? (
+						// Both rates stated up front, before any date is picked.
+						<div className="flex items-baseline gap-1.5 text-muted-foreground">
+							<span className="min-w-0 truncate">
+								{weekendDaysLabel(weekendDays)}
 							</span>
 							<span className="flex-1 border-b-2 border-dotted border-border" />
-							{/* The count never wraps: "5 open / days" split across two
-							    lines reads as two figures beside a wrapped date. */}
-							<span className="shrink-0 whitespace-nowrap font-medium">
-								{isPackage
-									? skippedDays.length > 0
-										? `${nights - skippedDays.length} ${ms ? "hari buka" : "open days"}`
-										: `${nights} ${ms ? "hari" : "days"}`
-									: `${nights} night${nights === 1 ? "" : "s"}`}
+							<span className="font-medium">
+								{formatPrice(weekendPrice, product.currency)}/night
 							</span>
 						</div>
-						{/* An open-days package names the shut days it steps over
+					) : null}
+					{nights > 0 &&
+					selection.checkIn !== undefined &&
+					checkOut !== undefined ? (
+						<>
+							{/* A package states WHAT WAS BOUGHT — "3 × 1 month" — above the
+						    window it produces. The nights count is arithmetic; the
+						    package count is the thing the buyer chose. */}
+							{isPackage && packages > 1 ? (
+								<div className="flex items-baseline gap-1.5">
+									<span>
+										{packages} × {bookingSpanNoun(packageLength, packageUnit)}
+									</span>
+									<span className="flex-1 border-b-2 border-dotted border-border" />
+									<span className="font-medium">
+										{formatPrice(unitPrice * packages, product.currency)}
+									</span>
+								</div>
+							) : null}
+							<div className="flex items-baseline gap-1.5">
+								<span>
+									{isPackage
+										? `${ms ? "Sah" : "Valid"} ${formatFulfilmentDate(selection.checkIn)} – ${formatFulfilmentDate(checkOut - DAY_MS)}`
+										: `${formatFulfilmentDate(selection.checkIn)} → ${formatFulfilmentDate(checkOut)}`}
+								</span>
+								<span className="flex-1 border-b-2 border-dotted border-border" />
+								{/* The count never wraps: "5 open / days" split across two
+							    lines reads as two figures beside a wrapped date. */}
+								<span className="shrink-0 whitespace-nowrap font-medium">
+									{isPackage
+										? skippedDays.length > 0
+											? `${nights - skippedDays.length} ${ms ? "hari buka" : "open days"}`
+											: `${nights} ${ms ? "hari" : "days"}`
+										: `${nights} night${nights === 1 ? "" : "s"}`}
+								</span>
+							</div>
+							{/* An open-days package names the shut days it steps over
 						    (z8r3fdhpm7) — the reason its last day is later than the
 						    count suggests, stated before the request, not after. */}
-						{skippedDays.length > 0 ? (
-							<p className="text-xs text-muted-foreground">
-								{ms ? "Tidak dikira" : "Skips"}{" "}
-								{describeNights(skippedDays, formatNight, "day")}{" "}
-								{ms ? "(kedai tutup)" : "(store closed)"}
-							</p>
-						) : null}
-						{/* The split, itemised — exactly the two lines the order will
+							{skippedDays.length > 0 ? (
+								<p className="text-xs text-muted-foreground">
+									{ms ? "Tidak dikira" : "Skips"}{" "}
+									{describeNights(skippedDays, formatNight, "day")}{" "}
+									{ms ? "(kedai tutup)" : "(store closed)"}
+								</p>
+							) : null}
+							{/* The split, itemised — exactly the two lines the order will
 						    carry, so "why is it RM 400?" is answered before the request
 						    is made. Only the kinds that occur; a stay that is all one
 						    kind still names it. */}
-						{hasWeekendRate && weekendPrice !== undefined ? (
-							<>
-								{split.weekdayNights > 0 ? (
-									<div className="flex items-baseline gap-1.5">
-										<span>
-											{split.weekdayNights}{" "}
-											{ms
-												? `malam biasa`
-												: `weekday night${split.weekdayNights === 1 ? "" : "s"}`}{" "}
-											× {formatPrice(unitPrice, product.currency)}
-										</span>
-										<span className="flex-1 border-b-2 border-dotted border-border" />
-										<span className="font-medium">
-											{formatPrice(
-												split.weekdayNights * unitPrice,
-												product.currency,
-											)}
-										</span>
-									</div>
-								) : null}
-								{split.weekendNights > 0 ? (
-									<div className="flex items-baseline gap-1.5">
-										<span>
-											{split.weekendNights}{" "}
-											{ms
-												? `malam hujung minggu`
-												: `weekend night${split.weekendNights === 1 ? "" : "s"}`}{" "}
-											× {formatPrice(weekendPrice, product.currency)}
-										</span>
-										<span className="flex-1 border-b-2 border-dotted border-border" />
-										<span className="font-medium">
-											{formatPrice(
-												split.weekendNights * weekendPrice,
-												product.currency,
-											)}
-										</span>
-									</div>
-								) : null}
-							</>
-						) : null}
-						{securityDeposit > 0 ? (
-							<div className="flex items-baseline gap-1.5">
-								<span>Security deposit (refundable)</span>
+							{hasWeekendRate && weekendPrice !== undefined ? (
+								<>
+									{split.weekdayNights > 0 ? (
+										<div className="flex items-baseline gap-1.5">
+											<span>
+												{split.weekdayNights}{" "}
+												{ms
+													? `malam biasa`
+													: `weekday night${split.weekdayNights === 1 ? "" : "s"}`}{" "}
+												× {formatPrice(unitPrice, product.currency)}
+											</span>
+											<span className="flex-1 border-b-2 border-dotted border-border" />
+											<span className="font-medium">
+												{formatPrice(
+													split.weekdayNights * unitPrice,
+													product.currency,
+												)}
+											</span>
+										</div>
+									) : null}
+									{split.weekendNights > 0 ? (
+										<div className="flex items-baseline gap-1.5">
+											<span>
+												{split.weekendNights}{" "}
+												{ms
+													? `malam hujung minggu`
+													: `weekend night${split.weekendNights === 1 ? "" : "s"}`}{" "}
+												× {formatPrice(weekendPrice, product.currency)}
+											</span>
+											<span className="flex-1 border-b-2 border-dotted border-border" />
+											<span className="font-medium">
+												{formatPrice(
+													split.weekendNights * weekendPrice,
+													product.currency,
+												)}
+											</span>
+										</div>
+									) : null}
+								</>
+							) : null}
+							{securityDeposit > 0 ? (
+								<div className="flex items-baseline gap-1.5">
+									<span>Security deposit (refundable)</span>
+									<span className="flex-1 border-b-2 border-dotted border-border" />
+									<span className="font-medium">
+										{formatPrice(securityDeposit, product.currency)}
+									</span>
+								</div>
+							) : null}
+							<div className="flex items-baseline gap-1.5 border-t-2 border-dashed border-border pt-2 font-heading text-base font-extrabold">
+								<span>
+									{instantBook
+										? ms
+											? "Jumlah"
+											: "Total"
+										: ms
+											? "Jumlah selepas diluluskan"
+											: "Total when approved"}
+								</span>
 								<span className="flex-1 border-b-2 border-dotted border-border" />
-								<span className="font-medium">
-									{formatPrice(securityDeposit, product.currency)}
+								<span>
+									{formatPrice(stayTotal + securityDeposit, product.currency)}
 								</span>
 							</div>
-						) : null}
-						<div className="flex items-baseline gap-1.5 border-t-2 border-dashed border-border pt-2 font-heading text-base font-extrabold">
-							<span>
-								{instantBook
-									? ms
-										? "Jumlah"
-										: "Total"
-									: ms
-										? "Jumlah selepas diluluskan"
-										: "Total when approved"}
-							</span>
-							<span className="flex-1 border-b-2 border-dotted border-border" />
-							<span>
-								{formatPrice(stayTotal + securityDeposit, product.currency)}
-							</span>
-						</div>
-					</>
-				) : (
-					<p className="text-xs text-muted-foreground">
-						{isPackage
-							? ms
-								? "Pilih tarikh mula untuk melihat jumlah."
-								: "Pick your start date to see the total."
-							: ms
-								? "Pilih tarikh untuk melihat jumlah."
-								: "Pick your dates to see the total."}
-					</p>
-				)}
+						</>
+					) : (
+						<p className="text-xs text-muted-foreground">
+							{isPackage
+								? ms
+									? "Pilih tarikh mula untuk melihat jumlah."
+									: "Pick your start date to see the total."
+								: ms
+									? "Pilih tarikh untuk melihat jumlah."
+									: "Pick your dates to see the total."}
+						</p>
+					)}
+				</div>
+				<p className="text-xs leading-relaxed text-muted-foreground">
+					{instantBook
+						? `Your booking is confirmed straight away — ${storeName} will send you the payment details.`
+						: `Nothing is charged now — you pay after ${storeName} approves your request.`}
+					{securityDeposit > 0
+						? " The security deposit is returned after check-out."
+						: ""}
+				</p>
 			</div>
-			<p className="text-xs leading-relaxed text-muted-foreground">
-				{instantBook
-					? `Your booking is confirmed straight away — ${storeName} will send you the payment details.`
-					: `Nothing is charged now — you pay after ${storeName} approves your request.`}
-				{securityDeposit > 0
-					? " The security deposit is returned after check-out."
-					: ""}
-			</p>
-		</div>
+			<BasketKeptNote itemCount={cartItemCount} storeName={storeName} />
+		</>
 	);
 
 	const cta = (
@@ -632,7 +643,11 @@ export function BookingCheckoutForm({
 	);
 
 	return (
-		<BookingBarLayout summary={summary} cta={cta} serverError={serverError}>
+		<StandaloneCheckoutLayout
+			summary={summary}
+			cta={cta}
+			serverError={serverError}
+		>
 			<CheckoutSection step={1} title="Who's booking?">
 				<label className="flex flex-col gap-1.5 text-sm font-medium">
 					Your name
@@ -906,54 +921,6 @@ export function BookingCheckoutForm({
 					className="rounded-xl border border-input bg-background px-3 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
 				/>
 			</CheckoutSection>
-		</BookingBarLayout>
-	);
-}
-
-/**
- * The checkout page's two-column skeleton, booking-sized: sections left,
- * sticky summary + CTA right on desktop; summary above the sections and a
- * FIXED bottom CTA bar on mobile (design-system rule #4 — the route already
- * reserves `--storefront-bar-h`).
- */
-function BookingBarLayout({
-	children,
-	summary,
-	cta,
-	serverError,
-}: {
-	children: React.ReactNode;
-	summary: React.ReactNode;
-	cta: React.ReactNode;
-	serverError: string | null;
-}) {
-	const barRef = usePublishedHeight<HTMLDivElement>("--storefront-bar-h");
-	const error = serverError ? (
-		<p
-			role="alert"
-			className="rounded-xl border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-		>
-			{serverError}
-		</p>
-	) : null;
-	return (
-		<div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:gap-8">
-			<div className="flex flex-1 flex-col gap-4 lg:order-1">
-				<div className="lg:hidden">{summary}</div>
-				{children}
-				{error}
-			</div>
-			<div className="hidden lg:sticky lg:top-6 lg:order-2 lg:flex lg:w-96 lg:flex-col lg:gap-3">
-				{summary}
-				{cta}
-			</div>
-			{/* Mobile: the commitment bar floats fixed above the page footer. */}
-			<div
-				ref={barRef}
-				className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-background px-5 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 lg:hidden"
-			>
-				{cta}
-			</div>
-		</div>
+		</StandaloneCheckoutLayout>
 	);
 }

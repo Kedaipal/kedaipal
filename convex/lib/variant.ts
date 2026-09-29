@@ -11,8 +11,14 @@ export type OptionAxis = {
 // axes explode the grid in UI and seller effort.
 export const MAX_OPTION_AXES = 2;
 export const MAX_VALUES_PER_AXIS = 25;
-// Shopee parity — caps the cartesian blowup (2 × 25 = 50).
-export const MAX_VARIANTS_PER_PRODUCT = 50;
+// THE cap on the cartesian blowup, and the only copy of it — the client-side
+// editor, wizard and CSV import all import this constant rather than mirroring
+// the number (they used to, and the mirrors drifted). Raised 50 → 100 on
+// 2026-09-29 (z8r3fdjgvd): a two-axis "Adult 1 size × Adult 2 size" event
+// listing needs 7 × 8 = 56, and one shared seat pool means it cannot be split
+// across two products. Still well under the axis product (25 × 25 = 625), so
+// the cap — not MAX_VALUES_PER_AXIS — is what refuses a runaway grid.
+export const MAX_VARIANTS_PER_PRODUCT = 100;
 export const MAX_AXIS_NAME_LENGTH = 40;
 export const MAX_VALUE_LENGTH = 60;
 // Custom / made-to-order line (docs/custom-option.md). One per product, lives
@@ -20,6 +26,32 @@ export const MAX_VALUE_LENGTH = 60;
 export const MAX_CUSTOM_LABEL_LENGTH = 40;
 export const MAX_CUSTOM_PROMPT_LENGTH = 280;
 export const DEFAULT_CUSTOM_LABEL = "Custom";
+
+/**
+ * THE sentence every surface uses when a grid exceeds the cap — the server's
+ * refusal, the editor's live notice, the form's submit issue and the wizard's
+ * step-2 issue. One author, for the reason this whole change exists: the four
+ * hand-kept copies of the CAP had already drifted, and the copy drifted with
+ * them (the wizard said "That's 110 combinations — keep it to 100 or fewer",
+ * so the same rule met the seller in two different sentences depending on
+ * which door they came through).
+ *
+ * "choices", not "variants": every surface the seller touches — the wizard,
+ * the grid editor's count, the RSVP tally, the stock sheet — says choices.
+ * "Variants" is our word, not theirs. (The CSV import keeps "variant rows":
+ * that page's whole vocabulary is rows in a sheet, and its own check refuses
+ * first.)
+ *
+ * It states the EXCESS and asks for VALUES, which are different units: the
+ * grid is a product of the lists, so "remove 12" combinations maps to no whole
+ * number of value-deletions (7 × 16 = 112 → "12 over", but 7 × 15 = 105 and
+ * 7 × 14 = 98). Naming the overshoot is true at every shape; naming a count of
+ * values to delete would not be.
+ */
+export function overCapMessage(total: number): string {
+	const over = total - MAX_VARIANTS_PER_PRODUCT;
+	return `${total} choices — ${over} over the limit of ${MAX_VARIANTS_PER_PRODUCT}. Remove option values to get under it.`;
+}
 
 /**
  * Human label for a variant from its positional option values:
@@ -101,10 +133,7 @@ export function normalizeOptions(
 	});
 
 	const total = cartesian(normalized).length;
-	if (total > MAX_VARIANTS_PER_PRODUCT)
-		throw new Error(
-			`That makes ${total} variants — max ${MAX_VARIANTS_PER_PRODUCT} per product`,
-		);
+	if (total > MAX_VARIANTS_PER_PRODUCT) throw new Error(overCapMessage(total));
 
 	return normalized;
 }

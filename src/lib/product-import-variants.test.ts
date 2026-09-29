@@ -327,14 +327,29 @@ describe("groupVariantRows helpers (independently testable)", () => {
 	});
 
 	test("buildVariantGrid errors past the per-product cap", () => {
-		// 8 × 8 = 64 > MAX_VARIANTS_PER_PRODUCT (50).
-		const eight = ["a", "b", "c", "d", "e", "f", "g", "h"];
+		// 11 × 10 = 110 > MAX_VARIANTS_PER_PRODUCT (100). Both axes stay inside
+		// MAX_VALUES_PER_AXIS (25), so it is the variant cap doing the refusing.
 		const options = [
-			{ name: "A", values: eight },
-			{ name: "B", values: eight },
+			{ name: "A", values: Array.from({ length: 11 }, (_, i) => `a${i}`) },
+			{ name: "B", values: Array.from({ length: 10 }, (_, i) => `b${i}`) },
 		];
 		const out = buildVariantGrid(options, new Map(), row({ name: "Big" }));
-		expect("error" in out && out.error.errors[0]).toMatch(/expands to 64/);
+		expect("error" in out && out.error.errors[0]).toMatch(
+			/expands to 110 variants \(max 100\)/,
+		);
+	});
+
+	test("buildVariantGrid accepts the 56-variant two-size event grid", () => {
+		// The import must agree with the editor, or a sheet that saves in the form
+		// fails on import (z8r3fdjgvd). 7 × 8 = 56 — over the old cap of 50.
+		const sizes = ["S", "M", "L", "XL", "2XL", "3XL", "4XL"];
+		const options = [
+			{ name: "Adult 1 size", values: sizes },
+			{ name: "Adult 2 size", values: ["None", ...sizes] },
+		];
+		const out = buildVariantGrid(options, new Map(), row({ name: "Falls" }));
+		expect("variants" in out && out.variants).toHaveLength(56);
+		expect("autoFilled" in out && out.autoFilled).toBe(56);
 	});
 });
 
@@ -475,8 +490,18 @@ describe("order rules — prep_minutes + pickup_note (z8r3fdff97)", () => {
 
 	test("a later 0 wins — it clears — and the drift warning reads 'none'", () => {
 		const grouped = groupVariantRows([
-			row({ name: "Puff", optionNames: ["F"], optionValues: ["A"], prepMinutes: 60 }),
-			row({ name: "Puff", optionNames: ["F"], optionValues: ["B"], prepMinutes: 0 }),
+			row({
+				name: "Puff",
+				optionNames: ["F"],
+				optionValues: ["A"],
+				prepMinutes: 60,
+			}),
+			row({
+				name: "Puff",
+				optionNames: ["F"],
+				optionValues: ["B"],
+				prepMinutes: 0,
+			}),
 		]);
 		expect(grouped.products[0].prepMinutes).toBe(0);
 		expect(grouped.products[0].warnings).toEqual([

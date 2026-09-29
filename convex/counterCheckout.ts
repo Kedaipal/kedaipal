@@ -71,7 +71,7 @@ import {
 } from "./lib/order";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 import type { PickupSnapshot } from "./lib/whatsappCopy";
-import { buildPickupSnapshot, resolveEventVenue } from "./orders";
+import { buildEventVenueSnapshot, resolveEventVenue } from "./orders";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidWaPhone } from "./lib/slug";
 import { variantLabel } from "./lib/variant";
@@ -821,6 +821,13 @@ export const createOrderFromSession = mutation({
 			Id<"products">,
 			{ event: ProductEvent; name: string }
 		>();
+		// Lines whose fulfilment moment the BUYER would pick — everything that
+		// isn't an event (`z8r3fdhh45`). An order is an order whichever door it
+		// came through, so the counter enforces the same standalone rule the
+		// storefront does; the panel disables the rows that would build such a
+		// cart, and this catches a session draft saved before the rule existed.
+		let buyerScheduledLines = 0;
+		let firstBuyerScheduledName: string | undefined;
 		for (const item of args.items) {
 			if (!Number.isInteger(item.quantity) || item.quantity < 1)
 				throw new ConvexError("Quantity must be a positive integer");
@@ -860,11 +867,15 @@ export const createOrderFromSession = mutation({
 			} else {
 				unitPrice = variant.price;
 			}
-			if (product.event !== undefined)
+			if (product.event !== undefined) {
 				eventProducts.set(variant.productId, {
 					event: product.event,
 					name: product.name,
 				});
+			} else {
+				buyerScheduledLines += 1;
+				firstBuyerScheduledName ??= product.name;
+			}
 			const block =
 				(variant.blockWhenOutOfStock ?? product.blockWhenOutOfStock) === true;
 			const prior = requestedByVariant.get(item.variantId);
@@ -912,6 +923,10 @@ export const createOrderFromSession = mutation({
 				throw new ConvexError(
 					"This order has RSVPs for two different events — ring them up separately.",
 				);
+			if (buyerScheduledLines > 0)
+				throw new ConvexError(
+					`An RSVP is its own order — "${firstBuyerScheduledName ?? "the other items"}" can't share it. Ring them up separately.`,
+				);
 			if (isEventPassed(eventLock))
 				throw new ConvexError(
 					`This event (${formatEventBadge(eventLock)}) has already taken place.`,
@@ -932,7 +947,9 @@ export const createOrderFromSession = mutation({
 					"An RSVP needs a venue on the guest's order page — add a pickup point in Settings → Fulfilment first.",
 				);
 			eventPickupLocationId = venue._id;
-			eventPickupSnapshot = buildPickupSnapshot(venue);
+			// No venue fee on an RSVP — see buildEventVenueSnapshot. The counter
+			// must agree with the storefront or the same event costs two prices.
+			eventPickupSnapshot = buildEventVenueSnapshot(venue);
 		}
 		for (const [productId, { event, name }] of eventProducts) {
 			if (event.seats === undefined) continue;

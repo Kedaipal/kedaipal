@@ -126,6 +126,9 @@ describe("spotlight registry", () => {
 		expect(SPOTLIGHT_ANCHOR.business_address.anchor).toBe(
 			SETTINGS_ANCHOR.business_address,
 		);
+		expect(SPOTLIGHT_ANCHOR.pickup_points.anchor).toBe(
+			SETTINGS_ANCHOR.pickup_addresses,
+		);
 	});
 
 	test("spotlightHref carries the tab AND the key, from one source", () => {

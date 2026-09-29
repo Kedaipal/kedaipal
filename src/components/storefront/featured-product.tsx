@@ -8,6 +8,7 @@ import type { UseCart } from "../../hooks/useCart";
 import { minQuantityUnreachable } from "../../lib/variant";
 import { ProductCard, type StorefrontProduct } from "./product-card";
 import { quickAddProductToCart } from "./product-purchase";
+import { SectionHeading } from "./section-heading";
 
 /**
  * "Popular this week" — the store home's merchandising shelf (86eybrhrt PR3):
@@ -104,9 +105,10 @@ function FeaturedProductInner({
 
 	return (
 		<section aria-label="Popular this week" className="flex flex-col">
-			<p className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">
-				Popular this week
-			</p>
+			<SectionHeading
+				title="Popular this week"
+				context="Most ordered, last 7 days"
+			/>
 			{/* Full-bleed scroller: the negative margins let cards run to the
 			    screen edge (the parent section pads px-5 / lg:px-8) so a
 			    part-visible card at the right edge advertises that the row
@@ -130,8 +132,8 @@ function FeaturedProductInner({
 							product={product}
 							storeSlug={storeSlug}
 							onQuickAdd={(p) => quickAddProductToCart(cart, p)}
+							onQuickRemove={(p) => cart.quickRemoveProduct(p._id)}
 							cartQuantity={cart.quantityForProduct(product._id)}
-							cartSubtotal={cart.subtotalForProduct(product._id)}
 							// The shelf sits above the grid, so its leading cards are
 							// the storefront's real above-the-fold images.
 							priority={index < 3}

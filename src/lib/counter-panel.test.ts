@@ -43,6 +43,46 @@ describe("counterPrimaryAction", () => {
 		}
 	});
 
+	test("a mixed RSVP cart blocks BOTH modes, naming the line to remove (z8r3fdhh45)", () => {
+		// Unlike `unpriced`, this one is not a send-path nicety: `orders.create`
+		// refuses a mixed order at either door, so an enabled button in counter
+		// mode would be a lie that fails at submit.
+		for (const mode of ["counter", "send"] as const) {
+			const a = counterPrimaryAction({
+				...base,
+				mode,
+				mixedRsvp: "Ceramic mug",
+			});
+			expect(a.disabled).toBe(true);
+			expect(a.reason).toMatch(/its own order/i);
+			// Names WHAT to take out — "this order is invalid" leaves the seller
+			// hunting through the cart.
+			expect(a.reason).toContain("Ceramic mug");
+		}
+	});
+
+	test("the mix outranks the event's send-mode reason — it blocks more doors", () => {
+		// A mixed cart necessarily HAS an event line, so both reasons apply.
+		// The mix is the one the seller can act on.
+		const a = counterPrimaryAction({
+			...base,
+			mode: "send",
+			eventName: "BNI Breakfast",
+			mixedRsvp: "Ceramic mug",
+		});
+		expect(a.reason).toMatch(/its own order/i);
+	});
+
+	test("an empty cart still outranks the mix — there is nothing to unmix", () => {
+		const a = counterPrimaryAction({
+			...base,
+			mode: "counter",
+			empty: true,
+			mixedRsvp: "Ceramic mug",
+		});
+		expect(a.reason).toBe("Add an item first");
+	});
+
 	test("an unpriced line blocks SEND only — a claim freezes prices at send", () => {
 		const send = counterPrimaryAction({
 			...base,

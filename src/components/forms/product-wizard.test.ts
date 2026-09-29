@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { overCapMessage } from "../../../convex/lib/variant";
 import { isKindCard, KIND_CARDS } from "../../lib/kind-card";
 import type { ProductFormDraft } from "./product-form";
 import {
@@ -126,27 +127,57 @@ describe("wizardStepIssues", () => {
 		).toEqual(["axis2Name", "axis2Values"]);
 	});
 
-	it("step 2 caps the combinations at the shared 50-variant limit", () => {
+	/** Build a wizard state whose two axes have the given value counts. */
+	function withAxisSizes(a: number, b: number): WizardState {
 		const s = browniesState();
-		const big: WizardState = {
+		return {
 			...s,
 			editor: {
 				...s.editor,
 				options: [
 					{
 						name: "Size",
-						values: Array.from({ length: 8 }, (_, i) => `s${i}`),
+						values: Array.from({ length: a }, (_, i) => `s${i}`),
 					},
 					{
 						name: "Flavour",
-						values: Array.from({ length: 7 }, (_, i) => `f${i}`),
+						values: Array.from({ length: b }, (_, i) => `f${i}`),
 					},
 				],
 			},
 		};
-		expect(wizardStepIssues(big, 2).some((i) => i.field === "axisValues")).toBe(
-			true,
+	}
+
+	it("step 2 caps the combinations at the shared 100-variant limit", () => {
+		// 11 × 10 = 110. Both axes stay inside MAX_VALUES_PER_AXIS (25), so it is
+		// the variant cap refusing, not the per-axis one.
+		expect(
+			wizardStepIssues(withAxisSizes(11, 10), 2).some(
+				(i) => i.field === "axisValues",
+			),
+		).toBe(true);
+	});
+
+	it("step 2 uses the SHARED over-cap sentence, not its own wording", () => {
+		// The wizard was the one surface left saying "That's 110 combinations —
+		// keep it to 100 or fewer" while every other door said "choices", so the
+		// same rule met the seller in two sentences (PR #310 review). Comparing
+		// against the helper rather than a literal means a future copy edit moves
+		// all four doors or fails here.
+		const issue = wizardStepIssues(withAxisSizes(11, 10), 2).find(
+			(i) => i.field === "axisValues",
 		);
+		expect(issue?.message).toBe(overCapMessage(110));
+	});
+
+	it("step 2 accepts a 56-combination grid (z8r3fdjgvd)", () => {
+		// 8 × 7 = 56 — over the old cap of 50, and the shape the cap moved for.
+		// The wizard must agree with the editor, the server and the CSV import.
+		expect(
+			wizardStepIssues(withAxisSizes(8, 7), 2).some(
+				(i) => i.field === "axisValues",
+			),
+		).toBe(false);
 	});
 
 	it("step 3 validates every active choice's price via the shared validator", () => {
