@@ -6,7 +6,9 @@
  * both happen in Convex, often while the seller's browser is closed, so no
  * client event can ever observe them. `first_order` piggybacks on the
  * existing write-once activation stamp (`stampRetailerActivation`), which IS
- * the once-per-retailer dedupe; `subscribe_paid` rides `invoices.markPaid`.
+ * the once-per-retailer dedupe; `subscribe_paid` rides `invoices.markPaid`;
+ * `credits_topup_paid` rides `creditPurchases.settlePurchase` (Credits T2),
+ * whose paid-once guard is its dedupe.
  *
  * Delivery contract: callers schedule this action fire-and-forget
  * (`ctx.scheduler.runAfter(0, …)`) so analytics can never block or roll back
@@ -28,7 +30,11 @@ import {
 
 export const sendKeyEvent = internalAction({
 	args: {
-		event: v.union(v.literal("first_order"), v.literal("subscribe_paid")),
+		event: v.union(
+			v.literal("first_order"),
+			v.literal("subscribe_paid"),
+			v.literal("credits_topup_paid"),
+		),
 		retailerId: v.id("retailers"),
 		// The retailer's real GA client id captured at signup, when present —
 		// lets Funnel Exploration stitch this event to their client-side journey.

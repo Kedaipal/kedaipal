@@ -13,6 +13,7 @@ import {
 	type PaymentEmailKey,
 	renderAutoRenewEmail,
 	renderBillingEmail,
+	renderCreditPurchaseEmail,
 	renderHoldEmail,
 	renderPaymentEmail,
 	renderTrialEmail,
@@ -21,6 +22,8 @@ import {
 import { loadCreditAccount } from "./credits";
 import { monthlyCreditGrant } from "./lib/credits";
 import { sendEmail } from "./lib/email";
+import { gatewayPaymentMethodLabel } from "./lib/hitpayBilling";
+import { formatDocDate } from "./lib/pdf/document";
 import { HOLD_LABEL } from "./lib/seasonalHold";
 import type { Locale } from "./lib/emailCopy";
 import {
@@ -351,16 +354,22 @@ export const sendSampleBillingEmail = internalAction({
 			v.literal("autoRenewEnabled"),
 			v.literal("autoRenewUpcoming"),
 			v.literal("autoRenewFailed"),
+			// Credits T2: the top-up receipt — "member":true previews the store
+			// copy of a teammate's purchase.
+			v.literal("creditPurchaseReceipt"),
 		),
-		locale: v.optional(v.union(v.literal("en"), v.literal("ms"))),
+		locale: v.optional(
+			v.union(v.literal("en"), v.literal("ms"), v.literal("zh")),
+		),
 		founding: v.optional(v.boolean()),
 		currency: v.optional(v.union(v.literal("MYR"), v.literal("SGD"))),
 		// Adds the sample Pay-now button to the invoice emails ("payNow": true).
 		payNow: v.optional(v.boolean()),
+		member: v.optional(v.boolean()),
 	},
 	handler: async (
 		_ctx,
-		{ to, key, locale, founding, currency, payNow },
+		{ to, key, locale, founding, currency, payNow, member },
 	): Promise<{ sent: string; key: string }> => {
 		const loc: Locale = locale ?? "en";
 		const url = billingPageUrl();
@@ -377,7 +386,20 @@ export const sendSampleBillingEmail = internalAction({
 				: "MYR 104.00"
 			: sampleBase;
 		const rendered =
-			key === "welcome" || key === "thanks"
+			key === "creditPurchaseReceipt"
+				? renderCreditPurchaseEmail(loc, {
+						storeName: "Sample Store",
+						credits: 50,
+						amountFormatted: crossBorder ? "SGD 22.00" : "MYR 45.00",
+						methodLabel: "Touch 'n Go",
+						paidOnFormatted: "30 Sep 2026",
+						expiresOnFormatted: "30 Sep 2027",
+						purchaseNumber: "CRD-202609-SMPL",
+						boughtBy: member ? "Aisyah" : undefined,
+						recipient: "store",
+						ctaUrl: url,
+					})
+				: key === "welcome" || key === "thanks"
 				? renderPaymentEmail(loc, key, {
 						storeName: "Sample Store",
 						planLabel: "Pro · Monthly",
@@ -774,6 +796,136 @@ export const notifyAutoRenewEmail = internalAction({
 					err instanceof Error ? err.message : String(err)
 				}`,
 			);
+		}
+	},
+});
+
+// --- Credit-pack receipts (Credits T2, z8r3fdf8ht) --------------------------
+
+type CreditPurchaseEmailMeta = {
+	status: string;
+	notifyEmail: string | undefined;
+	storeName: string;
+	locale: Locale;
+	credits: number;
+	amountMinor: number;
+	currency: string;
+	paymentMethod: string | undefined;
+	paidAt: number | undefined;
+	purchaseNumber: string;
+	expiresAt: number | undefined;
+	/** The teammate who bought it — null when the owner did. */
+	buyer: { name: string; email: string } | null;
+};
+
+/** Everything the top-up receipt needs in one read: the purchase, its lot's
+ * expiry, the store's billing inbox + locale, and the teammate who paid. */
+export const getCreditPurchaseForEmail = internalQuery({
+	args: { purchaseId: v.id("creditPurchases") },
+	handler: async (
+		ctx,
+		{ purchaseId },
+	): Promise<CreditPurchaseEmailMeta | null> => {
+		const purchase = await ctx.db.get(purchaseId);
+		if (!purchase) return null;
+		const retailer = await ctx.db.get(purchase.retailerId);
+		if (!retailer) return null;
+		const lot = purchase.lotId ? await ctx.db.get(purchase.lotId) : null;
+		let buyer: CreditPurchaseEmailMeta["buyer"] = null;
+		if (purchase.createdBy !== retailer.userId) {
+			const rows = await ctx.db
+				.query("retailerMembers")
+				.withIndex("by_user", (q) => q.eq("userId", purchase.createdBy))
+				.collect();
+			const member = rows.find((m) => m.retailerId === retailer._id);
+			if (member)
+				buyer = { name: member.displayName ?? member.email, email: member.email };
+		}
+		return {
+			status: purchase.status,
+			notifyEmail: retailer.notifyEmail,
+			storeName: retailer.storeName,
+			locale: (retailer.locale as Locale | undefined) ?? "en",
+			credits: purchase.credits,
+			amountMinor: purchase.amountMinor,
+			currency: purchase.currency,
+			paymentMethod: purchase.paymentMethod,
+			paidAt: purchase.paidAt,
+			purchaseNumber: purchase.purchaseNumber,
+			expiresAt: lot?.expiresAt,
+			buyer,
+		};
+	},
+});
+
+/**
+ * The top-up receipt, scheduled by `creditPurchases.finalizePaidPurchase` once
+ * the rail is named and the PDF frozen. It goes to the store's billing inbox
+ * for EVERY top-up — naming the teammate when one bought it, so the owner
+ * hears of every member purchase (Zaki, 30 Sep 2026) — and a copy goes to that
+ * teammate, who paid with their own card or wallet and needs the proof.
+ * Dates on the MYT wall clock (`formatDocDate`), matching the receipt PDF and
+ * the lot's own expiry. Fire-and-forget like every billing email.
+ */
+export const notifyCreditPurchaseReceipt = internalAction({
+	args: { purchaseId: v.id("creditPurchases") },
+	handler: async (ctx, { purchaseId }): Promise<void> => {
+		let meta: CreditPurchaseEmailMeta | null = null;
+		try {
+			meta = await ctx.runQuery(internal.billingEmail.getCreditPurchaseForEmail, {
+				purchaseId,
+			});
+		} catch (err) {
+			console.error("Credit receipt lookup failed", err);
+			return;
+		}
+		// Only a PAID purchase gets a receipt — a stray schedule never mails
+		// one for money that didn't land.
+		if (!meta || meta.status !== "paid" || meta.paidAt === undefined) return;
+		const base = {
+			storeName: meta.storeName,
+			credits: meta.credits,
+			amountFormatted: formatMoney(meta.amountMinor, meta.currency),
+			methodLabel: meta.paymentMethod
+				? gatewayPaymentMethodLabel(meta.paymentMethod)
+				: "Online payment",
+			paidOnFormatted: formatDocDate(meta.paidAt),
+			expiresOnFormatted:
+				meta.expiresAt !== undefined
+					? formatDocDate(meta.expiresAt)
+					: "12 months from today",
+			purchaseNumber: meta.purchaseNumber,
+		};
+		const sends: Array<{ to: string; recipient: "store" | "buyer" }> = [];
+		if (meta.notifyEmail) sends.push({ to: meta.notifyEmail, recipient: "store" });
+		else
+			console.warn(
+				`Credit receipt: store copy skipped, notifyEmail empty (${meta.purchaseNumber})`,
+			);
+		if (
+			meta.buyer &&
+			meta.buyer.email.toLowerCase() !== meta.notifyEmail?.toLowerCase()
+		)
+			sends.push({ to: meta.buyer.email, recipient: "buyer" });
+		for (const { to, recipient } of sends) {
+			const { subject, html, text } = renderCreditPurchaseEmail(meta.locale, {
+				...base,
+				boughtBy: meta.buyer?.name,
+				recipient,
+				ctaUrl:
+					recipient === "store"
+						? billingPageUrl()
+						: `${process.env.SITE_URL ?? "https://kedaipal.com"}/app`,
+			});
+			try {
+				await sendEmail(to, subject, html, text);
+			} catch (err) {
+				console.error(
+					`Credit receipt (${recipient}) failed (${meta.purchaseNumber}): ${
+						err instanceof Error ? err.message : String(err)
+					}`,
+				);
+			}
 		}
 	},
 });

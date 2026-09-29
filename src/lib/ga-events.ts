@@ -37,7 +37,11 @@ export type FunnelEvent =
 	| "calc_used"
 	| "cta_signup_click"
 	| "onboarding_start"
-	| "store_created";
+	| "store_created"
+	// Credits T2 (z8r3fdf8ht): a seller submitted the pack picker. Its paid
+	// counterpart, `credits_topup_paid`, is server-side (convex/ga4Events.ts) —
+	// the payment lands after the browser has gone to HitPay.
+	| "credits_topup_started";
 
 let gaInitialized = false;
 

@@ -35,6 +35,7 @@ import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
 import { usePermission, useStoreRole } from "../../hooks/usePermission";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { resolveAnnualOffer } from "../../lib/annual-billing";
+import { mergeBillingHistory } from "../../lib/billing-history";
 import { buildWaContactLink } from "../../lib/contact";
 import {
 	type CardTarget,
@@ -53,6 +54,7 @@ import {
 import { ZoomableImage } from "../ui/zoomable-image";
 import { AnnualBillingCard } from "./annual-billing-card";
 import { AutoRenewalCard } from "./auto-renewal-card";
+import { CreditReceiptButton } from "./credit-receipt-button";
 import {
 	FirstInvoiceSwitch,
 	firstInvoiceTargets,
@@ -98,6 +100,11 @@ export function BillingTab({
 	const storeArgs = { retailerId: actingAsAdmin ? retailer._id : undefined };
 	const invoices =
 		useQuery(convexQuery(api.invoices.myInvoices, storeArgs)).data ?? [];
+	// Paid credit-pack top-ups (Credits T2) share the history list. Credits
+	// READ gates them, so a teammate with billing read alone sees invoices only.
+	const creditPurchases =
+		useQuery(convexQuery(api.creditPurchases.myPurchases, storeArgs)).data ??
+		[];
 	const instructions = useQuery(
 		convexQuery(api.billing.paymentInstructions, {}),
 	).data;
@@ -197,7 +204,10 @@ export function BillingTab({
 	const adminOwnAccount = isAdmin && !retailer.actingAsAdmin;
 
 	const pending = invoices.find((i) => i.status === "pending");
-	const history = invoices.filter((i) => i.status !== "pending");
+	const history = mergeBillingHistory(
+		invoices.filter((i) => i.status !== "pending"),
+		creditPurchases,
+	);
 	const now = Date.now();
 
 	// Annual billing is offered here rather than on /pricing: manual billing has
@@ -851,69 +861,103 @@ export function BillingTab({
 					className={`flex flex-col gap-2 rounded-2xl border bg-background p-5 scroll-mt-24 lg:p-6 ${highlightRingClass(ring(SPOTLIGHT_ANCHOR.invoice_history.anchor))}`}
 				>
 					<p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-						Invoice history
+						Billing history
 					</p>
 					<ul className="flex flex-col divide-y divide-border">
-						{history.map((inv) => (
-							<li
-								key={inv._id}
-								className="flex items-center justify-between gap-3 py-2.5 text-sm"
-							>
-								<div>
-									<span className="font-mono">{inv.invoiceNumber}</span>
-									<span className="ml-2 text-xs text-muted-foreground">
-										{inv.markedPaidAt
-											? formatShortDate(inv.markedPaidAt)
-											: inv.voidedAt
-												? formatShortDate(inv.voidedAt)
-												: ""}
-									</span>
-								</div>
-								<div className="flex items-center gap-3">
-									<span
-										className={`tabular-nums ${inv.status === "void" ? "text-muted-foreground line-through" : ""}`}
+						{history.map((row) => {
+							if (row.kind === "credit_purchase") {
+								const p = row.purchase;
+								return (
+									<li
+										key={row.key}
+										className="flex items-center justify-between gap-3 py-2.5 text-sm"
 									>
-										{formatPrice(inv.total, inv.currency)}
-									</span>
-									<span
-										className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
-											inv.status === "paid"
-												? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
-												: "bg-muted text-muted-foreground"
-										}`}
-									>
-										{inv.status === "paid"
-											? "Paid"
-											: inv.status === "void"
-												? "Cancelled"
-												: inv.status}
-									</span>
-									{/* No documents for a voided (cancelled-in-error) invoice.
+										<div className="min-w-0">
+											<span className="font-medium">{p.credits} credits</span>
+											<span className="ml-2 text-xs text-muted-foreground">
+												{formatShortDate(row.at)}
+											</span>
+											{p.boughtBy ? (
+												<span className="block truncate text-xs text-muted-foreground">
+													Bought by {p.boughtBy}
+												</span>
+											) : null}
+										</div>
+										<div className="flex items-center gap-3">
+											<span className="tabular-nums">
+												{formatPrice(p.amountMinor, p.currency)}
+											</span>
+											<span className={PAID_PILL}>Paid</span>
+											<CreditReceiptButton
+												purchaseId={p._id}
+												className="size-8"
+											/>
+										</div>
+									</li>
+								);
+							}
+							const inv = row.invoice;
+							return (
+								<li
+									key={row.key}
+									className="flex items-center justify-between gap-3 py-2.5 text-sm"
+								>
+									<div>
+										<span className="font-mono">{inv.invoiceNumber}</span>
+										<span className="ml-2 text-xs text-muted-foreground">
+											{inv.markedPaidAt
+												? formatShortDate(inv.markedPaidAt)
+												: inv.voidedAt
+													? formatShortDate(inv.voidedAt)
+													: ""}
+										</span>
+									</div>
+									<div className="flex items-center gap-3">
+										<span
+											className={`tabular-nums ${inv.status === "void" ? "text-muted-foreground line-through" : ""}`}
+										>
+											{formatPrice(inv.total, inv.currency)}
+										</span>
+										<span
+											className={
+												inv.status === "paid"
+													? PAID_PILL
+													: "rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground"
+											}
+										>
+											{inv.status === "paid"
+												? "Paid"
+												: inv.status === "void"
+													? "Cancelled"
+													: inv.status}
+										</span>
+										{/* No documents for a voided (cancelled-in-error) invoice.
 									    A PAID invoice carries two: the bill (kept for the
 									    seller's records) and the payment receipt — proof of
 									    payment for their books (z8r3fdcrzj). */}
-									{inv.status !== "void" ? (
-										<InvoiceDownloadButton
-											invoiceId={inv._id}
-											label=""
-											size="icon"
-											variant="ghost"
-											className="size-8"
-										/>
-									) : null}
-									{inv.status === "paid" ? (
-										<InvoiceDownloadButton
-											invoiceId={inv._id}
-											kind="receipt"
-											label=""
-											size="icon"
-											variant="ghost"
-											className="size-8"
-										/>
-									) : null}
-								</div>
-							</li>
-						))}
+										{inv.status !== "void" ? (
+											<InvoiceDownloadButton
+												invoiceId={inv._id}
+												label=""
+												size="icon"
+												variant="ghost"
+												className="tap-target size-8"
+											/>
+										) : null}
+										{inv.status === "paid" ? (
+											<InvoiceDownloadButton
+												invoiceId={inv._id}
+												kind="receipt"
+												label=""
+												size="icon"
+												variant="ghost"
+												className="tap-target size-8"
+											/>
+										) : null}
+									</div>
+								</li>
+							);
+						})}
 					</ul>
 				</section>
 			) : null}
@@ -959,6 +1003,11 @@ export function BillingTab({
 		</div>
 	);
 }
+
+/** The "Paid" pill of a billing-history row — one look for an invoice and a
+ * credit top-up, so the two kinds of row read as one list. */
+const PAID_PILL =
+	"rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300";
 
 /**
  * A billing CTA that leaves the page — HitPay's checkout, or a WhatsApp

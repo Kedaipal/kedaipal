@@ -1358,3 +1358,194 @@ export function renderHoldEmail(
 ): RenderedEmail {
 	return holdRender[locale][key](vars);
 }
+
+/**
+ * The receipt for a paid credit-pack top-up (Credits T2, z8r3fdf8ht). One
+ * notice, two readers:
+ *  - `store` — the store's billing inbox (the owner's `notifyEmail`), for
+ *    EVERY top-up. When a teammate bought it, this copy names them and says
+ *    their own payment method paid (Zaki, 30 Sep 2026: a teammate's top-up
+ *    never touches the owner's saved card, and the owner hears of every one);
+ *  - `buyer` — the teammate who paid, so they hold proof of what they paid.
+ * Both state the pack, the credits, the amount, how it was paid, the expiry
+ * date and that credits are non-refundable and not redeemable for cash.
+ * Order counts only — never a balance in money.
+ */
+export type CreditPurchaseEmailVars = {
+	storeName: string;
+	credits: number;
+	amountFormatted: string; // e.g. "MYR 45.00"
+	methodLabel: string; // "Card", "Touch 'n Go", "Online payment"
+	paidOnFormatted: string; // e.g. "30 Sep 2026"
+	expiresOnFormatted: string; // e.g. "30 Sep 2027"
+	purchaseNumber: string; // CRD-YYYYMM-XXXX
+	/** The teammate who bought — absent when the owner bought it. */
+	boughtBy?: string;
+	recipient: "store" | "buyer";
+	/** Where the CTA goes: the billing tab for the store's copy (the receipt
+	 * PDF lives there), the dashboard for a teammate's. */
+	ctaUrl: string;
+};
+
+type CreditPurchaseCopy = {
+	subjectStore: (v: CreditPurchaseEmailVars) => string;
+	subjectStoreByMember: (v: CreditPurchaseEmailVars, member: string) => string;
+	subjectBuyer: (v: CreditPurchaseEmailVars) => string;
+	headline: string;
+	introStore: (v: CreditPurchaseEmailVars) => string;
+	introStoreByMember: (v: CreditPurchaseEmailVars, member: string) => string;
+	introBuyer: (v: CreditPurchaseEmailVars) => string;
+	pack: (credits: number) => string;
+	labels: {
+		pack: string;
+		amount: string;
+		method: string;
+		date: string;
+		expires: string;
+		receipt: string;
+		boughtBy: string;
+	};
+	rules: string;
+	footerStore: string;
+	footerBuyer: string;
+	ctaStore: string;
+	ctaBuyer: string;
+};
+
+const creditPurchaseCopy: Record<Locale, CreditPurchaseCopy> = {
+	en: {
+		subjectStore: (v) => `🧾 Receipt: ${v.credits} credits added to ${v.storeName}`,
+		subjectStoreByMember: (v, m) =>
+			`🧾 ${m} bought ${v.credits} credits for ${v.storeName}`,
+		subjectBuyer: (v) => `🧾 Your receipt: ${v.credits} credits for ${v.storeName}`,
+		headline: "Top-up receipt",
+		introStore: (v) =>
+			`Hi ${escapeHtml(v.storeName)}, your top-up went through — <strong>${v.credits} credits</strong> are on your store now, ready for your next ${v.credits} orders.`,
+		introStoreByMember: (v, m) =>
+			`Hi ${escapeHtml(v.storeName)}, <strong>${escapeHtml(m)}</strong> on your team bought <strong>${v.credits} credits</strong> for your store, paid with their own payment method — nothing was charged to yours.`,
+		introBuyer: (v) =>
+			`Hi, you bought <strong>${v.credits} credits</strong> for <strong>${escapeHtml(v.storeName)}</strong> — they're on the store now, ready for the next ${v.credits} orders.`,
+		pack: (c) => `${c}-credit pack`,
+		labels: {
+			pack: "Pack",
+			amount: "Amount paid",
+			method: "Paid with",
+			date: "Date",
+			expires: "Credits valid until",
+			receipt: "Receipt no.",
+			boughtBy: "Bought by",
+		},
+		rules:
+			"1 credit = 1 order. Bought credits are used after your plan's monthly orders, and they're non-refundable and not redeemable for cash.",
+		footerStore: "Download the receipt PDF any time from Settings → Billing.",
+		footerBuyer: "Keep this email as your receipt.",
+		ctaStore: "View billing",
+		ctaBuyer: "Open dashboard",
+	},
+	ms: {
+		subjectStore: (v) => `🧾 Resit: ${v.credits} kredit ditambah ke ${v.storeName}`,
+		subjectStoreByMember: (v, m) =>
+			`🧾 ${m} membeli ${v.credits} kredit untuk ${v.storeName}`,
+		subjectBuyer: (v) => `🧾 Resit anda: ${v.credits} kredit untuk ${v.storeName}`,
+		headline: "Resit tambah nilai",
+		introStore: (v) =>
+			`Hai ${escapeHtml(v.storeName)}, tambah nilai anda berjaya — <strong>${v.credits} kredit</strong> kini ada di kedai anda, sedia untuk ${v.credits} pesanan seterusnya.`,
+		introStoreByMember: (v, m) =>
+			`Hai ${escapeHtml(v.storeName)}, <strong>${escapeHtml(m)}</strong> dalam pasukan anda telah membeli <strong>${v.credits} kredit</strong> untuk kedai anda, dibayar dengan kaedah pembayaran mereka sendiri — tiada caj pada kaedah pembayaran anda.`,
+		introBuyer: (v) =>
+			`Hai, anda telah membeli <strong>${v.credits} kredit</strong> untuk <strong>${escapeHtml(v.storeName)}</strong> — kredit itu kini ada di kedai, sedia untuk ${v.credits} pesanan seterusnya.`,
+		pack: (c) => `Pek ${c} kredit`,
+		labels: {
+			pack: "Pek",
+			amount: "Jumlah dibayar",
+			method: "Dibayar dengan",
+			date: "Tarikh",
+			expires: "Kredit sah sehingga",
+			receipt: "No. resit",
+			boughtBy: "Dibeli oleh",
+		},
+		rules:
+			"1 kredit = 1 pesanan. Kredit yang dibeli digunakan selepas pesanan bulanan pelan anda, dan tidak boleh dikembalikan atau ditebus sebagai wang tunai.",
+		footerStore:
+			"Muat turun PDF resit bila-bila masa di Tetapan → Pengebilan.",
+		footerBuyer: "Simpan e-mel ini sebagai resit anda.",
+		ctaStore: "Lihat pengebilan",
+		ctaBuyer: "Buka dashboard",
+	},
+	zh: {
+		subjectStore: (v) => `🧾 收据：${v.storeName} 已增加 ${v.credits} 点`,
+		subjectStoreByMember: (v, m) =>
+			`🧾 ${m} 为 ${v.storeName} 购买了 ${v.credits} 点`,
+		subjectBuyer: (v) => `🧾 您的收据：${v.storeName} 的 ${v.credits} 点`,
+		headline: "充值收据",
+		introStore: (v) =>
+			`您好 ${escapeHtml(v.storeName)}，您的充值已完成 —— <strong>${v.credits} 点</strong>已加入您的商店，可用于接下来的 ${v.credits} 张订单。`,
+		introStoreByMember: (v, m) =>
+			`您好 ${escapeHtml(v.storeName)}，您团队的 <strong>${escapeHtml(m)}</strong> 为您的商店购买了 <strong>${v.credits} 点</strong>，使用的是他们自己的付款方式 —— 没有从您的付款方式扣款。`,
+		introBuyer: (v) =>
+			`您好，您为 <strong>${escapeHtml(v.storeName)}</strong> 购买了 <strong>${v.credits} 点</strong> —— 已加入商店，可用于接下来的 ${v.credits} 张订单。`,
+		pack: (c) => `${c} 点配套`,
+		labels: {
+			pack: "配套",
+			amount: "支付金额",
+			method: "付款方式",
+			date: "日期",
+			expires: "点数有效期至",
+			receipt: "收据编号",
+			boughtBy: "购买人",
+		},
+		rules:
+			"1 点 = 1 张订单。购买的点数会在套餐每月的点数用完后使用，不可退款，也不可兑换现金。",
+		footerStore: "您可随时在 设置 → 账单 下载收据 PDF。",
+		footerBuyer: "请保留此邮件作为您的收据。",
+		ctaStore: "查看账单",
+		ctaBuyer: "打开后台",
+	},
+};
+
+export function renderCreditPurchaseEmail(
+	locale: Locale,
+	v: CreditPurchaseEmailVars,
+): RenderedEmail {
+	const L = creditPurchaseCopy[locale];
+	const member = v.recipient === "store" ? v.boughtBy : undefined;
+	const subject =
+		v.recipient === "buyer"
+			? L.subjectBuyer(v)
+			: member
+				? L.subjectStoreByMember(v, member)
+				: L.subjectStore(v);
+	const intro =
+		v.recipient === "buyer"
+			? L.introBuyer(v)
+			: member
+				? L.introStoreByMember(v, member)
+				: L.introStore(v);
+	const rows: Array<[string, string]> = [
+		[L.labels.pack, L.pack(v.credits)],
+		[L.labels.amount, v.amountFormatted],
+		[L.labels.method, v.methodLabel],
+		[L.labels.date, v.paidOnFormatted],
+		[L.labels.expires, v.expiresOnFormatted],
+		[L.labels.receipt, v.purchaseNumber],
+	];
+	if (member) rows.push([L.labels.boughtBy, member]);
+	const details = rows
+		.map(([label, value]) => `${escapeHtml(label)}: <strong>${escapeHtml(value)}</strong>`)
+		.join("<br>");
+	const footer = v.recipient === "buyer" ? L.footerBuyer : L.footerStore;
+	const lines = [intro, details, escapeHtml(L.rules), escapeHtml(footer)];
+	const cta = v.recipient === "buyer" ? L.ctaBuyer : L.ctaStore;
+	const html = wrapHtml("🧾", L.headline, lines, v.ctaUrl, cta);
+	const text = [
+		subject,
+		"",
+		...rows.map(([label, value]) => `${label}: ${value}`),
+		"",
+		L.rules,
+		footer,
+		"",
+		v.ctaUrl,
+	].join("\n");
+	return { subject, html, text };
+}
