@@ -241,6 +241,61 @@ diagnose the first time. The exclusions cost nothing to keep.
 All task work belongs in a **sibling** worktree instead — `../kedaipal-wt-<id>`,
 branched from `origin/staging` — never inside the repo.
 
+## Test timeouts — a synchronous test can only ever misfire on one (2026-09-29)
+
+`testTimeout` in [`vitest.config.ts`](../vitest.config.ts) is **30 s**, not the
+5 s default. That is not a slow-test allowance; the default was a false-failure
+generator, and this is the fix.
+
+**The mechanism.** `withTimeout` in `@vitest/runner` creates the timer *before*
+it calls the test body:
+
+```js
+const timer = setTimeout(() => rejectTimeoutError(), timeout);
+const result = fn(...args);            // synchronous body blocks the event loop
+… else resolve(result);                // clears the timer, THEN checks the clock
+```
+
+A jsdom component test is synchronous from start to finish. While it runs, the
+event loop is blocked, so that timer can never fire; when the body returns,
+`resolve()` clears it and instead asserts `Date.now() - startTime < timeout`.
+So on a synchronous test the timeout is a **post-hoc wall-clock measurement**:
+it cannot interrupt a hang, and it cannot fail sooner than the body finishes.
+Its only possible effect is to convert "the machine was busy" into "the test
+failed". Raising it forfeits nothing.
+
+**What it cost us.** In jsdom, one `CheckoutPage` render is ~9 ms and one
+`getByRole(role, { name })` lookup is ~20 ms (it computes an accessible name
+*and* a `getComputedStyle` visibility check for every element of that role).
+Ordinary component tests therefore sit at 100–700 ms — well inside 5 s on an
+idle box, and over it under ~8x machine load. Both
+`src/components/storefront/checkout-form.test.tsx` and
+`booking-checkout-form.test.tsx` were reproduced failing with
+`Test timed out in 5000ms` on `origin/staging` (commit `0aac3095`) under load,
+on the same commit that passes idle. It reads as order-dependence — the file
+alone passes, the directory fails — but nothing is shared between files
+(vitest isolates each one); the directory run simply adds enough contention to
+cross the wall. `ubuntu-latest` is 4 shared vCPU, so this is a CI flake, not
+only a many-parallel-sessions-on-a-laptop one.
+
+**What still fails fast.** 30 s is ~40x our heaviest synchronous component
+test, and nothing else about failure reporting changes:
+
+- an async test whose promise never settles still trips Testing Library's own
+  `waitFor` budget (1 s, untouched) long before the test timeout;
+- anything genuinely stuck is caught by `timeout-minutes: 10` on the CI job;
+- `hookTimeout` stays at its 10 s default — our hooks do no rendering. Raise it
+  the day one does, for the same reason.
+
+**Corollary for writing tests: never put `getByRole(role, { name })` in a
+loop.** Resolve the node once and reuse it — React keeps the same DOM node
+across re-renders, and a `expect(input.isConnected).toBe(true)` after the loop
+is the tripwire if that ever stops being true (a remount would also drop the
+buyer's caret, so it is worth knowing). `checkout-form.test.tsx`'s `typePhone`
+was re-querying twice per character: a 15-character number spent 611 ms on
+lookups against 130 ms of actual re-rendering. Hoisting the lookup cut that
+test from 744 ms to 223 ms and the file from 2.6 s to 1.5 s.
+
 ## Dependency pinning — TanStack is exact-pinned (2026-08-07, ClickUp 86eyjadx7)
 
 `package.json` used to spec six TanStack packages as the `latest` dist-tag.
