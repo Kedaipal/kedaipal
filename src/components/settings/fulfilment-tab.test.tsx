@@ -1454,10 +1454,14 @@ describe("event-venue badge on pickup points (z8r3fdff9u round 5)", () => {
 	it("says an event venue's fee isn't charged to guests, beside the fee chip", () => {
 		renderTab();
 		fireEvent.click(screen.getByRole("button", { name: /Show inactive/ }));
-		const badge = screen.getByText(/Event venue: Card Check Camp/);
-		expect(badge.textContent).toMatch(
-			/Event guests aren't charged the fee — they're attending, not collecting/,
-		);
+		expect(screen.getByText(/Event venue: Card Check Camp/)).toBeTruthy();
+		// Its own line, not run into the event names — "…Sunrise Yoga Event
+		// guests aren't charged…" was a garden path.
+		expect(
+			screen.getByText(
+				/^Event guests aren't charged the fee — they're attending, not collecting\.$/,
+			),
+		).toBeTruthy();
 		// The chip itself stays: the fee is real for standard orders.
 		expect(screen.getByText(/\+ RM\s?5\.00 fee/)).toBeTruthy();
 	});
