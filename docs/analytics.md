@@ -69,6 +69,7 @@ root's pageview effect).
 | `cta_signup_click` | every signup CTA click, `placement` param (`nav`, `nav-mobile`, `hero`, `hero-secondary (retired 13 Sep 2026 with the hero's secondary link — landing v2)`, `final-cta`, `pricing-teaser-<tier>`, `pricing-card-<tier>`, `pricing-bottom`) | landing components + `pricing.tsx` via `trackSignupCta` |
 | `onboarding_start` | signed-in seller reaches the store-creation form AND the retailer query resolved to "no store yet" — an already-onboarded seller hitting `/onboarding` gets redirected, never counted | `onboarding.tsx` via [`useOnboardingStart`](../src/hooks/useOnboardingStart.ts) |
 | `store_created` | `createRetailer` succeeded (never on validation failure) | `onboarding.tsx` |
+| `credits_topup_started` | a seller (or a teammate with credits write) submits the credit-pack picker — `pack_id`, `value` (major units), `currency`. Fired BEFORE the HitPay redirect; the paid half is the server-side `credits_topup_paid` below, so started ÷ paid is the checkout drop-off (Credits T2, z8r3fdf8ht) | `credit-top-up-dialog.tsx` |
 
 **Every event auto-carries the `src` param** when the session arrived tagged:
 [`src/lib/marketing-attribution.ts`](../src/lib/marketing-attribution.ts)
@@ -164,6 +165,7 @@ them. Two server events extend the funnel past `store_created` via the GA4
 | --- | --- | --- |
 | `first_order` | ONCE per retailer ever — the moment `retailers.activatedAt` transitions unset → set (the existing write-once activation stamp IS the dedupe guard; all 8 confirm sites go through it) | [`stampRetailerActivation`](../convex/lib/activation.ts) |
 | `subscribe_paid` | every `invoices.markPaid` — renewals too, distinguished by `first_time`; carries `plan`, `cycle`, `value` (major units) + `currency` so revenue segments by channel | [`invoices.markPaid`](../convex/invoices.ts) |
+| `credits_topup_paid` | a credit-pack top-up settles (Credits T2, z8r3fdf8ht) — once per purchase: the settle's paid guard is the dedupe, so a repeated webhook never double-counts. Carries `value` (major units), `currency`, `pack_id` and `source` (`manual`; T4's auto top-up widens it) | [`creditPurchases.settlePurchase`](../convex/creditPurchases.ts) |
 
 Both carry the retailer's stored **`src`** (`retailers.signupSource`), so the
 whole funnel — `land_marketing → … → store_created → first_order →
@@ -202,8 +204,8 @@ Both unset (local dev, preview) → the action is a silent no-op, same posture
 as the client providers.
 
 **Operator steps (GA4 UI, once per property):** create the MP API secret
-(above), set both Convex env vars, then mark `first_order` and
-`subscribe_paid` as **key events** (Admin → Events). Verify with a test
+(above), set both Convex env vars, then mark `first_order`,
+`subscribe_paid` and `credits_topup_paid` as **key events** (Admin → Events). Verify with a test
 retailer's first confirmed order in Realtime/DebugView (server events appear
 within minutes), then check Funnel Exploration segments by `src`.
 

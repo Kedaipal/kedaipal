@@ -79,10 +79,13 @@ function mockQueries({
 	supportWa = CONFIGURED_WA,
 	invoices = [],
 	gateway = GATEWAY_OFF,
+	creditPurchases = [],
 }: {
 	isAdmin: boolean;
 	supportWa?: string | null;
 	invoices?: unknown[];
+	/** creditPurchases.myPurchases — the paid top-ups (Credits T2). */
+	creditPurchases?: unknown[];
 	/** billingGatewayAvailable answer. Defaults to what the server returns with
 	 * no HitPay credentials (rails off, list pricing); `null` = still loading. */
 	gateway?: Gateway | null;
@@ -93,6 +96,7 @@ function mockQueries({
 		instructions: getFunctionName(api.billing.paymentInstructions),
 		supportWa: getFunctionName(api.contact.supportWhatsapp),
 		gateway: getFunctionName(api.subscriptionPayments.billingGatewayAvailable),
+		creditPurchases: getFunctionName(api.creditPurchases.myPurchases),
 	};
 	vi.mocked(useQuery).mockImplementation(((opts: {
 		__fn: FunctionReference<"query">;
@@ -105,6 +109,7 @@ function mockQueries({
 			if (name === NAME.instructions) return { bankName: "Maybank" };
 			if (name === NAME.supportWa) return supportWa ?? undefined;
 			if (name === NAME.gateway) return gateway ?? undefined;
+			if (name === NAME.creditPurchases) return creditPurchases;
 			return undefined;
 		})();
 		return { data, isPending: false };
@@ -227,6 +232,8 @@ describe("BillingTab support WhatsApp number", () => {
 			const name = getFunctionName(opts.__fn);
 			const data = (() => {
 				if (name === getFunctionName(api.invoices.myInvoices)) return [];
+				if (name === getFunctionName(api.creditPurchases.myPurchases))
+					return [];
 				if (name === getFunctionName(api.billing.paymentInstructions))
 					return null;
 				return false;
@@ -324,6 +331,8 @@ describe("BillingTab pending invoice — how to pay", () => {
 			const data = (() => {
 				if (name === getFunctionName(api.invoices.myInvoices))
 					return [pendingInvoice("SGD")];
+				if (name === getFunctionName(api.creditPurchases.myPurchases))
+					return [];
 				if (name === getFunctionName(api.billing.paymentInstructions))
 					return {
 						bankName: "Maybank",
@@ -1026,6 +1035,76 @@ describe("BillingTab invoice history documents", () => {
 		expect(
 			screen.queryByRole("button", { name: /download receipt pdf/i }),
 		).toBeNull();
+	});
+});
+
+/**
+ * Credits T2 (z8r3fdf8ht): paid top-up packs share the history list with the
+ * invoices — one timeline, dated by when each was paid — and carry their own
+ * receipt. A teammate's purchase names them.
+ */
+describe("BillingTab billing history — credit top-ups (Credits T2)", () => {
+	const paidInvoice = {
+		_id: "inv_aug",
+		status: "paid",
+		currency: "MYR",
+		total: 14900,
+		invoiceNumber: "INV-PAID",
+		createdAt: Date.UTC(2026, 7, 1),
+		markedPaidAt: Date.UTC(2026, 7, 1),
+	};
+	const topUp = {
+		_id: "cp_sep",
+		purchaseNumber: "CRD-202609-AB12",
+		packId: "p50",
+		credits: 50,
+		amountMinor: 4500,
+		currency: "MYR",
+		status: "paid",
+		createdAt: Date.UTC(2026, 8, 1),
+		paidAt: Date.UTC(2026, 8, 1),
+		issue: null,
+		paymentMethodLabel: "Card",
+		boughtBy: null,
+	};
+
+	it("a paid top-up sits beside the invoices, newest first, with its receipt", () => {
+		mockQueries({
+			isAdmin: false,
+			invoices: [paidInvoice],
+			creditPurchases: [topUp],
+		});
+		render(<BillingTab retailer={retailer()} />);
+		expect(screen.getByText("Billing history")).toBeTruthy();
+		const rows = screen
+			.getByText("Billing history")
+			.parentElement?.querySelectorAll("li");
+		expect(rows).toHaveLength(2);
+		// September's top-up above August's invoice.
+		expect(rows?.[0].textContent).toMatch(/50 credits/);
+		expect(rows?.[0].textContent).toMatch(/RM\s45\.00/);
+		expect(rows?.[0].textContent).toMatch(/Paid/);
+		expect(rows?.[1].textContent).toMatch(/INV-PAID/);
+		// One receipt per paid row — the invoice's and the top-up's.
+		expect(
+			screen.getAllByRole("button", { name: /download receipt pdf/i }),
+		).toHaveLength(2);
+	});
+
+	it("a teammate's top-up names who bought it", () => {
+		mockQueries({
+			isAdmin: false,
+			creditPurchases: [{ ...topUp, boughtBy: "Aisyah" }],
+		});
+		render(<BillingTab retailer={retailer()} />);
+		expect(screen.getByText("Bought by Aisyah")).toBeTruthy();
+	});
+
+	it("top-ups alone still make a history", () => {
+		mockQueries({ isAdmin: false, creditPurchases: [topUp] });
+		render(<BillingTab retailer={retailer()} />);
+		expect(screen.getByText("Billing history")).toBeTruthy();
+		expect(screen.getByText("50 credits")).toBeTruthy();
 	});
 });
 

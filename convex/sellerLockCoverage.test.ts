@@ -84,6 +84,12 @@ const UNLOCKED: Record<string, string> = {
 	"subscriptionPayments.finishAutoRenewSetup": "billing: save a payment method",
 	"subscriptionPayments.cancelAutoRenew":
 		"billing: turning auto-renewal off must never need an active sub — that would be a trap",
+	"creditPurchases.createTopUp":
+		"billing: buying credits is the door out of the credit lock (T3) — locking it would trap an out-of-credits seller. A lapsed (past_due) store is refused by topUpRefusal instead, with copy pointing at its invoice",
+	"creditPurchases.verifyCreditPurchase":
+		"billing: confirm a top-up payment that already happened",
+	"creditPurchases.getOrCreateReceiptPdfUrl":
+		"billing: read their own top-up receipt",
 
 	// 3. Account, legal, onboarding state, and read-only artifacts.
 	"retailers.createRetailer": "no store yet — nothing to lock",

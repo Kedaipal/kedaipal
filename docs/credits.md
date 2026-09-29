@@ -1,6 +1,6 @@
 # Kedaipal Credits — the order-credit ledger
 
-> **Status:** T1 (the ledger — ClickUp [`86eye2ccu`](https://app.clickup.com/t/86eye2ccu)) built. T2 top-up packs (`z8r3fdf8ht`), T3 meter + seller lock + notices (`z8r3fdf8hy`), T4 auto top-up (`z8r3fdf8wa`) and T5 public surfaces + release pack (`z8r3fdfu31`) build on it and add their own sections below. Decision register: `z8r3fdf8j1` (Arif, locked 17 Sep 2026) — with **Zaki's 30 Sep 2026 overrides** (refund rule, trial allowance, team permission), marked below.
+> **Status:** T1 (the ledger — ClickUp [`86eye2ccu`](https://app.clickup.com/t/86eye2ccu)) built. T2 top-up packs ([`z8r3fdf8ht`](https://app.clickup.com/t/z8r3fdf8ht)) built — see [Top-up packs (T2)](#top-up-packs-t2). T3 meter + seller lock + notices (`z8r3fdf8hy`), T4 auto top-up (`z8r3fdf8wa`) and T5 public surfaces + release pack (`z8r3fdfu31`) build on it and add their own sections below. Decision register: `z8r3fdf8j1` (Arif, locked 17 Sep 2026) — with **Zaki's 30 Sep 2026 overrides** (refund rule, trial allowance, team permission), marked below.
 
 **1 credit = 1 order.** Every plan includes credits each month; sellers can buy
 more. From 1 Oct 2026 every order carries a real Meta messaging cost, so a flat
@@ -230,3 +230,202 @@ their grant (the query is in the T1 PR).
 Audit a store: `npx convex run credits:internalRecomputeBalance
 '{"retailerId":"…"}'` (add `"repair": true` to fix a drift — but find what wrote
 around `applyEntry` first).
+
+## Top-up packs (T2)
+
+**ClickUp:** [`z8r3fdf8ht`](https://app.clickup.com/t/z8r3fdf8ht) · **Files:**
+`convex/creditPurchases.ts` (the lifecycle), `convex/lib/creditPurchases.ts`
+(pure rules + refusal copy), `convex/lib/hitpayBillingClient.ts` (the one HTTP
+client for Kedaipal's own HitPay account), `convex/lib/hitpayBilling.ts`
+(request params, method labels), `convex/billingEmail.ts` +
+`convex/lib/billingEmailCopy.ts` (the receipt email), `convex/lib/pdf/` (the
+receipt PDF), `src/components/settings/credit-top-up-dialog.tsx` (the picker),
+`src/lib/credit-top-up.ts` (the URL contract).
+
+A seller picks a pack and pays on HitPay's hosted checkout — **Kedaipal's own
+HitPay account**, the same one-off payment request as a subscription invoice's
+Pay-now link, never the seller's BYO HitPay. The credits land in the purchased
+bucket **exactly once**, as a 12-month lot, through `addPurchasedCredits`.
+
+### Packs and currency
+
+| Billing currency | Packs |
+| --- | --- |
+| MYR | 50 credits — RM 45 · 200 credits — RM 160 |
+| SGD | 50 credits — S$ 22 · 200 credits — S$ 75 |
+
+A store sees **one currency's packs: its BILLING currency** — `renewalCurrency`
+(the newest paid invoice's currency, else the country), the author renewals
+already bill by. Never the visitor's geo cookie: a Malaysian seller on holiday
+in Singapore still pays in ringgit. A pack id from the other currency is
+refused. The purchase row freezes the pack, credits, amount and currency;
+nothing ever re-prices it.
+
+### Who can buy
+
+**The store** (`topUpRefusal`, which wraps T1's `topUpBlock`): an active,
+comped or missing-row store buys. Every other status is refused with copy that
+names the way out — the server's refusal and the picker's disabled-with-reason
+line are one author (`topUpRefusalMessage`):
+
+| Status | The owner reads | Way out in the picker |
+| --- | --- | --- |
+| `trialing` | "Credit packs top up a paid plan. Pick a plan first…" | Choose a plan |
+| `past_due` | "Your invoice INV-… is overdue. Pay it first…" | **Pay INV-…** (its Pay-now link), else View the invoice |
+| `on_hold` | "Your plan is on Off-Season Hold. Resume it first…" | Resume your plan |
+| `cancelled` | "Your subscription has ended. Choose a plan first…" | Choose a plan |
+| admin's own store | "Kedaipal admin stores aren't billed…" | — |
+
+A teammate reads the same reason addressed to them ("Ask the store owner to…")
+and gets no button: every way out is a billing write, which is the owner's.
+**A Kedaipal admin's own store** is its own refusal (a judgment call beyond the
+ticket): it sits in `trialing` forever and is never locked, so "pick a plan
+first" would be advice it can't take.
+
+**The person**: credits **WRITE** (`requireRetailerAccess(…, {area: "credits",
+level: "write"})`) — the owner and an admin always, a teammate only with the
+grant. **Under admin act-as it is refused**: billing is view-only there (the
+`subscriptions.setSeasonalHold` posture) and an admin adds credits with an
+audited `credits.adminAdjust` instead. A teammate pays on HitPay's page **with
+their own card or wallet** — no saved card is ever charged for a manual top-up
+— and the owner is emailed a receipt that names them.
+
+### The lifecycle
+
+```
+createTopUp (action, public)
+  └ openPurchase (mutation): credits write · not act-as · billingSelfServe rate
+     limit · pack ∈ the billing currency · topUpRefusal → insert PENDING,
+     schedule expirePurchase at +24h
+  └ POST /payment-requests  (expires_after "1440 mins", webhook, redirect
+     /app/settings?tab=billing&topup=return)
+  └ recordPurchaseRequest → return the checkout URL; the client redirects
+
+pending ──settlePurchase──▶ paid     (lot + ledger row; then finalize + GA4)
+pending ──24h, unpaid────▶ expired  (HitPay request DELETEd)
+pending ──mint failed────▶ failed   (the checkout never existed)
+```
+
+`creditPurchases` is its own table — deliberately **not** `invoices`: a pending
+invoice past its due date locks the store and blocks renewals
+([hitpay-recurring.md](./hitpay-recurring.md#why-credit-as-days-and-not-charge-the-difference)
+rejected "top-up invoices" for exactly this), and an abandoned top-up must do
+neither.
+
+### Settling — exactly once
+
+Three callers land in ONE mutation, `settlePurchase`: the v1 completion webhook,
+the return reconcile (`verifyCreditPurchase`), and the expiry's last look.
+
+| The purchase is… | …and the payment | Result |
+| --- | --- | --- |
+| pending | amount AND currency match | **paid** — lot + `purchase` ledger row (`refId` = the purchase, `refLabel` "50-credit pack") |
+| paid | the same payment id | duplicate — a plain no-op |
+| paid | a different payment id | `gatewayIssue: late_payment`, no credit |
+| expired / failed | anything | `gatewayIssue: late_payment`, **no credit** |
+| pending | wrong amount or currency | `gatewayIssue: amount_mismatch`, **no credit**, still pending |
+
+The status flip and `addPurchasedCredits` share the transaction, so the paid
+guard IS the idempotency: a second delivery can never mint a second lot. An
+issue is stamped once and never overwritten. After a settle: `finalizePaidPurchase`
+names the rail (the v1 webhook doesn't carry one — it asks HitPay's status API),
+freezes the receipt PDF, then schedules the receipt email, in that order so both
+say how the seller paid; and the server-side GA4 `credits_topup_paid` goes out.
+**Referral T2 hooks in right there** (the referrer's reward on a referee's first
+paid pack — a comment marks the spot; not built).
+
+### The webhook branch
+
+`POST /webhook/hitpay`, v1 form branch: orders are resolved first
+(`hitpay.getWebhookContext`); a miss goes to ONE resolver,
+`subscriptionPayments.resolveBillingRequestContext`, which answers an invoice OR
+a credit purchase by `gatewayRequestId` — one query hop whichever it is.
+`handleBillingCompletionWebhook` verifies the HMAC with `HITPAY_BILLING_SALT`
+(fail-closed 500 without it, 401 on a bad signature), acks a non-completed
+status without touching anything (a declined attempt leaves the checkout open
+for another try), and dispatches to `settlePurchase`. Routing never reads
+`reference_number` — the `CRD-…` number is a label.
+
+### Expiry — 24 hours, per purchase
+
+`openPurchase` schedules `expirePurchase` at +24h — a per-purchase timer, not a
+daily sweep, so "expired" means exactly that. The HitPay request carries the
+same clock (`expires_after "1440 mins"` — minutes, the only unit sandbox has
+verified on this account). The expiry **never throws money away**: it asks
+HitPay once more first, and settles a payment whose webhook was lost; if HitPay
+can't be asked, it looks again an hour later (three looks in all) —
+"couldn't check" is not "didn't pay". Only then is the purchase `expired` and
+its request DELETEd. A payment that still turns up is stamped `late_payment`.
+
+### Back from HitPay, and the URL contract
+
+- `/app/settings?tab=billing&topup=1` **opens the picker**. Every "Top up"
+  button links there — use `TOP_UP_SEARCH` on a router `<Link>` or
+  `TOP_UP_HREF` as a plain path (`src/lib/credit-top-up.ts`). The validated
+  search carries the raw `1`, so a typed link produces a clean `topup=1`.
+- `/app/settings?tab=billing&topup=return` is where HitPay sends the buyer:
+  the dialog reopens on "Confirming your payment…", calls
+  `verifyCreditPurchase` once, and watches `latestPurchase` reactively — no
+  polling — into **paid** (credits, new balance, receipt), **not received yet**
+  (honest for both paid-but-slow and backed-out; flips to paid live if the
+  webhook lands), **expired**, or **flagged** (an uncredited payment: "we'll add
+  them or refund you", with a WhatsApp link quoting the `CRD-…` number).
+- Both are consumed once and stripped from the URL — a refresh or a shared link
+  never replays a confirmation.
+
+The dialog is mounted by the settings route **beside** the billing tab's
+`AreaGate`, not inside it: a teammate can hold credits write without billing
+read, and inside the gate the only place they can buy would be hidden.
+
+### Every state the picker has
+
+Loading (skeletons) · can buy (balance being topped up — "37 orders left",
+"12 from your plan · 25 topped up" — both packs, "Better value" on the cheaper
+per credit, the rules, the Terms `#credits` link) · refused (disabled with the
+reason and the way out) · view-only teammate (`NeedsAccessNote`) · no credits
+access (the note is the surface) · admin act-as (view-only note, reads the
+seller's store) · online top-ups unavailable (no packs, a WhatsApp link) ·
+opening HitPay. A Starter store also reads that Pro includes 200 orders a month
+and is cheaper for steady volume — a line, not a button; never shown where no
+upgrade is on offer (Pro, Scale, founding, a custom grant).
+
+### Receipts and history
+
+- **Email** (`billingEmail.notifyCreditPurchaseReceipt`, en/ms/zh): to the
+  store's billing inbox (`notifyEmail`) for EVERY top-up, naming the teammate
+  when one bought it and saying their own method paid; plus a copy to that
+  teammate (a judgment call beyond the ticket — they paid and need proof). Pack,
+  credits, amount, rail, date, the lot's expiry, the `CRD-…` number and
+  "non-refundable and not redeemable for cash". Dates on the MYT wall clock,
+  matching the PDF. Preview: `npx convex run
+  billingEmail:sendSampleBillingEmail '{"to":"…","key":"creditPurchaseReceipt","member":true}'`.
+- **PDF** (`buildCreditPurchaseReceiptPdf`): frozen once paid on
+  `receiptPdfStorageId`, rendered on demand if missing, served by
+  `getReceiptPdfUrl` behind credits READ.
+- **Billing history** (`myPurchases`, credits read): paid top-ups merge into the
+  billing tab's list — now "Billing history" — dated by when each was paid,
+  with a receipt button; a teammate's purchase reads "Bought by {name}".
+
+### Deleting a store
+
+The rows are retained (a financial record, like invoices). The
+`creditPurchases` deletion phase closes every still-pending checkout (`expired`)
+and DELETEs its HitPay link — a payment into a deleted store is only ever a
+refund, and one that slips through lands as `late_payment`.
+
+### Operator notes (T2)
+
+- **Env vars:** none new. `HITPAY_BILLING_API_KEY` / `HITPAY_BILLING_SALT`
+  absent ⇒ `topUpOptions.available` is false, every top-up surface hides, and
+  `createTopUp` refuses.
+- **Schema:** the new `creditPurchases` table (indexes `by_retailer_created`,
+  `by_retailer_status_created`, `by_gateway_request`). Additive; no backfill.
+- **First sandbox run:** confirm HitPay accepts `expires_after "1440 mins"` —
+  a 422 there would fail every top-up at "Couldn't open the payment page".
+- **An uncredited payment needs a person:** `npx convex run
+  creditPurchases:internalListIssues` lists late payments and mismatches; land
+  the credits with `credits:adminAdjust` (purchased bucket, a note naming the
+  `CRD-…` number) or refund it in HitPay.
+- **GA4:** mark `credits_topup_paid` as a key event (docs/analytics.md).
+- **Terms:** the picker links `/terms#credits` — T5's Credits clause. The
+  picker must not be reachable in production before that clause is live.

@@ -23,6 +23,10 @@
  *    the seller bought and spent (purchased credits are deferred revenue until
  *    spent or expired). Like invoices: seller billing data, no buyer PII, kept
  *    for bookkeeping. Their `retailerId`/`orderId` refs dangle — expected.
+ *  - `creditPurchases` rows + their `receiptPdfStorageId` blobs (Credits T2,
+ *    z8r3fdf8ht) — what the seller paid Kedaipal for top-up packs, the same
+ *    kind of record as an invoice. Their `creditPurchases` PHASE doesn't
+ *    delete them: it closes every still-pending checkout (below).
  *  - `adminAuditLog` rows — an audit trail must outlive the tenant it audited
  *    (`targetId`s are doc ids / last-4 only, never buyer PII).
  *  - `optOuts` rows are the buyer's standing suppression instruction, GLOBAL
@@ -55,6 +59,7 @@ export const DELETION_PHASES = [
 	"counterCheckoutSessions",
 	"subscriptions",
 	"subscriptionUsage",
+	"creditPurchases",
 	"creditAccounts",
 	"creditLots",
 	"foundingMembers",
@@ -289,6 +294,35 @@ export async function runDeletionPhase(
 				.take(limit);
 			for (const usage of rows) await ctx.db.delete(usage._id);
 			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "creditPurchases": {
+			// Retained by decision (see the header) — but, like a pending
+			// invoice, a live top-up checkout must not outlive the store: a
+			// payment into a deleted store is only ever a refund. Expire every
+			// pending purchase and kill its HitPay link; a payment that still
+			// slips through is stamped `late_payment` and never credited.
+			// Expired rows drop out of the index range, so re-entry never
+			// redoes work.
+			const pending = await ctx.db
+				.query("creditPurchases")
+				.withIndex("by_retailer_status_created", (q) =>
+					q.eq("retailerId", retailerId).eq("status", "pending"),
+				)
+				.take(limit);
+			for (const purchase of pending) {
+				await ctx.db.patch(purchase._id, {
+					status: "expired",
+					expiredAt: Date.now(),
+				});
+				if (purchase.gatewayRequestId) {
+					await ctx.scheduler.runAfter(
+						0,
+						internal.creditPurchases.deletePurchaseRequest,
+						{ requestId: purchase.gatewayRequestId },
+					);
+				}
+			}
+			return { processed: pending.length, done: pending.length < limit };
 		}
 		case "creditAccounts": {
 			// The cached balance row (Credits, 86eye2ccu) — derived state, gone with
