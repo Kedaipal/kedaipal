@@ -19,6 +19,9 @@ erDiagram
     retailers ||--o{ slugHistory : "renamed from"
     customers ||--o{ orders : "places (nullable)"
     orders ||--o{ orderEvents : "audited by"
+    retailers ||--|| creditAccounts : "credit balance"
+    retailers ||--o{ creditLedger : "credit movements"
+    retailers ||--o{ creditLots : "purchased credits"
     products ||--o{ productVariants : "varies into"
     productVariants ||--o{ orders : "snapshotted into items[]"
 
@@ -215,6 +218,25 @@ The core transactional entity. Two independent dimensions:
 Immutable append-only audit log. One row per status transition or notable action. Notes seen in code: `"address_updated"`, `"payment_claimed"`, `"payment_received"`, `"payment_received_auto_confirm"`, `"Confirmed via WhatsApp"`.
 
 **Index:** `by_order`.
+
+### Kedaipal Credits: `creditAccounts`, `creditLedger`, `creditLots`
+
+The order-credit ledger (ClickUp `86eye2ccu`). 1 credit = 1 order, debited when an
+order is created. Full model: [`credits.md`](./credits.md).
+
+| Table | One row per | What it holds |
+| --- | --- | --- |
+| `creditAccounts` | store | The CACHED `planBalance` (may be negative — a debt) and `purchasedBalance`, the usage period (`periodKey` `YYYY-MM`, `periodGrant`), an admin `grantOverride`, the `annualGrant` locked for a prepaid year, the seller refund count, and `exhaustedAt`. Written only by `applyEntry` in `convex/credits.ts`, in the same mutation as its ledger row. |
+| `creditLedger` | credit movement | Append-only source of truth: `type` (grant / purchase / debit / refund / adjust / expire), `bucket`, signed `amount`, `reason`, `refId` (the order id for debits and refunds — the idempotency key), `refLabel` (`ORD-XXXX`), the running `planAfter` / `purchasedAfter`, and for admin adjustments a `note`. **Retained** when a store is deleted — a financial record, like `invoices`. |
+| `creditLots` | batch of purchased credits | `credits`, `remaining`, `open`, `expiresAt` (12 calendar months after landing), `source` (purchase / referral / adjust). Spent oldest-first; `purchasedBalance` always equals the sum of `remaining`. |
+
+**Indexes:** `creditAccounts.by_retailer`, `by_period` (the month-boundary sweep);
+`creditLedger.by_retailer_created`, `by_retailer_ref_type` (per-order idempotency);
+`creditLots.by_retailer_open_expiry` (spend + expiry order), `by_open_expiry` (the
+daily expiry sweep).
+
+Deliberately **not** fields on `retailers`: the storefront reads the retailer doc,
+and a per-order balance patch there would re-run every open storefront tab.
 
 ## The mirrored-validation pattern
 

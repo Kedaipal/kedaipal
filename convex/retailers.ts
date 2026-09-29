@@ -286,6 +286,7 @@ import {
 } from "./lib/whatsapp";
 import { TEMPLATE_MAX_LENGTH } from "./lib/whatsappCopy";
 import { ordersThisMonth } from "./subscriptionUsage";
+import { ensureCreditAccount } from "./credits";
 import {
 	assertSupportedCurrency,
 	DEFAULT_CURRENCY,
@@ -1614,6 +1615,9 @@ export const createRetailer = mutation({
 			args.intent ?? "public",
 			now,
 		);
+		// Open the credit account with the trial allowance (Credits, 86eye2ccu),
+		// so the balance exists from day one rather than at the first order.
+		await ensureCreditAccount(ctx, retailerId, now);
 
 		return { slug };
 	},

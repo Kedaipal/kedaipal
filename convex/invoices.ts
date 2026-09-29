@@ -47,6 +47,7 @@ import {
 } from "./lib/plans";
 import { rateLimiter } from "./lib/rateLimiter";
 import { enforceSeatCap } from "./lib/seats";
+import { applyCreditsOnSettle, prepareCreditsForSettle } from "./credits";
 import { getPaymentProvider, type PaymentRecord } from "./payments/provider";
 import { reserveFoundingRank, stampFoundingPaid } from "./foundingMembers";
 import { defaultCapsForPlan } from "./subscriptions";
@@ -102,6 +103,20 @@ async function settleInvoicePaid(
 	record: PaymentRecord,
 ): Promise<{ rank: number | null; firstTime: boolean }> {
 	const now = record.paidAt;
+
+	// Credits (86eye2ccu): roll the credit account into the current period
+	// under the status the store held until this payment — BEFORE the
+	// subscription is rewritten below — so a month that turned while it was
+	// trialing or past_due is refreshed by the rules that applied then. A
+	// ledger fault never blocks a payment settle.
+	try {
+		await prepareCreditsForSettle(ctx, invoice.retailerId, now);
+	} catch (err) {
+		console.error("[credits] pre-settle roll failed — settle continues", {
+			invoiceId: invoice._id,
+			err,
+		});
+	}
 
 	// First-ever payment? (drives welcome vs thanks email below). Counted before
 	// we flip this invoice, so it reflects PRIOR paid invoices.
@@ -247,6 +262,27 @@ async function settleInvoicePaid(
 	//     A hold settle keeps the tier, so seats survive a hold by design.
 	if (!isHold && retailerForCarryover) {
 		await enforceSeatCap(ctx, retailerForCarryover, caps.userCap, now);
+	}
+
+	// 2c) Credits (86eye2ccu): the same single plan-flip moment decides what
+	//     the payment does to the plan bucket — a trial converting starts the
+	//     plan's credits, a past_due store gets the grant it was waiting for,
+	//     an upgrade gets the difference now, an annual payment locks its
+	//     grant for the term. `sub` is the PRE-payment row.
+	try {
+		await applyCreditsOnSettle(ctx, {
+			retailerId: invoice.retailerId,
+			fromStatus: sub.status,
+			isHold,
+			billingCycle: billedCycle,
+			periodEnd: grantedPeriodEnd,
+			now,
+		});
+	} catch (err) {
+		console.error("[credits] settle grant failed — settle continues", {
+			invoiceId: invoice._id,
+			err,
+		});
 	}
 
 	// 3) Founding — the slot is reserved at onboard (signup). For the

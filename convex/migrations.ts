@@ -15,6 +15,7 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalMutation } from "./_generated/server";
+import { ensureCreditAccount } from "./credits";
 import { generateTrackingToken } from "./lib/order";
 import { capsForPlan } from "./lib/plans";
 import { isOrderPaymentMethod } from "./lib/paymentMethod";
@@ -478,5 +479,52 @@ export const backfillOrderFlows = internalMutation({
 			});
 		}
 		return { patched, isDone: page.isDone };
+	},
+});
+
+/**
+ * Kedaipal Credits (86eye2ccu): open a credit account for every existing
+ * store — the AFTER-DEPLOY step of the credits release (listed in the release
+ * PR's operator checklist). Each store opens with the grant its status earns
+ * today, for the current usage period: the one-off trial allowance (200), its
+ * plan's monthly grant (Founding Pro 300, Scale 500; comped and admin-owned
+ * stores their plan's), or nothing while past_due / on hold — that grant
+ * lands the moment they pay or resume. The FULL grant, never "grant minus
+ * this month's orders": nobody starts the credits era in debt or locked. No
+ * welcome credits (dropped 17 Sep 2026).
+ *
+ * Idempotent (a store that already has an account — opened at signup, or by
+ * its first order since the deploy — is only rolled, never re-granted) and
+ * batched: each run handles one page and schedules the next, so it is run
+ * ONCE per deployment. Returns this page's counts; every page logs its own.
+ */
+export const backfillCreditAccounts = internalMutation({
+	args: { cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (
+		ctx,
+		{ cursor },
+	): Promise<{ scanned: number; created: number; isDone: boolean }> => {
+		const now = Date.now();
+		const page = await ctx.db
+			.query("retailers")
+			.paginate({ numItems: 100, cursor: cursor ?? null });
+		let created = 0;
+		for (const retailer of page.page) {
+			const ensured = await ensureCreditAccount(ctx, retailer._id, now);
+			if (ensured?.created) created++;
+		}
+		console.log("[credits] backfill page", {
+			scanned: page.page.length,
+			created,
+			isDone: page.isDone,
+		});
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.migrations.backfillCreditAccounts,
+				{ cursor: page.continueCursor },
+			);
+		}
+		return { scanned: page.page.length, created, isDone: page.isDone };
 	},
 });

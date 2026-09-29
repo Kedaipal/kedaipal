@@ -16,7 +16,8 @@ removal and grant edits bite on the member's next call.
 
 - **Areas, not components** (`convex/lib/permissions.ts`, the registry):
   `orders · products · customers · bookings · insights · exports ·
-  store_settings · fulfilment · payments_settings · integrations · billing`.
+  store_settings · fulfilment · payments_settings · integrations · credits ·
+  billing`.
   Every tab, route and dashboard widget declares the area whose data it reads
   and inherits visibility — a future Lalamove-balance widget declares
   `integrations` and needs no new permission row. This keeps the Team page ~11
@@ -30,6 +31,14 @@ removal and grant edits bite on the member's next call.
   nature; **`billing` write is owner-only in v1** — plan changes, cancel and
   auto-renew move the owner's money. Relaxing any of these is one registry
   line, not a migration.
+- **`credits`** (Kedaipal Credits, Zaki 30 Sep 2026 — [`credits.md`](./credits.md)):
+  view = the order-credit balance and its history; **edit = buying credit packs,
+  and it IS grantable** — keeping a locked shop running mid-rush shouldn't need
+  the owner. A member pays on the HitPay checkout page themselves; the owner's
+  saved card is never charged by a member, and the owner is emailed every
+  member purchase. Plan changes stay under `billing` (owner-only). The "Store
+  manager" preset includes credits *view*; buying is always the owner's grant
+  to give.
 - **Hard owner-only, never in the matrix:** the Team page itself, the
   WhatsApp tab (store numbers + templates — Arif D2), slug rename,
   currency/country, business (legal) identity, consent re-acceptance, account

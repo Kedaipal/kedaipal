@@ -27,6 +27,7 @@ import {
 	isUnlimited,
 	OUTLET_ADDON_MONTHLY_PRICES,
 	PLAN_CAPS,
+	PLAN_CREDIT_GRANT,
 	PLAN_MONTHLY_PRICE,
 	PLAN_MONTHLY_PRICES,
 	planPrice,
@@ -228,11 +229,11 @@ describe("plans — gating helpers", () => {
 			userCap: 1,
 			broadcastQuota: 0,
 		});
-		// Pro 200 / Scale 400 — the allowances /pricing had advertised ahead of
-		// enforcement (86eye2ccu), landed with the pricing reset (z8r3fday24).
-		// userCap is TOTAL people incl. the owner: Pro = "You + 2 teammates",
-		// Scale = "You + 5" (team seats, 86exr91r4). Changing these needs
-		// migrations.resyncSubscriptionCaps on prod (caps are denormalized).
+		// Pro 200 / Scale 500 — the Credits grants (86eye2ccu; Scale moved from
+		// 400 to 500 on 17 Sep 2026). userCap is TOTAL people incl. the owner:
+		// Pro = "You + 2 teammates", Scale = "You + 5" (team seats, 86exr91r4).
+		// Changing these needs migrations.resyncSubscriptionCaps on prod (caps
+		// are denormalized).
 		expect(capsForPlan("pro")).toEqual({
 			orderCap: 200,
 			userCap: 3,
@@ -241,16 +242,17 @@ describe("plans — gating helpers", () => {
 		// Scale's "unlimited" was dropped for finite soft caps (Arif 2026-06-28);
 		// broadcasts stay 500/mo (~5× Pro). All finite.
 		expect(capsForPlan("scale")).toEqual({
-			orderCap: 400,
+			orderCap: 500,
 			userCap: 6,
 			broadcastQuota: 500,
 		});
 	});
 
-	test("the order allowances match what /pricing advertises (100 / 200 / 400)", () => {
-		expect(PLAN_CAPS.starter.orderCap).toBe(100);
-		expect(PLAN_CAPS.pro.orderCap).toBe(200);
-		expect(PLAN_CAPS.scale.orderCap).toBe(400);
+	test("the order allowance IS the credit grant — one number, one source (100 / 200 / 500)", () => {
+		expect(PLAN_CREDIT_GRANT).toEqual({ starter: 100, pro: 200, scale: 500 });
+		for (const plan of PLANS) {
+			expect(PLAN_CAPS[plan].orderCap).toBe(PLAN_CREDIT_GRANT[plan]);
+		}
 	});
 
 	// The UNLIMITED/isUnlimited sentinel is retained for a future Enterprise tier
