@@ -107,14 +107,52 @@ save-card session, so even inside the window it saw 0 and charged. Both are
 pinned by tests that drive the real path (unknown outcome → cron at +24h and
 +48h, and mid-dunning) against the captured payload shape.
 
-**Known edge, until the auto-charge-hold follow-up lands.** A stamp names the
-bill it was fired for. If that bill is **voided** (an admin void, or the seller
-switching plan) while its outcome is unknown, and HitPay did take that charge,
-the reconcile settles the *replacement* bill with it: no second debit, but the
-money is recorded against the wrong bill (wrong whenever the two totals
-differ) and the voided bill carries no audit. The follow-up holds the
-replacement instead, audits the voided bill, and says so to the seller and in
-the admin console.
+### A charge that lands on a voided bill is STRANDED (audit + hold)
+
+A stamp names the bill it was fired for (`pendingChargeInvoiceId`), and a
+reconciled charge belongs to **that** bill — `chargeContext.attemptInvoice`,
+not whichever bill the retry happens to be charging. If that bill was
+**voided** while the outcome was unknown (an admin void, or the seller
+switching plan) and HitPay did take the charge, the money is *stranded*.
+Decided (Zaki, 30 Sep 2026): **audit it and hold**, because both alternatives
+are wrong with money — booking it against the replacement records the wrong
+bill (and the wrong amount whenever the totals differ), and charging the
+replacement is the double debit this whole machine exists to prevent.
+
+- **One place decides.** `internalSettleFromGateway`'s "money on a non-pending
+  bill" branch already audits (`gatewayIssue: late_payment` on the voided
+  bill). When the sub's attempt stamp still names that bill — only a void can
+  leave it there; a settle clears it — the same branch **strands** it: resolves
+  the stamp, catches `timesCharged` up with HitPay (a counter left behind would
+  make the *next* unknown outcome read "HitPay took it" and settle a bill for
+  free), and records `autoRenew.strandedCharge` (bill number, amount, currency,
+  HitPay reference). Both doors land here: the reconcile, and a late
+  `charge.created` webhook (which resolves to the stamped bill too).
+- **Nothing charges while it's set.** `autoChargeAllowed(autoRenew)`
+  (`lib/hitpayBilling.ts`) is the ONE rule — the daily cron, renewal issue,
+  `subscribeSelf`, `changePlan` and `chargeDueRenewal` itself all ask it, so no
+  door can keep charging a stopped store. A bill written meanwhile is billed,
+  never charged (`chargingSavedMethod: false`, `autoCharge: false`).
+- **Any settle lifts it.** `settleInvoicePaid` clears `strandedCharge` with the
+  rest of the dunning state: the admin applied the money (marking the open bill
+  paid) or refunded it and the seller paid by hand — either way a human
+  decided, and charging resumes from the next renewal.
+- **The seller is told, and told not to pay twice.** `SubscriptionView.autoRenew
+  .stopped` drives the auto-renewal card's amber state, the dashboard banner
+  (`autoRenewStopped`, which outranks the declined banner), a "hold off" line
+  above the pay buttons (the options stay — we may ask them to pay), and the
+  plan cards, which stop promising a charge (the picker writes the invoice and
+  stays put instead of opening the authorisation page that would refuse,
+  "already on").
+- **The admin sees it on the store's rows.** Both admin lists render one
+  component (`AutoChargePill`/`AutoChargeDetail`, `describeAutoCharge`):
+  **Auto-charge stopped** (red, with an icon) leads with the fact, then the two
+  ways out, then the HitPay reference with a copy button; stopped stores sort
+  first in the auto-renewal overview. The same component shows **Charge
+  unconfirmed** (amber) for an attempt with no outcome older than an action can
+  run (10 min) — the state that used to be invisible there.
+- **Turning auto-renewal off** drops the hold with the rest of `autoRenew`; the
+  `late_payment` stamp on the voided bill stays as the record.
 
 ## Dunning (Kedaipal-owned)
 
