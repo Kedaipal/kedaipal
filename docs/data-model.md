@@ -238,7 +238,13 @@ order is created. Full model: [`credits.md`](./credits.md).
 `creditLots.by_retailer_open_expiry` (spend + expiry order), `by_open_expiry` (the
 daily expiry sweep); `creditPurchases.by_retailer_created` (the return view's
 newest purchase), `by_retailer_status_created` (paid history, pending reconcile,
-the deletion phase), `by_gateway_request` (webhook resolution).
+the deletion phase), `by_gateway_request` (webhook resolution), `by_status_paid`
+(Admin → Billing's this-month top-up revenue — one bounded range, T3).
+
+`creditAccounts.notices` (`{periodKey, sent}`) is the balance-notice dedupe and
+`creditLots.expiryNoticeAt` stamps a lot's 14-day expiry heads-up (Credits T3 —
+[`credits.md`](./credits.md#the-notices)); both are written directly, never
+through `applyEntry`, because neither is a balance.
 
 Deliberately **not** fields on `retailers`: the storefront reads the retailer doc,
 and a per-order balance patch there would re-run every open storefront tab.

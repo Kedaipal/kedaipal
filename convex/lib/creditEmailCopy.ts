@@ -260,22 +260,24 @@ const copy: Record<
 		},
 	},
 	zh: {
+		// Vocabulary (docs/credits.md): credits = 点数 (unit 点, 1 点 = 1 张订单),
+		// top up = 充值 — the same words /pricing and the receipts use.
 		action: (v) => {
 			switch (v.route) {
 				case "pick_plan":
-					return "您的试用包含 200 笔订单。用完后请选择套餐以继续处理订单。";
+					return "您的试用包含 200 张订单。用完后请选择套餐以继续处理订单。";
 				case "pay_invoice":
-					return "支付账单后，本月额度立即到账。";
+					return "支付账单后，本月点数立即到账。";
 				case "resume":
-					return "恢复套餐后，本月额度立即到账。";
+					return "恢复套餐后，本月点数立即到账。";
 				case "subscribe":
-					return "选择套餐即可获得本月额度。";
+					return "选择套餐即可获得本月点数。";
 				case "topup":
-					return `您可随时在 Billing 页面${v.topUpAvailable ? "购买额度包" : "补充额度"}${v.upgrade ? `，或升级到 ${escapeHtml(v.upgrade.planName)}（每月含 ${v.upgrade.included} 笔订单）` : ""}。`;
+					return `您可随时在 Billing 页面${v.topUpAvailable ? "购买点数配套" : "充值"}${v.upgrade ? `，或升级到 ${escapeHtml(v.upgrade.planName)}（每月含 ${v.upgrade.included} 点）` : ""}。`;
 			}
 		},
 		cta: {
-			topup: "补充额度",
+			topup: "充值点数",
 			pick_plan: "选择套餐",
 			pay_invoice: "支付账单",
 			resume: "恢复套餐",
@@ -285,74 +287,76 @@ const copy: Record<
 		render: {
 			low: (v) => {
 				const n = left(v.balance);
-				const subject = `🔔 Kedaipal 还剩 ${n} 笔订单额度`;
+				const subject = `🔔 Kedaipal 还剩 ${n} 点`;
 				const lines = [
-					`${escapeHtml(v.storeName)} 您好，您还剩 <strong>${n} 笔订单</strong>的额度。`,
-					"额度用完后，您的网店仍然开放，新订单照常进来 —— 但在您补充额度之前，接单、更新订单和编辑商品都会暂停。",
+					`${escapeHtml(v.storeName)} 您好，您还剩 <strong>${n} 点</strong>（每张订单用 1 点）。`,
+					"点数用完后，您的网店仍然开放，新订单照常进来 —— 但在您充值之前，接单、更新订单和编辑商品都会暂停。",
 					copy.zh.action(v),
 				];
 				return {
 					subject,
-					html: wrapHtml("🔔", `还剩 ${n} 笔订单`, lines, v.billingUrl, copy.zh.cta[v.route]),
-					text: `🔔 您在 Kedaipal 还剩 ${n} 笔订单额度。\n额度用完后新订单照常进来，但接单、更新订单和编辑商品会暂停，直到您补充额度。\n\n${v.billingUrl}`,
+					html: wrapHtml("🔔", `还剩 ${n} 点`, lines, v.billingUrl, copy.zh.cta[v.route]),
+					text: `🔔 您在 Kedaipal 还剩 ${n} 点（每张订单用 1 点）。\n点数用完后新订单照常进来，但接单、更新订单和编辑商品会暂停，直到您充值。\n\n${v.billingUrl}`,
 				};
 			},
 			locked: (v) => {
 				const debt = owed(v.balance);
-				const subject = "⚠️ 您的额度已用完 —— 新订单仍在进来";
+				const subject = "⚠️ 您的点数已用完 —— 新订单仍在进来";
 				const lines = [
-					`${escapeHtml(v.storeName)} 您好，您的 Kedaipal 额度已全部用完${debt > 0 ? `（欠 ${debt} 笔订单）` : ""}。`,
-					"您的网店仍然开放，新订单照常进来。<strong>补充额度前暂停：</strong>接单、更新订单、编辑商品。<strong>仍可使用：</strong>查看所有订单、取消订单和退款。",
+					`${escapeHtml(v.storeName)} 您好，您的 Kedaipal 点数已全部用完${debt > 0 ? `（欠 ${debt} 点）` : ""}。`,
+					"您的网店仍然开放，新订单照常进来。<strong>充值前暂停：</strong>接单、更新订单、编辑商品。<strong>仍可使用：</strong>查看所有订单、取消订单和退款。",
 					copy.zh.action(v),
 				];
 				return {
 					subject,
-					html: wrapHtml("⚠️", "您的额度已用完", lines, v.billingUrl, copy.zh.cta[v.route]),
-					text: `⚠️ 您的 Kedaipal 额度已用完${debt > 0 ? `（欠 ${debt} 笔订单）` : ""}。\n新订单照常进来。接单、更新订单和编辑商品已暂停，直到您补充额度；查看、取消和退款仍可使用。\n\n${v.billingUrl}`,
+					html: wrapHtml("⚠️", "您的点数已用完", lines, v.billingUrl, copy.zh.cta[v.route]),
+					text: `⚠️ 您的 Kedaipal 点数已用完${debt > 0 ? `（欠 ${debt} 点）` : ""}。\n新订单照常进来。接单、更新订单和编辑商品已暂停，直到您充值；查看、取消和退款仍可使用。\n\n${v.billingUrl}`,
 				};
 			},
 			stillLocked: (v) => {
 				const debt = owed(v.balance);
-				const where = debt > 0 ? `您仍欠 ${debt} 笔订单` : "您的余额为 0 笔订单";
-				const subject = `额度已更新 —— ${where}`;
+				// A refresh can land exactly on 0 — still locked (the lock lifts
+				// above zero), but "欠 0 点" would read as a bug.
+				const where = debt > 0 ? `您仍欠 ${debt} 点` : "您的点数为 0";
+				const subject = `点数已更新 —— ${where}`;
 				const lines = [
 					debt > 0
-						? `${escapeHtml(v.storeName)} 您好，本月额度已到账，但上个月额度用完后收到的订单超过了本月额度，因此您仍欠 <strong>${debt} 笔订单</strong>。`
-						: `${escapeHtml(v.storeName)} 您好，本月额度已到账，但刚好抵消上个月额度用完后收到的订单，因此您的余额为 <strong>0 笔订单</strong>。`,
-					"在余额回到零以上之前，接单、更新订单和编辑商品仍然暂停。新订单照常进来，您仍可查看、取消订单和退款。",
+						? `${escapeHtml(v.storeName)} 您好，本月点数已到账，但上个月点数用完后收到的订单超过了本月点数，因此您仍欠 <strong>${debt} 点</strong>。`
+						: `${escapeHtml(v.storeName)} 您好，本月点数已到账，但刚好抵消上个月点数用完后收到的订单，因此您的点数为 <strong>0</strong>。`,
+					"在点数回到零以上之前，接单、更新订单和编辑商品仍然暂停。新订单照常进来，您仍可查看、取消订单和退款。",
 					copy.zh.action(v),
 				];
 				return {
 					subject,
-					html: wrapHtml("⚠️", debt > 0 ? `仍欠 ${debt} 笔订单` : "余额为 0 笔订单", lines, v.billingUrl, copy.zh.cta[v.route]),
-					text: `额度已更新，但${where}。\n在余额回到零以上之前，接单、更新订单和编辑商品仍然暂停。\n\n${v.billingUrl}`,
+					html: wrapHtml("⚠️", debt > 0 ? `仍欠 ${debt} 点` : "点数为 0", lines, v.billingUrl, copy.zh.cta[v.route]),
+					text: `点数已更新，但${where}。\n在点数回到零以上之前，接单、更新订单和编辑商品仍然暂停。\n\n${v.billingUrl}`,
 				};
 			},
 			unlocked: (v) => {
 				const n = left(v.balance);
-				const subject = `✅ 已恢复 —— 还剩 ${n} 笔订单额度`;
+				const subject = `✅ 已恢复 —— 还剩 ${n} 点`;
 				const lines = [
-					`${escapeHtml(v.storeName)} 您好，额度已补充，您还剩 <strong>${n} 笔订单</strong>的额度。`,
+					`${escapeHtml(v.storeName)} 您好，点数已到账，您还剩 <strong>${n} 点</strong>。`,
 					"接单、更新订单和编辑商品已恢复正常。",
 				];
 				return {
 					subject,
 					html: wrapHtml("✅", "已恢复正常", lines, v.billingUrl, copy.zh.cta.open),
-					text: `✅ 已恢复 —— 还剩 ${n} 笔订单额度。\n接单、更新订单和编辑商品已恢复正常。\n\n${v.billingUrl}`,
+					text: `✅ 已恢复 —— 还剩 ${n} 点。\n接单、更新订单和编辑商品已恢复正常。\n\n${v.billingUrl}`,
 				};
 			},
 			expiring: (v) => {
 				const c = v.expiring?.credits ?? 0;
 				const on = escapeHtml(v.expiring?.onFormatted ?? "即将");
-				const subject = `⏳ 您购买的 ${c} 笔额度将于 ${v.expiring?.onFormatted ?? "即将"} 到期`;
+				const subject = `⏳ 您购买的 ${c} 点将于 ${v.expiring?.onFormatted ?? "即将"} 到期`;
 				const lines = [
-					`${escapeHtml(v.storeName)} 您好，<strong>您购买的 ${c} 笔额度将于 ${on} 到期</strong>。`,
-					"购买的额度有效期为 12 个月。系统总是先使用套餐的每月额度，再使用最早购买的额度 —— 因此本月套餐额度用完后，会先使用这部分。",
+					`${escapeHtml(v.storeName)} 您好，<strong>您购买的 ${c} 点将于 ${on} 到期</strong>。`,
+					"购买的点数有效期为 12 个月。系统总是先使用套餐的每月点数，再使用最早购买的点数 —— 因此本月套餐点数用完后，会先使用这部分。",
 				];
 				return {
 					subject,
-					html: wrapHtml("⏳", `${c} 笔额度将于 ${on} 到期`, lines, v.billingUrl, copy.zh.cta.open),
-					text: `⏳ 您购买的 ${c} 笔额度将于 ${v.expiring?.onFormatted ?? "即将"} 到期。\n购买的额度有效期 12 个月；先用套餐额度，再用最早购买的额度。\n\n${v.billingUrl}`,
+					html: wrapHtml("⏳", `${c} 点将于 ${on} 到期`, lines, v.billingUrl, copy.zh.cta.open),
+					text: `⏳ 您购买的 ${c} 点将于 ${v.expiring?.onFormatted ?? "即将"} 到期。\n购买的点数有效期 12 个月；先用套餐点数，再用最早购买的点数。\n\n${v.billingUrl}`,
 				};
 			},
 		},

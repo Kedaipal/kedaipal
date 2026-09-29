@@ -574,7 +574,11 @@ function ProductsRoute() {
 				<ul className="grid grid-cols-1 gap-3 lg:grid-cols-2 lg:gap-3 xl:grid-cols-3">
 					{filtered.map((p) => (
 						<li key={p._id}>
-							<ProductCard product={p} spot={spot} />
+							<ProductCard
+								product={p}
+								spot={spot}
+								lockedReason={writeBlockReason ?? undefined}
+							/>
 						</li>
 					))}
 				</ul>
@@ -615,11 +619,16 @@ function ProductCard({
 	product: p,
 	dragHandle,
 	spot,
+	lockedReason,
 }: {
 	product: ProductListItem;
 	dragHandle?: ReactNode;
 	/** A What's-new deep link to forward — only rows the key applies to carry it. */
 	spot?: ProductSpotlightKey;
+	/** Why the catalogue can't change right now (view-only, out of credits, a
+	 * view-only teammate) — moving stock edits the product, so Stock greys out
+	 * with the rest. Resolved once by the page, not per row. */
+	lockedReason?: string;
 }) {
 	const forwardSpot =
 		spot && PRODUCT_SPOTLIGHT[spot].applies(p) ? spot : undefined;
@@ -646,9 +655,6 @@ function ProductCard({
 	// would read as a regression. This list is the one screen that already shows
 	// stock, so it is where the daily "sold three at the stall" belongs.
 	const [stockOpen, setStockOpen] = useState(false);
-	// Moving stock edits the product, so it greys out with the rest of the
-	// catalogue — view-only, out of credits, or a view-only teammate.
-	const lock = useAreaLock("products", { credits: true });
 	const stockLines: StockLine[] = p.active
 		? p.variants
 				// Made-to-order and bespoke lines have no count to move; offering one
@@ -781,8 +787,8 @@ function ProductCard({
 					// 44px button would bloat every row in a 3-up grid.
 					className="mr-2 h-11 shrink-0 bg-background px-3 text-xs lg:h-9"
 					onClick={() => setStockOpen(true)}
-					disabled={lock.readOnly}
-					title={lock.readOnly ? lock.reason : `Adjust stock for ${p.name}`}
+					disabled={lockedReason !== undefined}
+					title={lockedReason ?? `Adjust stock for ${p.name}`}
 				>
 					Stock
 				</Button>

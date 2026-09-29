@@ -2988,7 +2988,10 @@ export default defineSchema({
 		// Billing history (paid) and the return reconcile (pending), newest first.
 		.index("by_retailer_status_created", ["retailerId", "status", "createdAt"])
 		// v1 completion-webhook resolution: payment-request id → purchase.
-		.index("by_gateway_request", ["gatewayRequestId"]),
+		.index("by_gateway_request", ["gatewayRequestId"])
+		// Admin → Billing's top-up revenue tile: this month's PAID purchases in
+		// one bounded range (Credits T3 × T5).
+		.index("by_status_paid", ["status", "paidAt"]),
 
 	// Per-period invoice. Admin marks it paid out-of-band (DuitNow / bank). The
 	// founding pending invoice carries a `dueDate` that drives the active→past_due

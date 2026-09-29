@@ -31,6 +31,7 @@ import { billingPageUrl } from "./lib/billingUrl";
 import { addPurchasedCredits } from "./credits";
 import {
 	type RetailerAccess,
+	requireAdmin,
 	requireRetailerAccess,
 	resolveMyRetailer,
 	resolveMyRetailerFor,
@@ -73,6 +74,7 @@ import {
 	renewalCurrency,
 } from "./lib/plans";
 import { rateLimiter } from "./lib/rateLimiter";
+import { monthStartMyt, usagePeriodKey } from "./lib/usagePeriod";
 
 type AnyCtx = QueryCtx | MutationCtx;
 type Purchase = Doc<"creditPurchases">;
@@ -1156,5 +1158,48 @@ export const internalListIssues = internalQuery({
 					]
 				: [],
 		);
+	},
+});
+
+// ---------------------------------------------------------------------------
+// Admin → Billing
+// ---------------------------------------------------------------------------
+
+export type TopUpRevenue = {
+	/** The MYT calendar month counted ("2026-10"). */
+	periodKey: string;
+	byCurrency: Record<
+		BillingCurrency,
+		{ amountMinor: number; purchases: number; credits: number }
+	>;
+};
+
+/**
+ * This month's top-up revenue, per billing currency — the Admin → Billing tile
+ * Credits T5 left for when this table existed. PAID purchases only, counted by
+ * when the money arrived (`paidAt`, MYT calendar month): a checkout opened on
+ * the 31st and paid on the 1st belongs to the month it was paid. One indexed
+ * range over this month's paid rows, so it stays bounded as purchases grow.
+ */
+export const adminTopUpRevenue = query({
+	args: {},
+	handler: async (ctx): Promise<TopUpRevenue> => {
+		await requireAdmin(ctx);
+		const now = Date.now();
+		const byCurrency: TopUpRevenue["byCurrency"] = {
+			MYR: { amountMinor: 0, purchases: 0, credits: 0 },
+			SGD: { amountMinor: 0, purchases: 0, credits: 0 },
+		};
+		for await (const purchase of ctx.db
+			.query("creditPurchases")
+			.withIndex("by_status_paid", (q) =>
+				q.eq("status", "paid").gte("paidAt", monthStartMyt(now)),
+			)) {
+			const bucket = byCurrency[purchase.currency];
+			bucket.amountMinor += purchase.amountMinor;
+			bucket.purchases += 1;
+			bucket.credits += purchase.credits;
+		}
+		return { periodKey: usagePeriodKey(now), byCurrency };
 	},
 });

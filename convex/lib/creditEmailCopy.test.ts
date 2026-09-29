@@ -59,8 +59,8 @@ describe("credit notice emails (Credits T3)", () => {
 		(locale) => {
 			const out = renderCreditEmail(locale, "stillLocked", vars({ balance: 0 }));
 			for (const part of [out.subject, out.html, out.text]) {
-				expect(part).not.toMatch(/\b0 orders short|kurang 0 pesanan|欠 0 笔/);
-				expect(part).toMatch(/0 orders left|0 pesanan|0 笔订单/);
+				expect(part).not.toMatch(/\b0 orders short|kurang 0 pesanan|欠 0 点/);
+				expect(part).toMatch(/0 orders left|0 pesanan|点数为 0/);
 			}
 		},
 	);

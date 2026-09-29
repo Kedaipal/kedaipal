@@ -658,8 +658,25 @@ refusal and every lock surface's copy.
   registered by Zaki — list them under "Meta template approvals" in the
   release PR.
 - **Crons:** new "credit expiry notices", daily 16:15 UTC (00:15 MYT).
-- **Schema:** nothing new — T1 pre-declared `creditAccounts.notices` and
-  `creditLots.expiryNoticeAt`.
+- **Schema:** one additive index, `creditPurchases.by_status_paid` (the admin
+  revenue tile). T1 pre-declared `creditAccounts.notices` and
+  `creditLots.expiryNoticeAt`, so nothing else is new.
 - **Behaviour change on release:** stores at or below zero lock the moment it
   deploys; the backfill opens every account with its full grant, so nobody
   starts locked.
+- **Admin → Billing** gains the tile T5 deferred until the purchase table
+  existed: **Top-ups · {month}** — this MYT month's paid packs, summed per
+  currency (never flattened), with packs and credits sold
+  (`creditPurchases.adminTopUpRevenue`, admin only). It sits beside T5's two
+  credit tiles, which stay counts of credits, never money.
+- **Language:** the notices speak the product's vocabulary — ms "kredit" /
+  "tambah kredit", zh 点数 (unit 点) / 充值 — the same words as `/pricing`
+  and the receipts (T2's zh receipt said 额度 until the stack was joined).
+  Tests pin both.
+
+### How the credit PRs stack
+
+T1 ← T2 ← T5 ← T3, merged in that order: T2 must not ship without T3's Top
+up buttons (its only entry points), T3 and T5 both reshape the plan cards, and
+the four ship in one release so the dashboard and `/pricing` never disagree.
+T4 (auto top-up) builds on T2 afterwards.

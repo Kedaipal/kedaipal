@@ -75,7 +75,7 @@ describe("credit copy never speaks money", () => {
 	test("message catalogs: any line about credits stays in orders", () => {
 		// "Credit card" and a courier's own prepaid credit (Delyva) aren't ours.
 		const aboutCredits =
-			/\bcredits?\b(?!\s+card)|\bkredit\b(?<!kad kredit)|额度/i;
+			/\bcredits?\b(?!\s+card)|\bkredit\b(?<!kad kredit)|点数|额度|充值/i;
 		const notOurs =
 			/credit card|kad kredit|信用卡|Delyva credit|kredit Delyva/i;
 		const found: string[] = [];
@@ -95,6 +95,18 @@ describe("credit copy never speaks money", () => {
 			}
 		}
 		expect(found).toEqual([]);
+	});
+
+	// One Chinese word for credits across the product (the vocabulary table in
+	// docs/credits.md): 点数, unit 点. The notices once said 额度 while /pricing
+	// said 点 — a seller reading both would think they were two things.
+	test("the notices speak the product's Chinese word for credits", () => {
+		const zh = readFileSync(
+			join(ROOT, "convex/lib/creditEmailCopy.ts"),
+			"utf8",
+		);
+		expect(zh).not.toMatch(/额度/);
+		expect(zh).toMatch(/点数/);
 	});
 
 	test("the guard itself bites (so a green run means something)", () => {

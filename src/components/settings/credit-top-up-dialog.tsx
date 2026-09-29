@@ -34,6 +34,7 @@ import {
 } from "../../lib/format";
 import { trackEvent } from "../../lib/ga-events";
 import { leavePageTo } from "../../lib/leave-page";
+import { TERMS_ANCHOR } from "../../lib/legal";
 import { cn } from "../../lib/utils";
 import { NeedsAccessNote } from "../app/owner-only-note";
 import { Button } from "../ui/button";
@@ -383,7 +384,7 @@ function PickerView({
 			<p className="text-xs text-muted-foreground">
 				Credits are non-refundable and not redeemable for cash.{" "}
 				<a
-					href="/terms#credits"
+					href={`/terms#${TERMS_ANCHOR.credits}`}
 					target="_blank"
 					rel="noopener noreferrer"
 					className="font-medium text-foreground underline underline-offset-2"

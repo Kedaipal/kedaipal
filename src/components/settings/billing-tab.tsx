@@ -28,6 +28,7 @@ import { api } from "../../../convex/_generated/api";
 import {
 	FOUNDING_BENEFIT_WARNING_MS,
 	FOUNDING_PLAN,
+	PLAN_CREDIT_GRANT,
 } from "../../../convex/lib/plans";
 import { HOLD_LABEL } from "../../../convex/lib/seasonalHold";
 import { usePermission, useStoreRole } from "../../hooks/usePermission";
@@ -441,17 +442,19 @@ export function BillingTab({
 					) : null}
 
 					{/* Starter never sees the annual card (ANNUAL_OFFER_PLANS is Pro
-					    only), so the constraint is explained here rather than left as
-					    an unexplained absence — "why can't I?" is exactly the question
-					    a silent gap produces. The upgrade ACTION itself now lives in
-					    the plan-change card below (it used to hand off to Arif on
-					    WhatsApp; tier changes are self-serve since 86eyb6z4r). */}
+					    and Scale), so the constraint is explained here rather than left
+					    as an unexplained absence — "why can't I?" is exactly the
+					    question a silent gap produces. The upgrade ACTION itself lives
+					    in the plan-change card below (it used to hand off to Arif on
+					    WhatsApp; tier changes are self-serve since 86eyb6z4r). The
+					    allowance reads the grant — never a literal (Credits T3). */}
 					{sub?.plan === "starter" && sub.status === "active" ? (
 						<p className="border-t border-border pt-4 text-xs text-muted-foreground">
-							Want 200 orders/month, the customer database and the order inbox?
-							Move up to Pro below — which can also be billed annually, with two
-							months free. We don't offer annual on Starter: you shouldn't pay a
-							year upfront before the shop has proven itself.
+							Want {PLAN_CREDIT_GRANT.pro} credits a month, the customer
+							database and the order inbox? Move up to Pro below — which can
+							also be billed annually, with two months free. We don't offer
+							annual on Starter: you shouldn't pay a year upfront before the
+							shop has proven itself.
 						</p>
 					) : null}
 				</section>

@@ -17,6 +17,7 @@ import {
 	RefreshCw,
 	Send,
 	ShieldX,
+	ShoppingBag,
 	TrendingDown,
 	UserPlus,
 } from "lucide-react";
@@ -24,6 +25,7 @@ import { type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import type { TopUpRevenue } from "../../convex/creditPurchases";
 import {
 	COUNTRIES,
 	COUNTRY_LABELS,
@@ -34,8 +36,8 @@ import {
 	annualQuote,
 	BILLING_CURRENCIES,
 	type BillingCurrency,
-	type Plan,
 	PLANS,
+	type Plan,
 	planPrice,
 } from "../../convex/lib/plans";
 import { PageHeader } from "../components/dashboard/page-header";
@@ -304,14 +306,18 @@ function AdminBillingOverview() {
 }
 
 /**
- * The book-wide credit figures (Kedaipal Credits T5) — counts of CREDITS,
+ * The book-wide credit figures (Kedaipal Credits T5) — two counts of CREDITS,
  * never money: what sellers have bought and not used (the deferred-revenue
  * figure — service still owed) and the orders taken past zero that the next
- * grant or pack will absorb. Top-up REVENUE needs T2's purchase table and is
- * a follow-up, not a tile that guesses. Exported for its states test.
+ * grant or pack will absorb. Beside them, the one money figure: this month's
+ * top-up revenue from paid packs, per currency (Credits T3 × T2 — it waited
+ * for the purchase table rather than guess). Exported for its states test.
  */
 export function CreditTotals() {
 	const totals = useQuery(convexQuery(api.credits.adminCreditTotals, {})).data;
+	const revenue = useQuery(
+		convexQuery(api.creditPurchases.adminTopUpRevenue, {}),
+	).data;
 	const across = (n: number) => `across ${n} store${n === 1 ? "" : "s"}`;
 	const tiles = [
 		{
@@ -341,6 +347,7 @@ export function CreditTotals() {
 					? "border-destructive/30 bg-destructive/10 text-destructive"
 					: "border-border bg-muted/50 text-foreground",
 		},
+		topUpTile(revenue),
 	];
 	return (
 		<section aria-label="Credits" className="flex flex-col gap-2">
@@ -388,6 +395,48 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * confirms — the store is created under *their* account. After they confirm, they
  * appear in the Issue-invoice picker below. See docs/manual-subscription.md.
  */
+/** The top-up revenue tile: paid packs this calendar month, per currency —
+ * summed per currency like Outstanding, never flattened into one number. */
+function topUpTile(revenue: TopUpRevenue | undefined) {
+	const month =
+		revenue === undefined
+			? null
+			: new Date(`${revenue.periodKey}-01T00:00:00Z`).toLocaleString("en", {
+					month: "long",
+					timeZone: "UTC",
+				});
+	const paid = revenue
+		? (
+				Object.entries(revenue.byCurrency) as [
+					BillingCurrency,
+					TopUpRevenue["byCurrency"][BillingCurrency],
+				][]
+			).filter(([, b]) => b.purchases > 0)
+		: [];
+	const packs = paid.reduce((n, [, b]) => n + b.purchases, 0);
+	const credits = paid.reduce((n, [, b]) => n + b.credits, 0);
+	return {
+		label: month ? `Top-ups · ${month}` : "Top-ups",
+		value:
+			revenue === undefined
+				? "..."
+				: paid.length === 0
+					? formatPrice(0, "MYR")
+					: // MYR first — the server builds the record in that order.
+						paid
+							.map(([currency, b]) => formatPrice(b.amountMinor, currency))
+							.join(" + "),
+		helper:
+			revenue === undefined
+				? "Credit packs paid this month"
+				: packs === 0
+					? "No packs paid yet this month"
+					: `${packs} pack${packs === 1 ? "" : "s"} · ${credits.toLocaleString("en")} credits`,
+		icon: <ShoppingBag className="size-4" />,
+		className: "border-emerald-200 bg-emerald-50 text-emerald-800",
+	};
+}
+
 function OnboardClientCard() {
 	const [storeName, setStoreName] = useState("");
 	const [slug, setSlug] = useState("");

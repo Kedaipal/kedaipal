@@ -1036,3 +1036,82 @@ describe("account deletion", () => {
 		);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Admin → Billing: this month's top-up revenue (Credits T3 × T2)
+// ---------------------------------------------------------------------------
+
+describe("adminTopUpRevenue — the admin billing tile", () => {
+	const row = (
+		retailerId: Id<"retailers">,
+		over: Partial<Doc<"creditPurchases">>,
+	) => ({
+		retailerId,
+		packId: "p50",
+		credits: 50,
+		amountMinor: 4500,
+		currency: "MYR" as const,
+		status: "paid" as const,
+		source: "manual" as const,
+		createdBy: OWNER,
+		purchaseNumber: "CRD-202610-TEST",
+		createdAt: OCT_10,
+		paidAt: OCT_10,
+		...over,
+	});
+
+	test("counts this month's PAID packs per currency — never pending, expired or last month's", async () => {
+		const t = setup();
+		const { retailerId } = await makeStore(t);
+		const SEP_30 = Date.parse("2026-09-30T23:00:00+08:00");
+		await t.run(async (ctx) => {
+			await ctx.db.insert("creditPurchases", row(retailerId, {}));
+			await ctx.db.insert(
+				"creditPurchases",
+				row(retailerId, { packId: "p200", credits: 200, amountMinor: 16000 }),
+			);
+			await ctx.db.insert(
+				"creditPurchases",
+				row(retailerId, {
+					packId: "p50sg",
+					currency: "SGD",
+					amountMinor: 2200,
+				}),
+			);
+			// Not revenue: still pending, expired unpaid, and paid LAST month
+			// (opened on the 30th, the money arrived before the 1st).
+			await ctx.db.insert(
+				"creditPurchases",
+				row(retailerId, { status: "pending", paidAt: undefined }),
+			);
+			await ctx.db.insert(
+				"creditPurchases",
+				row(retailerId, { status: "expired", paidAt: undefined }),
+			);
+			await ctx.db.insert(
+				"creditPurchases",
+				row(retailerId, { createdAt: SEP_30, paidAt: SEP_30 }),
+			);
+		});
+		const revenue = await t
+			.withIdentity({ subject: ADMIN })
+			.query(api.creditPurchases.adminTopUpRevenue, {});
+		expect(revenue).toEqual({
+			periodKey: "2026-10",
+			byCurrency: {
+				MYR: { amountMinor: 20500, purchases: 2, credits: 250 },
+				SGD: { amountMinor: 2200, purchases: 1, credits: 50 },
+			},
+		});
+	});
+
+	test("admins only — a seller can't read the book", async () => {
+		const t = setup();
+		await makeStore(t);
+		await expect(
+			t
+				.withIdentity({ subject: OWNER })
+				.query(api.creditPurchases.adminTopUpRevenue, {}),
+		).rejects.toThrow();
+	});
+});

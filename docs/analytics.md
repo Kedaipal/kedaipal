@@ -166,6 +166,7 @@ them. Two server events extend the funnel past `store_created` via the GA4
 | `first_order` | ONCE per retailer ever — the moment `retailers.activatedAt` transitions unset → set (the existing write-once activation stamp IS the dedupe guard; all 8 confirm sites go through it) | [`stampRetailerActivation`](../convex/lib/activation.ts) |
 | `subscribe_paid` | every `invoices.markPaid` — renewals too, distinguished by `first_time`; carries `plan`, `cycle`, `value` (major units) + `currency` so revenue segments by channel | [`invoices.markPaid`](../convex/invoices.ts) |
 | `credits_topup_paid` | a credit-pack top-up settles (Credits T2, z8r3fdf8ht) — once per purchase: the settle's paid guard is the dedupe, so a repeated webhook never double-counts. Carries `value` (major units), `currency`, `pack_id` and `source` (`manual`; T4's auto top-up widens it) | [`creditPurchases.settlePurchase`](../convex/creditPurchases.ts) |
+| `credits_low_nudge_sent` · `credits_seller_locked` · `credits_seller_unlocked` | a balance notice goes out (Credits T3, z8r3fdf8hy) — once per threshold per period, deduped by `creditAccounts.notices`, so a burst is one event. `low` carries `orders_left`; `locked` carries `balance` and `still` (a refresh left it at or below zero); `unlocked` carries `route` | [`creditNotices.evaluate`](../convex/creditNotices.ts) |
 
 Both carry the retailer's stored **`src`** (`retailers.signupSource`), so the
 whole funnel — `land_marketing → … → store_created → first_order →
@@ -224,7 +225,7 @@ nothing of that shape to measure.
 | `credits_topup_paid` | a pack purchase settles and its lot lands — server-side, like `subscribe_paid` | T2 | **yes** — revenue |
 | `credits_low_nudge_sent` | the once-per-period "running low" notice goes out | T3 (`z8r3fdf8hy`) | no |
 | `credits_seller_locked` | a store's total reaches zero or below and the seller lock applies (never for comped or admin-owned stores) | T3 | no |
-| `credits_seller_unlocked` | the lock lifts; carries `route` = `topup` \| `upgrade` \| `refresh` \| `settle` — what brought the balance back above zero | T3 | no |
+| `credits_seller_unlocked` | the lock lifts; carries `route` = `topup` \| `upgrade` \| `refresh` \| `settle` \| `resume` \| `adjust` \| `refund` — what brought the balance back above zero | T3 | no |
 
 Every one carries the store's `src` like the funnel events above. Operator
 step when T2 ships: mark `credits_topup_paid` as a **key event** in GA4.
