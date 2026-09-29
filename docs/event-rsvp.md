@@ -218,8 +218,25 @@ For an RSVP order:
    checkout reads the venue through its own public query
    (`pickupLocations.eventVenuePublicBySlug` — same resolver, buyer-safe
    shape, gated so only a venue some live event actually names is served),
-   because the active-only public list rightly omits a hidden venue. The
-   Settings → Fulfilment row of a hosting point carries an "Event venue:
+   because the active-only public list rightly omits a hidden venue.
+   **The venue charges no pickup fee** (`z8r3fdjgvd`, 29 Sep 2026). A venue is
+   a `pickupLocations` row only because that is where a store keeps its
+   addresses — but a guest is *attending* something at that address, not
+   collecting an order from it, and a self-collect fee prices the handling of
+   a collected order ("collect here, +RM5"). Inheriting it merely because the
+   event is hosted at the same point charges for something nobody does. So
+   `buildEventVenueSnapshot` drops the fee at the **event door** rather than
+   hiding it at the checkout: the summary, the CTA, the order total, the
+   invoice and the seller's inbox read the same number because there is only
+   one. Applied at BOTH doors (storefront + counter) or the same event would
+   cost two prices, and `orders.updatePickupLocation` refuses on an RSVP —
+   which was a second way to re-apply the fee, and would have sent one guest
+   to a different address than the rest. `PickupSummaryCard` takes `hideFee`
+   so the venue card stops advertising a charge that no longer exists. The
+   bug this fixes: a guest was quoted **RM 680** and charged **RM 685**, the
+   fee shown on the page but excluded from the total they agreed to. A
+   non-event order at the same point still pays it, pinned by test.
+   The Settings → Fulfilment row of a hosting point carries an "Event venue:
    <names>" line (plus "guests are still sent here" when hidden), and the
    hide-toast names the consequence — hiding must never read as "gone
    everywhere". **Save-time rules**: a single-point store never picks (unset
