@@ -121,6 +121,15 @@ export const SPOTLIGHT_ANCHOR = {
 		tab: "fulfilment",
 		anchor: "settings-closed-dates",
 	},
+	// The Pickup points card (z8r3fdjgvd) — where an event venue is picked and
+	// where the "guests aren't charged the fee" line now sits. Reuses the
+	// post-switch checklist's own anchor rather than minting a second id for
+	// the same card; the agreement is pinned in spotlight.test.ts.
+	pickup_points: {
+		page: "settings",
+		tab: "fulfilment",
+		anchor: "settings-pickup",
+	},
 	// The Pricing & capacity card of a stay listing — where the weekend rate
 	// (S13, z8r3fddkp8) lives. The card, not the field: every spotlight rings
 	// a card, and the field is its third row, labelled "Weekend rate".
