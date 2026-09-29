@@ -121,7 +121,17 @@ function sanitizePickupNote(raw: string | undefined): string | undefined {
 
 const MAX_IMAGES_PER_PRODUCT = 5;
 const MAX_IMAGES_PER_VARIANT = 3;
-const MAX_BULK_IMPORT_BATCH = 50;
+/**
+ * Variant rows one `bulkUpsert` call may carry. Deliberately EQUAL to the
+ * per-product variant cap, not a number of its own: a single product's grid
+ * cannot be split across calls (the client chunker never splits one product),
+ * so a batch ceiling below `MAX_VARIANTS_PER_PRODUCT` would accept a grid in
+ * the editor and refuse the same grid on import — which is exactly what
+ * happened when the cap moved to 100 and this still read 50 (z8r3fdjgvd).
+ * The chunker packs several small products up to this number; 100 variant rows
+ * is still far inside a Convex transaction's document budget.
+ */
+const MAX_BULK_IMPORT_BATCH = MAX_VARIANTS_PER_PRODUCT;
 const MAX_SKU_LENGTH = 60;
 
 /**
@@ -1721,8 +1731,11 @@ export const adjustStock = mutation({
 
 		if (args.adjustments.length === 0)
 			throw new ConvexError("Nothing to adjust");
-		// Mirrors the per-product variant cap: the sheet that sends a batch can
-		// never hold more rows than one product's grid.
+		// Deliberately the per-product variant cap, not a number of its own: the
+		// sheet that sends a batch is built from ONE product's variants
+		// (app.products.index.tsx derives its lines from `p.variants`), so it can
+		// never hold more rows than that product's grid. Splitting this off at 50
+		// would leave a 56-variant product unable to move its own stock.
 		if (args.adjustments.length > MAX_VARIANTS_PER_PRODUCT)
 			throw new ConvexError(
 				`At most ${MAX_VARIANTS_PER_PRODUCT} stock changes at once`,

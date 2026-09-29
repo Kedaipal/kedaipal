@@ -11,6 +11,7 @@ import { type ChangeEvent, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { fitsWithinProductCap } from "../../convex/lib/productCap";
+import { MAX_VARIANTS_PER_PRODUCT } from "../../convex/lib/variant";
 import { PageHeader } from "../components/dashboard/page-header";
 import { Button } from "../components/ui/button";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
@@ -36,10 +37,6 @@ export const Route = createFileRoute("/app/products/import")({
 	},
 	component: ImportProductsRoute,
 });
-
-// Each bulkUpsert call carries at most this many VARIANT rows (mirrors
-// MAX_BULK_IMPORT_BATCH on the server). Products are chunked to stay under it.
-const MAX_VARIANTS_PER_BATCH = 50;
 
 const SCHEMA_DOCS: Array<{ column: string; required: boolean; notes: string }> =
 	[
@@ -125,7 +122,16 @@ function toApiProduct(p: GroupedProductImport) {
 	};
 }
 
-/** Split products into batches whose total variant count stays under the cap. */
+/**
+ * Split products into batches whose total variant count stays under the cap
+ * (`MAX_BULK_IMPORT_BATCH` on the server is the same constant).
+ *
+ * One product is NEVER split — `cur.length > 0` lets a single oversized product
+ * form a chunk of its own — because its variants must be written in one call.
+ * That is why the batch ceiling has to equal the per-product variant cap: a
+ * 56-variant product forms a 56-row chunk, which a ceiling of 50 would refuse
+ * after the editor had already accepted the same grid (z8r3fdjgvd).
+ */
 function chunkByVariants(
 	products: GroupedProductImport[],
 ): GroupedProductImport[][] {
@@ -134,7 +140,7 @@ function chunkByVariants(
 	let count = 0;
 	for (const p of products) {
 		const n = p.variants.length;
-		if (cur.length > 0 && count + n > MAX_VARIANTS_PER_BATCH) {
+		if (cur.length > 0 && count + n > MAX_VARIANTS_PER_PRODUCT) {
 			chunks.push(cur);
 			cur = [];
 			count = 0;
@@ -383,7 +389,7 @@ function ImportProductsRoute() {
 						{fileName ?? "Choose a CSV or Excel file"}
 					</span>
 					<span className="text-xs text-muted-foreground">
-						Imported in batches of {MAX_VARIANTS_PER_BATCH} variant rows.
+						Imported in batches of {MAX_VARIANTS_PER_PRODUCT} variant rows.
 					</span>
 					<input
 						type="file"
@@ -518,9 +524,7 @@ function ParseSummary({
 					</span>
 				) : null}
 				{withPrep > 0 ? (
-					<span className="text-muted-foreground">
-						Prep time on {withPrep}
-					</span>
+					<span className="text-muted-foreground">Prep time on {withPrep}</span>
 				) : null}
 				{withNote > 0 ? (
 					<span className="text-muted-foreground">
@@ -548,8 +552,8 @@ function ParseSummary({
 						This file came from an export, so it carries{" "}
 						{parsed.summary.ignoredColumns.length} extra column
 						{parsed.summary.ignoredColumns.length === 1 ? "" : "s"} for
-						reference. Import updates names, descriptions, prices, weights,
-						prep times and pickup notes —{" "}
+						reference. Import updates names, descriptions, prices, weights, prep
+						times and pickup notes —{" "}
 						<span className="font-medium text-foreground">
 							changes to {parsed.summary.ignoredColumns.join(", ")} won't be
 							applied.
@@ -791,8 +795,8 @@ function StockChoice({
 							<>
 								Off — your sheet's <strong>stock</strong> column is ignored for
 								products you already have, so sales made since you exported are
-								kept. Prices, names, descriptions, weights, prep times and pickup
-								notes update either way.
+								kept. Prices, names, descriptions, weights, prep times and
+								pickup notes update either way.
 							</>
 						)}
 					</span>

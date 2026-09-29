@@ -19,6 +19,10 @@ import {
 	MAX_PICKUP_NOTE_LENGTH,
 	pickupNoteFits,
 } from "../../convex/lib/pickupNote";
+import {
+	MAX_OPTION_AXES,
+	MAX_VARIANTS_PER_PRODUCT,
+} from "../../convex/lib/variant";
 import { cartesian, variantLabel } from "./variant";
 
 export const PRODUCT_IMPORT_REQUIRED_COLUMNS = [
@@ -255,9 +259,10 @@ export function findDuplicateSkus(
 // See docs/product-variants.md §9 + the import/export rework ticket.
 // ---------------------------------------------------------------------------
 
-// Mirror of the caps in convex/lib/variant.ts — kept in sync manually.
-export const MAX_OPTION_AXES = 2;
-export const MAX_VARIANTS_PER_PRODUCT = 50;
+// Re-exported from convex/lib/variant.ts (a pure, Convex-free module) so the
+// import check and the server validator can never disagree about the caps —
+// these used to be hand-mirrored numbers and the mirrors drifted.
+export { MAX_OPTION_AXES, MAX_VARIANTS_PER_PRODUCT };
 export const PRODUCT_HANDLE_MAX_LENGTH = 80;
 export const PRODUCT_WEIGHT_MAX = 1_000_000; // 1000kg, sanity bound
 

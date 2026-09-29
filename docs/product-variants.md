@@ -148,7 +148,7 @@ client price (preserves the existing `{ productId, quantity }`-only trust model 
 
 ## 7. Edge cases
 
-- **Combinatorial cap:** hard-limit axes to **2** and total variants per product (~**50**,
+- **Combinatorial cap:** hard-limit axes to **2** and total variants per product (**100**,
   Shopee parity) to avoid grid blowup.
 - **Partial selection on storefront:** compute the valid value-set client-side as the buyer
   narrows; disable impossible combos (reason 1 above).
@@ -219,7 +219,7 @@ cutover care, not raw build time — tracked in the migration task.
 
 ---
 
-### Competitive validation — why 2 axes / 50 variants (added 2026-06-03)
+### Competitive validation — why 2 axes / 100 variants (added 2026-06-03, cap raised 2026-09-29)
 
 The 1–2 axis cap was checked against the marketplaces Malaysians actually use, and
 it is **exact parity**, not a shortfall:
@@ -230,7 +230,7 @@ it is **exact parity**, not a shortfall:
 | **Shopee (MY)** | **2** tiers | **≤50 combinations** |
 | **Lazada** | **2** (since Jul 2025) | ≤20 per axis, category-dependent |
 | **Meta (FB/IG Shops)** | recognised variant fields (color/size/material/pattern) | feed-based |
-| **Kedaipal** | **2** (`MAX_OPTION_AXES`) | **50** (`MAX_VARIANTS_PER_PRODUCT`) |
+| **Kedaipal** | **2** (`MAX_OPTION_AXES`) | **100** (`MAX_VARIANTS_PER_PRODUCT`) |
 
 Key finding: the giants do **not** absorb "vast product variety" with *more variation
 axes* — they cap at 2 universally. Variety is handled in a **second, separate layer**:
@@ -239,7 +239,7 @@ size-chart) that *describe* a product and drive search/filter/compliance but **d
 generate SKUs**. Picking a category reveals a tailored attribute set and constrains
 which variations are even allowed.
 
-Decision for Kedaipal: **keep 2 axes + 50 cap** (settled), and **do not** build a
+Decision for Kedaipal: **keep 2 axes** (settled) and **do not** build a
 category-attribute engine — that is marketplace-scale machinery for a *general* platform
 spanning electronics→groceries. As a **single-store, vertical-focused** storefront, the
 product-level **markdown description already carries the descriptive long-tail**
@@ -248,6 +248,16 @@ for our cohort is the lightweight **preset axis chips** (tap *Size* / *Weight* /
 / *Pack* to pre-fill an axis) — a nudge, not an engine. Implemented in the variant editor.
 Staying at 2 axes also maps cleanly onto the parked marketplace connectors (no lossy
 down-convert later). Sources captured in the originating research thread.
+
+**Raised 50 → 100 on 2026-09-29** (ClickUp `z8r3fdjgvd`). Helinox Community Malaysia's
+Into The Falls registration needs ONE event listing carrying both adult T-shirt sizes as
+required choices — `Adult 1 size` (S–4XL) × `Adult 2 size` (None + S–4XL) = 7 × 8 = **56**
+— and it cannot be split across two listings because the 40-seat cap is per product, so
+two listings would be two independent pools. A free-text Notes box was tried and rejected
+(buyers skip it; the seller then chases every miss). 100 is **TikTok Shop parity** and
+now above Shopee's 50, so the table above still reads as parity rather than excess. The
+axis count did **not** move — 2 axes remains the scope guard, and `MAX_VALUES_PER_AXIS`
+stays 25, which means a full 25 × 25 = 625 grid is still refused by the variant cap.
 
 ### Real-world reference
 
@@ -283,7 +293,7 @@ Lives in `src/components/forms/variant-editor.tsx` + `product-form.tsx`.
   works on touch (the desktop table's `title=` tooltips don't).
 - **Mobile-first variant grid.** The 8-column horizontal-scroll `<table>` violated the
   mobile-first rule. Now **responsive**: stacked labeled cards (`<ul class="sm:hidden">`)
-  below `sm`, the dense table at `sm+` (for power-users editing toward the 50-variant cap).
+  below `sm`, the dense table at `sm+` (for power-users editing toward the variant cap).
   Image upload/remove is single-sourced via `renderRowImage`; price/stock normalization via
   shared `PriceInput`/`StockInput` (registered in biome `noLabelWithoutControl.inputComponents`).
 - **Bulk "apply to all" labels** now describe the action the tap performs ("Make all

@@ -181,10 +181,12 @@ The importer + exporter were reworked for the variant schema (subtask of
 - **Columns:** `product_handle, name, description, option1_name, option1_value,
   option2_name, option2_value, sku, price, stock, weight_grams`. Images are not
   imported (avoids a dual storage-id/URL model) — added per product in the editor.
-- **Caps:** `MAX_BULK_IMPORT_BATCH = 50` now counts **variant rows** (the client
-  chunks products to stay under it); `MAX_VARIANTS_PER_PRODUCT = 50`;
-  `MAX_PRODUCTS_PER_RETAILER = 50` (the cap then; 200 since `86eyjmf4q`, in
-  `convex/lib/productCap.ts`).
+- **Caps:** `MAX_BULK_IMPORT_BATCH` counts **variant rows** (the client chunks
+  products to stay under it) and since `z8r3fdjgvd` **is** `MAX_VARIANTS_PER_PRODUCT`
+  — one product's grid can't be split across calls, so a lower batch ceiling would
+  refuse on import a grid the editor had accepted. `MAX_VARIANTS_PER_PRODUCT = 100`
+  (50 until 2026-09-29); `MAX_PRODUCTS_PER_RETAILER = 50` (the cap then; 200 since
+  `86eyjmf4q`, in `convex/lib/productCap.ts`).
 
 **Files:** parser/grouping `src/lib/product-import.ts`; CSV `src/lib/csv.ts`; XLSX
 `src/lib/xlsx.ts`; export `src/lib/product-export.ts`; UI
@@ -400,5 +402,5 @@ If only 2 days available this week: ship **#1 (Export) + #14 (Vertical Templates
 
 - **Mobile-first** — most retailers will import from their phone; drop-zone and preview table must survive narrow viewports.
 - **Multi-tenant from day one** — every feature must respect `retailerId` ownership checks already in `convex/products.ts`.
-- **Caps** — `MAX_PRODUCTS_PER_RETAILER = 200` (`convex/lib/productCap.ts`) and `MAX_BULK_IMPORT_BATCH = 50` (`convex/products.ts`) will need to lift before this roadmap is worth fully executing.
+- **Caps** — `MAX_PRODUCTS_PER_RETAILER = 200` (`convex/lib/productCap.ts`) and `MAX_BULK_IMPORT_BATCH` (`convex/products.ts`, = `MAX_VARIANTS_PER_PRODUCT`, 100 since `z8r3fdjgvd`) will need to lift before this roadmap is worth fully executing.
 - **Channel field** — bulk-created rows currently hardcode `channel: "whatsapp"`. Leave room for marketplace channels as that schema evolves.
