@@ -282,7 +282,8 @@ only a many-parallel-sessions-on-a-laptop one.
 test, and nothing else about failure reporting changes:
 
 - an async test whose promise never settles still trips Testing Library's own
-  `waitFor` budget (1 s, untouched) long before the test timeout;
+  `waitFor` budget — **5 s**, six times tighter than the test timeout on
+  purpose (see the next section);
 - anything genuinely stuck is caught by `timeout-minutes: 10` on the CI job;
 - `hookTimeout` stays at its 10 s default — our hooks do no rendering. Raise it
   the day one does, for the same reason.
@@ -295,6 +296,54 @@ buyer's caret, so it is worth knowing). `checkout-form.test.tsx`'s `typePhone`
 was re-querying twice per character: a 15-character number spent 611 ms on
 lookups against 130 ms of actual re-rendering. Hoisting the lookup cut that
 test from 744 ms to 223 ms and the file from 2.6 s to 1.5 s.
+
+### `asyncUtilTimeout` — 5 s, over a fixed 600 ms product timer
+
+Testing Library's `waitFor` / `findBy*` budget is set in
+[`vitest.setup.ts`](../vitest.setup.ts) (wired via `setupFiles`, guarded on
+`typeof document` so the `edge-runtime` half of the suite never imports Testing
+Library). It is **5 s**, not the 1 s default, and deliberately *not* 30 s:
+unlike `testTimeout`, this budget is real protection. `waitFor` is genuinely
+asynchronous, so it CAN interrupt a promise that never settles — it is what
+makes a broken async expectation fail in seconds rather than at the test
+timeout.
+
+**This is a margin fix, not a reproduced flake.** Worth stating, because the
+`testTimeout` change above *was* a reproduced failure and this one is not.
+
+Found by sweeping the value down until the suite breaks:
+
+| budget | full suite (idle) | `book-delivery-card.test.tsx` alone |
+| --- | --- | --- |
+| 1000 ms (old default) | 7337 pass | 42 pass |
+| 800 ms | 7337 pass | 42 pass |
+| 620 ms | — | 42 pass |
+| 400 ms | **4 fail** | — |
+
+The four are all in
+[`src/components/order/book-delivery-card.test.tsx`](../src/components/order/book-delivery-card.test.tsx),
+and they are slow for a legitimate reason: they wait on a **real product
+timer**, `SPEND_ARM_DELAY_MS` (600 ms) — the anti-misclick delay that arms
+Dispatch once a courier price lands. Real cost is therefore ~620 ms, and the 1 s
+default left **~400 ms of slack over a fixed 600 ms floor**.
+
+**That slack held under every load we could manufacture** — the full suite is
+green at the old 1 s budget at load averages 237 and 278 on 8 cores. That result
+does not clear the budget, it disqualifies the experiment: the dominant term is
+a wall-clock `setTimeout`, which CPU starvation barely stretches, so synthetic
+CPU load **under-models** this risk in a way it did not for `testTimeout`. What
+would actually spend 400 ms of slack is slower hardware running the polling and
+re-render around the timer (`ubuntu-latest` is 4 shared vCPU, not 8 fast local
+ones), or anyone raising `SPEND_ARM_DELAY_MS` — which would eat it silently,
+with the failure landing in a file that has nothing to do with their change.
+
+5 s is ~8x the measured cost. **If you add a product delay above ~800 ms,
+re-measure instead of arguing** — `ASYNC_UTIL_TIMEOUT_MS` exists for exactly
+that:
+
+```bash
+ASYNC_UTIL_TIMEOUT_MS=400 pnpm test   # sweep down until it breaks
+```
 
 ## Dependency pinning — TanStack is exact-pinned (2026-08-07, ClickUp 86eyjadx7)
 

@@ -46,5 +46,10 @@ export default defineConfig({
 		// Testing Library's own 1s `waitFor` budget, which this does not touch.
 		// See docs/ci.md.
 		testTimeout: 30_000,
+
+		// Testing Library's own `waitFor` budget is raised alongside it, for the
+		// same reason but NOT to the same value — that one is real protection and
+		// has to keep failing fast. See vitest.setup.ts.
+		setupFiles: ["./vitest.setup.ts"],
 	},
 });
