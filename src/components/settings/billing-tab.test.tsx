@@ -20,6 +20,12 @@ vi.mock("@tanstack/react-query", () => ({ useQuery: vi.fn() }));
 vi.mock("convex/react", () => ({
 	useAction: () => vi.fn(),
 	useMutation: () => vi.fn(),
+	// Credit activity (Credits T3) pages through the ledger.
+	usePaginatedQuery: () => ({
+		results: [],
+		status: "Exhausted",
+		loadMore: vi.fn(),
+	}),
 }));
 // WHO is reading the bill (86exr91r4). Billing WRITE is owner-only by
 // construction, but a teammate can be granted billing READ and lands on this
@@ -50,7 +56,6 @@ function retailer(overrides: Partial<Retailer> = {}): Retailer {
 		slug: "openmarket",
 		country: "MY",
 		isFoundingMember: false,
-		ordersThisMonth: 0,
 		subscription: {
 			plan: "pro",
 			status: "past_due",
@@ -491,7 +496,6 @@ describe("BillingTab comp accounts (z8r3fdeub2)", () => {
 				active: true,
 				frozen: false,
 			},
-			ordersThisMonth: 350,
 		} as unknown as Partial<Retailer>);
 
 	it("a sponsored store sees who's sponsoring it, no limits — and nothing to buy, change, pause or cancel", () => {
@@ -505,9 +509,9 @@ describe("BillingTab comp accounts (z8r3fdeub2)", () => {
 			/>,
 		);
 		expect(screen.getByText("Sponsored account")).toBeTruthy();
-		expect(screen.getByText("No limits")).toBeTruthy();
+		expect(screen.getByText("Never locked")).toBeTruthy();
 		expect(screen.getByText("Sponsored by Maybank SME")).toBeTruthy();
-		expect(screen.getByText(/no limits on orders/)).toBeTruthy();
+		expect(screen.getByText(/never\s+locks your store/)).toBeTruthy();
 		// A comp has no end date — nothing may suggest one.
 		expect(screen.queryByText(/until|expires|ends/i)).toBeNull();
 		// Not a plan: no tier, meter or any billing door.
@@ -2135,9 +2139,12 @@ describe("BillingTab — Scale is purchasable (z8r3fdfuhq)", () => {
 		mockQueries({ isAdmin: false, gateway: scaleGateway() });
 		const { unmount } = render(<BillingTab retailer={retailer()} />);
 		expect(screen.getByText(/RM\s*399\.00\/month/)).toBeTruthy();
+		// Scale's pitch is the team room; its volume is the credits line every
+		// plan row carries (Credits T3), so the number isn't said twice.
 		expect(
-			screen.getByText(/Everything in Pro \+ 500 credits a month/),
+			screen.getByText(/^Everything in Pro \+ room for \d+ teammates$/),
 		).toBeTruthy();
+		expect(screen.getByText("500 credits a month")).toBeTruthy();
 		fireEvent.click(screen.getByText("Scale"));
 		expect(
 			screen.getByRole("button", { name: "Subscribe to Scale" }),

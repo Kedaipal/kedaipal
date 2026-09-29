@@ -28,6 +28,7 @@ import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Country } from "../../convex/lib/country";
 import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
+import { CreditMeter } from "../components/credits/credit-meter";
 import { FirstOrderCelebration } from "../components/dashboard/first-order-celebration";
 import { GreetingChecklistRow } from "../components/dashboard/greeting-checklist-row";
 import { PageHeaderSkeleton } from "../components/dashboard/page-header";
@@ -571,6 +572,15 @@ function DashboardHome() {
 					</Link>
 				</section>
 			)}
+
+			{/* Credits (T3) — the quick look, right under today's counts because
+			    it answers the same question ("can I work today's orders?"). The
+			    same meter Settings → Billing shows, with a way in; a teammate
+			    without the Credits grant sees nothing (the shell banner still
+			    tells them if the store is locked). */}
+			<div className="lg:max-w-2xl">
+				<CreditMeter variant="card" retailer={retailer} />
+			</div>
 
 			{/* Share card — the dashed "ticket" from the landing page. Always the
 			    top verb for a live store: put the link where buyers already are. */}

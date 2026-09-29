@@ -30,6 +30,7 @@ import {
 } from "./lib/imageContentType";
 import type { CancelCause } from "./lib/credits";
 import { requireCustomerName } from "./lib/customer";
+import { assertCreditsAvailable } from "./creditLock";
 import { assertPlanFeature, assertSubscriptionActive } from "./subscriptions";
 import {
 	recordOrderCancelled,
@@ -2119,6 +2120,14 @@ export const generateReceiptPdf = action({
 		ctx,
 		{ shortId, token },
 	): Promise<{ pdf: ArrayBuffer; filename: string } | null> => {
+		// Credits (T3): a seller handing out an invoice or receipt is locked at
+		// zero credits. The BUYER's own copy (token) never is — buyers never
+		// feel a seller's balance.
+		if (shortId !== undefined && token === undefined) {
+			await ctx.runQuery(internal.creditLock.assertCreditsForOrder, {
+				shortId,
+			});
+		}
 		const inputs = await ctx.runQuery(internal.orders.receiptPdfInputs, {
 			shortId,
 			token,
@@ -2206,6 +2215,9 @@ export const sendPaymentReminder = action({
 		{ shortId },
 	): Promise<{ ok: boolean; reason?: ManualReminderBlock | "not_found" }> => {
 		await ctx.runQuery(internal.subscriptions.assertWritableForOrder, {
+			shortId: shortId,
+		});
+		await ctx.runQuery(internal.creditLock.assertCreditsForOrder, {
 			shortId: shortId,
 		});
 		const prep = await ctx.runMutation(internal.orders.prepareManualReminder, {
@@ -3689,6 +3701,9 @@ export const updateStatus = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		// Credits (T3): moving an order forward is locked at zero credits;
+		// cancelling never is — a locked seller must be able to release a buyer.
+		if (status !== "cancelled") await assertCreditsAvailable(ctx, order.retailerId);
 
 		// Cancelled is TERMINAL — the same rule advanceToStage already enforces
 		// (86eypn8ye). Not a UX nicety: cancelling RESTORES reserved stock, and
@@ -3849,8 +3864,14 @@ export const bulkUpdateStatus = mutation({
 			// single-retailer by construction (1:1 user↔store), so order 1's
 			// answer is order 50's — per-order would just be 50 subscription
 			// reads for one refusal. The admin bypass lives inside the guard.
-			if (firstResolve)
+			if (firstResolve) {
 				await assertSubscriptionActive(ctx, order.retailerId);
+				// Credits (T3): moving orders forward is locked at zero credits;
+				// cancelling never is — a locked seller must be able to release
+				// buyers. Once per batch, for the same reason as the lock above.
+				if (status !== "cancelled")
+					await assertCreditsAvailable(ctx, order.retailerId);
+			}
 			if (firstResolve) retailer = await ctx.db.get(order.retailerId);
 
 			// Skip no-ops + transitions blocked by the mockup gate (don't fail the
@@ -4168,6 +4189,7 @@ export const advanceToStage = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		await assertCreditsAvailable(ctx, order.retailerId);
 		const retailer = access.retailer;
 
 		if (order.status === "cancelled") {
@@ -4333,6 +4355,7 @@ export const setShipmentTracking = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		await assertCreditsAvailable(ctx, order.retailerId);
 
 		// All-blank input resolves to all-undefined = tracking cleared.
 		const shipment = resolveShipmentFields({
@@ -4584,6 +4607,7 @@ export const setDeliveryFee = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		await assertCreditsAvailable(ctx, order.retailerId);
 		if ((order.deliveryMethod ?? "delivery") !== "delivery")
 			throw new ConvexError("Only delivery orders carry a delivery charge");
 		if (order.status === "cancelled")
@@ -4705,6 +4729,7 @@ export const rescheduleFulfilment = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		await assertCreditsAvailable(ctx, order.retailerId);
 		if (order.status === "cancelled")
 			throw new ConvexError("This order was cancelled");
 		if (order.status === "shipped" || order.status === "delivered")
@@ -5108,6 +5133,7 @@ export const markPaymentReceived = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		await assertCreditsAvailable(ctx, order.retailerId);
 
 		if (order.paymentStatus === "received") {
 			// Idempotent — second click is a no-op.
@@ -5552,6 +5578,7 @@ export const submitMockup = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		await assertCreditsAvailable(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		if (order.mockupStatus === "approved")
@@ -5641,6 +5668,7 @@ export const updateMockupQuote = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		await assertCreditsAvailable(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		if (order.mockupStatus === "approved")
@@ -5768,6 +5796,7 @@ export const waiveMockup = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		await assertCreditsAvailable(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		if (order.mockupStatus === "approved" || order.mockupWaivedAt !== undefined)

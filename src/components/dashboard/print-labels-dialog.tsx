@@ -28,6 +28,7 @@ import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { AWB_BATCH_MAX, type AwbSort } from "../../../convex/lib/pdf/awb";
+import { useAreaLock } from "../../hooks/useStoreLock";
 import {
 	AWB_SORT_OPTIONS,
 	defaultCheckedQueueIds,
@@ -73,6 +74,7 @@ type PrintLabelsDialogProps = CommonProps &
 export function PrintLabelsDialog(props: PrintLabelsDialogProps) {
 	const { open, onOpenChange, retailerId, paperLabel } = props;
 	const generate = useAction(api.awb.generateAwbBatchPdf);
+	const lock = useAreaLock("orders", { credits: true });
 	const [sort, setSort] = useState<AwbSort>("fulfilment");
 	const [busy, setBusy] = useState(false);
 
@@ -123,8 +125,12 @@ export function PrintLabelsDialog(props: PrintLabelsDialogProps) {
 		queueSelection.length === queue?.rows.length;
 
 	const tooMany = printCount > AWB_BATCH_MAX;
-	const blockedReason =
-		printCount === 0
+	// Printing a despatch label is despatch work: it waits out the same locks
+	// the order page's own label button does (view-only, out of credits, a
+	// view-only teammate) — said here, in place of the print it would refuse.
+	const blockedReason = lock.readOnly
+		? lock.reason
+		: printCount === 0
 			? props.mode === "selection"
 				? "Select some orders first."
 				: "Tick at least one order to print."

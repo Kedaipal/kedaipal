@@ -51,6 +51,7 @@ import {
 } from "../../convex/lib/paymentMethod";
 import { ProFeatureTease } from "../components/app/pro-gate";
 import { ViewOnlyNote } from "../components/app/view-only-note";
+import { CreditLockNote } from "../components/credits/credit-lock-note";
 import {
 	DeliveryMethodIcon,
 	OrderContextBadge,
@@ -107,6 +108,7 @@ import { useAreaLock } from "../hooks/useStoreLock";
 import { canHardDeleteOrders } from "../lib/admin-actions";
 import { MASK_PII } from "../lib/analytics-privacy";
 import { describeAwbPaper } from "../lib/awb-labels";
+import { BULK_CREDIT_LOCK_NOTE } from "../lib/credits-ui";
 import { orderCustomerLabel } from "../lib/customer";
 import { downloadCsv } from "../lib/download";
 import {
@@ -491,6 +493,10 @@ function OrdersRoute() {
 	// but not edit — one flag, so every disabled-with-reason control below
 	// (select mode, bulk actions, pin, status moves) covers both.
 	const { readOnly, reason } = useAreaLock("orders");
+	// Out of credits (Credits T3) is narrower: select mode stays open, because
+	// cancelling in bulk still works, but every forward move greys out and the
+	// bar says why.
+	const work = useAreaLock("orders", { credits: true });
 	// Orders export is the ONE export the server genuinely gates (a teammate
 	// can work the inbox all day and still not walk out with the order book),
 	// and it is separate from orders itself — so the button asks the `exports`
@@ -1157,7 +1163,7 @@ function OrdersRoute() {
 			(t): BulkAction => ({
 				status: t.anchor,
 				label: t.label,
-				disabled: t.disabled,
+				disabled: t.disabled || work.readOnly,
 				reason: t.reason,
 			}),
 		)
@@ -1480,6 +1486,9 @@ function OrdersRoute() {
 
 			{/* A lapsed store can read this inbox and act on nothing in it. */}
 			<ViewOnlyNote />
+			{/* Out of credits (Credits T3): orders keep arriving — this says how
+			    many, what's paused, and the one way back. */}
+			<CreditLockNote scope="orders" />
 
 			{/* Starter: the inbox controls are a Pro feature — say so where they'd
 			    be, instead of leaving a silent gap. The order list below still works. */}
@@ -2036,7 +2045,9 @@ function OrdersRoute() {
 				<OrderBulkBar
 					count={selected.size}
 					actions={bulkActions}
-					actionsNote={bulkActionsNote}
+					actionsNote={
+						work.cause === "credits" ? BULK_CREDIT_LOCK_NOTE : bulkActionsNote
+					}
 					allSelected={allSelected}
 					onApply={applyBulk}
 					onDelete={canHardDelete ? applyBulkDelete : undefined}

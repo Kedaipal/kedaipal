@@ -28,11 +28,10 @@ import { api } from "../../../convex/_generated/api";
 import {
 	FOUNDING_BENEFIT_WARNING_MS,
 	FOUNDING_PLAN,
-	isUnlimited,
 } from "../../../convex/lib/plans";
 import { HOLD_LABEL } from "../../../convex/lib/seasonalHold";
-import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
 import { usePermission, useStoreRole } from "../../hooks/usePermission";
+import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { resolveAnnualOffer } from "../../lib/annual-billing";
 import { mergeBillingHistory } from "../../lib/billing-history";
@@ -48,9 +47,10 @@ import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import {
 	freePeriodState,
 	isRenewing,
-	ORDER_CAP_WARN_RATIO,
 	PLAN_LABEL,
 } from "../../lib/subscription";
+import { CreditActivity } from "../credits/credit-activity";
+import { CreditMeter } from "../credits/credit-meter";
 import { ZoomableImage } from "../ui/zoomable-image";
 import { AnnualBillingCard } from "./annual-billing-card";
 import { AutoRenewalCard } from "./auto-renewal-card";
@@ -60,8 +60,8 @@ import {
 	firstInvoiceTargets,
 } from "./first-invoice-switch";
 import { InvoiceDownloadButton } from "./invoice-download-button";
-import { PlanChangeCard } from "./plan-change-card";
 import { OwnerOnlyNote } from "./owner-only-note";
+import { PlanChangeCard } from "./plan-change-card";
 import { PlanPickerCard } from "./plan-picker-card";
 import { SeasonalHoldCard } from "./seasonal-hold-card";
 
@@ -110,6 +110,13 @@ export function BillingTab({
 	).data;
 	const gateway = useQuery(
 		convexQuery(api.subscriptionPayments.billingGatewayAvailable, storeArgs),
+	).data;
+	// The same read the credit meter holds (cache-shared): the plan cards use
+	// it to say what a plan choice does to the allowance before the tap.
+	// Null for a teammate without the Credits grant — the cards then state
+	// each plan's allowance and nothing about this store's balance.
+	const creditBalance = useQuery(
+		convexQuery(api.credits.getBalance, storeArgs),
 	).data;
 	// …while billing itself is VIEW-ONLY under act-as (Zaki, 17 Sep 2026): it is
 	// the seller's money and consent, and every legitimate admin billing action
@@ -278,28 +285,6 @@ export function BillingTab({
 			instructions.duitnowId ||
 			instructions.qrUrl);
 
-	// Monthly order meter vs the plan's SOFT cap (hidden for comped accounts and
-	// unlimited caps). `ordersThisMonth` rides on the retailer payload.
-	const orderCap = sub?.caps?.orderCap;
-	// Hidden for comped stores (unlimited) and for a store whose comp ENDED —
-	// "included orders on your plan" is wrong when there is no plan yet.
-	const capMeter =
-		!sub?.comped &&
-		!compEnded &&
-		orderCap !== undefined &&
-		orderCap > 0 &&
-		!isUnlimited(orderCap) &&
-		retailer.ordersThisMonth !== undefined
-			? {
-					used: retailer.ordersThisMonth,
-					cap: orderCap,
-					near:
-						retailer.ordersThisMonth >=
-						Math.ceil(orderCap * ORDER_CAP_WARN_RATIO),
-					over: retailer.ordersThisMonth >= orderCap,
-				}
-			: null;
-
 	return (
 		<div className="flex flex-col gap-6 pt-2">
 			{/* Said once, first, so every disabled control below has its why. */}
@@ -360,7 +345,7 @@ export function BillingTab({
 								Sponsored account
 							</p>
 							<span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700 dark:bg-violet-900/60 dark:text-violet-300">
-								No limits
+								Never locked
 							</span>
 						</div>
 						{sub.comp?.label ? (
@@ -369,9 +354,9 @@ export function BillingTab({
 							</p>
 						) : null}
 						<p className="text-xs text-violet-800/80 dark:text-violet-300/80">
-							Every feature is unlocked and there are no limits on orders.
-							There's no plan to subscribe to, change or cancel, and nothing to
-							pay.
+							Every feature is unlocked, and running out of credits never locks
+							your store. There's no plan to subscribe to, change or cancel, and
+							nothing to pay.
 						</p>
 					</div>
 				</section>
@@ -455,48 +440,6 @@ export function BillingTab({
 						</p>
 					) : null}
 
-					{/* Monthly order usage vs the plan's SOFT cap. The cap never blocks
-				    orders — passing it just escalates the upgrade nudge. */}
-					{capMeter ? (
-						<div className="flex flex-col gap-1.5 border-t border-border pt-4">
-							<div className="flex items-baseline justify-between text-xs">
-								<span className="font-semibold uppercase tracking-wide text-muted-foreground">
-									Orders this month
-								</span>
-								<span
-									className={`font-medium tabular-nums ${
-										capMeter.over
-											? "text-red-600 dark:text-red-400"
-											: capMeter.near
-												? "text-amber-700 dark:text-amber-400"
-												: "text-muted-foreground"
-									}`}
-								>
-									{capMeter.used} / {capMeter.cap}
-								</span>
-							</div>
-							<div className="h-1.5 overflow-hidden rounded-full bg-muted">
-								<div
-									className={`h-full rounded-full transition-all ${
-										capMeter.over
-											? "bg-red-500"
-											: capMeter.near
-												? "bg-amber-500"
-												: "bg-accent"
-									}`}
-									style={{
-										width: `${Math.min(100, Math.round((capMeter.used / capMeter.cap) * 100))}%`,
-									}}
-								/>
-							</div>
-							<p className="text-[11px] text-muted-foreground">
-								{capMeter.over
-									? "You're past your plan's included orders — everything keeps working, but this is the sign to upgrade."
-									: "Included orders on your plan. Going over never blocks an order."}
-							</p>
-						</div>
-					) : null}
-
 					{/* Starter never sees the annual card (ANNUAL_OFFER_PLANS is Pro
 					    only), so the constraint is explained here rather than left as
 					    an unexplained absence — "why can't I?" is exactly the question
@@ -513,6 +456,12 @@ export function BillingTab({
 					) : null}
 				</section>
 			)}
+
+			{/* Credits (T3): the balance sits right under the plan — it is the
+			    number a seller checks most, and every plan decision below changes
+			    it. Everyone sees it, comped and admin stores included (metered,
+			    never locked); a teammate without the Credits grant sees nothing. */}
+			<CreditMeter variant="full" retailer={retailer} />
 
 			{/* Change tier (86eyb6z4r) — a plan decision, so it sits directly under
 			    the current-plan card and above the payment mechanics. Only an ACTIVE
@@ -533,6 +482,7 @@ export function BillingTab({
 					foundingPricing={gateway.foundingPricing}
 					ownerOnly={ownerOnly}
 					openInvoiceNumber={pending?.invoiceNumber}
+					balance={creditBalance}
 				/>
 			) : null}
 
@@ -770,6 +720,7 @@ export function BillingTab({
 							foundingBenefitsRevoked={gateway.foundingBenefitsRevoked}
 							ownerOnly={ownerOnly}
 							onRedirectingChange={setRedirecting}
+							balance={creditBalance}
 						/>
 					</div>
 				) : (
@@ -850,6 +801,10 @@ export function BillingTab({
 					}}
 				/>
 			) : null}
+
+			{/* Credits (T3): every credit in and out — answers "why do I have
+			    37 left?" beside the bills. */}
+			<CreditActivity retailer={retailer} />
 
 			{/* History */}
 			{history.length > 0 ? (

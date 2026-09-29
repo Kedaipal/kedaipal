@@ -193,3 +193,151 @@ export function topUpBlock(
 	if (status === null || comped || status === "active") return null;
 	return status;
 }
+
+// ---------------------------------------------------------------------------
+// The seller lock at zero (Credits T3, ClickUp z8r3fdf8hy)
+// ---------------------------------------------------------------------------
+
+/** Orders left at which the low-credit warning goes out (register item 5 — the
+ * same number T4's auto top-up defaults to). */
+export const LOW_CREDIT_THRESHOLD = 10;
+
+/** Stores that are metered but NEVER locked: comped, owned by a Kedaipal
+ * admin, and the missing-row fail-safe. They get no balance notices either. */
+export function creditLockExempt(args: {
+	status: CreditBillingStatus;
+	comped: boolean;
+	ownerIsAdmin: boolean;
+}): boolean {
+	return args.status === null || args.comped || args.ownerIsAdmin;
+}
+
+/** What puts credits back for a locked store — it decides the lock copy and
+ * the one button the lock surface offers. */
+export type CreditUnlockRoute =
+	| "topup" // active: top up or upgrade (or wait for the monthly refresh)
+	| "pick_plan" // trialing: the trial's orders are used — subscribe
+	| "pay_invoice" // past_due: paying lands the month's credits
+	| "resume" // on_hold: resuming lands them
+	| "subscribe"; // cancelled
+
+export function creditUnlockRoute(status: CreditBillingStatus): CreditUnlockRoute {
+	switch (status) {
+		case "trialing":
+			return "pick_plan";
+		case "past_due":
+			return "pay_invoice";
+		case "on_hold":
+			return "resume";
+		case "cancelled":
+			return "subscribe";
+		default:
+			return "topup";
+	}
+}
+
+const LOCK_PAUSED =
+	"accepting and updating orders and editing products are paused";
+const LOCK_STILL_OPEN =
+	"New orders keep coming in, and you can still view, cancel and refund them.";
+
+/**
+ * The ONE sentence a locked seller reads — the server's refusal and the
+ * dashboard's lock banner both come from here, so they can't disagree. It says
+ * what is paused, what still works, and the way out. A teammate can't top up,
+ * so they're pointed at the owner.
+ */
+export function creditLockMessage(
+	route: CreditUnlockRoute,
+	audience: "owner" | "member",
+): string {
+	if (audience === "member")
+		return `This store is out of credits, so ${LOCK_PAUSED}. Ask the store owner to add credits. ${LOCK_STILL_OPEN}`;
+	switch (route) {
+		case "pick_plan":
+			return `Your trial's orders are used up, so ${LOCK_PAUSED}. Pick a plan in Settings → Billing to carry on. ${LOCK_STILL_OPEN}`;
+		case "pay_invoice":
+			return `You're out of credits, so ${LOCK_PAUSED}. Pay your invoice in Settings → Billing and this month's credits land straight away. ${LOCK_STILL_OPEN}`;
+		case "resume":
+			return `You're out of credits, so ${LOCK_PAUSED}. Resume your plan in Settings → Billing and this month's credits land straight away. ${LOCK_STILL_OPEN}`;
+		case "subscribe":
+			return `You're out of credits, so ${LOCK_PAUSED}. Choose a plan in Settings → Billing to carry on. ${LOCK_STILL_OPEN}`;
+		case "topup":
+			return `You're out of credits, so ${LOCK_PAUSED}. Top up or upgrade in Settings → Billing to carry on. ${LOCK_STILL_OPEN}`;
+	}
+}
+
+/**
+ * The TYPED refusal every locked seller write throws (`ConvexError` data), so
+ * the dashboard can put the one way back next to the sentence instead of just
+ * printing it — a product save that can't land offers "Top up" in place, never
+ * a dead end. `message` is `creditLockMessage`; `audience` says whether the
+ * reader can act on `unlockRoute` (a teammate can't — they ask the owner).
+ */
+export type CreditLockErrorData = {
+	kind: "credits_locked";
+	message: string;
+	unlockRoute: CreditUnlockRoute;
+	audience: "owner" | "member";
+};
+
+export function creditLockErrorData(
+	route: CreditUnlockRoute,
+	audience: "owner" | "member",
+): CreditLockErrorData {
+	return {
+		kind: "credits_locked",
+		message: creditLockMessage(route, audience),
+		unlockRoute: route,
+		audience,
+	};
+}
+
+/** Is this `ConvexError` payload the credit lock's? */
+export function isCreditLockErrorData(
+	data: unknown,
+): data is CreditLockErrorData {
+	if (typeof data !== "object" || data === null) return false;
+	const d = data as Record<string, unknown>;
+	return d.kind === "credits_locked" && typeof d.message === "string";
+}
+
+/** Stable opening of every lock refusal — what tests and callers match on. */
+export const CREDIT_LOCK_PREFIXES = [
+	"You're out of credits",
+	"Your trial's orders are used up",
+	"This store is out of credits",
+] as const;
+
+/** Which balance notice the store is owed, given where the balance sits now
+ * and what has already gone out. Pure, so the evaluator's dedupe is testable.
+ *  - `locked`: at or below zero and this lock hasn't been announced;
+ *  - `still_locked`: a new period's refresh left the store below zero again;
+ *  - `unlocked`: back above zero after an announced lock;
+ *  - `low`: at or below LOW_CREDIT_THRESHOLD, once a period, and never for a
+ *    store on a custom grant (its allowance was negotiated, no nudging). */
+export type CreditNoticeKind = "low" | "locked" | "still_locked" | "unlocked";
+
+export function dueCreditNotice(args: {
+	total: number;
+	sent: readonly string[];
+	/** The period rolled since the lock was announced (a refresh happened). */
+	refreshedWhileLocked: boolean;
+	customGrant: boolean;
+}): CreditNoticeKind | null {
+	const lockAnnounced = args.sent.includes("locked");
+	if (args.total <= 0) {
+		if (!lockAnnounced) return "locked";
+		if (args.refreshedWhileLocked && !args.sent.includes("still_locked"))
+			return "still_locked";
+		return null;
+	}
+	if (lockAnnounced) return "unlocked";
+	if (
+		args.total <= LOW_CREDIT_THRESHOLD &&
+		!args.customGrant &&
+		!args.sent.includes("low")
+	)
+		return "low";
+	return null;
+}

@@ -43,6 +43,7 @@ import {
 	cancelRefundDecision,
 	creditRegime,
 	debitBucket,
+	LOW_CREDIT_THRESHOLD,
 	monthlyCreditGrant,
 	refreshedPlanBalance,
 	sellerRefundsLeft,
@@ -54,6 +55,7 @@ import {
 } from "./lib/plans";
 import {
 	addMonthsMyt,
+	monthStartMyt,
 	nextMonthStartMyt,
 	usagePeriodKey,
 } from "./lib/usagePeriod";
@@ -160,7 +162,12 @@ async function applyEntry(
 	entry: EntryInput,
 	now: number,
 	extraPatch: Partial<Account> = {},
+	/** What put credits in, for the unlock notice + analytics (a grant can
+	 * be a monthly refresh, a paid invoice or an upgrade — only the caller
+	 * knows which). Defaults from the entry's type. */
+	route?: CreditInRoute,
 ): Promise<Account> {
+	const beforeTotal = account.planBalance + account.purchasedBalance;
 	const planBalance =
 		account.planBalance + (entry.bucket === "plan" ? entry.amount : 0);
 	const purchasedBalance =
@@ -189,7 +196,58 @@ async function applyEntry(
 		...extraPatch,
 	};
 	await ctx.db.patch(account._id, patch);
+	if (crossesNoticeLine(beforeTotal, total)) {
+		await scheduleNoticeCheck(ctx, account.retailerId, route ?? routeFor(entry));
+	}
 	return { ...account, ...patch };
+}
+
+/** What put credits back in — carried to the unlock notice and the
+ * `credits_seller_unlocked` event. */
+export type CreditInRoute =
+	| "topup"
+	| "refresh"
+	| "settle"
+	| "upgrade"
+	| "resume"
+	| "adjust"
+	| "refund";
+
+function routeFor(entry: EntryInput): CreditInRoute {
+	if (entry.type === "purchase") return "topup";
+	if (entry.type === "refund") return "refund";
+	if (entry.type === "adjust") return "adjust";
+	return "settle";
+}
+
+/**
+ * Balance notices (Credits T3) are judged a few minutes AFTER a line is
+ * crossed, from the state at that moment: a burst that takes a store from 12
+ * to −3 in one busy hour produces ONE "you're out" notice, not a "10 left"
+ * and then a "0". The delay also keeps the chain inert inside any test file's
+ * lifetime (the FIRST_INVOICE_DELAY_MS lesson in convex/subscriptions.ts).
+ */
+const NOTICE_DELAY_MS = 5 * 60 * 1000;
+
+/** Crossing into the low band, into zero-or-below, or back above zero. */
+function crossesNoticeLine(before: number, after: number): boolean {
+	return (
+		(before > LOW_CREDIT_THRESHOLD && after <= LOW_CREDIT_THRESHOLD) ||
+		(before > 0 && after <= 0) ||
+		(before <= 0 && after > 0)
+	);
+}
+
+async function scheduleNoticeCheck(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	route: CreditInRoute,
+): Promise<void> {
+	await ctx.scheduler.runAfter(
+		NOTICE_DELAY_MS,
+		internal.creditNotices.evaluate,
+		{ retailerId, route },
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -239,7 +297,7 @@ async function rollPeriod(
 	}
 	const grant = regime.kind === "monthly" ? regime.grant : 0;
 	if (grant > 0) {
-		return applyEntry(
+		const rolled = await applyEntry(
 			ctx,
 			next,
 			{
@@ -252,7 +310,14 @@ async function rollPeriod(
 			},
 			now,
 			{ periodKey, periodGrant: grant },
+			"refresh",
 		);
+		// A carried debt bigger than the new grant leaves the store locked
+		// through its refresh — the seller is told how far short they are.
+		if (rolled.planBalance + rolled.purchasedBalance <= 0) {
+			await scheduleNoticeCheck(ctx, rolled.retailerId, "refresh");
+		}
+		return rolled;
 	}
 	await ctx.db.patch(next._id, { periodKey, periodGrant: 0, updatedAt: now });
 	return { ...next, periodKey, periodGrant: 0, updatedAt: now };
@@ -570,6 +635,7 @@ export async function landCreditGrant(
 		},
 		now,
 		{ periodGrant: regime.grant },
+		"resume",
 	);
 }
 
@@ -670,21 +736,36 @@ export async function applyCreditsOnSettle(
 				args.now,
 			);
 		}
-		await applyEntry(ctx, account, entry(grant), args.now, {
-			periodGrant: grant,
-		});
+		await applyEntry(
+			ctx,
+			account,
+			entry(grant),
+			args.now,
+			{ periodGrant: grant },
+			"settle",
+		);
 		return;
 	}
 	if (account.periodGrant <= 0) {
-		await applyEntry(ctx, account, entry(grant), args.now, {
-			periodGrant: grant,
-		});
+		await applyEntry(
+			ctx,
+			account,
+			entry(grant),
+			args.now,
+			{ periodGrant: grant },
+			"settle",
+		);
 		return;
 	}
 	if (grant > account.periodGrant) {
-		await applyEntry(ctx, account, entry(grant - account.periodGrant), args.now, {
-			periodGrant: grant,
-		});
+		await applyEntry(
+			ctx,
+			account,
+			entry(grant - account.periodGrant),
+			args.now,
+			{ periodGrant: grant },
+			"upgrade",
+		);
 	}
 }
 
@@ -716,19 +797,33 @@ export type CreditBalanceView = {
 	sellerRefundsLeft: number;
 	/** An admin set a custom monthly grant (no upgrade nudges). */
 	customGrant: boolean;
+	/** Live orders created this calendar month (the usage counter — a cancel
+	 * takes one off, whatever happened to its credit). What a plan change
+	 * compares the new allowance against: "you've had 140 this month, Starter
+	 * includes 100". */
+	ordersThisPeriod: number;
 };
 
 /**
- * Project the account as the seller should see it NOW — including a period
- * the 00:05 MYT sweep hasn't rolled yet (a query can't write), and a store
- * that has no account yet (created on its first order, or by the backfill).
+ * The balance as it stands NOW — including a month boundary the 00:05 MYT
+ * sweep hasn't rolled yet (a query can't write) and a store with no account
+ * yet (opened at signup, by its first order, or by the backfill). The seller
+ * lock reads this, so a store whose refresh brings it back above zero is
+ * unlocked at its own midnight, not five minutes later.
  */
-async function balanceView(
+export async function projectedCredits(
 	ctx: AnyCtx,
 	retailerId: Id<"retailers">,
 	account: Account | null,
 	now: number,
-): Promise<CreditBalanceView | null> {
+): Promise<{
+	plan: number;
+	purchased: number;
+	total: number;
+	periodKey: string;
+	periodGrant: number;
+	regime: CreditRegime;
+} | null> {
 	const regime = await regimeFor(ctx, retailerId, account, now);
 	if (!regime) return null;
 	const periodKey = usagePeriodKey(now);
@@ -746,12 +841,36 @@ async function balanceView(
 		periodGrant = account.periodGrant;
 	}
 	const purchased = account?.purchasedBalance ?? 0;
-	const total = plan + purchased;
+	return {
+		plan,
+		purchased,
+		total: plan + purchased,
+		periodKey,
+		periodGrant,
+		regime,
+	};
+}
+
+async function balanceView(
+	ctx: AnyCtx,
+	retailerId: Id<"retailers">,
+	account: Account | null,
+	now: number,
+): Promise<CreditBalanceView | null> {
+	const projected = await projectedCredits(ctx, retailerId, account, now);
+	if (!projected) return null;
+	const { plan, purchased, total, periodKey, periodGrant, regime } = projected;
 	const lot = account ? await oldestOpenLot(ctx, retailerId) : null;
 	const refundsUsed =
 		account?.sellerRefunds?.periodKey === periodKey
 			? account.sellerRefunds.count
 			: 0;
+	const usage = await ctx.db
+		.query("subscriptionUsage")
+		.withIndex("by_retailer_month", (q) =>
+			q.eq("retailerId", retailerId).eq("monthStart", monthStartMyt(now)),
+		)
+		.unique();
 	return {
 		plan,
 		purchased,
@@ -766,6 +885,7 @@ async function balanceView(
 			total <= 0 ? (account?.exhaustedAt ?? now) : null,
 		sellerRefundsLeft: sellerRefundsLeft(refundsUsed),
 		customGrant: account?.grantOverride !== undefined,
+		ordersThisPeriod: usage?.orders ?? 0,
 	};
 }
 

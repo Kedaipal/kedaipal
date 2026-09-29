@@ -1,5 +1,4 @@
 import { describe, expect, test } from "vitest";
-import { UNLIMITED } from "../../convex/lib/plans";
 import {
 	freePeriodState,
 	hasFeature,
@@ -8,7 +7,6 @@ import {
 	isOrderInboxLocked,
 	isRenewing,
 	isStoreReadOnly,
-	orderCapState,
 	resolveBannerState,
 	type SubscriptionView,
 	shouldNudgePayment,
@@ -243,7 +241,13 @@ describe("resolveBannerState", () => {
 				undefined,
 				NOW,
 				undefined,
-				999,
+				{
+					locked: true,
+					route: "topup",
+					ordersWaiting: 3,
+					total: -3,
+					periodGrant: 200,
+				},
 			).kind,
 		).toBe("none");
 		expect(
@@ -377,7 +381,7 @@ describe("resolveBannerState", () => {
 		});
 	});
 
-	test("on hold → held, below every payment deadline, above the cap nudge (which can't fire at cap 0)", () => {
+	test("on hold → held, below every payment deadline, above the low-credits nudge", () => {
 		const caps = { orderCap: 0, userCap: 3, broadcastQuota: 100 };
 		expect(
 			resolveBannerState(
@@ -385,7 +389,13 @@ describe("resolveBannerState", () => {
 				undefined,
 				NOW,
 				undefined,
-				50,
+				{
+					locked: false,
+					route: "resume",
+					ordersWaiting: 0,
+					total: 5,
+					periodGrant: 200,
+				},
 			),
 		).toEqual({ kind: "held" });
 		// A hold invoice due soon is still "pay me".
@@ -403,47 +413,62 @@ describe("resolveBannerState", () => {
 		).toBe("pastDue");
 	});
 
-	test("soft order-cap nudge: over/near, ranked below payment deadlines", () => {
-		const caps = { orderCap: 100, userCap: 1, broadcastQuota: 0 };
-		const s = sub({ plan: "starter", status: "active", caps });
-		expect(resolveBannerState(s, undefined, NOW, undefined, 100)).toEqual({
-			kind: "orderCapOver",
-			used: 100,
-			cap: 100,
-		});
-		expect(resolveBannerState(s, undefined, NOW, undefined, 85)).toEqual({
-			kind: "orderCapNear",
-			used: 85,
-			cap: 100,
-		});
-		expect(resolveBannerState(s, undefined, NOW, undefined, 42).kind).toBe(
-			"none",
-		);
-		// A payment deadline outranks the upsell.
-		expect(resolveBannerState(s, NOW + 2 * DAY, NOW, undefined, 200).kind).toBe(
-			"invoiceWarn",
-		);
-	});
-});
-
-describe("orderCapState (soft cap meter)", () => {
-	const caps = { orderCap: 100, userCap: 1, broadcastQuota: 0 };
-
-	test("thresholds: near at 80%, over at 100%", () => {
-		const s = sub({ caps });
-		expect(orderCapState(s, 79).kind).toBe("none");
-		expect(orderCapState(s, 80).kind).toBe("near");
-		expect(orderCapState(s, 99).kind).toBe("near");
-		expect(orderCapState(s, 100).kind).toBe("over");
-	});
-
-	test("comped, unlimited-cap, or unknown usage never nudge", () => {
-		expect(orderCapState(sub({ caps, comped: true }), 500).kind).toBe("none");
+	test("credits (T3): out of credits outranks every deadline; running low is the lowest nudge", () => {
+		const s = sub({ plan: "starter", status: "active" });
+		const locked = {
+			locked: true,
+			route: "topup" as const,
+			ordersWaiting: 4,
+			total: -4,
+			periodGrant: 100,
+		};
 		expect(
-			orderCapState(sub({ caps: { ...caps, orderCap: UNLIMITED } }), 5000).kind,
+			resolveBannerState(s, NOW + 2 * DAY, NOW, undefined, locked),
+		).toEqual({ kind: "creditsLocked", ordersWaiting: 4, route: "topup" });
+		// …but a past-due store is view-only, which says more.
+		expect(
+			resolveBannerState(
+				sub({ status: "past_due" }),
+				undefined,
+				NOW,
+				undefined,
+				locked,
+			).kind,
+		).toBe("pastDue");
+		const low = {
+			locked: false,
+			route: "topup" as const,
+			ordersWaiting: 0,
+			periodGrant: 100,
+		};
+		expect(
+			resolveBannerState(s, undefined, NOW, undefined, { ...low, total: 20 }),
+		).toEqual({ kind: "creditsLow", total: 20 });
+		expect(
+			resolveBannerState(s, undefined, NOW, undefined, { ...low, total: 21 })
+				.kind,
 		).toBe("none");
-		expect(orderCapState(sub({ caps }), undefined).kind).toBe("none");
-		expect(orderCapState(undefined, 500).kind).toBe("none");
+		// A payment deadline outranks the nudge.
+		expect(
+			resolveBannerState(s, NOW + 2 * DAY, NOW, undefined, { ...low, total: 5 })
+				.kind,
+		).toBe("invoiceWarn");
+		// A custom grant is never nudged; a reader who can't see the balance
+		// isn't either.
+		expect(
+			resolveBannerState(s, undefined, NOW, undefined, {
+				...low,
+				total: 5,
+				customGrant: true,
+			}).kind,
+		).toBe("none");
+		expect(
+			resolveBannerState(s, undefined, NOW, undefined, {
+				locked: false,
+				route: "topup",
+				ordersWaiting: 0,
+			}).kind,
+		).toBe("none");
 	});
 });
 

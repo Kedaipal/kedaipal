@@ -285,7 +285,7 @@ import {
 	sellerNewOrderTemplateName,
 } from "./lib/whatsapp";
 import { TEMPLATE_MAX_LENGTH } from "./lib/whatsappCopy";
-import { ordersThisMonth } from "./subscriptionUsage";
+import { type CreditLockState, resolveCreditLock } from "./creditLock";
 import { ensureCreditAccount } from "./credits";
 import {
 	assertSupportedCurrency,
@@ -932,10 +932,6 @@ type RetailerPublic = {
 	// never leaks to shoppers. Fail-safe: a retailer missing a subscription row
 	// resolves to comped full access (see resolveAccess). See docs/manual-subscription.md.
 	subscription?: AccessState;
-	// Orders counted this MYT calendar month — the meter behind the SOFT
-	// orderCap nudge ("X of 100 plan orders used"). OWNER-only, like
-	// `subscription`. See convex/subscriptionUsage.ts.
-	ordersThisMonth?: number;
 	// Claim links (86eyq0epn): the store's remembered default payment window —
 	// seeds the send controls' chips and is updated on every send. OWNER-only
 	// (seller config). Unset falls back to DEFAULT_CLAIM_WINDOW_MINUTES.
@@ -971,6 +967,12 @@ type RetailerPublic = {
 	// A MEMBER's per-area grants (deny-by-default; convex/lib/permissions.ts).
 	// Absent for owner/admin — they hold every grant implicitly.
 	permissions?: MemberPermissions;
+	// Credits T3 (z8r3fdf8hy): is the store out of credits, why, and how many
+	// orders have arrived since — what the lock banner and every disabled
+	// control read. Deliberately NO balance numbers: every teammate needs to
+	// know WHY a button is disabled, but the balance itself is `credits`-area
+	// data (credits.getBalance). Never on the storefront payload.
+	creditLock?: CreditLockState;
 };
 
 async function loadRetailerForUser(
@@ -1038,7 +1040,6 @@ async function buildRetailerPublic(
 		.query("retailerSendingLimits")
 		.withIndex("by_retailer", (q) => q.eq("retailerId", row._id))
 		.first();
-	const usedOrders = await ordersThisMonth(ctx, row._id);
 	// Seller WA alerts (86eyhw9zy): surface whether the saved number holds an
 	// active global STOP opt-out — the WABA gateway would suppress every alert,
 	// so the settings card warns instead of the toggle silently doing nothing.
@@ -1101,7 +1102,6 @@ async function buildRetailerPublic(
 		subscription: resolveAccess(sub, {
 			adminFullAccess: opts?.adminFullAccess,
 		}),
-		ordersThisMonth: usedOrders,
 		claimLinkWindowMinutes: row.claimLinkWindowMinutes,
 		claimLinkSource: row.claimLinkSource,
 		isFoundingMember: row.isFoundingMember,
@@ -1111,6 +1111,7 @@ async function buildRetailerPublic(
 		sendingPauseReason: sendingLimits?.pauseReason,
 		role: opts?.role,
 		permissions: opts?.permissions,
+		creditLock: await resolveCreditLock(ctx, row, Date.now()),
 	};
 }
 

@@ -3,7 +3,8 @@
 // carried on `getMyRetailer().subscription`. See docs/manual-subscription.md.
 
 import type { CompKind } from "../../convex/lib/comp";
-import { isUnlimited, type PlanFeature } from "../../convex/lib/plans";
+import type { PlanFeature } from "../../convex/lib/plans";
+import { type CreditUnlockRoute, creditTone } from "./credits-ui";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -243,50 +244,18 @@ export function isRenewing(
 
 export const PAYMENT_WARN_DAYS = 5;
 
-/** Fraction of the monthly order cap at which the soft nudge starts. */
-export const ORDER_CAP_WARN_RATIO = 0.8;
-
-/**
- * Where this month's order count sits against the plan's SOFT cap. Pure — the
- * meter (`ordersThisMonth`) comes from the retailer payload. Orders are never
- * blocked; "over" only escalates the upgrade nudge. Comped subs and
- * unlimited/missing caps never nudge.
- */
-export type OrderCapState =
-	| { kind: "none" }
-	| { kind: "near"; used: number; cap: number }
-	| { kind: "over"; used: number; cap: number };
-
-export function orderCapState(
-	sub: SubscriptionView | undefined,
-	ordersThisMonth: number | undefined,
-): OrderCapState {
-	if (!sub || sub.comped) return { kind: "none" };
-	const cap = sub.caps?.orderCap;
-	if (
-		cap === undefined ||
-		cap <= 0 ||
-		isUnlimited(cap) ||
-		ordersThisMonth === undefined
-	)
-		return { kind: "none" };
-	if (ordersThisMonth >= cap)
-		return { kind: "over", used: ordersThisMonth, cap };
-	if (ordersThisMonth >= Math.ceil(cap * ORDER_CAP_WARN_RATIO))
-		return { kind: "near", used: ordersThisMonth, cap };
-	return { kind: "none" };
-}
-
 /**
  * What the dashboard subscription banner should show. Pure so it's unit-tested.
- * Precedence: a real `past_due` lock → a soon-due **pending invoice** (the most
- * concrete "pay me" — applies whether trialing or active) → a trial ending soon
- * → the soft order-cap nudge (over, then near — upsell ranks below any payment
- * deadline). Comped/paid-with-nothing-due → nothing. A store whose comp was
- * turned off (z8r3fdeub2) reads `compEnded` instead of `pastDue` — no bill
- * sits behind that lock. `pendingDueAt` is the
- * soonest pending invoice's due date (undefined when none); `ordersThisMonth`
- * is the usage meter (undefined → no cap nudge).
+ * Precedence: a real `past_due` lock → OUT OF CREDITS (Credits T3 — it blocks
+ * work right now, so it outranks every deadline) → a declined auto-charge → a
+ * soon-due **pending invoice** (the most concrete "pay me" — applies whether
+ * trialing or active) → Off-Season Hold → the free period → credits running
+ * LOW (the lowest nudge, like the soft order cap it replaced). Comped →
+ * nothing (never locked, never nudged). A store whose comp was turned off
+ * (z8r3fdeub2) reads `compEnded` instead of `pastDue` — no bill sits behind
+ * that lock. `pendingDueAt` is the soonest pending invoice's due date
+ * (undefined when none); `credits` is the lock state from the dashboard
+ * payload plus, for someone who can see credits, the balance.
  */
 export type BannerState =
 	| { kind: "none" }
@@ -309,20 +278,48 @@ export type BannerState =
 			daysLeft?: number;
 	  }
 	| { kind: "trialWarn"; daysLeft: number; ended: boolean }
-	| { kind: "orderCapOver"; used: number; cap: number }
-	| { kind: "orderCapNear"; used: number; cap: number };
+	/** Credits T3: out of credits — accepting/updating orders and editing
+	 * products are paused; orders keep arriving. Persistent. */
+	| {
+			kind: "creditsLocked";
+			ordersWaiting: number;
+			route: CreditUnlockRoute;
+	  }
+	/** Credits T3: in the last fifth of the month's credits. Dismissable. */
+	| { kind: "creditsLow"; total: number };
+
+/** What the banner knows about credits. `locked` + `route` + `ordersWaiting`
+ * ride the dashboard payload for everyone; the balance only for someone who
+ * can see credits (undefined → no low nudge). */
+export type BannerCredits = {
+	locked: boolean;
+	route: CreditUnlockRoute;
+	ordersWaiting: number;
+	total?: number;
+	periodGrant?: number;
+	customGrant?: boolean;
+};
 
 export function resolveBannerState(
 	sub: SubscriptionView | undefined,
 	pendingDueAt: number | undefined,
 	now: number,
 	warnDays = PAYMENT_WARN_DAYS,
-	ordersThisMonth?: number,
+	credits?: BannerCredits,
 ): BannerState {
-	// A comp has no bill, trial, cap or end date — nothing to warn about.
+	// A comp has no bill, trial, cap or end date, and is never locked or
+	// nudged for credits — nothing to warn about.
 	if (!sub || sub.comped) return { kind: "none" };
 	if (sub.status === "past_due")
 		return sub.compEnded ? { kind: "compEnded" } : { kind: "pastDue" };
+
+	// Out of credits blocks work NOW — above every deadline below.
+	if (credits?.locked)
+		return {
+			kind: "creditsLocked",
+			ordersWaiting: credits.ordersWaiting,
+			route: credits.route,
+		};
 
 	// A declined auto-charge outranks the generic invoice countdown: it names
 	// the actual problem (the saved method) and its fix, while access is still
@@ -360,11 +357,13 @@ export function resolveBannerState(
 			return { kind: "trialWarn", daysLeft: free.daysLeft, ended: false };
 	}
 
-	const cap = orderCapState(sub, ordersThisMonth);
-	if (cap.kind === "over")
-		return { kind: "orderCapOver", used: cap.used, cap: cap.cap };
-	if (cap.kind === "near")
-		return { kind: "orderCapNear", used: cap.used, cap: cap.cap };
+	if (
+		credits?.total !== undefined &&
+		credits.periodGrant !== undefined &&
+		!credits.customGrant &&
+		creditTone(credits.total, credits.periodGrant) === "low"
+	)
+		return { kind: "creditsLow", total: credits.total };
 
 	return { kind: "none" };
 }

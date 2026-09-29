@@ -164,4 +164,13 @@ crons.daily(
 	{},
 );
 
+// Credits T3: email each store 14 days before any of its bought credits expire
+// (00:15 MYT), once per lot, one email per store.
+crons.daily(
+	"credit expiry notices",
+	{ hourUTC: 16, minuteUTC: 15 },
+	internal.creditNotices.internalExpiryNotices,
+	{},
+);
+
 export default crons;

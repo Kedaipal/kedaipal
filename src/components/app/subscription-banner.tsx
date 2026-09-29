@@ -4,9 +4,16 @@ import { Link } from "@tanstack/react-router";
 import { PauseCircle, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../../../convex/_generated/api";
+import { useCreditLock } from "../../hooks/useCreditLock";
+import { useDashboardRetailer } from "../../hooks/useDashboardRetailer";
+import { useStoreRole } from "../../hooks/usePermission";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../../lib/contact";
-import { useStoreRole } from "../../hooks/usePermission";
+import {
+	lockCta,
+	ordersBalanceLabel,
+	ordersWaitingLabel,
+} from "../../lib/credits-ui";
 import { formatPrice } from "../../lib/format";
 import {
 	resolveBannerState,
@@ -29,24 +36,39 @@ import {
  *    from Billing, or switch plan first".
  *  - free period's backstop within 5 days → amber warning, dismissable (red +
  *    persistent only if the period ended and no invoice is on file).
- *  - the SOFT monthly order cap → amber upgrade nudge: dismissable at ≥80%
- *    (keyed by month, so it returns next month), persistent once the cap is
- *    passed. Orders are NEVER blocked — this is the upsell lever, not a lock.
+ *  - out of credits (Credits T3) → red, persistent, ranked right under
+ *    past-due: accepting/updating orders and editing products are paused
+ *    while orders keep arriving; one button to the way back (top up / pick a
+ *    plan / pay the invoice), or "ask the owner" for a teammate.
+ *  - credits running low (the last fifth of the month's grant) → amber,
+ *    dismissable for the month. Replaces the soft order-cap nudge.
  * Nothing for active/comped with nothing due. Warnings are dismissable for the
  * session only (sessionStorage, keyed by the deadline) so they return next login
  * and a new deadline re-shows. See docs/manual-subscription.md.
  */
 export function SubscriptionBanner({
 	subscription,
-	ordersThisMonth,
 	slug,
 }: {
 	subscription?: SubscriptionView;
-	ordersThisMonth?: number;
 	slug: string;
 }) {
 	// Who is reading this banner decides what it can ask them to do.
 	const isMember = useStoreRole() === "member";
+	const retailer = useDashboardRetailer();
+	const creditLock = useCreditLock();
+	// The balance is `credits`-area data: null for a teammate without the grant,
+	// which simply means no "running low" nudge for them.
+	const balance = useQuery(
+		convexQuery(
+			api.credits.getBalance,
+			retailer
+				? {
+						retailerId: retailer.actingAsAdmin ? retailer._id : undefined,
+					}
+				: "skip",
+		),
+	).data;
 	const skipInvoice =
 		!subscription || subscription.comped || subscription.status === "past_due";
 	const pending = useQuery(
@@ -59,7 +81,14 @@ export function SubscriptionBanner({
 		pending?.dueDate,
 		now,
 		undefined,
-		ordersThisMonth,
+		{
+			locked: creditLock.locked,
+			route: creditLock.route,
+			ordersWaiting: creditLock.ordersWaiting,
+			total: balance?.total,
+			periodGrant: balance?.periodGrant,
+			customGrant: balance?.customGrant,
+		},
 	);
 
 	// Dismiss key: only the soft (amber) warnings are dismissable, keyed by their
@@ -71,8 +100,8 @@ export function SubscriptionBanner({
 				? `subwarn:first:${pending?.dueDate}`
 				: state.kind === "trialWarn" && !state.ended
 					? `subwarn:trial:${subscription?.trialEndsAt}`
-					: state.kind === "orderCapNear"
-						? `subwarn:cap:${new Date(now).toISOString().slice(0, 7)}`
+					: state.kind === "creditsLow"
+						? `subwarn:credits:${balance?.periodKey ?? ""}`
 						: null;
 	const [dismissed, dismiss] = useDismissed(dismissKey);
 	// Read above the early returns — the past-due CTA that uses it is built inside
@@ -106,29 +135,58 @@ export function SubscriptionBanner({
 		);
 	}
 
-	// Soft order-cap nudge (amber) — upsell, not a lock. "Near" is dismissable
-	// for the month; "over" stays until the month rolls or they upgrade.
-	if (state.kind === "orderCapNear" || state.kind === "orderCapOver") {
-		if (dismissed && state.kind === "orderCapNear") return null;
-		const over = state.kind === "orderCapOver";
+	// Out of credits (Credits T3): the seller can't work orders or edit
+	// products until credits are added — orders keep arriving. Persistent.
+	if (state.kind === "creditsLocked") {
+		const waiting = ordersWaitingLabel(state.ordersWaiting);
+		const cta = lockCta(state.route);
+		return (
+			<div className="flex flex-col gap-2 border-b border-red-200 bg-red-50 px-5 py-3 dark:border-red-900 dark:bg-red-950/40 sm:flex-row sm:items-center sm:justify-between lg:px-8">
+				<p className="text-sm text-foreground/90">
+					<span className="font-medium">
+						{isMember
+							? "This store is out of credits"
+							: "You're out of credits"}
+						{waiting ? ` · ${waiting}` : ""}.
+					</span>{" "}
+					{isMember
+						? "Accepting and updating orders and editing products are paused until the owner adds credits. Orders keep coming in."
+						: "Accepting and updating orders and editing products are paused. Orders keep coming in, and you can still view, cancel and refund them."}
+				</p>
+				{isMember ? null : (
+					<Link
+						to="/app/settings"
+						search={cta.search}
+						className="inline-flex h-9 w-fit shrink-0 items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
+					>
+						{cta.label}
+					</Link>
+				)}
+			</div>
+		);
+	}
+
+	// Credits running low (amber) — dismissable for the month.
+	if (state.kind === "creditsLow") {
+		if (dismissed) return null;
 		return (
 			<div className="flex items-center gap-3 border-b border-amber-200 bg-amber-50 px-5 py-3 dark:border-amber-900 dark:bg-amber-950/40 lg:px-8">
 				<p className="flex-1 text-sm text-foreground/90">
 					<span className="font-medium">
-						{over
-							? `You've passed your plan's ${state.cap} orders this month (${state.used} so far).`
-							: `${state.used} of ${state.cap} plan orders used this month.`}
+						{ordersBalanceLabel(state.total)}.
 					</span>{" "}
-					Orders keep flowing as normal — upgrade for more headroom.
+					When you run out, orders keep coming in but you can't work on them
+					until you add credits.
 				</p>
 				<Link
 					to="/app/settings"
 					search={{ tab: "billing" }}
+					hash="credits"
 					className="inline-flex h-9 w-fit shrink-0 items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
 				>
-					Upgrade
+					See credits
 				</Link>
-				{!over && dismissKey ? (
+				{dismissKey ? (
 					<button
 						type="button"
 						onClick={dismiss}

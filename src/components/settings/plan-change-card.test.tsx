@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { FunctionReference } from "convex/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SubscriptionView } from "../../lib/subscription";
+import { PLAN_CREDIT_GRANT } from "../../../convex/lib/plans";
 import { PlanChangeCard } from "./plan-change-card";
 
 // The card only writes (useMutation) — no reads, so the TanStack adapter pair
@@ -54,10 +55,12 @@ function sub(overrides: Partial<SubscriptionView> = {}): SubscriptionView {
 
 describe("PlanChangeCard — what the seller is told before confirming", () => {
 	/** The option buttons' labels, in the order they render. */
+	// The direction + tier; each button also carries its allowance after a
+	// "·" (Credits T3), asserted on its own below.
 	const optionLabels = () =>
 		screen
 			.getAllByRole("button", { name: /^Move (up|down) to/ })
-			.map((b) => b.textContent?.trim());
+			.map((b) => b.textContent?.split("·")[0]?.trim());
 
 	it("offers every other tier, framed by direction — moves up first, nearest first", () => {
 		render(
@@ -65,6 +68,13 @@ describe("PlanChangeCard — what the seller is told before confirming", () => {
 		);
 		// Scale is purchasable since z8r3fdfuhq, so Starter can go two ways up.
 		expect(optionLabels()).toEqual(["Move up to Pro", "Move up to Scale"]);
+		// Each move states the allowance it lands on (Credits T3).
+		expect(
+			screen.getByRole("button", { name: /Move up to Pro/ }).textContent,
+		).toContain(`${PLAN_CREDIT_GRANT.pro} credits a month`);
+		expect(
+			screen.getByRole("button", { name: /Move up to Scale/ }).textContent,
+		).toContain(`${PLAN_CREDIT_GRANT.scale} credits a month`);
 
 		cleanup();
 		render(

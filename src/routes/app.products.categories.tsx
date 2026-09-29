@@ -16,11 +16,14 @@ import { type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { NeedsAccessNote } from "../components/app/owner-only-note";
 import {
 	ProBadge,
 	ProFeatureTease,
 	ProFeatureWall,
 } from "../components/app/pro-gate";
+import { ViewOnlyNote } from "../components/app/view-only-note";
+import { CreditLockNote } from "../components/credits/credit-lock-note";
 import { CategoryEditDialog } from "../components/dashboard/category-edit-dialog";
 import { PageHeader } from "../components/dashboard/page-header";
 import { AppImage } from "../components/ui/app-image";
@@ -34,6 +37,7 @@ import {
 import { Skeleton } from "../components/ui/skeleton";
 import { SortableList } from "../components/ui/sortable-list";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { useAreaLock } from "../hooks/useStoreLock";
 import { convexErrorMessage } from "../lib/format";
 import { reorderByIds } from "../lib/reorder";
 import { storefrontUrl } from "../lib/storefront-url";
@@ -84,6 +88,12 @@ function CategoriesRoute() {
 	const [dialog, setDialog] = useState<
 		{ open: true; category: CategoryRow | undefined } | { open: false }
 	>({ open: false });
+	// Every category write is a catalogue edit: none of them can land while the
+	// store is view-only, out of credits (Credits T3), or for a teammate with
+	// view on products. Unlike the Pro gate below this blocks archive and hide
+	// too — the notes under the header say which lock it is.
+	const writeLock = useAreaLock("products", { credits: true });
+	const readOnly = writeLock.readOnly;
 
 	if (!retailer) return null;
 
@@ -126,7 +136,7 @@ function CategoriesRoute() {
 	const newButton = (
 		<Button
 			className="h-11 lg:h-10"
-			disabled={locked}
+			disabled={locked || readOnly}
 			onClick={() => setDialog({ open: true, category: undefined })}
 		>
 			+ New category
@@ -165,6 +175,12 @@ function CategoriesRoute() {
 				<div className="shrink-0">{newButton}</div>
 			</div>
 
+			{/* Why nothing here changes right now. Each renders nothing unless it
+			    applies; the credit note stands down under view-only. */}
+			<ViewOnlyNote />
+			<CreditLockNote scope="products" />
+			<NeedsAccessNote area="products" />
+
 			{locked ? (
 				<ProFeatureTease message="Your categories still show on your storefront, but editing the structure is part of the Pro plan. You can archive any category below." />
 			) : null}
@@ -181,6 +197,7 @@ function CategoriesRoute() {
 					</p>
 					<Button
 						className="mt-4 h-11"
+						disabled={readOnly}
 						onClick={() => setDialog({ open: true, category: undefined })}
 					>
 						+ New category
@@ -194,6 +211,7 @@ function CategoriesRoute() {
 							storeSlug={retailer.slug}
 							categories={active}
 							locked={locked}
+							readOnly={readOnly}
 							onEdit={(category) => setDialog({ open: true, category })}
 						/>
 					) : (
@@ -214,6 +232,7 @@ function CategoriesRoute() {
 											category={category}
 											storeSlug={retailer.slug}
 											locked={locked}
+											readOnly={readOnly}
 											onEdit={() => setDialog({ open: true, category })}
 										/>
 									</li>
@@ -242,12 +261,16 @@ function ActiveCategoryList({
 	storeSlug,
 	categories,
 	locked,
+	readOnly,
 	onEdit,
 }: {
 	retailerId: Id<"retailers">;
 	storeSlug: string;
 	categories: CategoryRow[];
 	locked: boolean;
+	/** No write can land right now (view-only, out of credits, or a view-only
+	 * teammate) — no drag handles, no edit, no menu. */
+	readOnly: boolean;
 	onEdit: (category: CategoryRow) => void;
 }) {
 	const reorder = useMutation(api.categories.reorder);
@@ -276,8 +299,9 @@ function ActiveCategoryList({
 		}
 	}
 
-	// Reordering is structure-building (Pro) and needs 2+ rows to mean anything.
-	if (locked || categories.length < 2) {
+	// Reordering is structure-building (Pro) and needs 2+ rows to mean anything
+	// — and a store that can't save can't be handed handles that snap back.
+	if (locked || readOnly || categories.length < 2) {
 		return (
 			<ul className="flex flex-col gap-2">
 				{ordered.map((category) => (
@@ -286,6 +310,7 @@ function ActiveCategoryList({
 							category={category}
 							storeSlug={storeSlug}
 							locked={locked}
+							readOnly={readOnly}
 							onEdit={() => onEdit(category)}
 						/>
 					</li>
@@ -305,6 +330,7 @@ function ActiveCategoryList({
 					category={category}
 					storeSlug={storeSlug}
 					locked={locked}
+					readOnly={readOnly}
 					onEdit={() => onEdit(category)}
 					dragHandle={handle}
 				/>
@@ -317,12 +343,15 @@ function CategoryCard({
 	category,
 	storeSlug,
 	locked,
+	readOnly,
 	onEdit,
 	dragHandle,
 }: {
 	category: CategoryRow;
 	storeSlug: string;
 	locked: boolean;
+	/** See ActiveCategoryList — the row reads, it doesn't act. */
+	readOnly: boolean;
 	onEdit: () => void;
 	dragHandle?: ReactNode;
 }) {
@@ -416,7 +445,7 @@ function CategoryCard({
 			{/* Tapping the card body opens the editor (mirrors the product card) —
 			    a settings menu shouldn't be the only way in. Editing is Pro-gated,
 			    so a locked seller gets a plain, non-clickable row instead. */}
-			{locked ? (
+			{locked || readOnly ? (
 				<div className="flex min-w-0 flex-1 items-center gap-2">{rowBody}</div>
 			) : (
 				<button
@@ -445,7 +474,7 @@ function CategoryCard({
 					<PopoverTrigger asChild>
 						<button
 							type="button"
-							disabled={busy}
+							disabled={busy || readOnly}
 							aria-label={`More actions for ${category.name}`}
 							className="flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
 						>

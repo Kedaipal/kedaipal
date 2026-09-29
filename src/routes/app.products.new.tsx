@@ -6,6 +6,8 @@ import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { ViewOnlyNote } from "../components/app/view-only-note";
+import { CreditLockNote } from "../components/credits/credit-lock-note";
 import { PageHeader } from "../components/dashboard/page-header";
 import {
 	ProductForm,
@@ -20,6 +22,7 @@ import {
 } from "../components/forms/product-wizard";
 import { Button } from "../components/ui/button";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { lockLabel, useAreaLock } from "../hooks/useStoreLock";
 import { isKindCard, type KindCard } from "../lib/kind-card";
 import { hasFeature } from "../lib/subscription";
 
@@ -74,6 +77,15 @@ function NewProductRoute() {
 	// Set once the product row exists — makes a post-create failure (categories)
 	// retryable without minting a second product.
 	const createdProductId = useRef<Id<"products"> | null>(null);
+	// Can't create right now — view-only, out of credits (Credits T3), or a
+	// teammate with view on products. Unlike the cap wall below, the wizard
+	// and form stay usable: a lock can lift in minutes (a top-up), and a draft
+	// built meanwhile publishes the moment it does. Only Publish/Create grey
+	// out, with the reason beside them.
+	const productsLock = useAreaLock("products", { credits: true });
+	const saveLock = productsLock.readOnly
+		? { reason: productsLock.reason, label: lockLabel(productsLock.cause) }
+		: undefined;
 
 	if (!retailer) return null;
 
@@ -185,8 +197,11 @@ function NewProductRoute() {
 	if (form !== "full") {
 		return (
 			<div className="flex flex-col gap-4 lg:max-w-2xl">
+				<ViewOnlyNote />
+				<CreditLockNote scope="products" />
 				<ProductWizard
 					retailerId={retailer._id}
+					saveLock={saveLock}
 					categoriesLocked={categoriesLocked}
 					eventsLocked={eventsLocked}
 					currency={retailer.currency}
@@ -221,6 +236,8 @@ function NewProductRoute() {
 				</Link>
 			</div>
 			<h2 className="text-xl font-bold lg:hidden">New product</h2>
+			<ViewOnlyNote />
+			<CreditLockNote scope="products" />
 
 			{/* Way back to the guided setup — lossless (same draft substrate). */}
 			<button
@@ -247,6 +264,7 @@ function NewProductRoute() {
 					closedDates: retailer.closedDates,
 				}}
 				offerSelfCollect={retailer.offerSelfCollect !== false}
+				saveLock={saveLock}
 				onSubmit={handleCreate}
 			/>
 		</div>

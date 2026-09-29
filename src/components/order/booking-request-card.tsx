@@ -62,7 +62,12 @@ function bookingCapacityLine(
 
 export function BookingRequestCard({
 	order,
+	lockedReason,
 }: {
+	/** Set while the store can't accept work (out of credits, Credits T3 — or
+	 * view-only): Approve greys out and says so. Decline stays open — it
+	 * releases the guest, and a request never accepted gives its credit back. */
+	lockedReason?: string;
 	order: {
 		_id: Id<"orders">;
 		shortId: string;
@@ -209,13 +214,19 @@ export function BookingRequestCard({
 
 			<Button
 				className="tap-target h-12 w-full"
-				disabled={pending !== null}
+				disabled={pending !== null || lockedReason !== undefined}
+				title={lockedReason}
 				isLoading={pending === "approve"}
 				onClick={handleApprove}
 			>
 				<Check className="size-4" aria-hidden />
 				Approve booking
 			</Button>
+			{lockedReason ? (
+				<p className="-mt-1 text-xs leading-relaxed text-muted-foreground">
+					{lockedReason}
+				</p>
+			) : null}
 			<Button
 				variant="outline"
 				className="tap-target w-full text-destructive"

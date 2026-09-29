@@ -21,7 +21,11 @@ export type ServerKeyEvent =
 	| "subscribe_paid"
 	// Credits T2 (z8r3fdf8ht): a top-up pack settled — revenue that lands
 	// while the seller's tab may be closed.
-	| "credits_topup_paid";
+	| "credits_topup_paid"
+	// Credits T3 (z8r3fdf8hy): the balance notices and the seller lock.
+	| "credits_low_nudge_sent"
+	| "credits_seller_locked"
+	| "credits_seller_unlocked";
 
 /** Where Measurement Protocol events are POSTed (query carries the ids). */
 export const GA4_MP_ENDPOINT = "https://www.google-analytics.com/mp/collect";

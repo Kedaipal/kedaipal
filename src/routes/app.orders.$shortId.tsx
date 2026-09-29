@@ -58,6 +58,7 @@ import { orderPickupNotes } from "../../convex/lib/pickupNote";
 import type { PickupSnapshot } from "../../convex/lib/whatsappCopy";
 import { ProBadge } from "../components/app/pro-gate";
 import { ViewOnlyNote } from "../components/app/view-only-note";
+import { CreditLockNote } from "../components/credits/credit-lock-note";
 import { BRAND_GLYPHS } from "../components/dashboard/brand-icons";
 import { FulfilmentDateBadge } from "../components/dashboard/fulfilment-date-badge";
 import {
@@ -65,6 +66,7 @@ import {
 	PageHeaderSkeleton,
 } from "../components/dashboard/page-header";
 import { StatusBadge } from "../components/dashboard/status-badge";
+import { ActivityCard } from "../components/order/activity-card";
 import {
 	BookingRequestCard,
 	BookingResolutionNote,
@@ -88,7 +90,6 @@ import {
 	type ShipmentFields,
 	ShipmentTrackingCard,
 } from "../components/order/shipment-tracking";
-import { ActivityCard } from "../components/order/activity-card";
 import {
 	DeliveryAddressDisplay,
 	formatAddressInline,
@@ -109,10 +110,11 @@ import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
-import { useAreaLock } from "../hooks/useStoreLock";
+import { lockLabel, useAreaLock } from "../hooks/useStoreLock";
 import { canHardDeleteOrders } from "../lib/admin-actions";
 import { MASK_PII } from "../lib/analytics-privacy";
 import { bookingFulfilmentLine } from "../lib/booking-dates";
+import { cancelCreditLine } from "../lib/credits-ui";
 import { formatPhone, orderCustomerLabel } from "../lib/customer";
 import { shipsAsParcel } from "../lib/dispatch-surface";
 import {
@@ -339,6 +341,14 @@ function OrderDetailRoute() {
 	// this teammate holds view on orders and not edit. Sixteen controls on this
 	// page already branch on `readOnly`; they now cover the grant too.
 	const { readOnly, reason } = useAreaLock("orders");
+	// Out of credits (Credits T3) is narrower than view-only: the seller can
+	// still cancel, refund and pin, but not move an order on, take payment by
+	// hand, book a courier or hand out a receipt. Those controls read `work`
+	// (which includes view-only); cancel and pin stay on `readOnly`.
+	const work = useAreaLock("orders", { credits: true });
+	const workLockedReason = work.readOnly ? work.reason : undefined;
+	// What a greyed-out primary control says after its label.
+	const workLockLabel = lockLabel(work.cause);
 	// Line-item thumbnails (86eyrtz74): variant image, else product image, one
 	// entry per line IN LINE ORDER (the same product can appear twice). Resolved
 	// server-side in one batched read rather than a lookup per row.
@@ -534,6 +544,14 @@ function OrderDetailRoute() {
 	const [paymentMethodChoice, setPaymentMethodChoice] = useState<
 		OrderPaymentMethod | undefined
 	>(undefined);
+	// What cancelling does to this order's credit (Credits T3) — read only
+	// while the confirm is open, so the dialog says it before the tap.
+	const cancelOutlook = useQuery(
+		convexQuery(
+			api.creditLock.cancelOutlook,
+			confirmCancelOpen && order ? { orderId: order._id } : "skip",
+		),
+	).data;
 
 	if (order === undefined) {
 		return <OrderDetailSkeleton />;
@@ -762,11 +780,15 @@ function OrderDetailRoute() {
 						{/* Label first: it's the operational step (the parcel is going
 						    out now); the receipt is bookkeeping, any time after. */}
 						{canPrintLabel(order) ? (
-							<PrintLabelButton shortId={order.shortId} />
+							<PrintLabelButton
+								shortId={order.shortId}
+								lockedReason={workLockedReason}
+							/>
 						) : null}
 						<ReceiptDownloadButton
 							shortId={order.shortId}
 							paid={isOrderDocPaid(order.paymentStatus)}
+							lockedReason={workLockedReason}
 						/>
 					</>
 				}
@@ -817,13 +839,16 @@ function OrderDetailRoute() {
 			    nothing on it, so say that above the controls rather than letting
 			    every tap answer with a toast. Renders nothing when writable. */}
 			<ViewOnlyNote />
+			{/* Out of credits (Credits T3): the narrower lock — order work pauses,
+			    cancelling and refunding don't. Renders nothing otherwise. */}
+			<CreditLockNote scope="orders" />
 
 			{/* A booking request's stage control IS approve/decline (S3): the
 			    stepper can't move it (the server refuses), so its slot holds the
 			    request card until the seller answers. Once resolved without an
 			    approval, a quiet note keeps the WHY visible on the cancelled order. */}
 			{order.status === "booking_requested" ? (
-				<BookingRequestCard order={order} />
+				<BookingRequestCard order={order} lockedReason={workLockedReason} />
 			) : order.bookingResolution !== undefined ? (
 				<BookingResolutionNote
 					resolution={order.bookingResolution}
@@ -930,17 +955,18 @@ function OrderDetailRoute() {
 											}}
 											disabled={
 												pending !== null ||
-												readOnly ||
+												work.readOnly ||
 												blocked ||
 												riderManaged ||
 												collectionPending
 											}
+											title={work.readOnly ? work.reason : undefined}
 											className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-foreground text-[15px] font-bold text-background transition-opacity hover:opacity-95 disabled:opacity-55"
 										>
 											{pending === nextStage.id ? (
 												"Updating…"
-											) : readOnly ? (
-												`${advanceLabel} — view-only`
+											) : work.readOnly ? (
+												`${advanceLabel} — ${workLockLabel}`
 											) : blocked ? (
 												`${advanceLabel} — awaiting mockup`
 											) : collectionPending ? (
@@ -1192,7 +1218,9 @@ function OrderDetailRoute() {
 			{/* Delivery charge to confirm — the out-of-range "arrange via WhatsApp"
 			    state (86extzdr8). Amber like the payment claim: it needs the
 			    seller's action before the buyer can be asked to pay. */}
-			{deliveryFeePending ? <SetDeliveryFeeCard order={order} /> : null}
+			{deliveryFeePending ? (
+				<SetDeliveryFeeCard order={order} lockedReason={workLockedReason} />
+			) : null}
 
 			{/* Payment claim — the amber "needs your eyes" state card, actionable
 			    when the shopper has tapped "I've paid". */}
@@ -1275,12 +1303,12 @@ function OrderDetailRoute() {
 							// View-only: taking payment is a write; opening the method
 							// dialog first would walk the seller through choices the
 							// server is about to refuse (found live, 20 Sep).
-							disabled={confirmingPayment || readOnly}
-							title={readOnly ? reason : undefined}
+							disabled={confirmingPayment || work.readOnly}
+							title={work.readOnly ? work.reason : undefined}
 							className="h-11 w-full"
 						>
-							{readOnly
-								? "Mark payment received — view-only"
+							{work.readOnly
+								? `Mark payment received — ${workLockLabel}`
 								: "Mark payment received"}
 						</Button>
 						{askForProofUrl ? (
@@ -1348,15 +1376,18 @@ function OrderDetailRoute() {
 						onClick={() => setConfirmPaymentOpen(true)}
 						isLoading={confirmingPayment}
 						disabled={
-							confirmingPayment || readOnly || mockupGated || deliveryFeePending
+							confirmingPayment ||
+							work.readOnly ||
+							mockupGated ||
+							deliveryFeePending
 						}
-						title={readOnly ? reason : undefined}
+						title={work.readOnly ? work.reason : undefined}
 						variant="secondary"
 						className="h-11 w-full"
 					>
 						<BadgeCheck className="size-4" />
-						{readOnly
-							? "Mark payment received — view-only"
+						{work.readOnly
+							? `Mark payment received — ${workLockLabel}`
 							: mockupGated
 								? "Awaiting mockup approval"
 								: deliveryFeePending
@@ -1447,8 +1478,8 @@ function OrderDetailRoute() {
 												}
 											}}
 											isLoading={sendingReminder}
-											disabled={sendingReminder || onCooldown || readOnly}
-											title={readOnly ? reason : undefined}
+											disabled={sendingReminder || onCooldown || work.readOnly}
+											title={work.readOnly ? work.reason : undefined}
 											variant="outline"
 											className="h-11 w-full"
 										>
@@ -1678,7 +1709,10 @@ function OrderDetailRoute() {
 						</p>
 					) : (
 						<div className="ml-auto shrink-0">
-							<RescheduleFulfilmentDialog order={order} />
+							<RescheduleFulfilmentDialog
+								order={order}
+								lockedReason={workLockedReason}
+							/>
 						</div>
 					)}
 				</div>
@@ -1980,6 +2014,7 @@ function OrderDetailRoute() {
 							: undefined
 					}
 					onAdvanceBookUnavailable={() => setShipDialogOpen(true)}
+					lockedReason={workLockedReason}
 				/>
 			) : null}
 
@@ -2047,10 +2082,13 @@ function OrderDetailRoute() {
 						lalamoveVendor &&
 						(dispatchInfo?.blockReason === null || hasActiveRiderBooking)
 					}
+					lockedReason={workLockedReason}
 				/>
 			) : null}
 
-			{order.mockupStatus !== undefined ? <MockupCard order={order} /> : null}
+			{order.mockupStatus !== undefined ? (
+				<MockupCard order={order} lockedReason={workLockedReason} />
+			) : null}
 
 			{/* Rare actions (receipt, cancel, delete) collapse behind one quiet
 			    trigger — the stepper above already carries the main transition. The
@@ -2088,6 +2126,7 @@ function OrderDetailRoute() {
 						{canPrintLabel(order) ? (
 							<PrintLabelButton
 								shortId={order.shortId}
+								lockedReason={workLockedReason}
 								variant="ghost"
 								size="default"
 								className="h-12 w-full justify-start gap-2.5 rounded-none px-4 text-sm font-medium lg:hidden"
@@ -2096,6 +2135,7 @@ function OrderDetailRoute() {
 						<ReceiptDownloadButton
 							shortId={order.shortId}
 							paid={isOrderDocPaid(order.paymentStatus)}
+							lockedReason={workLockedReason}
 							variant="ghost"
 							size="default"
 							className="h-12 w-full justify-start gap-2.5 rounded-none px-4 text-sm font-medium lg:hidden"
@@ -2240,11 +2280,15 @@ function OrderDetailRoute() {
 				open={confirmCancelOpen}
 				onOpenChange={setConfirmCancelOpen}
 				title={`Cancel order #${order.shortId}?`}
-				description={
+				description={[
+					"Stock is restored and this can't be undone. The customer is NOT sent a WhatsApp — the reason you give below is what they see on their order page.",
+					cancelOutlook ? cancelCreditLine(cancelOutlook) : null,
 					hasActiveRiderBooking
-						? `Stock is restored and this can't be undone. The customer is NOT sent a WhatsApp — the reason you give below is what they see on their order page. ⚠️ A Lalamove rider booking is still active on this order — cancel it from the ${dispatchCardName} card too, or you may pay for a wasted trip.`
-						: "Stock is restored and this can't be undone. The customer is NOT sent a WhatsApp — the reason you give below is what they see on their order page."
-				}
+						? `⚠️ A Lalamove rider booking is still active on this order — cancel it from the ${dispatchCardName} card too, or you may pay for a wasted trip.`
+						: null,
+				]
+					.filter((line): line is string => line !== null)
+					.join(" ")}
 				confirmLabel="Cancel order"
 				cancelLabel="Keep order"
 				destructive
@@ -2399,7 +2443,15 @@ const FEE_PENDING_REASON_COPY: Record<
 	unknown: "No delivery charge could be applied to this order automatically.",
 };
 
-function SetDeliveryFeeCard({ order }: { order: Doc<"orders"> }) {
+function SetDeliveryFeeCard({
+	order,
+	lockedReason,
+}: {
+	order: Doc<"orders">;
+	/** Out of credits or view-only: Set charge greys out and says why. The
+	 * WhatsApp link stays — agreeing the charge with the buyer costs nothing. */
+	lockedReason?: string;
+}) {
 	const setDeliveryFee = useMutation(api.orders.setDeliveryFee);
 	const [feeInput, setFeeInput] = useState("");
 	const [saving, setSaving] = useState(false);
@@ -2466,7 +2518,8 @@ function SetDeliveryFeeCard({ order }: { order: Doc<"orders"> }) {
 				<Button
 					onClick={handleSet}
 					isLoading={saving}
-					disabled={saving}
+					disabled={saving || lockedReason !== undefined}
+					title={lockedReason}
 					className="h-11 shrink-0"
 				>
 					Set charge
@@ -2484,7 +2537,16 @@ function SetDeliveryFeeCard({ order }: { order: Doc<"orders"> }) {
 	);
 }
 
-function MockupCard({ order }: { order: Doc<"orders"> }) {
+function MockupCard({
+	order,
+	lockedReason,
+}: {
+	order: Doc<"orders">;
+	/** Out of credits or view-only: sending, pricing and waiving grey out and
+	 * say why. What the buyer already has stays on screen. */
+	lockedReason?: string;
+}) {
+	const locked = lockedReason !== undefined;
 	const generateUploadUrl = useMutation(api.orders.generateMockupUploadUrl);
 	const discardMockupUploads = useMutation(api.orders.discardMockupUploads);
 	const submitMockup = useMutation(api.orders.submitMockup);
@@ -2748,7 +2810,8 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 								type="button"
 								variant="secondary"
 								onClick={handleSavePrice}
-								disabled={savingPrice}
+								disabled={savingPrice || locked}
+								title={lockedReason}
 								className="h-11 shrink-0"
 							>
 								{savingPrice ? "…" : "Save price"}
@@ -2764,7 +2827,16 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 
 			{needsMockup || status === "submitted" ? (
 				<div className="flex flex-col gap-1">
-					<label className="flex h-11 cursor-pointer items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90">
+					<label
+						title={lockedReason}
+						aria-disabled={locked || undefined}
+						className={cn(
+							"flex h-11 items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors",
+							locked
+								? "cursor-not-allowed opacity-55"
+								: "cursor-pointer hover:bg-primary/90",
+						)}
+					>
 						<ImagePlus className="size-4" />
 						{uploading
 							? "Sending…"
@@ -2775,7 +2847,7 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 							type="file"
 							accept={IMAGE_ACCEPT}
 							multiple
-							disabled={uploading}
+							disabled={uploading || locked}
 							onChange={handleUpload}
 							className="hidden"
 						/>
@@ -2792,7 +2864,8 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 				<Button
 					variant="secondary"
 					onClick={handleWaive}
-					disabled={waiving}
+					disabled={waiving || locked}
+					title={lockedReason}
 					className="h-11 w-full"
 				>
 					{waiving ? "…" : "Proceed without approval"}

@@ -3,10 +3,12 @@ import { Check } from "lucide-react";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
+import type { CreditBalanceView } from "../../../convex/credits";
 import {
 	ANNUAL_MONTHS_CHARGED,
 	type BillingCurrency,
 	FOUNDING_PLAN,
+	FOUNDING_PRO_CREDIT_GRANT,
 	foundingPlanLocked,
 	isPlanSelectable,
 	PLAN_CAPS,
@@ -16,6 +18,7 @@ import {
 	planPrice,
 } from "../../../convex/lib/plans";
 import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
+import { includedCreditsLabel, planPickCreditLine } from "../../lib/credits-ui";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import type { SubscriptionView } from "../../lib/subscription";
 import { OwnerOnlyNote } from "./owner-only-note";
@@ -33,10 +36,11 @@ const PLAN_PITCH: Record<Plan, { name: string; pitch: string }> = {
 			"Everything in Starter + customer database, order inbox, insights, online payments",
 	},
 	// Scale opened with the credits release (z8r3fdfuhq). Its pitch is what's
-	// LIVE — volume and team — never the outlets that aren't built yet.
+	// LIVE — the team room; its volume is the credits line every plan row
+	// carries, so the number isn't said twice. Never the outlets, not built yet.
 	scale: {
 		name: "Scale",
-		pitch: `Everything in Pro + ${PLAN_CREDIT_GRANT.scale} credits a month and room for ${PLAN_CAPS.scale.userCap - 1} teammates`,
+		pitch: `Everything in Pro + room for ${PLAN_CAPS.scale.userCap - 1} teammates`,
 	},
 };
 
@@ -62,6 +66,7 @@ export function PlanPickerCard({
 	foundingBenefitsRevoked = false,
 	ownerOnly = false,
 	onRedirectingChange,
+	balance,
 }: {
 	sub: SubscriptionView;
 	currency: BillingCurrency;
@@ -84,6 +89,10 @@ export function PlanPickerCard({
 	/** Signals the tab that a HitPay redirect is in flight, so the freshly
 	 * created invoice's card shows a spinner instead of the manual rails. */
 	onRedirectingChange?: (redirecting: boolean) => void;
+	/** The store's credits (Credits T3), when the viewer may see them — so the
+	 * picker can say what the chosen plan does to the balance before the tap.
+	 * Absent/null: the plans still state their allowance, nothing more. */
+	balance?: CreditBalanceView | null;
 }) {
 	const subscribeSelf = useMutation(api.invoices.subscribeSelf);
 	const startAutoRenewSetup = useAction(
@@ -123,6 +132,20 @@ export function PlanPickerCard({
 	);
 	const planName = (p: Plan) =>
 		founding && p === FOUNDING_PLAN ? "Founding Pro" : PLAN_PITCH[p].name;
+	// The allowance each plan grants — the same founding eligibility the
+	// server's grant uses (`foundingPriceEligible`), so the number quoted is
+	// the number that lands.
+	const grantFor = (p: Plan) =>
+		founding && p === FOUNDING_PLAN
+			? FOUNDING_PRO_CREDIT_GRANT
+			: PLAN_CREDIT_GRANT[p];
+	const creditLine = balance
+		? planPickCreditLine({
+				balance,
+				grant: grantFor(plan),
+				planName: planName(plan),
+			})
+		: null;
 
 	// Subscribing IS enrolling in auto-renewal (owner decision, 11 Sep 2026),
 	// like every mainstream subscription: invoice created, then straight to
@@ -249,6 +272,9 @@ export function PlanPickerCard({
 							<p className="mt-1.5 text-sm font-medium tabular-nums">
 								{priceLine(p)}
 							</p>
+							<p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+								{includedCreditsLabel(grantFor(p))}
+							</p>
 						</div>
 					);
 					// One plan on offer (a Founding Member) is a summary, not a
@@ -289,6 +315,14 @@ export function PlanPickerCard({
 					);
 				})}
 			</div>
+
+			{/* What the chosen plan does to this store's credits — a trial moving
+			    to a smaller allowance sees it here, not after paying. */}
+			{creditLine ? (
+				<p className="rounded-lg bg-muted/60 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+					{creditLine}
+				</p>
+			) : null}
 
 			<div className="flex flex-col gap-2">
 				<button

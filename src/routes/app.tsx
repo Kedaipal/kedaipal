@@ -12,6 +12,7 @@ import { useEffect, useRef } from "react";
 import { api } from "../../convex/_generated/api";
 import { ActingAsBanner } from "../components/admin/acting-as-banner";
 import { ConsentBanner } from "../components/app/consent-banner";
+import { RouteAreaGuard } from "../components/app/route-area-guard";
 import { SendingPausedBanner } from "../components/app/sending-paused-banner";
 import { SubscriptionBanner } from "../components/app/subscription-banner";
 import { BottomNav } from "../components/dashboard/bottom-nav";
@@ -20,7 +21,6 @@ import { Sidebar } from "../components/dashboard/sidebar";
 import { WhatsNewProvider } from "../components/dashboard/whats-new";
 import { ActAsProvider, useActAs } from "../hooks/useActAs";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
-import { RouteAreaGuard } from "../components/app/route-area-guard";
 import { OrderNotificationsBridge } from "../hooks/useOrderNotifications";
 import { useOrderToastNotifications } from "../hooks/useOrderToastNotifications";
 import { hasFeature } from "../lib/subscription";
@@ -185,7 +185,6 @@ function AppShell() {
 							{adminOwnStore ? null : (
 								<SubscriptionBanner
 									subscription={retailer.subscription}
-									ordersThisMonth={retailer.ordersThisMonth}
 									slug={retailer.slug}
 								/>
 							)}

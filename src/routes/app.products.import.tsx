@@ -12,9 +12,13 @@ import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { fitsWithinProductCap } from "../../convex/lib/productCap";
 import { MAX_VARIANTS_PER_PRODUCT } from "../../convex/lib/variant";
+import { NeedsAccessNote } from "../components/app/owner-only-note";
+import { ViewOnlyNote } from "../components/app/view-only-note";
+import { CreditLockNote } from "../components/credits/credit-lock-note";
 import { PageHeader } from "../components/dashboard/page-header";
 import { Button } from "../components/ui/button";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { lockLabel, useAreaLock } from "../hooks/useStoreLock";
 import {
 	downloadProductCsvTemplate,
 	downloadSampleProductsCsv,
@@ -169,6 +173,10 @@ function ImportProductsRoute() {
 		summary: PreviewSummary;
 		cap: PreviewCap;
 	} | null>(null);
+	// An import writes the catalogue, so it waits out the same locks every
+	// product save does (view-only, out of credits, a view-only teammate).
+	// Reading the file and previewing stay open — only Confirm greys out.
+	const importLock = useAreaLock("products", { credits: true });
 
 	if (!retailer) return null;
 
@@ -300,6 +308,10 @@ function ImportProductsRoute() {
 					← Products
 				</Link>
 			</div>
+
+			<ViewOnlyNote />
+			<CreditLockNote scope="products" />
+			<NeedsAccessNote area="products" />
 
 			<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 				<div className="flex items-start gap-3">
@@ -469,12 +481,19 @@ function ImportProductsRoute() {
 					<Button
 						type="button"
 						onClick={handleConfirm}
-						disabled={importing || hasPreviewErrors || capOverflow}
+						disabled={
+							importing ||
+							hasPreviewErrors ||
+							capOverflow ||
+							importLock.readOnly
+						}
 						className="h-12 flex-1"
 					>
 						{importing
 							? "Importing…"
-							: `Confirm — ${preview.summary.creates} new, ${preview.summary.updates} updated`}
+							: importLock.readOnly
+								? `Confirm — ${lockLabel(importLock.cause)}`
+								: `Confirm — ${preview.summary.creates} new, ${preview.summary.updates} updated`}
 					</Button>
 					<Button
 						type="button"

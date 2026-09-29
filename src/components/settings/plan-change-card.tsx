@@ -9,6 +9,7 @@ import type * as React from "react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
+import type { CreditBalanceView } from "../../../convex/credits";
 import {
 	type BillingCurrency,
 	FOUNDING_PLAN,
@@ -24,8 +25,16 @@ import {
 	planPrice,
 	planRank,
 } from "../../../convex/lib/plans";
+import {
+	monthStartMyt,
+	nextMonthStartMyt,
+} from "../../../convex/lib/usagePeriod";
 import type { FixHighlight } from "../../lib/country-setup-copy";
 import { highlightRingClass } from "../../lib/country-setup-copy";
+import {
+	downgradeCreditLine,
+	includedCreditsLabel,
+} from "../../lib/credits-ui";
 import {
 	convexErrorMessage,
 	formatPrice,
@@ -81,6 +90,7 @@ export function PlanChangeCard({
 	foundingPricing,
 	ownerOnly = false,
 	openInvoiceNumber,
+	balance,
 }: {
 	/** Anchor + ring for `?spot=plan_change`, on every rendered state. */
 	id?: string;
@@ -101,6 +111,9 @@ export function PlanChangeCard({
 	 * with the invoice named, rather than erroring on confirm. Moving DOWN
 	 * costs nothing and stays available. */
 	openInvoiceNumber?: string;
+	/** The store's credits (Credits T3), when the viewer may see them — each
+	 * confirm then says what the move does to the monthly allowance. */
+	balance?: CreditBalanceView | null;
 }) {
 	const changePlan = useMutation(api.invoices.changePlan);
 	const cancelPlanChange = useMutation(api.invoices.cancelPlanChange);
@@ -274,6 +287,9 @@ export function PlanChangeCard({
 								<ArrowDownRight className="size-4" />
 							)}
 							{up ? "Move up to" : "Move down to"} {PLAN_LABEL[plan]}
+							<span className="font-normal text-muted-foreground">
+								· {includedCreditsLabel(PLAN_CREDIT_GRANT[plan])}
+							</span>
 						</button>
 					);
 				})}
@@ -302,7 +318,15 @@ export function PlanChangeCard({
 					}
 					description={
 						isPlanUpgrade(current, target)
-							? upgradeCopy({ current, target, cycle, founding, currency, sub })
+							? upgradeCopy({
+									current,
+									target,
+									cycle,
+									founding,
+									currency,
+									sub,
+									balance,
+								})
 							: downgradeCopy({
 									current,
 									target,
@@ -310,6 +334,7 @@ export function PlanChangeCard({
 									founding,
 									currency,
 									sub,
+									balance,
 								})
 					}
 					confirmLabel={busy ? "Working…" : `Move to ${PLAN_LABEL[target]}`}
@@ -327,6 +352,7 @@ function upgradeCopy({
 	founding,
 	currency,
 	sub,
+	balance,
 }: {
 	current: Plan;
 	target: Plan;
@@ -334,6 +360,7 @@ function upgradeCopy({
 	founding: boolean;
 	currency: BillingCurrency;
 	sub: SubscriptionView;
+	balance?: CreditBalanceView | null;
 }): string {
 	const price = planPrice(
 		target,
@@ -355,8 +382,12 @@ function upgradeCopy({
 	});
 	// The credits land with the payment, this month included (T1's upgrade
 	// rule: the bucket becomes the new grant minus what's been used) — the
-	// thing most sellers move up for, so it's in the first sentence.
-	const opening = `You'll be invoiced ${formatPrice(price, currency)} and ${PLAN_LABEL[target]} starts as soon as it's paid, with ${PLAN_CREDIT_GRANT[target]} credits a month — this month included.`;
+	// thing most sellers move up for, so it's in the first sentence. Not for
+	// a store on a custom allowance: an upgrade doesn't change that.
+	const credits = balance?.customGrant
+		? ""
+		: `, with ${PLAN_CREDIT_GRANT[target]} credits a month — this month included`;
+	const opening = `You'll be invoiced ${formatPrice(price, currency)} and ${PLAN_LABEL[target]} starts as soon as it's paid${credits}.`;
 	if (carry.days <= 0) return opening;
 	// Say WHY the day count shrinks. "16 days carry over" beside a billing page
 	// promising another 30 reads as 14 days confiscated; what carries is every
@@ -372,6 +403,7 @@ function downgradeCopy({
 	founding,
 	currency,
 	sub,
+	balance,
 }: {
 	current: Plan;
 	target: Plan;
@@ -379,6 +411,7 @@ function downgradeCopy({
 	founding: boolean;
 	currency: BillingCurrency;
 	sub: SubscriptionView;
+	balance?: CreditBalanceView | null;
 }): React.ReactNode {
 	const lost = featuresLost(current, target);
 	const when = sub.currentPeriodEnd
@@ -394,6 +427,25 @@ function downgradeCopy({
 	const teammatesThen = PLAN_CAPS[target].userCap - 1;
 	const team = (n: number) =>
 		n === 0 ? "just you" : `you + ${n} teammate${n === 1 ? "" : "s"}`;
+	// Plan credits refresh on the 1st, so the smaller allowance starts at the
+	// first refresh on or after the move lands (Credits T3) — and this month's
+	// orders sit beside it, so the seller sees whether it fits.
+	const end = sub.currentPeriodEnd;
+	const firstRefresh =
+		end === undefined
+			? undefined
+			: monthStartMyt(end) === end
+				? end
+				: nextMonthStartMyt(end);
+	const credits = downgradeCreditLine({
+		fromLabel: firstRefresh
+			? formatShortDate(firstRefresh)
+			: "the first refresh after the change",
+		currentGrant: balance?.periodGrant ?? PLAN_CREDIT_GRANT[current],
+		targetGrant: PLAN_CREDIT_GRANT[target],
+		ordersThisPeriod: balance?.ordersThisPeriod,
+		customGrant: balance?.customGrant === true,
+	});
 	// DialogDescription is a <p>, so the "list" is block spans rather than a
 	// <ul> — a nine-item comma run inside a paragraph is not something a seller
 	// reads, and these are the capabilities they are about to lose.
@@ -410,13 +462,14 @@ function downgradeCopy({
 				</span>
 				, instead of {formatPrice(nowPrice, currency)}.
 			</span>
-			<span className="mt-2 block">
-				From {when} you'll have {PLAN_CREDIT_GRANT[target]} credits a month
-				instead of {PLAN_CREDIT_GRANT[current]}
-				{teammatesThen < teammatesNow
-					? `, and ${team(teammatesThen)} instead of ${team(teammatesNow)}. Anyone over that loses access then — pending invites are cancelled first, then the newest teammates, and each is emailed.`
-					: "."}
-			</span>
+			{credits ? <span className="mt-2 block">{credits}</span> : null}
+			{teammatesThen < teammatesNow ? (
+				<span className="mt-2 block">
+					From {when}, {team(teammatesThen)} instead of {team(teammatesNow)}.
+					Anyone over that loses access then — pending invites are cancelled
+					first, then the newest teammates, and each is emailed.
+				</span>
+			) : null}
 			{lost.length ? (
 				<>
 					<span className="mt-2 block">From {when} you lose:</span>

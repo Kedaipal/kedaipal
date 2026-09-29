@@ -3,9 +3,11 @@
 // that ends a live order calls `recordOrderCancelled` — so the three things
 // that must see every order hang off these two functions:
 //
-//  1. The usage meter behind the SOFT orderCap ("X of 100 plan orders used
-//     this month") — a denormalized per-retailer × MYT-calendar-month counter
-//     (see the `subscriptionUsage` schema comment for the keying rationale).
+//  1. The monthly order count — a denormalized per-retailer × MYT-calendar-
+//     month counter (see the `subscriptionUsage` schema comment for the keying
+//     rationale). It no longer drives a meter of its own (Credits T3 replaced
+//     the soft-cap meter with the credit balance); it is what a plan change
+//     compares the new allowance against ("you've had 140 this month").
 //  2. Kedaipal Credits (86eye2ccu, convex/credits.ts): the order's one credit
 //     is used at creation and given back only if the order never got going.
 //  3. Start-when-you-sell (z8r3fday24): the store's first order ends its free

@@ -136,6 +136,10 @@ interface VariantEditorProps {
 	liveStock?: LiveVariantStock[];
 	/** Product name, for the adjust dialog's subtitle. */
 	productName?: string;
+	/** Moving stock is an immediate write, not part of Save — so while the
+	 * store can't write products (view-only, out of credits, a view-only
+	 * teammate) every Adjust greys out with Save, not after a dialog. */
+	stockLocked?: boolean;
 }
 
 /**
@@ -166,9 +170,11 @@ function findLiveStock(
 function LiveStockCell({
 	onHand,
 	onAdjust,
+	locked = false,
 }: {
 	onHand: number;
 	onAdjust: () => void;
+	locked?: boolean;
 }) {
 	return (
 		<div className="flex h-11 items-center justify-between gap-2 rounded-xl bg-muted pr-1 pl-3">
@@ -177,6 +183,7 @@ function LiveStockCell({
 				type="button"
 				variant="outline"
 				onClick={onAdjust}
+				disabled={locked}
 				// 44px: this is the ONLY way to change a saved variant's stock, and
 				// it replaced an h-11 input. Mobile-first is a hard floor
 				// (CLAUDE.md), and the cell it sits in is h-11 anyway.
@@ -635,6 +642,7 @@ export function VariantEditor({
 	weightMode = false,
 	liveStock,
 	productName = "This product",
+	stockLocked = false,
 }: VariantEditorProps) {
 	const { options, rows, customLine } = value;
 	// Every price label wears the store's symbol ("RM", "S$") — `currency` is
@@ -1324,6 +1332,7 @@ export function VariantEditor({
 											<span>In stock</span>
 											<LiveStockCell
 												onHand={live.onHand}
+												locked={stockLocked}
 												onAdjust={() =>
 													setAdjusting({
 														variantId: live.variantId,
@@ -1489,6 +1498,7 @@ export function VariantEditor({
 																	<span>In stock</span>
 																	<LiveStockCell
 																		onHand={live.onHand}
+																		locked={stockLocked}
 																		onAdjust={() =>
 																			setAdjusting({
 																				variantId: live.variantId,

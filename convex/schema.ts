@@ -2758,10 +2758,12 @@ export default defineSchema({
 		// Recurring-webhook resolution: billing-session id → subscription.
 		.index("by_autorenew_session", ["autoRenewSessionId"]),
 
-	// Per-retailer × MYT-calendar-month order counter — the meter behind the SOFT
-	// orderCap nudge ("X of 100 plan orders used this month"). Keyed by calendar
-	// month (not the billing period) because caps are "orders/mo" while billing
-	// cycles can be annual. High-churn counter split out per the Convex guideline
+	// Per-retailer × MYT-calendar-month order counter — live orders this month.
+	// It once metered the soft orderCap nudge; since Credits T3 the balance is
+	// the meter, and this is what a plan change compares the new allowance
+	// against ("you've had 140 this month, Starter includes 100"). Keyed by
+	// calendar month (not the billing period) because allowances are "orders a
+	// month" while billing cycles can be annual. High-churn counter split out per the Convex guideline
 	// (never `.collect().length`). Incremented on order create (storefront +
 	// counter checkout), decremented on the first transition into cancelled
 	// (keyed to the order's CREATION month, floored at zero). NEVER read to block

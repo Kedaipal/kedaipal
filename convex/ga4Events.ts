@@ -34,6 +34,9 @@ export const sendKeyEvent = internalAction({
 			v.literal("first_order"),
 			v.literal("subscribe_paid"),
 			v.literal("credits_topup_paid"),
+			v.literal("credits_low_nudge_sent"),
+			v.literal("credits_seller_locked"),
+			v.literal("credits_seller_unlocked"),
 		),
 		retailerId: v.id("retailers"),
 		// The retailer's real GA client id captured at signup, when present —
