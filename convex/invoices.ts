@@ -22,7 +22,12 @@ import {
 	requireRetailerAccess,
 	resolveMyRetailerFor,
 } from "./lib/auth";
-import { gatewayPaymentMethodTag } from "./lib/hitpayBilling";
+import {
+	type AdminAutoChargeState,
+	adminAutoChargeState,
+	autoChargeAllowed,
+	gatewayPaymentMethodTag,
+} from "./lib/hitpayBilling";
 import {
 	invoiceToSubscriptionData,
 	type SubscriptionInvoiceData,
@@ -233,6 +238,11 @@ async function settleInvoicePaid(
 						lastChargeError: undefined,
 						lastChargeAttemptAt: undefined,
 						pendingChargeInvoiceId: undefined,
+						// A stranded charge stops auto-charging until a human acts;
+						// a settled bill IS that act (the admin applied or refunded
+						// the money, or the seller paid by hand), so charging resumes
+						// from the next renewal.
+						strandedCharge: undefined,
 					},
 				}
 			: {}),
@@ -421,6 +431,34 @@ export const internalSettleFromGateway = internalMutation({
 						paymentId,
 						amountSen,
 						at: Date.now(),
+					},
+				});
+			}
+			// …and when it is the AUTO-CHARGE whose outcome we'd lost (the stamp
+			// still names this bill — only a void can leave it there, a settle
+			// clears it), that charge is STRANDED: its outcome is now known, so
+			// the stamp resolves and the counter catches up with HitPay, and
+			// auto-charging stops until a human sorts the money out. Applying it
+			// to the replacement bill would book it against the wrong bill;
+			// charging the replacement on top would be the double debit. Both the
+			// reconcile and a late `charge.created` webhook arrive here.
+			const sub = await ctx.db.get(invoice.subscriptionId);
+			if (sub?.autoRenew?.pendingChargeInvoiceId === invoiceId) {
+				await ctx.db.patch(sub._id, {
+					autoRenew: {
+						...sub.autoRenew,
+						timesCharged: (sub.autoRenew.timesCharged ?? 0) + 1,
+						lastChargeAttemptAt: undefined,
+						pendingChargeInvoiceId: undefined,
+						nextRetryAt: undefined,
+						strandedCharge: sub.autoRenew.strandedCharge ?? {
+							invoiceId,
+							invoiceNumber: invoice.invoiceNumber,
+							amountSen,
+							currency: invoice.currency,
+							paymentId,
+							at: Date.now(),
+						},
 					},
 				});
 			}
@@ -747,15 +785,18 @@ export const subscribeSelf = mutation({
 		// back later) never reaches the authorisation page — startAutoRenewSetup
 		// refuses with "already on". Without this their brand-new invoice would
 		// sit unpaid forever while the button that made it promised an immediate
-		// charge. Charge the saved method instead: same consent, same amount.
-		if (sub.autoRenew !== undefined) {
+		// charge. Charge the saved method instead: same consent, same amount —
+		// unless auto-charging is stopped over a stranded charge, when the new
+		// bill waits to be paid by hand like any other.
+		const chargingSavedMethod = autoChargeAllowed(sub.autoRenew);
+		if (chargingSavedMethod) {
 			await ctx.scheduler.runAfter(
 				0,
 				internal.subscriptionPayments.chargeDueRenewal,
 				{ invoiceId },
 			);
 		}
-		return { invoiceId, chargingSavedMethod: sub.autoRenew !== undefined };
+		return { invoiceId, chargingSavedMethod };
 	},
 });
 
@@ -889,8 +930,9 @@ export const changePlan = mutation({
 		}
 		// Same rule as subscribeSelf: a seller who already authorised a method
 		// is charged on it rather than being sent to an authorisation page that
-		// would refuse them ("already on").
-		if (sub.autoRenew !== undefined) {
+		// would refuse them ("already on") — unless auto-charging is stopped.
+		const chargingSavedMethod = autoChargeAllowed(sub.autoRenew);
+		if (chargingSavedMethod) {
 			await ctx.scheduler.runAfter(
 				0,
 				internal.subscriptionPayments.chargeDueRenewal,
@@ -900,7 +942,7 @@ export const changePlan = mutation({
 		return {
 			kind: "invoiced",
 			invoiceId,
-			chargingSavedMethod: sub.autoRenew !== undefined,
+			chargingSavedMethod,
 		};
 	},
 });
@@ -1238,7 +1280,7 @@ export const internalIssueRenewalInvoice = internalMutation({
 		if (kind === "plan" && sub.pendingPlanChange !== undefined) {
 			await ctx.db.patch(sub._id, { pendingPlanChange: undefined });
 		}
-		const autoCharge = sub.autoRenew !== undefined;
+		const autoCharge = autoChargeAllowed(sub.autoRenew);
 		if (autoCharge) {
 			await ctx.scheduler.runAfter(
 				0,
@@ -1336,12 +1378,7 @@ export const listPending = query({
 			/** Off-Season Hold invoices bill the hold, not the tier (z8r3fday24). */
 			kind: "plan" | "hold";
 			hasPayNowLink: boolean;
-			autoRenew: {
-				method: string;
-				failedAttempts: number;
-				nextRetryAt?: number;
-				lastChargeError?: string;
-			} | null;
+			autoRenew: AdminAutoChargeState | null;
 			gatewayIssue?: Doc<"invoices">["gatewayIssue"];
 			billingCycle: BillingCycle;
 		}>
@@ -1372,14 +1409,7 @@ export const listPending = query({
 				origin: inv.origin ?? "admin",
 				kind: inv.kind ?? "plan",
 				hasPayNowLink: inv.gatewayPayment !== undefined,
-				autoRenew: sub?.autoRenew
-					? {
-							method: sub.autoRenew.method,
-							failedAttempts: sub.autoRenew.failedAttempts ?? 0,
-							nextRetryAt: sub.autoRenew.nextRetryAt,
-							lastChargeError: sub.autoRenew.lastChargeError,
-						}
-					: null,
+				autoRenew: sub?.autoRenew ? adminAutoChargeState(sub.autoRenew) : null,
 				gatewayIssue: inv.gatewayIssue,
 				// Without this the admin console shows an annual and a monthly
 				// pending invoice identically except for the amount — while markPaid

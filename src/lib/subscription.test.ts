@@ -280,6 +280,7 @@ describe("resolveBannerState", () => {
 			methodLabel: "Visa ·· 4242",
 			failedAttempts: 1,
 			failing: true,
+			stopped: false,
 		};
 		expect(
 			resolveBannerState(
@@ -306,6 +307,32 @@ describe("resolveBannerState", () => {
 				NOW,
 			).kind,
 		).toBe("none");
+	});
+
+	test("auto-charging STOPPED over a stranded charge outranks a decline and the countdown — never past_due", () => {
+		const stopped = {
+			method: "card",
+			methodLabel: "Visa ·· 4242",
+			failedAttempts: 1,
+			failing: true,
+			stopped: true,
+		};
+		// Stopped is the current truth, and "pay it yourself" (the failed
+		// banner) could be the second payment while we sort the first one out.
+		expect(
+			resolveBannerState(
+				sub({ status: "active", autoRenew: stopped }),
+				NOW + 2 * DAY,
+				NOW,
+			).kind,
+		).toBe("autoRenewStopped");
+		expect(
+			resolveBannerState(
+				sub({ status: "past_due", autoRenew: stopped }),
+				NOW + 2 * DAY,
+				NOW,
+			).kind,
+		).toBe("pastDue");
 	});
 
 	test("active with a pending invoice due within 5 days → invoiceWarn", () => {

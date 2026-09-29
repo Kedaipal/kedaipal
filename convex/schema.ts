@@ -2710,6 +2710,27 @@ export default defineSchema({
 				// lock is still held (CHARGE_ATTEMPT_LOCK_MS).
 				lastChargeAttemptAt: v.optional(v.number()),
 				pendingChargeInvoiceId: v.optional(v.id("invoices")),
+				// A STRANDED charge: HitPay took an auto-charge whose outcome we'd
+				// lost, for a bill that was voided before we found out. The money
+				// is audited on that bill (`gatewayIssue: late_payment`, a refund
+				// conversation), and auto-charging STOPS while this is set — the
+				// money must never be quietly applied to a different bill, and
+				// charging the replacement on top would be the double debit this
+				// whole machine exists to prevent. Any settle of any of the store's
+				// bills clears it (settleInvoicePaid). Admin sees it on the pending
+				// bill's row; the seller sees the auto-renewal card say so.
+				strandedCharge: v.optional(
+					v.object({
+						invoiceId: v.id("invoices"),
+						invoiceNumber: v.string(),
+						amountSen: v.number(),
+						currency: v.string(),
+						// `reconciled:<session>:<n>` or the webhook's payment id —
+						// what the admin looks up in HitPay's dashboard.
+						paymentId: v.string(),
+						at: v.number(),
+					}),
+				),
 			}),
 		),
 		// In-flight authorisation the seller hasn't finished (they were redirected

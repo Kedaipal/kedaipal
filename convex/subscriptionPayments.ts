@@ -43,7 +43,10 @@ import {
 	senToDecimalString,
 } from "./lib/hitpay";
 import {
+	type AdminAutoChargeState,
 	AUTO_RENEW_METHODS,
+	adminAutoChargeState,
+	autoChargeAllowed,
 	autoRenewMethodLabel,
 	type BillingGatewayCredentials,
 	buildAutoRenewSessionParams,
@@ -251,13 +254,11 @@ export const listAutoRenewForAdmin = query({
 			retailerId: Id<"retailers">;
 			storeName: string;
 			slug: string;
-			method: string;
 			methodLabel: string;
 			attachedAt: number;
 			lastChargeAt?: number;
-			failedAttempts: number;
-			nextRetryAt?: number;
-			lastChargeError?: string;
+			/** Same projection the pending-bills list carries (one author). */
+			charge: AdminAutoChargeState;
 		}>
 	> => {
 		await requireAdmin(ctx);
@@ -271,21 +272,22 @@ export const listAutoRenewForAdmin = query({
 				retailerId: sub.retailerId,
 				storeName: retailer.storeName,
 				slug: retailer.slug,
-				method: sub.autoRenew.method,
 				methodLabel:
 					sub.autoRenew.methodLabel ??
 					autoRenewMethodLabel(sub.autoRenew.method),
 				attachedAt: sub.autoRenew.attachedAt,
 				lastChargeAt: sub.autoRenew.lastChargeAt,
-				failedAttempts: sub.autoRenew.failedAttempts ?? 0,
-				nextRetryAt: sub.autoRenew.nextRetryAt,
-				lastChargeError: sub.autoRenew.lastChargeError,
+				charge: adminAutoChargeState(sub.autoRenew),
 			});
 		}
-		// Failing first, then most recently attached.
+		// Stopped first (a human must act), then failing, then most recently
+		// attached.
 		return rows.sort(
 			(a, b) =>
-				b.failedAttempts - a.failedAttempts || b.attachedAt - a.attachedAt,
+				Number(b.charge.stranded !== undefined) -
+					Number(a.charge.stranded !== undefined) ||
+				b.charge.failedAttempts - a.charge.failedAttempts ||
+				b.attachedAt - a.attachedAt,
 		);
 	},
 });
@@ -1297,11 +1299,26 @@ export const chargeContext = internalQuery({
 		autoRenew: Doc<"subscriptions">["autoRenew"];
 		/** The invoice's live Pay-now request, killed while we charge. */
 		gatewayRequestId: string | undefined;
+		/** The bill an unresolved attempt was FIRED FOR — usually this one; a
+		 * different one only when that bill was voided (or reissued) while the
+		 * outcome was unknown. A reconciled charge belongs to it, not to us. */
+		attemptInvoice: {
+			invoiceId: Id<"invoices">;
+			totalSen: number;
+			currency: string;
+		} | null;
 	} | null> => {
 		const invoice = await ctx.db.get(invoiceId);
 		if (!invoice) return null;
 		const sub = await ctx.db.get(invoice.subscriptionId);
 		if (!sub) return null;
+		const attemptId = sub.autoRenew?.pendingChargeInvoiceId;
+		const attempt =
+			attemptId === undefined
+				? null
+				: attemptId === invoiceId
+					? invoice
+					: await ctx.db.get(attemptId);
 		return {
 			invoiceStatus: invoice.status,
 			invoiceNumber: invoice.invoiceNumber,
@@ -1311,6 +1328,13 @@ export const chargeContext = internalQuery({
 			sessionId: sub.autoRenewSessionId,
 			autoRenew: sub.autoRenew,
 			gatewayRequestId: invoice.gatewayRequestId,
+			attemptInvoice: attempt
+				? {
+						invoiceId: attempt._id,
+						totalSen: attempt.total,
+						currency: attempt.currency,
+					}
+				: null,
 		};
 	},
 });
@@ -1450,6 +1474,10 @@ export const chargeDueRenewal = internalAction({
 		if (context.invoiceStatus !== "pending") return; // settled/voided meanwhile
 		const { autoRenew, sessionId } = context;
 		if (!autoRenew || !sessionId) return; // turned off meanwhile — manual rail
+		// Stopped over a stranded charge: nothing charges until a human settles a
+		// bill. Every scheduler asks this rule first; re-asked here because a
+		// charge queued before the stop can still run after it.
+		if (!autoChargeAllowed(autoRenew)) return;
 
 		// Outcome-unknown guard. An attempt stamp is cleared only by a RECORDED
 		// outcome (a settle or a decline), so one still standing means an
@@ -1475,15 +1503,29 @@ export const chargeDueRenewal = internalAction({
 					return;
 				}
 				if (session.chargeCount > (autoRenew.timesCharged ?? 0)) {
+					// The money belongs to the bill the attempt was FIRED FOR — this
+					// one, unless it was voided while the outcome was unknown. Then the
+					// settle audits it on the voided bill and stops auto-charging (a
+					// stranded charge): never quietly booked against this bill, never
+					// charged again on top of it.
+					const charged = context.attemptInvoice ?? {
+						invoiceId,
+						totalSen: context.totalSen,
+						currency: context.currency,
+					};
 					console.warn(
 						"[billing] reconciled an untracked charge — settling without re-charging",
-						{ invoiceNumber: context.invoiceNumber, sessionId },
+						{
+							invoiceNumber: context.invoiceNumber,
+							chargedInvoiceId: charged.invoiceId,
+							sessionId,
+						},
 					);
 					await ctx.runMutation(internal.invoices.internalSettleFromGateway, {
-						invoiceId,
+						invoiceId: charged.invoiceId,
 						paymentId: `reconciled:${sessionId}:${session.chargeCount}`,
-						amountSen: context.totalSen,
-						currency: context.currency,
+						amountSen: charged.totalSen,
+						currency: charged.currency,
 						methodCode: autoRenew.method,
 					});
 					return;

@@ -106,7 +106,11 @@ export function PlanPickerCard({
 	// lapse, a voided bill, or a sponsorship that ended) never sees HitPay's
 	// page: subscribeSelf charges the method on file straight away. The words
 	// before the tap must say THAT — the amount and the method are the consent.
-	const savedMethod = sub.autoRenew?.methodLabel;
+	// Stopped over a stranded charge: the method is on file (so HitPay's
+	// authorisation page would refuse, "already on") but nothing charges it —
+	// subscribing only writes the invoice. Never promise a charge here.
+	const stopped = sub.autoRenew?.stopped === true;
+	const savedMethod = stopped ? undefined : sub.autoRenew?.methodLabel;
 	const price = formatPrice(
 		planPrice(plan, cycle, founding && plan === "pro", currency),
 		currency,
@@ -131,6 +135,18 @@ export function PlanPickerCard({
 				// startAutoRenewSetup would only refuse with "already on".
 				toast.success("Charging your saved payment method…", {
 					description: "Your plan activates the moment it goes through.",
+				});
+				setBusy(false);
+				onRedirectingChange?.(false);
+				return;
+			}
+			if (stopped) {
+				// A method on file that the server didn't charge: auto-charging is
+				// stopped. The invoice is written; the authorisation page would
+				// only refuse ("already on"), so stay here and say what's next.
+				toast.success("Your invoice is ready", {
+					description:
+						"Automatic charging is stopped for now — see Auto-renewal below before paying.",
 				});
 				setBusy(false);
 				onRedirectingChange?.(false);
@@ -169,9 +185,11 @@ export function PlanPickerCard({
 				</p>
 				<p className="mt-1 text-xs text-muted-foreground">
 					{founding ? "Choose monthly or yearly" : "Pick a plan"} —{" "}
-					{savedMethod
-						? `we'll charge your saved ${savedMethod} and your plan activates as soon as it goes through.`
-						: "you'll pay on HitPay's secure page and your plan activates straight away."}
+					{stopped
+						? "we'll write your invoice. Automatic charging is stopped for now, so nothing is charged — see Auto-renewal below."
+						: savedMethod
+							? `we'll charge your saved ${savedMethod} and your plan activates as soon as it goes through.`
+							: "you'll pay on HitPay's secure page and your plan activates straight away."}
 				</p>
 				{founding ? (
 					<p className="mt-2 text-xs text-muted-foreground">
@@ -288,16 +306,20 @@ export function PlanPickerCard({
 					className="inline-flex h-11 w-fit items-center rounded-lg bg-foreground px-4 text-sm font-medium text-background disabled:opacity-60"
 				>
 					{busy
-						? savedMethod
-							? "Charging your saved method…"
-							: "Opening secure payment…"
+						? stopped
+							? "Writing your invoice…"
+							: savedMethod
+								? "Charging your saved method…"
+								: "Opening secure payment…"
 						: `Subscribe to ${planName(plan)}`}
 				</button>
 				{ownerOnly ? <OwnerOnlyNote /> : null}
 				<p className="text-[11px] text-muted-foreground">
-					{savedMethod
-						? `We'll charge ${price} to your saved ${savedMethod} now — then it renews automatically each ${cycle === "annual" ? "year" : "month"}. Turn auto-renewal off any time from its card below.`
-						: `You'll authorise a card or Touch 'n Go once on HitPay's secure page and be charged ${price} now — then it renews automatically each ${cycle === "annual" ? "year" : "month"}. Turn it off any time; Kedaipal never sees your card or wallet details.`}
+					{stopped
+						? `Your ${price} invoice appears on this page. Your saved ${sub.autoRenew?.methodLabel ?? "payment method"} won't be charged while automatic charging is stopped.`
+						: savedMethod
+							? `We'll charge ${price} to your saved ${savedMethod} now — then it renews automatically each ${cycle === "annual" ? "year" : "month"}. Turn auto-renewal off any time from its card below.`
+							: `You'll authorise a card or Touch 'n Go once on HitPay's secure page and be charged ${price} now — then it renews automatically each ${cycle === "annual" ? "year" : "month"}. Turn it off any time; Kedaipal never sees your card or wallet details.`}
 				</p>
 			</div>
 		</section>

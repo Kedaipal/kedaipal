@@ -638,6 +638,18 @@ export function BillingTab({
 						) : (
 							<>
 								<p className="text-sm font-medium">How to pay</p>
+								{/* Auto-charging stopped over an earlier charge that landed
+								    after its bill was cancelled: we may count that money
+								    toward THIS bill, so paying now could be the second
+								    payment. Say so where the pay buttons are — the options
+								    stay, because we may also ask them to pay. */}
+								{sub?.autoRenew?.stopped ? (
+									<p className="mt-1 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+										Hold off for now — we're sorting out an earlier automatic
+										charge first and may count it toward this invoice. See
+										Auto-renewal below.
+									</p>
+								) : null}
 								{/* Online first (86eyb6z4r): card/banking/eWallet on HitPay's
 						    hosted page, auto-confirmed — the manual rails stay below. */}
 								{pending.gatewayPayment?.url ? (

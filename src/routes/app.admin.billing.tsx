@@ -34,6 +34,10 @@ import {
 	type BillingCurrency,
 	planPrice,
 } from "../../convex/lib/plans";
+import {
+	AutoChargeDetail,
+	AutoChargePill,
+} from "../components/admin/auto-charge-status";
 import { PageHeader } from "../components/dashboard/page-header";
 import { InvoiceDownloadButton } from "../components/settings/invoice-download-button";
 import { AppImage } from "../components/ui/app-image";
@@ -55,6 +59,7 @@ import {
 	formatPrice,
 	formatShortDate,
 } from "../lib/format";
+import { describeAutoCharge } from "../lib/auto-charge-status";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
 import { buildOnboardingInviteLink } from "../lib/onboarding-link";
 import { slugify, validateStoreName } from "../lib/slug";
@@ -868,6 +873,8 @@ function IssueInvoiceForm() {
 
 function PendingInvoices() {
 	const invoices = useQuery(convexQuery(api.invoices.listPending, {})).data;
+	// One clock per render, so a row's pill and its line can't disagree.
+	const now = Date.now();
 	const markPaid = useMutation(api.invoices.markPaid);
 	const voidInvoice = useMutation(api.invoices.voidInvoice);
 	const [confirming, setConfirming] = useState<
@@ -962,15 +969,9 @@ function PendingInvoices() {
 									{/* Which RAIL this bill is on (86eyb6z4r) — so "who needs
 									    chasing vs who settles themselves" is a glance. */}
 									{inv.autoRenew ? (
-										inv.autoRenew.failedAttempts > 0 ? (
-											<span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium text-red-700 dark:bg-red-950 dark:text-red-300">
-												Auto-charge failed ×{inv.autoRenew.failedAttempts}
-											</span>
-										) : (
-											<span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
-												Auto-renew
-											</span>
-										)
+										<AutoChargePill
+											description={describeAutoCharge(inv.autoRenew, now)}
+										/>
 									) : inv.hasPayNowLink ? (
 										<span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
 											Pay-now link
@@ -1004,15 +1005,10 @@ function PendingInvoices() {
 											: "⚠ A HitPay payment landed AFTER this invoice was settled/voided — possible double payment, check the HitPay dashboard."}
 									</p>
 								) : null}
-								{inv.autoRenew && inv.autoRenew.failedAttempts > 0 ? (
-									<p className="text-xs text-muted-foreground">
-										{inv.autoRenew.lastChargeError
-											? `Last error: ${inv.autoRenew.lastChargeError}. `
-											: ""}
-										{inv.autoRenew.nextRetryAt
-											? `Next retry ${new Date(inv.autoRenew.nextRetryAt).toLocaleDateString(undefined, { day: "numeric", month: "short" })}.`
-											: "Retries exhausted — seller is on the manual rail."}
-									</p>
+								{inv.autoRenew ? (
+									<AutoChargeDetail
+										description={describeAutoCharge(inv.autoRenew, now)}
+									/>
 								) : null}
 							</div>
 							<div className="flex items-center justify-between gap-3 sm:justify-end">
@@ -1162,6 +1158,7 @@ function AutoRenewOverview() {
 	const rows = useQuery(
 		convexQuery(api.subscriptionPayments.listAutoRenewForAdmin, {}),
 	).data;
+	const now = Date.now();
 
 	return (
 		<AdminCard>
@@ -1192,21 +1189,20 @@ function AutoRenewOverview() {
 									<span className="rounded-full bg-muted px-2 py-0.5 font-mono text-[11px] text-muted-foreground">
 										/{row.slug}
 									</span>
-									{row.failedAttempts > 0 ? (
-										<span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium text-red-700 dark:bg-red-950 dark:text-red-300">
-											Failing ×{row.failedAttempts}
-										</span>
-									) : null}
+									<AutoChargePill
+										description={describeAutoCharge(row.charge, now)}
+										showHealthy={false}
+									/>
 								</div>
 								<p className="text-xs text-muted-foreground">
 									{row.methodLabel}
 									{row.lastChargeAt
-										? ` · last charged ${new Date(row.lastChargeAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}`
+										? ` · last charged ${formatShortDate(row.lastChargeAt)}`
 										: " · no charge yet"}
-									{row.failedAttempts > 0 && row.lastChargeError
-										? ` · ${row.lastChargeError}`
-										: ""}
 								</p>
+								<AutoChargeDetail
+									description={describeAutoCharge(row.charge, now)}
+								/>
 							</div>
 						</li>
 					))}

@@ -35,12 +35,15 @@ export type SubscriptionView = {
 	currentPeriodEnd?: number;
 	caps?: { orderCap: number; userCap: number; broadcastQuota: number };
 	features?: Record<PlanFeature, boolean>;
-	/** Saved-method auto-renewal summary (86eyb6z4r) — owner payload only. */
+	/** Saved-method auto-renewal summary (86eyb6z4r) — owner payload only.
+	 * `stopped`: auto-charging is stopped over a stranded charge — nothing
+	 * charges until a bill is settled (docs/hitpay-recurring.md). */
 	autoRenew?: {
 		method: string;
 		methodLabel: string;
 		failedAttempts: number;
 		failing: boolean;
+		stopped: boolean;
 		nextChargeAt?: number;
 	};
 	autoRenewSetupPending?: boolean;
@@ -295,6 +298,9 @@ export type BannerState =
 	 * (z8r3fdeub2): same lock as past-due, but there is no bill to pay — they
 	 * choose a plan. */
 	| { kind: "compEnded" }
+	/** Auto-charging stopped over a stranded charge: an earlier charge landed
+	 * after its bill was voided, and a human is sorting the money out. */
+	| { kind: "autoRenewStopped" }
 	| { kind: "autoRenewFailed" }
 	| { kind: "invoiceWarn"; daysLeft: number }
 	/** Off-Season Hold: ordering is paused — a calm, persistent reminder. */
@@ -323,6 +329,12 @@ export function resolveBannerState(
 	if (!sub || sub.comped) return { kind: "none" };
 	if (sub.status === "past_due")
 		return sub.compEnded ? { kind: "compEnded" } : { kind: "pastDue" };
+
+	// Stopped outranks declined: it is the CURRENT truth about the saved
+	// method (nothing will charge it), and it changes what the seller should
+	// do — "pay it yourself" could make them pay twice while we sort out an
+	// earlier charge. Clears when any bill settles.
+	if (sub.autoRenew?.stopped) return { kind: "autoRenewStopped" };
 
 	// A declined auto-charge outranks the generic invoice countdown: it names
 	// the actual problem (the saved method) and its fix, while access is still

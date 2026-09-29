@@ -138,7 +138,11 @@ export function PlanChangeCard({
 				});
 			} else {
 				toast.success(`Your ${PLAN_LABEL[plan]} invoice is ready`, {
-					description: "Pay it below and the new plan starts straight away.",
+					// A saved method that wasn't charged means auto-charging is
+					// stopped over an earlier charge we may count toward this bill.
+					description: sub.autoRenew?.stopped
+						? "Automatic charging is stopped for now — see Auto-renewal below before paying."
+						: "Pay it below and the new plan starts straight away.",
 				});
 			}
 			setTarget(null);

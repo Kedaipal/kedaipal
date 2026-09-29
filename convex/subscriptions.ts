@@ -38,6 +38,7 @@ import {
 import { COMP_LABEL_MAX, COMP_NOTE_MAX, type CompKind } from "./lib/comp";
 import { rateLimiter } from "./lib/rateLimiter";
 import {
+	autoChargeAllowed,
 	autoRenewMethodLabel,
 	CHARGE_ATTEMPT_LOCK_MS,
 } from "./lib/hitpayBilling";
@@ -122,13 +123,16 @@ export type AccessState = {
 	periodPaidBy?: "plan" | "hold";
 	/** Saved-method auto-renewal summary (86eyb6z4r) — OWNER-only surface (this
 	 * state rides getMyRetailer, which shoppers never see). `failing` means the
-	 * last charge attempt was declined and dunning is running; `setupPending`
-	 * means the seller started authorisation but no method attached yet. */
+	 * last charge attempt was declined and dunning is running; `stopped` means
+	 * auto-charging is stopped over a stranded charge (nothing charges until a
+	 * bill is settled); `setupPending` means the seller started authorisation
+	 * but no method attached yet. */
 	autoRenew?: {
 		method: string;
 		methodLabel: string;
 		failedAttempts: number;
 		failing: boolean;
+		stopped: boolean;
 		nextChargeAt?: number;
 	};
 	autoRenewSetupPending?: boolean;
@@ -237,6 +241,7 @@ function resolveAccessBase(sub: Doc<"subscriptions"> | null): AccessState {
 						autoRenewMethodLabel(sub.autoRenew.method),
 					failedAttempts: sub.autoRenew.failedAttempts ?? 0,
 					failing: (sub.autoRenew.failedAttempts ?? 0) > 0,
+					stopped: !autoChargeAllowed(sub.autoRenew),
 					nextChargeAt: sub.currentPeriodEnd,
 				}
 			: undefined,
@@ -1289,7 +1294,11 @@ export const internalDailyBillingStatus = internalMutation({
 			const unresolvedAttempt =
 				sub.autoRenew?.lastChargeAttemptAt !== undefined &&
 				now - sub.autoRenew.lastChargeAttemptAt >= CHARGE_ATTEMPT_LOCK_MS;
-			if (pendingInvoice && (retryDue || unresolvedAttempt)) {
+			if (
+				pendingInvoice &&
+				autoChargeAllowed(sub.autoRenew) &&
+				(retryDue || unresolvedAttempt)
+			) {
 				await ctx.scheduler.runAfter(
 					0,
 					internal.subscriptionPayments.chargeDueRenewal,

@@ -144,7 +144,11 @@ export function AutoRenewalCard({
 	};
 
 	const on = sub.autoRenew !== undefined;
+	// Stopped over a stranded charge — a state the seller must be TOLD about,
+	// never shown as "renewing now" while nothing will charge.
+	const stopped = sub.autoRenew?.stopped === true;
 	const failing = sub.autoRenew?.failing === true;
+	const attention = stopped || failing;
 	const renewing = isRenewing(sub, Date.now());
 	const money = (m: Money) => formatPrice(m.amount, m.currency);
 	// A charge in flight takes the open bill; failing that, the renewal.
@@ -157,14 +161,14 @@ export function AutoRenewalCard({
 			className={`flex flex-col gap-3 rounded-2xl border p-5 scroll-mt-24 lg:p-6 ${
 				highlight
 					? highlightRingClass(highlight)
-					: failing
+					: attention
 						? "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40"
 						: "border-input bg-background"
 			}`}
 		>
 			<div className="flex items-start justify-between gap-3">
 				<div className="flex items-start gap-3">
-					{failing ? (
+					{attention ? (
 						<AlertTriangle className="mt-0.5 size-5 shrink-0 text-amber-600" />
 					) : (
 						<RefreshCw className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
@@ -172,7 +176,15 @@ export function AutoRenewalCard({
 					<div>
 						<p className="text-sm font-medium">Auto-renewal</p>
 						{on ? (
-							failing ? (
+							stopped ? (
+								<p className="mt-1 text-xs text-amber-800 dark:text-amber-300">
+									Stopped for now. An earlier automatic charge to your{" "}
+									{sub.autoRenew?.methodLabel} went through after its invoice
+									was cancelled. We'll be in touch to refund it or count it
+									toward your open invoice — no need to pay twice. Automatic
+									charging carries on once that's sorted.
+								</p>
+							) : failing ? (
 								<p className="mt-1 text-xs text-amber-800 dark:text-amber-300">
 									We couldn't charge{" "}
 									{pendingCharge ? `${money(pendingCharge)} to ` : ""}your{" "}
