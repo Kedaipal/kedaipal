@@ -41,6 +41,7 @@ import {
 	type ProductKind,
 	packageUnitMax,
 } from "../../../convex/lib/productKind";
+import { MAX_VARIANTS_PER_PRODUCT } from "../../../convex/lib/variant";
 import { bookingSpanCounted, bookingSpanNoun } from "../../lib/booking-dates";
 import {
 	type FixHighlight,
@@ -443,6 +444,22 @@ export function collectOptionIssues(
 	options: { name: string; values: string[] }[],
 ): VariantIssue[] {
 	const issues: VariantIssue[] = [];
+	// Over the cap the grid is the problem, and it is fixed by removing VALUES —
+	// so the breach is reported here, on the axis, and (because option issues are
+	// collected before row issues) it is the one the focus-first-error helper
+	// lands on. Before this, a seller who widened an axis past the cap met a pile
+	// of "Enter a price" errors on the rows the widening had just generated, and
+	// nothing said the grid was over the limit until the server refused the save
+	// (z8r3fdjgvd).
+	const total = cartesian(options).length;
+	if (total > MAX_VARIANTS_PER_PRODUCT) {
+		issues.push({
+			where: "option",
+			index: 0,
+			field: "values",
+			message: `${total} choices is over the limit of ${MAX_VARIANTS_PER_PRODUCT}. Remove ${total - MAX_VARIANTS_PER_PRODUCT} to save this product.`,
+		});
+	}
 	options.forEach((axis, index) => {
 		if (axis.name.trim().length === 0) {
 			issues.push({
@@ -952,9 +969,15 @@ export function ProductForm({
 			// line is the whole offer, and `buildSubmitVariants` emits that line
 			// as the product's only variant.
 			const built = buildSubmitVariants(reconciled.rows, editor.customLine);
+			// Over the cap, the blank rows the widening just generated are not what
+			// the seller must fix — the axis is. Reporting them alongside would
+			// bury the real blocker under dozens of price errors, the same reason
+			// `gridReady` gates them above.
+			const overCap =
+				cartesian(reconciled.options).length > MAX_VARIANTS_PER_PRODUCT;
 			const issues = [
 				...collectOptionIssues(reconciled.options),
-				...(gridReady && "issues" in built ? built.issues : []),
+				...(gridReady && !overCap && "issues" in built ? built.issues : []),
 			];
 			if (issues.length > 0) {
 				setEditorIssues(issues);

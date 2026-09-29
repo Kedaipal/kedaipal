@@ -238,6 +238,11 @@ export function EventRsvpCheckoutForm({
 	// unpicked multi-option event, which is exactly the bug it was added to fix.
 	const priceSettled = Boolean(variant);
 	const unitPrice = variant?.price ?? product.priceFrom ?? 0;
+	// Seats are the whole bill. An event VENUE carries no pickup fee — the guest
+	// is attending, not collecting — so `buildEventVenueSnapshot` drops it at
+	// order time and there is nothing here to add. Before that, the venue's
+	// self-collect fee was charged but never quoted: an RM 680 CTA placed an
+	// RM 685 order (z8r3fdjgvd test run).
 	const total = unitPrice * seats;
 	const isFree = priceSettled && total === 0;
 
@@ -453,7 +458,13 @@ export function EventRsvpCheckoutForm({
 				<EventMomentRow event={event} storeName={storeName} />
 				{venue ? (
 					<>
-						<PickupSummaryCard location={venue} currency={product.currency} />
+						<PickupSummaryCard
+							location={venue}
+							currency={product.currency}
+							// An event venue never charges its pickup fee, so the card
+							// must not advertise one — see buildEventVenueSnapshot.
+							hideFee
+						/>
 						<p className="text-xs text-muted-foreground">
 							Where the event happens — set by the store, the same for every
 							guest.

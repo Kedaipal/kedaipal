@@ -108,8 +108,14 @@ export function normalizeOptions(
 
 	const total = cartesian(normalized).length;
 	if (total > MAX_VARIANTS_PER_PRODUCT)
+		// "choices", not "variants": this message is what the seller reads in a
+		// toast when a save is refused, and every other surface they touch — the
+		// wizard, the grid editor's count, the over-cap notice, the RSVP tally,
+		// the stock sheet — says "choices". "Variants" is our word, not theirs.
+		// (The CSV import keeps "variant rows": that page's whole vocabulary is
+		// rows in a sheet, and its own check refuses first.)
 		throw new Error(
-			`That makes ${total} variants — max ${MAX_VARIANTS_PER_PRODUCT} per product`,
+			`That makes ${total} choices — max ${MAX_VARIANTS_PER_PRODUCT} per product`,
 		);
 
 	return normalized;

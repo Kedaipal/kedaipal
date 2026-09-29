@@ -1160,20 +1160,29 @@ export function VariantEditor({
 						</button>
 					</div>
 				</div>
-				<IssueText message={issueFor("option", axisIndex, "values")} />
 				{/* The cap is broken by ADDING a value, so it is reported on the
 				    control that adds one. It used to render only after the price
 				    grid — which at the cap is ~13,000px further down the page, so
 				    the seller saw the count climb and nothing tell them why the
 				    product would not save (z8r3fdjgvd). Shown under both axes,
-				    since either one can be the one pushing it over. */}
+				    since either one can be the one pushing it over, and shown LIVE
+				    rather than waiting for a submit.
+
+				    It replaces the submitted values-issue instead of sitting beside
+				    it: `collectOptionIssues` raises the same breach at submit (so
+				    the save blocks and focus lands here), and rendering both would
+				    print one sentence twice. The two cannot be different problems —
+				    an axis with no values makes zero combinations, so "add a value"
+				    and "too many combinations" can never be true at once. */}
 				{overCap ? (
 					<p className="text-xs text-destructive">
 						{variantCount} choices is over the limit of{" "}
 						{MAX_VARIANTS_PER_PRODUCT}. Remove{" "}
 						{variantCount - MAX_VARIANTS_PER_PRODUCT} to save this product.
 					</p>
-				) : null}
+				) : (
+					<IssueText message={issueFor("option", axisIndex, "values")} />
+				)}
 			</div>
 		);
 	}

@@ -164,4 +164,37 @@ describe("collectOptionIssues", () => {
 			[],
 		);
 	});
+
+	// z8r3fdjgvd — the cap is broken by adding a VALUE, so it is reported on the
+	// axis and (being an option issue) ahead of every row issue, which is what
+	// the focus-first-error helper lands on.
+	it("reports an over-cap grid FIRST, as an axis problem", () => {
+		const issues = collectOptionIssues([
+			{
+				name: "Adult 1 size",
+				values: Array.from({ length: 11 }, (_, i) => `a${i}`),
+			},
+			{
+				name: "Adult 2 size",
+				values: Array.from({ length: 10 }, (_, i) => `b${i}`),
+			},
+		]);
+		expect(issues[0]).toEqual(
+			expect.objectContaining({ where: "option", index: 0, field: "values" }),
+		);
+		// The consequence, not just the fact.
+		expect(issues[0].message).toMatch(
+			/110 choices is over the limit of 100\. Remove 10 to save this product\./,
+		);
+	});
+
+	it("the 56-choice grid the cap was raised for reports nothing", () => {
+		const sizes = ["S", "M", "L", "XL", "2XL", "3XL", "4XL"];
+		expect(
+			collectOptionIssues([
+				{ name: "Adult 1 size", values: sizes },
+				{ name: "Adult 2 size", values: ["None", ...sizes] },
+			]),
+		).toEqual([]);
+	});
 });

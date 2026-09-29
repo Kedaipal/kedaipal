@@ -104,7 +104,9 @@ describe("variant helpers", () => {
 					{ name: "A", values: Array.from({ length: 11 }, (_, i) => `a${i}`) },
 					{ name: "B", values: Array.from({ length: 10 }, (_, i) => `b${i}`) },
 				]),
-			).toThrow(/That makes 110 variants — max 100 per product/);
+			// "choices" is the seller's word — the toast this text becomes sits beside
+				// a UI that says "choices" everywhere else.
+			).toThrow(/That makes 110 choices — max 100 per product/);
 		});
 
 		test("accepts the 56-variant two-size event grid (z8r3fdjgvd)", () => {
@@ -127,7 +129,7 @@ describe("variant helpers", () => {
 					{ name: "A", values },
 					{ name: "B", values },
 				]),
-			).toThrow(/That makes 625 variants — max 100 per product/);
+			).toThrow(/That makes 625 choices — max 100 per product/);
 		});
 	});
 });

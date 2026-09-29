@@ -71,7 +71,7 @@ import {
 } from "./lib/order";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 import type { PickupSnapshot } from "./lib/whatsappCopy";
-import { buildPickupSnapshot, resolveEventVenue } from "./orders";
+import { buildEventVenueSnapshot, resolveEventVenue } from "./orders";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidWaPhone } from "./lib/slug";
 import { variantLabel } from "./lib/variant";
@@ -947,7 +947,9 @@ export const createOrderFromSession = mutation({
 					"An RSVP needs a venue on the guest's order page — add a pickup point in Settings → Fulfilment first.",
 				);
 			eventPickupLocationId = venue._id;
-			eventPickupSnapshot = buildPickupSnapshot(venue);
+			// No venue fee on an RSVP — see buildEventVenueSnapshot. The counter
+			// must agree with the storefront or the same event costs two prices.
+			eventPickupSnapshot = buildEventVenueSnapshot(venue);
 		}
 		for (const [productId, { event, name }] of eventProducts) {
 			if (event.seats === undefined) continue;
