@@ -8,7 +8,7 @@ Source of truth for tokens: [`src/styles.css`](../src/styles.css). Primitives: [
 - **Tailwind v4** (CSS-first `@theme`, no `tailwind.config.js`) + **shadcn** base layer + **radix-ui** for behaviour.
 - **Fonts:** `Geist Variable` (body, `--font-sans`), `Red Hat Display Variable` (headings, `--font-heading`). Use the `font-heading` utility on display text; headings `h1–h6` already get it via base CSS.
 - **Icons:** `lucide-react` only. Default icon size in buttons is `size-4` (auto-applied) — don't hardcode unless deviating.
-- **Animation:** `framer-motion` is available; always gate motion behind `prefers-reduced-motion` (see the marquee example in `styles.css`).
+- **Animation:** `framer-motion` is available; always gate motion behind `prefers-reduced-motion` (see the marquee example in `styles.css`). For chrome state changes (collapse/expand, reveal), prefer CSS transitions over framer-motion — the reference is the dashboard sidebar's collapse ([`sidebar.tsx`](../src/components/dashboard/sidebar.tsx)): one shared `transition-[…] duration-200 motion-reduce:transition-none` spec so width, labels and chevron move as one gesture; labels stay mounted and fade/clip (`aria-hidden` while collapsed) instead of unmounting mid-animation; and transitions arm one frame AFTER mount, so a state restored from `localStorage` paints instantly on page load rather than replaying as a slide.
 - Class merging: **always** `cn()` from [`#/lib/utils`](../src/lib/utils.ts). Polymorphism: radix `Slot` via the `asChild` prop (Button supports it).
 
 ## Color tokens (semantic, never raw hex)

@@ -3,7 +3,6 @@ import { Link, type LinkProps } from "@tanstack/react-router";
 import type { FunctionReturnType } from "convex/server";
 import {
 	ChevronLeft,
-	ChevronRight,
 	Home,
 	LineChart,
 	type LucideIcon,
@@ -16,9 +15,15 @@ import {
 	Store,
 	Users,
 } from "lucide-react";
-import type { MouseEventHandler, ReactNode } from "react";
+import {
+	type MouseEventHandler,
+	type ReactNode,
+	useEffect,
+	useState,
+} from "react";
 import type { api } from "../../../convex/_generated/api";
 import { useActAs } from "../../hooks/useActAs";
+import { usePermission } from "../../hooks/usePermission";
 import { useSidebarCollapsed } from "../../hooks/useSidebarCollapsed";
 import { hasFeature } from "../../lib/subscription";
 import { cn } from "../../lib/utils";
@@ -27,7 +32,6 @@ import { AppImage } from "../ui/app-image";
 import { AppVersionRow } from "./app-version-row";
 import { TierPill } from "./tier-pill";
 import { WhatsNewNavItem } from "./whats-new";
-import { usePermission } from "../../hooks/usePermission";
 
 type Retailer = NonNullable<
 	FunctionReturnType<typeof api.retailers.getMyRetailer>
@@ -60,6 +64,20 @@ export function Sidebar({
 	const insightsPerm = usePermission("insights");
 
 	const [collapsed, setCollapsed] = useSidebarCollapsed();
+	// The collapsed preference arrives from localStorage in an effect, so the
+	// first client paint may re-apply it. Transitions switch on one frame
+	// later, or every full page load would play the collapse as a 200ms slide
+	// instead of restoring it instantly.
+	const [motionReady, setMotionReady] = useState(false);
+	useEffect(() => {
+		const id = requestAnimationFrame(() => setMotionReady(true));
+		return () => cancelAnimationFrame(id);
+	}, []);
+	// One shared transition spec so the rail, labels, pill and chevron move as
+	// one gesture. Gated behind prefers-reduced-motion (design-system rule).
+	const motion = motionReady
+		? "transition-[width,max-width,max-height,padding,opacity,transform,color,background-color] duration-200 motion-reduce:transition-none"
+		: "";
 	const { user } = useUser();
 	const userEmail = user?.primaryEmailAddress?.emailAddress ?? null;
 	const userName =
@@ -80,15 +98,11 @@ export function Sidebar({
 			className={cn(
 				"sticky top-0 hidden h-dvh shrink-0 flex-col border-r border-border bg-card lg:flex print:hidden",
 				collapsed ? "w-[68px]" : "w-60",
+				motion,
 			)}
 			aria-label="Dashboard navigation"
 		>
-			<div
-				className={cn(
-					"flex h-16 items-center border-b border-border px-3",
-					collapsed ? "justify-center" : "gap-2.5 px-4",
-				)}
-			>
+			<div className="flex h-16 items-center gap-2.5 border-b border-border px-4">
 				<Link
 					to={retailer ? "/app" : "/app/admin/sellers"}
 					onClick={retailer ? undefined : exitActAs}
@@ -101,24 +115,38 @@ export function Sidebar({
 						fill={false}
 						priority
 					/>
-					{!collapsed ? (
-						<div className="flex min-w-0 flex-col">
-							<span className="truncate text-sm font-semibold leading-tight">
-								{retailer ? retailer.storeName : "Kedaipal"}
-							</span>
-							<span className="truncate font-mono text-[11px] text-muted-foreground">
-								{retailer ? `/${retailer.slug}` : "Admin console"}
-							</span>
-						</div>
-					) : null}
+					<div
+						aria-hidden={collapsed}
+						className={cn(
+							"flex min-w-0 flex-col overflow-hidden",
+							collapsed ? "max-w-0 opacity-0" : "max-w-40 opacity-100",
+							motion,
+						)}
+					>
+						<span className="truncate text-sm font-semibold leading-tight">
+							{retailer ? retailer.storeName : "Kedaipal"}
+						</span>
+						<span className="truncate font-mono text-[11px] text-muted-foreground">
+							{retailer ? `/${retailer.slug}` : "Admin console"}
+						</span>
+					</div>
 				</Link>
 			</div>
 
 			{/* Subscription tier pill — always-visible chrome (links to billing).
 			    Hidden for a storeless admin (no subscription to show). Reads "Admin"
 			    on an admin's own store. */}
-			{retailer && !collapsed ? (
-				<div className="border-b border-border px-4 py-2">
+			{retailer ? (
+				<div
+					aria-hidden={collapsed}
+					className={cn(
+						"overflow-hidden border-b border-border px-4",
+						collapsed
+							? "pointer-events-none max-h-0 py-0 opacity-0"
+							: "max-h-12 py-2 opacity-100",
+						motion,
+					)}
+				>
 					<TierPill
 						subscription={retailer.subscription}
 						foundingRank={retailer.foundingMemberRank}
@@ -138,65 +166,71 @@ export function Sidebar({
 							icon={Home}
 							label="Home"
 							collapsed={collapsed}
+							motion={motion}
 						/>
 						{productsPerm.canRead ? (
-						<SidebarLink
-							to="/app/products"
-							icon={Package}
-							label="Products"
-							collapsed={collapsed}
-						/>
+							<SidebarLink
+								to="/app/products"
+								icon={Package}
+								label="Products"
+								collapsed={collapsed}
+								motion={motion}
+							/>
 						) : null}
 						{ordersPerm.canRead ? (
-						<SidebarLink
-							to="/app/orders"
-							icon={ShoppingBag}
-							label="Orders"
-							collapsed={collapsed}
-							badge={newOrdersCount}
-							// Land on exactly what the badge counted — but only while
-							// there IS something new, so the link stays plain navigation
-							// the rest of the time. Mirrors the bottom nav.
-							search={
-								newOrdersCount > 0 ? { bucket: ["new" as const] } : undefined
-							}
-						/>
+							<SidebarLink
+								to="/app/orders"
+								icon={ShoppingBag}
+								label="Orders"
+								collapsed={collapsed}
+								motion={motion}
+								badge={newOrdersCount}
+								// Land on exactly what the badge counted — but only while
+								// there IS something new, so the link stays plain navigation
+								// the rest of the time. Mirrors the bottom nav.
+								search={
+									newOrdersCount > 0 ? { bucket: ["new" as const] } : undefined
+								}
+							/>
 						) : null}
 						{ordersPerm.canWrite ? (
-						<SidebarLink
-							to="/app/checkout"
-							icon={QrCode}
-							label="Counter"
-							collapsed={collapsed}
-						/>
+							<SidebarLink
+								to="/app/checkout"
+								icon={QrCode}
+								label="Counter"
+								collapsed={collapsed}
+								motion={motion}
+							/>
 						) : null}
 						{customersPerm.canRead ? (
-						<SidebarLink
-							to="/app/customers"
-							icon={Users}
-							label="Customers"
-							collapsed={collapsed}
-							// CRM is Pro+ — mark it in nav so the gate is never a surprise
-							// (the route shows the upgrade wall). Act-as admins see through.
-							pro={
-								!retailer.actingAsAdmin &&
-								!hasFeature(retailer.subscription, "crm")
-							}
-						/>
+							<SidebarLink
+								to="/app/customers"
+								icon={Users}
+								label="Customers"
+								collapsed={collapsed}
+								motion={motion}
+								// CRM is Pro+ — mark it in nav so the gate is never a surprise
+								// (the route shows the upgrade wall). Act-as admins see through.
+								pro={
+									!retailer.actingAsAdmin &&
+									!hasFeature(retailer.subscription, "crm")
+								}
+							/>
 						) : null}
 						{insightsPerm.canRead ? (
-						<SidebarLink
-							to="/app/insights"
-							icon={LineChart}
-							label="Insights"
-							collapsed={collapsed}
-							// Insights is Pro+ — mark it in nav so the gate is never a
-							// surprise (the route shows the teaser). Act-as admins see through.
-							pro={
-								!retailer.actingAsAdmin &&
-								!hasFeature(retailer.subscription, "insights")
-							}
-						/>
+							<SidebarLink
+								to="/app/insights"
+								icon={LineChart}
+								label="Insights"
+								collapsed={collapsed}
+								motion={motion}
+								// Insights is Pro+ — mark it in nav so the gate is never a
+								// surprise (the route shows the teaser). Act-as admins see through.
+								pro={
+									!retailer.actingAsAdmin &&
+									!hasFeature(retailer.subscription, "insights")
+								}
+							/>
 						) : null}
 						<SidebarLink
 							to="/app/settings"
@@ -204,6 +238,7 @@ export function Sidebar({
 							icon={Settings}
 							label="Settings"
 							collapsed={collapsed}
+							motion={motion}
 						/>
 					</>
 				) : null}
@@ -218,17 +253,25 @@ export function Sidebar({
 							retailer ? "" : "border-t-0 pt-0",
 						)}
 					>
-						{!collapsed ? (
-							<span className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-								Admin
-							</span>
-						) : null}
+						<span
+							aria-hidden={collapsed}
+							className={cn(
+								"overflow-hidden px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground",
+								collapsed
+									? "max-h-0 pb-0 opacity-0"
+									: "max-h-5 pb-1 opacity-100",
+								motion,
+							)}
+						>
+							Admin
+						</span>
 						<SidebarLink
 							to="/app/admin/sellers"
 							onClick={exitActAs}
 							icon={Store}
 							label="All sellers"
 							collapsed={collapsed}
+							motion={motion}
 						/>
 						<SidebarLink
 							to="/app/admin/billing"
@@ -236,6 +279,7 @@ export function Sidebar({
 							icon={ShieldCheck}
 							label="Billing"
 							collapsed={collapsed}
+							motion={motion}
 						/>
 						<SidebarLink
 							to="/app/admin/waba"
@@ -243,6 +287,7 @@ export function Sidebar({
 							icon={Siren}
 							label="WABA Safety"
 							collapsed={collapsed}
+							motion={motion}
 						/>
 					</div>
 				) : null}
@@ -266,21 +311,28 @@ export function Sidebar({
 					title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
 					className="absolute top-0 right-0 z-20 flex size-6 translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm transition-colors hover:border-accent/40 hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
 				>
-					{collapsed ? (
-						<ChevronRight className="size-3.5" strokeWidth={2.5} />
-					) : (
-						<ChevronLeft className="size-3.5" strokeWidth={2.5} />
-					)}
+					<ChevronLeft
+						className={cn("size-3.5", collapsed && "rotate-180", motion)}
+						strokeWidth={2.5}
+					/>
 				</button>
 				<div
 					className={cn(
-						"flex items-center gap-2 rounded-lg px-2 py-2",
-						collapsed && "justify-center px-0",
+						"flex items-center gap-2 rounded-lg py-2 pr-2",
+						collapsed ? "pl-3" : "pl-2",
+						motion,
 					)}
 				>
 					<UserButton />
-					{!collapsed && (userName || userEmail) ? (
-						<div className="flex min-w-0 flex-col">
+					{userName || userEmail ? (
+						<div
+							aria-hidden={collapsed}
+							className={cn(
+								"flex min-w-0 flex-col overflow-hidden",
+								collapsed ? "max-w-0 opacity-0" : "max-w-44 opacity-100",
+								motion,
+							)}
+						>
 							{userName ? (
 								<span className="truncate text-xs font-medium">{userName}</span>
 							) : null}
@@ -318,6 +370,8 @@ interface SidebarLinkProps {
 	icon: LucideIcon;
 	label: string;
 	collapsed: boolean;
+	/** Shared transition classes from the parent — empty until motion is armed. */
+	motion: string;
 	exact?: boolean;
 	badge?: number;
 	search?: LinkProps["search"];
@@ -331,6 +385,7 @@ function SidebarLink({
 	icon: Icon,
 	label,
 	collapsed,
+	motion,
 	exact,
 	badge,
 	search,
@@ -351,8 +406,9 @@ function SidebarLink({
 			activeOptions={{ exact: exact ?? false, includeSearch: false }}
 			title={collapsed ? label : undefined}
 			className={cn(
-				"group relative flex h-10 items-center rounded-lg text-sm transition-colors",
-				collapsed ? "justify-center" : "gap-3 px-3",
+				"group relative flex h-10 items-center gap-3 overflow-hidden rounded-lg text-sm",
+				collapsed ? "pl-4" : "px-3",
+				motion || "transition-colors",
 			)}
 			activeProps={{
 				className: "bg-accent/12 text-foreground font-semibold",
@@ -382,13 +438,18 @@ function SidebarLink({
 							<span className="absolute -right-1 -top-1 flex h-2 w-2 rounded-full bg-orange-500 ring-2 ring-card" />
 						) : null}
 					</span>
-					{!collapsed ? (
-						<>
-							<span className="flex-1">{label}</span>
-							{pro ? <ProBadge /> : null}
-							{showBadge ? <BadgePill count={badge} /> : null}
-						</>
-					) : null}
+					<span
+						aria-hidden={collapsed}
+						className={cn(
+							"flex min-w-0 flex-1 items-center gap-3 whitespace-nowrap",
+							collapsed ? "opacity-0" : "opacity-100",
+							motion,
+						)}
+					>
+						<span className="flex-1">{label}</span>
+						{pro ? <ProBadge /> : null}
+						{showBadge ? <BadgePill count={badge} /> : null}
+					</span>
 				</>
 			)}
 		</Link>
