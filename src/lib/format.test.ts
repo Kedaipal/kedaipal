@@ -209,8 +209,8 @@ describe("formatMobile", () => {
 		// code actually uses. Otherwise a malformed row would be dressed up as a
 		// well-formed number — `+44 791 1123 4` reads like a real GB mobile with
 		// a typo, when what we really have is digits we cannot vouch for.
-		expect(formatMobile("4479111234")).toBe("+4479111234"); // GB, 9 too few
-		expect(formatMobile("44791112345678")).toBe("+44791112345678"); // too many
+		expect(formatMobile("4479111234")).toBe("+4479111234"); // GB national 8, not 10
+		expect(formatMobile("44791112345678")).toBe("+44791112345678"); // 12, not 10
 	});
 });
 

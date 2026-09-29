@@ -279,7 +279,7 @@ cross the wall. `ubuntu-latest` is 4 shared vCPU, so this is a CI flake, not
 only a many-parallel-sessions-on-a-laptop one.
 
 **What still fails fast.** 30 s is ~40x our heaviest synchronous component
-test, and nothing else about failure reporting changes:
+test, and almost nothing about failure reporting changes:
 
 - an async test whose promise never settles still trips Testing Library's own
   `waitFor` budget — **5 s**, six times tighter than the test timeout on
@@ -287,6 +287,12 @@ test, and nothing else about failure reporting changes:
 - anything genuinely stuck is caught by `timeout-minutes: 10` on the CI job;
 - `hookTimeout` stays at its 10 s default — our hooks do no rendering. Raise it
   the day one does, for the same reason.
+
+**What it costs**, so the trade is chosen rather than discovered: a
+never-settling `await` **outside** `waitFor` has no tighter budget above it, so
+it now fails in 30 s instead of 5 s. That is the price of not failing green
+tests on a busy runner, and it is paid once per genuinely-broken test rather
+than at random on healthy ones.
 
 **Corollary for writing tests: never put `getByRole(role, { name })` in a
 loop.** Resolve the node once and reuse it — React keeps the same DOM node

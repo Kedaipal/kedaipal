@@ -43,8 +43,16 @@ export default defineConfig({
 		// 30s is ~40x the heaviest synchronous component test we have. The real
 		// backstop for something genuinely stuck stays `timeout-minutes: 10` on
 		// the CI job, and an async test that never settles still fails fast on
-		// Testing Library's own 1s `waitFor` budget, which this does not touch.
-		// See docs/ci.md.
+		// Testing Library's own `waitFor` budget — 5s, raised alongside this one
+		// and kept six times tighter on purpose, because THAT timeout is on a
+		// genuinely async wait and can actually interrupt it (vitest.setup.ts).
+		//
+		// What this DOES cost, stated so it is a chosen trade and not a
+		// discovered one: a never-settling `await` OUTSIDE `waitFor` has no
+		// tighter budget above it, so it now fails in 30s rather than 5s. That
+		// is the price of not failing green tests on a busy runner, and it is
+		// paid once per genuinely-broken test rather than at random. See
+		// docs/ci.md.
 		testTimeout: 30_000,
 
 		// Testing Library's own `waitFor` budget is raised alongside it, for the
