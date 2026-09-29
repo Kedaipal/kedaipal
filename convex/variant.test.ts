@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
 	cartesian,
 	isValidCombination,
+	MAX_VALUES_PER_AXIS,
 	normalizeOptions,
 	sameOptionValues,
 	variantLabel,
@@ -95,14 +96,38 @@ describe("variant helpers", () => {
 			).toThrow(/at least one value/);
 		});
 
-		test("rejects a grid exceeding the 50-variant cap", () => {
-			const values = Array.from({ length: 8 }, (_, i) => `v${i}`);
+		test("rejects a grid exceeding the 100-variant cap", () => {
+			// 11 × 10 = 110 > 100. Both axes stay inside MAX_VALUES_PER_AXIS (25),
+			// so this is the VARIANT cap refusing, not the per-axis one.
+			expect(() =>
+				normalizeOptions([
+					{ name: "A", values: Array.from({ length: 11 }, (_, i) => `a${i}`) },
+					{ name: "B", values: Array.from({ length: 10 }, (_, i) => `b${i}`) },
+				]),
+			).toThrow(/That makes 110 variants — max 100 per product/);
+		});
+
+		test("accepts the 56-variant two-size event grid (z8r3fdjgvd)", () => {
+			// "Adult 1 size" (S–4XL) × "Adult 2 size" (None + S–4XL) = 7 × 8 = 56.
+			// Refused by the old cap of 50; the reason the cap moved.
+			const sizes = ["S", "M", "L", "XL", "2XL", "3XL", "4XL"];
+			const normalized = normalizeOptions([
+				{ name: "Adult 1 size", values: sizes },
+				{ name: "Adult 2 size", values: ["None", ...sizes] },
+			]);
+			expect(cartesian(normalized)).toHaveLength(56);
+		});
+
+		test("the variant cap, not MAX_VALUES_PER_AXIS, refuses a full 25 × 25 grid", () => {
+			// Both axes are exactly at MAX_VALUES_PER_AXIS, so the per-axis guard is
+			// satisfied and 625 has to be caught by MAX_VARIANTS_PER_PRODUCT.
+			const values = Array.from({ length: MAX_VALUES_PER_AXIS }, (_, i) => `v${i}`);
 			expect(() =>
 				normalizeOptions([
 					{ name: "A", values },
 					{ name: "B", values },
 				]),
-			).toThrow(/max 50/);
+			).toThrow(/That makes 625 variants — max 100 per product/);
 		});
 	});
 });

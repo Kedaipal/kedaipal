@@ -296,6 +296,64 @@ describe("VariantEditor — vary per choice", () => {
 	});
 });
 
+describe("VariantEditor — the variant cap (z8r3fdjgvd)", () => {
+	/** A state whose two axes multiply to `a × b` combinations. */
+	function grid(a: number, b: number): VariantEditorState {
+		const av = Array.from({ length: a }, (_, i) => `a${i}`);
+		const bv = Array.from({ length: b }, (_, i) => `b${i}`);
+		return {
+			options: [
+				{ name: "Adult 1 size", values: av },
+				{ name: "Adult 2 size", values: bv },
+			],
+			rows: av.flatMap((x) =>
+				bv.map((y) => ({
+					optionValues: [x, y],
+					sku: "",
+					price: "10",
+					stock: "1",
+					active: true,
+					blockWhenOutOfStock: true,
+					requiresProof: false,
+					parcelWeightG: "",
+					imageStorageIds: [],
+				})),
+			),
+			customLine: null,
+		};
+	}
+
+	it("accepts the 56-combination two-size grid the cap was raised for", () => {
+		render(<Harness initial={grid(7, 8)} />);
+		expect(screen.getByText("56 choices")).toBeTruthy();
+		expect(screen.queryByText(/over the limit/)).toBeNull();
+	});
+
+	it("refuses past 100 and says how many to remove", () => {
+		render(<Harness initial={grid(11, 10)} />);
+		expect(
+			screen.getAllByText(/110 choices is over the limit of 100/).length,
+		).toBeGreaterThan(0);
+		// The consequence, not just the fact: "Remove some values" left the seller
+		// counting. 110 − 100 = 10.
+		expect(
+			screen.getAllByText(/Remove 10 to save this product/).length,
+		).toBeGreaterThan(0);
+	});
+
+	it("reports the breach on the axis editor, not only after the price grid", () => {
+		// The cap is broken by adding a VALUE, so the message has to live with the
+		// control that adds one — at the cap the grid below is ~13,000px long, and
+		// a message under it is off-screen for the whole edit.
+		render(<Harness initial={grid(11, 10)} />);
+		const notice = screen.getAllByText(/over the limit of 100/)[0];
+		const axisName = screen.getByDisplayValue("Adult 1 size");
+		// Same axis card: the notice is inside the container that holds the name
+		// field and its value chips.
+		expect(axisName.closest("div")?.parentElement?.contains(notice)).toBe(true);
+	});
+});
+
 describe("VariantEditor — Advanced disclosure", () => {
 	it("keeps SKU, approval and the custom option collapsed by default", () => {
 		render(<Harness initial={singleVariant} />);
@@ -550,7 +608,11 @@ describe("stock left the product save (86eypn8ye)", () => {
 		// control beside it, and the name/description fields above it, were all
 		// h-11. Also the mobile-first tap-target floor.
 		render(
-			<VariantEditor value={singleVariant} onChange={() => {}} currency="MYR" />,
+			<VariantEditor
+				value={singleVariant}
+				onChange={() => {}}
+				currency="MYR"
+			/>,
 		);
 		const price = screen.getByPlaceholderText("0.00");
 		expect(price.className).toContain("min-h-11");
@@ -565,7 +627,11 @@ describe("stock left the product save (86eypn8ye)", () => {
 		// No liveStock entry means the grid is INSERTING this combination: it has
 		// no stock of its own to protect, so the typed number is the only truth.
 		render(
-			<VariantEditor value={singleVariant} onChange={() => {}} currency="MYR" />,
+			<VariantEditor
+				value={singleVariant}
+				onChange={() => {}}
+				currency="MYR"
+			/>,
 		);
 		expect(screen.getByText("In stock now")).toBeTruthy();
 		expect(screen.getByLabelText("Stock on hand")).toBeTruthy();

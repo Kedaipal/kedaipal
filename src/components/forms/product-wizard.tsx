@@ -39,6 +39,10 @@ import {
 	weekendDaysLabel,
 } from "../../../convex/lib/productKind";
 import {
+	MAX_OPTION_AXES,
+	MAX_VARIANTS_PER_PRODUCT,
+} from "../../../convex/lib/variant";
+import {
 	bookingPriceSuffix,
 	bookingSpanCounted,
 	bookingSpanNoun,
@@ -102,10 +106,6 @@ import {
 } from "./variant-editor";
 import { VariantImageCell } from "./variant-image-cell";
 import { WeekdayPicker } from "./weekday-picker";
-
-// Mirrors the server caps in convex/lib/variant.ts.
-const MAX_AXES = 2;
-const MAX_VARIANTS = 50;
 
 /**
  * Draft state for the 5-step create wizard. The selling configuration lives
@@ -622,10 +622,10 @@ export function wizardStepIssues(
 					message: issue.message,
 				});
 			}
-			if (cartesian(options).length > MAX_VARIANTS) {
+			if (cartesian(options).length > MAX_VARIANTS_PER_PRODUCT) {
 				issues.push({
 					field: "axisValues",
-					message: `That's ${cartesian(options).length} combinations — keep it to ${MAX_VARIANTS} or fewer.`,
+					message: `That's ${cartesian(options).length} combinations — keep it to ${MAX_VARIANTS_PER_PRODUCT} or fewer.`,
 				});
 			}
 		}
@@ -1367,7 +1367,7 @@ export function ProductWizard({
 		);
 	}
 	function addSecondAxis(preset?: { name: string; values: string[] }) {
-		if (options.length >= MAX_AXES) return;
+		if (options.length >= MAX_OPTION_AXES) return;
 		setOptions([
 			...options,
 			preset

@@ -13,6 +13,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import {
+	MAX_OPTION_AXES,
+	MAX_VARIANTS_PER_PRODUCT,
+} from "../../../convex/lib/variant";
 import { useRevealOnAdd } from "../../hooks/useRevealOnAdd";
 import {
 	convexErrorMessage,
@@ -33,10 +37,6 @@ import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { CUSTOM_LINE_COPY, MOCKUP_APPROVAL_COPY } from "./advanced-option-copy";
-
-// Mirrors the server caps in convex/lib/variant.ts.
-const MAX_AXES = 2;
-const MAX_VARIANTS = 50;
 
 export type VariantRow = {
 	optionValues: string[];
@@ -728,7 +728,7 @@ export function VariantEditor({
 	}
 
 	const variantCount = useMemo(() => cartesian(options).length, [options]);
-	const overCap = variantCount > MAX_VARIANTS;
+	const overCap = variantCount > MAX_VARIANTS_PER_PRODUCT;
 	// While an axis has no values the rows still describe the PREVIOUS shape
 	// (kept deliberately — see rebuildRows), so per-choice UI must wait for the
 	// grid to actually exist rather than render a phantom blank-labelled row.
@@ -859,7 +859,7 @@ export function VariantEditor({
 	}
 
 	function addAxis() {
-		if (options.length >= MAX_AXES) return;
+		if (options.length >= MAX_OPTION_AXES) return;
 		markAdded(String(options.length));
 		setOptions([...options, { name: "", values: [] }]);
 		setValueDrafts((d) => [...d, ""]);
@@ -886,7 +886,7 @@ export function VariantEditor({
 	}
 
 	function addPresetAxis(preset: { name: string; values: string[] }) {
-		if (options.length >= MAX_AXES) return;
+		if (options.length >= MAX_OPTION_AXES) return;
 		if (options.some((a) => a.name.toLowerCase() === preset.name.toLowerCase()))
 			return;
 		markAdded(String(options.length));
@@ -1161,6 +1161,19 @@ export function VariantEditor({
 					</div>
 				</div>
 				<IssueText message={issueFor("option", axisIndex, "values")} />
+				{/* The cap is broken by ADDING a value, so it is reported on the
+				    control that adds one. It used to render only after the price
+				    grid — which at the cap is ~13,000px further down the page, so
+				    the seller saw the count climb and nothing tell them why the
+				    product would not save (z8r3fdjgvd). Shown under both axes,
+				    since either one can be the one pushing it over. */}
+				{overCap ? (
+					<p className="text-xs text-destructive">
+						{variantCount} choices is over the limit of{" "}
+						{MAX_VARIANTS_PER_PRODUCT}. Remove{" "}
+						{variantCount - MAX_VARIANTS_PER_PRODUCT} to save this product.
+					</p>
+				) : null}
 			</div>
 		);
 	}
@@ -1244,8 +1257,9 @@ export function VariantEditor({
 						/>
 						<IssueText message={issueFor("custom", 0, "price")} />
 						<span className="text-xs font-normal text-muted-foreground">
-							Buyers see “From {moneySymbol} …”, so they know the final price comes
-							with the mockup. Leave blank to show “Price on quote” instead.
+							Buyers see “From {moneySymbol} …”, so they know the final price
+							comes with the mockup. Leave blank to show “Price on quote”
+							instead.
 						</span>
 					</label>
 					<label className="flex flex-col gap-1 text-sm font-medium">
@@ -1501,12 +1515,6 @@ export function VariantEditor({
 							</ul>
 						</div>
 					) : null}
-					{overCap ? (
-						<p className="text-xs text-destructive">
-							{variantCount} variants exceeds the max of {MAX_VARIANTS}. Remove
-							some values.
-						</p>
-					) : null}
 				</>
 			)}
 
@@ -1727,9 +1735,9 @@ export function VariantEditor({
 											/>
 											<IssueText message={issueFor("custom", 0, "price")} />
 											<span className="text-xs font-normal text-muted-foreground">
-												Buyers see “From {moneySymbol} …”, so they know the final
-												price comes with the mockup. Leave blank to show “Price
-												on quote” instead.
+												Buyers see “From {moneySymbol} …”, so they know the
+												final price comes with the mockup. Leave blank to show
+												“Price on quote” instead.
 											</span>
 										</label>
 

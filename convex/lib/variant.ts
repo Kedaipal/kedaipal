@@ -11,8 +11,14 @@ export type OptionAxis = {
 // axes explode the grid in UI and seller effort.
 export const MAX_OPTION_AXES = 2;
 export const MAX_VALUES_PER_AXIS = 25;
-// Shopee parity — caps the cartesian blowup (2 × 25 = 50).
-export const MAX_VARIANTS_PER_PRODUCT = 50;
+// THE cap on the cartesian blowup, and the only copy of it — the client-side
+// editor, wizard and CSV import all import this constant rather than mirroring
+// the number (they used to, and the mirrors drifted). Raised 50 → 100 on
+// 2026-09-29 (z8r3fdjgvd): a two-axis "Adult 1 size × Adult 2 size" event
+// listing needs 7 × 8 = 56, and one shared seat pool means it cannot be split
+// across two products. Still well under the axis product (25 × 25 = 625), so
+// the cap — not MAX_VALUES_PER_AXIS — is what refuses a runaway grid.
+export const MAX_VARIANTS_PER_PRODUCT = 100;
 export const MAX_AXIS_NAME_LENGTH = 40;
 export const MAX_VALUE_LENGTH = 60;
 // Custom / made-to-order line (docs/custom-option.md). One per product, lives
