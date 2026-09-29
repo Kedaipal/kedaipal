@@ -1254,10 +1254,15 @@ function stubHitpay(respond: {
 	charge: (n: number) => Response;
 	session?: (n: number) => Response;
 }) {
-	const calls = { charges: 0, sessionReads: 0, linkDeletes: 0 };
+	const calls = {
+		charges: 0,
+		sessionReads: 0,
+		linkDeletes: 0,
+		emails: [] as Array<{ to: string[]; subject: string; text: string }>,
+	};
 	vi.stubGlobal(
 		"fetch",
-		vi.fn(async (url: unknown, init?: { method?: string }) => {
+		vi.fn(async (url: unknown, init?: { method?: string; body?: unknown }) => {
 			const u = String(url);
 			if (u.includes("/charge/recurring-billing/")) {
 				return respond.charge(++calls.charges);
@@ -1272,6 +1277,9 @@ function stubHitpay(respond: {
 			}
 			if (u.includes("/payment-requests/") && init?.method === "DELETE") {
 				calls.linkDeletes++;
+			}
+			if (u.includes("api.resend.com")) {
+				calls.emails.push(JSON.parse(String(init?.body)));
 			}
 			return Response.json({});
 		}),
@@ -1655,6 +1663,9 @@ describe("a lost charge that lands on a VOIDED bill is stranded — never re-app
 	test("the reconcile audits the money on the VOIDED bill, stops auto-charging, and leaves the replacement alone", async () => {
 		const t = setup();
 		stubBillingEnv();
+		vi.stubEnv("RESEND_API_KEY", "re_test");
+		vi.stubEnv("EMAIL_FROM", "billing@kedaipal.test");
+		vi.stubEnv("ADMIN_ALERT_EMAIL", "ops@kedaipal.test");
 		const calls = stubHitpay({
 			charge: (n) => succeeded(`pay_on_top_${n}`),
 			session: sessionCharged(1), // HitPay took INV-OLD's charge
@@ -1696,6 +1707,16 @@ describe("a lost charge that lands on a VOIDED bill is stranded — never re-app
 		expect(sub?.autoRenew?.lastChargeAttemptAt).toBeUndefined();
 		expect(sub?.autoRenew?.pendingChargeInvoiceId).toBeUndefined();
 		expect(sub?.autoRenew?.nextRetryAt).toBeUndefined();
+		// The seller is told "we'll be in touch" — so ops is told, once.
+		expect(calls.emails).toHaveLength(1);
+		expect(calls.emails[0].to).toEqual(["ops@kedaipal.test"]);
+		expect(calls.emails[0].subject).toBe(
+			"[Kedaipal] Stranded auto-charge — Store strand-store",
+		);
+		expect(calls.emails[0].text).toContain("MYR 149.00");
+		expect(calls.emails[0].text).toContain("INV-OLD");
+		expect(calls.emails[0].text).toContain("reconciled:rb_1:1");
+		expect(calls.emails[0].text).toContain("STOPPED");
 	});
 
 	test("while stranded NOTHING charges: not the cron, not a queued charge, not a new renewal", async () => {

@@ -37,6 +37,8 @@ import {
 	requireRetailerAccess,
 	resolveMyRetailerFor,
 } from "./lib/auth";
+import { sendEmail } from "./lib/email";
+import { escapeHtml } from "./lib/emailCopy";
 import {
 	decimalStringToSen,
 	HITPAY_API_BASE,
@@ -1443,6 +1445,58 @@ export const recordChargeFailure = internalMutation({
 			internal.subscriptionPayments.remintInvoicePaymentRequest,
 			{ invoiceId },
 		);
+	},
+});
+
+/**
+ * Tell ops a charge was STRANDED (invoices.internalSettleFromGateway): the
+ * seller has just been told "we'll be in touch", so a human must actually
+ * hear about it rather than stumble on a pill in the admin console. Same
+ * recipient resolution as the WABA alerts — ADMIN_ALERT_EMAIL, falling back
+ * to EMAIL_FROM — and never throws: the hold itself is already recorded.
+ */
+export const sendStrandedChargeAlert = internalAction({
+	args: {
+		storeName: v.string(),
+		slug: v.string(),
+		invoiceNumber: v.string(),
+		amountSen: v.number(),
+		currency: v.string(),
+		paymentId: v.string(),
+	},
+	handler: async (_ctx, args): Promise<void> => {
+		const amount = `${args.currency.toUpperCase()} ${senToDecimalString(args.amountSen)}`;
+		console.error("[billing] STRANDED auto-charge — auto-charging stopped", {
+			slug: args.slug,
+			invoiceNumber: args.invoiceNumber,
+			paymentId: args.paymentId,
+		});
+		const to = process.env.ADMIN_ALERT_EMAIL ?? process.env.EMAIL_FROM;
+		if (!to) {
+			console.error(
+				"Stranded-charge alert skipped: no ADMIN_ALERT_EMAIL / EMAIL_FROM",
+			);
+			return;
+		}
+		const text = [
+			`HitPay took ${amount} from ${args.storeName} (/${args.slug}) for ${args.invoiceNumber}, which was voided before we heard back — so the charge was never recorded against any bill.`,
+			"",
+			`HitPay reference: ${args.paymentId}`,
+			"",
+			"Auto-charging for this store is STOPPED until a bill is settled, and the seller has been told we'll be in touch. Decide with them: refund the charge in HitPay, or apply it by marking their open bill paid.",
+			"",
+			"Admin console: /app/admin/billing",
+		].join("\n");
+		try {
+			await sendEmail(
+				to,
+				`[Kedaipal] Stranded auto-charge — ${args.storeName}`,
+				`<pre>${escapeHtml(text)}</pre>`,
+				text,
+			);
+		} catch (err) {
+			console.error("Stranded-charge alert email failed", err);
+		}
 	},
 });
 

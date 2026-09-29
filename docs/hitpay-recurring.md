@@ -144,6 +144,10 @@ replacement is the double debit this whole machine exists to prevent.
   plan cards, which stop promising a charge (the picker writes the invoice and
   stays put instead of opening the authorisation page that would refuse,
   "already on").
+- **Ops is emailed, once.** The seller is told "we'll be in touch", so a human
+  must actually hear about it: stranding schedules `sendStrandedChargeAlert`
+  (store, bill, amount, HitPay reference, what to do) to `ADMIN_ALERT_EMAIL`,
+  falling back to `EMAIL_FROM` — the WABA alerts' recipient rule, no new config.
 - **The admin sees it on the store's rows.** Both admin lists render one
   component (`AutoChargePill`/`AutoChargeDetail`, `describeAutoCharge`):
   **Auto-charge stopped** (red, with an icon) leads with the fact, then the two

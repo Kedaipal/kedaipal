@@ -461,6 +461,23 @@ export const internalSettleFromGateway = internalMutation({
 						},
 					},
 				});
+				// The seller is told "we'll be in touch" — so a human is told
+				// too, once, rather than left to find a pill in the console.
+				if (sub.autoRenew.strandedCharge === undefined) {
+					const retailer = await ctx.db.get(sub.retailerId);
+					await ctx.scheduler.runAfter(
+						0,
+						internal.subscriptionPayments.sendStrandedChargeAlert,
+						{
+							storeName: retailer?.storeName ?? "(store missing)",
+							slug: retailer?.slug ?? "",
+							invoiceNumber: invoice.invoiceNumber,
+							amountSen,
+							currency: invoice.currency,
+							paymentId,
+						},
+					);
+				}
 			}
 			return { applied: false, reason: "late_payment" };
 		}
