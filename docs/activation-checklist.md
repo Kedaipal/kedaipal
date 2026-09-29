@@ -107,6 +107,13 @@ Required steps, in order:
    copy shows the live days-left (`trialDaysLeft`). Per product decision, this step
    is shown **from day 1 as the final step** with trial context — the checklist
    visibly isn't "complete" until they pay.
+   **It is also where a new seller first reads the trial** (Credits T5,
+   `z8r3fdfu31`): one line, never a modal — "Your first order then gives you 14
+   days or 200 orders, whichever comes first, to try everything in Pro". Title,
+   line and CTA per free-period state come from `subscribeStepCopy`
+   (`src/lib/subscribe-step.ts`, tested), with both numbers read from
+   `INVOICE_DUE_GRACE_DAYS` / `TRIAL_CREDIT_GRANT`; after the first invoice it
+   says Pro stays open until the due date for up to 200 orders.
 
 `hasSubscribed` (`src/lib/subscription.ts`) is the gate: `comped || status !==
 "trialing"`. Comped pilots never pay, so they read as done and are never nagged; a

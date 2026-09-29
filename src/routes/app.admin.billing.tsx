@@ -7,6 +7,7 @@ import {
 	Banknote,
 	CalendarClock,
 	Check,
+	Coins,
 	CreditCard,
 	FilePlus2,
 	ImagePlus,
@@ -16,6 +17,7 @@ import {
 	RefreshCw,
 	Send,
 	ShieldX,
+	TrendingDown,
 	UserPlus,
 } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
@@ -32,6 +34,8 @@ import {
 	annualQuote,
 	BILLING_CURRENCIES,
 	type BillingCurrency,
+	type Plan,
+	PLANS,
 	planPrice,
 } from "../../convex/lib/plans";
 import { PageHeader } from "../components/dashboard/page-header";
@@ -274,25 +278,103 @@ function AdminBillingOverview() {
 	];
 
 	return (
-		<div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-			{stats.map((stat) => (
-				<div
-					key={stat.label}
-					className={`flex items-center gap-3 rounded-2xl border px-3 py-3 ${stat.className}`}
-				>
-					<div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-white/70">
-						{stat.icon}
+		<div className="flex flex-col gap-2">
+			<div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+				{stats.map((stat) => (
+					<div
+						key={stat.label}
+						className={`flex items-center gap-3 rounded-2xl border px-3 py-3 ${stat.className}`}
+					>
+						<div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-white/70">
+							{stat.icon}
+						</div>
+						<div className="min-w-0">
+							<p className="text-xs font-medium opacity-75">{stat.label}</p>
+							<p className="truncate font-mono text-lg font-bold leading-tight">
+								{stat.value}
+							</p>
+							<p className="truncate text-[11px] opacity-70">{stat.helper}</p>
+						</div>
 					</div>
-					<div className="min-w-0">
-						<p className="text-xs font-medium opacity-75">{stat.label}</p>
-						<p className="truncate font-mono text-lg font-bold leading-tight">
-							{stat.value}
-						</p>
-						<p className="truncate text-[11px] opacity-70">{stat.helper}</p>
-					</div>
-				</div>
-			))}
+				))}
+			</div>
+			<CreditTotals />
 		</div>
+	);
+}
+
+/**
+ * The book-wide credit figures (Kedaipal Credits T5) — counts of CREDITS,
+ * never money: what sellers have bought and not used (the deferred-revenue
+ * figure — service still owed) and the orders taken past zero that the next
+ * grant or pack will absorb. Top-up REVENUE needs T2's purchase table and is
+ * a follow-up, not a tile that guesses. Exported for its states test.
+ */
+export function CreditTotals() {
+	const totals = useQuery(convexQuery(api.credits.adminCreditTotals, {})).data;
+	const across = (n: number) => `across ${n} store${n === 1 ? "" : "s"}`;
+	const tiles = [
+		{
+			label: "Unused bought credits",
+			value:
+				totals === undefined
+					? "..."
+					: totals.purchasedUnused.toLocaleString("en"),
+			helper:
+				totals === undefined
+					? "Deferred — service still owed"
+					: `${across(totals.storesWithPurchased)} · service still owed`,
+			icon: <Coins className="size-4" />,
+			className: "border-border bg-muted/50 text-foreground",
+		},
+		{
+			label: "Orders owed",
+			value:
+				totals === undefined ? "..." : totals.ordersOwed.toLocaleString("en"),
+			helper:
+				totals === undefined
+					? "Taken past zero"
+					: `${across(totals.storesOwing)} · settled by the next grant or pack`,
+			icon: <TrendingDown className="size-4" />,
+			className:
+				totals !== undefined && totals.ordersOwed > 0
+					? "border-destructive/30 bg-destructive/10 text-destructive"
+					: "border-border bg-muted/50 text-foreground",
+		},
+	];
+	return (
+		<section aria-label="Credits" className="flex flex-col gap-2">
+			<div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+				{tiles.map((tile) => (
+					<div
+						key={tile.label}
+						className={`flex items-center gap-3 rounded-2xl border px-3 py-3 ${tile.className}`}
+					>
+						<div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-background/70">
+							{tile.icon}
+						</div>
+						<div className="min-w-0">
+							<p className="text-xs font-medium opacity-75">{tile.label}</p>
+							<p className="truncate font-mono text-lg font-bold leading-tight">
+								{tile.value}
+							</p>
+							<p
+								className="truncate text-[11px] opacity-70"
+								title={tile.helper}
+							>
+								{tile.helper}
+							</p>
+						</div>
+					</div>
+				))}
+			</div>
+			{totals?.truncated ? (
+				<p className="text-[11px] text-muted-foreground">
+					Counted over the first {totals.accounts.toLocaleString("en")} credit
+					accounts only — past that, these totals need a stored counter.
+				</p>
+			) : null}
+		</section>
 	);
 }
 
@@ -598,7 +680,7 @@ function IssueInvoiceForm() {
 	const issue = useMutation(api.invoices.issueInvoice);
 
 	const [retailerId, setRetailerId] = useState<Id<"retailers"> | "">("");
-	const [plan, setPlan] = useState<"starter" | "pro">("pro");
+	const [plan, setPlan] = useState<Plan>("pro");
 	const [cycle, setCycle] = useState<"monthly" | "annual">("monthly");
 	// The operator's OVERRIDE only — not the effective value. See `founding`.
 	const [foundingOverride, setFoundingOverride] = useState(false);
@@ -720,8 +802,10 @@ function IssueInvoiceForm() {
 					<span className="text-xs font-medium text-muted-foreground">
 						Plan
 					</span>
+					{/* Every tier, in tier order — Scale is billable since it opened
+					    for purchase (z8r3fdfuhq); Arif assigns it by hand too. */}
 					<div className="grid grid-cols-3 gap-1.5 rounded-xl bg-background p-1 shadow-inner shadow-border/40">
-						{(["pro", "starter"] as const).map((p) => (
+						{PLANS.map((p) => (
 							<button
 								key={p}
 								type="button"
@@ -737,10 +821,6 @@ function IssueInvoiceForm() {
 								{p}
 							</button>
 						))}
-						<span className="flex min-h-10 flex-col items-center justify-center rounded-lg border border-dashed border-border/80 bg-muted/30 px-2 text-center text-[11px] leading-tight text-muted-foreground">
-							<span className="font-semibold">Scale</span>
-							<span className="text-[10px]">soon</span>
-						</span>
 					</div>
 				</div>
 

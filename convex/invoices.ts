@@ -37,6 +37,7 @@ import {
 	foundingPriceEligible,
 	foundingPricingApplies,
 	HOLD_MONTHLY_PRICES,
+	INVOICE_DUE_GRACE_DAYS,
 	isPlanSelectable,
 	isPlanUpgrade,
 	type Plan,
@@ -53,7 +54,6 @@ import { reserveFoundingRank, stampFoundingPaid } from "./foundingMembers";
 import { defaultCapsForPlan } from "./subscriptions";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const DUE_GRACE_DAYS = 14; // pay-by window when the admin doesn't override it
 
 /** The refusal every self-serve plan path gives a store on founding pricing
  * that asks for anything but Founding Pro (`foundingPlanLocked`). Names the one
@@ -533,7 +533,9 @@ export const internalSettleFromGateway = internalMutation({
  * true` → 30% Pro discount; rank claims when this invoice is marked paid). Amounts
  * are computed from the plan (single source of truth — Arif doesn't type them).
  * The subscription's plan/cycle are aligned so mark-paid reconciles the right caps.
- * Rejects Scale (the v1 defense-in-depth guard's home) and founding-non-Pro.
+ * Every tier can be issued: Scale's "unavailable for v1" guard lived here until
+ * Scale opened for purchase (z8r3fdfuhq, 30 Sep 2026) — Arif assigns it by hand
+ * as well as sellers picking it themselves. Founding stays Pro-only.
  */
 export const issueInvoice = mutation({
 	args: {
@@ -566,8 +568,8 @@ export const issueInvoice = mutation({
 	): Promise<{ invoiceId: Id<"invoices"> }> => {
 		await requireAdmin(ctx);
 		const currency: BillingCurrency = currencyArg ?? "MYR";
-		if (plan === "scale")
-			throw new ConvexError("Scale is unavailable for v1.");
+		if (!isPlanSelectable(plan))
+			throw new ConvexError("That plan isn't available to bill yet.");
 		if (founding && plan !== "pro")
 			throw new ConvexError("Only Pro qualifies for Founding Member.");
 
@@ -654,7 +656,7 @@ async function insertPendingInvoice(
 	const now = Date.now();
 	// System-set pay-by deadline (issue date + grace). The subscription's billing
 	// cycle is set later at settle, so the paid tier only starts once payment lands.
-	const dueDate = args.dueDate ?? now + DUE_GRACE_DAYS * DAY_MS;
+	const dueDate = args.dueDate ?? now + INVOICE_DUE_GRACE_DAYS * DAY_MS;
 
 	const invoiceId = await ctx.db.insert("invoices", {
 		retailerId: args.retailerId,
@@ -712,7 +714,10 @@ async function insertPendingInvoice(
  */
 export const subscribeSelf = mutation({
 	args: {
-		plan: v.union(v.literal("starter"), v.literal("pro")),
+		// Scale joined with the credits release (z8r3fdfuhq): priced from
+		// `planPrice` like the other two, monthly or annual, in the store's
+		// billing currency.
+		plan: v.union(v.literal("starter"), v.literal("pro"), v.literal("scale")),
 		billingCycle: v.union(v.literal("monthly"), v.literal("annual")),
 	},
 	handler: async (
@@ -819,7 +824,10 @@ export const subscribeSelf = mutation({
  */
 export const changePlan = mutation({
 	args: {
-		plan: v.union(v.literal("starter"), v.literal("pro")),
+		// Pro → Scale is an upgrade (billed now; the credit difference lands at
+		// settle, `applyCreditsOnSettle`), Scale → Pro a downgrade scheduled for
+		// the end of the paid period — both by RANK, like every other pair.
+		plan: v.union(v.literal("starter"), v.literal("pro"), v.literal("scale")),
 	},
 	handler: async (
 		ctx,
@@ -1070,15 +1078,18 @@ export const internalIssueFirstInvoice = internalMutation({
 /**
  * Seller: switch the plan on a pending MACHINE-issued invoice before paying
  * it (z8r3fday24). Every trial runs on Pro, so the first invoice bills Pro;
- * a seller who wants Starter — or a Starter picker who changed their mind —
- * swaps here in ONE mutation: the old invoice is voided (its Pay-now link
- * killed) and the replacement issued at the new tier, same cycle, same
- * currency, and the SAME due date, so switching can never extend the grace.
+ * a seller who wants Starter or (since z8r3fdfuhq) Scale — or a picker who
+ * changed their mind — swaps here in ONE mutation: the old invoice is voided
+ * (its Pay-now link killed) and the replacement issued at the new tier, same
+ * cycle, same currency, and the SAME due date, so switching can never extend
+ * the grace.
  * Admin-issued invoices are deliberately excluded — Arif may have priced one
  * by hand — and hold invoices have no tier to switch.
  */
 export const switchPendingPlan = mutation({
-	args: { plan: v.union(v.literal("starter"), v.literal("pro")) },
+	args: {
+		plan: v.union(v.literal("starter"), v.literal("pro"), v.literal("scale")),
+	},
 	handler: async (ctx, { plan }): Promise<{ invoiceId: Id<"invoices"> }> => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new ConvexError("Not authenticated");
@@ -1127,7 +1138,7 @@ export const switchPendingPlan = mutation({
 		const currentPlan = pending.plan ?? sub.plan;
 		if (currentPlan === plan)
 			throw new ConvexError(
-				`Your invoice is already for ${plan === "pro" ? "Pro" : "Starter"}.`,
+				`Your invoice is already for ${plan.charAt(0).toUpperCase()}${plan.slice(1)}.`,
 			);
 		const now = Date.now();
 		const eligibility = {

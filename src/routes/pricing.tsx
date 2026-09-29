@@ -11,10 +11,19 @@ import {
 	annualQuote,
 	type BillingCurrency,
 	BILLING_CURRENCY_FOR_COUNTRY,
-	OUTLET_ADDON_MONTHLY_PRICES,
+	CREDIT_PACKS,
+	INVOICE_DUE_GRACE_DAYS,
+	isPlanSelectable,
+	PLAN_CAPS,
+	PLAN_CREDIT_GRANT,
 	type Plan,
 	PLAN_MONTHLY_PRICES,
+	PURCHASED_CREDIT_LIFETIME_MONTHS,
+	SELLER_CANCEL_REFUNDS_PER_PERIOD,
+	TRIAL_CREDIT_GRANT,
+	TRIAL_DAYS,
 } from "../../convex/lib/plans";
+import { MAX_VARIANTS_PER_PRODUCT } from "../../convex/lib/variant";
 import { FadeIn } from "../components/landing/fade-in";
 import { Footer } from "../components/landing/footer";
 import {
@@ -40,15 +49,25 @@ import { cn } from "../lib/utils";
 import { m } from "../paraglide/messages";
 
 const SEO_TITLE = "Pricing — Kedaipal WhatsApp Order Hub";
-const SEO_DESC =
-	"Simple, transparent pricing for WhatsApp sellers. Start with a 14-day free trial. Starter RM79/mo, Pro RM149/mo, Scale RM399/mo flat — S$ pricing for Singapore.";
+/** Ringgit, whole units. The static SEO copy names both currencies by design
+ * (Googlebot crawls from the US — docs/pricing.md), so it quotes MYR. */
+const rm = (plan: Plan) => PLAN_MONTHLY_PRICES.MYR[plan] / 100;
+/**
+ * Derived from the billing tables, never typed: this line kept saying "Start
+ * with a 14-day free trial" after the trial stopped working that way, because
+ * nothing tied it to the constants the cards render from.
+ */
+const SEO_DESC = `Free until you sell. Starter RM${rm("starter")}, Pro RM${rm("pro")}, Scale RM${rm("scale")} a month — ${PLAN_CREDIT_GRANT.starter}, ${PLAN_CREDIT_GRANT.pro} or ${PLAN_CREDIT_GRANT.scale} orders included, no per-message fees. S$ pricing for Singapore.`;
 const SITE_URL = "https://kedaipal.com";
 const PAGE_URL = `${SITE_URL}/pricing`;
 const OG_IMAGE = `${SITE_URL}/og-image.png`;
 
 // Same allowance as the landing teaser (currency-literals allowlist applies:
 // Kedaipal's OWN subscription price, not a seller's storefront currency).
-const CURRENCY_SYMBOL: Record<BillingCurrency, string> = { MYR: "RM", SGD: "S$" };
+const CURRENCY_SYMBOL: Record<BillingCurrency, string> = {
+	MYR: "RM",
+	SGD: "S$",
+};
 
 // Annual billing went live with tokenised recurring (HitPay recurring
 // 86eyb6z4r): self-serve annual invoices exist, so the toggle is honest again.
@@ -83,7 +102,8 @@ interface Tier {
 	id: Plan;
 	name: string;
 	tagline: string;
-	orderCap: string;
+	/** The monthly credits line — "200 credits a month — 1 per order". */
+	credits: string;
 	teammates: number;
 	popular: boolean;
 	cta: string;
@@ -91,39 +111,68 @@ interface Tier {
 
 /**
  * Static tier facts (ids, seat counts) live at module scope; all translatable
- * copy (taglines, order caps, CTA) is resolved per-render inside the component
- * so paraglide reads the request's locale, not the locale that happened to be
- * active when this module was first imported on the server. Prices come from
- * `PLAN_MONTHLY_PRICES` per region at render — this page hardcoded RM 79/149/
- * 299 (and drift-prone annual literals) until 29 Aug, when it caught up with
- * the landing teaser's live-price + MY/SG posture. Founding fields are gone
- * with the Founding-10 program's landing presence (86eye4wtb).
+ * copy (taglines, credits line, CTA) is resolved per-render inside the
+ * component so paraglide reads the request's locale, not the locale that
+ * happened to be active when this module was first imported on the server.
+ * Prices come from `PLAN_MONTHLY_PRICES` per region at render and credits
+ * from `PLAN_CREDIT_GRANT` — this page hardcoded RM 79/149/299 until 29 Aug,
+ * and "100"/"200"/"400" orders until the credits release (z8r3fdfu31), each
+ * time trailing the constant it copied. Founding fields are gone with the
+ * Founding-10 program's landing presence (86eye4wtb); Founding Pro's 300
+ * credits are never shown here — the cohort is closed.
  */
 // `teammates` = MEMBER seats beside the owner ("You + 2"), the live promise
-// team seats ship with (86exr91r4) — userCap 1/3/6 total people server-side.
-const TIER_FACTS: readonly { id: Plan; name: string; teammates: number; popular: boolean }[] = [
-	{ id: "starter", name: "Starter", teammates: 0, popular: false },
-	{ id: "pro", name: "Pro", teammates: 2, popular: true },
-	{ id: "scale", name: "Scale", teammates: 5, popular: false },
+// team seats ship with (86exr91r4) — derived from `userCap` (TOTAL people,
+// 1/3/6) so the card can't drift from the seat cap the server enforces.
+const TIER_FACTS: readonly {
+	id: Plan;
+	name: string;
+	teammates: number;
+	popular: boolean;
+}[] = [
+	{
+		id: "starter",
+		name: "Starter",
+		teammates: PLAN_CAPS.starter.userCap - 1,
+		popular: false,
+	},
+	{
+		id: "pro",
+		name: "Pro",
+		teammates: PLAN_CAPS.pro.userCap - 1,
+		popular: true,
+	},
+	{
+		id: "scale",
+		name: "Scale",
+		teammates: PLAN_CAPS.scale.userCap - 1,
+		popular: false,
+	},
 ];
 
 function useTiers(): Tier[] {
 	const tagline: Record<Plan, string> = {
 		starter: m.pricingpage_tier_starter_tagline(),
 		pro: m.pricingpage_tier_pro_tagline(),
-		scale: m.pricingpage_tier_scale_tagline(),
-	};
-	const orderCap: Record<Plan, string> = {
-		starter: m.pricingpage_ordercap_starter(),
-		pro: m.pricingpage_ordercap_pro(),
-		scale: m.pricingpage_ordercap_scale(),
+		scale: m.pricingpage_tier_scale_tagline({
+			credits: PLAN_CREDIT_GRANT.scale,
+		}),
 	};
 	return TIER_FACTS.map((t) => ({
 		...t,
 		tagline: tagline[t.id],
-		orderCap: orderCap[t.id],
+		credits: m.pricingpage_credits_per_month({
+			credits: PLAN_CREDIT_GRANT[t.id],
+		}),
 		cta: m.pricingpage_cta_trial(),
 	}));
+}
+
+/** The cheapest top-up in this currency — what "top-ups start at" quotes. */
+function smallestPack(currency: BillingCurrency) {
+	return [...CREDIT_PACKS[currency]].sort(
+		(a, b) => a.priceMinor - b.priceMinor,
+	)[0];
 }
 
 /** Monthly price in major units for a tier+currency. */
@@ -167,20 +216,21 @@ interface Feature {
 function useFeatures(): Feature[] {
 	return [
 		{
-			// Allowances (Starter 100 / Pro 200 / Scale 400) from the caps ticket
-			// 86eye2ccu — enforced in PLAN_CAPS since the pricing reset (z8r3fday24),
-			// and plans.test.ts pins that the two agree.
+			// Kedaipal Credits (86eye2ccu): the monthly grant, read from the one
+			// constant the ledger grants from. PER MONTH in both toggle
+			// positions, never an annual total — annual is granted monthly too.
 			label: m.pricingpage_feat_orders_per_month(),
-			starter: "100",
-			pro: "200",
-			scale: "400",
+			starter: String(PLAN_CREDIT_GRANT.starter),
+			pro: String(PLAN_CREDIT_GRANT.pro),
+			scale: String(PLAN_CREDIT_GRANT.scale),
 		},
 		{
-			// LIVE since 86exr91r4 — counts are total people ("you + n").
+			// LIVE since 86exr91r4 — counts are total people ("you + n"), read
+			// from the seat cap the server enforces.
 			label: m.pricingpage_feat_team_members(),
-			starter: "1",
-			pro: "3",
-			scale: "6",
+			starter: String(PLAN_CAPS.starter.userCap),
+			pro: String(PLAN_CAPS.pro.userCap),
+			scale: String(PLAN_CAPS.scale.userCap),
 		},
 		{
 			label: m.pricingpage_feat_outlets(),
@@ -252,7 +302,9 @@ function useFeatures(): Feature[] {
 			scale: true,
 		},
 		{
-			label: m.pricingpage_feat_variants(),
+			// The cap the product form enforces (z8r3fdjgvd), not a copy of it —
+			// this row said "up to 50" after the cap moved to 100.
+			label: m.pricingpage_feat_variants({ max: MAX_VARIANTS_PER_PRODUCT }),
 			starter: true,
 			pro: true,
 			scale: true,
@@ -385,13 +437,43 @@ function useFeatures(): Feature[] {
 	];
 }
 
+/**
+ * Ordered by meaning, not by key number: paying and credits first — when the
+ * bill starts, what a credit is, whether the price moved, running out,
+ * carry-over, switching plans, annual — then the product questions. Every
+ * number arrives from the constant that enforces it.
+ */
 function useFaqs(): { q: string; a: string }[] {
 	return [
+		{
+			q: m.pricingpage_faq_q5(),
+			a: m.pricingpage_faq_a5({
+				days: INVOICE_DUE_GRACE_DAYS,
+				orders: TRIAL_CREDIT_GRANT,
+				// The backstop invoice lands the day after TRIAL_DAYS full free days.
+				backstopDay: TRIAL_DAYS + 1,
+			}),
+		},
+		{
+			q: m.pricingpage_faq_q7(),
+			a: m.pricingpage_faq_a7({
+				starter: PLAN_CREDIT_GRANT.starter,
+				pro: PLAN_CREDIT_GRANT.pro,
+				scale: PLAN_CREDIT_GRANT.scale,
+				refunds: SELLER_CANCEL_REFUNDS_PER_PERIOD,
+			}),
+		},
+		{ q: m.pricingpage_faq_q8(), a: m.pricingpage_faq_a8() },
+		{ q: m.pricingpage_faq_q9(), a: m.pricingpage_faq_a9() },
+		{
+			q: m.pricingpage_faq_q10(),
+			a: m.pricingpage_faq_a10({ months: PURCHASED_CREDIT_LIFETIME_MONTHS }),
+		},
 		{ q: m.pricingpage_faq_q1(), a: m.pricingpage_faq_a1() },
+		{ q: m.pricingpage_faq_q11(), a: m.pricingpage_faq_a11() },
 		{ q: m.pricingpage_faq_q2(), a: m.pricingpage_faq_a2() },
 		{ q: m.pricingpage_faq_q3(), a: m.pricingpage_faq_a3() },
 		{ q: m.pricingpage_faq_q4(), a: m.pricingpage_faq_a4() },
-		{ q: m.pricingpage_faq_q5(), a: m.pricingpage_faq_a5() },
 		{ q: m.pricingpage_faq_q6(), a: m.pricingpage_faq_a6() },
 	];
 }
@@ -430,14 +512,15 @@ function TierCard({
 	 * resolved (loading, or a storeless admin) — the CTA falls back safely then. */
 	subscription: SubscriptionView | null;
 	/** Auth/plan still resolving — show a spinner instead of a (soon-to-change)
-	 * label on the purchasable tiers. Scale ignores it (auth-independent). */
+	 * label on the purchasable tiers. */
 	pending: boolean;
 }) {
 	const shouldReduceMotion = useReducedMotion();
-	// Scale is the flat multi-outlet tier (RM399/mo — Arif, FINAL 6 Sep 2026),
-	// still not purchasable, so only its CTA differs (a disabled "Coming soon" panel).
-	// See docs/pricing.md.
-	const isScale = tier.id === "scale";
+	// Every tier is for sale since the credits release opened Scale
+	// (z8r3fdfuhq). The gate is still read rather than assumed, so a tier that
+	// stops being for sale gets its "Coming soon" badge and panel back from
+	// one place.
+	const selectable = isPlanSelectable(tier.id);
 	const price =
 		cycle === "annual"
 			? annualMonthlyPrice(tier.id, currency)
@@ -447,9 +530,13 @@ function TierCard({
 	// CTA is plan-aware for signed-in sellers: only an active/comped owner of this
 	// tier gets the disabled "Current plan" pill; trial/lapsed sellers get an
 	// actionable "Subscribe", and owners of another tier get "Upgrade"/"Manage
-	// plan" — all routing to Settings → Billing, which owns the manual contact-Arif
-	// flow (billing is manual in v1). See docs/pricing.md + src/lib/pricing-cta.ts.
-	const cta = resolveTierCta(tier.id, { isScale, isSignedIn, subscription });
+	// plan" — all routing to Settings → Billing, where subscribing and changing
+	// plan are self-serve. See docs/pricing.md + src/lib/pricing-cta.ts.
+	const cta = resolveTierCta(tier.id, {
+		selectable,
+		isSignedIn,
+		subscription,
+	});
 
 	return (
 		<div
@@ -465,7 +552,7 @@ function TierCard({
 					{m.pricing_most_popular()}
 				</span>
 			)}
-			{tier.id === "scale" && (
+			{!selectable && (
 				<span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-muted px-3 py-0.5 text-xs font-bold uppercase tracking-wider text-muted-foreground">
 					{m.pricingpage_coming_soon()}
 				</span>
@@ -537,7 +624,7 @@ function TierCard({
 			<ul className="mt-5 flex-1 space-y-2">
 				<li className="flex items-center gap-2 text-sm">
 					<Check className="size-4 shrink-0 text-accent" />
-					{tier.orderCap}
+					{tier.credits}
 				</li>
 				<li className="flex items-center gap-2 text-sm text-muted-foreground">
 					<Check className="size-4 shrink-0 text-muted-foreground/50" />
@@ -545,29 +632,26 @@ function TierCard({
 						? m.pricingpage_team_just_you()
 						: m.pricingpage_team_you_plus({ count: tier.teammates })}
 				</li>
-				{isScale && (
-					<>
-						<li className="flex items-center gap-2 text-sm text-muted-foreground">
-							<Check className="size-4 shrink-0 text-muted-foreground/50" />
-							{m.pricingpage_scale_outlets()}
-							<span className="rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-400">
-								{m.pricingpage_soon()}
-							</span>
-						</li>
-						<li className="pl-6 text-xs text-muted-foreground/80">
-							{m.pricingpage_scale_outlet_addon({
-								price: `${symbol}${OUTLET_ADDON_MONTHLY_PRICES[currency] / 100}`,
-							})}
-						</li>
-					</>
+				{tier.id === "scale" && (
+					// Outlets aren't built, and that is said HERE, in the Scale
+					// column itself — with no add-on price. Scale is buyable now,
+					// and a per-outlet price beside its CTA would sell something
+					// nobody can open yet (z8r3fdfuhq). The price waits for the build.
+					<li className="flex items-center gap-2 text-sm text-muted-foreground">
+						<Check className="size-4 shrink-0 text-muted-foreground/50" />
+						{m.pricingpage_scale_outlets()}
+						<span className="rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-400">
+							{m.pricingpage_soon()}
+						</span>
+					</li>
 				)}
 			</ul>
 
 			<div className="mt-6">
 				{cta === "coming_soon" ? (
-					// Scale is not yet purchasable — a disabled "Coming soon" panel
-					// replaces the CTA (mirrors the landing teaser). Trials are
-					// Pro-only, so a trial link here would be wrong.
+					// A tier `isPlanSelectable` says isn't for sale: a disabled
+					// "Coming soon" panel replaces the CTA (mirrors the landing
+					// teaser). None today — Scale opened with the credits release.
 					<div className="flex h-11 w-full items-center justify-center rounded-full border border-dashed border-border bg-muted/40 text-sm font-semibold text-muted-foreground">
 						{m.pricingpage_coming_soon()}
 					</div>
@@ -684,6 +768,8 @@ function PricingPage() {
 	// override persisted. MY/SG are the only countries, both billable.
 	const [region, setRegion] = useLandingRegion();
 	const currency: BillingCurrency = BILLING_CURRENCY_FOR_COUNTRY[region];
+	const symbol = CURRENCY_SYMBOL[currency];
+	const pack = smallestPack(currency);
 	const tiers = useTiers();
 	const features = useFeatures();
 	const faqs = useFaqs();
@@ -711,7 +797,10 @@ function PricingPage() {
 							{m.pricingpage_hero_rest()}
 						</h1>
 						<p className="mx-auto mt-5 max-w-xl text-lg leading-relaxed text-muted-foreground">
-							{m.pricingpage_hero_sub()}
+							{m.pricingpage_hero_sub({
+								days: INVOICE_DUE_GRACE_DAYS,
+								orders: TRIAL_CREDIT_GRANT,
+							})}
 						</p>
 						<div className="mt-7 flex justify-center">
 							<RegionToggle region={region} onChange={setRegion} />
@@ -754,14 +843,21 @@ function PricingPage() {
 									</span>
 								</button>
 							</div>
+							{/* The annual credits rule, said under the toggle in BOTH
+							    positions (so flipping it moves nothing): credits stay
+							    monthly on annual — never twelve months upfront — and
+							    the grant is locked for the prepaid year. */}
+							<p className="mx-auto mt-3 max-w-sm text-xs leading-relaxed text-muted-foreground">
+								{m.pricingpage_annual_credits_note()}
+							</p>
 						</FadeIn>
 					)}
 				</div>
 			</section>
 
 			{/* Cost context before the numbers — the compact sibling of the landing's
-			    money-math block, so RM79/149/299 arrive next to what a marketplace
-			    already takes (86eye3p6z §A). */}
+			    money-math block, so the tier prices arrive next to what a
+			    marketplace already takes (86eye3p6z §A). */}
 			<MoneyMathRow />
 
 			{/* Tier cards */}
@@ -876,64 +972,73 @@ function PricingPage() {
 							/>
 							<div className="overflow-x-auto rounded-3xl border border-border bg-card shadow-sm">
 								<table className="w-full min-w-[540px]">
-								<thead>
-									<tr className="border-b border-border/60">
-										<th className="px-6 py-4 text-left text-sm font-medium text-muted-foreground">
-											{m.pricingpage_table_feature()}
-										</th>
-										{TIER_FACTS.map((t) => (
-											<th
-												key={t.id}
+									<thead>
+										<tr className="border-b border-border/60">
+											<th className="px-6 py-4 text-left text-sm font-medium text-muted-foreground">
+												{m.pricingpage_table_feature()}
+											</th>
+											{TIER_FACTS.map((t) => (
+												<th
+													key={t.id}
+													className={cn(
+														"px-4 py-4 text-center text-sm font-bold",
+														t.popular ? "text-accent" : "text-foreground",
+													)}
+												>
+													{t.name}
+												</th>
+											))}
+										</tr>
+									</thead>
+									<tbody>
+										{features.map((f, i) => (
+											<tr
+												key={f.label}
 												className={cn(
-													"px-4 py-4 text-center text-sm font-bold",
-													t.popular ? "text-accent" : "text-foreground",
+													"transition-colors hover:bg-accent/[0.06]",
+													i % 2 === 0 ? "bg-muted/20" : "bg-transparent",
 												)}
 											>
-												{t.name}
-											</th>
-										))}
-									</tr>
-								</thead>
-								<tbody>
-									{features.map((f, i) => (
-										<tr
-											key={f.label}
-											className={cn(
-												"transition-colors hover:bg-accent/[0.06]",
-												i % 2 === 0 ? "bg-muted/20" : "bg-transparent",
-											)}
-										>
-											<td className="px-6 py-3 text-sm text-foreground">
-												<span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
-													<span
-														className={
-															f.comingSoon ? "text-muted-foreground" : ""
-														}
-													>
-														{f.label}
-													</span>
-													{f.comingSoon ? (
-														<span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-400">
-															{m.pricingpage_coming_soon()}
+												<td className="px-6 py-3 text-sm text-foreground">
+													<span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+														<span
+															className={
+																f.comingSoon ? "text-muted-foreground" : ""
+															}
+														>
+															{f.label}
 														</span>
-													) : null}
-												</span>
-											</td>
-											<td className="px-4 py-3 text-center">
-												<FeatureCell value={f.starter} />
-											</td>
-											<td className="px-4 py-3 text-center">
-												<FeatureCell value={f.pro} />
-											</td>
-											<td className="px-4 py-3 text-center">
-												<FeatureCell value={f.scale} />
-											</td>
-										</tr>
-									))}
-								</tbody>
-							</table>
+														{f.comingSoon ? (
+															<span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-400">
+																{m.pricingpage_coming_soon()}
+															</span>
+														) : null}
+													</span>
+												</td>
+												<td className="px-4 py-3 text-center">
+													<FeatureCell value={f.starter} />
+												</td>
+												<td className="px-4 py-3 text-center">
+													<FeatureCell value={f.pro} />
+												</td>
+												<td className="px-4 py-3 text-center">
+													<FeatureCell value={f.scale} />
+												</td>
+											</tr>
+										))}
+									</tbody>
+								</table>
 							</div>
 						</div>
+						{/* What a credit is and how to get more, directly under the
+						    row that counts them. The pack price is the visitor's
+						    currency's own (`CREDIT_PACKS`) — S$ never beside RM. */}
+						<p className="mx-auto mt-4 max-w-2xl text-center text-sm leading-relaxed text-muted-foreground">
+							{m.pricingpage_credits_explainer({
+								price: `${symbol} ${pack.priceMinor / 100}`,
+								credits: pack.credits,
+							})}
+						</p>
 					</FadeIn>
 				</div>
 			</section>
@@ -986,7 +1091,10 @@ function PricingPage() {
 							{m.pricingpage_cta_heading()}
 						</h2>
 						<p className="mx-auto mt-4 max-w-lg text-base text-muted-foreground">
-							{m.pricingpage_cta_sub()}
+							{m.pricingpage_cta_sub({
+								days: INVOICE_DUE_GRACE_DAYS,
+								orders: TRIAL_CREDIT_GRANT,
+							})}
 						</p>
 						<div className="mt-8 flex flex-col items-center gap-3.5">
 							<Link

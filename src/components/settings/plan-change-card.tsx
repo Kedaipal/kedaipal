@@ -13,11 +13,16 @@ import {
 	type BillingCurrency,
 	FOUNDING_PLAN,
 	foundingPlanLocked,
+	isPlanSelectable,
 	isPlanUpgrade,
+	PLAN_CAPS,
+	PLAN_CREDIT_GRANT,
 	PLAN_FEATURES,
 	type Plan,
+	PLANS,
 	planChangeCarryover,
 	planPrice,
+	planRank,
 } from "../../../convex/lib/plans";
 import type { FixHighlight } from "../../lib/country-setup-copy";
 import { highlightRingClass } from "../../lib/country-setup-copy";
@@ -99,7 +104,7 @@ export function PlanChangeCard({
 }) {
 	const changePlan = useMutation(api.invoices.changePlan);
 	const cancelPlanChange = useMutation(api.invoices.cancelPlanChange);
-	const [target, setTarget] = useState<"starter" | "pro" | null>(null);
+	const [target, setTarget] = useState<Plan | null>(null);
 	const [busy, setBusy] = useState(false);
 
 	const current = sub.plan;
@@ -114,13 +119,21 @@ export function PlanChangeCard({
 			? sub.pendingPlanChange
 			: undefined;
 
-	// Only the tiers a seller can actually buy, minus the one they're on — and
-	// a Founding Member can buy Founding Pro alone.
-	const options = (["starter", "pro"] as const).filter(
-		(p) => p !== current && !foundingPlanLocked(p, founding),
-	);
+	// Only the tiers a seller can actually buy (Scale included since
+	// z8r3fdfuhq), minus the one they're on — and a Founding Member can buy
+	// Founding Pro alone. Moves UP come first, nearest tier first: growing is
+	// the common reason to be on this card.
+	const options = PLANS.filter(
+		(p) =>
+			p !== current && isPlanSelectable(p) && !foundingPlanLocked(p, founding),
+	).sort((a, b) => {
+		const upA = isPlanUpgrade(current, a);
+		const upB = isPlanUpgrade(current, b);
+		if (upA !== upB) return upA ? -1 : 1;
+		return upA ? planRank(a) - planRank(b) : planRank(b) - planRank(a);
+	});
 
-	const confirm = async (plan: "starter" | "pro") => {
+	const confirm = async (plan: Plan) => {
 		setBusy(true);
 		try {
 			const result = await changePlan({ plan });
@@ -340,7 +353,10 @@ function upgradeCopy({
 		periodEnd: sub.currentPeriodEnd,
 		now: Date.now(),
 	});
-	const opening = `You'll be invoiced ${formatPrice(price, currency)} and ${PLAN_LABEL[target]} starts as soon as it's paid.`;
+	// The credits land with the payment, this month included (T1's upgrade
+	// rule: the bucket becomes the new grant minus what's been used) — the
+	// thing most sellers move up for, so it's in the first sentence.
+	const opening = `You'll be invoiced ${formatPrice(price, currency)} and ${PLAN_LABEL[target]} starts as soon as it's paid, with ${PLAN_CREDIT_GRANT[target]} credits a month — this month included.`;
 	if (carry.days <= 0) return opening;
 	// Say WHY the day count shrinks. "16 days carry over" beside a billing page
 	// promising another 30 reads as 14 days confiscated; what carries is every
@@ -370,6 +386,14 @@ function downgradeCopy({
 		: "the end of your current period";
 	const nowPrice = planPrice(current, cycle, founding, currency);
 	const thenPrice = planPrice(target, cycle, founding, currency);
+	// Limits a move down takes away that `featuresLost` can't see — they're
+	// caps, not feature flags. Scale → Pro (z8r3fdfuhq) loses nothing on the
+	// feature matrix, so without this the dialog would have said nothing at all
+	// about the 300 credits and three teammates going with it.
+	const teammatesNow = PLAN_CAPS[current].userCap - 1;
+	const teammatesThen = PLAN_CAPS[target].userCap - 1;
+	const team = (n: number) =>
+		n === 0 ? "just you" : `you + ${n} teammate${n === 1 ? "" : "s"}`;
 	// DialogDescription is a <p>, so the "list" is block spans rather than a
 	// <ul> — a nine-item comma run inside a paragraph is not something a seller
 	// reads, and these are the capabilities they are about to lose.
@@ -385,6 +409,13 @@ function downgradeCopy({
 					{formatPrice(thenPrice, currency)} for {PLAN_LABEL[target]}
 				</span>
 				, instead of {formatPrice(nowPrice, currency)}.
+			</span>
+			<span className="mt-2 block">
+				From {when} you'll have {PLAN_CREDIT_GRANT[target]} credits a month
+				instead of {PLAN_CREDIT_GRANT[current]}
+				{teammatesThen < teammatesNow
+					? `, and ${team(teammatesThen)} instead of ${team(teammatesNow)}. Anyone over that loses access then — pending invites are cancelled first, then the newest teammates, and each is emailed.`
+					: "."}
 			</span>
 			{lost.length ? (
 				<>

@@ -46,7 +46,8 @@ login or screen-share, neither of which scales.
      Trialing · Active · On hold · Cancelled · Comped · Admin (· No subscription,
      only when non-zero); Past due sits first after All because it is the urgent
      bucket. **Sort:** Founding rank (default, unchanged), Expiry · soonest first,
-     Newest store, Name A–Z. Filter, sort and search ride the URL
+     Credits · lowest first (Credits T5 — a sort, not a chip, because "out of
+     credits" crosses every status bucket), Newest store, Name A–Z. Filter, sort and search ride the URL
      (`?status=past_due&sort=expiry&q=…`, validated by `validateSearch`) so a
      filtered view is a link; defaults are omitted so the plain route stays
      `/app/admin/sellers`.
@@ -353,6 +354,43 @@ testing:** turning a comp off while acting-as a store won't show you the lock �
 admins bypass `assertSubscriptionActive` — so the view-only refusal (every
 seller action, orders included) is only visible to the seller's own login. Full lifecycle, edge cases and the "never
 charged" guarantees: [`manual-subscription.md`](./manual-subscription.md#comp-accounts--admin-granted-free-access-sep-2026-clickup-z8r3fdeub2).
+
+## Credits (Kedaipal Credits T5, `z8r3fdfu31`)
+
+The directory reads every store's **cached** credit balances
+(`AdminSellerRow.credits` — one `by_retailer` index read per store, never the
+ledger): a **Credits** column ("130 left" / "15 owed", red with "Out since …"
+once the total reaches zero; muted for comped and admin stores, which are
+never locked), the same reading on the phone card, and three CSV columns.
+`sellerCredits` (`src/lib/admin-seller-view.ts`) is the one derivation all of
+them share; a store with no credit account yet says so rather than reading as
+zero.
+
+The seller sheet's **Credits** section (beside Billing) names the balance, the
+month and its grant, since-when the store has been out, and any custom grant,
+and opens the **credit ledger drawer**
+(`src/components/admin/credit-ledger-sheet.tsx`) — the live projection
+(`credits.adminGetAccount`: balances, grant regime, refresh date, seller
+refunds left, open lots) and the full paginated ledger
+(`credits.adminListLedger`, admin notes included), plus the two levers:
+
+- **Adjust by hand** (`credits.adminAdjust`) — plan or bought credits, a whole
+  number (+ adds, − takes away), and a **mandatory note, said plainly to be
+  admin-only**: kept on the ledger, never shown to the seller. Plan
+  adjustments last until the month resets; bought additions land as a
+  12-month lot; bought removals take the oldest lot first and can't overdraw
+  (the drawer says so before the tap — the server refuses it too). The button
+  names its consequence ("Add 50 bought credits").
+- **Custom monthly grant** (`credits.adminSetGrantOverride`) — beats every plan
+  grant (a partner deal, a pilot); a higher grant lands its difference now, a
+  lower one or a clear waits for next month.
+
+Both writes are `requireAdmin`-gated and audited (`credits.adminAdjust` /
+`credits.adminSetGrantOverride`). **Admin → Billing** gains two tiles from
+`credits.adminCreditTotals`: **unused bought credits** (Σ `purchasedBalance` —
+the deferred-revenue figure, service still owed) and **orders owed**
+(Σ min(0, `planBalance`)), each "across N stores". Counts of credits, never
+money. The top-up REVENUE tile needs T2's purchase table and is a follow-up.
 
 ## Deliberate scope / follow-ups
 

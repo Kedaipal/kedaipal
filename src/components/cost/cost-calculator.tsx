@@ -3,6 +3,7 @@ import { useState } from "react";
 import {
 	BILLING_CURRENCY_FOR_COUNTRY,
 	type BillingCurrency,
+	PURCHASED_CREDIT_LIFETIME_MONTHS,
 } from "#/../convex/lib/plans";
 import { RegionToggle } from "#/components/landing/landing-ui";
 import { AppImage } from "#/components/ui/app-image";
@@ -14,10 +15,11 @@ import { useSupportWaNumber } from "#/hooks/useSupportWaNumber";
 import {
 	BOUNDS_FOR,
 	type CostInputs,
+	type CostResult,
 	clampInputs,
 	computeStatusQuoCost,
 	DEFAULT_INPUTS_FOR,
-	PRO_PRICE,
+	type PlanOption,
 } from "#/lib/calculator";
 import { buildWaContactLink } from "#/lib/contact";
 import { currencySymbol, formatPrice } from "#/lib/format";
@@ -30,22 +32,40 @@ function money(major: number, currency: BillingCurrency): string {
 }
 
 /**
- * The Pro price as it reads inside a sentence — "RM149", "S$59". The
+ * A monthly price as it reads inside a sentence — "RM149", "S$103". The
  * message catalogs used to hardcode the "RM", which left an SG visitor being
- * quoted ringgit beside S$ figures; they now take this whole string.
+ * quoted ringgit beside S$ figures; they take this whole string instead.
  */
-function proPriceLabel(currency: BillingCurrency): string {
-	return `${currencySymbol(currency)}${PRO_PRICE[currency]}`;
+function priceLabel(minor: number, currency: BillingCurrency): string {
+	const major = minor / 100;
+	return `${currencySymbol(currency)}${Number.isInteger(major) ? major : major.toFixed(2)}`;
+}
+
+/** Tier names are product names — the same in every locale. */
+const PLAN_NAME: Record<PlanOption["plan"], string> = {
+	starter: "Starter",
+	pro: "Pro",
+	scale: "Scale",
+};
+
+/** "Pro", or "Pro + 2 × 50 credits" when the volume needs top-ups. */
+function optionLabel(option: PlanOption): string {
+	const packs = option.packs.map((p) =>
+		m.cost_plan_pack({ count: p.count, credits: p.credits }),
+	);
+	return [PLAN_NAME[option.plan], ...packs].join(" + ");
 }
 
 function buildWaLink(
-	monthlyCost: number,
+	result: CostResult,
 	supportWa: string,
 	currency: BillingCurrency,
 ): string {
+	const { best } = result.recommendation;
 	const message = m.cost_wa_message({
-		cost: money(monthlyCost, currency),
-		price: proPriceLabel(currency),
+		cost: money(result.total, currency),
+		plan: optionLabel(best),
+		price: priceLabel(best.monthlyMinor, currency),
 	});
 	return buildWaContactLink(message, supportWa);
 }
@@ -246,7 +266,7 @@ export function CostCalculator({
 									className="h-11 w-full rounded-full"
 								>
 									<a
-										href={buildWaLink(result.total, supportWa, currency)}
+										href={buildWaLink(result, supportWa, currency)}
 										target="_blank"
 										rel="noopener noreferrer"
 									>
@@ -260,11 +280,16 @@ export function CostCalculator({
 								className="h-12 w-full rounded-full text-sm sm:text-base"
 							>
 								<a
-									href={buildWaLink(result.total, supportWa, currency)}
+									href={buildWaLink(result, supportWa, currency)}
 									target="_blank"
 									rel="noopener noreferrer"
 								>
-									{m.cost_cta_join({ price: proPriceLabel(currency) })}
+									{m.cost_cta_join({
+										price: priceLabel(
+											result.recommendation.best.monthlyMinor,
+											currency,
+										),
+									})}
 									<ArrowRight />
 								</a>
 							</Button>
@@ -277,9 +302,99 @@ export function CostCalculator({
 }
 
 interface ResultCardProps {
-	result: ReturnType<typeof computeStatusQuoCost>;
+	result: CostResult;
 	ratioLabel: string;
 	currency: BillingCurrency;
+}
+
+/**
+ * The plan behind the price the card quotes (Credits T5): the cheapest
+ * plan-plus-top-ups whose credits cover this volume, what it costs a month,
+ * and — when it leans on top-ups — the bigger tier it beat, so "Pro + 2 × 50
+ * credits" never reads as a way of not mentioning Scale.
+ */
+function PlanRecommendationBlock({
+	result,
+	currency,
+	tone,
+}: {
+	result: CostResult;
+	currency: BillingCurrency;
+	/** The qualified card is the dark mesh; the disqualified one is muted. */
+	tone: "mesh" | "muted";
+}) {
+	const { best, nextTierUp, monthlyOrders } = result.recommendation;
+	const mesh = tone === "mesh";
+	const note =
+		best.packs.length === 0
+			? m.cost_plan_covered({
+					plan: PLAN_NAME[best.plan],
+					included: best.included,
+				})
+			: m.cost_plan_topped_up({
+					plan: PLAN_NAME[best.plan],
+					included: best.included,
+					extra: monthlyOrders - best.included,
+					months: PURCHASED_CREDIT_LIFETIME_MONTHS,
+				});
+	return (
+		<div
+			data-testid="cost-plan"
+			className={cn(
+				"rounded-2xl border p-4",
+				mesh
+					? "border-white/10 bg-white/[0.06]"
+					: "border-border bg-background",
+			)}
+		>
+			<p
+				className={cn(
+					"text-xs font-semibold uppercase tracking-wider",
+					mesh ? "text-cta-mesh-foreground/60" : "text-muted-foreground",
+				)}
+			>
+				{m.cost_plan_heading({ orders: monthlyOrders })}
+			</p>
+			<div className="mt-1.5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+				<p className="text-lg font-bold">{optionLabel(best)}</p>
+				<p className="text-lg font-bold tabular-nums">
+					{priceLabel(best.monthlyMinor, currency)}
+					<span
+						className={cn(
+							"text-sm font-semibold",
+							mesh ? "text-cta-mesh-foreground/50" : "text-muted-foreground",
+						)}
+					>
+						{m.pricing_per_month()}
+					</span>
+				</p>
+			</div>
+			<p
+				className={cn(
+					"mt-1 text-xs leading-relaxed",
+					mesh ? "text-cta-mesh-foreground/70" : "text-muted-foreground",
+				)}
+			>
+				{note}
+			</p>
+			{best.packs.length > 0 && nextTierUp ? (
+				<p
+					className={cn(
+						"mt-1 text-xs leading-relaxed",
+						mesh ? "text-cta-mesh-foreground/60" : "text-muted-foreground",
+					)}
+				>
+					{m.cost_plan_runner_up({
+						// The whole option, not just its tier: at 130 a week the
+						// next tier up is "Scale + 2 × 50 credits" at RM489 —
+						// quoting "Scale at RM489" would misstate Scale's price.
+						plan: optionLabel(nextTierUp),
+						price: priceLabel(nextTierUp.monthlyMinor, currency),
+					})}
+				</p>
+			) : null}
+		</div>
+	);
 }
 
 function ResultCard({ result, ratioLabel, currency }: ResultCardProps) {
@@ -354,10 +469,21 @@ function QualifiedBody({ result, ratioLabel, currency }: ResultCardProps) {
 				</div>
 			</dl>
 
-			<div className="mt-6 rounded-2xl border border-accent/30 bg-accent/15 p-5">
+			<div className="mt-6">
+				<PlanRecommendationBlock
+					result={result}
+					currency={currency}
+					tone="mesh"
+				/>
+			</div>
+
+			<div className="mt-3 rounded-2xl border border-accent/30 bg-accent/15 p-5">
 				<p className="text-sm leading-relaxed text-cta-mesh-foreground/90">
 					{m.cost_plug({
-						price: proPriceLabel(currency),
+						price: priceLabel(
+							result.recommendation.best.monthlyMinor,
+							currency,
+						),
 						savings: money(result.savings, currency),
 					})}
 				</p>
@@ -387,9 +513,21 @@ function DisqualifiedBody({
 					? m.cost_disq_nomiss_body()
 					: m.cost_disq_notyet_body({
 							total: money(result.total, currency),
-							price: proPriceLabel(currency),
+							price: priceLabel(
+								result.recommendation.best.monthlyMinor,
+								currency,
+							),
 						})}
 			</p>
+			{/* The price "not worth it yet" is measured against — which plan, and
+			    why that one — so the verdict is checkable, not a black box. */}
+			<div className="mt-5">
+				<PlanRecommendationBlock
+					result={result}
+					currency={currency}
+					tone="muted"
+				/>
+			</div>
 		</div>
 	);
 }

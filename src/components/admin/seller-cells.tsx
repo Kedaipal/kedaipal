@@ -5,12 +5,14 @@
 import { Award, ExternalLink, Mail, MessageCircle } from "lucide-react";
 import type { AdminSellerRow } from "../../../convex/admin";
 import {
+	type CreditsTone,
 	type ExpiryTone,
 	SELLER_STATUS_LABEL,
 	type SellerBucket,
+	type SellerCredits,
 	type SellerExpiry,
 } from "../../lib/admin-seller-view";
-import { formatMobile } from "../../lib/format";
+import { formatMobile, formatShortDate } from "../../lib/format";
 import { cn } from "../../lib/utils";
 import { CopyButton } from "../ui/copy-button";
 
@@ -100,6 +102,47 @@ export function ExpiryText({
 					{expiry.detail}
 				</span>
 			) : null}
+		</div>
+	);
+}
+
+const CREDITS_TONE: Record<CreditsTone, string> = {
+	normal: "text-foreground",
+	out: "text-destructive",
+	muted: "text-muted-foreground",
+};
+
+/**
+ * A store's credits (Kedaipal Credits T5): "130 left" over "plan 80 · bought
+ * 50", red with "out since 3 Oct" once the total reaches zero — the fact the
+ * seller lock keys off. Comped and admin stores read muted: they can be at
+ * zero but are never locked.
+ */
+export function CreditsText({
+	credits,
+	className,
+}: {
+	credits: SellerCredits;
+	className?: string;
+}) {
+	return (
+		<div className={cn("flex min-w-0 flex-col gap-0.5", className)}>
+			<span
+				className={cn(
+					"truncate text-sm font-semibold tabular-nums",
+					CREDITS_TONE[credits.tone],
+				)}
+			>
+				{credits.headline}
+			</span>
+			<span
+				className="truncate text-[11px] text-muted-foreground"
+				title={credits.detail}
+			>
+				{credits.outSince !== undefined
+					? `Out since ${formatShortDate(credits.outSince)}`
+					: credits.detail}
+			</span>
 		</div>
 	);
 }

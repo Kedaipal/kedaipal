@@ -31,7 +31,10 @@ const SEO_TITLE = "Kedaipal — WhatsApp Order Hub for Malaysian Sellers";
  * live in SEO_TITLE and the Organization description, not here — "for
  * Malaysia & Singapore" was the 20 chars that pushed the differentiator out.
  * "Free until your first order" is the start-when-you-sell framing (pricing
- * reset, 30 Aug); the page never says "trial" or a number of days again.
+ * reset, 30 Aug), and still true under the 30 Sep trial model. This line never
+ * names a trial length; the page states it once, in the FAQ answer, as "14
+ * days or 200 orders" from the first order — the two bounds together
+ * (landing-redesign.test.ts).
  */
 const SEO_DESC =
 	"Sell on WhatsApp. Never lose an order or a payment. Orders, payments and couriers on one screen. Free until your first order, no Meta setup.";

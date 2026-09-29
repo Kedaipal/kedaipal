@@ -115,3 +115,86 @@ describe("CostCalculator — switching region re-seeds what the visitor never to
 		});
 	});
 });
+
+/**
+ * Credits T5 (z8r3fdfu31): the card prices the plan the visitor's volume
+ * actually needs — orders a week × 52 / 12 — not a flat Pro. The three
+ * volumes the ticket named, in both currencies; the arithmetic itself is
+ * pinned in calculator.test.ts, this pins what the visitor reads.
+ */
+describe("CostCalculator — the plan behind the price", () => {
+	/** The plan block's text, NBSP-flattened. */
+	function plan(): string {
+		return (screen.getByTestId("cost-plan").textContent ?? "").replace(
+			/\u00a0/g,
+			" ",
+		);
+	}
+	/** The sticky CTA's WhatsApp message, decoded. */
+	function waMessage(): string {
+		const link = screen.getByRole("link", { name: /Start with Kedaipal/ });
+		return decodeURIComponent(link.getAttribute("href") ?? "");
+	}
+
+	it("20 a week: Starter covers it — and the pitch prices Starter, not Pro", () => {
+		render(<CostCalculator initialInputs={{ ordersPerWeek: 20 }} />);
+		expect(plan()).toContain("Your plan at about 87 orders a month");
+		expect(plan()).toContain("Starter");
+		expect(plan()).toContain("RM79/mo");
+		expect(plan()).toContain("Starter includes 100 credits a month");
+		expect(plan()).not.toContain("Cheaper than");
+		expect(text()).toContain("Start with Kedaipal — RM79/mo");
+
+		switchToSingapore();
+		expect(plan()).toContain("S$29/mo");
+		expect(text()).not.toMatch(/RM\s?\d/);
+	});
+
+	it("60 a week: Pro + 2 × 50 credits, honestly set against Scale", () => {
+		render(<CostCalculator initialInputs={{ ordersPerWeek: 60 }} />);
+		expect(plan()).toContain("about 260 orders a month");
+		expect(plan()).toContain("Pro + 2 × 50 credits");
+		expect(plan()).toContain("RM239/mo");
+		expect(plan()).toContain(
+			"Pro includes 200 credits a month; top-ups cover the other 60",
+		);
+		expect(plan()).toContain("last 12 months");
+		expect(plan()).toContain("Cheaper than Scale at RM399/mo");
+		expect(waMessage()).toContain(
+			"get started on Pro + 2 × 50 credits (RM239/mo)",
+		);
+
+		switchToSingapore();
+		expect(plan()).toContain("Pro + 2 × 50 credits");
+		expect(plan()).toContain("S$103/mo");
+		expect(plan()).toContain("Cheaper than Scale at S$149/mo");
+	});
+
+	it("130 a week: the currencies part ways, and the bigger tier is named in full", () => {
+		render(<CostCalculator initialInputs={{ ordersPerWeek: 130 }} />);
+		expect(plan()).toContain("about 564 orders a month");
+		expect(plan()).toContain("Pro + 2 × 200 credits");
+		expect(plan()).toContain("RM469/mo");
+		// The runner-up is the whole option — Scale alone is RM399, not RM489.
+		expect(plan()).toContain("Cheaper than Scale + 2 × 50 credits at RM489/mo");
+
+		switchToSingapore();
+		expect(plan()).toContain("Scale + 2 × 50 credits");
+		expect(plan()).toContain("S$193/mo");
+		// Scale is the top tier: there's no bigger plan to have beaten, so no
+		// comparison line — never a "cheaper than" a smaller tier.
+		expect(plan()).not.toContain("Cheaper than");
+	});
+
+	it("a verdict of not-worth-it-yet still shows which plan it was measured against", () => {
+		// No missed orders → disqualified; the plan block explains the price.
+		render(
+			<CostCalculator
+				initialInputs={{ ordersPerWeek: 20, missedPerWeek: 0 }}
+			/>,
+		);
+		expect(screen.getByText(/Nothing's leaking/)).toBeTruthy();
+		expect(plan()).toContain("Starter");
+		expect(plan()).toContain("RM79/mo");
+	});
+});

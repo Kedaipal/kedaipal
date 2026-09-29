@@ -6,6 +6,7 @@
 import type { AdminSellerRow } from "../../../convex/admin";
 import {
 	sellerBucket,
+	sellerCredits,
 	sellerExpiry,
 	sellerPlanLabel,
 	sellerSeatsLabel,
@@ -23,6 +24,7 @@ import {
 } from "../ui/table";
 import {
 	ContactLine,
+	CreditsText,
 	ExpiryText,
 	FoundingPill,
 	StatusPill,
@@ -52,12 +54,13 @@ export function SellerTable({
 		>
 			<TableHeader>
 				<TableRow className="bg-muted/40 hover:bg-muted/40">
-					<TableHead className="w-[22%] pl-4">Store</TableHead>
-					<TableHead className="w-[25%]">Owner contact</TableHead>
-					<TableHead className="w-[13%]">Status</TableHead>
-					<TableHead className="w-[11%]">Plan</TableHead>
-					<TableHead className="w-[8%]">Seats</TableHead>
-					<TableHead className="w-[16%]">Expires / renews</TableHead>
+					<TableHead className="w-[20%] pl-4">Store</TableHead>
+					<TableHead className="w-[22%]">Owner contact</TableHead>
+					<TableHead className="w-[12%]">Status</TableHead>
+					<TableHead className="w-[10%]">Plan</TableHead>
+					<TableHead className="w-[7%]">Seats</TableHead>
+					<TableHead className="w-[11%]">Credits</TableHead>
+					<TableHead className="w-[14%]">Expires / renews</TableHead>
 					<TableHead className="w-[112px] pr-4 text-right">
 						<span className="sr-only">Actions</span>
 					</TableHead>
@@ -155,6 +158,9 @@ function SellerTableRow({
 			</TableCell>
 			<TableCell className="py-3">
 				<span className="text-sm">{sellerSeatsLabel(seller)}</span>
+			</TableCell>
+			<TableCell className="py-3">
+				<CreditsText credits={sellerCredits(seller)} />
 			</TableCell>
 			<TableCell className="py-3">
 				<ExpiryText expiry={expiry} />

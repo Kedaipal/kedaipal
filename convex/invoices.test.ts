@@ -435,18 +435,58 @@ describe("invoices.issueInvoice", () => {
 		expect((await getRetailer(t, retailerId))?.isFoundingMember).toBe(true);
 	});
 
-	test("rejects Scale + founding-non-Pro + duplicate pending + non-admin", async () => {
+	/**
+	 * Scale opened for purchase with the credits release (z8r3fdfuhq), and Arif
+	 * assigns it by hand as well — the "Scale is unavailable for v1" guard that
+	 * lived here is gone. Founding stays Pro-only.
+	 */
+	test("issues Scale at RM399 monthly and S$1,490 annual — never with the founding discount", async () => {
 		const t = setup();
-		const { retailerId } = await seedPublic(t, "u3", "store-3");
+		const { retailerId } = await seedPublic(t, "u_sc", "store-scale");
+		const { invoiceId } = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "scale",
+			billingCycle: "monthly",
+			founding: false,
+			dueDate: due(),
+		});
+		expect(await getInvoice(t, invoiceId)).toMatchObject({
+			plan: "scale",
+			total: 39900,
+			currency: "MYR",
+		});
+
+		const sg = await seedPublic(t, "u_sc_sg", "store-scale-sg");
+		const annual = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId: sg.retailerId,
+			plan: "scale",
+			billingCycle: "annual",
+			founding: false,
+			currency: "SGD",
+			dueDate: due(),
+		});
+		expect(await getInvoice(t, annual.invoiceId)).toMatchObject({
+			plan: "scale",
+			billingCycle: "annual",
+			total: 149000,
+			currency: "SGD",
+		});
+
 		await expect(
 			asAdmin(t).mutation(api.invoices.issueInvoice, {
-				retailerId,
+				retailerId: sg.retailerId,
 				plan: "scale",
 				billingCycle: "monthly",
-				founding: false,
+				founding: true,
+				currency: "SGD",
 				dueDate: due(),
 			}),
-		).rejects.toThrow(/scale is unavailable/i);
+		).rejects.toThrow(/only pro/i);
+	});
+
+	test("rejects founding-non-Pro + duplicate pending + non-admin", async () => {
+		const t = setup();
+		const { retailerId } = await seedPublic(t, "u3", "store-3");
 		await expect(
 			asAdmin(t).mutation(api.invoices.issueInvoice, {
 				retailerId,
