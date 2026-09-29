@@ -461,6 +461,27 @@ export function buildPickupSnapshot(
 	};
 }
 
+/**
+ * The same frozen snapshot for an event's VENUE — minus the fee.
+ *
+ * An event venue is a `pickupLocations` row because that is where the store
+ * keeps its addresses, but an RSVP is not a collection: the guest is attending
+ * something at that address, not picking an order up from it. A store's
+ * self-collect fee prices the handling of a collected order ("collect here,
+ * +RM5"), so inheriting it merely because the event is hosted at the same
+ * address charges for something nobody does (Zaki, 29 Sep 2026 — z8r3fdjgvd).
+ *
+ * Dropping it HERE rather than at the checkout means the guest is never quoted
+ * a fee they then pay, and never charged one they were never quoted: the
+ * summary, the CTA, the order total, the invoice and the seller's inbox all
+ * read the same number because there is only one.
+ */
+export function buildEventVenueSnapshot(
+	location: Doc<"pickupLocations">,
+): PickupSnapshot {
+	return { ...buildPickupSnapshot(location), fee: undefined };
+}
+
 /** Every status an order can BE — the read side: filters, the status column's
  * picker, exports. Includes `booking_requested`, which is a real state a
  * seller filters for (it's what the New bucket surfaces on a booking store);
@@ -1302,7 +1323,7 @@ export const create = mutation({
 					"This event doesn't have a venue set yet — please contact the store.",
 				);
 			resolvedPickupLocationId = venue._id;
-			sanitizedPickupSnapshot = buildPickupSnapshot(venue);
+			sanitizedPickupSnapshot = buildEventVenueSnapshot(venue);
 		}
 
 		// Fulfilment date: validated against the EFFECTIVE notice window — the
@@ -4803,6 +4824,15 @@ export const updatePickupLocation = mutation({
 		if (order.deliveryMethod !== "self_collect") {
 			throw new ConvexError("Delivery orders do not have a pickup location");
 		}
+		// An RSVP is seated at the venue the STORE set for the event — the guest
+		// picked a date-and-place package, not a collection point. Letting this
+		// mutation move it would send one guest to a different address than the
+		// rest, and would re-apply the venue fee that `buildEventVenueSnapshot`
+		// deliberately drops.
+		if (order.eventRsvp === true || (await orderEvent(ctx, order)) !== undefined)
+			throw new ConvexError(
+				"An event's venue is set by the store — it can't be changed on one RSVP",
+			);
 
 		const location = await ctx.db.get(pickupLocationId);
 		if (!location || location.retailerId !== order.retailerId) {

@@ -271,11 +271,10 @@ describe("products", () => {
 		).rejects.toThrow(/At most 2 option axes/);
 	});
 
-	test("create rejects a grid exceeding the 50-variant cap", async () => {
+	test("create rejects a grid exceeding the 100-variant cap", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const asA = t.withIdentity({ subject: USER_A });
-		const values = Array.from({ length: 8 }, (_, i) => `v${i}`);
 		await expect(
 			asA.mutation(api.products.create, {
 				retailerId: retailer._id,
@@ -284,12 +283,46 @@ describe("products", () => {
 				imageStorageIds: [],
 				sortOrder: 0,
 				options: [
-					{ name: "A", values }, // 8 × 8 = 64 > 50
-					{ name: "B", values },
+					// 11 × 10 = 110 > 100, with both axes inside MAX_VALUES_PER_AXIS.
+					{ name: "A", values: Array.from({ length: 11 }, (_, i) => `a${i}`) },
+					{ name: "B", values: Array.from({ length: 10 }, (_, i) => `b${i}`) },
 				],
 				variants: [],
 			}),
-		).rejects.toThrow(/max 50 per product/);
+		).rejects.toThrow(/110 choices — 10 over the limit of 100/);
+	});
+
+	// The grid the cap was raised for (z8r3fdjgvd): one event listing carrying
+	// both adult T-shirt sizes as required choices, so a shared seat pool stays
+	// on ONE product. 7 × 8 = 56 — refused by the old cap of 50.
+	test("create accepts the 56-variant two-size event grid", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const sizes = ["S", "M", "L", "XL", "2XL", "3XL", "4XL"];
+		const second = ["None", ...sizes];
+		const variants = sizes.flatMap((a) =>
+			second.map((b) => ({
+				optionValues: [a, b],
+				price: b === "None" ? 55000 : 68000,
+				onHand: 0,
+			})),
+		);
+		expect(variants).toHaveLength(56);
+		const productId = await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Into The Falls registration",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [
+				{ name: "Adult 1 size", values: sizes },
+				{ name: "Adult 2 size", values: second },
+			],
+			variants,
+		});
+		const saved = await asA.query(api.products.get, { productId });
+		expect(saved?.variants).toHaveLength(56);
 	});
 
 	// --- SKU uniqueness (now on the variant) --------------------------------

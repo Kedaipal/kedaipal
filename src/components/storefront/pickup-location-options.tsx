@@ -46,9 +46,18 @@ export const PICKUP_KIND_HEADING: Record<PickupKind, string> = {
 export function PickupSummaryCard({
 	location,
 	currency,
+	hideFee = false,
 }: {
 	location: PublicPickupLocation;
 	currency: string;
+	/**
+	 * Suppress the fee chip for a location whose fee this order will NOT be
+	 * charged — today that is an event venue, which is a pickup point only
+	 * because that is where a store keeps its addresses (see
+	 * `buildEventVenueSnapshot`). The chip exists to make a real charge visible,
+	 * so showing it where nothing is charged is the same lie in reverse.
+	 */
+	hideFee?: boolean;
 }) {
 	return (
 		// Fill only, no outline: this renders inside the checkout's bordered
@@ -65,7 +74,9 @@ export function PickupSummaryCard({
 							{location.label}
 						</p>
 						<PickupKindBadge kind={location.locationType} />
-						<PickupFeeChip fee={location.fee} currency={currency} />
+						{hideFee ? null : (
+							<PickupFeeChip fee={location.fee} currency={currency} />
+						)}
 					</div>
 					<p className="text-xs text-muted-foreground whitespace-pre-line">
 						{location.address}

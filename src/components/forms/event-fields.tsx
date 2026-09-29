@@ -208,7 +208,13 @@ export function EventFields({
 	 * is a stated fact; several = the seller must pick which hosts the event
 	 * (a guest choosing the venue is as wrong as a guest choosing the date).
 	 * Undefined while loading — the selector simply hasn't rendered yet. */
-	venues?: ReadonlyArray<{ _id: string; label: string; isActive: boolean }>;
+	venues?: ReadonlyArray<{
+		_id: string;
+		label: string;
+		isActive: boolean;
+		/** Minor units. An event never charges it — surfaced, not applied. */
+		fee?: number;
+	}>;
 }) {
 	const taken = rsvpCount ?? 0;
 	const hasRsvps = taken > 0;
@@ -413,6 +419,25 @@ export function EventFields({
 							still see its address on their RSVP.
 						</p>
 					) : null}
+					{/* The seller configured this fee and sees it advertised on the
+					    Fulfilment row; an event quietly not charging it would be money
+					    changing on the side that set it. Same rule as the hidden-point
+					    note above: say what it means where it happens (z8r3fdjgvd). */}
+					{(() => {
+						const picked =
+							venues === undefined
+								? undefined
+								: venues.length === 1
+									? venues[0]
+									: venues.find((v) => v._id === draft.venueId);
+						return picked?.fee && picked.fee > 0 ? (
+							<p className="text-xs text-muted-foreground">
+								{picked.label} charges a pickup fee on normal orders — guests of
+								this event aren&apos;t charged it. They&apos;re attending, not
+								collecting.
+							</p>
+						) : null;
+					})()}
 					{venues !== undefined && venues.length === 1 ? (
 						<p className="text-xs text-muted-foreground">
 							Venue:{" "}

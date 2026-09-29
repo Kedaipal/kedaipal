@@ -797,6 +797,129 @@ describe("event RSVP — its own status pipeline (`z8r3fdff9u` stages)", () => {
 	});
 });
 
+describe("event RSVP — the venue charges no pickup fee (z8r3fdjgvd)", () => {
+	/** A store whose only pickup point charges a fee, hosting an event there. */
+	async function seedPaidVenueEvent(t: ReturnType<typeof setup>) {
+		const { asUser, retailer, pickupLocationId } = await seedStore(t);
+		await asUser.mutation(api.pickupLocations.update, {
+			pickupLocationId,
+			fee: 500,
+		});
+		const productId = await seedEventProduct(t, retailer._id, { price: 68000 });
+		return { asUser, retailer, pickupLocationId, productId };
+	}
+
+	test("an RSVP is billed for seats only — the venue's fee is not charged", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedPaidVenueEvent(t);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ variantId: await variantFor(t, productId, "A"), quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+		});
+		const order = await orderByShortId(t, shortId);
+		// The guest is ATTENDING, not collecting: a self-collect handling fee
+		// prices a collected order, and inheriting it merely because the event is
+		// hosted at that address charges for something nobody does.
+		expect(order?.pickupFee).toBeUndefined();
+		expect(order?.pickupSnapshot?.fee).toBeUndefined();
+		// …and the total is exactly the seats, which is what the checkout quoted.
+		expect(order?.total).toBe(68000);
+	});
+
+	test("a NON-event order at the same point still pays the fee", async () => {
+		// Mutation-guard: if `buildEventVenueSnapshot` were applied everywhere, or
+		// the fee were dropped at the location instead of the event door, this
+		// goes green while real pickup revenue silently disappears.
+		const t = setup();
+		const { asUser, retailer, pickupLocationId } = await seedPaidVenueEvent(t);
+		const plain = await asUser.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Ceramic mug",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 1,
+			options: [],
+			variants: [{ optionValues: [], price: 1990, onHand: 5 }],
+		});
+		const mugVariant = await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", plain))
+				.collect();
+			if (!rows[0]) throw new Error("mug variant missing");
+			return rows[0]._id;
+		});
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ variantId: mugVariant, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			pickupLocationId,
+		});
+		const order = await orderByShortId(t, shortId);
+		expect(order?.pickupFee).toBe(500);
+		expect(order?.total).toBe(1990 + 500);
+	});
+
+	test("the counter seats an RSVP at the same price as the storefront", async () => {
+		const t = setup();
+		const { asUser, productId } = await seedPaidVenueEvent(t);
+		const { sessionId } = await asUser.mutation(
+			api.counterCheckout.bindSessionManualPhone,
+			{ waPhone: "60123456789", name: "Aina Hamzah" },
+		);
+		const counter = await asUser.mutation(
+			api.counterCheckout.createOrderFromSession,
+			{
+				sessionId,
+				items: [
+					{ variantId: await variantFor(t, productId, "A"), quantity: 1 },
+				],
+				paidInPerson: false,
+			},
+		);
+		const order = await orderByShortId(t, counter.shortId);
+		expect(order?.pickupFee).toBeUndefined();
+		expect(order?.total).toBe(68000);
+	});
+
+	test("a guest cannot move an RSVP's venue (and so cannot re-apply the fee)", async () => {
+		const t = setup();
+		const { asUser, retailer, productId } = await seedPaidVenueEvent(t);
+		const { pickupLocationId: outletB } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Outlet B",
+				address: "88 Jalan Dua, 50000 KL",
+			},
+		);
+		const { shortId, trackingToken } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ variantId: await variantFor(t, productId, "A"), quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+		});
+		await expect(
+			t.mutation(api.orders.updatePickupLocation, {
+				token: trackingToken,
+				pickupLocationId: outletB,
+			}),
+		).rejects.toThrow(/venue is set by the store/i);
+		const order = await orderByShortId(t, shortId);
+		expect(order?.pickupFee).toBeUndefined();
+		expect(order?.total).toBe(68000);
+	});
+});
+
 describe("event RSVP — the venue is the event's, never the guest's (round 4)", () => {
 	test("a multi-outlet store must name the venue at save; the pick then wins every door", async () => {
 		const t = setup();

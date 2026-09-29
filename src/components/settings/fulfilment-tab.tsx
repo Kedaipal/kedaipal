@@ -3268,6 +3268,24 @@ function LocationRowBody({
 							</span>
 						</p>
 					) : null}
+					{/* The fee chip above says "+ RM 5.00" and this point hosts an
+					    event, which never charges it. Leaving the two side by side
+					    means the seller collects RM0 on every RSVP while their own
+					    row advertises a charge — the same lie the buyer's venue card
+					    was fixed for, on the side that CONFIGURED it (z8r3fdjgvd).
+
+					    Its own line, not appended to the event names: "…Into The
+					    Falls 2026 Event guests aren't charged…" ran the listing
+					    straight into the rule and read as a garden path. */}
+					{eventNames !== undefined &&
+					eventNames.length > 0 &&
+					location.fee &&
+					location.fee > 0 ? (
+						<p className="text-xs text-muted-foreground">
+							Event guests aren&apos;t charged the fee — they&apos;re attending,
+							not collecting.
+						</p>
+					) : null}
 					{(() => {
 						const mapsUrl = deriveMapsUrl(location);
 						return mapsUrl ? (
