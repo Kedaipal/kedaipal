@@ -181,13 +181,24 @@ function changePhone(value: string) {
 }
 
 /** Typing, one character at a time, each appended to whatever the box holds
- * after the previous keystroke (including any rewrite the field made). */
+ * after the previous keystroke (including any rewrite the field made).
+ *
+ * The node is resolved ONCE, not per keystroke. `getByRole` with a `name`
+ * matcher computes an accessible name and a `getComputedStyle` visibility
+ * check for every textbox in the checkout — ~20ms in jsdom, against ~9ms for
+ * the re-render it wraps. Resolving it twice per character made a 15-character
+ * number 80% query overhead, and left this test one busy CI box away from the
+ * 5s timeout: it awaits nothing, so that timeout never measured the test, only
+ * the machine (vitest fails a synchronous body whose wall clock overruns).
+ * React keeps the same input node across the country switch this test trips
+ * mid-number, so the reference stays live — `isConnected` is the tripwire if a
+ * future change remounts the field, which would also drop the buyer's caret. */
 function typePhone(text: string) {
+	const input = phoneInput();
 	for (const ch of text) {
-		fireEvent.change(phoneInput(), {
-			target: { value: phoneInput().value + ch },
-		});
+		fireEvent.change(input, { target: { value: input.value + ch } });
 	}
+	expect(input.isConnected).toBe(true);
 }
 
 // parseBuyerWaPhone's rejection when the digits fit the OTHER store country.

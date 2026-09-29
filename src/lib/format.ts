@@ -199,14 +199,20 @@ const MOBILE_GROUPING: Record<Country, (digits: string) => string> = {
  * country to SG still renders as the MY number it is.
  *
  * Any other country's number (buyers can pick any country, z8r3fdh274) reads
- * `+CC NATIONAL` — `+44 7911123456` — so the code the buyer picked stands
- * apart from the number they typed; per-country grouping would need every
- * country's numbering plan, and the split is what makes a wrong code visible.
+ * `+CC` and then the national part in 3s and 4s — `+44 791 112 3456` — via
+ * `formatInternational`/`groupNational` (`convex/lib/phoneDial.ts`). The code
+ * the buyer picked stands apart from the number they typed, and the run is
+ * broken up enough to check a digit at a time. That grouping is a READING AID,
+ * not the country's own convention (a UK mobile conventionally reads
+ * `7911 123456`): honouring every convention means shipping every country's
+ * numbering plan, so MY and SG get their real grouping here and everyone else
+ * gets the generic one — `groupNational` carries the reasoning for that trade.
  * An MY/SG number that isn't a mobile (a landline, a legacy row) stays one
  * unbroken `+60312345678`: `toNationalPhoneInput` (`./phone.ts`) peels a
  * seller field's `+60 `/`+65 ` plate by string prefix, so splitting it would
  * seed the field with the national part and silently drop the country code.
- * Anything with no known code falls back to `+<digits>` rather than guessing.
+ * A number whose code is unknown — or whose national part is not a length that
+ * code uses — falls back to `+<digits>` rather than guessing.
  */
 export function formatMobile(waPhone: string): string {
 	const digits = waPhone.replace(/\D/g, "");

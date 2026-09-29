@@ -188,9 +188,13 @@ describe("formatMobile", () => {
 		expect(formatMobile("")).toBe("");
 	});
 
-	it("splits any other country's number as +CC NATIONAL (z8r3fdh274)", () => {
+	it("splits any other country's number as +CC then 3s and 4s (z8r3fdh274)", () => {
 		// Buyers can pick any country — the code they picked reads apart from
-		// the number they typed, so a wrong code is visible at a glance.
+		// the number they typed, so a wrong code is visible at a glance, and the
+		// national run is grouped short enough to check a digit at a time. The
+		// grouping is `groupNational`'s generic reading aid, deliberately NOT
+		// each country's own convention (a UK mobile conventionally reads
+		// "7911 123456"), which would mean shipping every numbering plan.
 		expect(formatMobile("447911123456")).toBe("+44 791 112 3456");
 		expect(formatMobile("14155550123")).toBe("+1 415 555 0123");
 		expect(formatMobile("+81 90-1234-5678")).toBe("+81 901 234 5678");
@@ -198,6 +202,15 @@ describe("formatMobile", () => {
 
 	it("an unknown calling code still falls back to +digits", () => {
 		expect(formatMobile("99912345678")).toBe("+99912345678");
+	});
+
+	it("a KNOWN code with a national part of the wrong length also falls back", () => {
+		// The grouping is only reached when the national part is a length that
+		// code actually uses. Otherwise a malformed row would be dressed up as a
+		// well-formed number — `+44 791 1123 4` reads like a real GB mobile with
+		// a typo, when what we really have is digits we cannot vouch for.
+		expect(formatMobile("4479111234")).toBe("+4479111234"); // GB national 8, not 10
+		expect(formatMobile("44791112345678")).toBe("+44791112345678"); // 12, not 10
 	});
 });
 
