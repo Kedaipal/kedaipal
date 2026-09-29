@@ -16,6 +16,7 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import {
 	MAX_OPTION_AXES,
 	MAX_VARIANTS_PER_PRODUCT,
+	overCapMessage,
 } from "../../../convex/lib/variant";
 import { useRevealOnAdd } from "../../hooks/useRevealOnAdd";
 import {
@@ -1168,17 +1169,20 @@ export function VariantEditor({
 				    since either one can be the one pushing it over, and shown LIVE
 				    rather than waiting for a submit.
 
-				    It replaces the submitted values-issue instead of sitting beside
-				    it: `collectOptionIssues` raises the same breach at submit (so
-				    the save blocks and focus lands here), and rendering both would
-				    print one sentence twice. The two cannot be different problems —
-				    an axis with no values makes zero combinations, so "add a value"
-				    and "too many combinations" can never be true at once. */}
+				    Two different things are deliberately NOT the same here. Within
+				    ONE axis card it replaces the submitted values-issue rather than
+				    sitting beside it — `collectOptionIssues` raises the same breach
+				    at submit (so the save blocks and focus lands here), and printing
+				    both would repeat one sentence in one place. The two can never be
+				    different problems: an axis with no values makes zero
+				    combinations, so "add a value" and "too many choices" cannot both
+				    be true. ACROSS axes it does repeat, once per card, and that is
+				    the point — the grid is a product of both lists, either one can
+				    be shortened to fix it, and a card that stayed silent would read
+				    as "not this one". */}
 				{overCap ? (
 					<p className="text-xs text-destructive">
-						{variantCount} choices is over the limit of{" "}
-						{MAX_VARIANTS_PER_PRODUCT}. Remove{" "}
-						{variantCount - MAX_VARIANTS_PER_PRODUCT} to save this product.
+						{overCapMessage(variantCount)}
 					</p>
 				) : (
 					<IssueText message={issueFor("option", axisIndex, "values")} />

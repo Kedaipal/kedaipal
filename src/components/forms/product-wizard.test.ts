@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { overCapMessage } from "../../../convex/lib/variant";
 import { isKindCard, KIND_CARDS } from "../../lib/kind-card";
 import type { ProductFormDraft } from "./product-form";
 import {
@@ -155,6 +156,18 @@ describe("wizardStepIssues", () => {
 				(i) => i.field === "axisValues",
 			),
 		).toBe(true);
+	});
+
+	it("step 2 uses the SHARED over-cap sentence, not its own wording", () => {
+		// The wizard was the one surface left saying "That's 110 combinations —
+		// keep it to 100 or fewer" while every other door said "choices", so the
+		// same rule met the seller in two sentences (PR #310 review). Comparing
+		// against the helper rather than a literal means a future copy edit moves
+		// all four doors or fails here.
+		const issue = wizardStepIssues(withAxisSizes(11, 10), 2).find(
+			(i) => i.field === "axisValues",
+		);
+		expect(issue?.message).toBe(overCapMessage(110));
 	});
 
 	it("step 2 accepts a 56-combination grid (z8r3fdjgvd)", () => {

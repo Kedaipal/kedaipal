@@ -106,7 +106,7 @@ describe("variant helpers", () => {
 				]),
 			// "choices" is the seller's word — the toast this text becomes sits beside
 				// a UI that says "choices" everywhere else.
-			).toThrow(/That makes 110 choices — max 100 per product/);
+			).toThrow(/110 choices — 10 over the limit of 100/);
 		});
 
 		test("accepts the 56-variant two-size event grid (z8r3fdjgvd)", () => {
@@ -129,7 +129,7 @@ describe("variant helpers", () => {
 					{ name: "A", values },
 					{ name: "B", values },
 				]),
-			).toThrow(/That makes 625 choices — max 100 per product/);
+			).toThrow(/625 choices — 525 over the limit of 100/);
 		});
 	});
 });

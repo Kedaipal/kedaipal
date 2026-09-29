@@ -41,6 +41,7 @@ import {
 import {
 	MAX_OPTION_AXES,
 	MAX_VARIANTS_PER_PRODUCT,
+	overCapMessage,
 } from "../../../convex/lib/variant";
 import {
 	bookingPriceSuffix,
@@ -622,10 +623,13 @@ export function wizardStepIssues(
 					message: issue.message,
 				});
 			}
-			if (cartesian(options).length > MAX_VARIANTS_PER_PRODUCT) {
+			const comboCount = cartesian(options).length;
+			if (comboCount > MAX_VARIANTS_PER_PRODUCT) {
+				// Same sentence the editor and the server use — the wizard is just
+				// another door onto one rule (z8r3fdjgvd review).
 				issues.push({
 					field: "axisValues",
-					message: `That's ${cartesian(options).length} combinations — keep it to ${MAX_VARIANTS_PER_PRODUCT} or fewer.`,
+					message: overCapMessage(comboCount),
 				});
 			}
 		}
@@ -1223,6 +1227,9 @@ export function ProductWizard({
 		_id: r._id as string,
 		label: r.label,
 		isActive: r.isActive,
+		// Carried so the picker can say that an event never charges it — see
+		// buildEventVenueSnapshot (z8r3fdjgvd).
+		fee: r.fee,
 	}));
 	const requireEventVenue = (eventVenues?.length ?? 0) > 1;
 	// Categories are only offered on review when the store actually has some —

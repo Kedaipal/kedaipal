@@ -28,6 +28,32 @@ export const MAX_CUSTOM_PROMPT_LENGTH = 280;
 export const DEFAULT_CUSTOM_LABEL = "Custom";
 
 /**
+ * THE sentence every surface uses when a grid exceeds the cap — the server's
+ * refusal, the editor's live notice, the form's submit issue and the wizard's
+ * step-2 issue. One author, for the reason this whole change exists: the four
+ * hand-kept copies of the CAP had already drifted, and the copy drifted with
+ * them (the wizard said "That's 110 combinations — keep it to 100 or fewer",
+ * so the same rule met the seller in two different sentences depending on
+ * which door they came through).
+ *
+ * "choices", not "variants": every surface the seller touches — the wizard,
+ * the grid editor's count, the RSVP tally, the stock sheet — says choices.
+ * "Variants" is our word, not theirs. (The CSV import keeps "variant rows":
+ * that page's whole vocabulary is rows in a sheet, and its own check refuses
+ * first.)
+ *
+ * It states the EXCESS and asks for VALUES, which are different units: the
+ * grid is a product of the lists, so "remove 12" combinations maps to no whole
+ * number of value-deletions (7 × 16 = 112 → "12 over", but 7 × 15 = 105 and
+ * 7 × 14 = 98). Naming the overshoot is true at every shape; naming a count of
+ * values to delete would not be.
+ */
+export function overCapMessage(total: number): string {
+	const over = total - MAX_VARIANTS_PER_PRODUCT;
+	return `${total} choices — ${over} over the limit of ${MAX_VARIANTS_PER_PRODUCT}. Remove option values to get under it.`;
+}
+
+/**
  * Human label for a variant from its positional option values:
  * ["1kg", "Fillet"] → "1kg / Fillet". Empty (the implicit default variant) → "".
  */
@@ -107,16 +133,7 @@ export function normalizeOptions(
 	});
 
 	const total = cartesian(normalized).length;
-	if (total > MAX_VARIANTS_PER_PRODUCT)
-		// "choices", not "variants": this message is what the seller reads in a
-		// toast when a save is refused, and every other surface they touch — the
-		// wizard, the grid editor's count, the over-cap notice, the RSVP tally,
-		// the stock sheet — says "choices". "Variants" is our word, not theirs.
-		// (The CSV import keeps "variant rows": that page's whole vocabulary is
-		// rows in a sheet, and its own check refuses first.)
-		throw new Error(
-			`That makes ${total} choices — max ${MAX_VARIANTS_PER_PRODUCT} per product`,
-		);
+	if (total > MAX_VARIANTS_PER_PRODUCT) throw new Error(overCapMessage(total));
 
 	return normalized;
 }

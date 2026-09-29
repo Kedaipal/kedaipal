@@ -289,6 +289,33 @@ message ledger you already designed.
 
 ---
 
+## 7b. Storefront fan-out — where the wall is (noted `z8r3fdjgvd`, 29 Sep 2026)
+
+`products.list` collects every ACTIVE product, then per product every variant
+plus a `storage.getUrl` per variant image. It is a single Convex transaction, so
+the binding limit is the **per-transaction document ceiling** — and blowing it is
+a hard error, not a slow page: the storefront stops rendering.
+
+Raising `MAX_VARIANTS_PER_PRODUCT` 50 → 100 **halves the headroom**:
+
+| | products | variants each | docs read (worst case) |
+|---|---|---|---|
+| Before | 200 (`MAX_PRODUCTS_PER_RETAILER`) | 50 | 10,000 |
+| After | 200 | 100 | **20,000** |
+
+Nowhere near the real cohort — the store that drove the cap raise has **one**
+56-variant product, and a 200-product catalog averaging 100 variants each is not
+a shape any seller has — so this was **not** treated as a blocker. But the two
+caps now multiply into a number past the ceiling, which nothing tests and
+nothing previously wrote down.
+
+**If it is ever approached**, the fix is not a lower cap: it is to stop reading
+every variant for a LIST view. The storefront grid needs a price range and a
+"from" price per product, not the full grid — that is a denormalized
+`priceFrom`/`variantCount` on `products` (both already exist for other reasons)
+plus a per-product variant read only on the product page. Ticket before raising
+either cap again.
+
 ## 8. Recommended action order
 1. ✅ `shortId` capability hardening (HIGH security) — **DONE** (ticket
    `86ey1fggw`). See §6.

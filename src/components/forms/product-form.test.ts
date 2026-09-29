@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { overCapMessage } from "../../../convex/lib/variant";
 import { buildSubmitVariants, collectOptionIssues } from "./product-form";
 import type { VariantIssue, VariantRow } from "./variant-editor";
 
@@ -183,9 +184,10 @@ describe("collectOptionIssues", () => {
 			expect.objectContaining({ where: "option", index: 0, field: "values" }),
 		);
 		// The consequence, not just the fact.
-		expect(issues[0].message).toMatch(
-			/110 choices is over the limit of 100\. Remove 10 to save this product\./,
-		);
+		// The shared sentence — states the EXCESS and asks for values, which is
+		// the only mapping that is true at every shape.
+		expect(issues[0].message).toBe(overCapMessage(110));
+		expect(issues[0].message).toMatch(/110 choices — 10 over the limit of 100/);
 	});
 
 	it("the 56-choice grid the cap was raised for reports nothing", () => {

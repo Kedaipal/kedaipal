@@ -332,12 +332,11 @@ describe("VariantEditor — the variant cap (z8r3fdjgvd)", () => {
 	it("refuses past 100 and says how many to remove", () => {
 		render(<Harness initial={grid(11, 10)} />);
 		expect(
-			screen.getAllByText(/110 choices is over the limit of 100/).length,
+			screen.getAllByText(/110 choices — 10 over the limit of 100/).length,
 		).toBeGreaterThan(0);
-		// The consequence, not just the fact: "Remove some values" left the seller
-		// counting. 110 − 100 = 10.
+		// The consequence, not just the fact.
 		expect(
-			screen.getAllByText(/Remove 10 to save this product/).length,
+			screen.getAllByText(/Remove option values to get under it/).length,
 		).toBeGreaterThan(0);
 	});
 

@@ -41,7 +41,10 @@ import {
 	type ProductKind,
 	packageUnitMax,
 } from "../../../convex/lib/productKind";
-import { MAX_VARIANTS_PER_PRODUCT } from "../../../convex/lib/variant";
+import {
+	MAX_VARIANTS_PER_PRODUCT,
+	overCapMessage,
+} from "../../../convex/lib/variant";
 import { bookingSpanCounted, bookingSpanNoun } from "../../lib/booking-dates";
 import {
 	type FixHighlight,
@@ -457,7 +460,7 @@ export function collectOptionIssues(
 			where: "option",
 			index: 0,
 			field: "values",
-			message: `${total} choices is over the limit of ${MAX_VARIANTS_PER_PRODUCT}. Remove ${total - MAX_VARIANTS_PER_PRODUCT} to save this product.`,
+			message: overCapMessage(total),
 		});
 	}
 	options.forEach((axis, index) => {
@@ -914,6 +917,9 @@ export function ProductForm({
 		_id: r._id as string,
 		label: r.label,
 		isActive: r.isActive,
+		// Carried so the picker can say that an event never charges it — see
+		// buildEventVenueSnapshot (z8r3fdjgvd).
+		fee: r.fee,
 	}));
 	const [eventDraft, setEventDraft] = useState<EventDraft>(
 		() =>

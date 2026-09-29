@@ -3265,6 +3265,15 @@ function LocationRowBody({
 								{location.isActive
 									? ""
 									: " — guests are still sent here while it's hidden."}
+								{/* The fee chip above says "+ RM5" and this point hosts an
+								    event, which never charges it. Leaving the two side by
+								    side means the seller collects RM0 on every RSVP while
+								    the row advertises a charge — the same lie the buyer's
+								    venue card was fixed for, on the side that CONFIGURED it
+								    (z8r3fdjgvd). */}
+								{location.fee && location.fee > 0
+									? " Event guests aren't charged the fee — they're attending, not collecting."
+									: ""}
 							</span>
 						</p>
 					) : null}

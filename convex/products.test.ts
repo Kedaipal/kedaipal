@@ -289,7 +289,7 @@ describe("products", () => {
 				],
 				variants: [],
 			}),
-		).rejects.toThrow(/max 100 per product/);
+		).rejects.toThrow(/110 choices — 10 over the limit of 100/);
 	});
 
 	// The grid the cap was raised for (z8r3fdjgvd): one event listing carrying

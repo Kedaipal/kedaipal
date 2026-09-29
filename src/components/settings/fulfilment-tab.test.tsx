@@ -1377,6 +1377,9 @@ describe("event-venue badge on pickup points (z8r3fdff9u round 5)", () => {
 			address: "5 Jalan Acara, 50480 KL",
 			isActive: false,
 			sortOrder: 1,
+			// A fee on the point that hosts events — the shape this store is in
+			// (HCM's venue charges one), and the case the note exists for.
+			fee: 500,
 		},
 	];
 
@@ -1443,5 +1446,44 @@ describe("event-venue badge on pickup points (z8r3fdff9u round 5)", () => {
 	it("a point hosting nothing carries no badge", () => {
 		renderTab();
 		expect(screen.queryByText(/Event venue:/)).toBeNull();
+	});
+
+	// z8r3fdjgvd — the row advertises "+ RM 5.00 fee" right beside "Event
+	// venue:", and an RSVP never charges it. Without this the seller collects
+	// RM0 on every RSVP while their own settings say otherwise.
+	it("says an event venue's fee isn't charged to guests, beside the fee chip", () => {
+		renderTab();
+		fireEvent.click(screen.getByRole("button", { name: /Show inactive/ }));
+		const badge = screen.getByText(/Event venue: Card Check Camp/);
+		expect(badge.textContent).toMatch(
+			/Event guests aren't charged the fee — they're attending, not collecting/,
+		);
+		// The chip itself stays: the fee is real for standard orders.
+		expect(screen.getByText(/\+ RM\s?5\.00 fee/)).toBeTruthy();
+	});
+
+	it("a FREE point hosting an event says nothing about fees", () => {
+		// Mutation-guard: a note that renders unconditionally would invent a fee
+		// rule on stores that have no fee.
+		vi.mocked(useQuery).mockImplementation(((opts: {
+			__fn: FunctionReference<"query">;
+		}) => {
+			const name = getFunctionName(opts.__fn);
+			if (name === NAME.listLocations)
+				return {
+					data: LOCATIONS.map((l) => ({ ...l, fee: undefined })),
+					isPending: false,
+				};
+			if (name === VENUE_USAGE)
+				return {
+					data: [{ venueId: "loc_hidden", name: "Card Check Camp" }],
+					isPending: false,
+				};
+			return { data: undefined, isPending: false };
+		}) as never);
+		renderTab();
+		fireEvent.click(screen.getByRole("button", { name: /Show inactive/ }));
+		expect(screen.getByText(/Event venue: Card Check Camp/)).toBeTruthy();
+		expect(screen.queryByText(/aren't charged the fee/)).toBeNull();
 	});
 });
