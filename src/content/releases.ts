@@ -178,6 +178,67 @@ export interface Release {
  */
 export const RELEASES: Release[] = [
 	{
+		version: "2026.09.9",
+		date: "2026-09-29",
+		// Authored `false`, and the call is put to Zaki in the release PR.
+		// Two triggers are arguably lit — the storefront's subpages MOVED, and
+		// a seller-visible number moved (50 choices to 100). Neither survives
+		// the recurring test, "a seller who reads nothing will keep doing the
+		// wrong thing": the storefront restyles itself with nothing to do on
+		// their side, and the higher cap is met exactly where it used to
+		// refuse them, in the words of the refusal itself. The two fixes are
+		// narrow — they need an event, and one of them needs an event venue
+		// that also charges a pickup fee. Set against v2026.09.8, which opened
+		// the modal for a whole new Settings tab, interrupting every seller
+		// for a restyle would spend the modal on the release that needs it
+		// least. The unseen dot carries it.
+		notable: false,
+		entries: [
+			{
+				kind: "enhancement",
+				title: { en: "A shared link opens on the goods, not on your cover photo" },
+				body: {
+					en: "Buyers arrive on a product or a category far more often than on your front page, and those pages used to open with a screenful of cover photo before anything they came for. They now start with a slim bar holding your logo, your name and today's hours, with back and share buttons where a thumb expects them. Product cards carry one full-width button in every state, and a card with something already in the basket counts it up and down in place. The basket bar stays out of sight until there is something in it. Your front page keeps its cover.",
+				},
+				// No link: nothing to switch on, and the thing to look at is the
+				// seller's own storefront, which lives outside /app — every href
+				// here has to be an in-app path.
+			},
+			{
+				kind: "fix",
+				title: { en: "An RSVP stops dragging the rest of the basket to the venue" },
+				body: {
+					en: "A guest who had a mug in the basket and then RSVP'd came out with one order pinned to your event venue — the mug included, with no delivery, no collection and no date. An RSVP now checks out on its own, the way a booking already does, and the basket is left untouched to order normally afterwards. Nothing changes on your side: your storefront, your product cards and your counter all send an RSVP down its own path.",
+				},
+				// No link: the seller has nothing to set up or find. Same reasoning
+				// as v2026.09.8's overseas-number note.
+			},
+			{
+				kind: "enhancement",
+				title: { en: "A product can carry 100 choices, up from 50" },
+				body: {
+					en: "Two option lists that multiply past fifty — adult sizes against a second set, a flavour against a pack size — were refused when you saved, after you had filled the whole grid in. The ceiling is now 100, and if you do cross it the warning arrives while you are still adding values: it counts what you have, says how many you are over, and asks for values back rather than a number of combinations to work out yourself. Every screen now calls them choices, the word you use.",
+				},
+				// Deliberately the products LIST rather than a `?spot=` ring. The
+				// cap is not a card — it is a ceiling the seller meets inside the
+				// variant grid while building options, and it now announces itself
+				// there. A spotlight key would need a PRODUCT_SPOTLIGHT row
+				// describing a card that does not exist. Raised in the release PR.
+				href: "/app/products",
+				hrefLabel: { en: "Open your listings" },
+			},
+			{
+				kind: "fix",
+				title: { en: "An event guest is charged what the page quoted" },
+				body: {
+					en: "If your event venue doubles as one of your pickup points and that point carries a handling fee, the fee was added on top of the total the guest had already agreed to — the button quoted one price and the order came out higher. A guest is attending, not collecting, so it no longer applies at an event. Your fulfilment settings and the venue picker now say so, rather than advertising a fee you were never going to collect.",
+				},
+				href: "/app/settings?tab=fulfilment",
+				hrefLabel: { en: "Check your pickup points" },
+			},
+		],
+	},
+	{
 		version: "2026.09.8",
 		date: "2026-09-26",
 		// Notable on two of the three triggers at once. Something MOVED: there is
