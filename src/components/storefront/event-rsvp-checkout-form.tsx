@@ -29,8 +29,15 @@ import {
 } from "../../../convex/lib/buyerPhone";
 import type { Country } from "../../../convex/lib/country";
 import { type Locale, pickLocale } from "../../../convex/lib/locale";
+import {
+	answerPrompt,
+	answersForSubmit,
+	firstMissingRequired,
+	visibleQuestions,
+} from "../../../convex/lib/buyerQuestions";
 import { isEventPassed } from "../../../convex/lib/productEvent";
 import { readAttributionSource } from "../../hooks/useSourceAttribution";
+import { BuyerQuestionsFields } from "../order/buyer-questions-fields";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import { buyerPhoneRejection } from "../../lib/buyer-phone-rejection";
 import {
@@ -91,6 +98,8 @@ export function EventRsvpCheckoutForm({
 		DialIso | undefined
 	>(undefined);
 	const [note, setNote] = useState("");
+	// Buyer questions (z8r3fdkjek) — one answer set for the whole RSVP.
+	const [answers, setAnswers] = useState<Record<string, string>>({});
 	const [submitting, setSubmitting] = useState(false);
 	const [serverError, setServerError] = useState<string | null>(null);
 
@@ -102,6 +111,10 @@ export function EventRsvpCheckoutForm({
 	).data;
 
 	const event = product?.event;
+	// The host approves each RSVP before anyone pays (`z8r3fdkjek`). Said at
+	// the top of the form, on the CTA, and under it — the difference between
+	// "you're in" and "you've asked" is the one thing a guest must not misread.
+	const needsApproval = event?.requiresApproval === true;
 
 	// The EVENT's venue, from the server — the same resolver order time uses,
 	// so what this page shows is what the order will freeze. Fetched (not read
@@ -266,6 +279,13 @@ export function EventRsvpCheckoutForm({
 		(_, axisIndex) => pp.selection[axisIndex] == null,
 	);
 
+	// Chain order = section order: the questions sit after "Your seats".
+	const questions = product?.buyerQuestions;
+	const missingQuestion = firstMissingRequired(questions, answers);
+	const shownAnswers = visibleQuestions(questions, answers).filter(
+		(q) => (answers[q.id] ?? "").trim().length > 0,
+	);
+
 	const blockedReason = pp.eventFull
 		? "This event is fully booked"
 		: !nameOk
@@ -280,7 +300,9 @@ export function EventRsvpCheckoutForm({
 						? "That combination isn't available"
 						: !pp.sellable
 							? "That option is fully taken"
-							: null;
+							: missingQuestion
+								? answerPrompt(missingQuestion.label)
+								: null;
 
 	async function submit() {
 		if (blockedReason || !variant || !product) return;
@@ -289,7 +311,13 @@ export function EventRsvpCheckoutForm({
 		try {
 			const result = await createOrder({
 				retailerId,
-				items: [{ variantId: variant._id, quantity: seats }],
+				items: [
+					{
+						variantId: variant._id,
+						quantity: seats,
+						answers: answersForSubmit(questions, answers),
+					},
+				],
 				currency: product.currency,
 				channel: "whatsapp",
 				customer: {
@@ -314,7 +342,12 @@ export function EventRsvpCheckoutForm({
 			navigate({
 				to: "/track/$token",
 				params: { token: result.trackingToken },
-				search: result.confirmedAtCreate ? {} : { send: 1 },
+				// A request is never handed to WhatsApp to "confirm": the seller
+				// hasn't yet. The tracking page says it's waiting for approval.
+				search:
+					result.confirmedAtCreate || result.awaitingApproval
+						? {}
+						: { send: 1 },
 			});
 		} catch (err) {
 			setServerError(convexErrorMessage(err));
@@ -343,6 +376,12 @@ export function EventRsvpCheckoutForm({
 							{variantLabel(variant.optionValues)}
 						</p>
 					) : null}
+					{shownAnswers.map((q) => (
+						<p key={q.id} className="text-xs text-muted-foreground">
+							{q.label}:{" "}
+							<span className="text-foreground">{answers[q.id]?.trim()}</span>
+						</p>
+					))}
 					{priceSettled ? (
 						<>
 							<div className="flex items-baseline gap-1.5">
@@ -400,11 +439,13 @@ export function EventRsvpCheckoutForm({
 			>
 				{/* The action carries its consequence: how many seats, and what it
 				    costs — never a bare "RSVP". */}
-				{!priceSettled
-					? "RSVP"
-					: isFree
-						? `RSVP for ${seats} ${seats === 1 ? "seat" : "seats"}`
-						: `RSVP · ${formatPrice(total, product.currency)}`}
+				{needsApproval
+					? `Request ${seats} ${seats === 1 ? "seat" : "seats"}`
+					: !priceSettled
+						? "RSVP"
+						: isFree
+							? `RSVP for ${seats} ${seats === 1 ? "seat" : "seats"}`
+							: `RSVP · ${formatPrice(total, product.currency)}`}
 			</Button>
 			{/* The blocked reason always speaks — a dead button with no reason is
 			    the thing this whole bar exists to avoid. The reassurance that
@@ -417,6 +458,14 @@ export function EventRsvpCheckoutForm({
 			{blockedReason ? (
 				<p className="text-center text-xs text-muted-foreground">
 					{blockedReason}
+				</p>
+			) : needsApproval ? (
+				// Shown on every screen size (unlike the reassurance below): it
+				// changes what the tap MEANS, so it can't be desktop-only.
+				<p className="text-center text-xs text-muted-foreground">
+					{isFree
+						? `${storeName} approves each RSVP — your seat is held until they do.`
+						: `${storeName} approves each RSVP — your seat is held, and you pay only after they approve.`}
 				</p>
 			) : (
 				<p className="hidden text-center text-xs text-muted-foreground lg:block">
@@ -480,6 +529,16 @@ export function EventRsvpCheckoutForm({
 					locale={pickLocale(locale)}
 					notes={product.pickupNote ? [product.pickupNote] : []}
 				/>
+				{needsApproval ? (
+					<p className="rounded-xl bg-muted/60 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
+						<span className="font-semibold text-foreground">
+							{storeName} approves each RSVP.
+						</span>{" "}
+						{isFree
+							? "Your seat is held while they review it — the page that opens next shows their answer."
+							: "Your seat is held while they review it. Nothing is paid now — once they approve, the page that opens next shows how to pay."}
+					</p>
+				) : null}
 			</CheckoutSection>
 
 			<CheckoutSection step={1} title="Who's coming?">
@@ -517,7 +576,11 @@ export function EventRsvpCheckoutForm({
 							id="rsvp-wa-phone-hint"
 							className="text-sm font-medium text-accent-emphasis"
 						>
-							We&apos;ll WhatsApp your RSVP confirmation to{" "}
+							{/* A request isn't confirmed yet — the message comes when
+							    the host approves (`z8r3fdkjek`). */}
+							{needsApproval
+								? "Once approved, we'll WhatsApp your confirmation to "
+								: "We'll WhatsApp your RSVP confirmation to "}
 							{formatMobile(parsedPhone.digits)} — check it&apos;s right.
 						</span>
 					) : phoneRejection ? (
@@ -544,7 +607,9 @@ export function EventRsvpCheckoutForm({
 							id="rsvp-wa-phone-hint"
 							className="text-xs font-normal text-muted-foreground"
 						>
-							Your RSVP confirmation lands in this WhatsApp.
+							{needsApproval
+								? "Your confirmation lands in this WhatsApp once the host approves."
+								: "Your RSVP confirmation lands in this WhatsApp."}
 						</span>
 					)}
 				</div>
@@ -619,6 +684,29 @@ export function EventRsvpCheckoutForm({
 					</>
 				)}
 			</CheckoutSection>
+
+			{questions && questions.length > 0 ? (
+				<CheckoutSection step={3} title="A few questions">
+					<p className="-mt-1 text-xs text-muted-foreground">
+						{seats > 1
+							? `${storeName} asks these once for this RSVP, not per seat.`
+							: `${storeName} needs these to get ready for you.`}
+					</p>
+					<BuyerQuestionsFields
+						questions={questions}
+						answers={answers}
+						idPrefix="rsvp-q"
+						onChange={(questionId, answer) =>
+							setAnswers((prev) => {
+								const { [questionId]: _dropped, ...rest } = prev;
+								return answer === undefined
+									? rest
+									: { ...rest, [questionId]: answer };
+							})
+						}
+					/>
+				</CheckoutSection>
+			) : null}
 
 			<CheckoutSection title={`Note to ${storeName} (optional)`}>
 				<textarea

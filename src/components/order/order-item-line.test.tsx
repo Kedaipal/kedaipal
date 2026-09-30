@@ -205,3 +205,28 @@ describe("OrderItemLine", () => {
 		expect(screen.getByText("RM 160.00")).toBeTruthy();
 	});
 });
+
+describe("OrderItemLine — buyer answers (z8r3fdkjek)", () => {
+	it("prints each answer as Label: answer under the line", () => {
+		line({
+			name: "Into The Falls",
+			answers: [
+				{ label: "What are you bringing?", answer: "Helinox tent" },
+				{ label: "Tent model", answer: "Tactical One" },
+			],
+		});
+		expect(screen.getByText("What are you bringing?:")).toBeTruthy();
+		expect(screen.getByText("Helinox tent")).toBeTruthy();
+		expect(screen.getByText("Tactical One")).toBeTruthy();
+	});
+
+	it("renders an answer as text, never as markup", () => {
+		line({ answers: [{ label: "Message", answer: "<b>Happy</b>" }] });
+		expect(screen.getByText("<b>Happy</b>")).toBeTruthy();
+	});
+
+	it("adds nothing when there are no answers", () => {
+		const { container } = line();
+		expect(container.querySelector("dl")).toBeNull();
+	});
+});

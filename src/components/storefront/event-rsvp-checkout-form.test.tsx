@@ -416,3 +416,97 @@ describe("EventRsvpCheckoutForm — the CTA carries its consequence", () => {
 		expect(screen.queryByRole("button", { name: /more seats/i })).toBeNull();
 	});
 });
+
+describe("buyer questions + approval (z8r3fdkjek)", () => {
+	const QUESTIONED = {
+		...PRODUCT,
+		buyerQuestions: [
+			{
+				id: "bring001",
+				label: "What are you bringing?",
+				type: "choice",
+				options: ["2 Helinox furniture", "Helinox tent"],
+				required: true,
+			},
+			{
+				id: "tent0001",
+				label: "Tent model",
+				type: "text",
+				required: true,
+				showWhen: { questionId: "bring001", option: "Helinox tent" },
+			},
+		],
+	};
+
+	function fillGuest() {
+		fireEvent.change(screen.getByPlaceholderText("e.g. Aisyah"), {
+			target: { value: "Wilson Tan" },
+		});
+		fireEvent.change(document.getElementById("rsvp-wa-phone") as Element, {
+			target: { value: "0123456789" },
+		});
+	}
+
+	it("asks the questions, blocks on the required one, and sends the answers", async () => {
+		state.product = QUESTIONED;
+		state.create.mockResolvedValue({ shortId: "ORD-1", trackingToken: "t" });
+		renderForm();
+		fillGuest();
+		expect(screen.getByText("A few questions")).toBeTruthy();
+		expect(
+			screen.getAllByText("Answer “What are you bringing?”").length,
+		).toBeGreaterThan(0);
+		// The tent box appears only after "Helinox tent" is picked.
+		expect(screen.queryByLabelText(/Tent model/)).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "Helinox tent" }));
+		expect(screen.getAllByText("Answer “Tent model”").length).toBeGreaterThan(
+			0,
+		);
+		fireEvent.change(screen.getByLabelText(/Tent model/), {
+			target: { value: "Tactical One" },
+		});
+		fireEvent.click(screen.getAllByRole("button", { name: /^RSVP · / })[0]);
+		await vi.waitFor(() => expect(state.create).toHaveBeenCalled());
+		expect(state.create.mock.calls[0][0].items).toEqual([
+			{
+				variantId: "var_1",
+				quantity: 1,
+				answers: [
+					{ questionId: "bring001", answer: "Helinox tent" },
+					{ questionId: "tent0001", answer: "Tactical One" },
+				],
+			},
+		]);
+	});
+
+	it("switching the trigger away drops the hidden answer", () => {
+		state.product = QUESTIONED;
+		renderForm();
+		fireEvent.click(screen.getByRole("button", { name: "Helinox tent" }));
+		fireEvent.change(screen.getByLabelText(/Tent model/), {
+			target: { value: "Tactical One" },
+		});
+		fireEvent.click(
+			screen.getByRole("button", { name: "2 Helinox furniture" }),
+		);
+		expect(screen.queryByLabelText(/Tent model/)).toBeNull();
+		// The receipt echoes only what will be sent.
+		expect(screen.queryByText("Tactical One")).toBeNull();
+	});
+
+	it("an event that approves each RSVP says so before the guest commits", () => {
+		state.product = {
+			...PRODUCT,
+			event: { ...PRODUCT.event, requiresApproval: true },
+		};
+		renderForm();
+		fillGuest();
+		expect(screen.getByText("IndoMart approves each RSVP.")).toBeTruthy();
+		expect(
+			screen.getAllByRole("button", { name: "Request 1 seat" }).length,
+		).toBeGreaterThan(0);
+		expect(
+			screen.getAllByText(/you pay only after they approve/i)[0],
+		).toBeTruthy();
+	});
+});
