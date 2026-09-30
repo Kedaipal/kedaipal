@@ -75,8 +75,9 @@ grants by design) → active member (grants checked). Deny throws `Forbidden`.
 
 ## Seats
 
-- `PLAN_CAPS.userCap` is TOTAL people incl. the owner: Starter 1 / Pro 3 /
-  Scale 6 = "You + 0/2/5 teammates". Caps are denormalized onto subscription
+- `PLAN_CAPS.userCap` is TOTAL people incl. the owner: Starter 1 / Pro 3 =
+  "You + 0/2 teammates"; Enterprise is unlimited (Credits T6 — Scale's
+  "you + 5" went with Scale). Caps are denormalized onto subscription
   rows → **changing them needs `migrations.resyncSubscriptionCaps` on prod**
   (on the release checklist). Comped stores and an admin's own store resolve
   to unlimited seats like every other cap.

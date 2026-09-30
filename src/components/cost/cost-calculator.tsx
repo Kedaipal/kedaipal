@@ -46,7 +46,6 @@ function priceLabel(minor: number, currency: BillingCurrency): string {
 const PLAN_NAME: Record<PlanOption["plan"], string> = {
 	starter: "Starter",
 	pro: "Pro",
-	scale: "Scale",
 };
 
 /** "Pro", or "Pro + 2 × 50 credits" when the volume needs top-ups. */
@@ -318,8 +317,8 @@ interface ResultCardProps {
 /**
  * The plan behind the price the card quotes (Credits T5): the cheapest
  * plan-plus-top-ups whose credits cover this volume, what it costs a month,
- * and — when it leans on top-ups — the bigger tier it beat, so "Pro + 2 × 50
- * credits" never reads as a way of not mentioning Scale.
+ * and — when it leans on top-ups — the bigger tier it beat, so "Starter +
+ * 1 × 200 credits" never reads as a way of not mentioning Pro.
  */
 function PlanRecommendationBlock({
 	result,
@@ -393,9 +392,9 @@ function PlanRecommendationBlock({
 					)}
 				>
 					{m.cost_plan_runner_up({
-						// The whole option, not just its tier: at 130 a week the
-						// next tier up is "Scale + 2 × 50 credits" at RM489 —
-						// quoting "Scale at RM489" would misstate Scale's price.
+						// The whole option, not just its tier: the next tier up can
+						// lean on top-ups too, and quoting just its name beside
+						// the option's total would misstate the tier's price.
 						plan: optionLabel(nextTierUp),
 						price: priceLabel(nextTierUp.monthlyMinor, currency),
 					})}

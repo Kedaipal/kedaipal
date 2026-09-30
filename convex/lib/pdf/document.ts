@@ -360,7 +360,7 @@ export function orderToReceiptData(args: {
 
 type InvoiceForPdf = {
 	invoiceNumber: string;
-	plan?: "starter" | "pro" | "scale";
+	plan?: "starter" | "pro" | "enterprise";
 	billingCycle?: "monthly" | "annual";
 	/** Off-Season Hold invoices bill the hold, not the tier (z8r3fday24). */
 	kind?: "plan" | "hold";
@@ -411,13 +411,13 @@ type BillingConfigForInvoice = {
 const PLAN_DISPLAY: Record<string, string> = {
 	starter: "Starter",
 	pro: "Pro",
-	scale: "Scale",
 };
 
 /** Human line-item label for a subscription invoice, e.g.
- * "Kedaipal Founding 10 Seller Plan - Monthly Subscription". */
+ * "Kedaipal Founding 10 Seller Plan - Monthly Subscription". An Enterprise
+ * invoice names the CONTRACT it bills, never a plan price (T6). */
 export function subscriptionLineLabel(invoice: {
-	plan?: "starter" | "pro" | "scale";
+	plan?: "starter" | "pro" | "enterprise";
 	billingCycle?: "monthly" | "annual";
 	foundingDiscount?: number;
 	kind?: "plan" | "hold";
@@ -428,6 +428,9 @@ export function subscriptionLineLabel(invoice: {
 	}
 	if (invoice.foundingDiscount !== undefined) {
 		return `Kedaipal Founding 10 Seller Plan - ${cycle} Subscription`;
+	}
+	if (invoice.plan === "enterprise") {
+		return `Kedaipal Enterprise Contract - ${cycle} Fee`;
 	}
 	const plan = PLAN_DISPLAY[invoice.plan ?? "pro"] ?? "Pro";
 	return `Kedaipal ${plan} Plan - ${cycle} Subscription`;

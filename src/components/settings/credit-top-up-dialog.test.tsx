@@ -93,6 +93,12 @@ type Options = {
 	viewOnly: null | "acting_as_admin" | "no_write";
 	pendingInvoice: { invoiceNumber: string; payNowUrl: string | null } | null;
 	upgradeHint: { planLabel: string; monthlyCredits: number } | null;
+	contractBlock: {
+		credits: number;
+		ratePerCreditMinor: number;
+		priceMinor: number;
+		currency: "MYR" | "SGD";
+	} | null;
 	buyerIsMember: boolean;
 };
 
@@ -110,6 +116,7 @@ const OPTIONS: Options = {
 	viewOnly: null,
 	pendingInvoice: null,
 	upgradeHint: null,
+	contractBlock: null,
 	buyerIsMember: false,
 };
 
@@ -528,6 +535,73 @@ describe("the picker", () => {
 				/Pro includes 200 orders a month, which works out cheaper/,
 			),
 		).toBeTruthy();
+	});
+	/** HSL's contract (Credits T6): RM0.60 a credit in blocks of 5,000. */
+	const HSL_BLOCK = {
+		credits: 5000,
+		ratePerCreditMinor: 60,
+		priceMinor: 300000,
+		currency: "MYR" as const,
+	};
+
+	it("an Enterprise store sees its contract's block rate beside the packs, and the owner can ask for one", () => {
+		mockReads({ options: { ...OPTIONS, contractBlock: HSL_BLOCK } });
+		renderDialog();
+		const line = screen.getByText(/Your Enterprise contract prices credits/);
+		expect(line.textContent).toMatch(/RM\s*0\.60 each, in blocks of 5,000/);
+		expect(line.textContent).toMatch(/RM\s*3,000 a block/);
+		const ask = screen.getByRole("link", { name: "Ask us for a block" });
+		const href = decodeURIComponent(ask.getAttribute("href") ?? "");
+		expect(href).toMatch(/^https:\/\/wa\.me\//);
+		expect(href).toContain(
+			"overage block of 5,000 credits for kedaipal.com/kedai",
+		);
+		// The packs are still there — a small top-up is still a top-up.
+		expect(packRadio(50)).toBeTruthy();
+	});
+
+	it("a teammate or an admin acting-as is told whose call a block is — no chat opened for the store", () => {
+		mockReads({
+			options: {
+				...OPTIONS,
+				contractBlock: HSL_BLOCK,
+				buyerIsMember: true,
+			},
+		});
+		const view = renderDialog();
+		expect(screen.getByText(/The store owner asks us for one/)).toBeTruthy();
+		expect(
+			screen.queryByRole("link", { name: "Ask us for a block" }),
+		).toBeNull();
+		view.unmount();
+
+		mockReads({
+			options: {
+				...OPTIONS,
+				contractBlock: HSL_BLOCK,
+				viewOnly: "acting_as_admin",
+			},
+		});
+		renderDialog(1, { ...RETAILER, actingAsAdmin: true });
+		expect(
+			screen.queryByRole("link", { name: "Ask us for a block" }),
+		).toBeNull();
+	});
+
+	it("a contract that includes its blocks never quotes a price of nothing", () => {
+		mockReads({
+			options: {
+				...OPTIONS,
+				contractBlock: { ...HSL_BLOCK, ratePerCreditMinor: 0, priceMinor: 0 },
+			},
+		});
+		renderDialog();
+		expect(
+			screen.getByText(
+				/Your Enterprise contract includes blocks of 5,000 credits/,
+			),
+		).toBeTruthy();
+		expect(screen.queryByText(/RM\s*0 a block|RM\s*0\.00/)).toBeNull();
 	});
 });
 

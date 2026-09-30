@@ -76,6 +76,13 @@ export type CreditRegime =
  * The monthly plan grant, ignoring whether the status earns one. Precedence
  * (locked 17 Sep 2026): admin override → the grant an annual payment locked
  * for its term → Founding Pro 300 → the plan's grant.
+ *
+ * An ENTERPRISE store's grant IS its override: the contract's included
+ * credits are written through to `grantOverride` in the same mutation that
+ * sets the contract (T6), so the first line answers it. Enterprise has no
+ * list grant to fall back to; should the override ever be missing, the store
+ * keeps Pro's allowance rather than dropping to zero and locking a contract
+ * customer over a data fault.
  */
 export function monthlyCreditGrant(inputs: CreditRegimeInputs): number {
 	if (inputs.override !== undefined) return inputs.override;
@@ -83,7 +90,9 @@ export function monthlyCreditGrant(inputs: CreditRegimeInputs): number {
 		return inputs.annualGrant.grant;
 	if (inputs.foundingEligible && inputs.plan === "pro")
 		return FOUNDING_PRO_CREDIT_GRANT;
-	return PLAN_CREDIT_GRANT[inputs.plan];
+	return PLAN_CREDIT_GRANT[
+		inputs.plan === "enterprise" ? "pro" : inputs.plan
+	];
 }
 
 /**

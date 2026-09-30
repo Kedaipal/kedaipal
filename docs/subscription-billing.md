@@ -11,10 +11,13 @@
 
 > **Update (30 Sep 2026) — superseded by Kedaipal Credits** ([`credits.md`](./credits.md),
 > ClickUp `86eye2ccu`). The volume bound this doc argued for is now the order-credit
-> ledger: 1 credit = 1 order, **Starter 100 / Pro 200 / Scale 500** a month
+> ledger: 1 credit = 1 order, **Starter 100 / Pro 200** a month
 > (`PLAN_CREDIT_GRANT`, from which `PLAN_CAPS.orderCap` is derived), top-up packs
-> for a busy month, and a seller lock at zero — never a per-message fee. The
-> 28 Jun "2,000 orders/mo" Scale cap and the "unlimited" rows below are kept as the
+> for a busy month, and a seller lock at zero — never a per-message fee. Scale is
+> retired (Credits T6, 1 Oct 2026): the third tier is **Enterprise**, a per-store
+> contract whose included credits are the grant
+> ([`pricing.md`](./pricing.md#enterprise--a-contract-not-a-price)). The 28 Jun
+> "2,000 orders/mo" Scale cap and the "unlimited" rows below are kept as the
 > original analysis only; `convex/lib/plans.ts` is canonical.
 
 ---

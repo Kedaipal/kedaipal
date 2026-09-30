@@ -72,7 +72,7 @@ type LedgerRow = Doc<"creditLedger">;
 const SWEEP_BATCH = 100;
 
 /** Largest single admin adjustment or custom grant — a typo guard. */
-const ADMIN_CREDIT_LIMIT = 100_000;
+export const ADMIN_CREDIT_LIMIT = 100_000;
 
 const NOTE_MIN = 3;
 const NOTE_MAX = 500;
@@ -1062,10 +1062,15 @@ export const adminAdjust = mutation({
 		bucket: v.union(v.literal("plan"), v.literal("purchased")),
 		amount: v.number(),
 		note: v.string(),
+		// An Enterprise overage block (T6): bought credits landed once the
+		// block's manual invoice is paid, written under its own ledger reason
+		// so the book can tell blocks from goodwill. Enterprise stores only,
+		// bought credits only, additions only.
+		enterpriseBlock: v.optional(v.boolean()),
 	},
 	handler: async (
 		ctx,
-		{ retailerId, bucket, amount, note },
+		{ retailerId, bucket, amount, note, enterpriseBlock },
 	): Promise<{ plan: number; purchased: number }> => {
 		const adminSubject = await requireAdmin(ctx);
 		const retailer = await ctx.db.get(retailerId);
@@ -1074,6 +1079,20 @@ export const adminAdjust = mutation({
 			throw new ConvexError(
 				"Enter a whole number of credits — positive to add, negative to take away.",
 			);
+		if (enterpriseBlock === true) {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			if (sub?.plan !== "enterprise")
+				throw new ConvexError(
+					"Only a store on an Enterprise contract buys overage blocks.",
+				);
+			if (bucket !== "purchased" || amount <= 0)
+				throw new ConvexError(
+					"An Enterprise block adds bought credits — a positive number, to the bought bucket.",
+				);
+		}
 		if (Math.abs(amount) > ADMIN_CREDIT_LIMIT)
 			throw new ConvexError(
 				`That's more than ${ADMIN_CREDIT_LIMIT.toLocaleString("en")} credits — check the number.`,
@@ -1105,7 +1124,7 @@ export const adminAdjust = mutation({
 				credits: amount,
 				source: "adjust",
 				type: "adjust",
-				reason: "adjust",
+				reason: enterpriseBlock === true ? "enterprise_block" : "adjust",
 				refId: `adjust:${now}`,
 				note: cleaned,
 				createdBy: adminSubject,
@@ -1152,12 +1171,64 @@ export const adminAdjust = mutation({
 	},
 });
 
+/** A custom grant's bounds — shared by the admin lever and the Enterprise
+ * contract (T6), so "included credits" can't take a value the lever refuses. */
+export function grantOverrideProblem(grant: number): string | null {
+	if (!Number.isInteger(grant) || grant < 0 || grant > ADMIN_CREDIT_LIMIT)
+		return `A custom grant is a whole number of credits from 0 to ${ADMIN_CREDIT_LIMIT.toLocaleString("en")}.`;
+	return null;
+}
+
+/**
+ * Set or clear (null) a store's custom monthly grant — the ONE writer of
+ * `creditAccounts.grantOverride`, for the admin lever below and the
+ * Enterprise contract (T6), whose included credits ARE this override. A
+ * HIGHER grant lands its difference now, like an upgrade; a lower one, or
+ * clearing it, waits for the next period, like a downgrade. A trialing store
+ * keeps its trial allowance until it converts. Callers validate and audit.
+ */
+export async function writeGrantOverride(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	grant: number | null,
+	by: string,
+	now: number,
+): Promise<{ plan: number; periodGrant: number }> {
+	const ensured = await ensureCreditAccount(ctx, retailerId, now);
+	if (!ensured) throw new ConvexError("Store not found");
+	const grantOverride = grant ?? undefined;
+	await ctx.db.patch(ensured.account._id, { grantOverride, updatedAt: now });
+	let account: Account = { ...ensured.account, grantOverride, updatedAt: now };
+	const regime = await regimeFor(ctx, retailerId, account, now);
+	if (regime?.kind === "monthly" && regime.grant > account.periodGrant) {
+		account = await applyEntry(
+			ctx,
+			account,
+			{
+				type: "grant",
+				bucket: "plan",
+				amount: regime.grant - account.periodGrant,
+				reason: "plan",
+				periodKey: account.periodKey,
+				createdBy: by,
+			},
+			now,
+			{ periodGrant: regime.grant },
+		);
+	}
+	return { plan: account.planBalance, periodGrant: account.periodGrant };
+}
+
 /**
  * Admin: set (or clear, with null) a custom monthly grant for one store — a
  * partner deal, a pilot. It beats every tier grant, and the store gets no
  * upgrade nudges. A HIGHER grant lands its difference now, like an upgrade; a
  * lower one waits for the next period, like a downgrade. A trialing store
  * keeps its trial allowance until it converts. Audited.
+ *
+ * On an ENTERPRISE store the override IS the contract's included credits
+ * (T6): setting it updates the contract too — changing one changes the
+ * other — and clearing it is refused while the store is on the contract.
  */
 export const adminSetGrantOverride = mutation({
 	args: {
@@ -1171,43 +1242,35 @@ export const adminSetGrantOverride = mutation({
 		const adminSubject = await requireAdmin(ctx);
 		const retailer = await ctx.db.get(retailerId);
 		if (!retailer) throw new ConvexError("Store not found");
-		if (
-			grant !== null &&
-			(!Number.isInteger(grant) || grant < 0 || grant > ADMIN_CREDIT_LIMIT)
-		)
-			throw new ConvexError(
-				`A custom grant is a whole number of credits from 0 to ${ADMIN_CREDIT_LIMIT.toLocaleString("en")}.`,
-			);
-		const now = Date.now();
-		const ensured = await ensureCreditAccount(ctx, retailerId, now);
-		if (!ensured) throw new ConvexError("Store not found");
-		const grantOverride = grant ?? undefined;
-		await ctx.db.patch(ensured.account._id, { grantOverride, updatedAt: now });
-		let account: Account = { ...ensured.account, grantOverride, updatedAt: now };
-		const regime = await regimeFor(ctx, retailerId, account, now);
-		if (regime?.kind === "monthly" && regime.grant > account.periodGrant) {
-			account = await applyEntry(
-				ctx,
-				account,
-				{
-					type: "grant",
-					bucket: "plan",
-					amount: regime.grant - account.periodGrant,
-					reason: "plan",
-					periodKey: account.periodKey,
-					createdBy: adminSubject,
-				},
-				now,
-				{ periodGrant: regime.grant },
-			);
+		const problem = grant === null ? null : grantOverrideProblem(grant);
+		if (problem) throw new ConvexError(problem);
+		const sub = await ctx.db
+			.query("subscriptions")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.first();
+		if (sub?.plan === "enterprise" && sub.enterprise) {
+			if (grant === null)
+				throw new ConvexError(
+					"This store is on an Enterprise contract — its included credits are the contract's. Change them there, or move the store to Pro.",
+				);
+			await ctx.db.patch(sub._id, {
+				enterprise: { ...sub.enterprise, includedCredits: grant },
+			});
 		}
+		const result = await writeGrantOverride(
+			ctx,
+			retailerId,
+			grant,
+			adminSubject,
+			Date.now(),
+		);
 		await logAdminAction(
 			ctx,
 			{ retailer, role: "admin", actingAsAdmin: true, userId: adminSubject },
 			"credits.adminSetGrantOverride",
 			retailerId,
 		);
-		return { plan: account.planBalance, periodGrant: account.periodGrant };
+		return result;
 	},
 });
 

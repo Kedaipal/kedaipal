@@ -3,13 +3,18 @@
 // carried on `getMyRetailer().subscription`. See docs/manual-subscription.md.
 
 import type { CompKind } from "../../convex/lib/comp";
-import type { PlanFeature } from "../../convex/lib/plans";
+import type {
+	BillingCurrency,
+	ListedPlan,
+	Plan,
+	PlanFeature,
+} from "../../convex/lib/plans";
 import { type CreditUnlockRoute, creditTone } from "./credits-ui";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type SubscriptionView = {
-	plan: "starter" | "pro" | "scale";
+	plan: Plan;
 	status: "trialing" | "active" | "past_due" | "cancelled" | "on_hold";
 	/** Optional on the mirror (the server always sends it) so a payload rendered
 	 * from an older cache degrades to "monthly" rather than throwing. */
@@ -49,8 +54,17 @@ export type SubscriptionView = {
 	foundingIntent?: boolean;
 	/** A downgrade taking effect at the end of the paid period (86eyb6z4r). */
 	pendingPlanChange?: {
-		plan: "starter" | "pro" | "scale";
+		plan: ListedPlan;
 		effectiveAt: number;
+	};
+	/** The Enterprise contract's seller-facing terms (Credits T6) — owner
+	 * payload only, present iff `plan` is `enterprise`. */
+	enterprise?: {
+		baseFeeMinor: number;
+		currency: BillingCurrency;
+		includedCredits: number;
+		overageRateMinor: number;
+		blockSize: number;
 	};
 };
 
@@ -159,11 +173,12 @@ export function storeReadOnlyReason(
 		: "Your subscription is past due, so your store is view-only. Pay your invoice to start working again.";
 }
 
-/** Canonical short tier labels (Starter/Pro/Scale) for the nav pill + billing UI. */
+/** Canonical short tier labels (Starter/Pro/Enterprise) for the nav pill +
+ * billing UI. */
 export const PLAN_LABEL: Record<SubscriptionView["plan"], string> = {
 	starter: "Starter",
 	pro: "Pro",
-	scale: "Scale",
+	enterprise: "Enterprise",
 };
 
 /** Whole days until a future timestamp (rounded up, never negative). */

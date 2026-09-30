@@ -11,21 +11,21 @@ import {
 	FOUNDING_PRO_CREDIT_GRANT,
 	foundingPlanLocked,
 	isPlanSelectable,
-	PLAN_CAPS,
+	LISTED_PLANS,
+	type ListedPlan,
 	PLAN_CREDIT_GRANT,
-	type Plan,
-	PLANS,
 	planPrice,
 } from "../../../convex/lib/plans";
 import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
 import { includedCreditsLabel, planPickCreditLine } from "../../lib/credits-ui";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import type { SubscriptionView } from "../../lib/subscription";
+import { EnterpriseOffer } from "./enterprise-offer";
 import { OwnerOnlyNote } from "./owner-only-note";
 
 type Cycle = "monthly" | "annual";
 
-const PLAN_PITCH: Record<Plan, { name: string; pitch: string }> = {
+const PLAN_PITCH: Record<ListedPlan, { name: string; pitch: string }> = {
 	starter: {
 		name: "Starter",
 		pitch: "Storefront, orders + WhatsApp confirmations",
@@ -34,13 +34,6 @@ const PLAN_PITCH: Record<Plan, { name: string; pitch: string }> = {
 		name: "Pro",
 		pitch:
 			"Everything in Starter + customer database, order inbox, insights, online payments",
-	},
-	// Scale opened with the credits release (z8r3fdfuhq). Its pitch is what's
-	// LIVE — the team room; its volume is the credits line every plan row
-	// carries, so the number isn't said twice. Never the outlets, not built yet.
-	scale: {
-		name: "Scale",
-		pitch: `Everything in Pro + room for ${PLAN_CAPS.scale.userCap - 1} teammates`,
 	},
 };
 
@@ -55,10 +48,12 @@ const PLAN_PITCH: Record<Plan, { name: string; pitch: string }> = {
  *
  * A store on founding pricing is offered Founding Pro and nothing else — the
  * cycle is still theirs to choose (Zaki, 17 Sep 2026). `subscribeSelf` refuses
- * any other tier server-side.
+ * any other tier server-side. Everyone else also sees Enterprise, which is
+ * never subscribed to here: it opens a chat with Arif (Credits T6).
  */
 export function PlanPickerCard({
 	sub,
+	slug,
 	currency,
 	renewing,
 	foundingPricing,
@@ -69,6 +64,8 @@ export function PlanPickerCard({
 	balance,
 }: {
 	sub: SubscriptionView;
+	/** The store's slug — named in the Enterprise chat's opening line. */
+	slug: string;
 	currency: BillingCurrency;
 	/** past_due / cancelled ⇒ "renew" framing instead of "choose". */
 	renewing: boolean;
@@ -99,14 +96,16 @@ export function PlanPickerCard({
 		api.subscriptionPayments.startAutoRenewSetup,
 	);
 	const founding = foundingPricing;
-	// Only the tiers this store may buy: every tier for sale (Scale included
-	// since z8r3fdfuhq), and a Founding Member stays on Founding Pro.
-	const plans = PLANS.filter(
+	// Only the listed tiers this store may buy, and a Founding Member stays on
+	// Founding Pro. Enterprise is never a pick here — it has its own row.
+	const plans = LISTED_PLANS.filter(
 		(p) => isPlanSelectable(p) && !foundingPlanLocked(p, founding),
 	);
 	// Default to the seller's current plan (a renewal shouldn't nudge them off
 	// it), which is Pro for every trial.
-	const [picked, setPlan] = useState<Plan>(sub.plan);
+	const [picked, setPlan] = useState<ListedPlan>(
+		sub.plan === "enterprise" ? "pro" : sub.plan,
+	);
 	// Derived, not stored: founding pricing is a live server answer, and a
 	// selection it rules out must never be what Subscribe sends.
 	const plan = plans.includes(picked) ? picked : FOUNDING_PLAN;
@@ -130,12 +129,12 @@ export function PlanPickerCard({
 		planPrice(plan, cycle, founding && plan === "pro", currency),
 		currency,
 	);
-	const planName = (p: Plan) =>
+	const planName = (p: ListedPlan) =>
 		founding && p === FOUNDING_PLAN ? "Founding Pro" : PLAN_PITCH[p].name;
 	// The allowance each plan grants — the same founding eligibility the
 	// server's grant uses (`foundingPriceEligible`), so the number quoted is
 	// the number that lands.
-	const grantFor = (p: Plan) =>
+	const grantFor = (p: ListedPlan) =>
 		founding && p === FOUNDING_PLAN
 			? FOUNDING_PRO_CREDIT_GRANT
 			: PLAN_CREDIT_GRANT[p];
@@ -185,7 +184,7 @@ export function PlanPickerCard({
 	// before the redirect, so a seller who abandons HitPay's page comes back to
 	// a pending invoice with the Pay-now button AND the bank/DuitNow details.
 
-	const priceLine = (p: Plan) => {
+	const priceLine = (p: ListedPlan) => {
 		const foundingApplies = founding && p === "pro";
 		const monthly = planPrice(p, "monthly", foundingApplies, currency);
 		const total = planPrice(p, cycle, foundingApplies, currency);
@@ -344,6 +343,18 @@ export function PlanPickerCard({
 						: `You'll authorise a card or Touch 'n Go once on HitPay's secure page and be charged ${price} now — then it renews automatically each ${cycle === "annual" ? "year" : "month"}. Turn it off any time; Kedaipal never sees your card or wallet details.`}
 				</p>
 			</div>
+
+			{/* Enterprise: the store that outgrows Pro plus packs — a chat, never
+			    a checkout, so it comes AFTER the pick → consequence → Subscribe
+			    run rather than splitting it. Not for a Founding Member (Founding
+			    Pro only). Disabled for a view-only viewer, with its reason beside
+			    it — the Subscribe note sits a paragraph above. */}
+			{founding ? null : (
+				<>
+					<EnterpriseOffer slug={slug} ownerOnly={ownerOnly} />
+					{ownerOnly ? <OwnerOnlyNote /> : null}
+				</>
+			)}
 		</section>
 	);
 }

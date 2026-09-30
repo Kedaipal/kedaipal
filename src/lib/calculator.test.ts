@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
 	CREDIT_PACKS,
+	ENTERPRISE_FROM_ORDERS,
+	type ListedPlan,
 	PLAN_CREDIT_GRANT,
 	PLAN_MONTHLY_PRICES,
 } from "../../convex/lib/plans";
@@ -26,7 +28,7 @@ import {
 function optionCost(
 	ordersPerWeek: number,
 	currency: "MYR" | "SGD",
-	plan: "starter" | "pro" | "scale",
+	plan: ListedPlan,
 ): number {
 	const shortfall =
 		monthlyOrdersFromWeekly(ordersPerWeek) - PLAN_CREDIT_GRANT[plan];
@@ -127,7 +129,7 @@ describe("recommendPlan — the plan a seller's volume actually needs (Credits T
 	 * derived from the billing tables, so a price or pack change re-derives the
 	 * expectation instead of leaving a stale literal to argue with.
 	 */
-	const price = (currency: "MYR" | "SGD", plan: "starter" | "pro" | "scale") =>
+	const price = (currency: "MYR" | "SGD", plan: ListedPlan) =>
 		PLAN_MONTHLY_PRICES[currency][plan];
 	const pack = (currency: "MYR" | "SGD", credits: number) => {
 		const found = CREDIT_PACKS[currency].find((p) => p.credits === credits);
@@ -145,7 +147,21 @@ describe("recommendPlan — the plan a seller's volume actually needs (Credits T
 		}
 	});
 
-	it("60 a week (~260 a month): Pro + 2 × 50 beats Scale in both currencies", () => {
+	it("30 a week (~130 a month): Starter + 1 × 50, and Pro is the honest comparison", () => {
+		for (const currency of ["MYR", "SGD"] as const) {
+			const r = recommendPlan(30, currency);
+			expect(r.monthlyOrders).toBe(130);
+			expect(shape(r.best), currency).toBe("starter + 1×50");
+			expect(r.best.monthlyMinor).toBe(
+				price(currency, "starter") + pack(currency, 50),
+			);
+			// "Cheaper than Pro at RM149" — Pro covers 130 on its own credits.
+			expect(shape(r.nextTierUp), currency).toBe("pro");
+			expect(r.nextTierUp?.monthlyMinor).toBe(price(currency, "pro"));
+		}
+	});
+
+	it("60 a week (~260 a month): Pro + 2 × 50 in both currencies", () => {
 		const my = recommendPlan(60, "MYR");
 		expect(shape(my.best)).toBe("pro + 2×50");
 		expect(my.best.monthlyMinor).toBe(
@@ -156,37 +172,39 @@ describe("recommendPlan — the plan a seller's volume actually needs (Credits T
 		expect(price("MYR", "starter") + pack("MYR", 200)).toBe(
 			my.best.monthlyMinor,
 		);
-		expect(my.best.monthlyMinor).toBeLessThan(price("MYR", "scale"));
 
 		const sg = recommendPlan(60, "SGD");
 		expect(shape(sg.best)).toBe("pro + 2×50");
 		expect(sg.best.monthlyMinor).toBe(
 			price("SGD", "pro") + 2 * pack("SGD", 50),
 		);
-		expect(sg.best.monthlyMinor).toBeLessThan(price("SGD", "scale"));
+		// Pro is the top LISTED tier — there is no bigger plan to compare
+		// against, and Enterprise (no price) is never one (T6).
+		expect(my.nextTierUp).toBeNull();
+		expect(sg.nextTierUp).toBeNull();
 	});
 
-	it("130 a week (~564 a month): the currencies part ways, honestly", () => {
-		// MYR: a 200-pack credit (RM0.80) undercuts what Scale charges per credit
-		// above Pro, so Pro + 2 × 200 (RM469) beats Scale + 2 × 50 (RM489).
-		const my = recommendPlan(130, "MYR");
-		expect(shape(my.best)).toBe("pro + 2×200");
-		expect(my.best.monthlyMinor).toBe(
-			price("MYR", "pro") + 2 * pack("MYR", 200),
-		);
-		expect(shape(my.nextTierUp)).toBe("scale + 2×50");
-		expect(my.nextTierUp?.monthlyMinor).toBe(
-			price("MYR", "scale") + 2 * pack("MYR", 50),
-		);
-		// SGD: Scale's extra credits are the cheap ones, so Scale + 2 × 50
-		// (S$193) beats Pro + 2 × 200 (S$209).
-		const sg = recommendPlan(130, "SGD");
-		expect(shape(sg.best)).toBe("scale + 2×50");
-		expect(sg.best.monthlyMinor).toBe(
-			price("SGD", "scale") + 2 * pack("SGD", 50),
-		);
-		// Scale is the top tier — there is no bigger plan to compare against.
-		expect(sg.nextTierUp).toBeNull();
+	it("130 a week (~564 a month): Pro + 2 × 200 in both currencies", () => {
+		for (const currency of ["MYR", "SGD"] as const) {
+			const r = recommendPlan(130, currency);
+			expect(shape(r.best), currency).toBe("pro + 2×200");
+			expect(r.best.monthlyMinor).toBe(
+				price(currency, "pro") + 2 * pack(currency, 200),
+			);
+			expect(r.nextTierUp).toBeNull();
+		}
+	});
+
+	it("never recommends Enterprise — it has no price, and the slider stops short of it", () => {
+		// The PlanOption type already forbids it; this pins the claim the
+		// type's comment makes: the busiest volume the page can express is
+		// below where Enterprise begins, so "Pro + top-ups" never pretends to
+		// be the answer for a seller who should be talking to us.
+		for (const currency of ["MYR", "SGD"] as const) {
+			const max = BOUNDS_FOR[currency].ordersPerWeek.max;
+			expect(monthlyOrdersFromWeekly(max)).toBeLessThan(ENTERPRISE_FROM_ORDERS);
+			expect(recommendPlan(max, currency).best.plan).toBe("pro");
+		}
 	});
 
 	it("always covers the volume it quotes", () => {
@@ -205,7 +223,7 @@ describe("recommendPlan — the plan a seller's volume actually needs (Credits T
 		for (const currency of ["MYR", "SGD"] as const) {
 			for (let w = 0; w <= BOUNDS_FOR[currency].ordersPerWeek.max; w++) {
 				const r = recommendPlan(w, currency);
-				for (const plan of ["starter", "pro", "scale"] as const) {
+				for (const plan of ["starter", "pro"] as const) {
 					expect(
 						r.best.monthlyMinor,
 						`${currency} ${w}/wk vs ${plan}`,
@@ -226,7 +244,8 @@ describe("recommendPlan — the plan a seller's volume actually needs (Credits T
 		expect(optionCost(60, "MYR", "starter")).toBe(
 			recommendPlan(60, "MYR").best.monthlyMinor,
 		);
-		expect(recommendPlan(60, "MYR").nextTierUp?.plan).toBe("scale");
+		expect(recommendPlan(60, "MYR").best.plan).toBe("pro");
+		expect(recommendPlan(60, "MYR").nextTierUp).toBeNull();
 	});
 });
 

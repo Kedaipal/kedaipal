@@ -260,12 +260,12 @@ describe("opening an account", () => {
 		const t = setup();
 		const starter = await makeStore(t, { status: "active", plan: "starter" });
 		expect(await balances(t, starter.retailerId)).toEqual({ plan: 100, purchased: 0 });
-		const scale = await makeStore(
+		const pro = await makeStore(
 			t,
-			{ status: "active", plan: "scale" },
-			{ userId: "user_credits_scale" },
+			{ status: "active", plan: "pro" },
+			{ userId: "user_credits_pro" },
 		);
-		expect(await balances(t, scale.retailerId)).toEqual({ plan: 500, purchased: 0 });
+		expect(await balances(t, pro.retailerId)).toEqual({ plan: 200, purchased: 0 });
 		const lapsed = await makeStore(
 			t,
 			{ status: "past_due", plan: "pro" },
@@ -697,14 +697,14 @@ describe("billing lifecycle", () => {
 		expect((await account(t, ids.retailerId))?.planBalance).toBe(200);
 	});
 
-	test("an upgrade mid-period gets the difference now (Pro → Scale)", async () => {
+	test("an upgrade mid-period gets the difference now (Starter → Pro)", async () => {
 		const t = setup();
-		const ids = await makeStore(t, { status: "active", plan: "pro" });
+		const ids = await makeStore(t, { status: "active", plan: "starter" });
 		for (let i = 0; i < 50; i++) await order(t, ids.retailerId);
-		await pay(t, ids, "scale");
+		await pay(t, ids, "pro");
 		expect(await account(t, ids.retailerId)).toMatchObject({
-			planBalance: 450,
-			periodGrant: 500,
+			planBalance: 150,
+			periodGrant: 200,
 		});
 	});
 

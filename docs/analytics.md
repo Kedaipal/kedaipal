@@ -70,6 +70,7 @@ root's pageview effect).
 | `onboarding_start` | signed-in seller reaches the store-creation form AND the retailer query resolved to "no store yet" — an already-onboarded seller hitting `/onboarding` gets redirected, never counted | `onboarding.tsx` via [`useOnboardingStart`](../src/hooks/useOnboardingStart.ts) |
 | `store_created` | `createRetailer` succeeded (never on validation failure) | `onboarding.tsx` |
 | `credits_topup_started` | a seller (or a teammate with credits write) submits the credit-pack picker — `pack_id`, `value` (major units), `currency`. Fired BEFORE the HitPay redirect; the paid half is the server-side `credits_topup_paid` below, so started ÷ paid is the checkout drop-off (Credits T2, z8r3fdf8ht) | `credit-top-up-dialog.tsx` |
+| `enterprise_talk_clicked` | someone taps **Talk to Arif** on an Enterprise card — `surface` = `pricing` \| `teaser` \| `billing`. Enterprise has no checkout, so this chat is its only door and this is its one lead signal (Credits T6, z8r3fdkp8h). Not a key event: a lead, not revenue — the contract is set by hand | `pricing.tsx`, `pricing-teaser.tsx`, `enterprise-offer.tsx` |
 
 **Every event auto-carries the `src` param** when the session arrived tagged:
 [`src/lib/marketing-attribution.ts`](../src/lib/marketing-attribution.ts)

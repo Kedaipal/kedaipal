@@ -47,6 +47,7 @@ import {
 	topUpRefusal,
 	topUpRefusalMessage,
 } from "./lib/creditPurchases";
+import { enterpriseBlockPrice } from "./lib/enterprise";
 import {
 	buildCreditPackPaymentRequestParams,
 	gatewayPaymentMethodLabel,
@@ -258,8 +259,18 @@ export type TopUpOptions = {
 	/** Past due, read by the owner: the invoice that is the way out. */
 	pendingInvoice: { invoiceNumber: string; payNowUrl: string | null } | null;
 	/** An ordinary Starter store: the plan that includes more orders a month.
-	 * Null where no upgrade is on offer (Pro/Scale, founding, custom grant). */
+	 * Null where no upgrade is on offer (Pro, Enterprise, founding, custom grant). */
 	upgradeHint: { planLabel: string; monthlyCredits: number } | null;
+	/** An Enterprise store's overage block, at its contract rate (Credits T6) —
+	 * named beside the packs, where credits are bought, so the cheaper route
+	 * is found at the moment it matters. A block is invoiced by hand and
+	 * landed by an admin (`credits.adminAdjust`); it is never bought here. */
+	contractBlock: {
+		credits: number;
+		ratePerCreditMinor: number;
+		priceMinor: number;
+		currency: BillingCurrency;
+	} | null;
 	/** A teammate is buying — they pay on HitPay's page themselves and the
 	 * owner is emailed the receipt. */
 	buyerIsMember: boolean;
@@ -341,6 +352,15 @@ export const topUpOptions = query({
 			upgradeHint: plainStarter
 				? { planLabel: "Pro", monthlyCredits: PLAN_CREDIT_GRANT.pro }
 				: null,
+			contractBlock:
+				sub?.plan === "enterprise" && sub.enterprise
+					? {
+							credits: sub.enterprise.blockSize,
+							ratePerCreditMinor: sub.enterprise.overageRateMinor,
+							priceMinor: enterpriseBlockPrice(sub.enterprise),
+							currency: sub.enterprise.currency,
+						}
+					: null,
 			buyerIsMember: access.role === "member",
 		};
 	},

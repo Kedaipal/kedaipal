@@ -23,9 +23,12 @@ A pending invoice is created in two ways:
    amount auto-derived from `lib/plans`). This is the path for trial **conversions**
    and **renewals**, and for onboarding a **Founding-10** member (founding toggle =
    30% Pro discount). Guards: founding-non-Pro and a duplicate pending per
-   retailer. (It also refused Scale as "unavailable for v1" until Scale opened
-   for purchase with the credits release, `z8r3fdfuhq` — the plan buttons now
-   offer Starter, Pro and Scale.)
+   retailer. The plan buttons offer **Starter and Pro**; an **Enterprise**
+   invoice is priced from the store's contract (`subscriptionPrice` →
+   `enterprisePrice`) and is refused for a store without one — a contract is
+   set in the seller sheet first ([`pricing.md` →
+   Enterprise](./pricing.md#enterprise--a-contract-not-a-price)). (Scale, briefly
+   purchasable with `z8r3fdfuhq`, was retired before release by T6.)
 2. **Founding-intent signup** — `createRetailer({ intent: "founding" })` reserves the
    rank + flags `foundingIntent`, but issues **no** auto-invoice (Arif issues it).
 
@@ -80,7 +83,7 @@ members; the full rule, the surfaces and the unresolved terms conflict are in
 **Nav pill (`TierPill`, sidebar + mobile header + settings card).** A founding
 member's status chip reads **"Founding #N"** (± trial/past-due state), which on
 its own hides their actual tier — so the pill renders a **second neutral tier
-chip** (Starter/Pro/Scale) beside it, both wrapped in one link to Settings →
+chip** (Starter/Pro/Enterprise) beside it, both wrapped in one link to Settings →
 Billing. Non-founding sellers keep the single tier chip (their status pill *is*
 the tier); an admin's own store still shows only the "Admin" chip (→ console).
 The pair wraps as a unit and inherits the header's smaller text so it stays neat
@@ -529,9 +532,10 @@ load-bearing** and each rung is a unit test:
 | 1 | Admin on their own store | `hidden` |
 | 2 | No subscription row | `hidden` |
 | 3 | `comped` | `hidden` |
+| 3b | An **Enterprise** contract — its term is set on the contract (T6) | `hidden` |
 | 4 | A **pending invoice already `annual`** | `pendingAnnual` |
 | 5 | `subscription.billingCycle === "annual"` | `onAnnual` |
-| 6 | Plan not in `ANNUAL_OFFER_PLANS` (**Pro and Scale**) | `hidden` |
+| 6 | Plan not in `ANNUAL_OFFER_PLANS` (**Pro** only) | `hidden` |
 | 7 | `status !== "active"` | `hidden` |
 | 8 | Fewer than `ANNUAL_MIN_PAID_INVOICES` (**2**) paid invoices | `hidden` |
 | 9 | Pending monthly invoice due in `< ANNUAL_SWAP_MIN_DAYS` (**4**) | `switchDeferred` |
@@ -548,11 +552,14 @@ Three of those rungs exist because of a specific failure:
 - **Rung 5 before the plan gate.** A seller already billed annually is told so on
   **any** plan. Hiding a true fact about their own billing because their tier is
   off-list is a lie by omission.
-- **Rung 6 is Pro and Scale.** Starter is excluded by owner decision (a year
-  upfront contradicts start-when-you-sell). Scale was held out only while
-  `issueInvoice` refused it — a dead-end CTA — and joined in the change that
-  made it purchasable (`z8r3fdfuhq`, 30 Sep 2026). A Starter seller is still
-  *told* annual exists, and *why not on Starter*, in the Starter → Pro nudge.
+- **Rung 6 is Pro only.** Starter is excluded by owner decision (a year
+  upfront contradicts start-when-you-sell). A Starter seller is still *told*
+  annual exists, and *why not on Starter*, in the Starter → Pro nudge.
+- **Rung 3b before rung 5.** An Enterprise store's term — monthly or a prepaid
+  year — is part of its contract, and its contract card already states it. An
+  "On annual billing" card there would repeat the term and invite a self-serve
+  plan change the server refuses, so the card never renders for a contract
+  (T6, pinned by `annual-billing.test.ts`).
 
 **Credits on annual (Kedaipal Credits).** An annual seller is granted credits
 **monthly**, never twelve months at once, and the monthly grant in force when
@@ -798,7 +805,7 @@ never withheld.
 
 The pricing table's **live** ✓/– feature rows are now enforced, not just
 advertised. Catalog: `PLAN_FEATURES`/`featuresForPlan` in `convex/lib/plans.ts`
-(Starter: no `crm`, `orderInbox` or `chargeablePickup`; Pro/Scale: all). `resolveAccess` resolves
+(Starter: no `crm`, `orderInbox` or `chargeablePickup`; Pro/Enterprise: all). `resolveAccess` resolves
 them onto `AccessState.features` — **the only place `plan` is read for
 gating**; every check reads the resolved descriptor, so per-retailer overrides
 stay possible later. Fail-safe: a missing subscription row resolves to Pro
@@ -945,29 +952,29 @@ deploy-time floor.
 
 ## Pricing / caps — single source of truth
 
-`convex/lib/plans.ts`. Starter RM79 / Pro RM149 / Scale **RM399** (S$29 / S$59 /
-S$149; the 30 Aug 2026 reset, `z8r3fday24`); founding Pro RM104 (Scale RM279,
-unreachable at launch — founding is retired for new signups, existing members keep
-theirs); Off-Season Hold **RM19 / S$9** (`HOLD_MONTHLY_PRICES`); additional outlet
-RM49 / S$18 (quoted nowhere while outlets are coming soon). Caps (orders /
-people / broadcasts): Starter 100/1/0, Pro **200**/3/100, Scale **500**/6/500 —
-the orders are the monthly credit grants (`PLAN_CREDIT_GRANT`, which
-`PLAN_CAPS.orderCap` derives from) that `/pricing` prints, all finite since
-Arif's 2026-06-28 decision dropped Scale's "unlimited" (kept an upsell ceiling
-for a future Enterprise tier). The `UNLIMITED`/`isUnlimited` sentinel stays
-exported for that future tier but no plan uses it. Scale is **selectable** since
-the credits release (`isPlanSelectable`, `z8r3fdfuhq`) and still grants **no**
-Founding badge (`planQualifiesForFounding`, Arif's 2026-05-28 decision) — a
-founding store stays on Founding Pro.
+`convex/lib/plans.ts`. Starter RM79 / Pro RM149 (S$29 / S$59; the 30 Aug 2026
+reset, `z8r3fday24`); **Enterprise has no list price** — every Enterprise
+invoice is priced from the store's contract (Credits T6, `z8r3fdkp8h`;
+[`pricing.md` → Enterprise](./pricing.md#enterprise--a-contract-not-a-price)).
+Founding Pro RM104 (founding is retired for new signups, existing members keep
+theirs); Off-Season Hold **RM19 / S$9** (`HOLD_MONTHLY_PRICES`). Caps (orders /
+people / broadcasts): Starter 100/1/0, Pro **200**/3/100 — the orders are the
+monthly credit grants (`PLAN_CREDIT_GRANT`, which `PLAN_CAPS.orderCap` derives
+from) that `/pricing` prints. Enterprise is `UNLIMITED` orders (the ledger meters
+its contract's included credits — the cap is never the gate) and `UNLIMITED`
+seats, with Pro's broadcast quota until broadcasts ship. Enterprise is never
+`isPlanSelectable` (no self-serve door) and grants **no** Founding badge
+(`planQualifiesForFounding`, Arif's 2026-05-28 decision) — a founding store
+stays on Founding Pro and can't be put on a contract.
 
-> **Scale = flat multi-outlet tier (ClickUp 86eyb9zwt, supersedes 86ey4gaju).**
-> The public pricing surface shows Scale as the **multi-outlet / high-volume** tier
-> at **RM399/mo flat** (no bands, no metering; the reseller band table was removed
-> after the 1 Jul ICP audit). **Purchasable since 30 Sep 2026** (`z8r3fdfuhq`) on
-> what is live — 500 credits a month and you + 5 teammates — while the Scale
-> build (multi-outlet management, outlet counting, RM49 / S$18 additional-outlet
-> billing) stays "Coming soon" on the rows that need it. See
-> [`pricing.md`](./pricing.md).
+> **Scale is retired; Enterprise is the third tier (Credits T6, 1 Oct 2026,
+> ClickUp z8r3fdkp8h — supersedes 86eyb9zwt's flat multi-outlet Scale and
+> z8r3fdfuhq's opening of it).** Scale at RM399 for 500 credits was Pro plus
+> packs under a new name, and anchored an enterprise buyer on SME pricing
+> (Arif, 30 Sep). The third card is now **Enterprise: Custom · Talk to Arif**,
+> quoted per deal, billed from a per-store contract. Multi-outlet stays
+> "Coming soon" — as Enterprise terms. See
+> [`pricing.md`](./pricing.md#enterprise--a-contract-not-a-price).
 
 > **Order allowances now match the page (ClickUp 86eye2ccu, landed via z8r3fday24).**
 > `/pricing` advertised **Starter 100 / Pro 200 / Scale 400** ahead of enforcement

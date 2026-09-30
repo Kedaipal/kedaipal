@@ -401,7 +401,7 @@ export function sellerReason(row: AdminSellerRow): string | undefined {
 const PLAN_LABEL: Record<NonNullable<AdminSellerRow["plan"]>, string> = {
 	starter: "Starter",
 	pro: "Pro",
-	scale: "Scale",
+	enterprise: "Enterprise",
 };
 
 /** Team seats, one spelling for every surface (86exr91r4): people with

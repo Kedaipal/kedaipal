@@ -52,13 +52,17 @@ function formatDueDate(ms: number): string {
 	return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 }
 
-function planLabel(
+/** "Pro · Monthly" — what an invoice email calls the thing it bills. An
+ * Enterprise bill names its CONTRACT, never a plan (T6): the invoice PDF's
+ * "Kedaipal Enterprise Contract" line, said the same way here. */
+export function invoicePlanLabel(
 	plan: string,
 	cycle: string,
 	kind: "plan" | "hold" = "plan",
 ): string {
 	const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 	if (kind === "hold") return `${HOLD_LABEL} · ${cap(cycle)}`;
+	if (plan === "enterprise") return `Enterprise contract · ${cap(cycle)}`;
 	return `${cap(plan)} · ${cap(cycle)}`;
 }
 
@@ -200,7 +204,7 @@ async function sendInvoiceEmail(
 	const { subject, html, text } = renderBillingEmail(meta.locale, key, {
 		storeName: meta.storeName,
 		invoiceNumber: meta.invoiceNumber,
-		planLabel: planLabel(meta.plan, meta.billingCycle, meta.kind),
+		planLabel: invoicePlanLabel(meta.plan, meta.billingCycle, meta.kind),
 		totalFormatted: formatMoney(meta.total, meta.currency),
 		baseFormatted: hasDiscount
 			? formatMoney(meta.amount, meta.currency)
@@ -653,7 +657,7 @@ export const notifyPaymentReceived = internalAction({
 		const key: PaymentEmailKey = firstTime ? "welcome" : "thanks";
 		const { subject, html, text } = renderPaymentEmail(meta.locale, key, {
 			storeName: meta.storeName,
-			planLabel: planLabel(meta.plan, meta.billingCycle, meta.kind),
+			planLabel: invoicePlanLabel(meta.plan, meta.billingCycle, meta.kind),
 			totalFormatted: formatMoney(meta.total, meta.currency),
 			dashboardUrl: billingPageUrl(),
 		});
@@ -720,13 +724,14 @@ export const getAutoRenewEmailContext = internalQuery({
 			paidThrough: sub.currentPeriodEnd,
 			lastPaidCurrency: lastPaid?.currency,
 			country: retailer.country,
+			enterprise: sub.enterprise,
 			now: Date.now(),
 		});
 		return {
 			notifyEmail: retailer.notifyEmail,
 			storeName: retailer.storeName,
 			locale: (retailer.locale as Locale | undefined) ?? "en",
-			planLabel: planLabel(quote.plan, quote.billingCycle, quote.kind),
+			planLabel: invoicePlanLabel(quote.plan, quote.billingCycle, quote.kind),
 			amountFormatted: formatMoney(quote.amount, quote.currency),
 			payNowUrl: pending?.gatewayPayment?.url,
 		};

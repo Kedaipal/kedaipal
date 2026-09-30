@@ -37,19 +37,48 @@ order, and **the storefront never pauses** — running out locks the *seller*
 | --- | --- |
 | Starter | 100 |
 | Pro | 200 |
-| Scale | 500 |
+| Enterprise | **the contract's included credits** (HSL: 1,500) — see [Enterprise](#enterprise-the-contract-is-the-grant-t6) |
 | Founding Pro (closed cohort, MY RM104 / SG S$41) | 300, for life |
 | Free trial | **200, one-off for the whole trial** (Zaki, 30 Sep 2026) |
 
 `PLAN_CREDIT_GRANT` in `convex/lib/plans.ts` is **the** per-plan order
 allowance — `PLAN_CAPS.orderCap` is derived from it ("one number, one source"),
 so the plan cards, the meter and the ledger can't disagree (the soft-cap meter
-it replaced is gone — T3). Scale moved from 400 to 500
-with this change; subscription rows carry `orderCap` denormalized, hence the
-`resyncSubscriptionCaps` step below.
+it replaced is gone — T3). It has no Enterprise key: a contract's grant is a
+per-store number, so it lives on the store (below). (Scale's 500 went with
+Scale, retired before release by T6.)
 
 **Grant precedence** (`monthlyCreditGrant`): an admin's custom grant → the grant
 an annual payment locked for its term → Founding Pro 300 → the plan's grant.
+An Enterprise store's grant is always the first line — its contract writes it
+there.
+
+### Enterprise: the contract is the grant (T6)
+
+A store on an Enterprise contract ([`pricing.md` →
+Enterprise](./pricing.md#enterprise--a-contract-not-a-price)) is granted its
+contract's **`includedCredits`** every month, and those credits live in exactly
+one field: `creditAccounts.grantOverride`. `enterprise.setContract` writes the
+override in the same mutation that saves the contract, and
+`credits.adminSetGrantOverride` on a contract store edits the contract's
+number too — changing one changes the other, and clearing the override is
+refused while the store is on a contract. Raising it lands the difference this
+month, exactly like an upgrade. When a scheduled move to Pro settles, the
+contract and the override are cleared together: this month's credits stay,
+next month is Pro's 200. Should the override ever be missing on an Enterprise
+row, `monthlyCreditGrant` falls back to Pro's grant rather than zero — a data
+fault must not lock a contract customer.
+
+**Overage blocks are bought credits.** A block (HSL: 5,000 at RM0.60) is
+invoiced by hand and landed with `credits.adminAdjust` into the **purchased**
+bucket under reason **`enterprise_block`** — contract stores only, positive
+amounts only. It then behaves like any pack: 12 months, spent after the monthly
+credits, counted in "Unused bought credits". The seller's activity list reads
+"Enterprise block — extra credits under your contract". The top-up dialog
+names the contract's block rate beside the packs, with an "Ask us for a block"
+chat for the owner (`topUpOptions.contractBlock`); the packs themselves stay on
+sale. Lock rules are Pro's unless comped, and a contract store is never shown
+an upgrade hint — there is no plan above a contract.
 
 ### The trial: 14 days or 200 orders, whichever comes first
 
@@ -87,7 +116,7 @@ monthly grant rather than a one-off trial allowance that would never refresh.
 
 ### Plan changes
 
-- **Upgrade** (e.g. Pro → Scale mid-month): the difference lands at once — the
+- **Upgrade** (e.g. Starter → Pro mid-month): the difference lands at once — the
   bucket becomes `newGrant − used this period`.
 - **Downgrade**: nothing changes this period; the next refresh grants the lower
   plan. A downgrade never takes credits back mid-month.
@@ -221,8 +250,10 @@ manager preset includes *view*.
 
 ## Public surfaces (T5)
 
-ClickUp [`z8r3fdfu31`](https://app.clickup.com/t/z8r3fdfu31), with "Open Scale
-for purchase" ([`z8r3fdfuhq`](https://app.clickup.com/t/z8r3fdfuhq)) folded in.
+ClickUp [`z8r3fdfu31`](https://app.clickup.com/t/z8r3fdfu31). "Open Scale for
+purchase" ([`z8r3fdfuhq`](https://app.clickup.com/t/z8r3fdfuhq)) was folded in,
+then cancelled before release by Enterprise (T6,
+[`z8r3fdkp8h`](https://app.clickup.com/t/z8r3fdkp8h)).
 The rule: on release day the dashboard, `/pricing`, the landing, `/cost`, the
 emails and the Terms say the same thing, in en/ms/zh, for MY and SG visitors —
 a prospect finds nothing to discover after signup.
@@ -239,12 +270,12 @@ for the FAQPage JSON-LD mirror, so it spells "14 days or 200 orders" and
 
 | Surface | What it says | Where |
 | --- | --- | --- |
-| `/pricing` tier cards | "{credits} credits a month — 1 per order"; Scale's CTA is plan-aware like the other two | `src/routes/pricing.tsx` |
-| `/pricing` table | "Credits a month (1 credit = 1 order)" — 100 / 200 / 500, **per month in both toggle positions** | same |
+| `/pricing` tier cards | "{credits} credits a month — 1 per order" on Starter and Pro; Enterprise "Credits sized to your volume", "Custom", and "Talk to Arif" | `src/routes/pricing.tsx` |
+| `/pricing` table | "Credits a month (1 credit = 1 order)" — 100 / 200 / Custom, **per month in both toggle positions** | same |
 | Under the table | "1 credit = 1 order. Need more in a busy month? Top-ups start at {price} for {credits} credits." — the visitor's currency's smallest pack; S$ never beside RM | same |
 | Under the annual toggle | "On annual you get the same credits every month, locked in for the year you paid." | same |
 | `/pricing` FAQ | When do I start paying? · What is a credit? · Is my price changing? · What happens if I run out? · Do unused credits carry over? · Can I switch plans? · Same credits on annual? | same |
-| Landing teaser | one sub line (every plan includes a monthly order allowance); each card opens on its credits; Scale's unbuilt rows wear "Soon" | `src/components/landing/pricing-teaser.tsx` |
+| Landing teaser | one sub line (every plan includes a monthly order allowance); Starter and Pro open on their credits, Enterprise on "Credits sized to your volume"; Enterprise's unbuilt rows wear "Soon" | `src/components/landing/pricing-teaser.tsx` |
 | `/cost` | the plan the visitor's volume needs — plan + cheapest top-ups, never a flat Pro | `recommendPlan`, `src/lib/calculator.ts` |
 | `/terms#credits`, `/terms#data-processing` | the credits clauses and the processor terms | `src/routes/terms.tsx` |
 | Emails | invoice emails name the billed plan's monthly credits (`monthlyCreditGrant` — a custom grant or Founding Pro's 300 in the member's own email); the first-invoice emails state the trial; the free-period nudge names each plan's credits | `convex/lib/billingEmailCopy.ts` |
@@ -284,8 +315,11 @@ trial's two bounds travelling together, and the banned vocabulary.
 
 After the release deploys (listed in the release PR's operator checklist):
 
-1. `npx convex run migrations:resyncSubscriptionCaps` — Scale's denormalized
-   `orderCap` 400 → 500.
+1. ~~`npx convex run migrations:resyncSubscriptionCaps`~~ — **not needed since
+   T6.** Its only job for this release was Scale's denormalized `orderCap`
+   400 → 500, Scale is retired with zero prod rows, and Starter's and Pro's
+   caps are unchanged. Harmless if run (idempotent; it would report
+   `patched: 0`).
 2. `npx convex run migrations:backfillCreditAccounts` — **once**; it batches
    and reschedules itself. Every store opens with the full grant its status
    earns today (never "grant − this month's orders"), so nobody starts in debt.
@@ -460,7 +494,9 @@ access (the note is the surface) · admin act-as (view-only note, reads the
 seller's store) · online top-ups unavailable (no packs, a WhatsApp link) ·
 opening HitPay. A Starter store also reads that Pro includes 200 orders a month
 and is cheaper for steady volume — a line, not a button; never shown where no
-upgrade is on offer (Pro, Scale, founding, a custom grant).
+upgrade is on offer (Pro, Enterprise, founding, a custom grant). An Enterprise
+store reads its contract's block rate there instead, with "Ask us for a block"
+for the owner.
 
 **The packs read like the /pricing cards** (Zaki, 1 Oct 2026 — "make the
 packages look enticing"): side-by-side cards, native radios (arrow keys move

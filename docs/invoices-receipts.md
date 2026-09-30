@@ -238,7 +238,7 @@ Backend:
   Unlike the reactive inbox (capped at a 1000-doc scan), the export **paginates
   the full result set** in 500-row pages via the internal `exportPage` query, so
   a bookkeeping export is never silently truncated to the latest 1000 orders. A
-  hard `EXPORT_SCAN_CAP` (20,000 docs ≈ 10 months at the Scale tier) bounds the
+  hard `EXPORT_SCAN_CAP` (20,000 docs ≈ 10 months at 2,000 orders a month, an Enterprise-sized store) bounds the
   worst case and is surfaced as a `capped` flag — the inbox warns the seller
   ("Exported the latest N … narrow the date range") rather than returning
   silently-incomplete books. Returns `{ csv, count, capped }`. An action (not a

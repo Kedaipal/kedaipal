@@ -1,7 +1,8 @@
 // Seat math + cap enforcement for team members (86exr91r4).
 //
-// `PLAN_CAPS.userCap` is TOTAL people including the owner (Starter 1 / Pro 3 /
-// Scale 6 — "You + 0/2/5 teammates"), so member rows get `userCap - 1` seats.
+// `PLAN_CAPS.userCap` is TOTAL people including the owner (Starter 1 / Pro 3 —
+// "You + 0/2 teammates"; Enterprise unlimited, T6), so member rows get
+// `userCap - 1` seats.
 // Pending invites hold a seat: an invite is a promise, and promising a 4th
 // person a seat on a 3-person plan is the lie the cap exists to prevent.
 //

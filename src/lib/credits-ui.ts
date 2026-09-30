@@ -86,6 +86,9 @@ export function creditStateLine(args: {
 	exempt: CreditLockExemption | null;
 	customGrant: boolean;
 	nextGrant: number | null;
+	/** The store is on an Enterprise contract (T6) — its allowance is the
+	 * contract's, and is named as such. */
+	enterprise?: boolean;
 }): string | null {
 	if (args.locked)
 		return args.total < 0
@@ -109,7 +112,9 @@ export function creditStateLine(args: {
 	if (args.status === "cancelled")
 		return `Your plan has ended, so no monthly credits are granted — choose a plan to get them again.${kept}`;
 	if (args.customGrant && args.nextGrant !== null)
-		return `Your store has a custom allowance of ${args.nextGrant} orders a month.`;
+		return args.enterprise
+			? `Your Enterprise contract includes ${args.nextGrant.toLocaleString("en")} orders a month.`
+			: `Your store has a custom allowance of ${args.nextGrant} orders a month.`;
 	return null;
 }
 
@@ -170,6 +175,7 @@ type ActivityRow = {
 		| "referral_referee"
 		| "referral_referrer"
 		| "adjust"
+		| "enterprise_block"
 		| "expiry";
 	amount: number;
 	refLabel?: string;
@@ -220,6 +226,8 @@ export function creditActivityLabel(row: ActivityRow): string {
 				return `${row.refLabel ?? "Order"} — removed by Kedaipal, credit returned`;
 			return `${row.refLabel ?? "Order"} — cancelled before you accepted it, credit returned`;
 		case "adjust":
+			if (row.reason === "enterprise_block")
+				return "Enterprise block — extra credits under your contract";
 			return row.amount >= 0 ? "Added by Kedaipal" : "Removed by Kedaipal";
 		case "expire":
 			if (row.reason === "trial")

@@ -215,6 +215,7 @@ export const billingGatewayAvailable = query({
 							pendingPlanChange: sub.pendingPlanChange?.plan,
 							lastPaidCurrency: lastPaid?.currency,
 							country: retailer.country,
+							enterprise: sub.enterprise,
 						})
 					: null,
 		};
@@ -600,6 +601,7 @@ export const autoRenewSetupContext = internalQuery({
 				paidThrough: sub.currentPeriodEnd,
 				lastPaidCurrency: lastPaid?.currency,
 				country: retailer.country,
+				enterprise: sub.enterprise,
 				now: Date.now(),
 			}),
 			comped: sub.comped === true,

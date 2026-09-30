@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isPlanSelectable, PLANS } from "../../convex/lib/plans";
+import { isPlanSelectable, LISTED_PLANS, PLANS } from "../../convex/lib/plans";
 import { resolveTierCta } from "./pricing-cta";
 import type { SubscriptionView } from "./subscription";
 
@@ -23,52 +23,58 @@ const signedIn = (subscription: SubscriptionView | null) => ({
 });
 
 describe("resolveTierCta", () => {
-	it("a tier that isn't for sale is a Coming soon pill, whatever the auth/plan state", () => {
+	it("a LISTED tier that isn't for sale is a Coming soon pill, whatever the auth/plan state", () => {
 		const closed = { selectable: false, isSignedIn: true };
-		expect(resolveTierCta("scale", { ...closed, subscription: null })).toBe(
+		expect(resolveTierCta("pro", { ...closed, subscription: null })).toBe(
 			"coming_soon",
 		);
 		expect(
-			resolveTierCta("scale", {
+			resolveTierCta("starter", {
 				selectable: false,
 				isSignedIn: false,
 				subscription: null,
 			}),
 		).toBe("coming_soon");
-		expect(
-			resolveTierCta("scale", {
-				...closed,
-				subscription: sub("pro", "active"),
-			}),
-		).toBe("coming_soon");
 	});
 
 	/**
-	 * Scale opened for purchase with the credits release (z8r3fdfuhq): the
-	 * public cards read the SAME gate the mutations enforce, so every tier —
-	 * Scale included — gets a real door, and Pro → Scale reads as an upgrade.
+	 * Enterprise (Credits T6) has no price and no self-serve door: its card is
+	 * a conversation for everyone — visitors, trials, paying stores — except
+	 * the store already on a contract (its Current plan) and a comp (included).
+	 * A store on a contract changes it by talking to us, so every OTHER tier
+	 * is "talk" for it too — never a billing-tab door that would refuse it.
 	 */
-	it("every tier is for sale, so Scale takes the same plan-aware CTA as the rest", () => {
-		for (const plan of PLANS) expect(isPlanSelectable(plan), plan).toBe(true);
-		const open = (
+	it("Enterprise is Talk to Arif — Current for a contract store, included for a comp", () => {
+		for (const plan of LISTED_PLANS)
+			expect(isPlanSelectable(plan), plan).toBe(true);
+		expect(isPlanSelectable("enterprise")).toBe(false);
+		const opts = (
 			subscription: SubscriptionView | null,
 			isSignedIn = true,
 		) => ({
-			selectable: isPlanSelectable("scale"),
+			selectable: isPlanSelectable("enterprise"),
 			isSignedIn,
 			subscription,
 		});
-		expect(resolveTierCta("scale", open(null, false))).toBe("trial");
-		expect(resolveTierCta("scale", open(sub("pro", "trialing")))).toBe(
-			"subscribe",
+		expect(resolveTierCta("enterprise", opts(null, false))).toBe("talk");
+		expect(resolveTierCta("enterprise", opts(null))).toBe("talk");
+		expect(resolveTierCta("enterprise", opts(sub("pro", "trialing")))).toBe(
+			"talk",
 		);
-		expect(resolveTierCta("scale", open(sub("pro", "active")))).toBe("upgrade");
-		expect(resolveTierCta("scale", open(sub("scale", "active")))).toBe(
-			"current",
+		expect(resolveTierCta("enterprise", opts(sub("pro", "active")))).toBe(
+			"talk",
 		);
-		expect(resolveTierCta("pro", signedIn(sub("scale", "active")))).toBe(
-			"manage",
+		expect(
+			resolveTierCta("enterprise", opts(sub("enterprise", "active"))),
+		).toBe("current");
+		expect(resolveTierCta("enterprise", opts(sub("pro", "active", true)))).toBe(
+			"sponsored",
 		);
+		// A contract store's other tiers are a conversation too.
+		for (const tier of LISTED_PLANS)
+			expect(resolveTierCta(tier, signedIn(sub("enterprise", "active")))).toBe(
+				"talk",
+			);
 	});
 
 	it("signed-out visitors get the trial CTA on purchasable tiers", () => {
@@ -123,10 +129,10 @@ describe("resolveTierCta", () => {
 				resolveTierCta(tier, signedIn(sub("starter", "trialing", true))),
 			).toBe("sponsored");
 		}
-		// A closed tier stays Coming soon even for a comp — a product fact,
-		// not a seller one.
+		// A closed listed tier stays Coming soon even for a comp — a product
+		// fact, not a seller one.
 		expect(
-			resolveTierCta("scale", {
+			resolveTierCta("pro", {
 				selectable: false,
 				isSignedIn: true,
 				subscription: sub("pro", "active", true),

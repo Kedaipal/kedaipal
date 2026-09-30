@@ -56,6 +56,7 @@ import { ZoomableImage } from "../ui/zoomable-image";
 import { AnnualBillingCard } from "./annual-billing-card";
 import { AutoRenewalCard } from "./auto-renewal-card";
 import { CreditReceiptButton } from "./credit-receipt-button";
+import { EnterpriseContractCard } from "./enterprise-contract-card";
 import {
 	FirstInvoiceSwitch,
 	firstInvoiceTargets,
@@ -442,7 +443,7 @@ export function BillingTab({
 					) : null}
 
 					{/* Starter never sees the annual card (ANNUAL_OFFER_PLANS is Pro
-					    and Scale), so the constraint is explained here rather than left
+					    only), so the constraint is explained here rather than left
 					    as an unexplained absence — "why can't I?" is exactly the
 					    question a silent gap produces. The upgrade ACTION itself lives
 					    in the plan-change card below (it used to hand off to Arif on
@@ -466,6 +467,17 @@ export function BillingTab({
 			    never locked); a teammate without the Credits grant sees nothing. */}
 			<CreditMeter variant="full" retailer={retailer} />
 
+			{/* An Enterprise store's plan IS its contract (Credits T6): the terms
+			    sit here in place of the plan-change card and the picker, because
+			    a contract changes by conversation, never by a self-serve tap. */}
+			{sub?.plan === "enterprise" ? (
+				<EnterpriseContractCard
+					sub={sub}
+					slug={retailer.slug}
+					ownerOnly={ownerOnly}
+				/>
+			) : null}
+
 			{/* Change tier (86eyb6z4r) — a plan decision, so it sits directly under
 			    the current-plan card and above the payment mechanics. Only an ACTIVE
 			    paid subscription can be "changed"; everyone else is CHOOSING a plan,
@@ -481,6 +493,7 @@ export function BillingTab({
 					id={SPOTLIGHT_ANCHOR.plan_change.anchor}
 					highlight={ring(SPOTLIGHT_ANCHOR.plan_change.anchor)}
 					sub={sub}
+					slug={retailer.slug}
 					currency={gateway.renewalCurrency}
 					foundingPricing={gateway.foundingPricing}
 					ownerOnly={ownerOnly}
@@ -496,7 +509,11 @@ export function BillingTab({
 			    which of its four states to render. */}
 			{/* Not for a store whose comp just ended: there's no plan behind that
 			    lock to pause (the server refuses it too) — they choose a plan. */}
-			{!adminOwnAccount && sub && !sub.comped && !compEnded ? (
+			{!adminOwnAccount &&
+			sub &&
+			!sub.comped &&
+			!compEnded &&
+			sub.plan !== "enterprise" ? (
 				<SeasonalHoldCard
 					id={SPOTLIGHT_ANCHOR.seasonal_hold.anchor}
 					highlight={ring(SPOTLIGHT_ANCHOR.seasonal_hold.anchor)}
@@ -567,9 +584,9 @@ export function BillingTab({
 					    invoices only — the first invoice, or a self-serve pick. The
 					    server refuses admin-issued and hold invoices too, and a
 					    Founding Member's move off Founding Pro (they have no other
-					    tier). Offers every other tier for sale, Scale included
-					    (z8r3fdfuhq). Waits for the gateway read: the quoted price is
-					    founding-sensitive. */}
+					    tier). Offers every other listed tier for sale; an
+					    Enterprise invoice bills a contract, so it has none. Waits
+					    for the gateway read: the quoted price is founding-sensitive. */}
 					{gateway &&
 					(pending.kind ?? "plan") === "plan" &&
 					(pending.origin === "free_period_end" ||
@@ -701,6 +718,7 @@ export function BillingTab({
 			{!adminOwnAccount &&
 			!pending &&
 			!sub?.comped &&
+			sub?.plan !== "enterprise" &&
 			(sub?.status === "trialing" ||
 				sub?.status === "past_due" ||
 				sub?.status === "cancelled") ? (
@@ -714,6 +732,7 @@ export function BillingTab({
 						) : null}
 						<PlanPickerCard
 							sub={sub}
+							slug={retailer.slug}
 							currency={gateway.currency}
 							// A store whose comp ended is choosing its FIRST plan, not
 							// renewing one it never had.

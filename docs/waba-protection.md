@@ -93,7 +93,7 @@ still throws (preserving each caller's fallback) and logs `failed`.
 | --- | --- | --- |
 | Starter | 50/day | 50/day |
 | Pro | 50/day | 200/day |
-| Scale | 50/day | 500/day |
+| Enterprise | 50/day | 500/day — sized per deal via the admin `dailyCap` override (`dailyCapOverride`) |
 | Burst (all) | 30 / 5-min | 30 / 5-min |
 
 New accounts are floored to 50/day regardless of tier — the anti-abuse ramp.

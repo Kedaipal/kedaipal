@@ -56,11 +56,12 @@ const DEMO_POSTER_URL = `${SITE_URL}${DEMO_VIDEO.landscape.poster}`;
 
 /**
  * The offer range is DERIVED from `PLAN_MONTHLY_PRICES`, never typed here —
- * the previous literal ("299") outlived the Scale reprice by weeks because
- * nothing tied it to the constant the teaser renders from.
+ * a typed literal once outlived a reprice by weeks because nothing tied it to
+ * the constant the teaser renders from. The listed tiers only: Enterprise has
+ * no public price (T6), so it can't bound a published offer range.
  */
 const OFFER_LOW = String(PLAN_MONTHLY_PRICES.MYR.starter / 100);
-const OFFER_HIGH = String(PLAN_MONTHLY_PRICES.MYR.scale / 100);
+const OFFER_HIGH = String(PLAN_MONTHLY_PRICES.MYR.pro / 100);
 
 /**
  * FAQPage entries mirror the visible FAQ by construction: `faqJsonLd` reads

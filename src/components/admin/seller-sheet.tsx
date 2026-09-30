@@ -4,11 +4,16 @@
 // own copy control; "Copy summary" writes the plain-text block an admin
 // pastes into a WhatsApp message. The actions live in the footer's Manage
 // menu — the same one door the row has, so nothing here can drift from it.
-import { Coins, ExternalLink } from "lucide-react";
+import { useMutation } from "convex/react";
+import { Building2, Coins, ExternalLink } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
+import { api } from "../../../convex/_generated/api";
 import type { AdminSellerRow } from "../../../convex/admin";
 import { COMP_KIND_LABEL } from "../../../convex/lib/comp";
 import { COUNTRY_LABELS } from "../../../convex/lib/country";
+import { enterpriseBlockPrice } from "../../../convex/lib/enterprise";
+import { enterprisePrice } from "../../../convex/lib/plans";
 import {
 	describeDays,
 	sellerBucket,
@@ -20,9 +25,14 @@ import {
 	sellerSeatsLabel,
 	sellerSummaryText,
 } from "../../lib/admin-seller-view";
-import { formatPrice, formatShortDate } from "../../lib/format";
+import {
+	convexErrorMessage,
+	formatPrice,
+	formatShortDate,
+} from "../../lib/format";
 import { storefrontOrigin, storefrontUrl } from "../../lib/storefront-url";
 import { Button } from "../ui/button";
+import { ConfirmDialog } from "../ui/confirm-dialog";
 import { CopyButton } from "../ui/copy-button";
 import {
 	Sheet,
@@ -32,6 +42,7 @@ import {
 	SheetTitle,
 } from "../ui/sheet";
 import { CreditLedgerBody, periodLabel } from "./credit-ledger-sheet";
+import { EnterpriseContractPage } from "./enterprise-contract-page";
 import {
 	ContactLine,
 	CreditsText,
@@ -90,27 +101,72 @@ function SellerSheetBody({
 		seller.notifyWaPhone === seller.waPhone;
 	const neverBilled = seller.ownerIsAdmin || seller.comped;
 	const credits = sellerCredits(seller);
-	// The credit ledger is a page of THIS drawer, not a second drawer on top:
-	// one surface, a back link, and focus returns to the button that opened it.
-	const [ledgerOpen, setLedgerOpen] = useState(false);
+	// The credit ledger and the Enterprise contract are pages of THIS drawer,
+	// not drawers stacked on top: one surface, a back link, and focus returns
+	// to the button that opened the page.
+	const [page, setPage] = useState<"details" | "ledger" | "enterprise">(
+		"details",
+	);
 	const ledgerButtonRef = useRef<HTMLButtonElement>(null);
-	const refocusLedgerButton = useRef(false);
+	const enterpriseButtonRef = useRef<HTMLButtonElement>(null);
+	const returnFocusTo = useRef<"ledger" | "enterprise" | null>(null);
 	useEffect(() => {
-		if (ledgerOpen || !refocusLedgerButton.current) return;
-		refocusLedgerButton.current = false;
-		ledgerButtonRef.current?.focus();
-	}, [ledgerOpen]);
+		if (page !== "details" || returnFocusTo.current === null) return;
+		const target = returnFocusTo.current;
+		returnFocusTo.current = null;
+		(target === "ledger"
+			? ledgerButtonRef
+			: enterpriseButtonRef
+		).current?.focus();
+	}, [page]);
+	const back = (from: "ledger" | "enterprise") => () => {
+		returnFocusTo.current = from;
+		setPage("details");
+	};
+	const [confirmMove, setConfirmMove] = useState(false);
+	const scheduleMoveToPro = useMutation(api.enterprise.scheduleMoveToPro);
+	const cancelMoveToPro = useMutation(api.enterprise.cancelMoveToPro);
 
-	if (ledgerOpen)
+	if (page === "ledger")
+		return <CreditLedgerBody seller={seller} onBack={back("ledger")} />;
+	if (page === "enterprise")
 		return (
-			<CreditLedgerBody
-				seller={seller}
-				onBack={() => {
-					refocusLedgerButton.current = true;
-					setLedgerOpen(false);
-				}}
-			/>
+			<EnterpriseContractPage seller={seller} onBack={back("enterprise")} />
 		);
+
+	const contract = seller.enterprise;
+	const movingToPro =
+		seller.plan === "enterprise" && seller.pendingPlanChange?.plan === "pro";
+	// Why a store can't be put on a contract, said beside the button.
+	const contractRefusal = seller.comped
+		? "Comped — end the comp before putting it on a contract."
+		: seller.isFoundingMember
+			? "Founding Members stay on Founding Pro."
+			: null;
+
+	async function moveToPro() {
+		try {
+			const res = await scheduleMoveToPro({ retailerId: seller._id });
+			toast.success("Moving to Pro at renewal", {
+				description: `The contract ends on ${formatShortDate(res.effectiveAt)} — that renewal bills Pro.`,
+			});
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setConfirmMove(false);
+		}
+	}
+
+	async function stayOnContract() {
+		try {
+			await cancelMoveToPro({ retailerId: seller._id });
+			toast.success("Staying on Enterprise", {
+				description: "The move to Pro is called off; the contract carries on.",
+			});
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		}
+	}
 
 	return (
 		<>
@@ -384,7 +440,7 @@ function SellerSheetBody({
 						<Button
 							ref={ledgerButtonRef}
 							variant="outline"
-							onClick={() => setLedgerOpen(true)}
+							onClick={() => setPage("ledger")}
 							className="tap-target w-full rounded-xl sm:w-fit"
 						>
 							<Coins data-icon="inline-start" aria-hidden="true" />
@@ -392,6 +448,119 @@ function SellerSheetBody({
 						</Button>
 					</div>
 				</Section>
+
+				{/* Credits T6 — Enterprise has no list price: a store is on it only
+				    while it carries a contract, set here. Beside Credits because
+				    the contract's included credits ARE the store's grant. */}
+				<Section title="Enterprise">
+					{contract ? (
+						<>
+							<Row label="Fee">
+								<Plain>
+									{formatPrice(
+										enterprisePrice(contract, seller.billingCycle ?? "monthly"),
+										contract.currency,
+									)}
+									<Muted>
+										{" "}
+										a {seller.billingCycle === "annual" ? "year" : "month"}
+									</Muted>
+								</Plain>
+							</Row>
+							<Row label="Included">
+								<Plain>
+									{contract.includedCredits.toLocaleString("en")} credits a
+									month
+								</Plain>
+							</Row>
+							<Row label="Overage">
+								<Plain>
+									{formatPrice(contract.overageRateMinor, contract.currency)}
+									<Muted>
+										{" "}
+										a credit · blocks of{" "}
+										{contract.blockSize.toLocaleString("en")} ={" "}
+										{formatPrice(
+											enterpriseBlockPrice(contract),
+											contract.currency,
+										)}
+									</Muted>
+								</Plain>
+							</Row>
+							<Row label="Contact">
+								<Plain>{contract.contactName}</Plain>
+							</Row>
+							{contract.notes ? (
+								<Row label="Notes">
+									<Plain muted className="whitespace-normal">
+										{contract.notes}
+									</Plain>
+								</Row>
+							) : null}
+							<Row label="Since">
+								<Plain>{formatShortDate(contract.setAt)}</Plain>
+							</Row>
+							{movingToPro ? (
+								<Row label="Ending">
+									<Plain>
+										Moves to Pro{" "}
+										{seller.currentPeriodEnd
+											? `on ${formatShortDate(seller.currentPeriodEnd)}`
+											: "at renewal"}
+									</Plain>
+								</Row>
+							) : null}
+						</>
+					) : (
+						<Row label="Contract">
+							<Plain muted>None — on list pricing</Plain>
+						</Row>
+					)}
+					<div className="flex flex-col gap-2 pt-2 sm:flex-row sm:flex-wrap">
+						<Button
+							ref={enterpriseButtonRef}
+							variant="outline"
+							onClick={() => setPage("enterprise")}
+							disabled={!contract && contractRefusal !== null}
+							className="tap-target w-full rounded-xl sm:w-fit"
+						>
+							<Building2 data-icon="inline-start" aria-hidden="true" />
+							{contract ? "Edit contract" : "Put on an Enterprise contract"}
+						</Button>
+						{contract ? (
+							movingToPro ? (
+								<Button
+									variant="outline"
+									onClick={stayOnContract}
+									className="tap-target w-full rounded-xl sm:w-fit"
+								>
+									Call off the move to Pro
+								</Button>
+							) : (
+								<Button
+									variant="outline"
+									onClick={() => setConfirmMove(true)}
+									className="tap-target w-full rounded-xl sm:w-fit"
+								>
+									Move to Pro at renewal
+								</Button>
+							)
+						) : null}
+					</div>
+					{!contract && contractRefusal ? (
+						<p className="pt-1.5 text-xs text-muted-foreground">
+							{contractRefusal}
+						</p>
+					) : null}
+				</Section>
+				<ConfirmDialog
+					open={confirmMove}
+					onOpenChange={setConfirmMove}
+					title={`Move ${seller.storeName} to Pro?`}
+					description={`The contract carries on until ${seller.currentPeriodEnd ? formatShortDate(seller.currentPeriodEnd) : "the end of the paid period"}. That renewal bills Pro instead, the contract ends when it's paid, and from the next month the store has Pro's credits and seats (teammates past Pro's limit are removed, each emailed).`}
+					confirmLabel="Move to Pro at renewal"
+					onConfirm={moveToPro}
+				/>
 
 				<Section title="How they arrived">
 					<Row label="Joined">

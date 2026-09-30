@@ -1,13 +1,25 @@
 // @vitest-environment jsdom
-// /pricing after the credits release (Credits T5, z8r3fdfu31) and Scale
-// opening for purchase (z8r3fdfuhq): the credits the page prints are the
+// /pricing after the credits release (Credits T5, z8r3fdfu31) and Enterprise
+// replacing Scale (T6, z8r3fdkp8h): the credits the page prints are the
 // ledger's own numbers, per month in both toggle positions; the pack price is
-// the visitor's currency's; Scale's card is a real door; and the page says the
-// real trial everywhere it used to say "14-day free trial".
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+// the visitor's currency's; Enterprise is "Custom" with a chat, never a price
+// or a checkout; and the page says the real trial everywhere it used to say
+// "14-day free trial".
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	within,
+} from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { CREDIT_PACKS, PLAN_CREDIT_GRANT } from "../../convex/lib/plans";
+import {
+	CREDIT_PACKS,
+	ENTERPRISE_FROM_ORDERS,
+	LISTED_PLANS,
+	PLAN_CREDIT_GRANT,
+} from "../../convex/lib/plans";
 import { MAX_VARIANTS_PER_PRODUCT } from "../../convex/lib/variant";
 import type { SubscriptionView } from "../lib/subscription";
 
@@ -123,23 +135,27 @@ function creditsRow(): string[] {
 }
 
 describe("/pricing — credits", () => {
-	it("prints the ledger's monthly credits on every card and in the table", () => {
+	it("prints the ledger's monthly credits on every listed card and in the table", () => {
 		renderPage();
-		for (const credits of Object.values(PLAN_CREDIT_GRANT)) {
-			expect(text()).toContain(`${credits} credits a month — 1 per order`);
+		for (const plan of LISTED_PLANS) {
+			expect(text()).toContain(
+				`${PLAN_CREDIT_GRANT[plan]} credits a month — 1 per order`,
+			);
 		}
+		// Enterprise's credits are per contract — never a number here.
 		expect(creditsRow()).toEqual([
 			String(PLAN_CREDIT_GRANT.starter),
 			String(PLAN_CREDIT_GRANT.pro),
-			String(PLAN_CREDIT_GRANT.scale),
+			"Custom",
 		]);
+		expect(text()).toContain("Credits sized to your volume");
 		expect(text()).not.toMatch(/\b400\b/);
 	});
 
 	it("keeps credits PER MONTH on the annual toggle — never a yearly total — and says why", () => {
 		renderPage();
 		fireEvent.click(screen.getByRole("button", { name: /Annual/ }));
-		expect(creditsRow()).toEqual(["100", "200", "500"]);
+		expect(creditsRow()).toEqual(["100", "200", "Custom"]);
 		expect(text()).toContain("200 credits a month — 1 per order");
 		expect(text()).toContain(
 			"On annual you get the same credits every month, locked in for the year you paid.",
@@ -189,39 +205,110 @@ describe("/pricing — credits", () => {
 	});
 });
 
-describe("/pricing — Scale is a real door (z8r3fdfuhq)", () => {
-	it("signed out, all three cards invite the same free start — no Coming soon card", () => {
+/** The Enterprise card — the one whose CTA is the chat with Arif. */
+function enterpriseCard(): HTMLElement {
+	const card = screen
+		.getByText(
+			`Built for ${ENTERPRISE_FROM_ORDERS.toLocaleString("en")}+ orders a month`,
+		)
+		.closest<HTMLElement>(".rounded-3xl");
+	if (!card) throw new Error("no Enterprise card");
+	return card;
+}
+
+describe("/pricing — Enterprise is a conversation (T6, z8r3fdkp8h)", () => {
+	it("signed out, Starter and Pro invite a free start and Enterprise opens a chat", () => {
 		renderPage();
 		expect(
 			screen.getAllByRole("link", { name: /Start free — pay when you sell/ }),
-		).toHaveLength(4); // three cards + the closing CTA
-		// The only "Coming soon" left is on the unbuilt Scale rows.
+		).toHaveLength(3); // two cards + the closing CTA
+		const talk = within(enterpriseCard()).getByRole("link", {
+			name: /Talk to Arif/,
+		});
+		const href = decodeURIComponent(talk.getAttribute("href") ?? "");
+		expect(href).toContain("wa.me/60123456789");
+		expect(href).toContain("Kedaipal Enterprise");
+		expect(href).toContain(ENTERPRISE_FROM_ORDERS.toLocaleString("en"));
+		expect(talk.getAttribute("target")).toBe("_blank");
+		// The only "Coming soon" left is on unbuilt table rows.
 		for (const badge of screen.queryAllByText("Coming soon")) {
 			expect(badge.closest("tr")).not.toBeNull();
 		}
 	});
 
-	it("never quotes an outlet add-on price beside a buyable Scale", () => {
+	it("never prices Enterprise — Custom in either currency, on either cycle", () => {
 		renderPage();
-		expect(text()).not.toMatch(/Additional outlets/);
-		const outlets = screen.getByText("Up to 3 outlets").closest("li");
-		expect(outlets?.textContent).toContain("Soon");
+		const card = () => enterpriseCard().textContent ?? "";
+		expect(card()).toContain("Custom");
+		expect(card()).toContain("Priced for your volume");
+		expect(card()).not.toMatch(/RM|S\$|\/mo|Billed/);
+		fireEvent.click(screen.getByRole("button", { name: "Singapore" }));
+		fireEvent.click(screen.getByRole("button", { name: /Annual/ }));
+		expect(card()).toContain("Custom");
+		expect(card()).not.toMatch(/RM|S\$|\/mo|Billed/);
 	});
 
-	it("an active Pro seller is offered the upgrade to Scale, into Billing", () => {
+	it("sells Enterprise on what is live, and says multi-outlet is not yet", () => {
+		renderPage();
+		expect(text()).not.toMatch(/Additional outlets/);
+		const card = within(enterpriseCard());
+		expect(card.getByText("Unlimited teammates")).toBeTruthy();
+		expect(
+			card.getByText("Multiple outlets").closest("li")?.textContent,
+		).toContain("Soon");
+	});
+
+	it("an active Pro seller: Pro is current, Starter is managed in Billing, Enterprise is a chat", () => {
 		state.auth = { isLoaded: true, isSignedIn: true };
 		state.plan = { plan: "pro", status: "active", comped: false };
 		renderPage();
-		const upgrade = screen.getByRole("link", { name: /Upgrade/ });
-		expect(upgrade.getAttribute("href")).toBe("/app/settings?tab=billing");
 		expect(screen.getByText("Current plan")).toBeTruthy();
-		expect(screen.getByRole("link", { name: /Manage plan/ })).toBeTruthy();
+		expect(
+			screen.getByRole("link", { name: /Manage plan/ }).getAttribute("href"),
+		).toBe("/app/settings?tab=billing");
+		expect(screen.queryByRole("link", { name: /Upgrade/ })).toBeNull();
+		expect(
+			within(enterpriseCard()).getByRole("link", { name: /Talk to Arif/ }),
+		).toBeTruthy();
 	});
 
-	it("a trialing seller can subscribe to any of the three", () => {
+	it("a trialing seller can subscribe to either listed tier", () => {
 		state.auth = { isLoaded: true, isSignedIn: true };
 		state.plan = { plan: "pro", status: "trialing", comped: false };
 		renderPage();
-		expect(screen.getAllByRole("link", { name: /^Subscribe/ })).toHaveLength(3);
+		expect(screen.getAllByRole("link", { name: /^Subscribe/ })).toHaveLength(2);
+		expect(
+			within(enterpriseCard()).getByRole("link", { name: /Talk to Arif/ }),
+		).toBeTruthy();
+	});
+
+	it("an Enterprise seller: Enterprise is current, and every other card is a conversation", () => {
+		state.auth = { isLoaded: true, isSignedIn: true };
+		state.plan = { plan: "enterprise", status: "active", comped: false };
+		renderPage();
+		expect(within(enterpriseCard()).getByText("Current plan")).toBeTruthy();
+		// A contract changes by talking to us — never a self-serve door the
+		// server would refuse.
+		expect(screen.getAllByRole("link", { name: /Talk to Arif/ })).toHaveLength(
+			2,
+		);
+		expect(
+			screen.queryByRole("link", { name: /^Subscribe|Upgrade|Manage plan/ }),
+		).toBeNull();
+		// Already onboarded — no first-order guarantee under the Pro card.
+		const pro = screen
+			.getByText("Orders and payments")
+			.closest<HTMLElement>(".rounded-3xl");
+		expect(pro?.textContent).not.toMatch(/first real order/i);
+	});
+
+	it("a sponsored store sees every card included, Enterprise too", () => {
+		state.auth = { isLoaded: true, isSignedIn: true };
+		state.plan = { plan: "pro", status: "active", comped: true };
+		renderPage();
+		expect(screen.queryByRole("link", { name: /Talk to Arif/ })).toBeNull();
+		expect(
+			within(enterpriseCard()).queryByText(/Talk to Arif|Current plan/),
+		).toBeNull();
 	});
 });

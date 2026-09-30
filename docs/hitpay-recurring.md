@@ -553,8 +553,8 @@ A store on founding pricing has **one tier: Founding Pro** (`FOUNDING_PLAN`).
 It can move between **monthly and yearly** on that tier (RM104 / RM1,040,
 S$41 / S$410), and it can **stop renewing** (turn auto-renewal off) — it
 cannot change tier — not down to Starter, and not back to list Pro, which
-costs more for the same features. That holds until Scale launches; whether a
-founding member may then move to Scale is Arif's call. Once the subscription
+costs more for the same features — and not onto an Enterprise contract either
+(`enterprise.setContract` refuses a founding store, Credits T6). Once the subscription
 lapses past the 3-month window the founding price is revoked, and from then on
 the store is an ordinary seller who can pick any plan.
 

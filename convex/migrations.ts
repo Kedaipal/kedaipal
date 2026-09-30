@@ -353,10 +353,11 @@ export const migrateLalamoveModeToLive = internalMutation({
 
 /**
  * Re-sync the denormalized entitlement caps on every subscription row to the
- * current `PLAN_CAPS` (30 Aug 2026 pricing reset, z8r3fday24: Pro 500 → 200,
- * Scale 2,000 → 400). The caps are copied onto the row at signup and at every
- * settle, so a constant change alone leaves every EXISTING seller on the old
- * denominator — "N of 500" in Settings → Billing under a page that says 200.
+ * current `PLAN_CAPS` (30 Aug 2026 pricing reset, z8r3fday24: Pro 500 → 200;
+ * Credits T6 retired Scale for Enterprise, whose seats are unlimited). The
+ * caps are copied onto the row at signup and at every settle, so a constant
+ * change alone leaves every EXISTING seller on the old denominator — "N of
+ * 500" in Settings → Billing under a page that says 200.
  *
  * Idempotent: rows already at the canonical caps are skipped. The patch
  * deliberately leaves `updatedAt` alone — for a past_due row that field is the
@@ -487,11 +488,11 @@ export const backfillOrderFlows = internalMutation({
  * store — the AFTER-DEPLOY step of the credits release (listed in the release
  * PR's operator checklist). Each store opens with the grant its status earns
  * today, for the current usage period: the one-off trial allowance (200), its
- * plan's monthly grant (Founding Pro 300, Scale 500; comped and admin-owned
- * stores their plan's), or nothing while past_due / on hold — that grant
- * lands the moment they pay or resume. The FULL grant, never "grant minus
- * this month's orders": nobody starts the credits era in debt or locked. No
- * welcome credits (dropped 17 Sep 2026).
+ * plan's monthly grant (Founding Pro 300, an Enterprise contract's included
+ * credits; comped and admin-owned stores their plan's), or nothing while
+ * past_due / on hold — that grant lands the moment they pay or resume. The
+ * FULL grant, never "grant minus this month's orders": nobody starts the
+ * credits era in debt or locked. No welcome credits (dropped 17 Sep 2026).
  *
  * Idempotent (a store that already has an account — opened at signup, or by
  * its first order since the deploy — is only rolled, never re-granted) and

@@ -654,52 +654,32 @@ describe("subscribeSelf", () => {
 		expect(invoice?.foundingDiscount).toBe(4500);
 	});
 
-	test("Scale is self-serve: monthly in MYR at RM399, annual in SGD at S$1,490 (z8r3fdfuhq)", async () => {
+	test("an Enterprise store has no self-serve door — every plan path answers with the one sentence (T6)", async () => {
 		const t = setup();
-		const { retailerId } = await seedRetailer(t, "u_sc_my", "sc-my-store");
-		const { invoiceId } = await t
-			.withIdentity({ subject: "u_sc_my" })
-			.mutation(api.invoices.subscribeSelf, {
-				plan: "scale",
-				billingCycle: "monthly",
-			});
-		expect(await getInvoice(t, invoiceId)).toMatchObject({
+		const { retailerId } = await seedRetailer(t, "u_ent_ss", "ent-ss-store");
+		await t.withIdentity({ subject: ADMIN }).mutation(api.enterprise.setContract, {
 			retailerId,
-			plan: "scale",
+			baseFeeMinor: 88800,
+			includedCredits: 1500,
+			overageRateMinor: 60,
+			blockSize: 5000,
 			billingCycle: "monthly",
-			total: 39900,
-			currency: "MYR",
-			origin: "self_serve",
+			contactName: "HSL Food GM",
 		});
-
-		const sg = await seedRetailer(t, "u_sc_sg", "sc-sg-store");
-		await t.run(async (ctx) => ctx.db.patch(sg.retailerId, { country: "SG" }));
-		const annual = await t
-			.withIdentity({ subject: "u_sc_sg" })
-			.mutation(api.invoices.subscribeSelf, {
-				plan: "scale",
-				billingCycle: "annual",
-			});
-		expect(await getInvoice(t, annual.invoiceId)).toMatchObject({
-			plan: "scale",
-			billingCycle: "annual",
-			total: 149000, // S$149 × 10 months
-			currency: "SGD",
-		});
-	});
-
-	test("a store on founding pricing is refused Scale — it stays on Founding Pro", async () => {
-		const t = setup();
-		const { subId } = await seedRetailer(t, "u_sc_f", "sc-f-store");
-		await t.run(async (ctx) => ctx.db.patch(subId, { foundingIntent: true }));
+		const asUser = t.withIdentity({ subject: "u_ent_ss" });
+		const refusal = /Enterprise contract, so plan changes go through Kedaipal/;
 		await expect(
-			t
-				.withIdentity({ subject: "u_sc_f" })
-				.mutation(api.invoices.subscribeSelf, {
-					plan: "scale",
-					billingCycle: "monthly",
-				}),
-		).rejects.toThrow(/Founding Pro/);
+			asUser.mutation(api.invoices.subscribeSelf, {
+				plan: "pro",
+				billingCycle: "monthly",
+			}),
+		).rejects.toThrow(refusal);
+		await expect(
+			asUser.mutation(api.invoices.switchPendingPlan, { plan: "starter" }),
+		).rejects.toThrow(refusal);
+		await expect(
+			asUser.mutation(api.invoices.cancelPlanChange, {}),
+		).rejects.toThrow(refusal);
 	});
 
 	test("refuses a second pending invoice, comped accounts, and active subs", async () => {
@@ -1532,7 +1512,7 @@ describe("changePlan — tier changes mid-subscription (86eyb6z4r)", () => {
 		t: ReturnType<typeof setup>,
 		userId: string,
 		slug: string,
-		plan: "starter" | "pro" | "scale" = "starter",
+		plan: "starter" | "pro" | "enterprise" = "starter",
 	) {
 		const { retailerId, subId } = await seedRetailer(t, userId, slug);
 		await t.run(async (ctx) => {
@@ -1715,84 +1695,23 @@ describe("changePlan — tier changes mid-subscription (86eyb6z4r)", () => {
 		).rejects.toThrow(/Choose a plan/);
 	});
 
-	/**
-	 * Scale opened for purchase with the credits release (z8r3fdfuhq). Pro →
-	 * Scale is an upgrade by RANK — billed now at Scale's ordinary price — and
-	 * paying it lands Scale's credits for THIS month (T1's upgrade rule);
-	 * Scale → Pro waits for the end of the paid period like any downgrade.
-	 */
-	test("Pro → Scale is billed now at Scale's price, and paying lands Scale's credits this month", async () => {
+	test("an Enterprise store can't change plan from the billing page — the contract is a conversation", async () => {
 		const t = setup();
-		const { retailerId, subId } = await seedActive(
-			t,
-			"u_up_sc",
-			"up-sc-store",
-			"pro",
-		);
-		const res = await t
-			.withIdentity({ subject: "u_up_sc" })
-			.mutation(api.invoices.changePlan, { plan: "scale" });
-		expect(res.kind).toBe("invoiced");
-		const invoice = await t.run(async (ctx) => {
-			const rows = await ctx.db
-				.query("invoices")
-				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-				.collect();
-			return rows.find((i) => i.status === "pending");
+		const { retailerId } = await seedActive(t, "u_ent_cp", "ent-cp-store", "pro");
+		await t.withIdentity({ subject: ADMIN }).mutation(api.enterprise.setContract, {
+			retailerId,
+			baseFeeMinor: 88800,
+			includedCredits: 1500,
+			overageRateMinor: 60,
+			blockSize: 5000,
+			billingCycle: "monthly",
+			contactName: "HSL Food GM",
 		});
-		expect(invoice).toMatchObject({ plan: "scale", total: 39900 });
-		if (!invoice) throw new Error("no invoice");
-		await t
-			.withIdentity({ subject: ADMIN })
-			.mutation(api.invoices.markPaid, { invoiceId: invoice._id });
-		expect((await getSub(t, subId))?.plan).toBe("scale");
-		const account = await t.run(async (ctx) =>
-			ctx.db
-				.query("creditAccounts")
-				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-				.first(),
-		);
-		expect(account?.periodGrant).toBe(500);
-		expect(account?.planBalance).toBe(500);
-	});
-
-	test("Scale → Pro is scheduled for the period's end — nothing billed, nothing taken today", async () => {
-		const t = setup();
-		const { retailerId, subId } = await seedActive(
-			t,
-			"u_dn_sc",
-			"dn-sc-store",
-			"scale",
-		);
-		const res = await t
-			.withIdentity({ subject: "u_dn_sc" })
-			.mutation(api.invoices.changePlan, { plan: "pro" });
-		expect(res.kind).toBe("scheduled");
-		const sub = await getSub(t, subId);
-		expect(sub?.plan).toBe("scale");
-		expect(sub?.pendingPlanChange?.plan).toBe("pro");
-		const pending = await t.run(async (ctx) =>
-			(
-				await ctx.db
-					.query("invoices")
-					.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-					.collect()
-			).filter((i) => i.status === "pending"),
-		);
-		expect(pending).toHaveLength(0);
-	});
-
-	test("a Founding Member still can't move to Scale — the founding price never carries to it", async () => {
-		const t = setup();
-		const { retailerId } = await seedActive(t, "u_fnd_sc", "fnd-sc-store", "pro");
-		await t.run(async (ctx) =>
-			ctx.db.patch(retailerId, { isFoundingMember: true, foundingMemberRank: 2 }),
-		);
 		await expect(
 			t
-				.withIdentity({ subject: "u_fnd_sc" })
-				.mutation(api.invoices.changePlan, { plan: "scale" }),
-		).rejects.toThrow(/Founding Pro/);
+				.withIdentity({ subject: "u_ent_cp" })
+				.mutation(api.invoices.changePlan, { plan: "starter" }),
+		).rejects.toThrow(/Enterprise contract/);
 	});
 
 	test("an upgrade charges an already-attached saved method", async () => {

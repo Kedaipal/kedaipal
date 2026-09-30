@@ -71,6 +71,16 @@ export type AdminSellerRow = {
 	foundingMemberRank?: number;
 	subscriptionStatus?: Doc<"subscriptions">["status"];
 	plan?: Doc<"subscriptions">["plan"];
+	/** The Enterprise contract (Credits T6) — admin-only, so the whole thing
+	 * rides here (contact, notes) for the seller sheet's Enterprise section;
+	 * `setBy` stays server-side (the audit log answers "who"). */
+	enterprise?: Omit<NonNullable<Doc<"subscriptions">["enterprise"]>, "setBy">;
+	/** A scheduled tier move (a downgrade, or an Enterprise store's move to
+	 * Pro) and when it lands. */
+	pendingPlanChange?: {
+		plan: NonNullable<Doc<"subscriptions">["pendingPlanChange"]>["plan"];
+		requestedAt: number;
+	};
 	/** On the house (z8r3fdeub2). True for an admin-granted comp AND for a
 	 * legacy stampless comped row — the chip renders either way. */
 	comped: boolean;
@@ -298,6 +308,19 @@ export const listSellersForAdmin = query({
 				foundingMemberRank: r.foundingMemberRank,
 				subscriptionStatus: sub?.status,
 				plan: sub?.plan,
+				enterprise: sub?.enterprise
+					? {
+							baseFeeMinor: sub.enterprise.baseFeeMinor,
+							currency: sub.enterprise.currency,
+							includedCredits: sub.enterprise.includedCredits,
+							overageRateMinor: sub.enterprise.overageRateMinor,
+							blockSize: sub.enterprise.blockSize,
+							contactName: sub.enterprise.contactName,
+							notes: sub.enterprise.notes,
+							setAt: sub.enterprise.setAt,
+						}
+					: undefined,
+				pendingPlanChange: sub?.pendingPlanChange,
 				comped: sub?.comped === true,
 				comp: sub?.comp
 					? {

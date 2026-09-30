@@ -36,6 +36,7 @@ import {
 	annualQuote,
 	BILLING_CURRENCIES,
 	type BillingCurrency,
+	enterprisePrice,
 	PLANS,
 	type Plan,
 	planPrice,
@@ -784,14 +785,34 @@ function IssueInvoiceForm() {
 
 	// Founding is Pro-only — flipping it on forces Pro. It prices per billing
 	// currency (RM104 / S$41 monthly).
-	const effectivePlan = founding ? "pro" : plan;
+	const effectivePlan: Plan = founding ? "pro" : plan;
+	// Enterprise (T6) bills the store's CONTRACT — its fee, currency and term —
+	// so those controls show the contract's values instead of taking a pick.
+	const contract = selected?.enterprise;
+	const billsContract = effectivePlan === "enterprise";
+	const effectiveCycle =
+		billsContract && contract ? contract.billingCycle : cycle;
+	const effectiveCurrency =
+		billsContract && contract ? contract.currency : currency;
 	// Derived amount (single source of truth from convex/lib/plans).
-	const total = planPrice(effectivePlan, cycle, founding, currency);
-	const base = planPrice(effectivePlan, cycle, false, currency);
+	const total =
+		effectivePlan === "enterprise"
+			? contract
+				? enterprisePrice(contract, effectiveCycle)
+				: 0
+			: planPrice(effectivePlan, cycle, founding, currency);
+	const base =
+		effectivePlan === "enterprise"
+			? total
+			: planPrice(effectivePlan, cycle, false, currency);
 	// What an annual invoice actually buys the seller. Shown to the operator
 	// because "RM 1,490.00" alone doesn't say whether it covers ten months or
 	// twelve — and this form is where an annual switch is honoured by hand.
-	const annual = annualQuote(effectivePlan, founding, currency);
+	const annual =
+		effectivePlan === "enterprise"
+			? null
+			: annualQuote(effectivePlan, founding, currency);
+	const noContract = billsContract && !contract;
 
 	async function handleIssue() {
 		if (!retailerId) return;
@@ -802,9 +823,9 @@ function IssueInvoiceForm() {
 			await issue({
 				retailerId,
 				plan: effectivePlan,
-				billingCycle: cycle,
+				billingCycle: effectiveCycle,
 				founding,
-				currency,
+				currency: effectiveCurrency,
 			});
 			toast.success("Invoice issued — it's now in Pending below.");
 			setRetailerId("");
@@ -854,14 +875,16 @@ function IssueInvoiceForm() {
 					<span className="text-xs font-medium text-muted-foreground">
 						Plan
 					</span>
-					{/* Every tier, in tier order — Scale is billable since it opened
-					    for purchase (z8r3fdfuhq); Arif assigns it by hand too. */}
+					{/* Every tier, in tier order. Enterprise bills the store's
+					    contract, so it needs one (set in Sellers → the store). */}
 					<div className="grid grid-cols-3 gap-1.5 rounded-xl bg-background p-1 shadow-inner shadow-border/40">
 						{PLANS.map((p) => (
 							<button
 								key={p}
 								type="button"
-								disabled={founding && p !== "pro"}
+								disabled={
+									(founding && p !== "pro") || (p === "enterprise" && !contract)
+								}
 								onClick={() => setPlan(p)}
 								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
 									effectivePlan === p
@@ -885,14 +908,15 @@ function IssueInvoiceForm() {
 							<button
 								key={c}
 								type="button"
+								disabled={billsContract}
 								onClick={() => setCycle(c)}
-								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold capitalize transition-all ${
-									cycle === c
+								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold capitalize transition-all disabled:cursor-not-allowed ${
+									effectiveCycle === c
 										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
-										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground disabled:opacity-40"
 								}`}
 							>
-								{cycle === c ? <Check className="size-3.5" /> : null}
+								{effectiveCycle === c ? <Check className="size-3.5" /> : null}
 								{c}
 							</button>
 						))}
@@ -908,19 +932,28 @@ function IssueInvoiceForm() {
 							<button
 								key={cur}
 								type="button"
+								disabled={billsContract}
 								onClick={() => setCurrency(cur)}
-								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold transition-all ${
-									currency === cur
+								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold transition-all disabled:cursor-not-allowed ${
+									effectiveCurrency === cur
 										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
-										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground disabled:opacity-40"
 								}`}
 							>
-								{currency === cur ? <Check className="size-3.5" /> : null}
+								{effectiveCurrency === cur ? (
+									<Check className="size-3.5" />
+								) : null}
 								{cur === "MYR" ? "RM (MYR)" : "S$ (SGD)"}
 							</button>
 						))}
 					</div>
-					{currency === "SGD" ? (
+					{billsContract ? (
+						<span className="text-[11px] text-muted-foreground">
+							Set by the store's Enterprise contract — the term and currency it
+							was agreed in.
+						</span>
+					) : null}
+					{effectiveCurrency === "SGD" ? (
 						<span className="text-[11px] text-muted-foreground">
 							SGD invoices carry no bank/DuitNow block — payment is arranged
 							over WhatsApp.
@@ -933,7 +966,7 @@ function IssueInvoiceForm() {
 				<input
 					type="checkbox"
 					checked={founding}
-					disabled={isExistingFounding}
+					disabled={isExistingFounding || billsContract}
 					onChange={(e) => setFoundingOverride(e.target.checked)}
 					className="size-4 disabled:opacity-60"
 				/>
@@ -957,15 +990,22 @@ function IssueInvoiceForm() {
 				<div className="min-w-0">
 					<p className="text-xs text-muted-foreground">Amount</p>
 					<p className="text-xl font-bold tabular-nums">
-						{formatPrice(total, currency)}
+						{noContract ? "—" : formatPrice(total, effectiveCurrency)}
 					</p>
+					{billsContract && contract ? (
+						<p className="text-xs text-muted-foreground">
+							From the contract:{" "}
+							{formatPrice(contract.baseFeeMinor, contract.currency)} a month
+							{effectiveCycle === "annual" ? " × 10 for the year" : ""}.
+						</p>
+					) : null}
 					{founding ? (
 						<p className="text-xs text-emerald-700">
 							{formatPrice(base, currency)} −{" "}
 							{formatPrice(base - total, currency)} founding discount
 						</p>
 					) : null}
-					{cycle === "annual" ? (
+					{annual && cycle === "annual" ? (
 						<p className="text-xs text-muted-foreground">
 							Covers {ANNUAL_MONTHS_RECEIVED} months ·{" "}
 							{formatPrice(annual.saving, currency)} saved (2 months free) ·{" "}
@@ -976,7 +1016,7 @@ function IssueInvoiceForm() {
 				<Button
 					type="button"
 					onClick={handleIssue}
-					disabled={!retailerId || busy || blocked || compedStore}
+					disabled={!retailerId || busy || blocked || compedStore || noContract}
 					className="h-11 w-full sm:w-auto sm:px-6"
 				>
 					{busy ? "Issuing…" : "Issue invoice"}
@@ -985,6 +1025,12 @@ function IssueInvoiceForm() {
 			{blocked ? (
 				<p className="text-xs text-amber-700">
 					This retailer already has a pending invoice — settle it first.
+				</p>
+			) : null}
+			{selected && !contract ? (
+				<p className="text-xs text-muted-foreground">
+					Enterprise bills a store's contract — put this store on one from Admin
+					· Sellers → the store → Enterprise to bill it here.
 				</p>
 			) : null}
 			{compedStore ? (
