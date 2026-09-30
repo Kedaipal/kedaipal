@@ -1,6 +1,6 @@
 # Kedaipal Credits — the order-credit ledger
 
-> **Status:** T1 (the ledger — ClickUp [`86eye2ccu`](https://app.clickup.com/t/86eye2ccu)) built. T2 top-up packs ([`z8r3fdf8ht`](https://app.clickup.com/t/z8r3fdf8ht)) built — see [Top-up packs (T2)](#top-up-packs-t2). T3 meter + seller lock + notices ([`z8r3fdf8hy`](https://app.clickup.com/t/z8r3fdf8hy)) built — see [The meter, the seller lock and the notices (T3)](#the-meter-the-seller-lock-and-the-notices-t3). T4 auto top-up (`z8r3fdf8wa`) and T5 public surfaces + release pack (`z8r3fdfu31`) build on it and add their own sections below. Decision register: `z8r3fdf8j1` (Arif, locked 17 Sep 2026) — with **Zaki's 30 Sep 2026 overrides** (refund rule, trial allowance, team permission), marked below.
+> **Status:** T1 (the ledger — ClickUp [`86eye2ccu`](https://app.clickup.com/t/86eye2ccu)) built. T2 top-up packs ([`z8r3fdf8ht`](https://app.clickup.com/t/z8r3fdf8ht)) built — see [Top-up packs (T2)](#top-up-packs-t2). T3 meter + seller lock + notices ([`z8r3fdf8hy`](https://app.clickup.com/t/z8r3fdf8hy)) built — see [The meter, the seller lock and the notices (T3)](#the-meter-the-seller-lock-and-the-notices-t3). T5 public surfaces + release pack (`z8r3fdfu31`) builds on it and adds its own section below. **T4 auto top-up (`z8r3fdf8wa`) was cancelled on 1 Oct 2026** (Zaki × Arif): credit packs never auto-reload — the subscription is the only recurring charge, and a pack is always a deliberate purchase on HitPay's checkout page. Decision register: `z8r3fdf8j1` (Arif, locked 17 Sep 2026) — with **Zaki's 30 Sep 2026 overrides** (refund rule, trial allowance, team permission), marked below.
 
 **1 credit = 1 order.** Every plan includes credits each month; sellers can buy
 more. From 1 Oct 2026 every order carries a real Meta messaging cost, so a flat
@@ -205,8 +205,8 @@ the meter is right at 00:01.
 **Team permission** — a new **Credits** area (Zaki, 30 Sep 2026): *view* = the
 balance and its history; *edit* = buying packs (T2). A member pays on the HitPay
 checkout page themselves — the owner's saved card is **never** charged by a
-member — and the owner is emailed every member purchase. Plan changes, cancel,
-auto-renewal and auto top-up stay under **Billing**, owner-only. The Store
+member — and the owner is emailed every member purchase. Plan changes, cancel
+and auto-renewal stay under **Billing**, owner-only. The Store
 manager preset includes *view*.
 
 ## Three constraints

@@ -83,12 +83,15 @@ describe("/terms — Kedaipal Credits + Data Processing", () => {
 			"never rejects or blocks a buyer's order",
 			"Viewing orders, cancelling and refunding them, topping up and upgrading your plan are never restricted",
 			"lifts as soon as your balance is above zero",
-			"merchant-initiated payment",
-			"we retry it once",
+			// Packs never auto-reload (T4 cancelled, 1 Oct 2026): the saved card
+			// is never charged for credits, and the Terms say so.
+			"We never charge your saved payment method for credits",
+			"credits are never bought automatically",
 			"30 days' notice",
 		]) {
 			expect(text, clause).toContain(clause);
 		}
+		expect(text).not.toMatch(/Automatic top-up|merchant-initiated/i);
 		// No banned vocabulary in the clause the seller reads.
 		expect(text).not.toMatch(/wallet|pay[- ]as[- ]you[- ]go|commission/i);
 	});

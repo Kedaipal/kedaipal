@@ -17,7 +17,9 @@
 
 // 2026-09-30 (Credits T5, z8r3fdfu31): added "Kedaipal Credits" (what a credit
 // is, non-transferable, never cash, plan vs purchased expiry, the refund rule,
-// the negative balance, restrictions at zero, auto top-up, price changes) and
+// the negative balance, restrictions at zero, buying credits — never
+// automatic, never on the saved card (T4 auto top-up was cancelled 1 Oct
+// 2026, before this version shipped) — price changes) and
 // "Data Processing" (merchant = controller, Kedaipal = processor, security,
 // breach notice, sub-processor categories, Kedaipal Pte Ltd + transfers).
 // Drafted for Arif's / a lawyer's sign-off. Every store owner re-accepts.

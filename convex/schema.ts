@@ -2942,8 +2942,10 @@ export default defineSchema({
 			v.literal("failed"),
 			v.literal("expired"),
 		),
-		// What opened it: a person picking a pack. Auto top-up (Credits T4)
-		// widens this.
+		// What opened it: always a person picking a pack. Packs never
+		// auto-reload (Credits T4 was cancelled, 1 Oct 2026 — the subscription
+		// is the only recurring charge); kept so the ledger and the
+		// `credits_topup_paid` event say so explicitly.
 		source: v.literal("manual"),
 		// Clerk subject of whoever opened the checkout — the owner, or a
 		// teammate holding credits write (who pays on HitPay's page themselves;
