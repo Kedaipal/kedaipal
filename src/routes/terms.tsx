@@ -217,13 +217,9 @@ function TermsPage() {
 						restriction lifts as soon as your balance is above zero.
 					</li>
 					<li>
-						<strong>Automatic top-up.</strong> Automatic top-up is off unless
-						you turn it on. If you do, you authorise Kedaipal to charge your
-						saved payment method, as a merchant-initiated payment, whenever your
-						balance reaches the trigger you chose. The trigger, the amount of
-						each top-up and a monthly limit are shown when you give your
-						consent, and you can turn it off at any time. You get a receipt for
-						every charge, and if a charge fails we retry it once.
+						<strong>Buying credits.</strong> Credits are only ever bought by a
+						purchase you make yourself. We never charge your saved payment
+						method for credits, and credits are never bought automatically.
 					</li>
 					<li>
 						<strong>Price changes.</strong> We may change credit prices — what a

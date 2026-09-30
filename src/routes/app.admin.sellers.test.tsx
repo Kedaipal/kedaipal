@@ -559,7 +559,7 @@ describe("directory — credits", () => {
 		]);
 	});
 
-	it("the sheet's Credits section names the custom grant and opens the ledger drawer", async () => {
+	it("the sheet's Credits section names the custom grant and opens the ledger as a page of the same drawer", async () => {
 		renderDirectory();
 		fireEvent.click(screen.getByRole("button", { name: "Lekor Mr.Ganu" }));
 		const sheet = await screen.findByRole("dialog");
@@ -569,8 +569,20 @@ describe("directory — credits", () => {
 			within(sheet).getByRole("button", { name: "Open credit ledger" }),
 		);
 		expect(
-			await screen.findByRole("heading", { name: "Credits — Lekor Mr.Ganu" }),
+			await screen.findByRole("heading", { name: "Credit ledger" }),
 		).toBeTruthy();
+		// One drawer — never a second one stacked on the seller's.
+		expect(screen.getAllByRole("dialog")).toHaveLength(1);
+		// The way back names the seller and returns focus to what opened it.
+		fireEvent.click(
+			within(screen.getByRole("dialog")).getByRole("button", {
+				name: "Lekor Mr.Ganu",
+			}),
+		);
+		const reopen = await screen.findByRole("button", {
+			name: "Open credit ledger",
+		});
+		expect(document.activeElement).toBe(reopen);
 	});
 
 	it("the CSV carries the credit columns", () => {
