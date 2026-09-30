@@ -11,6 +11,7 @@ import {
 	creditsExhausted,
 	debitBucket,
 	dueCreditNotice,
+	lowCreditLine,
 	monthlyCreditGrant,
 	refreshedPlanBalance,
 	sellerRefundsLeft,
@@ -274,15 +275,39 @@ describe("the lock sentence speaks to what the reader can do (Credits T3 × T2)"
 	});
 });
 
+describe("lowCreditLine — running low is the last 20% of the month's credits", () => {
+	test("one line per grant, never a flat number", () => {
+		expect(lowCreditLine(100)).toBe(20); // Starter
+		expect(lowCreditLine(200)).toBe(40); // Pro, and the trial's 200
+		expect(lowCreditLine(300)).toBe(60); // Founding Pro
+		expect(lowCreditLine(500)).toBe(100);
+		expect(lowCreditLine(7)).toBe(2); // a small custom grant rounds up
+	});
+	test("no grant this month, nothing to run low on", () => {
+		expect(lowCreditLine(0)).toBe(0);
+		expect(lowCreditLine(-5)).toBe(0);
+	});
+});
+
 describe("dueCreditNotice — once per threshold, bursts collapse", () => {
-	const base = { sent: [] as string[], refreshedWhileLocked: false, customGrant: false };
-	test("12 → -3 in one burst is ONE lock notice, not low then locked", () => {
+	const base = {
+		sent: [] as string[],
+		refreshedWhileLocked: false,
+		customGrant: false,
+		lowLine: lowCreditLine(200),
+	};
+	test("45 → -3 in one burst is ONE lock notice, not low then locked", () => {
 		expect(dueCreditNotice({ ...base, total: -3 })).toBe("locked");
 	});
-	test("low fires once; a custom allowance is never nudged", () => {
-		expect(dueCreditNotice({ ...base, total: 10 })).toBe("low");
+	test("low fires once, at the line; a custom allowance is never nudged", () => {
+		expect(dueCreditNotice({ ...base, total: 41 })).toBeNull();
+		expect(dueCreditNotice({ ...base, total: 40 })).toBe("low");
 		expect(dueCreditNotice({ ...base, total: 9, sent: ["low"] })).toBeNull();
 		expect(dueCreditNotice({ ...base, total: 5, customGrant: true })).toBeNull();
+	});
+	test("a store with no grant this month is never nudged — only a lock is news", () => {
+		expect(dueCreditNotice({ ...base, lowLine: 0, total: 5 })).toBeNull();
+		expect(dueCreditNotice({ ...base, lowLine: 0, total: 0 })).toBe("locked");
 	});
 	test("a refresh that leaves the store at or below zero says so once; back above zero unlocks", () => {
 		const locked = { ...base, sent: ["locked"] };

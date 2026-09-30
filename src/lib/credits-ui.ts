@@ -7,35 +7,115 @@
 import type { CancelCreditOutlook } from "../../convex/creditLock";
 import type { CreditBalanceView } from "../../convex/credits";
 import {
+	type CreditBillingStatus,
+	type CreditLockExemption,
 	type CreditUnlockRoute,
-	LOW_CREDIT_THRESHOLD,
+	lowCreditLine,
+	refreshedPlanBalance,
 } from "../../convex/lib/credits";
-import { SELLER_CANCEL_REFUNDS_PER_PERIOD } from "../../convex/lib/plans";
+import {
+	PURCHASED_CREDIT_LIFETIME_MONTHS,
+	SELLER_CANCEL_REFUNDS_PER_PERIOD,
+	TRIAL_CREDIT_GRANT,
+} from "../../convex/lib/plans";
 import { TOP_UP_SEARCH } from "./credit-top-up";
+import { formatShortDate } from "./format";
 
 export {
 	creditLockAudience,
 	creditLockMessage,
-	LOW_CREDIT_THRESHOLD,
+	LOW_CREDIT_RATIO,
+	lowCreditLine,
 } from "../../convex/lib/credits";
 export type { CreditUnlockRoute };
 
-/** Share of the month's grant at which the meter turns amber ("amber at 20%
- * remaining, red at 0"). */
-export const CREDIT_LOW_RATIO = 0.2;
-
 export type CreditTone = "ok" | "low" | "out";
 
-/** Where a balance sits: red at or below zero, amber in the last fifth of the
- * month's grant (never below the 10-left warning line), else calm. */
+/** Where a balance sits: red at or below zero, amber once it's into the last
+ * 20% of the month's credits (`lowCreditLine` — the same line the banner and
+ * the low email use), else calm. */
 export function creditTone(total: number, periodGrant: number): CreditTone {
 	if (total <= 0) return "out";
-	const lowLine = Math.max(
-		LOW_CREDIT_THRESHOLD,
-		Math.ceil(periodGrant * CREDIT_LOW_RATIO),
-	);
-	return total <= lowLine ? "low" : "ok";
+	return total <= lowCreditLine(periodGrant) ? "low" : "ok";
 }
+
+/** "1 order" / "15 orders". */
+function orders(n: number): string {
+	return `${n} ${n === 1 ? "order" : "orders"}`;
+}
+
+/**
+ * What the monthly credits become at the next refresh — a RESET, never an
+ * addition (Zaki, 1 Oct 2026: "300 more" read like 300 added on top):
+ *  - "Back to 300 on 1 Nov 2026";
+ *  - owing orders, the debt comes off the refresh: "285 on 1 Nov 2026 — the
+ *    15 owed come off";
+ *  - owing the whole grant: "0 on 1 Nov 2026 — the 300 owed use it all up";
+ *  - owing more than the grant: "Still 20 owed after 1 Nov 2026".
+ * `null` when no monthly refresh is coming (a trial, or no grant this month).
+ */
+export function creditRefreshLabel(
+	b: Pick<CreditBalanceView, "regime" | "plan" | "nextGrant" | "refreshesAt">,
+): string | null {
+	if (b.regime !== "monthly" || b.nextGrant === null || b.refreshesAt === null)
+		return null;
+	const on = formatShortDate(b.refreshesAt);
+	if (b.plan >= 0) return `Back to ${b.nextGrant} on ${on}`;
+	const owed = -b.plan;
+	const after = refreshedPlanBalance(b.plan, b.nextGrant);
+	if (after > 0)
+		return `${after} on ${on} — the ${owed} owed ${owed === 1 ? "comes" : "come"} off`;
+	if (after === 0) return `0 on ${on} — the ${owed} owed use it all up`;
+	return `Still ${-after} owed after ${on}`;
+}
+
+/**
+ * The one sentence under the meter that says why the balance behaves the way
+ * it does right now — the lock, a store that's never locked, a trial, an
+ * unpaid / paused / ended plan (bought credits never stand in for a plan:
+ * they're kept, and work again once it's active), or a custom allowance.
+ * Exemptions come before the subscription status: a Kedaipal admin's store
+ * sits in `trialing` or `past_due` and must never be told to pay.
+ */
+export function creditStateLine(args: {
+	locked: boolean;
+	total: number;
+	purchased: number;
+	regime: CreditBalanceView["regime"];
+	status: CreditBillingStatus | undefined;
+	exempt: CreditLockExemption | null;
+	customGrant: boolean;
+	nextGrant: number | null;
+}): string | null {
+	if (args.locked)
+		return args.total < 0
+			? `Accepting and updating orders and editing products are paused. The ${orders(-args.total)} owed come off your next pack or your next monthly credits.`
+			: "Accepting and updating orders and editing products are paused until you add credits.";
+	if (args.exempt === "admin_store")
+		return "Kedaipal admin stores aren't billed — credits refresh every month and the store never locks. This is here so you can see your volume.";
+	if (args.exempt === "sponsored")
+		return "Sponsored stores are never locked — this is here so you can see your volume.";
+	if (args.regime === "trial")
+		return `Your free trial includes ${TRIAL_CREDIT_GRANT} orders, counted from your first order. Pick a plan when they're used or your first invoice comes due.`;
+	const bought = args.purchased;
+	const kept =
+		bought > 0
+			? ` Your ${bought} bought ${bought === 1 ? "credit is" : "credits are"} kept, and ${bought === 1 ? "works" : "work"} again once your plan is active.`
+			: "";
+	if (args.status === "past_due")
+		return `Pay your invoice and this month's credits land straight away.${kept}`;
+	if (args.status === "on_hold")
+		return `Your plan is paused, so no monthly credits are granted — resume to get this month's.${kept}`;
+	if (args.status === "cancelled")
+		return `Your plan has ended, so no monthly credits are granted — choose a plan to get them again.${kept}`;
+	if (args.customGrant && args.nextGrant !== null)
+		return `Your store has a custom allowance of ${args.nextGrant} orders a month.`;
+	return null;
+}
+
+/** The rules in plain words, under the meter — the order of use first, since
+ * that's what makes the two balances make sense. */
+export const CREDIT_RULES_LINE = `1 credit = 1 order. Monthly credits are used first and reset on the 1st — they don't carry over. Bought credits are used next and last ${PURCHASED_CREDIT_LIFETIME_MONTHS} months. Cancel a new order before you accept it and its credit comes back (up to ${SELLER_CANCEL_REFUNDS_PER_PERIOD} a month).`;
 
 /** "42 orders left" / "1 order left" / "0 orders left" / "15 orders owed". */
 export function ordersBalanceLabel(total: number): string {

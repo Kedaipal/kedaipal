@@ -1,8 +1,11 @@
 // @vitest-environment node
 import { describe, expect, test } from "vitest";
 import {
+	CREDIT_RULES_LINE,
 	cancelCreditLine,
 	creditActivityLabel,
+	creditRefreshLabel,
+	creditStateLine,
 	creditTone,
 	downgradeCreditLine,
 	includedCreditsLabel,
@@ -11,6 +14,7 @@ import {
 	ordersWaitingLabel,
 	planPickCreditLine,
 } from "./credits-ui";
+import { formatShortDate } from "./format";
 
 describe("the balance speaks in orders", () => {
 	test("left, owed, and the singular", () => {
@@ -21,12 +25,15 @@ describe("the balance speaks in orders", () => {
 		expect(ordersBalanceLabel(-15)).toBe("15 orders owed");
 	});
 
-	test("amber in the last fifth of the grant, never below the 10-left line; red at zero", () => {
+	test("amber in the last 20% of the month's credits — the banner's and the email's line — red at zero", () => {
 		expect(creditTone(100, 200)).toBe("ok");
 		expect(creditTone(40, 200)).toBe("low"); // 20% of 200
 		expect(creditTone(41, 200)).toBe("ok");
-		// A small grant still warns at 10 left, not at 20% (= 4).
-		expect(creditTone(10, 20)).toBe("low");
+		expect(creditTone(60, 300)).toBe("low"); // Founding Pro
+		expect(creditTone(61, 300)).toBe("ok");
+		// One rule, no flat floor: a small grant runs low at its own 20%.
+		expect(creditTone(10, 20)).toBe("ok");
+		expect(creditTone(4, 20)).toBe("low");
 		expect(creditTone(1, 200)).toBe("low");
 		expect(creditTone(0, 200)).toBe("out");
 		expect(creditTone(-3, 200)).toBe("out");
@@ -260,5 +267,124 @@ describe("plan choices state the allowance and what they do to the balance", () 
 				customGrant: true,
 			}),
 		).toBeNull();
+	});
+});
+
+describe("the monthly reset reads as a reset, never as more on top", () => {
+	const NOV_1 = Date.parse("2026-11-01T00:00:00+08:00");
+	// The viewer's locale formats the date ("1 Nov 2026" in Malaysia).
+	const d = formatShortDate(NOV_1);
+	const at = (plan: number, nextGrant: number | null = 300) =>
+		creditRefreshLabel({
+			regime: "monthly",
+			plan,
+			nextGrant,
+			refreshesAt: NOV_1,
+		});
+
+	test("back to the allowance — not '300 more'", () => {
+		expect(at(10)).toBe(`Back to 300 on ${d}`);
+		expect(at(0)).toBe(`Back to 300 on ${d}`);
+		expect(at(10)).not.toMatch(/more/);
+	});
+
+	test("a debt comes off the refresh, and says so", () => {
+		expect(at(-15)).toBe(`285 on ${d} — the 15 owed come off`);
+		expect(at(-1)).toBe(`299 on ${d} — the 1 owed comes off`);
+		expect(at(-300)).toBe(`0 on ${d} — the 300 owed use it all up`);
+		expect(at(-320)).toBe(`Still 20 owed after ${d}`);
+	});
+
+	test("no monthly refresh coming — a trial, or no grant this month", () => {
+		expect(
+			creditRefreshLabel({
+				regime: "trial",
+				plan: 120,
+				nextGrant: null,
+				refreshesAt: null,
+			}),
+		).toBeNull();
+		expect(
+			creditRefreshLabel({
+				regime: "none",
+				plan: 0,
+				nextGrant: null,
+				refreshesAt: NOV_1,
+			}),
+		).toBeNull();
+	});
+});
+
+describe("the meter's state line", () => {
+	const base = {
+		locked: false,
+		total: 120,
+		purchased: 0,
+		regime: "monthly" as const,
+		status: "active" as const,
+		exempt: null,
+		customGrant: false,
+		nextGrant: 200,
+	};
+
+	test("a running monthly store needs no line", () => {
+		expect(creditStateLine(base)).toBeNull();
+	});
+
+	test("an admin's own store is never asked to pay — whatever its status says", () => {
+		for (const status of ["trialing", "past_due", "active"] as const) {
+			const line = creditStateLine({ ...base, status, exempt: "admin_store" });
+			expect(line).toMatch(/^Kedaipal admin stores aren't billed/);
+			expect(line).not.toMatch(/Pay your invoice|Pick a plan/);
+		}
+	});
+
+	test("a sponsored store is told it never locks", () => {
+		expect(
+			creditStateLine({ ...base, status: "past_due", exempt: "sponsored" }),
+		).toMatch(/^Sponsored stores are never locked/);
+	});
+
+	test("bought credits never stand in for a plan — they're kept for when it's active", () => {
+		expect(creditStateLine({ ...base, status: "past_due" })).toBe(
+			"Pay your invoice and this month's credits land straight away.",
+		);
+		expect(
+			creditStateLine({ ...base, status: "past_due", purchased: 150 }),
+		).toBe(
+			"Pay your invoice and this month's credits land straight away. Your 150 bought credits are kept, and work again once your plan is active.",
+		);
+		expect(
+			creditStateLine({ ...base, status: "on_hold", purchased: 1 }),
+		).toMatch(/Your 1 bought credit is kept, and works again/);
+		expect(creditStateLine({ ...base, status: "cancelled" })).toMatch(
+			/^Your plan has ended/,
+		);
+	});
+
+	test("the lock outranks everything, and a debt says where it goes", () => {
+		expect(
+			creditStateLine({ ...base, locked: true, total: 0, exempt: null }),
+		).toBe(
+			"Accepting and updating orders and editing products are paused until you add credits.",
+		);
+		expect(creditStateLine({ ...base, locked: true, total: -15 })).toMatch(
+			/The 15 orders owed come off your next pack or your next monthly credits\./,
+		);
+	});
+
+	test("a trial and a custom allowance say what they are", () => {
+		expect(
+			creditStateLine({ ...base, regime: "trial", status: "trialing" }),
+		).toMatch(/^Your free trial includes 200 orders/);
+		expect(
+			creditStateLine({ ...base, customGrant: true, nextGrant: 1000 }),
+		).toBe("Your store has a custom allowance of 1000 orders a month.");
+	});
+
+	test("the rules name the order of use", () => {
+		expect(CREDIT_RULES_LINE).toMatch(
+			/Monthly credits are used first and reset on the 1st.*Bought credits are used next and last 12 months/,
+		);
 	});
 });

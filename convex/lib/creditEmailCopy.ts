@@ -1,6 +1,7 @@
 // Kedaipal Credits balance-notice emails (Credits T3, ClickUp z8r3fdf8hy), in
 // the seller's locale. Five notices, each sent at most once per its trigger:
-// `low` (10 orders left, once a period), `locked` (out of credits), `stillLocked`
+// `low` (into the last 20% of the month's credits, once a period), `locked` (out
+// of credits), `stillLocked`
 // (a monthly refresh left the store below zero), `unlocked` (back above zero)
 // and `expiring` (bought credits expire in 14 days).
 //

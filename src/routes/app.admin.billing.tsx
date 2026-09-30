@@ -318,7 +318,7 @@ export function CreditTotals() {
 	const revenue = useQuery(
 		convexQuery(api.creditPurchases.adminTopUpRevenue, {}),
 	).data;
-	const across = (n: number) => `across ${n} store${n === 1 ? "" : "s"}`;
+	const stores = (n: number) => `${n} store${n === 1 ? "" : "s"}`;
 	const tiles = [
 		{
 			label: "Unused bought credits",
@@ -329,7 +329,9 @@ export function CreditTotals() {
 			helper:
 				totals === undefined
 					? "Deferred — service still owed"
-					: `${across(totals.storesWithPurchased)} · service still owed`,
+					: totals.storesWithPurchased === 0
+						? "No store holds any yet"
+						: `Across ${stores(totals.storesWithPurchased)} — service still owed`,
 			icon: <Coins className="size-4" />,
 			className: "border-border bg-muted/50 text-foreground",
 		},
@@ -340,7 +342,9 @@ export function CreditTotals() {
 			helper:
 				totals === undefined
 					? "Taken past zero"
-					: `${across(totals.storesOwing)} · settled by the next grant or pack`,
+					: totals.storesOwing === 0
+						? "No store is below zero"
+						: `${stores(totals.storesOwing)} below zero — the next grant or pack settles it`,
 			icon: <TrendingDown className="size-4" />,
 			className:
 				totals !== undefined && totals.ordersOwed > 0
@@ -365,10 +369,9 @@ export function CreditTotals() {
 							<p className="truncate font-mono text-lg font-bold leading-tight">
 								{tile.value}
 							</p>
-							<p
-								className="truncate text-[11px] opacity-70"
-								title={tile.helper}
-							>
+							{/* Wraps: the helper IS the explanation — cut off, it
+							    read "across 0 stores · service still …". */}
+							<p className="text-[11px] leading-snug text-pretty opacity-70">
 								{tile.helper}
 							</p>
 						</div>

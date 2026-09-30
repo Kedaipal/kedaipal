@@ -70,6 +70,7 @@ function balance(over: Partial<CreditBalanceView> = {}): CreditBalanceView {
 		sellerRefundsLeft: 10,
 		customGrant: false,
 		ordersThisPeriod: 80,
+		lockExempt: null,
 		...over,
 	};
 }
@@ -178,23 +179,53 @@ describe("CreditMeter — Billing (full)", () => {
 		expect(container.textContent).toBe("");
 	});
 
-	it("an active store: orders left, both buckets, the refresh, the rules, and top-up", () => {
+	it("an active store: the total, the TWO balances apart and in their order of use, the reset, the rules, and top-up", () => {
 		mockQueries({ bal: balance({ purchased: 30, total: 150 }) });
-		render(<CreditMeter variant="full" retailer={retailer()} />);
+		const { container } = render(
+			<CreditMeter variant="full" retailer={retailer()} />,
+		);
 		expect(screen.getByTestId("credit-balance").textContent).toBe(
 			"150 orders left",
 		);
-		expect(screen.getByText("120 of 200")).toBeTruthy();
+		// Monthly credits first, bought credits next — each its own tile.
+		expect(screen.getByText("Monthly credits")).toBeTruthy();
+		expect(screen.getByText("Used first")).toBeTruthy();
+		expect(screen.getByText("Bought credits")).toBeTruthy();
+		expect(screen.getByText("Used next")).toBeTruthy();
+		expect(container.textContent).toContain("120 of 200");
 		expect(screen.getByText("30")).toBeTruthy();
+		expect(screen.getByText("Last 12 months from purchase")).toBeTruthy();
+		// A RESET, not more on top (Zaki, 1 Oct 2026).
 		expect(
-			screen.getByText(`200 more on ${formatShortDate(NOV_1)}`),
+			screen.getByText(`Back to 200 on ${formatShortDate(NOV_1)}`),
 		).toBeTruthy();
+		expect(container.textContent).not.toMatch(/more on/);
 		// The rule, in plain words — no hidden behaviour.
 		expect(
-			screen.getByText(/don't carry over; credits you buy last 12 months/),
+			screen.getByText(
+				/Monthly credits are used first and reset on the 1st — they don't carry over\. Bought credits are used next and last 12 months/,
+			),
 		).toBeTruthy();
 		const topUp = screen.getByRole("link", { name: "Top up credits" });
 		expect(topUp.getAttribute("href")).toContain("topup=1");
+	});
+
+	it("no bought credits yet: the tile says packs last 12 months", () => {
+		mockQueries({ bal: balance() });
+		render(<CreditMeter variant="full" retailer={retailer()} />);
+		expect(screen.getByText("None yet — packs last 12 months")).toBeTruthy();
+	});
+
+	it("owing orders: the reset says the debt comes off it", () => {
+		mockQueries({ bal: balance({ plan: -15, total: -15 }) });
+		render(
+			<CreditMeter variant="full" retailer={retailer({ locked: true })} />,
+		);
+		expect(
+			screen.getByText(
+				`185 on ${formatShortDate(NOV_1)} — the 15 owed come off`,
+			),
+		).toBeTruthy();
 	});
 
 	it("amber in the last fifth, red at zero", () => {
@@ -268,6 +299,31 @@ describe("CreditMeter — Billing (full)", () => {
 		).toBeTruthy();
 	});
 
+	it("past due with bought credits: they're kept, but only work once the plan is paid", () => {
+		mockQueries({
+			bal: balance({
+				regime: "none",
+				nextGrant: null,
+				plan: 0,
+				purchased: 150,
+				total: 150,
+			}),
+			topUp: refused("past_due"),
+		});
+		render(
+			<CreditMeter
+				variant="full"
+				retailer={retailer({ status: "past_due" })}
+			/>,
+		);
+		expect(
+			screen.getByText(
+				"Pay your invoice and this month's credits land straight away. Your 150 bought credits are kept, and work again once your plan is active.",
+			),
+		).toBeTruthy();
+		expect(screen.getByText("None granted this month")).toBeTruthy();
+	});
+
 	it("past due: pay the invoice, and top-up waits for it", () => {
 		mockQueries({
 			bal: balance({ regime: "none", nextGrant: null, plan: 4, total: 4 }),
@@ -289,12 +345,37 @@ describe("CreditMeter — Billing (full)", () => {
 		).toBeTruthy();
 	});
 
-	it("comped: metered, never locked, said so", () => {
-		mockQueries({ bal: balance() });
+	it("comped: metered, never locked, said so — and nothing to top up", () => {
+		mockQueries({
+			bal: balance({ lockExempt: "sponsored" }),
+			topUp: refused("sponsored"),
+		});
 		render(
 			<CreditMeter variant="full" retailer={retailer({ comped: true })} />,
 		);
 		expect(screen.getByText(/Sponsored stores are never locked/)).toBeTruthy();
+		expect(screen.queryByText("Top up credits")).toBeNull();
+		// One balance, so no order of use to explain.
+		expect(screen.queryByText("Bought credits")).toBeNull();
+		expect(screen.queryByText("Used first")).toBeNull();
+	});
+
+	it("an admin's own store sitting in past_due is never told to pay (F1)", () => {
+		mockQueries({
+			bal: balance({ lockExempt: "admin_store" }),
+			topUp: refused("admin_store"),
+		});
+		const { container } = render(
+			<CreditMeter
+				variant="full"
+				retailer={retailer({ status: "past_due" })}
+			/>,
+		);
+		expect(
+			screen.getByText(/^Kedaipal admin stores aren't billed/),
+		).toBeTruthy();
+		expect(container.textContent).not.toMatch(/Pay your invoice/);
+		expect(screen.queryByText("Top up credits")).toBeNull();
 	});
 
 	it("a Founding Member on Pro wears the 300 badge", () => {
@@ -400,14 +481,35 @@ describe("CreditMeter — Billing (full)", () => {
 });
 
 describe("CreditMeter — dashboard home (card)", () => {
-	it("a quick look with a way into Billing", () => {
-		mockQueries({ bal: balance() });
+	it("a quick look — both balances in one line — with a way into Billing", () => {
+		mockQueries({ bal: balance({ purchased: 25, total: 145 }) });
 		render(<CreditMeter variant="card" retailer={retailer()} />);
 		expect(screen.getByTestId("credit-balance").textContent).toBe(
-			"120 orders left",
+			"145 orders left",
 		);
+		expect(screen.getByText("120 of 200 monthly · 25 bought")).toBeTruthy();
+		expect(
+			screen.getByText(`Back to 200 on ${formatShortDate(NOV_1)}`),
+		).toBeTruthy();
 		expect(screen.getByRole("link", { name: "Billing" })).toBeTruthy();
-		expect(screen.queryByRole("link", { name: "Top up" })).toBeNull();
+		// Not running low: no push to buy.
+		expect(screen.queryByRole("link", { name: /Top up/ })).toBeNull();
+	});
+
+	it("running low (the last 20%): the card offers the top-up itself", () => {
+		mockQueries({ bal: balance({ plan: 40, total: 40 }) });
+		render(<CreditMeter variant="card" retailer={retailer()} />);
+		const topUp = screen.getByRole("link", { name: "Top up credits" });
+		expect(topUp.getAttribute("href")).toContain("topup=1");
+	});
+
+	it("running low but not this reader's to buy: no top-up button", () => {
+		mockQueries({
+			bal: balance({ plan: 40, total: 40 }),
+			topUp: { ...CAN_BUY, viewOnly: "acting_as_admin" },
+		});
+		render(<CreditMeter variant="card" retailer={retailer()} />);
+		expect(screen.queryByRole("link", { name: /Top up/ })).toBeNull();
 	});
 
 	it("locked: the one way back, by route", () => {

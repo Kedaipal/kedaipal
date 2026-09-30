@@ -9,6 +9,7 @@ import { useDashboardRetailer } from "../../hooks/useDashboardRetailer";
 import { useStoreRole } from "../../hooks/usePermission";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../../lib/contact";
+import { TOP_UP_SEARCH } from "../../lib/credit-top-up";
 import {
 	lockCta,
 	ordersBalanceLabel,
@@ -40,8 +41,12 @@ import {
  *    past-due: accepting/updating orders and editing products are paused
  *    while orders keep arriving; one button to the way back (top up / pick a
  *    plan / pay the invoice), or "ask the owner" for a teammate.
- *  - credits running low (the last fifth of the month's grant) → amber,
- *    dismissable for the month. Replaces the soft order-cap nudge.
+ *  - credits running low (the last 20% of the month's credits — the meter's
+ *    amber and the low email's line) → amber, dismissable (keyed by the month,
+ *    so a new month's warning shows even in the same session), with
+ *    the way to stay ahead of zero for THIS reader: "Top up credits" straight
+ *    into the pack picker, "See plans" on a trial, or the meter for a
+ *    teammate who can't buy. Replaces the soft order-cap nudge.
  * Nothing for active/comped with nothing due. Warnings are dismissable for the
  * session only (sessionStorage, keyed by the deadline) so they return next login
  * and a new deadline re-shows. See docs/manual-subscription.md.
@@ -88,6 +93,7 @@ export function SubscriptionBanner({
 			total: balance?.total,
 			periodGrant: balance?.periodGrant,
 			customGrant: balance?.customGrant,
+			exempt: balance ? balance.lockExempt !== null : undefined,
 		},
 	);
 
@@ -168,36 +174,66 @@ export function SubscriptionBanner({
 		);
 	}
 
-	// Credits running low (amber) — dismissable for the month.
+	// Credits running low (amber) — dismissable, keyed by the month. The button is
+	// the way to stay ahead of zero for THIS reader: a pack, straight into the
+	// picker, when a top-up is the way and they may buy it (the owner, or a
+	// teammate holding Credits write — never an admin acting as the store);
+	// the plans while on the trial (packs top up a paid plan); otherwise the
+	// meter, where the balances and who can buy are spelled out.
 	if (state.kind === "creditsLow") {
 		if (dismissed) return null;
+		const canBuy =
+			creditLock.route === "topup" &&
+			creditLock.canAct &&
+			retailer?.actingAsAdmin !== true;
+		const onTrial = creditLock.route === "pick_plan";
+		const low = (
+			<span className="font-medium">
+				Running low: {ordersBalanceLabel(state.total)}.
+			</span>
+		);
 		return (
-			<div className="flex items-center gap-3 border-b border-amber-200 bg-amber-50 px-5 py-3 dark:border-amber-900 dark:bg-amber-950/40 lg:px-8">
+			<div className="flex flex-col gap-2 border-b border-amber-200 bg-amber-50 px-5 py-3 dark:border-amber-900 dark:bg-amber-950/40 sm:flex-row sm:items-center sm:gap-3 lg:px-8">
 				<p className="flex-1 text-sm text-foreground/90">
-					<span className="font-medium">
-						{ordersBalanceLabel(state.total)}.
-					</span>{" "}
-					When you run out, orders keep coming in but you can't work on them
-					until you add credits.
+					{low}{" "}
+					{canBuy
+						? "Top up now so new orders never wait — bought credits carry over for 12 months, so nothing goes to waste."
+						: onTrial
+							? "When your trial's orders are used, new orders wait until you pick a plan."
+							: creditLock.canAct
+								? "When you run out, new orders keep coming in but wait until credits are added."
+								: "When the store runs out, new orders wait until the owner adds credits."}
 				</p>
-				<Link
-					to="/app/settings"
-					search={{ tab: "billing" }}
-					hash="credits"
-					className="inline-flex h-9 w-fit shrink-0 items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
-				>
-					See credits
-				</Link>
-				{dismissKey ? (
-					<button
-						type="button"
-						onClick={dismiss}
-						aria-label="Dismiss"
-						className="-mr-1 shrink-0 rounded-md p-1.5 text-foreground/50 hover:bg-foreground/5 hover:text-foreground"
-					>
-						<X className="size-4" />
-					</button>
-				) : null}
+				<div className="flex shrink-0 items-center gap-2">
+					{canBuy ? (
+						<Link
+							to="/app/settings"
+							search={TOP_UP_SEARCH}
+							className="inline-flex h-9 w-fit shrink-0 items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
+						>
+							Top up credits
+						</Link>
+					) : (
+						<Link
+							to="/app/settings"
+							search={{ tab: "billing" }}
+							hash={onTrial && !isMember ? undefined : "credits"}
+							className="inline-flex h-9 w-fit shrink-0 items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
+						>
+							{onTrial && !isMember ? "See plans" : "See credits"}
+						</Link>
+					)}
+					{dismissKey ? (
+						<button
+							type="button"
+							onClick={dismiss}
+							aria-label="Dismiss"
+							className="-mr-1 inline-flex size-9 shrink-0 items-center justify-center rounded-md text-foreground/50 hover:bg-foreground/5 hover:text-foreground"
+						>
+							<X className="size-4" />
+						</button>
+					) : null}
+				</div>
 			</div>
 		);
 	}

@@ -200,9 +200,39 @@ export function topUpBlock(
 // The seller lock at zero (Credits T3, ClickUp z8r3fdf8hy)
 // ---------------------------------------------------------------------------
 
-/** Orders left at which the low-credit warning goes out (register item 5 — the
- * same number T4's auto top-up defaults to). */
-export const LOW_CREDIT_THRESHOLD = 10;
+/**
+ * The share of the month's credits at which a store is RUNNING LOW (Zaki,
+ * 1 Oct 2026 — was a flat 10 left): the meter turns amber, the dashboard
+ * banner offers a top-up and the low email goes out, all at the same moment.
+ * Measured on what's left IN TOTAL (monthly + bought) against the month's
+ * grant — exactly "20% of the monthly credits left" for a store with no
+ * bought credits, and a store with bought credits banked isn't told to buy
+ * more while it has plenty.
+ */
+export const LOW_CREDIT_RATIO = 0.2;
+
+/** Orders left at or below which a store is running low — 20 on Starter's
+ * 100, 40 on Pro's 200, 60 on Founding Pro's 300, 40 of a 200-order trial.
+ * Zero for a store with no grant this month (it has nothing to run low on). */
+export function lowCreditLine(periodGrant: number): number {
+	return Math.ceil(Math.max(0, periodGrant) * LOW_CREDIT_RATIO);
+}
+
+/** WHY a store is metered but never locked — the copy that explains it
+ * differs: a Kedaipal admin's own store is never billed; a SPONSORED store
+ * (comped, or the missing-row fail-safe `resolveAccess` treats as comped) is
+ * covered by Kedaipal. `null` for every store the lock applies to. */
+export type CreditLockExemption = "admin_store" | "sponsored";
+
+export function creditLockExemption(args: {
+	status: CreditBillingStatus;
+	comped: boolean;
+	ownerIsAdmin: boolean;
+}): CreditLockExemption | null {
+	if (args.ownerIsAdmin) return "admin_store";
+	if (args.status === null || args.comped) return "sponsored";
+	return null;
+}
 
 /** Stores that are metered but NEVER locked: comped, owned by a Kedaipal
  * admin, and the missing-row fail-safe. They get no balance notices either. */
@@ -211,7 +241,7 @@ export function creditLockExempt(args: {
 	comped: boolean;
 	ownerIsAdmin: boolean;
 }): boolean {
-	return args.status === null || args.comped || args.ownerIsAdmin;
+	return creditLockExemption(args) !== null;
 }
 
 /** What puts credits back for a locked store — it decides the lock copy and
@@ -340,7 +370,8 @@ export const CREDIT_LOCK_PREFIXES = [
  *  - `locked`: at or below zero and this lock hasn't been announced;
  *  - `still_locked`: a new period's refresh left the store below zero again;
  *  - `unlocked`: back above zero after an announced lock;
- *  - `low`: at or below LOW_CREDIT_THRESHOLD, once a period, and never for a
+ *  - `low`: at or below the low line (`lowCreditLine` — 20% of the month's
+ *    credits), once a period, and never for a
  *    store on a custom grant (its allowance was negotiated, no nudging). */
 export type CreditNoticeKind = "low" | "locked" | "still_locked" | "unlocked";
 
@@ -350,6 +381,8 @@ export function dueCreditNotice(args: {
 	/** The period rolled since the lock was announced (a refresh happened). */
 	refreshedWhileLocked: boolean;
 	customGrant: boolean;
+	/** `lowCreditLine` of the month's grant. */
+	lowLine: number;
 }): CreditNoticeKind | null {
 	const lockAnnounced = args.sent.includes("locked");
 	if (args.total <= 0) {
@@ -360,7 +393,7 @@ export function dueCreditNotice(args: {
 	}
 	if (lockAnnounced) return "unlocked";
 	if (
-		args.total <= LOW_CREDIT_THRESHOLD &&
+		args.total <= args.lowLine &&
 		!args.customGrant &&
 		!args.sent.includes("low")
 	)

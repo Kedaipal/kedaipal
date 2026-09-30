@@ -85,11 +85,13 @@ describe("CreditTotals", () => {
 		render(<CreditTotals />);
 		expect(screen.getByText("1,250")).toBeTruthy();
 		expect(
-			screen.getByText(/across 4 stores · service still owed/),
+			screen.getByText("Across 4 stores — service still owed"),
 		).toBeTruthy();
 		expect(screen.getByText("37")).toBeTruthy();
 		expect(
-			screen.getByText(/across 3 stores · settled by the next grant or pack/),
+			screen.getByText(
+				"3 stores below zero — the next grant or pack settles it",
+			),
 		).toBeTruthy();
 		// Credits, never money: no currency on either credit tile.
 		for (const label of [/Unused bought credits/, /Orders owed/])
@@ -118,11 +120,19 @@ describe("CreditTotals", () => {
 		);
 	});
 
-	it("an empty book reads zero, and a single store reads singular", () => {
+	it("an empty book reads zero in words, and a single store reads singular", () => {
 		state.totals = totals({ purchasedUnused: 50, storesWithPurchased: 1 });
 		render(<CreditTotals />);
-		expect(screen.getByText(/across 1 store ·/)).toBeTruthy();
+		expect(
+			screen.getByText("Across 1 store — service still owed"),
+		).toBeTruthy();
 		expect(screen.getByText("0")).toBeTruthy();
+		// Never "across 0 stores".
+		expect(screen.getByText("No store is below zero")).toBeTruthy();
+		cleanup();
+		state.totals = totals();
+		render(<CreditTotals />);
+		expect(screen.getByText("No store holds any yet")).toBeTruthy();
 	});
 
 	it("says so when the book is past what it can count exactly", () => {

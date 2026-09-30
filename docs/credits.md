@@ -535,23 +535,42 @@ tracking page at +50 and −50 and asserts they're identical).
 
 One `CreditMeter`, two places (one control, one rule):
 
-- **Dashboard home** (`card`) — "42 orders left", the bar, the next refresh
-  ("200 more on 1 Nov"), and a way into Billing; when locked, the one button
-  that puts credits back.
-- **Settings → Billing** (`full`), right under the plan — both buckets
-  ("120 of 200" plan, bought), the next refresh, the rule in plain words (plan
-  credits refresh on the 1st and don't carry over; bought credits last 12
-  months; plan credits are used first; a cancelled never-accepted order gives
-  its credit back, up to 10 a month), the nearest bought-credit expiry when it
-  falls within 30 days, and **Top up credits** → T2's picker.
+- **Dashboard home** (`card`) — "42 orders left", the monthly bar, both
+  balances in one line ("120 of 200 monthly · 25 bought"), the reset ("Back to
+  200 on 1 Nov"), and a way into Billing. One button by urgency: when locked,
+  the one that puts credits back; once running low, **Top up credits** straight
+  into the picker (for a reader who may buy); otherwise just Billing.
+- **Settings → Billing** (`full`), right under the plan — the total, then **the
+  two balances as two tiles in their order of use** (Zaki, 1 Oct 2026):
+  *Monthly credits · used first* ("120 of 200", its bar, "Back to 200 on 1 Nov")
+  and *Bought credits · used next* ("25", "Next 25 expire 12 Jan 2027" / "None
+  yet — packs last 12 months"); the state line; the nearest bought-credit
+  expiry when it falls within 30 days; **Top up credits** → T2's picker; and
+  the rule in plain words at the foot (monthly credits are used first and reset
+  on the 1st — they don't carry over; bought credits are used next and last 12
+  months; a cancelled never-accepted order gives its credit back, up to 10 a
+  month). A store that can't buy and holds no bought credits (sponsored, an
+  admin's own, a trial) shows the one tile.
 
-Order counts only — "15 orders owed", never money. Amber in the last fifth of
-the month's grant (never below the 10-left line), red at 0. Every state is
-designed: loading, trial ("200 orders from your first order"), active, founding
-(the 300 badge), past due, on hold, comped ("never locked — here so you can see
-your volume"), custom allowance, at zero, below zero ("the 15 owed come off
-your next pack or your next monthly credits"). Top up is hidden where packs
-aren't sold and **disabled with T2's own sentence** everywhere else
+**The reset reads as a reset** (Zaki's test round): "300 more on 1 Oct" read as
+300 ADDED; monthly credits go BACK to the allowance. `creditRefreshLabel`
+writes "Back to 300 on 1 Nov", "285 on 1 Nov — the 15 owed come off", "0 on
+1 Nov — the 300 owed use it all up" or "Still 20 owed after 1 Nov".
+
+Order counts only — "15 orders owed", never money. **Amber once the store is
+into the last 20% of the month's credits** (`lowCreditLine` — one line shared
+with the banner and the low email), red at 0. Every state is designed —
+`creditStateLine` is the one author: loading, trial ("200 orders from your
+first order"), active, founding (the 300 badge), past due / on hold / ended
+("…your 150 bought credits are kept, and work again once your plan is active"
+— bought credits never stand in for a plan), sponsored ("never locked — here so
+you can see your volume"), **an admin's own store** ("aren't billed… never
+locks" — keyed on `getBalance`'s new `lockExempt`, never on the raw status: an
+admin store sits in `past_due` or `trialing` and was being told to pay its
+invoice), custom allowance, at zero, below zero ("the 15 owed come off your
+next pack or your next monthly credits"). Top up is **hidden** where packs
+aren't sold and for a store that can never be locked (the state line says why
+instead), and **disabled with T2's own sentence** everywhere else
 (`creditPurchases.topUpOptions` — credits-read gated, so a teammate with Credits
 write gets it without Billing access).
 
@@ -612,8 +631,20 @@ refusal and every lock surface's copy.
 ### What the seller sees
 
 - **The banner** (app shell, red, right after past due): "You're out of credits
-  · 3 new orders since you ran out" + the one button. **Low** (amber,
-  dismissable for the month) in the last fifth of the grant.
+  · 3 new orders since you ran out" + the one button. **Running low** (amber,
+  dismissable — keyed by the month) once the store is into the last 20% of the
+  month's credits — 60 left on Founding Pro's 300, 40 on Pro, 20 on Starter, 40
+  of a trial's 200 — with the way to stay ahead of zero for THIS reader: **Top
+  up credits** straight into the picker (the owner, or a teammate holding
+  Credits write; never an admin acting as the store), **See plans** on a trial
+  (packs top up a paid plan), or **See credits** for a teammate who can't buy,
+  told the owner adds them. Never for a store that can't be locked or a custom
+  allowance. Measured on what's left IN TOTAL against the month's grant, so a
+  store with bought credits banked isn't told to buy more (Zaki, 1 Oct 2026:
+  "once base credit is 20%, show banner w/ CTA to purchase" — identical for a
+  store with no bought credits).
+- **The pack picker** says the result before the tap — and for a locked store,
+  "…Your store unlocks as soon as it's paid."
 - **`CreditLockNote`** in place on the orders inbox, the order page, the
   products list, new/edit product, import and categories — what's paused, what
   still works, the one button (or "ask the store owner").
@@ -645,16 +676,18 @@ refusal and every lock surface's copy.
 ### The notices
 
 - **When:** `applyEntry` schedules `creditNotices.evaluate` five minutes after
-  the balance crosses a line (≤ 10, ≤ 0, back above 0); the monthly roll
+  the balance crosses a line (into the last 20% of the month's credits —
+  `lowCreditLine` of the month's grant — ≤ 0, back above 0); the monthly roll
   schedules one for a store still at or below zero. The evaluator reads the
-  balance **when it runs**, so a burst from 12 to −3 is one "you're out", never
-  "10 left" then "out".
+  balance **when it runs**, so a burst from 45 to −3 is one "you're out", never
+  "running low" then "out".
 - **Once:** `creditAccounts.notices` (`{periodKey, sent}`) — `low` once a
   period, `locked` once per lock (the marker carries across the 1st, so a lock
   that spans it gets `still_locked`, not a second `locked`), `unlocked` clears
   it.
-- **What:** `low` (10 orders left — never for comped stores or a custom
-  allowance), `locked`, `still_locked` (a refresh left the store at or below
+- **What:** `low` (the last 20% of the month's credits — was a flat 10 until
+  Zaki's test round, 1 Oct 2026; the meter's amber and the banner move with it,
+  one line — never for comped stores or a custom allowance), `locked`, `still_locked` (a refresh left the store at or below
   zero — says how many orders short, or "at 0"), `unlocked`, and `expiring`
   (a bought lot expires within 14 days — once per lot via
   `creditLots.expiryNoticeAt`, a daily 00:15 MYT sweep, one email per store).
@@ -698,4 +731,4 @@ refusal and every lock surface's copy.
 T1 ← T2 ← T5 ← T3, merged in that order: T2 must not ship without T3's Top
 up buttons (its only entry points), T3 and T5 both reshape the plan cards, and
 the four ship in one release so the dashboard and `/pricing` never disagree.
-T4 (auto top-up) builds on T2 afterwards.
+T4 (auto top-up) was cancelled on 1 Oct 2026 — packs never auto-reload.

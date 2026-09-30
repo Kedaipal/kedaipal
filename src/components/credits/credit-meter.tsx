@@ -3,17 +3,23 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import type { FunctionReturnType } from "convex/server";
 import { Award, Gauge } from "lucide-react";
+import type { ReactNode } from "react";
 import { api } from "../../../convex/_generated/api";
+import type { CreditBalanceView } from "../../../convex/credits";
 import { TOP_UP_VIEW_ONLY_MESSAGE } from "../../../convex/lib/creditPurchases";
 import { useCreditLockFor } from "../../hooks/useCreditLock";
 import { TOP_UP_SEARCH } from "../../lib/credit-top-up";
 import {
+	CREDIT_RULES_LINE,
 	type CreditTone,
+	creditRefreshLabel,
+	creditStateLine,
 	creditTone,
 	lockCta,
 	ordersBalanceLabel,
 } from "../../lib/credits-ui";
 import { formatShortDate } from "../../lib/format";
+import { cn } from "../../lib/utils";
 import { NeedsAccessNote } from "../app/owner-only-note";
 import { Button } from "../ui/button";
 import { Skeleton } from "../ui/skeleton";
@@ -35,9 +41,13 @@ const TONE_BAR: Record<CreditTone, string> = {
  * The credit balance (Credits T3) — "42 orders left", never an amount of
  * money. One component, two places (one control, one rule): the dashboard
  * home's quick look (`card`, with a way into Billing) and Settings → Billing
- * (`full`, with the breakdown, the rules and the top-up). Reads
+ * (`full`, with the two balances, the rules and the top-up). Reads
  * `credits.getBalance`, gated on the Credits permission — a teammate without
  * it sees nothing here (the lock itself still reaches them via the banner).
+ *
+ * The two balances are always shown apart (Zaki, 1 Oct 2026): MONTHLY credits
+ * are used first and reset on the 1st; BOUGHT credits are used next and carry
+ * over for 12 months. The headline is their sum — what the lock reads.
  */
 type Retailer = NonNullable<
 	FunctionReturnType<typeof api.retailers.getMyRetailer>
@@ -66,17 +76,13 @@ export function CreditMeter({
 		return variant === "card" ? (
 			<Skeleton className="h-36 w-full rounded-2xl" />
 		) : (
-			<Skeleton className="h-48 w-full rounded-2xl" />
+			<Skeleton className="h-64 w-full rounded-2xl" />
 		);
 	if (balance === null) return null;
 
 	const sub = retailer?.subscription;
-	const comped = sub?.comped === true;
+	const exempt = balance.lockExempt;
 	const tone = creditTone(balance.total, balance.periodGrant);
-	const fill =
-		balance.periodGrant > 0
-			? Math.min(1, Math.max(0, balance.plan / balance.periodGrant))
-			: 0;
 	const founding =
 		retailer?.isFoundingMember === true &&
 		balance.regime === "monthly" &&
@@ -88,33 +94,29 @@ export function CreditMeter({
 			? balance.nextExpiry
 			: null;
 
-	// Top-up opens T2's pack picker: hidden where packs aren't sold, disabled
-	// WITH the reason everywhere else — T2's own sentences (`topUpOptions`), so
-	// the meter and the picker can never disagree about who may buy.
-	const showTopUp = topUp?.available === true;
+	// Top-up opens T2's pack picker: hidden where packs aren't sold AND for a
+	// store that can never be locked (an admin's own store, a sponsored one —
+	// nothing to top up; the state line says so), disabled WITH the reason
+	// everywhere else — T2's own sentences (`topUpOptions`), so the meter and
+	// the picker can never disagree about who may buy.
+	const showTopUp = topUp?.available === true && exempt === null;
 	const topUpReason =
 		topUp?.refusalMessage ??
 		(topUp?.viewOnly === "acting_as_admin" ? TOP_UP_VIEW_ONLY_MESSAGE : null);
 	const topUpNoWrite = topUp?.viewOnly === "no_write";
 	const canTopUp = topUpReason === null && !topUpNoWrite;
 
-	const stateLine = (() => {
-		if (lock.locked)
-			return balance.total < 0
-				? `Accepting and updating orders and editing products are paused. The ${-balance.total} ${balance.total === -1 ? "order" : "orders"} owed come off your next pack or your next monthly credits.`
-				: "Accepting and updating orders and editing products are paused until you add credits.";
-		if (comped)
-			return "Sponsored stores are never locked — this is here so you can see your volume.";
-		if (balance.regime === "trial")
-			return "Your free trial includes 200 orders, counted from your first order. Pick a plan when they're used or your first invoice comes due.";
-		if (sub?.status === "past_due")
-			return "Pay your invoice and this month's credits land straight away.";
-		if (sub?.status === "on_hold")
-			return "Your plan is paused, so no monthly credits are granted — resume to get this month's.";
-		if (balance.customGrant && balance.nextGrant !== null)
-			return `Your store has a custom allowance of ${balance.nextGrant} orders a month.`;
-		return null;
-	})();
+	const stateLine = creditStateLine({
+		locked: lock.locked,
+		total: balance.total,
+		purchased: balance.purchased,
+		regime: balance.regime,
+		status: sub?.status,
+		exempt,
+		customGrant: balance.customGrant,
+		nextGrant: balance.nextGrant,
+	});
+	const refresh = creditRefreshLabel(balance);
 
 	const header = (
 		<div className="flex items-center justify-between gap-3">
@@ -131,46 +133,42 @@ export function CreditMeter({
 		</div>
 	);
 
-	const figure = (
-		<div className="flex flex-col gap-2">
-			<p
-				className={`text-2xl font-semibold tabular-nums ${TONE_TEXT[tone]}`}
-				data-testid="credit-balance"
-			>
-				{ordersBalanceLabel(balance.total)}
-			</p>
-			{/* Decorative: the figure above IS the reading ("42 orders left"),
-			    so the bar stays out of the accessibility tree. */}
-			<div
-				className="h-2 overflow-hidden rounded-full bg-muted"
-				aria-hidden="true"
-			>
-				<div
-					className={`h-full rounded-full transition-all ${TONE_BAR[tone]}`}
-					style={{ width: `${Math.round(fill * 100)}%` }}
-				/>
-			</div>
-		</div>
+	const headline = (
+		<p
+			className={`text-2xl font-semibold tabular-nums ${TONE_TEXT[tone]}`}
+			data-testid="credit-balance"
+		>
+			{ordersBalanceLabel(balance.total)}
+		</p>
 	);
 
-	const refreshLine =
-		balance.refreshesAt !== null && balance.nextGrant !== null
-			? `${balance.nextGrant} more on ${formatShortDate(balance.refreshesAt)}`
-			: null;
-
 	if (variant === "card") {
-		const cta = lock.locked && lock.canAct ? lockCta(lock.route) : null;
+		// One button, by urgency: the way back when locked; a top-up once the
+		// store is running low and this reader may buy; otherwise just Billing.
+		const cta =
+			lock.locked && lock.canAct
+				? lockCta(lock.route)
+				: !lock.locked && tone === "low" && showTopUp && canTopUp
+					? { label: "Top up credits", search: TOP_UP_SEARCH }
+					: null;
 		return (
 			<section className="flex flex-col gap-3 rounded-2xl border border-input bg-background p-5">
 				{header}
-				{figure}
+				<div className="flex flex-col gap-2">
+					{headline}
+					<MonthlyBar balance={balance} tone={tone} />
+					<p className="text-xs text-muted-foreground tabular-nums">
+						{monthlyFigure(balance)} {monthlyNoun(balance)} ·{" "}
+						{balance.purchased} bought
+					</p>
+				</div>
 				<p className="text-xs text-muted-foreground">
 					{lock.locked
 						? "Paused: accepting and updating orders, editing products."
-						: (refreshLine ??
+						: (refresh ??
 							(balance.regime === "trial"
 								? "Trial orders — pick a plan to keep going once they're used."
-								: "Plan credits refresh on the 1st."))}
+								: "Monthly credits reset on the 1st."))}
 				</p>
 				<div className="flex flex-wrap gap-2">
 					{cta ? (
@@ -195,33 +193,60 @@ export function CreditMeter({
 		);
 	}
 
+	// A store that can't buy packs (never locked, or on its trial) and holds no
+	// bought credits has one balance, so "used first / used next" has nothing
+	// to explain.
+	const showBought =
+		balance.purchased > 0 || (exempt === null && balance.regime !== "trial");
+
 	return (
 		<section
 			id="credits"
 			className="flex flex-col gap-4 rounded-2xl border border-input bg-background p-5 lg:p-6"
 		>
 			{header}
-			{figure}
-			<dl className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-3">
-				<div>
-					<dt className="text-muted-foreground">Plan credits</dt>
-					<dd className="font-medium tabular-nums">
-						{balance.plan < 0
-							? `${-balance.plan} owed`
-							: `${balance.plan} of ${balance.periodGrant}`}
-					</dd>
-				</div>
-				<div>
-					<dt className="text-muted-foreground">Bought credits</dt>
-					<dd className="font-medium tabular-nums">{balance.purchased}</dd>
-				</div>
-				{refreshLine ? (
-					<div className="col-span-2 sm:col-span-1">
-						<dt className="text-muted-foreground">Next refresh</dt>
-						<dd className="font-medium">{refreshLine}</dd>
-					</div>
+			{headline}
+			<div
+				className={cn(
+					"grid gap-3",
+					showBought ? "sm:grid-cols-2" : "grid-cols-1",
+				)}
+			>
+				<BalanceTile
+					label={
+						balance.regime === "trial" ? "Trial orders" : "Monthly credits"
+					}
+					order={showBought ? "Used first" : null}
+					figure={
+						<>
+							{monthlyFigure(balance)}
+							{balance.plan >= 0 && balance.periodGrant > 0 ? (
+								<span className="text-sm font-normal text-muted-foreground">
+									{" "}
+									of {balance.periodGrant}
+								</span>
+							) : null}
+						</>
+					}
+					detail={monthlyDetail(balance, refresh)}
+				>
+					<MonthlyBar balance={balance} tone={tone} />
+				</BalanceTile>
+				{showBought ? (
+					<BalanceTile
+						label="Bought credits"
+						order="Used next"
+						figure={balance.purchased}
+						detail={
+							balance.purchased > 0 && balance.nextExpiry
+								? `Next ${balance.nextExpiry.credits} expire ${formatShortDate(balance.nextExpiry.at)}`
+								: balance.purchased > 0
+									? "Last 12 months from purchase"
+									: "None yet — packs last 12 months"
+						}
+					/>
 				) : null}
-			</dl>
+			</div>
 			{stateLine ? (
 				<p
 					className={`text-sm ${lock.locked ? "font-medium text-foreground" : "text-muted-foreground"}`}
@@ -236,12 +261,6 @@ export function CreditMeter({
 					{formatShortDate(expirySoon.at)}.
 				</p>
 			) : null}
-			<p className="border-t border-border pt-3 text-xs leading-relaxed text-muted-foreground">
-				1 credit = 1 order. Plan credits refresh on the 1st of every month and
-				don't carry over; credits you buy last 12 months, and plan credits are
-				always used first. Cancel a new order before you accept it and its
-				credit comes back (up to 10 a month).
-			</p>
 			{showTopUp ? (
 				<div className="flex flex-col gap-1.5">
 					<Button
@@ -265,6 +284,86 @@ export function CreditMeter({
 					) : null}
 				</div>
 			) : null}
+			<p className="border-t border-border pt-3 text-xs leading-relaxed text-muted-foreground">
+				{CREDIT_RULES_LINE}
+			</p>
 		</section>
+	);
+}
+
+type Balance = Pick<
+	CreditBalanceView,
+	"plan" | "periodGrant" | "regime" | "purchased"
+>;
+
+/** The monthly bucket as a figure: what's left, or what's owed. */
+function monthlyFigure(balance: Balance): string {
+	return balance.plan < 0 ? `${-balance.plan} owed` : String(balance.plan);
+}
+
+function monthlyNoun(balance: Balance): string {
+	const kind = balance.regime === "trial" ? "trial" : "monthly";
+	return balance.plan >= 0 && balance.periodGrant > 0
+		? `of ${balance.periodGrant} ${kind}`
+		: kind;
+}
+
+/** Under the monthly figure: when it resets, or why it won't. */
+function monthlyDetail(balance: Balance, refresh: string | null): string {
+	if (refresh) return refresh;
+	if (balance.regime === "trial")
+		return "One-off for your trial — your plan's monthly credits take over when you subscribe";
+	return "None granted this month";
+}
+
+/** The monthly bucket against the month's grant. Decorative: the figures
+ * say it in words, so the bar stays out of the accessibility tree. */
+function MonthlyBar({ balance, tone }: { balance: Balance; tone: CreditTone }) {
+	const fill =
+		balance.periodGrant > 0
+			? Math.min(1, Math.max(0, balance.plan / balance.periodGrant))
+			: 0;
+	return (
+		<div
+			className="h-2 overflow-hidden rounded-full bg-muted"
+			aria-hidden="true"
+		>
+			<div
+				className={`h-full rounded-full transition-all ${TONE_BAR[tone]}`}
+				style={{ width: `${Math.round(fill * 100)}%` }}
+			/>
+		</div>
+	);
+}
+
+/** One of the two balances — its name, where it sits in the order of use,
+ * the figure, and one line on when it changes. */
+function BalanceTile({
+	label,
+	order,
+	figure,
+	detail,
+	children,
+}: {
+	label: string;
+	order: string | null;
+	figure: ReactNode;
+	detail: string;
+	children?: ReactNode;
+}) {
+	return (
+		<div className="flex min-w-0 flex-col gap-2 rounded-xl border border-border bg-muted/30 p-4">
+			<div className="flex items-center justify-between gap-2">
+				<p className="text-xs font-medium text-muted-foreground">{label}</p>
+				{order ? (
+					<span className="shrink-0 rounded-full border border-border bg-background px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+						{order}
+					</span>
+				) : null}
+			</div>
+			<p className="text-xl font-semibold tabular-nums">{figure}</p>
+			{children}
+			<p className="text-xs text-muted-foreground">{detail}</p>
+		</div>
 	);
 }

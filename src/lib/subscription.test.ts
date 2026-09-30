@@ -469,6 +469,29 @@ describe("resolveBannerState", () => {
 				ordersWaiting: 0,
 			}).kind,
 		).toBe("none");
+		// A store that can never be locked has nothing to run low on.
+		expect(
+			resolveBannerState(s, undefined, NOW, undefined, {
+				...low,
+				total: 5,
+				exempt: true,
+			}).kind,
+		).toBe("none");
+		// The line is 20% of THIS month's credits: 60 on Founding Pro's 300.
+		expect(
+			resolveBannerState(s, undefined, NOW, undefined, {
+				...low,
+				periodGrant: 300,
+				total: 60,
+			}).kind,
+		).toBe("creditsLow");
+		expect(
+			resolveBannerState(s, undefined, NOW, undefined, {
+				...low,
+				periodGrant: 300,
+				total: 61,
+			}).kind,
+		).toBe("none");
 	});
 });
 

@@ -1,13 +1,14 @@
 // Kedaipal Credits balance notices (Credits T3, ClickUp z8r3fdf8hy,
 // docs/credits.md#notices). The seller hears about their balance at the four
-// moments that matter — 10 orders left, out of credits, still short after a
-// monthly refresh, back above zero — plus 14 days before bought credits expire.
+// moments that matter — running low (the last 20% of the month's credits,
+// `lowCreditLine`), out of credits, still short after a monthly refresh, back
+// above zero — plus 14 days before bought credits expire.
 //
 // Shape:
 //  - The ledger's one write path (`applyEntry`) schedules `evaluate` a few
 //    minutes after the balance crosses a line. `evaluate` reads the state AT
-//    THAT MOMENT, so a burst that takes a store from 12 to −3 sends one
-//    "you're out", never a "10 left" followed by it.
+//    THAT MOMENT, so a burst that takes a store from 25 to −3 sends one
+//    "you're out", never a "running low" followed by it.
 //  - Dedupe lives on `creditAccounts.notices` ({periodKey, sent}): "low" once a
 //    period, "locked" once per lock (carried across a month boundary so a lock
 //    that spans the 1st isn't re-announced — "still_locked" says it instead).
@@ -42,6 +43,7 @@ import {
 	creditLockExempt,
 	creditUnlockRoute,
 	dueCreditNotice,
+	lowCreditLine,
 } from "./lib/credits";
 import { sendEmail } from "./lib/email";
 import type { Locale } from "./lib/emailCopy";
@@ -102,7 +104,7 @@ function exempt(
 
 /**
  * A plan with more included orders, when moving up beats buying packs — named
- * in the "10 left" email (never in the WhatsApp template: utility only).
+ * in the running-low email (never in the WhatsApp template: utility only).
  * Starter → Pro is the one case where it's cleanly cheaper for the extra
  * orders; above that, packs are the honest answer until volume is steady.
  */
@@ -154,13 +156,14 @@ export const evaluate = internalMutation({
 			sent,
 			refreshedWhileLocked: carriedLock && !samePeriod,
 			customGrant: account.grantOverride !== undefined,
+			lowLine: lowCreditLine(projected.periodGrant),
 		});
 
 		let nextSent = sent;
 		if (kind === "unlocked")
 			nextSent = sent.filter((k) => k !== "locked" && k !== "still_locked");
 		// Announcing the lock also spends this period's "low" nudge — the
-		// seller must never get "10 left" AFTER being told they're out.
+		// seller must never hear "running low" AFTER being told they're out.
 		else if (kind === "locked")
 			nextSent = [...new Set([...sent, "locked", "low"])];
 		else if (kind) nextSent = [...sent, kind];

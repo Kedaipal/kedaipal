@@ -509,6 +509,50 @@ describe("the seller lock at zero credits", () => {
 	});
 });
 
+describe("bought credits never stand in for a plan (Zaki × Arif, 16 Sep; restated 1 Oct 2026)", () => {
+	test("a past-due store holding 150 bought credits still can't work — it's view-only until it pays", async () => {
+		const t = setup();
+		const s = await store(t, { status: "active", plan: "pro" });
+		const order = await storefrontOrder(t, s.retailerId, s.productId);
+		await t.run((ctx) =>
+			addPurchasedCredits(ctx, {
+				retailerId: s.retailerId,
+				credits: 150,
+				source: "purchase",
+				type: "purchase",
+				reason: "purchase",
+				refId: "p150",
+				createdBy: OWNER,
+				now: Date.now(),
+			}),
+		);
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", s.retailerId))
+				.first();
+			if (sub) await ctx.db.patch(sub._id, { status: "past_due" });
+		});
+		const asOwner = t.withIdentity({ subject: OWNER });
+		// Plenty of credits — and still refused, by the plan, not the balance.
+		expect(await total(t, s.retailerId)).toBeGreaterThan(100);
+		await expect(
+			asOwner.mutation(api.orders.updateStatus, {
+				orderId: order._id,
+				status: "confirmed",
+			}),
+		).rejects.toThrow(/subscription is past due, so your store is view-only/);
+		await expect(
+			asOwner.mutation(api.products.archive, { productId: s.productId }),
+		).rejects.toThrow(/view-only/);
+		// And no pack can be bought to get round it.
+		const options = await asOwner.query(api.creditPurchases.topUpOptions, {});
+		expect(options?.refusal).toBe("past_due");
+		// Buyers are never affected: the storefront still takes orders.
+		await storefrontOrder(t, s.retailerId, s.productId);
+	});
+});
+
 describe("cancel outlook — the dialog says whether the credit comes back", () => {
 	test("new order: comes back; accepted: kept; placed before credits: never charged", async () => {
 		const t = setup();
@@ -551,20 +595,30 @@ describe("balance notices", () => {
 	const evaluate = (t: T, retailerId: Id<"retailers">) =>
 		t.mutation(internal.creditNotices.evaluate, { retailerId, route: "settle" });
 
-	test("10 left fires once a period", async () => {
+	test("running low — the last 20% of the month's credits — fires once a period", async () => {
 		const t = setup();
+		// Starter: 100 a month, so the line is 20 left.
 		const s = await store(t);
-		await setBalance(t, s.retailerId, 10);
+		await setBalance(t, s.retailerId, 21);
+		expect(await evaluate(t, s.retailerId)).toBeNull();
+		await setBalance(t, s.retailerId, 20);
 		expect(await evaluate(t, s.retailerId)).toBe("low");
 		expect(await evaluate(t, s.retailerId)).toBeNull();
 		await setBalance(t, s.retailerId, 7);
 		expect(await evaluate(t, s.retailerId)).toBeNull();
 	});
 
-	test("a burst from 12 to −3 collapses into ONE 'out of credits' — never a late '10 left'", async () => {
+	test("the line follows the plan: Pro's 200 runs low at 40, not at a flat 10", async () => {
+		const t = setup();
+		const s = await store(t, { status: "active", plan: "pro" });
+		await setBalance(t, s.retailerId, 40);
+		expect(await evaluate(t, s.retailerId)).toBe("low");
+	});
+
+	test("a burst from 25 to −3 collapses into ONE 'out of credits' — never a late 'running low'", async () => {
 		const t = setup();
 		const s = await store(t);
-		await setBalance(t, s.retailerId, 12);
+		await setBalance(t, s.retailerId, 25);
 		await setBalance(t, s.retailerId, -3);
 		expect(await evaluate(t, s.retailerId)).toBe("locked");
 		await setBalance(t, s.retailerId, 5);
@@ -588,7 +642,8 @@ describe("balance notices", () => {
 	test("the ledger schedules the check when a line is crossed", async () => {
 		const t = setup();
 		const s = await store(t);
-		await setBalance(t, s.retailerId, 11);
+		// 21 → 20 crosses Starter's low line.
+		await setBalance(t, s.retailerId, 21);
 		const before = await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
 		await storefrontOrder(t, s.retailerId, s.productId);
 		const after = await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());

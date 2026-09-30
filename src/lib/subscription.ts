@@ -285,7 +285,8 @@ export type BannerState =
 			ordersWaiting: number;
 			route: CreditUnlockRoute;
 	  }
-	/** Credits T3: in the last fifth of the month's credits. Dismissable. */
+	/** Credits T3: into the last 20% of the month's credits (`lowCreditLine`
+	 * — the meter's amber and the low email's line). Dismissable. */
 	| { kind: "creditsLow"; total: number };
 
 /** What the banner knows about credits. `locked` + `route` + `ordersWaiting`
@@ -298,6 +299,9 @@ export type BannerCredits = {
 	total?: number;
 	periodGrant?: number;
 	customGrant?: boolean;
+	/** A store that can never be locked (an admin's own, a sponsored one) —
+	 * it has nothing to run low on, so it's never nudged. */
+	exempt?: boolean;
 };
 
 export function resolveBannerState(
@@ -361,6 +365,7 @@ export function resolveBannerState(
 		credits?.total !== undefined &&
 		credits.periodGrant !== undefined &&
 		!credits.customGrant &&
+		!credits.exempt &&
 		creditTone(credits.total, credits.periodGrant) === "low"
 	)
 		return { kind: "creditsLow", total: credits.total };

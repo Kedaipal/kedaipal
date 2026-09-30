@@ -38,12 +38,14 @@ import {
 import {
 	type CancelCause,
 	type CreditBucket,
+	type CreditLockExemption,
 	type CreditRegime,
 	type CreditRegimeInputs,
 	cancelRefundDecision,
+	creditLockExemption,
 	creditRegime,
 	debitBucket,
-	LOW_CREDIT_THRESHOLD,
+	lowCreditLine,
 	monthlyCreditGrant,
 	refreshedPlanBalance,
 	sellerRefundsLeft,
@@ -196,7 +198,10 @@ async function applyEntry(
 		...extraPatch,
 	};
 	await ctx.db.patch(account._id, patch);
-	if (crossesNoticeLine(beforeTotal, total)) {
+	// The low line of the month the balance now sits in (a refresh's grant row
+	// carries the new month's grant in `extraPatch`).
+	const lowLine = lowCreditLine(patch.periodGrant ?? account.periodGrant);
+	if (crossesNoticeLine(beforeTotal, total, lowLine)) {
 		await scheduleNoticeCheck(ctx, account.retailerId, route ?? routeFor(entry));
 	}
 	return { ...account, ...patch };
@@ -229,10 +234,15 @@ function routeFor(entry: EntryInput): CreditInRoute {
  */
 const NOTICE_DELAY_MS = 5 * 60 * 1000;
 
-/** Crossing into the low band, into zero-or-below, or back above zero. */
-function crossesNoticeLine(before: number, after: number): boolean {
+/** Crossing into the low band (the last 20% of the month's credits), into
+ * zero-or-below, or back above zero. */
+function crossesNoticeLine(
+	before: number,
+	after: number,
+	lowLine: number,
+): boolean {
 	return (
-		(before > LOW_CREDIT_THRESHOLD && after <= LOW_CREDIT_THRESHOLD) ||
+		(before > lowLine && after <= lowLine) ||
 		(before > 0 && after <= 0) ||
 		(before <= 0 && after > 0)
 	);
@@ -802,6 +812,11 @@ export type CreditBalanceView = {
 	 * compares the new allowance against: "you've had 140 this month, Starter
 	 * includes 100". */
 	ordersThisPeriod: number;
+	/** Why this store is never locked (an admin's own store, or a sponsored
+	 * one), or null when the lock applies. The meter says it instead of the
+	 * status line a billed store would read — an admin store sitting in
+	 * `trialing` or `past_due` is never asked to pay (T3 test round). */
+	lockExempt: CreditLockExemption | null;
 };
 
 /**
@@ -871,6 +886,11 @@ async function balanceView(
 			q.eq("retailerId", retailerId).eq("monthStart", monthStartMyt(now)),
 		)
 		.unique();
+	const retailer = await ctx.db.get(retailerId);
+	const sub = await ctx.db
+		.query("subscriptions")
+		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+		.first();
 	return {
 		plan,
 		purchased,
@@ -886,6 +906,11 @@ async function balanceView(
 		sellerRefundsLeft: sellerRefundsLeft(refundsUsed),
 		customGrant: account?.grantOverride !== undefined,
 		ordersThisPeriod: usage?.orders ?? 0,
+		lockExempt: creditLockExemption({
+			status: sub?.status ?? null,
+			comped: sub?.comped === true,
+			ownerIsAdmin: retailer ? storeOwnerIsAdmin(retailer) : false,
+		}),
 	};
 }
 

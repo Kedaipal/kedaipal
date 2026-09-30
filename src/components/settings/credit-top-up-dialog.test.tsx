@@ -126,6 +126,7 @@ const BALANCE = {
 	exhaustedAt: null,
 	sellerRefundsLeft: 10,
 	customGrant: false,
+	lockExempt: null as null | "admin_store" | "sponsored",
 };
 
 type Latest = {
@@ -300,9 +301,12 @@ describe("the picker", () => {
 		renderDialog();
 		expect(screen.getByText("15 orders owed")).toBeTruthy();
 		expect(screen.getByText(/15 owed on monthly · 0 bought/)).toBeTruthy();
-		// A pack pays the debt first — said before the tap.
+		// A pack pays the debt first — said before the tap — and the lock
+		// lifts the moment it's paid (T3).
 		expect(
-			screen.getByText("Covers the 15 owed and leaves 35 orders."),
+			screen.getByText(
+				"Covers the 15 owed and leaves 35 orders. Your store unlocks as soon as it's paid.",
+			),
 		).toBeTruthy();
 	});
 

@@ -426,6 +426,13 @@ function PickerView({
 			{canBuy && pack ? (
 				<p aria-live="polite" className="text-sm font-medium tabular-nums">
 					{afterTopUpLine(balance.total, pack.credits)}
+					{/* Out of credits now, above zero after: say the lock lifts
+					    (T3) — the moment it's paid, not after a refresh. */}
+					{balance.total <= 0 &&
+					balance.total + pack.credits > 0 &&
+					balance.lockExempt === null
+						? " Your store unlocks as soon as it's paid."
+						: null}
 				</p>
 			) : null}
 
