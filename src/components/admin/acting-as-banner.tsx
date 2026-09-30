@@ -1,6 +1,21 @@
 import { useNavigate } from "@tanstack/react-router";
 import { LogOut, ShieldAlert } from "lucide-react";
+import { useCallback } from "react";
 import { useActAs } from "../../hooks/useActAs";
+
+/**
+ * End the act-as session and return to the seller directory — the one exit,
+ * shared by the banner, the shell's stale-store redirect and its failed-read
+ * screen, so they can't drift.
+ */
+export function useExitActAs(): () => void {
+	const navigate = useNavigate();
+	const { setActAs } = useActAs();
+	return useCallback(() => {
+		setActAs(undefined);
+		navigate({ to: "/app/admin/sellers" });
+	}, [navigate, setActAs]);
+}
 
 /**
  * Persistent, high-contrast "you are operating someone else's store" banner shown
@@ -10,13 +25,7 @@ import { useActAs } from "../../hooks/useActAs";
  * seller directory. See docs/admin-console.md.
  */
 export function ActingAsBanner({ storeName }: { storeName: string }) {
-	const navigate = useNavigate();
-	const { setActAs } = useActAs();
-
-	function exit() {
-		setActAs(undefined);
-		navigate({ to: "/app/admin/sellers" });
-	}
+	const exit = useExitActAs();
 
 	return (
 		<div className="sticky top-0 z-30 flex items-center gap-3 border-b border-amber-300 bg-amber-400 px-4 py-2 text-amber-950">
