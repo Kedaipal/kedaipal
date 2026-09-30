@@ -165,7 +165,7 @@ them. Two server events extend the funnel past `store_created` via the GA4
 | --- | --- | --- |
 | `first_order` | ONCE per retailer ever — the moment `retailers.activatedAt` transitions unset → set (the existing write-once activation stamp IS the dedupe guard; all 8 confirm sites go through it) | [`stampRetailerActivation`](../convex/lib/activation.ts) |
 | `subscribe_paid` | every `invoices.markPaid` — renewals too, distinguished by `first_time`; carries `plan`, `cycle`, `value` (major units) + `currency` so revenue segments by channel | [`invoices.markPaid`](../convex/invoices.ts) |
-| `credits_topup_paid` | a credit-pack top-up settles (Credits T2, z8r3fdf8ht) — once per purchase: the settle's paid guard is the dedupe, so a repeated webhook never double-counts. Carries `value` (major units), `currency`, `pack_id` and `source` (`manual`; T4's auto top-up widens it) | [`creditPurchases.settlePurchase`](../convex/creditPurchases.ts) |
+| `credits_topup_paid` | a credit-pack top-up settles (Credits T2, z8r3fdf8ht) — once per purchase: the settle's paid guard is the dedupe, so a repeated webhook never double-counts. Carries `value` (major units), `currency`, `pack_id` and `source` (always `manual` — packs never auto-reload; T4 was cancelled 1 Oct 2026) | [`creditPurchases.settlePurchase`](../convex/creditPurchases.ts) |
 
 Both carry the retailer's stored **`src`** (`retailers.signupSource`), so the
 whole funnel — `land_marketing → … → store_created → first_order →
