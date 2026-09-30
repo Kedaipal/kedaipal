@@ -19,8 +19,8 @@ import {
 	PLAN_CAPS,
 	PLAN_CREDIT_GRANT,
 	PLAN_FEATURES,
-	type Plan,
 	PLANS,
+	type Plan,
 	planChangeCarryover,
 	planPrice,
 	planRank,
@@ -444,6 +444,7 @@ function downgradeCopy({
 		currentGrant: balance?.periodGrant ?? PLAN_CREDIT_GRANT[current],
 		targetGrant: PLAN_CREDIT_GRANT[target],
 		ordersThisPeriod: balance?.ordersThisPeriod,
+		owedNow: balance && balance.plan < 0 ? -balance.plan : undefined,
 		customGrant: balance?.customGrant === true,
 	});
 	// DialogDescription is a <p>, so the "list" is block spans rather than a

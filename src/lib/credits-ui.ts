@@ -216,7 +216,9 @@ export function planPickCreditLine(args: {
  * month's orders, so a seller sees whether it fits before confirming
  * ("you've had 140 this month, Starter includes 100"). Plan credits refresh
  * on the 1st, so the new allowance starts at the first refresh after the move
- * lands. `null` for a store on a custom allowance, which doesn't change. */
+ * lands — and a debt carries into that refresh (grant + min(0, balance)), so
+ * a store owing orders is told the first month lands smaller (T3 ticket, 17
+ * Sep). `null` for a store on a custom allowance, which doesn't change. */
 export function downgradeCreditLine(args: {
 	/** The first refresh on the new plan, already formatted. */
 	fromLabel: string;
@@ -224,6 +226,8 @@ export function downgradeCreditLine(args: {
 	targetGrant: number;
 	/** This month's orders — absent when the viewer can't see credits. */
 	ordersThisPeriod?: number;
+	/** Orders owed TODAY (a negative plan balance), when there are any. */
+	owedNow?: number;
 	customGrant: boolean;
 }): string | null {
 	if (args.customGrant) return null;
@@ -232,5 +236,11 @@ export function downgradeCreditLine(args: {
 		n === undefined
 			? ""
 			: ` — you've had ${n} ${n === 1 ? "order" : "orders"} so far this month`;
-	return `From ${args.fromLabel} you'll have ${args.targetGrant} credits a month instead of ${args.currentGrant}${usage}.`;
+	// Only what's owed WHEN that refresh lands carries; a top-up before then
+	// clears it, so today's figure is said as today's.
+	const owed =
+		args.owedNow !== undefined && args.owedNow > 0
+			? ` Anything still owed then comes off that month's credits (${args.owedNow} ${args.owedNow === 1 ? "order" : "orders"} owed today).`
+			: "";
+	return `From ${args.fromLabel} you'll have ${args.targetGrant} credits a month instead of ${args.currentGrant}${usage}.${owed}`;
 }

@@ -45,6 +45,7 @@ import type * as lib_attribution from "../lib/attribution.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_awbConfig from "../lib/awbConfig.js";
 import type * as lib_billingEmailCopy from "../lib/billingEmailCopy.js";
+import type * as lib_billingUrl from "../lib/billingUrl.js";
 import type * as lib_bookingAvailability from "../lib/bookingAvailability.js";
 import type * as lib_bookingPeriod from "../lib/bookingPeriod.js";
 import type * as lib_businessReport from "../lib/businessReport.js";
@@ -209,6 +210,7 @@ declare const fullApi: ApiFromModules<{
   "lib/auth": typeof lib_auth;
   "lib/awbConfig": typeof lib_awbConfig;
   "lib/billingEmailCopy": typeof lib_billingEmailCopy;
+  "lib/billingUrl": typeof lib_billingUrl;
   "lib/bookingAvailability": typeof lib_bookingAvailability;
   "lib/bookingPeriod": typeof lib_bookingPeriod;
   "lib/businessReport": typeof lib_businessReport;

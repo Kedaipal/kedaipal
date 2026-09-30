@@ -227,6 +227,20 @@ describe("plan choices state the allowance and what they do to the balance", () 
 				customGrant: false,
 			}),
 		).toMatch(/you've had 1 order so far/);
+		// A store owing orders is told the first month lands smaller — as
+		// TODAY's figure, since a top-up before then clears it.
+		expect(
+			downgradeCreditLine({
+				fromLabel: "1 Nov",
+				currentGrant: 200,
+				targetGrant: 100,
+				ordersThisPeriod: 215,
+				owedNow: 15,
+				customGrant: false,
+			}),
+		).toBe(
+			"From 1 Nov you'll have 100 credits a month instead of 200 — you've had 215 orders so far this month. Anything still owed then comes off that month's credits (15 orders owed today).",
+		);
 		// A viewer who can't see credits still gets the allowance change.
 		expect(
 			downgradeCreditLine({
