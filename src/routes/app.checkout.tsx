@@ -58,6 +58,16 @@ import { ClaimsPanel } from "../components/claim/send-claim";
 import { WaitingOnBuyerScreen } from "../components/claim/waiting-on-buyer";
 import { ManualBindDialog } from "../components/counter/manual-bind-dialog";
 import { BRAND_GLYPHS } from "../components/dashboard/brand-icons";
+import {
+	answerPrompt,
+	answersById,
+	answersForSubmit,
+	type BuyerQuestion,
+	firstMissingRequired,
+	type ItemAnswerInput,
+	visibleQuestions,
+} from "../../convex/lib/buyerQuestions";
+import { BuyerQuestionsFields } from "../components/order/buyer-questions-fields";
 import { OrderDocumentActions } from "../components/order/order-document-actions";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
@@ -926,6 +936,9 @@ type CartLine = {
 	// adjusted price is sent as `unitPrice` (the server trusts it because the
 	// caller is the authenticated seller, not a buyer).
 	catalogPrice?: number;
+	// Buyer-question answers the seller keyed for the walk-in (`z8r3fdkjek`),
+	// by question id. Entered in the line's edit sheet.
+	answers?: Record<string, string>;
 };
 
 /** A standard line whose price the seller changed from the catalog price. */
@@ -971,6 +984,7 @@ type SessionDraft = {
 		variantId: Id<"productVariants">;
 		quantity: number;
 		unitPrice?: number;
+		answers?: ItemAnswerInput[];
 	}>;
 	fulfilmentDate?: number;
 	paidInPerson?: boolean;
@@ -1411,6 +1425,21 @@ function BuildOrderScreen({
 	// total never flickers through half-typed values and there is no in-between
 	// state for the debounced autosave to persist.
 	const [editingLineId, setEditingLineId] = useState<string | null>(null);
+	// Buyer questions per variant (`z8r3fdkjek`), read from the LIVE catalog
+	// like `cartEvent` — so an edit made mid-sale is what gets asked.
+	const questionsByVariant = useMemo(() => {
+		const map = new Map<string, readonly BuyerQuestion[]>();
+		for (const p of products ?? []) {
+			if (!p.buyerQuestions?.length) continue;
+			for (const vr of p.variants) map.set(vr._id, p.buyerQuestions);
+		}
+		return map;
+	}, [products]);
+	const lineAnswers = useCallback(
+		(variantId: string, l: CartLine) =>
+			answersForSubmit(questionsByVariant.get(variantId), l.answers ?? {}),
+		[questionsByVariant],
+	);
 
 	// Send the claim link straight from the panel. Same mutation the dialog
 	// called; the dialog is gone because its two controls (window, origin) now
@@ -1425,6 +1454,7 @@ function BuildOrderScreen({
 					variantId: variantId as Id<"productVariants">,
 					quantity: l.qty,
 					unitPrice: l.isCustom || isAdjusted(l) ? l.price : undefined,
+					answers: lineAnswers(variantId, l),
 				})),
 				windowMinutes,
 				attributionSource: claimSource,
@@ -1496,6 +1526,7 @@ function BuildOrderScreen({
 				qty: it.quantity,
 				isCustom: v.isCustom,
 				catalogPrice: v.isCustom ? undefined : v.price,
+				answers: it.answers ? answersById(it.answers) : undefined,
 			});
 		}
 		if (next.size > 0) setCart(next);
@@ -1559,6 +1590,15 @@ function BuildOrderScreen({
 	}
 
 	function setQty(variantId: string, line: CartLine, qty: number) {
+		// A NEW line whose product asks a required question opens its sheet
+		// straight away (`z8r3fdkjek`) — the walk-in is standing there, so ask
+		// now rather than discover it at Review.
+		if (
+			qty > 0 &&
+			!cart.has(variantId) &&
+			firstMissingRequired(questionsByVariant.get(variantId), {}) !== undefined
+		)
+			setEditingLineId(variantId);
 		setCart((prev) => {
 			const next = new Map(prev);
 			if (qty <= 0) next.delete(variantId);
@@ -1587,13 +1627,14 @@ function BuildOrderScreen({
 					// Custom lines always carry their price; a standard line only when the
 					// seller adjusted it (otherwise the server charges the catalog price).
 					unitPrice: l.isCustom || isAdjusted(l) ? l.price : undefined,
+					answers: lineAnswers(variantId, l),
 				})),
 				fulfilmentDate: Number.isNaN(epoch) ? undefined : epoch,
 				paidInPerson: paid,
 				paymentMethod: paid ? method : undefined,
 			};
 		},
-		[fulfilmentDate, paid, method],
+		[fulfilmentDate, paid, method, lineAnswers],
 	);
 	const draftPayload = useMemo<SessionDraft>(
 		() => buildDraftPayload(cart),
@@ -1626,6 +1667,7 @@ function BuildOrderScreen({
 					variantId: variantId as Id<"productVariants">,
 					quantity: l.qty,
 					unitPrice: l.isCustom || isAdjusted(l) ? l.price : undefined,
+					answers: lineAnswers(variantId, l),
 				})),
 				paidInPerson: effectivePaid,
 				paymentMethod: effectivePaid ? method : undefined,
@@ -1648,6 +1690,17 @@ function BuildOrderScreen({
 	}
 
 	const totalItems = cartEntries.reduce((s, [, l]) => s + l.qty, 0);
+	const unansweredQuestion = (() => {
+		for (const [variantId, l] of cartEntries) {
+			const missing = firstMissingRequired(
+				questionsByVariant.get(variantId),
+				l.answers ?? {},
+			);
+			if (missing)
+				return `${answerPrompt(missing.label)} for ${l.name} — tap the line`;
+		}
+		return undefined;
+	})();
 	// The cart's EVENT, if any line is an RSVP (`z8r3fdff9u`) — the server will
 	// force the order onto this moment whatever date the panel holds, so every
 	// date this screen SAYS must be the event's. Before this, the Collection
@@ -2042,6 +2095,10 @@ function BuildOrderScreen({
 														</>
 													) : null}
 												</span>
+												<CounterLineAnswers
+													questions={questionsByVariant.get(variantId) ?? []}
+													answers={l.answers ?? {}}
+												/>
 											</button>
 											<div className="flex shrink-0 items-center gap-2">
 												<span className="text-sm font-semibold tabular-nums">
@@ -2364,6 +2421,7 @@ function BuildOrderScreen({
 								// Refuses a mixed cart in BOTH modes (`z8r3fdhh45`) —
 								// `orders.create` rejects it at either door.
 								mixedRsvp,
+								unansweredQuestion,
 								money: formatPrice(total, currency),
 								windowMinutes,
 								buyerName: buyer.displayName,
@@ -2432,6 +2490,9 @@ function BuildOrderScreen({
 				key={editingLineId ?? "closed"}
 				variantId={editingLineId}
 				line={editingLineId ? (cart.get(editingLineId) ?? null) : null}
+				questions={
+					editingLineId ? (questionsByVariant.get(editingLineId) ?? []) : []
+				}
 				currency={currency}
 				onClose={() => setEditingLineId(null)}
 				onRemove={(id) => {
@@ -2439,11 +2500,11 @@ function BuildOrderScreen({
 					if (line) setQty(id, line, 0);
 					setEditingLineId(null);
 				}}
-				onSave={(id, price, qty) => {
+				onSave={(id, price, qty, answers) => {
 					const line = cart.get(id);
 					if (!line) return;
 					const next = new Map(cart);
-					next.set(id, { ...line, price, qty });
+					next.set(id, { ...line, price, qty, answers });
 					setCart(next);
 					setEditingLineId(null);
 					// Flush the save immediately instead of waiting out the 700ms
@@ -2561,9 +2622,43 @@ function BuildOrderScreen({
  * ATOMICALLY on Save: the running total never flickers through half-typed
  * values, and Cancel/dismiss discards cleanly.
  */
+/**
+ * Under a counter cart line: what's been answered, or — for a required
+ * question still blank — an amber "needs an answer" hint, so the seller sees
+ * WHICH line the blocked primary action is talking about.
+ */
+function CounterLineAnswers({
+	questions,
+	answers,
+}: {
+	questions: readonly BuyerQuestion[];
+	answers: Record<string, string>;
+}) {
+	if (questions.length === 0) return null;
+	const missing = firstMissingRequired(questions, answers);
+	const answered = visibleQuestions(questions, answers).filter(
+		(q) => (answers[q.id] ?? "").trim().length > 0,
+	);
+	return (
+		<span className="mt-0.5 flex flex-col text-xs">
+			{answered.map((q) => (
+				<span key={q.id} className="truncate text-muted-foreground">
+					{q.label}: <span className="text-foreground">{answers[q.id]}</span>
+				</span>
+			))}
+			{missing ? (
+				<span className="font-medium text-amber-700 dark:text-amber-400">
+					Needs an answer: {missing.label}
+				</span>
+			) : null}
+		</span>
+	);
+}
+
 function CartLineEditDialog({
 	variantId,
 	line,
+	questions,
 	currency,
 	onClose,
 	onRemove,
@@ -2571,18 +2666,32 @@ function CartLineEditDialog({
 }: {
 	variantId: string | null;
 	line: CartLine | null;
+	/** The product's buyer questions (`z8r3fdkjek`) — the seller answers them
+	 * on the walk-in's behalf here. */
+	questions: readonly BuyerQuestion[];
 	currency: string;
 	onClose: () => void;
 	onRemove: (variantId: string) => void;
-	onSave: (variantId: string, price: number, qty: number) => void;
+	onSave: (
+		variantId: string,
+		price: number,
+		qty: number,
+		answers: Record<string, string> | undefined,
+	) => void;
 }) {
 	// Seeded once per open — the parent keys this component on the line id.
 	const [priceText, setPriceText] = useState(() =>
 		line ? centsToRm(line.price) : "",
 	);
 	const [qty, setLocalQty] = useState(() => line?.qty ?? 1);
+	const [answers, setAnswers] = useState<Record<string, string>>(
+		() => line?.answers ?? {},
+	);
 
 	if (!variantId || !line) return null;
+	// Answers are optional to SAVE (the seller may come back to them); the
+	// primary action is what refuses an unanswered required question.
+	const savedAnswers = Object.keys(answers).length > 0 ? answers : undefined;
 
 	const cents = rmToCents(priceText);
 	const validPrice = !Number.isNaN(cents);
@@ -2623,7 +2732,7 @@ function CartLineEditDialog({
 								onFocus={(e) => e.target.select()}
 								onKeyDown={(e) => {
 									if (e.key === "Enter" && validPrice)
-										onSave(variantId, cents, qty);
+										onSave(variantId, cents, qty, savedAnswers);
 								}}
 								placeholder={centsToRm(line.price)}
 								variant="field"
@@ -2680,6 +2789,30 @@ function CartLineEditDialog({
 							) : null}
 						</p>
 					) : null}
+					{questions.length > 0 ? (
+						<div className="flex flex-col gap-3 border-t border-border pt-4">
+							<div>
+								<p className="text-sm font-semibold">Ask the buyer</p>
+								<p className="text-xs text-muted-foreground">
+									Answer for them — it goes on the order like any storefront
+									answer.
+								</p>
+							</div>
+							<BuyerQuestionsFields
+								questions={questions}
+								answers={answers}
+								idPrefix={`counter-q-${variantId}`}
+								onChange={(questionId, answer) =>
+									setAnswers((prev) => {
+										const { [questionId]: _cleared, ...rest } = prev;
+										return answer === undefined
+											? rest
+											: { ...rest, [questionId]: answer };
+									})
+								}
+							/>
+						</div>
+					) : null}
 				</div>
 				<DialogFooter className="gap-2 sm:justify-between">
 					<Button
@@ -2692,7 +2825,9 @@ function CartLineEditDialog({
 					</Button>
 					<Button
 						disabled={!validPrice}
-						onClick={() => validPrice && onSave(variantId, cents, qty)}
+						onClick={() =>
+							validPrice && onSave(variantId, cents, qty, savedAnswers)
+						}
 					>
 						Save
 					</Button>

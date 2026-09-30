@@ -35,6 +35,9 @@ export function ClaimTicket({
 		variantLabel?: string;
 		price: number;
 		quantity: number;
+		/** Answers the seller keyed at the counter (z8r3fdkjek) — read-only
+		 * here; the buyer confirms them by committing. */
+		answers?: ReadonlyArray<{ label: string; answer: string }>;
 	}>;
 	/** "Pickup" / "Delivery" / "Collection" — the page knows which. */
 	fulfilmentLabel: string;
@@ -78,6 +81,11 @@ export function ClaimTicket({
 									{line.variantLabel}
 								</span>
 							) : null}
+							{(line.answers ?? []).map((a) => (
+								<span key={a.label} className={RECEIPT_VARIANT_CLASS}>
+									{a.label}: {a.answer}
+								</span>
+							))}
 						</span>
 						<span
 							aria-hidden
