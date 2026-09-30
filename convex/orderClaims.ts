@@ -84,6 +84,11 @@ import {
 	summarizeCartWeight,
 } from "./lib/delivery";
 import { rateLimiter } from "./lib/rateLimiter";
+import {
+	freezeLineAnswers,
+	itemAnswerInputValidator,
+	type ItemAnswerInput,
+} from "./lib/buyerQuestions";
 import { variantLabel } from "./lib/variant";
 import { orderConfirmTemplateName } from "./lib/whatsapp";
 import { type Locale, pickLocale, type PickupSnapshot } from "./lib/whatsappCopy";
@@ -122,6 +127,7 @@ async function freezeClaimLines(
 		variantId: Id<"productVariants">;
 		quantity: number;
 		unitPrice?: number;
+		answers?: ItemAnswerInput[];
 	}[],
 ): Promise<ClaimLine[]> {
 	const lines: ClaimLine[] = [];
@@ -182,6 +188,11 @@ async function freezeClaimLines(
 			variantLabel: label || undefined,
 			price: unitPrice,
 			quantity: item.quantity,
+			// The seller answers the product's questions at the counter before
+			// sending (z8r3fdkjek); frozen here, copied verbatim at commit. The
+			// buyer's claim page shows them read-only — required ones are
+			// enforced now, so a link is never dead on arrival over one.
+			answers: freezeLineAnswers(product, item.answers),
 		});
 	}
 	return lines;
@@ -203,6 +214,7 @@ export const sendClaim = mutation({
 				variantId: v.id("productVariants"),
 				quantity: v.number(),
 				unitPrice: v.optional(v.number()),
+				answers: v.optional(v.array(itemAnswerInputValidator)),
 			}),
 		),
 		windowMinutes: v.number(),

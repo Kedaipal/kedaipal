@@ -15,6 +15,13 @@
  * replaces it. See docs/counter-checkout.md + the "Store QR poster" section below.
  */
 
+import {
+	freezeLineAnswers,
+	type FrozenAnswer,
+	itemAnswerInputValidator,
+	MAX_ANSWER_LENGTH,
+	MAX_BUYER_QUESTIONS,
+} from "./lib/buyerQuestions";
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -569,6 +576,7 @@ const draftValidator = v.object({
 			variantId: v.id("productVariants"),
 			quantity: v.number(),
 			unitPrice: v.optional(v.number()),
+			answers: v.optional(v.array(itemAnswerInputValidator)),
 		}),
 	),
 	fulfilmentDate: v.optional(v.number()),
@@ -607,7 +615,20 @@ export const saveSessionDraft = mutation({
 		// rogue client can't bloat the row. Authoritative validation is at create.
 		const items = draft.items
 			.filter((i) => Number.isInteger(i.quantity) && i.quantity >= 1)
-			.slice(0, MAX_COUNTER_ITEMS);
+			.slice(0, MAX_COUNTER_ITEMS)
+			// Same bloat guard for answers: no more than a product can ask, each
+			// no longer than an answer can be. Validated for real at create.
+			.map((i) =>
+				i.answers === undefined
+					? i
+					: {
+							...i,
+							answers: i.answers.slice(0, MAX_BUYER_QUESTIONS).map((a) => ({
+								questionId: a.questionId.slice(0, 32),
+								answer: a.answer.slice(0, MAX_ANSWER_LENGTH),
+							})),
+						},
+			);
 
 		const now = Date.now();
 		await ctx.db.patch(sessionId, {
@@ -735,6 +756,9 @@ export const createOrderFromSession = mutation({
 				// reaches this path. Validated as a positive integer, no upper cap
 				// (same rule as any product price).
 				unitPrice: v.optional(v.number()),
+				// Buyer-question answers the seller keyed for the walk-in
+				// (z8r3fdkjek). Validated + frozen like the storefront's.
+				answers: v.optional(v.array(itemAnswerInputValidator)),
 			}),
 		),
 		// Settled at the counter. When false the order is left unpaid and the buyer
@@ -809,6 +833,8 @@ export const createOrderFromSession = mutation({
 			quantity: number;
 			/** Whether this line reserved stock at create — frozen (86eypn8ye). */
 			stockReserved: boolean;
+			/** Buyer-question answers the seller keyed (z8r3fdkjek). */
+			answers?: FrozenAnswer[];
 		}[] = [];
 		const requestedByVariant = new Map<
 			Id<"productVariants">,
@@ -899,6 +925,9 @@ export const createOrderFromSession = mutation({
 				variantLabel: label || undefined,
 				price: unitPrice,
 				quantity: item.quantity,
+				// The seller answers on the walk-in's behalf; required still
+				// enforced — the same rule as the storefront (z8r3fdkjek).
+				answers: freezeLineAnswers(product, item.answers),
 			});
 		}
 

@@ -45,6 +45,7 @@ import type * as lib_bookingAvailability from "../lib/bookingAvailability.js";
 import type * as lib_bookingPeriod from "../lib/bookingPeriod.js";
 import type * as lib_businessReport from "../lib/businessReport.js";
 import type * as lib_buyerPhone from "../lib/buyerPhone.js";
+import type * as lib_buyerQuestions from "../lib/buyerQuestions.js";
 import type * as lib_categoryCounts from "../lib/categoryCounts.js";
 import type * as lib_channels_registry from "../lib/channels/registry.js";
 import type * as lib_channels_types from "../lib/channels/types.js";
@@ -201,6 +202,7 @@ declare const fullApi: ApiFromModules<{
   "lib/bookingPeriod": typeof lib_bookingPeriod;
   "lib/businessReport": typeof lib_businessReport;
   "lib/buyerPhone": typeof lib_buyerPhone;
+  "lib/buyerQuestions": typeof lib_buyerQuestions;
   "lib/categoryCounts": typeof lib_categoryCounts;
   "lib/channels/registry": typeof lib_channels_registry;
   "lib/channels/types": typeof lib_channels_types;
