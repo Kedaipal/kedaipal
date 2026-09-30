@@ -119,6 +119,7 @@ function cartStub(): UseCart {
 		updateQuantity: vi.fn(),
 		removeItem: vi.fn(),
 		clearCart: vi.fn(),
+		setAnswer: vi.fn(),
 		quickRemoveProduct: vi.fn(),
 		quantityForProduct: () => 1,
 	};

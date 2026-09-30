@@ -19,6 +19,11 @@ import {
 } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
 import {
+	freezeLineAnswers,
+	type FrozenAnswer,
+	itemAnswerInputValidator,
+} from "./lib/buyerQuestions";
+import {
 	attributionBucket,
 	sanitizeAttributionSource,
 } from "./lib/attribution";
@@ -519,6 +524,8 @@ type OrderItemSnapshot = {
 	categoryNames?: string[];
 	/** The product's pickup note as it read when sold (z8r3fdff97). */
 	pickupNote?: string;
+	/** Buyer-question answers, frozen with their labels (z8r3fdkjek). */
+	answers?: FrozenAnswer[];
 };
 
 /**
@@ -834,6 +841,10 @@ export const create = mutation({
 				variantId: v.optional(v.id("productVariants")),
 				productId: v.optional(v.id("products")),
 				quantity: v.number(),
+				// Answers to the product's buyer questions (`z8r3fdkjek`) — one
+				// set per line. Validated against the product's CURRENT questions
+				// and frozen with their labels; unknown/hidden answers dropped.
+				answers: v.optional(v.array(itemAnswerInputValidator)),
 			}),
 		),
 		currency: v.string(),
@@ -1164,6 +1175,9 @@ export const create = mutation({
 				// counter" to "front door" must not rewrite the instruction this
 				// buyer is already holding in their WhatsApp thread.
 				pickupNote: product.pickupNote,
+				// Frozen with their labels (z8r3fdkjek): a question reworded or
+				// deleted later never rewrites what this buyer answered.
+				answers: freezeLineAnswers(product, item.answers),
 				// Filled in below, once per distinct product.
 				categoryNames: undefined as string[] | undefined,
 			});

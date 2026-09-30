@@ -21,7 +21,7 @@ describe("product create route — payload completeness", () => {
 		"utf8",
 	);
 
-	test.each(["event", "prepMinutes", "pickupNote", "minNoticeDays", "minQuantity", "booking"])(
+	test.each(["event", "prepMinutes", "pickupNote", "minNoticeDays", "minQuantity", "booking", "buyerQuestions"])(
 		"the create call forwards %s",
 		(field) => {
 			expect(source).toMatch(new RegExp(`${field}: values.${field}`));

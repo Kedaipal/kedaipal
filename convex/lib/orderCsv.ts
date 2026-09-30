@@ -13,6 +13,7 @@
 // in orderCsv.test.ts. See docs/invoices-receipts.md + docs/order-inbox.md.
 
 import { sourceLabel } from "./attribution";
+import { formatItemAnswers } from "./buyerQuestions";
 import { orderCustomerLabel } from "./customer";
 import { formatFulfilmentTime } from "./fulfilmentDate";
 import { ORDER_STATUS_KEYS, type OrderStatus } from "./orderStatus";
@@ -166,6 +167,8 @@ export type CsvOrder = {
 		/** The product's pickup note AS THE BUYER WAS TOLD IT (z8r3fdff97) —
 		 * frozen per line at order create. See `orders.items[].pickupNote`. */
 		pickupNote?: string;
+		/** Buyer-question answers, frozen with their labels (z8r3fdkjek). */
+		answers?: Array<{ label: string; answer: string }>;
 	}>;
 	subtotal: number;
 	/** Accepted/proposed mockup quote on a made-to-order order (minor units).
@@ -270,6 +273,7 @@ export type OrderColumnKey =
 	| "currency"
 	| "feePending"
 	| "note"
+	| "answers"
 	| "cancelledReason"
 	| "pinned";
 
@@ -753,6 +757,17 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		value: (o) => o.customerNote ?? "",
 	},
 	{
+		// Buyer questions (z8r3fdkjek). Sits beside Note because both are "what
+		// the buyer told us", and in the items group because answers belong to
+		// a LINE. Lines are joined with " | " (the pickup-notes precedent)
+		// because "; " already separates answers within a line.
+		key: "answers",
+		label: "Answers",
+		group: "items",
+		width: 260,
+		value: (o) => orderAnswersCell(o),
+	},
+	{
 		key: "cancelledReason",
 		label: "Cancelled reason",
 		group: "order",
@@ -890,4 +905,20 @@ export function ordersToCsv(
 		csvHeaderRow(columns),
 		...orders.map((o) => orderToCsvRow(o, columns)),
 	]);
+}
+
+/**
+ * The Answers cell: `Label: answer; Label: answer` per line that carries
+ * answers. When more than one line does, each is prefixed with its product
+ * (and option) so the reader knows which line answered what.
+ */
+export function orderAnswersCell(o: Pick<CsvOrder, "items">): string {
+	const answered = o.items.filter((it) => (it.answers?.length ?? 0) > 0);
+	if (answered.length === 1) return formatItemAnswers(answered[0].answers);
+	return answered
+		.map(
+			(it) =>
+				`${it.name}${it.variantLabel ? ` (${it.variantLabel})` : ""} — ${formatItemAnswers(it.answers)}`,
+		)
+		.join(" | ");
 }

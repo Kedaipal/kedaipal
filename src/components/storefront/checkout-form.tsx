@@ -46,6 +46,12 @@ import {
 } from "../../../convex/lib/openingHours";
 import { type DialIso, isDialIso } from "../../../convex/lib/phoneDial";
 import { distinctPickupNotes } from "../../../convex/lib/pickupNote";
+import {
+	answerPrompt,
+	answersForSubmit,
+	type BuyerQuestion,
+	firstMissingRequired,
+} from "../../../convex/lib/buyerQuestions";
 import { slowestPrep } from "../../../convex/lib/prepFloor";
 import type { UseCart } from "../../hooks/useCart";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
@@ -87,6 +93,7 @@ import { useLiveDeliveryQuote } from "../../lib/use-live-delivery-quote";
 import { submitThenFocusError } from "../forms/focus-error";
 import { useAppForm } from "../forms/form";
 import { CopyText, DayWindowsInline } from "../hours/hours-text";
+import { BuyerQuestionsFields } from "../order/buyer-questions-fields";
 import { PickupNotes } from "../order/pickup-notes";
 import { Button } from "../ui/button";
 import {
@@ -299,6 +306,22 @@ export function CheckoutPage({
 	const lineRules = cart.items.map((item) =>
 		resolveLineRules(item, liveProductsById.get(item.productId)),
 	);
+	// Buyer questions (z8r3fdkjek), read LIVE like the order rules: a question
+	// the seller added after the buyer filled their basket is still asked, and
+	// one they deleted is no longer sent. One answer set per LINE.
+	const questionLines = cart.items.flatMap((item) => {
+		const questions: readonly BuyerQuestion[] =
+			liveProductsById.get(item.productId)?.buyerQuestions ?? [];
+		return questions.length > 0 ? [{ item, questions }] : [];
+	});
+	const unansweredLine = questionLines
+		.map(({ item, questions }) => ({
+			item,
+			missing: firstMissingRequired(questions, item.answers ?? {}),
+		}))
+		.find((line) => line.missing !== undefined);
+	// The questions section takes step 2 when it renders; later steps shift.
+	const questionsStepOffset = questionLines.length > 0 ? 1 : 0;
 	// The slowest item decides the whole cart's prep, the way the strictest
 	// decides its notice. ONE value, so an exemption (an event cart) is one edit.
 	const cartPrep = slowestPrep(lineRules);
@@ -636,6 +659,10 @@ export function CheckoutPage({
 					items: cart.items.map((i) => ({
 						variantId: i.variantId,
 						quantity: i.quantity,
+						answers: answersForSubmit(
+							liveProductsById.get(i.productId)?.buyerQuestions,
+							i.answers ?? {},
+						),
 					})),
 					currency: cart.currency,
 					channel: "whatsapp",
@@ -1138,7 +1165,9 @@ export function CheckoutPage({
 				? "Below the store's minimum — see your order summary"
 				: overStockLine
 					? `Only ${stockCapFor(overStockLine.variantId)} × ${overStockLine.name} left — lower the quantity to continue`
-					: addressIncomplete
+					: unansweredLine?.missing
+						? `${answerPrompt(unansweredLine.missing.label)} for ${unansweredLine.item.name}`
+						: addressIncomplete
 						? collectsFromCustomer
 							? "Add your collection address to continue"
 							: "Add your delivery address to continue"
@@ -1171,7 +1200,9 @@ export function CheckoutPage({
 						// lists exactly what's missing (server enforces it too).
 						minRulesBlocked ||
 						// A line now exceeds live stock (server enforces it too).
-						overStockLine !== undefined
+						overStockLine !== undefined ||
+						// A required buyer question is unanswered (server too).
+						unansweredLine !== undefined
 					}
 					className="h-12 w-full text-base"
 				>
@@ -1609,8 +1640,43 @@ export function CheckoutPage({
 						</p>
 					</CheckoutSection>
 
+					{questionLines.length > 0 ? (
+						<CheckoutSection step={2} title="A few questions">
+							<p className="-mt-1 text-xs text-muted-foreground">
+								{storeName} asks these for{" "}
+								{questionLines.length === 1 ? "this item" : "these items"} — one
+								answer per item, whatever the quantity.
+							</p>
+							{questionLines.map(({ item, questions }) => (
+								<div
+									key={item.variantId}
+									className="flex flex-col gap-3 border-t border-border pt-3 first-of-type:border-t-0 first-of-type:pt-0"
+								>
+									{questionLines.length > 1 ? (
+										<p className="text-sm font-semibold">
+											{item.name}
+											{item.optionLabel ? (
+												<span className="ml-1.5 font-normal text-muted-foreground">
+													{item.optionLabel}
+												</span>
+											) : null}
+										</p>
+									) : null}
+									<BuyerQuestionsFields
+										questions={questions}
+										answers={item.answers ?? {}}
+										idPrefix={`q-${item.variantId}`}
+										onChange={(questionId, answer) =>
+											cart.setAnswer(item.variantId, questionId, answer)
+										}
+									/>
+								</div>
+							))}
+						</CheckoutSection>
+					) : null}
+
 					<CheckoutSection
-						step={2}
+						step={2 + questionsStepOffset}
 						title={
 							bothAvailable
 								? "How do you want to get it?"
@@ -1790,7 +1856,7 @@ export function CheckoutPage({
 								const isDropOff = schedule.isDropOff;
 								return (
 									<CheckoutSection
-										step={3}
+										step={3 + questionsStepOffset}
 										title={
 											hasCustomLine
 												? "Requested date"

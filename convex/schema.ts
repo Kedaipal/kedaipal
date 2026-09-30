@@ -1,5 +1,10 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import {
+	buyerQuestionValidator,
+	frozenAnswerValidator,
+	itemAnswerInputValidator,
+} from "./lib/buyerQuestions";
 import { countryValidator } from "./lib/country";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 import { memberPermissionsValidator } from "./lib/permissions";
@@ -1174,6 +1179,12 @@ export default defineSchema({
 				venueId: v.optional(v.id("pickupLocations")),
 			}),
 		),
+		// Buyer questions (`z8r3fdkjek`) — up to 3 things the buyer is asked at
+		// checkout ("What are you bringing?", "Message on the cake"). Public-safe
+		// (labels + options only). Unset = none; `[]` is normalised to unset by
+		// `sanitizeBuyerQuestions`. Never on a booking listing. Answers freeze
+		// onto `orders.items[].answers`. See docs/buyer-questions.md.
+		buyerQuestions: v.optional(v.array(buyerQuestionValidator)),
 		// DEPRECATED — moved to productVariants.requiresProof (per-variant).
 		requiresProof: v.optional(v.boolean()),
 		// When this product first appeared on a real order (set-if-unset at both
@@ -1439,6 +1450,12 @@ export default defineSchema({
 				// the field; deliberately NOT backfilled, since today's note is not
 				// evidence of what that buyer was told.
 				pickupNote: v.optional(v.string()),
+				// The buyer's answers to the product's questions (`z8r3fdkjek`),
+				// frozen WITH the label they were asked under — like `variantLabel`,
+				// a seller who later rewords or deletes a question must not rewrite
+				// what this buyer answered. One set per LINE, not per unit. Unset =
+				// no answers (every order predating the field included).
+				answers: v.optional(v.array(frozenAnswerValidator)),
 			}),
 		),
 		subtotal: v.number(),
@@ -2451,6 +2468,9 @@ export default defineSchema({
 						// catalog price is 0 — the agreed-in-person price. Absent for
 						// normal lines (those resolve to the variant's price at create).
 						unitPrice: v.optional(v.number()),
+						// Buyer-question answers the seller keyed for the walk-in
+						// (`z8r3fdkjek`) — re-validated at createOrderFromSession.
+						answers: v.optional(v.array(itemAnswerInputValidator)),
 					}),
 				),
 				fulfilmentDate: v.optional(v.number()),
@@ -2506,6 +2526,9 @@ export default defineSchema({
 				variantLabel: v.optional(v.string()),
 				price: v.number(), // sen — LOCKED at send
 				quantity: v.number(),
+				// Buyer-question answers the seller keyed at the counter
+				// (`z8r3fdkjek`), validated + frozen at send; commit copies them.
+				answers: v.optional(v.array(frozenAnswerValidator)),
 			}),
 		),
 		currency: v.string(),

@@ -29,8 +29,15 @@ import {
 } from "../../../convex/lib/buyerPhone";
 import type { Country } from "../../../convex/lib/country";
 import { type Locale, pickLocale } from "../../../convex/lib/locale";
+import {
+	answerPrompt,
+	answersForSubmit,
+	firstMissingRequired,
+	visibleQuestions,
+} from "../../../convex/lib/buyerQuestions";
 import { isEventPassed } from "../../../convex/lib/productEvent";
 import { readAttributionSource } from "../../hooks/useSourceAttribution";
+import { BuyerQuestionsFields } from "../order/buyer-questions-fields";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import { buyerPhoneRejection } from "../../lib/buyer-phone-rejection";
 import {
@@ -91,6 +98,8 @@ export function EventRsvpCheckoutForm({
 		DialIso | undefined
 	>(undefined);
 	const [note, setNote] = useState("");
+	// Buyer questions (z8r3fdkjek) — one answer set for the whole RSVP.
+	const [answers, setAnswers] = useState<Record<string, string>>({});
 	const [submitting, setSubmitting] = useState(false);
 	const [serverError, setServerError] = useState<string | null>(null);
 
@@ -266,6 +275,13 @@ export function EventRsvpCheckoutForm({
 		(_, axisIndex) => pp.selection[axisIndex] == null,
 	);
 
+	// Chain order = section order: the questions sit after "Your seats".
+	const questions = product?.buyerQuestions;
+	const missingQuestion = firstMissingRequired(questions, answers);
+	const shownAnswers = visibleQuestions(questions, answers).filter(
+		(q) => (answers[q.id] ?? "").trim().length > 0,
+	);
+
 	const blockedReason = pp.eventFull
 		? "This event is fully booked"
 		: !nameOk
@@ -280,7 +296,9 @@ export function EventRsvpCheckoutForm({
 						? "That combination isn't available"
 						: !pp.sellable
 							? "That option is fully taken"
-							: null;
+							: missingQuestion
+								? answerPrompt(missingQuestion.label)
+								: null;
 
 	async function submit() {
 		if (blockedReason || !variant || !product) return;
@@ -289,7 +307,13 @@ export function EventRsvpCheckoutForm({
 		try {
 			const result = await createOrder({
 				retailerId,
-				items: [{ variantId: variant._id, quantity: seats }],
+				items: [
+					{
+						variantId: variant._id,
+						quantity: seats,
+						answers: answersForSubmit(questions, answers),
+					},
+				],
 				currency: product.currency,
 				channel: "whatsapp",
 				customer: {
@@ -343,6 +367,11 @@ export function EventRsvpCheckoutForm({
 							{variantLabel(variant.optionValues)}
 						</p>
 					) : null}
+					{shownAnswers.map((q) => (
+						<p key={q.id} className="text-xs text-muted-foreground">
+							{q.label}: <span className="text-foreground">{answers[q.id]?.trim()}</span>
+						</p>
+					))}
 					{priceSettled ? (
 						<>
 							<div className="flex items-baseline gap-1.5">
@@ -619,6 +648,29 @@ export function EventRsvpCheckoutForm({
 					</>
 				)}
 			</CheckoutSection>
+
+			{questions && questions.length > 0 ? (
+				<CheckoutSection step={3} title="A few questions">
+					<p className="-mt-1 text-xs text-muted-foreground">
+						{seats > 1
+							? `${storeName} asks these once for this RSVP, not per seat.`
+							: `${storeName} needs these to get ready for you.`}
+					</p>
+					<BuyerQuestionsFields
+						questions={questions}
+						answers={answers}
+						idPrefix="rsvp-q"
+						onChange={(questionId, answer) =>
+							setAnswers((prev) => {
+								const { [questionId]: _dropped, ...rest } = prev;
+								return answer === undefined
+									? rest
+									: { ...rest, [questionId]: answer };
+							})
+						}
+					/>
+				</CheckoutSection>
+			) : null}
 
 			<CheckoutSection title={`Note to ${storeName} (optional)`}>
 				<textarea

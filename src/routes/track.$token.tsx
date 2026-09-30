@@ -1677,6 +1677,7 @@ function TrackingRoute() {
 								currency={order.currency}
 								imageUrl={itemImageUrls?.[i] ?? undefined}
 								booking={itemBookingSpan}
+								answers={item.answers}
 							/>
 						);
 					})}
