@@ -1816,14 +1816,19 @@ function TrackingRoute() {
 					</p>
 				) : null}
 				{/* Buyer self-serves a PDF receipt — generated on demand from this
-				    order, no delivery/email needed. */}
-				<ReceiptDownloadButton
-					token={token}
-					paid={isOrderDocPaid(order.paymentStatus)}
-					pdfHint
-					variant="outline"
-					className="w-full"
-				/>
+				    order, no delivery/email needed. Not for a request the seller
+				    hasn't accepted (awaiting, declined or expired — `z8r3fdkjek`):
+				    an invoice for an unaccepted booking/RSVP reads as a bill. */}
+				{order.status === "booking_requested" ||
+				order.bookingResolution !== undefined ? null : (
+					<ReceiptDownloadButton
+						token={token}
+						paid={isOrderDocPaid(order.paymentStatus)}
+						pdfHint
+						variant="outline"
+						className="w-full"
+					/>
+				)}
 			</section>
 
 			{/* Echo the shopper's note so they can confirm it was received. Plain

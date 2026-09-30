@@ -4,6 +4,7 @@ import {
 	normalizeQuestionsDraft,
 	questionsDraftFrom,
 	questionsDraftIssue,
+	questionRowIssues,
 	questionsSubmitValue,
 } from "./buyer-questions-card";
 
@@ -74,5 +75,21 @@ describe("buyer questions — seller draft", () => {
 				TENT,
 			])[1],
 		).toMatchObject({ showWhenId: "bring001", showWhenOption: "" });
+	});
+});
+
+describe("questionRowIssues — the error sits under the box to fix", () => {
+	test("a blank question asks for wording; a one-option pick asks for more", () => {
+		expect(
+			questionRowIssues({ ...BRINGING, label: " ", options: ["Only one"] }),
+		).toEqual({
+			label: "Add the question's wording.",
+			options: "Add at least 2 options — a buyer needs something to pick.",
+		});
+	});
+
+	test("a finished row has nothing to say, and a short answer needs no options", () => {
+		expect(questionRowIssues(BRINGING)).toEqual({});
+		expect(questionRowIssues(TENT)).toEqual({});
 	});
 });

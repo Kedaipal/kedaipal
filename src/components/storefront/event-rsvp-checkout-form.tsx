@@ -576,7 +576,11 @@ export function EventRsvpCheckoutForm({
 							id="rsvp-wa-phone-hint"
 							className="text-sm font-medium text-accent-emphasis"
 						>
-							We&apos;ll WhatsApp your RSVP confirmation to{" "}
+							{/* A request isn't confirmed yet — the message comes when
+							    the host approves (`z8r3fdkjek`). */}
+							{needsApproval
+								? "Once approved, we'll WhatsApp your confirmation to "
+								: "We'll WhatsApp your RSVP confirmation to "}
 							{formatMobile(parsedPhone.digits)} — check it&apos;s right.
 						</span>
 					) : phoneRejection ? (
@@ -603,7 +607,9 @@ export function EventRsvpCheckoutForm({
 							id="rsvp-wa-phone-hint"
 							className="text-xs font-normal text-muted-foreground"
 						>
-							Your RSVP confirmation lands in this WhatsApp.
+							{needsApproval
+								? "Your confirmation lands in this WhatsApp once the host approves."
+								: "Your RSVP confirmation lands in this WhatsApp."}
 						</span>
 					)}
 				</div>

@@ -393,6 +393,17 @@ A guest who messages their ORD ref before approval gets the
 
 **The counter is never held**: a walk-in RSVP is keyed by the seller herself.
 
+The buyer's page hides *Download invoice* while a request waits and after a
+decline or expiry — an invoice for something the seller never accepted reads
+as a bill. The seller's order page keeps its document actions.
+
+**An event needs a venue at save** (found while testing this, 30 Sep): a store
+with no pickup point used to save an event, advertise RSVP on the storefront,
+and only then turn every guest away at the RSVP page. `products.create` /
+`update` now refuse it ("Add a pickup point first…"), and the Event card and
+the wizard say so where the seller is working, with a link to Settings →
+Fulfilment. A hidden point counts — an RSVP-only venue is a hidden point.
+
 Where the guest learns it: the product page's event notice, the top of the
 RSVP form, the CTA ("Request 1 seat") and the line under it — before they
 commit, not after.

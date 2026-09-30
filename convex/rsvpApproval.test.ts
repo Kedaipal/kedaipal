@@ -245,3 +245,27 @@ describe("an RSVP on an event that approves each guest", () => {
 		expect(order?.status).toBe("confirmed");
 	});
 });
+
+describe("an event needs a venue", () => {
+	test("a store with no pickup point can't save an event — refused with the fix named", async () => {
+		const t = setup();
+		const asUser = t.withIdentity({ subject: USER });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: "No Venue Yet",
+			slug: "no-venue-yet",
+		});
+		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		await expect(
+			asUser.mutation(api.products.create, {
+				retailerId: retailer._id,
+				name: "Into The Falls 2026",
+				currency: "MYR",
+				imageStorageIds: [],
+				sortOrder: 0,
+				event: { date: EVENT_DATE },
+				variants: [{ optionValues: [], price: 15000, onHand: 0 }],
+			}),
+		).rejects.toThrow(/Add a pickup point first/);
+	});
+});

@@ -19,6 +19,7 @@ import {
 	MAX_OPTION_LABEL,
 	MAX_QUESTION_LABEL,
 	MAX_QUESTION_OPTIONS,
+	MIN_QUESTION_OPTIONS,
 	mintQuestionId,
 	normalizeOptions,
 	sanitizeBuyerQuestions,
@@ -125,18 +126,53 @@ export function normalizeQuestionsDraft(
 	});
 }
 
+/**
+ * One row's problems, addressed to the field that has them — so the error
+ * sits under the box the seller must fix, never as a sentence at the bottom
+ * naming "Question 2". The same rules as the sanitizer's per-row checks
+ * (the whole-draft verdict stays `questionsDraftIssue`).
+ */
+export function questionRowIssues(q: QuestionDraft): {
+	label?: string;
+	options?: string;
+} {
+	const issues: { label?: string; options?: string } = {};
+	if (q.label.trim().length === 0) issues.label = "Add the question's wording.";
+	if (q.type === "choice") {
+		const count = normalizeOptions(q.options).length;
+		if (count < MIN_QUESTION_OPTIONS)
+			issues.options = `Add at least ${MIN_QUESTION_OPTIONS} options — a buyer needs something to pick.`;
+		else if (count > MAX_QUESTION_OPTIONS)
+			issues.options = `${MAX_QUESTION_OPTIONS} options is the most.`;
+	}
+	return issues;
+}
+
 const SELECT_CLASS =
 	"h-11 w-full rounded-xl border border-input bg-background px-2 text-sm";
 
 export function BuyerQuestionsEditor({
 	draft,
 	onChange,
+	revealAll = false,
 }: {
 	draft: BuyerQuestionsDraft;
 	onChange: (next: BuyerQuestionsDraft) => void;
+	/** Show every row's problems — set once the seller tried to save. Until
+	 * then a row speaks only after it's been touched, so a freshly added
+	 * question never opens with an error on a box nobody has typed in. */
+	revealAll?: boolean;
 }) {
 	const atCap = draft.length >= MAX_BUYER_QUESTIONS;
+	const [touched, setTouched] = useState<ReadonlySet<string>>(new Set());
+	const touch = (id: string) =>
+		setTouched((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+	// Whole-draft fallback: shown only when a save was attempted and no row
+	// already explains the problem (e.g. a hand-edited draft).
 	const issue = questionsDraftIssue(draft);
+	const anyRowIssue = draft.some(
+		(q) => Object.keys(questionRowIssues(q)).length > 0,
+	);
 
 	function commit(next: BuyerQuestionsDraft) {
 		onChange(normalizeQuestionsDraft(next));
@@ -160,11 +196,13 @@ export function BuyerQuestionsEditor({
 					index={index}
 					question={question}
 					earlier={draft.slice(0, index)}
+					showIssues={revealAll || touched.has(question.id)}
+					onTouch={() => touch(question.id)}
 					onPatch={(fields) => patch(question.id, fields)}
 					onRemove={() => commit(draft.filter((q) => q.id !== question.id))}
 				/>
 			))}
-			{issue && draft.length > 0 ? (
+			{revealAll && issue && !anyRowIssue ? (
 				<p role="alert" className="text-xs text-destructive">
 					{issue}
 				</p>
@@ -201,12 +239,16 @@ function QuestionRow({
 	index,
 	question,
 	earlier,
+	showIssues,
+	onTouch,
 	onPatch,
 	onRemove,
 }: {
 	index: number;
 	question: QuestionDraft;
 	earlier: readonly QuestionDraft[];
+	showIssues: boolean;
+	onTouch: () => void;
 	onPatch: (fields: Partial<QuestionDraft>) => void;
 	onRemove: () => void;
 }) {
@@ -217,6 +259,8 @@ function QuestionRow({
 	);
 	const trigger = triggers.find((q) => q.id === question.showWhenId);
 	const optionsFull = question.options.length >= MAX_QUESTION_OPTIONS;
+
+	const rowIssues = showIssues ? questionRowIssues(question) : {};
 
 	function addOption() {
 		const text = optionText.trim().slice(0, MAX_OPTION_LABEL);
@@ -256,7 +300,15 @@ function QuestionRow({
 							: "e.g. Message on the cake"
 					}
 					onChange={(e) => onPatch({ label: e.target.value })}
+					onBlur={onTouch}
+					isError={rowIssues.label !== undefined}
+					aria-describedby={rowIssues.label ? `${labelId}-issue` : undefined}
 				/>
+				{rowIssues.label ? (
+					<p id={`${labelId}-issue`} className="text-xs text-destructive">
+						{rowIssues.label}
+					</p>
+				) : null}
 			</div>
 
 			<div className="grid grid-cols-2 gap-2">
@@ -314,7 +366,10 @@ function QuestionRow({
 									}}
 									// Android keyboards don't fire a reliable Enter —
 									// losing focus commits, as in the variant editor.
-									onBlur={addOption}
+									onBlur={() => {
+										addOption();
+										onTouch();
+									}}
 									className="h-9 w-32 text-xs"
 								/>
 								<button
@@ -328,11 +383,15 @@ function QuestionRow({
 							</div>
 						)}
 					</div>
-					<p className="text-xs text-muted-foreground">
-						{optionsFull
-							? `${MAX_QUESTION_OPTIONS} options is the most — remove one to add another.`
-							: `2 to ${MAX_QUESTION_OPTIONS} options. Press Enter after each.`}
-					</p>
+					{rowIssues.options ? (
+						<p className="text-xs text-destructive">{rowIssues.options}</p>
+					) : (
+						<p className="text-xs text-muted-foreground">
+							{optionsFull
+								? `${MAX_QUESTION_OPTIONS} options is the most — remove one to add another.`
+								: `${MIN_QUESTION_OPTIONS} to ${MAX_QUESTION_OPTIONS} options. Press Enter after each.`}
+						</p>
+					)}
 				</div>
 			) : (
 				<p className="text-xs text-muted-foreground">

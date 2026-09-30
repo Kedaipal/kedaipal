@@ -17,6 +17,11 @@ import { ProBadge } from "../app/pro-gate";
 import { Input } from "../ui/input";
 import { ToggleSwitch } from "../ui/toggle-switch";
 
+/** Why an event can't be saved on a store with no pickup point — said on
+ * the Event card and by the wizard, mirroring the server's refusal. */
+export const EVENT_NO_VENUE_COPY =
+	"An event needs a venue, and this store has no pickup point yet — guests would reach the RSVP page and be turned away. A hidden point works if it's only for events.";
+
 /**
  * The event block's state, kept as TYPED-RAW strings like every other draft in
  * the product form (a half-typed seat cap must survive a re-render). `on` is
@@ -165,9 +170,13 @@ export function eventDraftValid(
 		/** The store has several pickup points (hidden ones count), so the
 		 * event must say which one hosts it (the server refuses otherwise). */
 		requireVenue?: boolean;
+		/** The store has NO pickup point at all — an event can't be saved
+		 * until one exists (the server refuses too). */
+		noVenue?: boolean;
 	} = {},
 ): boolean {
 	if (!draft.on) return true;
+	if (opts.noVenue) return false;
 	if (opts.requireVenue && draft.venueId.trim().length === 0) return false;
 	if (draft.date.trim().length === 0) return false;
 	const date = mytMidnightFromYmd(draft.date);
@@ -369,6 +378,20 @@ export function EventFields({
 						    with guests booked, like the date: every RSVP froze this
 						    address onto its order page, so moving it would split one
 						    event across two addresses. */}
+						{venues !== undefined && venues.length === 0 ? (
+							<p
+								role="alert"
+								className="w-full rounded-lg bg-destructive/10 px-3 py-2 text-xs leading-relaxed text-destructive"
+							>
+								{EVENT_NO_VENUE_COPY}{" "}
+								<a
+									href="/app/settings?tab=fulfilment"
+									className="font-semibold underline underline-offset-2"
+								>
+									Add a pickup point
+								</a>
+							</p>
+						) : null}
 						{venues !== undefined && venues.length > 1 ? (
 							<div className="flex flex-col gap-1.5">
 								<label htmlFor="event-venue" className="text-sm font-medium">

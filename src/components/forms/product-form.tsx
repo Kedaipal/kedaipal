@@ -948,6 +948,7 @@ export function ProductForm({
 			eventDraftFrom(initialValues?.event) ??
 			EMPTY_EVENT_DRAFT,
 	);
+	const [questionsRevealed, setQuestionsRevealed] = useState(false);
 	const [questionsDraft, setQuestionsDraft] = useState<BuyerQuestionsDraft>(
 		() =>
 			initialValues?.buyerQuestionsDraft ??
@@ -1029,6 +1030,7 @@ export function ProductForm({
 				!eventDraftValid(eventDraft, {
 					allowPastDate: (eventRsvpCount ?? 0) > 0,
 					requireVenue: (eventVenues?.length ?? 0) > 1,
+					noVenue: eventVenues !== undefined && eventVenues.length === 0,
 				})
 			)
 				return;
@@ -1151,6 +1153,9 @@ export function ProductForm({
 	});
 
 	function handleSubmit(e: FormEvent) {
+		// From the first save attempt on, every question row shows its
+		// problem — before it, only rows the seller has touched do.
+		setQuestionsRevealed(true);
 		submitThenFocusError(form, e);
 	}
 
@@ -1685,6 +1690,7 @@ export function ProductForm({
 					<BuyerQuestionsEditor
 						draft={questionsDraft}
 						onChange={setQuestionsDraft}
+						revealAll={questionsRevealed}
 					/>
 				</ProductStepCard>
 			)}
