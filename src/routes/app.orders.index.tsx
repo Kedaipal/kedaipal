@@ -189,9 +189,12 @@ type InboxSearch = {
 	 * value can't ask. A legacy singular `?source=` is still read and folded in,
 	 * so old bookmarks keep working. */
 	sources?: OrderSource[];
-	/** How the order goes OUT (z8r3fdfau9) — `fulfilmentKey` values, repeated in
-	 * the URL like `pay`/`method` (`?ful=delivery&ful=drop_off`). The twin of
-	 * `sources`: that one is the surface it came in through. */
+	/** How the order goes OUT (z8r3fdfau9) — `fulfilmentKey` values, carried in
+	 * the URL exactly like `pay`/`method`: the router serialises the array as
+	 * JSON, so it reads `?ful=["delivery","drop_off"]`. A bare `?ful=delivery`
+	 * is still accepted (`toList`) and heals into that form on the next
+	 * navigate, so a hand-written or older link keeps working. The twin of
+	 * `sources`: that one is the surface it came IN through. */
 	ful?: FulfilmentKey[];
 	/**
 	 * THE status axis — status LEAVES, repeated in the URL like `pay`/`method`.

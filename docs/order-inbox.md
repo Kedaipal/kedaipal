@@ -369,6 +369,13 @@ is the `storefront` / "Online" drift this file already records:
 | `booking` | Booking | nothing ships; the guest turns up on check-in day |
 | `event` | Event | an RSVP to a fixed-moment event — **stored `self_collect`** |
 
+An RSVP to an approval-gated event (`z8r3fdkjek`) waits in the
+`booking_requested` **status** — the one bookings already use — while staying an
+RSVP. Status and fulfilment are different axes and neither bends the other: that
+order is an **Event** awaiting approval, not a Booking. `eventRsvp` is what tells
+the two apart, which is exactly why the key is derived from `orderFlowKind`
+rather than from the status or the method.
+
 **`fulfilmentKey` is built on `orderFlowKind`, and two refinements sit on top of
 it.** The flow kind comes first and that is not tidiness: an **event RSVP is
 stored `deliveryMethod: "self_collect"`** (the buyer collects at the venue) and
@@ -421,7 +428,9 @@ Placement is deliberate: the panel section sits **directly under Order type**,
 not appended after Order date. The two are one journey read twice — how it came
 IN, how it goes OUT — and a seller reaches for them together.
 
-Wiring, all of it the same shape every other dimension uses: `?ful=` (repeated)
+Wiring, all of it the same shape every other dimension uses: `?ful=`
+(`?ful=["delivery","drop_off"]` — the router's JSON array form, same as `pay`
+and `asrc`; a bare `?ful=delivery` is accepted and heals into it)
 → `InboxFilterArgs.fulfilments` → `buildInboxPredicate` → the CSV export through
 the shared predicate. It is in `NARROWING_FILTER_KEYS`, so it sits behind the
 same Pro gate as payment and category (that record is compiler-enforced complete

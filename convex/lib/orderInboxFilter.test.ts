@@ -368,6 +368,34 @@ describe("buildInboxPredicate — fulfilments (z8r3fdfau9)", () => {
 		expect(p(booking)).toBe(false);
 	});
 
+	test("an approval-gated RSVP is still an event, whatever status it waits in (z8r3fdkjek)", () => {
+		// An event with `requiresApproval` lands its RSVPs in `booking_requested`
+		// — the status bookings already use — while staying an RSVP. Status and
+		// fulfilment are different axes, so the one must not bend the other: the
+		// order is an Event that happens to be awaiting approval, not a Booking.
+		const awaiting = order({
+			deliveryMethod: "self_collect",
+			eventRsvp: true,
+			status: "booking_requested",
+		});
+		expect(buildInboxPredicate({ fulfilments: ["event"] })(awaiting)).toBe(
+			true,
+		);
+		expect(buildInboxPredicate({ fulfilments: ["booking"] })(awaiting)).toBe(
+			false,
+		);
+		expect(
+			buildInboxPredicate({ fulfilments: ["self_collect"] })(awaiting),
+		).toBe(false);
+		// And it ANDs with the status axis the way any other order does.
+		expect(
+			buildInboxPredicate({
+				fulfilments: ["event"],
+				statuses: ["booking_requested"],
+			})(awaiting),
+		).toBe(true);
+	});
+
 	test("an RSVP filters as an event, never as the self-collect it is stored as", () => {
 		const events = buildInboxPredicate({ fulfilments: ["event"] });
 		expect(events(rsvp)).toBe(true);
