@@ -226,13 +226,14 @@ confirmation resolve to the right store.
 ## Frontend: the act-as session
 
 - **`useActAs()`** (`src/hooks/useActAs.tsx`) — the `ActAsProvider` (wrapping the whole `/app`
-  subtree) holds `actAsRetailerId` in React state mirrored to `sessionStorage`. `setActAs(id)`
-  enters a store; `setActAs(undefined)` exits. Because it's a session (not a URL param), it
-  holds across **every** navigation, CRUD redirect, and refresh with zero per-link threading —
-  the class of bug that plagued the URL-param approach can't happen. Per-tab, so two tabs can
-  operate two different stores. `useActAsRetailerId()` is the raw reader for the few mutations
-  that must pass an explicit `retailerId` (`updateSettings`, `renameSlug`, counter-checkout
-  create/list).
+  subtree) holds the session in React state mirrored to `sessionStorage`
+  (`kp:actAsRetailerId`). `setActAs(id)` enters a store; `setActAs(undefined)` exits. Because
+  it's a session (not a URL param), it holds across **every** navigation, CRUD redirect, and
+  refresh with zero per-link threading — the class of bug that plagued the URL-param approach
+  can't happen. Per-tab, so two tabs can operate two different stores. `useActAsRetailerId()`
+  is the raw reader for the few mutations that must pass an explicit `retailerId`
+  (`updateSettings`, `renameSlug`, counter-checkout create/list). **The session belongs to the
+  admin who started it, in that Clerk sign-in** — see [Session ownership](#session-ownership--it-ends-when-the-admin-signs-out-z8r3fdkqn6).
 - **`useUpdateSettings()`** (`src/hooks/useUpdateSettings.ts`) — the act-as-aware wrapper for
   `retailers.updateSettings`; it injects `actAsRetailerId` into every call. **Every settings
   write must use this hook, never a raw `useMutation(api.retailers.updateSettings)`** — the
@@ -246,10 +247,14 @@ confirmation resolve to the right store.
   `fulfilment-tab.test.tsx` + `useUpdateSettings.test.tsx`.
 - **`useDashboardRetailer()`** (`src/hooks/useDashboardRetailer.ts`) — the single hook every
   `/app/*` screen calls instead of `useQuery(api.retailers.getMyRetailer)`. When a session is
-  active it calls `getRetailerForAdmin`, otherwise `getMyRetailer`.
+  active it calls `getRetailerForAdmin`, otherwise `getMyRetailer`; while a stored session is
+  still being confirmed it asks **neither** and reads as loading. The shell reads the sibling
+  **`useDashboardRetailerRead()`**, which also returns the read's `error` — see
+  [A failed store read is said, not spun](#a-failed-store-read-is-said-not-spun-z8r3fdkqn6).
 - **`ActingAsBanner`** (`src/components/admin/acting-as-banner.tsx`) — sticky, high-contrast
-  amber bar rendered by the `/app` shell whenever `retailer.actingAsAdmin`. "Exit" calls
-  `setActAs(undefined)` and returns to the directory.
+  amber bar rendered by the `/app` shell whenever `retailer.actingAsAdmin`. "Exit" ends the
+  session and returns to the directory through **`useExitActAs()`** (same file) — the one exit,
+  shared with the shell's stale-store redirect and its failed-read screen.
 - **Nav grouping** — the sidebar shows the **seller nav** (operating the vendor) and a
   separate, labelled **"Admin"** group (All sellers / Billing / WABA Safety), so the boundary
   is unmistakable while acting-as. Seller nav needs no special handling (the session holds
@@ -274,6 +279,71 @@ confirmation resolve to the right store.
   those screens need a store; "Manage" starts a session and brings the full seller shell back.
   Only a **non-admin** with no store is still sent to `/onboarding`. So an admin can choose
   never to set up a store and still run the console.
+
+### Session ownership — it ends when the admin signs out (z8r3fdkqn6)
+
+The session used to be a bare store id in `sessionStorage`, so it **outlived the admin's
+sign-in**. Found 1 Oct 2026 with an admin and a seller account in one browser tab: after the
+admin (acting as a store) signed out and the seller signed in, the dashboard still saw the id,
+skipped `getMyRetailer`, and asked `getRetailerForAdmin`, which `requireAdmin` refuses
+(`Not authorized`). An adapter read that throws just settles as "no data", so every `/app`
+page sat on its skeleton forever, with nothing in the browser console. And because the in-app
+sign-out → sign-in is a client-side navigation, inside the 10-minute cache window the admin's
+*cached* result for that store could have painted instead (ConvexQueryClient keeps a query's
+last data when it errors) — the seller looking at another store's dashboard.
+
+The stored value is now a record, `{ userId, sessionId, retailerId }`, and one pure rule,
+`resolveActAs`, decides what it means for whoever is looking:
+
+| Who is looking | Result |
+| --- | --- |
+| The admin who started it, in the same Clerk sign-in, confirmed as an admin | **active** — operate the store. Survives a refresh: Clerk keeps the session id |
+| The same, while Clerk is loading or Convex is still confirming the identity | **pending** — the shell shows its skeleton and asks for neither store. Guessing the admin's own store for a moment is a moment in which a write lands there |
+| Anyone else — another user, or the same admin in a **new** sign-in | **discard** — deleted; they get their own store |
+| The record's owner, but Convex says not an admin (a hand-written record; an admin removed from the allowlist mid-session) | **discard** — `getRetailerForAdmin` is never asked a question it will refuse |
+| A bare id (the pre-fix format) or anything unreadable | **discard** — it names no owner |
+
+- **Signing out clears it.** `/app` mounts `ActAsProvider` *outside* its
+  `<Show when="signed-in">` gate, so the provider is still mounted when Clerk reports the
+  sign-out, and deletes the record then and there. A sign-out elsewhere (the onboarding top
+  bar, the invite page) leaves a record naming a session that can never sign in again; it is
+  deleted on the next read.
+- **Keyed by Clerk session, not just by user.** User-keying alone would let an admin who signed
+  out anywhere but `/app` sign back in to find the old act-as session still running — the
+  session outliving the sign-out again, just for the same person.
+- **"Confirmed admin" means after Convex has confirmed the identity** (`useActAsViewer`,
+  `src/hooks/useActAsViewer.ts`). A query subscribed in the instant between Clerk loading and
+  Convex attaching the token is answered for an **anonymous** caller, so `amIAdmin` can read
+  `false` for a beat on a refresh; the viewer ignores it until `useConvexAuth()` reports the
+  backend has authenticated the user. Trusting it would end every admin's session on reload.
+  An identity Convex *rejects* counts as not-admin, so a broken token can't leave the session
+  pending forever.
+- **The server is still the gate.** `getRetailerForAdmin` and every act-as write re-check
+  `requireAdmin` / `requireRetailerAccess`; this is about the client never *asking* for a store
+  that isn't its viewer's, and never hanging when a read fails anyway.
+
+Pinned by `src/hooks/useActAs.test.tsx` (every row above, plus refresh and sign-out),
+`useActAsViewer.test.tsx` (the anonymous-answer race), `useDashboardRetailer.test.tsx` (the
+seller-with-a-stale-id scenario end to end) and `src/routes/app.test.tsx` (the provider sits
+outside the sign-in gate).
+
+### A failed store read is said, not spun (z8r3fdkqn6)
+
+`useDashboardRetailerRead()` returns `{ retailer, error }`. `error` is set only when the read
+failed with **nothing to show**: a store that loaded and later errors keeps showing (Convex
+keeps the data), and each action on it reports its own failure. When `error` is set, the shell
+renders **`DashboardLoadError`** (`src/components/app/dashboard-load-error.tsx`) instead of its
+skeleton:
+
+- **A seller** reads "Your dashboard didn't load", with **Reload** (a stale tab, or a client
+  from before a deploy), **Sign out** (an account that can't reach its store), and "Still stuck?
+  Message us on WhatsApp" (the configured support number).
+- **An admin acting as a store** reads "Couldn't open this store", with **Exit act-as** first —
+  it's the acted-as store that failed, and exiting lands on the directory — then Reload.
+
+Both render through `FullPageError` (`src/components/ui/full-page-error.tsx`), the primitive the
+router's `RouteErrorCard` now shares, so every full-page failure looks like one thing. The raw
+error shows in dev builds only.
 
 ## Audit trail
 
@@ -315,8 +385,11 @@ pause flow) is a sensible next step but not yet implemented.
   an admin's own store.
 - `src/routes/app.tsx` — `ActAsProvider` wrap + banner + redirect guard + storeless-admin mode
   + act-as-aware retailer resolution.
-- `src/hooks/useActAs.tsx` — the session (context + `sessionStorage`).
-- `src/hooks/useDashboardRetailer.ts`, `src/components/admin/acting-as-banner.tsx`.
+- `src/hooks/useActAs.tsx` — the session (context + `sessionStorage`) and its ownership rule,
+  `resolveActAs`; `src/hooks/useActAsViewer.ts` — who is looking (Clerk session + a
+  Convex-confirmed admin verdict).
+- `src/hooks/useDashboardRetailer.ts`, `src/components/admin/acting-as-banner.tsx` (+ the shared
+  `useExitActAs`), `src/components/app/dashboard-load-error.tsx`.
 - `src/components/dashboard/{sidebar,mobile-header,bottom-nav}.tsx` — accept a `null` retailer
   for storeless-admin mode; sidebar's Admin group ends the session.
 - `convex/admin.test.ts` — access, subscription bypass, audit, directory, counter-checkout.
