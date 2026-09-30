@@ -41,6 +41,7 @@ const LIVE_ROUTES = [
 	"privacy",
 	"sign-in",
 	"sign-up",
+	"stores", // the marketplace home (z8r3fdkmyp) — moved up from GENERIC
 	"terms",
 	"track",
 ] as const;
@@ -205,7 +206,7 @@ const GENERIC = [
 	"shop",
 	"shops",
 	"store",
-	"stores",
+	// "stores" graduated to LIVE_ROUTES — it IS the directory now (z8r3fdkmyp).
 	"vendor",
 	"vendors",
 	"verified",

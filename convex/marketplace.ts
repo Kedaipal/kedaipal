@@ -1,0 +1,155 @@
+import { query } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
+import type { QueryCtx } from "./_generated/server";
+import type { ClosedDateRange } from "./lib/closedDates";
+import { type Country, DEFAULT_COUNTRY } from "./lib/country";
+import {
+	isListableRow,
+	sponsorshipActive,
+} from "./lib/marketplaceListing";
+import type { OpeningHours } from "./lib/openingHours";
+import { hiddenFromStorefront } from "./lib/productEvent";
+
+/**
+ * The public store directory's card payload (z8r3fdkmyp) — the marketplace
+ * home at kedaipal.com/stores.
+ *
+ * Card fields ONLY. Nothing here may leak what the storefront payload keeps
+ * private: no subscription state, no contact numbers, no payment or courier
+ * config. `openingHours`/`closedDates` ride along (both already public on the
+ * by-slug payload) so the card's live "Open now" line shares ONE author with
+ * the storefront header (`openNowStatus` + `opening-hours-line.tsx`) instead
+ * of a server-frozen snapshot that goes stale while the page sits open.
+ */
+export type MarketplaceStoreCard = {
+	slug: string;
+	storeName: string;
+	storeDescription?: string;
+	/** Seller-typed area line ("Ampang, KL") — see schema `storeArea`. */
+	storeArea?: string;
+	country: Country;
+	logoUrl?: string;
+	/** Only populated on a sponsored card — the highlight rail is the one
+	 * surface that renders covers, so everyone else skips the storage read. */
+	coverImageUrl?: string;
+	/** Resolved: undefined means TRUE (legacy stores always delivered) — same
+	 * rule as the storefront reads it. Drives the "Delivers" filter chip. */
+	offersDelivery: boolean;
+	openingHours?: OpeningHours;
+	closedDates?: ClosedDateRange[];
+	isFoundingMember?: boolean;
+	foundingMemberRank?: number;
+	/** A live, admin-set sponsorship window — the card renders on the
+	 * "Store highlights" rail WITH a visible "Sponsored" label. */
+	sponsored: boolean;
+	/** Off-Season Hold — the card says "browse only" instead of "Open now",
+	 * matching what the buyer will find on the storefront itself. */
+	orderingPaused: boolean;
+	createdAt: number;
+};
+
+/**
+ * Does the store have at least one product a buyer would actually see on its
+ * storefront? Same visibility rules as `products.list` — active, not hidden,
+ * not hidden-by-category, not a finished event — because "listed on the
+ * directory, empty on arrival" is a dead end we send buyers into.
+ *
+ * `take(20)` bounds the read: the first 20 active rows almost always contain
+ * a visible one, and a store whose first 20 active products are ALL
+ * storefront-hidden (finished events / counter-only) reads as not listable —
+ * which is the honest answer for what a buyer would find.
+ */
+async function hasVisibleProduct(
+	ctx: QueryCtx,
+	retailerId: Id<"retailers">,
+): Promise<boolean> {
+	const candidates = await ctx.db
+		.query("products")
+		.withIndex("by_retailer_active", (q) =>
+			q.eq("retailerId", retailerId).eq("active", true),
+		)
+		.filter((q) =>
+			q.and(
+				q.neq(q.field("hidden"), true),
+				q.neq(q.field("hiddenByCategory"), true),
+			),
+		)
+		.take(20);
+	return candidates.some((row) => !hiddenFromStorefront(row));
+}
+
+/**
+ * General-list order, after the client lifts sponsored + founding into their
+ * own shelves: proven stores first (activated — has confirmed at least one
+ * order — newest activation first), then the not-yet-activated by newest
+ * store. A v1 heuristic, deliberately data-derived rather than hand-curated
+ * (docs/storefront-landing.md precedent — curation goes stale); a true
+ * recent-order-activity rank needs a denormalized counter and is the named
+ * upgrade path in docs/marketplace-home.md.
+ */
+function generalOrder(a: Doc<"retailers">, b: Doc<"retailers">): number {
+	const aActive = a.activatedAt !== undefined;
+	const bActive = b.activatedAt !== undefined;
+	if (aActive !== bActive) return aActive ? -1 : 1;
+	if (aActive && bActive)
+		return (b.activatedAt ?? 0) - (a.activatedAt ?? 0);
+	return b.createdAt - a.createdAt;
+}
+
+/**
+ * Every listable store, as directory cards. Public + arg-less: the region
+ * split (MY/SG) and the filter chips act client-side on the one payload —
+ * the table is small (low hundreds), the page needs the counts per region
+ * anyway, and one cacheable result beats a query per toggle flip.
+ *
+ * Full-table `.collect()` is a documented ceiling, not an accident: there is
+ * no field to index a "listable" scan on (the rule spans three tables), and
+ * at the current store count the read is cheap. The upgrade path — a
+ * denormalized `marketplaceListedAt` maintained by the writers — is named in
+ * docs/marketplace-home.md so it's a follow-up, not a rediscovery.
+ */
+export const listStores = query({
+	args: {},
+	handler: async (ctx): Promise<MarketplaceStoreCard[]> => {
+		const now = Date.now();
+		const rows = await ctx.db.query("retailers").collect();
+		const cards: Array<{ card: MarketplaceStoreCard; row: Doc<"retailers"> }> =
+			[];
+		for (const row of rows) {
+			if (!isListableRow(row)) continue;
+			if (!(await hasVisibleProduct(ctx, row._id))) continue;
+			const sponsored = sponsorshipActive(row.marketplaceSponsoredUntil, now);
+			let logoUrl: string | undefined;
+			if (row.logoStorageId) {
+				logoUrl = (await ctx.storage.getUrl(row.logoStorageId)) ?? undefined;
+			}
+			let coverImageUrl: string | undefined;
+			if (sponsored && row.coverImageStorageId) {
+				coverImageUrl =
+					(await ctx.storage.getUrl(row.coverImageStorageId)) ?? undefined;
+			}
+			cards.push({
+				row,
+				card: {
+					slug: row.slug,
+					storeName: row.storeName,
+					storeDescription: row.storeDescription,
+					storeArea: row.storeArea,
+					country: row.country ?? DEFAULT_COUNTRY,
+					logoUrl,
+					coverImageUrl,
+					offersDelivery: row.offerDelivery !== false,
+					openingHours: row.openingHours,
+					closedDates: row.closedDates,
+					isFoundingMember: row.isFoundingMember,
+					foundingMemberRank: row.foundingMemberRank,
+					sponsored,
+					orderingPaused: row.orderingPausedAt !== undefined,
+					createdAt: row.createdAt,
+				},
+			});
+		}
+		cards.sort((a, b) => generalOrder(a.row, b.row));
+		return cards.map((c) => c.card);
+	},
+});

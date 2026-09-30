@@ -311,6 +311,7 @@ import {
 	type MemberPermissions,
 	type PermissionArea,
 } from "./lib/permissions";
+import { sanitizeStoreArea } from "./lib/marketplaceListing";
 import { STORE_DESCRIPTION_MAX } from "./lib/storeProfile";
 import {
 	assertValidEmail,
@@ -787,6 +788,13 @@ type RetailerPublic = {
 	// Public storefront blurb under the store name. Public-safe — surfaced on
 	// both the owner read and the by-slug storefront payload.
 	storeDescription?: string;
+	// Marketplace card area line (z8r3fdkmyp) — public by nature (it renders on
+	// the /stores card); only the owner read carries it, the directory reads
+	// the row itself.
+	storeArea?: string;
+	// Marketplace listing switch state (z8r3fdkmyp): true = the seller opted
+	// OUT of /stores. Derived from `marketplaceUnlistedAt`; owner read only.
+	marketplaceUnlisted?: boolean;
 	// "What does your store sell?" — the default kind for NEW products in the
 	// wizard (86eyj70z1 decision 5). Owner-facing config, harmless if public.
 	storeType?: "physical" | "service" | "booking";
@@ -1058,6 +1066,8 @@ async function buildRetailerPublic(
 		slug: row.slug,
 		storeName: row.storeName,
 		storeDescription: row.storeDescription,
+		storeArea: row.storeArea,
+		marketplaceUnlisted: row.marketplaceUnlistedAt !== undefined,
 		storeType: row.storeType,
 		waPhone: row.waPhone,
 		notifyEmail: row.notifyEmail,
@@ -1635,6 +1645,14 @@ const updateSettingsArgs = {
 		storeName: v.optional(v.string()),
 		// Empty/blank clears the description. Undefined means "no change".
 		storeDescription: v.optional(v.string()),
+		// Marketplace card area line (z8r3fdkmyp). Blank clears; undefined = no
+		// change. Sanitized by sanitizeStoreArea (trim, one line, ≤ cap).
+		storeArea: v.optional(v.string()),
+		// Marketplace listing switch (z8r3fdkmyp): true relists (clears the
+		// opt-out stamp), false sets `marketplaceUnlistedAt`. A verb-shaped
+		// boolean in the API even though storage is a timestamp — the settings
+		// card thinks in on/off, the row remembers since-when.
+		marketplaceListed: v.optional(v.boolean()),
 		waPhone: v.optional(v.string()),
 		notifyEmail: v.optional(v.string()),
 		// Seller WhatsApp order alerts (86eyhw9zy). notifyWaPhone: blank clears
@@ -1732,6 +1750,10 @@ const SETTINGS_FIELD_AREA: Record<
 > = {
 	storeName: "store_settings",
 	storeDescription: "store_settings",
+	// Marketplace listing + card area (z8r3fdkmyp) — public presence, same
+	// class as the name/description/logo the card is built from.
+	storeArea: "store_settings",
+	marketplaceListed: "store_settings",
 	storeType: "store_settings",
 	locale: "store_settings",
 	logoStorageId: "store_settings",
@@ -1836,6 +1858,8 @@ export const updateSettings = mutation({
 		const patch: Partial<{
 			storeName: string;
 			storeDescription: string | undefined;
+			storeArea: string | undefined;
+			marketplaceUnlistedAt: number | undefined;
 			storeType: "physical" | "service" | "booking" | undefined;
 			waPhone: string | undefined;
 			notifyEmail: string | undefined;
@@ -1879,6 +1903,20 @@ export const updateSettings = mutation({
 		}
 		if (args.storeDescription !== undefined) {
 			patch.storeDescription = sanitizeStoreDescription(args.storeDescription);
+		}
+		if (args.storeArea !== undefined) {
+			try {
+				patch.storeArea = sanitizeStoreArea(args.storeArea);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
+		if (args.marketplaceListed !== undefined) {
+			// Relisting clears the stamp; opting out keeps the FIRST stamp if one
+			// is already there (a re-save must not rewrite "since when").
+			patch.marketplaceUnlistedAt = args.marketplaceListed
+				? undefined
+				: (retailer.marketplaceUnlistedAt ?? Date.now());
 		}
 		if (args.storeType !== undefined) {
 			// null clears; changing it re-types NOTHING — it only pre-selects the

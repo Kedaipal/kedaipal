@@ -99,6 +99,11 @@ export type AdminSellerRow = {
 	/** A dev-only purge cascade is running (z8r3fdbmc9) — the directory locks
 	 * the row (no Manage, no second purge) until it disappears. */
 	purging: boolean;
+	/** Marketplace listing state (z8r3fdkmyp): the seller's own opt-out stamp
+	 * (read-only here — only the seller flips it) and the admin-set sponsorship
+	 * window the directory's Sponsor control edits. Liveness is judged with
+	 * `sponsorshipActive`, never re-derived inline. */
+	marketplace: { unlistedAt?: number; sponsoredUntil?: number };
 	// --- Contact + billing facts (z8r3fdh37c) ------------------------------
 	// Everything an admin used to open a second tab for. All of it already
 	// lived on `retailers` / `subscriptions` / `invoices` / `adminAuditLog`;
@@ -300,6 +305,10 @@ export const listSellersForAdmin = query({
 					: {}),
 				createdAt: r._creationTime,
 				purging: r.purgeStartedAt !== undefined,
+				marketplace: {
+					unlistedAt: r.marketplaceUnlistedAt,
+					sponsoredUntil: r.marketplaceSponsoredUntil,
+				},
 				ownerEmail: r.notifyEmail,
 				waPhone: r.waPhone,
 				notifyWaPhone: r.notifyWaPhone,
@@ -335,6 +344,44 @@ export const listSellersForAdmin = query({
 			return b.createdAt - a.createdAt;
 		});
 		return rows;
+	},
+});
+
+/**
+ * Set / clear a store's marketplace "Store highlights" sponsorship window
+ * (z8r3fdkmyp). Admin-only and audited: v1 sponsorship is sold by hand
+ * (manual invoice), so the admin console is the ONE writer — a self-serve
+ * purchase path would arrive as its own ticket, not as a widening of this.
+ * `null` clears; a past `until` is refused rather than stored as an already-
+ * expired window that reads like a bug in the directory. Expiry itself is
+ * read-time (`sponsorshipActive`), so nothing needs a cron.
+ */
+export const setMarketplaceSponsorship = mutation({
+	args: {
+		retailerId: v.id("retailers"),
+		until: v.union(v.number(), v.null()),
+	},
+	handler: async (ctx, { retailerId, until }): Promise<void> => {
+		const adminUserId = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		if (until !== null && until <= Date.now()) {
+			throw new ConvexError("Sponsorship end must be in the future");
+		}
+		await ctx.db.patch(retailerId, {
+			marketplaceSponsoredUntil: until ?? undefined,
+			updatedAt: Date.now(),
+		});
+		await ctx.db.insert("adminAuditLog", {
+			adminUserId,
+			retailerId,
+			action:
+				until !== null
+					? "marketplace.sponsor.set"
+					: "marketplace.sponsor.clear",
+			targetId: until !== null ? new Date(until).toISOString() : undefined,
+			ts: Date.now(),
+		});
 	},
 });
 

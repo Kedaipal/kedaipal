@@ -105,6 +105,7 @@ function seller(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 		comped: false,
 		createdAt: at(-20),
 		purging: false,
+		marketplace: {},
 		country: "MY",
 		currency: "MYR",
 		...overrides,

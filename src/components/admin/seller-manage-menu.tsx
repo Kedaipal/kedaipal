@@ -5,11 +5,20 @@
 // read-only sheet) and the menu names each action with its consequence.
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
-import { ChevronDown, Gift, Info, Loader2, Store, Trash2 } from "lucide-react";
+import {
+	ChevronDown,
+	Gift,
+	Info,
+	Loader2,
+	Megaphone,
+	Store,
+	Trash2,
+} from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { AdminSellerRow } from "../../../convex/admin";
+import { sponsorshipActive } from "../../../convex/lib/marketplaceListing";
 import { useActAs } from "../../hooks/useActAs";
 import { convexErrorMessage } from "../../lib/format";
 import { cn } from "../../lib/utils";
@@ -22,6 +31,7 @@ import {
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { CompDialog } from "./comp-dialog";
+import { SponsorDialog } from "./sponsor-dialog";
 
 /**
  * Enter act-as for a store: start the session, audit the tenant ENTRY
@@ -75,6 +85,7 @@ export function SellerManageMenu({
 	const purgeStore = useMutation(api.admin.purgeStoreForAdmin);
 	const [purgeOpen, setPurgeOpen] = useState(false);
 	const [compOpen, setCompOpen] = useState(false);
+	const [sponsorOpen, setSponsorOpen] = useState(false);
 	// Server truth (`purging` rides the directory row, so every admin session
 	// locks) OR the just-clicked local echo, which bridges the moment before
 	// the reactive query refreshes.
@@ -182,6 +193,38 @@ export function SellerManageMenu({
 							</span>
 						</span>
 					</DropdownMenuItem>
+					<DropdownMenuItem
+						onSelect={() => setSponsorOpen(true)}
+						className="items-start"
+					>
+						<Megaphone
+							className={cn(
+								"mt-0.5 size-4",
+								sponsorshipActive(seller.marketplace.sponsoredUntil, Date.now())
+									? "text-accent-emphasis"
+									: "text-muted-foreground",
+							)}
+							aria-hidden="true"
+						/>
+						<span className="flex min-w-0 flex-col">
+							<span className="font-medium">
+								{sponsorshipActive(
+									seller.marketplace.sponsoredUntil,
+									Date.now(),
+								)
+									? "Marketplace sponsorship — on"
+									: "Sponsor on the marketplace"}
+							</span>
+							<span className="text-xs text-muted-foreground">
+								{sponsorshipActive(
+									seller.marketplace.sponsoredUntil,
+									Date.now(),
+								)
+									? "Edit the window or end it early"
+									: "Labelled highlight on kedaipal.com/stores"}
+							</span>
+						</span>
+					</DropdownMenuItem>
 					{purgeEnabled ? (
 						<>
 							<DropdownMenuSeparator />
@@ -203,6 +246,9 @@ export function SellerManageMenu({
 			</DropdownMenu>
 			{compOpen ? (
 				<CompDialog seller={seller} onClose={() => setCompOpen(false)} />
+			) : null}
+			{sponsorOpen ? (
+				<SponsorDialog seller={seller} onClose={() => setSponsorOpen(false)} />
 			) : null}
 			{purgeEnabled ? (
 				<ConfirmDialog

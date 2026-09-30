@@ -68,6 +68,7 @@ import { BookingsTab } from "../components/settings/bookings-tab";
 import { CountrySetupPanel } from "../components/settings/country-setup-panel";
 import { FulfilmentTab } from "../components/settings/fulfilment-tab";
 import { IntegrationsTab } from "../components/settings/integrations-tab";
+import { MarketplaceCard } from "../components/settings/marketplace-card";
 import { NotificationsCard } from "../components/settings/notifications-card";
 import { OrderFlowsSection } from "../components/settings/order-flows-card";
 import {
@@ -752,6 +753,15 @@ function SettingsRoute() {
 									onSave={(storeDescription) =>
 										updateSettings({ storeDescription })
 									}
+								/>
+							</Card>
+							{/* Right under the description — the card the marketplace
+							    builds from is the card this section just wrote. */}
+							<Card>
+								<MarketplaceCard
+									unlisted={retailer.marketplaceUnlisted === true}
+									area={retailer.storeArea ?? ""}
+									onSave={(patch) => updateSettings(patch)}
 								/>
 							</Card>
 							<Card>
