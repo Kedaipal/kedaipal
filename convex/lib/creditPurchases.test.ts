@@ -24,10 +24,19 @@ describe("the checkout's lifetime", () => {
 describe("topUpRefusal — who may buy", () => {
 	const base = { comped: false, ownerIsAdmin: false };
 
-	test("an active store, a comped store and the missing-row fail-safe can buy", () => {
+	test("an active, paid store can buy", () => {
 		expect(topUpRefusal({ ...base, status: "active" })).toBeNull();
-		expect(topUpRefusal({ ...base, status: "past_due", comped: true })).toBeNull();
-		expect(topUpRefusal({ ...base, status: null })).toBeNull();
+	});
+
+	test("a sponsored store can't — it never locks, so a pack would buy nothing", () => {
+		expect(topUpRefusal({ ...base, status: "active", comped: true })).toBe(
+			"sponsored",
+		);
+		expect(topUpRefusal({ ...base, status: "past_due", comped: true })).toBe(
+			"sponsored",
+		);
+		// The missing-row fail-safe resolves as comped full access.
+		expect(topUpRefusal({ ...base, status: null })).toBe("sponsored");
 	});
 
 	test("every other status refuses, by name", () => {
@@ -77,8 +86,16 @@ describe("topUpRefusalMessage — every refusal names the way out", () => {
 		}
 	});
 
+	test("a sponsored store is told there's nothing to top up — the same words for everyone", () => {
+		const owner = topUpRefusalMessage("sponsored", { audience: "owner" });
+		expect(owner).toMatch(/^Sponsored stores never run out/);
+		expect(topUpRefusalMessage("sponsored", { audience: "member" })).toBe(owner);
+	});
+
 	test("never money-balance language — order counts only", () => {
-		const all = (["trialing", "past_due", "on_hold", "cancelled", "admin_store"] as const)
+		const all = (
+			["trialing", "past_due", "on_hold", "cancelled", "admin_store", "sponsored"] as const
+		)
 			.flatMap((r) => [
 				topUpRefusalMessage(r, { audience: "owner" }),
 				topUpRefusalMessage(r, { audience: "member" }),

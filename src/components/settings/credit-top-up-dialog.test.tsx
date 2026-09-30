@@ -87,7 +87,8 @@ type Options = {
 		| "past_due"
 		| "on_hold"
 		| "cancelled"
-		| "admin_store";
+		| "admin_store"
+		| "sponsored";
 	refusalMessage: string | null;
 	viewOnly: null | "acting_as_admin" | "no_write";
 	pendingInvoice: { invoiceNumber: string; payNowUrl: string | null } | null;
@@ -209,6 +210,13 @@ function renderDialog(
 }
 
 const buyButton = () => screen.getByRole("button", { name: /^Buy / });
+/** A pack is a radio (arrow keys move the choice); its card is the label. */
+const packRadio = (credits: number) =>
+	screen.getByRole("radio", {
+		name: new RegExp(`^${credits} credits`),
+	}) as HTMLInputElement;
+const packCard = (credits: number) =>
+	packRadio(credits).closest("label")?.textContent ?? "";
 
 // ---------------------------------------------------------------------------
 
@@ -259,14 +267,23 @@ describe("the picker", () => {
 		mockReads({});
 		renderDialog();
 		expect(screen.getByText("37 orders left")).toBeTruthy();
-		expect(screen.getByText(/12 from your plan · 25 topped up/)).toBeTruthy();
-		const small = screen.getByRole("button", { name: /^50 credits/ });
-		const big = screen.getByRole("button", { name: /^200 credits/ });
-		expect(small.textContent).toMatch(/RM\s45\.00/);
-		expect(big.textContent).toMatch(/RM\s160\.00/);
-		expect(screen.getAllByText(/valid 12 months/)).toHaveLength(2);
+		// Always both balances, in the meter's words.
+		expect(screen.getByText(/12 monthly · 25 bought/)).toBeTruthy();
+		// Priced like the /pricing cards: whole amounts, what a credit costs,
+		// and what the bigger pack saves — in money, never a percentage.
+		expect(packCard(50)).toMatch(/RM\s45(?!\.)/);
+		expect(packCard(50)).toMatch(/RM\s0\.90 per credit/);
+		expect(packCard(200)).toMatch(/RM\s160(?!\.)/);
+		expect(packCard(200)).toMatch(/RM\s0\.80 per credit/);
+		expect(packCard(200)).toMatch(/Save RM\s20 vs 4 × 50/);
+		expect(packCard(50)).not.toMatch(/Save/);
+		expect(screen.getAllByText("Lasts 12 months")).toHaveLength(2);
 		// The cheaper-per-credit pack is labelled; never with a percentage.
-		expect(screen.getByText("Better value")).toBeTruthy();
+		expect(packCard(200)).toMatch(/Best value/);
+		expect(packCard(50)).not.toMatch(/Best value/);
+		// The default pick, and the result of the tap before the tap.
+		expect(packRadio(50).checked).toBe(true);
+		expect(screen.getByText("After this top-up: 87 orders left.")).toBeTruthy();
 		expect(document.body.textContent).not.toMatch(
 			/%|wallet|commission|\bfee\b/i,
 		);
@@ -282,6 +299,11 @@ describe("the picker", () => {
 		mockReads({ balance: { ...BALANCE, plan: -15, purchased: 0, total: -15 } });
 		renderDialog();
 		expect(screen.getByText("15 orders owed")).toBeTruthy();
+		expect(screen.getByText(/15 owed on monthly · 0 bought/)).toBeTruthy();
+		// A pack pays the debt first — said before the tap.
+		expect(
+			screen.getByText("Covers the 15 owed and leaves 35 orders."),
+		).toBeTruthy();
 	});
 
 	it("an SGD store's packs are priced in S$", () => {
@@ -296,9 +318,11 @@ describe("the picker", () => {
 			},
 		});
 		renderDialog();
-		expect(
-			screen.getByRole("button", { name: /^50 credits/ }).textContent,
-		).toMatch(/S\$\s22\.00/);
+		expect(packCard(50)).toMatch(/S\$\s22(?!\.)/);
+		expect(packCard(50)).toMatch(/S\$\s0\.44 per credit/);
+		// S$ 75 / 200 = 37.5 cents — rounded for the card, not for the saving.
+		expect(packCard(200)).toMatch(/S\$\s0\.38 per credit/);
+		expect(packCard(200)).toMatch(/Save S\$\s13 vs 4 × 50/);
 		expect(document.body.textContent).not.toMatch(/RM/);
 	});
 
@@ -318,7 +342,11 @@ describe("the picker", () => {
 		mockReads({});
 		renderDialog();
 		// Default pick is the smallest pack; pick the bigger one.
-		fireEvent.click(screen.getByRole("button", { name: /^200 credits/ }));
+		fireEvent.click(packRadio(200));
+		expect(packRadio(200).checked).toBe(true);
+		expect(
+			screen.getByText("After this top-up: 237 orders left."),
+		).toBeTruthy();
 		expect(buyButton().textContent).toMatch(/Buy 200 credits · RM\s160\.00/);
 		fireEvent.click(buyButton());
 		expect(mocks.trackEvent).toHaveBeenCalledWith("credits_topup_started", {
@@ -360,14 +388,28 @@ describe("the picker", () => {
 		renderDialog();
 		expect(screen.getByText(message)).toBeTruthy();
 		expect((buyButton() as HTMLButtonElement).disabled).toBe(true);
-		// The packs stay visible — what's sold is never hidden — but inert.
-		expect(
-			(screen.getByRole("button", { name: /^50 credits/ }) as HTMLButtonElement)
-				.disabled,
-		).toBe(true);
+		// The packs stay visible — what's sold is never hidden — but inert,
+		// with no "after" promise for a purchase that can't happen.
+		expect(packRadio(50).disabled).toBe(true);
+		expect(packRadio(200).disabled).toBe(true);
+		expect(screen.queryByText(/After this top-up/)).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: wayOut }));
 		// The way out is the billing tab under the dialog: closing IS it.
 		expect(screen.queryByRole("dialog")).toBeNull();
+	});
+
+	it.each([
+		"sponsored",
+		"admin_store",
+	] as const)("%s: nothing to top up — the reason, and no way-out button (nothing is wrong)", (refusal) => {
+		const message = `Refused because ${refusal}.`;
+		mockReads({ options: { ...OPTIONS, refusal, refusalMessage: message } });
+		renderDialog();
+		expect(screen.getByText(message)).toBeTruthy();
+		expect((buyButton() as HTMLButtonElement).disabled).toBe(true);
+		expect(
+			screen.queryByRole("button", { name: /Choose a plan|Resume|invoice/ }),
+		).toBeNull();
 	});
 
 	it("past due with a Pay-now link: the way out IS paying that invoice", () => {
