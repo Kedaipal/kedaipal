@@ -2877,16 +2877,29 @@ export default defineSchema({
 		// An authentic gateway event we deliberately did NOT settle from — the
 		// admin's audit trail for "seller paid the link after Arif marked it paid"
 		// (late_payment) or "the payment didn't match the invoice total"
-		// (amount_mismatch). Never auto-unsets anything; surfaced in the admin
-		// billing console.
+		// (amount_mismatch). Never auto-unsets anything; every stamp is real
+		// money awaiting a human decision (refund, or apply by settling a bill),
+		// so the console's "Payments to review" queue holds it until an admin
+		// marks it resolved — resolution is recorded, never deleted.
 		gatewayIssue: v.optional(
 			v.object({
 				kind: v.union(v.literal("amount_mismatch"), v.literal("late_payment")),
 				paymentId: v.string(),
 				amountSen: v.optional(v.number()),
 				at: v.number(),
+				// The human decision (invoices.resolveGatewayIssue): who closed it,
+				// when, and optionally what they did with the money.
+				resolvedAt: v.optional(v.number()),
+				resolvedBy: v.optional(v.string()),
+				resolvedNote: v.optional(v.string()),
 			}),
 		),
+		// Present (true) exactly while `gatewayIssue` awaits a human — the
+		// "Payments to review" queue reads this index instead of scanning every
+		// invoice ever issued for a rarely-set object. Set beside each stamp,
+		// cleared by resolveGatewayIssue. (`migrations.backfillGatewayIssueOpen`
+		// flags rows stamped before this field existed.)
+		gatewayIssueOpen: v.optional(v.literal(true)),
 		// Rendered PDF of this invoice, frozen at issue time. An invoice is a
 		// financial document, so we store the bytes (rather than regenerate on
 		// demand) — `billingConfig` bank details are a mutable singleton and could
@@ -2907,7 +2920,10 @@ export default defineSchema({
 		.index("by_retailer", ["retailerId"])
 		.index("by_status", ["status"])
 		// v1 completion-webhook resolution: payment-request id → invoice.
-		.index("by_gateway_request", ["gatewayRequestId"]),
+		.index("by_gateway_request", ["gatewayRequestId"])
+		// The admin's "Payments to review" queue: only rows whose gateway issue
+		// still awaits a human (gatewayIssueOpen === true).
+		.index("by_gateway_issue_open", ["gatewayIssueOpen"]),
 
 	// Global Kedaipal payment details (retailers pay Kedaipal). A SINGLETON — one
 	// row, no retailerId. Admin-editable from /app/admin/billing so the boss can

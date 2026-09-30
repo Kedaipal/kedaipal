@@ -138,11 +138,15 @@ export function PlanChangeCard({
 				});
 			} else {
 				toast.success(`Your ${PLAN_LABEL[plan]} invoice is ready`, {
-					// A saved method that wasn't charged means auto-charging is
-					// stopped over an earlier charge we may count toward this bill.
+					// A saved method that wasn't charged is either stopped (a
+					// stranded charge a human is sorting out) or confirming (an
+					// earlier charge whose outcome is pending) — neither may be
+					// answered with "pay it below": that's the double payment.
 					description: sub.autoRenew?.stopped
 						? "Automatic charging is stopped for now — see Auto-renewal below before paying."
-						: "Pay it below and the new plan starts straight away.",
+						: sub.autoRenew?.confirming
+							? "We're confirming an earlier automatic payment first — once that's done, this invoice is charged automatically."
+							: "Pay it below and the new plan starts straight away.",
 				});
 			}
 			setTarget(null);

@@ -349,6 +349,7 @@ describe("PlanChangeCard — what the seller is told before confirming", () => {
 						failedAttempts: 0,
 						failing: false,
 						stopped: true,
+						confirming: false,
 					},
 				})}
 				currency="MYR"
@@ -363,6 +364,42 @@ describe("PlanChangeCard — what the seller is told before confirming", () => {
 			"Your Pro invoice is ready",
 			{
 				description: expect.stringMatching(/Automatic charging is stopped/),
+			},
+		);
+	});
+
+	it("with an earlier charge CONFIRMING, the upgrade toast never says 'pay it below'", async () => {
+		mocks.changePlan.mockResolvedValueOnce({
+			kind: "invoiced",
+			invoiceId: "inv_up",
+			chargingSavedMethod: false,
+		} as unknown as { kind: string; effectiveAt: number });
+		render(
+			<PlanChangeCard
+				sub={sub({
+					autoRenew: {
+						method: "card",
+						methodLabel: "Visa ·· 4242",
+						failedAttempts: 0,
+						failing: false,
+						stopped: false,
+						confirming: true,
+					},
+				})}
+				currency="MYR"
+				foundingPricing={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: /Move up to Pro/ }));
+		fireEvent.click(screen.getByRole("button", { name: /^Move to Pro$/ }));
+
+		await waitFor(() => expect(vi.mocked(toast.success)).toHaveBeenCalled());
+		expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
+			"Your Pro invoice is ready",
+			{
+				description: expect.stringMatching(
+					/confirming an earlier automatic payment first/,
+				),
 			},
 		);
 	});

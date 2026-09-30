@@ -44,6 +44,9 @@ export type SubscriptionView = {
 		failedAttempts: number;
 		failing: boolean;
 		stopped: boolean;
+		/** A charge was sent and its outcome is still being confirmed —
+		 * never promise a charge or invite a manual payment while true. */
+		confirming: boolean;
 		nextChargeAt?: number;
 	};
 	autoRenewSetupPending?: boolean;
@@ -335,6 +338,13 @@ export function resolveBannerState(
 	// do — "pay it yourself" could make them pay twice while we sort out an
 	// earlier charge. Clears when any bill settles.
 	if (sub.autoRenew?.stopped) return { kind: "autoRenewStopped" };
+
+	// A charge being CONFIRMED silences every pay-me banner: both the
+	// declined banner and the due-soon countdown say "pay it yourself", and
+	// that is the double payment while the sent charge may have landed. The
+	// auto-renewal card carries the explanation; resolution is ≤ a daily
+	// sweep away, after which the right banner (if any) returns.
+	if (sub.autoRenew?.confirming) return { kind: "none" };
 
 	// A declined auto-charge outranks the generic invoice countdown: it names
 	// the actual problem (the saved method) and its fix, while access is still

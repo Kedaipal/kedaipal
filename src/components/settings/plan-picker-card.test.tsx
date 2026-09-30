@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 /** A trialing store choosing a plan, with a saved method on file. */
-function sub(stopped: boolean): SubscriptionView {
+function sub(stopped: boolean, confirming = false): SubscriptionView {
 	return {
 		plan: "pro",
 		status: "trialing",
@@ -43,6 +43,7 @@ function sub(stopped: boolean): SubscriptionView {
 			failedAttempts: 0,
 			failing: false,
 			stopped,
+			confirming,
 		},
 	};
 }
@@ -82,6 +83,30 @@ describe("PlanPickerCard — a saved method whose auto-charging is STOPPED", () 
 		// The button is re-armed, not left on a spinner.
 		expect(
 			screen.getByRole("button", { name: "Subscribe to Pro" }),
+		).toBeTruthy();
+	});
+
+	it("CONFIRMING an earlier charge: the invoice is written, nothing is promised, and the authorisation page is never opened", async () => {
+		mocks.subscribeSelf.mockResolvedValue({
+			invoiceId: "inv_1",
+			chargingSavedMethod: false, // the server won't promise either
+		});
+		renderPicker(sub(false, true));
+
+		await waitFor(() => expect(mocks.toastSuccess).toHaveBeenCalled());
+		// The refusal trap: startAutoRenewSetup refuses any store that already
+		// has a method ("already on") — falling through to it ends the flow on
+		// an error toast.
+		expect(mocks.startAutoRenewSetup).not.toHaveBeenCalled();
+		expect(mocks.toastSuccess).toHaveBeenCalledWith("Your invoice is ready", {
+			description: expect.stringMatching(
+				/confirming an earlier automatic payment first/,
+			),
+		});
+		// And the pre-tap copy never promises a charge it can't fire.
+		expect(screen.queryByText(/we'll charge your saved/)).toBeNull();
+		expect(
+			screen.getByText(/confirming an earlier automatic payment first/i),
 		).toBeTruthy();
 	});
 

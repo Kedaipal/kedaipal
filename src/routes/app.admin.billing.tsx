@@ -38,6 +38,7 @@ import {
 	AutoChargeDetail,
 	AutoChargePill,
 } from "../components/admin/auto-charge-status";
+import { GatewayIssuesCard } from "../components/admin/gateway-issues-card";
 import { PageHeader } from "../components/dashboard/page-header";
 import { InvoiceDownloadButton } from "../components/settings/invoice-download-button";
 import { AppImage } from "../components/ui/app-image";
@@ -122,6 +123,12 @@ function AdminBillingContent() {
 			</section>
 
 			<AdminBillingOverview />
+
+			{/* Real money that settled nothing (double payment / wrong amount).
+			    Above the tab fork on purpose: it's the most urgent thing this
+			    page can carry, it must not hide behind whichever tab is open,
+			    and it renders nothing while the queue is empty. */}
+			<GatewayIssuesCard />
 
 			<div className="grid gap-2 sm:grid-cols-2">
 				{tabs.map((t) => (

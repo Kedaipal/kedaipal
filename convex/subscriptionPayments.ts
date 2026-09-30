@@ -622,6 +622,10 @@ export const verifyInvoicePayment = action({
 				amountSen,
 				currency: payment.currency,
 				methodCode: payment.payment_type,
+				// The seller paid the Pay-now link themselves — NOT the saved-
+				// method session, so this settle may not touch the charge
+				// counter or answer an attempt stamp.
+				viaSessionCharge: false,
 			},
 		);
 		return { settled: result.applied || result.reason === "duplicate" };
@@ -1190,6 +1194,10 @@ async function applyMethodDetached(
 		)
 		.first();
 	if (!sub || sub.autoRenew === undefined) return { applied: false };
+	// A charge whose outcome is still unknown must outlive the autoRenew state
+	// it was recorded on — see scheduleLostAttemptReconcile. HitPay detaching
+	// the METHOD doesn't delete the session object, so the count stays readable.
+	await scheduleLostAttemptReconcile(ctx, sub, { deleteSessionAfter: false });
 	await ctx.db.patch(sub._id, {
 		autoRenew: undefined,
 		autoRenewSetup: undefined,
@@ -1200,6 +1208,157 @@ async function applyMethodDetached(
 	});
 	return { applied: true };
 }
+
+/**
+ * The attempt stamp is an open MONEY question, and clearing `autoRenew`
+ * (seller cancel, remote detach) destroys every hook the daily reconcile
+ * hangs off — the stamp, the counter, even the session id the webhook
+ * resolves by. Before that state goes, capture the question into a
+ * self-contained action (`reconcileLostAttempt`) that answers it against
+ * HitPay directly: settle the bill if the charge landed, put the Pay-now
+ * link back if it never did. Without this, cancelling mid-unknown made a
+ * landed charge permanently invisible — the seller's money, recorded
+ * nowhere.
+ */
+async function scheduleLostAttemptReconcile(
+	ctx: MutationCtx,
+	sub: Doc<"subscriptions">,
+	{ deleteSessionAfter }: { deleteSessionAfter: boolean },
+): Promise<boolean> {
+	const autoRenew = sub.autoRenew;
+	const sessionId = sub.autoRenewSessionId;
+	if (
+		!autoRenew ||
+		autoRenew.lastChargeAttemptAt === undefined ||
+		autoRenew.pendingChargeInvoiceId === undefined ||
+		!sessionId
+	) {
+		return false;
+	}
+	const invoice = await ctx.db.get(autoRenew.pendingChargeInvoiceId);
+	if (!invoice) return false;
+	await ctx.scheduler.runAfter(0, internal.subscriptionPayments.reconcileLostAttempt, {
+		sessionId,
+		invoiceId: invoice._id,
+		invoiceNumber: invoice.invoiceNumber,
+		amountSen: invoice.total,
+		currency: invoice.currency,
+		methodCode: autoRenew.method,
+		timesCharged: autoRenew.timesCharged ?? 0,
+		attempt: 0,
+		deleteSessionAfter,
+	});
+	console.warn(
+		"[billing] auto-renew ending with a charge outcome unknown — final reconcile scheduled",
+		{ subscriptionId: sub._id, sessionId, invoiceNumber: invoice.invoiceNumber },
+	);
+	return true;
+}
+
+/** How long `reconcileLostAttempt` waits before asking HitPay again when it
+ * can't get an answer. Front-loaded (transient blips), then spread across the
+ * day HitPay outages realistically last. After the last one it stops and
+ * logs for a human — never guesses about money. */
+const LOST_ATTEMPT_RETRY_DELAYS_MS = [
+	60 * 60 * 1000,
+	3 * 60 * 60 * 1000,
+	8 * 60 * 60 * 1000,
+	12 * 60 * 60 * 1000,
+];
+
+/**
+ * The last reconcile for a charge whose autoRenew state is gone (seller
+ * cancelled / method detached mid-unknown). Self-contained: every fact it
+ * needs was captured when it was scheduled, so it works however the sub has
+ * changed since — even if the seller re-subscribed onto a new session.
+ *
+ *  - HitPay's count moved past ours ⇒ the money is real ⇒ settle the bill it
+ *    was fired for (`viaSessionCharge` — a non-pending bill lands as a
+ *    late_payment audit in the review queue instead).
+ *  - Count says it never landed ⇒ re-mint the invoice's Pay-now link: the
+ *    seller is on the manual rail now and the claim killed their button.
+ *  - No answer (network, 5xx, no count, or the session is gone) ⇒ retry on
+ *    LOST_ATTEMPT_RETRY_DELAYS_MS, then log CRITICALLY for a human. Never
+ *    re-mint on a non-answer — inviting a manual payment while the charge
+ *    may have landed is the double-payment this file exists to prevent.
+ *  - `deleteSessionAfter` (seller cancel): the remote session is deleted only
+ *    AFTER the money question is answered — deleting first would 404 the
+ *    very count this reconcile needs.
+ */
+export const reconcileLostAttempt = internalAction({
+	args: {
+		sessionId: v.string(),
+		invoiceId: v.id("invoices"),
+		invoiceNumber: v.string(),
+		amountSen: v.number(),
+		currency: v.string(),
+		methodCode: v.string(),
+		timesCharged: v.number(),
+		attempt: v.number(),
+		deleteSessionAfter: v.boolean(),
+	},
+	handler: async (ctx, args): Promise<void> => {
+		const credentials = billingCredentials();
+		if (!credentials) {
+			console.error(
+				"[billing] CRITICAL: lost-attempt reconcile has no gateway credentials — check HitPay manually",
+				{ sessionId: args.sessionId, invoiceNumber: args.invoiceNumber },
+			);
+			return;
+		}
+		const session = await fetchRecurringSession(credentials, args.sessionId);
+		const answer =
+			session.kind === "found" && session.chargeCount !== undefined
+				? session.chargeCount
+				: null;
+		if (answer === null) {
+			const delay = LOST_ATTEMPT_RETRY_DELAYS_MS[args.attempt];
+			if (delay !== undefined) {
+				await ctx.scheduler.runAfter(
+					delay,
+					internal.subscriptionPayments.reconcileLostAttempt,
+					{ ...args, attempt: args.attempt + 1 },
+				);
+				return;
+			}
+			console.error(
+				"[billing] CRITICAL: lost-attempt reconcile exhausted — a charge may have landed with no record. Check the session in HitPay's dashboard by hand.",
+				{
+					sessionId: args.sessionId,
+					invoiceNumber: args.invoiceNumber,
+					amountSen: args.amountSen,
+					currency: args.currency,
+				},
+			);
+			return; // keep the remote session inspectable — no delete
+		}
+		if (answer > args.timesCharged) {
+			console.warn(
+				"[billing] lost attempt reconciled after auto-renew ended — the charge was real, settling",
+				{ sessionId: args.sessionId, invoiceNumber: args.invoiceNumber },
+			);
+			await ctx.runMutation(internal.invoices.internalSettleFromGateway, {
+				invoiceId: args.invoiceId,
+				paymentId: `reconciled:${args.sessionId}:${answer}`,
+				amountSen: args.amountSen,
+				currency: args.currency,
+				methodCode: args.methodCode,
+				viaSessionCharge: true,
+			});
+		} else {
+			// Never landed. The claim killed the Pay-now button; give the
+			// now-manual seller their way to pay back (no-ops unless pending).
+			await ctx.scheduler.runAfter(
+				0,
+				internal.subscriptionPayments.remintInvoicePaymentRequest,
+				{ invoiceId: args.invoiceId },
+			);
+		}
+		if (args.deleteSessionAfter) {
+			await deleteRemoteSession(credentials, args.sessionId);
+		}
+	},
+});
 
 export const recordMethodDetached = internalMutation({
 	args: { billingId: v.string() },
@@ -1230,6 +1389,14 @@ export const cancelAutoRenew = mutation({
 			.first();
 		if (!sub) return { ok: true };
 		const sessionId = sub.autoRenewSessionId;
+		// A charge whose outcome is unknown outlives the cancel: the final
+		// reconcile owns the money question AND the remote session delete —
+		// deleting the session first would 404 the count it needs. Turning off
+		// stays instant and ungated either way: `autoRenew` is cleared below,
+		// so nothing can charge from this moment.
+		const reconcilePending = await scheduleLostAttemptReconcile(ctx, sub, {
+			deleteSessionAfter: true,
+		});
 		if (sub.autoRenew !== undefined || sub.autoRenewSetup !== undefined) {
 			await ctx.db.patch(sub._id, {
 				autoRenew: undefined,
@@ -1237,7 +1404,7 @@ export const cancelAutoRenew = mutation({
 				autoRenewSessionId: undefined,
 			});
 		}
-		if (sessionId) {
+		if (sessionId && !reconcilePending) {
 			await ctx.scheduler.runAfter(
 				0,
 				internal.subscriptionPayments.deleteRecurringSession,
@@ -1248,37 +1415,47 @@ export const cancelAutoRenew = mutation({
 	},
 });
 
+/** DELETE a recurring-billing session at HitPay. Best-effort by contract:
+ * failure is a log line — with no local `autoRenew`, nothing charges
+ * regardless. Plain helper so the lost-attempt reconcile can delete in-line
+ * AFTER it has read the session's charge count. */
+async function deleteRemoteSession(
+	credentials: BillingGatewayCredentials,
+	sessionId: string,
+): Promise<void> {
+	try {
+		const response = await fetch(
+			`${HITPAY_API_BASE[credentials.mode]}/recurring-billing/${sessionId}`,
+			{
+				method: "DELETE",
+				headers: {
+					"X-BUSINESS-API-KEY": credentials.apiKey,
+					"X-Requested-With": "XMLHttpRequest",
+				},
+			},
+		);
+		if (!response.ok) {
+			console.warn("[billing] recurring session delete rejected", {
+				sessionId,
+				status: response.status,
+			});
+		}
+	} catch (err) {
+		console.warn("[billing] recurring session delete failed", {
+			sessionId,
+			err: err instanceof Error ? err.message : String(err),
+		});
+	}
+}
+
 /** Best-effort remote cleanup of a recurring-billing session (cancel /
- * supersede). Failure is a log line — with no local `autoRenew`, nothing
- * charges regardless. */
+ * supersede). */
 export const deleteRecurringSession = internalAction({
 	args: { sessionId: v.string() },
 	handler: async (_ctx, { sessionId }): Promise<void> => {
 		const credentials = billingCredentials();
 		if (!credentials) return;
-		try {
-			const response = await fetch(
-				`${HITPAY_API_BASE[credentials.mode]}/recurring-billing/${sessionId}`,
-				{
-					method: "DELETE",
-					headers: {
-						"X-BUSINESS-API-KEY": credentials.apiKey,
-						"X-Requested-With": "XMLHttpRequest",
-					},
-				},
-			);
-			if (!response.ok) {
-				console.warn("[billing] recurring session delete rejected", {
-					sessionId,
-					status: response.status,
-				});
-			}
-		} catch (err) {
-			console.warn("[billing] recurring session delete failed", {
-				sessionId,
-				err: err instanceof Error ? err.message : String(err),
-			});
-		}
+		await deleteRemoteSession(credentials, sessionId);
 	},
 });
 
@@ -1341,6 +1518,47 @@ export const chargeContext = internalQuery({
 	},
 });
 
+/**
+ * Close an attempt stamp whose question the reconcile ANSWERED "never
+ * landed" (HitPay's count didn't move) — or that can never be answered
+ * (session gone). Without this, a stamp whose bill is no longer pending
+ * (settled by Pay-now / mark-paid, or voided) had no path that cleared it:
+ * the daily sweep re-reconciled it forever and the seller's "confirming"
+ * state never ended.
+ *
+ * Guarded three ways so it can NEVER break the mutex of a live charge:
+ * the stamp must still be the exact one we reconciled (same timestamp, same
+ * bill — a newer claim is a different question), and it must be STALE
+ * (older than the lock): a fresh stamp can belong to a charge literally in
+ * flight, whose count HitPay simply hasn't moved yet — clearing that would
+ * hand the lock to a second charge, the double debit. A fresh stamp is left
+ * for its own action's outcome recording, exactly like the claim path.
+ */
+export const resolveChargeAttempt = internalMutation({
+	args: {
+		subscriptionId: v.id("subscriptions"),
+		invoiceId: v.id("invoices"),
+		observedAttemptAt: v.number(),
+	},
+	handler: async (
+		ctx,
+		{ subscriptionId, invoiceId, observedAttemptAt },
+	): Promise<void> => {
+		const sub = await ctx.db.get(subscriptionId);
+		if (!sub?.autoRenew) return;
+		if (sub.autoRenew.lastChargeAttemptAt !== observedAttemptAt) return;
+		if (sub.autoRenew.pendingChargeInvoiceId !== invoiceId) return;
+		if (Date.now() - observedAttemptAt < CHARGE_ATTEMPT_LOCK_MS) return;
+		await ctx.db.patch(subscriptionId, {
+			autoRenew: {
+				...sub.autoRenew,
+				lastChargeAttemptAt: undefined,
+				pendingChargeInvoiceId: undefined,
+			},
+		});
+	},
+});
+
 /** Stamp "a charge is about to fire" BEFORE the HTTP call, so a crash between
  * charge and settle is detectable (and reconciled) instead of double-charged. */
 export const recordChargeAttempt = internalMutation({
@@ -1354,6 +1572,8 @@ export const recordChargeAttempt = internalMutation({
 	): Promise<{ claimed: boolean }> => {
 		const sub = await ctx.db.get(subscriptionId);
 		if (!sub?.autoRenew) return { claimed: false };
+		const invoice = await ctx.db.get(invoiceId);
+		if (!invoice || invoice.status !== "pending") return { claimed: false };
 		// MUTEX, not just a stamp. Convex mutations are serializable, so this
 		// read-then-patch is the one place two concurrent charge actions can be
 		// made to disagree: whoever patches first owns the attempt, the loser
@@ -1383,6 +1603,18 @@ export const recordChargeAttempt = internalMutation({
 				pendingChargeInvoiceId: invoiceId,
 			},
 		});
+		// Retire the invoice's Pay-now link LOCALLY in the same transaction as
+		// the claim. The remote DELETE (expireInvoiceRequest, scheduled by the
+		// caller) kills the checkout; this kills the BUTTON — without it the
+		// billing tab and every email kept offering "Pay online now" for a
+		// link HitPay no longer had, for as long as a lost outcome stayed
+		// unresolved. A decline re-mints both together (remintInvoicePaymentRequest).
+		if (invoice.gatewayRequestId || invoice.gatewayPayment) {
+			await ctx.db.patch(invoiceId, {
+				gatewayRequestId: undefined,
+				gatewayPayment: undefined,
+			});
+		}
 		return { claimed: true };
 	},
 });
@@ -1525,19 +1757,20 @@ export const chargeDueRenewal = internalAction({
 			{ invoiceId },
 		);
 		if (!context) return;
-		if (context.invoiceStatus !== "pending") return; // settled/voided meanwhile
 		const { autoRenew, sessionId } = context;
 		if (!autoRenew || !sessionId) return; // turned off meanwhile — manual rail
-		// Stopped over a stranded charge: nothing charges until a human settles a
-		// bill. Every scheduler asks this rule first; re-asked here because a
-		// charge queued before the stop can still run after it.
-		if (!autoChargeAllowed(autoRenew)) return;
 
-		// Outcome-unknown guard. An attempt stamp is cleared only by a RECORDED
-		// outcome (a settle or a decline), so one still standing means an
-		// earlier action may have charged and died before it could say so. Ask
-		// HitPay how many charges the session has taken; if that moved past our
-		// counter the money is real — settle it, never charge again.
+		// Outcome-unknown guard — BEFORE the is-this-bill-still-pending return,
+		// because the stamp is a question about MONEY, not about this bill: the
+		// bill can settle by another rail (Pay-now, admin mark-paid) or be
+		// voided while the session charge's fate is unknown, and returning
+		// early on its status was how that question went unanswered for a
+		// whole cycle. An attempt stamp is cleared only by a RECORDED outcome
+		// on the session rail (a settle or a decline), so one still standing
+		// means an earlier action may have charged and died before it could
+		// say so. Ask HitPay how many charges the session has taken; if that
+		// moved past our counter the money is real — settle it (against the
+		// bill the attempt was FIRED FOR), never charge again.
 		// NO AGE LIMIT. The retry after an unknown outcome is scheduled a day
 		// out and fired by a daily cron, so it always meets a stamp at least
 		// 24h old; the old "< 24h" gate meant this never ran on that path, the
@@ -1581,15 +1814,62 @@ export const chargeDueRenewal = internalAction({
 						amountSen: charged.totalSen,
 						currency: charged.currency,
 						methodCode: autoRenew.method,
+						viaSessionCharge: true,
 					});
 					return;
 				}
-				// HitPay never took it — fall through; a stale lock is re-claimed.
+				// HitPay never took it — the stamp's question is ANSWERED "no",
+				// so a stale stamp is resolved here (guarded: never a fresh one,
+				// which may be a charge mid-flight whose count hasn't moved yet).
+				// Without this, a stamp whose bill settled by another rail was
+				// re-reconciled every day forever. A pending bill's charge below
+				// re-claims and re-stamps as before.
+				await ctx.runMutation(
+					internal.subscriptionPayments.resolveChargeAttempt,
+					{
+						subscriptionId: context.subscriptionId,
+						invoiceId:
+							context.attemptInvoice?.invoiceId ?? invoiceId,
+						observedAttemptAt: autoRenew.lastChargeAttemptAt,
+					},
+				);
 			}
-			// "gone" (404/410): a session HitPay doesn't have neither took the lost
-			// charge nor can take this one. Fall through — the charge's own refusal
-			// becomes a recorded, dunned decline instead of a silent skip forever.
+			if (session.kind === "gone") {
+				// A session HitPay doesn't have (404/410) neither took the lost
+				// charge nor can ever answer for it — the question is
+				// UNANSWERABLE, not open. Close a stale stamp (same guard) so it
+				// doesn't loop daily, and say loudly what a human should check.
+				console.error(
+					"[billing] CRITICAL: session gone with a charge outcome unknown — verify in HitPay's dashboard by hand",
+					{
+						sessionId,
+						invoiceNumber: context.invoiceNumber,
+						attemptInvoiceId: context.attemptInvoice?.invoiceId,
+					},
+				);
+				await ctx.runMutation(
+					internal.subscriptionPayments.resolveChargeAttempt,
+					{
+						subscriptionId: context.subscriptionId,
+						invoiceId:
+							context.attemptInvoice?.invoiceId ?? invoiceId,
+						observedAttemptAt: autoRenew.lastChargeAttemptAt,
+					},
+				);
+				// Fall through — the charge's own refusal becomes a recorded,
+				// dunned decline instead of a silent skip forever.
+			}
 		}
+
+		// Only now does THIS bill's status matter: a settled/voided bill takes
+		// no charge (the reconcile above already dealt with the money question).
+		if (context.invoiceStatus !== "pending") return;
+		// Stopped over a stranded charge: nothing charges until a human settles a
+		// bill. Every scheduler asks this rule first; re-asked here because a
+		// charge queued before the stop can still run after it. Placed after the
+		// reconcile on purpose — answering an open money question is always
+		// safe, charging is what the stop forbids.
+		if (!autoChargeAllowed(autoRenew)) return;
 
 		const claim: { claimed: boolean } = await ctx.runMutation(
 			internal.subscriptionPayments.recordChargeAttempt,
@@ -1664,6 +1944,7 @@ export const chargeDueRenewal = internalAction({
 				await ctx.runMutation(internal.invoices.internalSettleFromGateway, {
 					invoiceId,
 					paymentId: body.payment_id,
+					viaSessionCharge: true, // the sync verdict of OUR charge
 					amountSen: context.totalSen,
 					currency: context.currency,
 					methodCode: autoRenew.method,

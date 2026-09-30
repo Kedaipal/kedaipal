@@ -183,6 +183,25 @@ export function autoChargeAllowed(
 	return autoRenew !== undefined && autoRenew.strandedCharge === undefined;
 }
 
+/**
+ * May we PROMISE the seller an immediate charge of a fresh bill (the
+ * subscribe / plan-change "charging your saved method now" toast)? Stricter
+ * than `autoChargeAllowed`: while an earlier attempt's outcome is unknown
+ * (`lastChargeAttemptAt` standing), the mutex would stand a new charge down
+ * and the reconcile must answer first — so the promise would be a lie. The
+ * daily sweep charges the new bill once the question resolves; these doors
+ * simply don't schedule what they can't promise.
+ */
+export function autoChargeIdle(
+	autoRenew:
+		| { strandedCharge?: unknown; lastChargeAttemptAt?: number }
+		| undefined,
+): boolean {
+	return (
+		autoChargeAllowed(autoRenew) && autoRenew?.lastChargeAttemptAt === undefined
+	);
+}
+
 type StrandedChargeSummary = {
 	invoiceNumber: string;
 	amountSen: number;

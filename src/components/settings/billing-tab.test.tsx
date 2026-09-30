@@ -405,6 +405,7 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 							failedAttempts: 0,
 							failing: false,
 							stopped: true,
+							confirming: false,
 						},
 					},
 				} as Retailer}
@@ -464,6 +465,7 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 							failedAttempts: 1,
 							failing: true,
 							stopped: false,
+							confirming: false,
 						},
 					},
 				} as unknown as Partial<Retailer>)}
@@ -590,6 +592,7 @@ describe("BillingTab comp accounts (z8r3fdeub2)", () => {
 							failedAttempts: 0,
 							failing: false,
 							stopped: false,
+							confirming: false,
 						},
 						caps: { orderCap: 200, userCap: 3, broadcastQuota: 100 },
 						active: false,
@@ -669,6 +672,7 @@ describe("BillingTab — the lapsed-but-not-yet-renewed window (86eyb6z4r)", () 
 						failedAttempts: 0,
 						failing: false,
 						stopped: false,
+						confirming: false,
 						nextChargeAt: Date.now() - 24 * 60 * 60 * 1000,
 					},
 				})}
@@ -689,6 +693,7 @@ describe("BillingTab — the lapsed-but-not-yet-renewed window (86eyb6z4r)", () 
 						failedAttempts: 1,
 						failing: true,
 						stopped: false,
+						confirming: false,
 						nextChargeAt: Date.now() - 24 * 60 * 60 * 1000,
 					},
 				})}
@@ -730,6 +735,7 @@ describe("BillingTab — the lapsed-but-not-yet-renewed window (86eyb6z4r)", () 
 						failedAttempts: 1,
 						failing: true,
 						stopped: true,
+						confirming: false,
 						nextChargeAt: Date.now() - 24 * 60 * 60 * 1000,
 					},
 				})}
@@ -747,6 +753,49 @@ describe("BillingTab — the lapsed-but-not-yet-renewed window (86eyb6z4r)", () 
 		expect(screen.getByText(/Hold off for now/)).toBeTruthy();
 		expect(screen.getByText("Pay online now")).toBeTruthy();
 		expect(screen.getByText("Turn off auto-renewal")).toBeTruthy();
+	});
+
+	it("while a charge is CONFIRMING, every pay option goes away — the note says why", () => {
+		// Any pay option here would be the second payment if the sent charge
+		// landed. Hidden with the reason on screen, never silently.
+		mockQueries({
+			isAdmin: false,
+			gateway: GATEWAY_ON,
+			invoices: [
+				{
+					_id: "inv_new",
+					status: "pending",
+					invoiceNumber: "INV-NEW",
+					total: 7900,
+					currency: "MYR",
+					dueDate: Date.now() + 10 * 24 * 60 * 60 * 1000,
+					gatewayPayment: {
+						provider: "hitpay",
+						url: "https://securecheckout.hit-pay.com/req_new",
+					},
+				},
+			],
+		});
+		render(
+			<BillingTab
+				retailer={lapsed({
+					autoRenew: {
+						method: "card",
+						methodLabel: "Visa ·· 4242",
+						failedAttempts: 0,
+						failing: false,
+						stopped: false,
+						confirming: true,
+					},
+				})}
+			/>,
+		);
+		expect(screen.getByText(/confirming it with the payment provider/)).toBeTruthy();
+		expect(screen.queryByText("Pay online now")).toBeNull();
+		expect(screen.queryByText(/DuitNow/)).toBeNull();
+		// The auto-renewal card explains, instead of claiming "Renewing now".
+		expect(screen.getByText(/waiting for the payment provider to confirm/)).toBeTruthy();
+		expect(screen.queryByText(/Renewing now/)).toBeNull();
 	});
 
 	it("a healthy saved method never shows the hold-off line", () => {
@@ -773,6 +822,7 @@ describe("BillingTab — the lapsed-but-not-yet-renewed window (86eyb6z4r)", () 
 						failedAttempts: 0,
 						failing: false,
 						stopped: false,
+						confirming: false,
 					},
 				})}
 			/>,
@@ -1471,6 +1521,7 @@ describe("BillingTab founding price — one server-resolved answer (z8r3fdfty4)"
 		failedAttempts: 0,
 		failing: false,
 		stopped: false,
+		confirming: false,
 		nextChargeAt: Date.now() + 12 * DAY,
 	};
 
@@ -1996,6 +2047,7 @@ describe("BillingTab under admin act-as (z8r3fdfty4)", () => {
 							failedAttempts: 0,
 							failing: false,
 							stopped: false,
+							confirming: false,
 							nextChargeAt: Date.now() + 12 * DAY,
 						},
 					},
