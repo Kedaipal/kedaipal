@@ -539,7 +539,7 @@ describe("CreditMeter — dashboard home (card)", () => {
 		render(
 			<CreditMeter variant="card" retailer={retailer({ locked: true })} />,
 		);
-		expect(screen.getByRole("link", { name: "Top up" })).toBeTruthy();
+		expect(screen.getByRole("link", { name: "Top up credits" })).toBeTruthy();
 	});
 
 	it("locked, for a teammate who can't buy: no button that isn't theirs", () => {
@@ -549,7 +549,7 @@ describe("CreditMeter — dashboard home (card)", () => {
 		render(
 			<CreditMeter variant="card" retailer={retailer({ locked: true })} />,
 		);
-		expect(screen.queryByRole("link", { name: "Top up" })).toBeNull();
+		expect(screen.queryByRole("link", { name: "Top up credits" })).toBeNull();
 		expect(screen.getByRole("link", { name: "Billing" })).toBeTruthy();
 	});
 });

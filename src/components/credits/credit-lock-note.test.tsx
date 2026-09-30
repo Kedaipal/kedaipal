@@ -95,7 +95,7 @@ describe("CreditLockNote", () => {
 				/Accepting and updating orders is paused until you add credits\. Cancelling and refunding still work\./,
 			),
 		).toBeTruthy();
-		const cta = screen.getByRole("link", { name: "Top up" });
+		const cta = screen.getByRole("link", { name: "Top up credits" });
 		expect(cta.getAttribute("href")).toContain("topup=1");
 	});
 
@@ -117,7 +117,7 @@ describe("CreditLockNote", () => {
 		});
 		render(<CreditLockNote scope="orders" />);
 		expect(screen.getByRole("link", { name: "Pick a plan" })).toBeTruthy();
-		expect(screen.queryByRole("link", { name: "Top up" })).toBeNull();
+		expect(screen.queryByRole("link", { name: "Top up credits" })).toBeNull();
 	});
 
 	it("a teammate who can't buy is told who to ask, with no button that isn't theirs", () => {
@@ -136,7 +136,7 @@ describe("CreditLockNote", () => {
 		state.canBuy = true;
 		state.retailer = store({ locked: true });
 		render(<CreditLockNote scope="orders" />);
-		expect(screen.getByRole("link", { name: "Top up" })).toBeTruthy();
+		expect(screen.getByRole("link", { name: "Top up credits" })).toBeTruthy();
 		expect(screen.queryByText(/Ask the store owner/)).toBeNull();
 	});
 

@@ -135,7 +135,7 @@ export function lockCta(route: CreditUnlockRoute): {
 } {
 	switch (route) {
 		case "topup":
-			return { label: "Top up", search: TOP_UP_SEARCH };
+			return { label: "Top up credits", search: TOP_UP_SEARCH };
 		case "pick_plan":
 			return { label: "Pick a plan", search: { tab: "billing" } };
 		case "pay_invoice":

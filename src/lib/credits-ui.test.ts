@@ -48,7 +48,7 @@ describe("the balance speaks in orders", () => {
 
 	test("every unlock route gets the one button that puts credits back", () => {
 		expect(lockCta("topup")).toEqual({
-			label: "Top up",
+			label: "Top up credits",
 			search: { tab: "billing", topup: 1 },
 		});
 		expect(lockCta("pick_plan").label).toBe("Pick a plan");
