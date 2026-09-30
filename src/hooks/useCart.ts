@@ -74,6 +74,12 @@ export type CartItem = {
 	// storage id; serializable so it survives cart persistence) and passed to
 	// orders.create at checkout. See docs/custom-option.md.
 	customImageStorageId?: string;
+	// Answers to the product's buyer questions (z8r3fdkjek), keyed by question
+	// id — entered at CHECKOUT (one set per line), persisted so a refresh on
+	// the checkout page doesn't wipe them. Not validated against the product
+	// here (hydrate has no catalogue): checkout sends only ids the LIVE
+	// product still asks, and the server drops anything else.
+	answers?: Record<string, string>;
 };
 
 type CartState = {
@@ -90,6 +96,13 @@ type CartAction =
 	| { type: "ADD"; item: Omit<CartItem, "quantity">; quantity: number }
 	| { type: "SET_QTY"; variantId: Id<"productVariants">; quantity: number }
 	| { type: "REMOVE"; variantId: Id<"productVariants"> }
+	| {
+			type: "SET_ANSWER";
+			variantId: Id<"productVariants">;
+			questionId: string;
+			/** undefined clears the answer. */
+			answer: string | undefined;
+	  }
 	| { type: "CLEAR" }
 	| { type: "HYDRATE"; items: CartItem[]; retailerId: string };
 
@@ -146,6 +159,22 @@ function reducer(state: CartState, action: CartAction): CartState {
 				),
 			};
 		}
+		case "SET_ANSWER":
+			return {
+				...state,
+				items: state.items.map((i) => {
+					if (i.variantId !== action.variantId) return i;
+					const { [action.questionId]: _cleared, ...rest } = i.answers ?? {};
+					const answers =
+						action.answer === undefined
+							? rest
+							: { ...rest, [action.questionId]: action.answer };
+					return {
+						...i,
+						answers: Object.keys(answers).length > 0 ? answers : undefined,
+					};
+				}),
+			};
 		case "REMOVE":
 			return {
 				...state,
@@ -162,6 +191,15 @@ function storageKey(retailerId: string): string {
 	return `kedaipal:cart:${retailerId}`;
 }
 
+function isStringRecord(value: unknown): value is Record<string, string> {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		!Array.isArray(value) &&
+		Object.values(value).every((v) => typeof v === "string")
+	);
+}
+
 function readPersisted(retailerId: string): CartItem[] {
 	if (typeof window === "undefined") return [];
 	try {
@@ -169,24 +207,32 @@ function readPersisted(retailerId: string): CartItem[] {
 		if (!raw) return [];
 		const parsed = JSON.parse(raw);
 		if (!Array.isArray(parsed)) return [];
-		return parsed.filter(
-			(i): i is CartItem =>
-				typeof i === "object" &&
-				i !== null &&
-				// An RSVP is checked out standalone (`z8r3fdhh45`), so it can no
-				// longer be a cart line. A cart persisted before that change may
-				// still carry one — dropped on hydrate rather than left to be
-				// refused at `orders.create`, which would strand the buyer with a
-				// basket they can't check out and can't see the problem with.
-				(i as { event?: unknown }).event === undefined &&
-				typeof i.variantId === "string" &&
-				typeof i.productId === "string" &&
-				typeof i.name === "string" &&
-				typeof i.price === "number" &&
-				typeof i.currency === "string" &&
-				typeof i.quantity === "number" &&
-				i.quantity > 0,
-		);
+		return parsed
+			.filter(
+				(i): i is CartItem =>
+					typeof i === "object" &&
+					i !== null &&
+					// An RSVP is checked out standalone (`z8r3fdhh45`), so it can no
+					// longer be a cart line. A cart persisted before that change may
+					// still carry one — dropped on hydrate rather than left to be
+					// refused at `orders.create`, which would strand the buyer with a
+					// basket they can't check out and can't see the problem with.
+					(i as { event?: unknown }).event === undefined &&
+					typeof i.variantId === "string" &&
+					typeof i.productId === "string" &&
+					typeof i.name === "string" &&
+					typeof i.price === "number" &&
+					typeof i.currency === "string" &&
+					typeof i.quantity === "number" &&
+					i.quantity > 0,
+			)
+			.map((i) =>
+				// A malformed answers map is dropped, the LINE kept — losing typed
+				// answers is a nuisance, losing the basket is a dead end.
+				i.answers === undefined || isStringRecord(i.answers)
+					? i
+					: { ...i, answers: undefined },
+			);
 	} catch {
 		return [];
 	}
@@ -255,6 +301,14 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 		[],
 	);
 	const clearCart = useCallback(() => dispatch({ type: "CLEAR" }), []);
+	const setAnswer = useCallback(
+		(
+			variantId: Id<"productVariants">,
+			questionId: string,
+			answer: string | undefined,
+		) => dispatch({ type: "SET_ANSWER", variantId, questionId, answer }),
+		[],
+	);
 
 	const { itemCount, total, currency } = useMemo(() => {
 		let count = 0;
@@ -309,6 +363,7 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 		quickRemoveProduct,
 		removeItem,
 		clearCart,
+		setAnswer,
 		quantityForProduct,
 	};
 }

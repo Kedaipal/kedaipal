@@ -22,7 +22,8 @@ type TimelineEvent = FunctionReturnType<typeof api.orders.getTimeline>[number];
 
 const STATUS_LABEL: Record<TimelineEvent["status"], string> = {
 	pending: "Order placed",
-	booking_requested: "Booking requested",
+	// A booking OR an RSVP awaiting approval (`z8r3fdkjek`) — the same status.
+	booking_requested: "Requested — awaiting approval",
 	confirmed: "Confirmed",
 	packed: "Packed",
 	shipped: "Shipped",

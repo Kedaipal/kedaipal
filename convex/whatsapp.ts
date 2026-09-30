@@ -339,6 +339,9 @@ export const getRetailerLocaleForOrder = internalQuery({
 		// skips the payment block entirely. See `resolveEventLabel`.
 		isFree: boolean;
 		eventLabel: string | undefined;
+		// A request still waiting for the seller's approval (`z8r3fdkjek`) —
+		// nothing is payable, so the reply says so instead of asking for money.
+		awaitingApproval: boolean;
 	} | null> => {
 		const order = await ctx.db
 			.query("orders")
@@ -369,6 +372,7 @@ export const getRetailerLocaleForOrder = internalQuery({
 			deliveryFeePending: order.deliveryFeePending === true,
 			isFree: isFreeOrder(order),
 			eventLabel: await resolveEventLabel(ctx, order),
+			awaitingApproval: order.status === "booking_requested",
 		};
 	},
 });
@@ -684,6 +688,26 @@ export const handleInbound = internalAction({
 					})
 				: null);
 		const trackingUrl = `${appUrl}/track/${trackingToken ?? ""}`;
+
+		if (meta?.awaitingApproval) {
+			// An RSVP/booking the seller hasn't approved (`z8r3fdkjek`): the
+			// normal confirm would ask for money the page won't take. Say it's a
+			// request instead; the payment ask comes with the approval.
+			const body =
+				renderSystemMessage(locale, "requestAwaitingApproval", {
+					shortId,
+					storeName,
+					contactPhone,
+					trackingUrl,
+					eventLabel: meta.eventLabel,
+				}) + poweredByLine(locale);
+			try {
+				await sellerWa.send(fromPhone, { kind: "text", body });
+			} catch (err) {
+				console.error("WA awaiting-approval reply failed", err);
+			}
+			return;
+		}
 
 		if (meta?.mockupPending) {
 			// Order still has a custom item awaiting buyer mockup approval — defer

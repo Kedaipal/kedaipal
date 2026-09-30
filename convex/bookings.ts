@@ -588,24 +588,41 @@ export const requestBooking = mutation({
 	},
 });
 
+/**
+ * `booking_requested` is the generic "awaiting the seller's approval" status:
+ * a booking request, or an RSVP on an event that approves each guest
+ * (`z8r3fdkjek`). The mechanics are identical; only the nouns differ.
+ */
+function requestNouns(order: { eventRsvp?: boolean }): {
+	thing: "booking" | "RSVP";
+	held: string;
+	again: string;
+} {
+	return order.eventRsvp === true
+		? { thing: "RSVP", held: "the seat was released", again: "RSVP again" }
+		: { thing: "booking", held: "the dates were released", again: "book again" };
+}
+
 /** Cause-true refusals for acting on a request that is no longer one. */
 function assertStillRequested(order: {
 	status: string;
 	bookingResolution?: "declined" | "expired";
+	eventRsvp?: boolean;
 }): void {
 	if (order.status === "booking_requested") return;
+	const n = requestNouns(order);
 	if (order.bookingResolution === "expired") {
 		throw new ConvexError(
-			"This request expired after 24 hours and the dates were released — ask the guest to book again",
+			`This request expired after 24 hours and ${n.held} — ask the guest to ${n.again}`,
 		);
 	}
 	if (order.bookingResolution === "declined") {
 		throw new ConvexError("This request was already declined");
 	}
 	if (order.status === "cancelled") {
-		throw new ConvexError("This booking was cancelled");
+		throw new ConvexError(`This ${n.thing} was cancelled`);
 	}
-	throw new ConvexError("This booking was already approved");
+	throw new ConvexError(`This ${n.thing} was already approved`);
 }
 
 /**
@@ -631,7 +648,7 @@ export const approveBookingRequest = mutation({
 		// The one transition path: timeline event, activation stamp, stage reset.
 		// notifyStatusChange skips `confirmed`, so nothing generic goes out.
 		await applyStatusTransition(ctx, order, "confirmed", {
-			note: "Booking approved",
+			note: order.eventRsvp === true ? "RSVP approved" : "Booking approved",
 			actorUserId: access.role === "admin" ? undefined : access.userId,
 		});
 
@@ -699,7 +716,7 @@ export const declineBookingRequest = mutation({
 			{ ...order, bookingResolution: "declined" },
 			"cancelled",
 			{
-				note: `Booking declined: ${trimmed}`,
+				note: `${order.eventRsvp === true ? "RSVP" : "Booking"} declined: ${trimmed}`,
 				actorUserId: access.role === "admin" ? undefined : access.userId,
 			},
 		);
@@ -795,7 +812,7 @@ export const expireStaleRequests = internalMutation({
 			// expired", never a bare "cancelled").
 			await ctx.db.patch(order._id, { bookingResolution: "expired" });
 			await applyStatusTransition(ctx, order, "cancelled", {
-				note: "Booking request expired — not answered within 24 hours",
+				note: `${order.eventRsvp === true ? "RSVP" : "Booking"} request expired — not answered within 24 hours`,
 			});
 		}
 	},
