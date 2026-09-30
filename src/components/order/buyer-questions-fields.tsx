@@ -60,7 +60,10 @@ export function BuyerQuestionsFields({
 				const fieldId = `${idPrefix}-${question.id}`;
 				const optionalSuffix =
 					question.required === true ? null : (
-						<span className="font-normal text-muted-foreground"> (optional)</span>
+						<span className="font-normal text-muted-foreground">
+							{" "}
+							(optional)
+						</span>
 					);
 				if (question.type === "choice") {
 					return (

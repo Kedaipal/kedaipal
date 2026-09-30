@@ -907,6 +907,9 @@ export const create = mutation({
 		// the tracking page WITHOUT ?send=1 (no wa.me handoff needed). False/absent
 		// = the legacy buyer-sends-first flow (phone missing or template env unset).
 		confirmedAtCreate?: boolean;
+		// True when the RSVP waits for the seller's approval (`z8r3fdkjek`) —
+		// checkout lands on the tracking page with NO ?send=1.
+		awaitingApproval?: boolean;
 	}> => {
 		// Rate limit FIRST — public endpoint, throttle per storefront before any
 		// DB reads. Two limits on one key: the burst bucket shapes a live drop,
@@ -1598,7 +1601,17 @@ export const create = mutation({
 		// checkout with no confirmation and no link to the order page they
 		// approve their mockup on, sometimes for days; and it bought nothing,
 		// since the price still isn't final when they read it.
+		//
+		// An event that asks the seller to approve each RSVP (`z8r3fdkjek`) is
+		// the one carve-out: it lands as `booking_requested` — the generic
+		// "awaiting the seller's approval" status the booking request already
+		// uses, so the inbox bucket, the 24 h expiry cron, the seat hold and the
+		// hidden payment card all come for free. Nothing is pushed and nothing
+		// is payable until the seller approves (bookings.approveBookingRequest
+		// then sends the one confirmation, carrying the pay link).
+		const awaitingApproval = eventLock?.requiresApproval === true;
 		const confirmedAtCreate =
+			!awaitingApproval &&
 			customerWaPhone !== undefined &&
 			orderConfirmTemplateName() !== undefined;
 
@@ -1610,7 +1623,11 @@ export const create = mutation({
 			subtotal,
 			total,
 			currency: args.currency,
-			status: confirmedAtCreate ? "confirmed" : "pending",
+			status: awaitingApproval
+				? "booking_requested"
+				: confirmedAtCreate
+					? "confirmed"
+					: "pending",
 			channel: args.channel,
 			source: "storefront",
 			attributionSource: sanitizeAttributionSource(args.attributionSource),
@@ -1648,7 +1665,10 @@ export const create = mutation({
 
 		await ctx.db.insert("orderEvents", {
 			orderId,
-			status: "pending",
+			status: awaitingApproval ? "booking_requested" : "pending",
+			note: awaitingApproval
+				? "RSVP request — waiting for your approval"
+				: undefined,
 			createdAt: now,
 		});
 		if (confirmedAtCreate) {
@@ -1722,6 +1742,9 @@ export const create = mutation({
 			deliveryFee: deliverySnapshot?.fee,
 			deliveryFeePending: deliveryFeePending || undefined,
 			confirmedAtCreate: confirmedAtCreate || undefined,
+			// The RSVP is a REQUEST (`z8r3fdkjek`): the checkout must not hand
+			// the buyer to WhatsApp to "confirm" something the seller hasn't.
+			awaitingApproval: awaitingApproval || undefined,
 		};
 	},
 });
@@ -1755,7 +1778,8 @@ export const countActionable = query({
 			level: "read",
 		});
 
-		const [pendingRows, confirmedRows, mockupRows] = await Promise.all([
+		const [pendingRows, confirmedRows, mockupRows, requestedRows] =
+			await Promise.all([
 			ctx.db
 				.query("orders")
 				.withIndex("by_retailer_status", (q) =>
@@ -1781,12 +1805,24 @@ export const countActionable = query({
 						.lte("mockupStatus", "pending"),
 				)
 				.collect(),
+			// Requests awaiting the seller's approval (bookings, and RSVPs on an
+			// event that approves each guest — `z8r3fdkjek`) sit in the New
+			// bucket, so the badge must count them too — it didn't before.
+			ctx.db
+				.query("orders")
+				.withIndex("by_retailer_status", (q) =>
+					q.eq("retailerId", retailerId).eq("status", "booking_requested"),
+				)
+				.collect(),
 		]);
 
 		return {
 			// Unseen push-path orders are a subset of `confirmedRows`, already in
 			// memory — no extra read to add the badge's count.
-			newOrders: pendingRows.length + confirmedRows.filter(isUnseenOrder).length,
+			newOrders:
+				pendingRows.length +
+				requestedRows.length +
+				confirmedRows.filter(isUnseenOrder).length,
 			pending: pendingRows.length,
 			confirmed: confirmedRows.length,
 			mockupPending: mockupRows.length,
@@ -3703,7 +3739,7 @@ export const updateStatus = mutation({
 		// while sending the guest nothing, stranding the whole payment flow.
 		if (order.status === "booking_requested" && status !== "cancelled") {
 			throw new ConvexError(
-				"This is a booking request — approve or decline it from the order page instead",
+				"This is a request waiting for your approval — approve or decline it from the order page instead",
 			);
 		}
 
@@ -4167,7 +4203,7 @@ export const advanceToStage = mutation({
 		// confirmation + payment ask.
 		if (order.status === "booking_requested") {
 			throw new ConvexError(
-				"This is a booking request — approve or decline it from the order page instead",
+				"This is a request waiting for your approval — approve or decline it from the order page instead",
 			);
 		}
 
@@ -4904,6 +4940,10 @@ const PAYMENT_REFERENCE_MAX = 80;
  * `paymentClaimedAt`. Rejects only when the order is already `received`, since
  * a confirmed-by-retailer payment shouldn't be re-claimed.
  */
+/** Buyer-facing refusal for paying a request not yet approved. */
+const AWAITING_APPROVAL_PAYMENT_MESSAGE =
+	"The seller hasn't approved this yet — you'll get a message with how to pay once they do.";
+
 export const claimPayment = mutation({
 	args: {
 		token: v.string(),
@@ -4934,6 +4974,12 @@ export const claimPayment = mutation({
 			!(await isStoredImageRenderable(ctx, proofStorageId as Id<"_storage">))
 		) {
 			throw new ConvexError(UNRENDERABLE_PROOF_MESSAGE);
+		}
+		// A request the seller hasn't approved yet (a booking, or an RSVP that
+		// needs approval — `z8r3fdkjek`) is not payable: the page hides the
+		// payment card, and a direct call is refused the same way.
+		if (order.status === "booking_requested") {
+			throw new ConvexError(AWAITING_APPROVAL_PAYMENT_MESSAGE);
 		}
 		// Payment is gated behind mockup approval — the buyer's tracking page
 		// disables "I've paid" while the gate is closed; reject a direct call too.
@@ -5101,6 +5147,13 @@ export const markPaymentReceived = mutation({
 		if (order.paymentStatus === "received") {
 			// Idempotent — second click is a no-op.
 			return;
+		}
+		// Approve the request first — recording money against an order you
+		// haven't accepted leaves a paid, unapproved order (`z8r3fdkjek`).
+		if (order.status === "booking_requested") {
+			throw new ConvexError(
+				"Approve this request first — the guest is asked to pay only after you approve it.",
+			);
 		}
 		// Can't mark payment received while the mockup gate is closed — the buyer
 		// hasn't been asked to pay and the price may not be final. Mirrors the

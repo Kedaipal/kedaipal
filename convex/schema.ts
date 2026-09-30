@@ -1177,6 +1177,13 @@ export default defineSchema({
 				// active point; required at save when there are several. Order
 				// time resolves with a first-active fallback (see resolveEventVenue).
 				venueId: v.optional(v.id("pickupLocations")),
+				// "Approve each RSVP before the guest pays" (`z8r3fdkjek`). true =
+				// a storefront RSVP lands as `booking_requested` (the generic
+				// "awaiting the seller's approval" status bookings already use) —
+				// seat held, no payment asked — until the seller approves it.
+				// Unset = RSVPs confirm at checkout as before. The counter's
+				// walk-in RSVP is never held: the seller is the one keying it.
+				requiresApproval: v.optional(v.boolean()),
 			}),
 		),
 		// Buyer questions (`z8r3fdkjek`) — up to 3 things the buyer is asked at
@@ -1468,8 +1475,10 @@ export default defineSchema({
 			// carve-out from confirm-at-create, because booking inventory is scarce
 			// and needs vetting. Soft-holds capacity from the moment it exists.
 			// Exits: approve → confirmed (+ the ONE payment ask, S3), decline /
-			// 24 h expiry / buyer cancel → cancelled (hold released). Never reached
-			// by non-booking orders.
+			// 24 h expiry / buyer cancel → cancelled (hold released). Also reached
+			// by an RSVP on an event with `event.requiresApproval` (`z8r3fdkjek`) —
+			// the same "awaiting the seller's approval" meaning, holding a seat
+			// instead of dates; `eventRsvp` tells the two apart. No other order.
 			v.literal("booking_requested"),
 			v.literal("confirmed"),
 			v.literal("packed"),

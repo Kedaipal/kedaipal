@@ -826,6 +826,7 @@ function OrderDetailRoute() {
 				<BookingRequestCard order={order} />
 			) : order.bookingResolution !== undefined ? (
 				<BookingResolutionNote
+					isRsvp={order.eventRsvp === true}
 					resolution={order.bookingResolution}
 					reason={order.cancellationNote}
 				/>

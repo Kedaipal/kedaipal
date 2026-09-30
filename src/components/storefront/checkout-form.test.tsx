@@ -32,7 +32,12 @@ import type { PublicPickupLocation } from "./pickup-location-options";
 // pair, not `convex/react` (docs/frontend-caching.md, send-claim.test.tsx),
 // answering by function name. `orders.create` is the one mutation; its args
 // are what the submit test reads back.
-const state = vi.hoisted(() => ({ createOrder: vi.fn() }));
+const state = vi.hoisted(() => ({
+	createOrder: vi.fn(),
+	// The live catalog `products:list` answers with — [] unless a test lists
+	// a product (buyer questions are read from here, z8r3fdkjek).
+	listed: [] as unknown[],
+}));
 vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
 }));
@@ -48,7 +53,7 @@ vi.mock("@tanstack/react-query", () => ({
 		switch (getFunctionName(fn)) {
 			// Nothing listed: every cart line falls back to its own snapshot.
 			case "products:list":
-				return { data: [] };
+				return { data: state.listed };
 			// A free-delivery store — no quote gate in the way of the phone field.
 			case "delivery:quote":
 				return { data: { kind: "free" } };
@@ -142,12 +147,13 @@ function renderCheckout(
 		booksCouriers?: boolean;
 		method?: "delivery" | "pickup";
 		closedDates?: ClosedDateRange[];
+		cart?: UseCart;
 	} = {},
 ) {
 	const pickupOnly = opts.method === "pickup";
 	render(
 		<CheckoutPage
-			cart={cartStub()}
+			cart={opts.cart ?? cartStub()}
 			retailerId={"ret_1" as Id<"retailers">}
 			storeName="Kek Mama"
 			storeSlug="kek-mama"
@@ -375,5 +381,77 @@ describe("CheckoutPage — closed dates (z8r3fdhpm7)", () => {
 				/Kek Mama is closed .*\(Hari Raya\) — pick another day\./,
 			),
 		).toBeTruthy();
+	});
+});
+
+describe("CheckoutPage — buyer questions (z8r3fdkjek)", () => {
+	const CAKE_QUESTIONS = [
+		{
+			id: "msg00001",
+			label: "Message on the cake",
+			type: "text",
+			required: true,
+		},
+	];
+	afterEach(() => {
+		state.listed = [];
+	});
+
+	function fillBuyer() {
+		fireEvent.change(screen.getByRole("textbox", { name: /^Your name/ }), {
+			target: { value: "Aisyah Rahman" },
+		});
+		changePhone("012-345 6789");
+	}
+
+	it("asks the line's question, blocks Place order until it's answered", () => {
+		state.listed = [
+			{ _id: "prod_1", variants: [], buyerQuestions: CAKE_QUESTIONS },
+		];
+		const cart = cartStub();
+		renderCheckout({ method: "pickup", cart });
+		fillBuyer();
+		expect(screen.getByText("A few questions")).toBeTruthy();
+		expect(
+			screen.getAllByText("Answer “Message on the cake” for Kek Pandan").length,
+		).toBeGreaterThan(0);
+		const place = screen.getAllByRole("button", { name: "Place order" })[0];
+		expect((place as HTMLButtonElement).disabled).toBe(true);
+		fireEvent.change(screen.getByLabelText("Message on the cake"), {
+			target: { value: "Happy 40th" },
+		});
+		expect(cart.setAnswer).toHaveBeenCalledWith(
+			"var_1",
+			"msg00001",
+			"Happy 40th",
+		);
+	});
+
+	it("sends the stored answers for the line", async () => {
+		state.listed = [
+			{ _id: "prod_1", variants: [], buyerQuestions: CAKE_QUESTIONS },
+		];
+		const cart = cartStub();
+		cart.items[0] = {
+			...cart.items[0],
+			answers: { msg00001: "Happy 40th", gone0001: "stale" },
+		};
+		renderCheckout({ method: "pickup", cart });
+		fillBuyer();
+		fireEvent.click(screen.getAllByRole("button", { name: "Place order" })[0]);
+		await waitFor(() => expect(state.createOrder).toHaveBeenCalledTimes(1));
+		const [args] = state.createOrder.mock.calls[0];
+		expect(args.items[0].answers).toEqual([
+			{ questionId: "msg00001", answer: "Happy 40th" },
+		]);
+	});
+
+	it("a product with no questions shows no section and sends no answers", async () => {
+		renderCheckout({ method: "pickup" });
+		fillBuyer();
+		expect(screen.queryByText("A few questions")).toBeNull();
+		fireEvent.click(screen.getAllByRole("button", { name: "Place order" })[0]);
+		await waitFor(() => expect(state.createOrder).toHaveBeenCalledTimes(1));
+		expect(state.createOrder.mock.calls[0][0].items[0].answers).toBeUndefined();
 	});
 });

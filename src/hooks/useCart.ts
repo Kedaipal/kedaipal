@@ -207,30 +207,32 @@ function readPersisted(retailerId: string): CartItem[] {
 		if (!raw) return [];
 		const parsed = JSON.parse(raw);
 		if (!Array.isArray(parsed)) return [];
-		return parsed.filter(
-			(i): i is CartItem =>
-				typeof i === "object" &&
-				i !== null &&
-				// An RSVP is checked out standalone (`z8r3fdhh45`), so it can no
-				// longer be a cart line. A cart persisted before that change may
-				// still carry one — dropped on hydrate rather than left to be
-				// refused at `orders.create`, which would strand the buyer with a
-				// basket they can't check out and can't see the problem with.
-				(i as { event?: unknown }).event === undefined &&
-				typeof i.variantId === "string" &&
-				typeof i.productId === "string" &&
-				typeof i.name === "string" &&
-				typeof i.price === "number" &&
-				typeof i.currency === "string" &&
-				typeof i.quantity === "number" &&
-				i.quantity > 0,
-		).map((i) =>
-			// A malformed answers map is dropped, the LINE kept — losing typed
-			// answers is a nuisance, losing the basket is a dead end.
-			i.answers === undefined || isStringRecord(i.answers)
-				? i
-				: { ...i, answers: undefined },
-		);
+		return parsed
+			.filter(
+				(i): i is CartItem =>
+					typeof i === "object" &&
+					i !== null &&
+					// An RSVP is checked out standalone (`z8r3fdhh45`), so it can no
+					// longer be a cart line. A cart persisted before that change may
+					// still carry one — dropped on hydrate rather than left to be
+					// refused at `orders.create`, which would strand the buyer with a
+					// basket they can't check out and can't see the problem with.
+					(i as { event?: unknown }).event === undefined &&
+					typeof i.variantId === "string" &&
+					typeof i.productId === "string" &&
+					typeof i.name === "string" &&
+					typeof i.price === "number" &&
+					typeof i.currency === "string" &&
+					typeof i.quantity === "number" &&
+					i.quantity > 0,
+			)
+			.map((i) =>
+				// A malformed answers map is dropped, the LINE kept — losing typed
+				// answers is a nuisance, losing the basket is a dead end.
+				i.answers === undefined || isStringRecord(i.answers)
+					? i
+					: { ...i, answers: undefined },
+			);
 	} catch {
 		return [];
 	}

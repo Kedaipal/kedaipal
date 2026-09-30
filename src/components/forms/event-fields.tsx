@@ -36,6 +36,9 @@ export type EventDraft = {
 	time: string;
 	/** Seat cap as typed; blank = no limit. */
 	seats: string;
+	/** "Approve each RSVP before the guest pays" (`z8r3fdkjek`). Optional so
+	 * pre-approval draft literals (tests, stored handoffs) stay valid. */
+	requiresApproval?: boolean;
 };
 
 export const EMPTY_EVENT_DRAFT: EventDraft = {
@@ -45,6 +48,7 @@ export const EMPTY_EVENT_DRAFT: EventDraft = {
 	time: "",
 	seats: "",
 	venueId: "",
+	requiresApproval: false,
 };
 
 /** Seed the draft from a saved product (or the empty draft when it isn't an
@@ -58,6 +62,7 @@ export function eventDraftFrom(
 				seats?: number;
 				endDate?: number;
 				venueId?: string;
+				requiresApproval?: boolean;
 		  }
 		| undefined,
 ): EventDraft {
@@ -70,6 +75,7 @@ export function eventDraftFrom(
 		time:
 			event.timeMinutes === undefined ? "" : hhmmFromMinutes(event.timeMinutes),
 		seats: event.seats === undefined ? "" : String(event.seats),
+		requiresApproval: event.requiresApproval === true,
 	};
 }
 
@@ -81,6 +87,8 @@ export type EventSubmitValue = {
 	/** Branded here (the draft holds a plain string) so the create/update
 	 * calls need no cast; the server re-validates ownership regardless. */
 	venueId?: Id<"pickupLocations">;
+	/** true or absent — absent turns it off (whole-object replace). */
+	requiresApproval?: boolean;
 } | null;
 
 /** The draft's last day as an epoch: `undefined` when blank or the same day as
@@ -143,6 +151,7 @@ export function eventSubmitValue(draft: EventDraft): EventSubmitValue {
 		venueId: draft.venueId.trim()
 			? (draft.venueId as Id<"pickupLocations">)
 			: undefined,
+		requiresApproval: draft.requiresApproval === true ? true : undefined,
 	};
 }
 
@@ -480,6 +489,29 @@ export function EventFields({
 							the cap can&apos;t go below {taken}. Raise it any time.
 						</p>
 					) : null}
+
+					{/* "Approve each RSVP" (`z8r3fdkjek`) — a vetting step for events
+					    that register people (HCM's Into The Falls). Off = today's
+					    flow, RSVPs confirm at checkout. Both states say exactly what
+					    the guest experiences, because the difference is money. */}
+					<div className="flex items-start justify-between gap-4 rounded-xl border border-border p-3">
+						<div className="min-w-0">
+							<p className="text-sm font-medium">
+								Approve each RSVP before they pay
+							</p>
+							<p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+								{draft.requiresApproval
+									? "New RSVPs wait for you in Orders → New with Approve and Decline. The seat is held meanwhile; the guest is asked to pay only after you approve. A request you don't answer within 24 hours expires and frees the seat."
+									: "Off — RSVPs are confirmed the moment the guest submits, and they can pay straight away."}
+							</p>
+						</div>
+						<ToggleSwitch
+							on={draft.requiresApproval === true}
+							onChange={(requiresApproval) => set({ requiresApproval })}
+							disabled={locked}
+							label="Approve each RSVP before the guest pays"
+						/>
+					</div>
 
 					{/* Every consequence of the toggle, stated where it's switched on.
 					    A seller must never discover at checkout that her event forced

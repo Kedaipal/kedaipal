@@ -111,6 +111,10 @@ export function EventRsvpCheckoutForm({
 	).data;
 
 	const event = product?.event;
+	// The host approves each RSVP before anyone pays (`z8r3fdkjek`). Said at
+	// the top of the form, on the CTA, and under it — the difference between
+	// "you're in" and "you've asked" is the one thing a guest must not misread.
+	const needsApproval = event?.requiresApproval === true;
 
 	// The EVENT's venue, from the server — the same resolver order time uses,
 	// so what this page shows is what the order will freeze. Fetched (not read
@@ -338,7 +342,12 @@ export function EventRsvpCheckoutForm({
 			navigate({
 				to: "/track/$token",
 				params: { token: result.trackingToken },
-				search: result.confirmedAtCreate ? {} : { send: 1 },
+				// A request is never handed to WhatsApp to "confirm": the seller
+				// hasn't yet. The tracking page says it's waiting for approval.
+				search:
+					result.confirmedAtCreate || result.awaitingApproval
+						? {}
+						: { send: 1 },
 			});
 		} catch (err) {
 			setServerError(convexErrorMessage(err));
@@ -369,7 +378,8 @@ export function EventRsvpCheckoutForm({
 					) : null}
 					{shownAnswers.map((q) => (
 						<p key={q.id} className="text-xs text-muted-foreground">
-							{q.label}: <span className="text-foreground">{answers[q.id]?.trim()}</span>
+							{q.label}:{" "}
+							<span className="text-foreground">{answers[q.id]?.trim()}</span>
 						</p>
 					))}
 					{priceSettled ? (
@@ -429,11 +439,13 @@ export function EventRsvpCheckoutForm({
 			>
 				{/* The action carries its consequence: how many seats, and what it
 				    costs — never a bare "RSVP". */}
-				{!priceSettled
-					? "RSVP"
-					: isFree
-						? `RSVP for ${seats} ${seats === 1 ? "seat" : "seats"}`
-						: `RSVP · ${formatPrice(total, product.currency)}`}
+				{needsApproval
+					? `Request ${seats} ${seats === 1 ? "seat" : "seats"}`
+					: !priceSettled
+						? "RSVP"
+						: isFree
+							? `RSVP for ${seats} ${seats === 1 ? "seat" : "seats"}`
+							: `RSVP · ${formatPrice(total, product.currency)}`}
 			</Button>
 			{/* The blocked reason always speaks — a dead button with no reason is
 			    the thing this whole bar exists to avoid. The reassurance that
@@ -446,6 +458,14 @@ export function EventRsvpCheckoutForm({
 			{blockedReason ? (
 				<p className="text-center text-xs text-muted-foreground">
 					{blockedReason}
+				</p>
+			) : needsApproval ? (
+				// Shown on every screen size (unlike the reassurance below): it
+				// changes what the tap MEANS, so it can't be desktop-only.
+				<p className="text-center text-xs text-muted-foreground">
+					{isFree
+						? `${storeName} approves each RSVP — your seat is held until they do.`
+						: `${storeName} approves each RSVP — your seat is held, and you pay only after they approve.`}
 				</p>
 			) : (
 				<p className="hidden text-center text-xs text-muted-foreground lg:block">
@@ -509,6 +529,16 @@ export function EventRsvpCheckoutForm({
 					locale={pickLocale(locale)}
 					notes={product.pickupNote ? [product.pickupNote] : []}
 				/>
+				{needsApproval ? (
+					<p className="rounded-xl bg-muted/60 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
+						<span className="font-semibold text-foreground">
+							{storeName} approves each RSVP.
+						</span>{" "}
+						{isFree
+							? "Your seat is held while they review it — the page that opens next shows their answer."
+							: "Your seat is held while they review it. Nothing is paid now — once they approve, the page that opens next shows how to pay."}
+					</p>
+				) : null}
 			</CheckoutSection>
 
 			<CheckoutSection step={1} title="Who's coming?">

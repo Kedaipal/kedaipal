@@ -942,6 +942,7 @@ export const create = mutation({
 				seats: v.optional(v.number()),
 				endDate: v.optional(v.number()),
 				venueId: v.optional(v.id("pickupLocations")),
+				requiresApproval: v.optional(v.boolean()),
 			}),
 		),
 		// Kind + booking config land together at create and the kind is immutable
@@ -1347,6 +1348,7 @@ export const update = mutation({
 					seats: v.optional(v.number()),
 					endDate: v.optional(v.number()),
 					venueId: v.optional(v.id("pickupLocations")),
+					requiresApproval: v.optional(v.boolean()),
 				}),
 				v.null(),
 			),

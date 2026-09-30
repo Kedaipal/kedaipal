@@ -150,8 +150,8 @@ export function BuyerQuestionsEditor({
 			{draft.length === 0 ? (
 				<p className="rounded-xl bg-muted/40 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
 					Nothing asked yet. Add a question when you need something from every
-					buyer — a message on the cake, a spice level, what they're bringing
-					to the event. They can't check out until a required one is answered.
+					buyer — a message on the cake, a spice level, what they're bringing to
+					the event. They can't check out until a required one is answered.
 				</p>
 			) : null}
 			{draft.map((question, index) => (
@@ -366,8 +366,8 @@ function QuestionRow({
 					</label>
 					{triggers.length === 0 ? (
 						<p className="text-xs text-muted-foreground">
-							Always shown. To ask this only after a certain answer, put a
-							"Pick one" question with options above it.
+							Always shown. To ask this only after a certain answer, put a "Pick
+							one" question with options above it.
 						</p>
 					) : (
 						<div className="grid gap-2 sm:grid-cols-2">

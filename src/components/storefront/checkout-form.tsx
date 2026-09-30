@@ -1168,14 +1168,14 @@ export function CheckoutPage({
 					: unansweredLine?.missing
 						? `${answerPrompt(unansweredLine.missing.label)} for ${unansweredLine.item.name}`
 						: addressIncomplete
-						? collectsFromCustomer
-							? "Add your collection address to continue"
-							: "Add your delivery address to continue"
-						: quoteForDelivery?.kind === "calculating"
 							? collectsFromCustomer
-								? "Calculating your collection fee…"
-								: "Calculating your delivery fee…"
-							: (deliveryBlockedLine ?? null);
+								? "Add your collection address to continue"
+								: "Add your delivery address to continue"
+							: quoteForDelivery?.kind === "calculating"
+								? collectsFromCustomer
+									? "Calculating your collection fee…"
+									: "Calculating your delivery fee…"
+								: (deliveryBlockedLine ?? null);
 
 	const submitButton = (
 		<form.Subscribe
