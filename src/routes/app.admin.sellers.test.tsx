@@ -106,6 +106,7 @@ function seller(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 		ownerIsAdmin: false,
 		seats: { active: 1, cap: 3, capUnlimited: false, invited: 0 },
 		isFoundingMember: false,
+		foundingIntent: false,
 		subscriptionStatus: "trialing",
 		plan: "pro",
 		comped: false,
@@ -113,6 +114,7 @@ function seller(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 		purging: false,
 		country: "MY",
 		currency: "MYR",
+		billingCurrency: "MYR",
 		...overrides,
 	};
 }
@@ -156,6 +158,9 @@ const ROWS: AdminSellerRow[] = [
 			total: 9900,
 			currency: "MYR",
 			hasPayNowLink: true,
+			plan: "pro",
+			billingCycle: "monthly",
+			kind: "plan",
 		},
 		credits: {
 			plan: -15,

@@ -149,6 +149,16 @@ subscription status. A paid invoice can't be voided (that's a refund — out of 
 The vendor's billing history shows it as "Cancelled". Admin "Void" button + confirm in
 the pending list.
 
+**Voiding never deletes a scheduled change** (Credits T6 review, 1 Oct 2026). A
+renewal that carried one — a seller's move down to Starter, an Enterprise store's
+move to Pro — consumed `pendingPlanChange` when it was issued; voiding that bill puts
+the change back, so the next daily run bills it again. Before this, a void quietly
+turned the seller's choice into a renewal at the old tier (auto-charged with a saved
+method). Calling a change off is its own act: the seller's `cancelPlanChange`, or
+`enterprise.cancelMoveToPro`, which voids the move's bill itself. The pending list
+marks such a bill and the void dialog says what happens; a bill that ends a contract
+also wears "Ends Enterprise contract".
+
 Admin UI is **tabbed** (`app.admin.billing.tsx`): **Invoices** (onboard-a-client +
 issue form + pending list + mark-paid/void, the frequent task) and **Payment details**
 (set-once bank/QR). Tests: `convex/invoices.test.ts` (issueInvoice

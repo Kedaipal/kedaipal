@@ -8,10 +8,16 @@
 // is admin-only and audited.
 
 import { ConvexError, v } from "convex/values";
+import { internal } from "./_generated/api";
 import { mutation } from "./_generated/server";
 import { ADMIN_CREDIT_LIMIT, writeGrantOverride } from "./credits";
 import { logAdminAction, requireAdmin } from "./lib/auth";
-import { enterpriseContractProblem } from "./lib/enterprise";
+import {
+	type EnterpriseEntry,
+	enterpriseContractProblem,
+	enterpriseTermChangeBlocker,
+	isMoveOffContractBill,
+} from "./lib/enterprise";
 import { capsForPlan, renewalCurrency } from "./lib/plans";
 
 export const setContract = mutation({
@@ -67,13 +73,22 @@ export const setContract = mutation({
 			.withIndex("by_retailer", (q) => q.eq("retailerId", args.retailerId))
 			.order("desc")
 			.collect();
-		// An open bill at another tier would still bill that tier — settle or
-		// void it first, so what the store owes always matches its contract.
+		// An open bill at another tier would still bill that tier, and an open
+		// contract bill at the OTHER term would, once paid, write its term
+		// back onto the row (settle takes the cycle from the bill) — the
+		// change would silently undo itself. Settle or void it first.
 		const pending = invoices.find((inv) => inv.status === "pending");
-		if (pending && pending.plan !== "enterprise")
-			throw new ConvexError(
-				`Settle or void ${pending.invoiceNumber} first — it bills the store's old plan, not the contract.`,
-			);
+		const blocker = enterpriseTermChangeBlocker({
+			pending: pending
+				? {
+						invoiceNumber: pending.invoiceNumber,
+						plan: pending.plan ?? sub.plan,
+						billingCycle: pending.billingCycle ?? sub.billingCycle,
+					}
+				: undefined,
+			billingCycle: args.billingCycle,
+		});
+		if (blocker) throw new ConvexError(blocker);
 
 		const entering = sub.plan !== "enterprise" || sub.enterprise === undefined;
 		const now = Date.now();
@@ -89,6 +104,15 @@ export const setContract = mutation({
 			});
 		const notes = args.notes?.trim();
 		const caps = capsForPlan("enterprise");
+		// What bought the period still running when the store came onto the
+		// contract, so its first Enterprise settle values those days at the
+		// price they were bought at (see the schema). Kept across edits until
+		// a plan bill settles.
+		const enteredFrom: EnterpriseEntry | undefined = entering
+			? sub.plan === "enterprise"
+				? undefined
+				: { plan: sub.plan, billingCycle: sub.billingCycle }
+			: sub.enterprise?.enteredFrom;
 		// No `updatedAt`: on a past_due row that field is the lock-flip moment
 		// the founder report reads, and a contract edit must never move it.
 		await ctx.db.patch(sub._id, {
@@ -104,6 +128,7 @@ export const setContract = mutation({
 				...(notes ? { notes } : {}),
 				setBy: adminSubject,
 				setAt: now,
+				...(enteredFrom ? { enteredFrom } : {}),
 			},
 			// Entering: Enterprise's caps (unlimited seats), and any downgrade
 			// the store had scheduled is superseded — a renewal must bill the
@@ -155,6 +180,18 @@ export const scheduleMoveToPro = mutation({
 			.first();
 		if (sub?.plan !== "enterprise")
 			throw new ConvexError("This store isn't on an Enterprise contract.");
+		// An open bill already covers the contract's next term: paid, it would
+		// carry the store past the date this move promises. Settle or void it
+		// first, so the move lands on the renewal it names.
+		const pending = await ctx.db
+			.query("invoices")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.filter((q) => q.eq(q.field("status"), "pending"))
+			.first();
+		if (pending)
+			throw new ConvexError(
+				`Settle or void ${pending.invoiceNumber} first — it bills the contract's next term, so the move would land a whole term later than it says.`,
+			);
 		const now = Date.now();
 		await ctx.db.patch(sub._id, {
 			pendingPlanChange: { plan: "pro", requestedAt: now },
@@ -165,14 +202,26 @@ export const scheduleMoveToPro = mutation({
 			"enterprise.scheduleMoveToPro",
 			retailerId,
 		);
-		return { effectiveAt: sub.currentPeriodEnd ?? now };
+		// A period that has already run out renews on the next daily run.
+		return { effectiveAt: Math.max(sub.currentPeriodEnd ?? now, now) };
 	},
 });
 
-/** Call off a scheduled move to Pro — the contract simply carries on. */
+/**
+ * Call off a scheduled move to Pro — the contract simply carries on. Before
+ * the renewal the move is only a flag; once the renewal has billed it, the
+ * move IS that Pro bill, so calling it off voids the bill too (its Pay-now
+ * link dies with it) and the next daily run bills the contract instead. A
+ * plain void of that bill does NOT call the move off (`voidInvoice` re-arms
+ * it): this is the one door, so an unrelated void can never quietly keep a
+ * customer on a contract they're leaving.
+ */
 export const cancelMoveToPro = mutation({
 	args: { retailerId: v.id("retailers") },
-	handler: async (ctx, { retailerId }): Promise<{ ok: true }> => {
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{ voidedInvoiceNumber: string | null }> => {
 		const adminSubject = await requireAdmin(ctx);
 		const retailer = await ctx.db.get(retailerId);
 		if (!retailer) throw new ConvexError("Store not found");
@@ -180,15 +229,40 @@ export const cancelMoveToPro = mutation({
 			.query("subscriptions")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 			.first();
-		if (sub?.plan === "enterprise" && sub.pendingPlanChange !== undefined) {
+		if (sub?.plan !== "enterprise")
+			throw new ConvexError("This store isn't on an Enterprise contract.");
+		const pending = await ctx.db
+			.query("invoices")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.filter((q) => q.eq(q.field("status"), "pending"))
+			.first();
+		const moveBill =
+			pending && isMoveOffContractBill(pending, sub) ? pending : null;
+		if (sub.pendingPlanChange === undefined && moveBill === null)
+			throw new ConvexError("There's no move to Pro to call off.");
+		const now = Date.now();
+		if (sub.pendingPlanChange !== undefined)
 			await ctx.db.patch(sub._id, { pendingPlanChange: undefined });
-			await logAdminAction(
-				ctx,
-				{ retailer, role: "admin", actingAsAdmin: true, userId: adminSubject },
-				"enterprise.cancelMoveToPro",
-				retailerId,
-			);
+		if (moveBill) {
+			await ctx.db.patch(moveBill._id, {
+				status: "void",
+				voidedAt: now,
+				voidedBy: adminSubject,
+				voidReason: "Move to Pro called off — the contract carries on",
+			});
+			if (moveBill.gatewayRequestId)
+				await ctx.scheduler.runAfter(
+					0,
+					internal.subscriptionPayments.expireInvoiceRequest,
+					{ requestId: moveBill.gatewayRequestId },
+				);
 		}
-		return { ok: true };
+		await logAdminAction(
+			ctx,
+			{ retailer, role: "admin", actingAsAdmin: true, userId: adminSubject },
+			"enterprise.cancelMoveToPro",
+			retailerId,
+		);
+		return { voidedInvoiceNumber: moveBill?.invoiceNumber ?? null };
 	},
 });

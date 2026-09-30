@@ -57,8 +57,8 @@ export type SubscriptionView = {
 		plan: ListedPlan;
 		effectiveAt: number;
 	};
-	/** The Enterprise contract's seller-facing terms (Credits T6) — owner
-	 * payload only, present iff `plan` is `enterprise`. */
+	/** The Enterprise contract's seller-facing terms (Credits T6), present
+	 * iff `plan` is `enterprise` — never the contact, notes or who set it. */
 	enterprise?: {
 		baseFeeMinor: number;
 		currency: BillingCurrency;

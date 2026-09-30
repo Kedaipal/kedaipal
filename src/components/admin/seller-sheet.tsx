@@ -12,8 +12,11 @@ import { api } from "../../../convex/_generated/api";
 import type { AdminSellerRow } from "../../../convex/admin";
 import { COMP_KIND_LABEL } from "../../../convex/lib/comp";
 import { COUNTRY_LABELS } from "../../../convex/lib/country";
-import { enterpriseBlockPrice } from "../../../convex/lib/enterprise";
-import { enterprisePrice } from "../../../convex/lib/plans";
+import {
+	enterpriseBlockPrice,
+	isMoveOffContractBill,
+} from "../../../convex/lib/enterprise";
+import { enterprisePrice, planPrice } from "../../../convex/lib/plans";
 import {
 	describeDays,
 	sellerBucket,
@@ -135,14 +138,37 @@ function SellerSheetBody({
 		);
 
 	const contract = seller.enterprise;
+	// The move to Pro is a flag until the renewal bills it; from then on the
+	// move IS that open Pro bill (T6) — both read as "moving".
+	const moveBill =
+		seller.plan && seller.pendingInvoice
+			? isMoveOffContractBill(seller.pendingInvoice, { plan: seller.plan })
+				? seller.pendingInvoice
+				: null
+			: null;
 	const movingToPro =
-		seller.plan === "enterprise" && seller.pendingPlanChange?.plan === "pro";
+		seller.plan === "enterprise" &&
+		(seller.pendingPlanChange?.plan === "pro" || moveBill !== null);
+	// Scheduling the move while a bill is open would land it a term late —
+	// the server refuses; the reason sits beside the button.
+	const moveRefusal =
+		seller.pendingInvoice && !movingToPro
+			? `Settle or void ${seller.pendingInvoice.invoiceNumber} first — it bills the contract's next term.`
+			: null;
 	// Why a store can't be put on a contract, said beside the button.
 	const contractRefusal = seller.comped
 		? "Comped — end the comp before putting it on a contract."
-		: seller.isFoundingMember
+		: seller.isFoundingMember || seller.foundingIntent
 			? "Founding Members stay on Founding Pro."
 			: null;
+	// The move bills Pro on the contract's own term, in its currency.
+	const moveCycle = seller.billingCycle ?? "monthly";
+	const moveProPrice = contract
+		? formatPrice(
+				planPrice("pro", moveCycle, false, contract.currency),
+				contract.currency,
+			)
+		: null;
 
 	async function moveToPro() {
 		try {
@@ -159,9 +185,11 @@ function SellerSheetBody({
 
 	async function stayOnContract() {
 		try {
-			await cancelMoveToPro({ retailerId: seller._id });
+			const res = await cancelMoveToPro({ retailerId: seller._id });
 			toast.success("Staying on Enterprise", {
-				description: "The move to Pro is called off; the contract carries on.",
+				description: res.voidedInvoiceNumber
+					? `${res.voidedInvoiceNumber} is voided — the next renewal bills the contract.`
+					: "The move to Pro is called off; the contract carries on.",
 			});
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -503,10 +531,19 @@ function SellerSheetBody({
 							{movingToPro ? (
 								<Row label="Ending">
 									<Plain>
-										Moves to Pro{" "}
-										{seller.currentPeriodEnd
-											? `on ${formatShortDate(seller.currentPeriodEnd)}`
-											: "at renewal"}
+										{moveBill ? (
+											<>
+												Moving to Pro — billed as {moveBill.invoiceNumber}
+												<Muted> · the contract ends when it's paid</Muted>
+											</>
+										) : (
+											<>
+												Moves to Pro{" "}
+												{seller.currentPeriodEnd
+													? `on ${formatShortDate(seller.currentPeriodEnd)}`
+													: "at renewal"}
+											</>
+										)}
 									</Plain>
 								</Row>
 							) : null}
@@ -540,6 +577,7 @@ function SellerSheetBody({
 								<Button
 									variant="outline"
 									onClick={() => setConfirmMove(true)}
+									disabled={moveRefusal !== null}
 									className="tap-target w-full rounded-xl sm:w-fit"
 								>
 									Move to Pro at renewal
@@ -552,12 +590,17 @@ function SellerSheetBody({
 							{contractRefusal}
 						</p>
 					) : null}
+					{contract && moveRefusal ? (
+						<p className="pt-1.5 text-xs text-muted-foreground">
+							{moveRefusal}
+						</p>
+					) : null}
 				</Section>
 				<ConfirmDialog
 					open={confirmMove}
 					onOpenChange={setConfirmMove}
 					title={`Move ${seller.storeName} to Pro?`}
-					description={`The contract carries on until ${seller.currentPeriodEnd ? formatShortDate(seller.currentPeriodEnd) : "the end of the paid period"}. That renewal bills Pro instead, the contract ends when it's paid, and from the next month the store has Pro's credits and seats (teammates past Pro's limit are removed, each emailed).`}
+					description={`The contract carries on until ${seller.currentPeriodEnd ? formatShortDate(seller.currentPeriodEnd) : "the end of the paid period"}. That renewal bills Pro instead — a ${moveCycle === "annual" ? "year" : "month"} of it${moveProPrice ? ` (${moveProPrice})` : ""}, on the contract's own term — the contract ends when it's paid, and from the next month the store has Pro's credits and seats (teammates past Pro's limit are removed, each emailed).`}
 					confirmLabel="Move to Pro at renewal"
 					onConfirm={moveToPro}
 				/>

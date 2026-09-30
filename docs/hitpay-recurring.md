@@ -355,7 +355,9 @@ never resurrect a period that had already run out.
 annual offer's void-and-reissue runbook, and a field that could express one would
 eventually be set by a picker that defaults to monthly. The renewal cron reads
 it, bills that plan, and **clears it** (leaving it set would re-apply the
-downgrade to every future renewal). The pre-charge "renewing soon" email reads it
+downgrade to every future renewal) — and if an admin **voids** that renewal, the
+change goes back on the row (`voidInvoice`), so a void can never turn a seller's
+move down into a renewal at the old tier. The pre-charge "renewing soon" email reads it
 too, so the heads-up quotes the plan and price actually about to be charged
 rather than the tier the seller is on their way out of.
 

@@ -1253,8 +1253,20 @@ export const adminSetGrantOverride = mutation({
 				throw new ConvexError(
 					"This store is on an Enterprise contract — its included credits are the contract's. Change them there, or move the store to Pro.",
 				);
+			// The contract's own rule, not just the ledger's: a contract never
+			// includes zero credits, and the contract form would refuse to save
+			// the number this lever just wrote.
+			if (grant < 1)
+				throw new ConvexError(
+					`An Enterprise contract includes at least 1 credit a month — ${ADMIN_CREDIT_LIMIT.toLocaleString("en")} at most.`,
+				);
 			await ctx.db.patch(sub._id, {
-				enterprise: { ...sub.enterprise, includedCredits: grant },
+				enterprise: {
+					...sub.enterprise,
+					includedCredits: grant,
+					setBy: adminSubject,
+					setAt: Date.now(),
+				},
 			});
 		}
 		const result = await writeGrantOverride(

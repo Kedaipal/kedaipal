@@ -2782,6 +2782,20 @@ export default defineSchema({
 				notes: v.optional(v.string()),
 				setBy: v.string(),
 				setAt: v.number(),
+				// The listed plan and cycle the store was on when the contract
+				// was attached — what bought the period still running then.
+				// `setContract` flips the plan before any payment, so without
+				// this the first Enterprise settle would value that period's
+				// unused days at the CONTRACT's price and carry them 1:1 (a
+				// month of Pro turning into a month of Enterprise). Read by
+				// `settleInvoicePaid`'s carryover; cleared by the first plan
+				// bill that settles.
+				enteredFrom: v.optional(
+					v.object({
+						plan: v.union(v.literal("starter"), v.literal("pro")),
+						billingCycle: v.union(v.literal("monthly"), v.literal("annual")),
+					}),
+				),
 			}),
 		),
 		// Which `currentPeriodEnd` the pre-charge "renewing soon" notice was sent

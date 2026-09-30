@@ -1502,6 +1502,65 @@ describe("invoices.changePlan — mid-cycle tier moves", () => {
 		expect(after?.orderCap).toBe(100);
 	});
 
+	test("C3 — voiding the renewal that carried a downgrade keeps the downgrade scheduled", async () => {
+		// The renewal consumed the seller's scheduled move to Starter when it
+		// was issued. An admin voiding that bill (a wrong due date, a retry)
+		// must not quietly turn their choice into a Pro renewal — auto-charged
+		// if they have a saved method. Calling it off is the seller's own act.
+		const t = setup();
+		const { asUser, retailerId } = await seedActive(t, "u_rearm", "rearm-store", {
+			plan: "pro",
+			daysLeft: 1,
+		});
+		await asUser.mutation(api.invoices.changePlan, { plan: "starter" });
+		const subscriptionId = (await getSubFor(t, retailerId))?._id;
+		if (!subscriptionId) throw new Error("no subscription");
+		await t.run((ctx) =>
+			ctx.db.patch(subscriptionId, { currentPeriodEnd: Date.now() - 1000 }),
+		);
+		await t.mutation(internal.invoices.internalIssueRenewalInvoice, {
+			subscriptionId,
+		});
+		const [renewal] = await pendingFor(t, retailerId);
+		expect(renewal?.plan).toBe("starter");
+		expect((await getSubFor(t, retailerId))?.pendingPlanChange).toBeUndefined();
+		if (!renewal) throw new Error("no renewal invoice");
+
+		await asAdmin(t).mutation(api.invoices.voidInvoice, {
+			invoiceId: renewal._id,
+		});
+		expect((await getSubFor(t, retailerId))?.pendingPlanChange?.plan).toBe(
+			"starter",
+		);
+		await t.mutation(internal.invoices.internalIssueRenewalInvoice, {
+			subscriptionId,
+		});
+		const [again] = await pendingFor(t, retailerId);
+		expect(again).toMatchObject({ plan: "starter", total: 7900 });
+	});
+
+	test("C4 — voiding an ordinary renewal schedules nothing", async () => {
+		const t = setup();
+		const { retailerId } = await seedActive(t, "u_plainvoid", "plain-void-store", {
+			plan: "pro",
+			daysLeft: 1,
+		});
+		const subscriptionId = (await getSubFor(t, retailerId))?._id;
+		if (!subscriptionId) throw new Error("no subscription");
+		await t.run((ctx) =>
+			ctx.db.patch(subscriptionId, { currentPeriodEnd: Date.now() - 1000 }),
+		);
+		await t.mutation(internal.invoices.internalIssueRenewalInvoice, {
+			subscriptionId,
+		});
+		const [renewal] = await pendingFor(t, retailerId);
+		if (!renewal) throw new Error("no renewal invoice");
+		await asAdmin(t).mutation(api.invoices.voidInvoice, {
+			invoiceId: renewal._id,
+		});
+		expect((await getSubFor(t, retailerId))?.pendingPlanChange).toBeUndefined();
+	});
+
 	test("C2 — moving back up supersedes a scheduled downgrade", async () => {
 		const t = setup();
 		const { asUser, retailerId } = await seedActive(t, "u_undo", "undo-store", {

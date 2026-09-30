@@ -188,8 +188,9 @@ describe("landing v2 — cut sections stay cut", () => {
 		/^(nav_|hero_|demo_video_|proof_|handshake_|delivery_|pay_|pricing_|faq_|final_|footer_|guarantee_|region_)/;
 
 	it("never quotes the retired calendar trial or RM299 on a key the landing renders", () => {
-		// Start-when-you-sell replaced the calendar trial and Scale is RM399
-		// (pricing reset, 30 Aug 2026). The retired PHRASING is what's banned —
+		// Start-when-you-sell replaced the calendar trial, and RM299 was Scale's
+		// pre-reset price (30 Aug 2026; Scale itself retired for Enterprise,
+		// Credits T6). The retired PHRASING is what's banned —
 		// "14-day free trial", "14 days free" — not the number of days: since
 		// Zaki's 30 Sep 2026 model the landing says "14 days or 200 orders",
 		// counted from the first order (next test).

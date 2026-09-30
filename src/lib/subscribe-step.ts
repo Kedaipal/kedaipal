@@ -44,7 +44,7 @@ export function subscribeStepCopy(
 	}
 	return {
 		title: "Start your plan",
-		why: "Pick the plan that fits — Starter, Pro, or Scale — to keep your store live and accepting orders.",
+		why: "Pick the plan that fits — Starter or Pro — to keep your store live and accepting orders.",
 		cta: "View billing",
 	};
 }

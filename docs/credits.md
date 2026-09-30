@@ -61,11 +61,13 @@ contract's **`includedCredits`** every month, and those credits live in exactly
 one field: `creditAccounts.grantOverride`. `enterprise.setContract` writes the
 override in the same mutation that saves the contract, and
 `credits.adminSetGrantOverride` on a contract store edits the contract's
-number too — changing one changes the other, and clearing the override is
+number too (under the contract's own rule — at least 1 — and stamping who
+changed it) — changing one changes the other, and clearing the override is
 refused while the store is on a contract. Raising it lands the difference this
 month, exactly like an upgrade. When a scheduled move to Pro settles, the
 contract and the override are cleared together: this month's credits stay,
-next month is Pro's 200. Should the override ever be missing on an Enterprise
+next month is Pro's 200 (and that Pro bill's emails already quote 200, not the
+1,500 still on the account). Should the override ever be missing on an Enterprise
 row, `monthlyCreditGrant` falls back to Pro's grant rather than zero — a data
 fault must not lock a contract customer.
 

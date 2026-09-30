@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { ensureCreditAccount } from "./credits";
-import { UNLIMITED } from "./lib/plans";
+import { planChangeCarryoverDays, UNLIMITED } from "./lib/plans";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -285,6 +285,84 @@ describe("putting a store on a contract", () => {
 	});
 });
 
+describe("putting a store on a contract — the review round (1 Oct)", () => {
+	test("a new contract is frozen in the store's billing currency — the same answer the admin form labels the fee with", async () => {
+		const t = setup();
+		// An SG store that has only ever paid in ringgit.
+		const s = await activeStore(t, { country: "SG" });
+		await t.run((ctx) =>
+			ctx.db.insert("invoices", {
+				retailerId: s.retailerId,
+				subscriptionId: s.subId,
+				invoiceNumber: "INV-HIST-1",
+				plan: "pro",
+				billingCycle: "monthly",
+				amount: 14900,
+				total: 14900,
+				currency: "MYR",
+				periodStart: Date.now() - 20 * DAY,
+				periodEnd: Date.now() + 10 * DAY,
+				dueDate: Date.now() - 6 * DAY,
+				status: "paid",
+				markedPaidAt: Date.now() - 20 * DAY,
+				createdAt: Date.now() - 20 * DAY,
+			}),
+		);
+		const rows = await asAdmin(t).query(api.admin.listSellersForAdmin, {});
+		const row = rows.find((r) => r._id === s.retailerId);
+		expect(row?.billingCurrency).toBe("MYR");
+		await asAdmin(t).mutation(api.enterprise.setContract, {
+			retailerId: s.retailerId,
+			...HSL,
+		});
+		expect((await getSub(t, s.subId))?.enterprise?.currency).toBe(
+			row?.billingCurrency,
+		);
+	});
+
+	test("a store is on the house or on a contract, never both", async () => {
+		const t = setup();
+		const s = await activeStore(t);
+		await asAdmin(t).mutation(api.enterprise.setContract, {
+			retailerId: s.retailerId,
+			...HSL,
+		});
+		await expect(
+			asAdmin(t).mutation(api.subscriptions.setComp, {
+				retailerId: s.retailerId,
+				kind: "partner",
+			}),
+		).rejects.toThrow(/move it to Pro before comping it/);
+		expect((await getSub(t, s.subId))?.comped).not.toBe(true);
+	});
+
+	test("the grant lever holds a contract to the contract's own rule, and says who changed it", async () => {
+		const t = setup();
+		const s = await activeStore(t);
+		await asAdmin(t).mutation(api.enterprise.setContract, {
+			retailerId: s.retailerId,
+			...HSL,
+		});
+		await expect(
+			asAdmin(t).mutation(api.credits.adminSetGrantOverride, {
+				retailerId: s.retailerId,
+				grant: 0,
+			}),
+		).rejects.toThrow(/at least 1 credit a month/);
+		expect((await getSub(t, s.subId))?.enterprise?.includedCredits).toBe(1500);
+		vi.setSystemTime(OCT_10 + DAY);
+		await asAdmin(t).mutation(api.credits.adminSetGrantOverride, {
+			retailerId: s.retailerId,
+			grant: 2000,
+		});
+		expect((await getSub(t, s.subId))?.enterprise).toMatchObject({
+			includedCredits: 2000,
+			setBy: ADMIN,
+			setAt: OCT_10 + DAY,
+		});
+	});
+});
+
 describe("billing a contract", () => {
 	test("the renewal bills the contract fee in its currency — a prepaid year is the fee × 10", async () => {
 		const t = setup();
@@ -332,6 +410,149 @@ describe("billing a contract", () => {
 		expect(sub?.plan).toBe("enterprise");
 		expect(sub?.enterprise?.includedCredits).toBe(1500);
 		expect((await creditAccount(t, s.retailerId))?.grantOverride).toBe(1500);
+	});
+});
+
+describe("billing a contract — the review round (1 Oct)", () => {
+	/**
+	 * `setContract` flips the plan before any payment, so a store that came
+	 * onto a contract mid-period still has PRO days running. The first contract
+	 * bill must value them at Pro's price: carried 1:1 they became contract
+	 * days — 25 Pro days worth RM124 turned into 25 days worth RM740.
+	 */
+	test.each([
+		["monthly", 10],
+		["annual", 300],
+	] as const)(
+		"entering mid-period from Pro (%s) values its unused days at Pro's price, and the stamp goes with the first contract bill",
+		async (proCycle, daysLeft) => {
+			const t = setup();
+			const s = await activeStore(t, {
+				sub: {
+					billingCycle: proCycle,
+					currentPeriodEnd: Date.now() + daysLeft * DAY,
+				},
+			});
+			await asAdmin(t).mutation(api.enterprise.setContract, {
+				retailerId: s.retailerId,
+				...HSL,
+			});
+			expect((await getSub(t, s.subId))?.enterprise?.enteredFrom).toEqual({
+				plan: "pro",
+				billingCycle: proCycle,
+			});
+			const { invoiceId } = await asAdmin(t).mutation(
+				api.invoices.issueInvoice,
+				{
+					retailerId: s.retailerId,
+					plan: "enterprise",
+					billingCycle: "monthly",
+					founding: false,
+				},
+			);
+			const now = Date.now();
+			const expected = planChangeCarryoverDays({
+				fromPlan: "pro",
+				fromCycle: proCycle,
+				toPlan: "enterprise",
+				toCycle: "monthly",
+				founding: false,
+				currency: "MYR",
+				enterprise: { baseFeeMinor: HSL.baseFeeMinor, currency: "MYR" },
+				periodEnd: now + daysLeft * DAY,
+				now,
+			});
+			// 10 monthly Pro days (RM49.67) buy 2 contract days, not 10; 300
+			// yearly Pro days (RM1,224.66) buy 41, not 300.
+			expect(expected).toBe(proCycle === "monthly" ? 2 : 41);
+			await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId });
+			const sub = await getSub(t, s.subId);
+			expect(sub?.currentPeriodEnd).toBe(now + (30 + expected) * DAY);
+			expect(sub?.enterprise?.enteredFrom).toBeUndefined();
+			expect(sub?.enterprise?.includedCredits).toBe(1500);
+		},
+	);
+
+	test("a trialing store on a yearly contract gets a yearly first bill — the contract's, with the plain issued email", async () => {
+		const t = setup();
+		const s = await activeStore(t, { sub: { status: "trialing" } });
+		await asAdmin(t).mutation(api.enterprise.setContract, {
+			retailerId: s.retailerId,
+			...HSL,
+			billingCycle: "annual",
+		});
+		await t.run((ctx) =>
+			ctx.db.patch(s.subId, {
+				freePeriodEndedAt: Date.now(),
+				freePeriodEndReason: "first_order",
+			}),
+		);
+		const res = await t.mutation(internal.invoices.internalIssueFirstInvoice, {
+			subscriptionId: s.subId,
+		});
+		expect(res.issued).toBe(true);
+		const [bill] = await invoicesOf(t, s.retailerId);
+		expect(bill).toMatchObject({
+			plan: "enterprise",
+			billingCycle: "annual",
+			total: 888000,
+			currency: "MYR",
+		});
+		// Never the "your first invoice is for Pro — switch before you pay"
+		// variant: its terms were agreed with us.
+		const scheduled = await t.run((ctx) =>
+			ctx.db.system.query("_scheduled_functions").collect(),
+		);
+		const issued = scheduled.find((f) => f.name.includes("notifyInvoiceIssued"));
+		expect(issued?.args[0]).not.toHaveProperty("firstInvoice");
+	});
+
+	test("the free-period reminder never pitches plans to a contract store", async () => {
+		const t = setup();
+		const s = await activeStore(t, {
+			sub: { status: "trialing", trialEndsAt: Date.now() + 2 * DAY },
+		});
+		await asAdmin(t).mutation(api.enterprise.setContract, {
+			retailerId: s.retailerId,
+			...HSL,
+		});
+		const res = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(res.trialReminders).toBe(0);
+		expect((await getSub(t, s.subId))?.trialReminderSentAt).toBeUndefined();
+	});
+
+	test("the term can't change while a bill at the other term is open — paying it would put the term back; a fee change can", async () => {
+		const t = setup();
+		const s = await activeStore(t);
+		await asAdmin(t).mutation(api.enterprise.setContract, {
+			retailerId: s.retailerId,
+			...HSL,
+		});
+		const { invoiceId } = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId: s.retailerId,
+			plan: "enterprise",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		const bill = await t.run((ctx) => ctx.db.get(invoiceId));
+		await expect(
+			asAdmin(t).mutation(api.enterprise.setContract, {
+				retailerId: s.retailerId,
+				...HSL,
+				billingCycle: "annual",
+			}),
+		).rejects.toThrow(
+			`Settle or void ${bill?.invoiceNumber} first — it bills the contract's monthly term`,
+		);
+		await asAdmin(t).mutation(api.enterprise.setContract, {
+			retailerId: s.retailerId,
+			...HSL,
+			baseFeeMinor: 99900,
+		});
+		expect((await getSub(t, s.subId))?.enterprise?.baseFeeMinor).toBe(99900);
 	});
 });
 
@@ -385,6 +606,103 @@ describe("the one way off a contract: a move to Pro at renewal", () => {
 		await asAdmin(t).mutation(api.enterprise.cancelMoveToPro, {
 			retailerId: s.retailerId,
 		});
+		expect((await getSub(t, s.subId))?.pendingPlanChange).toBeUndefined();
+	});
+
+	/** The period ends and the renewal cron bills the move. */
+	async function billTheMove(t: T, s: { retailerId: Id<"retailers">; subId: Id<"subscriptions"> }) {
+		await asAdmin(t).mutation(api.enterprise.scheduleMoveToPro, {
+			retailerId: s.retailerId,
+		});
+		await t.run((ctx) =>
+			ctx.db.patch(s.subId, { currentPeriodEnd: Date.now() - DAY }),
+		);
+		await t.mutation(internal.invoices.internalIssueRenewalInvoice, {
+			subscriptionId: s.subId,
+		});
+		const bill = (await invoicesOf(t, s.retailerId)).find(
+			(i) => i.status === "pending",
+		);
+		if (!bill) throw new Error("no move bill");
+		return bill;
+	}
+
+	test("the move's Pro bill promises Pro's credits — never the contract's", async () => {
+		const t = setup();
+		const s = await activeStore(t);
+		await asAdmin(t).mutation(api.enterprise.setContract, {
+			retailerId: s.retailerId,
+			...HSL,
+		});
+		const bill = await billTheMove(t, s);
+		// The override still holds the contract's 1,500 until this settles.
+		expect((await creditAccount(t, s.retailerId))?.grantOverride).toBe(1500);
+		const meta = await t.query(internal.billingEmail.getInvoiceForEmail, {
+			invoiceId: bill._id,
+		});
+		expect(meta?.includedCredits).toBe(200);
+	});
+
+	test("voiding the move's bill keeps the move scheduled — calling it off is its own act, and voids the bill", async () => {
+		const t = setup();
+		const s = await activeStore(t);
+		await asAdmin(t).mutation(api.enterprise.setContract, {
+			retailerId: s.retailerId,
+			...HSL,
+		});
+		const first = await billTheMove(t, s);
+		expect((await getSub(t, s.subId))?.pendingPlanChange).toBeUndefined();
+		await asAdmin(t).mutation(api.invoices.voidInvoice, { invoiceId: first._id });
+		// Re-armed: the next renewal bills Pro again, never the contract.
+		expect((await getSub(t, s.subId))?.pendingPlanChange?.plan).toBe("pro");
+		await t.mutation(internal.invoices.internalIssueRenewalInvoice, {
+			subscriptionId: s.subId,
+		});
+		const second = (await invoicesOf(t, s.retailerId)).find(
+			(i) => i.status === "pending",
+		);
+		expect(second).toMatchObject({ plan: "pro", total: 14900 });
+		if (!second) throw new Error("no second move bill");
+
+		const res = await asAdmin(t).mutation(api.enterprise.cancelMoveToPro, {
+			retailerId: s.retailerId,
+		});
+		expect(res.voidedInvoiceNumber).toBe(second.invoiceNumber);
+		expect((await t.run((ctx) => ctx.db.get(second._id)))?.status).toBe("void");
+		expect((await getSub(t, s.subId))?.pendingPlanChange).toBeUndefined();
+		// The next renewal bills the contract.
+		await t.mutation(internal.invoices.internalIssueRenewalInvoice, {
+			subscriptionId: s.subId,
+		});
+		expect(
+			(await invoicesOf(t, s.retailerId)).find((i) => i.status === "pending"),
+		).toMatchObject({ plan: "enterprise", total: 88800 });
+	});
+
+	test("a move can't be scheduled over an open bill, and there's nothing to call off without one", async () => {
+		const t = setup();
+		const s = await activeStore(t);
+		await asAdmin(t).mutation(api.enterprise.setContract, {
+			retailerId: s.retailerId,
+			...HSL,
+		});
+		await expect(
+			asAdmin(t).mutation(api.enterprise.cancelMoveToPro, {
+				retailerId: s.retailerId,
+			}),
+		).rejects.toThrow(/no move to Pro to call off/);
+		const { invoiceId } = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId: s.retailerId,
+			plan: "enterprise",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		const bill = await t.run((ctx) => ctx.db.get(invoiceId));
+		await expect(
+			asAdmin(t).mutation(api.enterprise.scheduleMoveToPro, {
+				retailerId: s.retailerId,
+			}),
+		).rejects.toThrow(`Settle or void ${bill?.invoiceNumber} first`);
 		expect((await getSub(t, s.subId))?.pendingPlanChange).toBeUndefined();
 	});
 

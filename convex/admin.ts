@@ -41,7 +41,11 @@ import {
 	ADMIN_AUDIT_LOG_RETENTION_MS,
 	LOG_PURGE_PAGE_SIZE,
 } from "./lib/retention";
-import { isUnlimited } from "./lib/plans";
+import {
+	type BillingCurrency,
+	isUnlimited,
+	renewalCurrency,
+} from "./lib/plans";
 import { loadCreditAccount } from "./credits";
 import { loadSubscription, resolveAccess } from "./subscriptions";
 
@@ -68,6 +72,10 @@ export type AdminSellerRow = {
 	 * Pending invites shown separately so "2/3 +1 invited" reads at a glance. */
 	seats: { active: number; cap: number; capUnlimited: boolean; invited: number };
 	isFoundingMember: boolean;
+	/** Onboarded with a founding promise (`subscriptions.foundingIntent`) — a
+	 * founding store in waiting, refused an Enterprise contract like a member
+	 * (T6), so the contract form says so before the tap. */
+	foundingIntent: boolean;
 	foundingMemberRank?: number;
 	subscriptionStatus?: Doc<"subscriptions">["status"];
 	plan?: Doc<"subscriptions">["plan"];
@@ -149,14 +157,23 @@ export type AdminSellerRow = {
 		failedAttempts?: number;
 		nextRetryAt?: number;
 	};
-	/** The open bill, if any — the thing to chase on a past-due row. */
+	/** The open bill, if any — the thing to chase on a past-due row. Its
+	 * tier and term say, before the tap, why a contract can't be saved or a
+	 * move to Pro scheduled while it's open (T6). */
 	pendingInvoice?: {
 		invoiceNumber: string;
 		dueDate: number;
 		total: number;
 		currency: string;
 		hasPayNowLink: boolean;
+		plan: Doc<"subscriptions">["plan"];
+		billingCycle: Doc<"subscriptions">["billingCycle"];
+		kind: "plan" | "hold";
 	};
+	/** The currency this store's next bill is in — its last paid invoice's,
+	 * else its country's (`renewalCurrency`). A new Enterprise contract is
+	 * frozen in exactly this, so the form labels the fee with it (T6). */
+	billingCurrency: BillingCurrency;
 	/** The most recently settled bill — "when did they last pay, how much". */
 	lastPaidInvoice?: {
 		invoiceNumber: string;
@@ -192,8 +209,13 @@ export type AdminSellerRow = {
 async function loadInvoiceFacts(
 	ctx: QueryCtx,
 	retailerId: Id<"retailers">,
+	fallback: { plan: Doc<"subscriptions">["plan"]; billingCycle: Doc<"subscriptions">["billingCycle"] },
 ): Promise<
-	Pick<AdminSellerRow, "pendingInvoice" | "lastPaidInvoice">
+	Pick<AdminSellerRow, "pendingInvoice" | "lastPaidInvoice"> & {
+		/** The last paid bill's currency, stamp or no stamp — what
+		 * `renewalCurrency` (and so `setContract`) reads. */
+		lastPaidCurrency: string | undefined;
+	}
 > {
 	const pending = await ctx.db
 		.query("invoices")
@@ -216,6 +238,9 @@ async function loadInvoiceFacts(
 						total: pending.total,
 						currency: pending.currency,
 						hasPayNowLink: pending.gatewayPayment !== undefined,
+						plan: pending.plan ?? fallback.plan,
+						billingCycle: pending.billingCycle ?? fallback.billingCycle,
+						kind: pending.kind ?? "plan",
 					},
 				}
 			: {}),
@@ -229,6 +254,7 @@ async function loadInvoiceFacts(
 					},
 				}
 			: {}),
+		lastPaidCurrency: paid?.currency,
 	};
 }
 
@@ -270,7 +296,11 @@ export const listSellersForAdmin = query({
 			const referrer = r.signupReferrerId
 				? await ctx.db.get(r.signupReferrerId)
 				: null;
-			const invoiceFacts = await loadInvoiceFacts(ctx, r._id);
+			const { lastPaidCurrency, ...invoiceFacts } = await loadInvoiceFacts(
+				ctx,
+				r._id,
+				{ plan: sub?.plan ?? "pro", billingCycle: sub?.billingCycle ?? "monthly" },
+			);
 			const lastActAsAt = await loadLastActAs(ctx, r._id);
 			// One index read per store (`by_retailer`), the cached balances only.
 			const creditAccount = await loadCreditAccount(ctx, r._id);
@@ -305,6 +335,7 @@ export const listSellersForAdmin = query({
 					invited: invitedMembers.length,
 				},
 				isFoundingMember: r.isFoundingMember === true,
+				foundingIntent: sub?.foundingIntent === true,
 				foundingMemberRank: r.foundingMemberRank,
 				subscriptionStatus: sub?.status,
 				plan: sub?.plan,
@@ -365,6 +396,10 @@ export const listSellersForAdmin = query({
 						}
 					: undefined,
 				...invoiceFacts,
+				billingCurrency: renewalCurrency({
+					lastPaidCurrency,
+					country: r.country,
+				}),
 				lastActAsAt,
 				...(creditAccount
 					? {

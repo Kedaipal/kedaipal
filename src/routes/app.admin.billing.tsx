@@ -1163,6 +1163,13 @@ function PendingInvoices() {
 													: "Renewal"}
 										</span>
 									) : null}
+									{/* Paying this takes the store off its contract (T6) —
+									    worth seeing before marking it paid or voiding it. */}
+									{inv.endsContract ? (
+										<span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+											Ends Enterprise contract
+										</span>
+									) : null}
 								</div>
 								<div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
 									<span className="font-mono">{inv.invoiceNumber}</span>
@@ -1275,6 +1282,20 @@ function PendingInvoices() {
 							their history as “Cancelled” and frees them up for a corrected
 							invoice. Use this for an invoice issued by mistake — not one
 							that's been paid.
+							{voiding?.carriesScheduledChange ? (
+								<>
+									{" "}
+									<strong className="font-medium text-foreground">
+										This renewal carries a scheduled move to{" "}
+										{voiding.plan === "pro" ? "Pro" : "Starter"}
+									</strong>
+									: voiding it keeps the move scheduled, and the next daily run
+									bills it again.{" "}
+									{voiding.endsContract
+										? "To keep the store on its contract, use “Call off the move to Pro” in Sellers → the store."
+										: "The seller can call the move off from their billing page."}
+								</>
+							) : null}
 						</DialogDescription>
 					</DialogHeader>
 					<label className="flex flex-col gap-1 text-sm font-medium">

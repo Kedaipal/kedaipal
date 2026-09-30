@@ -123,6 +123,12 @@ export const getInvoiceForEmail = internalQuery({
 		// paying it re-stamps the lock at today's grant.
 		const account =
 			kind === "plan" ? await loadCreditAccount(ctx, invoice.retailerId) : null;
+		// A contract store's override IS its contract's included credits
+		// (T6), and it ends with the contract: the bill that moves the store
+		// OFF the contract (a Pro renewal after a scheduled move) buys Pro's
+		// allowance, so it must not promise the contract's 1,500.
+		const leavesContract =
+			sub?.enterprise !== undefined && plan !== "enterprise";
 		const includedCredits =
 			kind === "plan"
 				? monthlyCreditGrant({
@@ -131,7 +137,7 @@ export const getInvoiceForEmail = internalQuery({
 						comped: false,
 						ownerIsAdmin: false,
 						foundingEligible: (invoice.foundingDiscount ?? 0) > 0,
-						override: account?.grantOverride,
+						override: leavesContract ? undefined : account?.grantOverride,
 						annualGrant: undefined,
 						now: Date.now(),
 					})

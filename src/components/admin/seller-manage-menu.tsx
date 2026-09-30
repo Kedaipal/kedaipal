@@ -103,6 +103,7 @@ export function SellerManageMenu({
 	if (purging) {
 		return <DeletingPill className={cn("h-11", className)} />;
 	}
+	const onContract = seller.enterprise !== undefined;
 
 	return (
 		<>
@@ -157,7 +158,9 @@ export function SellerManageMenu({
 					    show a hover title, so the reason is the subtitle. */}
 					<DropdownMenuItem
 						onSelect={() => setCompOpen(true)}
-						disabled={seller.ownerIsAdmin}
+						// A contract store is never comped too (T6) — the server
+						// refuses it; the reason sits in the subtitle.
+						disabled={seller.ownerIsAdmin || onContract}
 						className="items-start"
 					>
 						<Gift
@@ -176,9 +179,11 @@ export function SellerManageMenu({
 							<span className="text-xs text-muted-foreground">
 								{seller.ownerIsAdmin
 									? "Admin store — always free already"
-									: seller.comped
-										? "Edit the sponsorship or turn it off"
-										: "Every feature, no limits, never billed"}
+									: onContract
+										? "On an Enterprise contract — move it to Pro first"
+										: seller.comped
+											? "Edit the sponsorship or turn it off"
+											: "Every feature, no limits, never billed"}
 							</span>
 						</span>
 					</DropdownMenuItem>

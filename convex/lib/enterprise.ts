@@ -5,7 +5,15 @@
 // imports, so the admin form's disabled-with-reason line and the server's
 // refusal are one author.
 
-import type { BillingCycle } from "./plans";
+import type { BillingCycle, Plan } from "./plans";
+
+/** The listed plan and cycle a store was on when its contract was attached —
+ * what bought the period still running then (`subscriptions.enterprise.
+ * enteredFrom`). */
+export type EnterpriseEntry = {
+	plan: "starter" | "pro";
+	billingCycle: BillingCycle;
+};
 
 /** The block an overage is sold in unless the deal says otherwise (HSL:
  * 5,000 credits at RM0.60). */
@@ -84,3 +92,41 @@ export function enterpriseBlockPrice(contract: {
  * the billing page offers "Message us" instead of a picker. */
 export const ENTERPRISE_SELF_SERVE_REFUSAL =
 	"Your store is on an Enterprise contract, so plan changes go through Kedaipal — message us and we'll sort it.";
+
+/**
+ * Why a contract can't be saved while a bill is open, or `null` — said beside
+ * the admin form's button and thrown by `enterprise.setContract` (one author).
+ * A bill at another tier still bills that tier; a contract bill at the OTHER
+ * term would, once paid, write its term back onto the row (settle takes the
+ * cycle from the bill), silently undoing the change.
+ */
+export function enterpriseTermChangeBlocker(args: {
+	pending:
+		| { invoiceNumber: string; plan: Plan; billingCycle: BillingCycle }
+		| undefined;
+	billingCycle: BillingCycle;
+}): string | null {
+	const bill = args.pending;
+	if (!bill) return null;
+	if (bill.plan !== "enterprise")
+		return `Settle or void ${bill.invoiceNumber} first — it bills ${bill.plan === "pro" ? "Pro" : "Starter"}, not the contract.`;
+	if (bill.billingCycle !== args.billingCycle)
+		return `Settle or void ${bill.invoiceNumber} first — it bills the contract's ${bill.billingCycle === "annual" ? "yearly" : "monthly"} term, and paying it would put that term back.`;
+	return null;
+}
+
+/** An open bill that takes a contract store OFF its contract — the Pro bill
+ * a scheduled move issues at renewal, or one an admin issued by hand. Paying
+ * it ends the contract (`settleInvoicePaid`), so calling the move off voids
+ * it. */
+export function isMoveOffContractBill(
+	invoice: { kind?: "plan" | "hold"; plan?: Plan },
+	sub: { plan: Plan },
+): boolean {
+	return (
+		sub.plan === "enterprise" &&
+		(invoice.kind ?? "plan") === "plan" &&
+		invoice.plan !== undefined &&
+		invoice.plan !== "enterprise"
+	);
+}

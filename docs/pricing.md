@@ -431,7 +431,8 @@ collected by hand, month 2 — 6 Nov — issued by the system).
 | `overageRateMinor` | Per credit, minor units; zero is allowed (a deal can include its blocks) |
 | `blockSize` | Credits per overage block (default `ENTERPRISE_BLOCK_SIZE_DEFAULT`, 5,000) |
 | `contactName`, `notes` | Admin-internal — never on a seller payload |
-| `setBy`, `setAt` | Who last saved it, and when |
+| `setBy`, `setAt` | Who last saved it (the form or the grant lever), and when |
+| `enteredFrom` | The listed plan and cycle the store was on when the contract was attached — what bought the period still running. Cleared by the first plan bill that settles |
 
 The term is the subscription's own `billingCycle`. Every rule a contract must
 meet is one pure function, `enterpriseContractProblem` (`convex/lib/enterprise.ts`),
@@ -444,20 +445,34 @@ throws — one author for both.
 one mutation:
 
 - flips `plan` to `enterprise` and sets the term;
-- on entering, writes Enterprise's caps (unlimited seats) and **supersedes any
-  scheduled downgrade** — a renewal must bill the contract, not a stale Starter;
+- on entering, writes Enterprise's caps (unlimited seats), **supersedes any
+  scheduled downgrade** — a renewal must bill the contract, not a stale Starter
+  — and stamps **`enteredFrom`**: the plan flips here, before any payment, so a
+  store that comes on mid-period still has Pro days running, and its first
+  contract bill must value them at Pro's price. Carried 1:1 they became
+  contract days (25 Pro days worth RM124 turning into 25 days worth RM740; 300
+  days of a yearly Pro becoming 300 days of the contract for one RM888);
+  `settleInvoicePaid` reads the stamp for its carryover, so 10 Pro days buy 2
+  contract days;
 - writes `includedCredits` through to **`creditAccounts.grantOverride`** — the
   contract's credits and the grant lever are one field. Raising the number
   lands the difference this month; `credits.adminSetGrantOverride` on an
   Enterprise store edits the contract too, and **clearing** the override is
   refused while the store is on a contract.
 
-It is refused for a **comped** store (end the comp first), a **founding** store
-(Founding Members stay on Founding Pro — `foundingIntent` included), a store
-**on hold**, and a store with a pending invoice at another tier (settle or void
-it first, so what the store owes always matches its contract). The form says
-each of these before the tap. It is a page of the seller sheet — the same
-drill-in as the credit ledger, one drawer with a back link.
+It is refused for a **comped** store (end the comp first — and comping a
+contract store is refused the other way round, so a store is never both), a
+**founding** store (Founding Members stay on Founding Pro — `foundingIntent`
+included), a store **on hold**, a store with a pending invoice at **another
+tier**, and a **term change** while a contract bill at the other term is open
+(settle takes the cycle from the bill, so paying it would silently put the old
+term back). One author, `enterpriseTermChangeBlocker`, for the last two. The
+form says every one of these before the tap — the admin row carries the open
+bill's tier and term, the founding intent, and **`billingCurrency`**, the exact
+currency (`renewalCurrency`: last paid bill's, else the country's) the server
+freezes a new contract in, so the fee's label can never disagree with what is
+stored. It is a page of the seller sheet — the same drill-in as the credit
+ledger, one drawer with a back link.
 
 ### Billing it
 
@@ -467,11 +482,17 @@ Enterprise through `enterprisePrice` (the fee, × 10 for a prepaid year).
 **Founding never applies.** Renewal issuance, `renewalQuote` (the pre-charge
 notice and the billing tab's next-renewal line) and admin `issueInvoice` all
 read it; an Enterprise row with no contract throws rather than bill something
-invented. The invoice PDF's line reads **"Kedaipal Enterprise Contract - Monthly
-Fee"** (or Annual; `subscriptionLineLabel`) and the email calls it
-**"Enterprise contract · Monthly"** (`invoicePlanLabel`) — the contract, never
-a plan price. Auto-renewal
-and Pay-now work exactly as for Pro: HitPay charges the invoice total.
+invented. `insertPendingInvoice` takes an Enterprise bill's fee, currency **and
+term** from the contract whatever its caller passed — the first-invoice path only
+ever knew "monthly", so a trialing store on a yearly contract would have been
+billed a month and then had its term rewritten at settle. That first bill gets
+the plain "invoice issued" email, never the "your first invoice is for Pro —
+switch before you pay" variant, and the free-period reminder skips a contract
+store for the same reason. The invoice PDF's line reads **"Kedaipal Enterprise
+Contract - Monthly Fee"** (or Annual; `subscriptionLineLabel`) and the email
+calls it **"Enterprise contract · Monthly"** (`invoicePlanLabel`) — the
+contract, never a plan price. Auto-renewal and Pay-now work exactly as for Pro:
+HitPay charges the invoice total.
 
 ### Overage blocks
 
@@ -503,12 +524,25 @@ email's plan line is too.
 
 Clearing a contract outright is never offered — an Enterprise store must always
 have one. An admin **schedules a move to Pro** (`enterprise.scheduleMoveToPro`,
-or `cancelMoveToPro` to call it off; both audited). The renewal then bills Pro,
-and when that bill **settles**, `settleInvoicePaid` clears the contract and its
-grant override **in the same mutation** — this month's credits stay; the next
-month is Pro's allowance, and seats fall back to Pro's (the existing
-drop-on-downgrade rules apply). The seller's contract card states the move and
-its date.
+audited), refused while any bill is open — paid, it would carry the store past
+the date the move promises. The renewal then bills Pro **on the contract's own
+term** (a yearly contract moves to a year of Pro; the confirm dialog says which,
+with the price), and that bill's emails quote Pro's 200 credits, not the
+contract's 1,500 still on the account. When it **settles**, `settleInvoicePaid`
+clears the contract and its grant override **in the same mutation** — this
+month's credits stay; the next month is Pro's allowance, and seats fall back to
+Pro's (the existing drop-on-downgrade rules apply). The seller's contract card
+states the move and its date; the admin sheet says "billed as INV-…" once the
+renewal has issued it.
+
+**Calling it off** (`enterprise.cancelMoveToPro`, audited) works before and
+after the renewal: before, it clears the flag; after, the move IS the open Pro
+bill, so it voids that bill too and the next daily run bills the contract. A
+**plain void** of the move's bill does NOT call the move off — it re-arms it
+(`voidInvoice` never deletes a scheduled change; see
+[`manual-subscription.md`](./manual-subscription.md)) — so an unrelated void can
+never quietly keep a customer on a contract they're leaving, or auto-charge them
+RM888 for it. With nothing to call off, it says so instead of a false success.
 
 ### What the seller sees
 

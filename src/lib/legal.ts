@@ -12,7 +12,7 @@
 
 export const TERMS_VERSION = "2026-09-30";
 export const PRIVACY_VERSION = "2026-08-17";
-export const AUP_VERSION = "2026-05-26";
+export const AUP_VERSION = "2026-10-01";
 
 /** Contact address shown in Terms, Privacy, and the AUP. */
 export const LEGAL_CONTACT_EMAIL = "hello@kedaipal.com";

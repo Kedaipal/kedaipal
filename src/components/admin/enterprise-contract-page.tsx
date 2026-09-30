@@ -15,9 +15,9 @@ import {
 	ENTERPRISE_BLOCK_SIZE_DEFAULT,
 	enterpriseBlockPrice,
 	enterpriseContractProblem,
+	enterpriseTermChangeBlocker,
 } from "../../../convex/lib/enterprise";
 import {
-	BILLING_CURRENCY_FOR_COUNTRY,
 	type BillingCurrency,
 	type BillingCycle,
 	enterprisePrice,
@@ -61,10 +61,12 @@ export function EnterpriseContractPage({
 }) {
 	const setContract = useMutation(api.enterprise.setContract);
 	const existing = seller.enterprise;
-	// A new contract takes the store's billing currency; an existing one keeps
-	// the currency it was agreed in (the server freezes it too).
+	// A new contract is frozen in the store's BILLING currency — its last paid
+	// bill's, else its country's — read from the same answer `setContract`
+	// uses, so the label and the stored fee can never disagree. An existing
+	// contract keeps the currency it was agreed in.
 	const currency: BillingCurrency =
-		existing?.currency ?? BILLING_CURRENCY_FOR_COUNTRY[seller.country];
+		existing?.currency ?? seller.billingCurrency;
 
 	const [fee, setFee] = useState(
 		existing ? majorOf(existing.baseFeeMinor) : "",
@@ -106,14 +108,24 @@ export function EnterpriseContractPage({
 	const problem = blankFields
 		? "Fill in the fee, the included credits and the overage rate."
 		: enterpriseContractProblem(input, MAX_INCLUDED);
-	const founding = seller.isFoundingMember;
+	const founding = seller.isFoundingMember || seller.foundingIntent;
+	// Every refusal `setContract` would throw, said here first.
 	const refusal = seller.comped
 		? "This store is comped — end the comp before putting it on a contract."
 		: founding
 			? "Founding Members stay on Founding Pro — a founding store can't be put on an Enterprise contract."
 			: seller.subscriptionStatus === "on_hold"
 				? "This store is on Off-Season Hold — resume it before putting it on a contract."
-				: null;
+				: enterpriseTermChangeBlocker({
+						pending: seller.pendingInvoice
+							? {
+									invoiceNumber: seller.pendingInvoice.invoiceNumber,
+									plan: seller.pendingInvoice.plan,
+									billingCycle: seller.pendingInvoice.billingCycle,
+								}
+							: undefined,
+						billingCycle: cycle,
+					});
 	const blocked = refusal ?? problem;
 
 	async function save() {
