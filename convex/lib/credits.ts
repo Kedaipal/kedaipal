@@ -181,9 +181,11 @@ export function creditsExhausted(total: number): boolean {
 	return total <= 0;
 }
 
-/** Why a store can't buy a top-up pack right now, or `null` when it can
- * (register item 7c + T2). Credits top up a live subscription; they never
- * replace one. Comped stores and the missing-row fail-safe can buy. */
+/** Why a store's SUBSCRIPTION stops it buying a top-up pack, or `null` when
+ * it doesn't (register item 7c + T2). Credits top up a live subscription;
+ * they never replace one. Comped stores and the missing-row fail-safe pass
+ * this rule — T2's `topUpRefusal` refuses them on its own ground: they are
+ * never locked, so a pack would buy nothing. */
 export type TopUpBlock = "trialing" | "past_due" | "on_hold" | "cancelled";
 
 export function topUpBlock(
