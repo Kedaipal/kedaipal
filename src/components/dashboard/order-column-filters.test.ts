@@ -56,6 +56,7 @@ const ALL_FULFILMENTS = {
 		drop_off: 1,
 		collection: 1,
 		booking: 1,
+		event: 1,
 	},
 	paymentStatus: {},
 	paymentMethod: {},
@@ -100,6 +101,15 @@ describe("a header filter's options read exactly like the column it filters", ()
 			// snapshot field, not from `deliveryMethod`.
 			columnKey: "fulfilment",
 			apply: (key) => {
+				// An RSVP is STORED self_collect and known only by the marker — the
+				// case that would silently read "Self-collect" in the column while
+				// the filter offered "Event".
+				if (key === "event")
+					return {
+						...ORDER,
+						deliveryMethod: "self_collect",
+						eventRsvp: true,
+					};
 				if (key === "collection")
 					return {
 						...ORDER,

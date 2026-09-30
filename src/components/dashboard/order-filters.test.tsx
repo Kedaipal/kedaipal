@@ -706,6 +706,21 @@ describe("OrderFilters — Fulfilment", () => {
 		).toBeTruthy();
 		// Never offered: kinds this seller has no orders for.
 		expect(screen.queryByRole("button", { name: /^Booking,/ })).toBeNull();
+		expect(screen.queryByRole("button", { name: /^Event,/ })).toBeNull();
+	});
+
+	it("offers Event for a store running RSVPs (z8r3fdff9u)", () => {
+		// An RSVP is stored `self_collect`, so before the flow kind was read this
+		// store's events were indistinguishable from counter pickups — one row,
+		// one count, no way to ask for either alone.
+		renderFilters({ facets: facets({ self_collect: 4, event: 9 }) });
+		openFilters();
+		expect(
+			screen.getByRole("button", { name: "Event, 9 orders" }),
+		).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "Self-collect, 4 orders" }),
+		).toBeTruthy();
 	});
 
 	it("ticking a kind writes only that kind", () => {

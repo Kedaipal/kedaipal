@@ -331,10 +331,20 @@ describe("buildInboxPredicate — fulfilments (z8r3fdfau9)", () => {
 		deliveryDirection: "collection",
 	});
 	const booking = order({ deliveryMethod: "booking" });
+	// Stored self_collect — the marker is the only thing that says "event".
+	const rsvp = order({ deliveryMethod: "self_collect", eventRsvp: true });
 
 	test("no fulfilment filter matches every kind", () => {
 		const p = buildInboxPredicate({});
-		for (const o of [delivery, legacy, pickup, dropOff, weCollect, booking]) {
+		for (const o of [
+			delivery,
+			legacy,
+			pickup,
+			dropOff,
+			weCollect,
+			booking,
+			rsvp,
+		]) {
 			expect(p(o)).toBe(true);
 		}
 	});
@@ -356,6 +366,17 @@ describe("buildInboxPredicate — fulfilments (z8r3fdfau9)", () => {
 		expect(p(weCollect)).toBe(false);
 		expect(p(pickup)).toBe(false);
 		expect(p(booking)).toBe(false);
+	});
+
+	test("an RSVP filters as an event, never as the self-collect it is stored as", () => {
+		const events = buildInboxPredicate({ fulfilments: ["event"] });
+		expect(events(rsvp)).toBe(true);
+		expect(events(pickup)).toBe(false);
+		// And the converse, which is the half that actually bit: asking for
+		// self-collect must not drag every RSVP in with it.
+		const own = buildInboxPredicate({ fulfilments: ["self_collect"] });
+		expect(own(pickup)).toBe(true);
+		expect(own(rsvp)).toBe(false);
 	});
 
 	test("self-collect and drop-off are separate answers", () => {

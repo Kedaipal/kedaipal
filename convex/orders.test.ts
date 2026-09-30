@@ -9848,6 +9848,44 @@ describe("orders — export gaps (86eyrtz74)", () => {
 		expect(csv.split("\r\n")[0]).toBe("Order ID,Total");
 	});
 
+	test("the exported Fulfilment cell says event for an RSVP, not the self_collect it is stored as", async () => {
+		// Same projection, same class of bug as the drop-off case below: an RSVP
+		// is stored `self_collect` and identified only by `eventRsvp`, so
+		// dropping that marker from `orderToCsvSource` makes the CSV disagree
+		// with the table on every event.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 10 });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Aisha", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		await t.run(async (ctx) => {
+			const doc = await ctx.db
+				.query("orders")
+				.filter((q) => q.eq(q.field("shortId"), shortId))
+				.first();
+			if (!doc) throw new Error("seed failed");
+			await ctx.db.patch(doc._id, {
+				deliveryMethod: "self_collect",
+				eventRsvp: true,
+			});
+		});
+		const { csv } = await asA.action(api.orders.exportOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			columnKeys: ["shortId", "fulfilment"],
+		});
+		const [header, row] = csv.split("\r\n");
+		expect(header).toBe("Order ID,Fulfilment");
+		expect(row.endsWith(",event")).toBe(true);
+	});
+
 	test("the exported Fulfilment cell says drop_off, matching the table (z8r3fdfau9)", async () => {
 		// `orderToCsvSource` projects the order down to the column registry's
 		// shape. Drop `pickupSnapshot.locationType` there and the CSV quietly

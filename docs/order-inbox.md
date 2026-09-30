@@ -367,16 +367,36 @@ is the `storefront` / "Online" drift this file already records:
 | `drop_off` | Drop-off | pickup at an agreed meetup point |
 | `collection` | We collect | `deliveryDirection === "collection"` — the opposite trip |
 | `booking` | Booking | nothing ships; the guest turns up on check-in day |
+| `event` | Event | an RSVP to a fixed-moment event — **stored `self_collect`** |
 
-**`fulfilmentKey` is the single source, and two refinements beat the bare
-method**, because the method alone describes the wrong trip: a `collection`
-order is stored as `deliveryMethod: "delivery"` but the rider goes buyer→store
+**`fulfilmentKey` is built on `orderFlowKind`, and two refinements sit on top of
+it.** The flow kind comes first and that is not tidiness: an **event RSVP is
+stored `deliveryMethod: "self_collect"`** (the buyer collects at the venue) and
+is told apart only by the frozen `orders.eventRsvp` marker, so reading the
+method files every RSVP under "Self-collect" — the exact flattening this
+function exists to undo for drop-off. `orderStatus.ts` states the rule in one
+line: *derive with `orderFlowKind`, never by re-reading products*.
+
+The two refinements are the cases the stage flow doesn't care about but the
+seller's day does, and **each is gated on its own kind**: a `collection` order is
+stored `deliveryMethod: "delivery"` but the rider goes buyer→store
 ([`86eyg0n8e`](https://app.clickup.com/t/86eyg0n8e)), and a `drop_off` order is
-stored as `self_collect` but the seller is standing at a pasar, not behind their
-counter ([`86ey30yhr`](https://app.clickup.com/t/86ey30yhr)). Because both the
-column and the predicate call the same function, the rows a tick keeps are
-exactly the rows whose cell shows the ticked word — that is a structural
-guarantee, not a convention to remember.
+stored `self_collect` but the seller is standing at a pasar, not behind their
+counter ([`86ey30yhr`](https://app.clickup.com/t/86ey30yhr)). Gating each on its
+kind is what keeps the flow kind winning — a booking or an RSVP can never be
+relabelled by a stray direction or a snapshot it had no business carrying.
+Writing those two as an early return instead makes the branch **unreachable**
+(the same value falls out of the tail), and an unreachable guard is one no test
+can hold — which is how it was caught.
+
+Because the column, the funnel, the predicate and the CSV all call this one
+function, the rows a tick keeps are exactly the rows whose cell shows the ticked
+word — a structural guarantee, not a convention to remember.
+
+**Adding a flow kind means adding it here too.** `FULFILMENT_KEYS` is a superset
+of `OrderFlowKind` (it adds the two refinements), so a new kind needs a key, a
+label, a `fulfilmentKeyValidator` literal, and — the one that fails silently —
+whatever field identifies it carried through `orderToCsvSource`.
 
 **Drop-off was promoted into the column as part of this.** It is already its own
 word in buyer emails, WhatsApp copy and the Settings pickup badges; only the

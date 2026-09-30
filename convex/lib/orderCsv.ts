@@ -18,6 +18,7 @@ import { orderCustomerLabel } from "./customer";
 import { formatFulfilmentTime } from "./fulfilmentDate";
 import {
 	orderFlowKind,
+	type OrderFlowKind,
 	ORDER_STATUS_KEYS,
 	type OrderStatus,
 } from "./orderStatus";
@@ -81,18 +82,24 @@ function csvFlag(on: boolean | undefined): string {
  *    column, and could not filter to them at all.
  *
  * Neither refinement can apply to a booking or an RSVP — nothing is shipped or
- * ridden for either — so the flow kind is answered first and those two return
- * immediately. Legacy orders carry no `deliveryMethod` and read as `delivery`,
+ * ridden for either — which is why each is gated on its own kind rather than
+ * tested alone. Legacy orders carry no `deliveryMethod` and read as `delivery`,
  * the schema's own default, so the cell names the trip that actually happened
  * instead of going blank.
  */
-export function fulfilmentKey(o: CsvOrder): string {
+export function fulfilmentKey(o: CsvOrder): FulfilmentKey {
 	const kind = orderFlowKind(o);
-	if (kind === "booking" || kind === "event") return kind;
-	if (o.deliveryDirection === "collection") return "collection";
+	// Each refinement is GATED ON ITS OWN KIND rather than tested in isolation,
+	// so the flow kind always wins: a booking and an RSVP can never be
+	// relabelled by a stray direction or a pickup snapshot they had no business
+	// carrying. Written as an early return for those two instead, the branch
+	// would be unreachable — the same value comes out of the tail — and an
+	// unreachable guard is one no test can hold.
+	if (kind === "delivery" && o.deliveryDirection === "collection")
+		return "collection";
 	if (kind === "self_collect" && o.pickupSnapshot?.locationType === "drop_off")
 		return "drop_off";
-	return kind;
+	return FLOW_KIND_FULFILMENT[kind];
 }
 
 export function humanizeEnum(raw: string): string {
@@ -162,6 +169,25 @@ export const FULFILMENT_KEYS = [
 ] as const;
 
 export type FulfilmentKey = (typeof FULFILMENT_KEYS)[number];
+
+/**
+ * Every `OrderFlowKind`, as the fulfilment key it reads as — and the actual
+ * tail of `fulfilmentKey`, so this is a proof rather than a comment.
+ *
+ * `fulfilmentKey` returns the flow kind verbatim whenever no refinement
+ * applies, so a flow kind missing from `FULFILMENT_KEYS` would render through
+ * `humanizeEnum`, be absent from both pickers, and be unfilterable — silently,
+ * on the one store that uses it. Adding a fifth kind to `OrderFlowKind` is now
+ * a **type error here** until it has a key and a label, which is the only kind
+ * of reminder that survives (the lesson `NARROWING_FILTER_KEYS` already
+ * learned the hard way).
+ */
+const FLOW_KIND_FULFILMENT: Record<OrderFlowKind, FulfilmentKey> = {
+	delivery: "delivery",
+	self_collect: "self_collect",
+	booking: "booking",
+	event: "event",
+};
 
 /** How the order reaches the buyer. `self_collect` humanizes to "Self collect";
  * the app has always written it hyphenated, so it is spelled out here. Every

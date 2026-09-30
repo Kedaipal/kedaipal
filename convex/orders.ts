@@ -2505,6 +2505,7 @@ const fulfilmentKeyValidator = v.union(
 	v.literal("drop_off"),
 	v.literal("collection"),
 	v.literal("booking"),
+	v.literal("event"),
 );
 
 // THE status axis on the wire (1 Sep) — leaves, not raw statuses. `confirmed`
@@ -2988,6 +2989,12 @@ function orderToCsvSource(o: Doc<"orders">): CsvOrder {
 		paymentReceivedAt: o.paymentReceivedAt,
 		deliveryMethod: o.deliveryMethod,
 		deliveryDirection: o.deliveryDirection,
+		// The RSVP marker, because `fulfilmentKey` reads it: an RSVP is stored
+		// `self_collect`, so dropping this here files every event under
+		// "Self-collect" in the CSV while the table calls it "Event" — the same
+		// export-vs-screen split `pickupSnapshot.locationType` already caused
+		// once on this exact projection. Pinned by a test.
+		eventRsvp: o.eventRsvp,
 		source: o.source,
 		attributionSource: o.attributionSource,
 		customer: o.customer,

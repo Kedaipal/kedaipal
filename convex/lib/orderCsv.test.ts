@@ -133,6 +133,46 @@ describe("orderToCsvRow", () => {
 		);
 	});
 
+	test("an RSVP is its own fulfilment kind even though it is STORED self_collect (z8r3fdff9u)", () => {
+		// The trap this pins: an event RSVP is collected at the venue, so it is
+		// stored `deliveryMethod: "self_collect"` and told apart only by the
+		// frozen `eventRsvp` marker. Read the method and every RSVP files under
+		// Self-collect — exactly the flattening drop-off already suffered.
+		const rsvp = { ...base, deliveryMethod: "self_collect", eventRsvp: true };
+		expect(orderToCsvRow(rsvp)[CSV_COLUMNS.indexOf("Fulfilment")]).toBe(
+			"event",
+		);
+		// The flow kind outranks BOTH refinements — an RSVP at a venue is not a
+		// pasar meetup and not a rider collection, whatever a row happens to
+		// carry. Neither shape is reachable through `orders.create` today (it
+		// takes delivery/self_collect only), which is exactly why the precedence
+		// needs pinning: the next flow kind added is the one that finds out.
+		expect(
+			fulfilmentKey({
+				...rsvp,
+				pickupSnapshot: {
+					label: "Dewan",
+					address: "Jalan 1",
+					locationType: "drop_off",
+				},
+			}),
+		).toBe("event");
+		expect(fulfilmentKey({ ...rsvp, deliveryDirection: "collection" })).toBe(
+			"event",
+		);
+		expect(
+			fulfilmentKey({
+				...base,
+				deliveryMethod: "booking",
+				deliveryDirection: "collection",
+			}),
+		).toBe("booking");
+		// A plain self-collect order is untouched.
+		expect(
+			fulfilmentKey({ ...base, deliveryMethod: "self_collect" }),
+		).toBe("self_collect");
+	});
+
 	test("fulfilmentKey precedence: collection beats the method, drop-off beats self-collect, legacy reads as delivery", () => {
 		const csv = (o: Partial<CsvOrder>) => fulfilmentKey({ ...base, ...o });
 		// A collection order is a DELIVERY order in the schema — the direction is
@@ -140,8 +180,25 @@ describe("orderToCsvRow", () => {
 		expect(
 			csv({ deliveryMethod: "delivery", deliveryDirection: "collection" }),
 		).toBe("collection");
-		// ...and it wins even over a pickup snapshot, which a collection order has
-		// no business carrying but could through a mid-flight settings change.
+		// A collection order carrying a pickup snapshot stays a collection: the
+		// direction refines the DELIVERY kind, and a snapshot picked up through a
+		// mid-flight settings change doesn't turn a rider trip into a meet-up.
+		expect(
+			csv({
+				deliveryMethod: "delivery",
+				deliveryDirection: "collection",
+				pickupSnapshot: {
+					label: "X",
+					address: "Y",
+					locationType: "drop_off",
+				},
+			}),
+		).toBe("collection");
+		// `self_collect` + a collection direction is NOT reachable — the direction
+		// is only stamped when the method isn't self_collect (orders.create) — and
+		// if a row ever held both, the buyer is collecting and no rider is moving,
+		// so the method is the trustworthy half. Pinned so the answer is a
+		// decision rather than a side effect of branch order.
 		expect(
 			csv({
 				deliveryMethod: "self_collect",
@@ -152,7 +209,7 @@ describe("orderToCsvRow", () => {
 					locationType: "drop_off",
 				},
 			}),
-		).toBe("collection");
+		).toBe("drop_off");
 		expect(csv({ deliveryMethod: "booking" })).toBe("booking");
 		// No method at all — every order created before the field existed. It
 		// reads as delivery (the schema's own default) rather than going blank,
@@ -170,6 +227,7 @@ describe("orderToCsvRow", () => {
 		expect(FULFILMENT_LABELS.self_collect).toBe("Self-collect");
 		expect(FULFILMENT_LABELS.collection).toBe("We collect");
 		expect(FULFILMENT_LABELS.drop_off).toBe("Drop-off");
+		expect(FULFILMENT_LABELS.event).toBe("Event");
 	});
 
 	test("summarizes items as 'qty x name (variant)'", () => {
