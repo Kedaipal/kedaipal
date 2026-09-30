@@ -184,7 +184,6 @@ describe("pricing copy stays aligned with the tiers on sale", () => {
 			"pricing_tier_enterprise_tagline",
 			"pricingpage_tier_enterprise_tagline",
 			"pricing_enterprise_price",
-			"pricing_enterprise_priced",
 			"pricing_enterprise_wa",
 			"pricing_feat_credits_custom",
 			"pricing_cta_talk",

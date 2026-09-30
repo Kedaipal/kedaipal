@@ -305,8 +305,9 @@ Presentation rules:
   ([`credits.md`](./credits.md#plan-changes)). See [Annual billing](#annual-billing).
   The Enterprise card ignores the toggle: "Custom" on both cycles.
 - **Enterprise is a conversation, never a checkout.** Its card shows
-  **"Custom"** where a price would be, "Priced for your volume" under it, and a
-  **"Talk to Arif"** button that opens WhatsApp with a prefilled message naming
+  **"Custom"** where a price would be (in the same box, so the three cards'
+  taglines and feature lists line up), "Built for 1,500+ orders a month" as
+  its tagline, and a **"Talk to Arif"** button that opens WhatsApp with a prefilled message naming
   the threshold (`enterpriseTalkUrl`, `src/lib/enterprise-contact.ts` — the one
   author of that link on every surface; in-app it also names the store's
   slug). `enterprise_talk_clicked` records the tap with its `surface`

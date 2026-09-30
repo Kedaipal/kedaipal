@@ -592,13 +592,13 @@ function TierCard({
 			</p>
 
 			{price === null ? (
-				<div className="mt-3">
+				// "Custom" sits where a price would, in the same box, so the
+				// three cards' taglines and feature lists line up; the tagline
+				// under it says who it's for.
+				<div className="mt-3 flex items-end gap-1">
 					<span className="text-4xl font-bold tracking-tight">
 						{m.pricing_enterprise_price()}
 					</span>
-					<p className="mt-1 text-xs text-muted-foreground">
-						{m.pricing_enterprise_priced()}
-					</p>
 				</div>
 			) : (
 				<div className="mt-3 flex items-end gap-1">

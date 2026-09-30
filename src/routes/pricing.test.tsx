@@ -240,7 +240,6 @@ describe("/pricing — Enterprise is a conversation (T6, z8r3fdkp8h)", () => {
 		renderPage();
 		const card = () => enterpriseCard().textContent ?? "";
 		expect(card()).toContain("Custom");
-		expect(card()).toContain("Priced for your volume");
 		expect(card()).not.toMatch(/RM|S\$|\/mo|Billed/);
 		fireEvent.click(screen.getByRole("button", { name: "Singapore" }));
 		fireEvent.click(screen.getByRole("button", { name: /Annual/ }));
