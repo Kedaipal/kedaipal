@@ -392,13 +392,18 @@ describe("createTopUp — opening a checkout", () => {
 		await expect(buy(t, OWNER, "p9000")).rejects.toThrow(/isn't on sale/);
 	});
 
-	test("active and comped stores can buy; trialing, past_due, on_hold and cancelled are refused with their way out", async () => {
+	test("only an active, paid store can buy; trialing, past_due, on_hold, cancelled and sponsored are refused with their reason", async () => {
 		const t = setup();
 		installFetch();
 		await makeStore(t, { userId: "u_active", status: "active" });
 		await expect(buy(t, "u_active")).resolves.toMatchObject({ url: expect.any(String) });
-		await makeStore(t, { userId: "u_comped", status: "trialing", comped: true });
-		await expect(buy(t, "u_comped")).resolves.toMatchObject({ url: expect.any(String) });
+
+		// A sponsored store never locks — a pack would be money for nothing
+		// (Zaki, 1 Oct 2026). Refused whatever its status says.
+		await makeStore(t, { userId: "u_comped", status: "active", comped: true });
+		await expect(buy(t, "u_comped")).rejects.toThrow(/^.*Sponsored stores never run out/);
+		const sponsored = await as(t, "u_comped").query(api.creditPurchases.topUpOptions, {});
+		expect(sponsored?.refusal).toBe("sponsored");
 
 		const refused: Array<[Doc<"subscriptions">["status"], RegExp]> = [
 			["trialing", /Pick a plan first/],
@@ -416,7 +421,7 @@ describe("createTopUp — opening a checkout", () => {
 		}
 		// Nothing was opened for a refused store.
 		const opened = await t.run((ctx) => ctx.db.query("creditPurchases").collect());
-		expect(opened).toHaveLength(2);
+		expect(opened).toHaveLength(1);
 	});
 
 	test("past due names the invoice to pay — and hands the owner its Pay-now link", async () => {
