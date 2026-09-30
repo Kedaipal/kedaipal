@@ -203,6 +203,17 @@ deleted — after the human refunded or applied the money; it moves no money
 itself and the dialog says so. `migrations:backfillGatewayIssueOpen` flags
 stamps from before the queue existed (run once per deployment).
 
+**Release operator steps for this machinery, in order:** deploy, then
+`npx convex run migrations:backfillGatewayIssueOpen --prod` (queue the old
+stamps), then `npx convex run subscriptionPayments:syncChargeCounters --prod`
+— the counter-parity one-shot. The pre-fix reconcile read a field that was
+always null and Pay-now settles used to bump the counter, so any LIVE
+recurring seller (her-moolah-collective was the first) may hold drift from
+before the fix: local behind ⇒ the next lost outcome settles a bill nobody
+charged; local ahead ⇒ it charges again. The sync reads each session's
+`total_charge` and aligns, skipping (and reporting) any session with an
+unresolved attempt or a stranded charge — that drift is evidence, not error.
+
 ### A charge that lands on a voided bill is STRANDED (audit + hold)
 
 A stamp names the bill it was fired for (`pendingChargeInvoiceId`), and a

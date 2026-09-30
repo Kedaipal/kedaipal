@@ -2414,6 +2414,108 @@ describe("payments to review (gatewayIssueOpen)", () => {
 	});
 });
 
+// The reconcile's no-double-charge verdict is exactly as good as counter
+// parity with HitPay: local behind ⇒ a free settle; local ahead ⇒ a double
+// charge. This one-shot aligns them at release, skipping any session whose
+// drift IS evidence of an open question.
+describe("syncChargeCounters (operator one-shot)", () => {
+	test("patches drift, keeps sync, and reports every session", async () => {
+		const t = setup();
+		stubBillingEnv();
+		const counts: Record<string, number> = { rb_a: 3, rb_b: 1 };
+		stubHitpay({
+			charge: () => {
+				throw new Error("the sync must never charge");
+			},
+			session: sessionCharged(0), // overridden per-URL below
+		});
+		// Per-session counts: re-stub with a URL-aware session responder.
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: unknown) => {
+				const u = String(url);
+				const id = u.split("/recurring-billing/")[1];
+				if (u.includes("/charge/")) throw new Error("must never charge");
+				return Response.json({
+					status: "active",
+					cycle: "save_card",
+					times_charged: null,
+					total_charge: counts[id ?? ""] ?? 0,
+				});
+			}),
+		);
+
+		const a = await seedRetailer(t, "u_sync_a", "sync-a");
+		await attachAutoRenew(t, a.subId, { timesCharged: 1 }); // behind (3 real)
+		await t.run((ctx) => ctx.db.patch(a.subId, { autoRenewSessionId: "rb_a" }));
+		const b = await seedRetailer(t, "u_sync_b", "sync-b");
+		await attachAutoRenew(t, b.subId, { timesCharged: 1 }); // in sync
+		await t.run((ctx) => ctx.db.patch(b.subId, { autoRenewSessionId: "rb_b" }));
+
+		const report = await t.action(
+			internal.subscriptionPayments.syncChargeCounters,
+			{},
+		);
+
+		expect(report).toHaveLength(2);
+		expect(
+			report.find((r) => r.sessionId === "rb_a"),
+		).toMatchObject({ outcome: "patched", local: 1, remote: 3 });
+		expect(
+			report.find((r) => r.sessionId === "rb_b"),
+		).toMatchObject({ outcome: "in_sync" });
+		expect((await getSub(t, a.subId))?.autoRenew?.timesCharged).toBe(3);
+		expect((await getSub(t, b.subId))?.autoRenew?.timesCharged).toBe(1);
+	});
+
+	test("NEVER syncs over an open question — unresolved and stranded sessions are skipped and reported", async () => {
+		// Aligning the counter while a charge outcome is unknown erases the
+		// exact drift the reconcile reads as "the money landed" — the sync
+		// would convert a pending double-payment discovery into a free month or a
+		// re-charge.
+		const t = setup();
+		stubBillingEnv();
+		const calls = stubHitpay({
+			charge: () => {
+				throw new Error("must never charge");
+			},
+			session: sessionCharged(5),
+		});
+		const u = await seedRetailer(t, "u_sync_u", "sync-u");
+		const invoiceId = await seedRenewalInvoice(t, u.retailerId, u.subId);
+		await attachAutoRenew(t, u.subId, {
+			timesCharged: 4,
+			lastChargeAttemptAt: Date.now() - HOUR,
+			pendingChargeInvoiceId: invoiceId,
+		});
+		const st = await seedRetailer(t, "u_sync_s", "sync-s");
+		await attachAutoRenew(t, st.subId, {
+			timesCharged: 4,
+			strandedCharge: {
+				invoiceId,
+				invoiceNumber: "INV-OLD",
+				amountSen: 14900,
+				currency: "MYR",
+				paymentId: "reconciled:rb_1:5",
+				at: Date.now(),
+			},
+		});
+
+		const report = await t.action(
+			internal.subscriptionPayments.syncChargeCounters,
+			{},
+		);
+
+		expect(report.map((r) => r.outcome).sort()).toEqual([
+			"skipped_stranded",
+			"skipped_unresolved",
+		]);
+		expect(calls.sessionReads).toBe(0); // not even read — nothing to align
+		expect((await getSub(t, u.subId))?.autoRenew?.timesCharged).toBe(4);
+		expect((await getSub(t, st.subId))?.autoRenew?.timesCharged).toBe(4);
+	});
+});
+
 describe("internalSettleFromGateway", () => {
 	test("duplicate payment id no-ops; a different late payment stamps the audit", async () => {
 		const t = setup();

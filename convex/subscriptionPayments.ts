@@ -1732,6 +1732,156 @@ export const sendStrandedChargeAlert = internalAction({
 	},
 });
 
+/** Operator report row for `syncChargeCounters`. */
+type ChargeCounterSyncRow = {
+	subscriptionId: Id<"subscriptions">;
+	sessionId: string;
+	outcome:
+		| "in_sync"
+		| "patched"
+		| "skipped_unresolved"
+		| "skipped_stranded"
+		| "gone"
+		| "unavailable"
+		| "no_count";
+	local?: number;
+	remote?: number;
+};
+
+export const listAutoRenewSessions = internalQuery({
+	args: {},
+	handler: async (
+		ctx,
+	): Promise<
+		Array<{
+			subscriptionId: Id<"subscriptions">;
+			sessionId: string;
+			timesCharged: number;
+			unresolved: boolean;
+			stranded: boolean;
+		}>
+	> => {
+		const subs = await ctx.db.query("subscriptions").collect();
+		return subs
+			.filter((s) => s.autoRenew !== undefined && s.autoRenewSessionId)
+			.map((s) => ({
+				subscriptionId: s._id,
+				sessionId: s.autoRenewSessionId as string,
+				timesCharged: s.autoRenew?.timesCharged ?? 0,
+				unresolved: s.autoRenew?.lastChargeAttemptAt !== undefined,
+				stranded: s.autoRenew?.strandedCharge !== undefined,
+			}));
+	},
+});
+
+export const setChargeCounter = internalMutation({
+	args: { subscriptionId: v.id("subscriptions"), timesCharged: v.number() },
+	handler: async (ctx, { subscriptionId, timesCharged }): Promise<void> => {
+		const sub = await ctx.db.get(subscriptionId);
+		if (!sub?.autoRenew) return;
+		// Re-checked transactionally: a charge that claimed the mutex after the
+		// action's read owns the counter now — overwriting it would erase the
+		// very drift evidence the reconcile needs.
+		if (sub.autoRenew.lastChargeAttemptAt !== undefined) return;
+		await ctx.db.patch(subscriptionId, {
+			autoRenew: { ...sub.autoRenew, timesCharged },
+		});
+	},
+});
+
+/**
+ * OPERATOR one-shot: align every subscription's `timesCharged` with the
+ * count HitPay actually holds (`total_charge`). Exists because the shipped
+ * counter could drift — the pre-fix reconcile read a field that was always
+ * null, and Pay-now settles used to bump it — and the reconcile's
+ * no-double-charge verdict is exactly as good as this parity:
+ *  - local BEHIND remote ⇒ the next lost outcome reads "remote ahead" and
+ *    settles a bill nobody charged (lost revenue);
+ *  - local AHEAD of remote ⇒ the next lost-but-landed charge reads "remote
+ *    not ahead" and charges AGAIN (the double debit).
+ *
+ * Read-then-patch per session, never a charge. Sessions with an UNRESOLVED
+ * attempt or a STRANDED charge are skipped and reported — syncing those
+ * would erase the drift that IS the evidence of the open question.
+ *
+ * Run at release, after deploy:
+ *   dev:  npx convex run subscriptionPayments:syncChargeCounters
+ *   PROD: npx convex run subscriptionPayments:syncChargeCounters --prod
+ * (write `--prod` yourself; the bare command runs against dev and reports
+ * success, which reads exactly like a prod run that worked).
+ */
+export const syncChargeCounters = internalAction({
+	args: {},
+	handler: async (ctx): Promise<ChargeCounterSyncRow[]> => {
+		const credentials = billingCredentials();
+		if (!credentials) {
+			console.error("[billing] counter sync: no gateway credentials");
+			return [];
+		}
+		const sessions: Array<{
+			subscriptionId: Id<"subscriptions">;
+			sessionId: string;
+			timesCharged: number;
+			unresolved: boolean;
+			stranded: boolean;
+		}> = await ctx.runQuery(
+			internal.subscriptionPayments.listAutoRenewSessions,
+			{},
+		);
+		const report: ChargeCounterSyncRow[] = [];
+		for (const s of sessions) {
+			const base = { subscriptionId: s.subscriptionId, sessionId: s.sessionId };
+			if (s.unresolved) {
+				report.push({ ...base, outcome: "skipped_unresolved" });
+				continue;
+			}
+			if (s.stranded) {
+				report.push({ ...base, outcome: "skipped_stranded" });
+				continue;
+			}
+			const session = await fetchRecurringSession(credentials, s.sessionId);
+			if (session.kind === "gone") {
+				report.push({ ...base, outcome: "gone", local: s.timesCharged });
+				continue;
+			}
+			if (session.kind === "unavailable") {
+				report.push({ ...base, outcome: "unavailable", local: s.timesCharged });
+				continue;
+			}
+			if (session.chargeCount === undefined) {
+				report.push({ ...base, outcome: "no_count", local: s.timesCharged });
+				continue;
+			}
+			if (session.chargeCount === s.timesCharged) {
+				report.push({
+					...base,
+					outcome: "in_sync",
+					local: s.timesCharged,
+					remote: session.chargeCount,
+				});
+				continue;
+			}
+			await ctx.runMutation(internal.subscriptionPayments.setChargeCounter, {
+				subscriptionId: s.subscriptionId,
+				timesCharged: session.chargeCount,
+			});
+			console.warn("[billing] charge counter drift corrected", {
+				subscriptionId: s.subscriptionId,
+				sessionId: s.sessionId,
+				local: s.timesCharged,
+				remote: session.chargeCount,
+			});
+			report.push({
+				...base,
+				outcome: "patched",
+				local: s.timesCharged,
+				remote: session.chargeCount,
+			});
+		}
+		return report;
+	},
+});
+
 /**
  * Charge the invoice total against the saved method — the auto-renewal
  * moment. Scheduled by the renewal cron, the retry sweep, and heal-on-attach.
