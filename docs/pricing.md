@@ -154,8 +154,13 @@ tier, `recommendPlan` prices the plan plus the **cheapest whole top-up packs**
 covering the rest (`cheapestTopUp` over `CREDIT_PACKS[currency]`), and takes the
 cheapest; a tie goes to the **higher** tier (the same money, more credits built
 in, fewer top-ups to remember). The leak is then compared against that price —
-the savings, the ratio, the "not worth it yet" verdict, the CTA and the
-WhatsApp message all name it.
+the savings, the ratio ("5.7× what Kedaipal costs you" — the plan plus its
+top-ups, never "your subscription"), the "not worth it yet" verdict and the
+WhatsApp message all name it. **The sticky CTA is the one exception:** it
+quotes the recommended PLAN at the plan's own price ("Start with Pro —
+RM149/mo"), because a plan-plus-top-ups total on a "Start" button reads like a
+plan price that doesn't exist (Zaki's test round, 1 Oct 2026). The card above
+it says what the top-ups add.
 
 | Orders a week (≈ a month) | MYR | SGD |
 | --- | --- | --- |

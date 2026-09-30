@@ -5,7 +5,7 @@
 // pastes into a WhatsApp message. The actions live in the footer's Manage
 // menu — the same one door the row has, so nothing here can drift from it.
 import { Coins, ExternalLink } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import type { AdminSellerRow } from "../../../convex/admin";
 import { COMP_KIND_LABEL } from "../../../convex/lib/comp";
 import { COUNTRY_LABELS } from "../../../convex/lib/country";
@@ -15,9 +15,9 @@ import {
 	sellerCredits,
 	sellerExpiry,
 	sellerPlanLabel,
-	sellerSeatsLabel,
 	sellerRail,
 	sellerReason,
+	sellerSeatsLabel,
 	sellerSummaryText,
 } from "../../lib/admin-seller-view";
 import { formatPrice, formatShortDate } from "../../lib/format";
@@ -31,7 +31,7 @@ import {
 	SheetHeader,
 	SheetTitle,
 } from "../ui/sheet";
-import { CreditLedgerSheet, periodLabel } from "./credit-ledger-sheet";
+import { CreditLedgerBody, periodLabel } from "./credit-ledger-sheet";
 import {
 	ContactLine,
 	CreditsText,
@@ -90,7 +90,27 @@ function SellerSheetBody({
 		seller.notifyWaPhone === seller.waPhone;
 	const neverBilled = seller.ownerIsAdmin || seller.comped;
 	const credits = sellerCredits(seller);
+	// The credit ledger is a page of THIS drawer, not a second drawer on top:
+	// one surface, a back link, and focus returns to the button that opened it.
 	const [ledgerOpen, setLedgerOpen] = useState(false);
+	const ledgerButtonRef = useRef<HTMLButtonElement>(null);
+	const refocusLedgerButton = useRef(false);
+	useEffect(() => {
+		if (ledgerOpen || !refocusLedgerButton.current) return;
+		refocusLedgerButton.current = false;
+		ledgerButtonRef.current?.focus();
+	}, [ledgerOpen]);
+
+	if (ledgerOpen)
+		return (
+			<CreditLedgerBody
+				seller={seller}
+				onBack={() => {
+					refocusLedgerButton.current = true;
+					setLedgerOpen(false);
+				}}
+			/>
+		);
 
 	return (
 		<>
@@ -362,6 +382,7 @@ function SellerSheetBody({
 					</Row>
 					<div className="pt-2">
 						<Button
+							ref={ledgerButtonRef}
 							variant="outline"
 							onClick={() => setLedgerOpen(true)}
 							className="tap-target w-full rounded-xl sm:w-fit"
@@ -415,12 +436,6 @@ function SellerSheetBody({
 					</Row>
 				</Section>
 			</div>
-
-			<CreditLedgerSheet
-				seller={seller}
-				open={ledgerOpen}
-				onOpenChange={setLedgerOpen}
-			/>
 
 			<div className="sticky bottom-0 mt-auto flex items-center justify-between gap-3 border-t border-border bg-popover p-4">
 				<span className="text-xs text-muted-foreground">

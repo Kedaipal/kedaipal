@@ -40,11 +40,10 @@ vi.mock("convex/react", () => ({
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
-import { CreditLedgerBody, ledgerRowLabel } from "./credit-ledger-sheet";
-
 // The body renders the Sheet's header parts, which need their Radix dialog
 // context — render it inside an open Sheet like the real drawer does.
 import { Sheet, SheetContent } from "../ui/sheet";
+import { CreditLedgerBody, ledgerRowLabel } from "./credit-ledger-sheet";
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = new Date(2026, 9, 10, 12).getTime();
@@ -72,11 +71,11 @@ function view(overrides: Record<string, unknown> = {}) {
 	};
 }
 
-function renderBody() {
+function renderBody(onBack?: () => void) {
 	return render(
 		<Sheet open>
 			<SheetContent>
-				<CreditLedgerBody seller={seller} />
+				<CreditLedgerBody seller={seller} onBack={onBack} />
 			</SheetContent>
 		</Sheet>,
 	);
@@ -103,6 +102,24 @@ beforeEach(() => {
 afterEach(() => {
 	cleanup();
 	vi.restoreAllMocks();
+});
+
+describe("CreditLedgerBody — a page of the seller sheet, not a second drawer", () => {
+	it("titles itself, and leads back to the seller it came from", () => {
+		const onBack = vi.fn();
+		renderBody(onBack);
+		expect(screen.getByText("Credit ledger")).toBeTruthy();
+		const back = screen.getByRole("button", { name: "Lekor Mr.Ganu" });
+		// Focus lands on the way back, so a keyboard user can return at once.
+		expect(document.activeElement).toBe(back);
+		fireEvent.click(back);
+		expect(onBack).toHaveBeenCalledTimes(1);
+	});
+
+	it("without a way back (rendered on its own), there's no back link", () => {
+		renderBody();
+		expect(screen.queryByRole("button", { name: "Lekor Mr.Ganu" })).toBeNull();
+	});
 });
 
 describe("CreditLedgerBody — balances", () => {

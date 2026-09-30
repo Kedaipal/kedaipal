@@ -135,10 +135,9 @@ export function CreditsText({
 			>
 				{credits.headline}
 			</span>
-			<span
-				className="truncate text-[11px] text-muted-foreground"
-				title={credits.detail}
-			>
+			{/* Wraps rather than truncates: the breakdown is the point of the
+			    column, and "plan 10 · bought 0 · custom 1000/mo" must read whole. */}
+			<span className="text-[11px] leading-snug text-pretty break-words text-muted-foreground">
 				{credits.outSince !== undefined
 					? `Out since ${formatShortDate(credits.outSince)}`
 					: credits.detail}

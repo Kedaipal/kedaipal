@@ -243,7 +243,7 @@ for the FAQPage JSON-LD mirror, so it spells "14 days or 200 orders" and
 | `/terms#credits`, `/terms#data-processing` | the credits clauses and the processor terms | `src/routes/terms.tsx` |
 | Emails | invoice emails name the billed plan's monthly credits (`monthlyCreditGrant` — a custom grant or Founding Pro's 300 in the member's own email); the first-invoice emails state the trial; the free-period nudge names each plan's credits | `convex/lib/billingEmailCopy.ts` |
 | Dashboard checklist | "Start your plan" states the trial in one line | `src/lib/subscribe-step.ts` |
-| Admin | per-store credits column + sort, a Credits section and ledger drawer (adjust, custom grant) in the seller sheet, two book-wide tiles on Admin → Billing | `admin.ts`, `credits.adminCreditTotals`, `src/components/admin/credit-ledger-sheet.tsx` |
+| Admin | per-store credits column + sort, a Credits section in the seller sheet that opens the credit ledger (adjust, custom grant) as a page of the SAME drawer — back link to the seller, never a drawer stacked on a drawer — and two book-wide tiles on Admin → Billing | `admin.ts`, `credits.adminCreditTotals`, `src/components/admin/credit-ledger-sheet.tsx` |
 
 **What public copy says, in one place:**
 
