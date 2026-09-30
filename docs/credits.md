@@ -249,7 +249,7 @@ for the FAQPage JSON-LD mirror, so it spells "14 days or 200 orders" and
 | `/terms#credits`, `/terms#data-processing` | the credits clauses and the processor terms | `src/routes/terms.tsx` |
 | Emails | invoice emails name the billed plan's monthly credits (`monthlyCreditGrant` — a custom grant or Founding Pro's 300 in the member's own email); the first-invoice emails state the trial; the free-period nudge names each plan's credits | `convex/lib/billingEmailCopy.ts` |
 | Dashboard checklist | "Start your plan" states the trial in one line | `src/lib/subscribe-step.ts` |
-| Admin | per-store credits column + sort, a Credits section and ledger drawer (adjust, custom grant) in the seller sheet, two book-wide tiles on Admin → Billing | `admin.ts`, `credits.adminCreditTotals`, `src/components/admin/credit-ledger-sheet.tsx` |
+| Admin | per-store credits column + sort, a Credits section in the seller sheet that opens the credit ledger (adjust, custom grant) as a page of the SAME drawer — back link to the seller, never a drawer stacked on a drawer — and two book-wide tiles on Admin → Billing | `admin.ts`, `credits.adminCreditTotals`, `src/components/admin/credit-ledger-sheet.tsx` |
 
 **What public copy says, in one place:**
 
@@ -330,10 +330,11 @@ nothing ever re-prices it.
 
 ### Who can buy
 
-**The store** (`topUpRefusal`, which wraps T1's `topUpBlock`): an active,
-comped or missing-row store buys. Every other status is refused with copy that
-names the way out — the server's refusal and the picker's disabled-with-reason
-line are one author (`topUpRefusalMessage`):
+**The store** (`topUpRefusal`, which wraps T1's `topUpBlock`): only an
+**active, paid** store buys — a pack tops up a plan, it never replaces one.
+Every other store is refused with copy that names the way out — the server's
+refusal and the picker's disabled-with-reason line are one author
+(`topUpRefusalMessage`):
 
 | Status | The owner reads | Way out in the picker |
 | --- | --- | --- |
@@ -342,12 +343,17 @@ line are one author (`topUpRefusalMessage`):
 | `on_hold` | "Your plan is on Off-Season Hold. Resume it first…" | Resume your plan |
 | `cancelled` | "Your subscription has ended. Choose a plan first…" | Choose a plan |
 | admin's own store | "Kedaipal admin stores aren't billed…" | — |
+| sponsored (comped, or no subscription row) | "Sponsored stores never run out, so there's nothing to top up…" | — |
 
 A teammate reads the same reason addressed to them ("Ask the store owner to…")
 and gets no button: every way out is a billing write, which is the owner's.
 **A Kedaipal admin's own store** is its own refusal (a judgment call beyond the
 ticket): it sits in `trialing` forever and is never locked, so "pick a plan
-first" would be advice it can't take.
+first" would be advice it can't take. **A sponsored store** (Zaki, 1 Oct 2026)
+is refused for the same reason — its credits are a meter, never a lock, so a
+pack would be money for nothing; the missing-row fail-safe resolves as comped
+and is refused alongside it. Neither refusal has a way-out button: nothing is
+wrong.
 
 **The person**: credits **WRITE** (`requireRetailerAccess(…, {area: "credits",
 level: "write"})`) — the owner and an admin always, a teammate only with the
@@ -447,14 +453,27 @@ read, and inside the gate the only place they can buy would be hidden.
 ### Every state the picker has
 
 Loading (skeletons) · can buy (balance being topped up — "37 orders left",
-"12 from your plan · 25 topped up" — both packs, "Better value" on the cheaper
-per credit, the rules, the Terms `#credits` link) · refused (disabled with the
-reason and the way out) · view-only teammate (`NeedsAccessNote`) · no credits
+always split as "12 monthly · 25 bought" — the packs, the rules, the Terms
+`#credits` link) · refused (disabled with the reason and the way out; the
+packs stay visible but inert) · view-only teammate (`NeedsAccessNote`) · no credits
 access (the note is the surface) · admin act-as (view-only note, reads the
 seller's store) · online top-ups unavailable (no packs, a WhatsApp link) ·
 opening HitPay. A Starter store also reads that Pro includes 200 orders a month
 and is cheaper for steady volume — a line, not a button; never shown where no
 upgrade is on offer (Pro, Scale, founding, a custom grant).
+
+**The packs read like the /pricing cards** (Zaki, 1 Oct 2026 — "make the
+packages look enticing"): side-by-side cards, native radios (arrow keys move
+the choice, one spoken sentence per pack), credits as the headline, the price
+the way /pricing quotes one (no cents on whole amounts), what one credit costs
+in each pack, the cheaper per credit badged **Best value** and saying exactly
+what it saves in money ("Save RM 20 vs 4 × 50") — never a percentage — and
+"Lasts 12 months" on each. Under them, the result of the tap before the tap:
+"After this top-up: 60 orders left", or "Covers the 15 owed and leaves 35
+orders" when the store owes orders (a pack pays the debt first). The rules
+live in `src/lib/credit-packs.ts` (`packOffers`, `afterTopUpLine`), pinned by
+tests. The default pick stays the smaller pack: the badge and the saving do the
+persuading, not a pre-selection.
 
 ### Receipts and history
 

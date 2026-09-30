@@ -227,7 +227,7 @@ describe("cancelRefundDecision — only an order that never got going", () => {
 });
 
 describe("topUpBlock — credits top up a live subscription, never replace one", () => {
-	test("active, comped and the fail-safe can buy", () => {
+	test("active, comped and the fail-safe pass the subscription rule (T2 then refuses the last two as sponsored)", () => {
 		expect(topUpBlock("active", false)).toBeNull();
 		expect(topUpBlock("past_due", true)).toBeNull();
 		expect(topUpBlock(null, false)).toBeNull();

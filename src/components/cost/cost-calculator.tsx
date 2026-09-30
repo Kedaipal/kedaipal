@@ -3,6 +3,7 @@ import { useState } from "react";
 import {
 	BILLING_CURRENCY_FOR_COUNTRY,
 	type BillingCurrency,
+	PLAN_MONTHLY_PRICES,
 	PURCHASED_CREDIT_LIFETIME_MONTHS,
 } from "#/../convex/lib/plans";
 import { RegionToggle } from "#/components/landing/landing-ui";
@@ -284,9 +285,16 @@ export function CostCalculator({
 									target="_blank"
 									rel="noopener noreferrer"
 								>
+									{/* The plan they'd start on, at the plan's own price —
+									    never the plan-plus-top-ups total, which would read
+									    like a plan price. Top-ups are bought as needed;
+									    the card above says what they'd add. */}
 									{m.cost_cta_join({
+										plan: PLAN_NAME[result.recommendation.best.plan],
 										price: priceLabel(
-											result.recommendation.best.monthlyMinor,
+											PLAN_MONTHLY_PRICES[currency][
+												result.recommendation.best.plan
+											],
 											currency,
 										),
 									})}

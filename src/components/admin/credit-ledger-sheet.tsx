@@ -1,30 +1,26 @@
 // The admin credit ledger (Kedaipal Credits T5, docs/credits.md): one store's
 // balances and open lots, every movement newest first, and the two admin
-// levers — a hand adjustment and a custom monthly grant. Opened from the
-// seller sheet's Credits section; the server gates every read and write with
-// `requireAdmin`, and both writes are audited.
+// levers — a hand adjustment and a custom monthly grant. A page INSIDE the
+// seller sheet, opened from its Credits section with a back link to the
+// seller — one drawer, never a drawer stacked on a drawer (Zaki, 1 Oct
+// 2026). The server gates every read and write with `requireAdmin`, and both
+// writes are audited.
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { useMutation, usePaginatedQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
-import { Loader2 } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { ChevronLeft, Loader2 } from "lucide-react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
-import type { AdminSellerRow } from "../../../convex/admin";
 import type { Doc } from "../../../convex/_generated/dataModel";
+import type { AdminSellerRow } from "../../../convex/admin";
 import { PURCHASED_CREDIT_LIFETIME_MONTHS } from "../../../convex/lib/plans";
 import { convexErrorMessage, formatShortDate } from "../../lib/format";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import {
-	Sheet,
-	SheetContent,
-	SheetDescription,
-	SheetHeader,
-	SheetTitle,
-} from "../ui/sheet";
+import { SheetDescription, SheetHeader, SheetTitle } from "../ui/sheet";
 import { Skeleton } from "../ui/skeleton";
 import { Textarea } from "../ui/textarea";
 
@@ -93,36 +89,45 @@ export function ledgerRowLabel(row: LedgerRow): string {
 	return row.bucket === "plan" ? "Plan credits" : "Bought credits";
 }
 
-export function CreditLedgerSheet({
+/**
+ * The ledger page of the seller sheet. `onBack` returns to the seller's
+ * details; it takes focus on arrival, and the page starts at its top even when
+ * the details were scrolled to the Credits section.
+ */
+export function CreditLedgerBody({
 	seller,
-	open,
-	onOpenChange,
+	onBack,
 }: {
 	seller: AdminSellerRow;
-	open: boolean;
-	onOpenChange: (open: boolean) => void;
+	onBack?: () => void;
 }) {
-	return (
-		<Sheet open={open} onOpenChange={onOpenChange}>
-			<SheetContent side="right" className="gap-0 p-0 sm:max-w-lg">
-				{/* Mounted only while open: the forms start clean on every open,
-				    and a closed drawer holds no live subscription. */}
-				{open ? <CreditLedgerBody seller={seller} /> : null}
-			</SheetContent>
-		</Sheet>
-	);
-}
-
-/** Exported for the drawer-states test, which renders it without the Sheet. */
-export function CreditLedgerBody({ seller }: { seller: AdminSellerRow }) {
 	const state = useQuery(
 		convexQuery(api.credits.adminGetAccount, { retailerId: seller._id }),
 	).data;
+	const backRef = useRef<HTMLButtonElement>(null);
+	useEffect(() => {
+		const back = backRef.current;
+		// The drawer is the scroll container: start the page at its top.
+		const drawer = back?.closest<HTMLElement>('[data-slot="sheet-content"]');
+		if (drawer) drawer.scrollTop = 0;
+		back?.focus();
+	}, []);
 	return (
 		<>
 			<SheetHeader className="gap-1 border-b border-border p-5 pr-14">
+				{onBack ? (
+					<button
+						ref={backRef}
+						type="button"
+						onClick={onBack}
+						className="-ml-2 mb-1 inline-flex min-h-11 w-fit max-w-full items-center gap-1 rounded-lg px-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:min-h-9"
+					>
+						<ChevronLeft className="size-4 shrink-0" aria-hidden="true" />
+						<span className="truncate">{seller.storeName}</span>
+					</button>
+				) : null}
 				<SheetTitle className="font-heading text-xl font-bold">
-					Credits — {seller.storeName}
+					Credit ledger
 				</SheetTitle>
 				<SheetDescription>
 					Balances, open lots and every movement, newest first. Adjust by hand

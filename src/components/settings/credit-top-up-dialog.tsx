@@ -26,6 +26,7 @@ import { useStoreRole } from "../../hooks/usePermission";
 import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../../lib/contact";
+import { afterTopUpLine, packOffers, wholePrice } from "../../lib/credit-packs";
 import type { TopUpParam } from "../../lib/credit-top-up";
 import {
 	convexErrorMessage,
@@ -146,7 +147,7 @@ export function CreditTopUpDialog({
 				if (!next) close();
 			}}
 		>
-			<DialogContent className="sm:max-w-md">
+			<DialogContent className="sm:max-w-lg">
 				{showReturn ? (
 					<ReturnView
 						latest={latest}
@@ -200,8 +201,8 @@ function PickerView({
 		<DialogHeader>
 			<DialogTitle>Top up credits</DialogTitle>
 			<DialogDescription>
-				1 credit = 1 order. Credits you buy are used after your plan's monthly
-				orders, and last 12 months.
+				1 credit = 1 order. Bought credits kick in once your monthly credits run
+				out, and carry over for 12 months — nothing goes to waste.
 			</DialogDescription>
 		</DialogHeader>
 	);
@@ -212,8 +213,10 @@ function PickerView({
 				{header}
 				<div className="flex flex-col gap-3" aria-busy="true">
 					<Skeleton className="h-16 w-full rounded-xl" />
-					<Skeleton className="h-[4.5rem] w-full rounded-xl" />
-					<Skeleton className="h-[4.5rem] w-full rounded-xl" />
+					<div className="grid grid-cols-2 gap-3 pt-2.5">
+						<Skeleton className="h-36 w-full rounded-2xl" />
+						<Skeleton className="h-36 w-full rounded-2xl" />
+					</div>
 				</div>
 				<DialogFooter>
 					<Button variant="outline" className="tap-target" onClick={onClose}>
@@ -242,7 +245,7 @@ function PickerView({
 	// pick the options no longer carry can never be what Buy sends.
 	const pack: Pack | undefined =
 		options.packs.find((p) => p.id === picked) ?? options.packs[0];
-	const bestValueId = bestValuePackId(options.packs);
+	const offers = packOffers(options.packs);
 	const canBuy =
 		options.available &&
 		options.refusal === null &&
@@ -324,54 +327,107 @@ function PickerView({
 				<NeedsAccessNote area="credits" level="write" />
 			) : null}
 
-			<div className="flex flex-col gap-2">
-				{options.packs.map((p) => {
-					const selected = p.id === pack?.id;
-					return (
-						<button
-							key={p.id}
-							type="button"
-							onClick={() => setPicked(p.id)}
-							aria-pressed={selected}
-							disabled={!canBuy || phase !== "idle"}
-							className={cn(
-								"flex min-h-16 items-center gap-3 rounded-xl border p-4 text-left transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60",
-								selected && canBuy
-									? "border-foreground bg-muted/50"
-									: "border-border enabled:hover:border-foreground/40",
-							)}
-						>
-							<span
-								aria-hidden
+			{/* The packs read like the /pricing cards — credits as the headline,
+			    then the price, what a credit costs in each, and exactly what the
+			    bigger pack saves. Native radios: arrow keys move the choice. */}
+			<fieldset className="min-w-0">
+				<legend className="sr-only">Choose a credit pack</legend>
+				<div className="grid grid-cols-2 gap-3 pt-2.5">
+					{offers.map((p) => {
+						const selected = p.id === pack?.id;
+						const on = selected && canBuy;
+						const disabled = !canBuy || phase !== "idle";
+						// One sentence for a screen reader — the card's figures are
+						// separate blocks that would otherwise run together.
+						const spoken = [
+							`${p.credits} credits for ${wholePrice(p.priceMinor, p.currency)}`,
+							`${wholePrice(p.perCreditMinor, p.currency)} per credit`,
+							p.saving
+								? `save ${wholePrice(p.saving.minor, p.currency)}`
+								: null,
+							p.bestValue ? "best value" : null,
+							"lasts 12 months",
+						]
+							.filter(Boolean)
+							.join(", ");
+						return (
+							<label
+								key={p.id}
 								className={cn(
-									"flex size-5 shrink-0 items-center justify-center rounded-full border",
-									selected && canBuy
-										? "border-foreground bg-foreground text-background"
-										: "border-border",
+									"relative flex min-w-0 flex-col rounded-2xl border p-4 pt-5 transition-[border-color,box-shadow,background-color] has-[:focus-visible]:ring-3 has-[:focus-visible]:ring-ring/50",
+									disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
+									on
+										? "border-accent bg-accent/5 shadow-md ring-1 ring-accent"
+										: "border-border bg-card shadow-sm",
+									!disabled && !on && "hover:border-foreground/30",
 								)}
 							>
-								{selected && canBuy ? <Check className="size-3.5" /> : null}
-							</span>
-							<span className="min-w-0 flex-1">
-								<span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-semibold">
-									{p.credits} credits
-									{p.id === bestValueId ? (
-										<span className="rounded-full border border-accent/20 bg-accent/10 px-1.5 py-0.5 text-[10px] font-semibold text-accent-emphasis">
-											Better value
-										</span>
-									) : null}
+								<input
+									type="radio"
+									name="credit-pack"
+									value={p.id}
+									checked={selected}
+									disabled={disabled}
+									onChange={() => setPicked(p.id)}
+									aria-label={spoken}
+									className="sr-only"
+								/>
+								<span className="flex items-baseline gap-1 pr-6">
+									<span className="text-3xl font-bold tracking-tight tabular-nums">
+										{p.credits}
+									</span>
+									<span className="text-sm text-muted-foreground">credits</span>
 								</span>
-								<span className="mt-0.5 block text-xs text-muted-foreground">
-									{p.credits} more orders · valid 12 months
+								<span className="mt-3 text-lg font-semibold tabular-nums">
+									{wholePrice(p.priceMinor, p.currency)}
 								</span>
-							</span>
-							<span className="shrink-0 text-sm font-semibold tabular-nums">
-								{formatPrice(p.priceMinor, p.currency)}
-							</span>
-						</button>
-					);
-				})}
-			</div>
+								<span className="text-xs text-muted-foreground tabular-nums">
+									{wholePrice(p.perCreditMinor, p.currency)} per credit
+								</span>
+								{p.saving ? (
+									<span className="mt-2.5 w-fit rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-semibold text-accent-emphasis">
+										Save {wholePrice(p.saving.minor, p.currency)}
+										{p.saving.versus
+											? ` vs ${p.saving.versus.count} × ${p.saving.versus.credits}`
+											: ""}
+									</span>
+								) : null}
+								<span className="mt-auto flex items-center gap-1.5 pt-3 text-xs text-muted-foreground">
+									<Check
+										className="size-3.5 shrink-0 text-accent"
+										aria-hidden
+									/>
+									Lasts 12 months
+								</span>
+								{/* After the figures in the DOM, so the radio's name
+								    starts with the credits it buys. */}
+								{p.bestValue ? (
+									<span className="absolute -top-2.5 left-1/2 -translate-x-1/2 rotate-2 whitespace-nowrap rounded-md bg-accent px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-accent-foreground shadow-sm">
+										Best value
+									</span>
+								) : null}
+								<span
+									aria-hidden
+									className={cn(
+										"absolute right-3 top-3 flex size-5 items-center justify-center rounded-full border",
+										on
+											? "border-accent bg-accent text-accent-foreground"
+											: "border-border bg-background",
+									)}
+								>
+									{on ? <Check className="size-3.5" /> : null}
+								</span>
+							</label>
+						);
+					})}
+				</div>
+			</fieldset>
+
+			{canBuy && pack ? (
+				<p aria-live="polite" className="text-sm font-medium tabular-nums">
+					{afterTopUpLine(balance.total, pack.credits)}
+				</p>
+			) : null}
 
 			{options.upgradeHint ? (
 				<p className="text-xs text-muted-foreground">
@@ -430,14 +486,6 @@ function PickerView({
 	);
 }
 
-/** The pack with the lowest price per credit, when there's a real choice. */
-function bestValuePackId(packs: Pack[]): string | null {
-	if (packs.length < 2) return null;
-	const perCredit = (p: Pack) => p.priceMinor / p.credits;
-	const best = packs.reduce((a, b) => (perCredit(b) < perCredit(a) ? b : a));
-	return packs.every((p) => perCredit(p) === perCredit(best)) ? null : best.id;
-}
-
 /** The one thing a refused OWNER can do about it. A teammate gets the copy
  * only — every way out is a billing write, which is the owner's. */
 function RefusalWayOut({
@@ -465,7 +513,8 @@ function RefusalWayOut({
 				? "Resume your plan"
 				: refusal === "trialing" || refusal === "cancelled"
 					? "Choose a plan"
-					: null;
+					: // admin_store / sponsored: nothing is wrong, so no way out.
+						null;
 	if (!label) return null;
 	// The billing tab under this dialog carries the invoice, the plan picker
 	// and the resume switch — closing IS the way there.
@@ -685,8 +734,9 @@ function ordersLabel(total: number): string {
 	return total < 0 ? `${n} ${noun} owed` : `${n} ${noun} left`;
 }
 
-/** What the seller is topping up: the total the meter shows, and — once they
- * hold bought credits — where it comes from. */
+/** What the seller is topping up: the total the meter shows, and always the
+ * two balances it's made of — monthly credits (used first, reset on the 1st)
+ * and bought credits (used next, kept 12 months) — in the meter's words. */
 function BalanceStrip({ balance }: { balance: Balance }) {
 	const owed = balance.total < 0;
 	return (
@@ -701,14 +751,12 @@ function BalanceStrip({ balance }: { balance: Balance }) {
 				>
 					{ordersLabel(balance.total)}
 				</p>
-				{balance.purchased > 0 ? (
-					<p className="text-xs text-muted-foreground tabular-nums">
-						{balance.plan < 0
-							? `${-balance.plan} owed on your plan`
-							: `${balance.plan} from your plan`}{" "}
-						· {balance.purchased} topped up
-					</p>
-				) : null}
+				<p className="text-xs text-muted-foreground tabular-nums">
+					{balance.plan < 0
+						? `${-balance.plan} owed on monthly`
+						: `${balance.plan} monthly`}{" "}
+					· {balance.purchased} bought
+				</p>
 			</div>
 		</div>
 	);

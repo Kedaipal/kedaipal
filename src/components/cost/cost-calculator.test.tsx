@@ -132,7 +132,7 @@ describe("CostCalculator — the plan behind the price", () => {
 	}
 	/** The sticky CTA's WhatsApp message, decoded. */
 	function waMessage(): string {
-		const link = screen.getByRole("link", { name: /Start with Kedaipal/ });
+		const link = screen.getByRole("link", { name: /^Start with / });
 		return decodeURIComponent(link.getAttribute("href") ?? "");
 	}
 
@@ -143,7 +143,7 @@ describe("CostCalculator — the plan behind the price", () => {
 		expect(plan()).toContain("RM79/mo");
 		expect(plan()).toContain("Starter includes 100 credits a month");
 		expect(plan()).not.toContain("Cheaper than");
-		expect(text()).toContain("Start with Kedaipal — RM79/mo");
+		expect(text()).toContain("Start with Starter — RM79/mo");
 
 		switchToSingapore();
 		expect(plan()).toContain("S$29/mo");
@@ -163,6 +163,13 @@ describe("CostCalculator — the plan behind the price", () => {
 		expect(waMessage()).toContain(
 			"get started on Pro + 2 × 50 credits (RM239/mo)",
 		);
+		// The CTA quotes the PLAN at its own price — never the plan-plus-top-ups
+		// total, which would read like a plan price. And the multiple is over
+		// what Kedaipal costs in all, not "your subscription".
+		expect(text()).toContain("Start with Pro — RM149/mo");
+		expect(text()).not.toContain("— RM239/mo");
+		expect(text()).toMatch(/× what Kedaipal costs you/);
+		expect(text()).not.toMatch(/your subscription/i);
 
 		switchToSingapore();
 		expect(plan()).toContain("Pro + 2 × 50 credits");

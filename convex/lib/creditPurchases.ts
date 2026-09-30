@@ -22,10 +22,15 @@ export const CREDIT_PURCHASE_TTL_MS = 24 * 60 * 60 * 1000;
 export const CREDIT_PURCHASE_HITPAY_EXPIRY = "1440 mins";
 
 /** Why a store can't buy a pack right now: T1's subscription rule
- * (`topUpBlock`), plus a Kedaipal admin's own store — never billed, never
- * locked, and permanently `trialing`, where "pick a plan first" would be
- * advice it can't take. */
-export type TopUpRefusal = TopUpBlock | "admin_store";
+ * (`topUpBlock` — a pack tops up a PAID plan, so trial, overdue, held and
+ * ended plans are refused), plus the two kinds of store that can never be
+ * locked and so have nothing to top up:
+ *  - a Kedaipal admin's own store — never billed, and permanently
+ *    `trialing`, where "pick a plan first" would be advice it can't take;
+ *  - a SPONSORED store (comped, or the missing-row fail-safe `resolveAccess`
+ *    treats as comped) — its credits are a meter, never a lock, so a pack
+ *    would be money for nothing (Zaki, 1 Oct 2026). */
+export type TopUpRefusal = TopUpBlock | "admin_store" | "sponsored";
 
 export function topUpRefusal(args: {
 	status: CreditBillingStatus;
@@ -33,6 +38,7 @@ export function topUpRefusal(args: {
 	ownerIsAdmin: boolean;
 }): TopUpRefusal | null {
 	if (args.ownerIsAdmin) return "admin_store";
+	if (args.comped || args.status === null) return "sponsored";
 	return topUpBlock(args.status, args.comped);
 }
 
@@ -48,6 +54,10 @@ export function topUpRefusalMessage(
 ): string {
 	if (refusal === "admin_store")
 		return "Kedaipal admin stores aren't billed, so there's nothing to top up — credits refresh every month and the store never locks.";
+	// The same sentence for the owner and a teammate: there is no way out to
+	// take, because nothing is wrong.
+	if (refusal === "sponsored")
+		return "Sponsored stores never run out, so there's nothing to top up — credits refresh every month and the store never locks.";
 	if (opts.audience === "member") {
 		switch (refusal) {
 			case "trialing":
