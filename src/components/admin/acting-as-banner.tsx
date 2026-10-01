@@ -1,6 +1,5 @@
-import { useNavigate } from "@tanstack/react-router";
 import { Hammer, LogOut, ShieldAlert } from "lucide-react";
-import { useActAs } from "../../hooks/useActAs";
+import { useExitActAs } from "../../hooks/useExitActAs";
 
 /**
  * Persistent, high-contrast "you are operating someone else's store" banner shown
@@ -29,13 +28,7 @@ export function ActingAsBanner({
 	 * a loud banner exists to prevent. */
 	unclaimed?: boolean;
 }) {
-	const navigate = useNavigate();
-	const { setActAs } = useActAs();
-
-	function exit() {
-		setActAs(undefined);
-		navigate({ to: "/app/admin/sellers" });
-	}
+	const exit = useExitActAs();
 
 	return (
 		<div className="sticky top-0 z-30 flex items-center gap-3 border-b border-amber-300 bg-amber-400 px-4 py-2 text-amber-950">
