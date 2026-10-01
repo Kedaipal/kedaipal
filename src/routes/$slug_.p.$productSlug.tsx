@@ -22,6 +22,7 @@ import {
 	imageSrcSet,
 	proxiedImageUrl,
 } from "../lib/image-proxy";
+import { jsonLdScript } from "../lib/json-ld";
 import { ssrRead } from "../lib/ssr-read";
 import { hasStartingPrice } from "../lib/variant";
 
@@ -236,9 +237,7 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 						]
 					: []),
 			],
-			scripts: [
-				{ type: "application/ld+json", children: JSON.stringify(jsonLd) },
-			],
+			scripts: [jsonLdScript(jsonLd)],
 		};
 	},
 	notFoundComponent: ProductNotFound,
@@ -347,7 +346,10 @@ function ProductRoute() {
 				/>
 				{/* Direct flex child so its `mt-auto` anchors it to the bottom of the
 			    page — same placement as the store home and category pages. */}
-				<StorefrontFooter slug={slug} />
+				<StorefrontFooter
+					slug={slug}
+					discover={retailer.marketplaceUnlisted !== true}
+				/>
 			</div>
 		</OrderingPausedProvider>
 	);

@@ -7,6 +7,10 @@ import {
 	type CsvOrder,
 	DEFAULT_ORDER_COLUMN_KEYS,
 	escapeCsvField,
+	FULFILMENT_KEYS,
+	FULFILMENT_LABELS,
+	fulfilmentKey,
+	fulfilmentLabel,
 	fulfilmentMomentSortKey,
 	ORDER_COLUMNS,
 	ORDER_COLUMNS_BY_KEY,
@@ -91,6 +95,157 @@ describe("orderToCsvRow", () => {
 				CSV_COLUMNS.indexOf("Fulfilment")
 			],
 		).toBe("self_collect");
+	});
+
+	test("a drop-off order is its own fulfilment kind, not flattened into self-collect (z8r3fdfau9)", () => {
+		const dropOff = {
+			...base,
+			deliveryMethod: "self_collect",
+			pickupSnapshot: {
+				label: "Pasar Chow Kit",
+				address: "Jalan Raja Alang",
+				locationType: "drop_off" as const,
+			},
+		};
+		expect(orderToCsvRow(dropOff)[CSV_COLUMNS.indexOf("Fulfilment")]).toBe(
+			"drop_off",
+		);
+		// A pickup point at the seller's OWN place, and a legacy snapshot from
+		// before drop-off existed, both stay self-collect.
+		const ownPlace = {
+			...base,
+			deliveryMethod: "self_collect",
+			pickupSnapshot: {
+				label: "Shop",
+				address: "Jalan 1",
+				locationType: "self_collect" as const,
+			},
+		};
+		expect(orderToCsvRow(ownPlace)[CSV_COLUMNS.indexOf("Fulfilment")]).toBe(
+			"self_collect",
+		);
+		const legacy = {
+			...base,
+			deliveryMethod: "self_collect",
+			pickupSnapshot: { label: "Shop", address: "Jalan 1" },
+		};
+		expect(orderToCsvRow(legacy)[CSV_COLUMNS.indexOf("Fulfilment")]).toBe(
+			"self_collect",
+		);
+	});
+
+	test("an RSVP is its own fulfilment kind even though it is STORED self_collect (z8r3fdff9u)", () => {
+		// The trap this pins: an event RSVP is collected at the venue, so it is
+		// stored `deliveryMethod: "self_collect"` and told apart only by the
+		// frozen `eventRsvp` marker. Read the method and every RSVP files under
+		// Self-collect — exactly the flattening drop-off already suffered.
+		const rsvp = { ...base, deliveryMethod: "self_collect", eventRsvp: true };
+		expect(orderToCsvRow(rsvp)[CSV_COLUMNS.indexOf("Fulfilment")]).toBe(
+			"event",
+		);
+		// The flow kind outranks BOTH refinements — an RSVP at a venue is not a
+		// pasar meetup and not a rider collection, whatever a row happens to
+		// carry. Neither shape is reachable through `orders.create` today (it
+		// takes delivery/self_collect only), which is exactly why the precedence
+		// needs pinning: the next flow kind added is the one that finds out.
+		expect(
+			fulfilmentKey({
+				...rsvp,
+				pickupSnapshot: {
+					label: "Dewan",
+					address: "Jalan 1",
+					locationType: "drop_off",
+				},
+			}),
+		).toBe("event");
+		expect(fulfilmentKey({ ...rsvp, deliveryDirection: "collection" })).toBe(
+			"event",
+		);
+		expect(
+			fulfilmentKey({
+				...base,
+				deliveryMethod: "booking",
+				deliveryDirection: "collection",
+			}),
+		).toBe("booking");
+		// A plain self-collect order is untouched.
+		expect(
+			fulfilmentKey({ ...base, deliveryMethod: "self_collect" }),
+		).toBe("self_collect");
+	});
+
+	test("fulfilmentKey precedence: collection beats the method, drop-off beats self-collect, legacy reads as delivery", () => {
+		const csv = (o: Partial<CsvOrder>) => fulfilmentKey({ ...base, ...o });
+		// A collection order is a DELIVERY order in the schema — the direction is
+		// what makes it the opposite trip, so it has to win.
+		expect(
+			csv({ deliveryMethod: "delivery", deliveryDirection: "collection" }),
+		).toBe("collection");
+		// A collection order carrying a pickup snapshot stays a collection: the
+		// direction refines the DELIVERY kind, and a snapshot picked up through a
+		// mid-flight settings change doesn't turn a rider trip into a meet-up.
+		expect(
+			csv({
+				deliveryMethod: "delivery",
+				deliveryDirection: "collection",
+				pickupSnapshot: {
+					label: "X",
+					address: "Y",
+					locationType: "drop_off",
+				},
+			}),
+		).toBe("collection");
+		// `self_collect` + a collection direction is NOT reachable — the direction
+		// is only stamped when the method isn't self_collect (orders.create) — and
+		// if a row ever held both, the buyer is collecting and no rider is moving,
+		// so the method is the trustworthy half. Pinned so the answer is a
+		// decision rather than a side effect of branch order.
+		expect(
+			csv({
+				deliveryMethod: "self_collect",
+				deliveryDirection: "collection",
+				pickupSnapshot: {
+					label: "X",
+					address: "Y",
+					locationType: "drop_off",
+				},
+			}),
+		).toBe("drop_off");
+		expect(csv({ deliveryMethod: "booking" })).toBe("booking");
+		// No method at all — every order created before the field existed. It
+		// reads as delivery (the schema's own default) rather than going blank,
+		// so the Delivery filter row keeps them instead of silently hiding them.
+		expect(csv({ deliveryMethod: undefined })).toBe("delivery");
+	});
+
+	test("fulfilmentLabel is the one author, and it humanises what it doesn't know", () => {
+		// The column, the CSV, the column funnel and the Filters panel each used
+		// to carry their OWN fallback, and they disagreed: the column humanised
+		// (`Drop Off`) while the three pickers printed the raw key (`drop_off`).
+		// All four now call this, so there is one answer to pin.
+		//
+		// Note what this does and does not prove: `fulfilmentKey` returns a closed
+		// union, so no unknown key can actually reach the column today — the four
+		// surfaces could only have disagreed about a value that cannot occur. The
+		// fix is de-duplication, and THIS is the assertion with teeth: change the
+		// shared fallback and it goes red.
+		expect(fulfilmentLabel("some_future_kind")).toBe("Some future kind");
+		for (const key of FULFILMENT_KEYS) {
+			expect(fulfilmentLabel(key)).toBe(FULFILMENT_LABELS[key]);
+		}
+	});
+
+	test("every fulfilment key has a real label — none falls through to humanizeEnum", () => {
+		for (const key of FULFILMENT_KEYS) {
+			expect(FULFILMENT_LABELS[key]).toBeTruthy();
+		}
+		// The two the fallback would have got wrong: `humanizeEnum` produces
+		// "Self collect" (no hyphen) and "Collection" (which reads as the opposite
+		// direction next to "Self-collect").
+		expect(FULFILMENT_LABELS.self_collect).toBe("Self-collect");
+		expect(FULFILMENT_LABELS.collection).toBe("We collect");
+		expect(FULFILMENT_LABELS.drop_off).toBe("Drop-off");
+		expect(FULFILMENT_LABELS.event).toBe("Event");
 	});
 
 	test("summarizes items as 'qty x name (variant)'", () => {

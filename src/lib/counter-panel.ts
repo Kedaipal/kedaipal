@@ -48,6 +48,11 @@ export interface PrimaryActionInput {
 	 * from a session draft saved before the rule existed, since the catalog
 	 * disables the rows that would build it. */
 	mixedRsvp?: string;
+	/** The first cart line with an unanswered REQUIRED buyer question
+	 * (`z8r3fdkjek`), already worded ("Answer “Flavour” for Birthday cake").
+	 * Blocks BOTH modes: every door refuses it, and a claim link must never be
+	 * dead on arrival over an answer only the seller can give. */
+	unansweredQuestion?: string;
 	/** Formatted money for the label, e.g. "RM 20.00". */
 	money: string;
 	windowMinutes: number;
@@ -78,6 +83,7 @@ export function counterPrimaryAction(input: PrimaryActionInput): PrimaryAction {
 		buyerName,
 		eventName,
 		mixedRsvp,
+		unansweredQuestion,
 	} = input;
 	if (mode === "send") {
 		const reason = empty
@@ -88,7 +94,7 @@ export function counterPrimaryAction(input: PrimaryActionInput): PrimaryAction {
 					? `"${eventName}" is an event — share its storefront link so guests RSVP to the fixed date`
 					: unpriced
 						? "Set a price for every custom item first"
-						: undefined;
+						: unansweredQuestion;
 		const runwayMinutes = Math.round(CLAIM_PAYMENT_RUNWAY_MS / 60_000);
 		return {
 			// Shows the MONEY, mirroring the counter primary: the price is what a
@@ -108,7 +114,7 @@ export function counterPrimaryAction(input: PrimaryActionInput): PrimaryAction {
 		? "Add an item first"
 		: mixedRsvp !== undefined
 			? `An RSVP is its own order — remove "${mixedRsvp}" or ring it up separately`
-			: undefined;
+			: unansweredQuestion;
 	return {
 		label: `Review order · ${money}`,
 		disabled: counterReason !== undefined,

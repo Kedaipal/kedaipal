@@ -6,6 +6,12 @@ import {
 	MAX_NOTICE_DAYS,
 	MAX_PREP_MINUTES,
 } from "./lib/fulfilmentDate";
+import {
+	type BuyerQuestion,
+	buyerQuestionInputValidator,
+	type BuyerQuestionInput,
+	sanitizeBuyerQuestions,
+} from "./lib/buyerQuestions";
 import { collapseNote, MAX_PICKUP_NOTE_LENGTH } from "./lib/pickupNote";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
@@ -28,7 +34,11 @@ import {
 	isProductVisible,
 } from "./lib/categoryCounts";
 import { sanitizeMinQuantity } from "./lib/minOrderRules";
-import { tallyEventSeats } from "./lib/eventSeats";
+import {
+	type QuestionTally,
+	questionTallies,
+	tallyEventSeats,
+} from "./lib/eventSeats";
 import { resolveEventVenue } from "./orders";
 import {
 	type EventInput,
@@ -878,6 +888,28 @@ export const get = query({
 // Mutations
 // ---------------------------------------------------------------------------
 
+/**
+ * Buyer questions (`z8r3fdkjek`) for a create/update. Refused on a booking
+ * listing — a booking has its own door (`bookings.requestBooking`) with no
+ * buyer items to hang answers on, so a question there could never be asked.
+ * An empty list is allowed on a booking (it's how "none" is spelled).
+ */
+function resolveBuyerQuestions(
+	kind: ReturnType<typeof effectiveKind>,
+	raw: BuyerQuestionInput[] | undefined,
+): BuyerQuestion[] | undefined {
+	if (raw === undefined || raw.length === 0) return undefined;
+	if (kind === "booking")
+		throw new ConvexError(
+			"Questions for the buyer aren't available on a booking listing yet",
+		);
+	try {
+		return sanitizeBuyerQuestions(raw);
+	} catch (err) {
+		throw new ConvexError((err as Error).message);
+	}
+}
+
 export const create = mutation({
 	args: {
 		retailerId: v.id("retailers"),
@@ -897,6 +929,10 @@ export const create = mutation({
 		hidden: v.optional(v.boolean()),
 		// Minimum order quantity (summed across variants). 0/1 normalize to unset.
 		minQuantity: v.optional(v.number()),
+		// Buyer questions (`z8r3fdkjek`) — asked at checkout, answers frozen on
+		// the order line. Refused on a booking listing. On update: undefined =
+		// no change, [] clears.
+		buyerQuestions: v.optional(v.array(buyerQuestionInputValidator)),
 		// Event RSVP config (`z8r3fdff9u`). Present = this product is a
 		// fixed-date event every RSVP locks to. Refused on the booking kind.
 		event: v.optional(
@@ -906,6 +942,7 @@ export const create = mutation({
 				seats: v.optional(v.number()),
 				endDate: v.optional(v.number()),
 				venueId: v.optional(v.id("pickupLocations")),
+				requiresApproval: v.optional(v.boolean()),
 			}),
 		),
 		// Kind + booking config land together at create and the kind is immutable
@@ -1051,6 +1088,11 @@ export const create = mutation({
 				event = await validateEventVenue(ctx, args.retailerId, sanitized);
 		}
 
+		const buyerQuestions = resolveBuyerQuestions(
+			effectiveKind(kind),
+			args.buyerQuestions,
+		);
+
 		// Cross-variant SKU uniqueness against the rest of this retailer's catalog.
 		for (const variant of variants) {
 			if (variant.sku)
@@ -1079,6 +1121,7 @@ export const create = mutation({
 			kind: kind === "physical" ? undefined : kind,
 			booking,
 			event,
+			buyerQuestions,
 			sortOrder: args.sortOrder,
 			active: true,
 			channel: "whatsapp",
@@ -1240,6 +1283,10 @@ type StoredProductEvent = Omit<ProductEvent, "venueId"> & {
 	venueId?: Id<"pickupLocations">;
 };
 
+/** Seller-facing refusal for an event on a store with no pickup point. */
+const EVENT_NEEDS_VENUE_MESSAGE =
+	"Add a pickup point first (Settings → Fulfilment → Pickup points) — it's where the event happens. A hidden point works if it's only for events.";
+
 async function validateEventVenue(
 	ctx: MutationCtx,
 	retailerId: Id<"retailers">,
@@ -1261,6 +1308,10 @@ async function validateEventVenue(
 		throw new ConvexError(
 			"This store has more than one pickup point — pick which one hosts the event.",
 		);
+	// No point at all: the event would save, advertise RSVP on the storefront,
+	// and then dead-end every guest at the RSVP page ("no collection point set
+	// up yet"). Refused here, where the seller can fix it (`z8r3fdkjek`).
+	if (points.length === 0) throw new ConvexError(EVENT_NEEDS_VENUE_MESSAGE);
 	return { ...event, venueId: undefined };
 }
 
@@ -1289,6 +1340,10 @@ export const update = mutation({
 		hidden: v.optional(v.boolean()),
 		// Minimum order quantity. 0 (or 1) clears the rule; undefined = no change.
 		minQuantity: v.optional(v.number()),
+		// Buyer questions (`z8r3fdkjek`) — asked at checkout, answers frozen on
+		// the order line. Refused on a booking listing. On update: undefined =
+		// no change, [] clears.
+		buyerQuestions: v.optional(v.array(buyerQuestionInputValidator)),
 		// Event RSVP config (`z8r3fdff9u`). `undefined` = no change; `null` turns
 		// the event OFF (the `description` posture — a toggle a seller can
 		// un-tick needs a spelling for "off", which an optional object alone
@@ -1301,6 +1356,7 @@ export const update = mutation({
 					seats: v.optional(v.number()),
 					endDate: v.optional(v.number()),
 					venueId: v.optional(v.id("pickupLocations")),
+					requiresApproval: v.optional(v.boolean()),
 				}),
 				v.null(),
 			),
@@ -1389,6 +1445,12 @@ export const update = mutation({
 			// 0/1 sanitize to undefined, which patch treats as "remove the field" —
 			// so sending 0 clears the rule (one spelling for "no minimum").
 			updates.minQuantity = sanitizeMinQuantity(fields.minQuantity);
+		if (fields.buyerQuestions !== undefined)
+			// [] sanitizes to undefined, which patch reads as "remove the field".
+			updates.buyerQuestions = resolveBuyerQuestions(
+				effectiveKind(ownedProduct.kind),
+				fields.buyerQuestions,
+			);
 		if (fields.event !== undefined) {
 			updates.event = await resolveEventUpdate(
 				ctx,
@@ -2645,6 +2707,8 @@ export const eventHeadcount = query({
 		left?: number;
 		passed: boolean;
 		options: Array<{ label: string; seats: number }>;
+		/** Per choice question (`z8r3fdkjek`), seat-weighted like `options`. */
+		questions: QuestionTally[];
 	} | null> => {
 		const { product } = await requireProductOwnership(ctx, productId, "read");
 		if (product.event === undefined) return null;
@@ -2669,6 +2733,7 @@ export const eventHeadcount = query({
 				label,
 				seats,
 			})),
+			questions: questionTallies(product.buyerQuestions, tally.byAnswer),
 		};
 	},
 });

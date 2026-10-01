@@ -99,8 +99,12 @@ export const getCheckoutContext = internalQuery({
 			trackingToken: order.trackingToken ?? "",
 			status: order.status,
 			paymentStatus: order.paymentStatus ?? "unpaid",
+			// A request awaiting the seller's approval is never payable
+			// (`z8r3fdkjek` — bookings and approval-required RSVPs alike).
 			holdsOpen:
-				!isMockupGateClosed(order) && order.deliveryFeePending !== true,
+				order.status !== "booking_requested" &&
+				!isMockupGateClosed(order) &&
+				order.deliveryFeePending !== true,
 			total: order.total,
 			currency: order.currency,
 			customerName: order.customer.name,

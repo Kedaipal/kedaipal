@@ -826,6 +826,7 @@ function OrderDetailRoute() {
 				<BookingRequestCard order={order} />
 			) : order.bookingResolution !== undefined ? (
 				<BookingResolutionNote
+					isRsvp={order.eventRsvp === true}
 					resolution={order.bookingResolution}
 					reason={order.cancellationNote}
 				/>
@@ -1770,6 +1771,7 @@ function OrderDetailRoute() {
 							currency={order.currency}
 							imageUrl={itemImageUrls?.[i] ?? undefined}
 							booking={itemBookingSpan}
+							answers={item.answers}
 						/>
 					))}
 				</ul>

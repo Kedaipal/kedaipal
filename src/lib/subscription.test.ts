@@ -280,6 +280,8 @@ describe("resolveBannerState", () => {
 			methodLabel: "Visa ·· 4242",
 			failedAttempts: 1,
 			failing: true,
+			stopped: false,
+			confirming: false,
 		};
 		expect(
 			resolveBannerState(
@@ -306,6 +308,72 @@ describe("resolveBannerState", () => {
 				NOW,
 			).kind,
 		).toBe("none");
+	});
+
+	test("auto-charging STOPPED over a stranded charge outranks a decline and the countdown — never past_due", () => {
+		const stopped = {
+			method: "card",
+			methodLabel: "Visa ·· 4242",
+			failedAttempts: 1,
+			failing: true,
+			stopped: true,
+			confirming: false,
+		};
+		// Stopped is the current truth, and "pay it yourself" (the failed
+		// banner) could be the second payment while we sort the first one out.
+		expect(
+			resolveBannerState(
+				sub({ status: "active", autoRenew: stopped }),
+				NOW + 2 * DAY,
+				NOW,
+			).kind,
+		).toBe("autoRenewStopped");
+		expect(
+			resolveBannerState(
+				sub({ status: "past_due", autoRenew: stopped }),
+				NOW + 2 * DAY,
+				NOW,
+			).kind,
+		).toBe("pastDue");
+	});
+
+	test("a charge being CONFIRMED silences every pay-me banner — but never past_due or stopped", () => {
+		const confirming = {
+			method: "card",
+			methodLabel: "Visa ·· 4242",
+			failedAttempts: 1,
+			failing: true,
+			stopped: false,
+			confirming: true,
+		};
+		// It outranks the declined banner AND the due-soon countdown: both say
+		// "pay it yourself", which is the double payment while the sent charge
+		// may have landed.
+		expect(
+			resolveBannerState(
+				sub({ status: "active", autoRenew: confirming }),
+				NOW + 2 * DAY,
+				NOW,
+			).kind,
+		).toBe("none");
+		// The harder locks still win: they are about ACCESS, not this charge.
+		expect(
+			resolveBannerState(
+				sub({ status: "past_due", autoRenew: confirming }),
+				NOW + 2 * DAY,
+				NOW,
+			).kind,
+		).toBe("pastDue");
+		expect(
+			resolveBannerState(
+				sub({
+					status: "active",
+					autoRenew: { ...confirming, stopped: true },
+				}),
+				NOW + 2 * DAY,
+				NOW,
+			).kind,
+		).toBe("autoRenewStopped");
 	});
 
 	test("active with a pending invoice due within 5 days → invoiceWarn", () => {

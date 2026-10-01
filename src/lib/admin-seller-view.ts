@@ -5,6 +5,10 @@
 
 import type { AdminSellerRow } from "../../convex/admin";
 import { COMP_KIND_LABEL } from "../../convex/lib/comp";
+import {
+	compHighlightEligible,
+	highlightSource,
+} from "../../convex/lib/marketplaceListing";
 import { csvDate, toCsv } from "../../convex/lib/orderCsv";
 import { formatMobile, formatPrice, formatShortDate } from "./format";
 
@@ -13,8 +17,11 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // --- Buckets: the status chips ------------------------------------------
 
 /** One chip per bucket. `none` = a store with no subscription row at all
- * (pre-billing stores); it only shows a chip when the count is non-zero. */
+ * (pre-billing stores); it only shows a chip when the count is non-zero.
+ * `unclaimed` = a pre-built store waiting for its vendor
+ * (docs/prebuilt-stores.md) — a store, but not yet a seller. */
 export type SellerBucket =
+	| "unclaimed"
 	| "past_due"
 	| "trialing"
 	| "active"
@@ -27,10 +34,14 @@ export type SellerBucket =
 export type SellerFilter = "all" | SellerBucket;
 
 /** Chip order. Past due sits first after All — it is the urgent bucket, and
- * an urgent filter never sits last (CLAUDE.md, "own the structure"). */
+ * an urgent filter never sits last (CLAUDE.md, "own the structure"). Unclaimed
+ * sits straight after it for the same reason: both are buckets where KEDAIPAL
+ * owes someone an action (chase a payment, finish a handover), unlike the rest,
+ * which describe a seller's own state. */
 export const SELLER_FILTERS: readonly SellerFilter[] = [
 	"all",
 	"past_due",
+	"unclaimed",
 	"trialing",
 	"active",
 	"on_hold",
@@ -43,6 +54,7 @@ export const SELLER_FILTERS: readonly SellerFilter[] = [
 export const SELLER_FILTER_LABEL: Record<SellerFilter, string> = {
 	all: "All",
 	past_due: "Past due",
+	unclaimed: "Unclaimed",
 	trialing: "Trialing",
 	active: "Active",
 	on_hold: "On hold",
@@ -60,8 +72,15 @@ export function isSellerFilter(value: unknown): value is SellerFilter {
 }
 
 /** Which chip a row belongs to. Admin and comped outrank the raw status —
- * both are "never billed", so their subscription status is not the story. */
+ * both are "never billed", so their subscription status is not the story.
+ *
+ * Unclaimed outranks BOTH, and must: a pre-built store runs on an `internal`
+ * comp while it is being built, so filing it under "Comped" would hide every
+ * half-finished handover inside the sponsored-deals bucket and show the admin
+ * a store that reads as live. "Nobody owns this yet" is the only fact about it
+ * that matters. */
 export function sellerBucket(row: AdminSellerRow): SellerBucket {
+	if (row.unclaimed) return "unclaimed";
 	if (row.ownerIsAdmin) return "admin";
 	if (row.comped) return "comped";
 	return row.subscriptionStatus ?? "none";
@@ -73,6 +92,7 @@ export function countSellerBuckets(
 	const counts: Record<SellerFilter, number> = {
 		all: rows.length,
 		past_due: 0,
+		unclaimed: 0,
 		trialing: 0,
 		active: 0,
 		on_hold: 0,
@@ -155,16 +175,26 @@ export function sortSellers(
 
 // --- Search -------------------------------------------------------------
 
-/** Name, slug, email, and both phones. A query with three or more digits is
- * also matched against the stored phone digits, so "0123" or "+60 12" finds
- * the number however it was typed. */
+/** Name, slug, email, the handover email, and both phones. A query with three
+ * or more digits is also matched against the stored phone digits, so "0123" or
+ * "+60 12" finds the number however it was typed.
+ *
+ * The HANDOVER email is searched as well as the owner's: a pre-built store has
+ * no owner email at all, so searching the address an admin was given — the only
+ * address that store has — has to find it. Without it, typing the vendor's email
+ * would return nothing for exactly the store you are setting up for them. */
 export function matchesSellerSearch(
 	row: AdminSellerRow,
 	query: string,
 ): boolean {
 	const needle = query.trim().toLowerCase();
 	if (!needle) return true;
-	const text = [row.storeName, row.slug, row.ownerEmail ?? ""]
+	const text = [
+		row.storeName,
+		row.slug,
+		row.ownerEmail ?? "",
+		row.pendingOwnerEmail ?? "",
+	]
 		.join(" ")
 		.toLowerCase();
 	if (text.includes(needle)) return true;
@@ -262,6 +292,22 @@ function toneForDeadline(at: number, now: number): ExpiryTone {
  * renews, a trial ends, a past-due store has a bill that was due.
  */
 export function sellerExpiry(row: AdminSellerRow, now: number): SellerExpiry {
+	// A pre-built store has no clock at all — the 14 days start at handover
+	// (startFreePeriodOnClaim), so every date on its row would be about the
+	// `internal` comp holding it, not about the vendor. Checked FIRST, before
+	// the comped branch, which would otherwise print "No expiry · Comped since
+	// 1 Oct" and read as a sponsored deal.
+	if (row.unclaimed) {
+		return {
+			headline: "Not handed over",
+			detail: row.pendingOwnerEmail
+				? `Waiting for ${row.pendingOwnerEmail}`
+				: "No handover email yet",
+			// Amber without one: a store built and then left with nobody named to
+			// claim it is unfinished work, and the directory should look it.
+			tone: row.pendingOwnerEmail ? "muted" : "warn",
+		};
+	}
 	if (row.ownerIsAdmin) {
 		return { headline: "—", detail: "Never billed", tone: "muted" };
 	}
@@ -371,6 +417,10 @@ export function sellerExpiry(row: AdminSellerRow, now: number): SellerExpiry {
 /** Why the status is what it is, when the pill alone would leave the admin
  * guessing. Absent when the pill says it all. */
 export function sellerReason(row: AdminSellerRow): string | undefined {
+	if (row.unclaimed)
+		return row.pendingOwnerEmail
+			? "Built by us · waiting to be claimed"
+			: "Built by us · set a handover email";
 	if (row.ownerIsAdmin || row.comped) return undefined;
 	const failed = row.autoRenew?.failedAttempts ?? 0;
 	if (failed > 0) {
@@ -404,15 +454,127 @@ const PLAN_LABEL: Record<NonNullable<AdminSellerRow["plan"]>, string> = {
 	scale: "Scale",
 };
 
+// --- Store highlights (z8r3fdkmyp) ----------------------------------------
+
+/**
+ * Where a store stands on the marketplace's "Store highlights" rail, for the
+ * pill, the Manage item, the dialog and the sheet — one mapping of the admin
+ * row onto the shared `highlightSource`, so the console can never disagree
+ * with the buyer page. Internal stores are never listed, so never highlighted.
+ */
+export function sellerHighlight(
+	row: AdminSellerRow,
+	now: number,
+): { source: "paid" | "comp" | null; compEligible: boolean } {
+	if (row.marketplace.internal) return { source: null, compEligible: false };
+	return {
+		source: highlightSource(
+			{
+				sponsoredUntil: row.marketplace.sponsoredUntil,
+				comped: row.comped,
+				compKind: row.comp?.kind,
+				compHighlightOffAt: row.marketplace.compHighlightOffAt,
+			},
+			now,
+		),
+		compEligible: compHighlightEligible(row.comped, row.comp?.kind),
+	};
+}
+
+/** The last day a stored paid-window `until` covers — what every surface
+ * names (the stored value is the NEXT midnight). */
+export function highlightedThroughLabel(until: number): string {
+	return formatShortDate(until - 1);
+}
+
 /** Team seats, one spelling for every surface (86exr91r4): people with
  * access over the plan's people-cap, pending invites appended.
  * "2/3 · 1 invited", "1/∞" for comped/admin stores. */
+/**
+ * The seat VALUE, for the three surfaces that print it under a "Seats" label
+ * (the table column, the sheet row, the CSV, the copy summary). A bare ratio
+ * there; prose belongs to `sellerSeatsPhrase`.
+ *
+ * A pre-built store has no owner and no team, so a ratio would be a count of
+ * nobody — "0/3" is true and still reads like a store that LOST its people
+ * rather than one that hasn't got them yet.
+ *
+ * SHORT, because this value lands in a column sized for "1/3" — "No team yet"
+ * wrapped to THREE lines in the table (seen 2 Oct). Under a "Seats" header the
+ * noun is already supplied, so "None" says the whole thing. The card, which
+ * inlines it with no header, keeps the longer phrase below.
+ */
 export function sellerSeatsLabel(row: AdminSellerRow): string {
+	if (row.unclaimed) return "None";
 	const cap = row.seats.capUnlimited ? "∞" : String(row.seats.cap);
 	const base = `${row.seats.active}/${cap}`;
 	return row.seats.invited > 0
 		? `${base} · ${row.seats.invited} invited`
 		: base;
+}
+
+/**
+ * The seat phrase for the mobile card, which inlines it in a sentence rather
+ * than under a label — "1/3 seats", but "No team yet" on its own, because a
+ * bare "None" mid-sentence leaves the reader asking "none of what?".
+ *
+ * Its own function because the card used to append the noun to whatever
+ * `sellerSeatsLabel` returned, which read "No one yet seats" the moment the
+ * value stopped being a ratio. A caller that must not append cannot be trusted
+ * to remember not to; give it a value it never has to finish.
+ */
+export function sellerSeatsPhrase(row: AdminSellerRow): string {
+	return row.unclaimed ? "No team yet" : `${sellerSeatsLabel(row)} seats`;
+}
+
+/**
+ * The Manage menu's comp item — its title, its subtitle, and whether the icon
+ * should read as a live sponsorship.
+ *
+ * Here rather than inline in the menu because it is the same kind of derived
+ * fact as `sellerRail` and `sellerReason`: a sentence about a row that has to
+ * be right, and that a test can hold. The case it exists for is the one the
+ * menu got wrong — a PRE-BUILT store is always comped (the `internal` comp
+ * keeps it unbilled while an admin builds it), so the ordinary comped copy
+ * called that scaffolding a "sponsorship" and offered to turn it off.
+ *
+ * A REAL comp on an unclaimed store is NOT scaffolding: an admin pre-comping a
+ * partner ahead of handover is supported, and that comp survives the claim, so
+ * it keeps the ordinary copy.
+ */
+export function sellerCompMenuItem(row: AdminSellerRow): {
+	title: string;
+	hint: string;
+	/** Violet (a live sponsorship) vs muted (setup, or nothing yet). */
+	sponsored: boolean;
+} {
+	const setup = row.unclaimed && row.comp?.kind === "internal";
+	if (row.ownerIsAdmin) {
+		return {
+			title: row.comped ? "Comp upgrade — on" : "Turn on comp upgrade",
+			hint: "Admin store — always free already",
+			sponsored: false,
+		};
+	}
+	if (setup) {
+		return {
+			title: "Comp upgrade — setup only",
+			hint: "Keeps this store unbilled while you build it, and ends when they claim it. Set a partner or sponsor comp here if the deal has one.",
+			sponsored: false,
+		};
+	}
+	if (row.comped) {
+		return {
+			title: "Comp upgrade — on",
+			hint: "Edit the sponsorship or turn it off",
+			sponsored: true,
+		};
+	}
+	return {
+		title: "Turn on comp upgrade",
+		hint: "Every feature, no limits, never billed",
+		sponsored: false,
+	};
 }
 
 export function sellerPlanLabel(row: AdminSellerRow): string {
@@ -422,6 +584,9 @@ export function sellerPlanLabel(row: AdminSellerRow): string {
 
 /** The billing rail under the plan: cycle, then how money arrives. */
 export function sellerRail(row: AdminSellerRow): string {
+	// Nothing bills an unclaimed store, so naming a rail ("free period",
+	// "manual billing") would describe money that cannot move.
+	if (row.unclaimed) return "Not billed until claimed";
 	if (row.ownerIsAdmin) return "Admin store";
 	if (row.comped) {
 		if (!row.comp) return "Comped";
@@ -505,6 +670,7 @@ export function sellerCredits(row: AdminSellerRow): SellerCredits {
 }
 
 export const SELLER_STATUS_LABEL: Record<SellerBucket, string> = {
+	unclaimed: "Unclaimed",
 	past_due: "Past due",
 	trialing: "Trialing",
 	active: "Active",
@@ -530,7 +696,11 @@ export function sellerSummaryText(
 		.join(" · ");
 	return [
 		`${row.storeName} — ${origin}/${row.slug}`,
-		`Email: ${row.ownerEmail ?? "none on file"}`,
+		// An unclaimed store has no owner email; printing "none on file" would
+		// read as a seller who deleted theirs, so it says what is actually true.
+		row.unclaimed
+			? `Owner: unclaimed${row.pendingOwnerEmail ? ` · waiting for ${row.pendingOwnerEmail}` : " · no handover email yet"}`
+			: `Email: ${row.ownerEmail ?? "none on file"}`,
 		`WhatsApp: ${row.waPhone ? formatMobile(row.waPhone) : "none on file"}`,
 		`Plan: ${plan || "—"} · ${SELLER_STATUS_LABEL[sellerBucket(row)]}`,
 		`Seats: ${sellerSeatsLabel(row)}`,
@@ -567,6 +737,8 @@ const CSV_HEADER = [
 	"Expiry",
 	"Expiry date",
 	"Email",
+	"Handover email",
+	"Claimed",
 	"Store WhatsApp",
 	"Alerts WhatsApp",
 	"Country",
@@ -604,6 +776,8 @@ function sellerToCsvRow(
 		expiry.headline,
 		csvDate(expiry.at),
 		row.ownerEmail ?? "",
+		row.pendingOwnerEmail ?? "",
+		csvDate(row.claimedAt),
 		row.waPhone ?? "",
 		row.notifyWaPhone ?? "",
 		row.country,

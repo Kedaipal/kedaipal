@@ -484,6 +484,10 @@ http.route({
 						amountSen: event.amountSen ?? -1,
 						currency: event.currency ?? "",
 						methodCode: event.methodCode ?? recurring.methodCode,
+						// A charge event on the recurring-billing session IS the
+						// saved-method rail — it may advance the counter and
+						// answer an attempt stamp.
+						viaSessionCharge: true,
 					},
 				);
 				console.log("HitPay event webhook processed", {
@@ -675,6 +679,9 @@ async function handleBillingCompletionWebhook(
 			? await ctx.runMutation(internal.invoices.internalSettleFromGateway, {
 					invoiceId: context.invoiceId,
 					...payment,
+					// v1 completion = the seller paid the Pay-now link — never the
+					// saved-method session, so no counter bump, no stamp answer.
+					viaSessionCharge: false,
 				})
 			: await ctx.runMutation(internal.creditPurchases.settlePurchase, {
 					purchaseId: context.purchaseId,

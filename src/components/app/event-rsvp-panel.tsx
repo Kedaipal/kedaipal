@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { CalendarClock, Inbox, Users } from "lucide-react";
+import type { QuestionTally } from "../../../convex/lib/eventSeats";
 import { formatEventMoment } from "../../../convex/lib/productEvent";
 
 export type EventHeadcount = {
@@ -11,6 +12,9 @@ export type EventHeadcount = {
 	left?: number;
 	passed: boolean;
 	options: Array<{ label: string; seats: number }>;
+	/** Per choice question (`z8r3fdkjek`) — seat-weighted like `options`.
+	 * Optional so an older cached payload still renders. */
+	questions?: QuestionTally[];
 };
 
 /**
@@ -115,6 +119,33 @@ export function EventRsvpPanel({
 							))}
 						</ul>
 					) : null}
+					{/* Buyer-question tallies (`z8r3fdkjek`) — "Helinox tent 23 · 2
+					    Helinox furniture 17" without opening a single order. Choice
+					    questions only; text answers live on each order. */}
+					{(headcount.questions ?? []).map((question) => (
+						<div key={question.questionId} className="flex flex-col gap-1.5">
+							<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+								{question.label}
+							</p>
+							<ul className="flex flex-col gap-1.5">
+								{question.options.map((opt) => (
+									<li
+										key={opt.label}
+										className="flex items-baseline justify-between gap-3 border-b border-border/60 pb-1.5 text-sm last:border-0 last:pb-0"
+									>
+										<span
+											className={`min-w-0 truncate ${opt.seats === 0 ? "text-muted-foreground" : ""}`}
+										>
+											{opt.label}
+										</span>
+										<span className="shrink-0 font-semibold tabular-nums">
+											{opt.seats}
+										</span>
+									</li>
+								))}
+							</ul>
+						</div>
+					))}
 					{/* The orders themselves are one tap away, pre-filtered to the
 					    event's day — never "go to the inbox and find them". */}
 					<Link

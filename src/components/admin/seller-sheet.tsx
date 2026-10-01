@@ -11,9 +11,11 @@ import { COMP_KIND_LABEL } from "../../../convex/lib/comp";
 import { COUNTRY_LABELS } from "../../../convex/lib/country";
 import {
 	describeDays,
+	highlightedThroughLabel,
 	sellerBucket,
 	sellerCredits,
 	sellerExpiry,
+	sellerHighlight,
 	sellerPlanLabel,
 	sellerRail,
 	sellerReason,
@@ -35,8 +37,10 @@ import { CreditLedgerBody, periodLabel } from "./credit-ledger-sheet";
 import {
 	ContactLine,
 	CreditsText,
+	OwnerEmailLine,
 	ExpiryText,
 	FoundingPill,
+	MarketplacePill,
 	StatusPill,
 } from "./seller-cells";
 import { SellerManageMenu, useOpenStore } from "./seller-manage-menu";
@@ -56,7 +60,11 @@ export function SellerSheet({
 }) {
 	return (
 		<Sheet open={open && seller !== null} onOpenChange={onOpenChange}>
-			<SheetContent side="right" className="gap-0 p-0 sm:max-w-lg">
+			{/* `sm:pb-0` too: the right sheet adds `sm:pb-5`, which a bare `p-0`
+			    can't override, and padding on the scroll container parks the
+			    sticky footer ABOVE it — rows then scroll visibly underneath. The
+			    footer carries the safe-area inset itself instead. */}
+			<SheetContent side="right" className="gap-0 p-0 sm:max-w-lg sm:pb-0">
 				{seller ? (
 					<SellerSheetBody
 						seller={seller}
@@ -85,6 +93,11 @@ function SellerSheetBody({
 	const rail = sellerRail(seller);
 	const link = storefrontUrl(seller.slug);
 	const summary = sellerSummaryText(seller, storefrontOrigin(), now);
+	const highlight = sellerHighlight(seller, now);
+	const hidden = seller.marketplace.hidden;
+	// A highlight keeps its setting while the store is hidden, but it isn't
+	// showing — the line must not read as if it were.
+	const hiddenSuffix = hidden !== undefined ? " — paused while hidden" : "";
 	const alertsSameAsStore =
 		seller.notifyWaPhone !== undefined &&
 		seller.notifyWaPhone === seller.waPhone;
@@ -126,6 +139,7 @@ function SellerSheetBody({
 					</div>
 					<SheetDescription className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
 						<StatusPill bucket={bucket} />
+						<MarketplacePill seller={seller} now={now} />
 						<span className="truncate">
 							{[sellerPlanLabel(seller), rail]
 								.filter((p) => p && p !== "—")
@@ -157,8 +171,11 @@ function SellerSheetBody({
 
 			<div className="flex flex-col gap-5 p-5">
 				<Section title="Contact">
-					<Row label="Login email">
-						<ContactLine kind="email" value={seller.ownerEmail} />
+					{/* An unclaimed store has no login to name — the address here is
+					    the one it is WAITING for, so the label has to say which
+					    question the value answers (docs/prebuilt-stores.md). */}
+					<Row label={seller.unclaimed ? "Handover email" : "Login email"}>
+						<OwnerEmailLine seller={seller} />
 					</Row>
 					<Row label="Store WhatsApp">
 						<ContactLine kind="whatsapp" value={seller.waPhone} />
@@ -194,6 +211,52 @@ function SellerSheetBody({
 								className="h-11 w-11 justify-center rounded-lg px-0"
 								labelClassName="sr-only"
 							/>
+						</div>
+					</Row>
+					{/* Marketplace presence (z8r3fdkmyp): the admin's hide, the
+					    seller's own opt-out and the admin-sold sponsorship, all
+					    read before selling one. */}
+					<Row label="Marketplace">
+						{/* Short lines, not one long one: the row truncates, and
+						    the hide / highlight state is what an admin opens this for. */}
+						<div className="flex min-w-0 flex-col">
+							<Plain
+								muted={
+									seller.marketplace.internal ||
+									hidden !== undefined ||
+									seller.marketplace.unlistedAt !== undefined
+								}
+							>
+								{seller.marketplace.internal
+									? "Not listed — internal store"
+									: hidden !== undefined
+										? `Hidden by an admin since ${formatShortDate(hidden.at)}`
+										: seller.marketplace.unlistedAt !== undefined
+											? `Opted out since ${formatShortDate(seller.marketplace.unlistedAt)}`
+											: "Listed (the default)"}
+							</Plain>
+							{hidden?.note ? <Plain muted>Note: {hidden.note}</Plain> : null}
+							{/* Showing it again won't list it while the seller is
+							    opted out — say so before the admin finds out. */}
+							{hidden !== undefined &&
+							seller.marketplace.unlistedAt !== undefined ? (
+								<Plain muted>
+									Seller opted out too, since{" "}
+									{formatShortDate(seller.marketplace.unlistedAt)}
+								</Plain>
+							) : null}
+							{highlight.source === "paid" &&
+							seller.marketplace.sponsoredUntil !== undefined ? (
+								<Plain muted>
+									Highlighted through{" "}
+									{highlightedThroughLabel(seller.marketplace.sponsoredUntil)}
+									{hiddenSuffix}
+								</Plain>
+							) : highlight.source === "comp" ? (
+								<Plain muted>Highlighted while comped{hiddenSuffix}</Plain>
+							) : highlight.compEligible ? (
+								<Plain muted>Comped — kept off highlights</Plain>
+							) : null}
 						</div>
 					</Row>
 					<Row label="Country · currency">
@@ -394,12 +457,40 @@ function SellerSheetBody({
 				</Section>
 
 				<Section title="How they arrived">
-					<Row label="Joined">
+					{/* "Joined" is a seller's own act. A pre-built store was BUILT —
+					    by us, before anyone joined — and saying "joined" of a store
+					    nobody owns yet is the kind of quietly wrong line that makes
+					    an admin trust the rest of the sheet less. */}
+					<Row label={seller.unclaimed ? "Built" : "Joined"}>
 						<Plain>
 							{formatShortDate(seller.createdAt)}
 							<Muted> · {describeDays(seller.createdAt, now)}</Muted>
 						</Plain>
 					</Row>
+					{/* Shown for a pre-built store either way round: while it waits,
+					    this is the row an admin came to read; once claimed, it is the
+					    only remaining trace that the store did not start life owned
+					    (the placeholder owner id is overwritten at claim). */}
+					{seller.unclaimed || seller.claimedAt !== undefined ? (
+						<Row label="Handover">
+							{seller.claimedAt !== undefined ? (
+								<Plain>
+									Claimed {formatShortDate(seller.claimedAt)}
+									<Muted> · {describeDays(seller.claimedAt, now)}</Muted>
+								</Plain>
+							) : seller.pendingOwnerEmail ? (
+								<Plain>
+									Waiting for {seller.pendingOwnerEmail}
+									<Muted> · they claim it by signing up with it</Muted>
+								</Plain>
+							) : (
+								<Plain muted>
+									No handover email yet — nobody can claim this store until one
+									is set
+								</Plain>
+							)}
+						</Row>
+					) : null}
 					<Row label="Signup source">
 						{seller.signupSource ? (
 							<Plain>
@@ -437,9 +528,13 @@ function SellerSheetBody({
 				</Section>
 			</div>
 
-			<div className="sticky bottom-0 mt-auto flex items-center justify-between gap-3 border-t border-border bg-popover p-4">
+			<div className="sticky bottom-0 mt-auto flex items-center justify-between gap-3 border-t border-border bg-popover p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
 				<span className="text-xs text-muted-foreground">
-					Comp upgrade and the dev reset live under Manage.
+					{/* Names what's actually in the menu here — the dev reset
+					    exists only where the purge is enabled. */}
+					{purgeEnabled
+						? "Comp, highlights, hiding from /stores and the dev reset live under Manage."
+						: "Comp, highlights and hiding from /stores live under Manage."}
 				</span>
 				<SellerManageMenu seller={seller} purgeEnabled={purgeEnabled} />
 			</div>
