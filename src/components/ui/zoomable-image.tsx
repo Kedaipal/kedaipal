@@ -2,7 +2,7 @@ import { X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useEffect, useState } from "react";
 import { cn } from "#/lib/utils";
-import { AppImage } from "./app-image";
+import { AppImage, type ImageFrame } from "./app-image";
 
 /**
  * Shared tap-to-zoom image lightbox. Built once and reused for storefront
@@ -122,6 +122,7 @@ export function ZoomableImage({
 	sizes,
 	sensitive,
 	priority,
+	frame,
 }: {
 	src: string;
 	alt: string;
@@ -139,6 +140,9 @@ export function ZoomableImage({
 	 * downloads bytes that branch never shows.
 	 */
 	priority?: boolean;
+	/** Photo edge + lift — forwards to AppImage's `frame`. The gallery surfaces
+	 * pass `"raised"`: they float straight on the page with no card around them. */
+	frame?: ImageFrame;
 	/** Classes for the wrapping button — use for layout (flex item, snap, etc.). */
 	wrapperClassName?: string;
 	/** Optional caption shown in the lightbox. */
@@ -166,6 +170,7 @@ export function ZoomableImage({
 					sizes={sizes}
 					sensitive={sensitive}
 					priority={priority}
+					frame={frame}
 				/>
 			</button>
 			{/* The lightbox deliberately keeps the ORIGINAL, unproxied URL: it

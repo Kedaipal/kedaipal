@@ -19,6 +19,12 @@ import type { PublicDeliveryQuote } from "../../../convex/delivery";
 import { SG_STATE_LABEL } from "../../../convex/lib/address";
 import { parseBuyerWaPhone } from "../../../convex/lib/buyerPhone";
 import {
+	answerPrompt,
+	answersForSubmit,
+	type BuyerQuestion,
+	firstMissingRequired,
+} from "../../../convex/lib/buyerQuestions";
+import {
 	type ClosedDateRange,
 	closureOn,
 } from "../../../convex/lib/closedDates";
@@ -46,12 +52,6 @@ import {
 } from "../../../convex/lib/openingHours";
 import { type DialIso, isDialIso } from "../../../convex/lib/phoneDial";
 import { distinctPickupNotes } from "../../../convex/lib/pickupNote";
-import {
-	answerPrompt,
-	answersForSubmit,
-	type BuyerQuestion,
-	firstMissingRequired,
-} from "../../../convex/lib/buyerQuestions";
 import { slowestPrep } from "../../../convex/lib/prepFloor";
 import type { UseCart } from "../../hooks/useCart";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
@@ -794,6 +794,19 @@ export function CheckoutPage({
 	const quickDays = quickPickDays(minYmd, maxYmd, todayYmd, 3, (ymd) =>
 		isDaySelectable(ymd, watchedSchedule),
 	);
+	// Does the grid actually grey anything out? The note under the calendar is
+	// an explanation, so it appears only when there is something to explain —
+	// a store with no closed dates, no hours and no prep shows a clean month and
+	// should read as one. Bounded: a long window doesn't need a full scan to
+	// answer "is there at least one".
+	const hasUnpickableDays = (() => {
+		let ymd = minYmd;
+		for (let i = 0; i < 90 && ymd <= maxYmd; i++) {
+			if (!isDaySelectable(ymd, watchedSchedule)) return true;
+			ymd = addDaysYmd(ymd, 1);
+		}
+		return false;
+	})();
 	const watchedLat = useStore(form.store, (s) => s.values.address.latitude);
 	const watchedLng = useStore(form.store, (s) => s.values.address.longitude);
 	// Weight-mode stores zone-match on the STATE — a manual address (no pin)
@@ -1934,6 +1947,17 @@ export function CheckoutPage({
 														min={minYmd}
 														max={maxYmd}
 														required
+														// The chips already honoured this; the picker
+														// itself could not, so a closed day was offered
+														// and then refused (z8r3fdm36y).
+														isDayDisabled={(ymd) =>
+															!isDaySelectable(ymd, watchedSchedule)
+														}
+														unavailableNote={
+															hasUnpickableDays
+																? "Greyed-out days aren't available — the store is closed, or there isn't enough time left to prepare this order."
+																: undefined
+														}
 														description={
 															// Custom carts: the date is the buyer's ASK — the
 															// seller settles the final date in the design

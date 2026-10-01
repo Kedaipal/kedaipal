@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
-import { cn } from "../../lib/utils";
+import { DatePicker } from "../ui/date-picker";
 import { Field, FieldDescription, FieldError, FieldLabel } from "../ui/field";
-import { Input } from "../ui/input";
 import { useFieldContext } from "./form";
 
 interface DateFieldProps {
@@ -15,15 +14,32 @@ interface DateFieldProps {
 	 * keep a time range on one line (`TimeRange`, z8r3fdff8r). */
 	description?: ReactNode;
 	disabled?: boolean;
+	/**
+	 * Days inside `min`..`max` the buyer still can't have — a store closed date,
+	 * a weekday it never opens, a today the cart's prep has already used up.
+	 * Greys the day out in the grid instead of taking the pick and refusing it
+	 * afterwards (z8r3fdm36y).
+	 */
+	isDayDisabled?: (ymd: string) => boolean;
+	/** One line under the grid naming why days are greyed — required reading
+	 * whenever `isDayDisabled` can actually refuse something, so the constraint
+	 * is surfaced rather than silently enforced. */
+	unavailableNote?: string;
 }
 
 /**
- * Native `<input type="date">` bound to a TanStack Form string field. We use the
- * browser's built-in date control deliberately — it's the mobile-first choice
- * (the OS date wheel/calendar, zero JS, no dependency) and matches the lean
- * scope of the checkout date picker. `min`/`max` clamp the picker; the value is
- * a "YYYY-MM-DD" string the submit handler converts to an epoch via
- * convex/lib/fulfilmentDate.
+ * Date field bound to a TanStack Form string field, rendering the house
+ * `DatePicker` (themed `Calendar` in a popover).
+ *
+ * It used to be a native `<input type="date">`, chosen for the OS wheel and
+ * zero JS. What retired that choice is `isDayDisabled`: a native date input
+ * accepts `min`/`max` and nothing else, so every store-closed day inside the
+ * window was offered and then refused on submit — the checkout had already
+ * written the limitation down and worked around it with an after-the-fact
+ * explanation. See `ui/date-picker.tsx` for the full rationale.
+ *
+ * The value is still a "YYYY-MM-DD" string the submit handler converts to an
+ * epoch via convex/lib/fulfilmentDate — nothing downstream changed.
  */
 export function DateField({
 	label,
@@ -32,6 +48,8 @@ export function DateField({
 	required = false,
 	description,
 	disabled = false,
+	isDayDisabled,
+	unavailableNote,
 }: DateFieldProps) {
 	const field = useFieldContext<string>();
 	const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid;
@@ -42,21 +60,18 @@ export function DateField({
 				{label}
 				{required ? <span className="ml-0.5 text-destructive">*</span> : null}
 			</FieldLabel>
-			<Input
+			<DatePicker
 				id={field.name}
 				name={field.name}
-				type="date"
-				min={min}
-				max={max}
 				disabled={disabled}
 				value={field.state.value ?? ""}
-				onChange={(e) => field.handleChange(e.target.value)}
+				onChange={(ymd) => field.handleChange(ymd)}
 				onBlur={() => field.handleBlur()}
-				variant="field"
+				min={min}
+				max={max}
+				isDayDisabled={isDayDisabled}
+				unavailableNote={unavailableNote}
 				isError={isInvalid}
-				// Native date inputs render the placeholder/value text via the OS; nudge
-				// the control to fill the row and keep the calendar icon tappable.
-				className={cn("appearance-none")}
 			/>
 			{description ? <FieldDescription>{description}</FieldDescription> : null}
 			{isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}

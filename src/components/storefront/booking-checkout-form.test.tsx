@@ -18,7 +18,11 @@ import {
 	vi,
 } from "vitest";
 import type { Id } from "../../../convex/_generated/dataModel";
-import type { Country } from "../../../convex/lib/country";
+import { COUNTRY_DIAL_CODE, type Country } from "../../../convex/lib/country";
+import {
+	phonePlateCode,
+	pickPhoneCountry,
+} from "../../lib/test/buyer-phone-picker";
 import { BookingCheckoutForm } from "./booking-checkout-form";
 
 // Reads go via `useQuery(convexQuery(api.x, args)).data` — mock the adapter
@@ -112,10 +116,12 @@ function renderForm(country: Country = "MY", locale?: "en" | "ms") {
 	);
 }
 
-const picker = () =>
-	screen.getByRole("combobox", {
-		name: "Country of your WhatsApp number",
-	}) as HTMLSelectElement;
+const PICKER_LABEL = "Country of your WhatsApp number";
+/** The plate's control — a searchable sheet since z8r3fdm36y, driven
+ * through the shared helpers so this file holds no copy of its shape. */
+const plateCode = () => phonePlateCode(PICKER_LABEL);
+const pick = (name: string, query?: string) =>
+	pickPhoneCountry(name, { label: PICKER_LABEL, query });
 const phoneInput = () =>
 	screen.getByRole("textbox", { name: "WhatsApp number" }) as HTMLInputElement;
 
@@ -132,13 +138,13 @@ function tapDay(day: string) {
 	fireEvent.click(within(cell).getByRole("button"));
 }
 
-describe("BookingCheckoutForm — WhatsApp number", () => {
+describe("BookingCheckoutForm — WhatsApp number", async () => {
 	it.each([
 		["MY", "12-345 6789"],
 		["SG", "9123 4567"],
 	] as const)("opens on the store's country with its own example (%s)", (country, example) => {
 		renderForm(country);
-		expect(picker().value).toBe(country);
+		expect(plateCode()).toBe(`+${COUNTRY_DIAL_CODE[country]}`);
 		expect(phoneInput().getAttribute("placeholder")).toBe(example);
 	});
 
@@ -177,7 +183,7 @@ describe("BookingCheckoutForm — WhatsApp number", () => {
 		});
 		switchButton.focus();
 		fireEvent.click(switchButton);
-		expect(picker().value).toBe("SG");
+		expect(plateCode()).toBe("+65");
 		expect(
 			screen.queryByRole("button", { name: "Switch to Singapore (+65)" }),
 		).toBeNull();
@@ -201,7 +207,7 @@ describe("BookingCheckoutForm — WhatsApp number", () => {
 		fireEvent.change(screen.getByPlaceholderText("e.g. Aisyah"), {
 			target: { value: "Kenji Sato" },
 		});
-		fireEvent.change(picker(), { target: { value: "JP" } });
+		await pick("Japan");
 		typePhone("90-1234-5678");
 		fireEvent.click(
 			screen.getAllByRole("button", { name: "Request to book" })[0] as Element,
