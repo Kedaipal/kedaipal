@@ -32,10 +32,12 @@ import { type ActAsViewer, useActAsViewer } from "./useActAsViewer";
  * `resolveActAs` honours it only for that exact session, confirmed as an admin:
  *
  * - a refresh keeps it — the Clerk session is the same;
- * - signing out ends it — `/app` mounts this provider OUTSIDE its sign-in gate,
- *   so it sees the sign-out and deletes the record; a sign-out anywhere else
- *   leaves a record naming a session that can never sign in again, deleted on
- *   the next read;
+ * - signing out ends it — the provider deletes the record on Clerk's own
+ *   sign-out event (`useAuth()` reads "loading" for the whole of a UserButton
+ *   sign-out, so it can't be the signal), and `/app` mounts it OUTSIDE its
+ *   sign-in gate so it is still there when that event fires. A sign-out
+ *   anywhere else leaves a record naming a session that can never sign in
+ *   again, deleted on the next read;
  * - no later sign-in to the tab — another user's, or the same admin's — can
  *   pick it up;
  * - a viewer Convex says is not an admin never acts as a store: the record is
@@ -134,18 +136,21 @@ function persist(value: string | null): void {
 }
 
 export function ActAsProvider({ children }: { children: ReactNode }) {
-	const viewer = useActAsViewer();
 	const [stored, setStored] = useState<string | null>(() =>
 		typeof window === "undefined"
 			? null
 			: window.sessionStorage.getItem(ACT_AS_STORAGE_KEY),
 	);
-	const resolution = resolveActAs(stored, viewer);
-
 	const save = useCallback((value: string | null) => {
 		persist(value);
 		setStored(value);
 	}, []);
+
+	// A sign-out ends any session in this tab — nobody is left for it to belong
+	// to. Heard on Clerk's own event (see `useActAsViewer`): `viewer.session`
+	// reads "loading" for the whole of a UserButton sign-out.
+	const viewer = useActAsViewer(() => save(null));
+	const resolution = resolveActAs(stored, viewer);
 
 	// Deleted, not merely ignored: a dead record left in the tab is one
 	// refactor away from being read again.

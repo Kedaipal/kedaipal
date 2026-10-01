@@ -17,12 +17,18 @@ import type { ActAsViewer } from "./useActAsViewer";
 // sign in to the tab inherited it and /app hung on a skeleton for good.
 //
 // The viewer (Clerk session + Convex's admin verdict) is the seam: each test
-// says who is looking, then re-renders as Clerk/Convex would move.
+// says who is looking, then re-renders as Clerk/Convex would move. The mock
+// also keeps the provider's sign-out callback, so a test can fire Clerk's
+// sign-out event the way the real listener does.
 const viewer = vi.hoisted(() => ({
 	current: { session: undefined, isAdmin: undefined } as ActAsViewer,
+	onSignedOut: undefined as (() => void) | undefined,
 }));
 vi.mock("./useActAsViewer", () => ({
-	useActAsViewer: () => viewer.current,
+	useActAsViewer: (onSignedOut?: () => void) => {
+		viewer.onSignedOut = onSignedOut;
+		return viewer.current;
+	},
 }));
 
 const STORE = "rt_acted_store" as Id<"retailers">;
@@ -114,12 +120,28 @@ describe("ActAsProvider — the session belongs to the admin who started it", ()
 		expect(state()).toBe(STORE);
 	});
 
-	it("signing out clears it", () => {
+	it("signing out clears it — on Clerk's sign-out event, while useAuth() still reads 'loading'", () => {
 		prime(ADMIN);
 		const view = mount();
 		expect(state()).toBe(STORE);
-		// `/app` keeps the provider mounted across its sign-in gate, so it sees
-		// Clerk report nobody signed in.
+		// A UserButton sign-out, as measured live: `useAuth()` drops both ids to
+		// `undefined` (loading) and UserButton's redirect unmounts /app before it
+		// settles on `null`. From the viewer alone this is "wait", never "delete"…
+		view.as({ session: undefined, isAdmin: undefined });
+		expect(state()).toBe("pending");
+		expect(stored()).not.toBeNull();
+		// …so the record goes on Clerk's own event, which does fire in that gap.
+		act(() => viewer.onSignedOut?.());
+		expect(stored()).toBeNull();
+		expect(state()).toBe("own store");
+	});
+
+	it("signing out clears it — when Clerk settles on signed-out with the provider still mounted", () => {
+		// A sign-out that doesn't navigate this tab away (e.g. one made in
+		// another tab): `/app` keeps the provider mounted across its sign-in
+		// gate, so the viewer itself reports nobody signed in.
+		prime(ADMIN);
+		const view = mount();
 		view.as({ session: null, isAdmin: false });
 		expect(state()).toBe("own store");
 		expect(stored()).toBeNull();

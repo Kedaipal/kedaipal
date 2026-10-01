@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { useAuth } from "@clerk/tanstack-react-start";
 import { useQuery } from "@tanstack/react-query";
-import { renderHook } from "@testing-library/react";
+import { cleanup, renderHook } from "@testing-library/react";
 import { useConvexAuth } from "convex/react";
 import { type FunctionReference, getFunctionName } from "convex/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../convex/_generated/api";
 import { useActAsViewer } from "./useActAsViewer";
 
@@ -14,7 +14,29 @@ vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ __fn: fn, args }),
 }));
 vi.mock("@tanstack/react-query", () => ({ useQuery: vi.fn() }));
-vi.mock("@clerk/tanstack-react-start", () => ({ useAuth: vi.fn() }));
+// Clerk's raw event stream: the fake keeps each registered listener and its
+// options, so a test can emit exactly what clerk-js emits.
+const clerkEvents = vi.hoisted(() => ({
+	listeners: [] as Array<{
+		cb: (r: { session?: unknown; user?: unknown }) => void;
+		options?: { skipInitialEmit?: boolean };
+	}>,
+	unsubscribed: 0,
+}));
+vi.mock("@clerk/tanstack-react-start", () => ({
+	useAuth: vi.fn(),
+	useClerk: () => ({
+		addListener: (
+			cb: (r: { session?: unknown; user?: unknown }) => void,
+			options?: { skipInitialEmit?: boolean },
+		) => {
+			clerkEvents.listeners.push({ cb, options });
+			return () => {
+				clerkEvents.unsubscribed += 1;
+			};
+		},
+	}),
+}));
 vi.mock("convex/react", () => ({ useConvexAuth: vi.fn() }));
 
 const AMI_ADMIN = getFunctionName(api.billing.amIAdmin);
@@ -45,7 +67,11 @@ beforeEach(() => {
 	}) as never);
 	clerk({ isLoaded: true, userId: "user_admin", sessionId: "sess_1" });
 	convexAuth(false, true);
+	clerkEvents.listeners = [];
+	clerkEvents.unsubscribed = 0;
 });
+
+afterEach(cleanup);
 
 const view = () => renderHook(() => useActAsViewer()).result.current;
 
@@ -92,5 +118,44 @@ describe("useActAsViewer", () => {
 		convexAuth(false, false);
 		expect(view()).toEqual({ session: null, isAdmin: false });
 		expect(askedWith).toEqual(["skip"]);
+	});
+});
+
+describe("useActAsViewer — Clerk's sign-out event", () => {
+	function hear() {
+		const onSignedOut = vi.fn();
+		const hook = renderHook(() => useActAsViewer(onSignedOut));
+		const listener = clerkEvents.listeners[clerkEvents.listeners.length - 1];
+		return {
+			onSignedOut,
+			hook,
+			listener,
+			emit: (r: { session?: unknown; user?: unknown }) => listener.cb(r),
+		};
+	}
+
+	it("reports a sign-out as clerk-js emits it: both resources undefined, then null", () => {
+		// `undefined` is what a UserButton sign-out emits while `useAuth()` reads
+		// "loading" — the moment the viewer's own `session` can't carry.
+		const { onSignedOut, emit } = hear();
+		emit({ session: undefined, user: undefined });
+		expect(onSignedOut).toHaveBeenCalledTimes(1);
+		emit({ session: null, user: null });
+		expect(onSignedOut).toHaveBeenCalledTimes(2);
+	});
+
+	it("a signed-in emission — a token refresh, a profile edit — is not a sign-out", () => {
+		const { onSignedOut, emit } = hear();
+		emit({ session: { id: "sess_1" }, user: { id: "user_admin" } });
+		expect(onSignedOut).not.toHaveBeenCalled();
+	});
+
+	it("listens for changes only, and stops listening on unmount", () => {
+		const { hook, listener } = hear();
+		// The state at mount is useAuth()'s to report; this listener exists only
+		// for the moment it changes.
+		expect(listener.options).toEqual({ skipInitialEmit: true });
+		hook.unmount();
+		expect(clerkEvents.unsubscribed).toBe(1);
 	});
 });

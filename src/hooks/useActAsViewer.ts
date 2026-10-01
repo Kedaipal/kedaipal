@@ -1,7 +1,8 @@
-import { useAuth } from "@clerk/tanstack-react-start";
+import { useAuth, useClerk } from "@clerk/tanstack-react-start";
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { useConvexAuth } from "convex/react";
+import { useEffect, useRef } from "react";
 import { api } from "../../convex/_generated/api";
 
 /**
@@ -23,8 +24,17 @@ export type ActAsViewer = {
 	isAdmin: boolean | undefined;
 };
 
-export function useActAsViewer(): ActAsViewer {
+/**
+ * @param onSignedOut Called the moment Clerk ends the signed-in session. The
+ * viewer's own `session` can't carry that moment: while Clerk tears a session
+ * down, `useAuth()` reports both ids `undefined` — "not loaded", not "signed
+ * out" — and UserButton's redirect unmounts `/app` about 400ms later, before it
+ * ever settles on `null`. Measured driving the real sign-out (z8r3fdkqn6 test
+ * run, 2 Oct); Clerk's own listener is the one place that hears it.
+ */
+export function useActAsViewer(onSignedOut?: () => void): ActAsViewer {
 	const { isLoaded, userId, sessionId } = useAuth();
+	const clerk = useClerk();
 	const convexAuth = useConvexAuth();
 	const session = !isLoaded
 		? undefined
@@ -45,5 +55,22 @@ export function useActAsViewer(): ActAsViewer {
 		: convexAuth.isAuthenticated
 			? amIAdmin
 			: false;
+
+	const onSignedOutRef = useRef(onSignedOut);
+	useEffect(() => {
+		onSignedOutRef.current = onSignedOut;
+	});
+	useEffect(
+		() =>
+			clerk.addListener(
+				({ session: clerkSession, user }) => {
+					if (!clerkSession && !user) onSignedOutRef.current?.();
+				},
+				// Changes only: the state at mount is `useAuth()`'s to report.
+				{ skipInitialEmit: true },
+			),
+		[clerk],
+	);
+
 	return { session, isAdmin };
 }

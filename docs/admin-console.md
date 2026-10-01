@@ -318,11 +318,18 @@ The stored value is now a record, `{ userId, sessionId, retailerId }`, and one p
 | The record's owner, but Convex says not an admin (a hand-written record; an admin removed from the allowlist mid-session) | **discard** — `getRetailerForAdmin` is never asked a question it will refuse |
 | A bare id (the pre-fix format) or anything unreadable | **discard** — it names no owner |
 
-- **Signing out clears it.** `/app` mounts `ActAsProvider` *outside* its
-  `<Show when="signed-in">` gate, so the provider is still mounted when Clerk reports the
-  sign-out, and deletes the record then and there. A sign-out elsewhere (the onboarding top
-  bar, the invite page) leaves a record naming a session that can never sign in again; it is
-  deleted on the next read. The pre-built store claim (`/onboarding`,
+- **Signing out clears it — on Clerk's own sign-out event.** `useActAsViewer` registers
+  `clerk.addListener` (changes only), and an emission with no session and no user deletes the
+  record. `useAuth()` cannot be the signal: driving the real UserButton sign-out (2 Oct) showed
+  it reporting both ids `undefined` — "not loaded", which correctly means *wait* — for the
+  whole teardown, and the redirect to `/` unmounting `/app` ~400ms later, before Clerk ever
+  settled on `null`. A provider watching `useAuth()` alone kept the record through the sign-out
+  and the next sign-in; with the listener it is gone in the same tick as Clerk's event, ~380ms
+  before the redirect. `/app` mounts `ActAsProvider` *outside* its `<Show when="signed-in">`
+  gate so it is still mounted when that event fires (and so a sign-out that keeps the tab on
+  `/app`, e.g. one made in another tab, also reaches it through `useAuth()`). A sign-out
+  elsewhere (the onboarding top bar, the invite page) leaves a record naming a session that can
+  never sign in again; it is deleted on the next read. The pre-built store claim (`/onboarding`,
   [prebuilt-stores.md](./prebuilt-stores.md)) also clears it outright through the
   provider-free `clearStoredActAs()`, since the claim is the moment a store changes hands.
 - **Keyed by Clerk session, not just by user.** User-keying alone would let an admin who signed
@@ -339,10 +346,15 @@ The stored value is now a record, `{ userId, sessionId, retailerId }`, and one p
   `requireAdmin` / `requireRetailerAccess`; this is about the client never *asking* for a store
   that isn't its viewer's, and never hanging when a read fails anyway.
 
-Pinned by `src/hooks/useActAs.test.tsx` (every row above, plus refresh and sign-out),
-`useActAsViewer.test.tsx` (the anonymous-answer race), `useDashboardRetailer.test.tsx` (the
+Pinned by `src/hooks/useActAs.test.tsx` (every row above, refresh, and sign-out by both
+routes — Clerk's event while `useAuth()` reads "loading", and a settled `null`),
+`useActAsViewer.test.tsx` (the anonymous-answer race, and the sign-out listener: what counts
+as a sign-out, changes only, unsubscribed on unmount), `useDashboardRetailer.test.tsx` (the
 seller-with-a-stale-id scenario end to end) and `src/routes/app.test.tsx` (the provider sits
-outside the sign-in gate).
+outside the sign-in gate). All driven live on dev in the same round: a seller with a stale id,
+a foreign-session and a forged record (zero `getRetailerForAdmin` calls in the Convex logs),
+act-as across three hard refreshes with no flash of the admin's own store, Exit, the
+failed-read screen, and the sign-out.
 
 ### A failed store read is said, not spun (z8r3fdkqn6)
 
