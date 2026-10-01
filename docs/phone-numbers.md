@@ -85,8 +85,10 @@ is the country the save judges by") still holds, because the validator now
 judges by the **picked** country.
 
 What did **not** come back: the combobox, its two dependencies, the flag
-barrel. The picker is a native `<select>` over the same plate, and the runtime
-ships a table of dial codes. The one exception `86eyknr2r` left — the counter's
+barrel. The picker is a **searchable sheet** built from primitives already in
+the bundle (`z8r3fdm36y` — it started as a native `<select>`, which could not
+be searched by dial code at all; see [The picker](#the-picker)), and the
+runtime still ships nothing but a table of dial codes. The one exception `86eyknr2r` left — the counter's
 bare, loose manual bind as "the path for a foreign walk-in" — is retired: the
 counter wears the buyer picker like every other buyer field.
 
@@ -97,26 +99,62 @@ plate: form-bound `TextField prefix={<BuyerPhonePrefix …/>}` with the field's
 `onChange` routed through `applyBuyerPhoneKeystroke`, and plain-state
 `BuyerPhoneInput`. Both render through `InputPrefixFrame`.
 
-- **A native `<select>`, on purpose.** It sits invisibly (opacity 0) over the
-  whole plate, padding included, so the 44px plate is the tap target. The OS
-  picker is the mobile-friendly, accessible, zero-dependency list: an iOS
-  wheel, an Android sheet, desktop type-ahead. It is `text-base` (16px) so iOS
-  Safari doesn't zoom on focus. The plate paints the MY/SG inline SVG flag or,
-  for every other country, a 28×14 ISO badge (same footprint, so the plate
-  doesn't change width), then the dial code and a chevron. A hover wash says
-  "tap me" on desktop. **Keyboard focus shows on the plate**: the select is
-  invisible, so a Tab onto it paints the same wash plus an inset ring
-  (`peer-focus-visible`), distinct from the frame's ring around the input —
-  otherwise a keyboard user can't tell the picker from the number.
-- **Order.** The store's country first. Then a **Nearby** group
-  (`NEARBY_DIAL_COUNTRIES` — an MY store gets SG, BN, ID, TH, PH, VN; an SG
-  store gets MY, ID, BN, TH, PH, VN — the JB↔SG corridor and the neighbours
-  whose buyers actually turn up). Then **All countries** A–Z by English name,
-  with the neighbours repeated so an alphabetical scroll never misses one.
-  Options read `Japan (+81)`.
+- **A searchable sheet** (`src/components/ui/dial-country-picker.tsx`,
+  z8r3fdm36y). An invisible button covers the whole plate, padding included, so
+  the 44px plate is still the tap target; tapping it opens the house `Sheet` —
+  a bottom sheet on a phone, a centred panel at `sm+`. The plate itself is
+  unchanged: the MY/SG inline SVG flag or, for every other country, a 28×14 ISO
+  badge (same footprint, so the plate never changes width), then the dial code
+  and a chevron. A hover wash says "tap me" on desktop. **Keyboard focus shows
+  on the plate**: the trigger is invisible, so a Tab onto it paints that wash
+  plus an inset ring (`peer-focus-visible`), distinct from the frame's ring
+  around the input — otherwise a keyboard user can't tell the picker from the
+  number.
+  - **This replaced a native `<select>`, and the reasons that chose the select
+    still hold — they just stopped being enough.** The select was accessible
+    and shipped nothing, but it carried **241 options** and its only search was
+    the OS type-ahead over the option TEXT (`Japan (+81)`). So typing the one
+    string the plate itself prints — `+81`, or `81` — matched nothing at all,
+    and on a phone there was no search field whatsoever: an iOS wheel with 241
+    stops. What that earlier decision was protecting is kept intact: **no new
+    dependency** (the house `Sheet` is radix Dialog, already in; the data is
+    the `DIAL_ROWS` table that already shipped) and **no flag-set barrel** —
+    MY/SG keep their inline SVGs and everyone else the ISO badge. This is not
+    the `cmdk` + `react-phone-number-input` combobox `86eyknr2r` removed, and
+    those dependencies stay gone.
+  - **One control at both breakpoints.** A popover on desktop and a sheet on
+    mobile would be two codepaths for one concept, which is how a control
+    starts drifting. `Sheet` already is both.
+  - **Search matches three things**, because all three are things a buyer knows
+    about their own number (`src/lib/dial-country-search.ts`, pure and
+    unit-tested): the **dial code** (`+81`, `81`, `0081`, or a partial `+6` to
+    browse the region), the **ISO code** (`MY`, `SG` — what the plate shows for
+    a flagless country), and the **name** (`japan`; `korea` finds "South Korea"
+    mid-string). A numeric query is judged against the dial code **only** —
+    letting `1` fall through to a name substring would bury every +1 country
+    under any name containing a "1". An exact ISO wins outright.
+  - **Keyboard.** The search field is the combobox and owns the keyboard
+    (`aria-activedescendant` into the listbox): ↑/↓ move, Home/End jump, Enter
+    picks, Escape closes. Rows are real `<button>`s with `tabIndex={-1}`, so
+    they activate on Enter/Space without entering the tab order. Opening lands
+    on the **current pick**, not row 0 — "where am I now?" is the first
+    question a 241-row list has to answer — and a fresh query resets to the
+    top, where the best match is.
+  - **States.** No query: grouped (below). Typing: a flat ranked list, because
+    group headings over a filtered set are noise and the ranking has already
+    decided the order; the count is announced `aria-live`. No match: "No
+    country matches that", with the hint to try a code like `+65` — never a
+    blank box.
+- **Order (unfiltered).** A **Suggested** group — the store's country first,
+  then its neighbours (`NEARBY_DIAL_COUNTRIES` — an MY store gets SG, BN, ID,
+  TH, PH, VN; an SG store gets MY, ID, BN, TH, PH, VN — the JB↔SG corridor and
+  the neighbours whose buyers actually turn up). Then **All countries** A–Z by
+  English name, with the neighbours **repeated** so an alphabetical scroll
+  never misses one (the `<select>`'s optgroups did the same). Each row reads
+  the flag/badge, the name, the dial code, and a check on the current pick.
 - **Accessible name.** "Country of your WhatsApp number" on the buyer's own
   screens. The counter passes `countryLabel="Country of the buyer's WhatsApp
-  number"`, because there the cashier keys someone else's number. The select
+  number"`, because there the cashier keys someone else's number. The control
   never carries `aria-invalid`: the error belongs to the number, and focus on
   error must land in the input.
 - **Auto-switch on a typed code.** A `+CC…` or `00CC…` moves the picker to

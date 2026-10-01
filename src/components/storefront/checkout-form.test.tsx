@@ -19,12 +19,12 @@ import {
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { ClosedDateRange } from "../../../convex/lib/closedDates";
 import type { Country } from "../../../convex/lib/country";
-import {
-	DAY_MS,
-	todayMytMidnight,
-	ymdFromEpoch,
-} from "../../../convex/lib/fulfilmentDate";
+import { DAY_MS, todayMytMidnight } from "../../../convex/lib/fulfilmentDate";
 import type { UseCart } from "../../hooks/useCart";
+import {
+	phonePlateCode,
+	pickPhoneCountry,
+} from "../../lib/test/buyer-phone-picker";
 import { CheckoutPage } from "./checkout-form";
 import type { PublicPickupLocation } from "./pickup-location-options";
 
@@ -151,7 +151,7 @@ function renderCheckout(
 	} = {},
 ) {
 	const pickupOnly = opts.method === "pickup";
-	render(
+	const result = render(
 		<CheckoutPage
 			cart={opts.cart ?? cartStub()}
 			retailerId={"ret_1" as Id<"retailers">}
@@ -172,12 +172,14 @@ function renderCheckout(
 			pickupLocations={pickupOnly ? [PICKUP] : []}
 		/>,
 	);
+	return result;
 }
 
-const picker = () =>
-	screen.getByRole("combobox", {
-		name: "Country of your WhatsApp number",
-	}) as HTMLSelectElement;
+/** The plate's control — a searchable sheet since z8r3fdm36y, driven through
+ * the shared helpers so this file holds no copy of its shape. */
+const plateCode = () => phonePlateCode();
+const pick = (name: string, query?: string) =>
+	pickPhoneCountry(name, { query });
 const phoneInput = () =>
 	screen.getByRole("textbox", { name: /^WhatsApp number/ }) as HTMLInputElement;
 
@@ -216,7 +218,7 @@ const OVERSEAS_NOTE =
 describe("CheckoutPage — WhatsApp number from any country (z8r3fdh274)", () => {
 	it("opens on the store's country, with the input the switch refocuses", () => {
 		renderCheckout({ country: "SG" });
-		expect(picker().value).toBe("SG");
+		expect(plateCode()).toBe("+65");
 		// BuyerPhoneCountrySwitch focuses by id; TextField ids its input with
 		// the field name.
 		expect(phoneInput().id).toBe("waPhone");
@@ -225,7 +227,7 @@ describe("CheckoutPage — WhatsApp number from any country (z8r3fdh274)", () =>
 	it("typing a +44 number from empty moves the picker to GB and keeps only the national part", () => {
 		renderCheckout();
 		typePhone("+44 7911 123456");
-		expect(picker().value).toBe("GB");
+		expect(plateCode()).toBe("+44");
 		// The code went to the plate, never to the box (`+44 | +44 7911…`).
 		expect(phoneInput().value).not.toContain("+44");
 		// Exact: the switch lands on "+44" and empties the box, and the space
@@ -236,7 +238,7 @@ describe("CheckoutPage — WhatsApp number from any country (z8r3fdh274)", () =>
 	it("a pasted or autofilled +44 number does the same, leaving exactly the national part", () => {
 		renderCheckout();
 		changePhone("+44 7911 123456");
-		expect(picker().value).toBe("GB");
+		expect(plateCode()).toBe("+44");
 		expect(phoneInput().value).toBe("7911 123456");
 	});
 
@@ -249,18 +251,18 @@ describe("CheckoutPage — WhatsApp number from any country (z8r3fdh274)", () =>
 		// of what the box actually held, it would read as a keystroke and leave
 		// "+65 9123 4567" under a GB plate.
 		changePhone("+65 9123 4567");
-		expect(picker().value).toBe("SG");
+		expect(plateCode()).toBe("+65");
 		expect(phoneInput().value).toBe("9123 4567");
 	});
 
 	it("a '+' slipped in front of digits already typed does NOT switch the country", () => {
 		renderCheckout();
 		typePhone("12-345 6789");
-		expect(picker().value).toBe("MY");
+		expect(plateCode()).toBe("+60");
 		// "+12-345 6789" completes "+1" — judged without the value it replaced,
 		// that would jump the plate to the United States and eat the 1.
 		changePhone(`+${phoneInput().value}`);
-		expect(picker().value).toBe("MY");
+		expect(plateCode()).toBe("+60");
 		expect(phoneInput().value).toBe("+12-345 6789");
 	});
 
@@ -276,7 +278,7 @@ describe("CheckoutPage — WhatsApp number from any country (z8r3fdh274)", () =>
 		switchButton.focus();
 		fireEvent.click(switchButton);
 
-		expect(picker().value).toBe("SG");
+		expect(plateCode()).toBe("+65");
 		expect(phoneInput().value).toBe("9123 4567");
 		expect(screen.queryByText(SG_UNDER_MY)).toBeNull();
 		expect(screen.queryByRole("button", { name: /^Switch to/ })).toBeNull();
@@ -289,35 +291,35 @@ describe("CheckoutPage — WhatsApp number from any country (z8r3fdh274)", () =>
 	});
 });
 
-describe("CheckoutPage — overseas courier note", () => {
-	it("a courier-booking store, delivery, a GB number: the rider-calls-the-store note shows", () => {
+describe("CheckoutPage — overseas courier note", async () => {
+	it("a courier-booking store, delivery, a GB number: the rider-calls-the-store note shows", async () => {
 		renderCheckout({ booksCouriers: true });
-		fireEvent.change(picker(), { target: { value: "GB" } });
+		await pick("United Kingdom");
 		expect(screen.getByText(OVERSEAS_NOTE)).toBeTruthy();
 	});
 
 	it("the same store with a Malaysian number shows nothing — the local happy path is unchanged", () => {
 		renderCheckout({ booksCouriers: true });
-		expect(picker().value).toBe("MY");
+		expect(plateCode()).toBe("+60");
 		expect(screen.queryByText(/is from outside Malaysia/)).toBeNull();
 	});
 
-	it("a store that books no couriers never shows it, whatever the number", () => {
+	it("a store that books no couriers never shows it, whatever the number", async () => {
 		renderCheckout({ booksCouriers: false });
-		fireEvent.change(picker(), { target: { value: "GB" } });
-		expect(picker().value).toBe("GB");
+		await pick("United Kingdom");
+		expect(plateCode()).toBe("+44");
 		expect(screen.queryByText(/is from outside Malaysia/)).toBeNull();
 	});
 });
 
-describe("CheckoutPage — submit", () => {
+describe("CheckoutPage — submit", async () => {
 	it("sends the picked dial country with the number as typed", async () => {
 		renderCheckout({ method: "pickup" });
 		fireEvent.change(screen.getByRole("textbox", { name: /^Your name/ }), {
 			target: { value: "Aisyah Rahman" },
 		});
 		changePhone("+44 7911 123456");
-		expect(picker().value).toBe("GB");
+		expect(plateCode()).toBe("+44");
 
 		fireEvent.click(screen.getAllByRole("button", { name: "Place order" })[0]);
 
@@ -348,7 +350,7 @@ describe("CheckoutPage — submit", () => {
 	});
 });
 
-describe("CheckoutPage — closed dates (z8r3fdhpm7)", () => {
+describe("CheckoutPage — closed dates (z8r3fdhpm7)", async () => {
 	// Read after `beforeEach` fakes the clock — "today" is the faked one.
 	let today = 0;
 	let raya: ClosedDateRange;
@@ -371,20 +373,26 @@ describe("CheckoutPage — closed dates (z8r3fdhpm7)", () => {
 		expect(args.fulfilmentDate).toBe(today + 2 * DAY_MS);
 	});
 
-	it("a closed date typed into the date field is explained in the server's words", async () => {
+	it("a closed date can't be picked at all — the calendar refuses it", async () => {
+		// This replaces "a closed date TYPED into the date field is explained":
+		// the field was a native <input type="date">, which takes min/max and
+		// nothing else, so every closed day inside the window was offered and the
+		// buyer learned it was wrong only after choosing. Since z8r3fdm36y the
+		// grid greys it instead (z8r3fdm36y) — disabled-with-reason over
+		// wrong-but-enabled. Drop `isDayDisabled` from the DateField call and
+		// this goes red.
 		renderCheckout({ method: "pickup", closedDates: [raya] });
-		fireEvent.change(screen.getByLabelText(/^Date/), {
-			target: { value: ymdFromEpoch(today + DAY_MS) },
+		fireEvent.click(screen.getByLabelText(/^Date/));
+		const closed = new Date(today + DAY_MS);
+		const weekday = closed.toLocaleDateString("en-US", { weekday: "long" });
+		const cell = await screen.findByRole("button", {
+			name: new RegExp(`${weekday}, \\w+ ${closed.getDate()}(st|nd|rd|th)`),
 		});
-		expect(
-			await screen.findByText(
-				/Kek Mama is closed .*\(Hari Raya\) — pick another day\./,
-			),
-		).toBeTruthy();
+		expect(cell.hasAttribute("disabled")).toBe(true);
 	});
 });
 
-describe("CheckoutPage — buyer questions (z8r3fdkjek)", () => {
+describe("CheckoutPage — buyer questions (z8r3fdkjek)", async () => {
 	const CAKE_QUESTIONS = [
 		{
 			id: "msg00001",

@@ -33,7 +33,11 @@ import {
 	mytEpochFromCalendarDate,
 	type SelectionContext,
 } from "../../lib/booking-dates";
-import { Calendar } from "../ui/calendar";
+import {
+	Calendar,
+	TOUCH_CALENDAR_CLASSNAMES,
+	TOUCH_CALENDAR_STYLES,
+} from "../ui/calendar";
 
 export function BookingCalendar({
 	selection,
@@ -144,13 +148,7 @@ export function BookingCalendar({
 				startMonth={calendarDateFromMytEpoch(minMonth)}
 				endMonth={calendarDateFromMytEpoch(maxMonth)}
 				className="w-full"
-				classNames={{
-					month_grid: "w-full border-collapse",
-					weekdays: "grid grid-cols-7",
-					weekday: "w-auto text-[11px] font-medium text-muted-foreground",
-					week: "mt-1 grid w-full grid-cols-7 gap-0",
-					day: "relative p-0 text-center text-sm",
-				}}
+				classNames={TOUCH_CALENDAR_CLASSNAMES}
 				modifiers={modifiers}
 				modifiersClassNames={{
 					unavailable:
@@ -189,10 +187,7 @@ export function BookingCalendar({
 					if (dayModifiers.disabled) return;
 					onSelect(mytEpochFromCalendarDate(date));
 				}}
-				// Day cells stretch to the grid columns (the wrapper's size-9 is for
-				// the compact insights picker; checkout wants the full card width with
-				// ≥44px touch targets).
-				styles={{ day_button: { width: "100%", minHeight: "2.75rem" } }}
+				styles={TOUCH_CALENDAR_STYLES}
 			/>
 		</div>
 	);

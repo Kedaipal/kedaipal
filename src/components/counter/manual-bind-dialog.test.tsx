@@ -9,7 +9,11 @@ import {
 import { useState } from "react";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Country } from "../../../convex/lib/country";
+import { COUNTRY_DIAL_CODE, type Country } from "../../../convex/lib/country";
+import {
+	phonePlateCode,
+	pickPhoneCountry,
+} from "../../lib/test/buyer-phone-picker";
 import { ManualBindDialog } from "./manual-bind-dialog";
 
 // The dialog reads nothing — the store country arrives as a prop — so only the
@@ -67,10 +71,12 @@ const MY_REJECTION =
 	"Enter a Malaysian mobile number (e.g. 012-345 6789), or tap +60 to change the country";
 const MY_HINT = "Serving a visitor? Tap +60 to pick their country.";
 
-const picker = () =>
-	screen.getByRole("combobox", {
-		name: "Country of the buyer's WhatsApp number",
-	}) as HTMLSelectElement;
+const PICKER_LABEL = "Country of the buyer's WhatsApp number";
+/** The plate's control — a searchable sheet since z8r3fdm36y, driven
+ * through the shared helpers so this file holds no copy of its shape. */
+const plateCode = () => phonePlateCode(PICKER_LABEL);
+const pick = (name: string, query?: string) =>
+	pickPhoneCountry(name, { label: PICKER_LABEL, query });
 const phoneInput = () =>
 	screen.getByRole("textbox", { name: "WhatsApp number" }) as HTMLInputElement;
 const startButton = () =>
@@ -86,13 +92,13 @@ function typePhone(value: string) {
 	fireEvent.change(phoneInput(), { target: { value } });
 }
 
-describe("ManualBindDialog — the picker", () => {
+describe("ManualBindDialog — the picker", async () => {
 	it.each([
 		["MY", "+60"],
 		["SG", "+65"],
 	] as const)("opens on the store's country (%s)", (storeCountry, code) => {
 		openDialog({ storeCountry });
-		expect(picker().value).toBe(storeCountry);
+		expect(plateCode()).toBe(`+${COUNTRY_DIAL_CODE[storeCountry]}`);
 		// The capability is named where the cashier types, not left to the
 		// chevron alone.
 		expect(
@@ -104,19 +110,19 @@ describe("ManualBindDialog — the picker", () => {
 		// The dashboard retailer reads "MY" until it loads. An SG store's cashier
 		// who opens the dialog in that window must still land on +65.
 		const { rerender } = openDialog({ storeCountry: "MY" });
-		expect(picker().value).toBe("MY");
+		expect(plateCode()).toBe("+60");
 		rerender(<Host storeCountry="SG" />);
-		expect(picker().value).toBe("SG");
+		expect(plateCode()).toBe("+65");
 		expect(
 			screen.getByText("Serving a visitor? Tap +65 to pick their country."),
 		).toBeTruthy();
 	});
 
-	it("a cashier's pick survives the store country re-rendering under it", () => {
+	it("a cashier's pick survives the store country re-rendering under it", async () => {
 		const { rerender } = openDialog({ storeCountry: "MY" });
-		fireEvent.change(picker(), { target: { value: "JP" } });
+		await pick("Japan");
 		rerender(<Host storeCountry="SG" />);
-		expect(picker().value).toBe("JP");
+		expect(plateCode()).toBe("+81");
 		expect(
 			screen.getByText("Number from Japan — tap +81 to change it."),
 		).toBeTruthy();
@@ -127,7 +133,7 @@ describe("ManualBindDialog — the picker", () => {
 		const onStarted = vi.fn();
 		openDialog({ onStarted });
 		typeName("Kenji Sato");
-		fireEvent.change(picker(), { target: { value: "JP" } });
+		await pick("Japan");
 		expect(
 			screen.getByText("Number from Japan — tap +81 to change it."),
 		).toBeTruthy();
@@ -149,7 +155,7 @@ describe("ManualBindDialog — the picker", () => {
 		openDialog();
 		typeName("Kenji Sato");
 		typePhone("+81 90-1234-5678");
-		expect(picker().value).toBe("JP");
+		expect(plateCode()).toBe("+81");
 		expect(phoneInput().value).toBe("90-1234-5678");
 		fireEvent.click(startButton());
 		await waitFor(() => expect(state.bind).toHaveBeenCalled());
@@ -159,10 +165,10 @@ describe("ManualBindDialog — the picker", () => {
 		});
 	});
 
-	it("takes a 7-digit national number (Brunei) — no blanket digit-count gate", () => {
+	it("takes a 7-digit national number (Brunei) — no blanket digit-count gate", async () => {
 		openDialog();
 		typeName("Hajah Noor");
-		fireEvent.change(picker(), { target: { value: "BN" } });
+		await pick("Brunei");
 		typePhone("712 3456");
 		expect(startButton().disabled).toBe(false);
 	});
@@ -173,7 +179,7 @@ describe("ManualBindDialog — the picker", () => {
 	});
 });
 
-describe("ManualBindDialog — rejection", () => {
+describe("ManualBindDialog — rejection", async () => {
 	it("an invalid number says why under the field, and Start checkout can't fire", () => {
 		openDialog();
 		typeName("Aiman Hakim");
@@ -250,7 +256,7 @@ describe("ManualBindDialog — rejection", () => {
 		});
 		switchButton.focus();
 		fireEvent.click(switchButton);
-		expect(picker().value).toBe("SG");
+		expect(plateCode()).toBe("+65");
 		expect(
 			screen.queryByRole("button", { name: "Switch to Singapore (+65)" }),
 		).toBeNull();
@@ -278,18 +284,18 @@ describe("ManualBindDialog — rejection", () => {
 	});
 });
 
-describe("ManualBindDialog — every open starts clean", () => {
-	it("closing drops the last buyer's pick, number and name", () => {
+describe("ManualBindDialog — every open starts clean", async () => {
+	it("closing drops the last buyer's pick, number and name", async () => {
 		openDialog();
 		typeName("Kenji Sato");
-		fireEvent.change(picker(), { target: { value: "JP" } });
+		await pick("Japan");
 		typePhone("123");
 		fireEvent.blur(phoneInput());
 		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 		expect(screen.queryByRole("dialog")).toBeNull();
 
 		fireEvent.click(screen.getByRole("button", { name: "Enter phone number" }));
-		expect(picker().value).toBe("MY");
+		expect(plateCode()).toBe("+60");
 		expect(phoneInput().value).toBe("");
 		expect(
 			(screen.getByPlaceholderText("e.g. Aiman") as HTMLInputElement).value,

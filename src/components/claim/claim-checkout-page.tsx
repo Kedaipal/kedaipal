@@ -446,6 +446,16 @@ export function ClaimCheckoutPage({
 	const quickDays = quickPickDays(minYmd, maxYmd, todayYmd, 3, (ymd) =>
 		isDaySelectable(ymd, watchedSchedule),
 	);
+	// Same bounded scan as the storefront checkout: the note under the grid is
+	// an explanation, so it only shows when something is actually greyed.
+	const hasUnpickableDays = (() => {
+		let ymd = minYmd;
+		for (let i = 0; i < 90 && ymd <= maxYmd; i++) {
+			if (!isDaySelectable(ymd, watchedSchedule)) return true;
+			ymd = addDaysYmd(ymd, 1);
+		}
+		return false;
+	})();
 	const watchedLat = useStore(form.store, (s) => s.values.address.latitude);
 	const watchedLng = useStore(form.store, (s) => s.values.address.longitude);
 	const watchedState = useStore(form.store, (s) => s.values.address.state);
@@ -998,6 +1008,14 @@ export function ClaimCheckoutPage({
 										min={minYmd}
 										max={maxYmd}
 										required
+										isDayDisabled={(ymd) =>
+											!isDaySelectable(ymd, watchedSchedule)
+										}
+										unavailableNote={
+											hasUnpickableDays
+												? "Greyed-out days aren't available — the store is closed, or there isn't enough time left to prepare this order."
+												: undefined
+										}
 										description={
 											// The store's hours ride on the TIME field, never
 											// the date (pickup asks for a time whenever the
