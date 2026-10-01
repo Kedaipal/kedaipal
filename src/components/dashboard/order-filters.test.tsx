@@ -38,6 +38,7 @@ const EMPTY: Pick<
 	| "methodUnspecified"
 	| "attributionSources"
 	| "sources"
+	| "fulfilments"
 	| "statuses"
 	| "bookingPeriods"
 	| "categories"
@@ -48,6 +49,7 @@ const EMPTY: Pick<
 	methodUnspecified: false,
 	attributionSources: [],
 	sources: [],
+	fulfilments: [],
 	statuses: [],
 	bookingPeriods: [],
 	categories: [],
@@ -77,10 +79,11 @@ function openFilters() {
 }
 
 describe("OrderFilters", () => {
-	it("counts payment + method + unspecified + date range + mockup + source + came-from", () => {
+	it("counts payment + method + unspecified + date range + mockup + source + fulfilment + came-from", () => {
 		expect(activeFilterCount({ ...EMPTY, mockup: false })).toBe(0);
 		// 2 payment + 1 method + 1 unspecified + 1 date range + 1 mockup + 1 source
-		// + 2 came-from = 9 (each selected origin counts on its own, like payment).
+		// + 2 fulfilment + 2 came-from = 11 (each selected value counts on its own,
+		// like payment).
 		expect(
 			activeFilterCount({
 				payment: ["unpaid", "received"],
@@ -91,12 +94,13 @@ describe("OrderFilters", () => {
 				to: 2,
 				mockup: true,
 				sources: ["counter"],
+				fulfilments: ["delivery", "drop_off"],
 				attributionSources: ["tiktok", "direct"],
 				statuses: [],
 				categories: [],
 				categoriesUnspecified: false,
 			}),
-		).toBe(9);
+		).toBe(11);
 		expect(activeFilterCount({ ...EMPTY, from: 1, mockup: false })).toBe(1);
 		// Each selected surface counts on its own, like payment (86eyrtz74).
 		expect(
@@ -345,6 +349,7 @@ describe("OrderFilters — status + categories mirror the header filters (86eyrt
 describe("OrderFilters — the sheet (Direction A, 86eyrtz74)", () => {
 	const FACETS = {
 		statusLeaf: { packed: 6, delivered: 0 },
+		fulfilment: {},
 		category: { Cakes: 9 },
 		source: { counter: 4 },
 		paymentStatus: { unpaid: 7 },
@@ -525,6 +530,7 @@ describe("OrderFilters — select-all must not lie (PR #235 review)", () => {
 
 	const FACETS = {
 		statusLeaf: {},
+		fulfilment: {},
 		category: { Cakes: 9, "": 4 },
 		source: {},
 		paymentStatus: {},
@@ -651,5 +657,149 @@ describe("STATUS is grouped by bucket, and nothing falls out", () => {
 		expect(
 			(["confirmed", "packed", "shipped"] as const).map(statusToBucket),
 		).toEqual(["in_progress", "in_progress", "in_progress"]);
+	});
+});
+
+/**
+ * Fulfilment (z8r3fdfau9) — the dimension the panel was missing: every other
+ * enumerable thing about an order could be filtered, but not the one question a
+ * seller planning tomorrow actually asks ("which of these do I have to deliver,
+ * and which are people coming to collect?").
+ */
+describe("OrderFilters — Fulfilment", () => {
+	const facets = (fulfilment: Record<string, number>) => ({
+		statusLeaf: {},
+		fulfilment,
+		category: {},
+		source: {},
+		paymentStatus: {},
+		paymentMethod: {},
+		attribution: {},
+	});
+
+	it("is hidden on a store that only ever does one kind", () => {
+		// A single-option filter can only narrow to what you already have. The
+		// rule Categories and Came-from already follow — and the same helper the
+		// column funnel asks, so the two surfaces appear and disappear together.
+		renderFilters({ facets: facets({ delivery: 14 }) });
+		openFilters();
+		expect(screen.queryByText("Fulfilment")).toBeNull();
+	});
+
+	it("appears once there are two kinds, with the registry's own words and counts", () => {
+		renderFilters({
+			facets: facets({ delivery: 14, self_collect: 6, drop_off: 2 }),
+		});
+		openFilters();
+		expect(screen.getByText("Fulfilment")).toBeTruthy();
+		expect(screen.getByText("how it reaches them")).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "Delivery, 14 orders" }),
+		).toBeTruthy();
+		// Drop-off is its own answer, not folded into Self-collect — three pasar
+		// meetups are a different day out from a counter full of collections.
+		expect(
+			screen.getByRole("button", { name: "Self-collect, 6 orders" }),
+		).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "Drop-off, 2 orders" }),
+		).toBeTruthy();
+		// Never offered: kinds this seller has no orders for.
+		expect(screen.queryByRole("button", { name: /^Booking,/ })).toBeNull();
+		expect(screen.queryByRole("button", { name: /^Event,/ })).toBeNull();
+	});
+
+	it("offers Event for a store running RSVPs (z8r3fdff9u)", () => {
+		// An RSVP is stored `self_collect`, so before the flow kind was read this
+		// store's events were indistinguishable from counter pickups — one row,
+		// one count, no way to ask for either alone.
+		renderFilters({ facets: facets({ self_collect: 4, event: 9 }) });
+		openFilters();
+		expect(
+			screen.getByRole("button", { name: "Event, 9 orders" }),
+		).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "Self-collect, 4 orders" }),
+		).toBeTruthy();
+	});
+
+	it("ticking a kind writes only that kind", () => {
+		const { onChange } = renderFilters({
+			facets: facets({ delivery: 14, self_collect: 6 }),
+		});
+		openFilters();
+		fireEvent.click(
+			screen.getByRole("button", { name: "Self-collect, 6 orders" }),
+		);
+		expect(onChange).toHaveBeenCalledWith(
+			expect.objectContaining({ fulfilments: ["self_collect"] }),
+		);
+	});
+
+	it("select-all writes exactly the options it offered, and says it narrows nothing", () => {
+		const { onChange } = renderFilters({
+			facets: facets({ delivery: 14, self_collect: 6 }),
+		});
+		openFilters();
+		fireEvent.click(screen.getByRole("checkbox", { name: /^Fulfilment —/i }));
+		// The rows, the total and the select-all set all read ONE array — so
+		// "every option selected" can't mean a different set from what it writes.
+		expect(onChange).toHaveBeenCalledWith(
+			expect.objectContaining({ fulfilments: ["delivery", "self_collect"] }),
+		);
+		cleanup();
+		renderFilters({
+			facets: facets({ delivery: 14, self_collect: 6 }),
+			value: {
+				...EMPTY,
+				mockup: false,
+				fulfilments: ["delivery", "self_collect"],
+			},
+		});
+		openFilters();
+		expect(
+			screen.getByText("Every option selected — same as no fulfilment filter."),
+		).toBeTruthy();
+	});
+
+	it("stays visible for a selected kind the window no longer contains", () => {
+		// Otherwise the panel hides a lit filter, the list stays narrowed, and the
+		// seller has no control to switch it off.
+		renderFilters({
+			facets: facets({ delivery: 14 }),
+			value: { ...EMPTY, mockup: false, fulfilments: ["booking"] },
+		});
+		openFilters();
+		expect(screen.getByText("Fulfilment")).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "Booking, 0 orders" }),
+		).toBeTruthy();
+	});
+
+	it("each selected kind is its own removable token", () => {
+		const { onChange } = renderFilters({
+			facets: facets({ delivery: 14, drop_off: 2 }),
+			value: { ...EMPTY, mockup: false, fulfilments: ["delivery", "drop_off"] },
+		});
+		const token = screen.getAllByRole("button", {
+			name: "Remove filter: Drop-off",
+		})[0];
+		fireEvent.click(token);
+		// Removes only its own kind — the other selection survives.
+		expect(onChange).toHaveBeenCalledWith(
+			expect.objectContaining({ fulfilments: ["delivery"] }),
+		);
+	});
+
+	it("is cleared by Clear all", () => {
+		const { onChange } = renderFilters({
+			facets: facets({ delivery: 14, drop_off: 2 }),
+			value: { ...EMPTY, mockup: false, fulfilments: ["drop_off"] },
+		});
+		openFilters();
+		fireEvent.click(screen.getByRole("button", { name: /clear all \(1\)/i }));
+		expect(onChange).toHaveBeenCalledWith(
+			expect.objectContaining({ fulfilments: [] }),
+		);
 	});
 });
