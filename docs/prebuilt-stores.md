@@ -1,6 +1,7 @@
 # Pre-built stores — an admin builds the shop, the vendor claims it later
 
-Reference doc for **white-glove store handover**: a Kedaipal admin creates a
+Reference doc for **white-glove store handover** (ClickUp
+[`z8r3fdm6up`](https://app.clickup.com/t/z8r3fdm6up)): a Kedaipal admin creates a
 complete store — catalog, fulfilment, branding, settings — **before the vendor
 has an account anywhere**, then hands it over by naming the email they will sign
 up with. The vendor signs up, taps once, and the whole store is theirs.
