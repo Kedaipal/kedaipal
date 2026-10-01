@@ -938,6 +938,8 @@ export function ProductForm({
 		_id: r._id as string,
 		label: r.label,
 		isActive: r.isActive,
+		// Drives the picker's grouping (z8r3fdm32x).
+		eventsOnly: r.eventsOnly,
 		// Carried so the picker can say that an event never charges it — see
 		// buildEventVenueSnapshot (z8r3fdjgvd).
 		fee: r.fee,

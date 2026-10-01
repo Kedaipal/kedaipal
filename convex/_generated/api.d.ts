@@ -112,6 +112,7 @@ import type * as lib_pdf_qr from "../lib/pdf/qr.js";
 import type * as lib_pdf_render from "../lib/pdf/render.js";
 import type * as lib_permissions from "../lib/permissions.js";
 import type * as lib_phoneDial from "../lib/phoneDial.js";
+import type * as lib_pickupChoice from "../lib/pickupChoice.js";
 import type * as lib_pickupNote from "../lib/pickupNote.js";
 import type * as lib_plans from "../lib/plans.js";
 import type * as lib_popularProducts from "../lib/popularProducts.js";
@@ -271,6 +272,7 @@ declare const fullApi: ApiFromModules<{
   "lib/pdf/render": typeof lib_pdf_render;
   "lib/permissions": typeof lib_permissions;
   "lib/phoneDial": typeof lib_phoneDial;
+  "lib/pickupChoice": typeof lib_pickupChoice;
   "lib/pickupNote": typeof lib_pickupNote;
   "lib/plans": typeof lib_plans;
   "lib/popularProducts": typeof lib_popularProducts;

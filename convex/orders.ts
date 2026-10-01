@@ -28,6 +28,10 @@ import {
 	sanitizeAttributionSource,
 } from "./lib/attribution";
 import { stampProductsOrdered } from "./lib/productOrdered";
+import {
+	isChoosablePickupPoint,
+	pickupChoiceRefusal,
+} from "./lib/pickupChoice";
 import { assertValidAddress, formatPickupAddress } from "./lib/address";
 import {
 	isStoredImageRenderable,
@@ -1251,13 +1255,19 @@ export const create = mutation({
 			retailer.offerSelfCollect === true &&
 			eventProducts.size === 0
 		) {
-			const activeCount = await ctx.db
-				.query("pickupLocations")
-				.withIndex("by_retailer_active", (q) =>
-					q.eq("retailerId", args.retailerId).eq("isActive", true),
-				)
-				.first();
-			if (activeCount !== null) {
+			// `.filter`, not `.first()`: an EVENT VENUE is active but is never a
+			// checkout option, so a store whose only active points are venues
+			// must read as "offers no pickup" here — otherwise the branch below
+			// demands a point the buyer was never shown (z8r3fdm32x).
+			const choosable = (
+				await ctx.db
+					.query("pickupLocations")
+					.withIndex("by_retailer_active", (q) =>
+						q.eq("retailerId", args.retailerId).eq("isActive", true),
+					)
+					.collect()
+			).filter(isChoosablePickupPoint);
+			if (choosable.length > 0) {
 				if (!args.pickupLocationId) {
 					throw new ConvexError(
 						"Pick a pickup location to continue with self-collect",
@@ -1267,8 +1277,9 @@ export const create = mutation({
 				if (!location || location.retailerId !== args.retailerId) {
 					throw new ConvexError("Pickup location not found");
 				}
-				if (!location.isActive) {
-					throw new ConvexError("That pickup location is no longer available");
+				const refusal = pickupChoiceRefusal(location);
+				if (refusal !== null) {
+					throw new ConvexError(refusal);
 				}
 				resolvedPickupLocationId = location._id;
 				sanitizedPickupSnapshot = buildPickupSnapshot(location);
