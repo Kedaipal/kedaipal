@@ -81,7 +81,13 @@ export function GreetingChecklistRow({
 	locale: GreetingLang;
 }) {
 	const Icon = item.icon;
-	const markDone = useChecklistStamp(api.retailers.markGreetingSetupDone);
+	// `active` is false in admin act-as, where the stamp records nothing. Both
+	// controls below finish this step, so both would hang on "Saving…" waiting
+	// for a flip that never comes — hence disabled-with-reason rather than a
+	// button that looks live and isn't (PR review, 2 Oct).
+	const { stamp: markDone, active: canComplete } = useChecklistStamp(
+		api.retailers.markGreetingSetupDone,
+	);
 	const [lang, setLang] = useState<GreetingLang>(locale);
 	const [copied, setCopied] = useState(false);
 	const [saving, setSaving] = useState(false);
@@ -135,10 +141,13 @@ export function GreetingChecklistRow({
 	}
 
 	async function complete() {
-		if (saving) return;
+		if (saving || !canComplete) return;
 		setSaving(true);
 		try {
 			await markDone();
+			// `saving` is deliberately NOT cleared on success: the stamp flips
+			// `item.done` and this row unmounts. That only holds while the stamp
+			// actually records, which `canComplete` now guarantees.
 		} catch {
 			setSaving(false);
 		}
@@ -214,21 +223,31 @@ export function GreetingChecklistRow({
 					variant="outline"
 					className="h-9"
 					onClick={complete}
-					disabled={saving}
+					disabled={saving || !canComplete}
 				>
 					Mark as done
 				</Button>
 				<button
 					type="button"
+					disabled={!canComplete}
 					className={cn(
 						"text-xs font-medium text-muted-foreground underline-offset-4 hover:underline",
-						saving && "pointer-events-none opacity-50",
+						(saving || !canComplete) && "pointer-events-none opacity-50",
 					)}
 					onClick={complete}
 				>
 					Skip for now
 				</button>
 			</div>
+			{/* The reason, where the disabled controls are. The greeting is pasted
+			    into the SELLER's own WhatsApp app, so this is not a step an admin
+			    can finish for them — and the stamp would record nothing anyway. */}
+			{canComplete ? null : (
+				<p className="text-[11px] text-muted-foreground">
+					Only the seller can finish this step — the greeting is set in their
+					own WhatsApp app, from their phone.
+				</p>
+			)}
 		</li>
 	);
 }

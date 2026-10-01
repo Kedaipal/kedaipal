@@ -67,7 +67,9 @@ const TEMPLATE_HELP: Record<PosterVariant, string> = {
 function PosterRoute() {
 	const retailer = useDashboardRetailer();
 	const actAsRetailerId = useActAsRetailerId();
-	const markLinkShared = useChecklistStamp(api.retailers.markLinkShared);
+	const { stamp: markLinkShared } = useChecklistStamp(
+		api.retailers.markLinkShared,
+	);
 	// The permanent walk-in store QR (86ey5m35w): the left "At the counter" QR
 	// encodes this `KPS-` wa.me deep link so a scan starts a walk-in checkout
 	// the cashier rings up. `waUrl` is undefined until a token exists / if the

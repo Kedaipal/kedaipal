@@ -33,7 +33,7 @@ afterEach(() => {
 describe("useChecklistStamp", () => {
 	test("stamps normally when the seller is operating their own store", async () => {
 		const { result } = renderHook(() => useChecklistStamp(REF));
-		await result.current();
+		await result.current.stamp();
 		expect(stamp).toHaveBeenCalledWith({});
 	});
 
@@ -41,8 +41,19 @@ describe("useChecklistStamp", () => {
 		// The bug this exists for: the stamp would land on the admin's own store.
 		actAs.id = "retailer_being_built_for_a_vendor";
 		const { result } = renderHook(() => useChecklistStamp(REF));
-		await result.current();
+		await result.current.stamp();
 		expect(stamp).not.toHaveBeenCalled();
+	});
+
+	test("REPORTS that it is inert, so an awaiting caller can disable its control", async () => {
+		// A silent no-op is fine fire-and-forget and a trap for a caller that
+		// sequences UI on the promise — the greeting row hung on "Saving…"
+		// waiting for a flip that was never coming (PR review, 2 Oct).
+		const live = renderHook(() => useChecklistStamp(REF));
+		expect(live.result.current.active).toBe(true);
+		actAs.id = "retailer_being_built_for_a_vendor";
+		const inert = renderHook(() => useChecklistStamp(REF));
+		expect(inert.result.current.active).toBe(false);
 	});
 
 	test("still resolves when it no-ops, because a caller awaits it", async () => {
@@ -50,7 +61,7 @@ describe("useChecklistStamp", () => {
 		// that returned early without resolving would hang that row forever.
 		actAs.id = "retailer_being_built_for_a_vendor";
 		const { result } = renderHook(() => useChecklistStamp(REF));
-		await expect(result.current()).resolves.toBeUndefined();
+		await expect(result.current.stamp()).resolves.toBeUndefined();
 	});
 });
 

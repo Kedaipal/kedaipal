@@ -248,7 +248,7 @@ export function FulfilmentTab({
 		return map;
 	}, [venueUsage]);
 	const reorder = useMutation(api.pickupLocations.reorder);
-	const markPickupSetupSeen = useChecklistStamp(
+	const { stamp: markPickupSetupSeen } = useChecklistStamp(
 		api.retailers.markPickupSetupSeen,
 	);
 

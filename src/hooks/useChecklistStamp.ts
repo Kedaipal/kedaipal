@@ -23,16 +23,34 @@ import { useActAsRetailerId } from "./useActAs";
  * rule enforced by remembering is a rule that gets forgotten; this makes a new
  * call site correct by default.
  *
- * Awaitable, because one caller (the greeting row) sequences UI state on it.
- * Resolves immediately, having done nothing, when a session is active.
+ * Returns `active` ALONGSIDE the stamp, and that pairing is the point.
+ *
+ * A stamp that resolves having silently done nothing is fine for a
+ * fire-and-forget caller and a trap for an awaiting one: the greeting row sets
+ * `saving` and deliberately never clears it on success, because it expects the
+ * row to unmount when the seller's flag flips. Inert, that flip never comes and
+ * the button sits on "Saving…" for ever — the exact failure this PR had already
+ * diagnosed and fixed once, in the consent banner, and then reintroduced here
+ * by making the no-op invisible (PR review, 2 Oct).
+ *
+ * So callers are handed the fact rather than having to infer it: `active` is
+ * false while an admin is acting-as, and a surface whose control cannot work
+ * can disable it with a reason instead of offering a button that does nothing.
  */
 export function useChecklistStamp(
 	mutation: FunctionReference<"mutation", "public", Record<string, never>>,
-): () => Promise<void> {
+): {
+	/** Fire the stamp. Resolves immediately, having done nothing, when inert. */
+	stamp: () => Promise<void>;
+	/** False while an admin is acting-as: the stamp would record nothing. */
+	active: boolean;
+} {
 	const actAsRetailerId = useActAsRetailerId();
-	const stamp = useMutation(mutation);
-	return useCallback(async () => {
-		if (actAsRetailerId) return;
-		await stamp({});
-	}, [actAsRetailerId, stamp]);
+	const mutate = useMutation(mutation);
+	const active = actAsRetailerId === undefined;
+	const stamp = useCallback(async () => {
+		if (!active) return;
+		await mutate({});
+	}, [active, mutate]);
+	return { stamp, active };
 }

@@ -312,8 +312,15 @@ for after building a pre-built store (the flow literally tells them to open the
 storefront). Nothing had fired on dev, so there was no data to clean up.
 
 All five now go through `useChecklistStamp` (`src/hooks/useChecklistStamp.ts`),
-which no-ops while acting-as and stays awaitable for the one caller that
-sequences UI state on it. A gate test fails on any direct
+which no-ops while acting-as and **reports that it is inert** (`active: false`)
+rather than resolving silently. The first cut returned a bare function, and that
+silence re-created the very bug this PR had already fixed in the consent banner:
+the greeting row sets `saving` and deliberately never clears it on success,
+expecting the stamp to flip `item.done` and unmount the row — inert, that flip
+never comes and the button sits on "Saving…" for ever (PR review, 2 Oct). Both
+its controls finish the step, so both are now disabled with the reason, which is
+honest as well as safe: the greeting is pasted into the SELLER's own WhatsApp
+app, from their phone, so it is not a step an admin can finish for them. A gate test fails on any direct
 `useMutation(api.retailers.mark*)`, so a sixth call site cannot quietly
 reintroduce it — a rule held by remembering is a rule that gets forgotten, and
 this one had been forgotten three times out of five.

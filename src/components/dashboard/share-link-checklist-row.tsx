@@ -34,7 +34,7 @@ export function ShareLinkChecklistRow({
 	onOpenQr: () => void;
 }) {
 	const Icon = item.icon;
-	const markShared = useChecklistStamp(api.retailers.markLinkShared);
+	const { stamp: markShared } = useChecklistStamp(api.retailers.markLinkShared);
 	const [copied, setCopied] = useState(false);
 
 	if (item.done) {

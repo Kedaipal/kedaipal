@@ -193,7 +193,9 @@ function DashboardHome() {
 	// Which "Optional extras" row is expanded (accordion — one at a time, all
 	// collapsed by default so the optional group stays compact).
 	const [openOptional, setOpenOptional] = useState<string | null>(null);
-	const markLinkShared = useChecklistStamp(api.retailers.markLinkShared);
+	const { stamp: markLinkShared } = useChecklistStamp(
+		api.retailers.markLinkShared,
+	);
 
 	if (!retailer) return <DashboardSkeleton />;
 
