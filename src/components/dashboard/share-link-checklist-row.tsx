@@ -1,7 +1,7 @@
-import { useMutation } from "convex/react";
 import { Check, Copy, ExternalLink, QrCode } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../../convex/_generated/api";
+import { useChecklistStamp } from "../../hooks/useChecklistStamp";
 import type { ChecklistItem } from "../../routes/app.index";
 import { Button } from "../ui/button";
 
@@ -34,7 +34,7 @@ export function ShareLinkChecklistRow({
 	onOpenQr: () => void;
 }) {
 	const Icon = item.icon;
-	const markShared = useMutation(api.retailers.markLinkShared);
+	const markShared = useChecklistStamp(api.retailers.markLinkShared);
 	const [copied, setCopied] = useState(false);
 
 	if (item.done) {
@@ -70,7 +70,7 @@ export function ShareLinkChecklistRow({
 
 	// Fire-and-forget: a failed stamp must never block the actual share action.
 	function stamp() {
-		void markShared({}).catch(() => {
+		void markShared().catch(() => {
 			// ignore — the seller still copied / saw the QR
 		});
 	}

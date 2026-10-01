@@ -1,7 +1,7 @@
-import { useMutation } from "convex/react";
 import { Check, ChevronDown, Copy } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { api } from "../../../convex/_generated/api";
+import { useChecklistStamp } from "../../hooks/useChecklistStamp";
 import type { Locale } from "../../../convex/lib/locale";
 import { cn } from "../../lib/utils";
 import type { ChecklistItem } from "../../routes/app.index";
@@ -81,7 +81,7 @@ export function GreetingChecklistRow({
 	locale: GreetingLang;
 }) {
 	const Icon = item.icon;
-	const markDone = useMutation(api.retailers.markGreetingSetupDone);
+	const markDone = useChecklistStamp(api.retailers.markGreetingSetupDone);
 	const [lang, setLang] = useState<GreetingLang>(locale);
 	const [copied, setCopied] = useState(false);
 	const [saving, setSaving] = useState(false);
@@ -138,7 +138,7 @@ export function GreetingChecklistRow({
 		if (saving) return;
 		setSaving(true);
 		try {
-			await markDone({});
+			await markDone();
 		} catch {
 			setSaving(false);
 		}

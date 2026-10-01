@@ -6,6 +6,7 @@ import { ImagePlus, Loader2, Printer, RefreshCw } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
+import { useChecklistStamp } from "../hooks/useChecklistStamp";
 import { DEFAULT_COUNTRY } from "../../convex/lib/country";
 import {
 	PageHeader,
@@ -66,7 +67,7 @@ const TEMPLATE_HELP: Record<PosterVariant, string> = {
 function PosterRoute() {
 	const retailer = useDashboardRetailer();
 	const actAsRetailerId = useActAsRetailerId();
-	const markLinkShared = useMutation(api.retailers.markLinkShared);
+	const markLinkShared = useChecklistStamp(api.retailers.markLinkShared);
 	// The permanent walk-in store QR (86ey5m35w): the left "At the counter" QR
 	// encodes this `KPS-` wa.me deep link so a scan starts a walk-in checkout
 	// the cashier rings up. `waUrl` is undefined until a token exists / if the
@@ -180,13 +181,11 @@ function PosterRoute() {
 
 	function handlePrint() {
 		// Printing the poster is a "shared their link" signal for the activation
-		// funnel. Fire-and-forget; the mutation resolves by caller identity, so
-		// skip it in admin act-as (it would stamp the admin's own store).
-		if (!retailer?.actingAsAdmin) {
-			void markLinkShared({}).catch(() => {
-				// ignore — the seller still gets their poster
-			});
-		}
+		// funnel. Fire-and-forget; `useChecklistStamp` is what no-ops it in
+		// admin act-as, where it would otherwise stamp the admin's own store.
+		void markLinkShared().catch(() => {
+			// ignore — the seller still gets their poster
+		});
 		window.print();
 	}
 

@@ -296,6 +296,28 @@ person how to verify a guard, so a backwards instruction is worse than none;
 all three now name the failure, and each was re-run against its mutation to
 confirm the claim.
 
+**A pre-existing bug this feature would have started firing.** The setup
+checklist's three progress stamps (`markLinkShared`, `markPickupSetupSeen`,
+`markGreetingSetupDone`) take no arguments and resolve the store from the
+CALLER's identity via `resolveMyRetailer` — which does not honour act-as, since
+act-as is a client session passed per call as an explicit `retailerId`. Fired
+from an act-as session they stamp the **admin's own store**, never the seller's,
+and the server cannot defend itself: an admin sharing their own store's link is
+legitimate.
+
+Two of the five call sites already guarded it by hand, in two different
+spellings, with comments assuming the rest did too. **Three did not** — including
+the dashboard home's Copy-link button, which is the first thing an admin reaches
+for after building a pre-built store (the flow literally tells them to open the
+storefront). Nothing had fired on dev, so there was no data to clean up.
+
+All five now go through `useChecklistStamp` (`src/hooks/useChecklistStamp.ts`),
+which no-ops while acting-as and stays awaitable for the one caller that
+sequences UI state on it. A gate test fails on any direct
+`useMutation(api.retailers.mark*)`, so a sixth call site cannot quietly
+reintroduce it — a rule held by remembering is a rule that gets forgotten, and
+this one had been forgotten three times out of five.
+
 ### Which email is which
 
 Three different addresses, and only one of them is ever a key:

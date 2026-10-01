@@ -1,7 +1,6 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useMutation } from "convex/react";
 import {
 	ArrowRight,
 	Banknote,
@@ -26,6 +25,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
+import { useChecklistStamp } from "../hooks/useChecklistStamp";
 import type { Country } from "../../convex/lib/country";
 import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
 import { FirstOrderCelebration } from "../components/dashboard/first-order-celebration";
@@ -193,7 +193,7 @@ function DashboardHome() {
 	// Which "Optional extras" row is expanded (accordion — one at a time, all
 	// collapsed by default so the optional group stays compact).
 	const [openOptional, setOpenOptional] = useState<string | null>(null);
-	const markLinkShared = useMutation(api.retailers.markLinkShared);
+	const markLinkShared = useChecklistStamp(api.retailers.markLinkShared);
 
 	if (!retailer) return <DashboardSkeleton />;
 
@@ -213,7 +213,7 @@ function DashboardHome() {
 	// that stamps `linkSharedAt` and completes the share step. Fire-and-forget so a
 	// failed stamp never blocks the action; idempotent server-side.
 	function stampShare() {
-		void markLinkShared({}).catch(() => {
+		void markLinkShared().catch(() => {
 			// ignore — the seller still copied / saw the QR
 		});
 	}
