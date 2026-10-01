@@ -217,6 +217,22 @@ export function BillingTab({
 		foundingPricing && (sub?.plan ?? "pro") === FOUNDING_PLAN
 			? "Founding Pro"
 			: PLAN_LABEL[sub?.plan ?? "pro"];
+	// What the CURRENT-PLAN line says, which is not always the tier's name.
+	//
+	// During the free period a seller has neither chosen nor paid for a plan —
+	// `subscriptions.plan` holds the tier being TRIALLED (see createRetailer:
+	// "tier is chosen at conversion, not signup"). Rendering that bare as "Pro"
+	// claims both that they are on Pro and that they are paying for it, while
+	// the chip beside it says "Free · until your first order", the card below
+	// asks "Ready to choose a plan?", and the admin console files them under
+	// Trialing. The tier stays in the line because the order cap on this very
+	// card is that tier's — it is the trial of a named plan, not of nothing.
+	//
+	// Deliberately NOT applied to `planLabel` itself: the on-hold copy below
+	// reads "Your {planLabel} plan comes back", where a trial suffix would be
+	// both wrong and impossible (a held store is not trialing).
+	const currentPlanLabel =
+		sub?.status === "trialing" ? `${planLabel} trial` : planLabel;
 
 	const freePeriod = freePeriodState(sub, now);
 	const held = sub?.status === "on_hold" || sub?.held === true;
@@ -374,7 +390,7 @@ export function BillingTab({
 							<p className="mt-1 text-lg font-semibold">
 								{compEnded
 									? `Ended ${formatShortDate(compEnded.at)}`
-									: planLabel}
+									: currentPlanLabel}
 							</p>
 						</div>
 						<span
