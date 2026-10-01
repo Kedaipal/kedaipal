@@ -55,10 +55,16 @@ describe("EventFields — the venue name survives a control that can't ellipsize
 	 * seller actually chose, suffix and all. Spell the suffix a second time at
 	 * the title and a hidden venue starts reading as two different places.
 	 */
-	it("says the same thing in the option and the title for a hidden venue", () => {
+	/**
+	 * An inactive point keeps its suffix even though its group heading says
+	 * the same thing, because a CLOSED `<select>` shows only the option text —
+	 * without it, a seller whose event points at a retired address sees nothing
+	 * amiss until they open the list.
+	 */
+	it("says the same thing in the option and the title for an inactive venue", () => {
 		const select = renderPicker("loc_hidden");
 		const picked = (select as HTMLSelectElement).selectedOptions[0];
-		expect(picked.textContent).toBe("Old Warehouse Bay 3 — hidden from buyers");
+		expect(picked.textContent).toBe("Old Warehouse Bay 3 — inactive");
 		expect(select.getAttribute("title")).toBe(picked.textContent);
 	});
 });

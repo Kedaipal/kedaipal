@@ -193,13 +193,75 @@ export function eventDraftValid(
 	return true;
 }
 
+/** The shape the picker needs from a pickup point. */
+export type VenueOption = {
+	_id: string;
+	label: string;
+	isActive: boolean;
+	/** Hosts events and never appears at checkout (`z8r3fdm32x`). */
+	eventsOnly?: boolean;
+	/** Minor units. An event never charges it — surfaced, not applied. */
+	fee?: number;
+};
+
 /**
  * What a venue reads as in the picker. ONE author, so the visible `<option>`
  * and the `title` that recovers it when the control clips it can't drift into
  * saying two different things about the same place.
+ *
+ * An INACTIVE point keeps its suffix even though its group heading already
+ * says so, because a closed `<select>` shows only the option text — drop it and
+ * a seller whose event points at a retired address sees nothing amiss until
+ * they open the list. Event venues never carry a suffix: the heading is the
+ * only place that fact needs to live, since it is their normal state.
  */
-function venueOptionLabel(v: { label: string; isActive: boolean }): string {
-	return v.isActive ? v.label : `${v.label} — hidden from buyers`;
+function venueOptionLabel(v: Pick<VenueOption, "label" | "isActive">): string {
+	return v.isActive ? v.label : `${v.label} — inactive`;
+}
+
+/** The picker's groups, in the order they are offered. */
+const VENUE_GROUPS = [
+	{
+		key: "events",
+		heading: "Event venues",
+		match: (v: VenueOption) => v.isActive && v.eventsOnly === true,
+	},
+	{
+		key: "pickup",
+		heading: "Pickup points",
+		match: (v: VenueOption) => v.isActive && v.eventsOnly !== true,
+	},
+	{
+		key: "off",
+		heading: "Inactive",
+		match: (v: VenueOption) => !v.isActive,
+	},
+] as const;
+
+/**
+ * Group the venues for the picker (`z8r3fdm32x`).
+ *
+ * Event venues lead because they exist for exactly this choice; ordinary
+ * pickup points follow because an event can legitimately happen at one;
+ * inactive points come last but stay listed, because naming where an event
+ * ALREADY is isn't a move, and dropping them would make an existing selection
+ * unreadable.
+ *
+ * **Order inside a group is the seller's own** — the array arrives sorted by
+ * `sortOrder`, which is what they arranged with the drag list in Settings.
+ * Deliberately not alphabetical: sorting this surface one way and every other
+ * by `sortOrder` would be two rules for one list, and an invisible rule teaches
+ * the seller nothing about why an option sits where it does. The headings are
+ * what make the grouping legible, not the order.
+ */
+export function groupVenues(
+	venues: ReadonlyArray<VenueOption>,
+): Array<{ key: string; heading: string; venues: VenueOption[] }> {
+	return VENUE_GROUPS.map((g) => ({
+		key: g.key,
+		heading: g.heading,
+		venues: venues.filter(g.match),
+	})).filter((g) => g.venues.length > 0);
 }
 
 /**
@@ -236,13 +298,7 @@ export function EventFields({
 	 * is a stated fact; several = the seller must pick which hosts the event
 	 * (a guest choosing the venue is as wrong as a guest choosing the date).
 	 * Undefined while loading — the selector simply hasn't rendered yet. */
-	venues?: ReadonlyArray<{
-		_id: string;
-		label: string;
-		isActive: boolean;
-		/** Minor units. An event never charges it — surfaced, not applied. */
-		fee?: number;
-	}>;
+	venues?: ReadonlyArray<VenueOption>;
 }) {
 	const taken = rsvpCount ?? 0;
 	const hasRsvps = taken > 0;
@@ -433,11 +489,15 @@ export function EventFields({
 									disabled={locked || (hasRsvps && draft.venueId.trim() !== "")}
 									isError={draft.venueId.trim() === ""}
 								>
-									<option value="">Pick a pickup point…</option>
-									{venues.map((v) => (
-										<option key={v._id} value={v._id}>
-											{venueOptionLabel(v)}
-										</option>
+									<option value="">Pick a venue…</option>
+									{groupVenues(venues).map((group) => (
+										<optgroup key={group.key} label={group.heading}>
+											{group.venues.map((v) => (
+												<option key={v._id} value={v._id}>
+													{venueOptionLabel(v)}
+												</option>
+											))}
+										</optgroup>
 									))}
 								</Select>
 							</div>
@@ -447,8 +507,8 @@ export function EventFields({
 					venues.length > 1 &&
 					!draft.venueId.trim() ? (
 						<p className="text-xs text-destructive">
-							Pick which pickup point hosts the event — guests are sent there,
-							not to a point of their choosing.
+							Pick which venue hosts the event — guests are sent there, not to a
+							place of their choosing.
 						</p>
 					) : null}
 					{/* Disabled-with-reason: the frozen venue must say WHY it won't

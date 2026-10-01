@@ -15,17 +15,6 @@ import {
 	Save,
 	Store,
 } from "lucide-react";
-import type {
-	BuyerQuestion,
-	BuyerQuestionInput,
-} from "../../../convex/lib/buyerQuestions";
-import {
-	BuyerQuestionsEditor,
-	type BuyerQuestionsDraft,
-	questionsDraftFrom,
-	questionsDraftValid,
-	questionsSubmitValue,
-} from "./buyer-questions-card";
 import {
 	type FormEvent,
 	type MutableRefObject,
@@ -36,6 +25,10 @@ import {
 } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import type {
+	BuyerQuestion,
+	BuyerQuestionInput,
+} from "../../../convex/lib/buyerQuestions";
 import {
 	MAX_NOTICE_DAYS,
 	MAX_PREP_MINUTES,
@@ -87,6 +80,13 @@ import { Input } from "../ui/input";
 import { Markdown } from "../ui/markdown";
 import { Textarea } from "../ui/textarea";
 import { ToggleSwitch } from "../ui/toggle-switch";
+import {
+	type BuyerQuestionsDraft,
+	BuyerQuestionsEditor,
+	questionsDraftFrom,
+	questionsDraftValid,
+	questionsSubmitValue,
+} from "./buyer-questions-card";
 
 /**
  * Prep-time shortcuts. The field is MINUTES because that is what the floor
@@ -938,6 +938,8 @@ export function ProductForm({
 		_id: r._id as string,
 		label: r.label,
 		isActive: r.isActive,
+		// Drives the picker's grouping (z8r3fdm32x).
+		eventsOnly: r.eventsOnly,
 		// Carried so the picker can say that an event never charges it — see
 		// buildEventVenueSnapshot (z8r3fdjgvd).
 		fee: r.fee,

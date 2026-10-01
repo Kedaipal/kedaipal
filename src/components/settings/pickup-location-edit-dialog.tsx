@@ -25,6 +25,7 @@ import {
 } from "../forms/google-address-autocomplete";
 import { Button } from "../ui/button";
 import { MOBILE_PLACEHOLDER, MyPhonePrefix } from "../ui/my-phone-input";
+import { ToggleSwitch } from "../ui/toggle-switch";
 
 interface PickupLocationEditDialogProps {
 	open: boolean;
@@ -44,6 +45,10 @@ interface PickupLocationEditDialogProps {
 	/** Whether the plan allows charging a pickup fee (Pro+). When false the fee
 	 * input renders disabled-with-reason; the server gate is the real lock. */
 	canChargeFee: boolean;
+	/** Which card's Add opened this — a DEFAULT for the events-only control,
+	 * never a lock; the seller can still change it before saving. Ignored when
+	 * editing an existing point, which carries its own value. */
+	defaultEventsOnly?: boolean;
 }
 
 /**
@@ -115,6 +120,7 @@ export function PickupLocationEditDialog({
 	country,
 	currency,
 	canChargeFee,
+	defaultEventsOnly = false,
 }: PickupLocationEditDialogProps) {
 	const createLocation = useMutation(api.pickupLocations.create);
 	const updateLocation = useMutation(api.pickupLocations.update);
@@ -130,6 +136,14 @@ export function PickupLocationEditDialog({
 	const [kind, setKind] = useState<"self_collect" | "drop_off">(
 		location?.locationType ?? "self_collect",
 	);
+	// Events-only is ORTHOGONAL to `kind`, and deliberately a separate control:
+	// kind says where the guest stands when they arrive, this says which flows
+	// the address is offered in. Folding it into the kind selector would force
+	// an either/or the seller doesn't have — "my shop, which is also where I
+	// run the class" is a self-collect point with this off (z8r3fdm32x).
+	const [eventsOnly, setEventsOnly] = useState<boolean>(
+		location?.eventsOnly ?? defaultEventsOnly,
+	);
 	// Fee as a display string (RM) — same local-state pattern as `kind`. Stored
 	// in minor units server-side; converted at submit.
 	const [feeInput, setFeeInput] = useState<string>(
@@ -142,8 +156,17 @@ export function PickupLocationEditDialog({
 	const [feePendingRemoval, setFeePendingRemoval] = useState(false);
 
 	const isEditing = location !== undefined;
-	const title = isEditing ? "Edit pickup point" : "Add pickup point";
-	const submitLabel = isEditing ? "Save changes" : "Add point";
+	// The heading follows the LIVE toggle, not the mode the dialog opened in.
+	// A seller who pressed "Add event venue" must not be told they're adding a
+	// pickup point — and flipping the toggle re-titles the dialog, which is the
+	// clearest possible statement of what that switch does (z8r3fdm32x).
+	const noun = eventsOnly ? "event venue" : "pickup point";
+	const title = `${isEditing ? "Edit" : "Add"} ${noun}`;
+	const submitLabel = isEditing
+		? "Save changes"
+		: eventsOnly
+			? "Add venue"
+			: "Add point";
 	// Locked plan sitting on an existing charge — the only fee action allowed is
 	// removal, surfaced as a dedicated "Remove fee" control below.
 	const lockedWithExistingFee =
@@ -239,6 +262,7 @@ export function PickupLocationEditDialog({
 						// stored line (empty string = clear, server-side).
 						unit,
 						locationType: kind,
+						eventsOnly,
 						// Empty string clears the note server-side; a value re-sets it.
 						scheduleNote,
 						notes,
@@ -272,6 +296,7 @@ export function PickupLocationEditDialog({
 						address,
 						unit: unit.length > 0 ? unit : undefined,
 						locationType: kind,
+						eventsOnly: eventsOnly || undefined,
 						scheduleNote: scheduleNote.length > 0 ? scheduleNote : undefined,
 						notes: notes.length > 0 ? notes : undefined,
 						latitude: geo.latitude,
@@ -367,6 +392,26 @@ export function PickupLocationEditDialog({
 									/>
 								</div>
 							</fieldset>
+
+							{/* Under the kind, because it changes what the point is FOR
+							    rather than what it is. Phrased as what the seller gets,
+							    not as a flag: the consequence (off checkout, picked on
+							    the event) is the whole point of turning it on. */}
+							<div className="flex items-start justify-between gap-4 rounded-xl border border-border px-3 py-2.5">
+								<div className="min-w-0">
+									<p className="text-sm font-medium">Only hosts events</p>
+									<p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+										{eventsOnly
+											? "Buyers never see this at checkout. Pick it on an event and guests are sent straight here."
+											: "Buyers can choose this at checkout. It can still host events either way."}
+									</p>
+								</div>
+								<ToggleSwitch
+									on={eventsOnly}
+									onChange={setEventsOnly}
+									label="Only hosts events"
+								/>
+							</div>
 
 							<form.AppField name="label">
 								{(field) => (

@@ -892,7 +892,7 @@ describe("the Event card — a router with its own route (`z8r3fdff9u` round 4)"
 		expect(
 			wizardStepIssues(eventState(), 6, { requireEventVenue: true })[0]
 				?.message,
-		).toMatch(/which pickup point hosts/i);
+		).toMatch(/which venue hosts/i);
 		expect(
 			wizardStepIssues(
 				eventState({
