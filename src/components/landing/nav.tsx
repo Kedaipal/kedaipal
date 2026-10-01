@@ -6,6 +6,7 @@ import type { Locale } from "../../../convex/lib/locale";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../../lib/contact";
 import { trackSignupCta } from "../../lib/ga-events";
+import { BLOG_URL } from "../../lib/site-links";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 import { getLocale, locales, setLocale } from "../../paraglide/runtime";
@@ -246,7 +247,9 @@ export function Nav() {
 				<div className="flex h-14 items-center justify-between pl-4 pr-2 md:h-16 md:pl-6 md:pr-3">
 					<Link
 						to="/"
-						className="flex min-h-11 items-center"
+						// shrink-0: the wordmark must never give way to the links —
+						// measured in Bahasa, two extra links squeezed it to its mark.
+						className="flex min-h-11 shrink-0 items-center"
 						aria-label={m.nav_home()}
 					>
 						<AppImage
@@ -314,6 +317,24 @@ export function Nav() {
 							>
 								{m.nav_pricing()}
 							</Link>
+							{/* The two doors OUT of the seller pitch (z8r3fdkmyp): the store
+							    directory and the blog. Here and in the footer only — the
+							    desktop bar is capped at max-w-5xl, and in Bahasa two more
+							    links squeezed the logo at every width. */}
+							<Link
+								to="/stores"
+								onClick={closeMenu}
+								className={mobileLinkClass}
+							>
+								{m.nav_stores()}
+							</Link>
+							<a
+								href={BLOG_URL}
+								onClick={closeMenu}
+								className={mobileLinkClass}
+							>
+								{m.nav_blog()}
+							</a>
 						</div>
 						<div className="mt-3 flex flex-col gap-2 border-t border-border/70 pt-3">
 							<MobileMenuAuthCta onClose={closeMenu} />

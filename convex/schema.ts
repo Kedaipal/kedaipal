@@ -61,6 +61,14 @@ export default defineSchema({
 		// plain text with newlines preserved. Empty/unset → nothing renders. No
 		// index — only read alongside the retailer row.
 		storeDescription: v.optional(v.string()),
+		// Short area/locality shown on the store's marketplace card ("Ampang, KL")
+		// — seller-typed free text (z8r3fdkmyp). The profile carries no city field
+		// (country only), and local discovery without a place is weak, so this is
+		// the card's one geographic hint. Trimmed + capped (STORE_AREA_MAX in
+		// convex/lib/marketplaceListing.ts); unset → the card simply omits it.
+		// Deliberately NOT derived from pickup locations: not every store has one,
+		// and a wrong guess about where a home business "is" is worse than none.
+		storeArea: v.optional(v.string()),
 		waPhone: v.optional(v.string()),
 		// Email address for retailer-facing operational notifications
 		// (new orders, payment claims, etc.). Independent of the Clerk auth
@@ -780,6 +788,39 @@ export default defineSchema({
 		// never reads subscription status; it refuses on the seller's own
 		// "ordering is paused" switch, like opening hours or a minimum order.
 		orderingPausedAt: v.optional(v.number()),
+		// Marketplace listing opt-OUT (z8r3fdkmyp). Every store with a visible
+		// product is listed on /stores by default — the storefront is already a
+		// public URL and the directory is free distribution — and this stamp is
+		// the seller saying "direct link only". Set/cleared by the Settings →
+		// Store "Marketplace listing" switch (updateSettings.marketplaceListed);
+		// absent = listed. A timestamp, not a boolean, per the house pattern
+		// (orderingPausedAt): "since when" costs nothing and answers support
+		// questions a flag cannot.
+		marketplaceUnlistedAt: v.optional(v.number()),
+		// Marketplace "Store highlights" sponsorship window (z8r3fdkmyp): the
+		// store rides the labelled sponsored rail on /stores while this epoch-ms
+		// is in the future. ADMIN-set only (admin.setMarketplaceSponsorship,
+		// audited) — v1 is manually invoiced, no self-serve purchase path writes
+		// it. Expiry is read-time (`> now`), so no cron clears it; clearing =
+		// unset. Every placement it buys renders with a visible "Sponsored"
+		// label — the rail is disclosed advertising, never covert ranking.
+		marketplaceSponsoredUntil: v.optional(v.number()),
+		// Comped stores (partner / sponsor / pilot) ride Store highlights
+		// AUTOMATICALLY while comped — derived at read time by
+		// `highlightSource`, never written (z8r3fdkmyp, Zaki 1 Oct 2026). This
+		// stamp is the admin's one override: set = "keep this comped store off
+		// the rail" (admin.setCompHighlight, audited). Unset = the default.
+		// Timestamp, not boolean, per the house pattern.
+		marketplaceCompHighlightOffAt: v.optional(v.number()),
+		// Admin moderation (z8r3fdkmyp, Zaki 1 Oct 2026): set = an admin took
+		// this store OFF /stores, whatever the seller's own switch says (junk
+		// trials, quality, policy). Written only by admin.hideFromMarketplace /
+		// admin.showOnMarketplace, each audited under its own name. `note` is
+		// optional and is SHOWN TO THE SELLER on Settings → Store, so they know
+		// what to fix. The storefront itself is untouched. Unset = not hidden.
+		marketplaceHidden: v.optional(
+			v.object({ at: v.number(), note: v.optional(v.string()) }),
+		),
 		// Highest release version whose "What's new" notes this seller has seen
 		// (86eyqgxv9). A calendar version string (`YYYY.MM.N`), NOT a boolean —
 		// a boolean can only answer "dismissed once", so the next release would
@@ -2725,18 +2766,21 @@ export default defineSchema({
 				attachedAt: v.number(),
 				lastChargeAt: v.optional(v.number()),
 				// Successful tokenised charges on this session — compared against
-				// HitPay's `times_charged` to reconcile an attempt whose outcome was
-				// lost mid-action (crash between charge and settle) WITHOUT charging
-				// twice. See convex/subscriptionPayments.ts.
+				// HitPay's charge count (`total_charge` on a save-card session; its
+				// `times_charged` is always null there) to reconcile an attempt whose
+				// outcome was lost mid-action WITHOUT charging twice. See
+				// lib/hitpayBilling.ts `readSessionChargeCount`.
 				timesCharged: v.optional(v.number()),
 				// Dunning state for the CURRENT pending renewal invoice. Reset to
 				// zero/unset on a successful settle.
 				failedAttempts: v.optional(v.number()),
 				nextRetryAt: v.optional(v.number()),
 				lastChargeError: v.optional(v.string()),
-				// Stamped just BEFORE the charge HTTP call; cleared once the outcome
-				// (success/failure) is recorded. A fresh stamp with no outcome means
-				// "unknown — reconcile against HitPay before charging again".
+				// Stamped just BEFORE the charge HTTP call; cleared once a definitive
+				// outcome (settle or decline) is recorded — an UNKNOWN outcome keeps
+				// it. A stamp still standing, at ANY age, means "reconcile against
+				// HitPay before charging again"; its age only decides whether the
+				// lock is still held (CHARGE_ATTEMPT_LOCK_MS).
 				lastChargeAttemptAt: v.optional(v.number()),
 				pendingChargeInvoiceId: v.optional(v.id("invoices")),
 			}),

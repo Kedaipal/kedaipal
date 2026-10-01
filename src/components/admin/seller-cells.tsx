@@ -2,15 +2,24 @@
 // one status pill, one contact line, one expiry reading — so the three
 // surfaces are the same component wearing different layouts, never three
 // drawings of the same fact.
-import { Award, ExternalLink, Mail, MessageCircle } from "lucide-react";
+import {
+	Award,
+	ExternalLink,
+	EyeOff,
+	Mail,
+	Megaphone,
+	MessageCircle,
+} from "lucide-react";
 import type { AdminSellerRow } from "../../../convex/admin";
 import {
 	type ExpiryTone,
+	highlightedThroughLabel,
 	SELLER_STATUS_LABEL,
 	type SellerBucket,
 	type SellerExpiry,
+	sellerHighlight,
 } from "../../lib/admin-seller-view";
-import { formatMobile } from "../../lib/format";
+import { formatMobile, formatShortDate } from "../../lib/format";
 import { cn } from "../../lib/utils";
 import { CopyButton } from "../ui/copy-button";
 
@@ -57,6 +66,62 @@ export function FoundingPill({ rank }: { rank: number }) {
 			title={`Founding Member #${rank}`}
 		>
 			<Award className="size-3" aria-hidden="true" />#{rank}
+		</span>
+	);
+}
+
+/**
+ * The store's admin-set state on /stores (z8r3fdkmyp), beside the slug on
+ * every directory surface — so "who is hidden, who is on the rail and why /
+ * until when" reads at a glance rather than behind each Manage menu.
+ *
+ * - Hidden by an admin: "Hidden from /stores". It outranks a highlight: a
+ *   hidden store isn't on the rail, and a highlight pill would say it is.
+ * - Paid window: "Highlight · to 8 Oct" (full date in the tooltip).
+ * - Comped: "Highlight · comped" — no date, it lasts as long as the comp.
+ *
+ * Nothing otherwise. "Highlight", not "Sponsored", because Sponsor is
+ * already a comp kind in the same row.
+ */
+export function MarketplacePill({
+	seller,
+	now,
+}: {
+	seller: AdminSellerRow;
+	now: number;
+}) {
+	if (seller.marketplace.hidden) {
+		return (
+			<span
+				className="inline-flex h-5 shrink-0 items-center gap-1 rounded-full bg-muted px-1.5 text-[10px] font-bold whitespace-nowrap text-muted-foreground"
+				title={`Hidden from /stores by an admin since ${formatShortDate(seller.marketplace.hidden.at)}`}
+			>
+				<EyeOff className="size-3" aria-hidden="true" />
+				Hidden from /stores
+			</span>
+		);
+	}
+	const { source } = sellerHighlight(seller, now);
+	if (source === null) return null;
+	let label: string;
+	let title: string;
+	if (source === "paid" && seller.marketplace.sponsoredUntil !== undefined) {
+		// Day + month on the pill (it shares a line with the slug); the full
+		// date, year included, rides the tooltip.
+		const lastDay = seller.marketplace.sponsoredUntil - 1;
+		label = `to ${new Date(lastDay).toLocaleDateString(undefined, { day: "numeric", month: "short" })}`;
+		title = `On Store highlights through ${highlightedThroughLabel(seller.marketplace.sponsoredUntil)}`;
+	} else {
+		label = "comped";
+		title = "On Store highlights while comped";
+	}
+	return (
+		<span
+			className="inline-flex h-5 shrink-0 items-center gap-1 rounded-full bg-accent/10 px-1.5 text-[10px] font-bold whitespace-nowrap text-accent-emphasis"
+			title={title}
+		>
+			<Megaphone className="size-3" aria-hidden="true" />
+			Highlight · {label}
 		</span>
 	);
 }

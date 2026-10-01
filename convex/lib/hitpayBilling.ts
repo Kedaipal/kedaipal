@@ -153,12 +153,22 @@ export function nextChargeRetryAt(
 }
 
 /**
- * An attempt stamped this recently with NO recorded outcome means the action
- * may have died between charging and settling — reconcile against HitPay's
- * `times_charged` before charging again. Longer than any plausible action
- * retry latency, shorter than the daily cron cadence.
+ * How long a charge attempt holds the LOCK (`recordChargeAttempt`): a second
+ * claim inside it is refused, because a charge still in flight hasn't moved
+ * HitPay's count yet — so no reconcile can tell a racing charge from a lost
+ * one. Past it the lock is stale (no action runs a day; Convex caps them at
+ * minutes) and a new attempt may re-claim. Generous on purpose: HitPay may
+ * still be settling a charge whose response we lost, and breaking the lock
+ * sooner buys nothing — the unknown outcome's retry is a day out anyway.
+ *
+ * This is ONLY the lock's lifetime — NOT how long an unknown outcome stays
+ * worth checking. An attempt stamp with no recorded outcome is reconciled at
+ * ANY age (`chargeDueRenewal`): the retry after an unknown outcome is
+ * scheduled 24h out and fired by a daily cron, so it always arrives with the
+ * stamp at least this old. A reconcile gated on this window never ran on the
+ * one path it exists for.
  */
-export const CHARGE_OUTCOME_UNKNOWN_WINDOW_MS = 24 * 60 * 60 * 1000;
+export const CHARGE_ATTEMPT_LOCK_MS = 24 * 60 * 60 * 1000;
 
 // --- Request builders -------------------------------------------------------
 
@@ -356,6 +366,39 @@ export function readAttachedMethodCode(
 		asString(charge?.method) ??
 		undefined
 	);
+}
+
+/**
+ * How many charges HitPay says a recurring-billing session has taken — the
+ * number the outcome-unknown reconcile compares against our own counter, so
+ * the no-double-charge guarantee is exactly as good as this read.
+ *
+ * CAPTURED FROM LIVE SANDBOX TRAFFIC (30 Sep 2026): on a `save_card` session
+ * the docs' `times_charged` is present but always NULL; the count lives in
+ * `total_charge`. A session whose auto-charges settled RM79 + RM149 + RM79
+ * read `total_charge: 3` (a count, not the RM307 sum) beside
+ * `times_charged: null`; sessions that never charged read 0. Reading
+ * `times_charged` alone meant the reconcile saw 0 on every save-card
+ * session — "HitPay never took it" — and charged again.
+ *
+ * Evidence-ordered like `readAttachedMethodCode`: `total_charge` first, the
+ * documented `times_charged` as fallback; a whole-number string is read too
+ * (HitPay spells some numbers as strings elsewhere). Returns undefined when
+ * neither carries a count — the caller must treat that as "can't judge",
+ * never as zero.
+ */
+export function readSessionChargeCount(
+	billing: Record<string, unknown>,
+): number | undefined {
+	for (const value of [billing.total_charge, billing.times_charged]) {
+		if (typeof value === "number" && Number.isInteger(value) && value >= 0) {
+			return value;
+		}
+		if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+			return Number(value.trim());
+		}
+	}
+	return undefined;
 }
 
 /**

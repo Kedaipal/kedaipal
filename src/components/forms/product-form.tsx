@@ -15,17 +15,6 @@ import {
 	Save,
 	Store,
 } from "lucide-react";
-import type {
-	BuyerQuestion,
-	BuyerQuestionInput,
-} from "../../../convex/lib/buyerQuestions";
-import {
-	BuyerQuestionsEditor,
-	type BuyerQuestionsDraft,
-	questionsDraftFrom,
-	questionsDraftValid,
-	questionsSubmitValue,
-} from "./buyer-questions-card";
 import {
 	type FormEvent,
 	type MutableRefObject,
@@ -36,6 +25,10 @@ import {
 } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import type {
+	BuyerQuestion,
+	BuyerQuestionInput,
+} from "../../../convex/lib/buyerQuestions";
 import {
 	MAX_NOTICE_DAYS,
 	MAX_PREP_MINUTES,
@@ -87,6 +80,13 @@ import { Input } from "../ui/input";
 import { Markdown } from "../ui/markdown";
 import { Textarea } from "../ui/textarea";
 import { ToggleSwitch } from "../ui/toggle-switch";
+import {
+	type BuyerQuestionsDraft,
+	BuyerQuestionsEditor,
+	questionsDraftFrom,
+	questionsDraftValid,
+	questionsSubmitValue,
+} from "./buyer-questions-card";
 
 /**
  * Prep-time shortcuts. The field is MINUTES because that is what the floor
@@ -1953,7 +1953,8 @@ export function ProductForm({
 							<p className="text-xs leading-relaxed text-muted-foreground">
 								One line collecting buyers see on the product page, at checkout
 								and on their order page — the page their WhatsApp confirmation
-								links to. It&apos;s copied onto each order as it&apos;s placed,
+								links to. Paste a link (e.g. a Google Maps pin) and it becomes
+								tappable. It&apos;s copied onto each order as it&apos;s placed,
 								so editing it later never rewrites what earlier buyers were
 								told.
 							</p>
