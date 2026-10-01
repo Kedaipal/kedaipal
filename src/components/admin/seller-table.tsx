@@ -25,7 +25,7 @@ import {
 	ContactLine,
 	ExpiryText,
 	FoundingPill,
-	SponsoredPill,
+	HighlightPill,
 	StatusPill,
 	ViaPill,
 } from "./seller-cells";
@@ -119,7 +119,7 @@ function SellerTableRow({
 							/{seller.slug}
 						</span>
 						<ViaPill seller={seller} />
-						<SponsoredPill seller={seller} now={now} />
+						<HighlightPill seller={seller} now={now} />
 					</div>
 				</div>
 			</TableCell>

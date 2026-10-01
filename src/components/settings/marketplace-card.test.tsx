@@ -28,7 +28,7 @@ function renderCard(
 		<MarketplaceCard
 			unlisted={false}
 			area=""
-			hasVisibleProduct={true}
+			readiness={{ hasVisibleProduct: true, internal: false }}
 			onSave={onSave}
 			{...props}
 		/>,
@@ -49,7 +49,7 @@ describe("MarketplaceCard — the switch line tells the truth", () => {
 	});
 
 	test("ON but no visible product: never claims to be shown, and points at the fix", () => {
-		renderCard({ hasVisibleProduct: false });
+		renderCard({ readiness: { hasVisibleProduct: false, internal: false } });
 		expect(screen.queryByText(/Shown in the directory/)).toBeNull();
 		expect(screen.getByText(/not shown yet/)).toBeTruthy();
 		expect(
@@ -58,14 +58,17 @@ describe("MarketplaceCard — the switch line tells the truth", () => {
 	});
 
 	test("still loading: says it's checking — undefined is not 'no'", () => {
-		renderCard({ hasVisibleProduct: undefined });
+		renderCard({ readiness: undefined });
 		expect(screen.getByText(/Checking your listing/)).toBeTruthy();
 		expect(screen.queryByText(/Shown in the directory/)).toBeNull();
 		expect(screen.queryByText(/not shown yet/)).toBeNull();
 	});
 
 	test("opted out: hidden, with the direct-link reassurance, whatever the products", () => {
-		renderCard({ unlisted: true, hasVisibleProduct: true });
+		renderCard({
+			unlisted: true,
+			readiness: { hasVisibleProduct: true, internal: false },
+		});
 		expect(
 			screen.getByText(/buyers can still reach your direct link/i),
 		).toBeTruthy();
@@ -74,6 +77,14 @@ describe("MarketplaceCard — the switch line tells the truth", () => {
 				.getByRole("switch", { name: /List my store/ })
 				.getAttribute("aria-checked"),
 		).toBe("false");
+	});
+});
+
+describe("MarketplaceCard — internal stores", () => {
+	test("a Kedaipal/test store is told it's never listed, even with the switch on and products live", () => {
+		renderCard({ readiness: { hasVisibleProduct: true, internal: true } });
+		expect(screen.getByText(/never listed on the marketplace/)).toBeTruthy();
+		expect(screen.queryByText(/Shown in the directory/)).toBeNull();
 	});
 });
 

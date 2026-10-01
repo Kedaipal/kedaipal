@@ -205,7 +205,7 @@ describe("marketplace.myListingReadiness — the seller card's truth", () => {
 			await asOwner.query(api.marketplace.myListingReadiness, {
 				retailerId: retailer._id,
 			}),
-		).toEqual({ hasVisibleProduct: false });
+		).toEqual({ hasVisibleProduct: false, internal: false });
 
 		await asOwner.mutation(api.products.create, {
 			retailerId: retailer._id,
@@ -219,7 +219,7 @@ describe("marketplace.myListingReadiness — the seller card's truth", () => {
 			await asOwner.query(api.marketplace.myListingReadiness, {
 				retailerId: retailer._id,
 			}),
-		).toEqual({ hasVisibleProduct: true });
+		).toEqual({ hasVisibleProduct: true, internal: false });
 
 		await expect(
 			t
@@ -321,5 +321,104 @@ describe("admin sponsorship — set / end", () => {
 			["admin.setMarketplaceSponsorship", retailerId],
 			["admin.endMarketplaceSponsorship", retailerId],
 		]);
+	});
+});
+
+describe("comped stores ride Store highlights; internal stores never list", () => {
+	test("partner comp → highlighted; admin switch off/on; revoking the comp ends it", async () => {
+		const t = setup();
+		const { retailerId } = await seedListableStore(
+			t,
+			"user_mkt_comp",
+			"kedai-comp",
+		);
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+		const card = async () =>
+			(await t.query(api.marketplace.listStores)).find(
+				(c) => c.slug === "kedai-comp",
+			);
+
+		expect((await card())?.sponsored).toBe(false);
+
+		await asAdmin.mutation(api.subscriptions.setComp, {
+			retailerId,
+			kind: "partner",
+		});
+		expect((await card())?.sponsored).toBe(true);
+
+		await asAdmin.mutation(api.admin.setCompHighlight, {
+			retailerId,
+			on: false,
+		});
+		expect((await card())?.sponsored).toBe(false);
+		// Still LISTED — the switch only takes it off the rail.
+		expect(await card()).toBeDefined();
+
+		await asAdmin.mutation(api.admin.setCompHighlight, {
+			retailerId,
+			on: true,
+		});
+		expect((await card())?.sponsored).toBe(true);
+
+		await asAdmin.mutation(api.subscriptions.revokeComp, { retailerId });
+		expect((await card())?.sponsored).toBe(false);
+
+		const audit = await t.run(async (ctx) =>
+			ctx.db.query("adminAuditLog").collect(),
+		);
+		expect(
+			audit.filter((r) => r.action === "admin.setCompHighlight"),
+		).toHaveLength(2);
+	});
+
+	test("setCompHighlight is admin-only and refuses a store that isn't comp-eligible", async () => {
+		const t = setup();
+		const { retailerId } = await seedListableStore(
+			t,
+			"user_mkt_ineligible",
+			"kedai-plain",
+		);
+		await expect(
+			t
+				.withIdentity({ subject: "user_mkt_ineligible" })
+				.mutation(api.admin.setCompHighlight, { retailerId, on: false }),
+		).rejects.toThrow();
+		await expect(
+			t
+				.withIdentity({ subject: ADMIN })
+				.mutation(api.admin.setCompHighlight, { retailerId, on: false }),
+		).rejects.toThrow(/featured automatically/);
+	});
+
+	test("an internal comp and an admin-owned store are never listed — and their seller card knows", async () => {
+		const t = setup();
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+		const internalComp = await seedListableStore(
+			t,
+			"user_mkt_internal",
+			"kedai-internal",
+		);
+		await asAdmin.mutation(api.subscriptions.setComp, {
+			retailerId: internalComp.retailerId,
+			kind: "internal",
+		});
+		const adminOwned = await seedListableStore(t, ADMIN, "kedai-admin");
+
+		const slugs = (await t.query(api.marketplace.listStores)).map(
+			(c) => c.slug,
+		);
+		expect(slugs).not.toContain("kedai-internal");
+		expect(slugs).not.toContain("kedai-admin");
+
+		expect(
+			await asAdmin.query(api.marketplace.myListingReadiness, {
+				retailerId: adminOwned.retailerId,
+			}),
+		).toEqual({ hasVisibleProduct: true, internal: true });
+
+		const rows = await asAdmin.query(api.admin.listSellersForAdmin, {});
+		expect(
+			rows.find((r) => r.slug === "kedai-internal")?.marketplace.internal,
+		).toBe(true);
 	});
 });

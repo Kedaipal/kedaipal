@@ -24,18 +24,19 @@ import { SAVE_BTN_CLASS, SectionHeading } from "./settings-primitives";
  * The switch line tells the TRUTH about the directory, not just the switch:
  * ON with no storefront-visible product is not listed, and saying "Shown in
  * the directory" there would lie to the brand-new seller most likely to read
- * it. `hasVisibleProduct` comes from `marketplace.myListingReadiness`;
+ * it — nor would it be true for an internal (Kedaipal / test) store, which is
+ * never listed. `readiness` comes from `marketplace.myListingReadiness`;
  * `undefined` is loading, never "no".
  */
 export function MarketplaceCard({
 	unlisted,
 	area,
-	hasVisibleProduct,
+	readiness,
 	onSave,
 }: {
 	unlisted: boolean;
 	area: string;
-	hasVisibleProduct: boolean | undefined;
+	readiness: { hasVisibleProduct: boolean; internal: boolean } | undefined;
 	onSave: (patch: {
 		marketplaceListed?: boolean;
 		storeArea?: string;
@@ -105,10 +106,7 @@ export function MarketplaceCard({
 			<div className="flex items-center justify-between gap-3">
 				<div className="flex flex-col">
 					<span className="text-sm font-medium">List my store</span>
-					<ListingStatusLine
-						listed={listed}
-						hasVisibleProduct={hasVisibleProduct}
-					/>
+					<ListingStatusLine listed={listed} readiness={readiness} />
 				</div>
 				<ToggleSwitch
 					on={listed}
@@ -150,11 +148,19 @@ export function MarketplaceCard({
 
 function ListingStatusLine({
 	listed,
-	hasVisibleProduct,
+	readiness,
 }: {
 	listed: boolean;
-	hasVisibleProduct: boolean | undefined;
+	readiness: { hasVisibleProduct: boolean; internal: boolean } | undefined;
 }) {
+	if (readiness?.internal) {
+		return (
+			<span className="text-xs text-muted-foreground">
+				A Kedaipal or test store — never listed on the marketplace, whatever
+				this switch says.
+			</span>
+		);
+	}
 	if (!listed) {
 		return (
 			<span className="text-xs text-muted-foreground">
@@ -162,14 +168,14 @@ function ListingStatusLine({
 			</span>
 		);
 	}
-	if (hasVisibleProduct === undefined) {
+	if (readiness === undefined) {
 		return (
 			<span className="text-xs text-muted-foreground">
 				Checking your listing…
 			</span>
 		);
 	}
-	if (!hasVisibleProduct) {
+	if (!readiness.hasVisibleProduct) {
 		return (
 			<span className="text-xs text-muted-foreground">
 				On, but not shown yet — buyers find you once a product is visible on

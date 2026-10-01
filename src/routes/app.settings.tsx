@@ -405,12 +405,12 @@ function SettingsRoute() {
 		).data === true;
 	// Marketplace card truth (z8r3fdkmyp): ON without a visible product isn't
 	// listed, so the card must know. `undefined` = loading, never "no".
-	const listingHasVisibleProduct = useQuery(
+	const listingReadiness = useQuery(
 		convexQuery(
 			api.marketplace.myListingReadiness,
 			retailer && activeTab === "store" ? { retailerId: retailer._id } : "skip",
 		),
-	).data?.hasVisibleProduct;
+	).data;
 	const visibleTabs = SETTINGS_TABS.filter(
 		(t) => t.id !== "bookings" || hasBookingListings,
 	);
@@ -769,7 +769,7 @@ function SettingsRoute() {
 								<MarketplaceCard
 									unlisted={retailer.marketplaceUnlisted === true}
 									area={retailer.storeArea ?? ""}
-									hasVisibleProduct={listingHasVisibleProduct}
+									readiness={listingReadiness}
 									onSave={(patch) => updateSettings(patch)}
 								/>
 							</Card>

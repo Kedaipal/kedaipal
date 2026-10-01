@@ -41,7 +41,9 @@ import {
 	ADMIN_AUDIT_LOG_RETENTION_MS,
 	LOG_PURGE_PAGE_SIZE,
 } from "./lib/retention";
+import { compHighlightEligible } from "./lib/marketplaceListing";
 import { isUnlimited } from "./lib/plans";
+import { storeIsInternal } from "./marketplace";
 import { loadSubscription, resolveAccess } from "./subscriptions";
 
 /** How many sellers the directory pulls. The Founding cohort is ~10 and the whole
@@ -99,11 +101,18 @@ export type AdminSellerRow = {
 	/** A dev-only purge cascade is running (z8r3fdbmc9) — the directory locks
 	 * the row (no Manage, no second purge) until it disappears. */
 	purging: boolean;
-	/** Marketplace listing state (z8r3fdkmyp): the seller's own opt-out stamp
-	 * (read-only here — only the seller flips it) and the admin-set sponsorship
-	 * window the directory's Sponsor control edits. Liveness is judged with
-	 * `sponsorshipActive`, never re-derived inline. */
-	marketplace: { unlistedAt?: number; sponsoredUntil?: number };
+	/** Marketplace state (z8r3fdkmyp): the seller's own opt-out stamp
+	 * (read-only here — only the seller flips it), the admin-set paid window,
+	 * the admin's "keep this comped store off the rail" override, and whether
+	 * the store is internal (never listed). Whether it's ON the rail is judged
+	 * with `highlightSource` over these + `comped`/`comp.kind` — never
+	 * re-derived inline. */
+	marketplace: {
+		unlistedAt?: number;
+		sponsoredUntil?: number;
+		compHighlightOffAt?: number;
+		internal: boolean;
+	};
 	// --- Contact + billing facts (z8r3fdh37c) ------------------------------
 	// Everything an admin used to open a second tab for. All of it already
 	// lived on `retailers` / `subscriptions` / `invoices` / `adminAuditLog`;
@@ -308,6 +317,8 @@ export const listSellersForAdmin = query({
 				marketplace: {
 					unlistedAt: r.marketplaceUnlistedAt,
 					sponsoredUntil: r.marketplaceSponsoredUntil,
+					compHighlightOffAt: r.marketplaceCompHighlightOffAt,
+					internal: storeIsInternal(r, sub, adminUserIds()),
 				},
 				ownerEmail: r.notifyEmail,
 				waPhone: r.waPhone,
@@ -399,6 +410,43 @@ export const endMarketplaceSponsorship = mutation({
 			adminUserId,
 			retailerId,
 			action: "admin.endMarketplaceSponsorship",
+			targetId: retailerId,
+			ts: Date.now(),
+		});
+	},
+});
+
+/**
+ * The admin's one override of the comp-driven highlight (z8r3fdkmyp): comped
+ * partner / sponsor / pilot stores ride Store highlights automatically, and
+ * this switch keeps a particular one OFF (or puts it back). Only meaningful
+ * for a comp-eligible store; refused otherwise rather than storing a stamp
+ * that silently does nothing. Turning off keeps the FIRST stamp on a re-save.
+ */
+export const setCompHighlight = mutation({
+	args: { retailerId: v.id("retailers"), on: v.boolean() },
+	handler: async (ctx, { retailerId, on }): Promise<void> => {
+		const adminUserId = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		const sub = await loadSubscription(ctx, retailerId);
+		if (!compHighlightEligible(sub?.comped === true, sub?.comp?.kind)) {
+			throw new ConvexError(
+				"Only comped partner, sponsor or pilot stores are featured automatically",
+			);
+		}
+		const next = on
+			? undefined
+			: (retailer.marketplaceCompHighlightOffAt ?? Date.now());
+		if (next === retailer.marketplaceCompHighlightOffAt) return;
+		await ctx.db.patch(retailerId, {
+			marketplaceCompHighlightOffAt: next,
+			updatedAt: Date.now(),
+		});
+		await ctx.db.insert("adminAuditLog", {
+			adminUserId,
+			retailerId,
+			action: "admin.setCompHighlight",
 			targetId: retailerId,
 			ts: Date.now(),
 		});

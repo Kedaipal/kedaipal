@@ -13,6 +13,12 @@ One author: `convex/lib/marketplaceListing.ts` (row rules, pure) +
 
 A store lists when ALL hold:
 
+0. **Not internal** — Kedaipal's own or a test store (`isInternalStore`: the
+   founder report's `isExcludedRetailer` — admin-owned, internal email
+   fragments, the `EXCLUDED_SLUGS` escape hatch — plus an `internal` comp).
+   Caught before launch: prod held three such stores with live products
+   (kp-demo, openmarket, deqly-cards). The seller card says so for these
+   instead of claiming "Shown in the directory".
 1. **Not opted out** — `retailers.marketplaceUnlistedAt` unset. Listing is the
    DEFAULT (the storefront is already a public URL; the directory is free
    distribution). The opt-out lives in **Settings → Store → Marketplace
@@ -38,20 +44,29 @@ says so via `orderingPaused`, outranking the open-now clock).
 
 Client partitions one payload (`partitionStores` in `src/lib/marketplace.ts`):
 
-- **Sponsored rail** — `marketplaceSponsoredUntil > now`
-  (`sponsorshipActive`, read-time expiry, no cron). Every placement renders a
-  visible **"Sponsored"** label; the rail is disclosed advertising, never
-  covert ranking. **Admin-set only**: `admin.setMarketplaceSponsorship`
-  (start/move, future-only) and `admin.endMarketplaceSponsorship` (idempotent),
-  each audited under its own function name with the store as `targetId` — the
-  setComp/revokeComp shape. Driven from the seller directory's Manage menu →
-  `SponsorDialog` (inclusive end date; Update stays disabled until the date
-  moves, with the reason under the field). V1 is manually invoiced —
-  self-serve purchase is a future ticket. **Visible at a glance**: a
-  `SponsoredPill` ("Sponsored · to 8 Oct", full date in the tooltip) sits on
-  the slug line of every directory row/card and in the sheet header, the
-  Manage item names the end date, and the details sheet's Storefront section
-  carries a Marketplace row (listed vs opted-out-since, sponsored-through).
+- **Store highlights rail** — `highlightSource` (ONE author, shared by the
+  buyer query and every admin surface) puts a store on the rail when:
+  - **a paid window is live** — `marketplaceSponsoredUntil > now` (read-time
+    expiry, no cron). Admin-set via `admin.setMarketplaceSponsorship` /
+    `admin.endMarketplaceSponsorship`, each audited under its own function
+    name, store as `targetId`. V1 is manually invoiced.
+  - **or it's comped as partner / sponsor / pilot** (Zaki, 1 Oct 2026) —
+    DERIVED from the subscription, never written, so revoking the comp takes
+    it off with nothing to clean up (a far-future window would rot). The
+    admin's one override is `marketplaceCompHighlightOffAt`
+    (`admin.setCompHighlight`, audited; refused for a non-eligible store).
+    `internal` comps never qualify — they're never listed.
+  A paid window wins over the switch. Every card on the rail is labelled
+  **"Sponsored"** to buyers whatever the reason — the label says the
+  position is promoted, not earned by ranking, which is true of both; the
+  reason never leaves the server (it would reveal billing state).
+  **Admin vocabulary is "Highlight"**, not "Sponsored": "Sponsor" is already
+  a comp kind in the same directory row, and the two were confused in
+  testing. Surfaces: a `HighlightPill` on the slug line ("Highlight · to 8
+  Oct" / "Highlight · comped"), a Manage item naming the state (incl.
+  disabled-with-reason for internal stores), `HighlightDialog` (internal: no
+  controls; comped: the switch; otherwise: the dated window with Update
+  disabled until the date moves), and a Marketplace row in the details sheet.
 - **The Founding 10** — `foundingMemberRank` ascending, shipped badge reused
   (as a plain emblem, not the popover button — the whole card is a link).
 - **General list** — activated stores first (newest `activatedAt`), then

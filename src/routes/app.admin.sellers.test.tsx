@@ -106,7 +106,7 @@ function seller(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 		comped: false,
 		createdAt: at(-20),
 		purging: false,
-		marketplace: {},
+		marketplace: { internal: false },
 		country: "MY",
 		currency: "MYR",
 		...overrides,
@@ -417,23 +417,52 @@ function renderCard(row: AdminSellerRow, purgeEnabled = false) {
 	return { onViewDetails };
 }
 
-describe("SellerCard — marketplace sponsorship at a glance (z8r3fdkmyp)", () => {
-	it("a live window shows a Sponsored pill naming its last day", () => {
+describe("SellerCard — Store highlights at a glance (z8r3fdkmyp)", () => {
+	it("a live paid window shows a Highlight pill naming its last day", () => {
 		const until = NOW + 7 * 24 * 60 * 60 * 1000;
-		renderCard(seller({ marketplace: { sponsoredUntil: until } }));
-		const pill = screen.getByText(/^Sponsored · to /);
+		renderCard(
+			seller({ marketplace: { sponsoredUntil: until, internal: false } }),
+		);
+		const pill = screen.getByText(/^Highlight · to /);
 		// Full date (with year) in the tooltip; day + month on the pill.
 		expect(pill.getAttribute("title")).toBe(
-			`Sponsored on the marketplace through ${formatShortDate(until - 1)}`,
+			`On Store highlights through ${formatShortDate(until - 1)}`,
 		);
 	});
 
-	it("an expired or absent window shows nothing", () => {
-		renderCard(seller({ marketplace: { sponsoredUntil: NOW - 1 } }));
-		expect(screen.queryByText(/^Sponsored/)).toBeNull();
+	it("a comped Sponsor store shows 'Highlight · comped' with no window set", () => {
+		renderCard(
+			seller({
+				comped: true,
+				comp: { kind: "sponsor", label: "Sponsored by Kedaipal", grantedAt: 0 },
+			}),
+		);
+		expect(screen.getByText("Highlight · comped")).toBeTruthy();
+	});
+
+	it("nothing for an expired window, a kept-off comp, or an internal store", () => {
+		renderCard(
+			seller({ marketplace: { sponsoredUntil: NOW - 1, internal: false } }),
+		);
+		expect(screen.queryByText(/^Highlight/)).toBeNull();
 		cleanup();
-		renderCard(seller());
-		expect(screen.queryByText(/^Sponsored/)).toBeNull();
+		renderCard(
+			seller({
+				comped: true,
+				comp: { kind: "partner", grantedAt: 0 },
+				marketplace: { compHighlightOffAt: NOW - 1, internal: false },
+			}),
+		);
+		expect(screen.queryByText(/^Highlight/)).toBeNull();
+		cleanup();
+		renderCard(
+			seller({
+				comped: true,
+				comp: { kind: "internal", grantedAt: 0 },
+				marketplace: { internal: true },
+			}),
+		);
+		expect(screen.queryByText(/^Highlight/)).toBeNull();
 	});
 });
 

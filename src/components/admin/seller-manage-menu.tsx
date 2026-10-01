@@ -18,8 +18,11 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { AdminSellerRow } from "../../../convex/admin";
-import { sponsorshipActive } from "../../../convex/lib/marketplaceListing";
 import { useActAs } from "../../hooks/useActAs";
+import {
+	highlightedThroughLabel,
+	sellerHighlight,
+} from "../../lib/admin-seller-view";
 import { convexErrorMessage } from "../../lib/format";
 import { cn } from "../../lib/utils";
 import { ConfirmDialog } from "../ui/confirm-dialog";
@@ -31,7 +34,7 @@ import {
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { CompDialog } from "./comp-dialog";
-import { SponsorDialog, sponsoredThroughLabel } from "./sponsor-dialog";
+import { HighlightDialog } from "./highlight-dialog";
 
 /**
  * Enter act-as for a store: start the session, audit the tenant ENTRY
@@ -85,14 +88,40 @@ export function SellerManageMenu({
 	const purgeStore = useMutation(api.admin.purgeStoreForAdmin);
 	const [purgeOpen, setPurgeOpen] = useState(false);
 	const [compOpen, setCompOpen] = useState(false);
-	const [sponsorOpen, setSponsorOpen] = useState(false);
-	// The live window's last day, or null — the item names it so an admin
-	// sees "until when" before opening the dialog.
-	const sponsoredThrough =
-		seller.marketplace.sponsoredUntil !== undefined &&
-		sponsorshipActive(seller.marketplace.sponsoredUntil, Date.now())
-			? sponsoredThroughLabel(seller.marketplace.sponsoredUntil)
-			: null;
+	const [highlightOpen, setHighlightOpen] = useState(false);
+	// Where the store stands on Store highlights — the item says it before the
+	// dialog opens: why it's on (paid window / comp), or why it can't be.
+	const highlight = sellerHighlight(seller, Date.now());
+	const highlightItem = seller.marketplace.internal
+		? {
+				title: "Store highlights",
+				hint: "Internal store — never listed on /stores",
+				on: false,
+			}
+		: highlight.source === "paid" &&
+				seller.marketplace.sponsoredUntil !== undefined
+			? {
+					title: "Store highlights — on",
+					hint: `Through ${highlightedThroughLabel(seller.marketplace.sponsoredUntil)} — edit or end early`,
+					on: true,
+				}
+			: highlight.source === "comp"
+				? {
+						title: "Store highlights — on",
+						hint: "While comped — turn off if needed",
+						on: true,
+					}
+				: highlight.compEligible
+					? {
+							title: "Store highlights — off",
+							hint: "Comped, but kept off by an admin",
+							on: false,
+						}
+					: {
+							title: "Feature in Store highlights",
+							hint: "A dated window on kedaipal.com/stores",
+							on: false,
+						};
 	// Server truth (`purging` rides the directory row, so every admin session
 	// locks) OR the just-clicked local echo, which bridges the moment before
 	// the reactive query refreshes.
@@ -200,29 +229,25 @@ export function SellerManageMenu({
 							</span>
 						</span>
 					</DropdownMenuItem>
+					{/* Disabled-with-reason for an internal store, like the comp item. */}
 					<DropdownMenuItem
-						onSelect={() => setSponsorOpen(true)}
+						onSelect={() => setHighlightOpen(true)}
+						disabled={seller.marketplace.internal}
 						className="items-start"
 					>
 						<Megaphone
 							className={cn(
 								"mt-0.5 size-4",
-								sponsoredThrough
+								highlightItem.on
 									? "text-accent-emphasis"
 									: "text-muted-foreground",
 							)}
 							aria-hidden="true"
 						/>
 						<span className="flex min-w-0 flex-col">
-							<span className="font-medium">
-								{sponsoredThrough
-									? "Marketplace sponsorship — on"
-									: "Sponsor on the marketplace"}
-							</span>
+							<span className="font-medium">{highlightItem.title}</span>
 							<span className="text-xs text-muted-foreground">
-								{sponsoredThrough
-									? `Through ${sponsoredThrough} — edit or end early`
-									: "Labelled highlight on kedaipal.com/stores"}
+								{highlightItem.hint}
 							</span>
 						</span>
 					</DropdownMenuItem>
@@ -248,8 +273,11 @@ export function SellerManageMenu({
 			{compOpen ? (
 				<CompDialog seller={seller} onClose={() => setCompOpen(false)} />
 			) : null}
-			{sponsorOpen ? (
-				<SponsorDialog seller={seller} onClose={() => setSponsorOpen(false)} />
+			{highlightOpen ? (
+				<HighlightDialog
+					seller={seller}
+					onClose={() => setHighlightOpen(false)}
+				/>
 			) : null}
 			{purgeEnabled ? (
 				<ConfirmDialog

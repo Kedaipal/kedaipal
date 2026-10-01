@@ -42,15 +42,88 @@ export function sanitizeStoreArea(input: string): string | undefined {
 }
 
 /** The row-level facts the listable rule reads — a structural subset of
- * `Doc<"retailers">` so the rule is testable without a database. */
+ * `Doc<"retailers">` so the rule is testable without a database. `internal`
+ * is resolved by the caller (`isInternalStore`): it needs the admin
+ * allowlist, which is server-only. */
 export interface MarketplaceListableRow {
 	marketplaceUnlistedAt?: number;
 	purgeStartedAt?: number;
+	internal: boolean;
+}
+
+/**
+ * Comp kinds that join Store highlights automatically (Zaki, 1 Oct 2026): a
+ * store Kedaipal is already backing — a partner, a sponsored seller, a pilot —
+ * gets the rail for as long as the comp lasts, no separate admin step. NOT
+ * `internal`: an internal comp is our own or a test store, which is never
+ * listed at all (`isInternalStore`).
+ */
+export const HIGHLIGHT_COMP_KINDS = ["partner", "sponsor", "pilot"] as const;
+
+/**
+ * Is this store Kedaipal's own or a test store? One author for the directory
+ * and the admin console. Reuses the founder report's exclusion
+ * (`isExcludedRetailer`: admin-owned, internal email fragments, the
+ * `EXCLUDED_SLUGS` escape hatch) and adds the `internal` comp kind — an admin
+ * labelling a store internal is the most explicit signal there is.
+ */
+export function isInternalStore(
+	excludedByReport: boolean,
+	compKind: string | undefined,
+): boolean {
+	return excludedByReport || compKind === "internal";
+}
+
+/**
+ * Why a store rides Store highlights, or `null` when it doesn't. ONE author for
+ * the buyer rail (convex/marketplace.ts) and every admin surface (pill, menu,
+ * dialog, sheet), so the console can never disagree with the page.
+ *
+ * - `"paid"` — an admin-set window that hasn't ended (read-time expiry).
+ * - `"comp"` — comped as a highlight kind and not switched off by an admin.
+ *   Derived, never written: revoking the comp takes the store off the rail
+ *   with nothing to clean up, which a far-future window could not do.
+ *
+ * A paid window wins: it's an explicit, dated act, and outlives the switch.
+ */
+export function highlightSource(
+	facts: {
+		sponsoredUntil?: number;
+		comped: boolean;
+		compKind?: string;
+		compHighlightOffAt?: number;
+	},
+	now: number,
+): "paid" | "comp" | null {
+	if (sponsorshipActive(facts.sponsoredUntil, now)) return "paid";
+	if (
+		facts.comped &&
+		(HIGHLIGHT_COMP_KINDS as readonly string[]).includes(facts.compKind ?? "") &&
+		facts.compHighlightOffAt === undefined
+	) {
+		return "comp";
+	}
+	return null;
+}
+
+/** Comped as a highlight kind — the stores the admin's "feature while
+ * comped" switch applies to (on or off). */
+export function compHighlightEligible(
+	comped: boolean,
+	compKind: string | undefined,
+): boolean {
+	return (
+		comped &&
+		(HIGHLIGHT_COMP_KINDS as readonly string[]).includes(compKind ?? "")
+	);
 }
 
 /**
  * Row-level listable rule: may this store appear on /stores at all?
  *
+ * - `internal` — Kedaipal's own or a test store (`isInternalStore`). Never on
+ *   a public page: prod held three such stores with live products when the
+ *   directory shipped (kp-demo, openmarket, deqly-cards).
  * - `marketplaceUnlistedAt` set — the seller opted out. Listed is the default
  *   (the storefront is already a public URL; the directory is distribution),
  *   but an opt-out is absolute and needs no other reason.
@@ -65,6 +138,7 @@ export interface MarketplaceListableRow {
  * products table and lives in `convex/marketplace.ts`.
  */
 export function isListableRow(row: MarketplaceListableRow): boolean {
+	if (row.internal) return false;
 	if (row.marketplaceUnlistedAt !== undefined) return false;
 	if (row.purgeStartedAt !== undefined) return false;
 	return true;

@@ -15,7 +15,7 @@ import {
 	ContactLine,
 	ExpiryText,
 	FoundingPill,
-	SponsoredPill,
+	HighlightPill,
 	StatusPill,
 	ViaPill,
 } from "./seller-cells";
@@ -62,7 +62,7 @@ export function SellerCard({
 							/{seller.slug}
 						</span>
 						<ViaPill seller={seller} />
-						<SponsoredPill seller={seller} now={now} />
+						<HighlightPill seller={seller} now={now} />
 					</div>
 				</div>
 				<StatusPill bucket={bucket} />

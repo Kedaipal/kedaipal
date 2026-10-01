@@ -10,14 +10,15 @@ import {
 	MessageCircle,
 } from "lucide-react";
 import type { AdminSellerRow } from "../../../convex/admin";
-import { sponsorshipActive } from "../../../convex/lib/marketplaceListing";
 import {
 	type ExpiryTone,
+	highlightedThroughLabel,
 	SELLER_STATUS_LABEL,
 	type SellerBucket,
 	type SellerExpiry,
+	sellerHighlight,
 } from "../../lib/admin-seller-view";
-import { formatMobile, formatShortDate } from "../../lib/format";
+import { formatMobile } from "../../lib/format";
 import { cn } from "../../lib/utils";
 import { CopyButton } from "../ui/copy-button";
 
@@ -69,35 +70,42 @@ export function FoundingPill({ rank }: { rank: number }) {
 }
 
 /**
- * A live marketplace sponsorship (z8r3fdkmyp), beside the Founding pill on
- * every directory surface — sponsorship is a paid placement, so "who is on
- * the rail and until when" must read at a glance, not behind each Manage
- * menu. Renders nothing for an absent or expired window (read-time expiry,
- * the same `sponsorshipActive` the directory itself uses).
+ * On the marketplace's "Store highlights" rail (z8r3fdkmyp) — beside the
+ * slug on every directory surface, so "who is on the rail, and why / until
+ * when" reads at a glance rather than behind each Manage menu. Paid window:
+ * "Highlight · to 8 Oct" (full date in the tooltip). Comped: "Highlight ·
+ * comped" — no date, it lasts as long as the comp. Nothing otherwise.
+ * "Highlight", not "Sponsored", because Sponsor is already a comp kind in the
+ * same row.
  */
-export function SponsoredPill({
+export function HighlightPill({
 	seller,
 	now,
 }: {
 	seller: AdminSellerRow;
 	now: number;
 }) {
-	const until = seller.marketplace.sponsoredUntil;
-	if (until === undefined || !sponsorshipActive(until, now)) return null;
-	// Day + month on the pill (it shares a line with the slug); the full date,
-	// year included, rides the tooltip.
-	const lastDay = until - 1;
-	const short = new Date(lastDay).toLocaleDateString(undefined, {
-		day: "numeric",
-		month: "short",
-	});
+	const { source } = sellerHighlight(seller, now);
+	if (source === null) return null;
+	let label: string;
+	let title: string;
+	if (source === "paid" && seller.marketplace.sponsoredUntil !== undefined) {
+		// Day + month on the pill (it shares a line with the slug); the full
+		// date, year included, rides the tooltip.
+		const lastDay = seller.marketplace.sponsoredUntil - 1;
+		label = `to ${new Date(lastDay).toLocaleDateString(undefined, { day: "numeric", month: "short" })}`;
+		title = `On Store highlights through ${highlightedThroughLabel(seller.marketplace.sponsoredUntil)}`;
+	} else {
+		label = "comped";
+		title = "On Store highlights while comped";
+	}
 	return (
 		<span
 			className="inline-flex h-5 shrink-0 items-center gap-1 rounded-full bg-accent/10 px-1.5 text-[10px] font-bold whitespace-nowrap text-accent-emphasis"
-			title={`Sponsored on the marketplace through ${formatShortDate(lastDay)}`}
+			title={title}
 		>
 			<Megaphone className="size-3" aria-hidden="true" />
-			Sponsored · to {short}
+			Highlight · {label}
 		</span>
 	);
 }

@@ -1,15 +1,18 @@
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { type QueryCtx, query } from "./_generated/server";
-import { requireRetailerAccess } from "./lib/auth";
+import { adminUserIds, requireRetailerAccess } from "./lib/auth";
+import { isExcludedRetailer } from "./lib/businessReport";
 import type { ClosedDateRange } from "./lib/closedDates";
 import { type Country, DEFAULT_COUNTRY } from "./lib/country";
 import {
+	highlightSource,
+	isInternalStore,
 	isListableRow,
-	sponsorshipActive,
 } from "./lib/marketplaceListing";
 import type { OpeningHours } from "./lib/openingHours";
 import { hiddenFromStorefront } from "./lib/productEvent";
+import { loadSubscription } from "./subscriptions";
 
 /**
  * The public store directory's card payload (z8r3fdkmyp) — the marketplace
@@ -40,8 +43,11 @@ export type MarketplaceStoreCard = {
 	closedDates?: ClosedDateRange[];
 	isFoundingMember?: boolean;
 	foundingMemberRank?: number;
-	/** A live, admin-set sponsorship window — the card renders on the
-	 * "Store highlights" rail WITH a visible "Sponsored" label. */
+	/** On the "Store highlights" rail — a live paid window, or comped as a
+	 * highlight kind (`highlightSource`). Renders WITH a visible "Sponsored"
+	 * label either way: the label tells the buyer the position is promoted,
+	 * not earned by ranking, which is true of both. The reason stays
+	 * server-side (it would reveal billing state). */
 	sponsored: boolean;
 	/** Off-Season Hold — the card says "browse only" instead of "Open now",
 	 * matching what the buyer will find on the storefront itself. */
@@ -80,6 +86,32 @@ async function hasVisibleProduct(
 }
 
 /**
+ * Kedaipal's own or a test store? The server half of `isInternalStore` — it
+ * needs the admin allowlist and the subscription's comp kind. Shared by the
+ * directory, the seller card's readiness answer and the admin console, so
+ * "is this store on /stores?" has exactly one answer everywhere.
+ */
+export function storeIsInternal(
+	row: Doc<"retailers">,
+	sub: Doc<"subscriptions"> | null,
+	adminIds: readonly string[],
+): boolean {
+	return isInternalStore(
+		isExcludedRetailer(
+			{
+				id: row._id,
+				slug: row.slug,
+				userId: row.userId,
+				notifyEmail: row.notifyEmail,
+				createdAt: row.createdAt,
+			},
+			adminIds,
+		),
+		sub?.comp?.kind,
+	);
+}
+
+/**
  * The seller's own "am I actually on /stores?" answer, for the Settings →
  * Store → Marketplace listing card. The switch alone can't say it: a store
  * that is ON but has no storefront-visible product is NOT listed, and the
@@ -93,12 +125,18 @@ export const myListingReadiness = query({
 	handler: async (
 		ctx,
 		{ retailerId },
-	): Promise<{ hasVisibleProduct: boolean }> => {
-		await requireRetailerAccess(ctx, retailerId, {
+	): Promise<{ hasVisibleProduct: boolean; internal: boolean }> => {
+		const { retailer } = await requireRetailerAccess(ctx, retailerId, {
 			area: "store_settings",
 			level: "read",
 		});
-		return { hasVisibleProduct: await hasVisibleProduct(ctx, retailerId) };
+		// An internal store is never listed, whatever its switch says — the
+		// card must not tell Kedaipal's own team "Shown in the directory".
+		const sub = await loadSubscription(ctx, retailerId);
+		return {
+			hasVisibleProduct: await hasVisibleProduct(ctx, retailerId),
+			internal: storeIsInternal(retailer, sub, adminUserIds()),
+		};
 	},
 });
 
@@ -136,13 +174,34 @@ export const listStores = query({
 	args: {},
 	handler: async (ctx): Promise<MarketplaceStoreCard[]> => {
 		const now = Date.now();
+		const adminIds = adminUserIds();
 		const rows = await ctx.db.query("retailers").collect();
 		const cards: Array<{ card: MarketplaceStoreCard; row: Doc<"retailers"> }> =
 			[];
 		for (const row of rows) {
-			if (!isListableRow(row)) continue;
+			// The subscription is read for TWO store facts — is this an internal
+			// store, and is it comped into Store highlights — and never shipped:
+			// the card says "sponsored", not why.
+			const sub = await loadSubscription(ctx, row._id);
+			if (
+				!isListableRow({
+					marketplaceUnlistedAt: row.marketplaceUnlistedAt,
+					purgeStartedAt: row.purgeStartedAt,
+					internal: storeIsInternal(row, sub, adminIds),
+				})
+			)
+				continue;
 			if (!(await hasVisibleProduct(ctx, row._id))) continue;
-			const sponsored = sponsorshipActive(row.marketplaceSponsoredUntil, now);
+			const sponsored =
+				highlightSource(
+					{
+						sponsoredUntil: row.marketplaceSponsoredUntil,
+						comped: sub?.comped === true,
+						compKind: sub?.comp?.kind,
+						compHighlightOffAt: row.marketplaceCompHighlightOffAt,
+					},
+					now,
+				) !== null;
 			let logoUrl: string | undefined;
 			if (row.logoStorageId) {
 				logoUrl = (await ctx.storage.getUrl(row.logoStorageId)) ?? undefined;

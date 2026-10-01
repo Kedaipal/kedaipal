@@ -9,11 +9,12 @@ import type { ReactNode } from "react";
 import type { AdminSellerRow } from "../../../convex/admin";
 import { COMP_KIND_LABEL } from "../../../convex/lib/comp";
 import { COUNTRY_LABELS } from "../../../convex/lib/country";
-import { sponsorshipActive } from "../../../convex/lib/marketplaceListing";
 import {
 	describeDays,
+	highlightedThroughLabel,
 	sellerBucket,
 	sellerExpiry,
+	sellerHighlight,
 	sellerPlanLabel,
 	sellerRail,
 	sellerReason,
@@ -35,7 +36,7 @@ import {
 	ContactLine,
 	ExpiryText,
 	FoundingPill,
-	SponsoredPill,
+	HighlightPill,
 	StatusPill,
 } from "./seller-cells";
 import { SellerManageMenu, useOpenStore } from "./seller-manage-menu";
@@ -55,7 +56,11 @@ export function SellerSheet({
 }) {
 	return (
 		<Sheet open={open && seller !== null} onOpenChange={onOpenChange}>
-			<SheetContent side="right" className="gap-0 p-0 sm:max-w-lg">
+			{/* `sm:pb-0` too: the right sheet adds `sm:pb-5`, which a bare `p-0`
+			    can't override, and padding on the scroll container parks the
+			    sticky footer ABOVE it — rows then scroll visibly underneath. The
+			    footer carries the safe-area inset itself instead. */}
+			<SheetContent side="right" className="gap-0 p-0 sm:max-w-lg sm:pb-0">
 				{seller ? (
 					<SellerSheetBody
 						seller={seller}
@@ -84,6 +89,7 @@ function SellerSheetBody({
 	const rail = sellerRail(seller);
 	const link = storefrontUrl(seller.slug);
 	const summary = sellerSummaryText(seller, storefrontOrigin(), now);
+	const highlight = sellerHighlight(seller, now);
 	const alertsSameAsStore =
 		seller.notifyWaPhone !== undefined &&
 		seller.notifyWaPhone === seller.waPhone;
@@ -103,7 +109,7 @@ function SellerSheetBody({
 					</div>
 					<SheetDescription className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
 						<StatusPill bucket={bucket} />
-						<SponsoredPill seller={seller} now={now} />
+						<HighlightPill seller={seller} now={now} />
 						<span className="truncate">
 							{[sellerPlanLabel(seller), rail]
 								.filter((p) => p && p !== "—")
@@ -178,19 +184,30 @@ function SellerSheetBody({
 					    the admin-sold sponsorship, both read before selling one. */}
 					<Row label="Marketplace">
 						{/* Two short lines, not one long one: the row truncates, and
-						    the sponsorship date is the fact an admin opens this for. */}
+						    the highlight state is the fact an admin opens this for. */}
 						<div className="flex min-w-0 flex-col">
-							<Plain muted={seller.marketplace.unlistedAt !== undefined}>
-								{seller.marketplace.unlistedAt !== undefined
-									? `Opted out since ${formatShortDate(seller.marketplace.unlistedAt)}`
-									: "Listed (the default)"}
+							<Plain
+								muted={
+									seller.marketplace.internal ||
+									seller.marketplace.unlistedAt !== undefined
+								}
+							>
+								{seller.marketplace.internal
+									? "Not listed — internal store"
+									: seller.marketplace.unlistedAt !== undefined
+										? `Opted out since ${formatShortDate(seller.marketplace.unlistedAt)}`
+										: "Listed (the default)"}
 							</Plain>
-							{seller.marketplace.sponsoredUntil !== undefined &&
-							sponsorshipActive(seller.marketplace.sponsoredUntil, now) ? (
+							{highlight.source === "paid" &&
+							seller.marketplace.sponsoredUntil !== undefined ? (
 								<Plain muted>
-									Sponsored through{" "}
-									{formatShortDate(seller.marketplace.sponsoredUntil - 1)}
+									Highlighted through{" "}
+									{highlightedThroughLabel(seller.marketplace.sponsoredUntil)}
 								</Plain>
+							) : highlight.source === "comp" ? (
+								<Plain muted>Highlighted while comped</Plain>
+							) : highlight.compEligible ? (
+								<Plain muted>Comped — kept off highlights</Plain>
 							) : null}
 						</div>
 					</Row>
@@ -387,7 +404,7 @@ function SellerSheetBody({
 				</Section>
 			</div>
 
-			<div className="sticky bottom-0 mt-auto flex items-center justify-between gap-3 border-t border-border bg-popover p-4">
+			<div className="sticky bottom-0 mt-auto flex items-center justify-between gap-3 border-t border-border bg-popover p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
 				<span className="text-xs text-muted-foreground">
 					Comp upgrade and the dev reset live under Manage.
 				</span>

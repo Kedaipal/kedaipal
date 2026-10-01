@@ -805,6 +805,13 @@ export default defineSchema({
 		// unset. Every placement it buys renders with a visible "Sponsored"
 		// label — the rail is disclosed advertising, never covert ranking.
 		marketplaceSponsoredUntil: v.optional(v.number()),
+		// Comped stores (partner / sponsor / pilot) ride Store highlights
+		// AUTOMATICALLY while comped — derived at read time by
+		// `highlightSource`, never written (z8r3fdkmyp, Zaki 1 Oct 2026). This
+		// stamp is the admin's one override: set = "keep this comped store off
+		// the rail" (admin.setCompHighlight, audited). Unset = the default.
+		// Timestamp, not boolean, per the house pattern.
+		marketplaceCompHighlightOffAt: v.optional(v.number()),
 		// Highest release version whose "What's new" notes this seller has seen
 		// (86eyqgxv9). A calendar version string (`YYYY.MM.N`), NOT a boolean —
 		// a boolean can only answer "dismissed once", so the next release would
