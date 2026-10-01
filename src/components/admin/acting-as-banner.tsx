@@ -1,21 +1,5 @@
-import { useNavigate } from "@tanstack/react-router";
 import { Hammer, LogOut, ShieldAlert } from "lucide-react";
-import { useCallback } from "react";
-import { useActAs } from "../../hooks/useActAs";
-
-/**
- * End the act-as session and return to the seller directory — the one exit,
- * shared by the banner, the shell's stale-store redirect and its failed-read
- * screen, so they can't drift.
- */
-export function useExitActAs(): () => void {
-	const navigate = useNavigate();
-	const { setActAs } = useActAs();
-	return useCallback(() => {
-		setActAs(undefined);
-		navigate({ to: "/app/admin/sellers" });
-	}, [navigate, setActAs]);
-}
+import { useExitActAs } from "../../hooks/useExitActAs";
 
 /**
  * Persistent, high-contrast "you are operating someone else's store" banner shown

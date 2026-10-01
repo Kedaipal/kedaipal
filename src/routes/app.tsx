@@ -10,10 +10,7 @@ import {
 import { useMutation } from "convex/react";
 import { useEffect, useRef } from "react";
 import { api } from "../../convex/_generated/api";
-import {
-	ActingAsBanner,
-	useExitActAs,
-} from "../components/admin/acting-as-banner";
+import { ActingAsBanner } from "../components/admin/acting-as-banner";
 import { ConsentBanner } from "../components/app/consent-banner";
 import { DashboardLoadError } from "../components/app/dashboard-load-error";
 import { RouteAreaGuard } from "../components/app/route-area-guard";
@@ -25,6 +22,7 @@ import { Sidebar } from "../components/dashboard/sidebar";
 import { WhatsNewProvider } from "../components/dashboard/whats-new";
 import { ActAsProvider, useActAs } from "../hooks/useActAs";
 import { useDashboardRetailerRead } from "../hooks/useDashboardRetailer";
+import { useExitActAs } from "../hooks/useExitActAs";
 import { OrderNotificationsBridge } from "../hooks/useOrderNotifications";
 import { useOrderToastNotifications } from "../hooks/useOrderToastNotifications";
 import { hasFeature } from "../lib/subscription";

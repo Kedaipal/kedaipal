@@ -268,8 +268,9 @@ confirmation resolve to the right store.
   [A failed store read is said, not spun](#a-failed-store-read-is-said-not-spun-z8r3fdkqn6).
 - **`ActingAsBanner`** (`src/components/admin/acting-as-banner.tsx`) — sticky, high-contrast
   amber bar rendered by the `/app` shell whenever `retailer.actingAsAdmin`. "Exit" ends the
-  session and returns to the directory through **`useExitActAs()`** (same file) — the one exit,
-  shared with the shell's stale-store redirect and its failed-read screen.
+  session and returns to the directory through **`useExitActAs()`**
+  (`src/hooks/useExitActAs.ts`) — the one exit, shared with the shell's stale-store redirect
+  and its failed-read screen.
 - **Nav grouping** — the sidebar shows the **seller nav** (operating the vendor) and a
   separate, labelled **"Admin"** group (All sellers / Billing / WABA Safety), so the boundary
   is unmistakable while acting-as. Seller nav needs no special handling (the session holds
@@ -417,8 +418,8 @@ pause flow) is a sensible next step but not yet implemented.
 - `src/hooks/useActAs.tsx` — the session (context + `sessionStorage`) and its ownership rule,
   `resolveActAs`; `src/hooks/useActAsViewer.ts` — who is looking (Clerk session + a
   Convex-confirmed admin verdict).
-- `src/hooks/useDashboardRetailer.ts`, `src/components/admin/acting-as-banner.tsx` (+ the shared
-  `useExitActAs`), `src/components/app/dashboard-load-error.tsx`.
+- `src/hooks/useDashboardRetailer.ts`, `src/components/admin/acting-as-banner.tsx`,
+  `src/hooks/useExitActAs.ts` (the shared exit), `src/components/app/dashboard-load-error.tsx`.
 - `src/components/dashboard/{sidebar,mobile-header,bottom-nav}.tsx` — accept a `null` retailer
   for storeless-admin mode; sidebar's Admin group ends the session.
 - `convex/admin.test.ts` — access, subscription bypass, audit, directory, counter-checkout.
