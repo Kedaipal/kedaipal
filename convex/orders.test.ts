@@ -10437,6 +10437,55 @@ describe("orders — column header filters (86eyrtz74)", () => {
 		expect(legacy.total).toBe(0);
 	});
 
+	test("the CSV export NARROWS by fulfilment, not just labels it (z8r3fdfau9)", async () => {
+		// The other two fulfilment export tests assert the CELL's wording. This
+		// one asserts the ROW SET: that `fulfilments` actually reaches the
+		// export's predicate. Without it the seller filters to "pickups", hits
+		// Export, and silently gets every order — the export diverging from the
+		// screen, which is the one thing the shared predicate exists to prevent.
+		const t = setup();
+		const { retailer, asA, a, b, mixed } = await seedForFilters(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(a._id, {
+				deliveryMethod: "self_collect",
+				pickupSnapshot: { label: "Kedai", address: "Jalan 1" },
+			});
+			await ctx.db.patch(b._id, {
+				deliveryMethod: "self_collect",
+				pickupSnapshot: {
+					label: "Pasar",
+					address: "Jalan 2",
+					locationType: "drop_off",
+				},
+			});
+			await ctx.db.patch(mixed._id, { eventRsvp: true });
+		});
+
+		const pickups = await asA.action(api.orders.exportOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			fulfilments: ["self_collect"],
+			columnKeys: ["shortId", "fulfilment"],
+		});
+		expect(pickups.count).toBe(1);
+		expect(pickups.csv).toContain(a.shortId);
+		// The drop-off and the RSVP are NOT self-collect, however they are stored.
+		expect(pickups.csv).not.toContain(b.shortId);
+		expect(pickups.csv).not.toContain(mixed.shortId);
+
+		// Several kinds OR together in the export exactly as in the inbox.
+		const both = await asA.action(api.orders.exportOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			fulfilments: ["drop_off", "event"],
+			columnKeys: ["shortId", "fulfilment"],
+		});
+		expect(both.count).toBe(2);
+		expect(both.csv).toContain(b.shortId);
+		expect(both.csv).toContain(mixed.shortId);
+		expect(both.csv).not.toContain(a.shortId);
+	});
+
 	test("the CSV export honours the header filters, or it isn't the same list", async () => {
 		// The invariant orderInboxFilter.ts exists for: export what's on screen.
 		const t = setup();
