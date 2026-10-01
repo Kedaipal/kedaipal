@@ -384,6 +384,14 @@ export const listSellersForAdmin = query({
 							includedCredits: sub.enterprise.includedCredits,
 							overageRateMinor: sub.enterprise.overageRateMinor,
 							blockSize: sub.enterprise.blockSize,
+							// The per-deal allowances ride too — the edit form prefills
+							// from THIS row, and the day they were left out, reopening a
+							// contract showed them blank: a fee typo-fix away from
+							// silently resetting a deal to unlimited seats (found
+							// hands-on, 2 Oct). Optional fields slip through Omit<>
+							// typing, so the admin.test.ts pin is the guard.
+							teammates: sub.enterprise.teammates,
+							broadcastQuota: sub.enterprise.broadcastQuota,
 							contactName: sub.enterprise.contactName,
 							notes: sub.enterprise.notes,
 							setAt: sub.enterprise.setAt,

@@ -169,22 +169,25 @@ export function EnterpriseContractPage({
 		: enterpriseContractProblem(input, MAX_INCLUDED, teammatesInUse);
 	const founding = seller.isFoundingMember || seller.foundingIntent;
 	// Every refusal `setContract` would throw, said here first.
-	const refusal = seller.comped
-		? "This store is comped — end the comp before putting it on a contract."
-		: founding
-			? "Founding Members stay on Founding Pro — a founding store can't be put on an Enterprise contract."
-			: seller.subscriptionStatus === "on_hold"
-				? "This store is on Off-Season Hold — resume it before putting it on a contract."
-				: enterpriseTermChangeBlocker({
-						pending: seller.pendingInvoice
-							? {
-									invoiceNumber: seller.pendingInvoice.invoiceNumber,
-									plan: seller.pendingInvoice.plan,
-									billingCycle: seller.pendingInvoice.billingCycle,
-								}
-							: undefined,
-						billingCycle: cycle,
-					});
+	const refusal =
+		seller.subscriptionStatus === undefined
+			? "This store has no subscription yet — it gets one when the owner claims it; attach the contract then."
+			: seller.comped
+				? "This store is comped — end the comp before putting it on a contract."
+				: founding
+					? "Founding Members stay on Founding Pro — a founding store can't be put on an Enterprise contract."
+					: seller.subscriptionStatus === "on_hold"
+						? "This store is on Off-Season Hold — resume it before putting it on a contract."
+						: enterpriseTermChangeBlocker({
+								pending: seller.pendingInvoice
+									? {
+											invoiceNumber: seller.pendingInvoice.invoiceNumber,
+											plan: seller.pendingInvoice.plan,
+											billingCycle: seller.pendingInvoice.billingCycle,
+										}
+									: undefined,
+								billingCycle: cycle,
+							});
 	const blocked = refusal ?? problem;
 
 	async function save() {
@@ -196,12 +199,20 @@ export function EnterpriseContractPage({
 				...input,
 				contactName: contact.trim(),
 			});
+			// A trialing store keeps its one-off trial allowance until it converts
+			// (writeGrantOverride's documented rule) — promising it the credits
+			// "this month" would be the toast lying about money.
+			const trialing = seller.subscriptionStatus === "trialing";
 			toast.success(
 				res.created ? `${seller.storeName} is on Enterprise` : "Contract saved",
 				{
 					description: res.created
-						? "Its next invoice bills the contract, and its monthly credits are the contract's."
-						: "Changes bill from the next invoice; a higher credit number lands this month.",
+						? trialing
+							? "Its first invoice bills the contract; the contract's credits take over when the free period converts."
+							: "Its next invoice bills the contract, and its monthly credits are the contract's."
+						: trialing
+							? "Changes bill from the first invoice; the contract's credits take over when the free period converts."
+							: "Changes bill from the next invoice; a higher credit number lands this month.",
 				},
 			);
 			onBack();
@@ -406,11 +417,20 @@ export function EnterpriseContractPage({
 				{!existing && !refusal ? (
 					<p className="text-xs text-muted-foreground">
 						Saving moves the store to Enterprise now: its next invoice bills
-						this contract, its monthly credits become the included number (a
-						higher number lands this month), and it gets{" "}
-						{isUnlimited(caps.userCap)
-							? "unlimited teammates"
-							: `${caps.userCap - 1} ${caps.userCap === 2 ? "teammate" : "teammates"}`}
+						this contract, its monthly credits become the included number
+						{seller.subscriptionStatus === "trialing"
+							? " (taking over when the free period converts)"
+							: " (a higher number lands this month)"}
+						, and it gets{" "}
+						{/* The specific number is earned only by a VALID form — while
+						    the refusal under the button rejects what was typed, this
+						    paragraph must not read it back as a promise ("5000
+						    teammates", or NaN for garbage). */}
+						{problem !== null
+							? "the teammates the contract sets"
+							: isUnlimited(caps.userCap)
+								? "unlimited teammates"
+								: `${caps.userCap - 1} ${caps.userCap === 2 ? "teammate" : "teammates"}`}
 						. The way off a contract is a scheduled move to Pro.
 					</p>
 				) : null}

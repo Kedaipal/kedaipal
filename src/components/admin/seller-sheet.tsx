@@ -200,7 +200,13 @@ function SellerSheetBody({
 		try {
 			const res = await scheduleMoveToPro({ retailerId: seller._id });
 			toast.success("Moving to Pro at renewal", {
-				description: `The contract ends on ${formatShortDate(res.effectiveAt)} — that renewal bills Pro.`,
+				// A trialing store has no renewal date yet — effectiveAt falls back
+				// to "now", and printing today's date as the contract's end reads
+				// like an immediate cancellation.
+				description:
+					seller.subscriptionStatus === "trialing"
+						? "When the free period ends, the first bill is Pro's — the contract ends when it's paid."
+						: `The contract ends on ${formatShortDate(res.effectiveAt)} — that renewal bills Pro.`,
 			});
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -575,6 +581,25 @@ function SellerSheetBody({
 								<Plain>
 									{contract.includedCredits.toLocaleString("en")} credits a
 									month
+								</Plain>
+							</Row>
+							{/* The per-deal allowances, readable without opening the edit
+							    form — a negotiated term the summary hides is a term the
+							    next admin discovers by hitting it. Broadcasts only when
+							    the deal names a number (unbuilt feature, tier default
+							    otherwise). */}
+							<Row label="Team">
+								<Plain>
+									{contract.teammates === undefined
+										? "Unlimited teammates"
+										: `${contract.teammates} ${contract.teammates === 1 ? "teammate" : "teammates"} + the owner`}
+									{contract.broadcastQuota !== undefined ? (
+										<Muted>
+											{" "}
+											· {contract.broadcastQuota.toLocaleString("en")}{" "}
+											broadcasts/mo
+										</Muted>
+									) : null}
 								</Plain>
 							</Row>
 							<Row label="Overage">

@@ -16,7 +16,10 @@ const state = vi.hoisted(() => ({
 vi.mock("convex/react", () => ({
 	useMutation: () => state.setContract,
 }));
-vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+const toastSuccess = vi.hoisted(() => vi.fn());
+vi.mock("sonner", () => ({
+	toast: { success: toastSuccess, error: vi.fn() },
+}));
 
 // The page renders the Sheet's header parts, which need their Radix dialog
 // context — render it inside an open Sheet like the real drawer does.
@@ -350,5 +353,74 @@ describe("EnterpriseContractPage — starting from another deal", () => {
 			[template()],
 		);
 		expect(screen.queryByLabelText("Start from another contract")).toBeNull();
+	});
+});
+
+describe("EnterpriseContractPage — findings from the 2 Oct hands-on test", () => {
+	it("a store with NO subscription is refused before the tap, not by an error toast", () => {
+		// TrailGear (a legacy sub-less dev store): the server threw "no
+		// subscription yet" AFTER the tap — the one refusal the form did not
+		// say beside its disabled button.
+		renderPage(seller({ subscriptionStatus: undefined, plan: undefined }));
+		fillHsl();
+		expect(saveButton().disabled).toBe(true);
+		expect(screen.getByText(/This store has no subscription yet/)).toBeTruthy();
+	});
+
+	it("the entry paragraph never reads an INVALID teammate count back as a promise", () => {
+		// With 5000 typed, the refusal under the button rejects it — the
+		// paragraph above must not simultaneously say "it gets 5000 teammates"
+		// (or "NaN teammates" for garbage).
+		renderPage(seller());
+		fillHsl();
+		fireEvent.change(screen.getByLabelText("Teammates"), {
+			target: { value: "5000" },
+		});
+		expect(screen.queryByText(/gets 5000 teammates/)).toBeNull();
+		expect(screen.getByText(/the teammates the contract sets/)).toBeTruthy();
+		fireEvent.change(screen.getByLabelText("Teammates"), {
+			target: { value: "abc" },
+		});
+		expect(screen.queryByText(/NaN/)).toBeNull();
+	});
+
+	it("saving onto a TRIALING store never promises the credits land this month", async () => {
+		// writeGrantOverride's documented rule: a trial keeps its one-off
+		// allowance until it converts — exactly HSL's attach-mid-trial state,
+		// so the toast must not claim otherwise.
+		toastSuccess.mockClear();
+		renderPage(seller({ subscriptionStatus: "trialing" }));
+		fillHsl();
+		fireEvent.click(saveButton());
+		await vi.waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+		const description = (
+			toastSuccess.mock.calls[0][1] as { description: string }
+		).description;
+		expect(description).toMatch(/when the free period converts/);
+		expect(description).not.toMatch(/lands this month/);
+
+		// An ACTIVE store keeps the immediate-landing copy on an edit.
+		toastSuccess.mockClear();
+		cleanup();
+		state.setContract = vi.fn(async () => ({ created: false }));
+		renderPage(
+			seller({
+				plan: "enterprise",
+				enterprise: {
+					baseFeeMinor: 88_800,
+					currency: "MYR",
+					includedCredits: 1500,
+					overageRateMinor: 60,
+					blockSize: 5000,
+					contactName: "HSL Food GM",
+					setAt: 0,
+				},
+			}),
+		);
+		fireEvent.click(saveButton());
+		await vi.waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+		expect(
+			(toastSuccess.mock.calls[0][1] as { description: string }).description,
+		).toMatch(/a higher credit number lands this month/);
 	});
 });

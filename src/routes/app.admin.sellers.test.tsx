@@ -410,6 +410,64 @@ describe("directory — detail sheet", () => {
 		expect(startActAsSpy()).toHaveBeenCalledWith({ retailerId: "r_bear" });
 		expect(navigateSpy).toHaveBeenCalledWith({ to: "/app" });
 	});
+
+	it("a contract's allowances read on the sheet, not only inside the edit form", async () => {
+		// A negotiated term the summary hides is a term the next admin
+		// discovers by hitting it (z8r3fdkp8h seats/broadcasts).
+		queryData.set(getFunctionName(api.admin.listSellersForAdmin), [
+			seller({
+				_id: "r_hsl" as AdminSellerRow["_id"],
+				storeName: "Mama's Delights",
+				slug: "mamas-delights",
+				subscriptionStatus: "active",
+				plan: "enterprise",
+				billingCycle: "monthly",
+				enterprise: {
+					baseFeeMinor: 88_800,
+					currency: "MYR",
+					includedCredits: 1500,
+					overageRateMinor: 60,
+					blockSize: 5000,
+					teammates: 12,
+					broadcastQuota: 500,
+					contactName: "HSL Food GM",
+					setAt: at(-1),
+				},
+			}),
+			seller({
+				_id: "r_unl" as AdminSellerRow["_id"],
+				storeName: "Unlimited Deal",
+				slug: "unlimited-deal",
+				subscriptionStatus: "active",
+				plan: "enterprise",
+				billingCycle: "monthly",
+				enterprise: {
+					baseFeeMinor: 120_000,
+					currency: "MYR",
+					includedCredits: 2000,
+					overageRateMinor: 50,
+					blockSize: 5000,
+					contactName: "Someone",
+					setAt: at(-1),
+				},
+			}),
+		]);
+		queryData.set(getFunctionName(api.admin.devStorePurgeEnabled), false);
+		render(<Harness />);
+
+		fireEvent.click(screen.getByRole("button", { name: "Mama's Delights" }));
+		let sheet = await screen.findByRole("dialog");
+		expect(within(sheet).getByText(/12 teammates \+ the owner/)).toBeTruthy();
+		expect(within(sheet).getByText(/500 broadcasts\/mo/)).toBeTruthy();
+		fireEvent.keyDown(document.body, { key: "Escape" });
+
+		// A deal that names no allowances reads the tier's unlimited, and says
+		// nothing about broadcasts it never negotiated.
+		fireEvent.click(screen.getByRole("button", { name: "Unlimited Deal" }));
+		sheet = await screen.findByRole("dialog");
+		expect(within(sheet).getByText("Unlimited teammates")).toBeTruthy();
+		expect(within(sheet).queryByText(/broadcasts\/mo/)).toBeNull();
+	});
 });
 
 describe("directory — phone", () => {

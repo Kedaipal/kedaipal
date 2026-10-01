@@ -952,6 +952,38 @@ describe("the contract's own allowances (seats + broadcasts)", () => {
 		expect((await getSub(t, s.subId))?.userCap).toBe(3);
 	});
 
+	it("the admin row carries the WHOLE contract — the edit form prefills from it", async () => {
+		// convex/admin.ts rebuilds the contract field-by-field for the sellers
+		// list, and optional fields slip straight through its Omit<> typing:
+		// the day teammates/broadcastQuota were left out, reopening a contract
+		// showed them blank — one fee typo-fix away from silently resetting a
+		// deal to unlimited seats (found hands-on, 2 Oct). This pins every
+		// admin-facing contract field, so a future field can't go missing
+		// without a red test.
+		const t = setup();
+		const s = await activeStore(t);
+		await asAdmin(t).mutation(api.enterprise.setContract, {
+			retailerId: s.retailerId,
+			...HSL,
+			teammates: 12,
+			broadcastQuota: 500,
+			notes: "Signed 2 Oct",
+		});
+		const rows = await asAdmin(t).query(api.admin.listSellersForAdmin, {});
+		const row = rows.find((r) => r._id === s.retailerId);
+		expect(row?.enterprise).toMatchObject({
+			baseFeeMinor: HSL.baseFeeMinor,
+			currency: "MYR",
+			includedCredits: HSL.includedCredits,
+			overageRateMinor: HSL.overageRateMinor,
+			blockSize: HSL.blockSize,
+			teammates: 12,
+			broadcastQuota: 500,
+			contactName: HSL.contactName,
+			notes: "Signed 2 Oct",
+		});
+	});
+
 	it("refuses a slipped zero", async () => {
 		const t = setup();
 		const s = await activeStore(t);
