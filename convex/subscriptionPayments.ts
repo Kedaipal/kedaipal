@@ -48,9 +48,10 @@ import {
 	type BillingGatewayCredentials,
 	buildAutoRenewSessionParams,
 	buildInvoicePaymentRequestParams,
-	CHARGE_OUTCOME_UNKNOWN_WINDOW_MS,
+	CHARGE_ATTEMPT_LOCK_MS,
 	nextChargeRetryAt,
 	readAttachedMethodCode,
+	readSessionChargeCount,
 	resolveBillingGatewayCredentials,
 } from "./lib/hitpayBilling";
 import {
@@ -987,7 +988,9 @@ export const finishAutoRenewSetup = action({
 			credentials,
 			context.existingSessionId,
 		);
-		if (!session || session.status !== "active") return { attached: false };
+		if (session.kind !== "found" || session.status !== "active") {
+			return { attached: false };
+		}
 		await ctx.runMutation(internal.subscriptionPayments.recordMethodAttached, {
 			billingId: context.existingSessionId,
 			methodCode: session.paymentMethod,
@@ -997,16 +1000,28 @@ export const finishAutoRenewSetup = action({
 	},
 });
 
-type RecurringSessionStatus = {
-	status: string;
-	timesCharged: number;
-	paymentMethod: string | undefined;
-};
+/** What a session GET told us. `gone` and `unavailable` are different facts:
+ * a session HitPay says it doesn't have can't take a charge either, while a
+ * read that failed tells us nothing at all. */
+type RecurringSessionRead =
+	| {
+			kind: "found";
+			status: string;
+			/** Undefined when the body carries no count — "can't judge", never
+			 * zero (lib/hitpayBilling.ts `readSessionChargeCount`). */
+			chargeCount: number | undefined;
+			paymentMethod: string | undefined;
+	  }
+	/** 404/410 — HitPay has no such session (e.g. removed at their end and the
+	 * detach webhook never reached us). */
+	| { kind: "gone"; httpStatus: number }
+	/** No usable answer: a network error, 5xx, 429, or any other refusal. */
+	| { kind: "unavailable" };
 
 async function fetchRecurringSession(
 	credentials: BillingGatewayCredentials,
 	sessionId: string,
-): Promise<RecurringSessionStatus | null> {
+): Promise<RecurringSessionRead> {
 	let response: Response;
 	try {
 		response = await fetch(
@@ -1020,24 +1035,39 @@ async function fetchRecurringSession(
 		);
 	} catch (err) {
 		console.error("[billing] recurring session fetch failed", {
+			sessionId,
 			err: err instanceof Error ? err.message : String(err),
 		});
-		return null;
+		return { kind: "unavailable" };
+	}
+	if (response.status === 404 || response.status === 410) {
+		console.warn("[billing] recurring session not found at HitPay", {
+			sessionId,
+			status: response.status,
+		});
+		return { kind: "gone", httpStatus: response.status };
 	}
 	if (!response.ok) {
 		console.error("[billing] recurring session fetch rejected", {
+			sessionId,
 			status: response.status,
 		});
-		return null;
+		return { kind: "unavailable" };
 	}
-	const body = (await response.json()) as Record<string, unknown>;
-	// Same reader the webhook uses — the GET response IS a recurring-billing
+	let body: Record<string, unknown>;
+	try {
+		body = (await response.json()) as Record<string, unknown>;
+	} catch {
+		console.error("[billing] recurring session body unreadable", { sessionId });
+		return { kind: "unavailable" };
+	}
+	// Same readers the webhook uses — the GET response IS a recurring-billing
 	// object, and reading only the docs' flat `payment_method` here is what
 	// made the reconcile path record "card" for a Touch 'n Go wallet.
 	return {
+		kind: "found",
 		status: typeof body.status === "string" ? body.status : "unknown",
-		timesCharged:
-			typeof body.times_charged === "number" ? body.times_charged : 0,
+		chargeCount: readSessionChargeCount(body),
 		paymentMethod: readAttachedMethodCode(body),
 	};
 }
@@ -1095,8 +1125,8 @@ async function applyMethodAttached(
 	//  1. FIRST ATTACH ONLY. This helper runs for every attach signal — the
 	//     webhook, its retries, AND the redirect reconcile — so charging on
 	//     each one races two charges onto the same bill (each sees the invoice
-	//     still pending, and the in-flight charge hasn't moved HitPay's
-	//     times_charged yet, so the reconcile guard waves the second through).
+	//     still pending, and the in-flight charge hasn't moved HitPay's charge
+	//     count yet, so the reconcile guard waves the second through).
 	//  2. THE BILL THE PAGE SHOWED. `autoRenewSetup` recorded the invoice and
 	//     amount displayed at mint time; anything else — a renewal issued while
 	//     the seller sat on HitPay's page, an admin invoice voided and
@@ -1304,12 +1334,14 @@ export const recordChargeAttempt = internalMutation({
 		// is told to stand down. Without it, two schedulers (attach webhook +
 		// redirect reconcile, or cron + heal) both POST — and the
 		// outcome-unknown reconcile can't save us, because while charge A is
-		// still in flight HitPay's times_charged hasn't moved yet, so charge B
+		// still in flight HitPay's charge count hasn't moved yet, so charge B
 		// reads "remote not ahead" and charges anyway.
+		// The window is the LOCK's lifetime only: a stale stamp may be
+		// re-claimed because chargeDueRenewal has already asked HitPay about it
+		// by then — at any age (lib/hitpayBilling.ts CHARGE_ATTEMPT_LOCK_MS).
 		const inFlight =
 			sub.autoRenew.lastChargeAttemptAt !== undefined &&
-			Date.now() - sub.autoRenew.lastChargeAttemptAt <
-				CHARGE_OUTCOME_UNKNOWN_WINDOW_MS;
+			Date.now() - sub.autoRenew.lastChargeAttemptAt < CHARGE_ATTEMPT_LOCK_MS;
 		if (inFlight) {
 			console.warn("[billing] charge attempt refused — one already in flight", {
 				subscriptionId,
@@ -1395,12 +1427,15 @@ export const recordChargeFailure = internalMutation({
  * moment. Scheduled by the renewal cron, the retry sweep, and heal-on-attach.
  * Money rules:
  *  - charge the INVOICE total at charge time, never a cached plan amount;
- *  - never fire when a recent attempt's outcome is unknown — reconcile
- *    against HitPay's `times_charged` first (settle if it already went
- *    through), so a crashed action can't become a double charge;
+ *  - never fire while an earlier attempt's outcome is unknown — reconcile
+ *    against HitPay's charge count first (settle if it already went
+ *    through), so a crashed action can't become a double charge. At ANY
+ *    age: the retry after an unknown outcome lands a day later by
+ *    construction, so an age-gated guard never ran where it was needed;
  *  - the synchronous response is the verdict: succeeded → settle through the
  *    markPaid path; anything else → Kedaipal-owned dunning
- *    (recordChargeFailure), with the Pay-now link always live as the way out.
+ *    (recordChargeFailure), whose decline re-mints the Pay-now link as the
+ *    way out.
  */
 export const chargeDueRenewal = internalAction({
 	args: { invoiceId: v.id("invoices") },
@@ -1416,32 +1451,48 @@ export const chargeDueRenewal = internalAction({
 		const { autoRenew, sessionId } = context;
 		if (!autoRenew || !sessionId) return; // turned off meanwhile — manual rail
 
-		// Outcome-unknown guard: a fresh attempt stamp with no recorded result
-		// means a previous action may have charged and died. Ask HitPay how many
-		// charges the session has taken; if it moved past our counter, that money
-		// is real — settle it, don't charge again.
-		if (
-			autoRenew.lastChargeAttemptAt !== undefined &&
-			Date.now() - autoRenew.lastChargeAttemptAt <
-				CHARGE_OUTCOME_UNKNOWN_WINDOW_MS
-		) {
+		// Outcome-unknown guard. An attempt stamp is cleared only by a RECORDED
+		// outcome (a settle or a decline), so one still standing means an
+		// earlier action may have charged and died before it could say so. Ask
+		// HitPay how many charges the session has taken; if that moved past our
+		// counter the money is real — settle it, never charge again.
+		// NO AGE LIMIT. The retry after an unknown outcome is scheduled a day
+		// out and fired by a daily cron, so it always meets a stamp at least
+		// 24h old; the old "< 24h" gate meant this never ran on that path, the
+		// lock read the stamp as stale, and a charge HitPay had taken was POSTed
+		// again. The lock's window (CHARGE_ATTEMPT_LOCK_MS) is not this one.
+		if (autoRenew.lastChargeAttemptAt !== undefined) {
 			const session = await fetchRecurringSession(credentials, sessionId);
-			if (session === null) return; // can't judge — try again next sweep
-			if (session.timesCharged > (autoRenew.timesCharged ?? 0)) {
-				console.warn(
-					"[billing] reconciled an untracked charge — settling without re-charging",
-					{ invoiceNumber: context.invoiceNumber, sessionId },
-				);
-				await ctx.runMutation(internal.invoices.internalSettleFromGateway, {
-					invoiceId,
-					paymentId: `reconciled:${sessionId}:${session.timesCharged}`,
-					amountSen: context.totalSen,
-					currency: context.currency,
-					methodCode: autoRenew.method,
-				});
-				return;
+			// No usable answer — the retry sweep asks again tomorrow.
+			if (session.kind === "unavailable") return;
+			if (session.kind === "found") {
+				if (session.chargeCount === undefined) {
+					// A body without a count can't prove the lost charge DIDN'T land.
+					console.error(
+						"[billing] session carries no charge count — not charging blind",
+						{ invoiceNumber: context.invoiceNumber, sessionId },
+					);
+					return;
+				}
+				if (session.chargeCount > (autoRenew.timesCharged ?? 0)) {
+					console.warn(
+						"[billing] reconciled an untracked charge — settling without re-charging",
+						{ invoiceNumber: context.invoiceNumber, sessionId },
+					);
+					await ctx.runMutation(internal.invoices.internalSettleFromGateway, {
+						invoiceId,
+						paymentId: `reconciled:${sessionId}:${session.chargeCount}`,
+						amountSen: context.totalSen,
+						currency: context.currency,
+						methodCode: autoRenew.method,
+					});
+					return;
+				}
+				// HitPay never took it — fall through; a stale lock is re-claimed.
 			}
-			// Session never took the charge — fall through and charge normally.
+			// "gone" (404/410): a session HitPay doesn't have neither took the lost
+			// charge nor can take this one. Fall through — the charge's own refusal
+			// becomes a recorded, dunned decline instead of a silent skip forever.
 		}
 
 		const claim: { claimed: boolean } = await ctx.runMutation(
@@ -1495,10 +1546,24 @@ export const chargeDueRenewal = internalAction({
 		}
 
 		if (response.ok) {
-			const body = (await response.json()) as {
-				payment_id?: string;
-				status?: string;
-			};
+			let body: { payment_id?: string; status?: string };
+			try {
+				body = (await response.json()) as typeof body;
+			} catch {
+				// A 2xx we can't read says nothing about the money — the charge MAY
+				// have landed. Unknown, not a decline: the stamp stays for the
+				// reconcile (a thrown action here would record no outcome at all).
+				console.error("[billing] auto-charge response unreadable", {
+					invoiceNumber: context.invoiceNumber,
+				});
+				await ctx.runMutation(internal.subscriptionPayments.recordChargeFailure, {
+					subscriptionId: context.subscriptionId,
+					invoiceId,
+					error: "unreadable charge response — outcome unknown",
+					outcome: "unknown",
+				});
+				return;
+			}
 			if (body.status === "succeeded" && body.payment_id) {
 				await ctx.runMutation(internal.invoices.internalSettleFromGateway, {
 					invoiceId,

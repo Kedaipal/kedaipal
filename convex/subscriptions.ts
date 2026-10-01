@@ -37,7 +37,10 @@ import {
 } from "./lib/auth";
 import { COMP_LABEL_MAX, COMP_NOTE_MAX, type CompKind } from "./lib/comp";
 import { rateLimiter } from "./lib/rateLimiter";
-import { autoRenewMethodLabel } from "./lib/hitpayBilling";
+import {
+	autoRenewMethodLabel,
+	CHARGE_ATTEMPT_LOCK_MS,
+} from "./lib/hitpayBilling";
 import {
 	type BillingCycle,
 	capsForPlan,
@@ -1082,7 +1085,9 @@ export const internalBackfillSubscriptions = internalMutation({
  *    (invoices.internalIssueRenewalInvoice — the bill Arif used to type), and
  *    schedules the tokenised auto-charge when a saved method is attached;
  *  - failed auto-charges are retried on the Kedaipal-owned schedule
- *    (`autoRenew.nextRetryAt`, lib/hitpayBilling.ts);
+ *    (`autoRenew.nextRetryAt`, lib/hitpayBilling.ts), and an attempt that
+ *    never recorded an outcome is re-run once its lock is stale — the charge
+ *    action reconciles it with HitPay before it can charge again;
  *  - auto-renew sellers get a one-per-cycle "renewing soon" notice ahead of
  *    the charge (the no-surprise-MIT rule).
  * Plus the one-time pre-due-date reminder for pending invoices, and — once an
@@ -1272,14 +1277,19 @@ export const internalDailyBillingStatus = internalMutation({
 				continue;
 			}
 			const pendingInvoice = invoices.find((inv) => inv.status === "pending");
-			// Dunning retry: a declined auto-charge whose retry window arrived.
-			// The charge action re-guards everything (still pending, still
-			// attached, outcome-unknown reconcile), so scheduling is safe.
-			if (
-				pendingInvoice &&
+			// Dunning retry: a declined auto-charge whose retry window arrived —
+			// OR an attempt whose action died without recording any outcome (a
+			// stale stamp and no retry scheduled), which nothing else would ever
+			// look at again. The charge action re-guards everything (still
+			// pending, still attached, outcome-unknown reconcile at any age), so
+			// scheduling is safe.
+			const retryDue =
 				sub.autoRenew?.nextRetryAt !== undefined &&
-				sub.autoRenew.nextRetryAt <= now
-			) {
+				sub.autoRenew.nextRetryAt <= now;
+			const unresolvedAttempt =
+				sub.autoRenew?.lastChargeAttemptAt !== undefined &&
+				now - sub.autoRenew.lastChargeAttemptAt >= CHARGE_ATTEMPT_LOCK_MS;
+			if (pendingInvoice && (retryDue || unresolvedAttempt)) {
 				await ctx.scheduler.runAfter(
 					0,
 					internal.subscriptionPayments.chargeDueRenewal,

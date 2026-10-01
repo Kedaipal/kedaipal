@@ -2725,18 +2725,21 @@ export default defineSchema({
 				attachedAt: v.number(),
 				lastChargeAt: v.optional(v.number()),
 				// Successful tokenised charges on this session — compared against
-				// HitPay's `times_charged` to reconcile an attempt whose outcome was
-				// lost mid-action (crash between charge and settle) WITHOUT charging
-				// twice. See convex/subscriptionPayments.ts.
+				// HitPay's charge count (`total_charge` on a save-card session; its
+				// `times_charged` is always null there) to reconcile an attempt whose
+				// outcome was lost mid-action WITHOUT charging twice. See
+				// lib/hitpayBilling.ts `readSessionChargeCount`.
 				timesCharged: v.optional(v.number()),
 				// Dunning state for the CURRENT pending renewal invoice. Reset to
 				// zero/unset on a successful settle.
 				failedAttempts: v.optional(v.number()),
 				nextRetryAt: v.optional(v.number()),
 				lastChargeError: v.optional(v.string()),
-				// Stamped just BEFORE the charge HTTP call; cleared once the outcome
-				// (success/failure) is recorded. A fresh stamp with no outcome means
-				// "unknown — reconcile against HitPay before charging again".
+				// Stamped just BEFORE the charge HTTP call; cleared once a definitive
+				// outcome (settle or decline) is recorded — an UNKNOWN outcome keeps
+				// it. A stamp still standing, at ANY age, means "reconcile against
+				// HitPay before charging again"; its age only decides whether the
+				// lock is still held (CHARGE_ATTEMPT_LOCK_MS).
 				lastChargeAttemptAt: v.optional(v.number()),
 				pendingChargeInvoiceId: v.optional(v.id("invoices")),
 			}),
