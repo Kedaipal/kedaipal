@@ -23,6 +23,34 @@ import type { MarketplaceStoreCard } from "../../convex/marketplace";
 
 export type MarketplaceChip = "all" | "open" | "new" | "delivers";
 
+const FILTER_CHIPS: ReadonlyArray<Exclude<MarketplaceChip, "all">> = [
+	"open",
+	"new",
+	"delivers",
+];
+
+/** Longest search kept in the URL — a query, not a paste of someone's essay. */
+export const SEARCH_QUERY_MAX = 80;
+
+/**
+ * The page's URL state: `?q=` and `?filter=`. In the URL rather than component
+ * state so Back from a storefront returns the buyer to the view they left,
+ * and a filtered view is a link someone can share. "All" and an empty search
+ * are the ABSENCE of a param, so the bare `/stores` stays the canonical page.
+ * Anything hand-edited or stale degrades to that default, never to a crash.
+ */
+export function parseMarketplaceSearch(search: Record<string, unknown>): {
+	q?: string;
+	filter?: Exclude<MarketplaceChip, "all">;
+} {
+	const q =
+		typeof search.q === "string" && search.q.trim().length > 0
+			? search.q.slice(0, SEARCH_QUERY_MAX)
+			: undefined;
+	const filter = FILTER_CHIPS.find((chip) => chip === search.filter);
+	return { ...(q ? { q } : {}), ...(filter ? { filter } : {}) };
+}
+
 /**
  * The card's one-line live status. Reuses the storefront's own authors
  * (`openNowStatus` + the fulfilment-date formatters), compressed to card

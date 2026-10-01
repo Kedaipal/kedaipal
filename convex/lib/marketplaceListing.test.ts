@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+	collapseStoreArea,
 	isListableRow,
 	isNewStore,
 	NEW_STORE_WINDOW_MS,
@@ -12,6 +13,14 @@ describe("sanitizeStoreArea", () => {
 	test("trims and collapses inner whitespace to one line", () => {
 		expect(sanitizeStoreArea("  Ampang,   KL \n")).toBe("Ampang, KL");
 		expect(sanitizeStoreArea("Ampang,\nKL")).toBe("Ampang, KL");
+	});
+
+	test("collapseStoreArea is exactly the stored shape (the form compares with it)", () => {
+		expect(collapseStoreArea("  Ampang,   KL ")).toBe("Ampang, KL");
+		expect(sanitizeStoreArea("  Ampang,   KL ")).toBe(
+			collapseStoreArea("  Ampang,   KL "),
+		);
+		expect(collapseStoreArea("   ")).toBe("");
 	});
 
 	test("blank clears (undefined), never an empty string", () => {

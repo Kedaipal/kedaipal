@@ -77,7 +77,8 @@ describe("StoreCard states", () => {
 
 	it("founding member: the emblem names itself with its rank", async () => {
 		renderCard(card({ isFoundingMember: true, foundingMemberRank: 3 }));
-		expect(await screen.findByAltText("Founding Member #3")).toBeTruthy();
+		// Light + dark artwork both carry the name; CSS shows exactly one.
+		expect(await screen.findAllByAltText("Founding Member #3")).toHaveLength(2);
 	});
 
 	it("new store: the New chip shows inside the window", async () => {

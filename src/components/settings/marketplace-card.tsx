@@ -1,6 +1,10 @@
+import { Link } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
 import { toast } from "sonner";
-import { STORE_AREA_MAX } from "../../../convex/lib/marketplaceListing";
+import {
+	collapseStoreArea,
+	STORE_AREA_MAX,
+} from "../../../convex/lib/marketplaceListing";
 import { convexErrorMessage } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -16,14 +20,22 @@ import { SAVE_BTN_CLASS, SectionHeading } from "./settings-primitives";
  *
  * Two controls: the listing switch (saves on flip — it's a state, not a
  * form) and the card's area line (a form with the usual counter + save).
+ *
+ * The switch line tells the TRUTH about the directory, not just the switch:
+ * ON with no storefront-visible product is not listed, and saying "Shown in
+ * the directory" there would lie to the brand-new seller most likely to read
+ * it. `hasVisibleProduct` comes from `marketplace.myListingReadiness`;
+ * `undefined` is loading, never "no".
  */
 export function MarketplaceCard({
 	unlisted,
 	area,
+	hasVisibleProduct,
 	onSave,
 }: {
 	unlisted: boolean;
 	area: string;
+	hasVisibleProduct: boolean | undefined;
 	onSave: (patch: {
 		marketplaceListed?: boolean;
 		storeArea?: string;
@@ -33,7 +45,9 @@ export function MarketplaceCard({
 	const [areaValue, setAreaValue] = useState(area);
 	const [savingArea, setSavingArea] = useState(false);
 	const listed = !unlisted;
-	const areaDirty = areaValue.trim() !== area.trim();
+	// Compare in the SAVED shape: the server collapses inner whitespace, so a
+	// raw comparison would leave "Ampang,   KL" reading as unsaved forever.
+	const areaDirty = collapseStoreArea(areaValue) !== area;
 
 	async function handleFlip(next: boolean) {
 		setFlipping(true);
@@ -54,12 +68,13 @@ export function MarketplaceCard({
 	async function handleAreaSubmit(e: FormEvent) {
 		e.preventDefault();
 		if (!areaDirty) return;
+		const saved = collapseStoreArea(areaValue);
 		setSavingArea(true);
 		try {
-			await onSave({ storeArea: areaValue });
-			toast.success(
-				areaValue.trim().length > 0 ? "Area updated." : "Area removed.",
-			);
+			await onSave({ storeArea: saved });
+			// Show what was stored, so the field and the card agree.
+			setAreaValue(saved);
+			toast.success(saved.length > 0 ? "Area updated." : "Area removed.");
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -90,11 +105,10 @@ export function MarketplaceCard({
 			<div className="flex items-center justify-between gap-3">
 				<div className="flex flex-col">
 					<span className="text-sm font-medium">List my store</span>
-					<span className="text-xs text-muted-foreground">
-						{listed
-							? "Shown in the directory and its search."
-							: "Hidden from the directory — buyers can still reach your direct link."}
-					</span>
+					<ListingStatusLine
+						listed={listed}
+						hasVisibleProduct={hasVisibleProduct}
+					/>
 				</div>
 				<ToggleSwitch
 					on={listed}
@@ -116,10 +130,10 @@ export function MarketplaceCard({
 					maxLength={STORE_AREA_MAX}
 					variant="field"
 				/>
-				<span className="flex items-baseline justify-between text-xs text-muted-foreground">
+				<span className="flex items-baseline justify-between gap-3 text-xs text-muted-foreground">
 					<span>Helps nearby buyers spot you. Leave blank to show none.</span>
-					<span className="tabular-nums">
-						{areaValue.trim().length}/{STORE_AREA_MAX}
+					<span className="shrink-0 tabular-nums">
+						{collapseStoreArea(areaValue).length}/{STORE_AREA_MAX}
 					</span>
 				</span>
 				<Button
@@ -131,5 +145,47 @@ export function MarketplaceCard({
 				</Button>
 			</form>
 		</div>
+	);
+}
+
+function ListingStatusLine({
+	listed,
+	hasVisibleProduct,
+}: {
+	listed: boolean;
+	hasVisibleProduct: boolean | undefined;
+}) {
+	if (!listed) {
+		return (
+			<span className="text-xs text-muted-foreground">
+				Hidden from the directory — buyers can still reach your direct link.
+			</span>
+		);
+	}
+	if (hasVisibleProduct === undefined) {
+		return (
+			<span className="text-xs text-muted-foreground">
+				Checking your listing…
+			</span>
+		);
+	}
+	if (!hasVisibleProduct) {
+		return (
+			<span className="text-xs text-muted-foreground">
+				On, but not shown yet — buyers find you once a product is visible on
+				your storefront.{" "}
+				<Link
+					to="/app/products/new"
+					className="font-medium text-accent-emphasis underline underline-offset-2"
+				>
+					Add a product
+				</Link>
+			</span>
+		);
+	}
+	return (
+		<span className="text-xs text-muted-foreground">
+			Shown in the directory and its search.
+		</span>
 	);
 }

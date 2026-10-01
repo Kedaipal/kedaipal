@@ -19,15 +19,42 @@ import { AppImage } from "../ui/app-image";
  * the whole card is a link, and a button nested inside a link is broken
  * interaction (and invalid markup). The emblem still names itself for screen
  * readers; the story behind it lives on the storefront the tap opens.
+ *
+ * Navy on light, mint on dark — the storefront badge's own swap, so the
+ * emblem never vanishes into a dark card. One author for every directory
+ * surface (row, grid, highlight card, Founding shelf): `sm` beside a name,
+ * `md` as the shelf's rank mark.
  */
-export function FoundingEmblemInline({ rank }: { rank?: number }) {
+export function FoundingEmblemInline({
+	rank,
+	size = "sm",
+}: {
+	/** Folded into the accessible name — omit where the rank is visible text. */
+	rank?: number;
+	size?: "sm" | "md";
+}) {
+	const alt = `Founding Member${rank ? ` #${rank}` : ""}`;
+	const aspect =
+		size === "md" ? "h-[18px] w-auto shrink-0" : "h-3.5 w-auto shrink-0";
 	return (
-		<AppImage
-			src="/img/badges/founding-badge-navy.png"
-			alt={`Founding Member${rank ? ` #${rank}` : ""}`}
-			aspect="h-3.5 w-auto shrink-0"
-			fill={false}
-		/>
+		<>
+			<AppImage
+				src="/img/badges/founding-badge-navy.png"
+				alt={alt}
+				aspect={aspect}
+				className="dark:hidden"
+				fill={false}
+			/>
+			{/* Same name on both: whichever is display:none drops out of the
+			    accessibility tree, so the visible one must always carry it. */}
+			<AppImage
+				src="/img/badges/founding-badge-mint.png"
+				alt={alt}
+				aspect={aspect}
+				className="hidden dark:block"
+				fill={false}
+			/>
+		</>
 	);
 }
 

@@ -1,6 +1,12 @@
 import { describe, expect, test } from "vitest";
 import type { MarketplaceStoreCard } from "../../convex/marketplace";
-import { cardOpenStatus, filterStores, partitionStores } from "./marketplace";
+import {
+	cardOpenStatus,
+	filterStores,
+	parseMarketplaceSearch,
+	partitionStores,
+	SEARCH_QUERY_MAX,
+} from "./marketplace";
 
 /** Tue 16 Jan 2024 10:00 MYT (UTC+8). */
 const TUE_10AM = Date.UTC(2024, 0, 16, 2, 0, 0);
@@ -141,6 +147,27 @@ describe("filterStores", () => {
 				now: TUE_10AM,
 			}).map((c) => c.slug),
 		).not.toContain("pickup-only");
+	});
+});
+
+describe("parseMarketplaceSearch — the URL state Back returns to", () => {
+	test("keeps a real query and filter", () => {
+		expect(parseMarketplaceSearch({ q: "kek", filter: "open" })).toEqual({
+			q: "kek",
+			filter: "open",
+		});
+	});
+
+	test("'all' and blank are the ABSENCE of a param — bare /stores stays canonical", () => {
+		expect(parseMarketplaceSearch({ q: "   ", filter: "all" })).toEqual({});
+		expect(parseMarketplaceSearch({})).toEqual({});
+	});
+
+	test("hand-edited junk degrades to the default, never a crash", () => {
+		expect(parseMarketplaceSearch({ q: 42, filter: "cheapest" })).toEqual({});
+		expect(
+			parseMarketplaceSearch({ q: "x".repeat(SEARCH_QUERY_MAX + 20) }).q,
+		).toHaveLength(SEARCH_QUERY_MAX);
 	});
 });
 

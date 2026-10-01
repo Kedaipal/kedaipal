@@ -18,7 +18,9 @@ import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
 import {
 	filterStores,
 	type MarketplaceChip,
+	parseMarketplaceSearch,
 	partitionStores,
+	SEARCH_QUERY_MAX,
 } from "../lib/marketplace";
 import { ssrRead } from "../lib/ssr-read";
 
@@ -29,6 +31,11 @@ import { ssrRead } from "../lib/ssr-read";
  * SSRs (the loader feeds head()'s meta + ItemList JSON-LD and the first
  * paint); the component re-reads the same query through the TanStack adapter
  * for the live view, the `$slug.tsx` posture exactly.
+ *
+ * Search + filter live in the URL (`?q=`, `?filter=`), so Back from a
+ * storefront lands on the view the buyer left. The loader takes no deps from
+ * them — filtering is client-side over one payload — and the canonical stays
+ * the bare `/stores`.
  */
 
 interface StoresLoaderData {
@@ -44,6 +51,7 @@ const PAGE_DESCRIPTION =
 	"Browse real sellers on Kedaipal — find a store, order on their page, confirmed over WhatsApp.";
 
 export const Route = createFileRoute("/stores")({
+	validateSearch: parseMarketplaceSearch,
 	loader: async (): Promise<StoresLoaderData | null> => {
 		const client = getConvexHttpClient();
 		// Soft-degrade like every buyer loader (86eyheqzv): a transient upstream
@@ -104,12 +112,39 @@ const CHIPS: Array<{ id: MarketplaceChip; label: string; dot?: boolean }> = [
 	{ id: "delivers", label: "Delivers" },
 ];
 
+/** A horizontal rail that snaps: `scroll-px-*` matches the gutter, or
+ * `snap-start` pulls the first card flush to the screen edge on load. */
+const RAIL_CLASS =
+	"flex snap-x gap-3 overflow-x-auto scroll-px-5 px-5 pb-1 lg:scroll-px-8 lg:px-8";
+
 function MarketplacePage() {
 	const cards = useQuery(convexQuery(api.marketplace.listStores, {})).data;
 	const [region, setRegion] = useLandingRegion();
-	const [search, setSearch] = useState("");
-	const [chip, setChip] = useState<MarketplaceChip>("all");
+	const { q, filter } = Route.useSearch();
+	const navigate = Route.useNavigate();
+	const chip: MarketplaceChip = filter ?? "all";
+	// The input's own buffer, seeded from the URL. The URL is written on every
+	// keystroke (replace, so typing never floods history); it isn't read back
+	// mid-typing, which would fight the caret while a navigation settles.
+	const [search, setSearchBuffer] = useState(q ?? "");
 	const [shown, setShown] = useState(PAGE_SIZE);
+
+	function setSearch(next: string) {
+		setSearchBuffer(next);
+		void navigate({
+			search: (prev) => ({ ...prev, q: next.trim() ? next : undefined }),
+			replace: true,
+		});
+	}
+	function setChip(next: MarketplaceChip) {
+		void navigate({
+			search: (prev) => ({
+				...prev,
+				filter: next === "all" ? undefined : next,
+			}),
+			replace: true,
+		});
+	}
 
 	// Minute tick so "Open now" flips live — the opening-hours-line pattern.
 	const [, setTick] = useState(0);
@@ -141,222 +176,242 @@ function MarketplacePage() {
 		: [];
 	const { sponsored, founding } = partitionStores(regionCards);
 	const refined = search.trim().length > 0 || chip !== "all";
+	// An empty REGION carries its own "be the first" CTA; the band below it
+	// would repeat the identical button, so it steps aside (one ask, once).
+	const regionEmpty = !refined && visible.length === 0;
 
 	return (
-		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col bg-background">
-			{/* Top of page rides the landing's mint mesh — nav through chips. */}
+		<div className="flex min-h-dvh w-full flex-col bg-background">
+			{/* The landing's mint mesh runs edge to edge; the content inside it
+			    keeps the page column. Nav through chips ride it. */}
 			<div className="bg-hero-mesh pb-4">
-				<header className="flex items-center justify-between gap-3 px-5 py-3.5 lg:px-8">
-					<Link to="/" aria-label="Kedaipal home">
+				<div className="mx-auto w-full max-w-6xl">
+					<header className="flex items-center justify-between gap-3 px-5 py-3.5 lg:px-8">
+						<Link to="/" aria-label="Kedaipal home">
+							<AppImage
+								src="/logo-3.svg"
+								alt="Kedaipal"
+								aspect="h-7 w-auto"
+								fill={false}
+								priority
+							/>
+						</Link>
+						<div className="flex items-center gap-2.5">
+							<RegionToggle region={region} onChange={setRegion} />
+							{/* One seller CTA up here — "learn" and "sign up" land on the
+							    same funnel, so two adjacent buttons would be noise; the
+							    footer's "For sellers" is the quiet path to the pitch. Navy,
+							    not mint: on a buyer page the buyer's search owns the
+							    action colour and the seller ask sits a rung below. */}
+							<Button
+								asChild
+								className="tap-target hidden bg-primary px-4 font-bold text-primary-foreground hover:bg-primary/90 sm:inline-flex"
+							>
+								<Link to="/app">Open your store</Link>
+							</Button>
+						</div>
+					</header>
+
+					<div className="flex flex-col items-center px-5 pt-5 text-center lg:pt-8">
 						<AppImage
-							src="/logo-3.svg"
-							alt="Kedaipal"
-							aspect="h-7 w-auto"
+							src="/logo.svg"
+							alt=""
+							aspect="h-12 w-auto lg:h-14"
 							fill={false}
 							priority
 						/>
-					</Link>
-					<div className="flex items-center gap-2.5">
-						<RegionToggle region={region} onChange={setRegion} />
-						{/* One seller CTA up here — "learn" and "sign up" both land on
-						    the same funnel, so two adjacent buttons would be noise; the
-						    footer's "For sellers" link is the quiet path to the pitch. */}
-						<Button
-							asChild
-							className="tap-target hidden px-4 font-bold sm:inline-flex"
-						>
-							<Link to="/app">Open your store</Link>
-						</Button>
+						<h1 className="tracking-display mt-3 font-heading text-[25px] font-extrabold leading-tight lg:text-[2.6rem]">
+							Find your next{" "}
+							<span className="kp-highlight text-accent">favourite store</span>
+						</h1>
+						<p className="mt-2 max-w-md text-sm leading-relaxed text-muted-foreground lg:max-w-xl lg:text-[15px]">
+							Browse real sellers on Kedaipal — order on their store, confirmed
+							over WhatsApp.
+						</p>
 					</div>
-				</header>
 
-				<div className="flex flex-col items-center px-5 pt-5 text-center lg:pt-8">
-					<AppImage
-						src="/logo.svg"
-						alt=""
-						aspect="h-12 w-auto lg:h-14"
-						fill={false}
-						priority
-					/>
-					<h1 className="tracking-display mt-3 font-heading text-[25px] font-extrabold leading-tight lg:text-[2.6rem]">
-						Find your next{" "}
-						<span className="kp-highlight text-accent">favourite store</span>
-					</h1>
-					<p className="mt-2 max-w-md text-sm leading-relaxed text-muted-foreground lg:max-w-lg lg:text-[15px]">
-						Browse real sellers on Kedaipal — order on their store, confirmed
-						over WhatsApp.
-					</p>
-				</div>
-
-				{/* <search> is the semantic landmark; the inner form keeps Enter
-				    from navigating (search is live-as-you-type). */}
-				<search className="mt-4 flex justify-center px-5">
-					<form
-						className="flex w-full justify-center"
-						onSubmit={(e) => e.preventDefault()}
-					>
-					<div className="flex h-12 w-full max-w-xl items-center gap-2.5 rounded-full border border-border bg-card pl-5 pr-1.5 shadow-sm transition-shadow focus-within:ring-3 focus-within:ring-ring/40">
-						<input
-							type="search"
-							value={search}
-							onChange={(e) => setSearch(e.target.value)}
-							placeholder="Search stores…"
-							aria-label="Search stores"
-							className="min-w-0 grow bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
-						/>
-						<button
-							type="submit"
-							aria-label="Search"
-							className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent text-accent-foreground transition-colors hover:bg-accent/90"
+					{/* <search> is the semantic landmark; the inner form keeps Enter
+					    from navigating (search is live-as-you-type). */}
+					<search className="mt-4 flex justify-center px-5">
+						<form
+							className="flex w-full justify-center"
+							onSubmit={(e) => e.preventDefault()}
 						>
-							<Search className="size-4" />
-						</button>
-					</div>
-					</form>
-				</search>
+							<div className="flex h-12 w-full max-w-xl items-center gap-2.5 rounded-full border border-border bg-card pl-5 pr-1.5 shadow-sm transition-shadow focus-within:ring-3 focus-within:ring-ring/40">
+								<input
+									type="search"
+									value={search}
+									onChange={(e) => setSearch(e.target.value)}
+									placeholder="Search stores…"
+									aria-label="Search stores"
+									maxLength={SEARCH_QUERY_MAX}
+									className="min-w-0 grow bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
+								/>
+								<button
+									type="submit"
+									aria-label="Search"
+									className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent text-accent-foreground transition-colors hover:bg-accent/90"
+								>
+									<Search className="size-4" />
+								</button>
+							</div>
+						</form>
+					</search>
 
-				<div className="mt-3.5 flex gap-2 overflow-x-auto px-5 lg:justify-center">
-					{CHIPS.map(({ id, label, dot }) => {
-						const active = chip === id;
-						return (
-							<button
-								key={id}
-								type="button"
-								aria-pressed={active}
-								onClick={() => setChip(id)}
-								className={`tap-target flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-xs font-semibold transition-colors ${
-									active
-										? "bg-primary text-primary-foreground"
-										: "border border-border bg-card text-foreground hover:bg-muted"
-								}`}
-							>
-								{dot ? (
-									<span
-										aria-hidden
-										className="size-1.5 rounded-full bg-accent"
-									/>
-								) : null}
-								{label}
-							</button>
-						);
-					})}
+					<div className="mt-3.5 flex gap-2 overflow-x-auto px-5 lg:justify-center">
+						{CHIPS.map(({ id, label, dot }) => {
+							const active = chip === id;
+							return (
+								<button
+									key={id}
+									type="button"
+									aria-pressed={active}
+									onClick={() => setChip(id)}
+									className={`tap-target flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-xs font-semibold transition-colors ${
+										active
+											? "bg-primary text-primary-foreground"
+											: "border border-border bg-card text-foreground hover:bg-muted"
+									}`}
+								>
+									{dot ? (
+										<span
+											aria-hidden
+											className="size-1.5 rounded-full bg-accent"
+										/>
+									) : null}
+									{label}
+								</button>
+							);
+						})}
+					</div>
 				</div>
 			</div>
 
-			{cards === undefined ? (
-				<MarketplaceSkeleton />
-			) : (
-				<main className="flex flex-col">
-					{!refined && sponsored.length > 0 ? (
-						<section className="mt-7 flex flex-col gap-3">
+			<div className="mx-auto flex w-full max-w-6xl grow flex-col">
+				{cards === undefined ? (
+					<MarketplaceSkeleton />
+				) : (
+					<main className="flex flex-col">
+						{!refined && sponsored.length > 0 ? (
+							<section className="mt-7 flex flex-col gap-3">
+								<div className="px-5 lg:px-8">
+									<SectionHeading
+										title="Store highlights"
+										context="Sponsored placements"
+									/>
+								</div>
+								<div
+									className={`${RAIL_CLASS} lg:grid lg:grid-cols-3 lg:overflow-visible`}
+								>
+									{sponsored.map((card) => (
+										<SponsoredCard
+											key={card.slug}
+											card={card}
+											now={now}
+											className="w-[85vw] max-w-[340px] shrink-0 snap-start lg:w-auto lg:max-w-none"
+										/>
+									))}
+								</div>
+							</section>
+						) : null}
+
+						{!refined ? (
+							<FoundingShelf
+								stores={founding}
+								className="mt-7"
+								railClassName={RAIL_CLASS}
+							/>
+						) : null}
+
+						<section className="mt-7 flex flex-col">
 							<div className="px-5 lg:px-8">
 								<SectionHeading
-									title="Store highlights"
-									context="Sponsored placements"
+									title={refined ? "Results" : "All stores"}
+									context={`${visible.length} ${visible.length === 1 ? "store" : "stores"} · ${COUNTRY_LABELS[region]}`}
 								/>
 							</div>
-							<div className="flex snap-x gap-3 overflow-x-auto px-5 pb-1 lg:grid lg:grid-cols-3 lg:overflow-visible lg:px-8">
-								{sponsored.map((card) => (
-									<SponsoredCard
-										key={card.slug}
-										card={card}
-										now={now}
-										className="w-[85vw] max-w-[340px] shrink-0 snap-start lg:w-auto lg:max-w-none"
-									/>
-								))}
-							</div>
-						</section>
-					) : null}
-
-					{!refined ? (
-						<div className="mt-7">
-							<FoundingShelf stores={founding} />
-						</div>
-					) : null}
-
-					<section className="mt-7 flex flex-col">
-						<div className="px-5 lg:px-8">
-							<SectionHeading
-								title={refined ? "Results" : "All stores"}
-								context={`${visible.length} ${visible.length === 1 ? "store" : "stores"} · ${COUNTRY_LABELS[region]}`}
-							/>
-						</div>
-						{visible.length === 0 ? (
-							<EmptyState
-								region={region}
-								refined={refined}
-								onClear={() => {
-									setSearch("");
-									setChip("all");
-								}}
-							/>
-						) : (
-							<>
-								{/* Mobile: divided rows. Desktop: a 4-up card grid. Same
-								    StoreCard, two variants — one idea, one control. */}
-								<div className="mt-1 flex flex-col divide-y divide-border/60 lg:hidden">
-									{visible.slice(0, shown).map((card) => (
-										<StoreCard
-											key={card.slug}
-											card={card}
-											variant="row"
-											now={now}
-										/>
-									))}
-								</div>
-								<div className="mt-3 hidden lg:grid lg:grid-cols-4 lg:gap-4 lg:px-8">
-									{visible.slice(0, shown).map((card) => (
-										<StoreCard
-											key={card.slug}
-											card={card}
-											variant="grid"
-											now={now}
-										/>
-									))}
-								</div>
-								{visible.length > shown ? (
-									<div className="mt-4 flex justify-center px-5">
-										<Button
-											type="button"
-											variant="secondary"
-											className="tap-target w-full max-w-xs font-bold"
-											onClick={() => setShown((n) => n + PAGE_SIZE)}
-										>
-											Show {Math.min(PAGE_SIZE, visible.length - shown)} more
-											stores
-										</Button>
+							{visible.length === 0 ? (
+								<EmptyState
+									region={region}
+									refined={refined}
+									onClear={() => {
+										setSearchBuffer("");
+										void navigate({ search: {}, replace: true });
+									}}
+								/>
+							) : (
+								<>
+									{/* Mobile: divided rows. Desktop: a 4-up card grid. Same
+									    StoreCard, two variants — one idea, one control. */}
+									<div className="mt-1 flex flex-col divide-y divide-border/60 lg:hidden">
+										{visible.slice(0, shown).map((card) => (
+											<StoreCard
+												key={card.slug}
+												card={card}
+												variant="row"
+												now={now}
+											/>
+										))}
 									</div>
-								) : null}
-							</>
-						)}
-					</section>
+									<div className="mt-3 hidden lg:grid lg:grid-cols-4 lg:gap-4 lg:px-8">
+										{visible.slice(0, shown).map((card) => (
+											<StoreCard
+												key={card.slug}
+												card={card}
+												variant="grid"
+												now={now}
+											/>
+										))}
+									</div>
+									{visible.length > shown ? (
+										<div className="mt-4 flex justify-center px-5">
+											<Button
+												type="button"
+												variant="secondary"
+												className="tap-target w-full max-w-xs font-bold"
+												onClick={() => setShown((n) => n + PAGE_SIZE)}
+											>
+												Show {Math.min(PAGE_SIZE, visible.length - shown)} more
+												stores
+											</Button>
+										</div>
+									) : null}
+								</>
+							)}
+						</section>
 
-					<SellerCtaBand />
-				</main>
-			)}
+						{regionEmpty ? null : <SellerCtaBand />}
+					</main>
+				)}
 
-			<footer className="mt-auto flex flex-col gap-2 px-5 py-7 text-xs text-muted-foreground lg:flex-row lg:items-center lg:justify-between lg:px-8">
-				<nav className="flex gap-4">
-					<Link to="/" className="hover:text-foreground">
-						For sellers
-					</Link>
-					<Link to="/pricing" className="hover:text-foreground">
-						Pricing
-					</Link>
-					<Link to="/privacy" className="hover:text-foreground">
-						Privacy
-					</Link>
-					<Link to="/terms" className="hover:text-foreground">
-						Terms
-					</Link>
-				</nav>
-				<span className="text-muted-foreground/80">
-					© {new Date().getFullYear()} Kedaipal
-				</span>
-			</footer>
+				{/* Mobile: links then ©. Desktop (the mock): © left, links right. */}
+				<footer className="mt-auto flex flex-col gap-1 px-5 py-6 text-xs text-muted-foreground lg:flex-row-reverse lg:items-center lg:justify-between lg:px-8 lg:py-7">
+					<nav className="flex gap-4">
+						<Link to="/" className={FOOTER_LINK_CLASS}>
+							For sellers
+						</Link>
+						<Link to="/pricing" className={FOOTER_LINK_CLASS}>
+							Pricing
+						</Link>
+						<Link to="/privacy" className={FOOTER_LINK_CLASS}>
+							Privacy
+						</Link>
+						<Link to="/terms" className={FOOTER_LINK_CLASS}>
+							Terms
+						</Link>
+					</nav>
+					<span className="text-muted-foreground/80">
+						© {new Date().getFullYear()} Kedaipal
+					</span>
+				</footer>
+			</div>
 		</div>
 	);
 }
+
+/** 44px tall on touch (design-system §mobile); the row stays one line. */
+const FOOTER_LINK_CLASS =
+	"inline-flex min-h-11 items-center hover:text-foreground lg:min-h-0";
 
 /**
  * Zero results, two different stories: a refined view that filtered everything
@@ -400,7 +455,7 @@ function EmptyState({
 				one buyers find here.
 			</p>
 			<Button asChild className="tap-target px-4 font-bold">
-				<Link to="/app">Open your store</Link>
+				<Link to="/app">Open your store — start free</Link>
 			</Button>
 		</div>
 	);
@@ -418,8 +473,11 @@ function SellerCtaBand() {
 					listed here, free.
 				</p>
 			</div>
+			{/* "start free", not "free": the house promise is "Start free — pay
+			    when you sell" (messages/en.json), and the button must not
+			    outrun it. */}
 			<Button asChild className="tap-target shrink-0 px-5 font-bold">
-				<Link to="/app">Open your store</Link>
+				<Link to="/app">Open your store — start free</Link>
 			</Button>
 		</section>
 	);

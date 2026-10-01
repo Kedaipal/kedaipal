@@ -1,6 +1,7 @@
-import { query } from "./_generated/server";
+import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import type { QueryCtx } from "./_generated/server";
+import { type QueryCtx, query } from "./_generated/server";
+import { requireRetailerAccess } from "./lib/auth";
 import type { ClosedDateRange } from "./lib/closedDates";
 import { type Country, DEFAULT_COUNTRY } from "./lib/country";
 import {
@@ -77,6 +78,29 @@ async function hasVisibleProduct(
 		.take(20);
 	return candidates.some((row) => !hiddenFromStorefront(row));
 }
+
+/**
+ * The seller's own "am I actually on /stores?" answer, for the Settings →
+ * Store → Marketplace listing card. The switch alone can't say it: a store
+ * that is ON but has no storefront-visible product is NOT listed, and the
+ * card telling that seller "Shown in the directory" would be copy that lies
+ * to exactly the new seller reading it. A separate query, not a field on
+ * `getMyRetailer`, so the product read stays off the dashboard's hot path —
+ * only the settings card subscribes to it.
+ */
+export const myListingReadiness = query({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{ hasVisibleProduct: boolean }> => {
+		await requireRetailerAccess(ctx, retailerId, {
+			area: "store_settings",
+			level: "read",
+		});
+		return { hasVisibleProduct: await hasVisibleProduct(ctx, retailerId) };
+	},
+});
 
 /**
  * General-list order, after the client lifts sponsored + founding into their

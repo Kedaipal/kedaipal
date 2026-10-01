@@ -19,7 +19,10 @@ A store lists when ALL hold:
    listing** (`MarketplaceCard`), which is also where sellers LEARN they're
    listed — the toggle shipped in the same PR as the page, per the
    no-hidden-behaviour rule. Stamped, not boolean; re-saving off keeps the
-   first stamp.
+   first stamp. The card's status line tells the truth about the DIRECTORY,
+   not the switch: ON with no visible product reads "On, but not shown yet"
+   with an Add-a-product link — fed by `marketplace.myListingReadiness`, a
+   separate query so the product read stays off `getMyRetailer`'s hot path.
 2. **Has ≥ 1 storefront-visible product** — same filters as `products.list`
    (active, not `hidden`, not `hiddenByCategory`, not a finished event), first
    20 active rows checked. An empty storefront is a dead end we don't route
@@ -59,10 +62,17 @@ unfindable in the full list.
 failure), is in `sitemap.xml`, and the component re-reads through the TanStack
 adapter. Region (MY/SG) reuses the landing's `useLandingRegion` + a
 `RegionToggle` — regions never blend; the count fact names the region; an
-empty region is an acquisition CTA, not a dead end. Search + chips (All /
-Open now / New this month / Delivers) are client-side over the one payload
-(`filterStores`, unit-tested); refining collapses the shelves into a flat
-Results list. "Open now" derives client-side from `openingHours` +
+empty region is an acquisition CTA, not a dead end (and the CTA band steps
+aside there — one ask, once). Search + chips (All / Open now / New this
+month / Delivers) are client-side over the one payload (`filterStores`,
+unit-tested) but their STATE lives in the URL (`?q=`, `?filter=`,
+`parseMarketplaceSearch`), so Back from a storefront returns the buyer to the
+view they left; "all"/blank are the absence of a param, so bare `/stores`
+stays canonical. Refining collapses the shelves into a flat Results list.
+Snapping rails carry `scroll-px-*` matching their gutter — without it
+`snap-start` pulls the first card flush to the screen edge. The one nav CTA
+is navy (the buyer's search owns mint on this page); the mesh band is
+full-bleed with content in the page column. "Open now" derives client-side from `openingHours` +
 `closedDates` via `openNowStatus` (`cardOpenStatus` — same author as the
 storefront hours pill, minute tick, hydration-safe).
 
@@ -82,8 +92,12 @@ subscription/payment/courier config (pinned by the leak test in
 
 - `stores` moved from the reserved GENERIC group into `LIVE_ROUTES`
   (`convex/lib/reservedSlugs.ts`); the gate test enforces the move. The
-  reserved list never applied retroactively — **prod was to be checked for a
-  pre-existing `stores` slug before merge** (release checklist item).
+  reserved list never applied retroactively, so prod was read before merge
+  (1 Oct 2026, read-only): no store or slug-history row held `stores`. The
+  same round fenced the directory's next shelves (`events`, `categories`,
+  `featured`, `sponsored`, `founding`, `near-me`, … — new MARKETPLACE group)
+  and the in-flight features' public nouns (`enterprise`, `advertise`,
+  `credits`, `top-up`, `rsvp`) — zero prod collisions across all 18.
 - `listStores` does a full-table `.collect()` over `retailers` plus one
   bounded product read per store — fine at low hundreds of stores, and the
   documented ceiling. Upgrade path: denormalize a `marketplaceListedAt` and
@@ -96,4 +110,7 @@ subscription/payment/courier config (pinned by the leak test in
 leak pin, sponsorship admin gate + audit), `src/lib/marketplace.test.ts`
 (status label, filters, partition), `src/components/marketplace/store-card.test.tsx`
 (card states over a real router), `src/components/settings/marketplace-card.test.tsx`
-(toggle + area form + discoverability link).
+(the four status-line states incl. ON-but-not-shown + loading, area saves in
+the stored shape, discoverability link), `src/components/admin/sponsor-dialog.test.tsx`
+(start / update / end early, inclusive end date, opted-out warning), and
+`parseMarketplaceSearch` cases for the URL state.

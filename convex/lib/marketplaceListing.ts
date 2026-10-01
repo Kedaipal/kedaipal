@@ -18,14 +18,22 @@
 export const STORE_AREA_MAX = 40;
 
 /**
- * Trim, collapse inner whitespace (the field renders on one line, so a pasted
- * newline must not smuggle a second row in), treat blank as "clear", reject
- * over-cap input. Mirrors `sanitizeStoreDescription`'s posture: undefined
- * means the field should be UNSET, so an empty area never renders a bare dot
- * separator on the card.
+ * The area exactly as the server will store it: one line, inner runs of
+ * whitespace collapsed, ends trimmed. Exported so the settings form compares
+ * and re-displays the SAVED shape — otherwise "Ampang,   KL" saves as
+ * "Ampang, KL" and the form keeps reading as unsaved.
+ */
+export function collapseStoreArea(input: string): string {
+	return input.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Collapse (above), treat blank as "clear", reject over-cap input. Mirrors
+ * `sanitizeStoreDescription`'s posture: undefined means the field should be
+ * UNSET, so an empty area never renders a bare dot separator on the card.
  */
 export function sanitizeStoreArea(input: string): string | undefined {
-	const collapsed = input.replace(/\s+/g, " ").trim();
+	const collapsed = collapseStoreArea(input);
 	if (collapsed.length === 0) return undefined;
 	if (collapsed.length > STORE_AREA_MAX) {
 		throw new Error(`Area exceeds ${STORE_AREA_MAX} characters`);

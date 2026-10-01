@@ -1,14 +1,44 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { MarketplaceCard } from "./marketplace-card";
 
+vi.mock("@tanstack/react-router", () => ({
+	Link: ({ to, children, ...rest }: { to: string; children: ReactNode }) => (
+		<a href={to} {...rest}>
+			{children}
+		</a>
+	),
+}));
+
 afterEach(cleanup);
 
-describe("MarketplaceCard", () => {
-	test("the switch flips the listing and says what each state means", async () => {
-		const onSave = vi.fn().mockResolvedValue(undefined);
-		render(<MarketplaceCard unlisted={false} area="" onSave={onSave} />);
+function renderCard(
+	props: Partial<React.ComponentProps<typeof MarketplaceCard>> = {},
+) {
+	const onSave = vi.fn().mockResolvedValue(undefined);
+	render(
+		<MarketplaceCard
+			unlisted={false}
+			area=""
+			hasVisibleProduct={true}
+			onSave={onSave}
+			{...props}
+		/>,
+	);
+	return onSave;
+}
+
+describe("MarketplaceCard — the switch line tells the truth", () => {
+	test("listed with a visible product: shown, and the switch flips it off", () => {
+		const onSave = renderCard();
 		expect(screen.getByText(/Shown in the directory/)).toBeTruthy();
 		const toggle = screen.getByRole("switch", {
 			name: /List my store on the Kedaipal marketplace/,
@@ -18,8 +48,24 @@ describe("MarketplaceCard", () => {
 		expect(onSave).toHaveBeenCalledWith({ marketplaceListed: false });
 	});
 
-	test("an unlisted store reads as hidden, with the direct-link reassurance", () => {
-		render(<MarketplaceCard unlisted={true} area="" onSave={vi.fn()} />);
+	test("ON but no visible product: never claims to be shown, and points at the fix", () => {
+		renderCard({ hasVisibleProduct: false });
+		expect(screen.queryByText(/Shown in the directory/)).toBeNull();
+		expect(screen.getByText(/not shown yet/)).toBeTruthy();
+		expect(
+			screen.getByRole("link", { name: "Add a product" }).getAttribute("href"),
+		).toBe("/app/products/new");
+	});
+
+	test("still loading: says it's checking — undefined is not 'no'", () => {
+		renderCard({ hasVisibleProduct: undefined });
+		expect(screen.getByText(/Checking your listing/)).toBeTruthy();
+		expect(screen.queryByText(/Shown in the directory/)).toBeNull();
+		expect(screen.queryByText(/not shown yet/)).toBeNull();
+	});
+
+	test("opted out: hidden, with the direct-link reassurance, whatever the products", () => {
+		renderCard({ unlisted: true, hasVisibleProduct: true });
 		expect(
 			screen.getByText(/buyers can still reach your direct link/i),
 		).toBeTruthy();
@@ -29,22 +75,38 @@ describe("MarketplaceCard", () => {
 				.getAttribute("aria-checked"),
 		).toBe("false");
 	});
+});
 
-	test("the area form saves the typed value and disables until dirty", () => {
-		const onSave = vi.fn().mockResolvedValue(undefined);
-		render(<MarketplaceCard unlisted={false} area="" onSave={onSave} />);
+describe("MarketplaceCard — area form", () => {
+	test("saves the collapsed value and stops reading as unsaved afterwards", async () => {
+		const onSave = renderCard();
+		const field = screen.getByLabelText(
+			"Area shown on your card",
+		) as HTMLInputElement;
 		const save = screen.getByRole("button", { name: "Save area" });
 		expect(save.hasAttribute("disabled")).toBe(true);
-		fireEvent.change(screen.getByLabelText("Area shown on your card"), {
-			target: { value: "Ampang, KL" },
-		});
+		fireEvent.change(field, { target: { value: "  Ampang,   KL " } });
 		expect(save.hasAttribute("disabled")).toBe(false);
 		fireEvent.click(save);
 		expect(onSave).toHaveBeenCalledWith({ storeArea: "Ampang, KL" });
+		// The field now shows what the server stored.
+		await waitFor(() => expect(field.value).toBe("Ampang, KL"));
+	});
+
+	test("whitespace-only edits of the saved value are not a change", () => {
+		renderCard({ area: "Ampang, KL" });
+		fireEvent.change(screen.getByLabelText("Area shown on your card"), {
+			target: { value: "Ampang,    KL  " },
+		});
+		expect(
+			screen
+				.getByRole("button", { name: "Save area" })
+				.hasAttribute("disabled"),
+		).toBe(true);
 	});
 
 	test("the card links to the live marketplace page", () => {
-		render(<MarketplaceCard unlisted={false} area="" onSave={vi.fn()} />);
+		renderCard();
 		const link = screen.getByRole("link", { name: /kedaipal\.com\/stores/ });
 		expect(link.getAttribute("href")).toBe("/stores");
 	});

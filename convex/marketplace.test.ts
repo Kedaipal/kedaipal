@@ -191,6 +191,46 @@ describe("marketplace.listStores — the listable rule end to end", () => {
 	});
 });
 
+describe("marketplace.myListingReadiness — the seller card's truth", () => {
+	test("false with no products, true once one is visible; strangers refused", async () => {
+		const t = setup();
+		const asOwner = t.withIdentity({ subject: "user_mkt_ready" });
+		await asOwner.mutation(api.retailers.createRetailer, {
+			storeName: "Ready Store",
+			slug: "kedai-ready",
+		});
+		const retailer = await asOwner.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		expect(
+			await asOwner.query(api.marketplace.myListingReadiness, {
+				retailerId: retailer._id,
+			}),
+		).toEqual({ hasVisibleProduct: false });
+
+		await asOwner.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Kuih lapis",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			variants: [{ optionValues: [], price: 500, onHand: 5 }],
+		});
+		expect(
+			await asOwner.query(api.marketplace.myListingReadiness, {
+				retailerId: retailer._id,
+			}),
+		).toEqual({ hasVisibleProduct: true });
+
+		await expect(
+			t
+				.withIdentity({ subject: "user_mkt_stranger" })
+				.query(api.marketplace.myListingReadiness, {
+					retailerId: retailer._id,
+				}),
+		).rejects.toThrow();
+	});
+});
+
 describe("updateSettings — storeArea", () => {
 	test("sets, collapses, clears, and refuses over-cap", async () => {
 		const t = setup();
