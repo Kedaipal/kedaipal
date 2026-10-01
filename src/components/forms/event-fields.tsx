@@ -17,6 +17,11 @@ import { ProBadge } from "../app/pro-gate";
 import { Input } from "../ui/input";
 import { ToggleSwitch } from "../ui/toggle-switch";
 
+/** Why an event can't be saved on a store with no pickup point — said on
+ * the Event card and by the wizard, mirroring the server's refusal. */
+export const EVENT_NO_VENUE_COPY =
+	"An event needs a venue, and this store has no pickup point yet — guests would reach the RSVP page and be turned away. A hidden point works if it's only for events.";
+
 /**
  * The event block's state, kept as TYPED-RAW strings like every other draft in
  * the product form (a half-typed seat cap must survive a re-render). `on` is
@@ -36,6 +41,9 @@ export type EventDraft = {
 	time: string;
 	/** Seat cap as typed; blank = no limit. */
 	seats: string;
+	/** "Approve each RSVP before the guest pays" (`z8r3fdkjek`). Optional so
+	 * pre-approval draft literals (tests, stored handoffs) stay valid. */
+	requiresApproval?: boolean;
 };
 
 export const EMPTY_EVENT_DRAFT: EventDraft = {
@@ -45,6 +53,7 @@ export const EMPTY_EVENT_DRAFT: EventDraft = {
 	time: "",
 	seats: "",
 	venueId: "",
+	requiresApproval: false,
 };
 
 /** Seed the draft from a saved product (or the empty draft when it isn't an
@@ -58,6 +67,7 @@ export function eventDraftFrom(
 				seats?: number;
 				endDate?: number;
 				venueId?: string;
+				requiresApproval?: boolean;
 		  }
 		| undefined,
 ): EventDraft {
@@ -70,6 +80,7 @@ export function eventDraftFrom(
 		time:
 			event.timeMinutes === undefined ? "" : hhmmFromMinutes(event.timeMinutes),
 		seats: event.seats === undefined ? "" : String(event.seats),
+		requiresApproval: event.requiresApproval === true,
 	};
 }
 
@@ -81,6 +92,8 @@ export type EventSubmitValue = {
 	/** Branded here (the draft holds a plain string) so the create/update
 	 * calls need no cast; the server re-validates ownership regardless. */
 	venueId?: Id<"pickupLocations">;
+	/** true or absent — absent turns it off (whole-object replace). */
+	requiresApproval?: boolean;
 } | null;
 
 /** The draft's last day as an epoch: `undefined` when blank or the same day as
@@ -143,6 +156,7 @@ export function eventSubmitValue(draft: EventDraft): EventSubmitValue {
 		venueId: draft.venueId.trim()
 			? (draft.venueId as Id<"pickupLocations">)
 			: undefined,
+		requiresApproval: draft.requiresApproval === true ? true : undefined,
 	};
 }
 
@@ -156,9 +170,13 @@ export function eventDraftValid(
 		/** The store has several pickup points (hidden ones count), so the
 		 * event must say which one hosts it (the server refuses otherwise). */
 		requireVenue?: boolean;
+		/** The store has NO pickup point at all — an event can't be saved
+		 * until one exists (the server refuses too). */
+		noVenue?: boolean;
 	} = {},
 ): boolean {
 	if (!draft.on) return true;
+	if (opts.noVenue) return false;
 	if (opts.requireVenue && draft.venueId.trim().length === 0) return false;
 	if (draft.date.trim().length === 0) return false;
 	const date = mytMidnightFromYmd(draft.date);
@@ -360,6 +378,20 @@ export function EventFields({
 						    with guests booked, like the date: every RSVP froze this
 						    address onto its order page, so moving it would split one
 						    event across two addresses. */}
+						{venues !== undefined && venues.length === 0 ? (
+							<p
+								role="alert"
+								className="w-full rounded-lg bg-destructive/10 px-3 py-2 text-xs leading-relaxed text-destructive"
+							>
+								{EVENT_NO_VENUE_COPY}{" "}
+								<a
+									href="/app/settings?tab=fulfilment"
+									className="font-semibold underline underline-offset-2"
+								>
+									Add a pickup point
+								</a>
+							</p>
+						) : null}
 						{venues !== undefined && venues.length > 1 ? (
 							<div className="flex flex-col gap-1.5">
 								<label htmlFor="event-venue" className="text-sm font-medium">
@@ -480,6 +512,29 @@ export function EventFields({
 							the cap can&apos;t go below {taken}. Raise it any time.
 						</p>
 					) : null}
+
+					{/* "Approve each RSVP" (`z8r3fdkjek`) — a vetting step for events
+					    that register people (HCM's Into The Falls). Off = today's
+					    flow, RSVPs confirm at checkout. Both states say exactly what
+					    the guest experiences, because the difference is money. */}
+					<div className="flex items-start justify-between gap-4 rounded-xl border border-border p-3">
+						<div className="min-w-0">
+							<p className="text-sm font-medium">
+								Approve each RSVP before they pay
+							</p>
+							<p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+								{draft.requiresApproval
+									? "New RSVPs wait for you in Orders → New with Approve and Decline. The seat is held meanwhile; the guest is asked to pay only after you approve. A request you don't answer within 24 hours expires and frees the seat."
+									: "Off — RSVPs are confirmed the moment the guest submits, and they can pay straight away."}
+							</p>
+						</div>
+						<ToggleSwitch
+							on={draft.requiresApproval === true}
+							onChange={(requiresApproval) => set({ requiresApproval })}
+							disabled={locked}
+							label="Approve each RSVP before the guest pays"
+						/>
+					</div>
 
 					{/* Every consequence of the toggle, stated where it's switched on.
 					    A seller must never discover at checkout that her event forced

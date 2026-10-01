@@ -10,6 +10,7 @@ import {
 	EyeOff,
 	Info,
 	Layers3,
+	MessageSquareText,
 	PackageCheck,
 	Save,
 	Store,
@@ -24,6 +25,10 @@ import {
 } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import type {
+	BuyerQuestion,
+	BuyerQuestionInput,
+} from "../../../convex/lib/buyerQuestions";
 import type { CreditLockErrorData } from "../../../convex/lib/credits";
 import {
 	MAX_NOTICE_DAYS,
@@ -78,6 +83,13 @@ import { Input } from "../ui/input";
 import { Markdown } from "../ui/markdown";
 import { Textarea } from "../ui/textarea";
 import { ToggleSwitch } from "../ui/toggle-switch";
+import {
+	type BuyerQuestionsDraft,
+	BuyerQuestionsEditor,
+	questionsDraftFrom,
+	questionsDraftValid,
+	questionsSubmitValue,
+} from "./buyer-questions-card";
 
 /**
  * Prep-time shortcuts. The field is MINUTES because that is what the floor
@@ -159,6 +171,8 @@ export interface ProductFormSubmitValues {
 	// Minimum order quantity (summed across variants). undefined = no minimum;
 	// the caller sends 0 to clear on edit. See convex/lib/minOrderRules.ts.
 	minQuantity?: number;
+	// Buyer questions (`z8r3fdkjek`). Always an array — `[]` clears on edit.
+	buyerQuestions: BuyerQuestionInput[];
 	// Fixed event date (`z8r3fdff9u`). `null` CLEARS a stored event (the toggle
 	// turned off); an object sets/replaces it. Never `undefined` from this form
 	// — that spelling means "no change", which would strand a cleared event.
@@ -237,6 +251,8 @@ export type ProductFormDraft = {
 	/** Event block, as typed. Optional so pre-event draft literals (tests,
 	 * stored wizard handoffs) stay valid. */
 	event?: EventDraft;
+	/** Buyer questions, as typed (`z8r3fdkjek`). Optional for the same reason. */
+	buyerQuestions?: BuyerQuestionsDraft;
 };
 
 interface ProductFormProps {
@@ -288,6 +304,11 @@ interface ProductFormProps {
 		 * which must survive a round-trip with half-typed values intact. Wins
 		 * over `event` when both are present. */
 		eventDraft?: EventDraft;
+		/** Stored buyer questions (`z8r3fdkjek`). */
+		buyerQuestions?: BuyerQuestion[];
+		/** Questions as a draft — the wizard handoff's spelling; wins over
+		 * `buyerQuestions` (the `eventDraft` rule). */
+		buyerQuestionsDraft?: BuyerQuestionsDraft;
 		categoryIds?: Id<"categories">[];
 		// Deprecated product-level defaults — used only to seed per-variant flags
 		// for legacy products whose variants predate the per-variant columns.
@@ -944,6 +965,12 @@ export function ProductForm({
 			eventDraftFrom(initialValues?.event) ??
 			EMPTY_EVENT_DRAFT,
 	);
+	const [questionsRevealed, setQuestionsRevealed] = useState(false);
+	const [questionsDraft, setQuestionsDraft] = useState<BuyerQuestionsDraft>(
+		() =>
+			initialValues?.buyerQuestionsDraft ??
+			questionsDraftFrom(initialValues?.buyerQuestions),
+	);
 	const [categoryIds, setCategoryIds] = useState<Id<"categories">[]>(
 		initialValues?.categoryIds ?? [],
 	);
@@ -1021,9 +1048,13 @@ export function ProductForm({
 				!eventDraftValid(eventDraft, {
 					allowPastDate: (eventRsvpCount ?? 0) > 0,
 					requireVenue: (eventVenues?.length ?? 0) > 1,
+					noVenue: eventVenues !== undefined && eventVenues.length === 0,
 				})
 			)
 				return;
+			// Questions are validated by the server's own sanitizer; the card
+			// shows its message inline. Never on a booking (always sends []).
+			if (!isBooking && !questionsDraftValid(questionsDraft)) return;
 			if (
 				isBooking &&
 				(!capacityValid || !depositValid || !packageValid || !weekendValid)
@@ -1091,6 +1122,7 @@ export function ProductForm({
 					// `null` when off — the spelling that CLEARS. A booking listing
 					// never renders the block, so it always sends null.
 					event: isBooking ? null : eventSubmitValue(eventDraft),
+					buyerQuestions: isBooking ? [] : questionsSubmitValue(questionsDraft),
 					categoryIds,
 					imageStorageIds: images.map((i) => i.id),
 					// Derived from the SAME reconciled pair as `variants` above, so the
@@ -1132,6 +1164,7 @@ export function ProductForm({
 			prepMinutes: prepDraft,
 			pickupNote: pickupNoteDraft,
 			event: eventDraft,
+			buyerQuestions: questionsDraft,
 		});
 		return () => {
 			draftRef.current = null;
@@ -1139,6 +1172,9 @@ export function ProductForm({
 	});
 
 	function handleSubmit(e: FormEvent) {
+		// From the first save attempt on, every question row shows its
+		// problem — before it, only rows the seller has touched do.
+		setQuestionsRevealed(true);
 		submitThenFocusError(form, e);
 	}
 
@@ -1659,6 +1695,26 @@ export function ProductForm({
 				</ProductStepCard>
 			)}
 
+			{/* Buyer questions (`z8r3fdkjek`) — what the buyer is ASKED at
+			    checkout. After Event (an RSVP's "what are you bringing?" reads as
+			    part of the event) and before Order rules, because it isn't a
+			    limit on how they order. Never on a booking listing: its checkout
+			    has no line to hang answers on. */}
+			{isBooking ? null : (
+				<ProductStepCard
+					icon={<MessageSquareText className="size-5" />}
+					kicker="Selling"
+					title="Ask the buyer"
+					description="Up to 3 questions answered at checkout. Optional."
+				>
+					<BuyerQuestionsEditor
+						draft={questionsDraft}
+						onChange={setQuestionsDraft}
+						revealAll={questionsRevealed}
+					/>
+				</ProductStepCard>
+			)}
+
 			{/* Order rules — what governs HOW a buyer may order this product (how
 			    many, how soon, how long it takes to make) and the one line they
 			    need when they collect it. Grouped in one card because they're the
@@ -1917,7 +1973,8 @@ export function ProductForm({
 							<p className="text-xs leading-relaxed text-muted-foreground">
 								One line collecting buyers see on the product page, at checkout
 								and on their order page — the page their WhatsApp confirmation
-								links to. It&apos;s copied onto each order as it&apos;s placed,
+								links to. Paste a link (e.g. a Google Maps pin) and it becomes
+								tappable. It&apos;s copied onto each order as it&apos;s placed,
 								so editing it later never rewrites what earlier buyers were
 								told.
 							</p>

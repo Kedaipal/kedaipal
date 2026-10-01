@@ -124,7 +124,18 @@ export function PlanPickerCard({
 	// lapse, a voided bill, or a sponsorship that ended) never sees HitPay's
 	// page: subscribeSelf charges the method on file straight away. The words
 	// before the tap must say THAT — the amount and the method are the consent.
-	const savedMethod = sub.autoRenew?.methodLabel;
+	// Two states pause that promise while the method stays on file: STOPPED
+	// (a stranded charge; a human is sorting the money out) and CONFIRMING
+	// (a sent charge whose outcome HitPay hasn't confirmed). Subscribing then
+	// only writes the invoice — never promise a charge the server won't fire.
+	const stopped = sub.autoRenew?.stopped === true;
+	const confirming = sub.autoRenew?.confirming === true;
+	const paused = stopped || confirming;
+	const savedMethod = paused ? undefined : sub.autoRenew?.methodLabel;
+	/** Why the invoice isn't being charged right now — the toast + copy pair. */
+	const pausedReason = stopped
+		? "Automatic charging is stopped for now — see Auto-renewal below before paying."
+		: "We're confirming an earlier automatic payment first — once that's done, this invoice is charged automatically.";
 	const price = formatPrice(
 		planPrice(plan, cycle, founding && plan === "pro", currency),
 		currency,
@@ -168,6 +179,19 @@ export function PlanPickerCard({
 				onRedirectingChange?.(false);
 				return;
 			}
+			if (sub.autoRenew !== undefined) {
+				// A method on file that the server chose not to charge (stopped,
+				// or an earlier charge still being confirmed). The invoice is
+				// written; the authorisation page would only refuse ("already
+				// on") — this branch exists so NO state with a saved method can
+				// ever fall through to it and end on an error toast.
+				toast.success("Your invoice is ready", {
+					description: pausedReason,
+				});
+				setBusy(false);
+				onRedirectingChange?.(false);
+				return;
+			}
 			const { url } = await startAutoRenewSetup({});
 			window.location.assign(url);
 		} catch (err) {
@@ -201,9 +225,13 @@ export function PlanPickerCard({
 				</p>
 				<p className="mt-1 text-xs text-muted-foreground">
 					{founding ? "Choose monthly or yearly" : "Pick a plan"} —{" "}
-					{savedMethod
-						? `we'll charge your saved ${savedMethod} and your plan activates as soon as it goes through.`
-						: "you'll pay on HitPay's secure page and your plan activates straight away."}
+					{paused
+						? stopped
+							? "we'll write your invoice. Automatic charging is stopped for now, so nothing is charged — see Auto-renewal below."
+							: "we'll write your invoice. We're confirming an earlier automatic payment first, then it's charged automatically — see Auto-renewal below."
+						: savedMethod
+							? `we'll charge your saved ${savedMethod} and your plan activates as soon as it goes through.`
+							: "you'll pay on HitPay's secure page and your plan activates straight away."}
 				</p>
 				{founding ? (
 					<p className="mt-2 text-xs text-muted-foreground">
@@ -331,16 +359,22 @@ export function PlanPickerCard({
 					className="inline-flex h-11 w-fit items-center rounded-lg bg-foreground px-4 text-sm font-medium text-background disabled:opacity-60"
 				>
 					{busy
-						? savedMethod
-							? "Charging your saved method…"
-							: "Opening secure payment…"
+						? paused
+							? "Writing your invoice…"
+							: savedMethod
+								? "Charging your saved method…"
+								: "Opening secure payment…"
 						: `Subscribe to ${planName(plan)}`}
 				</button>
 				{ownerOnly ? <OwnerOnlyNote /> : null}
 				<p className="text-[11px] text-muted-foreground">
-					{savedMethod
-						? `We'll charge ${price} to your saved ${savedMethod} now — then it renews automatically each ${cycle === "annual" ? "year" : "month"}. Turn auto-renewal off any time from its card below.`
-						: `You'll authorise a card or Touch 'n Go once on HitPay's secure page and be charged ${price} now — then it renews automatically each ${cycle === "annual" ? "year" : "month"}. Turn it off any time; Kedaipal never sees your card or wallet details.`}
+					{paused
+						? stopped
+							? `Your ${price} invoice appears on this page. Your saved ${sub.autoRenew?.methodLabel ?? "payment method"} won't be charged while automatic charging is stopped.`
+							: `Your ${price} invoice appears on this page and is charged to your saved ${sub.autoRenew?.methodLabel ?? "payment method"} automatically once your earlier payment is confirmed.`
+						: savedMethod
+							? `We'll charge ${price} to your saved ${savedMethod} now — then it renews automatically each ${cycle === "annual" ? "year" : "month"}. Turn auto-renewal off any time from its card below.`
+							: `You'll authorise a card or Touch 'n Go once on HitPay's secure page and be charged ${price} now — then it renews automatically each ${cycle === "annual" ? "year" : "month"}. Turn it off any time; Kedaipal never sees your card or wallet details.`}
 				</p>
 			</div>
 

@@ -69,6 +69,7 @@ export function MobileHeader({ retailer, adminBadge }: MobileHeaderProps) {
 								admin={adminBadge}
 								compact
 								className="py-0 text-[9px]"
+								unclaimed={retailer?.unclaimed === true}
 							/>
 						</div>
 					</div>

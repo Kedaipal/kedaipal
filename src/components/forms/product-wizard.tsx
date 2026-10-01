@@ -75,9 +75,16 @@ import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import { ToggleSwitch } from "../ui/toggle-switch";
 import { CUSTOM_LINE_COPY, MOCKUP_APPROVAL_COPY } from "./advanced-option-copy";
+import {
+	type BuyerQuestionsDraft,
+	BuyerQuestionsEditor,
+	questionsDraftIssue,
+	questionsSubmitValue,
+} from "./buyer-questions-card";
 import { CategoryPicker } from "./category-picker";
 import {
 	EMPTY_EVENT_DRAFT,
+	EVENT_NO_VENUE_COPY,
 	type EventDraft,
 	EventFields,
 	eventDraftValid,
@@ -206,6 +213,10 @@ export type WizardState = {
 	 * every product must answer, and "is this an event?" is a no for almost
 	 * every one of them. Never offered on a booking listing. */
 	event: EventDraft;
+	/** Review "More options" — buyer questions (`z8r3fdkjek`), as typed. In the
+	 * drawer for the event's reason: most products ask nothing. Never on a
+	 * booking listing. */
+	buyerQuestions: BuyerQuestionsDraft;
 };
 
 export function emptyWizardState(defaultKind?: ProductKind): WizardState {
@@ -245,6 +256,7 @@ export function emptyWizardState(defaultKind?: ProductKind): WizardState {
 		prepMinutes: "",
 		pickupNote: "",
 		event: { ...EMPTY_EVENT_DRAFT },
+		buyerQuestions: [],
 	};
 }
 
@@ -458,6 +470,8 @@ export function wizardStepIssues(
 		/** The store has several pickup points (hidden ones count), so an armed
 		 * event must name its venue (the server refuses the save otherwise). */
 		requireEventVenue?: boolean;
+		/** No pickup point exists — an event can't be saved yet. */
+		noEventVenue?: boolean;
 		/** The retailer's ISO code, so a money message names the store's own
 		 * symbol ("S$ 10,000"). Only the on-screen callers need it — a caller
 		 * that just counts issues can leave it off. */
@@ -499,7 +513,9 @@ export function wizardStepIssues(
 	// seller is stopped ON the step that owns the fields.
 	if (step === 6) {
 		const endIssue = eventEndDateIssue(state.event);
-		if (state.event.date.trim().length === 0) {
+		if (opts.noEventVenue) {
+			issues.push({ field: "event", message: EVENT_NO_VENUE_COPY });
+		} else if (state.event.date.trim().length === 0) {
 			issues.push({ field: "event", message: "Pick the event date." });
 		} else if (
 			opts.requireEventVenue &&
@@ -737,6 +753,7 @@ export function wizardStepIssues(
 		if (
 			!eventDraftValid(state.event, {
 				requireVenue: opts.requireEventVenue,
+				noVenue: opts.noEventVenue,
 			})
 		) {
 			issues.push({
@@ -745,6 +762,13 @@ export function wizardStepIssues(
 					"Set an event date of today or later, and a seat limit between 1 and 500 (or leave it blank).",
 			});
 		}
+		// Buyer questions — the server's own sanitizer is the judge.
+		const questionsIssue =
+			wizardKind(state) === "booking"
+				? null
+				: questionsDraftIssue(state.buyerQuestions);
+		if (questionsIssue)
+			issues.push({ field: "buyerQuestions", message: questionsIssue });
 	}
 	return issues;
 }
@@ -861,6 +885,8 @@ export function buildWizardSubmitValues(
 				: undefined,
 		// A booking listing already takes its own dates — never an event.
 		event: kind === "booking" ? null : eventSubmitValue(state.event),
+		buyerQuestions:
+			kind === "booking" ? [] : questionsSubmitValue(state.buyerQuestions),
 		categoryIds: state.categoryIds,
 		imageStorageIds: state.images.map((i) => i.id),
 		options: reconciled.options,
@@ -914,6 +940,7 @@ export function wizardHandoff(state: WizardState): {
 			// Handed over as the DRAFT, not the parsed value: a half-typed seat
 			// cap must survive the jump to the full editor intact.
 			eventDraft: state.event,
+			buyerQuestionsDraft: state.buyerQuestions,
 		},
 		initialEditor: state.editor,
 	};
@@ -942,6 +969,7 @@ export function formDraftToWizardState(draft: ProductFormDraft): WizardState {
 		weekendPrice: draft.weekendPrice ?? "",
 		weekendDays: draft.weekendDays ?? [...DEFAULT_WEEKEND_DAYS],
 		event: draft.event ?? { ...EMPTY_EVENT_DRAFT },
+		buyerQuestions: draft.buyerQuestions ?? [],
 		// The form's substrate IS the answer — nothing to re-ask. Axes present =
 		// the buyer picks; one never-out-of-stock, mockup-gated row = made to
 		// order; anything else = a single item.
@@ -970,7 +998,7 @@ export function formDraftToWizardState(draft: ProductFormDraft): WizardState {
  */
 export function wizardInitialStep(
 	state: WizardState,
-	opts: { requireEventVenue?: boolean } = {},
+	opts: { requireEventVenue?: boolean; noEventVenue?: boolean } = {},
 ): number {
 	const steps = wizardSteps(
 		effectiveShape(state),
@@ -1223,7 +1251,9 @@ export function ProductWizard({
 			(initialState.editor.customLine !== null ||
 				initialState.editor.rows.some((r) => r.requiresProof) ||
 				initialState.minQuantity.trim().length > 0 ||
-				initialState.minNoticeDays.trim().length > 0),
+				initialState.minNoticeDays.trim().length > 0 ||
+				// A handoff from the full form must not hide typed questions.
+				initialState.buyerQuestions.length > 0),
 	);
 	// One add-value draft per axis (max 2), mirroring the full editor.
 	const [valueDrafts, setValueDrafts] = useState<string[]>(() =>
@@ -1246,6 +1276,7 @@ export function ProductWizard({
 		fee: r.fee,
 	}));
 	const requireEventVenue = (eventVenues?.length ?? 0) > 1;
+	const noEventVenue = eventVenues !== undefined && eventVenues.length === 0;
 	// Categories are only offered on review when the store actually has some —
 	// a brand-new seller shouldn't meet a whole new concept mid-wizard.
 	const categories = useQuery(
@@ -1638,6 +1669,7 @@ export function ProductWizard({
 	function goNext() {
 		const found = wizardStepIssues(state, step, {
 			requireEventVenue,
+			noEventVenue,
 			currency,
 		});
 		if (found.length > 0) {
@@ -1668,6 +1700,7 @@ export function ProductWizard({
 		for (const s of steps) {
 			const found = wizardStepIssues(state, s, {
 				requireEventVenue,
+				noEventVenue,
 				currency,
 			});
 			if (found.length > 0) {
@@ -3092,6 +3125,11 @@ export function ProductWizard({
 											anyMto && !isBooking ? MOCKUP_APPROVAL_COPY.teaser : null,
 											madeToOrder || isBooking ? null : CUSTOM_LINE_COPY.teaser,
 											state.event.on || isBooking ? null : "events",
+											isBooking
+												? null
+												: state.buyerQuestions.length > 0
+													? `${state.buyerQuestions.length} question${state.buyerQuestions.length === 1 ? "" : "s"} for the buyer`
+													: "questions for the buyer",
 											isBooking ? null : "order rules",
 											"full editor",
 										]
@@ -3258,6 +3296,27 @@ export function ProductWizard({
 												venues={eventVenues}
 											/>
 											<IssueText message={issueFor("event")} />
+										</div>
+									)}
+
+									{/* Buyer questions (`z8r3fdkjek`) — shown on every route,
+									    the event one included (its "When is it?" step doesn't
+									    own them). Never on a booking listing. */}
+									{isBooking ? null : (
+										<div className="flex flex-col gap-3 border-t border-border pt-3">
+											<div>
+												<p className="text-sm font-semibold">Ask the buyer</p>
+												<p className="text-xs text-muted-foreground">
+													Up to 3 questions answered at checkout. Optional.
+												</p>
+											</div>
+											<BuyerQuestionsEditor
+												draft={state.buyerQuestions}
+												onChange={(buyerQuestions) => patch({ buyerQuestions })}
+												// The review check flagged this block on Publish —
+												// from then on every row names its own problem.
+												revealAll={issueFor("buyerQuestions") !== undefined}
+											/>
 										</div>
 									)}
 
@@ -3434,8 +3493,9 @@ export function ProductWizard({
 												<IssueText message={issueFor("pickupNote")} />
 												<span className="text-xs font-normal text-muted-foreground">
 													Collecting buyers see this at checkout and on their
-													order page. It&apos;s copied onto each order, so
-													editing it later never changes past orders.
+													order page. Paste a link (e.g. a Google Maps pin) and
+													it becomes tappable. It&apos;s copied onto each order,
+													so editing it later never changes past orders.
 												</span>
 											</label>
 										</div>

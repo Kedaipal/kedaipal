@@ -7,9 +7,9 @@ import {
 	sellerCredits,
 	sellerExpiry,
 	sellerPlanLabel,
-	sellerSeatsLabel,
 	sellerRail,
 	sellerReason,
+	sellerSeatsPhrase,
 } from "../../lib/admin-seller-view";
 import { cn } from "../../lib/utils";
 import {
@@ -17,6 +17,8 @@ import {
 	CreditsText,
 	ExpiryText,
 	FoundingPill,
+	MarketplacePill,
+	OwnerEmailLine,
 	StatusPill,
 	ViaPill,
 } from "./seller-cells";
@@ -63,6 +65,7 @@ export function SellerCard({
 							/{seller.slug}
 						</span>
 						<ViaPill seller={seller} />
+						<MarketplacePill seller={seller} now={now} />
 					</div>
 				</div>
 				<StatusPill bucket={bucket} />
@@ -72,7 +75,7 @@ export function SellerCard({
 				<span className="font-semibold">{sellerPlanLabel(seller)}</span>
 				{rail ? <span className="text-muted-foreground">{rail}</span> : null}
 				<span className="text-muted-foreground">
-					· {sellerSeatsLabel(seller)} seats
+					· {sellerSeatsPhrase(seller)}
 				</span>
 				{reason ? (
 					<span className="basis-full text-xs text-muted-foreground">
@@ -93,7 +96,7 @@ export function SellerCard({
 			</div>
 
 			<div className="flex flex-col divide-y divide-border/60 border-t border-border/60">
-				<ContactLine kind="email" value={seller.ownerEmail} />
+				<OwnerEmailLine seller={seller} />
 				<ContactLine kind="whatsapp" value={seller.waPhone} />
 			</div>
 

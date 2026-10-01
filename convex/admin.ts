@@ -42,11 +42,17 @@ import {
 	LOG_PURGE_PAGE_SIZE,
 } from "./lib/retention";
 import {
+	compHighlightEligible,
+	sanitizeHiddenNote,
+} from "./lib/marketplaceListing";
+import {
 	type BillingCurrency,
 	isUnlimited,
 	renewalCurrency,
 } from "./lib/plans";
 import { loadCreditAccount } from "./credits";
+import { storeIsInternal } from "./marketplace";
+import { isUnclaimed } from "./lib/unclaimedStore";
 import { loadSubscription, resolveAccess } from "./subscriptions";
 
 /** How many sellers the directory pulls. The Founding cohort is ~10 and the whole
@@ -115,9 +121,38 @@ export type AdminSellerRow = {
 	 * + name. Absent = no badge referrer, or one that has since been purged. */
 	signupReferrer?: { slug: string; storeName: string };
 	createdAt: number;
+	/** Pre-built store, not yet handed over (docs/prebuilt-stores.md). An admin
+	 * built it before the vendor had an account, so it has no owner: every
+	 * owner-shaped fact on this row (`ownerUserId`, `ownerEmail`, seats) is a
+	 * placeholder or absent, and the directory must say "Unclaimed" rather than
+	 * render a blank person. Flips to false the moment the vendor claims it. */
+	unclaimed: boolean;
+	/** The address that will claim it (`retailers.pendingOwnerEmail`). Only ever
+	 * set while `unclaimed` — absent means an admin is still building and hasn't
+	 * been given the vendor's email, which is a normal state the console names
+	 * ("No handover email yet") rather than leaving blank. */
+	pendingOwnerEmail?: string;
+	/** When a pre-built store was handed over. Set = this store started life
+	 * unclaimed; absent = it was created by its own owner, like every store
+	 * before this feature. */
+	claimedAt?: number;
 	/** A dev-only purge cascade is running (z8r3fdbmc9) — the directory locks
 	 * the row (no Manage, no second purge) until it disappears. */
 	purging: boolean;
+	/** Marketplace state (z8r3fdkmyp): the seller's own opt-out stamp
+	 * (read-only here — only the seller flips it), the admin-set paid window,
+	 * the admin's "keep this comped store off the rail" override, the admin's
+	 * hide (with its note to the seller), and whether the store is internal
+	 * (never listed). Whether it's ON the rail is judged with
+	 * `highlightSource` over these + `comped`/`comp.kind` — never re-derived
+	 * inline. */
+	marketplace: {
+		unlistedAt?: number;
+		sponsoredUntil?: number;
+		compHighlightOffAt?: number;
+		hidden?: { at: number; note?: string };
+		internal: boolean;
+	};
 	// --- Contact + billing facts (z8r3fdh37c) ------------------------------
 	// Everything an admin used to open a second tab for. All of it already
 	// lived on `retailers` / `subscriptions` / `invoices` / `adminAuditLog`;
@@ -329,7 +364,10 @@ export const listSellersForAdmin = query({
 				ownerUserId: r.userId,
 				ownerIsAdmin: adminIds.has(r.userId),
 				seats: {
-					active: 1 + activeMembers.length,
+					// The `1` is the OWNER. A pre-built store has none, so counting
+					// one renders "1/3 seats" against a store with nobody in it —
+					// spotted by rendering the card, not by reading the code.
+					active: (isUnclaimed(r) ? 0 : 1) + activeMembers.length,
 					cap: seatCap,
 					capUnlimited: isUnlimited(seatCap),
 					invited: invitedMembers.length,
@@ -373,7 +411,17 @@ export const listSellersForAdmin = query({
 						}
 					: {}),
 				createdAt: r._creationTime,
+				unclaimed: isUnclaimed(r),
+				pendingOwnerEmail: r.pendingOwnerEmail,
+				claimedAt: r.claimedAt,
 				purging: r.purgeStartedAt !== undefined,
+				marketplace: {
+					unlistedAt: r.marketplaceUnlistedAt,
+					sponsoredUntil: r.marketplaceSponsoredUntil,
+					compHighlightOffAt: r.marketplaceCompHighlightOffAt,
+					hidden: r.marketplaceHidden,
+					internal: storeIsInternal(r, sub, adminUserIds()),
+				},
 				ownerEmail: r.notifyEmail,
 				waPhone: r.waPhone,
 				notifyWaPhone: r.notifyWaPhone,
@@ -425,6 +473,167 @@ export const listSellersForAdmin = query({
 			return b.createdAt - a.createdAt;
 		});
 		return rows;
+	},
+});
+
+/**
+ * Start or move a store's marketplace "Store highlights" sponsorship window
+ * (z8r3fdkmyp). Admin-only and audited: v1 sponsorship is sold by hand
+ * (manual invoice), so the admin console is the ONE writer — a self-serve
+ * purchase path would arrive as its own ticket, not as a widening of this.
+ * A past `until` is refused rather than stored as an already-expired window
+ * that reads like a bug in the directory. Expiry itself is read-time
+ * (`sponsorshipActive`), so nothing needs a cron. Ending one early is its own
+ * act — `endMarketplaceSponsorship` — so the audit log says which happened
+ * (the setComp / revokeComp pair's shape).
+ */
+export const setMarketplaceSponsorship = mutation({
+	args: { retailerId: v.id("retailers"), until: v.number() },
+	handler: async (ctx, { retailerId, until }): Promise<void> => {
+		const adminUserId = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		if (until <= Date.now()) {
+			throw new ConvexError("Sponsorship end must be in the future");
+		}
+		await ctx.db.patch(retailerId, {
+			marketplaceSponsoredUntil: until,
+			updatedAt: Date.now(),
+		});
+		await ctx.db.insert("adminAuditLog", {
+			adminUserId,
+			retailerId,
+			action: "admin.setMarketplaceSponsorship",
+			targetId: retailerId,
+			ts: Date.now(),
+		});
+	},
+});
+
+/** End a store's sponsorship now (z8r3fdkmyp) — the card leaves the rail on
+ * the next read. Idempotent: ending a window that isn't running writes
+ * nothing, so a double-click can't litter the audit log. */
+export const endMarketplaceSponsorship = mutation({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<void> => {
+		const adminUserId = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		if (retailer.marketplaceSponsoredUntil === undefined) return;
+		await ctx.db.patch(retailerId, {
+			marketplaceSponsoredUntil: undefined,
+			updatedAt: Date.now(),
+		});
+		await ctx.db.insert("adminAuditLog", {
+			adminUserId,
+			retailerId,
+			action: "admin.endMarketplaceSponsorship",
+			targetId: retailerId,
+			ts: Date.now(),
+		});
+	},
+});
+
+/**
+ * The admin's one override of the comp-driven highlight (z8r3fdkmyp): comped
+ * partner / sponsor / pilot stores ride Store highlights automatically, and
+ * this switch keeps a particular one OFF (or puts it back). Only meaningful
+ * for a comp-eligible store; refused otherwise rather than storing a stamp
+ * that silently does nothing. Turning off keeps the FIRST stamp on a re-save.
+ */
+export const setCompHighlight = mutation({
+	args: { retailerId: v.id("retailers"), on: v.boolean() },
+	handler: async (ctx, { retailerId, on }): Promise<void> => {
+		const adminUserId = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		const sub = await loadSubscription(ctx, retailerId);
+		if (!compHighlightEligible(sub?.comped === true, sub?.comp?.kind)) {
+			throw new ConvexError(
+				"Only comped partner, sponsor or pilot stores are featured automatically",
+			);
+		}
+		const next = on
+			? undefined
+			: (retailer.marketplaceCompHighlightOffAt ?? Date.now());
+		if (next === retailer.marketplaceCompHighlightOffAt) return;
+		await ctx.db.patch(retailerId, {
+			marketplaceCompHighlightOffAt: next,
+			updatedAt: Date.now(),
+		});
+		await ctx.db.insert("adminAuditLog", {
+			adminUserId,
+			retailerId,
+			action: "admin.setCompHighlight",
+			targetId: retailerId,
+			ts: Date.now(),
+		});
+	},
+});
+
+/**
+ * Take a store off /stores (z8r3fdkmyp, Zaki 1 Oct 2026) — junk trials,
+ * quality, policy. It outranks the seller's own "List my store" switch, and
+ * touches nothing else: the storefront, orders and WhatsApp all carry on.
+ * The optional `note` is shown to the seller on their settings card, so a
+ * hide for a fixable reason tells them what to fix. Refused for an internal
+ * store (never listed anyway — a stamp there would do nothing). Hiding a
+ * store that is already hidden writes nothing, so the first stamp and note
+ * stand and a double-click can't litter the audit log. Undone by its own act,
+ * `showOnMarketplace`, so the log says which happened.
+ */
+export const hideFromMarketplace = mutation({
+	args: { retailerId: v.id("retailers"), note: v.optional(v.string()) },
+	handler: async (ctx, { retailerId, note }): Promise<void> => {
+		const adminUserId = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		const sub = await loadSubscription(ctx, retailerId);
+		if (storeIsInternal(retailer, sub, adminUserIds())) {
+			throw new ConvexError(
+				"Internal stores are never listed on /stores — nothing to hide",
+			);
+		}
+		const cleanNote = sanitizeHiddenNote(note);
+		if (retailer.marketplaceHidden !== undefined) return;
+		await ctx.db.patch(retailerId, {
+			marketplaceHidden: {
+				at: Date.now(),
+				...(cleanNote ? { note: cleanNote } : {}),
+			},
+			updatedAt: Date.now(),
+		});
+		await ctx.db.insert("adminAuditLog", {
+			adminUserId,
+			retailerId,
+			action: "admin.hideFromMarketplace",
+			targetId: retailerId,
+			ts: Date.now(),
+		});
+	},
+});
+
+/** Put a hidden store back (z8r3fdkmyp). It lists again once the rest of the
+ * listable rule holds — the seller's own opt-out still applies. Idempotent,
+ * like the hide. */
+export const showOnMarketplace = mutation({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<void> => {
+		const adminUserId = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		if (retailer.marketplaceHidden === undefined) return;
+		await ctx.db.patch(retailerId, {
+			marketplaceHidden: undefined,
+			updatedAt: Date.now(),
+		});
+		await ctx.db.insert("adminAuditLog", {
+			adminUserId,
+			retailerId,
+			action: "admin.showOnMarketplace",
+			targetId: retailerId,
+			ts: Date.now(),
+		});
 	},
 });
 

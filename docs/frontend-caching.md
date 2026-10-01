@@ -75,9 +75,21 @@ Rules that make it safe:
   inbox's `useRef<NonNullable<typeof result>["counts"]>`).
 - **Type-position** usages of the old hook (`ReturnType<typeof useQuery<typeof api.x>>`) become
   `FunctionReturnType<typeof api.x>` (+ `| undefined` where the loading state was part of the type).
+- **An adapter read never throws — a read whose `undefined` blocks a screen must check
+  `.error` too.** Plain `useQuery` from `convex/react` threw a failed query into the nearest
+  error boundary; the adapter settles it as `status: "error"` and leaves `.data` as it was:
+  `undefined` if nothing had loaded, the last good value if something had (ConvexQueryClient
+  keeps it). So through `.data` alone a read that fails on first load is indistinguishable
+  from a slow one, and a component whose `undefined` branch is a skeleton spins forever —
+  exactly how every `/app` page hung for a seller who inherited an admin's act-as session
+  (ClickUp `z8r3fdkqn6`). Recovery from a first-load failure is TanStack's retry, a remount or
+  a reload, **not** the live subscription: the bridge only updates cache entries that already
+  hold data, so a later good push is dropped.
 
 `src/hooks/useDashboardRetailer.ts` unwraps `.data` **internally** and keeps returning
-`Retailer | null | undefined`, so its ~8 route consumers are unchanged.
+`Retailer | null | undefined`, so its ~8 route consumers are unchanged. The shell — the one
+place a failed store read must become a screen, not a skeleton — reads the sibling
+`useDashboardRetailerRead()`, which returns `{ retailer, error }`.
 
 ## What stays on `convex/react` (NOT migrated)
 

@@ -366,6 +366,36 @@ export const migrateLalamoveModeToLive = internalMutation({
  * The table is one row per store (≈ hundreds), so a single collect is fine.
  * Run: `npx convex run migrations:resyncSubscriptionCaps`
  */
+/**
+ * Flag every unresolved `gatewayIssue` stamped before `gatewayIssueOpen`
+ * existed, so the admin "Payments to review" queue (which reads the
+ * `by_gateway_issue_open` index) sees them. Invoices are one-per-cycle rows,
+ * so a full collect is fine at this table's size — this is a one-off, not a
+ * hot path.
+ *
+ * Idempotent: already-flagged and already-resolved rows are skipped.
+ *
+ * Run on dev:  `npx convex run migrations:backfillGatewayIssueOpen`
+ * Run on PROD: `npx convex run migrations:backfillGatewayIssueOpen --prod`
+ * (write `--prod` yourself — the bare command runs against DEV and reports
+ * success, which reads exactly like a prod run that worked).
+ */
+export const backfillGatewayIssueOpen = internalMutation({
+	args: {},
+	handler: async (ctx): Promise<{ scanned: number; flagged: number }> => {
+		const invoices = await ctx.db.query("invoices").collect();
+		let flagged = 0;
+		for (const inv of invoices) {
+			if (!inv.gatewayIssue) continue;
+			if (inv.gatewayIssue.resolvedAt !== undefined) continue;
+			if (inv.gatewayIssueOpen === true) continue;
+			await ctx.db.patch(inv._id, { gatewayIssueOpen: true });
+			flagged++;
+		}
+		return { scanned: invoices.length, flagged };
+	},
+});
+
 export const resyncSubscriptionCaps = internalMutation({
 	args: {},
 	handler: async (ctx): Promise<{ scanned: number; patched: number }> => {

@@ -5,13 +5,30 @@
 // read-only sheet) and the menu names each action with its consequence.
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
-import { ChevronDown, Gift, Info, Loader2, Store, Trash2 } from "lucide-react";
+import {
+	ChevronDown,
+	Eye,
+	EyeOff,
+	Gift,
+	Info,
+	Loader2,
+	Megaphone,
+	Store,
+	Trash2,
+	UserPlus,
+} from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { AdminSellerRow } from "../../../convex/admin";
+import { HIDDEN_NOTE_MAX } from "../../../convex/lib/marketplaceListing";
 import { useActAs } from "../../hooks/useActAs";
-import { convexErrorMessage } from "../../lib/format";
+import {
+	highlightedThroughLabel,
+	sellerCompMenuItem,
+	sellerHighlight,
+} from "../../lib/admin-seller-view";
+import { convexErrorMessage, formatShortDate } from "../../lib/format";
 import { cn } from "../../lib/utils";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 import {
@@ -22,6 +39,8 @@ import {
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { CompDialog } from "./comp-dialog";
+import { HandoverDialog } from "./handover-dialog";
+import { HighlightDialog } from "./highlight-dialog";
 
 /**
  * Enter act-as for a store: start the session, audit the tenant ENTRY
@@ -73,8 +92,80 @@ export function SellerManageMenu({
 }) {
 	const openStore = useOpenStore(seller);
 	const purgeStore = useMutation(api.admin.purgeStoreForAdmin);
+	const hideStore = useMutation(api.admin.hideFromMarketplace);
+	const showStore = useMutation(api.admin.showOnMarketplace);
 	const [purgeOpen, setPurgeOpen] = useState(false);
+	const [hideOpen, setHideOpen] = useState(false);
 	const [compOpen, setCompOpen] = useState(false);
+	const [handoverOpen, setHandoverOpen] = useState(false);
+	// Title/subtitle/tone for the comp item — one pure author in
+	// admin-seller-view.ts, where the row's other derived sentences live.
+	const compItem = sellerCompMenuItem(seller);
+	const [highlightOpen, setHighlightOpen] = useState(false);
+	// Where the store stands on Store highlights — the item says it before the
+	// dialog opens: why it's on (paid window / comp), or why it can't be.
+	const highlight = sellerHighlight(seller, Date.now());
+	const hidden = seller.marketplace.hidden;
+	const highlightItem = seller.marketplace.internal
+		? {
+				title: "Store highlights",
+				hint: "Internal store — never listed on /stores",
+				on: false,
+			}
+		: highlight.source === "paid" &&
+				seller.marketplace.sponsoredUntil !== undefined
+			? {
+					title: "Store highlights — on",
+					hint: `Through ${highlightedThroughLabel(seller.marketplace.sponsoredUntil)} — edit or end early`,
+					on: true,
+				}
+			: highlight.source === "comp"
+				? {
+						title: "Store highlights — on",
+						hint: "While comped — turn off if needed",
+						on: true,
+					}
+				: highlight.compEligible
+					? {
+							title: "Store highlights — off",
+							hint: "Comped, but kept off by an admin",
+							on: false,
+						}
+					: {
+							title: "Feature in Store highlights",
+							hint: "A dated window on kedaipal.com/stores",
+							on: false,
+						};
+	// A highlight keeps its setting while the store is hidden, but nothing
+	// shows — the item must not read as featured right above "Show on
+	// /stores again".
+	const highlightPaused = hidden !== undefined && highlightItem.on;
+
+	async function confirmHide(note?: string) {
+		try {
+			await hideStore({ retailerId: seller._id, note });
+			toast.success(`${seller.storeName} is hidden from /stores.`);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+			throw err;
+		}
+	}
+
+	// Showing a store again is the default being restored, and one more click
+	// undoes it — so no confirm step. The toast says when it still won't show.
+	async function showAgain() {
+		try {
+			await showStore({ retailerId: seller._id });
+			toast.success(
+				seller.marketplace.unlistedAt !== undefined
+					? `${seller.storeName} is no longer hidden, but the seller has opted out, so it still won't show.`
+					: `${seller.storeName} can appear on /stores again.`,
+			);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		}
+	}
+
 	// Server truth (`purging` rides the directory row, so every admin session
 	// locks) OR the just-clicked local echo, which bridges the moment before
 	// the reactive query refreshes.
@@ -154,8 +245,53 @@ export function SellerManageMenu({
 							</span>
 						</DropdownMenuItem>
 					) : null}
+					{/* Only on a pre-built store, and placed before the commercial
+					    items: for an unclaimed store the open question is WHO it is
+					    for, not what it costs. Absent once claimed rather than
+					    disabled — ownership moves exactly once, so a permanently
+					    greyed row would sit on every ordinary store forever saying
+					    nothing (docs/prebuilt-stores.md). */}
+					{seller.unclaimed ? (
+						<DropdownMenuItem
+							onSelect={() => setHandoverOpen(true)}
+							className="items-start"
+						>
+							<UserPlus
+								className={cn(
+									"mt-0.5 size-4",
+									seller.pendingOwnerEmail
+										? "text-muted-foreground"
+										: "text-amber-600 dark:text-amber-400",
+								)}
+								aria-hidden="true"
+							/>
+							<span className="flex min-w-0 flex-col">
+								<span className="font-medium">
+									{seller.pendingOwnerEmail
+										? "Handover email — set"
+										: "Set handover email"}
+								</span>
+								<span className="text-xs text-muted-foreground">
+									{seller.pendingOwnerEmail
+										? `Waiting for ${seller.pendingOwnerEmail} to sign up`
+										: "Nobody can claim this store until you name their email"}
+								</span>
+							</span>
+						</DropdownMenuItem>
+					) : null}
 					{/* Disabled-with-reason IN the item — a disabled menu row can't
-					    show a hover title, so the reason is the subtitle. */}
+					    show a hover title, so the reason is the subtitle.
+
+					    A pre-built store is ALWAYS comped (the `internal` comp keeps
+					    it unbilled while an admin builds it), so the plain comped
+					    copy called that scaffolding a "sponsorship" and offered to
+					    "turn it off" — the same lie the Sponsored pill told before
+					    `tierPill` learned about unclaimed stores, on the one surface
+					    that still believed it (2 Oct). It stays ENABLED rather than
+					    disabled: setting a REAL partner/sponsor comp before handover
+					    is supported and survives the claim
+					    (`startFreePeriodOnClaim`), so refusing here would block a
+					    flow we deliberately kept. */}
 					<DropdownMenuItem
 						onSelect={() => setCompOpen(true)}
 						// A contract store is never comped too (T6) — the server
@@ -166,24 +302,70 @@ export function SellerManageMenu({
 						<Gift
 							className={cn(
 								"mt-0.5 size-4",
-								seller.comped
+								compItem.sponsored
 									? "text-violet-600 dark:text-violet-300"
 									: "text-muted-foreground",
 							)}
 							aria-hidden="true"
 						/>
 						<span className="flex min-w-0 flex-col">
+							<span className="font-medium">{compItem.title}</span>
+							<span className="text-xs text-muted-foreground">
+								{compItem.hint}
+							</span>
+						</span>
+					</DropdownMenuItem>
+					{/* Disabled-with-reason for an internal store, like the comp item. */}
+					<DropdownMenuItem
+						onSelect={() => setHighlightOpen(true)}
+						disabled={seller.marketplace.internal}
+						className="items-start"
+					>
+						<Megaphone
+							className={cn(
+								"mt-0.5 size-4",
+								highlightItem.on && !highlightPaused
+									? "text-accent-emphasis"
+									: "text-muted-foreground",
+							)}
+							aria-hidden="true"
+						/>
+						<span className="flex min-w-0 flex-col">
+							<span className="font-medium">{highlightItem.title}</span>
+							<span className="text-xs text-muted-foreground">
+								{highlightPaused
+									? "Paused while hidden from /stores"
+									: highlightItem.hint}
+							</span>
+						</span>
+					</DropdownMenuItem>
+					{/* Beside highlights: both are the store's place on /stores. */}
+					<DropdownMenuItem
+						onSelect={hidden ? () => void showAgain() : () => setHideOpen(true)}
+						disabled={seller.marketplace.internal}
+						className="items-start"
+					>
+						{hidden ? (
+							<Eye
+								className="mt-0.5 size-4 text-muted-foreground"
+								aria-hidden="true"
+							/>
+						) : (
+							<EyeOff
+								className="mt-0.5 size-4 text-muted-foreground"
+								aria-hidden="true"
+							/>
+						)}
+						<span className="flex min-w-0 flex-col">
 							<span className="font-medium">
-								{seller.comped ? "Comp upgrade — on" : "Turn on comp upgrade"}
+								{hidden ? "Show on /stores again" : "Hide from /stores"}
 							</span>
 							<span className="text-xs text-muted-foreground">
-								{seller.ownerIsAdmin
-									? "Admin store — always free already"
-									: onContract
-										? "On an Enterprise contract — move it to Pro first"
-										: seller.comped
-											? "Edit the sponsorship or turn it off"
-											: "Every feature, no limits, never billed"}
+								{seller.marketplace.internal
+									? "Internal store — never listed anyway"
+									: hidden
+										? `Hidden since ${formatShortDate(hidden.at)}`
+										: "Off the directory — storefront and orders unaffected"}
 							</span>
 						</span>
 					</DropdownMenuItem>
@@ -206,9 +388,43 @@ export function SellerManageMenu({
 					) : null}
 				</DropdownMenuContent>
 			</DropdownMenu>
+			{handoverOpen ? (
+				<HandoverDialog
+					seller={seller}
+					onClose={() => setHandoverOpen(false)}
+				/>
+			) : null}
 			{compOpen ? (
 				<CompDialog seller={seller} onClose={() => setCompOpen(false)} />
 			) : null}
+			{highlightOpen ? (
+				<HighlightDialog
+					seller={seller}
+					onClose={() => setHighlightOpen(false)}
+				/>
+			) : null}
+			<ConfirmDialog
+				open={hideOpen}
+				onOpenChange={setHideOpen}
+				title={`Hide ${seller.storeName} from /stores?`}
+				description={
+					<>
+						Buyers won't find it on kedaipal.com/stores, in its search or on
+						Store highlights, whatever the seller's own switch says. Its
+						storefront link, orders and WhatsApp carry on as normal. The seller
+						sees that Kedaipal hid it in Settings → Store, and you can show it
+						again from this menu.
+					</>
+				}
+				reason={{
+					label: "Note to the seller",
+					placeholder: "e.g. Add real product photos and we'll relist you.",
+					maxLength: HIDDEN_NOTE_MAX,
+					helper: "Shown to the seller in Settings → Store.",
+				}}
+				confirmLabel="Hide from /stores"
+				onConfirm={confirmHide}
+			/>
 			{purgeEnabled ? (
 				<ConfirmDialog
 					open={purgeOpen}
