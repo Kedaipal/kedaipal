@@ -550,8 +550,9 @@ describe("retailers slug rename", () => {
 		// The 2 Oct hands-on bug: an admin building a store for a vendor typed a
 		// name whose slug was their OWN store's, saw "✓ Available", clicked, and
 		// the server refused with "That slug is taken". Delete the `purpose`
-		// branch in checkSlugAvailability and this goes green while the create
-		// path still refuses — a client contradicting its own server.
+		// branch in checkSlugAvailability and this test FAILS: the hint answers
+		// "available" while the create path still refuses — a client
+		// contradicting its own server.
 		const t = setup();
 		const asA = await seed(t, USER_A, "mine");
 

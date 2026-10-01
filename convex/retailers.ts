@@ -1885,13 +1885,24 @@ async function resolvePendingOwnerEmail(
 	// A store they ALREADY own is the same wall from the other side: the claim
 	// would refuse it (one store per login), so say so now instead of handing an
 	// admin a link that can never work.
+	//
+	// This is a BEST-EFFORT match, and the message says so rather than asserting
+	// ownership. Kedaipal never stores a login address — `notifyEmail` is the
+	// only email on the row, prefilled from Clerk at signup but explicitly
+	// re-pointable at a shared ops inbox (see its schema comment), so it can
+	// name a different person than the one who signs in. Keying on it is still
+	// right: it is correct for every store that never changed it, and the
+	// authoritative wall is `claimBlocker`, which matches on the Clerk subject
+	// at claim time. What the copy must not do is tell an admin that an address
+	// "runs" a store when all we know is that the store mails it — a flat
+	// refusal on a proxy signal, with no way out, is a dead end.
 	const owned = await ctx.db
 		.query("retailers")
 		.withIndex("by_notify_email", (q) => q.eq("notifyEmail", normalized))
 		.first();
 	if (owned && owned._id !== selfId && !isUnclaimed(owned))
 		throw new ConvexError(
-			`${normalized} already runs ${owned.storeName}. One login can only hold one store.`,
+			`${owned.storeName} already uses ${normalized} as its contact email, so that login most likely owns it — and one login can only hold one store. If this is a different person, change ${owned.storeName}'s notification email first; it's the only address we can match on.`,
 		);
 	return normalized;
 }

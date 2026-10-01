@@ -278,6 +278,23 @@ key is gone from `sessionStorage`), plus a case that simply renders the screen �
 reintroduce the hook and that one goes red. A mock that stands in for the thing
 under test proves the mock works, not the code.
 
+**From review (PR #332).** Two non-blocking notes, both acted on:
+
+The "already runs a store" pre-check matches on `notifyEmail`, which the schema
+explicitly allows a seller to re-point at a shared ops inbox — so it can name a
+different person than the one who signs in. The guard stays (it is correct for
+every store that never changed it, and the authoritative wall is `claimBlocker`
+on the Clerk subject at claim time), but the refusal no longer asserts that the
+address "runs" a store. It states the match it actually made and how to clear
+it, because a flat refusal on a proxy signal with no way out is a dead end.
+Kedaipal never stores a login address, so no stronger check is available.
+
+Three mutation-test comments said the guarded test "goes green" when the guard
+is deleted. It goes **red** — measured. Those comments exist to tell the next
+person how to verify a guard, so a backwards instruction is worse than none;
+all three now name the failure, and each was re-run against its mutation to
+confirm the claim.
+
 ### Which email is which
 
 Three different addresses, and only one of them is ever a key:

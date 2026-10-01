@@ -212,6 +212,28 @@ describe("createUnclaimedStore", () => {
 			buildStore(t, { slug: "doomed", email: VENDOR.email }),
 		).rejects.toThrow(/one store/i);
 	});
+
+	test("that refusal says what it CHECKED, not that the address owns a store", async () => {
+		// We match on `notifyEmail`, which is explicitly re-pointable at a shared
+		// ops inbox (schema), so it can name a different person than the one who
+		// signs in. Asserting "X already runs Y" on that proxy would be a flat
+		// refusal on a signal we cannot stand behind, with no way out — so the
+		// message states the match it made and how to clear it.
+		const t = setup();
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.createRetailer, {
+				storeName: "Their Own Shop",
+				slug: "their-own-shop",
+			});
+		const err = await buildStore(t, {
+			slug: "doomed",
+			email: VENDOR.email,
+		}).catch((e: Error) => e.message);
+		expect(err).toMatch(/uses .* as its contact email/i);
+		expect(err).toMatch(/notification email/i); // the way out
+		expect(err).not.toMatch(/already runs/i); // the claim we cannot make
+	});
 });
 
 describe("setPendingOwnerEmail", () => {
@@ -381,7 +403,8 @@ describe("claimStore", () => {
 	test("an UNVERIFIED email cannot claim, however exactly it matches", async () => {
 		// Anyone can type any address into a sign-up form. Verification is the
 		// whole proof of inbox control — delete the emailVerified check in
-		// convex/lib/identity.ts and this goes green when it must not.
+		// convex/lib/identity.ts and this test FAILS, because the unverified
+		// caller walks off with the store.
 		const t = setup();
 		await buildStore(t, { email: VENDOR.email });
 		const result = await t
@@ -428,7 +451,8 @@ describe("claimStore", () => {
 		// ownerless. Clearing `pendingOwnerEmail` at claim normally keeps this
 		// unreachable — so if that clear ever regresses, or a row is patched by
 		// hand, THIS is what stops a live store being handed to a second person.
-		// Delete the `isUnclaimed` re-check in `claimStore` and this goes green.
+		// Delete the `isUnclaimed` re-check in `claimStore` and this test FAILS,
+		// because the stranger's claim succeeds.
 		const t = setup();
 		const { retailerId } = await buildStore(t, { email: VENDOR.email });
 		await t
