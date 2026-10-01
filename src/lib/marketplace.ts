@@ -43,9 +43,10 @@ export function parseMarketplaceSearch(search: Record<string, unknown>): {
 	q?: string;
 	filter?: Exclude<MarketplaceChip, "all">;
 } {
+	// Trim BEFORE the cap, so padding never spends the 80-char budget.
 	const q =
-		typeof search.q === "string" && search.q.trim().length > 0
-			? search.q.slice(0, SEARCH_QUERY_MAX)
+		typeof search.q === "string"
+			? search.q.trim().slice(0, SEARCH_QUERY_MAX) || undefined
 			: undefined;
 	const filter = FILTER_CHIPS.find((chip) => chip === search.filter);
 	return { ...(q ? { q } : {}), ...(filter ? { filter } : {}) };

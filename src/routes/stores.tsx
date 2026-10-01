@@ -15,6 +15,7 @@ import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
 import { useLandingRegion } from "../hooks/useLandingRegion";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
+import { jsonLdScript } from "../lib/json-ld";
 import {
 	filterStores,
 	type MarketplaceChip,
@@ -79,23 +80,22 @@ export const Route = createFileRoute("/stores")({
 			{ name: "twitter:title", content: PAGE_TITLE },
 			{ name: "twitter:description", content: PAGE_DESCRIPTION },
 		];
-		const scripts: Array<{ type: string; children: string }> = [];
-		if (loaderData && loaderData.stores.length > 0) {
-			scripts.push({
-				type: "application/ld+json",
-				children: JSON.stringify({
-					"@context": "https://schema.org",
-					"@type": "ItemList",
-					name: PAGE_TITLE,
-					itemListElement: loaderData.stores.map((store, i) => ({
-						"@type": "ListItem",
-						position: i + 1,
-						name: store.storeName,
-						url: `${SITE_URL}/${store.slug}`,
-					})),
-				}),
-			});
-		}
+		const scripts =
+			loaderData && loaderData.stores.length > 0
+				? [
+						jsonLdScript({
+							"@context": "https://schema.org",
+							"@type": "ItemList",
+							name: PAGE_TITLE,
+							itemListElement: loaderData.stores.map((store, i) => ({
+								"@type": "ListItem",
+								position: i + 1,
+								name: store.storeName,
+								url: `${SITE_URL}/${store.slug}`,
+							})),
+						}),
+					]
+				: [];
 		return {
 			meta,
 			links: [{ rel: "canonical", href: canonicalUrl }],

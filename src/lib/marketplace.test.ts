@@ -169,6 +169,15 @@ describe("parseMarketplaceSearch — the URL state Back returns to", () => {
 			parseMarketplaceSearch({ q: "x".repeat(SEARCH_QUERY_MAX + 20) }).q,
 		).toHaveLength(SEARCH_QUERY_MAX);
 	});
+
+	test("padding is trimmed before the length cap, never counted against it", () => {
+		expect(parseMarketplaceSearch({ q: "  kek  " })).toEqual({ q: "kek" });
+		expect(
+			parseMarketplaceSearch({
+				q: `${" ".repeat(10)}${"x".repeat(SEARCH_QUERY_MAX)}`,
+			}).q,
+		).toBe("x".repeat(SEARCH_QUERY_MAX));
+	});
 });
 
 describe("partitionStores", () => {

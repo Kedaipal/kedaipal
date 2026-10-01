@@ -139,6 +139,17 @@ property, so an arbitrary transition list must name `translate`, not
 subscription/payment/courier config (pinned by the leak test in
 `convex/marketplace.test.ts`). Cover URLs resolve only for sponsored cards.
 
+**The ItemList JSON-LD is built from every seller's store name on one shared
+page**, so it goes through `jsonLdScript` (`src/lib/json-ld.ts`), which
+escapes `<`, `>` and `&` as `\uXXXX`. TanStack SSRs a head script's
+`children` with `dangerouslySetInnerHTML`, and `JSON.stringify` leaves `<`
+alone, so a store name such as `</script><script …>` (it fits the 60-char
+cap) would close the tag and run on every buyer's visit to `/stores`. Found in
+PR #324 review. The same raw stringify sat on the storefront, product and
+landing routes, and all four now use the helper. `json-ld.test.ts` lets the
+HTML parser judge each hostile name and fails on any other source file naming
+`application/ld+json`.
+
 ## Namespace + scale notes
 
 - `stores` moved from the reserved GENERIC group into `LIVE_ROUTES`
@@ -162,6 +173,8 @@ leak pin, sponsorship admin gate + audit), `src/lib/marketplace.test.ts`
 (status label, filters, partition), `src/components/marketplace/store-card.test.tsx`
 (card states over a real router), `src/components/settings/marketplace-card.test.tsx`
 (the four status-line states incl. ON-but-not-shown + loading, area saves in
-the stored shape, discoverability link), `src/components/admin/sponsor-dialog.test.tsx`
-(start / update-needs-a-change / end via its own mutation, inclusive end date, opted-out warning), the directory pill in `app.admin.sellers.test.tsx`, and
-`parseMarketplaceSearch` cases for the URL state.
+the stored shape, discoverability link), `src/components/admin/highlight-dialog.test.tsx`
+(start / update-needs-a-change / end via its own mutation, inclusive end date, opted-out warning, comp switch, internal store), the directory pill in `app.admin.sellers.test.tsx`,
+`src/components/storefront/storefront-footer.test.tsx` (the discover link),
+`parseMarketplaceSearch` cases for the URL state, and `src/lib/json-ld.test.ts`
+(escaping + the gate).
