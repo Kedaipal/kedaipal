@@ -857,6 +857,18 @@ already bills at list.
    (`chargeCountAtAttempt`), so whatever else moves HitPay's number is
    irrelevant. Evidence gathered on the way: a SETTLED charge moves
    `total_charge` by exactly 1 (observed twice: 3→4→5), and a 422-refused
-   charge does not move it at all. A genuine processor decline remains
-   unobservable in the sandbox, which approved a RM 999,999 Touch 'n Go
-   charge — worth remembering that sandbox limits are not production limits.
+   charge does not move it at all. A genuine processor decline is
+   **unobservable on the dev sandbox account**, and not for want of trying:
+   HitPay documents exactly one decline trigger — the Visa test card
+   `4000 0000 0000 0002` — and **no** magic amount or e-wallet equivalent, so
+   the RM 999,999 Touch 'n Go charge it approved was never going to decline.
+   The card rail cannot be used either: asking for it returns
+   `422 … "It must be one of: touch_n_go"`, i.e. **the dev account has only
+   Touch 'n Go enabled**. (That is also live corroboration of the
+   degrade-on-422 path — the error names the account's real rail set.) A
+   decline could only be exercised on an account with cards on; if that ever
+   matters it is Arif's live account, not dev. Separately worth remembering:
+   sandbox limits are not production limits.
+   HitPay's own 7-day retry, checked at the same time, applies to a plan's
+   **scheduled charge date** — not to merchant-initiated charges, which is
+   what `lib/hitpayBilling.ts` already assumed.
