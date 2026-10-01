@@ -47,6 +47,7 @@ import {
 } from "./lib/marketplaceListing";
 import { isUnlimited } from "./lib/plans";
 import { storeIsInternal } from "./marketplace";
+import { isUnclaimed } from "./lib/unclaimedStore";
 import { loadSubscription, resolveAccess } from "./subscriptions";
 
 /** How many sellers the directory pulls. The Founding cohort is ~10 and the whole
@@ -101,6 +102,21 @@ export type AdminSellerRow = {
 	 * + name. Absent = no badge referrer, or one that has since been purged. */
 	signupReferrer?: { slug: string; storeName: string };
 	createdAt: number;
+	/** Pre-built store, not yet handed over (docs/prebuilt-stores.md). An admin
+	 * built it before the vendor had an account, so it has no owner: every
+	 * owner-shaped fact on this row (`ownerUserId`, `ownerEmail`, seats) is a
+	 * placeholder or absent, and the directory must say "Unclaimed" rather than
+	 * render a blank person. Flips to false the moment the vendor claims it. */
+	unclaimed: boolean;
+	/** The address that will claim it (`retailers.pendingOwnerEmail`). Only ever
+	 * set while `unclaimed` — absent means an admin is still building and hasn't
+	 * been given the vendor's email, which is a normal state the console names
+	 * ("No handover email yet") rather than leaving blank. */
+	pendingOwnerEmail?: string;
+	/** When a pre-built store was handed over. Set = this store started life
+	 * unclaimed; absent = it was created by its own owner, like every store
+	 * before this feature. */
+	claimedAt?: number;
 	/** A dev-only purge cascade is running (z8r3fdbmc9) — the directory locks
 	 * the row (no Manage, no second purge) until it disappears. */
 	purging: boolean;
@@ -288,7 +304,10 @@ export const listSellersForAdmin = query({
 				ownerUserId: r.userId,
 				ownerIsAdmin: adminIds.has(r.userId),
 				seats: {
-					active: 1 + activeMembers.length,
+					// The `1` is the OWNER. A pre-built store has none, so counting
+					// one renders "1/3 seats" against a store with nobody in it —
+					// spotted by rendering the card, not by reading the code.
+					active: (isUnclaimed(r) ? 0 : 1) + activeMembers.length,
 					cap: seatCap,
 					capUnlimited: isUnlimited(seatCap),
 					invited: invitedMembers.length,
@@ -318,6 +337,9 @@ export const listSellersForAdmin = query({
 						}
 					: {}),
 				createdAt: r._creationTime,
+				unclaimed: isUnclaimed(r),
+				pendingOwnerEmail: r.pendingOwnerEmail,
+				claimedAt: r.claimedAt,
 				purging: r.purgeStartedAt !== undefined,
 				marketplace: {
 					unlistedAt: r.marketplaceUnlistedAt,

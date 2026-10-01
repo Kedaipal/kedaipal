@@ -162,7 +162,11 @@ function AppShell() {
 				<div className="mx-auto flex w-full min-w-0 max-w-md flex-1 flex-col lg:mx-0 lg:max-w-none print:max-w-none">
 					{retailer?.actingAsAdmin ? (
 						<div className="print:hidden">
-							<ActingAsBanner storeName={retailer.storeName} />
+							<ActingAsBanner
+								storeName={retailer.storeName}
+								unclaimed={retailer.unclaimed === true}
+								pendingOwnerEmail={retailer.pendingOwnerEmail}
+							/>
 						</div>
 					) : null}
 					<MobileHeader retailer={retailer} adminBadge={adminOwnStore} />

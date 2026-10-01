@@ -364,6 +364,43 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 			},
 		} as unknown as Partial<Retailer>);
 
+	it("a trialing seller is NOT told they are on the Pro plan", () => {
+		// `subscriptions.plan` holds the tier being TRIALLED, not one the seller
+		// chose or is paying for — so rendering it bare said "Current plan: Pro"
+		// while the chip beside it said "Free · until your first order" and the
+		// admin console filed them under Trialing (Zaki, 2 Oct). The tier stays
+		// named, because the order cap on the same card is that tier's.
+		mockQueries({ isAdmin: false });
+		render(<BillingTab retailer={trialing()} />);
+		expect(screen.getByText("Pro trial")).toBeTruthy();
+		// The bare tier name must not be the headline value any more.
+		expect(screen.queryByText(/^Pro$/)).toBeNull();
+	});
+
+	it("a PAYING seller still just reads the plan name", () => {
+		// The suffix belongs to the free period alone — an active subscriber IS
+		// on Pro, and "Pro trial" would be the opposite lie.
+		mockQueries({ isAdmin: false });
+		render(
+			<BillingTab
+				retailer={
+					retailer({
+						subscription: {
+							plan: "pro",
+							status: "active",
+							comped: false,
+							caps: { orderCap: 500, userCap: 3, broadcastQuota: 0 },
+							active: true,
+							frozen: false,
+						},
+					} as unknown as Partial<Retailer>)
+				}
+			/>,
+		);
+		expect(screen.getByText("Pro")).toBeTruthy();
+		expect(screen.queryByText("Pro trial")).toBeNull();
+	});
+
 	it("gateway ON → the plan picker replaces the WhatsApp card", () => {
 		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
 		render(<BillingTab retailer={trialing()} />);

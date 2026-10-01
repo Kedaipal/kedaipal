@@ -397,7 +397,8 @@ export type TierTone =
 	| "warn"
 	| "founding"
 	| "admin"
-	| "sponsored";
+	| "sponsored"
+	| "unclaimed";
 
 export type TierPill = { label: string; tone: TierTone };
 
@@ -420,8 +421,18 @@ export function tierPill(
 	now: number,
 	foundingRank?: number,
 	isAdmin = false,
+	/** A pre-built store nobody owns yet (docs/prebuilt-stores.md). */
+	unclaimed = false,
 ): TierPill {
 	if (isAdmin) return { label: "Admin", tone: "admin" };
+	// Before the comped branch, and that order is the whole point. A pre-built
+	// store runs on an `internal` comp while an admin builds it, so the comped
+	// branch would label it "Sponsored" — a word that is simply false (it is
+	// being set up, not sponsored) on a SELLER-FACING chip, which is the screen
+	// an admin shows the vendor during the handover demo. Same precedence the
+	// admin directory already uses (`sellerBucket` puts unclaimed above comped);
+	// this chip was the surface that missed it.
+	if (unclaimed) return { label: "Unclaimed", tone: "unclaimed" };
 	const fm = foundingRank ? `Founding #${foundingRank}` : null;
 	if (sub.comped)
 		return { label: fm ? `${fm} · Sponsored` : "Sponsored", tone: "sponsored" };

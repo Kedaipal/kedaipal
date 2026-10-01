@@ -1,6 +1,6 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import {
 	Award,
@@ -9,9 +9,11 @@ import {
 	Check,
 	CreditCard,
 	FilePlus2,
+	Hammer,
 	ImagePlus,
 	Landmark,
 	ListChecks,
+	Loader2,
 	ReceiptText,
 	RefreshCw,
 	Send,
@@ -54,6 +56,7 @@ import {
 import { Input } from "../components/ui/input";
 import { MyPhoneInput } from "../components/ui/my-phone-input";
 import { Skeleton } from "../components/ui/skeleton";
+import { useActAs } from "../hooks/useActAs";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import {
 	convexErrorMessage,
@@ -311,14 +314,34 @@ function AdminBillingOverview() {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Onboard a client on their behalf. A retailer is always owned 1:1 by the
- * client's own Clerk login — we can't create it *for* them without an orphaned,
- * un-loginable store. So instead the admin fills the details here and gets a
- * prefilled onboarding link to send; the client opens it, signs in once, and
- * confirms — the store is created under *their* account. After they confirm, they
- * appear in the Issue-invoice picker below. See docs/manual-subscription.md.
+ * Onboard a client, two ways — ONE card, because it is one decision made at one
+ * moment with the same facts, and splitting it into two cards would make an
+ * admin read both to find out which they wanted.
+ *
+ *  - **Send them a link** (the original): the admin fills the details and gets a
+ *    prefilled onboarding link to paste. The client opens it, signs in, and
+ *    confirms; the store is created under *their* login. Right whenever the
+ *    client can be trusted to finish a form.
+ *  - **Build it for them** (docs/prebuilt-stores.md): the store is created NOW,
+ *    owned by nobody, and the admin walks straight into it via act-as to add
+ *    products and settings. The vendor claims it later by signing up with the
+ *    handover email. This is the white-glove path for a high-value vendor who
+ *    should be handed a finished shop, not a form.
+ *
+ * The card's own copy used to assert the first was the only possibility ("we
+ * can't create it for them without an orphaned, un-loginable store"). That held
+ * until a store could be unclaimed rather than orphaned — a named state with a
+ * way out. See docs/manual-subscription.md + docs/prebuilt-stores.md.
  */
 function OnboardClientCard() {
+	// Which door. Held here rather than in the URL: it is a scratch choice
+	// inside one form, and nothing links to a half-filled card.
+	const [mode, setMode] = useState<"link" | "build">("link");
+	const navigate = useNavigate();
+	const { setActAs } = useActAs();
+	const createUnclaimedStore = useMutation(api.retailers.createUnclaimedStore);
+	const startActAsSession = useMutation(api.admin.startActAsSession);
+	const [building, setBuilding] = useState(false);
 	const [storeName, setStoreName] = useState("");
 	const [slug, setSlug] = useState("");
 	const [slugEdited, setSlugEdited] = useState(false);
@@ -338,7 +361,7 @@ function OnboardClientCard() {
 	// Mirror the onboarding form: derive the slug from the name until hand-edited,
 	// and check availability live so we never hand out a link to a taken slug.
 	const derivedSlug = slugEdited ? slug : slugify(storeName);
-	const availability = useSlugAvailability(derivedSlug);
+	const availability = useSlugAvailability(derivedSlug, "create");
 	const nameCheck = validateStoreName(storeName);
 
 	// Live email pre-check (debounced) — Clerk allows one account per email and
@@ -358,8 +381,50 @@ function OnboardClientCard() {
 	).data;
 	const emailTaken = emailCheck?.exists === true;
 
+	// Build mode REQUIRES the handover email. A store built with nobody named
+	// cannot be claimed by anyone, and "I'll set it later" is a thing an admin
+	// forgets — you are building this store FOR a specific person, so name them
+	// now (Zaki, 2 Oct). It stays CHANGEABLE afterwards (Manage → Handover
+	// email), which is what covers a typo; the server keeps accepting an absent
+	// one so an admin can deliberately park a handover whose deal fell through,
+	// and the directory shouts about that state in amber.
 	const ready =
-		nameCheck.ok && availability.status === "available" && !emailTaken;
+		nameCheck.ok &&
+		availability.status === "available" &&
+		!emailTaken &&
+		(mode === "link" || emailLooksValid);
+
+	/**
+	 * Create the store now and walk straight into it. The navigate is the
+	 * easement, not a flourish: an admin who clicks "Build it for them" is about
+	 * to add products, and making them find the new store in the directory first
+	 * would be a step with no purpose.
+	 */
+	async function handleBuild() {
+		if (!ready || building) return;
+		setBuilding(true);
+		try {
+			const result = await createUnclaimedStore({
+				storeName: storeName.trim(),
+				slug: derivedSlug,
+				waPhone: waPhone.trim() || undefined,
+				country,
+				pendingOwnerEmail: email.trim() || undefined,
+			});
+			setActAs(result.retailerId);
+			void startActAsSession({ retailerId: result.retailerId }).catch(() => {});
+			toast.success(`${storeName.trim()} created — you're in it now.`, {
+				description: email.trim()
+					? `Build it out, then they claim it by signing up with ${email.trim()}.`
+					: "Set a handover email from the seller directory when you know it.",
+			});
+			navigate({ to: "/app" });
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setBuilding(false);
+		}
+	}
 
 	const link =
 		typeof window === "undefined"
@@ -393,8 +458,54 @@ function OnboardClientCard() {
 			<AdminSectionHeading
 				icon={<UserPlus className="size-5" />}
 				title="Onboard a client"
-				description="Fill what you know, copy the invite link, and send it manually. They confirm under their own login before invoicing."
+				description={
+					mode === "link"
+						? "Fill what you know, copy the invite link, and send it manually. They confirm under their own login before invoicing."
+						: "Create the store now and set it up yourself. They claim it later by signing up with the handover email — no form for them to fill."
+				}
 			/>
+
+			{/* The mode picker sits FIRST because it changes what every field below
+			    means (the email is a send-to address in one mode and a handover
+			    target in the other). Each option states its consequence — an admin
+			    picking between two onboarding paths should not have to try one to
+			    find out what it does. */}
+			<fieldset className="flex flex-col gap-2">
+				<legend className="text-sm font-medium">How are they onboarding?</legend>
+				<div className="grid gap-2 sm:grid-cols-2">
+					{(
+						[
+							{
+								key: "link" as const,
+								title: "Send them a link",
+								hint: "They sign up and confirm the store under their own login.",
+							},
+							{
+								key: "build" as const,
+								title: "Build it for them",
+								hint: "You create it now and fill it in. They claim it when they sign up.",
+							},
+						]
+					).map((option) => (
+						<button
+							key={option.key}
+							type="button"
+							aria-pressed={mode === option.key}
+							onClick={() => setMode(option.key)}
+							className={`flex min-h-16 flex-col items-start gap-0.5 rounded-xl border px-4 py-3 text-left transition-colors ${
+								mode === option.key
+									? "border-accent bg-accent/10"
+									: "border-input bg-background hover:border-ring"
+							}`}
+						>
+							<span className="text-sm font-semibold">{option.title}</span>
+							<span className="text-xs text-muted-foreground">
+								{option.hint}
+							</span>
+						</button>
+					))}
+				</div>
+			</fieldset>
 
 			<label className="flex flex-col gap-1 text-sm font-medium">
 				Store name
@@ -475,9 +586,9 @@ function OnboardClientCard() {
 				</label>
 				<label className="flex flex-col gap-1 text-sm font-medium">
 					<span className="flex min-h-5 items-center gap-1">
-						Client email
+						{mode === "build" ? "Handover email" : "Client email"}
 						<span className="font-normal text-muted-foreground">
-							(to send to)
+							{mode === "build" ? "(required)" : "(to send to)"}
 						</span>
 					</span>
 					<Input
@@ -493,43 +604,78 @@ function OnboardClientCard() {
 							A store ({emailCheck?.storeName}) already uses this email. They
 							can't create a second one; it's one store per login.
 						</span>
+					) : mode === "build" ? (
+						<span className="text-xs text-muted-foreground">
+							The address they'll sign up with — that sign-in hands them the
+							store. You can change it later from Manage → Handover email.
+						</span>
 					) : null}
 				</label>
 			</div>
 
+			{/* Disabled-with-reason rather than hidden in build mode: an admin
+			    onboarding a founding vendor must be told WHY the toggle is
+			    unavailable and what to do instead, not left wondering where it
+			    went. A pre-built store reserves no rank at create — a slot held by
+			    a store that may never be claimed would eat one of ten — so the
+			    rank is claimed the ordinary way, by issuing the founding invoice
+			    after handover. */}
 			<label className="flex items-start gap-2.5 text-sm">
 				<input
 					type="checkbox"
-					checked={founding && foundingAvailable}
-					disabled={!foundingAvailable}
+					checked={mode === "link" && founding && foundingAvailable}
+					disabled={!foundingAvailable || mode === "build"}
 					onChange={(e) => setFounding(e.target.checked)}
 					className="mt-0.5 size-4 disabled:opacity-50"
 				/>
 				<span>
 					<span className="font-medium">Founding Member</span>
 					<span className="block text-xs text-muted-foreground">
-						{foundingAvailable
-							? `Reserves a founding rank + the lifetime discount. Starts on the normal 14-day trial; Pro begins once they pay the founding invoice. ${spotsRemaining}/10 spots left.`
-							: "All 10 founding spots are taken."}
+						{mode === "build"
+							? "Not set at build time — a pre-built store holds no founding rank. Issue them a founding invoice after they claim it."
+							: foundingAvailable
+								? `Reserves a founding rank + the lifetime discount. Starts on the normal 14-day trial; Pro begins once they pay the founding invoice. ${spotsRemaining}/10 spots left.`
+								: "All 10 founding spots are taken."}
 					</span>
 				</span>
 			</label>
 
-			{ready && link ? (
+			{mode === "link" && ready && link ? (
 				<div className="flex flex-col gap-2 rounded-xl border border-dashed border-border bg-muted/30 p-3">
 					<p className="break-all font-mono text-xs text-muted-foreground">
 						{link}
 					</p>
 				</div>
 			) : null}
+			{/* What happens the moment they tap it — a create that also drops them
+			    into act-as is a bigger jump than a copy, so it is written down
+			    before the click rather than discovered after. */}
+			{mode === "build" ? (
+				<p className="text-xs text-muted-foreground">
+					Creating it opens the store straight away in act-as mode so you can
+					add products. Nothing is billed and it stays off
+					kedaipal.com/stores until they claim it — their 14-day free period
+					starts the day they do.
+				</p>
+			) : null}
 
 			<Button
 				type="button"
-				onClick={handleCopy}
-				disabled={!ready}
+				onClick={mode === "build" ? () => void handleBuild() : handleCopy}
+				disabled={!ready || building}
 				className="h-11 lg:w-auto lg:self-start lg:px-6"
 			>
-				{copied ? (
+				{mode === "build" ? (
+					building ? (
+						<>
+							<Loader2 className="size-4 animate-spin" /> Creating…
+						</>
+					) : (
+						<>
+							<Hammer className="size-4" /> Create store &amp; start setting up
+						</>
+					)
+				) : copied ? (
 					<>
 						<Check className="size-4" /> Copied
 					</>
@@ -539,6 +685,20 @@ function OnboardClientCard() {
 					</>
 				)}
 			</Button>
+			{/* Disabled-with-reason — the button above goes quiet on an invalid
+			    name/slug or a taken email, and the three reasons are not the same
+			    fix. */}
+			{!ready ? (
+				<p className="text-xs text-muted-foreground">
+					{!nameCheck.ok
+						? "Enter a store name first."
+						: emailTaken
+							? "That email already runs a store — use a different one."
+							: availability.status !== "available"
+								? "Pick a store link that's available."
+								: "Add the handover email — nobody can claim the store without it."}
+				</p>
+			) : null}
 		</AdminCard>
 	);
 }

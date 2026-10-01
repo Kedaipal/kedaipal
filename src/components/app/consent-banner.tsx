@@ -21,11 +21,26 @@ export function ConsentBanner({
 }) {
 	const recordConsent = useMutation(api.retailers.recordConsentAcceptance);
 	const [submitting, setSubmitting] = useState(false);
-	// Terms bind the ACCOUNT HOLDER — a team member can't accept them for the
-	// store (the server refuses by construction), so don't show them the ask.
+	// Terms bind the ACCOUNT HOLDER, so ONLY THE OWNER is ever asked.
+	//
+	// This used to exclude members alone, which left two ways to be shown an ask
+	// you must not answer — both found in the 2 Oct hands-on test:
+	//
+	//  - an ADMIN in act-as sees the banner for the SELLER's stale consent, but
+	//    `recordConsentAcceptance` resolves `by_user` on the CALLER, so the
+	//    click re-stamps the admin's OWN store and the banner never clears
+	//    (verified: IndoMart's termsAcceptedAt moved, the acted-on store's did
+	//    not, and the button sat on "Saving…" forever);
+	//  - a PRE-BUILT store (docs/prebuilt-stores.md) has no consent stamps by
+	//    design — the vendor accepts at the claim — so the banner fires on every
+	//    page of every store being built, asking an admin to agree to the terms
+	//    on behalf of someone who has not seen them.
+	//
+	// Owner-only closes both, and closes them the way the server already works
+	// rather than by naming each case.
 	const role = useStoreRole();
 
-	if (role === "member") return null;
+	if (role !== "owner") return null;
 	if (!consentIsStale(versions)) return null;
 
 	async function handleAccept() {

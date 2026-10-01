@@ -85,6 +85,14 @@ login or screen-share, neither of which scales.
      status — never a collect over a store's billing history) and
      `lastActAsAt`. No schema change. Absent facts stay absent and the UI says
      so ("No email on file", "Never paid", "Never") rather than leaving a blank.
+   - **Unclaimed stores** (docs/prebuilt-stores.md): a store an admin built
+     before the vendor had an account shows an **Unclaimed** chip (straight
+     after Past due — both are buckets where Kedaipal owes an action), the
+     handover address in place of a login email, and **Set handover email** in
+     the Manage menu. The chip outranks `comped`/`admin` in `sellerBucket`
+     because a pre-built store always carries the `internal` setup comp, and
+     filing it under "Comped" would hide every half-finished handover inside
+     the sponsored-deals bucket.
 2. **Act-as context** — selecting a seller renders the ordinary dashboard against that
    `retailerId`. All reads/writes target it; the admin identity is the actor on every write;
    a persistent **"Acting as {store} — admin"** banner shows across every screen with a
@@ -115,6 +123,13 @@ inlined ~15× in `orders.ts`. These were centralised into **`convex/lib/auth.ts`
 Admins are the same env allowlist as billing (`ADMIN_USER_IDS`, via `isAdmin` / `requireAdmin`
 in `convex/lib/auth.ts`) — **not** a DB field, **not** a Clerk role (yet). The client
 `amIAdmin` check is cosmetic; the real gate is always server-side.
+
+Because the admin branch of `resolveAccessForIdentity` never looks at WHO owns
+the store, act-as works unchanged on a store that has **no owner at all** — the
+whole reason pre-built stores (docs/prebuilt-stores.md) needed no changes here.
+The act-as banner does distinguish them: "Admin · **building** {store}" with a
+hammer, rather than "acting as" with an alarm, because the warning inverts
+(nobody's shop yet vs. someone's real shop).
 
 ### Subscription soft-lock bypass
 

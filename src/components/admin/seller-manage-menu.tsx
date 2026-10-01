@@ -15,6 +15,7 @@ import {
 	Megaphone,
 	Store,
 	Trash2,
+	UserPlus,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -24,6 +25,7 @@ import { HIDDEN_NOTE_MAX } from "../../../convex/lib/marketplaceListing";
 import { useActAs } from "../../hooks/useActAs";
 import {
 	highlightedThroughLabel,
+	sellerCompMenuItem,
 	sellerHighlight,
 } from "../../lib/admin-seller-view";
 import { convexErrorMessage, formatShortDate } from "../../lib/format";
@@ -37,6 +39,7 @@ import {
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { CompDialog } from "./comp-dialog";
+import { HandoverDialog } from "./handover-dialog";
 import { HighlightDialog } from "./highlight-dialog";
 
 /**
@@ -94,6 +97,10 @@ export function SellerManageMenu({
 	const [purgeOpen, setPurgeOpen] = useState(false);
 	const [hideOpen, setHideOpen] = useState(false);
 	const [compOpen, setCompOpen] = useState(false);
+	const [handoverOpen, setHandoverOpen] = useState(false);
+	// Title/subtitle/tone for the comp item — one pure author in
+	// admin-seller-view.ts, where the row's other derived sentences live.
+	const compItem = sellerCompMenuItem(seller);
 	const [highlightOpen, setHighlightOpen] = useState(false);
 	// Where the store stands on Store highlights — the item says it before the
 	// dialog opens: why it's on (paid window / comp), or why it can't be.
@@ -237,8 +244,53 @@ export function SellerManageMenu({
 							</span>
 						</DropdownMenuItem>
 					) : null}
+					{/* Only on a pre-built store, and placed before the commercial
+					    items: for an unclaimed store the open question is WHO it is
+					    for, not what it costs. Absent once claimed rather than
+					    disabled — ownership moves exactly once, so a permanently
+					    greyed row would sit on every ordinary store forever saying
+					    nothing (docs/prebuilt-stores.md). */}
+					{seller.unclaimed ? (
+						<DropdownMenuItem
+							onSelect={() => setHandoverOpen(true)}
+							className="items-start"
+						>
+							<UserPlus
+								className={cn(
+									"mt-0.5 size-4",
+									seller.pendingOwnerEmail
+										? "text-muted-foreground"
+										: "text-amber-600 dark:text-amber-400",
+								)}
+								aria-hidden="true"
+							/>
+							<span className="flex min-w-0 flex-col">
+								<span className="font-medium">
+									{seller.pendingOwnerEmail
+										? "Handover email — set"
+										: "Set handover email"}
+								</span>
+								<span className="text-xs text-muted-foreground">
+									{seller.pendingOwnerEmail
+										? `Waiting for ${seller.pendingOwnerEmail} to sign up`
+										: "Nobody can claim this store until you name their email"}
+								</span>
+							</span>
+						</DropdownMenuItem>
+					) : null}
 					{/* Disabled-with-reason IN the item — a disabled menu row can't
-					    show a hover title, so the reason is the subtitle. */}
+					    show a hover title, so the reason is the subtitle.
+
+					    A pre-built store is ALWAYS comped (the `internal` comp keeps
+					    it unbilled while an admin builds it), so the plain comped
+					    copy called that scaffolding a "sponsorship" and offered to
+					    "turn it off" — the same lie the Sponsored pill told before
+					    `tierPill` learned about unclaimed stores, on the one surface
+					    that still believed it (2 Oct). It stays ENABLED rather than
+					    disabled: setting a REAL partner/sponsor comp before handover
+					    is supported and survives the claim
+					    (`startFreePeriodOnClaim`), so refusing here would block a
+					    flow we deliberately kept. */}
 					<DropdownMenuItem
 						onSelect={() => setCompOpen(true)}
 						disabled={seller.ownerIsAdmin}
@@ -247,22 +299,16 @@ export function SellerManageMenu({
 						<Gift
 							className={cn(
 								"mt-0.5 size-4",
-								seller.comped
+								compItem.sponsored
 									? "text-violet-600 dark:text-violet-300"
 									: "text-muted-foreground",
 							)}
 							aria-hidden="true"
 						/>
 						<span className="flex min-w-0 flex-col">
-							<span className="font-medium">
-								{seller.comped ? "Comp upgrade — on" : "Turn on comp upgrade"}
-							</span>
+							<span className="font-medium">{compItem.title}</span>
 							<span className="text-xs text-muted-foreground">
-								{seller.ownerIsAdmin
-									? "Admin store — always free already"
-									: seller.comped
-										? "Edit the sponsorship or turn it off"
-										: "Every feature, no limits, never billed"}
+								{compItem.hint}
 							</span>
 						</span>
 					</DropdownMenuItem>
@@ -339,6 +385,12 @@ export function SellerManageMenu({
 					) : null}
 				</DropdownMenuContent>
 			</DropdownMenu>
+			{handoverOpen ? (
+				<HandoverDialog
+					seller={seller}
+					onClose={() => setHandoverOpen(false)}
+				/>
+			) : null}
 			{compOpen ? (
 				<CompDialog seller={seller} onClose={() => setCompOpen(false)} />
 			) : null}
