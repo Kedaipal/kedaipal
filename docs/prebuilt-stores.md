@@ -250,6 +250,20 @@ claimedAt` was exactly 14 days — but the screens around it were not:
   deliberately park a handover whose deal fell through — the directory shows
   that state in amber.
 
+**Two more from the admin run.** The seats cell read "No team yet" in a column
+sized for "1/3" and wrapped to three lines, so the COLUMN value is now "None"
+(the "Seats" header already supplies the noun) while the mobile card, which
+inlines it with no header, keeps "No team yet" — which is exactly why
+`sellerSeatsLabel` and `sellerSeatsPhrase` are separate. And the Manage menu
+still called the setup comp a sponsorship: a pre-built store is ALWAYS comped,
+so the ordinary comped copy offered to "edit the sponsorship or turn it off"
+for scaffolding. It now reads **"Comp upgrade — setup only"** and explains that
+it ends at the claim. The item stays ENABLED, because pre-comping a real
+partner deal before handover is supported and survives the claim — that case
+keeps the ordinary copy. The decision lives in `sellerCompMenuItem`
+(`admin-seller-view.ts`) beside the row's other derived sentences, so it is
+testable rather than buried in a dropdown.
+
 ### Which email is which
 
 Three different addresses, and only one of them is ever a key:

@@ -484,12 +484,15 @@ export function highlightedThroughLabel(until: number): string {
  *
  * A pre-built store has no owner and no team, so a ratio would be a count of
  * nobody — "0/3" is true and still reads like a store that LOST its people
- * rather than one that hasn't got them yet. It names the thing ("No team yet")
- * because the card inlines it after the billing rail, where a bare "No one
- * yet" leaves the reader asking "no one yet… what?".
+ * rather than one that hasn't got them yet.
+ *
+ * SHORT, because this value lands in a column sized for "1/3" — "No team yet"
+ * wrapped to THREE lines in the table (seen 2 Oct). Under a "Seats" header the
+ * noun is already supplied, so "None" says the whole thing. The card, which
+ * inlines it with no header, keeps the longer phrase below.
  */
 export function sellerSeatsLabel(row: AdminSellerRow): string {
-	if (row.unclaimed) return "No team yet";
+	if (row.unclaimed) return "None";
 	const cap = row.seats.capUnlimited ? "∞" : String(row.seats.cap);
 	const base = `${row.seats.active}/${cap}`;
 	return row.seats.invited > 0
@@ -499,7 +502,8 @@ export function sellerSeatsLabel(row: AdminSellerRow): string {
 
 /**
  * The seat phrase for the mobile card, which inlines it in a sentence rather
- * than under a label — "1/3 seats", but "No team yet" on its own.
+ * than under a label — "1/3 seats", but "No team yet" on its own, because a
+ * bare "None" mid-sentence leaves the reader asking "none of what?".
  *
  * Its own function because the card used to append the noun to whatever
  * `sellerSeatsLabel` returned, which read "No one yet seats" the moment the
@@ -507,8 +511,57 @@ export function sellerSeatsLabel(row: AdminSellerRow): string {
  * to remember not to; give it a value it never has to finish.
  */
 export function sellerSeatsPhrase(row: AdminSellerRow): string {
-	const label = sellerSeatsLabel(row);
-	return row.unclaimed ? label : `${label} seats`;
+	return row.unclaimed ? "No team yet" : `${sellerSeatsLabel(row)} seats`;
+}
+
+/**
+ * The Manage menu's comp item — its title, its subtitle, and whether the icon
+ * should read as a live sponsorship.
+ *
+ * Here rather than inline in the menu because it is the same kind of derived
+ * fact as `sellerRail` and `sellerReason`: a sentence about a row that has to
+ * be right, and that a test can hold. The case it exists for is the one the
+ * menu got wrong — a PRE-BUILT store is always comped (the `internal` comp
+ * keeps it unbilled while an admin builds it), so the ordinary comped copy
+ * called that scaffolding a "sponsorship" and offered to turn it off.
+ *
+ * A REAL comp on an unclaimed store is NOT scaffolding: an admin pre-comping a
+ * partner ahead of handover is supported, and that comp survives the claim, so
+ * it keeps the ordinary copy.
+ */
+export function sellerCompMenuItem(row: AdminSellerRow): {
+	title: string;
+	hint: string;
+	/** Violet (a live sponsorship) vs muted (setup, or nothing yet). */
+	sponsored: boolean;
+} {
+	const setup = row.unclaimed && row.comp?.kind === "internal";
+	if (row.ownerIsAdmin) {
+		return {
+			title: row.comped ? "Comp upgrade — on" : "Turn on comp upgrade",
+			hint: "Admin store — always free already",
+			sponsored: false,
+		};
+	}
+	if (setup) {
+		return {
+			title: "Comp upgrade — setup only",
+			hint: "Keeps this store unbilled while you build it, and ends when they claim it. Set a partner or sponsor comp here if the deal has one.",
+			sponsored: false,
+		};
+	}
+	if (row.comped) {
+		return {
+			title: "Comp upgrade — on",
+			hint: "Edit the sponsorship or turn it off",
+			sponsored: true,
+		};
+	}
+	return {
+		title: "Turn on comp upgrade",
+		hint: "Every feature, no limits, never billed",
+		sponsored: false,
+	};
 }
 
 export function sellerPlanLabel(row: AdminSellerRow): string {

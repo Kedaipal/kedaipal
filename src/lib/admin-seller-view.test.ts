@@ -15,6 +15,7 @@ import {
 	matchesSellerSearch,
 	SELLER_FILTERS,
 	sellerBucket,
+	sellerCompMenuItem,
 	sellerExpiry,
 	sellerPlanLabel,
 	sellerRail,
@@ -589,7 +590,9 @@ describe("a pre-built store reads as unclaimed everywhere (docs/prebuilt-stores.
 		// Caught by RENDERING the directory card, not by reading the code: the
 		// owner is an implicit +1 in `listSellersForAdmin`, and an unclaimed
 		// store has no owner to count.
-		expect(sellerSeatsLabel(waiting)).toBe("No team yet");
+		// The COLUMN value is short — it lands under a "Seats" header in a cell
+		// sized for "1/3", where "No team yet" wrapped to three lines.
+		expect(sellerSeatsLabel(waiting)).toBe("None");
 		expect(sellerSeatsLabel(row())).toBe("1/3");
 		// The card inlines it in prose and used to append the noun itself, which
 		// read "No one yet seats" — found by rendering the card, not by reading.
@@ -597,7 +600,49 @@ describe("a pre-built store reads as unclaimed everywhere (docs/prebuilt-stores.
 		expect(sellerSeatsPhrase(row())).toBe("1/3 seats");
 		expect(
 			sellerSummaryText(waiting, "https://kedaipal.com", NOW),
-		).toContain("Seats: No team yet");
+		).toContain("Seats: None");
+	});
+
+	it("the Manage menu calls the setup comp what it is, not a sponsorship", () => {
+		// A pre-built store is ALWAYS comped — the `internal` comp keeps it
+		// unbilled while an admin builds it — so the ordinary comped copy
+		// described that scaffolding as a sponsorship and offered to turn it
+		// off. Same lie the Sponsored pill told, on the surface that still
+		// believed it (found by opening the menu, 2 Oct).
+		const item = sellerCompMenuItem(waiting);
+		expect(item.title).toBe("Comp upgrade — setup only");
+		expect(item.hint).toMatch(/ends when they claim it/i);
+		expect(item.hint).not.toMatch(/sponsorship/i);
+		// Muted, not violet: violet is the live-sponsorship colour.
+		expect(item.sponsored).toBe(false);
+	});
+
+	it("but a REAL comp on an unclaimed store keeps the sponsorship copy", () => {
+		// Pre-comping a partner ahead of handover is supported and survives the
+		// claim (startFreePeriodOnClaim), so it must not be relabelled as setup.
+		const partner = row({
+			unclaimed: true,
+			comped: true,
+			comp: { kind: "partner", grantedAt: at(-1) },
+		});
+		const item = sellerCompMenuItem(partner);
+		expect(item.title).toBe("Comp upgrade — on");
+		expect(item.hint).toMatch(/sponsorship/i);
+		expect(item.sponsored).toBe(true);
+	});
+
+	it("an ordinary comped store and an admin store are untouched", () => {
+		expect(sellerCompMenuItem(row({ comped: true }))).toMatchObject({
+			title: "Comp upgrade — on",
+			sponsored: true,
+		});
+		expect(sellerCompMenuItem(row())).toMatchObject({
+			title: "Turn on comp upgrade",
+			sponsored: false,
+		});
+		expect(sellerCompMenuItem(row({ ownerIsAdmin: true }))).toMatchObject({
+			hint: "Admin store — always free already",
+		});
 	});
 
 	it("once claimed it reads like any other seller again", () => {
