@@ -123,7 +123,9 @@ describe("TeamTab states", () => {
 		expect(screen.getByText("3 of 3 seats used")).toBeTruthy();
 		const button = screen.getByText("Send invitation").closest("button");
 		expect(button?.disabled).toBe(true);
-		expect(screen.getByText(/All 3 seats are in use/)).toBeTruthy();
+		expect(
+			screen.getByText(/All 3 seats are in use/),
+		).toBeTruthy();
 	});
 
 	it("member view: read-only list with Leave, no invite form, colleagues masked", () => {
@@ -231,7 +233,9 @@ describe("TeamTab states", () => {
 			],
 		});
 		mount();
-		expect(screen.getByText(/Invitation expired — resend/)).toBeTruthy();
+		expect(
+			screen.getByText(/Invitation expired — resend/),
+		).toBeTruthy();
 	});
 
 	it("preset picker prefills the matrix and reports the active preset", () => {

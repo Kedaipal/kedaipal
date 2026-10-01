@@ -14,8 +14,8 @@
 import {
 	type AnnualQuote,
 	annualQuote,
-	BILLING_CURRENCIES,
 	type BillingCurrency,
+	BILLING_CURRENCIES,
 	DEFAULT_BILLING_CURRENCY,
 	type Plan,
 } from "../../convex/lib/plans";
@@ -181,10 +181,7 @@ export function resolveAnnualOffer(input: {
 	const pendingInvoice = invoices.find((i) => i.status === "pending");
 
 	if (pendingInvoice?.billingCycle === "annual")
-		return {
-			kind: "pendingAnnual",
-			invoiceNumber: pendingInvoice.invoiceNumber,
-		};
+		return { kind: "pendingAnnual", invoiceNumber: pendingInvoice.invoiceNumber };
 
 	if (sub.billingCycle === "annual")
 		return { kind: "onAnnual", plan: sub.plan, renewsAt: sub.currentPeriodEnd };

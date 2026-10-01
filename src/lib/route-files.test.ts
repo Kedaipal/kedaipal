@@ -28,9 +28,7 @@ const VITE_CONFIG = join(__dirname, "../../vite.config.ts");
 /** The pattern as the generator builds it: matched against the BASENAME. */
 function configuredIgnoreRegExp(): RegExp {
 	const source = readFileSync(VITE_CONFIG, "utf8");
-	const declared = source.match(
-		/routeFileIgnorePattern:\s*"((?:[^"\\]|\\.)*)"/,
-	);
+	const declared = source.match(/routeFileIgnorePattern:\s*"((?:[^"\\]|\\.)*)"/);
 	expect(
 		declared,
 		"vite.config.ts declares no routeFileIgnorePattern — a route test would warn on every dev boot",

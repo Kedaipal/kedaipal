@@ -12,15 +12,12 @@ describe("statusTone", () => {
 		expect(statusTone("APPROVED")).toBe("ok");
 	});
 
-	test.each([
-		"PAUSED",
-		"DISABLED",
-		"REJECTED",
-		"PENDING_DELETION",
-		"FLAGGED",
-	])("%s is red — every send naming the template fails", (status) => {
-		expect(statusTone(status)).toBe("bad");
-	});
+	test.each(["PAUSED", "DISABLED", "REJECTED", "PENDING_DELETION", "FLAGGED"])(
+		"%s is red — every send naming the template fails",
+		(status) => {
+			expect(statusTone(status)).toBe("bad");
+		},
+	);
 
 	test("an in-flight status is amber, not green or red", () => {
 		expect(statusTone("PENDING")).toBe("warn");
@@ -33,13 +30,12 @@ describe("statusTone", () => {
 });
 
 describe("categoryTone — the 6.1× question", () => {
-	test.each([
-		"UTILITY",
-		"AUTHENTICATION",
-		"SERVICE",
-	])("%s is low-rate, so green", (category) => {
-		expect(categoryTone(category)).toBe("ok");
-	});
+	test.each(["UTILITY", "AUTHENTICATION", "SERVICE"])(
+		"%s is low-rate, so green",
+		(category) => {
+			expect(categoryTone(category)).toBe("ok");
+		},
+	);
 
 	test("MARKETING is red", () => {
 		expect(categoryTone("MARKETING")).toBe("bad");

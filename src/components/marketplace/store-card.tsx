@@ -58,6 +58,18 @@ export function FoundingEmblemInline({
 	);
 }
 
+/**
+ * The directory's one hover/focus treatment for a CARD (z8r3fdkmyp): a 2px
+ * lift, the border warming to mint, and a soft mint glow beneath — enough to
+ * say "this is the one you're on", quiet enough to scan past. Shared by the
+ * grid card, the highlight card and the Founding card so the page has one
+ * feel. Keyboard focus gets the same lift plus a ring (not hover-only). Pointer
+ * `hover:` only fires on hover-capable devices, so touch never sticks lifted;
+ * reduced-motion drops the movement and keeps the colour.
+ */
+export const CARD_INTERACTION_CLASS =
+	"transition-[translate,box-shadow,border-color] duration-200 ease-out hover:-translate-y-0.5 hover:border-accent/50 hover:shadow-[0_12px_30px_-12px_color-mix(in_oklab,var(--accent)_45%,transparent)] focus-visible:-translate-y-0.5 focus-visible:border-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-accent/25 motion-reduce:transition-[box-shadow,border-color] motion-reduce:hover:translate-y-0 motion-reduce:focus-visible:translate-y-0";
+
 /** "New" chip — mint tint, mirrors the storefront's accent chip language. */
 function NewChip() {
 	return (
@@ -76,9 +88,13 @@ function NewChip() {
 export function StoreStatusLine({
 	card,
 	now,
+	showArea = true,
 }: {
 	card: MarketplaceStoreCard;
 	now: number;
+	/** Off where the card already names the area elsewhere (the highlight
+	 * card prints it under the store name) — saying it twice only crowds. */
+	showArea?: boolean;
 }) {
 	const status = cardOpenStatus(card, now);
 	return (
@@ -98,7 +114,7 @@ export function StoreStatusLine({
 				}`}
 			>
 				{status.label}
-				{card.storeArea ? (
+				{showArea && card.storeArea ? (
 					<span className="font-normal text-muted-foreground">
 						{" · "}
 						{card.storeArea}
@@ -134,7 +150,7 @@ export function StoreCard({
 			<Link
 				to="/$slug"
 				params={{ slug: card.slug }}
-				className="flex min-h-[44px] items-center gap-3 px-5 py-3.5 transition-colors hover:bg-muted/40 lg:px-8"
+				className="group flex min-h-[44px] items-center gap-3 px-5 py-3.5 transition-colors hover:bg-accent/5 focus-visible:bg-accent/5 focus-visible:outline-none lg:px-8"
 			>
 				<StoreLogoTile
 					storeName={card.storeName}
@@ -150,7 +166,10 @@ export function StoreCard({
 					) : null}
 					<StoreStatusLine card={card} now={now} />
 				</span>
-				<ChevronRight aria-hidden className="size-4 shrink-0 text-border" />
+				<ChevronRight
+					aria-hidden
+					className="size-4 shrink-0 text-border transition-[translate,color] group-hover:translate-x-0.5 group-hover:text-accent-emphasis motion-reduce:transition-none"
+				/>
 			</Link>
 		);
 	}
@@ -159,7 +178,7 @@ export function StoreCard({
 		<Link
 			to="/$slug"
 			params={{ slug: card.slug }}
-			className="flex flex-col gap-2.5 rounded-2xl border border-border bg-card p-4 transition-shadow hover:shadow-md"
+			className={`flex flex-col gap-2.5 rounded-2xl border border-border bg-card p-4 ${CARD_INTERACTION_CLASS}`}
 		>
 			<span className="flex items-center gap-2.5">
 				<StoreLogoTile

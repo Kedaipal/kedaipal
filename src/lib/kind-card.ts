@@ -32,7 +32,6 @@ export type KindCard = (typeof KIND_CARDS)[number];
  * a hand-typed value can never select something step 0 doesn't render. */
 export function isKindCard(value: unknown): value is KindCard {
 	return (
-		typeof value === "string" &&
-		(KIND_CARDS as readonly string[]).includes(value)
+		typeof value === "string" && (KIND_CARDS as readonly string[]).includes(value)
 	);
 }

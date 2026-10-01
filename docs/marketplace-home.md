@@ -104,6 +104,35 @@ fallback), `FoundingShelf`. Logo tiles reuse `StoreLogoTile` (new `card`
 size). `storeArea` (new optional profile field, ≤ 40 chars, Settings card) is
 the card's one geographic hint — the profile has no city field.
 
+## How buyers reach `/stores`
+
+- **Storefront footer** — "Discover more stores on Kedaipal →" above the
+  Powered-by badge (`StorefrontFooter discover`). Opt-in per page and ON only
+  where a buyer is browsing: store home, category, product, and the
+  store-not-found dead end. Never at checkout, a claim or an order page.
+  Hidden for a store that opted out (`marketplaceUnlisted` rides the by-slug
+  payload — public-safe). **Deliberately NOT a Kedaipal logo top-left**
+  (considered, 1 Oct 2026): the top of a storefront is the seller's brand,
+  and a header logo would walk a seller's own buyers to competitors — and to
+  paid highlights — before they've bought.
+- **Landing** — a "Browse their stores →" link on the Real-sellers proof
+  section (the landing's one buyer-shaped door; the hero stays the seller
+  pitch), and a footer **Explore** column (Browse stores · Blog). Both also
+  in the mobile menu. **Not in the desktop nav bar**: it's capped at
+  `max-w-5xl`, and measured in Bahasa two more links squeezed the logo to its
+  mark at every width — the crowding that already moved `/cost` out. The
+  blog URL lives in `src/lib/site-links.ts`.
+
+## Card interaction
+
+One hover/focus treatment for every card on the page (`CARD_INTERACTION_CLASS`
+in `store-card.tsx`): a 2px lift, mint border, soft mint glow; keyboard focus
+gets the same plus a ring. `hover:` only fires on hover-capable devices, and
+reduced-motion keeps the colour but drops the lift. Mobile list rows tint
+mint and nudge the chevron instead. Note for v4: the lift is the `translate`
+property, so an arbitrary transition list must name `translate`, not
+`transform`.
+
 ## Payload safety
 
 `MarketplaceStoreCard` is card fields ONLY — no `_id`, no contact numbers, no

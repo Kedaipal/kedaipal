@@ -72,10 +72,7 @@ describe("lalamoveSurface", () => {
 
 	it("hides in an unsupported country, unless a rider is still out", () => {
 		expect(
-			lalamoveSurface(
-				order(),
-				lalamove({ blockReason: "country_unsupported" }),
-			),
+			lalamoveSurface(order(), lalamove({ blockReason: "country_unsupported" })),
 		).toBe("none");
 		expect(
 			lalamoveSurface(
@@ -179,9 +176,9 @@ describe("no dispatch card on a booking", () => {
 		// Both already declined a booking via `deliveryMethod !== "delivery"`;
 		// this pins that the shared predicate kept that behaviour, so the hub
 		// can guard on it without changing what the cards decide.
-		expect(
-			lalamoveSurface(order({ deliveryMethod: "booking" }), lalamove()),
-		).toBe("none");
+		expect(lalamoveSurface(order({ deliveryMethod: "booking" }), lalamove())).toBe(
+			"none",
+		);
 		expect(delyvaSurface(order({ deliveryMethod: "booking" }), delyva())).toBe(
 			"none",
 		);

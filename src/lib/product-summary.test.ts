@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
 	describeProduct,
 	isSecurityDepositInRange,
-	type SummaryInput,
 	securityDepositRangeMessage,
+	type SummaryInput,
 	weekendRateConsequence,
 } from "./product-summary";
 
@@ -230,9 +230,7 @@ describe("describeProduct — weekend rate (S13)", () => {
 				},
 				"MYR",
 			),
-		).toBe(
-			"Booking · 5 spots/night · RM\u00a080/night · RM\u00a0120 Fri & Sat",
-		);
+		).toBe("Booking · 5 spots/night · RM\u00a080/night · RM\u00a0120 Fri & Sat");
 	});
 
 	it("a package never shows it — one flat price", () => {
@@ -270,11 +268,7 @@ describe("describeProduct — weekend rate (S13)", () => {
 			describeProduct(
 				{
 					...base,
-					booking: {
-						capacityPerNight: "1",
-						weekendPrice: "120",
-						weekendDays: [],
-					},
+					booking: { capacityPerNight: "1", weekendPrice: "120", weekendDays: [] },
 				},
 				"MYR",
 			),
@@ -347,8 +341,8 @@ describe("describeProduct — a package names its UNIT (hotfix to #280)", () => 
 				},
 				"MYR",
 			),
-			// The strip wears the store's symbol — this case once pinned the raw
-			// ISO code ("MYR 100/month") as correct.
+		// The strip wears the store's symbol — this case once pinned the raw
+		// ISO code ("MYR 100/month") as correct.
 		).toBe("Booking · 1-month package · 1 at a time · RM 100/month");
 	});
 
@@ -456,20 +450,8 @@ describe("describeProduct — an SG store reads S$, never SGD", () => {
 			{
 				options: [{ name: "Size", values: ["S", "L"] }],
 				rows: [
-					{
-						optionValues: ["S"],
-						price: "12",
-						active: true,
-						blockWhenOutOfStock: true,
-						requiresProof: false,
-					},
-					{
-						optionValues: ["L"],
-						price: "28.50",
-						active: true,
-						blockWhenOutOfStock: true,
-						requiresProof: false,
-					},
+					{ optionValues: ["S"], price: "12", active: true, blockWhenOutOfStock: true, requiresProof: false },
+					{ optionValues: ["L"], price: "28.50", active: true, blockWhenOutOfStock: true, requiresProof: false },
 				],
 				customLine: null,
 			},

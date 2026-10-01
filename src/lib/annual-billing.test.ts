@@ -91,9 +91,7 @@ describe("resolveAnnualOffer — who sees the switch", () => {
 	});
 
 	it("hides from a comped account — nothing is billed to switch", () => {
-		expect(resolve({ subscription: sub({ comped: true }) }).kind).toBe(
-			"hidden",
-		);
+		expect(resolve({ subscription: sub({ comped: true }) }).kind).toBe("hidden");
 	});
 
 	it("hides with no subscription at all", () => {
@@ -101,13 +99,12 @@ describe("resolveAnnualOffer — who sees the switch", () => {
 		expect(resolve({ subscription: undefined }).kind).toBe("hidden");
 	});
 
-	it.each([
-		"trialing",
-		"past_due",
-		"cancelled",
-	] as const)("hides while %s — that seller has a more urgent card on this page", (status) => {
-		expect(resolve({ subscription: sub({ status }) }).kind).toBe("hidden");
-	});
+	it.each(["trialing", "past_due", "cancelled"] as const)(
+		"hides while %s — that seller has a more urgent card on this page",
+		(status) => {
+			expect(resolve({ subscription: sub({ status }) }).kind).toBe("hidden");
+		},
+	);
 });
 
 describe("resolveAnnualOffer — the proven-payer gate", () => {
@@ -222,9 +219,9 @@ describe("resolveAnnualOffer — already on annual", () => {
 	});
 
 	it("treats a missing cycle as monthly, never as annual", () => {
-		expect(
-			resolve({ subscription: sub({ billingCycle: undefined }) }).kind,
-		).toBe("offer");
+		expect(resolve({ subscription: sub({ billingCycle: undefined }) }).kind).toBe(
+			"offer",
+		);
 	});
 });
 

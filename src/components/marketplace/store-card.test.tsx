@@ -10,6 +10,7 @@ import {
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { MarketplaceStoreCard } from "../../../convex/marketplace";
+import { SponsoredCard } from "./sponsored-card";
 import { StoreCard } from "./store-card";
 
 afterEach(cleanup);
@@ -36,11 +37,18 @@ function card(overrides: Partial<MarketplaceStoreCard>): MarketplaceStoreCard {
  * genuine href is the assertion that buyers (and crawlers) can follow it.
  * Mirrors `storefront/product-card.test.tsx`.
  */
-function renderCard(c: MarketplaceStoreCard, variant: "row" | "grid" = "row") {
+function renderCard(
+	c: MarketplaceStoreCard,
+	variant: "row" | "grid" | "highlight" = "row",
+) {
 	const rootRoute = createRootRoute({
 		component: () => (
 			<>
-				<StoreCard card={c} variant={variant} now={NOW} />
+				{variant === "highlight" ? (
+					<SponsoredCard card={c} now={NOW} />
+				) : (
+					<StoreCard card={c} variant={variant} now={NOW} />
+				)}
 				<Outlet />
 			</>
 		),
@@ -96,5 +104,22 @@ describe("StoreCard states", () => {
 		renderCard(card({}), "grid");
 		expect(await screen.findByText("Kedai X")).toBeTruthy();
 		expect(screen.getByText(/Open now/)).toBeTruthy();
+	});
+});
+
+describe("SponsoredCard (Store highlights)", () => {
+	it("carries the Sponsored label and names the area ONCE — never beside Visit store", async () => {
+		renderCard(
+			card({
+				sponsored: true,
+				storeArea: "Belakang ais box sebelah rumah kau",
+			}),
+			"highlight",
+		);
+		expect(await screen.findByText("Sponsored")).toBeTruthy();
+		expect(
+			screen.getAllByText(/Belakang ais box sebelah rumah kau/),
+		).toHaveLength(1);
+		expect(screen.getByText("Visit store")).toBeTruthy();
 	});
 });

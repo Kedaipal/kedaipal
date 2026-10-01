@@ -22,21 +22,14 @@ const at = (h: number, m: number) => Date.UTC(2026, 5, 26, h - 8, m, 0);
 /** 4:30–5:30 PM, then 7:00–9:00 PM: the schedule the live test ran on. */
 const SPLIT: DayHours = { open: 990, close: 1050, open2: 1140, close2: 1260 };
 const week = (day: DayHours): OpeningHours =>
-	Array.from({ length: 7 }, (_, i) =>
-		i === 5 || i === 6 ? day : OPEN_ALL_DAY,
-	);
+	Array.from({ length: 7 }, (_, i) => (i === 5 || i === 6 ? day : OPEN_ALL_DAY));
 const hours = week(SPLIT);
 const ctx = { storeName: "Huff & Puff", verb: "deliver" as const };
 
 describe("fulfilmentTimeIssue", () => {
 	test("a pickable time has no issue", () => {
 		expect(
-			fulfilmentTimeIssue({
-				hours,
-				dayEpoch: SAT,
-				timeMinutes: 1000,
-				now: at(9, 0),
-			}),
+			fulfilmentTimeIssue({ hours, dayEpoch: SAT, timeMinutes: 1000, now: at(9, 0) }),
 		).toBeNull();
 	});
 
@@ -224,21 +217,14 @@ describe("the cart's prep window is a CAUSE the ladder carries (z8r3fdff97)", ()
 describe("copy — one sentence for the notice and the submit banner", () => {
 	test("each issue flattens to the exact submit wording", () => {
 		expect(
-			copyText(
-				timeIssueCopy(
-					{ kind: "in_break", gap: { open: 1050, close: 1140 } },
-					ctx,
-				),
-			),
-		).toBe(
-			"Huff & Puff is closed 5:30 PM – 7:00 PM — pick a time in an open window.",
+			copyText(timeIssueCopy({ kind: "in_break", gap: { open: 1050, close: 1140 } }, ctx)),
+		).toBe("Huff & Puff is closed 5:30 PM – 7:00 PM — pick a time in an open window.");
+		expect(copyText(timeIssueCopy({ kind: "too_early", earliest: 990 }, ctx))).toBe(
+			"The earliest we can deliver is 4:30 PM — pick that or later.",
 		);
-		expect(
-			copyText(timeIssueCopy({ kind: "too_early", earliest: 990 }, ctx)),
-		).toBe("The earliest we can deliver is 4:30 PM — pick that or later.");
-		expect(
-			copyText(timeIssueCopy({ kind: "too_late", latest: 1260 }, ctx)),
-		).toBe("Huff & Puff closes at 9:00 PM that day — pick an earlier time.");
+		expect(copyText(timeIssueCopy({ kind: "too_late", latest: 1260 }, ctx))).toBe(
+			"Huff & Puff closes at 9:00 PM that day — pick an earlier time.",
+		);
 		expect(copyText(timeIssueCopy({ kind: "missing" }, ctx))).toBe(
 			"Pick a delivery time.",
 		);
@@ -253,10 +239,7 @@ describe("copy — one sentence for the notice and the submit banner", () => {
 		).toBe("There's no time left to deliver today — pick tomorrow.");
 		expect(
 			copyText(
-				timeIssueCopy(
-					{ kind: "no_slot", reason: "closed_day", weekday: 4 },
-					ctx,
-				),
+				timeIssueCopy({ kind: "no_slot", reason: "closed_day", weekday: 4 }, ctx),
 			),
 		).toBe("Huff & Puff is closed on Thursdays — pick another day.");
 	});
@@ -297,39 +280,24 @@ describe("copy — one sentence for the notice and the submit banner", () => {
 					store,
 				),
 			),
-		).toBe(
-			"We moved your time to 7:00 PM — Huff & Puff is closed 5:30 PM – 7:00 PM.",
-		);
+		).toBe("We moved your time to 7:00 PM — Huff & Puff is closed 5:30 PM – 7:00 PM.");
 		expect(
 			copyText(
-				timeMovedCopy(
-					{ from: 1035, to: 1040, reason: { kind: "passed" } },
-					store,
-				),
+				timeMovedCopy({ from: 1035, to: 1040, reason: { kind: "passed" } }, store),
 			),
 		).toBe("We moved your time to 5:20 PM — 5:15 PM is no longer available.");
 		// A new DAY is not the clock passing: nothing expired, the day just keeps
 		// different hours. Saying "no longer available" here was the live-test bug.
 		expect(
 			copyText(
-				timeMovedCopy(
-					{ from: 600, to: 780, reason: { kind: "before_open" } },
-					store,
-				),
+				timeMovedCopy({ from: 600, to: 780, reason: { kind: "before_open" } }, store),
 			),
-		).toBe(
-			"We moved your time to 1:00 PM — 10:00 AM is before Huff & Puff opens that day.",
-		);
+		).toBe("We moved your time to 1:00 PM — 10:00 AM is before Huff & Puff opens that day.");
 		expect(
 			copyText(
-				timeMovedCopy(
-					{ from: 1170, to: 600, reason: { kind: "after_close" } },
-					store,
-				),
+				timeMovedCopy({ from: 1170, to: 600, reason: { kind: "after_close" } }, store),
 			),
-		).toBe(
-			"We moved your time to 10:00 AM — 7:30 PM is after Huff & Puff closes that day.",
-		);
+		).toBe("We moved your time to 10:00 AM — 7:30 PM is after Huff & Puff closes that day.");
 	});
 });
 
@@ -461,9 +429,7 @@ describe("planTimeRepair — ownership decides who may change the time", () => {
 			systemHhmm: "10:00",
 			now: at(9, 0),
 		};
-		expect(planTimeRepair(base)?.moved?.reason).toEqual({
-			kind: "before_open",
-		});
+		expect(planTimeRepair(base)?.moved?.reason).toEqual({ kind: "before_open" });
 		const withPrep = planTimeRepair({
 			...base,
 			prepMinutes: 120,

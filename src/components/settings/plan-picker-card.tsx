@@ -25,8 +25,7 @@ const PLAN_PITCH: Record<PickablePlan, { name: string; pitch: string }> = {
 	},
 	pro: {
 		name: "Pro",
-		pitch:
-			"Everything in Starter + customer database, order inbox, insights, online payments",
+		pitch: "Everything in Starter + customer database, order inbox, insights, online payments",
 	},
 };
 

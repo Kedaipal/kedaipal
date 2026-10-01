@@ -79,9 +79,7 @@ describe("legacy status fields are read-only from the frontend", () => {
 					// `key:` as an object property — a read like `retailer.statusLabels`
 					// passed along as a prop is fine and must not trip this.
 					if (new RegExp(`[{,]\\s*${key}\\s*:`).test(call)) {
-						offenders.push(
-							`${relative(SRC, file)} → updateSettings({ ${key}: … })`,
-						);
+						offenders.push(`${relative(SRC, file)} → updateSettings({ ${key}: … })`);
 					}
 				}
 			}
@@ -92,16 +90,13 @@ describe("legacy status fields are read-only from the frontend", () => {
 	test("the guard actually catches a write (it is not vacuous)", () => {
 		// A scan test that matches nothing is indistinguishable from a broken one,
 		// so prove the matcher fires on the shape it is meant to forbid.
-		const bad =
-			"await updateSettings({ statusLabels: { en: { shipped: 'x' } } });";
+		const bad = "await updateSettings({ statusLabels: { en: { shipped: 'x' } } });";
 		const calls = updateSettingsArgs(bad);
 		expect(calls).toHaveLength(1);
 		expect(/[{,]\s*statusLabels\s*:/.test(calls[0])).toBe(true);
 
 		// …and does NOT fire on a legitimate read being forwarded as a prop.
 		const good = "await updateSettings({ orderFlows });";
-		expect(/[{,]\s*orderStages\s*:/.test(updateSettingsArgs(good)[0])).toBe(
-			false,
-		);
+		expect(/[{,]\s*orderStages\s*:/.test(updateSettingsArgs(good)[0])).toBe(false);
 	});
 });

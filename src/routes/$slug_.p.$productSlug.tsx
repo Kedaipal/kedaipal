@@ -347,7 +347,10 @@ function ProductRoute() {
 				/>
 				{/* Direct flex child so its `mt-auto` anchors it to the bottom of the
 			    page — same placement as the store home and category pages. */}
-				<StorefrontFooter slug={slug} />
+				<StorefrontFooter
+					slug={slug}
+					discover={retailer.marketplaceUnlisted !== true}
+				/>
 			</div>
 		</OrderingPausedProvider>
 	);

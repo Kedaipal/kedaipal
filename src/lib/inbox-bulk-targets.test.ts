@@ -7,10 +7,7 @@ import {
 } from "./inbox-bulk-targets";
 import { type OrderStage, resolveStages } from "./orderStatus";
 
-const vocab = (
-	kind: BulkVocab["kind"],
-	bookingPackaged?: boolean,
-): BulkVocab => ({
+const vocab = (kind: BulkVocab["kind"], bookingPackaged?: boolean): BulkVocab => ({
 	kind,
 	stages: resolveStages({ deliveryMethod: kind, bookingPackaged }),
 });
@@ -55,10 +52,9 @@ describe("buildBulkTargets — the menu speaks the selection", () => {
 
 	test("an event RSVP disables both middle milestones", () => {
 		const { targets } = buildBulkTargets([vocab("event")], []);
-		expect(targets.filter((t) => t.disabled).map((t) => t.anchor)).toEqual([
-			"packed",
-			"shipped",
-		]);
+		expect(
+			targets.filter((t) => t.disabled).map((t) => t.anchor),
+		).toEqual(["packed", "shipped"]);
 	});
 
 	test("kinds that AGREE keep the seller's familiar word, with no note", () => {

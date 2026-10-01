@@ -474,11 +474,7 @@ describe("BillingTab comp accounts (z8r3fdeub2)", () => {
 				status: "active",
 				comped: true,
 				comp,
-				caps: {
-					orderCap: 1_000_000_000,
-					userCap: 1_000_000_000,
-					broadcastQuota: 500,
-				},
+				caps: { orderCap: 1_000_000_000, userCap: 1_000_000_000, broadcastQuota: 500 },
 				active: true,
 				frozen: false,
 			},

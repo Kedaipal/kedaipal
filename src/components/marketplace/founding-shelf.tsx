@@ -2,7 +2,7 @@ import { Link } from "@tanstack/react-router";
 import type { MarketplaceStoreCard } from "../../../convex/marketplace";
 import { SectionHeading } from "../storefront/section-heading";
 import { StoreLogoTile } from "../storefront/storefront-header";
-import { FoundingEmblemInline } from "./store-card";
+import { CARD_INTERACTION_CLASS, FoundingEmblemInline } from "./store-card";
 
 /**
  * "The Founding 10" shelf (z8r3fdkmyp) — the first stores on Kedaipal, in
@@ -40,7 +40,7 @@ export function FoundingShelf({
 						<Link
 							to="/$slug"
 							params={{ slug: card.slug }}
-							className="flex h-full flex-col items-center gap-2 rounded-2xl border border-border bg-card px-2.5 py-4 text-center transition-shadow hover:shadow-md"
+							className={`flex h-full flex-col items-center gap-2 rounded-2xl border border-border bg-card px-2.5 py-4 text-center ${CARD_INTERACTION_CLASS}`}
 						>
 							<StoreLogoTile
 								storeName={card.storeName}

@@ -793,7 +793,11 @@ type RetailerPublic = {
 	// the row itself.
 	storeArea?: string;
 	// Marketplace listing switch state (z8r3fdkmyp): true = the seller opted
-	// OUT of /stores. Derived from `marketplaceUnlistedAt`; owner read only.
+	// OUT of /stores. Derived from `marketplaceUnlistedAt`. On the owner read
+	// (the settings card) AND the by-slug payload — public-safe, since whether
+	// a store is in the public directory is itself public — where it hides the
+	// storefront footer's "Discover more stores" link: a seller who chose to
+	// stay out shouldn't have their buyers pointed at the directory.
 	marketplaceUnlisted?: boolean;
 	// "What does your store sell?" — the default kind for NEW products in the
 	// wizard (86eyj70z1 decision 5). Owner-facing config, harmless if public.
@@ -1270,6 +1274,7 @@ export const getRetailerBySlug = query({
 					isFoundingMember: active.isFoundingMember,
 					foundingMemberRank: active.foundingMemberRank,
 					orderingPaused: active.orderingPausedAt !== undefined,
+					marketplaceUnlisted: active.marketplaceUnlistedAt !== undefined,
 					// paymentInstructions intentionally omitted from the public
 					// storefront payload — only revealed in the WhatsApp confirm
 					// reply after the shopper commits to an order.

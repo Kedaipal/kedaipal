@@ -93,6 +93,14 @@ describe("marketplace.listStores — the listable rule end to end", () => {
 			marketplaceListed: false,
 		});
 		expect(await t.query(api.marketplace.listStores)).toEqual([]);
+		// The storefront's public payload carries the bit — it hides the
+		// footer's "Discover more stores" link for an opted-out store.
+		const bySlug = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "kedai-optout",
+		});
+		expect(
+			bySlug.status === "ok" ? bySlug.retailer.marketplaceUnlisted : null,
+		).toBe(true);
 		await asUser.mutation(api.retailers.updateSettings, {
 			marketplaceListed: true,
 		});

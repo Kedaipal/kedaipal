@@ -3,7 +3,11 @@ import { ArrowRight } from "lucide-react";
 import type { MarketplaceStoreCard } from "../../../convex/marketplace";
 import { storeInitials } from "../storefront/storefront-header";
 import { AppImage } from "../ui/app-image";
-import { FoundingEmblemInline, StoreStatusLine } from "./store-card";
+import {
+	CARD_INTERACTION_CLASS,
+	FoundingEmblemInline,
+	StoreStatusLine,
+} from "./store-card";
 
 /**
  * A "Store highlights" card (z8r3fdkmyp) — the marketplace's sponsored rail.
@@ -29,7 +33,7 @@ export function SponsoredCard({
 		<Link
 			to="/$slug"
 			params={{ slug: card.slug }}
-			className={`flex flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-sm transition-shadow hover:shadow-md ${className}`}
+			className={`group flex flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-sm ${CARD_INTERACTION_CLASS} ${className}`}
 		>
 			<span className="relative block h-32 shrink-0 bg-accent/10">
 				{card.coverImageUrl ? (
@@ -90,11 +94,16 @@ export function SponsoredCard({
 				<span className="line-clamp-2 min-h-[2.4rem] text-[13px] leading-[1.45] text-foreground/80">
 					{card.storeDescription ?? ""}
 				</span>
-				<span className="flex items-center justify-between">
-					<StoreStatusLine card={card} now={now} />
+				{/* gap-3 keeps the status off "Visit store" however long it runs;
+				    the area is NOT repeated here — it's already under the name. */}
+				<span className="flex items-center justify-between gap-3">
+					<StoreStatusLine card={card} now={now} showArea={false} />
 					<span className="flex shrink-0 items-center gap-1 text-[13px] font-bold text-accent-emphasis">
 						Visit store
-						<ArrowRight aria-hidden className="size-3.5" />
+						<ArrowRight
+							aria-hidden
+							className="size-3.5 transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none"
+						/>
 					</span>
 				</span>
 			</span>
