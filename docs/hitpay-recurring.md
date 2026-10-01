@@ -160,6 +160,29 @@ but an unresolved stamp, **the bill the attempt was fired for**, so the
 reconcile runs this sweep instead of a whole cycle later. `chargeDueRenewal`
 reconciles BEFORE its is-this-bill-pending return for the same reason.
 
+### The one residual: a session HitPay deletes behind our back
+
+A `gone` (404/410) session with an unresolved stamp is the single place money
+can be lost track of for good: the count can never go "ahead", so a charge
+that *did* land can never be proven, and the charge's own refusal dunns the
+seller — whose payment would then be a second debit. It is accepted
+deliberately, for two reasons.
+
+**Every session loss we cause is already covered.** The seller's cancel and a
+HitPay-side `method_detached` both schedule `reconcileLostAttempt` *before*
+the state it needs is cleared, and cancel deletes the remote session only
+*after* the money question is answered. So this branch is reachable only if
+HitPay unilaterally deletes a session we never asked them to — undocumented,
+and unobserved.
+
+**And in the likely shape of that event the dunning is correct.** A gone
+session almost certainly means the charge never landed and auto-renewal is
+dead; the seller genuinely needs to be told to pay and re-authorise.
+Suppressing the email to protect against the rare branch would leave them
+uninformed in the common one. The CRITICAL log on this path is the hook: it
+names the session and the bill so a human can check HitPay before the
+seller acts on the email.
+
 ### The seller sees "confirming", and nothing asks them to pay
 
 While a stamp is unresolved, `SubscriptionView.autoRenew.confirming` is true
