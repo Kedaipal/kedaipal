@@ -227,6 +227,22 @@ export function BillingTab({
 		foundingPricing && (sub?.plan ?? "pro") === FOUNDING_PLAN
 			? "Founding Pro"
 			: PLAN_LABEL[sub?.plan ?? "pro"];
+	// What the CURRENT-PLAN line says, which is not always the tier's name.
+	//
+	// During the free period a seller has neither chosen nor paid for a plan —
+	// `subscriptions.plan` holds the tier being TRIALLED (see createRetailer:
+	// "tier is chosen at conversion, not signup"). Rendering that bare as "Pro"
+	// claims both that they are on Pro and that they are paying for it, while
+	// the chip beside it says "Free · until your first order", the card below
+	// asks "Ready to choose a plan?", and the admin console files them under
+	// Trialing. The tier stays in the line because the order cap on this very
+	// card is that tier's — it is the trial of a named plan, not of nothing.
+	//
+	// Deliberately NOT applied to `planLabel` itself: the on-hold copy below
+	// reads "Your {planLabel} plan comes back", where a trial suffix would be
+	// both wrong and impossible (a held store is not trialing).
+	const currentPlanLabel =
+		sub?.status === "trialing" ? `${planLabel} trial` : planLabel;
 
 	const freePeriod = freePeriodState(sub, now);
 	const held = sub?.status === "on_hold" || sub?.held === true;
@@ -384,7 +400,7 @@ export function BillingTab({
 							<p className="mt-1 text-lg font-semibold">
 								{compEnded
 									? `Ended ${formatShortDate(compEnded.at)}`
-									: planLabel}
+									: currentPlanLabel}
 							</p>
 						</div>
 						<span
@@ -645,9 +661,37 @@ export function BillingTab({
 									? "Taking you to HitPay's secure payment page…"
 									: "Confirming your payment…"}
 							</div>
+						) : sub?.autoRenew?.confirming ? (
+							// A charge was SENT for this store and HitPay hasn't confirmed
+							// the outcome. Every pay option here would be the second
+							// payment if it landed, so the options go away entirely — a
+							// constraint surfaced, not enforced silently. Resolution is at
+							// most a daily sweep away; the rails come back with it (or the
+							// invoice flips paid).
+							<>
+								<p className="text-sm font-medium">How to pay</p>
+								<p className="mt-1 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+									Nothing to do right now — we've charged your saved payment
+									method and are confirming it with the payment provider. If it
+									didn't go through, we'll retry automatically and your payment
+									options come back here. See Auto-renewal below.
+								</p>
+							</>
 						) : (
 							<>
 								<p className="text-sm font-medium">How to pay</p>
+								{/* Auto-charging stopped over an earlier charge that landed
+								    after its bill was cancelled: we may count that money
+								    toward THIS bill, so paying now could be the second
+								    payment. Say so where the pay buttons are — the options
+								    stay, because we may also ask them to pay. */}
+								{sub?.autoRenew?.stopped ? (
+									<p className="mt-1 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+										Hold off for now — we're sorting out an earlier automatic
+										charge first and may count it toward this invoice. See
+										Auto-renewal below.
+									</p>
+								) : null}
 								{/* Online first (86eyb6z4r): card/banking/eWallet on HitPay's
 						    hosted page, auto-confirmed — the manual rails stay below. */}
 								{pending.gatewayPayment?.url ? (

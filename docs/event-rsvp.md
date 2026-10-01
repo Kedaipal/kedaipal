@@ -362,6 +362,56 @@ resolvers.
   the settings note for sellers who run events (`products.hasEventListings`).
   Tagging custom stages per product kind is ticketed separately.
 
+## Approving RSVPs before the guest pays (`event.requiresApproval`, `z8r3fdkjek`)
+
+An event can ask the seller to **approve each RSVP before anyone pays** — the
+Event card's *Approve each RSVP before they pay* toggle (off by default, so
+every existing event behaves as before). Built for HCM's *Into The Falls*,
+where registrants are vetted before the host takes money.
+
+**No new status.** A storefront RSVP on such an event lands as
+`booking_requested` — which already meant "awaiting the seller's approval" for
+booking requests — so the New bucket, the 4 h/24 h age escalation, the
+24-hour expiry cron, `bookings.approveBookingRequest` /
+`declineBookingRequest`, the hidden payment card and the seat hold all apply
+unchanged. `orders.eventRsvp` tells the two kinds apart, and every string that
+said "booking"/"dates" now follows it ("RSVP"/"seat").
+
+| Moment | What happens |
+|---|---|
+| Guest submits | Order inserted as `booking_requested` (timeline: "RSVP request — waiting for your approval"). **Holds its seat** — the cap counts it. No confirmation push, no `?send=1` handoff (`orders.create` returns `awaitingApproval`). Seller gets the usual new-order email (now keyed *new order*, never *confirmed*) + WhatsApp alert, and the nav badge counts it. |
+| Guest's page | "RSVP request sent — {store} approves each RSVP. Your seat is held meanwhile and nothing has been paid…". No payment card. |
+| Seller approves | → `confirmed`; the ONE confirmation push goes out (it carries the pay link); payment opens. |
+| Seller declines | Reason required, quoted on the guest's page ("RSVP not approved"); → `cancelled`, seat freed. No WhatsApp is sent (none are, since 86eyd63r8). |
+| 24 h, no answer | The cron expires it: `cancelled` + `bookingResolution: "expired"`, seat freed, the guest's page says so. |
+
+**Payment is refused server-side while a request waits** — `claimPayment`,
+`markPaymentReceived` and HitPay's `holdsOpen` all check the status (this
+closes the same gap for bookings, which previously relied on the UI alone).
+A guest who messages their ORD ref before approval gets the
+`requestAwaitingApproval` reply, never a payment ask.
+
+**The counter is never held**: a walk-in RSVP is keyed by the seller herself.
+
+The buyer's page hides *Download invoice* while a request waits and after a
+decline or expiry — an invoice for something the seller never accepted reads
+as a bill. The seller's order page keeps its document actions.
+
+**An event needs a venue at save** (found while testing this, 30 Sep): a store
+with no pickup point used to save an event, advertise RSVP on the storefront,
+and only then turn every guest away at the RSVP page. `products.create` /
+`update` now refuse it ("Add a pickup point first…"), and the Event card and
+the wizard say so where the seller is working, with a link to Settings →
+Fulfilment. A hidden point counts — an RSVP-only venue is a hidden point.
+
+Where the guest learns it: the product page's event notice, the top of the
+RSVP form, the CTA ("Request 1 seat") and the line under it — before they
+commit, not after.
+
+Known edge: a request made less than 24 h before the event can outlive the
+event (the expiry is counted from the request). Approve or decline those by
+hand.
+
 ## Free events (`isFreeOrder`)
 
 A total of 0 is **not enough on its own** to say an order is free, and that's

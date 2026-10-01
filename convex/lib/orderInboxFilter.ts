@@ -17,6 +17,7 @@ import {
 } from "./orderBuckets";
 import {
 	type CsvOrder,
+	fulfilmentKey,
 	ORDER_COLUMNS,
 	orderColumnDisplay,
 } from "./orderCsv";
@@ -84,6 +85,7 @@ const NARROWING_FILTER_KEYS: Record<
 	categoriesUnspecified: true,
 	sources: true,
 	attributionSources: true,
+	fulfilments: true,
 };
 
 /** True when these args ask for anything beyond "the newest orders, unfiltered"
@@ -184,6 +186,25 @@ export type InboxFilterArgs = {
 	// not counter" is a real question and a single value can't ask it. Empty or
 	// undefined = no source filtering. See orders.source in convex/schema.ts.
 	sources?: Array<"storefront" | "counter" | "claim">;
+	/**
+	 * How the order LEAVES — the `fulfilmentKey` values: delivery, self_collect,
+	 * drop_off, collection, booking (z8r3fdfau9). Multi-select; empty or
+	 * undefined = no fulfilment filtering.
+	 *
+	 * The deliberate twin of `sources` above, and its neighbour for that reason:
+	 * that field is how the order came IN (which checkout surface), this one is
+	 * how it goes OUT. They answer opposite halves of the same question and a
+	 * seller reaches for them together — "today's counter sales" and "today's
+	 * deliveries" are the same kind of ask.
+	 *
+	 * Matched through `fulfilmentKey`, never through `deliveryMethod` directly,
+	 * so the filter, the table column and the CSV cell are physically incapable
+	 * of disagreeing — including on the two refinements that override the bare
+	 * method (a collection order is not a delivery; a meetup point is not the
+	 * seller's shop). A legacy order with no method matches **Delivery**, which
+	 * is what its row already says on screen.
+	 */
+	fulfilments?: string[];
 	// Marketing origin (86eyq0eq9) — the `attributionBucket` keys the seller
 	// picked: a stamped `?src=` tag, "counter", or "direct". MULTI-select (an
 	// OR within the filter, ANDed with the rest), because "how did my socials
@@ -319,6 +340,10 @@ export function buildInboxPredicate(
 		args.sources && args.sources.length > 0
 			? new Set<string>(args.sources)
 			: null;
+	const fulfilmentSet =
+		args.fulfilments && args.fulfilments.length > 0
+			? new Set<string>(args.fulfilments)
+			: null;
 	const periodList =
 		args.bookingPeriods && args.bookingPeriods.length > 0
 			? args.bookingPeriods
@@ -359,6 +384,12 @@ export function buildInboxPredicate(
 		}
 		// Source filter — legacy/undefined source reads as "storefront".
 		if (sourceSet && !sourceSet.has(o.source ?? "storefront")) return false;
+		// Fulfilment filter — through the registry's own `fulfilmentKey`, so the
+		// rows this keeps are exactly the rows whose Fulfilment cell shows the
+		// ticked word. It already folds in the two overrides (collection beats
+		// delivery, drop-off beats self-collect) and the legacy default, so none
+		// of that logic gets a second, drifting copy here.
+		if (fulfilmentSet && !fulfilmentSet.has(fulfilmentKey(o))) return false;
 		// Marketing-origin filter — bucketed through the SAME resolver Insights
 		// reports with (attribution.ts), so a row in the by-source breakdown and
 		// the inbox it drills into can never disagree about which orders count.

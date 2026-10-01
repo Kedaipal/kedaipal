@@ -31,6 +31,7 @@ import {
 	variantLabel,
 } from "../../lib/variant";
 import { Button } from "../ui/button";
+import { LinkifiedText } from "../ui/linkified-text";
 import { ZoomableImage } from "../ui/zoomable-image";
 import type { StorefrontProduct } from "./product-card";
 import { ORDERING_PAUSED_CTA, useOrderingPaused } from "./seasonal-break";
@@ -564,7 +565,9 @@ export function EventNotice({ pp }: { pp: ProductPurchase }) {
 						: ""}
 				{pp.eventFull
 					? " Message the store to ask about a cancellation."
-					: `RSVP and you're booked for ${event.endDate !== undefined ? "these dates" : "this date"} — it's collected at the venue, so there's no delivery and no date to pick at checkout.`}
+					: event.requiresApproval === true
+						? `The host approves each RSVP — your seat is held while they review it, and you pay only once it's approved. It's at the venue on ${event.endDate !== undefined ? "these dates" : "this date"}, so there's no delivery and no date to pick.`
+						: `RSVP and you're booked for ${event.endDate !== undefined ? "these dates" : "this date"} — it's collected at the venue, so there's no delivery and no date to pick at checkout.`}
 			</p>
 		</div>
 	);
@@ -667,7 +670,9 @@ export function PurchaseHints({ pp }: { pp: ProductPurchase }) {
 					<span className="block font-semibold text-foreground">
 						Collecting?
 					</span>
-					<span className="line-clamp-3">{pickupNote}</span>
+					<span className="line-clamp-3">
+						<LinkifiedText text={pickupNote} />
+					</span>
 				</p>
 			) : null}
 		</>

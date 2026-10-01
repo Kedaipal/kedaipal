@@ -45,6 +45,7 @@ function makeCart(items: CartItem[]): UseCart {
 		updateQuantity: vi.fn(),
 		removeItem: vi.fn(),
 		clearCart: vi.fn(),
+		setAnswer: vi.fn(),
 		quantityForProduct: vi.fn(() => 0),
 	} as unknown as UseCart;
 }

@@ -23,6 +23,7 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { computeHitpayHmac } from "./lib/hitpay";
 import schema from "./schema";
+import { resolveAccess } from "./subscriptions";
 
 const modules = import.meta.glob("./**/*.ts");
 
@@ -1041,6 +1042,40 @@ describe("startAutoRenewSetup", () => {
 	});
 });
 
+describe("finishAutoRenewSetup (redirect-return reconcile)", () => {
+	test.each([
+		["an active session attaches the method it reports", 200, true],
+		["a session HitPay no longer has attaches nothing", 404, false],
+		["an unreadable session attaches nothing", 503, false],
+	])("%s", async (_case, status, attached) => {
+		const t = setup();
+		stubBillingEnv();
+		const { subId } = await seedRetailer(t, "u_fin", "fin-store");
+		await t.run((ctx) => ctx.db.patch(subId, { autoRenewSessionId: "rb_fin" }));
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				status === 200
+					? Response.json({
+							status: "active",
+							times_charged: 0,
+							payment_provider_charge_method: "touch_n_go",
+						})
+					: new Response("nope", { status }),
+			),
+		);
+
+		const result = await t
+			.withIdentity({ subject: "u_fin", email: "u_fin@x.com" })
+			.action(api.subscriptionPayments.finishAutoRenewSetup, {});
+
+		expect(result.attached).toBe(attached);
+		expect((await getSub(t, subId))?.autoRenew?.method).toBe(
+			attached ? "touch_n_go" : undefined,
+		);
+	});
+});
+
 describe("chargeDueRenewal", () => {
 	test("success: settles through the markPaid path + advances the counters", async () => {
 		const t = setup();
@@ -1138,6 +1173,27 @@ describe("chargeDueRenewal", () => {
 		expect(sub?.autoRenew?.pendingChargeInvoiceId).toBe(invoiceId);
 	});
 
+	test("a 2xx we can't read is an unknown outcome too — never a decline, never a thrown action", async () => {
+		// HitPay may have taken the money; a throw here would record NO outcome
+		// and a decline would clear the stamp — either way the reconcile loses it.
+		const t = setup();
+		stubBillingEnv();
+		const { retailerId, subId } = await seedRetailer(t, "u_garb", "garb-store");
+		await attachAutoRenew(t, subId);
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response("<html>502 upstream</html>", { status: 200 })),
+		);
+		await t.action(internal.subscriptionPayments.chargeDueRenewal, { invoiceId });
+		const sub = await getSub(t, subId);
+		expect(sub?.autoRenew?.failedAttempts).toBeUndefined();
+		expect(sub?.autoRenew?.lastChargeError).toContain("unreadable");
+		expect(sub?.autoRenew?.lastChargeAttemptAt).toBeTypeOf("number");
+		expect(sub?.autoRenew?.nextRetryAt).toBe(Date.now() + 86400000);
+		expect((await getInvoice(t, invoiceId))?.status).toBe("pending");
+	});
+
 	test("outcome-unknown reconcile: HitPay already took the money → settle, never re-charge", async () => {
 		const t = setup();
 		stubBillingEnv();
@@ -1151,7 +1207,14 @@ describe("chargeDueRenewal", () => {
 		const fetchMock = vi.fn(async (url: unknown) => {
 			// Only the session GET is allowed; a POST /charge here would be the bug.
 			expect(String(url)).not.toContain("/charge/");
-			return Response.json({ status: "active", times_charged: 1 });
+			// The save-card shape HitPay really returns: the count in
+			// `total_charge`, `times_charged` null (sandbox, 30 Sep 2026).
+			return Response.json({
+				status: "active",
+				cycle: "save_card",
+				times_charged: null,
+				total_charge: 1,
+			});
 		});
 		vi.stubGlobal("fetch", fetchMock);
 
@@ -1178,6 +1241,1466 @@ describe("chargeDueRenewal", () => {
 	});
 });
 
+// Shared by the charge-story suites below: a scripted HitPay and the cron.
+const HOUR = 60 * 60 * 1000;
+const DAY = 24 * HOUR;
+
+/** HitPay for a whole story: the charge POST and the session GET answer
+ * per call (1-based); a responder that throws is a request that never
+ * came back. Everything else (link deletes, mints) is acked. Counts every
+ * way money is ASKED FOR or a session is destroyed — those counts are the
+ * assertions. */
+function stubHitpay(respond: {
+	charge: (n: number) => Response;
+	session?: (n: number) => Response;
+	/** POST /payment-requests (the Pay-now mint). Default: an empty object,
+	 * which the mint treats as "no link stored". */
+	mint?: (n: number) => Response;
+}) {
+	const calls = {
+		charges: 0,
+		sessionReads: 0,
+		sessionDeletes: 0,
+		linkDeletes: 0,
+		mints: 0,
+		emails: [] as Array<{ to: string[]; subject: string; text: string }>,
+	};
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (url: unknown, init?: { method?: string; body?: unknown }) => {
+			const u = String(url);
+			if (u.includes("/charge/recurring-billing/")) {
+				return respond.charge(++calls.charges);
+			}
+			if (u.includes("/recurring-billing/") && init?.method === "DELETE") {
+				calls.sessionDeletes++;
+				return Response.json({});
+			}
+			if (
+				u.includes("/recurring-billing/") &&
+				(init?.method ?? "GET") === "GET"
+			) {
+				calls.sessionReads++;
+				if (!respond.session) throw new Error("unexpected session read");
+				return respond.session(calls.sessionReads);
+			}
+			if (u.includes("/payment-requests/") && init?.method === "DELETE") {
+				calls.linkDeletes++;
+			}
+			if (u.endsWith("/payment-requests") && init?.method === "POST") {
+				calls.mints++;
+				if (respond.mint) return respond.mint(calls.mints);
+			}
+			if (u.includes("api.resend.com")) {
+				calls.emails.push(JSON.parse(String(init?.body)));
+			}
+			return Response.json({});
+		}),
+	);
+	return calls;
+}
+
+const lostRequest = () => {
+	throw new Error("socket hang up");
+};
+const succeeded = (paymentId: string) =>
+	Response.json({ payment_id: paymentId, status: "succeeded" });
+/** A save-card session in the shape HitPay's GET really returns (sandbox,
+ * 30 Sep 2026): the count in `total_charge`, the documented `times_charged`
+ * null. A fixture carrying `times_charged: n` is how the reconcile shipped
+ * reading a field that is never set. */
+const sessionCharged = (count: number) => () =>
+	Response.json({
+		status: "active",
+		cycle: "save_card",
+		times_charged: null,
+		total_charge: count,
+	});
+
+/**
+ * The count HitPay reports on each successive GET (1-based; the last value
+ * repeats). Every charge now reads a BASELINE before it POSTs, and the
+ * reconcile asks whether the count moved since — so "the lost charge landed"
+ * has to be modelled as the number going UP after that baseline read. A
+ * constant count says the opposite: nothing moved, nothing landed.
+ */
+const sessionCountSeq =
+	(...counts: number[]) =>
+	(n: number) =>
+		Response.json({
+			status: "active",
+			cycle: "save_card",
+			times_charged: null,
+			total_charge: counts[Math.min(n, counts.length) - 1],
+		});
+
+/** The daily cron at `at`, plus every charge it schedules. */
+async function cronAt(t: ReturnType<typeof setup>, at: number) {
+	vi.setSystemTime(at);
+	const run = await t.mutation(
+		internal.subscriptions.internalDailyBillingStatus,
+		{},
+	);
+	await t.finishAllScheduledFunctions(vi.runAllTimers);
+	return run;
+}
+
+// The reconcile used to run only while the attempt stamp was under 24h old —
+// but the retry that follows an unknown outcome is scheduled 24h out and
+// fired by a DAILY cron, so it always arrived with the stamp at 24h or older.
+// The guard never ran on the one path it exists for, the lock read the stamp
+// as stale, and a charge HitPay had already taken was POSTed again. These
+// stories drive the real retry path (unknown outcome → cron → retry) at the
+// boundary and past it, rather than seeding a convenient fresh stamp.
+describe("an unresolved charge is reconciled at ANY age — the cron retry path", () => {
+	/** Seed a store mid-renewal and run the FIRST charge, whose request dies. */
+	async function unknownOutcome(
+		t: ReturnType<typeof setup>,
+		userId: string,
+		slug: string,
+	) {
+		const { retailerId, subId } = await seedRetailer(t, userId, slug);
+		await attachAutoRenew(t, subId);
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId);
+		const attemptAt = Date.now();
+		await t.action(internal.subscriptionPayments.chargeDueRenewal, { invoiceId });
+		const sub = await getSub(t, subId);
+		expect(sub?.autoRenew?.lastChargeAttemptAt).toBe(attemptAt);
+		expect(sub?.autoRenew?.nextRetryAt).toBe(attemptAt + DAY);
+		return { subId, invoiceId, attemptAt };
+	}
+
+	test.each([
+		["+24h, the earliest the retry can fire", DAY],
+		["+48h, the next daily cron after that", 2 * DAY],
+	])(
+		"HitPay took the lost charge; the retry at %s settles it as reconciled and never charges again",
+		async (_when, gap) => {
+			const t = setup();
+			stubBillingEnv();
+			// Our request died AFTER HitPay processed it: the session says 1.
+			const calls = stubHitpay({
+				charge: (n) => (n === 1 ? lostRequest() : succeeded(`pay_again_${n}`)),
+				// 0 when the charge fires, 1 when the retry asks: it landed.
+				session: sessionCountSeq(0, 1),
+			});
+			const { subId, invoiceId, attemptAt } = await unknownOutcome(
+				t,
+				"u_took",
+				"took-store",
+			);
+
+			const run = await cronAt(t, attemptAt + gap);
+
+			expect(run.autoChargeRetries).toBe(1);
+			expect(calls.charges).toBe(1); // the lost one — never a second
+			const invoice = await getInvoice(t, invoiceId);
+			expect(invoice?.status).toBe("paid");
+			expect(invoice?.markedPaidBy).toBe("reconciled:rb_1:1");
+			// 2 reads: the baseline this charge captured before it POSTed,
+			// then the reconcile's own read on the retry.
+			expect(calls.sessionReads).toBe(2);
+			const sub = await getSub(t, subId);
+			expect(sub?.autoRenew?.timesCharged).toBe(1);
+			expect(sub?.autoRenew?.lastChargeAttemptAt).toBeUndefined();
+			expect(sub?.autoRenew?.nextRetryAt).toBeUndefined();
+		},
+	);
+
+	test.each([
+		["+24h, the earliest the retry can fire", DAY],
+		["+48h, the next daily cron after that", 2 * DAY],
+	])(
+		"HitPay never took the lost charge; the retry at %s asks first, then charges exactly once",
+		async (_when, gap) => {
+			const t = setup();
+			stubBillingEnv();
+			const calls = stubHitpay({
+				charge: (n) => (n === 1 ? lostRequest() : succeeded(`pay_retry_${n}`)),
+				session: sessionCharged(0),
+			});
+			const { subId, invoiceId, attemptAt } = await unknownOutcome(
+				t,
+				"u_never",
+				"never-store",
+			);
+
+			await cronAt(t, attemptAt + gap);
+
+			// 2 reads: the baseline this charge captured before it POSTed,
+			// then the reconcile's own read on the retry.
+			expect(calls.sessionReads).toBe(2);
+			expect(calls.charges).toBe(2); // the lost one + exactly one retry
+			const invoice = await getInvoice(t, invoiceId);
+			expect(invoice?.status).toBe("paid");
+			expect(invoice?.markedPaidBy).toBe("pay_retry_2");
+			expect((await getSub(t, subId))?.autoRenew?.timesCharged).toBe(1);
+		},
+	);
+
+	test("a stale stamp HitPay says never charged is RE-CLAIMED — the retry stamps its own attempt before it charges", async () => {
+		const t = setup();
+		stubBillingEnv();
+		// The retry's request dies too, so its stamp survives to be read.
+		const calls = stubHitpay({
+			charge: () => lostRequest(),
+			session: sessionCharged(0),
+		});
+		const { subId, invoiceId, attemptAt } = await unknownOutcome(
+			t,
+			"u_restamp",
+			"restamp-store",
+		);
+
+		await cronAt(t, attemptAt + DAY);
+
+		expect(calls.charges).toBe(2);
+		const sub = await getSub(t, subId);
+		// Not the original stamp: the lock re-claimed at the retry's own moment,
+		// so the NEXT run reconciles this attempt, not the one before it.
+		expect(sub?.autoRenew?.lastChargeAttemptAt).toBeGreaterThanOrEqual(
+			attemptAt + DAY,
+		);
+		expect(sub?.autoRenew?.pendingChargeInvoiceId).toBe(invoiceId);
+		expect((await getInvoice(t, invoiceId))?.status).toBe("pending");
+	});
+
+	test("mid-dunning: an unknown outcome keeps the already-due retry, and the next day's cron reconciles it", async () => {
+		// recordChargeFailure keeps an existing nextRetryAt on an unknown
+		// outcome — mid-dunning that one is already in the past, so tomorrow's
+		// cron retries ~24h after the stamp, right on the old window's edge.
+		const t = setup();
+		stubBillingEnv();
+		const calls = stubHitpay({
+			charge: (n) =>
+				n === 1
+					? Response.json({ payment_id: "pay_dec", status: "failed" }) // decline
+					: n === 2
+						? lostRequest() // the dunning retry: HitPay took it, we never heard
+						: succeeded(`pay_again_${n}`),
+			// Baselines for charge 1 and charge 2 read 0; the reconcile's read
+			// is 1, so the SECOND charge is the one that landed.
+			session: sessionCountSeq(0, 0, 1),
+		});
+		const { retailerId, subId } = await seedRetailer(t, "u_dun", "dun-store");
+		await attachAutoRenew(t, subId);
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId);
+		const declinedAt = Date.now();
+		await t.action(internal.subscriptionPayments.chargeDueRenewal, { invoiceId });
+		expect((await getSub(t, subId))?.autoRenew?.failedAttempts).toBe(1);
+
+		await cronAt(t, declinedAt + 2 * DAY); // retry #1: request lost
+		expect(calls.charges).toBe(2);
+		const stamped = await getSub(t, subId);
+		expect(stamped?.autoRenew?.nextRetryAt).toBe(declinedAt + 2 * DAY);
+
+		await cronAt(t, declinedAt + 3 * DAY); // next day: must ask, not charge
+
+		expect(calls.charges).toBe(2);
+		const invoice = await getInvoice(t, invoiceId);
+		expect(invoice?.status).toBe("paid");
+		expect(invoice?.markedPaidBy).toBe("reconciled:rb_1:1");
+		// 3 reads: a baseline before each of the two charges, then the reconcile.
+		expect(calls.sessionReads).toBe(3);
+	});
+
+	/** A store whose last attempt, 30h ago, never came back. */
+	async function staleStamp(
+		t: ReturnType<typeof setup>,
+		userId: string,
+		slug: string,
+		stampAge = 30 * HOUR,
+	) {
+		const { retailerId, subId } = await seedRetailer(t, userId, slug);
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId);
+		const now = Date.now();
+		await attachAutoRenew(t, subId, {
+			lastChargeAttemptAt: now - stampAge,
+			pendingChargeInvoiceId: invoiceId,
+			nextRetryAt: now - 6 * HOUR,
+			lastChargeError: "network failure — outcome unknown",
+		});
+		return { subId, invoiceId, stampedAt: now - stampAge };
+	}
+
+	test.each([
+		["the read never comes back", lostRequest],
+		["HitPay 500s", () => new Response("oops", { status: 500 })],
+		["HitPay 503s", () => new Response("maintenance", { status: 503 })],
+		["HitPay rate-limits us (429)", () => new Response("slow", { status: 429 })],
+		["HitPay rejects our key (401)", () => new Response("no", { status: 401 })],
+	])(
+		"when HitPay can't answer for a stale attempt (%s), nothing is charged — the retry sweep asks again",
+		async (_why, session) => {
+			const t = setup();
+			stubBillingEnv();
+			const calls = stubHitpay({
+				charge: () => succeeded("pay_blind"),
+				session,
+			});
+			const { subId, invoiceId, stampedAt } = await staleStamp(
+				t,
+				"u_blind",
+				"blind-store",
+			);
+			const before = await getSub(t, subId);
+
+			await t.action(internal.subscriptionPayments.chargeDueRenewal, {
+				invoiceId,
+			});
+
+			expect(calls.charges).toBe(0);
+			expect((await getInvoice(t, invoiceId))?.status).toBe("pending");
+			expect(calls.sessionReads).toBe(1);
+			const sub = await getSub(t, subId);
+			// Untouched: still unresolved, still due — tomorrow's cron asks again.
+			expect(sub?.autoRenew?.lastChargeAttemptAt).toBe(stampedAt);
+			expect(sub?.autoRenew?.nextRetryAt).toBe(before?.autoRenew?.nextRetryAt);
+			expect(sub?.autoRenew?.failedAttempts).toBeUndefined();
+		},
+	);
+
+	test.each([404, 410])(
+		"a session HitPay no longer has (%i) can't be charged either — fall through, and the charge's refusal becomes a visible decline",
+		async (status) => {
+			const t = setup();
+			stubBillingEnv();
+			const calls = stubHitpay({
+				charge: () => new Response("recurring billing not found", { status }),
+				session: () => new Response("not found", { status }),
+			});
+			const { subId, invoiceId } = await staleStamp(t, "u_gone", "gone-store");
+
+			await t.action(internal.subscriptionPayments.chargeDueRenewal, {
+				invoiceId,
+			});
+
+			expect(calls.sessionReads).toBe(1);
+			expect(calls.charges).toBe(1);
+			const sub = await getSub(t, subId);
+			// A decline is a RECORDED outcome: counted, dunned, stamp resolved.
+			expect(sub?.autoRenew?.failedAttempts).toBe(1);
+			expect(sub?.autoRenew?.lastChargeError).toContain(`HTTP ${status}`);
+			expect(sub?.autoRenew?.lastChargeAttemptAt).toBeUndefined();
+			expect((await getInvoice(t, invoiceId))?.status).toBe("pending");
+		},
+	);
+
+	test("a session that answers without ANY charge count is never charged over", async () => {
+		const t = setup();
+		stubBillingEnv();
+		const calls = stubHitpay({
+			charge: () => succeeded("pay_blind"),
+			session: () =>
+				Response.json({ status: "active", cycle: "save_card", times_charged: null }),
+		});
+		const { subId, invoiceId, stampedAt } = await staleStamp(
+			t,
+			"u_nocount",
+			"nocount-store",
+		);
+
+		await t.action(internal.subscriptionPayments.chargeDueRenewal, {
+			invoiceId,
+		});
+
+		expect(calls.charges).toBe(0);
+		expect(calls.sessionReads).toBe(1);
+		expect((await getSub(t, subId))?.autoRenew?.lastChargeAttemptAt).toBe(
+			stampedAt,
+		);
+	});
+
+	test("an attempt whose action DIED without recording anything is picked up by the cron once its lock is stale", async () => {
+		// No outcome was ever recorded, so no retry was ever scheduled: the
+		// stamp is the only trace, and the cron is the only thing that looks.
+		const t = setup();
+		stubBillingEnv();
+		const calls = stubHitpay({
+			charge: () => succeeded("pay_again"),
+			session: sessionCharged(1), // HitPay took it before the action died
+		});
+		const { retailerId, subId } = await seedRetailer(t, "u_died", "died-store");
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId);
+		const diedAt = Date.now();
+		await attachAutoRenew(t, subId, {
+			lastChargeAttemptAt: diedAt,
+			pendingChargeInvoiceId: invoiceId,
+		});
+
+		// Inside the lock the attempt may still be running — leave it alone.
+		const early = await cronAt(t, diedAt + 23 * HOUR);
+		expect(early.autoChargeRetries).toBe(0);
+		expect(calls.sessionReads).toBe(0);
+
+		const run = await cronAt(t, diedAt + DAY);
+		expect(run.autoChargeRetries).toBe(1);
+		expect(calls.charges).toBe(0);
+		const invoice = await getInvoice(t, invoiceId);
+		expect(invoice?.status).toBe("paid");
+		expect(invoice?.markedPaidBy).toBe("reconciled:rb_1:1");
+	});
+
+	test("a gone session with an attempt still inside the lock stands down — the lock, not the reconcile, owns in-flight", async () => {
+		const t = setup();
+		stubBillingEnv();
+		const calls = stubHitpay({
+			charge: () => succeeded("pay_racing"),
+			session: () => new Response("not found", { status: 404 }),
+		});
+		const { invoiceId } = await staleStamp(t, "u_race", "race-store", 60_000);
+
+		await t.action(internal.subscriptionPayments.chargeDueRenewal, {
+			invoiceId,
+		});
+
+		expect(calls.sessionReads).toBe(1);
+		expect(calls.charges).toBe(0);
+	});
+});
+
+// The reconcile's money belongs to the bill its attempt was FIRED FOR. If that
+// bill was voided while the outcome was unknown (an admin reissue, or the
+// seller switching plan), the charge is STRANDED: audited on the voided bill
+// and auto-charging stops until a human settles a bill. It must never be
+// booked against the replacement (wrong bill, wrong amount) and never be
+// charged again on top (the double debit). Decided: audit + hold.
+describe("a lost charge that lands on a VOIDED bill is stranded — never re-applied, never re-charged", () => {
+	/** INV-OLD's charge was lost, then INV-OLD was voided and replaced by
+	 * INV-NEW (a different total), which carries its own live Pay-now link. */
+	async function voidedMidUnknown(
+		t: ReturnType<typeof setup>,
+		userId: string,
+		slug: string,
+	) {
+		const { retailerId, subId } = await seedRetailer(t, userId, slug);
+		const voided = await seedRenewalInvoice(t, retailerId, subId, {
+			invoiceNumber: "INV-OLD",
+			status: "void" as const,
+		});
+		const replacement = await seedRenewalInvoice(t, retailerId, subId, {
+			invoiceNumber: "INV-NEW",
+			amount: 7900,
+			total: 7900,
+			gatewayRequestId: "req_new",
+			gatewayPayment: {
+				provider: "hitpay" as const,
+				url: "https://pay.example/req_new",
+			},
+		});
+		const now = Date.now();
+		await attachAutoRenew(t, subId, {
+			lastChargeAttemptAt: now - 30 * HOUR,
+			pendingChargeInvoiceId: voided,
+			nextRetryAt: now - 6 * HOUR,
+			lastChargeError: "network failure — outcome unknown",
+		});
+		return { subId, voided, replacement };
+	}
+
+	test("the reconcile audits the money on the VOIDED bill, stops auto-charging, and leaves the replacement alone", async () => {
+		const t = setup();
+		stubBillingEnv();
+		vi.stubEnv("RESEND_API_KEY", "re_test");
+		vi.stubEnv("EMAIL_FROM", "billing@kedaipal.test");
+		vi.stubEnv("ADMIN_ALERT_EMAIL", "ops@kedaipal.test");
+		const calls = stubHitpay({
+			charge: (n) => succeeded(`pay_on_top_${n}`),
+			session: sessionCharged(1), // HitPay took INV-OLD's charge
+		});
+		const { subId, voided, replacement } = await voidedMidUnknown(
+			t,
+			"u_strand",
+			"strand-store",
+		);
+
+		const run = await cronAt(t, Date.now() + HOUR);
+
+		expect(run.autoChargeRetries).toBe(1);
+		expect(calls.sessionReads).toBe(1);
+		expect(calls.charges).toBe(0); // never charged on top
+		expect(calls.linkDeletes).toBe(0); // the replacement's link stays live
+		const oldBill = await getInvoice(t, voided);
+		expect(oldBill?.status).toBe("void");
+		expect(oldBill?.gatewayIssue).toMatchObject({
+			kind: "late_payment",
+			paymentId: "reconciled:rb_1:1",
+			amountSen: 14900, // what INV-OLD's charge took, not INV-NEW's total
+		});
+		const newBill = await getInvoice(t, replacement);
+		expect(newBill?.status).toBe("pending"); // never settled with old money
+		expect(newBill?.gatewayRequestId).toBe("req_new");
+		const sub = await getSub(t, subId);
+		expect(sub?.autoRenew?.strandedCharge).toMatchObject({
+			invoiceId: voided,
+			invoiceNumber: "INV-OLD",
+			amountSen: 14900,
+			currency: "MYR",
+			paymentId: "reconciled:rb_1:1",
+		});
+		// The outcome is known now: the stamp resolves, and our counter catches
+		// up with HitPay — a counter left behind would make the NEXT unknown
+		// outcome read "HitPay took it" and settle a bill for free.
+		expect(sub?.autoRenew?.timesCharged).toBe(1);
+		expect(sub?.autoRenew?.lastChargeAttemptAt).toBeUndefined();
+		expect(sub?.autoRenew?.pendingChargeInvoiceId).toBeUndefined();
+		expect(sub?.autoRenew?.nextRetryAt).toBeUndefined();
+		// The seller is told "we'll be in touch" — so ops is told, once.
+		expect(calls.emails).toHaveLength(1);
+		expect(calls.emails[0].to).toEqual(["ops@kedaipal.test"]);
+		expect(calls.emails[0].subject).toBe(
+			"[Kedaipal] Stranded auto-charge — Store strand-store",
+		);
+		expect(calls.emails[0].text).toContain("MYR 149.00");
+		expect(calls.emails[0].text).toContain("INV-OLD");
+		expect(calls.emails[0].text).toContain("reconciled:rb_1:1");
+		expect(calls.emails[0].text).toContain("STOPPED");
+	});
+
+	test("while stranded NOTHING charges: not the cron, not a queued charge, not a new renewal", async () => {
+		const t = setup();
+		stubBillingEnv();
+		const calls = stubHitpay({
+			charge: (n) => succeeded(`pay_on_top_${n}`),
+			session: sessionCharged(1),
+		});
+		const { subId, replacement } = await voidedMidUnknown(
+			t,
+			"u_stopped",
+			"stopped-store",
+		);
+		await cronAt(t, Date.now() + HOUR); // strands it
+
+		const nextDay = await cronAt(t, Date.now() + DAY);
+		expect(nextDay.autoChargeRetries).toBe(0);
+		// A charge queued before the stop still re-asks the rule when it runs.
+		await t.action(internal.subscriptionPayments.chargeDueRenewal, {
+			invoiceId: replacement,
+		});
+		// A renewal written while stopped is billed, not charged.
+		await t.run(async (ctx) =>
+			ctx.db.patch(replacement, { status: "void" as const }),
+		);
+		const issued = await t.mutation(
+			internal.invoices.internalIssueRenewalInvoice,
+			{ subscriptionId: subId },
+		);
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+		expect(issued).toEqual({ issued: true, autoCharge: false });
+
+		expect(calls.charges).toBe(0);
+		expect(calls.sessionReads).toBe(1); // only the read that stranded it
+	});
+
+	test("the cron asks the same rule — a due retry on a stopped store is not scheduled", async () => {
+		// Stranding clears the retry state, so no story reaches this door; the
+		// rule still has to hold at every door, not just the ones in use today.
+		const t = setup();
+		stubBillingEnv();
+		const calls = stubHitpay({ charge: (n) => succeeded(`pay_${n}`) });
+		const { retailerId, subId } = await seedRetailer(t, "u_door", "door-store");
+		const voided = await seedRenewalInvoice(t, retailerId, subId, {
+			invoiceNumber: "INV-OLD",
+			status: "void" as const,
+		});
+		await seedRenewalInvoice(t, retailerId, subId, {
+			invoiceNumber: "INV-NEW",
+		});
+		await attachAutoRenew(t, subId, {
+			nextRetryAt: Date.now() - HOUR,
+			strandedCharge: {
+				invoiceId: voided,
+				invoiceNumber: "INV-OLD",
+				amountSen: 14900,
+				currency: "MYR",
+				paymentId: "reconciled:rb_1:1",
+				at: Date.now() - DAY,
+			},
+		});
+
+		const run = await cronAt(t, Date.now() + HOUR);
+
+		expect(run.autoChargeRetries).toBe(0);
+		expect(calls.charges).toBe(0);
+	});
+
+	test("settling ANY bill lifts it — the admin applied or refunded the money, or the seller paid by hand", async () => {
+		const t = setup();
+		stubBillingEnv();
+		stubHitpay({
+			charge: (n) => succeeded(`pay_${n}`),
+			session: sessionCharged(1),
+		});
+		const { subId, replacement } = await voidedMidUnknown(
+			t,
+			"u_lift",
+			"lift-store",
+		);
+		await cronAt(t, Date.now() + HOUR);
+		expect((await getSub(t, subId))?.autoRenew?.strandedCharge).toBeDefined();
+
+		await t
+			.withIdentity({ subject: ADMIN })
+			.mutation(api.invoices.markPaid, { invoiceId: replacement });
+
+		const sub = await getSub(t, subId);
+		expect(sub?.autoRenew?.strandedCharge).toBeUndefined();
+		expect(sub?.autoRenew?.method).toBe("card"); // still on auto-renewal
+	});
+
+	test("a double payment on a bill already PAID another way is audited — but doesn't stop auto-charging", async () => {
+		// The boundary: only a charge whose ATTEMPT STAMP still names the bill
+		// is a lost auto-charge. A payment that lands on a bill settled some
+		// other way (no stamp — the settle cleared it) is a plain double
+		// payment: refund conversation, auto-renewal carries on.
+		const t = setup();
+		stubBillingEnv();
+		const { retailerId, subId } = await seedRetailer(t, "u_dbl", "dbl-store");
+		await attachAutoRenew(t, subId);
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId, {
+			status: "paid" as const,
+			markedPaidBy: ADMIN,
+		});
+
+		// The SESSION rail this time, so the only thing standing between this
+		// payment and a strand is the missing attempt stamp — the boundary
+		// under test. (The rail boundary has its own suite below.)
+		const result = await t.mutation(internal.invoices.internalSettleFromGateway, {
+			viaSessionCharge: true,
+			invoiceId,
+			paymentId: "pay_late_1",
+			amountSen: 14900,
+			currency: "MYR",
+		});
+
+		expect(result).toEqual({ applied: false, reason: "late_payment" });
+		expect((await getInvoice(t, invoiceId))?.gatewayIssue?.kind).toBe(
+			"late_payment",
+		);
+		expect((await getSub(t, subId))?.autoRenew?.strandedCharge).toBeUndefined();
+	});
+
+	test("both admin lists carry it, stopped stores sort first, and the seller's view says stopped", async () => {
+		const t = setup();
+		stubBillingEnv();
+		stubHitpay({ charge: (n) => succeeded(`pay_${n}`), session: sessionCharged(1) });
+		// A healthy auto-renew store attached MORE recently — it would sort
+		// first on attach date alone.
+		const healthy = await seedRetailer(t, "u_fine", "fine-store");
+		await attachAutoRenew(t, healthy.subId, { attachedAt: Date.now() });
+		const { subId, replacement } = await voidedMidUnknown(
+			t,
+			"u_listed",
+			"listed-store",
+		);
+		await cronAt(t, Date.now() + HOUR);
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+
+		const pending = await asAdmin.query(api.invoices.listPending, {});
+		const row = pending.find((r) => r._id === replacement);
+		expect(row?.autoRenew?.stranded).toMatchObject({
+			invoiceNumber: "INV-OLD",
+			amountSen: 14900,
+			paymentId: "reconciled:rb_1:1",
+		});
+
+		const overview = await asAdmin.query(
+			api.subscriptionPayments.listAutoRenewForAdmin,
+			{},
+		);
+		expect(overview.map((r) => r.slug)).toEqual(["listed-store", "fine-store"]);
+		expect(overview[0].charge.stranded?.invoiceNumber).toBe("INV-OLD");
+		expect(overview[1].charge.stranded).toBeUndefined();
+
+		const sub = await getSub(t, subId);
+		const view = resolveAccess(sub);
+		expect(view.autoRenew?.stopped).toBe(true);
+		expect(resolveAccess(await getSub(t, healthy.subId)).autoRenew?.stopped).toBe(
+			false,
+		);
+	});
+});
+
+// Only the SESSION rail may answer the money question. A Pay-now/manual
+// settle of the same bill is DIFFERENT money: bumping our counter for it
+// pushes us ahead of HitPay (the seed of "remote not ahead" → a double
+// charge), and clearing the stamp closes a question that payment never
+// answered — the lost session charge may still have landed.
+// The reconcile used to ask "is HitPay ahead of my success tally?". The tally
+// counts only OUR successes, so ANY other thing that moves HitPay's number
+// reads as "your lost charge landed" and settles a bill nobody paid — a free
+// month. The suspected mover is a declined charge, which cannot be observed
+// in the sandbox (it approves everything it validates), so the fix removes
+// the dependency instead of betting on the answer: capture HitPay's count at
+// the moment the charge fires and measure the DELTA.
+describe("the reconcile measures a delta from the attempt's own baseline", () => {
+	test("a counter that drifted BEHIND HitPay no longer settles a bill nobody paid", async () => {
+		// The exact decline scenario: something moved HitPay's count without
+		// being one of our successes, so remote (7) sits above the tally (5).
+		// A later charge is then lost. Old logic: "remote ahead ⇒ it landed" ⇒
+		// free month. With a baseline of 7 captured at fire time, an unmoved 7
+		// is correctly read as "it never landed".
+		const t = setup();
+		stubBillingEnv();
+		const calls = stubHitpay({
+			charge: (n) => (n === 1 ? lostRequest() : succeeded(`pay_retry_${n}`)),
+			session: sessionCharged(7),
+		});
+		const { retailerId, subId } = await seedRetailer(t, "u_drift", "drift-store");
+		await attachAutoRenew(t, subId, { timesCharged: 5 }); // tally is BEHIND
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId);
+
+		// The charge fires: it reads 7 as the baseline, then its response is lost.
+		await t.action(internal.subscriptionPayments.chargeDueRenewal, { invoiceId });
+		const stamped = await getSub(t, subId);
+		expect(stamped?.autoRenew?.chargeCountAtAttempt).toBe(7);
+		expect(calls.charges).toBe(1);
+
+		// The retry a day later: HitPay still says 7 — unmoved since we fired,
+		// so the charge never landed and the bill must be charged, not settled.
+		await cronAt(t, Date.now() + DAY + HOUR);
+
+		expect((await getInvoice(t, invoiceId))?.markedPaidBy).toBe("pay_retry_2");
+		expect(calls.charges).toBe(2); // charged, never settled for free
+	});
+
+	test("…and the same drift still settles when the charge REALLY landed", async () => {
+		// Same drifted tally, but this time the count moved past the baseline.
+		const t = setup();
+		stubBillingEnv();
+		const calls = stubHitpay({
+			charge: () => lostRequest(),
+			session: (n) => (n === 1 ? sessionCharged(7)() : sessionCharged(8)()),
+		});
+		const { retailerId, subId } = await seedRetailer(t, "u_drift2", "drift2-store");
+		await attachAutoRenew(t, subId, { timesCharged: 5 });
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId);
+
+		await t.action(internal.subscriptionPayments.chargeDueRenewal, { invoiceId });
+		expect((await getSub(t, subId))?.autoRenew?.chargeCountAtAttempt).toBe(7);
+
+		await cronAt(t, Date.now() + DAY + HOUR);
+
+		const invoice = await getInvoice(t, invoiceId);
+		expect(invoice?.status).toBe("paid");
+		expect(invoice?.markedPaidBy).toBe("reconciled:rb_1:8");
+		expect(calls.charges).toBe(1); // never a second charge
+	});
+
+	test("a stamp with NO baseline falls back to the tally — the old behaviour, never worse", async () => {
+		// Stamps written before this field existed, or when the pre-charge read
+		// failed. The fallback must still catch a landed charge.
+		const t = setup();
+		stubBillingEnv();
+		const calls = stubHitpay({
+			charge: () => succeeded("pay_never"),
+			session: sessionCharged(6),
+		});
+		const { retailerId, subId } = await seedRetailer(t, "u_fb", "fb-store");
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId);
+		await attachAutoRenew(t, subId, {
+			timesCharged: 5,
+			lastChargeAttemptAt: Date.now() - 30 * HOUR,
+			pendingChargeInvoiceId: invoiceId,
+			// chargeCountAtAttempt deliberately absent
+		});
+
+		await t.action(internal.subscriptionPayments.chargeDueRenewal, { invoiceId });
+
+		expect((await getInvoice(t, invoiceId))?.markedPaidBy).toBe(
+			"reconciled:rb_1:6",
+		);
+		expect(calls.charges).toBe(0);
+	});
+
+	test("an unreadable count before charging still charges — and records no baseline", async () => {
+		// A GET blip must not block a renewal; it just degrades to the fallback.
+		const t = setup();
+		stubBillingEnv();
+		const calls = stubHitpay({
+			charge: () => succeeded("pay_ok"),
+			session: () => new Response("down", { status: 503 }),
+		});
+		const { retailerId, subId } = await seedRetailer(t, "u_blip", "blip-store");
+		await attachAutoRenew(t, subId, { timesCharged: 2 });
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId);
+
+		await t.action(internal.subscriptionPayments.chargeDueRenewal, { invoiceId });
+
+		expect(calls.charges).toBe(1);
+		expect((await getInvoice(t, invoiceId))?.status).toBe("paid");
+	});
+
+	test("the baseline is cleared with the stamp, never left to mislead the next attempt", async () => {
+		const t = setup();
+		stubBillingEnv();
+		stubHitpay({
+			charge: () => Response.json({ payment_id: "p", status: "failed" }),
+			session: sessionCharged(3),
+		});
+		const { retailerId, subId } = await seedRetailer(t, "u_clr", "clr-store");
+		await attachAutoRenew(t, subId, { timesCharged: 3 });
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId);
+
+		await t.action(internal.subscriptionPayments.chargeDueRenewal, { invoiceId });
+
+		const sub = await getSub(t, subId);
+		expect(sub?.autoRenew?.failedAttempts).toBe(1); // a recorded decline
+		expect(sub?.autoRenew?.lastChargeAttemptAt).toBeUndefined();
+		expect(sub?.autoRenew?.chargeCountAtAttempt).toBeUndefined();
+	});
+});
+
+describe("only the session rail answers the stamp (viaSessionCharge)", () => {
+	/** A store whose renewal charge was SENT and lost (stamp standing). */
+	async function lostCharge(
+		t: ReturnType<typeof setup>,
+		userId: string,
+		slug: string,
+		calls: ReturnType<typeof stubHitpay>,
+	) {
+		const { retailerId, subId } = await seedRetailer(t, userId, slug);
+		await attachAutoRenew(t, subId);
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId);
+		await t.action(internal.subscriptionPayments.chargeDueRenewal, { invoiceId });
+		expect(calls.charges).toBe(1);
+		expect((await getSub(t, subId))?.autoRenew?.lastChargeAttemptAt).toBeTypeOf(
+			"number",
+		);
+		return { retailerId, subId, invoiceId };
+	}
+
+	test("a Pay-now settle of the stamped bill keeps the stamp and the counter — the reconcile later finds the landed charge and strands it", async () => {
+		const t = setup();
+		stubBillingEnv();
+		vi.stubEnv("RESEND_API_KEY", "re_test");
+		vi.stubEnv("EMAIL_FROM", "billing@kedaipal.test");
+		const calls = stubHitpay({
+			charge: () => lostRequest(),
+			// 0 when the charge fires, 1 when the reconcile asks: it DID land.
+			session: sessionCountSeq(0, 1),
+		});
+		const { subId, invoiceId } = await lostCharge(t, "u_rail", "rail-store", calls);
+
+		// The seller pays the bill themselves (slipped-through checkout → v1
+		// completion). The settle applies — but answers NOTHING about the
+		// session charge.
+		const settled = await t.mutation(
+			internal.invoices.internalSettleFromGateway,
+			{
+				invoiceId,
+				paymentId: "paynow_rail_1",
+				amountSen: 14900,
+				currency: "MYR",
+				viaSessionCharge: false,
+			},
+		);
+		expect(settled).toEqual({ applied: true });
+		const mid = await getSub(t, subId);
+		expect(mid?.autoRenew?.timesCharged ?? 0).toBe(0); // NO phantom bump
+		expect(mid?.autoRenew?.lastChargeAttemptAt).toBeTypeOf("number"); // question still open
+
+		// Next daily sweep: no pending bill, but the unresolved stamp routes the
+		// reconcile at the bill the attempt was FIRED FOR. The landed charge is
+		// found: double payment audited on that (paid) bill, auto-charging
+		// stopped, counter caught up — and never a second POST.
+		const run = await cronAt(t, Date.now() + DAY + HOUR);
+		expect(run.autoChargeRetries).toBe(1);
+		expect(calls.charges).toBe(1);
+		const invoice = await getInvoice(t, invoiceId);
+		expect(invoice?.status).toBe("paid");
+		expect(invoice?.gatewayIssue).toMatchObject({
+			kind: "late_payment",
+			paymentId: "reconciled:rb_1:1",
+		});
+		expect(invoice?.gatewayIssueOpen).toBe(true);
+		const sub = await getSub(t, subId);
+		expect(sub?.autoRenew?.strandedCharge).toMatchObject({
+			invoiceId,
+			paymentId: "reconciled:rb_1:1",
+		});
+		expect(sub?.autoRenew?.timesCharged).toBe(1);
+		expect(sub?.autoRenew?.lastChargeAttemptAt).toBeUndefined();
+	});
+
+	test("…and when the lost charge never landed, the answered stamp CLOSES instead of looping daily", async () => {
+		const t = setup();
+		stubBillingEnv();
+		const calls = stubHitpay({
+			charge: () => lostRequest(),
+			session: sessionCharged(0), // never landed
+		});
+		const { subId, invoiceId } = await lostCharge(t, "u_close", "close-store", calls);
+		await t.mutation(internal.invoices.internalSettleFromGateway, {
+			invoiceId,
+			paymentId: "paynow_close_1",
+			amountSen: 14900,
+			currency: "MYR",
+			viaSessionCharge: false,
+		});
+
+		const day1 = await cronAt(t, Date.now() + DAY + HOUR);
+		expect(day1.autoChargeRetries).toBe(1);
+		// 2: the baseline the lost charge captured, then the reconcile's read.
+		expect(calls.sessionReads).toBe(2);
+		expect(calls.charges).toBe(1); // nothing new was POSTed
+		const sub = await getSub(t, subId);
+		expect(sub?.autoRenew?.lastChargeAttemptAt).toBeUndefined(); // answered
+		expect(sub?.autoRenew?.strandedCharge).toBeUndefined();
+		expect(sub?.autoRenew?.timesCharged ?? 0).toBe(0);
+
+		// The day after: nothing left to reconcile — the loop ended.
+		const day2 = await cronAt(t, Date.now() + DAY);
+		expect(day2.autoChargeRetries).toBe(0);
+		expect(calls.sessionReads).toBe(2); // unchanged — nothing left to ask
+	});
+
+	test("a late Pay-now payment on the VOIDED stamped bill audits — but never strands, bumps, or answers the stamp", async () => {
+		// The seller pays a dead link late. That is THEIR money on a void bill
+		// (refund conversation) — it says nothing about the session charge,
+		// which may still be out there.
+		const t = setup();
+		stubBillingEnv();
+		const { retailerId, subId } = await seedRetailer(t, "u_v1void", "v1void-store");
+		const voided = await seedRenewalInvoice(t, retailerId, subId, {
+			status: "void" as const,
+		});
+		const stampedAt = Date.now() - 30 * HOUR;
+		await attachAutoRenew(t, subId, {
+			lastChargeAttemptAt: stampedAt,
+			pendingChargeInvoiceId: voided,
+		});
+
+		const result = await t.mutation(
+			internal.invoices.internalSettleFromGateway,
+			{
+				invoiceId: voided,
+				paymentId: "paynow_dead_link",
+				amountSen: 14900,
+				currency: "MYR",
+				viaSessionCharge: false,
+			},
+		);
+
+		expect(result).toEqual({ applied: false, reason: "late_payment" });
+		expect((await getInvoice(t, voided))?.gatewayIssue?.kind).toBe(
+			"late_payment",
+		);
+		const sub = await getSub(t, subId);
+		expect(sub?.autoRenew?.strandedCharge).toBeUndefined();
+		expect(sub?.autoRenew?.timesCharged ?? 0).toBe(0);
+		expect(sub?.autoRenew?.lastChargeAttemptAt).toBe(stampedAt);
+	});
+
+	test("subscribeSelf never promises (or schedules) a charge while a stamp is unresolved", async () => {
+		const t = setup();
+		stubBillingEnv();
+		const calls = stubHitpay({ charge: () => succeeded("pay_never") });
+		const { retailerId, subId } = await seedRetailer(t, "u_subw", "subw-store");
+		const voided = await seedRenewalInvoice(t, retailerId, subId, {
+			status: "void" as const,
+		});
+		await attachAutoRenew(t, subId, {
+			lastChargeAttemptAt: Date.now() - 2 * HOUR,
+			pendingChargeInvoiceId: voided,
+		});
+		await t.run((ctx) => ctx.db.patch(subId, { status: "trialing" as const }));
+
+		const result = await t
+			.withIdentity({ subject: "u_subw", email: "u_subw@x.com" })
+			.mutation(api.invoices.subscribeSelf, {
+				plan: "pro",
+				billingCycle: "monthly",
+			});
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+		expect(result.chargingSavedMethod).toBe(false);
+		expect(calls.charges).toBe(0);
+	});
+
+	test("a FRESH stamp is never resolved by a not-ahead reading — the in-flight mutex survives", async () => {
+		// Count-not-ahead can simply mean HitPay hasn't processed the in-flight
+		// charge yet. Resolving a fresh stamp would hand the lock to a second
+		// charge — the double debit.
+		const t = setup();
+		stubBillingEnv();
+		const calls = stubHitpay({
+			charge: () => succeeded("pay_never"),
+			session: sessionCharged(0),
+		});
+		const { retailerId, subId } = await seedRetailer(t, "u_fresh", "fresh-store");
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId, {
+			status: "paid" as const,
+			markedPaidBy: ADMIN,
+		});
+		const stampedAt = Date.now() - 60_000; // in flight
+		await attachAutoRenew(t, subId, {
+			lastChargeAttemptAt: stampedAt,
+			pendingChargeInvoiceId: invoiceId,
+		});
+
+		await t.action(internal.subscriptionPayments.chargeDueRenewal, { invoiceId });
+
+		expect(calls.sessionReads).toBe(1);
+		expect(calls.charges).toBe(0);
+		expect((await getSub(t, subId))?.autoRenew?.lastChargeAttemptAt).toBe(
+			stampedAt,
+		);
+	});
+
+	test("a GONE session with a stale stamp on a settled bill closes loudly instead of looping", async () => {
+		const t = setup();
+		stubBillingEnv();
+		const calls = stubHitpay({
+			charge: () => succeeded("pay_never"),
+			session: () => new Response("not found", { status: 404 }),
+		});
+		const { retailerId, subId } = await seedRetailer(t, "u_gone2", "gone2-store");
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId, {
+			status: "paid" as const,
+			markedPaidBy: ADMIN,
+		});
+		await attachAutoRenew(t, subId, {
+			lastChargeAttemptAt: Date.now() - 30 * HOUR,
+			pendingChargeInvoiceId: invoiceId,
+		});
+
+		await t.action(internal.subscriptionPayments.chargeDueRenewal, { invoiceId });
+
+		expect(calls.charges).toBe(0);
+		expect((await getSub(t, subId))?.autoRenew?.lastChargeAttemptAt).toBeUndefined();
+	});
+});
+
+describe("the claim (recordChargeAttempt) — the transaction where charging becomes safe", () => {
+	test("claiming retires the local Pay-now button in the same transaction as the stamp", async () => {
+		const t = setup();
+		const { retailerId, subId } = await seedRetailer(t, "u_clm", "clm-store");
+		await attachAutoRenew(t, subId);
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId, {
+			gatewayRequestId: "req_live",
+			gatewayPayment: {
+				provider: "hitpay" as const,
+				url: "https://pay.example/req_live",
+			},
+		});
+
+		const claim = await t.mutation(
+			internal.subscriptionPayments.recordChargeAttempt,
+			{ subscriptionId: subId, invoiceId },
+		);
+
+		expect(claim.claimed).toBe(true);
+		const invoice = await getInvoice(t, invoiceId);
+		// Without this, the billing tab and every email kept offering "Pay
+		// online now" against a link the claim's remote DELETE had killed —
+		// for as long as a lost outcome stayed unresolved.
+		expect(invoice?.gatewayPayment).toBeUndefined();
+		expect(invoice?.gatewayRequestId).toBeUndefined();
+	});
+
+	test("a bill that settled between the action's read and the claim is refused — the charge never fires", async () => {
+		// The context read (query) and the claim (mutation) are separate
+		// transactions; a Pay-now webhook can settle the bill in between. The
+		// claim re-verifying `pending` is what closes that window.
+		const t = setup();
+		const { retailerId, subId } = await seedRetailer(t, "u_race2", "race2-store");
+		await attachAutoRenew(t, subId);
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId, {
+			status: "paid" as const,
+			markedPaidBy: ADMIN,
+		});
+		const claim = await t.mutation(
+			internal.subscriptionPayments.recordChargeAttempt,
+			{ subscriptionId: subId, invoiceId },
+		);
+		expect(claim.claimed).toBe(false);
+		expect((await getSub(t, subId))?.autoRenew?.lastChargeAttemptAt).toBeUndefined();
+	});
+});
+
+// Clearing `autoRenew` (seller cancel, remote detach) used to destroy every
+// hook the reconcile hangs off — with an outcome unknown, a landed charge
+// became permanently invisible. The captured-facts action answers it anyway.
+describe("cancel / detach with a charge outcome unknown (reconcileLostAttempt)", () => {
+	/** Sub with a lost charge: stamp standing, session rb_1, bill pending. */
+	async function lostThen(
+		t: ReturnType<typeof setup>,
+		userId: string,
+		slug: string,
+	) {
+		const { retailerId, subId } = await seedRetailer(t, userId, slug);
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId);
+		await attachAutoRenew(t, subId, {
+			lastChargeAttemptAt: Date.now() - 2 * HOUR,
+			pendingChargeInvoiceId: invoiceId,
+		});
+		return { subId, invoiceId, asOwner: t.withIdentity({ subject: userId, email: `${userId}@x.com` }) };
+	}
+
+	test("cancel carries the attempt's BASELINE, not the tally — a drifted counter can't fake a landed charge", async () => {
+		// The tally (5) sits below HitPay (7) for some reason that was never one
+		// of our successes. The lost charge's baseline is 7 and HitPay still
+		// says 7, so it never landed: the bill must get its Pay-now link back,
+		// not be settled for free on the strength of the drift.
+		const t = setup();
+		stubBillingEnv();
+		const calls = stubHitpay({
+			charge: () => succeeded("pay_never"),
+			session: sessionCharged(7),
+			mint: () =>
+				Response.json({ id: "req_back", url: "https://pay.example/req_back" }),
+		});
+		const { retailerId, subId } = await seedRetailer(t, "u_cxlb", "cxlb-store");
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId);
+		await attachAutoRenew(t, subId, {
+			timesCharged: 5,
+			chargeCountAtAttempt: 7,
+			lastChargeAttemptAt: Date.now() - 2 * HOUR,
+			pendingChargeInvoiceId: invoiceId,
+		});
+
+		await t
+			.withIdentity({ subject: "u_cxlb", email: "u_cxlb@x.com" })
+			.mutation(api.subscriptionPayments.cancelAutoRenew, {});
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+		const invoice = await getInvoice(t, invoiceId);
+		expect(invoice?.status).toBe("pending"); // NOT settled for free
+		expect(invoice?.gatewayPayment?.url).toBe("https://pay.example/req_back");
+		expect(calls.charges).toBe(0);
+	});
+
+	test("cancel: the landed charge is still found and settled, THEN the session is deleted", async () => {
+		const t = setup();
+		stubBillingEnv();
+		const calls = stubHitpay({
+			charge: () => succeeded("pay_never"),
+			session: sessionCharged(1),
+		});
+		const { subId, invoiceId, asOwner } = await lostThen(t, "u_cxl", "cxl-store");
+
+		await asOwner.mutation(api.subscriptionPayments.cancelAutoRenew, {});
+		expect((await getSub(t, subId))?.autoRenew).toBeUndefined(); // off NOW
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+		expect(calls.sessionReads).toBe(1);
+		expect(calls.charges).toBe(0);
+		const invoice = await getInvoice(t, invoiceId);
+		expect(invoice?.status).toBe("paid");
+		expect(invoice?.markedPaidBy).toBe("reconciled:rb_1:1");
+		// Deleted only AFTER the count was read — deleting first would 404 the
+		// very answer this needed.
+		expect(calls.sessionDeletes).toBe(1);
+	});
+
+	test("cancel: a charge that never landed re-mints the Pay-now link the claim killed", async () => {
+		const t = setup();
+		stubBillingEnv();
+		const calls = stubHitpay({
+			charge: () => succeeded("pay_never"),
+			session: sessionCharged(0),
+			mint: () =>
+				Response.json({ id: "req_back", url: "https://pay.example/req_back" }),
+		});
+		const { invoiceId, asOwner } = await lostThen(t, "u_cxl2", "cxl2-store");
+
+		await asOwner.mutation(api.subscriptionPayments.cancelAutoRenew, {});
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+		expect(calls.charges).toBe(0);
+		expect(calls.mints).toBe(1);
+		const invoice = await getInvoice(t, invoiceId);
+		expect(invoice?.status).toBe("pending");
+		expect(invoice?.gatewayPayment?.url).toBe("https://pay.example/req_back");
+		expect(calls.sessionDeletes).toBe(1);
+	});
+
+	test("cancel: no answer from HitPay → retries, then stops WITHOUT re-minting or deleting — never guesses about money", async () => {
+		const t = setup();
+		stubBillingEnv();
+		const calls = stubHitpay({
+			charge: () => succeeded("pay_never"),
+			session: () => new Response("down", { status: 503 }),
+		});
+		const { invoiceId, asOwner } = await lostThen(t, "u_cxl3", "cxl3-store");
+
+		await asOwner.mutation(api.subscriptionPayments.cancelAutoRenew, {});
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+		expect(calls.sessionReads).toBe(5); // 1 + the 4 scheduled retries
+		expect(calls.mints).toBe(0); // a manual payment invite could be the 2nd payment
+		expect(calls.sessionDeletes).toBe(0); // left inspectable for the human
+		expect((await getInvoice(t, invoiceId))?.gatewayPayment).toBeUndefined();
+	});
+
+	test("detach (HitPay-side): same reconcile, but never a session delete", async () => {
+		const t = setup();
+		stubBillingEnv();
+		const calls = stubHitpay({
+			charge: () => succeeded("pay_never"),
+			session: sessionCharged(1),
+		});
+		const { subId, invoiceId } = await lostThen(t, "u_det", "det-store");
+
+		await t.mutation(internal.subscriptionPayments.recordMethodDetached, {
+			billingId: "rb_1",
+		});
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+		expect((await getSub(t, subId))?.autoRenew).toBeUndefined();
+		expect((await getInvoice(t, invoiceId))?.status).toBe("paid");
+		expect(calls.sessionDeletes).toBe(0);
+	});
+
+	test("cancel with NOTHING unresolved deletes the session straight away (unchanged behaviour)", async () => {
+		const t = setup();
+		stubBillingEnv();
+		const calls = stubHitpay({ charge: () => succeeded("pay_never") });
+		const { retailerId, subId } = await seedRetailer(t, "u_cxl4", "cxl4-store");
+		await seedRenewalInvoice(t, retailerId, subId);
+		await attachAutoRenew(t, subId);
+
+		await t
+			.withIdentity({ subject: "u_cxl4", email: "u_cxl4@x.com" })
+			.mutation(api.subscriptionPayments.cancelAutoRenew, {});
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+		expect(calls.sessionDeletes).toBe(1);
+		expect(calls.sessionReads).toBe(0);
+	});
+});
+
+// Real gateway money that settled nothing used to be invisible exactly when
+// it mattered: a late_payment sits on a PAID or VOID bill by definition, and
+// the console only rendered pending rows.
+describe("payments to review (gatewayIssueOpen)", () => {
+	test("a late payment is queued with its store, and resolving records who/when/what", async () => {
+		const t = setup();
+		const { retailerId, subId } = await seedRetailer(t, "u_q", "q-store");
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId, {
+			status: "paid" as const,
+			markedPaidBy: ADMIN,
+		});
+		await t.mutation(internal.invoices.internalSettleFromGateway, {
+			invoiceId,
+			paymentId: "pay_late_q",
+			amountSen: 14900,
+			currency: "MYR",
+			viaSessionCharge: false,
+		});
+
+		const queue = await t
+			.withIdentity({ subject: ADMIN })
+			.query(api.invoices.listGatewayIssues, {});
+		expect(queue).toHaveLength(1);
+		expect(queue[0]).toMatchObject({
+			invoiceId,
+			invoiceStatus: "paid",
+			storeName: "Store q-store",
+			slug: "q-store",
+			kind: "late_payment",
+			paymentId: "pay_late_q",
+			amountSen: 14900,
+		});
+		// Only admins may read or close money-review state.
+		await expect(
+			t.withIdentity({ subject: "u_q" }).query(api.invoices.listGatewayIssues, {}),
+		).rejects.toThrow();
+		await expect(
+			t
+				.withIdentity({ subject: "u_q" })
+				.mutation(api.invoices.resolveGatewayIssue, { invoiceId }),
+		).rejects.toThrow();
+
+		await t
+			.withIdentity({ subject: ADMIN })
+			.mutation(api.invoices.resolveGatewayIssue, {
+				invoiceId,
+				note: "refunded in HitPay",
+			});
+		expect(
+			await t.withIdentity({ subject: ADMIN }).query(api.invoices.listGatewayIssues, {}),
+		).toHaveLength(0);
+		const invoice = await getInvoice(t, invoiceId);
+		expect(invoice?.gatewayIssueOpen).toBeUndefined();
+		// Resolution is recorded, never deleted — the audit survives.
+		expect(invoice?.gatewayIssue).toMatchObject({
+			kind: "late_payment",
+			resolvedBy: ADMIN,
+			resolvedNote: "refunded in HitPay",
+		});
+		expect(invoice?.gatewayIssue?.resolvedAt).toBeTypeOf("number");
+		await expect(
+			t
+				.withIdentity({ subject: ADMIN })
+				.mutation(api.invoices.resolveGatewayIssue, { invoiceId }),
+		).rejects.toThrow(/Already resolved/);
+	});
+
+	test("an amount mismatch on a PENDING bill is queued too", async () => {
+		const t = setup();
+		const { retailerId, subId } = await seedRetailer(t, "u_q2", "q2-store");
+		const invoiceId = await seedRenewalInvoice(t, retailerId, subId);
+		await t.mutation(internal.invoices.internalSettleFromGateway, {
+			invoiceId,
+			paymentId: "pay_mismatch_q",
+			amountSen: 999,
+			currency: "MYR",
+			viaSessionCharge: false,
+		});
+		const queue = await t
+			.withIdentity({ subject: ADMIN })
+			.query(api.invoices.listGatewayIssues, {});
+		expect(queue).toHaveLength(1);
+		expect(queue[0]).toMatchObject({
+			kind: "amount_mismatch",
+			invoiceStatus: "pending",
+			amountSen: 999,
+			invoiceTotal: 14900,
+		});
+	});
+
+	test("the backfill flags stamps from before the queue existed — and skips resolved ones", async () => {
+		const t = setup();
+		const { retailerId, subId } = await seedRetailer(t, "u_q3", "q3-store");
+		const legacy = await seedRenewalInvoice(t, retailerId, subId, {
+			invoiceNumber: "INV-LEGACY",
+			status: "void" as const,
+			gatewayIssue: {
+				kind: "late_payment" as const,
+				paymentId: "pay_old",
+				amountSen: 14900,
+				at: Date.now() - 5 * DAY,
+			},
+		});
+		await seedRenewalInvoice(t, retailerId, subId, {
+			invoiceNumber: "INV-RESOLVED",
+			status: "void" as const,
+			gatewayIssue: {
+				kind: "late_payment" as const,
+				paymentId: "pay_done",
+				amountSen: 14900,
+				at: Date.now() - 9 * DAY,
+				resolvedAt: Date.now() - 8 * DAY,
+				resolvedBy: ADMIN,
+			},
+		});
+
+		const result = await t.mutation(
+			internal.migrations.backfillGatewayIssueOpen,
+			{},
+		);
+		expect(result.flagged).toBe(1);
+		const queue = await t
+			.withIdentity({ subject: ADMIN })
+			.query(api.invoices.listGatewayIssues, {});
+		expect(queue.map((r) => r.invoiceId)).toEqual([legacy]);
+	});
+});
+
+// The reconcile's no-double-charge verdict is exactly as good as counter
+// parity with HitPay: local behind ⇒ a free settle; local ahead ⇒ a double
+// charge. This one-shot aligns them at release, skipping any session whose
+// drift IS evidence of an open question.
+describe("syncChargeCounters (operator one-shot)", () => {
+	test("patches drift, keeps sync, and reports every session", async () => {
+		const t = setup();
+		stubBillingEnv();
+		const counts: Record<string, number> = { rb_a: 3, rb_b: 1 };
+		stubHitpay({
+			charge: () => {
+				throw new Error("the sync must never charge");
+			},
+			session: sessionCharged(0), // overridden per-URL below
+		});
+		// Per-session counts: re-stub with a URL-aware session responder.
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: unknown) => {
+				const u = String(url);
+				const id = u.split("/recurring-billing/")[1];
+				if (u.includes("/charge/")) throw new Error("must never charge");
+				return Response.json({
+					status: "active",
+					cycle: "save_card",
+					times_charged: null,
+					total_charge: counts[id ?? ""] ?? 0,
+				});
+			}),
+		);
+
+		const a = await seedRetailer(t, "u_sync_a", "sync-a");
+		await attachAutoRenew(t, a.subId, { timesCharged: 1 }); // behind (3 real)
+		await t.run((ctx) => ctx.db.patch(a.subId, { autoRenewSessionId: "rb_a" }));
+		const b = await seedRetailer(t, "u_sync_b", "sync-b");
+		await attachAutoRenew(t, b.subId, { timesCharged: 1 }); // in sync
+		await t.run((ctx) => ctx.db.patch(b.subId, { autoRenewSessionId: "rb_b" }));
+
+		const report = await t.action(
+			internal.subscriptionPayments.syncChargeCounters,
+			{},
+		);
+
+		expect(report).toHaveLength(2);
+		expect(
+			report.find((r) => r.sessionId === "rb_a"),
+		).toMatchObject({ outcome: "patched", local: 1, remote: 3 });
+		expect(
+			report.find((r) => r.sessionId === "rb_b"),
+		).toMatchObject({ outcome: "in_sync" });
+		expect((await getSub(t, a.subId))?.autoRenew?.timesCharged).toBe(3);
+		expect((await getSub(t, b.subId))?.autoRenew?.timesCharged).toBe(1);
+	});
+
+	test("NEVER syncs over an open question — unresolved and stranded sessions are skipped and reported", async () => {
+		// Aligning the counter while a charge outcome is unknown erases the
+		// exact drift the reconcile reads as "the money landed" — the sync
+		// would convert a pending double-payment discovery into a free month or a
+		// re-charge.
+		const t = setup();
+		stubBillingEnv();
+		const calls = stubHitpay({
+			charge: () => {
+				throw new Error("must never charge");
+			},
+			session: sessionCharged(5),
+		});
+		const u = await seedRetailer(t, "u_sync_u", "sync-u");
+		const invoiceId = await seedRenewalInvoice(t, u.retailerId, u.subId);
+		await attachAutoRenew(t, u.subId, {
+			timesCharged: 4,
+			lastChargeAttemptAt: Date.now() - HOUR,
+			pendingChargeInvoiceId: invoiceId,
+		});
+		const st = await seedRetailer(t, "u_sync_s", "sync-s");
+		await attachAutoRenew(t, st.subId, {
+			timesCharged: 4,
+			strandedCharge: {
+				invoiceId,
+				invoiceNumber: "INV-OLD",
+				amountSen: 14900,
+				currency: "MYR",
+				paymentId: "reconciled:rb_1:5",
+				at: Date.now(),
+			},
+		});
+
+		const report = await t.action(
+			internal.subscriptionPayments.syncChargeCounters,
+			{},
+		);
+
+		expect(report.map((r) => r.outcome).sort()).toEqual([
+			"skipped_stranded",
+			"skipped_unresolved",
+		]);
+		expect(calls.sessionReads).toBe(0); // not even read — nothing to align
+		expect((await getSub(t, u.subId))?.autoRenew?.timesCharged).toBe(4);
+		expect((await getSub(t, st.subId))?.autoRenew?.timesCharged).toBe(4);
+	});
+});
+
 describe("internalSettleFromGateway", () => {
 	test("duplicate payment id no-ops; a different late payment stamps the audit", async () => {
 		const t = setup();
@@ -1185,6 +2708,7 @@ describe("internalSettleFromGateway", () => {
 		const invoiceId = await seedRenewalInvoice(t, retailerId, subId);
 
 		const first = await t.mutation(internal.invoices.internalSettleFromGateway, {
+			viaSessionCharge: false,
 			invoiceId,
 			paymentId: "pay_1",
 			amountSen: 14900,
@@ -1194,6 +2718,7 @@ describe("internalSettleFromGateway", () => {
 		expect(first.applied).toBe(true);
 
 		const dupe = await t.mutation(internal.invoices.internalSettleFromGateway, {
+			viaSessionCharge: false,
 			invoiceId,
 			paymentId: "pay_1",
 			amountSen: 14900,
@@ -1203,6 +2728,7 @@ describe("internalSettleFromGateway", () => {
 		expect((await getInvoice(t, invoiceId))?.gatewayIssue).toBeUndefined();
 
 		const late = await t.mutation(internal.invoices.internalSettleFromGateway, {
+			viaSessionCharge: false,
 			invoiceId,
 			paymentId: "pay_2_other",
 			amountSen: 14900,
@@ -1219,6 +2745,7 @@ describe("internalSettleFromGateway", () => {
 		const { retailerId, subId } = await seedRetailer(t, "u_mis", "mis-store");
 		const invoiceId = await seedRenewalInvoice(t, retailerId, subId);
 		const result = await t.mutation(internal.invoices.internalSettleFromGateway, {
+			viaSessionCharge: false,
 			invoiceId,
 			paymentId: "pay_wrong",
 			amountSen: 9900,
@@ -1244,6 +2771,7 @@ describe("internalSettleFromGateway", () => {
 			total: 10400,
 		});
 		const result = await t.mutation(internal.invoices.internalSettleFromGateway, {
+			viaSessionCharge: false,
 			invoiceId,
 			paymentId: "pay_f1",
 			amountSen: 10400,
@@ -1313,6 +2841,59 @@ describe("POST /webhook/hitpay — V2 event branch (Kedaipal's account)", () => 
 		const invoice = await getInvoice(t, invoiceId);
 		expect(invoice?.status).toBe("paid");
 		expect(invoice?.markedPaidBy).toBe("pay_ev_1");
+	});
+
+	test("a late charge.created for a bill voided mid-unknown STRANDS it — the replacement is neither settled nor charged", async () => {
+		// The other door to the same fact: the webhook resolves the charge to
+		// the bill the attempt stamp names, which was voided while we waited.
+		const t = setup();
+		stubBillingEnv();
+		const { retailerId, subId } = await seedRetailer(t, "u_evs", "evs-store");
+		const voided = await seedRenewalInvoice(t, retailerId, subId, {
+			invoiceNumber: "INV-OLD",
+			status: "void" as const,
+		});
+		const replacement = await seedRenewalInvoice(t, retailerId, subId, {
+			invoiceNumber: "INV-NEW",
+		});
+		await attachAutoRenew(t, subId, {
+			lastChargeAttemptAt: Date.now() - HOUR,
+			pendingChargeInvoiceId: voided,
+		});
+
+		const body = JSON.stringify({
+			id: "pay_ev_late",
+			channel: "recurrent",
+			status: "succeeded",
+			amount: 149,
+			currency: "myr",
+			recurring_billing_id: "rb_1",
+			payment_provider: { charge: { method: "card" } },
+		});
+		const res = await t.fetch("/webhook/hitpay", {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				"Hitpay-Signature": await signEvent(body),
+				"Hitpay-Event-Object": "charge",
+				"Hitpay-Event-Type": "created",
+			},
+			body,
+		});
+
+		expect(res.status).toBe(200);
+		expect((await getInvoice(t, voided))?.gatewayIssue).toMatchObject({
+			kind: "late_payment",
+			paymentId: "pay_ev_late",
+		});
+		expect((await getInvoice(t, replacement))?.status).toBe("pending");
+		const sub = await getSub(t, subId);
+		expect(sub?.autoRenew?.strandedCharge).toMatchObject({
+			invoiceNumber: "INV-OLD",
+			paymentId: "pay_ev_late",
+		});
+		expect(sub?.autoRenew?.lastChargeAttemptAt).toBeUndefined();
+		expect(sub?.autoRenew?.timesCharged).toBe(1);
 	});
 
 	test("method_attached arms the sub; forged signatures 401; missing salt 500", async () => {

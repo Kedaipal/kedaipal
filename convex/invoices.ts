@@ -22,7 +22,13 @@ import {
 	requireRetailerAccess,
 	resolveMyRetailerFor,
 } from "./lib/auth";
-import { gatewayPaymentMethodTag } from "./lib/hitpayBilling";
+import {
+	type AdminAutoChargeState,
+	adminAutoChargeState,
+	autoChargeAllowed,
+	autoChargeIdle,
+	gatewayPaymentMethodTag,
+} from "./lib/hitpayBilling";
 import {
 	invoiceToSubscriptionData,
 	type SubscriptionInvoiceData,
@@ -246,8 +252,21 @@ async function settleInvoicePaid(
 						failedAttempts: undefined,
 						nextRetryAt: undefined,
 						lastChargeError: undefined,
-						lastChargeAttemptAt: undefined,
-						pendingChargeInvoiceId: undefined,
+						// DELIBERATELY NOT lastChargeAttemptAt / pendingChargeInvoiceId.
+						// The attempt stamp is an open MONEY question — "did that
+						// session charge land at HitPay?" — and settling a bill by
+						// some other rail (admin mark-paid, Pay-now, bank transfer)
+						// doesn't answer it. Clearing it here is how a lost-but-
+						// landed charge used to vanish: nothing reconciled it, the
+						// counter drifted, and the seller's double payment surfaced
+						// nowhere. Only a recorded outcome on the SESSION rail
+						// resolves the stamp (internalSettleFromGateway's
+						// viaSessionCharge patch, or recordChargeFailure).
+						// A stranded charge stops auto-charging until a human acts;
+						// a settled bill IS that act (the admin applied or refunded
+						// the money, or the seller paid by hand), so charging resumes
+						// from the next renewal.
+						strandedCharge: undefined,
 					},
 				}
 			: {}),
@@ -425,10 +444,21 @@ export const internalSettleFromGateway = internalMutation({
 		currency: v.string(),
 		// HitPay method code when the event carries one ("card"/"touch_n_go").
 		methodCode: v.optional(v.string()),
+		// WHICH RAIL the money rode. True only for a saved-method session
+		// charge (the sync response, its `charge.created` webhook, or the
+		// outcome-unknown reconcile); false for a Pay-now payment (v1
+		// completion webhook, redirect-return reconcile). The distinction is
+		// load-bearing for money: only a SESSION charge may advance
+		// `timesCharged` or answer an attempt stamp. A Pay-now settle that did
+		// either would (a) push our counter ahead of HitPay's, making a later
+		// lost-but-landed charge read "remote not ahead" — a DOUBLE CHARGE —
+		// and (b) close the "did that lost charge land?" question with an
+		// answer that came from different money.
+		viaSessionCharge: v.boolean(),
 	},
 	handler: async (
 		ctx,
-		{ invoiceId, paymentId, amountSen, currency, methodCode },
+		{ invoiceId, paymentId, amountSen, currency, methodCode, viaSessionCharge },
 	): Promise<{
 		applied: boolean;
 		reason?: "duplicate" | "late_payment" | "amount_mismatch" | "gone";
@@ -458,7 +488,62 @@ export const internalSettleFromGateway = internalMutation({
 						amountSen,
 						at: Date.now(),
 					},
+					// Real money nobody applied — queue it for a human
+					// (admin "Payments to review", resolveGatewayIssue).
+					gatewayIssueOpen: true,
 				});
+			}
+			// …and when it is the AUTO-CHARGE whose outcome we'd lost (the stamp
+			// still names this bill; only a settle BY THE SESSION RAIL answers
+			// it), that charge is STRANDED: its outcome is now known, so the
+			// stamp resolves and the counter catches up with HitPay, and
+			// auto-charging stops until a human sorts the money out. Applying it
+			// to the replacement bill would book it against the wrong bill;
+			// charging the replacement on top would be the double debit. Both the
+			// reconcile and a late `charge.created` webhook arrive here. A
+			// Pay-now payment landing here is a different fact — the seller paid
+			// a dead bill — and must not touch the stamp or the counter: the
+			// session charge it would masquerade as may still be out there.
+			const sub = await ctx.db.get(invoice.subscriptionId);
+			if (
+				viaSessionCharge &&
+				sub?.autoRenew?.pendingChargeInvoiceId === invoiceId
+			) {
+				await ctx.db.patch(sub._id, {
+					autoRenew: {
+						...sub.autoRenew,
+						timesCharged: (sub.autoRenew.timesCharged ?? 0) + 1,
+						lastChargeAttemptAt: undefined,
+						pendingChargeInvoiceId: undefined,
+						chargeCountAtAttempt: undefined,
+						nextRetryAt: undefined,
+						strandedCharge: sub.autoRenew.strandedCharge ?? {
+							invoiceId,
+							invoiceNumber: invoice.invoiceNumber,
+							amountSen,
+							currency: invoice.currency,
+							paymentId,
+							at: Date.now(),
+						},
+					},
+				});
+				// The seller is told "we'll be in touch" — so a human is told
+				// too, once, rather than left to find a pill in the console.
+				if (sub.autoRenew.strandedCharge === undefined) {
+					const retailer = await ctx.db.get(sub.retailerId);
+					await ctx.scheduler.runAfter(
+						0,
+						internal.subscriptionPayments.sendStrandedChargeAlert,
+						{
+							storeName: retailer?.storeName ?? "(store missing)",
+							slug: retailer?.slug ?? "",
+							invoiceNumber: invoice.invoiceNumber,
+							amountSen,
+							currency: invoice.currency,
+							paymentId,
+						},
+					);
+				}
 			}
 			return { applied: false, reason: "late_payment" };
 		}
@@ -482,6 +567,8 @@ export const internalSettleFromGateway = internalMutation({
 						amountSen,
 						at: Date.now(),
 					},
+					// Same queue as late_payment: money moved, nothing settled.
+					gatewayIssueOpen: true,
 				});
 			}
 			return { applied: false, reason: "amount_mismatch" };
@@ -507,11 +594,15 @@ export const internalSettleFromGateway = internalMutation({
 		// Pay-now settle is the link completing itself. Killing again would fire
 		// a guaranteed-to-fail DELETE on the commonest path and train the eye to
 		// ignore the warn that matters. Manual markPaid/voidInvoice keep theirs.
-		// A successful AUTO-CHARGE also advances the saved-method counters —
-		// resolved via the pending-charge stamp so a Pay-now settle on a session
-		// mid-dunning doesn't inflate timesCharged. (Dunning state itself was
-		// already cleared inside settleInvoicePaid.)
-		if (sub.autoRenew?.pendingChargeInvoiceId === invoiceId) {
+		// A successful SESSION charge also advances the saved-method counters
+		// and RESOLVES the attempt stamp — this patch is the only success-side
+		// resolver, because only the session rail can answer "did that charge
+		// land?". A Pay-now settle on the same bill (the slipped-through
+		// checkout) leaves both alone: bumping would push our counter ahead of
+		// HitPay's (the seed of a future double charge), and clearing the stamp
+		// would close a money question that other payment never answered — the
+		// reconcile still owes us the verdict on the session charge.
+		if (viaSessionCharge && sub.autoRenew?.pendingChargeInvoiceId === invoiceId) {
 			const settled = await ctx.db.get(sub._id);
 			if (settled?.autoRenew) {
 				await ctx.db.patch(sub._id, {
@@ -519,9 +610,24 @@ export const internalSettleFromGateway = internalMutation({
 						...settled.autoRenew,
 						lastChargeAt: record.paidAt,
 						timesCharged: (sub.autoRenew.timesCharged ?? 0) + 1,
+						lastChargeAttemptAt: undefined,
+						pendingChargeInvoiceId: undefined,
+						chargeCountAtAttempt: undefined,
 					},
 				});
 			}
+		} else if (
+			!viaSessionCharge &&
+			sub.autoRenew?.lastChargeAttemptAt !== undefined
+		) {
+			// The seller's own payment landed while a session charge is
+			// unresolved — the classic double-payment setup. Nothing to do here
+			// (the reconcile will answer the charge and audit it if it landed),
+			// but say so where an operator greps.
+			console.warn(
+				"[billing] Pay-now settle while a session charge is unresolved — reconcile pending",
+				{ invoiceNumber: invoice.invoiceNumber, paymentId },
+			);
 		}
 		return { applied: true };
 	},
@@ -783,15 +889,20 @@ export const subscribeSelf = mutation({
 		// back later) never reaches the authorisation page — startAutoRenewSetup
 		// refuses with "already on". Without this their brand-new invoice would
 		// sit unpaid forever while the button that made it promised an immediate
-		// charge. Charge the saved method instead: same consent, same amount.
-		if (sub.autoRenew !== undefined) {
+		// charge. Charge the saved method instead: same consent, same amount —
+		// unless auto-charging is stopped (stranded charge) or an earlier
+		// charge's outcome is still unknown (autoChargeIdle): promising a
+		// charge the mutex would stand down is a lie, so the new bill waits
+		// for the daily sweep (which reconciles first) or the seller's hand.
+		const chargingSavedMethod = autoChargeIdle(sub.autoRenew);
+		if (chargingSavedMethod) {
 			await ctx.scheduler.runAfter(
 				0,
 				internal.subscriptionPayments.chargeDueRenewal,
 				{ invoiceId },
 			);
 		}
-		return { invoiceId, chargingSavedMethod: sub.autoRenew !== undefined };
+		return { invoiceId, chargingSavedMethod };
 	},
 });
 
@@ -925,8 +1036,10 @@ export const changePlan = mutation({
 		}
 		// Same rule as subscribeSelf: a seller who already authorised a method
 		// is charged on it rather than being sent to an authorisation page that
-		// would refuse them ("already on").
-		if (sub.autoRenew !== undefined) {
+		// would refuse them ("already on") — unless auto-charging is stopped
+		// or an earlier charge is still being confirmed (autoChargeIdle).
+		const chargingSavedMethod = autoChargeIdle(sub.autoRenew);
+		if (chargingSavedMethod) {
 			await ctx.scheduler.runAfter(
 				0,
 				internal.subscriptionPayments.chargeDueRenewal,
@@ -936,7 +1049,7 @@ export const changePlan = mutation({
 		return {
 			kind: "invoiced",
 			invoiceId,
-			chargingSavedMethod: sub.autoRenew !== undefined,
+			chargingSavedMethod,
 		};
 	},
 });
@@ -1274,7 +1387,7 @@ export const internalIssueRenewalInvoice = internalMutation({
 		if (kind === "plan" && sub.pendingPlanChange !== undefined) {
 			await ctx.db.patch(sub._id, { pendingPlanChange: undefined });
 		}
-		const autoCharge = sub.autoRenew !== undefined;
+		const autoCharge = autoChargeAllowed(sub.autoRenew);
 		if (autoCharge) {
 			await ctx.scheduler.runAfter(
 				0,
@@ -1372,12 +1485,7 @@ export const listPending = query({
 			/** Off-Season Hold invoices bill the hold, not the tier (z8r3fday24). */
 			kind: "plan" | "hold";
 			hasPayNowLink: boolean;
-			autoRenew: {
-				method: string;
-				failedAttempts: number;
-				nextRetryAt?: number;
-				lastChargeError?: string;
-			} | null;
+			autoRenew: AdminAutoChargeState | null;
 			gatewayIssue?: Doc<"invoices">["gatewayIssue"];
 			billingCycle: BillingCycle;
 		}>
@@ -1408,14 +1516,7 @@ export const listPending = query({
 				origin: inv.origin ?? "admin",
 				kind: inv.kind ?? "plan",
 				hasPayNowLink: inv.gatewayPayment !== undefined,
-				autoRenew: sub?.autoRenew
-					? {
-							method: sub.autoRenew.method,
-							failedAttempts: sub.autoRenew.failedAttempts ?? 0,
-							nextRetryAt: sub.autoRenew.nextRetryAt,
-							lastChargeError: sub.autoRenew.lastChargeError,
-						}
-					: null,
+				autoRenew: sub?.autoRenew ? adminAutoChargeState(sub.autoRenew) : null,
 				gatewayIssue: inv.gatewayIssue,
 				// Without this the admin console shows an annual and a monthly
 				// pending invoice identically except for the amount — while markPaid
@@ -1426,6 +1527,93 @@ export const listPending = query({
 			});
 		}
 		return rows;
+	},
+});
+
+/**
+ * Admin: every gateway payment that landed without settling anything and
+ * still awaits a human — the "Payments to review" queue. A `late_payment`
+ * lands on a PAID or VOID invoice by definition, so the pending-invoices
+ * list structurally cannot show it (that was the hole: the console claimed
+ * to surface possible double payments and never could). Index-backed on
+ * `gatewayIssueOpen`; rows stamped before that field shipped are picked up
+ * by `migrations.backfillGatewayIssueOpen`.
+ */
+export const listGatewayIssues = query({
+	args: {},
+	handler: async (
+		ctx,
+	): Promise<
+		Array<{
+			invoiceId: Id<"invoices">;
+			invoiceNumber: string;
+			invoiceStatus: "pending" | "paid" | "void";
+			invoiceTotal: number;
+			currency: string;
+			storeName: string;
+			slug: string;
+			kind: "late_payment" | "amount_mismatch";
+			paymentId: string;
+			/** What the gateway says was paid — absent on old rows. */
+			amountSen?: number;
+			at: number;
+		}>
+	> => {
+		await requireAdmin(ctx);
+		const flagged = await ctx.db
+			.query("invoices")
+			.withIndex("by_gateway_issue_open", (q) => q.eq("gatewayIssueOpen", true))
+			.collect();
+		const rows = [];
+		for (const inv of flagged) {
+			// The flag without the stamp can't happen through our writers; skip
+			// defensively rather than render a row with nothing to say.
+			if (!inv.gatewayIssue) continue;
+			const retailer = await ctx.db.get(inv.retailerId);
+			rows.push({
+				invoiceId: inv._id,
+				invoiceNumber: inv.invoiceNumber,
+				invoiceStatus: inv.status,
+				invoiceTotal: inv.total,
+				currency: inv.currency,
+				storeName: retailer?.storeName ?? "(store deleted)",
+				slug: retailer?.slug ?? "",
+				kind: inv.gatewayIssue.kind,
+				paymentId: inv.gatewayIssue.paymentId,
+				amountSen: inv.gatewayIssue.amountSen,
+				at: inv.gatewayIssue.at,
+			});
+		}
+		// Oldest first: the longest-waiting money is the most overdue decision.
+		return rows.sort((a, b) => a.at - b.at);
+	},
+});
+
+/**
+ * Admin: close a reviewed gateway payment — after refunding it in HitPay, or
+ * applying it by settling a bill. Records who and when (and optionally what
+ * they did) on the stamp itself; the stamp is never deleted, so the audit
+ * trail survives its own resolution.
+ */
+export const resolveGatewayIssue = mutation({
+	args: { invoiceId: v.id("invoices"), note: v.optional(v.string()) },
+	handler: async (ctx, { invoiceId, note }): Promise<{ ok: true }> => {
+		const adminSubject = await requireAdmin(ctx);
+		const invoice = await ctx.db.get(invoiceId);
+		if (!invoice?.gatewayIssue)
+			throw new ConvexError("This invoice has no gateway payment to review.");
+		if (invoice.gatewayIssue.resolvedAt !== undefined)
+			throw new ConvexError("Already resolved.");
+		await ctx.db.patch(invoiceId, {
+			gatewayIssue: {
+				...invoice.gatewayIssue,
+				resolvedAt: Date.now(),
+				resolvedBy: adminSubject,
+				resolvedNote: note?.trim() ? note.trim() : undefined,
+			},
+			gatewayIssueOpen: undefined,
+		});
+		return { ok: true };
 	},
 });
 

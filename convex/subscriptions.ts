@@ -38,7 +38,11 @@ import {
 import { landCreditGrant } from "./credits";
 import { COMP_LABEL_MAX, COMP_NOTE_MAX, type CompKind } from "./lib/comp";
 import { rateLimiter } from "./lib/rateLimiter";
-import { autoRenewMethodLabel } from "./lib/hitpayBilling";
+import {
+	autoChargeAllowed,
+	autoRenewMethodLabel,
+	CHARGE_ATTEMPT_LOCK_MS,
+} from "./lib/hitpayBilling";
 import {
 	type BillingCycle,
 	capsForPlan,
@@ -120,13 +124,19 @@ export type AccessState = {
 	periodPaidBy?: "plan" | "hold";
 	/** Saved-method auto-renewal summary (86eyb6z4r) — OWNER-only surface (this
 	 * state rides getMyRetailer, which shoppers never see). `failing` means the
-	 * last charge attempt was declined and dunning is running; `setupPending`
+	 * last charge attempt was declined and dunning is running; `stopped` means
+	 * auto-charging is stopped over a stranded charge (nothing charges until a
+	 * bill is settled); `confirming` means a charge was SENT and its outcome
+	 * is still being confirmed with HitPay — the UI must neither promise a
+	 * charge nor invite a manual payment while it stands; `setupPending`
 	 * means the seller started authorisation but no method attached yet. */
 	autoRenew?: {
 		method: string;
 		methodLabel: string;
 		failedAttempts: number;
 		failing: boolean;
+		stopped: boolean;
+		confirming: boolean;
 		nextChargeAt?: number;
 	};
 	autoRenewSetupPending?: boolean;
@@ -235,6 +245,8 @@ function resolveAccessBase(sub: Doc<"subscriptions"> | null): AccessState {
 						autoRenewMethodLabel(sub.autoRenew.method),
 					failedAttempts: sub.autoRenew.failedAttempts ?? 0,
 					failing: (sub.autoRenew.failedAttempts ?? 0) > 0,
+					stopped: !autoChargeAllowed(sub.autoRenew),
+					confirming: sub.autoRenew.lastChargeAttemptAt !== undefined,
 					nextChargeAt: sub.currentPeriodEnd,
 				}
 			: undefined,
@@ -794,6 +806,114 @@ async function endComp(
 }
 
 /**
+ * A pre-built store has just been claimed by its real owner — start their free
+ * period NOW (docs/prebuilt-stores.md).
+ *
+ * THE SIBLING OF `endComp`, AND DELIBERATELY NOT IT. A pre-built store runs on
+ * an `internal` comp while the admin builds it, so the days spent setting it up
+ * are not billed and the daily cron has nothing to lock. Ending that comp the
+ * ordinary way lands the store on `past_due` with no invoice — an EXPIRED
+ * seller — which would make the vendor's very first sign-in a lockout screen,
+ * and would email them that sponsored access they never had has ended. So the
+ * comp ends INTO a trial instead: the 14 days start the moment the store
+ * becomes theirs, exactly as if they had signed up today.
+ *
+ * This is why a pre-built store cannot simply be created `trialing` and handed
+ * over later: `trialEndsAt` is stamped at create, so a store built on the 1st
+ * and handed over on the 20th would arrive with its free period already spent.
+ *
+ * `foundingIntent` is left alone — a founding store that was pre-built is still
+ * a founding store, and the rank was reserved at create.
+ */
+export async function startFreePeriodOnClaim(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	now: number,
+): Promise<void> {
+	const caps = capsForPlan("pro"); // the trial grants Pro-level access
+	const sub = await loadSubscription(ctx, retailerId);
+	if (!sub) {
+		// No row to convert (a store minted before this feature, or a failed
+		// create). Fail OPEN into the ordinary trial rather than leaving the new
+		// owner with no subscription at all.
+		await ctx.db.insert("subscriptions", {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			status: "trialing",
+			trialEndsAt: now + TRIAL_DAYS * DAY_MS,
+			orderCap: caps.orderCap,
+			userCap: caps.userCap,
+			broadcastQuota: caps.broadcastQuota,
+			createdAt: now,
+			updatedAt: now,
+		});
+		return;
+	}
+	// An admin may have comped the store for a REAL reason before handover (a
+	// partner deal, a sponsor). That is a commercial promise to the vendor, not
+	// setup scaffolding, so the handover must not quietly cancel it — only the
+	// `internal` comp this feature puts there is scaffolding.
+	if (sub.comped === true && sub.comp?.kind !== "internal") return;
+	await ctx.db.patch(sub._id, {
+		comped: false,
+		comp: undefined,
+		compEndedAt: undefined,
+		status: "trialing",
+		trialEndsAt: now + TRIAL_DAYS * DAY_MS,
+		trialReminderSentAt: undefined,
+		freePeriodEndedAt: undefined,
+		freePeriodEndReason: undefined,
+		currentPeriodStart: undefined,
+		currentPeriodEnd: undefined,
+		periodPaidBy: undefined,
+		heldAt: undefined,
+		pendingPlanChange: undefined,
+		orderCap: caps.orderCap,
+		userCap: caps.userCap,
+		broadcastQuota: caps.broadcastQuota,
+		updatedAt: now,
+	});
+}
+
+/**
+ * The `internal` comp a pre-built store runs on while an admin builds it. Set
+ * at create (admin.createUnclaimedStore) so nothing bills, nothing locks and
+ * nothing emails a store with no owner to read it; ended into a fresh trial by
+ * `startFreePeriodOnClaim` at handover. See docs/prebuilt-stores.md.
+ *
+ * Written here rather than by calling `setComp` because `setComp` is a public
+ * admin mutation that re-reads the store, voids invoices and audits — all
+ * meaningless for a row being inserted in the same transaction as the store.
+ */
+export async function insertSetupComp(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	adminSubject: string,
+	now: number,
+): Promise<void> {
+	const caps = capsForPlan("pro");
+	await ctx.db.insert("subscriptions", {
+		retailerId,
+		plan: "pro",
+		billingCycle: "monthly",
+		status: "active",
+		comped: true,
+		comp: {
+			kind: "internal",
+			note: "Pre-built store — setup in progress, not yet handed over.",
+			grantedBy: adminSubject,
+			grantedAt: now,
+		},
+		orderCap: caps.orderCap,
+		userCap: caps.userCap,
+		broadcastQuota: caps.broadcastQuota,
+		createdAt: now,
+		updatedAt: now,
+	});
+}
+
+/**
  * Admin: turn a store's comp upgrade ON (partner / sponsor / pilot /
  * internal). A comp is a toggle with no end date — it stays on until an admin
  * turns it off (`revokeComp`). While on, the store resolves exactly like a
@@ -1104,7 +1224,9 @@ export const internalBackfillSubscriptions = internalMutation({
  *    (invoices.internalIssueRenewalInvoice — the bill Arif used to type), and
  *    schedules the tokenised auto-charge when a saved method is attached;
  *  - failed auto-charges are retried on the Kedaipal-owned schedule
- *    (`autoRenew.nextRetryAt`, lib/hitpayBilling.ts);
+ *    (`autoRenew.nextRetryAt`, lib/hitpayBilling.ts), and an attempt that
+ *    never recorded an outcome is re-run once its lock is stale — the charge
+ *    action reconciles it with HitPay before it can charge again;
  *  - auto-renew sellers get a one-per-cycle "renewing soon" notice ahead of
  *    the charge (the no-surprise-MIT rule).
  * Plus the one-time pre-due-date reminder for pending invoices, and — once an
@@ -1294,18 +1416,37 @@ export const internalDailyBillingStatus = internalMutation({
 				continue;
 			}
 			const pendingInvoice = invoices.find((inv) => inv.status === "pending");
-			// Dunning retry: a declined auto-charge whose retry window arrived.
-			// The charge action re-guards everything (still pending, still
-			// attached, outcome-unknown reconcile), so scheduling is safe.
-			if (
-				pendingInvoice &&
+			// Dunning retry: a declined auto-charge whose retry window arrived —
+			// OR an attempt whose action died without recording any outcome (a
+			// stale stamp and no retry scheduled), which nothing else would ever
+			// look at again. The charge action re-guards everything (still
+			// pending, still attached, outcome-unknown reconcile at any age), so
+			// scheduling is safe.
+			const retryDue =
 				sub.autoRenew?.nextRetryAt !== undefined &&
-				sub.autoRenew.nextRetryAt <= now
+				sub.autoRenew.nextRetryAt <= now;
+			const unresolvedAttempt =
+				sub.autoRenew?.lastChargeAttemptAt !== undefined &&
+				now - sub.autoRenew.lastChargeAttemptAt >= CHARGE_ATTEMPT_LOCK_MS;
+			// The bill to hand the charge action: the open one — or, with no
+			// open bill but an unresolved attempt, the bill that attempt was
+			// FIRED FOR. That happens when the bill settled by another rail
+			// (Pay-now, admin mark-paid) or was voided while the outcome was
+			// unknown: the action then runs the reconcile only (it never
+			// charges a non-pending bill), so a landed charge is found this
+			// sweep, not a whole cycle later when the next bill exists.
+			const chargeTarget =
+				pendingInvoice?._id ??
+				(unresolvedAttempt ? sub.autoRenew?.pendingChargeInvoiceId : undefined);
+			if (
+				chargeTarget !== undefined &&
+				autoChargeAllowed(sub.autoRenew) &&
+				(retryDue || unresolvedAttempt)
 			) {
 				await ctx.scheduler.runAfter(
 					0,
 					internal.subscriptionPayments.chargeDueRenewal,
-					{ invoiceId: pendingInvoice._id },
+					{ invoiceId: chargeTarget },
 				);
 				autoChargeRetries++;
 			}
@@ -1444,6 +1585,19 @@ export const internalDailyBillingStatus = internalMutation({
 			}
 			if (inv.reminderSentAt !== undefined) continue;
 			if (inv.dueDate <= reminderFrom || inv.dueDate > reminderTo) continue;
+			// "Pay this invoice" is a double-payment nudge while the machine is
+			// mid-flight on the same money: a charge outcome we're still
+			// confirming with HitPay, or a stranded charge a human is sorting
+			// out. Skip WITHOUT stamping reminderSentAt, so the reminder can
+			// still go out once the question resolves and the invoice remains
+			// unpaid inside the window. (Exhausted dunning — declined, retries
+			// done — is a recorded outcome: those sellers are reminded.)
+			const reminderSub = await ctx.db.get(inv.subscriptionId);
+			if (
+				reminderSub?.autoRenew?.lastChargeAttemptAt !== undefined ||
+				reminderSub?.autoRenew?.strandedCharge !== undefined
+			)
+				continue;
 			await ctx.db.patch(inv._id, { reminderSentAt: now });
 			await ctx.scheduler.runAfter(
 				0,

@@ -630,9 +630,14 @@ function TrackingRoute() {
 			key: "pending",
 			// A booking's first beat is the request, not "Order Received" — reuse
 			// the swept status label so a seller's locale flows through.
-			label: isBooking
-				? statusConfig.booking_requested.label
-				: statusConfig.pending.label,
+			// An RSVP on an event that approves each guest (`z8r3fdkjek`) shares
+			// the request's first beat — judged by status, not by kind.
+			label:
+				isBooking ||
+				order.status === "booking_requested" ||
+				order.bookingResolution !== undefined
+					? statusConfig.booking_requested.label
+					: statusConfig.pending.label,
 			icon: statusConfig.pending.icon,
 			isDone: true, // any order on this page has at least been received
 			isCurrent: currentPos === 0,
@@ -744,6 +749,63 @@ function TrackingRoute() {
 			    lifecycle, stated where the buyer lands. While awaiting, the payment
 			    card below is suppressed — nothing is payable until the seller
 			    approves, and an armed Pay button on a request would be a lie. */}
+			{/* An RSVP awaiting the host's approval (`z8r3fdkjek`) — the same
+			    request lifecycle, in the guest's words: a SEAT is held, not dates. */}
+			{!isBooking && order.status === "booking_requested" ? (
+				<section className="mt-6 flex flex-col gap-2 rounded-2xl border border-amber-300 bg-card p-4 dark:border-amber-800">
+					<span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+						<Clock className="size-3.5" aria-hidden />
+						{ms ? "Menunggu kelulusan" : "Awaiting approval"}
+					</span>
+					<p className="font-heading text-lg font-extrabold leading-tight">
+						{ms ? "Permintaan RSVP dihantar" : "RSVP request sent"}
+					</p>
+					<p className="text-sm leading-relaxed text-muted-foreground">
+						{ms
+							? `${order.storeName} meluluskan setiap RSVP. Tempat anda disimpan sementara itu dan belum ada bayaran — sebaik sahaja diluluskan, cara membayar akan muncul di halaman ini. Permintaan yang tidak dijawab dalam 24 jam akan tamat tempoh.`
+							: `${order.storeName} approves each RSVP. Your seat is held meanwhile and nothing has been paid — once they approve, how to pay appears on this page. A request not answered within 24 hours expires.`}
+					</p>
+				</section>
+			) : null}
+			{!isBooking && order.bookingResolution !== undefined ? (
+				<section className="mt-6 flex flex-col gap-2 rounded-2xl border border-border bg-card p-4">
+					<span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-[11px] font-semibold text-muted-foreground">
+						{order.bookingResolution === "declined"
+							? ms
+								? "RSVP tidak diluluskan"
+								: "RSVP not approved"
+							: ms
+								? "Permintaan tamat tempoh"
+								: "Request expired"}
+					</span>
+					{order.bookingResolution === "declined" && order.cancellationNote ? (
+						<blockquote className="border-l-2 border-border pl-3 text-sm italic text-muted-foreground">
+							“{order.cancellationNote}”
+						</blockquote>
+					) : order.bookingResolution === "expired" ? (
+						<p className="text-sm leading-relaxed text-muted-foreground">
+							{ms
+								? "Penganjur tidak menjawab dalam masa 24 jam, jadi tempat anda dilepaskan."
+								: "The host didn't respond within 24 hours, so your seat was released."}
+						</p>
+					) : null}
+					<p className="text-sm font-medium">
+						{ms ? "Tiada bayaran dibuat." : "Nothing was charged."}
+					</p>
+					{order.retailerSlug ? (
+						<Link
+							to="/$slug"
+							params={{ slug: order.retailerSlug }}
+							className="mt-1 inline-flex h-11 w-fit items-center rounded-lg border border-border bg-background px-4 text-sm font-semibold transition-colors hover:bg-muted"
+						>
+							{ms
+								? `Kembali ke ${order.storeName}`
+								: `Back to ${order.storeName}`}
+						</Link>
+					) : null}
+				</section>
+			) : null}
+
 			{isBooking && order.status === "booking_requested" ? (
 				<section className="mt-6 flex flex-col gap-2 rounded-2xl border border-amber-300 bg-card p-4 dark:border-amber-800">
 					<span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
@@ -1677,6 +1739,7 @@ function TrackingRoute() {
 								currency={order.currency}
 								imageUrl={itemImageUrls?.[i] ?? undefined}
 								booking={itemBookingSpan}
+								answers={item.answers}
 							/>
 						);
 					})}
@@ -1753,14 +1816,19 @@ function TrackingRoute() {
 					</p>
 				) : null}
 				{/* Buyer self-serves a PDF receipt — generated on demand from this
-				    order, no delivery/email needed. */}
-				<ReceiptDownloadButton
-					token={token}
-					paid={isOrderDocPaid(order.paymentStatus)}
-					pdfHint
-					variant="outline"
-					className="w-full"
-				/>
+				    order, no delivery/email needed. Not for a request the seller
+				    hasn't accepted (awaiting, declined or expired — `z8r3fdkjek`):
+				    an invoice for an unaccepted booking/RSVP reads as a bill. */}
+				{order.status === "booking_requested" ||
+				order.bookingResolution !== undefined ? null : (
+					<ReceiptDownloadButton
+						token={token}
+						paid={isOrderDocPaid(order.paymentStatus)}
+						pdfHint
+						variant="outline"
+						className="w-full"
+					/>
+				)}
 			</section>
 
 			{/* Echo the shopper's note so they can confirm it was received. Plain

@@ -56,25 +56,253 @@ A charge action can die between HitPay taking the money and us settling.
 Defences, in order:
 
 0. `recordChargeAttempt` is a **mutex, not a stamp**: it refuses the claim
-   when an attempt is already in flight, so two schedulers (attach webhook +
+   while an attempt holds the lock, so two schedulers (attach webhook +
    reconcile, or cron + heal) can never both POST. The loser stands down; the
    owner settles or records a failure either way. Without it the reconcile in
-   (2) cannot save us — while charge A is in flight HitPay's `times_charged`
-   has not moved, so charge B reads "remote not ahead" and charges anyway.
+   (2) cannot save us — while charge A is in flight HitPay's charge count has
+   not moved, so charge B reads "remote not ahead" and charges anyway. The
+   lock lasts `CHARGE_ATTEMPT_LOCK_MS` (24h); past that a stale stamp may be
+   re-claimed, because (2) has already asked HitPay about it by then.
 1. The winner stamps `lastChargeAttemptAt` + `pendingChargeInvoiceId` **before**
    the HTTP call, and **kills the invoice's Pay-now link** in the same breath —
-   that window (seller on HitPay's page, our charge in flight) is the one place
-   both rails could take money, and no spinner of ours reaches them there. A
-   decline re-mints the link, because the failure email's whole CTA is "pay it
+   remotely (DELETE at HitPay) *and* locally (`gatewayPayment` off the invoice,
+   in the claim's own transaction): that window (seller on HitPay's page, our
+   charge in flight) is the one place both rails could take money, and before
+   the local clear the billing tab and every email kept offering "Pay online
+   now" against a dead link for as long as a lost outcome stayed unresolved.
+   The claim also **re-verifies the invoice is still `pending`** — the action's
+   context read and the claim are separate transactions, and a Pay-now webhook
+   settling in between used to leave a charge firing at a paid bill. A decline
+   re-mints the link, because the failure email's whole CTA is "pay it
    yourself".
-2. A later run seeing a fresh stamp with no recorded outcome **reconciles
-   first**: `GET /recurring-billing/{id}` and compare `times_charged` to our
-   `autoRenew.timesCharged`. Remote ahead ⇒ the money is real ⇒ settle with
-   `recordedBy = reconciled:<session>:<n>`, never re-charge.
-3. Network throws and HitPay 5xx are recorded as outcome **"unknown"** — not
-   counted as an attempt, no seller email, retry ~24h later through the
-   reconcile guard. Only a definitive decline (2xx-not-succeeded or 4xx)
-   counts toward dunning.
+2. Any later run that finds a stamp with no recorded outcome — **at any age**
+   — **reconciles first**: `GET /recurring-billing/{id}` and compare HitPay's
+   charge count to our `autoRenew.timesCharged`. Remote ahead ⇒ the money is
+   real ⇒ settle with `recordedBy = reconciled:<session>:<n>`, never
+   re-charge. The stamp is cleared only by a recorded outcome (a settle or a
+   decline), so "still standing" means exactly "outcome unknown".
+   - **The measure is a DELTA from the attempt's own baseline, not our
+     tally.** Every charge reads HitPay's count immediately before it POSTs
+     and stores it on the stamp (`autoRenew.chargeCountAtAttempt`); the
+     reconcile then asks "has the count moved since I fired THIS charge?".
+     Comparing against `timesCharged` was a bet that nothing but our own
+     successes ever moves HitPay's number — and the obvious counter-example,
+     a *declined* charge, **cannot be observed in the sandbox** (it approves
+     everything it validates, including a RM 999,999 wallet charge; only a
+     pre-processor 422 leaves the count alone). Had declines counted, the
+     sequence [decline → later lost outcome] would have read "remote ahead"
+     and settled a bill nobody paid: a free month. The delta makes the
+     question moot. A stamp with no baseline — a GET blip at claim time, or
+     one written before the field existed — falls back to `timesCharged`,
+     i.e. exactly the old behaviour, never worse. The pre-charge read is
+     reused from the reconcile's own read when there is one, and skipped
+     entirely for a session that just answered "gone".
+   - **The count is `total_charge`, not `times_charged`.** On a save-card
+     session HitPay leaves the documented `times_charged` null for good; the
+     count lives in `total_charge` (sandbox GET, 30 Sep 2026: a session whose
+     auto-charges settled RM79 + RM149 + RM79 read `total_charge: 3` beside
+     `times_charged: null`; sessions that never charged read 0).
+     `readSessionChargeCount` probes `total_charge`, then `times_charged`, and
+     returns *undefined* — never 0 — when neither carries a count.
+   - **What HitPay's answer decides.** A count ⇒ compare as above. No count
+     in the body, a network error, 5xx, 429 or any other refusal ⇒ **can't
+     judge, so don't charge** — the retry sweep asks again tomorrow. A
+     **404/410** ⇒ HitPay has no such session (removed at their end, detach
+     webhook missed): it neither took the lost charge nor can take this one,
+     so the run falls through and the charge's own refusal becomes an
+     ordinary dunned decline instead of a silent skip every day.
+3. Network throws, HitPay 5xx and a 2xx whose body we can't read are recorded
+   as outcome **"unknown"** — not counted as an attempt, no seller email, the
+   stamp kept, retry ~24h later through the reconcile in (2). Only a
+   definitive decline (2xx-not-succeeded or 4xx) counts toward dunning. An
+   action that dies without recording anything leaves only the stamp; the
+   daily cron re-runs that bill once the lock is stale, so (2) still gets it.
+
+**Trap — why the reconcile has no age limit, and reads `total_charge`.** It
+shipped gated on "stamp younger than 24h", but the retry after an unknown
+outcome is scheduled 24h out (`nextRetryAt`) and fired by a daily cron, so it
+ALWAYS met a stamp at least 24h old: the guard never ran on the one path it
+existed for, the lock read the stamp as stale, and a charge HitPay had already
+taken was POSTed again — unless the V2 `charge.created` webhook happened to
+settle the bill first. It also read `times_charged`, which is null on every
+save-card session, so even inside the window it saw 0 and charged. Both are
+pinned by tests that drive the real path (unknown outcome → cron at +24h and
++48h, and mid-dunning) against the captured payload shape.
+
+### Only the SESSION rail answers the stamp (`viaSessionCharge`)
+
+Every `internalSettleFromGateway` caller declares WHICH RAIL the money rode:
+`true` for a saved-method session charge (the sync verdict, its
+`charge.created` webhook, the outcome-unknown reconcile, the lost-attempt
+reconcile), `false` for a Pay-now payment (v1 completion webhook, the
+redirect-return reconcile). Only a `true` settle may:
+
+- **advance `timesCharged`** — a Pay-now settle that bumped it (the
+  slipped-through checkout paying the same bill mid-charge) pushed our counter
+  ahead of HitPay's, and the NEXT lost-but-landed charge then read "remote not
+  ahead" and charged again: a double charge seeded by bookkeeping;
+- **answer the attempt stamp** — different money answering the question let a
+  landed session charge vanish unreconciled.
+
+For the same reason **`settleInvoicePaid` no longer clears the stamp**: paying
+a bill by bank transfer / mark-paid / Pay-now doesn't say what happened to the
+session charge. The stamp is resolved only by a recorded outcome on the
+session rail: the `viaSessionCharge` settle patch, `recordChargeFailure`, or —
+when the reconcile reads "count not ahead" (HitPay says it never landed) or
+the session is gone (unanswerable) — `resolveChargeAttempt`, which closes a
+**stale** stamp only (same timestamp, same bill, older than the lock): a fresh
+stamp can be a charge literally in flight whose count hasn't moved yet, and
+resolving it would hand the mutex to a second charge. Without that closer, a
+stamp whose bill settled by another rail was re-reconciled daily forever.
+
+The daily sweep hands the charge action the open bill — or, with no open bill
+but an unresolved stamp, **the bill the attempt was fired for**, so the
+reconcile runs this sweep instead of a whole cycle later. `chargeDueRenewal`
+reconciles BEFORE its is-this-bill-pending return for the same reason.
+
+### The one residual: a session HitPay deletes behind our back
+
+A `gone` (404/410) session with an unresolved stamp is the single place money
+can be lost track of for good: the count can never go "ahead", so a charge
+that *did* land can never be proven, and the charge's own refusal dunns the
+seller — whose payment would then be a second debit. It is accepted
+deliberately, for two reasons.
+
+**Every session loss we cause is already covered.** The seller's cancel and a
+HitPay-side `method_detached` both schedule `reconcileLostAttempt` *before*
+the state it needs is cleared, and cancel deletes the remote session only
+*after* the money question is answered. So this branch is reachable only if
+HitPay unilaterally deletes a session we never asked them to — undocumented,
+and unobserved.
+
+**And in the likely shape of that event the dunning is correct.** A gone
+session almost certainly means the charge never landed and auto-renewal is
+dead; the seller genuinely needs to be told to pay and re-authorise.
+Suppressing the email to protect against the rare branch would leave them
+uninformed in the common one. The CRITICAL log on this path is the hook: it
+names the session and the bill so a human can check HitPay before the
+seller acts on the email.
+
+### The seller sees "confirming", and nothing asks them to pay
+
+While a stamp is unresolved, `SubscriptionView.autoRenew.confirming` is true
+and every surface that would invite a payment stands down — an invited manual
+payment is the second payment if the sent charge landed:
+
+- the **billing tab's pay options disappear** behind an amber note that says
+  why and that they come back (or the bill flips paid);
+- the **auto-renewal card** explains (two variants: bill still open — "we've
+  charged and are confirming"; bill settled meanwhile — "if you were charged
+  on top of a payment you made, we'll be in touch to refund it");
+- the **dashboard banner** goes quiet: `confirming` outranks the declined
+  banner and the due-soon countdown (both say "pay it yourself"), but never
+  `past_due`/`stopped`;
+- the **pre-due reminder email is held** (not stamped, so it still goes out
+  once resolved-and-unpaid); a stranded charge holds it the same way;
+- **subscribe / plan-change never promise a charge** (`autoChargeIdle`): the
+  server returns `chargingSavedMethod: false`, writes the bill, and the daily
+  sweep charges it once the question resolves — and the plan picker no longer
+  falls through to the authorisation page, which refuses any store that
+  already has a method ("already on").
+
+### Cancel / detach with a charge outcome unknown
+
+Clearing `autoRenew` (seller cancel, HitPay detach) used to destroy every hook
+the reconcile hangs off — stamp, counter, session id — so cancelling
+mid-unknown made a landed charge permanently invisible. Now
+`scheduleLostAttemptReconcile` captures the question first and
+`reconcileLostAttempt` answers it independently of the sub's state:
+
+- count moved past ours ⇒ **settle the bill the attempt was fired for**
+  (`viaSessionCharge`; a non-pending bill lands in the review queue);
+- count says it never landed ⇒ **re-mint the Pay-now link** the claim killed
+  (the seller is on the manual rail now);
+- no answer (network, 5xx, no count, session gone) ⇒ retry on
+  `LOST_ATTEMPT_RETRY_DELAYS_MS` (+1h/+3h/+8h/+12h), then a CRITICAL log for a
+  human — **never re-mint on a non-answer**: inviting a manual payment while
+  the charge may have landed is the double payment;
+- on a seller cancel the **remote session is deleted only after the answer**
+  (deleting first would 404 the very count the reconcile needs); turning off
+  stays instant and ungated — `autoRenew` is cleared immediately, so nothing
+  can charge from that moment. A HitPay-side detach never deletes.
+
+### Payments to review (admin)
+
+Every gateway payment that settled nothing — `late_payment`, `amount_mismatch`
+— is **real money awaiting a human decision**, and a `late_payment` sits on a
+PAID or VOID bill by definition, so the pending-invoices list structurally
+could never show it (the console claimed to surface possible double payments
+and couldn't). `gatewayIssueOpen` + the `by_gateway_issue_open` index feed the
+**"Payments to review"** queue at the top of `/app/admin/billing` (above the
+tab fork; hidden while empty): store, bill + status, amount received vs the
+bill's total, what to do (worded by the bill's status), the HitPay ref with a
+copy button, oldest first. **Mark resolved** (`resolveGatewayIssue`,
+admin-only) records who/when/what on the stamp — resolution is written, never
+deleted — after the human refunded or applied the money; it moves no money
+itself and the dialog says so. `migrations:backfillGatewayIssueOpen` flags
+stamps from before the queue existed (run once per deployment).
+
+**Release operator steps for this machinery, in order:** deploy, then
+`npx convex run migrations:backfillGatewayIssueOpen --prod` (queue the old
+stamps), then `npx convex run subscriptionPayments:syncChargeCounters --prod`
+— the counter-parity one-shot. The pre-fix reconcile read a field that was
+always null and Pay-now settles used to bump the counter, so any LIVE
+recurring seller (her-moolah-collective was the first) may hold drift from
+before the fix: local behind ⇒ the next lost outcome settles a bill nobody
+charged; local ahead ⇒ it charges again. The sync reads each session's
+`total_charge` and aligns, skipping (and reporting) any session with an
+unresolved attempt or a stranded charge — that drift is evidence, not error.
+
+### A charge that lands on a voided bill is STRANDED (audit + hold)
+
+A stamp names the bill it was fired for (`pendingChargeInvoiceId`), and a
+reconciled charge belongs to **that** bill — `chargeContext.attemptInvoice`,
+not whichever bill the retry happens to be charging. If that bill was
+**voided** while the outcome was unknown (an admin void, or the seller
+switching plan) and HitPay did take the charge, the money is *stranded*.
+Decided (Zaki, 30 Sep 2026): **audit it and hold**, because both alternatives
+are wrong with money — booking it against the replacement records the wrong
+bill (and the wrong amount whenever the totals differ), and charging the
+replacement is the double debit this whole machine exists to prevent.
+
+- **One place decides.** `internalSettleFromGateway`'s "money on a non-pending
+  bill" branch already audits (`gatewayIssue: late_payment` on the voided
+  bill). When the sub's attempt stamp still names that bill — only a void can
+  leave it there; a settle clears it — the same branch **strands** it: resolves
+  the stamp, catches `timesCharged` up with HitPay (a counter left behind would
+  make the *next* unknown outcome read "HitPay took it" and settle a bill for
+  free), and records `autoRenew.strandedCharge` (bill number, amount, currency,
+  HitPay reference). Both doors land here: the reconcile, and a late
+  `charge.created` webhook (which resolves to the stamped bill too).
+- **Nothing charges while it's set.** `autoChargeAllowed(autoRenew)`
+  (`lib/hitpayBilling.ts`) is the ONE rule — the daily cron, renewal issue,
+  `subscribeSelf`, `changePlan` and `chargeDueRenewal` itself all ask it, so no
+  door can keep charging a stopped store. A bill written meanwhile is billed,
+  never charged (`chargingSavedMethod: false`, `autoCharge: false`).
+- **Any settle lifts it.** `settleInvoicePaid` clears `strandedCharge` with the
+  rest of the dunning state: the admin applied the money (marking the open bill
+  paid) or refunded it and the seller paid by hand — either way a human
+  decided, and charging resumes from the next renewal.
+- **The seller is told, and told not to pay twice.** `SubscriptionView.autoRenew
+  .stopped` drives the auto-renewal card's amber state, the dashboard banner
+  (`autoRenewStopped`, which outranks the declined banner), a "hold off" line
+  above the pay buttons (the options stay — we may ask them to pay), and the
+  plan cards, which stop promising a charge (the picker writes the invoice and
+  stays put instead of opening the authorisation page that would refuse,
+  "already on").
+- **Ops is emailed, once.** The seller is told "we'll be in touch", so a human
+  must actually hear about it: stranding schedules `sendStrandedChargeAlert`
+  (store, bill, amount, HitPay reference, what to do) to `ADMIN_ALERT_EMAIL`,
+  falling back to `EMAIL_FROM` — the WABA alerts' recipient rule, no new config.
+- **The admin sees it on the store's rows.** Both admin lists render one
+  component (`AutoChargePill`/`AutoChargeDetail`, `describeAutoCharge`):
+  **Auto-charge stopped** (red, with an icon) leads with the fact, then the two
+  ways out, then the HitPay reference with a copy button; stopped stores sort
+  first in the auto-renewal overview. The same component shows **Charge
+  unconfirmed** (amber) for an attempt with no outcome older than an action can
+  run (10 min) — the state that used to be invisible there.
+- **Turning auto-renewal off** drops the hold with the rest of `autoRenew`; the
+  `late_payment` stamp on the voided bill stays as the record.
 
 ## Dunning (Kedaipal-owned)
 
@@ -661,3 +889,24 @@ already bills at list.
    tokenisation cross-border for MY customers + MYR on the tokenised charge
    path** on the live SG account (86eyb6z2d question set). Card rail works
    regardless.
+7. ~~**A declined auto-charge must not move `total_charge`.**~~ **CLOSED by
+   design, 1 Oct 2026** — the reconcile no longer depends on the answer. It
+   measures the delta from the baseline captured when the charge fired
+   (`chargeCountAtAttempt`), so whatever else moves HitPay's number is
+   irrelevant. Evidence gathered on the way: a SETTLED charge moves
+   `total_charge` by exactly 1 (observed twice: 3→4→5), and a 422-refused
+   charge does not move it at all. A genuine processor decline is
+   **unobservable on the dev sandbox account**, and not for want of trying:
+   HitPay documents exactly one decline trigger — the Visa test card
+   `4000 0000 0000 0002` — and **no** magic amount or e-wallet equivalent, so
+   the RM 999,999 Touch 'n Go charge it approved was never going to decline.
+   The card rail cannot be used either: asking for it returns
+   `422 … "It must be one of: touch_n_go"`, i.e. **the dev account has only
+   Touch 'n Go enabled**. (That is also live corroboration of the
+   degrade-on-422 path — the error names the account's real rail set.) A
+   decline could only be exercised on an account with cards on; if that ever
+   matters it is Arif's live account, not dev. Separately worth remembering:
+   sandbox limits are not production limits.
+   HitPay's own 7-day retry, checked at the same time, applies to a plan's
+   **scheduled charge date** — not to merchant-initiated charges, which is
+   what `lib/hitpayBilling.ts` already assumed.

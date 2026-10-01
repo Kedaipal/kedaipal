@@ -19,6 +19,11 @@ import {
 } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
 import {
+	freezeLineAnswers,
+	type FrozenAnswer,
+	itemAnswerInputValidator,
+} from "./lib/buyerQuestions";
+import {
 	attributionBucket,
 	sanitizeAttributionSource,
 } from "./lib/attribution";
@@ -89,6 +94,7 @@ import {
 } from "./lib/orderBuckets";
 import {
 	type CsvOrder,
+	fulfilmentKey,
 	orderCategoryNames,
 	ordersToCsv,
 } from "./lib/orderCsv";
@@ -520,6 +526,8 @@ type OrderItemSnapshot = {
 	categoryNames?: string[];
 	/** The product's pickup note as it read when sold (z8r3fdff97). */
 	pickupNote?: string;
+	/** Buyer-question answers, frozen with their labels (z8r3fdkjek). */
+	answers?: FrozenAnswer[];
 };
 
 /**
@@ -835,6 +843,10 @@ export const create = mutation({
 				variantId: v.optional(v.id("productVariants")),
 				productId: v.optional(v.id("products")),
 				quantity: v.number(),
+				// Answers to the product's buyer questions (`z8r3fdkjek`) — one
+				// set per line. Validated against the product's CURRENT questions
+				// and frozen with their labels; unknown/hidden answers dropped.
+				answers: v.optional(v.array(itemAnswerInputValidator)),
 			}),
 		),
 		currency: v.string(),
@@ -897,6 +909,9 @@ export const create = mutation({
 		// the tracking page WITHOUT ?send=1 (no wa.me handoff needed). False/absent
 		// = the legacy buyer-sends-first flow (phone missing or template env unset).
 		confirmedAtCreate?: boolean;
+		// True when the RSVP waits for the seller's approval (`z8r3fdkjek`) —
+		// checkout lands on the tracking page with NO ?send=1.
+		awaitingApproval?: boolean;
 	}> => {
 		// Rate limit FIRST — public endpoint, throttle per storefront before any
 		// DB reads. Two limits on one key: the burst bucket shapes a live drop,
@@ -1165,6 +1180,9 @@ export const create = mutation({
 				// counter" to "front door" must not rewrite the instruction this
 				// buyer is already holding in their WhatsApp thread.
 				pickupNote: product.pickupNote,
+				// Frozen with their labels (z8r3fdkjek): a question reworded or
+				// deleted later never rewrites what this buyer answered.
+				answers: freezeLineAnswers(product, item.answers),
 				// Filled in below, once per distinct product.
 				categoryNames: undefined as string[] | undefined,
 			});
@@ -1585,7 +1603,17 @@ export const create = mutation({
 		// checkout with no confirmation and no link to the order page they
 		// approve their mockup on, sometimes for days; and it bought nothing,
 		// since the price still isn't final when they read it.
+		//
+		// An event that asks the seller to approve each RSVP (`z8r3fdkjek`) is
+		// the one carve-out: it lands as `booking_requested` — the generic
+		// "awaiting the seller's approval" status the booking request already
+		// uses, so the inbox bucket, the 24 h expiry cron, the seat hold and the
+		// hidden payment card all come for free. Nothing is pushed and nothing
+		// is payable until the seller approves (bookings.approveBookingRequest
+		// then sends the one confirmation, carrying the pay link).
+		const awaitingApproval = eventLock?.requiresApproval === true;
 		const confirmedAtCreate =
+			!awaitingApproval &&
 			customerWaPhone !== undefined &&
 			orderConfirmTemplateName() !== undefined;
 
@@ -1597,7 +1625,11 @@ export const create = mutation({
 			subtotal,
 			total,
 			currency: args.currency,
-			status: confirmedAtCreate ? "confirmed" : "pending",
+			status: awaitingApproval
+				? "booking_requested"
+				: confirmedAtCreate
+					? "confirmed"
+					: "pending",
 			channel: args.channel,
 			source: "storefront",
 			attributionSource: sanitizeAttributionSource(args.attributionSource),
@@ -1635,7 +1667,10 @@ export const create = mutation({
 
 		await ctx.db.insert("orderEvents", {
 			orderId,
-			status: "pending",
+			status: awaitingApproval ? "booking_requested" : "pending",
+			note: awaitingApproval
+				? "RSVP request — waiting for your approval"
+				: undefined,
 			createdAt: now,
 		});
 		if (confirmedAtCreate) {
@@ -1714,6 +1749,9 @@ export const create = mutation({
 			deliveryFee: deliverySnapshot?.fee,
 			deliveryFeePending: deliveryFeePending || undefined,
 			confirmedAtCreate: confirmedAtCreate || undefined,
+			// The RSVP is a REQUEST (`z8r3fdkjek`): the checkout must not hand
+			// the buyer to WhatsApp to "confirm" something the seller hasn't.
+			awaitingApproval: awaitingApproval || undefined,
 		};
 	},
 });
@@ -1747,7 +1785,8 @@ export const countActionable = query({
 			level: "read",
 		});
 
-		const [pendingRows, confirmedRows, mockupRows] = await Promise.all([
+		const [pendingRows, confirmedRows, mockupRows, requestedRows] =
+			await Promise.all([
 			ctx.db
 				.query("orders")
 				.withIndex("by_retailer_status", (q) =>
@@ -1773,12 +1812,24 @@ export const countActionable = query({
 						.lte("mockupStatus", "pending"),
 				)
 				.collect(),
+			// Requests awaiting the seller's approval (bookings, and RSVPs on an
+			// event that approves each guest — `z8r3fdkjek`) sit in the New
+			// bucket, so the badge must count them too — it didn't before.
+			ctx.db
+				.query("orders")
+				.withIndex("by_retailer_status", (q) =>
+					q.eq("retailerId", retailerId).eq("status", "booking_requested"),
+				)
+				.collect(),
 		]);
 
 		return {
 			// Unseen push-path orders are a subset of `confirmedRows`, already in
 			// memory — no extra read to add the badge's count.
-			newOrders: pendingRows.length + confirmedRows.filter(isUnseenOrder).length,
+			newOrders:
+				pendingRows.length +
+				requestedRows.length +
+				confirmedRows.filter(isUnseenOrder).length,
 			pending: pendingRows.length,
 			confirmed: confirmedRows.length,
 			mockupPending: mockupRows.length,
@@ -2448,6 +2499,21 @@ const orderSourceValidator = v.union(
 	v.literal("claim"),
 );
 
+// How the order LEAVES (z8r3fdfau9) — every value `fulfilmentKey` can return.
+// A closed set, so a literal union rather than the free-form v.string() the
+// seller-invented dimensions (categories, attribution tags) need. Held to
+// FULFILMENT_KEYS by a test that pushes each member through this validator: a
+// sixth kind added to the registry and forgotten here would otherwise reach a
+// seller as an unexplained failure the moment they ticked it.
+const fulfilmentKeyValidator = v.union(
+	v.literal("delivery"),
+	v.literal("self_collect"),
+	v.literal("drop_off"),
+	v.literal("collection"),
+	v.literal("booking"),
+	v.literal("event"),
+);
+
 // THE status axis on the wire (1 Sep) — leaves, not raw statuses. `confirmed`
 // here means confirmed AND SEEN; `confirmed_unseen` is its own member. See
 // INBOX_LEAF_KEYS in lib/orderBuckets.ts for why the split exists.
@@ -2537,6 +2603,12 @@ export const searchOrders = query({
 	// accepted so a bookmarked URL or an in-flight client from before the widen
 	// keeps working; the handler folds it into `sources`. Drop it a release on.
 	sources: v.optional(v.array(orderSourceValidator)),
+		// How the order LEAVES, MULTI (z8r3fdfau9) — the twin of `sources` above
+		// and its neighbour on purpose: that one is which checkout surface the
+		// order came in through, this one is the trip out. Matched via the column
+		// registry's `fulfilmentKey`, so the filter and the Fulfilment cell can
+		// never name the same order two different things.
+		fulfilments: v.optional(v.array(fulfilmentKeyValidator)),
 		// Marketing origin (86eyq0eq9): `attributionBucket` keys — a stamped
 		// `?src=` tag, "counter", or "direct". Multi-select ORs within itself and
 		// ANDs with the rest. Free-form by design (sellers invent their own
@@ -2577,6 +2649,7 @@ export const searchOrders = query({
 			mockupPending,
 			source,
 			sources,
+			fulfilments,
 			statuses,
 			categories,
 			categoriesUnspecified,
@@ -2616,6 +2689,7 @@ export const searchOrders = query({
 			mockupPending,
 			source,
 			sources,
+			fulfilments,
 			statuses,
 			categories,
 			categoriesUnspecified,
@@ -2695,6 +2769,10 @@ export const searchOrders = query({
 		const leafTally = new Map<string, number>();
 		const categoryTally = new Map<string, number>();
 		const checkoutSourceTally = new Map<string, number>();
+		// How each order LEAVES (z8r3fdfau9) — keyed by `fulfilmentKey`, the same
+		// function the column renders and the predicate matches on, so the number
+		// beside an option is exactly the number of rows ticking it will show.
+		const fulfilmentTally = new Map<string, number>();
 		const paymentStatusTally = new Map<string, number>();
 		// "" is the count of orders with no recorded method, which the picker
 		// offers as "Unspecified" — a real answer, not a gap.
@@ -2734,6 +2812,7 @@ export const searchOrders = query({
 			if (isReadyToShipForLabel(o)) counts.readyToShip++;
 			if (o.pinnedAt !== undefined) counts.pinned++;
 			bump(checkoutSourceTally, o.source ?? "storefront");
+			bump(fulfilmentTally, fulfilmentKey(o));
 			bump(paymentStatusTally, o.paymentStatus ?? "unpaid");
 			bump(paymentMethodTally, o.paymentMethod ?? "");
 			// An order counts ONCE per category it contains, never once per line —
@@ -2800,6 +2879,7 @@ export const searchOrders = query({
 				statusLeaf: Object.fromEntries(leafTally),
 				category: Object.fromEntries(categoryTally),
 				source: Object.fromEntries(checkoutSourceTally),
+				fulfilment: Object.fromEntries(fulfilmentTally),
 				paymentStatus: Object.fromEntries(paymentStatusTally),
 				paymentMethod: Object.fromEntries(paymentMethodTally),
 				attribution: Object.fromEntries(sourceTally),
@@ -2873,6 +2953,10 @@ const exportFilterValidators = {
 	// accepted so a bookmarked URL or an in-flight client from before the widen
 	// keeps working; the handler folds it into `sources`. Drop it a release on.
 	sources: v.optional(v.array(orderSourceValidator)),
+	// How the order LEAVES (z8r3fdfau9) — in the shared set for the same reason
+	// every other filter is: an export of a filtered view must contain exactly
+	// the rows the seller was looking at.
+	fulfilments: v.optional(v.array(fulfilmentKeyValidator)),
 	searchText: v.optional(v.string()),
 	// Pin mode (86eyrtz74) — kept in the SHARED validator set so an export of a
 	// filtered view contains exactly the rows the seller was looking at, forced-in
@@ -2911,6 +2995,12 @@ function orderToCsvSource(o: Doc<"orders">): CsvOrder {
 		paymentReceivedAt: o.paymentReceivedAt,
 		deliveryMethod: o.deliveryMethod,
 		deliveryDirection: o.deliveryDirection,
+		// The RSVP marker, because `fulfilmentKey` reads it: an RSVP is stored
+		// `self_collect`, so dropping this here files every event under
+		// "Self-collect" in the CSV while the table calls it "Event" — the same
+		// export-vs-screen split `pickupSnapshot.locationType` already caused
+		// once on this exact projection. Pinned by a test.
+		eventRsvp: o.eventRsvp,
 		source: o.source,
 		attributionSource: o.attributionSource,
 		customer: o.customer,
@@ -2937,7 +3027,16 @@ function orderToCsvSource(o: Doc<"orders">): CsvOrder {
 				}
 			: undefined,
 		pickupSnapshot: o.pickupSnapshot
-			? { label: o.pickupSnapshot.label, address: o.pickupSnapshot.address }
+			? {
+					label: o.pickupSnapshot.label,
+					address: o.pickupSnapshot.address,
+					// Carried because `fulfilmentKey` reads it (z8r3fdfau9): drop it
+					// here and the CSV's Fulfilment cell says "Self-collect" for the
+					// very orders the table calls "Drop-off" — the export diverging
+					// from the screen, which is the one thing this whole path exists
+					// to prevent.
+					locationType: o.pickupSnapshot.locationType,
+				}
 			: undefined,
 		courierName: o.courierName,
 		trackingNo: o.trackingNo,
@@ -3711,7 +3810,7 @@ export const updateStatus = mutation({
 		// while sending the guest nothing, stranding the whole payment flow.
 		if (order.status === "booking_requested" && status !== "cancelled") {
 			throw new ConvexError(
-				"This is a booking request — approve or decline it from the order page instead",
+				"This is a request waiting for your approval — approve or decline it from the order page instead",
 			);
 		}
 
@@ -4178,7 +4277,7 @@ export const advanceToStage = mutation({
 		// confirmation + payment ask.
 		if (order.status === "booking_requested") {
 			throw new ConvexError(
-				"This is a booking request — approve or decline it from the order page instead",
+				"This is a request waiting for your approval — approve or decline it from the order page instead",
 			);
 		}
 
@@ -4915,6 +5014,10 @@ const PAYMENT_REFERENCE_MAX = 80;
  * `paymentClaimedAt`. Rejects only when the order is already `received`, since
  * a confirmed-by-retailer payment shouldn't be re-claimed.
  */
+/** Buyer-facing refusal for paying a request not yet approved. */
+const AWAITING_APPROVAL_PAYMENT_MESSAGE =
+	"The seller hasn't approved this yet — you'll get a message with how to pay once they do.";
+
 export const claimPayment = mutation({
 	args: {
 		token: v.string(),
@@ -4945,6 +5048,12 @@ export const claimPayment = mutation({
 			!(await isStoredImageRenderable(ctx, proofStorageId as Id<"_storage">))
 		) {
 			throw new ConvexError(UNRENDERABLE_PROOF_MESSAGE);
+		}
+		// A request the seller hasn't approved yet (a booking, or an RSVP that
+		// needs approval — `z8r3fdkjek`) is not payable: the page hides the
+		// payment card, and a direct call is refused the same way.
+		if (order.status === "booking_requested") {
+			throw new ConvexError(AWAITING_APPROVAL_PAYMENT_MESSAGE);
 		}
 		// Payment is gated behind mockup approval — the buyer's tracking page
 		// disables "I've paid" while the gate is closed; reject a direct call too.
@@ -5112,6 +5221,13 @@ export const markPaymentReceived = mutation({
 		if (order.paymentStatus === "received") {
 			// Idempotent — second click is a no-op.
 			return;
+		}
+		// Approve the request first — recording money against an order you
+		// haven't accepted leaves a paid, unapproved order (`z8r3fdkjek`).
+		if (order.status === "booking_requested") {
+			throw new ConvexError(
+				"Approve this request first — the guest is asked to pay only after you approve it.",
+			);
 		}
 		// Can't mark payment received while the mockup gate is closed — the buyer
 		// hasn't been asked to pay and the price may not be final. Mirrors the

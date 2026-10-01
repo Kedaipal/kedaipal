@@ -5,12 +5,13 @@
 // dialog whose reason is REQUIRED because it's quoted verbatim to the guest.
 
 import { useMutation } from "convex/react";
-import { CalendarRange, Check, Clock, X } from "lucide-react";
+import { CalendarRange, Check, Clock, Users, X } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { BOOKING_REQUEST_TTL_MS } from "../../../convex/lib/bookingAvailability";
+import { answerLabelPrefix } from "../../../convex/lib/buyerQuestions";
 import {
 	DAY_MS,
 	formatFulfilmentDate,
@@ -35,6 +36,14 @@ const QUICK_REASONS = [
 	"Those dates aren't available",
 	"We're closed for maintenance",
 	"Group size is too large for this site",
+];
+
+/** An RSVP on an event that approves each guest (`z8r3fdkjek`) reuses this
+ * card — the same request, in an event's words (a seat, not dates). */
+const RSVP_QUICK_REASONS = [
+	"The event is full",
+	"Registration is for members only",
+	"We couldn't verify your details",
 ];
 
 /**
@@ -80,9 +89,18 @@ export function BookingRequestCard({
 			capacityPerNight?: number;
 			peakOtherBookings: number;
 		};
-		items: { name: string }[];
+		items: {
+			name: string;
+			variantLabel?: string;
+			quantity?: number;
+			answers?: ReadonlyArray<{ label: string; answer: string }>;
+		}[];
+		/** Frozen RSVP marker — switches the card to the event's vocabulary. */
+		eventRsvp?: boolean;
 	};
 }) {
+	const isRsvp = order.eventRsvp === true;
+	const quickReasons = isRsvp ? RSVP_QUICK_REASONS : QUICK_REASONS;
 	const approve = useMutation(api.bookings.approveBookingRequest);
 	const decline = useMutation(api.bookings.declineBookingRequest);
 	const [pending, setPending] = useState<"approve" | "decline" | null>(null);
@@ -106,7 +124,9 @@ export function BookingRequestCard({
 		try {
 			await approve({ orderId: order._id });
 			toast.success(
-				"Booking approved — the guest can pay from their order page",
+				isRsvp
+					? "RSVP approved — the guest can pay from their order page"
+					: "Booking approved — the guest can pay from their order page",
 			);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -119,7 +139,11 @@ export function BookingRequestCard({
 		setPending("decline");
 		try {
 			await decline({ orderId: order._id, reason });
-			toast.success("Request declined — the dates are free again");
+			toast.success(
+				isRsvp
+					? "RSVP declined — the seat is free again"
+					: "Request declined — the dates are free again",
+			);
 			setDeclineOpen(false);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -132,8 +156,12 @@ export function BookingRequestCard({
 		<section className="flex flex-col gap-3 rounded-2xl border border-amber-300 bg-card p-4 dark:border-amber-800">
 			<div className="flex items-center justify-between gap-2">
 				<span className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
-					<CalendarRange className="size-3.5" aria-hidden />
-					Booking request
+					{isRsvp ? (
+						<Users className="size-3.5" aria-hidden />
+					) : (
+						<CalendarRange className="size-3.5" aria-hidden />
+					)}
+					{isRsvp ? "RSVP request" : "Booking request"}
 				</span>
 				<span
 					className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold ${
@@ -198,13 +226,58 @@ export function BookingRequestCard({
 				</div>
 			) : null}
 
+			{isRsvp ? (
+				<div className="flex flex-col gap-1.5 border-y-2 border-dashed border-border py-3 text-sm tabular-nums">
+					{order.items.map((item) => (
+						<div key={`${item.name}-${item.variantLabel ?? ""}`}>
+							<div className="flex items-baseline gap-1.5">
+								<span className="font-medium">
+									{item.name}
+									{item.variantLabel ? (
+										<span className="ml-1.5 font-normal text-muted-foreground">
+											{item.variantLabel}
+										</span>
+									) : null}
+								</span>
+								<span className="flex-1 border-b-2 border-dotted border-border" />
+								<span className="font-semibold">
+									{item.quantity ?? 1}{" "}
+									{(item.quantity ?? 1) === 1 ? "seat" : "seats"}
+								</span>
+							</div>
+							{(item.answers ?? []).map((a) => (
+								<p key={a.label} className="text-xs text-muted-foreground">
+									{answerLabelPrefix(a.label)}{" "}
+									<span className="font-medium text-foreground">
+										{a.answer}
+									</span>
+								</p>
+							))}
+						</div>
+					))}
+					<div className="flex items-baseline gap-1.5">
+						<span className="text-muted-foreground">Total</span>
+						<span className="flex-1 border-b-2 border-dotted border-border" />
+						<span className="font-heading font-extrabold">
+							{formatPrice(order.total, order.currency)}
+						</span>
+					</div>
+				</div>
+			) : null}
+
 			<p className="text-xs leading-relaxed text-muted-foreground">
-				{context
-					? bookingCapacityLine(context, isPackage ? "days" : "nights")
-					: null}
-				Approving confirms the booking and unlocks payment on the guest&apos;s
-				order page. Nothing has been charged yet; unanswered requests release
-				automatically after 24 hours.
+				{isRsvp ? (
+					"The seat is held while you decide. Approving confirms the RSVP, sends the guest their WhatsApp confirmation and unlocks payment on their order page. Nothing has been charged yet; an unanswered request frees the seat after 24 hours."
+				) : (
+					<>
+						{context
+							? bookingCapacityLine(context, isPackage ? "days" : "nights")
+							: null}
+						Approving confirms the booking and unlocks payment on the
+						guest&apos;s order page. Nothing has been charged yet; unanswered
+						requests release automatically after 24 hours.
+					</>
+				)}
 			</p>
 
 			<Button
@@ -214,7 +287,7 @@ export function BookingRequestCard({
 				onClick={handleApprove}
 			>
 				<Check className="size-4" aria-hidden />
-				Approve booking
+				{isRsvp ? "Approve RSVP" : "Approve booking"}
 			</Button>
 			<Button
 				variant="outline"
@@ -231,12 +304,13 @@ export function BookingRequestCard({
 					<DialogHeader>
 						<DialogTitle>Decline this request?</DialogTitle>
 						<DialogDescription>
-							The guest sees your reason word-for-word, and the dates open up
-							again. Nothing was charged.
+							{isRsvp
+								? "The guest sees your reason word-for-word on their order page, and the seat opens up again. Nothing was charged."
+								: "The guest sees your reason word-for-word, and the dates open up again. Nothing was charged."}
 						</DialogDescription>
 					</DialogHeader>
 					<div className="flex flex-wrap gap-1.5">
-						{QUICK_REASONS.map((quick) => (
+						{quickReasons.map((quick) => (
 							<FilterChip
 								key={quick}
 								selected={reason === quick}
@@ -250,7 +324,11 @@ export function BookingRequestCard({
 						value={reason}
 						onChange={(e) => setReason(e.target.value.slice(0, 200))}
 						rows={2}
-						placeholder="Reason (required) — e.g. We're closed for a private event that weekend"
+						placeholder={
+							isRsvp
+								? "Reason (required) — e.g. This registration is for club members"
+								: "Reason (required) — e.g. We're closed for a private event that weekend"
+						}
 						className="w-full rounded-xl border border-input bg-background px-3 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
 					/>
 					<DialogFooter>
@@ -267,7 +345,7 @@ export function BookingRequestCard({
 							isLoading={pending === "decline"}
 							onClick={handleDecline}
 						>
-							Decline &amp; notify guest
+							{isRsvp ? "Decline RSVP" : <>Decline &amp; notify guest</>}
 						</Button>
 					</DialogFooter>
 				</DialogContent>
@@ -281,21 +359,25 @@ export function BookingRequestCard({
 export function BookingResolutionNote({
 	resolution,
 	reason,
+	isRsvp = false,
 }: {
 	resolution: "declined" | "expired";
 	reason?: string;
+	/** An RSVP request (`z8r3fdkjek`) — a seat, not dates. */
+	isRsvp?: boolean;
 }) {
+	const noun = isRsvp ? "RSVP request" : "Booking request";
 	return (
 		<section className="flex flex-col gap-1 rounded-2xl border border-border bg-muted/40 p-4 text-sm">
 			<p className="font-semibold">
-				{resolution === "declined"
-					? "Booking request declined"
-					: "Booking request expired"}
+				{resolution === "declined" ? `${noun} declined` : `${noun} expired`}
 			</p>
 			<p className="text-xs leading-relaxed text-muted-foreground">
 				{resolution === "declined"
 					? `Reason sent to the guest: “${reason ?? ""}”`
-					: "No answer within 24 hours, so the hold was released automatically and the guest was told the dates are free again."}
+					: isRsvp
+						? "No answer within 24 hours, so the seat was released automatically. The guest's order page says the request expired."
+						: "No answer within 24 hours, so the hold was released automatically and the guest was told the dates are free again."}
 			</p>
 		</section>
 	);

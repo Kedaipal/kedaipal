@@ -2,6 +2,7 @@ import { StickyNote } from "lucide-react";
 import type { Locale } from "../../../convex/lib/locale";
 import { PICKUP_NOTES_HEADING } from "../../../convex/lib/pickupNote";
 import { cn } from "../../lib/utils";
+import { LinkifiedText } from "../ui/linkified-text";
 
 /**
  * The seller's collection instructions for an order (ClickUp `z8r3fdff97`) —
@@ -9,6 +10,9 @@ import { cn } from "../../lib/utils";
  * way wherever they appear: the buyer's /track page, the seller's order page
  * and checkout. One component, so the heading, the dedupe (done upstream by
  * `orderPickupNotes`) and the look can't drift between surfaces.
+ *
+ * A bare URL in a note (a Google Maps pin, a parking guide) is tappable via
+ * `LinkifiedText`; everything else stays escaped text.
  *
  * Takes already-distinct notes. Renders NOTHING for an empty list, so callers
  * don't need a guard.
@@ -58,13 +62,13 @@ export function PickupNotes({
 				) : null}
 				{notes.length === 1 ? (
 					<p className="mt-1 text-sm text-foreground wrap-break-word">
-						{notes[0]}
+						<LinkifiedText text={notes[0]} />
 					</p>
 				) : (
 					<ul className="mt-1 list-disc space-y-0.5 pl-4 text-sm text-foreground">
 						{notes.map((note) => (
 							<li key={note} className="wrap-break-word">
-								{note}
+								<LinkifiedText text={note} />
 							</li>
 						))}
 					</ul>

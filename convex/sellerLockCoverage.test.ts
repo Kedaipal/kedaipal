@@ -93,6 +93,8 @@ const UNLOCKED: Record<string, string> = {
 
 	// 3. Account, legal, onboarding state, and read-only artifacts.
 	"retailers.createRetailer": "no store yet — nothing to lock",
+	"retailers.claimStore":
+		"no store yet — the caller is taking over a pre-built one, and the store it claims is comped (docs/prebuilt-stores.md)",
 	"retailers.recordConsentAcceptance": "legal consent is never withheld",
 	"retailers.ensureNotifyEmailFromIdentity": "account housekeeping",
 	"retailers.ackCountrySetup": "dismisses a banner",
