@@ -1955,7 +1955,8 @@ export function ProductForm({
 							<p className="text-xs leading-relaxed text-muted-foreground">
 								One line collecting buyers see on the product page, at checkout
 								and on their order page — the page their WhatsApp confirmation
-								links to. It&apos;s copied onto each order as it&apos;s placed,
+								links to. Paste a link (e.g. a Google Maps pin) and it becomes
+								tappable. It&apos;s copied onto each order as it&apos;s placed,
 								so editing it later never rewrites what earlier buyers were
 								told.
 							</p>
