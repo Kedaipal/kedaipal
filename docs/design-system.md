@@ -85,6 +85,7 @@ Don't hand-roll what exists. From [`src/components/ui/`](../src/components/ui/):
 | --- | --- | --- |
 | Button | `Button` | variants: `default`(mint)/`outline`/`secondary`/`ghost`/`destructive`/`link`; sizes incl. `icon*`. `isLoading` shows a spinner; `asChild` to wrap a `Link`. |
 | Text input | `Input` | `variant="field"` = **mobile form field (≥44px)**; `default` = compact toolbar; `bare` = child of a composite. `isError` sets `aria-invalid`. |
+| Picker | `Select` | native `<select>` with the UA caret suppressed and **our own chevron** — see below. Same `variant="field"`/`default` + `isError` API as `Input`, so the two line up side by side. Form-bound rows use `SelectField` (`src/components/forms/`), which wraps it. |
 | Form row | `Field` + `FieldLabel` / `FieldContent` / `FieldDescription` / `FieldError` | **always** compose forms with these — don't hand-write label+input+error. `FieldError` takes an `errors` array (TanStack Form shape). |
 | Textarea | `Textarea` | |
 | Phone — seller / platform | `MyPhoneInput` (plain state) / `TextField prefix={<MyPhonePrefix />}` (form-bound) | a **fixed** plate for the store's country — the store's own numbers. See below. |
@@ -100,6 +101,35 @@ Don't hand-roll what exists. From [`src/components/ui/`](../src/components/ui/):
 | Zoomable image | `ZoomableImage` | product/mockup imagery; wraps `AppImage` internally, so it gets the same loading/error handling for free. |
 
 If a primitive is missing, **add it to `src/components/ui/`** — don't inline a one-off in a route.
+
+### Every `<select>` wears our chevron, never the UA caret (2026-10-01)
+`src/components/ui/select.tsx`. **Native on purpose** — on a phone a `<select>`
+opens the OS picker wheel, which beats any listbox we could draw, and it needs
+no portal, no focus trap and no JS to be accessible. This is the same posture as
+the buyer phone picker; it is not a combobox in disguise.
+
+What the primitive exists to fix: **the native macOS caret paints hard against
+the right border and ignores the control's padding.** Beside a native date or
+time `<input>` — whose calendar and clock glyphs *are* inset — the caret reads
+as shoved into the corner, and it fights a `rounded-xl` focus ring. (Spotted on
+the product wizard's event-venue picker, which sat in a row with three such
+inputs.) So the variant sets `appearance-none`, reserves the glyph's lane with
+`pr-10`, and we draw a `ChevronDown` at `right-3.5` — which also makes Safari,
+Chrome and Firefox agree instead of each shipping its own arrow.
+
+Two things that are easy to get wrong when hand-rolling it: the chevron needs
+`pointer-events-none` (otherwise it eats the click that should open the picker,
+and the control stops being one target), and it must **dim with the control** —
+a disabled select whose caret still looks live reads as merely empty, not
+locked. Both are pinned by `select.test.tsx`.
+
+`className` lands on the positioning **wrapper**, not the `<select>`: pass the
+width there (`className="w-56"`) and the select fills it, so the chevron is
+placed against the box the seller actually sees. Because the control lives
+inside that wrapper, **label it with an explicit `htmlFor`/`id`** rather than
+wrapping it in a `<label>` — an association that depends on nesting depth is one
+refactor away from silently breaking, and biome's `noLabelWithoutControl` will
+flag it.
 
 ### Images always render via `AppImage` (2026-07-24)
 `src/components/ui/app-image.tsx` — skeleton placeholder while loading → fade-in on load → a labelled fallback (muted box + icon + the alt text) on a dead URL or unset `src`, instead of a blank box. A failed load is **retried twice with jittered backoff before that fallback is shown** (2026-08-21, ClickUp `86eypxgff` — see below). Two sizing modes: **`fill` (default)** — `aspect` is the wrapper's box, the image crops to fill it (`objectFit="cover"|"contain"`); use for photo thumbnails, avatars, banners. **`fill={false}`** — `aspect` becomes the image's OWN intrinsic-ratio classes (e.g. `"h-8 w-auto"`) instead of a box to stretch into; use for fixed-height, auto-width brand-mark SVGs (forcing those through `w-full` inside an auto-width wrapper is the classic "percentage width in an indefinite container" CSS trap). `priority` (LCP candidates — storefront cover, first product-grid row) skips the lazy-loading hint. Local upload previews (`blob:`/`data:` URLs) auto-skip the skeleton (already instant). **Exceptions:** `store-poster.tsx` (print/PDF-export surface — a lazy or opacity-0 image can print blank; has its own `new Image()` onload/onerror gating) and `landing/responsive-image.tsx` (a build-time `<picture>`/srcset wrapper for static optimized assets — a different concern from `AppImage`'s runtime Convex-hosted URLs).

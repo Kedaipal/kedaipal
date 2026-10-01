@@ -1,5 +1,5 @@
 import { useMutation } from "convex/react";
-import { ChevronDown, CircleAlert, ExternalLink, Truck } from "lucide-react";
+import { CircleAlert, ExternalLink, Truck } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
@@ -23,6 +23,7 @@ import {
 	DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { Select } from "../ui/select";
 
 // Manual courier + tracking number on mark-shipped (86eyehvk4). Two entry
 // points share one fieldset: the mark-shipped prompt (MarkShippedDialog) and
@@ -85,11 +86,6 @@ function draftToFields(draft: ShipmentDraft): ShipmentFields {
 	};
 }
 
-// appearance-none + our own chevron: the native macOS caret hugs the right
-// border and ignores padding, so it fought the rounded-xl focus ring.
-const SELECT_CLASSES =
-	"min-h-11 w-full appearance-none rounded-xl border border-input bg-background px-4 pr-10 text-base outline-none transition-colors focus:border-ring focus:ring-2 focus:ring-ring/50";
-
 /** Shared fieldset: courier picklist + tracking number (+ name/link for "Other"). */
 function ShipmentFieldset({
 	draft,
@@ -104,30 +100,32 @@ function ShipmentFieldset({
 	const noCourier = draft.courier === "";
 	return (
 		<div className="flex flex-col gap-3">
-			<label className="flex flex-col gap-1.5">
-				<span className="text-xs font-medium text-muted-foreground">
+			{/* Explicit `htmlFor`, not a wrapping label: `Select` puts the control
+			    inside its own positioning div, and an association that depends on
+			    nesting depth is one refactor away from silently breaking. */}
+			<div className="flex flex-col gap-1.5">
+				<label
+					htmlFor="shipment-courier"
+					className="text-xs font-medium text-muted-foreground"
+				>
 					Courier
-				</span>
-				<div className="relative">
-					<select
-						value={draft.courier}
-						onChange={(e) => onChange({ ...draft, courier: e.target.value })}
-						className={SELECT_CLASSES}
-					>
-						<option value="">No courier</option>
-						{COURIERS.map((c) => (
-							<option key={c.label} value={c.label}>
-								{c.label}
-							</option>
-						))}
-						<option value={OTHER}>Other courier</option>
-					</select>
-					<ChevronDown
-						aria-hidden="true"
-						className="pointer-events-none absolute right-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-					/>
-				</div>
-			</label>
+				</label>
+				<Select
+					id="shipment-courier"
+					variant="field"
+					className="w-full"
+					value={draft.courier}
+					onChange={(e) => onChange({ ...draft, courier: e.target.value })}
+				>
+					<option value="">No courier</option>
+					{COURIERS.map((c) => (
+						<option key={c.label} value={c.label}>
+							{c.label}
+						</option>
+					))}
+					<option value={OTHER}>Other courier</option>
+				</Select>
+			</div>
 			{/* "No courier" collapses the form — the remaining inputs only make
 			    sense once a courier is picked, and draftToFields treats this state
 			    as an explicit clear. */}

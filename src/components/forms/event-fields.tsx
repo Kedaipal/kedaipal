@@ -15,6 +15,7 @@ import {
 } from "../../../convex/lib/productEvent";
 import { ProBadge } from "../app/pro-gate";
 import { Input } from "../ui/input";
+import { Select } from "../ui/select";
 import { ToggleSwitch } from "../ui/toggle-switch";
 
 /** Why an event can't be saved on a store with no pickup point — said on
@@ -397,19 +398,17 @@ export function EventFields({
 								<label htmlFor="event-venue" className="text-sm font-medium">
 									Venue
 								</label>
-								<select
+								<Select
 									id="event-venue"
+									variant="field"
+									className="w-56"
 									value={draft.venueId}
 									onChange={(e) => set({ venueId: e.target.value })}
 									// A BLANK venue (saved before venues existed) stays
 									// pickable — naming where the event already is isn't a
 									// move, and the server refuses an actual move anyway.
 									disabled={locked || (hasRsvps && draft.venueId.trim() !== "")}
-									className={`h-11 w-56 rounded-xl border bg-background px-3 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50 ${
-										draft.venueId.trim() === ""
-											? "border-destructive"
-											: "border-input"
-									}`}
+									isError={draft.venueId.trim() === ""}
 								>
 									<option value="">Pick a pickup point…</option>
 									{venues.map((v) => (
@@ -417,7 +416,7 @@ export function EventFields({
 											{v.isActive ? v.label : `${v.label} — hidden from buyers`}
 										</option>
 									))}
-								</select>
+								</Select>
 							</div>
 						) : null}
 					</div>
