@@ -1,6 +1,6 @@
 import { useMutation } from "convex/react";
 import { CircleAlert, ExternalLink, Truck } from "lucide-react";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
@@ -98,6 +98,10 @@ function ShipmentFieldset({
 }) {
 	const selected = findCourier(draft.courier);
 	const noCourier = draft.courier === "";
+	// Generated, not hardcoded: BOTH hosts of this fieldset — the card and the
+	// mark-shipped dialog — mount on the same order page, so a fixed id would
+	// collide and `label[for]` would bind to whichever rendered first.
+	const courierId = useId();
 	return (
 		<div className="flex flex-col gap-3">
 			{/* Explicit `htmlFor`, not a wrapping label: `Select` puts the control
@@ -105,13 +109,13 @@ function ShipmentFieldset({
 			    nesting depth is one refactor away from silently breaking. */}
 			<div className="flex flex-col gap-1.5">
 				<label
-					htmlFor="shipment-courier"
+					htmlFor={courierId}
 					className="text-xs font-medium text-muted-foreground"
 				>
 					Courier
 				</label>
 				<Select
-					id="shipment-courier"
+					id={courierId}
 					variant="field"
 					className="w-full"
 					value={draft.courier}

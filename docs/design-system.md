@@ -121,7 +121,19 @@ Two things that are easy to get wrong when hand-rolling it: the chevron needs
 `pointer-events-none` (otherwise it eats the click that should open the picker,
 and the control stops being one target), and it must **dim with the control** —
 a disabled select whose caret still looks live reads as merely empty, not
-locked. Both are pinned by `select.test.tsx`.
+locked. The dimming is keyed off the select's own `:disabled` (the select
+carries `peer`, the chevron `peer-disabled:opacity-50`), **not** off the
+`disabled` prop, so a control disabled by a wrapping `<fieldset disabled>` dims
+too. Both are pinned by `select.test.tsx`, as is the rule that an omitted
+`variant` and an explicit `variant="default"` place the glyph identically —
+`cva` resolves the omission, a bare `variant === "default"` check would not.
+
+Give long free-text options room. A native `<select>` **cannot ellipsize**: an
+option that overruns is simply cut mid-word, with nothing to say it was. Where
+the options are user-typed names of no bounded length (a venue, a location),
+size the control for them and pass `title` with the selected label so a hover
+recovers it on desktop — the width is the fix, `title` is the safety net. Fixed
+short content (a unit, a state, a currency) needs neither.
 
 `className` lands on the positioning **wrapper**, not the `<select>`: pass the
 width there (`className="w-56"`) and the select fills it, so the chevron is

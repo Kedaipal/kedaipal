@@ -41,6 +41,33 @@ describe("Select — the native caret is suppressed and replaced", () => {
 		expect(chevron?.getAttribute("aria-hidden")).toBe("true");
 	});
 
+	/**
+	 * An OMITTED variant and an explicit `variant="default"` are the same
+	 * control, so they must place the chevron in the same spot. `cva` resolves
+	 * the omission to `default` for the padding; a raw `variant === "default"`
+	 * check would NOT, and the glyph would drift into the `field` position
+	 * over `default` padding.
+	 */
+	it("places the chevron identically whether the default variant is omitted or named", () => {
+		const chevronClass = (ui: React.ReactElement) =>
+			render(ui).container.querySelector("svg")?.getAttribute("class");
+
+		const omitted = chevronClass(
+			<Select aria-label="A">
+				<option value="">Pick…</option>
+			</Select>,
+		);
+		cleanup();
+		const named = chevronClass(
+			<Select aria-label="B" variant="default">
+				<option value="">Pick…</option>
+			</Select>,
+		);
+
+		expect(omitted).toBe(named);
+		expect(omitted).toContain("right-2.5");
+	});
+
 	it("reserves the chevron's lane so a long label can't run under it", () => {
 		expect(renderSelect().className).toContain("pr-10");
 	});
@@ -59,14 +86,26 @@ describe("Select — states", () => {
 		expect(renderSelect().getAttribute("aria-invalid")).not.toBe("true");
 	});
 
-	it("dims the chevron with the control, so a locked picker doesn't read as merely empty", () => {
+	/**
+	 * Asserted as a PAIR, because that's what makes it work: the chevron keys
+	 * off the select's own `:disabled` via `peer-disabled:`, not off the
+	 * `disabled` prop. Drop the `peer` class from the select, or the variant
+	 * from the chevron, and the dimming silently stops.
+	 *
+	 * Keying on the element rather than the prop is deliberate: a control
+	 * disabled by a wrapping `<fieldset disabled>` never sees a `disabled`
+	 * prop here, and a chevron left bright on a locked picker reads as merely
+	 * empty.
+	 */
+	it("dims the chevron from the select's own :disabled, not from the prop", () => {
 		const { container } = render(
 			<Select aria-label="Venue" disabled>
 				<option value="">Pick…</option>
 			</Select>,
 		);
+		expect(screen.getByLabelText("Venue").className).toContain("peer");
 		expect(container.querySelector("svg")?.getAttribute("class")).toContain(
-			"opacity-50",
+			"peer-disabled:opacity-50",
 		);
 	});
 

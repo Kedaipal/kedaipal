@@ -63,17 +63,20 @@ function Select({
 	variant,
 	isError,
 	children,
-	disabled,
 	"aria-invalid": ariaInvalid,
 	...props
 }: SelectProps) {
+	// Resolved ONCE, because the chevron's inset is picked from it below and
+	// `cva` would otherwise disagree with that ternary: an omitted `variant`
+	// renders the `default` chrome but `variant === "default"` is false, so the
+	// same control would get `default` padding and `field` chevron placement.
+	const resolvedVariant = variant ?? "default";
 	return (
 		<div className={cn("relative", className)}>
 			<select
 				data-slot="select"
-				disabled={disabled}
 				aria-invalid={isError || ariaInvalid}
-				className={selectVariants({ variant })}
+				className={cn("peer", selectVariants({ variant: resolvedVariant }))}
 				{...props}
 			>
 				{children}
@@ -84,10 +87,13 @@ function Select({
 					// `pointer-events-none` so the glyph never eats the click that
 					// should open the picker — the whole control stays one target.
 					"pointer-events-none absolute top-1/2 size-4 -translate-y-1/2 text-muted-foreground",
-					variant === "default" ? "right-2.5" : "right-3.5",
+					resolvedVariant === "default" ? "right-2.5" : "right-3.5",
 					// The chevron dims WITH the control: a disabled select whose
 					// caret still looks live reads as merely empty, not locked.
-					disabled && "opacity-50",
+					// Keyed off the SELECT's own `:disabled` rather than the prop,
+					// so a control disabled by a wrapping `<fieldset disabled>` —
+					// which never reaches this component as a prop — dims too.
+					"peer-disabled:opacity-50",
 				)}
 			/>
 		</div>
