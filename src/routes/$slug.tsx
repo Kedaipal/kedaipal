@@ -28,6 +28,7 @@ import {
 	imageSrcSet,
 	proxiedImageUrl,
 } from "../lib/image-proxy";
+import { jsonLdScript } from "../lib/json-ld";
 import { ssrRead } from "../lib/ssr-read";
 
 interface StorefrontLoaderData {
@@ -217,12 +218,7 @@ export const Route = createFileRoute("/$slug")({
 						]
 					: []),
 			],
-			scripts: [
-				{
-					type: "application/ld+json",
-					children: JSON.stringify(jsonLd),
-				},
-			],
+			scripts: [jsonLdScript(jsonLd)],
 		};
 	},
 	notFoundComponent: StoreNotFound,
@@ -239,9 +235,10 @@ function StoreNotFound() {
 					No retailer uses <span className="font-mono">/{slug}</span>.
 				</p>
 			</div>
-			{/* No store to attribute to — the slug names nobody. The badge is
-			    still the one way out of this dead end. */}
-			<StorefrontFooter />
+			{/* No store to attribute to — the slug names nobody. The directory
+			    link turns the dead end into a next step; the badge stays the
+			    way to Kedaipal itself. */}
+			<StorefrontFooter discover />
 		</main>
 	);
 }
@@ -343,7 +340,10 @@ function StorefrontRoute() {
 					/>
 				</section>
 
-				<StorefrontFooter slug={slug} />
+				<StorefrontFooter
+					slug={slug}
+					discover={retailer.marketplaceUnlisted !== true}
+				/>
 
 				<CartBar cart={cart} storeSlug={retailer.slug} />
 			</div>

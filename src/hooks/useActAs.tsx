@@ -188,6 +188,27 @@ export function useActAs(): ActAsContextValue {
 	return ctx;
 }
 
+/**
+ * End the stored act-as session WITHOUT the provider.
+ *
+ * `useActAs` throws outside `ActAsProvider`, and the provider wraps the `/app`
+ * subtree only — so `/onboarding`'s pre-built store claim, the moment a store
+ * changes hands, cannot use the hook at all (it threw exactly that way the
+ * first time a vendor opened it). The usual route to the claim is the admin's
+ * own tab: they built the store, signed out, and the vendor signed in where the
+ * admin's record can still sit — when that sign-out happened outside `/app`,
+ * where no provider was mounted to see it. The record names the admin's Clerk
+ * session, so `resolveActAs` never honours it for the vendor and their first
+ * `/app` mount deletes it; clearing it here just ends it at the handover
+ * itself rather than one page later.
+ *
+ * Exported from here rather than reaching for the key directly, so
+ * `ACT_AS_STORAGE_KEY` keeps exactly one writer. Safe in SSR.
+ */
+export function clearStoredActAs(): void {
+	persist(null);
+}
+
 /** Convenience reader for the current act-as retailer id (undefined = own store). */
 export function useActAsRetailerId(): Id<"retailers"> | undefined {
 	return useActAs().actAsRetailerId;

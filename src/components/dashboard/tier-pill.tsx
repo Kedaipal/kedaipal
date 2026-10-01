@@ -25,6 +25,10 @@ function toneClass(tone: TierTone): string {
 			return "bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300";
 		case "sponsored":
 			return "bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300";
+		// Matches the seller directory's Unclaimed chip (seller-cells.tsx) —
+		// one idea, one look, across both admin surfaces.
+		case "unclaimed":
+			return "border border-dashed border-accent/70 bg-accent/5 text-accent-emphasis";
 		case "trial":
 			return "border border-accent/20 bg-accent/10 text-accent dark:bg-accent/15";
 		default:
@@ -49,12 +53,15 @@ export function TierPill({
 	subscription,
 	foundingRank,
 	admin = false,
+	unclaimed = false,
 	compact = false,
 	className,
 }: {
 	subscription?: SubscriptionView;
 	foundingRank?: number;
 	admin?: boolean;
+	/** Pre-built store, no owner yet (docs/prebuilt-stores.md). */
+	unclaimed?: boolean;
 	compact?: boolean;
 	className?: string;
 }) {
@@ -64,6 +71,7 @@ export function TierPill({
 		Date.now(),
 		foundingRank,
 		admin,
+		unclaimed,
 	);
 	const displayLabel =
 		compact && subscription.status === "trialing"
@@ -74,7 +82,10 @@ export function TierPill({
 			: label;
 
 	// Admin pill points at the console; the seller-state pill points at billing.
-	if (tone === "admin") {
+	// An UNCLAIMED store goes to the console too — there is no subscriber yet, so
+	// "manage your billing" is a page about nobody, whereas the directory is
+	// where the admin sets the handover email and finishes the job.
+	if (tone === "admin" || tone === "unclaimed") {
 		return (
 			<Link
 				to="/app/admin/sellers"
