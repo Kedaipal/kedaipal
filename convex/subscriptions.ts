@@ -38,6 +38,7 @@ import {
 import { COMP_LABEL_MAX, COMP_NOTE_MAX, type CompKind } from "./lib/comp";
 import { rateLimiter } from "./lib/rateLimiter";
 import {
+	autoChargeAllowed,
 	autoRenewMethodLabel,
 	CHARGE_ATTEMPT_LOCK_MS,
 } from "./lib/hitpayBilling";
@@ -122,13 +123,19 @@ export type AccessState = {
 	periodPaidBy?: "plan" | "hold";
 	/** Saved-method auto-renewal summary (86eyb6z4r) — OWNER-only surface (this
 	 * state rides getMyRetailer, which shoppers never see). `failing` means the
-	 * last charge attempt was declined and dunning is running; `setupPending`
+	 * last charge attempt was declined and dunning is running; `stopped` means
+	 * auto-charging is stopped over a stranded charge (nothing charges until a
+	 * bill is settled); `confirming` means a charge was SENT and its outcome
+	 * is still being confirmed with HitPay — the UI must neither promise a
+	 * charge nor invite a manual payment while it stands; `setupPending`
 	 * means the seller started authorisation but no method attached yet. */
 	autoRenew?: {
 		method: string;
 		methodLabel: string;
 		failedAttempts: number;
 		failing: boolean;
+		stopped: boolean;
+		confirming: boolean;
 		nextChargeAt?: number;
 	};
 	autoRenewSetupPending?: boolean;
@@ -237,6 +244,8 @@ function resolveAccessBase(sub: Doc<"subscriptions"> | null): AccessState {
 						autoRenewMethodLabel(sub.autoRenew.method),
 					failedAttempts: sub.autoRenew.failedAttempts ?? 0,
 					failing: (sub.autoRenew.failedAttempts ?? 0) > 0,
+					stopped: !autoChargeAllowed(sub.autoRenew),
+					confirming: sub.autoRenew.lastChargeAttemptAt !== undefined,
 					nextChargeAt: sub.currentPeriodEnd,
 				}
 			: undefined,
@@ -1289,11 +1298,25 @@ export const internalDailyBillingStatus = internalMutation({
 			const unresolvedAttempt =
 				sub.autoRenew?.lastChargeAttemptAt !== undefined &&
 				now - sub.autoRenew.lastChargeAttemptAt >= CHARGE_ATTEMPT_LOCK_MS;
-			if (pendingInvoice && (retryDue || unresolvedAttempt)) {
+			// The bill to hand the charge action: the open one — or, with no
+			// open bill but an unresolved attempt, the bill that attempt was
+			// FIRED FOR. That happens when the bill settled by another rail
+			// (Pay-now, admin mark-paid) or was voided while the outcome was
+			// unknown: the action then runs the reconcile only (it never
+			// charges a non-pending bill), so a landed charge is found this
+			// sweep, not a whole cycle later when the next bill exists.
+			const chargeTarget =
+				pendingInvoice?._id ??
+				(unresolvedAttempt ? sub.autoRenew?.pendingChargeInvoiceId : undefined);
+			if (
+				chargeTarget !== undefined &&
+				autoChargeAllowed(sub.autoRenew) &&
+				(retryDue || unresolvedAttempt)
+			) {
 				await ctx.scheduler.runAfter(
 					0,
 					internal.subscriptionPayments.chargeDueRenewal,
-					{ invoiceId: pendingInvoice._id },
+					{ invoiceId: chargeTarget },
 				);
 				autoChargeRetries++;
 			}
@@ -1432,6 +1455,19 @@ export const internalDailyBillingStatus = internalMutation({
 			}
 			if (inv.reminderSentAt !== undefined) continue;
 			if (inv.dueDate <= reminderFrom || inv.dueDate > reminderTo) continue;
+			// "Pay this invoice" is a double-payment nudge while the machine is
+			// mid-flight on the same money: a charge outcome we're still
+			// confirming with HitPay, or a stranded charge a human is sorting
+			// out. Skip WITHOUT stamping reminderSentAt, so the reminder can
+			// still go out once the question resolves and the invoice remains
+			// unpaid inside the window. (Exhausted dunning — declined, retries
+			// done — is a recorded outcome: those sellers are reminded.)
+			const reminderSub = await ctx.db.get(inv.subscriptionId);
+			if (
+				reminderSub?.autoRenew?.lastChargeAttemptAt !== undefined ||
+				reminderSub?.autoRenew?.strandedCharge !== undefined
+			)
+				continue;
 			await ctx.db.patch(inv._id, { reminderSentAt: now });
 			await ctx.scheduler.runAfter(
 				0,

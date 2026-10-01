@@ -170,6 +170,88 @@ export function nextChargeRetryAt(
  */
 export const CHARGE_ATTEMPT_LOCK_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * May Kedaipal charge this subscription's saved method right now? Only when
+ * a method is attached AND no stranded charge is waiting on a human (see
+ * `autoRenew.strandedCharge` in schema.ts). The ONE rule: every path that
+ * schedules `chargeDueRenewal` asks it, and the charge re-asks it — a second
+ * copy of the condition is how one door would keep charging a stopped store.
+ */
+export function autoChargeAllowed(
+	autoRenew: { strandedCharge?: unknown } | undefined,
+): boolean {
+	return autoRenew !== undefined && autoRenew.strandedCharge === undefined;
+}
+
+/**
+ * May we PROMISE the seller an immediate charge of a fresh bill (the
+ * subscribe / plan-change "charging your saved method now" toast)? Stricter
+ * than `autoChargeAllowed`: while an earlier attempt's outcome is unknown
+ * (`lastChargeAttemptAt` standing), the mutex would stand a new charge down
+ * and the reconcile must answer first — so the promise would be a lie. The
+ * daily sweep charges the new bill once the question resolves; these doors
+ * simply don't schedule what they can't promise.
+ */
+export function autoChargeIdle(
+	autoRenew:
+		| { strandedCharge?: unknown; lastChargeAttemptAt?: number }
+		| undefined,
+): boolean {
+	return (
+		autoChargeAllowed(autoRenew) && autoRenew?.lastChargeAttemptAt === undefined
+	);
+}
+
+type StrandedChargeSummary = {
+	invoiceNumber: string;
+	amountSen: number;
+	currency: string;
+	paymentId: string;
+	at: number;
+};
+
+/** What the admin console needs to say about a store's auto-charging. ONE
+ * projection for both admin lists (the pending bills and the auto-renewal
+ * overview), so the two can never describe the same store differently. */
+export type AdminAutoChargeState = {
+	method: string;
+	failedAttempts: number;
+	nextRetryAt?: number;
+	lastChargeError?: string;
+	/** An attempt with no recorded outcome yet (the stamp). In flight for a
+	 * few seconds normally; left standing, the next run asks HitPay first. */
+	unresolvedAttemptAt?: number;
+	/** Auto-charging stopped over a charge that landed on a voided bill. */
+	stranded?: StrandedChargeSummary;
+};
+
+export function adminAutoChargeState(autoRenew: {
+	method: string;
+	failedAttempts?: number;
+	nextRetryAt?: number;
+	lastChargeError?: string;
+	lastChargeAttemptAt?: number;
+	strandedCharge?: StrandedChargeSummary & { invoiceId: unknown };
+}): AdminAutoChargeState {
+	const stranded = autoRenew.strandedCharge;
+	return {
+		method: autoRenew.method,
+		failedAttempts: autoRenew.failedAttempts ?? 0,
+		nextRetryAt: autoRenew.nextRetryAt,
+		lastChargeError: autoRenew.lastChargeError,
+		unresolvedAttemptAt: autoRenew.lastChargeAttemptAt,
+		stranded: stranded
+			? {
+					invoiceNumber: stranded.invoiceNumber,
+					amountSen: stranded.amountSen,
+					currency: stranded.currency,
+					paymentId: stranded.paymentId,
+					at: stranded.at,
+				}
+			: undefined,
+	};
+}
+
 // --- Request builders -------------------------------------------------------
 
 const PURPOSE_MAX = 255;

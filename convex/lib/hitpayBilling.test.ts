@@ -3,6 +3,8 @@ import {
 	AUTO_CHARGE_MAX_ATTEMPTS,
 	AUTO_CHARGE_RETRY_DELAYS_MS,
 	AUTO_RENEW_METHODS,
+	adminAutoChargeState,
+	autoChargeAllowed,
 	autoRenewMethodLabel,
 	buildAutoRenewSessionParams,
 	buildInvoicePaymentRequestParams,
@@ -474,6 +476,51 @@ describe("readSessionChargeCount", () => {
 		expect(readSessionChargeCount({ total_charge: -1 })).toBeUndefined();
 		expect(readSessionChargeCount({ total_charge: 1.5 })).toBeUndefined();
 		expect(readSessionChargeCount({ total_charge: "3 charges" })).toBeUndefined();
+	});
+});
+
+describe("autoChargeAllowed — the one rule every charge scheduler asks", () => {
+	const stranded = {
+		invoiceId: "inv_old",
+		invoiceNumber: "INV-OLD",
+		amountSen: 14900,
+		currency: "MYR",
+		paymentId: "reconciled:rb_1:1",
+		at: 1,
+	};
+
+	test("no saved method → nothing to charge", () => {
+		expect(autoChargeAllowed(undefined)).toBe(false);
+	});
+
+	test("a saved method charges — unless a stranded charge is waiting on a human", () => {
+		expect(autoChargeAllowed({})).toBe(true);
+		expect(autoChargeAllowed({ strandedCharge: stranded })).toBe(false);
+	});
+
+	test("the admin projection carries the stranded charge and the unresolved stamp", () => {
+		const state = adminAutoChargeState({
+			method: "card",
+			failedAttempts: 1,
+			lastChargeAttemptAt: 42,
+			strandedCharge: stranded,
+		});
+		expect(state).toEqual({
+			method: "card",
+			failedAttempts: 1,
+			nextRetryAt: undefined,
+			lastChargeError: undefined,
+			unresolvedAttemptAt: 42,
+			// No invoice id: the admin reads the NUMBER; the id is server business.
+			stranded: {
+				invoiceNumber: "INV-OLD",
+				amountSen: 14900,
+				currency: "MYR",
+				paymentId: "reconciled:rb_1:1",
+				at: 1,
+			},
+		});
+		expect(adminAutoChargeState({ method: "card" }).failedAttempts).toBe(0);
 	});
 });
 
