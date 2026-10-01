@@ -527,21 +527,67 @@ describe("retailers slug rename", () => {
 		).rejects.toThrow(/reserved/);
 	});
 
-	test("checkSlugAvailability reports owner-reclaim as available", async () => {
+	test("checkSlugAvailability reports owner-reclaim as available (rename)", async () => {
 		const t = setup();
 		const asA = await seed(t, USER_A, "orig");
 		await asA.mutation(api.retailers.renameSlug, { newSlug: "renamed" });
 
 		const forOwner = await asA.query(api.retailers.checkSlugAvailability, {
 			slug: "orig",
+			purpose: "rename",
 		});
 		expect(forOwner).toEqual({ status: "available" });
 
 		const asB = t.withIdentity({ subject: USER_B });
 		const forOther = await asB.query(api.retailers.checkSlugAvailability, {
 			slug: "orig",
+			purpose: "rename",
 		});
 		expect(forOther).toEqual({ status: "taken" });
+	});
+
+	test("a store being BORN cannot take the caller's own slug", async () => {
+		// The 2 Oct hands-on bug: an admin building a store for a vendor typed a
+		// name whose slug was their OWN store's, saw "✓ Available", clicked, and
+		// the server refused with "That slug is taken". Delete the `purpose`
+		// branch in checkSlugAvailability and this goes green while the create
+		// path still refuses — a client contradicting its own server.
+		const t = setup();
+		const asA = await seed(t, USER_A, "mine");
+
+		expect(
+			await asA.query(api.retailers.checkSlugAvailability, {
+				slug: "mine",
+				purpose: "rename",
+			}),
+		).toEqual({ status: "available" });
+		expect(
+			await asA.query(api.retailers.checkSlugAvailability, {
+				slug: "mine",
+				purpose: "create",
+			}),
+		).toEqual({ status: "taken" });
+		// (The end-to-end "the hint agrees with the create" assertion lives in
+		// prebuiltStore.test.ts, against `createUnclaimedStore` — the admin path
+		// is the only create that a caller who ALREADY owns a store can reach,
+		// since `createRetailer` refuses one-store-per-login before it ever
+		// looks at the slug. Which is why the bug only showed up there.)
+	});
+
+	test("a NEW store cannot take a slug still parked in someone's history", async () => {
+		// Same split on the history branch: reclaiming your own parked slug is a
+		// rename back, but a new store may not take a slug still redirecting to a
+		// live shop — not even its own builder's.
+		const t = setup();
+		const asA = await seed(t, USER_A, "parked");
+		await asA.mutation(api.retailers.renameSlug, { newSlug: "current" });
+
+		expect(
+			await asA.query(api.retailers.checkSlugAvailability, {
+				slug: "parked",
+				purpose: "create",
+			}),
+		).toEqual({ status: "taken" });
 	});
 });
 

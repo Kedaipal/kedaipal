@@ -349,7 +349,7 @@ function OnboardClientCard() {
 	// Mirror the onboarding form: derive the slug from the name until hand-edited,
 	// and check availability live so we never hand out a link to a taken slug.
 	const derivedSlug = slugEdited ? slug : slugify(storeName);
-	const availability = useSlugAvailability(derivedSlug);
+	const availability = useSlugAvailability(derivedSlug, "create");
 	const nameCheck = validateStoreName(storeName);
 
 	// Live email pre-check (debounced) — Clerk allows one account per email and

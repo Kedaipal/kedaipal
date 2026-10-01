@@ -164,6 +164,30 @@ describe("createUnclaimedStore", () => {
 		await expect(buildStore(t, { slug: "taken" })).rejects.toThrow(/taken/i);
 	});
 
+	test("the slug hint an admin sees AGREES with what the create does", async () => {
+		// The 2 Oct hands-on blocker: `checkSlugAvailability` exempted the
+		// CALLER's own slug (right for a rename, wrong for a birth), so an admin
+		// building a store saw "✓ Available" for their own store's slug and the
+		// server then refused. Flip the query's `purpose` branch back and the
+		// two stop agreeing.
+		const t = setup();
+		// The admin owns a store of their own, as they do in real life.
+		await t.withIdentity(ADMIN).mutation(api.retailers.createRetailer, {
+			storeName: "Admin's Own Shop",
+			slug: "admin-own",
+		});
+		const hint = await t
+			.withIdentity(ADMIN)
+			.query(api.retailers.checkSlugAvailability, {
+				slug: "admin-own",
+				purpose: "create",
+			});
+		expect(hint).toEqual({ status: "taken" });
+		await expect(buildStore(t, { slug: "admin-own" })).rejects.toThrow(
+			/taken/i,
+		);
+	});
+
 	test("an address another pre-built store is already waiting for is refused", async () => {
 		// Two stores pointed at one inbox would both answer myClaimableStore and
 		// the vendor would get whichever the index returned first.

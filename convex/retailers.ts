@@ -990,6 +990,12 @@ type RetailerPublic = {
 	// is not a seller yet, nothing you do here reaches anybody".
 	// Only ever set when true, so ordinary payloads are byte-identical.
 	unclaimed?: boolean;
+	// Who this pre-built store is waiting for, so the act-as banner can say it
+	// instead of telling an admin to go and set an address they already set.
+	// Rides only the AUTHENTICATED payloads — `buildRetailerPublic` feeds
+	// `getMyRetailer` and `getRetailerForAdmin`; the public storefront
+	// (`getRetailerBySlug`) builds its own object and never sees this.
+	pendingOwnerEmail?: string;
 	// WHO the caller is to this store (86exr91r4): "owner" | "member" | "admin".
 	// Drives `useIsStoreOwner` + `usePermission` — a member's chrome renders
 	// owner-only tabs locked-with-reason, never missing. Absent on payloads that
@@ -1087,7 +1093,14 @@ async function buildRetailerPublic(
 		slug: row.slug,
 		storeName: row.storeName,
 		// Spread-only-when-true, so an ordinary store's payload is unchanged.
-		...(isUnclaimed(row) ? { unclaimed: true as const } : {}),
+		...(isUnclaimed(row)
+			? {
+					unclaimed: true as const,
+					...(row.pendingOwnerEmail !== undefined
+						? { pendingOwnerEmail: row.pendingOwnerEmail }
+						: {}),
+				}
+			: {}),
 		storeDescription: row.storeDescription,
 		storeArea: row.storeArea,
 		marketplaceUnlisted: row.marketplaceUnlistedAt !== undefined,
@@ -1319,11 +1332,31 @@ export const getRetailerBySlug = query({
  * `getRetailerBySlug` but from the perspective of "can the current user claim
  * this slug?" — so owner-reclaim paths return `available`.
  */
+/**
+ * Is this slug free? WHICH QUESTION IS BEING ASKED IS REQUIRED, because the two
+ * callers need opposite answers about the caller's OWN slug:
+ *
+ *  - `"rename"` — Settings → rename. Your current slug must read AVAILABLE:
+ *    re-saving the slug you already have is a no-op, not a collision.
+ *  - `"create"` — a store being BORN (the seller's own onboarding, or an admin
+ *    building one for a vendor). Your own slug is as taken as anybody else's,
+ *    because the new store is a different store.
+ *
+ * It used to always apply the rename exemption, so an admin building a store
+ * saw "✓ Available" for their own store's slug, the button enabled, and the
+ * create refused server-side with "That slug is taken" — a client contradicting
+ * its own server (found in the 2 Oct hands-on test). The arg is REQUIRED rather
+ * than defaulted so a new call site has to state which question it is asking,
+ * the same posture as `requireRetailerAccess`'s requirement argument.
+ */
 export const checkSlugAvailability = query({
-	args: { slug: v.string() },
+	args: {
+		slug: v.string(),
+		purpose: v.union(v.literal("create"), v.literal("rename")),
+	},
 	handler: async (
 		ctx,
-		{ slug },
+		{ slug, purpose },
 	): Promise<
 		{ status: "available" } | { status: "taken" } | { status: "invalid"; reason: string }
 	> => {
@@ -1342,7 +1375,7 @@ export const checkSlugAvailability = query({
 			.withIndex("by_slug", (q) => q.eq("slug", normalized))
 			.first();
 		if (active) {
-			if (currentUserId && active.userId === currentUserId) {
+			if (purpose === "rename" && currentUserId && active.userId === currentUserId) {
 				return { status: "available" };
 			}
 			return { status: "taken" };
@@ -1353,7 +1386,10 @@ export const checkSlugAvailability = query({
 			.withIndex("by_old_slug", (q) => q.eq("oldSlug", normalized))
 			.first();
 		if (historyRow && historyRow.expiresAt > Date.now()) {
-			if (currentUserId) {
+			// Same split: reclaiming your OWN parked slug is a rename back, but a
+			// NEW store may not take a slug still redirecting to someone's shop —
+			// not even its builder's.
+			if (purpose === "rename" && currentUserId) {
 				const historyOwner = await ctx.db.get(historyRow.retailerId);
 				if (historyOwner && historyOwner.userId === currentUserId) {
 					return { status: "available" };

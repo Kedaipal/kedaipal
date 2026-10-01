@@ -165,6 +165,7 @@ function AppShell() {
 							<ActingAsBanner
 								storeName={retailer.storeName}
 								unclaimed={retailer.unclaimed === true}
+								pendingOwnerEmail={retailer.pendingOwnerEmail}
 							/>
 						</div>
 					) : null}

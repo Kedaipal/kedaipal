@@ -178,6 +178,59 @@ Per CLAUDE.md, no hidden behaviour. Each rule and the place it is stated:
 | a claim can't go through | `HandoverBlockedBanner`, naming the blocking store |
 | it was pre-built, after the fact | the sheet's **Handover** row (`claimedAt`) and the CSV's **Claimed** column |
 
+## What the hands-on test changed (2 Oct)
+
+Driving it found four defects that the suite could not, two of them blockers.
+Each one is now a test that goes red if the fix is reverted.
+
+**The slug hint contradicted its own server.** `checkSlugAvailability` exempted
+the CALLER's own slug — correct for a rename (re-saving the slug you have is a
+no-op), wrong for a store being BORN. An admin building a store saw
+"✓ Available" for their own store's slug, the button enabled, and the create
+refused with "That slug is taken". The query now takes a **required** `purpose`
+(`"create" | "rename"`), so a new call site has to state which question it is
+asking rather than inherit the wrong answer. The bug was only reachable through
+`createUnclaimedStore`, because `createRetailer` refuses one-store-per-login
+before it ever looks at the slug — which is why it had survived.
+
+Deliberately NOT fixed by removing the slug field: the slug is the vendor's
+public identity and derives badly from a store name ("Mak Cik Kuih Homemade
+Kuih & Catering" → `mak-cik-kuih-homemade-kuih-cat`), names and slugs move
+independently, `renameSlug` + 90-day `slugHistory` already exist so editing is
+safe, and a non-Latin store name slugifies to nothing. `slugify` DID get the
+related fix: it cut mid-word at 32 chars, and now falls back to the last whole
+word (`something-very-very-long-store`, not `…-store-n`).
+
+**The consent banner asked an admin to accept the terms for the vendor.** A
+pre-built store has no consent stamps by design, so the re-accept banner fired
+on every page. Worse, `recordConsentAcceptance` resolves the store `by_user` on
+the CALLER, so clicking it re-stamped the ADMIN'S OWN store, left the acted-on
+store untouched, and parked the button on "Saving…" forever because the banner's
+own condition never cleared. The banner is now **owner-only** (`role !==
+"owner"` returns null), which closes the pre-built case and the pre-existing
+act-as-any-seller case in one line, the way the server already works.
+
+**A pre-built store called itself "Sponsored."** It runs on an `internal` comp,
+and `tierPill`'s comped branch labelled it so — a false word on the
+seller-facing chip an admin shows the vendor during the handover demo.
+`unclaimed` now outranks `comped` there, exactly as it already did in the admin
+directory's `sellerBucket`; the chip reads **Unclaimed**, wears the directory's
+dashed-accent treatment, and links to the console rather than to a billing page
+about nobody.
+
+**The act-as banner nagged for finished work** — "Set a handover email in the
+seller directory" even when one was set. It now names who the store is waiting
+for, and only asks when nothing is set (in which case it says plainly that
+nobody can claim it).
+
+Still open, deliberately: **the pre-handoff tier picker.** An admin should
+choose what the vendor lands on before handover — default Enterprise (a custom
+tier whose limits the admin sets), switchable to a comp or to Pro/Starter with
+those tiers' limits locked. `Plan` here is still `"starter" | "pro" | "scale"`;
+Enterprise lives on `zaki/z8r3fdkp8h-enterprise-tier` and is in neither staging
+nor this branch's base, so building the picker now would stack this PR three
+deep for a feature it does not need. Its own ticket once Enterprise lands.
+
 ## Audit
 
 Both admin acts drop `adminAuditLog` rows against the store —

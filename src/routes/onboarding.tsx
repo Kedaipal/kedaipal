@@ -157,7 +157,7 @@ function OnboardingForm() {
 	const [submitting, setSubmitting] = useState(false);
 	const [agreed, setAgreed] = useState(false);
 
-	const availability = useSlugAvailability(slug);
+	const availability = useSlugAvailability(slug, "create");
 
 	// Already onboarded → straight to dashboard.
 	useEffect(() => {

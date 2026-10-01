@@ -424,7 +424,7 @@ function SettingsRoute() {
 	const [newSlug, setNewSlug] = useState("");
 	const [saving, setSaving] = useState(false);
 
-	const availability = useSlugAvailability(newSlug);
+	const availability = useSlugAvailability(newSlug, "rename");
 
 	// Deep link to one card: scroll to it and ring it, instead of dropping the
 	// seller at the top of a long tab to hunt for it. Two senders, one shape —

@@ -12,8 +12,15 @@ import { useActAs } from "../../hooks/useActAs";
 export function ActingAsBanner({
 	storeName,
 	unclaimed = false,
+	pendingOwnerEmail,
 }: {
 	storeName: string;
+	/** Who the pre-built store is waiting for. Present ⇒ the handover is set up
+	 * and the banner states it; absent ⇒ nobody can claim the store yet, which
+	 * is the one thing the admin still has to do, so the banner says so. It used
+	 * to tell every admin to "set a handover email" even when one was set
+	 * (2 Oct hands-on test) — an instruction to redo finished work. */
+	pendingOwnerEmail?: string;
 	/** A pre-built store with no owner yet (docs/prebuilt-stores.md). The
 	 * warning inverts: in a live seller's store the point is "this is someone's
 	 * real shop, be careful"; in a pre-built one it is "nobody owns this yet —
@@ -45,7 +52,9 @@ export function ActingAsBanner({
 				<span className="hidden font-normal sm:inline">
 					{" "}
 					{unclaimed
-						? "— nobody owns this store yet. Set a handover email in the seller directory when it's ready."
+						? pendingOwnerEmail
+							? `— nobody owns it yet. ${pendingOwnerEmail} claims it when they sign up.`
+							: "— nobody owns this store yet, and no handover email is set, so nobody can claim it."
 						: "— every change is made on this seller's store and logged to you."}
 				</span>
 			</p>
