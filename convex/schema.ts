@@ -1,5 +1,10 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import {
+	buyerQuestionValidator,
+	frozenAnswerValidator,
+	itemAnswerInputValidator,
+} from "./lib/buyerQuestions";
 import { countryValidator } from "./lib/country";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 import { memberPermissionsValidator } from "./lib/permissions";
@@ -56,6 +61,14 @@ export default defineSchema({
 		// plain text with newlines preserved. Empty/unset → nothing renders. No
 		// index — only read alongside the retailer row.
 		storeDescription: v.optional(v.string()),
+		// Short area/locality shown on the store's marketplace card ("Ampang, KL")
+		// — seller-typed free text (z8r3fdkmyp). The profile carries no city field
+		// (country only), and local discovery without a place is weak, so this is
+		// the card's one geographic hint. Trimmed + capped (STORE_AREA_MAX in
+		// convex/lib/marketplaceListing.ts); unset → the card simply omits it.
+		// Deliberately NOT derived from pickup locations: not every store has one,
+		// and a wrong guess about where a home business "is" is worse than none.
+		storeArea: v.optional(v.string()),
 		waPhone: v.optional(v.string()),
 		// Email address for retailer-facing operational notifications
 		// (new orders, payment claims, etc.). Independent of the Clerk auth
@@ -775,6 +788,39 @@ export default defineSchema({
 		// never reads subscription status; it refuses on the seller's own
 		// "ordering is paused" switch, like opening hours or a minimum order.
 		orderingPausedAt: v.optional(v.number()),
+		// Marketplace listing opt-OUT (z8r3fdkmyp). Every store with a visible
+		// product is listed on /stores by default — the storefront is already a
+		// public URL and the directory is free distribution — and this stamp is
+		// the seller saying "direct link only". Set/cleared by the Settings →
+		// Store "Marketplace listing" switch (updateSettings.marketplaceListed);
+		// absent = listed. A timestamp, not a boolean, per the house pattern
+		// (orderingPausedAt): "since when" costs nothing and answers support
+		// questions a flag cannot.
+		marketplaceUnlistedAt: v.optional(v.number()),
+		// Marketplace "Store highlights" sponsorship window (z8r3fdkmyp): the
+		// store rides the labelled sponsored rail on /stores while this epoch-ms
+		// is in the future. ADMIN-set only (admin.setMarketplaceSponsorship,
+		// audited) — v1 is manually invoiced, no self-serve purchase path writes
+		// it. Expiry is read-time (`> now`), so no cron clears it; clearing =
+		// unset. Every placement it buys renders with a visible "Sponsored"
+		// label — the rail is disclosed advertising, never covert ranking.
+		marketplaceSponsoredUntil: v.optional(v.number()),
+		// Comped stores (partner / sponsor / pilot) ride Store highlights
+		// AUTOMATICALLY while comped — derived at read time by
+		// `highlightSource`, never written (z8r3fdkmyp, Zaki 1 Oct 2026). This
+		// stamp is the admin's one override: set = "keep this comped store off
+		// the rail" (admin.setCompHighlight, audited). Unset = the default.
+		// Timestamp, not boolean, per the house pattern.
+		marketplaceCompHighlightOffAt: v.optional(v.number()),
+		// Admin moderation (z8r3fdkmyp, Zaki 1 Oct 2026): set = an admin took
+		// this store OFF /stores, whatever the seller's own switch says (junk
+		// trials, quality, policy). Written only by admin.hideFromMarketplace /
+		// admin.showOnMarketplace, each audited under its own name. `note` is
+		// optional and is SHOWN TO THE SELLER on Settings → Store, so they know
+		// what to fix. The storefront itself is untouched. Unset = not hidden.
+		marketplaceHidden: v.optional(
+			v.object({ at: v.number(), note: v.optional(v.string()) }),
+		),
 		// Highest release version whose "What's new" notes this seller has seen
 		// (86eyqgxv9). A calendar version string (`YYYY.MM.N`), NOT a boolean —
 		// a boolean can only answer "dismissed once", so the next release would
@@ -854,6 +900,30 @@ export default defineSchema({
 		// link serves a TikTok Live, a phone order and a DM quote alike, and
 		// only the seller knows which.
 		claimLinkSource: v.optional(v.string()),
+		// Pre-built store handover (docs/prebuilt-stores.md). The email the admin
+		// says will own this store — set while `userId` is still a placeholder
+		// (convex/lib/unclaimedStore.ts). The vendor signs in with it once and
+		// `retailers.claimStore` hands the store over.
+		//
+		// A TARGET, not a credential: holding an address here grants nothing. The
+		// claim only completes for a caller whose Clerk identity carries that
+		// address AS VERIFIED, exactly as a team invite binds (convex/team.ts) —
+		// so a typo'd or guessed address can never take a store, it just leaves
+		// one unclaimed.
+		//
+		// Separate from the placeholder `userId` on purpose: an admin builds
+		// before they have been given the vendor's address, so "built, no email
+		// yet" must be writable. Cleared at claim — which is the whole of
+		// "remove the email we used", because no Clerk account was ever created
+		// for it. Indexed (`by_pending_owner_email`) because every storeless
+		// sign-in asks "is a store waiting for me?".
+		pendingOwnerEmail: v.optional(v.string()),
+		// When a pre-built store was handed over. Set once by `claimStore`, never
+		// cleared — the console's "handed over 3 Oct" fact, and the only durable
+		// trace that this store did not start life owned (the placeholder
+		// `userId` is overwritten by the claim, so nothing else survives it).
+		// Unset on every ordinary store, which is all of them before this feature.
+		claimedAt: v.optional(v.number()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
@@ -865,7 +935,8 @@ export default defineSchema({
 		// Admin "onboard a client" pre-check: is a store already registered to this
 		// email? notifyEmail is stored normalized (trim + lowercase via
 		// assertValidEmail), so an equality lookup is exact. See docs/vendor-identity.md.
-		.index("by_notify_email", ["notifyEmail"]),
+		.index("by_notify_email", ["notifyEmail"])
+		.index("by_pending_owner_email", ["pendingOwnerEmail"]),
 
 	// --- Team members (ClickUp 86exr91r4, docs/team-members.md) ---------------
 	// One row per teammate relationship on a store. The OWNER is `retailers.
@@ -1172,8 +1243,21 @@ export default defineSchema({
 				// active point; required at save when there are several. Order
 				// time resolves with a first-active fallback (see resolveEventVenue).
 				venueId: v.optional(v.id("pickupLocations")),
+				// "Approve each RSVP before the guest pays" (`z8r3fdkjek`). true =
+				// a storefront RSVP lands as `booking_requested` (the generic
+				// "awaiting the seller's approval" status bookings already use) —
+				// seat held, no payment asked — until the seller approves it.
+				// Unset = RSVPs confirm at checkout as before. The counter's
+				// walk-in RSVP is never held: the seller is the one keying it.
+				requiresApproval: v.optional(v.boolean()),
 			}),
 		),
+		// Buyer questions (`z8r3fdkjek`) — up to 3 things the buyer is asked at
+		// checkout ("What are you bringing?", "Message on the cake"). Public-safe
+		// (labels + options only). Unset = none; `[]` is normalised to unset by
+		// `sanitizeBuyerQuestions`. Never on a booking listing. Answers freeze
+		// onto `orders.items[].answers`. See docs/buyer-questions.md.
+		buyerQuestions: v.optional(v.array(buyerQuestionValidator)),
 		// DEPRECATED — moved to productVariants.requiresProof (per-variant).
 		requiresProof: v.optional(v.boolean()),
 		// When this product first appeared on a real order (set-if-unset at both
@@ -1439,6 +1523,12 @@ export default defineSchema({
 				// the field; deliberately NOT backfilled, since today's note is not
 				// evidence of what that buyer was told.
 				pickupNote: v.optional(v.string()),
+				// The buyer's answers to the product's questions (`z8r3fdkjek`),
+				// frozen WITH the label they were asked under — like `variantLabel`,
+				// a seller who later rewords or deletes a question must not rewrite
+				// what this buyer answered. One set per LINE, not per unit. Unset =
+				// no answers (every order predating the field included).
+				answers: v.optional(v.array(frozenAnswerValidator)),
 			}),
 		),
 		subtotal: v.number(),
@@ -1451,8 +1541,10 @@ export default defineSchema({
 			// carve-out from confirm-at-create, because booking inventory is scarce
 			// and needs vetting. Soft-holds capacity from the moment it exists.
 			// Exits: approve → confirmed (+ the ONE payment ask, S3), decline /
-			// 24 h expiry / buyer cancel → cancelled (hold released). Never reached
-			// by non-booking orders.
+			// 24 h expiry / buyer cancel → cancelled (hold released). Also reached
+			// by an RSVP on an event with `event.requiresApproval` (`z8r3fdkjek`) —
+			// the same "awaiting the seller's approval" meaning, holding a seat
+			// instead of dates; `eventRsvp` tells the two apart. No other order.
 			v.literal("booking_requested"),
 			v.literal("confirmed"),
 			v.literal("packed"),
@@ -2451,6 +2543,9 @@ export default defineSchema({
 						// catalog price is 0 — the agreed-in-person price. Absent for
 						// normal lines (those resolve to the variant's price at create).
 						unitPrice: v.optional(v.number()),
+						// Buyer-question answers the seller keyed for the walk-in
+						// (`z8r3fdkjek`) — re-validated at createOrderFromSession.
+						answers: v.optional(v.array(itemAnswerInputValidator)),
 					}),
 				),
 				fulfilmentDate: v.optional(v.number()),
@@ -2506,6 +2601,9 @@ export default defineSchema({
 				variantLabel: v.optional(v.string()),
 				price: v.number(), // sen — LOCKED at send
 				quantity: v.number(),
+				// Buyer-question answers the seller keyed at the counter
+				// (`z8r3fdkjek`), validated + frozen at send; commit copies them.
+				answers: v.optional(v.array(frozenAnswerValidator)),
 			}),
 		),
 		currency: v.string(),
@@ -2693,20 +2791,58 @@ export default defineSchema({
 				attachedAt: v.number(),
 				lastChargeAt: v.optional(v.number()),
 				// Successful tokenised charges on this session — compared against
-				// HitPay's `times_charged` to reconcile an attempt whose outcome was
-				// lost mid-action (crash between charge and settle) WITHOUT charging
-				// twice. See convex/subscriptionPayments.ts.
+				// HitPay's charge count (`total_charge` on a save-card session; its
+				// `times_charged` is always null there) to reconcile an attempt whose
+				// outcome was lost mid-action WITHOUT charging twice. See
+				// lib/hitpayBilling.ts `readSessionChargeCount`.
 				timesCharged: v.optional(v.number()),
 				// Dunning state for the CURRENT pending renewal invoice. Reset to
 				// zero/unset on a successful settle.
 				failedAttempts: v.optional(v.number()),
 				nextRetryAt: v.optional(v.number()),
 				lastChargeError: v.optional(v.string()),
-				// Stamped just BEFORE the charge HTTP call; cleared once the outcome
-				// (success/failure) is recorded. A fresh stamp with no outcome means
-				// "unknown — reconcile against HitPay before charging again".
+				// Stamped just BEFORE the charge HTTP call; cleared once a definitive
+				// outcome (settle or decline) is recorded — an UNKNOWN outcome keeps
+				// it. A stamp still standing, at ANY age, means "reconcile against
+				// HitPay before charging again"; its age only decides whether the
+				// lock is still held (CHARGE_ATTEMPT_LOCK_MS).
 				lastChargeAttemptAt: v.optional(v.number()),
 				pendingChargeInvoiceId: v.optional(v.id("invoices")),
+				// HitPay's own charge count READ IMMEDIATELY BEFORE this attempt
+				// POSTed — the baseline the reconcile measures against, so the
+				// question is "has the count moved since I fired THIS charge?"
+				// rather than "is HitPay ahead of my success tally?". The tally
+				// only counts our successes, so anything else that moves HitPay's
+				// number (a decline, if their counter counts those — unproven and
+				// unprovable in the sandbox, which approves everything — or any
+				// charge from outside this code) would otherwise be misread as
+				// "your lost charge landed" and settle a bill nobody paid.
+				// Absent ⇒ the baseline could not be read (a GET blip) or the
+				// stamp predates this field: the reconcile falls back to
+				// `timesCharged`, i.e. exactly the previous behaviour, never worse.
+				// Cleared with `lastChargeAttemptAt` — it is meaningless alone.
+				chargeCountAtAttempt: v.optional(v.number()),
+				// A STRANDED charge: HitPay took an auto-charge whose outcome we'd
+				// lost, for a bill that was voided before we found out. The money
+				// is audited on that bill (`gatewayIssue: late_payment`, a refund
+				// conversation), and auto-charging STOPS while this is set — the
+				// money must never be quietly applied to a different bill, and
+				// charging the replacement on top would be the double debit this
+				// whole machine exists to prevent. Any settle of any of the store's
+				// bills clears it (settleInvoicePaid). Admin sees it on the pending
+				// bill's row; the seller sees the auto-renewal card say so.
+				strandedCharge: v.optional(
+					v.object({
+						invoiceId: v.id("invoices"),
+						invoiceNumber: v.string(),
+						amountSen: v.number(),
+						currency: v.string(),
+						// `reconciled:<session>:<n>` or the webhook's payment id —
+						// what the admin looks up in HitPay's dashboard.
+						paymentId: v.string(),
+						at: v.number(),
+					}),
+				),
 			}),
 		),
 		// In-flight authorisation the seller hasn't finished (they were redirected
@@ -2991,16 +3127,29 @@ export default defineSchema({
 		// An authentic gateway event we deliberately did NOT settle from — the
 		// admin's audit trail for "seller paid the link after Arif marked it paid"
 		// (late_payment) or "the payment didn't match the invoice total"
-		// (amount_mismatch). Never auto-unsets anything; surfaced in the admin
-		// billing console.
+		// (amount_mismatch). Never auto-unsets anything; every stamp is real
+		// money awaiting a human decision (refund, or apply by settling a bill),
+		// so the console's "Payments to review" queue holds it until an admin
+		// marks it resolved — resolution is recorded, never deleted.
 		gatewayIssue: v.optional(
 			v.object({
 				kind: v.union(v.literal("amount_mismatch"), v.literal("late_payment")),
 				paymentId: v.string(),
 				amountSen: v.optional(v.number()),
 				at: v.number(),
+				// The human decision (invoices.resolveGatewayIssue): who closed it,
+				// when, and optionally what they did with the money.
+				resolvedAt: v.optional(v.number()),
+				resolvedBy: v.optional(v.string()),
+				resolvedNote: v.optional(v.string()),
 			}),
 		),
+		// Present (true) exactly while `gatewayIssue` awaits a human — the
+		// "Payments to review" queue reads this index instead of scanning every
+		// invoice ever issued for a rarely-set object. Set beside each stamp,
+		// cleared by resolveGatewayIssue. (`migrations.backfillGatewayIssueOpen`
+		// flags rows stamped before this field existed.)
+		gatewayIssueOpen: v.optional(v.literal(true)),
 		// Rendered PDF of this invoice, frozen at issue time. An invoice is a
 		// financial document, so we store the bytes (rather than regenerate on
 		// demand) — `billingConfig` bank details are a mutable singleton and could
@@ -3021,7 +3170,10 @@ export default defineSchema({
 		.index("by_retailer", ["retailerId"])
 		.index("by_status", ["status"])
 		// v1 completion-webhook resolution: payment-request id → invoice.
-		.index("by_gateway_request", ["gatewayRequestId"]),
+		.index("by_gateway_request", ["gatewayRequestId"])
+		// The admin's "Payments to review" queue: only rows whose gateway issue
+		// still awaits a human (gatewayIssueOpen === true).
+		.index("by_gateway_issue_open", ["gatewayIssueOpen"]),
 
 	// Global Kedaipal payment details (retailers pay Kedaipal). A SINGLETON — one
 	// row, no retailerId. Admin-editable from /app/admin/billing so the boss can

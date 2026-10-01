@@ -2,21 +2,44 @@
 // one status pill, one contact line, one expiry reading — so the three
 // surfaces are the same component wearing different layouts, never three
 // drawings of the same fact.
-import { Award, ExternalLink, Mail, MessageCircle } from "lucide-react";
+import {
+	Award,
+	ExternalLink,
+	EyeOff,
+	Mail,
+	Megaphone,
+	MessageCircle,
+	UserPlus,
+} from "lucide-react";
 import type { AdminSellerRow } from "../../../convex/admin";
 import {
 	type ExpiryTone,
+	highlightedThroughLabel,
 	SELLER_STATUS_LABEL,
 	type SellerBucket,
 	type SellerExpiry,
+	sellerHighlight,
 } from "../../lib/admin-seller-view";
-import { formatMobile } from "../../lib/format";
+import { formatMobile, formatShortDate } from "../../lib/format";
 import { cn } from "../../lib/utils";
 import { CopyButton } from "../ui/copy-button";
 
 /** Pill tones per bucket. Semantic-ish Tailwind hues rather than raw hex —
  * the same ones the dashboard's tier pill and status badges already use. */
 const STATUS_PILL: Record<SellerBucket, string> = {
+	// Dashed rather than another solid hue: every other bucket describes a
+	// store that IS something, and the outline reads "not finished yet" at a
+	// glance in a column of filled pills — which is exactly what an unclaimed
+	// store is. The solid hues are also spoken for (amber = on hold, violet =
+	// comped), and a pre-built store is neither.
+	//
+	// The dash is ACCENT, not grey. Rendered side by side, a grey outline was
+	// the quietest thing on the row — backwards for the one bucket that means
+	// "Kedaipal owes this store an action", and on the card it lost to the
+	// store name. Accent is spoken for by no other bucket and is the colour the
+	// app already uses for "ours / act on this".
+	unclaimed:
+		"border border-dashed border-accent/70 bg-accent/5 text-accent-emphasis",
 	active:
 		"bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
 	trialing: "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300",
@@ -57,6 +80,62 @@ export function FoundingPill({ rank }: { rank: number }) {
 			title={`Founding Member #${rank}`}
 		>
 			<Award className="size-3" aria-hidden="true" />#{rank}
+		</span>
+	);
+}
+
+/**
+ * The store's admin-set state on /stores (z8r3fdkmyp), beside the slug on
+ * every directory surface — so "who is hidden, who is on the rail and why /
+ * until when" reads at a glance rather than behind each Manage menu.
+ *
+ * - Hidden by an admin: "Hidden from /stores". It outranks a highlight: a
+ *   hidden store isn't on the rail, and a highlight pill would say it is.
+ * - Paid window: "Highlight · to 8 Oct" (full date in the tooltip).
+ * - Comped: "Highlight · comped" — no date, it lasts as long as the comp.
+ *
+ * Nothing otherwise. "Highlight", not "Sponsored", because Sponsor is
+ * already a comp kind in the same row.
+ */
+export function MarketplacePill({
+	seller,
+	now,
+}: {
+	seller: AdminSellerRow;
+	now: number;
+}) {
+	if (seller.marketplace.hidden) {
+		return (
+			<span
+				className="inline-flex h-5 shrink-0 items-center gap-1 rounded-full bg-muted px-1.5 text-[10px] font-bold whitespace-nowrap text-muted-foreground"
+				title={`Hidden from /stores by an admin since ${formatShortDate(seller.marketplace.hidden.at)}`}
+			>
+				<EyeOff className="size-3" aria-hidden="true" />
+				Hidden from /stores
+			</span>
+		);
+	}
+	const { source } = sellerHighlight(seller, now);
+	if (source === null) return null;
+	let label: string;
+	let title: string;
+	if (source === "paid" && seller.marketplace.sponsoredUntil !== undefined) {
+		// Day + month on the pill (it shares a line with the slug); the full
+		// date, year included, rides the tooltip.
+		const lastDay = seller.marketplace.sponsoredUntil - 1;
+		label = `to ${new Date(lastDay).toLocaleDateString(undefined, { day: "numeric", month: "short" })}`;
+		title = `On Store highlights through ${highlightedThroughLabel(seller.marketplace.sponsoredUntil)}`;
+	} else {
+		label = "comped";
+		title = "On Store highlights while comped";
+	}
+	return (
+		<span
+			className="inline-flex h-5 shrink-0 items-center gap-1 rounded-full bg-accent/10 px-1.5 text-[10px] font-bold whitespace-nowrap text-accent-emphasis"
+			title={title}
+		>
+			<Megaphone className="size-3" aria-hidden="true" />
+			Highlight · {label}
 		</span>
 	);
 }
@@ -114,6 +193,33 @@ function copyButtonClass(compact: boolean): string {
 }
 
 /**
+ * The email line for a seller row — the ONE author of "whose address is this?".
+ *
+ * A pre-built store has no owner yet, so its row shows the HANDOVER address it
+ * is waiting for instead (docs/prebuilt-stores.md). That decision lives here
+ * rather than at the table, the card and the sheet, because three call sites
+ * choosing independently is how two of them end up showing "No email on file"
+ * for a store whose whole state is "waiting for vendor@example.com".
+ */
+export function OwnerEmailLine({
+	seller,
+	compact = false,
+}: {
+	seller: AdminSellerRow;
+	compact?: boolean;
+}) {
+	return seller.unclaimed ? (
+		<ContactLine
+			kind="handover"
+			value={seller.pendingOwnerEmail}
+			compact={compact}
+		/>
+	) : (
+		<ContactLine kind="email" value={seller.ownerEmail} compact={compact} />
+	);
+}
+
+/**
  * One contact fact with its copy control — the email, or a WhatsApp number
  * with a chat link beside the copy. An absent value says so in words rather
  * than leaving a blank cell, and grows no buttons.
@@ -124,14 +230,25 @@ export function ContactLine({
 	compact = false,
 	className,
 }: {
-	kind: "email" | "whatsapp";
+	/** `handover` is the address a pre-built store is WAITING for, not a way to
+	 * reach its owner — there isn't one yet. Its own kind rather than an email
+	 * with different copy, because the two answer different questions and the
+	 * empty state of one ("No email on file" — the seller cleared it) would be
+	 * a false reading of the other ("nobody has told us the address yet"). */
+	kind: "email" | "whatsapp" | "handover";
 	value?: string;
 	/** Desktop table density (32px controls). Off = the 44px touch floor. */
 	compact?: boolean;
 	className?: string;
 }) {
-	const Icon = kind === "email" ? Mail : MessageCircle;
-	const noun = kind === "email" ? "email" : "WhatsApp";
+	const Icon =
+		kind === "whatsapp" ? MessageCircle : kind === "handover" ? UserPlus : Mail;
+	const noun =
+		kind === "whatsapp"
+			? "WhatsApp"
+			: kind === "handover"
+				? "handover email"
+				: "email";
 	if (!value) {
 		return (
 			<div
@@ -142,11 +259,13 @@ export function ContactLine({
 				)}
 			>
 				<Icon className="size-3.5 shrink-0" aria-hidden="true" />
-				<span className="truncate text-[13px] italic">No {noun} on file</span>
+				<span className="truncate text-[13px] italic">
+					{kind === "handover" ? "No handover email yet" : `No ${noun} on file`}
+				</span>
 			</div>
 		);
 	}
-	const shown = kind === "email" ? value : formatMobile(value);
+	const shown = kind === "whatsapp" ? formatMobile(value) : value;
 	const digits = value.replace(/\D/g, "");
 	return (
 		<div

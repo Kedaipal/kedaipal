@@ -8,9 +8,9 @@ import {
 	sellerBucket,
 	sellerExpiry,
 	sellerPlanLabel,
-	sellerSeatsLabel,
 	sellerRail,
 	sellerReason,
+	sellerSeatsLabel,
 } from "../../lib/admin-seller-view";
 import { cn } from "../../lib/utils";
 import {
@@ -23,8 +23,10 @@ import {
 } from "../ui/table";
 import {
 	ContactLine,
+	OwnerEmailLine,
 	ExpiryText,
 	FoundingPill,
+	MarketplacePill,
 	StatusPill,
 	ViaPill,
 } from "./seller-cells";
@@ -113,17 +115,18 @@ function SellerTableRow({
 							<FoundingPill rank={seller.foundingMemberRank} />
 						) : null}
 					</div>
-					<div className="flex min-w-0 items-center gap-2">
+					<div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
 						<span className="truncate font-mono text-xs text-muted-foreground">
 							/{seller.slug}
 						</span>
 						<ViaPill seller={seller} />
+						<MarketplacePill seller={seller} now={now} />
 					</div>
 				</div>
 			</TableCell>
 			<TableCell className="py-2">
 				<div className="flex min-w-0 flex-col">
-					<ContactLine kind="email" value={seller.ownerEmail} compact />
+					<OwnerEmailLine seller={seller} compact />
 					<ContactLine kind="whatsapp" value={seller.waPhone} compact />
 				</div>
 			</TableCell>

@@ -35,12 +35,18 @@ export type SubscriptionView = {
 	currentPeriodEnd?: number;
 	caps?: { orderCap: number; userCap: number; broadcastQuota: number };
 	features?: Record<PlanFeature, boolean>;
-	/** Saved-method auto-renewal summary (86eyb6z4r) — owner payload only. */
+	/** Saved-method auto-renewal summary (86eyb6z4r) — owner payload only.
+	 * `stopped`: auto-charging is stopped over a stranded charge — nothing
+	 * charges until a bill is settled (docs/hitpay-recurring.md). */
 	autoRenew?: {
 		method: string;
 		methodLabel: string;
 		failedAttempts: number;
 		failing: boolean;
+		stopped: boolean;
+		/** A charge was sent and its outcome is still being confirmed —
+		 * never promise a charge or invite a manual payment while true. */
+		confirming: boolean;
 		nextChargeAt?: number;
 	};
 	autoRenewSetupPending?: boolean;
@@ -295,6 +301,9 @@ export type BannerState =
 	 * (z8r3fdeub2): same lock as past-due, but there is no bill to pay — they
 	 * choose a plan. */
 	| { kind: "compEnded" }
+	/** Auto-charging stopped over a stranded charge: an earlier charge landed
+	 * after its bill was voided, and a human is sorting the money out. */
+	| { kind: "autoRenewStopped" }
 	| { kind: "autoRenewFailed" }
 	| { kind: "invoiceWarn"; daysLeft: number }
 	/** Off-Season Hold: ordering is paused — a calm, persistent reminder. */
@@ -323,6 +332,19 @@ export function resolveBannerState(
 	if (!sub || sub.comped) return { kind: "none" };
 	if (sub.status === "past_due")
 		return sub.compEnded ? { kind: "compEnded" } : { kind: "pastDue" };
+
+	// Stopped outranks declined: it is the CURRENT truth about the saved
+	// method (nothing will charge it), and it changes what the seller should
+	// do — "pay it yourself" could make them pay twice while we sort out an
+	// earlier charge. Clears when any bill settles.
+	if (sub.autoRenew?.stopped) return { kind: "autoRenewStopped" };
+
+	// A charge being CONFIRMED silences every pay-me banner: both the
+	// declined banner and the due-soon countdown say "pay it yourself", and
+	// that is the double payment while the sent charge may have landed. The
+	// auto-renewal card carries the explanation; resolution is ≤ a daily
+	// sweep away, after which the right banner (if any) returns.
+	if (sub.autoRenew?.confirming) return { kind: "none" };
 
 	// A declined auto-charge outranks the generic invoice countdown: it names
 	// the actual problem (the saved method) and its fix, while access is still
@@ -375,7 +397,8 @@ export type TierTone =
 	| "warn"
 	| "founding"
 	| "admin"
-	| "sponsored";
+	| "sponsored"
+	| "unclaimed";
 
 export type TierPill = { label: string; tone: TierTone };
 
@@ -398,8 +421,18 @@ export function tierPill(
 	now: number,
 	foundingRank?: number,
 	isAdmin = false,
+	/** A pre-built store nobody owns yet (docs/prebuilt-stores.md). */
+	unclaimed = false,
 ): TierPill {
 	if (isAdmin) return { label: "Admin", tone: "admin" };
+	// Before the comped branch, and that order is the whole point. A pre-built
+	// store runs on an `internal` comp while an admin builds it, so the comped
+	// branch would label it "Sponsored" — a word that is simply false (it is
+	// being set up, not sponsored) on a SELLER-FACING chip, which is the screen
+	// an admin shows the vendor during the handover demo. Same precedence the
+	// admin directory already uses (`sellerBucket` puts unclaimed above comped);
+	// this chip was the surface that missed it.
+	if (unclaimed) return { label: "Unclaimed", tone: "unclaimed" };
 	const fm = foundingRank ? `Founding #${foundingRank}` : null;
 	if (sub.comped)
 		return { label: fm ? `${fm} · Sponsored` : "Sponsored", tone: "sponsored" };

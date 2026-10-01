@@ -18,6 +18,7 @@
 // "2 weekend nights × RM 120.00" and the title row needn't repeat the label.
 
 import { partitionNights } from "../../../convex/lib/bookingAvailability";
+import { answerLabelPrefix } from "../../../convex/lib/buyerQuestions";
 import {
 	DAY_MS,
 	formatFulfilmentDate,
@@ -60,6 +61,7 @@ export function OrderItemLine({
 	currency,
 	imageUrl,
 	booking,
+	answers = [],
 }: {
 	name: string;
 	variantLabel?: string;
@@ -73,13 +75,19 @@ export function OrderItemLine({
 	imageUrl?: string;
 	/** Set on a booking order's line — replaces the "N × price" sub-line. */
 	booking?: OrderBookingSpan;
+	/** The buyer's answers to the product's questions (z8r3fdkjek), frozen
+	 * with the label they were asked under. Plain text — React escapes it. */
+	answers?: ReadonlyArray<{ label: string; answer: string }>;
 }) {
 	// A weekend/weekday line carries its kind in the frozen label; the
 	// sub-line says it, so the title row doesn't repeat it.
 	const nightKind = booking ? bookingNightKind(variantLabel) : undefined;
 	const titleLabel = nightKind === undefined ? variantLabel : undefined;
+	const hasAnswers = answers.length > 0;
 	return (
-		<li className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0">
+		<li
+			className={`flex ${hasAnswers ? "items-start" : "items-center"} justify-between gap-3 py-2.5 first:pt-0 last:pb-0`}
+		>
 			<AppImage
 				src={imageUrl}
 				alt={name}
@@ -106,6 +114,24 @@ export function OrderItemLine({
 							)
 						: `${quantity} × ${formatPrice(unitPrice, currency)}`}
 				</p>
+				{hasAnswers ? (
+					// Each pair flows as ONE run of text, wrapping like a sentence.
+					// It was a flex row with a `shrink-0` label, so a long question
+					// took the whole width and squeezed the answer to a one-letter
+					// column. Inline flow can't do that, whatever the lengths.
+					<dl className="mt-1 flex flex-col gap-0.5 text-xs">
+						{answers.map((a) => (
+							<div key={`${a.label}:${a.answer}`} className="wrap-break-word">
+								<dt className="inline text-muted-foreground">
+									{answerLabelPrefix(a.label)}
+								</dt>{" "}
+								<dd className="inline font-medium text-foreground">
+									{a.answer}
+								</dd>
+							</div>
+						))}
+					</dl>
+				) : null}
 			</div>
 			<p className="shrink-0 text-sm font-semibold tabular-nums">
 				{formatPrice(lineTotal, currency)}

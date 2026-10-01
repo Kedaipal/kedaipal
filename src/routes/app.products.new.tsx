@@ -114,6 +114,7 @@ function NewProductRoute() {
 				// stayed green because they call the API directly. The payload scan
 				// test now pins it.)
 				event: values.event ?? undefined,
+				buyerQuestions: values.buyerQuestions,
 				variants: values.variants,
 			}));
 		createdProductId.current = productId;

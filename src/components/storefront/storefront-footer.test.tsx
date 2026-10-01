@@ -1,7 +1,16 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import type { ReactNode } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { StorefrontFooter } from "./storefront-footer";
+
+vi.mock("@tanstack/react-router", () => ({
+	Link: ({ to, children, ...rest }: { to: string; children: ReactNode }) => (
+		<a href={to} {...rest}>
+			{children}
+		</a>
+	),
+}));
 
 afterEach(cleanup);
 
@@ -47,6 +56,25 @@ describe("StorefrontFooter", () => {
 		const { container } = render(<StorefrontFooter surface="track" />);
 		expect(container.querySelector("a")?.getAttribute("href")).toBe(
 			"https://kedaipal.com/?src=powered-by-track",
+		);
+	});
+});
+
+describe("StorefrontFooter — Discover more stores (z8r3fdkmyp)", () => {
+	it("is OFF by default — checkout, claim and order pages never pull a buyer out", () => {
+		render(<StorefrontFooter slug="sweet-co" />);
+		expect(screen.queryByText(/Discover more stores/)).toBeNull();
+	});
+
+	it("when on, links to the directory in the same tab, above the badge", () => {
+		const { container } = render(<StorefrontFooter slug="sweet-co" discover />);
+		const link = screen.getByRole("link", { name: /Discover more stores/ });
+		expect(link.getAttribute("href")).toBe("/stores");
+		expect(link.getAttribute("target")).toBeNull();
+		// The badge stays the last link — the seller's brand mark closes the page.
+		const links = container.querySelectorAll("a");
+		expect(links[links.length - 1].getAttribute("aria-label")).toBe(
+			"Powered by Kedaipal",
 		);
 	});
 });
