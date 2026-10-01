@@ -10,6 +10,7 @@ import {
 	FULFILMENT_KEYS,
 	FULFILMENT_LABELS,
 	fulfilmentKey,
+	fulfilmentLabel,
 	fulfilmentMomentSortKey,
 	ORDER_COLUMNS,
 	ORDER_COLUMNS_BY_KEY,
@@ -215,6 +216,23 @@ describe("orderToCsvRow", () => {
 		// reads as delivery (the schema's own default) rather than going blank,
 		// so the Delivery filter row keeps them instead of silently hiding them.
 		expect(csv({ deliveryMethod: undefined })).toBe("delivery");
+	});
+
+	test("fulfilmentLabel is the one author, and it humanises what it doesn't know", () => {
+		// The column, the CSV, the column funnel and the Filters panel each used
+		// to carry their OWN fallback, and they disagreed: the column humanised
+		// (`Drop Off`) while the three pickers printed the raw key (`drop_off`).
+		// All four now call this, so there is one answer to pin.
+		//
+		// Note what this does and does not prove: `fulfilmentKey` returns a closed
+		// union, so no unknown key can actually reach the column today — the four
+		// surfaces could only have disagreed about a value that cannot occur. The
+		// fix is de-duplication, and THIS is the assertion with teeth: change the
+		// shared fallback and it goes red.
+		expect(fulfilmentLabel("some_future_kind")).toBe("Some future kind");
+		for (const key of FULFILMENT_KEYS) {
+			expect(fulfilmentLabel(key)).toBe(FULFILMENT_LABELS[key]);
+		}
 	});
 
 	test("every fulfilment key has a real label — none falls through to humanizeEnum", () => {

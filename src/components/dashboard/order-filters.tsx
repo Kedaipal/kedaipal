@@ -5,7 +5,7 @@ import { sourceLabel } from "../../../convex/lib/attribution";
 import type { Country } from "../../../convex/lib/country";
 import type { FulfilmentWindow } from "../../../convex/lib/fulfilmentDate";
 import {
-	FULFILMENT_LABELS,
+	fulfilmentLabel,
 	ORDER_SOURCE_KEYS,
 	ORDER_SOURCE_LABELS,
 	PAYMENT_STATUS_KEYS,
@@ -277,7 +277,7 @@ function activeFilterTokens(
 			key: `ful-${f}`,
 			// The registry's label, never a local copy — the token, the section row
 			// and the table cell are three renderings of one word.
-			label: FULFILMENT_LABELS[f] ?? f,
+			label: fulfilmentLabel(f),
 			clear: (x) => ({
 				...x,
 				fulfilments: x.fulfilments.filter((y) => y !== f),
@@ -966,8 +966,8 @@ export function OrderFilters({
 											{fulfilmentChoices.map((key) => (
 												<FilterOptionRow
 													key={key}
-													label={FULFILMENT_LABELS[key] ?? key}
-													count={facets?.fulfilment[key] ?? 0}
+													label={fulfilmentLabel(key)}
+													count={facets?.fulfilment?.[key] ?? 0}
 													selected={value.fulfilments.includes(key)}
 													onToggle={() =>
 														onChange({

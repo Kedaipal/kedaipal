@@ -193,7 +193,7 @@ const FLOW_KIND_FULFILMENT: Record<OrderFlowKind, FulfilmentKey> = {
  * the app has always written it hyphenated, so it is spelled out here. Every
  * key is listed rather than left to `humanizeEnum` — a label that is only
  * accidentally right is a label nobody will think to change. */
-export const FULFILMENT_LABELS: Record<string, string> = {
+export const FULFILMENT_LABELS: Record<FulfilmentKey, string> = {
 	delivery: "Delivery",
 	// The buyer collects from the seller's own place.
 	self_collect: "Self-collect",
@@ -213,6 +213,24 @@ export const FULFILMENT_LABELS: Record<string, string> = {
 	// counter pickup nor a stay — the guest arrives at a time the SELLER set.
 	event: "Event",
 };
+
+/**
+ * The seller-facing word for a fulfilment key — **the one author**, used by the
+ * Fulfilment column, the CSV, the column funnel and the Filters panel.
+ *
+ * It exists because those four sites each had their own fallback and they did
+ * not agree: the column humanised an unknown key (`Drop Off`) while the three
+ * pickers printed it raw (`drop_off`). Unreachable while the union is closed —
+ * but "four call sites, two behaviours, one idea" is the exact drift this whole
+ * registry exists to prevent, so it is a function rather than four `??`s.
+ *
+ * Takes `string`, not `FulfilmentKey`: the callers hold values that came off the
+ * URL and the wire, and a lookup is the honest place to absorb that rather than
+ * a cast at each site.
+ */
+export function fulfilmentLabel(key: string): string {
+	return FULFILMENT_LABELS[key as FulfilmentKey] ?? humanizeEnum(key);
+}
 
 export type CsvOrder = {
 	shortId: string;
@@ -571,7 +589,7 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		value: (o) => fulfilmentKey(o),
 		display: (o) => {
 			const key = fulfilmentKey(o);
-			return FULFILMENT_LABELS[key] ?? humanizeEnum(key);
+			return fulfilmentLabel(key);
 		},
 	},
 	{

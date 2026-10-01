@@ -3,7 +3,8 @@ import type { Country } from "../../../convex/lib/country";
 import type { FulfilmentWindow } from "../../../convex/lib/fulfilmentDate";
 import {
 	FULFILMENT_KEYS,
-	FULFILMENT_LABELS,
+	type FulfilmentKey,
+	fulfilmentLabel,
 	ORDER_SOURCE_KEYS,
 	ORDER_SOURCE_LABELS,
 	type OrderColumnKey,
@@ -160,9 +161,13 @@ function opt(
 export function fulfilmentChoicesFrom(
 	facets: OrderFilterFacets | undefined,
 	selected: readonly string[] = [],
-): string[] {
+): FulfilmentKey[] {
+	// `facets?.fulfilment?.[key]`, both links optional: `OrderFilterFacets`
+	// requires the field, so a payload missing it can only come from a backend
+	// older than this frontend — which the deploy order rules out, but a throw
+	// is a blank inbox and the house `opt()` idiom already guards this way.
 	return FULFILMENT_KEYS.filter(
-		(key) => (facets?.fulfilment[key] ?? 0) > 0 || selected.includes(key),
+		(key) => (facets?.fulfilment?.[key] ?? 0) > 0 || selected.includes(key),
 	);
 }
 
@@ -253,7 +258,7 @@ export function buildOrderColumnFilters({
 		map.set("fulfilment", {
 			label: "Fulfilment",
 			options: fulfilmentChoicesFrom(facets, state.fulfilments).map((key) =>
-				opt(key, FULFILMENT_LABELS[key] ?? key, facets?.fulfilment),
+				opt(key, fulfilmentLabel(key), facets?.fulfilment),
 			),
 			selected: state.fulfilments,
 			onChange: (fulfilments) => onApply({ fulfilments }),
