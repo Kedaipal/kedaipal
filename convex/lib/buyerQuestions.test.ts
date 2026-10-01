@@ -4,6 +4,7 @@ import {
 	type BuyerQuestion,
 	type BuyerQuestionInput,
 	firstMissingRequired,
+	answerLabelPrefix,
 	formatItemAnswers,
 	MAX_ANSWER_LENGTH,
 	MAX_BUYER_QUESTIONS,
@@ -296,6 +297,17 @@ describe("validateAnswers", () => {
 	});
 });
 
+describe("answerLabelPrefix", () => {
+	test("a question keeps its own punctuation; a bare noun gains a colon", () => {
+		expect(answerLabelPrefix("Vehicle plate number?")).toBe(
+			"Vehicle plate number?",
+		);
+		expect(answerLabelPrefix("Size:")).toBe("Size:");
+		expect(answerLabelPrefix("Tent model")).toBe("Tent model:");
+		expect(answerLabelPrefix(" Tent model ")).toBe("Tent model:");
+	});
+});
+
 describe("formatItemAnswers", () => {
 	test("Label: answer; Label: answer", () => {
 		expect(
@@ -303,7 +315,7 @@ describe("formatItemAnswers", () => {
 				{ label: "What are you bringing?", answer: "Helinox tent" },
 				{ label: "Tent model", answer: "Tactical One" },
 			]),
-		).toBe("What are you bringing?: Helinox tent; Tent model: Tactical One");
+		).toBe("What are you bringing? Helinox tent; Tent model: Tactical One");
 		expect(formatItemAnswers(undefined)).toBe("");
 	});
 });

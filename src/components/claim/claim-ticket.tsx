@@ -1,3 +1,4 @@
+import { answerLabelPrefix } from "../../../convex/lib/buyerQuestions";
 import { formatPrice } from "../../lib/format";
 import {
 	RECEIPT_LABEL_CLASS,
@@ -83,7 +84,7 @@ export function ClaimTicket({
 							) : null}
 							{(line.answers ?? []).map((a) => (
 								<span key={a.label} className={RECEIPT_VARIANT_CLASS}>
-									{a.label}: {a.answer}
+									{answerLabelPrefix(a.label)} {a.answer}
 								</span>
 							))}
 						</span>
