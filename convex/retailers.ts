@@ -1911,12 +1911,20 @@ export const myClaimableStore = query({
 	handler: async (
 		ctx,
 	): Promise<
+		| { state: "anonymous" }
 		| { state: "none" }
 		| { state: "claimable"; storeName: string; slug: string }
 		| { state: "blocked"; storeName: string; refusal: ClaimRefusal }
 	> => {
 		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) return { state: "none" };
+		// NOT "none". Convex answers a query the moment it arrives, which is
+		// BEFORE the Clerk token attaches — so an anonymous answer here is "ask
+		// me again in a tick", not "no store is waiting for you". Collapsing the
+		// two flashed the "Name your store" wizard at a vendor whose store had
+		// already been built for them (Zaki, 2 Oct), because `none` is a
+		// perfectly valid verdict and the client rendered it. The caller is
+		// inside `<Show when="signed-in">`, so this state is always transient.
+		if (!identity) return { state: "anonymous" };
 		const email = identityEmail(identity);
 		if (!email) return { state: "none" };
 		const store = await ctx.db

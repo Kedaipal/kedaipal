@@ -10,6 +10,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 const claimStore = vi.fn(async () => ({ ok: true, slug: "mak-cik-kuih" }));
 const navigate = vi.fn();
+const setActAs = vi.fn();
 
 vi.mock("convex/react", () => ({
 	useMutation: () => claimStore,
@@ -23,6 +24,10 @@ vi.mock("@tanstack/react-router", () => ({
 	RedirectToSignIn: () => null,
 	RedirectToSignUp: () => null,
 }));
+vi.mock("../hooks/useActAs", () => ({
+	useActAs: () => ({ actAsRetailerId: undefined, setActAs }),
+	useActAsRetailerId: () => undefined,
+}));
 vi.mock("../components/onboarding/onboarding-top-bar", () => ({
 	OnboardingTopBar: () => <div>Kedaipal</div>,
 }));
@@ -35,6 +40,7 @@ afterEach(() => {
 	cleanup();
 	claimStore.mockClear();
 	navigate.mockClear();
+	setActAs.mockClear();
 });
 
 describe("ClaimStoreScreen", () => {
@@ -75,6 +81,18 @@ describe("ClaimStoreScreen", () => {
 		expect(
 			screen.getByText(/free trial starts when you take it over/i),
 		).toBeTruthy();
+	});
+
+	test("claiming ENDS any act-as session before landing in the dashboard", async () => {
+		// The usual way to reach this screen is the admin's own tab: they built
+		// the store, signed out, and the vendor signed in to claim it.
+		// `useActAs` lives in sessionStorage, which a sign-out does not clear, so
+		// without this the vendor lands on their brand-new dashboard wearing the
+		// admin's "BUILDING" banner (Zaki, 2 Oct).
+		const { button, consent } = open();
+		fireEvent.click(consent);
+		fireEvent.click(button);
+		await vi.waitFor(() => expect(setActAs).toHaveBeenCalledWith(undefined));
 	});
 
 	test("claiming passes the consent through and lands them in the dashboard", async () => {

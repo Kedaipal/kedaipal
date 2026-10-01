@@ -369,11 +369,18 @@ function OnboardClientCard() {
 	).data;
 	const emailTaken = emailCheck?.exists === true;
 
-	// Build mode does not need an email at all — an admin often starts before
-	// the vendor has given one, and `setPendingOwnerEmail` fills it in later.
-	// Link mode still wants one, because the link has to be sent somewhere.
+	// Build mode REQUIRES the handover email. A store built with nobody named
+	// cannot be claimed by anyone, and "I'll set it later" is a thing an admin
+	// forgets — you are building this store FOR a specific person, so name them
+	// now (Zaki, 2 Oct). It stays CHANGEABLE afterwards (Manage → Handover
+	// email), which is what covers a typo; the server keeps accepting an absent
+	// one so an admin can deliberately park a handover whose deal fell through,
+	// and the directory shouts about that state in amber.
 	const ready =
-		nameCheck.ok && availability.status === "available" && !emailTaken;
+		nameCheck.ok &&
+		availability.status === "available" &&
+		!emailTaken &&
+		(mode === "link" || emailLooksValid);
 
 	/**
 	 * Create the store now and walk straight into it. The navigate is the
@@ -569,7 +576,7 @@ function OnboardClientCard() {
 					<span className="flex min-h-5 items-center gap-1">
 						{mode === "build" ? "Handover email" : "Client email"}
 						<span className="font-normal text-muted-foreground">
-							{mode === "build" ? "(optional)" : "(to send to)"}
+							{mode === "build" ? "(required)" : "(to send to)"}
 						</span>
 					</span>
 					<Input
@@ -588,7 +595,7 @@ function OnboardClientCard() {
 					) : mode === "build" ? (
 						<span className="text-xs text-muted-foreground">
 							The address they'll sign up with — that sign-in hands them the
-							store. Leave blank and set it later from the seller directory.
+							store. You can change it later from Manage → Handover email.
 						</span>
 					) : null}
 				</label>
@@ -675,7 +682,9 @@ function OnboardClientCard() {
 						? "Enter a store name first."
 						: emailTaken
 							? "That email already runs a store — use a different one."
-							: "Pick a store link that's available."}
+							: availability.status !== "available"
+								? "Pick a store link that's available."
+								: "Add the handover email — nobody can claim the store without it."}
 				</p>
 			) : null}
 		</AdminCard>

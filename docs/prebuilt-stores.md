@@ -223,6 +223,47 @@ seller directory" even when one was set. It now names who the store is waiting
 for, and only asks when nothing is set (in which case it says plainly that
 nobody can claim it).
 
+**Three more from the vendor-side run (Zaki, 2 Oct).** The claim itself was
+clean — ownership moved, the email cleared, consent stamped, and `trialEndsAt −
+claimedAt` was exactly 14 days — but the screens around it were not:
+
+- **The wizard flashed before the claim screen.** `myClaimableStore` returned
+  `none` for an anonymous caller, and Convex answers a query the instant it
+  arrives — before the Clerk token attaches — so the client believed a timing
+  state was a verdict and rendered "Name your store" at a vendor whose store was
+  already built. It now returns a distinct **`anonymous`** state and the route
+  holds the loading screen on it. Fixed server-side rather than with a client
+  auth hook so there is no window where the two disagree; `useActAsViewer` in
+  PR #325 solves the same trap for the admin check with `useConvexAuth`.
+- **The vendor landed wearing the admin's banner.** `useActAs` lives in
+  `sessionStorage`, which a sign-out does not clear, and the usual path to the
+  claim screen is the admin's own tab. `claimStore` now clears the act-as
+  session at the moment ownership transfers — the one instant that belongs to
+  the handover itself. The general "act-as outlives a sign-in as someone else"
+  case is PR #325's (it makes the session Clerk-session-keyed); this is not a
+  duplicate of it and both are wanted.
+- **The handover email is now REQUIRED in build mode.** "Optional, set it later"
+  is a thing an admin forgets, and a store with nobody named cannot be claimed
+  by anyone. You are building the store FOR a specific person, so you name them
+  at create. It stays changeable afterwards (Manage → Handover email), which is
+  what covers a typo. The server still accepts an absent one, so an admin can
+  deliberately park a handover whose deal fell through — the directory shows
+  that state in amber.
+
+### Which email is which
+
+Three different addresses, and only one of them is ever a key:
+
+| | What it is | Who changes it, where |
+|---|---|---|
+| **Clerk login email** | the vendor's sign-in | the vendor, via Clerk's own `<UserButton>` → Manage account. Never in our Settings. |
+| **`retailers.notifyEmail`** | where order + billing mail goes | the seller, Settings → Store. Set to the claimer's address at handover. |
+| **`retailers.pendingOwnerEmail`** | the claim target, used once | an admin, Manage → Handover email. Cleared by the claim. |
+
+**Ownership is keyed on the Clerk USER ID (`identity.subject`), never on the
+email.** So a vendor can change their login address afterwards and keep their
+store — the email is only how the claim finds them, once.
+
 Still open, deliberately: **the pre-handoff tier picker.** An admin should
 choose what the vendor lands on before handover — default Enterprise (a custom
 tier whose limits the admin sets), switchable to a comp or to Pro/Starter with

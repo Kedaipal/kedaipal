@@ -553,6 +553,23 @@ describe("myClaimableStore", () => {
 		});
 	});
 
+	test("an UNAUTHENTICATED read answers `anonymous`, never `none`", async () => {
+		// Convex answers the instant a query arrives — before the Clerk token
+		// attaches — so an anonymous answer is "ask again in a tick", not a
+		// verdict. Collapsing it into `none` flashed the "Name your store"
+		// wizard at a vendor whose store was already built (Zaki, 2 Oct).
+		// Return `none` here and the client has no way to tell the two apart.
+		const t = setup();
+		await buildStore(t, { email: VENDOR.email });
+		expect(await t.query(api.retailers.myClaimableStore, {})).toEqual({
+			state: "anonymous",
+		});
+		// A signed-in caller with nothing waiting still gets a real verdict.
+		expect(
+			await t.withIdentity(STRANGER).query(api.retailers.myClaimableStore, {}),
+		).toEqual({ state: "none" });
+	});
+
 	test("goes quiet once the store is claimed", async () => {
 		const t = setup();
 		await buildStore(t, { email: VENDOR.email });

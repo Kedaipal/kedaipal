@@ -46,6 +46,7 @@ import {
 	type OnboardingPrefill,
 } from "../lib/onboarding-link";
 import type { ClaimRefusal } from "../../convex/lib/unclaimedStore";
+import { useActAs } from "../hooks/useActAs";
 import { waPhoneCheckoutSchema } from "../lib/schemas";
 import { slugify, validateStoreName } from "../lib/slug";
 
@@ -169,7 +170,16 @@ function OnboardingForm() {
 		if (!slugEdited) setSlug(slugify(storeName));
 	}, [storeName, slugEdited]);
 
-	if (retailer === undefined || claimable === undefined) {
+	// `claimable.state === "anonymous"` means Convex answered before the Clerk
+	// token attached — a timing state, not a verdict (see myClaimableStore).
+	// Rendering the wizard on it flashed "Name your store" at a vendor whose
+	// store was already built and waiting. Always transient here: this component
+	// only mounts inside `<Show when="signed-in">`.
+	if (
+		retailer === undefined ||
+		claimable === undefined ||
+		claimable.state === "anonymous"
+	) {
 		return <LoadingScreen />;
 	}
 
@@ -531,6 +541,7 @@ export function ClaimStoreScreen({
 	slug: string;
 }) {
 	const navigate = useNavigate();
+	const { setActAs } = useActAs();
 	const claimStore = useMutation(api.retailers.claimStore);
 	const [agreed, setAgreed] = useState(false);
 	const [claiming, setClaiming] = useState(false);
@@ -541,6 +552,16 @@ export function ClaimStoreScreen({
 		try {
 			const result = await claimStore({ acceptedLegal: agreed });
 			if (result.ok) {
+				// The store just changed hands, so ANY act-as session pointing at
+				// it is stale by definition — and the usual way to reach this
+				// screen is the admin's own tab, where they built the store and
+				// then signed out for the vendor to claim it. Without this the
+				// vendor lands on their new dashboard wearing the admin's
+				// "BUILDING" banner over a cached unclaimed payload (Zaki, 2 Oct).
+				// `useActAs` keys on sessionStorage, which a sign-out does not
+				// clear; PR #325 makes act-as session-keyed in general, and this
+				// is the one moment that belongs to the handover itself.
+				setActAs(undefined);
 				toast.success(`${storeName} is yours — welcome to Kedaipal!`);
 				navigate({ to: "/app" });
 				return;
@@ -670,7 +691,10 @@ export function ClaimStoreScreen({
 export function HandoverBlockedBanner({
 	claimable,
 }: {
-	claimable: { state: "none" } | { state: "blocked"; storeName: string; refusal: ClaimRefusal };
+	claimable:
+		| { state: "anonymous" }
+		| { state: "none" }
+		| { state: "blocked"; storeName: string; refusal: ClaimRefusal };
 }) {
 	if (claimable.state !== "blocked") return null;
 	const { storeName, refusal } = claimable;
