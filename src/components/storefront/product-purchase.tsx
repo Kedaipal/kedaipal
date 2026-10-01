@@ -31,6 +31,7 @@ import {
 	variantLabel,
 } from "../../lib/variant";
 import { Button } from "../ui/button";
+import { LinkifiedText } from "../ui/linkified-text";
 import { ZoomableImage } from "../ui/zoomable-image";
 import type { StorefrontProduct } from "./product-card";
 import { ORDERING_PAUSED_CTA, useOrderingPaused } from "./seasonal-break";
@@ -669,7 +670,9 @@ export function PurchaseHints({ pp }: { pp: ProductPurchase }) {
 					<span className="block font-semibold text-foreground">
 						Collecting?
 					</span>
-					<span className="line-clamp-3">{pickupNote}</span>
+					<span className="line-clamp-3">
+						<LinkifiedText text={pickupNote} />
+					</span>
 				</p>
 			) : null}
 		</>

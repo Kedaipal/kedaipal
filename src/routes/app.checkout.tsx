@@ -34,6 +34,16 @@ import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { sourceLabel } from "../../convex/lib/attribution";
+import {
+	answerLabelPrefix,
+	answerPrompt,
+	answersById,
+	answersForSubmit,
+	type BuyerQuestion,
+	firstMissingRequired,
+	type ItemAnswerInput,
+	visibleQuestions,
+} from "../../convex/lib/buyerQuestions";
 import type { Country } from "../../convex/lib/country";
 import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
 import {
@@ -58,15 +68,6 @@ import { ClaimsPanel } from "../components/claim/send-claim";
 import { WaitingOnBuyerScreen } from "../components/claim/waiting-on-buyer";
 import { ManualBindDialog } from "../components/counter/manual-bind-dialog";
 import { BRAND_GLYPHS } from "../components/dashboard/brand-icons";
-import {
-	answerPrompt,
-	answersById,
-	answersForSubmit,
-	type BuyerQuestion,
-	firstMissingRequired,
-	type ItemAnswerInput,
-	visibleQuestions,
-} from "../../convex/lib/buyerQuestions";
 import { BuyerQuestionsFields } from "../components/order/buyer-questions-fields";
 import { OrderDocumentActions } from "../components/order/order-document-actions";
 import { AppImage } from "../components/ui/app-image";
@@ -2643,7 +2644,8 @@ function CounterLineAnswers({
 		<span className="mt-0.5 flex flex-col text-xs">
 			{answered.map((q) => (
 				<span key={q.id} className="truncate text-muted-foreground">
-					{q.label}: <span className="text-foreground">{answers[q.id]}</span>
+					{answerLabelPrefix(q.label)}{" "}
+					<span className="text-foreground">{answers[q.id]}</span>
 				</span>
 			))}
 			{missing ? (

@@ -18,6 +18,7 @@
 // "2 weekend nights × RM 120.00" and the title row needn't repeat the label.
 
 import { partitionNights } from "../../../convex/lib/bookingAvailability";
+import { answerLabelPrefix } from "../../../convex/lib/buyerQuestions";
 import {
 	DAY_MS,
 	formatFulfilmentDate,
@@ -114,11 +115,17 @@ export function OrderItemLine({
 						: `${quantity} × ${formatPrice(unitPrice, currency)}`}
 				</p>
 				{hasAnswers ? (
+					// Each pair flows as ONE run of text, wrapping like a sentence.
+					// It was a flex row with a `shrink-0` label, so a long question
+					// took the whole width and squeezed the answer to a one-letter
+					// column. Inline flow can't do that, whatever the lengths.
 					<dl className="mt-1 flex flex-col gap-0.5 text-xs">
 						{answers.map((a) => (
-							<div key={`${a.label}:${a.answer}`} className="flex gap-1">
-								<dt className="shrink-0 text-muted-foreground">{a.label}:</dt>
-								<dd className="min-w-0 break-words font-medium text-foreground">
+							<div key={`${a.label}:${a.answer}`} className="wrap-break-word">
+								<dt className="inline text-muted-foreground">
+									{answerLabelPrefix(a.label)}
+								</dt>{" "}
+								<dd className="inline font-medium text-foreground">
 									{a.answer}
 								</dd>
 							</div>
