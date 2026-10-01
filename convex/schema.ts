@@ -2742,6 +2742,41 @@ export default defineSchema({
 				// lock is still held (CHARGE_ATTEMPT_LOCK_MS).
 				lastChargeAttemptAt: v.optional(v.number()),
 				pendingChargeInvoiceId: v.optional(v.id("invoices")),
+				// HitPay's own charge count READ IMMEDIATELY BEFORE this attempt
+				// POSTed — the baseline the reconcile measures against, so the
+				// question is "has the count moved since I fired THIS charge?"
+				// rather than "is HitPay ahead of my success tally?". The tally
+				// only counts our successes, so anything else that moves HitPay's
+				// number (a decline, if their counter counts those — unproven and
+				// unprovable in the sandbox, which approves everything — or any
+				// charge from outside this code) would otherwise be misread as
+				// "your lost charge landed" and settle a bill nobody paid.
+				// Absent ⇒ the baseline could not be read (a GET blip) or the
+				// stamp predates this field: the reconcile falls back to
+				// `timesCharged`, i.e. exactly the previous behaviour, never worse.
+				// Cleared with `lastChargeAttemptAt` — it is meaningless alone.
+				chargeCountAtAttempt: v.optional(v.number()),
+				// A STRANDED charge: HitPay took an auto-charge whose outcome we'd
+				// lost, for a bill that was voided before we found out. The money
+				// is audited on that bill (`gatewayIssue: late_payment`, a refund
+				// conversation), and auto-charging STOPS while this is set — the
+				// money must never be quietly applied to a different bill, and
+				// charging the replacement on top would be the double debit this
+				// whole machine exists to prevent. Any settle of any of the store's
+				// bills clears it (settleInvoicePaid). Admin sees it on the pending
+				// bill's row; the seller sees the auto-renewal card say so.
+				strandedCharge: v.optional(
+					v.object({
+						invoiceId: v.id("invoices"),
+						invoiceNumber: v.string(),
+						amountSen: v.number(),
+						currency: v.string(),
+						// `reconciled:<session>:<n>` or the webhook's payment id —
+						// what the admin looks up in HitPay's dashboard.
+						paymentId: v.string(),
+						at: v.number(),
+					}),
+				),
 			}),
 		),
 		// In-flight authorisation the seller hasn't finished (they were redirected
@@ -2888,16 +2923,29 @@ export default defineSchema({
 		// An authentic gateway event we deliberately did NOT settle from — the
 		// admin's audit trail for "seller paid the link after Arif marked it paid"
 		// (late_payment) or "the payment didn't match the invoice total"
-		// (amount_mismatch). Never auto-unsets anything; surfaced in the admin
-		// billing console.
+		// (amount_mismatch). Never auto-unsets anything; every stamp is real
+		// money awaiting a human decision (refund, or apply by settling a bill),
+		// so the console's "Payments to review" queue holds it until an admin
+		// marks it resolved — resolution is recorded, never deleted.
 		gatewayIssue: v.optional(
 			v.object({
 				kind: v.union(v.literal("amount_mismatch"), v.literal("late_payment")),
 				paymentId: v.string(),
 				amountSen: v.optional(v.number()),
 				at: v.number(),
+				// The human decision (invoices.resolveGatewayIssue): who closed it,
+				// when, and optionally what they did with the money.
+				resolvedAt: v.optional(v.number()),
+				resolvedBy: v.optional(v.string()),
+				resolvedNote: v.optional(v.string()),
 			}),
 		),
+		// Present (true) exactly while `gatewayIssue` awaits a human — the
+		// "Payments to review" queue reads this index instead of scanning every
+		// invoice ever issued for a rarely-set object. Set beside each stamp,
+		// cleared by resolveGatewayIssue. (`migrations.backfillGatewayIssueOpen`
+		// flags rows stamped before this field existed.)
+		gatewayIssueOpen: v.optional(v.literal(true)),
 		// Rendered PDF of this invoice, frozen at issue time. An invoice is a
 		// financial document, so we store the bytes (rather than regenerate on
 		// demand) — `billingConfig` bank details are a mutable singleton and could
@@ -2918,7 +2966,10 @@ export default defineSchema({
 		.index("by_retailer", ["retailerId"])
 		.index("by_status", ["status"])
 		// v1 completion-webhook resolution: payment-request id → invoice.
-		.index("by_gateway_request", ["gatewayRequestId"]),
+		.index("by_gateway_request", ["gatewayRequestId"])
+		// The admin's "Payments to review" queue: only rows whose gateway issue
+		// still awaits a human (gatewayIssueOpen === true).
+		.index("by_gateway_issue_open", ["gatewayIssueOpen"]),
 
 	// Global Kedaipal payment details (retailers pay Kedaipal). A SINGLETON — one
 	// row, no retailerId. Admin-editable from /app/admin/billing so the boss can

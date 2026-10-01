@@ -927,6 +927,101 @@ describe("daily billing cron", () => {
 		expect(second.renewalNotices).toBe(0);
 	});
 
+	test("no reminder while the machine is mid-flight on the same money — and it still goes out once resolved", async () => {
+		// "Pay this invoice" is a double-payment nudge while a sent charge's
+		// outcome is unknown, or while a stranded charge waits on a human.
+		const t = setup();
+		const DAY = 24 * 60 * 60 * 1000;
+		const { retailerId, invoiceId } = await seedFounding(t, "u_norem", "norem-store");
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, {
+				status: "active",
+				currentPeriodEnd: Date.now() + 20 * DAY,
+				autoRenewSessionId: "rb_rem",
+				autoRenew: {
+					provider: "hitpay" as const,
+					method: "card",
+					attachedAt: Date.now(),
+					// Outcome unknown, young enough that the retry sweep stays
+					// quiet — this test is about the reminder alone.
+					lastChargeAttemptAt: Date.now() - 60_000,
+					pendingChargeInvoiceId: invoiceId,
+				},
+			});
+			await ctx.db.patch(invoiceId, { dueDate: Date.now() + 2 * DAY });
+		});
+
+		const held = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(held.remindersSent).toBe(0);
+		// NOT stamped — the skip must not eat the reminder for good.
+		expect((await t.run((ctx) => ctx.db.get(invoiceId)))?.reminderSentAt)
+			.toBeUndefined();
+
+		// The question resolves (decline recorded), the bill is still unpaid
+		// and still inside the window: NOW the reminder goes out.
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, {
+				autoRenew: {
+					...sub!.autoRenew!,
+					lastChargeAttemptAt: undefined,
+					pendingChargeInvoiceId: undefined,
+				},
+			});
+		});
+		const resolved = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(resolved.remindersSent).toBe(1);
+	});
+
+	test("a stranded charge holds the reminder the same way", async () => {
+		const t = setup();
+		const DAY = 24 * 60 * 60 * 1000;
+		const { retailerId, invoiceId } = await seedFounding(t, "u_norem2", "norem2-store");
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, {
+				status: "active",
+				currentPeriodEnd: Date.now() + 20 * DAY,
+				autoRenewSessionId: "rb_rem2",
+				autoRenew: {
+					provider: "hitpay" as const,
+					method: "card",
+					attachedAt: Date.now(),
+					strandedCharge: {
+						invoiceId,
+						invoiceNumber: "INV-OLD",
+						amountSen: 14900,
+						currency: "MYR",
+						paymentId: "reconciled:rb_rem2:1",
+						at: Date.now() - DAY,
+					},
+				},
+			});
+			await ctx.db.patch(invoiceId, { dueDate: Date.now() + 2 * DAY });
+		});
+		const run = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(run.remindersSent).toBe(0);
+	});
+
 	test("reminders fire again next cycle — dedup is per-invoice, not per-vendor", async () => {
 		const t = setup();
 		const DAY = 24 * 60 * 60 * 1000;

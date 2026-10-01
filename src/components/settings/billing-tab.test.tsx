@@ -390,6 +390,35 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 		expect(screen.queryByText("Auto-renewal")).toBeNull();
 	});
 
+	it("a STOPPED saved method: the picker promises an invoice, never a charge", () => {
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		const base = trialing();
+		render(
+			<BillingTab
+				retailer={{
+					...base,
+					subscription: {
+						...base.subscription,
+						autoRenew: {
+							method: "card",
+							methodLabel: "Visa ·· 4242",
+							failedAttempts: 0,
+							failing: false,
+							stopped: true,
+							confirming: false,
+						},
+					},
+				} as Retailer}
+			/>,
+		);
+		expect(screen.getByText(/we'll write your invoice/)).toBeTruthy();
+		expect(
+			screen.getByText(/won't be charged while automatic charging is stopped/),
+		).toBeTruthy();
+		expect(screen.queryByText(/we'll charge your saved/)).toBeNull();
+		expect(screen.queryByText(/We'll charge .* to your saved/)).toBeNull();
+	});
+
 	it("pre-subscription the auto-renewal card is HIDDEN — the picker is the one door", () => {
 		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
 		render(<BillingTab retailer={trialing()} />);
@@ -435,6 +464,8 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 							methodLabel: "Visa ·· 4242",
 							failedAttempts: 1,
 							failing: true,
+							stopped: false,
+							confirming: false,
 						},
 					},
 				} as unknown as Partial<Retailer>)}
@@ -560,6 +591,8 @@ describe("BillingTab comp accounts (z8r3fdeub2)", () => {
 							methodLabel: "Touch 'n Go",
 							failedAttempts: 0,
 							failing: false,
+							stopped: false,
+							confirming: false,
 						},
 						caps: { orderCap: 200, userCap: 3, broadcastQuota: 100 },
 						active: false,
@@ -638,6 +671,8 @@ describe("BillingTab — the lapsed-but-not-yet-renewed window (86eyb6z4r)", () 
 						methodLabel: "Touch 'n Go",
 						failedAttempts: 0,
 						failing: false,
+						stopped: false,
+						confirming: false,
 						nextChargeAt: Date.now() - 24 * 60 * 60 * 1000,
 					},
 				})}
@@ -657,6 +692,8 @@ describe("BillingTab — the lapsed-but-not-yet-renewed window (86eyb6z4r)", () 
 						methodLabel: "Touch 'n Go",
 						failedAttempts: 1,
 						failing: true,
+						stopped: false,
+						confirming: false,
 						nextChargeAt: Date.now() - 24 * 60 * 60 * 1000,
 					},
 				})}
@@ -666,6 +703,131 @@ describe("BillingTab — the lapsed-but-not-yet-renewed window (86eyb6z4r)", () 
 			screen.getByText(/We couldn't charge your Touch 'n Go/),
 		).toBeTruthy();
 		expect(screen.queryByText(/Renewing now/)).toBeNull();
+	});
+
+	it("a STOPPED method says what happened — never 'Renewing now' — and the pay block says hold off", () => {
+		// Auto-charging stopped over a stranded charge: an earlier charge landed
+		// after its invoice was cancelled, and we may count it toward THIS bill.
+		mockQueries({
+			isAdmin: false,
+			gateway: GATEWAY_ON,
+			invoices: [
+				{
+					_id: "inv_new",
+					status: "pending",
+					invoiceNumber: "INV-NEW",
+					total: 7900,
+					currency: "MYR",
+					dueDate: Date.now() + 10 * 24 * 60 * 60 * 1000,
+					gatewayPayment: {
+						provider: "hitpay",
+						url: "https://securecheckout.hit-pay.com/req_new",
+					},
+				},
+			],
+		});
+		render(
+			<BillingTab
+				retailer={lapsed({
+					autoRenew: {
+						method: "card",
+						methodLabel: "Visa ·· 4242",
+						failedAttempts: 1,
+						failing: true,
+						stopped: true,
+						confirming: false,
+						nextChargeAt: Date.now() - 24 * 60 * 60 * 1000,
+					},
+				})}
+			/>,
+		);
+		expect(
+			screen.getByText(/Stopped for now\. An earlier automatic charge to your/),
+		).toBeTruthy();
+		expect(screen.getByText(/no need to pay twice/)).toBeTruthy();
+		// Stopped outranks the decline message, and nothing claims a charge.
+		expect(screen.queryByText(/Renewing now/)).toBeNull();
+		expect(screen.queryByText(/We couldn't charge/)).toBeNull();
+		// Where the pay buttons are: hold off — but the options stay, because
+		// we may also ask them to pay this one.
+		expect(screen.getByText(/Hold off for now/)).toBeTruthy();
+		expect(screen.getByText("Pay online now")).toBeTruthy();
+		expect(screen.getByText("Turn off auto-renewal")).toBeTruthy();
+	});
+
+	it("while a charge is CONFIRMING, every pay option goes away — the note says why", () => {
+		// Any pay option here would be the second payment if the sent charge
+		// landed. Hidden with the reason on screen, never silently.
+		mockQueries({
+			isAdmin: false,
+			gateway: GATEWAY_ON,
+			invoices: [
+				{
+					_id: "inv_new",
+					status: "pending",
+					invoiceNumber: "INV-NEW",
+					total: 7900,
+					currency: "MYR",
+					dueDate: Date.now() + 10 * 24 * 60 * 60 * 1000,
+					gatewayPayment: {
+						provider: "hitpay",
+						url: "https://securecheckout.hit-pay.com/req_new",
+					},
+				},
+			],
+		});
+		render(
+			<BillingTab
+				retailer={lapsed({
+					autoRenew: {
+						method: "card",
+						methodLabel: "Visa ·· 4242",
+						failedAttempts: 0,
+						failing: false,
+						stopped: false,
+						confirming: true,
+					},
+				})}
+			/>,
+		);
+		expect(screen.getByText(/confirming it with the payment provider/)).toBeTruthy();
+		expect(screen.queryByText("Pay online now")).toBeNull();
+		expect(screen.queryByText(/DuitNow/)).toBeNull();
+		// The auto-renewal card explains, instead of claiming "Renewing now".
+		expect(screen.getByText(/waiting for the payment provider to confirm/)).toBeTruthy();
+		expect(screen.queryByText(/Renewing now/)).toBeNull();
+	});
+
+	it("a healthy saved method never shows the hold-off line", () => {
+		mockQueries({
+			isAdmin: false,
+			gateway: GATEWAY_ON,
+			invoices: [
+				{
+					_id: "inv_new",
+					status: "pending",
+					invoiceNumber: "INV-NEW",
+					total: 7900,
+					currency: "MYR",
+					dueDate: Date.now() + 10 * 24 * 60 * 60 * 1000,
+				},
+			],
+		});
+		render(
+			<BillingTab
+				retailer={lapsed({
+					autoRenew: {
+						method: "card",
+						methodLabel: "Visa ·· 4242",
+						failedAttempts: 0,
+						failing: false,
+						stopped: false,
+						confirming: false,
+					},
+				})}
+			/>,
+		);
+		expect(screen.queryByText(/Hold off for now/)).toBeNull();
 	});
 });
 
@@ -1358,6 +1520,8 @@ describe("BillingTab founding price — one server-resolved answer (z8r3fdfty4)"
 		methodLabel: "Visa ·· 4242",
 		failedAttempts: 0,
 		failing: false,
+		stopped: false,
+		confirming: false,
 		nextChargeAt: Date.now() + 12 * DAY,
 	};
 
@@ -1882,6 +2046,8 @@ describe("BillingTab under admin act-as (z8r3fdfty4)", () => {
 							methodLabel: "Visa ·· 4242",
 							failedAttempts: 0,
 							failing: false,
+							stopped: false,
+							confirming: false,
 							nextChargeAt: Date.now() + 12 * DAY,
 						},
 					},
