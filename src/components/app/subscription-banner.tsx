@@ -238,6 +238,31 @@ export function SubscriptionBanner({
 		);
 	}
 
+	// Auto-charging stopped over a stranded charge (an earlier charge landed
+	// after its invoice was voided). Say what happened and that we'll resolve
+	// it WITH them — never "pay it yourself", which could be the second
+	// payment. Persistent: it clears when any bill settles.
+	if (state.kind === "autoRenewStopped") {
+		return (
+			<div className="flex items-center gap-3 border-b border-amber-200 bg-amber-50 px-5 py-3 dark:border-amber-900 dark:bg-amber-950/40 lg:px-8">
+				<p className="flex-1 text-sm text-foreground/90">
+					<span className="font-medium">
+						We've stopped automatic charging for now.
+					</span>{" "}
+					An earlier charge went through after its invoice was cancelled —
+					we'll be in touch, so there's no need to pay twice.
+				</p>
+				<Link
+					to="/app/settings"
+					search={{ tab: "billing" }}
+					className="inline-flex h-9 w-fit shrink-0 items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
+				>
+					See billing
+				</Link>
+			</div>
+		);
+	}
+
 	// A declined auto-charge: access is still on, but the saved method needs
 	// attention — name the problem and land the seller on the fix. Persistent
 	// (no dismiss): it disappears when the invoice settles or dunning resolves.

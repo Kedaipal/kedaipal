@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import type { FunctionReference } from "convex/server";
+import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SubscriptionView } from "../../lib/subscription";
 import { PLAN_CREDIT_GRANT } from "../../../convex/lib/plans";
@@ -394,6 +401,76 @@ describe("PlanChangeCard — what the seller is told before confirming", () => {
 		fireEvent.click(screen.getByRole("button", { name: /Move up to Pro/ }));
 		fireEvent.click(screen.getByRole("button", { name: /^Move to Pro$/ }));
 		expect(mocks.changePlan).toHaveBeenCalledWith({ plan: "pro" });
+	});
+
+	it("with auto-charging STOPPED the upgrade invoice waits — the toast says so instead of 'pay it below'", async () => {
+		mocks.changePlan.mockResolvedValueOnce({
+			kind: "invoiced",
+			invoiceId: "inv_up",
+			chargingSavedMethod: false,
+		} as unknown as { kind: string; effectiveAt: number });
+		render(
+			<PlanChangeCard
+				sub={sub({
+					autoRenew: {
+						method: "card",
+						methodLabel: "Visa ·· 4242",
+						failedAttempts: 0,
+						failing: false,
+						stopped: true,
+						confirming: false,
+					},
+				})}
+				currency="MYR"
+				foundingPricing={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: /Move up to Pro/ }));
+		fireEvent.click(screen.getByRole("button", { name: /^Move to Pro$/ }));
+
+		await waitFor(() => expect(vi.mocked(toast.success)).toHaveBeenCalled());
+		expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
+			"Your Pro invoice is ready",
+			{
+				description: expect.stringMatching(/Automatic charging is stopped/),
+			},
+		);
+	});
+
+	it("with an earlier charge CONFIRMING, the upgrade toast never says 'pay it below'", async () => {
+		mocks.changePlan.mockResolvedValueOnce({
+			kind: "invoiced",
+			invoiceId: "inv_up",
+			chargingSavedMethod: false,
+		} as unknown as { kind: string; effectiveAt: number });
+		render(
+			<PlanChangeCard
+				sub={sub({
+					autoRenew: {
+						method: "card",
+						methodLabel: "Visa ·· 4242",
+						failedAttempts: 0,
+						failing: false,
+						stopped: false,
+						confirming: true,
+					},
+				})}
+				currency="MYR"
+				foundingPricing={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: /Move up to Pro/ }));
+		fireEvent.click(screen.getByRole("button", { name: /^Move to Pro$/ }));
+
+		await waitFor(() => expect(vi.mocked(toast.success)).toHaveBeenCalled());
+		expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
+			"Your Pro invoice is ready",
+			{
+				description: expect.stringMatching(
+					/confirming an earlier automatic payment first/,
+				),
+			},
+		);
 	});
 
 	it("an admin acting-as sees the options disabled, with the reason beside them", () => {

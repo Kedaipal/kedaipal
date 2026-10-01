@@ -14,6 +14,7 @@ import { VideoDemo } from "../components/landing/video-demo";
 import { LandingRegionProvider } from "../hooks/useLandingRegion";
 import { useMarketingLanding } from "../hooks/useMarketingLanding";
 import { DEMO_DURATION_ISO, DEMO_VIDEO } from "../lib/demo-video";
+import { jsonLdScript } from "../lib/json-ld";
 import { faqJsonLd } from "../lib/landing-faq";
 
 /**
@@ -146,12 +147,7 @@ export const Route = createFileRoute("/")({
 			{ name: "twitter:image", content: OG_IMAGE },
 		],
 		links: [{ rel: "canonical", href: SITE_URL }],
-		scripts: [
-			{
-				type: "application/ld+json",
-				children: JSON.stringify(jsonLd),
-			},
-		],
+		scripts: [jsonLdScript(jsonLd)],
 	}),
 	component: Landing,
 });

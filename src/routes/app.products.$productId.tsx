@@ -371,6 +371,7 @@ function EditProductRoute() {
 					pickupNote: product.pickupNote,
 					minQuantity: product.minQuantity,
 					event: product.event,
+					buyerQuestions: product.buyerQuestions,
 					categoryIds,
 					imageStorageIds: product.imageStorageIds,
 					imageUrls: product.imageUrls,
@@ -464,6 +465,7 @@ function EditProductRoute() {
 						// `null` clears a stored event (toggle off); the form never
 						// sends undefined, so an event can always be turned off.
 						event: values.event,
+						buyerQuestions: values.buyerQuestions,
 					});
 					await saveVariantGrid({
 						productId: product._id,

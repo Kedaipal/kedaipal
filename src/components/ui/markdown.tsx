@@ -1,5 +1,6 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { ExternalLink } from "./linkified-text";
 
 /**
  * Renders seller-authored product descriptions as a safe markdown subset.
@@ -15,14 +16,7 @@ import remarkGfm from "remark-gfm";
 const components = {
 	img: () => null,
 	a: ({ href, children }: { href?: string; children?: React.ReactNode }) => (
-		<a
-			href={href}
-			target="_blank"
-			rel="noopener noreferrer nofollow"
-			className="text-accent underline underline-offset-2"
-		>
-			{children}
-		</a>
+		<ExternalLink href={href}>{children}</ExternalLink>
 	),
 	ul: ({ children }: { children?: React.ReactNode }) => (
 		<ul className="my-2 list-disc space-y-1 pl-5">{children}</ul>

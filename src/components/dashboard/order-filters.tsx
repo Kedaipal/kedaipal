@@ -5,6 +5,7 @@ import { sourceLabel } from "../../../convex/lib/attribution";
 import type { Country } from "../../../convex/lib/country";
 import type { FulfilmentWindow } from "../../../convex/lib/fulfilmentDate";
 import {
+	fulfilmentLabel,
 	ORDER_SOURCE_KEYS,
 	ORDER_SOURCE_LABELS,
 	PAYMENT_STATUS_KEYS,
@@ -33,7 +34,11 @@ import { BulkSelectRow } from "../ui/bulk-select-row";
 import { Button } from "../ui/button";
 import { FilterChip } from "../ui/filter-chip";
 import { FilterOptionRow } from "../ui/filter-option-row";
-import type { OrderFilterFacets } from "./order-column-filters";
+import {
+	fulfilmentChoicesFrom,
+	fulfilmentFilterApplies,
+	type OrderFilterFacets,
+} from "./order-column-filters";
 
 export type PaymentStatus = "unpaid" | "claimed" | "received";
 
@@ -85,6 +90,17 @@ export interface OrderFilterValue {
 	 */
 	sources: OrderSource[];
 	/**
+	 * How the order goes OUT (z8r3fdfau9) — `fulfilmentKey` values: delivery,
+	 * self_collect, drop_off, collection, booking. Multi-select; empty = every
+	 * kind.
+	 *
+	 * Sits next to `sources` because it is its twin: that field is the surface
+	 * the order came IN through, this one is the trip out. The options offered
+	 * are whatever this seller's window actually contains — see
+	 * `fulfilmentChoicesFrom`.
+	 */
+	fulfilments: string[];
+	/**
 	 * THE status axis — status LEAVES (1 Sep). Written by all three surfaces that
 	 * express it: the chip row above the list (whole groups at a tap), these rows
 	 * (one leaf at a time), and the Status column's own header filter. One state,
@@ -132,6 +148,7 @@ export function activeFilterCount(v: OrderFilterValue): number {
 		(v.mockup ? 1 : 0) +
 		(v.fwin != null ? 1 : 0) +
 		v.sources.length +
+		v.fulfilments.length +
 		v.statuses.length +
 		v.bookingPeriods.length +
 		v.categories.length +
@@ -255,6 +272,18 @@ function activeFilterTokens(
 			clear: (x) => ({ ...x, sources: x.sources.filter((y) => y !== src) }),
 		});
 	}
+	for (const f of v.fulfilments) {
+		tokens.push({
+			key: `ful-${f}`,
+			// The registry's label, never a local copy — the token, the section row
+			// and the table cell are three renderings of one word.
+			label: fulfilmentLabel(f),
+			clear: (x) => ({
+				...x,
+				fulfilments: x.fulfilments.filter((y) => y !== f),
+			}),
+		});
+	}
 	for (const a of v.attributionSources) {
 		tokens.push({
 			key: `asrc-${a}`,
@@ -324,6 +353,7 @@ export function clearedFilters(): OrderFilterValue {
 		mockup: false,
 		fwin: undefined,
 		sources: [],
+		fulfilments: [],
 		statuses: [],
 		categories: [],
 		categoriesUnspecified: false,
@@ -478,6 +508,11 @@ export function OrderFilters({
 		value.method,
 		methodsPresentIn(facets),
 	);
+
+	// Same single-list discipline for fulfilment: the rows, the select-all set
+	// and the section's total all read this one array, so "every option
+	// selected" can never mean a different set from what select-all writes.
+	const fulfilmentChoices = fulfilmentChoicesFrom(facets, value.fulfilments);
 
 	const showCustomDates =
 		customDates ||
@@ -904,6 +939,48 @@ export function OrderFilters({
 											/>
 										))}
 									</FilterSection>
+
+									{/* Directly under Order type, never appended at the end: the
+									    two are one journey read twice — how it came IN, how it
+									    goes OUT — and a seller planning tomorrow ("show me the
+									    deliveries so I can book riders", "show me the pickups so
+									    I can prep the counter") reaches for them together.
+
+									    Hidden entirely unless this seller's window holds more
+									    than one kind, via the SAME helper the column funnel
+									    asks: a delivery-only store gets neither surface rather
+									    than a section whose one row narrows nothing. */}
+									{fulfilmentFilterApplies(facets, value.fulfilments) ? (
+										<FilterSection
+											title="Fulfilment"
+											hint="how it reaches them"
+											selected={value.fulfilments.length}
+											total={fulfilmentChoices.length}
+											onToggleAll={(all) =>
+												onChange({
+													...value,
+													fulfilments: all ? [...fulfilmentChoices] : [],
+												})
+											}
+										>
+											{fulfilmentChoices.map((key) => (
+												<FilterOptionRow
+													key={key}
+													label={fulfilmentLabel(key)}
+													count={facets?.fulfilment?.[key] ?? 0}
+													selected={value.fulfilments.includes(key)}
+													onToggle={() =>
+														onChange({
+															...value,
+															fulfilments: value.fulfilments.includes(key)
+																? value.fulfilments.filter((x) => x !== key)
+																: [...value.fulfilments, key],
+														})
+													}
+												/>
+											))}
+										</FilterSection>
+									) : null}
 
 									{(availableSources?.length ?? 0) > 1 ? (
 										<FilterSection

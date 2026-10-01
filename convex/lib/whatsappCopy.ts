@@ -231,7 +231,8 @@ export type SystemMessageKey =
 	| "counterOrderConfirmedPaid"
 	| "counterOrderConfirmedUnpaid"
 	| "paymentReminderIntro"
-	| "rsvpFreeConfirm";
+	| "rsvpFreeConfirm"
+	| "requestAwaitingApproval";
 
 type SystemCopy = {
 	transferReferenceLine: (v: CopyVars) => string;
@@ -267,6 +268,11 @@ type SystemCopy = {
 	// thing a guest needs and the one thing a generic confirm doesn't say.
 	// Paid events fall through to the normal confirm + payment block.
 	rsvpFreeConfirm: (v: CopyVars) => string;
+	// A request awaiting the seller's approval — a booking, or an RSVP on an
+	// event that approves each guest (`z8r3fdkjek`) — replying to a buyer who
+	// messages their ORD ref BEFORE the seller has approved.
+	// Says it's a request and that nothing is payable yet.
+	requestAwaitingApproval: (v: CopyVars) => string;
 };
 
 export const systemMessages: Record<Locale, SystemCopy> = {
@@ -305,6 +311,10 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`🎟️ You're in! RSVP ${shortId} for *${eventLabel}* at ${storeName} is confirmed — no payment needed.${
 				trackingUrl ? `\n\nWhere to go and what you picked: ${trackingUrl}` : ""
 			}${contactLine(contactPhone, "en")}`,
+		requestAwaitingApproval: ({ shortId, storeName, eventLabel, trackingUrl, contactPhone }) =>
+			`🕒 Got it — your request ${shortId}${eventLabel ? ` for *${eventLabel}*` : ""} is with ${storeName} for approval. It's held for you, and nothing is paid yet: you'll get a message with how to pay once they approve.${
+				trackingUrl ? `\n\nFollow it here: ${trackingUrl}` : ""
+			}${contactLine(contactPhone, "en")}`,
 	},
 	ms: {
 		transferReferenceLine: ({ shortId }) =>
@@ -341,6 +351,10 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`🎟️ Anda sudah didaftarkan! RSVP ${shortId} untuk *${eventLabel}* di ${storeName} telah disahkan — tiada bayaran diperlukan.${
 				trackingUrl ? `\n\nLokasi dan pilihan anda: ${trackingUrl}` : ""
 			}${contactLine(contactPhone, "ms")}`,
+		requestAwaitingApproval: ({ shortId, storeName, eventLabel, trackingUrl, contactPhone }) =>
+			`🕒 Diterima — permintaan ${shortId}${eventLabel ? ` untuk *${eventLabel}*` : ""} sedang menunggu kelulusan ${storeName}. Ia disimpan untuk anda dan belum ada bayaran: anda akan menerima mesej cara membayar sebaik sahaja diluluskan.${
+				trackingUrl ? `\n\nIkuti di sini: ${trackingUrl}` : ""
+			}${contactLine(contactPhone, "ms")}`,
 	},
 	zh: {
 		transferReferenceLine: ({ shortId }) =>
@@ -376,6 +390,10 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 		rsvpFreeConfirm: ({ shortId, storeName, eventLabel, trackingUrl, contactPhone }) =>
 			`🎟️ 报名成功！您在 ${storeName} 的 *${eventLabel}* 报名 ${shortId} 已确认 —— 无需付款。${
 				trackingUrl ? `\n\n地点和您的选择：${trackingUrl}` : ""
+			}${contactLine(contactPhone, "zh")}`,
+		requestAwaitingApproval: ({ shortId, storeName, eventLabel, trackingUrl, contactPhone }) =>
+			`🕒 已收到 —— 您的申请 ${shortId}${eventLabel ? `（*${eventLabel}*）` : ""} 正在等待 ${storeName} 审核。已为您保留，暂时无需付款：审核通过后您会收到付款方式。${
+				trackingUrl ? `\n\n查看进度：${trackingUrl}` : ""
 			}${contactLine(contactPhone, "zh")}`,
 	},
 };

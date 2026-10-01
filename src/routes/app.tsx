@@ -12,6 +12,7 @@ import { useEffect, useRef } from "react";
 import { api } from "../../convex/_generated/api";
 import { ActingAsBanner } from "../components/admin/acting-as-banner";
 import { ConsentBanner } from "../components/app/consent-banner";
+import { DashboardLoadError } from "../components/app/dashboard-load-error";
 import { RouteAreaGuard } from "../components/app/route-area-guard";
 import { SendingPausedBanner } from "../components/app/sending-paused-banner";
 import { SubscriptionBanner } from "../components/app/subscription-banner";
@@ -20,7 +21,8 @@ import { MobileHeader } from "../components/dashboard/mobile-header";
 import { Sidebar } from "../components/dashboard/sidebar";
 import { WhatsNewProvider } from "../components/dashboard/whats-new";
 import { ActAsProvider, useActAs } from "../hooks/useActAs";
-import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { useDashboardRetailerRead } from "../hooks/useDashboardRetailer";
+import { useExitActAs } from "../hooks/useExitActAs";
 import { OrderNotificationsBridge } from "../hooks/useOrderNotifications";
 import { useOrderToastNotifications } from "../hooks/useOrderToastNotifications";
 import { hasFeature } from "../lib/subscription";
@@ -34,24 +36,27 @@ export const Route = createFileRoute("/app")({
 
 function AppLayout() {
 	return (
-		<Show
-			when="signed-in"
-			fallback={<RedirectToSignIn signInForceRedirectUrl="/app" />}
-		>
-			{/* The act-as session wraps the whole dashboard so it holds across every
-			    navigation + CRUD until the admin Exits. See docs/admin-console.md. */}
-			<ActAsProvider>
+		// The act-as session wraps the whole dashboard so it holds across every
+		// navigation + CRUD until the admin Exits — and it sits OUTSIDE the
+		// sign-in gate, so it is still mounted when the admin signs out and ends
+		// the session right there (z8r3fdkqn6). See docs/admin-console.md.
+		<ActAsProvider>
+			<Show
+				when="signed-in"
+				fallback={<RedirectToSignIn signInForceRedirectUrl="/app" />}
+			>
 				<AppShell />
-			</ActAsProvider>
-		</Show>
+			</Show>
+		</ActAsProvider>
 	);
 }
 
 function AppShell() {
 	const navigate = useNavigate();
 	const location = useLocation();
-	const { actAsRetailerId, setActAs } = useActAs();
-	const retailer = useDashboardRetailer();
+	const { actAsRetailerId } = useActAs();
+	const exitActAs = useExitActAs();
+	const { retailer, error: retailerError } = useDashboardRetailerRead();
 	const actingAsAdmin = retailer?.actingAsAdmin === true;
 	const counts = useQuery(
 		convexQuery(
@@ -88,8 +93,7 @@ function AppShell() {
 		// Acting-as but the store resolved null → the id is stale/foreign; clear the
 		// session and return to the directory.
 		if (actAsRetailerId) {
-			setActAs(undefined);
-			navigate({ to: "/app/admin/sellers" });
+			exitActAs();
 			return;
 		}
 		// Wait for the admin check before deciding where a storeless user goes.
@@ -108,7 +112,7 @@ function AppShell() {
 		isAdminResult,
 		onAdminRoute,
 		navigate,
-		setActAs,
+		exitActAs,
 	]);
 
 	// One-shot backfill: if the retailer has no notifyEmail yet, copy it from
@@ -133,6 +137,18 @@ function AppShell() {
 		});
 	}, [retailer, actingAsAdmin, ensureNotifyEmail]);
 
+	// A failed read is said, not shown as loading: an adapter read that throws
+	// settles as "no data", and before this the skeleton below spun forever
+	// (z8r3fdkqn6).
+	if (retailerError) {
+		return (
+			<DashboardLoadError
+				error={retailerError}
+				actingAs={actAsRetailerId !== undefined}
+				onExitActAs={exitActAs}
+			/>
+		);
+	}
 	// Render the shell once we have a store (own or act-as) OR the caller is a
 	// storeless admin on an admin route. Everything else (loading, or redirecting
 	// a non-admin to onboarding) shows the skeleton.
@@ -162,7 +178,11 @@ function AppShell() {
 				<div className="mx-auto flex w-full min-w-0 max-w-md flex-1 flex-col lg:mx-0 lg:max-w-none print:max-w-none">
 					{retailer?.actingAsAdmin ? (
 						<div className="print:hidden">
-							<ActingAsBanner storeName={retailer.storeName} />
+							<ActingAsBanner
+								storeName={retailer.storeName}
+								unclaimed={retailer.unclaimed === true}
+								pendingOwnerEmail={retailer.pendingOwnerEmail}
+							/>
 						</div>
 					) : null}
 					<MobileHeader retailer={retailer} adminBadge={adminOwnStore} />
