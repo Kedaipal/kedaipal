@@ -23,6 +23,7 @@ import {
 } from "../ui/table";
 import {
 	ContactLine,
+	OwnerEmailLine,
 	ExpiryText,
 	FoundingPill,
 	MarketplacePill,
@@ -125,7 +126,7 @@ function SellerTableRow({
 			</TableCell>
 			<TableCell className="py-2">
 				<div className="flex min-w-0 flex-col">
-					<ContactLine kind="email" value={seller.ownerEmail} compact />
+					<OwnerEmailLine seller={seller} compact />
 					<ContactLine kind="whatsapp" value={seller.waPhone} compact />
 				</div>
 			</TableCell>

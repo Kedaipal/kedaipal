@@ -10,6 +10,7 @@ import {
 	isInternalStore,
 	isListableRow,
 } from "./lib/marketplaceListing";
+import { isUnclaimed } from "./lib/unclaimedStore";
 import type { OpeningHours } from "./lib/openingHours";
 import { hiddenFromStorefront } from "./lib/productEvent";
 import { loadSubscription } from "./subscriptions";
@@ -96,6 +97,13 @@ export function storeIsInternal(
 	sub: Doc<"subscriptions"> | null,
 	adminIds: readonly string[],
 ): boolean {
+	// A store nobody owns yet is never on /stores, and this says so
+	// STRUCTURALLY rather than leaning on the `internal` comp it also carries
+	// (docs/prebuilt-stores.md). The comp is a billing state an admin can edit
+	// — comp it `partner` ahead of a deal and the exclusion would evaporate —
+	// whereas "has no owner" is the actual reason: a buyer who orders from an
+	// unclaimed store is messaging a shop with nobody behind it.
+	if (isUnclaimed(row)) return true;
 	return isInternalStore(
 		isExcludedRetailer(
 			{

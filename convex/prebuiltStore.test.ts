@@ -1,0 +1,607 @@
+/// <reference types="vite/client" />
+// Pre-built stores handed over later (docs/prebuilt-stores.md).
+//
+// Every test here is written so that DELETING the guard it covers turns it red
+// — the handover moves ownership of a whole store, so each thing standing
+// between "an address was typed into a console" and "that login now owns this
+// business" gets its own failing case.
+
+import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
+import { convexTest } from "convex-test";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { api } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
+import { UNCLAIMED_OWNER_PREFIX } from "./lib/unclaimedStore";
+import schema from "./schema";
+
+const modules = import.meta.glob("./**/*.ts");
+
+function setup() {
+	const t = convexTest(schema, modules);
+	registerRateLimiter(t);
+	return t;
+}
+
+const ADMIN = { subject: "user_admin", email: "admin@kedaipal.com" };
+const VENDOR = {
+	subject: "user_vendor",
+	email: "vendor@example.com",
+	emailVerified: true,
+	name: "Mak Cik Kuih",
+};
+const STRANGER = {
+	subject: "user_stranger",
+	email: "stranger@example.com",
+	emailVerified: true,
+};
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+let prevAdminEnv: string | undefined;
+beforeEach(() => {
+	prevAdminEnv = process.env.ADMIN_USER_IDS;
+	process.env.ADMIN_USER_IDS = ADMIN.subject;
+});
+afterEach(() => {
+	process.env.ADMIN_USER_IDS = prevAdminEnv;
+});
+
+/** Build a store as the admin would, optionally naming its handover address. */
+async function buildStore(
+	t: ReturnType<typeof setup>,
+	opts: { email?: string; slug?: string } = {},
+) {
+	return await t.withIdentity(ADMIN).mutation(api.retailers.createUnclaimedStore, {
+		storeName: "Mak Cik Kuih",
+		slug: opts.slug ?? "mak-cik-kuih",
+		pendingOwnerEmail: opts.email,
+	});
+}
+
+function readStore(t: ReturnType<typeof setup>, id: Id<"retailers">) {
+	return t.run(async (ctx) => ctx.db.get(id));
+}
+
+function readSub(t: ReturnType<typeof setup>, id: Id<"retailers">) {
+	return t.run(async (ctx) =>
+		ctx.db
+			.query("subscriptions")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", id))
+			.first(),
+	);
+}
+
+describe("createUnclaimedStore", () => {
+	test("only an admin can build a store for someone else", async () => {
+		const t = setup();
+		await expect(
+			t
+				.withIdentity(STRANGER)
+				.mutation(api.retailers.createUnclaimedStore, {
+					storeName: "Not Yours",
+					slug: "not-yours",
+				}),
+		).rejects.toThrow(/Not authorized/);
+	});
+
+	test("the store is owned by a PLACEHOLDER no Clerk subject can match", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t);
+		const row = await readStore(t, retailerId);
+		expect(row?.userId.startsWith(UNCLAIMED_OWNER_PREFIX)).toBe(true);
+		// A Clerk subject is `user_…`; the two namespaces must not overlap, or
+		// the owner branch of requireRetailerAccess could match a real person.
+		expect(row?.userId.startsWith("user_")).toBe(false);
+	});
+
+	test("two pre-built stores get DIFFERENT placeholders", async () => {
+		// `retailers.by_user` is read with `.first()` everywhere — a shared
+		// sentinel would make the second store unreachable through that index.
+		const t = setup();
+		const a = await buildStore(t, { slug: "store-a" });
+		const b = await buildStore(t, { slug: "store-b" });
+		const rowA = await readStore(t, a.retailerId);
+		const rowB = await readStore(t, b.retailerId);
+		expect(rowA?.userId).not.toBe(rowB?.userId);
+	});
+
+	test("NO consent is stamped — the vendor hasn't agreed to anything yet", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t);
+		const row = await readStore(t, retailerId);
+		expect(row?.termsAcceptedAt).toBeUndefined();
+		expect(row?.privacyAcceptedAt).toBeUndefined();
+		expect(row?.aupAcceptedAt).toBeUndefined();
+	});
+
+	test("no notifyEmail is set — a store in setup must not mail a founder inbox", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		const row = await readStore(t, retailerId);
+		expect(row?.notifyEmail).toBeUndefined();
+		expect(row?.pendingOwnerEmail).toBe(VENDOR.email);
+	});
+
+	test("it runs on an `internal` comp, so nothing bills or locks while we build", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t);
+		const sub = await readSub(t, retailerId);
+		expect(sub?.comped).toBe(true);
+		expect(sub?.comp?.kind).toBe("internal");
+		// The point of the comp: no trial clock is running, so the days spent
+		// setting the store up cannot be spent out of the vendor's free period.
+		expect(sub?.trialEndsAt).toBeUndefined();
+		expect(sub?.status).toBe("active");
+	});
+
+	test("the directory counts NO seats on it — there is no owner to count", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		const before = await t
+			.withIdentity(ADMIN)
+			.query(api.admin.listSellersForAdmin, {});
+		expect(before.find((r) => r._id === retailerId)).toMatchObject({
+			unclaimed: true,
+			pendingOwnerEmail: VENDOR.email,
+			seats: { active: 0 },
+		});
+		// And the owner reappears in the count the moment it is claimed.
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		const after = await t
+			.withIdentity(ADMIN)
+			.query(api.admin.listSellersForAdmin, {});
+		expect(after.find((r) => r._id === retailerId)).toMatchObject({
+			unclaimed: false,
+			seats: { active: 1 },
+		});
+	});
+
+	test("a slug another store holds is refused", async () => {
+		const t = setup();
+		await buildStore(t, { slug: "taken" });
+		await expect(buildStore(t, { slug: "taken" })).rejects.toThrow(/taken/i);
+	});
+
+	test("an address another pre-built store is already waiting for is refused", async () => {
+		// Two stores pointed at one inbox would both answer myClaimableStore and
+		// the vendor would get whichever the index returned first.
+		const t = setup();
+		await buildStore(t, { slug: "first", email: VENDOR.email });
+		await expect(
+			buildStore(t, { slug: "second", email: VENDOR.email }),
+		).rejects.toThrow(/already waiting/i);
+	});
+
+	test("an address that already OWNS a store is refused at build time", async () => {
+		const t = setup();
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.createRetailer, {
+				storeName: "Their Own Shop",
+				slug: "their-own-shop",
+			});
+		// The claim would refuse this (one store per login), so refusing here is
+		// what stops an admin building a store that can never be handed over.
+		await expect(
+			buildStore(t, { slug: "doomed", email: VENDOR.email }),
+		).rejects.toThrow(/one store/i);
+	});
+});
+
+describe("setPendingOwnerEmail", () => {
+	test("an admin can name, change and clear the handover address", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t);
+		const asAdmin = t.withIdentity(ADMIN);
+		await asAdmin.mutation(api.retailers.setPendingOwnerEmail, {
+			retailerId,
+			email: "first@example.com",
+		});
+		expect((await readStore(t, retailerId))?.pendingOwnerEmail).toBe(
+			"first@example.com",
+		);
+		await asAdmin.mutation(api.retailers.setPendingOwnerEmail, {
+			retailerId,
+			email: "SECOND@Example.com",
+		});
+		// Normalized, so it compares equal to a Clerk identity email.
+		expect((await readStore(t, retailerId))?.pendingOwnerEmail).toBe(
+			"second@example.com",
+		);
+		await asAdmin.mutation(api.retailers.setPendingOwnerEmail, { retailerId });
+		expect((await readStore(t, retailerId))?.pendingOwnerEmail).toBeUndefined();
+	});
+
+	test("a CLAIMED store refuses it — this is not a store-takeover primitive", async () => {
+		// THE guard. Without it, an admin could re-point a live seller's owner
+		// email and hand their business to anyone who signs up with it.
+		const t = setup();
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		await expect(
+			t.withIdentity(ADMIN).mutation(api.retailers.setPendingOwnerEmail, {
+				retailerId,
+				email: STRANGER.email,
+			}),
+		).rejects.toThrow(/already has an owner/i);
+	});
+
+	test("a non-admin cannot touch it", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t);
+		await expect(
+			t.withIdentity(STRANGER).mutation(api.retailers.setPendingOwnerEmail, {
+				retailerId,
+				email: STRANGER.email,
+			}),
+		).rejects.toThrow(/Not authorized/);
+	});
+});
+
+describe("claimStore", () => {
+	test("the named vendor takes ownership, and the handover email is retired", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		const result = await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		expect(result).toMatchObject({ ok: true, slug: "mak-cik-kuih" });
+		const row = await readStore(t, retailerId);
+		expect(row?.userId).toBe(VENDOR.subject);
+		// "Remove the previously used email" in full: the target is cleared and
+		// their address becomes the store's operational contact.
+		expect(row?.pendingOwnerEmail).toBeUndefined();
+		expect(row?.notifyEmail).toBe(VENDOR.email);
+		expect(row?.claimedAt).toBeGreaterThan(0);
+	});
+
+	test("the store then resolves as theirs through the ordinary owner path", async () => {
+		const t = setup();
+		await buildStore(t, { email: VENDOR.email });
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		const mine = await t
+			.withIdentity(VENDOR)
+			.query(api.retailers.getMyRetailer, {});
+		expect(mine?.storeName).toBe("Mak Cik Kuih");
+		expect(mine?.role).toBe("owner");
+		// The payload flag the act-as banner reads must stop being set.
+		expect(mine?.unclaimed).toBeUndefined();
+	});
+
+	test("consent is stamped AT THE CLAIM — the admin could not agree for them", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		const row = await readStore(t, retailerId);
+		expect(row?.termsAcceptedAt).toBeGreaterThan(0);
+		expect(row?.termsVersion).toBeTruthy();
+		expect(row?.privacyAcceptedAt).toBeGreaterThan(0);
+		expect(row?.aupAcceptedAt).toBeGreaterThan(0);
+	});
+
+	test("an unticked agreement refuses the claim", async () => {
+		const t = setup();
+		await buildStore(t, { email: VENDOR.email });
+		await expect(
+			t
+				.withIdentity(VENDOR)
+				.mutation(api.retailers.claimStore, { acceptedLegal: false }),
+		).rejects.toThrow(/Accept the Terms/i);
+	});
+
+	test("the 14-day free period starts AT THE CLAIM, not when we built it", async () => {
+		// The bug this prevents: a store built on the 1st and handed over on the
+		// 20th would arrive with its trial already spent, so the vendor's first
+		// ever sign-in would be a past-due lockout.
+		const t = setup();
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		const builtAt = (await readStore(t, retailerId))?._creationTime ?? 0;
+		await t.run(async (ctx) => {
+			// Age the store by three weeks — longer than the whole trial.
+			await ctx.db.patch(retailerId, { createdAt: builtAt - 21 * DAY_MS });
+		});
+		const claimedAt = Date.now();
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		const sub = await readSub(t, retailerId);
+		expect(sub?.status).toBe("trialing");
+		expect(sub?.comped).toBe(false);
+		expect(sub?.comp).toBeUndefined();
+		const daysLeft = ((sub?.trialEndsAt ?? 0) - claimedAt) / DAY_MS;
+		expect(daysLeft).toBeGreaterThan(13);
+		expect(daysLeft).toBeLessThan(15);
+	});
+
+	test("ending the setup comp must NOT land the store on past_due", async () => {
+		// `endComp` (the ordinary revoke) lands on past_due with no invoice — an
+		// expired seller. Routing the claim through it would lock the vendor out
+		// on their first sign-in, so the claim has its own transition.
+		const t = setup();
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		const sub = await readSub(t, retailerId);
+		expect(sub?.status).not.toBe("past_due");
+		expect(sub?.compEndedAt).toBeUndefined();
+	});
+
+	test("a REAL comp (a partner deal) survives the handover", async () => {
+		// Only the `internal` setup comp is scaffolding. A partner/sponsor comp
+		// is a commercial promise to the vendor and the handover must not
+		// silently cancel it.
+		const t = setup();
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		await t.withIdentity(ADMIN).mutation(api.subscriptions.setComp, {
+			retailerId,
+			kind: "partner",
+			label: "Sponsored by Maybank SME",
+		});
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		const sub = await readSub(t, retailerId);
+		expect(sub?.comped).toBe(true);
+		expect(sub?.comp?.kind).toBe("partner");
+	});
+
+	test("an UNVERIFIED email cannot claim, however exactly it matches", async () => {
+		// Anyone can type any address into a sign-up form. Verification is the
+		// whole proof of inbox control — delete the emailVerified check in
+		// convex/lib/identity.ts and this goes green when it must not.
+		const t = setup();
+		await buildStore(t, { email: VENDOR.email });
+		const result = await t
+			.withIdentity({ ...VENDOR, emailVerified: false })
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		expect(result).toMatchObject({ ok: false, reason: "unverified_email" });
+	});
+
+	test("a different address claims nothing", async () => {
+		const t = setup();
+		await buildStore(t, { email: VENDOR.email });
+		const result = await t
+			.withIdentity(STRANGER)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		expect(result).toMatchObject({ ok: false, reason: "none" });
+	});
+
+	test("a store with NO handover email cannot be claimed by anyone", async () => {
+		const t = setup();
+		await buildStore(t);
+		for (const who of [VENDOR, STRANGER]) {
+			const result = await t
+				.withIdentity(who)
+				.mutation(api.retailers.claimStore, { acceptedLegal: true });
+			expect(result).toMatchObject({ ok: false, reason: "none" });
+		}
+	});
+
+	test("it can only be claimed ONCE", async () => {
+		const t = setup();
+		await buildStore(t, { email: VENDOR.email });
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		const again = await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		expect(again).toMatchObject({ ok: false, reason: "none" });
+	});
+
+	test("a CLAIMED store with a stale pending email cannot be claimed again", async () => {
+		// The second line of defence, and the only test that reaches it: the
+		// index only says an address is pending, not that the store is still
+		// ownerless. Clearing `pendingOwnerEmail` at claim normally keeps this
+		// unreachable — so if that clear ever regresses, or a row is patched by
+		// hand, THIS is what stops a live store being handed to a second person.
+		// Delete the `isUnclaimed` re-check in `claimStore` and this goes green.
+		const t = setup();
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		await t.run(async (ctx) => {
+			// Re-arm the target on a store that now has a real owner.
+			await ctx.db.patch(retailerId, { pendingOwnerEmail: STRANGER.email });
+		});
+		const result = await t
+			.withIdentity(STRANGER)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		expect(result).toMatchObject({ ok: false, reason: "none" });
+		// And the real owner still owns it.
+		expect((await readStore(t, retailerId))?.userId).toBe(VENDOR.subject);
+	});
+
+	test("a caller who already owns a store is refused, and told which", async () => {
+		const t = setup();
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.createRetailer, {
+				storeName: "Their Own Shop",
+				slug: "their-own-shop",
+			});
+		// Built before they had a store (so the create-time check passed), then
+		// they went and made one — exactly the race the claim has to catch.
+		const { retailerId } = await buildStore(t, { slug: "built-later" });
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailerId, { pendingOwnerEmail: VENDOR.email });
+		});
+		const result = await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		expect(result).toMatchObject({
+			ok: false,
+			reason: "own_store",
+			storeName: "Their Own Shop",
+		});
+	});
+
+	test("a caller on another store's team is refused, and told which", async () => {
+		const t = setup();
+		const ownerIdentity = { subject: "user_other_owner", email: "o@x.com" };
+		await t
+			.withIdentity(ownerIdentity)
+			.mutation(api.retailers.createRetailer, {
+				storeName: "Host Store",
+				slug: "host-store",
+			});
+		const host = await t
+			.withIdentity(ownerIdentity)
+			.query(api.retailers.getMyRetailer, {});
+		if (!host) throw new Error("seed failed");
+		const { memberId } = await t
+			.withIdentity(ownerIdentity)
+			.mutation(api.team.invite, {
+				retailerId: host._id,
+				email: VENDOR.email,
+				permissions: { orders: "write" },
+			});
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.team.acceptPendingInvite, { memberId });
+		await buildStore(t, { slug: "waiting", email: VENDOR.email });
+		const result = await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		expect(result).toMatchObject({
+			ok: false,
+			reason: "other_membership",
+			storeName: "Host Store",
+		});
+	});
+});
+
+describe("myClaimableStore", () => {
+	test("names the store waiting for this verified address", async () => {
+		const t = setup();
+		await buildStore(t, { email: VENDOR.email });
+		const state = await t
+			.withIdentity(VENDOR)
+			.query(api.retailers.myClaimableStore, {});
+		expect(state).toMatchObject({
+			state: "claimable",
+			storeName: "Mak Cik Kuih",
+			slug: "mak-cik-kuih",
+		});
+	});
+
+	test("answers `none` to everyone else", async () => {
+		const t = setup();
+		await buildStore(t, { email: VENDOR.email });
+		for (const who of [STRANGER, { ...VENDOR, emailVerified: false }]) {
+			expect(
+				await t.withIdentity(who).query(api.retailers.myClaimableStore, {}),
+			).toEqual({ state: "none" });
+		}
+	});
+
+	test("says BLOCKED (not `none`) when a store waits but the login can't hold it", async () => {
+		// Answering `none` here would render the bare wizard and leave the vendor
+		// with no hint that the store we built them exists.
+		const t = setup();
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.createRetailer, {
+				storeName: "Their Own Shop",
+				slug: "their-own-shop",
+			});
+		const { retailerId } = await buildStore(t, { slug: "built-later" });
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailerId, { pendingOwnerEmail: VENDOR.email });
+		});
+		const state = await t
+			.withIdentity(VENDOR)
+			.query(api.retailers.myClaimableStore, {});
+		expect(state).toMatchObject({
+			state: "blocked",
+			storeName: "Mak Cik Kuih",
+			refusal: { reason: "own_store", storeName: "Their Own Shop" },
+		});
+	});
+
+	test("goes quiet once the store is claimed", async () => {
+		const t = setup();
+		await buildStore(t, { email: VENDOR.email });
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		expect(
+			await t.withIdentity(VENDOR).query(api.retailers.myClaimableStore, {}),
+		).toEqual({ state: "none" });
+	});
+});
+
+describe("an unclaimed store is reachable but never advertised", () => {
+	test("the storefront resolves by direct link, so an admin can show the vendor", async () => {
+		const t = setup();
+		await buildStore(t, { email: VENDOR.email });
+		const result = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "mak-cik-kuih",
+		});
+		expect(result.status).toBe("ok");
+	});
+
+	test("but it is kept out of the sitemap", async () => {
+		const t = setup();
+		await buildStore(t, { slug: "unclaimed-shop" });
+		await t
+			.withIdentity(STRANGER)
+			.mutation(api.retailers.createRetailer, {
+				storeName: "Real Shop",
+				slug: "real-shop",
+			});
+		const slugs = (
+			await t.query(api.retailers.listSlugsForSitemap, {})
+		).map((s) => s.slug);
+		expect(slugs).toContain("real-shop");
+		expect(slugs).not.toContain("unclaimed-shop");
+	});
+
+	test("and it joins the sitemap once claimed", async () => {
+		const t = setup();
+		await buildStore(t, { slug: "unclaimed-shop", email: VENDOR.email });
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		const slugs = (
+			await t.query(api.retailers.listSlugsForSitemap, {})
+		).map((s) => s.slug);
+		expect(slugs).toContain("unclaimed-shop");
+	});
+
+	test("an admin can operate it through act-as with no owner in existence", async () => {
+		// The whole reason this feature is small: the admin branch of
+		// requireRetailerAccess never looked at who the owner was.
+		const t = setup();
+		const { retailerId } = await buildStore(t);
+		const seen = await t
+			.withIdentity(ADMIN)
+			.query(api.retailers.getRetailerForAdmin, { retailerId });
+		expect(seen).toMatchObject({
+			storeName: "Mak Cik Kuih",
+			actingAsAdmin: true,
+			unclaimed: true,
+		});
+	});
+
+	test("a stranger still cannot operate it", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t);
+		await expect(
+			t.withIdentity(STRANGER).mutation(api.retailers.updateSettings, {
+				retailerId,
+				storeName: "Hijacked",
+			}),
+		).rejects.toThrow(/Forbidden|Not authorized/);
+	});
+});

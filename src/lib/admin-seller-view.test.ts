@@ -19,6 +19,8 @@ import {
 	sellerPlanLabel,
 	sellerRail,
 	sellerReason,
+	sellerSeatsLabel,
+	sellerSeatsPhrase,
 	sellerSummaryText,
 	sellersToCsv,
 	sortSellers,
@@ -41,6 +43,7 @@ function row(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 		isFoundingMember: false,
 		comped: false,
 		createdAt: at(-180),
+		unclaimed: false,
 		purging: false,
 		marketplace: { internal: false },
 		country: "MY",
@@ -485,5 +488,127 @@ describe("sellerSummaryText + CSV", () => {
 		);
 		expect(line).toContain("60123456789");
 		expect(line).toMatch(/,\d{4}-\d{2}-\d{2},/);
+	});
+});
+
+describe("a pre-built store reads as unclaimed everywhere (docs/prebuilt-stores.md)", () => {
+	const waiting = row({
+		unclaimed: true,
+		pendingOwnerEmail: "vendor@example.com",
+		// A pre-built store always carries the `internal` setup comp — the whole
+		// point of these cases is that it must not read as a sponsored deal.
+		comped: true,
+		comp: { kind: "internal", grantedAt: at(-3) },
+		subscriptionStatus: "active",
+	});
+	const nameless = row({ unclaimed: true, comped: true, comp: { kind: "internal", grantedAt: at(-3) } });
+
+	it("outranks comped and admin in the chip — a half-built store is never filed under Comped", () => {
+		expect(sellerBucket(waiting)).toBe("unclaimed");
+		expect(sellerBucket(row({ unclaimed: true, ownerIsAdmin: true }))).toBe(
+			"unclaimed",
+		);
+		expect(countSellerBuckets([waiting, row()]).unclaimed).toBe(1);
+	});
+
+	it("sits straight after Past due — both are buckets where WE owe an action", () => {
+		expect(SELLER_FILTERS.slice(0, 3)).toEqual([
+			"all",
+			"past_due",
+			"unclaimed",
+		]);
+	});
+
+	it("filters to only the unclaimed rows", () => {
+		expect(
+			filterSellers([waiting, row(), nameless], "unclaimed", "").map(
+				(r) => r.unclaimed,
+			),
+		).toEqual([true, true]);
+	});
+
+	it("shows no clock — the trial starts at handover, so no date on the row is about the vendor", () => {
+		const e = sellerExpiry(waiting, NOW);
+		expect(e.headline).toBe("Not handed over");
+		expect(e.detail).toBe("Waiting for vendor@example.com");
+		expect(e.at).toBeUndefined();
+		// Not the comped reading, which would say "No expiry · Comped since …"
+		// and look like a sponsorship.
+		expect(e.headline).not.toBe("No expiry");
+	});
+
+	it("goes amber when nobody is named — a store built and then abandoned is unfinished work", () => {
+		expect(sellerExpiry(nameless, NOW)).toMatchObject({
+			headline: "Not handed over",
+			detail: "No handover email yet",
+			tone: "warn",
+		});
+		expect(sellerExpiry(waiting, NOW).tone).toBe("muted");
+	});
+
+	it("says why, and never names a billing rail that cannot move money", () => {
+		expect(sellerReason(waiting)).toBe("Built by us · waiting to be claimed");
+		expect(sellerReason(nameless)).toBe("Built by us · set a handover email");
+		expect(sellerRail(waiting)).toBe("Not billed until claimed");
+	});
+
+	it("is found by the HANDOVER email — the only address a pre-built store has", () => {
+		expect(matchesSellerSearch(waiting, "vendor@example.com")).toBe(true);
+		expect(matchesSellerSearch(waiting, "vendor")).toBe(true);
+		// And the search still only matches the row it belongs to.
+		expect(matchesSellerSearch(row(), "vendor@example.com")).toBe(false);
+	});
+
+	it("Copy summary states 'unclaimed' rather than 'none on file'", () => {
+		const text = sellerSummaryText(waiting, "https://kedaipal.com", NOW);
+		expect(text).toContain("Owner: unclaimed · waiting for vendor@example.com");
+		// Not the owner-email line at all — "Email: none on file" would read as a
+		// seller who cleared theirs. (The WhatsApp line still says "none on
+		// file", correctly: the store genuinely has no number yet.)
+		expect(text).not.toContain("Email: none on file");
+		expect(
+			sellerSummaryText(nameless, "https://kedaipal.com", NOW),
+		).toContain("no handover email yet");
+	});
+
+	it("exports the handover email and the claim date as their own columns", () => {
+		const csv = sellersToCsv(
+			[waiting, row({ claimedAt: at(-2), ownerEmail: "owner@example.com" })],
+			"https://kedaipal.com",
+			NOW,
+		);
+		const [header, first, second] = csv.split("\n");
+		expect(header).toContain("Handover email");
+		expect(header).toContain("Claimed");
+		expect(first).toContain("vendor@example.com");
+		// A claimed store carries its handover DATE but no pending address.
+		expect(second).toContain("owner@example.com");
+	});
+
+	it("counts nobody, because there is nobody — not '1/3 seats' against an empty store", () => {
+		// Caught by RENDERING the directory card, not by reading the code: the
+		// owner is an implicit +1 in `listSellersForAdmin`, and an unclaimed
+		// store has no owner to count.
+		expect(sellerSeatsLabel(waiting)).toBe("No team yet");
+		expect(sellerSeatsLabel(row())).toBe("1/3");
+		// The card inlines it in prose and used to append the noun itself, which
+		// read "No one yet seats" — found by rendering the card, not by reading.
+		expect(sellerSeatsPhrase(waiting)).toBe("No team yet");
+		expect(sellerSeatsPhrase(row())).toBe("1/3 seats");
+		expect(
+			sellerSummaryText(waiting, "https://kedaipal.com", NOW),
+		).toContain("Seats: No team yet");
+	});
+
+	it("once claimed it reads like any other seller again", () => {
+		const claimed = row({
+			unclaimed: false,
+			claimedAt: at(-2),
+			subscriptionStatus: "trialing",
+			trialEndsAt: at(12),
+		});
+		expect(sellerBucket(claimed)).toBe("trialing");
+		expect(sellerReason(claimed)).toBeUndefined();
+		expect(sellerExpiry(claimed, NOW).headline).not.toBe("Not handed over");
 	});
 });

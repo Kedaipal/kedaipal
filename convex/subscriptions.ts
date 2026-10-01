@@ -786,6 +786,114 @@ async function endComp(
 }
 
 /**
+ * A pre-built store has just been claimed by its real owner — start their free
+ * period NOW (docs/prebuilt-stores.md).
+ *
+ * THE SIBLING OF `endComp`, AND DELIBERATELY NOT IT. A pre-built store runs on
+ * an `internal` comp while the admin builds it, so the days spent setting it up
+ * are not billed and the daily cron has nothing to lock. Ending that comp the
+ * ordinary way lands the store on `past_due` with no invoice — an EXPIRED
+ * seller — which would make the vendor's very first sign-in a lockout screen,
+ * and would email them that sponsored access they never had has ended. So the
+ * comp ends INTO a trial instead: the 14 days start the moment the store
+ * becomes theirs, exactly as if they had signed up today.
+ *
+ * This is why a pre-built store cannot simply be created `trialing` and handed
+ * over later: `trialEndsAt` is stamped at create, so a store built on the 1st
+ * and handed over on the 20th would arrive with its free period already spent.
+ *
+ * `foundingIntent` is left alone — a founding store that was pre-built is still
+ * a founding store, and the rank was reserved at create.
+ */
+export async function startFreePeriodOnClaim(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	now: number,
+): Promise<void> {
+	const caps = capsForPlan("pro"); // the trial grants Pro-level access
+	const sub = await loadSubscription(ctx, retailerId);
+	if (!sub) {
+		// No row to convert (a store minted before this feature, or a failed
+		// create). Fail OPEN into the ordinary trial rather than leaving the new
+		// owner with no subscription at all.
+		await ctx.db.insert("subscriptions", {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			status: "trialing",
+			trialEndsAt: now + TRIAL_DAYS * DAY_MS,
+			orderCap: caps.orderCap,
+			userCap: caps.userCap,
+			broadcastQuota: caps.broadcastQuota,
+			createdAt: now,
+			updatedAt: now,
+		});
+		return;
+	}
+	// An admin may have comped the store for a REAL reason before handover (a
+	// partner deal, a sponsor). That is a commercial promise to the vendor, not
+	// setup scaffolding, so the handover must not quietly cancel it — only the
+	// `internal` comp this feature puts there is scaffolding.
+	if (sub.comped === true && sub.comp?.kind !== "internal") return;
+	await ctx.db.patch(sub._id, {
+		comped: false,
+		comp: undefined,
+		compEndedAt: undefined,
+		status: "trialing",
+		trialEndsAt: now + TRIAL_DAYS * DAY_MS,
+		trialReminderSentAt: undefined,
+		freePeriodEndedAt: undefined,
+		freePeriodEndReason: undefined,
+		currentPeriodStart: undefined,
+		currentPeriodEnd: undefined,
+		periodPaidBy: undefined,
+		heldAt: undefined,
+		pendingPlanChange: undefined,
+		orderCap: caps.orderCap,
+		userCap: caps.userCap,
+		broadcastQuota: caps.broadcastQuota,
+		updatedAt: now,
+	});
+}
+
+/**
+ * The `internal` comp a pre-built store runs on while an admin builds it. Set
+ * at create (admin.createUnclaimedStore) so nothing bills, nothing locks and
+ * nothing emails a store with no owner to read it; ended into a fresh trial by
+ * `startFreePeriodOnClaim` at handover. See docs/prebuilt-stores.md.
+ *
+ * Written here rather than by calling `setComp` because `setComp` is a public
+ * admin mutation that re-reads the store, voids invoices and audits — all
+ * meaningless for a row being inserted in the same transaction as the store.
+ */
+export async function insertSetupComp(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	adminSubject: string,
+	now: number,
+): Promise<void> {
+	const caps = capsForPlan("pro");
+	await ctx.db.insert("subscriptions", {
+		retailerId,
+		plan: "pro",
+		billingCycle: "monthly",
+		status: "active",
+		comped: true,
+		comp: {
+			kind: "internal",
+			note: "Pre-built store — setup in progress, not yet handed over.",
+			grantedBy: adminSubject,
+			grantedAt: now,
+		},
+		orderCap: caps.orderCap,
+		userCap: caps.userCap,
+		broadcastQuota: caps.broadcastQuota,
+		createdAt: now,
+		updatedAt: now,
+	});
+}
+
+/**
  * Admin: turn a store's comp upgrade ON (partner / sponsor / pilot /
  * internal). A comp is a toggle with no end date — it stays on until an admin
  * turns it off (`revokeComp`). While on, the store resolves exactly like a

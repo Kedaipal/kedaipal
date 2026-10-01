@@ -900,6 +900,30 @@ export default defineSchema({
 		// link serves a TikTok Live, a phone order and a DM quote alike, and
 		// only the seller knows which.
 		claimLinkSource: v.optional(v.string()),
+		// Pre-built store handover (docs/prebuilt-stores.md). The email the admin
+		// says will own this store — set while `userId` is still a placeholder
+		// (convex/lib/unclaimedStore.ts). The vendor signs in with it once and
+		// `retailers.claimStore` hands the store over.
+		//
+		// A TARGET, not a credential: holding an address here grants nothing. The
+		// claim only completes for a caller whose Clerk identity carries that
+		// address AS VERIFIED, exactly as a team invite binds (convex/team.ts) —
+		// so a typo'd or guessed address can never take a store, it just leaves
+		// one unclaimed.
+		//
+		// Separate from the placeholder `userId` on purpose: an admin builds
+		// before they have been given the vendor's address, so "built, no email
+		// yet" must be writable. Cleared at claim — which is the whole of
+		// "remove the email we used", because no Clerk account was ever created
+		// for it. Indexed (`by_pending_owner_email`) because every storeless
+		// sign-in asks "is a store waiting for me?".
+		pendingOwnerEmail: v.optional(v.string()),
+		// When a pre-built store was handed over. Set once by `claimStore`, never
+		// cleared — the console's "handed over 3 Oct" fact, and the only durable
+		// trace that this store did not start life owned (the placeholder
+		// `userId` is overwritten by the claim, so nothing else survives it).
+		// Unset on every ordinary store, which is all of them before this feature.
+		claimedAt: v.optional(v.number()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
@@ -911,7 +935,8 @@ export default defineSchema({
 		// Admin "onboard a client" pre-check: is a store already registered to this
 		// email? notifyEmail is stored normalized (trim + lowercase via
 		// assertValidEmail), so an equality lookup is exact. See docs/vendor-identity.md.
-		.index("by_notify_email", ["notifyEmail"]),
+		.index("by_notify_email", ["notifyEmail"])
+		.index("by_pending_owner_email", ["pendingOwnerEmail"]),
 
 	// --- Team members (ClickUp 86exr91r4, docs/team-members.md) ---------------
 	// One row per teammate relationship on a store. The OWNER is `retailers.

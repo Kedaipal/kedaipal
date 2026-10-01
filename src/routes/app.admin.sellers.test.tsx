@@ -106,6 +106,7 @@ function seller(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 		plan: "pro",
 		comped: false,
 		createdAt: at(-20),
+		unclaimed: false,
 		purging: false,
 		marketplace: { internal: false },
 		country: "MY",

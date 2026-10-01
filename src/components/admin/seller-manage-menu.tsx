@@ -15,6 +15,7 @@ import {
 	Megaphone,
 	Store,
 	Trash2,
+	UserPlus,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -37,6 +38,7 @@ import {
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { CompDialog } from "./comp-dialog";
+import { HandoverDialog } from "./handover-dialog";
 import { HighlightDialog } from "./highlight-dialog";
 
 /**
@@ -94,6 +96,7 @@ export function SellerManageMenu({
 	const [purgeOpen, setPurgeOpen] = useState(false);
 	const [hideOpen, setHideOpen] = useState(false);
 	const [compOpen, setCompOpen] = useState(false);
+	const [handoverOpen, setHandoverOpen] = useState(false);
 	const [highlightOpen, setHighlightOpen] = useState(false);
 	// Where the store stands on Store highlights — the item says it before the
 	// dialog opens: why it's on (paid window / comp), or why it can't be.
@@ -237,6 +240,40 @@ export function SellerManageMenu({
 							</span>
 						</DropdownMenuItem>
 					) : null}
+					{/* Only on a pre-built store, and placed before the commercial
+					    items: for an unclaimed store the open question is WHO it is
+					    for, not what it costs. Absent once claimed rather than
+					    disabled — ownership moves exactly once, so a permanently
+					    greyed row would sit on every ordinary store forever saying
+					    nothing (docs/prebuilt-stores.md). */}
+					{seller.unclaimed ? (
+						<DropdownMenuItem
+							onSelect={() => setHandoverOpen(true)}
+							className="items-start"
+						>
+							<UserPlus
+								className={cn(
+									"mt-0.5 size-4",
+									seller.pendingOwnerEmail
+										? "text-muted-foreground"
+										: "text-amber-600 dark:text-amber-400",
+								)}
+								aria-hidden="true"
+							/>
+							<span className="flex min-w-0 flex-col">
+								<span className="font-medium">
+									{seller.pendingOwnerEmail
+										? "Handover email — set"
+										: "Set handover email"}
+								</span>
+								<span className="text-xs text-muted-foreground">
+									{seller.pendingOwnerEmail
+										? `Waiting for ${seller.pendingOwnerEmail} to sign up`
+										: "Nobody can claim this store until you name their email"}
+								</span>
+							</span>
+						</DropdownMenuItem>
+					) : null}
 					{/* Disabled-with-reason IN the item — a disabled menu row can't
 					    show a hover title, so the reason is the subtitle. */}
 					<DropdownMenuItem
@@ -339,6 +376,12 @@ export function SellerManageMenu({
 					) : null}
 				</DropdownMenuContent>
 			</DropdownMenu>
+			{handoverOpen ? (
+				<HandoverDialog
+					seller={seller}
+					onClose={() => setHandoverOpen(false)}
+				/>
+			) : null}
 			{compOpen ? (
 				<CompDialog seller={seller} onClose={() => setCompOpen(false)} />
 			) : null}

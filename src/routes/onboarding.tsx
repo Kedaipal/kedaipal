@@ -45,6 +45,7 @@ import {
 	decodeOnboardingPrefill,
 	type OnboardingPrefill,
 } from "../lib/onboarding-link";
+import type { ClaimRefusal } from "../../convex/lib/unclaimedStore";
 import { waPhoneCheckoutSchema } from "../lib/schemas";
 import { slugify, validateStoreName } from "../lib/slug";
 
@@ -102,6 +103,12 @@ function OnboardingForm() {
 	const navigate = useNavigate();
 	const search = Route.useSearch();
 	const retailer = useQuery(convexQuery(api.retailers.getMyRetailer, {})).data;
+	// Pre-built store handover (docs/prebuilt-stores.md): is a finished store
+	// waiting for this login? Read here, beside the "do I already have a store?"
+	// question, because the answer decides WHICH SCREEN this is — not a banner on
+	// top of a wizard the vendor must not use.
+	const claimable = useQuery(convexQuery(api.retailers.myClaimableStore, {}))
+		.data;
 	const createRetailer = useMutation(api.retailers.createRetailer);
 	// Assisted = an admin-generated prefill link. Seed the fields, surface the WA
 	// number for review, and tell the client what's going on.
@@ -162,8 +169,22 @@ function OnboardingForm() {
 		if (!slugEdited) setSlug(slugify(storeName));
 	}, [storeName, slugEdited]);
 
-	if (retailer === undefined) {
+	if (retailer === undefined || claimable === undefined) {
 		return <LoadingScreen />;
+	}
+
+	// A store that is already theirs REPLACES the wizard — it never sits as a
+	// banner above it. Their store exists, fully built; offering "Name your
+	// store" beside it invites a second store this login cannot have, and
+	// `createRetailer` would only refuse after they had filled the whole form.
+	// A dead end dressed as a choice is worse than no choice (CLAUDE.md).
+	if (claimable.state === "claimable") {
+		return (
+			<ClaimStoreScreen
+				storeName={claimable.storeName}
+				slug={claimable.slug}
+			/>
+		);
 	}
 
 	// Same rule as the server (`assertValidStoreName`), read inline before the
@@ -250,6 +271,7 @@ function OnboardingForm() {
 			    member deserves the explanation before a bare "create your store". */}
 			<PendingInvitesBanner />
 			<RemovedFromTeamBanner />
+			<HandoverBlockedBanner claimable={claimable} />
 			<header className="flex flex-col gap-2">
 				<p className="text-xs font-semibold uppercase tracking-widest text-accent">
 					Step 1 of 1
@@ -475,6 +497,198 @@ function LoadingScreen() {
 			<OnboardingTopBar />
 			<p className="m-auto text-sm text-muted-foreground">Loading…</p>
 		</main>
+	);
+}
+
+// ---------------------------------------------------------------------------
+// Pre-built store handover (docs/prebuilt-stores.md)
+// ---------------------------------------------------------------------------
+
+/**
+ * "Your store is ready" — the whole of a white-glove vendor's onboarding.
+ *
+ * Exported for the visual harness + onboarding-claim.test.tsx (same reason
+ * comp-dialog exports its dialog): this screen is behind Clerk and a specific
+ * data state, so the only way to LOOK at its states is to render it directly.
+ *
+ * REPLACES the wizard rather than banners it, because this login cannot create
+ * a store (one store per login) and must not be shown a form that would refuse
+ * at the end. The screen's job is to make a store the vendor has never seen
+ * feel like theirs before they tap: it names the store, shows the real
+ * storefront link they can open in a tab, and says what is inside.
+ *
+ * CONSENT IS TAKEN HERE. `createUnclaimedStore` deliberately stamps none — an
+ * admin cannot agree to the Terms on the vendor's behalf — so this is the first
+ * and only moment the person actually bound by the agreement accepts it, and
+ * `claimStore` requires it. Same checkbox, same links, same "not pre-ticked"
+ * rule as the wizard.
+ */
+export function ClaimStoreScreen({
+	storeName,
+	slug,
+}: {
+	storeName: string;
+	slug: string;
+}) {
+	const navigate = useNavigate();
+	const claimStore = useMutation(api.retailers.claimStore);
+	const [agreed, setAgreed] = useState(false);
+	const [claiming, setClaiming] = useState(false);
+	const storefront = `kedaipal.com/${slug}`;
+
+	async function handleClaim() {
+		setClaiming(true);
+		try {
+			const result = await claimStore({ acceptedLegal: agreed });
+			if (result.ok) {
+				toast.success(`${storeName} is yours — welcome to Kedaipal!`);
+				navigate({ to: "/app" });
+				return;
+			}
+			// The refusals are all "something changed since this page loaded" —
+			// another tab claimed it, or this login joined a team meanwhile. Say
+			// which, and leave them on a page that re-reads on refresh.
+			toast.error(
+				result.reason === "own_store"
+					? `This login already runs ${result.storeName}, and an account can only hold one store.`
+					: result.reason === "other_membership"
+						? `You're on the team at ${result.storeName ?? "another store"}. Leave that team from Settings → Team first.`
+						: result.reason === "unverified_email"
+							? "Your email address isn't verified yet — verify it, then reload this page."
+							: "This store is no longer waiting to be claimed — ask us to check it.",
+			);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setClaiming(false);
+		}
+	}
+
+	return (
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-6 px-5 pb-32 pt-6">
+			<OnboardingTopBar />
+			<header className="flex flex-col gap-2">
+				<p className="text-xs font-semibold uppercase tracking-widest text-accent">
+					Ready for you
+				</p>
+				<h1 className="text-3xl font-bold leading-tight">
+					{storeName} is set up
+				</h1>
+				<p className="text-sm text-muted-foreground">
+					We built this store for you. Take it over and it's yours — products,
+					settings and all.
+				</p>
+			</header>
+
+			<div className="flex items-start gap-3 rounded-xl border border-accent/30 bg-accent/5 px-4 py-3 text-sm">
+				<Sparkles className="mt-0.5 size-4 shrink-0 text-accent" />
+				<div className="flex min-w-0 flex-col gap-1">
+					<p className="font-medium text-foreground">Your store link</p>
+					<a
+						href={`https://${storefront}`}
+						target="_blank"
+						rel="noreferrer"
+						className="truncate font-mono text-[13px] text-accent-emphasis underline"
+					>
+						{storefront}
+					</a>
+					<p className="text-xs text-muted-foreground">
+						Open it in a tab to see what buyers will see. It isn't listed
+						publicly until you take it over.
+					</p>
+				</div>
+			</div>
+
+			<label className="flex items-start gap-3 text-sm text-muted-foreground">
+				<input
+					type="checkbox"
+					checked={agreed}
+					onChange={(e) => setAgreed(e.target.checked)}
+					className="mt-0.5 size-5 shrink-0 rounded border-input accent-accent"
+				/>
+				<span>
+					I agree to the{" "}
+					<Link
+						to="/terms"
+						target="_blank"
+						className="font-medium text-foreground underline"
+					>
+						Terms
+					</Link>
+					,{" "}
+					<Link
+						to="/privacy"
+						target="_blank"
+						className="font-medium text-foreground underline"
+					>
+						Privacy Policy
+					</Link>
+					, and{" "}
+					<Link
+						to="/acceptable-use"
+						target="_blank"
+						className="font-medium text-foreground underline"
+					>
+						Acceptable Use Policy
+					</Link>
+					.
+				</span>
+			</label>
+
+			<div className="fixed inset-x-0 bottom-0 border-t border-border bg-background px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+				<div className="mx-auto w-full max-w-md">
+					<Button
+						className="h-12 w-full text-base"
+						disabled={!agreed || claiming}
+						onClick={() => void handleClaim()}
+					>
+						{claiming ? "Taking over…" : `Take over ${storeName}`}
+					</Button>
+					{/* Disabled-with-reason: the button above goes quiet until the box
+					    is ticked, and a quiet button with no reason is the oldest
+					    dead end there is. */}
+					<p className="mt-2 text-center text-xs text-muted-foreground">
+						{agreed
+							? "Your 14-day free trial starts when you take it over — not before."
+							: "Tick the box above to continue."}
+					</p>
+				</div>
+			</div>
+		</main>
+	);
+}
+
+/**
+ * A store IS waiting for this address, but this login can't hold it — it
+ * already runs a store, or sits on another store's team.
+ *
+ * Without this the vendor sees nothing at all: `myClaimableStore` would answer
+ * "none", the wizard would render, and the store we built for them would be
+ * invisible with no hint that it exists or why they can't reach it. Same shape
+ * as `RemovedFromTeamBanner` — one explanation, one way out.
+ */
+export function HandoverBlockedBanner({
+	claimable,
+}: {
+	claimable: { state: "none" } | { state: "blocked"; storeName: string; refusal: ClaimRefusal };
+}) {
+	if (claimable.state !== "blocked") return null;
+	const { storeName, refusal } = claimable;
+	const why =
+		refusal.reason === "own_store"
+			? `This login already runs ${refusal.storeName}, and an account can only hold one store. Close that store first, or sign up with a different email and tell us which one to use.`
+			: refusal.reason === "other_membership"
+				? `You're on the team at ${refusal.storeName ?? "another store"}, and an account can only be in one store. Leave that team from Settings → Team, then reload this page.`
+				: "Your email address isn't verified yet. Verify it, then reload this page.";
+	return (
+		<div className="rounded-2xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950/40">
+			<p className="text-sm font-semibold">
+				{storeName} is waiting for you — but not on this login
+			</p>
+			<p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+				{why}
+			</p>
+		</div>
 	);
 }
 

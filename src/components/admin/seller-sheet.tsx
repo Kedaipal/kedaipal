@@ -34,6 +34,7 @@ import {
 } from "../ui/sheet";
 import {
 	ContactLine,
+	OwnerEmailLine,
 	ExpiryText,
 	FoundingPill,
 	MarketplacePill,
@@ -145,8 +146,11 @@ function SellerSheetBody({
 
 			<div className="flex flex-col gap-5 p-5">
 				<Section title="Contact">
-					<Row label="Login email">
-						<ContactLine kind="email" value={seller.ownerEmail} />
+					{/* An unclaimed store has no login to name — the address here is
+					    the one it is WAITING for, so the label has to say which
+					    question the value answers (docs/prebuilt-stores.md). */}
+					<Row label={seller.unclaimed ? "Handover email" : "Login email"}>
+						<OwnerEmailLine seller={seller} />
 					</Row>
 					<Row label="Store WhatsApp">
 						<ContactLine kind="whatsapp" value={seller.waPhone} />
@@ -380,12 +384,40 @@ function SellerSheetBody({
 				</Section>
 
 				<Section title="How they arrived">
-					<Row label="Joined">
+					{/* "Joined" is a seller's own act. A pre-built store was BUILT —
+					    by us, before anyone joined — and saying "joined" of a store
+					    nobody owns yet is the kind of quietly wrong line that makes
+					    an admin trust the rest of the sheet less. */}
+					<Row label={seller.unclaimed ? "Built" : "Joined"}>
 						<Plain>
 							{formatShortDate(seller.createdAt)}
 							<Muted> · {describeDays(seller.createdAt, now)}</Muted>
 						</Plain>
 					</Row>
+					{/* Shown for a pre-built store either way round: while it waits,
+					    this is the row an admin came to read; once claimed, it is the
+					    only remaining trace that the store did not start life owned
+					    (the placeholder owner id is overwritten at claim). */}
+					{seller.unclaimed || seller.claimedAt !== undefined ? (
+						<Row label="Handover">
+							{seller.claimedAt !== undefined ? (
+								<Plain>
+									Claimed {formatShortDate(seller.claimedAt)}
+									<Muted> · {describeDays(seller.claimedAt, now)}</Muted>
+								</Plain>
+							) : seller.pendingOwnerEmail ? (
+								<Plain>
+									Waiting for {seller.pendingOwnerEmail}
+									<Muted> · they claim it by signing up with it</Muted>
+								</Plain>
+							) : (
+								<Plain muted>
+									No handover email yet — nobody can claim this store until one
+									is set
+								</Plain>
+							)}
+						</Row>
+					) : null}
 					<Row label="Signup source">
 						{seller.signupSource ? (
 							<Plain>
