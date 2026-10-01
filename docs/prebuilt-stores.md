@@ -264,6 +264,20 @@ keeps the ordinary copy. The decision lives in `sellerCompMenuItem`
 (`admin-seller-view.ts`) beside the row's other derived sentences, so it is
 testable rather than buried in a dropdown.
 
+**And the fix that broke the thing it was fixing.** Clearing the act-as session
+at the claim reached for `useActAs()`, but `ActAsProvider` wraps the `/app`
+subtree only — `/onboarding` is a sibling route — so the hook threw and the
+vendor's entire onboarding died on "useActAs must be used within an
+ActAsProvider". The session is cleared through a provider-free
+`clearStoredActAs()` instead, exported from `useActAs.tsx` so `STORAGE_KEY`
+keeps one owner.
+
+The test had MOCKED `useActAs`, which is exactly why it stayed green while the
+screen was broken. It now runs the real module and asserts the real effect (the
+key is gone from `sessionStorage`), plus a case that simply renders the screen —
+reintroduce the hook and that one goes red. A mock that stands in for the thing
+under test proves the mock works, not the code.
+
 ### Which email is which
 
 Three different addresses, and only one of them is ever a key:

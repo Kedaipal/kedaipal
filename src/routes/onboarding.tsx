@@ -46,7 +46,7 @@ import {
 	type OnboardingPrefill,
 } from "../lib/onboarding-link";
 import type { ClaimRefusal } from "../../convex/lib/unclaimedStore";
-import { useActAs } from "../hooks/useActAs";
+import { clearStoredActAs } from "../hooks/useActAs";
 import { waPhoneCheckoutSchema } from "../lib/schemas";
 import { slugify, validateStoreName } from "../lib/slug";
 
@@ -541,7 +541,6 @@ export function ClaimStoreScreen({
 	slug: string;
 }) {
 	const navigate = useNavigate();
-	const { setActAs } = useActAs();
 	const claimStore = useMutation(api.retailers.claimStore);
 	const [agreed, setAgreed] = useState(false);
 	const [claiming, setClaiming] = useState(false);
@@ -558,10 +557,12 @@ export function ClaimStoreScreen({
 				// then signed out for the vendor to claim it. Without this the
 				// vendor lands on their new dashboard wearing the admin's
 				// "BUILDING" banner over a cached unclaimed payload (Zaki, 2 Oct).
-				// `useActAs` keys on sessionStorage, which a sign-out does not
-				// clear; PR #325 makes act-as session-keyed in general, and this
-				// is the one moment that belongs to the handover itself.
-				setActAs(undefined);
+				// Cleared through the provider-FREE helper: `ActAsProvider` wraps
+				// the `/app` subtree only, so `useActAs()` throws on this route —
+				// which is exactly how this screen crashed the first time a
+				// vendor opened it. PR #325 makes act-as session-keyed in
+				// general; this is the one moment that belongs to the handover.
+				clearStoredActAs();
 				toast.success(`${storeName} is yours — welcome to Kedaipal!`);
 				navigate({ to: "/app" });
 				return;

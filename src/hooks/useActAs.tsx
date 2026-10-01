@@ -62,6 +62,25 @@ export function useActAs(): ActAsContextValue {
 	return ctx;
 }
 
+/**
+ * End the stored act-as session WITHOUT the provider.
+ *
+ * `useActAs` throws outside `ActAsProvider`, and the provider wraps the `/app`
+ * subtree only — so the one screen that most needs to end a session,
+ * `/onboarding`'s pre-built store claim, cannot use the hook at all. (It threw
+ * exactly that way the first time a vendor opened it.) The claim is the moment
+ * a store changes hands, and the usual route to it is the admin's own tab:
+ * they built the store, signed out, and the vendor signed in where the session
+ * is still sitting in `sessionStorage`, which a sign-out does not clear.
+ *
+ * Exported from here rather than reaching for the key directly, so
+ * `STORAGE_KEY` keeps exactly one owner. Safe before hydration and in SSR.
+ */
+export function clearStoredActAs(): void {
+	if (typeof window === "undefined") return;
+	window.sessionStorage.removeItem(STORAGE_KEY);
+}
+
 /** Convenience reader for the current act-as retailer id (undefined = own store). */
 export function useActAsRetailerId(): Id<"retailers"> | undefined {
 	return useActAs().actAsRetailerId;
