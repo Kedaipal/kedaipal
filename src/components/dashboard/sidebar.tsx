@@ -123,7 +123,7 @@ export function Sidebar({
 						subscription={retailer.subscription}
 						foundingRank={retailer.foundingMemberRank}
 						admin={adminBadge}
-											unclaimed={retailer?.unclaimed === true}
+						unclaimed={retailer?.unclaimed === true}
 					/>
 				</div>
 			) : null}
