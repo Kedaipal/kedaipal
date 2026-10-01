@@ -479,6 +479,7 @@ export const internalSettleFromGateway = internalMutation({
 						timesCharged: (sub.autoRenew.timesCharged ?? 0) + 1,
 						lastChargeAttemptAt: undefined,
 						pendingChargeInvoiceId: undefined,
+						chargeCountAtAttempt: undefined,
 						nextRetryAt: undefined,
 						strandedCharge: sub.autoRenew.strandedCharge ?? {
 							invoiceId,
@@ -575,6 +576,7 @@ export const internalSettleFromGateway = internalMutation({
 						timesCharged: (sub.autoRenew.timesCharged ?? 0) + 1,
 						lastChargeAttemptAt: undefined,
 						pendingChargeInvoiceId: undefined,
+						chargeCountAtAttempt: undefined,
 					},
 				});
 			}

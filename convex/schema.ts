@@ -2742,6 +2742,20 @@ export default defineSchema({
 				// lock is still held (CHARGE_ATTEMPT_LOCK_MS).
 				lastChargeAttemptAt: v.optional(v.number()),
 				pendingChargeInvoiceId: v.optional(v.id("invoices")),
+				// HitPay's own charge count READ IMMEDIATELY BEFORE this attempt
+				// POSTed — the baseline the reconcile measures against, so the
+				// question is "has the count moved since I fired THIS charge?"
+				// rather than "is HitPay ahead of my success tally?". The tally
+				// only counts our successes, so anything else that moves HitPay's
+				// number (a decline, if their counter counts those — unproven and
+				// unprovable in the sandbox, which approves everything — or any
+				// charge from outside this code) would otherwise be misread as
+				// "your lost charge landed" and settle a bill nobody paid.
+				// Absent ⇒ the baseline could not be read (a GET blip) or the
+				// stamp predates this field: the reconcile falls back to
+				// `timesCharged`, i.e. exactly the previous behaviour, never worse.
+				// Cleared with `lastChargeAttemptAt` — it is meaningless alone.
+				chargeCountAtAttempt: v.optional(v.number()),
 				// A STRANDED charge: HitPay took an auto-charge whose outcome we'd
 				// lost, for a bill that was voided before we found out. The money
 				// is audited on that bill (`gatewayIssue: late_payment`, a refund

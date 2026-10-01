@@ -1244,7 +1244,9 @@ async function scheduleLostAttemptReconcile(
 		amountSen: invoice.total,
 		currency: invoice.currency,
 		methodCode: autoRenew.method,
-		timesCharged: autoRenew.timesCharged ?? 0,
+		// The count to beat: this attempt's own baseline if it was captured,
+		// else the success tally (the pre-baseline fallback).
+		baselineCount: autoRenew.chargeCountAtAttempt ?? autoRenew.timesCharged ?? 0,
 		attempt: 0,
 		deleteSessionAfter,
 	});
@@ -1293,7 +1295,8 @@ export const reconcileLostAttempt = internalAction({
 		amountSen: v.number(),
 		currency: v.string(),
 		methodCode: v.string(),
-		timesCharged: v.number(),
+		/** HitPay's count as of the moment the lost charge fired. */
+		baselineCount: v.number(),
 		attempt: v.number(),
 		deleteSessionAfter: v.boolean(),
 	},
@@ -1332,7 +1335,7 @@ export const reconcileLostAttempt = internalAction({
 			);
 			return; // keep the remote session inspectable — no delete
 		}
-		if (answer > args.timesCharged) {
+		if (answer > args.baselineCount) {
 			console.warn(
 				"[billing] lost attempt reconciled after auto-renew ended — the charge was real, settling",
 				{ sessionId: args.sessionId, invoiceNumber: args.invoiceNumber },
@@ -1554,6 +1557,7 @@ export const resolveChargeAttempt = internalMutation({
 				...sub.autoRenew,
 				lastChargeAttemptAt: undefined,
 				pendingChargeInvoiceId: undefined,
+				chargeCountAtAttempt: undefined,
 			},
 		});
 	},
@@ -1565,10 +1569,14 @@ export const recordChargeAttempt = internalMutation({
 	args: {
 		subscriptionId: v.id("subscriptions"),
 		invoiceId: v.id("invoices"),
+		/** HitPay's charge count read moments ago, before this POST — the
+		 * baseline the reconcile measures against. Omitted when the read
+		 * failed; the reconcile then falls back to `timesCharged`. */
+		chargeCountAtAttempt: v.optional(v.number()),
 	},
 	handler: async (
 		ctx,
-		{ subscriptionId, invoiceId },
+		{ subscriptionId, invoiceId, chargeCountAtAttempt },
 	): Promise<{ claimed: boolean }> => {
 		const sub = await ctx.db.get(subscriptionId);
 		if (!sub?.autoRenew) return { claimed: false };
@@ -1601,6 +1609,7 @@ export const recordChargeAttempt = internalMutation({
 				...sub.autoRenew,
 				lastChargeAttemptAt: Date.now(),
 				pendingChargeInvoiceId: invoiceId,
+				chargeCountAtAttempt,
 			},
 		});
 		// Retire the invoice's Pay-now link LOCALLY in the same transaction as
@@ -1658,6 +1667,7 @@ export const recordChargeFailure = internalMutation({
 				lastChargeError: error,
 				lastChargeAttemptAt: undefined,
 				pendingChargeInvoiceId: undefined,
+				chargeCountAtAttempt: undefined,
 			},
 		});
 		await ctx.scheduler.runAfter(0, internal.billingEmail.notifyAutoRenewEmail, {
@@ -1919,15 +1929,31 @@ export const chargeDueRenewal = internalAction({
 		// on the session rail (a settle or a decline), so one still standing
 		// means an earlier action may have charged and died before it could
 		// say so. Ask HitPay how many charges the session has taken; if that
-		// moved past our counter the money is real — settle it (against the
-		// bill the attempt was FIRED FOR), never charge again.
+		// moved PAST THE BASELINE CAPTURED WHEN THAT CHARGE FIRED, the money
+		// is real — settle it (against the bill the attempt was FIRED FOR),
+		// never charge again.
+		// The baseline, not our success tally, is the measure: the tally only
+		// counts OUR successes, so anything else that moves HitPay's number
+		// would read as "your lost charge landed" and settle a bill nobody
+		// paid. (Whether a declined charge moves it is unproven — the sandbox
+		// approves everything it validates, so it cannot be observed there.
+		// Measuring the delta makes the answer irrelevant.) A stamp with no
+		// baseline — a GET blip at claim time, or one written before the field
+		// existed — falls back to the tally: the previous behaviour, never worse.
 		// NO AGE LIMIT. The retry after an unknown outcome is scheduled a day
 		// out and fired by a daily cron, so it always meets a stamp at least
 		// 24h old; the old "< 24h" gate meant this never ran on that path, the
 		// lock read the stamp as stale, and a charge HitPay had taken was POSTed
 		// again. The lock's window (CHARGE_ATTEMPT_LOCK_MS) is not this one.
+		// HitPay's count as of a moment ago. Set by whichever read happens
+		// below, and handed to the claim as the next attempt's baseline.
+		let liveChargeCount: number | undefined;
+		// Whether we already asked HitPay this run. A session that answered
+		// "gone" gives no count, but re-asking it would just 404 twice.
+		let sessionAlreadyRead = false;
 		if (autoRenew.lastChargeAttemptAt !== undefined) {
 			const session = await fetchRecurringSession(credentials, sessionId);
+			sessionAlreadyRead = true;
 			// No usable answer — the retry sweep asks again tomorrow.
 			if (session.kind === "unavailable") return;
 			if (session.kind === "found") {
@@ -1939,7 +1965,10 @@ export const chargeDueRenewal = internalAction({
 					);
 					return;
 				}
-				if (session.chargeCount > (autoRenew.timesCharged ?? 0)) {
+				liveChargeCount = session.chargeCount;
+				const baseline =
+					autoRenew.chargeCountAtAttempt ?? autoRenew.timesCharged ?? 0;
+				if (session.chargeCount > baseline) {
 					// The money belongs to the bill the attempt was FIRED FOR — this
 					// one, unless it was voided while the outcome was unknown. Then the
 					// settle audits it on the voided bill and stops auto-charging (a
@@ -2021,9 +2050,29 @@ export const chargeDueRenewal = internalAction({
 		// safe, charging is what the stop forbids.
 		if (!autoChargeAllowed(autoRenew)) return;
 
+		// Capture HitPay's count BEFORE the POST, so the next reconcile can ask
+		// "did it move since I fired?" instead of trusting our success tally.
+		// The reconcile above may already have read it a moment ago — reuse
+		// that rather than pay for a second GET. A failed read is not fatal:
+		// the claim stores no baseline and the reconcile falls back.
+		if (!sessionAlreadyRead) {
+			const pre = await fetchRecurringSession(credentials, sessionId);
+			if (pre.kind === "found") liveChargeCount = pre.chargeCount;
+			else {
+				console.warn(
+					"[billing] could not read the charge count before charging — the reconcile will fall back to the success tally",
+					{ invoiceNumber: context.invoiceNumber, sessionId },
+				);
+			}
+		}
+
 		const claim: { claimed: boolean } = await ctx.runMutation(
 			internal.subscriptionPayments.recordChargeAttempt,
-			{ subscriptionId: context.subscriptionId, invoiceId },
+			{
+				subscriptionId: context.subscriptionId,
+				invoiceId,
+				chargeCountAtAttempt: liveChargeCount,
+			},
 		);
 		if (!claim.claimed) {
 			// Another charge action owns this window (or the method vanished).

@@ -81,6 +81,22 @@ Defences, in order:
    real ⇒ settle with `recordedBy = reconciled:<session>:<n>`, never
    re-charge. The stamp is cleared only by a recorded outcome (a settle or a
    decline), so "still standing" means exactly "outcome unknown".
+   - **The measure is a DELTA from the attempt's own baseline, not our
+     tally.** Every charge reads HitPay's count immediately before it POSTs
+     and stores it on the stamp (`autoRenew.chargeCountAtAttempt`); the
+     reconcile then asks "has the count moved since I fired THIS charge?".
+     Comparing against `timesCharged` was a bet that nothing but our own
+     successes ever moves HitPay's number — and the obvious counter-example,
+     a *declined* charge, **cannot be observed in the sandbox** (it approves
+     everything it validates, including a RM 999,999 wallet charge; only a
+     pre-processor 422 leaves the count alone). Had declines counted, the
+     sequence [decline → later lost outcome] would have read "remote ahead"
+     and settled a bill nobody paid: a free month. The delta makes the
+     question moot. A stamp with no baseline — a GET blip at claim time, or
+     one written before the field existed — falls back to `timesCharged`,
+     i.e. exactly the old behaviour, never worse. The pre-charge read is
+     reused from the reconcile's own read when there is one, and skipped
+     entirely for a session that just answered "gone".
    - **The count is `total_charge`, not `times_charged`.** On a save-card
      session HitPay leaves the documented `times_charged` null for good; the
      count lives in `total_charge` (sandbox GET, 30 Sep 2026: a session whose
@@ -835,11 +851,12 @@ already bills at list.
    tokenisation cross-border for MY customers + MYR on the tokenised charge
    path** on the live SG account (86eyb6z2d question set). Card rail works
    regardless.
-7. **A declined auto-charge must not move `total_charge`.** Confirmed so far:
-   three SETTLED charges ↔ `total_charge: 3` (30 Sep 2026). A decline has
-   never been observed. If one also counts, our counter (successes only)
-   falls behind for good, and after a decline plus a later unknown outcome
-   the reconcile would settle a bill HitPay never charged — lost revenue, not
-   a double charge, but it would need a baseline read at claim time instead.
-   Run one declined charge (e.g. a TnG wallet short of balance), then GET the
-   session.
+7. ~~**A declined auto-charge must not move `total_charge`.**~~ **CLOSED by
+   design, 1 Oct 2026** — the reconcile no longer depends on the answer. It
+   measures the delta from the baseline captured when the charge fired
+   (`chargeCountAtAttempt`), so whatever else moves HitPay's number is
+   irrelevant. Evidence gathered on the way: a SETTLED charge moves
+   `total_charge` by exactly 1 (observed twice: 3→4→5), and a 422-refused
+   charge does not move it at all. A genuine processor decline remains
+   unobservable in the sandbox, which approved a RM 999,999 Touch 'n Go
+   charge — worth remembering that sandbox limits are not production limits.
