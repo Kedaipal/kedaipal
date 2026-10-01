@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { BOOKING_REQUEST_TTL_MS } from "../../../convex/lib/bookingAvailability";
+import { answerLabelPrefix } from "../../../convex/lib/buyerQuestions";
 import {
 	DAY_MS,
 	formatFulfilmentDate,
@@ -246,7 +247,7 @@ export function BookingRequestCard({
 							</div>
 							{(item.answers ?? []).map((a) => (
 								<p key={a.label} className="text-xs text-muted-foreground">
-									{a.label}:{" "}
+									{answerLabelPrefix(a.label)}{" "}
 									<span className="font-medium text-foreground">
 										{a.answer}
 									</span>

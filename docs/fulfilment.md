@@ -563,6 +563,13 @@ in [`fulfilment-date.md`](./fulfilment-date.md).
   "Notes for buyers" on the location — sits directly above it on `/track` and the seller order
   page, so it carries its own heading, **"About this spot"**: two instruction boxes in one card,
   each saying whose it is (the place vs. what was bought).
+- **Links.** A bare `https://…` or `www.…` URL in a note (a Google Maps pin, a parking guide)
+  renders as a tappable link on every buyer and seller surface, via `LinkifiedText`
+  (`src/lib/linkify.ts`). It is deliberately **not markdown**: the note also rides WhatsApp,
+  which links a bare URL by itself but would print `[Pin](https://…)` as raw brackets, so bare
+  URLs read the same in the chat and on the page and the 200-character cap counts exactly what
+  the buyer sees. Only http/https ever reaches an `href`; everything else stays escaped text.
+  Both seller forms say so under the field.
 - **WhatsApp — honestly scoped.** `renderPickupNotes` appends "📝 Before you collect" and the
   notes inside the pickup block of the **free-form** confirm (legacy / no-template path), the
   **mockup-gated** confirm, and the **free-form** manual payment reminder. The **Meta template

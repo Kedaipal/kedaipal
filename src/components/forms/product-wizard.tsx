@@ -72,17 +72,17 @@ import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import { ToggleSwitch } from "../ui/toggle-switch";
 import { CUSTOM_LINE_COPY, MOCKUP_APPROVAL_COPY } from "./advanced-option-copy";
-import { CategoryPicker } from "./category-picker";
 import {
-	BuyerQuestionsEditor,
 	type BuyerQuestionsDraft,
+	BuyerQuestionsEditor,
 	questionsDraftIssue,
 	questionsSubmitValue,
 } from "./buyer-questions-card";
+import { CategoryPicker } from "./category-picker";
 import {
 	EMPTY_EVENT_DRAFT,
-	type EventDraft,
 	EVENT_NO_VENUE_COPY,
+	type EventDraft,
 	EventFields,
 	eventDraftValid,
 	eventEndDateIssue,
@@ -3477,8 +3477,9 @@ export function ProductWizard({
 												<IssueText message={issueFor("pickupNote")} />
 												<span className="text-xs font-normal text-muted-foreground">
 													Collecting buyers see this at checkout and on their
-													order page. It&apos;s copied onto each order, so
-													editing it later never changes past orders.
+													order page. Paste a link (e.g. a Google Maps pin) and
+													it becomes tappable. It&apos;s copied onto each order,
+													so editing it later never changes past orders.
 												</span>
 											</label>
 										</div>

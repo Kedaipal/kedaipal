@@ -107,7 +107,12 @@ live orders — never rewrites what a past buyer answered (pinned by
     question is added; the row shows the answers or "Needs an answer: …"; the
     primary action names the line while one is missing.
 - **Order page + `/track`** — `Label: answer` rows under the item
-  (`OrderItemLine`, plain text).
+  (`OrderItemLine`, plain text). Each row flows as **inline text** that wraps
+  like a sentence. It was a flex row with a `shrink-0` label once, and a long
+  question squeezed its answer into a one-letter-wide column. The prefix comes
+  from `answerLabelPrefix`, so a label that is already a question keeps its own
+  `?` ("Vehicle plate number? JJ7777J", never "number?: JJ7777J"). The CSV,
+  claim ticket, counter and booking-request card use the same helper.
 - **Claim ticket** — the seller's answers, read-only.
 - **CSV + orders table** — an *Answers* column in the *Items* group, after
   *Note*: `Label: answer; Label: answer` per line. When more than one line

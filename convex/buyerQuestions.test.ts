@@ -326,7 +326,7 @@ describe("orders.create — the storefront door", () => {
 		] as never);
 		expect(csv).toContain("Answers");
 		expect(csv).toContain(
-			"What are you bringing?: Helinox tent; Tent model: Tactical One",
+			"What are you bringing? Helinox tent; Tent model: Tactical One",
 		);
 	});
 });
