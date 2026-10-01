@@ -812,6 +812,15 @@ export default defineSchema({
 		// the rail" (admin.setCompHighlight, audited). Unset = the default.
 		// Timestamp, not boolean, per the house pattern.
 		marketplaceCompHighlightOffAt: v.optional(v.number()),
+		// Admin moderation (z8r3fdkmyp, Zaki 1 Oct 2026): set = an admin took
+		// this store OFF /stores, whatever the seller's own switch says (junk
+		// trials, quality, policy). Written only by admin.hideFromMarketplace /
+		// admin.showOnMarketplace, each audited under its own name. `note` is
+		// optional and is SHOWN TO THE SELLER on Settings → Store, so they know
+		// what to fix. The storefront itself is untouched. Unset = not hidden.
+		marketplaceHidden: v.optional(
+			v.object({ at: v.number(), note: v.optional(v.string()) }),
+		),
 		// Highest release version whose "What's new" notes this seller has seen
 		// (86eyqgxv9). A calendar version string (`YYYY.MM.N`), NOT a boolean —
 		// a boolean can only answer "dismissed once", so the next release would

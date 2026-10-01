@@ -138,6 +138,25 @@ describe("HighlightDialog — not comped: a dated window", () => {
 		);
 		expect(screen.getByText(/opted OUT of the marketplace/)).toBeTruthy();
 	});
+
+	it("warns when an admin hid the store — and that outranks the seller's opt-out", () => {
+		render(
+			<HighlightDialog
+				seller={seller({
+					marketplace: {
+						hidden: { at: Date.now() - 1000 },
+						unlistedAt: Date.now() - 1000,
+						internal: false,
+					},
+				})}
+				onClose={vi.fn()}
+			/>,
+		);
+		expect(
+			screen.getByText(/An admin hid this store from \/stores/),
+		).toBeTruthy();
+		expect(screen.queryByText(/opted OUT of the marketplace/)).toBeNull();
+	});
 });
 
 describe("HighlightDialog — comped: featured automatically", () => {

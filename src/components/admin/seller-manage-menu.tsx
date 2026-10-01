@@ -7,6 +7,8 @@ import { useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import {
 	ChevronDown,
+	Eye,
+	EyeOff,
 	Gift,
 	Info,
 	Loader2,
@@ -18,12 +20,13 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { AdminSellerRow } from "../../../convex/admin";
+import { HIDDEN_NOTE_MAX } from "../../../convex/lib/marketplaceListing";
 import { useActAs } from "../../hooks/useActAs";
 import {
 	highlightedThroughLabel,
 	sellerHighlight,
 } from "../../lib/admin-seller-view";
-import { convexErrorMessage } from "../../lib/format";
+import { convexErrorMessage, formatShortDate } from "../../lib/format";
 import { cn } from "../../lib/utils";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 import {
@@ -86,12 +89,16 @@ export function SellerManageMenu({
 }) {
 	const openStore = useOpenStore(seller);
 	const purgeStore = useMutation(api.admin.purgeStoreForAdmin);
+	const hideStore = useMutation(api.admin.hideFromMarketplace);
+	const showStore = useMutation(api.admin.showOnMarketplace);
 	const [purgeOpen, setPurgeOpen] = useState(false);
+	const [hideOpen, setHideOpen] = useState(false);
 	const [compOpen, setCompOpen] = useState(false);
 	const [highlightOpen, setHighlightOpen] = useState(false);
 	// Where the store stands on Store highlights — the item says it before the
 	// dialog opens: why it's on (paid window / comp), or why it can't be.
 	const highlight = sellerHighlight(seller, Date.now());
+	const hidden = seller.marketplace.hidden;
 	const highlightItem = seller.marketplace.internal
 		? {
 				title: "Store highlights",
@@ -122,6 +129,36 @@ export function SellerManageMenu({
 							hint: "A dated window on kedaipal.com/stores",
 							on: false,
 						};
+	// A highlight keeps its setting while the store is hidden, but nothing
+	// shows — the item must not read as featured right above "Show on
+	// /stores again".
+	const highlightPaused = hidden !== undefined && highlightItem.on;
+
+	async function confirmHide(note?: string) {
+		try {
+			await hideStore({ retailerId: seller._id, note });
+			toast.success(`${seller.storeName} is hidden from /stores.`);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+			throw err;
+		}
+	}
+
+	// Showing a store again is the default being restored, and one more click
+	// undoes it — so no confirm step. The toast says when it still won't show.
+	async function showAgain() {
+		try {
+			await showStore({ retailerId: seller._id });
+			toast.success(
+				seller.marketplace.unlistedAt !== undefined
+					? `${seller.storeName} is no longer hidden, but the seller has opted out, so it still won't show.`
+					: `${seller.storeName} can appear on /stores again.`,
+			);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		}
+	}
+
 	// Server truth (`purging` rides the directory row, so every admin session
 	// locks) OR the just-clicked local echo, which bridges the moment before
 	// the reactive query refreshes.
@@ -238,7 +275,7 @@ export function SellerManageMenu({
 						<Megaphone
 							className={cn(
 								"mt-0.5 size-4",
-								highlightItem.on
+								highlightItem.on && !highlightPaused
 									? "text-accent-emphasis"
 									: "text-muted-foreground",
 							)}
@@ -247,7 +284,39 @@ export function SellerManageMenu({
 						<span className="flex min-w-0 flex-col">
 							<span className="font-medium">{highlightItem.title}</span>
 							<span className="text-xs text-muted-foreground">
-								{highlightItem.hint}
+								{highlightPaused
+									? "Paused while hidden from /stores"
+									: highlightItem.hint}
+							</span>
+						</span>
+					</DropdownMenuItem>
+					{/* Beside highlights: both are the store's place on /stores. */}
+					<DropdownMenuItem
+						onSelect={hidden ? () => void showAgain() : () => setHideOpen(true)}
+						disabled={seller.marketplace.internal}
+						className="items-start"
+					>
+						{hidden ? (
+							<Eye
+								className="mt-0.5 size-4 text-muted-foreground"
+								aria-hidden="true"
+							/>
+						) : (
+							<EyeOff
+								className="mt-0.5 size-4 text-muted-foreground"
+								aria-hidden="true"
+							/>
+						)}
+						<span className="flex min-w-0 flex-col">
+							<span className="font-medium">
+								{hidden ? "Show on /stores again" : "Hide from /stores"}
+							</span>
+							<span className="text-xs text-muted-foreground">
+								{seller.marketplace.internal
+									? "Internal store — never listed anyway"
+									: hidden
+										? `Hidden since ${formatShortDate(hidden.at)}`
+										: "Off the directory — storefront and orders unaffected"}
 							</span>
 						</span>
 					</DropdownMenuItem>
@@ -279,6 +348,28 @@ export function SellerManageMenu({
 					onClose={() => setHighlightOpen(false)}
 				/>
 			) : null}
+			<ConfirmDialog
+				open={hideOpen}
+				onOpenChange={setHideOpen}
+				title={`Hide ${seller.storeName} from /stores?`}
+				description={
+					<>
+						Buyers won't find it on kedaipal.com/stores, in its search or on
+						Store highlights, whatever the seller's own switch says. Its
+						storefront link, orders and WhatsApp carry on as normal. The seller
+						sees that Kedaipal hid it in Settings → Store, and you can show it
+						again from this menu.
+					</>
+				}
+				reason={{
+					label: "Note to the seller",
+					placeholder: "e.g. Add real product photos and we'll relist you.",
+					maxLength: HIDDEN_NOTE_MAX,
+					helper: "Shown to the seller in Settings → Store.",
+				}}
+				confirmLabel="Hide from /stores"
+				onConfirm={confirmHide}
+			/>
 			{purgeEnabled ? (
 				<ConfirmDialog
 					open={purgeOpen}

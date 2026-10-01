@@ -5,6 +5,8 @@ import {
 	collapseStoreArea,
 	STORE_AREA_MAX,
 } from "../../../convex/lib/marketplaceListing";
+import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
+import { buildWaContactLink } from "../../lib/contact";
 import { convexErrorMessage } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -25,18 +27,28 @@ import { SAVE_BTN_CLASS, SectionHeading } from "./settings-primitives";
  * ON with no storefront-visible product is not listed, and saying "Shown in
  * the directory" there would lie to the brand-new seller most likely to read
  * it — nor would it be true for an internal (Kedaipal / test) store, which is
- * never listed. `readiness` comes from `marketplace.myListingReadiness`;
- * `undefined` is loading, never "no".
+ * never listed, or for one an admin hid (the card says so, with the admin's
+ * note and a way to ask us). `readiness` comes from
+ * `marketplace.myListingReadiness`; `undefined` is loading, never "no".
  */
+type ListingReadiness = {
+	hasVisibleProduct: boolean;
+	internal: boolean;
+	hidden: { note?: string } | null;
+};
+
 export function MarketplaceCard({
+	storeName,
 	unlisted,
 	area,
 	readiness,
 	onSave,
 }: {
+	/** Names the store in the "ask us why" message when an admin hid it. */
+	storeName: string;
 	unlisted: boolean;
 	area: string;
-	readiness: { hasVisibleProduct: boolean; internal: boolean } | undefined;
+	readiness: ListingReadiness | undefined;
 	onSave: (patch: {
 		marketplaceListed?: boolean;
 		storeArea?: string;
@@ -54,10 +66,13 @@ export function MarketplaceCard({
 		setFlipping(true);
 		try {
 			await onSave({ marketplaceListed: next });
+			// Say what the switch did, not what the directory shows: ON may
+			// still not list (no visible product, internal, hidden by us) —
+			// the status line under the switch carries that truth.
 			toast.success(
 				next
-					? "Your store is listed on the marketplace."
-					: "Removed from the marketplace — your direct link still works.",
+					? "Marketplace listing turned on."
+					: "Marketplace listing turned off — your direct link still works.",
 			);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -106,7 +121,11 @@ export function MarketplaceCard({
 			<div className="flex items-center justify-between gap-3">
 				<div className="flex flex-col">
 					<span className="text-sm font-medium">List my store</span>
-					<ListingStatusLine listed={listed} readiness={readiness} />
+					<ListingStatusLine
+						listed={listed}
+						readiness={readiness}
+						storeName={storeName}
+					/>
 				</div>
 				<ToggleSwitch
 					on={listed}
@@ -149,9 +168,11 @@ export function MarketplaceCard({
 function ListingStatusLine({
 	listed,
 	readiness,
+	storeName,
 }: {
 	listed: boolean;
-	readiness: { hasVisibleProduct: boolean; internal: boolean } | undefined;
+	readiness: ListingReadiness | undefined;
+	storeName: string;
 }) {
 	if (readiness?.internal) {
 		return (
@@ -159,6 +180,11 @@ function ListingStatusLine({
 				A Kedaipal or test store — never listed on the marketplace, whatever
 				this switch says.
 			</span>
+		);
+	}
+	if (readiness?.hidden) {
+		return (
+			<HiddenByKedaipal note={readiness.hidden.note} storeName={storeName} />
 		);
 	}
 	if (!listed) {
@@ -192,6 +218,45 @@ function ListingStatusLine({
 	return (
 		<span className="text-xs text-muted-foreground">
 			Shown in the directory and its search.
+		</span>
+	);
+}
+
+/**
+ * An admin took the store off /stores. It outranks the switch, so the seller
+ * is told plainly — with the admin's note when there is one, and a WhatsApp
+ * line to us either way, so "why?" is never a dead end.
+ */
+function HiddenByKedaipal({
+	note,
+	storeName,
+}: {
+	note?: string;
+	storeName: string;
+}) {
+	const supportWa = useSupportWaNumber();
+	const askUrl = buildWaContactLink(
+		`Hi Kedaipal, my store ${storeName} is hidden from kedaipal.com/stores. What do I need to change?`,
+		supportWa,
+	);
+	return (
+		<span className="flex flex-col gap-1 text-xs text-muted-foreground">
+			<span>
+				Kedaipal has hidden your store from the directory, so it isn't shown
+				whatever this switch says. Your storefront link and orders are
+				unaffected.
+			</span>
+			{note ? (
+				<span className="text-foreground">Note from Kedaipal: {note}</span>
+			) : null}
+			<a
+				href={askUrl}
+				target="_blank"
+				rel="noreferrer"
+				className="font-medium text-accent-emphasis underline underline-offset-2"
+			>
+				Ask us about it on WhatsApp
+			</a>
 		</span>
 	);
 }

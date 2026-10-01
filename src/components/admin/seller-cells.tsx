@@ -5,6 +5,7 @@
 import {
 	Award,
 	ExternalLink,
+	EyeOff,
 	Mail,
 	Megaphone,
 	MessageCircle,
@@ -18,7 +19,7 @@ import {
 	type SellerExpiry,
 	sellerHighlight,
 } from "../../lib/admin-seller-view";
-import { formatMobile } from "../../lib/format";
+import { formatMobile, formatShortDate } from "../../lib/format";
 import { cn } from "../../lib/utils";
 import { CopyButton } from "../ui/copy-button";
 
@@ -70,21 +71,36 @@ export function FoundingPill({ rank }: { rank: number }) {
 }
 
 /**
- * On the marketplace's "Store highlights" rail (z8r3fdkmyp) — beside the
- * slug on every directory surface, so "who is on the rail, and why / until
- * when" reads at a glance rather than behind each Manage menu. Paid window:
- * "Highlight · to 8 Oct" (full date in the tooltip). Comped: "Highlight ·
- * comped" — no date, it lasts as long as the comp. Nothing otherwise.
- * "Highlight", not "Sponsored", because Sponsor is already a comp kind in the
- * same row.
+ * The store's admin-set state on /stores (z8r3fdkmyp), beside the slug on
+ * every directory surface — so "who is hidden, who is on the rail and why /
+ * until when" reads at a glance rather than behind each Manage menu.
+ *
+ * - Hidden by an admin: "Hidden from /stores". It outranks a highlight: a
+ *   hidden store isn't on the rail, and a highlight pill would say it is.
+ * - Paid window: "Highlight · to 8 Oct" (full date in the tooltip).
+ * - Comped: "Highlight · comped" — no date, it lasts as long as the comp.
+ *
+ * Nothing otherwise. "Highlight", not "Sponsored", because Sponsor is
+ * already a comp kind in the same row.
  */
-export function HighlightPill({
+export function MarketplacePill({
 	seller,
 	now,
 }: {
 	seller: AdminSellerRow;
 	now: number;
 }) {
+	if (seller.marketplace.hidden) {
+		return (
+			<span
+				className="inline-flex h-5 shrink-0 items-center gap-1 rounded-full bg-muted px-1.5 text-[10px] font-bold whitespace-nowrap text-muted-foreground"
+				title={`Hidden from /stores by an admin since ${formatShortDate(seller.marketplace.hidden.at)}`}
+			>
+				<EyeOff className="size-3" aria-hidden="true" />
+				Hidden from /stores
+			</span>
+		);
+	}
 	const { source } = sellerHighlight(seller, now);
 	if (source === null) return null;
 	let label: string;

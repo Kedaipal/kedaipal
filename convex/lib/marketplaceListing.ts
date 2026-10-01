@@ -49,6 +49,27 @@ export interface MarketplaceListableRow {
 	marketplaceUnlistedAt?: number;
 	purgeStartedAt?: number;
 	internal: boolean;
+	/** `retailers.marketplaceHidden` is set — an admin took the store off. */
+	hiddenByAdmin: boolean;
+}
+
+/**
+ * Cap on the admin's optional note to a hidden store. It is shown to the
+ * seller on their settings card, so it is a sentence ("Add real product
+ * photos and we'll relist you"), not a case file.
+ */
+export const HIDDEN_NOTE_MAX = 200;
+
+/** Trim, treat blank as no note, refuse over-cap. Undefined = store none. */
+export function sanitizeHiddenNote(
+	input: string | undefined,
+): string | undefined {
+	const trimmed = input?.trim() ?? "";
+	if (trimmed.length === 0) return undefined;
+	if (trimmed.length > HIDDEN_NOTE_MAX) {
+		throw new Error(`Note exceeds ${HIDDEN_NOTE_MAX} characters`);
+	}
+	return trimmed;
 }
 
 /**
@@ -124,6 +145,9 @@ export function compHighlightEligible(
  * - `internal` — Kedaipal's own or a test store (`isInternalStore`). Never on
  *   a public page: prod held three such stores with live products when the
  *   directory shipped (kp-demo, openmarket, deqly-cards).
+ * - `hiddenByAdmin` — an admin took the store off (`marketplaceHidden`):
+ *   junk trials, quality, policy. It outranks the seller's switch, so a
+ *   seller flipping "List my store" back on can't undo it.
  * - `marketplaceUnlistedAt` set — the seller opted out. Listed is the default
  *   (the storefront is already a public URL; the directory is distribution),
  *   but an opt-out is absolute and needs no other reason.
@@ -139,6 +163,7 @@ export function compHighlightEligible(
  */
 export function isListableRow(row: MarketplaceListableRow): boolean {
 	if (row.internal) return false;
+	if (row.hiddenByAdmin) return false;
 	if (row.marketplaceUnlistedAt !== undefined) return false;
 	if (row.purgeStartedAt !== undefined) return false;
 	return true;

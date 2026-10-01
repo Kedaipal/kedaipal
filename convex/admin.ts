@@ -41,7 +41,10 @@ import {
 	ADMIN_AUDIT_LOG_RETENTION_MS,
 	LOG_PURGE_PAGE_SIZE,
 } from "./lib/retention";
-import { compHighlightEligible } from "./lib/marketplaceListing";
+import {
+	compHighlightEligible,
+	sanitizeHiddenNote,
+} from "./lib/marketplaceListing";
 import { isUnlimited } from "./lib/plans";
 import { storeIsInternal } from "./marketplace";
 import { loadSubscription, resolveAccess } from "./subscriptions";
@@ -103,14 +106,16 @@ export type AdminSellerRow = {
 	purging: boolean;
 	/** Marketplace state (z8r3fdkmyp): the seller's own opt-out stamp
 	 * (read-only here — only the seller flips it), the admin-set paid window,
-	 * the admin's "keep this comped store off the rail" override, and whether
-	 * the store is internal (never listed). Whether it's ON the rail is judged
-	 * with `highlightSource` over these + `comped`/`comp.kind` — never
-	 * re-derived inline. */
+	 * the admin's "keep this comped store off the rail" override, the admin's
+	 * hide (with its note to the seller), and whether the store is internal
+	 * (never listed). Whether it's ON the rail is judged with
+	 * `highlightSource` over these + `comped`/`comp.kind` — never re-derived
+	 * inline. */
 	marketplace: {
 		unlistedAt?: number;
 		sponsoredUntil?: number;
 		compHighlightOffAt?: number;
+		hidden?: { at: number; note?: string };
 		internal: boolean;
 	};
 	// --- Contact + billing facts (z8r3fdh37c) ------------------------------
@@ -318,6 +323,7 @@ export const listSellersForAdmin = query({
 					unlistedAt: r.marketplaceUnlistedAt,
 					sponsoredUntil: r.marketplaceSponsoredUntil,
 					compHighlightOffAt: r.marketplaceCompHighlightOffAt,
+					hidden: r.marketplaceHidden,
 					internal: storeIsInternal(r, sub, adminUserIds()),
 				},
 				ownerEmail: r.notifyEmail,
@@ -447,6 +453,72 @@ export const setCompHighlight = mutation({
 			adminUserId,
 			retailerId,
 			action: "admin.setCompHighlight",
+			targetId: retailerId,
+			ts: Date.now(),
+		});
+	},
+});
+
+/**
+ * Take a store off /stores (z8r3fdkmyp, Zaki 1 Oct 2026) — junk trials,
+ * quality, policy. It outranks the seller's own "List my store" switch, and
+ * touches nothing else: the storefront, orders and WhatsApp all carry on.
+ * The optional `note` is shown to the seller on their settings card, so a
+ * hide for a fixable reason tells them what to fix. Refused for an internal
+ * store (never listed anyway — a stamp there would do nothing). Hiding a
+ * store that is already hidden writes nothing, so the first stamp and note
+ * stand and a double-click can't litter the audit log. Undone by its own act,
+ * `showOnMarketplace`, so the log says which happened.
+ */
+export const hideFromMarketplace = mutation({
+	args: { retailerId: v.id("retailers"), note: v.optional(v.string()) },
+	handler: async (ctx, { retailerId, note }): Promise<void> => {
+		const adminUserId = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		const sub = await loadSubscription(ctx, retailerId);
+		if (storeIsInternal(retailer, sub, adminUserIds())) {
+			throw new ConvexError(
+				"Internal stores are never listed on /stores — nothing to hide",
+			);
+		}
+		const cleanNote = sanitizeHiddenNote(note);
+		if (retailer.marketplaceHidden !== undefined) return;
+		await ctx.db.patch(retailerId, {
+			marketplaceHidden: {
+				at: Date.now(),
+				...(cleanNote ? { note: cleanNote } : {}),
+			},
+			updatedAt: Date.now(),
+		});
+		await ctx.db.insert("adminAuditLog", {
+			adminUserId,
+			retailerId,
+			action: "admin.hideFromMarketplace",
+			targetId: retailerId,
+			ts: Date.now(),
+		});
+	},
+});
+
+/** Put a hidden store back (z8r3fdkmyp). It lists again once the rest of the
+ * listable rule holds — the seller's own opt-out still applies. Idempotent,
+ * like the hide. */
+export const showOnMarketplace = mutation({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<void> => {
+		const adminUserId = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		if (retailer.marketplaceHidden === undefined) return;
+		await ctx.db.patch(retailerId, {
+			marketplaceHidden: undefined,
+			updatedAt: Date.now(),
+		});
+		await ctx.db.insert("adminAuditLog", {
+			adminUserId,
+			retailerId,
+			action: "admin.showOnMarketplace",
 			targetId: retailerId,
 			ts: Date.now(),
 		});

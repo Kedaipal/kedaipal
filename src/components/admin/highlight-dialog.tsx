@@ -116,7 +116,12 @@ export function HighlightDialog({
 
 				{seller.marketplace.internal ? null : (
 					<>
-						{seller.marketplace.unlistedAt !== undefined ? (
+						{seller.marketplace.hidden !== undefined ? (
+							<p className="rounded-xl bg-destructive/10 px-3.5 py-2.5 text-xs text-destructive">
+								An admin hid this store from /stores — a highlight would not
+								show until it's shown again (Manage → Show on /stores again).
+							</p>
+						) : seller.marketplace.unlistedAt !== undefined ? (
 							<p className="rounded-xl bg-destructive/10 px-3.5 py-2.5 text-xs text-destructive">
 								This seller opted OUT of the marketplace — a highlight would not
 								show until they relist in Settings → Store.

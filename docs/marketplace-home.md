@@ -19,7 +19,10 @@ A store lists when ALL hold:
    Caught before launch: prod held three such stores with live products
    (kp-demo, openmarket, deqly-cards). The seller card says so for these
    instead of claiming "Shown in the directory".
-1. **Not opted out** — `retailers.marketplaceUnlistedAt` unset. Listing is the
+1. **Not hidden by an admin** — `retailers.marketplaceHidden` unset (see
+   [Admin hide](#admin-hide--moderation-over-the-sellers-switch)). It
+   outranks the seller's switch.
+2. **Not opted out** — `retailers.marketplaceUnlistedAt` unset. Listing is the
    DEFAULT (the storefront is already a public URL; the directory is free
    distribution). The opt-out lives in **Settings → Store → Marketplace
    listing** (`MarketplaceCard`), which is also where sellers LEARN they're
@@ -29,16 +32,48 @@ A store lists when ALL hold:
    not the switch: ON with no visible product reads "On, but not shown yet"
    with an Add-a-product link — fed by `marketplace.myListingReadiness`, a
    separate query so the product read stays off `getMyRetailer`'s hot path.
-2. **Has ≥ 1 storefront-visible product** — same filters as `products.list`
+3. **Has ≥ 1 storefront-visible product** — same filters as `products.list`
    (active, not `hidden`, not `hiddenByCategory`, not a finished event), first
    20 active rows checked. An empty storefront is a dead end we don't route
    buyers into.
-3. **Not purging** (`purgeStartedAt` unset).
+4. **Not purging** (`purgeStartedAt` unset).
 
 **Billing state is deliberately absent** — the storefront never hides on
 subscription state (convex/subscriptions.ts invariant) and the directory
 follows the storefront. An `on_hold` store lists as **browse only** (the card
 says so via `orderingPaused`, outranking the open-now clock).
+
+## Admin hide — moderation over the seller's switch
+
+Zaki, 1 Oct 2026: an admin can take any store off `/stores` from the
+directory's **Manage → Hide from /stores** (junk trials, quality, policy).
+Written only by `admin.hideFromMarketplace` / `admin.showOnMarketplace`, each
+audited under its own name with the store as `targetId`, so the log says
+which happened. Both are idempotent: re-hiding keeps the first stamp and
+note, and a double-click writes no second audit row. Hiding an internal store
+is refused, since it's never listed anyway.
+
+- **Only the directory changes.** The storefront link, orders and WhatsApp
+  carry on. The confirm dialog says so before the admin commits.
+- **The seller is told** (no hidden behaviour): their Settings → Store card
+  reads "Kedaipal has hidden your store from the directory…" in place of the
+  directory status. It shows the admin's optional **note to the seller**
+  (`HIDDEN_NOTE_MAX` = 200, collected in the confirm dialog) and a WhatsApp
+  "ask us" link. Their switch still works, and its toast now says what the
+  switch did ("Marketplace listing turned on."), never "your store is listed".
+  That was already false for a store with no visible product.
+- **Not on the public payload.** Moderation state stays between Kedaipal and
+  the seller: it rides `myListingReadiness` (seller-auth) and the admin row,
+  never `getRetailerBySlug`. So the storefront's "Discover more stores" door
+  still follows only the seller's own switch. A hidden seller who doesn't
+  want to send buyers to the directory can turn the switch off themselves.
+- **Admin surfaces:** a "Hidden from /stores" pill on the slug line (it
+  outranks a highlight pill — a hidden store isn't on the rail); the Manage
+  item reads "Show on /stores again · Hidden since …" and shows in one click
+  (restoring the default; the toast warns when a seller opt-out still keeps
+  it off). The details sheet shows the hide, the note, and "Seller opted out
+  too" when both apply. The highlight dialog warns that a highlight won't show
+  while hidden, and its settings are kept, marked "paused while hidden".
 
 ## Ordering
 
@@ -177,4 +212,9 @@ the stored shape, discoverability link), `src/components/admin/highlight-dialog.
 (start / update-needs-a-change / end via its own mutation, inclusive end date, opted-out warning, comp switch, internal store), the directory pill in `app.admin.sellers.test.tsx`,
 `src/components/storefront/storefront-footer.test.tsx` (the discover link),
 `parseMarketplaceSearch` cases for the URL state, and `src/lib/json-ld.test.ts`
-(escaping + the gate).
+(escaping + the gate). Admin hide: the clause in `marketplaceListing.test.ts`,
+end to end in `marketplace.test.ts` (admin-only, the seller's switch can't
+relist past it, the note reaches the seller card but never the public
+payload, idempotent audit, internal refused), the pill + Manage item in
+`app.admin.sellers.test.tsx`, the dialog warning in `highlight-dialog.test.tsx`,
+and the seller's hidden line in `marketplace-card.test.tsx`.

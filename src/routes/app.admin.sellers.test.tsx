@@ -8,6 +8,7 @@ import {
 	fireEvent,
 	render,
 	screen,
+	waitFor,
 	within,
 } from "@testing-library/react";
 import { type FunctionReference, getFunctionName } from "convex/server";
@@ -463,6 +464,82 @@ describe("SellerCard — Store highlights at a glance (z8r3fdkmyp)", () => {
 			}),
 		);
 		expect(screen.queryByText(/^Highlight/)).toBeNull();
+	});
+
+	it("hidden by an admin: 'Hidden from /stores' — and it outranks a live highlight", () => {
+		renderCard(
+			seller({
+				marketplace: {
+					hidden: { at: at(-2) },
+					sponsoredUntil: at(7),
+					internal: false,
+				},
+			}),
+		);
+		expect(screen.getByText("Hidden from /stores").getAttribute("title")).toBe(
+			`Hidden from /stores by an admin since ${formatShortDate(at(-2))}`,
+		);
+		expect(screen.queryByText(/^Highlight/)).toBeNull();
+	});
+});
+
+describe("SellerCard — hide from /stores (z8r3fdkmyp)", () => {
+	const hideSpy = () =>
+		mutationSpies.get(getFunctionName(api.admin.hideFromMarketplace));
+	const showSpy = () =>
+		mutationSpies.get(getFunctionName(api.admin.showOnMarketplace));
+
+	it("hiding goes through a confirm that names the consequence, with the optional note", async () => {
+		renderCard(seller());
+		openMenu(/Manage Mak Kuih/);
+		expect(screen.getByText(/storefront and orders unaffected/)).toBeTruthy();
+		fireEvent.click(screen.getByText("Hide from /stores"));
+		expect(await screen.findByText("Hide Mak Kuih from /stores?")).toBeTruthy();
+		expect(
+			screen.getByText(/whatever the seller's own switch says/),
+		).toBeTruthy();
+		expect(hideSpy()).not.toHaveBeenCalled();
+		fireEvent.change(screen.getByLabelText(/Note to the seller/), {
+			target: { value: "  Add real photos.  " },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "Hide from /stores" }));
+		await waitFor(() =>
+			expect(hideSpy()).toHaveBeenCalledWith({
+				retailerId: "r_comp",
+				note: "Add real photos.",
+			}),
+		);
+	});
+
+	it("a hidden store's item says since when, pauses its highlight, and shows it again in one click", () => {
+		renderCard(
+			seller({
+				comped: true,
+				comp: { kind: "sponsor", grantedAt: 0 },
+				marketplace: { hidden: { at: at(-3) }, internal: false },
+			}),
+		);
+		openMenu(/Manage Mak Kuih/);
+		expect(
+			screen.getByText(`Hidden since ${formatShortDate(at(-3))}`),
+		).toBeTruthy();
+		// The highlight keeps its setting but must not read as featured.
+		expect(screen.getByText("Paused while hidden from /stores")).toBeTruthy();
+		expect(screen.queryByText(/While comped/)).toBeNull();
+		fireEvent.click(screen.getByText("Show on /stores again"));
+		expect(showSpy()).toHaveBeenCalledWith({ retailerId: "r_comp" });
+	});
+
+	it("an internal store: disabled, with the reason in place", () => {
+		renderCard(seller({ marketplace: { internal: true } }));
+		openMenu(/Manage Mak Kuih/);
+		const item = screen
+			.getByText("Hide from /stores")
+			.closest('[role="menuitem"]');
+		expect(item?.getAttribute("aria-disabled")).toBe("true");
+		expect(
+			screen.getByText("Internal store — never listed anyway"),
+		).toBeTruthy();
 	});
 });
 

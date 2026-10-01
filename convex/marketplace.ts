@@ -125,7 +125,13 @@ export const myListingReadiness = query({
 	handler: async (
 		ctx,
 		{ retailerId },
-	): Promise<{ hasVisibleProduct: boolean; internal: boolean }> => {
+	): Promise<{
+		hasVisibleProduct: boolean;
+		internal: boolean;
+		/** An admin took the store off /stores, with their optional note to
+		 * the seller — the card says so instead of "Shown in the directory". */
+		hidden: { note?: string } | null;
+	}> => {
 		const { retailer } = await requireRetailerAccess(ctx, retailerId, {
 			area: "store_settings",
 			level: "read",
@@ -136,6 +142,9 @@ export const myListingReadiness = query({
 		return {
 			hasVisibleProduct: await hasVisibleProduct(ctx, retailerId),
 			internal: storeIsInternal(retailer, sub, adminUserIds()),
+			hidden: retailer.marketplaceHidden
+				? { note: retailer.marketplaceHidden.note }
+				: null,
 		};
 	},
 });
@@ -188,6 +197,7 @@ export const listStores = query({
 					marketplaceUnlistedAt: row.marketplaceUnlistedAt,
 					purgeStartedAt: row.purgeStartedAt,
 					internal: storeIsInternal(row, sub, adminIds),
+					hiddenByAdmin: row.marketplaceHidden !== undefined,
 				})
 			)
 				continue;

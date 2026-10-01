@@ -4,7 +4,7 @@ import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { STORE_AREA_MAX } from "./lib/marketplaceListing";
+import { HIDDEN_NOTE_MAX, STORE_AREA_MAX } from "./lib/marketplaceListing";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -213,7 +213,7 @@ describe("marketplace.myListingReadiness — the seller card's truth", () => {
 			await asOwner.query(api.marketplace.myListingReadiness, {
 				retailerId: retailer._id,
 			}),
-		).toEqual({ hasVisibleProduct: false, internal: false });
+		).toEqual({ hasVisibleProduct: false, internal: false, hidden: null });
 
 		await asOwner.mutation(api.products.create, {
 			retailerId: retailer._id,
@@ -227,7 +227,7 @@ describe("marketplace.myListingReadiness — the seller card's truth", () => {
 			await asOwner.query(api.marketplace.myListingReadiness, {
 				retailerId: retailer._id,
 			}),
-		).toEqual({ hasVisibleProduct: true, internal: false });
+		).toEqual({ hasVisibleProduct: true, internal: false, hidden: null });
 
 		await expect(
 			t
@@ -422,11 +422,145 @@ describe("comped stores ride Store highlights; internal stores never list", () =
 			await asAdmin.query(api.marketplace.myListingReadiness, {
 				retailerId: adminOwned.retailerId,
 			}),
-		).toEqual({ hasVisibleProduct: true, internal: true });
+		).toEqual({ hasVisibleProduct: true, internal: true, hidden: null });
 
 		const rows = await asAdmin.query(api.admin.listSellersForAdmin, {});
 		expect(
 			rows.find((r) => r.slug === "kedai-internal")?.marketplace.internal,
 		).toBe(true);
+	});
+});
+
+describe("admin hide from /stores — moderation over the seller's switch", () => {
+	test("admin-only; hidden stores drop off, the seller can't relist past it, show brings it back", async () => {
+		const t = setup();
+		const { retailerId } = await seedListableStore(
+			t,
+			"user_mkt_hide",
+			"kedai-hide",
+		);
+		const asSeller = t.withIdentity({ subject: "user_mkt_hide" });
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+		const listed = async () =>
+			(await t.query(api.marketplace.listStores)).map((c) => c.slug);
+
+		await expect(
+			asSeller.mutation(api.admin.hideFromMarketplace, { retailerId }),
+		).rejects.toThrow();
+		await expect(
+			asSeller.mutation(api.admin.showOnMarketplace, { retailerId }),
+		).rejects.toThrow();
+
+		await asAdmin.mutation(api.admin.hideFromMarketplace, {
+			retailerId,
+			note: "  Add real product photos and we'll relist you.  ",
+		});
+		expect(await listed()).toEqual([]);
+
+		// The seller's own switch can't undo an admin hide.
+		await asSeller.mutation(api.retailers.updateSettings, {
+			marketplaceListed: false,
+		});
+		await asSeller.mutation(api.retailers.updateSettings, {
+			marketplaceListed: true,
+		});
+		expect(await listed()).toEqual([]);
+
+		// The seller's card is told, with the note — trimmed.
+		expect(
+			await asSeller.query(api.marketplace.myListingReadiness, { retailerId }),
+		).toEqual({
+			hasVisibleProduct: true,
+			internal: false,
+			hidden: { note: "Add real product photos and we'll relist you." },
+		});
+		// …and the admin row carries it for the pill, menu and sheet.
+		const row = (await asAdmin.query(api.admin.listSellersForAdmin, {})).find(
+			(r) => r._id === retailerId,
+		);
+		expect(row?.marketplace.hidden?.note).toBe(
+			"Add real product photos and we'll relist you.",
+		);
+		// Never on the public storefront payload — moderation state stays
+		// between Kedaipal and the seller.
+		const bySlug = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "kedai-hide",
+		});
+		expect(JSON.stringify(bySlug)).not.toContain("relist");
+
+		await asAdmin.mutation(api.admin.showOnMarketplace, { retailerId });
+		expect(await listed()).toEqual(["kedai-hide"]);
+		expect(
+			(await asSeller.query(api.marketplace.myListingReadiness, { retailerId }))
+				.hidden,
+		).toBeNull();
+	});
+
+	test("idempotent both ways — the first stamp and note stand, the audit log names each act once", async () => {
+		const t = setup();
+		const { retailerId } = await seedListableStore(
+			t,
+			"user_mkt_hide2",
+			"kedai-hide2",
+		);
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+		await asAdmin.mutation(api.admin.hideFromMarketplace, {
+			retailerId,
+			note: "first",
+		});
+		const first = await t.run(
+			async (ctx) => (await ctx.db.get(retailerId))?.marketplaceHidden,
+		);
+		await asAdmin.mutation(api.admin.hideFromMarketplace, {
+			retailerId,
+			note: "second",
+		});
+		expect(
+			await t.run(
+				async (ctx) => (await ctx.db.get(retailerId))?.marketplaceHidden,
+			),
+		).toEqual(first);
+		expect(first?.note).toBe("first");
+
+		await asAdmin.mutation(api.admin.showOnMarketplace, { retailerId });
+		await asAdmin.mutation(api.admin.showOnMarketplace, { retailerId });
+		const audit = await t.run(async (ctx) =>
+			ctx.db.query("adminAuditLog").collect(),
+		);
+		expect(audit.map((r) => [r.action, r.targetId])).toEqual([
+			["admin.hideFromMarketplace", retailerId],
+			["admin.showOnMarketplace", retailerId],
+		]);
+	});
+
+	test("refuses an internal store and an over-long note; a blank note stores none", async () => {
+		const t = setup();
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+		const adminOwned = await seedListableStore(t, ADMIN, "kedai-admin-hide");
+		await expect(
+			asAdmin.mutation(api.admin.hideFromMarketplace, {
+				retailerId: adminOwned.retailerId,
+			}),
+		).rejects.toThrow(/never listed/);
+
+		const { retailerId } = await seedListableStore(
+			t,
+			"user_mkt_hide3",
+			"kedai-hide3",
+		);
+		await expect(
+			asAdmin.mutation(api.admin.hideFromMarketplace, {
+				retailerId,
+				note: "x".repeat(HIDDEN_NOTE_MAX + 1),
+			}),
+		).rejects.toThrow(/exceeds/);
+		await asAdmin.mutation(api.admin.hideFromMarketplace, {
+			retailerId,
+			note: "   ",
+		});
+		const hidden = await t.run(
+			async (ctx) => (await ctx.db.get(retailerId))?.marketplaceHidden,
+		);
+		expect(hidden && "note" in hidden).toBe(false);
 	});
 });

@@ -6,7 +6,9 @@ import {
 	isInternalStore,
 	isListableRow,
 	isNewStore,
+	HIDDEN_NOTE_MAX,
 	NEW_STORE_WINDOW_MS,
+	sanitizeHiddenNote,
 	sanitizeStoreArea,
 	sponsorshipActive,
 	STORE_AREA_MAX,
@@ -44,13 +46,17 @@ describe("sanitizeStoreArea", () => {
 describe("isListableRow — every clause bites", () => {
 	// One assertion per clause: delete a guard in isListableRow and the
 	// matching test goes red (mutation-test posture).
-	const base = { internal: false };
+	const base = { internal: false, hiddenByAdmin: false };
 	test("a plain row is listed by default", () => {
 		expect(isListableRow(base)).toBe(true);
 	});
 
 	test("an internal store is never listed", () => {
-		expect(isListableRow({ internal: true })).toBe(false);
+		expect(isListableRow({ ...base, internal: true })).toBe(false);
+	});
+
+	test("an admin hide delists — and outranks a seller who is opted IN", () => {
+		expect(isListableRow({ ...base, hiddenByAdmin: true })).toBe(false);
 	});
 
 	test("an opt-out stamp delists, whatever its age", () => {
@@ -62,6 +68,23 @@ describe("isListableRow — every clause bites", () => {
 
 	test("a purging store is never listed", () => {
 		expect(isListableRow({ ...base, purgeStartedAt: Date.now() })).toBe(false);
+	});
+});
+
+describe("sanitizeHiddenNote — the admin's note the seller reads", () => {
+	test("trims; blank is no note at all", () => {
+		expect(sanitizeHiddenNote("  Add real photos  ")).toBe("Add real photos");
+		expect(sanitizeHiddenNote("   ")).toBeUndefined();
+		expect(sanitizeHiddenNote(undefined)).toBeUndefined();
+	});
+
+	test("refuses over-cap, accepts exactly the cap", () => {
+		expect(() => sanitizeHiddenNote("x".repeat(HIDDEN_NOTE_MAX + 1))).toThrow(
+			/exceeds/,
+		);
+		expect(sanitizeHiddenNote("x".repeat(HIDDEN_NOTE_MAX))).toHaveLength(
+			HIDDEN_NOTE_MAX,
+		);
 	});
 });
 

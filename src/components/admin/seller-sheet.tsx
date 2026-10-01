@@ -36,7 +36,7 @@ import {
 	ContactLine,
 	ExpiryText,
 	FoundingPill,
-	HighlightPill,
+	MarketplacePill,
 	StatusPill,
 } from "./seller-cells";
 import { SellerManageMenu, useOpenStore } from "./seller-manage-menu";
@@ -90,6 +90,10 @@ function SellerSheetBody({
 	const link = storefrontUrl(seller.slug);
 	const summary = sellerSummaryText(seller, storefrontOrigin(), now);
 	const highlight = sellerHighlight(seller, now);
+	const hidden = seller.marketplace.hidden;
+	// A highlight keeps its setting while the store is hidden, but it isn't
+	// showing — the line must not read as if it were.
+	const hiddenSuffix = hidden !== undefined ? " — paused while hidden" : "";
 	const alertsSameAsStore =
 		seller.notifyWaPhone !== undefined &&
 		seller.notifyWaPhone === seller.waPhone;
@@ -109,7 +113,7 @@ function SellerSheetBody({
 					</div>
 					<SheetDescription className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
 						<StatusPill bucket={bucket} />
-						<HighlightPill seller={seller} now={now} />
+						<MarketplacePill seller={seller} now={now} />
 						<span className="truncate">
 							{[sellerPlanLabel(seller), rail]
 								.filter((p) => p && p !== "—")
@@ -180,32 +184,47 @@ function SellerSheetBody({
 							/>
 						</div>
 					</Row>
-					{/* Marketplace presence (z8r3fdkmyp): the seller's own opt-out and
-					    the admin-sold sponsorship, both read before selling one. */}
+					{/* Marketplace presence (z8r3fdkmyp): the admin's hide, the
+					    seller's own opt-out and the admin-sold sponsorship, all
+					    read before selling one. */}
 					<Row label="Marketplace">
-						{/* Two short lines, not one long one: the row truncates, and
-						    the highlight state is the fact an admin opens this for. */}
+						{/* Short lines, not one long one: the row truncates, and
+						    the hide / highlight state is what an admin opens this for. */}
 						<div className="flex min-w-0 flex-col">
 							<Plain
 								muted={
 									seller.marketplace.internal ||
+									hidden !== undefined ||
 									seller.marketplace.unlistedAt !== undefined
 								}
 							>
 								{seller.marketplace.internal
 									? "Not listed — internal store"
-									: seller.marketplace.unlistedAt !== undefined
-										? `Opted out since ${formatShortDate(seller.marketplace.unlistedAt)}`
-										: "Listed (the default)"}
+									: hidden !== undefined
+										? `Hidden by an admin since ${formatShortDate(hidden.at)}`
+										: seller.marketplace.unlistedAt !== undefined
+											? `Opted out since ${formatShortDate(seller.marketplace.unlistedAt)}`
+											: "Listed (the default)"}
 							</Plain>
+							{hidden?.note ? <Plain muted>Note: {hidden.note}</Plain> : null}
+							{/* Showing it again won't list it while the seller is
+							    opted out — say so before the admin finds out. */}
+							{hidden !== undefined &&
+							seller.marketplace.unlistedAt !== undefined ? (
+								<Plain muted>
+									Seller opted out too, since{" "}
+									{formatShortDate(seller.marketplace.unlistedAt)}
+								</Plain>
+							) : null}
 							{highlight.source === "paid" &&
 							seller.marketplace.sponsoredUntil !== undefined ? (
 								<Plain muted>
 									Highlighted through{" "}
 									{highlightedThroughLabel(seller.marketplace.sponsoredUntil)}
+									{hiddenSuffix}
 								</Plain>
 							) : highlight.source === "comp" ? (
-								<Plain muted>Highlighted while comped</Plain>
+								<Plain muted>Highlighted while comped{hiddenSuffix}</Plain>
 							) : highlight.compEligible ? (
 								<Plain muted>Comped — kept off highlights</Plain>
 							) : null}
@@ -406,7 +425,11 @@ function SellerSheetBody({
 
 			<div className="sticky bottom-0 mt-auto flex items-center justify-between gap-3 border-t border-border bg-popover p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
 				<span className="text-xs text-muted-foreground">
-					Comp upgrade and the dev reset live under Manage.
+					{/* Names what's actually in the menu here — the dev reset
+					    exists only where the purge is enabled. */}
+					{purgeEnabled
+						? "Comp, highlights, hiding from /stores and the dev reset live under Manage."
+						: "Comp, highlights and hiding from /stores live under Manage."}
 				</span>
 				<SellerManageMenu seller={seller} purgeEnabled={purgeEnabled} />
 			</div>

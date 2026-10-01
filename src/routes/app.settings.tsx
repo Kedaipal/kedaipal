@@ -767,6 +767,7 @@ function SettingsRoute() {
 							    builds from is the card this section just wrote. */}
 							<Card>
 								<MarketplaceCard
+									storeName={retailer.storeName}
 									unlisted={retailer.marketplaceUnlisted === true}
 									area={retailer.storeArea ?? ""}
 									readiness={listingReadiness}

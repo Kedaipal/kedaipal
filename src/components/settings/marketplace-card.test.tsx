@@ -7,8 +7,14 @@ import {
 	waitFor,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { toast } from "sonner";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { MarketplaceCard } from "./marketplace-card";
+
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("../../hooks/useSupportWaNumber", () => ({
+	useSupportWaNumber: () => "60123456789",
+}));
 
 vi.mock("@tanstack/react-router", () => ({
 	Link: ({ to, children, ...rest }: { to: string; children: ReactNode }) => (
@@ -18,7 +24,10 @@ vi.mock("@tanstack/react-router", () => ({
 	),
 }));
 
-afterEach(cleanup);
+afterEach(() => {
+	cleanup();
+	vi.clearAllMocks();
+});
 
 function renderCard(
 	props: Partial<React.ComponentProps<typeof MarketplaceCard>> = {},
@@ -26,9 +35,10 @@ function renderCard(
 	const onSave = vi.fn().mockResolvedValue(undefined);
 	render(
 		<MarketplaceCard
+			storeName="Kedai Mak Su"
 			unlisted={false}
 			area=""
-			readiness={{ hasVisibleProduct: true, internal: false }}
+			readiness={{ hasVisibleProduct: true, internal: false, hidden: null }}
 			onSave={onSave}
 			{...props}
 		/>,
@@ -49,7 +59,9 @@ describe("MarketplaceCard — the switch line tells the truth", () => {
 	});
 
 	test("ON but no visible product: never claims to be shown, and points at the fix", () => {
-		renderCard({ readiness: { hasVisibleProduct: false, internal: false } });
+		renderCard({
+			readiness: { hasVisibleProduct: false, internal: false, hidden: null },
+		});
 		expect(screen.queryByText(/Shown in the directory/)).toBeNull();
 		expect(screen.getByText(/not shown yet/)).toBeTruthy();
 		expect(
@@ -67,7 +79,7 @@ describe("MarketplaceCard — the switch line tells the truth", () => {
 	test("opted out: hidden, with the direct-link reassurance, whatever the products", () => {
 		renderCard({
 			unlisted: true,
-			readiness: { hasVisibleProduct: true, internal: false },
+			readiness: { hasVisibleProduct: true, internal: false, hidden: null },
 		});
 		expect(
 			screen.getByText(/buyers can still reach your direct link/i),
@@ -82,9 +94,61 @@ describe("MarketplaceCard — the switch line tells the truth", () => {
 
 describe("MarketplaceCard — internal stores", () => {
 	test("a Kedaipal/test store is told it's never listed, even with the switch on and products live", () => {
-		renderCard({ readiness: { hasVisibleProduct: true, internal: true } });
+		renderCard({
+			readiness: { hasVisibleProduct: true, internal: true, hidden: null },
+		});
 		expect(screen.getByText(/never listed on the marketplace/)).toBeTruthy();
 		expect(screen.queryByText(/Shown in the directory/)).toBeNull();
+	});
+});
+
+describe("MarketplaceCard — hidden by Kedaipal", () => {
+	test("says so, shows the admin's note, and links to us — never 'Shown in the directory'", () => {
+		renderCard({
+			readiness: {
+				hasVisibleProduct: true,
+				internal: false,
+				hidden: { note: "Add real product photos and we'll relist you." },
+			},
+		});
+		expect(screen.getByText(/Kedaipal has hidden your store/)).toBeTruthy();
+		expect(
+			screen.getByText(
+				"Note from Kedaipal: Add real product photos and we'll relist you.",
+			),
+		).toBeTruthy();
+		expect(screen.queryByText(/Shown in the directory/)).toBeNull();
+		const ask = screen
+			.getByRole("link", { name: /Ask us about it on WhatsApp/ })
+			.getAttribute("href");
+		expect(ask).toMatch(/^https:\/\/wa\.me\/60123456789\?text=/);
+		expect(decodeURIComponent(ask ?? "")).toContain("Kedai Mak Su");
+	});
+
+	test("outranks the seller's own opt-out — flipping the switch would not list it", () => {
+		renderCard({
+			unlisted: true,
+			readiness: { hasVisibleProduct: true, internal: false, hidden: {} },
+		});
+		expect(screen.getByText(/Kedaipal has hidden your store/)).toBeTruthy();
+		expect(
+			screen.queryByText(/buyers can still reach your direct link/i),
+		).toBeNull();
+		expect(screen.queryByText(/Note from Kedaipal/)).toBeNull();
+	});
+
+	test("the switch's toast says what the switch did, never that the store is shown", async () => {
+		const onSave = renderCard({
+			unlisted: true,
+			readiness: { hasVisibleProduct: true, internal: false, hidden: {} },
+		});
+		fireEvent.click(screen.getByRole("switch", { name: /List my store/ }));
+		expect(onSave).toHaveBeenCalledWith({ marketplaceListed: true });
+		await waitFor(() =>
+			expect(toast.success).toHaveBeenCalledWith(
+				"Marketplace listing turned on.",
+			),
+		);
 	});
 });
 
