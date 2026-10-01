@@ -4,11 +4,11 @@
 // way off it, and what the seller sees.
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { ensureCreditAccount } from "./credits";
-import { planChangeCarryoverDays, UNLIMITED } from "./lib/plans";
+import { isUnlimited, PLAN_CAPS, planChangeCarryoverDays, UNLIMITED } from "./lib/plans";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -854,5 +854,120 @@ describe("what the seller sees", () => {
 		});
 		const json = JSON.stringify(me?.subscription);
 		expect(json).not.toMatch(/HSL Food GM|Signed 6 Oct|user_ent_admin/);
+	});
+});
+
+describe("the contract's own allowances (seats + broadcasts)", () => {
+	it("omitted = the tier's defaults, and the row carries them", async () => {
+		const t = setup();
+		const s = await activeStore(t);
+		await asAdmin(t).mutation(api.enterprise.setContract, {
+			retailerId: s.retailerId,
+			...HSL,
+		});
+		const sub = await getSub(t, s.subId);
+		// Unlimited seats is what Enterprise has always meant; a contract that
+		// says nothing doesn't quietly take it away.
+		expect(isUnlimited(sub?.userCap ?? 0)).toBe(true);
+		expect(sub?.broadcastQuota).toBe(PLAN_CAPS.enterprise.broadcastQuota);
+		expect(sub?.enterprise?.teammates).toBeUndefined();
+		expect(sub?.enterprise?.broadcastQuota).toBeUndefined();
+	});
+
+	it("a negotiated number overrides the tier, owner included in the cap", async () => {
+		const t = setup();
+		const s = await activeStore(t);
+		await asAdmin(t).mutation(api.enterprise.setContract, {
+			retailerId: s.retailerId,
+			...HSL,
+			teammates: 12,
+			broadcastQuota: 500,
+		});
+		const sub = await getSub(t, s.subId);
+		// `userCap` is TOTAL people; the contract names teammates, so the owner
+		// is added back exactly once.
+		expect(sub?.userCap).toBe(13);
+		expect(sub?.broadcastQuota).toBe(500);
+		expect(sub?.enterprise?.teammates).toBe(12);
+	});
+
+	it("EDITING a live contract moves the caps too — not just entering it", async () => {
+		// The bug this pins: caps used to be written only on the way in, so an
+		// admin raising a contract's seat count changed a number the form
+		// showed and nothing enforced.
+		const t = setup();
+		const s = await activeStore(t);
+		await asAdmin(t).mutation(api.enterprise.setContract, {
+			retailerId: s.retailerId,
+			...HSL,
+			teammates: 2,
+		});
+		expect((await getSub(t, s.subId))?.userCap).toBe(3);
+		await asAdmin(t).mutation(api.enterprise.setContract, {
+			retailerId: s.retailerId,
+			...HSL,
+			teammates: 20,
+		});
+		expect((await getSub(t, s.subId))?.userCap).toBe(21);
+		// And clearing the number hands the tier default back.
+		await asAdmin(t).mutation(api.enterprise.setContract, {
+			retailerId: s.retailerId,
+			...HSL,
+		});
+		expect(isUnlimited((await getSub(t, s.subId))?.userCap ?? 0)).toBe(true);
+	});
+
+	it("refuses a seat count below the people already in the store", async () => {
+		const t = setup();
+		const s = await activeStore(t);
+		// Two people working today: one accepted, one invited (an invite holds
+		// a seat — promising a seat and then taking it back is the same harm).
+		await t.run(async (ctx) => {
+			for (const [email, status] of [
+				["a@example.com", "active"],
+				["b@example.com", "invited"],
+			] as const)
+				await ctx.db.insert("retailerMembers", {
+					retailerId: s.retailerId,
+					email,
+					status,
+					permissions: {},
+					invitedAt: Date.now(),
+					invitedBy: OWNER,
+				});
+		});
+		await expect(
+			asAdmin(t).mutation(api.enterprise.setContract, {
+				retailerId: s.retailerId,
+				...HSL,
+				teammates: 1,
+			}),
+		).rejects.toThrow(/already has 2 teammates/);
+		// At the count in use it saves — the refusal is a floor, not a ban.
+		await asAdmin(t).mutation(api.enterprise.setContract, {
+			retailerId: s.retailerId,
+			...HSL,
+			teammates: 2,
+		});
+		expect((await getSub(t, s.subId))?.userCap).toBe(3);
+	});
+
+	it("refuses a slipped zero", async () => {
+		const t = setup();
+		const s = await activeStore(t);
+		await expect(
+			asAdmin(t).mutation(api.enterprise.setContract, {
+				retailerId: s.retailerId,
+				...HSL,
+				teammates: 5000,
+			}),
+		).rejects.toThrow(/whole number from 0 to 500/);
+		await expect(
+			asAdmin(t).mutation(api.enterprise.setContract, {
+				retailerId: s.retailerId,
+				...HSL,
+				broadcastQuota: 2_000_000,
+			}),
+		).rejects.toThrow(/whole number from 0 to/);
 	});
 });

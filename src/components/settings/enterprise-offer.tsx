@@ -64,8 +64,14 @@ export function EnterpriseOffer({
 						</span>
 					</p>
 					<p className="mt-0.5 text-xs text-muted-foreground">
-						Built for {enterpriseFromOrdersLabel()}+ orders a month — credits
-						sized to your volume and unlimited teammates, priced per deal.
+						{/* "Unlimited teammates" until seats became a per-deal term
+						    (z8r3fdkp8h): this line is addressed to one seller about to
+						    negotiate, so it promises the SHAPE of the deal, not a number
+						    their contract might not carry. The public `/pricing` table
+						    still shows the tier's unlimited — that column describes the
+						    ceiling, and the specifics live in the contract. */}
+						Built for {enterpriseFromOrdersLabel()}+ orders a month — credits,
+						seats and support sized to your volume, priced per deal.
 					</p>
 				</div>
 			</div>

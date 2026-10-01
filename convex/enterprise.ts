@@ -14,11 +14,13 @@ import { ADMIN_CREDIT_LIMIT, writeGrantOverride } from "./credits";
 import { logAdminAction, requireAdmin } from "./lib/auth";
 import {
 	type EnterpriseEntry,
+	enterpriseContractCaps,
 	enterpriseContractProblem,
 	enterpriseTermChangeBlocker,
 	isMoveOffContractBill,
 } from "./lib/enterprise";
-import { capsForPlan, renewalCurrency } from "./lib/plans";
+import { renewalCurrency } from "./lib/plans";
+import { seatRows } from "./lib/seats";
 
 export const setContract = mutation({
 	args: {
@@ -28,6 +30,10 @@ export const setContract = mutation({
 		overageRateMinor: v.number(),
 		blockSize: v.number(),
 		billingCycle: v.union(v.literal("monthly"), v.literal("annual")),
+		// Omitted = the tier default (unlimited teammates, Pro's broadcast
+		// quota). See the schema + `enterpriseContractCaps`.
+		teammates: v.optional(v.number()),
+		broadcastQuota: v.optional(v.number()),
 		contactName: v.string(),
 		notes: v.optional(v.string()),
 	},
@@ -52,6 +58,10 @@ export const setContract = mutation({
 			throw new ConvexError(
 				"This store is on Off-Season Hold — resume it before putting it on a contract.",
 			);
+		// People the store is running on today: active members plus pending
+		// invites, because an invite holds a seat. The contract can't be saved
+		// below it — see `enterpriseContractProblem`.
+		const seats = await seatRows(ctx, args.retailerId);
 		const problem = enterpriseContractProblem(
 			{
 				baseFeeMinor: args.baseFeeMinor,
@@ -59,12 +69,15 @@ export const setContract = mutation({
 				overageRateMinor: args.overageRateMinor,
 				blockSize: args.blockSize,
 				billingCycle: args.billingCycle,
+				teammates: args.teammates,
+				broadcastQuota: args.broadcastQuota,
 				contactName: args.contactName,
 				notes: args.notes,
 			},
 			// The ledger's own grant ceiling — the contract can never hold an
 			// included-credits number the grant lever would refuse.
 			ADMIN_CREDIT_LIMIT,
+			seats.active.length + seats.invited.length,
 		);
 		if (problem) throw new ConvexError(problem);
 
@@ -103,7 +116,13 @@ export const setContract = mutation({
 				country: retailer.country,
 			});
 		const notes = args.notes?.trim();
-		const caps = capsForPlan("enterprise");
+		// The tier's caps with this deal's overrides applied — written on EVERY
+		// save, not only on entry: an admin raising a live contract's seat
+		// count has to take effect, and the row carries caps denormalized.
+		const caps = enterpriseContractCaps({
+			teammates: args.teammates,
+			broadcastQuota: args.broadcastQuota,
+		});
 		// What bought the period still running when the store came onto the
 		// contract, so its first Enterprise settle values those days at the
 		// price they were bought at (see the schema). Kept across edits until
@@ -124,24 +143,26 @@ export const setContract = mutation({
 				includedCredits: args.includedCredits,
 				overageRateMinor: args.overageRateMinor,
 				blockSize: args.blockSize,
+				...(args.teammates === undefined ? {} : { teammates: args.teammates }),
+				...(args.broadcastQuota === undefined
+					? {}
+					: { broadcastQuota: args.broadcastQuota }),
 				contactName: args.contactName.trim(),
 				...(notes ? { notes } : {}),
 				setBy: adminSubject,
 				setAt: now,
 				...(enteredFrom ? { enteredFrom } : {}),
 			},
-			// Entering: Enterprise's caps (unlimited seats), and any downgrade
-			// the store had scheduled is superseded — a renewal must bill the
-			// contract, not a stale Starter. Editing a live contract leaves a
-			// scheduled move to Pro alone (cancel it explicitly).
-			...(entering
-				? {
-						orderCap: caps.orderCap,
-						userCap: caps.userCap,
-						broadcastQuota: caps.broadcastQuota,
-						pendingPlanChange: undefined,
-					}
-				: {}),
+			// The contract's caps, every save — an edited allowance that didn't
+			// reach the row would be a number the admin typed and nothing
+			// enforced. Only ENTERING supersedes a scheduled downgrade (a
+			// renewal must bill the contract, not a stale Starter); editing a
+			// live contract leaves a scheduled move to Pro alone — that one is
+			// cancelled explicitly.
+			orderCap: caps.orderCap,
+			userCap: caps.userCap,
+			broadcastQuota: caps.broadcastQuota,
+			...(entering ? { pendingPlanChange: undefined } : {}),
 		});
 		// The contract's included credits ARE the store's grant — one field.
 		await writeGrantOverride(

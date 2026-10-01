@@ -45,7 +45,10 @@ import {
 	SheetTitle,
 } from "../ui/sheet";
 import { CreditLedgerBody, periodLabel } from "./credit-ledger-sheet";
-import { EnterpriseContractPage } from "./enterprise-contract-page";
+import {
+	EnterpriseContractPage,
+	type EnterpriseContractTemplate,
+} from "./enterprise-contract-page";
 import {
 	ContactLine,
 	CreditsText,
@@ -57,12 +60,15 @@ import { SellerManageMenu, useOpenStore } from "./seller-manage-menu";
 
 export function SellerSheet({
 	seller,
+	contractTemplates,
 	open,
 	onOpenChange,
 	purgeEnabled,
 	now,
 }: {
 	seller: AdminSellerRow | null;
+	/** Other stores' Enterprise contracts, to start a new deal from. */
+	contractTemplates: EnterpriseContractTemplate[];
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	purgeEnabled: boolean;
@@ -74,6 +80,7 @@ export function SellerSheet({
 				{seller ? (
 					<SellerSheetBody
 						seller={seller}
+						contractTemplates={contractTemplates}
 						purgeEnabled={purgeEnabled}
 						now={now}
 					/>
@@ -85,10 +92,12 @@ export function SellerSheet({
 
 function SellerSheetBody({
 	seller,
+	contractTemplates,
 	purgeEnabled,
 	now,
 }: {
 	seller: AdminSellerRow;
+	contractTemplates: EnterpriseContractTemplate[];
 	purgeEnabled: boolean;
 	now: number;
 }) {
@@ -134,7 +143,11 @@ function SellerSheetBody({
 		return <CreditLedgerBody seller={seller} onBack={back("ledger")} />;
 	if (page === "enterprise")
 		return (
-			<EnterpriseContractPage seller={seller} onBack={back("enterprise")} />
+			<EnterpriseContractPage
+				seller={seller}
+				templates={contractTemplates}
+				onBack={back("enterprise")}
+			/>
 		);
 
 	const contract = seller.enterprise;

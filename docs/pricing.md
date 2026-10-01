@@ -312,7 +312,7 @@ Presentation rules:
   author of that link on every surface; in-app it also names the store's
   slug). `enterprise_talk_clicked` records the tap with its `surface`
   ([`analytics.md`](./analytics.md)). What it sells TODAY is volume (credits
-  sized to the deal) and team (unlimited seats); outlets and the rest keep
+  sized to the deal) and team (seats sized to the deal); outlets and the rest keep
   their **Coming soon** badges, and the teaser marks them "Soon" on the card.
 - **Tier CTAs are plan-aware for signed-in sellers** (`resolveTierCta` in
   `src/lib/pricing-cta.ts`): signed-out → trial link. For a signed-in seller,
@@ -430,6 +430,8 @@ collected by hand, month 2 — 6 Nov — issued by the system).
 | `includedCredits` | The store's monthly grant (up to `ADMIN_CREDIT_LIMIT`, 100,000) |
 | `overageRateMinor` | Per credit, minor units; zero is allowed (a deal can include its blocks) |
 | `blockSize` | Credits per overage block (default `ENTERPRISE_BLOCK_SIZE_DEFAULT`, 5,000) |
+| `teammates` | People besides the owner. **Absent = the tier's unlimited.** The seller's own vocabulary ("You + N teammates"), so an admin types what the store reads; `userCap` adds the owner back |
+| `broadcastQuota` | Broadcasts a month. **Absent = the tier default.** Stored and shown to the admin today; broadcasts themselves are unbuilt, so the seller's billing card doesn't name it yet — a quota for a feature that doesn't exist is a promise, not an allowance |
 | `contactName`, `notes` | Admin-internal — never on a seller payload |
 | `setBy`, `setAt` | Who last saved it (the form or the grant lever), and when |
 | `enteredFrom` | The listed plan and cycle the store was on when the contract was attached — what bought the period still running. Cleared by the first plan bill that settles |
@@ -439,13 +441,33 @@ meet is one pure function, `enterpriseContractProblem` (`convex/lib/enterprise.t
 which the admin form shows beside its disabled button and `enterprise.setContract`
 throws — one author for both.
 
+**A contract OVERRIDES the tier table, it never replaces it.** The allowance
+fields are optional, and `enterpriseContractCaps` resolves
+`contract value ?? PLAN_CAPS.enterprise` in one place — the mutation writes the
+result onto the row (caps are denormalized), the admin form previews the same
+answer, and a lever nobody negotiated still has exactly one default in exactly
+one place. A future per-deal lever is one optional field plus one line there.
+Note `orderCap` is deliberately NOT per-deal: an Enterprise store's order
+allowance IS its `includedCredits`, metered by the ledger, and a second copy of
+that number on the row is what T6 refused to create.
+
+**Seats can be raised freely and lowered only to the floor.** The form and the
+server both refuse a teammate count below the people the store is running on
+today — active members plus pending invites, because an invite holds a seat.
+`enforceSeatCap` still runs in exactly one place, `settleInvoicePaid`, where a
+plan actually flips: a contract EDIT is not a drop trigger, because an admin
+retyping a number must never cut off a paying customer's staff mid-month.
+
 ### Setting it — Admin → Billing → seller sheet → Enterprise
 
 `enterprise.setContract` (admin-only, audited as `enterprise.setContract`) in
 one mutation:
 
 - flips `plan` to `enterprise` and sets the term;
-- on entering, writes Enterprise's caps (unlimited seats), **supersedes any
+- writes the contract's caps on **every** save, not only on entry — an edited
+  allowance that didn't reach the row would be a number the admin typed and
+  nothing enforced;
+- on entering, **supersedes any
   scheduled downgrade** — a renewal must bill the contract, not a stale Starter
   — and stamps **`enteredFrom`**: the plan flips here, before any payment, so a
   store that comes on mid-period still has Pro days running, and its first
@@ -554,7 +576,7 @@ RM888 for it. With nothing to call off, it says so instead of a false success.
   the annual card and the Off-Season Hold card don't render.
 - **Settings → Billing, everyone else (except Founding Members):** an
   Enterprise row closes the plan picker and the plan-change card — "Built for
-  1,500+ orders a month — credits sized to your volume and unlimited teammates,
+  1,500+ orders a month — credits, seats and support sized to your volume,
   priced per deal", with "Talk to Arif". It sits **after** the pick →
   consequence → Subscribe run, never inside it. For a viewer who can't change
   billing (an admin acting-as, a teammate with billing READ) every Enterprise
@@ -580,8 +602,10 @@ RM888 for it. With nothing to call off, it says so instead of a false success.
   `PlanFeatures` is, by its own rule, only for features that are LIVE —
   coming-soon rows don't belong there until they ship, and a flag with no
   reader is dead code. Enterprise's entitlements today are Pro's features plus
-  unlimited seats (`PLAN_CAPS.enterprise.userCap`). Broadcast quota is Pro's
-  until broadcasts ship, when the contract decides it.
+  the tier's unlimited seats (`PLAN_CAPS.enterprise.userCap`) — **unless the
+  contract names a number**, which overrides it (`enterpriseContractCaps`).
+  Broadcast quota works the same way: the tier's until a deal says otherwise,
+  and nothing enforces it until broadcasts ship.
 - **`includedCredits` is capped at 100,000** — the credit ledger's own grant
   ceiling (`ADMIN_CREDIT_LIMIT`), so the contract can never hold a number the
   grant lever would refuse.

@@ -21,7 +21,10 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 // The page renders the Sheet's header parts, which need their Radix dialog
 // context — render it inside an open Sheet like the real drawer does.
 import { Sheet, SheetContent } from "../ui/sheet";
-import { EnterpriseContractPage } from "./enterprise-contract-page";
+import {
+	EnterpriseContractPage,
+	type EnterpriseContractTemplate,
+} from "./enterprise-contract-page";
 
 function seller(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 	return {
@@ -46,14 +49,43 @@ function seller(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 	};
 }
 
-function renderPage(row: AdminSellerRow) {
+function renderPage(
+	row: AdminSellerRow,
+	templates: EnterpriseContractTemplate[] = [],
+) {
 	return render(
 		<Sheet open>
 			<SheetContent>
-				<EnterpriseContractPage seller={row} onBack={() => {}} />
+				<EnterpriseContractPage
+					seller={row}
+					templates={templates}
+					onBack={() => {}}
+				/>
 			</SheetContent>
 		</Sheet>,
 	);
+}
+
+/** Another store's live deal, offered as a starting point. */
+function template(
+	overrides: Partial<EnterpriseContractTemplate["contract"]> = {},
+): EnterpriseContractTemplate {
+	return {
+		retailerId: "r_other",
+		storeName: "Lekor Mr Ganu",
+		contract: {
+			baseFeeMinor: 120_000,
+			currency: "MYR",
+			includedCredits: 2000,
+			overageRateMinor: 50,
+			blockSize: 5000,
+			teammates: 8,
+			contactName: "Someone else entirely",
+			notes: "Signed 12 Sep",
+			setAt: 0,
+			...overrides,
+		},
+	};
 }
 
 /** Fill the four numbers and the contact with HSL's deal. */
@@ -199,7 +231,7 @@ describe("EnterpriseContractPage — saving", () => {
 		fillHsl();
 		expect(
 			screen.getByText(
-				/Bills RM\s*888\.00 a month · 1,500 credits a month · blocks of 5,000 at RM\s*0\.60 = RM\s*3,000\.00/,
+				/Bills RM\s*888\.00 a month · 1,500 credits a month · unlimited teammates · 100 broadcasts · blocks of 5,000 at RM\s*0\.60 = RM\s*3,000\.00/,
 			),
 		).toBeTruthy();
 		fireEvent.click(saveButton());
@@ -215,5 +247,106 @@ describe("EnterpriseContractPage — saving", () => {
 				contactName: "HSL Food GM",
 			}),
 		);
+	});
+});
+
+describe("EnterpriseContractPage — the per-deal allowances", () => {
+	it("leaves teammates and broadcasts OUT of the payload when blank — the tier decides", async () => {
+		renderPage(seller());
+		fillHsl();
+		fireEvent.click(saveButton());
+		await vi.waitFor(() => expect(state.setContract).toHaveBeenCalledTimes(1));
+		const sent = (state.setContract as ReturnType<typeof vi.fn>).mock
+			.calls[0][0] as Record<string, unknown>;
+		expect("teammates" in sent ? sent.teammates : undefined).toBeUndefined();
+		expect(
+			"broadcastQuota" in sent ? sent.broadcastQuota : undefined,
+		).toBeUndefined();
+		// And the form says so rather than leaving the blank to be guessed at.
+		expect(screen.getByText(/Bills .*unlimited teammates/)).toBeTruthy();
+	});
+
+	it("sends what was typed, and previews the resolved allowances", async () => {
+		renderPage(seller());
+		fillHsl();
+		fireEvent.change(screen.getByLabelText("Teammates"), {
+			target: { value: "12" },
+		});
+		fireEvent.change(screen.getByLabelText("Broadcasts a month"), {
+			target: { value: "500" },
+		});
+		// The preview names the allowance, not just the money — the admin reads
+		// back what the store will actually get.
+		expect(
+			screen.getByText(/Bills .*12 teammates · 500 broadcasts/),
+		).toBeTruthy();
+		fireEvent.click(saveButton());
+		await vi.waitFor(() => expect(state.setContract).toHaveBeenCalledTimes(1));
+		expect(
+			(state.setContract as ReturnType<typeof vi.fn>).mock.calls[0][0],
+		).toMatchObject({ teammates: 12, broadcastQuota: 500 });
+	});
+
+	it("refuses a seat count below the people already working in the store", () => {
+		// Owner + 2 active + 1 invited = 3 teammates in use (an invite holds a
+		// seat). Saving 2 would cut someone off mid-month, so the button is
+		// disabled with the reason instead.
+		renderPage(
+			seller({ seats: { active: 3, cap: 3, capUnlimited: false, invited: 1 } }),
+		);
+		fillHsl();
+		fireEvent.change(screen.getByLabelText("Teammates"), {
+			target: { value: "2" },
+		});
+		expect(saveButton().disabled).toBe(true);
+		expect(screen.getByText(/already has 3 teammates/)).toBeTruthy();
+		// At the count in use it saves.
+		fireEvent.change(screen.getByLabelText("Teammates"), {
+			target: { value: "3" },
+		});
+		expect(saveButton().disabled).toBe(false);
+	});
+});
+
+describe("EnterpriseContractPage — starting from another deal", () => {
+	it("fills the numbers and the allowances, never the other buyer's contact", () => {
+		renderPage(seller(), [template()]);
+		fireEvent.change(screen.getByLabelText("Start from another contract"), {
+			target: { value: "r_other" },
+		});
+		expect(
+			(screen.getByLabelText(/Monthly fee/) as HTMLInputElement).value,
+		).toBe("1200");
+		expect(
+			(screen.getByLabelText("Credits included a month") as HTMLInputElement)
+				.value,
+		).toBe("2000");
+		expect((screen.getByLabelText("Teammates") as HTMLInputElement).value).toBe(
+			"8",
+		);
+		// The contact is this deal's, always — carrying it across is how the
+		// wrong name ends up on a contract.
+		expect((screen.getByLabelText("Contact") as HTMLInputElement).value).toBe(
+			"",
+		);
+	});
+
+	it("is never offered on a contract that already exists", () => {
+		renderPage(
+			seller({
+				plan: "enterprise",
+				enterprise: {
+					baseFeeMinor: 88_800,
+					currency: "MYR",
+					includedCredits: 1500,
+					overageRateMinor: 60,
+					blockSize: 5000,
+					contactName: "HSL Food GM",
+					setAt: 0,
+				},
+			}),
+			[template()],
+		);
+		expect(screen.queryByLabelText("Start from another contract")).toBeNull();
 	});
 });

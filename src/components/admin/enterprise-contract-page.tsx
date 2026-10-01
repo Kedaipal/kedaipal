@@ -14,6 +14,7 @@ import type { AdminSellerRow } from "../../../convex/admin";
 import {
 	ENTERPRISE_BLOCK_SIZE_DEFAULT,
 	enterpriseBlockPrice,
+	enterpriseContractCaps,
 	enterpriseContractProblem,
 	enterpriseTermChangeBlocker,
 } from "../../../convex/lib/enterprise";
@@ -21,6 +22,8 @@ import {
 	type BillingCurrency,
 	type BillingCycle,
 	enterprisePrice,
+	isUnlimited,
+	PLAN_CAPS,
 } from "../../../convex/lib/plans";
 import {
 	convexErrorMessage,
@@ -52,11 +55,31 @@ function toWhole(raw: string): number {
 const majorOf = (minor: number) =>
 	minor % 100 === 0 ? String(minor / 100) : (minor / 100).toFixed(2);
 
+/** Blank means "the tier decides" — `undefined`, never 0. */
+const optionalWhole = (raw: string): number | undefined =>
+	raw.trim() === "" ? undefined : toWhole(raw);
+
+/**
+ * Another store's live contract, offered as a starting point. Every enterprise
+ * deal is negotiated, so there is nothing stable enough to be a saved template
+ * — but the LAST deal is the best first draft of the next one, and it already
+ * exists. The picker only fills the form; nothing is saved until the button.
+ */
+export type EnterpriseContractTemplate = {
+	retailerId: string;
+	storeName: string;
+	contract: NonNullable<AdminSellerRow["enterprise"]>;
+};
+
 export function EnterpriseContractPage({
 	seller,
+	templates,
 	onBack,
 }: {
 	seller: AdminSellerRow;
+	/** Other stores' contracts, to start a new deal from. Comes from the
+	 * sellers list the drawer was opened out of — no extra query. */
+	templates: EnterpriseContractTemplate[];
 	onBack: () => void;
 }) {
 	const setContract = useMutation(api.enterprise.setContract);
@@ -83,9 +106,38 @@ export function EnterpriseContractPage({
 	const [cycle, setCycle] = useState<BillingCycle>(
 		seller.billingCycle ?? "monthly",
 	);
+	const [teammates, setTeammates] = useState(
+		existing?.teammates === undefined ? "" : String(existing.teammates),
+	);
+	const [broadcasts, setBroadcasts] = useState(
+		existing?.broadcastQuota === undefined
+			? ""
+			: String(existing.broadcastQuota),
+	);
 	const [contact, setContact] = useState(existing?.contactName ?? "");
 	const [notes, setNotes] = useState(existing?.notes ?? "");
 	const [saving, setSaving] = useState(false);
+	// Which contract the form was started from, so the picker shows its own
+	// effect instead of snapping back to the placeholder.
+	const [startedFrom, setStartedFrom] = useState("");
+
+	/** Fill every negotiated number from another deal — the fee, the credits,
+	 * the overage, the allowances and the term. NOT the contact or the notes:
+	 * those belong to the other buyer, and carrying them across is how the
+	 * wrong name ends up on a contract. */
+	const startFrom = (retailerId: string) => {
+		setStartedFrom(retailerId);
+		const from = templates.find((t) => t.retailerId === retailerId)?.contract;
+		if (!from) return;
+		setFee(majorOf(from.baseFeeMinor));
+		setIncluded(String(from.includedCredits));
+		setRate(majorOf(from.overageRateMinor));
+		setBlock(String(from.blockSize));
+		setTeammates(from.teammates === undefined ? "" : String(from.teammates));
+		setBroadcasts(
+			from.broadcastQuota === undefined ? "" : String(from.broadcastQuota),
+		);
+	};
 
 	const backRef = useRef<HTMLButtonElement>(null);
 	useEffect(() => {
@@ -101,13 +153,20 @@ export function EnterpriseContractPage({
 		overageRateMinor: toMinor(rate),
 		blockSize: toWhole(block),
 		billingCycle: cycle,
+		teammates: optionalWhole(teammates),
+		broadcastQuota: optionalWhole(broadcasts),
 		contactName: contact,
 		notes: notes.trim() || undefined,
 	};
+	// Teammates already working in this store: people besides the owner, plus
+	// pending invites (an invite holds a seat). The contract can't be saved
+	// under it — the server refuses with the same sentence.
+	const teammatesInUse =
+		Math.max(0, seller.seats.active - 1) + seller.seats.invited;
 	const blankFields = !fee.trim() || !included.trim() || !rate.trim();
 	const problem = blankFields
 		? "Fill in the fee, the included credits and the overage rate."
-		: enterpriseContractProblem(input, MAX_INCLUDED);
+		: enterpriseContractProblem(input, MAX_INCLUDED, teammatesInUse);
 	const founding = seller.isFoundingMember || seller.foundingIntent;
 	// Every refusal `setContract` would throw, said here first.
 	const refusal = seller.comped
@@ -153,9 +212,12 @@ export function EnterpriseContractPage({
 		}
 	}
 
+	// What the typed numbers actually resolve to — the same helper the server
+	// writes onto the row, so the preview can't flatter the save.
+	const caps = enterpriseContractCaps(input);
 	const preview = problem
 		? null
-		: `Bills ${formatPrice(enterprisePrice({ baseFeeMinor: input.baseFeeMinor, currency }, cycle), currency)} a ${cycle === "annual" ? "year" : "month"} · ${input.includedCredits.toLocaleString("en")} credits a month · blocks of ${input.blockSize.toLocaleString("en")} at ${formatPrice(input.overageRateMinor, currency)} = ${formatPrice(enterpriseBlockPrice(input), currency)}`;
+		: `Bills ${formatPrice(enterprisePrice({ baseFeeMinor: input.baseFeeMinor, currency }, cycle), currency)} a ${cycle === "annual" ? "year" : "month"} · ${input.includedCredits.toLocaleString("en")} credits a month · ${isUnlimited(caps.userCap) ? "unlimited teammates" : `${caps.userCap - 1} ${caps.userCap === 2 ? "teammate" : "teammates"}`} · ${caps.broadcastQuota.toLocaleString("en")} broadcasts · blocks of ${input.blockSize.toLocaleString("en")} at ${formatPrice(input.overageRateMinor, currency)} = ${formatPrice(enterpriseBlockPrice(input), currency)}`;
 
 	return (
 		<>
@@ -179,45 +241,111 @@ export function EnterpriseContractPage({
 			</SheetHeader>
 
 			<div className="flex flex-col gap-5 p-5">
-				<div className="grid gap-4 sm:grid-cols-2">
-					<Field
-						id="ent-fee"
-						label={`Monthly fee (${currencySymbol(currency)})`}
-						value={fee}
-						onChange={setFee}
-						placeholder="e.g. 888"
-						inputMode="decimal"
-						hint={
-							existing
-								? "The contract's currency is fixed."
-								: "In the store's billing currency."
-						}
-					/>
-					<Field
-						id="ent-included"
-						label="Credits included a month"
-						value={included}
-						onChange={setIncluded}
-						placeholder="e.g. 1500"
-						inputMode="numeric"
-						hint="Becomes the store's monthly grant."
-					/>
-					<Field
-						id="ent-rate"
-						label={`Overage per credit (${currencySymbol(currency)})`}
-						value={rate}
-						onChange={setRate}
-						placeholder="e.g. 0.60"
-						inputMode="decimal"
-					/>
-					<Field
-						id="ent-block"
-						label="Block size (credits)"
-						value={block}
-						onChange={setBlock}
-						placeholder={String(ENTERPRISE_BLOCK_SIZE_DEFAULT)}
-						inputMode="numeric"
-					/>
+				{/* Every deal is negotiated, so there is no template library worth
+				    keeping — but the last deal is the best first draft of the next
+				    one. Offered only on a NEW contract: on a live one it would
+				    overwrite numbers someone is editing. */}
+				{!existing && templates.length > 0 ? (
+					<div className="flex flex-col gap-1.5">
+						<label htmlFor="ent-template" className="text-sm font-medium">
+							Start from another contract
+						</label>
+						<select
+							id="ent-template"
+							value={startedFrom}
+							onChange={(e) => startFrom(e.target.value)}
+							className="min-h-11 rounded-xl border border-input bg-background px-3 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+						>
+							<option value="">Start from scratch</option>
+							{templates.map((t) => (
+								<option key={t.retailerId} value={t.retailerId}>
+									{t.storeName} —{" "}
+									{formatPrice(t.contract.baseFeeMinor, t.contract.currency)}/mo
+									· {t.contract.includedCredits.toLocaleString("en")} credits
+								</option>
+							))}
+						</select>
+						<p className="text-xs text-muted-foreground">
+							Fills the numbers only — the contact and notes stay this deal's.
+							Nothing is saved until you press the button.
+						</p>
+					</div>
+				) : null}
+
+				<div className="flex flex-col gap-2">
+					<span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+						What they pay
+					</span>
+					<div className="grid gap-4 sm:grid-cols-2">
+						<Field
+							id="ent-fee"
+							label={`Monthly fee (${currencySymbol(currency)})`}
+							value={fee}
+							onChange={setFee}
+							placeholder="e.g. 888"
+							inputMode="decimal"
+							hint={
+								existing
+									? "The contract's currency is fixed."
+									: "In the store's billing currency."
+							}
+						/>
+						<Field
+							id="ent-rate"
+							label={`Overage per credit (${currencySymbol(currency)})`}
+							value={rate}
+							onChange={setRate}
+							placeholder="e.g. 0.60"
+							inputMode="decimal"
+						/>
+						<Field
+							id="ent-block"
+							label="Block size (credits)"
+							value={block}
+							onChange={setBlock}
+							placeholder={String(ENTERPRISE_BLOCK_SIZE_DEFAULT)}
+							inputMode="numeric"
+						/>
+					</div>
+				</div>
+
+				<div className="flex flex-col gap-2">
+					<span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+						What they get each month
+					</span>
+					<div className="grid gap-4 sm:grid-cols-2">
+						<Field
+							id="ent-included"
+							label="Credits included a month"
+							value={included}
+							onChange={setIncluded}
+							placeholder="e.g. 1500"
+							inputMode="numeric"
+							hint="Becomes the store's monthly grant."
+						/>
+						<Field
+							id="ent-teammates"
+							label="Teammates"
+							value={teammates}
+							onChange={setTeammates}
+							placeholder="Unlimited"
+							inputMode="numeric"
+							hint={
+								teammatesInUse > 0
+									? `Besides the owner. Blank = unlimited. Using ${teammatesInUse} now.`
+									: "Besides the owner. Blank = unlimited."
+							}
+						/>
+						<Field
+							id="ent-broadcasts"
+							label="Broadcasts a month"
+							value={broadcasts}
+							onChange={setBroadcasts}
+							placeholder={String(PLAN_CAPS.enterprise.broadcastQuota)}
+							inputMode="numeric"
+							hint={`Blank = the tier default (${PLAN_CAPS.enterprise.broadcastQuota}). Broadcasts aren't built yet.`}
+						/>
+					</div>
 				</div>
 
 				<div className="flex flex-col gap-1.5">
@@ -279,8 +407,11 @@ export function EnterpriseContractPage({
 					<p className="text-xs text-muted-foreground">
 						Saving moves the store to Enterprise now: its next invoice bills
 						this contract, its monthly credits become the included number (a
-						higher number lands this month), and its seats become unlimited. The
-						way off a contract is a scheduled move to Pro.
+						higher number lands this month), and it gets{" "}
+						{isUnlimited(caps.userCap)
+							? "unlimited teammates"
+							: `${caps.userCap - 1} ${caps.userCap === 2 ? "teammate" : "teammates"}`}
+						. The way off a contract is a scheduled move to Pro.
 					</p>
 				) : null}
 

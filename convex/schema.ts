@@ -2778,6 +2778,18 @@ export default defineSchema({
 				// `enterprise_block` adjustment of bought credits.
 				overageRateMinor: v.number(),
 				blockSize: v.number(),
+				// Per-deal entitlement overrides. ABSENT = the tier default in
+				// `PLAN_CAPS.enterprise` (unlimited teammates, Pro's broadcast
+				// quota) — the contract overrides the table, it never replaces
+				// it, so a lever nobody negotiated keeps one answer in one
+				// place. Resolved by `enterpriseContractCaps` and written onto
+				// the row's denormalized caps on every save.
+				// `teammates` is people BESIDES the owner, the number the
+				// seller's own team page shows ("You + N teammates"), so what
+				// an admin types is what the store reads; `userCap` adds the
+				// owner back.
+				teammates: v.optional(v.number()),
+				broadcastQuota: v.optional(v.number()),
 				contactName: v.string(),
 				notes: v.optional(v.string()),
 				setBy: v.string(),

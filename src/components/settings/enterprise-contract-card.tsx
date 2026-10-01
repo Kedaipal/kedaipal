@@ -1,6 +1,6 @@
 import { Building2, CalendarClock, MessageCircle } from "lucide-react";
 import { enterpriseBlockPrice } from "../../../convex/lib/enterprise";
-import { enterprisePrice } from "../../../convex/lib/plans";
+import { enterprisePrice, isUnlimited } from "../../../convex/lib/plans";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../../lib/contact";
 import { formatPrice, formatShortDate } from "../../lib/format";
@@ -33,6 +33,13 @@ export function EnterpriseContractCard({
 	const credits = contract.includedCredits.toLocaleString("en");
 	const block = contract.blockSize.toLocaleString("en");
 	const moving = sub.pendingPlanChange;
+	const userCap = sub.caps?.userCap;
+	const seatLine =
+		userCap === undefined
+			? null
+			: isUnlimited(userCap)
+				? "Unlimited teammates"
+				: `${userCap - 1} ${userCap === 2 ? "teammate" : "teammates"} besides you`;
 
 	return (
 		<section className="flex flex-col gap-4 rounded-2xl border border-input bg-background p-5 lg:p-6">
@@ -64,6 +71,18 @@ export function EnterpriseContractCard({
 				</dd>
 				<dt className="text-muted-foreground">Included</dt>
 				<dd className="tabular-nums">{credits} credits a month</dd>
+				{/* The RESOLVED cap, not a second copy of the contract field — this
+				    is the number the store is actually held to, and a contract
+				    that grants seats the seller can't see is a term they'd only
+				    discover by hitting it. Broadcasts stay off this card until
+				    broadcasts ship: a quota for a feature that doesn't exist is a
+				    promise, not an allowance. */}
+				{seatLine ? (
+					<>
+						<dt className="text-muted-foreground">Team</dt>
+						<dd className="tabular-nums">{seatLine}</dd>
+					</>
+				) : null}
 				<dt className="text-muted-foreground">More credits</dt>
 				<dd className="tabular-nums">
 					Blocks of {block} at{" "}

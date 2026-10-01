@@ -164,6 +164,14 @@ export function SellerDirectory({
 	const counts = countSellerBuckets(all);
 	const visible = sortSellers(filterSellers(all, filter, q), sort, now);
 	const detailSeller = all.find((s) => s._id === detailId) ?? null;
+	// Live contracts the open store could be modelled on — built from the list
+	// already on screen, so the "start from" picker costs no second query. The
+	// store being edited is never its own template.
+	const contractTemplates = all.flatMap((s) =>
+		s.enterprise && s._id !== detailId
+			? [{ retailerId: s._id, storeName: s.storeName, contract: s.enterprise }]
+			: [],
+	);
 	const filtered = filter !== "all" || q.trim().length > 0;
 
 	function setFilter(next: SellerFilter) {
@@ -396,6 +404,7 @@ export function SellerDirectory({
 
 			<SellerSheet
 				seller={detailSeller}
+				contractTemplates={contractTemplates}
 				open={detailId !== null}
 				onOpenChange={(open) => {
 					if (!open) setDetailId(null);

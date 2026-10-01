@@ -2236,6 +2236,36 @@ describe("BillingTab — Enterprise (Credits T6)", () => {
 		expect(screen.queryByRole("link", { name: /Talk to Arif/ })).toBeNull();
 	});
 
+	it("names the team the contract grants — unlimited, or the number agreed", () => {
+		// A contract term the seller can only discover by hitting it is not a
+		// term, it's a trap. The card reads the RESOLVED cap, which is what the
+		// store is actually held to — not a second copy of the contract field.
+		mockQueries({ isAdmin: false, gateway: gatewayIn() });
+		render(<BillingTab retailer={onContract()} />);
+		expect(
+			screen.getByText("Your Enterprise contract").closest("section")
+				?.textContent,
+		).toContain("Unlimited teammates");
+
+		cleanup();
+		mockQueries({ isAdmin: false, gateway: gatewayIn() });
+		render(
+			<BillingTab
+				retailer={onContract({
+					caps: { orderCap: 1_000_000_000, userCap: 13, broadcastQuota: 500 },
+				})}
+			/>,
+		);
+		const text =
+			screen.getByText("Your Enterprise contract").closest("section")
+				?.textContent ?? "";
+		// 13 total people = the owner plus 12 — the seller's own vocabulary.
+		expect(text).toContain("12 teammates besides you");
+		// Broadcasts stay off this card until broadcasts ship: a quota for a
+		// feature that doesn't exist is a promise, not an allowance.
+		expect(text).not.toContain("broadcast");
+	});
+
 	it("a yearly contract states the year and what it is a month", () => {
 		mockQueries({ isAdmin: false, gateway: gatewayIn() });
 		render(<BillingTab retailer={onContract({ billingCycle: "annual" })} />);
