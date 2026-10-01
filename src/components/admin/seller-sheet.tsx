@@ -9,14 +9,15 @@ import type { ReactNode } from "react";
 import type { AdminSellerRow } from "../../../convex/admin";
 import { COMP_KIND_LABEL } from "../../../convex/lib/comp";
 import { COUNTRY_LABELS } from "../../../convex/lib/country";
+import { sponsorshipActive } from "../../../convex/lib/marketplaceListing";
 import {
 	describeDays,
 	sellerBucket,
 	sellerExpiry,
 	sellerPlanLabel,
-	sellerSeatsLabel,
 	sellerRail,
 	sellerReason,
+	sellerSeatsLabel,
 	sellerSummaryText,
 } from "../../lib/admin-seller-view";
 import { formatPrice, formatShortDate } from "../../lib/format";
@@ -34,6 +35,7 @@ import {
 	ContactLine,
 	ExpiryText,
 	FoundingPill,
+	SponsoredPill,
 	StatusPill,
 } from "./seller-cells";
 import { SellerManageMenu, useOpenStore } from "./seller-manage-menu";
@@ -101,6 +103,7 @@ function SellerSheetBody({
 					</div>
 					<SheetDescription className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
 						<StatusPill bucket={bucket} />
+						<SponsoredPill seller={seller} now={now} />
 						<span className="truncate">
 							{[sellerPlanLabel(seller), rail]
 								.filter((p) => p && p !== "—")
@@ -169,6 +172,26 @@ function SellerSheetBody({
 								className="h-11 w-11 justify-center rounded-lg px-0"
 								labelClassName="sr-only"
 							/>
+						</div>
+					</Row>
+					{/* Marketplace presence (z8r3fdkmyp): the seller's own opt-out and
+					    the admin-sold sponsorship, both read before selling one. */}
+					<Row label="Marketplace">
+						{/* Two short lines, not one long one: the row truncates, and
+						    the sponsorship date is the fact an admin opens this for. */}
+						<div className="flex min-w-0 flex-col">
+							<Plain muted={seller.marketplace.unlistedAt !== undefined}>
+								{seller.marketplace.unlistedAt !== undefined
+									? `Opted out since ${formatShortDate(seller.marketplace.unlistedAt)}`
+									: "Listed (the default)"}
+							</Plain>
+							{seller.marketplace.sponsoredUntil !== undefined &&
+							sponsorshipActive(seller.marketplace.sponsoredUntil, now) ? (
+								<Plain muted>
+									Sponsored through{" "}
+									{formatShortDate(seller.marketplace.sponsoredUntil - 1)}
+								</Plain>
+							) : null}
 						</div>
 					</Row>
 					<Row label="Country · currency">

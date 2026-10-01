@@ -264,8 +264,8 @@ describe("updateSettings — storeArea", () => {
 	});
 });
 
-describe("admin.setMarketplaceSponsorship", () => {
-	test("admin-only, future-only, audited, clearable", async () => {
+describe("admin sponsorship — set / end", () => {
+	test("admin-only, future-only, visible on the directory row, audited by function name", async () => {
 		const t = setup();
 		const { retailerId } = await seedListableStore(
 			t,
@@ -282,6 +282,9 @@ describe("admin.setMarketplaceSponsorship", () => {
 				until: future,
 			}),
 		).rejects.toThrow();
+		await expect(
+			asSeller.mutation(api.admin.endMarketplaceSponsorship, { retailerId }),
+		).rejects.toThrow();
 
 		await expect(
 			asAdmin.mutation(api.admin.setMarketplaceSponsorship, {
@@ -294,29 +297,29 @@ describe("admin.setMarketplaceSponsorship", () => {
 			retailerId,
 			until: future,
 		});
-		expect(
-			await t.run(
-				async (ctx) => (await ctx.db.get(retailerId))?.marketplaceSponsoredUntil,
-			),
-		).toBe(future);
+		// The admin directory row carries the window — the pill and the
+		// Manage item read it from here.
+		const row = (await asAdmin.query(api.admin.listSellersForAdmin, {})).find(
+			(r) => r._id === retailerId,
+		);
+		expect(row?.marketplace.sponsoredUntil).toBe(future);
 
-		await asAdmin.mutation(api.admin.setMarketplaceSponsorship, {
-			retailerId,
-			until: null,
-		});
+		await asAdmin.mutation(api.admin.endMarketplaceSponsorship, { retailerId });
 		expect(
 			(await t.run(
 				async (ctx) =>
 					(await ctx.db.get(retailerId))?.marketplaceSponsoredUntil,
 			)) ?? null,
 		).toBeNull();
+		// Ending a window that isn't running is a no-op — no second audit row.
+		await asAdmin.mutation(api.admin.endMarketplaceSponsorship, { retailerId });
 
 		const audit = await t.run(async (ctx) =>
 			ctx.db.query("adminAuditLog").collect(),
 		);
-		expect(audit.map((r) => r.action)).toEqual([
-			"marketplace.sponsor.set",
-			"marketplace.sponsor.clear",
+		expect(audit.map((r) => [r.action, r.targetId])).toEqual([
+			["admin.setMarketplaceSponsorship", retailerId],
+			["admin.endMarketplaceSponsorship", retailerId],
 		]);
 	});
 });

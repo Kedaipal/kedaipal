@@ -29,6 +29,8 @@ import { SponsorDialog } from "./sponsor-dialog";
 
 const setSponsorshipSpy = () =>
 	mutationSpies.get(getFunctionName(api.admin.setMarketplaceSponsorship));
+const endSponsorshipSpy = () =>
+	mutationSpies.get(getFunctionName(api.admin.endMarketplaceSponsorship));
 
 beforeEach(() => {
 	mutationSpies.clear();
@@ -74,6 +76,10 @@ describe("SponsorDialog — not sponsored", () => {
 		).toBeNull();
 		const start = screen.getByRole("button", { name: "Start sponsorship" });
 		expect(start.hasAttribute("disabled")).toBe(true);
+		// Disabled WITH its reason.
+		expect(
+			screen.getByText("Pick the last day the card should show."),
+		).toBeTruthy();
 
 		const end = inputDate(7);
 		fireEvent.change(screen.getByLabelText(/Sponsored through/), {
@@ -103,7 +109,7 @@ describe("SponsorDialog — not sponsored", () => {
 });
 
 describe("SponsorDialog — live window", () => {
-	it("prefills the inclusive end date and ends early with null", async () => {
+	it("prefills the inclusive end date; Update waits for a change; End uses its own mutation", async () => {
 		const [y, m, d] = inputDate(5).split("-").map(Number);
 		const until = new Date(y, m - 1, d + 1).getTime();
 		const onClose = vi.fn();
@@ -116,16 +122,25 @@ describe("SponsorDialog — live window", () => {
 		expect(
 			(screen.getByLabelText(/Sponsored through/) as HTMLInputElement).value,
 		).toBe(inputDate(5));
-		expect(screen.getByRole("button", { name: "Update window" })).toBeTruthy();
+		// Unchanged → nothing to save (no no-op write, no empty audit row).
+		const update = screen.getByRole("button", { name: "Update window" });
+		expect(update.hasAttribute("disabled")).toBe(true);
+		expect(screen.getByText(/Pick a new last day/)).toBeTruthy();
+		fireEvent.change(screen.getByLabelText(/Sponsored through/), {
+			target: { value: inputDate(9) },
+		});
+		expect(update.hasAttribute("disabled")).toBe(false);
+
 		fireEvent.click(
 			screen.getByRole("button", { name: "End sponsorship now" }),
 		);
 		await waitFor(() =>
-			expect(setSponsorshipSpy()).toHaveBeenCalledWith({
+			expect(endSponsorshipSpy()).toHaveBeenCalledWith({
 				retailerId: "r_spon",
-				until: null,
 			}),
 		);
+		expect(setSponsorshipSpy()).not.toHaveBeenCalled();
+		await waitFor(() => expect(onClose).toHaveBeenCalled());
 	});
 
 	it("an expired window reads as not sponsored", () => {

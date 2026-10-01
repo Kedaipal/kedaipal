@@ -31,7 +31,7 @@ import {
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { CompDialog } from "./comp-dialog";
-import { SponsorDialog } from "./sponsor-dialog";
+import { SponsorDialog, sponsoredThroughLabel } from "./sponsor-dialog";
 
 /**
  * Enter act-as for a store: start the session, audit the tenant ENTRY
@@ -86,6 +86,13 @@ export function SellerManageMenu({
 	const [purgeOpen, setPurgeOpen] = useState(false);
 	const [compOpen, setCompOpen] = useState(false);
 	const [sponsorOpen, setSponsorOpen] = useState(false);
+	// The live window's last day, or null — the item names it so an admin
+	// sees "until when" before opening the dialog.
+	const sponsoredThrough =
+		seller.marketplace.sponsoredUntil !== undefined &&
+		sponsorshipActive(seller.marketplace.sponsoredUntil, Date.now())
+			? sponsoredThroughLabel(seller.marketplace.sponsoredUntil)
+			: null;
 	// Server truth (`purging` rides the directory row, so every admin session
 	// locks) OR the just-clicked local echo, which bridges the moment before
 	// the reactive query refreshes.
@@ -200,7 +207,7 @@ export function SellerManageMenu({
 						<Megaphone
 							className={cn(
 								"mt-0.5 size-4",
-								sponsorshipActive(seller.marketplace.sponsoredUntil, Date.now())
+								sponsoredThrough
 									? "text-accent-emphasis"
 									: "text-muted-foreground",
 							)}
@@ -208,19 +215,13 @@ export function SellerManageMenu({
 						/>
 						<span className="flex min-w-0 flex-col">
 							<span className="font-medium">
-								{sponsorshipActive(
-									seller.marketplace.sponsoredUntil,
-									Date.now(),
-								)
+								{sponsoredThrough
 									? "Marketplace sponsorship — on"
 									: "Sponsor on the marketplace"}
 							</span>
 							<span className="text-xs text-muted-foreground">
-								{sponsorshipActive(
-									seller.marketplace.sponsoredUntil,
-									Date.now(),
-								)
-									? "Edit the window or end it early"
+								{sponsoredThrough
+									? `Through ${sponsoredThrough} — edit or end early`
 									: "Labelled highlight on kedaipal.com/stores"}
 							</span>
 						</span>

@@ -2,15 +2,22 @@
 // one status pill, one contact line, one expiry reading — so the three
 // surfaces are the same component wearing different layouts, never three
 // drawings of the same fact.
-import { Award, ExternalLink, Mail, MessageCircle } from "lucide-react";
+import {
+	Award,
+	ExternalLink,
+	Mail,
+	Megaphone,
+	MessageCircle,
+} from "lucide-react";
 import type { AdminSellerRow } from "../../../convex/admin";
+import { sponsorshipActive } from "../../../convex/lib/marketplaceListing";
 import {
 	type ExpiryTone,
 	SELLER_STATUS_LABEL,
 	type SellerBucket,
 	type SellerExpiry,
 } from "../../lib/admin-seller-view";
-import { formatMobile } from "../../lib/format";
+import { formatMobile, formatShortDate } from "../../lib/format";
 import { cn } from "../../lib/utils";
 import { CopyButton } from "../ui/copy-button";
 
@@ -57,6 +64,40 @@ export function FoundingPill({ rank }: { rank: number }) {
 			title={`Founding Member #${rank}`}
 		>
 			<Award className="size-3" aria-hidden="true" />#{rank}
+		</span>
+	);
+}
+
+/**
+ * A live marketplace sponsorship (z8r3fdkmyp), beside the Founding pill on
+ * every directory surface — sponsorship is a paid placement, so "who is on
+ * the rail and until when" must read at a glance, not behind each Manage
+ * menu. Renders nothing for an absent or expired window (read-time expiry,
+ * the same `sponsorshipActive` the directory itself uses).
+ */
+export function SponsoredPill({
+	seller,
+	now,
+}: {
+	seller: AdminSellerRow;
+	now: number;
+}) {
+	const until = seller.marketplace.sponsoredUntil;
+	if (until === undefined || !sponsorshipActive(until, now)) return null;
+	// Day + month on the pill (it shares a line with the slug); the full date,
+	// year included, rides the tooltip.
+	const lastDay = until - 1;
+	const short = new Date(lastDay).toLocaleDateString(undefined, {
+		day: "numeric",
+		month: "short",
+	});
+	return (
+		<span
+			className="inline-flex h-5 shrink-0 items-center gap-1 rounded-full bg-accent/10 px-1.5 text-[10px] font-bold whitespace-nowrap text-accent-emphasis"
+			title={`Sponsored on the marketplace through ${formatShortDate(lastDay)}`}
+		>
+			<Megaphone className="size-3" aria-hidden="true" />
+			Sponsored · to {short}
 		</span>
 	);
 }

@@ -82,6 +82,7 @@ vi.mock("convex/react", () => ({
 }));
 
 import { SellerCard } from "../components/admin/seller-card";
+import { formatShortDate } from "../lib/format";
 import { AdminSellersContent, type SellersSearch } from "./app.admin.sellers";
 
 const startActAsSpy = () =>
@@ -415,6 +416,26 @@ function renderCard(row: AdminSellerRow, purgeEnabled = false) {
 	);
 	return { onViewDetails };
 }
+
+describe("SellerCard — marketplace sponsorship at a glance (z8r3fdkmyp)", () => {
+	it("a live window shows a Sponsored pill naming its last day", () => {
+		const until = NOW + 7 * 24 * 60 * 60 * 1000;
+		renderCard(seller({ marketplace: { sponsoredUntil: until } }));
+		const pill = screen.getByText(/^Sponsored · to /);
+		// Full date (with year) in the tooltip; day + month on the pill.
+		expect(pill.getAttribute("title")).toBe(
+			`Sponsored on the marketplace through ${formatShortDate(until - 1)}`,
+		);
+	});
+
+	it("an expired or absent window shows nothing", () => {
+		renderCard(seller({ marketplace: { sponsoredUntil: NOW - 1 } }));
+		expect(screen.queryByText(/^Sponsored/)).toBeNull();
+		cleanup();
+		renderCard(seller());
+		expect(screen.queryByText(/^Sponsored/)).toBeNull();
+	});
+});
 
 describe("SellerCard — the Manage menu", () => {
 	it("one door: nothing on the row enters act-as; the name opens details, the rest are copy controls", () => {

@@ -41,10 +41,17 @@ Client partitions one payload (`partitionStores` in `src/lib/marketplace.ts`):
 - **Sponsored rail** — `marketplaceSponsoredUntil > now`
   (`sponsorshipActive`, read-time expiry, no cron). Every placement renders a
   visible **"Sponsored"** label; the rail is disclosed advertising, never
-  covert ranking. **Admin-set only** (`admin.setMarketplaceSponsorship`,
-  audited `marketplace.sponsor.set/clear`, future-only, from the seller
-  directory's Manage menu → `SponsorDialog`; end date inclusive). V1 is
-  manually invoiced — self-serve purchase is a future ticket.
+  covert ranking. **Admin-set only**: `admin.setMarketplaceSponsorship`
+  (start/move, future-only) and `admin.endMarketplaceSponsorship` (idempotent),
+  each audited under its own function name with the store as `targetId` — the
+  setComp/revokeComp shape. Driven from the seller directory's Manage menu →
+  `SponsorDialog` (inclusive end date; Update stays disabled until the date
+  moves, with the reason under the field). V1 is manually invoiced —
+  self-serve purchase is a future ticket. **Visible at a glance**: a
+  `SponsoredPill` ("Sponsored · to 8 Oct", full date in the tooltip) sits on
+  the slug line of every directory row/card and in the sheet header, the
+  Manage item names the end date, and the details sheet's Storefront section
+  carries a Marketplace row (listed vs opted-out-since, sponsored-through).
 - **The Founding 10** — `foundingMemberRank` ascending, shipped badge reused
   (as a plain emblem, not the popover button — the whole card is a link).
 - **General list** — activated stores first (newest `activatedAt`), then
@@ -112,5 +119,5 @@ leak pin, sponsorship admin gate + audit), `src/lib/marketplace.test.ts`
 (card states over a real router), `src/components/settings/marketplace-card.test.tsx`
 (the four status-line states incl. ON-but-not-shown + loading, area saves in
 the stored shape, discoverability link), `src/components/admin/sponsor-dialog.test.tsx`
-(start / update / end early, inclusive end date, opted-out warning), and
+(start / update-needs-a-change / end via its own mutation, inclusive end date, opted-out warning), the directory pill in `app.admin.sellers.test.tsx`, and
 `parseMarketplaceSearch` cases for the URL state.

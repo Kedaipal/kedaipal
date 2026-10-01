@@ -348,38 +348,58 @@ export const listSellersForAdmin = query({
 });
 
 /**
- * Set / clear a store's marketplace "Store highlights" sponsorship window
+ * Start or move a store's marketplace "Store highlights" sponsorship window
  * (z8r3fdkmyp). Admin-only and audited: v1 sponsorship is sold by hand
  * (manual invoice), so the admin console is the ONE writer — a self-serve
  * purchase path would arrive as its own ticket, not as a widening of this.
- * `null` clears; a past `until` is refused rather than stored as an already-
- * expired window that reads like a bug in the directory. Expiry itself is
- * read-time (`sponsorshipActive`), so nothing needs a cron.
+ * A past `until` is refused rather than stored as an already-expired window
+ * that reads like a bug in the directory. Expiry itself is read-time
+ * (`sponsorshipActive`), so nothing needs a cron. Ending one early is its own
+ * act — `endMarketplaceSponsorship` — so the audit log says which happened
+ * (the setComp / revokeComp pair's shape).
  */
 export const setMarketplaceSponsorship = mutation({
-	args: {
-		retailerId: v.id("retailers"),
-		until: v.union(v.number(), v.null()),
-	},
+	args: { retailerId: v.id("retailers"), until: v.number() },
 	handler: async (ctx, { retailerId, until }): Promise<void> => {
 		const adminUserId = await requireAdmin(ctx);
 		const retailer = await ctx.db.get(retailerId);
 		if (!retailer) throw new ConvexError("Store not found");
-		if (until !== null && until <= Date.now()) {
+		if (until <= Date.now()) {
 			throw new ConvexError("Sponsorship end must be in the future");
 		}
 		await ctx.db.patch(retailerId, {
-			marketplaceSponsoredUntil: until ?? undefined,
+			marketplaceSponsoredUntil: until,
 			updatedAt: Date.now(),
 		});
 		await ctx.db.insert("adminAuditLog", {
 			adminUserId,
 			retailerId,
-			action:
-				until !== null
-					? "marketplace.sponsor.set"
-					: "marketplace.sponsor.clear",
-			targetId: until !== null ? new Date(until).toISOString() : undefined,
+			action: "admin.setMarketplaceSponsorship",
+			targetId: retailerId,
+			ts: Date.now(),
+		});
+	},
+});
+
+/** End a store's sponsorship now (z8r3fdkmyp) — the card leaves the rail on
+ * the next read. Idempotent: ending a window that isn't running writes
+ * nothing, so a double-click can't litter the audit log. */
+export const endMarketplaceSponsorship = mutation({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<void> => {
+		const adminUserId = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		if (retailer.marketplaceSponsoredUntil === undefined) return;
+		await ctx.db.patch(retailerId, {
+			marketplaceSponsoredUntil: undefined,
+			updatedAt: Date.now(),
+		});
+		await ctx.db.insert("adminAuditLog", {
+			adminUserId,
+			retailerId,
+			action: "admin.endMarketplaceSponsorship",
+			targetId: retailerId,
 			ts: Date.now(),
 		});
 	},
