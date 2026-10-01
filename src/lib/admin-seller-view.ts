@@ -5,6 +5,10 @@
 
 import type { AdminSellerRow } from "../../convex/admin";
 import { COMP_KIND_LABEL } from "../../convex/lib/comp";
+import {
+	compHighlightEligible,
+	highlightSource,
+} from "../../convex/lib/marketplaceListing";
 import { csvDate, toCsv } from "../../convex/lib/orderCsv";
 import { formatMobile, formatPrice, formatShortDate } from "./format";
 
@@ -391,13 +395,48 @@ const PLAN_LABEL: Record<NonNullable<AdminSellerRow["plan"]>, string> = {
 	scale: "Scale",
 };
 
+// --- Store highlights (z8r3fdkmyp) ----------------------------------------
+
+/**
+ * Where a store stands on the marketplace's "Store highlights" rail, for the
+ * pill, the Manage item, the dialog and the sheet — one mapping of the admin
+ * row onto the shared `highlightSource`, so the console can never disagree
+ * with the buyer page. Internal stores are never listed, so never highlighted.
+ */
+export function sellerHighlight(
+	row: AdminSellerRow,
+	now: number,
+): { source: "paid" | "comp" | null; compEligible: boolean } {
+	if (row.marketplace.internal) return { source: null, compEligible: false };
+	return {
+		source: highlightSource(
+			{
+				sponsoredUntil: row.marketplace.sponsoredUntil,
+				comped: row.comped,
+				compKind: row.comp?.kind,
+				compHighlightOffAt: row.marketplace.compHighlightOffAt,
+			},
+			now,
+		),
+		compEligible: compHighlightEligible(row.comped, row.comp?.kind),
+	};
+}
+
+/** The last day a stored paid-window `until` covers — what every surface
+ * names (the stored value is the NEXT midnight). */
+export function highlightedThroughLabel(until: number): string {
+	return formatShortDate(until - 1);
+}
+
 /** Team seats, one spelling for every surface (86exr91r4): people with
  * access over the plan's people-cap, pending invites appended.
  * "2/3 · 1 invited", "1/∞" for comped/admin stores. */
 export function sellerSeatsLabel(row: AdminSellerRow): string {
 	const cap = row.seats.capUnlimited ? "∞" : String(row.seats.cap);
 	const base = `${row.seats.active}/${cap}`;
-	return row.seats.invited > 0 ? `${base} · ${row.seats.invited} invited` : base;
+	return row.seats.invited > 0
+		? `${base} · ${row.seats.invited} invited`
+		: base;
 }
 
 export function sellerPlanLabel(row: AdminSellerRow): string {

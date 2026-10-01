@@ -274,7 +274,10 @@ function CategoryRoute() {
 					/>
 				</section>
 
-				<StorefrontFooter slug={slug} />
+				<StorefrontFooter
+					slug={slug}
+					discover={retailer.marketplaceUnlisted !== true}
+				/>
 
 				<CartBar cart={cart} storeSlug={retailer.slug} />
 			</div>

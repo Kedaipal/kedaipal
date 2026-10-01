@@ -68,6 +68,7 @@ import { BookingsTab } from "../components/settings/bookings-tab";
 import { CountrySetupPanel } from "../components/settings/country-setup-panel";
 import { FulfilmentTab } from "../components/settings/fulfilment-tab";
 import { IntegrationsTab } from "../components/settings/integrations-tab";
+import { MarketplaceCard } from "../components/settings/marketplace-card";
 import { NotificationsCard } from "../components/settings/notifications-card";
 import { OrderFlowsSection } from "../components/settings/order-flows-card";
 import {
@@ -402,6 +403,14 @@ function SettingsRoute() {
 				retailer ? { retailerId: retailer._id } : "skip",
 			),
 		).data === true;
+	// Marketplace card truth (z8r3fdkmyp): ON without a visible product isn't
+	// listed, so the card must know. `undefined` = loading, never "no".
+	const listingReadiness = useQuery(
+		convexQuery(
+			api.marketplace.myListingReadiness,
+			retailer && activeTab === "store" ? { retailerId: retailer._id } : "skip",
+		),
+	).data;
 	const visibleTabs = SETTINGS_TABS.filter(
 		(t) => t.id !== "bookings" || hasBookingListings,
 	);
@@ -752,6 +761,17 @@ function SettingsRoute() {
 									onSave={(storeDescription) =>
 										updateSettings({ storeDescription })
 									}
+								/>
+							</Card>
+							{/* Right under the description — the card the marketplace
+							    builds from is the card this section just wrote. */}
+							<Card>
+								<MarketplaceCard
+									storeName={retailer.storeName}
+									unlisted={retailer.marketplaceUnlisted === true}
+									area={retailer.storeArea ?? ""}
+									readiness={listingReadiness}
+									onSave={(patch) => updateSettings(patch)}
 								/>
 							</Card>
 							<Card>

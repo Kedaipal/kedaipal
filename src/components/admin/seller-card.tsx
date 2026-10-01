@@ -6,15 +6,16 @@ import {
 	sellerBucket,
 	sellerExpiry,
 	sellerPlanLabel,
-	sellerSeatsLabel,
 	sellerRail,
 	sellerReason,
+	sellerSeatsLabel,
 } from "../../lib/admin-seller-view";
 import { cn } from "../../lib/utils";
 import {
 	ContactLine,
 	ExpiryText,
 	FoundingPill,
+	MarketplacePill,
 	StatusPill,
 	ViaPill,
 } from "./seller-cells";
@@ -61,6 +62,7 @@ export function SellerCard({
 							/{seller.slug}
 						</span>
 						<ViaPill seller={seller} />
+						<MarketplacePill seller={seller} now={now} />
 					</div>
 				</div>
 				<StatusPill bucket={bucket} />
