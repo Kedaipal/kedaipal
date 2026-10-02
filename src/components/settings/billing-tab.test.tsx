@@ -551,7 +551,11 @@ describe("BillingTab comp accounts (z8r3fdeub2)", () => {
 				status: "active",
 				comped: true,
 				comp,
-				caps: { orderCap: 1_000_000_000, userCap: 1_000_000_000, broadcastQuota: 500 },
+				caps: {
+					orderCap: 1_000_000_000,
+					userCap: 1_000_000_000,
+					broadcastQuota: 500,
+				},
 				active: true,
 				frozen: false,
 			},
@@ -1168,10 +1172,12 @@ describe("BillingTab annual billing", () => {
 		expect(screen.queryByText("Ask for an annual invoice")).toBeNull();
 	});
 
-	it("hides from Scale, which cannot be invoiced at all yet", () => {
+	it("offers the year to a Scale seller now Scale is purchasable (z8r3fdfuhq)", () => {
 		mockQueries({ isAdmin: false, invoices: settled });
 		render(<BillingTab retailer={activePro({ plan: "scale" })} />);
-		expect(screen.queryByText(/Pay for the year/)).toBeNull();
+		expect(screen.getByText(/Pay for the year/)).toBeTruthy();
+		// Priced from annualQuote at Scale's rate — RM3,990 for 12 months.
+		expect(screen.getByText(/RM\s*3,990\.00/)).toBeTruthy();
 	});
 });
 
@@ -2311,5 +2317,147 @@ describe("BillingTab past-due follow-up line (z8r3fdg3mh)", () => {
 		expect(screen.queryByText(/We'll follow up by email/)).toBeNull();
 		// Their story is the compEnded line instead.
 		expect(screen.getByText(/buyers can still order/)).toBeTruthy();
+	});
+});
+
+/**
+ * Scale opened for purchase with the credits release (z8r3fdfuhq). Every door
+ * a seller can reach from `/pricing`'s Scale card has to offer Scale, or the
+ * CTA leads to a page that can't sell what it advertised: the plan picker, the
+ * first invoice's switch, and (for founding members) a plain "no".
+ */
+describe("BillingTab — Scale is purchasable (z8r3fdfuhq)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+	const scaleGateway = (currency: "MYR" | "SGD" = "MYR"): Gateway => ({
+		...GATEWAY_ON,
+		currency,
+		renewalCurrency: currency,
+	});
+
+	it("the plan picker offers Scale at RM399 / S$149, monthly or yearly", () => {
+		mockQueries({ isAdmin: false, gateway: scaleGateway() });
+		const { unmount } = render(<BillingTab retailer={retailer()} />);
+		expect(screen.getByText(/RM\s*399\.00\/month/)).toBeTruthy();
+		expect(
+			screen.getByText(/Everything in Pro \+ 500 credits a month/),
+		).toBeTruthy();
+		fireEvent.click(screen.getByText("Scale"));
+		expect(
+			screen.getByRole("button", { name: "Subscribe to Scale" }),
+		).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: /Yearly/ }));
+		expect(screen.getByText(/RM\s*3,990\.00\/year/)).toBeTruthy();
+		unmount();
+
+		mockQueries({ isAdmin: false, gateway: scaleGateway("SGD") });
+		render(<BillingTab retailer={retailer({ country: "SG" })} />);
+		expect(screen.getByText(/S\$\s*149\.00\/month/)).toBeTruthy();
+		expect(screen.queryByText(/RM\s*\d/)).toBeNull();
+	});
+
+	it("a lapsed Scale seller's picker defaults to renewing Scale", () => {
+		mockQueries({ isAdmin: false, gateway: scaleGateway() });
+		render(
+			<BillingTab
+				retailer={retailer({
+					subscription: {
+						plan: "scale",
+						status: "past_due",
+						comped: false,
+						caps: { orderCap: 500, userCap: 6, broadcastQuota: 500 },
+						active: false,
+						frozen: true,
+					},
+				} as never)}
+			/>,
+		);
+		expect(
+			screen.getByRole("button", { name: "Subscribe to Scale" }),
+		).toBeTruthy();
+	});
+
+	it("the first invoice can be switched to Scale as well as Starter, each with its consequence", () => {
+		mockQueries({
+			isAdmin: false,
+			gateway: scaleGateway(),
+			invoices: [
+				{
+					_id: "i_first_sc",
+					status: "pending",
+					currency: "MYR",
+					total: 14900,
+					amount: 14900,
+					plan: "pro",
+					billingCycle: "monthly",
+					origin: "free_period_end",
+					invoiceNumber: "INV-FIRST-SC",
+					dueDate: Date.now() + 12 * DAY,
+					createdAt: Date.now(),
+				},
+			],
+		});
+		render(
+			<BillingTab
+				retailer={retailer({
+					subscription: {
+						plan: "pro",
+						status: "trialing",
+						comped: false,
+						freePeriodEndedAt: Date.now() - DAY,
+						freePeriodEndReason: "first_order",
+						caps: { orderCap: 200, userCap: 3, broadcastQuota: 100 },
+						active: true,
+						frozen: false,
+					},
+				} as never)}
+			/>,
+		);
+		expect(screen.getByText("Switch to Starter")).toBeTruthy();
+		expect(screen.getByText("Switch to Scale")).toBeTruthy();
+		expect(
+			screen.getByText(/Scale \(RM\s*399\.00\/month\) has 500 credits a month/),
+		).toBeTruthy();
+	});
+
+	it("a Scale invoice offers the way back to Pro or Starter", () => {
+		mockQueries({
+			isAdmin: false,
+			gateway: scaleGateway(),
+			invoices: [
+				{
+					_id: "i_sc",
+					status: "pending",
+					currency: "MYR",
+					total: 39900,
+					amount: 39900,
+					plan: "scale",
+					billingCycle: "monthly",
+					origin: "self_serve",
+					invoiceNumber: "INV-SC",
+					dueDate: Date.now() + 10 * DAY,
+					createdAt: Date.now(),
+				},
+			],
+		});
+		render(<BillingTab retailer={retailer()} />);
+		expect(screen.getByText("Switch to Pro")).toBeTruthy();
+		expect(screen.getByText("Switch to Starter")).toBeTruthy();
+		expect(screen.queryByText("Switch to Scale")).toBeNull();
+	});
+
+	it("a Founding Member is never offered Scale — the founding price stays on Pro", () => {
+		mockQueries({
+			isAdmin: false,
+			gateway: { ...scaleGateway(), foundingPricing: true },
+		});
+		render(
+			<BillingTab
+				retailer={retailer({ isFoundingMember: true, foundingMemberRank: 3 })}
+			/>,
+		);
+		expect(
+			screen.getByRole("button", { name: "Subscribe to Founding Pro" }),
+		).toBeTruthy();
+		expect(screen.queryByText(/RM\s*399\.00/)).toBeNull();
 	});
 });

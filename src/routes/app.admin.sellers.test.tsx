@@ -80,6 +80,12 @@ vi.mock("convex/react", () => ({
 		}
 		return mutationSpies.get(name);
 	},
+	// The credit ledger drawer's paginated read (Credits T5).
+	usePaginatedQuery: () => ({
+		results: [],
+		status: "Exhausted",
+		loadMore: () => {},
+	}),
 }));
 
 import { SellerCard } from "../components/admin/seller-card";
@@ -132,6 +138,12 @@ const ROWS: AdminSellerRow[] = [
 			attachedAt: at(-60),
 		},
 		lastActAsAt: at(-4),
+		credits: {
+			plan: 80,
+			purchased: 50,
+			periodKey: "2026-09",
+			periodGrant: 200,
+		},
 	}),
 	seller({
 		_id: "r_lekor" as AdminSellerRow["_id"],
@@ -148,6 +160,14 @@ const ROWS: AdminSellerRow[] = [
 			total: 9900,
 			currency: "MYR",
 			hasPayNowLink: true,
+		},
+		credits: {
+			plan: -15,
+			purchased: 0,
+			periodKey: "2026-09",
+			periodGrant: 100,
+			exhaustedAt: at(-3),
+			customGrant: 150,
 		},
 	}),
 	seller({
@@ -629,5 +649,83 @@ describe("SellerCard — the Manage menu", () => {
 		renderCard(seller({ purging: true }), true);
 		expect(screen.getByText("Deleting…")).toBeTruthy();
 		expect(screen.queryByRole("button", { name: /Manage/ })).toBeNull();
+	});
+});
+
+/**
+ * Kedaipal Credits T5: the directory reads each store's credits, sorts the
+ * owing ones to the top, and the sheet opens the full ledger drawer.
+ */
+describe("directory — credits", () => {
+	it("the row reads each store's credits: left, owed with since-when, or no account yet", () => {
+		renderDirectory();
+		const row = (slug: string) =>
+			screen
+				.getAllByRole("row")
+				.find((r) => r.getAttribute("data-seller") === slug) as HTMLElement;
+		expect(within(row("bearcamp-malaysia")).getByText("130 left")).toBeTruthy();
+		expect(within(row("lekor-mr-ganu")).getByText("15 owed")).toBeTruthy();
+		expect(within(row("lekor-mr-ganu")).getByText(/Out since/)).toBeTruthy();
+		expect(
+			within(row("waadaafish")).getByText("No credit account yet"),
+		).toBeTruthy();
+	});
+
+	it("sort by credits puts the store owing orders first and account-less rows last", () => {
+		renderDirectory();
+		openMenu(/^Sort: Founding rank/);
+		fireEvent.click(screen.getByRole("menuitemradio", { name: /Credits/ }));
+		const names = screen
+			.getAllByRole("row")
+			.slice(1)
+			.map((r) => r.getAttribute("data-seller"));
+		expect(names).toEqual([
+			"lekor-mr-ganu",
+			"bearcamp-malaysia",
+			// No credit account: by name after everything with a number.
+			"kp-demo",
+			"waadaafish",
+		]);
+	});
+
+	it("the sheet's Credits section names the custom grant and opens the ledger as a page of the same drawer", async () => {
+		renderDirectory();
+		fireEvent.click(screen.getByRole("button", { name: "Lekor Mr.Ganu" }));
+		const sheet = await screen.findByRole("dialog");
+		expect(within(sheet).getByText("150 a month")).toBeTruthy();
+		expect(within(sheet).getByText(/Sep 2026/)).toBeTruthy();
+		fireEvent.click(
+			within(sheet).getByRole("button", { name: "Open credit ledger" }),
+		);
+		expect(
+			await screen.findByRole("heading", { name: "Credit ledger" }),
+		).toBeTruthy();
+		// One drawer — never a second one stacked on the seller's.
+		expect(screen.getAllByRole("dialog")).toHaveLength(1);
+		// The way back names the seller and returns focus to what opened it.
+		fireEvent.click(
+			within(screen.getByRole("dialog")).getByRole("button", {
+				name: "Lekor Mr.Ganu",
+			}),
+		);
+		const reopen = await screen.findByRole("button", {
+			name: "Open credit ledger",
+		});
+		expect(document.activeElement).toBe(reopen);
+	});
+
+	it("the CSV carries the credit columns", () => {
+		renderDirectory();
+		fireEvent.click(screen.getByRole("button", { name: /Export CSV/ }));
+		const csv = downloadCsvSpy.mock.calls[0][1] as string;
+		const [header] = csv.split("\r\n");
+		for (const column of [
+			"Credits left",
+			"Plan credits",
+			"Bought credits",
+			"Out of credits since",
+			"Custom grant",
+		])
+			expect(header).toContain(column);
 	});
 });

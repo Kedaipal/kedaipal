@@ -8,6 +8,11 @@ import {
 	type BillingCurrency,
 	FOUNDING_PLAN,
 	foundingPlanLocked,
+	isPlanSelectable,
+	PLAN_CAPS,
+	PLAN_CREDIT_GRANT,
+	type Plan,
+	PLANS,
 	planPrice,
 } from "../../../convex/lib/plans";
 import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
@@ -15,17 +20,23 @@ import { convexErrorMessage, formatPrice } from "../../lib/format";
 import type { SubscriptionView } from "../../lib/subscription";
 import { OwnerOnlyNote } from "./owner-only-note";
 
-type PickablePlan = "starter" | "pro";
 type Cycle = "monthly" | "annual";
 
-const PLAN_PITCH: Record<PickablePlan, { name: string; pitch: string }> = {
+const PLAN_PITCH: Record<Plan, { name: string; pitch: string }> = {
 	starter: {
 		name: "Starter",
 		pitch: "Storefront, orders + WhatsApp confirmations",
 	},
 	pro: {
 		name: "Pro",
-		pitch: "Everything in Starter + customer database, order inbox, insights, online payments",
+		pitch:
+			"Everything in Starter + customer database, order inbox, insights, online payments",
+	},
+	// Scale opened with the credits release (z8r3fdfuhq). Its pitch is what's
+	// LIVE — volume and team — never the outlets that aren't built yet.
+	scale: {
+		name: "Scale",
+		pitch: `Everything in Pro + ${PLAN_CREDIT_GRANT.scale} credits a month and room for ${PLAN_CAPS.scale.userCap - 1} teammates`,
 	},
 };
 
@@ -79,15 +90,14 @@ export function PlanPickerCard({
 		api.subscriptionPayments.startAutoRenewSetup,
 	);
 	const founding = foundingPricing;
-	// Only the tiers this store may buy: a Founding Member stays on Founding Pro.
-	const plans = (["starter", "pro"] as const).filter(
-		(p) => !foundingPlanLocked(p, founding),
+	// Only the tiers this store may buy: every tier for sale (Scale included
+	// since z8r3fdfuhq), and a Founding Member stays on Founding Pro.
+	const plans = PLANS.filter(
+		(p) => isPlanSelectable(p) && !foundingPlanLocked(p, founding),
 	);
 	// Default to the seller's current plan (a renewal shouldn't nudge them off
 	// it), which is Pro for every trial.
-	const [picked, setPlan] = useState<PickablePlan>(
-		sub.plan === "starter" ? "starter" : "pro",
-	);
+	const [picked, setPlan] = useState<Plan>(sub.plan);
 	// Derived, not stored: founding pricing is a live server answer, and a
 	// selection it rules out must never be what Subscribe sends.
 	const plan = plans.includes(picked) ? picked : FOUNDING_PLAN;
@@ -122,7 +132,7 @@ export function PlanPickerCard({
 		planPrice(plan, cycle, founding && plan === "pro", currency),
 		currency,
 	);
-	const planName = (p: PickablePlan) =>
+	const planName = (p: Plan) =>
 		founding && p === FOUNDING_PLAN ? "Founding Pro" : PLAN_PITCH[p].name;
 
 	// Subscribing IS enrolling in auto-renewal (owner decision, 11 Sep 2026),
@@ -176,7 +186,7 @@ export function PlanPickerCard({
 	// before the redirect, so a seller who abandons HitPay's page comes back to
 	// a pending invoice with the Pay-now button AND the bank/DuitNow details.
 
-	const priceLine = (p: PickablePlan) => {
+	const priceLine = (p: Plan) => {
 		const foundingApplies = founding && p === "pro";
 		const monthly = planPrice(p, "monthly", foundingApplies, currency);
 		const total = planPrice(p, cycle, foundingApplies, currency);

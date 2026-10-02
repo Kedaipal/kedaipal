@@ -469,6 +469,8 @@ describe("sellerSummaryText + CSV", () => {
 				"WhatsApp: +60 12-345 6789",
 				"Plan: Pro · Monthly · auto-renew Visa ·· 4242 · Active",
 				"Seats: 1/3",
+				// No credit account on this fixture — said, not left blank.
+				"Credits: No credit account yet",
 				`Renews ${formatDeadline(at(22), NOW)} · in 22 days`,
 			].join("\n"),
 		);

@@ -24,18 +24,17 @@ import { daysUntil } from "./subscription";
 /**
  * Plans the annual switch is offered on.
  *
- * **Pro only.** Not Starter, by owner decision: Starter is moving to
+ * **Pro and Scale.** Not Starter, by owner decision: Starter is moving to
  * start-when-you-sell billing, so asking that seller for a year upfront
- * contradicts the premise of the tier. Not Scale either — `issueInvoice` throws
- * "Scale is unavailable for v1." (convex/invoices.ts), so offering it would
- * reproduce in-app exactly the dead-end CTA we refuse to ship on the public
- * pricing page. Add `"scale"` in the same change that makes Scale purchasable
- * (the separate Scale build — the z8r3fday24 pricing reset only moved its price).
+ * contradicts the premise of the tier. Scale joined in the change that made it
+ * purchasable (z8r3fdfuhq) — it was held out only while `issueInvoice` refused
+ * it, which would have made this card a dead-end CTA; the admin form now issues
+ * a Scale annual like any other.
  *
  * A Starter seller is still TOLD annual exists, in the Starter → Pro nudge —
  * a constraint is surfaced, never enforced silently.
  */
-export const ANNUAL_OFFER_PLANS: readonly Plan[] = ["pro"];
+export const ANNUAL_OFFER_PLANS: readonly Plan[] = ["pro", "scale"];
 
 /**
  * Paid invoices a seller must already have before annual is offered.
@@ -181,7 +180,10 @@ export function resolveAnnualOffer(input: {
 	const pendingInvoice = invoices.find((i) => i.status === "pending");
 
 	if (pendingInvoice?.billingCycle === "annual")
-		return { kind: "pendingAnnual", invoiceNumber: pendingInvoice.invoiceNumber };
+		return {
+			kind: "pendingAnnual",
+			invoiceNumber: pendingInvoice.invoiceNumber,
+		};
 
 	if (sub.billingCycle === "annual")
 		return { kind: "onAnnual", plan: sub.plan, renewsAt: sub.currentPeriodEnd };

@@ -60,12 +60,18 @@ function sub(overrides: Partial<SubscriptionView> = {}): SubscriptionView {
 }
 
 describe("PlanChangeCard — what the seller is told before confirming", () => {
-	it("offers the other tier, framed by direction", () => {
+	/** The option buttons' labels, in the order they render. */
+	const optionLabels = () =>
+		screen
+			.getAllByRole("button", { name: /^Move (up|down) to/ })
+			.map((b) => b.textContent?.trim());
+
+	it("offers every other tier, framed by direction — moves up first, nearest first", () => {
 		render(
 			<PlanChangeCard sub={sub()} currency="MYR" foundingPricing={false} />,
 		);
-		expect(screen.getByRole("button", { name: /Move up to Pro/ })).toBeTruthy();
-		expect(screen.queryByRole("button", { name: /Move down to/ })).toBeNull();
+		// Scale is purchasable since z8r3fdfuhq, so Starter can go two ways up.
+		expect(optionLabels()).toEqual(["Move up to Pro", "Move up to Scale"]);
 
 		cleanup();
 		render(
@@ -75,10 +81,60 @@ describe("PlanChangeCard — what the seller is told before confirming", () => {
 				foundingPricing={false}
 			/>,
 		);
-		expect(
-			screen.getByRole("button", { name: /Move down to Starter/ }),
-		).toBeTruthy();
-		expect(screen.queryByRole("button", { name: /Move up to/ })).toBeNull();
+		expect(optionLabels()).toEqual([
+			"Move up to Scale",
+			"Move down to Starter",
+		]);
+
+		cleanup();
+		render(
+			<PlanChangeCard
+				sub={sub({ plan: "scale" })}
+				currency="MYR"
+				foundingPricing={false}
+			/>,
+		);
+		expect(optionLabels()).toEqual([
+			"Move down to Pro",
+			"Move down to Starter",
+		]);
+	});
+
+	it("moving up to Scale names Scale's price and the credits that land with it", () => {
+		render(
+			<PlanChangeCard
+				sub={sub({ plan: "pro" })}
+				currency="MYR"
+				foundingPricing={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: /Move up to Scale/ }));
+		const copy = screen.getByText(/You'll be invoiced/).textContent ?? "";
+		expect(copy).toMatch(/RM\s*399\.00/);
+		expect(copy).toContain("with 500 credits a month — this month included");
+	});
+
+	it("moving down from Scale says what goes with it — credits and teammates, not just features", () => {
+		// Scale → Pro loses nothing on the feature matrix, so without the caps
+		// line the dialog would have said nothing about what the seller loses.
+		render(
+			<PlanChangeCard
+				sub={sub({ plan: "scale" })}
+				currency="MYR"
+				foundingPricing={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: /Move down to Pro/ }));
+		const dialog = screen.getByRole("dialog");
+		expect(dialog.textContent).toContain(
+			"you'll have 200 credits a month instead of 500",
+		);
+		expect(dialog.textContent).toContain(
+			"you + 2 teammates instead of you + 5 teammates",
+		);
+		expect(dialog.textContent).toContain("the newest teammates");
+		// …and no invented feature losses.
+		expect(dialog.textContent).not.toContain("you lose:");
 	});
 
 	it("an upgrade names the price AND shows the carryover conversion", () => {
@@ -321,8 +377,11 @@ describe("PlanChangeCard — what the seller is told before confirming", () => {
 		);
 		const down = screen.getByRole("button", { name: /Move down to Starter/ });
 		expect((down as HTMLButtonElement).disabled).toBe(false);
-		// And no upgrade option exists to explain away.
-		expect(screen.queryByText(/Moving up waits until invoice/)).toBeNull();
+		// Moving UP to Scale writes a second bill, so it waits — with the
+		// invoice named, not a silent disabled button.
+		const up = screen.getByRole("button", { name: /Move up to Scale/ });
+		expect((up as HTMLButtonElement).disabled).toBe(true);
+		expect(screen.getByText(/Moving up waits until invoice/)).toBeTruthy();
 	});
 
 	it("confirming sends the chosen plan to the server", () => {

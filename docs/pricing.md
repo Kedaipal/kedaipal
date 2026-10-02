@@ -1,5 +1,14 @@
 # Pricing surface — tiers, Scale multi-outlet, Enterprise-hidden
 
+> **30 Sep 2026 (Credits T5 `z8r3fdfu31` + `z8r3fdfuhq`):** every public
+> allowance is now **Kedaipal Credits read from `PLAN_CREDIT_GRANT`** (100 / 200 /
+> 500 — the retired Scale 400 is gone from every catalog), **Scale is
+> purchasable** (plan-aware CTA on both surfaces, self-serve and admin), the trial
+> reads **"14 days or 200 orders from your first order"** wherever the page used
+> to say "14-day free trial", `/cost` prices the plan the visitor's volume needs,
+> and no public surface mentions the Off-Season Hold. The full map of what each
+> surface says: [`credits.md` → Public surfaces](./credits.md#public-surfaces-t5).
+
 > **13 Sep 2026 (`z8r3fdegej`):** `/`'s pricing teaser, hero, nav and closing CTA
 > now carry the start-when-you-sell copy (no "14-day"), the JSON-LD offer range
 > is derived from `PLAN_MONTHLY_PRICES`, and the landing's MY/SG region is one
@@ -20,9 +29,10 @@ numbers come from the caps ticket `86eye2ccu`.
 - **`src/components/landing/pricing-teaser.tsx`** — the landing-page teaser; same
   three tiers, links to the full page.
 - **`src/components/cost/cost-calculator.tsx`** (`/cost`) — not a tier surface,
-  but it anchors the seller's own leak against the **Pro list price**, so it
-  prices Kedaipal too and follows the same region. (It anchored on the Founding
-  price until that was retired — 30 Aug 2026 pricing reset, ClickUp z8r3fday21.)
+  but it prices Kedaipal against the seller's own leak, so it follows the same
+  region. Since the credits release it anchors on **the plan their volume
+  needs** (`recommendPlan`, below) — it was the Founding price until the 30 Aug
+  reset (z8r3fday21), then a flat Pro list price for everyone.
 - Copy lives in `messages/en.json` + `messages/ms.json` + `messages/zh.json`
   (`pricing_*` for the teaser, `pricingpage_*` for the full page, `cost_*` for
   the calculator). All three locales are kept in lockstep — the i18n parity test
@@ -130,19 +140,55 @@ third billing currency is a compile error, never a silent Malaysian fallback.
 
 | | MYR | SGD |
 | --- | --- | --- |
-| Pro price anchor | RM149 | S$59 |
+| Price anchor | `recommendPlan` — plan + top-ups in MYR | the same, in SGD |
 | Labour rate (`LABOR_RATE_PER_HR`) | 25/hr | 15/hr |
 | AOV slider | max 500, step 5, default 35 | max 200, step 2, default 15 |
 
-The MY column is byte-identical to pre-SG and a test pins it.
+The MY sliders are byte-identical to pre-SG and a test pins them.
+
+### `/cost` recommends the plan the volume needs (Credits T5)
+
+Monthly volume is `ordersPerWeek × 52 / 12`, **rounded up** so the answer
+always covers the estimate (`monthlyOrdersFromWeekly`). For every purchasable
+tier, `recommendPlan` prices the plan plus the **cheapest whole top-up packs**
+covering the rest (`cheapestTopUp` over `CREDIT_PACKS[currency]`), and takes the
+cheapest; a tie goes to the **higher** tier (the same money, more credits built
+in, fewer top-ups to remember). The leak is then compared against that price —
+the savings, the ratio ("5.7× what Kedaipal costs you" — the plan plus its
+top-ups, never "your subscription"), the "not worth it yet" verdict and the
+WhatsApp message all name it. **The sticky CTA is the one exception:** it
+quotes the recommended PLAN at the plan's own price ("Start with Pro —
+RM149/mo"), because a plan-plus-top-ups total on a "Start" button reads like a
+plan price that doesn't exist (Zaki's test round, 1 Oct 2026). The card above
+it says what the top-ups add.
+
+| Orders a week (≈ a month) | MYR | SGD |
+| --- | --- | --- |
+| 20 (87) | Starter — RM79 | Starter — S$29 |
+| 60 (260) | Pro + 2 × 50 credits — RM239 (ties Starter + 1 × 200) | Pro + 2 × 50 credits — S$103 |
+| 130 (564) | Pro + 2 × 200 credits — RM469 | Scale + 2 × 50 credits — S$193 |
+
+When the answer leans on top-ups the card names the **next tier up** it beat
+("Cheaper than Scale at RM399/mo"), by its whole option ("Scale + 2 × 50
+credits at RM489") — never a lower tier: at 260 orders Starter + 1 × 200 ties
+Pro + 2 × 50, and "cheaper than" it would be false. The MYR/SGD split at 130 a
+week is honest arithmetic, not a bug: in ringgit a 200-pack credit (RM0.80)
+undercuts what Scale charges per credit above Pro (RM0.83), in dollars it
+doesn't (S$0.375 vs S$0.30).
+
+**A deliberate deviation from the ticket's wording.** The ticket said "Starter
+up to 100, Pro up to 200"; its own rule — "the cheapest option whose credits
+cover it" — makes **Starter + one 50-credit top-up** the answer from 101 to 150
+orders a month (RM124 / S$51 against Pro's RM149 / S$59). The page follows the
+rule, not the shorthand.
 
 **S$15/hr is not an FX conversion.** RM25 converts to about S$7, which reads as
 implausibly cheap labour to a Singaporean and would quietly undercut the
 chase-cost half of the argument.
 
-`PRO_PRICE` is **derived** from `PLAN_MONTHLY_PRICES`, not restated — the file
-used to carry its own literal, a second copy of the Pro price with nothing
-stopping it drifting. A test asserts the identity.
+The anchor is **derived** from `PLAN_MONTHLY_PRICES` and `CREDIT_PACKS`, never
+restated — the file once carried its own Pro literal (`PRO_PRICE`, since
+deleted), a second copy of the price with nothing stopping it drifting.
 
 The calculator holds only what the visitor **stated** (a shared link's params,
 then each slider they move) and derives the rest, because the region can resolve
@@ -171,8 +217,10 @@ currency and the leak total), not just the price we quote.
 Marked `UNCONFIRMED` in `convex/lib/plans.ts`, both following the tier ratio
 (SGD ≈ 0.4 × MYR across all three plans):
 
-- `OUTLET_ADDON_MONTHLY_PRICES.SGD` — S$19 (vs RM49). Display copy only; Scale
-  is not purchasable.
+- `OUTLET_ADDON_MONTHLY_PRICES` — RM49 / S$18 (S$18 confirmed by Arif, 1 Sep).
+  **Quoted nowhere** since Scale became purchasable: outlets are "Coming soon",
+  and a per-outlet price beside a live Subscribe button would sell something
+  nobody can open. It waits for the outlets build.
 - `COMPETITOR_MONTHLY_RANGE.SGD` — S$80–200 (vs RM200–500), the landing
   anchor's comparison band.
 
@@ -188,16 +236,17 @@ today's is.
 | --- | --- | --- | --- | --- | --- |
 | **Starter** | RM79/mo · S$29 | Single home seller, just starting | 100 | 1 (you) | 1 |
 | **Pro** | RM149/mo · S$59 | Established single shop | 200 | 3 (you + 2) | 1 |
-| **Scale** | **RM399/mo · S$149 flat — Coming soon** | Multi-outlet / high-volume seller | 500 | 6 (you + 5) | Up to 3 (+RM49 · S$18/mo each additional) |
-| *Off-Season Hold* | **RM19/mo · S$9** — a status, not a tier | A paid seller paused between seasons: ordering off, everything else live, one tap back | 0 | — | — |
+| **Scale** | **RM399/mo · S$149 flat — purchasable since 30 Sep 2026** | High-volume / multi-outlet seller | 500 | 6 (you + 5) | Up to 3 — **coming soon**, no add-on price quoted |
+| *Off-Season Hold* | **RM19/mo · S$9** — a status, not a tier; **never on a public surface** (retired separately, `z8r3fdfuhr`) | A paid seller paused between seasons: ordering off, everything else live, one tap back | 0 | — | — |
 
 The credits column is the **Kedaipal Credits** grant (ClickUp `86eye2ccu`,
 [`credits.md`](./credits.md)): `PLAN_CREDIT_GRANT` in `convex/lib/plans.ts`,
 from which `PLAN_CAPS.orderCap` is derived — one number, one source. Founding
 Pro is granted 300 (never shown publicly) and the free trial 200, one-off. Top-up
 packs: MY 50 for RM45 / 200 for RM160, SG 50 for S$22 / 200 for S$75
-(`CREDIT_PACKS`). Scale moved from 400 to 500 on 17 Sep 2026; the public copy
-follows with the credits release (T5 `z8r3fdfu31`).
+(`CREDIT_PACKS`). Scale moved from 400 to 500 on 17 Sep 2026, and the public
+copy moved with the credits release (T5 `z8r3fdfu31`) — every number now read
+from the constant, so the next move needs no copy edit.
 
 **Founding pricing (RM104/S$41) is retired** (30 Aug 2026 pricing reset,
 ClickUp z8r3fday21): no public surface advertises it any more — a guard in
@@ -207,11 +256,16 @@ them). Scale's launch price **is RM399/S$149** as of the companion backend
 ticket (z8r3fday24, Arif's FINAL 6 Sep number; the S$19 outlet guess became the
 confirmed S$18). The order allowances are the monthly credit grants —
 100/200/500 (see the table note above). Every store is **free until
-its first live order or day 15**, and a paid seller can pause for the hold price —
-both mechanisms are documented in
-[`manual-subscription.md`](./manual-subscription.md#start-when-you-sell--off-season-hold-sep-2026-clickup-z8r3fday24).
-The public copy for both (landing, `/pricing`, the Hold card, SEO strings) is
-Arif's wave 2 (z8r3fday21), gated on this backend and now unblocked.
+its first live order**; that order starts **14 days or 200 orders of everything
+in Pro, whichever comes first** (Zaki, 30 Sep 2026 — the 14 days is the first
+invoice's grace, `INVOICE_DUE_GRACE_DAYS`, and the 200 is `TRIAL_CREDIT_GRANT`),
+then the seller picks a plan. A store with no order by day 15 gets its first
+invoice then (the backstop), which the FAQ answers name and nothing contradicts.
+The mechanism lives in
+[`manual-subscription.md`](./manual-subscription.md#start-when-you-sell--off-season-hold-sep-2026-clickup-z8r3fday24)
+and [`credits.md`](./credits.md#the-trial-14-days-or-200-orders-whichever-comes-first).
+The Off-Season Hold stays an in-product status only — no public surface quotes
+it.
 
 All three prices are **flat** — no per-message fees and no cut of the seller's sales (Arif, 19 Jul 2026). Volume is bounded by the monthly credits, not metered per message: a seller who needs more tops up or upgrades ([`credits.md`](./credits.md)). The 1 Jul ICP
 audit disqualified reseller/wholesale networks; our real payers outgrow Pro on
@@ -226,8 +280,15 @@ Presentation rules:
   "2 months free", never a percentage. Credits stay monthly on either cycle —
   an annual seller is granted every month, never 12 months upfront
   ([`credits.md`](./credits.md#plan-changes)). See [Annual billing](#annual-billing).
-- Scale is **not purchasable**: the CTA is a disabled **"Coming soon"** panel
-  (trials are Pro-only), on both the full page and the teaser.
+- **Scale is purchasable** (z8r3fdfuhq, 30 Sep 2026): its card takes the same
+  plan-aware CTA as the other two, on both the full page and the teaser, and
+  Settings → Billing sells it (picker, plan change, first-invoice switch,
+  annual). Both surfaces read `isPlanSelectable` rather than naming Scale, so a
+  tier that closes again gets its "Coming soon" pill and disabled panel back
+  from that one gate. What Scale sells TODAY is volume (500 credits) and team
+  (you + 5); outlets, broadcasts, custom domain, production calendar and
+  priority support keep their **Coming soon** badges, and the teaser marks
+  outlets and broadcasts "Soon" on the card itself.
 - **Tier CTAs are plan-aware for signed-in sellers** (`resolveTierCta` in
   `src/lib/pricing-cta.ts`): signed-out → trial link. For a signed-in seller,
   ownership is judged on **status, not just `plan`** — a trial stamps
@@ -236,8 +297,8 @@ Presentation rules:
   gets the disabled **"Current plan"** pill; a trialing / past_due / cancelled
   seller gets an actionable **"Subscribe"** on every tier; an owner of another
   tier gets **"Upgrade"** (higher) or **"Manage plan"** (lower). All actionable
-  CTAs route to **Settings → Billing** (`?tab=billing`), which owns the manual
-  contact-Arif flow. While Clerk auth + the plan query are still resolving, the
+  CTAs route to **Settings → Billing** (`?tab=billing`), where subscribing and
+  changing plan are self-serve. While Clerk auth + the plan query are still resolving, the
   purchasable-tier buttons show a **spinner** (`Button isLoading`) instead of a
   label, so a signed-in seller's CTA doesn't flip trial → dashboard → final on one
   refresh — the SSR render is the spinner too, so hydration matches. A storeless
@@ -248,18 +309,22 @@ Presentation rules:
   links here).
 - **Order allowances are the credit grants.** One constant (`PLAN_CREDIT_GRANT`)
   feeds the ledger, the soft-cap meter's denominator (`PLAN_CAPS.orderCap` is
-  derived from it) and — with the credits release — the page. Cap numbers stay
-  off the hero price; they live in the tier-card allowance line and the
-  comparison table. The page never shows "Unlimited".
+  derived from it) and the page — as a `{credits}` placeholder in every catalog
+  line, never a literal (`pricing-copy.test.ts` fails on one). Cap numbers stay
+  off the hero price; they live in the tier-card credits line ("{credits}
+  credits a month — 1 per order") and the comparison table's "Credits a month"
+  row, which reads PER MONTH in both toggle positions. The page never shows
+  "Unlimited".
 - Each tier card carries **"Flat price. We never take a cut of your sales."** — the
   value posture vs the metered/commission competitors.
 - The comparison table carries a live **Insights row** (Starter –, Pro ✓, Scale ✓,
   no Coming soon badge): the strongest shipped Pro differentiator. The old "Sales
   reports" row was deleted per the 11 Jul Insights tiering decision.
 - Scale-only rows (Outlets "Up to 3", custom domain, production calendar, priority
-  support, higher broadcast quota) carry **Coming soon** badges until the Scale
-  build ships. "Additional outlets RM49/mo each" is display copy only — the billing
-  lever ships with that build.
+  support, higher broadcast quota) carry **Coming soon** badges until they ship.
+  The "Additional outlets {price}/mo each" line was **removed** when Scale became
+  purchasable — quoting an add-on nobody can buy beside a live CTA is the
+  over-promise the badges exist to prevent.
 - Founding is generic across plans: `FOUNDING_MONTHLY_PRICE` covers pro (RM104) +
   scale (RM209), 30% lifetime — not hardcoded to Pro. **Retired for new signups
   30 Aug 2026**; the constants remain only so existing members keep their rate.
@@ -307,8 +372,12 @@ Two more defects fixed in the same pass, both in that dead code:
 number by twelve must never land under the bill. Same
 strictly-true-beats-tightest rule as `starterPricePerDay`.
 
-**Where annual is actually sold:** the seller's Settings → Billing tab, to
-proven payers on Pro, as a prefilled WhatsApp message. The eligibility ladder,
+**Where annual is actually sold:** the seller's Settings → Billing tab — the
+self-serve plan picker for anyone choosing a plan, and the annual card for
+proven monthly payers on **Pro and Scale** (a prefilled WhatsApp message).
+Annual sellers are granted credits **monthly**, never twelve months at once, at
+the grant locked for the year they paid for (`creditAccounts.annualGrant`); the
+page says so under the toggle. The eligibility ladder,
 the swap runbook and the credit-not-refund policy live in
 [`manual-subscription.md`](./manual-subscription.md#annual-billing--the-in-app-offer-sep-2026).
 

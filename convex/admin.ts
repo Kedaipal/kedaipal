@@ -46,6 +46,7 @@ import {
 	sanitizeHiddenNote,
 } from "./lib/marketplaceListing";
 import { isUnlimited } from "./lib/plans";
+import { loadCreditAccount } from "./credits";
 import { storeIsInternal } from "./marketplace";
 import { isUnclaimed } from "./lib/unclaimedStore";
 import { loadSubscription, resolveAccess } from "./subscriptions";
@@ -191,6 +192,23 @@ export type AdminSellerRow = {
 	/** When a Kedaipal admin last opened this store in act-as mode
 	 * (`adminAuditLog` `actAs.sessionStart`). Absent = never. */
 	lastActAsAt?: number;
+	/** Kedaipal Credits (T5, docs/credits.md): the store's CACHED balances —
+	 * the plan bucket (this period's monthly credits; negative = orders owed),
+	 * purchased credits (packs and admin lots), the usage period they belong
+	 * to and what it granted, when the total last reached zero (`exhaustedAt`,
+	 * set only while it's still there — "out of credits since"), and an
+	 * admin's custom monthly grant. Absent = no credit account yet (a store
+	 * the backfill hasn't reached). The drawer reads the live projection
+	 * (`credits.adminGetAccount`); the directory reads the cache, which can
+	 * lag a month boundary by the few minutes before the 00:05 MYT roll. */
+	credits?: {
+		plan: number;
+		purchased: number;
+		periodKey: string;
+		periodGrant: number;
+		exhaustedAt?: number;
+		customGrant?: number;
+	};
 };
 
 /** The two per-store invoice facts the directory shows: the open bill and the
@@ -279,6 +297,8 @@ export const listSellersForAdmin = query({
 				: null;
 			const invoiceFacts = await loadInvoiceFacts(ctx, r._id);
 			const lastActAsAt = await loadLastActAs(ctx, r._id);
+			// One index read per store (`by_retailer`), the cached balances only.
+			const creditAccount = await loadCreditAccount(ctx, r._id);
 			// Seats (86exr91r4) — two short index reads per store; cap through
 			// resolveAccess so comped stores read as unlimited here too.
 			const activeMembers = await ctx.db
@@ -371,6 +391,18 @@ export const listSellersForAdmin = query({
 					: undefined,
 				...invoiceFacts,
 				lastActAsAt,
+				...(creditAccount
+					? {
+							credits: {
+								plan: creditAccount.planBalance,
+								purchased: creditAccount.purchasedBalance,
+								periodKey: creditAccount.periodKey,
+								periodGrant: creditAccount.periodGrant,
+								exhaustedAt: creditAccount.exhaustedAt,
+								customGrant: creditAccount.grantOverride,
+							},
+						}
+					: {}),
 			});
 		}
 		rows.sort((a, b) => {

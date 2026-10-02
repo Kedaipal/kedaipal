@@ -213,6 +213,67 @@ manager preset includes *view*.
   Delyva and Meta are never paid in credits. `reason` is the seam for future
   Kedaipal-provided spenders.
 
+## Public surfaces (T5)
+
+ClickUp [`z8r3fdfu31`](https://app.clickup.com/t/z8r3fdfu31), with "Open Scale
+for purchase" ([`z8r3fdfuhq`](https://app.clickup.com/t/z8r3fdfuhq)) folded in.
+The rule: on release day the dashboard, `/pricing`, the landing, `/cost`, the
+emails and the Terms say the same thing, in en/ms/zh, for MY and SG visitors —
+a prospect finds nothing to discover after signup.
+
+**Every number is read, never typed.** Allowances come from
+`PLAN_CREDIT_GRANT`, pack prices from `CREDIT_PACKS[currency]`, the trial from
+`INVOICE_DUE_GRACE_DAYS` (the first invoice's grace — which IS the 14 days) and
+`TRIAL_CREDIT_GRANT`, the refund allowance from
+`SELLER_CANCEL_REFUNDS_PER_PERIOD`, the lot lifetime from
+`PURCHASED_CREDIT_LIFETIME_MONTHS` — as `{placeholders}` in the catalogs. The
+one exception is the landing FAQ (`faq_a_8`): FAQ answers render param-less
+for the FAQPage JSON-LD mirror, so it spells "14 days or 200 orders" and
+`landing-redesign.test.ts` pins those literals to the constants.
+
+| Surface | What it says | Where |
+| --- | --- | --- |
+| `/pricing` tier cards | "{credits} credits a month — 1 per order"; Scale's CTA is plan-aware like the other two | `src/routes/pricing.tsx` |
+| `/pricing` table | "Credits a month (1 credit = 1 order)" — 100 / 200 / 500, **per month in both toggle positions** | same |
+| Under the table | "1 credit = 1 order. Need more in a busy month? Top-ups start at {price} for {credits} credits." — the visitor's currency's smallest pack; S$ never beside RM | same |
+| Under the annual toggle | "On annual you get the same credits every month, locked in for the year you paid." | same |
+| `/pricing` FAQ | When do I start paying? · What is a credit? · Is my price changing? · What happens if I run out? · Do unused credits carry over? · Can I switch plans? · Same credits on annual? | same |
+| Landing teaser | one sub line (every plan includes a monthly order allowance); each card opens on its credits; Scale's unbuilt rows wear "Soon" | `src/components/landing/pricing-teaser.tsx` |
+| `/cost` | the plan the visitor's volume needs — plan + cheapest top-ups, never a flat Pro | `recommendPlan`, `src/lib/calculator.ts` |
+| `/terms#credits`, `/terms#data-processing` | the credits clauses and the processor terms | `src/routes/terms.tsx` |
+| Emails | invoice emails name the billed plan's monthly credits (`monthlyCreditGrant` — a custom grant or Founding Pro's 300 in the member's own email); the first-invoice emails state the trial; the free-period nudge names each plan's credits | `convex/lib/billingEmailCopy.ts` |
+| Dashboard checklist | "Start your plan" states the trial in one line | `src/lib/subscribe-step.ts` |
+| Admin | per-store credits column + sort, a Credits section in the seller sheet that opens the credit ledger (adjust, custom grant) as a page of the SAME drawer — back link to the seller, never a drawer stacked on a drawer — and two book-wide tiles on Admin → Billing | `admin.ts`, `credits.adminCreditTotals`, `src/components/admin/credit-ledger-sheet.tsx` |
+
+**What public copy says, in one place:**
+
+- **1 credit = 1 order you keep.** A credit comes back only for an order that
+  never got going (an unanswered booking request, a lapsed unpaid claim-link
+  order, a buyer backing out, or a new order the seller cancels before
+  accepting — up to 10 a month).
+- **Running out never stops the shop.** Every order still comes in; until
+  credits are added (top up, move up, or the monthly credits) the seller can't
+  accept or update orders or edit products, and can always see, cancel and
+  refund. Orders taken at zero come off the next credits.
+- **The trial:** free until the first order; from it, 14 days or 200 orders of
+  everything in Pro, whichever comes first; then pick a plan. The day-15
+  backstop is named in the FAQ answers, never contradicted elsewhere.
+- **Never shown publicly:** Founding Pro's 300, the Off-Season Hold, any
+  percentage, "wallet", "pay as you go", a balance in money — and credits are
+  never mentioned to a buyer.
+
+**Vocabulary** (so T3's in-app copy and emails match the public pages):
+
+| en | ms | zh |
+| --- | --- | --- |
+| credit / credits | kredit | 点数 (unit 点 — "1 点 = 1 张订单") |
+| top up | tambah kredit | 充值 |
+| orders a month | pesanan sebulan | 每月 … 张订单 |
+
+`pricing-copy.test.ts` pins the allowances to `PLAN_CREDIT_GRANT` (placeholder,
+never a literal; the retired 400 and any "orders/mo" line are banned), the
+trial's two bounds travelling together, and the banned vocabulary.
+
 ## Operator runbook
 
 After the release deploys (listed in the release PR's operator checklist):

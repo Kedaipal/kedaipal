@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { LOCALES } from "../../convex/lib/locale";
+import {
+	INVOICE_DUE_GRACE_DAYS,
+	PLAN_CREDIT_GRANT,
+	PLANS,
+	TRIAL_CREDIT_GRANT,
+} from "../../convex/lib/plans";
 import en from "../../messages/en.json";
 import ms from "../../messages/ms.json";
 import zh from "../../messages/zh.json";
+import { m } from "../paraglide/messages";
 
 /**
  * Semantic guards on the public pricing copy (`pricing_*` teaser + `pricingpage_*`
@@ -9,10 +17,11 @@ import zh from "../../messages/zh.json";
  *   1. Scale is the flat multi-outlet tier — reseller-band language is dead and
  *      must not creep back in any locale.
  *   2. No tier ever advertises "Unlimited" — every allowance is finite.
- *   3. The decided order allowances (Starter 100 / Pro 200 / Scale 400) hold.
- *      Note these are display numbers from the caps ticket 86eye2ccu and
- *      deliberately lead PLAN_CAPS enforcement, so this asserts the *copy*, not
- *      the backend constant.
+ *   3. Every allowance the copy prints is `PLAN_CREDIT_GRANT` (Credits T5,
+ *      z8r3fdfu31): the credits lines take the number as a `{credits}`
+ *      placeholder, so the page cannot print one the ledger doesn't grant.
+ *      The literal "400" Scale shipped with outlived the move to 500 in two
+ *      catalogs and a hardcoded table row — that is the failure this pins.
  * Key parity across locales is covered separately by i18n.test.ts.
  */
 
@@ -86,17 +95,106 @@ describe("pricing copy stays aligned with the flat multi-outlet Scale", () => {
 		expect(offenders, offenders.join("\n")).toEqual([]);
 	});
 
-	it("advertises the decided order allowances (100 / 200 / 400)", () => {
+	it("publishes the locked monthly credits: Starter 100, Pro 200, Scale 500", () => {
+		// The decision (register z8r3fdf8j1, 17 Sep 2026). Every surface below
+		// reads the constant, so this is the one place the numbers are spelled.
+		expect(PLAN_CREDIT_GRANT).toEqual({ starter: 100, pro: 200, scale: 500 });
+	});
+
+	it("takes every allowance as a {credits} placeholder, never a literal", () => {
+		const allowanceKeys = [
+			"pricingpage_credits_per_month",
+			"pricing_feat_credits",
+			"pricingpage_tier_scale_tagline",
+			"pricing_tier_scale_tagline",
+		];
 		for (const [locale, catalog] of catalogs) {
-			expect(catalog.pricingpage_ordercap_starter, locale).toContain("100");
-			expect(catalog.pricingpage_ordercap_pro, locale).toContain("200");
-			// Scale's card allowance was deliberately number-free after the flat
-			// multi-outlet repositioning (86eyb9zwt), while the comparison table
-			// already printed a concrete 400 — two answers to the same question on
-			// one page. The funnel redesign (86eye3p6z) settles it on 400
-			// everywhere, so the card line now carries the number too.
-			expect(catalog.pricingpage_ordercap_pro, locale).not.toContain("500");
-			expect(catalog.pricingpage_ordercap_scale, locale).toContain("400");
+			for (const key of allowanceKeys) {
+				expect(catalog[key], `${locale}.${key}`).toContain("{credits}");
+				// A literal allowance beside the placeholder is how 400 survived.
+				for (const grant of [...Object.values(PLAN_CREDIT_GRANT), 400]) {
+					expect(catalog[key], `${locale}.${key}`).not.toContain(String(grant));
+				}
+			}
 		}
+	});
+
+	it("renders each tier's credits from PLAN_CREDIT_GRANT, in every locale", () => {
+		for (const locale of LOCALES) {
+			for (const plan of PLANS) {
+				const line = m.pricingpage_credits_per_month(
+					{ credits: PLAN_CREDIT_GRANT[plan] },
+					{ locale },
+				);
+				expect(line, `${locale} ${plan}`).toContain(
+					String(PLAN_CREDIT_GRANT[plan]),
+				);
+				expect(
+					m.pricing_feat_credits(
+						{ credits: PLAN_CREDIT_GRANT[plan] },
+						{ locale },
+					),
+					`${locale} ${plan}`,
+				).toBe(line);
+			}
+		}
+	});
+
+	it('never carries the retired Scale 400 or an "orders/mo" line', () => {
+		const offenders: string[] = [];
+		for (const [locale, catalog] of catalogs) {
+			for (const [key, value] of Object.entries(catalog)) {
+				if (/\b400\b|orders\/mo|order\/bulan|订单\/月/i.test(value))
+					offenders.push(`${locale}.${key} = ${value}`);
+			}
+		}
+		expect(offenders, offenders.join("\n")).toEqual([]);
+	});
+
+	/**
+	 * The trial (Zaki, 30 Sep 2026): free until the first order, then N days
+	 * or M orders, whichever comes first. The public lines take both as
+	 * placeholders from `INVOICE_DUE_GRACE_DAYS` / `TRIAL_CREDIT_GRANT` — and
+	 * the two bounds always travel together, because "14 days" alone is the
+	 * calendar trial this model replaced.
+	 */
+	it("states the trial's two bounds together, from the constants", () => {
+		const trialKeys = [
+			"pricing_sub",
+			"pricingpage_hero_sub",
+			"pricingpage_faq_a5",
+			"pricingpage_cta_sub",
+		];
+		for (const [locale, catalog] of catalogs) {
+			for (const key of trialKeys) {
+				expect(catalog[key], `${locale}.${key}`).toContain("{days}");
+				expect(catalog[key], `${locale}.${key}`).toContain("{orders}");
+			}
+		}
+		for (const locale of LOCALES) {
+			const sub = m.pricingpage_hero_sub(
+				{ days: INVOICE_DUE_GRACE_DAYS, orders: TRIAL_CREDIT_GRANT },
+				{ locale },
+			);
+			expect(sub, locale).toContain(String(INVOICE_DUE_GRACE_DAYS));
+			expect(sub, locale).toContain(String(TRIAL_CREDIT_GRANT));
+		}
+	});
+
+	/**
+	 * Words the credits model bans from public copy (docs/credits.md): no
+	 * wallet, no pay-as-you-go, and no "commission" — the flat-price note said
+	 * "komisen" / "佣金" in ms/zh while the en said "cut".
+	 */
+	it("keeps the banned credits vocabulary out of every locale", () => {
+		const banned =
+			/\bwallet\b|pay[- ]as[- ]you[- ]go|\bpayg\b|commission|komisen|佣金|dompet|钱包|off-season|luar musim|淡季/i;
+		const offenders: string[] = [];
+		for (const [locale, catalog] of catalogs) {
+			for (const [key, value] of pricingEntries(catalog)) {
+				if (banned.test(value)) offenders.push(`${locale}.${key} = ${value}`);
+			}
+		}
+		expect(offenders, offenders.join("\n")).toEqual([]);
 	});
 });

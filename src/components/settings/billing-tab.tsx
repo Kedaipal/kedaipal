@@ -28,7 +28,6 @@ import { api } from "../../../convex/_generated/api";
 import {
 	FOUNDING_BENEFIT_WARNING_MS,
 	FOUNDING_PLAN,
-	foundingPlanLocked,
 	isUnlimited,
 } from "../../../convex/lib/plans";
 import { HOLD_LABEL } from "../../../convex/lib/seasonalHold";
@@ -56,7 +55,10 @@ import { ZoomableImage } from "../ui/zoomable-image";
 import { AnnualBillingCard } from "./annual-billing-card";
 import { AutoRenewalCard } from "./auto-renewal-card";
 import { CreditReceiptButton } from "./credit-receipt-button";
-import { FirstInvoiceSwitch } from "./first-invoice-switch";
+import {
+	FirstInvoiceSwitch,
+	firstInvoiceTargets,
+} from "./first-invoice-switch";
 import { InvoiceDownloadButton } from "./invoice-download-button";
 import { PlanChangeCard } from "./plan-change-card";
 import { OwnerOnlyNote } from "./owner-only-note";
@@ -628,17 +630,15 @@ export function BillingTab({
 					    invoices only — the first invoice, or a self-serve pick. The
 					    server refuses admin-issued and hold invoices too, and a
 					    Founding Member's move off Founding Pro (they have no other
-					    tier). Waits for the gateway read: the quoted price is
+					    tier). Offers every other tier for sale, Scale included
+					    (z8r3fdfuhq). Waits for the gateway read: the quoted price is
 					    founding-sensitive. */}
 					{gateway &&
 					(pending.kind ?? "plan") === "plan" &&
 					(pending.origin === "free_period_end" ||
 						pending.origin === "self_serve") &&
-					(pending.plan === "pro" || pending.plan === "starter") &&
-					!foundingPlanLocked(
-						pending.plan === "pro" ? "starter" : "pro",
-						foundingPricing,
-					) ? (
+					pending.plan !== undefined &&
+					firstInvoiceTargets(pending.plan, foundingPricing).length > 0 ? (
 						<FirstInvoiceSwitch
 							invoicePlan={pending.plan}
 							currency={pending.currency === "SGD" ? "SGD" : "MYR"}

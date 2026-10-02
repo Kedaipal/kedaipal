@@ -209,6 +209,26 @@ as the client providers.
 retailer's first confirmed order in Realtime/DebugView (server events appear
 within minutes), then check Funnel Exploration segments by `src`.
 
+## Kedaipal Credits events (Credits T2/T3)
+
+The credits release adds five events. **T5 (the public surfaces) fires none of
+them** — this catalog is written down here, ahead of the tickets that fire
+them, so their names, params and key-event status are settled once rather
+than per branch. There are **no store-paused events**: the storefront never
+pauses when a seller runs out ([`credits.md`](./credits.md)), so there is
+nothing of that shape to measure.
+
+| Event | Fires | Fired by | Key event? |
+| --- | --- | --- | --- |
+| `credits_topup_started` | a seller starts a top-up pack checkout (the HitPay page opens) | T2 (`z8r3fdf8ht`) | no |
+| `credits_topup_paid` | a pack purchase settles and its lot lands — server-side, like `subscribe_paid` | T2 | **yes** — revenue |
+| `credits_low_nudge_sent` | the once-per-period "running low" notice goes out | T3 (`z8r3fdf8hy`) | no |
+| `credits_seller_locked` | a store's total reaches zero or below and the seller lock applies (never for comped or admin-owned stores) | T3 | no |
+| `credits_seller_unlocked` | the lock lifts; carries `route` = `topup` \| `upgrade` \| `refresh` \| `settle` — what brought the balance back above zero | T3 | no |
+
+Every one carries the store's `src` like the funnel events above. Operator
+step when T2 ships: mark `credits_topup_paid` as a **key event** in GA4.
+
 ## Configuration
 
 - **Local:** copy the `VITE_CLARITY_PROJECT_ID` line from `.env.local.example`

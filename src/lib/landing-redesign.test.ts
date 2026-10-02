@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+	INVOICE_DUE_GRACE_DAYS,
+	TRIAL_CREDIT_GRANT,
+} from "../../convex/lib/plans";
 import en from "../../messages/en.json";
 import ms from "../../messages/ms.json";
 import zh from "../../messages/zh.json";
@@ -179,17 +183,52 @@ describe("landing v2 — cut sections stay cut", () => {
 		}
 	});
 
-	it("never says 14-day or RM299 on a key the landing renders", () => {
+	// Prefixes = every section on `/`.
+	const onLanding =
+		/^(nav_|hero_|demo_video_|proof_|handshake_|delivery_|pay_|pricing_|faq_|final_|footer_|guarantee_|region_)/;
+
+	it("never quotes the retired calendar trial or RM299 on a key the landing renders", () => {
 		// Start-when-you-sell replaced the calendar trial and Scale is RM399
-		// (pricing reset, 30 Aug 2026). Prefixes = every section on `/`.
-		const onLanding =
-			/^(nav_|hero_|demo_video_|proof_|handshake_|delivery_|pay_|pricing_|faq_|final_|footer_|guarantee_|region_)/;
-		const stale = /14[- ]day|14 hari|14 天|RM ?299|S\$ ?119/i;
+		// (pricing reset, 30 Aug 2026). The retired PHRASING is what's banned —
+		// "14-day free trial", "14 days free" — not the number of days: since
+		// Zaki's 30 Sep 2026 model the landing says "14 days or 200 orders",
+		// counted from the first order (next test).
+		const stale =
+			/\d+[- ]day (free )?trial|\d+ days free|free for \d+ days|percubaan percuma \d+ hari|\d+ hari percuma|\d+ 天免费|RM ?299|S\$ ?119/i;
 		for (const [locale, catalog] of catalogs) {
 			const hits = Object.entries(catalog)
 				.filter(([k, v]) => onLanding.test(k) && stale.test(String(v)))
 				.map(([k]) => k);
 			expect(hits, `${locale}: ${hits.join(", ")}`).toEqual([]);
+		}
+	});
+
+	/**
+	 * The trial has TWO bounds — days and orders from the first order,
+	 * whichever comes first — and a day count without its order bound is the
+	 * calendar trial the model replaced. Most landing keys take both as
+	 * placeholders; FAQ answers can't (they render param-less for the
+	 * FAQPage mirror, landing-faq.ts), so `faq_a_8` spells them, pinned here
+	 * to the constants that enforce them.
+	 */
+	it("states the trial's day bound only beside its order bound", () => {
+		const days = new RegExp(
+			`\\b${INVOICE_DUE_GRACE_DAYS}[- ]?(day|hari|天)`,
+			"i",
+		);
+		const orders = new RegExp(`\\b${TRIAL_CREDIT_GRANT}\\b`);
+		for (const [locale, catalog] of catalogs) {
+			const lone = Object.entries(catalog)
+				.filter(
+					([k, v]) =>
+						onLanding.test(k) &&
+						days.test(String(v)) &&
+						!orders.test(String(v)),
+				)
+				.map(([k]) => k);
+			expect(lone, `${locale}: ${lone.join(", ")}`).toEqual([]);
+			expect(catalog.faq_a_8, `${locale}.faq_a_8`).toMatch(days);
+			expect(catalog.faq_a_8, `${locale}.faq_a_8`).toMatch(orders);
 		}
 	});
 });

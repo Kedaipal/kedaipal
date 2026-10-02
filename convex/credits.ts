@@ -1066,6 +1066,65 @@ export const adminSetGrantOverride = mutation({
 	},
 });
 
+/** Upper bound on the accounts one totals read walks — one row per store, so
+ * this is the store count the admin tiles stay exact for (they say so past
+ * it). Past a few thousand stores the totals want a denormalized counter. */
+const ADMIN_TOTALS_SCAN_LIMIT = 5_000;
+
+export type AdminCreditTotals = {
+	/** Σ purchasedBalance: credits sellers bought and haven't used yet — the
+	 * deferred-revenue figure (a sold credit is a service still owed). */
+	purchasedUnused: number;
+	/** How many stores hold any unused purchased credits. */
+	storesWithPurchased: number;
+	/** Σ min(0, planBalance), as a positive count: orders taken past zero that
+	 * the next monthly grant or purchased pack will absorb. */
+	ordersOwed: number;
+	/** How many stores carry a plan-bucket debt. */
+	storesOwing: number;
+	/** Accounts read. `truncated` = the scan hit its limit, so the sums are a
+	 * floor, not the whole book. */
+	accounts: number;
+	truncated: boolean;
+};
+
+/** Admin: the book-wide credit figures behind Admin → Billing's two credit
+ * tiles (Credits T5). Reads the cached balances — one row per store — never
+ * the ledger. */
+export const adminCreditTotals = query({
+	args: {},
+	handler: async (ctx): Promise<AdminCreditTotals> => {
+		await requireAdmin(ctx);
+		const rows = await ctx.db
+			.query("creditAccounts")
+			.take(ADMIN_TOTALS_SCAN_LIMIT + 1);
+		const truncated = rows.length > ADMIN_TOTALS_SCAN_LIMIT;
+		const accounts = truncated ? rows.slice(0, ADMIN_TOTALS_SCAN_LIMIT) : rows;
+		let purchasedUnused = 0;
+		let storesWithPurchased = 0;
+		let ordersOwed = 0;
+		let storesOwing = 0;
+		for (const account of accounts) {
+			if (account.purchasedBalance > 0) {
+				purchasedUnused += account.purchasedBalance;
+				storesWithPurchased += 1;
+			}
+			if (account.planBalance < 0) {
+				ordersOwed += -account.planBalance;
+				storesOwing += 1;
+			}
+		}
+		return {
+			purchasedUnused,
+			storesWithPurchased,
+			ordersOwed,
+			storesOwing,
+			accounts: accounts.length,
+			truncated,
+		};
+	},
+});
+
 // ---------------------------------------------------------------------------
 // Sweeps + audit (internal)
 // ---------------------------------------------------------------------------

@@ -19,6 +19,8 @@ import {
 	renderTrialEmail,
 	type TrialEmailKey,
 } from "./lib/billingEmailCopy";
+import { loadCreditAccount } from "./credits";
+import { monthlyCreditGrant } from "./lib/credits";
 import { sendEmail } from "./lib/email";
 import { gatewayPaymentMethodLabel } from "./lib/hitpayBilling";
 import { formatDocDate } from "./lib/pdf/document";
@@ -27,7 +29,9 @@ import type { Locale } from "./lib/emailCopy";
 import {
 	BILLING_CURRENCY_FOR_COUNTRY,
 	type BillingCurrency,
+	FOUNDING_PRO_CREDIT_GRANT,
 	HOLD_MONTHLY_PRICES,
+	PLAN_CREDIT_GRANT,
 	renewalQuote,
 } from "./lib/plans";
 
@@ -84,6 +88,9 @@ type InvoiceEmailMeta = {
 	crossBorder: boolean;
 	// HitPay Pay-now link (86eyb6z4r), when the mint landed for this invoice.
 	payNowUrl: string | undefined;
+	// Kedaipal Credits (T5): what the billed plan gives THIS store a month —
+	// undefined for a hold invoice, which grants nothing.
+	includedCredits: number | undefined;
 };
 
 /** Loads everything the billing-email action needs in one roundtrip: invoice +
@@ -104,6 +111,29 @@ export const getInvoiceForEmail = internalQuery({
 		const config = crossBorder
 			? null
 			: await ctx.db.query("billingConfig").first();
+		const kind = invoice.kind ?? "plan";
+		const plan = invoice.plan ?? sub?.plan ?? "pro";
+		// The store's own grant for the BILLED plan, through the one author of
+		// grant precedence (`monthlyCreditGrant`): an admin's custom grant beats
+		// the tier, and a founding-priced Pro invoice is Founding Pro's 300 —
+		// fine in the member's own email, never on a public page. The annual
+		// lock is left out on purpose: this bill starts the NEXT term, and
+		// paying it re-stamps the lock at today's grant.
+		const account =
+			kind === "plan" ? await loadCreditAccount(ctx, invoice.retailerId) : null;
+		const includedCredits =
+			kind === "plan"
+				? monthlyCreditGrant({
+						status: "active",
+						plan,
+						comped: false,
+						ownerIsAdmin: false,
+						foundingEligible: (invoice.foundingDiscount ?? 0) > 0,
+						override: account?.grantOverride,
+						annualGrant: undefined,
+						now: Date.now(),
+					})
+				: undefined;
 		return {
 			invoiceNumber: invoice.invoiceNumber,
 			amount: invoice.amount,
@@ -119,9 +149,9 @@ export const getInvoiceForEmail = internalQuery({
 			// the first annual invoice email "Pro · Monthly" beside a ten-times
 			// amount while its own attached PDF said "Annual Subscription". Same bug
 			// mislabelled a Starter invoice issued to a store still trialing on Pro.
-			plan: invoice.plan ?? sub?.plan ?? "pro",
+			plan,
 			billingCycle: invoice.billingCycle ?? sub?.billingCycle ?? "monthly",
-			kind: invoice.kind ?? "plan",
+			kind,
 			notifyEmail: retailer.notifyEmail,
 			storeName: retailer.storeName,
 			locale: (retailer.locale as Locale | undefined) ?? "en",
@@ -131,6 +161,7 @@ export const getInvoiceForEmail = internalQuery({
 			duitnowId: config?.duitnowId,
 			crossBorder,
 			payNowUrl: invoice.gatewayPayment?.url,
+			includedCredits,
 		};
 	},
 });
@@ -187,6 +218,7 @@ async function sendInvoiceEmail(
 		crossBorder: meta.crossBorder,
 		payNowUrl: meta.payNowUrl,
 		billingUrl: billingPageUrl(),
+		includedCredits: meta.includedCredits,
 		daysPastDue,
 		// The Off-Season Hold is only an alternative for a seller who ISN'T
 		// already on it — a hold invoice means they took that door already, and
@@ -418,6 +450,9 @@ export const sendSampleBillingEmail = internalAction({
 								crossBorder,
 								payNowUrl: samplePayNow,
 								billingUrl: url,
+								includedCredits: withDiscount
+									? FOUNDING_PRO_CREDIT_GRANT
+									: PLAN_CREDIT_GRANT.pro,
 							});
 		await sendEmail(to, rendered.subject, rendered.html, rendered.text);
 		return { sent: to, key };
