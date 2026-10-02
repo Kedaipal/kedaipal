@@ -203,7 +203,7 @@ export const RELEASES: Release[] = [
 					en: "Every order spends a credit, and the balance is on the page",
 				},
 				body: {
-					en: "Your plan's monthly allowance used to be a quiet line that counted up and did nothing much. It is now a balance you can act on: Starter comes with 100 credits a month, Pro with 200, Founding Pro with 300, and one order spends one. The meter sits right under your plan, and warns you once you are into the last fifth of the month. If you do run out, your storefront keeps taking orders — it is the dashboard that waits until you top up a pack or move up a plan. Cancel an order nobody had started on and the credit comes back. On every plan.",
+					en: "Your plan's monthly allowance used to be a quiet line that counted up and did nothing much. It is now a balance you can act on: Starter comes with 100 credits a month, Pro with 200, Founding Pro with 300, and one order spends one. The meter sits right under your plan, and warns you once you are into the last fifth of the month. Run out and nothing stops: your storefront keeps taking orders and they come off your next credits, so a top-up or the 1st of the month clears the balance. Cancel an order nobody had started on and the credit comes back. On every plan.",
 				},
 				href: spotlightHref("credit_balance"),
 				hrefLabel: { en: "See your balance" },
@@ -571,7 +571,7 @@ export const RELEASES: Release[] = [
 				},
 				body: {
 					// currency-literal-ok: Kedaipal's OWN plan prices (MY + SG), not store money.
-					en: "Two changes to plans, and we would rather you heard them here than on an invoice. The monthly order allowance is now 200 on Pro and 400 on Scale. It was a soft line then — passing it showed in your usage and nothing more. From v2026.10.1 that allowance is a credit balance: your storefront still never closes and no buyer is ever turned away, but the dashboard waits once you reach zero. See the credits note above. Scale moves to RM399 (S$149) from your next invoice; Starter and Pro keep their prices, and founding members keep their discount on the new numbers.",
+					en: "Two changes to plans, and we would rather you heard them here than on an invoice. The monthly order allowance is now 200 on Pro and 400 on Scale. It was a soft line then — passing it showed in your usage and nothing more. From v2026.10.1 that allowance is a credit balance you can see and top up — your storefront still never closes and no buyer is ever turned away. See the credits note above. Scale moves to RM399 (S$149) from your next invoice; Starter and Pro keep their prices, and founding members keep their discount on the new numbers.",
 				},
 				href: spotlightHref("plan_change"),
 				hrefLabel: { en: "See your plan" },

@@ -45,6 +45,7 @@ import {
 	tryRetailerAccess,
 } from "./lib/auth";
 import {
+	CREDIT_LOCK_ENABLED,
 	type CreditUnlockRoute,
 	cancelRefundDecision,
 	creditLockAudience,
@@ -95,6 +96,12 @@ export async function resolveCreditLock(
 		since: null,
 		ordersWaiting: 0,
 	};
+	// The lock is built and switched off (CREDIT_LOCK_ENABLED, lib/credits.ts).
+	// Gated HERE, at the ONE resolver every guard and the dashboard payload
+	// read, so the off state can never disagree with itself — what the seller
+	// is told and what the server refuses come from this answer. Turning it on
+	// is this line, not a sweep.
+	if (!CREDIT_LOCK_ENABLED) return open;
 	if (
 		creditLockExempt({
 			status,

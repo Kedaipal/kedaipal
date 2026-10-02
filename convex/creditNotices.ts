@@ -38,6 +38,7 @@ import {
 	renderCreditEmail,
 } from "./lib/creditEmailCopy";
 import {
+	CREDIT_LOCK_ENABLED,
 	type CreditNoticeKind,
 	type CreditUnlockRoute,
 	creditLockExempt,
@@ -127,6 +128,15 @@ export const evaluate = internalMutation({
 		ctx,
 		{ retailerId, route: inRoute },
 	): Promise<CreditNoticeKind | null> => {
+		// All three balance notices — low, locked, unlocked — state in every
+		// surface (email, WhatsApp template, in-app banner) that order handling
+		// pauses. With the lock switched off (CREDIT_LOCK_ENABLED) that is
+		// false, so none of them is sent, and no `notices` bookkeeping is
+		// written: the day the lock turns on, every store is announced to
+		// cleanly rather than carrying a marker for a notice nobody received.
+		// Expiry notices (internalExpiryNotices) are about purchased lots, not
+		// the lock, and are untouched.
+		if (!CREDIT_LOCK_ENABLED) return null;
 		const retailer = await ctx.db.get(retailerId);
 		if (!retailer) return null;
 		const account = await loadCreditAccount(ctx, retailerId);
