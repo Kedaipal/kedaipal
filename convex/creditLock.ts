@@ -12,6 +12,22 @@
 // separate guards: the credit lock must leave cancel, refund and settings open,
 // and cancel runs through the same `updateStatus` as confirm. Which public
 // writes carry this guard is a TEST, not prose — creditLockCoverage.test.ts.
+//
+// CALL IT UNCONDITIONALLY. Both locks let Kedaipal admins through on their own
+// `isAdmin` check (identity, `ADMIN_USER_IDS`), which is a SUPERSET of the
+// call site's `access.actingAsAdmin` — that flag is set only for an admin
+// subject, and misses an admin on their own store, whom both guards also pass.
+// So a call site never wraps this guard in an act-as test. Ten sites shipped
+// it looking wrapped (PR #320 review, 2 Oct):
+//
+//   if (!access.actingAsAdmin)
+//     await assertSubscriptionActive(ctx, id);
+//     await assertCreditsAvailable(ctx, id);   // ← NOT inside the if
+//
+// Right by accident, and a lie about the control flow in auth-adjacent code.
+// Those sites now brace the `if`; `creditLockCoverage.test.ts` fails on the
+// dangling shape for any `assert*` guard, and `creditLock.test.ts` pins the
+// white-glove bypass itself, so moving it goes red instead of quiet.
 
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -100,7 +116,13 @@ export async function resolveCreditLock(
 	};
 }
 
-/** Live orders created at or after `since`, newest first, capped. */
+/** Live orders created at or after `since`, newest first, capped.
+ *
+ * Walks the `by_retailer` index (insertion order) and stops at the first row
+ * older than `since`, which assumes `createdAt` runs with insertion — true for
+ * every intake path, none of which backdates it. A backdated row would only
+ * end the walk early, undercounting a "99+" banner figure; it can never
+ * over-count or affect the lock itself. */
 async function ordersSince(
 	ctx: AnyCtx,
 	retailerId: Id<"retailers">,

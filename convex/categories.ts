@@ -461,9 +461,10 @@ export const update = mutation({
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		// Soft-lock (growth-write); admin act-as bypasses.
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, category.retailerId);
-			await assertCreditsAvailable(ctx, category.retailerId);
+		}
+		await assertCreditsAvailable(ctx, category.retailerId);
 		// Editing category structure is Pro; archive/restore (setActive) is the
 		// un-gated escape hatch, not this. Admin act-as bypasses.
 		if (!access.actingAsAdmin)
@@ -530,9 +531,10 @@ export const setActive = mutation({
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		// Soft-lock (growth-write); admin act-as bypasses.
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, category.retailerId);
-			await assertCreditsAvailable(ctx, category.retailerId);
+		}
+		await assertCreditsAvailable(ctx, category.retailerId);
 		if (category.active === active) return; // idempotent
 
 		const patch: Partial<Doc<"categories">> = {
@@ -629,9 +631,10 @@ export const reorderProducts = mutation({
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		// Soft-lock (growth-write); admin act-as bypasses.
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, category.retailerId);
-			await assertCreditsAvailable(ctx, category.retailerId);
+		}
+		await assertCreditsAvailable(ctx, category.retailerId);
 		// Structure-building — Pro. Admin act-as bypasses.
 		if (!access.actingAsAdmin)
 			await assertPlanFeature(ctx, category.retailerId, "categories");
@@ -691,9 +694,10 @@ export const setProductCategories = mutation({
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		// Soft-lock (growth-write); admin act-as bypasses.
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, product.retailerId);
-			await assertCreditsAvailable(ctx, product.retailerId);
+		}
+		await assertCreditsAvailable(ctx, product.retailerId);
 
 		const requested = new Set(categoryIds);
 		if (requested.size !== categoryIds.length) {
@@ -811,9 +815,10 @@ export const setHidden = mutation({
 		);
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, category.retailerId);
-			await assertCreditsAvailable(ctx, category.retailerId);
+		}
+		await assertCreditsAvailable(ctx, category.retailerId);
 		if ((category.hidden ?? false) === hidden) return; // idempotent
 
 		await ctx.db.patch(categoryId, { hidden, updatedAt: Date.now() });
