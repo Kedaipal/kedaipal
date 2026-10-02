@@ -354,7 +354,15 @@ Deduped by `renewalNoticeSentForPeriodEnd`.
 | Events | `charge.created`, `recurring_billing.method_attached/detached/subscription_updated` | `status=completed` |
 
 The v1 branch resolves **orders first** (`by_gateway_request` on orders),
-then **invoices** (same-named index on invoices). Unknown ids still 200-ack.
+then ONE resolver for everything minted on Kedaipal's own account —
+`subscriptionPayments.resolveBillingRequestContext` answers a subscription
+**invoice** or a **credit-pack purchase** (Credits T2, `creditPurchases`, the
+same-named index) in one query hop. `handleBillingCompletionWebhook` verifies
+both with `HITPAY_BILLING_SALT` and settles through
+`invoices.internalSettleFromGateway` or `creditPurchases.settlePurchase` — each
+owns its amount check and duplicate guard; see
+[credits.md](./credits.md#the-webhook-branch). Routing never reads
+`reference_number`. Unknown ids still 200-ack.
 Recurring `charge.created` is corroboration only (the sync response settles
 first; duplicates no-op); attach/detach/status events maintain `autoRenew`.
 Event payload parsing (`extractRecurringEvent`) is deliberately tolerant and
@@ -384,8 +392,8 @@ returns null → ack for anything unrecognised.
 | `HITPAY_BILLING_WEBHOOK_SALT` | The **registered endpoint's** signing secret — signs the dashboard V2 events. Optional: falls back to `HITPAY_BILLING_SALT`, but on a real account the two DIFFER, and without it every V2 event 401s |
 
 **The first two, both or nothing.** Absent ⇒ every surface (Pay-now, auto-renewal, plan
-picker) quietly stays hidden and manual billing renders byte-identical to
-before — fail-open-to-manual. These are **deployment env**, never a table:
+picker, and the credit-pack top-up — Credits T2) quietly stays hidden and manual
+billing renders byte-identical to before — fail-open-to-manual. These are **deployment env**, never a table:
 `billingConfig` is readable by every signed-in seller via
 `paymentInstructions`, so a platform secret can't live there.
 
@@ -409,6 +417,13 @@ recurring/charge events) — the signing secret shown for THAT endpoint is
   rejects it outright ("You cant set times_to_be_charged for save_card is
   true", sandbox 11 Sep 2026). No charge-count ceiling exists on the
   tokenised path.
+
+**One HTTP client for the account** (`convex/lib/hitpayBillingClient.ts`,
+extracted for Credits T2): the credentials, the headers and the
+payment-request create / DELETE / status calls live there, and both the invoice
+Pay-now link and the credit-pack checkout go through them — the empty
+`payment_methods` guard (a request the account can't take money on is deleted
+and reported as failed) included, so the two can't drift.
 
 ## Webhooks: TWO mechanisms, TWO secrets (sandbox-proved, 11 Sep 2026)
 

@@ -39,11 +39,7 @@ import {
 } from "./lib/auth";
 import { sendEmail } from "./lib/email";
 import { escapeHtml } from "./lib/emailCopy";
-import {
-	decimalStringToSen,
-	HITPAY_API_BASE,
-	senToDecimalString,
-} from "./lib/hitpay";
+import { HITPAY_API_BASE, senToDecimalString } from "./lib/hitpay";
 import {
 	type AdminAutoChargeState,
 	AUTO_RENEW_METHODS,
@@ -57,8 +53,15 @@ import {
 	nextChargeRetryAt,
 	readAttachedMethodCode,
 	readSessionChargeCount,
-	resolveBillingGatewayCredentials,
 } from "./lib/hitpayBilling";
+import {
+	billingAuthHeaders,
+	billingCredentials,
+	billingFormHeaders,
+	createPaymentRequest,
+	deletePaymentRequest,
+	lookupPaymentRequest,
+} from "./lib/hitpayBillingClient";
 import {
 	BILLING_CURRENCY_FOR_COUNTRY,
 	type BillingCurrency,
@@ -75,22 +78,6 @@ import { HOLD_LABEL } from "./lib/seasonalHold";
 /** How long an unfinished authorisation session is offered for "resume" before
  * a new one is minted. */
 const SETUP_RESUME_WINDOW_MS = 24 * 60 * 60 * 1000;
-
-function billingCredentials(): BillingGatewayCredentials | null {
-	return resolveBillingGatewayCredentials({
-		HITPAY_BILLING_API_KEY: process.env.HITPAY_BILLING_API_KEY,
-		HITPAY_BILLING_SALT: process.env.HITPAY_BILLING_SALT,
-		HITPAY_BILLING_WEBHOOK_SALT: process.env.HITPAY_BILLING_WEBHOOK_SALT,
-	});
-}
-
-function hitpayHeaders(credentials: BillingGatewayCredentials): HeadersInit {
-	return {
-		"X-BUSINESS-API-KEY": credentials.apiKey,
-		"Content-Type": "application/x-www-form-urlencoded",
-		"X-Requested-With": "XMLHttpRequest",
-	};
-}
 
 function billingPageUrl(extra?: string): string {
 	const base = `${process.env.SITE_URL ?? "https://kedaipal.com"}/app/settings?tab=billing`;
@@ -381,67 +368,25 @@ export const mintInvoicePaymentRequest = internalAction({
 			webhookUrl: siteUrl ? `${siteUrl}/webhook/hitpay` : "",
 			customerEmail: context.notifyEmail,
 		});
-		let response: Response;
-		try {
-			response = await fetch(
-				`${HITPAY_API_BASE[credentials.mode]}/payment-requests`,
-				{
-					method: "POST",
-					headers: hitpayHeaders(credentials),
-					body: params.toString(),
-				},
-			);
-		} catch (err) {
-			console.error("[billing] Pay-now mint failed (network)", {
-				invoiceNumber: context.invoiceNumber,
-				err: err instanceof Error ? err.message : String(err),
-			});
-			return;
-		}
-		if (!response.ok) {
-			console.error("[billing] Pay-now mint rejected", {
-				invoiceNumber: context.invoiceNumber,
-				status: response.status,
-				body: (await response.text()).slice(0, 300),
-			});
-			return;
-		}
-		const request = (await response.json()) as {
-			id?: string;
-			url?: string;
-			payment_methods?: string[];
-		};
-		if (!request.id || !request.url) {
-			console.error("[billing] Pay-now mint malformed response", {
-				invoiceNumber: context.invoiceNumber,
-			});
-			return;
-		}
-		// The response echoes the ACCOUNT's resolved methods for this currency.
-		// An explicit EMPTY list means the checkout page would render dead
-		// ("Awaiting customer present card", sandbox-observed 11 Sep on an SGD
-		// request with no SGD rails enabled) — don't store the link: no button
-		// beats a dead button, and the invoice stays on the manual rail. An
-		// absent field is treated as "no information", same as the BYO probe.
-		if (request.payment_methods !== undefined && request.payment_methods.length === 0) {
-			console.error(
-				"[billing] Pay-now mint has NO usable payment methods for this currency — link not stored; enable a method on the HitPay account",
-				{ invoiceNumber: context.invoiceNumber, currency: context.currency },
-			);
-			// HitPay already created it; a request we refuse to store is one no
-			// void or settle path can ever reach, so kill it here or it stays
-			// live and payable forever (these carry no expiry).
-			await expireRequest(credentials, request.id);
-			return;
-		}
+		// A failed mint (network, a rejection, or a request the account has no
+		// rails for in this currency — already deleted by the client) leaves the
+		// invoice on the manual rail: no button beats a dead button.
+		const request = await createPaymentRequest(credentials, params, {
+			kind: "invoice",
+			invoiceNumber: context.invoiceNumber,
+			currency: context.currency,
+		});
+		if (request.kind !== "ok") return;
 		const stored: { ok: boolean } = await ctx.runMutation(
 			internal.subscriptionPayments.recordInvoiceRequest,
 			{ invoiceId, requestId: request.id, url: request.url },
 		);
 		if (!stored.ok) {
-			// Settled/voided under us, or a link already stored. Same reasoning:
-			// an unstored request is unreachable by every later cleanup path.
-			await expireRequest(credentials, request.id);
+			// Settled/voided under us, or a link already stored. HitPay already
+			// created it, and a request we refuse to store is one no void or
+			// settle path can ever reach — kill it here or it stays live and
+			// payable forever (these carry no expiry).
+			await deletePaymentRequest(credentials, request.id);
 		}
 	},
 });
@@ -473,69 +418,16 @@ export const clearInvoiceRequest = internalMutation({
 	},
 });
 
-/** Kill an invoice's Pay-now request at HitPay (void / settled out-of-band).
- * Best-effort: DELETE on an already-completed request fails, and that's fine
- * — a payment that slipped through lands as a `late_payment` audit stamp. */
-/** DELETE a payment request at HitPay. Plain helper so the mint can kill a
- * request it just created without hopping through the scheduler — an orphan
- * must die in the same action that orphaned it. Best-effort by contract. */
-async function expireRequest(
-	credentials: BillingGatewayCredentials,
-	requestId: string,
-): Promise<void> {
-	try {
-		const response = await fetch(
-			`${HITPAY_API_BASE[credentials.mode]}/payment-requests/${requestId}`,
-			{
-				method: "DELETE",
-				headers: {
-					"X-BUSINESS-API-KEY": credentials.apiKey,
-					"X-Requested-With": "XMLHttpRequest",
-				},
-			},
-		);
-		if (!response.ok) {
-			console.warn("[billing] Pay-now link delete rejected", {
-				requestId,
-				status: response.status,
-			});
-		}
-	} catch (err) {
-		console.warn("[billing] Pay-now link delete failed", {
-			requestId,
-			err: err instanceof Error ? err.message : String(err),
-		});
-	}
-}
-
+/** Kill an invoice's Pay-now request at HitPay (void / settled out-of-band /
+ * account deleted). Scheduled from mutations, which can't fetch. Best-effort:
+ * DELETE on an already-completed request fails, and that's fine — a payment
+ * that slipped through lands as a `late_payment` audit stamp. */
 export const expireInvoiceRequest = internalAction({
 	args: { requestId: v.string() },
 	handler: async (_ctx, { requestId }): Promise<void> => {
 		const credentials = billingCredentials();
 		if (!credentials) return;
-		try {
-			const response = await fetch(
-				`${HITPAY_API_BASE[credentials.mode]}/payment-requests/${requestId}`,
-				{
-					method: "DELETE",
-					headers: {
-						"X-BUSINESS-API-KEY": credentials.apiKey,
-						"X-Requested-With": "XMLHttpRequest",
-					},
-				},
-			);
-			if (!response.ok) {
-				console.warn("[billing] Pay-now link delete rejected", {
-					requestId,
-					status: response.status,
-				});
-			}
-		} catch (err) {
-			console.warn("[billing] Pay-now link delete failed", {
-				requestId,
-				err: err instanceof Error ? err.message : String(err),
-			});
-		}
+		await deletePaymentRequest(credentials, requestId);
 	},
 });
 
@@ -586,42 +478,16 @@ export const verifyInvoicePayment = action({
 		);
 		if (!pending) return { settled: false };
 
-		let response: Response;
-		try {
-			response = await fetch(
-				`${HITPAY_API_BASE[credentials.mode]}/payment-requests/${pending.requestId}`,
-				{
-					headers: {
-						"X-BUSINESS-API-KEY": credentials.apiKey,
-						"X-Requested-With": "XMLHttpRequest",
-					},
-				},
-			);
-		} catch {
-			return { settled: false };
-		}
-		if (!response.ok) return { settled: false };
-		const request = (await response.json()) as {
-			payments?: Array<{
-				id: string;
-				status: string;
-				amount: string;
-				currency: string;
-				payment_type?: string;
-			}>;
-		};
-		const payment = request.payments?.find((p) => p.status === "succeeded");
-		if (!payment) return { settled: false };
-		const amountSen = decimalStringToSen(payment.amount);
-		if (amountSen === null) return { settled: false };
+		const payment = await lookupPaymentRequest(credentials, pending.requestId);
+		if (payment.kind !== "paid") return { settled: false };
 		const result: { applied: boolean; reason?: string } = await ctx.runMutation(
 			internal.invoices.internalSettleFromGateway,
 			{
 				invoiceId: pending.invoiceId,
-				paymentId: payment.id,
-				amountSen,
+				paymentId: payment.paymentId,
+				amountSen: payment.amountSen,
 				currency: payment.currency,
-				methodCode: payment.payment_type,
+				methodCode: payment.methodCode,
 				// The seller paid the Pay-now link themselves — NOT the saved-
 				// method session, so this settle may not touch the charge
 				// counter or answer an attempt stamp.
@@ -632,20 +498,39 @@ export const verifyInvoicePayment = action({
 	},
 });
 
-/** Webhook correlation for the v1 form branch: payment-request id → invoice. */
-export const resolveInvoiceRequestContext = internalQuery({
+/**
+ * Webhook correlation for the v1 form branch, for requests minted on
+ * KEDAIPAL's own account: payment-request id → the subscription invoice or
+ * the credit-pack purchase (Credits T2) it pays. ONE resolver, so a v1
+ * callback costs one query hop whichever it is. Routing never reads
+ * `reference_number` — that is a label, the request id is the key.
+ */
+export const resolveBillingRequestContext = internalQuery({
 	args: { paymentRequestId: v.string() },
 	handler: async (
 		ctx,
 		{ paymentRequestId },
-	): Promise<{ invoiceId: Id<"invoices"> } | null> => {
+	): Promise<
+		| { kind: "invoice"; invoiceId: Id<"invoices"> }
+		| { kind: "credit_purchase"; purchaseId: Id<"creditPurchases"> }
+		| null
+	> => {
 		const invoice = await ctx.db
 			.query("invoices")
 			.withIndex("by_gateway_request", (q) =>
 				q.eq("gatewayRequestId", paymentRequestId),
 			)
 			.first();
-		return invoice ? { invoiceId: invoice._id } : null;
+		if (invoice) return { kind: "invoice", invoiceId: invoice._id };
+		const purchase = await ctx.db
+			.query("creditPurchases")
+			.withIndex("by_gateway_request", (q) =>
+				q.eq("gatewayRequestId", paymentRequestId),
+			)
+			.first();
+		return purchase
+			? { kind: "credit_purchase", purchaseId: purchase._id }
+			: null;
 	},
 });
 
@@ -939,7 +824,7 @@ async function createRecurringSession(
 			`${HITPAY_API_BASE[credentials.mode]}/recurring-billing`,
 			{
 				method: "POST",
-				headers: hitpayHeaders(credentials),
+				headers: billingFormHeaders(credentials),
 				body: buildAutoRenewSessionParams(inputs).toString(),
 			},
 		);
@@ -1034,12 +919,7 @@ async function fetchRecurringSession(
 	try {
 		response = await fetch(
 			`${HITPAY_API_BASE[credentials.mode]}/recurring-billing/${sessionId}`,
-			{
-				headers: {
-					"X-BUSINESS-API-KEY": credentials.apiKey,
-					"X-Requested-With": "XMLHttpRequest",
-				},
-			},
+			{ headers: billingAuthHeaders(credentials) },
 		);
 	} catch (err) {
 		console.error("[billing] recurring session fetch failed", {
@@ -2086,9 +1966,7 @@ export const chargeDueRenewal = internalAction({
 		// ours can reach them). A decline re-mints the link, see
 		// recordChargeFailure.
 		if (context.gatewayRequestId) {
-			await ctx.runAction(internal.subscriptionPayments.expireInvoiceRequest, {
-				requestId: context.gatewayRequestId,
-			});
+			await deletePaymentRequest(credentials, context.gatewayRequestId);
 		}
 
 		let response: Response;
@@ -2097,7 +1975,7 @@ export const chargeDueRenewal = internalAction({
 				`${HITPAY_API_BASE[credentials.mode]}/charge/recurring-billing/${sessionId}`,
 				{
 					method: "POST",
-					headers: hitpayHeaders(credentials),
+					headers: billingFormHeaders(credentials),
 					body: new URLSearchParams({
 						amount: senToDecimalString(context.totalSen),
 						currency: context.currency.toUpperCase(),
