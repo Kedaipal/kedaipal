@@ -990,9 +990,10 @@ export const create = mutation({
 		// Soft-lock: a past_due seller can't grow their catalog (storefront + order
 		// pipeline stay live). Admins onboarding a store (act-as) bypass it —
 		// white-glove happens before the seller has paid. See docs/manual-subscription.md.
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, args.retailerId);
-			await assertCreditsAvailable(ctx, args.retailerId);
+		}
+		await assertCreditsAvailable(ctx, args.retailerId);
 
 		// Product cap — counts archived rows too, so deleting (not archiving) is
 		// what frees a slot. An admin operating the store (act-as) is exempt: a
@@ -1410,9 +1411,10 @@ export const update = mutation({
 			productId,
 			"write",
 		);
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, ownedProduct.retailerId);
-			await assertCreditsAvailable(ctx, ownedProduct.retailerId);
+		}
+		await assertCreditsAvailable(ctx, ownedProduct.retailerId);
 
 		if (
 			fields.imageStorageIds !== undefined &&
@@ -1549,9 +1551,10 @@ export const saveVariantGrid = mutation({
 			args.productId,
 			"write",
 		);
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, product.retailerId);
-			await assertCreditsAvailable(ctx, product.retailerId);
+		}
+		await assertCreditsAvailable(ctx, product.retailerId);
 
 		const options = normalizeOptionsOrThrow(args.options);
 		const variants = validateVariantSet(options, args.variants);
@@ -1823,9 +1826,10 @@ export const adjustStock = mutation({
 				adjustment.variantId,
 				"write",
 			);
-			if (!access.actingAsAdmin)
+			if (!access.actingAsAdmin) {
 				await assertSubscriptionActive(ctx, variant.retailerId);
-				await assertCreditsAvailable(ctx, variant.retailerId);
+			}
+			await assertCreditsAvailable(ctx, variant.retailerId);
 
 			// A bespoke line is priced on a quote and never counted — `onHand` is
 			// coerced to 0 on every write path. Offering to adjust it would invent a

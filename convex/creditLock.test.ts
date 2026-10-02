@@ -501,6 +501,79 @@ describe("the seller lock at zero credits", () => {
 	});
 });
 
+describe("white-glove: an admin acting as a locked store still works", () => {
+	/**
+	 * The ten call sites fixed in the PR #320 review read
+	 * `if (!access.actingAsAdmin) { assertSubscriptionActive } ;
+	 * assertCreditsAvailable` — the credit guard runs for EVERYONE and lets
+	 * admins through on its own `isAdmin` early return, exactly as the
+	 * past-due guard does. Nothing pinned that bypass, so moving it would have
+	 * broken onboarding-by-act-as silently. This is the pin: delete
+	 * `if (await isAdmin(ctx)) return;` from `assertCreditsAvailable` and
+	 * every case below goes red.
+	 */
+	test("the catalogue and order writes a locked seller can't do, an admin can", async () => {
+		const t = setup();
+		// Pro: categories are plan-gated, and this test is about the CREDIT
+		// lock, not the plan gate.
+		const s = await store(t, { status: "active", plan: "pro" });
+		const order = await storefrontOrder(t, s.retailerId, s.productId);
+		const { categoryId } = await t
+			.withIdentity({ subject: OWNER })
+			.mutation(api.categories.create, {
+				retailerId: s.retailerId,
+				name: "Snacks",
+				slug: "snacks",
+			});
+		await setBalance(t, s.retailerId, 0);
+		const asOwner = t.withIdentity({ subject: OWNER });
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+
+		// The owner is locked out of each one…
+		await expectCreditLocked(
+			() =>
+				asOwner.mutation(api.products.update, {
+					productId: s.productId,
+					name: "Owner rename",
+				}),
+			"products.update (owner)",
+		);
+		await expectCreditLocked(
+			() =>
+				asOwner.mutation(api.categories.setActive, {
+					categoryId,
+					active: false,
+				}),
+			"categories.setActive (owner)",
+		);
+
+		// …and the admin operating that same store is not. Onboarding a seller
+		// happens before they have paid for anything.
+		await asAdmin.mutation(api.products.update, {
+			productId: s.productId,
+			name: "White-glove rename",
+		});
+		await asAdmin.mutation(api.categories.setActive, {
+			categoryId,
+			active: false,
+		});
+		await asAdmin.mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "confirmed",
+		});
+
+		const product = await t.run((ctx) => ctx.db.get(s.productId));
+		expect(product?.name).toBe("White-glove rename");
+		const category = await t.run((ctx) => ctx.db.get(categoryId));
+		expect(category?.active).toBe(false);
+		const after = await t.run((ctx) => ctx.db.get(order._id));
+		expect(after?.status).toBe("confirmed");
+		// Metered, never excused: the admin's writes still spent nothing extra,
+		// and the store is still at its locked balance.
+		expect(await total(t, s.retailerId)).toBe(0);
+	});
+});
+
 describe("bought credits never stand in for a plan (Zaki × Arif, 16 Sep; restated 1 Oct 2026)", () => {
 	test("a past-due store holding 150 bought credits still can't work — it's view-only until it pays", async () => {
 		const t = setup();

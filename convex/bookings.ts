@@ -650,9 +650,10 @@ export const approveBookingRequest = mutation({
 			level: "write",
 		});
 		assertStillRequested(order);
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, order.retailerId);
-			await assertCreditsAvailable(ctx, order.retailerId);
+		}
+		await assertCreditsAvailable(ctx, order.retailerId);
 
 		// The one transition path: timeline event, activation stamp, stage reset.
 		// notifyStatusChange skips `confirmed`, so nothing generic goes out.

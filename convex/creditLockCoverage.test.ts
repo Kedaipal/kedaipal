@@ -226,6 +226,44 @@ describe("the seller lock at zero credits covers every write it should", () => {
 		}
 	});
 
+	test("no guard dangles under an unbraced `if` — the indentation never lies", () => {
+		// A guard written as the SECOND statement under an unbraced `if` runs
+		// unconditionally while reading as conditional:
+		//
+		//   if (!access.actingAsAdmin)
+		//     await assertSubscriptionActive(ctx, id);
+		//     await assertCreditsAvailable(ctx, id);  // NOT inside the if
+		//
+		// Ten sites shipped that shape (PR #320 review, 2 Oct). Behaviour was
+		// right only by accident — both guards start with their own `isAdmin`
+		// early return — so the next person to move an admin bypass, or to copy
+		// the shape for a guard that has no bypass, breaks white-glove act-as or
+		// opens a hole, in auth-adjacent code. Biome would never catch it: its
+		// `files.includes` is `src/**` only, so `convex/` is neither formatted
+		// nor linted (bringing it in is its own mechanical PR).
+		const offenders: string[] = [];
+		for (const file of readdirSync(CONVEX).filter(
+			(f) => f.endsWith(".ts") && !f.endsWith(".test.ts"),
+		)) {
+			const lines = readFileSync(join(CONVEX, file), "utf8").split("\n");
+			lines.forEach((line, i) => {
+				if (!/^\s*(await\s+)?assert[A-Z]\w*\(/.test(line)) return;
+				const prev = lines[i - 1] ?? "";
+				const head = lines[i - 2] ?? "";
+				const indent = (l: string) => /^\t*/.exec(l)?.[0].length ?? 0;
+				// Same depth as the line above it, which is itself the lone body
+				// of an `if (...)` that opened no block.
+				if (
+					indent(line) === indent(prev) &&
+					/^\s*if \(.*\)\s*$/.test(head) &&
+					indent(head) < indent(prev)
+				)
+					offenders.push(`${file}:${i + 1} ${line.trim()}`);
+			});
+		}
+		expect(offenders, offenders.join("\n")).toEqual([]);
+	});
+
 	test("order intake never carries the credit guard", () => {
 		const offenders: string[] = [];
 		for (const mod of INTAKE_MODULES)
