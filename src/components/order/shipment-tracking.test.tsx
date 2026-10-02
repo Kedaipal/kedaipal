@@ -165,4 +165,17 @@ describe("ShipmentTrackingCard", () => {
 		);
 		expect(container.innerHTML).toBe("");
 	});
+
+	// Credits T3: the store can't record tracking while it's out of credits —
+	// but the entry is still THIS seller's to make, so the control stays where
+	// it is (greyed, with the reason), unlike a rider-managed order.
+	it("out of credits: Add tracking stays in place, disabled with the reason", () => {
+		const reason = "You're out of credits, so accepting and updating orders…";
+		render(
+			<ShipmentTrackingCard order={{ _id: ORDER_ID }} lockedReason={reason} />,
+		);
+		const add = screen.getByRole("button", { name: "Add tracking" });
+		expect((add as HTMLButtonElement).disabled).toBe(true);
+		expect(add.getAttribute("title")).toBe(reason);
+	});
 });

@@ -22,8 +22,10 @@ A pending invoice is created in two ways:
    (pick retailer, plan, cycle, **founding** toggle, due date defaulting to +14d;
    amount auto-derived from `lib/plans`). This is the path for trial **conversions**
    and **renewals**, and for onboarding a **Founding-10** member (founding toggle =
-   30% Pro discount). Guards: rejects Scale (the v1 defense-in-depth home),
-   founding-non-Pro, and a duplicate pending per retailer.
+   30% Pro discount). Guards: founding-non-Pro and a duplicate pending per
+   retailer. (It also refused Scale as "unavailable for v1" until Scale opened
+   for purchase with the credits release, `z8r3fdfuhq` — the plan buttons now
+   offer Starter, Pro and Scale.)
 2. **Founding-intent signup** — `createRetailer({ intent: "founding" })` reserves the
    rank + flags `foundingIntent`, but issues **no** auto-invoice (Arif issues it).
 
@@ -529,7 +531,7 @@ load-bearing** and each rung is a unit test:
 | 3 | `comped` | `hidden` |
 | 4 | A **pending invoice already `annual`** | `pendingAnnual` |
 | 5 | `subscription.billingCycle === "annual"` | `onAnnual` |
-| 6 | Plan not in `ANNUAL_OFFER_PLANS` (**Pro only**) | `hidden` |
+| 6 | Plan not in `ANNUAL_OFFER_PLANS` (**Pro and Scale**) | `hidden` |
 | 7 | `status !== "active"` | `hidden` |
 | 8 | Fewer than `ANNUAL_MIN_PAID_INVOICES` (**2**) paid invoices | `hidden` |
 | 9 | Pending monthly invoice due in `< ANNUAL_SWAP_MIN_DAYS` (**4**) | `switchDeferred` |
@@ -546,12 +548,18 @@ Three of those rungs exist because of a specific failure:
 - **Rung 5 before the plan gate.** A seller already billed annually is told so on
   **any** plan. Hiding a true fact about their own billing because their tier is
   off-list is a lie by omission.
-- **Rung 6 is Pro only.** Starter is excluded by owner decision (a year upfront
-  contradicts start-when-you-sell). **Scale is excluded because `issueInvoice`
-  throws on it** — offering it would reproduce in-app the dead-end CTA we refuse
-  to ship publicly. Add `"scale"` in the same change that makes Scale
-  purchasable (`z8r3fday24`). A Starter seller is still *told* annual exists, and
-  *why not on Starter*, in the Starter → Pro nudge.
+- **Rung 6 is Pro and Scale.** Starter is excluded by owner decision (a year
+  upfront contradicts start-when-you-sell). Scale was held out only while
+  `issueInvoice` refused it — a dead-end CTA — and joined in the change that
+  made it purchasable (`z8r3fdfuhq`, 30 Sep 2026). A Starter seller is still
+  *told* annual exists, and *why not on Starter*, in the Starter → Pro nudge.
+
+**Credits on annual (Kedaipal Credits).** An annual seller is granted credits
+**monthly**, never twelve months at once, and the monthly grant in force when
+they paid is **locked for the prepaid term** (`creditAccounts.annualGrant`), so
+a later change to `PLAN_CREDIT_GRANT` reaches them only at renewal. An upgrade
+mid-term re-stamps the lock; a monthly payment clears it. `/pricing` says it
+under the toggle and in its FAQ ([`credits.md`](./credits.md#plan-changes)).
 
 Currency comes from the seller's **own most recent paid invoice**, never visitor
 geo — they have already told us what we bill them in, and a VPN must not
@@ -826,6 +834,15 @@ showcases Pro).
 
 ## Order-usage meter + soft-cap nudge (Jul 2026)
 
+> **Superseded by Kedaipal Credits T3 (`z8r3fdf8hy`, Sep 2026).** The
+> "Orders this month" meter, the ≥80% / ≥100% banner nudges, `orderCapState`
+> and `ordersThisMonth` on the retailer payload are **gone** — the credit
+> balance is the meter now, and running out locks the seller's order work
+> instead of nudging (see [`credits.md`](./credits.md#the-meter-the-seller-lock-and-the-notices-t3)).
+> The `subscriptionUsage` counter itself stays: it is the "orders this month"
+> a plan change compares the new allowance against (`getBalance.ordersThisPeriod`).
+> The history below is kept for the record.
+
 The promised "X/100 orders used" surface behind the SOFT `orderCap`:
 
 - **`subscriptionUsage` table** — per-retailer × **MYT calendar month**
@@ -932,28 +949,36 @@ deploy-time floor.
 S$149; the 30 Aug 2026 reset, `z8r3fday24`); founding Pro RM104 (Scale RM279,
 unreachable at launch — founding is retired for new signups, existing members keep
 theirs); Off-Season Hold **RM19 / S$9** (`HOLD_MONTHLY_PRICES`); additional outlet
-RM49 / S$18. Caps: Starter 100/1/0, Pro **200**/2/100, Scale **400**/5/500 — the
-allowances `/pricing` advertises, all finite since Arif's 2026-06-28 decision
-dropped Scale's "unlimited" (kept an upsell ceiling for a future Enterprise tier). The
-`UNLIMITED`/`isUnlimited` sentinel stays exported for that future tier but no v1
-plan uses it. Scale is **not selectable** at v1 (`isPlanSelectable`) and grants
-**no** Founding badge (`planQualifiesForFounding`, Arif's 2026-05-28 decision).
+RM49 / S$18 (quoted nowhere while outlets are coming soon). Caps (orders /
+people / broadcasts): Starter 100/1/0, Pro **200**/3/100, Scale **500**/6/500 —
+the orders are the monthly credit grants (`PLAN_CREDIT_GRANT`, which
+`PLAN_CAPS.orderCap` derives from) that `/pricing` prints, all finite since
+Arif's 2026-06-28 decision dropped Scale's "unlimited" (kept an upsell ceiling
+for a future Enterprise tier). The `UNLIMITED`/`isUnlimited` sentinel stays
+exported for that future tier but no plan uses it. Scale is **selectable** since
+the credits release (`isPlanSelectable`, `z8r3fdfuhq`) and still grants **no**
+Founding badge (`planQualifiesForFounding`, Arif's 2026-05-28 decision) — a
+founding store stays on Founding Pro.
 
 > **Scale = flat multi-outlet tier (ClickUp 86eyb9zwt, supersedes 86ey4gaju).**
 > The public pricing surface shows Scale as the **multi-outlet / high-volume** tier
 > at **RM399/mo flat** (no bands, no metering; the reseller band table was removed
-> after the 1 Jul ICP audit). Scale stays "Coming soon" — not purchasable — until
-> the separate Scale build (multi-outlet management, outlet counting, RM49/mo
-> additional-outlet billing) ships. See [`pricing.md`](./pricing.md).
+> after the 1 Jul ICP audit). **Purchasable since 30 Sep 2026** (`z8r3fdfuhq`) on
+> what is live — 500 credits a month and you + 5 teammates — while the Scale
+> build (multi-outlet management, outlet counting, RM49 / S$18 additional-outlet
+> billing) stays "Coming soon" on the rows that need it. See
+> [`pricing.md`](./pricing.md).
 
 > **Order allowances now match the page (ClickUp 86eye2ccu, landed via z8r3fday24).**
 > `/pricing` advertised **Starter 100 / Pro 200 / Scale 400** ahead of enforcement
 > (Arif, 9 Aug 2026) while `PLAN_CAPS` read Pro 500 / Scale 2,000 — the denominator
 > the billing-tab meter renders. The constants moved with the pricing reset;
 > `migrations.resyncSubscriptionCaps` re-syncs the denormalized caps on existing
-> rows (idempotent, `updatedAt` untouched). Still open from `86eye2ccu`: the admin
-> per-store allowance override and the surfaced-not-billed overage copy. See
-> [`pricing.md`](./pricing.md).
+> rows (idempotent, `updatedAt` untouched). The admin per-store allowance
+> override now exists as the **custom monthly grant**
+> (`credits.adminSetGrantOverride`, set from the admin seller sheet's credit
+> ledger drawer — Credits T5). See [`pricing.md`](./pricing.md) and
+> [`credits.md`](./credits.md).
 
 ## SGD invoices — billing a Singapore seller (Aug 2026)
 

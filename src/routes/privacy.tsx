@@ -1,6 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { LegalLayout } from "../components/legal/legal-layout";
-import { LEGAL_CONTACT_EMAIL, PRIVACY_VERSION } from "../lib/legal";
+import {
+	LEGAL_CONTACT_EMAIL,
+	PRIVACY_ANCHOR,
+	PRIVACY_VERSION,
+} from "../lib/legal";
 
 const SEO_TITLE = "Privacy Policy — Kedaipal";
 const SEO_DESC =
@@ -118,7 +122,14 @@ function PrivacyPage() {
 				</ul>
 			</section>
 
-			<section className="space-y-3">
+			{/* Anchored: the Terms' Data Processing section links here as THE
+			    sub-processor list (TERMS_ANCHOR / PRIVACY_ANCHOR, src/lib/legal.ts).
+			    An id is markup, not content — adding it needed no
+			    PRIVACY_VERSION bump. */}
+			<section
+				id={PRIVACY_ANCHOR.processors}
+				className="scroll-mt-24 space-y-3"
+			>
 				<h2 className="text-2xl font-semibold tracking-tight">
 					3. How We Share Information (Data Processors)
 				</h2>

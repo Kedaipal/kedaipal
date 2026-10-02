@@ -15,6 +15,8 @@ import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { EventRsvpPanel } from "../components/app/event-rsvp-panel";
+import { ViewOnlyNote } from "../components/app/view-only-note";
+import { CreditLockNote } from "../components/credits/credit-lock-note";
 import {
 	PageHeader,
 	PageHeaderSkeleton,
@@ -36,6 +38,7 @@ import {
 } from "../components/ui/dialog";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { lockLabel, useAreaLock } from "../hooks/useStoreLock";
 import { convexErrorMessage } from "../lib/format";
 import { draftPreviewOverlay } from "../lib/product-preview";
 import { type ProductStatus, productStatus } from "../lib/product-status";
@@ -176,6 +179,15 @@ function EditProductRoute() {
 		string,
 		unknown
 	> | null>(null);
+	// Can't change products right now — view-only, out of credits (Credits
+	// T3), or a teammate with view on products. Every write on this page greys
+	// out together; the form's fields stay editable so an edit already under
+	// way survives until saving is possible again.
+	const productsLock = useAreaLock("products", { credits: true });
+	const saveLock = productsLock.readOnly
+		? { reason: productsLock.reason, label: lockLabel(productsLock.cause) }
+		: undefined;
+	const locked = saveLock !== undefined;
 
 	if (product === undefined || categoryIds === undefined || !retailer) {
 		return <ProductDetailSkeleton />;
@@ -216,6 +228,27 @@ function EditProductRoute() {
 		});
 	}
 
+	// One author per action — the header, the sticky bar and the can't-delete
+	// dialog all call these, so a refusal reads as a toast, never an unhandled
+	// rejection that looks like nothing happened.
+	async function archiveProduct() {
+		if (!product) return;
+		try {
+			await archive({ productId: product._id });
+			navigate({ to: "/app/products" });
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		}
+	}
+	async function restoreProduct() {
+		if (!product) return;
+		try {
+			await update({ productId: product._id, active: true });
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		}
+	}
+
 	return (
 		<div className="flex flex-col gap-4 lg:max-w-2xl">
 			<PageHeader
@@ -236,19 +269,16 @@ function EditProductRoute() {
 						{product.active ? (
 							<Button
 								variant="secondary"
-								onClick={async () => {
-									await archive({ productId: product._id });
-									navigate({ to: "/app/products" });
-								}}
+								disabled={locked}
+								onClick={() => void archiveProduct()}
 							>
 								Archive
 							</Button>
 						) : (
 							<Button
 								variant="secondary"
-								onClick={async () => {
-									await update({ productId: product._id, active: true });
-								}}
+								disabled={locked}
+								onClick={() => void restoreProduct()}
 							>
 								Restore
 							</Button>
@@ -289,9 +319,15 @@ function EditProductRoute() {
 				<StatusChip status={status} />
 			</div>
 
+			{/* Why nothing here saves right now — a lapsed store, or one out of
+			    credits (Credits T3). Each renders nothing otherwise. */}
+			<ViewOnlyNote />
+			<CreditLockNote scope="products" />
+
 			<ProductForm
 				key={product._id}
 				retailerId={product.retailerId}
+				saveLock={saveLock}
 				draftRef={formDraftRef}
 				spotlight={spot}
 				categoriesLocked={
@@ -389,10 +425,8 @@ function EditProductRoute() {
 							type="button"
 							variant="outline"
 							className="h-12 shrink-0 gap-2 rounded-xl bg-background px-4"
-							onClick={async () => {
-								await archive({ productId: product._id });
-								navigate({ to: "/app/products" });
-							}}
+							disabled={locked}
+							onClick={() => void archiveProduct()}
 						>
 							<Archive className="size-4" />
 							Archive
@@ -402,9 +436,8 @@ function EditProductRoute() {
 							type="button"
 							variant="outline"
 							className="h-12 shrink-0 gap-2 rounded-xl bg-background px-4"
-							onClick={async () => {
-								await update({ productId: product._id, active: true });
-							}}
+							disabled={locked}
+							onClick={() => void restoreProduct()}
 						>
 							<ArchiveRestore className="size-4" />
 							Restore
@@ -500,7 +533,7 @@ function EditProductRoute() {
 					type="button"
 					variant="ghost"
 					onClick={() => setConfirmDeleteOpen(true)}
-					disabled={deleting}
+					disabled={deleting || locked}
 					className="h-11 self-start gap-2 px-3 text-sm font-medium text-destructive hover:bg-destructive/10 hover:text-destructive"
 				>
 					<Trash2 className="size-4" aria-hidden="true" />
@@ -528,12 +561,7 @@ function EditProductRoute() {
 							Close
 						</Button>
 						{product.active ? (
-							<Button
-								onClick={async () => {
-									await archive({ productId: product._id });
-									navigate({ to: "/app/products" });
-								}}
-							>
+							<Button disabled={locked} onClick={() => void archiveProduct()}>
 								<Archive className="size-4" />
 								Archive instead
 							</Button>

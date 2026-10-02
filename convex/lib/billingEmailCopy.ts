@@ -6,6 +6,11 @@
 // payment-details layout than order alerts.
 
 import { escapeHtml, type Locale, logoHeader, wrapHtml } from "./emailCopy";
+import {
+	INVOICE_DUE_GRACE_DAYS,
+	PLAN_CREDIT_GRANT,
+	TRIAL_CREDIT_GRANT,
+} from "./plans";
 
 export type BillingEmailKey =
 	| "invoiceIssued"
@@ -54,6 +59,11 @@ export type BillingEmailVars = {
 	// omitted when a hold makes no sense for this row (already held).
 	daysPastDue?: number;
 	holdPriceFormatted?: string;
+	// Kedaipal Credits (T5, z8r3fdfu31): what the billed plan includes a month
+	// — the store's actual monthly grant for that plan, resolved by the caller
+	// (`monthlyCreditGrant`). Rendered under the plan wherever the plan is
+	// shown. Omitted for a hold invoice, which grants nothing.
+	includedCredits?: number;
 };
 
 type RenderedEmail = { subject: string; html: string; text: string };
@@ -91,6 +101,12 @@ const t = {
 		needHelp: "Stuck on something? Reply to this email and we'll sort it out.",
 		holdHeading: "Pause instead of cancelling",
 		holdCta: "See the pause option",
+		// Kedaipal Credits (T5).
+		includedCredits: "{credits} credits a month · 1 per order",
+		trialOffer:
+			"From today you have {days} days — or {orders} orders, whichever comes first — to try everything in Pro.",
+		trialKeep:
+			"Until it's due you have everything in Pro, for up to {orders} orders.",
 	},
 	ms: {
 		bank: "Bank",
@@ -125,6 +141,12 @@ const t = {
 			"Ada masalah? Balas e-mel ini dan kami akan bantu selesaikan.",
 		holdHeading: "Jeda, jangan batalkan",
 		holdCta: "Lihat pilihan jeda",
+		// Kedaipal Credits (T5).
+		includedCredits: "{credits} kredit sebulan · 1 setiap pesanan",
+		trialOffer:
+			"Mulai hari ini anda ada {days} hari — atau {orders} pesanan, mana yang dahulu — untuk mencuba semua ciri Pro.",
+		trialKeep:
+			"Sehingga tarikh akhir, anda dapat semua ciri Pro untuk sehingga {orders} pesanan.",
 	},
 	zh: {
 		bank: "银行",
@@ -157,6 +179,11 @@ const t = {
 		needHelp: "遇到问题？直接回复这封邮件，我们会帮您处理。",
 		holdHeading: "暂停，而不是取消",
 		holdCta: "查看暂停选项",
+		// Kedaipal Credits (T5).
+		includedCredits: "每月 {credits} 点 · 每张订单 1 点",
+		trialOffer:
+			"从今天起，您有 {days} 天或 {orders} 张订单（以先到者为准）免费体验 Pro 的全部功能。",
+		trialKeep: "在到期日之前，您可以使用 Pro 的全部功能，最多 {orders} 张订单。",
 	},
 } as const;
 
@@ -166,6 +193,28 @@ function contactForPaymentLine(locale: Locale, v: BillingEmailVars): string {
 		"{invoiceNumber}",
 		v.invoiceNumber,
 	);
+}
+
+/** "200 credits a month · 1 per order", or "" when the invoice carries none
+ * (a hold bill, or a caller that didn't resolve it). */
+function creditsLine(locale: Locale, v: BillingEmailVars): string {
+	if (v.includedCredits === undefined) return "";
+	return t[locale].includedCredits.replace(
+		"{credits}",
+		String(v.includedCredits),
+	);
+}
+
+/** The trial's two bounds — from the constants that enforce them (the first
+ * invoice's grace, the one-off trial allowance), never literals. */
+function trialOfferLine(locale: Locale): string {
+	return t[locale].trialOffer
+		.replace("{days}", String(INVOICE_DUE_GRACE_DAYS))
+		.replace("{orders}", String(TRIAL_CREDIT_GRANT));
+}
+
+function trialKeepLine(locale: Locale): string {
+	return t[locale].trialKeep.replace("{orders}", String(TRIAL_CREDIT_GRANT));
 }
 
 /** The past-due fact as a MID-SENTENCE clause. The HTML intro glues it after
@@ -218,6 +267,13 @@ function payText(locale: Locale, v: BillingEmailVars): string {
 	if (v.duitnowId) rows.push(`${L.duitnow}: ${v.duitnowId}`);
 	if (rows.length === 0) return `${payNow}${L.noDetails}`;
 	return `${payNow}${L.howToPay}:\n${rows.join("\n")}\n${L.qrNote}`;
+}
+
+/** The text body's plan line: "Pro · Monthly · MYR 149.00 · 200 credits a
+ * month · 1 per order" — the credits ride along wherever the plan is named. */
+function planText(locale: Locale, v: BillingEmailVars): string {
+	const credits = creditsLine(locale, v);
+	return `${v.planLabel} · ${amountText(locale, v)}${credits ? ` · ${credits}` : ""}`;
 }
 
 function amountText(locale: Locale, v: BillingEmailVars): string {
@@ -356,7 +412,15 @@ ${summaryTile(L.amount, escapeHtml(v.totalFormatted))}
 ${summaryTile(L.dueDate, escapeHtml(v.dueDateFormatted))}
 </tr>
 <tr>
-${summaryTile(L.plan, escapeHtml(v.planLabel), true)}
+${summaryTile(
+	L.plan,
+	`${escapeHtml(v.planLabel)}${
+		creditsLine(locale, v)
+			? `<br><span style="font-size:12px;font-weight:600;color:#475569;">${escapeHtml(creditsLine(locale, v))}</span>`
+			: ""
+	}`,
+	true,
+)}
 ${summaryTile(L.invoice, escapeHtml(v.invoiceNumber), true)}
 </tr>
 </table>
@@ -391,7 +455,7 @@ const render: Record<
 				v,
 				t.en.cta,
 			);
-			const text = `🧾 New invoice ${v.invoiceNumber}\n${v.planLabel} · ${amountText("en", v)}\nDue by ${v.dueDateFormatted}.\n\n${payText("en", v)}\n\n${v.billingUrl}`;
+			const text = `🧾 New invoice ${v.invoiceNumber}\n${planText("en", v)}\nDue by ${v.dueDateFormatted}.\n\n${payText("en", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		invoiceReminder: (v) => {
@@ -404,7 +468,7 @@ const render: Record<
 				v,
 				t.en.cta,
 			);
-			const text = `⏰ Reminder: invoice ${v.invoiceNumber} due ${v.dueDateFormatted}\n${v.planLabel} · ${amountText("en", v)}\nPay before then to keep your store fully active.\n\n${payText("en", v)}\n\n${v.billingUrl}`;
+			const text = `⏰ Reminder: invoice ${v.invoiceNumber} due ${v.dueDateFormatted}\n${planText("en", v)}\nPay before then to keep your store fully active.\n\n${payText("en", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		invoiceOverdue: (v) => {
@@ -417,7 +481,7 @@ const render: Record<
 				v,
 				t.en.cta,
 			);
-			const text = `🔒 Your subscription is past due · ${v.invoiceNumber}\n${t.en.storeStaysLive}\n${v.planLabel} · ${amountText("en", v)}\n\n${payText("en", v)}\n\n${v.billingUrl}`;
+			const text = `🔒 Your subscription is past due · ${v.invoiceNumber}\n${t.en.storeStaysLive}\n${planText("en", v)}\n\n${payText("en", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		// Start-when-you-sell (z8r3fday24): the store's FIRST invoice. Two
@@ -429,11 +493,11 @@ const render: Record<
 				"en",
 				"firstInvoiceOrder",
 				"Your first order is in!",
-				`Hi ${escapeHtml(v.storeName)}, congratulations on your first live order. As promised, that's when your plan starts — your first <strong>${escapeHtml(v.planLabel)}</strong> invoice is below, due by ${escapeHtml(v.dueDateFormatted)}. Your storefront and orders keep running as normal in the meantime, and you can switch to a different plan from your billing page before you pay.`,
+				`Hi ${escapeHtml(v.storeName)}, congratulations on your first live order! ${escapeHtml(trialOfferLine("en"))} Your first <strong>${escapeHtml(v.planLabel)}</strong> invoice is below, due by ${escapeHtml(v.dueDateFormatted)} — paying it starts your plan. Your storefront and orders keep running as normal in the meantime, and you can switch to a different plan from your billing page before you pay.`,
 				v,
 				t.en.cta,
 			);
-			const text = `🎉 Your first order is in — here's your first invoice ${v.invoiceNumber}\n${v.planLabel} · ${amountText("en", v)}\nDue by ${v.dueDateFormatted}. Your storefront keeps running as normal; switch plan from your billing page before paying if Starter fits better.\n\n${payText("en", v)}\n\n${v.billingUrl}`;
+			const text = `🎉 Your first order is in — here's your first invoice ${v.invoiceNumber}\n${trialOfferLine("en")}\n${planText("en", v)}\nDue by ${v.dueDateFormatted}. Your storefront keeps running as normal; switch plan from your billing page before paying if another fits better.\n\n${payText("en", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		firstInvoiceBackstop: (v) => {
@@ -442,11 +506,11 @@ const render: Record<
 				"en",
 				"firstInvoiceBackstop",
 				"Your free period has ended",
-				`Hi ${escapeHtml(v.storeName)}, your 14 free days are up — your first <strong>${escapeHtml(v.planLabel)}</strong> invoice is below, due by ${escapeHtml(v.dueDateFormatted)}. Nothing is locked: your storefront stays live and you keep full access while you settle it. Want a different plan? Switch from your billing page before you pay.`,
+				`Hi ${escapeHtml(v.storeName)}, your 14 free days are up — your first <strong>${escapeHtml(v.planLabel)}</strong> invoice is below, due by ${escapeHtml(v.dueDateFormatted)}. Nothing is locked: your storefront stays live and you keep full access while you settle it. ${escapeHtml(trialKeepLine("en"))} Want a different plan? Switch from your billing page before you pay.`,
 				v,
 				t.en.cta,
 			);
-			const text = `🧾 Your free period has ended — here's your first invoice ${v.invoiceNumber}\n${v.planLabel} · ${amountText("en", v)}\nDue by ${v.dueDateFormatted}. Nothing is locked — your storefront stays live while you settle it; switch plan from your billing page before paying if Starter fits better.\n\n${payText("en", v)}\n\n${v.billingUrl}`;
+			const text = `🧾 Your free period has ended — here's your first invoice ${v.invoiceNumber}\n${planText("en", v)}\nDue by ${v.dueDateFormatted}. Nothing is locked — your storefront stays live while you settle it. ${trialKeepLine("en")} Switch plan from your billing page before paying if another fits better.\n\n${payText("en", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		// Post-lock recovery chain (z8r3fdg3mh) — the two nudges AFTER the lock.
@@ -462,7 +526,7 @@ const render: Record<
 				v,
 				t.en.cta,
 			);
-			const text = `🔒 ${v.storeName} — your dashboard is locked\n${pastDueLine("en", v)}\n${v.planLabel} · ${amountText("en", v)}\n${t.en.storeStaysLive}\n\n${payText("en", v)}\n\n${v.billingUrl}`;
+			const text = `🔒 ${v.storeName} — your dashboard is locked\n${pastDueLine("en", v)}\n${planText("en", v)}\n${t.en.storeStaysLive}\n\n${payText("en", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		recoveryFinal: (v) => {
@@ -483,7 +547,7 @@ const render: Record<
 				v,
 				t.en.cta,
 			);
-			const text = `Last reminder — ${v.invoiceNumber} is still unpaid\n${pastDueLine("en", v)}\n${v.planLabel} · ${amountText("en", v)}\n${t.en.lastReminder}${holdLine ? `\n${holdLine}` : ""}\n${t.en.needHelp}\n\n${payText("en", v)}\n\n${v.billingUrl}`;
+			const text = `Last reminder — ${v.invoiceNumber} is still unpaid\n${pastDueLine("en", v)}\n${planText("en", v)}\n${t.en.lastReminder}${holdLine ? `\n${holdLine}` : ""}\n${t.en.needHelp}\n\n${payText("en", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 	},
@@ -498,7 +562,7 @@ const render: Record<
 				v,
 				t.ms.cta,
 			);
-			const text = `🧾 Bil baru ${v.invoiceNumber}\n${v.planLabel} · ${amountText("ms", v)}\nPerlu dibayar sebelum ${v.dueDateFormatted}.\n\n${payText("ms", v)}\n\n${v.billingUrl}`;
+			const text = `🧾 Bil baru ${v.invoiceNumber}\n${planText("ms", v)}\nPerlu dibayar sebelum ${v.dueDateFormatted}.\n\n${payText("ms", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		invoiceReminder: (v) => {
@@ -511,7 +575,7 @@ const render: Record<
 				v,
 				t.ms.cta,
 			);
-			const text = `⏰ Peringatan: bil ${v.invoiceNumber} perlu dibayar ${v.dueDateFormatted}\n${v.planLabel} · ${amountText("ms", v)}\nBayar sebelum itu untuk memastikan kedai anda aktif sepenuhnya.\n\n${payText("ms", v)}\n\n${v.billingUrl}`;
+			const text = `⏰ Peringatan: bil ${v.invoiceNumber} perlu dibayar ${v.dueDateFormatted}\n${planText("ms", v)}\nBayar sebelum itu untuk memastikan kedai anda aktif sepenuhnya.\n\n${payText("ms", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		invoiceOverdue: (v) => {
@@ -524,7 +588,7 @@ const render: Record<
 				v,
 				t.ms.cta,
 			);
-			const text = `🔒 Langganan anda telah tertunggak · ${v.invoiceNumber}\n${t.ms.storeStaysLive}\n${v.planLabel} · ${amountText("ms", v)}\n\n${payText("ms", v)}\n\n${v.billingUrl}`;
+			const text = `🔒 Langganan anda telah tertunggak · ${v.invoiceNumber}\n${t.ms.storeStaysLive}\n${planText("ms", v)}\n\n${payText("ms", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		firstInvoiceOrder: (v) => {
@@ -533,11 +597,11 @@ const render: Record<
 				"ms",
 				"firstInvoiceOrder",
 				"Pesanan pertama anda dah masuk!",
-				`Hai ${escapeHtml(v.storeName)}, tahniah atas pesanan pertama anda. Seperti dijanjikan, di situlah pelan anda bermula — bil <strong>${escapeHtml(v.planLabel)}</strong> pertama anda ada di bawah, perlu dibayar sebelum ${escapeHtml(v.dueDateFormatted)}. Etalase dan pesanan anda terus berjalan seperti biasa, dan anda boleh tukar pelan dari halaman bil sebelum membayar.`,
+				`Hai ${escapeHtml(v.storeName)}, tahniah atas pesanan pertama anda! ${escapeHtml(trialOfferLine("ms"))} Bil <strong>${escapeHtml(v.planLabel)}</strong> pertama anda ada di bawah, perlu dibayar sebelum ${escapeHtml(v.dueDateFormatted)} — membayarnya memulakan pelan anda. Etalase dan pesanan anda terus berjalan seperti biasa, dan anda boleh tukar pelan dari halaman bil sebelum membayar.`,
 				v,
 				t.ms.cta,
 			);
-			const text = `🎉 Pesanan pertama anda dah masuk — bil pertama anda ${v.invoiceNumber}\n${v.planLabel} · ${amountText("ms", v)}\nPerlu dibayar sebelum ${v.dueDateFormatted}. Etalase anda terus berjalan seperti biasa; tukar pelan dari halaman bil sebelum membayar jika Starter lebih sesuai.\n\n${payText("ms", v)}\n\n${v.billingUrl}`;
+			const text = `🎉 Pesanan pertama anda dah masuk — bil pertama anda ${v.invoiceNumber}\n${trialOfferLine("ms")}\n${planText("ms", v)}\nPerlu dibayar sebelum ${v.dueDateFormatted}. Etalase anda terus berjalan seperti biasa; tukar pelan dari halaman bil sebelum membayar jika pelan lain lebih sesuai.\n\n${payText("ms", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		firstInvoiceBackstop: (v) => {
@@ -546,11 +610,11 @@ const render: Record<
 				"ms",
 				"firstInvoiceBackstop",
 				"Tempoh percuma anda telah tamat",
-				`Hai ${escapeHtml(v.storeName)}, 14 hari percuma anda telah tamat — bil <strong>${escapeHtml(v.planLabel)}</strong> pertama anda ada di bawah, perlu dibayar sebelum ${escapeHtml(v.dueDateFormatted)}. Tiada apa yang dikunci: etalase anda kekal aktif dan anda masih ada akses penuh sementara menjelaskannya. Mahu pelan lain? Tukar dari halaman bil sebelum membayar.`,
+				`Hai ${escapeHtml(v.storeName)}, 14 hari percuma anda telah tamat — bil <strong>${escapeHtml(v.planLabel)}</strong> pertama anda ada di bawah, perlu dibayar sebelum ${escapeHtml(v.dueDateFormatted)}. Tiada apa yang dikunci: etalase anda kekal aktif dan anda masih ada akses penuh sementara menjelaskannya. ${escapeHtml(trialKeepLine("ms"))} Mahu pelan lain? Tukar dari halaman bil sebelum membayar.`,
 				v,
 				t.ms.cta,
 			);
-			const text = `🧾 Tempoh percuma anda telah tamat — bil pertama anda ${v.invoiceNumber}\n${v.planLabel} · ${amountText("ms", v)}\nPerlu dibayar sebelum ${v.dueDateFormatted}. Tiada apa yang dikunci — etalase anda kekal aktif; tukar pelan dari halaman bil sebelum membayar jika Starter lebih sesuai.\n\n${payText("ms", v)}\n\n${v.billingUrl}`;
+			const text = `🧾 Tempoh percuma anda telah tamat — bil pertama anda ${v.invoiceNumber}\n${planText("ms", v)}\nPerlu dibayar sebelum ${v.dueDateFormatted}. Tiada apa yang dikunci — etalase anda kekal aktif. ${trialKeepLine("ms")} Tukar pelan dari halaman bil sebelum membayar jika pelan lain lebih sesuai.\n\n${payText("ms", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		// Post-lock recovery chain (z8r3fdg3mh) — the two nudges AFTER the lock.
@@ -566,7 +630,7 @@ const render: Record<
 				v,
 				t.ms.cta,
 			);
-			const text = `🔒 ${v.storeName} — dashboard anda dikunci\n${pastDueLine("ms", v)}\n${v.planLabel} · ${amountText("ms", v)}\n${t.ms.storeStaysLive}\n\n${payText("ms", v)}\n\n${v.billingUrl}`;
+			const text = `🔒 ${v.storeName} — dashboard anda dikunci\n${pastDueLine("ms", v)}\n${planText("ms", v)}\n${t.ms.storeStaysLive}\n\n${payText("ms", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		recoveryFinal: (v) => {
@@ -587,7 +651,7 @@ const render: Record<
 				v,
 				t.ms.cta,
 			);
-			const text = `Peringatan terakhir — ${v.invoiceNumber} masih belum dijelaskan\n${pastDueLine("ms", v)}\n${v.planLabel} · ${amountText("ms", v)}\n${t.ms.lastReminder}${holdLine ? `\n${holdLine}` : ""}\n${t.ms.needHelp}\n\n${payText("ms", v)}\n\n${v.billingUrl}`;
+			const text = `Peringatan terakhir — ${v.invoiceNumber} masih belum dijelaskan\n${pastDueLine("ms", v)}\n${planText("ms", v)}\n${t.ms.lastReminder}${holdLine ? `\n${holdLine}` : ""}\n${t.ms.needHelp}\n\n${payText("ms", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 	},
@@ -602,7 +666,7 @@ const render: Record<
 				v,
 				t.zh.cta,
 			);
-			const text = `🧾 新账单 ${v.invoiceNumber}\n${v.planLabel} · ${amountText("zh", v)}\n请在 ${v.dueDateFormatted} 前付款。\n\n${payText("zh", v)}\n\n${v.billingUrl}`;
+			const text = `🧾 新账单 ${v.invoiceNumber}\n${planText("zh", v)}\n请在 ${v.dueDateFormatted} 前付款。\n\n${payText("zh", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		invoiceReminder: (v) => {
@@ -615,7 +679,7 @@ const render: Record<
 				v,
 				t.zh.cta,
 			);
-			const text = `⏰ 提醒：账单 ${v.invoiceNumber} 将于 ${v.dueDateFormatted} 到期\n${v.planLabel} · ${amountText("zh", v)}\n请在到期前付款，让您的商店保持完整运作。\n\n${payText("zh", v)}\n\n${v.billingUrl}`;
+			const text = `⏰ 提醒：账单 ${v.invoiceNumber} 将于 ${v.dueDateFormatted} 到期\n${planText("zh", v)}\n请在到期前付款，让您的商店保持完整运作。\n\n${payText("zh", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		invoiceOverdue: (v) => {
@@ -628,7 +692,7 @@ const render: Record<
 				v,
 				t.zh.cta,
 			);
-			const text = `🔒 您的订阅已逾期 · ${v.invoiceNumber}\n${t.zh.storeStaysLive}\n${v.planLabel} · ${amountText("zh", v)}\n\n${payText("zh", v)}\n\n${v.billingUrl}`;
+			const text = `🔒 您的订阅已逾期 · ${v.invoiceNumber}\n${t.zh.storeStaysLive}\n${planText("zh", v)}\n\n${payText("zh", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		firstInvoiceOrder: (v) => {
@@ -637,11 +701,11 @@ const render: Record<
 				"zh",
 				"firstInvoiceOrder",
 				"您的第一笔订单来了！",
-				`您好 ${escapeHtml(v.storeName)}，恭喜您收到第一笔订单。如约，您的方案从这一刻开始 —— 第一张 <strong>${escapeHtml(v.planLabel)}</strong> 账单见下方，请在 ${escapeHtml(v.dueDateFormatted)} 前付清。在此期间您的商店和订单照常运作；付款前可在账单页面更换方案。`,
+				`您好 ${escapeHtml(v.storeName)}，恭喜您收到第一笔订单！${escapeHtml(trialOfferLine("zh"))}第一张 <strong>${escapeHtml(v.planLabel)}</strong> 账单见下方，请在 ${escapeHtml(v.dueDateFormatted)} 前付清 —— 付款后方案即开始。在此期间您的商店和订单照常运作；付款前可在账单页面更换方案。`,
 				v,
 				t.zh.cta,
 			);
-			const text = `🎉 您的第一笔订单来了 —— 第一张账单 ${v.invoiceNumber}\n${v.planLabel} · ${amountText("zh", v)}\n请在 ${v.dueDateFormatted} 前付款。您的商店照常运作；如果 Starter 更合适，付款前可在账单页面更换方案。\n\n${payText("zh", v)}\n\n${v.billingUrl}`;
+			const text = `🎉 您的第一笔订单来了 —— 第一张账单 ${v.invoiceNumber}\n${trialOfferLine("zh")}\n${planText("zh", v)}\n请在 ${v.dueDateFormatted} 前付款。您的商店照常运作；如果其他方案更合适，付款前可在账单页面更换。\n\n${payText("zh", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		firstInvoiceBackstop: (v) => {
@@ -650,11 +714,11 @@ const render: Record<
 				"zh",
 				"firstInvoiceBackstop",
 				"您的免费期已结束",
-				`您好 ${escapeHtml(v.storeName)}，您的 14 天免费期已满 —— 第一张 <strong>${escapeHtml(v.planLabel)}</strong> 账单见下方，请在 ${escapeHtml(v.dueDateFormatted)} 前付清。没有任何功能被锁定：您的商店保持在线，付款期间您仍拥有完整权限。想换个方案？付款前可在账单页面更换。`,
+				`您好 ${escapeHtml(v.storeName)}，您的 14 天免费期已满 —— 第一张 <strong>${escapeHtml(v.planLabel)}</strong> 账单见下方，请在 ${escapeHtml(v.dueDateFormatted)} 前付清。没有任何功能被锁定：您的商店保持在线，付款期间您仍拥有完整权限。${escapeHtml(trialKeepLine("zh"))}想换个方案？付款前可在账单页面更换。`,
 				v,
 				t.zh.cta,
 			);
-			const text = `🧾 您的免费期已结束 —— 第一张账单 ${v.invoiceNumber}\n${v.planLabel} · ${amountText("zh", v)}\n请在 ${v.dueDateFormatted} 前付款。没有任何功能被锁定 —— 您的商店保持在线；如果 Starter 更合适，付款前可在账单页面更换方案。\n\n${payText("zh", v)}\n\n${v.billingUrl}`;
+			const text = `🧾 您的免费期已结束 —— 第一张账单 ${v.invoiceNumber}\n${planText("zh", v)}\n请在 ${v.dueDateFormatted} 前付款。没有任何功能被锁定 —— 您的商店保持在线。${trialKeepLine("zh")}如果其他方案更合适，付款前可在账单页面更换。\n\n${payText("zh", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		// Post-lock recovery chain (z8r3fdg3mh) — the two nudges AFTER the lock.
@@ -670,7 +734,7 @@ const render: Record<
 				v,
 				t.zh.cta,
 			);
-			const text = `🔒 ${v.storeName} —— 您的管理后台已锁定\n${pastDueLine("zh", v)}\n${v.planLabel} · ${amountText("zh", v)}\n${t.zh.storeStaysLive}\n\n${payText("zh", v)}\n\n${v.billingUrl}`;
+			const text = `🔒 ${v.storeName} —— 您的管理后台已锁定\n${pastDueLine("zh", v)}\n${planText("zh", v)}\n${t.zh.storeStaysLive}\n\n${payText("zh", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		recoveryFinal: (v) => {
@@ -691,7 +755,7 @@ const render: Record<
 				v,
 				t.zh.cta,
 			);
-			const text = `最后提醒 —— ${v.invoiceNumber} 仍未付款\n${pastDueLine("zh", v)}\n${v.planLabel} · ${amountText("zh", v)}\n${t.zh.lastReminder}${holdLine ? `\n${holdLine}` : ""}\n${t.zh.needHelp}\n\n${payText("zh", v)}\n\n${v.billingUrl}`;
+			const text = `最后提醒 —— ${v.invoiceNumber} 仍未付款\n${pastDueLine("zh", v)}\n${planText("zh", v)}\n${t.zh.lastReminder}${holdLine ? `\n${holdLine}` : ""}\n${t.zh.needHelp}\n\n${payText("zh", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 	},
@@ -732,6 +796,23 @@ export type TrialEmailVars = {
 	endsOnFormatted?: string;
 };
 
+/**
+ * What the choose-a-plan moment needs to know (Credits T5): the first invoice
+ * is for Pro, what Pro includes a month, and the other two tiers' credits —
+ * all read from `PLAN_CREDIT_GRANT`, never literals.
+ */
+function trialPlansLine(locale: Locale): string {
+	const { starter, pro, scale } = PLAN_CREDIT_GRANT;
+	switch (locale) {
+		case "en":
+			return `Your first invoice is for Pro — ${pro} credits a month, 1 per order. Prefer Starter (${starter} a month) or Scale (${scale})? Switch before you pay.`;
+		case "ms":
+			return `Bil pertama anda untuk Pro — ${pro} kredit sebulan, 1 setiap pesanan. Lebih suka Starter (${starter} sebulan) atau Scale (${scale})? Tukar sebelum membayar.`;
+		case "zh":
+			return `第一张账单是 Pro 方案 —— 每月 ${pro} 点，每张订单 1 点。想要 Starter（每月 ${starter} 点）或 Scale（${scale} 点）？付款前可以更换。`;
+	}
+}
+
 const trialRender: Record<
 	Locale,
 	Record<TrialEmailKey, (v: TrialEmailVars) => RenderedEmail>
@@ -743,10 +824,11 @@ const trialRender: Record<
 			const subject = `⏰ Your free period ends in ${dayStr}`;
 			const lines = [
 				`Hi ${escapeHtml(v.storeName)}, your free period ends in <strong>${dayStr}</strong> — or sooner, the moment you take your first live order.`,
-				"Either way your first invoice arrives then, with 14 days to pay, and your plan starts once it's settled. Your storefront stays live throughout — there's nothing to do before then.",
+				`Either way your first invoice arrives then, with ${INVOICE_DUE_GRACE_DAYS} days to pay — until it's paid you have everything in Pro, for up to ${TRIAL_CREDIT_GRANT} orders — and your plan starts once it's settled. Your storefront stays live throughout — there's nothing to do before then.`,
+				trialPlansLine("en"),
 			];
 			const html = wrapHtml("⏰", `Your free period ends in ${dayStr}`, lines, v.billingUrl, t.en.choosePlan);
-			const text = `⏰ Your free period ends in ${dayStr} — or sooner, the moment you take your first live order.\nYour first invoice arrives then, with 14 days to pay; your storefront stays live throughout.\n\n${v.billingUrl}`;
+			const text = `⏰ Your free period ends in ${dayStr} — or sooner, the moment you take your first live order.\nYour first invoice arrives then, with ${INVOICE_DUE_GRACE_DAYS} days to pay — until it's paid you have everything in Pro, for up to ${TRIAL_CREDIT_GRANT} orders; your storefront stays live throughout.\n${trialPlansLine("en")}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		compEnded: (v) => {
@@ -792,10 +874,11 @@ const trialRender: Record<
 			const subject = `⏰ Tempoh percuma anda tamat dalam ${dayStr}`;
 			const lines = [
 				`Hai ${escapeHtml(v.storeName)}, tempoh percuma anda tamat dalam <strong>${dayStr}</strong> — atau lebih awal, sebaik sahaja anda terima pesanan pertama.`,
-				"Bil pertama anda akan tiba ketika itu, dengan 14 hari untuk membayar, dan pelan anda bermula sebaik sahaja ia dijelaskan. Etalase anda kekal aktif sepanjang masa — tiada apa yang perlu dibuat sebelum itu.",
+				`Bil pertama anda akan tiba ketika itu, dengan ${INVOICE_DUE_GRACE_DAYS} hari untuk membayar — sehingga ia dibayar, anda dapat semua ciri Pro untuk sehingga ${TRIAL_CREDIT_GRANT} pesanan — dan pelan anda bermula sebaik sahaja ia dijelaskan. Etalase anda kekal aktif sepanjang masa — tiada apa yang perlu dibuat sebelum itu.`,
+				trialPlansLine("ms"),
 			];
 			const html = wrapHtml("⏰", `Tempoh percuma anda tamat dalam ${dayStr}`, lines, v.billingUrl, t.ms.choosePlan);
-			const text = `⏰ Tempoh percuma anda tamat dalam ${dayStr} — atau lebih awal, sebaik sahaja anda terima pesanan pertama.\nBil pertama anda tiba ketika itu, dengan 14 hari untuk membayar; etalase anda kekal aktif sepanjang masa.\n\n${v.billingUrl}`;
+			const text = `⏰ Tempoh percuma anda tamat dalam ${dayStr} — atau lebih awal, sebaik sahaja anda terima pesanan pertama.\nBil pertama anda tiba ketika itu, dengan ${INVOICE_DUE_GRACE_DAYS} hari untuk membayar — sehingga ia dibayar, anda dapat semua ciri Pro untuk sehingga ${TRIAL_CREDIT_GRANT} pesanan; etalase anda kekal aktif sepanjang masa.\n${trialPlansLine("ms")}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		compEnded: (v) => {
@@ -841,10 +924,11 @@ const trialRender: Record<
 			const subject = `⏰ 您的免费期还剩 ${dayStr}`;
 			const lines = [
 				`您好 ${escapeHtml(v.storeName)}，您的免费期还剩 <strong>${dayStr}</strong> —— 一旦收到第一笔订单，免费期会提前结束。`,
-				"届时您会收到第一张账单，有 14 天的付款时间，付清后方案即开始。在此期间您的商店保持在线 —— 之前无需做任何事。",
+				`届时您会收到第一张账单，有 ${INVOICE_DUE_GRACE_DAYS} 天的付款时间 —— 付款前您可以使用 Pro 的全部功能，最多 ${TRIAL_CREDIT_GRANT} 张订单 —— 付清后方案即开始。在此期间您的商店保持在线 —— 之前无需做任何事。`,
+				trialPlansLine("zh"),
 			];
 			const html = wrapHtml("⏰", `您的免费期还剩 ${dayStr}`, lines, v.billingUrl, t.zh.choosePlan);
-			const text = `⏰ 您的免费期还剩 ${dayStr} —— 一旦收到第一笔订单，免费期会提前结束。\n届时您会收到第一张账单，有 14 天付款时间；您的商店保持在线。\n\n${v.billingUrl}`;
+			const text = `⏰ 您的免费期还剩 ${dayStr} —— 一旦收到第一笔订单，免费期会提前结束。\n届时您会收到第一张账单，有 ${INVOICE_DUE_GRACE_DAYS} 天付款时间 —— 付款前您可以使用 Pro 的全部功能，最多 ${TRIAL_CREDIT_GRANT} 张订单；您的商店保持在线。\n${trialPlansLine("zh")}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		compEnded: (v) => {
@@ -1273,4 +1357,195 @@ export function renderHoldEmail(
 	vars: HoldEmailVars,
 ): RenderedEmail {
 	return holdRender[locale][key](vars);
+}
+
+/**
+ * The receipt for a paid credit-pack top-up (Credits T2, z8r3fdf8ht). One
+ * notice, two readers:
+ *  - `store` — the store's billing inbox (the owner's `notifyEmail`), for
+ *    EVERY top-up. When a teammate bought it, this copy names them and says
+ *    their own payment method paid (Zaki, 30 Sep 2026: a teammate's top-up
+ *    never touches the owner's saved card, and the owner hears of every one);
+ *  - `buyer` — the teammate who paid, so they hold proof of what they paid.
+ * Both state the pack, the credits, the amount, how it was paid, the expiry
+ * date and that credits are non-refundable and not redeemable for cash.
+ * Order counts only — never a balance in money.
+ */
+export type CreditPurchaseEmailVars = {
+	storeName: string;
+	credits: number;
+	amountFormatted: string; // e.g. "MYR 45.00"
+	methodLabel: string; // "Card", "Touch 'n Go", "Online payment"
+	paidOnFormatted: string; // e.g. "30 Sep 2026"
+	expiresOnFormatted: string; // e.g. "30 Sep 2027"
+	purchaseNumber: string; // CRD-YYYYMM-XXXX
+	/** The teammate who bought — absent when the owner bought it. */
+	boughtBy?: string;
+	recipient: "store" | "buyer";
+	/** Where the CTA goes: the billing tab for the store's copy (the receipt
+	 * PDF lives there), the dashboard for a teammate's. */
+	ctaUrl: string;
+};
+
+type CreditPurchaseCopy = {
+	subjectStore: (v: CreditPurchaseEmailVars) => string;
+	subjectStoreByMember: (v: CreditPurchaseEmailVars, member: string) => string;
+	subjectBuyer: (v: CreditPurchaseEmailVars) => string;
+	headline: string;
+	introStore: (v: CreditPurchaseEmailVars) => string;
+	introStoreByMember: (v: CreditPurchaseEmailVars, member: string) => string;
+	introBuyer: (v: CreditPurchaseEmailVars) => string;
+	pack: (credits: number) => string;
+	labels: {
+		pack: string;
+		amount: string;
+		method: string;
+		date: string;
+		expires: string;
+		receipt: string;
+		boughtBy: string;
+	};
+	rules: string;
+	footerStore: string;
+	footerBuyer: string;
+	ctaStore: string;
+	ctaBuyer: string;
+};
+
+const creditPurchaseCopy: Record<Locale, CreditPurchaseCopy> = {
+	en: {
+		subjectStore: (v) => `🧾 Receipt: ${v.credits} credits added to ${v.storeName}`,
+		subjectStoreByMember: (v, m) =>
+			`🧾 ${m} bought ${v.credits} credits for ${v.storeName}`,
+		subjectBuyer: (v) => `🧾 Your receipt: ${v.credits} credits for ${v.storeName}`,
+		headline: "Top-up receipt",
+		introStore: (v) =>
+			`Hi ${escapeHtml(v.storeName)}, your top-up went through — <strong>${v.credits} credits</strong> are on your store now, ready for your next ${v.credits} orders.`,
+		introStoreByMember: (v, m) =>
+			`Hi ${escapeHtml(v.storeName)}, <strong>${escapeHtml(m)}</strong> on your team bought <strong>${v.credits} credits</strong> for your store, paid with their own payment method — nothing was charged to yours.`,
+		introBuyer: (v) =>
+			`Hi, you bought <strong>${v.credits} credits</strong> for <strong>${escapeHtml(v.storeName)}</strong> — they're on the store now, ready for the next ${v.credits} orders.`,
+		pack: (c) => `${c}-credit pack`,
+		labels: {
+			pack: "Pack",
+			amount: "Amount paid",
+			method: "Paid with",
+			date: "Date",
+			expires: "Credits valid until",
+			receipt: "Receipt no.",
+			boughtBy: "Bought by",
+		},
+		rules:
+			"1 credit = 1 order. Bought credits are used after your plan's monthly orders, and they're non-refundable and not redeemable for cash.",
+		footerStore: "Download the receipt PDF any time from Settings → Billing.",
+		footerBuyer: "Keep this email as your receipt.",
+		ctaStore: "View billing",
+		ctaBuyer: "Open dashboard",
+	},
+	ms: {
+		subjectStore: (v) => `🧾 Resit: ${v.credits} kredit ditambah ke ${v.storeName}`,
+		subjectStoreByMember: (v, m) =>
+			`🧾 ${m} membeli ${v.credits} kredit untuk ${v.storeName}`,
+		subjectBuyer: (v) => `🧾 Resit anda: ${v.credits} kredit untuk ${v.storeName}`,
+		headline: "Resit tambah nilai",
+		introStore: (v) =>
+			`Hai ${escapeHtml(v.storeName)}, tambah nilai anda berjaya — <strong>${v.credits} kredit</strong> kini ada di kedai anda, sedia untuk ${v.credits} pesanan seterusnya.`,
+		introStoreByMember: (v, m) =>
+			`Hai ${escapeHtml(v.storeName)}, <strong>${escapeHtml(m)}</strong> dalam pasukan anda telah membeli <strong>${v.credits} kredit</strong> untuk kedai anda, dibayar dengan kaedah pembayaran mereka sendiri — tiada caj pada kaedah pembayaran anda.`,
+		introBuyer: (v) =>
+			`Hai, anda telah membeli <strong>${v.credits} kredit</strong> untuk <strong>${escapeHtml(v.storeName)}</strong> — kredit itu kini ada di kedai, sedia untuk ${v.credits} pesanan seterusnya.`,
+		pack: (c) => `Pek ${c} kredit`,
+		labels: {
+			pack: "Pek",
+			amount: "Jumlah dibayar",
+			method: "Dibayar dengan",
+			date: "Tarikh",
+			expires: "Kredit sah sehingga",
+			receipt: "No. resit",
+			boughtBy: "Dibeli oleh",
+		},
+		rules:
+			"1 kredit = 1 pesanan. Kredit yang dibeli digunakan selepas pesanan bulanan pelan anda, dan tidak boleh dikembalikan atau ditebus sebagai wang tunai.",
+		footerStore:
+			"Muat turun PDF resit bila-bila masa di Tetapan → Pengebilan.",
+		footerBuyer: "Simpan e-mel ini sebagai resit anda.",
+		ctaStore: "Lihat pengebilan",
+		ctaBuyer: "Buka dashboard",
+	},
+	zh: {
+		subjectStore: (v) => `🧾 收据：${v.storeName} 已增加 ${v.credits} 点`,
+		subjectStoreByMember: (v, m) =>
+			`🧾 ${m} 为 ${v.storeName} 购买了 ${v.credits} 点`,
+		subjectBuyer: (v) => `🧾 您的收据：${v.storeName} 的 ${v.credits} 点`,
+		headline: "充值收据",
+		introStore: (v) =>
+			`您好 ${escapeHtml(v.storeName)}，您的充值已完成 —— <strong>${v.credits} 点</strong>已加入您的商店，可用于接下来的 ${v.credits} 张订单。`,
+		introStoreByMember: (v, m) =>
+			`您好 ${escapeHtml(v.storeName)}，您团队的 <strong>${escapeHtml(m)}</strong> 为您的商店购买了 <strong>${v.credits} 点</strong>，使用的是他们自己的付款方式 —— 没有从您的付款方式扣款。`,
+		introBuyer: (v) =>
+			`您好，您为 <strong>${escapeHtml(v.storeName)}</strong> 购买了 <strong>${v.credits} 点</strong> —— 已加入商店，可用于接下来的 ${v.credits} 张订单。`,
+		pack: (c) => `${c} 点配套`,
+		labels: {
+			pack: "配套",
+			amount: "支付金额",
+			method: "付款方式",
+			date: "日期",
+			expires: "点数有效期至",
+			receipt: "收据编号",
+			boughtBy: "购买人",
+		},
+		rules:
+			"1 点 = 1 张订单。购买的点数会在套餐每月的点数用完后使用，不可退款，也不可兑换现金。",
+		footerStore: "您可随时在 设置 → 账单 下载收据 PDF。",
+		footerBuyer: "请保留此邮件作为您的收据。",
+		ctaStore: "查看账单",
+		ctaBuyer: "打开后台",
+	},
+};
+
+export function renderCreditPurchaseEmail(
+	locale: Locale,
+	v: CreditPurchaseEmailVars,
+): RenderedEmail {
+	const L = creditPurchaseCopy[locale];
+	const member = v.recipient === "store" ? v.boughtBy : undefined;
+	const subject =
+		v.recipient === "buyer"
+			? L.subjectBuyer(v)
+			: member
+				? L.subjectStoreByMember(v, member)
+				: L.subjectStore(v);
+	const intro =
+		v.recipient === "buyer"
+			? L.introBuyer(v)
+			: member
+				? L.introStoreByMember(v, member)
+				: L.introStore(v);
+	const rows: Array<[string, string]> = [
+		[L.labels.pack, L.pack(v.credits)],
+		[L.labels.amount, v.amountFormatted],
+		[L.labels.method, v.methodLabel],
+		[L.labels.date, v.paidOnFormatted],
+		[L.labels.expires, v.expiresOnFormatted],
+		[L.labels.receipt, v.purchaseNumber],
+	];
+	if (member) rows.push([L.labels.boughtBy, member]);
+	const details = rows
+		.map(([label, value]) => `${escapeHtml(label)}: <strong>${escapeHtml(value)}</strong>`)
+		.join("<br>");
+	const footer = v.recipient === "buyer" ? L.footerBuyer : L.footerStore;
+	const lines = [intro, details, escapeHtml(L.rules), escapeHtml(footer)];
+	const cta = v.recipient === "buyer" ? L.ctaBuyer : L.ctaStore;
+	const html = wrapHtml("🧾", L.headline, lines, v.ctaUrl, cta);
+	const text = [
+		subject,
+		"",
+		...rows.map(([label, value]) => `${label}: ${value}`),
+		"",
+		L.rules,
+		footer,
+		"",
+		v.ctaUrl,
+	].join("\n");
+	return { subject, html, text };
 }

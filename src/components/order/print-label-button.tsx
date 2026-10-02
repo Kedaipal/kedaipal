@@ -42,12 +42,16 @@ export function PrintLabelButton({
 	size,
 	className,
 	label = "Print label",
+	lockedReason,
 }: {
 	shortId: string;
 	variant?: React.ComponentProps<typeof Button>["variant"];
 	size?: React.ComponentProps<typeof Button>["size"];
 	className?: string;
 	label?: string;
+	/** Why printing (= despatching) is locked right now (Credits T3) — the
+	 * button disables and says so. */
+	lockedReason?: string;
 }) {
 	const generate = useAction(api.awb.generateAwbPdf);
 	const [busy, setBusy] = useState(false);
@@ -74,7 +78,8 @@ export function PrintLabelButton({
 			variant={variant ?? "outline"}
 			size={size ?? "sm"}
 			onClick={handlePrint}
-			disabled={busy}
+			disabled={busy || lockedReason !== undefined}
+			title={lockedReason}
 			className={className}
 		>
 			{busy ? (

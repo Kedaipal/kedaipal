@@ -181,9 +181,11 @@ export function creditsExhausted(total: number): boolean {
 	return total <= 0;
 }
 
-/** Why a store can't buy a top-up pack right now, or `null` when it can
- * (register item 7c + T2). Credits top up a live subscription; they never
- * replace one. Comped stores and the missing-row fail-safe can buy. */
+/** Why a store's SUBSCRIPTION stops it buying a top-up pack, or `null` when
+ * it doesn't (register item 7c + T2). Credits top up a live subscription;
+ * they never replace one. Comped stores and the missing-row fail-safe pass
+ * this rule — T2's `topUpRefusal` refuses them on its own ground: they are
+ * never locked, so a pack would buy nothing. */
 export type TopUpBlock = "trialing" | "past_due" | "on_hold" | "cancelled";
 
 export function topUpBlock(
@@ -192,4 +194,209 @@ export function topUpBlock(
 ): TopUpBlock | null {
 	if (status === null || comped || status === "active") return null;
 	return status;
+}
+
+// ---------------------------------------------------------------------------
+// The seller lock at zero (Credits T3, ClickUp z8r3fdf8hy)
+// ---------------------------------------------------------------------------
+
+/**
+ * The share of the month's credits at which a store is RUNNING LOW (Zaki,
+ * 1 Oct 2026 — was a flat 10 left): the meter turns amber, the dashboard
+ * banner offers a top-up and the low email goes out, all at the same moment.
+ * Measured on what's left IN TOTAL (monthly + bought) against the month's
+ * grant — exactly "20% of the monthly credits left" for a store with no
+ * bought credits, and a store with bought credits banked isn't told to buy
+ * more while it has plenty.
+ */
+export const LOW_CREDIT_RATIO = 0.2;
+
+/** Orders left at or below which a store is running low — 20 on Starter's
+ * 100, 40 on Pro's 200, 60 on Founding Pro's 300, 40 of a 200-order trial.
+ * Zero for a store with no grant this month (it has nothing to run low on). */
+export function lowCreditLine(periodGrant: number): number {
+	return Math.ceil(Math.max(0, periodGrant) * LOW_CREDIT_RATIO);
+}
+
+/** WHY a store is metered but never locked — the copy that explains it
+ * differs: a Kedaipal admin's own store is never billed; a SPONSORED store
+ * (comped, or the missing-row fail-safe `resolveAccess` treats as comped) is
+ * covered by Kedaipal. `null` for every store the lock applies to. */
+export type CreditLockExemption = "admin_store" | "sponsored";
+
+export function creditLockExemption(args: {
+	status: CreditBillingStatus;
+	comped: boolean;
+	ownerIsAdmin: boolean;
+}): CreditLockExemption | null {
+	if (args.ownerIsAdmin) return "admin_store";
+	if (args.status === null || args.comped) return "sponsored";
+	return null;
+}
+
+/** Stores that are metered but NEVER locked: comped, owned by a Kedaipal
+ * admin, and the missing-row fail-safe. They get no balance notices either. */
+export function creditLockExempt(args: {
+	status: CreditBillingStatus;
+	comped: boolean;
+	ownerIsAdmin: boolean;
+}): boolean {
+	return creditLockExemption(args) !== null;
+}
+
+/** What puts credits back for a locked store — it decides the lock copy and
+ * the one button the lock surface offers. */
+export type CreditUnlockRoute =
+	| "topup" // active: top up or upgrade (or wait for the monthly refresh)
+	| "pick_plan" // trialing: the trial's orders are used — subscribe
+	| "pay_invoice" // past_due: paying lands the month's credits
+	| "resume" // on_hold: resuming lands them
+	| "subscribe"; // cancelled
+
+export function creditUnlockRoute(status: CreditBillingStatus): CreditUnlockRoute {
+	switch (status) {
+		case "trialing":
+			return "pick_plan";
+		case "past_due":
+			return "pay_invoice";
+		case "on_hold":
+			return "resume";
+		case "cancelled":
+			return "subscribe";
+		default:
+			return "topup";
+	}
+}
+
+const LOCK_PAUSED =
+	"accepting and updating orders and editing products are paused";
+const LOCK_STILL_OPEN =
+	"New orders keep coming in, and you can still view, cancel and refund them.";
+
+/**
+ * Who is reading a lock sentence, by what they can do about it: the OWNER
+ * (every way back), a teammate who may buy packs (`member_topup` — Credits
+ * write, T2, and a top-up is the way back), or a teammate who can only ask.
+ */
+export type CreditLockAudience = "owner" | "member_topup" | "member";
+
+export function creditLockAudience(args: {
+	isMember: boolean;
+	/** Holds Credits WRITE — may buy a pack on HitPay's page (T2). */
+	canBuyCredits: boolean;
+	route: CreditUnlockRoute;
+}): CreditLockAudience {
+	if (!args.isMember) return "owner";
+	// Paying an invoice, picking or resuming a plan are billing writes —
+	// owner-only — so a pack is the only way back a teammate can take.
+	return args.canBuyCredits && args.route === "topup"
+		? "member_topup"
+		: "member";
+}
+
+/**
+ * The ONE sentence a locked seller reads — the server's refusal and the
+ * dashboard's lock surfaces both come from here, so they can't disagree. It
+ * says what is paused, what still works, and the way out THIS reader can take:
+ * a teammate who may buy packs is sent to top up; one who can't is pointed at
+ * the owner.
+ */
+export function creditLockMessage(
+	route: CreditUnlockRoute,
+	audience: CreditLockAudience,
+): string {
+	if (audience === "member")
+		return `This store is out of credits, so ${LOCK_PAUSED}. Ask the store owner to add credits. ${LOCK_STILL_OPEN}`;
+	if (audience === "member_topup")
+		return `This store is out of credits, so ${LOCK_PAUSED}. Top up in Settings → Billing to carry on. ${LOCK_STILL_OPEN}`;
+	switch (route) {
+		case "pick_plan":
+			return `Your trial's orders are used up, so ${LOCK_PAUSED}. Pick a plan in Settings → Billing to carry on. ${LOCK_STILL_OPEN}`;
+		case "pay_invoice":
+			return `You're out of credits, so ${LOCK_PAUSED}. Pay your invoice in Settings → Billing and this month's credits land straight away. ${LOCK_STILL_OPEN}`;
+		case "resume":
+			return `You're out of credits, so ${LOCK_PAUSED}. Resume your plan in Settings → Billing and this month's credits land straight away. ${LOCK_STILL_OPEN}`;
+		case "subscribe":
+			return `You're out of credits, so ${LOCK_PAUSED}. Choose a plan in Settings → Billing to carry on. ${LOCK_STILL_OPEN}`;
+		case "topup":
+			return `You're out of credits, so ${LOCK_PAUSED}. Top up or upgrade in Settings → Billing to carry on. ${LOCK_STILL_OPEN}`;
+	}
+}
+
+/**
+ * The TYPED refusal every locked seller write throws (`ConvexError` data), so
+ * the dashboard can put the one way back next to the sentence instead of just
+ * printing it — a product save that can't land offers "Top up" in place, never
+ * a dead end. `message` is `creditLockMessage`; `audience` says whether the
+ * reader can act on `unlockRoute` (`member` can't — they ask the owner).
+ */
+export type CreditLockErrorData = {
+	kind: "credits_locked";
+	message: string;
+	unlockRoute: CreditUnlockRoute;
+	audience: CreditLockAudience;
+};
+
+export function creditLockErrorData(
+	route: CreditUnlockRoute,
+	audience: CreditLockAudience,
+): CreditLockErrorData {
+	return {
+		kind: "credits_locked",
+		message: creditLockMessage(route, audience),
+		unlockRoute: route,
+		audience,
+	};
+}
+
+/** Is this `ConvexError` payload the credit lock's? */
+export function isCreditLockErrorData(
+	data: unknown,
+): data is CreditLockErrorData {
+	if (typeof data !== "object" || data === null) return false;
+	const d = data as Record<string, unknown>;
+	return d.kind === "credits_locked" && typeof d.message === "string";
+}
+
+/** Stable opening of every lock refusal — what tests and callers match on. */
+export const CREDIT_LOCK_PREFIXES = [
+	"You're out of credits",
+	"Your trial's orders are used up",
+	"This store is out of credits",
+] as const;
+
+/** Which balance notice the store is owed, given where the balance sits now
+ * and what has already gone out. Pure, so the evaluator's dedupe is testable.
+ *  - `locked`: at or below zero and this lock hasn't been announced;
+ *  - `still_locked`: a new period's refresh left the store below zero again;
+ *  - `unlocked`: back above zero after an announced lock;
+ *  - `low`: at or below the low line (`lowCreditLine` — 20% of the month's
+ *    credits), once a period, and never for a
+ *    store on a custom grant (its allowance was negotiated, no nudging). */
+export type CreditNoticeKind = "low" | "locked" | "still_locked" | "unlocked";
+
+export function dueCreditNotice(args: {
+	total: number;
+	sent: readonly string[];
+	/** The period rolled since the lock was announced (a refresh happened). */
+	refreshedWhileLocked: boolean;
+	customGrant: boolean;
+	/** `lowCreditLine` of the month's grant. */
+	lowLine: number;
+}): CreditNoticeKind | null {
+	const lockAnnounced = args.sent.includes("locked");
+	if (args.total <= 0) {
+		if (!lockAnnounced) return "locked";
+		if (args.refreshedWhileLocked && !args.sent.includes("still_locked"))
+			return "still_locked";
+		return null;
+	}
+	if (lockAnnounced) return "unlocked";
+	if (
+		args.total <= args.lowLine &&
+		!args.customGrant &&
+		!args.sent.includes("low")
+	)
+		return "low";
+	return null;
 }

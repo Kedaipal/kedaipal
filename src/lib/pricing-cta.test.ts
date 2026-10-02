@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { isPlanSelectable, PLANS } from "../../convex/lib/plans";
 import { resolveTierCta } from "./pricing-cta";
 import type { SubscriptionView } from "./subscription";
 
@@ -16,34 +17,62 @@ const sub = (
 ): SubscriptionView => ({ plan, status, comped });
 
 const signedIn = (subscription: SubscriptionView | null) => ({
-	isScale: false,
+	selectable: true,
 	isSignedIn: true,
 	subscription,
 });
 
 describe("resolveTierCta", () => {
-	it("Scale is always a Coming soon pill, whatever the auth/plan state", () => {
-		const scaleOpts = { isScale: true, isSignedIn: true };
-		expect(resolveTierCta("scale", { ...scaleOpts, subscription: null })).toBe(
+	it("a tier that isn't for sale is a Coming soon pill, whatever the auth/plan state", () => {
+		const closed = { selectable: false, isSignedIn: true };
+		expect(resolveTierCta("scale", { ...closed, subscription: null })).toBe(
 			"coming_soon",
 		);
 		expect(
 			resolveTierCta("scale", {
-				isScale: true,
+				selectable: false,
 				isSignedIn: false,
 				subscription: null,
 			}),
 		).toBe("coming_soon");
 		expect(
 			resolveTierCta("scale", {
-				...scaleOpts,
+				...closed,
 				subscription: sub("pro", "active"),
 			}),
 		).toBe("coming_soon");
 	});
 
+	/**
+	 * Scale opened for purchase with the credits release (z8r3fdfuhq): the
+	 * public cards read the SAME gate the mutations enforce, so every tier —
+	 * Scale included — gets a real door, and Pro → Scale reads as an upgrade.
+	 */
+	it("every tier is for sale, so Scale takes the same plan-aware CTA as the rest", () => {
+		for (const plan of PLANS) expect(isPlanSelectable(plan), plan).toBe(true);
+		const open = (
+			subscription: SubscriptionView | null,
+			isSignedIn = true,
+		) => ({
+			selectable: isPlanSelectable("scale"),
+			isSignedIn,
+			subscription,
+		});
+		expect(resolveTierCta("scale", open(null, false))).toBe("trial");
+		expect(resolveTierCta("scale", open(sub("pro", "trialing")))).toBe(
+			"subscribe",
+		);
+		expect(resolveTierCta("scale", open(sub("pro", "active")))).toBe("upgrade");
+		expect(resolveTierCta("scale", open(sub("scale", "active")))).toBe(
+			"current",
+		);
+		expect(resolveTierCta("pro", signedIn(sub("scale", "active")))).toBe(
+			"manage",
+		);
+	});
+
 	it("signed-out visitors get the trial CTA on purchasable tiers", () => {
-		const opts = { isScale: false, isSignedIn: false, subscription: null };
+		const opts = { selectable: true, isSignedIn: false, subscription: null };
 		expect(resolveTierCta("starter", opts)).toBe("trial");
 		expect(resolveTierCta("pro", opts)).toBe("trial");
 	});
@@ -86,7 +115,7 @@ describe("resolveTierCta", () => {
 		// A comp resolves to the highest tier with unlimited orders and refuses
 		// subscribe/change/cancel server-side, so no tier may be a link. Covers the
 		// fail-open missing row (plan:pro/active/comped) and any stored plan/status.
-		for (const tier of ["starter", "pro"]) {
+		for (const tier of PLANS) {
 			expect(resolveTierCta(tier, signedIn(sub("pro", "active", true)))).toBe(
 				"sponsored",
 			);
@@ -94,10 +123,11 @@ describe("resolveTierCta", () => {
 				resolveTierCta(tier, signedIn(sub("starter", "trialing", true))),
 			).toBe("sponsored");
 		}
-		// Scale is still Coming soon — a product fact, not a seller one.
+		// A closed tier stays Coming soon even for a comp — a product fact,
+		// not a seller one.
 		expect(
 			resolveTierCta("scale", {
-				isScale: true,
+				selectable: false,
 				isSignedIn: true,
 				subscription: sub("pro", "active", true),
 			}),

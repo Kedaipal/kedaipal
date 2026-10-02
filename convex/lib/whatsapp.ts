@@ -146,6 +146,42 @@ export function billingPastDueTemplateName(): string | undefined {
 }
 
 /**
+ * Kedaipal Credits balance notices (Credits T3, ClickUp z8r3fdf8hy) — three
+ * Meta utility templates to the SELLER's alert number (`notifyWaPhone`), each
+ * the louder second tap beside an email that always goes out. Same env-gating
+ * posture as every sibling: unset ⇒ nothing is attempted and the email carries
+ * it alone, so the code ships decoupled from Meta review.
+ *
+ * Registered by Zaki (30 Sep 2026) in English (`en`) + Malay (`ms`) under one
+ * name each, category Utility, no header, optional footer "1 credit = 1 order".
+ * Body params, in order:
+ *  - `credits_low_utility`: {{1}} store name, {{2}} orders left (e.g. "10");
+ *  - `credits_locked_utility`: {{1}} store name, {{2}} the balance in words
+ *    ("0 orders left" / "15 orders owed", localized — `creditBalancePhrase`);
+ *  - `credits_unlocked_utility`: {{1}} store name, {{2}} orders left.
+ * Button (all three): URL `https://kedaipal.com/app/settings?tab={{1}}` ← the
+ * value `billing` — the shape `billing_past_due_utility` already uses. Added
+ * via Meta's **Add variable** control, never hand-typed braces.
+ */
+export function creditsLowTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_CREDITS_LOW_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+/** See creditsLowTemplateName — out of credits (also re-sent when a monthly
+ * refresh leaves the store still below zero). */
+export function creditsLockedTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_CREDITS_LOCKED_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+/** See creditsLowTemplateName — credits are back above zero. */
+export function creditsUnlockedTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_CREDITS_UNLOCKED_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+/**
  * Every Meta template this deployment is configured to send, keyed by the
  * env var that names it — the ONE registry the admin console's template
  * panel reads, so a new template can't be sent without also being watched.
@@ -192,6 +228,21 @@ export function configuredTemplates(): Array<{
 			envVar: "WHATSAPP_BILLING_PAST_DUE_TEMPLATE",
 			purpose: "Seller alert — subscription past due (dashboard locked)",
 			name: billingPastDueTemplateName(),
+		},
+		{
+			envVar: "WHATSAPP_CREDITS_LOW_TEMPLATE",
+			purpose: "Seller alert — 10 orders left (credits)",
+			name: creditsLowTemplateName(),
+		},
+		{
+			envVar: "WHATSAPP_CREDITS_LOCKED_TEMPLATE",
+			purpose: "Seller alert — out of credits (orders still coming in)",
+			name: creditsLockedTemplateName(),
+		},
+		{
+			envVar: "WHATSAPP_CREDITS_UNLOCKED_TEMPLATE",
+			purpose: "Seller alert — credits back above zero",
+			name: creditsUnlockedTemplateName(),
 		},
 	];
 }

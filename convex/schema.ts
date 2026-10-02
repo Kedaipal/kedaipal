@@ -2894,10 +2894,12 @@ export default defineSchema({
 		// Recurring-webhook resolution: billing-session id → subscription.
 		.index("by_autorenew_session", ["autoRenewSessionId"]),
 
-	// Per-retailer × MYT-calendar-month order counter — the meter behind the SOFT
-	// orderCap nudge ("X of 100 plan orders used this month"). Keyed by calendar
-	// month (not the billing period) because caps are "orders/mo" while billing
-	// cycles can be annual. High-churn counter split out per the Convex guideline
+	// Per-retailer × MYT-calendar-month order counter — live orders this month.
+	// It once metered the soft orderCap nudge; since Credits T3 the balance is
+	// the meter, and this is what a plan change compares the new allowance
+	// against ("you've had 140 this month, Starter includes 100"). Keyed by
+	// calendar month (not the billing period) because allowances are "orders a
+	// month" while billing cycles can be annual. High-churn counter split out per the Convex guideline
 	// (never `.collect().length`). Incremented on order create (storefront +
 	// counter checkout), decremented on the first transition into cancelled
 	// (keyed to the order's CREATION month, floored at zero). NEVER read to block
@@ -3049,6 +3051,85 @@ export default defineSchema({
 	})
 		.index("by_retailer_open_expiry", ["retailerId", "open", "expiresAt"])
 		.index("by_open_expiry", ["open", "expiresAt"]),
+
+	// Top-up pack purchases (Credits T2, z8r3fdf8ht — docs/credits.md#top-up-packs-t2).
+	// One row per checkout a seller (or a teammate with credits write) opens:
+	// a one-off HitPay payment request on KEDAIPAL's own account, settled by the
+	// v1 completion webhook (or the return reconcile) into a 12-month credit lot.
+	// Deliberately NOT the `invoices` table: a pending invoice past its dueDate
+	// locks the store and blocks renewals, and an abandoned top-up must never do
+	// either. Kept when a store is deleted — a financial record, like invoices.
+	creditPurchases: defineTable({
+		retailerId: v.id("retailers"),
+		// The `CreditPackId` bought, frozen with its credits + price below — the
+		// row is never re-priced from `CREDIT_PACKS`.
+		packId: v.string(),
+		credits: v.number(),
+		// Minor units (sen / cents) in `currency` — exactly what HitPay must be
+		// paid, checked on settle.
+		amountMinor: v.number(),
+		// The store's BILLING currency when the checkout was opened.
+		currency: v.union(v.literal("MYR"), v.literal("SGD")),
+		// pending → paid (credits landed) | expired (24h, never paid) | failed
+		// (the checkout could never be created). Expired and failed never credit.
+		status: v.union(
+			v.literal("pending"),
+			v.literal("paid"),
+			v.literal("failed"),
+			v.literal("expired"),
+		),
+		// What opened it: always a person picking a pack. Packs never
+		// auto-reload (Credits T4 was cancelled, 1 Oct 2026 — the subscription
+		// is the only recurring charge); kept so the ledger and the
+		// `credits_topup_paid` event say so explicitly.
+		source: v.literal("manual"),
+		// Clerk subject of whoever opened the checkout — the owner, or a
+		// teammate holding credits write (who pays on HitPay's page themselves;
+		// the owner is emailed a receipt naming them).
+		createdBy: v.string(),
+		// Human reference, `CRD-YYYYMM-XXXX` — HitPay's reference number and the
+		// receipt's number. Never used to route a payment.
+		purchaseNumber: v.string(),
+		// HitPay payment-request id — what the webhook resolves the purchase by.
+		gatewayRequestId: v.optional(v.string()),
+		gatewayPayment: v.optional(
+			v.object({
+				url: v.string(),
+				// The settled payment id — the idempotency key of the settle.
+				paymentId: v.optional(v.string()),
+			}),
+		),
+		// `hitpay_card` / `hitpay_touch_n_go` / bare `hitpay` when the rail is
+		// unknown (lib/hitpayBilling.ts gatewayPaymentMethodTag).
+		paymentMethod: v.optional(v.string()),
+		// An authentic payment we deliberately did NOT credit: it arrived after
+		// the purchase expired (late_payment) or didn't match the pack's amount
+		// or currency (amount_mismatch). An admin reconciles it by hand with a
+		// credits adjustment (or a refund). Stamped once, never auto-cleared.
+		gatewayIssue: v.optional(
+			v.object({
+				kind: v.union(v.literal("amount_mismatch"), v.literal("late_payment")),
+				paymentId: v.string(),
+				amountSen: v.optional(v.number()),
+				at: v.number(),
+			}),
+		),
+		// The lot the paid credits landed in (creditLots).
+		lotId: v.optional(v.id("creditLots")),
+		// The rendered receipt PDF, frozen once paid.
+		receiptPdfStorageId: v.optional(v.id("_storage")),
+		createdAt: v.number(),
+		paidAt: v.optional(v.number()),
+		expiredAt: v.optional(v.number()),
+	})
+		.index("by_retailer_created", ["retailerId", "createdAt"])
+		// Billing history (paid) and the return reconcile (pending), newest first.
+		.index("by_retailer_status_created", ["retailerId", "status", "createdAt"])
+		// v1 completion-webhook resolution: payment-request id → purchase.
+		.index("by_gateway_request", ["gatewayRequestId"])
+		// Admin → Billing's top-up revenue tile: this month's PAID purchases in
+		// one bounded range (Credits T3 × T5).
+		.index("by_status_paid", ["status", "paidAt"]),
 
 	// Per-period invoice. Admin marks it paid out-of-band (DuitNow / bank). The
 	// founding pending invoice carries a `dueDate` that drives the active→past_due

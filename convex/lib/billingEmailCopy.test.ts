@@ -2,11 +2,18 @@ import { describe, expect, it } from "vitest";
 import {
 	type AutoRenewEmailVars,
 	type BillingEmailVars,
+	type CreditPurchaseEmailVars,
 	renderAutoRenewEmail,
 	renderBillingEmail,
+	renderCreditPurchaseEmail,
 	renderPaymentEmail,
 	renderTrialEmail,
 } from "./billingEmailCopy";
+import {
+	INVOICE_DUE_GRACE_DAYS,
+	PLAN_CREDIT_GRANT,
+	TRIAL_CREDIT_GRANT,
+} from "./plans";
 
 const base: BillingEmailVars = {
 	storeName: "Mak Kuih",
@@ -585,6 +592,155 @@ describe("post-lock recovery chain (z8r3fdg3mh)", () => {
 			// read as good news at the exact moment it is not.
 			expect(html).toContain("#dc2626");
 			expect(overdueHtml).toContain("#dc2626");
+		}
+	});
+});
+
+/**
+ * Kedaipal Credits T5 (z8r3fdfu31): the renewal invoice and the
+ * choose-a-plan emails say what the plan includes, and the first-invoice
+ * emails state the real trial — every number read from the constants.
+ */
+describe("credits in the billing emails", () => {
+	const withCredits = { ...base, includedCredits: PLAN_CREDIT_GRANT.pro };
+
+	it("an invoice email names the plan's monthly credits beside the plan, in HTML and text", () => {
+		const expected = {
+			en: "200 credits a month · 1 per order",
+			ms: "200 kredit sebulan · 1 setiap pesanan",
+			zh: "每月 200 点 · 每张订单 1 点",
+		} as const;
+		for (const locale of ["en", "ms", "zh"] as const) {
+			for (const key of [
+				"invoiceIssued",
+				"invoiceReminder",
+				"firstInvoiceOrder",
+			] as const) {
+				const { html, text } = renderBillingEmail(locale, key, withCredits);
+				expect(html, `${locale} ${key}`).toContain(expected[locale]);
+				expect(text, `${locale} ${key}`).toContain(expected[locale]);
+			}
+		}
+	});
+
+	it("says nothing about credits when none were resolved — a hold bill grants none", () => {
+		const { html, text } = renderBillingEmail("en", "invoiceIssued", base);
+		expect(html).not.toContain("credits a month");
+		expect(text).not.toContain("credits a month");
+	});
+
+	it("the first-order invoice states the trial's two bounds, from the constants", () => {
+		const { html, text } = renderBillingEmail("en", "firstInvoiceOrder", base);
+		const bounds = `${INVOICE_DUE_GRACE_DAYS} days — or ${TRIAL_CREDIT_GRANT} orders, whichever comes first`;
+		expect(html).toContain(bounds);
+		expect(text).toContain(bounds);
+		for (const locale of ["ms", "zh"] as const) {
+			const body = renderBillingEmail(locale, "firstInvoiceOrder", base).text;
+			expect(body, locale).toContain(String(INVOICE_DUE_GRACE_DAYS));
+			expect(body, locale).toContain(String(TRIAL_CREDIT_GRANT));
+		}
+	});
+
+	it("the backstop invoice keeps Pro open for the trial's order bound", () => {
+		const { html } = renderBillingEmail("en", "firstInvoiceBackstop", base);
+		expect(html).toContain(`for up to ${TRIAL_CREDIT_GRANT} orders`);
+	});
+
+	it("the choose-a-plan email names what each plan includes", () => {
+		for (const locale of ["en", "ms", "zh"] as const) {
+			const { html, text } = renderTrialEmail(locale, "trialEndingSoon", {
+				storeName: "Mak Kuih",
+				billingUrl: base.billingUrl,
+				daysLeft: 3,
+			});
+			for (const credits of Object.values(PLAN_CREDIT_GRANT)) {
+				expect(html, `${locale} html`).toContain(String(credits));
+				expect(text, `${locale} text`).toContain(String(credits));
+			}
+			expect(text, locale).toContain(String(TRIAL_CREDIT_GRANT));
+		}
+	});
+});
+
+describe("renderCreditPurchaseEmail (Credits T2)", () => {
+	const receipt: CreditPurchaseEmailVars = {
+		storeName: "Mak Kuih",
+		credits: 50,
+		amountFormatted: "MYR 45.00",
+		methodLabel: "Touch 'n Go",
+		paidOnFormatted: "10 Oct 2026",
+		expiresOnFormatted: "10 Oct 2027",
+		purchaseNumber: "CRD-202610-AB12",
+		recipient: "store",
+		ctaUrl: "https://kedaipal.com/app/settings?tab=billing",
+	};
+
+	it("states the pack, credits, amount, rail, expiry and the no-refund rule", () => {
+		const { subject, html, text } = renderCreditPurchaseEmail("en", receipt);
+		expect(subject).toBe("🧾 Receipt: 50 credits added to Mak Kuih");
+		for (const fact of [
+			"Pack: 50-credit pack",
+			"Amount paid: MYR 45.00",
+			"Paid with: Touch 'n Go",
+			"Date: 10 Oct 2026",
+			"Credits valid until: 10 Oct 2027",
+			"Receipt no.: CRD-202610-AB12",
+			"non-refundable and not redeemable for cash",
+		])
+			expect(text).toContain(fact);
+		expect(html).toContain("<strong>50 credits</strong>");
+		expect(html).toContain(receipt.ctaUrl);
+		expect(text).not.toContain("Bought by");
+	});
+
+	it("the store's copy of a teammate's purchase names them — and says their own method paid", () => {
+		const { subject, html, text } = renderCreditPurchaseEmail("en", {
+			...receipt,
+			boughtBy: "Aisyah",
+		});
+		expect(subject).toBe("🧾 Aisyah bought 50 credits for Mak Kuih");
+		expect(html).toContain("<strong>Aisyah</strong> on your team bought");
+		expect(html).toContain("nothing was charged to yours");
+		expect(text).toContain("Bought by: Aisyah");
+	});
+
+	it("the teammate's own copy is theirs — no 'bought by', and a dashboard CTA", () => {
+		const { subject, text } = renderCreditPurchaseEmail("en", {
+			...receipt,
+			boughtBy: "Aisyah",
+			recipient: "buyer",
+			ctaUrl: "https://kedaipal.com/app",
+		});
+		expect(subject).toBe("🧾 Your receipt: 50 credits for Mak Kuih");
+		expect(text).not.toContain("Bought by");
+		expect(text).toContain("Keep this email as your receipt.");
+	});
+
+	it("speaks Malay and Chinese, with the same facts", () => {
+		const ms = renderCreditPurchaseEmail("ms", { ...receipt, boughtBy: "Aisyah" });
+		expect(ms.subject).toBe("🧾 Aisyah membeli 50 kredit untuk Mak Kuih");
+		expect(ms.text).toContain("Pek: Pek 50 kredit");
+		expect(ms.text).toContain("Kredit sah sehingga: 10 Oct 2027");
+		expect(ms.text).toContain("tidak boleh dikembalikan atau ditebus sebagai wang tunai");
+		const zh = renderCreditPurchaseEmail("zh", receipt);
+		// One word for credits across the product: 点数 (unit 点), per the
+		// vocabulary table in docs/credits.md.
+		expect(zh.subject).toBe("🧾 收据：Mak Kuih 已增加 50 点");
+		expect(zh.text).toContain("点数有效期至: 10 Oct 2027");
+		expect(zh.text).not.toContain("额度");
+		expect(zh.text).toContain("不可退款，也不可兑换现金");
+	});
+
+	it("never talks money-balance: no wallet, fee, commission or percentages", () => {
+		// The words, not the HTML shell (whose table is `width="100%"`).
+		for (const locale of ["en", "ms", "zh"] as const) {
+			const { subject, text } = renderCreditPurchaseEmail(locale, {
+				...receipt,
+				boughtBy: "Aisyah",
+			});
+			expect(`${subject} ${text}`).not.toMatch(
+				/wallet|commission|pay as you go|\bfee\b|%/i,
+			);
 		}
 	});
 });

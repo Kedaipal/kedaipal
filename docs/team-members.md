@@ -38,7 +38,11 @@ removal and grant edits bite on the member's next call.
   saved card is never charged by a member, and the owner is emailed every
   member purchase. Plan changes stay under `billing` (owner-only). The "Store
   manager" preset includes credits *view*; buying is always the owner's grant
-  to give.
+  to give. **When the store runs out** (the T3 seller lock) a member holding
+  credits *edit* is told to top up and gets the button — a pack is a way back
+  they can take; every other member is told to ask the owner, and a way back
+  that is billing (pay the invoice, pick or resume a plan) is always the
+  owner's (`creditLockAudience`).
 - **Hard owner-only, never in the matrix:** the Team page itself, the
   WhatsApp tab (store numbers + templates — Arif D2), slug rename,
   currency/country, business (legal) identity, consent re-acceptance, account

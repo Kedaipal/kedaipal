@@ -3,29 +3,44 @@ import { Check } from "lucide-react";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
+import type { CreditBalanceView } from "../../../convex/credits";
 import {
 	ANNUAL_MONTHS_CHARGED,
 	type BillingCurrency,
 	FOUNDING_PLAN,
+	FOUNDING_PRO_CREDIT_GRANT,
 	foundingPlanLocked,
+	isPlanSelectable,
+	PLAN_CAPS,
+	PLAN_CREDIT_GRANT,
+	type Plan,
+	PLANS,
 	planPrice,
 } from "../../../convex/lib/plans";
 import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
+import { includedCreditsLabel, planPickCreditLine } from "../../lib/credits-ui";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import type { SubscriptionView } from "../../lib/subscription";
 import { OwnerOnlyNote } from "./owner-only-note";
 
-type PickablePlan = "starter" | "pro";
 type Cycle = "monthly" | "annual";
 
-const PLAN_PITCH: Record<PickablePlan, { name: string; pitch: string }> = {
+const PLAN_PITCH: Record<Plan, { name: string; pitch: string }> = {
 	starter: {
 		name: "Starter",
 		pitch: "Storefront, orders + WhatsApp confirmations",
 	},
 	pro: {
 		name: "Pro",
-		pitch: "Everything in Starter + customer database, order inbox, insights, online payments",
+		pitch:
+			"Everything in Starter + customer database, order inbox, insights, online payments",
+	},
+	// Scale opened with the credits release (z8r3fdfuhq). Its pitch is what's
+	// LIVE — the team room; its volume is the credits line every plan row
+	// carries, so the number isn't said twice. Never the outlets, not built yet.
+	scale: {
+		name: "Scale",
+		pitch: `Everything in Pro + room for ${PLAN_CAPS.scale.userCap - 1} teammates`,
 	},
 };
 
@@ -51,6 +66,7 @@ export function PlanPickerCard({
 	foundingBenefitsRevoked = false,
 	ownerOnly = false,
 	onRedirectingChange,
+	balance,
 }: {
 	sub: SubscriptionView;
 	currency: BillingCurrency;
@@ -73,21 +89,24 @@ export function PlanPickerCard({
 	/** Signals the tab that a HitPay redirect is in flight, so the freshly
 	 * created invoice's card shows a spinner instead of the manual rails. */
 	onRedirectingChange?: (redirecting: boolean) => void;
+	/** The store's credits (Credits T3), when the viewer may see them — so the
+	 * picker can say what the chosen plan does to the balance before the tap.
+	 * Absent/null: the plans still state their allowance, nothing more. */
+	balance?: CreditBalanceView | null;
 }) {
 	const subscribeSelf = useMutation(api.invoices.subscribeSelf);
 	const startAutoRenewSetup = useAction(
 		api.subscriptionPayments.startAutoRenewSetup,
 	);
 	const founding = foundingPricing;
-	// Only the tiers this store may buy: a Founding Member stays on Founding Pro.
-	const plans = (["starter", "pro"] as const).filter(
-		(p) => !foundingPlanLocked(p, founding),
+	// Only the tiers this store may buy: every tier for sale (Scale included
+	// since z8r3fdfuhq), and a Founding Member stays on Founding Pro.
+	const plans = PLANS.filter(
+		(p) => isPlanSelectable(p) && !foundingPlanLocked(p, founding),
 	);
 	// Default to the seller's current plan (a renewal shouldn't nudge them off
 	// it), which is Pro for every trial.
-	const [picked, setPlan] = useState<PickablePlan>(
-		sub.plan === "starter" ? "starter" : "pro",
-	);
+	const [picked, setPlan] = useState<Plan>(sub.plan);
 	// Derived, not stored: founding pricing is a live server answer, and a
 	// selection it rules out must never be what Subscribe sends.
 	const plan = plans.includes(picked) ? picked : FOUNDING_PLAN;
@@ -122,8 +141,22 @@ export function PlanPickerCard({
 		planPrice(plan, cycle, founding && plan === "pro", currency),
 		currency,
 	);
-	const planName = (p: PickablePlan) =>
+	const planName = (p: Plan) =>
 		founding && p === FOUNDING_PLAN ? "Founding Pro" : PLAN_PITCH[p].name;
+	// The allowance each plan grants — the same founding eligibility the
+	// server's grant uses (`foundingPriceEligible`), so the number quoted is
+	// the number that lands.
+	const grantFor = (p: Plan) =>
+		founding && p === FOUNDING_PLAN
+			? FOUNDING_PRO_CREDIT_GRANT
+			: PLAN_CREDIT_GRANT[p];
+	const creditLine = balance
+		? planPickCreditLine({
+				balance,
+				grant: grantFor(plan),
+				planName: planName(plan),
+			})
+		: null;
 
 	// Subscribing IS enrolling in auto-renewal (owner decision, 11 Sep 2026),
 	// like every mainstream subscription: invoice created, then straight to
@@ -176,7 +209,7 @@ export function PlanPickerCard({
 	// before the redirect, so a seller who abandons HitPay's page comes back to
 	// a pending invoice with the Pay-now button AND the bank/DuitNow details.
 
-	const priceLine = (p: PickablePlan) => {
+	const priceLine = (p: Plan) => {
 		const foundingApplies = founding && p === "pro";
 		const monthly = planPrice(p, "monthly", foundingApplies, currency);
 		const total = planPrice(p, cycle, foundingApplies, currency);
@@ -267,6 +300,9 @@ export function PlanPickerCard({
 							<p className="mt-1.5 text-sm font-medium tabular-nums">
 								{priceLine(p)}
 							</p>
+							<p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+								{includedCreditsLabel(grantFor(p))}
+							</p>
 						</div>
 					);
 					// One plan on offer (a Founding Member) is a summary, not a
@@ -307,6 +343,14 @@ export function PlanPickerCard({
 					);
 				})}
 			</div>
+
+			{/* What the chosen plan does to this store's credits — a trial moving
+			    to a smaller allowance sees it here, not after paying. */}
+			{creditLine ? (
+				<p className="rounded-lg bg-muted/60 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+					{creditLine}
+				</p>
+			) : null}
 
 			<div className="flex flex-col gap-2">
 				<button

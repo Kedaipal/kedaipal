@@ -205,7 +205,6 @@ function AppShell() {
 							{adminOwnStore ? null : (
 								<SubscriptionBanner
 									subscription={retailer.subscription}
-									ordersThisMonth={retailer.ordersThisMonth}
 									slug={retailer.slug}
 								/>
 							)}

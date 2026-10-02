@@ -4,8 +4,8 @@
 // own copy control; "Copy summary" writes the plain-text block an admin
 // pastes into a WhatsApp message. The actions live in the footer's Manage
 // menu — the same one door the row has, so nothing here can drift from it.
-import { ExternalLink } from "lucide-react";
-import type { ReactNode } from "react";
+import { Coins, ExternalLink } from "lucide-react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import type { AdminSellerRow } from "../../../convex/admin";
 import { COMP_KIND_LABEL } from "../../../convex/lib/comp";
 import { COUNTRY_LABELS } from "../../../convex/lib/country";
@@ -13,6 +13,7 @@ import {
 	describeDays,
 	highlightedThroughLabel,
 	sellerBucket,
+	sellerCredits,
 	sellerExpiry,
 	sellerHighlight,
 	sellerPlanLabel,
@@ -32,8 +33,10 @@ import {
 	SheetHeader,
 	SheetTitle,
 } from "../ui/sheet";
+import { CreditLedgerBody, periodLabel } from "./credit-ledger-sheet";
 import {
 	ContactLine,
+	CreditsText,
 	OwnerEmailLine,
 	ExpiryText,
 	FoundingPill,
@@ -99,6 +102,28 @@ function SellerSheetBody({
 		seller.notifyWaPhone !== undefined &&
 		seller.notifyWaPhone === seller.waPhone;
 	const neverBilled = seller.ownerIsAdmin || seller.comped;
+	const credits = sellerCredits(seller);
+	// The credit ledger is a page of THIS drawer, not a second drawer on top:
+	// one surface, a back link, and focus returns to the button that opened it.
+	const [ledgerOpen, setLedgerOpen] = useState(false);
+	const ledgerButtonRef = useRef<HTMLButtonElement>(null);
+	const refocusLedgerButton = useRef(false);
+	useEffect(() => {
+		if (ledgerOpen || !refocusLedgerButton.current) return;
+		refocusLedgerButton.current = false;
+		ledgerButtonRef.current?.focus();
+	}, [ledgerOpen]);
+
+	if (ledgerOpen)
+		return (
+			<CreditLedgerBody
+				seller={seller}
+				onBack={() => {
+					refocusLedgerButton.current = true;
+					setLedgerOpen(false);
+				}}
+			/>
+		);
 
 	return (
 		<>
@@ -381,6 +406,54 @@ function SellerSheetBody({
 							<Plain muted>{seller.comp.note}</Plain>
 						</Row>
 					) : null}
+				</Section>
+
+				{/* Credits T5 — beside Billing, because it's the other half of
+				    what a store pays for. The drawer holds the ledger and the
+				    two admin levers; the directory row only reads the cache. */}
+				<Section title="Credits">
+					<Row label="Balance">
+						<CreditsText
+							credits={credits}
+							className="flex-row items-baseline gap-2"
+						/>
+					</Row>
+					{seller.credits ? (
+						<Row label="This month">
+							<Plain>
+								{periodLabel(seller.credits.periodKey)}
+								<Muted> · {seller.credits.periodGrant} granted</Muted>
+							</Plain>
+						</Row>
+					) : null}
+					<Row label="Out of credits">
+						{credits.outSince !== undefined ? (
+							<Plain>
+								Since {formatShortDate(credits.outSince)}
+								<Muted> · {describeDays(credits.outSince, now)}</Muted>
+							</Plain>
+						) : (
+							<Plain muted>{credits.out ? "Yes" : "No"}</Plain>
+						)}
+					</Row>
+					<Row label="Custom grant">
+						{credits.customGrant !== undefined ? (
+							<Plain>{credits.customGrant} a month</Plain>
+						) : (
+							<Plain muted>None — the plan's grant</Plain>
+						)}
+					</Row>
+					<div className="pt-2">
+						<Button
+							ref={ledgerButtonRef}
+							variant="outline"
+							onClick={() => setLedgerOpen(true)}
+							className="tap-target w-full rounded-xl sm:w-fit"
+						>
+							<Coins data-icon="inline-start" aria-hidden="true" />
+							Open credit ledger
+						</Button>
+					</div>
 				</Section>
 
 				<Section title="How they arrived">

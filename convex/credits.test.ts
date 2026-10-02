@@ -788,6 +788,42 @@ describe("admin", () => {
 	});
 });
 
+describe("admin totals (Credits T5)", () => {
+	test("sums unused bought credits and orders owed across the book — admin only", async () => {
+		const t = setup();
+		const a = await makeStore(t, { status: "active", plan: "pro" }, {
+			userId: "user_totals_a",
+		});
+		const b = await makeStore(t, { status: "active", plan: "starter" }, {
+			userId: "user_totals_b",
+		});
+		await makeStore(t, { status: "active", plan: "pro" }, {
+			userId: "user_totals_c",
+		});
+		await adjust(t, a.retailerId, "purchased", 50);
+		// Starter's 100, 115 used: 15 orders owed.
+		await adjust(t, b.retailerId, "plan", -115);
+
+		const totals = await t
+			.withIdentity({ subject: ADMIN })
+			.query(api.credits.adminCreditTotals, {});
+		expect(totals).toEqual({
+			purchasedUnused: 50,
+			storesWithPurchased: 1,
+			ordersOwed: 15,
+			storesOwing: 1,
+			accounts: 3,
+			truncated: false,
+		});
+
+		await expect(
+			t
+				.withIdentity({ subject: OWNER })
+				.query(api.credits.adminCreditTotals, {}),
+		).rejects.toThrow(/Not authorized/);
+	});
+});
+
 describe("purchased-credit expiry", () => {
 	test("whatever is left of a lot expires 12 months after it landed — one row per lot", async () => {
 		const t = setup();

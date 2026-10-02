@@ -107,11 +107,15 @@ export function countSellerBuckets(
 
 // --- Sort ---------------------------------------------------------------
 
-export type SellerSort = "founding" | "expiry" | "newest" | "name";
+export type SellerSort = "founding" | "expiry" | "credits" | "newest" | "name";
 
 export const SELLER_SORTS: ReadonlyArray<{ key: SellerSort; label: string }> = [
 	{ key: "founding", label: "Founding rank" },
 	{ key: "expiry", label: "Expiry · soonest first" },
+	// Credits T5: out-of-credits stores float to the top — a sort, not a
+	// status chip, because "out of credits" crosses every status bucket (an
+	// active store and a trialing one can both be at zero).
+	{ key: "credits", label: "Credits · lowest first" },
 	{ key: "newest", label: "Newest store" },
 	{ key: "name", label: "Name A–Z" },
 ];
@@ -155,6 +159,15 @@ export function sortSellers(
 				const ea = sellerExpiry(a, now).at ?? Number.POSITIVE_INFINITY;
 				const eb = sellerExpiry(b, now).at ?? Number.POSITIVE_INFINITY;
 				if (ea !== eb) return ea - eb;
+				return a.storeName.localeCompare(b.storeName);
+			});
+		case "credits":
+			// Lowest total first, so a store owing orders tops the list; stores
+			// with no credit account yet go last, then by name.
+			return sorted.sort((a, b) => {
+				const ta = sellerCredits(a).total ?? Number.POSITIVE_INFINITY;
+				const tb = sellerCredits(b).total ?? Number.POSITIVE_INFINITY;
+				if (ta !== tb) return ta - tb;
 				return a.storeName.localeCompare(b.storeName);
 			});
 	}
@@ -604,6 +617,58 @@ export function sellerRail(row: AdminSellerRow): string {
 	return parts.join(" · ");
 }
 
+// --- Credits (Kedaipal Credits T5) --------------------------------------
+
+export type CreditsTone = "normal" | "out" | "muted";
+
+export interface SellerCredits {
+	/** "130 left", "0 left", "15 owed" — "—" with no account. */
+	headline: string;
+	/** "plan 80 · bought 50", plus the custom grant when one is set. */
+	detail: string;
+	tone: CreditsTone;
+	/** The total is at or below zero — the fact the seller lock keys off
+	 * (T3). Comped and admin stores can be out and are still never locked. */
+	out: boolean;
+	/** When the total reached zero (`exhaustedAt`) — "out since". */
+	outSince?: number;
+	/** An admin's custom monthly grant, when set. */
+	customGrant?: number;
+	/** plan + purchased, for sorting. Absent = no credit account yet. */
+	total?: number;
+}
+
+/** A store's credits in one reading, shared by the table, the phone cards,
+ * the sheet, the CSV and the copy-summary so they can't disagree. */
+export function sellerCredits(row: AdminSellerRow): SellerCredits {
+	const c = row.credits;
+	if (!c)
+		return {
+			headline: "—",
+			detail: "No credit account yet",
+			tone: "muted",
+			out: false,
+		};
+	const total = c.plan + c.purchased;
+	const out = total <= 0;
+	const neverLocked = row.ownerIsAdmin || row.comped;
+	const detail = [
+		`plan ${c.plan}`,
+		`bought ${c.purchased}`,
+		...(c.customGrant !== undefined ? [`custom ${c.customGrant}/mo`] : []),
+		...(out && neverLocked ? ["never locked"] : []),
+	].join(" · ");
+	return {
+		headline: total < 0 ? `${-total} owed` : `${total} left`,
+		detail,
+		tone: out ? (neverLocked ? "muted" : "out") : "normal",
+		out,
+		outSince: out ? c.exhaustedAt : undefined,
+		customGrant: c.customGrant,
+		total,
+	};
+}
+
 export const SELLER_STATUS_LABEL: Record<SellerBucket, string> = {
 	unclaimed: "Unclaimed",
 	past_due: "Past due",
@@ -639,8 +704,20 @@ export function sellerSummaryText(
 		`WhatsApp: ${row.waPhone ? formatMobile(row.waPhone) : "none on file"}`,
 		`Plan: ${plan || "—"} · ${SELLER_STATUS_LABEL[sellerBucket(row)]}`,
 		`Seats: ${sellerSeatsLabel(row)}`,
+		`Credits: ${creditsSummary(row)}`,
 		`${expiry.headline}${expiry.detail ? ` · ${expiry.detail}` : ""}`,
 	].join("\n");
+}
+
+/** "130 left (plan 80 · bought 50)", "15 owed (…) · out since 3 Oct 2026". */
+function creditsSummary(row: AdminSellerRow): string {
+	const credits = sellerCredits(row);
+	if (credits.total === undefined) return credits.detail;
+	const since =
+		credits.outSince !== undefined
+			? ` · out since ${formatShortDate(credits.outSince)}`
+			: "";
+	return `${credits.headline} (${credits.detail})${since}`;
 }
 
 const CSV_HEADER = [
@@ -652,6 +729,11 @@ const CSV_HEADER = [
 	"Plan",
 	"Billing",
 	"Seats",
+	"Credits left",
+	"Plan credits",
+	"Bought credits",
+	"Out of credits since",
+	"Custom grant",
 	"Expiry",
 	"Expiry date",
 	"Email",
@@ -676,6 +758,7 @@ function sellerToCsvRow(
 	now: number,
 ): string[] {
 	const expiry = sellerExpiry(row, now);
+	const credits = sellerCredits(row);
 	return [
 		row.storeName,
 		row.slug,
@@ -685,6 +768,11 @@ function sellerToCsvRow(
 		sellerPlanLabel(row),
 		sellerRail(row),
 		sellerSeatsLabel(row),
+		credits.total !== undefined ? String(credits.total) : "",
+		row.credits ? String(row.credits.plan) : "",
+		row.credits ? String(row.credits.purchased) : "",
+		csvDate(credits.outSince),
+		credits.customGrant !== undefined ? String(credits.customGrant) : "",
 		expiry.headline,
 		csvDate(expiry.at),
 		row.ownerEmail ?? "",

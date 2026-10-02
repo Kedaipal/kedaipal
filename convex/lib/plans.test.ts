@@ -214,10 +214,12 @@ describe("plans — public tier set", () => {
 });
 
 describe("plans — gating helpers", () => {
-	test("Scale is not selectable at v1; only Pro qualifies for founding", () => {
+	test("every tier is for sale — Scale opened with the credits release (z8r3fdfuhq); only Pro qualifies for founding", () => {
 		expect(isPlanSelectable("starter")).toBe(true);
 		expect(isPlanSelectable("pro")).toBe(true);
-		expect(isPlanSelectable("scale")).toBe(false);
+		expect(isPlanSelectable("scale")).toBe(true);
+		// Opening Scale did not open founding to it: the cohort is closed and
+		// a founding store stays on Founding Pro.
 		expect(planQualifiesForFounding("pro")).toBe(true);
 		expect(planQualifiesForFounding("scale")).toBe(false);
 		expect(planQualifiesForFounding("starter")).toBe(false);

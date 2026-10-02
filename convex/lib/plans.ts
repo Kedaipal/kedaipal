@@ -14,14 +14,35 @@ export type BillingCycle = "monthly" | "annual";
 
 export const PLANS: Plan[] = ["starter", "pro", "scale"];
 
-/** Plan currently selectable at signup. Scale is disabled ("Coming soon") for v1
- * — schema keeps it so future activation needs no migration. */
+/**
+ * Whether a seller can buy this tier — self-serve (`subscribeSelf`,
+ * `changePlan`, `switchPendingPlan`) and on the public pages (`/pricing`'s
+ * plan-aware CTA, the landing teaser). Every tier is purchasable since the
+ * credits release opened Scale (ClickUp z8r3fdfuhq, 30 Sep 2026): it sells on
+ * what is live today — 500 credits a month and you + 5 teammates — while its
+ * unbuilt rows (outlets, broadcasts, custom domain, production calendar,
+ * priority support) stay marked "Coming soon" where they are listed.
+ *
+ * Kept as the one gate rather than inlined `true` so a tier that is not ready
+ * to sell (an Enterprise, a re-cut Scale) closes every door — both public
+ * surfaces and all three mutations — by answering `false` here, not by
+ * hunting down call sites. A `Record` rather than a list so a new member of
+ * `Plan` is a compile error until someone decides whether it is for sale.
+ */
+const SELECTABLE: Record<Plan, boolean> = {
+	starter: true,
+	pro: true,
+	scale: true,
+};
+
 export function isPlanSelectable(plan: Plan): boolean {
-	return plan === "starter" || plan === "pro";
+	return SELECTABLE[plan];
 }
 
-/** Only Pro grants a Founding Member rank at v1 (Arif's 2026-05-28 decision —
- * Scale is disabled and grants no badge). */
+/** Only Pro grants a Founding Member rank (Arif's 2026-05-28 decision). Scale
+ * being purchasable does not change this: the cohort is closed, and a
+ * founding store stays on Founding Pro (`foundingPlanLocked`), so the
+ * founding price never carries to Scale. */
 export function planQualifiesForFounding(plan: Plan): boolean {
 	return plan === "pro";
 }
@@ -289,7 +310,9 @@ export const BILLING_CURRENCY_FOR_COUNTRY: Record<Country, BillingCurrency> = {
 // Starter/Pro: locked May 2026 (MYR) + the Aug 2026 SG pricing deck (SGD).
 // Scale: RM399 / S$149 per the 30 Aug 2026 pricing reset (z8r3fday24 — Arif
 // locked RM399 FINAL on 6 Sep after an RM299/RM300 wobble; earlier numbers are
-// void). Scale is still "Coming soon", so nobody was repriced by the move.
+// void). Scale was still "Coming soon" then, so nobody was repriced by the
+// move; it opened for purchase at RM399 / S$149 with the credits release
+// (z8r3fdfuhq).
 export const PLAN_MONTHLY_PRICES: Record<
 	BillingCurrency,
 	Record<Plan, number>
@@ -306,7 +329,8 @@ export const PLAN_MONTHLY_PRICE: Record<Plan, number> = PLAN_MONTHLY_PRICES.MYR;
 // RM104.30 → RM104, RM279.30 → RM279; SGD S$41.30 → S$41, S$104.30 → S$104).
 // Founding pricing was RETIRED for new signups in the 30 Aug 2026 reset — no
 // public surface advertises it — but every claimed member keeps their rate, so
-// the table stays in billing. Scale kept for when it activates.
+// the table stays in billing. The Scale row is never billed: a founding store
+// stays on Founding Pro (`foundingPlanLocked`), even now Scale is purchasable.
 export const FOUNDING_MONTHLY_PRICES: Record<
 	BillingCurrency,
 	Record<"pro" | "scale", number>
@@ -322,10 +346,12 @@ export const FOUNDING_MONTHLY_PRICE: Record<"pro" | "scale", number> =
 /**
  * Price of each outlet beyond the three Scale includes (minor units).
  *
- * Display copy only — Scale is still "Coming soon" and the billing lever ships
- * with that build (docs/pricing.md). It lives here rather than inside the
- * message catalogs because the catalogs used to spell "RM49" into the sentence,
- * which quoted ringgit at a Singaporean reading S$ tier prices two lines above.
+ * Quoted NOWHERE while outlets are "Coming soon" (z8r3fdfuhq): once Scale
+ * became purchasable, an add-on price beside its Subscribe button would have
+ * sold an outlet nobody can open yet. It stays here as Arif's confirmed number
+ * for the outlets build to bill from (docs/pricing.md). It lived here rather
+ * than in the message catalogs because the catalogs once spelled "RM49" into
+ * the sentence, quoting ringgit to a Singaporean reading S$ tier prices.
  *
  * SGD S$18 is the number in the 30 Aug 2026 pricing reset artifact (confirmed
  * by Arif, 1 Sep — it replaced the S$19 ratio guess); MYR RM49 holds.
@@ -583,6 +609,19 @@ export function isPlanUpgrade(from: Plan, to: Plan): boolean {
 export const TRIAL_DAYS = 14;
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * Days a seller has to pay an invoice once it's issued, when the admin form
+ * doesn't set its own due date (`insertPendingInvoice`).
+ *
+ * The FIRST invoice's grace is also the public trial (Zaki, 30 Sep 2026): it
+ * is issued with the store's first order, and until it's paid the store keeps
+ * everything in Pro, capped at `TRIAL_CREDIT_GRANT` orders. So "14 days or 200
+ * orders from your first order, whichever comes first" is THIS number and that
+ * one — `/pricing`, the landing teaser and the emails read both from here,
+ * never a literal, so moving the grace moves the promise with it.
+ */
+export const INVOICE_DUE_GRACE_DAYS = 14;
+
 /** Founding cohort size — first 10 paying Pro retailers. */
 export const FOUNDING_MEMBER_LIMIT = 10;
 
@@ -801,8 +840,10 @@ export function foundingBenefitsWarningDue(
  * and from there the store is an ordinary seller again, free to pick any plan —
  * permanently, since the revocation outranks the read-time window. The lock
  * needs no code for that: it keys off `foundingPriceEligible`, so it opens the
- * moment revocation lands (pinned by a test). Scale joins when it becomes
- * purchasable (its founding row already exists).
+ * moment revocation lands (pinned by a test). Opening Scale for purchase
+ * (z8r3fdfuhq, 30 Sep 2026) deliberately did NOT widen this: the founding
+ * price never carries to Scale, so a founding member who wants Scale's volume
+ * tops up instead (their 300 credits a month already beat Pro's 200).
  */
 export const FOUNDING_PLAN = "pro" satisfies Plan;
 

@@ -20,6 +20,12 @@ vi.mock("@tanstack/react-query", () => ({ useQuery: vi.fn() }));
 vi.mock("convex/react", () => ({
 	useAction: () => vi.fn(),
 	useMutation: () => vi.fn(),
+	// Credit activity (Credits T3) pages through the ledger.
+	usePaginatedQuery: () => ({
+		results: [],
+		status: "Exhausted",
+		loadMore: vi.fn(),
+	}),
 }));
 // WHO is reading the bill (86exr91r4). Billing WRITE is owner-only by
 // construction, but a teammate can be granted billing READ and lands on this
@@ -50,7 +56,6 @@ function retailer(overrides: Partial<Retailer> = {}): Retailer {
 		slug: "openmarket",
 		country: "MY",
 		isFoundingMember: false,
-		ordersThisMonth: 0,
 		subscription: {
 			plan: "pro",
 			status: "past_due",
@@ -79,10 +84,13 @@ function mockQueries({
 	supportWa = CONFIGURED_WA,
 	invoices = [],
 	gateway = GATEWAY_OFF,
+	creditPurchases = [],
 }: {
 	isAdmin: boolean;
 	supportWa?: string | null;
 	invoices?: unknown[];
+	/** creditPurchases.myPurchases — the paid top-ups (Credits T2). */
+	creditPurchases?: unknown[];
 	/** billingGatewayAvailable answer. Defaults to what the server returns with
 	 * no HitPay credentials (rails off, list pricing); `null` = still loading. */
 	gateway?: Gateway | null;
@@ -93,6 +101,7 @@ function mockQueries({
 		instructions: getFunctionName(api.billing.paymentInstructions),
 		supportWa: getFunctionName(api.contact.supportWhatsapp),
 		gateway: getFunctionName(api.subscriptionPayments.billingGatewayAvailable),
+		creditPurchases: getFunctionName(api.creditPurchases.myPurchases),
 	};
 	vi.mocked(useQuery).mockImplementation(((opts: {
 		__fn: FunctionReference<"query">;
@@ -105,6 +114,7 @@ function mockQueries({
 			if (name === NAME.instructions) return { bankName: "Maybank" };
 			if (name === NAME.supportWa) return supportWa ?? undefined;
 			if (name === NAME.gateway) return gateway ?? undefined;
+			if (name === NAME.creditPurchases) return creditPurchases;
 			return undefined;
 		})();
 		return { data, isPending: false };
@@ -227,6 +237,8 @@ describe("BillingTab support WhatsApp number", () => {
 			const name = getFunctionName(opts.__fn);
 			const data = (() => {
 				if (name === getFunctionName(api.invoices.myInvoices)) return [];
+				if (name === getFunctionName(api.creditPurchases.myPurchases))
+					return [];
 				if (name === getFunctionName(api.billing.paymentInstructions))
 					return null;
 				return false;
@@ -324,6 +336,8 @@ describe("BillingTab pending invoice — how to pay", () => {
 			const data = (() => {
 				if (name === getFunctionName(api.invoices.myInvoices))
 					return [pendingInvoice("SGD")];
+				if (name === getFunctionName(api.creditPurchases.myPurchases))
+					return [];
 				if (name === getFunctionName(api.billing.paymentInstructions))
 					return {
 						bankName: "Maybank",
@@ -542,11 +556,14 @@ describe("BillingTab comp accounts (z8r3fdeub2)", () => {
 				status: "active",
 				comped: true,
 				comp,
-				caps: { orderCap: 1_000_000_000, userCap: 1_000_000_000, broadcastQuota: 500 },
+				caps: {
+					orderCap: 1_000_000_000,
+					userCap: 1_000_000_000,
+					broadcastQuota: 500,
+				},
 				active: true,
 				frozen: false,
 			},
-			ordersThisMonth: 350,
 		} as unknown as Partial<Retailer>);
 
 	it("a sponsored store sees who's sponsoring it, no limits — and nothing to buy, change, pause or cancel", () => {
@@ -560,9 +577,9 @@ describe("BillingTab comp accounts (z8r3fdeub2)", () => {
 			/>,
 		);
 		expect(screen.getByText("Sponsored account")).toBeTruthy();
-		expect(screen.getByText("No limits")).toBeTruthy();
+		expect(screen.getByText("Never locked")).toBeTruthy();
 		expect(screen.getByText("Sponsored by Maybank SME")).toBeTruthy();
-		expect(screen.getByText(/no limits on orders/)).toBeTruthy();
+		expect(screen.getByText(/never\s+locks your store/)).toBeTruthy();
 		// A comp has no end date — nothing may suggest one.
 		expect(screen.queryByText(/until|expires|ends/i)).toBeNull();
 		// Not a plan: no tier, meter or any billing door.
@@ -1159,10 +1176,12 @@ describe("BillingTab annual billing", () => {
 		expect(screen.queryByText("Ask for an annual invoice")).toBeNull();
 	});
 
-	it("hides from Scale, which cannot be invoiced at all yet", () => {
+	it("offers the year to a Scale seller now Scale is purchasable (z8r3fdfuhq)", () => {
 		mockQueries({ isAdmin: false, invoices: settled });
 		render(<BillingTab retailer={activePro({ plan: "scale" })} />);
-		expect(screen.queryByText(/Pay for the year/)).toBeNull();
+		expect(screen.getByText(/Pay for the year/)).toBeTruthy();
+		// Priced from annualQuote at Scale's rate — RM3,990 for 12 months.
+		expect(screen.getByText(/RM\s*3,990\.00/)).toBeTruthy();
 	});
 });
 
@@ -1225,6 +1244,76 @@ describe("BillingTab invoice history documents", () => {
 		expect(
 			screen.queryByRole("button", { name: /download receipt pdf/i }),
 		).toBeNull();
+	});
+});
+
+/**
+ * Credits T2 (z8r3fdf8ht): paid top-up packs share the history list with the
+ * invoices — one timeline, dated by when each was paid — and carry their own
+ * receipt. A teammate's purchase names them.
+ */
+describe("BillingTab billing history — credit top-ups (Credits T2)", () => {
+	const paidInvoice = {
+		_id: "inv_aug",
+		status: "paid",
+		currency: "MYR",
+		total: 14900,
+		invoiceNumber: "INV-PAID",
+		createdAt: Date.UTC(2026, 7, 1),
+		markedPaidAt: Date.UTC(2026, 7, 1),
+	};
+	const topUp = {
+		_id: "cp_sep",
+		purchaseNumber: "CRD-202609-AB12",
+		packId: "p50",
+		credits: 50,
+		amountMinor: 4500,
+		currency: "MYR",
+		status: "paid",
+		createdAt: Date.UTC(2026, 8, 1),
+		paidAt: Date.UTC(2026, 8, 1),
+		issue: null,
+		paymentMethodLabel: "Card",
+		boughtBy: null,
+	};
+
+	it("a paid top-up sits beside the invoices, newest first, with its receipt", () => {
+		mockQueries({
+			isAdmin: false,
+			invoices: [paidInvoice],
+			creditPurchases: [topUp],
+		});
+		render(<BillingTab retailer={retailer()} />);
+		expect(screen.getByText("Billing history")).toBeTruthy();
+		const rows = screen
+			.getByText("Billing history")
+			.parentElement?.querySelectorAll("li");
+		expect(rows).toHaveLength(2);
+		// September's top-up above August's invoice.
+		expect(rows?.[0].textContent).toMatch(/50 credits/);
+		expect(rows?.[0].textContent).toMatch(/RM\s45\.00/);
+		expect(rows?.[0].textContent).toMatch(/Paid/);
+		expect(rows?.[1].textContent).toMatch(/INV-PAID/);
+		// One receipt per paid row — the invoice's and the top-up's.
+		expect(
+			screen.getAllByRole("button", { name: /download receipt pdf/i }),
+		).toHaveLength(2);
+	});
+
+	it("a teammate's top-up names who bought it", () => {
+		mockQueries({
+			isAdmin: false,
+			creditPurchases: [{ ...topUp, boughtBy: "Aisyah" }],
+		});
+		render(<BillingTab retailer={retailer()} />);
+		expect(screen.getByText("Bought by Aisyah")).toBeTruthy();
+	});
+
+	it("top-ups alone still make a history", () => {
+		mockQueries({ isAdmin: false, creditPurchases: [topUp] });
+		render(<BillingTab retailer={retailer()} />);
+		expect(screen.getByText("Billing history")).toBeTruthy();
+		expect(screen.getByText("50 credits")).toBeTruthy();
 	});
 });
 
@@ -2232,5 +2321,150 @@ describe("BillingTab past-due follow-up line (z8r3fdg3mh)", () => {
 		expect(screen.queryByText(/We'll follow up by email/)).toBeNull();
 		// Their story is the compEnded line instead.
 		expect(screen.getByText(/buyers can still order/)).toBeTruthy();
+	});
+});
+
+/**
+ * Scale opened for purchase with the credits release (z8r3fdfuhq). Every door
+ * a seller can reach from `/pricing`'s Scale card has to offer Scale, or the
+ * CTA leads to a page that can't sell what it advertised: the plan picker, the
+ * first invoice's switch, and (for founding members) a plain "no".
+ */
+describe("BillingTab — Scale is purchasable (z8r3fdfuhq)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+	const scaleGateway = (currency: "MYR" | "SGD" = "MYR"): Gateway => ({
+		...GATEWAY_ON,
+		currency,
+		renewalCurrency: currency,
+	});
+
+	it("the plan picker offers Scale at RM399 / S$149, monthly or yearly", () => {
+		mockQueries({ isAdmin: false, gateway: scaleGateway() });
+		const { unmount } = render(<BillingTab retailer={retailer()} />);
+		expect(screen.getByText(/RM\s*399\.00\/month/)).toBeTruthy();
+		// Scale's pitch is the team room; its volume is the credits line every
+		// plan row carries (Credits T3), so the number isn't said twice.
+		expect(
+			screen.getByText(/^Everything in Pro \+ room for \d+ teammates$/),
+		).toBeTruthy();
+		expect(screen.getByText("500 credits a month")).toBeTruthy();
+		fireEvent.click(screen.getByText("Scale"));
+		expect(
+			screen.getByRole("button", { name: "Subscribe to Scale" }),
+		).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: /Yearly/ }));
+		expect(screen.getByText(/RM\s*3,990\.00\/year/)).toBeTruthy();
+		unmount();
+
+		mockQueries({ isAdmin: false, gateway: scaleGateway("SGD") });
+		render(<BillingTab retailer={retailer({ country: "SG" })} />);
+		expect(screen.getByText(/S\$\s*149\.00\/month/)).toBeTruthy();
+		expect(screen.queryByText(/RM\s*\d/)).toBeNull();
+	});
+
+	it("a lapsed Scale seller's picker defaults to renewing Scale", () => {
+		mockQueries({ isAdmin: false, gateway: scaleGateway() });
+		render(
+			<BillingTab
+				retailer={retailer({
+					subscription: {
+						plan: "scale",
+						status: "past_due",
+						comped: false,
+						caps: { orderCap: 500, userCap: 6, broadcastQuota: 500 },
+						active: false,
+						frozen: true,
+					},
+				} as never)}
+			/>,
+		);
+		expect(
+			screen.getByRole("button", { name: "Subscribe to Scale" }),
+		).toBeTruthy();
+	});
+
+	it("the first invoice can be switched to Scale as well as Starter, each with its consequence", () => {
+		mockQueries({
+			isAdmin: false,
+			gateway: scaleGateway(),
+			invoices: [
+				{
+					_id: "i_first_sc",
+					status: "pending",
+					currency: "MYR",
+					total: 14900,
+					amount: 14900,
+					plan: "pro",
+					billingCycle: "monthly",
+					origin: "free_period_end",
+					invoiceNumber: "INV-FIRST-SC",
+					dueDate: Date.now() + 12 * DAY,
+					createdAt: Date.now(),
+				},
+			],
+		});
+		render(
+			<BillingTab
+				retailer={retailer({
+					subscription: {
+						plan: "pro",
+						status: "trialing",
+						comped: false,
+						freePeriodEndedAt: Date.now() - DAY,
+						freePeriodEndReason: "first_order",
+						caps: { orderCap: 200, userCap: 3, broadcastQuota: 100 },
+						active: true,
+						frozen: false,
+					},
+				} as never)}
+			/>,
+		);
+		expect(screen.getByText("Switch to Starter")).toBeTruthy();
+		expect(screen.getByText("Switch to Scale")).toBeTruthy();
+		expect(
+			screen.getByText(/Scale \(RM\s*399\.00\/month\) has 500 credits a month/),
+		).toBeTruthy();
+	});
+
+	it("a Scale invoice offers the way back to Pro or Starter", () => {
+		mockQueries({
+			isAdmin: false,
+			gateway: scaleGateway(),
+			invoices: [
+				{
+					_id: "i_sc",
+					status: "pending",
+					currency: "MYR",
+					total: 39900,
+					amount: 39900,
+					plan: "scale",
+					billingCycle: "monthly",
+					origin: "self_serve",
+					invoiceNumber: "INV-SC",
+					dueDate: Date.now() + 10 * DAY,
+					createdAt: Date.now(),
+				},
+			],
+		});
+		render(<BillingTab retailer={retailer()} />);
+		expect(screen.getByText("Switch to Pro")).toBeTruthy();
+		expect(screen.getByText("Switch to Starter")).toBeTruthy();
+		expect(screen.queryByText("Switch to Scale")).toBeNull();
+	});
+
+	it("a Founding Member is never offered Scale — the founding price stays on Pro", () => {
+		mockQueries({
+			isAdmin: false,
+			gateway: { ...scaleGateway(), foundingPricing: true },
+		});
+		render(
+			<BillingTab
+				retailer={retailer({ isFoundingMember: true, foundingMemberRank: 3 })}
+			/>,
+		);
+		expect(
+			screen.getByRole("button", { name: "Subscribe to Founding Pro" }),
+		).toBeTruthy();
+		expect(screen.queryByText(/RM\s*399\.00/)).toBeNull();
 	});
 });

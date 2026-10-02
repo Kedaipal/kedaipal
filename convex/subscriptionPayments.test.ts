@@ -655,6 +655,54 @@ describe("subscribeSelf", () => {
 		expect(invoice?.foundingDiscount).toBe(4500);
 	});
 
+	test("Scale is self-serve: monthly in MYR at RM399, annual in SGD at S$1,490 (z8r3fdfuhq)", async () => {
+		const t = setup();
+		const { retailerId } = await seedRetailer(t, "u_sc_my", "sc-my-store");
+		const { invoiceId } = await t
+			.withIdentity({ subject: "u_sc_my" })
+			.mutation(api.invoices.subscribeSelf, {
+				plan: "scale",
+				billingCycle: "monthly",
+			});
+		expect(await getInvoice(t, invoiceId)).toMatchObject({
+			retailerId,
+			plan: "scale",
+			billingCycle: "monthly",
+			total: 39900,
+			currency: "MYR",
+			origin: "self_serve",
+		});
+
+		const sg = await seedRetailer(t, "u_sc_sg", "sc-sg-store");
+		await t.run(async (ctx) => ctx.db.patch(sg.retailerId, { country: "SG" }));
+		const annual = await t
+			.withIdentity({ subject: "u_sc_sg" })
+			.mutation(api.invoices.subscribeSelf, {
+				plan: "scale",
+				billingCycle: "annual",
+			});
+		expect(await getInvoice(t, annual.invoiceId)).toMatchObject({
+			plan: "scale",
+			billingCycle: "annual",
+			total: 149000, // S$149 × 10 months
+			currency: "SGD",
+		});
+	});
+
+	test("a store on founding pricing is refused Scale — it stays on Founding Pro", async () => {
+		const t = setup();
+		const { subId } = await seedRetailer(t, "u_sc_f", "sc-f-store");
+		await t.run(async (ctx) => ctx.db.patch(subId, { foundingIntent: true }));
+		await expect(
+			t
+				.withIdentity({ subject: "u_sc_f" })
+				.mutation(api.invoices.subscribeSelf, {
+					plan: "scale",
+					billingCycle: "monthly",
+				}),
+		).rejects.toThrow(/Founding Pro/);
+	});
+
 	test("refuses a second pending invoice, comped accounts, and active subs", async () => {
 		const t = setup();
 		const { subId } = await seedRetailer(t, "u_guard", "guard-store");
@@ -3065,7 +3113,7 @@ describe("changePlan — tier changes mid-subscription (86eyb6z4r)", () => {
 		t: ReturnType<typeof setup>,
 		userId: string,
 		slug: string,
-		plan: "starter" | "pro" = "starter",
+		plan: "starter" | "pro" | "scale" = "starter",
 	) {
 		const { retailerId, subId } = await seedRetailer(t, userId, slug);
 		await t.run(async (ctx) => {
@@ -3246,6 +3294,86 @@ describe("changePlan — tier changes mid-subscription (86eyb6z4r)", () => {
 		await expect(
 			asUser.mutation(api.invoices.changePlan, { plan: "pro" }),
 		).rejects.toThrow(/Choose a plan/);
+	});
+
+	/**
+	 * Scale opened for purchase with the credits release (z8r3fdfuhq). Pro →
+	 * Scale is an upgrade by RANK — billed now at Scale's ordinary price — and
+	 * paying it lands Scale's credits for THIS month (T1's upgrade rule);
+	 * Scale → Pro waits for the end of the paid period like any downgrade.
+	 */
+	test("Pro → Scale is billed now at Scale's price, and paying lands Scale's credits this month", async () => {
+		const t = setup();
+		const { retailerId, subId } = await seedActive(
+			t,
+			"u_up_sc",
+			"up-sc-store",
+			"pro",
+		);
+		const res = await t
+			.withIdentity({ subject: "u_up_sc" })
+			.mutation(api.invoices.changePlan, { plan: "scale" });
+		expect(res.kind).toBe("invoiced");
+		const invoice = await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.collect();
+			return rows.find((i) => i.status === "pending");
+		});
+		expect(invoice).toMatchObject({ plan: "scale", total: 39900 });
+		if (!invoice) throw new Error("no invoice");
+		await t
+			.withIdentity({ subject: ADMIN })
+			.mutation(api.invoices.markPaid, { invoiceId: invoice._id });
+		expect((await getSub(t, subId))?.plan).toBe("scale");
+		const account = await t.run(async (ctx) =>
+			ctx.db
+				.query("creditAccounts")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first(),
+		);
+		expect(account?.periodGrant).toBe(500);
+		expect(account?.planBalance).toBe(500);
+	});
+
+	test("Scale → Pro is scheduled for the period's end — nothing billed, nothing taken today", async () => {
+		const t = setup();
+		const { retailerId, subId } = await seedActive(
+			t,
+			"u_dn_sc",
+			"dn-sc-store",
+			"scale",
+		);
+		const res = await t
+			.withIdentity({ subject: "u_dn_sc" })
+			.mutation(api.invoices.changePlan, { plan: "pro" });
+		expect(res.kind).toBe("scheduled");
+		const sub = await getSub(t, subId);
+		expect(sub?.plan).toBe("scale");
+		expect(sub?.pendingPlanChange?.plan).toBe("pro");
+		const pending = await t.run(async (ctx) =>
+			(
+				await ctx.db
+					.query("invoices")
+					.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+					.collect()
+			).filter((i) => i.status === "pending"),
+		);
+		expect(pending).toHaveLength(0);
+	});
+
+	test("a Founding Member still can't move to Scale — the founding price never carries to it", async () => {
+		const t = setup();
+		const { retailerId } = await seedActive(t, "u_fnd_sc", "fnd-sc-store", "pro");
+		await t.run(async (ctx) =>
+			ctx.db.patch(retailerId, { isFoundingMember: true, foundingMemberRank: 2 }),
+		);
+		await expect(
+			t
+				.withIdentity({ subject: "u_fnd_sc" })
+				.mutation(api.invoices.changePlan, { plan: "scale" }),
+		).rejects.toThrow(/Founding Pro/);
 	});
 
 	test("an upgrade charges an already-attached saved method", async () => {
