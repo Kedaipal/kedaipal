@@ -546,9 +546,16 @@ export const requestBooking = mutation({
 		// every other confirm site makes.
 		if (instantBook) await stampRetailerActivation(ctx, args.retailerId, now);
 
-		// Same bookkeeping as any created order: usage meter (soft cap), the
-		// sold-once stamp (protects the listing from permanent delete), CRM link.
-		await recordOrderCreated(ctx, args.retailerId, now);
+		// Same bookkeeping as any created order: usage meter (soft cap) + its
+		// credit, the sold-once stamp (protects the listing from permanent
+		// delete), CRM link. A request-to-book uses its credit now and gets it
+		// back if the request is declined or expires unanswered.
+		await recordOrderCreated(ctx, {
+			retailerId: args.retailerId,
+			orderId,
+			orderShortId: shortId,
+			createdAt: now,
+		});
 		await stampProductsOrdered(ctx, items, now);
 		await linkOrderToCustomer(ctx, {
 			retailerId: args.retailerId,
@@ -718,6 +725,9 @@ export const declineBookingRequest = mutation({
 			{
 				note: `${order.eventRsvp === true ? "RSVP" : "Booking"} declined: ${trimmed}`,
 				actorUserId: access.role === "admin" ? undefined : access.userId,
+				// Declining a request the seller never accepted — the strictest refund
+				// rule applies (never accepted, within the monthly allowance).
+				cancelCause: "seller",
 			},
 		);
 		await logAdminAction(ctx, access, "bookings.decline", orderId);
@@ -813,6 +823,7 @@ export const expireStaleRequests = internalMutation({
 			await ctx.db.patch(order._id, { bookingResolution: "expired" });
 			await applyStatusTransition(ctx, order, "cancelled", {
 				note: `${order.eventRsvp === true ? "RSVP" : "Booking"} request expired — not answered within 24 hours`,
+				cancelCause: "system",
 			});
 		}
 	},

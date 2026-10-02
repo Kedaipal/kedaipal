@@ -26,14 +26,102 @@ export function planQualifiesForFounding(plan: Plan): boolean {
 	return plan === "pro";
 }
 
+/**
+ * Kedaipal Credits (86eye2ccu): the orders each plan includes a month.
+ * 1 credit = 1 order, used when the order is created on any channel and given
+ * back only for an order that never got going (see `convex/lib/credits.ts`).
+ * Locked 17 Sep 2026 (decision register z8r3fdf8j1): Starter 100 / Pro 200 /
+ * Scale 500.
+ *
+ * THE per-plan order allowance — "one number, one source". `PLAN_CAPS.orderCap`
+ * below is DERIVED from this table, never a second literal, so the soft-cap
+ * meter and the credit ledger can't disagree. Subscription rows carry
+ * `orderCap` denormalized, so changing a number here needs
+ * `migrations.resyncSubscriptionCaps` on prod (Scale's move from 400 to 500
+ * is exactly that). Public copy (`/pricing`, landing) reads these numbers too.
+ */
+export const PLAN_CREDIT_GRANT: Record<Plan, number> = {
+	starter: 100,
+	pro: 200,
+	scale: 500,
+};
+
+/** The monthly grant for a store on FOUNDING pricing whose plan is Pro — 300
+ * for life, MY (RM104) and SG (S$41) seats alike (Arif, 15 Sep 2026). A
+ * founding store that moves to Scale takes Scale's 500: founding never
+ * lowers a grant. Never shown on a public page — the cohort is closed. */
+export const FOUNDING_PRO_CREDIT_GRANT = 300;
+
+/**
+ * The free trial's order allowance (Zaki, 30 Sep 2026). Counted from the
+ * store's FIRST order: the trial lasts 14 days (the first invoice's due date)
+ * or this many orders, whichever runs out first. ONE-OFF for the whole trial:
+ * a trial that crosses a month boundary is NOT re-granted, or "200 orders to
+ * try it" would quietly become 400. It is Pro's allowance because the trial
+ * is a Pro trial.
+ */
+export const TRIAL_CREDIT_GRANT = PLAN_CREDIT_GRANT.pro;
+
+/** How long bought (and referral / admin-granted) credits last, in calendar
+ * months from the moment they land (register item 6). Plan credits never
+ * carry over at all — they reset every usage period. */
+export const PURCHASED_CREDIT_LIFETIME_MONTHS = 12;
+
+/**
+ * How many SELLER cancellations a month give their credit back (Zaki,
+ * 30 Sep 2026). Only an order the seller never accepted qualifies — a new
+ * order or an unanswered booking request, cancelled or declined. Without the
+ * cap, "cancel a finished order to win its credit back" would turn the seller
+ * lock into a no-op, since cancelling stays open while a store is locked.
+ */
+export const SELLER_CANCEL_REFUNDS_PER_PERIOD = 10;
+
+/** A top-up pack id — stable, stamped on every purchase row, never recomputed. */
+export type CreditPackId = "p50" | "p200" | "p50sg" | "p200sg";
+
+export type CreditPack = {
+	id: CreditPackId;
+	credits: number;
+	/** Minor units (sen / cents), in `currency`. */
+	priceMinor: number;
+	currency: BillingCurrency;
+};
+
+/**
+ * Top-up packs, locked 17 Sep 2026 (z8r3fdf8j1 items 2 + 3; the older
+ * RM50 / RM170 / S$25 / S$85 figures are dead). Keyed by the seller's BILLING
+ * currency — a seller only ever sees one currency's packs, never RM beside S$.
+ *
+ * Guard rule, pinned by `credits.test.ts`: in each currency the cheapest
+ * credit in any pack costs at least as much as the most expensive implied
+ * per-order price of any tier, so upgrading always beats topping up at volume.
+ */
+export const CREDIT_PACKS: Record<BillingCurrency, readonly CreditPack[]> = {
+	MYR: [
+		{ id: "p50", credits: 50, priceMinor: 4500, currency: "MYR" },
+		{ id: "p200", credits: 200, priceMinor: 16000, currency: "MYR" },
+	],
+	SGD: [
+		{ id: "p50sg", credits: 50, priceMinor: 2200, currency: "SGD" },
+		{ id: "p200sg", credits: 200, priceMinor: 7500, currency: "SGD" },
+	],
+};
+
+/** Every pack, both currencies — for lookups by id. */
+export function creditPackById(id: string): CreditPack | undefined {
+	for (const currency of BILLING_CURRENCIES) {
+		const pack = CREDIT_PACKS[currency].find((p) => p.id === id);
+		if (pack) return pack;
+	}
+	return undefined;
+}
+
 export type PlanCaps = {
-	/** Monthly order cap. SOFT in v1 — drives a dashboard nudge, never blocks the
-	 * public storefront. All tiers are finite (Arif's 2026-06-28 decision dropped
-	 * Scale's "unlimited"). Starter 100 / Pro 200 / Scale 400 — the allowances
-	 * `/pricing` advertises (caps ticket 86eye2ccu; the numbers landed with the
-	 * 30 Aug 2026 pricing reset, z8r3fday24, so the billing-tab meter's
-	 * denominator and the page finally agree). Rows carry the cap denormalized,
-	 * so a change here needs `migrations.resyncSubscriptionCaps` on prod.
+	/** Monthly order allowance — DERIVED from `PLAN_CREDIT_GRANT` (Credits,
+	 * 86eye2ccu), never a literal of its own. SOFT: it drives the dashboard
+	 * meter and never blocks the public storefront. Rows carry the cap
+	 * denormalized, so a change needs `migrations.resyncSubscriptionCaps` on
+	 * prod.
 	 *
 	 * While a subscription is ON HOLD the EFFECTIVE cap is 0 (ordering off) —
 	 * resolved by `resolveAccess`, never stored, so resuming needs no rewrite. */
@@ -48,11 +136,19 @@ export type PlanCaps = {
 	broadcastQuota: number;
 };
 
-// Per CLAUDE.md pricing table.
+// Per CLAUDE.md pricing table. `orderCap` is the credit grant — see above.
 export const PLAN_CAPS: Record<Plan, PlanCaps> = {
-	starter: { orderCap: 100, userCap: 1, broadcastQuota: 0 },
-	pro: { orderCap: 200, userCap: 3, broadcastQuota: 100 },
-	scale: { orderCap: 400, userCap: 6, broadcastQuota: 500 },
+	starter: {
+		orderCap: PLAN_CREDIT_GRANT.starter,
+		userCap: 1,
+		broadcastQuota: 0,
+	},
+	pro: { orderCap: PLAN_CREDIT_GRANT.pro, userCap: 3, broadcastQuota: 100 },
+	scale: {
+		orderCap: PLAN_CREDIT_GRANT.scale,
+		userCap: 6,
+		broadcastQuota: 500,
+	},
 };
 
 /** Boolean feature entitlements per plan — the pricing table's ✓/– rows for

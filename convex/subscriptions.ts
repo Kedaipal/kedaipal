@@ -35,6 +35,7 @@ import {
 	storeOwnerIsAdmin,
 	tryRetailerAccess,
 } from "./lib/auth";
+import { landCreditGrant } from "./credits";
 import { COMP_LABEL_MAX, COMP_NOTE_MAX, type CompKind } from "./lib/comp";
 import { rateLimiter } from "./lib/rateLimiter";
 import {
@@ -710,6 +711,16 @@ export const setSeasonalHold = mutation({
 			orderingPausedAt: undefined,
 			updatedAt: now,
 		});
+		// Credits (86eye2ccu): no grant lands while held — if the month turned
+		// during the hold, this period's grant lands now, with the resume.
+		try {
+			await landCreditGrant(ctx, retailerId, now);
+		} catch (err) {
+			console.error("[credits] resume grant failed — resume continues", {
+				retailerId,
+				err,
+			});
+		}
 		const billNow = resumeBillsNow({
 			currentPeriodEnd: sub.currentPeriodEnd,
 			periodPaidBy: sub.periodPaidBy,
@@ -1031,6 +1042,17 @@ export const setComp = mutation({
 				pendingPlanChange: undefined,
 				// An edit is not a status flip — only turning it on moves the clock.
 				updatedAt: alreadyOn ? sub.updatedAt : now,
+			});
+		}
+		// Credits (86eye2ccu): a comped store is metered on its plan's monthly
+		// grant (never locked). Comping a past_due store mid-month lands the
+		// grant it was waiting for; an already-granted period is left alone.
+		try {
+			await landCreditGrant(ctx, retailerId, now);
+		} catch (err) {
+			console.error("[credits] comp grant failed — comp continues", {
+				retailerId,
+				err,
 			});
 		}
 		// Always recorded: an admin store can't be comped (refused above), so this

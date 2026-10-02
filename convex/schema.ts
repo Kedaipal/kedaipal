@@ -2912,6 +2912,144 @@ export default defineSchema({
 		updatedAt: v.number(),
 	}).index("by_retailer_month", ["retailerId", "monthStart"]),
 
+	// ── Kedaipal Credits (86eye2ccu, docs/credits.md) ──────────────────────────
+	// 1 credit = 1 order. Three tables, and deliberately NO new fields on
+	// `retailers` / `subscriptions`: the storefront reads the retailer doc, so a
+	// balance patched onto it would re-run every open storefront tab on every
+	// order; and on the one shared dev deployment, data in new fields of an
+	// EXISTING table blocks every other branch's `convex dev --once` (Convex
+	// never validates a table a branch doesn't declare).
+
+	// One row per store: the CACHED balances every reader uses (dashboard meter,
+	// seller lock) instead of summing the ledger. Written in the same mutation as
+	// every ledger row, by ONE function (`applyEntry` in convex/credits.ts).
+	creditAccounts: defineTable({
+		retailerId: v.id("retailers"),
+		// The monthly allowance. May be NEGATIVE: orders keep arriving at zero,
+		// and the debt comes off the next refresh (never wiped).
+		planBalance: v.number(),
+		// Packs, referral rewards, admin grants. Never negative, and always the
+		// sum of this store's `creditLots.remaining`.
+		purchasedBalance: v.number(),
+		// The usage period (`YYYY-MM`, MYT calendar month) `planBalance` belongs
+		// to. Sortable, so `by_period` finds every account a boundary has passed.
+		periodKey: v.string(),
+		// Plan credits granted for `periodKey` so far. 0 while a past_due /
+		// on_hold store waits for its grant; raised by an upgrade mid-period.
+		periodGrant: v.number(),
+		// Admin-set custom monthly grant — beats every tier grant.
+		grantOverride: v.optional(v.number()),
+		// The grant an ANNUAL payment locked for its prepaid term (Arif, 17 Sep
+		// 2026): a later cut to PLAN_CREDIT_GRANT reaches an annual seller only
+		// at renewal. Stamped at every annual settle, cleared by a monthly one.
+		annualGrant: v.optional(v.object({ grant: v.number(), until: v.number() })),
+		// Seller cancellations that gave their credit back this period — capped
+		// at SELLER_CANCEL_REFUNDS_PER_PERIOD (lib/plans.ts).
+		sellerRefunds: v.optional(
+			v.object({ periodKey: v.string(), count: v.number() }),
+		),
+		// When the TOTAL balance last fell to 0 or below; cleared when it rises
+		// above 0. A fact about the balance, not a lock: comped and admin stores
+		// carry it too and are never locked (the seller-lock gate decides).
+		exhaustedAt: v.optional(v.number()),
+		// Balance notices already sent this period (low / locked …) — the
+		// once-per-period dedupe the notice sender (Credits T3) keeps. Declared
+		// here so every credits branch shares one schema.
+		notices: v.optional(
+			v.object({ periodKey: v.string(), sent: v.array(v.string()) }),
+		),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_retailer", ["retailerId"])
+		.index("by_period", ["periodKey"]),
+
+	// Every credit movement, append-only. The source of truth the cached
+	// balances must always agree with (`recomputeBalance` checks), and what the
+	// seller's "Credit activity" list and the admin ledger read. Kept when a
+	// store is deleted — a financial record, like `invoices`.
+	creditLedger: defineTable({
+		retailerId: v.id("retailers"),
+		type: v.union(
+			v.literal("grant"),
+			v.literal("purchase"),
+			v.literal("debit"),
+			v.literal("refund"),
+			v.literal("adjust"),
+			v.literal("expire"),
+		),
+		bucket: v.union(v.literal("plan"), v.literal("purchased")),
+		// Signed whole credits: + in, − out.
+		amount: v.number(),
+		// Why. `order` is the only spend today; the field is the seam for future
+		// spenders without a migration.
+		reason: v.union(
+			v.literal("plan"),
+			v.literal("trial"),
+			v.literal("order"),
+			v.literal("purchase"),
+			v.literal("referral_referee"),
+			v.literal("referral_referrer"),
+			v.literal("adjust"),
+			v.literal("expiry"),
+		),
+		// Idempotency key (with `type`): the order id for debits/refunds, the
+		// purchase / referral id for grants that land once.
+		refId: v.optional(v.string()),
+		// Human handle for the activity list (an order's `ORD-XXXX`), frozen at
+		// write time so the list never joins.
+		refLabel: v.optional(v.string()),
+		orderId: v.optional(v.id("orders")),
+		// The purchased lot a purchased-bucket movement touched.
+		lotId: v.optional(v.id("creditLots")),
+		// The usage period the movement belongs to.
+		periodKey: v.string(),
+		// Refunds only: who ended the order (lib/credits.ts CancelCause).
+		cause: v.optional(
+			v.union(
+				v.literal("seller"),
+				v.literal("system"),
+				v.literal("buyer"),
+				v.literal("admin"),
+			),
+		),
+		// Mandatory on admin adjustments.
+		note: v.optional(v.string()),
+		// "system", or the Clerk subject of the person who caused it.
+		createdBy: v.string(),
+		// Both balances right after this row — the running balance the activity
+		// list shows, and a cheap audit trail.
+		planAfter: v.number(),
+		purchasedAfter: v.number(),
+		createdAt: v.number(),
+	})
+		.index("by_retailer_created", ["retailerId", "createdAt"])
+		.index("by_retailer_ref_type", ["retailerId", "refId", "type"]),
+
+	// Purchased credits in the batches they arrived in, so each can expire 12
+	// months after it landed and be spent oldest-first. `purchasedBalance` is
+	// always the sum of `remaining` across a store's lots.
+	creditLots: defineTable({
+		retailerId: v.id("retailers"),
+		source: v.union(
+			v.literal("purchase"),
+			v.literal("referral"),
+			v.literal("adjust"),
+		),
+		// What created it: the purchase / referral / admin action.
+		refId: v.optional(v.string()),
+		credits: v.number(),
+		remaining: v.number(),
+		// `remaining > 0` — the index key that finds spendable / expirable lots.
+		open: v.boolean(),
+		expiresAt: v.number(),
+		// When the "credits expire in 14 days" email went out (Credits T3).
+		expiryNoticeAt: v.optional(v.number()),
+		createdAt: v.number(),
+	})
+		.index("by_retailer_open_expiry", ["retailerId", "open", "expiresAt"])
+		.index("by_open_expiry", ["open", "expiresAt"]),
+
 	// Per-period invoice. Admin marks it paid out-of-band (DuitNow / bank). The
 	// founding pending invoice carries a `dueDate` that drives the active→past_due
 	// overdue cron flip.

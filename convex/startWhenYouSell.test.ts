@@ -195,7 +195,27 @@ describe("first live order ends the free period", () => {
 		// (see convex/subscriptionUsage.ts); exercising the seam directly proves
 		// the channel is irrelevant.
 		await t.run(async (ctx) => {
-			await recordOrderCreated(ctx, retailerId, Date.now());
+			const now = Date.now();
+			const orderId = await ctx.db.insert("orders", {
+				retailerId,
+				shortId: "ORD-SEAM",
+				items: [],
+				subtotal: 1000,
+				total: 1000,
+				currency: "MYR",
+				status: "confirmed",
+				channel: "whatsapp",
+				customer: { name: "Aina" },
+				deliveryMethod: "delivery",
+				createdAt: now,
+				updatedAt: now,
+			});
+			await recordOrderCreated(ctx, {
+				retailerId,
+				orderId,
+				orderShortId: "ORD-SEAM",
+				createdAt: now,
+			});
 		});
 		const sub = await getSub(t, subId);
 		expect(sub?.freePeriodEndReason).toBe("first_order");

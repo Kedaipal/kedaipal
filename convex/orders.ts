@@ -33,6 +33,7 @@ import {
 	isStoredImageRenderable,
 	UNRENDERABLE_PROOF_MESSAGE,
 } from "./lib/imageContentType";
+import type { CancelCause } from "./lib/credits";
 import { requireCustomerName } from "./lib/customer";
 import { assertPlanFeature, assertSubscriptionActive } from "./subscriptions";
 import {
@@ -1686,9 +1687,14 @@ export const create = mutation({
 			await stampRetailerActivation(ctx, args.retailerId, now);
 		}
 
-		// Meter the order against the retailer's monthly usage (SOFT cap — the
-		// nudge banner, never a block on this public mutation).
-		await recordOrderCreated(ctx, args.retailerId, now);
+		// Meter the order (SOFT cap — the nudge banner) and use its credit
+		// (Credits, 86eye2ccu). Never a block on this public mutation.
+		await recordOrderCreated(ctx, {
+			retailerId: args.retailerId,
+			orderId,
+			orderShortId: shortId,
+			createdAt: now,
+		});
 
 		// Mark every product on this order as having sold, so it can no longer be
 		// permanently deleted out from under the order lines that now reference it.
@@ -3404,10 +3410,14 @@ async function lineReservedStock(
 	return (fresh.blockWhenOutOfStock ?? product.blockWhenOutOfStock) === true;
 }
 
+/** `order` is the doc as it was BEFORE the cancel — its status decides whether
+ * the order's credit comes back (`cancelRefundDecision`), and `cause` says who
+ * ended it. */
 async function reverseCancellationEffects(
 	ctx: MutationCtx,
 	order: Doc<"orders">,
 	now: number,
+	cause: CancelCause,
 ): Promise<void> {
 	const restoreByVariant = new Map<Id<"productVariants">, number>();
 	for (const item of order.items) {
@@ -3437,8 +3447,9 @@ async function reverseCancellationEffects(
 	}
 
 	// Un-meter the order from its creation month (runs regardless of customer
-	// linkage — every created order was counted). See convex/subscriptionUsage.ts.
-	await recordOrderCancelled(ctx, order.retailerId, order.createdAt);
+	// linkage — every created order was counted) and give its credit back if it
+	// never got going. See convex/subscriptionUsage.ts.
+	await recordOrderCancelled(ctx, { order, cause, now });
 }
 
 /**
@@ -3523,14 +3534,25 @@ export async function applyStatusTransition(
 		 * expiry sweeps). Stamps cannot be backfilled, so they ship with the
 		 * backend even though the timeline renders them later. */
 		actorUserId?: string;
+		/** Who is ending the order, when `status` is "cancelled" — decides
+		 * whether its credit comes back (`cancelRefundDecision`). Sweeps pass
+		 * "system". Defaults to "seller", the STRICTEST rule (only a
+		 * never-accepted order, within the monthly allowance), so a caller that
+		 * forgets can only ever under-refund, never mint a credit. */
+		cancelCause?: CancelCause;
 	} = {},
 ): Promise<void> {
 	const now = Date.now();
 
-	// Restore stock + reverse aggregates/usage on the FIRST transition into
-	// cancelled. Idempotent — re-cancelling a cancelled order is a no-op.
+	// Restore stock + reverse aggregates/usage/credit on the FIRST transition
+	// into cancelled. Idempotent — re-cancelling a cancelled order is a no-op.
 	if (status === "cancelled" && order.status !== "cancelled") {
-		await reverseCancellationEffects(ctx, order, now);
+		await reverseCancellationEffects(
+			ctx,
+			order,
+			now,
+			opts.cancelCause ?? "seller",
+		);
 	}
 
 	const patch: Partial<{
@@ -3839,6 +3861,7 @@ export const updateStatus = mutation({
 			courierName,
 			trackingNo,
 			actorUserId: access.role === "admin" ? undefined : access.userId,
+			cancelCause: "seller",
 		});
 		await logAdminAction(ctx, access, "orders.updateStatus", orderId);
 	},
@@ -4016,6 +4039,7 @@ export const bulkUpdateStatus = mutation({
 			await applyStatusTransition(ctx, order, status, {
 				actorUserId:
 					batchAccess.role === "admin" ? undefined : batchAccess.userId,
+				cancelCause: "seller",
 			});
 			updated++;
 		}
@@ -4060,8 +4084,9 @@ async function deleteOrderCascade(
 
 	// 1. Reverse live-side effects only for an order that hasn't already been
 	//    cancelled (a cancelled order reversed them on the way into cancelled).
+	//    Hard delete is Kedaipal-admin only, so a live order's credit comes back.
 	if (order.status !== "cancelled") {
-		await reverseCancellationEffects(ctx, order, now);
+		await reverseCancellationEffects(ctx, order, now, "admin");
 	}
 
 	// 2. Delete owned storage blobs — via the SHARED helper (86eyetzbk), which is
@@ -5974,9 +5999,10 @@ export const declineMockupItem = mutation({
 					customerId: order.customerId,
 					orderTotal: revenueExcludingDeposit(order),
 				});
-			// Un-meter on the transition into cancelled (mirrors
-			// applyStatusTransition — this cancel path bypasses that helper).
-			await recordOrderCancelled(ctx, order.retailerId, order.createdAt);
+			// Un-meter + give the credit back on the transition into cancelled
+			// (mirrors applyStatusTransition — this cancel path bypasses that
+			// helper). The BUYER backed out, so the credit always returns.
+			await recordOrderCancelled(ctx, { order, cause: "buyer", now });
 			await ctx.db.patch(order._id, {
 				status: "cancelled",
 				mockupStatus: undefined,
