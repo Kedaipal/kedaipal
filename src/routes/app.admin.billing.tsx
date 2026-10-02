@@ -65,15 +65,16 @@ import { MyPhoneInput } from "../components/ui/my-phone-input";
 import { Skeleton } from "../components/ui/skeleton";
 import { useActAs } from "../hooks/useActAs";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
+import { describeAutoCharge } from "../lib/auto-charge-status";
 import {
 	convexErrorMessage,
 	formatPrice,
 	formatShortDate,
 } from "../lib/format";
-import { describeAutoCharge } from "../lib/auto-charge-status";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
 import { buildOnboardingInviteLink } from "../lib/onboarding-link";
 import { slugify, validateStoreName } from "../lib/slug";
+import { PLAN_LABEL } from "../lib/subscription";
 
 export const Route = createFileRoute("/app/admin/billing")({
 	component: AdminBillingRoute,
@@ -606,22 +607,22 @@ function OnboardClientCard() {
 			    picking between two onboarding paths should not have to try one to
 			    find out what it does. */}
 			<fieldset className="flex flex-col gap-2">
-				<legend className="text-sm font-medium">How are they onboarding?</legend>
+				<legend className="text-sm font-medium">
+					How are they onboarding?
+				</legend>
 				<div className="grid gap-2 sm:grid-cols-2">
-					{(
-						[
-							{
-								key: "link" as const,
-								title: "Send them a link",
-								hint: "They sign up and confirm the store under their own login.",
-							},
-							{
-								key: "build" as const,
-								title: "Build it for them",
-								hint: "You create it now and fill it in. They claim it when they sign up.",
-							},
-						]
-					).map((option) => (
+					{[
+						{
+							key: "link" as const,
+							title: "Send them a link",
+							hint: "They sign up and confirm the store under their own login.",
+						},
+						{
+							key: "build" as const,
+							title: "Build it for them",
+							hint: "You create it now and fill it in. They claim it when they sign up.",
+						},
+					].map((option) => (
 						<button
 							key={option.key}
 							type="button"
@@ -788,9 +789,8 @@ function OnboardClientCard() {
 			{mode === "build" ? (
 				<p className="text-xs text-muted-foreground">
 					Creating it opens the store straight away in act-as mode so you can
-					add products. Nothing is billed and it stays off
-					kedaipal.com/stores until they claim it — their 14-day free period
-					starts the day they do.
+					add products. Nothing is billed and it stays off kedaipal.com/stores
+					until they claim it — their 14-day free period starts the day they do.
 				</p>
 			) : null}
 
@@ -953,6 +953,17 @@ function IssueInvoiceForm() {
 	useEffect(() => {
 		setFoundingOverride(false);
 		setCurrency("MYR");
+		// A contract store ARMS its contract (z8r3fdkp8h, found live on 2 Oct):
+		// the previous default left Pro · RM 149.00 one click from issue for a
+		// store whose paid Pro bill would take it OFF its contract — the most
+		// drastic action on this form as the silent default. Picking another
+		// plan stays possible (that IS the manual off-ramp), and the line
+		// under the amount then says what paying it does.
+		setPlan(
+			retailers?.find((r) => r._id === retailerId)?.enterprise
+				? "enterprise"
+				: "pro",
+		);
 	}, [retailerId]);
 
 	// Founding is Pro-only — flipping it on forces Pro. It prices per billing
@@ -985,6 +996,10 @@ function IssueInvoiceForm() {
 			? null
 			: annualQuote(effectivePlan, founding, currency);
 	const noContract = billsContract && !contract;
+	// The deliberate off-ramp, named before the tap: a non-enterprise bill on
+	// a contract store ends the contract when it's PAID (settle treats it as
+	// the move to Pro/Starter).
+	const offContractBill = contract !== undefined && !billsContract;
 
 	async function handleIssue() {
 		if (!retailerId) return;
@@ -1169,6 +1184,14 @@ function IssueInvoiceForm() {
 							From the contract:{" "}
 							{formatPrice(contract.baseFeeMinor, contract.currency)} a month
 							{effectiveCycle === "annual" ? " × 10 for the year" : ""}.
+						</p>
+					) : null}
+					{offContractBill ? (
+						<p className="text-xs font-medium text-amber-700 dark:text-amber-400">
+							This store is on an Enterprise contract — paying this{" "}
+							{PLAN_LABEL[effectivePlan]} bill ends the contract and moves it to{" "}
+							{PLAN_LABEL[effectivePlan]}. That's the manual off-ramp; if you
+							meant to bill the contract, pick Enterprise.
 						</p>
 					) : null}
 					{founding ? (

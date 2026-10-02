@@ -53,6 +53,7 @@ import {
 	subscriptionPrice,
 } from "./lib/plans";
 import {
+	enterpriseContractCaps,
 	ENTERPRISE_SELF_SERVE_REFUSAL,
 	isMoveOffContractBill,
 } from "./lib/enterprise";
@@ -161,7 +162,15 @@ async function settleInvoicePaid(
 	const billedCycle = isHold
 		? sub.billingCycle
 		: (invoice.billingCycle ?? sub.billingCycle);
-	const caps = defaultCapsForPlan(billedPlan);
+	// An Enterprise settle keeps the CONTRACT's caps (per-deal seats and
+	// broadcasts, z8r3fdkp8h) — the tier default here stomped a 20-teammate
+	// contract back to unlimited the moment its first bill was paid (found by
+	// the 2 Oct sandbox E2E: setContract wrote userCap 21, this line wrote
+	// 1e9 over it at settle).
+	const caps =
+		billedPlan === "enterprise" && sub.enterprise
+			? enterpriseContractCaps(sub.enterprise)
+			: defaultCapsForPlan(billedPlan);
 	// CREDIT AS DAYS: a seller never loses time they already paid for. Whatever
 	// is left of a still-running paid period is converted into days of the plan
 	// they're now on and added to the new period — an upgrade mid-cycle, an

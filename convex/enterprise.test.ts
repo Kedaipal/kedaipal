@@ -952,6 +952,32 @@ describe("the contract's own allowances (seats + broadcasts)", () => {
 		expect((await getSub(t, s.subId))?.userCap).toBe(3);
 	});
 
+	it("settle keeps the CONTRACT's caps — the tier default must not stomp a 20-teammate deal", async () => {
+		// Found by the 2 Oct sandbox E2E, not by reading: setContract wrote
+		// userCap 21 onto the row; paying the first contract bill re-derived
+		// caps from capsForPlan("enterprise") and wrote UNLIMITED over it.
+		const t = setup();
+		const s = await activeStore(t);
+		await asAdmin(t).mutation(api.enterprise.setContract, {
+			retailerId: s.retailerId,
+			...HSL,
+			teammates: 20,
+			broadcastQuota: 500,
+		});
+		expect((await getSub(t, s.subId))?.userCap).toBe(21);
+		const { invoiceId } = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId: s.retailerId,
+			plan: "enterprise",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId });
+		const sub = await getSub(t, s.subId);
+		expect(sub?.status).toBe("active");
+		expect(sub?.userCap).toBe(21);
+		expect(sub?.broadcastQuota).toBe(500);
+	});
+
 	it("the admin row carries the WHOLE contract — the edit form prefills from it", async () => {
 		// convex/admin.ts rebuilds the contract field-by-field for the sellers
 		// list, and optional fields slip straight through its Omit<> typing:
