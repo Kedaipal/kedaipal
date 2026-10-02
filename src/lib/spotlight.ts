@@ -94,6 +94,12 @@ export const SPOTLIGHT_ANCHOR = {
 		tab: "store",
 		anchor: "settings-business-details",
 	},
+	// The credit balance card (Credits T3, z8r3fdf8hy), directly under the plan
+	// — the number a seller checks most. Reuses the anchor the out-of-credits
+	// banner's "See credits" link already carries (`#credits`), rather than
+	// minting a second id for the same card; both now read it from here and
+	// spotlight.test.ts pins the agreement.
+	credit_balance: { page: "settings", tab: "billing", anchor: "credits" },
 	store_country: { page: "settings", tab: "store", anchor: "settings-country" },
 	// The Business address card — the post-switch checklist already anchors it
 	// (`?fix=business_address`), so this key reuses that exact id, as the
@@ -129,6 +135,14 @@ export const SPOTLIGHT_ANCHOR = {
 		page: "settings",
 		tab: "fulfilment",
 		anchor: "settings-pickup",
+	},
+	// The Store listing card (z8r3fdkmyp), right under the store description the
+	// public directory builds its card from — where the area line is typed and
+	// where a seller takes the shop off /stores.
+	store_listing: {
+		page: "settings",
+		tab: "store",
+		anchor: "settings-marketplace",
 	},
 	// The Pricing & capacity card of a stay listing — where the weekend rate
 	// (S13, z8r3fddkp8) lives. The card, not the field: every spotlight rings

@@ -779,7 +779,10 @@ function SettingsRoute() {
 							</Card>
 							{/* Right under the description — the card the marketplace
 							    builds from is the card this section just wrote. */}
-							<Card>
+							<Card
+								id={SPOTLIGHT_ANCHOR.store_listing.anchor}
+								highlight={ringFor(SPOTLIGHT_ANCHOR.store_listing.anchor)}
+							>
 								<MarketplaceCard
 									storeName={retailer.storeName}
 									unlisted={retailer.marketplaceUnlisted === true}

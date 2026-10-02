@@ -16,6 +16,7 @@ import {
 	ordersWaitingLabel,
 } from "../../lib/credits-ui";
 import { formatPrice } from "../../lib/format";
+import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import {
 	resolveBannerState,
 	type SubscriptionView,
@@ -217,7 +218,11 @@ export function SubscriptionBanner({
 						<Link
 							to="/app/settings"
 							search={{ tab: "billing" }}
-							hash={onTrial && !isMember ? undefined : "credits"}
+							hash={
+								onTrial && !isMember
+									? undefined
+									: SPOTLIGHT_ANCHOR.credit_balance.anchor
+							}
 							className="inline-flex h-9 w-fit shrink-0 items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
 						>
 							{onTrial && !isMember ? "See plans" : "See credits"}
@@ -249,8 +254,8 @@ export function SubscriptionBanner({
 					<span className="font-medium">
 						We've stopped automatic charging for now.
 					</span>{" "}
-					An earlier charge went through after its invoice was cancelled —
-					we'll be in touch, so there's no need to pay twice.
+					An earlier charge went through after its invoice was cancelled — we'll
+					be in touch, so there's no need to pay twice.
 				</p>
 				<Link
 					to="/app/settings"

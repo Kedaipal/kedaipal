@@ -8,6 +8,10 @@ import { api } from "../../../convex/_generated/api";
 import type { CreditBalanceView } from "../../../convex/credits";
 import { TOP_UP_VIEW_ONLY_MESSAGE } from "../../../convex/lib/creditPurchases";
 import { useCreditLockFor } from "../../hooks/useCreditLock";
+import {
+	type FixHighlight,
+	highlightRingClass,
+} from "../../lib/country-setup-copy";
 import { TOP_UP_SEARCH } from "../../lib/credit-top-up";
 import {
 	CREDIT_RULES_LINE,
@@ -19,6 +23,7 @@ import {
 	ordersBalanceLabel,
 } from "../../lib/credits-ui";
 import { formatShortDate } from "../../lib/format";
+import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import { cn } from "../../lib/utils";
 import { NeedsAccessNote } from "../app/owner-only-note";
 import { Button } from "../ui/button";
@@ -56,9 +61,14 @@ type Retailer = NonNullable<
 export function CreditMeter({
 	variant,
 	retailer,
+	highlight,
 }: {
 	variant: "card" | "full";
 	retailer: Retailer | null | undefined;
+	/** Deep-link target — the full variant IS the card a `?spot=credit_balance`
+	 * note rings (see src/lib/spotlight.ts). The frame already carries a bare
+	 * `border` width class, so the ring renders an edge and not a bare halo. */
+	highlight?: FixHighlight;
 }) {
 	const actingAsAdmin = retailer?.actingAsAdmin === true;
 	const storeArgs = retailer
@@ -202,8 +212,11 @@ export function CreditMeter({
 
 	return (
 		<section
-			id="credits"
-			className="flex flex-col gap-4 rounded-2xl border border-input bg-background p-5 lg:p-6"
+			id={SPOTLIGHT_ANCHOR.credit_balance.anchor}
+			className={cn(
+				"flex flex-col gap-4 rounded-2xl border border-input bg-background p-5 scroll-mt-24 lg:p-6",
+				highlightRingClass(highlight),
+			)}
 		>
 			{header}
 			{headline}
