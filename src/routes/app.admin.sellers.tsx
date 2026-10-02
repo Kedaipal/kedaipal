@@ -46,6 +46,7 @@ import {
 	SELLER_SORTS,
 	type SellerFilter,
 	type SellerSort,
+	sellerFilterEmptyNoun,
 	sellersToCsv,
 	sortSellers,
 } from "../lib/admin-seller-view";
@@ -361,15 +362,17 @@ export function SellerDirectory({
 						{all.length === 0
 							? "No sellers yet"
 							: filter !== "all"
-								? `No ${SELLER_FILTER_LABEL[filter].toLowerCase()} sellers${q.trim() ? ` match “${q.trim()}”` : ""}`
+								? `No ${sellerFilterEmptyNoun(filter)}${q.trim() ? ` match “${q.trim()}”` : ""}`
 								: `No sellers match “${q.trim()}”`}
 					</p>
 					<p className="max-w-xs text-sm text-muted-foreground">
 						{all.length === 0
 							? "Stores appear here once a seller finishes onboarding."
-							: filter !== "all"
-								? "They may be in another status — clear the filter to search every store."
-								: "Try the store name, its slug, the owner's email or their phone."}
+							: filter === "wants_enterprise"
+								? "Nobody's waiting. Sellers land here when they tap “Talk to Arif” in the app, and leave when a contract lands or you dismiss the ask."
+								: filter !== "all"
+									? "They may be in another status — clear the filter to search every store."
+									: "Try the store name, its slug, the owner's email or their phone."}
 					</p>
 					{filtered ? (
 						<Button

@@ -468,6 +468,40 @@ describe("directory — detail sheet", () => {
 		expect(within(sheet).getByText("Unlimited teammates")).toBeTruthy();
 		expect(within(sheet).queryByText(/broadcasts\/mo/)).toBeNull();
 	});
+
+	it("an open Enterprise ask reads on the sheet and dismisses in place; the chip filters to it", async () => {
+		// The lead exists so an ask can't be forgotten (z8r3fdkp8h follow-up):
+		// a chip in the owes-action front group, and the answer (contract or
+		// dismiss) right where the admin already works.
+		queryData.set(getFunctionName(api.admin.listSellersForAdmin), [
+			ROWS[0],
+			seller({
+				_id: "r_lead" as AdminSellerRow["_id"],
+				storeName: "Mama's Delights",
+				slug: "mamas-delights",
+				subscriptionStatus: "trialing",
+				enterpriseInterestAt: at(-3),
+			}),
+		]);
+		queryData.set(getFunctionName(api.admin.devStorePurgeEnabled), false);
+		render(<Harness initial={{ status: "wants_enterprise" }} />);
+
+		// The chip carries its count and the filter shows only the ask.
+		expect(
+			screen.getByRole("button", { name: /Wants Enterprise/ }).textContent,
+		).toContain("1");
+		expect(screen.getByText("Mama's Delights")).toBeTruthy();
+		expect(screen.queryByText("Bearcamp Malaysia")).toBeNull();
+
+		fireEvent.click(screen.getByRole("button", { name: "Mama's Delights" }));
+		const sheet = await screen.findByRole("dialog");
+		expect(within(sheet).getByText("Wants Enterprise")).toBeTruthy();
+		expect(within(sheet).getByText(/3 days ago/)).toBeTruthy();
+		fireEvent.click(within(sheet).getByRole("button", { name: "Dismiss" }));
+		expect(
+			mutationSpies.get(getFunctionName(api.enterprise.dismissInterest)),
+		).toHaveBeenCalledWith({ retailerId: "r_lead" });
+	});
 });
 
 describe("directory — phone", () => {

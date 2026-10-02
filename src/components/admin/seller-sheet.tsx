@@ -150,6 +150,18 @@ function SellerSheetBody({
 	};
 	const [confirmMove, setConfirmMove] = useState(false);
 	const scheduleMoveToPro = useMutation(api.enterprise.scheduleMoveToPro);
+	const dismissInterest = useMutation(api.enterprise.dismissInterest);
+	const dismissLead = async () => {
+		try {
+			await dismissInterest({ retailerId: seller._id });
+			toast.success("Enterprise ask dismissed", {
+				description:
+					"Off the Wants Enterprise list — it comes back if they ask again.",
+			});
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		}
+	};
 	const cancelMoveToPro = useMutation(api.enterprise.cancelMoveToPro);
 
 	if (page === "ledger")
@@ -650,9 +662,34 @@ function SellerSheetBody({
 							) : null}
 						</>
 					) : (
-						<Row label="Contract">
-							<Plain muted>None — on list pricing</Plain>
-						</Row>
+						<>
+							<Row label="Contract">
+								<Plain muted>None — on list pricing</Plain>
+							</Row>
+							{/* An open lead (the owner tapped "Talk to Arif") sits right
+							    where the answer lives: attach a contract, or dismiss the
+							    ask. Cleared automatically the moment a contract lands. */}
+							{seller.enterpriseInterestAt !== undefined ? (
+								<Row label="Asked for it">
+									<Plain>
+										<span className="font-medium text-accent-emphasis">
+											Wants Enterprise
+										</span>
+										<Muted>
+											{" "}
+											· {describeDays(seller.enterpriseInterestAt, now)}
+										</Muted>
+										<button
+											type="button"
+											onClick={() => void dismissLead()}
+											className="ml-2 rounded-md px-1.5 py-0.5 text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
+										>
+											Dismiss
+										</button>
+									</Plain>
+								</Row>
+							) : null}
+						</>
 					)}
 					<div className="flex flex-col gap-2 pt-2 sm:flex-row sm:flex-wrap">
 						<Button

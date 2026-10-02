@@ -10,6 +10,7 @@ import {
 	describeDays,
 	filterSellers,
 	formatDeadline,
+	isEnterpriseLead,
 	isSellerFilter,
 	isSellerSort,
 	matchesSellerSearch,
@@ -17,6 +18,7 @@ import {
 	sellerBucket,
 	sellerCompMenuItem,
 	sellerExpiry,
+	sellerFilterEmptyNoun,
 	sellerPlanLabel,
 	sellerRail,
 	sellerReason,
@@ -82,6 +84,50 @@ describe("sellerBucket / counts", () => {
 		expect(counts.admin).toBe(1);
 		expect(counts.trialing).toBe(0);
 		expect(SELLER_FILTERS.slice(0, 2)).toEqual(["all", "past_due"]);
+	});
+
+	it("Wants Enterprise is a predicate over the buckets, not a bucket — and sits in the owes-action front group", () => {
+		// A trialing store can want Enterprise; the lead filter must not steal
+		// the row from its status bucket, and a store already on a contract
+		// never counts however stale a stamp it carries.
+		const lead = row({
+			subscriptionStatus: "trialing",
+			enterpriseInterestAt: 1,
+		});
+		const contracted = row({
+			subscriptionStatus: "active",
+			plan: "enterprise",
+			enterpriseInterestAt: 1,
+			enterprise: {
+				baseFeeMinor: 88_800,
+				currency: "MYR",
+				includedCredits: 1500,
+				overageRateMinor: 60,
+				blockSize: 5000,
+				contactName: "HSL",
+				setAt: 0,
+			},
+		});
+		expect(isEnterpriseLead(lead)).toBe(true);
+		expect(isEnterpriseLead(contracted)).toBe(false);
+		const counts = countSellerBuckets([lead, contracted]);
+		expect(counts.wants_enterprise).toBe(1);
+		expect(counts.trialing).toBe(1); // the lead still counts in its bucket
+		expect(filterSellers([lead, contracted], "wants_enterprise", "")).toEqual([
+			lead,
+		]);
+		// Owes-action group order: All, Past due, Unclaimed, then the leads.
+		expect(SELLER_FILTERS.slice(0, 4)).toEqual([
+			"all",
+			"past_due",
+			"unclaimed",
+			"wants_enterprise",
+		]);
+		// And its empty state is a sentence, not a lowercased chip label.
+		expect(sellerFilterEmptyNoun("wants_enterprise")).toBe(
+			"open Enterprise asks",
+		);
+		expect(sellerFilterEmptyNoun("past_due")).toBe("past due sellers");
 	});
 
 	it("validates URL values", () => {

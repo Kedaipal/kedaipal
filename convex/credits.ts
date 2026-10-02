@@ -49,6 +49,7 @@ import {
 	monthlyCreditGrant,
 	refreshedPlanBalance,
 	sellerRefundsLeft,
+	GRANT_LEVER_CONTRACT_REFUSAL,
 } from "./lib/credits";
 import {
 	type BillingCycle,
@@ -1248,6 +1249,17 @@ export const adminSetGrantOverride = mutation({
 			.query("subscriptions")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 			.first();
+		// SETTING a recurring allowance is reserved for a comp (sponsored) or a
+		// contract (where the branch below edits the contract's own number) —
+		// a list-price plan with a custom grant is a deal nothing recorded.
+		// CLEARING always works: a stale grant must never be trapped behind
+		// the rule that retired it.
+		if (
+			grant !== null &&
+			sub?.comped !== true &&
+			!(sub?.plan === "enterprise" && sub.enterprise)
+		)
+			throw new ConvexError(GRANT_LEVER_CONTRACT_REFUSAL);
 		if (sub?.plan === "enterprise" && sub.enterprise) {
 			if (grant === null)
 				throw new ConvexError(

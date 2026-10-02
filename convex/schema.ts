@@ -126,6 +126,14 @@ export default defineSchema({
 		// dangles once the referrer is purged — readers treat a missing doc as
 		// "no referrer". Same posture as signupSource: per-row read, no index.
 		signupReferrerId: v.optional(v.id("retailers")),
+		// The owner tapped "Talk to Arif" in-app (Credits T6 follow-up,
+		// z8r3fdkp8h): a signed-in Enterprise lead, stamped so the admin
+		// console can list who asked instead of trusting a WhatsApp scrollback.
+		// Re-asking restamps (latest ask is the useful fact). Cleared when a
+		// contract is attached or an admin dismisses the lead. Anonymous
+		// /pricing clicks can't stamp — no account; the WhatsApp thread is the
+		// capture there.
+		enterpriseInterestAt: v.optional(v.number()),
 		// Store country (SG-lite, 86eynw27f). The one switch every country-shaped
 		// rule reads: checkout phone plate/validator arm, address variant, Places
 		// autocomplete region, and the currency a new store defaults to. Undefined

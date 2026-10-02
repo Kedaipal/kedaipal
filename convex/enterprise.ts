@@ -164,6 +164,10 @@ export const setContract = mutation({
 			broadcastQuota: caps.broadcastQuota,
 			...(entering ? { pendingPlanChange: undefined } : {}),
 		});
+		// The lead is answered the moment a contract lands — a store on
+		// Enterprise must never still sit in the "wants Enterprise" filter.
+		if (retailer.enterpriseInterestAt !== undefined)
+			await ctx.db.patch(retailer._id, { enterpriseInterestAt: undefined });
 		// The contract's included credits ARE the store's grant — one field.
 		await writeGrantOverride(
 			ctx,
@@ -189,6 +193,53 @@ export const setContract = mutation({
  * already granted this month stay; next month is Pro's allowance. Clearing a
  * contract outright is never offered: an Enterprise store must always have one.
  */
+/**
+ * A signed-in owner tapped "Talk to Arif" (the in-app Enterprise door) —
+ * stamp the store so Admin → Sellers can FILTER the asks instead of trusting
+ * a WhatsApp scrollback (z8r3fdkp8h follow-up). Best-effort beside the chat:
+ * the wa.me link is the primary action and must open whether or not this
+ * lands. Re-asking restamps — the latest ask is the fact an admin acts on.
+ * Owner-resolved on purpose: a teammate's tap still opens the chat, and the
+ * lead Arif replies to is the store either way.
+ */
+export const markInterest = mutation({
+	args: {},
+	handler: async (ctx): Promise<null> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new ConvexError("Not authenticated");
+		const retailer = await ctx.db
+			.query("retailers")
+			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+			.first();
+		if (!retailer) throw new ConvexError("No store found for your account");
+		await ctx.db.patch(retailer._id, { enterpriseInterestAt: Date.now() });
+		return null;
+	},
+});
+
+/**
+ * The admin's "not now" on a lead — spoken to, not a fit, or stale. Audited:
+ * dismissing an ask is an action taken on a store. The other way a lead
+ * clears is `setContract` (the ask was answered with a contract).
+ */
+export const dismissInterest = mutation({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<null> => {
+		const adminSubject = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		if (retailer.enterpriseInterestAt === undefined) return null;
+		await ctx.db.patch(retailerId, { enterpriseInterestAt: undefined });
+		await logAdminAction(
+			ctx,
+			{ retailer, role: "admin", actingAsAdmin: true, userId: adminSubject },
+			"enterprise.dismissInterest",
+			retailerId,
+		);
+		return null;
+	},
+});
+
 export const scheduleMoveToPro = mutation({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }): Promise<{ effectiveAt: number }> => {

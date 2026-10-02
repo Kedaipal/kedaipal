@@ -1003,3 +1003,98 @@ describe("the contract's own allowances (seats + broadcasts)", () => {
 		).rejects.toThrow(/whole number from 0 to/);
 	});
 });
+
+describe("enterprise leads — who asked, so nobody forgets (z8r3fdkp8h follow-up)", () => {
+	const getRetailer = (t: T, id: Id<"retailers">) =>
+		t.run((ctx) => ctx.db.get(id));
+
+	it("the owner's tap stamps the store; asking again restamps", async () => {
+		const t = setup();
+		const s = await activeStore(t);
+		await expect(t.mutation(api.enterprise.markInterest, {})).rejects.toThrow(
+			/Not authenticated/,
+		);
+		vi.setSystemTime(OCT_10);
+		await t
+			.withIdentity({ subject: OWNER })
+			.mutation(api.enterprise.markInterest, {});
+		expect((await getRetailer(t, s.retailerId))?.enterpriseInterestAt).toBe(
+			OCT_10,
+		);
+		vi.setSystemTime(OCT_10 + 3 * DAY);
+		await t
+			.withIdentity({ subject: OWNER })
+			.mutation(api.enterprise.markInterest, {});
+		// The LATEST ask is the fact an admin acts on.
+		expect((await getRetailer(t, s.retailerId))?.enterpriseInterestAt).toBe(
+			OCT_10 + 3 * DAY,
+		);
+	});
+
+	it("attaching a contract answers the lead — the stamp clears in the same mutation", async () => {
+		const t = setup();
+		const s = await activeStore(t);
+		await t
+			.withIdentity({ subject: OWNER })
+			.mutation(api.enterprise.markInterest, {});
+		await asAdmin(t).mutation(api.enterprise.setContract, {
+			retailerId: s.retailerId,
+			...HSL,
+		});
+		expect(
+			(await getRetailer(t, s.retailerId))?.enterpriseInterestAt,
+		).toBeUndefined();
+	});
+
+	it("dismissing is admin-only, audited, and idempotent", async () => {
+		const t = setup();
+		const s = await activeStore(t);
+		await t
+			.withIdentity({ subject: OWNER })
+			.mutation(api.enterprise.markInterest, {});
+		await expect(
+			t
+				.withIdentity({ subject: OWNER })
+				.mutation(api.enterprise.dismissInterest, {
+					retailerId: s.retailerId,
+				}),
+		).rejects.toThrow();
+		await asAdmin(t).mutation(api.enterprise.dismissInterest, {
+			retailerId: s.retailerId,
+		});
+		expect(
+			(await getRetailer(t, s.retailerId))?.enterpriseInterestAt,
+		).toBeUndefined();
+		const audit = await t.run((ctx) =>
+			ctx.db
+				.query("adminAuditLog")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", s.retailerId))
+				.collect(),
+		);
+		expect(audit.map((a) => a.action)).toContain("enterprise.dismissInterest");
+		// Dismissing an already-clear lead writes no second audit row.
+		await asAdmin(t).mutation(api.enterprise.dismissInterest, {
+			retailerId: s.retailerId,
+		});
+		const after = await t.run((ctx) =>
+			ctx.db
+				.query("adminAuditLog")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", s.retailerId))
+				.collect(),
+		);
+		expect(
+			after.filter((a) => a.action === "enterprise.dismissInterest"),
+		).toHaveLength(1);
+	});
+
+	it("the admin row carries the stamp, so the Wants Enterprise filter can see it", async () => {
+		const t = setup();
+		const s = await activeStore(t);
+		await t
+			.withIdentity({ subject: OWNER })
+			.mutation(api.enterprise.markInterest, {});
+		const rows = await asAdmin(t).query(api.admin.listSellersForAdmin, {});
+		const row = rows.find((r) => r._id === s.retailerId);
+		expect(row?.enterpriseInterestAt).toBeDefined();
+	});
+});

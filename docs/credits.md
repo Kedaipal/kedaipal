@@ -60,7 +60,10 @@ Enterprise](./pricing.md#enterprise--a-contract-not-a-price)) is granted its
 contract's **`includedCredits`** every month, and those credits live in exactly
 one field: `creditAccounts.grantOverride`. `enterprise.setContract` writes the
 override in the same mutation that saves the contract, and
-`credits.adminSetGrantOverride` on a contract store edits the contract's
+`credits.adminSetGrantOverride` — which since the z8r3fdkp8h follow-up only
+accepts a NUMBER on comped or contract stores (`GRANT_LEVER_CONTRACT_REFUSAL`:
+a custom allowance on a listed plan is a contract with no record; clearing a
+stale grant always works) — on a contract store edits the contract's
 number too (under the contract's own rule — at least 1 — and stamping who
 changed it) — changing one changes the other, and clearing the override is
 refused while the store is on a contract. Raising it lands the difference this

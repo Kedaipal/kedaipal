@@ -427,7 +427,7 @@ collected by hand, month 2 — 6 Nov — issued by the system).
 | --- | --- |
 | `baseFeeMinor` | The monthly fee, minor units, in the contract's currency |
 | `currency` | `MYR` or `SGD` — taken from the store's billing currency when the contract is created, then **frozen**. An SG deal is SGD minor units; nothing is ever converted |
-| `includedCredits` | The store's monthly grant (up to `ADMIN_CREDIT_LIMIT`, 100,000) |
+| `includedCredits` | The store's monthly grant of ORDER credits (up to `ADMIN_CREDIT_LIMIT`, 100,000). The form says "order credits" throughout — once broadcasts sit beside it, bare "credits" stops naming the thing |
 | `overageRateMinor` | Per credit, minor units; zero is allowed (a deal can include its blocks) |
 | `blockSize` | Credits per overage block (default `ENTERPRISE_BLOCK_SIZE_DEFAULT`, 5,000) |
 | `teammates` | People besides the owner. **Absent = the tier's unlimited.** The seller's own vocabulary ("You + N teammates"), so an admin types what the store reads; `userCap` adds the owner back |
@@ -450,6 +450,30 @@ one place. A future per-deal lever is one optional field plus one line there.
 Note `orderCap` is deliberately NOT per-deal: an Enterprise store's order
 allowance IS its `includedCredits`, metered by the ledger, and a second copy of
 that number on the row is what T6 refused to create.
+
+**Who asked for Enterprise is a stamp, not a memory.** A signed-in owner's
+tap on any in-app "Talk to Arif" (the billing offer, a signed-in `/pricing`
+click) writes `retailers.enterpriseInterestAt` beside opening the chat —
+best-effort, the chat is the primary action. Admin → Sellers grows a
+**"Wants Enterprise"** chip in the owes-action front group (All · Past due ·
+Unclaimed · Wants Enterprise): an open lead is money on the table and must
+not live at the back of a chip row. It is a predicate, not a bucket — a
+trialing store that asked still counts as trialing. The lead clears when a
+contract lands (`setContract`) or when an admin dismisses it on the seller
+sheet (audited, `enterprise.dismissInterest`); asking again restamps.
+Anonymous `/pricing` and landing clicks have no account to stamp — the
+WhatsApp thread is the capture there, and GA still counts the taps
+(`enterprise_talk_clicked`).
+
+**The custom-grant lever is for comps and contracts only**
+(`GRANT_LEVER_CONTRACT_REFUSAL`, one author for the ledger page's reason and
+the server's throw). A recurring custom allowance on a LIST-PRICE plan is an
+Enterprise deal with no contract record — nothing says what was agreed, with
+whom, or what it bills — and the contract can carry the plan's exact fee, so
+"same price, more credits" is a contract too. On a contract the lever edits
+`includedCredits`; on a comp it stays the sponsor lever; on plain
+Starter/Pro, SETTING is refused and CLEARING a stale grant still works (a
+grant that predates the rule is never trapped behind it).
 
 **Seats can be raised freely and lowered only to the floor.** The form and the
 server both refuse a teammate count below the people the store is running on

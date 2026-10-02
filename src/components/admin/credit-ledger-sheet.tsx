@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import type { AdminSellerRow } from "../../../convex/admin";
+import { GRANT_LEVER_CONTRACT_REFUSAL } from "../../../convex/lib/credits";
 import { PURCHASED_CREDIT_LIFETIME_MONTHS } from "../../../convex/lib/plans";
 import { convexErrorMessage, formatShortDate } from "../../lib/format";
 import { cn } from "../../lib/utils";
@@ -162,6 +163,13 @@ export function CreditLedgerBody({
 							retailerId={seller._id}
 							customGrant={state.account?.grantOverride}
 							periodGrant={state.view.periodGrant}
+							// SETTING a recurring allowance is a contract's or a comp's
+							// job now (GRANT_LEVER_CONTRACT_REFUSAL) — a list-price plan
+							// gets the reason, not a lever.
+							setLocked={
+								!(seller.plan === "enterprise" && seller.enterprise) &&
+								!seller.comped
+							}
 						/>
 					</>
 				)}
@@ -455,10 +463,14 @@ function GrantForm({
 	retailerId,
 	customGrant,
 	periodGrant,
+	setLocked,
 }: {
 	retailerId: AdminSellerRow["_id"];
 	customGrant: number | undefined;
 	periodGrant: number;
+	/** A list-price plan (not comped, no contract): setting is refused with
+	 * the one-author reason; clearing a stale grant still works. */
+	setLocked: boolean;
 }) {
 	const setGrant = useMutation(api.credits.adminSetGrantOverride);
 	const [raw, setRaw] = useState(
@@ -511,35 +523,46 @@ function GrantForm({
 					<>The plan's grant ({periodGrant} this month)</>
 				)}
 			</p>
-			<p className="text-xs text-muted-foreground">
-				Beats every plan grant — for a partner deal or a pilot — and the seller
-				gets no upgrade nudges. A higher grant lands its difference this month;
-				a lower one, or clearing it, waits for next month.
-			</p>
-			<div className="flex flex-col gap-1.5">
-				<label htmlFor="credit-grant" className="text-sm font-medium">
-					Credits a month
-				</label>
-				<Input
-					id="credit-grant"
-					variant="field"
-					inputMode="numeric"
-					value={raw}
-					onChange={(e) => setRaw(e.target.value)}
-					placeholder="e.g. 1000"
-				/>
-			</div>
+			{setLocked ? (
+				<p className="text-xs text-muted-foreground">
+					{GRANT_LEVER_CONTRACT_REFUSAL}
+				</p>
+			) : (
+				<p className="text-xs text-muted-foreground">
+					Beats every plan grant — for a sponsored store, or edits an Enterprise
+					contract's included credits — and the seller gets no upgrade nudges. A
+					higher grant lands its difference this month; a lower one, or clearing
+					it, waits for next month.
+				</p>
+			)}
+			{setLocked ? null : (
+				<div className="flex flex-col gap-1.5">
+					<label htmlFor="credit-grant" className="text-sm font-medium">
+						Credits a month
+					</label>
+					<Input
+						id="credit-grant"
+						variant="field"
+						inputMode="numeric"
+						value={raw}
+						onChange={(e) => setRaw(e.target.value)}
+						placeholder="e.g. 1000"
+					/>
+				</div>
+			)}
 			<div className="flex flex-col gap-2 sm:flex-row">
-				<Button
-					onClick={() => run(n)}
-					disabled={!valid || unchanged || saving !== null}
-					className="tap-target w-full sm:w-fit"
-				>
-					{saving === "save" ? (
-						<Loader2 className="size-4 animate-spin" />
-					) : null}
-					{valid && !unchanged ? `Set ${n} a month` : "Set custom grant"}
-				</Button>
+				{setLocked ? null : (
+					<Button
+						onClick={() => run(n)}
+						disabled={!valid || unchanged || saving !== null}
+						className="tap-target w-full sm:w-fit"
+					>
+						{saving === "save" ? (
+							<Loader2 className="size-4 animate-spin" />
+						) : null}
+						{valid && !unchanged ? `Set ${n} a month` : "Set custom grant"}
+					</Button>
+				)}
 				{customGrant !== undefined ? (
 					<Button
 						variant="outline"

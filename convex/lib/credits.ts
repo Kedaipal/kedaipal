@@ -28,6 +28,21 @@ import {
 	TRIAL_CREDIT_GRANT,
 } from "./plans";
 
+
+/**
+ * Who the custom-grant lever is FOR, now that Enterprise contracts exist
+ * (z8r3fdkp8h follow-up, Zaki 2 Oct 2026): a recurring custom allowance is
+ * either SPONSORED (a comp) or CONTRACTED (Enterprise, where the lever edits
+ * the contract's included credits) — never a quiet tweak on a list-price
+ * plan. A Pro store with 1,500 credits is an Enterprise deal with no
+ * contract record: nothing says what was agreed, with whom, or what it
+ * bills. The contract can carry Pro's exact fee, so "same price, more
+ * credits" is a contract too. Said beside the admin form's disabled lever
+ * and thrown by `credits.adminSetGrantOverride` — one author.
+ */
+export const GRANT_LEVER_CONTRACT_REFUSAL =
+	"A custom allowance on a listed plan is an Enterprise deal with no contract record. Put the store on a contract — it can keep this plan's exact terms — or comp it if it's sponsored. Clearing an old custom grant still works.";
+
 export type CreditBucket = "plan" | "purchased";
 
 /** A subscription's status, or `null` for a store with no subscription row

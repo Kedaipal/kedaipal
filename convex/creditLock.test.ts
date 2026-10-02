@@ -651,10 +651,24 @@ describe("balance notices", () => {
 		await setBalance(t, comped.retailerId, -5);
 		expect(await evaluate(t, comped.retailerId)).toBeNull();
 
-		const custom = await store(t, { status: "active", plan: "starter" }, "user_lock_custom");
-		await t.withIdentity({ subject: ADMIN }).mutation(api.credits.adminSetGrantOverride, {
+		// A custom allowance now lives on a CONTRACT (the lever is comps and
+		// contracts only since the z8r3fdkp8h follow-up), and an Enterprise
+		// store keeps Pro's lock rules — so "no low nudge, but locks at zero"
+		// is an Enterprise behaviour now. The contract writes the grant
+		// override; the no-nudge guard reads that same field.
+		const custom = await store(
+			t,
+			{ status: "active", plan: "pro" },
+			"user_lock_custom",
+		);
+		await t.withIdentity({ subject: ADMIN }).mutation(api.enterprise.setContract, {
 			retailerId: custom.retailerId,
-			grant: 150,
+			baseFeeMinor: 88_800,
+			includedCredits: 150,
+			overageRateMinor: 60,
+			blockSize: 5000,
+			billingCycle: "monthly",
+			contactName: "HSL Food GM",
 		});
 		await setBalance(t, custom.retailerId, 5);
 		expect(await evaluate(t, custom.retailerId)).toBeNull();

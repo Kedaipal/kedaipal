@@ -60,6 +60,10 @@ vi.mock("@tanstack/react-router", () => ({
 vi.mock("@clerk/tanstack-react-start", () => ({
 	useAuth: () => state.auth,
 }));
+// The Enterprise lead stamp (enterprise.markInterest) rides the tier card's
+// Talk CTA for signed-in sellers — mock the write seam like every component
+// test does.
+vi.mock("convex/react", () => ({ useMutation: () => vi.fn() }));
 vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (_fn: unknown, args: unknown) => ({ args }),
 }));

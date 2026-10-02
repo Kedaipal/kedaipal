@@ -98,10 +98,10 @@ function fillHsl() {
 	fireEvent.change(screen.getByLabelText(/Monthly fee/), {
 		target: { value: "888" },
 	});
-	fireEvent.change(screen.getByLabelText("Credits included a month"), {
+	fireEvent.change(screen.getByLabelText("Order credits a month"), {
 		target: { value: "1500" },
 	});
-	fireEvent.change(screen.getByLabelText(/Overage per credit/), {
+	fireEvent.change(screen.getByLabelText(/Overage per order credit/), {
 		target: { value: "0.60" },
 	});
 	fireEvent.change(screen.getByLabelText("Contact"), {
@@ -127,7 +127,7 @@ describe("EnterpriseContractPage — the currency", () => {
 			seller({ country: "SG", currency: "SGD", billingCurrency: "MYR" }),
 		);
 		expect(screen.getByLabelText("Monthly fee (RM)")).toBeTruthy();
-		expect(screen.getByLabelText("Overage per credit (RM)")).toBeTruthy();
+		expect(screen.getByLabelText("Overage per order credit (RM)")).toBeTruthy();
 	});
 
 	it("keeps an existing contract's currency, whatever the store now bills in", () => {
@@ -323,7 +323,7 @@ describe("EnterpriseContractPage — starting from another deal", () => {
 			(screen.getByLabelText(/Monthly fee/) as HTMLInputElement).value,
 		).toBe("1200");
 		expect(
-			(screen.getByLabelText("Credits included a month") as HTMLInputElement)
+			(screen.getByLabelText("Order credits a month") as HTMLInputElement)
 				.value,
 		).toBe("2000");
 		expect((screen.getByLabelText("Teammates") as HTMLInputElement).value).toBe(

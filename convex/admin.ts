@@ -95,6 +95,10 @@ export type AdminSellerRow = {
 		plan: NonNullable<Doc<"subscriptions">["pendingPlanChange"]>["plan"];
 		requestedAt: number;
 	};
+	/** The owner tapped the in-app "Talk to Arif" (z8r3fdkp8h follow-up) —
+	 * an open Enterprise lead. Absent once a contract lands or an admin
+	 * dismisses it; drives the "Wants Enterprise" filter. */
+	enterpriseInterestAt?: number;
 	/** On the house (z8r3fdeub2). True for an admin-granted comp AND for a
 	 * legacy stampless comped row — the chip renders either way. */
 	comped: boolean;
@@ -398,6 +402,7 @@ export const listSellersForAdmin = query({
 						}
 					: undefined,
 				pendingPlanChange: sub?.pendingPlanChange,
+				enterpriseInterestAt: r.enterpriseInterestAt,
 				comped: sub?.comped === true,
 				comp: sub?.comp
 					? {

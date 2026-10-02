@@ -772,7 +772,14 @@ describe("admin", () => {
 
 	test("a custom grant beats the tier; a higher one lands its difference now, clearing it waits for the next period", async () => {
 		const t = setup();
-		const { retailerId } = await makeStore(t, { status: "active", plan: "starter" });
+		// COMPED: since the Enterprise follow-up (z8r3fdkp8h) a recurring
+		// custom allowance is only for sponsored or contracted stores — a
+		// comp is the sponsored case this behaviour now belongs to.
+		const { retailerId } = await makeStore(t, {
+			status: "active",
+			plan: "starter",
+			comped: true,
+		});
 		const asAdmin = t.withIdentity({ subject: ADMIN });
 		await asAdmin.mutation(api.credits.adminSetGrantOverride, { retailerId, grant: 1000 });
 		expect(await account(t, retailerId)).toMatchObject({
@@ -785,6 +792,36 @@ describe("admin", () => {
 		vi.setSystemTime(NOV_1);
 		await t.mutation(internal.credits.internalRollPeriods, {});
 		expect((await account(t, retailerId))?.planBalance).toBe(100);
+	});
+
+	test("SETTING a custom grant on a listed plan is refused — that deal is a contract now; clearing a stale one still works", async () => {
+		// Zaki, 2 Oct 2026: a Pro store with 1,500 credits is an Enterprise
+		// deal with no contract record — the contract can carry Pro's exact
+		// fee, so "same price, more credits" is a contract too. Comped stays
+		// allowed (sponsored); enterprise edits the contract (covered in
+		// enterprise.test.ts).
+		const t = setup();
+		const { retailerId } = await makeStore(t, { status: "active", plan: "pro" });
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+		await expect(
+			asAdmin.mutation(api.credits.adminSetGrantOverride, {
+				retailerId,
+				grant: 1000,
+			}),
+		).rejects.toThrow(/contract record/);
+		// A grant that predates the rule must never be trapped behind it.
+		await t.run(async (ctx) => {
+			const acc = await ctx.db
+				.query("creditAccounts")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			if (acc) await ctx.db.patch(acc._id, { grantOverride: 1000 });
+		});
+		await asAdmin.mutation(api.credits.adminSetGrantOverride, {
+			retailerId,
+			grant: null,
+		});
+		expect((await account(t, retailerId))?.grantOverride).toBeUndefined();
 	});
 });
 

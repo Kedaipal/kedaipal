@@ -2,6 +2,7 @@ import { useAuth } from "@clerk/tanstack-react-start";
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { useMutation } from "convex/react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ArrowRight, Check, Minus, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -537,6 +538,7 @@ function TierCard({
 	supportWa: string;
 }) {
 	const shouldReduceMotion = useReducedMotion();
+	const markInterest = useMutation(api.enterprise.markInterest);
 	// Enterprise (T6) has no list price and no self-serve door: its card says
 	// "Custom" where a price would be and opens a chat with Arif instead of a
 	// sign-up. The listed tiers read the gate rather than assume it, so a tier
@@ -696,9 +698,15 @@ function TierCard({
 							href={enterpriseTalkUrl(supportWa)}
 							target="_blank"
 							rel="noopener noreferrer"
-							onClick={() =>
-								trackEvent("enterprise_talk_clicked", { surface: "pricing" })
-							}
+							onClick={() => {
+								trackEvent("enterprise_talk_clicked", { surface: "pricing" });
+								// A signed-in seller asking from /pricing is the same lead
+								// as one asking from Billing — stamp it so Admin → Sellers'
+								// "Wants Enterprise" filter sees it. Best-effort beside the
+								// chat; anonymous visitors have no account to stamp, and
+								// their WhatsApp thread is the capture.
+								if (isSignedIn) markInterest({}).catch(() => {});
+							}}
 						>
 							{m.pricing_cta_talk()} <ArrowRight className="size-4" />
 						</a>

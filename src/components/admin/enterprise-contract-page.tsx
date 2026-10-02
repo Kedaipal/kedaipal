@@ -303,7 +303,7 @@ export function EnterpriseContractPage({
 						/>
 						<Field
 							id="ent-rate"
-							label={`Overage per credit (${currencySymbol(currency)})`}
+							label={`Overage per order credit (${currencySymbol(currency)})`}
 							value={rate}
 							onChange={setRate}
 							placeholder="e.g. 0.60"
@@ -311,11 +311,12 @@ export function EnterpriseContractPage({
 						/>
 						<Field
 							id="ent-block"
-							label="Block size (credits)"
+							label="Overage block (order credits)"
 							value={block}
 							onChange={setBlock}
 							placeholder={String(ENTERPRISE_BLOCK_SIZE_DEFAULT)}
 							inputMode="numeric"
+							hint="Extra order credits are sold in blocks of this size."
 						/>
 					</div>
 				</div>
@@ -327,7 +328,7 @@ export function EnterpriseContractPage({
 					<div className="grid gap-4 sm:grid-cols-2">
 						<Field
 							id="ent-included"
-							label="Credits included a month"
+							label="Order credits a month"
 							value={included}
 							onChange={setIncluded}
 							placeholder="e.g. 1500"

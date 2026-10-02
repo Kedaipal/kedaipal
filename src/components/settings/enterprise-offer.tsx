@@ -1,4 +1,6 @@
+import { useMutation } from "convex/react";
 import { ArrowUpRight, Building2 } from "lucide-react";
+import { api } from "../../../convex/_generated/api";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import {
 	enterpriseFromOrdersLabel,
@@ -26,6 +28,7 @@ export function EnterpriseOffer({
 	ownerOnly?: boolean;
 }) {
 	const supportWa = useSupportWaNumber();
+	const markInterest = useMutation(api.enterprise.markInterest);
 	const cta = ownerOnly ? (
 		<button
 			type="button"
@@ -40,9 +43,14 @@ export function EnterpriseOffer({
 			href={enterpriseTalkUrl(supportWa, { slug })}
 			target="_blank"
 			rel="noopener noreferrer"
-			onClick={() =>
-				trackEvent("enterprise_talk_clicked", { surface: "billing" })
-			}
+			onClick={() => {
+				trackEvent("enterprise_talk_clicked", { surface: "billing" });
+				// Best-effort lead stamp (owner-resolved) — the chat is the
+				// primary action and opens regardless; a billing teammate's tap
+				// has no store under their own login, and the lead Arif replies
+				// to is the store either way.
+				markInterest({}).catch(() => {});
+			}}
 			className="tap-target inline-flex h-11 w-fit shrink-0 items-center gap-1.5 rounded-lg border border-border px-4 text-sm font-medium text-foreground transition-colors hover:bg-muted sm:h-10"
 		>
 			Talk to Arif
