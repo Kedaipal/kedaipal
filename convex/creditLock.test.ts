@@ -373,29 +373,21 @@ describe("the seller lock at zero credits", () => {
 		await t.mutation(internal.credits.internalRollPeriods, {});
 		await asOwner().mutation(api.orders.markPaymentReceived, { orderId: order._id });
 
-		// Upgrade (Pro → Scale lands the difference now).
+		// Upgrade — an Enterprise contract (T6) lands its bigger grant's
+		// difference now, like any upgrade: 500 included on a Pro month of 200.
 		await setBalance(t, s.retailerId, -5);
 		await expect(
 			asOwner().mutation(api.products.archive, { productId: s.productId }),
 		).rejects.toThrow(LOCKED);
-		const invoiceId = await t.run((ctx) =>
-			ctx.db.insert("invoices", {
-				retailerId: s.retailerId,
-				subscriptionId: s.subId,
-				invoiceNumber: "INV-LK-UP",
-				plan: "scale",
-				billingCycle: "monthly",
-				amount: 39900,
-				total: 39900,
-				currency: "MYR",
-				periodStart: Date.now(),
-				periodEnd: Date.now() + 30 * DAY,
-				dueDate: Date.now() + 14 * DAY,
-				status: "pending",
-				createdAt: Date.now(),
-			}),
-		);
-		await t.withIdentity({ subject: ADMIN }).mutation(api.invoices.markPaid, { invoiceId });
+		await t.withIdentity({ subject: ADMIN }).mutation(api.enterprise.setContract, {
+			retailerId: s.retailerId,
+			baseFeeMinor: 88800,
+			includedCredits: 500,
+			overageRateMinor: 60,
+			blockSize: 5000,
+			billingCycle: "monthly",
+			contactName: "Contract contact",
+		});
 		expect(await total(t, s.retailerId)).toBe(295);
 		await asOwner().mutation(api.products.archive, { productId: s.productId });
 	});
@@ -732,10 +724,24 @@ describe("balance notices", () => {
 		await setBalance(t, comped.retailerId, -5);
 		expect(await evaluate(t, comped.retailerId)).toBeNull();
 
-		const custom = await store(t, { status: "active", plan: "starter" }, "user_lock_custom");
-		await t.withIdentity({ subject: ADMIN }).mutation(api.credits.adminSetGrantOverride, {
+		// A custom allowance now lives on a CONTRACT (the lever is comps and
+		// contracts only since the z8r3fdkp8h follow-up), and an Enterprise
+		// store keeps Pro's lock rules — so "no low nudge, but locks at zero"
+		// is an Enterprise behaviour now. The contract writes the grant
+		// override; the no-nudge guard reads that same field.
+		const custom = await store(
+			t,
+			{ status: "active", plan: "pro" },
+			"user_lock_custom",
+		);
+		await t.withIdentity({ subject: ADMIN }).mutation(api.enterprise.setContract, {
 			retailerId: custom.retailerId,
-			grant: 150,
+			baseFeeMinor: 88_800,
+			includedCredits: 150,
+			overageRateMinor: 60,
+			blockSize: 5000,
+			billingCycle: "monthly",
+			contactName: "HSL Food GM",
 		});
 		await setBalance(t, custom.retailerId, 5);
 		expect(await evaluate(t, custom.retailerId)).toBeNull();

@@ -436,49 +436,54 @@ describe("invoices.issueInvoice", () => {
 	});
 
 	/**
-	 * Scale opened for purchase with the credits release (z8r3fdfuhq), and Arif
-	 * assigns it by hand as well — the "Scale is unavailable for v1" guard that
-	 * lived here is gone. Founding stays Pro-only.
+	 * Enterprise (Credits T6) has no list price: its invoice bills the store's
+	 * CONTRACT — the fee, the currency it was agreed in and its term — whatever
+	 * the form sends, and founding never applies. No contract, no invoice.
 	 */
-	test("issues Scale at RM399 monthly and S$1,490 annual — never with the founding discount", async () => {
+	test("an Enterprise invoice bills the contract — never the form's cycle or currency, never founding", async () => {
 		const t = setup();
-		const { retailerId } = await seedPublic(t, "u_sc", "store-scale");
-		const { invoiceId } = await asAdmin(t).mutation(api.invoices.issueInvoice, {
-			retailerId,
-			plan: "scale",
-			billingCycle: "monthly",
-			founding: false,
-			dueDate: due(),
-		});
-		expect(await getInvoice(t, invoiceId)).toMatchObject({
-			plan: "scale",
-			total: 39900,
-			currency: "MYR",
-		});
-
-		const sg = await seedPublic(t, "u_sc_sg", "store-scale-sg");
-		const annual = await asAdmin(t).mutation(api.invoices.issueInvoice, {
-			retailerId: sg.retailerId,
-			plan: "scale",
-			billingCycle: "annual",
-			founding: false,
-			currency: "SGD",
-			dueDate: due(),
-		});
-		expect(await getInvoice(t, annual.invoiceId)).toMatchObject({
-			plan: "scale",
-			billingCycle: "annual",
-			total: 149000,
-			currency: "SGD",
-		});
-
+		const { retailerId } = await seedPublic(t, "u_ent", "store-ent");
 		await expect(
 			asAdmin(t).mutation(api.invoices.issueInvoice, {
-				retailerId: sg.retailerId,
-				plan: "scale",
+				retailerId,
+				plan: "enterprise",
 				billingCycle: "monthly",
+				founding: false,
+				dueDate: due(),
+			}),
+		).rejects.toThrow(/contract first/);
+		await asAdmin(t).mutation(api.enterprise.setContract, {
+			retailerId,
+			baseFeeMinor: 88800,
+			includedCredits: 1500,
+			overageRateMinor: 60,
+			blockSize: 5000,
+			billingCycle: "annual",
+			contactName: "HSL Food GM",
+		});
+		const { invoiceId } = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "enterprise",
+			billingCycle: "monthly",
+			founding: false,
+			currency: "SGD",
+			dueDate: due(),
+		});
+		const inv = await getInvoice(t, invoiceId);
+		expect(inv).toMatchObject({
+			plan: "enterprise",
+			billingCycle: "annual",
+			total: 888000, // RM888 × 10 — the prepaid year
+			amount: 888000,
+			currency: "MYR",
+		});
+		expect(inv?.foundingDiscount).toBeUndefined();
+		await expect(
+			asAdmin(t).mutation(api.invoices.issueInvoice, {
+				retailerId,
+				plan: "enterprise",
+				billingCycle: "annual",
 				founding: true,
-				currency: "SGD",
 				dueDate: due(),
 			}),
 		).rejects.toThrow(/only pro/i);
@@ -1590,6 +1595,65 @@ describe("invoices.changePlan — mid-cycle tier moves", () => {
 		const after = await getSubFor(t, retailerId);
 		expect(after?.plan).toBe("starter");
 		expect(after?.orderCap).toBe(100);
+	});
+
+	test("C3 — voiding the renewal that carried a downgrade keeps the downgrade scheduled", async () => {
+		// The renewal consumed the seller's scheduled move to Starter when it
+		// was issued. An admin voiding that bill (a wrong due date, a retry)
+		// must not quietly turn their choice into a Pro renewal — auto-charged
+		// if they have a saved method. Calling it off is the seller's own act.
+		const t = setup();
+		const { asUser, retailerId } = await seedActive(t, "u_rearm", "rearm-store", {
+			plan: "pro",
+			daysLeft: 1,
+		});
+		await asUser.mutation(api.invoices.changePlan, { plan: "starter" });
+		const subscriptionId = (await getSubFor(t, retailerId))?._id;
+		if (!subscriptionId) throw new Error("no subscription");
+		await t.run((ctx) =>
+			ctx.db.patch(subscriptionId, { currentPeriodEnd: Date.now() - 1000 }),
+		);
+		await t.mutation(internal.invoices.internalIssueRenewalInvoice, {
+			subscriptionId,
+		});
+		const [renewal] = await pendingFor(t, retailerId);
+		expect(renewal?.plan).toBe("starter");
+		expect((await getSubFor(t, retailerId))?.pendingPlanChange).toBeUndefined();
+		if (!renewal) throw new Error("no renewal invoice");
+
+		await asAdmin(t).mutation(api.invoices.voidInvoice, {
+			invoiceId: renewal._id,
+		});
+		expect((await getSubFor(t, retailerId))?.pendingPlanChange?.plan).toBe(
+			"starter",
+		);
+		await t.mutation(internal.invoices.internalIssueRenewalInvoice, {
+			subscriptionId,
+		});
+		const [again] = await pendingFor(t, retailerId);
+		expect(again).toMatchObject({ plan: "starter", total: 7900 });
+	});
+
+	test("C4 — voiding an ordinary renewal schedules nothing", async () => {
+		const t = setup();
+		const { retailerId } = await seedActive(t, "u_plainvoid", "plain-void-store", {
+			plan: "pro",
+			daysLeft: 1,
+		});
+		const subscriptionId = (await getSubFor(t, retailerId))?._id;
+		if (!subscriptionId) throw new Error("no subscription");
+		await t.run((ctx) =>
+			ctx.db.patch(subscriptionId, { currentPeriodEnd: Date.now() - 1000 }),
+		);
+		await t.mutation(internal.invoices.internalIssueRenewalInvoice, {
+			subscriptionId,
+		});
+		const [renewal] = await pendingFor(t, retailerId);
+		if (!renewal) throw new Error("no renewal invoice");
+		await asAdmin(t).mutation(api.invoices.voidInvoice, {
+			invoiceId: renewal._id,
+		});
+		expect((await getSubFor(t, retailerId))?.pendingPlanChange).toBeUndefined();
 	});
 
 	test("C2 — moving back up supersedes a scheduled downgrade", async () => {

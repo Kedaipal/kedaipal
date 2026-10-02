@@ -126,6 +126,14 @@ export default defineSchema({
 		// dangles once the referrer is purged — readers treat a missing doc as
 		// "no referrer". Same posture as signupSource: per-row read, no index.
 		signupReferrerId: v.optional(v.id("retailers")),
+		// The owner tapped "Talk to Arif" in-app (Credits T6 follow-up,
+		// z8r3fdkp8h): a signed-in Enterprise lead, stamped so the admin
+		// console can list who asked instead of trusting a WhatsApp scrollback.
+		// Re-asking restamps (latest ask is the useful fact). Cleared when a
+		// contract is attached or an admin dismisses the lead. Anonymous
+		// /pricing clicks can't stamp — no account; the WhatsApp thread is the
+		// capture there.
+		enterpriseInterestAt: v.optional(v.number()),
 		// Store country (SG-lite, 86eynw27f). The one switch every country-shaped
 		// rule reads: checkout phone plate/validator arm, address variant, Places
 		// autocomplete region, and the currency a new store defaults to. Undefined
@@ -2678,7 +2686,14 @@ export default defineSchema({
 	// pro) → `active` (paid) / `past_due` (lapsed) / `cancelled`.
 	subscriptions: defineTable({
 		retailerId: v.id("retailers"),
-		plan: v.union(v.literal("starter"), v.literal("pro"), v.literal("scale")),
+		// Starter · Pro · Enterprise (Credits T6, z8r3fdkp8h). `scale` was
+		// narrowed out after a zero-row count on prod — nobody was ever on it.
+		// A row is `enterprise` only while it carries `enterprise` (below).
+		plan: v.union(
+			v.literal("starter"),
+			v.literal("pro"),
+			v.literal("enterprise"),
+		),
 		billingCycle: v.union(v.literal("monthly"), v.literal("annual")),
 		status: v.union(
 			v.literal("trialing"),
@@ -2875,12 +2890,68 @@ export default defineSchema({
 		// be set by a picker that defaults to monthly.
 		pendingPlanChange: v.optional(
 			v.object({
-				plan: v.union(
-					v.literal("starter"),
-					v.literal("pro"),
-					v.literal("scale"),
-				),
+				// A downgrade lands on a LISTED tier — Enterprise is reached by a
+				// contract, never scheduled (an Enterprise store moving to Pro is
+				// exactly this, set by an admin).
+				plan: v.union(v.literal("starter"), v.literal("pro")),
 				requestedAt: v.number(),
+			}),
+		),
+		// The Enterprise contract (Credits T6, z8r3fdkp8h): what an Enterprise
+		// store is billed and granted, set by a Kedaipal admin
+		// (`enterprise.setContract`, audited). Present iff `plan` is
+		// `enterprise` — setting it flips the plan, and it can't be cleared
+		// while the plan is Enterprise (the way out is a scheduled move to
+		// Pro, which clears it when that bill settles). The TERM is the row's
+		// own `billingCycle` (monthly = a 1-month term, annual = 12), never a
+		// second field that could disagree with what renewals bill.
+		enterprise: v.optional(
+			v.object({
+				// Monthly fee in the contract's currency, minor units (RM888 =
+				// 88800). An annual term bills it × 10 (`enterprisePrice`).
+				baseFeeMinor: v.number(),
+				// Agreed per deal and frozen here — an SG deal is SGD, never
+				// converted, whatever the store's country later says.
+				currency: v.union(v.literal("MYR"), v.literal("SGD")),
+				// Orders included a month. Written through to
+				// `creditAccounts.grantOverride` in the same mutation — the one
+				// included-credits field; changing either changes the other.
+				includedCredits: v.number(),
+				// Overage, per credit, minor units (RM0.60 = 60), sold in blocks
+				// of `blockSize` — billed by hand in v1 and landed as an admin
+				// `enterprise_block` adjustment of bought credits.
+				overageRateMinor: v.number(),
+				blockSize: v.number(),
+				// Per-deal entitlement overrides. ABSENT = the tier default in
+				// `PLAN_CAPS.enterprise` (unlimited teammates, Pro's broadcast
+				// quota) — the contract overrides the table, it never replaces
+				// it, so a lever nobody negotiated keeps one answer in one
+				// place. Resolved by `enterpriseContractCaps` and written onto
+				// the row's denormalized caps on every save.
+				// `teammates` is people BESIDES the owner, the number the
+				// seller's own team page shows ("You + N teammates"), so what
+				// an admin types is what the store reads; `userCap` adds the
+				// owner back.
+				teammates: v.optional(v.number()),
+				broadcastQuota: v.optional(v.number()),
+				contactName: v.string(),
+				notes: v.optional(v.string()),
+				setBy: v.string(),
+				setAt: v.number(),
+				// The listed plan and cycle the store was on when the contract
+				// was attached — what bought the period still running then.
+				// `setContract` flips the plan before any payment, so without
+				// this the first Enterprise settle would value that period's
+				// unused days at the CONTRACT's price and carry them 1:1 (a
+				// month of Pro turning into a month of Enterprise). Read by
+				// `settleInvoicePaid`'s carryover; cleared by the first plan
+				// bill that settles.
+				enteredFrom: v.optional(
+					v.object({
+						plan: v.union(v.literal("starter"), v.literal("pro")),
+						billingCycle: v.union(v.literal("monthly"), v.literal("annual")),
+					}),
+				),
 			}),
 		),
 		// Which `currentPeriodEnd` the pre-charge "renewing soon" notice was sent
@@ -2993,6 +3064,10 @@ export default defineSchema({
 			v.literal("referral_referee"),
 			v.literal("referral_referrer"),
 			v.literal("adjust"),
+			// An Enterprise overage block (T6): bought credits an admin lands
+			// once the block's manual invoice is paid — its own reason so the
+			// admin totals can tell blocks from goodwill adjustments.
+			v.literal("enterprise_block"),
 			v.literal("expiry"),
 		),
 		// Idempotency key (with `type`): the order id for debits/refunds, the
@@ -3142,7 +3217,11 @@ export default defineSchema({
 		// subscription) so issuing doesn't change the seller's visible tier before they
 		// pay — mark-paid reconciles the sub from these. Optional for pre-existing rows.
 		plan: v.optional(
-			v.union(v.literal("starter"), v.literal("pro"), v.literal("scale")),
+			v.union(
+				v.literal("starter"),
+				v.literal("pro"),
+				v.literal("enterprise"),
+			),
 		),
 		billingCycle: v.optional(
 			v.union(v.literal("monthly"), v.literal("annual")),
@@ -3275,7 +3354,7 @@ export default defineSchema({
 	foundingMembers: defineTable({
 		retailerId: v.id("retailers"),
 		rank: v.number(), // 1..10
-		plan: v.union(v.literal("pro"), v.literal("scale")), // tier at claim time
+		plan: v.literal("pro"), // tier at claim time — founding is Pro-only
 		// The slot is RESERVED at founding onboard (signup), so these are filled
 		// later when the first founding invoice is actually paid (null until then).
 		paidAt: v.optional(v.number()),

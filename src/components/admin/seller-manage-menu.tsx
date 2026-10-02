@@ -194,6 +194,7 @@ export function SellerManageMenu({
 	if (purging) {
 		return <DeletingPill className={cn("h-11", className)} />;
 	}
+	const onContract = seller.enterprise !== undefined;
 
 	return (
 		<>
@@ -293,7 +294,9 @@ export function SellerManageMenu({
 					    flow we deliberately kept. */}
 					<DropdownMenuItem
 						onSelect={() => setCompOpen(true)}
-						disabled={seller.ownerIsAdmin}
+						// A contract store is never comped too (T6) — the server
+						// refuses it; the reason sits in the subtitle.
+						disabled={seller.ownerIsAdmin || onContract}
 						className="items-start"
 					>
 						<Gift

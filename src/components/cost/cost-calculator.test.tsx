@@ -150,7 +150,22 @@ describe("CostCalculator — the plan behind the price", () => {
 		expect(text()).not.toMatch(/RM\s?\d/);
 	});
 
-	it("60 a week: Pro + 2 × 50 credits, honestly set against Scale", () => {
+	it("30 a week: Starter + 1 × 50 credits, honestly set against Pro", () => {
+		render(<CostCalculator initialInputs={{ ordersPerWeek: 30 }} />);
+		expect(plan()).toContain("about 130 orders a month");
+		expect(plan()).toContain("Starter + 1 × 50 credits");
+		expect(plan()).toContain("RM124/mo");
+		// Leaning on a top-up, so the bigger plan it beat is named — Pro
+		// covers 130 on its own credits.
+		expect(plan()).toContain("Cheaper than Pro at RM149/mo");
+
+		switchToSingapore();
+		expect(plan()).toContain("Starter + 1 × 50 credits");
+		expect(plan()).toContain("S$51/mo");
+		expect(plan()).toContain("Cheaper than Pro at S$59/mo");
+	});
+
+	it("60 a week: Pro + 2 × 50 credits — Pro is the top listed tier, so no comparison", () => {
 		render(<CostCalculator initialInputs={{ ordersPerWeek: 60 }} />);
 		expect(plan()).toContain("about 260 orders a month");
 		expect(plan()).toContain("Pro + 2 × 50 credits");
@@ -159,7 +174,9 @@ describe("CostCalculator — the plan behind the price", () => {
 			"Pro includes 200 credits a month; top-ups cover the other 60",
 		);
 		expect(plan()).toContain("last 12 months");
-		expect(plan()).toContain("Cheaper than Scale at RM399/mo");
+		// Starter + 1 × 200 ties at RM239, and a "cheaper than" a smaller tier
+		// would be false — Enterprise has no price to compare (T6).
+		expect(plan()).not.toContain("Cheaper than");
 		expect(waMessage()).toContain(
 			"get started on Pro + 2 × 50 credits (RM239/mo)",
 		);
@@ -174,23 +191,20 @@ describe("CostCalculator — the plan behind the price", () => {
 		switchToSingapore();
 		expect(plan()).toContain("Pro + 2 × 50 credits");
 		expect(plan()).toContain("S$103/mo");
-		expect(plan()).toContain("Cheaper than Scale at S$149/mo");
+		expect(plan()).not.toContain("Cheaper than");
 	});
 
-	it("130 a week: the currencies part ways, and the bigger tier is named in full", () => {
+	it("130 a week: Pro + 2 × 200 credits in both currencies", () => {
 		render(<CostCalculator initialInputs={{ ordersPerWeek: 130 }} />);
 		expect(plan()).toContain("about 564 orders a month");
 		expect(plan()).toContain("Pro + 2 × 200 credits");
 		expect(plan()).toContain("RM469/mo");
-		// The runner-up is the whole option — Scale alone is RM399, not RM489.
-		expect(plan()).toContain("Cheaper than Scale + 2 × 50 credits at RM489/mo");
+		expect(plan()).not.toContain("Cheaper than");
 
 		switchToSingapore();
-		expect(plan()).toContain("Scale + 2 × 50 credits");
-		expect(plan()).toContain("S$193/mo");
-		// Scale is the top tier: there's no bigger plan to have beaten, so no
-		// comparison line — never a "cheaper than" a smaller tier.
-		expect(plan()).not.toContain("Cheaper than");
+		expect(plan()).toContain("Pro + 2 × 200 credits");
+		expect(plan()).toContain("S$209/mo");
+		expect(text()).not.toMatch(/Scale/);
 	});
 
 	it("a verdict of not-worth-it-yet still shows which plan it was measured against", () => {

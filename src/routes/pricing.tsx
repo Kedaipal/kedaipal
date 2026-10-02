@@ -2,6 +2,7 @@ import { useAuth } from "@clerk/tanstack-react-start";
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { useMutation } from "convex/react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ArrowRight, Check, Minus, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -9,15 +10,17 @@ import { api } from "../../convex/_generated/api";
 import {
 	type AnnualQuote,
 	annualQuote,
-	type BillingCurrency,
 	BILLING_CURRENCY_FOR_COUNTRY,
+	type BillingCurrency,
 	CREDIT_PACKS,
 	INVOICE_DUE_GRACE_DAYS,
 	isPlanSelectable,
+	isUnlimited,
+	type ListedPlan,
 	PLAN_CAPS,
 	PLAN_CREDIT_GRANT,
-	type Plan,
 	PLAN_MONTHLY_PRICES,
+	type Plan,
 	PURCHASED_CREDIT_LIFETIME_MONTHS,
 	SELLER_CANCEL_REFUNDS_PER_PERIOD,
 	TRIAL_CREDIT_GRANT,
@@ -42,6 +45,10 @@ import { useLandingRegion } from "../hooks/useLandingRegion";
 import { useMarketingLanding } from "../hooks/useMarketingLanding";
 import { useSupportWaNumber } from "../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../lib/contact";
+import {
+	enterpriseFromOrdersLabel,
+	enterpriseTalkUrl,
+} from "../lib/enterprise-contact";
 import { trackEvent, trackSignupCta } from "../lib/ga-events";
 import { resolveTierCta } from "../lib/pricing-cta";
 import type { SubscriptionView } from "../lib/subscription";
@@ -51,13 +58,13 @@ import { m } from "../paraglide/messages";
 const SEO_TITLE = "Pricing — Kedaipal WhatsApp Order Hub";
 /** Ringgit, whole units. The static SEO copy names both currencies by design
  * (Googlebot crawls from the US — docs/pricing.md), so it quotes MYR. */
-const rm = (plan: Plan) => PLAN_MONTHLY_PRICES.MYR[plan] / 100;
+const rm = (plan: ListedPlan) => PLAN_MONTHLY_PRICES.MYR[plan] / 100;
 /**
  * Derived from the billing tables, never typed: this line kept saying "Start
  * with a 14-day free trial" after the trial stopped working that way, because
  * nothing tied it to the constants the cards render from.
  */
-const SEO_DESC = `Free until you sell. Starter RM${rm("starter")}, Pro RM${rm("pro")}, Scale RM${rm("scale")} a month — ${PLAN_CREDIT_GRANT.starter}, ${PLAN_CREDIT_GRANT.pro} or ${PLAN_CREDIT_GRANT.scale} orders included, no per-message fees. S$ pricing for Singapore.`;
+const SEO_DESC = `Free until you sell. Starter RM${rm("starter")} or Pro RM${rm("pro")} a month — ${PLAN_CREDIT_GRANT.starter} or ${PLAN_CREDIT_GRANT.pro} orders included — and Enterprise priced for your volume. No per-message fees. S$ pricing for Singapore.`;
 const SITE_URL = "https://kedaipal.com";
 const PAGE_URL = `${SITE_URL}/pricing`;
 const OG_IMAGE = `${SITE_URL}/og-image.png`;
@@ -102,9 +109,11 @@ interface Tier {
 	id: Plan;
 	name: string;
 	tagline: string;
-	/** The monthly credits line — "200 credits a month — 1 per order". */
+	/** The monthly credits line — "200 credits a month — 1 per order", or
+	 * Enterprise's "Credits sized to your volume". */
 	credits: string;
-	teammates: number;
+	/** Member seats beside the owner, or unlimited (Enterprise). */
+	teammates: number | "unlimited";
 	popular: boolean;
 	cta: string;
 }
@@ -123,29 +132,36 @@ interface Tier {
  */
 // `teammates` = MEMBER seats beside the owner ("You + 2"), the live promise
 // team seats ship with (86exr91r4) — derived from `userCap` (TOTAL people,
-// 1/3/6) so the card can't drift from the seat cap the server enforces.
+// 1/3, unlimited on Enterprise) so the card can't drift from the seat cap the
+// server enforces.
+function teammatesOf(plan: Plan): number | "unlimited" {
+	const cap = PLAN_CAPS[plan].userCap;
+	return isUnlimited(cap) ? "unlimited" : cap - 1;
+}
+
 const TIER_FACTS: readonly {
 	id: Plan;
 	name: string;
-	teammates: number;
+	teammates: number | "unlimited";
 	popular: boolean;
 }[] = [
 	{
 		id: "starter",
 		name: "Starter",
-		teammates: PLAN_CAPS.starter.userCap - 1,
+		teammates: teammatesOf("starter"),
 		popular: false,
 	},
 	{
 		id: "pro",
 		name: "Pro",
-		teammates: PLAN_CAPS.pro.userCap - 1,
+		teammates: teammatesOf("pro"),
 		popular: true,
 	},
 	{
-		id: "scale",
-		name: "Scale",
-		teammates: PLAN_CAPS.scale.userCap - 1,
+		// Contact us, no public price (Credits T6, z8r3fdkp8h).
+		id: "enterprise",
+		name: "Enterprise",
+		teammates: teammatesOf("enterprise"),
 		popular: false,
 	},
 ];
@@ -154,16 +170,19 @@ function useTiers(): Tier[] {
 	const tagline: Record<Plan, string> = {
 		starter: m.pricingpage_tier_starter_tagline(),
 		pro: m.pricingpage_tier_pro_tagline(),
-		scale: m.pricingpage_tier_scale_tagline({
-			credits: PLAN_CREDIT_GRANT.scale,
+		enterprise: m.pricingpage_tier_enterprise_tagline({
+			orders: enterpriseFromOrdersLabel(),
 		}),
 	};
 	return TIER_FACTS.map((t) => ({
 		...t,
 		tagline: tagline[t.id],
-		credits: m.pricingpage_credits_per_month({
-			credits: PLAN_CREDIT_GRANT[t.id],
-		}),
+		credits:
+			t.id === "enterprise"
+				? m.pricing_feat_credits_custom()
+				: m.pricingpage_credits_per_month({
+						credits: PLAN_CREDIT_GRANT[t.id],
+					}),
 		cta: m.pricingpage_cta_trial(),
 	}));
 }
@@ -176,7 +195,7 @@ function smallestPack(currency: BillingCurrency) {
 }
 
 /** Monthly price in major units for a tier+currency. */
-function monthlyPrice(id: Plan, currency: BillingCurrency): number {
+function monthlyPrice(id: ListedPlan, currency: BillingCurrency): number {
 	return PLAN_MONTHLY_PRICES[currency][id] / 100;
 }
 
@@ -190,13 +209,13 @@ function monthlyPrice(id: Plan, currency: BillingCurrency): number {
  * advertised RM650/yr against an invoice of RM790. Headline and total now come
  * from one object so they cannot describe different offers.
  */
-function annualPricing(id: Plan, currency: BillingCurrency): AnnualQuote {
+function annualPricing(id: ListedPlan, currency: BillingCurrency): AnnualQuote {
 	return annualQuote(id, false, currency);
 }
 
 /** Whole-unit effective per-month price for the card headline — floored to keep
  * the integer shape every other price on this page has. */
-function annualMonthlyPrice(id: Plan, currency: BillingCurrency): number {
+function annualMonthlyPrice(id: ListedPlan, currency: BillingCurrency): number {
 	return Math.floor(annualPricing(id, currency).effectiveMonthly / 100);
 }
 
@@ -206,7 +225,7 @@ interface Feature {
 	label: string;
 	starter: FeatureValue;
 	pro: FeatureValue;
-	scale: FeatureValue;
+	enterprise: FeatureValue;
 	// True = the capability isn't built yet. Shown with a "Coming soon" badge so the
 	// pricing table doesn't over-promise before those features ship. Keep in sync
 	// with what's actually shipped (see ClickUp 86exrhpfn + the entitlement tickets).
@@ -222,7 +241,8 @@ function useFeatures(): Feature[] {
 			label: m.pricingpage_feat_orders_per_month(),
 			starter: String(PLAN_CREDIT_GRANT.starter),
 			pro: String(PLAN_CREDIT_GRANT.pro),
-			scale: String(PLAN_CREDIT_GRANT.scale),
+			// Per contract — never a number on a public page (T6).
+			enterprise: m.pricingpage_val_custom(),
 		},
 		{
 			// LIVE since 86exr91r4 — counts are total people ("you + n"), read
@@ -230,20 +250,20 @@ function useFeatures(): Feature[] {
 			label: m.pricingpage_feat_team_members(),
 			starter: String(PLAN_CAPS.starter.userCap),
 			pro: String(PLAN_CAPS.pro.userCap),
-			scale: String(PLAN_CAPS.scale.userCap),
+			enterprise: m.pricingpage_val_team_unlimited(),
 		},
 		{
 			label: m.pricingpage_feat_outlets(),
 			starter: "1",
 			pro: "1",
-			scale: m.pricingpage_val_outlets_scale(),
+			enterprise: m.pricingpage_val_outlets_multi(),
 			comingSoon: true,
 		},
 		{
 			label: m.pricingpage_feat_storefront(),
 			starter: true,
 			pro: true,
-			scale: true,
+			enterprise: true,
 		},
 		{
 			// Shipped (Counter Checkout) — sat in the bento + FAQ but never on
@@ -251,19 +271,19 @@ function useFeatures(): Feature[] {
 			label: m.pricingpage_feat_counter(),
 			starter: true,
 			pro: true,
-			scale: true,
+			enterprise: true,
 		},
 		{
 			label: m.pricingpage_feat_pipeline(),
 			starter: true,
 			pro: true,
-			scale: true,
+			enterprise: true,
 		},
 		{
 			label: m.pricingpage_feat_wa_automation(),
 			starter: true,
 			pro: true,
-			scale: true,
+			enterprise: true,
 		},
 		{
 			// Shipped (claim links, 86eyq0epn) — price-locked live-drop checkout.
@@ -271,13 +291,13 @@ function useFeatures(): Feature[] {
 			label: m.pricingpage_feat_claim_links(),
 			starter: true,
 			pro: true,
-			scale: true,
+			enterprise: true,
 		},
 		{
 			label: m.pricingpage_feat_payment_claim(),
 			starter: true,
 			pro: true,
-			scale: true,
+			enterprise: true,
 		},
 		{
 			// Shipped (receipts/invoices PDF + AWB parcel labels, 86eyehvk4 et al)
@@ -285,7 +305,7 @@ function useFeatures(): Feature[] {
 			label: m.pricingpage_feat_docs_pdf(),
 			starter: true,
 			pro: true,
-			scale: true,
+			enterprise: true,
 		},
 		{
 			// Shipped (HitPay gateway, 86eyb6z3a) — BYO seller accounts, Pro-gated
@@ -293,13 +313,13 @@ function useFeatures(): Feature[] {
 			label: m.pricingpage_feat_online_payments(),
 			starter: false,
 			pro: true,
-			scale: true,
+			enterprise: true,
 		},
 		{
 			label: m.pricingpage_feat_inventory(),
 			starter: true,
 			pro: true,
-			scale: true,
+			enterprise: true,
 		},
 		{
 			// The cap the product form enforces (z8r3fdjgvd), not a copy of it —
@@ -307,32 +327,32 @@ function useFeatures(): Feature[] {
 			label: m.pricingpage_feat_variants({ max: MAX_VARIANTS_PER_PRODUCT }),
 			starter: true,
 			pro: true,
-			scale: true,
+			enterprise: true,
 		},
 		{
 			// Shipped (86ey81n63) — PLAN_FEATURES.categories.
 			label: m.pricingpage_feat_categories(),
 			starter: false,
 			pro: true,
-			scale: true,
+			enterprise: true,
 		},
 		{
 			label: m.pricingpage_feat_mockup(),
 			starter: true,
 			pro: true,
-			scale: true,
+			enterprise: true,
 		},
 		{
 			label: m.pricingpage_feat_crm(),
 			starter: false,
 			pro: true,
-			scale: true,
+			enterprise: true,
 		},
 		{
 			label: m.pricingpage_feat_inbox(),
 			starter: false,
 			pro: true,
-			scale: true,
+			enterprise: true,
 		},
 		{
 			// Shipped (Seller Insights v1, 86ey5tfrz) — live, so no Coming soon
@@ -340,7 +360,7 @@ function useFeatures(): Feature[] {
 			label: m.pricingpage_feat_insights(),
 			starter: false,
 			pro: true,
-			scale: true,
+			enterprise: true,
 		},
 		{
 			// Shipped (source attribution, 86eyq0eq9): capture is all-tier, but the
@@ -349,7 +369,7 @@ function useFeatures(): Feature[] {
 			label: m.pricingpage_feat_sources(),
 			starter: false,
 			pro: true,
-			scale: true,
+			enterprise: true,
 		},
 		{
 			// Shipped (fulfilment date at checkout, 86expm524) — and it's part of
@@ -358,7 +378,7 @@ function useFeatures(): Feature[] {
 			label: m.pricingpage_feat_datepicker(),
 			starter: true,
 			pro: true,
-			scale: true,
+			enterprise: true,
 		},
 		{
 			// Shipped and un-gated (payment reminder, 86ey570am): the nudge protects
@@ -367,7 +387,7 @@ function useFeatures(): Feature[] {
 			label: m.pricingpage_feat_reminders(),
 			starter: true,
 			pro: true,
-			scale: true,
+			enterprise: true,
 		},
 		{
 			// Shipped (86ey5tywf) — PLAN_FEATURES.chargeablePickup: per-location
@@ -375,21 +395,21 @@ function useFeatures(): Feature[] {
 			label: m.pricingpage_feat_pickup_fees(),
 			starter: false,
 			pro: true,
-			scale: true,
+			enterprise: true,
 		},
 		{
 			// Shipped (86extzdr8) — PLAN_FEATURES.radiusDelivery.
 			label: m.pricingpage_feat_radius(),
 			starter: false,
 			pro: true,
-			scale: true,
+			enterprise: true,
 		},
 		{
 			// Shipped (86eyb5hrf) — PLAN_FEATURES.delivery. BYO Lalamove keys.
 			label: m.pricingpage_feat_lalamove(),
 			starter: false,
 			pro: true,
-			scale: true,
+			enterprise: true,
 		},
 		{
 			// Shipped (weight/zone rate cards 86eyeea1n + manual consignment
@@ -397,41 +417,41 @@ function useFeatures(): Feature[] {
 			label: m.pricingpage_feat_couriers(),
 			starter: true,
 			pro: true,
-			scale: true,
+			enterprise: true,
 		},
 		{
 			// Shipped (86eyhw9zy) — PLAN_FEATURES.waOrderAlerts.
 			label: m.pricingpage_feat_wa_alerts(),
 			starter: false,
 			pro: true,
-			scale: true,
+			enterprise: true,
 		},
 		{
 			label: m.pricingpage_feat_broadcasts(),
 			starter: false,
 			pro: m.pricingpage_val_broadcast_pro(),
-			scale: m.pricingpage_val_broadcast_scale(),
+			enterprise: m.pricingpage_val_custom(),
 			comingSoon: true,
 		},
 		{
 			label: m.pricingpage_feat_custom_domain(),
 			starter: false,
 			pro: false,
-			scale: true,
+			enterprise: true,
 			comingSoon: true,
 		},
 		{
 			label: m.pricingpage_feat_production_calendar(),
 			starter: false,
 			pro: false,
-			scale: true,
+			enterprise: true,
 			comingSoon: true,
 		},
 		{
 			label: m.pricingpage_feat_priority_support(),
 			starter: false,
 			pro: false,
-			scale: true,
+			enterprise: true,
 			comingSoon: true,
 		},
 	];
@@ -459,7 +479,6 @@ function useFaqs(): { q: string; a: string }[] {
 			a: m.pricingpage_faq_a7({
 				starter: PLAN_CREDIT_GRANT.starter,
 				pro: PLAN_CREDIT_GRANT.pro,
-				scale: PLAN_CREDIT_GRANT.scale,
 				refunds: SELLER_CANCEL_REFUNDS_PER_PERIOD,
 			}),
 		},
@@ -503,6 +522,7 @@ function TierCard({
 	isSignedIn,
 	subscription,
 	pending,
+	supportWa,
 }: {
 	tier: Tier;
 	cycle: Cycle;
@@ -514,17 +534,23 @@ function TierCard({
 	/** Auth/plan still resolving — show a spinner instead of a (soon-to-change)
 	 * label on the purchasable tiers. */
 	pending: boolean;
+	/** Kedaipal's WhatsApp — where "Talk to Arif" opens. */
+	supportWa: string;
 }) {
 	const shouldReduceMotion = useReducedMotion();
-	// Every tier is for sale since the credits release opened Scale
-	// (z8r3fdfuhq). The gate is still read rather than assumed, so a tier that
-	// stops being for sale gets its "Coming soon" badge and panel back from
-	// one place.
-	const selectable = isPlanSelectable(tier.id);
+	const markInterest = useMutation(api.enterprise.markInterest);
+	// Enterprise (T6) has no list price and no self-serve door: its card says
+	// "Custom" where a price would be and opens a chat with Arif instead of a
+	// sign-up. The listed tiers read the gate rather than assume it, so a tier
+	// that stops being for sale gets its "Coming soon" badge from one place.
+	const enterprise = tier.id === "enterprise";
+	const selectable = enterprise || isPlanSelectable(tier.id);
 	const price =
-		cycle === "annual"
-			? annualMonthlyPrice(tier.id, currency)
-			: monthlyPrice(tier.id, currency);
+		tier.id === "enterprise"
+			? null
+			: cycle === "annual"
+				? annualMonthlyPrice(tier.id, currency)
+				: monthlyPrice(tier.id, currency);
 	const symbol = CURRENCY_SYMBOL[currency];
 
 	// CTA is plan-aware for signed-in sellers: only an active/comped owner of this
@@ -567,35 +593,46 @@ function TierCard({
 				{tier.name}
 			</p>
 
-			<div className="mt-3 flex items-end gap-1">
-				{/* Same price-roll as the landing teaser: the MY/SG toggle's one
+			{price === null ? (
+				// "Custom" sits where a price would, in the same box, so the
+				// three cards' taglines and feature lists line up; the tagline
+				// under it says who it's for.
+				<div className="mt-3 flex items-end gap-1">
+					<span className="text-4xl font-bold tracking-tight">
+						{m.pricing_enterprise_price()}
+					</span>
+				</div>
+			) : (
+				<div className="mt-3 flex items-end gap-1">
+					{/* Same price-roll as the landing teaser: the MY/SG toggle's one
 				    visible consequence responds visibly. */}
-				<span className="overflow-hidden text-4xl font-bold tracking-tight">
-					<AnimatePresence mode="popLayout" initial={false}>
-						<motion.span
-							key={currency}
-							initial={shouldReduceMotion ? false : { y: 14, opacity: 0 }}
-							animate={{ y: 0, opacity: 1 }}
-							exit={shouldReduceMotion ? undefined : { y: -14, opacity: 0 }}
-							transition={{ duration: 0.22, ease: "easeOut" }}
-							className="inline-block"
-						>
-							{symbol} {price}
-						</motion.span>
-					</AnimatePresence>
-				</span>
-				<span
-					className={cn(
-						"mb-1 text-sm",
-						tier.popular
-							? "text-primary-foreground/60"
-							: "text-muted-foreground",
-					)}
-				>
-					{m.pricing_per_month()}
-				</span>
-			</div>
-			{cycle === "annual" && (
+					<span className="overflow-hidden text-4xl font-bold tracking-tight">
+						<AnimatePresence mode="popLayout" initial={false}>
+							<motion.span
+								key={currency}
+								initial={shouldReduceMotion ? false : { y: 14, opacity: 0 }}
+								animate={{ y: 0, opacity: 1 }}
+								exit={shouldReduceMotion ? undefined : { y: -14, opacity: 0 }}
+								transition={{ duration: 0.22, ease: "easeOut" }}
+								className="inline-block"
+							>
+								{symbol} {price}
+							</motion.span>
+						</AnimatePresence>
+					</span>
+					<span
+						className={cn(
+							"mb-1 text-sm",
+							tier.popular
+								? "text-primary-foreground/60"
+								: "text-muted-foreground",
+						)}
+					>
+						{m.pricing_per_month()}
+					</span>
+				</div>
+			)}
+			{cycle === "annual" && tier.id !== "enterprise" && (
 				<p className="mt-0.5 text-xs text-accent">
 					{m.pricingpage_billed_annual({
 						total: `${symbol}${annualPricing(tier.id, currency).annualTotal / 100}`,
@@ -628,18 +665,19 @@ function TierCard({
 				</li>
 				<li className="flex items-center gap-2 text-sm text-muted-foreground">
 					<Check className="size-4 shrink-0 text-muted-foreground/50" />
-					{tier.teammates === 0
-						? m.pricingpage_team_just_you()
-						: m.pricingpage_team_you_plus({ count: tier.teammates })}
+					{tier.teammates === "unlimited"
+						? m.pricing_feat_team_unlimited()
+						: tier.teammates === 0
+							? m.pricingpage_team_just_you()
+							: m.pricingpage_team_you_plus({ count: tier.teammates })}
 				</li>
-				{tier.id === "scale" && (
-					// Outlets aren't built, and that is said HERE, in the Scale
-					// column itself — with no add-on price. Scale is buyable now,
-					// and a per-outlet price beside its CTA would sell something
-					// nobody can open yet (z8r3fdfuhq). The price waits for the build.
+				{enterprise && (
+					// Outlets aren't built, and that is said HERE, in the column
+					// itself — Enterprise is sold on the volume, the seats and the
+					// terms that are live today; multi-outlet wears "Soon".
 					<li className="flex items-center gap-2 text-sm text-muted-foreground">
 						<Check className="size-4 shrink-0 text-muted-foreground/50" />
-						{m.pricingpage_scale_outlets()}
+						{m.pricing_feat_outlets_multi()}
 						<span className="rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-400">
 							{m.pricingpage_soon()}
 						</span>
@@ -648,10 +686,35 @@ function TierCard({
 			</ul>
 
 			<div className="mt-6">
-				{cta === "coming_soon" ? (
-					// A tier `isPlanSelectable` says isn't for sale: a disabled
-					// "Coming soon" panel replaces the CTA (mirrors the landing
-					// teaser). None today — Scale opened with the credits release.
+				{cta === "talk" ? (
+					// Enterprise: a conversation, never a checkout (T6).
+					<Button
+						asChild
+						size="lg"
+						variant="outline"
+						className="h-11 w-full rounded-full border-border bg-background text-foreground hover:bg-muted"
+					>
+						<a
+							href={enterpriseTalkUrl(supportWa)}
+							target="_blank"
+							rel="noopener noreferrer"
+							onClick={() => {
+								trackEvent("enterprise_talk_clicked", { surface: "pricing" });
+								// A signed-in seller asking from /pricing is the same lead
+								// as one asking from Billing — stamp it so Admin → Sellers'
+								// "Wants Enterprise" filter sees it. Best-effort beside the
+								// chat; anonymous visitors have no account to stamp, and
+								// their WhatsApp thread is the capture.
+								if (isSignedIn) markInterest({}).catch(() => {});
+							}}
+						>
+							{m.pricing_cta_talk()} <ArrowRight className="size-4" />
+						</a>
+					</Button>
+				) : cta === "coming_soon" ? (
+					// A listed tier `isPlanSelectable` says isn't for sale: a
+					// disabled "Coming soon" panel replaces the CTA (mirrors the
+					// landing teaser). None today.
 					<div className="flex h-11 w-full items-center justify-center rounded-full border border-dashed border-border bg-muted/40 text-sm font-semibold text-muted-foreground">
 						{m.pricingpage_coming_soon()}
 					</div>
@@ -730,11 +793,13 @@ function TierCard({
 				{/* The guarantee rides the tier a visitor is most likely to pick,
 				    directly under its CTA (86eye3p6z §B) — and only while that CTA is
 				    still an invitation. A seller already on this plan has been
-				    onboarded; promising them a first order would read as a bug. */}
+				    onboarded, and so has an Enterprise store (whose every card is
+				    "talk"); promising either a first order would read as a bug. */}
 				{tier.popular &&
 				cta !== "coming_soon" &&
 				cta !== "current" &&
-				cta !== "sponsored" ? (
+				cta !== "sponsored" &&
+				cta !== "talk" ? (
 					<GuaranteeLine className="mt-2.5 text-[11.5px] leading-relaxed text-primary-foreground/65" />
 				) : null}
 			</div>
@@ -865,7 +930,7 @@ function PricingPage() {
 				<div className="mx-auto max-w-6xl px-5 py-16 md:px-8">
 					<FadeIn>
 						{/* Mobile: the same Embla centered carousel as the landing teaser
-						    (owner call, 29 Aug) — Pro parked dead-center, Starter/Scale
+						    (owner call, 29 Aug) — Pro parked dead-center, Starter/Enterprise
 						    peeking; md+ deactivates Embla and the grid takes over. The
 						    slide wrapper stretches, the card fills it, so heights match. */}
 						<CenterSnapCarousel
@@ -884,6 +949,7 @@ function PricingPage() {
 										isSignedIn={isSignedIn ?? false}
 										subscription={subscription}
 										pending={ctaPending}
+										supportWa={supportWa}
 									/>
 								</div>
 							))}
@@ -1022,7 +1088,7 @@ function PricingPage() {
 													<FeatureCell value={f.pro} />
 												</td>
 												<td className="px-4 py-3 text-center">
-													<FeatureCell value={f.scale} />
+													<FeatureCell value={f.enterprise} />
 												</td>
 											</tr>
 										))}

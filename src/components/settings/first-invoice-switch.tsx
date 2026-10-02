@@ -7,10 +7,11 @@ import {
 	type BillingCurrency,
 	foundingPlanLocked,
 	isPlanSelectable,
+	LISTED_PLANS,
+	type ListedPlan,
 	PLAN_CAPS,
 	PLAN_CREDIT_GRANT,
 	type Plan,
-	PLANS,
 	planPrice,
 } from "../../../convex/lib/plans";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
@@ -20,15 +21,18 @@ import { OwnerOnlyNote } from "./owner-only-note";
 
 /**
  * The tiers a pending machine-issued invoice can be switched to: every other
- * tier that's for sale, minus any a Founding Member can't move to (they stay
- * on Founding Pro, so for them this is empty and the tab renders nothing).
- * Exported so the tab decides whether to render from the same answer.
+ * LISTED tier that's for sale, minus any a Founding Member can't move to (they
+ * stay on Founding Pro, so for them this is empty and the tab renders
+ * nothing). An Enterprise invoice bills a contract, so it has nowhere to
+ * switch to either (T6). Exported so the tab decides whether to render from
+ * the same answer.
  */
 export function firstInvoiceTargets(
 	invoicePlan: Plan,
 	foundingPricing: boolean,
-): Plan[] {
-	return PLANS.filter(
+): ListedPlan[] {
+	if (invoicePlan === "enterprise") return [];
+	return LISTED_PLANS.filter(
 		(p) =>
 			p !== invoicePlan &&
 			isPlanSelectable(p) &&
@@ -39,16 +43,13 @@ export function firstInvoiceTargets(
 /**
  * Inside the pending-invoice card: switch a MACHINE-issued plan invoice to
  * another tier before paying it (z8r3fday24). Every trial runs on Pro, so the
- * first invoice bills Pro — this is where a seller who wants Starter, or
- * (since Scale opened, z8r3fdfuhq) Scale, says so, in one tap, keeping the
- * same due date. Without the Scale option, `/pricing`'s "Subscribe" on the
- * Scale card led a trialing seller to a Pro bill with no way to choose Scale.
+ * first invoice bills Pro — this is where a seller who wants Starter says so,
+ * in one tap, keeping the same due date.
  *
  * States the consequence that matters for each move, where the tap is: Starter
- * has no customer database, order inbox or insights; Scale's reason to exist
- * today is its credits and teammates. Admin-issued invoices never show this
- * (Arif may have priced them by hand) — `invoices.switchPendingPlan` refuses
- * those server-side too.
+ * has no customer database, order inbox or insights. Admin-issued invoices
+ * never show this (Arif may have priced them by hand) —
+ * `invoices.switchPendingPlan` refuses those server-side too.
  */
 export function FirstInvoiceSwitch({
 	invoicePlan,
@@ -68,15 +69,15 @@ export function FirstInvoiceSwitch({
 	ownerOnly?: boolean;
 }) {
 	const switchPlan = useMutation(api.invoices.switchPendingPlan);
-	const [busy, setBusy] = useState<Plan | null>(null);
+	const [busy, setBusy] = useState<ListedPlan | null>(null);
 	const targets = firstInvoiceTargets(invoicePlan, founding);
-	const monthly = (plan: Plan) =>
+	const monthly = (plan: ListedPlan) =>
 		formatPrice(
 			planPrice(plan, "monthly", founding && plan === "pro", currency),
 			currency,
 		);
 
-	const submit = async (target: Plan) => {
+	const submit = async (target: ListedPlan) => {
 		setBusy(target);
 		try {
 			await switchPlan({ plan: target });
@@ -91,7 +92,7 @@ export function FirstInvoiceSwitch({
 	};
 
 	/** What moving to `target` changes, in the seller's terms. */
-	const consequence = (target: Plan): ReactNode => {
+	const consequence = (target: ListedPlan): ReactNode => {
 		const credits = PLAN_CREDIT_GRANT[target];
 		if (target === "starter")
 			return (
@@ -101,22 +102,15 @@ export function FirstInvoiceSwitch({
 					everything else works the same.
 				</>
 			);
-		if (target === "pro")
-			return invoicePlan === "starter" ? (
-				<>
-					Want to keep the customer database, order inbox and insights? Switch
-					back to Pro ({monthly("pro")}/month, {credits} credits a month).
-				</>
-			) : (
-				<>
-					Prefer Pro ({monthly("pro")}/month)? It has {credits} credits a month
-					and room for {PLAN_CAPS.pro.userCap - 1} teammates.
-				</>
-			);
-		return (
+		return invoicePlan === "starter" ? (
 			<>
-				Need more volume? Scale ({monthly("scale")}/month) has {credits} credits
-				a month and room for {PLAN_CAPS.scale.userCap - 1} teammates.
+				Want to keep the customer database, order inbox and insights? Switch
+				back to Pro ({monthly("pro")}/month, {credits} credits a month).
+			</>
+		) : (
+			<>
+				Prefer Pro ({monthly("pro")}/month)? It has {credits} credits a month
+				and room for {PLAN_CAPS.pro.userCap - 1} teammates.
 			</>
 		);
 	};

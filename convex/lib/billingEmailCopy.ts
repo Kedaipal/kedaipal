@@ -7,6 +7,7 @@
 
 import { escapeHtml, type Locale, logoHeader, wrapHtml } from "./emailCopy";
 import {
+	ENTERPRISE_FROM_ORDERS,
 	INVOICE_DUE_GRACE_DAYS,
 	PLAN_CREDIT_GRANT,
 	TRIAL_CREDIT_GRANT,
@@ -797,19 +798,21 @@ export type TrialEmailVars = {
 };
 
 /**
- * What the choose-a-plan moment needs to know (Credits T5): the first invoice
- * is for Pro, what Pro includes a month, and the other two tiers' credits —
- * all read from `PLAN_CREDIT_GRANT`, never literals.
+ * What the choose-a-plan moment needs to know (Credits T5, T6): the first
+ * invoice is for Pro, what Pro includes a month, the one other tier on sale
+ * and where Enterprise begins — all read from `PLAN_CREDIT_GRANT` and
+ * `ENTERPRISE_FROM_ORDERS`, never literals. Enterprise has no price to quote.
  */
 function trialPlansLine(locale: Locale): string {
-	const { starter, pro, scale } = PLAN_CREDIT_GRANT;
+	const { starter, pro } = PLAN_CREDIT_GRANT;
+	const big = ENTERPRISE_FROM_ORDERS.toLocaleString("en");
 	switch (locale) {
 		case "en":
-			return `Your first invoice is for Pro — ${pro} credits a month, 1 per order. Prefer Starter (${starter} a month) or Scale (${scale})? Switch before you pay.`;
+			return `Your first invoice is for Pro — ${pro} credits a month, 1 per order. Prefer Starter (${starter} a month)? Switch before you pay. Running ${big}+ orders a month? Ask us about Enterprise.`;
 		case "ms":
-			return `Bil pertama anda untuk Pro — ${pro} kredit sebulan, 1 setiap pesanan. Lebih suka Starter (${starter} sebulan) atau Scale (${scale})? Tukar sebelum membayar.`;
+			return `Bil pertama anda untuk Pro — ${pro} kredit sebulan, 1 setiap pesanan. Lebih suka Starter (${starter} sebulan)? Tukar sebelum membayar. Lebih ${big} pesanan sebulan? Tanya kami tentang Enterprise.`;
 		case "zh":
-			return `第一张账单是 Pro 方案 —— 每月 ${pro} 点，每张订单 1 点。想要 Starter（每月 ${starter} 点）或 Scale（${scale} 点）？付款前可以更换。`;
+			return `第一张账单是 Pro 方案 —— 每月 ${pro} 点，每张订单 1 点。想要 Starter（每月 ${starter} 点）？付款前可以更换。每月超过 ${big} 张订单？问问我们 Enterprise 方案。`;
 	}
 }
 

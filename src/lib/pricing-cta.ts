@@ -6,11 +6,12 @@ import type { SubscriptionView } from "./subscription";
  * unit-tested — the signed-in states can't be exercised in the signed-out
  * marketing preview. See src/routes/pricing.tsx.
  *
- * - `coming_soon` — a tier `isPlanSelectable` says isn't for sale; a disabled
- *    pill. No tier is today: Scale opened for purchase with the credits
- *    release (z8r3fdfuhq) and now takes the same plan-aware CTA as the other
- *    two. The branch stays because the gate does — a tier that closes again
- *    closes here too, without a Scale-shaped special case.
+ * - `talk` — ENTERPRISE (Credits T6): no price and no self-serve door, so the
+ *    card opens a WhatsApp chat with Arif instead. Also every other tier's
+ *    button for a store already on an Enterprise contract — changing a
+ *    contract is a conversation, never a billing-tab refusal.
+ * - `coming_soon` — a LISTED tier `isPlanSelectable` says isn't for sale; a
+ *    disabled pill. None is today; the branch stays because the gate does.
  * - `trial` — signed-out visitor; the sign-up link.
  * - `dashboard` — signed in but plan not yet resolved (loading) or a storeless
  *    admin; safe fallback to the dashboard, never a wrong upgrade label.
@@ -24,6 +25,7 @@ import type { SubscriptionView } from "./subscription";
  *    route to Settings → Billing, where the plan change is self-serve.
  */
 export type TierCtaKind =
+	| "talk"
 	| "coming_soon"
 	| "trial"
 	| "dashboard"
@@ -44,6 +46,16 @@ export function resolveTierCta(
 	},
 ): TierCtaKind {
 	const { selectable, isSignedIn, subscription } = opts;
+	if (tierId === "enterprise") {
+		if (isSignedIn && subscription?.comped === true) return "sponsored";
+		if (
+			isSignedIn &&
+			subscription?.status === "active" &&
+			subscription.plan === "enterprise"
+		)
+			return "current";
+		return "talk";
+	}
 	if (!selectable) return "coming_soon";
 	if (!isSignedIn) return "trial";
 	if (!subscription) return "dashboard";
@@ -59,6 +71,8 @@ export function resolveTierCta(
 	// anyone else hasn't committed, so every tier is a "subscribe" action into
 	// Billing, never a dead "Current plan" pill. See docs/pricing.md.
 	const { plan, status } = subscription;
+	// An Enterprise store changes its contract by talking to us (T6).
+	if (plan === "enterprise") return "talk";
 	if (status !== "active") return "subscribe";
 
 	if (plan === tierId) return "current";

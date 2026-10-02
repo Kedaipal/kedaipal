@@ -31,17 +31,22 @@ export type SellerBucket =
 	| "admin"
 	| "none";
 
-export type SellerFilter = "all" | SellerBucket;
+export type SellerFilter = "all" | SellerBucket | "wants_enterprise";
 
 /** Chip order. Past due sits first after All — it is the urgent bucket, and
  * an urgent filter never sits last (CLAUDE.md, "own the structure"). Unclaimed
  * sits straight after it for the same reason: both are buckets where KEDAIPAL
  * owes someone an action (chase a payment, finish a handover), unlike the rest,
- * which describe a seller's own state. */
+ * which describe a seller's own state. "Wants Enterprise" joins that front
+ * group (z8r3fdkp8h follow-up): an open lead is money on the table, and the
+ * whole point of stamping it is that it can't be forgotten at the back of a
+ * chip row. Unlike the others it is NOT a bucket — a trialing store can want
+ * Enterprise — so it filters on the lead stamp, orthogonal to status. */
 export const SELLER_FILTERS: readonly SellerFilter[] = [
 	"all",
 	"past_due",
 	"unclaimed",
+	"wants_enterprise",
 	"trialing",
 	"active",
 	"on_hold",
@@ -62,7 +67,17 @@ export const SELLER_FILTER_LABEL: Record<SellerFilter, string> = {
 	comped: "Comped",
 	admin: "Admin",
 	none: "No subscription",
+	wants_enterprise: "Wants Enterprise",
 };
+
+/** The empty state's noun for a filter — "No {noun}{ match …}". The chip
+ * label lowercased works for the status buckets ("past due sellers") and
+ * falls apart for the lead filter ("wants enterprise sellers"), so the
+ * phrase is owned here beside the labels. */
+export function sellerFilterEmptyNoun(filter: SellerFilter): string {
+	if (filter === "wants_enterprise") return "open Enterprise asks";
+	return `${SELLER_FILTER_LABEL[filter].toLowerCase()} sellers`;
+}
 
 export function isSellerFilter(value: unknown): value is SellerFilter {
 	return (
@@ -100,9 +115,20 @@ export function countSellerBuckets(
 		comped: 0,
 		admin: 0,
 		none: 0,
+		wants_enterprise: 0,
 	};
-	for (const row of rows) counts[sellerBucket(row)] += 1;
+	for (const row of rows) {
+		counts[sellerBucket(row)] += 1;
+		if (isEnterpriseLead(row)) counts.wants_enterprise += 1;
+	}
 	return counts;
+}
+
+/** An OPEN Enterprise lead: the owner asked and nobody has answered — no
+ * contract attached, not dismissed. A store already on a contract never
+ * counts, whatever stale stamp a row might carry. */
+export function isEnterpriseLead(row: AdminSellerRow): boolean {
+	return row.enterpriseInterestAt !== undefined && row.enterprise === undefined;
 }
 
 // --- Sort ---------------------------------------------------------------
@@ -212,8 +238,11 @@ export function filterSellers(
 ): AdminSellerRow[] {
 	return rows.filter(
 		(row) =>
-			(filter === "all" || sellerBucket(row) === filter) &&
-			matchesSellerSearch(row, query),
+			(filter === "all"
+				? true
+				: filter === "wants_enterprise"
+					? isEnterpriseLead(row)
+					: sellerBucket(row) === filter) && matchesSellerSearch(row, query),
 	);
 }
 
@@ -451,7 +480,7 @@ export function sellerReason(row: AdminSellerRow): string | undefined {
 const PLAN_LABEL: Record<NonNullable<AdminSellerRow["plan"]>, string> = {
 	starter: "Starter",
 	pro: "Pro",
-	scale: "Scale",
+	enterprise: "Enterprise",
 };
 
 // --- Store highlights (z8r3fdkmyp) ----------------------------------------
@@ -553,6 +582,15 @@ export function sellerCompMenuItem(row: AdminSellerRow): {
 		return {
 			title: row.comped ? "Comp upgrade — on" : "Turn on comp upgrade",
 			hint: "Admin store — always free already",
+			sponsored: false,
+		};
+	}
+	// A contract store is never comped too (T6) — `setComp` refuses it, and the
+	// menu disables the item, so this subtitle is where the refusal is SAID.
+	if (row.enterprise !== undefined) {
+		return {
+			title: "Turn on comp upgrade",
+			hint: "On an Enterprise contract — move it to Pro first",
 			sponsored: false,
 		};
 	}

@@ -45,9 +45,7 @@ describe("subscribeStepCopy", () => {
 		expect(copy.why).toContain(`for up to ${TRIAL_CREDIT_GRANT} orders`);
 	});
 
-	it("outside the free period: pick a plan — all three are for sale", () => {
-		expect(subscribeStepCopy({ kind: "none" }).why).toContain(
-			"Starter, Pro, or Scale",
-		);
+	it("outside the free period: pick a plan — the two listed tiers, Enterprise being a conversation", () => {
+		expect(subscribeStepCopy({ kind: "none" }).why).toContain("Starter or Pro");
 	});
 });

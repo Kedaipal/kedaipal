@@ -24,6 +24,15 @@ vi.mock("convex/react", () => ({
 vi.mock("sonner", () => ({
 	toast: { success: mocks.toastSuccess, error: vi.fn() },
 }));
+// The T6 picker renders the Enterprise offer, whose only read is the support
+// WA number on the TanStack adapter pair — mock the pair (the house pattern,
+// see billing-tab.test.tsx), not convex/react.
+vi.mock("@convex-dev/react-query", () => ({
+	convexQuery: (fn: unknown, args: unknown) => ({ __fn: fn, args }),
+}));
+vi.mock("@tanstack/react-query", () => ({
+	useQuery: () => ({ data: "60111111111" }),
+}));
 
 afterEach(() => {
 	cleanup();
@@ -52,6 +61,7 @@ function renderPicker(s: SubscriptionView) {
 	render(
 		<PlanPickerCard
 			sub={s}
+			slug="openmarket"
 			currency="MYR"
 			renewing={false}
 			foundingPricing={false}

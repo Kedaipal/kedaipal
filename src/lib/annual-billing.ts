@@ -14,9 +14,10 @@
 import {
 	type AnnualQuote,
 	annualQuote,
-	type BillingCurrency,
 	BILLING_CURRENCIES,
+	type BillingCurrency,
 	DEFAULT_BILLING_CURRENCY,
+	type ListedPlan,
 	type Plan,
 } from "../../convex/lib/plans";
 import { daysUntil } from "./subscription";
@@ -24,17 +25,16 @@ import { daysUntil } from "./subscription";
 /**
  * Plans the annual switch is offered on.
  *
- * **Pro and Scale.** Not Starter, by owner decision: Starter is moving to
+ * **Pro.** Not Starter, by owner decision: Starter is moving to
  * start-when-you-sell billing, so asking that seller for a year upfront
- * contradicts the premise of the tier. Scale joined in the change that made it
- * purchasable (z8r3fdfuhq) — it was held out only while `issueInvoice` refused
- * it, which would have made this card a dead-end CTA; the admin form now issues
- * a Scale annual like any other.
+ * contradicts the premise of the tier. Not Enterprise either (T6): an
+ * Enterprise term — monthly or a prepaid year — is part of the contract an
+ * admin sets, never a self-serve switch.
  *
  * A Starter seller is still TOLD annual exists, in the Starter → Pro nudge —
  * a constraint is surfaced, never enforced silently.
  */
-export const ANNUAL_OFFER_PLANS: readonly Plan[] = ["pro", "scale"];
+export const ANNUAL_OFFER_PLANS: readonly ListedPlan[] = ["pro"];
 
 /**
  * Paid invoices a seller must already have before annual is offered.
@@ -176,6 +176,10 @@ export function resolveAnnualOffer(input: {
 	if (adminOwnAccount) return { kind: "hidden" };
 	if (!sub) return { kind: "hidden" };
 	if (sub.comped) return { kind: "hidden" };
+	// An Enterprise term is part of its contract (T6): the contract card
+	// states it, so there is no switch to offer and no second card to repeat
+	// it — least of all one inviting a self-serve plan change.
+	if (sub.plan === "enterprise") return { kind: "hidden" };
 
 	const pendingInvoice = invoices.find((i) => i.status === "pending");
 

@@ -71,15 +71,24 @@ function view(overrides: Record<string, unknown> = {}) {
 	};
 }
 
-function renderBody(onBack?: () => void) {
+function renderBody(onBack?: () => void, who: AdminSellerRow = seller) {
 	return render(
 		<Sheet open>
 			<SheetContent>
-				<CreditLedgerBody seller={seller} onBack={onBack} />
+				<CreditLedgerBody seller={who} onBack={onBack} />
 			</SheetContent>
 		</Sheet>,
 	);
 }
+
+/** Since the Enterprise follow-up (z8r3fdkp8h) SETTING a recurring grant is
+ * only for sponsored (comped) or contracted stores — the plain fixture above
+ * now gets the reason instead of the lever. */
+const compedSeller = {
+	_id: "r_lekor",
+	storeName: "Lekor Mr.Ganu",
+	comped: true,
+} as unknown as AdminSellerRow;
 
 beforeEach(() => {
 	vi.spyOn(Date, "now").mockReturnValue(NOW);
@@ -212,8 +221,8 @@ describe("CreditLedgerBody — adjust by hand", () => {
 });
 
 describe("CreditLedgerBody — custom monthly grant", () => {
-	it("sets a whole-number grant, and says what a clear does", async () => {
-		renderBody();
+	it("sets a whole-number grant on a COMPED store, and says what a clear does", async () => {
+		renderBody(undefined, compedSeller);
 		fireEvent.change(screen.getByLabelText("Credits a month"), {
 			target: { value: "1000" },
 		});
@@ -224,13 +233,38 @@ describe("CreditLedgerBody — custom monthly grant", () => {
 		});
 	});
 
-	it("a store with a custom grant can clear it back to the plan's", () => {
+	it("a listed plan gets the contract reason, not the lever — but a stale grant still clears", () => {
+		// Zaki, 2 Oct 2026: a custom allowance on a list-price plan is an
+		// Enterprise deal with no contract record. The input and Set button go;
+		// the reason stands where they were; Clear survives so a grant that
+		// predates the rule is never trapped behind it.
 		state.account = {
 			view: view({ customGrant: true }),
 			account: { _id: "a1", grantOverride: 1000 },
 			lots: [],
 		};
 		renderBody();
+		expect(screen.getByText(/contract record/)).toBeTruthy();
+		expect(screen.queryByLabelText("Credits a month")).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: /Set custom grant|Set \d/ }),
+		).toBeNull();
+		fireEvent.click(
+			screen.getByRole("button", { name: "Clear — use the plan's grant" }),
+		);
+		expect(state.grant).toHaveBeenCalledWith({
+			retailerId: "r_lekor",
+			grant: null,
+		});
+	});
+
+	it("a store with a custom grant can clear it back to the plan's", () => {
+		state.account = {
+			view: view({ customGrant: true }),
+			account: { _id: "a1", grantOverride: 1000 },
+			lots: [],
+		};
+		renderBody(undefined, compedSeller);
 		expect(screen.getByText("1000 a month")).toBeTruthy();
 		fireEvent.click(
 			screen.getByRole("button", { name: "Clear — use the plan's grant" }),

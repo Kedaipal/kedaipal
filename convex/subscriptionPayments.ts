@@ -221,6 +221,7 @@ export const billingGatewayAvailable = query({
 							pendingPlanChange: sub.pendingPlanChange?.plan,
 							lastPaidCurrency: lastPaid?.currency,
 							country: retailer.country,
+							enterprise: sub.enterprise,
 						})
 					: null,
 		};
@@ -483,6 +484,9 @@ export const verifyInvoicePayment = action({
 				paymentId: payment.paymentId,
 				amountSen: payment.amountSen,
 				currency: payment.currency,
+				// The extracted client (T2) already maps HitPay's `payment_type`
+				// onto `methodCode` — staging read the raw field, which no
+				// longer exists on this shape.
 				methodCode: payment.methodCode,
 				// The seller paid the Pay-now link themselves — NOT the saved-
 				// method session, so this settle may not touch the charge
@@ -609,6 +613,7 @@ export const autoRenewSetupContext = internalQuery({
 				paidThrough: sub.currentPeriodEnd,
 				lastPaidCurrency: lastPaid?.currency,
 				country: retailer.country,
+				enterprise: sub.enterprise,
 				now: Date.now(),
 			}),
 			comped: sub.comped === true,

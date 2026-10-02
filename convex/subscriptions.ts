@@ -37,6 +37,7 @@ import {
 } from "./lib/auth";
 import { landCreditGrant } from "./credits";
 import { COMP_LABEL_MAX, COMP_NOTE_MAX, type CompKind } from "./lib/comp";
+import { ENTERPRISE_SELF_SERVE_REFUSAL } from "./lib/enterprise";
 import { rateLimiter } from "./lib/rateLimiter";
 import {
 	autoChargeAllowed,
@@ -44,11 +45,13 @@ import {
 	CHARGE_ATTEMPT_LOCK_MS,
 } from "./lib/hitpayBilling";
 import {
+	type BillingCurrency,
 	type BillingCycle,
 	capsForPlan,
 	FULL_ACCESS_PLAN,
 	featuresForPlan,
 	fullAccessCaps,
+	type ListedPlan,
 	type Plan,
 	PLAN_CAPS,
 	type PlanFeature,
@@ -149,7 +152,21 @@ export type AccessState = {
 	/** A downgrade scheduled for the end of the paid period (86eyb6z4r). The
 	 * seller keeps everything they bought until `effectiveAt`; the renewal
 	 * invoice then bills `plan`. Owner-only, and cancellable. */
-	pendingPlanChange?: { plan: Plan; effectiveAt: number };
+	pendingPlanChange?: { plan: ListedPlan; effectiveAt: number };
+	/** The Enterprise contract's SELLER-FACING terms (Credits T6) — what they
+	 * pay, what's included, what an overage block costs. `contactName`,
+	 * `notes`, who set it and the entry stamp are admin-internal and never
+	 * ride a seller payload. Present iff `plan` is `enterprise`. Like the
+	 * rest of `AccessState` it reaches every viewer of the store's payload
+	 * (the plan, status and renewal already do); Settings → Billing is the
+	 * only surface that renders it. */
+	enterprise?: {
+		baseFeeMinor: number;
+		currency: BillingCurrency;
+		includedCredits: number;
+		overageRateMinor: number;
+		blockSize: number;
+	};
 };
 
 /** Pure access resolution from a subscription doc (or null). Exported for tests
@@ -261,6 +278,15 @@ function resolveAccessBase(sub: Doc<"subscriptions"> | null): AccessState {
 					// The change lands with the renewal invoice the cron issues
 					// once the paid period ends.
 					effectiveAt: sub.currentPeriodEnd ?? sub.pendingPlanChange.requestedAt,
+				}
+			: undefined,
+		enterprise: sub.enterprise
+			? {
+					baseFeeMinor: sub.enterprise.baseFeeMinor,
+					currency: sub.enterprise.currency,
+					includedCredits: sub.enterprise.includedCredits,
+					overageRateMinor: sub.enterprise.overageRateMinor,
+					blockSize: sub.enterprise.blockSize,
 				}
 			: undefined,
 	};
@@ -634,6 +660,11 @@ export const setSeasonalHold = mutation({
 		if (hold) {
 			if (sub.status === "on_hold")
 				throw new ConvexError("Your subscription is already on hold.");
+			// A contract pauses by agreement, never by a self-serve tap: the
+			// hold bills Kedaipal's list hold price, which a contract never
+			// agreed to (T6). The billing tab hides the card; this is the door.
+			if (sub.plan === "enterprise")
+				throw new ConvexError(ENTERPRISE_SELF_SERVE_REFUSAL);
 			if (
 				!canEnterHold(
 					sub.status,
@@ -981,6 +1012,14 @@ export const setComp = mutation({
 		const now = Date.now();
 
 		const sub = await loadSubscription(ctx, retailerId);
+		// A store is either on the house or on a contract, never both (T6 —
+		// `setContract` refuses a comped store the same way). A comp laid over
+		// a contract would leave, when it ends, a past-due store whose only
+		// way back is a plan picker a contract store never sees.
+		if (sub?.enterprise !== undefined)
+			throw new ConvexError(
+				"This store is on an Enterprise contract — move it to Pro before comping it.",
+			);
 		// An edit keeps who first turned the comp on, and when; the audit log
 		// records the edit itself.
 		const alreadyOn = sub?.comped === true && sub.comp !== undefined;
@@ -1316,8 +1355,15 @@ export const internalDailyBillingStatus = internalMutation({
 					continue;
 				}
 				// "Free period ends in 3 days" (once, deduped by trialReminderSentAt).
+				// Not for a store already on an Enterprise contract (T6): the
+				// reminder's pitch — "your first invoice is for Pro, prefer
+				// Starter?" — is false for it; its terms were agreed with us.
 				const daysLeft = Math.ceil((sub.trialEndsAt - now) / DAY_MS);
-				if (daysLeft <= 3 && sub.trialReminderSentAt === undefined) {
+				if (
+					daysLeft <= 3 &&
+					sub.trialReminderSentAt === undefined &&
+					sub.plan !== "enterprise"
+				) {
 					await ctx.db.patch(sub._id, { trialReminderSentAt: now });
 					await ctx.scheduler.runAfter(
 						0,

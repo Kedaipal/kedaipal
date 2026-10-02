@@ -2983,7 +2983,7 @@ const exportFilterValidators = {
 // financial records). EXPORT_SCAN_CAP bounds the worst case (a matching range
 // that sits beyond this many of the newest orders), surfaced as a `capped` flag
 // so the UI can warn rather than return silently-incomplete books. ~10 months at
-// the Scale tier's 2,000 orders/month.
+// 2,000 orders/month — an Enterprise-sized store.
 const EXPORT_PAGE_SIZE = 500;
 const EXPORT_SCAN_CAP = 20_000;
 

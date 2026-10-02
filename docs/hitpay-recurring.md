@@ -583,7 +583,9 @@ never resurrect a period that had already run out.
 annual offer's void-and-reissue runbook, and a field that could express one would
 eventually be set by a picker that defaults to monthly. The renewal cron reads
 it, bills that plan, and **clears it** (leaving it set would re-apply the
-downgrade to every future renewal). The pre-charge "renewing soon" email reads it
+downgrade to every future renewal) — and if an admin **voids** that renewal, the
+change goes back on the row (`voidInvoice`), so a void can never turn a seller's
+move down into a renewal at the old tier. The pre-charge "renewing soon" email reads it
 too, so the heads-up quotes the plan and price actually about to be charged
 rather than the tier the seller is on their way out of.
 
@@ -781,8 +783,8 @@ A store on founding pricing has **one tier: Founding Pro** (`FOUNDING_PLAN`).
 It can move between **monthly and yearly** on that tier (RM104 / RM1,040,
 S$41 / S$410), and it can **stop renewing** (turn auto-renewal off) — it
 cannot change tier — not down to Starter, and not back to list Pro, which
-costs more for the same features. That holds until Scale launches; whether a
-founding member may then move to Scale is Arif's call. Once the subscription
+costs more for the same features — and not onto an Enterprise contract either
+(`enterprise.setContract` refuses a founding store, Credits T6). Once the subscription
 lapses past the 3-month window the founding price is revoked, and from then on
 the store is an ordinary seller who can pick any plan.
 

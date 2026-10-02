@@ -45,7 +45,11 @@ import {
 	compHighlightEligible,
 	sanitizeHiddenNote,
 } from "./lib/marketplaceListing";
-import { isUnlimited } from "./lib/plans";
+import {
+	type BillingCurrency,
+	isUnlimited,
+	renewalCurrency,
+} from "./lib/plans";
 import { loadCreditAccount } from "./credits";
 import { storeIsInternal } from "./marketplace";
 import { isUnclaimed } from "./lib/unclaimedStore";
@@ -74,9 +78,27 @@ export type AdminSellerRow = {
 	 * Pending invites shown separately so "2/3 +1 invited" reads at a glance. */
 	seats: { active: number; cap: number; capUnlimited: boolean; invited: number };
 	isFoundingMember: boolean;
+	/** Onboarded with a founding promise (`subscriptions.foundingIntent`) — a
+	 * founding store in waiting, refused an Enterprise contract like a member
+	 * (T6), so the contract form says so before the tap. */
+	foundingIntent: boolean;
 	foundingMemberRank?: number;
 	subscriptionStatus?: Doc<"subscriptions">["status"];
 	plan?: Doc<"subscriptions">["plan"];
+	/** The Enterprise contract (Credits T6) — admin-only, so the whole thing
+	 * rides here (contact, notes) for the seller sheet's Enterprise section;
+	 * `setBy` stays server-side (the audit log answers "who"). */
+	enterprise?: Omit<NonNullable<Doc<"subscriptions">["enterprise"]>, "setBy">;
+	/** A scheduled tier move (a downgrade, or an Enterprise store's move to
+	 * Pro) and when it lands. */
+	pendingPlanChange?: {
+		plan: NonNullable<Doc<"subscriptions">["pendingPlanChange"]>["plan"];
+		requestedAt: number;
+	};
+	/** The owner tapped the in-app "Talk to Arif" (z8r3fdkp8h follow-up) —
+	 * an open Enterprise lead. Absent once a contract lands or an admin
+	 * dismisses it; drives the "Wants Enterprise" filter. */
+	enterpriseInterestAt?: number;
 	/** On the house (z8r3fdeub2). True for an admin-granted comp AND for a
 	 * legacy stampless comped row — the chip renders either way. */
 	comped: boolean;
@@ -174,14 +196,23 @@ export type AdminSellerRow = {
 		failedAttempts?: number;
 		nextRetryAt?: number;
 	};
-	/** The open bill, if any — the thing to chase on a past-due row. */
+	/** The open bill, if any — the thing to chase on a past-due row. Its
+	 * tier and term say, before the tap, why a contract can't be saved or a
+	 * move to Pro scheduled while it's open (T6). */
 	pendingInvoice?: {
 		invoiceNumber: string;
 		dueDate: number;
 		total: number;
 		currency: string;
 		hasPayNowLink: boolean;
+		plan: Doc<"subscriptions">["plan"];
+		billingCycle: Doc<"subscriptions">["billingCycle"];
+		kind: "plan" | "hold";
 	};
+	/** The currency this store's next bill is in — its last paid invoice's,
+	 * else its country's (`renewalCurrency`). A new Enterprise contract is
+	 * frozen in exactly this, so the form labels the fee with it (T6). */
+	billingCurrency: BillingCurrency;
 	/** The most recently settled bill — "when did they last pay, how much". */
 	lastPaidInvoice?: {
 		invoiceNumber: string;
@@ -217,8 +248,13 @@ export type AdminSellerRow = {
 async function loadInvoiceFacts(
 	ctx: QueryCtx,
 	retailerId: Id<"retailers">,
+	fallback: { plan: Doc<"subscriptions">["plan"]; billingCycle: Doc<"subscriptions">["billingCycle"] },
 ): Promise<
-	Pick<AdminSellerRow, "pendingInvoice" | "lastPaidInvoice">
+	Pick<AdminSellerRow, "pendingInvoice" | "lastPaidInvoice"> & {
+		/** The last paid bill's currency, stamp or no stamp — what
+		 * `renewalCurrency` (and so `setContract`) reads. */
+		lastPaidCurrency: string | undefined;
+	}
 > {
 	const pending = await ctx.db
 		.query("invoices")
@@ -241,6 +277,9 @@ async function loadInvoiceFacts(
 						total: pending.total,
 						currency: pending.currency,
 						hasPayNowLink: pending.gatewayPayment !== undefined,
+						plan: pending.plan ?? fallback.plan,
+						billingCycle: pending.billingCycle ?? fallback.billingCycle,
+						kind: pending.kind ?? "plan",
 					},
 				}
 			: {}),
@@ -254,6 +293,7 @@ async function loadInvoiceFacts(
 					},
 				}
 			: {}),
+		lastPaidCurrency: paid?.currency,
 	};
 }
 
@@ -295,7 +335,11 @@ export const listSellersForAdmin = query({
 			const referrer = r.signupReferrerId
 				? await ctx.db.get(r.signupReferrerId)
 				: null;
-			const invoiceFacts = await loadInvoiceFacts(ctx, r._id);
+			const { lastPaidCurrency, ...invoiceFacts } = await loadInvoiceFacts(
+				ctx,
+				r._id,
+				{ plan: sub?.plan ?? "pro", billingCycle: sub?.billingCycle ?? "monthly" },
+			);
 			const lastActAsAt = await loadLastActAs(ctx, r._id);
 			// One index read per store (`by_retailer`), the cached balances only.
 			const creditAccount = await loadCreditAccount(ctx, r._id);
@@ -333,9 +377,32 @@ export const listSellersForAdmin = query({
 					invited: invitedMembers.length,
 				},
 				isFoundingMember: r.isFoundingMember === true,
+				foundingIntent: sub?.foundingIntent === true,
 				foundingMemberRank: r.foundingMemberRank,
 				subscriptionStatus: sub?.status,
 				plan: sub?.plan,
+				enterprise: sub?.enterprise
+					? {
+							baseFeeMinor: sub.enterprise.baseFeeMinor,
+							currency: sub.enterprise.currency,
+							includedCredits: sub.enterprise.includedCredits,
+							overageRateMinor: sub.enterprise.overageRateMinor,
+							blockSize: sub.enterprise.blockSize,
+							// The per-deal allowances ride too — the edit form prefills
+							// from THIS row, and the day they were left out, reopening a
+							// contract showed them blank: a fee typo-fix away from
+							// silently resetting a deal to unlimited seats (found
+							// hands-on, 2 Oct). Optional fields slip through Omit<>
+							// typing, so the admin.test.ts pin is the guard.
+							teammates: sub.enterprise.teammates,
+							broadcastQuota: sub.enterprise.broadcastQuota,
+							contactName: sub.enterprise.contactName,
+							notes: sub.enterprise.notes,
+							setAt: sub.enterprise.setAt,
+						}
+					: undefined,
+				pendingPlanChange: sub?.pendingPlanChange,
+				enterpriseInterestAt: r.enterpriseInterestAt,
 				comped: sub?.comped === true,
 				comp: sub?.comp
 					? {
@@ -390,6 +457,10 @@ export const listSellersForAdmin = query({
 						}
 					: undefined,
 				...invoiceFacts,
+				billingCurrency: renewalCurrency({
+					lastPaidCurrency,
+					country: r.country,
+				}),
 				lastActAsAt,
 				...(creditAccount
 					? {

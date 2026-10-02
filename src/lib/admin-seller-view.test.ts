@@ -10,6 +10,7 @@ import {
 	describeDays,
 	filterSellers,
 	formatDeadline,
+	isEnterpriseLead,
 	isSellerFilter,
 	isSellerSort,
 	matchesSellerSearch,
@@ -17,6 +18,7 @@ import {
 	sellerBucket,
 	sellerCompMenuItem,
 	sellerExpiry,
+	sellerFilterEmptyNoun,
 	sellerPlanLabel,
 	sellerRail,
 	sellerReason,
@@ -42,6 +44,7 @@ function row(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 		ownerIsAdmin: false,
 		seats: { active: 1, cap: 3, capUnlimited: false, invited: 0 },
 		isFoundingMember: false,
+		foundingIntent: false,
 		comped: false,
 		createdAt: at(-180),
 		unclaimed: false,
@@ -49,6 +52,7 @@ function row(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 		marketplace: { internal: false },
 		country: "MY",
 		currency: "MYR",
+		billingCurrency: "MYR",
 		...overrides,
 	};
 }
@@ -80,6 +84,50 @@ describe("sellerBucket / counts", () => {
 		expect(counts.admin).toBe(1);
 		expect(counts.trialing).toBe(0);
 		expect(SELLER_FILTERS.slice(0, 2)).toEqual(["all", "past_due"]);
+	});
+
+	it("Wants Enterprise is a predicate over the buckets, not a bucket — and sits in the owes-action front group", () => {
+		// A trialing store can want Enterprise; the lead filter must not steal
+		// the row from its status bucket, and a store already on a contract
+		// never counts however stale a stamp it carries.
+		const lead = row({
+			subscriptionStatus: "trialing",
+			enterpriseInterestAt: 1,
+		});
+		const contracted = row({
+			subscriptionStatus: "active",
+			plan: "enterprise",
+			enterpriseInterestAt: 1,
+			enterprise: {
+				baseFeeMinor: 88_800,
+				currency: "MYR",
+				includedCredits: 1500,
+				overageRateMinor: 60,
+				blockSize: 5000,
+				contactName: "HSL",
+				setAt: 0,
+			},
+		});
+		expect(isEnterpriseLead(lead)).toBe(true);
+		expect(isEnterpriseLead(contracted)).toBe(false);
+		const counts = countSellerBuckets([lead, contracted]);
+		expect(counts.wants_enterprise).toBe(1);
+		expect(counts.trialing).toBe(1); // the lead still counts in its bucket
+		expect(filterSellers([lead, contracted], "wants_enterprise", "")).toEqual([
+			lead,
+		]);
+		// Owes-action group order: All, Past due, Unclaimed, then the leads.
+		expect(SELLER_FILTERS.slice(0, 4)).toEqual([
+			"all",
+			"past_due",
+			"unclaimed",
+			"wants_enterprise",
+		]);
+		// And its empty state is a sentence, not a lowercased chip label.
+		expect(sellerFilterEmptyNoun("wants_enterprise")).toBe(
+			"open Enterprise asks",
+		);
+		expect(sellerFilterEmptyNoun("past_due")).toBe("past due sellers");
 	});
 
 	it("validates URL values", () => {
@@ -165,6 +213,9 @@ describe("sellerExpiry — the wording follows the state", () => {
 					total: 9900,
 					currency: "MYR",
 					hasPayNowLink: true,
+					plan: "pro",
+					billingCycle: "monthly",
+					kind: "plan",
 				},
 			}),
 			NOW,
@@ -188,6 +239,9 @@ describe("sellerExpiry — the wording follows the state", () => {
 					total: 9900,
 					currency: "MYR",
 					hasPayNowLink: false,
+					plan: "pro",
+					billingCycle: "monthly",
+					kind: "plan",
 				},
 			}),
 			NOW,
@@ -272,6 +326,9 @@ describe("sellerReason / plan / rail", () => {
 						total: 1,
 						currency: "MYR",
 						hasPayNowLink: false,
+						plan: "pro",
+						billingCycle: "monthly",
+						kind: "plan",
 					},
 				}),
 			),
@@ -330,6 +387,9 @@ describe("sellerReason / plan / rail", () => {
 						total: 1,
 						currency: "MYR",
 						hasPayNowLink: true,
+						plan: "pro",
+						billingCycle: "monthly",
+						kind: "plan",
 					},
 				}),
 			),
@@ -504,7 +564,11 @@ describe("a pre-built store reads as unclaimed everywhere (docs/prebuilt-stores.
 		comp: { kind: "internal", grantedAt: at(-3) },
 		subscriptionStatus: "active",
 	});
-	const nameless = row({ unclaimed: true, comped: true, comp: { kind: "internal", grantedAt: at(-3) } });
+	const nameless = row({
+		unclaimed: true,
+		comped: true,
+		comp: { kind: "internal", grantedAt: at(-3) },
+	});
 
 	it("outranks comped and admin in the chip — a half-built store is never filed under Comped", () => {
 		expect(sellerBucket(waiting)).toBe("unclaimed");
@@ -569,9 +633,9 @@ describe("a pre-built store reads as unclaimed everywhere (docs/prebuilt-stores.
 		// seller who cleared theirs. (The WhatsApp line still says "none on
 		// file", correctly: the store genuinely has no number yet.)
 		expect(text).not.toContain("Email: none on file");
-		expect(
-			sellerSummaryText(nameless, "https://kedaipal.com", NOW),
-		).toContain("no handover email yet");
+		expect(sellerSummaryText(nameless, "https://kedaipal.com", NOW)).toContain(
+			"no handover email yet",
+		);
 	});
 
 	it("exports the handover email and the claim date as their own columns", () => {
@@ -600,9 +664,9 @@ describe("a pre-built store reads as unclaimed everywhere (docs/prebuilt-stores.
 		// read "No one yet seats" — found by rendering the card, not by reading.
 		expect(sellerSeatsPhrase(waiting)).toBe("No team yet");
 		expect(sellerSeatsPhrase(row())).toBe("1/3 seats");
-		expect(
-			sellerSummaryText(waiting, "https://kedaipal.com", NOW),
-		).toContain("Seats: None");
+		expect(sellerSummaryText(waiting, "https://kedaipal.com", NOW)).toContain(
+			"Seats: None",
+		);
 	});
 
 	it("the Manage menu calls the setup comp what it is, not a sponsorship", () => {
@@ -631,6 +695,28 @@ describe("a pre-built store reads as unclaimed everywhere (docs/prebuilt-stores.
 		expect(item.title).toBe("Comp upgrade — on");
 		expect(item.hint).toMatch(/sponsorship/i);
 		expect(item.sponsored).toBe(true);
+	});
+
+	it("a contract store's comp item carries the refusal the menu disables on", () => {
+		// The menu greys the item for an Enterprise store (`setComp` refuses a
+		// comp over a contract, T6) — this subtitle is where that refusal is
+		// SAID, so the constraint is surfaced, never silent.
+		const item = sellerCompMenuItem(
+			row({
+				plan: "enterprise",
+				enterprise: {
+					baseFeeMinor: 88_800,
+					currency: "MYR",
+					includedCredits: 1500,
+					overageRateMinor: 60,
+					blockSize: 5000,
+					contactName: "HSL Food GM",
+					setAt: at(-1),
+				},
+			}),
+		);
+		expect(item.hint).toBe("On an Enterprise contract — move it to Pro first");
+		expect(item.sponsored).toBe(false);
 	});
 
 	it("an ordinary comped store and an admin store are untouched", () => {

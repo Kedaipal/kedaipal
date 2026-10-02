@@ -74,6 +74,8 @@ const UNLOCKED: Record<string, string> = {
 
 	// 2. Billing — the door out. Locking these locks the seller in.
 	"invoices.subscribeSelf": "billing: buying a plan IS the unlock",
+	"enterprise.markInterest":
+		"billing: asking about Enterprise is a door out — a locked 1,500-order shop tapping Talk to Arif is exactly the lead the stamp exists for",
 	"invoices.changePlan": "billing: schedule a plan change",
 	"invoices.cancelPlanChange": "billing: undo that",
 	"invoices.switchPendingPlan": "billing: change the plan before paying",

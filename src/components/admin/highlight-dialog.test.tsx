@@ -44,6 +44,7 @@ function seller(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 		ownerIsAdmin: false,
 		seats: { active: 1, cap: 3, capUnlimited: false, invited: 0 },
 		isFoundingMember: false,
+		foundingIntent: false,
 		subscriptionStatus: "active",
 		plan: "pro",
 		comped: false,
@@ -53,6 +54,7 @@ function seller(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 		marketplace: { internal: false },
 		country: "MY",
 		currency: "MYR",
+		billingCurrency: "MYR",
 		...overrides,
 	};
 }

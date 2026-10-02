@@ -27,10 +27,10 @@ import {
 	CREDIT_PACKS,
 	type CreditPack,
 	isPlanSelectable,
+	LISTED_PLANS,
+	type ListedPlan,
 	PLAN_CREDIT_GRANT,
 	PLAN_MONTHLY_PRICES,
-	PLANS,
-	type Plan,
 	planRank,
 } from "../../convex/lib/plans";
 
@@ -68,9 +68,11 @@ export interface PackCount {
 	priceMinor: number;
 }
 
-/** One way to cover the volume: a plan, plus whatever top-ups it needs. */
+/** One way to cover the volume: a plan, plus whatever top-ups it needs.
+ * Only LISTED tiers — Enterprise has no price to compare (T6), and the
+ * volume slider stops well short of where it begins. */
 export interface PlanOption {
-	plan: Plan;
+	plan: ListedPlan;
 	/** Credits the plan includes a month (`PLAN_CREDIT_GRANT`). */
 	included: number;
 	/** Top-ups a month on top of the plan, largest pack first. Empty = the
@@ -89,8 +91,8 @@ export interface PlanRecommendation {
 	best: PlanOption;
 	/** The cheapest option on a HIGHER tier than `best` — the honest answer to
 	 * "why not the bigger plan?" when `best` leans on top-ups ("cheaper than
-	 * Scale at RM399"). Always strictly dearer than `best`: a tie goes to the
-	 * higher tier, so it would have BEEN `best`. Null at the top tier. A
+	 * Pro at RM149"). Always strictly dearer than `best`: a tie goes to the
+	 * higher tier, so it would have BEEN `best`. Null at the top listed tier. A
 	 * cheaper-or-equal lower tier is never the comparison — at 260 orders
 	 * Starter + 1 × 200 ties Pro + 2 × 50 at RM239, and "cheaper than" it
 	 * would be false. */
@@ -168,9 +170,8 @@ export function cheapestTopUp(
  * Which plan this seller would actually be on, and what it costs them a month:
  * for every purchasable tier, its price plus the cheapest top-ups covering the
  * rest of the volume — then the cheapest of those. So Starter covers up to its
- * grant, and above it the answer is whichever is honestly cheaper: the next
- * tier, or staying put and topping up ("Pro + 2 × 50 credits" beats Scale at
- * 260 orders a month in both currencies).
+ * grant, and above it the answer is whichever is honestly cheaper: Pro, or
+ * staying on Starter and topping up.
  *
  * A tie goes to the HIGHER tier — the same money buys more credits built in
  * and fewer top-ups to remember (MYR at 260 orders: Starter + 1 × 200 and
@@ -181,20 +182,22 @@ export function recommendPlan(
 	currency: BillingCurrency,
 ): PlanRecommendation {
 	const monthlyOrders = monthlyOrdersFromWeekly(ordersPerWeek);
-	const options: PlanOption[] = PLANS.filter(isPlanSelectable).map((plan) => {
-		const included = PLAN_CREDIT_GRANT[plan];
-		const topUp = cheapestTopUp(
-			monthlyOrders - included,
-			CREDIT_PACKS[currency],
-		);
-		return {
-			plan,
-			included,
-			packs: topUp.packs,
-			topUpCredits: topUp.credits,
-			monthlyMinor: PLAN_MONTHLY_PRICES[currency][plan] + topUp.priceMinor,
-		};
-	});
+	const options: PlanOption[] = LISTED_PLANS.filter(isPlanSelectable).map(
+		(plan) => {
+			const included = PLAN_CREDIT_GRANT[plan];
+			const topUp = cheapestTopUp(
+				monthlyOrders - included,
+				CREDIT_PACKS[currency],
+			);
+			return {
+				plan,
+				included,
+				packs: topUp.packs,
+				topUpCredits: topUp.credits,
+				monthlyMinor: PLAN_MONTHLY_PRICES[currency][plan] + topUp.priceMinor,
+			};
+		},
+	);
 	options.sort(
 		(a, b) =>
 			a.monthlyMinor - b.monthlyMinor || planRank(b.plan) - planRank(a.plan),

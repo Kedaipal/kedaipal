@@ -292,7 +292,7 @@ describe("retailers.updateSettings — hitpay connection", () => {
 	test("plan catalog: onlinePayments is Pro+", () => {
 		expect(featuresForPlan("starter").onlinePayments).toBe(false);
 		expect(featuresForPlan("pro").onlinePayments).toBe(true);
-		expect(featuresForPlan("scale").onlinePayments).toBe(true);
+		expect(featuresForPlan("enterprise").onlinePayments).toBe(true);
 	});
 });
 

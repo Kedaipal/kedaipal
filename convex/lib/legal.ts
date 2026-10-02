@@ -33,7 +33,12 @@ export const TERMS_VERSION = "2026-09-30";
 // the global opt-out list, added the SG PDPA line (SG-incorporated operator)
 // and the DPO designation, and dropped the never-populated acceptanceIp field.
 export const PRIVACY_VERSION = "2026-08-17";
-export const AUP_VERSION = "2026-05-26";
+// 2026-10-01 (Credits T6, z8r3fdkp8h): the 50-numbers-in-5-minutes rule
+// exempted "the Scale tier", retired before it went public (it exempted
+// nobody). A higher limit is now "agreed with you in writing" — how an
+// Enterprise contract carries one — never a tier name. For Arif's sign-off;
+// released alongside the T5 Terms bump, so it's the same one re-acceptance.
+export const AUP_VERSION = "2026-10-01";
 
 /** Contact address shown in Terms, Privacy, and the AUP. */
 export const LEGAL_CONTACT_EMAIL = "hello@kedaipal.com";

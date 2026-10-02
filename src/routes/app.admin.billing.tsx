@@ -38,6 +38,7 @@ import {
 	annualQuote,
 	BILLING_CURRENCIES,
 	type BillingCurrency,
+	enterprisePrice,
 	PLANS,
 	type Plan,
 	planPrice,
@@ -64,15 +65,16 @@ import { MyPhoneInput } from "../components/ui/my-phone-input";
 import { Skeleton } from "../components/ui/skeleton";
 import { useActAs } from "../hooks/useActAs";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
+import { describeAutoCharge } from "../lib/auto-charge-status";
 import {
 	convexErrorMessage,
 	formatPrice,
 	formatShortDate,
 } from "../lib/format";
-import { describeAutoCharge } from "../lib/auto-charge-status";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
 import { buildOnboardingInviteLink } from "../lib/onboarding-link";
 import { slugify, validateStoreName } from "../lib/slug";
+import { PLAN_LABEL } from "../lib/subscription";
 
 export const Route = createFileRoute("/app/admin/billing")({
 	component: AdminBillingRoute,
@@ -605,22 +607,22 @@ function OnboardClientCard() {
 			    picking between two onboarding paths should not have to try one to
 			    find out what it does. */}
 			<fieldset className="flex flex-col gap-2">
-				<legend className="text-sm font-medium">How are they onboarding?</legend>
+				<legend className="text-sm font-medium">
+					How are they onboarding?
+				</legend>
 				<div className="grid gap-2 sm:grid-cols-2">
-					{(
-						[
-							{
-								key: "link" as const,
-								title: "Send them a link",
-								hint: "They sign up and confirm the store under their own login.",
-							},
-							{
-								key: "build" as const,
-								title: "Build it for them",
-								hint: "You create it now and fill it in. They claim it when they sign up.",
-							},
-						]
-					).map((option) => (
+					{[
+						{
+							key: "link" as const,
+							title: "Send them a link",
+							hint: "They sign up and confirm the store under their own login.",
+						},
+						{
+							key: "build" as const,
+							title: "Build it for them",
+							hint: "You create it now and fill it in. They claim it when they sign up.",
+						},
+					].map((option) => (
 						<button
 							key={option.key}
 							type="button"
@@ -787,9 +789,8 @@ function OnboardClientCard() {
 			{mode === "build" ? (
 				<p className="text-xs text-muted-foreground">
 					Creating it opens the store straight away in act-as mode so you can
-					add products. Nothing is billed and it stays off
-					kedaipal.com/stores until they claim it — their 14-day free period
-					starts the day they do.
+					add products. Nothing is billed and it stays off kedaipal.com/stores
+					until they claim it — their 14-day free period starts the day they do.
 				</p>
 			) : null}
 
@@ -952,18 +953,53 @@ function IssueInvoiceForm() {
 	useEffect(() => {
 		setFoundingOverride(false);
 		setCurrency("MYR");
+		// A contract store ARMS its contract (z8r3fdkp8h, found live on 2 Oct):
+		// the previous default left Pro · RM 149.00 one click from issue for a
+		// store whose paid Pro bill would take it OFF its contract — the most
+		// drastic action on this form as the silent default. Picking another
+		// plan stays possible (that IS the manual off-ramp), and the line
+		// under the amount then says what paying it does.
+		setPlan(
+			retailers?.find((r) => r._id === retailerId)?.enterprise
+				? "enterprise"
+				: "pro",
+		);
 	}, [retailerId]);
 
 	// Founding is Pro-only — flipping it on forces Pro. It prices per billing
 	// currency (RM104 / S$41 monthly).
-	const effectivePlan = founding ? "pro" : plan;
+	const effectivePlan: Plan = founding ? "pro" : plan;
+	// Enterprise (T6) bills the store's CONTRACT — its fee, currency and term —
+	// so those controls show the contract's values instead of taking a pick.
+	const contract = selected?.enterprise;
+	const billsContract = effectivePlan === "enterprise";
+	const effectiveCycle =
+		billsContract && contract ? contract.billingCycle : cycle;
+	const effectiveCurrency =
+		billsContract && contract ? contract.currency : currency;
 	// Derived amount (single source of truth from convex/lib/plans).
-	const total = planPrice(effectivePlan, cycle, founding, currency);
-	const base = planPrice(effectivePlan, cycle, false, currency);
+	const total =
+		effectivePlan === "enterprise"
+			? contract
+				? enterprisePrice(contract, effectiveCycle)
+				: 0
+			: planPrice(effectivePlan, cycle, founding, currency);
+	const base =
+		effectivePlan === "enterprise"
+			? total
+			: planPrice(effectivePlan, cycle, false, currency);
 	// What an annual invoice actually buys the seller. Shown to the operator
 	// because "RM 1,490.00" alone doesn't say whether it covers ten months or
 	// twelve — and this form is where an annual switch is honoured by hand.
-	const annual = annualQuote(effectivePlan, founding, currency);
+	const annual =
+		effectivePlan === "enterprise"
+			? null
+			: annualQuote(effectivePlan, founding, currency);
+	const noContract = billsContract && !contract;
+	// The deliberate off-ramp, named before the tap: a non-enterprise bill on
+	// a contract store ends the contract when it's PAID (settle treats it as
+	// the move to Pro/Starter).
+	const offContractBill = contract !== undefined && !billsContract;
 
 	async function handleIssue() {
 		if (!retailerId) return;
@@ -974,9 +1010,9 @@ function IssueInvoiceForm() {
 			await issue({
 				retailerId,
 				plan: effectivePlan,
-				billingCycle: cycle,
+				billingCycle: effectiveCycle,
 				founding,
-				currency,
+				currency: effectiveCurrency,
 			});
 			toast.success("Invoice issued — it's now in Pending below.");
 			setRetailerId("");
@@ -1026,14 +1062,16 @@ function IssueInvoiceForm() {
 					<span className="text-xs font-medium text-muted-foreground">
 						Plan
 					</span>
-					{/* Every tier, in tier order — Scale is billable since it opened
-					    for purchase (z8r3fdfuhq); Arif assigns it by hand too. */}
+					{/* Every tier, in tier order. Enterprise bills the store's
+					    contract, so it needs one (set in Sellers → the store). */}
 					<div className="grid grid-cols-3 gap-1.5 rounded-xl bg-background p-1 shadow-inner shadow-border/40">
 						{PLANS.map((p) => (
 							<button
 								key={p}
 								type="button"
-								disabled={founding && p !== "pro"}
+								disabled={
+									(founding && p !== "pro") || (p === "enterprise" && !contract)
+								}
 								onClick={() => setPlan(p)}
 								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
 									effectivePlan === p
@@ -1057,14 +1095,15 @@ function IssueInvoiceForm() {
 							<button
 								key={c}
 								type="button"
+								disabled={billsContract}
 								onClick={() => setCycle(c)}
-								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold capitalize transition-all ${
-									cycle === c
+								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold capitalize transition-all disabled:cursor-not-allowed ${
+									effectiveCycle === c
 										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
-										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground disabled:opacity-40"
 								}`}
 							>
-								{cycle === c ? <Check className="size-3.5" /> : null}
+								{effectiveCycle === c ? <Check className="size-3.5" /> : null}
 								{c}
 							</button>
 						))}
@@ -1080,19 +1119,28 @@ function IssueInvoiceForm() {
 							<button
 								key={cur}
 								type="button"
+								disabled={billsContract}
 								onClick={() => setCurrency(cur)}
-								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold transition-all ${
-									currency === cur
+								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold transition-all disabled:cursor-not-allowed ${
+									effectiveCurrency === cur
 										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
-										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground disabled:opacity-40"
 								}`}
 							>
-								{currency === cur ? <Check className="size-3.5" /> : null}
+								{effectiveCurrency === cur ? (
+									<Check className="size-3.5" />
+								) : null}
 								{cur === "MYR" ? "RM (MYR)" : "S$ (SGD)"}
 							</button>
 						))}
 					</div>
-					{currency === "SGD" ? (
+					{billsContract ? (
+						<span className="text-[11px] text-muted-foreground">
+							Set by the store's Enterprise contract — the term and currency it
+							was agreed in.
+						</span>
+					) : null}
+					{effectiveCurrency === "SGD" ? (
 						<span className="text-[11px] text-muted-foreground">
 							SGD invoices carry no bank/DuitNow block — payment is arranged
 							over WhatsApp.
@@ -1105,7 +1153,7 @@ function IssueInvoiceForm() {
 				<input
 					type="checkbox"
 					checked={founding}
-					disabled={isExistingFounding}
+					disabled={isExistingFounding || billsContract}
 					onChange={(e) => setFoundingOverride(e.target.checked)}
 					className="size-4 disabled:opacity-60"
 				/>
@@ -1129,15 +1177,30 @@ function IssueInvoiceForm() {
 				<div className="min-w-0">
 					<p className="text-xs text-muted-foreground">Amount</p>
 					<p className="text-xl font-bold tabular-nums">
-						{formatPrice(total, currency)}
+						{noContract ? "—" : formatPrice(total, effectiveCurrency)}
 					</p>
+					{billsContract && contract ? (
+						<p className="text-xs text-muted-foreground">
+							From the contract:{" "}
+							{formatPrice(contract.baseFeeMinor, contract.currency)} a month
+							{effectiveCycle === "annual" ? " × 10 for the year" : ""}.
+						</p>
+					) : null}
+					{offContractBill ? (
+						<p className="text-xs font-medium text-amber-700 dark:text-amber-400">
+							This store is on an Enterprise contract — paying this{" "}
+							{PLAN_LABEL[effectivePlan]} bill ends the contract and moves it to{" "}
+							{PLAN_LABEL[effectivePlan]}. That's the manual off-ramp; if you
+							meant to bill the contract, pick Enterprise.
+						</p>
+					) : null}
 					{founding ? (
 						<p className="text-xs text-emerald-700">
 							{formatPrice(base, currency)} −{" "}
 							{formatPrice(base - total, currency)} founding discount
 						</p>
 					) : null}
-					{cycle === "annual" ? (
+					{annual && cycle === "annual" ? (
 						<p className="text-xs text-muted-foreground">
 							Covers {ANNUAL_MONTHS_RECEIVED} months ·{" "}
 							{formatPrice(annual.saving, currency)} saved (2 months free) ·{" "}
@@ -1148,7 +1211,7 @@ function IssueInvoiceForm() {
 				<Button
 					type="button"
 					onClick={handleIssue}
-					disabled={!retailerId || busy || blocked || compedStore}
+					disabled={!retailerId || busy || blocked || compedStore || noContract}
 					className="h-11 w-full sm:w-auto sm:px-6"
 				>
 					{busy ? "Issuing…" : "Issue invoice"}
@@ -1157,6 +1220,12 @@ function IssueInvoiceForm() {
 			{blocked ? (
 				<p className="text-xs text-amber-700">
 					This retailer already has a pending invoice — settle it first.
+				</p>
+			) : null}
+			{selected && !contract ? (
+				<p className="text-xs text-muted-foreground">
+					Enterprise bills a store's contract — put this store on one from Admin
+					· Sellers → the store → Enterprise to bill it here.
 				</p>
 			) : null}
 			{compedStore ? (
@@ -1285,6 +1354,13 @@ function PendingInvoices() {
 													: "Renewal"}
 										</span>
 									) : null}
+									{/* Paying this takes the store off its contract (T6) —
+									    worth seeing before marking it paid or voiding it. */}
+									{inv.endsContract ? (
+										<span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+											Ends Enterprise contract
+										</span>
+									) : null}
 								</div>
 								<div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
 									<span className="font-mono">{inv.invoiceNumber}</span>
@@ -1392,6 +1468,20 @@ function PendingInvoices() {
 							their history as “Cancelled” and frees them up for a corrected
 							invoice. Use this for an invoice issued by mistake — not one
 							that's been paid.
+							{voiding?.carriesScheduledChange ? (
+								<>
+									{" "}
+									<strong className="font-medium text-foreground">
+										This renewal carries a scheduled move to{" "}
+										{voiding.plan === "pro" ? "Pro" : "Starter"}
+									</strong>
+									: voiding it keeps the move scheduled, and the next daily run
+									bills it again.{" "}
+									{voiding.endsContract
+										? "To keep the store on its contract, use “Call off the move to Pro” in Sellers → the store."
+										: "The seller can call the move off from their billing page."}
+								</>
+							) : null}
 						</DialogDescription>
 					</DialogHeader>
 					<label className="flex flex-col gap-1 text-sm font-medium">

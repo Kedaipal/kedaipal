@@ -444,6 +444,21 @@ function PickerView({
 				</p>
 			) : null}
 
+			{/* An Enterprise store's cheaper route (T6): its contract's block
+			    rate, said where credits are bought. A block is invoiced by hand,
+			    so the owner asks for one in a chat; anyone else is told whose
+			    call it is. */}
+			{options.contractBlock ? (
+				<ContractBlockLine
+					block={options.contractBlock}
+					canAsk={options.viewOnly === null && !options.buyerIsMember}
+					askUrl={buildWaContactLink(
+						`Hi Arif, we'd like an overage block of ${options.contractBlock.credits.toLocaleString("en")} credits for kedaipal.com/${slug}.`,
+						supportWa,
+					)}
+				/>
+			) : null}
+
 			<p className="text-xs text-muted-foreground">
 				Credits are non-refundable and not redeemable for cash.{" "}
 				<a
@@ -490,6 +505,46 @@ function PickerView({
 				</Button>
 			</DialogFooter>
 		</>
+	);
+}
+
+/** The contract's overage block beside the packs (Credits T6). An overage
+ * rate of zero is a deal that includes its blocks — said as such, never as a
+ * price of nothing. */
+function ContractBlockLine({
+	block,
+	canAsk,
+	askUrl,
+}: {
+	block: NonNullable<TopUpOptions["contractBlock"]>;
+	canAsk: boolean;
+	askUrl: string;
+}) {
+	const size = block.credits.toLocaleString("en");
+	return (
+		<p className="text-xs text-muted-foreground">
+			{block.ratePerCreditMinor > 0 ? (
+				<>
+					Buying often? Your Enterprise contract prices credits at{" "}
+					{wholePrice(block.ratePerCreditMinor, block.currency)} each, in blocks
+					of {size} ({wholePrice(block.priceMinor, block.currency)} a block).
+				</>
+			) : (
+				<>Your Enterprise contract includes blocks of {size} credits.</>
+			)}{" "}
+			{canAsk ? (
+				<a
+					href={askUrl}
+					target="_blank"
+					rel="noopener noreferrer"
+					className="font-medium text-foreground underline underline-offset-2"
+				>
+					Ask us for a block
+				</a>
+			) : (
+				"The store owner asks us for one."
+			)}
+		</p>
 	);
 }
 

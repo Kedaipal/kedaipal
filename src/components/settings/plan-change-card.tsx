@@ -16,10 +16,11 @@ import {
 	foundingPlanLocked,
 	isPlanSelectable,
 	isPlanUpgrade,
+	LISTED_PLANS,
+	type ListedPlan,
 	PLAN_CAPS,
 	PLAN_CREDIT_GRANT,
 	PLAN_FEATURES,
-	PLANS,
 	type Plan,
 	planChangeCarryover,
 	planPrice,
@@ -42,6 +43,7 @@ import {
 } from "../../lib/format";
 import { PLAN_LABEL, type SubscriptionView } from "../../lib/subscription";
 import { ConfirmDialog } from "../ui/confirm-dialog";
+import { EnterpriseOffer } from "./enterprise-offer";
 import { OwnerOnlyNote } from "./owner-only-note";
 
 /** What a seller actually loses by dropping to a lower tier, in their words —
@@ -82,20 +84,13 @@ function featuresLost(from: Plan, to: Plan): string[] {
  * Founding Pro, so the card says so in place of offering a change, and
  * `changePlan` refuses it server-side.
  */
-export function PlanChangeCard({
-	id,
-	highlight,
-	sub,
-	currency,
-	foundingPricing,
-	ownerOnly = false,
-	openInvoiceNumber,
-	balance,
-}: {
+type PlanChangeCardProps = {
 	/** Anchor + ring for `?spot=plan_change`, on every rendered state. */
 	id?: string;
 	highlight?: FixHighlight;
 	sub: SubscriptionView;
+	/** The store's slug — named in the Enterprise chat's opening line. */
+	slug: string;
 	/** What plan changes and renewals bill in — the gateway's
 	 * `renewalCurrency` (last paid invoice, else the country). */
 	currency: BillingCurrency;
@@ -114,13 +109,33 @@ export function PlanChangeCard({
 	/** The store's credits (Credits T3), when the viewer may see them — each
 	 * confirm then says what the move does to the monthly allowance. */
 	balance?: CreditBalanceView | null;
-}) {
+};
+
+/** An Enterprise store's plan changes are a conversation (T6): the billing
+ * tab shows its contract instead, so this card renders nothing for it. */
+export function PlanChangeCard(props: PlanChangeCardProps) {
+	const current = props.sub.plan;
+	if (current === "enterprise") return null;
+	return <ListedPlanChangeCard {...props} current={current} />;
+}
+
+function ListedPlanChangeCard({
+	id,
+	highlight,
+	sub,
+	slug,
+	current,
+	currency,
+	foundingPricing,
+	ownerOnly = false,
+	openInvoiceNumber,
+	balance,
+}: PlanChangeCardProps & { current: ListedPlan }) {
 	const changePlan = useMutation(api.invoices.changePlan);
 	const cancelPlanChange = useMutation(api.invoices.cancelPlanChange);
-	const [target, setTarget] = useState<Plan | null>(null);
+	const [target, setTarget] = useState<ListedPlan | null>(null);
 	const [busy, setBusy] = useState(false);
 
-	const current = sub.plan;
 	const cycle = sub.billingCycle ?? "monthly";
 	const founding = foundingPricing;
 	// A Founding Member's downgrade scheduled before the founding lock is
@@ -132,11 +147,11 @@ export function PlanChangeCard({
 			? sub.pendingPlanChange
 			: undefined;
 
-	// Only the tiers a seller can actually buy (Scale included since
-	// z8r3fdfuhq), minus the one they're on — and a Founding Member can buy
-	// Founding Pro alone. Moves UP come first, nearest tier first: growing is
-	// the common reason to be on this card.
-	const options = PLANS.filter(
+	// Only the listed tiers a seller can actually buy, minus the one they're on
+	// — and a Founding Member can buy Founding Pro alone. Moves UP come first,
+	// nearest tier first: growing is the common reason to be on this card.
+	// Enterprise is its own row below — a conversation, never a tap.
+	const options = LISTED_PLANS.filter(
 		(p) =>
 			p !== current && isPlanSelectable(p) && !foundingPlanLocked(p, founding),
 	).sort((a, b) => {
@@ -146,7 +161,7 @@ export function PlanChangeCard({
 		return upA ? planRank(a) - planRank(b) : planRank(b) - planRank(a);
 	});
 
-	const confirm = async (plan: Plan) => {
+	const confirm = async (plan: ListedPlan) => {
 		setBusy(true);
 		try {
 			const result = await changePlan({ plan });
@@ -312,6 +327,9 @@ export function PlanChangeCard({
 					two open bills at once is how a paid-up store ends up locked out.
 				</p>
 			) : null}
+			{/* Past Pro, the next step is a conversation: Enterprise (T6). Last,
+			    so the reasons above stay beside the buttons they explain. */}
+			{founding ? null : <EnterpriseOffer slug={slug} ownerOnly={ownerOnly} />}
 
 			{target ? (
 				<ConfirmDialog
@@ -362,8 +380,8 @@ function upgradeCopy({
 	sub,
 	balance,
 }: {
-	current: Plan;
-	target: Plan;
+	current: ListedPlan;
+	target: ListedPlan;
 	cycle: "monthly" | "annual";
 	founding: boolean;
 	currency: BillingCurrency;
@@ -413,8 +431,8 @@ function downgradeCopy({
 	sub,
 	balance,
 }: {
-	current: Plan;
-	target: Plan;
+	current: ListedPlan;
+	target: ListedPlan;
 	cycle: "monthly" | "annual";
 	founding: boolean;
 	currency: BillingCurrency;
@@ -428,9 +446,8 @@ function downgradeCopy({
 	const nowPrice = planPrice(current, cycle, founding, currency);
 	const thenPrice = planPrice(target, cycle, founding, currency);
 	// Limits a move down takes away that `featuresLost` can't see — they're
-	// caps, not feature flags. Scale → Pro (z8r3fdfuhq) loses nothing on the
-	// feature matrix, so without this the dialog would have said nothing at all
-	// about the 300 credits and three teammates going with it.
+	// caps, not feature flags (the teammates a smaller plan can't seat), so
+	// the dialog names them rather than saying nothing.
 	const teammatesNow = PLAN_CAPS[current].userCap - 1;
 	const teammatesThen = PLAN_CAPS[target].userCap - 1;
 	const team = (n: number) =>

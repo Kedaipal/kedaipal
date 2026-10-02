@@ -9,40 +9,58 @@
 
 import type { Country } from "./country";
 
-export type Plan = "starter" | "pro" | "scale";
+/**
+ * The three tiers (Credits T6, ClickUp z8r3fdkp8h — Arif, 30 Sep 2026):
+ * Starter and Pro at a list price, and ENTERPRISE — contact us, no public
+ * price, quoted per deal. Scale (RM399 for 500 credits) was retired before it
+ * ever went public: it was Pro plus packs under a new name, and its only real
+ * effect was anchoring an enterprise buyer on SME pricing. Nobody was ever on
+ * it, so it went as a rename, not a migration.
+ */
+export type Plan = "starter" | "pro" | "enterprise";
 export type BillingCycle = "monthly" | "annual";
 
-export const PLANS: Plan[] = ["starter", "pro", "scale"];
+/** The tiers with a LIST price — what the price tables, the credit grants and
+ * every self-serve door are keyed by. Enterprise is priced by its contract
+ * (`subscriptions.enterprise`), never by a table, so a `Record<ListedPlan, …>`
+ * makes "the Enterprise price" a compile error rather than a silent zero. */
+export type ListedPlan = Exclude<Plan, "enterprise">;
+
+/** Rank order, low to high. */
+export const PLANS: Plan[] = ["starter", "pro", "enterprise"];
+export const LISTED_PLANS: ListedPlan[] = ["starter", "pro"];
+
+export function isListedPlan(plan: Plan): plan is ListedPlan {
+	return plan !== "enterprise";
+}
 
 /**
  * Whether a seller can buy this tier — self-serve (`subscribeSelf`,
  * `changePlan`, `switchPendingPlan`) and on the public pages (`/pricing`'s
- * plan-aware CTA, the landing teaser). Every tier is purchasable since the
- * credits release opened Scale (ClickUp z8r3fdfuhq, 30 Sep 2026): it sells on
- * what is live today — 500 credits a month and you + 5 teammates — while its
- * unbuilt rows (outlets, broadcasts, custom domain, production calendar,
- * priority support) stay marked "Coming soon" where they are listed.
+ * plan-aware CTA, the landing teaser). Starter and Pro are; ENTERPRISE never
+ * is: a store is on Enterprise only when a Kedaipal admin attaches a contract
+ * (`enterprise.setContract`), and the public surfaces offer "Talk to Arif"
+ * instead of a Subscribe button.
  *
- * Kept as the one gate rather than inlined `true` so a tier that is not ready
- * to sell (an Enterprise, a re-cut Scale) closes every door — both public
- * surfaces and all three mutations — by answering `false` here, not by
- * hunting down call sites. A `Record` rather than a list so a new member of
- * `Plan` is a compile error until someone decides whether it is for sale.
+ * Kept as the one gate rather than inlined `true` so a tier that is not for
+ * sale closes every door — both public surfaces and all three mutations — by
+ * answering `false` here, not by hunting down call sites. A `Record` rather
+ * than a list so a new member of `Plan` is a compile error until someone
+ * decides whether it is for sale.
  */
 const SELECTABLE: Record<Plan, boolean> = {
 	starter: true,
 	pro: true,
-	scale: true,
+	enterprise: false,
 };
 
 export function isPlanSelectable(plan: Plan): boolean {
 	return SELECTABLE[plan];
 }
 
-/** Only Pro grants a Founding Member rank (Arif's 2026-05-28 decision). Scale
- * being purchasable does not change this: the cohort is closed, and a
- * founding store stays on Founding Pro (`foundingPlanLocked`), so the
- * founding price never carries to Scale. */
+/** Only Pro grants a Founding Member rank (Arif's 2026-05-28 decision). The
+ * cohort is closed, and a founding store stays on Founding Pro
+ * (`foundingPlanLocked`) — it can never be put on an Enterprise contract. */
 export function planQualifiesForFounding(plan: Plan): boolean {
 	return plan === "pro";
 }
@@ -51,26 +69,32 @@ export function planQualifiesForFounding(plan: Plan): boolean {
  * Kedaipal Credits (86eye2ccu): the orders each plan includes a month.
  * 1 credit = 1 order, used when the order is created on any channel and given
  * back only for an order that never got going (see `convex/lib/credits.ts`).
- * Locked 17 Sep 2026 (decision register z8r3fdf8j1): Starter 100 / Pro 200 /
- * Scale 500.
+ * Locked 17 Sep 2026 (decision register z8r3fdf8j1): Starter 100 / Pro 200.
+ * ENTERPRISE has no entry: its included credits are negotiated per deal and
+ * live on the contract, written through to `creditAccounts.grantOverride` —
+ * the one included-credits field (T6).
  *
  * THE per-plan order allowance — "one number, one source". `PLAN_CAPS.orderCap`
  * below is DERIVED from this table, never a second literal, so the soft-cap
  * meter and the credit ledger can't disagree. Subscription rows carry
  * `orderCap` denormalized, so changing a number here needs
- * `migrations.resyncSubscriptionCaps` on prod (Scale's move from 400 to 500
- * is exactly that). Public copy (`/pricing`, landing) reads these numbers too.
+ * `migrations.resyncSubscriptionCaps` on prod. Public copy (`/pricing`,
+ * landing) reads these numbers too.
  */
-export const PLAN_CREDIT_GRANT: Record<Plan, number> = {
+export const PLAN_CREDIT_GRANT: Record<ListedPlan, number> = {
 	starter: 100,
 	pro: 200,
-	scale: 500,
 };
 
+/** Where an Enterprise tier starts (Arif, 30 Sep 2026): "built for 1,500+
+ * orders a month" on `/pricing` and the plan picker, and the volume at which
+ * `/cost` points a visitor at Enterprise instead of Pro plus packs. A number,
+ * never a price — Enterprise has no public price. */
+export const ENTERPRISE_FROM_ORDERS = 1500;
+
 /** The monthly grant for a store on FOUNDING pricing whose plan is Pro — 300
- * for life, MY (RM104) and SG (S$41) seats alike (Arif, 15 Sep 2026). A
- * founding store that moves to Scale takes Scale's 500: founding never
- * lowers a grant. Never shown on a public page — the cohort is closed. */
+ * for life, MY (RM104) and SG (S$41) seats alike (Arif, 15 Sep 2026). Never
+ * shown on a public page — the cohort is closed. */
 export const FOUNDING_PRO_CREDIT_GRANT = 300;
 
 /**
@@ -148,14 +172,24 @@ export type PlanCaps = {
 	 * resolved by `resolveAccess`, never stored, so resuming needs no rewrite. */
 	orderCap: number;
 	/** Hard cap on dashboard users — TOTAL people incl. the owner, so member
-	 * seats = `userCap - 1` (see convex/lib/seats.ts). Starter 1 / Pro 3 /
-	 * Scale 6 = "You + 0/2/5 teammates" (Zaki, 24 Sep 2026, 86exr91r4).
-	 * Denormalized onto subscription rows like orderCap — changing these
-	 * numbers needs `migrations.resyncSubscriptionCaps` on prod. */
+	 * seats = `userCap - 1` (see convex/lib/seats.ts). Starter 1 / Pro 3 =
+	 * "You + 0/2 teammates" (Zaki, 24 Sep 2026, 86exr91r4); Enterprise is
+	 * unlimited (T6). Denormalized onto subscription rows like orderCap —
+	 * changing these numbers needs `migrations.resyncSubscriptionCaps` on
+	 * prod. */
 	userCap: number;
 	/** Monthly broadcast quota (hard, seller-side). */
 	broadcastQuota: number;
 };
+
+/** Sentinel for "unlimited" denormalized caps (Convex stores finite numbers;
+ * `Infinity` isn't valid JSON). Any cap ≥ this is treated as unlimited.
+ * Declared before `PLAN_CAPS`, which reads it at module load. */
+export const UNLIMITED = 1_000_000_000;
+
+export function isUnlimited(cap: number): boolean {
+	return cap >= UNLIMITED;
+}
 
 // Per CLAUDE.md pricing table. `orderCap` is the credit grant — see above.
 export const PLAN_CAPS: Record<Plan, PlanCaps> = {
@@ -165,10 +199,15 @@ export const PLAN_CAPS: Record<Plan, PlanCaps> = {
 		broadcastQuota: 0,
 	},
 	pro: { orderCap: PLAN_CREDIT_GRANT.pro, userCap: 3, broadcastQuota: 100 },
-	scale: {
-		orderCap: PLAN_CREDIT_GRANT.scale,
-		userCap: 6,
-		broadcastQuota: 500,
+	// Enterprise (T6): Pro plus unlimited seats. Its order volume is the
+	// contract's included credits, metered by the credit ledger — the cap is
+	// never the gate, so it isn't a second copy of a per-deal number.
+	// Broadcasts are unbuilt; when they ship, the contract decides their
+	// quota — until then, Pro's.
+	enterprise: {
+		orderCap: UNLIMITED,
+		userCap: UNLIMITED,
+		broadcastQuota: 100,
 	},
 };
 
@@ -261,7 +300,11 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		events: true,
 		waOrderAlerts: true,
 	},
-	scale: {
+	// Enterprise gets everything Pro has. Its extras are seats (above) and
+	// terms (the contract); multi-outlet and priority support are sold as
+	// "coming" in copy and get a flag here only when they ship — this table
+	// holds LIVE features only.
+	enterprise: {
 		crm: true,
 		orderInbox: true,
 		chargeablePickup: true,
@@ -308,58 +351,36 @@ export const BILLING_CURRENCY_FOR_COUNTRY: Record<Country, BillingCurrency> = {
 
 // Standard monthly price per billing currency (minor units — sen / cents).
 // Starter/Pro: locked May 2026 (MYR) + the Aug 2026 SG pricing deck (SGD).
-// Scale: RM399 / S$149 per the 30 Aug 2026 pricing reset (z8r3fday24 — Arif
-// locked RM399 FINAL on 6 Sep after an RM299/RM300 wobble; earlier numbers are
-// void). Scale was still "Coming soon" then, so nobody was repriced by the
-// move; it opened for purchase at RM399 / S$149 with the credits release
-// (z8r3fdfuhq).
+// Enterprise has no list price — it bills from its contract (`enterprisePrice`).
 export const PLAN_MONTHLY_PRICES: Record<
 	BillingCurrency,
-	Record<Plan, number>
+	Record<ListedPlan, number>
 > = {
-	MYR: { starter: 7900, pro: 14900, scale: 39900 },
-	SGD: { starter: 2900, pro: 5900, scale: 14900 },
+	MYR: { starter: 7900, pro: 14900 },
+	SGD: { starter: 2900, pro: 5900 },
 };
 
 // MYR shorthand for the table above.
-export const PLAN_MONTHLY_PRICE: Record<Plan, number> = PLAN_MONTHLY_PRICES.MYR;
+export const PLAN_MONTHLY_PRICE: Record<ListedPlan, number> =
+	PLAN_MONTHLY_PRICES.MYR;
 
 // Founding Member monthly price — 30% lifetime discount (manual v1), per
 // billing currency, rounded DOWN to a whole unit the same way in each (MYR
-// RM104.30 → RM104, RM279.30 → RM279; SGD S$41.30 → S$41, S$104.30 → S$104).
-// Founding pricing was RETIRED for new signups in the 30 Aug 2026 reset — no
-// public surface advertises it — but every claimed member keeps their rate, so
-// the table stays in billing. The Scale row is never billed: a founding store
-// stays on Founding Pro (`foundingPlanLocked`), even now Scale is purchasable.
+// RM104.30 → RM104; SGD S$41.30 → S$41). Founding pricing was RETIRED for new
+// signups in the 30 Aug 2026 reset — no public surface advertises it — but
+// every claimed member keeps their rate, so the table stays in billing. Pro
+// only: a founding store stays on Founding Pro (`foundingPlanLocked`).
 export const FOUNDING_MONTHLY_PRICES: Record<
 	BillingCurrency,
-	Record<"pro" | "scale", number>
+	Record<"pro", number>
 > = {
-	MYR: { pro: 10400, scale: 27900 },
-	SGD: { pro: 4100, scale: 10400 },
+	MYR: { pro: 10400 },
+	SGD: { pro: 4100 },
 };
 
 // MYR shorthand for the founding table above.
-export const FOUNDING_MONTHLY_PRICE: Record<"pro" | "scale", number> =
+export const FOUNDING_MONTHLY_PRICE: Record<"pro", number> =
 	FOUNDING_MONTHLY_PRICES.MYR;
-
-/**
- * Price of each outlet beyond the three Scale includes (minor units).
- *
- * Quoted NOWHERE while outlets are "Coming soon" (z8r3fdfuhq): once Scale
- * became purchasable, an add-on price beside its Subscribe button would have
- * sold an outlet nobody can open yet. It stays here as Arif's confirmed number
- * for the outlets build to bill from (docs/pricing.md). It lived here rather
- * than in the message catalogs because the catalogs once spelled "RM49" into
- * the sentence, quoting ringgit to a Singaporean reading S$ tier prices.
- *
- * SGD S$18 is the number in the 30 Aug 2026 pricing reset artifact (confirmed
- * by Arif, 1 Sep — it replaced the S$19 ratio guess); MYR RM49 holds.
- */
-export const OUTLET_ADDON_MONTHLY_PRICES: Record<BillingCurrency, number> = {
-	MYR: 4900,
-	SGD: 1800,
-};
 
 /**
  * Off-Season Hold — the monthly price of a PAUSED subscription (minor units).
@@ -421,18 +442,66 @@ export const ANNUAL_MONTHS_RECEIVED = 12;
  * claim can never contradict what `planPrice` actually charges. */
 export const ANNUAL_MONTHS_FREE = ANNUAL_MONTHS_RECEIVED - ANNUAL_MONTHS_CHARGED;
 
-/** Plan price for a billing cycle (minor units). Annual = monthly × 10. */
+/** A LISTED tier's price for a billing cycle (minor units). Annual = monthly
+ * × 10. Enterprise is priced by its contract — see `enterprisePrice`, and
+ * `subscriptionPrice` for code that bills any tier. */
 export function planPrice(
-	plan: Plan,
+	plan: ListedPlan,
 	cycle: BillingCycle,
 	founding = false,
 	currency: BillingCurrency = "MYR",
 ): number {
 	const monthly =
-		founding && (plan === "pro" || plan === "scale")
-			? FOUNDING_MONTHLY_PRICES[currency][plan]
+		founding && plan === "pro"
+			? FOUNDING_MONTHLY_PRICES[currency].pro
 			: PLAN_MONTHLY_PRICES[currency][plan];
 	return cycle === "annual" ? monthly * ANNUAL_MONTHS_CHARGED : monthly;
+}
+
+/** What an Enterprise contract prices by: its monthly fee, in the currency it
+ * was agreed in (a Singapore deal is SGD minor units — never converted). */
+export type EnterpriseTerms = {
+	baseFeeMinor: number;
+	currency: BillingCurrency;
+};
+
+/**
+ * An Enterprise bill for a cycle (T6): the contract's monthly fee, × 10 for a
+ * year — the same "2 months free" every tier gets (HSL: RM888 a month, RM8,880
+ * a year, fee and rate locked for the term). Founding never applies.
+ */
+export function enterprisePrice(
+	terms: EnterpriseTerms,
+	cycle: BillingCycle,
+): number {
+	return cycle === "annual"
+		? terms.baseFeeMinor * ANNUAL_MONTHS_CHARGED
+		: terms.baseFeeMinor;
+}
+
+/**
+ * Any tier's price for a cycle — the list tables, or the contract for an
+ * Enterprise store. A money path must never guess: an Enterprise subscription
+ * without its contract THROWS (the contract mutation makes that unreachable —
+ * a store only becomes Enterprise by getting one, and can't drop it while it
+ * is).
+ */
+export function subscriptionPrice(
+	plan: Plan,
+	cycle: BillingCycle,
+	opts: {
+		founding: boolean;
+		currency: BillingCurrency;
+		enterprise: EnterpriseTerms | undefined;
+	},
+): number {
+	if (plan !== "enterprise")
+		return planPrice(plan, cycle, opts.founding, opts.currency);
+	if (!opts.enterprise)
+		throw new Error(
+			"An Enterprise subscription is priced by its contract, and this one has none.",
+		);
+	return enterprisePrice(opts.enterprise, cycle);
 }
 
 /**
@@ -464,7 +533,7 @@ export type AnnualQuote = {
 };
 
 export function annualQuote(
-	plan: Plan,
+	plan: ListedPlan,
 	founding = false,
 	currency: BillingCurrency = "MYR",
 ): AnnualQuote {
@@ -532,6 +601,10 @@ export type PlanChangeCarryoverArgs = {
 	toCycle: BillingCycle;
 	founding: boolean;
 	currency: BillingCurrency;
+	/** The store's Enterprise contract, when either side is Enterprise — its
+	 * days are valued at the contract fee. Absent on an Enterprise side, no
+	 * days carry (never a guess on a money path). */
+	enterprise?: EnterpriseTerms;
 	/** The period the seller already paid for. */
 	periodEnd: number | undefined;
 	now: number;
@@ -554,18 +627,14 @@ export function planChangeCarryover(
 	if (args.periodEnd === undefined) return none;
 	const msLeft = args.periodEnd - args.now;
 	if (msLeft <= 0) return none;
-	const fromPrice = planPrice(
-		args.fromPlan,
-		args.fromCycle,
-		args.founding,
-		args.currency,
-	);
-	const toPrice = planPrice(
-		args.toPlan,
-		args.toCycle,
-		args.founding,
-		args.currency,
-	);
+	const priceOf = (plan: Plan, cycle: BillingCycle): number =>
+		plan === "enterprise"
+			? args.enterprise
+				? enterprisePrice(args.enterprise, cycle)
+				: 0
+			: planPrice(plan, cycle, args.founding, args.currency);
+	const fromPrice = priceOf(args.fromPlan, args.fromCycle);
+	const toPrice = priceOf(args.toPlan, args.toCycle);
 	if (fromPrice <= 0 || toPrice <= 0) return none;
 	const daysLeftExact = msLeft / DAY_MS;
 	const valueLeft = (fromPrice * daysLeftExact) / cycleDays(args.fromCycle);
@@ -708,7 +777,7 @@ export function foundingClockFrom(
 /**
  * Whether this STORE is on founding pricing right now — for any tier that has
  * a founding price. Tier-agnostic on purpose: `planPrice` already confines the
- * discount to Pro/Scale, so the store-level answer is the one to hand to
+ * discount to Pro, so the store-level answer is the one to hand to
  * anything that prices MORE than one tier (the billing page's plan cards, a
  * Starter → Pro carryover). Asking `foundingPricingApplies` with the store's
  * CURRENT plan instead answers "no" for a founding member sitting on Starter,
@@ -751,7 +820,7 @@ export function foundingPriceEligible(args: FoundingEligibilityArgs): boolean {
 export function foundingPricingApplies(
 	args: FoundingEligibilityArgs & { plan: Plan },
 ): boolean {
-	if (args.plan !== "pro" && args.plan !== "scale") return false;
+	if (args.plan !== "pro") return false;
 	return foundingPriceEligible(args);
 }
 
@@ -840,10 +909,9 @@ export function foundingBenefitsWarningDue(
  * and from there the store is an ordinary seller again, free to pick any plan —
  * permanently, since the revocation outranks the read-time window. The lock
  * needs no code for that: it keys off `foundingPriceEligible`, so it opens the
- * moment revocation lands (pinned by a test). Opening Scale for purchase
- * (z8r3fdfuhq, 30 Sep 2026) deliberately did NOT widen this: the founding
- * price never carries to Scale, so a founding member who wants Scale's volume
- * tops up instead (their 300 credits a month already beat Pro's 200).
+ * moment revocation lands (pinned by a test). A founding member who wants
+ * more volume tops up (their 300 credits a month already beat Pro's 200); a
+ * founding store can never be put on an Enterprise contract.
  */
 export const FOUNDING_PLAN = "pro" satisfies Plan;
 
@@ -910,6 +978,10 @@ export function renewalQuote(args: {
 	benefitsRestoredAt: number | undefined;
 	lastPaidCurrency: string | undefined;
 	country: Country | undefined;
+	/** The store's Enterprise contract, if it has one. Required as a KEY so
+	 * every caller answers it: an Enterprise renewal bills the contract, in
+	 * the contract's currency, and never a list price. */
+	enterprise: EnterpriseTerms | undefined;
 	now: number;
 }): RenewalQuote {
 	const currency = renewalCurrency(args);
@@ -932,6 +1004,23 @@ export function renewalQuote(args: {
 			? args.pendingPlanChange
 			: undefined;
 	const plan = scheduled ?? args.plan;
+	if (plan === "enterprise") {
+		// The contract prices it, in the currency it was agreed in; founding
+		// never applies. `subscriptionPrice` throws on a missing contract —
+		// a renewal must never be issued at a guessed amount.
+		return {
+			kind: "plan",
+			plan,
+			billingCycle: args.billingCycle,
+			founding: false,
+			currency: args.enterprise?.currency ?? currency,
+			amount: subscriptionPrice(plan, args.billingCycle, {
+				founding: false,
+				currency,
+				enterprise: args.enterprise,
+			}),
+		};
+	}
 	const founding = foundingPricingApplies({ ...args, plan });
 	return {
 		kind: "plan",
@@ -956,18 +1045,10 @@ export function capsForPlan(plan: Plan): PlanCaps {
 	};
 }
 
-/** Sentinel for "unlimited" denormalized caps (Convex stores finite numbers;
- * `Infinity` isn't valid JSON). Any cap ≥ this is treated as unlimited. */
-export const UNLIMITED = 1_000_000_000;
-
-export function isUnlimited(cap: number): boolean {
-	return cap >= UNLIMITED;
-}
-
 /** The tier whose FEATURES "full access" resolves to. Full access is what a
  * Kedaipal admin gets on their own store and what a comped store gets
- * (z8r3fdeub2) — one definition, so the two can never drift. */
-export const FULL_ACCESS_PLAN: Plan = "scale";
+ * (z8r3fdeub2) — one definition, so the two can never drift. The top tier. */
+export const FULL_ACCESS_PLAN: Plan = "enterprise";
 
 /** Entitlement caps for full access: no limits on anything — orders, seats or
  * broadcasts (Zaki, 17 Sep: a comp gets "the same limit as admin"). Resolved

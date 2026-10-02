@@ -163,6 +163,16 @@ const GATEWAY_OFF: Gateway = {
 
 const GATEWAY_ON: Gateway = { ...GATEWAY_OFF, payNow: true, autoRenew: true };
 
+/** HSL's deal shape (Credits T6): RM888 a month, 1,500 credits included,
+ * overage RM0.60 in 5,000-credit blocks. */
+const ENTERPRISE_CONTRACT = {
+	baseFeeMinor: 88800,
+	currency: "MYR",
+	includedCredits: 1500,
+	overageRateMinor: 60,
+	blockSize: 5000,
+};
+
 /** Every wa.me href the tab renders. */
 function waLinks(): string[] {
 	return screen
@@ -1176,12 +1186,21 @@ describe("BillingTab annual billing", () => {
 		expect(screen.queryByText("Ask for an annual invoice")).toBeNull();
 	});
 
-	it("offers the year to a Scale seller now Scale is purchasable (z8r3fdfuhq)", () => {
+	it("never offers the switch to an Enterprise store — its term is its contract (T6)", () => {
 		mockQueries({ isAdmin: false, invoices: settled });
-		render(<BillingTab retailer={activePro({ plan: "scale" })} />);
-		expect(screen.getByText(/Pay for the year/)).toBeTruthy();
-		// Priced from annualQuote at Scale's rate — RM3,990 for 12 months.
-		expect(screen.getByText(/RM\s*3,990\.00/)).toBeTruthy();
+		render(
+			<BillingTab
+				retailer={activePro({
+					plan: "enterprise",
+					billingCycle: "annual",
+					enterprise: ENTERPRISE_CONTRACT,
+				})}
+			/>,
+		);
+		expect(screen.queryByText(/Pay for the year/)).toBeNull();
+		expect(screen.queryByText("You're on annual billing")).toBeNull();
+		// The contract card states the term instead.
+		expect(screen.getByText("Your Enterprise contract")).toBeTruthy();
 	});
 });
 
@@ -2325,71 +2344,200 @@ describe("BillingTab past-due follow-up line (z8r3fdg3mh)", () => {
 });
 
 /**
- * Scale opened for purchase with the credits release (z8r3fdfuhq). Every door
- * a seller can reach from `/pricing`'s Scale card has to offer Scale, or the
- * CTA leads to a page that can't sell what it advertised: the plan picker, the
- * first invoice's switch, and (for founding members) a plain "no".
+ * Enterprise replaced Scale before Scale went public (Credits T6, z8r3fdkp8h):
+ * no list price, no self-serve door. Every place a seller picks or changes a
+ * plan offers it as a chat with Arif that names the store; a store ON a
+ * contract sees the contract in place of the picker and the plan-change card,
+ * because its terms change by conversation. Scale is offered nowhere.
  */
-describe("BillingTab — Scale is purchasable (z8r3fdfuhq)", () => {
+describe("BillingTab — Enterprise (Credits T6)", () => {
 	const DAY = 24 * 60 * 60 * 1000;
-	const scaleGateway = (currency: "MYR" | "SGD" = "MYR"): Gateway => ({
+	const gatewayIn = (currency: "MYR" | "SGD" = "MYR"): Gateway => ({
 		...GATEWAY_ON,
 		currency,
 		renewalCurrency: currency,
 	});
+	/** An active store on a contract, renewing in 10 days. */
+	function onContract(
+		overrides: Record<string, unknown> = {},
+		store: Record<string, unknown> = {},
+	) {
+		return retailer({
+			...store,
+			subscription: {
+				plan: "enterprise",
+				status: "active",
+				comped: false,
+				billingCycle: "monthly",
+				currentPeriodEnd: Date.now() + 10 * DAY,
+				enterprise: ENTERPRISE_CONTRACT,
+				caps: {
+					orderCap: 1_000_000_000,
+					userCap: 1_000_000_000,
+					broadcastQuota: 100,
+				},
+				features: { crm: true, orderInbox: true, chargeablePickup: true },
+				active: true,
+				frozen: false,
+				...overrides,
+			},
+		} as never);
+	}
 
-	it("the plan picker offers Scale at RM399 / S$149, monthly or yearly", () => {
-		mockQueries({ isAdmin: false, gateway: scaleGateway() });
-		const { unmount } = render(<BillingTab retailer={retailer()} />);
-		expect(screen.getByText(/RM\s*399\.00\/month/)).toBeTruthy();
-		// Scale's pitch is the team room; its volume is the credits line every
-		// plan row carries (Credits T3), so the number isn't said twice.
+	it("the plan picker sells Starter and Pro, and offers Enterprise as a chat naming the store", () => {
+		mockQueries({ isAdmin: false, gateway: gatewayIn() });
+		render(<BillingTab retailer={retailer()} />);
+		expect(screen.getByText(/RM\s*79\.00\/month/)).toBeTruthy();
+		expect(screen.getByText(/RM\s*149\.00\/month/)).toBeTruthy();
+		expect(screen.queryByText("Scale")).toBeNull();
 		expect(
-			screen.getByText(/^Everything in Pro \+ room for \d+ teammates$/),
-		).toBeTruthy();
-		expect(screen.getByText("500 credits a month")).toBeTruthy();
-		fireEvent.click(screen.getByText("Scale"));
-		expect(
-			screen.getByRole("button", { name: "Subscribe to Scale" }),
-		).toBeTruthy();
-		fireEvent.click(screen.getByRole("button", { name: /Yearly/ }));
-		expect(screen.getByText(/RM\s*3,990\.00\/year/)).toBeTruthy();
-		unmount();
-
-		mockQueries({ isAdmin: false, gateway: scaleGateway("SGD") });
-		render(<BillingTab retailer={retailer({ country: "SG" })} />);
-		expect(screen.getByText(/S\$\s*149\.00\/month/)).toBeTruthy();
-		expect(screen.queryByText(/RM\s*\d/)).toBeNull();
+			screen.queryByRole("button", { name: /Subscribe to Enterprise/ }),
+		).toBeNull();
+		const talk = screen.getByRole("link", { name: /Talk to Arif/ });
+		const href = decodeURIComponent(talk.getAttribute("href") ?? "");
+		expect(href).toContain(`wa.me/${CONFIGURED_WA}`);
+		expect(href).toContain("kedaipal.com/openmarket");
 	});
 
-	it("a lapsed Scale seller's picker defaults to renewing Scale", () => {
-		mockQueries({ isAdmin: false, gateway: scaleGateway() });
+	it("under act-as the picker's Enterprise chat is disabled, its reason beside it", () => {
+		mockQueries({ isAdmin: true, gateway: gatewayIn() });
+		render(<BillingTab retailer={retailer({ actingAsAdmin: true })} />);
+		const talk = screen.getByRole("button", { name: /Talk to Arif/ });
+		expect((talk as HTMLButtonElement).disabled).toBe(true);
+		expect(screen.queryByRole("link", { name: /Talk to Arif/ })).toBeNull();
+		// The reason is the row's next sibling, not a paragraph away.
+		expect(
+			talk.closest("div.border-dashed")?.nextElementSibling?.textContent,
+		).toMatch(/View-only while you're acting as this store/);
+	});
+
+	it("an Enterprise store sees its contract — fee, credits, blocks, renewal — not a plan to change", () => {
+		mockQueries({ isAdmin: false, gateway: gatewayIn() });
+		render(<BillingTab retailer={onContract()} />);
+		const card = screen
+			.getByText("Your Enterprise contract")
+			.closest("section");
+		const text = card?.textContent ?? "";
+		expect(text).toMatch(/RM\s*888\.00 a month/);
+		expect(text).toContain("1,500 credits a month");
+		// 5,000 × RM0.60 — the block price is said, not left to arithmetic.
+		expect(text).toMatch(/Blocks of 5,000 at RM\s*0\.60 a credit/);
+		expect(text).toMatch(/RM\s*3,000\.00 a block/);
+		expect(text).toContain("Renews");
+		const message = screen.getByRole("link", {
+			name: /Need a block or a change\? Message us/,
+		});
+		expect(decodeURIComponent(message.getAttribute("href") ?? "")).toContain(
+			"Enterprise contract for kedaipal.com/openmarket",
+		);
+		// A contract changes by conversation — no self-serve plan doors.
+		expect(screen.queryByText("Change your plan")).toBeNull();
+		expect(screen.queryByRole("button", { name: /^Subscribe to/ })).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: /Move (up|down) to/ }),
+		).toBeNull();
+		expect(screen.queryByRole("link", { name: /Talk to Arif/ })).toBeNull();
+	});
+
+	it("names the team the contract grants — unlimited, or the number agreed", () => {
+		// A contract term the seller can only discover by hitting it is not a
+		// term, it's a trap. The card reads the RESOLVED cap, which is what the
+		// store is actually held to — not a second copy of the contract field.
+		mockQueries({ isAdmin: false, gateway: gatewayIn() });
+		render(<BillingTab retailer={onContract()} />);
+		expect(
+			screen.getByText("Your Enterprise contract").closest("section")
+				?.textContent,
+		).toContain("Unlimited teammates");
+
+		cleanup();
+		mockQueries({ isAdmin: false, gateway: gatewayIn() });
 		render(
 			<BillingTab
-				retailer={retailer({
-					subscription: {
-						plan: "scale",
-						status: "past_due",
-						comped: false,
-						caps: { orderCap: 500, userCap: 6, broadcastQuota: 500 },
-						active: false,
-						frozen: true,
-					},
-				} as never)}
+				retailer={onContract({
+					caps: { orderCap: 1_000_000_000, userCap: 13, broadcastQuota: 500 },
+				})}
 			/>,
 		);
-		expect(
-			screen.getByRole("button", { name: "Subscribe to Scale" }),
-		).toBeTruthy();
+		const text =
+			screen.getByText("Your Enterprise contract").closest("section")
+				?.textContent ?? "";
+		// 13 total people = the owner plus 12 — the seller's own vocabulary.
+		expect(text).toContain("12 teammates besides you");
+		// Broadcasts stay off this card until broadcasts ship: a quota for a
+		// feature that doesn't exist is a promise, not an allowance.
+		expect(text).not.toContain("broadcast");
 	});
 
-	it("the first invoice can be switched to Scale as well as Starter, each with its consequence", () => {
+	it("a yearly contract states the year and what it is a month", () => {
+		mockQueries({ isAdmin: false, gateway: gatewayIn() });
+		render(<BillingTab retailer={onContract({ billingCycle: "annual" })} />);
+		const text =
+			screen.getByText("Your Enterprise contract").closest("section")
+				?.textContent ?? "";
+		expect(text).toMatch(/RM\s*8,880\.00 a year/);
+		expect(text).toMatch(/RM\s*888\.00 a\s+month, 2 months free/);
+	});
+
+	it("a scheduled move to Pro is stated with the day it lands", () => {
+		const effectiveAt = Date.UTC(2027, 2, 12);
+		mockQueries({ isAdmin: false, gateway: gatewayIn() });
+		render(
+			<BillingTab
+				retailer={onContract({
+					pendingPlanChange: { plan: "pro", effectiveAt },
+				})}
+			/>,
+		);
+		const note = screen.getByText(/Moving to Pro on/);
+		expect(note.textContent).toContain(formatShortDate(effectiveAt));
+		expect(note.textContent).toContain("your contract ends then");
+	});
+
+	it("an SG contract bills in SGD, never converted", () => {
+		mockQueries({ isAdmin: false, gateway: gatewayIn("SGD") });
+		render(
+			<BillingTab
+				retailer={onContract({
+					enterprise: {
+						...ENTERPRISE_CONTRACT,
+						currency: "SGD",
+						baseFeeMinor: 30000,
+						overageRateMinor: 25,
+					},
+				})}
+			/>,
+		);
+		const text =
+			screen.getByText("Your Enterprise contract").closest("section")
+				?.textContent ?? "";
+		expect(text).toMatch(/S\$\s*300\.00 a month/);
+		expect(text).not.toMatch(/RM\s*\d/);
+	});
+
+	it("under act-as the contract's chat is disabled beside its reason", () => {
+		mockQueries({ isAdmin: true, gateway: gatewayIn() });
+		render(<BillingTab retailer={onContract({}, { actingAsAdmin: true })} />);
+		const button = screen.getByRole("button", {
+			name: /Need a block or a change\? Message us/,
+		});
+		expect((button as HTMLButtonElement).disabled).toBe(true);
+		const card = button.closest("section");
+		expect(card?.textContent).toMatch(
+			/View-only while you're acting as this store/,
+		);
+		expect(
+			screen.queryByRole("link", { name: /Need a block or a change/ }),
+		).toBeNull();
+	});
+
+	it("the first invoice can be switched to Starter — never to Enterprise", () => {
 		mockQueries({
 			isAdmin: false,
-			gateway: scaleGateway(),
+			gateway: gatewayIn(),
 			invoices: [
 				{
-					_id: "i_first_sc",
+					_id: "i_first",
 					status: "pending",
 					currency: "MYR",
 					total: 14900,
@@ -2397,7 +2545,7 @@ describe("BillingTab — Scale is purchasable (z8r3fdfuhq)", () => {
 					plan: "pro",
 					billingCycle: "monthly",
 					origin: "free_period_end",
-					invoiceNumber: "INV-FIRST-SC",
+					invoiceNumber: "INV-FIRST",
 					dueDate: Date.now() + 12 * DAY,
 					createdAt: Date.now(),
 				},
@@ -2420,42 +2568,37 @@ describe("BillingTab — Scale is purchasable (z8r3fdfuhq)", () => {
 			/>,
 		);
 		expect(screen.getByText("Switch to Starter")).toBeTruthy();
-		expect(screen.getByText("Switch to Scale")).toBeTruthy();
-		expect(
-			screen.getByText(/Scale \(RM\s*399\.00\/month\) has 500 credits a month/),
-		).toBeTruthy();
+		expect(screen.queryByText(/Switch to (Scale|Enterprise)/)).toBeNull();
 	});
 
-	it("a Scale invoice offers the way back to Pro or Starter", () => {
+	it("an Enterprise invoice offers no switch — it bills a contract", () => {
 		mockQueries({
 			isAdmin: false,
-			gateway: scaleGateway(),
+			gateway: gatewayIn(),
 			invoices: [
 				{
-					_id: "i_sc",
+					_id: "i_ent",
 					status: "pending",
 					currency: "MYR",
-					total: 39900,
-					amount: 39900,
-					plan: "scale",
+					total: 88800,
+					amount: 88800,
+					plan: "enterprise",
 					billingCycle: "monthly",
-					origin: "self_serve",
-					invoiceNumber: "INV-SC",
+					origin: "renewal",
+					invoiceNumber: "INV-ENT",
 					dueDate: Date.now() + 10 * DAY,
 					createdAt: Date.now(),
 				},
 			],
 		});
-		render(<BillingTab retailer={retailer()} />);
-		expect(screen.getByText("Switch to Pro")).toBeTruthy();
-		expect(screen.getByText("Switch to Starter")).toBeTruthy();
-		expect(screen.queryByText("Switch to Scale")).toBeNull();
+		render(<BillingTab retailer={onContract()} />);
+		expect(screen.queryByText(/^Switch to/)).toBeNull();
 	});
 
-	it("a Founding Member is never offered Scale — the founding price stays on Pro", () => {
+	it("a Founding Member is never offered Enterprise — the founding price stays on Pro", () => {
 		mockQueries({
 			isAdmin: false,
-			gateway: { ...scaleGateway(), foundingPricing: true },
+			gateway: { ...gatewayIn(), foundingPricing: true },
 		});
 		render(
 			<BillingTab
@@ -2465,6 +2608,6 @@ describe("BillingTab — Scale is purchasable (z8r3fdfuhq)", () => {
 		expect(
 			screen.getByRole("button", { name: "Subscribe to Founding Pro" }),
 		).toBeTruthy();
-		expect(screen.queryByText(/RM\s*399\.00/)).toBeNull();
+		expect(screen.queryByRole("link", { name: /Talk to Arif/ })).toBeNull();
 	});
 });

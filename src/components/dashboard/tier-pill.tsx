@@ -45,7 +45,7 @@ function toneClass(tone: TierTone): string {
  *
  * Founding-10 members' status pill reads "Founding #N" (± trial/past-due), which
  * on its own hides their actual tier — so we render a second neutral **tier chip**
- * (Starter/Pro/Scale) next to it, both inside one link to billing. On mobile the
+ * (Starter/Pro/Enterprise) next to it, both inside one link to billing. On mobile the
  * pair wraps as a unit and inherits the header's smaller text so it stays neat.
  * See docs/manual-subscription.md + docs/admin-console.md.
  */

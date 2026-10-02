@@ -48,13 +48,22 @@ import {
 	isPlanUpgrade,
 	type Plan,
 	planChangeCarryoverDays,
-	planPrice,
 	renewalCurrency,
 	renewalQuote,
+	subscriptionPrice,
 } from "./lib/plans";
+import {
+	enterpriseContractCaps,
+	ENTERPRISE_SELF_SERVE_REFUSAL,
+	isMoveOffContractBill,
+} from "./lib/enterprise";
 import { rateLimiter } from "./lib/rateLimiter";
 import { enforceSeatCap } from "./lib/seats";
-import { applyCreditsOnSettle, prepareCreditsForSettle } from "./credits";
+import {
+	applyCreditsOnSettle,
+	prepareCreditsForSettle,
+	writeGrantOverride,
+} from "./credits";
 import { getPaymentProvider, type PaymentRecord } from "./payments/provider";
 import { reserveFoundingRank, stampFoundingPaid } from "./foundingMembers";
 import { defaultCapsForPlan } from "./subscriptions";
@@ -91,6 +100,15 @@ function nextPeriodEnd(
 	from: number,
 ): number {
 	return from + (cycle === "annual" ? 365 : 30) * DAY_MS;
+}
+
+/** A contract with its entry stamp dropped — Convex patches nested objects
+ * whole, so the stamp goes by rebuilding the object without it. */
+function withoutEnteredFrom(
+	contract: NonNullable<Doc<"subscriptions">["enterprise"]>,
+): NonNullable<Doc<"subscriptions">["enterprise"]> {
+	const { enteredFrom: _entered, ...rest } = contract;
+	return rest;
 }
 
 /**
@@ -144,7 +162,15 @@ async function settleInvoicePaid(
 	const billedCycle = isHold
 		? sub.billingCycle
 		: (invoice.billingCycle ?? sub.billingCycle);
-	const caps = defaultCapsForPlan(billedPlan);
+	// An Enterprise settle keeps the CONTRACT's caps (per-deal seats and
+	// broadcasts, z8r3fdkp8h) — the tier default here stomped a 20-teammate
+	// contract back to unlimited the moment its first bill was paid (found by
+	// the 2 Oct sandbox E2E: setContract wrote userCap 21, this line wrote
+	// 1e9 over it at settle).
+	const caps =
+		billedPlan === "enterprise" && sub.enterprise
+			? enterpriseContractCaps(sub.enterprise)
+			: defaultCapsForPlan(billedPlan);
 	// CREDIT AS DAYS: a seller never loses time they already paid for. Whatever
 	// is left of a still-running paid period is converted into days of the plan
 	// they're now on and added to the new period — an upgrade mid-cycle, an
@@ -153,9 +179,18 @@ async function settleInvoicePaid(
 	// money lands: priced at issue instead, a manual-rail seller paying twelve
 	// days later would be credited days that had already elapsed.
 	const retailerForCarryover = await ctx.db.get(invoice.retailerId);
+	// What bought the period still running. Normally the row's own plan and
+	// cycle — the plan only ever flips HERE, at settle. The one exception is
+	// an Enterprise contract (T6): `setContract` flips the plan before any
+	// payment, so a store that entered mid-period from Pro still has Pro days
+	// running, and they must be valued at Pro's price, not the contract's.
+	const boughtAs = sub.enterprise?.enteredFrom ?? {
+		plan: sub.plan,
+		billingCycle: sub.billingCycle,
+	};
 	const carryover = planChangeCarryoverDays({
-		fromPlan: sub.plan,
-		fromCycle: sub.billingCycle,
+		fromPlan: boughtAs.plan,
+		fromCycle: boughtAs.billingCycle,
 		toPlan: billedPlan,
 		toCycle: billedCycle,
 		// STORE eligibility, never "does the plan being left have a founding
@@ -163,7 +198,7 @@ async function settleInvoicePaid(
 		// invoice, so the days their remainder buys are priced at that rate
 		// too. Asked with `sub.plan` this answered "no" and granted 5 days
 		// where the billing page promised 8 (z8r3fdfty4). `planPrice` confines
-		// the discount to Pro/Scale on each side of the conversion.
+		// the discount to Pro on each side of the conversion.
 		founding: foundingPriceEligible({
 			isFoundingMember: retailerForCarryover?.isFoundingMember === true,
 			benefitsRevokedAt: retailerForCarryover?.foundingBenefitsRevokedAt,
@@ -176,6 +211,9 @@ async function settleInvoicePaid(
 			invoice.currency === "SGD" || invoice.currency === "MYR"
 				? invoice.currency
 				: DEFAULT_BILLING_CURRENCY,
+		// An Enterprise side is valued at the contract fee (T6). The contract
+		// is still on the row here — a move to Pro clears it below, after.
+		enterprise: sub.enterprise,
 		// Carryover is a TIER-to-TIER conversion and must never cross the hold
 		// rate in either direction (z8r3fday24 × 86eyb6z4r, reconciled 14 Sep):
 		//  - INTO a hold: a hold is not a `Plan`, so `billedPlan` would still be
@@ -196,7 +234,7 @@ async function settleInvoicePaid(
 	if (carryover > 0) {
 		console.info("[billing] carried unused paid days onto the new period", {
 			retailerId: invoice.retailerId,
-			fromPlan: sub.plan,
+			fromPlan: boughtAs.plan,
 			toPlan: billedPlan,
 			carryoverDays: carryover,
 		});
@@ -245,6 +283,18 @@ async function settleInvoicePaid(
 		// seller again — drop the marker so a future lapse reads "past due",
 		// not "your sponsored access ended".
 		compEndedAt: undefined,
+		// Leaving Enterprise (T6): the first bill at another tier ends the
+		// contract — here, at the one plan-flip moment, so a store can never
+		// be Pro with a contract or Enterprise without one. Staying on it: this
+		// bill bought the new period, so what the store entered FROM no longer
+		// describes anything still running.
+		...(!isHold && sub.enterprise
+			? billedPlan !== "enterprise"
+				? { enterprise: undefined }
+				: sub.enterprise.enteredFrom !== undefined
+					? { enterprise: withoutEnteredFrom(sub.enterprise) }
+					: {}
+			: {}),
 		...(sub.autoRenew
 			? {
 					autoRenew: {
@@ -281,6 +331,27 @@ async function settleInvoicePaid(
 	//     A hold settle keeps the tier, so seats survive a hold by design.
 	if (!isHold && retailerForCarryover) {
 		await enforceSeatCap(ctx, retailerForCarryover, caps.userCap, now);
+	}
+
+	// 2b′) The contract's included credits were the store's grant override;
+	//     off the contract they go too — this month's grant stays (it was
+	//     granted), next month is the new tier's (T6). A ledger fault never
+	//     blocks a payment settle.
+	if (!isHold && billedPlan !== "enterprise" && sub.enterprise) {
+		try {
+			await writeGrantOverride(
+				ctx,
+				invoice.retailerId,
+				null,
+				record.recordedBy,
+				now,
+			);
+		} catch (err) {
+			console.error("[credits] clearing the Enterprise grant failed", {
+				invoiceId: invoice._id,
+				err,
+			});
+		}
 	}
 
 	// 2c) Credits (86eye2ccu): the same single plan-flip moment decides what
@@ -639,17 +710,18 @@ export const internalSettleFromGateway = internalMutation({
  * true` → 30% Pro discount; rank claims when this invoice is marked paid). Amounts
  * are computed from the plan (single source of truth — Arif doesn't type them).
  * The subscription's plan/cycle are aligned so mark-paid reconciles the right caps.
- * Every tier can be issued: Scale's "unavailable for v1" guard lived here until
- * Scale opened for purchase (z8r3fdfuhq, 30 Sep 2026) — Arif assigns it by hand
- * as well as sellers picking it themselves. Founding stays Pro-only.
+ * Every tier can be issued. An ENTERPRISE invoice bills the store's contract
+ * (T6) — its fee, currency and term — and needs one; founding stays Pro-only.
  */
 export const issueInvoice = mutation({
 	args: {
 		retailerId: v.id("retailers"),
+		// Enterprise bills the store's contract — its fee, its currency, its
+		// term — so the form's currency and cycle don't override it (T6).
 		plan: v.union(
 			v.literal("starter"),
 			v.literal("pro"),
-			v.literal("scale"),
+			v.literal("enterprise"),
 		),
 		billingCycle: v.union(v.literal("monthly"), v.literal("annual")),
 		founding: v.boolean(),
@@ -673,8 +745,7 @@ export const issueInvoice = mutation({
 		},
 	): Promise<{ invoiceId: Id<"invoices"> }> => {
 		await requireAdmin(ctx);
-		const currency: BillingCurrency = currencyArg ?? "MYR";
-		if (!isPlanSelectable(plan))
+		if (plan !== "enterprise" && !isPlanSelectable(plan))
 			throw new ConvexError("That plan isn't available to bill yet.");
 		if (founding && plan !== "pro")
 			throw new ConvexError("Only Pro qualifies for Founding Member.");
@@ -692,6 +763,16 @@ export const issueInvoice = mutation({
 			throw new ConvexError(
 				"This store is comped — it's on the house. End the comp first if you really mean to bill it.",
 			);
+		if (plan === "enterprise" && !sub.enterprise)
+			throw new ConvexError(
+				"Put the store on an Enterprise contract first — an Enterprise invoice bills its contract.",
+			);
+		const currency: BillingCurrency =
+			plan === "enterprise" && sub.enterprise
+				? sub.enterprise.currency
+				: (currencyArg ?? "MYR");
+		const cycle =
+			plan === "enterprise" ? sub.billingCycle : billingCycle;
 
 		// Prevent accidental duplicate pendings — settle/void the existing one first.
 		const existingPending = await ctx.db
@@ -708,7 +789,7 @@ export const issueInvoice = mutation({
 			retailerId,
 			subscriptionId: sub._id,
 			plan,
-			billingCycle,
+			billingCycle: cycle,
 			founding,
 			currency,
 			dueDate: dueDateArg,
@@ -751,14 +832,38 @@ async function insertPendingInvoice(
 	},
 ): Promise<Id<"invoices">> {
 	const kind = args.kind ?? "plan";
+	// Enterprise (T6) bills its contract: the fee, in the currency the deal
+	// was agreed in, on the contract's TERM — whatever the caller guessed (the
+	// first-invoice path only ever knew "monthly", and a yearly contract must
+	// never be billed a month). No contract, no invoice.
+	let enterprise: Doc<"subscriptions">["enterprise"];
+	let billingCycle = args.billingCycle;
+	if (kind === "plan" && args.plan === "enterprise") {
+		const sub = await ctx.db.get(args.subscriptionId);
+		if (!sub?.enterprise)
+			throw new ConvexError(
+				"An Enterprise invoice bills the store's contract, and this store has none.",
+			);
+		enterprise = sub.enterprise;
+		billingCycle = sub.billingCycle;
+	}
+	const currency = enterprise?.currency ?? args.currency;
 	const base =
 		kind === "hold"
-			? HOLD_MONTHLY_PRICES[args.currency]
-			: planPrice(args.plan, args.billingCycle, false, args.currency);
+			? HOLD_MONTHLY_PRICES[currency]
+			: subscriptionPrice(args.plan, billingCycle, {
+					founding: false,
+					currency,
+					enterprise,
+				});
 	const total =
 		kind === "hold"
 			? base
-			: planPrice(args.plan, args.billingCycle, args.founding, args.currency);
+			: subscriptionPrice(args.plan, billingCycle, {
+					founding: args.founding,
+					currency,
+					enterprise,
+				});
 	const now = Date.now();
 	// System-set pay-by deadline (issue date + grace). The subscription's billing
 	// cycle is set later at settle, so the paid tier only starts once payment lands.
@@ -769,14 +874,14 @@ async function insertPendingInvoice(
 		subscriptionId: args.subscriptionId,
 		invoiceNumber: generateInvoiceNumber(now),
 		plan: args.plan,
-		billingCycle: kind === "hold" ? "monthly" : args.billingCycle,
+		billingCycle: kind === "hold" ? "monthly" : billingCycle,
 		amount: base,
 		foundingDiscount:
 			kind === "plan" && args.founding ? base - total : undefined,
 		total,
-		currency: args.currency,
+		currency,
 		periodStart: now,
-		periodEnd: nextPeriodEnd(kind === "hold" ? "monthly" : args.billingCycle, now),
+		periodEnd: nextPeriodEnd(kind === "hold" ? "monthly" : billingCycle, now),
 		dueDate,
 		status: "pending",
 		origin: args.origin,
@@ -820,10 +925,9 @@ async function insertPendingInvoice(
  */
 export const subscribeSelf = mutation({
 	args: {
-		// Scale joined with the credits release (z8r3fdfuhq): priced from
-		// `planPrice` like the other two, monthly or annual, in the store's
-		// billing currency.
-		plan: v.union(v.literal("starter"), v.literal("pro"), v.literal("scale")),
+		// The LISTED tiers only — Enterprise has no self-serve door (T6); it is
+		// reached by a contract an admin attaches.
+		plan: v.union(v.literal("starter"), v.literal("pro")),
 		billingCycle: v.union(v.literal("monthly"), v.literal("annual")),
 	},
 	handler: async (
@@ -850,6 +954,8 @@ export const subscribeSelf = mutation({
 		if (!sub) throw new ConvexError("No subscription found for your store");
 		if (sub.comped === true)
 			throw new ConvexError("Your account is on the house — nothing to pay.");
+		if (sub.plan === "enterprise")
+			throw new ConvexError(ENTERPRISE_SELF_SERVE_REFUSAL);
 		if (sub.status === "active")
 			throw new ConvexError(
 				"You're already on an active plan. Message us to change plans mid-cycle.",
@@ -935,10 +1041,9 @@ export const subscribeSelf = mutation({
  */
 export const changePlan = mutation({
 	args: {
-		// Pro → Scale is an upgrade (billed now; the credit difference lands at
-		// settle, `applyCreditsOnSettle`), Scale → Pro a downgrade scheduled for
-		// the end of the paid period — both by RANK, like every other pair.
-		plan: v.union(v.literal("starter"), v.literal("pro"), v.literal("scale")),
+		// Starter ↔ Pro, by RANK. Enterprise is neither a self-serve target
+		// nor a self-serve origin (T6) — a contract store is refused below.
+		plan: v.union(v.literal("starter"), v.literal("pro")),
 	},
 	handler: async (
 		ctx,
@@ -971,6 +1076,8 @@ export const changePlan = mutation({
 		if (!sub) throw new ConvexError("No subscription found for your store");
 		if (sub.comped === true)
 			throw new ConvexError("Your account is on the house — nothing to change.");
+		if (sub.plan === "enterprise")
+			throw new ConvexError(ENTERPRISE_SELF_SERVE_REFUSAL);
 		// Only a seller mid-paid-period can "change" a plan; everyone else is
 		// choosing one, which is the plan picker's job (and starts a fresh period).
 		if (sub.status !== "active")
@@ -1078,6 +1185,10 @@ export const cancelPlanChange = mutation({
 			.query("subscriptions")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
 			.first();
+		// An Enterprise store's scheduled move to Pro is an admin's lever, set
+		// with the customer — not the seller's to undo from the billing page.
+		if (sub?.plan === "enterprise")
+			throw new ConvexError(ENTERPRISE_SELF_SERVE_REFUSAL);
 		if (sub?.pendingPlanChange !== undefined) {
 			await ctx.db.patch(sub._id, { pendingPlanChange: undefined });
 		}
@@ -1103,12 +1214,37 @@ export const voidInvoice = mutation({
 			throw new ConvexError(
 				`Only a pending invoice can be voided (this one is ${invoice.status}).`,
 			);
+		const now = Date.now();
 		await ctx.db.patch(invoiceId, {
 			status: "void",
-			voidedAt: Date.now(),
+			voidedAt: now,
 			voidedBy: adminSubject,
 			voidReason: reason?.trim() ? reason.trim() : undefined,
 		});
+		// A renewal that carried a SCHEDULED change consumed its flag when it
+		// was issued (`internalIssueRenewalInvoice`). Voiding the bill must not
+		// delete the change with it: a seller's scheduled move down to Starter,
+		// or an Enterprise store's move off its contract, would silently
+		// become a renewal at the old tier — auto-charged if they have a saved
+		// method. So the change goes back on the row, and the next daily run
+		// bills it again. Calling a change off is its own act
+		// (`cancelPlanChange`, `enterprise.cancelMoveToPro`), never a side
+		// effect of a void.
+		if (
+			invoice.origin === "auto_renewal" &&
+			(invoice.kind ?? "plan") === "plan" &&
+			(invoice.plan === "starter" || invoice.plan === "pro")
+		) {
+			const sub = await ctx.db.get(invoice.subscriptionId);
+			if (
+				sub &&
+				sub.plan !== invoice.plan &&
+				sub.pendingPlanChange === undefined
+			)
+				await ctx.db.patch(sub._id, {
+					pendingPlanChange: { plan: invoice.plan, requestedAt: now },
+				});
+		}
 		// A voided invoice's Pay-now link must die with it — a payment on a void
 		// bill can only ever become a refund conversation.
 		if (invoice.gatewayRequestId) {
@@ -1131,6 +1267,8 @@ export const voidInvoice = mutation({
  * switch the pending invoice to Starter before paying, `switchPendingPlan`),
  * monthly, in the store's country currency, at the founding price when the
  * store was promised one (`foundingPricingApplies`, same rule as self-serve).
+ * A store already on an Enterprise contract (T6) is billed its contract —
+ * fee, term and currency — by `insertPendingInvoice`, whatever this passes.
  * Never auto-charged, even with a saved method — a first bill the seller has
  * not seen is exactly the surprise debit 86eyb6z4r refuses to send; the
  * Pay-now link is in the email and on the billing tab.
@@ -1177,7 +1315,14 @@ export const internalIssueFirstInvoice = internalMutation({
 			founding,
 			currency,
 			origin: "free_period_end",
-			firstInvoice: sub.freePeriodEndReason ?? "backstop",
+			// The first-invoice emails pitch a plan choice ("your first invoice
+			// is for Pro — switch before you pay"), a dead end for a store on a
+			// contract (T6): its terms were agreed with Kedaipal, so it gets
+			// the plain "invoice issued" email for its contract bill.
+			firstInvoice:
+				sub.plan === "enterprise"
+					? undefined
+					: (sub.freePeriodEndReason ?? "backstop"),
 		});
 		console.info("[billing] first invoice issued", {
 			retailerId: sub.retailerId,
@@ -1191,8 +1336,8 @@ export const internalIssueFirstInvoice = internalMutation({
 /**
  * Seller: switch the plan on a pending MACHINE-issued invoice before paying
  * it (z8r3fday24). Every trial runs on Pro, so the first invoice bills Pro;
- * a seller who wants Starter or (since z8r3fdfuhq) Scale — or a picker who
- * changed their mind — swaps here in ONE mutation: the old invoice is voided
+ * a seller who wants Starter — or a picker who changed their mind — swaps
+ * here in ONE mutation: the old invoice is voided
  * (its Pay-now link killed) and the replacement issued at the new tier, same
  * cycle, same currency, and the SAME due date, so switching can never extend
  * the grace.
@@ -1201,7 +1346,7 @@ export const internalIssueFirstInvoice = internalMutation({
  */
 export const switchPendingPlan = mutation({
 	args: {
-		plan: v.union(v.literal("starter"), v.literal("pro"), v.literal("scale")),
+		plan: v.union(v.literal("starter"), v.literal("pro")),
 	},
 	handler: async (ctx, { plan }): Promise<{ invoiceId: Id<"invoices"> }> => {
 		const identity = await ctx.auth.getUserIdentity();
@@ -1222,6 +1367,8 @@ export const switchPendingPlan = mutation({
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
 			.first();
 		if (!sub) throw new ConvexError("No subscription found for your store");
+		if (sub.plan === "enterprise")
+			throw new ConvexError(ENTERPRISE_SELF_SERVE_REFUSAL);
 		const pending = await ctx.db
 			.query("invoices")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
@@ -1373,6 +1520,7 @@ export const internalIssueRenewalInvoice = internalMutation({
 			paidThrough: sub.currentPeriodEnd,
 			lastPaidCurrency: invoices.find((inv) => inv.status === "paid")?.currency,
 			country: retailer.country,
+			enterprise: sub.enterprise,
 			now,
 		});
 		const kind = quote.kind;
@@ -1439,6 +1587,14 @@ export const listRetailersForAdmin = query({
 			 * drafts a bill `issueInvoice` will refuse anyway. */
 			comped: boolean;
 			compLabel?: string;
+			/** The Enterprise contract's billing facts (T6) — an Enterprise
+			 * invoice bills exactly these, so the form shows them instead of
+			 * letting the admin pick a cycle or currency. */
+			enterprise?: {
+				baseFeeMinor: number;
+				currency: BillingCurrency;
+				billingCycle: BillingCycle;
+			};
 		}>
 	> => {
 		await requireAdmin(ctx);
@@ -1466,6 +1622,13 @@ export const listRetailersForAdmin = query({
 				hasPending: pending !== null,
 				comped: sub?.comped === true,
 				compLabel: sub?.comp?.label,
+				enterprise: sub?.enterprise
+					? {
+							baseFeeMinor: sub.enterprise.baseFeeMinor,
+							currency: sub.enterprise.currency,
+							billingCycle: sub.billingCycle,
+						}
+					: undefined,
 			});
 		}
 		return rows;
@@ -1499,6 +1662,12 @@ export const listPending = query({
 			autoRenew: AdminAutoChargeState | null;
 			gatewayIssue?: Doc<"invoices">["gatewayIssue"];
 			billingCycle: BillingCycle;
+			/** Paying it ends the store's Enterprise contract (T6). */
+			endsContract: boolean;
+			/** A renewal that carries a SCHEDULED change (a move down, or off a
+			 * contract): voiding it keeps the change scheduled (`voidInvoice`).
+			 * The tier it moves to is `plan`. */
+			carriesScheduledChange: boolean;
 		}>
 	> => {
 		await requireAdmin(ctx);
@@ -1535,6 +1704,12 @@ export const listPending = query({
 				billingCycle: (inv.billingCycle ??
 					sub?.billingCycle ??
 					"monthly") as BillingCycle,
+				endsContract: sub ? isMoveOffContractBill(inv, sub) : false,
+				carriesScheduledChange:
+					inv.origin === "auto_renewal" &&
+					(inv.kind ?? "plan") === "plan" &&
+					inv.plan !== undefined &&
+					inv.plan !== sub?.plan,
 			});
 		}
 		return rows;

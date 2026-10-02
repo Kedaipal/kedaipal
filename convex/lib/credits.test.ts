@@ -22,9 +22,9 @@ import {
 	CREDIT_PACKS,
 	creditPackById,
 	FOUNDING_PRO_CREDIT_GRANT,
+	LISTED_PLANS,
 	PLAN_CREDIT_GRANT,
 	PLAN_MONTHLY_PRICES,
-	PLANS,
 	SELLER_CANCEL_REFUNDS_PER_PERIOD,
 	TRIAL_CREDIT_GRANT,
 } from "./plans";
@@ -46,8 +46,8 @@ function inputs(over: Partial<CreditRegimeInputs> = {}): CreditRegimeInputs {
 }
 
 describe("the locked numbers", () => {
-	test("grants: Starter 100 / Pro 200 / Scale 500, Founding Pro 300, trial 200", () => {
-		expect(PLAN_CREDIT_GRANT).toEqual({ starter: 100, pro: 200, scale: 500 });
+	test("grants: Starter 100 / Pro 200, Founding Pro 300, trial 200 — Enterprise's is its contract's", () => {
+		expect(PLAN_CREDIT_GRANT).toEqual({ starter: 100, pro: 200 });
 		expect(FOUNDING_PRO_CREDIT_GRANT).toBe(300);
 		expect(TRIAL_CREDIT_GRANT).toBe(200);
 	});
@@ -78,7 +78,7 @@ describe("the locked numbers", () => {
 				...CREDIT_PACKS[currency].map((p) => p.priceMinor / p.credits),
 			);
 			const dearestTierOrder = Math.max(
-				...PLANS.map(
+				...LISTED_PLANS.map(
 					(plan) => PLAN_MONTHLY_PRICES[currency][plan] / PLAN_CREDIT_GRANT[plan],
 				),
 			);
@@ -89,15 +89,21 @@ describe("the locked numbers", () => {
 
 describe("monthlyCreditGrant — precedence", () => {
 	test("the plan's grant by default", () => {
-		for (const plan of PLANS)
+		for (const plan of LISTED_PLANS)
 			expect(monthlyCreditGrant(inputs({ plan }))).toBe(PLAN_CREDIT_GRANT[plan]);
 	});
 
-	test("founding Pro gets 300; a founding store on Scale keeps 500; Starter is unaffected", () => {
-		expect(monthlyCreditGrant(inputs({ foundingEligible: true }))).toBe(300);
+	test("Enterprise is granted its contract's included credits — the override the contract writes (T6)", () => {
 		expect(
-			monthlyCreditGrant(inputs({ foundingEligible: true, plan: "scale" })),
-		).toBe(500);
+			monthlyCreditGrant(inputs({ plan: "enterprise", override: 1500 })),
+		).toBe(1500);
+		// Should the override ever be missing, a contract customer keeps Pro's
+		// allowance rather than dropping to zero and locking.
+		expect(monthlyCreditGrant(inputs({ plan: "enterprise" }))).toBe(200);
+	});
+
+	test("founding Pro gets 300; Starter is unaffected", () => {
+		expect(monthlyCreditGrant(inputs({ foundingEligible: true }))).toBe(300);
 		expect(
 			monthlyCreditGrant(inputs({ foundingEligible: true, plan: "starter" })),
 		).toBe(100);

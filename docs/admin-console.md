@@ -177,7 +177,7 @@ header pill + the Billing-row status subtitle) and the **Admin · Sellers direct
 treatment — every place a tier/plan would otherwise show for an admin's own store now reads
 "Admin". **Settings → Billing** follows the same rule: the `BillingTab` swaps the Current-plan /
 status / order-usage / renew apparatus for a plain **"Admin account"** note (admins have no trial,
-tier or invoices) — so the tab never presents the admin as a Starter/Pro/Scale seller. While
+tier or invoices) — so the tab never presents the admin as a Starter/Pro/Enterprise seller. While
 **acting-as** a seller the chrome (banner + billing tab + directory row) shows that seller's
 **real** subscription state — white-glove needs to see where they stand.
 

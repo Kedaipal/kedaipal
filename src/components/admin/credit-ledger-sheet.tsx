@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import type { AdminSellerRow } from "../../../convex/admin";
+import { GRANT_LEVER_CONTRACT_REFUSAL } from "../../../convex/lib/credits";
 import { PURCHASED_CREDIT_LIFETIME_MONTHS } from "../../../convex/lib/plans";
 import { convexErrorMessage, formatShortDate } from "../../lib/format";
 import { cn } from "../../lib/utils";
@@ -86,6 +87,7 @@ export function ledgerRowLabel(row: LedgerRow): string {
 	if (row.type === "purchase") return "Top-up pack";
 	if (row.reason === "referral_referee" || row.reason === "referral_referrer")
 		return "Referral reward";
+	if (row.reason === "enterprise_block") return "Enterprise overage block";
 	return row.bucket === "plan" ? "Plan credits" : "Bought credits";
 }
 
@@ -151,11 +153,23 @@ export function CreditLedgerBody({
 						<AdjustForm
 							retailerId={seller._id}
 							purchased={state.view.purchased}
+							enterpriseBlockSize={
+								seller.plan === "enterprise"
+									? seller.enterprise?.blockSize
+									: undefined
+							}
 						/>
 						<GrantForm
 							retailerId={seller._id}
 							customGrant={state.account?.grantOverride}
 							periodGrant={state.view.periodGrant}
+							// SETTING a recurring allowance is a contract's or a comp's
+							// job now (GRANT_LEVER_CONTRACT_REFUSAL) — a list-price plan
+							// gets the reason, not a lever.
+							setLocked={
+								!(seller.plan === "enterprise" && seller.enterprise) &&
+								!seller.comped
+							}
 						/>
 					</>
 				)}
@@ -282,15 +296,20 @@ function parseAmount(raw: string): { amount: number } | { reason: string } {
 function AdjustForm({
 	retailerId,
 	purchased,
+	enterpriseBlockSize,
 }: {
 	retailerId: AdminSellerRow["_id"];
 	purchased: number;
+	/** Set on an Enterprise store (T6): its contract's block size, so an
+	 * overage block can be landed under its own ledger reason. */
+	enterpriseBlockSize?: number;
 }) {
 	const adjust = useMutation(api.credits.adminAdjust);
 	const [bucket, setBucket] = useState<Bucket>("plan");
 	const [raw, setRaw] = useState("");
 	const [note, setNote] = useState("");
 	const [saving, setSaving] = useState(false);
+	const [block, setBlock] = useState(false);
 
 	const parsed = parseAmount(raw);
 	const amount = "amount" in parsed ? parsed.amount : null;
@@ -298,30 +317,49 @@ function AdjustForm({
 	const blocked =
 		"reason" in parsed
 			? parsed.reason
-			: bucket === "purchased" && amount !== null && -amount > purchased
-				? `This store holds ${purchased} bought credits — take away at most that many, or adjust the plan credits instead.`
-				: note.trim().length < NOTE_MIN
-					? "Add a note saying why."
-					: null;
+			: block && amount !== null && amount < 0
+				? "A block adds bought credits — enter a positive number."
+				: bucket === "purchased" && amount !== null && -amount > purchased
+					? `This store holds ${purchased} bought credits — take away at most that many, or adjust the plan credits instead.`
+					: note.trim().length < NOTE_MIN
+						? "Add a note saying why."
+						: null;
 
 	const noun = bucket === "plan" ? "plan" : "bought";
 	const label =
 		amount === null
 			? "Adjust credits"
-			: amount > 0
-				? `Add ${amount} ${noun} credit${amount === 1 ? "" : "s"}`
-				: `Take away ${-amount} ${noun} credit${amount === -1 ? "" : "s"}`;
+			: block
+				? `Land a ${amount.toLocaleString("en")}-credit block`
+				: amount > 0
+					? `Add ${amount} ${noun} credit${amount === 1 ? "" : "s"}`
+					: `Take away ${-amount} ${noun} credit${amount === -1 ? "" : "s"}`;
+
+	function toggleBlock(on: boolean) {
+		setBlock(on);
+		if (on && enterpriseBlockSize !== undefined) {
+			setBucket("purchased");
+			setRaw(String(enterpriseBlockSize));
+		}
+	}
 
 	async function submit() {
 		if (blocked || amount === null) return;
 		setSaving(true);
 		try {
-			const res = await adjust({ retailerId, bucket, amount, note });
+			const res = await adjust({
+				retailerId,
+				bucket,
+				amount,
+				note,
+				...(block ? { enterpriseBlock: true } : {}),
+			});
 			toast.success("Credits adjusted", {
 				description: `Now plan ${res.plan} · bought ${res.purchased}.`,
 			});
 			setRaw("");
 			setNote("");
+			setBlock(false);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -333,12 +371,30 @@ function AdjustForm({
 		<Section title="Adjust by hand">
 			{/* The same segmented choice the comp dialog uses — one idea, one
 			    control. */}
+			{enterpriseBlockSize !== undefined ? (
+				<label className="flex items-start gap-2.5 rounded-xl border border-border p-3 text-sm">
+					<input
+						type="checkbox"
+						checked={block}
+						onChange={(e) => toggleBlock(e.target.checked)}
+						className="mt-0.5 size-4"
+					/>
+					<span>
+						<span className="font-medium">Enterprise overage block</span>
+						<span className="block text-xs text-muted-foreground">
+							Bought credits under the contract, landed once its manual invoice
+							is paid — logged as a block, not goodwill.
+						</span>
+					</span>
+				</label>
+			) : null}
 			<div className="grid grid-cols-2 gap-2">
 				{(["plan", "purchased"] as const).map((b) => (
 					<button
 						key={b}
 						type="button"
 						aria-pressed={bucket === b}
+						disabled={block && b === "plan"}
 						onClick={() => setBucket(b)}
 						className={cn(
 							"min-h-11 rounded-xl border px-3 text-sm font-medium transition-colors",
@@ -407,10 +463,14 @@ function GrantForm({
 	retailerId,
 	customGrant,
 	periodGrant,
+	setLocked,
 }: {
 	retailerId: AdminSellerRow["_id"];
 	customGrant: number | undefined;
 	periodGrant: number;
+	/** A list-price plan (not comped, no contract): setting is refused with
+	 * the one-author reason; clearing a stale grant still works. */
+	setLocked: boolean;
 }) {
 	const setGrant = useMutation(api.credits.adminSetGrantOverride);
 	const [raw, setRaw] = useState(
@@ -463,35 +523,46 @@ function GrantForm({
 					<>The plan's grant ({periodGrant} this month)</>
 				)}
 			</p>
-			<p className="text-xs text-muted-foreground">
-				Beats every plan grant — for a partner deal or a pilot — and the seller
-				gets no upgrade nudges. A higher grant lands its difference this month;
-				a lower one, or clearing it, waits for next month.
-			</p>
-			<div className="flex flex-col gap-1.5">
-				<label htmlFor="credit-grant" className="text-sm font-medium">
-					Credits a month
-				</label>
-				<Input
-					id="credit-grant"
-					variant="field"
-					inputMode="numeric"
-					value={raw}
-					onChange={(e) => setRaw(e.target.value)}
-					placeholder="e.g. 1000"
-				/>
-			</div>
+			{setLocked ? (
+				<p className="text-xs text-muted-foreground">
+					{GRANT_LEVER_CONTRACT_REFUSAL}
+				</p>
+			) : (
+				<p className="text-xs text-muted-foreground">
+					Beats every plan grant — for a sponsored store, or edits an Enterprise
+					contract's included credits — and the seller gets no upgrade nudges. A
+					higher grant lands its difference this month; a lower one, or clearing
+					it, waits for next month.
+				</p>
+			)}
+			{setLocked ? null : (
+				<div className="flex flex-col gap-1.5">
+					<label htmlFor="credit-grant" className="text-sm font-medium">
+						Credits a month
+					</label>
+					<Input
+						id="credit-grant"
+						variant="field"
+						inputMode="numeric"
+						value={raw}
+						onChange={(e) => setRaw(e.target.value)}
+						placeholder="e.g. 1000"
+					/>
+				</div>
+			)}
 			<div className="flex flex-col gap-2 sm:flex-row">
-				<Button
-					onClick={() => run(n)}
-					disabled={!valid || unchanged || saving !== null}
-					className="tap-target w-full sm:w-fit"
-				>
-					{saving === "save" ? (
-						<Loader2 className="size-4 animate-spin" />
-					) : null}
-					{valid && !unchanged ? `Set ${n} a month` : "Set custom grant"}
-				</Button>
+				{setLocked ? null : (
+					<Button
+						onClick={() => run(n)}
+						disabled={!valid || unchanged || saving !== null}
+						className="tap-target w-full sm:w-fit"
+					>
+						{saving === "save" ? (
+							<Loader2 className="size-4 animate-spin" />
+						) : null}
+						{valid && !unchanged ? `Set ${n} a month` : "Set custom grant"}
+					</Button>
+				)}
 				{customGrant !== undefined ? (
 					<Button
 						variant="outline"

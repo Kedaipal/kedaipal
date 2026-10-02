@@ -115,6 +115,7 @@ export function CreditMeter({
 		exempt,
 		customGrant: balance.customGrant,
 		nextGrant: balance.nextGrant,
+		enterprise: sub?.plan === "enterprise",
 	});
 	const refresh = creditRefreshLabel(balance);
 

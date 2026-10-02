@@ -7,6 +7,7 @@ import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
+import { invoicePlanLabel } from "./billingEmail";
 import {
 	FOUNDING_PRO_CREDIT_GRANT,
 	PLAN_CREDIT_GRANT,
@@ -76,16 +77,55 @@ async function invoice(
 const meta = (t: ReturnType<typeof setup>, invoiceId: Id<"invoices">) =>
 	t.query(internal.billingEmail.getInvoiceForEmail, { invoiceId });
 
+describe("invoicePlanLabel — what the email calls the bill", () => {
+	test("a tier by name, a hold as the hold, a contract as the contract (T6)", () => {
+		expect(invoicePlanLabel("pro", "monthly")).toBe("Pro · Monthly");
+		expect(invoicePlanLabel("starter", "annual")).toBe("Starter · Annual");
+		// Never "Enterprise · Monthly" — an Enterprise bill is its contract's
+		// fee, the same words as the PDF's "Kedaipal Enterprise Contract".
+		expect(invoicePlanLabel("enterprise", "monthly")).toBe(
+			"Enterprise contract · Monthly",
+		);
+		expect(invoicePlanLabel("enterprise", "annual")).toBe(
+			"Enterprise contract · Annual",
+		);
+		expect(invoicePlanLabel("pro", "monthly", "hold")).toMatch(/· Monthly$/);
+		expect(invoicePlanLabel("pro", "monthly", "hold")).not.toMatch(/^Pro/);
+	});
+});
+
 describe("getInvoiceForEmail — the credits the billed plan includes", () => {
-	test("each tier's invoice carries that tier's monthly credits", async () => {
+	test("each listed tier's invoice carries that tier's monthly credits", async () => {
 		const t = setup();
 		const ids = await seed(t, "user_bem_tiers");
-		for (const plan of ["starter", "pro", "scale"] as const) {
+		for (const plan of ["starter", "pro"] as const) {
 			const id = await invoice(t, ids, { plan });
 			expect((await meta(t, id))?.includedCredits, plan).toBe(
 				PLAN_CREDIT_GRANT[plan],
 			);
 		}
+	});
+
+	test("an Enterprise invoice carries its contract's included credits", async () => {
+		const t = setup();
+		const ids = await seed(t, "user_bem_ent");
+		await t.run(async (ctx) => {
+			const account = await ctx.db
+				.query("creditAccounts")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", ids.retailerId))
+				.first();
+			if (!account) throw new Error("no credit account");
+			// `setContract` writes the included credits through as the grant.
+			await ctx.db.patch(account._id, { grantOverride: 1500 });
+		});
+		const id = await invoice(t, ids, {
+			plan: "enterprise",
+			amount: 88800,
+			total: 88800,
+		});
+		const m = await meta(t, id);
+		expect(m?.includedCredits).toBe(1500);
+		expect(m?.plan).toBe("enterprise");
 	});
 
 	test("a founding-priced Pro invoice is Founding Pro's grant — the member's own email", async () => {

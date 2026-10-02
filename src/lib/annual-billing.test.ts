@@ -75,17 +75,19 @@ describe("resolveAnnualOffer — who sees the switch", () => {
 	});
 
 	/**
-	 * Scale was held out while `issueInvoice` refused it ("Scale is unavailable
-	 * for v1") — offering it would have been a dead-end CTA. It joined in the
-	 * change that made it purchasable (z8r3fdfuhq), priced from `annualQuote`.
+	 * Enterprise (T6): the term — monthly or a prepaid year — is part of the
+	 * contract an admin sets, and the contract card states it. So no switch is
+	 * offered, and no "You're on annual billing" card repeats the term while
+	 * inviting a self-serve plan change the server refuses.
 	 */
-	it("offers the year to a proven, active Scale seller too", () => {
-		expect(ANNUAL_OFFER_PLANS).toContain("scale");
-		const state = resolve({ subscription: sub({ plan: "scale" }) });
-		expect(state.kind).toBe("offer");
-		if (state.kind !== "offer") return;
-		expect(state.plan).toBe("scale");
-		expect(state.quote.annualTotal).toBe(399_000); // RM3,990
+	it.each([
+		"monthly",
+		"annual",
+	] as const)("hides from an Enterprise store — %s term", (billingCycle) => {
+		expect(ANNUAL_OFFER_PLANS).not.toContain("enterprise");
+		expect(
+			resolve({ subscription: sub({ plan: "enterprise", billingCycle }) }).kind,
+		).toBe("hidden");
 	});
 
 	it("hides from an admin on their own store", () => {

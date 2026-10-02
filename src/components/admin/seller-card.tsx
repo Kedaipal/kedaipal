@@ -15,10 +15,10 @@ import { cn } from "../../lib/utils";
 import {
 	ContactLine,
 	CreditsText,
-	OwnerEmailLine,
 	ExpiryText,
 	FoundingPill,
 	MarketplacePill,
+	OwnerEmailLine,
 	StatusPill,
 	ViaPill,
 } from "./seller-cells";
