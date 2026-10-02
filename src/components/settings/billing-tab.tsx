@@ -481,7 +481,11 @@ export function BillingTab({
 			    number a seller checks most, and every plan decision below changes
 			    it. Everyone sees it, comped and admin stores included (metered,
 			    never locked); a teammate without the Credits grant sees nothing. */}
-			<CreditMeter variant="full" retailer={retailer} />
+			<CreditMeter
+				variant="full"
+				retailer={retailer}
+				highlight={ring(SPOTLIGHT_ANCHOR.credit_balance.anchor)}
+			/>
 
 			{/* An Enterprise store's plan IS its contract (Credits T6): the terms
 			    sit here in place of the plan-change card and the picker, because
