@@ -88,7 +88,9 @@ export function TransferOwnershipDialog({
 							</p>
 							<p>
 								Order and billing email is cleared until the new owner claims
-								it, so nothing keeps mailing the old owner.
+								it, and the previous owner's saved card is removed — nothing can
+								charge them for a store they no longer own. The new owner sets
+								up auto-renewal themselves.
 							</p>
 						</div>
 					</div>

@@ -262,6 +262,7 @@ import {
 	resolveAccess,
 	startFreePeriodOnClaim,
 } from "./subscriptions";
+import { detachAutoRenewForRetailer } from "./subscriptionPayments";
 import {
 	type ClaimRefusal,
 	isUnclaimed,
@@ -1917,6 +1918,14 @@ export const transferStoreOwnership = mutation({
 			throw new ConvexError(
 				`${normalized} is already on ${retailer.storeName}'s team. One login can only hold one store, so remove them from the team first — then transfer.`,
 			);
+
+		// The PREVIOUS owner's saved card is attached to the SUBSCRIPTION, which
+		// is store-scoped — so without this it stays attached to a store they no
+		// longer own and the next renewal charges them for somebody else's shop.
+		// A charge nobody authorised, and the one genuine money risk in a
+		// handover. The period they already paid for still stands: they paid for
+		// this store's service, and the store carries on.
+		await detachAutoRenewForRetailer(ctx, retailerId);
 
 		const now = Date.now();
 		await ctx.db.patch(retailerId, {

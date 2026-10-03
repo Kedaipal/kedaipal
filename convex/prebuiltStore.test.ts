@@ -772,6 +772,58 @@ describe("transferStoreOwnership", () => {
 		).rejects.toThrow(/already on .* team/i);
 	});
 
+	test("the previous owner's saved card is detached — nothing can charge them for a store they lost", async () => {
+		const t = setup();
+		const retailerId = await claimedStore(t);
+		const sub = await readSub(t, retailerId);
+		await t.run(async (ctx) => {
+			if (!sub) throw new Error("sub");
+			await ctx.db.patch(sub._id, {
+				status: "active",
+				autoRenewSessionId: "rec-session-1",
+				autoRenew: {
+					provider: "hitpay" as const,
+					method: "card",
+					attachedAt: Date.now(),
+				},
+			});
+		});
+
+		await t
+			.withIdentity(ADMIN)
+			.mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: STRANGER.email,
+			});
+
+		// The card is attached to the SUBSCRIPTION, which is store-scoped — so
+		// without the detach it would follow the store and charge the person who
+		// no longer owns it. Every charge is merchant-initiated, so clearing
+		// `autoRenew` is what makes that structurally impossible.
+		const after = await readSub(t, retailerId);
+		expect(after?.autoRenew).toBeUndefined();
+		expect(after?.autoRenewSessionId).toBeUndefined();
+	});
+
+	test("refuses an address that already runs another store — one login, one store", async () => {
+		const t = setup();
+		const retailerId = await claimedStore(t);
+		// A second, unrelated store already mailing that address.
+		const other = await buildStore(t, { slug: "other-shop" });
+		await t.run(async (ctx) => {
+			await ctx.db.patch(other.retailerId, {
+				userId: "user_other_owner",
+				notifyEmail: "taken@example.com",
+			});
+		});
+		await expect(
+			t.withIdentity(ADMIN).mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: "taken@example.com",
+			}),
+		).rejects.toThrow(/already uses taken@example.com/i);
+	});
+
 	test("a PAID subscription survives the handover — the new owner inherits the period, not a free trial", async () => {
 		const t = setup();
 		const retailerId = await claimedStore(t);

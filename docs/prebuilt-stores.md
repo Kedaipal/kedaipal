@@ -158,6 +158,17 @@ taken at claim, which is exactly why `createUnclaimedStore` leaves this field
 unset too). The claim sets it. The gap is one sign-in long and orders stay
 visible in the dashboard and the admin console throughout.
 
+**Why the saved card is detached.** `autoRenew` / `autoRenewSessionId` live on
+the SUBSCRIPTION row, which is store-scoped — so a handover would otherwise
+leave the previous owner's tokenised card attached to a store they no longer
+own, and the next renewal would charge them for somebody else's shop. A charge
+nobody authorised, and the one genuine money risk in a transfer.
+`detachAutoRenewForRetailer` (extracted from `cancelAutoRenew`, one author) runs
+before the patch; the reconcile ordering it carries is load-bearing, which is
+why it is a helper and not three field clears at each call site. The period the
+old owner already paid for still stands — they paid for this store's service and
+the store carries on; the new owner authorises their own method.
+
 **Why a PAID subscription survives.** `startFreePeriodOnClaim` converts a claimed
 store into a fresh 14-day Pro trial — correct for a pre-built store, catastrophic
 for a transferred one, where it would wipe `currentPeriodEnd` / `periodPaidBy`
