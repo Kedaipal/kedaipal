@@ -25,7 +25,6 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
-import { useChecklistStamp } from "../../hooks/useChecklistStamp";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import {
 	formatPickupAddress,
@@ -69,6 +68,7 @@ import {
 	WEEKDAY_NAMES_SHORT,
 } from "../../../convex/lib/openingHours";
 import { useActAsRetailerId } from "../../hooks/useActAs";
+import { useChecklistStamp } from "../../hooks/useChecklistStamp";
 import { useUpdateSettings } from "../../hooks/useUpdateSettings";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import {
@@ -101,6 +101,7 @@ import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { FilterChip } from "../ui/filter-chip";
 import { Input } from "../ui/input";
+import { LinkifiedText } from "../ui/linkified-text";
 import { ModeButton, ModeRadioDot } from "../ui/mode-button";
 import { Skeleton } from "../ui/skeleton";
 import { SortableList } from "../ui/sortable-list";
@@ -3303,8 +3304,8 @@ function LocationRowBody({
 						) : null;
 					})()}
 					{location.notes ? (
-						<p className="text-xs text-muted-foreground whitespace-pre-line">
-							{location.notes}
+						<p className="text-xs text-muted-foreground whitespace-pre-line wrap-break-word">
+							<LinkifiedText text={location.notes} />
 						</p>
 					) : null}
 					{location.managerName || location.managerWaPhone ? (

@@ -14,6 +14,7 @@
 // message points. Don't re-add copy for a send that no longer exists.
 
 import { type Locale, pickLocale as pickLocaleBase } from "./locale";
+import { noteToPlainText } from "./noteLinks";
 import { distinctPickupNotes, PICKUP_NOTES_HEADING } from "./pickupNote";
 import { deriveMapsUrl } from "./mapsUrl";
 
@@ -584,7 +585,8 @@ export function renderPickupNotes(
 	return [
 		"",
 		`📝 ${PICKUP_NOTES_HEADING[locale]}`,
-		...distinct.map((note) => `• ${note}`),
+		// WhatsApp can't render `[label](url)` — spell it out (noteLinks.ts).
+		...distinct.map((note) => `• ${noteToPlainText(note)}`),
 	].join("\n");
 }
 
@@ -677,7 +679,7 @@ export function renderPickupBlock(
 	if (mapsUrl) lines.push(mapsUrl);
 	if (snapshot.notes) {
 		lines.push("");
-		lines.push(snapshot.notes);
+		lines.push(noteToPlainText(snapshot.notes));
 	}
 	return lines.join("\n");
 }

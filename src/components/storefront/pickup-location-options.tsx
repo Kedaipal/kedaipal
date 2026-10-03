@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { formatPrice } from "../../lib/format";
 import { deriveMapsUrl } from "../../lib/google-address";
+import { ClampedNote } from "../ui/clamped-note";
 
 /** Pickup kind — "self_collect" (seller's place) or "drop_off" (meetup point). */
 export type PickupKind = "self_collect" | "drop_off";
@@ -102,9 +103,10 @@ export function PickupSummaryCard({
 						) : null;
 					})()}
 					{location.notes ? (
-						<p className="line-clamp-3 text-xs text-muted-foreground whitespace-pre-line">
-							{location.notes}
-						</p>
+						<ClampedNote
+							text={location.notes}
+							className="text-xs text-muted-foreground whitespace-pre-line"
+						/>
 					) : null}
 				</div>
 			</div>
@@ -170,6 +172,12 @@ export function PickupLocationRadioList({
 
 	const renderOption = (loc: PublicPickupLocation) => {
 		const selected = value === loc._id;
+		// The radio is named by the point's label alone and described by its
+		// address: wrapped in the <label>, it would otherwise announce the whole
+		// card — maps link, the note and its "Show more" included. The note
+		// stays readable (and its links reachable) as ordinary content.
+		const nameId = `pickup-${loc._id}-name`;
+		const detailId = `pickup-${loc._id}-detail`;
 		const mapsUrl = deriveMapsUrl(loc);
 		return (
 			// Fill, not outline — see PickupSummaryCard. The radio itself is the
@@ -187,12 +195,14 @@ export function PickupLocationRadioList({
 					value={loc._id}
 					checked={selected}
 					onChange={() => onChange(loc._id)}
+					aria-labelledby={nameId}
+					aria-describedby={detailId}
 					aria-invalid={error ? true : undefined}
 					className="mt-1 size-4 shrink-0 accent-accent"
 				/>
 				<div className="flex min-w-0 flex-1 flex-col gap-1">
 					<span className="flex items-center gap-2">
-						<span className="text-sm font-semibold leading-tight">
+						<span id={nameId} className="text-sm font-semibold leading-tight">
 							{loc.label}
 						</span>
 						{/* Badge only when headings are off — otherwise the group
@@ -200,7 +210,10 @@ export function PickupLocationRadioList({
 						{showHeadings ? null : <PickupKindBadge kind={loc.locationType} />}
 						<PickupFeeChip fee={loc.fee} currency={currency} />
 					</span>
-					<span className="text-xs text-muted-foreground whitespace-pre-line">
+					<span
+						id={detailId}
+						className="text-xs text-muted-foreground whitespace-pre-line"
+					>
 						{loc.address}
 					</span>
 					{loc.scheduleNote ? (
@@ -220,6 +233,16 @@ export function PickupLocationRadioList({
 							<ExternalLink className="size-3" />
 							Open in maps
 						</a>
+					) : null}
+					{/* The spot's own note ("park at the back", a parking-guide
+					    link) — read while CHOOSING, not only after ordering. Was
+					    missing here, shown only on the single-spot summary card. */}
+					{loc.notes ? (
+						<ClampedNote
+							text={loc.notes}
+							lines={2}
+							className="text-xs text-muted-foreground whitespace-pre-line"
+						/>
 					) : null}
 				</div>
 			</label>

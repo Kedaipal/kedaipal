@@ -1,5 +1,6 @@
 import { formatFulfilmentDateTime } from "../../convex/lib/fulfilmentDate";
 import { deriveMapsUrl } from "../../convex/lib/mapsUrl";
+import { noteToPlainText } from "../../convex/lib/noteLinks";
 import { displayAddressState } from "./address-display";
 import { formatPrice } from "./format";
 
@@ -141,7 +142,7 @@ export function buildOrderWaMessage(order: WaOrderMessageInput): string {
 			if (snap.scheduleNote) lines.push(`🗓️ ${snap.scheduleNote}`);
 			const mapsUrl = deriveMapsUrl(snap);
 			if (mapsUrl) lines.push(mapsUrl);
-			if (snap.notes) lines.push(snap.notes);
+			if (snap.notes) lines.push(noteToPlainText(snap.notes));
 		} else {
 			lines.push("📍 Pickup");
 		}

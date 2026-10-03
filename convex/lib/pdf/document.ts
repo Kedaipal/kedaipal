@@ -15,6 +15,7 @@ import {
 	gatewayPaymentMethodLabel,
 	isGatewayPaymentTag,
 } from "../hitpayBilling";
+import { noteToPlainText } from "../noteLinks";
 import { isOrderDocPaid } from "../orderDocument";
 import { printable } from "./latin1";
 
@@ -279,7 +280,8 @@ export function paymentMethodsToBlocks(
 				m.bankName,
 				m.bankAccountName,
 				m.bankAccountNumber,
-				m.note,
+				// Paper can't be tapped — a Markdown link prints as "label: url".
+				m.note ? noteToPlainText(m.note) : undefined,
 			].filter((l): l is string => Boolean(l && l.trim()));
 			blocks.push({ label: m.label, lines });
 		} else if (!qrEmitted) {

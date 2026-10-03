@@ -11,6 +11,7 @@ import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
 import { Button } from "../ui/button";
 import { CopyButton } from "../ui/copy-button";
 import { Input } from "../ui/input";
+import { LinkifiedText } from "../ui/linkified-text";
 import { ZoomableImage } from "../ui/zoomable-image";
 
 /**
@@ -259,7 +260,7 @@ export function ManualPaymentDialog({
 											) : null}
 											{m.note ? (
 												<p className="whitespace-pre-line break-words text-sm text-muted-foreground">
-													{m.note}
+													<LinkifiedText text={m.note} />
 												</p>
 											) : null}
 										</div>
