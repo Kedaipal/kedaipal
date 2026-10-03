@@ -224,7 +224,7 @@ function sanitizePaymentInstructions(
 }
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { internalMutation, mutation, type MutationCtx, query, type QueryCtx } from "./_generated/server";
+import { action, internalMutation, internalQuery, mutation, type MutationCtx, query, type QueryCtx } from "./_generated/server";
 import { ConvexError } from "convex/values";
 import { reserveFoundingRank } from "./foundingMembers";
 import {
@@ -235,6 +235,8 @@ import { sanitizeAttributionSource } from "./lib/attribution";
 import { sanitizeUnitLine, UNIT_LINE_MAX_LENGTH } from "./lib/address";
 import { sanitizeReferrerSlug } from "./lib/poweredBy";
 import { isValidGaClientId } from "./lib/ga4";
+import { sendEmail } from "./lib/email";
+import { renderHandoverInvite } from "./lib/handoverEmailCopy";
 import { DEFAULT_LOCALE, type Locale } from "./lib/locale";
 import { MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
 import { sanitizeMinOrderValue } from "./lib/minOrderRules";
@@ -261,7 +263,9 @@ import {
 	loadSubscription,
 	resolveAccess,
 	startFreePeriodOnClaim,
+	voidPendingInvoiceOnHandover,
 } from "./subscriptions";
+import { detachAutoRenewForRetailer } from "./subscriptionPayments";
 import {
 	type ClaimRefusal,
 	isUnclaimed,
@@ -1844,7 +1848,17 @@ export const setPendingOwnerEmail = mutation({
 			email,
 			retailerId,
 		);
-		await ctx.db.patch(retailerId, { pendingOwnerEmail, updatedAt: Date.now() });
+		// Same invariant as the transfer: the stamp belongs to the address it was
+		// sent to. Correcting a typo'd handover address after inviting must take
+		// the nudge back, or the admin is told the new person has been emailed.
+		// Unchanged address keeps its stamp — re-saving the same value is not a
+		// re-invite.
+		const addressChanged = pendingOwnerEmail !== retailer.pendingOwnerEmail;
+		await ctx.db.patch(retailerId, {
+			pendingOwnerEmail,
+			...(addressChanged ? { handoverInviteSentAt: undefined } : {}),
+			updatedAt: Date.now(),
+		});
 		await logAdminAction(
 			ctx,
 			{ retailer, role: "admin", actingAsAdmin: true, userId: adminSubject },
@@ -1852,6 +1866,224 @@ export const setPendingOwnerEmail = mutation({
 			retailerId,
 		);
 		return { ok: true };
+	},
+});
+
+/**
+ * Hand a CLAIMED store to a different person (admin only).
+ *
+ * The white-glove case this exists for: a founder built and claimed a store on
+ * their OWN login while setting the vendor up, and now has to give it away. The
+ * pre-built path (`createUnclaimedStore` + `setPendingOwnerEmail`) covers a
+ * store that was never owned; this covers one that already is.
+ *
+ * HOW IT WORKS: the store goes BACK to the unclaimed state and is pointed at
+ * the new address — a fresh sentinel `userId` plus `pendingOwnerEmail` — and
+ * the new owner takes it through the ordinary `claimStore` door. That is the
+ * whole mechanism. No second transfer protocol, no "pending transfer" state to
+ * reason about, and every refusal, consent stamp and free-period rule the claim
+ * already enforces applies unchanged. The old owner loses access the instant
+ * this runs, because `requireRetailerAccess`'s owner branch compares against a
+ * `userId` no Clerk subject can equal.
+ *
+ * WHAT TRAVELS WITH THE STORE: everything except the person. Products, orders,
+ * customers, settings, the team and **the subscription** stay exactly as they
+ * are — a transfer is not a cancellation, and billing a new owner for a plan
+ * the store already pays for would be a second charge for one month. The admin
+ * is told this in the dialog rather than left to assume it.
+ *
+ * WHAT DOES NOT TRAVEL: `notifyEmail` is CLEARED, deliberately. It is the old
+ * owner's address, and a store in handover must not keep mailing buyers' names
+ * and addresses to someone who no longer runs it — nor to the new owner, who
+ * has not accepted anything yet (consent is taken at claim, which is exactly
+ * why `createUnclaimedStore` leaves this field unset too). The claim sets it to
+ * the new owner. Orders in the gap are visible in the dashboard and the admin
+ * console; the gap is one sign-in long.
+ */
+export const transferStoreOwnership = mutation({
+	args: {
+		retailerId: v.id("retailers"),
+		/** Required — unlike `setPendingOwnerEmail`, there is no "we don't know
+		 * yet" here. Taking a store off its current owner without naming who
+		 * gets it would leave a live store nobody can reach. */
+		email: v.string(),
+	},
+	handler: async (ctx, { retailerId, email }): Promise<{ ok: true }> => {
+		const adminSubject = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		if (isUnclaimed(retailer))
+			throw new ConvexError(
+				`${retailer.storeName} has no owner yet — set its handover email instead.`,
+			);
+		const normalized = await resolvePendingOwnerEmail(ctx, email, retailerId);
+		if (!normalized)
+			throw new ConvexError("Enter the new owner's email address.");
+		// A teammate of THIS store cannot claim it: `claimBlocker` refuses anyone
+		// holding an active membership, so the handover would dead-end at the
+		// vendor's sign-in with a message about a store they are already in.
+		// Caught here, where the admin can act on it, rather than there.
+		const member = await ctx.db
+			.query("retailerMembers")
+			.withIndex("by_email", (q) => q.eq("email", normalized))
+			.collect();
+		if (member.some((m) => m.retailerId === retailerId && m.status === "active"))
+			throw new ConvexError(
+				`${normalized} is already on ${retailer.storeName}'s team. One login can only hold one store, so remove them from the team first — then transfer.`,
+			);
+
+		// The PREVIOUS owner's saved card is attached to the SUBSCRIPTION, which
+		// is store-scoped — so without this it stays attached to a store they no
+		// longer own and the next renewal charges them for somebody else's shop.
+		// A charge nobody authorised, and the one genuine money risk in a
+		// handover. The period they already paid for still stands: they paid for
+		// this store's service, and the store carries on.
+		await detachAutoRenewForRetailer(ctx, retailerId);
+
+		const now = Date.now();
+		// The store's OPEN BILL stops here too. Clearing `notifyEmail` below,
+		// detaching the card above and the daily pass's unclaimed skip together
+		// guarantee a pending invoice is never seen or chased while the store
+		// waits — and then it re-arms the moment the new owner claims, locking
+		// their shop on day one for a month they did not own. It also holds the
+		// single-pending-invoice slot, so their first real bill could not be
+		// issued. `voidPendingInvoiceOnHandover` explains why voiding (not
+		// refusing the transfer) is the house answer, and what survives for the
+		// audit. An admin who wants the money settles the invoice BEFORE
+		// transferring; the dialog says so.
+		const voidedInvoice = await voidPendingInvoiceOnHandover(
+			ctx,
+			retailerId,
+			adminSubject,
+			now,
+		);
+		await ctx.db.patch(retailerId, {
+			userId: mintUnclaimedOwnerId(),
+			pendingOwnerEmail: normalized,
+			notifyEmail: undefined,
+			// Re-stamped by the new owner's claim. Left set, the store would read
+			// as claimed on every surface that asks, while having no owner.
+			claimedAt: undefined,
+			// The stamp describes the invite for the CURRENT pending address, so
+			// a new address has never been invited. Left set, the Manage row
+			// would read grey "Waiting for <new address> to sign up" while that
+			// person has had no email — and the amber "invite them" nudge, the
+			// whole reason this is a timestamp and not a boolean, never returns.
+			handoverInviteSentAt: undefined,
+			updatedAt: now,
+		});
+		await logAdminAction(
+			ctx,
+			{ retailer, role: "admin", actingAsAdmin: true, userId: adminSubject },
+			"retailers.transferStoreOwnership",
+			retailerId,
+		);
+		console.log(
+			`transferStoreOwnership[${retailerId}] ${retailer.slug} released by ${adminSubject}, waiting for ${normalized}${
+				voidedInvoice ? `, voided open invoice ${voidedInvoice}` : ""
+			}`,
+		);
+		return { ok: true };
+	},
+});
+
+/**
+ * Email the handover invitation to the address a store is waiting for
+ * (z8r3fdmy7n). Admin only, and the ONE door for both handover paths — a store
+ * we pre-built and a store transferred off its previous owner are the same
+ * state by the time this runs (`pendingOwnerEmail` set, nobody owning it), so
+ * they get the same email rather than two that drift apart.
+ *
+ * Re-sendable on purpose: the commonest failure of a white-glove handover is
+ * an address named and never told, and the second commonest is an invite that
+ * went to spam. `handoverInviteSentAt` records the LAST send so the admin can
+ * see both states — never sent, and sent a while ago with nothing happening.
+ *
+ * SEND FIRST, STAMP AFTER. The first cut scheduled the send and stamped
+ * immediately, swallowing provider errors — so a failed send showed the admin a
+ * success toast and a row reading "sent" while nothing arrived, which is how
+ * this was found on 3 Oct. The stamp now means the provider accepted it.
+ */
+export const sendHandoverInvite = action({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<{ ok: true; email: string }> => {
+		// Validate (and prove admin) BEFORE spending a send, then send, then
+		// stamp. An ACTION rather than a mutation-that-schedules, because the
+		// person who pressed the button is sitting there waiting: a failed send
+		// has to reach them, and a stamp that says "sent" when nothing left the
+		// building is worse than no stamp at all. Fire-and-forget is right for
+		// the automatic emails — a cron must not fail on a bounced notice — and
+		// wrong here.
+		const prep = await ctx.runQuery(
+			internal.retailers.handoverInviteContext,
+			{ retailerId },
+		);
+		const { subject, html, text } = renderHandoverInvite(prep.locale, {
+			storeName: prep.storeName,
+			appUrl: `${process.env.SITE_URL ?? "https://kedaipal.com"}/app`,
+			email: prep.email,
+		});
+		// Deliberately unguarded: sendEmail throws with the provider's own
+		// message, and that message IS the answer the admin needs ("domain not
+		// verified", "recipient suppressed"). Swallowing it is what made the
+		// first cut claim success while nothing arrived.
+		await sendEmail(prep.email, subject, html, text);
+		await ctx.runMutation(internal.retailers.stampHandoverInvite, {
+			retailerId,
+		});
+		return { ok: true, email: prep.email };
+	},
+});
+
+/** Admin check + every refusal, in one read the action makes before sending.
+ * Throws rather than returning null: each refusal is a sentence the admin acts
+ * on, and an action cannot tell them apart from a null. */
+export const handoverInviteContext = internalQuery({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{ storeName: string; locale: Locale; email: string }> => {
+		await requireAdmin(ctx);
+		const r = await ctx.db.get(retailerId);
+		if (!r) throw new ConvexError("Store not found");
+		if (!isUnclaimed(r))
+			throw new ConvexError(
+				`${r.storeName} already has an owner — there is nobody to invite.`,
+			);
+		if (!r.pendingOwnerEmail)
+			throw new ConvexError(
+				`Set the handover email for ${r.storeName} first — there is no address to send to.`,
+			);
+		return {
+			storeName: r.storeName,
+			locale: (r.locale ?? "en") as Locale,
+			email: r.pendingOwnerEmail,
+		};
+	},
+});
+
+/** Record a send that actually left the building. Re-checks admin because an
+ * internal mutation is reachable from any action, and re-reads nothing else —
+ * the send already happened, so a store claimed in between still gets its
+ * honest stamp. */
+export const stampHandoverInvite = internalMutation({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<void> => {
+		const adminSubject = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) return;
+		const now = Date.now();
+		await ctx.db.patch(retailerId, {
+			handoverInviteSentAt: now,
+			updatedAt: now,
+		});
+		await logAdminAction(
+			ctx,
+			{ retailer, role: "admin", actingAsAdmin: true, userId: adminSubject },
+			"retailers.sendHandoverInvite",
+			retailerId,
+		);
 	},
 });
 
@@ -2020,6 +2252,11 @@ export const claimStore = mutation({
 			// account to delete, only this field.
 			userId: identity.subject,
 			pendingOwnerEmail: undefined,
+			// The stamp describes an invite for a pending address that no longer
+			// exists. Clearing it here is what makes the field mean exactly "the
+			// invite for the CURRENT pending address" on every path, so a store
+			// that is later transferred starts its next handover un-invited.
+			handoverInviteSentAt: undefined,
 			// Their address becomes the store's operational contact, so order and
 			// billing mail goes to them from this moment.
 			notifyEmail: email,

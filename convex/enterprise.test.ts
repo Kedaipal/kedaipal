@@ -170,7 +170,7 @@ describe("putting a store on a contract", () => {
 		).rejects.toThrow();
 	});
 
-	test("refused for a comped store, a founding store, a held store and a bill at another tier", async () => {
+	test("refused for a comped store, a held store and a bill at another tier", async () => {
 		const t = setup();
 		const comped = await activeStore(t, {
 			userId: "u_ent_comp",
@@ -182,17 +182,6 @@ describe("putting a store on a contract", () => {
 				...HSL,
 			}),
 		).rejects.toThrow(/comped/);
-
-		const founding = await activeStore(t, {
-			userId: "u_ent_fnd",
-			sub: { foundingIntent: true },
-		});
-		await expect(
-			asAdmin(t).mutation(api.enterprise.setContract, {
-				retailerId: founding.retailerId,
-				...HSL,
-			}),
-		).rejects.toThrow(/Founding Pro/);
 
 		const held = await activeStore(t, {
 			userId: "u_ent_hold",
@@ -1122,5 +1111,37 @@ describe("enterprise leads — who asked, so nobody forgets (z8r3fdkp8h follow-u
 		const rows = await asAdmin(t).query(api.admin.listSellersForAdmin, {});
 		const row = rows.find((r) => r._id === s.retailerId);
 		expect(row?.enterpriseInterestAt).toBeDefined();
+	});
+});
+
+describe("a Founding Member can go on a contract", () => {
+	// Zaki, 3 Oct 2026. The original refusal protected founding PRICING, but a
+	// contract has no list price to discount — the negotiated fee IS the price,
+	// and `enterprisePrice` never applies founding. Membership is permanent
+	// (z8r3fdfyw5) and must survive the move untouched.
+	test("the contract is accepted and the founding membership survives", async () => {
+		const t = setup();
+		const store = await activeStore(t, {
+			userId: "u_ent_founder",
+			sub: { foundingIntent: true },
+		});
+		await t.run(async (ctx) => {
+			await ctx.db.patch(store.retailerId, { isFoundingMember: true });
+		});
+
+		await asAdmin(t).mutation(api.enterprise.setContract, {
+			retailerId: store.retailerId,
+			...HSL,
+		});
+
+		const sub = await t.run(async (ctx) =>
+			ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", store.retailerId))
+				.first(),
+		);
+		expect(sub?.enterprise?.baseFeeMinor).toBe(HSL.baseFeeMinor);
+		const retailer = await t.run(async (ctx) => ctx.db.get(store.retailerId));
+		expect(retailer?.isFoundingMember).toBe(true);
 	});
 });

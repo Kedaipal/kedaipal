@@ -7,6 +7,7 @@ import {
 	Banknote,
 	CalendarClock,
 	Check,
+	ChevronDown,
 	Coins,
 	CreditCard,
 	FilePlus2,
@@ -870,6 +871,7 @@ function retailerOptionLabel(r: {
 	foundingBenefitsRevoked: boolean;
 	hasPending: boolean;
 	comped: boolean;
+	unclaimed: boolean;
 }): string {
 	const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 	const parts = [`${r.storeName} (/${r.slug})`];
@@ -886,7 +888,11 @@ function retailerOptionLabel(r: {
 	if (r.hasPending) parts.push("has pending");
 	// Comped stores can't be billed (issueInvoice refuses, z8r3fdeub2) — say so
 	// in the picker rather than letting the admin draft a bill that bounces.
-	if (r.comped) parts.push("on the house");
+	// A store nobody owns yet is comped too (the `internal` setup comp), but
+	// calling that "on the house" reads as a sponsorship an admin should go and
+	// end. It is scaffolding, and the claim clears it by itself.
+	if (r.unclaimed) parts.push("waiting for its owner");
+	else if (r.comped) parts.push("on the house");
 	return parts.join(" · ");
 }
 
@@ -916,7 +922,13 @@ function IssueInvoiceForm() {
 	const blocked = selected?.hasPending === true;
 	// On the house (z8r3fdeub2) — issueInvoice refuses these server-side; the
 	// button is disabled with the reason instead of bouncing on click.
-	const compedStore = selected?.comped === true;
+	// A store nobody owns yet is ALSO comped — the `internal` setup comp — but
+	// that is scaffolding, not a sponsorship, and it clears itself into a fresh
+	// 14-day Pro trial the moment the vendor claims the store. Telling an admin
+	// to "end the comp" would have them tear down the scaffolding instead of
+	// finishing the handover, so the two states speak separately.
+	const unclaimedStore = selected?.unclaimed === true;
+	const compedStore = selected?.comped === true && !unclaimedStore;
 	// Auto-apply (and lock) the founding discount when the store is on founding
 	// PRICING — an existing Founding Member whose benefits still stand, or a store
 	// onboarded as one (foundingIntent, still on the 14-day trial) — so the
@@ -1043,18 +1055,28 @@ function IssueInvoiceForm() {
 
 			<label className="flex flex-col gap-1 text-sm font-medium">
 				Retailer
-				<select
-					value={retailerId}
-					onChange={(e) => setRetailerId(e.target.value as Id<"retailers">)}
-					className="min-h-11 rounded-xl border border-input bg-background px-3 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-				>
-					<option value="">Select a store…</option>
-					{retailers?.map((r) => (
-						<option key={r._id} value={r._id}>
-							{retailerOptionLabel(r)}
-						</option>
-					))}
-				</select>
+				{/* appearance-none + our own chevron, the same reason
+				    shipment-tracking.tsx gives: the native macOS caret hugs the
+				    right border and ignores padding, so on a full-width field it
+				    sits a screen away from the text it belongs to. */}
+				<div className="relative">
+					<select
+						value={retailerId}
+						onChange={(e) => setRetailerId(e.target.value as Id<"retailers">)}
+						className="min-h-11 w-full appearance-none rounded-xl border border-input bg-background px-3 pr-10 text-base outline-none transition-colors focus:border-ring focus:ring-2 focus:ring-ring/50"
+					>
+						<option value="">Select a store…</option>
+						{retailers?.map((r) => (
+							<option key={r._id} value={r._id}>
+								{retailerOptionLabel(r)}
+							</option>
+						))}
+					</select>
+					<ChevronDown
+						aria-hidden="true"
+						className="pointer-events-none absolute right-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+					/>
+				</div>
 			</label>
 
 			<div className="grid gap-4 rounded-2xl border border-border/70 bg-muted/20 p-3 lg:grid-cols-2 lg:p-4">
@@ -1070,7 +1092,11 @@ function IssueInvoiceForm() {
 								key={p}
 								type="button"
 								disabled={
-									(founding && p !== "pro") || (p === "enterprise" && !contract)
+									// Founding locks the plan to Pro — EXCEPT Enterprise, which
+									// a founding store may take: a contract's negotiated fee is
+									// its own price, so there is no founding discount to lose.
+									(founding && p !== "pro" && p !== "enterprise") ||
+									(p === "enterprise" && !contract)
 								}
 								onClick={() => setPlan(p)}
 								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
@@ -1211,7 +1237,14 @@ function IssueInvoiceForm() {
 				<Button
 					type="button"
 					onClick={handleIssue}
-					disabled={!retailerId || busy || blocked || compedStore || noContract}
+					disabled={
+						!retailerId ||
+						busy ||
+						blocked ||
+						compedStore ||
+						unclaimedStore ||
+						noContract
+					}
 					className="h-11 w-full sm:w-auto sm:px-6"
 				>
 					{busy ? "Issuing…" : "Issue invoice"}
@@ -1226,6 +1259,15 @@ function IssueInvoiceForm() {
 				<p className="text-xs text-muted-foreground">
 					Enterprise bills a store's contract — put this store on one from Admin
 					· Sellers → the store → Enterprise to bill it here.
+				</p>
+			) : null}
+			{unclaimedStore ? (
+				<p className="text-xs text-amber-700">
+					Nobody owns this store yet, so there's nobody to bill — the server
+					refuses it and the daily renewal skips it.{" "}
+					{selected?.comped
+						? "It runs unbilled while you build it, and the day the vendor claims it they start a 14-day Pro trial — bill them after that."
+						: "It already carries a live plan, which keeps its current period. Billing picks up again once the new owner claims it."}
 				</p>
 			) : null}
 			{compedStore ? (

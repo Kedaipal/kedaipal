@@ -9,7 +9,7 @@
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { UNCLAIMED_OWNER_PREFIX } from "./lib/unclaimedStore";
 import schema from "./schema";
@@ -668,5 +668,520 @@ describe("an unclaimed store is reachable but never advertised", () => {
 				storeName: "Hijacked",
 			}),
 		).rejects.toThrow(/Forbidden|Not authorized/);
+	});
+});
+
+describe("transferStoreOwnership", () => {
+	/** A claimed store, owned by VENDOR, ready to be handed to someone else. */
+	async function claimedStore(t: ReturnType<typeof setup>) {
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		return retailerId;
+	}
+
+	test("releases the store back to unclaimed, pointed at the new address", async () => {
+		const t = setup();
+		const retailerId = await claimedStore(t);
+		const before = await readStore(t, retailerId);
+		expect(before?.userId).toBe(VENDOR.subject);
+		expect(before?.notifyEmail).toBe(VENDOR.email);
+
+		await t
+			.withIdentity(ADMIN)
+			.mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: STRANGER.email,
+			});
+
+		const after = await readStore(t, retailerId);
+		expect(after?.userId.startsWith(UNCLAIMED_OWNER_PREFIX)).toBe(true);
+		expect(after?.pendingOwnerEmail).toBe(STRANGER.email);
+		expect(after?.claimedAt).toBeUndefined();
+		// Cleared deliberately: a store in handover must not keep mailing the old
+		// owner, and the new one has consented to nothing yet.
+		expect(after?.notifyEmail).toBeUndefined();
+	});
+
+	test("the previous owner is locked out, and the new one can claim it", async () => {
+		const t = setup();
+		const retailerId = await claimedStore(t);
+		await t
+			.withIdentity(ADMIN)
+			.mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: STRANGER.email,
+			});
+
+		// The old owner's dashboard no longer resolves to this store.
+		expect(
+			await t.withIdentity(VENDOR).query(api.retailers.getMyRetailer, {}),
+		).toBeNull();
+
+		const claimed = await t
+			.withIdentity(STRANGER)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		expect(claimed.ok).toBe(true);
+		const after = await readStore(t, retailerId);
+		expect(after?.userId).toBe(STRANGER.subject);
+		expect(after?.notifyEmail).toBe(STRANGER.email);
+	});
+
+	test("a store nobody owns yet is refused — that is the handover email's job", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t);
+		await expect(
+			t.withIdentity(ADMIN).mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: STRANGER.email,
+			}),
+		).rejects.toThrow(/no owner yet/i);
+	});
+
+	test("only an admin can transfer", async () => {
+		const t = setup();
+		const retailerId = await claimedStore(t);
+		await expect(
+			t.withIdentity(VENDOR).mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: STRANGER.email,
+			}),
+		).rejects.toThrow();
+	});
+
+	test("refuses an address already on this store's team — the claim would dead-end", async () => {
+		const t = setup();
+		const retailerId = await claimedStore(t);
+		await t.run(async (ctx) => {
+			await ctx.db.insert("retailerMembers", {
+				retailerId,
+				email: STRANGER.email,
+				userId: STRANGER.subject,
+				status: "active",
+				permissions: { orders: "read" },
+				invitedAt: Date.now(),
+				invitedBy: VENDOR.subject,
+			});
+		});
+		await expect(
+			t.withIdentity(ADMIN).mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: STRANGER.email,
+			}),
+		).rejects.toThrow(/already on .* team/i);
+	});
+
+	test("the previous owner's saved card is detached — nothing can charge them for a store they lost", async () => {
+		const t = setup();
+		const retailerId = await claimedStore(t);
+		const sub = await readSub(t, retailerId);
+		await t.run(async (ctx) => {
+			if (!sub) throw new Error("sub");
+			await ctx.db.patch(sub._id, {
+				status: "active",
+				autoRenewSessionId: "rec-session-1",
+				autoRenew: {
+					provider: "hitpay" as const,
+					method: "card",
+					attachedAt: Date.now(),
+				},
+			});
+		});
+
+		await t
+			.withIdentity(ADMIN)
+			.mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: STRANGER.email,
+			});
+
+		// The card is attached to the SUBSCRIPTION, which is store-scoped — so
+		// without the detach it would follow the store and charge the person who
+		// no longer owns it. Every charge is merchant-initiated, so clearing
+		// `autoRenew` is what makes that structurally impossible.
+		const after = await readSub(t, retailerId);
+		expect(after?.autoRenew).toBeUndefined();
+		expect(after?.autoRenewSessionId).toBeUndefined();
+	});
+
+	test("refuses an address that already runs another store — one login, one store", async () => {
+		const t = setup();
+		const retailerId = await claimedStore(t);
+		// A second, unrelated store already mailing that address.
+		const other = await buildStore(t, { slug: "other-shop" });
+		await t.run(async (ctx) => {
+			await ctx.db.patch(other.retailerId, {
+				userId: "user_other_owner",
+				notifyEmail: "taken@example.com",
+			});
+		});
+		await expect(
+			t.withIdentity(ADMIN).mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: "taken@example.com",
+			}),
+		).rejects.toThrow(/already uses taken@example.com/i);
+	});
+
+	test("a PAID subscription survives the handover — the new owner inherits the period, not a free trial", async () => {
+		const t = setup();
+		const retailerId = await claimedStore(t);
+		const periodEnd = Date.now() + 20 * DAY_MS;
+		const sub = await readSub(t, retailerId);
+		await t.run(async (ctx) => {
+			if (!sub) throw new Error("sub");
+			await ctx.db.patch(sub._id, {
+				status: "active",
+				plan: "pro",
+				trialEndsAt: undefined,
+				currentPeriodEnd: periodEnd,
+			});
+		});
+
+		await t
+			.withIdentity(ADMIN)
+			.mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: STRANGER.email,
+			});
+		await t
+			.withIdentity(STRANGER)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+
+		const after = await readSub(t, retailerId);
+		// Without the `status === "active"` guard in startFreePeriodOnClaim, the
+		// claim resets this to `trialing` and wipes the period that was paid for.
+		expect(after?.status).toBe("active");
+		expect(after?.currentPeriodEnd).toBe(periodEnd);
+	});
+});
+
+describe("sendHandoverInvite", () => {
+	/** The send is real now (action, not fire-and-forget), so the Resend call is
+	 * stubbed the way convex/lib/email.ts documents — credentials are read at
+	 * call time and the transport is `globalThis.fetch`. */
+	let sent: Array<{ to: string[]; subject: string }>;
+	let restoreFetch: (() => void) | undefined;
+	beforeEach(() => {
+		process.env.RESEND_API_KEY = "test-resend";
+		process.env.EMAIL_FROM = "Kedaipal <orders@kedaipal.test>";
+		process.env.SITE_URL = "https://kedaipal.test";
+		sent = [];
+		const original = globalThis.fetch;
+		restoreFetch = () => {
+			globalThis.fetch = original;
+		};
+		globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+			sent.push(JSON.parse(String(init?.body ?? "{}")));
+			return { ok: true, status: 200, text: async () => "" } as Response;
+		}) as unknown as typeof fetch;
+	});
+	afterEach(() => {
+		restoreFetch?.();
+	});
+
+	test("sends the email, then stamps", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		const before = await readStore(t, retailerId);
+		expect(before?.handoverInviteSentAt).toBeUndefined();
+
+		const res = await t
+			.withIdentity(ADMIN)
+			.action(api.retailers.sendHandoverInvite, { retailerId });
+		expect(res.email).toBe(VENDOR.email);
+		expect(sent).toHaveLength(1);
+		expect(sent[0]?.to).toEqual([VENDOR.email]);
+		expect(sent[0]?.subject).toContain("Mak Cik Kuih");
+
+		const after = await readStore(t, retailerId);
+		expect(typeof after?.handoverInviteSentAt).toBe("number");
+	});
+
+	test("a provider failure reaches the admin AND leaves no stamp", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		globalThis.fetch = (async () =>
+			({
+				ok: false,
+				status: 403,
+				text: async () => "domain not verified",
+			}) as Response) as unknown as typeof fetch;
+
+		await expect(
+			t
+				.withIdentity(ADMIN)
+				.action(api.retailers.sendHandoverInvite, { retailerId }),
+		).rejects.toThrow(/domain not verified/i);
+
+		// The bug this replaced: the first cut scheduled the send, swallowed the
+		// error and stamped anyway, so the console read "sent" while nothing
+		// arrived. A stamp now means the provider accepted it.
+		const after = await readStore(t, retailerId);
+		expect(after?.handoverInviteSentAt).toBeUndefined();
+	});
+
+	test("refuses when no address has been named — there is nothing to send to", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t);
+		await expect(
+			t
+				.withIdentity(ADMIN)
+				.action(api.retailers.sendHandoverInvite, { retailerId }),
+		).rejects.toThrow(/Set the handover email/i);
+	});
+
+	test("refuses on a store that already has an owner", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		await expect(
+			t
+				.withIdentity(ADMIN)
+				.action(api.retailers.sendHandoverInvite, { retailerId }),
+		).rejects.toThrow(/already has an owner/i);
+	});
+
+	test("only an admin can invite", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		await expect(
+			t
+				.withIdentity(VENDOR)
+				.action(api.retailers.sendHandoverInvite, { retailerId }),
+		).rejects.toThrow();
+	});
+
+	test("a transferred store can be invited through the same door", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		await t
+			.withIdentity(ADMIN)
+			.mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: STRANGER.email,
+			});
+		// Pre-built and transferred are the SAME state by the time this runs, so
+		// one invite door serves both rather than two that drift apart.
+		const res = await t
+			.withIdentity(ADMIN)
+			.action(api.retailers.sendHandoverInvite, { retailerId });
+		expect(res.email).toBe(STRANGER.email);
+	});
+});
+
+describe("the invite stamp always describes the CURRENT pending address", () => {
+	/** Invite, then change who the store is waiting for. The stamp must not
+	 * survive the address it was sent to — the Manage row gates the amber
+	 * "invite them" nudge on it, so a surviving stamp tells the admin a person
+	 * who was never emailed is "waiting to sign up". */
+	async function invited(t: ReturnType<typeof setup>) {
+		process.env.RESEND_API_KEY = "test-resend";
+		process.env.EMAIL_FROM = "Kedaipal <orders@kedaipal.test>";
+		globalThis.fetch = (async () =>
+			({ ok: true, status: 200, text: async () => "" }) as Response) as unknown as typeof fetch;
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		await t
+			.withIdentity(ADMIN)
+			.action(api.retailers.sendHandoverInvite, { retailerId });
+		expect((await readStore(t, retailerId))?.handoverInviteSentAt).toBeDefined();
+		return retailerId;
+	}
+
+	test("correcting a typo'd handover address takes the nudge back", async () => {
+		const t = setup();
+		const retailerId = await invited(t);
+		await t
+			.withIdentity(ADMIN)
+			.mutation(api.retailers.setPendingOwnerEmail, {
+				retailerId,
+				email: STRANGER.email,
+			});
+		expect(
+			(await readStore(t, retailerId))?.handoverInviteSentAt,
+		).toBeUndefined();
+	});
+
+	test("re-saving the SAME address is not a re-invite", async () => {
+		const t = setup();
+		const retailerId = await invited(t);
+		await t
+			.withIdentity(ADMIN)
+			.mutation(api.retailers.setPendingOwnerEmail, {
+				retailerId,
+				email: VENDOR.email,
+			});
+		expect((await readStore(t, retailerId))?.handoverInviteSentAt).toBeDefined();
+	});
+
+	test("a claim clears it, so a later transfer starts un-invited", async () => {
+		const t = setup();
+		const retailerId = await invited(t);
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		expect(
+			(await readStore(t, retailerId))?.handoverInviteSentAt,
+		).toBeUndefined();
+
+		await t
+			.withIdentity(ADMIN)
+			.mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: STRANGER.email,
+			});
+		expect(
+			(await readStore(t, retailerId))?.handoverInviteSentAt,
+		).toBeUndefined();
+	});
+});
+
+describe("a store nobody owns has no billing clock", () => {
+	test("the manual invoice path refuses it", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		// Claimed and NOT comped — the state `transferStoreOwnership` creates,
+		// which the comped refusal alone would have let through.
+		const sub = await readSub(t, retailerId);
+		await t.run(async (ctx) => {
+			if (!sub) throw new Error("sub");
+			await ctx.db.patch(sub._id, { comped: false, comp: undefined, status: "active" });
+		});
+		await t
+			.withIdentity(ADMIN)
+			.mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: STRANGER.email,
+			});
+
+		await expect(
+			t.withIdentity(ADMIN).mutation(api.invoices.issueInvoice, {
+				retailerId,
+				plan: "pro",
+				billingCycle: "monthly",
+				founding: false,
+			}),
+		).rejects.toThrow(/no owner yet/i);
+	});
+
+	/** A claimed, PAYING store whose period ended yesterday with an overdue
+	 * invoice still open — the two triggers the daily pass acts on, and the
+	 * state a mid-cycle handover has to be safe in. Stops short of the transfer
+	 * so each test can watch what the transfer itself does. */
+	async function overdueStoreReadyToHandOver(t: ReturnType<typeof setup>) {
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		const sub = await readSub(t, retailerId);
+		await t.run(async (ctx) => {
+			if (!sub) throw new Error("sub");
+			await ctx.db.patch(sub._id, {
+				comped: false,
+				comp: undefined,
+				status: "active",
+				// A period that ended yesterday, plus an overdue invoice: both
+				// triggers the pass acts on.
+				currentPeriodEnd: Date.now() - DAY_MS,
+			});
+			await ctx.db.insert("invoices", {
+				retailerId,
+				subscriptionId: sub._id,
+				invoiceNumber: "INV-TEST-0001",
+				plan: "pro",
+				billingCycle: "monthly",
+				amount: 14900,
+				total: 14900,
+				currency: "MYR",
+				status: "pending",
+				periodStart: Date.now() - 30 * DAY_MS,
+				periodEnd: Date.now() - DAY_MS,
+				dueDate: Date.now() - DAY_MS,
+				createdAt: Date.now() - 20 * DAY_MS,
+			});
+		});
+		return { retailerId };
+	}
+
+	const invoiceOn = (t: ReturnType<typeof setup>, retailerId: Id<"retailers">) =>
+		t.run(async (ctx) =>
+			ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first(),
+		);
+
+	test("the daily pass issues nothing and never locks it", async () => {
+		const t = setup();
+		const { retailerId } = await overdueStoreReadyToHandOver(t);
+		await t
+			.withIdentity(ADMIN)
+			.mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: STRANGER.email,
+			});
+
+		await t.mutation(internal.subscriptions.internalDailyBillingStatus, {});
+
+		// Without the unclaimed skip this flips to past_due — handing the new
+		// owner a locked shop and a bill neither party was ever emailed.
+		const after = await readSub(t, retailerId);
+		expect(after?.status).toBe("active");
+	});
+
+	test("the open bill is VOIDED by the handover, and says who and why", async () => {
+		const t = setup();
+		const { retailerId } = await overdueStoreReadyToHandOver(t);
+		expect((await invoiceOn(t, retailerId))?.status).toBe("pending");
+
+		await t
+			.withIdentity(ADMIN)
+			.mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: STRANGER.email,
+			});
+
+		// The row SURVIVES as void — a genuine debt stays on the record to chase
+		// off-platform. Hard-deleting it would erase the evidence.
+		const invoice = await invoiceOn(t, retailerId);
+		expect(invoice?.status).toBe("void");
+		expect(invoice?.voidedBy).toBe(ADMIN.subject);
+		expect(invoice?.voidReason).toMatch(/ownership transferred/i);
+		expect(invoice?.invoiceNumber).toBe("INV-TEST-0001");
+	});
+
+	test("so the NEW owner is not locked on day one for the previous owner's month", async () => {
+		const t = setup();
+		const { retailerId } = await overdueStoreReadyToHandOver(t);
+		await t
+			.withIdentity(ADMIN)
+			.mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: STRANGER.email,
+			});
+		// The step the unclaimed skip alone never reached: the invoice re-arms
+		// the moment somebody owns the store again.
+		await t
+			.withIdentity(STRANGER)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+
+		await t.mutation(internal.subscriptions.internalDailyBillingStatus, {});
+
+		// Without the void, `overduePending` flips this to past_due and emails a
+		// "pay to resume" demand for a period the new owner never had the store
+		// for — the mirror image of the wiped-paid-period bug this feature
+		// already guards against.
+		const after = await readSub(t, retailerId);
+		expect(after?.status).not.toBe("past_due");
+		expect((await invoiceOn(t, retailerId))?.status).toBe("void");
 	});
 });

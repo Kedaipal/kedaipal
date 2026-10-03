@@ -1267,37 +1267,53 @@ export const cancelAutoRenew = mutation({
 			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
 			.first();
 		if (!retailer) throw new ConvexError("No store found for your account");
-		const sub = await ctx.db
-			.query("subscriptions")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
-			.first();
-		if (!sub) return { ok: true };
-		const sessionId = sub.autoRenewSessionId;
-		// A charge whose outcome is unknown outlives the cancel: the final
-		// reconcile owns the money question AND the remote session delete —
-		// deleting the session first would 404 the count it needs. Turning off
-		// stays instant and ungated either way: `autoRenew` is cleared below,
-		// so nothing can charge from this moment.
-		const reconcilePending = await scheduleLostAttemptReconcile(ctx, sub, {
-			deleteSessionAfter: true,
-		});
-		if (sub.autoRenew !== undefined || sub.autoRenewSetup !== undefined) {
-			await ctx.db.patch(sub._id, {
-				autoRenew: undefined,
-				autoRenewSetup: undefined,
-				autoRenewSessionId: undefined,
-			});
-		}
-		if (sessionId && !reconcilePending) {
-			await ctx.scheduler.runAfter(
-				0,
-				internal.subscriptionPayments.deleteRecurringSession,
-				{ sessionId },
-			);
-		}
+		await detachAutoRenewForRetailer(ctx, retailer._id);
 		return { ok: true };
 	},
 });
+
+/**
+ * Take the saved payment method off a store's subscription — the ONE author of
+ * "nothing can charge this store any more". Extracted from `cancelAutoRenew`
+ * when `retailers.transferStoreOwnership` needed the identical sequence: a
+ * handover must never leave the PREVIOUS owner's tokenised card attached to a
+ * store they no longer own, which is a charge nobody authorised.
+ *
+ * The order is load-bearing and is why this is a helper rather than three
+ * patches at each call site: a charge whose outcome is unknown outlives the
+ * detach, so the final reconcile owns both the money question AND the remote
+ * session delete — deleting the session first would 404 the count it needs.
+ * Turning off is instant and ungated either way, because every charge is
+ * merchant-initiated: no `autoRenew` on the sub ⇒ no charge can ever fire.
+ */
+export async function detachAutoRenewForRetailer(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+): Promise<void> {
+	const sub = await ctx.db
+		.query("subscriptions")
+		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+		.first();
+	if (!sub) return;
+	const sessionId = sub.autoRenewSessionId;
+	const reconcilePending = await scheduleLostAttemptReconcile(ctx, sub, {
+		deleteSessionAfter: true,
+	});
+	if (sub.autoRenew !== undefined || sub.autoRenewSetup !== undefined) {
+		await ctx.db.patch(sub._id, {
+			autoRenew: undefined,
+			autoRenewSetup: undefined,
+			autoRenewSessionId: undefined,
+		});
+	}
+	if (sessionId && !reconcilePending) {
+		await ctx.scheduler.runAfter(
+			0,
+			internal.subscriptionPayments.deleteRecurringSession,
+			{ sessionId },
+		);
+	}
+}
 
 /** DELETE a recurring-billing session at HitPay. Best-effort by contract:
  * failure is a log line — with no local `autoRenew`, nothing charges

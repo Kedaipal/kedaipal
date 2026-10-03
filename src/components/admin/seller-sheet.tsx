@@ -194,11 +194,12 @@ function SellerSheetBody({
 			? `Settle or void ${seller.pendingInvoice.invoiceNumber} first — it bills the contract's next term.`
 			: null;
 	// Why a store can't be put on a contract, said beside the button.
+	// A Founding Member is NOT refused (Zaki, 3 Oct 2026): a contract has no list
+	// price to discount, so there is no founding pricing to protect — and the
+	// membership survives the move untouched.
 	const contractRefusal = seller.comped
 		? "Comped — end the comp before putting it on a contract."
-		: seller.isFoundingMember || seller.foundingIntent
-			? "Founding Members stay on Founding Pro."
-			: null;
+		: null;
 	// The move bills Pro on the contract's own term, in its currency.
 	const moveCycle = seller.billingCycle ?? "monthly";
 	const moveProPrice = contract

@@ -3,15 +3,22 @@
 // (docs/prebuilt-stores.md). Mounted only while open, so the field initialises
 // from the row every time, exactly like comp-dialog.
 
-import { useMutation } from "convex/react";
-import { Loader2, UserPlus } from "lucide-react";
+import { useAction, useMutation } from "convex/react";
+import { Loader2, MailCheck, Send, UserPlus } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { AdminSellerRow } from "../../../convex/admin";
-import { convexErrorMessage } from "../../lib/format";
+import { convexErrorMessage, formatShortDate } from "../../lib/format";
 import { Button } from "../ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../ui/dialog";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "../ui/dialog";
 import { Input } from "../ui/input";
 
 /** Shape-only, so the button can disable before a round-trip. The server
@@ -38,6 +45,8 @@ export function HandoverDialog({
 	onClose: () => void;
 }) {
 	const setEmail = useMutation(api.retailers.setPendingOwnerEmail);
+	const sendInvite = useAction(api.retailers.sendHandoverInvite);
+	const [sending, setSending] = useState(false);
 	const current = seller.pendingOwnerEmail ?? "";
 	const [email, setEmailValue] = useState(current);
 	const [saving, setSaving] = useState(false);
@@ -62,7 +71,7 @@ export function HandoverDialog({
 				{
 					description: clearing
 						? undefined
-						: "Send them the sign-up link yourself — Kedaipal doesn't email it. The store becomes theirs when they sign up with that address.",
+						: "Send them the invitation below, or paste the sign-up link yourself. The store becomes theirs when they sign up with that address.",
 				},
 			);
 			onClose();
@@ -70,6 +79,22 @@ export function HandoverDialog({
 			toast.error(convexErrorMessage(err));
 		} finally {
 			setSaving(false);
+		}
+	}
+
+	async function invite() {
+		setSending(true);
+		try {
+			const res = await sendInvite({ retailerId: seller._id });
+			toast.success(`Invitation sent to ${res.email}.`, {
+				description:
+					"They take the store over by signing in with that address — the email carries no link that works on its own.",
+			});
+			onClose();
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSending(false);
 		}
 	}
 
@@ -120,6 +145,58 @@ export function HandoverDialog({
 							</p>
 						)}
 					</label>
+					{/* Inviting sits AFTER the field, not beside the "Waiting for"
+					    summary: it is what you do once the address is right, and the
+					    saved address is what it sends to. Hidden entirely when no
+					    address is saved — there is nothing to send to, and a disabled
+					    button would need a reason that the empty field already gives.
+					    Unsaved edits are named rather than silently ignored, because
+					    "I typed the new address and pressed Send" is the obvious
+					    mistake this layout invites. */}
+					{current ? (
+						<div className="flex flex-col gap-2 rounded-xl border border-input bg-muted/30 p-3">
+							<div className="flex items-start gap-2">
+								{seller.handoverInviteSentAt ? (
+									<MailCheck
+										className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+										aria-hidden="true"
+									/>
+								) : (
+									<Send
+										className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400"
+										aria-hidden="true"
+									/>
+								)}
+								<p className="text-xs text-muted-foreground">
+									{seller.handoverInviteSentAt
+										? `Invitation last sent ${formatShortDate(seller.handoverInviteSentAt)}. Send it again if they never got it.`
+										: "They haven't been told yet. Send the invitation and they can take the store over themselves."}
+								</p>
+							</div>
+							<Button
+								type="button"
+								variant="outline"
+								className="h-11 w-full sm:h-9"
+								onClick={() => void invite()}
+								disabled={sending || saving || !unchanged}
+							>
+								{sending ? (
+									<Loader2 className="size-4 animate-spin" aria-hidden="true" />
+								) : (
+									<Send className="size-4" aria-hidden="true" />
+								)}
+								{seller.handoverInviteSentAt
+									? "Send invitation again"
+									: "Send invitation"}
+							</Button>
+							{!unchanged ? (
+								<p className="text-xs text-muted-foreground">
+									Save the address above first — the invitation goes to{" "}
+									<strong>{current}</strong>, not to what you've typed.
+								</p>
+							) : null}
+						</div>
+					) : null}
 					<p className="text-xs text-muted-foreground">
 						Until it's claimed: the storefront works by direct link (so you can
 						show them), it stays off kedaipal.com/stores and out of search, and
@@ -131,7 +208,10 @@ export function HandoverDialog({
 					<Button variant="outline" onClick={onClose} disabled={saving}>
 						Cancel
 					</Button>
-					<Button onClick={() => void save()} disabled={!valid || unchanged || saving}>
+					<Button
+						onClick={() => void save()}
+						disabled={!valid || unchanged || saving}
+					>
 						{saving ? (
 							<Loader2 className="size-4 animate-spin" aria-hidden="true" />
 						) : null}
