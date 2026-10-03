@@ -83,8 +83,11 @@ the one reader of the placeholder; nothing else tests the prefix by hand.
    the mistake a loud banner exists to prevent.
 3. **Name the handover email** from the seller directory's Manage menu → **Set
    handover email** (`retailers.setPendingOwnerEmail`), any time before handover.
-4. **Send them the sign-up link yourself.** Kedaipal never emails it — same
-   posture as the existing invite link.
+4. **Send the invitation** from the same Manage menu → **Handover email → Send
+   invitation** (`retailers.sendHandoverInvite`). The row reads "Handover —
+   invite them" in amber until it has gone. The email carries an ordinary
+   sign-in link and no token, so it is safe to forward and useless on its own —
+   pasting the link by hand still works if you prefer.
 
 The directory carries an **Unclaimed** chip, placed straight after **Past due**:
 both are buckets where *Kedaipal* owes an action, unlike the rest, which
@@ -228,12 +231,38 @@ and that one must still convert. "Paying" is *active and nobody is covering it*.
   anyone holding an active membership, so the handover would dead-end on the
   vendor's screen. Remove them from the team first.
 
-**Known gap, deliberate:** nobody is emailed. Kedaipal does not email the
-sign-up link for a pre-built store either — an admin sends it — and the previous
-owner is not notified that the store left them. For the white-glove case (a
-founder handing over their own build) there is nobody to tell. A genuine
-vendor-to-vendor transfer should notify both sides; that is tracked separately,
-not pretended at here.
+**Known gap, deliberate:** the PREVIOUS owner is not told their store left
+them. The new owner is — see [the invitation email](#the-invitation-email-z8r3fdmy7n) — but the
+person losing the shop gets nothing. For the white-glove case (a founder handing
+over their own build) there is nobody to tell; a genuine vendor-to-vendor sale
+should notify both sides, and that is tracked separately rather than
+half-built here.
+
+## A store nobody owns has no billing clock
+
+The pre-built design's safety argument was `insertSetupComp`'s own comment —
+"nothing bills, nothing locks and nothing emails a store with no owner to read
+it" — and that rested entirely on the `internal` comp. `transferStoreOwnership`
+broke the assumption: it makes a store unclaimed **without** comping it, so the
+daily pass's single `comped` exemption missed it.
+
+Concretely, found in review: transfer on day 20 of a monthly period → the period
+ends during the gap → `internalIssueRenewalInvoice` fires → the invoice email and
+all three dunning mails drop at `if (!meta.notifyEmail) return` (the handover
+cleared it) → the invoice goes overdue → the store flips `past_due` and **locks
+itself**. The new owner would claim into a locked shop holding a bill neither
+party was ever told about.
+
+**Ownership is the real predicate, so it is now tested directly** rather than
+through whatever happens to be comping the store:
+
+- `subscriptions.internalDailyBillingStatus` skips an unclaimed row beside a
+  comped one — no renewal, no dunning, no overdue lock;
+- `invoices.issueInvoice` refuses one, because the manual path must refuse what
+  the machine path skips, exactly as it already does for a comp.
+
+The clock resumes at the claim, with somebody to read it. The period the store
+already paid for is untouched throughout — see `startFreePeriodOnClaim`.
 
 ## Billing — why an `internal` comp and not a trial
 

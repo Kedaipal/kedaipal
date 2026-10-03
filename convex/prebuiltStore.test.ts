@@ -9,7 +9,7 @@
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { UNCLAIMED_OWNER_PREFIX } from "./lib/unclaimedStore";
 import schema from "./schema";
@@ -973,5 +973,151 @@ describe("sendHandoverInvite", () => {
 			.withIdentity(ADMIN)
 			.action(api.retailers.sendHandoverInvite, { retailerId });
 		expect(res.email).toBe(STRANGER.email);
+	});
+});
+
+describe("the invite stamp always describes the CURRENT pending address", () => {
+	/** Invite, then change who the store is waiting for. The stamp must not
+	 * survive the address it was sent to — the Manage row gates the amber
+	 * "invite them" nudge on it, so a surviving stamp tells the admin a person
+	 * who was never emailed is "waiting to sign up". */
+	async function invited(t: ReturnType<typeof setup>) {
+		process.env.RESEND_API_KEY = "test-resend";
+		process.env.EMAIL_FROM = "Kedaipal <orders@kedaipal.test>";
+		globalThis.fetch = (async () =>
+			({ ok: true, status: 200, text: async () => "" }) as Response) as unknown as typeof fetch;
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		await t
+			.withIdentity(ADMIN)
+			.action(api.retailers.sendHandoverInvite, { retailerId });
+		expect((await readStore(t, retailerId))?.handoverInviteSentAt).toBeDefined();
+		return retailerId;
+	}
+
+	test("correcting a typo'd handover address takes the nudge back", async () => {
+		const t = setup();
+		const retailerId = await invited(t);
+		await t
+			.withIdentity(ADMIN)
+			.mutation(api.retailers.setPendingOwnerEmail, {
+				retailerId,
+				email: STRANGER.email,
+			});
+		expect(
+			(await readStore(t, retailerId))?.handoverInviteSentAt,
+		).toBeUndefined();
+	});
+
+	test("re-saving the SAME address is not a re-invite", async () => {
+		const t = setup();
+		const retailerId = await invited(t);
+		await t
+			.withIdentity(ADMIN)
+			.mutation(api.retailers.setPendingOwnerEmail, {
+				retailerId,
+				email: VENDOR.email,
+			});
+		expect((await readStore(t, retailerId))?.handoverInviteSentAt).toBeDefined();
+	});
+
+	test("a claim clears it, so a later transfer starts un-invited", async () => {
+		const t = setup();
+		const retailerId = await invited(t);
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		expect(
+			(await readStore(t, retailerId))?.handoverInviteSentAt,
+		).toBeUndefined();
+
+		await t
+			.withIdentity(ADMIN)
+			.mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: STRANGER.email,
+			});
+		expect(
+			(await readStore(t, retailerId))?.handoverInviteSentAt,
+		).toBeUndefined();
+	});
+});
+
+describe("a store nobody owns has no billing clock", () => {
+	test("the manual invoice path refuses it", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		// Claimed and NOT comped — the state `transferStoreOwnership` creates,
+		// which the comped refusal alone would have let through.
+		const sub = await readSub(t, retailerId);
+		await t.run(async (ctx) => {
+			if (!sub) throw new Error("sub");
+			await ctx.db.patch(sub._id, { comped: false, comp: undefined, status: "active" });
+		});
+		await t
+			.withIdentity(ADMIN)
+			.mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: STRANGER.email,
+			});
+
+		await expect(
+			t.withIdentity(ADMIN).mutation(api.invoices.issueInvoice, {
+				retailerId,
+				plan: "pro",
+				billingCycle: "monthly",
+				founding: false,
+			}),
+		).rejects.toThrow(/no owner yet/i);
+	});
+
+	test("the daily pass issues nothing and never locks it", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		const sub = await readSub(t, retailerId);
+		await t.run(async (ctx) => {
+			if (!sub) throw new Error("sub");
+			await ctx.db.patch(sub._id, {
+				comped: false,
+				comp: undefined,
+				status: "active",
+				// A period that ended yesterday, plus an overdue invoice: both
+				// triggers the pass acts on.
+				currentPeriodEnd: Date.now() - DAY_MS,
+			});
+			await ctx.db.insert("invoices", {
+				retailerId,
+				subscriptionId: sub._id,
+				invoiceNumber: "INV-TEST-0001",
+				plan: "pro",
+				billingCycle: "monthly",
+				amount: 14900,
+				total: 14900,
+				currency: "MYR",
+				status: "pending",
+				periodStart: Date.now() - 30 * DAY_MS,
+				periodEnd: Date.now() - DAY_MS,
+				dueDate: Date.now() - DAY_MS,
+				createdAt: Date.now() - 20 * DAY_MS,
+			});
+		});
+		await t
+			.withIdentity(ADMIN)
+			.mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: STRANGER.email,
+			});
+
+		await t.mutation(internal.subscriptions.internalDailyBillingStatus, {});
+
+		// Without the unclaimed skip this flips to past_due — handing the new
+		// owner a locked shop and a bill neither party was ever emailed.
+		const after = await readSub(t, retailerId);
+		expect(after?.status).toBe("active");
 	});
 });

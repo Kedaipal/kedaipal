@@ -1092,7 +1092,11 @@ function IssueInvoiceForm() {
 								key={p}
 								type="button"
 								disabled={
-									(founding && p !== "pro") || (p === "enterprise" && !contract)
+									// Founding locks the plan to Pro — EXCEPT Enterprise, which
+									// a founding store may take: a contract's negotiated fee is
+									// its own price, so there is no founding discount to lose.
+									(founding && p !== "pro" && p !== "enterprise") ||
+									(p === "enterprise" && !contract)
 								}
 								onClick={() => setPlan(p)}
 								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
@@ -1259,9 +1263,11 @@ function IssueInvoiceForm() {
 			) : null}
 			{unclaimedStore ? (
 				<p className="text-xs text-amber-700">
-					Nobody owns this store yet, so there's nobody to bill. It runs
-					unbilled while you build it, and the day the vendor claims it they
-					start a 14-day Pro trial — bill them after that.
+					Nobody owns this store yet, so there's nobody to bill — the server
+					refuses it and the daily renewal skips it.{" "}
+					{selected?.comped
+						? "It runs unbilled while you build it, and the day the vendor claims it they start a 14-day Pro trial — bill them after that."
+						: "It already carries a live plan, which keeps its current period. Billing picks up again once the new owner claims it."}
 				</p>
 			) : null}
 			{compedStore ? (

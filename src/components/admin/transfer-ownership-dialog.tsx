@@ -50,7 +50,7 @@ export function TransferOwnershipDialog({
 			await transfer({ retailerId: seller._id, email: trimmed });
 			toast.success(`${seller.storeName} is now waiting for ${trimmed}.`, {
 				description:
-					"The previous owner has lost access. Send them the sign-up link yourself — Kedaipal doesn't email it.",
+					"The previous owner has lost access. Next: Manage → Handover email → Send invitation.",
 			});
 			onClose();
 		} catch (err) {
@@ -91,6 +91,11 @@ export function TransferOwnershipDialog({
 								it, and the previous owner's saved card is removed — nothing can
 								charge them for a store they no longer own. The new owner sets
 								up auto-renewal themselves.
+							</p>
+							<p>
+								While it waits: nothing bills, nothing locks, and the shop drops
+								off kedaipal.com/stores. The storefront keeps taking orders by
+								direct link throughout.
 							</p>
 						</div>
 					</div>

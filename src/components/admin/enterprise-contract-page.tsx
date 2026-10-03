@@ -226,6 +226,14 @@ export function EnterpriseContractPage({
 	// What the typed numbers actually resolve to — the same helper the server
 	// writes onto the row, so the preview can't flatter the save.
 	const caps = enterpriseContractCaps(input);
+	// What this deal already charges per included credit — the honest anchor for
+	// the overage rate, which is negotiated and must never be auto-filled.
+	// Null until both halves are real, so a half-typed form shows guidance
+	// rather than a number derived from nothing.
+	const impliedRateMinor =
+		input.baseFeeMinor > 0 && input.includedCredits > 0
+			? Math.round(input.baseFeeMinor / input.includedCredits)
+			: null;
 	const preview = problem
 		? null
 		: `Bills ${formatPrice(enterprisePrice({ baseFeeMinor: input.baseFeeMinor, currency }, cycle), currency)} a ${cycle === "annual" ? "year" : "month"} · ${input.includedCredits.toLocaleString("en")} credits a month · ${isUnlimited(caps.userCap) ? "unlimited teammates" : `${caps.userCap - 1} ${caps.userCap === 2 ? "teammate" : "teammates"}`} · ${caps.broadcastQuota.toLocaleString("en")} broadcasts · blocks of ${input.blockSize.toLocaleString("en")} at ${formatPrice(input.overageRateMinor, currency)} = ${formatPrice(enterpriseBlockPrice(input), currency)}`;
@@ -295,10 +303,17 @@ export function EnterpriseContractPage({
 							onChange={setFee}
 							placeholder="e.g. 888"
 							inputMode="decimal"
+							// The stored field is the MONTHLY fee whatever the term — a
+							// yearly contract bills it × 10 — so the input stays monthly
+							// and the YEAR is derived beside it. Relabelling the input on
+							// a term switch would mean converting the number the admin
+							// typed, and then "what did we agree?" has two answers.
 							hint={
-								existing
-									? "The contract's currency is fixed."
-									: "In the store's billing currency."
+								cycle === "annual"
+									? `Billed ${formatPrice(enterprisePrice({ baseFeeMinor: toMinor(fee), currency }, "annual"), currency)} once a year (10 × the monthly fee).${existing ? " The contract's currency is fixed." : ""}`
+									: existing
+										? "The contract's currency is fixed."
+										: "In the store's billing currency."
 							}
 						/>
 						<Field
@@ -308,6 +323,16 @@ export function EnterpriseContractPage({
 							onChange={setRate}
 							placeholder="e.g. 0.60"
 							inputMode="decimal"
+							// No default and no computed value: this is a negotiated rate,
+							// and inventing one would quietly set a price nobody agreed.
+							// What the form CAN do is show what the deal already implies —
+							// the fee divided by its own included credits — so the rate is
+							// chosen against a real number instead of guessed.
+							hint={
+								impliedRateMinor === null
+									? "What an extra credit costs once the monthly allowance runs out. Set per deal — we don't calculate it."
+									: `Their included credits work out at ${formatPrice(impliedRateMinor, currency)} each. Overage usually sits at or just above that.`
+							}
 						/>
 						<Field
 							id="ent-block"

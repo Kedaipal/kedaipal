@@ -764,6 +764,16 @@ export const issueInvoice = mutation({
 			throw new ConvexError(
 				"This store is comped — it's on the house. End the comp first if you really mean to bill it.",
 			);
+		// Same reasoning, the other half of "no billing clock": a store nobody
+		// owns has nobody to bill, nobody to email it to and nobody who could
+		// pay it. The daily cron skips these too (subscriptions.ts), and the
+		// manual path must refuse for the same reason it refuses a comp — or one
+		// click issues an invoice into a store with no owner to read it.
+		const billTarget = await ctx.db.get(retailerId);
+		if (billTarget && isUnclaimed(billTarget))
+			throw new ConvexError(
+				`${billTarget.storeName} has no owner yet — bill it once the new owner has claimed it.`,
+			);
 		if (plan === "enterprise" && !sub.enterprise)
 			throw new ConvexError(
 				"Put the store on an Enterprise contract first — an Enterprise invoice bills its contract.",

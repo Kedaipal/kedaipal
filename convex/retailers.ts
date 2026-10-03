@@ -1847,7 +1847,17 @@ export const setPendingOwnerEmail = mutation({
 			email,
 			retailerId,
 		);
-		await ctx.db.patch(retailerId, { pendingOwnerEmail, updatedAt: Date.now() });
+		// Same invariant as the transfer: the stamp belongs to the address it was
+		// sent to. Correcting a typo'd handover address after inviting must take
+		// the nudge back, or the admin is told the new person has been emailed.
+		// Unchanged address keeps its stamp — re-saving the same value is not a
+		// re-invite.
+		const addressChanged = pendingOwnerEmail !== retailer.pendingOwnerEmail;
+		await ctx.db.patch(retailerId, {
+			pendingOwnerEmail,
+			...(addressChanged ? { handoverInviteSentAt: undefined } : {}),
+			updatedAt: Date.now(),
+		});
 		await logAdminAction(
 			ctx,
 			{ retailer, role: "admin", actingAsAdmin: true, userId: adminSubject },
@@ -1937,6 +1947,12 @@ export const transferStoreOwnership = mutation({
 			// Re-stamped by the new owner's claim. Left set, the store would read
 			// as claimed on every surface that asks, while having no owner.
 			claimedAt: undefined,
+			// The stamp describes the invite for the CURRENT pending address, so
+			// a new address has never been invited. Left set, the Manage row
+			// would read grey "Waiting for <new address> to sign up" while that
+			// person has had no email — and the amber "invite them" nudge, the
+			// whole reason this is a timestamp and not a boolean, never returns.
+			handoverInviteSentAt: undefined,
 			updatedAt: now,
 		});
 		await logAdminAction(
@@ -2217,6 +2233,11 @@ export const claimStore = mutation({
 			// account to delete, only this field.
 			userId: identity.subject,
 			pendingOwnerEmail: undefined,
+			// The stamp describes an invite for a pending address that no longer
+			// exists. Clearing it here is what makes the field mean exactly "the
+			// invite for the CURRENT pending address" on every path, so a store
+			// that is later transferred starts its next handover un-invited.
+			handoverInviteSentAt: undefined,
 			// Their address becomes the store's operational contact, so order and
 			// billing mail goes to them from this moment.
 			notifyEmail: email,

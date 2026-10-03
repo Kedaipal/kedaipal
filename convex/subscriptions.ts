@@ -35,6 +35,7 @@ import {
 	storeOwnerIsAdmin,
 	tryRetailerAccess,
 } from "./lib/auth";
+import { isUnclaimed } from "./lib/unclaimedStore";
 import { landCreditGrant } from "./credits";
 import { COMP_LABEL_MAX, COMP_NOTE_MAX, type CompKind } from "./lib/comp";
 import { ENTERPRISE_SELF_SERVE_REFUSAL } from "./lib/enterprise";
@@ -1447,6 +1448,20 @@ export const internalDailyBillingStatus = internalMutation({
 			// on a date, so nothing below (overdue lock, dunning, renewal issuance)
 			// may touch it. Only an admin turning the comp off changes it.
 			if (sub.comped === true) continue;
+			// Neither does a store NOBODY OWNS (z8r3fdm6up handover). A pre-built
+			// store was shielded by its `internal` comp — "nothing bills, nothing
+			// locks and nothing emails a store with no owner to read it" — and the
+			// comp was doing that work by accident: `transferStoreOwnership` makes
+			// a store unclaimed WITHOUT comping it, and this loop would then issue
+			// a renewal nobody can be told about (`notifyEmail` is cleared at
+			// handover, so the invoice email and all three dunning mails drop at
+			// `if (!meta.notifyEmail) return`), and then LOCK the store when that
+			// invoice went overdue — handing the new owner a past_due shop and a
+			// bill neither party ever saw. Ownership is the real predicate, so it
+			// is tested directly rather than through whatever is comping today.
+			// The clock resumes at the claim, with somebody to read it.
+			const owner = await ctx.db.get(sub.retailerId);
+			if (owner && isUnclaimed(owner)) continue;
 			const invoices = await ctx.db
 				.query("invoices")
 				.withIndex("by_retailer", (q) => q.eq("retailerId", sub.retailerId))
