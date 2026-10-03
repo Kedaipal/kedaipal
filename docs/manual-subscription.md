@@ -61,7 +61,11 @@ never another tier, until their founding benefits are revoked (3 months without
 an active subscription), after which they are ordinary sellers. Every self-serve
 plan path refuses the move server-side (`foundingPlanLocked`), and a downgrade
 scheduled before the lock is cancelled at renewal (`renewalQuote`); the admin
-issue form is not gated — Arif's judgment stays the override. See
+issue form is not gated — Arif's judgment stays the override. **Narrowed 3 Oct
+2026:** "never another tier" means never another *listed* tier. An admin CAN put
+a founding store on an **Enterprise contract**, because a contract has no list
+price for the founding discount to protect; membership survives the move and is
+quoted again if the store returns to Pro. See
 [`hitpay-recurring.md`](./hitpay-recurring.md#founding-members-stay-on-founding-pro-zaki-17-sep-2026).
 
 **⚠️ Membership is permanent; BENEFITS are revocable (z8r3fdfyw5).** The rank,
@@ -974,8 +978,13 @@ from) that `/pricing` prints. Enterprise is `UNLIMITED` orders (the ledger meter
 its contract's included credits — the cap is never the gate) and `UNLIMITED`
 seats, with Pro's broadcast quota until broadcasts ship. Enterprise is never
 `isPlanSelectable` (no self-serve door) and grants **no** Founding badge
-(`planQualifiesForFounding`, Arif's 2026-05-28 decision) — a founding store
-stays on Founding Pro and can't be put on a contract.
+(`planQualifiesForFounding`, Arif's 2026-05-28 decision) — but an **admin can
+put a founding store on a contract** (Zaki, 3 Oct 2026, reversing the 17 Sep
+refusal): a contract has no list price for the founding discount to protect, and
+`enterprisePrice` never applies it. The membership is permanent and untouched by
+the move, so a store that later returns to Pro is quoted founding pricing again.
+Self-serve is unchanged — `foundingPlanLocked` still refuses a founding store
+that asks for another *listed* tier.
 
 > **Scale is retired; Enterprise is the third tier (Credits T6, 1 Oct 2026,
 > ClickUp z8r3fdkp8h — supersedes 86eyb9zwt's flat multi-outlet Scale and

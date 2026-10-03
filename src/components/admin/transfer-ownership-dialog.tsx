@@ -87,6 +87,13 @@ export function TransferOwnershipDialog({
 								transfer moves the person, never the subscription.
 							</p>
 							<p>
+								<strong>Any invoice still unpaid is voided.</strong> It can't
+								follow the store to someone who didn't owe it, and left open it
+								would lock the new owner's shop the day they claim.{" "}
+								<strong>Settle it before transferring</strong> if it needs to be
+								paid.
+							</p>
+							<p>
 								Order and billing email is cleared until the new owner claims
 								it, and the previous owner's saved card is removed — nothing can
 								charge them for a store they no longer own. The new owner sets

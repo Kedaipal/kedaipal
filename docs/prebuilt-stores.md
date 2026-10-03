@@ -197,6 +197,7 @@ subject can equal.
 | Products, orders, customers, settings, the team | The owner |
 | **The subscription** — plan, period, founding rank | `notifyEmail`, cleared |
 | `pendingOwnerEmail`, pointed at the new address | `claimedAt`, re-stamped at claim |
+| — | An **open pending invoice**, voided |
 
 **Why `notifyEmail` is cleared.** It is the old owner's address. A store in
 handover must not keep mailing buyers' names and addresses to someone who no
@@ -215,6 +216,27 @@ before the patch; the reconcile ordering it carries is load-bearing, which is
 why it is a helper and not three field clears at each call site. The period the
 old owner already paid for still stands — they paid for this store's service and
 the store carries on; the new owner authorises their own method.
+
+**Why an OPEN BILL is voided.** An invoice still `pending` when the store changes
+hands cannot be collected through the product, and three of the handover's own
+steps guarantee it: `notifyEmail` is cleared, so the invoice mail and all three
+dunning mails drop at their `if (!meta.notifyEmail) return`; the card is
+detached, so nothing can auto-pay it; and the daily pass skips an unclaimed
+store, so it is never chased. It then **re-arms the moment the new owner
+claims** — `overduePending` flips the store to `past_due` and sends them a "pay
+to resume" demand for a month they did not own, which is the mirror image of the
+wiped-paid-period bug below. It also holds the single-pending-invoice slot
+(`issueInvoice` refuses a second), so their own first bill could not be issued.
+
+So the bill stops at the handover, the same way every other lifecycle flow that
+suspends a store's clock stops it: an admin comp (`setComp`) and the seasonal
+hold both void the open plan invoice, through the same `voidPendingInvoice`
+helper. **Nothing that was ever collected is forgiven** — a pending invoice is a
+*request*, not money, and the row survives as `void` carrying `voidedBy` /
+`voidReason`, so a genuine debt is still on the record to chase off-platform.
+An admin who wants it paid settles it **before** transferring, which is what the
+dialog's panel tells them. `voidPendingInvoiceOnHandover` is the one author, and
+its number goes into the transfer's log line.
 
 **Why a PAID subscription survives.** `startFreePeriodOnClaim` converts a claimed
 store into a fresh 14-day Pro trial — correct for a pre-built store, catastrophic

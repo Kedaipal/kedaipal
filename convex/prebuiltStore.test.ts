@@ -1073,8 +1073,11 @@ describe("a store nobody owns has no billing clock", () => {
 		).rejects.toThrow(/no owner yet/i);
 	});
 
-	test("the daily pass issues nothing and never locks it", async () => {
-		const t = setup();
+	/** A claimed, PAYING store whose period ended yesterday with an overdue
+	 * invoice still open — the two triggers the daily pass acts on, and the
+	 * state a mid-cycle handover has to be safe in. Stops short of the transfer
+	 * so each test can watch what the transfer itself does. */
+	async function overdueStoreReadyToHandOver(t: ReturnType<typeof setup>) {
 		const { retailerId } = await buildStore(t, { email: VENDOR.email });
 		await t
 			.withIdentity(VENDOR)
@@ -1106,6 +1109,20 @@ describe("a store nobody owns has no billing clock", () => {
 				createdAt: Date.now() - 20 * DAY_MS,
 			});
 		});
+		return { retailerId };
+	}
+
+	const invoiceOn = (t: ReturnType<typeof setup>, retailerId: Id<"retailers">) =>
+		t.run(async (ctx) =>
+			ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first(),
+		);
+
+	test("the daily pass issues nothing and never locks it", async () => {
+		const t = setup();
+		const { retailerId } = await overdueStoreReadyToHandOver(t);
 		await t
 			.withIdentity(ADMIN)
 			.mutation(api.retailers.transferStoreOwnership, {
@@ -1119,5 +1136,52 @@ describe("a store nobody owns has no billing clock", () => {
 		// owner a locked shop and a bill neither party was ever emailed.
 		const after = await readSub(t, retailerId);
 		expect(after?.status).toBe("active");
+	});
+
+	test("the open bill is VOIDED by the handover, and says who and why", async () => {
+		const t = setup();
+		const { retailerId } = await overdueStoreReadyToHandOver(t);
+		expect((await invoiceOn(t, retailerId))?.status).toBe("pending");
+
+		await t
+			.withIdentity(ADMIN)
+			.mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: STRANGER.email,
+			});
+
+		// The row SURVIVES as void — a genuine debt stays on the record to chase
+		// off-platform. Hard-deleting it would erase the evidence.
+		const invoice = await invoiceOn(t, retailerId);
+		expect(invoice?.status).toBe("void");
+		expect(invoice?.voidedBy).toBe(ADMIN.subject);
+		expect(invoice?.voidReason).toMatch(/ownership transferred/i);
+		expect(invoice?.invoiceNumber).toBe("INV-TEST-0001");
+	});
+
+	test("so the NEW owner is not locked on day one for the previous owner's month", async () => {
+		const t = setup();
+		const { retailerId } = await overdueStoreReadyToHandOver(t);
+		await t
+			.withIdentity(ADMIN)
+			.mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: STRANGER.email,
+			});
+		// The step the unclaimed skip alone never reached: the invoice re-arms
+		// the moment somebody owns the store again.
+		await t
+			.withIdentity(STRANGER)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+
+		await t.mutation(internal.subscriptions.internalDailyBillingStatus, {});
+
+		// Without the void, `overduePending` flips this to past_due and emails a
+		// "pay to resume" demand for a period the new owner never had the store
+		// for — the mirror image of the wiped-paid-period bug this feature
+		// already guards against.
+		const after = await readSub(t, retailerId);
+		expect(after?.status).not.toBe("past_due");
+		expect((await invoiceOn(t, retailerId))?.status).toBe("void");
 	});
 });

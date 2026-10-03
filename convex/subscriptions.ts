@@ -606,6 +606,56 @@ async function voidPendingInvoice(
 }
 
 /**
+ * A HANDOVER voids the store's open bill, and returns its number for the audit
+ * line (or `null` when there was none).
+ *
+ * An invoice still `pending` when a store changes hands cannot be collected
+ * through the product, and three of the handover's own steps guarantee it:
+ * `notifyEmail` is cleared, so the invoice mail and all three dunning mails
+ * drop at their `if (!meta.notifyEmail) return`; the previous owner's saved
+ * card is detached, so nothing can auto-pay it; and the daily pass skips an
+ * unclaimed store, so it is never chased. It then re-arms the instant the NEW
+ * owner claims — `overduePending` flips the store to `past_due` and sends them
+ * a "pay to resume" demand for a month they did not own. It also holds the
+ * single-pending-invoice slot (`issueInvoice` refuses a second), so their own
+ * first bill could not be issued until someone noticed.
+ *
+ * So the bill stops at the handover, exactly as it does for every other
+ * lifecycle flow that suspends a store's clock — an admin comp (`setComp`) and
+ * the seasonal hold both void the open plan invoice. Nothing is forgiven that
+ * was ever collected: a pending invoice is a REQUEST, not money, and the row
+ * survives as `void` with `voidedBy` / `voidReason`, so a genuine debt is still
+ * on the record to chase off-platform. An admin who wants it paid settles it
+ * BEFORE transferring — which is what the dialog tells them.
+ *
+ * Runs AFTER `detachAutoRenewForRetailer`, and that order is deliberate: the
+ * detach only SCHEDULES its lost-attempt reconcile, so a charge already in
+ * flight can still land on a bill this voids. That case is already handled and
+ * is not a silent loss — `applyGatewayPayment` refuses to settle a non-pending
+ * invoice and stamps a `late_payment` `gatewayIssue` instead, which surfaces in
+ * the admin "Payments to review" queue. Skipping the void whenever a reconcile
+ * were pending would be worse: the invoice would survive to re-arm on the claim,
+ * which is the bug this exists to close.
+ */
+export async function voidPendingInvoiceOnHandover(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	by: string,
+	now: number,
+): Promise<string | null> {
+	const invoice = await pendingInvoiceFor(ctx, retailerId);
+	if (!invoice) return null;
+	await voidPendingInvoice(
+		ctx,
+		invoice,
+		by,
+		"Store ownership transferred — an open bill cannot follow the store to a new owner.",
+		now,
+	);
+	return invoice.invoiceNumber;
+}
+
+/**
  * Seller (or admin acting-as): pause the subscription for the season, or
  * resume it. One switch, two directions, both honest about money:
  *

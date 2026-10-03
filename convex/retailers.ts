@@ -263,6 +263,7 @@ import {
 	loadSubscription,
 	resolveAccess,
 	startFreePeriodOnClaim,
+	voidPendingInvoiceOnHandover,
 } from "./subscriptions";
 import { detachAutoRenewForRetailer } from "./subscriptionPayments";
 import {
@@ -1940,6 +1941,22 @@ export const transferStoreOwnership = mutation({
 		await detachAutoRenewForRetailer(ctx, retailerId);
 
 		const now = Date.now();
+		// The store's OPEN BILL stops here too. Clearing `notifyEmail` below,
+		// detaching the card above and the daily pass's unclaimed skip together
+		// guarantee a pending invoice is never seen or chased while the store
+		// waits — and then it re-arms the moment the new owner claims, locking
+		// their shop on day one for a month they did not own. It also holds the
+		// single-pending-invoice slot, so their first real bill could not be
+		// issued. `voidPendingInvoiceOnHandover` explains why voiding (not
+		// refusing the transfer) is the house answer, and what survives for the
+		// audit. An admin who wants the money settles the invoice BEFORE
+		// transferring; the dialog says so.
+		const voidedInvoice = await voidPendingInvoiceOnHandover(
+			ctx,
+			retailerId,
+			adminSubject,
+			now,
+		);
 		await ctx.db.patch(retailerId, {
 			userId: mintUnclaimedOwnerId(),
 			pendingOwnerEmail: normalized,
@@ -1962,7 +1979,9 @@ export const transferStoreOwnership = mutation({
 			retailerId,
 		);
 		console.log(
-			`transferStoreOwnership[${retailerId}] ${retailer.slug} released by ${adminSubject}, waiting for ${normalized}`,
+			`transferStoreOwnership[${retailerId}] ${retailer.slug} released by ${adminSubject}, waiting for ${normalized}${
+				voidedInvoice ? `, voided open invoice ${voidedInvoice}` : ""
+			}`,
 		);
 		return { ok: true };
 	},
