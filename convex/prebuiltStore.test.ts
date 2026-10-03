@@ -858,7 +858,30 @@ describe("transferStoreOwnership", () => {
 });
 
 describe("sendHandoverInvite", () => {
-	test("stamps the send and schedules the email", async () => {
+	/** The send is real now (action, not fire-and-forget), so the Resend call is
+	 * stubbed the way convex/lib/email.ts documents — credentials are read at
+	 * call time and the transport is `globalThis.fetch`. */
+	let sent: Array<{ to: string[]; subject: string }>;
+	let restoreFetch: (() => void) | undefined;
+	beforeEach(() => {
+		process.env.RESEND_API_KEY = "test-resend";
+		process.env.EMAIL_FROM = "Kedaipal <orders@kedaipal.test>";
+		process.env.SITE_URL = "https://kedaipal.test";
+		sent = [];
+		const original = globalThis.fetch;
+		restoreFetch = () => {
+			globalThis.fetch = original;
+		};
+		globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+			sent.push(JSON.parse(String(init?.body ?? "{}")));
+			return { ok: true, status: 200, text: async () => "" } as Response;
+		}) as unknown as typeof fetch;
+	});
+	afterEach(() => {
+		restoreFetch?.();
+	});
+
+	test("sends the email, then stamps", async () => {
 		const t = setup();
 		const { retailerId } = await buildStore(t, { email: VENDOR.email });
 		const before = await readStore(t, retailerId);
@@ -866,11 +889,37 @@ describe("sendHandoverInvite", () => {
 
 		const res = await t
 			.withIdentity(ADMIN)
-			.mutation(api.retailers.sendHandoverInvite, { retailerId });
+			.action(api.retailers.sendHandoverInvite, { retailerId });
 		expect(res.email).toBe(VENDOR.email);
+		expect(sent).toHaveLength(1);
+		expect(sent[0]?.to).toEqual([VENDOR.email]);
+		expect(sent[0]?.subject).toContain("Mak Cik Kuih");
 
 		const after = await readStore(t, retailerId);
 		expect(typeof after?.handoverInviteSentAt).toBe("number");
+	});
+
+	test("a provider failure reaches the admin AND leaves no stamp", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		globalThis.fetch = (async () =>
+			({
+				ok: false,
+				status: 403,
+				text: async () => "domain not verified",
+			}) as Response) as unknown as typeof fetch;
+
+		await expect(
+			t
+				.withIdentity(ADMIN)
+				.action(api.retailers.sendHandoverInvite, { retailerId }),
+		).rejects.toThrow(/domain not verified/i);
+
+		// The bug this replaced: the first cut scheduled the send, swallowed the
+		// error and stamped anyway, so the console read "sent" while nothing
+		// arrived. A stamp now means the provider accepted it.
+		const after = await readStore(t, retailerId);
+		expect(after?.handoverInviteSentAt).toBeUndefined();
 	});
 
 	test("refuses when no address has been named — there is nothing to send to", async () => {
@@ -879,7 +928,7 @@ describe("sendHandoverInvite", () => {
 		await expect(
 			t
 				.withIdentity(ADMIN)
-				.mutation(api.retailers.sendHandoverInvite, { retailerId }),
+				.action(api.retailers.sendHandoverInvite, { retailerId }),
 		).rejects.toThrow(/Set the handover email/i);
 	});
 
@@ -892,7 +941,7 @@ describe("sendHandoverInvite", () => {
 		await expect(
 			t
 				.withIdentity(ADMIN)
-				.mutation(api.retailers.sendHandoverInvite, { retailerId }),
+				.action(api.retailers.sendHandoverInvite, { retailerId }),
 		).rejects.toThrow(/already has an owner/i);
 	});
 
@@ -902,7 +951,7 @@ describe("sendHandoverInvite", () => {
 		await expect(
 			t
 				.withIdentity(VENDOR)
-				.mutation(api.retailers.sendHandoverInvite, { retailerId }),
+				.action(api.retailers.sendHandoverInvite, { retailerId }),
 		).rejects.toThrow();
 	});
 
@@ -922,7 +971,7 @@ describe("sendHandoverInvite", () => {
 		// one invite door serves both rather than two that drift apart.
 		const res = await t
 			.withIdentity(ADMIN)
-			.mutation(api.retailers.sendHandoverInvite, { retailerId });
+			.action(api.retailers.sendHandoverInvite, { retailerId });
 		expect(res.email).toBe(STRANGER.email);
 	});
 });

@@ -3,7 +3,7 @@
 // (docs/prebuilt-stores.md). Mounted only while open, so the field initialises
 // from the row every time, exactly like comp-dialog.
 
-import { useMutation } from "convex/react";
+import { useAction, useMutation } from "convex/react";
 import { Loader2, MailCheck, Send, UserPlus } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -45,7 +45,7 @@ export function HandoverDialog({
 	onClose: () => void;
 }) {
 	const setEmail = useMutation(api.retailers.setPendingOwnerEmail);
-	const sendInvite = useMutation(api.retailers.sendHandoverInvite);
+	const sendInvite = useAction(api.retailers.sendHandoverInvite);
 	const [sending, setSending] = useState(false);
 	const current = seller.pendingOwnerEmail ?? "";
 	const [email, setEmailValue] = useState(current);

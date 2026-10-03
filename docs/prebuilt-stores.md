@@ -155,12 +155,20 @@ Manage row itself — "Handover — invite them" with an amber icon until it has
 gone, "Handover email — set" after — so an unfinished handover is visible
 without opening anything.
 
-**The stamp records "we tried", not "it arrived."** The mutation stamps and
-schedules; the send is an action, because a Convex mutation cannot reach the
-network. A bounce shows in Resend and re-sending is one tap, so a mutation that
-waited on a write-back would buy an accuracy nobody can act on. The recipient
-address is passed *into* the action rather than re-read, so a claim racing the
-schedule cannot redirect the invite to a cleared field.
+**Send first, stamp after — and the first cut got this wrong.** It was a
+mutation that stamped and scheduled the send, with the provider error swallowed
+by a `try/catch`. So a failed send showed the admin a success toast and a row
+reading "sent" while nothing arrived — found on 3 Oct by an invite that never
+landed. It is now an **action**: validate (and prove admin) through
+`handoverInviteContext`, send, then stamp through `stampHandoverInvite`. The
+provider's own message reaches the admin, because that message *is* the answer
+("domain not verified", "recipient suppressed"), and a stamp now means Resend
+accepted it. `prebuiltStore.test.ts` pins both halves — a success writes the
+stamp, a 403 throws and leaves none.
+
+The lesson generalises: fire-and-forget is right for the automatic emails, where
+a cron must not fail on a bounced notice, and wrong for a button a person is
+waiting on.
 
 **The invite button refuses an unsaved edit** rather than sending to the typed
 value: the dialog edits the address and sends to the saved one, and "I typed the

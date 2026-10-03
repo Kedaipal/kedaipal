@@ -224,7 +224,7 @@ function sanitizePaymentInstructions(
 }
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { internalAction, internalMutation, internalQuery, mutation, type MutationCtx, query, type QueryCtx } from "./_generated/server";
+import { action, internalMutation, internalQuery, mutation, type MutationCtx, query, type QueryCtx } from "./_generated/server";
 import { ConvexError } from "convex/values";
 import { reserveFoundingRank } from "./foundingMembers";
 import {
@@ -1964,81 +1964,91 @@ export const transferStoreOwnership = mutation({
  * went to spam. `handoverInviteSentAt` records the LAST send so the admin can
  * see both states — never sent, and sent a while ago with nothing happening.
  *
- * The mutation stamps and schedules; the send itself is an action, because
- * Convex mutations cannot reach the network. The stamp therefore records
- * "we tried", not "it arrived" — a bounce is visible in the Resend dashboard,
- * and re-sending is one tap, so the alternative (a mutation that waits on an
- * action to write back) buys an accuracy nobody can act on.
+ * SEND FIRST, STAMP AFTER. The first cut scheduled the send and stamped
+ * immediately, swallowing provider errors — so a failed send showed the admin a
+ * success toast and a row reading "sent" while nothing arrived, which is how
+ * this was found on 3 Oct. The stamp now means the provider accepted it.
  */
-export const sendHandoverInvite = mutation({
+export const sendHandoverInvite = action({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }): Promise<{ ok: true; email: string }> => {
+		// Validate (and prove admin) BEFORE spending a send, then send, then
+		// stamp. An ACTION rather than a mutation-that-schedules, because the
+		// person who pressed the button is sitting there waiting: a failed send
+		// has to reach them, and a stamp that says "sent" when nothing left the
+		// building is worse than no stamp at all. Fire-and-forget is right for
+		// the automatic emails — a cron must not fail on a bounced notice — and
+		// wrong here.
+		const prep = await ctx.runQuery(
+			internal.retailers.handoverInviteContext,
+			{ retailerId },
+		);
+		const { subject, html, text } = renderHandoverInvite(prep.locale, {
+			storeName: prep.storeName,
+			appUrl: `${process.env.SITE_URL ?? "https://kedaipal.com"}/app`,
+			email: prep.email,
+		});
+		// Deliberately unguarded: sendEmail throws with the provider's own
+		// message, and that message IS the answer the admin needs ("domain not
+		// verified", "recipient suppressed"). Swallowing it is what made the
+		// first cut claim success while nothing arrived.
+		await sendEmail(prep.email, subject, html, text);
+		await ctx.runMutation(internal.retailers.stampHandoverInvite, {
+			retailerId,
+		});
+		return { ok: true, email: prep.email };
+	},
+});
+
+/** Admin check + every refusal, in one read the action makes before sending.
+ * Throws rather than returning null: each refusal is a sentence the admin acts
+ * on, and an action cannot tell them apart from a null. */
+export const handoverInviteContext = internalQuery({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{ storeName: string; locale: Locale; email: string }> => {
+		await requireAdmin(ctx);
+		const r = await ctx.db.get(retailerId);
+		if (!r) throw new ConvexError("Store not found");
+		if (!isUnclaimed(r))
+			throw new ConvexError(
+				`${r.storeName} already has an owner — there is nobody to invite.`,
+			);
+		if (!r.pendingOwnerEmail)
+			throw new ConvexError(
+				`Set the handover email for ${r.storeName} first — there is no address to send to.`,
+			);
+		return {
+			storeName: r.storeName,
+			locale: (r.locale ?? "en") as Locale,
+			email: r.pendingOwnerEmail,
+		};
+	},
+});
+
+/** Record a send that actually left the building. Re-checks admin because an
+ * internal mutation is reachable from any action, and re-reads nothing else —
+ * the send already happened, so a store claimed in between still gets its
+ * honest stamp. */
+export const stampHandoverInvite = internalMutation({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<void> => {
 		const adminSubject = await requireAdmin(ctx);
 		const retailer = await ctx.db.get(retailerId);
-		if (!retailer) throw new ConvexError("Store not found");
-		if (!isUnclaimed(retailer))
-			throw new ConvexError(
-				`${retailer.storeName} already has an owner — there is nobody to invite.`,
-			);
-		const email = retailer.pendingOwnerEmail;
-		if (!email)
-			throw new ConvexError(
-				`Set the handover email for ${retailer.storeName} first — there is no address to send to.`,
-			);
+		if (!retailer) return;
 		const now = Date.now();
 		await ctx.db.patch(retailerId, {
 			handoverInviteSentAt: now,
 			updatedAt: now,
 		});
-		await ctx.scheduler.runAfter(
-			0,
-			internal.retailers.deliverHandoverInvite,
-			{ retailerId, email },
-		);
 		await logAdminAction(
 			ctx,
 			{ retailer, role: "admin", actingAsAdmin: true, userId: adminSubject },
 			"retailers.sendHandoverInvite",
 			retailerId,
 		);
-		return { ok: true, email };
-	},
-});
-
-/** The send. Fire-and-forget like every other Kedaipal email: a bounced invite
- * must never roll back the stamp, because re-sending is the fix and an admin
- * can see the date. `email` is passed in rather than re-read so a claim racing
- * the schedule cannot redirect the invite to a cleared field. */
-export const deliverHandoverInvite = internalAction({
-	args: { retailerId: v.id("retailers"), email: v.string() },
-	handler: async (ctx, { retailerId, email }): Promise<void> => {
-		const ctxRow = await ctx.runQuery(
-			internal.retailers.handoverInviteContext,
-			{ retailerId },
-		);
-		if (!ctxRow) return;
-		const { subject, html, text } = renderHandoverInvite(ctxRow.locale, {
-			storeName: ctxRow.storeName,
-			appUrl: `${process.env.SITE_URL ?? "https://kedaipal.com"}/app`,
-			email,
-		});
-		try {
-			await sendEmail(email, subject, html, text);
-		} catch (err) {
-			console.error("[handover] invite email failed", { retailerId, err });
-		}
-	},
-});
-
-export const handoverInviteContext = internalQuery({
-	args: { retailerId: v.id("retailers") },
-	handler: async (
-		ctx,
-		{ retailerId },
-	): Promise<{ storeName: string; locale: Locale } | null> => {
-		const r = await ctx.db.get(retailerId);
-		if (!r) return null;
-		return { storeName: r.storeName, locale: (r.locale ?? "en") as Locale };
 	},
 });
 
