@@ -229,7 +229,12 @@ describe("the seller lock ships switched off", () => {
 		expect(account?.notices).toBeUndefined();
 	});
 
-	test("running low is silent too — its copy promises a pause that cannot happen", async () => {
+	// NB: this covers the EMAIL/template notice only. The in-app "running low"
+	// banner is NOT driven by `evaluate` — it reads the balance through
+	// `resolveBannerState` — and its copy is pinned in
+	// src/lib/credit-lock-off-copy.test.ts. An earlier version of this test
+	// name implied it covered both.
+	test("the running-low NOTICE is silent too — its copy promises a pause that cannot happen", async () => {
 		const t = setup();
 		const { retailerId } = await store(t);
 		// Starter grants 100; 10 left is inside the last fifth.

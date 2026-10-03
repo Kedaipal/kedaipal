@@ -128,14 +128,21 @@ export const evaluate = internalMutation({
 		ctx,
 		{ retailerId, route: inRoute },
 	): Promise<CreditNoticeKind | null> => {
-		// All three balance notices — low, locked, unlocked — state in every
-		// surface (email, WhatsApp template, in-app banner) that order handling
-		// pauses. With the lock switched off (CREDIT_LOCK_ENABLED) that is
-		// false, so none of them is sent, and no `notices` bookkeeping is
+		// All three balance notices — low, locked, unlocked — state that order
+		// handling pauses. With the lock switched off (CREDIT_LOCK_ENABLED) that
+		// is false, so none of them is sent, and no `notices` bookkeeping is
 		// written: the day the lock turns on, every store is announced to
 		// cleanly rather than carrying a marker for a notice nobody received.
 		// Expiry notices (internalExpiryNotices) are about purchased lots, not
 		// the lock, and are untouched.
+		//
+		// SCOPE: this gate covers the EMAIL and the WhatsApp template only.
+		// `creditAccounts.notices` is send-dedupe bookkeeping — nothing renders
+		// from it — so the in-app banner is NOT silenced here and never was. It
+		// reads the balance directly through `resolveBannerState`, so its copy
+		// had to be corrected at the source instead (subscription-banner.tsx).
+		// An earlier version of this comment claimed the banner, which is how
+		// the banner kept promising a pause for a release.
 		if (!CREDIT_LOCK_ENABLED) return null;
 		const retailer = await ctx.db.get(retailerId);
 		if (!retailer) return null;

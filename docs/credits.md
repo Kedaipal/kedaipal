@@ -579,8 +579,27 @@ whim.
 
 It is gated at the ONE resolver every guard and the payload read, so the off
 state can never disagree with itself: what the seller is told and what the
-server refuses come from the same answer. Every lock-conditional string in
-`src/lib/credits-ui.ts` is therefore unreachable rather than wrong.
+server refuses come from the same answer. Every string conditioned on `locked`
+— `credits-ui.ts`'s lock lines, `CreditLockNote`, `CreditLockCta`, the meter's
+"Paused:" line, `useAreaLock(area, { credits: true })` — is therefore
+unreachable rather than wrong.
+
+⚠️ **The gate does NOT reach copy conditioned on the BALANCE.** Three surfaces
+read `total` / `creditTone` directly and never look at `locked`, so they
+survived the switch still promising a pause that no longer happens — found in
+review, and the single most important thing to know if the per-order model
+changes these predicates again:
+
+| Surface | Read |
+| --- | --- |
+| The running-low shell banner (`resolveBannerState` → `subscription-banner.tsx`) | `creditTone(...) !== "ok"` |
+| The top-up picker's "your store unlocks" line | `balance.total <= 0 && …` |
+| The dashboard card's CTA (`credit-meter.tsx`) | `tone === "low"` |
+
+All three now state the carry-over instead, and the picker's unlock sentence is
+gated on `CREDIT_LOCK_ENABLED` so turn-on restores it. The banner also had to
+WIDEN to `!== "ok"`: `creditsLocked` outranks it while the lock is on, so with
+the lock off a store already in debt had no banner at all.
 
 **What is NOT touched, deliberately:** every order still spends a credit, the
 ledger still runs negative, and grants / purchases / refunds / expiry all
@@ -592,7 +611,11 @@ lots, not the lock, and keep running.
 
 **Copy that had to move with it:** the public pricing FAQ
 (`pricingpage_faq_a9`, all three locales) described the lock in detail and now
-describes only the carry-over; the v2026.10.1 release note likewise.
+describes only the carry-over; the v2026.10.1 release note likewise; and the
+three balance-driven surfaces in the table above. Reinstating the pause
+sentences belongs to the per-order lock's own copy sweep
+([`z8r3fdmg4h`](https://app.clickup.com/t/z8r3fdmg4h)), not to a lie left lying
+here in the meantime.
 
 **Tests, both directions.** `convex/creditLockOff.test.ts` runs against the real
 constant and pins the off state — deleting either gate turns it red (verified by

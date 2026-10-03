@@ -22,6 +22,7 @@ import {
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { CREDIT_LOCK_ENABLED } from "../../../convex/lib/credits";
 import { useStoreRole } from "../../hooks/usePermission";
 import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
@@ -427,8 +428,14 @@ function PickerView({
 				<p aria-live="polite" className="text-sm font-medium tabular-nums">
 					{afterTopUpLine(balance.total, pack.credits)}
 					{/* Out of credits now, above zero after: say the lock lifts
-					    (T3) — the moment it's paid, not after a refresh. */}
-					{balance.total <= 0 &&
+					    (T3) — the moment it's paid, not after a refresh. Gated on
+					    CREDIT_LOCK_ENABLED because this reads off the BALANCE, not
+					    off `locked`: with the lock switched off it promised an
+					    unlock to a store that was never locked, on the checkout
+					    line. `afterTopUpLine` above already says the true and
+					    sufficient thing ("Covers the 15 owed and leaves 35 orders"). */}
+					{CREDIT_LOCK_ENABLED &&
+					balance.total <= 0 &&
 					balance.total + pack.credits > 0 &&
 					balance.lockExempt === null
 						? " Your store unlocks as soon as it's paid."

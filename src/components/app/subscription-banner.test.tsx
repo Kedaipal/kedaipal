@@ -159,7 +159,9 @@ describe("SubscriptionBanner — running low (the last 20% of the month)", () =>
 		reads(low());
 		render(<SubscriptionBanner subscription={sub()} slug="kedai" />);
 		expect(
-			screen.getByText(/new orders wait until the owner adds credits/),
+			screen.getByText(
+				/anything past the balance comes off the store's next credits/,
+			),
 		).toBeTruthy();
 		expect(screen.queryByRole("link", { name: "Top up credits" })).toBeNull();
 		expect(
@@ -188,7 +190,9 @@ describe("SubscriptionBanner — running low (the last 20% of the month)", () =>
 			/>,
 		);
 		expect(
-			screen.getByText(/new orders wait until you pick a plan/),
+			screen.getByText(
+				/come off your first month's credits/,
+			),
 		).toBeTruthy();
 		expect(screen.getByRole("link", { name: "See plans" })).toBeTruthy();
 		expect(screen.queryByRole("link", { name: "Top up credits" })).toBeNull();
