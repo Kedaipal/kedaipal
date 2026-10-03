@@ -14,6 +14,16 @@ import {
 
 const SETTINGS_ROUTE = join(__dirname, "../routes/app.settings.tsx");
 const SETTINGS_COMPONENTS = join(__dirname, "../components/settings");
+// A settings card does not have to live in `components/settings`: the credit
+// balance card is the same component the dashboard renders in its compact
+// variant, so it sits in `components/credits` and the billing tab mounts it.
+// The guarantee this test makes is "a card renders the anchor", not "the file
+// is in one folder" — so the directories a settings TAB mounts cards from are
+// all scanned.
+const SETTINGS_CARD_DIRS = [
+	SETTINGS_COMPONENTS,
+	join(__dirname, "../components/credits"),
+];
 const PRODUCT_FORM = join(__dirname, "../components/forms/product-form.tsx");
 
 const settingsEntries = Object.entries(SPOTLIGHT_ANCHOR).filter(
@@ -54,9 +64,11 @@ describe("spotlight registry", () => {
 		// anchor can't leave a stale literal behind.
 		const sources = [
 			readFileSync(SETTINGS_ROUTE, "utf8"),
-			...readdirSync(SETTINGS_COMPONENTS)
-				.filter((f) => f.endsWith(".tsx") && !f.endsWith(".test.tsx"))
-				.map((f) => readFileSync(join(SETTINGS_COMPONENTS, f), "utf8")),
+			...SETTINGS_CARD_DIRS.flatMap((dir) =>
+				readdirSync(dir)
+					.filter((f) => f.endsWith(".tsx") && !f.endsWith(".test.tsx"))
+					.map((f) => readFileSync(join(dir, f), "utf8")),
+			),
 		].join("\n");
 		for (const [key, { anchor }] of settingsEntries) {
 			// A card the post-switch checklist already anchors keeps taking its

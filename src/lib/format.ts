@@ -13,6 +13,10 @@ import {
 	COUNTRY_DIAL_CODE,
 	type Country,
 } from "../../convex/lib/country";
+import {
+	type CreditLockErrorData,
+	isCreditLockErrorData,
+} from "../../convex/lib/credits";
 import { formatInternational } from "../../convex/lib/phoneDial";
 import { STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
 
@@ -46,11 +50,22 @@ export function convexErrorMessage(err: unknown): string {
 		return `Busy right now — please try again in ${wait}. Nothing was submitted.`;
 	}
 	if (err instanceof ConvexError) {
+		// The credit lock (Credits T3) is typed so a surface can offer its way
+		// back (`creditLockErrorOf`); everywhere else it reads as its sentence.
+		if (isCreditLockErrorData(err.data)) return err.data.message;
 		return typeof err.data === "string" ? err.data : String(err.data);
 	}
 	return unwrapServerError(
 		err instanceof Error ? err.message : String(err ?? ""),
 	);
+}
+
+/** The credit lock's typed refusal inside a caught error, or `null` — for the
+ * surfaces that put the way back next to the sentence (Credits T3). */
+export function creditLockErrorOf(err: unknown): CreditLockErrorData | null {
+	return err instanceof ConvexError && isCreditLockErrorData(err.data)
+		? err.data
+		: null;
 }
 
 /**

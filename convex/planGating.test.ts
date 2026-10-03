@@ -713,9 +713,6 @@ describe("subscription usage meter", () => {
 		await placeOrder(t, retailer._id, productId);
 		expect(await usageOrders(t, retailer._id)).toBe(2);
 
-		// getMyRetailer carries the meter for the dashboard nudge + billing tab.
-		const me = await asA.query(api.retailers.getMyRetailer);
-		expect(me?.ordersThisMonth).toBe(2);
 
 		await asA.mutation(api.orders.updateStatus, {
 			orderId: first,

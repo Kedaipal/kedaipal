@@ -1,7 +1,6 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useMutation } from "convex/react";
 import {
 	ArrowRight,
 	Banknote,
@@ -26,8 +25,10 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
+import { useChecklistStamp } from "../hooks/useChecklistStamp";
 import type { Country } from "../../convex/lib/country";
 import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
+import { CreditMeter } from "../components/credits/credit-meter";
 import { FirstOrderCelebration } from "../components/dashboard/first-order-celebration";
 import { GreetingChecklistRow } from "../components/dashboard/greeting-checklist-row";
 import { PageHeaderSkeleton } from "../components/dashboard/page-header";
@@ -61,6 +62,7 @@ import {
 	stageLabel,
 } from "../lib/orderStatus";
 import { storefrontUrl as buildStorefrontUrl } from "../lib/storefront-url";
+import { subscribeStepCopy } from "../lib/subscribe-step";
 import {
 	freePeriodState,
 	hasFeature,
@@ -193,7 +195,9 @@ function DashboardHome() {
 	// Which "Optional extras" row is expanded (accordion — one at a time, all
 	// collapsed by default so the optional group stays compact).
 	const [openOptional, setOpenOptional] = useState<string | null>(null);
-	const markLinkShared = useMutation(api.retailers.markLinkShared);
+	const { stamp: markLinkShared } = useChecklistStamp(
+		api.retailers.markLinkShared,
+	);
 
 	if (!retailer) return <DashboardSkeleton />;
 
@@ -213,7 +217,7 @@ function DashboardHome() {
 	// that stamps `linkSharedAt` and completes the share step. Fire-and-forget so a
 	// failed stamp never blocks the action; idempotent server-side.
 	function stampShare() {
-		void markLinkShared({}).catch(() => {
+		void markLinkShared().catch(() => {
 			// ignore — the seller still copied / saw the QR
 		});
 	}
@@ -356,22 +360,10 @@ function DashboardHome() {
 			key: "subscribe",
 			done: subscribed,
 			icon: Sparkles,
-			title:
-				freePeriod.kind === "ended"
-					? "Pay your first invoice"
-					: "Start your plan",
-			why:
-				freePeriod.kind === "free"
-					? `You're free until your first live order, or day 15 — ${freePeriod.daysLeft} day${freePeriod.daysLeft === 1 ? "" : "s"} left on that clock. Your first invoice starts your plan; there's nothing to do before then.`
-					: freePeriod.kind === "ended"
-						? `${
-								freePeriod.reason === "first_order"
-									? "Your first order came in, so your first invoice is ready."
-									: "Your 14 free days are up, so your first invoice is ready."
-							} Pay it to start your plan — or switch to Starter first if that fits better. Your storefront stays live either way.`
-						: "Pick the plan that fits — Starter, Pro, or Scale — to keep your store live and accepting orders.",
+			// Title, the real trial as one line, and the CTA — per free-period
+			// state, from src/lib/subscribe-step.ts (tested there).
+			...subscribeStepCopy(freePeriod),
 			time: "~2 min",
-			cta: freePeriod.kind === "ended" ? "View invoice" : "View billing",
 			to: "/app/settings",
 			tab: "billing",
 		},
@@ -582,6 +574,15 @@ function DashboardHome() {
 					</Link>
 				</section>
 			)}
+
+			{/* Credits (T3) — the quick look, right under today's counts because
+			    it answers the same question ("can I work today's orders?"). The
+			    same meter Settings → Billing shows, with a way in; a teammate
+			    without the Credits grant sees nothing (the shell banner still
+			    tells them if the store is locked). */}
+			<div className="lg:max-w-2xl">
+				<CreditMeter variant="card" retailer={retailer} />
+			</div>
 
 			{/* Share card — the dashed "ticket" from the landing page. Always the
 			    top verb for a live store: put the link where buyers already are. */}

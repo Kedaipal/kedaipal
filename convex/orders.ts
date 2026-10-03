@@ -33,7 +33,9 @@ import {
 	isStoredImageRenderable,
 	UNRENDERABLE_PROOF_MESSAGE,
 } from "./lib/imageContentType";
+import type { CancelCause } from "./lib/credits";
 import { requireCustomerName } from "./lib/customer";
+import { assertCreditsAvailable } from "./creditLock";
 import { assertPlanFeature, assertSubscriptionActive } from "./subscriptions";
 import {
 	recordOrderCancelled,
@@ -93,6 +95,7 @@ import {
 } from "./lib/orderBuckets";
 import {
 	type CsvOrder,
+	fulfilmentKey,
 	orderCategoryNames,
 	ordersToCsv,
 } from "./lib/orderCsv";
@@ -1685,9 +1688,14 @@ export const create = mutation({
 			await stampRetailerActivation(ctx, args.retailerId, now);
 		}
 
-		// Meter the order against the retailer's monthly usage (SOFT cap — the
-		// nudge banner, never a block on this public mutation).
-		await recordOrderCreated(ctx, args.retailerId, now);
+		// Meter the order (SOFT cap — the nudge banner) and use its credit
+		// (Credits, 86eye2ccu). Never a block on this public mutation.
+		await recordOrderCreated(ctx, {
+			retailerId: args.retailerId,
+			orderId,
+			orderShortId: shortId,
+			createdAt: now,
+		});
 
 		// Mark every product on this order as having sold, so it can no longer be
 		// permanently deleted out from under the order lines that now reference it.
@@ -2163,6 +2171,14 @@ export const generateReceiptPdf = action({
 		ctx,
 		{ shortId, token },
 	): Promise<{ pdf: ArrayBuffer; filename: string } | null> => {
+		// Credits (T3): a seller handing out an invoice or receipt is locked at
+		// zero credits. The BUYER's own copy (token) never is — buyers never
+		// feel a seller's balance.
+		if (shortId !== undefined && token === undefined) {
+			await ctx.runQuery(internal.creditLock.assertCreditsForOrder, {
+				shortId,
+			});
+		}
 		const inputs = await ctx.runQuery(internal.orders.receiptPdfInputs, {
 			shortId,
 			token,
@@ -2250,6 +2266,9 @@ export const sendPaymentReminder = action({
 		{ shortId },
 	): Promise<{ ok: boolean; reason?: ManualReminderBlock | "not_found" }> => {
 		await ctx.runQuery(internal.subscriptions.assertWritableForOrder, {
+			shortId: shortId,
+		});
+		await ctx.runQuery(internal.creditLock.assertCreditsForOrder, {
 			shortId: shortId,
 		});
 		const prep = await ctx.runMutation(internal.orders.prepareManualReminder, {
@@ -2492,6 +2511,21 @@ const orderSourceValidator = v.union(
 	v.literal("claim"),
 );
 
+// How the order LEAVES (z8r3fdfau9) — every value `fulfilmentKey` can return.
+// A closed set, so a literal union rather than the free-form v.string() the
+// seller-invented dimensions (categories, attribution tags) need. Held to
+// FULFILMENT_KEYS by a test that pushes each member through this validator: a
+// sixth kind added to the registry and forgotten here would otherwise reach a
+// seller as an unexplained failure the moment they ticked it.
+const fulfilmentKeyValidator = v.union(
+	v.literal("delivery"),
+	v.literal("self_collect"),
+	v.literal("drop_off"),
+	v.literal("collection"),
+	v.literal("booking"),
+	v.literal("event"),
+);
+
 // THE status axis on the wire (1 Sep) — leaves, not raw statuses. `confirmed`
 // here means confirmed AND SEEN; `confirmed_unseen` is its own member. See
 // INBOX_LEAF_KEYS in lib/orderBuckets.ts for why the split exists.
@@ -2581,6 +2615,12 @@ export const searchOrders = query({
 	// accepted so a bookmarked URL or an in-flight client from before the widen
 	// keeps working; the handler folds it into `sources`. Drop it a release on.
 	sources: v.optional(v.array(orderSourceValidator)),
+		// How the order LEAVES, MULTI (z8r3fdfau9) — the twin of `sources` above
+		// and its neighbour on purpose: that one is which checkout surface the
+		// order came in through, this one is the trip out. Matched via the column
+		// registry's `fulfilmentKey`, so the filter and the Fulfilment cell can
+		// never name the same order two different things.
+		fulfilments: v.optional(v.array(fulfilmentKeyValidator)),
 		// Marketing origin (86eyq0eq9): `attributionBucket` keys — a stamped
 		// `?src=` tag, "counter", or "direct". Multi-select ORs within itself and
 		// ANDs with the rest. Free-form by design (sellers invent their own
@@ -2621,6 +2661,7 @@ export const searchOrders = query({
 			mockupPending,
 			source,
 			sources,
+			fulfilments,
 			statuses,
 			categories,
 			categoriesUnspecified,
@@ -2660,6 +2701,7 @@ export const searchOrders = query({
 			mockupPending,
 			source,
 			sources,
+			fulfilments,
 			statuses,
 			categories,
 			categoriesUnspecified,
@@ -2739,6 +2781,10 @@ export const searchOrders = query({
 		const leafTally = new Map<string, number>();
 		const categoryTally = new Map<string, number>();
 		const checkoutSourceTally = new Map<string, number>();
+		// How each order LEAVES (z8r3fdfau9) — keyed by `fulfilmentKey`, the same
+		// function the column renders and the predicate matches on, so the number
+		// beside an option is exactly the number of rows ticking it will show.
+		const fulfilmentTally = new Map<string, number>();
 		const paymentStatusTally = new Map<string, number>();
 		// "" is the count of orders with no recorded method, which the picker
 		// offers as "Unspecified" — a real answer, not a gap.
@@ -2778,6 +2824,7 @@ export const searchOrders = query({
 			if (isReadyToShipForLabel(o)) counts.readyToShip++;
 			if (o.pinnedAt !== undefined) counts.pinned++;
 			bump(checkoutSourceTally, o.source ?? "storefront");
+			bump(fulfilmentTally, fulfilmentKey(o));
 			bump(paymentStatusTally, o.paymentStatus ?? "unpaid");
 			bump(paymentMethodTally, o.paymentMethod ?? "");
 			// An order counts ONCE per category it contains, never once per line —
@@ -2844,6 +2891,7 @@ export const searchOrders = query({
 				statusLeaf: Object.fromEntries(leafTally),
 				category: Object.fromEntries(categoryTally),
 				source: Object.fromEntries(checkoutSourceTally),
+				fulfilment: Object.fromEntries(fulfilmentTally),
 				paymentStatus: Object.fromEntries(paymentStatusTally),
 				paymentMethod: Object.fromEntries(paymentMethodTally),
 				attribution: Object.fromEntries(sourceTally),
@@ -2917,6 +2965,10 @@ const exportFilterValidators = {
 	// accepted so a bookmarked URL or an in-flight client from before the widen
 	// keeps working; the handler folds it into `sources`. Drop it a release on.
 	sources: v.optional(v.array(orderSourceValidator)),
+	// How the order LEAVES (z8r3fdfau9) — in the shared set for the same reason
+	// every other filter is: an export of a filtered view must contain exactly
+	// the rows the seller was looking at.
+	fulfilments: v.optional(v.array(fulfilmentKeyValidator)),
 	searchText: v.optional(v.string()),
 	// Pin mode (86eyrtz74) — kept in the SHARED validator set so an export of a
 	// filtered view contains exactly the rows the seller was looking at, forced-in
@@ -2931,7 +2983,7 @@ const exportFilterValidators = {
 // financial records). EXPORT_SCAN_CAP bounds the worst case (a matching range
 // that sits beyond this many of the newest orders), surfaced as a `capped` flag
 // so the UI can warn rather than return silently-incomplete books. ~10 months at
-// the Scale tier's 2,000 orders/month.
+// 2,000 orders/month — an Enterprise-sized store.
 const EXPORT_PAGE_SIZE = 500;
 const EXPORT_SCAN_CAP = 20_000;
 
@@ -2955,6 +3007,12 @@ function orderToCsvSource(o: Doc<"orders">): CsvOrder {
 		paymentReceivedAt: o.paymentReceivedAt,
 		deliveryMethod: o.deliveryMethod,
 		deliveryDirection: o.deliveryDirection,
+		// The RSVP marker, because `fulfilmentKey` reads it: an RSVP is stored
+		// `self_collect`, so dropping this here files every event under
+		// "Self-collect" in the CSV while the table calls it "Event" — the same
+		// export-vs-screen split `pickupSnapshot.locationType` already caused
+		// once on this exact projection. Pinned by a test.
+		eventRsvp: o.eventRsvp,
 		source: o.source,
 		attributionSource: o.attributionSource,
 		customer: o.customer,
@@ -2981,7 +3039,16 @@ function orderToCsvSource(o: Doc<"orders">): CsvOrder {
 				}
 			: undefined,
 		pickupSnapshot: o.pickupSnapshot
-			? { label: o.pickupSnapshot.label, address: o.pickupSnapshot.address }
+			? {
+					label: o.pickupSnapshot.label,
+					address: o.pickupSnapshot.address,
+					// Carried because `fulfilmentKey` reads it (z8r3fdfau9): drop it
+					// here and the CSV's Fulfilment cell says "Self-collect" for the
+					// very orders the table calls "Drop-off" — the export diverging
+					// from the screen, which is the one thing this whole path exists
+					// to prevent.
+					locationType: o.pickupSnapshot.locationType,
+				}
 			: undefined,
 		courierName: o.courierName,
 		trackingNo: o.trackingNo,
@@ -3355,10 +3422,14 @@ async function lineReservedStock(
 	return (fresh.blockWhenOutOfStock ?? product.blockWhenOutOfStock) === true;
 }
 
+/** `order` is the doc as it was BEFORE the cancel — its status decides whether
+ * the order's credit comes back (`cancelRefundDecision`), and `cause` says who
+ * ended it. */
 async function reverseCancellationEffects(
 	ctx: MutationCtx,
 	order: Doc<"orders">,
 	now: number,
+	cause: CancelCause,
 ): Promise<void> {
 	const restoreByVariant = new Map<Id<"productVariants">, number>();
 	for (const item of order.items) {
@@ -3388,8 +3459,9 @@ async function reverseCancellationEffects(
 	}
 
 	// Un-meter the order from its creation month (runs regardless of customer
-	// linkage — every created order was counted). See convex/subscriptionUsage.ts.
-	await recordOrderCancelled(ctx, order.retailerId, order.createdAt);
+	// linkage — every created order was counted) and give its credit back if it
+	// never got going. See convex/subscriptionUsage.ts.
+	await recordOrderCancelled(ctx, { order, cause, now });
 }
 
 /**
@@ -3474,14 +3546,25 @@ export async function applyStatusTransition(
 		 * expiry sweeps). Stamps cannot be backfilled, so they ship with the
 		 * backend even though the timeline renders them later. */
 		actorUserId?: string;
+		/** Who is ending the order, when `status` is "cancelled" — decides
+		 * whether its credit comes back (`cancelRefundDecision`). Sweeps pass
+		 * "system". Defaults to "seller", the STRICTEST rule (only a
+		 * never-accepted order, within the monthly allowance), so a caller that
+		 * forgets can only ever under-refund, never mint a credit. */
+		cancelCause?: CancelCause;
 	} = {},
 ): Promise<void> {
 	const now = Date.now();
 
-	// Restore stock + reverse aggregates/usage on the FIRST transition into
-	// cancelled. Idempotent — re-cancelling a cancelled order is a no-op.
+	// Restore stock + reverse aggregates/usage/credit on the FIRST transition
+	// into cancelled. Idempotent — re-cancelling a cancelled order is a no-op.
 	if (status === "cancelled" && order.status !== "cancelled") {
-		await reverseCancellationEffects(ctx, order, now);
+		await reverseCancellationEffects(
+			ctx,
+			order,
+			now,
+			opts.cancelCause ?? "seller",
+		);
 	}
 
 	const patch: Partial<{
@@ -3717,6 +3800,9 @@ export const updateStatus = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		// Credits (T3): moving an order forward is locked at zero credits;
+		// cancelling never is — a locked seller must be able to release a buyer.
+		if (status !== "cancelled") await assertCreditsAvailable(ctx, order.retailerId);
 
 		// Cancelled is TERMINAL — the same rule advanceToStage already enforces
 		// (86eypn8ye). Not a UX nicety: cancelling RESTORES reserved stock, and
@@ -3790,6 +3876,7 @@ export const updateStatus = mutation({
 			courierName,
 			trackingNo,
 			actorUserId: access.role === "admin" ? undefined : access.userId,
+			cancelCause: "seller",
 		});
 		await logAdminAction(ctx, access, "orders.updateStatus", orderId);
 	},
@@ -3876,8 +3963,14 @@ export const bulkUpdateStatus = mutation({
 			// single-retailer by construction (1:1 user↔store), so order 1's
 			// answer is order 50's — per-order would just be 50 subscription
 			// reads for one refusal. The admin bypass lives inside the guard.
-			if (firstResolve)
+			if (firstResolve) {
 				await assertSubscriptionActive(ctx, order.retailerId);
+				// Credits (T3): moving orders forward is locked at zero credits;
+				// cancelling never is — a locked seller must be able to release
+				// buyers. Once per batch, for the same reason as the lock above.
+				if (status !== "cancelled")
+					await assertCreditsAvailable(ctx, order.retailerId);
+			}
 			if (firstResolve) retailer = await ctx.db.get(order.retailerId);
 
 			// Skip no-ops + transitions blocked by the mockup gate (don't fail the
@@ -3967,6 +4060,7 @@ export const bulkUpdateStatus = mutation({
 			await applyStatusTransition(ctx, order, status, {
 				actorUserId:
 					batchAccess.role === "admin" ? undefined : batchAccess.userId,
+				cancelCause: "seller",
 			});
 			updated++;
 		}
@@ -4011,8 +4105,9 @@ async function deleteOrderCascade(
 
 	// 1. Reverse live-side effects only for an order that hasn't already been
 	//    cancelled (a cancelled order reversed them on the way into cancelled).
+	//    Hard delete is Kedaipal-admin only, so a live order's credit comes back.
 	if (order.status !== "cancelled") {
-		await reverseCancellationEffects(ctx, order, now);
+		await reverseCancellationEffects(ctx, order, now, "admin");
 	}
 
 	// 2. Delete owned storage blobs — via the SHARED helper (86eyetzbk), which is
@@ -4193,6 +4288,7 @@ export const advanceToStage = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		await assertCreditsAvailable(ctx, order.retailerId);
 		const retailer = access.retailer;
 
 		if (order.status === "cancelled") {
@@ -4358,6 +4454,7 @@ export const setShipmentTracking = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		await assertCreditsAvailable(ctx, order.retailerId);
 
 		// All-blank input resolves to all-undefined = tracking cleared.
 		const shipment = resolveShipmentFields({
@@ -4609,6 +4706,7 @@ export const setDeliveryFee = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		await assertCreditsAvailable(ctx, order.retailerId);
 		if ((order.deliveryMethod ?? "delivery") !== "delivery")
 			throw new ConvexError("Only delivery orders carry a delivery charge");
 		if (order.status === "cancelled")
@@ -4730,6 +4828,7 @@ export const rescheduleFulfilment = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		await assertCreditsAvailable(ctx, order.retailerId);
 		if (order.status === "cancelled")
 			throw new ConvexError("This order was cancelled");
 		if (order.status === "shipped" || order.status === "delivered")
@@ -5143,6 +5242,7 @@ export const markPaymentReceived = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		await assertCreditsAvailable(ctx, order.retailerId);
 
 		if (order.paymentStatus === "received") {
 			// Idempotent — second click is a no-op.
@@ -5594,6 +5694,7 @@ export const submitMockup = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		await assertCreditsAvailable(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		if (order.mockupStatus === "approved")
@@ -5683,6 +5784,7 @@ export const updateMockupQuote = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		await assertCreditsAvailable(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		if (order.mockupStatus === "approved")
@@ -5810,6 +5912,7 @@ export const waiveMockup = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		await assertCreditsAvailable(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		if (order.mockupStatus === "approved" || order.mockupWaivedAt !== undefined)
@@ -5925,9 +6028,10 @@ export const declineMockupItem = mutation({
 					customerId: order.customerId,
 					orderTotal: revenueExcludingDeposit(order),
 				});
-			// Un-meter on the transition into cancelled (mirrors
-			// applyStatusTransition — this cancel path bypasses that helper).
-			await recordOrderCancelled(ctx, order.retailerId, order.createdAt);
+			// Un-meter + give the credit back on the transition into cancelled
+			// (mirrors applyStatusTransition — this cancel path bypasses that
+			// helper). The BUYER backed out, so the credit always returns.
+			await recordOrderCancelled(ctx, { order, cause: "buyer", now });
 			await ctx.db.patch(order._id, {
 				status: "cancelled",
 				mockupStatus: undefined,

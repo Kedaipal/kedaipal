@@ -22,8 +22,13 @@ A pending invoice is created in two ways:
    (pick retailer, plan, cycle, **founding** toggle, due date defaulting to +14d;
    amount auto-derived from `lib/plans`). This is the path for trial **conversions**
    and **renewals**, and for onboarding a **Founding-10** member (founding toggle =
-   30% Pro discount). Guards: rejects Scale (the v1 defense-in-depth home),
-   founding-non-Pro, and a duplicate pending per retailer.
+   30% Pro discount). Guards: founding-non-Pro and a duplicate pending per
+   retailer. The plan buttons offer **Starter and Pro**; an **Enterprise**
+   invoice is priced from the store's contract (`subscriptionPrice` →
+   `enterprisePrice`) and is refused for a store without one — a contract is
+   set in the seller sheet first ([`pricing.md` →
+   Enterprise](./pricing.md#enterprise--a-contract-not-a-price)). (Scale, briefly
+   purchasable with `z8r3fdfuhq`, was retired before release by T6.)
 2. **Founding-intent signup** — `createRetailer({ intent: "founding" })` reserves the
    rank + flags `foundingIntent`, but issues **no** auto-invoice (Arif issues it).
 
@@ -56,7 +61,11 @@ never another tier, until their founding benefits are revoked (3 months without
 an active subscription), after which they are ordinary sellers. Every self-serve
 plan path refuses the move server-side (`foundingPlanLocked`), and a downgrade
 scheduled before the lock is cancelled at renewal (`renewalQuote`); the admin
-issue form is not gated — Arif's judgment stays the override. See
+issue form is not gated — Arif's judgment stays the override. **Narrowed 3 Oct
+2026:** "never another tier" means never another *listed* tier. An admin CAN put
+a founding store on an **Enterprise contract**, because a contract has no list
+price for the founding discount to protect; membership survives the move and is
+quoted again if the store returns to Pro. See
 [`hitpay-recurring.md`](./hitpay-recurring.md#founding-members-stay-on-founding-pro-zaki-17-sep-2026).
 
 **⚠️ Membership is permanent; BENEFITS are revocable (z8r3fdfyw5).** The rank,
@@ -78,7 +87,7 @@ members; the full rule, the surfaces and the unresolved terms conflict are in
 **Nav pill (`TierPill`, sidebar + mobile header + settings card).** A founding
 member's status chip reads **"Founding #N"** (± trial/past-due state), which on
 its own hides their actual tier — so the pill renders a **second neutral tier
-chip** (Starter/Pro/Scale) beside it, both wrapped in one link to Settings →
+chip** (Starter/Pro/Enterprise) beside it, both wrapped in one link to Settings →
 Billing. Non-founding sellers keep the single tier chip (their status pill *is*
 the tier); an admin's own store still shows only the "Admin" chip (→ console).
 The pair wraps as a unit and inherits the header's smaller text so it stays neat
@@ -143,6 +152,16 @@ single-pending slot so a corrected invoice can be issued, and does **not** touch
 subscription status. A paid invoice can't be voided (that's a refund — out of scope).
 The vendor's billing history shows it as "Cancelled". Admin "Void" button + confirm in
 the pending list.
+
+**Voiding never deletes a scheduled change** (Credits T6 review, 1 Oct 2026). A
+renewal that carried one — a seller's move down to Starter, an Enterprise store's
+move to Pro — consumed `pendingPlanChange` when it was issued; voiding that bill puts
+the change back, so the next daily run bills it again. Before this, a void quietly
+turned the seller's choice into a renewal at the old tier (auto-charged with a saved
+method). Calling a change off is its own act: the seller's `cancelPlanChange`, or
+`enterprise.cancelMoveToPro`, which voids the move's bill itself. The pending list
+marks such a bill and the void dialog says what happens; a bill that ends a contract
+also wears "Ends Enterprise contract".
 
 Admin UI is **tabbed** (`app.admin.billing.tsx`): **Invoices** (onboard-a-client +
 issue form + pending list + mark-paid/void, the frequent task) and **Payment details**
@@ -527,9 +546,10 @@ load-bearing** and each rung is a unit test:
 | 1 | Admin on their own store | `hidden` |
 | 2 | No subscription row | `hidden` |
 | 3 | `comped` | `hidden` |
+| 3b | An **Enterprise** contract — its term is set on the contract (T6) | `hidden` |
 | 4 | A **pending invoice already `annual`** | `pendingAnnual` |
 | 5 | `subscription.billingCycle === "annual"` | `onAnnual` |
-| 6 | Plan not in `ANNUAL_OFFER_PLANS` (**Pro only**) | `hidden` |
+| 6 | Plan not in `ANNUAL_OFFER_PLANS` (**Pro** only) | `hidden` |
 | 7 | `status !== "active"` | `hidden` |
 | 8 | Fewer than `ANNUAL_MIN_PAID_INVOICES` (**2**) paid invoices | `hidden` |
 | 9 | Pending monthly invoice due in `< ANNUAL_SWAP_MIN_DAYS` (**4**) | `switchDeferred` |
@@ -546,12 +566,21 @@ Three of those rungs exist because of a specific failure:
 - **Rung 5 before the plan gate.** A seller already billed annually is told so on
   **any** plan. Hiding a true fact about their own billing because their tier is
   off-list is a lie by omission.
-- **Rung 6 is Pro only.** Starter is excluded by owner decision (a year upfront
-  contradicts start-when-you-sell). **Scale is excluded because `issueInvoice`
-  throws on it** — offering it would reproduce in-app the dead-end CTA we refuse
-  to ship publicly. Add `"scale"` in the same change that makes Scale
-  purchasable (`z8r3fday24`). A Starter seller is still *told* annual exists, and
-  *why not on Starter*, in the Starter → Pro nudge.
+- **Rung 6 is Pro only.** Starter is excluded by owner decision (a year
+  upfront contradicts start-when-you-sell). A Starter seller is still *told*
+  annual exists, and *why not on Starter*, in the Starter → Pro nudge.
+- **Rung 3b before rung 5.** An Enterprise store's term — monthly or a prepaid
+  year — is part of its contract, and its contract card already states it. An
+  "On annual billing" card there would repeat the term and invite a self-serve
+  plan change the server refuses, so the card never renders for a contract
+  (T6, pinned by `annual-billing.test.ts`).
+
+**Credits on annual (Kedaipal Credits).** An annual seller is granted credits
+**monthly**, never twelve months at once, and the monthly grant in force when
+they paid is **locked for the prepaid term** (`creditAccounts.annualGrant`), so
+a later change to `PLAN_CREDIT_GRANT` reaches them only at renewal. An upgrade
+mid-term re-stamps the lock; a monthly payment clears it. `/pricing` says it
+under the toggle and in its FAQ ([`credits.md`](./credits.md#plan-changes)).
 
 Currency comes from the seller's **own most recent paid invoice**, never visitor
 geo — they have already told us what we bill them in, and a VPN must not
@@ -790,7 +819,7 @@ never withheld.
 
 The pricing table's **live** ✓/– feature rows are now enforced, not just
 advertised. Catalog: `PLAN_FEATURES`/`featuresForPlan` in `convex/lib/plans.ts`
-(Starter: no `crm`, `orderInbox` or `chargeablePickup`; Pro/Scale: all). `resolveAccess` resolves
+(Starter: no `crm`, `orderInbox` or `chargeablePickup`; Pro/Enterprise: all). `resolveAccess` resolves
 them onto `AccessState.features` — **the only place `plan` is read for
 gating**; every check reads the resolved descriptor, so per-retailer overrides
 stay possible later. Fail-safe: a missing subscription row resolves to Pro
@@ -825,6 +854,15 @@ showcases Pro).
   Components in `src/components/app/pro-gate.tsx`.
 
 ## Order-usage meter + soft-cap nudge (Jul 2026)
+
+> **Superseded by Kedaipal Credits T3 (`z8r3fdf8hy`, Sep 2026).** The
+> "Orders this month" meter, the ≥80% / ≥100% banner nudges, `orderCapState`
+> and `ordersThisMonth` on the retailer payload are **gone** — the credit
+> balance is the meter now, and running out locks the seller's order work
+> instead of nudging (see [`credits.md`](./credits.md#the-meter-the-seller-lock-and-the-notices-t3)).
+> The `subscriptionUsage` counter itself stays: it is the "orders this month"
+> a plan change compares the new allowance against (`getBalance.ordersThisPeriod`).
+> The history below is kept for the record.
 
 The promised "X/100 orders used" surface behind the SOFT `orderCap`:
 
@@ -928,32 +966,45 @@ deploy-time floor.
 
 ## Pricing / caps — single source of truth
 
-`convex/lib/plans.ts`. Starter RM79 / Pro RM149 / Scale **RM399** (S$29 / S$59 /
-S$149; the 30 Aug 2026 reset, `z8r3fday24`); founding Pro RM104 (Scale RM279,
-unreachable at launch — founding is retired for new signups, existing members keep
-theirs); Off-Season Hold **RM19 / S$9** (`HOLD_MONTHLY_PRICES`); additional outlet
-RM49 / S$18. Caps: Starter 100/1/0, Pro **200**/2/100, Scale **400**/5/500 — the
-allowances `/pricing` advertises, all finite since Arif's 2026-06-28 decision
-dropped Scale's "unlimited" (kept an upsell ceiling for a future Enterprise tier). The
-`UNLIMITED`/`isUnlimited` sentinel stays exported for that future tier but no v1
-plan uses it. Scale is **not selectable** at v1 (`isPlanSelectable`) and grants
-**no** Founding badge (`planQualifiesForFounding`, Arif's 2026-05-28 decision).
+`convex/lib/plans.ts`. Starter RM79 / Pro RM149 (S$29 / S$59; the 30 Aug 2026
+reset, `z8r3fday24`); **Enterprise has no list price** — every Enterprise
+invoice is priced from the store's contract (Credits T6, `z8r3fdkp8h`;
+[`pricing.md` → Enterprise](./pricing.md#enterprise--a-contract-not-a-price)).
+Founding Pro RM104 (founding is retired for new signups, existing members keep
+theirs); Off-Season Hold **RM19 / S$9** (`HOLD_MONTHLY_PRICES`). Caps (orders /
+people / broadcasts): Starter 100/1/0, Pro **200**/3/100 — the orders are the
+monthly credit grants (`PLAN_CREDIT_GRANT`, which `PLAN_CAPS.orderCap` derives
+from) that `/pricing` prints. Enterprise is `UNLIMITED` orders (the ledger meters
+its contract's included credits — the cap is never the gate) and `UNLIMITED`
+seats, with Pro's broadcast quota until broadcasts ship. Enterprise is never
+`isPlanSelectable` (no self-serve door) and grants **no** Founding badge
+(`planQualifiesForFounding`, Arif's 2026-05-28 decision) — but an **admin can
+put a founding store on a contract** (Zaki, 3 Oct 2026, reversing the 17 Sep
+refusal): a contract has no list price for the founding discount to protect, and
+`enterprisePrice` never applies it. The membership is permanent and untouched by
+the move, so a store that later returns to Pro is quoted founding pricing again.
+Self-serve is unchanged — `foundingPlanLocked` still refuses a founding store
+that asks for another *listed* tier.
 
-> **Scale = flat multi-outlet tier (ClickUp 86eyb9zwt, supersedes 86ey4gaju).**
-> The public pricing surface shows Scale as the **multi-outlet / high-volume** tier
-> at **RM399/mo flat** (no bands, no metering; the reseller band table was removed
-> after the 1 Jul ICP audit). Scale stays "Coming soon" — not purchasable — until
-> the separate Scale build (multi-outlet management, outlet counting, RM49/mo
-> additional-outlet billing) ships. See [`pricing.md`](./pricing.md).
+> **Scale is retired; Enterprise is the third tier (Credits T6, 1 Oct 2026,
+> ClickUp z8r3fdkp8h — supersedes 86eyb9zwt's flat multi-outlet Scale and
+> z8r3fdfuhq's opening of it).** Scale at RM399 for 500 credits was Pro plus
+> packs under a new name, and anchored an enterprise buyer on SME pricing
+> (Arif, 30 Sep). The third card is now **Enterprise: Custom · Talk to Arif**,
+> quoted per deal, billed from a per-store contract. Multi-outlet stays
+> "Coming soon" — as Enterprise terms. See
+> [`pricing.md`](./pricing.md#enterprise--a-contract-not-a-price).
 
 > **Order allowances now match the page (ClickUp 86eye2ccu, landed via z8r3fday24).**
 > `/pricing` advertised **Starter 100 / Pro 200 / Scale 400** ahead of enforcement
 > (Arif, 9 Aug 2026) while `PLAN_CAPS` read Pro 500 / Scale 2,000 — the denominator
 > the billing-tab meter renders. The constants moved with the pricing reset;
 > `migrations.resyncSubscriptionCaps` re-syncs the denormalized caps on existing
-> rows (idempotent, `updatedAt` untouched). Still open from `86eye2ccu`: the admin
-> per-store allowance override and the surfaced-not-billed overage copy. See
-> [`pricing.md`](./pricing.md).
+> rows (idempotent, `updatedAt` untouched). The admin per-store allowance
+> override now exists as the **custom monthly grant**
+> (`credits.adminSetGrantOverride`, set from the admin seller sheet's credit
+> ledger drawer — Credits T5). See [`pricing.md`](./pricing.md) and
+> [`credits.md`](./credits.md).
 
 ## SGD invoices — billing a Singapore seller (Aug 2026)
 

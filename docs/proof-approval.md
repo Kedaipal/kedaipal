@@ -317,6 +317,6 @@ the waiver guard, whole-order gating with mixed items.
 
 ## 12. Tier impact
 
-**Pro / Scale** — a custom-workflow differentiator for the made-to-order segment
+**Pro / Enterprise** — a custom-workflow differentiator for the made-to-order segment
 (printing, cake, engraving). Starter omits it. Final tier placement is a pricing
 call.

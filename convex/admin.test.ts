@@ -270,6 +270,53 @@ describe("admin console reads", () => {
 		).rejects.toThrow(/Not authorized/);
 	});
 
+	test("listSellersForAdmin carries each store's cached credits — balances, period, out-since, custom grant (Credits T5)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, OWNER);
+		const find = async () =>
+			(
+				await t
+					.withIdentity({ subject: ADMIN })
+					.query(api.admin.listSellersForAdmin, {})
+			).find((r) => r.ownerUserId === OWNER);
+		// A new store opens with the trial allowance at signup (T1).
+		const fresh = await find();
+		expect(fresh?.credits).toMatchObject({ plan: 200, purchased: 0 });
+		expect(fresh?.credits?.exhaustedAt).toBeUndefined();
+		expect(fresh?.credits?.customGrant).toBeUndefined();
+
+		const outSince = Date.now() - 3 * 24 * 60 * 60 * 1000;
+		await t.run(async (ctx) => {
+			const account = await ctx.db
+				.query("creditAccounts")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.first();
+			if (!account) throw new Error("no credit account");
+			await ctx.db.patch(account._id, {
+				planBalance: -15,
+				exhaustedAt: outSince,
+				grantOverride: 1000,
+			});
+		});
+		expect((await find())?.credits).toMatchObject({
+			plan: -15,
+			purchased: 0,
+			exhaustedAt: outSince,
+			customGrant: 1000,
+		});
+
+		// No account yet (a store the backfill hasn't reached) → no credits
+		// facts at all, never a zero that reads as "out of credits".
+		await t.run(async (ctx) => {
+			const account = await ctx.db
+				.query("creditAccounts")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.first();
+			if (account) await ctx.db.delete(account._id);
+		});
+		expect((await find())?.credits).toBeUndefined();
+	});
+
 	test("listSellersForAdmin carries signupSource so acquisition is checkable in the console", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, OWNER);

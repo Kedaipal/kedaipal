@@ -5,6 +5,7 @@ import {
 	useMotionValue,
 	useReducedMotion,
 } from "framer-motion";
+import { Link } from "@tanstack/react-router";
 import { ArrowLeft, ArrowRight, Star } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
 import { m } from "../../paraglide/messages";
@@ -199,6 +200,20 @@ export function RealSellers() {
 						<p className="text-base leading-relaxed text-muted-foreground md:text-lg lg:text-right">
 							{m.proof_sub()}
 						</p>
+						{/* The proof's own next step: these are real stores, so let a
+						    visitor walk into them (z8r3fdkmyp). The landing's one
+						    buyer-shaped door — on the proof, not in the hero, which
+						    stays the seller's pitch. */}
+						<Link
+							to="/stores"
+							className="group inline-flex min-h-11 items-center gap-1.5 self-start text-sm font-semibold text-accent-emphasis underline-offset-4 hover:underline lg:self-end"
+						>
+							{m.proof_browse_stores()}
+							<ArrowRight
+								aria-hidden
+								className="size-4 transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none"
+							/>
+						</Link>
 						<div className="hidden gap-2 md:flex">
 							<button
 								type="button"

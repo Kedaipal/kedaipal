@@ -39,7 +39,12 @@ import {
 	type InboxStatusLeaf,
 	type OrderBucket,
 } from "../../convex/lib/orderBuckets";
-import { ORDER_COLUMNS, type OrderColumnKey } from "../../convex/lib/orderCsv";
+import {
+	FULFILMENT_KEYS,
+	type FulfilmentKey,
+	ORDER_COLUMNS,
+	type OrderColumnKey,
+} from "../../convex/lib/orderCsv";
 import {
 	type InboxSort,
 	type PinMode,
@@ -51,6 +56,7 @@ import {
 } from "../../convex/lib/paymentMethod";
 import { ProFeatureTease } from "../components/app/pro-gate";
 import { ViewOnlyNote } from "../components/app/view-only-note";
+import { CreditLockNote } from "../components/credits/credit-lock-note";
 import {
 	DeliveryMethodIcon,
 	OrderContextBadge,
@@ -107,6 +113,7 @@ import { useAreaLock } from "../hooks/useStoreLock";
 import { canHardDeleteOrders } from "../lib/admin-actions";
 import { MASK_PII } from "../lib/analytics-privacy";
 import { describeAwbPaper } from "../lib/awb-labels";
+import { BULK_CREDIT_LOCK_NOTE } from "../lib/credits-ui";
 import { orderCustomerLabel } from "../lib/customer";
 import { downloadCsv } from "../lib/download";
 import {
@@ -184,6 +191,13 @@ type InboxSearch = {
 	 * value can't ask. A legacy singular `?source=` is still read and folded in,
 	 * so old bookmarks keep working. */
 	sources?: OrderSource[];
+	/** How the order goes OUT (z8r3fdfau9) — `fulfilmentKey` values, carried in
+	 * the URL exactly like `pay`/`method`: the router serialises the array as
+	 * JSON, so it reads `?ful=["delivery","drop_off"]`. A bare `?ful=delivery`
+	 * is still accepted (`toList`) and heals into that form on the next
+	 * navigate, so a hand-written or older link keeps working. The twin of
+	 * `sources`: that one is the surface it came IN through. */
+	ful?: FulfilmentKey[];
 	/**
 	 * THE status axis — status LEAVES, repeated in the URL like `pay`/`method`.
 	 * Written by the chip row (a whole bucket's leaves at a tap), the Filters
@@ -236,6 +250,12 @@ function isFulfilmentWindow(x: unknown): x is FulfilmentWindow {
 
 function isOrderSource(x: unknown): x is OrderSource {
 	return x === "storefront" || x === "counter" || x === "claim";
+}
+
+/** Narrowed against the registry, so a hand-edited or stale URL can't push a
+ * value `searchOrders`' validator would reject outright. */
+function isFulfilmentKey(x: unknown): x is FulfilmentKey {
+	return (FULFILMENT_KEYS as readonly string[]).includes(x as string);
 }
 
 function isInboxLeaf(x: unknown): x is InboxStatusLeaf {
@@ -342,6 +362,7 @@ export const Route = createFileRoute("/app/orders/")({
 				),
 			),
 		];
+		const ful = [...new Set(toList(search.ful).filter(isFulfilmentKey))];
 		// Legacy `?bucket=` folds into `st` right here, so the rest of the route
 		// only ever sees ONE status field and a stale bookmark heals on the next
 		// navigate. Same helper the server folds with, so a link and the query it
@@ -387,6 +408,7 @@ export const Route = createFileRoute("/app/orders/")({
 			// A pre-widen `?source=counter` folds into the list, so a bookmark or a
 			// link shared before this shipped still filters (86eyrtz74).
 			sources: sources.length > 0 ? sources : undefined,
+			ful: ful.length > 0 ? ful : undefined,
 			st: st.length > 0 ? st : undefined,
 			cat: cat.length > 0 ? cat : undefined,
 			catunspec:
@@ -466,6 +488,7 @@ function OrdersRoute() {
 		mockup = false,
 		fwin,
 		sources = [],
+		ful = [],
 		st = [],
 		cat = [],
 		catunspec = false,
@@ -491,6 +514,10 @@ function OrdersRoute() {
 	// but not edit — one flag, so every disabled-with-reason control below
 	// (select mode, bulk actions, pin, status moves) covers both.
 	const { readOnly, reason } = useAreaLock("orders");
+	// Out of credits (Credits T3) is narrower: select mode stays open, because
+	// cancelling in bulk still works, but every forward move greys out and the
+	// bar says why.
+	const work = useAreaLock("orders", { credits: true });
 	// Orders export is the ONE export the server genuinely gates (a teammate
 	// can work the inbox all day and still not walk out with the order book),
 	// and it is separate from orders itself — so the button asks the `exports`
@@ -560,6 +587,7 @@ function OrdersRoute() {
 	const asrcKey = asrc.join(",");
 	const periodKey = period.join(",");
 	const sourcesKey = sources.join(",");
+	const fulKey = ful.join(",");
 	const stKey = st.join(",");
 	const catKey = cat.join(",");
 	// Mirror the debounced search into the URL (shareable / survives refresh).
@@ -587,6 +615,7 @@ function OrdersRoute() {
 		mockup,
 		fwin,
 		sourcesKey,
+		fulKey,
 		stKey,
 		catKey,
 		catunspec,
@@ -642,6 +671,7 @@ function OrdersRoute() {
 							mockupPending: mockup || undefined,
 							fulfilmentWindow: fwin,
 							sources: sources.length > 0 ? sources : undefined,
+							fulfilments: ful.length > 0 ? ful : undefined,
 							statuses: st.length > 0 ? st : undefined,
 							categories: cat.length > 0 ? cat : undefined,
 							categoriesUnspecified: catunspec || undefined,
@@ -789,6 +819,7 @@ function OrdersRoute() {
 			categories: cat,
 			categoriesUnspecified: catunspec,
 			sources,
+			fulfilments: ful,
 			paymentStatuses: pay,
 			paymentMethods: munspec ? [...method, METHOD_UNSPECIFIED] : method,
 			attributionSources: asrc,
@@ -831,6 +862,7 @@ function OrdersRoute() {
 		mockup ||
 		fwin != null ||
 		sources.length > 0 ||
+		ful.length > 0 ||
 		cat.length > 0 ||
 		catunspec ||
 		asrc.length > 0;
@@ -983,6 +1015,11 @@ function OrdersRoute() {
 						? true
 						: undefined;
 				}
+				if (patch.fulfilments)
+					next.ful =
+						patch.fulfilments.length > 0
+							? (patch.fulfilments as FulfilmentKey[])
+							: undefined;
 				if (patch.attributionSources)
 					next.asrc =
 						patch.attributionSources.length > 0
@@ -1010,6 +1047,7 @@ function OrdersRoute() {
 				mockup: undefined,
 				fwin: undefined,
 				sources: undefined,
+				ful: undefined,
 				// The status axis clears too — BOTH halves. This is the table's
 				// "start over below" button, and in table view the axis is set from
 				// the Status column's own filter funnel, so leaving it would strand
@@ -1045,6 +1083,10 @@ function OrdersRoute() {
 						? next.attributionSources
 						: undefined,
 				sources: next.sources.length > 0 ? next.sources : undefined,
+				ful:
+					next.fulfilments.length > 0
+						? (next.fulfilments as FulfilmentKey[])
+						: undefined,
 				st:
 					next.statuses.length > 0
 						? (next.statuses as InboxStatusLeaf[])
@@ -1157,7 +1199,7 @@ function OrdersRoute() {
 			(t): BulkAction => ({
 				status: t.anchor,
 				label: t.label,
-				disabled: t.disabled,
+				disabled: t.disabled || work.readOnly,
 				reason: t.reason,
 			}),
 		)
@@ -1308,6 +1350,7 @@ function OrdersRoute() {
 					mockupPending: mockup || undefined,
 					fulfilmentWindow: fwin,
 					sources: sources.length > 0 ? sources : undefined,
+					fulfilments: ful.length > 0 ? ful : undefined,
 					statuses: st.length > 0 ? st : undefined,
 					categories: cat.length > 0 ? cat : undefined,
 					categoriesUnspecified: catunspec || undefined,
@@ -1480,6 +1523,9 @@ function OrdersRoute() {
 
 			{/* A lapsed store can read this inbox and act on nothing in it. */}
 			<ViewOnlyNote />
+			{/* Out of credits (Credits T3): orders keep arriving — this says how
+			    many, what's paused, and the one way back. */}
+			<CreditLockNote scope="orders" />
 
 			{/* Starter: the inbox controls are a Pro feature — say so where they'd
 			    be, instead of leaving a silent gap. The order list below still works. */}
@@ -1600,6 +1646,7 @@ function OrdersRoute() {
 								mockup,
 								fwin,
 								sources,
+								fulfilments: ful,
 								statuses: st,
 								bookingPeriods: period,
 								categories: cat,
@@ -2036,7 +2083,9 @@ function OrdersRoute() {
 				<OrderBulkBar
 					count={selected.size}
 					actions={bulkActions}
-					actionsNote={bulkActionsNote}
+					actionsNote={
+						work.cause === "credits" ? BULK_CREDIT_LOCK_NOTE : bulkActionsNote
+					}
 					allSelected={allSelected}
 					onApply={applyBulk}
 					onDelete={canHardDelete ? applyBulkDelete : undefined}
