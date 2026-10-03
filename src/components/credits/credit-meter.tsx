@@ -154,12 +154,19 @@ export function CreditMeter({
 	);
 
 	if (variant === "card") {
-		// One button, by urgency: the way back when locked; a top-up once the
-		// store is running low and this reader may buy; otherwise just Billing.
+		// One button, by urgency: the way back when locked; otherwise a top-up
+		// from the moment the balance stops being comfortable — `out` as well as
+		// `low`, which are mutually exclusive in `creditTone`. The locked branch
+		// used to cover `out`, so gating the top-up on `low` alone (with the lock
+		// switched off) left a store IN DEBT with no action button while a store
+		// merely running low got one: the urgency ladder upside down.
 		const cta =
 			lock.locked && lock.canAct
 				? lockCta(lock.route)
-				: !lock.locked && tone === "low" && showTopUp && canTopUp
+				: !lock.locked &&
+						(tone === "out" || tone === "low") &&
+						showTopUp &&
+						canTopUp
 					? { label: "Top up credits", search: TOP_UP_SEARCH }
 					: null;
 		return (

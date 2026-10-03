@@ -1,6 +1,6 @@
 # Kedaipal Credits — the order-credit ledger
 
-> **Status:** T1 (the ledger — ClickUp [`86eye2ccu`](https://app.clickup.com/t/86eye2ccu)) built. T2 top-up packs ([`z8r3fdf8ht`](https://app.clickup.com/t/z8r3fdf8ht)) built — see [Top-up packs (T2)](#top-up-packs-t2). T3 meter + seller lock + notices ([`z8r3fdf8hy`](https://app.clickup.com/t/z8r3fdf8hy)) built — see [The meter, the seller lock and the notices (T3)](#the-meter-the-seller-lock-and-the-notices-t3). T5 public surfaces + release pack (`z8r3fdfu31`) builds on it and adds its own section below. **T4 auto top-up (`z8r3fdf8wa`) was cancelled on 1 Oct 2026** (Zaki × Arif): credit packs never auto-reload — the subscription is the only recurring charge, and a pack is always a deliberate purchase on HitPay's checkout page. Decision register: `z8r3fdf8j1` (Arif, locked 17 Sep 2026) — with **Zaki's 30 Sep 2026 overrides** (refund rule, trial allowance, team permission), marked below.
+> **Status:** T1 (the ledger — ClickUp [`86eye2ccu`](https://app.clickup.com/t/86eye2ccu)) built. T2 top-up packs ([`z8r3fdf8ht`](https://app.clickup.com/t/z8r3fdf8ht)) built — see [Top-up packs (T2)](#top-up-packs-t2). T3 meter + seller lock + notices ([`z8r3fdf8hy`](https://app.clickup.com/t/z8r3fdf8hy)) built — see [The meter, the seller lock and the notices (T3)](#the-meter-the-seller-lock-and-the-notices-t3). **The LOCK half ships switched off** (2 Oct 2026) pending the per-order model — see [The seller lock ships SWITCHED OFF](#the-seller-lock-ships-switched-off-2-oct-2026); the meter, notices scaffolding and metering are live. T5 public surfaces + release pack (`z8r3fdfu31`) builds on it and adds its own section below. **T4 auto top-up (`z8r3fdf8wa`) was cancelled on 1 Oct 2026** (Zaki × Arif): credit packs never auto-reload — the subscription is the only recurring charge, and a pack is always a deliberate purchase on HitPay's checkout page. Decision register: `z8r3fdf8j1` (Arif, locked 17 Sep 2026) — with **Zaki's 30 Sep 2026 overrides** (refund rule, trial allowance, team permission), marked below.
 
 **1 credit = 1 order.** Every plan includes credits each month; sellers can buy
 more. From 1 Oct 2026 every order carries a real Meta messaging cost, so a flat
@@ -556,6 +556,72 @@ refund, and one that slips through lands as `late_payment`.
 - **GA4:** mark `credits_topup_paid` as a key event (docs/analytics.md).
 - **Terms:** the picker links `/terms#credits` — T5's Credits clause. The
   picker must not be reachable in production before that clause is live.
+
+## The seller lock ships SWITCHED OFF (2 Oct 2026)
+
+`CREDIT_LOCK_ENABLED` in `convex/lib/credits.ts` is `false`. **Everything below
+about the lock is built and tested; none of it runs.**
+
+**Why.** As built, the lock is store-WIDE: at a total balance of 0 or below the
+seller can't work ANY order, including ones whose credit was spent weeks ago.
+That over-reaches. An order that already paid for its credit should stay
+workable forever; only orders that arrived while the balance was at or below
+zero should wait. The per-order model is scoped separately — **this switch is
+the placeholder until it lands**, not a feature flag anyone should flip on a
+whim.
+
+**What the switch touches — exactly two gates:**
+
+| Gate | Effect |
+| --- | --- |
+| `resolveCreditLock` (`convex/creditLock.ts`) | returns the `open` state immediately, so every `assertCreditsAvailable` guard passes and the dashboard payload's `creditLock` reads unlocked |
+| `creditNotices.evaluate` | returns `null`, so no `low` / `locked` / `unlocked` notice is sent and **no `notices` marker is written** — the day the lock turns on, every store is announced to cleanly instead of carrying a marker for an email nobody received |
+
+It is gated at the ONE resolver every guard and the payload read, so the off
+state can never disagree with itself: what the seller is told and what the
+server refuses come from the same answer. Every string conditioned on `locked`
+— `credits-ui.ts`'s lock lines, `CreditLockNote`, `CreditLockCta`, the meter's
+"Paused:" line, `useAreaLock(area, { credits: true })` — is therefore
+unreachable rather than wrong.
+
+⚠️ **The gate does NOT reach copy conditioned on the BALANCE.** Three surfaces
+read `total` / `creditTone` directly and never look at `locked`, so they
+survived the switch still promising a pause that no longer happens — found in
+review, and the single most important thing to know if the per-order model
+changes these predicates again:
+
+| Surface | Read |
+| --- | --- |
+| The running-low shell banner (`resolveBannerState` → `subscription-banner.tsx`) | `creditTone(...) !== "ok"` |
+| The top-up picker's "your store unlocks" line | `balance.total <= 0 && …` |
+| The dashboard card's CTA (`credit-meter.tsx`) | `tone === "low"` |
+
+All three now state the carry-over instead, and the picker's unlock sentence is
+gated on `CREDIT_LOCK_ENABLED` so turn-on restores it. The banner also had to
+WIDEN to `!== "ok"`: `creditsLocked` outranks it while the lock is on, so with
+the lock off a store already in debt had no banner at all.
+
+**What is NOT touched, deliberately:** every order still spends a credit, the
+ledger still runs negative, and grants / purchases / refunds / expiry all
+behave. So `creditLedger` is already recording `orderId` plus the running
+`planAfter` / `purchasedAfter` for every debit — **which is precisely the
+funding history the per-order rule needs, accruing from day one.** Turning the
+lock on, in either model, needs no backfill. Expiry notices are about purchased
+lots, not the lock, and keep running.
+
+**Copy that had to move with it:** the public pricing FAQ
+(`pricingpage_faq_a9`, all three locales) described the lock in detail and now
+describes only the carry-over; the v2026.10.1 release note likewise; and the
+three balance-driven surfaces in the table above. Reinstating the pause
+sentences belongs to the per-order lock's own copy sweep
+([`z8r3fdmg4h`](https://app.clickup.com/t/z8r3fdmg4h)), not to a lie left lying
+here in the meantime.
+
+**Tests, both directions.** `convex/creditLockOff.test.ts` runs against the real
+constant and pins the off state — deleting either gate turns it red (verified by
+removing each one). `convex/creditLock.test.ts` mocks the constant to `true` and
+keeps proving the lock's own behaviour, which is what we turn back on. Neither
+direction can rot while the switch is parked.
 
 ## The meter, the seller lock and the notices (T3)
 

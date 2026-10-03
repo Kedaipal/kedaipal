@@ -312,7 +312,7 @@ describe("the picker", () => {
 		// lifts the moment it's paid (T3).
 		expect(
 			screen.getByText(
-				"Covers the 15 owed and leaves 35 orders. Your store unlocks as soon as it's paid.",
+				"Covers the 15 owed and leaves 35 orders.",
 			),
 		).toBeTruthy();
 	});
