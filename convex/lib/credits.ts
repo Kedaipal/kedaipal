@@ -242,6 +242,33 @@ export function lowCreditLine(periodGrant: number): number {
 	return Math.ceil(Math.max(0, periodGrant) * LOW_CREDIT_RATIO);
 }
 
+/**
+ * The seller lock at zero credits is BUILT but SWITCHED OFF (2 Oct 2026).
+ *
+ * As shipped, the lock is store-WIDE: at a total balance of 0 or below the
+ * seller can't work ANY order, including ones whose credit was spent weeks
+ * ago. That over-reaches — an order that already paid for its credit should
+ * stay workable forever, and only orders that arrived while the balance was
+ * at or below zero should wait. The per-order model is scoped separately;
+ * until it lands, nothing locks.
+ *
+ * What stays live with this off: every order still spends a credit, the
+ * ledger still runs negative, grants/purchases/refunds/expiry all behave, and
+ * the balance meter shows the real number. So the history the per-order rule
+ * needs is accruing from day one, and flipping this to `true` (or deleting it
+ * in favour of the per-order rule) needs no backfill.
+ *
+ * What this silences: the lock itself (`resolveCreditLock`, and therefore
+ * every `assertCreditsAvailable` guard) and the three BALANCE notices
+ * (`low` / `locked` / `unlocked`), whose copy — email, WhatsApp template and
+ * banner alike — all state that order handling pauses. Expiry notices are
+ * about purchased lots, not the lock, and keep running.
+ *
+ * Tests that exercise the lock's own behaviour mock this to `true`; the suite
+ * also pins the off-state, so neither direction can rot.
+ */
+export const CREDIT_LOCK_ENABLED = false;
+
 /** WHY a store is metered but never locked — the copy that explains it
  * differs: a Kedaipal admin's own store is never billed; a SPONSORED store
  * (comped, or the missing-row fail-safe `resolveAccess` treats as comped) is

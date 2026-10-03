@@ -188,22 +188,34 @@ export function SubscriptionBanner({
 			creditLock.canAct &&
 			retailer?.actingAsAdmin !== true;
 		const onTrial = creditLock.route === "pick_plan";
+		// The lead-in names which tone this is — the same banner now covers both
+		// (see resolveBannerState), so "Running low" must not head a store that
+		// is already into next month's credits.
 		const low = (
 			<span className="font-medium">
-				Running low: {ordersBalanceLabel(state.total)}.
+				{state.total > 0 ? "Running low" : "Out of credits"}:{" "}
+				{ordersBalanceLabel(state.total)}.
 			</span>
 		);
 		return (
 			<div className="flex flex-col gap-2 border-b border-amber-200 bg-amber-50 px-5 py-3 dark:border-amber-900 dark:bg-amber-950/40 sm:flex-row sm:items-center sm:gap-3 lg:px-8">
 				<p className="flex-1 text-sm text-foreground/90">
 					{low}{" "}
+					{/* Every variant used to promise the pause — "new orders wait
+					    until credits are added". With the lock switched off
+					    (CREDIT_LOCK_ENABLED) nothing waits, so the copy states the
+					    carry-over instead, which is what actually happens and stays
+					    true either way. Same move already made for the public pricing
+					    FAQ. Reinstating the pause sentence is part of the per-order
+					    lock's copy sweep (z8r3fdmg4h), not something to leave lying
+					    here as a lie in the meantime. */}
 					{canBuy
-						? "Top up now so new orders never wait — bought credits carry over for 12 months, so nothing goes to waste."
+						? "Top up to stay ahead — bought credits carry over for 12 months, so nothing goes to waste."
 						: onTrial
-							? "When your trial's orders are used, new orders wait until you pick a plan."
+							? "Orders past your trial's allowance come off your first month's credits — pick a plan when you're ready."
 							: creditLock.canAct
-								? "When you run out, new orders keep coming in but wait until credits are added."
-								: "When the store runs out, new orders wait until the owner adds credits."}
+								? "Orders keep coming in; anything past your balance comes off your next credits."
+								: "Orders keep coming in; anything past the balance comes off the store's next credits — the owner tops up."}
 				</p>
 				<div className="flex shrink-0 items-center gap-2">
 					{canBuy ? (

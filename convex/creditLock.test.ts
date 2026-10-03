@@ -12,6 +12,16 @@ import { addPurchasedCredits, ensureCreditAccount } from "./credits";
 import { isCreditLockErrorData } from "./lib/credits";
 import schema from "./schema";
 
+// The lock ships SWITCHED OFF (CREDIT_LOCK_ENABLED, lib/credits.ts) until the
+// per-order model lands. This file is the proof that the lock itself behaves —
+// which is what we turn back on — so it runs with the switch forced ON. The
+// shipped OFF state is pinned by its own file, creditLockOff.test.ts; the two
+// together mean neither direction can rot while the switch is parked.
+vi.mock("./lib/credits", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./lib/credits")>()),
+	CREDIT_LOCK_ENABLED: true,
+}));
+
 const modules = import.meta.glob("./**/*.ts");
 
 function setup() {

@@ -400,12 +400,18 @@ export function resolveBannerState(
 			return { kind: "trialWarn", daysLeft: free.daysLeft, ended: false };
 	}
 
+	// `low` OR `out`. While the lock is on, `creditsLocked` above catches the
+	// zero-and-below store — but that branch reads `credits.locked`, and with
+	// the lock switched off (CREDIT_LOCK_ENABLED) it never fires, which left a
+	// store already into next month's credits with no banner at all. The two
+	// tones share one banner whose lead-in names which it is; when the lock
+	// returns, `creditsLocked` outranks this again and nothing here changes.
 	if (
 		credits?.total !== undefined &&
 		credits.periodGrant !== undefined &&
 		!credits.customGrant &&
 		!credits.exempt &&
-		creditTone(credits.total, credits.periodGrant) === "low"
+		creditTone(credits.total, credits.periodGrant) !== "ok"
 	)
 		return { kind: "creditsLow", total: credits.total };
 
