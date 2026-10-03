@@ -71,7 +71,7 @@ export function HandoverDialog({
 				{
 					description: clearing
 						? undefined
-						: "Send them the sign-up link yourself — Kedaipal doesn't email it. The store becomes theirs when they sign up with that address.",
+						: "Send them the invitation below, or paste the sign-up link yourself. The store becomes theirs when they sign up with that address.",
 				},
 			);
 			onClose();

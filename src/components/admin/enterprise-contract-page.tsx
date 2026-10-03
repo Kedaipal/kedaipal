@@ -167,27 +167,24 @@ export function EnterpriseContractPage({
 	const problem = blankFields
 		? "Fill in the fee, the included credits and the overage rate."
 		: enterpriseContractProblem(input, MAX_INCLUDED, teammatesInUse);
-	const founding = seller.isFoundingMember || seller.foundingIntent;
 	// Every refusal `setContract` would throw, said here first.
 	const refusal =
 		seller.subscriptionStatus === undefined
 			? "This store has no subscription yet — it gets one when the owner claims it; attach the contract then."
 			: seller.comped
 				? "This store is comped — end the comp before putting it on a contract."
-				: founding
-					? "Founding Members stay on Founding Pro — a founding store can't be put on an Enterprise contract."
-					: seller.subscriptionStatus === "on_hold"
-						? "This store is on Off-Season Hold — resume it before putting it on a contract."
-						: enterpriseTermChangeBlocker({
-								pending: seller.pendingInvoice
-									? {
-											invoiceNumber: seller.pendingInvoice.invoiceNumber,
-											plan: seller.pendingInvoice.plan,
-											billingCycle: seller.pendingInvoice.billingCycle,
-										}
-									: undefined,
-								billingCycle: cycle,
-							});
+				: seller.subscriptionStatus === "on_hold"
+					? "This store is on Off-Season Hold — resume it before putting it on a contract."
+					: enterpriseTermChangeBlocker({
+							pending: seller.pendingInvoice
+								? {
+										invoiceNumber: seller.pendingInvoice.invoiceNumber,
+										plan: seller.pendingInvoice.plan,
+										billingCycle: seller.pendingInvoice.billingCycle,
+									}
+								: undefined,
+							billingCycle: cycle,
+						});
 	const blocked = refusal ?? problem;
 
 	async function save() {
