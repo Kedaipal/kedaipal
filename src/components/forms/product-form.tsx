@@ -108,6 +108,7 @@ export const PREP_PRESETS = [
 	{ minutes: 240, label: "4 hours" },
 ] as const;
 
+import { NOTE_LINK_HINT } from "../../lib/linkify";
 import { CategoryPicker } from "./category-picker";
 import {
 	EMPTY_EVENT_DRAFT,
@@ -1973,10 +1974,9 @@ export function ProductForm({
 							<p className="text-xs leading-relaxed text-muted-foreground">
 								One line collecting buyers see on the product page, at checkout
 								and on their order page — the page their WhatsApp confirmation
-								links to. Paste a link (e.g. a Google Maps pin) and it becomes
-								tappable. It&apos;s copied onto each order as it&apos;s placed,
-								so editing it later never rewrites what earlier buyers were
-								told.
+								links to. {NOTE_LINK_HINT} It&apos;s copied onto each order as
+								it&apos;s placed, so editing it later never rewrites what
+								earlier buyers were told.
 							</p>
 						) : null}
 						{!pickupNoteValid ? (

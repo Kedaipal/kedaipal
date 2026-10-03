@@ -2313,6 +2313,24 @@ export default defineSchema({
 		createdAt: v.number(),
 	}).index("by_order", ["orderId"]),
 
+	// One row per buyer "I've paid" submission (z8r3fdn2uj) — the HISTORY of
+	// what the buyer sent, so the seller can reopen any screenshot long after
+	// the payment was marked received. `orders.paymentReference` /
+	// `paymentProofStorageId` stay as the latest values (email + WhatsApp read
+	// them); these rows are what used to be overwritten. Each row records only
+	// what THAT submission carried — a reference-only resubmit has no proof.
+	// Capped per order (MAX_PAYMENT_CLAIMS_PER_ORDER in lib/paymentClaims.ts).
+	// Orders claimed before this table existed have no rows until
+	// `migrations:backfillPaymentClaims` runs; readers fall back to the order's
+	// own fields meanwhile. Rows + their blobs are freed with the order
+	// (lib/orderBlobs.ts).
+	paymentClaims: defineTable({
+		orderId: v.id("orders"),
+		reference: v.optional(v.string()),
+		proofStorageId: v.optional(v.string()),
+		createdAt: v.number(),
+	}).index("by_order_createdAt", ["orderId", "createdAt"]),
+
 	// --- Lalamove delivery (docs/delivery-lalamove.md, ClickUp 86eyb5hrf) -----
 	// Server-side record of a live checkout quote. The public quoteForCheckout
 	// action writes one row and hands the CLIENT only its id + fee — orders.create

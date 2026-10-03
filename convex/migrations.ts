@@ -18,6 +18,7 @@ import { internalMutation } from "./_generated/server";
 import { ensureCreditAccount } from "./credits";
 import { generateTrackingToken } from "./lib/order";
 import { capsForPlan } from "./lib/plans";
+import { legacyClaimFromOrder } from "./lib/paymentClaims";
 import { isOrderPaymentMethod } from "./lib/paymentMethod";
 import {
 	synthesizeDefaultStages,
@@ -557,5 +558,49 @@ export const backfillCreditAccounts = internalMutation({
 			);
 		}
 		return { scanned: page.page.length, created, isDone: page.isDone };
+	},
+});
+
+/**
+ * Give every order claimed before `paymentClaims` existed (z8r3fdn2uj) its one
+ * history row, rebuilt from the order's own fields by `legacyClaimFromOrder` —
+ * the same rebuild the seller's order page shows meanwhile, so running this
+ * changes nothing a seller sees; it only makes the history real rows.
+ *
+ * Idempotent: an order that already has a row (claimed after deploy, or
+ * already backfilled) is skipped, and an order nobody claimed has nothing to
+ * rebuild. `updatedAt` is NOT bumped — recording history isn't a change to the
+ * sale. Batched + self-scheduling.
+ *
+ * Run: `npx convex run migrations:backfillPaymentClaims`
+ */
+export const backfillPaymentClaims = internalMutation({
+	args: { cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (ctx, { cursor }) => {
+		const page = await ctx.db
+			.query("orders")
+			.paginate({ numItems: BATCH_SIZE, cursor: cursor ?? null });
+
+		let inserted = 0;
+		for (const order of page.page) {
+			const legacy = legacyClaimFromOrder(order);
+			if (!legacy) continue;
+			const existing = await ctx.db
+				.query("paymentClaims")
+				.withIndex("by_order_createdAt", (q) => q.eq("orderId", order._id))
+				.first();
+			if (existing) continue;
+			await ctx.db.insert("paymentClaims", { orderId: order._id, ...legacy });
+			inserted++;
+		}
+
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.migrations.backfillPaymentClaims,
+				{ cursor: page.continueCursor },
+			);
+		}
+		return { inserted, isDone: page.isDone };
 	},
 });

@@ -1,0 +1,144 @@
+/**
+ * The buyer's "I've paid" submissions, kept as HISTORY (z8r3fdn2uj).
+ *
+ * `claimPayment` used to overwrite `orders.paymentReference` /
+ * `paymentProofStorageId` on every resubmit, and the seller's order page only
+ * showed the proof while the claim was open — so once a payment was marked
+ * received, the screenshot the seller relied on was unreachable, and any
+ * earlier screenshot was lost outright. Each submission is now a
+ * `paymentClaims` row; the order's own fields stay as the latest values for the
+ * email + WhatsApp readers.
+ *
+ * Orders claimed before the table existed have no rows. `legacyClaimFromOrder`
+ * rebuilds their one submission from the order, so the seller sees it before
+ * `migrations:backfillPaymentClaims` has run — and `recordPaymentClaim` writes
+ * that row first on the next resubmit, so the legacy proof can't be lost then
+ * either.
+ */
+
+import { ConvexError } from "convex/values";
+import type { Doc, Id } from "../_generated/dataModel";
+import type { MutationCtx, QueryCtx } from "../_generated/server";
+
+/** How many submissions one order keeps. A real buyer resubmits once or twice
+ * (a typo'd reference, a forgotten screenshot); the cap only stops a script
+ * from growing one order's history without bound — the per-minute rate limit
+ * alone would let it reach thousands in a day. */
+export const MAX_PAYMENT_CLAIMS_PER_ORDER = 20;
+
+/** Buyer-facing refusal once the cap is hit — points at the human channel. */
+export const PAYMENT_CLAIM_LIMIT_MESSAGE =
+	"You've already sent your payment details many times — message the seller on WhatsApp if something's changed.";
+
+/** One submission, as the seller's order page lists it. */
+export type PaymentClaimEntry = {
+	reference?: string;
+	proofStorageId?: string;
+	createdAt: number;
+};
+
+/**
+ * The order's single pre-history submission, rebuilt from its own fields — or
+ * null when the buyer never claimed. Keyed on `paymentClaimedAt` (only
+ * `claimPayment` sets it), never on the reference alone: HitPay settlement
+ * writes its payment id into `paymentReference`, and that's not something the
+ * buyer sent, so it's dropped here too.
+ */
+export function legacyClaimFromOrder(
+	order: Doc<"orders">,
+): PaymentClaimEntry | null {
+	if (order.paymentClaimedAt === undefined) return null;
+	const reference =
+		order.paymentReference !== undefined &&
+		order.paymentReference !== order.gatewayPaymentId
+			? order.paymentReference
+			: undefined;
+	return {
+		...(reference !== undefined ? { reference } : {}),
+		...(order.paymentProofStorageId !== undefined
+			? { proofStorageId: order.paymentProofStorageId }
+			: {}),
+		createdAt: order.paymentClaimedAt,
+	};
+}
+
+/** The order's claim rows, oldest first, bounded by the per-order cap. */
+export async function paymentClaimRows(
+	ctx: QueryCtx | MutationCtx,
+	orderId: Id<"orders">,
+): Promise<Doc<"paymentClaims">[]> {
+	return await ctx.db
+		.query("paymentClaims")
+		.withIndex("by_order_createdAt", (q) => q.eq("orderId", orderId))
+		.take(MAX_PAYMENT_CLAIMS_PER_ORDER);
+}
+
+/**
+ * Every submission the buyer made on this order, oldest first: the stored rows,
+ * or — for an order claimed before the table existed — its one rebuilt entry.
+ */
+export async function orderPaymentClaims(
+	ctx: QueryCtx | MutationCtx,
+	order: Doc<"orders">,
+): Promise<PaymentClaimEntry[]> {
+	const rows = await paymentClaimRows(ctx, order._id);
+	if (rows.length > 0) {
+		return rows.map((row) => ({
+			...(row.reference !== undefined ? { reference: row.reference } : {}),
+			...(row.proofStorageId !== undefined
+				? { proofStorageId: row.proofStorageId }
+				: {}),
+			createdAt: row.createdAt,
+		}));
+	}
+	const legacy = legacyClaimFromOrder(order);
+	return legacy ? [legacy] : [];
+}
+
+/**
+ * Append one submission. Called by `claimPayment` BEFORE it patches the order,
+ * so a legacy order's pre-table submission is still readable from the order
+ * and gets written as the first row — otherwise the patch would overwrite the
+ * only copy. Refuses past the per-order cap.
+ */
+export async function recordPaymentClaim(
+	ctx: MutationCtx,
+	order: Doc<"orders">,
+	submission: { reference?: string; proofStorageId?: string },
+	now: number,
+): Promise<void> {
+	const rows = await paymentClaimRows(ctx, order._id);
+	if (rows.length >= MAX_PAYMENT_CLAIMS_PER_ORDER) {
+		throw new ConvexError(PAYMENT_CLAIM_LIMIT_MESSAGE);
+	}
+	if (rows.length === 0) {
+		const legacy = legacyClaimFromOrder(order);
+		if (legacy) await ctx.db.insert("paymentClaims", { orderId: order._id, ...legacy });
+	}
+	await ctx.db.insert("paymentClaims", {
+		orderId: order._id,
+		...(submission.reference !== undefined
+			? { reference: submission.reference }
+			: {}),
+		...(submission.proofStorageId !== undefined
+			? { proofStorageId: submission.proofStorageId }
+			: {}),
+		createdAt: now,
+	});
+}
+
+/**
+ * Which submission leads the seller's card: the newest one carrying a
+ * screenshot — the image the seller checks the transfer against, and the one
+ * `orders.paymentProofStorageId` points at — else the newest of all. A later
+ * reference-only resubmit doesn't erase a screenshot, so it mustn't bump it
+ * out of the lead either. Index into `entries` (oldest first); -1 when empty.
+ */
+export function currentClaimIndex(
+	entries: readonly PaymentClaimEntry[],
+): number {
+	for (let i = entries.length - 1; i >= 0; i--) {
+		if (entries[i].proofStorageId !== undefined) return i;
+	}
+	return entries.length - 1;
+}
