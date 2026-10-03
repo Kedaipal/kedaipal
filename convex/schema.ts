@@ -926,6 +926,11 @@ export default defineSchema({
 		// for it. Indexed (`by_pending_owner_email`) because every storeless
 		// sign-in asks "is a store waiting for me?".
 		pendingOwnerEmail: v.optional(v.string()),
+		// When the handover invitation was last emailed to `pendingOwnerEmail`
+		// (z8r3fdmy7n). Unset = never sent, which the admin must be able to see:
+		// an address named but never told is the commonest way a handover
+		// stalls. Re-sendable, so this is the LAST send, not a boolean.
+		handoverInviteSentAt: v.optional(v.number()),
 		// When a pre-built store was handed over. Set once by `claimStore`, never
 		// cleared — the console's "handed over 3 Oct" fact, and the only durable
 		// trace that this store did not start life owned (the placeholder

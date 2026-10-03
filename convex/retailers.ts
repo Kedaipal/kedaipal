@@ -224,7 +224,7 @@ function sanitizePaymentInstructions(
 }
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { internalMutation, mutation, type MutationCtx, query, type QueryCtx } from "./_generated/server";
+import { internalAction, internalMutation, internalQuery, mutation, type MutationCtx, query, type QueryCtx } from "./_generated/server";
 import { ConvexError } from "convex/values";
 import { reserveFoundingRank } from "./foundingMembers";
 import {
@@ -235,6 +235,8 @@ import { sanitizeAttributionSource } from "./lib/attribution";
 import { sanitizeUnitLine, UNIT_LINE_MAX_LENGTH } from "./lib/address";
 import { sanitizeReferrerSlug } from "./lib/poweredBy";
 import { isValidGaClientId } from "./lib/ga4";
+import { sendEmail } from "./lib/email";
+import { renderHandoverInvite } from "./lib/handoverEmailCopy";
 import { DEFAULT_LOCALE, type Locale } from "./lib/locale";
 import { MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
 import { sanitizeMinOrderValue } from "./lib/minOrderRules";
@@ -1947,6 +1949,96 @@ export const transferStoreOwnership = mutation({
 			`transferStoreOwnership[${retailerId}] ${retailer.slug} released by ${adminSubject}, waiting for ${normalized}`,
 		);
 		return { ok: true };
+	},
+});
+
+/**
+ * Email the handover invitation to the address a store is waiting for
+ * (z8r3fdmy7n). Admin only, and the ONE door for both handover paths — a store
+ * we pre-built and a store transferred off its previous owner are the same
+ * state by the time this runs (`pendingOwnerEmail` set, nobody owning it), so
+ * they get the same email rather than two that drift apart.
+ *
+ * Re-sendable on purpose: the commonest failure of a white-glove handover is
+ * an address named and never told, and the second commonest is an invite that
+ * went to spam. `handoverInviteSentAt` records the LAST send so the admin can
+ * see both states — never sent, and sent a while ago with nothing happening.
+ *
+ * The mutation stamps and schedules; the send itself is an action, because
+ * Convex mutations cannot reach the network. The stamp therefore records
+ * "we tried", not "it arrived" — a bounce is visible in the Resend dashboard,
+ * and re-sending is one tap, so the alternative (a mutation that waits on an
+ * action to write back) buys an accuracy nobody can act on.
+ */
+export const sendHandoverInvite = mutation({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<{ ok: true; email: string }> => {
+		const adminSubject = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		if (!isUnclaimed(retailer))
+			throw new ConvexError(
+				`${retailer.storeName} already has an owner — there is nobody to invite.`,
+			);
+		const email = retailer.pendingOwnerEmail;
+		if (!email)
+			throw new ConvexError(
+				`Set the handover email for ${retailer.storeName} first — there is no address to send to.`,
+			);
+		const now = Date.now();
+		await ctx.db.patch(retailerId, {
+			handoverInviteSentAt: now,
+			updatedAt: now,
+		});
+		await ctx.scheduler.runAfter(
+			0,
+			internal.retailers.deliverHandoverInvite,
+			{ retailerId, email },
+		);
+		await logAdminAction(
+			ctx,
+			{ retailer, role: "admin", actingAsAdmin: true, userId: adminSubject },
+			"retailers.sendHandoverInvite",
+			retailerId,
+		);
+		return { ok: true, email };
+	},
+});
+
+/** The send. Fire-and-forget like every other Kedaipal email: a bounced invite
+ * must never roll back the stamp, because re-sending is the fix and an admin
+ * can see the date. `email` is passed in rather than re-read so a claim racing
+ * the schedule cannot redirect the invite to a cleared field. */
+export const deliverHandoverInvite = internalAction({
+	args: { retailerId: v.id("retailers"), email: v.string() },
+	handler: async (ctx, { retailerId, email }): Promise<void> => {
+		const ctxRow = await ctx.runQuery(
+			internal.retailers.handoverInviteContext,
+			{ retailerId },
+		);
+		if (!ctxRow) return;
+		const { subject, html, text } = renderHandoverInvite(ctxRow.locale, {
+			storeName: ctxRow.storeName,
+			appUrl: `${process.env.SITE_URL ?? "https://kedaipal.com"}/app`,
+			email,
+		});
+		try {
+			await sendEmail(email, subject, html, text);
+		} catch (err) {
+			console.error("[handover] invite email failed", { retailerId, err });
+		}
+	},
+});
+
+export const handoverInviteContext = internalQuery({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{ storeName: string; locale: Locale } | null> => {
+		const r = await ctx.db.get(retailerId);
+		if (!r) return null;
+		return { storeName: r.storeName, locale: (r.locale ?? "en") as Locale };
 	},
 });
 

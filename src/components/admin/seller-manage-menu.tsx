@@ -264,7 +264,10 @@ export function SellerManageMenu({
 							<UserPlus
 								className={cn(
 									"mt-0.5 size-4",
-									seller.pendingOwnerEmail
+									// Amber while the handover is unfinished — no address, or
+									// an address nobody has been told about. Both leave a
+									// store that can never be claimed until an admin acts.
+									seller.pendingOwnerEmail && seller.handoverInviteSentAt
 										? "text-muted-foreground"
 										: "text-amber-600 dark:text-amber-400",
 								)}
@@ -273,12 +276,16 @@ export function SellerManageMenu({
 							<span className="flex min-w-0 flex-col">
 								<span className="font-medium">
 									{seller.pendingOwnerEmail
-										? "Handover email — set"
+										? seller.handoverInviteSentAt
+											? "Handover email — set"
+											: "Handover — invite them"
 										: "Set handover email"}
 								</span>
 								<span className="text-xs text-muted-foreground">
 									{seller.pendingOwnerEmail
-										? `Waiting for ${seller.pendingOwnerEmail} to sign up`
+										? seller.handoverInviteSentAt
+											? `Waiting for ${seller.pendingOwnerEmail} to sign up`
+											: `${seller.pendingOwnerEmail} hasn't been invited yet`
 										: "Nobody can claim this store until you name their email"}
 								</span>
 							</span>

@@ -130,6 +130,42 @@ The claim re-checks `isUnclaimed`, not just the index: the index only says an
 address is *pending*, and a claimed store with a stale pending field would
 otherwise hand a live business to a second person.
 
+## The invitation email (z8r3fdmy7n)
+
+`retailers.sendHandoverInvite` (admin only, in the **Handover email** dialog)
+emails the address a store is waiting for. **One door for both handover paths**
+— a store we pre-built and a store transferred off its previous owner are the
+same state by the time this runs, so they get the same email rather than two
+that drift apart.
+
+**It carries no token, deliberately.** Claiming is proved by Clerk verifying the
+address, never by holding a URL, so the email contains an ordinary `/app`
+sign-in link. A forwarded invite gets the next person a sign-in page and nothing
+else — the property a magic link would destroy. `handoverEmailCopy.test.ts`
+fails on any token-shaped URL.
+
+**It names nothing but the store's name.** The recipient has consented to
+nothing yet, so the email must not ship them a catalogue, a buyer's details or a
+phone number.
+
+**`handoverInviteSentAt` is the LAST send, not a boolean**, because re-sending
+is the fix for the two things that actually go wrong (an address named and never
+told; an invite in spam). Both states are surfaced *outside* the dialog, on the
+Manage row itself — "Handover — invite them" with an amber icon until it has
+gone, "Handover email — set" after — so an unfinished handover is visible
+without opening anything.
+
+**The stamp records "we tried", not "it arrived."** The mutation stamps and
+schedules; the send is an action, because a Convex mutation cannot reach the
+network. A bounce shows in Resend and re-sending is one tap, so a mutation that
+waited on a write-back would buy an accuracy nobody can act on. The recipient
+address is passed *into* the action rather than re-read, so a claim racing the
+schedule cannot redirect the invite to a cleared field.
+
+**The invite button refuses an unsaved edit** rather than sending to the typed
+value: the dialog edits the address and sends to the saved one, and "I typed the
+new address and pressed Send" is the mistake that layout invites.
+
 ## Transferring a store that already HAS an owner
 
 `retailers.transferStoreOwnership` (admin only, Manage → **Transfer ownership**)

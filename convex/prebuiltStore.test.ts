@@ -856,3 +856,73 @@ describe("transferStoreOwnership", () => {
 		expect(after?.currentPeriodEnd).toBe(periodEnd);
 	});
 });
+
+describe("sendHandoverInvite", () => {
+	test("stamps the send and schedules the email", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		const before = await readStore(t, retailerId);
+		expect(before?.handoverInviteSentAt).toBeUndefined();
+
+		const res = await t
+			.withIdentity(ADMIN)
+			.mutation(api.retailers.sendHandoverInvite, { retailerId });
+		expect(res.email).toBe(VENDOR.email);
+
+		const after = await readStore(t, retailerId);
+		expect(typeof after?.handoverInviteSentAt).toBe("number");
+	});
+
+	test("refuses when no address has been named — there is nothing to send to", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t);
+		await expect(
+			t
+				.withIdentity(ADMIN)
+				.mutation(api.retailers.sendHandoverInvite, { retailerId }),
+		).rejects.toThrow(/Set the handover email/i);
+	});
+
+	test("refuses on a store that already has an owner", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		await expect(
+			t
+				.withIdentity(ADMIN)
+				.mutation(api.retailers.sendHandoverInvite, { retailerId }),
+		).rejects.toThrow(/already has an owner/i);
+	});
+
+	test("only an admin can invite", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		await expect(
+			t
+				.withIdentity(VENDOR)
+				.mutation(api.retailers.sendHandoverInvite, { retailerId }),
+		).rejects.toThrow();
+	});
+
+	test("a transferred store can be invited through the same door", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		await t
+			.withIdentity(ADMIN)
+			.mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: STRANGER.email,
+			});
+		// Pre-built and transferred are the SAME state by the time this runs, so
+		// one invite door serves both rather than two that drift apart.
+		const res = await t
+			.withIdentity(ADMIN)
+			.mutation(api.retailers.sendHandoverInvite, { retailerId });
+		expect(res.email).toBe(STRANGER.email);
+	});
+});
