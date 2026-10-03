@@ -15,6 +15,7 @@ import {
 } from "../../../convex/lib/productEvent";
 import { ProBadge } from "../app/pro-gate";
 import { Input } from "../ui/input";
+import { Select } from "../ui/select";
 import { ToggleSwitch } from "../ui/toggle-switch";
 
 /** Why an event can't be saved on a store with no pickup point — said on
@@ -193,6 +194,15 @@ export function eventDraftValid(
 }
 
 /**
+ * What a venue reads as in the picker. ONE author, so the visible `<option>`
+ * and the `title` that recovers it when the control clips it can't drift into
+ * saying two different things about the same place.
+ */
+function venueOptionLabel(v: { label: string; isActive: boolean }): string {
+	return v.isActive ? v.label : `${v.label} — hidden from buyers`;
+}
+
+/**
  * "This is an event" — the fixed-date mode (`z8r3fdff9u`).
  *
  * Its own card rather than a third row under "Order rules" on purpose: min
@@ -257,6 +267,12 @@ export function EventFields({
 		seatsValid && seatsRaw.length > 0 && seatsParsed < taken;
 	const endDateIssue = eventEndDateIssue(draft);
 	const endDateWarning = eventEndDateWarning(draft);
+	// Undefined while nothing is picked, so the placeholder doesn't get a
+	// tooltip repeating itself.
+	const pickedVenue = venues?.find((v) => v._id === draft.venueId);
+	const selectedVenueLabel = pickedVenue
+		? venueOptionLabel(pickedVenue)
+		: undefined;
 
 	return (
 		<div className="flex flex-col gap-4">
@@ -392,32 +408,38 @@ export function EventFields({
 								</a>
 							</p>
 						) : null}
+						{/* Wider than the boxes beside it, and full-width on a phone
+						    where it sits alone on its row: those hold a date, a time and
+						    a seat count — fixed, short, known — while this holds a venue
+						    name the seller typed, of no bounded length. A native
+						    `<select>` cannot ellipsize, so a name that overruns is simply
+						    cut; `title` is the desktop recovery (hover), the width is the
+						    real fix. */}
 						{venues !== undefined && venues.length > 1 ? (
-							<div className="flex flex-col gap-1.5">
+							<div className="flex w-full flex-col gap-1.5 sm:w-64">
 								<label htmlFor="event-venue" className="text-sm font-medium">
 									Venue
 								</label>
-								<select
+								<Select
 									id="event-venue"
+									variant="field"
+									className="w-full"
+									title={selectedVenueLabel}
 									value={draft.venueId}
 									onChange={(e) => set({ venueId: e.target.value })}
 									// A BLANK venue (saved before venues existed) stays
 									// pickable — naming where the event already is isn't a
 									// move, and the server refuses an actual move anyway.
 									disabled={locked || (hasRsvps && draft.venueId.trim() !== "")}
-									className={`h-11 w-56 rounded-xl border bg-background px-3 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50 ${
-										draft.venueId.trim() === ""
-											? "border-destructive"
-											: "border-input"
-									}`}
+									isError={draft.venueId.trim() === ""}
 								>
 									<option value="">Pick a pickup point…</option>
 									{venues.map((v) => (
 										<option key={v._id} value={v._id}>
-											{v.isActive ? v.label : `${v.label} — hidden from buyers`}
+											{venueOptionLabel(v)}
 										</option>
 									))}
-								</select>
+								</Select>
 							</div>
 						) : null}
 					</div>
