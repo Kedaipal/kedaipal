@@ -130,6 +130,56 @@ The claim re-checks `isUnclaimed`, not just the index: the index only says an
 address is *pending*, and a claimed store with a stale pending field would
 otherwise hand a live business to a second person.
 
+## Transferring a store that already HAS an owner
+
+`retailers.transferStoreOwnership` (admin only, Manage → **Transfer ownership**)
+covers the case the pre-built path does not: a founder built and **claimed** a
+store on their own login while setting a vendor up, and now has to give it away.
+
+**It reuses this whole mechanism rather than inventing a second one.** The store
+goes BACK to the unclaimed state — a fresh sentinel `userId` plus
+`pendingOwnerEmail` — and the new owner takes it through the ordinary
+`claimStore` door. There is no "pending transfer" state, no second protocol, and
+every refusal, consent stamp and free-period rule the claim already enforces
+applies unchanged. The old owner loses access the instant it runs, because the
+owner branch of `requireRetailerAccess` compares against a `userId` no Clerk
+subject can equal.
+
+| Travels with the store | Does not |
+| --- | --- |
+| Products, orders, customers, settings, the team | The owner |
+| **The subscription** — plan, period, founding rank | `notifyEmail`, cleared |
+| `pendingOwnerEmail`, pointed at the new address | `claimedAt`, re-stamped at claim |
+
+**Why `notifyEmail` is cleared.** It is the old owner's address. A store in
+handover must not keep mailing buyers' names and addresses to someone who no
+longer runs it — nor to the new owner, who has accepted nothing yet (consent is
+taken at claim, which is exactly why `createUnclaimedStore` leaves this field
+unset too). The claim sets it. The gap is one sign-in long and orders stay
+visible in the dashboard and the admin console throughout.
+
+**Why a PAID subscription survives.** `startFreePeriodOnClaim` converts a claimed
+store into a fresh 14-day Pro trial — correct for a pre-built store, catastrophic
+for a transferred one, where it would wipe `currentPeriodEnd` / `periodPaidBy`
+and hand back 14 free days for money already taken. It now returns early for a
+subscription that is `active` **and not comped**. The `!comped` half is
+load-bearing: a pre-built store's `internal` comp sits on an `active` row too,
+and that one must still convert. "Paying" is *active and nobody is covering it*.
+
+**Two refusals, both at the admin end** rather than at the vendor's sign-in:
+
+- the store has **no owner yet** → set the handover email instead;
+- the new address is **already on this store's team** → `claimBlocker` refuses
+  anyone holding an active membership, so the handover would dead-end on the
+  vendor's screen. Remove them from the team first.
+
+**Known gap, deliberate:** nobody is emailed. Kedaipal does not email the
+sign-up link for a pre-built store either — an admin sends it — and the previous
+owner is not notified that the store left them. For the white-glove case (a
+founder handing over their own build) there is nobody to tell. A genuine
+vendor-to-vendor transfer should notify both sides; that is tracked separately,
+not pretended at here.
+
 ## Billing — why an `internal` comp and not a trial
 
 A pre-built store runs on `comp.kind: "internal"` (`insertSetupComp`) while the
@@ -149,6 +199,17 @@ ended. Both outcomes would be absurd on a vendor's first login.
 **A real comp survives the handover.** Only `internal` is scaffolding; a
 `partner`/`sponsor`/`pilot` comp set before handover is a commercial promise to
 the vendor, and the claim leaves it alone.
+
+### The admin billing picker says "waiting for its owner", never "on the house"
+
+An unclaimed store IS comped (the `internal` setup comp), so the issue-invoice
+picker labelled it `on the house` and its refusal line read *"End the comp from
+Admin · Sellers first"* — telling an admin to tear down the scaffolding instead
+of finishing the handover. Exactly the lie the Sponsored pill told before
+`tierPill` learned about unclaimed stores. `listRetailersForAdmin` now carries
+`unclaimed`, the picker says **"waiting for its owner"**, and the note explains
+that the 14-day Pro trial starts at the claim. Nothing about billing changed —
+`issueInvoice` always refused these.
 
 ## Visibility before the handover
 

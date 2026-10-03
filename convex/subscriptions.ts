@@ -886,6 +886,17 @@ export async function startFreePeriodOnClaim(
 	// setup scaffolding, so the handover must not quietly cancel it — only the
 	// `internal` comp this feature puts there is scaffolding.
 	if (sub.comped === true && sub.comp?.kind !== "internal") return;
+	// A store that already PAYS keeps what it paid for. Unreachable while the
+	// only claimable stores were pre-built ones, but `transferStoreOwnership`
+	// hands over a LIVE store, and resetting an active subscription to a free
+	// trial here would wipe a paid period — erasing `currentPeriodEnd` /
+	// `periodPaidBy` and handing back 14 free days for money already taken. A
+	// transfer moves the person, never the plan.
+	//
+	// `!sub.comped` is load-bearing: a pre-built store's `internal` comp sits on
+	// an `active` row too, and that one DOES convert to the trial — which is the
+	// whole point of this function. Paying is "active and nobody is covering it".
+	if (!sub.comped && sub.status === "active") return;
 	await ctx.db.patch(sub._id, {
 		comped: false,
 		comp: undefined,

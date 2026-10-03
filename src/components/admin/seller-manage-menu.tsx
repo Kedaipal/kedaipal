@@ -16,6 +16,7 @@ import {
 	Store,
 	Trash2,
 	UserPlus,
+	UserRoundCog,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -41,6 +42,7 @@ import {
 import { CompDialog } from "./comp-dialog";
 import { HandoverDialog } from "./handover-dialog";
 import { HighlightDialog } from "./highlight-dialog";
+import { TransferOwnershipDialog } from "./transfer-ownership-dialog";
 
 /**
  * Enter act-as for a store: start the session, audit the tenant ENTRY
@@ -98,6 +100,7 @@ export function SellerManageMenu({
 	const [hideOpen, setHideOpen] = useState(false);
 	const [compOpen, setCompOpen] = useState(false);
 	const [handoverOpen, setHandoverOpen] = useState(false);
+	const [transferOpen, setTransferOpen] = useState(false);
 	// Title/subtitle/tone for the comp item — one pure author in
 	// admin-seller-view.ts, where the row's other derived sentences live.
 	const compItem = sellerCompMenuItem(seller);
@@ -245,12 +248,14 @@ export function SellerManageMenu({
 							</span>
 						</DropdownMenuItem>
 					) : null}
-					{/* Only on a pre-built store, and placed before the commercial
-					    items: for an unclaimed store the open question is WHO it is
-					    for, not what it costs. Absent once claimed rather than
-					    disabled — ownership moves exactly once, so a permanently
-					    greyed row would sit on every ordinary store forever saying
-					    nothing (docs/prebuilt-stores.md). */}
+					{/* The "who owns this store" slot, placed before the commercial
+					    items: the open question about a store in handover is WHO it
+					    is for, not what it costs. ONE slot, two states — a store
+					    nobody owns yet names the address that will claim it, and a
+					    store that already has an owner hands it to someone else.
+					    Both end in the same place (`pendingOwnerEmail` + the ordinary
+					    claim), so showing them as two unrelated actions would be two
+					    controls for one idea (docs/prebuilt-stores.md). */}
 					{seller.unclaimed ? (
 						<DropdownMenuItem
 							onSelect={() => setHandoverOpen(true)}
@@ -278,7 +283,24 @@ export function SellerManageMenu({
 								</span>
 							</span>
 						</DropdownMenuItem>
-					) : null}
+					) : (
+						<DropdownMenuItem
+							onSelect={() => setTransferOpen(true)}
+							className="items-start"
+						>
+							<UserRoundCog
+								className="mt-0.5 size-4 text-muted-foreground"
+								aria-hidden="true"
+							/>
+							<span className="flex min-w-0 flex-col">
+								<span className="font-medium">Transfer ownership</span>
+								<span className="text-xs text-muted-foreground">
+									Hand the store to a different email — the plan, team and
+									everything else stay
+								</span>
+							</span>
+						</DropdownMenuItem>
+					)}
 					{/* Disabled-with-reason IN the item — a disabled menu row can't
 					    show a hover title, so the reason is the subtitle.
 
@@ -392,6 +414,12 @@ export function SellerManageMenu({
 				<HandoverDialog
 					seller={seller}
 					onClose={() => setHandoverOpen(false)}
+				/>
+			) : null}
+			{transferOpen ? (
+				<TransferOwnershipDialog
+					seller={seller}
+					onClose={() => setTransferOpen(false)}
 				/>
 			) : null}
 			{compOpen ? (

@@ -670,3 +670,137 @@ describe("an unclaimed store is reachable but never advertised", () => {
 		).rejects.toThrow(/Forbidden|Not authorized/);
 	});
 });
+
+describe("transferStoreOwnership", () => {
+	/** A claimed store, owned by VENDOR, ready to be handed to someone else. */
+	async function claimedStore(t: ReturnType<typeof setup>) {
+		const { retailerId } = await buildStore(t, { email: VENDOR.email });
+		await t
+			.withIdentity(VENDOR)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		return retailerId;
+	}
+
+	test("releases the store back to unclaimed, pointed at the new address", async () => {
+		const t = setup();
+		const retailerId = await claimedStore(t);
+		const before = await readStore(t, retailerId);
+		expect(before?.userId).toBe(VENDOR.subject);
+		expect(before?.notifyEmail).toBe(VENDOR.email);
+
+		await t
+			.withIdentity(ADMIN)
+			.mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: STRANGER.email,
+			});
+
+		const after = await readStore(t, retailerId);
+		expect(after?.userId.startsWith(UNCLAIMED_OWNER_PREFIX)).toBe(true);
+		expect(after?.pendingOwnerEmail).toBe(STRANGER.email);
+		expect(after?.claimedAt).toBeUndefined();
+		// Cleared deliberately: a store in handover must not keep mailing the old
+		// owner, and the new one has consented to nothing yet.
+		expect(after?.notifyEmail).toBeUndefined();
+	});
+
+	test("the previous owner is locked out, and the new one can claim it", async () => {
+		const t = setup();
+		const retailerId = await claimedStore(t);
+		await t
+			.withIdentity(ADMIN)
+			.mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: STRANGER.email,
+			});
+
+		// The old owner's dashboard no longer resolves to this store.
+		expect(
+			await t.withIdentity(VENDOR).query(api.retailers.getMyRetailer, {}),
+		).toBeNull();
+
+		const claimed = await t
+			.withIdentity(STRANGER)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		expect(claimed.ok).toBe(true);
+		const after = await readStore(t, retailerId);
+		expect(after?.userId).toBe(STRANGER.subject);
+		expect(after?.notifyEmail).toBe(STRANGER.email);
+	});
+
+	test("a store nobody owns yet is refused — that is the handover email's job", async () => {
+		const t = setup();
+		const { retailerId } = await buildStore(t);
+		await expect(
+			t.withIdentity(ADMIN).mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: STRANGER.email,
+			}),
+		).rejects.toThrow(/no owner yet/i);
+	});
+
+	test("only an admin can transfer", async () => {
+		const t = setup();
+		const retailerId = await claimedStore(t);
+		await expect(
+			t.withIdentity(VENDOR).mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: STRANGER.email,
+			}),
+		).rejects.toThrow();
+	});
+
+	test("refuses an address already on this store's team — the claim would dead-end", async () => {
+		const t = setup();
+		const retailerId = await claimedStore(t);
+		await t.run(async (ctx) => {
+			await ctx.db.insert("retailerMembers", {
+				retailerId,
+				email: STRANGER.email,
+				userId: STRANGER.subject,
+				status: "active",
+				permissions: { orders: "read" },
+				invitedAt: Date.now(),
+				invitedBy: VENDOR.subject,
+			});
+		});
+		await expect(
+			t.withIdentity(ADMIN).mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: STRANGER.email,
+			}),
+		).rejects.toThrow(/already on .* team/i);
+	});
+
+	test("a PAID subscription survives the handover — the new owner inherits the period, not a free trial", async () => {
+		const t = setup();
+		const retailerId = await claimedStore(t);
+		const periodEnd = Date.now() + 20 * DAY_MS;
+		const sub = await readSub(t, retailerId);
+		await t.run(async (ctx) => {
+			if (!sub) throw new Error("sub");
+			await ctx.db.patch(sub._id, {
+				status: "active",
+				plan: "pro",
+				trialEndsAt: undefined,
+				currentPeriodEnd: periodEnd,
+			});
+		});
+
+		await t
+			.withIdentity(ADMIN)
+			.mutation(api.retailers.transferStoreOwnership, {
+				retailerId,
+				email: STRANGER.email,
+			});
+		await t
+			.withIdentity(STRANGER)
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+
+		const after = await readSub(t, retailerId);
+		// Without the `status === "active"` guard in startFreePeriodOnClaim, the
+		// claim resets this to `trialing` and wipes the period that was paid for.
+		expect(after?.status).toBe("active");
+		expect(after?.currentPeriodEnd).toBe(periodEnd);
+	});
+});

@@ -1856,6 +1856,92 @@ export const setPendingOwnerEmail = mutation({
 });
 
 /**
+ * Hand a CLAIMED store to a different person (admin only).
+ *
+ * The white-glove case this exists for: a founder built and claimed a store on
+ * their OWN login while setting the vendor up, and now has to give it away. The
+ * pre-built path (`createUnclaimedStore` + `setPendingOwnerEmail`) covers a
+ * store that was never owned; this covers one that already is.
+ *
+ * HOW IT WORKS: the store goes BACK to the unclaimed state and is pointed at
+ * the new address — a fresh sentinel `userId` plus `pendingOwnerEmail` — and
+ * the new owner takes it through the ordinary `claimStore` door. That is the
+ * whole mechanism. No second transfer protocol, no "pending transfer" state to
+ * reason about, and every refusal, consent stamp and free-period rule the claim
+ * already enforces applies unchanged. The old owner loses access the instant
+ * this runs, because `requireRetailerAccess`'s owner branch compares against a
+ * `userId` no Clerk subject can equal.
+ *
+ * WHAT TRAVELS WITH THE STORE: everything except the person. Products, orders,
+ * customers, settings, the team and **the subscription** stay exactly as they
+ * are — a transfer is not a cancellation, and billing a new owner for a plan
+ * the store already pays for would be a second charge for one month. The admin
+ * is told this in the dialog rather than left to assume it.
+ *
+ * WHAT DOES NOT TRAVEL: `notifyEmail` is CLEARED, deliberately. It is the old
+ * owner's address, and a store in handover must not keep mailing buyers' names
+ * and addresses to someone who no longer runs it — nor to the new owner, who
+ * has not accepted anything yet (consent is taken at claim, which is exactly
+ * why `createUnclaimedStore` leaves this field unset too). The claim sets it to
+ * the new owner. Orders in the gap are visible in the dashboard and the admin
+ * console; the gap is one sign-in long.
+ */
+export const transferStoreOwnership = mutation({
+	args: {
+		retailerId: v.id("retailers"),
+		/** Required — unlike `setPendingOwnerEmail`, there is no "we don't know
+		 * yet" here. Taking a store off its current owner without naming who
+		 * gets it would leave a live store nobody can reach. */
+		email: v.string(),
+	},
+	handler: async (ctx, { retailerId, email }): Promise<{ ok: true }> => {
+		const adminSubject = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		if (isUnclaimed(retailer))
+			throw new ConvexError(
+				`${retailer.storeName} has no owner yet — set its handover email instead.`,
+			);
+		const normalized = await resolvePendingOwnerEmail(ctx, email, retailerId);
+		if (!normalized)
+			throw new ConvexError("Enter the new owner's email address.");
+		// A teammate of THIS store cannot claim it: `claimBlocker` refuses anyone
+		// holding an active membership, so the handover would dead-end at the
+		// vendor's sign-in with a message about a store they are already in.
+		// Caught here, where the admin can act on it, rather than there.
+		const member = await ctx.db
+			.query("retailerMembers")
+			.withIndex("by_email", (q) => q.eq("email", normalized))
+			.collect();
+		if (member.some((m) => m.retailerId === retailerId && m.status === "active"))
+			throw new ConvexError(
+				`${normalized} is already on ${retailer.storeName}'s team. One login can only hold one store, so remove them from the team first — then transfer.`,
+			);
+
+		const now = Date.now();
+		await ctx.db.patch(retailerId, {
+			userId: mintUnclaimedOwnerId(),
+			pendingOwnerEmail: normalized,
+			notifyEmail: undefined,
+			// Re-stamped by the new owner's claim. Left set, the store would read
+			// as claimed on every surface that asks, while having no owner.
+			claimedAt: undefined,
+			updatedAt: now,
+		});
+		await logAdminAction(
+			ctx,
+			{ retailer, role: "admin", actingAsAdmin: true, userId: adminSubject },
+			"retailers.transferStoreOwnership",
+			retailerId,
+		);
+		console.log(
+			`transferStoreOwnership[${retailerId}] ${retailer.slug} released by ${adminSubject}, waiting for ${normalized}`,
+		);
+		return { ok: true };
+	},
+});
+
+/**
  * Validate a handover address and make sure it is the ONLY store waiting on it.
  * Two stores pointed at one inbox would both answer `myClaimableStore`, and the
  * vendor would silently get whichever the index returned first — so the second

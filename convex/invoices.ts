@@ -22,6 +22,7 @@ import {
 	requireRetailerAccess,
 	resolveMyRetailerFor,
 } from "./lib/auth";
+import { isUnclaimed } from "./lib/unclaimedStore";
 import {
 	type AdminAutoChargeState,
 	adminAutoChargeState,
@@ -1587,6 +1588,15 @@ export const listRetailersForAdmin = query({
 			 * drafts a bill `issueInvoice` will refuse anyway. */
 			comped: boolean;
 			compLabel?: string;
+			/** Nobody owns this store yet (z8r3fdm6up). It is ALSO `comped` — the
+			 * `internal` comp keeps a store nobody can read unbilled while an
+			 * admin builds it — but that is scaffolding, not a sponsorship, and
+			 * the claim clears it into a fresh 14-day Pro trial. Carried so the
+			 * picker can say "waiting for its owner" instead of calling the setup
+			 * comp a freebie and telling an admin to go and end it, which is the
+			 * same lie the Sponsored pill told before `tierPill` learned about
+			 * unclaimed stores. */
+			unclaimed: boolean;
 			/** The Enterprise contract's billing facts (T6) — an Enterprise
 			 * invoice bills exactly these, so the form shows them instead of
 			 * letting the admin pick a cycle or currency. */
@@ -1621,6 +1631,7 @@ export const listRetailersForAdmin = query({
 				foundingBenefitsRevoked: r.foundingBenefitsRevokedAt !== undefined,
 				hasPending: pending !== null,
 				comped: sub?.comped === true,
+				unclaimed: isUnclaimed(r),
 				compLabel: sub?.comp?.label,
 				enterprise: sub?.enterprise
 					? {
