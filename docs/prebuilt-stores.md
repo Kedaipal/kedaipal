@@ -83,8 +83,11 @@ the one reader of the placeholder; nothing else tests the prefix by hand.
    the mistake a loud banner exists to prevent.
 3. **Name the handover email** from the seller directory's Manage menu → **Set
    handover email** (`retailers.setPendingOwnerEmail`), any time before handover.
-4. **Send them the sign-up link yourself.** Kedaipal never emails it — same
-   posture as the existing invite link.
+4. **Send the invitation** from the same Manage menu → **Handover email → Send
+   invitation** (`retailers.sendHandoverInvite`). The row reads "Handover —
+   invite them" in amber until it has gone. The email carries an ordinary
+   sign-in link and no token, so it is safe to forward and useless on its own —
+   pasting the link by hand still works if you prefer.
 
 The directory carries an **Unclaimed** chip, placed straight after **Past due**:
 both are buckets where *Kedaipal* owes an action, unlike the rest, which
@@ -130,6 +133,159 @@ The claim re-checks `isUnclaimed`, not just the index: the index only says an
 address is *pending*, and a claimed store with a stale pending field would
 otherwise hand a live business to a second person.
 
+## The invitation email (z8r3fdmy7n)
+
+`retailers.sendHandoverInvite` (admin only, in the **Handover email** dialog)
+emails the address a store is waiting for. **One door for both handover paths**
+— a store we pre-built and a store transferred off its previous owner are the
+same state by the time this runs, so they get the same email rather than two
+that drift apart.
+
+**It carries no token, deliberately.** Claiming is proved by Clerk verifying the
+address, never by holding a URL, so the email contains an ordinary `/app`
+sign-in link. A forwarded invite gets the next person a sign-in page and nothing
+else — the property a magic link would destroy. `handoverEmailCopy.test.ts`
+fails on any token-shaped URL.
+
+**It names nothing but the store's name.** The recipient has consented to
+nothing yet, so the email must not ship them a catalogue, a buyer's details or a
+phone number.
+
+**`handoverInviteSentAt` is the LAST send, not a boolean**, because re-sending
+is the fix for the two things that actually go wrong (an address named and never
+told; an invite in spam). Both states are surfaced *outside* the dialog, on the
+Manage row itself — "Handover — invite them" with an amber icon until it has
+gone, "Handover email — set" after — so an unfinished handover is visible
+without opening anything.
+
+**Send first, stamp after — and the first cut got this wrong.** It was a
+mutation that stamped and scheduled the send, with the provider error swallowed
+by a `try/catch`. So a failed send showed the admin a success toast and a row
+reading "sent" while nothing arrived — found on 3 Oct by an invite that never
+landed. It is now an **action**: validate (and prove admin) through
+`handoverInviteContext`, send, then stamp through `stampHandoverInvite`. The
+provider's own message reaches the admin, because that message *is* the answer
+("domain not verified", "recipient suppressed"), and a stamp now means Resend
+accepted it. `prebuiltStore.test.ts` pins both halves — a success writes the
+stamp, a 403 throws and leaves none.
+
+The lesson generalises: fire-and-forget is right for the automatic emails, where
+a cron must not fail on a bounced notice, and wrong for a button a person is
+waiting on.
+
+**The invite button refuses an unsaved edit** rather than sending to the typed
+value: the dialog edits the address and sends to the saved one, and "I typed the
+new address and pressed Send" is the mistake that layout invites.
+
+## Transferring a store that already HAS an owner
+
+`retailers.transferStoreOwnership` (admin only, Manage → **Transfer ownership**)
+covers the case the pre-built path does not: a founder built and **claimed** a
+store on their own login while setting a vendor up, and now has to give it away.
+
+**It reuses this whole mechanism rather than inventing a second one.** The store
+goes BACK to the unclaimed state — a fresh sentinel `userId` plus
+`pendingOwnerEmail` — and the new owner takes it through the ordinary
+`claimStore` door. There is no "pending transfer" state, no second protocol, and
+every refusal, consent stamp and free-period rule the claim already enforces
+applies unchanged. The old owner loses access the instant it runs, because the
+owner branch of `requireRetailerAccess` compares against a `userId` no Clerk
+subject can equal.
+
+| Travels with the store | Does not |
+| --- | --- |
+| Products, orders, customers, settings, the team | The owner |
+| **The subscription** — plan, period, founding rank | `notifyEmail`, cleared |
+| `pendingOwnerEmail`, pointed at the new address | `claimedAt`, re-stamped at claim |
+| — | An **open pending invoice**, voided |
+
+**Why `notifyEmail` is cleared.** It is the old owner's address. A store in
+handover must not keep mailing buyers' names and addresses to someone who no
+longer runs it — nor to the new owner, who has accepted nothing yet (consent is
+taken at claim, which is exactly why `createUnclaimedStore` leaves this field
+unset too). The claim sets it. The gap is one sign-in long and orders stay
+visible in the dashboard and the admin console throughout.
+
+**Why the saved card is detached.** `autoRenew` / `autoRenewSessionId` live on
+the SUBSCRIPTION row, which is store-scoped — so a handover would otherwise
+leave the previous owner's tokenised card attached to a store they no longer
+own, and the next renewal would charge them for somebody else's shop. A charge
+nobody authorised, and the one genuine money risk in a transfer.
+`detachAutoRenewForRetailer` (extracted from `cancelAutoRenew`, one author) runs
+before the patch; the reconcile ordering it carries is load-bearing, which is
+why it is a helper and not three field clears at each call site. The period the
+old owner already paid for still stands — they paid for this store's service and
+the store carries on; the new owner authorises their own method.
+
+**Why an OPEN BILL is voided.** An invoice still `pending` when the store changes
+hands cannot be collected through the product, and three of the handover's own
+steps guarantee it: `notifyEmail` is cleared, so the invoice mail and all three
+dunning mails drop at their `if (!meta.notifyEmail) return`; the card is
+detached, so nothing can auto-pay it; and the daily pass skips an unclaimed
+store, so it is never chased. It then **re-arms the moment the new owner
+claims** — `overduePending` flips the store to `past_due` and sends them a "pay
+to resume" demand for a month they did not own, which is the mirror image of the
+wiped-paid-period bug below. It also holds the single-pending-invoice slot
+(`issueInvoice` refuses a second), so their own first bill could not be issued.
+
+So the bill stops at the handover, the same way every other lifecycle flow that
+suspends a store's clock stops it: an admin comp (`setComp`) and the seasonal
+hold both void the open plan invoice, through the same `voidPendingInvoice`
+helper. **Nothing that was ever collected is forgiven** — a pending invoice is a
+*request*, not money, and the row survives as `void` carrying `voidedBy` /
+`voidReason`, so a genuine debt is still on the record to chase off-platform.
+An admin who wants it paid settles it **before** transferring, which is what the
+dialog's panel tells them. `voidPendingInvoiceOnHandover` is the one author, and
+its number goes into the transfer's log line.
+
+**Why a PAID subscription survives.** `startFreePeriodOnClaim` converts a claimed
+store into a fresh 14-day Pro trial — correct for a pre-built store, catastrophic
+for a transferred one, where it would wipe `currentPeriodEnd` / `periodPaidBy`
+and hand back 14 free days for money already taken. It now returns early for a
+subscription that is `active` **and not comped**. The `!comped` half is
+load-bearing: a pre-built store's `internal` comp sits on an `active` row too,
+and that one must still convert. "Paying" is *active and nobody is covering it*.
+
+**Two refusals, both at the admin end** rather than at the vendor's sign-in:
+
+- the store has **no owner yet** → set the handover email instead;
+- the new address is **already on this store's team** → `claimBlocker` refuses
+  anyone holding an active membership, so the handover would dead-end on the
+  vendor's screen. Remove them from the team first.
+
+**Known gap, deliberate:** the PREVIOUS owner is not told their store left
+them. The new owner is — see [the invitation email](#the-invitation-email-z8r3fdmy7n) — but the
+person losing the shop gets nothing. For the white-glove case (a founder handing
+over their own build) there is nobody to tell; a genuine vendor-to-vendor sale
+should notify both sides, and that is tracked separately rather than
+half-built here.
+
+## A store nobody owns has no billing clock
+
+The pre-built design's safety argument was `insertSetupComp`'s own comment —
+"nothing bills, nothing locks and nothing emails a store with no owner to read
+it" — and that rested entirely on the `internal` comp. `transferStoreOwnership`
+broke the assumption: it makes a store unclaimed **without** comping it, so the
+daily pass's single `comped` exemption missed it.
+
+Concretely, found in review: transfer on day 20 of a monthly period → the period
+ends during the gap → `internalIssueRenewalInvoice` fires → the invoice email and
+all three dunning mails drop at `if (!meta.notifyEmail) return` (the handover
+cleared it) → the invoice goes overdue → the store flips `past_due` and **locks
+itself**. The new owner would claim into a locked shop holding a bill neither
+party was ever told about.
+
+**Ownership is the real predicate, so it is now tested directly** rather than
+through whatever happens to be comping the store:
+
+- `subscriptions.internalDailyBillingStatus` skips an unclaimed row beside a
+  comped one — no renewal, no dunning, no overdue lock;
+- `invoices.issueInvoice` refuses one, because the manual path must refuse what
+  the machine path skips, exactly as it already does for a comp.
+
+The clock resumes at the claim, with somebody to read it. The period the store
+already paid for is untouched throughout — see `startFreePeriodOnClaim`.
+
 ## Billing — why an `internal` comp and not a trial
 
 A pre-built store runs on `comp.kind: "internal"` (`insertSetupComp`) while the
@@ -149,6 +305,17 @@ ended. Both outcomes would be absurd on a vendor's first login.
 **A real comp survives the handover.** Only `internal` is scaffolding; a
 `partner`/`sponsor`/`pilot` comp set before handover is a commercial promise to
 the vendor, and the claim leaves it alone.
+
+### The admin billing picker says "waiting for its owner", never "on the house"
+
+An unclaimed store IS comped (the `internal` setup comp), so the issue-invoice
+picker labelled it `on the house` and its refusal line read *"End the comp from
+Admin · Sellers first"* — telling an admin to tear down the scaffolding instead
+of finishing the handover. Exactly the lie the Sponsored pill told before
+`tierPill` learned about unclaimed stores. `listRetailersForAdmin` now carries
+`unclaimed`, the picker says **"waiting for its owner"**, and the note explains
+that the 14-day Pro trial starts at the claim. Nothing about billing changed —
+`issueInvoice` always refused these.
 
 ## Visibility before the handover
 

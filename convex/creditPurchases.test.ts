@@ -749,11 +749,24 @@ describe("a checkout expires 24h after it opened", () => {
 		const { retailerId } = await makeStore(t);
 		const { purchaseId } = await buy(t, OWNER);
 
-		vi.advanceTimersByTime(CREDIT_PURCHASE_TTL_MS - 1000);
+		// How far below the TTL we check that nothing has expired yet. It is an
+		// HOUR, not the millisecond it reads like it could be: `flushSoon`
+		// advances the fake clock 1ms per macrotask pump while it waits for
+		// scheduled functions to settle (convex-test's
+		// `finishAllScheduledFunctions`), so ONE flush burns fake milliseconds
+		// in proportion to REAL latency — measured at 1.7-2.1s against a cold
+		// module cache, and worse on a loaded CI runner. The 1000ms margin this
+		// replaces was smaller than a single flush, so the +24h expiry fired on
+		// the line below instead of after it and the suite failed at random (it
+		// took down PR #337, whose diff never touched this file). An hour
+		// cannot be overshot: a flush is capped at 100 x 10000 pumps, ~16.7min
+		// of fake time. The total advanced is still exactly the TTL.
+		const HEADROOM_MS = 60 * 60 * 1000;
+		vi.advanceTimersByTime(CREDIT_PURCHASE_TTL_MS - HEADROOM_MS);
 		await flushSoon(t);
 		expect((await getPurchase(t, purchaseId))?.status).toBe("pending");
 
-		vi.advanceTimersByTime(1000);
+		vi.advanceTimersByTime(HEADROOM_MS);
 		await flushSoon(t);
 		const purchase = await getPurchase(t, purchaseId);
 		expect(purchase?.status).toBe("expired");

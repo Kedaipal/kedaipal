@@ -506,10 +506,20 @@ one mutation:
   Enterprise store edits the contract too, and **clearing** the override is
   refused while the store is on a contract.
 
+**A Founding Member CAN go on a contract** (Zaki, 3 Oct 2026 — reversing the
+17 Sep refusal). The original rule protected founding *pricing*, and a contract
+has no list price to discount: the negotiated fee IS the price, and
+`enterprisePrice` never applies the founding discount anyway, so there was
+nothing left to protect. Membership is permanent and untouched by the move
+(`z8r3fdfyw5`) — the badge stays, and a store that later moves back to Pro is
+quoted founding pricing again, because that is resolved from the membership and
+not from whatever plan the store is on today. The **self-serve** lock is
+unchanged: `foundingPlanLocked` still refuses a founding store that asks for
+another *listed* tier, so this is an admin-only door.
+
 It is refused for a **comped** store (end the comp first — and comping a
 contract store is refused the other way round, so a store is never both), a
-**founding** store (Founding Members stay on Founding Pro — `foundingIntent`
-included), a store **on hold**, a store with a pending invoice at **another
+store **on hold**, a store with a pending invoice at **another
 tier**, and a **term change** while a contract bill at the other term is open
 (settle takes the cycle from the bill, so paying it would silently put the old
 term back). One author, `enterpriseTermChangeBlocker`, for the last two. The

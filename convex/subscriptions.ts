@@ -35,6 +35,7 @@ import {
 	storeOwnerIsAdmin,
 	tryRetailerAccess,
 } from "./lib/auth";
+import { isUnclaimed } from "./lib/unclaimedStore";
 import { landCreditGrant } from "./credits";
 import { COMP_LABEL_MAX, COMP_NOTE_MAX, type CompKind } from "./lib/comp";
 import { ENTERPRISE_SELF_SERVE_REFUSAL } from "./lib/enterprise";
@@ -605,6 +606,56 @@ async function voidPendingInvoice(
 }
 
 /**
+ * A HANDOVER voids the store's open bill, and returns its number for the audit
+ * line (or `null` when there was none).
+ *
+ * An invoice still `pending` when a store changes hands cannot be collected
+ * through the product, and three of the handover's own steps guarantee it:
+ * `notifyEmail` is cleared, so the invoice mail and all three dunning mails
+ * drop at their `if (!meta.notifyEmail) return`; the previous owner's saved
+ * card is detached, so nothing can auto-pay it; and the daily pass skips an
+ * unclaimed store, so it is never chased. It then re-arms the instant the NEW
+ * owner claims — `overduePending` flips the store to `past_due` and sends them
+ * a "pay to resume" demand for a month they did not own. It also holds the
+ * single-pending-invoice slot (`issueInvoice` refuses a second), so their own
+ * first bill could not be issued until someone noticed.
+ *
+ * So the bill stops at the handover, exactly as it does for every other
+ * lifecycle flow that suspends a store's clock — an admin comp (`setComp`) and
+ * the seasonal hold both void the open plan invoice. Nothing is forgiven that
+ * was ever collected: a pending invoice is a REQUEST, not money, and the row
+ * survives as `void` with `voidedBy` / `voidReason`, so a genuine debt is still
+ * on the record to chase off-platform. An admin who wants it paid settles it
+ * BEFORE transferring — which is what the dialog tells them.
+ *
+ * Runs AFTER `detachAutoRenewForRetailer`, and that order is deliberate: the
+ * detach only SCHEDULES its lost-attempt reconcile, so a charge already in
+ * flight can still land on a bill this voids. That case is already handled and
+ * is not a silent loss — `applyGatewayPayment` refuses to settle a non-pending
+ * invoice and stamps a `late_payment` `gatewayIssue` instead, which surfaces in
+ * the admin "Payments to review" queue. Skipping the void whenever a reconcile
+ * were pending would be worse: the invoice would survive to re-arm on the claim,
+ * which is the bug this exists to close.
+ */
+export async function voidPendingInvoiceOnHandover(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	by: string,
+	now: number,
+): Promise<string | null> {
+	const invoice = await pendingInvoiceFor(ctx, retailerId);
+	if (!invoice) return null;
+	await voidPendingInvoice(
+		ctx,
+		invoice,
+		by,
+		"Store ownership transferred — an open bill cannot follow the store to a new owner.",
+		now,
+	);
+	return invoice.invoiceNumber;
+}
+
+/**
  * Seller (or admin acting-as): pause the subscription for the season, or
  * resume it. One switch, two directions, both honest about money:
  *
@@ -886,6 +937,17 @@ export async function startFreePeriodOnClaim(
 	// setup scaffolding, so the handover must not quietly cancel it — only the
 	// `internal` comp this feature puts there is scaffolding.
 	if (sub.comped === true && sub.comp?.kind !== "internal") return;
+	// A store that already PAYS keeps what it paid for. Unreachable while the
+	// only claimable stores were pre-built ones, but `transferStoreOwnership`
+	// hands over a LIVE store, and resetting an active subscription to a free
+	// trial here would wipe a paid period — erasing `currentPeriodEnd` /
+	// `periodPaidBy` and handing back 14 free days for money already taken. A
+	// transfer moves the person, never the plan.
+	//
+	// `!sub.comped` is load-bearing: a pre-built store's `internal` comp sits on
+	// an `active` row too, and that one DOES convert to the trial — which is the
+	// whole point of this function. Paying is "active and nobody is covering it".
+	if (!sub.comped && sub.status === "active") return;
 	await ctx.db.patch(sub._id, {
 		comped: false,
 		comp: undefined,
@@ -1436,6 +1498,20 @@ export const internalDailyBillingStatus = internalMutation({
 			// on a date, so nothing below (overdue lock, dunning, renewal issuance)
 			// may touch it. Only an admin turning the comp off changes it.
 			if (sub.comped === true) continue;
+			// Neither does a store NOBODY OWNS (z8r3fdm6up handover). A pre-built
+			// store was shielded by its `internal` comp — "nothing bills, nothing
+			// locks and nothing emails a store with no owner to read it" — and the
+			// comp was doing that work by accident: `transferStoreOwnership` makes
+			// a store unclaimed WITHOUT comping it, and this loop would then issue
+			// a renewal nobody can be told about (`notifyEmail` is cleared at
+			// handover, so the invoice email and all three dunning mails drop at
+			// `if (!meta.notifyEmail) return`), and then LOCK the store when that
+			// invoice went overdue — handing the new owner a past_due shop and a
+			// bill neither party ever saw. Ownership is the real predicate, so it
+			// is tested directly rather than through whatever is comping today.
+			// The clock resumes at the claim, with somebody to read it.
+			const owner = await ctx.db.get(sub.retailerId);
+			if (owner && isUnclaimed(owner)) continue;
 			const invoices = await ctx.db
 				.query("invoices")
 				.withIndex("by_retailer", (q) => q.eq("retailerId", sub.retailerId))

@@ -22,6 +22,7 @@ import {
 	requireRetailerAccess,
 	resolveMyRetailerFor,
 } from "./lib/auth";
+import { isUnclaimed } from "./lib/unclaimedStore";
 import {
 	type AdminAutoChargeState,
 	adminAutoChargeState,
@@ -762,6 +763,16 @@ export const issueInvoice = mutation({
 		if (sub.comped === true)
 			throw new ConvexError(
 				"This store is comped — it's on the house. End the comp first if you really mean to bill it.",
+			);
+		// Same reasoning, the other half of "no billing clock": a store nobody
+		// owns has nobody to bill, nobody to email it to and nobody who could
+		// pay it. The daily cron skips these too (subscriptions.ts), and the
+		// manual path must refuse for the same reason it refuses a comp — or one
+		// click issues an invoice into a store with no owner to read it.
+		const billTarget = await ctx.db.get(retailerId);
+		if (billTarget && isUnclaimed(billTarget))
+			throw new ConvexError(
+				`${billTarget.storeName} has no owner yet — bill it once the new owner has claimed it.`,
 			);
 		if (plan === "enterprise" && !sub.enterprise)
 			throw new ConvexError(
@@ -1587,6 +1598,15 @@ export const listRetailersForAdmin = query({
 			 * drafts a bill `issueInvoice` will refuse anyway. */
 			comped: boolean;
 			compLabel?: string;
+			/** Nobody owns this store yet (z8r3fdm6up). It is ALSO `comped` — the
+			 * `internal` comp keeps a store nobody can read unbilled while an
+			 * admin builds it — but that is scaffolding, not a sponsorship, and
+			 * the claim clears it into a fresh 14-day Pro trial. Carried so the
+			 * picker can say "waiting for its owner" instead of calling the setup
+			 * comp a freebie and telling an admin to go and end it, which is the
+			 * same lie the Sponsored pill told before `tierPill` learned about
+			 * unclaimed stores. */
+			unclaimed: boolean;
 			/** The Enterprise contract's billing facts (T6) — an Enterprise
 			 * invoice bills exactly these, so the form shows them instead of
 			 * letting the admin pick a cycle or currency. */
@@ -1621,6 +1641,7 @@ export const listRetailersForAdmin = query({
 				foundingBenefitsRevoked: r.foundingBenefitsRevokedAt !== undefined,
 				hasPending: pending !== null,
 				comped: sub?.comped === true,
+				unclaimed: isUnclaimed(r),
 				compLabel: sub?.comp?.label,
 				enterprise: sub?.enterprise
 					? {

@@ -553,3 +553,32 @@ describe("CreditMeter — dashboard home (card)", () => {
 		expect(screen.getByRole("link", { name: "Billing" })).toBeTruthy();
 	});
 });
+
+describe("the card's one button, with the seller lock switched off", () => {
+	// `creditTone` returns "out" (not "low") at a balance of zero or below, and
+	// the locked branch — which used to cover that state — is unreachable while
+	// CREDIT_LOCK_ENABLED is false. Gating the top-up on "low" alone therefore
+	// left a store IN DEBT with no action button while a store merely running
+	// low got one: the urgency ladder upside down.
+	it("offers Top up at a debt balance, not only when running low", () => {
+		mockQueries({ bal: balance({ plan: -15, total: -15 }) });
+		render(<CreditMeter variant="card" retailer={retailer()} />);
+		expect(screen.getByRole("link", { name: "Top up credits" })).toBeTruthy();
+		cleanup();
+
+		mockQueries({ bal: balance({ plan: 30, total: 30 }) });
+		render(<CreditMeter variant="card" retailer={retailer()} />);
+		expect(screen.getByRole("link", { name: "Top up credits" })).toBeTruthy();
+	});
+
+	it("still offers nothing when the server refuses the top-up", () => {
+		// The widened tone must not widen WHO may buy — `canTopUp` is T2's own
+		// answer (`topUpOptions`), and a debt balance doesn't override it.
+		mockQueries({
+			bal: balance({ plan: -15, total: -15 }),
+			topUp: refused("past_due"),
+		});
+		render(<CreditMeter variant="card" retailer={retailer()} />);
+		expect(screen.queryByRole("link", { name: "Top up credits" })).toBeNull();
+	});
+});

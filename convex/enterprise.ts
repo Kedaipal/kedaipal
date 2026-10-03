@@ -50,10 +50,14 @@ export const setContract = mutation({
 			throw new ConvexError(
 				"This store is comped — end the comp before putting it on a contract.",
 			);
-		if (retailer.isFoundingMember === true || sub.foundingIntent === true)
-			throw new ConvexError(
-				"Founding Members stay on Founding Pro — a founding store can't be put on an Enterprise contract.",
-			);
+		// A Founding Member CAN go on a contract (Zaki, 3 Oct 2026). The original
+		// refusal protected founding PRICING, but a contract has no list price to
+		// discount — the negotiated fee IS the price, and `enterprisePrice` never
+		// applies founding anyway, so there was nothing left to protect.
+		// Membership is permanent and survives untouched (z8r3fdfyw5): the badge
+		// stays, and a store that later moves back to Pro gets founding pricing
+		// again, because that is resolved from the membership and not from
+		// whatever plan it is on today.
 		if (sub.status === "on_hold")
 			throw new ConvexError(
 				"This store is on Off-Season Hold — resume it before putting it on a contract.",

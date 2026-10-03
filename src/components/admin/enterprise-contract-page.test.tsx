@@ -152,15 +152,19 @@ describe("EnterpriseContractPage — the currency", () => {
 });
 
 describe("EnterpriseContractPage — every refusal said before the tap", () => {
-	it("a store onboarded with a founding promise is refused like a member", () => {
+	it("a founding store is NOT refused — a contract has no list price to discount", () => {
+		// Zaki, 3 Oct 2026. The old refusal protected founding PRICING, and a
+		// contract's negotiated fee is its own price. Three gates had to agree:
+		// `setContract`, this page, and the seller sheet's button — two of them
+		// were missed on the first pass and caught by driving it.
 		renderPage(seller({ foundingIntent: true }));
 		fillHsl();
-		expect(saveButton().disabled).toBe(true);
+		expect(saveButton().disabled).toBe(false);
 		expect(
-			screen.getByText(
+			screen.queryByText(
 				/a founding store can't be put on an Enterprise contract/,
 			),
-		).toBeTruthy();
+		).toBeNull();
 	});
 
 	it("an open bill at another tier must be settled or voided first", () => {

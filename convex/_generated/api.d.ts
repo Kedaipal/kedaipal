@@ -84,6 +84,7 @@ import type * as lib_eventSeats from "../lib/eventSeats.js";
 import type * as lib_fulfilmentDate from "../lib/fulfilmentDate.js";
 import type * as lib_fulfilmentShape from "../lib/fulfilmentShape.js";
 import type * as lib_ga4 from "../lib/ga4.js";
+import type * as lib_handoverEmailCopy from "../lib/handoverEmailCopy.js";
 import type * as lib_hitpay from "../lib/hitpay.js";
 import type * as lib_hitpayBilling from "../lib/hitpayBilling.js";
 import type * as lib_hitpayBillingClient from "../lib/hitpayBillingClient.js";
@@ -257,6 +258,7 @@ declare const fullApi: ApiFromModules<{
   "lib/fulfilmentDate": typeof lib_fulfilmentDate;
   "lib/fulfilmentShape": typeof lib_fulfilmentShape;
   "lib/ga4": typeof lib_ga4;
+  "lib/handoverEmailCopy": typeof lib_handoverEmailCopy;
   "lib/hitpay": typeof lib_hitpay;
   "lib/hitpayBilling": typeof lib_hitpayBilling;
   "lib/hitpayBillingClient": typeof lib_hitpayBillingClient;

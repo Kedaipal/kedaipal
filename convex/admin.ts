@@ -136,6 +136,10 @@ export type AdminSellerRow = {
 	 * been given the vendor's email, which is a normal state the console names
 	 * ("No handover email yet") rather than leaving blank. */
 	pendingOwnerEmail?: string;
+	/** When the handover invitation was last emailed (z8r3fdmy7n). Absent while
+	 * an address is named but never told — the commonest way a handover stalls,
+	 * so the console surfaces it rather than leaving the admin to remember. */
+	handoverInviteSentAt?: number;
 	/** When a pre-built store was handed over. Set = this store started life
 	 * unclaimed; absent = it was created by its own owner, like every store
 	 * before this feature. */
@@ -426,6 +430,7 @@ export const listSellersForAdmin = query({
 				createdAt: r._creationTime,
 				unclaimed: isUnclaimed(r),
 				pendingOwnerEmail: r.pendingOwnerEmail,
+				handoverInviteSentAt: r.handoverInviteSentAt,
 				claimedAt: r.claimedAt,
 				purging: r.purgeStartedAt !== undefined,
 				marketplace: {
