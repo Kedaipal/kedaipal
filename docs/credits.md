@@ -469,6 +469,18 @@ can't be asked, it looks again an hour later (three looks in all) —
 "couldn't check" is not "didn't pay". Only then is the purchase `expired` and
 its request DELETEd. A payment that still turns up is stamped `late_payment`.
 
+**Testing that clock — mind the flush drift.** `flushSoon`, the suite's
+`finishAllScheduledFunctions` wrapper, advances the fake clock **1ms per
+macrotask pump** while it waits for scheduled functions to settle, so a single
+flush burns fake milliseconds in proportion to *real* latency — ~2s against a
+cold module cache, more on a loaded CI runner. An assertion that a purchase has
+**not** expired yet must therefore sit well clear of the TTL rather than a
+second below it: the original 1000ms margin was smaller than one flush, so the
+expiry fired early and the suite failed at random on whichever branch happened
+to be slow. `creditPurchases.test.ts` checks an hour out, which a flush cannot
+overshoot (capped at 100 x 10000 pumps, ~16.7min of fake time). The same trap
+applies to any future "not yet" assertion against a scheduled timer.
+
 ### Back from HitPay, and the URL contract
 
 - `/app/settings?tab=billing&topup=1` **opens the picker**. Every "Top up"
