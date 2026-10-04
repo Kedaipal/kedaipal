@@ -128,6 +128,7 @@ import {
 } from "./lib/order";
 import { deleteOrderOwnedBlobs } from "./lib/orderBlobs";
 import {
+	borrowedLeadReference,
 	currentClaimIndex,
 	orderPaymentClaims,
 	recordPaymentClaim,
@@ -2374,6 +2375,9 @@ export const listPaymentProofs = query({
 			url: string | null;
 			submittedAt: number;
 			isCurrent: boolean;
+			/** Lead only: another submission's reference, shown when the lead
+			 * carries none (`borrowedLeadReference`). */
+			borrowedReference: { reference: string; submittedAt: number } | null;
 		}>
 	> => {
 		const order = await ctx.db.get(orderId);
@@ -2386,6 +2390,7 @@ export const listPaymentProofs = query({
 
 		const claims = await orderPaymentClaims(ctx, order);
 		const current = currentClaimIndex(claims);
+		const borrowed = borrowedLeadReference(claims, current);
 		const entries = await Promise.all(
 			claims.map(async (claim, i) => ({
 				key: `${claim.createdAt}-${i}`,
@@ -2396,6 +2401,10 @@ export const listPaymentProofs = query({
 					: null,
 				submittedAt: claim.createdAt,
 				isCurrent: i === current,
+				borrowedReference:
+					i === current && borrowed
+						? { reference: borrowed.reference, submittedAt: borrowed.createdAt }
+						: null,
 			})),
 		);
 		return entries.reverse();

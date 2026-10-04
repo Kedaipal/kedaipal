@@ -173,11 +173,13 @@ export function PickupLocationRadioList({
 	const renderOption = (loc: PublicPickupLocation) => {
 		const selected = value === loc._id;
 		// The radio is named by the point's label alone and described by its
-		// address: wrapped in the <label>, it would otherwise announce the whole
-		// card — maps link, the note and its "Show more" included. The note
-		// stays readable (and its links reachable) as ordinary content.
+		// address + note: wrapped in the <label>, it would otherwise announce the
+		// whole card as its NAME — maps link and the note's "Show more"
+		// included. The note is part of the description because it's what
+		// carries the instructions (and the link) for this point.
 		const nameId = `pickup-${loc._id}-name`;
 		const detailId = `pickup-${loc._id}-detail`;
+		const noteId = `pickup-${loc._id}-note`;
 		const mapsUrl = deriveMapsUrl(loc);
 		return (
 			// Fill, not outline — see PickupSummaryCard. The radio itself is the
@@ -196,7 +198,7 @@ export function PickupLocationRadioList({
 					checked={selected}
 					onChange={() => onChange(loc._id)}
 					aria-labelledby={nameId}
-					aria-describedby={detailId}
+					aria-describedby={loc.notes ? `${detailId} ${noteId}` : detailId}
 					aria-invalid={error ? true : undefined}
 					className="mt-1 size-4 shrink-0 accent-accent"
 				/>
@@ -240,6 +242,7 @@ export function PickupLocationRadioList({
 					{loc.notes ? (
 						<ClampedNote
 							text={loc.notes}
+							textId={noteId}
 							lines={2}
 							className="text-xs text-muted-foreground whitespace-pre-line"
 						/>

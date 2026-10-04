@@ -6,6 +6,7 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { deleteOrderOwnedBlobs } from "./lib/orderBlobs";
 import {
+	borrowedLeadReference,
 	currentClaimIndex,
 	MAX_PAYMENT_CLAIMS_PER_ORDER,
 	PAYMENT_CLAIM_LIMIT_MESSAGE,
@@ -106,6 +107,37 @@ describe("currentClaimIndex", () => {
 	});
 });
 
+describe("borrowedLeadReference", () => {
+	test("lends the newest other reference to a lead that has none", () => {
+		expect(
+			borrowedLeadReference(
+				[
+					{ reference: "OLD", createdAt: 1 },
+					{ reference: "NEWER", createdAt: 2 },
+					{ proofStorageId: "shot", createdAt: 3 },
+				],
+				2,
+			),
+		).toEqual({ reference: "NEWER", createdAt: 2 });
+	});
+
+	test("is null when the lead has its own reference, or nobody sent one", () => {
+		expect(
+			borrowedLeadReference(
+				[
+					{ reference: "OLD", createdAt: 1 },
+					{ reference: "MINE", proofStorageId: "s", createdAt: 2 },
+				],
+				1,
+			),
+		).toBeNull();
+		expect(
+			borrowedLeadReference([{ proofStorageId: "s", createdAt: 1 }], 0),
+		).toBeNull();
+		expect(borrowedLeadReference([], -1)).toBeNull();
+	});
+});
+
 describe("claimPayment keeps every submission", () => {
 	test("a resubmit adds a row instead of losing the first screenshot", async () => {
 		const t = setup();
@@ -187,6 +219,39 @@ describe("claimPayment keeps every submission", () => {
 		});
 		expect(proofs).toHaveLength(1);
 		expect(proofs[0].url).not.toBeNull();
+	});
+
+	test("a screenshot-only resubmit leads, carrying the earlier reference", async () => {
+		const t = setup();
+		const { asOwner, orderId, token } = await seedOrder(t);
+		const shot = await storeImage(t, "shot");
+		await t.mutation(api.orders.claimPayment, { token, reference: "MBB-123" });
+		await t.mutation(api.orders.claimPayment, { token, proofStorageId: shot });
+
+		const proofs = await asOwner.query(api.orders.listPaymentProofs, {
+			orderId,
+		});
+		expect(proofs[0]).toMatchObject({
+			isCurrent: true,
+			hasProof: true,
+			reference: null,
+			borrowedReference: { reference: "MBB-123" },
+		});
+		expect(proofs[1].borrowedReference).toBeNull();
+	});
+
+	test("a bare claim with nothing attached records no history row", async () => {
+		const t = setup();
+		const { asOwner, orderId, token } = await seedOrder(t);
+		await t.mutation(api.orders.claimPayment, { token });
+
+		expect(await claimRows(t, orderId)).toHaveLength(0);
+		// Nor does the legacy rebuild invent an empty entry for it.
+		expect(
+			await asOwner.query(api.orders.listPaymentProofs, { orderId }),
+		).toEqual([]);
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.paymentStatus).toBe("claimed");
 	});
 
 	test("refuses past the per-order cap, with a message that points at WhatsApp", async () => {

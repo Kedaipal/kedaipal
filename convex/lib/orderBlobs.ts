@@ -21,7 +21,6 @@
 
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
-import { paymentClaimRows } from "./paymentClaims";
 
 /**
  * Deduped ids of every blob the order owns. The legacy singular
@@ -51,8 +50,13 @@ export async function deleteOrderOwnedBlobs(
 	order: Doc<"orders">,
 ): Promise<void> {
 	const ids = orderOwnedBlobIds(order);
-	// Bounded by MAX_PAYMENT_CLAIMS_PER_ORDER, so one read clears the history.
-	for (const claim of await paymentClaimRows(ctx, order._id)) {
+	// collect(), not the capped reader: the cap is enforced at write time, and
+	// a deletion must free every row even if a race ever slipped one past it.
+	const claims = await ctx.db
+		.query("paymentClaims")
+		.withIndex("by_order_createdAt", (q) => q.eq("orderId", order._id))
+		.collect();
+	for (const claim of claims) {
 		if (claim.proofStorageId) ids.add(claim.proofStorageId);
 		await ctx.db.delete(claim._id);
 	}

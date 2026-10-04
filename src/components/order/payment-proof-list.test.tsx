@@ -13,6 +13,7 @@ function entry(overrides: Partial<PaymentProofEntry> = {}): PaymentProofEntry {
 		url: "https://files.example/proof-1.png",
 		submittedAt: Date.UTC(2026, 9, 3, 6, 14),
 		isCurrent: true,
+		borrowedReference: null,
 		...overrides,
 	};
 }
@@ -57,6 +58,26 @@ describe("PaymentProofList — received card", () => {
 			/>,
 		);
 		expect(screen.getByText("No screenshot attached.")).toBeTruthy();
+	});
+
+	it("a screenshot-only lead shows the reference the buyer sent earlier, labelled", () => {
+		render(
+			<PaymentProofList
+				proofs={[
+					entry({
+						reference: null,
+						borrowedReference: {
+							reference: "MBB-123",
+							submittedAt: Date.UTC(2026, 9, 2, 6, 0),
+						},
+					}),
+				]}
+				tone="received"
+			/>,
+		);
+		expect(screen.getByText("MBB-123")).toBeTruthy();
+		expect(screen.getByText(/From their submission on/)).toBeTruthy();
+		expect(screen.queryByText("Not provided")).toBeNull();
 	});
 
 	it("an empty reference reads 'Not provided' and offers no copy", () => {

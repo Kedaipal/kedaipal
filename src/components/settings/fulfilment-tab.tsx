@@ -25,6 +25,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
+import { useChecklistStamp } from "../../hooks/useChecklistStamp";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import {
 	formatPickupAddress,
@@ -68,7 +69,6 @@ import {
 	WEEKDAY_NAMES_SHORT,
 } from "../../../convex/lib/openingHours";
 import { useActAsRetailerId } from "../../hooks/useActAs";
-import { useChecklistStamp } from "../../hooks/useChecklistStamp";
 import { useUpdateSettings } from "../../hooks/useUpdateSettings";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import {

@@ -53,6 +53,10 @@ export function legacyClaimFromOrder(
 		order.paymentReference !== order.gatewayPaymentId
 			? order.paymentReference
 			: undefined;
+	// A bare "I've paid" with nothing attached has nothing to show.
+	if (reference === undefined && order.paymentProofStorageId === undefined) {
+		return null;
+	}
 	return {
 		...(reference !== undefined ? { reference } : {}),
 		...(order.paymentProofStorageId !== undefined
@@ -107,6 +111,16 @@ export async function recordPaymentClaim(
 	submission: { reference?: string; proofStorageId?: string },
 	now: number,
 ): Promise<void> {
+	// A bare "I've paid" (both fields optional) still flips the order to
+	// claimed, but leaves nothing to look at — recording it would only add
+	// noise rows, and twenty of them would lock the buyer out of ever
+	// attaching a screenshot.
+	if (
+		submission.reference === undefined &&
+		submission.proofStorageId === undefined
+	) {
+		return;
+	}
 	const rows = await paymentClaimRows(ctx, order._id);
 	if (rows.length >= MAX_PAYMENT_CLAIMS_PER_ORDER) {
 		throw new ConvexError(PAYMENT_CLAIM_LIMIT_MESSAGE);
@@ -141,4 +155,26 @@ export function currentClaimIndex(
 		if (entries[i].proofStorageId !== undefined) return i;
 	}
 	return entries.length - 1;
+}
+
+/**
+ * The reference to show beside the lead when the lead itself carries none —
+ * the newest reference any OTHER submission carried, with when it was sent.
+ * The common resubmit is "I forgot the screenshot": the buyer's dialog starts
+ * empty, so that row is screenshot-only and becomes the lead, while the
+ * reference the seller reconciles by sits on the earlier row. Null when the
+ * lead has its own reference, or nobody ever sent one.
+ */
+export function borrowedLeadReference(
+	entries: readonly PaymentClaimEntry[],
+	leadIndex: number,
+): { reference: string; createdAt: number } | null {
+	if (leadIndex < 0 || entries[leadIndex].reference !== undefined) return null;
+	for (let i = entries.length - 1; i >= 0; i--) {
+		const reference = entries[i].reference;
+		if (i !== leadIndex && reference !== undefined) {
+			return { reference, createdAt: entries[i].createdAt };
+		}
+	}
+	return null;
 }

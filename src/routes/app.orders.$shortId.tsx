@@ -41,6 +41,7 @@ import {
 	isRiderManagedTransition,
 	riderDrivesOrderStatus,
 } from "../../convex/lib/lalamove";
+import { noteToPlainText } from "../../convex/lib/noteLinks";
 import {
 	isDefaultedCounterDate,
 	isFreeOrder,
@@ -2877,7 +2878,9 @@ function formatPickupInline(snapshot: PickupSnapshot): string {
 	const lines = [snapshot.label, snapshot.address];
 	const mapsUrl = deriveMapsUrl(snapshot);
 	if (mapsUrl) lines.push(mapsUrl);
-	if (snapshot.notes) lines.push(snapshot.notes);
+	// Pasted into WhatsApp by the seller — a Markdown link must arrive as
+	// "label: url", never brackets (convex/lib/noteLinks.ts).
+	if (snapshot.notes) lines.push(noteToPlainText(snapshot.notes));
 	return lines.join("\n");
 }
 

@@ -97,6 +97,9 @@ function LargeProof({ entry }: { entry: PaymentProofEntry }) {
 
 /** The green card's lead: thumbnail + the reference the seller reconciles by. */
 function CompactProof({ entry }: { entry: PaymentProofEntry }) {
+	// A screenshot-only resubmit leads without a reference of its own; the
+	// seller still gets the one the buyer sent earlier, labelled as such.
+	const reference = entry.reference ?? entry.borrowedReference?.reference;
 	return (
 		<div className="flex flex-col gap-2">
 			<p className="text-xs font-semibold uppercase tracking-widest text-emerald-800 dark:text-emerald-300">
@@ -106,16 +109,16 @@ function CompactProof({ entry }: { entry: PaymentProofEntry }) {
 				<Thumbnail entry={entry} size="lg" />
 				<div className="flex min-w-0 flex-1 flex-col gap-1">
 					<span className="text-xs text-muted-foreground">Reference</span>
-					{entry.reference ? (
+					{reference ? (
 						<div className="flex items-start justify-between gap-2">
 							{/* Wrap, never truncate: a half-shown reference can't be
 							    matched against a bank statement. wrap-anywhere breaks at
 							    spaces first and only splits a long unbroken reference. */}
 							<span className="min-w-0 wrap-anywhere font-mono text-sm font-medium">
-								{entry.reference}
+								{reference}
 							</span>
 							<CopyButton
-								value={entry.reference}
+								value={reference}
 								ariaLabel="Copy customer's payment reference"
 								successMessage="Reference copied"
 								className="-my-2 -mr-2"
@@ -125,6 +128,12 @@ function CompactProof({ entry }: { entry: PaymentProofEntry }) {
 					) : (
 						<em className="text-sm text-muted-foreground">Not provided</em>
 					)}
+					{!entry.reference && entry.borrowedReference ? (
+						<span className="text-xs text-muted-foreground">
+							From their submission on{" "}
+							{formatOrderTimestamp(entry.borrowedReference.submittedAt)}
+						</span>
+					) : null}
 					<span className="text-xs text-muted-foreground">
 						Sent {formatOrderTimestamp(entry.submittedAt)}
 					</span>

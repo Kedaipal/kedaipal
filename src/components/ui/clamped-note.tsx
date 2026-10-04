@@ -19,6 +19,9 @@ const CLAMP = {
  */
 interface ClampedNoteProps {
 	text: string;
+	/** On the note's TEXT only (not its Show more), so a control can point
+	 * `aria-describedby` at it. */
+	textId?: string;
 	lines?: keyof typeof CLAMP;
 	className?: string;
 }
@@ -32,7 +35,12 @@ export function ClampedNote(props: ClampedNoteProps) {
 	);
 }
 
-function ClampedNoteBody({ text, lines = 3, className }: ClampedNoteProps) {
+function ClampedNoteBody({
+	text,
+	textId,
+	lines = 3,
+	className,
+}: ClampedNoteProps) {
 	const ref = useRef<HTMLSpanElement>(null);
 	const [expanded, setExpanded] = useState(false);
 	const [overflows, setOverflows] = useState(false);
@@ -54,6 +62,7 @@ function ClampedNoteBody({ text, lines = 3, className }: ClampedNoteProps) {
 		<span className={cn("flex flex-col items-start gap-1", className)}>
 			<span
 				ref={ref}
+				id={textId}
 				className={cn("wrap-break-word", expanded ? undefined : CLAMP[lines])}
 			>
 				<LinkifiedText text={text} />

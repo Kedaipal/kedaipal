@@ -66,7 +66,7 @@ describe("pickup point notes at checkout", () => {
 });
 
 describe("pickup option accessible name", () => {
-	it("names the radio by the point's label, not the whole card", () => {
+	it("names the radio by its label and describes it by address + note", () => {
 		render(
 			<PickupLocationRadioList
 				locations={[location({ notes: "Ring the bell at https://x.co/door" })]}
@@ -77,8 +77,15 @@ describe("pickup option accessible name", () => {
 		);
 		const radio = screen.getByRole("radio", { name: "Main shop" });
 		expect(radio).toBeTruthy();
+		const [addressId, noteId] = (
+			radio.getAttribute("aria-describedby") ?? ""
+		).split(" ");
 		expect(screen.getByText("12 Jalan Mawar, Petaling Jaya").id).toBe(
-			radio.getAttribute("aria-describedby"),
+			addressId,
+		);
+		// The note text itself — its "Show more" button is not part of it.
+		expect(document.getElementById(noteId)?.textContent).toBe(
+			"Ring the bell at https://x.co/door",
 		);
 	});
 });

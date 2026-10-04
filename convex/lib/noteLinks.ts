@@ -4,9 +4,10 @@
  *
  * Two spellings are recognised everywhere a note is shown:
  *   - a bare URL — `https://…`, `http://…` or `www.…`
- *   - a Markdown link — `[Parking guide](https://…)` — so a 90-character Maps
- *     URL doesn't have to eat half of a 200-character note, and the buyer taps
- *     words instead of a wall of characters.
+ *   - a Markdown link — `[Parking guide](https://…)` — so the buyer taps
+ *     words instead of a wall of characters. It saves DISPLAY space, not the
+ *     200-character budget: the cap counts the stored text, and the Markdown
+ *     form is longer than the bare URL.
  *
  * Nothing else is Markdown: a note stays one plain line. Pages render the link
  * (`src/lib/linkify.ts`); plain-text channels — WhatsApp, the PDF receipt —
