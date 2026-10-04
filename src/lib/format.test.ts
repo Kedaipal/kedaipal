@@ -1,7 +1,9 @@
 import { ConvexError } from "convex/values";
 import { describe, expect, it, test } from "vitest";
+import { creditLockErrorData } from "../../convex/lib/credits";
 import {
 	convexErrorMessage,
+	creditLockErrorOf,
 	currencySymbol,
 	formatDraftAmount,
 	formatDraftPrice,
@@ -276,6 +278,26 @@ describe("convexErrorMessage — rate-limit payload", () => {
 		expect(convexErrorMessage(new ConvexError("Only 2 in stock"))).toBe(
 			"Only 2 in stock",
 		);
+	});
+});
+
+describe("convexErrorMessage — the credit lock's typed refusal (Credits T3)", () => {
+	it("reads as its sentence, never [object Object]", () => {
+		const data = creditLockErrorData("topup", "owner");
+		const err = new ConvexError(data);
+		expect(convexErrorMessage(err)).toBe(data.message);
+		expect(convexErrorMessage(err)).toMatch(/^You're out of credits/);
+	});
+
+	it("hands a surface the way back, and nothing for any other error", () => {
+		const err = new ConvexError(creditLockErrorData("pick_plan", "member"));
+		expect(creditLockErrorOf(err)).toMatchObject({
+			kind: "credits_locked",
+			unlockRoute: "pick_plan",
+			audience: "member",
+		});
+		expect(creditLockErrorOf(new ConvexError("Only 2 in stock"))).toBeNull();
+		expect(creditLockErrorOf(new Error("boom"))).toBeNull();
 	});
 });
 

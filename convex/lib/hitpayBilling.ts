@@ -19,6 +19,11 @@
  *    /payment-requests as the buyer gateway) so the manual-rail seller pays in
  *    two taps instead of bank-transfer + WhatsApp. No expiry — the link lives
  *    in emails.
+ *  - CREDIT PACKS (Credits T2, z8r3fdf8ht): the same one-off request for a
+ *    top-up pack, expiring in 24h (it is opened by a tap, not an email).
+ *
+ * The HTTP calls themselves live in lib/hitpayBillingClient.ts — one client
+ * for every request against this account.
  *
  * Webhooks: the account's dashboard-registered V2 events (charge.created,
  * recurring_billing.method_attached/…) arrive as JSON with an
@@ -28,6 +33,7 @@
  * (no Convex imports) — the minOrderRules pattern.
  */
 
+import { CREDIT_PURCHASE_HITPAY_EXPIRY } from "./creditPurchases";
 import type { BillingCurrency } from "./plans";
 import {
 	type HitpayMode,
@@ -117,6 +123,45 @@ export function gatewayPaymentMethodTag(methodCode: string | undefined): string 
 	return code ? `hitpay_${code}` : "hitpay";
 }
 
+/** Receipt-facing names for the rails a HitPay payment on Kedaipal's account
+ * can carry — the one-off checkout's full set, wider than the tokenisable
+ * `AUTO_RENEW_METHOD_LABELS`. */
+const GATEWAY_METHOD_LABELS: Record<string, string> = {
+	card: "Card",
+	cards: "Card",
+	touch_n_go: "Touch 'n Go",
+	duitnow: "DuitNow",
+	fpx: "FPX online banking",
+	paynow: "PayNow",
+	paynow_online: "PayNow",
+	grabpay: "GrabPay",
+	grabpay_direct: "GrabPay",
+	shopee_pay: "ShopeePay",
+	boost: "Boost",
+	atome: "Atome",
+	giro: "GIRO",
+};
+
+/** True for a tag `gatewayPaymentMethodTag` wrote — as opposed to the
+ * free-form manual methods an admin types at mark-paid ("duitnow",
+ * "bank_transfer"). */
+export function isGatewayPaymentTag(tag: string): boolean {
+	return /^hitpay(_|$)/.test(tag.trim().toLowerCase());
+}
+
+/**
+ * The words a receipt prints for a `gatewayPaymentMethodTag` — "Card",
+ * "Touch 'n Go" — never the raw `hitpay_touch_n_go`. Bare `hitpay` (the rail
+ * wasn't reported) and codes HitPay adds later read "Online payment": a
+ * settlement through the gateway IS a known fact, so it is never blank. Only
+ * for gateway tags (`isGatewayPaymentTag`) — a manual method is the admin's own
+ * words and prints as typed.
+ */
+export function gatewayPaymentMethodLabel(tag: string): string {
+	const code = tag.trim().toLowerCase().replace(/^hitpay_?/, "");
+	return GATEWAY_METHOD_LABELS[code] ?? "Online payment";
+}
+
 // `times_to_be_charged` is deliberately ABSENT from the session params: the
 // API reference documents it (1–100, default 1) for plan-cycle billing, but a
 // save_payment_method session REJECTS it outright — "You cant set
@@ -153,12 +198,104 @@ export function nextChargeRetryAt(
 }
 
 /**
- * An attempt stamped this recently with NO recorded outcome means the action
- * may have died between charging and settling — reconcile against HitPay's
- * `times_charged` before charging again. Longer than any plausible action
- * retry latency, shorter than the daily cron cadence.
+ * How long a charge attempt holds the LOCK (`recordChargeAttempt`): a second
+ * claim inside it is refused, because a charge still in flight hasn't moved
+ * HitPay's count yet — so no reconcile can tell a racing charge from a lost
+ * one. Past it the lock is stale (no action runs a day; Convex caps them at
+ * minutes) and a new attempt may re-claim. Generous on purpose: HitPay may
+ * still be settling a charge whose response we lost, and breaking the lock
+ * sooner buys nothing — the unknown outcome's retry is a day out anyway.
+ *
+ * This is ONLY the lock's lifetime — NOT how long an unknown outcome stays
+ * worth checking. An attempt stamp with no recorded outcome is reconciled at
+ * ANY age (`chargeDueRenewal`): the retry after an unknown outcome is
+ * scheduled 24h out and fired by a daily cron, so it always arrives with the
+ * stamp at least this old. A reconcile gated on this window never ran on the
+ * one path it exists for.
  */
-export const CHARGE_OUTCOME_UNKNOWN_WINDOW_MS = 24 * 60 * 60 * 1000;
+export const CHARGE_ATTEMPT_LOCK_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * May Kedaipal charge this subscription's saved method right now? Only when
+ * a method is attached AND no stranded charge is waiting on a human (see
+ * `autoRenew.strandedCharge` in schema.ts). The ONE rule: every path that
+ * schedules `chargeDueRenewal` asks it, and the charge re-asks it — a second
+ * copy of the condition is how one door would keep charging a stopped store.
+ */
+export function autoChargeAllowed(
+	autoRenew: { strandedCharge?: unknown } | undefined,
+): boolean {
+	return autoRenew !== undefined && autoRenew.strandedCharge === undefined;
+}
+
+/**
+ * May we PROMISE the seller an immediate charge of a fresh bill (the
+ * subscribe / plan-change "charging your saved method now" toast)? Stricter
+ * than `autoChargeAllowed`: while an earlier attempt's outcome is unknown
+ * (`lastChargeAttemptAt` standing), the mutex would stand a new charge down
+ * and the reconcile must answer first — so the promise would be a lie. The
+ * daily sweep charges the new bill once the question resolves; these doors
+ * simply don't schedule what they can't promise.
+ */
+export function autoChargeIdle(
+	autoRenew:
+		| { strandedCharge?: unknown; lastChargeAttemptAt?: number }
+		| undefined,
+): boolean {
+	return (
+		autoChargeAllowed(autoRenew) && autoRenew?.lastChargeAttemptAt === undefined
+	);
+}
+
+type StrandedChargeSummary = {
+	invoiceNumber: string;
+	amountSen: number;
+	currency: string;
+	paymentId: string;
+	at: number;
+};
+
+/** What the admin console needs to say about a store's auto-charging. ONE
+ * projection for both admin lists (the pending bills and the auto-renewal
+ * overview), so the two can never describe the same store differently. */
+export type AdminAutoChargeState = {
+	method: string;
+	failedAttempts: number;
+	nextRetryAt?: number;
+	lastChargeError?: string;
+	/** An attempt with no recorded outcome yet (the stamp). In flight for a
+	 * few seconds normally; left standing, the next run asks HitPay first. */
+	unresolvedAttemptAt?: number;
+	/** Auto-charging stopped over a charge that landed on a voided bill. */
+	stranded?: StrandedChargeSummary;
+};
+
+export function adminAutoChargeState(autoRenew: {
+	method: string;
+	failedAttempts?: number;
+	nextRetryAt?: number;
+	lastChargeError?: string;
+	lastChargeAttemptAt?: number;
+	strandedCharge?: StrandedChargeSummary & { invoiceId: unknown };
+}): AdminAutoChargeState {
+	const stranded = autoRenew.strandedCharge;
+	return {
+		method: autoRenew.method,
+		failedAttempts: autoRenew.failedAttempts ?? 0,
+		nextRetryAt: autoRenew.nextRetryAt,
+		lastChargeError: autoRenew.lastChargeError,
+		unresolvedAttemptAt: autoRenew.lastChargeAttemptAt,
+		stranded: stranded
+			? {
+					invoiceNumber: stranded.invoiceNumber,
+					amountSen: stranded.amountSen,
+					currency: stranded.currency,
+					paymentId: stranded.paymentId,
+					at: stranded.at,
+				}
+			: undefined,
+	};
+}
 
 // --- Request builders -------------------------------------------------------
 
@@ -236,17 +373,72 @@ export type InvoicePaymentRequestInputs = {
 export function buildInvoicePaymentRequestParams(
 	inputs: InvoicePaymentRequestInputs,
 ): URLSearchParams {
+	return oneOffRequestParams({
+		amountSen: inputs.amountSen,
+		currency: inputs.currency,
+		purpose: `Kedaipal subscription ${inputs.invoiceNumber} — ${inputs.storeName}`,
+		reference: inputs.invoiceNumber,
+		redirectUrl: inputs.redirectUrl,
+		webhookUrl: inputs.webhookUrl,
+		customerEmail: inputs.customerEmail,
+	});
+}
+
+export type CreditPackPaymentRequestInputs = {
+	purchaseNumber: string;
+	/** "50-credit pack". */
+	packLabel: string;
+	storeName: string;
+	amountSen: number;
+	currency: BillingCurrency;
+	redirectUrl: string;
+	/** Absolute URL for the v1 completion webhook ("" omits it). */
+	webhookUrl: string;
+	/** The BUYER's email — the owner's billing email, or the teammate's own. */
+	customerEmail?: string;
+};
+
+/**
+ * Form body for a credit-pack checkout (Credits T2). The invoice link's twin
+ * with one deliberate difference: it EXPIRES (`CREDIT_PURCHASE_HITPAY_EXPIRY`,
+ * 24h). An invoice link lives in emails for a whole grace window; a top-up is
+ * opened by a tap and paid there and then, and an old one left payable forever
+ * is a way to buy credits at a price or for a store that has since changed.
+ * The purchase row expires on the same clock.
+ */
+export function buildCreditPackPaymentRequestParams(
+	inputs: CreditPackPaymentRequestInputs,
+): URLSearchParams {
+	const params = oneOffRequestParams({
+		amountSen: inputs.amountSen,
+		currency: inputs.currency,
+		purpose: `Kedaipal ${inputs.packLabel} ${inputs.purchaseNumber} — ${inputs.storeName}`,
+		reference: inputs.purchaseNumber,
+		redirectUrl: inputs.redirectUrl,
+		webhookUrl: inputs.webhookUrl,
+		customerEmail: inputs.customerEmail,
+	});
+	params.set("expires_after", CREDIT_PURCHASE_HITPAY_EXPIRY);
+	return params;
+}
+
+/** The fields every one-off payment request on Kedaipal's account shares.
+ * `send_sms` DEFAULTS TO TRUE at HitPay and both notices stay off: Kedaipal
+ * sends its own receipt, one voice per event. */
+function oneOffRequestParams(inputs: {
+	amountSen: number;
+	currency: string;
+	purpose: string;
+	reference: string;
+	redirectUrl: string;
+	webhookUrl: string;
+	customerEmail?: string;
+}): URLSearchParams {
 	const params = new URLSearchParams();
 	params.set("amount", senToDecimalString(inputs.amountSen));
 	params.set("currency", inputs.currency.toUpperCase());
-	params.set(
-		"purpose",
-		`Kedaipal subscription ${inputs.invoiceNumber} — ${inputs.storeName}`.slice(
-			0,
-			PURPOSE_MAX,
-		),
-	);
-	params.set("reference_number", inputs.invoiceNumber);
+	params.set("purpose", inputs.purpose.slice(0, PURPOSE_MAX));
+	params.set("reference_number", inputs.reference);
 	params.set("redirect_url", inputs.redirectUrl);
 	if (inputs.webhookUrl) params.set("webhook", inputs.webhookUrl);
 	params.set("send_sms", "false");
@@ -356,6 +548,39 @@ export function readAttachedMethodCode(
 		asString(charge?.method) ??
 		undefined
 	);
+}
+
+/**
+ * How many charges HitPay says a recurring-billing session has taken — the
+ * number the outcome-unknown reconcile compares against our own counter, so
+ * the no-double-charge guarantee is exactly as good as this read.
+ *
+ * CAPTURED FROM LIVE SANDBOX TRAFFIC (30 Sep 2026): on a `save_card` session
+ * the docs' `times_charged` is present but always NULL; the count lives in
+ * `total_charge`. A session whose auto-charges settled RM79 + RM149 + RM79
+ * read `total_charge: 3` (a count, not the RM307 sum) beside
+ * `times_charged: null`; sessions that never charged read 0. Reading
+ * `times_charged` alone meant the reconcile saw 0 on every save-card
+ * session — "HitPay never took it" — and charged again.
+ *
+ * Evidence-ordered like `readAttachedMethodCode`: `total_charge` first, the
+ * documented `times_charged` as fallback; a whole-number string is read too
+ * (HitPay spells some numbers as strings elsewhere). Returns undefined when
+ * neither carries a count — the caller must treat that as "can't judge",
+ * never as zero.
+ */
+export function readSessionChargeCount(
+	billing: Record<string, unknown>,
+): number | undefined {
+	for (const value of [billing.total_charge, billing.times_charged]) {
+		if (typeof value === "number" && Number.isInteger(value) && value >= 0) {
+			return value;
+		}
+		if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+			return Number(value.trim());
+		}
+	}
+	return undefined;
 }
 
 /**

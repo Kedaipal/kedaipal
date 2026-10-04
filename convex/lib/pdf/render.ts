@@ -1,5 +1,5 @@
-// pdf-lib drawing for Kedaipal's three documents (order receipt, subscription
-// invoice, despatch label). Consumes the pure view-models from ./document.ts and
+// pdf-lib drawing for Kedaipal's documents (order receipt, subscription
+// invoice, credit-pack receipt, despatch label). Consumes the pure view-models from ./document.ts and
 // ./awb.ts and returns the rendered bytes. pdf-lib is pure JS (no native deps) so
 // this runs inside a Convex action. The brand lockup is embedded from an inlined
 // PNG (./logo.ts) so rendering never depends on a network fetch.
@@ -24,6 +24,7 @@ import type { AwbPaperSize } from "../awbConfig";
 import { poweredByHref } from "../poweredBy";
 import { encodeCode128 } from "./barcode";
 import {
+	type CreditPurchaseReceiptData,
 	formatDocDate,
 	formatMoney,
 	type OrderReceiptData,
@@ -812,6 +813,115 @@ export async function buildSubscriptionInvoicePdf(
 			: data.issuerBank.length > 0
 				? `Please transfer to any account above and use ${data.invoiceNumber} as your payment reference.`
 				: `We'll confirm payment details with you on WhatsApp — quote ${data.invoiceNumber} as your payment reference.`,
+	);
+	return d.doc.save();
+}
+
+// --- B2: credit-pack receipt (Credits T2, z8r3fdf8ht) ----------------------
+
+/**
+ * The receipt for a paid top-up pack — Kedaipal's own document, so it wears
+ * the subscription receipt's face (letterhead, green Paid pill, "Amount paid"
+ * bar, the plain site line), with the one fact a pack has that a plan doesn't:
+ * the date the credits stop working. Only ever rendered once paid.
+ */
+export async function buildCreditPurchaseReceiptPdf(
+	data: CreditPurchaseReceiptData,
+): Promise<Uint8Array> {
+	const d = await newDoc();
+	const { page, font, bold } = d;
+	let y = header(d, "Receipt", data.purchaseNumber, {
+		label: "Paid",
+		fill: GREEN,
+	});
+
+	// Parties — the same blocks as the subscription receipt.
+	const colW = CONTENT_W / 2 - 12;
+	const billedLines: Array<{ text: string; strong?: boolean }> = [
+		{ text: data.billedToName, strong: true },
+	];
+	if (data.billedToContact) billedLines.push({ text: data.billedToContact });
+	const leftBottom = detailBlock(d, MARGIN, "Billed to", billedLines, y, colW);
+	const rightBottom = detailBlock(
+		d,
+		MARGIN + CONTENT_W / 2 + 12,
+		"From",
+		[
+			{ text: "Kedaipal Pte Ltd", strong: true },
+			{ text: "UEN 202630712C" },
+			{ text: "WhatsApp-first order hub" },
+		],
+		y,
+		colW,
+	);
+	y = Math.min(leftBottom, rightBottom) - 10;
+
+	// Dates strip: when it was paid (and how), and when the credits expire.
+	const dateBits = [
+		data.methodLabel
+			? `Paid: ${formatDocDate(data.paidAt)} (${data.methodLabel})`
+			: `Paid: ${formatDocDate(data.paidAt)}`,
+	];
+	if (data.expiresAt !== undefined)
+		dateBits.push(`Credits valid until: ${formatDocDate(data.expiresAt)}`);
+	draw(page, font, dateBits.join("     "), MARGIN, y, 9, SLATE);
+	y -= 14;
+	if (data.boughtBy) {
+		draw(page, font, `Bought by: ${data.boughtBy}`, MARGIN, y, 9, SLATE);
+		y -= 14;
+	}
+	y -= 10;
+
+	// Line-item table: one pack.
+	const qtyX = RIGHT - 150;
+	const amtX = RIGHT;
+	y = tableHead(
+		d,
+		[
+			{ label: "DESCRIPTION", x: MARGIN + 12, align: "left" },
+			{ label: "QTY", x: qtyX, align: "right" },
+			{ label: "AMOUNT", x: amtX - 12, align: "right" },
+		],
+		y,
+	);
+	y -= 18;
+	const descLines = wrap(font, data.lineLabel, 10, qtyX - MARGIN - 28);
+	descLines.forEach((line, i) => {
+		draw(page, bold, line, MARGIN + 12, y, 10);
+		if (i === 0) {
+			drawRight(page, font, "1", qtyX, y, 10, SLATE);
+			drawRight(page, bold, formatMoney(data.amount, data.currency), amtX - 12, y, 10);
+		}
+		y -= 14;
+	});
+	draw(
+		page,
+		font,
+		`${data.credits} credits - 1 credit = 1 order`,
+		MARGIN + 12,
+		y,
+		9,
+		SLATE,
+	);
+	y -= 14;
+	rule(page, y + 6);
+	y -= 12;
+	y = totalBar(d, "Amount paid", formatMoney(data.amount, data.currency), y);
+
+	// The rules a pack comes with — what the seller is holding, in writing.
+	const rules = [
+		"Used after your plan's monthly orders, the soonest-expiring credits first.",
+	];
+	rules.push(
+		data.expiresAt !== undefined
+			? `Valid until ${formatDocDate(data.expiresAt)}. Non-refundable and not redeemable for cash.`
+			: "Valid for 12 months. Non-refundable and not redeemable for cash.",
+	);
+	paymentCard(d, "About these credits", [{ label: "Order credits", lines: rules }], y);
+
+	footer(
+		d,
+		`Payment received — thank you. Keep this receipt for your records (ref ${data.purchaseNumber}).`,
 	);
 	return d.doc.save();
 }

@@ -41,7 +41,7 @@ import { components } from "../_generated/api";
  *   one person can be made to receive, which a store-wide limit alone doesn't.
  *   Resend spends both too — its 60s cooldown throttles the rate but caps no
  *   total, so on its own it still allowed ~60 mails/hour at one address.
- *   Sized well above a real store: Scale is owner + 5, and a generous
+ *   Sized well above a real store: Pro is owner + 2, and a generous
  *   onboarding is five invites, a few typo re-sends and a couple of nudges.
  * - `productWrite`: authenticated retailer mutations. Keyed by Clerk subject so
  *   a single user cannot bulk-trash inventory.

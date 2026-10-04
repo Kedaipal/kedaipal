@@ -342,11 +342,24 @@ export function validateAnswers(
 	return { answers, missing };
 }
 
+/**
+ * The label as it prefixes its answer. A label is usually a question, and
+ * "Vehicle plate number?: JJ7777J" is a typo the seller never wrote — so a
+ * label already ending in `?` or `:` keeps its own punctuation and only a bare
+ * noun ("Tent model") gains the colon. One spelling for every surface.
+ */
+export function answerLabelPrefix(label: string): string {
+	const trimmed = label.trim();
+	return /[?:？：]$/.test(trimmed) ? trimmed : `${trimmed}:`;
+}
+
 /** `Label: answer; Label: answer` — one order line's CSV/table cell. */
 export function formatItemAnswers(
 	answers: readonly Pick<FrozenAnswer, "label" | "answer">[] | undefined,
 ): string {
-	return (answers ?? []).map((a) => `${a.label}: ${a.answer}`).join("; ");
+	return (answers ?? [])
+		.map((a) => `${answerLabelPrefix(a.label)} ${a.answer}`)
+		.join("; ");
 }
 
 /**

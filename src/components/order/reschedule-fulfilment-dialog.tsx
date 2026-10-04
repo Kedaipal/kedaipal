@@ -58,8 +58,15 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  */
 export function RescheduleFulfilmentDialog({
 	order,
+	lockedReason,
 }: {
 	order: Doc<"orders">;
+	/** Set while the STORE can't do order work right now — out of credits
+	 * (Credits T3) or view-only. Same treatment as the payment-window lock and
+	 * for the same reason: the trigger stays tappable (a `title` is invisible
+	 * on a phone) and the dialog opens onto this sentence instead of a form
+	 * the server would refuse. */
+	lockedReason?: string;
 }) {
 	const [open, setOpen] = useState(false);
 	const [dateValue, setDateValue] = useState("");
@@ -97,6 +104,7 @@ export function RescheduleFulfilmentDialog({
 	// delivery method AND this order is bookable right now. Flat/radius/weight
 	// stores never see it — their fees aren't time-sensitive.
 	const canPreviewFee =
+		lockedReason === undefined &&
 		isDelivery &&
 		dispatch?.riderOnlyStore === true &&
 		dispatch.blockReason === null &&
@@ -212,6 +220,10 @@ export function RescheduleFulfilmentDialog({
 	// Claim links (86eyq0epn): the receipt is out and a countdown is running
 	// against THIS date. Mirrors the server guard in orders.rescheduleFulfilment.
 	const paymentWindowLocked = isPaymentWindowLocked(order);
+	// The store-wide lock outranks the order's own: it stops every change,
+	// and it's the one the seller can clear today.
+	const storeLocked = lockedReason !== undefined;
+	const locked = storeLocked || paymentWindowLocked;
 
 	// Live preview of exactly what the buyer's order page will say — parse
 	// failures (mid-typing) just hide the line.
@@ -325,16 +337,16 @@ export function RescheduleFulfilmentDialog({
 				variant="outline"
 				className={cn(
 					"h-11 shrink-0 px-3 text-xs",
-					paymentWindowLocked && "text-muted-foreground",
+					locked && "text-muted-foreground",
 				)}
 				onClick={openDialog}
 			>
-				{paymentWindowLocked ? (
+				{locked ? (
 					<Lock className="size-4" />
 				) : (
 					<CalendarClock className="size-4" />
 				)}
-				{paymentWindowLocked
+				{paymentWindowLocked && !storeLocked
 					? "Locked"
 					: order.fulfilmentDate !== undefined
 						? "Reschedule"
@@ -344,25 +356,44 @@ export function RescheduleFulfilmentDialog({
 				<DialogContent>
 					<DialogHeader>
 						<DialogTitle>
-							{paymentWindowLocked
-								? "Locked while they pay"
-								: order.fulfilmentDate !== undefined
-									? "Reschedule this order"
-									: "Set a fulfilment date"}
+							{storeLocked
+								? "Changing the date is paused"
+								: paymentWindowLocked
+									? "Locked while they pay"
+									: order.fulfilmentDate !== undefined
+										? "Reschedule this order"
+										: "Set a fulfilment date"}
 						</DialogTitle>
 						<DialogDescription>
-							{paymentWindowLocked
-								? "This date is part of what the buyer is paying for."
-								: isDelivery
-									? collection
-										? "Change when the rider collects from your customer."
-										: "Change when this order should be delivered."
-									: dropOff
-										? "Change when you meet the buyer at the drop-off point."
-										: "Change when the buyer picks this order up."}
+							{storeLocked
+								? "The buyer's order page keeps the date it shows now."
+								: paymentWindowLocked
+									? "This date is part of what the buyer is paying for."
+									: isDelivery
+										? collection
+											? "Change when the rider collects from your customer."
+											: "Change when this order should be delivered."
+										: dropOff
+											? "Change when you meet the buyer at the drop-off point."
+											: "Change when the buyer picks this order up."}
 						</DialogDescription>
 					</DialogHeader>
-					{paymentWindowLocked ? (
+					{storeLocked ? (
+						<div className="flex flex-col gap-3">
+							<p className="rounded-lg bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+								{lockedReason}
+							</p>
+							<DialogFooter>
+								<Button
+									type="button"
+									variant="outline"
+									onClick={() => setOpen(false)}
+								>
+									Close
+								</Button>
+							</DialogFooter>
+						</div>
+					) : paymentWindowLocked ? (
 						<div className="flex flex-col gap-3">
 							<p className="rounded-lg bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
 								This buyer is paying against this date right now — their order
@@ -432,7 +463,8 @@ export function RescheduleFulfilmentDialog({
 							{isSelfCollect && showTime ? (
 								<div className="flex min-h-11 items-center justify-between gap-2">
 									<p className="text-xs text-muted-foreground">
-										{clearsPickupTime && order.fulfilmentTimeMinutes !== undefined
+										{clearsPickupTime &&
+										order.fulfilmentTimeMinutes !== undefined
 											? `Removes the ${formatFulfilmentTime(order.fulfilmentTimeMinutes)} pickup time — the buyer can come any time that day.`
 											: "Optional — leave blank for any time that day."}
 									</p>

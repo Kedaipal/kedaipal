@@ -46,6 +46,7 @@ import {
 	SELLER_SORTS,
 	type SellerFilter,
 	type SellerSort,
+	sellerFilterEmptyNoun,
 	sellersToCsv,
 	sortSellers,
 } from "../lib/admin-seller-view";
@@ -164,6 +165,14 @@ export function SellerDirectory({
 	const counts = countSellerBuckets(all);
 	const visible = sortSellers(filterSellers(all, filter, q), sort, now);
 	const detailSeller = all.find((s) => s._id === detailId) ?? null;
+	// Live contracts the open store could be modelled on — built from the list
+	// already on screen, so the "start from" picker costs no second query. The
+	// store being edited is never its own template.
+	const contractTemplates = all.flatMap((s) =>
+		s.enterprise && s._id !== detailId
+			? [{ retailerId: s._id, storeName: s.storeName, contract: s.enterprise }]
+			: [],
+	);
 	const filtered = filter !== "all" || q.trim().length > 0;
 
 	function setFilter(next: SellerFilter) {
@@ -353,15 +362,17 @@ export function SellerDirectory({
 						{all.length === 0
 							? "No sellers yet"
 							: filter !== "all"
-								? `No ${SELLER_FILTER_LABEL[filter].toLowerCase()} sellers${q.trim() ? ` match “${q.trim()}”` : ""}`
+								? `No ${sellerFilterEmptyNoun(filter)}${q.trim() ? ` match “${q.trim()}”` : ""}`
 								: `No sellers match “${q.trim()}”`}
 					</p>
 					<p className="max-w-xs text-sm text-muted-foreground">
 						{all.length === 0
 							? "Stores appear here once a seller finishes onboarding."
-							: filter !== "all"
-								? "They may be in another status — clear the filter to search every store."
-								: "Try the store name, its slug, the owner's email or their phone."}
+							: filter === "wants_enterprise"
+								? "Nobody's waiting. Sellers land here when they tap “Talk to Arif” in the app, and leave when a contract lands or you dismiss the ask."
+								: filter !== "all"
+									? "They may be in another status — clear the filter to search every store."
+									: "Try the store name, its slug, the owner's email or their phone."}
 					</p>
 					{filtered ? (
 						<Button
@@ -396,6 +407,7 @@ export function SellerDirectory({
 
 			<SellerSheet
 				seller={detailSeller}
+				contractTemplates={contractTemplates}
 				open={detailId !== null}
 				onOpenChange={(open) => {
 					if (!open) setDetailId(null);

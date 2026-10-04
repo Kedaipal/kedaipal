@@ -224,7 +224,7 @@ function sanitizePaymentInstructions(
 }
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { internalMutation, mutation, type MutationCtx, query, type QueryCtx } from "./_generated/server";
+import { action, internalMutation, internalQuery, mutation, type MutationCtx, query, type QueryCtx } from "./_generated/server";
 import { ConvexError } from "convex/values";
 import { reserveFoundingRank } from "./foundingMembers";
 import {
@@ -235,6 +235,8 @@ import { sanitizeAttributionSource } from "./lib/attribution";
 import { sanitizeUnitLine, UNIT_LINE_MAX_LENGTH } from "./lib/address";
 import { sanitizeReferrerSlug } from "./lib/poweredBy";
 import { isValidGaClientId } from "./lib/ga4";
+import { sendEmail } from "./lib/email";
+import { renderHandoverInvite } from "./lib/handoverEmailCopy";
 import { DEFAULT_LOCALE, type Locale } from "./lib/locale";
 import { MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
 import { sanitizeMinOrderValue } from "./lib/minOrderRules";
@@ -257,9 +259,19 @@ import {
 	assertPlanFeature,
 	assertOwnStoreActive,
 	assertSubscriptionActive,
+	insertSetupComp,
 	loadSubscription,
 	resolveAccess,
+	startFreePeriodOnClaim,
+	voidPendingInvoiceOnHandover,
 } from "./subscriptions";
+import { detachAutoRenewForRetailer } from "./subscriptionPayments";
+import {
+	type ClaimRefusal,
+	isUnclaimed,
+	mintUnclaimedOwnerId,
+} from "./lib/unclaimedStore";
+import { identityEmail } from "./lib/identity";
 import {
 	type DeliveryConfig,
 	deliveryModeAllowed,
@@ -285,7 +297,8 @@ import {
 	sellerNewOrderTemplateName,
 } from "./lib/whatsapp";
 import { TEMPLATE_MAX_LENGTH } from "./lib/whatsappCopy";
-import { ordersThisMonth } from "./subscriptionUsage";
+import { type CreditLockState, resolveCreditLock } from "./creditLock";
+import { ensureCreditAccount } from "./credits";
 import {
 	assertSupportedCurrency,
 	DEFAULT_CURRENCY,
@@ -311,6 +324,7 @@ import {
 	type MemberPermissions,
 	type PermissionArea,
 } from "./lib/permissions";
+import { sanitizeStoreArea } from "./lib/marketplaceListing";
 import { STORE_DESCRIPTION_MAX } from "./lib/storeProfile";
 import {
 	assertValidEmail,
@@ -787,6 +801,17 @@ type RetailerPublic = {
 	// Public storefront blurb under the store name. Public-safe — surfaced on
 	// both the owner read and the by-slug storefront payload.
 	storeDescription?: string;
+	// Marketplace card area line (z8r3fdkmyp) — public by nature (it renders on
+	// the /stores card); only the owner read carries it, the directory reads
+	// the row itself.
+	storeArea?: string;
+	// Marketplace listing switch state (z8r3fdkmyp): true = the seller opted
+	// OUT of /stores. Derived from `marketplaceUnlistedAt`. On the owner read
+	// (the settings card) AND the by-slug payload — public-safe, since whether
+	// a store is in the public directory is itself public — where it hides the
+	// storefront footer's "Discover more stores" link: a seller who chose to
+	// stay out shouldn't have their buyers pointed at the directory.
+	marketplaceUnlisted?: boolean;
 	// "What does your store sell?" — the default kind for NEW products in the
 	// wizard (86eyj70z1 decision 5). Owner-facing config, harmless if public.
 	storeType?: "physical" | "service" | "booking";
@@ -931,10 +956,6 @@ type RetailerPublic = {
 	// never leaks to shoppers. Fail-safe: a retailer missing a subscription row
 	// resolves to comped full access (see resolveAccess). See docs/manual-subscription.md.
 	subscription?: AccessState;
-	// Orders counted this MYT calendar month — the meter behind the SOFT
-	// orderCap nudge ("X of 100 plan orders used"). OWNER-only, like
-	// `subscription`. See convex/subscriptionUsage.ts.
-	ordersThisMonth?: number;
 	// Claim links (86eyq0epn): the store's remembered default payment window —
 	// seeds the send controls' chips and is updated on every send. OWNER-only
 	// (seller config). Unset falls back to DEFAULT_CLAIM_WINDOW_MINUTES.
@@ -961,6 +982,21 @@ type RetailerPublic = {
 	// (not the owner). Drives the persistent "Acting as {store}" dashboard banner.
 	// Only ever set by the admin act-as read path. See docs/admin-console.md.
 	actingAsAdmin?: boolean;
+	// True while this store has no owner yet — an admin pre-built it and the
+	// vendor hasn't claimed it (docs/prebuilt-stores.md). Set on every payload
+	// rather than only the admin read: the act-as banner has to say WHICH kind
+	// of store an admin is standing in, because the two look identical and the
+	// mistake they protect against is opposite — in a live seller's store the
+	// warning is "this is someone's real shop", in a pre-built one it is "this
+	// is not a seller yet, nothing you do here reaches anybody".
+	// Only ever set when true, so ordinary payloads are byte-identical.
+	unclaimed?: boolean;
+	// Who this pre-built store is waiting for, so the act-as banner can say it
+	// instead of telling an admin to go and set an address they already set.
+	// Rides only the AUTHENTICATED payloads — `buildRetailerPublic` feeds
+	// `getMyRetailer` and `getRetailerForAdmin`; the public storefront
+	// (`getRetailerBySlug`) builds its own object and never sees this.
+	pendingOwnerEmail?: string;
 	// WHO the caller is to this store (86exr91r4): "owner" | "member" | "admin".
 	// Drives `useIsStoreOwner` + `usePermission` — a member's chrome renders
 	// owner-only tabs locked-with-reason, never missing. Absent on payloads that
@@ -970,6 +1006,12 @@ type RetailerPublic = {
 	// A MEMBER's per-area grants (deny-by-default; convex/lib/permissions.ts).
 	// Absent for owner/admin — they hold every grant implicitly.
 	permissions?: MemberPermissions;
+	// Credits T3 (z8r3fdf8hy): is the store out of credits, why, and how many
+	// orders have arrived since — what the lock banner and every disabled
+	// control read. Deliberately NO balance numbers: every teammate needs to
+	// know WHY a button is disabled, but the balance itself is `credits`-area
+	// data (credits.getBalance). Never on the storefront payload.
+	creditLock?: CreditLockState;
 };
 
 async function loadRetailerForUser(
@@ -1037,7 +1079,6 @@ async function buildRetailerPublic(
 		.query("retailerSendingLimits")
 		.withIndex("by_retailer", (q) => q.eq("retailerId", row._id))
 		.first();
-	const usedOrders = await ordersThisMonth(ctx, row._id);
 	// Seller WA alerts (86eyhw9zy): surface whether the saved number holds an
 	// active global STOP opt-out — the WABA gateway would suppress every alert,
 	// so the settings card warns instead of the toggle silently doing nothing.
@@ -1057,7 +1098,18 @@ async function buildRetailerPublic(
 		_id: row._id,
 		slug: row.slug,
 		storeName: row.storeName,
+		// Spread-only-when-true, so an ordinary store's payload is unchanged.
+		...(isUnclaimed(row)
+			? {
+					unclaimed: true as const,
+					...(row.pendingOwnerEmail !== undefined
+						? { pendingOwnerEmail: row.pendingOwnerEmail }
+						: {}),
+				}
+			: {}),
 		storeDescription: row.storeDescription,
+		storeArea: row.storeArea,
+		marketplaceUnlisted: row.marketplaceUnlistedAt !== undefined,
 		storeType: row.storeType,
 		waPhone: row.waPhone,
 		notifyEmail: row.notifyEmail,
@@ -1100,7 +1152,6 @@ async function buildRetailerPublic(
 		subscription: resolveAccess(sub, {
 			adminFullAccess: opts?.adminFullAccess,
 		}),
-		ordersThisMonth: usedOrders,
 		claimLinkWindowMinutes: row.claimLinkWindowMinutes,
 		claimLinkSource: row.claimLinkSource,
 		isFoundingMember: row.isFoundingMember,
@@ -1110,6 +1161,7 @@ async function buildRetailerPublic(
 		sendingPauseReason: sendingLimits?.pauseReason,
 		role: opts?.role,
 		permissions: opts?.permissions,
+		creditLock: await resolveCreditLock(ctx, row, Date.now()),
 	};
 }
 
@@ -1260,6 +1312,7 @@ export const getRetailerBySlug = query({
 					isFoundingMember: active.isFoundingMember,
 					foundingMemberRank: active.foundingMemberRank,
 					orderingPaused: active.orderingPausedAt !== undefined,
+					marketplaceUnlisted: active.marketplaceUnlistedAt !== undefined,
 					// paymentInstructions intentionally omitted from the public
 					// storefront payload — only revealed in the WhatsApp confirm
 					// reply after the shopper commits to an order.
@@ -1285,11 +1338,31 @@ export const getRetailerBySlug = query({
  * `getRetailerBySlug` but from the perspective of "can the current user claim
  * this slug?" — so owner-reclaim paths return `available`.
  */
+/**
+ * Is this slug free? WHICH QUESTION IS BEING ASKED IS REQUIRED, because the two
+ * callers need opposite answers about the caller's OWN slug:
+ *
+ *  - `"rename"` — Settings → rename. Your current slug must read AVAILABLE:
+ *    re-saving the slug you already have is a no-op, not a collision.
+ *  - `"create"` — a store being BORN (the seller's own onboarding, or an admin
+ *    building one for a vendor). Your own slug is as taken as anybody else's,
+ *    because the new store is a different store.
+ *
+ * It used to always apply the rename exemption, so an admin building a store
+ * saw "✓ Available" for their own store's slug, the button enabled, and the
+ * create refused server-side with "That slug is taken" — a client contradicting
+ * its own server (found in the 2 Oct hands-on test). The arg is REQUIRED rather
+ * than defaulted so a new call site has to state which question it is asking,
+ * the same posture as `requireRetailerAccess`'s requirement argument.
+ */
 export const checkSlugAvailability = query({
-	args: { slug: v.string() },
+	args: {
+		slug: v.string(),
+		purpose: v.union(v.literal("create"), v.literal("rename")),
+	},
 	handler: async (
 		ctx,
-		{ slug },
+		{ slug, purpose },
 	): Promise<
 		{ status: "available" } | { status: "taken" } | { status: "invalid"; reason: string }
 	> => {
@@ -1308,7 +1381,7 @@ export const checkSlugAvailability = query({
 			.withIndex("by_slug", (q) => q.eq("slug", normalized))
 			.first();
 		if (active) {
-			if (currentUserId && active.userId === currentUserId) {
+			if (purpose === "rename" && currentUserId && active.userId === currentUserId) {
 				return { status: "available" };
 			}
 			return { status: "taken" };
@@ -1319,7 +1392,10 @@ export const checkSlugAvailability = query({
 			.withIndex("by_old_slug", (q) => q.eq("oldSlug", normalized))
 			.first();
 		if (historyRow && historyRow.expiresAt > Date.now()) {
-			if (currentUserId) {
+			// Same split: reclaiming your OWN parked slug is a rename back, but a
+			// NEW store may not take a slug still redirecting to someone's shop —
+			// not even its builder's.
+			if (purpose === "rename" && currentUserId) {
 				const historyOwner = await ctx.db.get(historyRow.retailerId);
 				if (historyOwner && historyOwner.userId === currentUserId) {
 					return { status: "available" };
@@ -1436,6 +1512,43 @@ async function createSubscriptionForRetailer(
 	});
 }
 
+/**
+ * Take a slug for a store being born: refuse it if another store holds it, or
+ * if someone else's rename still has it parked in `slugHistory`; sweep an
+ * expired history row out of the way inline.
+ *
+ * Shared by the TWO doors a store can be created through — the seller's own
+ * `createRetailer` and the admin's `createUnclaimedStore` — because they are
+ * the same question with the same answers, and a pre-built store that skipped
+ * the history check would hijack a redirect a seller is still relying on.
+ * (The other two `by_old_slug` readers ask different questions —
+ * `checkSlugAvailability` reports without taking, `getRetailerBySlug` resolves
+ * a redirect — so they stay as they are.)
+ */
+async function claimSlugForNewStore(
+	ctx: MutationCtx,
+	slug: string,
+): Promise<void> {
+	const collision = await ctx.db
+		.query("retailers")
+		.withIndex("by_slug", (q) => q.eq("slug", slug))
+		.first();
+	if (collision) throw new ConvexError("That slug is taken");
+
+	// Slug history collision (someone else's rename, still within TTL)
+	const historyRow = await ctx.db
+		.query("slugHistory")
+		.withIndex("by_old_slug", (q) => q.eq("oldSlug", slug))
+		.first();
+	if (historyRow && historyRow.expiresAt > Date.now()) {
+		throw new ConvexError("That slug is temporarily reserved");
+	}
+	if (historyRow) {
+		// Expired but not yet purged — remove inline.
+		await ctx.db.delete(historyRow._id);
+	}
+}
+
 export const createRetailer = mutation({
 	args: {
 		storeName: v.string(),
@@ -1527,24 +1640,7 @@ export const createRetailer = mutation({
 			);
 		}
 
-		const collision = await ctx.db
-			.query("retailers")
-			.withIndex("by_slug", (q) => q.eq("slug", slug))
-			.first();
-		if (collision) throw new ConvexError("That slug is taken");
-
-		// Slug history collision (someone else's rename, still within TTL)
-		const historyRow = await ctx.db
-			.query("slugHistory")
-			.withIndex("by_old_slug", (q) => q.eq("oldSlug", slug))
-			.first();
-		if (historyRow && historyRow.expiresAt > Date.now()) {
-			throw new ConvexError("That slug is temporarily reserved");
-		}
-		if (historyRow) {
-			// Expired but not yet purged — remove inline.
-			await ctx.db.delete(historyRow._id);
-		}
+		await claimSlugForNewStore(ctx, slug);
 
 		// Absent/blank → undefined (untagged), present-but-garbage → "other" —
 		// identical semantics to orders.attributionSource.
@@ -1614,10 +1710,599 @@ export const createRetailer = mutation({
 			args.intent ?? "public",
 			now,
 		);
+		// Open the credit account with the trial allowance (Credits, 86eye2ccu),
+		// so the balance exists from day one rather than at the first order.
+		await ensureCreditAccount(ctx, retailerId, now);
 
 		return { slug };
 	},
 });
+
+// ---------------------------------------------------------------------------
+// Pre-built stores — an admin builds the shop, the vendor claims it later.
+// docs/prebuilt-stores.md
+// ---------------------------------------------------------------------------
+
+/**
+ * Admin: create a store that NOBODY owns yet, so white-glove setup can happen
+ * before the vendor has signed up anywhere.
+ *
+ * The sibling of `createRetailer`, and the reason the old "we can't create it
+ * for them without an orphaned, un-loginable store" constraint is gone: the
+ * store is not orphaned, it is UNCLAIMED — a named state with a way out
+ * (`claimStore`). Differences from the seller's own door, each deliberate:
+ *
+ *  - `userId` is a placeholder, so the owner branch of `requireRetailerAccess`
+ *    matches nobody and admins reach it through the admin branch exactly as
+ *    they already reach any seller's store. Act-as needs no changes.
+ *  - NO CONSENT IS STAMPED. Terms, privacy and the AUP are agreements between
+ *    Kedaipal and the vendor, and the vendor is not here. Recording our click
+ *    as their acceptance would be a false record of consent — so the fields
+ *    stay unset and `claimStore` stamps them when the person who is actually
+ *    bound says yes.
+ *  - the subscription is an `internal` comp, not a trial — see
+ *    `startFreePeriodOnClaim` for why a trial stamped today would arrive spent.
+ *  - no founding rank is reserved and no welcome message is sent: there is
+ *    nobody to welcome, and a rank held by a store that may never be claimed
+ *    would eat one of ten slots. A pre-built store converts to founding the
+ *    ordinary way, by an admin issuing its founding invoice after handover.
+ */
+export const createUnclaimedStore = mutation({
+	args: {
+		storeName: v.string(),
+		slug: v.string(),
+		waPhone: v.optional(v.string()),
+		country: v.optional(v.union(v.literal("MY"), v.literal("SG"))),
+		/** The address that will claim it. Optional — an admin often starts
+		 * building before the vendor has given one; `setPendingOwnerEmail` fills
+		 * it in later. */
+		pendingOwnerEmail: v.optional(v.string()),
+	},
+	handler: async (ctx, args): Promise<{ slug: string; retailerId: Id<"retailers"> }> => {
+		const adminSubject = await requireAdmin(ctx);
+		const country = args.country ?? DEFAULT_COUNTRY;
+		let storeName: string;
+		let slug: string;
+		let waPhone: string | undefined;
+		try { storeName = assertValidStoreName(args.storeName); } catch (err) { throw new ConvexError((err as Error).message); }
+		try { slug = assertValidSlug(args.slug); } catch (err) { throw new ConvexError((err as Error).message); }
+		if (args.waPhone && args.waPhone.trim().length > 0) {
+			try { waPhone = assertValidMobileForCountry(args.waPhone, country); } catch (err) { throw new ConvexError((err as Error).message); }
+		}
+		const pendingOwnerEmail = await resolvePendingOwnerEmail(
+			ctx,
+			args.pendingOwnerEmail,
+			null,
+		);
+
+		await claimSlugForNewStore(ctx, slug);
+
+		const now = Date.now();
+		const retailerId = await ctx.db.insert("retailers", {
+			userId: mintUnclaimedOwnerId(),
+			slug,
+			storeName,
+			waPhone,
+			// notifyEmail is left UNSET, not pointed at the admin. Order and
+			// billing email for a store in setup would otherwise land in a founder
+			// inbox and then have to be un-pointed at handover — and the one that
+			// got missed would keep sending a vendor's order mail to us. An admin
+			// watching a pre-built store watches it in the console.
+			pendingOwnerEmail,
+			currency: COUNTRY_CURRENCY[country],
+			...(args.country !== undefined ? { country: args.country } : {}),
+			channel: "whatsapp",
+			offerSelfCollect: true,
+			offerDelivery: true,
+			createdAt: now,
+			updatedAt: now,
+		});
+		await insertSetupComp(ctx, retailerId, adminSubject, now);
+		// Audited against the store, not globally, so the row lands on THIS
+		// store's trail — `recentAuditForRetailer` is where an admin looks to ask
+		// "where did this store come from, and who built it?".
+		const created = await ctx.db.get(retailerId);
+		if (created) {
+			await logAdminAction(
+				ctx,
+				{
+					retailer: created,
+					role: "admin",
+					actingAsAdmin: true,
+					userId: adminSubject,
+				},
+				"retailers.createUnclaimedStore",
+				retailerId,
+			);
+		}
+		return { slug, retailerId };
+	},
+});
+
+/**
+ * Admin: name (or re-name, or clear) the address that will claim a pre-built
+ * store. The "then change the email to theirs" step.
+ *
+ * Refused once the store HAS an owner — ownership moves exactly once, at claim,
+ * and a mutation that could re-point a live store's owner email is a
+ * store-takeover primitive. Transferring a claimed store is a different feature
+ * with different safeguards (the owner must agree); this is not a back door to
+ * it.
+ */
+export const setPendingOwnerEmail = mutation({
+	args: {
+		retailerId: v.id("retailers"),
+		/** Blank/omitted clears it — "we don't know yet". */
+		email: v.optional(v.string()),
+	},
+	handler: async (ctx, { retailerId, email }): Promise<{ ok: true }> => {
+		const adminSubject = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		if (!isUnclaimed(retailer))
+			throw new ConvexError(
+				`${retailer.storeName} already has an owner — the handover email only applies to a store that hasn't been claimed yet.`,
+			);
+		const pendingOwnerEmail = await resolvePendingOwnerEmail(
+			ctx,
+			email,
+			retailerId,
+		);
+		// Same invariant as the transfer: the stamp belongs to the address it was
+		// sent to. Correcting a typo'd handover address after inviting must take
+		// the nudge back, or the admin is told the new person has been emailed.
+		// Unchanged address keeps its stamp — re-saving the same value is not a
+		// re-invite.
+		const addressChanged = pendingOwnerEmail !== retailer.pendingOwnerEmail;
+		await ctx.db.patch(retailerId, {
+			pendingOwnerEmail,
+			...(addressChanged ? { handoverInviteSentAt: undefined } : {}),
+			updatedAt: Date.now(),
+		});
+		await logAdminAction(
+			ctx,
+			{ retailer, role: "admin", actingAsAdmin: true, userId: adminSubject },
+			"retailers.setPendingOwnerEmail",
+			retailerId,
+		);
+		return { ok: true };
+	},
+});
+
+/**
+ * Hand a CLAIMED store to a different person (admin only).
+ *
+ * The white-glove case this exists for: a founder built and claimed a store on
+ * their OWN login while setting the vendor up, and now has to give it away. The
+ * pre-built path (`createUnclaimedStore` + `setPendingOwnerEmail`) covers a
+ * store that was never owned; this covers one that already is.
+ *
+ * HOW IT WORKS: the store goes BACK to the unclaimed state and is pointed at
+ * the new address — a fresh sentinel `userId` plus `pendingOwnerEmail` — and
+ * the new owner takes it through the ordinary `claimStore` door. That is the
+ * whole mechanism. No second transfer protocol, no "pending transfer" state to
+ * reason about, and every refusal, consent stamp and free-period rule the claim
+ * already enforces applies unchanged. The old owner loses access the instant
+ * this runs, because `requireRetailerAccess`'s owner branch compares against a
+ * `userId` no Clerk subject can equal.
+ *
+ * WHAT TRAVELS WITH THE STORE: everything except the person. Products, orders,
+ * customers, settings, the team and **the subscription** stay exactly as they
+ * are — a transfer is not a cancellation, and billing a new owner for a plan
+ * the store already pays for would be a second charge for one month. The admin
+ * is told this in the dialog rather than left to assume it.
+ *
+ * WHAT DOES NOT TRAVEL: `notifyEmail` is CLEARED, deliberately. It is the old
+ * owner's address, and a store in handover must not keep mailing buyers' names
+ * and addresses to someone who no longer runs it — nor to the new owner, who
+ * has not accepted anything yet (consent is taken at claim, which is exactly
+ * why `createUnclaimedStore` leaves this field unset too). The claim sets it to
+ * the new owner. Orders in the gap are visible in the dashboard and the admin
+ * console; the gap is one sign-in long.
+ */
+export const transferStoreOwnership = mutation({
+	args: {
+		retailerId: v.id("retailers"),
+		/** Required — unlike `setPendingOwnerEmail`, there is no "we don't know
+		 * yet" here. Taking a store off its current owner without naming who
+		 * gets it would leave a live store nobody can reach. */
+		email: v.string(),
+	},
+	handler: async (ctx, { retailerId, email }): Promise<{ ok: true }> => {
+		const adminSubject = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		if (isUnclaimed(retailer))
+			throw new ConvexError(
+				`${retailer.storeName} has no owner yet — set its handover email instead.`,
+			);
+		const normalized = await resolvePendingOwnerEmail(ctx, email, retailerId);
+		if (!normalized)
+			throw new ConvexError("Enter the new owner's email address.");
+		// A teammate of THIS store cannot claim it: `claimBlocker` refuses anyone
+		// holding an active membership, so the handover would dead-end at the
+		// vendor's sign-in with a message about a store they are already in.
+		// Caught here, where the admin can act on it, rather than there.
+		const member = await ctx.db
+			.query("retailerMembers")
+			.withIndex("by_email", (q) => q.eq("email", normalized))
+			.collect();
+		if (member.some((m) => m.retailerId === retailerId && m.status === "active"))
+			throw new ConvexError(
+				`${normalized} is already on ${retailer.storeName}'s team. One login can only hold one store, so remove them from the team first — then transfer.`,
+			);
+
+		// The PREVIOUS owner's saved card is attached to the SUBSCRIPTION, which
+		// is store-scoped — so without this it stays attached to a store they no
+		// longer own and the next renewal charges them for somebody else's shop.
+		// A charge nobody authorised, and the one genuine money risk in a
+		// handover. The period they already paid for still stands: they paid for
+		// this store's service, and the store carries on.
+		await detachAutoRenewForRetailer(ctx, retailerId);
+
+		const now = Date.now();
+		// The store's OPEN BILL stops here too. Clearing `notifyEmail` below,
+		// detaching the card above and the daily pass's unclaimed skip together
+		// guarantee a pending invoice is never seen or chased while the store
+		// waits — and then it re-arms the moment the new owner claims, locking
+		// their shop on day one for a month they did not own. It also holds the
+		// single-pending-invoice slot, so their first real bill could not be
+		// issued. `voidPendingInvoiceOnHandover` explains why voiding (not
+		// refusing the transfer) is the house answer, and what survives for the
+		// audit. An admin who wants the money settles the invoice BEFORE
+		// transferring; the dialog says so.
+		const voidedInvoice = await voidPendingInvoiceOnHandover(
+			ctx,
+			retailerId,
+			adminSubject,
+			now,
+		);
+		await ctx.db.patch(retailerId, {
+			userId: mintUnclaimedOwnerId(),
+			pendingOwnerEmail: normalized,
+			notifyEmail: undefined,
+			// Re-stamped by the new owner's claim. Left set, the store would read
+			// as claimed on every surface that asks, while having no owner.
+			claimedAt: undefined,
+			// The stamp describes the invite for the CURRENT pending address, so
+			// a new address has never been invited. Left set, the Manage row
+			// would read grey "Waiting for <new address> to sign up" while that
+			// person has had no email — and the amber "invite them" nudge, the
+			// whole reason this is a timestamp and not a boolean, never returns.
+			handoverInviteSentAt: undefined,
+			updatedAt: now,
+		});
+		await logAdminAction(
+			ctx,
+			{ retailer, role: "admin", actingAsAdmin: true, userId: adminSubject },
+			"retailers.transferStoreOwnership",
+			retailerId,
+		);
+		console.log(
+			`transferStoreOwnership[${retailerId}] ${retailer.slug} released by ${adminSubject}, waiting for ${normalized}${
+				voidedInvoice ? `, voided open invoice ${voidedInvoice}` : ""
+			}`,
+		);
+		return { ok: true };
+	},
+});
+
+/**
+ * Email the handover invitation to the address a store is waiting for
+ * (z8r3fdmy7n). Admin only, and the ONE door for both handover paths — a store
+ * we pre-built and a store transferred off its previous owner are the same
+ * state by the time this runs (`pendingOwnerEmail` set, nobody owning it), so
+ * they get the same email rather than two that drift apart.
+ *
+ * Re-sendable on purpose: the commonest failure of a white-glove handover is
+ * an address named and never told, and the second commonest is an invite that
+ * went to spam. `handoverInviteSentAt` records the LAST send so the admin can
+ * see both states — never sent, and sent a while ago with nothing happening.
+ *
+ * SEND FIRST, STAMP AFTER. The first cut scheduled the send and stamped
+ * immediately, swallowing provider errors — so a failed send showed the admin a
+ * success toast and a row reading "sent" while nothing arrived, which is how
+ * this was found on 3 Oct. The stamp now means the provider accepted it.
+ */
+export const sendHandoverInvite = action({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<{ ok: true; email: string }> => {
+		// Validate (and prove admin) BEFORE spending a send, then send, then
+		// stamp. An ACTION rather than a mutation-that-schedules, because the
+		// person who pressed the button is sitting there waiting: a failed send
+		// has to reach them, and a stamp that says "sent" when nothing left the
+		// building is worse than no stamp at all. Fire-and-forget is right for
+		// the automatic emails — a cron must not fail on a bounced notice — and
+		// wrong here.
+		const prep = await ctx.runQuery(
+			internal.retailers.handoverInviteContext,
+			{ retailerId },
+		);
+		const { subject, html, text } = renderHandoverInvite(prep.locale, {
+			storeName: prep.storeName,
+			appUrl: `${process.env.SITE_URL ?? "https://kedaipal.com"}/app`,
+			email: prep.email,
+		});
+		// Deliberately unguarded: sendEmail throws with the provider's own
+		// message, and that message IS the answer the admin needs ("domain not
+		// verified", "recipient suppressed"). Swallowing it is what made the
+		// first cut claim success while nothing arrived.
+		await sendEmail(prep.email, subject, html, text);
+		await ctx.runMutation(internal.retailers.stampHandoverInvite, {
+			retailerId,
+		});
+		return { ok: true, email: prep.email };
+	},
+});
+
+/** Admin check + every refusal, in one read the action makes before sending.
+ * Throws rather than returning null: each refusal is a sentence the admin acts
+ * on, and an action cannot tell them apart from a null. */
+export const handoverInviteContext = internalQuery({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{ storeName: string; locale: Locale; email: string }> => {
+		await requireAdmin(ctx);
+		const r = await ctx.db.get(retailerId);
+		if (!r) throw new ConvexError("Store not found");
+		if (!isUnclaimed(r))
+			throw new ConvexError(
+				`${r.storeName} already has an owner — there is nobody to invite.`,
+			);
+		if (!r.pendingOwnerEmail)
+			throw new ConvexError(
+				`Set the handover email for ${r.storeName} first — there is no address to send to.`,
+			);
+		return {
+			storeName: r.storeName,
+			locale: (r.locale ?? "en") as Locale,
+			email: r.pendingOwnerEmail,
+		};
+	},
+});
+
+/** Record a send that actually left the building. Re-checks admin because an
+ * internal mutation is reachable from any action, and re-reads nothing else —
+ * the send already happened, so a store claimed in between still gets its
+ * honest stamp. */
+export const stampHandoverInvite = internalMutation({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<void> => {
+		const adminSubject = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) return;
+		const now = Date.now();
+		await ctx.db.patch(retailerId, {
+			handoverInviteSentAt: now,
+			updatedAt: now,
+		});
+		await logAdminAction(
+			ctx,
+			{ retailer, role: "admin", actingAsAdmin: true, userId: adminSubject },
+			"retailers.sendHandoverInvite",
+			retailerId,
+		);
+	},
+});
+
+/**
+ * Validate a handover address and make sure it is the ONLY store waiting on it.
+ * Two stores pointed at one inbox would both answer `myClaimableStore`, and the
+ * vendor would silently get whichever the index returned first — so the second
+ * one is refused here, where an admin can read the reason, rather than at the
+ * claim, where nobody can.
+ *
+ * `selfId` is the store being edited (so re-saving the same address on the same
+ * store is not a collision with itself); pass `null` at create.
+ */
+async function resolvePendingOwnerEmail(
+	ctx: MutationCtx,
+	raw: string | undefined,
+	selfId: Id<"retailers"> | null,
+): Promise<string | undefined> {
+	if (raw === undefined || raw.trim().length === 0) return undefined;
+	let normalized: string;
+	try {
+		normalized = assertValidEmail(raw);
+	} catch (err) {
+		throw new ConvexError((err as Error).message);
+	}
+	const waiting = await ctx.db
+		.query("retailers")
+		.withIndex("by_pending_owner_email", (q) =>
+			q.eq("pendingOwnerEmail", normalized),
+		)
+		.first();
+	if (waiting && waiting._id !== selfId)
+		throw new ConvexError(
+			`${waiting.storeName} is already waiting for ${normalized}. One login can only hold one store — finish or clear that handover first.`,
+		);
+	// A store they ALREADY own is the same wall from the other side: the claim
+	// would refuse it (one store per login), so say so now instead of handing an
+	// admin a link that can never work.
+	//
+	// This is a BEST-EFFORT match, and the message says so rather than asserting
+	// ownership. Kedaipal never stores a login address — `notifyEmail` is the
+	// only email on the row, prefilled from Clerk at signup but explicitly
+	// re-pointable at a shared ops inbox (see its schema comment), so it can
+	// name a different person than the one who signs in. Keying on it is still
+	// right: it is correct for every store that never changed it, and the
+	// authoritative wall is `claimBlocker`, which matches on the Clerk subject
+	// at claim time. What the copy must not do is tell an admin that an address
+	// "runs" a store when all we know is that the store mails it — a flat
+	// refusal on a proxy signal, with no way out, is a dead end.
+	const owned = await ctx.db
+		.query("retailers")
+		.withIndex("by_notify_email", (q) => q.eq("notifyEmail", normalized))
+		.first();
+	if (owned && owned._id !== selfId && !isUnclaimed(owned))
+		throw new ConvexError(
+			`${owned.storeName} already uses ${normalized} as its contact email, so that login most likely owns it — and one login can only hold one store. If this is a different person, change ${owned.storeName}'s notification email first; it's the only address we can match on.`,
+		);
+	return normalized;
+}
+
+/**
+ * Is a pre-built store waiting for the person signed in right now? Drives the
+ * claim banner on /onboarding — which is the ONLY place the vendor is ever told
+ * this store exists, so the query has to answer for a storeless caller with no
+ * store id to pass.
+ *
+ * Returns the refusal too, not just the store, because "a store is waiting but
+ * you can't take it" is the state most worth rendering: a seller who already
+ * owns a shop needs to read why, not see nothing.
+ */
+export const myClaimableStore = query({
+	args: {},
+	handler: async (
+		ctx,
+	): Promise<
+		| { state: "anonymous" }
+		| { state: "none" }
+		| { state: "claimable"; storeName: string; slug: string }
+		| { state: "blocked"; storeName: string; refusal: ClaimRefusal }
+	> => {
+		const identity = await ctx.auth.getUserIdentity();
+		// NOT "none". Convex answers a query the moment it arrives, which is
+		// BEFORE the Clerk token attaches — so an anonymous answer here is "ask
+		// me again in a tick", not "no store is waiting for you". Collapsing the
+		// two flashed the "Name your store" wizard at a vendor whose store had
+		// already been built for them (Zaki, 2 Oct), because `none` is a
+		// perfectly valid verdict and the client rendered it. The caller is
+		// inside `<Show when="signed-in">`, so this state is always transient.
+		if (!identity) return { state: "anonymous" };
+		const email = identityEmail(identity);
+		if (!email) return { state: "none" };
+		const store = await ctx.db
+			.query("retailers")
+			.withIndex("by_pending_owner_email", (q) =>
+				q.eq("pendingOwnerEmail", email),
+			)
+			.first();
+		if (!store || !isUnclaimed(store)) return { state: "none" };
+		const refusal = await claimBlocker(ctx, identity.subject);
+		if (refusal)
+			return { state: "blocked", storeName: store.storeName, refusal };
+		return {
+			state: "claimable",
+			storeName: store.storeName,
+			slug: store.slug,
+		};
+	},
+});
+
+/**
+ * Take ownership of the pre-built store waiting for this caller's verified
+ * email. The vendor's entire onboarding: sign up, tap once.
+ *
+ * WHAT PROVES THE PERSON: the verified email on the Clerk identity, matched
+ * against `pendingOwnerEmail`. Identical to how a team invite binds
+ * (convex/team.ts) and for the identical reason — Clerk verifies addresses, so
+ * equality here means the caller controls that inbox. An UNVERIFIED address
+ * proves nothing and is refused; `identityEmail` (convex/lib/identity.ts) returns undefined for
+ * it, so there is no branch to forget.
+ *
+ * CONSENT IS TAKEN HERE, not at create: `createUnclaimedStore` deliberately
+ * stamps none, because the admin cannot agree to the terms on the vendor's
+ * behalf. `acceptedLegal` is therefore REQUIRED and must be true — the banner
+ * gates its button on the same checkbox the onboarding wizard uses, so the
+ * person bound by the agreement is the one who accepted it.
+ */
+export const claimStore = mutation({
+	args: {
+		/** The vendor ticked "I agree" on the claim banner. Required — a claim
+		 * cannot complete without consent, because consent is what create
+		 * skipped. */
+		acceptedLegal: v.boolean(),
+	},
+	handler: async (
+		ctx,
+		{ acceptedLegal },
+	): Promise<
+		{ ok: true; slug: string } | ({ ok: false } & ClaimRefusal)
+	> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new ConvexError("Not authenticated");
+		const email = identityEmail(identity);
+		if (!email) return { ok: false, reason: "unverified_email" };
+		const store = await ctx.db
+			.query("retailers")
+			.withIndex("by_pending_owner_email", (q) =>
+				q.eq("pendingOwnerEmail", email),
+			)
+			.first();
+		// `isUnclaimed` is re-checked, not assumed: the index only says an address
+		// is pending, and a claimed store with a stale pending field would
+		// otherwise hand itself to a second person.
+		if (!store || !isUnclaimed(store)) return { ok: false, reason: "none" };
+		const refusal = await claimBlocker(ctx, identity.subject);
+		if (refusal) return { ok: false, ...refusal };
+		if (!acceptedLegal)
+			throw new ConvexError(
+				"Accept the Terms, Privacy Policy and Acceptable Use Policy to take over this store.",
+			);
+
+		const now = Date.now();
+		await ctx.db.patch(store._id, {
+			// The handover itself: the placeholder owner becomes a real Clerk
+			// subject, and the address we were handed stops being a target. This
+			// patch IS "remove the previously used email" — there was never a Clerk
+			// account to delete, only this field.
+			userId: identity.subject,
+			pendingOwnerEmail: undefined,
+			// The stamp describes an invite for a pending address that no longer
+			// exists. Clearing it here is what makes the field mean exactly "the
+			// invite for the CURRENT pending address" on every path, so a store
+			// that is later transferred starts its next handover un-invited.
+			handoverInviteSentAt: undefined,
+			// Their address becomes the store's operational contact, so order and
+			// billing mail goes to them from this moment.
+			notifyEmail: email,
+			claimedAt: now,
+			termsAcceptedAt: now,
+			termsVersion: TERMS_VERSION,
+			privacyAcceptedAt: now,
+			privacyVersion: PRIVACY_VERSION,
+			aupAcceptedAt: now,
+			aupVersion: AUP_VERSION,
+			updatedAt: now,
+		});
+		// The 14 days start now, not when we started building.
+		await startFreePeriodOnClaim(ctx, store._id, now);
+		console.log(
+			`claimStore[${store._id}] handed over to ${identity.subject} (${store.slug})`,
+		);
+		return { ok: true, slug: store.slug };
+	},
+});
+
+/**
+ * Why this caller cannot take a store, or null when nothing is in the way.
+ * One store per login — the same wall `createRetailer` and `team.acceptInvite`
+ * enforce, so a seller meets one rule however they arrived, and the way out is
+ * always the explicit act (close the store, or leave the team).
+ */
+async function claimBlocker(
+	ctx: QueryCtx | MutationCtx,
+	subject: string,
+): Promise<ClaimRefusal | null> {
+	const own = await ctx.db
+		.query("retailers")
+		.withIndex("by_user", (q) => q.eq("userId", subject))
+		.first();
+	if (own) return { reason: "own_store", storeName: own.storeName };
+	const memberships = await ctx.db
+		.query("retailerMembers")
+		.withIndex("by_user", (q) => q.eq("userId", subject))
+		.collect();
+	const active = memberships.find((m) => m.status === "active");
+	if (!active) return null;
+	const teamStore = await ctx.db.get(active.retailerId);
+	return { reason: "other_membership", storeName: teamStore?.storeName };
+}
+
 
 /**
  * Update retailer profile fields (store name, WhatsApp number).
@@ -1635,6 +2320,14 @@ const updateSettingsArgs = {
 		storeName: v.optional(v.string()),
 		// Empty/blank clears the description. Undefined means "no change".
 		storeDescription: v.optional(v.string()),
+		// Marketplace card area line (z8r3fdkmyp). Blank clears; undefined = no
+		// change. Sanitized by sanitizeStoreArea (trim, one line, ≤ cap).
+		storeArea: v.optional(v.string()),
+		// Marketplace listing switch (z8r3fdkmyp): true relists (clears the
+		// opt-out stamp), false sets `marketplaceUnlistedAt`. A verb-shaped
+		// boolean in the API even though storage is a timestamp — the settings
+		// card thinks in on/off, the row remembers since-when.
+		marketplaceListed: v.optional(v.boolean()),
 		waPhone: v.optional(v.string()),
 		notifyEmail: v.optional(v.string()),
 		// Seller WhatsApp order alerts (86eyhw9zy). notifyWaPhone: blank clears
@@ -1732,6 +2425,10 @@ const SETTINGS_FIELD_AREA: Record<
 > = {
 	storeName: "store_settings",
 	storeDescription: "store_settings",
+	// Marketplace listing + card area (z8r3fdkmyp) — public presence, same
+	// class as the name/description/logo the card is built from.
+	storeArea: "store_settings",
+	marketplaceListed: "store_settings",
 	storeType: "store_settings",
 	locale: "store_settings",
 	logoStorageId: "store_settings",
@@ -1836,6 +2533,8 @@ export const updateSettings = mutation({
 		const patch: Partial<{
 			storeName: string;
 			storeDescription: string | undefined;
+			storeArea: string | undefined;
+			marketplaceUnlistedAt: number | undefined;
 			storeType: "physical" | "service" | "booking" | undefined;
 			waPhone: string | undefined;
 			notifyEmail: string | undefined;
@@ -1879,6 +2578,20 @@ export const updateSettings = mutation({
 		}
 		if (args.storeDescription !== undefined) {
 			patch.storeDescription = sanitizeStoreDescription(args.storeDescription);
+		}
+		if (args.storeArea !== undefined) {
+			try {
+				patch.storeArea = sanitizeStoreArea(args.storeArea);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
+		if (args.marketplaceListed !== undefined) {
+			// Relisting clears the stamp; opting out keeps the FIRST stamp if one
+			// is already there (a re-save must not rewrite "since when").
+			patch.marketplaceUnlistedAt = args.marketplaceListed
+				? undefined
+				: (retailer.marketplaceUnlistedAt ?? Date.now());
 		}
 		if (args.storeType !== undefined) {
 			// null clears; changing it re-types NOTHING — it only pre-selects the
@@ -3068,7 +3781,16 @@ export const listSlugsForSitemap = query({
 	args: {},
 	handler: async (ctx): Promise<Array<{ slug: string; updatedAt: number }>> => {
 		const rows = await ctx.db.query("retailers").collect();
-		return rows.map((r) => ({ slug: r.slug, updatedAt: r._creationTime }));
+		return (
+			rows
+				// A pre-built store's storefront works by direct link — that is how
+				// an admin shows the vendor their shop before handover — but it is
+				// nobody's shop yet, so it must not be submitted to search engines.
+				// Indexing a URL whose store may never be claimed (or may be renamed
+				// at handover) spends the slug's ranking on a page that could vanish.
+				.filter((r) => !isUnclaimed(r))
+				.map((r) => ({ slug: r.slug, updatedAt: r._creationTime }))
+		);
 	},
 });
 

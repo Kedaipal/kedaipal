@@ -3,12 +3,18 @@
 // carried on `getMyRetailer().subscription`. See docs/manual-subscription.md.
 
 import type { CompKind } from "../../convex/lib/comp";
-import { isUnlimited, type PlanFeature } from "../../convex/lib/plans";
+import type {
+	BillingCurrency,
+	ListedPlan,
+	Plan,
+	PlanFeature,
+} from "../../convex/lib/plans";
+import { type CreditUnlockRoute, creditTone } from "./credits-ui";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type SubscriptionView = {
-	plan: "starter" | "pro" | "scale";
+	plan: Plan;
 	status: "trialing" | "active" | "past_due" | "cancelled" | "on_hold";
 	/** Optional on the mirror (the server always sends it) so a payload rendered
 	 * from an older cache degrades to "monthly" rather than throwing. */
@@ -35,12 +41,18 @@ export type SubscriptionView = {
 	currentPeriodEnd?: number;
 	caps?: { orderCap: number; userCap: number; broadcastQuota: number };
 	features?: Record<PlanFeature, boolean>;
-	/** Saved-method auto-renewal summary (86eyb6z4r) — owner payload only. */
+	/** Saved-method auto-renewal summary (86eyb6z4r) — owner payload only.
+	 * `stopped`: auto-charging is stopped over a stranded charge — nothing
+	 * charges until a bill is settled (docs/hitpay-recurring.md). */
 	autoRenew?: {
 		method: string;
 		methodLabel: string;
 		failedAttempts: number;
 		failing: boolean;
+		stopped: boolean;
+		/** A charge was sent and its outcome is still being confirmed —
+		 * never promise a charge or invite a manual payment while true. */
+		confirming: boolean;
 		nextChargeAt?: number;
 	};
 	autoRenewSetupPending?: boolean;
@@ -48,8 +60,17 @@ export type SubscriptionView = {
 	foundingIntent?: boolean;
 	/** A downgrade taking effect at the end of the paid period (86eyb6z4r). */
 	pendingPlanChange?: {
-		plan: "starter" | "pro" | "scale";
+		plan: ListedPlan;
 		effectiveAt: number;
+	};
+	/** The Enterprise contract's seller-facing terms (Credits T6), present
+	 * iff `plan` is `enterprise` — never the contact, notes or who set it. */
+	enterprise?: {
+		baseFeeMinor: number;
+		currency: BillingCurrency;
+		includedCredits: number;
+		overageRateMinor: number;
+		blockSize: number;
 	};
 };
 
@@ -158,11 +179,12 @@ export function storeReadOnlyReason(
 		: "Your subscription is past due, so your store is view-only. Pay your invoice to start working again.";
 }
 
-/** Canonical short tier labels (Starter/Pro/Scale) for the nav pill + billing UI. */
+/** Canonical short tier labels (Starter/Pro/Enterprise) for the nav pill +
+ * billing UI. */
 export const PLAN_LABEL: Record<SubscriptionView["plan"], string> = {
 	starter: "Starter",
 	pro: "Pro",
-	scale: "Scale",
+	enterprise: "Enterprise",
 };
 
 /** Whole days until a future timestamp (rounded up, never negative). */
@@ -243,50 +265,18 @@ export function isRenewing(
 
 export const PAYMENT_WARN_DAYS = 5;
 
-/** Fraction of the monthly order cap at which the soft nudge starts. */
-export const ORDER_CAP_WARN_RATIO = 0.8;
-
-/**
- * Where this month's order count sits against the plan's SOFT cap. Pure — the
- * meter (`ordersThisMonth`) comes from the retailer payload. Orders are never
- * blocked; "over" only escalates the upgrade nudge. Comped subs and
- * unlimited/missing caps never nudge.
- */
-export type OrderCapState =
-	| { kind: "none" }
-	| { kind: "near"; used: number; cap: number }
-	| { kind: "over"; used: number; cap: number };
-
-export function orderCapState(
-	sub: SubscriptionView | undefined,
-	ordersThisMonth: number | undefined,
-): OrderCapState {
-	if (!sub || sub.comped) return { kind: "none" };
-	const cap = sub.caps?.orderCap;
-	if (
-		cap === undefined ||
-		cap <= 0 ||
-		isUnlimited(cap) ||
-		ordersThisMonth === undefined
-	)
-		return { kind: "none" };
-	if (ordersThisMonth >= cap)
-		return { kind: "over", used: ordersThisMonth, cap };
-	if (ordersThisMonth >= Math.ceil(cap * ORDER_CAP_WARN_RATIO))
-		return { kind: "near", used: ordersThisMonth, cap };
-	return { kind: "none" };
-}
-
 /**
  * What the dashboard subscription banner should show. Pure so it's unit-tested.
- * Precedence: a real `past_due` lock → a soon-due **pending invoice** (the most
- * concrete "pay me" — applies whether trialing or active) → a trial ending soon
- * → the soft order-cap nudge (over, then near — upsell ranks below any payment
- * deadline). Comped/paid-with-nothing-due → nothing. A store whose comp was
- * turned off (z8r3fdeub2) reads `compEnded` instead of `pastDue` — no bill
- * sits behind that lock. `pendingDueAt` is the
- * soonest pending invoice's due date (undefined when none); `ordersThisMonth`
- * is the usage meter (undefined → no cap nudge).
+ * Precedence: a real `past_due` lock → OUT OF CREDITS (Credits T3 — it blocks
+ * work right now, so it outranks every deadline) → a declined auto-charge → a
+ * soon-due **pending invoice** (the most concrete "pay me" — applies whether
+ * trialing or active) → Off-Season Hold → the free period → credits running
+ * LOW (the lowest nudge, like the soft order cap it replaced). Comped →
+ * nothing (never locked, never nudged). A store whose comp was turned off
+ * (z8r3fdeub2) reads `compEnded` instead of `pastDue` — no bill sits behind
+ * that lock. `pendingDueAt` is the soonest pending invoice's due date
+ * (undefined when none); `credits` is the lock state from the dashboard
+ * payload plus, for someone who can see credits, the balance.
  */
 export type BannerState =
 	| { kind: "none" }
@@ -295,6 +285,9 @@ export type BannerState =
 	 * (z8r3fdeub2): same lock as past-due, but there is no bill to pay — they
 	 * choose a plan. */
 	| { kind: "compEnded" }
+	/** Auto-charging stopped over a stranded charge: an earlier charge landed
+	 * after its bill was voided, and a human is sorting the money out. */
+	| { kind: "autoRenewStopped" }
 	| { kind: "autoRenewFailed" }
 	| { kind: "invoiceWarn"; daysLeft: number }
 	/** Off-Season Hold: ordering is paused — a calm, persistent reminder. */
@@ -309,20 +302,67 @@ export type BannerState =
 			daysLeft?: number;
 	  }
 	| { kind: "trialWarn"; daysLeft: number; ended: boolean }
-	| { kind: "orderCapOver"; used: number; cap: number }
-	| { kind: "orderCapNear"; used: number; cap: number };
+	/** Credits T3: out of credits — accepting/updating orders and editing
+	 * products are paused; orders keep arriving. Persistent. */
+	| {
+			kind: "creditsLocked";
+			ordersWaiting: number;
+			route: CreditUnlockRoute;
+	  }
+	/** Credits T3: into the last 20% of the month's credits (`lowCreditLine`
+	 * — the meter's amber and the low email's line). Dismissable. */
+	| { kind: "creditsLow"; total: number };
+
+/** What the banner knows about credits. `locked` + `route` + `ordersWaiting`
+ * ride the dashboard payload for everyone; the balance only for someone who
+ * can see credits (undefined → no low nudge). */
+export type BannerCredits = {
+	locked: boolean;
+	route: CreditUnlockRoute;
+	ordersWaiting: number;
+	total?: number;
+	periodGrant?: number;
+	customGrant?: boolean;
+	/** A store that can never be locked (an admin's own, a sponsored one) —
+	 * it has nothing to run low on, so it's never nudged. */
+	exempt?: boolean;
+};
 
 export function resolveBannerState(
 	sub: SubscriptionView | undefined,
 	pendingDueAt: number | undefined,
 	now: number,
 	warnDays = PAYMENT_WARN_DAYS,
-	ordersThisMonth?: number,
+	credits?: BannerCredits,
 ): BannerState {
-	// A comp has no bill, trial, cap or end date — nothing to warn about.
+	// A comp has no bill, trial, cap or end date, and is never locked or
+	// nudged for credits — nothing to warn about.
 	if (!sub || sub.comped) return { kind: "none" };
 	if (sub.status === "past_due")
 		return sub.compEnded ? { kind: "compEnded" } : { kind: "pastDue" };
+
+	// Out of credits blocks work NOW — above every deadline below, and above
+	// the saved-method banners: those are about how the next bill gets paid,
+	// this is about orders not being taken today.
+	if (credits?.locked)
+		return {
+			kind: "creditsLocked",
+			ordersWaiting: credits.ordersWaiting,
+			route: credits.route,
+		};
+
+	// Stopped outranks declined: it is the CURRENT truth about the saved
+	// method (nothing will charge it), and it changes what the seller should
+	// do — "pay it yourself" could make them pay twice while we sort out an
+	// earlier charge. Clears when any bill settles.
+	if (sub.autoRenew?.stopped) return { kind: "autoRenewStopped" };
+
+	// A charge being CONFIRMED silences every pay-me banner: both the
+	// declined banner and the due-soon countdown say "pay it yourself", and
+	// that is the double payment while the sent charge may have landed. The
+	// auto-renewal card carries the explanation; resolution is ≤ a daily
+	// sweep away, after which the right banner (if any) returns.
+	if (sub.autoRenew?.confirming) return { kind: "none" };
 
 	// A declined auto-charge outranks the generic invoice countdown: it names
 	// the actual problem (the saved method) and its fix, while access is still
@@ -360,11 +400,20 @@ export function resolveBannerState(
 			return { kind: "trialWarn", daysLeft: free.daysLeft, ended: false };
 	}
 
-	const cap = orderCapState(sub, ordersThisMonth);
-	if (cap.kind === "over")
-		return { kind: "orderCapOver", used: cap.used, cap: cap.cap };
-	if (cap.kind === "near")
-		return { kind: "orderCapNear", used: cap.used, cap: cap.cap };
+	// `low` OR `out`. While the lock is on, `creditsLocked` above catches the
+	// zero-and-below store — but that branch reads `credits.locked`, and with
+	// the lock switched off (CREDIT_LOCK_ENABLED) it never fires, which left a
+	// store already into next month's credits with no banner at all. The two
+	// tones share one banner whose lead-in names which it is; when the lock
+	// returns, `creditsLocked` outranks this again and nothing here changes.
+	if (
+		credits?.total !== undefined &&
+		credits.periodGrant !== undefined &&
+		!credits.customGrant &&
+		!credits.exempt &&
+		creditTone(credits.total, credits.periodGrant) !== "ok"
+	)
+		return { kind: "creditsLow", total: credits.total };
 
 	return { kind: "none" };
 }
@@ -375,7 +424,8 @@ export type TierTone =
 	| "warn"
 	| "founding"
 	| "admin"
-	| "sponsored";
+	| "sponsored"
+	| "unclaimed";
 
 export type TierPill = { label: string; tone: TierTone };
 
@@ -398,8 +448,18 @@ export function tierPill(
 	now: number,
 	foundingRank?: number,
 	isAdmin = false,
+	/** A pre-built store nobody owns yet (docs/prebuilt-stores.md). */
+	unclaimed = false,
 ): TierPill {
 	if (isAdmin) return { label: "Admin", tone: "admin" };
+	// Before the comped branch, and that order is the whole point. A pre-built
+	// store runs on an `internal` comp while an admin builds it, so the comped
+	// branch would label it "Sponsored" — a word that is simply false (it is
+	// being set up, not sponsored) on a SELLER-FACING chip, which is the screen
+	// an admin shows the vendor during the handover demo. Same precedence the
+	// admin directory already uses (`sellerBucket` puts unclaimed above comped);
+	// this chip was the surface that missed it.
+	if (unclaimed) return { label: "Unclaimed", tone: "unclaimed" };
 	const fm = foundingRank ? `Founding #${foundingRank}` : null;
 	if (sub.comped)
 		return { label: fm ? `${fm} · Sponsored` : "Sponsored", tone: "sponsored" };

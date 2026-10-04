@@ -75,15 +75,19 @@ describe("resolveAnnualOffer — who sees the switch", () => {
 	});
 
 	/**
-	 * `issueInvoice` throws "Scale is unavailable for v1." — offering annual on
-	 * Scale would reproduce in-app the dead-end CTA we refuse to ship publicly,
-	 * and would hand the operator a request the mutation rejects.
+	 * Enterprise (T6): the term — monthly or a prepaid year — is part of the
+	 * contract an admin sets, and the contract card states it. So no switch is
+	 * offered, and no "You're on annual billing" card repeats the term while
+	 * inviting a self-serve plan change the server refuses.
 	 */
-	it("hides from Scale, which cannot be invoiced at all yet", () => {
-		expect(ANNUAL_OFFER_PLANS).not.toContain("scale");
-		expect(resolve({ subscription: sub({ plan: "scale" }) }).kind).toBe(
-			"hidden",
-		);
+	it.each([
+		"monthly",
+		"annual",
+	] as const)("hides from an Enterprise store — %s term", (billingCycle) => {
+		expect(ANNUAL_OFFER_PLANS).not.toContain("enterprise");
+		expect(
+			resolve({ subscription: sub({ plan: "enterprise", billingCycle }) }).kind,
+		).toBe("hidden");
 	});
 
 	it("hides from an admin on their own store", () => {
@@ -91,7 +95,9 @@ describe("resolveAnnualOffer — who sees the switch", () => {
 	});
 
 	it("hides from a comped account — nothing is billed to switch", () => {
-		expect(resolve({ subscription: sub({ comped: true }) }).kind).toBe("hidden");
+		expect(resolve({ subscription: sub({ comped: true }) }).kind).toBe(
+			"hidden",
+		);
 	});
 
 	it("hides with no subscription at all", () => {
@@ -99,12 +105,13 @@ describe("resolveAnnualOffer — who sees the switch", () => {
 		expect(resolve({ subscription: undefined }).kind).toBe("hidden");
 	});
 
-	it.each(["trialing", "past_due", "cancelled"] as const)(
-		"hides while %s — that seller has a more urgent card on this page",
-		(status) => {
-			expect(resolve({ subscription: sub({ status }) }).kind).toBe("hidden");
-		},
-	);
+	it.each([
+		"trialing",
+		"past_due",
+		"cancelled",
+	] as const)("hides while %s — that seller has a more urgent card on this page", (status) => {
+		expect(resolve({ subscription: sub({ status }) }).kind).toBe("hidden");
+	});
 });
 
 describe("resolveAnnualOffer — the proven-payer gate", () => {
@@ -219,9 +226,9 @@ describe("resolveAnnualOffer — already on annual", () => {
 	});
 
 	it("treats a missing cycle as monthly, never as annual", () => {
-		expect(resolve({ subscription: sub({ billingCycle: undefined }) }).kind).toBe(
-			"offer",
-		);
+		expect(
+			resolve({ subscription: sub({ billingCycle: undefined }) }).kind,
+		).toBe("offer");
 	});
 });
 

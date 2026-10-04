@@ -311,6 +311,151 @@ describe("buildInboxPredicate — source", () => {
 	});
 });
 
+describe("buildInboxPredicate — fulfilments (z8r3fdfau9)", () => {
+	const delivery = order({ deliveryMethod: "delivery" });
+	const legacy = order({ deliveryMethod: undefined });
+	const pickup = order({
+		deliveryMethod: "self_collect",
+		pickupSnapshot: { label: "Shop", address: "Jalan 1" },
+	});
+	const dropOff = order({
+		deliveryMethod: "self_collect",
+		pickupSnapshot: {
+			label: "Pasar Chow Kit",
+			address: "Jalan Raja Alang",
+			locationType: "drop_off",
+		},
+	});
+	const weCollect = order({
+		deliveryMethod: "delivery",
+		deliveryDirection: "collection",
+	});
+	const booking = order({ deliveryMethod: "booking" });
+	// Stored self_collect — the marker is the only thing that says "event".
+	const rsvp = order({ deliveryMethod: "self_collect", eventRsvp: true });
+
+	test("no fulfilment filter matches every kind", () => {
+		const p = buildInboxPredicate({});
+		for (const o of [
+			delivery,
+			legacy,
+			pickup,
+			dropOff,
+			weCollect,
+			booking,
+			rsvp,
+		]) {
+			expect(p(o)).toBe(true);
+		}
+	});
+
+	test("an empty list means no filtering, not 'match nothing'", () => {
+		const p = buildInboxPredicate({ fulfilments: [] });
+		expect(p(pickup)).toBe(true);
+	});
+
+	test("delivery matches delivery AND legacy, but never a collection run", () => {
+		const p = buildInboxPredicate({ fulfilments: ["delivery"] });
+		expect(p(delivery)).toBe(true);
+		// Every order created before `deliveryMethod` existed — its row already
+		// reads "Delivery", so the filter has to keep it or the table and the
+		// filter disagree about the same order.
+		expect(p(legacy)).toBe(true);
+		// A collection order IS deliveryMethod "delivery" in the schema. The trip
+		// goes the other way, so "show me my deliveries" must not return it.
+		expect(p(weCollect)).toBe(false);
+		expect(p(pickup)).toBe(false);
+		expect(p(booking)).toBe(false);
+	});
+
+	test("an approval-gated RSVP is still an event, whatever status it waits in (z8r3fdkjek)", () => {
+		// An event with `requiresApproval` lands its RSVPs in `booking_requested`
+		// — the status bookings already use — while staying an RSVP. Status and
+		// fulfilment are different axes, so the one must not bend the other: the
+		// order is an Event that happens to be awaiting approval, not a Booking.
+		const awaiting = order({
+			deliveryMethod: "self_collect",
+			eventRsvp: true,
+			status: "booking_requested",
+		});
+		expect(buildInboxPredicate({ fulfilments: ["event"] })(awaiting)).toBe(
+			true,
+		);
+		expect(buildInboxPredicate({ fulfilments: ["booking"] })(awaiting)).toBe(
+			false,
+		);
+		expect(
+			buildInboxPredicate({ fulfilments: ["self_collect"] })(awaiting),
+		).toBe(false);
+		// And it ANDs with the status axis the way any other order does.
+		expect(
+			buildInboxPredicate({
+				fulfilments: ["event"],
+				statuses: ["booking_requested"],
+			})(awaiting),
+		).toBe(true);
+	});
+
+	test("an RSVP filters as an event, never as the self-collect it is stored as", () => {
+		const events = buildInboxPredicate({ fulfilments: ["event"] });
+		expect(events(rsvp)).toBe(true);
+		expect(events(pickup)).toBe(false);
+		// And the converse, which is the half that actually bit: asking for
+		// self-collect must not drag every RSVP in with it.
+		const own = buildInboxPredicate({ fulfilments: ["self_collect"] });
+		expect(own(pickup)).toBe(true);
+		expect(own(rsvp)).toBe(false);
+	});
+
+	test("self-collect and drop-off are separate answers", () => {
+		const own = buildInboxPredicate({ fulfilments: ["self_collect"] });
+		expect(own(pickup)).toBe(true);
+		// The whole point: three pasar meetups are a different day out from a
+		// counter full of shop collections.
+		expect(own(dropOff)).toBe(false);
+
+		const meetup = buildInboxPredicate({ fulfilments: ["drop_off"] });
+		expect(meetup(dropOff)).toBe(true);
+		expect(meetup(pickup)).toBe(false);
+	});
+
+	test("we-collect and booking each match only themselves", () => {
+		expect(buildInboxPredicate({ fulfilments: ["collection"] })(weCollect)).toBe(
+			true,
+		);
+		expect(buildInboxPredicate({ fulfilments: ["collection"] })(delivery)).toBe(
+			false,
+		);
+		expect(buildInboxPredicate({ fulfilments: ["booking"] })(booking)).toBe(
+			true,
+		);
+		expect(buildInboxPredicate({ fulfilments: ["booking"] })(delivery)).toBe(
+			false,
+		);
+	});
+
+	test("several kinds OR together — 'everything I have to travel for'", () => {
+		const p = buildInboxPredicate({
+			fulfilments: ["delivery", "collection"],
+		});
+		expect(p(delivery)).toBe(true);
+		expect(p(weCollect)).toBe(true);
+		expect(p(pickup)).toBe(false);
+		expect(p(dropOff)).toBe(false);
+	});
+
+	test("ANDs with the other dimensions rather than ORing into them", () => {
+		// "Today's unpaid pickups" is one question, not two lists joined.
+		const p = buildInboxPredicate({
+			fulfilments: ["self_collect"],
+			paymentStatuses: ["unpaid"],
+		});
+		expect(p({ ...pickup, paymentStatus: "unpaid" })).toBe(true);
+		expect(p({ ...pickup, paymentStatus: "received" })).toBe(false);
+		expect(p({ ...delivery, paymentStatus: "unpaid" })).toBe(false);
+	});
+});
+
 describe("buildInboxPredicate — attributionSources (86eyq0eq9)", () => {
 	const tiktok = order({ attributionSource: "tiktok" });
 	const instagram = order({ attributionSource: "instagram" });
@@ -785,6 +930,15 @@ describe("narrowsTheInbox — the Pro gate", () => {
 		expect(narrowsTheInbox({ bookingPeriods: ["active"] })).toBe(false);
 		expect(narrowsTheInbox({ paymentStatuses: ["unpaid"] })).toBe(true);
 		expect(narrowsTheInbox({})).toBe(false);
+	});
+	test("fulfilment gates like every other narrowing filter (z8r3fdfau9)", () => {
+		// It is a filter, not a place: it narrows the list, so it belongs behind
+		// the same gate as payment and category. The record this reads is
+		// compiler-enforced complete — the reason a filter added without touching
+		// it can no longer fail the gate open silently.
+		expect(narrowsTheInbox({ fulfilments: ["delivery"] })).toBe(true);
+		// An empty array narrows nothing, so it must not paywall either.
+		expect(narrowsTheInbox({ fulfilments: [] })).toBe(false);
 	});
 });
 

@@ -25,6 +25,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
+import { useChecklistStamp } from "../../hooks/useChecklistStamp";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import {
 	formatPickupAddress,
@@ -100,6 +101,7 @@ import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { FilterChip } from "../ui/filter-chip";
 import { Input } from "../ui/input";
+import { LinkifiedText } from "../ui/linkified-text";
 import { ModeButton, ModeRadioDot } from "../ui/mode-button";
 import { Skeleton } from "../ui/skeleton";
 import { SortableList } from "../ui/sortable-list";
@@ -247,24 +249,25 @@ export function FulfilmentTab({
 		return map;
 	}, [venueUsage]);
 	const reorder = useMutation(api.pickupLocations.reorder);
-	const markPickupSetupSeen = useMutation(api.retailers.markPickupSetupSeen);
-	const actAsRetailerId = useActAsRetailerId();
+	const { stamp: markPickupSetupSeen } = useChecklistStamp(
+		api.retailers.markPickupSetupSeen,
+	);
 
 	// Fire-and-forget on first mount so step 4 of the dashboard checklist
 	// dismisses. Server-side is idempotent (no-op when already true) so a
 	// double-render or re-mount doesn't double-write. We don't await or surface
-	// errors — failing this is purely cosmetic for the checklist. Skipped in
-	// admin act-as: the mutation resolves by identity, so it would stamp the
-	// ADMIN's own checklist, not the seller's (markLinkShared posture).
+	// errors — failing this is purely cosmetic for the checklist. The act-as
+	// no-op lives in `useChecklistStamp` now, not here: this guard used to be
+	// one of two spellings of the same rule, and three other call sites had
+	// simply forgotten it.
 	const seenFired = useRef(false);
 	useEffect(() => {
-		if (actAsRetailerId) return;
 		if (seenFired.current) return;
 		seenFired.current = true;
-		markPickupSetupSeen({}).catch(() => {
+		markPickupSetupSeen().catch(() => {
 			seenFired.current = false; // allow retry on subsequent mount
 		});
-	}, [markPickupSetupSeen, actAsRetailerId]);
+	}, [markPickupSetupSeen]);
 
 	const [editing, setEditing] = useState<Doc<"pickupLocations"> | "new" | null>(
 		null,
@@ -3301,8 +3304,8 @@ function LocationRowBody({
 						) : null;
 					})()}
 					{location.notes ? (
-						<p className="text-xs text-muted-foreground whitespace-pre-line">
-							{location.notes}
+						<p className="text-xs text-muted-foreground whitespace-pre-line wrap-break-word">
+							<LinkifiedText text={location.notes} />
 						</p>
 					) : null}
 					{location.managerName || location.managerWaPhone ? (

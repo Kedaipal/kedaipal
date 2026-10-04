@@ -56,6 +56,7 @@ import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { CopyButton } from "../components/ui/copy-button";
+import { LinkifiedText } from "../components/ui/linkified-text";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { bookingLengthLabel } from "../lib/booking-dates";
@@ -1534,8 +1535,8 @@ function TrackingRoute() {
 							<p className="text-xs font-semibold text-foreground">
 								About this spot
 							</p>
-							<p className="mt-0.5 text-xs text-foreground whitespace-pre-line">
-								{order.pickupSnapshot.notes}
+							<p className="mt-0.5 text-xs text-foreground whitespace-pre-line wrap-break-word">
+								<LinkifiedText text={order.pickupSnapshot.notes} />
 							</p>
 						</div>
 					) : null}
