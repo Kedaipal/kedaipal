@@ -59,6 +59,7 @@ import {
 	parsePriceInput,
 } from "../../lib/format";
 import type { KindCard } from "../../lib/kind-card";
+import { NOTE_LINK_HINT } from "../../lib/linkify";
 import { asPackageUnit } from "../../lib/package-unit";
 import {
 	isSecurityDepositInRange,
@@ -3493,9 +3494,9 @@ export function ProductWizard({
 												<IssueText message={issueFor("pickupNote")} />
 												<span className="text-xs font-normal text-muted-foreground">
 													Collecting buyers see this at checkout and on their
-													order page. Paste a link (e.g. a Google Maps pin) and
-													it becomes tappable. It&apos;s copied onto each order,
-													so editing it later never changes past orders.
+													order page. {NOTE_LINK_HINT} It&apos;s copied onto
+													each order, so editing it later never changes past
+													orders.
 												</span>
 											</label>
 										</div>

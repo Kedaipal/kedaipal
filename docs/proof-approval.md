@@ -74,7 +74,7 @@ images.
 
 > **Naming (build decision, 2026-06-04):** code identifiers use **`mockup`**, not
 > `proof`, because the codebase already uses "proof" throughout for the buyer's
-> **payment** screenshot (`paymentProofStorageId`, `getPaymentProofUrl`,
+> **payment** screenshot (`paymentProofStorageId`, `listPaymentProofs`,
 > `generateOrderProofUploadUrl`, the `proofUpload` rate-limit key). So: `mockupStatus`,
 > `mockupImageStorageId`, `mockupChangeNote`, `submitMockup`, `approveMockup`,
 > `requestMockupChanges`, `waiveMockup`, `generateMockupUploadUrl`. Read "proof"

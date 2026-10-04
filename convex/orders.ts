@@ -127,6 +127,12 @@ import {
 	revenueExcludingDeposit,
 } from "./lib/order";
 import { deleteOrderOwnedBlobs } from "./lib/orderBlobs";
+import {
+	borrowedLeadReference,
+	currentClaimIndex,
+	orderPaymentClaims,
+	recordPaymentClaim,
+} from "./lib/paymentClaims";
 import { normalizeTrackingToken } from "./lib/trackingToken";
 import {
 	type CartWeightItem,
@@ -2344,24 +2350,64 @@ export const getPaymentMethods = query({
 });
 
 /**
- * Resolve the payment-proof storage ID into a viewable URL for the dashboard.
- * Auth-gated (Clerk) — only the owning retailer can see the screenshot. Public
- * shoppers must not be able to fish proof images for arbitrary shortIds, so
- * this is intentionally separate from the public `get` query.
+ * Every "I've paid" submission on an order, for the seller's order page
+ * (z8r3fdn2uj) — newest first, each with its screenshot resolved to a URL.
+ * `isCurrent` marks the one the card leads with (`currentClaimIndex`); the rest
+ * list under "Other submissions". An order claimed before `paymentClaims`
+ * existed returns its one submission rebuilt from the order, so its screenshot
+ * shows before the backfill runs.
+ *
+ * Auth-gated — only the owning store's team (orders read) sees a buyer's bank
+ * screenshot. Public shoppers must not be able to fish proof images, so this
+ * is deliberately separate from the public `get` query. `url` is null when the
+ * blob is gone (the card says so instead of showing a broken image).
  */
-export const getPaymentProofUrl = query({
+export const listPaymentProofs = query({
 	args: { orderId: v.id("orders") },
-	handler: async (ctx, { orderId }): Promise<string | null> => {
+	handler: async (
+		ctx,
+		{ orderId },
+	): Promise<
+		Array<{
+			key: string;
+			reference: string | null;
+			hasProof: boolean;
+			url: string | null;
+			submittedAt: number;
+			isCurrent: boolean;
+			/** Lead only: another submission's reference, shown when the lead
+			 * carries none (`borrowedLeadReference`). */
+			borrowedReference: { reference: string; submittedAt: number } | null;
+		}>
+	> => {
 		const order = await ctx.db.get(orderId);
-		if (!order) return null;
+		if (!order) return [];
 		// Owner, member with orders access, or admin act-as; Forbidden otherwise.
 		await requireRetailerAccess(ctx, order.retailerId, {
 			area: "orders",
 			level: "read",
 		});
 
-		if (!order.paymentProofStorageId) return null;
-		return (await ctx.storage.getUrl(order.paymentProofStorageId)) ?? null;
+		const claims = await orderPaymentClaims(ctx, order);
+		const current = currentClaimIndex(claims);
+		const borrowed = borrowedLeadReference(claims, current);
+		const entries = await Promise.all(
+			claims.map(async (claim, i) => ({
+				key: `${claim.createdAt}-${i}`,
+				reference: claim.reference ?? null,
+				hasProof: claim.proofStorageId !== undefined,
+				url: claim.proofStorageId
+					? ((await ctx.storage.getUrl(claim.proofStorageId)) ?? null)
+					: null,
+				submittedAt: claim.createdAt,
+				isCurrent: i === current,
+				borrowedReference:
+					i === current && borrowed
+						? { reference: borrowed.reference, submittedAt: borrowed.createdAt }
+						: null,
+			})),
+		);
+		return entries.reverse();
 	},
 });
 
@@ -5035,9 +5081,11 @@ const PAYMENT_REFERENCE_MAX = 80;
  * Public mutation: shopper claims they've paid for their order. Trust model
  * mirrors `updateDeliveryAddress` — knowing the shortId is the capability.
  *
- * Idempotent: re-submitting overwrites the reference / proof and refreshes
- * `paymentClaimedAt`. Rejects only when the order is already `received`, since
- * a confirmed-by-retailer payment shouldn't be re-claimed.
+ * Re-submitting updates the order's latest reference / proof and refreshes
+ * `paymentClaimedAt`; every submission is also kept as a `paymentClaims` row,
+ * so the seller can still open an earlier screenshot (z8r3fdn2uj). Rejects
+ * when the order is already `received` (a confirmed payment shouldn't be
+ * re-claimed) and past MAX_PAYMENT_CLAIMS_PER_ORDER submissions.
  */
 /** Buyer-facing refusal for paying a request not yet approved. */
 const AWAITING_APPROVAL_PAYMENT_MESSAGE =
@@ -5104,6 +5152,18 @@ export const claimPayment = mutation({
 		const trimmedProof = proofStorageId?.trim();
 
 		const now = Date.now();
+		// History first (z8r3fdn2uj): the patch below overwrites the order's
+		// latest-proof fields, and for an order claimed before the history table
+		// existed those fields are the only copy of the earlier submission.
+		await recordPaymentClaim(
+			ctx,
+			order,
+			{
+				...(trimmedRef ? { reference: trimmedRef } : {}),
+				...(trimmedProof ? { proofStorageId: trimmedProof } : {}),
+			},
+			now,
+		);
 		const patch: Partial<Doc<"orders">> = {
 			paymentStatus: "claimed",
 			paymentClaimedAt: now,

@@ -206,7 +206,7 @@ other settings tab keeps act-as edits.
 A few read paths gate visibility on ownership; they now also allow an admin:
 
 - `products.get` — inactive variants (owner-only editor view) are shown to an acting admin.
-- `orders.resolveSharedOrder` (seller `shortId` path) + `orders.getPaymentProofUrl` — an
+- `orders.resolveSharedOrder` (seller `shortId` path) + `orders.listPaymentProofs` — an
   admin can open a seller's order detail / payment proof.
 - `pickupLocations.getOwnedById`, `counterCheckout.getCheckoutSession` — same.
 

@@ -106,6 +106,7 @@ import {
 import { parseTopUpParam, type TopUpParam } from "../lib/credit-top-up";
 import { convexErrorMessage } from "../lib/format";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
+import { NOTE_LINK_HINT } from "../lib/linkify";
 import type { StatusLabels } from "../lib/orderStatus";
 import { normalizeMobileDigits, toNationalPhoneInput } from "../lib/phone";
 import { reorderByIds } from "../lib/reorder";
@@ -2052,6 +2053,9 @@ function PaymentMethodsForm({
 						maxLength={500}
 						className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
 					/>
+					<span className="text-xs text-muted-foreground">
+						{NOTE_LINK_HINT}
+					</span>
 				</label>
 
 				<button

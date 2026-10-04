@@ -19,6 +19,7 @@ erDiagram
     retailers ||--o{ slugHistory : "renamed from"
     customers ||--o{ orders : "places (nullable)"
     orders ||--o{ orderEvents : "audited by"
+    orders ||--o{ paymentClaims : "buyer payment submissions"
     retailers ||--|| creditAccounts : "credit balance"
     retailers ||--o{ creditLedger : "credit movements"
     retailers ||--o{ creditLots : "purchased credits"
@@ -220,6 +221,12 @@ The core transactional entity. Two independent dimensions:
 Immutable append-only audit log. One row per status transition or notable action. Notes seen in code: `"address_updated"`, `"payment_claimed"`, `"payment_received"`, `"payment_received_auto_confirm"`, `"Confirmed via WhatsApp"`.
 
 **Index:** `by_order`.
+
+### `paymentClaims`
+
+One row per buyer "I've paid" submission (ClickUp `z8r3fdn2uj`): `orderId`, `reference?`, `proofStorageId?`, `createdAt`. Each row is what THAT submission carried; `orders.paymentReference` / `paymentProofStorageId` stay as the latest values. Capped at 20 per order. Pre-table orders are rebuilt from the order's own fields until `migrations:backfillPaymentClaims` runs. Rows and their screenshots are freed with the order (`lib/orderBlobs.ts`). See [`payment-handshake.md`](./payment-handshake.md#payment-proof-history-z8r3fdn2uj).
+
+**Index:** `by_order_createdAt`.
 
 ### Kedaipal Credits: `creditAccounts`, `creditLedger`, `creditLots`, `creditPurchases`
 

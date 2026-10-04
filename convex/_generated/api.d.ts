@@ -113,6 +113,7 @@ import type * as lib_orderDocument from "../lib/orderDocument.js";
 import type * as lib_orderInboxFilter from "../lib/orderInboxFilter.js";
 import type * as lib_orderStatus from "../lib/orderStatus.js";
 import type * as lib_payment from "../lib/payment.js";
+import type * as lib_paymentClaims from "../lib/paymentClaims.js";
 import type * as lib_paymentMethod from "../lib/paymentMethod.js";
 import type * as lib_paymentReminder from "../lib/paymentReminder.js";
 import type * as lib_pdf_awb from "../lib/pdf/awb.js";
@@ -286,6 +287,7 @@ declare const fullApi: ApiFromModules<{
   "lib/orderInboxFilter": typeof lib_orderInboxFilter;
   "lib/orderStatus": typeof lib_orderStatus;
   "lib/payment": typeof lib_payment;
+  "lib/paymentClaims": typeof lib_paymentClaims;
   "lib/paymentMethod": typeof lib_paymentMethod;
   "lib/paymentReminder": typeof lib_paymentReminder;
   "lib/pdf/awb": typeof lib_pdf_awb;

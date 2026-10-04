@@ -41,6 +41,7 @@ import {
 	isRiderManagedTransition,
 	riderDrivesOrderStatus,
 } from "../../convex/lib/lalamove";
+import { noteToPlainText } from "../../convex/lib/noteLinks";
 import {
 	isDefaultedCounterDate,
 	isFreeOrder,
@@ -76,6 +77,7 @@ import {
 	type OrderBookingSpan,
 	OrderItemLine,
 } from "../components/order/order-item-line";
+import { PaymentProofList } from "../components/order/payment-proof-list";
 import { PickupNotes } from "../components/order/pickup-notes";
 import {
 	canPrintLabel,
@@ -107,6 +109,7 @@ import {
 	DialogTitle,
 } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
+import { LinkifiedText } from "../components/ui/linkified-text";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
@@ -390,10 +393,13 @@ function OrderDetailRoute() {
 		actingAsAdmin: retailer?.actingAsAdmin,
 		amIAdmin,
 	});
-	const proofUrl = useQuery(
+	// Every "I've paid" submission (z8r3fdn2uj). Keyed on paymentClaimedAt:
+	// only a buyer claim sets it, so an order the seller marked paid by hand
+	// has nothing to list and never asks.
+	const paymentProofs = useQuery(
 		convexQuery(
-			api.orders.getPaymentProofUrl,
-			order?.paymentProofStorageId ? { orderId: order._id } : "skip",
+			api.orders.listPaymentProofs,
+			order?.paymentClaimedAt !== undefined ? { orderId: order._id } : "skip",
 		),
 	).data;
 	const customerImageUrl = useQuery(
@@ -1264,38 +1270,7 @@ function OrderDetailRoute() {
 						) : null}
 					</div>
 
-					{order.paymentProofStorageId ? (
-						proofUrl ? (
-							<a
-								href={proofUrl}
-								target="_blank"
-								rel="noopener noreferrer"
-								className="block overflow-hidden rounded-xl border border-amber-200 bg-background dark:border-amber-800"
-							>
-								{/* Fixed-height frame (was max-h with auto height) so the
-								    skeleton has a real box to show while this — a real
-								    photo upload with no prior placeholder — loads. */}
-								<AppImage
-									src={proofUrl}
-									alt="Payment receipt"
-									aspect="h-64 w-full"
-									objectFit="contain"
-									// A buyer's bank screenshot. Order-owned, erased on hard
-									// delete — must never sit on a public edge cache.
-									sensitive
-								/>
-							</a>
-						) : (
-							<div className="flex items-center justify-center rounded-xl border border-amber-200 bg-background p-4 text-xs text-muted-foreground dark:border-amber-800">
-								Loading screenshot…
-							</div>
-						)
-					) : (
-						<p className="text-sm text-amber-900/90 dark:text-amber-200/90">
-							No screenshot attached. Cross-check the amount and reference in
-							your bank app.
-						</p>
-					)}
+					<PaymentProofList proofs={paymentProofs} tone="claimed" />
 
 					<div className="flex flex-col gap-2">
 						<Button
@@ -1505,46 +1480,55 @@ function OrderDetailRoute() {
 
 			{/* Received → read-only confirmation. */}
 			{paymentStatus === "received" ? (
-				<section className="flex items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4">
-					<BadgeCheck className="size-5 shrink-0 text-emerald-700" />
-					<div className="min-w-0 flex-1">
-						<p className="text-xs font-semibold uppercase tracking-widest text-emerald-800">
-							Payment received
-						</p>
-						<p className="text-sm text-emerald-900">
-							{order.gatewayPaymentId
-								? // Auto-confirmed by the HitPay webhook (86eyb6z3a) — say so,
-									// since nobody on the team pressed the button.
-									`Paid online via HitPay${order.paymentReceivedAt ? ` ${formatRelative(order.paymentReceivedAt)}` : ""}`
-								: order.paymentReceivedAt
-									? `Confirmed ${formatRelative(order.paymentReceivedAt)}`
-									: "Confirmed by you"}
-							{order.paymentMethod
-								? ` · ${paymentMethodLabel(order.paymentMethod)}`
-								: ""}
-						</p>
-						{order.gatewayPaymentId ? (
-							// The seller is the side that pastes this into HitPay's
-							// dashboard search (to refund or reconcile), so the copy
-							// affordance belongs here at least as much as on the buyer's
-							// page — it was the buyer-only half of "one number both sides
-							// quote". `break-all` over `truncate`: a half-shown reference
-							// can't be matched against a dashboard entry.
-							<div className="mt-1 flex items-start justify-between gap-2">
-								<p className="min-w-0 break-all font-mono text-xs text-emerald-800/80">
-									Ref {order.gatewayPaymentId}
-								</p>
-								<CopyButton
-									value={order.gatewayPaymentId}
-									ariaLabel="Copy payment reference"
-									successMessage="Payment reference copied"
-									// Layout only — no colour override, so the primitive's
-									// own "Copied" green still lands on tap.
-									className="-my-2"
-								/>
-							</div>
-						) : null}
+				<section className="flex flex-col gap-3 rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 dark:border-emerald-800 dark:bg-emerald-950/40">
+					<div className="flex items-center gap-3">
+						<BadgeCheck className="size-5 shrink-0 text-emerald-700 dark:text-emerald-400" />
+						<div className="min-w-0 flex-1">
+							<p className="text-xs font-semibold uppercase tracking-widest text-emerald-800 dark:text-emerald-300">
+								Payment received
+							</p>
+							<p className="text-sm text-emerald-900 dark:text-emerald-100">
+								{order.gatewayPaymentId
+									? // Auto-confirmed by the HitPay webhook (86eyb6z3a) — say so,
+										// since nobody on the team pressed the button.
+										`Paid online via HitPay${order.paymentReceivedAt ? ` ${formatRelative(order.paymentReceivedAt)}` : ""}`
+									: order.paymentReceivedAt
+										? `Confirmed ${formatRelative(order.paymentReceivedAt)}`
+										: "Confirmed by you"}
+								{order.paymentMethod
+									? ` · ${paymentMethodLabel(order.paymentMethod)}`
+									: ""}
+							</p>
+							{order.gatewayPaymentId ? (
+								// The seller is the side that pastes this into HitPay's
+								// dashboard search (to refund or reconcile), so the copy
+								// affordance belongs here at least as much as on the buyer's
+								// page — it was the buyer-only half of "one number both sides
+								// quote". `break-all` over `truncate`: a half-shown reference
+								// can't be matched against a dashboard entry.
+								<div className="mt-1 flex items-start justify-between gap-2">
+									<p className="min-w-0 break-all font-mono text-xs text-emerald-800/80 dark:text-emerald-300/80">
+										Ref {order.gatewayPaymentId}
+									</p>
+									<CopyButton
+										value={order.gatewayPaymentId}
+										ariaLabel="Copy payment reference"
+										successMessage="Payment reference copied"
+										// Layout only — no colour override, so the primitive's
+										// own "Copied" green still lands on tap.
+										className="-my-2"
+									/>
+								</div>
+							) : null}
+						</div>
 					</div>
+					{/* What the buyer sent stays reachable after the money is in
+					    (z8r3fdn2uj) — a dispute, refund or reconciliation needs it
+					    long after the claim card is gone. A hand-marked payment has
+					    no claim, so nothing renders. */}
+					{order.paymentClaimedAt !== undefined ? (
+						<PaymentProofList proofs={paymentProofs} tone="received" />
+					) : null}
 				</section>
 			) : null}
 
@@ -1955,8 +1939,8 @@ function OrderDetailRoute() {
 								<p className="text-xs font-semibold text-foreground">
 									About this spot
 								</p>
-								<p className="mt-0.5 text-xs text-foreground whitespace-pre-line">
-									{order.pickupSnapshot.notes}
+								<p className="mt-0.5 text-xs text-foreground whitespace-pre-line wrap-break-word">
+									<LinkifiedText text={order.pickupSnapshot.notes} />
 								</p>
 							</div>
 						) : null}
@@ -2894,7 +2878,9 @@ function formatPickupInline(snapshot: PickupSnapshot): string {
 	const lines = [snapshot.label, snapshot.address];
 	const mapsUrl = deriveMapsUrl(snapshot);
 	if (mapsUrl) lines.push(mapsUrl);
-	if (snapshot.notes) lines.push(snapshot.notes);
+	// Pasted into WhatsApp by the seller — a Markdown link must arrive as
+	// "label: url", never brackets (convex/lib/noteLinks.ts).
+	if (snapshot.notes) lines.push(noteToPlainText(snapshot.notes));
 	return lines.join("\n");
 }
 
