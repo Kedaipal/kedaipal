@@ -247,7 +247,12 @@ export function DialCountryPicker({
 					// `sm:max-w-sm`: this one holds a scrolling list, not a short form.
 					// `overflow-hidden` because the LIST scrolls, not the sheet — a
 					// sheet that scrolls as a whole takes the search field off screen.
-					className="max-h-[85dvh] gap-3 overflow-hidden sm:max-w-md"
+					// `min-h` as well as `max-h`: the panel is content-sized, so
+					// filtering 241 rows down to one used to collapse it from full
+					// height to a single row — on a phone the bottom sheet shrank away
+					// under the thumb that was typing. A floor keeps it steady while
+					// the list changes, and stays under the cap on a short screen.
+					className="h-[min(32rem,85dvh)] max-h-[85dvh] gap-3 overflow-hidden sm:max-w-md"
 					onOpenAutoFocus={(e) => {
 						// Focus the search box, never the first row: typing is the point.
 						// On a phone that also means the keyboard is up immediately, which

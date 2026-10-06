@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ymdChipLabel } from "../../lib/checkout-dates";
 import {
 	DatePicker,
 	dateFromYmd,
@@ -36,6 +37,9 @@ function Host({
 			}}
 			min={MIN}
 			max={MAX}
+			// Mirrors the real `DateField` host, which passes its visible label so
+			// the button announces the chosen date.
+			label="Date"
 			isDayDisabled={isDayDisabled}
 			unavailableNote={unavailableNote}
 		/>
@@ -92,6 +96,7 @@ describe("DatePicker — the day predicate", () => {
 				onChange={onChange}
 				min="2026-11-05"
 				max="2026-11-25"
+				label="Date"
 			/>,
 		);
 		fireEvent.click(trigger());
@@ -126,9 +131,44 @@ describe("DatePicker — the day predicate", () => {
 
 describe("DatePicker — the trigger", () => {
 	it("reads the picked date in a form nobody can misread", () => {
-		// 03/11 and 11/03 are opposite dates; this market reads day-first.
+		// 03/11 and 11/03 are opposite dates; this market reads day-first, so the
+		// month is always a word.
 		render(<Host initial="2026-11-03" />);
-		expect(screen.getByText(/Tue, 3 Nov 2026/)).toBeDefined();
+		expect(screen.getByText(/Tue,? 3 Nov/)).toBeDefined();
+	});
+
+	it("names itself WITH the chosen date — the control is a button", () => {
+		// `<button>` is a labelable element, so the `<label for>` wins over the
+		// button's text: without an explicit name a screen reader says "Date" and
+		// the chosen date is invisible, which the native input never was.
+		// Delete `aria-label` from the trigger and this goes red.
+		render(
+			<DatePicker
+				value="2026-11-03"
+				onChange={() => {}}
+				min={MIN}
+				max={MAX}
+				label="Date"
+			/>,
+		);
+		const name = screen.getByRole("button").getAttribute("aria-label") ?? "";
+		expect(name).toContain("Date");
+		expect(name).toMatch(/3 Nov/);
+	});
+
+	it("announces the placeholder when nothing is picked, never silence", () => {
+		render(
+			<DatePicker
+				value=""
+				onChange={() => {}}
+				min={MIN}
+				max={MAX}
+				label="Date"
+			/>,
+		);
+		expect(screen.getByRole("button").getAttribute("aria-label")).toBe(
+			"Date: Pick a date",
+		);
 	});
 
 	it("shows a placeholder, not a blank control, with nothing picked", () => {
@@ -160,6 +200,7 @@ describe("DatePicker — the trigger", () => {
 				onChange={() => {}}
 				min={MIN}
 				max={MAX}
+				label="Date"
 				onBlur={onBlur}
 			/>,
 		);
@@ -196,5 +237,28 @@ describe("ymd helpers", () => {
 	it("formats nothing for an unparseable value rather than 'Invalid Date'", () => {
 		expect(formatPickedDate("")).toBe("");
 		expect(formatPickedDate("nonsense")).toBe("");
+	});
+});
+
+describe("formatPickedDate — the words the chips already use", () => {
+	it("drops the year in the current year, so it fits the phone's half-row", () => {
+		// Date and Time share a two-column row; at 375px that leaves the date
+		// ~145px, where "Thu, 8 Oct 2026" truncated to "Thu, 8 Oct…".
+		const now = new Date(2026, 9, 6);
+		expect(formatPickedDate("2026-10-08", now)).toBe("Thu, 8 Oct");
+	});
+
+	it("keeps the year when it is NOT the current one", () => {
+		// A December buyer picking into January must still see which January.
+		const now = new Date(2026, 11, 20);
+		expect(formatPickedDate("2027-01-08", now)).toBe("Fri, 8 Jan 2027");
+	});
+
+	it("says the same words as the quick-pick chip beside it", () => {
+		// One date, one vocabulary — the chip and the field are the same idea.
+		const now = new Date(2026, 9, 6);
+		for (const ymd of ["2026-10-08", "2026-10-09", "2026-10-31"]) {
+			expect(formatPickedDate(ymd, now)).toBe(ymdChipLabel(ymd));
+		}
 	});
 });

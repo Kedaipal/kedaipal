@@ -63,6 +63,9 @@ export function DateField({
 			<DatePicker
 				id={field.name}
 				name={field.name}
+				// The control is a <button>, which the <label for> above would
+				// otherwise name "Date" with the chosen date nowhere in it.
+				label={label}
 				disabled={disabled}
 				value={field.state.value ?? ""}
 				onChange={(ymd) => field.handleChange(ymd)}

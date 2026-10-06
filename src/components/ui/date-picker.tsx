@@ -40,6 +40,9 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "#/components/ui/popover";
+// The chips' own formatter — imported rather than re-implemented so the two
+// surfaces cannot drift (see `formatPickedDate`).
+import { ymdChipLabel } from "#/lib/checkout-dates";
 import { cn } from "#/lib/utils";
 
 /** `"2026-10-03"` → the local `Date` naming that calendar day (never an epoch:
@@ -58,18 +61,27 @@ export function ymdFromDate(date: Date): string {
 	return `${date.getFullYear()}-${mm}-${dd}`;
 }
 
-/** "Fri, 3 Oct 2026" — long enough to be unambiguous, short enough for a field.
- * `en-GB` on purpose: `03/10` and `10/03` mean opposite things, and this market
- * reads day-first. */
-export function formatPickedDate(ymd: string): string {
+/**
+ * "Thu, 8 Oct" — and "Thu, 8 Jan 2027" only when the year is not the current
+ * one (z8r3fdm36y test run).
+ *
+ * Two things fixed at once. It **reuses `ymdChipLabel`**, which is what the
+ * quick-pick chips directly above this field already print, so the chip and the
+ * field can no longer say the same date in two different ways — they are one
+ * idea and now one formatter. And dropping the redundant year is what makes it
+ * FIT: Date and Time share a two-column row, which leaves the date ~145px on a
+ * 375px phone, and "Thu, 8 Oct 2026" truncated to "Thu, 8 Oct…" there.
+ *
+ * Day-first throughout, never `03/10`: in this market `03/10` and `10/03` are
+ * opposite dates, so the month is always a word.
+ */
+export function formatPickedDate(ymd: string, now: Date = new Date()): string {
 	const date = dateFromYmd(ymd);
 	if (!date) return "";
-	return date.toLocaleDateString("en-GB", {
-		weekday: "short",
-		day: "numeric",
-		month: "short",
-		year: "numeric",
-	});
+	const label = ymdChipLabel(ymd);
+	return date.getFullYear() === now.getFullYear()
+		? label
+		: `${label} ${date.getFullYear()}`;
 }
 
 export interface DatePickerProps {
@@ -98,6 +110,14 @@ export interface DatePickerProps {
 	id?: string;
 	name?: string;
 	placeholder?: string;
+	/**
+	 * The field's visible label ("Date"). Needed because `<button>` is a
+	 * *labelable* element, so the `<label for>` beside it WINS over the button's
+	 * own text and the control announces "Date" with no date in it — strictly
+	 * worse than the native `<input type="date">` this replaced, which exposed
+	 * its value. Given a label, the trigger names itself "Date: Thu, 8 Oct".
+	 */
+	label?: string;
 	onBlur?: () => void;
 	/** Wired by the field wrapper so the label and error read out with it. */
 	"aria-describedby"?: string;
@@ -115,6 +135,7 @@ export function DatePicker({
 	id,
 	name,
 	placeholder = "Pick a date",
+	label,
 	onBlur,
 	"aria-describedby": describedBy,
 }: DatePickerProps) {
@@ -130,6 +151,13 @@ export function DatePicker({
 
 	const minDate = min ? dateFromYmd(min) : undefined;
 	const maxDate = max ? dateFromYmd(max) : undefined;
+
+	// What the control reads out. `aria-label` beats the `<label for>`, which is
+	// the whole point: without it a screen reader says "Date, button" and the
+	// chosen date is invisible. Falls back to the placeholder so an empty field
+	// announces what it wants rather than going silent.
+	const valueText = value ? formatPickedDate(value) : placeholder;
+	const triggerLabel = label ? `${label}: ${valueText}` : valueText;
 
 	return (
 		<Popover
@@ -153,6 +181,7 @@ export function DatePicker({
 					disabled={disabled}
 					aria-invalid={isError || undefined}
 					aria-describedby={describedBy}
+					aria-label={triggerLabel}
 					className={cn(
 						// Deliberately the `field` input variant's chrome, class for
 						// class: this sits in a column with real inputs and any drift
@@ -174,7 +203,7 @@ export function DatePicker({
 							value ? undefined : "text-muted-foreground",
 						)}
 					>
-						{value ? formatPickedDate(value) : placeholder}
+						{valueText}
 					</span>
 				</button>
 			</PopoverTrigger>

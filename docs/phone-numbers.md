@@ -145,6 +145,11 @@ plate: form-bound `TextField prefix={<BuyerPhonePrefix …/>}` with the field's
     decided the order; the count is announced `aria-live`. No match: "No
     country matches that", with the hint to try a code like `+65` — never a
     blank box.
+  - **The panel height is fixed, not content-sized** (`h-[min(32rem,85dvh)]`).
+    It was content-sized at first, so filtering 241 rows down to one collapsed
+    the panel from full height to a single row — on a phone the bottom sheet
+    shrank away under the thumb that was typing it. The floor stays under the
+    `85dvh` cap, so a short screen still fits.
 - **Order (unfiltered).** A **Suggested** group — the store's country first,
   then its neighbours (`NEARBY_DIAL_COUNTRIES` — an MY store gets SG, BN, ID,
   TH, PH, VN; an SG store gets MY, ID, BN, TH, PH, VN — the JB↔SG corridor and
