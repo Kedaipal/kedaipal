@@ -30,6 +30,23 @@ export const MAX_PAYMENT_CLAIMS_PER_ORDER = 20;
 export const PAYMENT_CLAIM_LIMIT_MESSAGE =
 	"You've already sent your payment details many times — message the seller on WhatsApp if something's changed.";
 
+/**
+ * Buyer-facing refusal for a claim that would leave the order with nothing to
+ * verify against (z8r3fdnpxf).
+ *
+ * The rule is on the ORDER, not on the submission: the seller's whole reason
+ * for a claim is an image they can check a bank statement against, and once
+ * one is on file a later reference-only resubmit (the forgotten-reference fix)
+ * doesn't take it away. So only the FIRST claim is required to carry a
+ * screenshot — see `claimPayment`.
+ *
+ * English, like every other refusal on this mutation: the buyer's sheet blocks
+ * this case before it can be submitted and says so in their own language, so
+ * this message is the direct-call backstop, not the copy a buyer reads.
+ */
+export const PAYMENT_PROOF_REQUIRED_MESSAGE =
+	"Attach a screenshot of your payment so the seller can verify it.";
+
 /** One submission, as the seller's order page lists it. */
 export type PaymentClaimEntry = {
 	reference?: string;

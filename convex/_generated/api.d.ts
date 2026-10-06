@@ -102,6 +102,7 @@ import type * as lib_logRedaction from "../lib/logRedaction.js";
 import type * as lib_mapsUrl from "../lib/mapsUrl.js";
 import type * as lib_marketplaceListing from "../lib/marketplaceListing.js";
 import type * as lib_minOrderRules from "../lib/minOrderRules.js";
+import type * as lib_noteLinks from "../lib/noteLinks.js";
 import type * as lib_openingHours from "../lib/openingHours.js";
 import type * as lib_optOutPhone from "../lib/optOutPhone.js";
 import type * as lib_order from "../lib/order.js";
@@ -276,6 +277,7 @@ declare const fullApi: ApiFromModules<{
   "lib/mapsUrl": typeof lib_mapsUrl;
   "lib/marketplaceListing": typeof lib_marketplaceListing;
   "lib/minOrderRules": typeof lib_minOrderRules;
+  "lib/noteLinks": typeof lib_noteLinks;
   "lib/openingHours": typeof lib_openingHours;
   "lib/optOutPhone": typeof lib_optOutPhone;
   "lib/order": typeof lib_order;

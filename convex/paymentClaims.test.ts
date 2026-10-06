@@ -221,35 +221,52 @@ describe("claimPayment keeps every submission", () => {
 		expect(proofs[0].url).not.toBeNull();
 	});
 
-	test("a screenshot-only resubmit leads, carrying the earlier reference", async () => {
+	// The lead carries no reference of its own, so the seller still gets the one
+	// the buyer sent — from a LATER row. Since proof became mandatory on the
+	// first claim (z8r3fdnpxf) the reachable sequence is screenshot-then-
+	// reference rather than the reverse, but the borrow it exercises is the same
+	// and is the whole reason `borrowedLeadReference` exists.
+	test("the lead borrows a reference from a later reference-only resubmit", async () => {
 		const t = setup();
 		const { asOwner, orderId, token } = await seedOrder(t);
 		const shot = await storeImage(t, "shot");
-		await t.mutation(api.orders.claimPayment, { token, reference: "MBB-123" });
 		await t.mutation(api.orders.claimPayment, { token, proofStorageId: shot });
+		await t.mutation(api.orders.claimPayment, { token, reference: "MBB-123" });
 
 		const proofs = await asOwner.query(api.orders.listPaymentProofs, {
 			orderId,
 		});
+		// Newest first: the reference-only row, then the screenshot that leads.
 		expect(proofs[0]).toMatchObject({
+			isCurrent: false,
+			hasProof: false,
+			reference: "MBB-123",
+		});
+		expect(proofs[1]).toMatchObject({
 			isCurrent: true,
 			hasProof: true,
 			reference: null,
 			borrowedReference: { reference: "MBB-123" },
 		});
-		expect(proofs[1].borrowedReference).toBeNull();
 	});
 
-	test("a bare claim with nothing attached records no history row", async () => {
+	// A first claim with nothing attached is refused outright now (z8r3fdnpxf),
+	// so the empty-submission guard is only reachable as a RESUBMIT — and it
+	// still matters there: twenty noise rows would lock the buyer out of ever
+	// attaching another screenshot.
+	test("a bare resubmit records no history row", async () => {
 		const t = setup();
 		const { asOwner, orderId, token } = await seedOrder(t);
+		const shot = await storeImage(t, "shot");
+		await t.mutation(api.orders.claimPayment, { token, proofStorageId: shot });
+
 		await t.mutation(api.orders.claimPayment, { token });
 
-		expect(await claimRows(t, orderId)).toHaveLength(0);
-		// Nor does the legacy rebuild invent an empty entry for it.
+		// Still just the one real submission.
+		expect(await claimRows(t, orderId)).toHaveLength(1);
 		expect(
 			await asOwner.query(api.orders.listPaymentProofs, { orderId }),
-		).toEqual([]);
+		).toHaveLength(1);
 		const order = await t.run((ctx) => ctx.db.get(orderId));
 		expect(order?.paymentStatus).toBe("claimed");
 	});
@@ -257,6 +274,14 @@ describe("claimPayment keeps every submission", () => {
 	test("refuses past the per-order cap, with a message that points at WhatsApp", async () => {
 		const t = setup();
 		const { orderId, token } = await seedOrder(t);
+		const shot = await storeImage(t, "shot");
+		// Every claim earlier in this file schedules the payment-claimed email and
+		// the seller's WhatsApp alert. Left in flight, those raced the seeding
+		// transaction below and three of its twenty inserts silently vanished, so
+		// the cap was never reached and this test failed for a reason that had
+		// nothing to do with the cap. Drain first, then assert the precondition —
+		// a partial seed must never again be mistaken for a broken guard.
+		await t.finishInProgressScheduledFunctions();
 		await t.run(async (ctx) => {
 			for (let i = 0; i < MAX_PAYMENT_CLAIMS_PER_ORDER; i++) {
 				await ctx.db.insert("paymentClaims", {
@@ -266,9 +291,19 @@ describe("claimPayment keeps every submission", () => {
 				});
 			}
 		});
+		expect(await claimRows(t, orderId)).toHaveLength(
+			MAX_PAYMENT_CLAIMS_PER_ORDER,
+		);
 
+		// Carries a screenshot deliberately: the mandatory-proof gate
+		// (z8r3fdnpxf) runs first, so a bare claim would be refused for the wrong
+		// reason and the cap would never be exercised.
 		await expect(
-			t.mutation(api.orders.claimPayment, { token, reference: "one more" }),
+			t.mutation(api.orders.claimPayment, {
+				token,
+				reference: "one more",
+				proofStorageId: shot,
+			}),
 		).rejects.toThrow(PAYMENT_CLAIM_LIMIT_MESSAGE);
 		// Refused before the order was touched.
 		const order = await t.run((ctx) => ctx.db.get(orderId));

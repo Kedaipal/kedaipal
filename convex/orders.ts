@@ -131,6 +131,7 @@ import {
 	borrowedLeadReference,
 	currentClaimIndex,
 	orderPaymentClaims,
+	PAYMENT_PROOF_REQUIRED_MESSAGE,
 	recordPaymentClaim,
 } from "./lib/paymentClaims";
 import { normalizeTrackingToken } from "./lib/trackingToken";
@@ -1939,6 +1940,16 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 	// buyer's 24h window) or as a best-effort free-form message. The button's
 	// helper copy says which — a deployment-level fact, not order data.
 	paymentReminderViaTemplate?: boolean;
+	// Does a buyer-sent payment screenshot already exist on this order
+	// (z8r3fdnpxf)? The claim sheet needs it to know whether THIS submission is
+	// the one that must bring a screenshot, or whether the buyer is just fixing
+	// a reference on a claim the seller can already verify — the same ORDER-level
+	// rule `claimPayment` enforces.
+	//
+	// A boolean, deliberately never the storage id: resolving a proof to a
+	// viewable URL is the seller's authenticated read (`listPaymentProofs`), and
+	// this payload crosses an unauthenticated wire.
+	hasPaymentProof: boolean;
 };
 
 export const get = query({
@@ -2125,6 +2136,7 @@ export const get = query({
 			paymentReminderViaTemplate: isBuyerRead
 				? undefined
 				: paymentReminderTemplateName() !== undefined,
+			hasPaymentProof: order.paymentProofStorageId !== undefined,
 		};
 	},
 });
@@ -5150,6 +5162,23 @@ export const claimPayment = mutation({
 			);
 		}
 		const trimmedProof = proofStorageId?.trim();
+		// Proof is MANDATORY (z8r3fdnpxf). A claim with nothing to look at is the
+		// thing Kedaipal sells against: the seller gets "they say they paid" and
+		// goes back to WhatsApp to ask for the receipt — the exact chase the
+		// handshake exists to end.
+		//
+		// The rule is on the ORDER, not on this submission. Once a screenshot is
+		// on file the seller has what they need, so the common resubmit — "I
+		// forgot the reference number" — must not demand the same image again;
+		// `currentClaimIndex` already keeps that earlier screenshot in the lead.
+		// Only a claim that would leave the order with nothing is refused.
+		//
+		// The buyer's sheet blocks this before it can be sent (submit stays
+		// disabled, with the reason beside it); this closes the direct-call gap a
+		// client guard structurally cannot.
+		if (!trimmedProof && order.paymentProofStorageId === undefined) {
+			throw new ConvexError(PAYMENT_PROOF_REQUIRED_MESSAGE);
+		}
 
 		const now = Date.now();
 		// History first (z8r3fdn2uj): the patch below overwrites the order's
