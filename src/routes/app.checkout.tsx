@@ -28,7 +28,14 @@ import {
 	UserX,
 	X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	useCallback,
+	useEffect,
+	useId,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import QRCode from "react-qr-code";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
@@ -89,6 +96,7 @@ import {
 	DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu";
 import { Input } from "../components/ui/input";
+import { Select } from "../components/ui/select";
 import {
 	useActAsRetailerId,
 	useDashboardRetailer,
@@ -1375,6 +1383,7 @@ function BuildOrderScreen({
 	// A resumed draft can hold a rail this store no longer offers (its country
 	// was switched mid-checkout) — seeding the <select> with a value that isn't
 	// an <option> renders it blank, so fall back to the country's first rail.
+	const paymentMethodId = useId();
 	const [method, setMethod] = useState<OrderPaymentMethod>(() =>
 		draft?.paymentMethod && methodChoices.includes(draft.paymentMethod)
 			? draft.paymentMethod
@@ -2271,24 +2280,29 @@ function BuildOrderScreen({
 											) : null}
 
 											{paid ? (
-												<label className="mt-3 block">
-													<span className="text-xs font-medium text-muted-foreground">
+												<div className="mt-3 block">
+													<label
+														htmlFor={paymentMethodId}
+														className="text-xs font-medium text-muted-foreground"
+													>
 														Payment method
-													</span>
-													<select
+													</label>
+													<Select
+														id={paymentMethodId}
+														variant="field"
+														className="mt-1 w-full font-medium"
 														value={method}
 														onChange={(e) =>
 															setMethod(e.target.value as OrderPaymentMethod)
 														}
-														className="mt-1 min-h-11 w-full rounded-xl border border-input bg-background px-4 text-base font-medium outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
 													>
 														{methodChoices.map((m) => (
 															<option key={m} value={m}>
 																{PAYMENT_METHOD_LABELS[m]}
 															</option>
 														))}
-													</select>
-												</label>
+													</Select>
+												</div>
 											) : (
 												<p className="mt-3 rounded-xl bg-background px-3 py-2 text-xs text-muted-foreground">
 													We'll send one WhatsApp with how to pay and a link to
