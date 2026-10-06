@@ -232,6 +232,7 @@ import {
 	type StoredAwbConfig,
 } from "./lib/awbConfig";
 import { sanitizeAttributionSource } from "./lib/attribution";
+import { isChoosablePickupPoint } from "./lib/pickupChoice";
 import { sanitizeUnitLine, UNIT_LINE_MAX_LENGTH } from "./lib/address";
 import { sanitizeReferrerSlug } from "./lib/poweredBy";
 import { isValidGaClientId } from "./lib/ga4";
@@ -3189,13 +3190,19 @@ export const updateSettings = mutation({
 				args.offerSelfCollect ?? retailer.offerSelfCollect ?? false;
 			let selfCollectWorking = false;
 			if (nextOfferSelfCollect) {
-				const firstActive = await ctx.db
-					.query("pickupLocations")
-					.withIndex("by_retailer_active", (q) =>
-						q.eq("retailerId", retailer._id).eq("isActive", true),
-					)
-					.first();
-				selfCollectWorking = firstActive !== null;
+				// Event venues are active but are never offered at checkout, so
+				// they can't be what makes self-collect "work" — counting one
+				// would let a venue-only store switch to pickup-only and leave
+				// buyers with no way to order (z8r3fdm32x).
+				const choosable = (
+					await ctx.db
+						.query("pickupLocations")
+						.withIndex("by_retailer_active", (q) =>
+							q.eq("retailerId", retailer._id).eq("isActive", true),
+						)
+						.collect()
+				).some(isChoosablePickupPoint);
+				selfCollectWorking = choosable;
 			}
 			if (!nextOfferDelivery && !selfCollectWorking) {
 				// Tailor the message to what the seller was trying to do so the UI

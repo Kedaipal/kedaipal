@@ -43,6 +43,10 @@ import {
 import { linkOrderToCustomer } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
 import { stampProductsOrdered } from "./lib/productOrdered";
+import {
+	isChoosablePickupPoint,
+	pickupChoiceRefusal,
+} from "./lib/pickupChoice";
 import { orderingPausedMessage } from "./lib/seasonalHold";
 import { recordOrderCreated } from "./subscriptionUsage";
 import { assertValidAddress } from "./lib/address";
@@ -777,13 +781,17 @@ export const commit = mutation({
 			args.deliveryMethod === "self_collect" &&
 			retailer.offerSelfCollect === true
 		) {
-			const activeCount = await ctx.db
-				.query("pickupLocations")
-				.withIndex("by_retailer_active", (q) =>
-					q.eq("retailerId", claim.retailerId).eq("isActive", true),
-				)
-				.first();
-			if (activeCount !== null) {
+			// Event venues are active but never choosable — same probe as
+			// `orders.create`, same reason (z8r3fdm32x).
+			const choosable = (
+				await ctx.db
+					.query("pickupLocations")
+					.withIndex("by_retailer_active", (q) =>
+						q.eq("retailerId", claim.retailerId).eq("isActive", true),
+					)
+					.collect()
+			).filter(isChoosablePickupPoint);
+			if (choosable.length > 0) {
 				if (!args.pickupLocationId)
 					throw new ConvexError(
 						"Pick a pickup location to continue with self-collect",
@@ -791,8 +799,8 @@ export const commit = mutation({
 				const location = await ctx.db.get(args.pickupLocationId);
 				if (!location || location.retailerId !== claim.retailerId)
 					throw new ConvexError("Pickup location not found");
-				if (!location.isActive)
-					throw new ConvexError("That pickup location is no longer available");
+				const refusal = pickupChoiceRefusal(location);
+				if (refusal !== null) throw new ConvexError(refusal);
 				resolvedPickupLocationId = location._id;
 				sanitizedPickupSnapshot = buildPickupSnapshot(location);
 			}

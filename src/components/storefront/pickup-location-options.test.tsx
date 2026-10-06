@@ -89,3 +89,67 @@ describe("pickup option accessible name", () => {
 		);
 	});
 });
+
+/**
+ * `asEventVenue` — the card is showing WHERE AN EVENT HAPPENS, not a pickup
+ * option the guest chose (`z8r3fdm32x`).
+ *
+ * The two suppressions are asserted together on purpose: they are one idea,
+ * and the badge half was missed when the fee half shipped. Found by driving
+ * the real RSVP page (6 Oct 2026) — "Dewan Serbaguna MPKS · SELF-COLLECT" to a
+ * guest who is attending, not collecting.
+ */
+describe("a venue card is not a pickup option (asEventVenue)", () => {
+	it("drops the self-collect / drop-off badge — a guest is attending, not collecting", () => {
+		render(
+			<PickupSummaryCard
+				location={location({ locationType: "self_collect" })}
+				currency="MYR"
+				asEventVenue
+			/>,
+		);
+		expect(screen.queryByText(/self-collect/i)).toBeNull();
+	});
+
+	it("drops a drop-off badge for the same reason", () => {
+		render(
+			<PickupSummaryCard
+				location={location({ locationType: "drop_off" })}
+				currency="MYR"
+				asEventVenue
+			/>,
+		);
+		expect(screen.queryByText(/drop-off/i)).toBeNull();
+	});
+
+	it("still drops the fee chip — an event venue never charges it", () => {
+		render(
+			<PickupSummaryCard
+				location={location({ fee: 500 })}
+				currency="MYR"
+				asEventVenue
+			/>,
+		);
+		expect(screen.queryByText(/5\.00/)).toBeNull();
+	});
+
+	it("keeps the address and the name — suppressing the vocabulary, not the facts", () => {
+		render(
+			<PickupSummaryCard
+				location={location({ fee: 500 })}
+				currency="MYR"
+				asEventVenue
+			/>,
+		);
+		expect(screen.getByText("Main shop")).toBeTruthy();
+		expect(screen.getByText("12 Jalan Mawar, Petaling Jaya")).toBeTruthy();
+	});
+
+	it("an ORDINARY pickup card still shows both — the suppression is opt-in", () => {
+		render(
+			<PickupSummaryCard location={location({ fee: 500 })} currency="MYR" />,
+		);
+		expect(screen.getByText(/self-collect/i)).toBeTruthy();
+		expect(screen.getByText(/5\.00/)).toBeTruthy();
+	});
+});

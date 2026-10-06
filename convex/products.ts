@@ -1288,7 +1288,7 @@ type StoredProductEvent = Omit<ProductEvent, "venueId"> & {
 
 /** Seller-facing refusal for an event on a store with no pickup point. */
 const EVENT_NEEDS_VENUE_MESSAGE =
-	"Add a pickup point first (Settings → Fulfilment → Pickup points) — it's where the event happens. A hidden point works if it's only for events.";
+	"Add the place this event happens first (Settings → Fulfilment) — an Event venue if it only hosts events, or a pickup point if buyers collect there too.";
 
 async function validateEventVenue(
 	ctx: MutationCtx,
@@ -1307,9 +1307,11 @@ async function validateEventVenue(
 		.query("pickupLocations")
 		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 		.take(2);
+	// "place", not "pickup point": with `eventsOnly` (z8r3fdm32x) the second row
+	// may be an Event venue, which is not a pickup point at all.
 	if (points.length > 1)
 		throw new ConvexError(
-			"This store has more than one pickup point — pick which one hosts the event.",
+			"This store has more than one place — pick which one hosts the event.",
 		);
 	// No point at all: the event would save, advertise RSVP on the storefront,
 	// and then dead-end every guest at the RSVP page ("no collection point set

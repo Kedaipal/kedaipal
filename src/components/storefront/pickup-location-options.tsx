@@ -47,18 +47,28 @@ export const PICKUP_KIND_HEADING: Record<PickupKind, string> = {
 export function PickupSummaryCard({
 	location,
 	currency,
-	hideFee = false,
+	asEventVenue = false,
 }: {
 	location: PublicPickupLocation;
 	currency: string;
 	/**
-	 * Suppress the fee chip for a location whose fee this order will NOT be
-	 * charged — today that is an event venue, which is a pickup point only
-	 * because that is where a store keeps its addresses (see
-	 * `buildEventVenueSnapshot`). The chip exists to make a real charge visible,
-	 * so showing it where nothing is charged is the same lie in reverse.
+	 * This card is showing WHERE AN EVENT HAPPENS, not a pickup option the
+	 * buyer chose. One prop, because the two things it suppresses are one
+	 * idea — both say "the pickup subsystem's vocabulary doesn't apply here":
+	 *
+	 * - **The fee chip.** An event venue never charges its pickup fee (see
+	 *   `buildEventVenueSnapshot`). The chip exists to make a real charge
+	 *   visible, so showing it where nothing is charged is the same lie in
+	 *   reverse.
+	 * - **The kind badge.** "Self-collect" / "Drop-off" describe how a buyer
+	 *   receives an ORDER. A guest attending an event is doing neither — they
+	 *   are going to an address — so the badge reads as a category error
+	 *   (found driving the RSVP page, 6 Oct 2026, `z8r3fdm32x`).
+	 *
+	 * An address is a pickup point only because that is where a store keeps
+	 * its addresses; that storage detail should not reach the guest.
 	 */
-	hideFee?: boolean;
+	asEventVenue?: boolean;
 }) {
 	return (
 		// Fill only, no outline: this renders inside the checkout's bordered
@@ -74,9 +84,11 @@ export function PickupSummaryCard({
 						<p className="text-sm font-semibold leading-tight">
 							{location.label}
 						</p>
-						<PickupKindBadge kind={location.locationType} />
-						{hideFee ? null : (
-							<PickupFeeChip fee={location.fee} currency={currency} />
+						{asEventVenue ? null : (
+							<>
+								<PickupKindBadge kind={location.locationType} />
+								<PickupFeeChip fee={location.fee} currency={currency} />
+							</>
 						)}
 					</div>
 					<p className="text-xs text-muted-foreground whitespace-pre-line">

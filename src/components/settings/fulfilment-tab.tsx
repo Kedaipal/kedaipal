@@ -25,7 +25,6 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
-import { useChecklistStamp } from "../../hooks/useChecklistStamp";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import {
 	formatPickupAddress,
@@ -69,6 +68,7 @@ import {
 	WEEKDAY_NAMES_SHORT,
 } from "../../../convex/lib/openingHours";
 import { useActAsRetailerId } from "../../hooks/useActAs";
+import { useChecklistStamp } from "../../hooks/useChecklistStamp";
 import { useUpdateSettings } from "../../hooks/useUpdateSettings";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import {
@@ -181,6 +181,116 @@ interface FulfilmentTabProps {
 	subscription: SubscriptionView | undefined;
 }
 
+/**
+ * The pickup-point list: drag-sorted active rows, a collapsible set of
+ * inactive ones, and a caller-supplied empty state.
+ *
+ * Shared by BOTH cards (pickup points and event venues, `z8r3fdm32x`) rather
+ * than copied, so the two can't drift into looking like different features —
+ * they are the same objects, filtered. Only the heading, the empty state and
+ * which segment a reorder writes differ.
+ */
+function LocationList({
+	loading,
+	active,
+	inactive,
+	currency,
+	emptyState,
+	showInactive,
+	onToggleShowInactive,
+	onReorder,
+	onEdit,
+	onToggleActive,
+	eventNamesByVenue,
+}: {
+	loading: boolean;
+	active: Doc<"pickupLocations">[];
+	inactive: Doc<"pickupLocations">[];
+	currency: string;
+	emptyState: React.ReactNode;
+	showInactive: boolean;
+	onToggleShowInactive: () => void;
+	onReorder: (orderedIds: string[]) => void;
+	onEdit: (location: Doc<"pickupLocations">) => void;
+	onToggleActive: (location: Doc<"pickupLocations">, next: boolean) => void;
+	eventNamesByVenue: Map<string, string[]>;
+}) {
+	return (
+		<>
+			{loading ? (
+				<LocationListSkeleton />
+			) : active.length === 0 ? (
+				emptyState
+			) : (
+				<SortableList
+					items={active}
+					getId={(loc) => loc._id}
+					onReorder={onReorder}
+					renderItem={(loc, handle, state) =>
+						state.isSorting ? (
+							// Collapsed one-line row while dragging (matches the
+							// order-status editor) — a tall list stays easy to rearrange.
+							<div
+								className={`flex items-center gap-2 rounded-xl border bg-background p-3 ${
+									state.isOverlay ? "border-accent shadow-lg" : "border-border"
+								}`}
+							>
+								{handle}
+								<MapPin
+									className="size-4 shrink-0 text-accent"
+									aria-hidden="true"
+								/>
+								<span className="truncate text-sm font-medium">
+									{loc.label}
+								</span>
+							</div>
+						) : (
+							<div className="flex flex-col gap-3 rounded-xl border border-border bg-background p-4">
+								<LocationRowBody
+									currency={currency}
+									location={loc}
+									onEdit={() => onEdit(loc)}
+									onToggleActive={(next) => onToggleActive(loc, next)}
+									dragHandle={handle}
+									eventNames={eventNamesByVenue.get(loc._id)}
+								/>
+							</div>
+						)
+					}
+				/>
+			)}
+
+			{inactive.length > 0 ? (
+				<div className="flex flex-col gap-2 border-t border-border pt-3">
+					<button
+						type="button"
+						onClick={onToggleShowInactive}
+						className="self-start text-xs font-medium text-muted-foreground underline-offset-2 hover:underline"
+					>
+						{showInactive
+							? `Hide inactive (${inactive.length})`
+							: `Show inactive (${inactive.length})`}
+					</button>
+					{showInactive ? (
+						<ul className="flex flex-col gap-2">
+							{inactive.map((loc) => (
+								<LocationRow
+									key={loc._id}
+									location={loc}
+									currency={currency}
+									onEdit={() => onEdit(loc)}
+									onToggleActive={(next) => onToggleActive(loc, next)}
+									eventNames={eventNamesByVenue.get(loc._id)}
+								/>
+							))}
+						</ul>
+					) : null}
+				</div>
+			) : null}
+		</>
+	);
+}
+
 function PickupKindBadge({ kind }: { kind: "self_collect" | "drop_off" }) {
 	return (
 		<span className="shrink-0 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
@@ -269,14 +379,30 @@ export function FulfilmentTab({
 		});
 	}, [markPickupSetupSeen]);
 
-	const [editing, setEditing] = useState<Doc<"pickupLocations"> | "new" | null>(
-		null,
-	);
+	// "new" and "new-venue" differ only in what the dialog pre-selects — both
+	// create a row in the same table.
+	const [editing, setEditing] = useState<
+		Doc<"pickupLocations"> | "new" | "new-venue" | null
+	>(null);
 	const [showInactive, setShowInactive] = useState(false);
+	const [showInactiveVenues, setShowInactiveVenues] = useState(false);
 	const [toggling, setToggling] = useState(false);
 
-	const active = locations?.filter((l) => l.isActive) ?? [];
-	const inactive = locations?.filter((l) => !l.isActive) ?? [];
+	// Two lists over ONE table (z8r3fdm32x). `eventsOnly` says a point hosts
+	// events and is never offered at checkout — so it must not count towards
+	// anything that asks "can a buyer collect here?", which is why the pickup
+	// splits below filter it out rather than the whole-table reads doing it.
+	const pickupPoints = locations?.filter((l) => l.eventsOnly !== true) ?? [];
+	const eventVenues = locations?.filter((l) => l.eventsOnly === true) ?? [];
+	const active = pickupPoints.filter((l) => l.isActive);
+	const inactive = pickupPoints.filter((l) => !l.isActive);
+	const activeVenues = eventVenues.filter((l) => l.isActive);
+	const inactiveVenues = eventVenues.filter((l) => !l.isActive);
+	// The venues section is shown to a store that can run events, and ALSO to
+	// one that already has a venue — a downgrade must never make configured
+	// data invisible (the per-kind order-flow posture).
+	const showEventVenues =
+		hasFeature(subscription, "events") || eventVenues.length > 0;
 
 	// Fulfilment invariant (mirrors the server guard in retailers.updateSettings):
 	// a storefront must keep ≥1 WORKING method. Self-collect only "works" with an
@@ -287,6 +413,26 @@ export function FulfilmentTab({
 	const deliveryIsLastMethod =
 		locations !== undefined && offerDelivery && !selfCollectWorking;
 	const selfCollectIsLastMethod = offerSelfCollect && !offerDelivery;
+	/**
+	 * Why "Only hosts events" can't be ticked for this point, or undefined.
+	 *
+	 * Mirrors the server guard in `pickupLocations.update`: flipping the last
+	 * CHOOSABLE point to events-only takes it out of the buyer's picker exactly
+	 * as deactivating it would, so a pickup-only store would be left accepting
+	 * nothing. The server is the real lock — this exists so the seller is told
+	 * before the tap, not by an error after the save (`z8r3fdm32x` review).
+	 */
+	const eventsOnlyLockReason = (
+		loc: Doc<"pickupLocations"> | undefined,
+	): string | undefined => {
+		if (!loc || offerDelivery || !loc.isActive || loc.eventsOnly === true) {
+			return undefined;
+		}
+		const othersLeft = active.some((l) => l._id !== loc._id);
+		return othersLeft
+			? undefined
+			: "Delivery is off and this is the only place buyers can collect from. Turn delivery back on, or add another pickup point, before making this events-only.";
+	};
 	const deliveryToggleDisabled = toggling || deliveryIsLastMethod;
 	const selfCollectToggleDisabled = toggling || selfCollectIsLastMethod;
 
@@ -353,7 +499,8 @@ export function FulfilmentTab({
 	// re-sync on every parent render, clobbering optimistic state between drop
 	// and mutation-ack and producing a visible "snap back, then re-jump"
 	// stutter.
-	const activeIds = active.map((l) => l._id);
+	// The whole active set, both segments — `reorder` is all-or-nothing.
+	const activeIds = [...active, ...activeVenues].map((l) => l._id);
 	const activeIdsKey = activeIds.join("|");
 	const [localOrder, setLocalOrder] =
 		useState<Array<Id<"pickupLocations">>>(activeIds);
@@ -365,15 +512,34 @@ export function FulfilmentTab({
 		setLocalOrder(activeIds);
 	}, [activeIdsKey]);
 
-	const orderedActive = useMemo(() => {
-		const byId = new Map(active.map((l) => [l._id, l]));
+	const orderBy = (rows: Doc<"pickupLocations">[]) => {
+		const byId = new Map(rows.map((l) => [l._id, l]));
 		return localOrder
 			.map((id) => byId.get(id))
 			.filter((l): l is Doc<"pickupLocations"> => l !== undefined);
-	}, [active, localOrder]);
+	};
+	// biome-ignore lint/correctness/useExhaustiveDependencies: orderBy is a stable closure over localOrder, which IS a dep.
+	const orderedActive = useMemo(() => orderBy(active), [active, localOrder]);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: see above.
+	const orderedVenues = useMemo(
+		() => orderBy(activeVenues),
+		[activeVenues, localOrder],
+	);
 
-	async function handleReorder(orderedIds: string[]) {
-		const next = orderedIds as Array<Id<"pickupLocations">>;
+	// `reorder` demands EVERY active row exactly once, so each card sends its
+	// own segment and we compose the whole list here — pickup points first,
+	// venues after. The other segment keeps its relative order, and the two
+	// stay contiguous in `sortOrder`, which is what the picker's groups read.
+	async function handleReorder(
+		segment: "pickup" | "venue",
+		orderedIds: string[],
+	) {
+		const ids = orderedIds as Array<Id<"pickupLocations">>;
+		const others = (segment === "pickup" ? activeVenues : active).map(
+			(l) => l._id,
+		);
+		const next =
+			segment === "pickup" ? [...ids, ...others] : [...others, ...ids];
 		const previous = localOrder;
 		setLocalOrder(next); // optimistic
 		try {
@@ -518,88 +684,97 @@ export function FulfilmentTab({
 					</Button>
 				</div>
 
-				{locations === undefined ? (
-					<LocationListSkeleton />
-				) : active.length === 0 ? (
-					<EmptyState onAdd={() => setEditing("new")} />
-				) : (
-					<SortableList
-						items={orderedActive}
-						getId={(loc) => loc._id}
-						onReorder={handleReorder}
-						renderItem={(loc, handle, state) =>
-							state.isSorting ? (
-								// Collapsed one-line row while dragging (matches the order-status
-								// editor) — a tall list stays easy to rearrange.
-								<div
-									className={`flex items-center gap-2 rounded-xl border bg-background p-3 ${
-										state.isOverlay
-											? "border-accent shadow-lg"
-											: "border-border"
-									}`}
-								>
-									{handle}
-									<MapPin
-										className="size-4 shrink-0 text-accent"
-										aria-hidden="true"
-									/>
-									<span className="truncate text-sm font-medium">
-										{loc.label}
-									</span>
-								</div>
-							) : (
-								<div className="flex flex-col gap-3 rounded-xl border border-border bg-background p-4">
-									<LocationRowBody
-										currency={currency}
-										location={loc}
-										onEdit={() => setEditing(loc)}
-										onToggleActive={(next) => handleToggleActive(loc, next)}
-										dragHandle={handle}
-										eventNames={eventNamesByVenue.get(loc._id)}
-									/>
-								</div>
-							)
-						}
-					/>
-				)}
-
-				{inactive.length > 0 ? (
-					<div className="flex flex-col gap-2 border-t border-border pt-3">
-						<button
-							type="button"
-							onClick={() => setShowInactive((s) => !s)}
-							className="self-start text-xs font-medium text-muted-foreground underline-offset-2 hover:underline"
-						>
-							{showInactive
-								? `Hide inactive (${inactive.length})`
-								: `Show inactive (${inactive.length})`}
-						</button>
-						{showInactive ? (
-							<ul className="flex flex-col gap-2">
-								{inactive.map((loc) => (
-									<LocationRow
-										key={loc._id}
-										location={loc}
-										currency={currency}
-										onEdit={() => setEditing(loc)}
-										onToggleActive={(next) => handleToggleActive(loc, next)}
-										eventNames={eventNamesByVenue.get(loc._id)}
-									/>
-								))}
-							</ul>
-						) : null}
-					</div>
-				) : null}
+				<LocationList
+					loading={locations === undefined}
+					active={orderedActive}
+					inactive={inactive}
+					currency={currency}
+					emptyState={<EmptyState onAdd={() => setEditing("new")} />}
+					showInactive={showInactive}
+					onToggleShowInactive={() => setShowInactive((v) => !v)}
+					onReorder={(ids) => handleReorder("pickup", ids)}
+					onEdit={setEditing}
+					onToggleActive={handleToggleActive}
+					eventNamesByVenue={eventNamesByVenue}
+				/>
 			</Card>
+
+			{/* Directly after Pickup, NOT inside it. The Pickup card is governed
+			    by the "Offer pickup on the storefront" toggle, so a store that
+			    only runs events and never offers pickup would find its venues
+			    buried inside a switched-off section (z8r3fdm32x). */}
+			{showEventVenues ? (
+				<Card>
+					<div className="flex items-center justify-between gap-3">
+						<SectionHeading
+							title="Event venues"
+							description="Addresses that host your events. Guests are sent to the venue the event names — these never appear as a pickup choice at checkout."
+						/>
+						<Button
+							type="button"
+							onClick={() => setEditing("new-venue")}
+							size="sm"
+							className="h-10 shrink-0 gap-1.5"
+						>
+							<Plus className="size-4" />
+							Add
+						</Button>
+					</div>
+					<LocationList
+						loading={locations === undefined}
+						active={orderedVenues}
+						inactive={inactiveVenues}
+						currency={currency}
+						emptyState={
+							<div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border px-4 py-8 text-center">
+								<CalendarClock
+									className="size-5 text-muted-foreground"
+									aria-hidden="true"
+								/>
+								<p className="text-sm font-medium">No event venues yet</p>
+								<p className="max-w-sm text-xs leading-relaxed text-muted-foreground">
+									Add a hall, a studio or anywhere else you host events. It
+									stays off your checkout — you pick it on the event itself, and
+									guests are sent straight there.
+								</p>
+								<Button
+									type="button"
+									variant="outline"
+									size="sm"
+									className="mt-1 h-10 gap-1.5"
+									onClick={() => setEditing("new-venue")}
+								>
+									<Plus className="size-4" />
+									Add event venue
+								</Button>
+							</div>
+						}
+						showInactive={showInactiveVenues}
+						onToggleShowInactive={() => setShowInactiveVenues((v) => !v)}
+						onReorder={(ids) => handleReorder("venue", ids)}
+						onEdit={setEditing}
+						onToggleActive={handleToggleActive}
+						eventNamesByVenue={eventNamesByVenue}
+					/>
+				</Card>
+			) : null}
 
 			<PickupLocationEditDialog
 				// Remount per edit target so the dialog's local state (kind, geo,
 				// fee, form defaults — all captured in initializers) can't leak
 				// from one location into the next.
-				key={editing === "new" ? "new" : (editing?._id ?? "closed")}
+				key={typeof editing === "string" ? editing : (editing?._id ?? "closed")}
 				open={editing !== null}
 				onClose={() => setEditing(null)}
-				location={editing === "new" ? undefined : (editing ?? undefined)}
+				location={
+					typeof editing === "string" ? undefined : (editing ?? undefined)
+				}
+				eventsOnlyLockReason={eventsOnlyLockReason(
+					typeof editing === "string" ? undefined : (editing ?? undefined),
+				)}
+				// Which card's Add was pressed. Only a default — the dialog's own
+				// control still lets the seller change their mind before saving.
+				defaultEventsOnly={editing === "new-venue"}
 				retailerId={retailerId}
 				currency={currency}
 				country={country}
