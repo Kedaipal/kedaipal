@@ -118,10 +118,31 @@ plate: form-bound `TextField prefix={<BuyerPhonePrefix …/>}` with the field's
     and on a phone there was no search field whatsoever: an iOS wheel with 241
     stops. What that earlier decision was protecting is kept intact: **no new
     dependency** (the house `Sheet` is radix Dialog, already in; the data is
-    the `DIAL_ROWS` table that already shipped) and **no flag-set barrel** —
-    MY/SG keep their inline SVGs and everyone else the ISO badge. This is not
-    the `cmdk` + `react-phone-number-input` combobox `86eyknr2r` removed, and
-    those dependencies stay gone.
+    the `DIAL_ROWS` table that already shipped) and **no flag-set barrel**.
+    This is not the `cmdk` + `react-phone-number-input` combobox `86eyknr2r`
+    removed, and those dependencies stay gone.
+  - **Every row carries a real flag, and it costs nothing** (`lib/flag-emoji.ts`).
+    The list first shipped with an inline SVG for MY/SG — drawn for the
+    *seller's* fixed plate and reused — and a two-letter ISO badge for the
+    other 239, so two rows out of 248 looked different and the thing read as
+    half-built. The flags now come from the **OS emoji font**, so the bundle
+    grows by nothing. Shipping artwork was priced first and rejected with
+    numbers: all 271 `flag-icons` SVGs are 2.0 MB raw / **600 KB gzipped**
+    (mostly coats of arms invisible at 28×14), and a 2× retina WebP sprite of
+    the same set measures **91 KB** — too much for decoration on a buyer who
+    arrived cold from a WhatsApp link on mobile data.
+    - **Windows is the catch, and it is handled.** Segoe UI Emoji has no flag
+      glyphs, so a regional-indicator pair renders there as two letters — a
+      naive switch would look *worse* than the badge it replaced.
+      `supportsFlagEmoji()` measures it once (a composed pair is one glyph and
+      so about as wide as a single indicator; a fallback is roughly twice as
+      wide) and the **whole list** falls back to badges together. A device
+      shows flags everywhere or badges everywhere, never a mix — which was the
+      original complaint in a new coat.
+    - **The PLATE keeps the inline MY/SG SVGs.** It paints on the first byte,
+      where emoji support is unknown and a flip after hydration would flash;
+      it only ever shows the store's own country until the buyer picks
+      otherwise; and a seller's fixed plate must never degrade to letters.
   - **One control at both breakpoints.** A popover on desktop and a sheet on
     mobile would be two codepaths for one concept, which is how a control
     starts drifting. `Sheet` already is both.

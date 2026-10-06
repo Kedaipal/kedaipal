@@ -13,6 +13,7 @@ import {
 	parseBuyerWaPhone,
 } from "../../../convex/lib/buyerPhone";
 import { COUNTRIES, type Country } from "../../../convex/lib/country";
+import { flagEmoji, resetFlagEmojiSupportForTest } from "../../lib/flag-emoji";
 import { waPhoneCheckoutSchema } from "../../lib/schemas";
 import {
 	applyBuyerPhoneKeystroke,
@@ -544,5 +545,56 @@ describe("applyBuyerPhoneKeystroke — when a typed code moves the picker", () =
 		expect(
 			applyBuyerPhoneKeystroke("+12-345 6789", "MY", "12-345 6789"),
 		).toEqual({ value: "+12-345 6789", dialCountry: "MY" });
+	});
+});
+
+describe("the picker's flags (z8r3fdm36y follow-up)", () => {
+	afterEach(() => resetFlagEmojiSupportForTest(undefined));
+
+	function openList() {
+		render(
+			<BuyerPhoneInput
+				value=""
+				onChange={() => {}}
+				storeCountry="MY"
+				dialCountry="MY"
+				onDialCountryChange={() => {}}
+			/>,
+		);
+		fireEvent.click(
+			screen.getByRole("button", { name: "Country of your WhatsApp number" }),
+		);
+	}
+
+	it("gives EVERY row a flag, not just MY and SG", async () => {
+		// The complaint this fixes: MY/SG had inline SVGs (drawn for the seller's
+		// fixed plate and reused) while the other 239 countries got a letter
+		// badge, so two rows out of 248 looked different. Every row now draws the
+		// same way. Hand the list `flags` again and this goes red.
+		resetFlagEmojiSupportForTest(true);
+		openList();
+		const rows = await screen.findAllByRole("option");
+		const texts = rows.map((r) => r.textContent ?? "");
+		// A flag emoji on the Malaysia row, exactly as on a far-flung one.
+		expect(texts.find((t) => t.includes("Malaysia"))).toContain(
+			flagEmoji("MY"),
+		);
+		expect(texts.find((t) => t.includes("Japan"))).toContain(flagEmoji("JP"));
+		expect(texts.find((t) => t.includes("Afghanistan"))).toContain(
+			flagEmoji("AF"),
+		);
+	});
+
+	it("falls the WHOLE list back to badges where flags don't render", async () => {
+		// Windows has no flag glyphs. Mixing emoji and badges per row would be
+		// the same inconsistency in a new coat, so the device decides once.
+		resetFlagEmojiSupportForTest(false);
+		openList();
+		const rows = await screen.findAllByRole("option");
+		const texts = rows.map((r) => r.textContent ?? "");
+		expect(texts.some((t) => t.includes(flagEmoji("MY")))).toBe(false);
+		expect(texts.some((t) => t.includes(flagEmoji("JP")))).toBe(false);
+		// …and the badge is what's there instead.
+		expect(texts.find((t) => t.includes("Japan"))).toMatch(/JP/);
 	});
 });

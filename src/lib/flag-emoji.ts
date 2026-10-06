@@ -1,0 +1,69 @@
+/**
+ * Country flags for the buyer's picker, at zero bytes (z8r3fdm36y follow-up).
+ *
+ * The picker listed 241 countries with a real flag for exactly two of them
+ * (MY and SG, whose SVGs were drawn for the SELLER's fixed plate and reused
+ * here) and a two-letter ISO badge for everyone else — which reads as a
+ * half-finished feature rather than a decision.
+ *
+ * Shipping flag artwork was priced and rejected, with numbers: all 271
+ * `flag-icons` SVGs are 2.0 MB raw / **600 KB gzipped** (most of that weight is
+ * coats of arms that are invisible at 28x14 px), and a 2x retina WebP sprite of
+ * the same set measures **91 KB**. Buyers arrive cold from a WhatsApp link on
+ * mobile data, so neither is worth it for decoration.
+ *
+ * So the flags come from the OS emoji font instead and cost nothing to ship.
+ *
+ * **The catch, and why `supportsFlagEmoji` exists.** Windows' Segoe UI Emoji
+ * has no flag glyphs at all: a regional-indicator pair renders there as the two
+ * letters, so a naive emoji switch would quietly look WORSE than the badge it
+ * replaced. We detect it once and let the whole list fall back to badges
+ * together, so any one device is internally consistent — flags everywhere, or
+ * badges everywhere, never a mix.
+ */
+
+/** `"JP"` → `"🇯🇵"` — the two regional indicator symbols for the ISO code. */
+export function flagEmoji(iso: string): string {
+	const code = iso.trim().toUpperCase();
+	if (!/^[A-Z]{2}$/.test(code)) return "";
+	return String.fromCodePoint(
+		...[...code].map((ch) => 0x1f1e6 + (ch.charCodeAt(0) - 65)),
+	);
+}
+
+/** Memoised across calls — the answer can't change for a given device/session,
+ * and the measurement touches canvas. */
+let cached: boolean | undefined;
+
+/**
+ * Does this device actually draw a flag for a regional-indicator pair?
+ *
+ * A pair that composes renders as ONE glyph, so it measures about as wide as a
+ * single indicator. Where there is no flag glyph the two fall back to separate
+ * letterforms and the pair measures roughly twice as wide. That width ratio is
+ * the whole test.
+ *
+ * Returns `false` without a DOM (SSR) and on any canvas failure — the badge is
+ * the safe answer, because it is what shipped before and it always renders.
+ */
+export function supportsFlagEmoji(): boolean {
+	if (cached !== undefined) return cached;
+	if (typeof document === "undefined") return false;
+	try {
+		const ctx = document.createElement("canvas").getContext("2d");
+		if (!ctx) return (cached = false);
+		ctx.font = "32px system-ui";
+		const pair = ctx.measureText(flagEmoji("MY")).width;
+		const single = ctx.measureText(String.fromCodePoint(0x1f1f2)).width;
+		if (!pair || !single) return (cached = false);
+		cached = pair < single * 1.8;
+		return cached;
+	} catch {
+		return (cached = false);
+	}
+}
+
+/** Tests only — the memo would otherwise leak between cases. */
+export function resetFlagEmojiSupportForTest(value?: boolean): void {
+	cached = value;
+}

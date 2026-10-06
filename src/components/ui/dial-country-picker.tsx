@@ -42,6 +42,7 @@ import {
 	dialCountryOption,
 	searchDialCountries,
 } from "#/lib/dial-country-search";
+import { flagEmoji, supportsFlagEmoji } from "#/lib/flag-emoji";
 import { cn } from "#/lib/utils";
 import type { DialIso } from "../../../convex/lib/buyerPhone";
 import { NEARBY_DIAL_COUNTRIES } from "../../../convex/lib/buyerPhone";
@@ -97,14 +98,30 @@ function buildRows(
 	return rows;
 }
 
+/**
+ * One country's mark, 28x14 whatever it draws, so the rows keep their rhythm
+ * and the plate never changes width.
+ *
+ * `emoji` is the device-wide answer from `supportsFlagEmoji`, passed in rather
+ * than measured per row: it decides the WHOLE list at once, so a device shows
+ * flags everywhere or badges everywhere and never a mix. See `flag-emoji.ts`
+ * for why shipping flag artwork was priced and rejected.
+ *
+ * `flags` still wins where it has an entry. That is the plate's MY/SG pair:
+ * those are inline SVGs that render identically on every device and, unlike the
+ * emoji, are safe during SSR — the plate paints on the first byte, the list
+ * only ever opens from a tap.
+ */
 function FlagOrBadge({
 	iso,
 	flags,
+	emoji,
 }: {
 	iso: DialIso;
-	flags: Partial<Record<string, (p: { title: string }) => React.ReactElement>>;
+	flags?: Partial<Record<string, (p: { title: string }) => React.ReactElement>>;
+	emoji: boolean;
 }) {
-	const Flag = flags[iso];
+	const Flag = flags?.[iso];
 	if (Flag)
 		return (
 			// Decoration at both call sites — the trigger carries the button's
@@ -112,6 +129,18 @@ function FlagOrBadge({
 			// flags take a `title`, so hiding happens on the wrapper.
 			<span aria-hidden className="flex">
 				<Flag title="" />
+			</span>
+		);
+	if (emoji)
+		return (
+			// `leading-none` + a fixed box: an emoji sits on the text baseline and
+			// would otherwise push the 44px row around as the glyph's height varies
+			// between platforms.
+			<span
+				aria-hidden
+				className="inline-flex h-3.5 w-7 shrink-0 items-center justify-center text-base leading-none"
+			>
+				{flagEmoji(iso)}
 			</span>
 		);
 	return (
@@ -145,6 +174,11 @@ export function DialCountryPicker({
 	flags: Partial<Record<string, (p: { title: string }) => React.ReactElement>>;
 	suggestedLabel?: string;
 }) {
+	// One answer for the whole control. Safe to read during render: the only
+	// thing that paints before hydration is the PLATE, and the plate draws the
+	// store's own country from the inline `flags` pair, so this value cannot
+	// change what SSR emitted. The list exists only after a tap.
+	const emoji = supportsFlagEmoji();
 	const [open, setOpen] = useState(false);
 	const [query, setQuery] = useState("");
 	const [activeIndex, setActiveIndex] = useState(0);
@@ -232,7 +266,7 @@ export function DialCountryPicker({
 				className="pointer-events-none absolute inset-0 transition-colors peer-hover:bg-muted peer-focus-visible:bg-muted peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-focus-visible:ring-inset peer-disabled:bg-transparent"
 			/>
 			<span className="relative flex items-center gap-1.5">
-				<FlagOrBadge iso={value} flags={flags} />
+				<FlagOrBadge iso={value} flags={flags} emoji={emoji} />
 				<span className="text-base font-medium tabular-nums">
 					+{current.dial}
 				</span>
@@ -357,7 +391,9 @@ export function DialCountryPicker({
 												i === activeIndex && "bg-muted",
 											)}
 										>
-											<FlagOrBadge iso={row.option.iso} flags={flags} />
+											{/* Deliberately no `flags`: handing MY/SG their inline SVGs here is
+											    exactly what made two rows out of 248 look different. */}
+											<FlagOrBadge iso={row.option.iso} emoji={emoji} />
 											<span className="flex-1 truncate text-sm">
 												{row.option.name}
 											</span>
