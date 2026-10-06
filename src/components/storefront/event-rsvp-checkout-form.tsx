@@ -27,17 +27,16 @@ import {
 	type DialIso,
 	parseBuyerWaPhone,
 } from "../../../convex/lib/buyerPhone";
-import type { Country } from "../../../convex/lib/country";
-import { type Locale, pickLocale } from "../../../convex/lib/locale";
 import {
 	answerPrompt,
 	answersForSubmit,
 	firstMissingRequired,
 	visibleQuestions,
 } from "../../../convex/lib/buyerQuestions";
+import type { Country } from "../../../convex/lib/country";
+import { type Locale, pickLocale } from "../../../convex/lib/locale";
 import { isEventPassed } from "../../../convex/lib/productEvent";
 import { readAttributionSource } from "../../hooks/useSourceAttribution";
-import { BuyerQuestionsFields } from "../order/buyer-questions-fields";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import { buyerPhoneRejection } from "../../lib/buyer-phone-rejection";
 import {
@@ -46,6 +45,7 @@ import {
 	formatPrice,
 } from "../../lib/format";
 import { variantLabel } from "../../lib/variant";
+import { BuyerQuestionsFields } from "../order/buyer-questions-fields";
 import { PickupNotes } from "../order/pickup-notes";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -510,9 +510,11 @@ export function EventRsvpCheckoutForm({
 						<PickupSummaryCard
 							location={venue}
 							currency={product.currency}
-							// An event venue never charges its pickup fee, so the card
-							// must not advertise one — see buildEventVenueSnapshot.
-							hideFee
+							// Where the event happens — not a pickup option the guest
+							// chose. Drops the fee chip (never charged) and the
+							// self-collect/drop-off badge (describes order handover,
+							// which a guest attending isn't doing).
+							asEventVenue
 						/>
 						<p className="text-xs text-muted-foreground">
 							Where the event happens — set by the store, the same for every

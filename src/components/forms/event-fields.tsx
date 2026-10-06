@@ -15,12 +15,18 @@ import {
 } from "../../../convex/lib/productEvent";
 import { ProBadge } from "../app/pro-gate";
 import { Input } from "../ui/input";
+import { Select } from "../ui/select";
 import { ToggleSwitch } from "../ui/toggle-switch";
 
-/** Why an event can't be saved on a store with no pickup point — said on
- * the Event card and by the wizard, mirroring the server's refusal. */
+/** Why an event can't be saved on a store with nowhere to hold it — said on
+ * the Event card and by the wizard, mirroring the server's refusal.
+ *
+ * It points at Event venues rather than "a hidden point", which was the
+ * workaround this store of advice outlived: before `eventsOnly` (z8r3fdm32x)
+ * an events-only address had to masquerade as a deactivated pickup point, and
+ * telling a seller to do that now contradicts the section built for it. */
 export const EVENT_NO_VENUE_COPY =
-	"An event needs a venue, and this store has no pickup point yet — guests would reach the RSVP page and be turned away. A hidden point works if it's only for events.";
+	"An event needs a venue, and this store has nowhere set up yet — guests would reach the RSVP page and be turned away. Add an Event venue if the place only hosts events, or a pickup point if buyers collect there too.";
 
 /**
  * The event block's state, kept as TYPED-RAW strings like every other draft in
@@ -192,6 +198,77 @@ export function eventDraftValid(
 	return true;
 }
 
+/** The shape the picker needs from a pickup point. */
+export type VenueOption = {
+	_id: string;
+	label: string;
+	isActive: boolean;
+	/** Hosts events and never appears at checkout (`z8r3fdm32x`). */
+	eventsOnly?: boolean;
+	/** Minor units. An event never charges it — surfaced, not applied. */
+	fee?: number;
+};
+
+/**
+ * What a venue reads as in the picker. ONE author, so the visible `<option>`
+ * and the `title` that recovers it when the control clips it can't drift into
+ * saying two different things about the same place.
+ *
+ * An INACTIVE point keeps its suffix even though its group heading already
+ * says so, because a closed `<select>` shows only the option text — drop it and
+ * a seller whose event points at a retired address sees nothing amiss until
+ * they open the list. Event venues never carry a suffix: the heading is the
+ * only place that fact needs to live, since it is their normal state.
+ */
+function venueOptionLabel(v: Pick<VenueOption, "label" | "isActive">): string {
+	return v.isActive ? v.label : `${v.label} — inactive`;
+}
+
+/** The picker's groups, in the order they are offered. */
+const VENUE_GROUPS = [
+	{
+		key: "events",
+		heading: "Event venues",
+		match: (v: VenueOption) => v.isActive && v.eventsOnly === true,
+	},
+	{
+		key: "pickup",
+		heading: "Pickup points",
+		match: (v: VenueOption) => v.isActive && v.eventsOnly !== true,
+	},
+	{
+		key: "off",
+		heading: "Inactive",
+		match: (v: VenueOption) => !v.isActive,
+	},
+] as const;
+
+/**
+ * Group the venues for the picker (`z8r3fdm32x`).
+ *
+ * Event venues lead because they exist for exactly this choice; ordinary
+ * pickup points follow because an event can legitimately happen at one;
+ * inactive points come last but stay listed, because naming where an event
+ * ALREADY is isn't a move, and dropping them would make an existing selection
+ * unreadable.
+ *
+ * **Order inside a group is the seller's own** — the array arrives sorted by
+ * `sortOrder`, which is what they arranged with the drag list in Settings.
+ * Deliberately not alphabetical: sorting this surface one way and every other
+ * by `sortOrder` would be two rules for one list, and an invisible rule teaches
+ * the seller nothing about why an option sits where it does. The headings are
+ * what make the grouping legible, not the order.
+ */
+export function groupVenues(
+	venues: ReadonlyArray<VenueOption>,
+): Array<{ key: string; heading: string; venues: VenueOption[] }> {
+	return VENUE_GROUPS.map((g) => ({
+		key: g.key,
+		heading: g.heading,
+		venues: venues.filter(g.match),
+	})).filter((g) => g.venues.length > 0);
+}
+
 /**
  * "This is an event" — the fixed-date mode (`z8r3fdff9u`).
  *
@@ -226,13 +303,7 @@ export function EventFields({
 	 * is a stated fact; several = the seller must pick which hosts the event
 	 * (a guest choosing the venue is as wrong as a guest choosing the date).
 	 * Undefined while loading — the selector simply hasn't rendered yet. */
-	venues?: ReadonlyArray<{
-		_id: string;
-		label: string;
-		isActive: boolean;
-		/** Minor units. An event never charges it — surfaced, not applied. */
-		fee?: number;
-	}>;
+	venues?: ReadonlyArray<VenueOption>;
 }) {
 	const taken = rsvpCount ?? 0;
 	const hasRsvps = taken > 0;
@@ -257,6 +328,12 @@ export function EventFields({
 		seatsValid && seatsRaw.length > 0 && seatsParsed < taken;
 	const endDateIssue = eventEndDateIssue(draft);
 	const endDateWarning = eventEndDateWarning(draft);
+	// Undefined while nothing is picked, so the placeholder doesn't get a
+	// tooltip repeating itself.
+	const pickedVenue = venues?.find((v) => v._id === draft.venueId);
+	const selectedVenueLabel = pickedVenue
+		? venueOptionLabel(pickedVenue)
+		: undefined;
 
 	return (
 		<div className="flex flex-col gap-4">
@@ -392,32 +469,42 @@ export function EventFields({
 								</a>
 							</p>
 						) : null}
+						{/* Wider than the boxes beside it, and full-width on a phone
+						    where it sits alone on its row: those hold a date, a time and
+						    a seat count — fixed, short, known — while this holds a venue
+						    name the seller typed, of no bounded length. A native
+						    `<select>` cannot ellipsize, so a name that overruns is simply
+						    cut; `title` is the desktop recovery (hover), the width is the
+						    real fix. */}
 						{venues !== undefined && venues.length > 1 ? (
-							<div className="flex flex-col gap-1.5">
+							<div className="flex w-full flex-col gap-1.5 sm:w-64">
 								<label htmlFor="event-venue" className="text-sm font-medium">
 									Venue
 								</label>
-								<select
+								<Select
 									id="event-venue"
+									variant="field"
+									className="w-full"
+									title={selectedVenueLabel}
 									value={draft.venueId}
 									onChange={(e) => set({ venueId: e.target.value })}
 									// A BLANK venue (saved before venues existed) stays
 									// pickable — naming where the event already is isn't a
 									// move, and the server refuses an actual move anyway.
 									disabled={locked || (hasRsvps && draft.venueId.trim() !== "")}
-									className={`h-11 w-56 rounded-xl border bg-background px-3 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50 ${
-										draft.venueId.trim() === ""
-											? "border-destructive"
-											: "border-input"
-									}`}
+									isError={draft.venueId.trim() === ""}
 								>
-									<option value="">Pick a pickup point…</option>
-									{venues.map((v) => (
-										<option key={v._id} value={v._id}>
-											{v.isActive ? v.label : `${v.label} — hidden from buyers`}
-										</option>
+									<option value="">Pick a venue…</option>
+									{groupVenues(venues).map((group) => (
+										<optgroup key={group.key} label={group.heading}>
+											{group.venues.map((v) => (
+												<option key={v._id} value={v._id}>
+													{venueOptionLabel(v)}
+												</option>
+											))}
+										</optgroup>
 									))}
-								</select>
+								</Select>
 							</div>
 						) : null}
 					</div>
@@ -425,8 +512,8 @@ export function EventFields({
 					venues.length > 1 &&
 					!draft.venueId.trim() ? (
 						<p className="text-xs text-destructive">
-							Pick which pickup point hosts the event — guests are sent there,
-							not to a point of their choosing.
+							Pick which venue hosts the event — guests are sent there, not to a
+							place of their choosing.
 						</p>
 					) : null}
 					{/* Disabled-with-reason: the frozen venue must say WHY it won't

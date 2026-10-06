@@ -2281,7 +2281,31 @@ export default defineSchema({
 		// historical order snapshots remain meaningful. Inactive rows are
 		// hidden from the storefront picker but still listed in settings under
 		// a "show inactive" toggle.
+		//
+		// NOTE this means "retired", and ONLY that — see `eventsOnly` below for
+		// why that distinction had to be made explicit.
 		isActive: v.boolean(),
+		// This address hosts EVENTS and never appears in the buyer's pickup
+		// picker at checkout. Unset/false = today's behaviour exactly, and such
+		// a point stays fully venue-eligible, so "my shop, which is also where
+		// I run the class" is simply the flag left off. Legacy rows read as
+		// false; no backfill (z8r3fdm32x).
+		//
+		// Before this existed an RSVP-only venue had to masquerade as a
+		// DEACTIVATED pickup point — `isActive` carried two unrelated meanings
+		// ("retired" and "events only"), which buried live venues behind the
+		// settings "Show inactive" disclosure, labelled them "hidden from
+		// buyers" in the venue picker, and could trip "no active points yet" on
+		// a store that had plenty.
+		//
+		// Deliberately NOT a third `locationType`. That value is FROZEN onto
+		// `orders.pickupSnapshot` and read in ~two dozen places — WhatsApp
+		// copy, email, /track, order detail — nearly all as binary
+		// `=== "drop_off" ? … : …` ternaries, so a third literal would fall
+		// silently into the self-collect branch everywhere. It would also force
+		// an either/or the seller doesn't have: kind (where the buyer stands)
+		// and events-eligibility (which flows it is offered in) are orthogonal.
+		eventsOnly: v.optional(v.boolean()),
 		// Ascending integer used to drive the picker order. The settings UI
 		// surfaces up/down arrows that swap sortOrder with the neighbour.
 		sortOrder: v.number(),

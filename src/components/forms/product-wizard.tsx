@@ -524,7 +524,7 @@ export function wizardStepIssues(
 		) {
 			issues.push({
 				field: "event",
-				message: "Pick which pickup point hosts the event.",
+				message: "Pick which venue hosts the event.",
 			});
 		} else if (endIssue !== null) {
 			// The specific problem beats the generic sentence — "the last day
@@ -1272,6 +1272,8 @@ export function ProductWizard({
 		_id: r._id as string,
 		label: r.label,
 		isActive: r.isActive,
+		// Drives the picker's grouping (z8r3fdm32x).
+		eventsOnly: r.eventsOnly,
 		// Carried so the picker can say that an event never charges it — see
 		// buildEventVenueSnapshot (z8r3fdjgvd).
 		fee: r.fee,
