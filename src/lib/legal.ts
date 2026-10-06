@@ -10,12 +10,27 @@
  * each legal page.
  */
 
-export const TERMS_VERSION = "2026-07-01";
+export const TERMS_VERSION = "2026-09-30";
 export const PRIVACY_VERSION = "2026-08-17";
-export const AUP_VERSION = "2026-05-26";
+export const AUP_VERSION = "2026-10-01";
 
 /** Contact address shown in Terms, Privacy, and the AUP. */
 export const LEGAL_CONTACT_EMAIL = "hello@kedaipal.com";
+
+/**
+ * Section anchors other surfaces deep-link to. A contract, not decoration:
+ * the credit top-up picker (Credits T2) links `/terms#credits`, and the
+ * Terms' data-processing section links the Privacy Policy's processor list —
+ * renaming an id here moves every link with it.
+ */
+export const TERMS_ANCHOR = {
+	credits: "credits",
+	dataProcessing: "data-processing",
+} as const;
+
+export const PRIVACY_ANCHOR = {
+	processors: "processors",
+} as const;
 
 /** Versions a retailer has accepted, as stored on the retailer record. */
 export type AcceptedLegalVersions = {

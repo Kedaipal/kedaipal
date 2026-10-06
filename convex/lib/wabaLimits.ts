@@ -28,7 +28,9 @@ export const DEFAULT_BURST_CAP_5MIN = 30;
 const TIER_DAILY_CAP: Record<Plan, number> = {
 	starter: 50,
 	pro: 200,
-	scale: 500,
+	// An Enterprise deal is sized per contract; a store that outgrows this
+	// gets an admin `dailyCapOverride` (below), never a silent throttle.
+	enterprise: 500,
 };
 
 /**

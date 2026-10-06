@@ -15,6 +15,8 @@ import {
 	Megaphone,
 	Store,
 	Trash2,
+	UserPlus,
+	UserRoundCog,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -24,6 +26,7 @@ import { HIDDEN_NOTE_MAX } from "../../../convex/lib/marketplaceListing";
 import { useActAs } from "../../hooks/useActAs";
 import {
 	highlightedThroughLabel,
+	sellerCompMenuItem,
 	sellerHighlight,
 } from "../../lib/admin-seller-view";
 import { convexErrorMessage, formatShortDate } from "../../lib/format";
@@ -37,7 +40,9 @@ import {
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { CompDialog } from "./comp-dialog";
+import { HandoverDialog } from "./handover-dialog";
 import { HighlightDialog } from "./highlight-dialog";
+import { TransferOwnershipDialog } from "./transfer-ownership-dialog";
 
 /**
  * Enter act-as for a store: start the session, audit the tenant ENTRY
@@ -94,6 +99,11 @@ export function SellerManageMenu({
 	const [purgeOpen, setPurgeOpen] = useState(false);
 	const [hideOpen, setHideOpen] = useState(false);
 	const [compOpen, setCompOpen] = useState(false);
+	const [handoverOpen, setHandoverOpen] = useState(false);
+	const [transferOpen, setTransferOpen] = useState(false);
+	// Title/subtitle/tone for the comp item — one pure author in
+	// admin-seller-view.ts, where the row's other derived sentences live.
+	const compItem = sellerCompMenuItem(seller);
 	const [highlightOpen, setHighlightOpen] = useState(false);
 	// Where the store stands on Store highlights — the item says it before the
 	// dialog opens: why it's on (paid window / comp), or why it can't be.
@@ -187,6 +197,7 @@ export function SellerManageMenu({
 	if (purging) {
 		return <DeletingPill className={cn("h-11", className)} />;
 	}
+	const onContract = seller.enterprise !== undefined;
 
 	return (
 		<>
@@ -237,32 +248,99 @@ export function SellerManageMenu({
 							</span>
 						</DropdownMenuItem>
 					) : null}
+					{/* The "who owns this store" slot, placed before the commercial
+					    items: the open question about a store in handover is WHO it
+					    is for, not what it costs. ONE slot, two states — a store
+					    nobody owns yet names the address that will claim it, and a
+					    store that already has an owner hands it to someone else.
+					    Both end in the same place (`pendingOwnerEmail` + the ordinary
+					    claim), so showing them as two unrelated actions would be two
+					    controls for one idea (docs/prebuilt-stores.md). */}
+					{seller.unclaimed ? (
+						<DropdownMenuItem
+							onSelect={() => setHandoverOpen(true)}
+							className="items-start"
+						>
+							<UserPlus
+								className={cn(
+									"mt-0.5 size-4",
+									// Amber while the handover is unfinished — no address, or
+									// an address nobody has been told about. Both leave a
+									// store that can never be claimed until an admin acts.
+									seller.pendingOwnerEmail && seller.handoverInviteSentAt
+										? "text-muted-foreground"
+										: "text-amber-600 dark:text-amber-400",
+								)}
+								aria-hidden="true"
+							/>
+							<span className="flex min-w-0 flex-col">
+								<span className="font-medium">
+									{seller.pendingOwnerEmail
+										? seller.handoverInviteSentAt
+											? "Handover email — set"
+											: "Handover — invite them"
+										: "Set handover email"}
+								</span>
+								<span className="text-xs text-muted-foreground">
+									{seller.pendingOwnerEmail
+										? seller.handoverInviteSentAt
+											? `Waiting for ${seller.pendingOwnerEmail} to sign up`
+											: `${seller.pendingOwnerEmail} hasn't been invited yet`
+										: "Nobody can claim this store until you name their email"}
+								</span>
+							</span>
+						</DropdownMenuItem>
+					) : (
+						<DropdownMenuItem
+							onSelect={() => setTransferOpen(true)}
+							className="items-start"
+						>
+							<UserRoundCog
+								className="mt-0.5 size-4 text-muted-foreground"
+								aria-hidden="true"
+							/>
+							<span className="flex min-w-0 flex-col">
+								<span className="font-medium">Transfer ownership</span>
+								<span className="text-xs text-muted-foreground">
+									Hand the store to a different email — the plan, team and
+									everything else stay
+								</span>
+							</span>
+						</DropdownMenuItem>
+					)}
 					{/* Disabled-with-reason IN the item — a disabled menu row can't
-					    show a hover title, so the reason is the subtitle. */}
+					    show a hover title, so the reason is the subtitle.
+
+					    A pre-built store is ALWAYS comped (the `internal` comp keeps
+					    it unbilled while an admin builds it), so the plain comped
+					    copy called that scaffolding a "sponsorship" and offered to
+					    "turn it off" — the same lie the Sponsored pill told before
+					    `tierPill` learned about unclaimed stores, on the one surface
+					    that still believed it (2 Oct). It stays ENABLED rather than
+					    disabled: setting a REAL partner/sponsor comp before handover
+					    is supported and survives the claim
+					    (`startFreePeriodOnClaim`), so refusing here would block a
+					    flow we deliberately kept. */}
 					<DropdownMenuItem
 						onSelect={() => setCompOpen(true)}
-						disabled={seller.ownerIsAdmin}
+						// A contract store is never comped too (T6) — the server
+						// refuses it; the reason sits in the subtitle.
+						disabled={seller.ownerIsAdmin || onContract}
 						className="items-start"
 					>
 						<Gift
 							className={cn(
 								"mt-0.5 size-4",
-								seller.comped
+								compItem.sponsored
 									? "text-violet-600 dark:text-violet-300"
 									: "text-muted-foreground",
 							)}
 							aria-hidden="true"
 						/>
 						<span className="flex min-w-0 flex-col">
-							<span className="font-medium">
-								{seller.comped ? "Comp upgrade — on" : "Turn on comp upgrade"}
-							</span>
+							<span className="font-medium">{compItem.title}</span>
 							<span className="text-xs text-muted-foreground">
-								{seller.ownerIsAdmin
-									? "Admin store — always free already"
-									: seller.comped
-										? "Edit the sponsorship or turn it off"
-										: "Every feature, no limits, never billed"}
+								{compItem.hint}
 							</span>
 						</span>
 					</DropdownMenuItem>
@@ -339,6 +417,18 @@ export function SellerManageMenu({
 					) : null}
 				</DropdownMenuContent>
 			</DropdownMenu>
+			{handoverOpen ? (
+				<HandoverDialog
+					seller={seller}
+					onClose={() => setHandoverOpen(false)}
+				/>
+			) : null}
+			{transferOpen ? (
+				<TransferOwnershipDialog
+					seller={seller}
+					onClose={() => setTransferOpen(false)}
+				/>
+			) : null}
 			{compOpen ? (
 				<CompDialog seller={seller} onClose={() => setCompOpen(false)} />
 			) : null}

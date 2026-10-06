@@ -2,10 +2,14 @@
  * Status-quo cost calculator — pure logic for the `/cost` page.
  *
  * Quantifies what WhatsApp-only ordering costs a seller per month (missed-order
- * revenue + payment-chase labour) and contrasts it against Kedaipal's Pro list
- * price. See ClickUp 86exqej55 for the formula and framing; the anchor moved
- * from the Founding price to the Pro list price when Founding pricing was
- * retired (30 Aug 2026 pricing reset, ClickUp z8r3fday21).
+ * revenue + payment-chase labour) and contrasts it against what Kedaipal would
+ * cost THEM: the cheapest plan-plus-top-ups whose credits cover their monthly
+ * order volume (`recommendPlan`, Credits T5 z8r3fdfu31). See ClickUp
+ * 86exqej55 for the formula and framing. The anchor was the Founding price,
+ * then the Pro list price for everyone (30 Aug 2026 pricing reset, ClickUp
+ * z8r3fday21); a flat Pro anchor told a 20-order-a-week seller Kedaipal costs
+ * twice what Starter does, and told a 130-a-week seller Pro covers volume it
+ * can't.
  *
  * Amounts are **major units** (e.g. 149 = RM 149.00, 59 = S$ 59.00). Rounding
  * for display happens at the edge (the calculator UI), not here.
@@ -20,7 +24,14 @@
 import { z } from "zod";
 import {
 	type BillingCurrency,
+	CREDIT_PACKS,
+	type CreditPack,
+	isPlanSelectable,
+	LISTED_PLANS,
+	type ListedPlan,
+	PLAN_CREDIT_GRANT,
 	PLAN_MONTHLY_PRICES,
+	planRank,
 } from "../../convex/lib/plans";
 
 /** Weeks per month — task-locked constant (52 / 12). */
@@ -40,16 +51,165 @@ export const LABOR_RATE_PER_HR: Record<BillingCurrency, number> = {
 };
 
 /**
- * Pro list monthly price — the comparison anchor, in major units.
- *
- * Derived from `PLAN_MONTHLY_PRICES` (minor units) rather than restated: this
- * file used to carry its own literal, a second copy of the price that nothing
- * stopped from drifting.
+ * Monthly order volume from the weekly slider: `ordersPerWeek × 52 / 12`,
+ * rounded UP so the recommended plan always covers the estimate rather than
+ * falling one order short of it. (52/12 exactly, not `WEEKS_PER_MONTH`'s 4.33:
+ * the volume decides a plan boundary, so it takes the unrounded year.)
  */
-export const PRO_PRICE: Record<BillingCurrency, number> = {
-	MYR: PLAN_MONTHLY_PRICES.MYR.pro / 100,
-	SGD: PLAN_MONTHLY_PRICES.SGD.pro / 100,
-};
+export function monthlyOrdersFromWeekly(ordersPerWeek: number): number {
+	return Math.ceil((ordersPerWeek * 52) / 12);
+}
+
+/** Top-up packs of one size in a recommendation — "2 × 50 credits". */
+export interface PackCount {
+	credits: number;
+	count: number;
+	/** Price of ONE pack, minor units. */
+	priceMinor: number;
+}
+
+/** One way to cover the volume: a plan, plus whatever top-ups it needs.
+ * Only LISTED tiers — Enterprise has no price to compare (T6), and the
+ * volume slider stops well short of where it begins. */
+export interface PlanOption {
+	plan: ListedPlan;
+	/** Credits the plan includes a month (`PLAN_CREDIT_GRANT`). */
+	included: number;
+	/** Top-ups a month on top of the plan, largest pack first. Empty = the
+	 * plan's own credits cover it. */
+	packs: PackCount[];
+	/** Credits the top-ups add (can exceed the shortfall — packs are whole). */
+	topUpCredits: number;
+	/** Plan price + top-ups, minor units, per month. */
+	monthlyMinor: number;
+}
+
+export interface PlanRecommendation {
+	/** `monthlyOrdersFromWeekly` of the slider. */
+	monthlyOrders: number;
+	/** The cheapest option. */
+	best: PlanOption;
+	/** The cheapest option on a HIGHER tier than `best` — the honest answer to
+	 * "why not the bigger plan?" when `best` leans on top-ups ("cheaper than
+	 * Pro at RM149"). Always strictly dearer than `best`: a tie goes to the
+	 * higher tier, so it would have BEEN `best`. Null at the top listed tier. A
+	 * cheaper-or-equal lower tier is never the comparison — at 260 orders
+	 * Starter + 1 × 200 ties Pro + 2 × 50 at RM239, and "cheaper than" it
+	 * would be false. */
+	nextTierUp: PlanOption | null;
+}
+
+/**
+ * The cheapest whole-pack combination adding at least `shortfall` credits.
+ * Exhaustive over the counts of every pack size but the smallest, which then
+ * fills the rest — cheap at today's two sizes and any shortfall the slider can
+ * reach. Ties go to fewer credits bought, then fewer packs.
+ */
+export function cheapestTopUp(
+	shortfall: number,
+	packs: readonly CreditPack[],
+): { packs: PackCount[]; credits: number; priceMinor: number } {
+	if (shortfall <= 0 || packs.length === 0)
+		return { packs: [], credits: 0, priceMinor: 0 };
+	const sizes = [...packs].sort((a, b) => b.credits - a.credits);
+	type Combo = { counts: number[]; credits: number; priceMinor: number };
+	let best: Combo | null = null;
+	const better = (a: Combo, b: Combo | null): boolean => {
+		if (!b) return true;
+		if (a.priceMinor !== b.priceMinor) return a.priceMinor < b.priceMinor;
+		if (a.credits !== b.credits) return a.credits < b.credits;
+		const packsA = a.counts.reduce((n, c) => n + c, 0);
+		const packsB = b.counts.reduce((n, c) => n + c, 0);
+		return packsA < packsB;
+	};
+	const walk = (
+		i: number,
+		counts: number[],
+		credits: number,
+		price: number,
+	) => {
+		const remaining = shortfall - credits;
+		const pack = sizes[i];
+		if (i === sizes.length - 1) {
+			const n = Math.max(0, Math.ceil(remaining / pack.credits));
+			const combo: Combo = {
+				counts: [...counts, n],
+				credits: credits + n * pack.credits,
+				priceMinor: price + n * pack.priceMinor,
+			};
+			if (better(combo, best)) best = combo;
+			return;
+		}
+		const most = Math.max(0, Math.ceil(remaining / pack.credits));
+		for (let n = 0; n <= most; n++) {
+			walk(
+				i + 1,
+				[...counts, n],
+				credits + n * pack.credits,
+				price + n * pack.priceMinor,
+			);
+		}
+	};
+	walk(0, [], 0, 0);
+	const found = best as Combo | null;
+	if (!found) return { packs: [], credits: 0, priceMinor: 0 };
+	return {
+		packs: sizes
+			.map((pack, i) => ({
+				credits: pack.credits,
+				count: found.counts[i],
+				priceMinor: pack.priceMinor,
+			}))
+			.filter((p) => p.count > 0),
+		credits: found.credits,
+		priceMinor: found.priceMinor,
+	};
+}
+
+/**
+ * Which plan this seller would actually be on, and what it costs them a month:
+ * for every purchasable tier, its price plus the cheapest top-ups covering the
+ * rest of the volume — then the cheapest of those. So Starter covers up to its
+ * grant, and above it the answer is whichever is honestly cheaper: Pro, or
+ * staying on Starter and topping up.
+ *
+ * A tie goes to the HIGHER tier — the same money buys more credits built in
+ * and fewer top-ups to remember (MYR at 260 orders: Starter + 1 × 200 and
+ * Pro + 2 × 50 both cost RM239; Pro wins).
+ */
+export function recommendPlan(
+	ordersPerWeek: number,
+	currency: BillingCurrency,
+): PlanRecommendation {
+	const monthlyOrders = monthlyOrdersFromWeekly(ordersPerWeek);
+	const options: PlanOption[] = LISTED_PLANS.filter(isPlanSelectable).map(
+		(plan) => {
+			const included = PLAN_CREDIT_GRANT[plan];
+			const topUp = cheapestTopUp(
+				monthlyOrders - included,
+				CREDIT_PACKS[currency],
+			);
+			return {
+				plan,
+				included,
+				packs: topUp.packs,
+				topUpCredits: topUp.credits,
+				monthlyMinor: PLAN_MONTHLY_PRICES[currency][plan] + topUp.priceMinor,
+			};
+		},
+	);
+	options.sort(
+		(a, b) =>
+			a.monthlyMinor - b.monthlyMinor || planRank(b.plan) - planRank(a.plan),
+	);
+	const [best, ...rest] = options;
+	return {
+		monthlyOrders,
+		best,
+		nextTierUp:
+			rest.find((o) => planRank(o.plan) > planRank(best.plan)) ?? null,
+	};
+}
 
 /** Default minutes spent per payment chase when the seller doesn't specify. */
 export const DEFAULT_CHASE_MIN = 5;
@@ -109,7 +269,8 @@ export interface CostInputs {
 /**
  * Why the calculator declined to show a savings pitch:
  * - `no_missed`  — M = 0, so there's no leak to plug.
- * - `below_price`— total status-quo cost ≤ Pro price; wouldn't pay for itself yet.
+ * - `below_price`— total status-quo cost ≤ what their plan would cost; wouldn't
+ *   pay for itself yet.
  */
 export type DisqualifyReason = "no_missed" | "below_price" | null;
 
@@ -120,13 +281,18 @@ export interface CostResult {
 	chaseCost: number;
 	/** C — total status-quo cost per month. */
 	total: number;
-	/** D — monthly savings vs the Pro price; negative when disqualified. */
+	/** What Kedaipal costs this seller a month, major units — the
+	 * recommendation's plan plus top-ups. The anchor for D and the ratio. */
+	kedaipalMonthly: number;
+	/** D — monthly savings vs `kedaipalMonthly`; negative when disqualified. */
 	savings: number;
-	/** total ÷ Pro price — "every RM149 covers RMx of leak". */
+	/** total ÷ `kedaipalMonthly` — "every RM149 covers RMx of leak". */
 	ratio: number;
 	/** True when an honest disqualification message should replace the pitch. */
 	disqualified: boolean;
 	disqualifyReason: DisqualifyReason;
+	/** The plan (and top-ups) the seller's volume puts them on. */
+	recommendation: PlanRecommendation;
 }
 
 /**
@@ -212,8 +378,11 @@ export function clampInputs(
  *   A. missedRevenue = M × AOV × WEEKS_PER_MONTH
  *   B. chaseCost     = (W × chaseMin / 60) × WEEKS_PER_MONTH × LABOR_RATE_PER_HR
  *   C. total         = A + B
- *   D. savings       = total − PRO_PRICE
- *      ratio         = total ÷ PRO_PRICE
+ *   D. savings       = total − kedaipalMonthly
+ *      ratio         = total ÷ kedaipalMonthly
+ *
+ * `kedaipalMonthly` is `recommendPlan(W, currency)` — the price of the plan
+ * (plus top-ups) their volume actually needs, not a fixed tier.
  *
  * Disqualification (honest, not salesy):
  *   - M = 0           → `no_missed`  (takes priority; the core leak is dry)
@@ -223,7 +392,8 @@ export function computeStatusQuoCost(
 	inputs: CostInputs,
 	currency: BillingCurrency,
 ): CostResult {
-	const proPrice = PRO_PRICE[currency];
+	const recommendation = recommendPlan(inputs.ordersPerWeek, currency);
+	const kedaipalMonthly = recommendation.best.monthlyMinor / 100;
 	const missedRevenue = inputs.missedPerWeek * inputs.aov * WEEKS_PER_MONTH;
 	const chaseCost =
 		((inputs.ordersPerWeek * inputs.chaseMin) / 60) *
@@ -234,7 +404,7 @@ export function computeStatusQuoCost(
 	let disqualifyReason: DisqualifyReason = null;
 	if (inputs.missedPerWeek <= 0) {
 		disqualifyReason = "no_missed";
-	} else if (total <= proPrice) {
+	} else if (total <= kedaipalMonthly) {
 		disqualifyReason = "below_price";
 	}
 
@@ -242,9 +412,11 @@ export function computeStatusQuoCost(
 		missedRevenue,
 		chaseCost,
 		total,
-		savings: total - proPrice,
-		ratio: total / proPrice,
+		kedaipalMonthly,
+		savings: total - kedaipalMonthly,
+		ratio: total / kedaipalMonthly,
 		disqualified: disqualifyReason !== null,
 		disqualifyReason,
+		recommendation,
 	};
 }

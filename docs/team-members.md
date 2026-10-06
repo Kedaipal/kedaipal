@@ -16,7 +16,8 @@ removal and grant edits bite on the member's next call.
 
 - **Areas, not components** (`convex/lib/permissions.ts`, the registry):
   `orders · products · customers · bookings · insights · exports ·
-  store_settings · fulfilment · payments_settings · integrations · billing`.
+  store_settings · fulfilment · payments_settings · integrations · credits ·
+  billing`.
   Every tab, route and dashboard widget declares the area whose data it reads
   and inherits visibility — a future Lalamove-balance widget declares
   `integrations` and needs no new permission row. This keeps the Team page ~11
@@ -30,6 +31,18 @@ removal and grant edits bite on the member's next call.
   nature; **`billing` write is owner-only in v1** — plan changes, cancel and
   auto-renew move the owner's money. Relaxing any of these is one registry
   line, not a migration.
+- **`credits`** (Kedaipal Credits, Zaki 30 Sep 2026 — [`credits.md`](./credits.md)):
+  view = the order-credit balance and its history; **edit = buying credit packs,
+  and it IS grantable** — keeping a locked shop running mid-rush shouldn't need
+  the owner. A member pays on the HitPay checkout page themselves; the owner's
+  saved card is never charged by a member, and the owner is emailed every
+  member purchase. Plan changes stay under `billing` (owner-only). The "Store
+  manager" preset includes credits *view*; buying is always the owner's grant
+  to give. **When the store runs out** (the T3 seller lock) a member holding
+  credits *edit* is told to top up and gets the button — a pack is a way back
+  they can take; every other member is told to ask the owner, and a way back
+  that is billing (pay the invoice, pick or resume a plan) is always the
+  owner's (`creditLockAudience`).
 - **Hard owner-only, never in the matrix:** the Team page itself, the
   WhatsApp tab (store numbers + templates — Arif D2), slug rename,
   currency/country, business (legal) identity, consent re-acceptance, account
@@ -62,8 +75,9 @@ grants by design) → active member (grants checked). Deny throws `Forbidden`.
 
 ## Seats
 
-- `PLAN_CAPS.userCap` is TOTAL people incl. the owner: Starter 1 / Pro 3 /
-  Scale 6 = "You + 0/2/5 teammates". Caps are denormalized onto subscription
+- `PLAN_CAPS.userCap` is TOTAL people incl. the owner: Starter 1 / Pro 3 =
+  "You + 0/2 teammates"; Enterprise is unlimited (Credits T6 — Scale's
+  "you + 5" went with Scale). Caps are denormalized onto subscription
   rows → **changing them needs `migrations.resyncSubscriptionCaps` on prod**
   (on the release checklist). Comped stores and an admin's own store resolve
   to unlimited seats like every other cap.

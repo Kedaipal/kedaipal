@@ -391,7 +391,7 @@ from it, leaving no tombstone — for test / spam / duplicate orders that need t
 disappear. **Kedaipal admin only** (support): both mutations resolve
 `requireOrderAccess`/`requireRetailerAccess` and then throw `Forbidden` unless
 the caller **is an admin** (`isAdmin` — allow-list membership, checked directly),
-so a plain store owner — Starter, Pro or Scale — is rejected server-side even
+so a plain store owner — Starter, Pro or Enterprise — is rejected server-side even
 though they own the store. The gate is admin membership, **not**
 `access.actingAsAdmin`: an admin can erase orders in **any** store, including one
 they personally own (which resolves via `requireRetailerAccess`'s owner branch,
@@ -462,7 +462,7 @@ example here no longer exists — see
 
 **Access / tiering:** both `deleteOrder` and `bulkDeleteOrders` are **admin
 only** (any store), not plan-gated — permanent erasure is an ops action, not a
-paid feature, so it applies equally to Starter / Pro / Scale. (The bulk
+paid feature, so it applies equally to Starter / Pro / Enterprise. (The bulk
 mutation's earlier Pro `orderInbox` gate is gone: a plain owner never reaches it,
 they're rejected up front.) Bulk checks the admin gate once up front (`isAdmin` —
 one caller identity for the batch), then still caps at 100/batch and resolves

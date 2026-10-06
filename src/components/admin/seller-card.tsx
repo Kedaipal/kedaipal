@@ -4,18 +4,21 @@
 import type { AdminSellerRow } from "../../../convex/admin";
 import {
 	sellerBucket,
+	sellerCredits,
 	sellerExpiry,
 	sellerPlanLabel,
 	sellerRail,
 	sellerReason,
-	sellerSeatsLabel,
+	sellerSeatsPhrase,
 } from "../../lib/admin-seller-view";
 import { cn } from "../../lib/utils";
 import {
 	ContactLine,
+	CreditsText,
 	ExpiryText,
 	FoundingPill,
 	MarketplacePill,
+	OwnerEmailLine,
 	StatusPill,
 	ViaPill,
 } from "./seller-cells";
@@ -72,7 +75,7 @@ export function SellerCard({
 				<span className="font-semibold">{sellerPlanLabel(seller)}</span>
 				{rail ? <span className="text-muted-foreground">{rail}</span> : null}
 				<span className="text-muted-foreground">
-					· {sellerSeatsLabel(seller)} seats
+					· {sellerSeatsPhrase(seller)}
 				</span>
 				{reason ? (
 					<span className="basis-full text-xs text-muted-foreground">
@@ -81,13 +84,19 @@ export function SellerCard({
 				) : null}
 			</div>
 
-			<ExpiryText
-				expiry={sellerExpiry(seller, now)}
-				className="flex-row items-baseline gap-2"
-			/>
+			<div className="flex flex-col gap-2 sm:flex-row sm:items-baseline sm:justify-between">
+				<ExpiryText
+					expiry={sellerExpiry(seller, now)}
+					className="flex-row items-baseline gap-2"
+				/>
+				<CreditsText
+					credits={sellerCredits(seller)}
+					className="flex-row items-baseline gap-2"
+				/>
+			</div>
 
 			<div className="flex flex-col divide-y divide-border/60 border-t border-border/60">
-				<ContactLine kind="email" value={seller.ownerEmail} />
+				<OwnerEmailLine seller={seller} />
 				<ContactLine kind="whatsapp" value={seller.waPhone} />
 			</div>
 

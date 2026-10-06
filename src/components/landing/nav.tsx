@@ -218,8 +218,8 @@ export function Nav() {
 	}, []);
 
 	// The design's link set (landing v2, z8r3fdegej): the two sections the
-	// target tier is sold on, then the price, then the objections. Pricing sits
-	// between them as its own route link below.
+	// target tier is sold on, then the objections. These are in-page anchors —
+	// they only mean anything relative to `/`, which is why they stay `<a>`.
 	const navLinks = [
 		{ href: "/#delivery", label: m.nav_delivery() },
 		{ href: "/#payments", label: m.nav_payments() },
@@ -230,7 +230,7 @@ export function Nav() {
 	// and pills, and only an explicit shared height keeps their hover pills from
 	// rendering at three different sizes in one row.
 	const linkClass =
-		"inline-flex min-h-11 items-center whitespace-nowrap rounded-full px-4 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground";
+		"inline-flex min-h-11 items-center whitespace-nowrap rounded-full px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground";
 	const mobileLinkClass =
 		"rounded-xl px-3 py-3 text-base font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground";
 
@@ -238,7 +238,7 @@ export function Nav() {
 		<div className="fixed inset-x-0 top-0 z-40 px-3 pt-3 md:px-5 md:pt-4">
 			<nav
 				className={cn(
-					"mx-auto max-w-5xl rounded-3xl border transition-all duration-300",
+					"mx-auto max-w-6xl rounded-3xl border transition-all duration-300",
 					scrolled || menuOpen
 						? "border-border/70 bg-background/90 shadow-[0_8px_30px_hsl(222_47%_11%_/_0.08)] backdrop-blur-lg"
 						: "border-transparent bg-transparent",
@@ -260,18 +260,45 @@ export function Nav() {
 							priority
 						/>
 					</Link>
-					{/* The cost calculator left the nav (86eye3p6z): five links plus the
-					    locale switcher and the CTA crowded the bar between md and ~lg;
-					    `/cost` is linked from the pricing teaser's "full breakdown" row. */}
-					<div className="hidden items-center gap-1 md:flex">
-						{navLinks.map((link) => (
-							<a key={link.href} href={link.href} className={linkClass}>
-								{link.label}
-							</a>
-						))}
+					{/* Two groups, one rule: in-page anchors into the pitch, then the
+					    three ROUTES a visitor can leave for — the price, the store
+					    directory, the blog. The hairline IS the grouping, not
+					    decoration; without it six labels read as one undifferentiated
+					    run. `/cost` still isn't here (86eye3p6z) — the pricing teaser's
+					    "full breakdown" row links it.
+
+					    Two tiers, because the bar measurably cannot hold six labels at
+					    every desktop width — this was measured, not estimated. At a
+					    1024px viewport Bahasa needs 1107px for six labels plus the
+					    action cluster and has 982px: it overruns by 125px
+					    ("Penghantaran", "Pembayaran", "Soalan Lazim", "Mula percuma"),
+					    and no trimming closes a gap that size — dropping the hairline,
+					    tightening to px-2.5 and even cutting FAQ outright all still
+					    overflow, and `min-h-11` is not negotiable. So `lg` carries the
+					    three ROUTES (the places you cannot otherwise reach from here;
+					    ~250px of slack even in Bahasa) and `xl` adds the anchors, which
+					    are only scroll shortcuts into sections this page scrolls through
+					    anyway and which all six locales fit by 1280px. Below `lg` the
+					    menu carries all six, which is why the hamburger now switches at
+					    `lg` too. */}
+					<div className="hidden items-center gap-1 lg:flex">
+						<div className="hidden items-center gap-1 xl:flex">
+							{navLinks.map((link) => (
+								<a key={link.href} href={link.href} className={linkClass}>
+									{link.label}
+								</a>
+							))}
+							<span aria-hidden className="mx-1.5 h-5 w-px bg-border" />
+						</div>
 						<Link to="/pricing" className={linkClass}>
 							{m.nav_pricing()}
 						</Link>
+						<Link to="/stores" className={linkClass}>
+							{m.nav_stores()}
+						</Link>
+						<a href={BLOG_URL} className={linkClass}>
+							{m.nav_blog()}
+						</a>
 					</div>
 					<div className="flex items-center gap-1">
 						{/* Navigation ends, actions begin. Without this the 17px gap
@@ -280,7 +307,7 @@ export function Nav() {
 						    undifferentiated run of nine controls. */}
 						<span
 							aria-hidden
-							className="mx-2 hidden h-6 w-px bg-border md:block"
+							className="mx-2 hidden h-6 w-px bg-border lg:block"
 						/>
 						<LanguageSwitcher />
 						<NavAuthCta />
@@ -288,7 +315,7 @@ export function Nav() {
 							type="button"
 							variant="ghost"
 							size="icon"
-							className="tap-target rounded-full md:hidden"
+							className="tap-target rounded-full lg:hidden"
 							onClick={() => setMenuOpen((prev) => !prev)}
 							aria-label={menuOpen ? m.nav_menu_close() : m.nav_menu_open()}
 							aria-expanded={menuOpen}
@@ -298,7 +325,7 @@ export function Nav() {
 					</div>
 				</div>
 				{menuOpen && (
-					<div className="border-t border-border/70 px-4 pb-4 pt-2 md:hidden">
+					<div className="border-t border-border/70 px-4 pb-4 pt-2 lg:hidden">
 						<div className="flex flex-col gap-1">
 							{navLinks.map((link) => (
 								<a
@@ -317,10 +344,9 @@ export function Nav() {
 							>
 								{m.nav_pricing()}
 							</Link>
-							{/* The two doors OUT of the seller pitch (z8r3fdkmyp): the store
-							    directory and the blog. Here and in the footer only — the
-							    desktop bar is capped at max-w-5xl, and in Bahasa two more
-							    links squeezed the logo at every width. */}
+							{/* The two doors OUT of the seller pitch (z8r3fdkmyp) — the
+							    store directory and the blog. Same order as the bar, so the
+							    menu is the bar at a narrower width, not a second IA. */}
 							<Link
 								to="/stores"
 								onClick={closeMenu}
@@ -337,7 +363,12 @@ export function Nav() {
 							</a>
 						</div>
 						<div className="mt-3 flex flex-col gap-2 border-t border-border/70 pt-3">
-							<MobileMenuAuthCta onClose={closeMenu} />
+							{/* `md:hidden`: from `md` up the bar already shows Log in and
+							    the trial pill, so repeating them here would put the same
+							    primary CTA on screen twice between `md` and `lg`. */}
+							<div className="flex flex-col gap-2 md:hidden">
+								<MobileMenuAuthCta onClose={closeMenu} />
+							</div>
 							<BookDemoLink className="h-12 w-full rounded-full" />
 						</div>
 					</div>

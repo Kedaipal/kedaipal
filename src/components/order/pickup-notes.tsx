@@ -11,8 +11,9 @@ import { LinkifiedText } from "../ui/linkified-text";
  * and checkout. One component, so the heading, the dedupe (done upstream by
  * `orderPickupNotes`) and the look can't drift between surfaces.
  *
- * A bare URL in a note (a Google Maps pin, a parking guide) is tappable via
- * `LinkifiedText`; everything else stays escaped text.
+ * A link in a note — a bare URL or a Markdown `[Parking guide](https://…)`
+ * (convex/lib/noteLinks.ts) — is tappable via `LinkifiedText`; everything
+ * else stays escaped text.
  *
  * Takes already-distinct notes. Renders NOTHING for an empty list, so callers
  * don't need a guard.

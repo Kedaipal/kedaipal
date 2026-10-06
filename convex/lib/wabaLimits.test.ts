@@ -19,7 +19,7 @@ describe("resolveSendingLimits", () => {
 			resolveSendingLimits({ plan: "pro", accountCreatedAt: fresh, now }).dailyCap,
 		).toBe(NEW_ACCOUNT_DAILY_CAP);
 		expect(
-			resolveSendingLimits({ plan: "scale", accountCreatedAt: fresh, now })
+			resolveSendingLimits({ plan: "enterprise", accountCreatedAt: fresh, now })
 				.dailyCap,
 		).toBe(NEW_ACCOUNT_DAILY_CAP);
 	});
@@ -33,7 +33,7 @@ describe("resolveSendingLimits", () => {
 			resolveSendingLimits({ plan: "pro", accountCreatedAt: old, now }).dailyCap,
 		).toBe(200);
 		expect(
-			resolveSendingLimits({ plan: "scale", accountCreatedAt: old, now })
+			resolveSendingLimits({ plan: "enterprise", accountCreatedAt: old, now })
 				.dailyCap,
 		).toBe(500);
 	});

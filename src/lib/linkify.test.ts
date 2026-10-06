@@ -63,3 +63,47 @@ describe("linkify", () => {
 		expect(links.map((l) => l.text)).toEqual(["https://a.co", "https://b.co"]);
 	});
 });
+
+describe("linkify — Markdown links (z8r3fdn2uj)", () => {
+	it("links the label, not the raw syntax", () => {
+		expect(
+			linkify("Parking: [guide](https://maps.app.goo.gl/abc) then the gate"),
+		).toEqual([
+			{ kind: "text", text: "Parking: " },
+			{
+				kind: "link",
+				text: "guide",
+				href: "https://maps.app.goo.gl/abc",
+			},
+			{ kind: "text", text: " then the gate" },
+		]);
+	});
+
+	it("gives a www. target an https href", () => {
+		expect(linkify("[Map](www.kedaipal.com/map)")).toEqual([
+			{ kind: "link", text: "Map", href: "https://www.kedaipal.com/map" },
+		]);
+	});
+
+	it("mixes with bare URLs in the same note", () => {
+		const links = linkify("[Pin](https://a.co) or https://b.co").filter(
+			(s) => s.kind === "link",
+		);
+		expect(links).toEqual([
+			{ kind: "link", text: "Pin", href: "https://a.co/" },
+			{ kind: "link", text: "https://b.co", href: "https://b.co/" },
+		]);
+	});
+
+	it("never links a non-http Markdown target", () => {
+		expect(linkify("[tap](javascript:alert(1))")).toEqual([
+			{ kind: "text", text: "[tap](javascript:alert(1))" },
+		]);
+	});
+
+	it("leaves brackets that aren't a link as text", () => {
+		expect(linkify("Ring [twice] at the gate")).toEqual([
+			{ kind: "text", text: "Ring [twice] at the gate" },
+		]);
+	});
+});

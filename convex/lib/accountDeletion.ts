@@ -19,6 +19,14 @@
  *    data only (no buyer PII) and must survive the tenant for bookkeeping/tax.
  *    Their `retailerId`/`subscriptionId` refs dangle after deletion — expected
  *    for a retained record of a deleted tenant.
+ *  - `creditLedger` rows (Credits, 86eye2ccu) — the financial record of what
+ *    the seller bought and spent (purchased credits are deferred revenue until
+ *    spent or expired). Like invoices: seller billing data, no buyer PII, kept
+ *    for bookkeeping. Their `retailerId`/`orderId` refs dangle — expected.
+ *  - `creditPurchases` rows + their `receiptPdfStorageId` blobs (Credits T2,
+ *    z8r3fdf8ht) — what the seller paid Kedaipal for top-up packs, the same
+ *    kind of record as an invoice. Their `creditPurchases` PHASE doesn't
+ *    delete them: it closes every still-pending checkout (below).
  *  - `adminAuditLog` rows — an audit trail must outlive the tenant it audited
  *    (`targetId`s are doc ids / last-4 only, never buyer PII).
  *  - `optOuts` rows are the buyer's standing suppression instruction, GLOBAL
@@ -51,6 +59,9 @@ export const DELETION_PHASES = [
 	"counterCheckoutSessions",
 	"subscriptions",
 	"subscriptionUsage",
+	"creditPurchases",
+	"creditAccounts",
+	"creditLots",
 	"foundingMembers",
 	"retailerMembers",
 	"retailerSendingLimits",
@@ -282,6 +293,57 @@ export async function runDeletionPhase(
 				.withIndex("by_retailer_month", (q) => q.eq("retailerId", retailerId))
 				.take(limit);
 			for (const usage of rows) await ctx.db.delete(usage._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "creditPurchases": {
+			// Retained by decision (see the header) — but, like a pending
+			// invoice, a live top-up checkout must not outlive the store: a
+			// payment into a deleted store is only ever a refund. Expire every
+			// pending purchase and kill its HitPay link; a payment that still
+			// slips through is stamped `late_payment` and never credited.
+			// Expired rows drop out of the index range, so re-entry never
+			// redoes work.
+			const pending = await ctx.db
+				.query("creditPurchases")
+				.withIndex("by_retailer_status_created", (q) =>
+					q.eq("retailerId", retailerId).eq("status", "pending"),
+				)
+				.take(limit);
+			for (const purchase of pending) {
+				await ctx.db.patch(purchase._id, {
+					status: "expired",
+					expiredAt: Date.now(),
+				});
+				if (purchase.gatewayRequestId) {
+					await ctx.scheduler.runAfter(
+						0,
+						internal.creditPurchases.deletePurchaseRequest,
+						{ requestId: purchase.gatewayRequestId },
+					);
+				}
+			}
+			return { processed: pending.length, done: pending.length < limit };
+		}
+		case "creditAccounts": {
+			// The cached balance row (Credits, 86eye2ccu) — derived state, gone with
+			// the tenant. The LEDGER is retained (see the header).
+			const rows = await ctx.db
+				.query("creditAccounts")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const account of rows) await ctx.db.delete(account._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "creditLots": {
+			// Index prefix: by_retailer_open_expiry with only the retailerId bound
+			// — open and spent lots alike.
+			const rows = await ctx.db
+				.query("creditLots")
+				.withIndex("by_retailer_open_expiry", (q) =>
+					q.eq("retailerId", retailerId),
+				)
+				.take(limit);
+			for (const lot of rows) await ctx.db.delete(lot._id);
 			return { processed: rows.length, done: rows.length < limit };
 		}
 		case "foundingMembers": {

@@ -171,6 +171,29 @@ describe("blocked states name their fix", () => {
 			screen.getByText(/Add your pickup address under Settings/i),
 		).toBeTruthy();
 	});
+
+	// Credits T3: out of credits, no quote is offered (it would be refused);
+	// the booking control stays in place, disabled, saying why — and the
+	// store-wide lock outranks the order's own block, since it's the one the
+	// seller can clear today.
+	it("out of credits: no quote, a disabled Book with the lock's reason", () => {
+		const reason =
+			"You're out of credits, so accepting and updating orders and editing products are paused.";
+		render(<DelyvaDispatchCard order={order} lockedReason={reason} />);
+		expect(
+			screen.queryByRole("button", { name: /get courier prices/i }),
+		).toBeNull();
+		const button = screen.getByRole("button", { name: /book a courier/i });
+		expect(button.hasAttribute("disabled")).toBe(true);
+		expect(screen.getByText(reason)).toBeTruthy();
+		cleanup();
+		state.dispatch = dispatchState({ blockReason: "no_pickup_address" });
+		render(<DelyvaDispatchCard order={order} lockedReason={reason} />);
+		expect(screen.getByText(reason)).toBeTruthy();
+		expect(
+			screen.queryByText(/Add your pickup address under Settings/i),
+		).toBeNull();
+	});
 });
 
 describe("quote → pick → book", () => {

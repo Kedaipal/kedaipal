@@ -1077,9 +1077,15 @@ export const createOrderFromSession = mutation({
 		// real first order — activate the store (one-time stamp).
 		await stampRetailerActivation(ctx, retailer._id, now);
 
-		// Meter against the monthly usage nudge (SOFT cap, never a block) —
-		// counter orders count like storefront ones.
-		await recordOrderCreated(ctx, retailer._id, now);
+		// Meter against the monthly usage nudge (SOFT cap, never a block) and
+		// use the order's credit — counter orders count like storefront ones,
+		// including while the store is out of credits (intake never stops).
+		await recordOrderCreated(ctx, {
+			retailerId: retailer._id,
+			orderId,
+			orderShortId: shortId,
+			createdAt: now,
+		});
 
 		// Mark every product on this order as having sold, so it can no longer be
 		// permanently deleted out from under the order lines that now reference it.

@@ -41,6 +41,7 @@ import {
 	isRiderManagedTransition,
 	riderDrivesOrderStatus,
 } from "../../convex/lib/lalamove";
+import { noteToPlainText } from "../../convex/lib/noteLinks";
 import {
 	isDefaultedCounterDate,
 	isFreeOrder,
@@ -58,6 +59,7 @@ import { orderPickupNotes } from "../../convex/lib/pickupNote";
 import type { PickupSnapshot } from "../../convex/lib/whatsappCopy";
 import { ProBadge } from "../components/app/pro-gate";
 import { ViewOnlyNote } from "../components/app/view-only-note";
+import { CreditLockNote } from "../components/credits/credit-lock-note";
 import { BRAND_GLYPHS } from "../components/dashboard/brand-icons";
 import { FulfilmentDateBadge } from "../components/dashboard/fulfilment-date-badge";
 import {
@@ -65,6 +67,7 @@ import {
 	PageHeaderSkeleton,
 } from "../components/dashboard/page-header";
 import { StatusBadge } from "../components/dashboard/status-badge";
+import { ActivityCard } from "../components/order/activity-card";
 import {
 	BookingRequestCard,
 	BookingResolutionNote,
@@ -74,6 +77,7 @@ import {
 	type OrderBookingSpan,
 	OrderItemLine,
 } from "../components/order/order-item-line";
+import { PaymentProofList } from "../components/order/payment-proof-list";
 import { PickupNotes } from "../components/order/pickup-notes";
 import {
 	canPrintLabel,
@@ -88,7 +92,6 @@ import {
 	type ShipmentFields,
 	ShipmentTrackingCard,
 } from "../components/order/shipment-tracking";
-import { ActivityCard } from "../components/order/activity-card";
 import {
 	DeliveryAddressDisplay,
 	formatAddressInline,
@@ -106,13 +109,15 @@ import {
 	DialogTitle,
 } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
+import { LinkifiedText } from "../components/ui/linkified-text";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
-import { useAreaLock } from "../hooks/useStoreLock";
+import { lockLabel, useAreaLock } from "../hooks/useStoreLock";
 import { canHardDeleteOrders } from "../lib/admin-actions";
 import { MASK_PII } from "../lib/analytics-privacy";
 import { bookingFulfilmentLine } from "../lib/booking-dates";
+import { cancelCreditLine } from "../lib/credits-ui";
 import { formatPhone, orderCustomerLabel } from "../lib/customer";
 import { shipsAsParcel } from "../lib/dispatch-surface";
 import {
@@ -339,6 +344,14 @@ function OrderDetailRoute() {
 	// this teammate holds view on orders and not edit. Sixteen controls on this
 	// page already branch on `readOnly`; they now cover the grant too.
 	const { readOnly, reason } = useAreaLock("orders");
+	// Out of credits (Credits T3) is narrower than view-only: the seller can
+	// still cancel, refund and pin, but not move an order on, take payment by
+	// hand, book a courier or hand out a receipt. Those controls read `work`
+	// (which includes view-only); cancel and pin stay on `readOnly`.
+	const work = useAreaLock("orders", { credits: true });
+	const workLockedReason = work.readOnly ? work.reason : undefined;
+	// What a greyed-out primary control says after its label.
+	const workLockLabel = lockLabel(work.cause);
 	// Line-item thumbnails (86eyrtz74): variant image, else product image, one
 	// entry per line IN LINE ORDER (the same product can appear twice). Resolved
 	// server-side in one batched read rather than a lookup per row.
@@ -380,10 +393,13 @@ function OrderDetailRoute() {
 		actingAsAdmin: retailer?.actingAsAdmin,
 		amIAdmin,
 	});
-	const proofUrl = useQuery(
+	// Every "I've paid" submission (z8r3fdn2uj). Keyed on paymentClaimedAt:
+	// only a buyer claim sets it, so an order the seller marked paid by hand
+	// has nothing to list and never asks.
+	const paymentProofs = useQuery(
 		convexQuery(
-			api.orders.getPaymentProofUrl,
-			order?.paymentProofStorageId ? { orderId: order._id } : "skip",
+			api.orders.listPaymentProofs,
+			order?.paymentClaimedAt !== undefined ? { orderId: order._id } : "skip",
 		),
 	).data;
 	const customerImageUrl = useQuery(
@@ -534,6 +550,14 @@ function OrderDetailRoute() {
 	const [paymentMethodChoice, setPaymentMethodChoice] = useState<
 		OrderPaymentMethod | undefined
 	>(undefined);
+	// What cancelling does to this order's credit (Credits T3) — read only
+	// while the confirm is open, so the dialog says it before the tap.
+	const cancelOutlook = useQuery(
+		convexQuery(
+			api.creditLock.cancelOutlook,
+			confirmCancelOpen && order ? { orderId: order._id } : "skip",
+		),
+	).data;
 
 	if (order === undefined) {
 		return <OrderDetailSkeleton />;
@@ -762,11 +786,15 @@ function OrderDetailRoute() {
 						{/* Label first: it's the operational step (the parcel is going
 						    out now); the receipt is bookkeeping, any time after. */}
 						{canPrintLabel(order) ? (
-							<PrintLabelButton shortId={order.shortId} />
+							<PrintLabelButton
+								shortId={order.shortId}
+								lockedReason={workLockedReason}
+							/>
 						) : null}
 						<ReceiptDownloadButton
 							shortId={order.shortId}
 							paid={isOrderDocPaid(order.paymentStatus)}
+							lockedReason={workLockedReason}
 						/>
 					</>
 				}
@@ -817,13 +845,16 @@ function OrderDetailRoute() {
 			    nothing on it, so say that above the controls rather than letting
 			    every tap answer with a toast. Renders nothing when writable. */}
 			<ViewOnlyNote />
+			{/* Out of credits (Credits T3): the narrower lock — order work pauses,
+			    cancelling and refunding don't. Renders nothing otherwise. */}
+			<CreditLockNote scope="orders" />
 
 			{/* A booking request's stage control IS approve/decline (S3): the
 			    stepper can't move it (the server refuses), so its slot holds the
 			    request card until the seller answers. Once resolved without an
 			    approval, a quiet note keeps the WHY visible on the cancelled order. */}
 			{order.status === "booking_requested" ? (
-				<BookingRequestCard order={order} />
+				<BookingRequestCard order={order} lockedReason={workLockedReason} />
 			) : order.bookingResolution !== undefined ? (
 				<BookingResolutionNote
 					isRsvp={order.eventRsvp === true}
@@ -931,17 +962,18 @@ function OrderDetailRoute() {
 											}}
 											disabled={
 												pending !== null ||
-												readOnly ||
+												work.readOnly ||
 												blocked ||
 												riderManaged ||
 												collectionPending
 											}
+											title={work.readOnly ? work.reason : undefined}
 											className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-foreground text-[15px] font-bold text-background transition-opacity hover:opacity-95 disabled:opacity-55"
 										>
 											{pending === nextStage.id ? (
 												"Updating…"
-											) : readOnly ? (
-												`${advanceLabel} — view-only`
+											) : work.readOnly ? (
+												`${advanceLabel} — ${workLockLabel}`
 											) : blocked ? (
 												`${advanceLabel} — awaiting mockup`
 											) : collectionPending ? (
@@ -1193,7 +1225,9 @@ function OrderDetailRoute() {
 			{/* Delivery charge to confirm — the out-of-range "arrange via WhatsApp"
 			    state (86extzdr8). Amber like the payment claim: it needs the
 			    seller's action before the buyer can be asked to pay. */}
-			{deliveryFeePending ? <SetDeliveryFeeCard order={order} /> : null}
+			{deliveryFeePending ? (
+				<SetDeliveryFeeCard order={order} lockedReason={workLockedReason} />
+			) : null}
 
 			{/* Payment claim — the amber "needs your eyes" state card, actionable
 			    when the shopper has tapped "I've paid". */}
@@ -1236,38 +1270,7 @@ function OrderDetailRoute() {
 						) : null}
 					</div>
 
-					{order.paymentProofStorageId ? (
-						proofUrl ? (
-							<a
-								href={proofUrl}
-								target="_blank"
-								rel="noopener noreferrer"
-								className="block overflow-hidden rounded-xl border border-amber-200 bg-background dark:border-amber-800"
-							>
-								{/* Fixed-height frame (was max-h with auto height) so the
-								    skeleton has a real box to show while this — a real
-								    photo upload with no prior placeholder — loads. */}
-								<AppImage
-									src={proofUrl}
-									alt="Payment receipt"
-									aspect="h-64 w-full"
-									objectFit="contain"
-									// A buyer's bank screenshot. Order-owned, erased on hard
-									// delete — must never sit on a public edge cache.
-									sensitive
-								/>
-							</a>
-						) : (
-							<div className="flex items-center justify-center rounded-xl border border-amber-200 bg-background p-4 text-xs text-muted-foreground dark:border-amber-800">
-								Loading screenshot…
-							</div>
-						)
-					) : (
-						<p className="text-sm text-amber-900/90 dark:text-amber-200/90">
-							No screenshot attached. Cross-check the amount and reference in
-							your bank app.
-						</p>
-					)}
+					<PaymentProofList proofs={paymentProofs} tone="claimed" />
 
 					<div className="flex flex-col gap-2">
 						<Button
@@ -1276,12 +1279,12 @@ function OrderDetailRoute() {
 							// View-only: taking payment is a write; opening the method
 							// dialog first would walk the seller through choices the
 							// server is about to refuse (found live, 20 Sep).
-							disabled={confirmingPayment || readOnly}
-							title={readOnly ? reason : undefined}
+							disabled={confirmingPayment || work.readOnly}
+							title={work.readOnly ? work.reason : undefined}
 							className="h-11 w-full"
 						>
-							{readOnly
-								? "Mark payment received — view-only"
+							{work.readOnly
+								? `Mark payment received — ${workLockLabel}`
 								: "Mark payment received"}
 						</Button>
 						{askForProofUrl ? (
@@ -1349,15 +1352,18 @@ function OrderDetailRoute() {
 						onClick={() => setConfirmPaymentOpen(true)}
 						isLoading={confirmingPayment}
 						disabled={
-							confirmingPayment || readOnly || mockupGated || deliveryFeePending
+							confirmingPayment ||
+							work.readOnly ||
+							mockupGated ||
+							deliveryFeePending
 						}
-						title={readOnly ? reason : undefined}
+						title={work.readOnly ? work.reason : undefined}
 						variant="secondary"
 						className="h-11 w-full"
 					>
 						<BadgeCheck className="size-4" />
-						{readOnly
-							? "Mark payment received — view-only"
+						{work.readOnly
+							? `Mark payment received — ${workLockLabel}`
 							: mockupGated
 								? "Awaiting mockup approval"
 								: deliveryFeePending
@@ -1448,8 +1454,8 @@ function OrderDetailRoute() {
 												}
 											}}
 											isLoading={sendingReminder}
-											disabled={sendingReminder || onCooldown || readOnly}
-											title={readOnly ? reason : undefined}
+											disabled={sendingReminder || onCooldown || work.readOnly}
+											title={work.readOnly ? work.reason : undefined}
 											variant="outline"
 											className="h-11 w-full"
 										>
@@ -1474,46 +1480,55 @@ function OrderDetailRoute() {
 
 			{/* Received → read-only confirmation. */}
 			{paymentStatus === "received" ? (
-				<section className="flex items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4">
-					<BadgeCheck className="size-5 shrink-0 text-emerald-700" />
-					<div className="min-w-0 flex-1">
-						<p className="text-xs font-semibold uppercase tracking-widest text-emerald-800">
-							Payment received
-						</p>
-						<p className="text-sm text-emerald-900">
-							{order.gatewayPaymentId
-								? // Auto-confirmed by the HitPay webhook (86eyb6z3a) — say so,
-									// since nobody on the team pressed the button.
-									`Paid online via HitPay${order.paymentReceivedAt ? ` ${formatRelative(order.paymentReceivedAt)}` : ""}`
-								: order.paymentReceivedAt
-									? `Confirmed ${formatRelative(order.paymentReceivedAt)}`
-									: "Confirmed by you"}
-							{order.paymentMethod
-								? ` · ${paymentMethodLabel(order.paymentMethod)}`
-								: ""}
-						</p>
-						{order.gatewayPaymentId ? (
-							// The seller is the side that pastes this into HitPay's
-							// dashboard search (to refund or reconcile), so the copy
-							// affordance belongs here at least as much as on the buyer's
-							// page — it was the buyer-only half of "one number both sides
-							// quote". `break-all` over `truncate`: a half-shown reference
-							// can't be matched against a dashboard entry.
-							<div className="mt-1 flex items-start justify-between gap-2">
-								<p className="min-w-0 break-all font-mono text-xs text-emerald-800/80">
-									Ref {order.gatewayPaymentId}
-								</p>
-								<CopyButton
-									value={order.gatewayPaymentId}
-									ariaLabel="Copy payment reference"
-									successMessage="Payment reference copied"
-									// Layout only — no colour override, so the primitive's
-									// own "Copied" green still lands on tap.
-									className="-my-2"
-								/>
-							</div>
-						) : null}
+				<section className="flex flex-col gap-3 rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 dark:border-emerald-800 dark:bg-emerald-950/40">
+					<div className="flex items-center gap-3">
+						<BadgeCheck className="size-5 shrink-0 text-emerald-700 dark:text-emerald-400" />
+						<div className="min-w-0 flex-1">
+							<p className="text-xs font-semibold uppercase tracking-widest text-emerald-800 dark:text-emerald-300">
+								Payment received
+							</p>
+							<p className="text-sm text-emerald-900 dark:text-emerald-100">
+								{order.gatewayPaymentId
+									? // Auto-confirmed by the HitPay webhook (86eyb6z3a) — say so,
+										// since nobody on the team pressed the button.
+										`Paid online via HitPay${order.paymentReceivedAt ? ` ${formatRelative(order.paymentReceivedAt)}` : ""}`
+									: order.paymentReceivedAt
+										? `Confirmed ${formatRelative(order.paymentReceivedAt)}`
+										: "Confirmed by you"}
+								{order.paymentMethod
+									? ` · ${paymentMethodLabel(order.paymentMethod)}`
+									: ""}
+							</p>
+							{order.gatewayPaymentId ? (
+								// The seller is the side that pastes this into HitPay's
+								// dashboard search (to refund or reconcile), so the copy
+								// affordance belongs here at least as much as on the buyer's
+								// page — it was the buyer-only half of "one number both sides
+								// quote". `break-all` over `truncate`: a half-shown reference
+								// can't be matched against a dashboard entry.
+								<div className="mt-1 flex items-start justify-between gap-2">
+									<p className="min-w-0 break-all font-mono text-xs text-emerald-800/80 dark:text-emerald-300/80">
+										Ref {order.gatewayPaymentId}
+									</p>
+									<CopyButton
+										value={order.gatewayPaymentId}
+										ariaLabel="Copy payment reference"
+										successMessage="Payment reference copied"
+										// Layout only — no colour override, so the primitive's
+										// own "Copied" green still lands on tap.
+										className="-my-2"
+									/>
+								</div>
+							) : null}
+						</div>
 					</div>
+					{/* What the buyer sent stays reachable after the money is in
+					    (z8r3fdn2uj) — a dispute, refund or reconciliation needs it
+					    long after the claim card is gone. A hand-marked payment has
+					    no claim, so nothing renders. */}
+					{order.paymentClaimedAt !== undefined ? (
+						<PaymentProofList proofs={paymentProofs} tone="received" />
+					) : null}
 				</section>
 			) : null}
 
@@ -1679,7 +1694,10 @@ function OrderDetailRoute() {
 						</p>
 					) : (
 						<div className="ml-auto shrink-0">
-							<RescheduleFulfilmentDialog order={order} />
+							<RescheduleFulfilmentDialog
+								order={order}
+								lockedReason={workLockedReason}
+							/>
 						</div>
 					)}
 				</div>
@@ -1921,8 +1939,8 @@ function OrderDetailRoute() {
 								<p className="text-xs font-semibold text-foreground">
 									About this spot
 								</p>
-								<p className="mt-0.5 text-xs text-foreground whitespace-pre-line">
-									{order.pickupSnapshot.notes}
+								<p className="mt-0.5 text-xs text-foreground whitespace-pre-line wrap-break-word">
+									<LinkifiedText text={order.pickupSnapshot.notes} />
 								</p>
 							</div>
 						) : null}
@@ -1982,6 +2000,7 @@ function OrderDetailRoute() {
 							: undefined
 					}
 					onAdvanceBookUnavailable={() => setShipDialogOpen(true)}
+					lockedReason={workLockedReason}
 				/>
 			) : null}
 
@@ -2049,10 +2068,13 @@ function OrderDetailRoute() {
 						lalamoveVendor &&
 						(dispatchInfo?.blockReason === null || hasActiveRiderBooking)
 					}
+					lockedReason={workLockedReason}
 				/>
 			) : null}
 
-			{order.mockupStatus !== undefined ? <MockupCard order={order} /> : null}
+			{order.mockupStatus !== undefined ? (
+				<MockupCard order={order} lockedReason={workLockedReason} />
+			) : null}
 
 			{/* Rare actions (receipt, cancel, delete) collapse behind one quiet
 			    trigger — the stepper above already carries the main transition. The
@@ -2090,6 +2112,7 @@ function OrderDetailRoute() {
 						{canPrintLabel(order) ? (
 							<PrintLabelButton
 								shortId={order.shortId}
+								lockedReason={workLockedReason}
 								variant="ghost"
 								size="default"
 								className="h-12 w-full justify-start gap-2.5 rounded-none px-4 text-sm font-medium lg:hidden"
@@ -2098,6 +2121,7 @@ function OrderDetailRoute() {
 						<ReceiptDownloadButton
 							shortId={order.shortId}
 							paid={isOrderDocPaid(order.paymentStatus)}
+							lockedReason={workLockedReason}
 							variant="ghost"
 							size="default"
 							className="h-12 w-full justify-start gap-2.5 rounded-none px-4 text-sm font-medium lg:hidden"
@@ -2242,11 +2266,15 @@ function OrderDetailRoute() {
 				open={confirmCancelOpen}
 				onOpenChange={setConfirmCancelOpen}
 				title={`Cancel order #${order.shortId}?`}
-				description={
+				description={[
+					"Stock is restored and this can't be undone. The customer is NOT sent a WhatsApp — the reason you give below is what they see on their order page.",
+					cancelOutlook ? cancelCreditLine(cancelOutlook) : null,
 					hasActiveRiderBooking
-						? `Stock is restored and this can't be undone. The customer is NOT sent a WhatsApp — the reason you give below is what they see on their order page. ⚠️ A Lalamove rider booking is still active on this order — cancel it from the ${dispatchCardName} card too, or you may pay for a wasted trip.`
-						: "Stock is restored and this can't be undone. The customer is NOT sent a WhatsApp — the reason you give below is what they see on their order page."
-				}
+						? `⚠️ A Lalamove rider booking is still active on this order — cancel it from the ${dispatchCardName} card too, or you may pay for a wasted trip.`
+						: null,
+				]
+					.filter((line): line is string => line !== null)
+					.join(" ")}
 				confirmLabel="Cancel order"
 				cancelLabel="Keep order"
 				destructive
@@ -2401,7 +2429,15 @@ const FEE_PENDING_REASON_COPY: Record<
 	unknown: "No delivery charge could be applied to this order automatically.",
 };
 
-function SetDeliveryFeeCard({ order }: { order: Doc<"orders"> }) {
+function SetDeliveryFeeCard({
+	order,
+	lockedReason,
+}: {
+	order: Doc<"orders">;
+	/** Out of credits or view-only: Set charge greys out and says why. The
+	 * WhatsApp link stays — agreeing the charge with the buyer costs nothing. */
+	lockedReason?: string;
+}) {
 	const setDeliveryFee = useMutation(api.orders.setDeliveryFee);
 	const [feeInput, setFeeInput] = useState("");
 	const [saving, setSaving] = useState(false);
@@ -2468,7 +2504,8 @@ function SetDeliveryFeeCard({ order }: { order: Doc<"orders"> }) {
 				<Button
 					onClick={handleSet}
 					isLoading={saving}
-					disabled={saving}
+					disabled={saving || lockedReason !== undefined}
+					title={lockedReason}
 					className="h-11 shrink-0"
 				>
 					Set charge
@@ -2486,7 +2523,16 @@ function SetDeliveryFeeCard({ order }: { order: Doc<"orders"> }) {
 	);
 }
 
-function MockupCard({ order }: { order: Doc<"orders"> }) {
+function MockupCard({
+	order,
+	lockedReason,
+}: {
+	order: Doc<"orders">;
+	/** Out of credits or view-only: sending, pricing and waiving grey out and
+	 * say why. What the buyer already has stays on screen. */
+	lockedReason?: string;
+}) {
+	const locked = lockedReason !== undefined;
 	const generateUploadUrl = useMutation(api.orders.generateMockupUploadUrl);
 	const discardMockupUploads = useMutation(api.orders.discardMockupUploads);
 	const submitMockup = useMutation(api.orders.submitMockup);
@@ -2750,7 +2796,8 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 								type="button"
 								variant="secondary"
 								onClick={handleSavePrice}
-								disabled={savingPrice}
+								disabled={savingPrice || locked}
+								title={lockedReason}
 								className="h-11 shrink-0"
 							>
 								{savingPrice ? "…" : "Save price"}
@@ -2766,7 +2813,16 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 
 			{needsMockup || status === "submitted" ? (
 				<div className="flex flex-col gap-1">
-					<label className="flex h-11 cursor-pointer items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90">
+					<label
+						title={lockedReason}
+						aria-disabled={locked || undefined}
+						className={cn(
+							"flex h-11 items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors",
+							locked
+								? "cursor-not-allowed opacity-55"
+								: "cursor-pointer hover:bg-primary/90",
+						)}
+					>
 						<ImagePlus className="size-4" />
 						{uploading
 							? "Sending…"
@@ -2777,7 +2833,7 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 							type="file"
 							accept={IMAGE_ACCEPT}
 							multiple
-							disabled={uploading}
+							disabled={uploading || locked}
 							onChange={handleUpload}
 							className="hidden"
 						/>
@@ -2794,7 +2850,8 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 				<Button
 					variant="secondary"
 					onClick={handleWaive}
-					disabled={waiving}
+					disabled={waiving || locked}
+					title={lockedReason}
 					className="h-11 w-full"
 				>
 					{waiving ? "…" : "Proceed without approval"}
@@ -2821,7 +2878,9 @@ function formatPickupInline(snapshot: PickupSnapshot): string {
 	const lines = [snapshot.label, snapshot.address];
 	const mapsUrl = deriveMapsUrl(snapshot);
 	if (mapsUrl) lines.push(mapsUrl);
-	if (snapshot.notes) lines.push(snapshot.notes);
+	// Pasted into WhatsApp by the seller — a Markdown link must arrive as
+	// "label: url", never brackets (convex/lib/noteLinks.ts).
+	if (snapshot.notes) lines.push(noteToPlainText(snapshot.notes));
 	return lines.join("\n");
 }
 

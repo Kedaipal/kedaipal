@@ -80,6 +80,13 @@ export const AREA_COPY: Record<PermissionArea, AreaCopy> = {
 		label: "Integrations",
 		description: "Lalamove, Delyva and HitPay accounts.",
 	},
+	credits: {
+		label: "Credits",
+		description:
+			"The store's order credits and their history. Edit also lets them buy credit packs.",
+		caveat:
+			"They pay for packs on the checkout page themselves — your saved card is never charged, and you're emailed every purchase.",
+	},
 	billing: {
 		label: "Billing",
 		description: "Your Kedaipal subscription and invoices (view only).",
@@ -104,6 +111,7 @@ export const AREA_GROUPS: ReadonlyArray<{
 			"exports",
 			"payments_settings",
 			"integrations",
+			"credits",
 			"billing",
 		],
 	},
@@ -133,7 +141,7 @@ export const TEAM_PRESETS: TeamPreset[] = [
 		id: "manager",
 		label: "Store manager",
 		description:
-			"Everything a helper can, plus editing products, customers, store and fulfilment settings, and viewing insights.",
+			"Everything a helper can, plus editing products, customers, store and fulfilment settings, and viewing insights and credits.",
 		grants: {
 			orders: "write",
 			products: "write",
@@ -142,6 +150,9 @@ export const TEAM_PRESETS: TeamPreset[] = [
 			store_settings: "write",
 			fulfilment: "write",
 			insights: "read",
+			// A manager runs the shop day to day, so they should see a low credit
+			// balance coming. Buying stays off until the owner grants it.
+			credits: "read",
 		},
 	},
 ];

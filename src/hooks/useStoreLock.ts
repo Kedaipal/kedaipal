@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../../convex/_generated/api";
 import { isStoreReadOnly, storeReadOnlyReason } from "../lib/subscription";
 import { AREA_COPY, type PermissionArea } from "../lib/team-permissions";
+import { useCreditLock } from "./useCreditLock";
 import { useDashboardRetailer } from "./useDashboardRetailer";
 import { usePermission, useStoreRole } from "./usePermission";
 
@@ -45,18 +46,48 @@ export function useStoreLock(): { readOnly: boolean; reason: string } {
  * Reads nothing new: `usePermission` resolves off the same cached retailer
  * payload the shell already holds.
  */
-export function useAreaLock(area: PermissionArea): {
+/** Which lock is speaking, so a greyed-out control can name it in its label
+ * (`lockLabel`) while the full sentence lives in `reason`. */
+export type AreaLockCause = "subscription" | "credits" | "permission";
+
+export function useAreaLock(
+	area: PermissionArea,
+	opts?: {
+		/** The control does WORK the credit lock covers (Credits T3): accepting
+		 * or moving an order forward, taking payment by hand, booking a courier,
+		 * handing out a receipt, editing the catalogue. Leave it off for what
+		 * stays open at zero — cancel, refund, pinning, settings. */
+		credits?: boolean;
+	},
+): {
 	readOnly: boolean;
 	reason: string;
+	cause: AreaLockCause | null;
 } {
 	const store = useStoreLock();
+	const credit = useCreditLock();
 	const { canWrite, role } = usePermission(area);
-	if (store.readOnly) return store;
+	if (store.readOnly) return { ...store, cause: "subscription" };
+	// Store-wide and blocks the owner too, so it outranks a missing grant —
+	// "ask for edit access" would send a teammate after a grant that still
+	// wouldn't let them act.
+	if (opts?.credits && credit.locked)
+		return { readOnly: true, reason: credit.reason, cause: "credits" };
 	// `role` is undefined until the payload lands — no lock, so nothing flashes
 	// disabled for an owner on first paint.
 	if (role === "member" && !canWrite)
-		return { readOnly: true, reason: writeBlockReason(area) };
-	return store;
+		return {
+			readOnly: true,
+			reason: writeBlockReason(area),
+			cause: "permission",
+		};
+	return { ...store, cause: null };
+}
+
+/** The few words a greyed-out primary control carries after its label
+ * ("Mark as Packed — out of credits"); the sentence is `reason`. */
+export function lockLabel(cause: AreaLockCause | null): string {
+	return cause === "credits" ? "out of credits" : "view-only";
 }
 
 /** The ONE sentence a teammate reads when they hold view on an area and reach

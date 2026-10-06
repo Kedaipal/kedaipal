@@ -45,8 +45,14 @@ import {
 	compHighlightEligible,
 	sanitizeHiddenNote,
 } from "./lib/marketplaceListing";
-import { isUnlimited } from "./lib/plans";
+import {
+	type BillingCurrency,
+	isUnlimited,
+	renewalCurrency,
+} from "./lib/plans";
+import { loadCreditAccount } from "./credits";
 import { storeIsInternal } from "./marketplace";
+import { isUnclaimed } from "./lib/unclaimedStore";
 import { loadSubscription, resolveAccess } from "./subscriptions";
 
 /** How many sellers the directory pulls. The Founding cohort is ~10 and the whole
@@ -72,9 +78,27 @@ export type AdminSellerRow = {
 	 * Pending invites shown separately so "2/3 +1 invited" reads at a glance. */
 	seats: { active: number; cap: number; capUnlimited: boolean; invited: number };
 	isFoundingMember: boolean;
+	/** Onboarded with a founding promise (`subscriptions.foundingIntent`) — a
+	 * founding store in waiting, refused an Enterprise contract like a member
+	 * (T6), so the contract form says so before the tap. */
+	foundingIntent: boolean;
 	foundingMemberRank?: number;
 	subscriptionStatus?: Doc<"subscriptions">["status"];
 	plan?: Doc<"subscriptions">["plan"];
+	/** The Enterprise contract (Credits T6) — admin-only, so the whole thing
+	 * rides here (contact, notes) for the seller sheet's Enterprise section;
+	 * `setBy` stays server-side (the audit log answers "who"). */
+	enterprise?: Omit<NonNullable<Doc<"subscriptions">["enterprise"]>, "setBy">;
+	/** A scheduled tier move (a downgrade, or an Enterprise store's move to
+	 * Pro) and when it lands. */
+	pendingPlanChange?: {
+		plan: NonNullable<Doc<"subscriptions">["pendingPlanChange"]>["plan"];
+		requestedAt: number;
+	};
+	/** The owner tapped the in-app "Talk to Arif" (z8r3fdkp8h follow-up) —
+	 * an open Enterprise lead. Absent once a contract lands or an admin
+	 * dismisses it; drives the "Wants Enterprise" filter. */
+	enterpriseInterestAt?: number;
 	/** On the house (z8r3fdeub2). True for an admin-granted comp AND for a
 	 * legacy stampless comped row — the chip renders either way. */
 	comped: boolean;
@@ -101,6 +125,25 @@ export type AdminSellerRow = {
 	 * + name. Absent = no badge referrer, or one that has since been purged. */
 	signupReferrer?: { slug: string; storeName: string };
 	createdAt: number;
+	/** Pre-built store, not yet handed over (docs/prebuilt-stores.md). An admin
+	 * built it before the vendor had an account, so it has no owner: every
+	 * owner-shaped fact on this row (`ownerUserId`, `ownerEmail`, seats) is a
+	 * placeholder or absent, and the directory must say "Unclaimed" rather than
+	 * render a blank person. Flips to false the moment the vendor claims it. */
+	unclaimed: boolean;
+	/** The address that will claim it (`retailers.pendingOwnerEmail`). Only ever
+	 * set while `unclaimed` — absent means an admin is still building and hasn't
+	 * been given the vendor's email, which is a normal state the console names
+	 * ("No handover email yet") rather than leaving blank. */
+	pendingOwnerEmail?: string;
+	/** When the handover invitation was last emailed (z8r3fdmy7n). Absent while
+	 * an address is named but never told — the commonest way a handover stalls,
+	 * so the console surfaces it rather than leaving the admin to remember. */
+	handoverInviteSentAt?: number;
+	/** When a pre-built store was handed over. Set = this store started life
+	 * unclaimed; absent = it was created by its own owner, like every store
+	 * before this feature. */
+	claimedAt?: number;
 	/** A dev-only purge cascade is running (z8r3fdbmc9) — the directory locks
 	 * the row (no Manage, no second purge) until it disappears. */
 	purging: boolean;
@@ -157,14 +200,23 @@ export type AdminSellerRow = {
 		failedAttempts?: number;
 		nextRetryAt?: number;
 	};
-	/** The open bill, if any — the thing to chase on a past-due row. */
+	/** The open bill, if any — the thing to chase on a past-due row. Its
+	 * tier and term say, before the tap, why a contract can't be saved or a
+	 * move to Pro scheduled while it's open (T6). */
 	pendingInvoice?: {
 		invoiceNumber: string;
 		dueDate: number;
 		total: number;
 		currency: string;
 		hasPayNowLink: boolean;
+		plan: Doc<"subscriptions">["plan"];
+		billingCycle: Doc<"subscriptions">["billingCycle"];
+		kind: "plan" | "hold";
 	};
+	/** The currency this store's next bill is in — its last paid invoice's,
+	 * else its country's (`renewalCurrency`). A new Enterprise contract is
+	 * frozen in exactly this, so the form labels the fee with it (T6). */
+	billingCurrency: BillingCurrency;
 	/** The most recently settled bill — "when did they last pay, how much". */
 	lastPaidInvoice?: {
 		invoiceNumber: string;
@@ -175,6 +227,23 @@ export type AdminSellerRow = {
 	/** When a Kedaipal admin last opened this store in act-as mode
 	 * (`adminAuditLog` `actAs.sessionStart`). Absent = never. */
 	lastActAsAt?: number;
+	/** Kedaipal Credits (T5, docs/credits.md): the store's CACHED balances —
+	 * the plan bucket (this period's monthly credits; negative = orders owed),
+	 * purchased credits (packs and admin lots), the usage period they belong
+	 * to and what it granted, when the total last reached zero (`exhaustedAt`,
+	 * set only while it's still there — "out of credits since"), and an
+	 * admin's custom monthly grant. Absent = no credit account yet (a store
+	 * the backfill hasn't reached). The drawer reads the live projection
+	 * (`credits.adminGetAccount`); the directory reads the cache, which can
+	 * lag a month boundary by the few minutes before the 00:05 MYT roll. */
+	credits?: {
+		plan: number;
+		purchased: number;
+		periodKey: string;
+		periodGrant: number;
+		exhaustedAt?: number;
+		customGrant?: number;
+	};
 };
 
 /** The two per-store invoice facts the directory shows: the open bill and the
@@ -183,8 +252,13 @@ export type AdminSellerRow = {
 async function loadInvoiceFacts(
 	ctx: QueryCtx,
 	retailerId: Id<"retailers">,
+	fallback: { plan: Doc<"subscriptions">["plan"]; billingCycle: Doc<"subscriptions">["billingCycle"] },
 ): Promise<
-	Pick<AdminSellerRow, "pendingInvoice" | "lastPaidInvoice">
+	Pick<AdminSellerRow, "pendingInvoice" | "lastPaidInvoice"> & {
+		/** The last paid bill's currency, stamp or no stamp — what
+		 * `renewalCurrency` (and so `setContract`) reads. */
+		lastPaidCurrency: string | undefined;
+	}
 > {
 	const pending = await ctx.db
 		.query("invoices")
@@ -207,6 +281,9 @@ async function loadInvoiceFacts(
 						total: pending.total,
 						currency: pending.currency,
 						hasPayNowLink: pending.gatewayPayment !== undefined,
+						plan: pending.plan ?? fallback.plan,
+						billingCycle: pending.billingCycle ?? fallback.billingCycle,
+						kind: pending.kind ?? "plan",
 					},
 				}
 			: {}),
@@ -220,6 +297,7 @@ async function loadInvoiceFacts(
 					},
 				}
 			: {}),
+		lastPaidCurrency: paid?.currency,
 	};
 }
 
@@ -261,8 +339,14 @@ export const listSellersForAdmin = query({
 			const referrer = r.signupReferrerId
 				? await ctx.db.get(r.signupReferrerId)
 				: null;
-			const invoiceFacts = await loadInvoiceFacts(ctx, r._id);
+			const { lastPaidCurrency, ...invoiceFacts } = await loadInvoiceFacts(
+				ctx,
+				r._id,
+				{ plan: sub?.plan ?? "pro", billingCycle: sub?.billingCycle ?? "monthly" },
+			);
 			const lastActAsAt = await loadLastActAs(ctx, r._id);
+			// One index read per store (`by_retailer`), the cached balances only.
+			const creditAccount = await loadCreditAccount(ctx, r._id);
 			// Seats (86exr91r4) — two short index reads per store; cap through
 			// resolveAccess so comped stores read as unlimited here too.
 			const activeMembers = await ctx.db
@@ -288,15 +372,41 @@ export const listSellersForAdmin = query({
 				ownerUserId: r.userId,
 				ownerIsAdmin: adminIds.has(r.userId),
 				seats: {
-					active: 1 + activeMembers.length,
+					// The `1` is the OWNER. A pre-built store has none, so counting
+					// one renders "1/3 seats" against a store with nobody in it —
+					// spotted by rendering the card, not by reading the code.
+					active: (isUnclaimed(r) ? 0 : 1) + activeMembers.length,
 					cap: seatCap,
 					capUnlimited: isUnlimited(seatCap),
 					invited: invitedMembers.length,
 				},
 				isFoundingMember: r.isFoundingMember === true,
+				foundingIntent: sub?.foundingIntent === true,
 				foundingMemberRank: r.foundingMemberRank,
 				subscriptionStatus: sub?.status,
 				plan: sub?.plan,
+				enterprise: sub?.enterprise
+					? {
+							baseFeeMinor: sub.enterprise.baseFeeMinor,
+							currency: sub.enterprise.currency,
+							includedCredits: sub.enterprise.includedCredits,
+							overageRateMinor: sub.enterprise.overageRateMinor,
+							blockSize: sub.enterprise.blockSize,
+							// The per-deal allowances ride too — the edit form prefills
+							// from THIS row, and the day they were left out, reopening a
+							// contract showed them blank: a fee typo-fix away from
+							// silently resetting a deal to unlimited seats (found
+							// hands-on, 2 Oct). Optional fields slip through Omit<>
+							// typing, so the admin.test.ts pin is the guard.
+							teammates: sub.enterprise.teammates,
+							broadcastQuota: sub.enterprise.broadcastQuota,
+							contactName: sub.enterprise.contactName,
+							notes: sub.enterprise.notes,
+							setAt: sub.enterprise.setAt,
+						}
+					: undefined,
+				pendingPlanChange: sub?.pendingPlanChange,
+				enterpriseInterestAt: r.enterpriseInterestAt,
 				comped: sub?.comped === true,
 				comp: sub?.comp
 					? {
@@ -318,6 +428,10 @@ export const listSellersForAdmin = query({
 						}
 					: {}),
 				createdAt: r._creationTime,
+				unclaimed: isUnclaimed(r),
+				pendingOwnerEmail: r.pendingOwnerEmail,
+				handoverInviteSentAt: r.handoverInviteSentAt,
+				claimedAt: r.claimedAt,
 				purging: r.purgeStartedAt !== undefined,
 				marketplace: {
 					unlistedAt: r.marketplaceUnlistedAt,
@@ -348,7 +462,23 @@ export const listSellersForAdmin = query({
 						}
 					: undefined,
 				...invoiceFacts,
+				billingCurrency: renewalCurrency({
+					lastPaidCurrency,
+					country: r.country,
+				}),
 				lastActAsAt,
+				...(creditAccount
+					? {
+							credits: {
+								plan: creditAccount.planBalance,
+								purchased: creditAccount.purchasedBalance,
+								periodKey: creditAccount.periodKey,
+								periodGrant: creditAccount.periodGrant,
+								exhaustedAt: creditAccount.exhaustedAt,
+								customGrant: creditAccount.grantOverride,
+							},
+						}
+					: {}),
 			});
 		}
 		rows.sort((a, b) => {
