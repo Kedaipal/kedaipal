@@ -25,7 +25,6 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
-import { useChecklistStamp } from "../../hooks/useChecklistStamp";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import {
 	formatPickupAddress,
@@ -69,6 +68,7 @@ import {
 	WEEKDAY_NAMES_SHORT,
 } from "../../../convex/lib/openingHours";
 import { useActAsRetailerId } from "../../hooks/useActAs";
+import { useChecklistStamp } from "../../hooks/useChecklistStamp";
 import { useUpdateSettings } from "../../hooks/useUpdateSettings";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import {
@@ -413,6 +413,26 @@ export function FulfilmentTab({
 	const deliveryIsLastMethod =
 		locations !== undefined && offerDelivery && !selfCollectWorking;
 	const selfCollectIsLastMethod = offerSelfCollect && !offerDelivery;
+	/**
+	 * Why "Only hosts events" can't be ticked for this point, or undefined.
+	 *
+	 * Mirrors the server guard in `pickupLocations.update`: flipping the last
+	 * CHOOSABLE point to events-only takes it out of the buyer's picker exactly
+	 * as deactivating it would, so a pickup-only store would be left accepting
+	 * nothing. The server is the real lock — this exists so the seller is told
+	 * before the tap, not by an error after the save (`z8r3fdm32x` review).
+	 */
+	const eventsOnlyLockReason = (
+		loc: Doc<"pickupLocations"> | undefined,
+	): string | undefined => {
+		if (!loc || offerDelivery || !loc.isActive || loc.eventsOnly === true) {
+			return undefined;
+		}
+		const othersLeft = active.some((l) => l._id !== loc._id);
+		return othersLeft
+			? undefined
+			: "Delivery is off and this is the only place buyers can collect from. Turn delivery back on, or add another pickup point, before making this events-only.";
+	};
 	const deliveryToggleDisabled = toggling || deliveryIsLastMethod;
 	const selfCollectToggleDisabled = toggling || selfCollectIsLastMethod;
 
@@ -749,6 +769,9 @@ export function FulfilmentTab({
 				location={
 					typeof editing === "string" ? undefined : (editing ?? undefined)
 				}
+				eventsOnlyLockReason={eventsOnlyLockReason(
+					typeof editing === "string" ? undefined : (editing ?? undefined),
+				)}
 				// Which card's Add was pressed. Only a default — the dialog's own
 				// control still lets the seller change their mind before saving.
 				defaultEventsOnly={editing === "new-venue"}

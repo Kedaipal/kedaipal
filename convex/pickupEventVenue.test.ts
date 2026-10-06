@@ -273,3 +273,149 @@ describe("an event venue can never prop up the fulfilment invariant", () => {
 		expect(r?.offerDelivery).toBe(false);
 	});
 });
+
+/**
+ * Both halves of the PR #330 review. One root cause: the old guard counted
+ * active rows and compared `<= 1`, assuming the subject row was among them —
+ * which `isChoosablePickupPoint` broke for a venue, and which `update` never
+ * applied at all.
+ */
+describe("stopping a point being choosable respects the fulfilment invariant", () => {
+	/** Sets up delivery-off (pickup-only), the only shape the guard fires in. */
+	async function pickupOnlyStore(t: ReturnType<typeof convexTest>) {
+		const retailer = await seedRetailer(t);
+		const asUser = t.withIdentity({ subject: USER });
+		const realPoint = await addPoint(t, retailer._id, "Main Store");
+		await asUser.mutation(api.retailers.updateSettings, {
+			retailerId: retailer._id,
+			offerSelfCollect: true,
+		});
+		await asUser.mutation(api.retailers.updateSettings, {
+			retailerId: retailer._id,
+			offerDelivery: false,
+		});
+		return { retailer, asUser, realPoint };
+	}
+
+	/**
+	 * HIGH. `update` had NO guard, so this was a one-tap route to a storefront
+	 * that accepts nothing: delivery off, self-collect on, zero choosable
+	 * points.
+	 */
+	test("the events-only toggle can't take a pickup-only store offline", async () => {
+		const t = setup();
+		const { asUser, realPoint, retailer } = await pickupOnlyStore(t);
+
+		await expect(
+			asUser.mutation(api.pickupLocations.update, {
+				pickupLocationId: realPoint,
+				eventsOnly: true,
+			}),
+		).rejects.toThrow(/no way to receive orders/i);
+
+		// And the refusal actually protected the buyer, not just thrown.
+		expect(
+			await t.query(api.pickupLocations.listActivePublicBySlug, {
+				slug: retailer.slug,
+			}),
+		).toHaveLength(1);
+	});
+
+	test("…but it's allowed when another choosable point remains", async () => {
+		const t = setup();
+		const { asUser, realPoint, retailer } = await pickupOnlyStore(t);
+		await addPoint(t, retailer._id, "Second Store");
+
+		await asUser.mutation(api.pickupLocations.update, {
+			pickupLocationId: realPoint,
+			eventsOnly: true,
+		});
+		expect(
+			(
+				await t.query(api.pickupLocations.listActivePublicBySlug, {
+					slug: retailer.slug,
+				})
+			).map((p) => p.label),
+		).toEqual(["Second Store"]);
+	});
+
+	/**
+	 * MEDIUM. Retiring a venue cannot strand anything — nobody could choose it
+	 * — but the subject row was filtered out of its own count, so the guard
+	 * fired with a message that made no sense. This is the exact store shape
+	 * the feature is built for: collect at the shop, run the class at the hall.
+	 */
+	test("retiring an event venue is never refused", async () => {
+		const t = setup();
+		const { asUser, retailer } = await pickupOnlyStore(t);
+		const venue = await addPoint(t, retailer._id, "Community Hall", true);
+
+		await asUser.mutation(api.pickupLocations.setActive, {
+			pickupLocationId: venue,
+			isActive: false,
+		});
+
+		const rows = await asUser.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		expect(rows.find((r) => r._id === venue)?.isActive).toBe(false);
+	});
+
+	test("the real point is still protected on that same store", async () => {
+		const t = setup();
+		const { asUser, retailer, realPoint } = await pickupOnlyStore(t);
+		await addPoint(t, retailer._id, "Community Hall", true);
+
+		// A venue alongside must not make the last real point look expendable.
+		await expect(
+			asUser.mutation(api.pickupLocations.setActive, {
+				pickupLocationId: realPoint,
+				isActive: false,
+			}),
+		).rejects.toThrow(/no way to receive orders/i);
+	});
+});
+
+/**
+ * The branch the API cannot reach, so the guard must not depend on it being
+ * unreachable.
+ *
+ * `setActive` skips the invariant when the row being hidden is itself a venue
+ * (`isChoosablePickupPoint(location)`). With the subject-excluding helper that
+ * skip is redundant for every state a seller can actually produce — the other
+ * two guards stop a pickup-only store ever having only venues active — so a
+ * mutation test over the public API can't tell the difference.
+ *
+ * It still matters: in that state the storefront is ALREADY offline, and
+ * refusing to retire a venue would block an action that changes nothing a
+ * buyer can see, with a message blaming the wrong row. Built here with a
+ * direct write, because relying on "another guard makes this impossible" is
+ * the cross-guard coupling that rots.
+ */
+describe("a venue-only pickup store (unreachable via the API, built directly)", () => {
+	test("retiring the venue is allowed — the storefront was already offline", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const asUser = t.withIdentity({ subject: USER });
+		const venue = await addPoint(t, retailer._id, "Community Hall", true);
+
+		// Force the shape the public mutations refuse to create.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				offerDelivery: false,
+				offerSelfCollect: true,
+			});
+		});
+
+		await asUser.mutation(api.pickupLocations.setActive, {
+			pickupLocationId: venue,
+			isActive: false,
+		});
+
+		const rows = await asUser.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		expect(rows.find((r) => r._id === venue)?.isActive).toBe(false);
+	});
+});
+

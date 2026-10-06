@@ -50,6 +50,11 @@ interface PickupLocationEditDialogProps {
 	 * never a lock; the seller can still change it before saving. Ignored when
 	 * editing an existing point, which carries its own value. */
 	defaultEventsOnly?: boolean;
+	/** Why "Only hosts events" is unavailable for THIS point, or undefined when
+	 * it's fine. Set when flipping it would leave a pickup-only storefront with
+	 * nothing a buyer can pick — the server refuses that, so the switch says so
+	 * before the tap instead of failing the save. */
+	eventsOnlyLockReason?: string;
 }
 
 /**
@@ -122,6 +127,7 @@ export function PickupLocationEditDialog({
 	currency,
 	canChargeFee,
 	defaultEventsOnly = false,
+	eventsOnlyLockReason,
 }: PickupLocationEditDialogProps) {
 	const createLocation = useMutation(api.pickupLocations.create);
 	const updateLocation = useMutation(api.pickupLocations.update);
@@ -402,14 +408,19 @@ export function PickupLocationEditDialog({
 								<div className="min-w-0">
 									<p className="text-sm font-medium">Only hosts events</p>
 									<p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-										{eventsOnly
-											? "Buyers never see this at checkout. Pick it on an event and guests are sent straight here."
-											: "Buyers can choose this at checkout. It can still host events either way."}
+										{eventsOnlyLockReason ??
+											(eventsOnly
+												? "Buyers never see this at checkout. Pick it on an event and guests are sent straight here."
+												: "Buyers can choose this at checkout. It can still host events either way.")}
 									</p>
 								</div>
 								<ToggleSwitch
 									on={eventsOnly}
 									onChange={setEventsOnly}
+									// Disabled-with-reason: the server refuses this flip
+									// when it would strand the storefront, so the switch
+									// must not offer it and then fail the save.
+									disabled={eventsOnlyLockReason !== undefined}
 									label="Only hosts events"
 								/>
 							</div>
