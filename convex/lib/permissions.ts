@@ -37,6 +37,7 @@ export const PERMISSION_AREAS = [
 	"fulfilment", // pickup locations, delivery config, AWB template
 	"payments_settings", // banks + QR codes buyers see
 	"integrations", // Lalamove/Delyva/HitPay accounts + future balance widgets
+	"credits", // order-credit balance + activity; write = buy packs (never the owner's saved card)
 	"billing", // subscription, invoices, seat usage
 ] as const;
 
@@ -57,6 +58,11 @@ export type MemberPermissions = Partial<
  *  - `billing` write moves the owner's money (plan change, cancel,
  *    auto-renew), so it stays owner-only in v1 — relaxing that later is this
  *    one line, not a migration (Zaki, 24 Sep 2026).
+ * `credits` write IS grantable (Zaki, 30 Sep 2026): buying a pack keeps the
+ * shop running — a helper at a locked store mid-rush shouldn't have to reach
+ * the owner — and it moves no owner money on its own: a member pays on the
+ * HitPay checkout page, never with the owner's saved card, and the owner is
+ * emailed every member purchase. Plan changes stay under `billing`.
  * `sanitizePermissions` clamps to this, so a tampered client request can
  * never store a grant the registry forbids.
  */
@@ -71,6 +77,7 @@ export const MAX_GRANTABLE: Record<PermissionArea, PermissionLevel> = {
 	fulfilment: "write",
 	payments_settings: "write",
 	integrations: "write",
+	credits: "write",
 	billing: "read",
 };
 
@@ -92,6 +99,7 @@ export const memberPermissionsValidator = v.object({
 	fulfilment: v.optional(level),
 	payments_settings: v.optional(level),
 	integrations: v.optional(level),
+	credits: v.optional(level),
 	billing: v.optional(level),
 });
 

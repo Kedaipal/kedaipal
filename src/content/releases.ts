@@ -129,7 +129,10 @@ export type ReleaseIconName =
 	| "calendar-clock"
 	// And again: the glyph Settings → Team carries in the tab nav (UsersRound),
 	// so the team announcement's tile is the tab the seller has to find.
-	| "users";
+	| "users"
+	// And again: the glyph the credit balance card wears in Settings → Billing
+	// (Gauge), so the credits announcement's tile is the card it rings.
+	| "gauge";
 
 export interface ReleaseEntry {
 	/**
@@ -178,6 +181,81 @@ export interface Release {
  */
 export const RELEASES: Release[] = [
 	{
+		version: "2026.10.1",
+		date: "2026-10-02",
+		// Notable, and not a close call — all three triggers are lit at once.
+		// A whole new way of selling: orders are metered in credits, where the
+		// monthly allowance used to be a line that counted up and did nothing.
+		// A seller-visible number moves: that same allowance is now a balance
+		// that can reach zero. And something MOVED: Scale is off the pricing
+		// page, replaced by a contract nobody can pick for themselves.
+		//
+		// The deciding one is the lock. A seller who reads nothing will one day
+		// find the dashboard refusing to work an order, with the storefront
+		// still cheerfully taking them — the single worst "wait, what?" this
+		// product can produce. The dot would not have told them, and the first
+		// they would hear of it is the morning it happens.
+		notable: true,
+		entries: [
+			{
+				kind: "feature",
+				title: {
+					en: "Every order spends a credit, and the balance is on the page",
+				},
+				body: {
+					en: "Your plan's monthly allowance used to be a quiet line that counted up and did nothing much. It is now a balance you can act on: Starter comes with 100 credits a month, Pro with 200, Founding Pro with 300, and one order spends one. The meter sits right under your plan, and warns you once you are into the last fifth of the month. Run out and nothing stops: your storefront keeps taking orders and they come off your next credits, so a top-up or the 1st of the month clears the balance. Cancel an order nobody had started on and the credit comes back. On every plan.",
+				},
+				href: spotlightHref("credit_balance"),
+				hrefLabel: { en: "See your balance" },
+				icon: "gauge",
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Outgrowing Pro is a conversation now, not a bigger shelf price",
+				},
+				body: {
+					en: "Scale was a fixed price that never quite fitted the stores asking for it — several outlets, well past a thousand orders a month, a team that does not stop at three. Enterprise replaces it: the base, the credits included, the rate on anything over and the number of seats are all set around your own numbers, so there is nothing to pick. Wherever a plan is offered you will now find a Talk to Arif button instead of a third card. Starter and Pro are exactly as they were.",
+				},
+				href: spotlightHref("plan_change"),
+				hrefLabel: { en: "Look at your plan" },
+				icon: "wallet",
+			},
+			{
+				kind: "feature",
+				title: { en: "Filter the inbox by how an order leaves your hands" },
+				body: {
+					en: "Deliveries, self-collect, drop-offs, bookings and events all sat mixed together in one list — and drop-offs were hiding inside Self-collect, so a drop-off run you meant to pack was invisible unless you read every row. There is now a Fulfilment filter beside the others: tick one or several and the list narrows to just those, as does the CSV you export from it. On every plan.",
+				},
+				// The orders list, not a `?spot=` ring: the filter is a control in
+				// the inbox toolbar, not a card on a settings tab — the same call
+				// v2026.09.9's variant-cap note made about the products list.
+				href: "/app/orders",
+				hrefLabel: { en: "Open your inbox" },
+			},
+			{
+				kind: "feature",
+				title: { en: "Your shop can sit on our public store directory" },
+				body: {
+					en: 'kedaipal.com/stores is a new front door: buyers browse real shops and land straight on yours. A store with a live storefront and at least one product on sale is listed, and you can add a short area line — "Ampang, KL", "Ships nationwide" — so a buyer knows where you are before they tap. If you would rather stay word-of-mouth, one tick takes your shop off the directory and nothing else changes. Your own link works exactly as before either way. On every plan.',
+				},
+				href: spotlightHref("store_listing"),
+				hrefLabel: { en: "Check your listing" },
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "A renewal can't be charged twice, and a lost charge isn't lost",
+				},
+				body: {
+					en: "When a saved-card renewal was interrupted part-way, our records and the payment gateway could disagree about whether the money had actually moved — which risked a second attempt on a bill you had already paid. We now ask the gateway what it holds before any retry. And if a charge turns up against a bill we had already voided, auto-renewal stops rather than charging again, a banner tells you where that money is, and a person here is already looking at it.",
+				},
+				href: spotlightHref("auto_renewal"),
+				hrefLabel: { en: "Check auto-renewal" },
+			},
+		],
+	},
+	{
 		version: "2026.09.9",
 		date: "2026-09-29",
 		// Notable — authored `false`, and Zaki flipped it, the same way
@@ -195,7 +273,9 @@ export const RELEASES: Release[] = [
 		entries: [
 			{
 				kind: "enhancement",
-				title: { en: "A shared link opens on the goods, not on your cover photo" },
+				title: {
+					en: "A shared link opens on the goods, not on your cover photo",
+				},
 				body: {
 					en: "Buyers arrive on a product or a category far more often than on your front page, and those pages used to open with a screenful of cover photo before anything they came for. They now start with a slim bar holding your logo, your name and today's hours, with back and share buttons where a thumb expects them. Product cards carry one full-width button in every state, and a card with something already in the basket counts it up and down in place. The basket bar stays out of sight until there is something in it. Your front page keeps its cover.",
 				},
@@ -205,7 +285,9 @@ export const RELEASES: Release[] = [
 			},
 			{
 				kind: "fix",
-				title: { en: "An RSVP stops dragging the rest of the basket to the venue" },
+				title: {
+					en: "An RSVP stops dragging the rest of the basket to the venue",
+				},
 				body: {
 					en: "A guest who had a mug in the basket and then RSVP'd came out with one order pinned to your event venue — the mug included, with no delivery, no collection and no date. An RSVP now checks out on its own, the way a booking already does, and the basket is left untouched to order normally afterwards. Nothing changes on your side: your storefront, your product cards and your counter all send an RSVP down its own path.",
 				},
@@ -261,7 +343,7 @@ export const RELEASES: Release[] = [
 					en: "Bring your team in — and pick what each person can touch",
 				},
 				body: {
-					en: "A helper could only get in as you, on your password, seeing your bank details and your bill. Now invite them by email and choose area by area what they reach: orders only for whoever packs, orders and products for a manager, and nothing near your money unless you say so. They sign in as themselves, so the order timeline names who confirmed it and who rang it up at the counter. Remove someone and their history still reads — the name stays on what they did. Seats come with your plan: Pro is you plus 2 teammates, Scale you plus 5.",
+					en: "A helper could only get in as you, on your password, seeing your bank details and your bill. Now invite them by email and choose area by area what they reach: orders only for whoever packs, orders and products for a manager, and nothing near your money unless you say so. They sign in as themselves, so the order timeline names who confirmed it and who rang it up at the counter. Remove someone and their history still reads — the name stays on what they did. Seats come with your plan: Pro is you plus 2 teammates.",
 				},
 				href: "/app/settings?tab=team",
 				hrefLabel: { en: "Invite your team" },
@@ -306,7 +388,7 @@ export const RELEASES: Release[] = [
 				kind: "enhancement",
 				title: { en: "Your own words for each kind of order" },
 				body: {
-					en: "Renaming Confirmed to \"Ok go\" for your deliveries put those words on your campsite bookings too, and no screen was left that could show you that or undo it. Stages now belong to the kind of order: deliveries, self-collect, bookings and events each keep their own steps and wording, on their own card. Bookings and events take custom steps for the first time, and Reset to defaults is there when you want the standard set back. Bulk-marking a mixed selection now says what it skipped.",
+					en: 'Renaming Confirmed to "Ok go" for your deliveries put those words on your campsite bookings too, and no screen was left that could show you that or undo it. Stages now belong to the kind of order: deliveries, self-collect, bookings and events each keep their own steps and wording, on their own card. Bookings and events take custom steps for the first time, and Reset to defaults is there when you want the standard set back. Bulk-marking a mixed selection now says what it skipped.',
 				},
 				href: "/app/settings?tab=order-status",
 				hrefLabel: { en: "Review your stages" },
@@ -359,7 +441,7 @@ export const RELEASES: Release[] = [
 				},
 				body: {
 					// currency-literal-ok: the note quotes the old and new spelling on purpose.
-					en: "Price fields and summaries in the product editor printed your currency's code — \"Price (MYR)\", \"MYR 12–28\" — where the rest of Kedaipal says RM\u00a012. They now read RM, or S$ for a Singapore store, and so does the deposit limit. On every plan.",
+					en: 'Price fields and summaries in the product editor printed your currency\'s code — "Price (MYR)", "MYR 12–28" — where the rest of Kedaipal says RM\u00a012. They now read RM, or S$ for a Singapore store, and so does the deposit limit. On every plan.',
 				},
 				href: "/app/products",
 				hrefLabel: { en: "Open products" },
@@ -381,7 +463,7 @@ export const RELEASES: Release[] = [
 					en: "Bookings in your order list use booking words",
 				},
 				body: {
-					en: "A guest who'd checked in could read \"Shipped\" or \"Ready for Pickup\" in the order list, and a finished stay \"Delivered\" — your shop's wording, borrowed for a campsite. Each row now speaks its own: Checked In and Checked Out, or Active and Ended for a package. And on Pro, bulk-marking a mix of orders as Packed now leaves bookings alone, since a stay is never packed, and the toast says how many it skipped.",
+					en: 'A guest who\'d checked in could read "Shipped" or "Ready for Pickup" in the order list, and a finished stay "Delivered" — your shop\'s wording, borrowed for a campsite. Each row now speaks its own: Checked In and Checked Out, or Active and Ended for a package. And on Pro, bulk-marking a mix of orders as Packed now leaves bookings alone, since a stay is never packed, and the toast says how many it skipped.',
 				},
 				// No link: a booking seller already works out of Orders, and a
 				// second "Open orders" straight under the counter note's reads as
@@ -408,7 +490,7 @@ export const RELEASES: Release[] = [
 					en: "Say how long each product takes to make — and buyers book a time you can meet",
 				},
 				body: {
-					en: "A cake that needs two hours shouldn't be collectable in fifteen minutes. Give any product a prep time and checkout does the maths: a buyer ordering for today is only offered times you can actually meet — and told why, \"needs 2 hours to prepare\", instead of a bare \"unavailable\" — while tomorrow's orders absorb the wait overnight. Self-collect orders now carry a pickup time inside your opening hours, so \"when are they coming?\" finally has an answer on the order. And the new pickup note — \"side counter\", \"bring an ice bag\" — travels the whole way: storefront, checkout, the WhatsApp confirmation and the buyer's order page. Counter sales skip all of it, because you're standing right there. On every plan.",
+					en: 'A cake that needs two hours shouldn\'t be collectable in fifteen minutes. Give any product a prep time and checkout does the maths: a buyer ordering for today is only offered times you can actually meet — and told why, "needs 2 hours to prepare", instead of a bare "unavailable" — while tomorrow\'s orders absorb the wait overnight. Self-collect orders now carry a pickup time inside your opening hours, so "when are they coming?" finally has an answer on the order. And the new pickup note — "side counter", "bring an ice bag" — travels the whole way: storefront, checkout, the WhatsApp confirmation and the buyer\'s order page. Counter sales skip all of it, because you\'re standing right there. On every plan.',
 				},
 				href: spotlightHref("prep_time"),
 				hrefLabel: { en: "Set a prep time" },
@@ -442,7 +524,7 @@ export const RELEASES: Release[] = [
 					en: "The new-order alert tells you who and how much",
 				},
 				body: {
-					en: "The pop-up used to read \"New order ORD-XCVE\" — an order id, and nothing you can triage on. It now leads with the buyer's name and the total, and tapping anywhere on it opens the order, not just the small button. The phone notification carries the same facts.",
+					en: 'The pop-up used to read "New order ORD-XCVE" — an order id, and nothing you can triage on. It now leads with the buyer\'s name and the total, and tapping anywhere on it opens the order, not just the small button. The phone notification carries the same facts.',
 				},
 			},
 			{
@@ -451,7 +533,7 @@ export const RELEASES: Release[] = [
 					en: "Importing your own export updates your products, not copies them",
 				},
 				body: {
-					en: "Export your catalogue, fix a cell, import it back — the exact loop the import screen suggests. But a product without a SKU (every booking listing, for a start) came back marked \"new\", and confirming would have created a duplicate. The sheet's own handle column now does the matching, so your export always finds the products it came from. Hand-typed sheets still match by SKU, exactly as before.",
+					en: 'Export your catalogue, fix a cell, import it back — the exact loop the import screen suggests. But a product without a SKU (every booking listing, for a start) came back marked "new", and confirming would have created a duplicate. The sheet\'s own handle column now does the matching, so your export always finds the products it came from. Hand-typed sheets still match by SKU, exactly as before.',
 				},
 				href: "/app/products/import",
 				hrefLabel: { en: "Open import" },
@@ -489,7 +571,7 @@ export const RELEASES: Release[] = [
 				},
 				body: {
 					// currency-literal-ok: Kedaipal's OWN plan prices (MY + SG), not store money.
-					en: "Two changes to plans, and we would rather you heard them here than on an invoice. The monthly order allowance is now 200 on Pro and 400 on Scale. It stays a soft line: passing it never stops an order, never closes your storefront and never turns a buyer away — it shows in your usage and we talk about the right plan. Scale moves to RM399 (S$149) from your next invoice; Starter and Pro keep their prices, and founding members keep their discount on the new numbers.",
+					en: "Two changes to plans, and we would rather you heard them here than on an invoice. The monthly order allowance is now 200 on Pro and 400 on Scale. It was a soft line then — passing it showed in your usage and nothing more. From v2026.10.1 that allowance is a credit balance you can see and top up — your storefront still never closes and no buyer is ever turned away. See the credits note above. Scale moves to RM399 (S$149) from your next invoice; Starter and Pro keep their prices, and founding members keep their discount on the new numbers.",
 				},
 				href: spotlightHref("plan_change"),
 				hrefLabel: { en: "See your plan" },

@@ -9,18 +9,33 @@ import type * as React from "react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
+import type { CreditBalanceView } from "../../../convex/credits";
 import {
 	type BillingCurrency,
 	FOUNDING_PLAN,
 	foundingPlanLocked,
+	isPlanSelectable,
 	isPlanUpgrade,
+	LISTED_PLANS,
+	type ListedPlan,
+	PLAN_CAPS,
+	PLAN_CREDIT_GRANT,
 	PLAN_FEATURES,
 	type Plan,
 	planChangeCarryover,
 	planPrice,
+	planRank,
 } from "../../../convex/lib/plans";
+import {
+	monthStartMyt,
+	nextMonthStartMyt,
+} from "../../../convex/lib/usagePeriod";
 import type { FixHighlight } from "../../lib/country-setup-copy";
 import { highlightRingClass } from "../../lib/country-setup-copy";
+import {
+	downgradeCreditLine,
+	includedCreditsLabel,
+} from "../../lib/credits-ui";
 import {
 	convexErrorMessage,
 	formatPrice,
@@ -28,6 +43,7 @@ import {
 } from "../../lib/format";
 import { PLAN_LABEL, type SubscriptionView } from "../../lib/subscription";
 import { ConfirmDialog } from "../ui/confirm-dialog";
+import { EnterpriseOffer } from "./enterprise-offer";
 import { OwnerOnlyNote } from "./owner-only-note";
 
 /** What a seller actually loses by dropping to a lower tier, in their words —
@@ -68,19 +84,13 @@ function featuresLost(from: Plan, to: Plan): string[] {
  * Founding Pro, so the card says so in place of offering a change, and
  * `changePlan` refuses it server-side.
  */
-export function PlanChangeCard({
-	id,
-	highlight,
-	sub,
-	currency,
-	foundingPricing,
-	ownerOnly = false,
-	openInvoiceNumber,
-}: {
+type PlanChangeCardProps = {
 	/** Anchor + ring for `?spot=plan_change`, on every rendered state. */
 	id?: string;
 	highlight?: FixHighlight;
 	sub: SubscriptionView;
+	/** The store's slug — named in the Enterprise chat's opening line. */
+	slug: string;
 	/** What plan changes and renewals bill in — the gateway's
 	 * `renewalCurrency` (last paid invoice, else the country). */
 	currency: BillingCurrency;
@@ -96,13 +106,36 @@ export function PlanChangeCard({
 	 * with the invoice named, rather than erroring on confirm. Moving DOWN
 	 * costs nothing and stays available. */
 	openInvoiceNumber?: string;
-}) {
+	/** The store's credits (Credits T3), when the viewer may see them — each
+	 * confirm then says what the move does to the monthly allowance. */
+	balance?: CreditBalanceView | null;
+};
+
+/** An Enterprise store's plan changes are a conversation (T6): the billing
+ * tab shows its contract instead, so this card renders nothing for it. */
+export function PlanChangeCard(props: PlanChangeCardProps) {
+	const current = props.sub.plan;
+	if (current === "enterprise") return null;
+	return <ListedPlanChangeCard {...props} current={current} />;
+}
+
+function ListedPlanChangeCard({
+	id,
+	highlight,
+	sub,
+	slug,
+	current,
+	currency,
+	foundingPricing,
+	ownerOnly = false,
+	openInvoiceNumber,
+	balance,
+}: PlanChangeCardProps & { current: ListedPlan }) {
 	const changePlan = useMutation(api.invoices.changePlan);
 	const cancelPlanChange = useMutation(api.invoices.cancelPlanChange);
-	const [target, setTarget] = useState<"starter" | "pro" | null>(null);
+	const [target, setTarget] = useState<ListedPlan | null>(null);
 	const [busy, setBusy] = useState(false);
 
-	const current = sub.plan;
 	const cycle = sub.billingCycle ?? "monthly";
 	const founding = foundingPricing;
 	// A Founding Member's downgrade scheduled before the founding lock is
@@ -114,13 +147,21 @@ export function PlanChangeCard({
 			? sub.pendingPlanChange
 			: undefined;
 
-	// Only the tiers a seller can actually buy, minus the one they're on — and
-	// a Founding Member can buy Founding Pro alone.
-	const options = (["starter", "pro"] as const).filter(
-		(p) => p !== current && !foundingPlanLocked(p, founding),
-	);
+	// Only the listed tiers a seller can actually buy, minus the one they're on
+	// — and a Founding Member can buy Founding Pro alone. Moves UP come first,
+	// nearest tier first: growing is the common reason to be on this card.
+	// Enterprise is its own row below — a conversation, never a tap.
+	const options = LISTED_PLANS.filter(
+		(p) =>
+			p !== current && isPlanSelectable(p) && !foundingPlanLocked(p, founding),
+	).sort((a, b) => {
+		const upA = isPlanUpgrade(current, a);
+		const upB = isPlanUpgrade(current, b);
+		if (upA !== upB) return upA ? -1 : 1;
+		return upA ? planRank(a) - planRank(b) : planRank(b) - planRank(a);
+	});
 
-	const confirm = async (plan: "starter" | "pro") => {
+	const confirm = async (plan: ListedPlan) => {
 		setBusy(true);
 		try {
 			const result = await changePlan({ plan });
@@ -138,7 +179,15 @@ export function PlanChangeCard({
 				});
 			} else {
 				toast.success(`Your ${PLAN_LABEL[plan]} invoice is ready`, {
-					description: "Pay it below and the new plan starts straight away.",
+					// A saved method that wasn't charged is either stopped (a
+					// stranded charge a human is sorting out) or confirming (an
+					// earlier charge whose outcome is pending) — neither may be
+					// answered with "pay it below": that's the double payment.
+					description: sub.autoRenew?.stopped
+						? "Automatic charging is stopped for now — see Auto-renewal below before paying."
+						: sub.autoRenew?.confirming
+							? "We're confirming an earlier automatic payment first — once that's done, this invoice is charged automatically."
+							: "Pay it below and the new plan starts straight away.",
 				});
 			}
 			setTarget(null);
@@ -261,6 +310,9 @@ export function PlanChangeCard({
 								<ArrowDownRight className="size-4" />
 							)}
 							{up ? "Move up to" : "Move down to"} {PLAN_LABEL[plan]}
+							<span className="font-normal text-muted-foreground">
+								· {includedCreditsLabel(PLAN_CREDIT_GRANT[plan])}
+							</span>
 						</button>
 					);
 				})}
@@ -275,6 +327,9 @@ export function PlanChangeCard({
 					two open bills at once is how a paid-up store ends up locked out.
 				</p>
 			) : null}
+			{/* Past Pro, the next step is a conversation: Enterprise (T6). Last,
+			    so the reasons above stay beside the buttons they explain. */}
+			{founding ? null : <EnterpriseOffer slug={slug} ownerOnly={ownerOnly} />}
 
 			{target ? (
 				<ConfirmDialog
@@ -289,7 +344,15 @@ export function PlanChangeCard({
 					}
 					description={
 						isPlanUpgrade(current, target)
-							? upgradeCopy({ current, target, cycle, founding, currency, sub })
+							? upgradeCopy({
+									current,
+									target,
+									cycle,
+									founding,
+									currency,
+									sub,
+									balance,
+								})
 							: downgradeCopy({
 									current,
 									target,
@@ -297,6 +360,7 @@ export function PlanChangeCard({
 									founding,
 									currency,
 									sub,
+									balance,
 								})
 					}
 					confirmLabel={busy ? "Working…" : `Move to ${PLAN_LABEL[target]}`}
@@ -314,13 +378,15 @@ function upgradeCopy({
 	founding,
 	currency,
 	sub,
+	balance,
 }: {
-	current: Plan;
-	target: Plan;
+	current: ListedPlan;
+	target: ListedPlan;
 	cycle: "monthly" | "annual";
 	founding: boolean;
 	currency: BillingCurrency;
 	sub: SubscriptionView;
+	balance?: CreditBalanceView | null;
 }): string {
 	const price = planPrice(
 		target,
@@ -340,7 +406,14 @@ function upgradeCopy({
 		periodEnd: sub.currentPeriodEnd,
 		now: Date.now(),
 	});
-	const opening = `You'll be invoiced ${formatPrice(price, currency)} and ${PLAN_LABEL[target]} starts as soon as it's paid.`;
+	// The credits land with the payment, this month included (T1's upgrade
+	// rule: the bucket becomes the new grant minus what's been used) — the
+	// thing most sellers move up for, so it's in the first sentence. Not for
+	// a store on a custom allowance: an upgrade doesn't change that.
+	const credits = balance?.customGrant
+		? ""
+		: `, with ${PLAN_CREDIT_GRANT[target]} credits a month — this month included`;
+	const opening = `You'll be invoiced ${formatPrice(price, currency)} and ${PLAN_LABEL[target]} starts as soon as it's paid${credits}.`;
 	if (carry.days <= 0) return opening;
 	// Say WHY the day count shrinks. "16 days carry over" beside a billing page
 	// promising another 30 reads as 14 days confiscated; what carries is every
@@ -356,13 +429,15 @@ function downgradeCopy({
 	founding,
 	currency,
 	sub,
+	balance,
 }: {
-	current: Plan;
-	target: Plan;
+	current: ListedPlan;
+	target: ListedPlan;
 	cycle: "monthly" | "annual";
 	founding: boolean;
 	currency: BillingCurrency;
 	sub: SubscriptionView;
+	balance?: CreditBalanceView | null;
 }): React.ReactNode {
 	const lost = featuresLost(current, target);
 	const when = sub.currentPeriodEnd
@@ -370,6 +445,33 @@ function downgradeCopy({
 		: "the end of your current period";
 	const nowPrice = planPrice(current, cycle, founding, currency);
 	const thenPrice = planPrice(target, cycle, founding, currency);
+	// Limits a move down takes away that `featuresLost` can't see — they're
+	// caps, not feature flags (the teammates a smaller plan can't seat), so
+	// the dialog names them rather than saying nothing.
+	const teammatesNow = PLAN_CAPS[current].userCap - 1;
+	const teammatesThen = PLAN_CAPS[target].userCap - 1;
+	const team = (n: number) =>
+		n === 0 ? "just you" : `you + ${n} teammate${n === 1 ? "" : "s"}`;
+	// Plan credits refresh on the 1st, so the smaller allowance starts at the
+	// first refresh on or after the move lands (Credits T3) — and this month's
+	// orders sit beside it, so the seller sees whether it fits.
+	const end = sub.currentPeriodEnd;
+	const firstRefresh =
+		end === undefined
+			? undefined
+			: monthStartMyt(end) === end
+				? end
+				: nextMonthStartMyt(end);
+	const credits = downgradeCreditLine({
+		fromLabel: firstRefresh
+			? formatShortDate(firstRefresh)
+			: "the first refresh after the change",
+		currentGrant: balance?.periodGrant ?? PLAN_CREDIT_GRANT[current],
+		targetGrant: PLAN_CREDIT_GRANT[target],
+		ordersThisPeriod: balance?.ordersThisPeriod,
+		owedNow: balance && balance.plan < 0 ? -balance.plan : undefined,
+		customGrant: balance?.customGrant === true,
+	});
 	// DialogDescription is a <p>, so the "list" is block spans rather than a
 	// <ul> — a nine-item comma run inside a paragraph is not something a seller
 	// reads, and these are the capabilities they are about to lose.
@@ -386,6 +488,14 @@ function downgradeCopy({
 				</span>
 				, instead of {formatPrice(nowPrice, currency)}.
 			</span>
+			{credits ? <span className="mt-2 block">{credits}</span> : null}
+			{teammatesThen < teammatesNow ? (
+				<span className="mt-2 block">
+					From {when}, {team(teammatesThen)} instead of {team(teammatesNow)}.
+					Anyone over that loses access then — pending invites are cancelled
+					first, then the newest teammates, and each is emailed.
+				</span>
+			) : null}
 			{lost.length ? (
 				<>
 					<span className="mt-2 block">From {when} you lose:</span>

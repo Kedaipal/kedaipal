@@ -19,6 +19,12 @@ erDiagram
     retailers ||--o{ slugHistory : "renamed from"
     customers ||--o{ orders : "places (nullable)"
     orders ||--o{ orderEvents : "audited by"
+    orders ||--o{ paymentClaims : "buyer payment submissions"
+    retailers ||--|| creditAccounts : "credit balance"
+    retailers ||--o{ creditLedger : "credit movements"
+    retailers ||--o{ creditLots : "purchased credits"
+    retailers ||--o{ creditPurchases : "top-up packs"
+    creditPurchases ||--o| creditLots : "lands as"
     products ||--o{ productVariants : "varies into"
     productVariants ||--o{ orders : "snapshotted into items[]"
 
@@ -215,6 +221,40 @@ The core transactional entity. Two independent dimensions:
 Immutable append-only audit log. One row per status transition or notable action. Notes seen in code: `"address_updated"`, `"payment_claimed"`, `"payment_received"`, `"payment_received_auto_confirm"`, `"Confirmed via WhatsApp"`.
 
 **Index:** `by_order`.
+
+### `paymentClaims`
+
+One row per buyer "I've paid" submission (ClickUp `z8r3fdn2uj`): `orderId`, `reference?`, `proofStorageId?`, `createdAt`. Each row is what THAT submission carried; `orders.paymentReference` / `paymentProofStorageId` stay as the latest values. Capped at 20 per order. Pre-table orders are rebuilt from the order's own fields until `migrations:backfillPaymentClaims` runs. Rows and their screenshots are freed with the order (`lib/orderBlobs.ts`). See [`payment-handshake.md`](./payment-handshake.md#payment-proof-history-z8r3fdn2uj).
+
+**Index:** `by_order_createdAt`.
+
+### Kedaipal Credits: `creditAccounts`, `creditLedger`, `creditLots`, `creditPurchases`
+
+The order-credit ledger (ClickUp `86eye2ccu`). 1 credit = 1 order, debited when an
+order is created. Full model: [`credits.md`](./credits.md).
+
+| Table | One row per | What it holds |
+| --- | --- | --- |
+| `creditAccounts` | store | The CACHED `planBalance` (may be negative — a debt) and `purchasedBalance`, the usage period (`periodKey` `YYYY-MM`, `periodGrant`), an admin `grantOverride`, the `annualGrant` locked for a prepaid year, the seller refund count, and `exhaustedAt`. Written only by `applyEntry` in `convex/credits.ts`, in the same mutation as its ledger row. |
+| `creditLedger` | credit movement | Append-only source of truth: `type` (grant / purchase / debit / refund / adjust / expire), `bucket`, signed `amount`, `reason`, `refId` (the order id for debits and refunds — the idempotency key), `refLabel` (`ORD-XXXX`), the running `planAfter` / `purchasedAfter`, and for admin adjustments a `note`. **Retained** when a store is deleted — a financial record, like `invoices`. |
+| `creditLots` | batch of purchased credits | `credits`, `remaining`, `open`, `expiresAt` (12 calendar months after landing), `source` (purchase / referral / adjust). Spent oldest-first; `purchasedBalance` always equals the sum of `remaining`. |
+| `creditPurchases` | top-up checkout (Credits T2, `z8r3fdf8ht`) | The pack frozen at purchase (`packId`, `credits`, `amountMinor`, `currency` — the store's BILLING currency), `status` (pending → paid / expired / failed), `source` (`manual`), `createdBy` (the buyer — owner or a teammate with credits write), `purchaseNumber` (`CRD-YYYYMM-XXXX`), the HitPay `gatewayRequestId` + `gatewayPayment` (`url`, settled `paymentId` — the settle's idempotency key), `paymentMethod`, `gatewayIssue` (an uncredited late / mismatched payment), `lotId`, `receiptPdfStorageId`, `paidAt` / `expiredAt`. Deliberately NOT `invoices` (a pending invoice past its due date locks the store). **Retained** when a store is deleted; its pending rows are expired. See [`credits.md`](./credits.md#top-up-packs-t2). |
+
+**Indexes:** `creditAccounts.by_retailer`, `by_period` (the month-boundary sweep);
+`creditLedger.by_retailer_created`, `by_retailer_ref_type` (per-order idempotency);
+`creditLots.by_retailer_open_expiry` (spend + expiry order), `by_open_expiry` (the
+daily expiry sweep); `creditPurchases.by_retailer_created` (the return view's
+newest purchase), `by_retailer_status_created` (paid history, pending reconcile,
+the deletion phase), `by_gateway_request` (webhook resolution), `by_status_paid`
+(Admin → Billing's this-month top-up revenue — one bounded range, T3).
+
+`creditAccounts.notices` (`{periodKey, sent}`) is the balance-notice dedupe and
+`creditLots.expiryNoticeAt` stamps a lot's 14-day expiry heads-up (Credits T3 —
+[`credits.md`](./credits.md#the-notices)); both are written directly, never
+through `applyEntry`, because neither is a balance.
+
+Deliberately **not** fields on `retailers`: the storefront reads the retailer doc,
+and a per-order balance patch there would re-run every open storefront tab.
 
 ## The mirrored-validation pattern
 

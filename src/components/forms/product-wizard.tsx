@@ -19,6 +19,7 @@ import {
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import type { CreditLockErrorData } from "../../../convex/lib/credits";
 import {
 	MAX_NOTICE_DAYS,
 	MAX_PREP_MINUTES,
@@ -50,6 +51,7 @@ import {
 } from "../../lib/booking-dates";
 import {
 	convexErrorMessage,
+	creditLockErrorOf,
 	currencySymbol,
 	formatDraftPrice,
 	formatDraftPriceRange,
@@ -57,6 +59,7 @@ import {
 	parsePriceInput,
 } from "../../lib/format";
 import type { KindCard } from "../../lib/kind-card";
+import { NOTE_LINK_HINT } from "../../lib/linkify";
 import { asPackageUnit } from "../../lib/package-unit";
 import {
 	isSecurityDepositInRange,
@@ -66,6 +69,7 @@ import {
 import { cn } from "../../lib/utils";
 import { cartesian, type OptionAxis, variantLabel } from "../../lib/variant";
 import { ProFeatureTease } from "../app/pro-gate";
+import { CreditLockCta, SaveLockNote } from "../credits/credit-lock-cta";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 import { Input } from "../ui/input";
@@ -1124,9 +1128,15 @@ export function ProductWizard({
 	initialState,
 	linkedCard,
 	storeSchedule,
+	saveLock,
 }: {
 	/** Owning retailer — feeds the review step's category picker. */
 	retailerId: Id<"retailers">;
+	/** Set while this seller can't create products right now (view-only, out
+	 * of credits, or a teammate with view on products) — see ProductForm's
+	 * `saveLock`. Every step still works, so the draft is ready to publish the
+	 * moment saving is possible again; only Publish greys out. */
+	saveLock?: { reason: string; label: string };
 	/** Client mirror of the `categories` plan gate (same as the full form). */
 	categoriesLocked: boolean;
 	/** Client mirror of the `events` plan gate — the toggle disables with the
@@ -1207,6 +1217,11 @@ export function ProductWizard({
 		apply: () => void;
 	} | null>(null);
 	const [serverError, setServerError] = useState<string | null>(null);
+	// The credit lock's typed refusal, when that's what Publish hit — its way
+	// back renders under the sentence (Credits T3).
+	const [serverLock, setServerLock] = useState<CreditLockErrorData | null>(
+		null,
+	);
 	// Restored drafts open their optional reveals when they hold content.
 	const [showDescription, setShowDescription] = useState(
 		() => (initialState?.description ?? "").trim().length > 0,
@@ -1701,10 +1716,12 @@ export function ProductWizard({
 		}
 		setSubmitting(true);
 		setServerError(null);
+		setServerLock(null);
 		try {
 			await onSubmit(buildWizardSubmitValues(state));
 		} catch (err) {
 			const message = convexErrorMessage(err);
+			setServerLock(creditLockErrorOf(err));
 			// A rejected SKU names itself in the message — take the seller to the
 			// row that owns it with the details open, instead of a generic banner
 			// on the review step with no pointer to the offending choice.
@@ -3479,9 +3496,9 @@ export function ProductWizard({
 												<IssueText message={issueFor("pickupNote")} />
 												<span className="text-xs font-normal text-muted-foreground">
 													Collecting buyers see this at checkout and on their
-													order page. Paste a link (e.g. a Google Maps pin) and
-													it becomes tappable. It&apos;s copied onto each order,
-													so editing it later never changes past orders.
+													order page. {NOTE_LINK_HINT} It&apos;s copied onto
+													each order, so editing it later never changes past
+													orders.
 												</span>
 											</label>
 										</div>
@@ -3508,12 +3525,15 @@ export function ProductWizard({
 				) : null}
 
 				{serverError ? (
-					<p
+					<div
 						role="alert"
 						className="rounded-xl border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive"
 					>
-						{serverError}
-					</p>
+						<p>{serverError}</p>
+						<CreditLockCta lock={serverLock} />
+					</div>
+				) : saveLock && step === REVIEW_STEP ? (
+					<SaveLockNote reason={saveLock.reason} />
 				) : null}
 			</section>
 
@@ -3532,10 +3552,14 @@ export function ProductWizard({
 					<Button
 						type="button"
 						onClick={publish}
-						disabled={submitting}
+						disabled={submitting || saveLock !== undefined}
 						className="h-12 w-full shadow-lg shadow-accent/20 lg:shadow-none"
 					>
-						{submitting ? "Publishing…" : "Publish product"}
+						{submitting
+							? "Publishing…"
+							: saveLock
+								? `Publish product — ${saveLock.label}`
+								: "Publish product"}
 					</Button>
 				)}
 				{step === 0 ? (

@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
 	billingConfigToBlocks,
 	businessIdentityToLines,
+	creditPurchaseToReceiptData,
 	formatDocDate,
 	formatMoney,
 	formatPeriodLabel,
@@ -442,5 +443,84 @@ describe("invoiceToSubscriptionData — receipt face", () => {
 			asReceipt: true,
 		});
 		expect(data.paid).toBeUndefined();
+	});
+});
+
+describe("gateway-settled receipts name the rail, never the raw tag", () => {
+	const paidInvoice = {
+		invoiceNumber: "INV-202609-GW",
+		plan: "pro" as const,
+		billingCycle: "monthly" as const,
+		amount: 14900,
+		total: 14900,
+		currency: "MYR",
+		periodStart: JUN_30_MYT,
+		periodEnd: JUN_30_MYT,
+		dueDate: JUN_30_MYT,
+		createdAt: JUN_30_MYT,
+		markedPaidAt: JUN_30_MYT,
+	};
+	const retailer = { storeName: "Sweet Co", slug: "sweet" };
+
+	test("a Pay-now / auto-renewal receipt prints 'Touch 'n Go', not 'hitpay_touch_n_go'", () => {
+		const data = invoiceToSubscriptionData({
+			invoice: { ...paidInvoice, paymentMethod: "hitpay_touch_n_go" },
+			retailer,
+			billingConfig: null,
+			asReceipt: true,
+		});
+		expect(data.paid?.methodLabel).toBe("Touch 'n Go");
+		const unknownRail = invoiceToSubscriptionData({
+			invoice: { ...paidInvoice, paymentMethod: "hitpay" },
+			retailer,
+			billingConfig: null,
+			asReceipt: true,
+		});
+		expect(unknownRail.paid?.methodLabel).toBe("Online payment");
+	});
+});
+
+describe("creditPurchaseToReceiptData (Credits T2)", () => {
+	const purchase = {
+		purchaseNumber: "CRD-202606-AB12",
+		credits: 50,
+		amountMinor: 4500,
+		currency: "MYR",
+		paidAt: JUN_30_MYT,
+		paymentMethod: "hitpay_card",
+	};
+	const retailer = { storeName: "Sweet Co", slug: "sweet", waPhone: "60123456789" };
+
+	test("one line, the credits, the amount, how it was paid and when the credits expire", () => {
+		const data = creditPurchaseToReceiptData({
+			purchase,
+			retailer,
+			expiresAt: JUN_30_MYT + 365 * 86400000,
+			boughtBy: undefined,
+		});
+		expect(data).toEqual({
+			purchaseNumber: "CRD-202606-AB12",
+			billedToName: "Sweet Co",
+			billedToContact: "60123456789",
+			paidAt: JUN_30_MYT,
+			methodLabel: "Card",
+			lineLabel: "Kedaipal order credits - 50-credit pack",
+			credits: 50,
+			amount: 4500,
+			currency: "MYR",
+			expiresAt: JUN_30_MYT + 365 * 86400000,
+			boughtBy: undefined,
+		});
+	});
+
+	test("names the teammate who bought it; a store with no number falls back to its link", () => {
+		const data = creditPurchaseToReceiptData({
+			purchase,
+			retailer: { storeName: "Sweet Co", slug: "sweet" },
+			expiresAt: undefined,
+			boughtBy: "Aisyah",
+		});
+		expect(data.boughtBy).toBe("Aisyah");
+		expect(data.billedToContact).toBe("kedaipal.com/sweet");
 	});
 });

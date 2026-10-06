@@ -1106,7 +1106,12 @@ export const commit = mutation({
 			await stampRetailerActivation(ctx, claim.retailerId, now);
 		}
 
-		await recordOrderCreated(ctx, claim.retailerId, now);
+		await recordOrderCreated(ctx, {
+			retailerId: claim.retailerId,
+			orderId,
+			orderShortId: shortId,
+			createdAt: now,
+		});
 		await stampProductsOrdered(ctx, claim.lines, now);
 
 		await linkOrderToCustomer(ctx, {
@@ -1210,6 +1215,7 @@ export const cancelUnpaidDueOrders = internalMutation({
 			if (!isAutoCancelDue(order, now)) continue;
 			await applyStatusTransition(ctx, order, "cancelled", {
 				note: "payment_window_expired",
+				cancelCause: "system",
 			});
 			// applyStatusTransition clears paymentDueAt on every cancel; the
 			// reason stamp is this sweep's own signature.

@@ -9,13 +9,16 @@ import {
 	Mail,
 	Megaphone,
 	MessageCircle,
+	UserPlus,
 } from "lucide-react";
 import type { AdminSellerRow } from "../../../convex/admin";
 import {
+	type CreditsTone,
 	type ExpiryTone,
 	highlightedThroughLabel,
 	SELLER_STATUS_LABEL,
 	type SellerBucket,
+	type SellerCredits,
 	type SellerExpiry,
 	sellerHighlight,
 } from "../../lib/admin-seller-view";
@@ -26,6 +29,19 @@ import { CopyButton } from "../ui/copy-button";
 /** Pill tones per bucket. Semantic-ish Tailwind hues rather than raw hex —
  * the same ones the dashboard's tier pill and status badges already use. */
 const STATUS_PILL: Record<SellerBucket, string> = {
+	// Dashed rather than another solid hue: every other bucket describes a
+	// store that IS something, and the outline reads "not finished yet" at a
+	// glance in a column of filled pills — which is exactly what an unclaimed
+	// store is. The solid hues are also spoken for (amber = on hold, violet =
+	// comped), and a pre-built store is neither.
+	//
+	// The dash is ACCENT, not grey. Rendered side by side, a grey outline was
+	// the quietest thing on the row — backwards for the one bucket that means
+	// "Kedaipal owes this store an action", and on the card it lost to the
+	// store name. Accent is spoken for by no other bucket and is the colour the
+	// app already uses for "ours / act on this".
+	unclaimed:
+		"border border-dashed border-accent/70 bg-accent/5 text-accent-emphasis",
 	active:
 		"bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
 	trialing: "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300",
@@ -169,6 +185,46 @@ export function ExpiryText({
 	);
 }
 
+const CREDITS_TONE: Record<CreditsTone, string> = {
+	normal: "text-foreground",
+	out: "text-destructive",
+	muted: "text-muted-foreground",
+};
+
+/**
+ * A store's credits (Kedaipal Credits T5): "130 left" over "plan 80 · bought
+ * 50", red with "out since 3 Oct" once the total reaches zero — the fact the
+ * seller lock keys off. Comped and admin stores read muted: they can be at
+ * zero but are never locked.
+ */
+export function CreditsText({
+	credits,
+	className,
+}: {
+	credits: SellerCredits;
+	className?: string;
+}) {
+	return (
+		<div className={cn("flex min-w-0 flex-col gap-0.5", className)}>
+			<span
+				className={cn(
+					"truncate text-sm font-semibold tabular-nums",
+					CREDITS_TONE[credits.tone],
+				)}
+			>
+				{credits.headline}
+			</span>
+			{/* Wraps rather than truncates: the breakdown is the point of the
+			    column, and "plan 10 · bought 0 · custom 1000/mo" must read whole. */}
+			<span className="text-[11px] leading-snug text-pretty break-words text-muted-foreground">
+				{credits.outSince !== undefined
+					? `Out since ${formatShortDate(credits.outSince)}`
+					: credits.detail}
+			</span>
+		</div>
+	);
+}
+
 /** Icon-only copy control sized for the surface: 32px beside a mouse, the
  * 44px floor under a thumb. The visible label is screen-reader only; the
  * aria-label names what gets copied. */
@@ -176,6 +232,33 @@ function copyButtonClass(compact: boolean): string {
 	return compact
 		? "h-8 min-h-0 w-8 justify-center rounded-lg px-0"
 		: "h-11 w-11 justify-center rounded-lg px-0";
+}
+
+/**
+ * The email line for a seller row — the ONE author of "whose address is this?".
+ *
+ * A pre-built store has no owner yet, so its row shows the HANDOVER address it
+ * is waiting for instead (docs/prebuilt-stores.md). That decision lives here
+ * rather than at the table, the card and the sheet, because three call sites
+ * choosing independently is how two of them end up showing "No email on file"
+ * for a store whose whole state is "waiting for vendor@example.com".
+ */
+export function OwnerEmailLine({
+	seller,
+	compact = false,
+}: {
+	seller: AdminSellerRow;
+	compact?: boolean;
+}) {
+	return seller.unclaimed ? (
+		<ContactLine
+			kind="handover"
+			value={seller.pendingOwnerEmail}
+			compact={compact}
+		/>
+	) : (
+		<ContactLine kind="email" value={seller.ownerEmail} compact={compact} />
+	);
 }
 
 /**
@@ -189,14 +272,25 @@ export function ContactLine({
 	compact = false,
 	className,
 }: {
-	kind: "email" | "whatsapp";
+	/** `handover` is the address a pre-built store is WAITING for, not a way to
+	 * reach its owner — there isn't one yet. Its own kind rather than an email
+	 * with different copy, because the two answer different questions and the
+	 * empty state of one ("No email on file" — the seller cleared it) would be
+	 * a false reading of the other ("nobody has told us the address yet"). */
+	kind: "email" | "whatsapp" | "handover";
 	value?: string;
 	/** Desktop table density (32px controls). Off = the 44px touch floor. */
 	compact?: boolean;
 	className?: string;
 }) {
-	const Icon = kind === "email" ? Mail : MessageCircle;
-	const noun = kind === "email" ? "email" : "WhatsApp";
+	const Icon =
+		kind === "whatsapp" ? MessageCircle : kind === "handover" ? UserPlus : Mail;
+	const noun =
+		kind === "whatsapp"
+			? "WhatsApp"
+			: kind === "handover"
+				? "handover email"
+				: "email";
 	if (!value) {
 		return (
 			<div
@@ -207,11 +301,13 @@ export function ContactLine({
 				)}
 			>
 				<Icon className="size-3.5 shrink-0" aria-hidden="true" />
-				<span className="truncate text-[13px] italic">No {noun} on file</span>
+				<span className="truncate text-[13px] italic">
+					{kind === "handover" ? "No handover email yet" : `No ${noun} on file`}
+				</span>
 			</div>
 		);
 	}
-	const shown = kind === "email" ? value : formatMobile(value);
+	const shown = kind === "whatsapp" ? formatMobile(value) : value;
 	const digits = value.replace(/\D/g, "");
 	return (
 		<div

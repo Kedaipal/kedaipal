@@ -37,7 +37,9 @@ import {
 	isStoredImageRenderable,
 	UNRENDERABLE_PROOF_MESSAGE,
 } from "./lib/imageContentType";
+import type { CancelCause } from "./lib/credits";
 import { requireCustomerName } from "./lib/customer";
+import { assertCreditsAvailable } from "./creditLock";
 import { assertPlanFeature, assertSubscriptionActive } from "./subscriptions";
 import {
 	recordOrderCancelled,
@@ -129,6 +131,12 @@ import {
 	revenueExcludingDeposit,
 } from "./lib/order";
 import { deleteOrderOwnedBlobs } from "./lib/orderBlobs";
+import {
+	borrowedLeadReference,
+	currentClaimIndex,
+	orderPaymentClaims,
+	recordPaymentClaim,
+} from "./lib/paymentClaims";
 import { normalizeTrackingToken } from "./lib/trackingToken";
 import {
 	type CartWeightItem,
@@ -1697,9 +1705,14 @@ export const create = mutation({
 			await stampRetailerActivation(ctx, args.retailerId, now);
 		}
 
-		// Meter the order against the retailer's monthly usage (SOFT cap — the
-		// nudge banner, never a block on this public mutation).
-		await recordOrderCreated(ctx, args.retailerId, now);
+		// Meter the order (SOFT cap — the nudge banner) and use its credit
+		// (Credits, 86eye2ccu). Never a block on this public mutation.
+		await recordOrderCreated(ctx, {
+			retailerId: args.retailerId,
+			orderId,
+			orderShortId: shortId,
+			createdAt: now,
+		});
 
 		// Mark every product on this order as having sold, so it can no longer be
 		// permanently deleted out from under the order lines that now reference it.
@@ -2175,6 +2188,14 @@ export const generateReceiptPdf = action({
 		ctx,
 		{ shortId, token },
 	): Promise<{ pdf: ArrayBuffer; filename: string } | null> => {
+		// Credits (T3): a seller handing out an invoice or receipt is locked at
+		// zero credits. The BUYER's own copy (token) never is — buyers never
+		// feel a seller's balance.
+		if (shortId !== undefined && token === undefined) {
+			await ctx.runQuery(internal.creditLock.assertCreditsForOrder, {
+				shortId,
+			});
+		}
 		const inputs = await ctx.runQuery(internal.orders.receiptPdfInputs, {
 			shortId,
 			token,
@@ -2264,6 +2285,9 @@ export const sendPaymentReminder = action({
 		await ctx.runQuery(internal.subscriptions.assertWritableForOrder, {
 			shortId: shortId,
 		});
+		await ctx.runQuery(internal.creditLock.assertCreditsForOrder, {
+			shortId: shortId,
+		});
 		const prep = await ctx.runMutation(internal.orders.prepareManualReminder, {
 			shortId,
 		});
@@ -2337,24 +2361,64 @@ export const getPaymentMethods = query({
 });
 
 /**
- * Resolve the payment-proof storage ID into a viewable URL for the dashboard.
- * Auth-gated (Clerk) — only the owning retailer can see the screenshot. Public
- * shoppers must not be able to fish proof images for arbitrary shortIds, so
- * this is intentionally separate from the public `get` query.
+ * Every "I've paid" submission on an order, for the seller's order page
+ * (z8r3fdn2uj) — newest first, each with its screenshot resolved to a URL.
+ * `isCurrent` marks the one the card leads with (`currentClaimIndex`); the rest
+ * list under "Other submissions". An order claimed before `paymentClaims`
+ * existed returns its one submission rebuilt from the order, so its screenshot
+ * shows before the backfill runs.
+ *
+ * Auth-gated — only the owning store's team (orders read) sees a buyer's bank
+ * screenshot. Public shoppers must not be able to fish proof images, so this
+ * is deliberately separate from the public `get` query. `url` is null when the
+ * blob is gone (the card says so instead of showing a broken image).
  */
-export const getPaymentProofUrl = query({
+export const listPaymentProofs = query({
 	args: { orderId: v.id("orders") },
-	handler: async (ctx, { orderId }): Promise<string | null> => {
+	handler: async (
+		ctx,
+		{ orderId },
+	): Promise<
+		Array<{
+			key: string;
+			reference: string | null;
+			hasProof: boolean;
+			url: string | null;
+			submittedAt: number;
+			isCurrent: boolean;
+			/** Lead only: another submission's reference, shown when the lead
+			 * carries none (`borrowedLeadReference`). */
+			borrowedReference: { reference: string; submittedAt: number } | null;
+		}>
+	> => {
 		const order = await ctx.db.get(orderId);
-		if (!order) return null;
+		if (!order) return [];
 		// Owner, member with orders access, or admin act-as; Forbidden otherwise.
 		await requireRetailerAccess(ctx, order.retailerId, {
 			area: "orders",
 			level: "read",
 		});
 
-		if (!order.paymentProofStorageId) return null;
-		return (await ctx.storage.getUrl(order.paymentProofStorageId)) ?? null;
+		const claims = await orderPaymentClaims(ctx, order);
+		const current = currentClaimIndex(claims);
+		const borrowed = borrowedLeadReference(claims, current);
+		const entries = await Promise.all(
+			claims.map(async (claim, i) => ({
+				key: `${claim.createdAt}-${i}`,
+				reference: claim.reference ?? null,
+				hasProof: claim.proofStorageId !== undefined,
+				url: claim.proofStorageId
+					? ((await ctx.storage.getUrl(claim.proofStorageId)) ?? null)
+					: null,
+				submittedAt: claim.createdAt,
+				isCurrent: i === current,
+				borrowedReference:
+					i === current && borrowed
+						? { reference: borrowed.reference, submittedAt: borrowed.createdAt }
+						: null,
+			})),
+		);
+		return entries.reverse();
 	},
 });
 
@@ -2976,7 +3040,7 @@ const exportFilterValidators = {
 // financial records). EXPORT_SCAN_CAP bounds the worst case (a matching range
 // that sits beyond this many of the newest orders), surfaced as a `capped` flag
 // so the UI can warn rather than return silently-incomplete books. ~10 months at
-// the Scale tier's 2,000 orders/month.
+// 2,000 orders/month — an Enterprise-sized store.
 const EXPORT_PAGE_SIZE = 500;
 const EXPORT_SCAN_CAP = 20_000;
 
@@ -3415,10 +3479,14 @@ async function lineReservedStock(
 	return (fresh.blockWhenOutOfStock ?? product.blockWhenOutOfStock) === true;
 }
 
+/** `order` is the doc as it was BEFORE the cancel — its status decides whether
+ * the order's credit comes back (`cancelRefundDecision`), and `cause` says who
+ * ended it. */
 async function reverseCancellationEffects(
 	ctx: MutationCtx,
 	order: Doc<"orders">,
 	now: number,
+	cause: CancelCause,
 ): Promise<void> {
 	const restoreByVariant = new Map<Id<"productVariants">, number>();
 	for (const item of order.items) {
@@ -3448,8 +3516,9 @@ async function reverseCancellationEffects(
 	}
 
 	// Un-meter the order from its creation month (runs regardless of customer
-	// linkage — every created order was counted). See convex/subscriptionUsage.ts.
-	await recordOrderCancelled(ctx, order.retailerId, order.createdAt);
+	// linkage — every created order was counted) and give its credit back if it
+	// never got going. See convex/subscriptionUsage.ts.
+	await recordOrderCancelled(ctx, { order, cause, now });
 }
 
 /**
@@ -3534,14 +3603,25 @@ export async function applyStatusTransition(
 		 * expiry sweeps). Stamps cannot be backfilled, so they ship with the
 		 * backend even though the timeline renders them later. */
 		actorUserId?: string;
+		/** Who is ending the order, when `status` is "cancelled" — decides
+		 * whether its credit comes back (`cancelRefundDecision`). Sweeps pass
+		 * "system". Defaults to "seller", the STRICTEST rule (only a
+		 * never-accepted order, within the monthly allowance), so a caller that
+		 * forgets can only ever under-refund, never mint a credit. */
+		cancelCause?: CancelCause;
 	} = {},
 ): Promise<void> {
 	const now = Date.now();
 
-	// Restore stock + reverse aggregates/usage on the FIRST transition into
-	// cancelled. Idempotent — re-cancelling a cancelled order is a no-op.
+	// Restore stock + reverse aggregates/usage/credit on the FIRST transition
+	// into cancelled. Idempotent — re-cancelling a cancelled order is a no-op.
 	if (status === "cancelled" && order.status !== "cancelled") {
-		await reverseCancellationEffects(ctx, order, now);
+		await reverseCancellationEffects(
+			ctx,
+			order,
+			now,
+			opts.cancelCause ?? "seller",
+		);
 	}
 
 	const patch: Partial<{
@@ -3777,6 +3857,9 @@ export const updateStatus = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		// Credits (T3): moving an order forward is locked at zero credits;
+		// cancelling never is — a locked seller must be able to release a buyer.
+		if (status !== "cancelled") await assertCreditsAvailable(ctx, order.retailerId);
 
 		// Cancelled is TERMINAL — the same rule advanceToStage already enforces
 		// (86eypn8ye). Not a UX nicety: cancelling RESTORES reserved stock, and
@@ -3850,6 +3933,7 @@ export const updateStatus = mutation({
 			courierName,
 			trackingNo,
 			actorUserId: access.role === "admin" ? undefined : access.userId,
+			cancelCause: "seller",
 		});
 		await logAdminAction(ctx, access, "orders.updateStatus", orderId);
 	},
@@ -3936,8 +4020,14 @@ export const bulkUpdateStatus = mutation({
 			// single-retailer by construction (1:1 user↔store), so order 1's
 			// answer is order 50's — per-order would just be 50 subscription
 			// reads for one refusal. The admin bypass lives inside the guard.
-			if (firstResolve)
+			if (firstResolve) {
 				await assertSubscriptionActive(ctx, order.retailerId);
+				// Credits (T3): moving orders forward is locked at zero credits;
+				// cancelling never is — a locked seller must be able to release
+				// buyers. Once per batch, for the same reason as the lock above.
+				if (status !== "cancelled")
+					await assertCreditsAvailable(ctx, order.retailerId);
+			}
 			if (firstResolve) retailer = await ctx.db.get(order.retailerId);
 
 			// Skip no-ops + transitions blocked by the mockup gate (don't fail the
@@ -4027,6 +4117,7 @@ export const bulkUpdateStatus = mutation({
 			await applyStatusTransition(ctx, order, status, {
 				actorUserId:
 					batchAccess.role === "admin" ? undefined : batchAccess.userId,
+				cancelCause: "seller",
 			});
 			updated++;
 		}
@@ -4071,8 +4162,9 @@ async function deleteOrderCascade(
 
 	// 1. Reverse live-side effects only for an order that hasn't already been
 	//    cancelled (a cancelled order reversed them on the way into cancelled).
+	//    Hard delete is Kedaipal-admin only, so a live order's credit comes back.
 	if (order.status !== "cancelled") {
-		await reverseCancellationEffects(ctx, order, now);
+		await reverseCancellationEffects(ctx, order, now, "admin");
 	}
 
 	// 2. Delete owned storage blobs — via the SHARED helper (86eyetzbk), which is
@@ -4253,6 +4345,7 @@ export const advanceToStage = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		await assertCreditsAvailable(ctx, order.retailerId);
 		const retailer = access.retailer;
 
 		if (order.status === "cancelled") {
@@ -4418,6 +4511,7 @@ export const setShipmentTracking = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		await assertCreditsAvailable(ctx, order.retailerId);
 
 		// All-blank input resolves to all-undefined = tracking cleared.
 		const shipment = resolveShipmentFields({
@@ -4669,6 +4763,7 @@ export const setDeliveryFee = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		await assertCreditsAvailable(ctx, order.retailerId);
 		if ((order.deliveryMethod ?? "delivery") !== "delivery")
 			throw new ConvexError("Only delivery orders carry a delivery charge");
 		if (order.status === "cancelled")
@@ -4790,6 +4885,7 @@ export const rescheduleFulfilment = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		await assertCreditsAvailable(ctx, order.retailerId);
 		if (order.status === "cancelled")
 			throw new ConvexError("This order was cancelled");
 		if (order.status === "shipped" || order.status === "delivered")
@@ -4996,9 +5092,11 @@ const PAYMENT_REFERENCE_MAX = 80;
  * Public mutation: shopper claims they've paid for their order. Trust model
  * mirrors `updateDeliveryAddress` — knowing the shortId is the capability.
  *
- * Idempotent: re-submitting overwrites the reference / proof and refreshes
- * `paymentClaimedAt`. Rejects only when the order is already `received`, since
- * a confirmed-by-retailer payment shouldn't be re-claimed.
+ * Re-submitting updates the order's latest reference / proof and refreshes
+ * `paymentClaimedAt`; every submission is also kept as a `paymentClaims` row,
+ * so the seller can still open an earlier screenshot (z8r3fdn2uj). Rejects
+ * when the order is already `received` (a confirmed payment shouldn't be
+ * re-claimed) and past MAX_PAYMENT_CLAIMS_PER_ORDER submissions.
  */
 /** Buyer-facing refusal for paying a request not yet approved. */
 const AWAITING_APPROVAL_PAYMENT_MESSAGE =
@@ -5065,6 +5163,18 @@ export const claimPayment = mutation({
 		const trimmedProof = proofStorageId?.trim();
 
 		const now = Date.now();
+		// History first (z8r3fdn2uj): the patch below overwrites the order's
+		// latest-proof fields, and for an order claimed before the history table
+		// existed those fields are the only copy of the earlier submission.
+		await recordPaymentClaim(
+			ctx,
+			order,
+			{
+				...(trimmedRef ? { reference: trimmedRef } : {}),
+				...(trimmedProof ? { proofStorageId: trimmedProof } : {}),
+			},
+			now,
+		);
 		const patch: Partial<Doc<"orders">> = {
 			paymentStatus: "claimed",
 			paymentClaimedAt: now,
@@ -5203,6 +5313,7 @@ export const markPaymentReceived = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		await assertCreditsAvailable(ctx, order.retailerId);
 
 		if (order.paymentStatus === "received") {
 			// Idempotent — second click is a no-op.
@@ -5654,6 +5765,7 @@ export const submitMockup = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		await assertCreditsAvailable(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		if (order.mockupStatus === "approved")
@@ -5743,6 +5855,7 @@ export const updateMockupQuote = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		await assertCreditsAvailable(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		if (order.mockupStatus === "approved")
@@ -5870,6 +5983,7 @@ export const waiveMockup = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
+		await assertCreditsAvailable(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		if (order.mockupStatus === "approved" || order.mockupWaivedAt !== undefined)
@@ -5985,9 +6099,10 @@ export const declineMockupItem = mutation({
 					customerId: order.customerId,
 					orderTotal: revenueExcludingDeposit(order),
 				});
-			// Un-meter on the transition into cancelled (mirrors
-			// applyStatusTransition — this cancel path bypasses that helper).
-			await recordOrderCancelled(ctx, order.retailerId, order.createdAt);
+			// Un-meter + give the credit back on the transition into cancelled
+			// (mirrors applyStatusTransition — this cancel path bypasses that
+			// helper). The BUYER backed out, so the credit always returns.
+			await recordOrderCancelled(ctx, { order, cause: "buyer", now });
 			await ctx.db.patch(order._id, {
 				status: "cancelled",
 				mockupStatus: undefined,

@@ -239,6 +239,9 @@ export const generateAwbPdf = action({
 		await ctx.runQuery(internal.subscriptions.assertWritable, {
 			retailerId: inputs.retailerId,
 		});
+		await ctx.runQuery(internal.creditLock.assertCreditsForAction, {
+			retailerId: inputs.retailerId,
+		});
 		const bytes = await buildAwbPdf([inputs.label], {
 			paperSize: inputs.paperSize,
 			logo: await fetchLogoBytes(inputs.logoUrl),
@@ -449,6 +452,9 @@ export const generateAwbBatchPdf = action({
 	},
 	handler: async (ctx, { retailerId, orderIds, sort }): Promise<AwbBatchResult> => {
 		await ctx.runQuery(internal.subscriptions.assertWritable, { retailerId });
+		await ctx.runQuery(internal.creditLock.assertCreditsForAction, {
+			retailerId: retailerId,
+		});
 		let ids: Array<Id<"orders">>;
 		let remaining = 0;
 		let filenamePrefix: string;

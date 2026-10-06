@@ -11,6 +11,11 @@
 // every amount here is sen and `formatMoney` divides by 100.
 
 import { formatPhone } from "../customer";
+import {
+	gatewayPaymentMethodLabel,
+	isGatewayPaymentTag,
+} from "../hitpayBilling";
+import { noteToPlainText } from "../noteLinks";
 import { isOrderDocPaid } from "../orderDocument";
 import { printable } from "./latin1";
 
@@ -147,6 +152,27 @@ export type SubscriptionInvoiceData = {
 	paid?: { paidAt: number; methodLabel?: string };
 };
 
+/** A credit-pack top-up's receipt (Credits T2, z8r3fdf8ht) — Kedaipal's own
+ * document, like the subscription receipt, but for a one-off pack: no period,
+ * a validity date instead. Only ever rendered for a PAID purchase. */
+export type CreditPurchaseReceiptData = {
+	purchaseNumber: string;
+	billedToName: string;
+	billedToContact?: string;
+	paidAt: number;
+	/** "Card", "Touch 'n Go"… */
+	methodLabel?: string;
+	/** "Kedaipal order credits - 50-credit pack". */
+	lineLabel: string;
+	credits: number;
+	amount: number; // minor units
+	currency: string;
+	/** When these credits expire (the lot's `expiresAt`). */
+	expiresAt?: number;
+	/** The teammate who bought it, when it wasn't the owner. */
+	boughtBy?: string;
+};
+
 // --- Pure mappers (Doc -> view-model) --------------------------------------
 
 type OrderForReceipt = {
@@ -254,7 +280,8 @@ export function paymentMethodsToBlocks(
 				m.bankName,
 				m.bankAccountName,
 				m.bankAccountNumber,
-				m.note,
+				// Paper can't be tapped — a Markdown link prints as "label: url".
+				m.note ? noteToPlainText(m.note) : undefined,
 			].filter((l): l is string => Boolean(l && l.trim()));
 			blocks.push({ label: m.label, lines });
 		} else if (!qrEmitted) {
@@ -335,7 +362,7 @@ export function orderToReceiptData(args: {
 
 type InvoiceForPdf = {
 	invoiceNumber: string;
-	plan?: "starter" | "pro" | "scale";
+	plan?: "starter" | "pro" | "enterprise";
 	billingCycle?: "monthly" | "annual";
 	/** Off-Season Hold invoices bill the hold, not the tier (z8r3fday24). */
 	kind?: "plan" | "hold";
@@ -361,6 +388,15 @@ const PAYMENT_METHOD_DISPLAY: Record<string, string> = {
 	manual: "Manual payment",
 };
 
+/** A stored `paymentMethod` as a receipt prints it. A gateway tag
+ * (`hitpay_touch_n_go`) is NOT admin-typed, so it must never print verbatim —
+ * every Pay-now / auto-renewal receipt read "Paid: … (hitpay_touch_n_go)"
+ * until Credits T2 routed it through the gateway's own labels. */
+function paymentMethodDisplay(method: string): string {
+	if (isGatewayPaymentTag(method)) return gatewayPaymentMethodLabel(method);
+	return PAYMENT_METHOD_DISPLAY[method] ?? method;
+}
+
 type RetailerForInvoice = {
 	storeName: string;
 	waPhone?: string;
@@ -377,13 +413,13 @@ type BillingConfigForInvoice = {
 const PLAN_DISPLAY: Record<string, string> = {
 	starter: "Starter",
 	pro: "Pro",
-	scale: "Scale",
 };
 
 /** Human line-item label for a subscription invoice, e.g.
- * "Kedaipal Founding 10 Seller Plan - Monthly Subscription". */
+ * "Kedaipal Founding 10 Seller Plan - Monthly Subscription". An Enterprise
+ * invoice names the CONTRACT it bills, never a plan price (T6). */
 export function subscriptionLineLabel(invoice: {
-	plan?: "starter" | "pro" | "scale";
+	plan?: "starter" | "pro" | "enterprise";
 	billingCycle?: "monthly" | "annual";
 	foundingDiscount?: number;
 	kind?: "plan" | "hold";
@@ -394,6 +430,9 @@ export function subscriptionLineLabel(invoice: {
 	}
 	if (invoice.foundingDiscount !== undefined) {
 		return `Kedaipal Founding 10 Seller Plan - ${cycle} Subscription`;
+	}
+	if (invoice.plan === "enterprise") {
+		return `Kedaipal Enterprise Contract - ${cycle} Fee`;
 	}
 	const plan = PLAN_DISPLAY[invoice.plan ?? "pro"] ?? "Pro";
 	return `Kedaipal ${plan} Plan - ${cycle} Subscription`;
@@ -435,8 +474,7 @@ export function invoiceToSubscriptionData(args: {
 			? {
 					paidAt: invoice.markedPaidAt,
 					methodLabel: invoice.paymentMethod
-						? (PAYMENT_METHOD_DISPLAY[invoice.paymentMethod] ??
-							invoice.paymentMethod)
+						? paymentMethodDisplay(invoice.paymentMethod)
 						: undefined,
 				}
 			: undefined;
@@ -462,5 +500,45 @@ export function invoiceToSubscriptionData(args: {
 			!paid && invoice.currency === "MYR"
 				? billingConfigToBlocks(billingConfig)
 				: [],
+	};
+}
+
+/** "Kedaipal order credits - 50-credit pack" — the receipt's one line item. */
+export function creditPurchaseLineLabel(credits: number): string {
+	return `Kedaipal order credits - ${credits}-credit pack`;
+}
+
+/** A paid top-up → its receipt view-model (Credits T2). `expiresAt` is the
+ * lot's expiry — the date the credits stop working, printed so the seller
+ * never has to work out "12 calendar months" themselves. */
+export function creditPurchaseToReceiptData(args: {
+	purchase: {
+		purchaseNumber: string;
+		credits: number;
+		amountMinor: number;
+		currency: string;
+		paidAt: number;
+		paymentMethod?: string;
+	};
+	retailer: RetailerForInvoice;
+	expiresAt: number | undefined;
+	boughtBy: string | undefined;
+}): CreditPurchaseReceiptData {
+	const { purchase, retailer } = args;
+	return {
+		purchaseNumber: purchase.purchaseNumber,
+		billedToName: retailer.storeName,
+		billedToContact: retailer.waPhone?.trim() || `kedaipal.com/${retailer.slug}`,
+		paidAt: purchase.paidAt,
+		methodLabel: purchase.paymentMethod
+			? paymentMethodDisplay(purchase.paymentMethod)
+			: undefined,
+		lineLabel: creditPurchaseLineLabel(purchase.credits),
+		credits: purchase.credits,
+		amount: purchase.amountMinor,
+		currency: purchase.currency,
+		expiresAt: args.expiresAt,
+		// A teammate's display name is theirs to type — keep it printable.
+		boughtBy: args.boughtBy ? printable(args.boughtBy) : undefined,
 	};
 }

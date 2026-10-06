@@ -435,18 +435,63 @@ describe("invoices.issueInvoice", () => {
 		expect((await getRetailer(t, retailerId))?.isFoundingMember).toBe(true);
 	});
 
-	test("rejects Scale + founding-non-Pro + duplicate pending + non-admin", async () => {
+	/**
+	 * Enterprise (Credits T6) has no list price: its invoice bills the store's
+	 * CONTRACT — the fee, the currency it was agreed in and its term — whatever
+	 * the form sends, and founding never applies. No contract, no invoice.
+	 */
+	test("an Enterprise invoice bills the contract — never the form's cycle or currency, never founding", async () => {
 		const t = setup();
-		const { retailerId } = await seedPublic(t, "u3", "store-3");
+		const { retailerId } = await seedPublic(t, "u_ent", "store-ent");
 		await expect(
 			asAdmin(t).mutation(api.invoices.issueInvoice, {
 				retailerId,
-				plan: "scale",
+				plan: "enterprise",
 				billingCycle: "monthly",
 				founding: false,
 				dueDate: due(),
 			}),
-		).rejects.toThrow(/scale is unavailable/i);
+		).rejects.toThrow(/contract first/);
+		await asAdmin(t).mutation(api.enterprise.setContract, {
+			retailerId,
+			baseFeeMinor: 88800,
+			includedCredits: 1500,
+			overageRateMinor: 60,
+			blockSize: 5000,
+			billingCycle: "annual",
+			contactName: "HSL Food GM",
+		});
+		const { invoiceId } = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "enterprise",
+			billingCycle: "monthly",
+			founding: false,
+			currency: "SGD",
+			dueDate: due(),
+		});
+		const inv = await getInvoice(t, invoiceId);
+		expect(inv).toMatchObject({
+			plan: "enterprise",
+			billingCycle: "annual",
+			total: 888000, // RM888 × 10 — the prepaid year
+			amount: 888000,
+			currency: "MYR",
+		});
+		expect(inv?.foundingDiscount).toBeUndefined();
+		await expect(
+			asAdmin(t).mutation(api.invoices.issueInvoice, {
+				retailerId,
+				plan: "enterprise",
+				billingCycle: "annual",
+				founding: true,
+				dueDate: due(),
+			}),
+		).rejects.toThrow(/only pro/i);
+	});
+
+	test("rejects founding-non-Pro + duplicate pending + non-admin", async () => {
+		const t = setup();
+		const { retailerId } = await seedPublic(t, "u3", "store-3");
 		await expect(
 			asAdmin(t).mutation(api.invoices.issueInvoice, {
 				retailerId,
@@ -925,6 +970,101 @@ describe("daily billing cron", () => {
 			{},
 		);
 		expect(second.renewalNotices).toBe(0);
+	});
+
+	test("no reminder while the machine is mid-flight on the same money — and it still goes out once resolved", async () => {
+		// "Pay this invoice" is a double-payment nudge while a sent charge's
+		// outcome is unknown, or while a stranded charge waits on a human.
+		const t = setup();
+		const DAY = 24 * 60 * 60 * 1000;
+		const { retailerId, invoiceId } = await seedFounding(t, "u_norem", "norem-store");
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, {
+				status: "active",
+				currentPeriodEnd: Date.now() + 20 * DAY,
+				autoRenewSessionId: "rb_rem",
+				autoRenew: {
+					provider: "hitpay" as const,
+					method: "card",
+					attachedAt: Date.now(),
+					// Outcome unknown, young enough that the retry sweep stays
+					// quiet — this test is about the reminder alone.
+					lastChargeAttemptAt: Date.now() - 60_000,
+					pendingChargeInvoiceId: invoiceId,
+				},
+			});
+			await ctx.db.patch(invoiceId, { dueDate: Date.now() + 2 * DAY });
+		});
+
+		const held = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(held.remindersSent).toBe(0);
+		// NOT stamped — the skip must not eat the reminder for good.
+		expect((await t.run((ctx) => ctx.db.get(invoiceId)))?.reminderSentAt)
+			.toBeUndefined();
+
+		// The question resolves (decline recorded), the bill is still unpaid
+		// and still inside the window: NOW the reminder goes out.
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, {
+				autoRenew: {
+					...sub!.autoRenew!,
+					lastChargeAttemptAt: undefined,
+					pendingChargeInvoiceId: undefined,
+				},
+			});
+		});
+		const resolved = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(resolved.remindersSent).toBe(1);
+	});
+
+	test("a stranded charge holds the reminder the same way", async () => {
+		const t = setup();
+		const DAY = 24 * 60 * 60 * 1000;
+		const { retailerId, invoiceId } = await seedFounding(t, "u_norem2", "norem2-store");
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, {
+				status: "active",
+				currentPeriodEnd: Date.now() + 20 * DAY,
+				autoRenewSessionId: "rb_rem2",
+				autoRenew: {
+					provider: "hitpay" as const,
+					method: "card",
+					attachedAt: Date.now(),
+					strandedCharge: {
+						invoiceId,
+						invoiceNumber: "INV-OLD",
+						amountSen: 14900,
+						currency: "MYR",
+						paymentId: "reconciled:rb_rem2:1",
+						at: Date.now() - DAY,
+					},
+				},
+			});
+			await ctx.db.patch(invoiceId, { dueDate: Date.now() + 2 * DAY });
+		});
+		const run = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(run.remindersSent).toBe(0);
 	});
 
 	test("reminders fire again next cycle — dedup is per-invoice, not per-vendor", async () => {
@@ -1455,6 +1595,65 @@ describe("invoices.changePlan — mid-cycle tier moves", () => {
 		const after = await getSubFor(t, retailerId);
 		expect(after?.plan).toBe("starter");
 		expect(after?.orderCap).toBe(100);
+	});
+
+	test("C3 — voiding the renewal that carried a downgrade keeps the downgrade scheduled", async () => {
+		// The renewal consumed the seller's scheduled move to Starter when it
+		// was issued. An admin voiding that bill (a wrong due date, a retry)
+		// must not quietly turn their choice into a Pro renewal — auto-charged
+		// if they have a saved method. Calling it off is the seller's own act.
+		const t = setup();
+		const { asUser, retailerId } = await seedActive(t, "u_rearm", "rearm-store", {
+			plan: "pro",
+			daysLeft: 1,
+		});
+		await asUser.mutation(api.invoices.changePlan, { plan: "starter" });
+		const subscriptionId = (await getSubFor(t, retailerId))?._id;
+		if (!subscriptionId) throw new Error("no subscription");
+		await t.run((ctx) =>
+			ctx.db.patch(subscriptionId, { currentPeriodEnd: Date.now() - 1000 }),
+		);
+		await t.mutation(internal.invoices.internalIssueRenewalInvoice, {
+			subscriptionId,
+		});
+		const [renewal] = await pendingFor(t, retailerId);
+		expect(renewal?.plan).toBe("starter");
+		expect((await getSubFor(t, retailerId))?.pendingPlanChange).toBeUndefined();
+		if (!renewal) throw new Error("no renewal invoice");
+
+		await asAdmin(t).mutation(api.invoices.voidInvoice, {
+			invoiceId: renewal._id,
+		});
+		expect((await getSubFor(t, retailerId))?.pendingPlanChange?.plan).toBe(
+			"starter",
+		);
+		await t.mutation(internal.invoices.internalIssueRenewalInvoice, {
+			subscriptionId,
+		});
+		const [again] = await pendingFor(t, retailerId);
+		expect(again).toMatchObject({ plan: "starter", total: 7900 });
+	});
+
+	test("C4 — voiding an ordinary renewal schedules nothing", async () => {
+		const t = setup();
+		const { retailerId } = await seedActive(t, "u_plainvoid", "plain-void-store", {
+			plan: "pro",
+			daysLeft: 1,
+		});
+		const subscriptionId = (await getSubFor(t, retailerId))?._id;
+		if (!subscriptionId) throw new Error("no subscription");
+		await t.run((ctx) =>
+			ctx.db.patch(subscriptionId, { currentPeriodEnd: Date.now() - 1000 }),
+		);
+		await t.mutation(internal.invoices.internalIssueRenewalInvoice, {
+			subscriptionId,
+		});
+		const [renewal] = await pendingFor(t, retailerId);
+		if (!renewal) throw new Error("no renewal invoice");
+		await asAdmin(t).mutation(api.invoices.voidInvoice, {
+			invoiceId: renewal._id,
+		});
+		expect((await getSubFor(t, retailerId))?.pendingPlanChange).toBeUndefined();
 	});
 
 	test("C2 — moving back up supersedes a scheduled downgrade", async () => {

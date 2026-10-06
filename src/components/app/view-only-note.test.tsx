@@ -20,8 +20,14 @@ vi.mock("@tanstack/react-router", () => ({
 		</a>
 	),
 }));
-// `useActAs` reads a persisted session through a provider we don't mount.
+// `useActAs` reads a persisted session through a provider we don't mount —
+// here, no session: the viewer's own store.
 vi.mock("../../hooks/useActAs", () => ({
+	useActAs: () => ({
+		actAsRetailerId: undefined,
+		pending: false,
+		setActAs: () => {},
+	}),
 	useActAsRetailerId: () => undefined,
 }));
 

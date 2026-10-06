@@ -564,3 +564,75 @@ describe("admin hide from /stores — moderation over the seller's switch", () =
 		expect(hidden && "note" in hidden).toBe(false);
 	});
 });
+
+describe("a pre-built store never lists, however it is comped", () => {
+	/** A pre-built store with one storefront-visible product — an admin mid-setup
+	 * (docs/prebuilt-stores.md). Products are added through act-as, which is why
+	 * the admin identity creates them against the unclaimed store's id. */
+	async function seedUnclaimedListable(
+		t: ReturnType<typeof setup>,
+		slug: string,
+	): Promise<Id<"retailers">> {
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+		const { retailerId } = await asAdmin.mutation(
+			api.retailers.createUnclaimedStore,
+			{ storeName: `Store ${slug}`, slug },
+		);
+		await asAdmin.mutation(api.products.create, {
+			retailerId,
+			name: "Kuih Lapis",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			variants: [{ optionValues: [], price: 10000, onHand: 10 }],
+		});
+		return retailerId;
+	}
+
+	test("a stocked, unclaimed store is absent from /stores and joins once claimed", async () => {
+		const t = setup();
+		const retailerId = await seedUnclaimedListable(t, "prebuilt-shop");
+		await seedListableStore(t, "user_real", "real-shop");
+		const before = (await t.query(api.marketplace.listStores, {})).map(
+			(c) => c.slug,
+		);
+		expect(before).toContain("real-shop");
+		// It has a product and nothing has hidden it — only "nobody owns this"
+		// keeps it off the rail.
+		expect(before).not.toContain("prebuilt-shop");
+
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailerId, {
+				pendingOwnerEmail: "prebuilt@example.com",
+			});
+		});
+		await t
+			.withIdentity({
+				subject: "user_prebuilt_vendor",
+				email: "prebuilt@example.com",
+				emailVerified: true,
+			})
+			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		const after = (await t.query(api.marketplace.listStores, {})).map(
+			(c) => c.slug,
+		);
+		expect(after).toContain("prebuilt-shop");
+	});
+
+	test("comping it `partner` does NOT put it on the rail while it is unclaimed", async () => {
+		// The reason the exclusion is structural rather than a side effect of the
+		// `internal` comp: a comp is a billing state an admin can edit, and
+		// pre-comping a partner deal ahead of handover must not publish a store
+		// with nobody behind it.
+		const t = setup();
+		const retailerId = await seedUnclaimedListable(t, "partner-prebuilt");
+		await t.withIdentity({ subject: ADMIN }).mutation(
+			api.subscriptions.setComp,
+			{ retailerId, kind: "partner", label: "Sponsored by Maybank SME" },
+		);
+		const slugs = (await t.query(api.marketplace.listStores, {})).map(
+			(c) => c.slug,
+		);
+		expect(slugs).not.toContain("partner-prebuilt");
+	});
+});

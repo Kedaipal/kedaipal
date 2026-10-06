@@ -18,6 +18,15 @@ export:
 > the order receipt's generate-on-demand-never-store posture, adds the only
 > non-A4 page sizes in the codebase (A6 and an A4 4-up imposition), and brings
 > in-repo QR + Code 128 encoders that `render.ts` draws.
+>
+> A **fourth**: the **credit-pack receipt** (Credits T2, `z8r3fdf8ht` —
+> [`credits.md`](./credits.md#top-up-packs-t2)). Kedaipal's own document like B,
+> and frozen once paid like B's receipt face (`creditPurchases.receiptPdfStorageId`,
+> `buildCreditPurchaseReceiptPdf`): the pack, the credits, the amount, the rail,
+> the date the credits expire and "non-refundable and not redeemable for cash".
+> Built for it and fixed in passing: a gateway-settled invoice receipt printed
+> the raw tag — "Paid: … (hitpay_touch_n_go)" — until `paymentMethodDisplay`
+> routed `hitpay_*` through `gatewayPaymentMethodLabel` ("Touch 'n Go").
 
 ClickUp `86ext578n`. Needed before the first paid customer (~5 Jul 2026).
 
@@ -229,7 +238,7 @@ Backend:
   Unlike the reactive inbox (capped at a 1000-doc scan), the export **paginates
   the full result set** in 500-row pages via the internal `exportPage` query, so
   a bookkeeping export is never silently truncated to the latest 1000 orders. A
-  hard `EXPORT_SCAN_CAP` (20,000 docs ≈ 10 months at the Scale tier) bounds the
+  hard `EXPORT_SCAN_CAP` (20,000 docs ≈ 10 months at 2,000 orders a month, an Enterprise-sized store) bounds the
   worst case and is surfaced as a `capped` flag — the inbox warns the seller
   ("Exported the latest N … narrow the date range") rather than returning
   silently-incomplete books. Returns `{ csv, count, capped }`. An action (not a

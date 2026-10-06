@@ -355,6 +355,7 @@ export function MarkShippedDialog({
 export function ShipmentTrackingCard({
 	order,
 	readOnly = false,
+	lockedReason,
 }: {
 	order: {
 		_id: Id<"orders">;
@@ -363,6 +364,11 @@ export function ShipmentTrackingCard({
 		carrierTrackingUrl?: string;
 	};
 	readOnly?: boolean;
+	/** Set while the STORE can't record tracking right now (out of credits,
+	 * Credits T3 — or view-only). Unlike `readOnly` the entry is still this
+	 * seller's to make, so Add/Edit stays in place, disabled, with the reason
+	 * on it — and the card keeps showing while nothing is attached. */
+	lockedReason?: string;
 }) {
 	const setShipmentTracking = useMutation(api.orders.setShipmentTracking);
 	const [draft, setDraft] = useState<ShipmentDraft | null>(null);
@@ -416,7 +422,9 @@ export function ShipmentTrackingCard({
 					<button
 						type="button"
 						onClick={startEdit}
-						className="text-xs text-accent hover:underline"
+						disabled={lockedReason !== undefined}
+						title={lockedReason}
+						className="text-xs text-accent hover:underline disabled:text-muted-foreground disabled:no-underline"
 					>
 						{hasAny ? "Edit" : "Add tracking"}
 					</button>

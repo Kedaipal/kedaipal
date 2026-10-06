@@ -3,6 +3,7 @@
 // the originating mutation/cron never fails on an outbound issue — mirrors the
 // order-alert emails in convex/email.ts. Pure copy lives in lib/billingEmailCopy.ts.
 
+import { billingPageUrl } from "./lib/billingUrl";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -13,24 +14,28 @@ import {
 	type PaymentEmailKey,
 	renderAutoRenewEmail,
 	renderBillingEmail,
+	renderCreditPurchaseEmail,
 	renderHoldEmail,
 	renderPaymentEmail,
 	renderTrialEmail,
 	type TrialEmailKey,
 } from "./lib/billingEmailCopy";
+import { loadCreditAccount } from "./credits";
+import { monthlyCreditGrant } from "./lib/credits";
 import { sendEmail } from "./lib/email";
+import { gatewayPaymentMethodLabel } from "./lib/hitpayBilling";
+import { formatDocDate } from "./lib/pdf/document";
 import { HOLD_LABEL } from "./lib/seasonalHold";
 import type { Locale } from "./lib/emailCopy";
 import {
 	BILLING_CURRENCY_FOR_COUNTRY,
 	type BillingCurrency,
+	FOUNDING_PRO_CREDIT_GRANT,
 	HOLD_MONTHLY_PRICES,
+	PLAN_CREDIT_GRANT,
 	renewalQuote,
 } from "./lib/plans";
 
-function billingPageUrl(): string {
-	return `${process.env.SITE_URL ?? "https://kedaipal.com"}/app/settings?tab=billing`;
-}
 
 const MONTHS = [
 	"Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -47,13 +52,17 @@ function formatDueDate(ms: number): string {
 	return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 }
 
-function planLabel(
+/** "Pro · Monthly" — what an invoice email calls the thing it bills. An
+ * Enterprise bill names its CONTRACT, never a plan (T6): the invoice PDF's
+ * "Kedaipal Enterprise Contract" line, said the same way here. */
+export function invoicePlanLabel(
 	plan: string,
 	cycle: string,
 	kind: "plan" | "hold" = "plan",
 ): string {
 	const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 	if (kind === "hold") return `${HOLD_LABEL} · ${cap(cycle)}`;
+	if (plan === "enterprise") return `Enterprise contract · ${cap(cycle)}`;
 	return `${cap(plan)} · ${cap(cycle)}`;
 }
 
@@ -81,6 +90,9 @@ type InvoiceEmailMeta = {
 	crossBorder: boolean;
 	// HitPay Pay-now link (86eyb6z4r), when the mint landed for this invoice.
 	payNowUrl: string | undefined;
+	// Kedaipal Credits (T5): what the billed plan gives THIS store a month —
+	// undefined for a hold invoice, which grants nothing.
+	includedCredits: number | undefined;
 };
 
 /** Loads everything the billing-email action needs in one roundtrip: invoice +
@@ -101,6 +113,35 @@ export const getInvoiceForEmail = internalQuery({
 		const config = crossBorder
 			? null
 			: await ctx.db.query("billingConfig").first();
+		const kind = invoice.kind ?? "plan";
+		const plan = invoice.plan ?? sub?.plan ?? "pro";
+		// The store's own grant for the BILLED plan, through the one author of
+		// grant precedence (`monthlyCreditGrant`): an admin's custom grant beats
+		// the tier, and a founding-priced Pro invoice is Founding Pro's 300 —
+		// fine in the member's own email, never on a public page. The annual
+		// lock is left out on purpose: this bill starts the NEXT term, and
+		// paying it re-stamps the lock at today's grant.
+		const account =
+			kind === "plan" ? await loadCreditAccount(ctx, invoice.retailerId) : null;
+		// A contract store's override IS its contract's included credits
+		// (T6), and it ends with the contract: the bill that moves the store
+		// OFF the contract (a Pro renewal after a scheduled move) buys Pro's
+		// allowance, so it must not promise the contract's 1,500.
+		const leavesContract =
+			sub?.enterprise !== undefined && plan !== "enterprise";
+		const includedCredits =
+			kind === "plan"
+				? monthlyCreditGrant({
+						status: "active",
+						plan,
+						comped: false,
+						ownerIsAdmin: false,
+						foundingEligible: (invoice.foundingDiscount ?? 0) > 0,
+						override: leavesContract ? undefined : account?.grantOverride,
+						annualGrant: undefined,
+						now: Date.now(),
+					})
+				: undefined;
 		return {
 			invoiceNumber: invoice.invoiceNumber,
 			amount: invoice.amount,
@@ -116,9 +157,9 @@ export const getInvoiceForEmail = internalQuery({
 			// the first annual invoice email "Pro · Monthly" beside a ten-times
 			// amount while its own attached PDF said "Annual Subscription". Same bug
 			// mislabelled a Starter invoice issued to a store still trialing on Pro.
-			plan: invoice.plan ?? sub?.plan ?? "pro",
+			plan,
 			billingCycle: invoice.billingCycle ?? sub?.billingCycle ?? "monthly",
-			kind: invoice.kind ?? "plan",
+			kind,
 			notifyEmail: retailer.notifyEmail,
 			storeName: retailer.storeName,
 			locale: (retailer.locale as Locale | undefined) ?? "en",
@@ -128,6 +169,7 @@ export const getInvoiceForEmail = internalQuery({
 			duitnowId: config?.duitnowId,
 			crossBorder,
 			payNowUrl: invoice.gatewayPayment?.url,
+			includedCredits,
 		};
 	},
 });
@@ -168,7 +210,7 @@ async function sendInvoiceEmail(
 	const { subject, html, text } = renderBillingEmail(meta.locale, key, {
 		storeName: meta.storeName,
 		invoiceNumber: meta.invoiceNumber,
-		planLabel: planLabel(meta.plan, meta.billingCycle, meta.kind),
+		planLabel: invoicePlanLabel(meta.plan, meta.billingCycle, meta.kind),
 		totalFormatted: formatMoney(meta.total, meta.currency),
 		baseFormatted: hasDiscount
 			? formatMoney(meta.amount, meta.currency)
@@ -184,6 +226,7 @@ async function sendInvoiceEmail(
 		crossBorder: meta.crossBorder,
 		payNowUrl: meta.payNowUrl,
 		billingUrl: billingPageUrl(),
+		includedCredits: meta.includedCredits,
 		daysPastDue,
 		// The Off-Season Hold is only an alternative for a seller who ISN'T
 		// already on it — a hold invoice means they took that door already, and
@@ -319,16 +362,22 @@ export const sendSampleBillingEmail = internalAction({
 			v.literal("autoRenewEnabled"),
 			v.literal("autoRenewUpcoming"),
 			v.literal("autoRenewFailed"),
+			// Credits T2: the top-up receipt — "member":true previews the store
+			// copy of a teammate's purchase.
+			v.literal("creditPurchaseReceipt"),
 		),
-		locale: v.optional(v.union(v.literal("en"), v.literal("ms"))),
+		locale: v.optional(
+			v.union(v.literal("en"), v.literal("ms"), v.literal("zh")),
+		),
 		founding: v.optional(v.boolean()),
 		currency: v.optional(v.union(v.literal("MYR"), v.literal("SGD"))),
 		// Adds the sample Pay-now button to the invoice emails ("payNow": true).
 		payNow: v.optional(v.boolean()),
+		member: v.optional(v.boolean()),
 	},
 	handler: async (
 		_ctx,
-		{ to, key, locale, founding, currency, payNow },
+		{ to, key, locale, founding, currency, payNow, member },
 	): Promise<{ sent: string; key: string }> => {
 		const loc: Locale = locale ?? "en";
 		const url = billingPageUrl();
@@ -345,7 +394,20 @@ export const sendSampleBillingEmail = internalAction({
 				: "MYR 104.00"
 			: sampleBase;
 		const rendered =
-			key === "welcome" || key === "thanks"
+			key === "creditPurchaseReceipt"
+				? renderCreditPurchaseEmail(loc, {
+						storeName: "Sample Store",
+						credits: 50,
+						amountFormatted: crossBorder ? "SGD 22.00" : "MYR 45.00",
+						methodLabel: "Touch 'n Go",
+						paidOnFormatted: "30 Sep 2026",
+						expiresOnFormatted: "30 Sep 2027",
+						purchaseNumber: "CRD-202609-SMPL",
+						boughtBy: member ? "Aisyah" : undefined,
+						recipient: "store",
+						ctaUrl: url,
+					})
+				: key === "welcome" || key === "thanks"
 				? renderPaymentEmail(loc, key, {
 						storeName: "Sample Store",
 						planLabel: "Pro · Monthly",
@@ -396,6 +458,9 @@ export const sendSampleBillingEmail = internalAction({
 								crossBorder,
 								payNowUrl: samplePayNow,
 								billingUrl: url,
+								includedCredits: withDiscount
+									? FOUNDING_PRO_CREDIT_GRANT
+									: PLAN_CREDIT_GRANT.pro,
 							});
 		await sendEmail(to, rendered.subject, rendered.html, rendered.text);
 		return { sent: to, key };
@@ -598,7 +663,7 @@ export const notifyPaymentReceived = internalAction({
 		const key: PaymentEmailKey = firstTime ? "welcome" : "thanks";
 		const { subject, html, text } = renderPaymentEmail(meta.locale, key, {
 			storeName: meta.storeName,
-			planLabel: planLabel(meta.plan, meta.billingCycle, meta.kind),
+			planLabel: invoicePlanLabel(meta.plan, meta.billingCycle, meta.kind),
 			totalFormatted: formatMoney(meta.total, meta.currency),
 			dashboardUrl: billingPageUrl(),
 		});
@@ -665,13 +730,14 @@ export const getAutoRenewEmailContext = internalQuery({
 			paidThrough: sub.currentPeriodEnd,
 			lastPaidCurrency: lastPaid?.currency,
 			country: retailer.country,
+			enterprise: sub.enterprise,
 			now: Date.now(),
 		});
 		return {
 			notifyEmail: retailer.notifyEmail,
 			storeName: retailer.storeName,
 			locale: (retailer.locale as Locale | undefined) ?? "en",
-			planLabel: planLabel(quote.plan, quote.billingCycle, quote.kind),
+			planLabel: invoicePlanLabel(quote.plan, quote.billingCycle, quote.kind),
 			amountFormatted: formatMoney(quote.amount, quote.currency),
 			payNowUrl: pending?.gatewayPayment?.url,
 		};
@@ -739,6 +805,136 @@ export const notifyAutoRenewEmail = internalAction({
 					err instanceof Error ? err.message : String(err)
 				}`,
 			);
+		}
+	},
+});
+
+// --- Credit-pack receipts (Credits T2, z8r3fdf8ht) --------------------------
+
+type CreditPurchaseEmailMeta = {
+	status: string;
+	notifyEmail: string | undefined;
+	storeName: string;
+	locale: Locale;
+	credits: number;
+	amountMinor: number;
+	currency: string;
+	paymentMethod: string | undefined;
+	paidAt: number | undefined;
+	purchaseNumber: string;
+	expiresAt: number | undefined;
+	/** The teammate who bought it — null when the owner did. */
+	buyer: { name: string; email: string } | null;
+};
+
+/** Everything the top-up receipt needs in one read: the purchase, its lot's
+ * expiry, the store's billing inbox + locale, and the teammate who paid. */
+export const getCreditPurchaseForEmail = internalQuery({
+	args: { purchaseId: v.id("creditPurchases") },
+	handler: async (
+		ctx,
+		{ purchaseId },
+	): Promise<CreditPurchaseEmailMeta | null> => {
+		const purchase = await ctx.db.get(purchaseId);
+		if (!purchase) return null;
+		const retailer = await ctx.db.get(purchase.retailerId);
+		if (!retailer) return null;
+		const lot = purchase.lotId ? await ctx.db.get(purchase.lotId) : null;
+		let buyer: CreditPurchaseEmailMeta["buyer"] = null;
+		if (purchase.createdBy !== retailer.userId) {
+			const rows = await ctx.db
+				.query("retailerMembers")
+				.withIndex("by_user", (q) => q.eq("userId", purchase.createdBy))
+				.collect();
+			const member = rows.find((m) => m.retailerId === retailer._id);
+			if (member)
+				buyer = { name: member.displayName ?? member.email, email: member.email };
+		}
+		return {
+			status: purchase.status,
+			notifyEmail: retailer.notifyEmail,
+			storeName: retailer.storeName,
+			locale: (retailer.locale as Locale | undefined) ?? "en",
+			credits: purchase.credits,
+			amountMinor: purchase.amountMinor,
+			currency: purchase.currency,
+			paymentMethod: purchase.paymentMethod,
+			paidAt: purchase.paidAt,
+			purchaseNumber: purchase.purchaseNumber,
+			expiresAt: lot?.expiresAt,
+			buyer,
+		};
+	},
+});
+
+/**
+ * The top-up receipt, scheduled by `creditPurchases.finalizePaidPurchase` once
+ * the rail is named and the PDF frozen. It goes to the store's billing inbox
+ * for EVERY top-up — naming the teammate when one bought it, so the owner
+ * hears of every member purchase (Zaki, 30 Sep 2026) — and a copy goes to that
+ * teammate, who paid with their own card or wallet and needs the proof.
+ * Dates on the MYT wall clock (`formatDocDate`), matching the receipt PDF and
+ * the lot's own expiry. Fire-and-forget like every billing email.
+ */
+export const notifyCreditPurchaseReceipt = internalAction({
+	args: { purchaseId: v.id("creditPurchases") },
+	handler: async (ctx, { purchaseId }): Promise<void> => {
+		let meta: CreditPurchaseEmailMeta | null = null;
+		try {
+			meta = await ctx.runQuery(internal.billingEmail.getCreditPurchaseForEmail, {
+				purchaseId,
+			});
+		} catch (err) {
+			console.error("Credit receipt lookup failed", err);
+			return;
+		}
+		// Only a PAID purchase gets a receipt — a stray schedule never mails
+		// one for money that didn't land.
+		if (!meta || meta.status !== "paid" || meta.paidAt === undefined) return;
+		const base = {
+			storeName: meta.storeName,
+			credits: meta.credits,
+			amountFormatted: formatMoney(meta.amountMinor, meta.currency),
+			methodLabel: meta.paymentMethod
+				? gatewayPaymentMethodLabel(meta.paymentMethod)
+				: "Online payment",
+			paidOnFormatted: formatDocDate(meta.paidAt),
+			expiresOnFormatted:
+				meta.expiresAt !== undefined
+					? formatDocDate(meta.expiresAt)
+					: "12 months from today",
+			purchaseNumber: meta.purchaseNumber,
+		};
+		const sends: Array<{ to: string; recipient: "store" | "buyer" }> = [];
+		if (meta.notifyEmail) sends.push({ to: meta.notifyEmail, recipient: "store" });
+		else
+			console.warn(
+				`Credit receipt: store copy skipped, notifyEmail empty (${meta.purchaseNumber})`,
+			);
+		if (
+			meta.buyer &&
+			meta.buyer.email.toLowerCase() !== meta.notifyEmail?.toLowerCase()
+		)
+			sends.push({ to: meta.buyer.email, recipient: "buyer" });
+		for (const { to, recipient } of sends) {
+			const { subject, html, text } = renderCreditPurchaseEmail(meta.locale, {
+				...base,
+				boughtBy: meta.buyer?.name,
+				recipient,
+				ctaUrl:
+					recipient === "store"
+						? billingPageUrl()
+						: `${process.env.SITE_URL ?? "https://kedaipal.com"}/app`,
+			});
+			try {
+				await sendEmail(to, subject, html, text);
+			} catch (err) {
+				console.error(
+					`Credit receipt (${recipient}) failed (${meta.purchaseNumber}): ${
+						err instanceof Error ? err.message : String(err)
+					}`,
+				);
+			}
 		}
 	},
 });

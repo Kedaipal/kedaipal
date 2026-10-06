@@ -3,16 +3,27 @@ import { Link } from "@tanstack/react-router";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ArrowRight, Check, Sparkles } from "lucide-react";
 import {
-	type BillingCurrency,
 	BILLING_CURRENCY_FOR_COUNTRY,
+	type BillingCurrency,
 	COMPETITOR_MONTHLY_RANGE,
+	INVOICE_DUE_GRACE_DAYS,
 	isPlanSelectable,
-	type Plan,
+	isUnlimited,
+	type ListedPlan,
+	PLAN_CAPS,
+	PLAN_CREDIT_GRANT,
 	PLAN_MONTHLY_PRICES,
+	type Plan,
 	starterPricePerDay,
+	TRIAL_CREDIT_GRANT,
 } from "../../../convex/lib/plans";
 import { useLandingRegionContext } from "../../hooks/useLandingRegion";
-import { trackSignupCta } from "../../lib/ga-events";
+import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
+import {
+	enterpriseFromOrdersLabel,
+	enterpriseTalkUrl,
+} from "../../lib/enterprise-contact";
+import { trackEvent, trackSignupCta } from "../../lib/ga-events";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 import { Button } from "../ui/button";
@@ -28,17 +39,46 @@ import {
 // Bare symbol prefixes for Kedaipal's OWN subscription price, allowed here per
 // `currency-literals.test.ts` (components/landing/ is on the allowlist —
 // billing currency, not a seller's storefront currency).
-const CURRENCY_SYMBOL: Record<BillingCurrency, string> = { MYR: "RM", SGD: "S$" };
+const CURRENCY_SYMBOL: Record<BillingCurrency, string> = {
+	MYR: "RM",
+	SGD: "S$",
+};
+
+interface TeaserFeature {
+	label: string;
+	/** Not built yet — carries a "Soon" pill so a buyable card never sells it
+	 * as included. */
+	soon?: boolean;
+}
 
 interface TeaserTier {
 	id: Plan;
 	name: string;
 	tagline: string;
-	features: string[];
+	features: TeaserFeature[];
 	popular: boolean;
-	// Scale is disabled for v1 launch — "Coming soon" pill replaces the CTA. Schema
-	// keeps it so re-enabling needs no migration. See docs/manual-subscription.md.
-	comingSoon?: boolean;
+	/** `!isPlanSelectable` on a LISTED tier — a "Coming soon" pill replaces
+	 * the CTA. None today. Enterprise is never "coming soon": it is sold by
+	 * conversation (T6). */
+	comingSoon: boolean;
+}
+
+/** "You + 2 teammates" — from the seat cap the server enforces (86exr91r4). */
+function teamLine(plan: Plan): string {
+	const cap = PLAN_CAPS[plan].userCap;
+	if (isUnlimited(cap)) return m.pricing_feat_team_unlimited();
+	const teammates = cap - 1;
+	return teammates === 0
+		? m.pricing_feat_1_user()
+		: m.pricing_feat_team_you_plus({ count: teammates });
+}
+
+/** Each card opens on its monthly credits (Credits T5), read from the one
+ * constant the ledger grants from — the same line `/pricing`'s cards carry. */
+function creditsLine(plan: ListedPlan): TeaserFeature {
+	return {
+		label: m.pricing_feat_credits({ credits: PLAN_CREDIT_GRANT[plan] }),
+	};
 }
 
 function getTiers(): TeaserTier[] {
@@ -48,43 +88,55 @@ function getTiers(): TeaserTier[] {
 			name: "Starter",
 			tagline: m.pricing_tier_starter_tagline(),
 			features: [
-				m.pricing_feat_storefront(),
-				m.pricing_feat_pipeline(),
-				m.pricing_feat_wa_automation(),
-				m.pricing_feat_handshake(),
-				m.pricing_feat_1_user(),
+				creditsLine("starter"),
+				{ label: m.pricing_feat_storefront() },
+				{ label: m.pricing_feat_pipeline() },
+				{ label: m.pricing_feat_wa_automation() },
+				{ label: m.pricing_feat_handshake() },
+				{ label: teamLine("starter") },
 			],
 			popular: false,
+			comingSoon: !isPlanSelectable("starter"),
 		},
 		{
 			id: "pro",
 			name: "Pro",
 			tagline: m.pricing_tier_pro_tagline(),
 			// Online payments + Lalamove lead here now that both are shipped — they
-			// are the two Pro capabilities a seller can picture immediately, and
-			// radius-band fees are the narrower story of the same delivery feature.
+			// are the two Pro capabilities a seller can picture immediately.
+			// Courier-quoted delivery rides the Pro `delivery` gate, so it is
+			// listed here, where it is bought.
 			features: [
-				m.pricing_feat_everything_starter(),
-				m.pricing_feat_online_payments(),
-				m.pricing_feat_crm(),
-				m.pricing_feat_lalamove(),
-				m.pricing_feat_insights(),
-				m.pricing_feat_2_users(),
+				creditsLine("pro"),
+				{ label: m.pricing_feat_everything_starter() },
+				{ label: m.pricing_feat_online_payments() },
+				{ label: m.pricing_feat_crm() },
+				{ label: m.pricing_feat_lalamove() },
+				{ label: m.pricing_feat_courier() },
+				{ label: m.pricing_feat_insights() },
+				{ label: teamLine("pro") },
 			],
 			popular: true,
+			comingSoon: !isPlanSelectable("pro"),
 		},
 		{
-			id: "scale",
-			name: "Scale",
-			tagline: m.pricing_tier_scale_tagline(),
+			// Contact us, no public price (Credits T6, z8r3fdkp8h). What an
+			// Enterprise buyer gets TODAY is credits sized to their volume and
+			// the team; outlets and broadcasts aren't built, so they wear "Soon".
+			id: "enterprise",
+			name: "Enterprise",
+			tagline: m.pricing_tier_enterprise_tagline({
+				orders: enterpriseFromOrdersLabel(),
+			}),
 			features: [
-				m.pricing_feat_everything_pro(),
-				m.pricing_feat_courier(),
-				m.pricing_feat_broadcast(),
-				m.pricing_feat_5_users(),
+				{ label: m.pricing_feat_credits_custom() },
+				{ label: m.pricing_feat_everything_pro() },
+				{ label: teamLine("enterprise") },
+				{ label: m.pricing_feat_outlets_multi(), soon: true },
+				{ label: m.pricing_feat_broadcast(), soon: true },
 			],
 			popular: false,
-			comingSoon: !isPlanSelectable("scale"),
+			comingSoon: false,
 		},
 	];
 }
@@ -92,6 +144,7 @@ function getTiers(): TeaserTier[] {
 export function PricingTeaser() {
 	const { isSignedIn } = useAuth();
 	const tiers = getTiers();
+	const supportWa = useSupportWaNumber();
 	const shouldReduceMotion = useReducedMotion();
 	// The page's ONE region (landing v2): the Delivery section's toggle and this
 	// one move the same state, so the courier list and the prices never disagree.
@@ -123,7 +176,15 @@ export function PricingTeaser() {
 							{m.pricing_heading()}
 						</h2>
 						<p className="mx-auto mt-4 max-w-lg text-base text-muted-foreground">
-							{m.pricing_sub()}
+							{m.pricing_sub({
+								days: INVOICE_DUE_GRACE_DAYS,
+								orders: TRIAL_CREDIT_GRANT,
+							})}
+						</p>
+						{/* Credits, said once for all three cards before any of them
+						    (Credits T5) — each card then opens on its own number. */}
+						<p className="mx-auto mt-3 max-w-lg text-sm font-medium text-foreground/80">
+							{m.pricing_sub_credits()}
 						</p>
 						<div className="mx-auto mt-5 max-w-xl rounded-2xl border-l-4 border-accent/40 bg-accent/5 px-5 py-3 text-left text-sm text-muted-foreground">
 							{m.pricing_anchor({
@@ -140,7 +201,7 @@ export function PricingTeaser() {
 
 				<FadeIn delay={0.1}>
 					{/* Mobile: Embla carousel CENTERED ON PRO (owner call, 29 Aug) —
-					    startIndex 1 parks Pro dead-center with Starter/Scale peeking
+					    startIndex 1 parks Pro dead-center with Starter/Enterprise peeking
 					    both sides, drag physics included; md+ deactivates Embla and the
 					    grid takes over. pt-4 on the flex container keeps the "Most
 					    popular" badge — absolutely positioned above the card edge —
@@ -157,7 +218,9 @@ export function PricingTeaser() {
 							   the card's own surface (owner-caught, 29 Aug). */
 							<div
 								key={tier.id}
-								className={centerSnapSlideClass(cn("flex", tier.popular && "z-10"))}
+								className={centerSnapSlideClass(
+									cn("flex", tier.popular && "z-10"),
+								)}
 							>
 								<div
 									className={cn(
@@ -166,123 +229,176 @@ export function PricingTeaser() {
 											? "bg-primary text-primary-foreground shadow-2xl lg:-my-5 lg:scale-[1.02]"
 											: "border border-border bg-card shadow-sm lg:my-0",
 										tier.id === "starter" && "lg:rounded-r-none lg:border-r-0",
-										tier.id === "scale" && "lg:rounded-l-none lg:border-l-0",
+										tier.id === "enterprise" &&
+											"lg:rounded-l-none lg:border-l-0",
 										tier.comingSoon && "opacity-80",
 									)}
 								>
-								{tier.popular && (
-									<span className="absolute -top-3.5 left-1/2 -translate-x-1/2 rotate-2 rounded-lg bg-accent px-3 py-1 text-xs font-bold uppercase tracking-wider text-accent-foreground shadow-md">
-										{m.pricing_most_popular()}
-									</span>
-								)}
-								{tier.id === "scale" && (
-									<span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-muted px-3 py-0.5 text-xs font-bold uppercase tracking-wider text-muted-foreground">
-										{m.pricing_coming_soon()}
-									</span>
-								)}
-
-								<p
-									className={cn(
-										"text-sm font-semibold uppercase tracking-wider",
-										tier.popular ? "text-accent" : "text-muted-foreground",
+									{tier.popular && (
+										<span className="absolute -top-3.5 left-1/2 -translate-x-1/2 rotate-2 rounded-lg bg-accent px-3 py-1 text-xs font-bold uppercase tracking-wider text-accent-foreground shadow-md">
+											{m.pricing_most_popular()}
+										</span>
 									)}
-								>
-									{tier.name}
-								</p>
-								<div className="mt-3 flex items-end gap-1">
-									{/* The price rolls when the MY/SG toggle flips — the toggle's
-									    one visible consequence deserves a visible response. */}
-									<span className="overflow-hidden text-4xl font-bold tracking-tight">
-										<AnimatePresence mode="popLayout" initial={false}>
-											<motion.span
-												key={currency}
-												initial={
-													shouldReduceMotion ? false : { y: 14, opacity: 0 }
-												}
-												animate={{ y: 0, opacity: 1 }}
-												exit={
-													shouldReduceMotion
-														? undefined
-														: { y: -14, opacity: 0 }
-												}
-												transition={{ duration: 0.22, ease: "easeOut" }}
-												className="inline-block"
-											>
-												{symbol} {PLAN_MONTHLY_PRICES[currency][tier.id] / 100}
-											</motion.span>
-										</AnimatePresence>
-									</span>
-									<span
+									{tier.comingSoon && (
+										<span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-muted px-3 py-0.5 text-xs font-bold uppercase tracking-wider text-muted-foreground">
+											{m.pricing_coming_soon()}
+										</span>
+									)}
+
+									<p
 										className={cn(
-											"mb-1 text-sm",
+											"text-sm font-semibold uppercase tracking-wider",
+											tier.popular ? "text-accent" : "text-muted-foreground",
+										)}
+									>
+										{tier.name}
+									</p>
+									{tier.id === "enterprise" ? (
+										<div className="mt-3 flex items-end gap-1">
+											<span className="text-4xl font-bold tracking-tight">
+												{m.pricing_enterprise_price()}
+											</span>
+										</div>
+									) : (
+										<div className="mt-3 flex items-end gap-1">
+											{/* The price rolls when the MY/SG toggle flips — the toggle's
+									    one visible consequence deserves a visible response. */}
+											<span className="overflow-hidden text-4xl font-bold tracking-tight">
+												<AnimatePresence mode="popLayout" initial={false}>
+													<motion.span
+														key={currency}
+														initial={
+															shouldReduceMotion ? false : { y: 14, opacity: 0 }
+														}
+														animate={{ y: 0, opacity: 1 }}
+														exit={
+															shouldReduceMotion
+																? undefined
+																: { y: -14, opacity: 0 }
+														}
+														transition={{ duration: 0.22, ease: "easeOut" }}
+														className="inline-block"
+													>
+														{symbol}{" "}
+														{PLAN_MONTHLY_PRICES[currency][tier.id] / 100}
+													</motion.span>
+												</AnimatePresence>
+											</span>
+											<span
+												className={cn(
+													"mb-1 text-sm",
+													tier.popular
+														? "text-primary-foreground/60"
+														: "text-muted-foreground",
+												)}
+											>
+												{m.pricing_per_month()}
+											</span>
+										</div>
+									)}
+									<p
+										className={cn(
+											"mt-1 text-xs",
 											tier.popular
 												? "text-primary-foreground/60"
 												: "text-muted-foreground",
 										)}
 									>
-										{m.pricing_per_month()}
-									</span>
-								</div>
-								<p
-									className={cn(
-										"mt-1 text-xs",
-										tier.popular
-											? "text-primary-foreground/60"
-											: "text-muted-foreground",
-									)}
-								>
-									{tier.tagline}
-								</p>
+										{tier.tagline}
+									</p>
 
-								<ul className="mt-6 flex-1 space-y-2.5">
-									{tier.features.map((f) => (
-										<li key={f} className="flex items-center gap-2 text-sm">
-											<Check className="size-4 shrink-0 text-accent" />
-											{f}
-										</li>
-									))}
-								</ul>
+									<ul className="mt-6 flex-1 space-y-2.5">
+										{tier.features.map((f) => (
+											<li
+												key={f.label}
+												className={cn(
+													"flex items-center gap-2 text-sm",
+													f.soon &&
+														(tier.popular
+															? "text-primary-foreground/60"
+															: "text-muted-foreground"),
+												)}
+											>
+												<Check
+													className={cn(
+														"size-4 shrink-0",
+														f.soon ? "text-muted-foreground/50" : "text-accent",
+													)}
+												/>
+												{f.label}
+												{/* Same amber pill /pricing's Enterprise card uses for
+											    unbuilt rows — one idea, one control. */}
+												{f.soon ? (
+													<span className="rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-400">
+														{m.pricing_soon()}
+													</span>
+												) : null}
+											</li>
+										))}
+									</ul>
 
-								<div className="mt-7">
-									{tier.comingSoon ? (
-										<div className="flex h-11 w-full items-center justify-center rounded-full border border-dashed border-border bg-muted/40 text-sm font-semibold text-muted-foreground">
-											{m.pricing_coming_soon()}
-										</div>
-									) : (
-										<Button
-											asChild
-											size="lg"
-											className={cn(
-												"h-11 w-full rounded-full",
-												!tier.popular &&
-													"border-border bg-background text-foreground hover:bg-muted",
-											)}
-											variant={tier.popular ? "default" : "outline"}
-										>
-											{isSignedIn ? (
-												<Link to="/app">
-													{m.nav_go_to_dashboard()}
-													<ArrowRight />
-												</Link>
-											) : (
-												<Link
-													to="/sign-up/$"
-													params={{ _splat: "" }}
+									<div className="mt-7">
+										{tier.id === "enterprise" ? (
+											// A conversation, never a checkout (T6).
+											<Button
+												asChild
+												size="lg"
+												variant="outline"
+												className="h-11 w-full rounded-full border-border bg-background text-foreground hover:bg-muted"
+											>
+												<a
+													href={enterpriseTalkUrl(supportWa)}
+													target="_blank"
+													rel="noopener noreferrer"
 													onClick={() =>
-														trackSignupCta(`pricing-teaser-${tier.id}`)
+														trackEvent("enterprise_talk_clicked", {
+															surface: "teaser",
+														})
 													}
 												>
-													{m.pricing_cta()}
+													{m.pricing_cta_talk()}
 													<ArrowRight />
-												</Link>
-											)}
-										</Button>
-									)}
-									{/* The guarantee rides the tier a visitor is most likely to
+												</a>
+											</Button>
+										) : tier.comingSoon ? (
+											<div className="flex h-11 w-full items-center justify-center rounded-full border border-dashed border-border bg-muted/40 text-sm font-semibold text-muted-foreground">
+												{m.pricing_coming_soon()}
+											</div>
+										) : (
+											<Button
+												asChild
+												size="lg"
+												className={cn(
+													"h-11 w-full rounded-full",
+													!tier.popular &&
+														"border-border bg-background text-foreground hover:bg-muted",
+												)}
+												variant={tier.popular ? "default" : "outline"}
+											>
+												{isSignedIn ? (
+													<Link to="/app">
+														{m.nav_go_to_dashboard()}
+														<ArrowRight />
+													</Link>
+												) : (
+													<Link
+														to="/sign-up/$"
+														params={{ _splat: "" }}
+														onClick={() =>
+															trackSignupCta(`pricing-teaser-${tier.id}`)
+														}
+													>
+														{m.pricing_cta()}
+														<ArrowRight />
+													</Link>
+												)}
+											</Button>
+										)}
+										{/* The guarantee rides the tier a visitor is most likely to
 									    pick, directly under its CTA (86eye3p6z §B). */}
-									{tier.popular && !tier.comingSoon ? (
-										<GuaranteeLine className="mt-2.5 text-[11.5px] leading-relaxed text-primary-foreground/65" />
-									) : null}
+										{tier.popular && !tier.comingSoon ? (
+											<GuaranteeLine className="mt-2.5 text-[11.5px] leading-relaxed text-primary-foreground/65" />
+										) : null}
 									</div>
 								</div>
 							</div>

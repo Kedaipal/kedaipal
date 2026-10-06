@@ -14,6 +14,7 @@ import {
 	normalizePriceInput,
 	parsePriceInput,
 } from "../../lib/format";
+import { NOTE_LINK_HINT } from "../../lib/linkify";
 import { toNationalPhoneInput } from "../../lib/phone";
 import { waPhoneFormOptionalSchema } from "../../lib/schemas";
 import { ProBadge } from "../app/pro-gate";
@@ -577,6 +578,7 @@ export function PickupLocationEditDialog({
 									<field.TextareaField
 										label="Notes for buyers (optional)"
 										placeholder="Parking instructions, what to bring, etc."
+										description={NOTE_LINK_HINT}
 										rows={3}
 									/>
 								)}
