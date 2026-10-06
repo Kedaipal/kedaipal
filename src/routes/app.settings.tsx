@@ -28,6 +28,7 @@ import {
 	type ReactNode,
 	useCallback,
 	useEffect,
+	useId,
 	useState,
 } from "react";
 import { toast } from "sonner";
@@ -87,6 +88,7 @@ import {
 	MOBILE_PLACEHOLDER,
 	MyPhonePrefix,
 } from "../components/ui/my-phone-input";
+import { Select } from "../components/ui/select";
 import { Skeleton } from "../components/ui/skeleton";
 import { SortableList } from "../components/ui/sortable-list";
 import {
@@ -2290,6 +2292,7 @@ function LocaleForm({
 	current: Locale;
 	onSave: (locale: Locale) => Promise<unknown>;
 }) {
+	const localeSelectId = useId();
 	const [value, setValue] = useState<Locale>(current);
 	const dirty = value !== current;
 
@@ -2305,19 +2308,23 @@ function LocaleForm({
 
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
-			<label className="flex flex-col gap-2">
-				<span className="text-sm font-medium">Message language</span>
-				<select
+			<div className="flex flex-col gap-2">
+				<label htmlFor={localeSelectId} className="text-sm font-medium">
+					Message language
+				</label>
+				<Select
+					id={localeSelectId}
+					variant="field"
+					className="w-full"
 					value={value}
 					onChange={(e) => setValue(e.target.value as Locale)}
-					className="min-h-11 rounded-xl border border-input bg-background px-4 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
 				>
 					{LOCALE_OPTIONS.map((opt) => (
 						<option key={opt.value} value={opt.value}>
 							{opt.label}
 						</option>
 					))}
-				</select>
+				</Select>
 				{/* The field reaches further than its old "sent to shoppers" copy
 				    admitted: retailer email alerts have always rendered in it, and
 				    the WhatsApp order alerts (86eyhw9zy) now do too. */}
@@ -2325,7 +2332,7 @@ function LocaleForm({
 					Used for the order confirmation buyers receive and their order page —
 					and for the order alerts we send you on WhatsApp.
 				</span>
-			</label>
+			</div>
 
 			<Button type="submit" disabled={!dirty} className={SAVE_BTN_CLASS}>
 				Save language

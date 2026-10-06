@@ -7,7 +7,6 @@ import {
 	Banknote,
 	CalendarClock,
 	Check,
-	ChevronDown,
 	Coins,
 	CreditCard,
 	FilePlus2,
@@ -24,7 +23,7 @@ import {
 	TrendingDown,
 	UserPlus,
 } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useId, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
@@ -63,6 +62,7 @@ import {
 } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { MyPhoneInput } from "../components/ui/my-phone-input";
+import { Select } from "../components/ui/select";
 import { Skeleton } from "../components/ui/skeleton";
 import { useActAs } from "../hooks/useActAs";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
@@ -902,6 +902,7 @@ function retailerOptionLabel(r: {
  * derived from plan + cycle + founding; the due date defaults to +14 days.
  */
 function IssueInvoiceForm() {
+	const retailerSelectId = useId();
 	const retailers = useQuery(
 		convexQuery(api.invoices.listRetailersForAdmin, {}),
 	).data;
@@ -1053,31 +1054,25 @@ function IssueInvoiceForm() {
 				}
 			/>
 
-			<label className="flex flex-col gap-1 text-sm font-medium">
-				Retailer
-				{/* appearance-none + our own chevron, the same reason
-				    shipment-tracking.tsx gives: the native macOS caret hugs the
-				    right border and ignores padding, so on a full-width field it
-				    sits a screen away from the text it belongs to. */}
-				<div className="relative">
-					<select
-						value={retailerId}
-						onChange={(e) => setRetailerId(e.target.value as Id<"retailers">)}
-						className="min-h-11 w-full appearance-none rounded-xl border border-input bg-background px-3 pr-10 text-base outline-none transition-colors focus:border-ring focus:ring-2 focus:ring-ring/50"
-					>
-						<option value="">Select a store…</option>
-						{retailers?.map((r) => (
-							<option key={r._id} value={r._id}>
-								{retailerOptionLabel(r)}
-							</option>
-						))}
-					</select>
-					<ChevronDown
-						aria-hidden="true"
-						className="pointer-events-none absolute right-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-					/>
-				</div>
-			</label>
+			<div className="flex flex-col gap-1">
+				<label htmlFor={retailerSelectId} className="text-sm font-medium">
+					Retailer
+				</label>
+				<Select
+					id={retailerSelectId}
+					variant="field"
+					className="w-full"
+					value={retailerId}
+					onChange={(e) => setRetailerId(e.target.value as Id<"retailers">)}
+				>
+					<option value="">Select a store…</option>
+					{retailers?.map((r) => (
+						<option key={r._id} value={r._id}>
+							{retailerOptionLabel(r)}
+						</option>
+					))}
+				</Select>
+			</div>
 
 			<div className="grid gap-4 rounded-2xl border border-border/70 bg-muted/20 p-3 lg:grid-cols-2 lg:p-4">
 				<div className="flex flex-col gap-1.5">

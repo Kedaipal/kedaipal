@@ -126,3 +126,19 @@ describe("Select — states", () => {
 		expect(screen.getByLabelText("Venue").className).not.toContain("w-56");
 	});
 });
+
+/**
+ * The `field` inset had nothing holding it: the chevron test matches
+ * `right-2.5|right-3.5`, and the omitted-vs-named test only locks `default`,
+ * so moving `field` to any inset kept the suite green (PR #329 review).
+ */
+it("pins the field variant's chevron to right-3.5", () => {
+	const { container } = render(
+		<Select aria-label="Venue" variant="field">
+			<option value="">Pick…</option>
+		</Select>,
+	);
+	expect(container.querySelector("svg")?.getAttribute("class")).toContain(
+		"right-3.5",
+	);
+});
