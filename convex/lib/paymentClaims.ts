@@ -175,23 +175,35 @@ export function currentClaimIndex(
 }
 
 /**
- * The reference to show beside the lead when the lead itself carries none —
- * the newest reference any OTHER submission carried, with when it was sent.
- * The common resubmit is "I forgot the screenshot": the buyer's dialog starts
- * empty, so that row is screenshot-only and becomes the lead, while the
- * reference the seller reconciles by sits on the earlier row. Null when the
- * lead has its own reference, or nobody ever sent one.
+ * The reference to show beside the lead when it belongs to a DIFFERENT
+ * submission — the newest reference the buyer sent anywhere in this order's
+ * history, with when it was sent. Null when the lead already carries that
+ * newest reference, or nobody ever sent one.
+ *
+ * **The newest reference wins, even over one the lead carries itself.** A
+ * resubmit is always a correction or an addition, never a regression: a buyer
+ * who sends a screenshot with a typo'd reference and then sends the corrected
+ * one must not leave the seller reconciling by the typo. This used to return
+ * null whenever the lead had any reference of its own, which is also why the
+ * seller's two cards disagreed — the amber card read the ORDER's
+ * `paymentReference` (always the newest) while the green card read the lead's
+ * own, so the same order showed one number while the seller was deciding and
+ * another after the payment was in (found by driving it, z8r3fdnpxf).
+ *
+ * The lead is still the submission carrying the SCREENSHOT (`currentClaimIndex`)
+ * — the image is the evidence, the reference is just the string beside it.
  */
 export function borrowedLeadReference(
 	entries: readonly PaymentClaimEntry[],
 	leadIndex: number,
 ): { reference: string; createdAt: number } | null {
-	if (leadIndex < 0 || entries[leadIndex].reference !== undefined) return null;
+	if (leadIndex < 0) return null;
 	for (let i = entries.length - 1; i >= 0; i--) {
 		const reference = entries[i].reference;
-		if (i !== leadIndex && reference !== undefined) {
-			return { reference, createdAt: entries[i].createdAt };
-		}
+		if (reference === undefined) continue;
+		// The newest reference anywhere. If the lead is already carrying it,
+		// there is nothing to attribute elsewhere.
+		return i === leadIndex ? null : { reference, createdAt: entries[i].createdAt };
 	}
 	return null;
 }

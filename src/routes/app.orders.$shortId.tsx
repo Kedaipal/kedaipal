@@ -1245,31 +1245,13 @@ function OrderDetailRoute() {
 						</span>
 					</div>
 
-					<div className="flex flex-col gap-2 rounded-xl bg-background/80 p-3">
-						<div className="flex items-start justify-between gap-3">
-							<span className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
-								Reference
-							</span>
-							<span className="break-all text-right text-sm font-medium">
-								{order.paymentReference ?? (
-									<em className="font-normal text-muted-foreground">
-										not provided
-									</em>
-								)}
-							</span>
-						</div>
-						{order.paymentClaimedAt ? (
-							<div className="flex items-center justify-between gap-3">
-								<span className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
-									Submitted
-								</span>
-								<span className="text-sm">
-									{formatRelative(order.paymentClaimedAt)}
-								</span>
-							</div>
-						) : null}
-					</div>
-
+					{/* Reference + submitted-at live INSIDE the proof list now
+					    (z8r3fdnpxf). They used to be read off the ORDER here — the
+					    LATEST values — while the list underneath, and the green card
+					    after confirming, spoke for the SUBMISSION the screenshot
+					    belongs to. A buyer who resubmits a corrected reference left
+					    this card showing one number and the paid card another, with
+					    nothing saying which went with the receipt on screen. */}
 					<PaymentProofList proofs={paymentProofs} tone="claimed" />
 
 					<div className="flex flex-col gap-2">

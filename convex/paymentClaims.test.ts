@@ -121,7 +121,23 @@ describe("borrowedLeadReference", () => {
 		).toEqual({ reference: "NEWER", createdAt: 2 });
 	});
 
-	test("is null when the lead has its own reference, or nobody sent one", () => {
+	// The typo fix (z8r3fdnpxf): the buyer attached a screenshot with a wrong
+	// reference, then sent the corrected one on its own. The screenshot is still
+	// the lead — it is the evidence — but the seller must reconcile by the
+	// CORRECTION, not by the typo it replaced.
+	test("a later correction outranks the reference the lead carries itself", () => {
+		expect(
+			borrowedLeadReference(
+				[
+					{ reference: "TYPO", proofStorageId: "shot", createdAt: 1 },
+					{ reference: "CORRECTED", createdAt: 2 },
+				],
+				0,
+			),
+		).toEqual({ reference: "CORRECTED", createdAt: 2 });
+	});
+
+	test("is null when the lead already carries the newest reference", () => {
 		expect(
 			borrowedLeadReference(
 				[
@@ -135,6 +151,20 @@ describe("borrowedLeadReference", () => {
 			borrowedLeadReference([{ proofStorageId: "s", createdAt: 1 }], 0),
 		).toBeNull();
 		expect(borrowedLeadReference([], -1)).toBeNull();
+	});
+
+	// The order's own `paymentReference` is the newest reference the buyer sent,
+	// because `claimPayment` patches it on every submission that carries one. The
+	// seller's cards must agree with it, or the dashboard contradicts the record
+	// the emails and WhatsApp alerts quote.
+	test("whatever it resolves to IS the order's latest reference", () => {
+		const entries = [
+			{ reference: "FIRST", proofStorageId: "shot", createdAt: 1 },
+			{ reference: "SECOND", createdAt: 2 },
+		];
+		const lead = currentClaimIndex(entries);
+		const borrowed = borrowedLeadReference(entries, lead);
+		expect(borrowed?.reference ?? entries[lead].reference).toBe("SECOND");
 	});
 });
 
