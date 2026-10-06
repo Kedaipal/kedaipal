@@ -22,6 +22,8 @@
  * badges everywhere, never a mix.
  */
 
+import { useSyncExternalStore } from "react";
+
 /** `"JP"` → `"🇯🇵"` — the two regional indicator symbols for the ISO code. */
 export function flagEmoji(iso: string): string {
 	const code = iso.trim().toUpperCase();
@@ -69,6 +71,36 @@ function measureFlagSupport(): boolean {
 	} catch {
 		return false;
 	}
+}
+
+/**
+ * React binding for the probe, SSR-safe by construction.
+ *
+ * `useSyncExternalStore` renders `getServerSnapshot` on the server AND through
+ * hydration, then re-renders with `getSnapshot` — so the first client paint
+ * always matches the HTML and the flags arrive a tick later, instead of
+ * tripping a hydration mismatch.
+ *
+ * This is not theoretical. The plate is SSR'd with whatever dial country it was
+ * given, and since `z8r3fdh274` that can be a FOREIGN one (the `/track` number
+ * repair form prefills the country of the number that failed). The server has
+ * no `document`, so it draws the ISO badge; a flag-capable client would have
+ * drawn the emoji. Buyer loaders happen to discard the SSR payload today, which
+ * is the only reason nothing mismatches yet — closing that double-fetch
+ * (`86eydh4vd`) would have turned this into a real warning and flash.
+ */
+export function useFlagEmojiSupport(): boolean {
+	return useSyncExternalStore(subscribeNever, supportsFlagEmoji, serverFalse);
+}
+
+/** The answer can't change for a device, so there is nothing to subscribe to. */
+function subscribeNever(): () => void {
+	return () => {};
+}
+
+/** No DOM on the server: the badge is what the HTML must contain. */
+function serverFalse(): boolean {
+	return false;
 }
 
 /** Tests only — the memo would otherwise leak between cases. */

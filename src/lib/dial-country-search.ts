@@ -59,9 +59,15 @@ export function dialCountryOption(iso: DialIso): DialCountryOption {
  */
 function score(option: DialCountryOption, query: string): number | null {
 	if (NUMERIC_QUERY.test(query)) {
-		// Drop the IDD prefix BEFORE stripping separators, or "0081" keeps its
-		// leading zeros and matches no code at all. `+` falls out either way.
-		const digits = query.replace(/^00/, "").replace(/[^\d]/g, "");
+		// Drop the international prefix BEFORE stripping separators, or "0081"
+		// keeps its leading zeros and matches no code at all. `+` comes off
+		// first so "+0081" — plus AND the IDD, which is a thing people type —
+		// resolves the same as either one alone. No dial code starts with 0, so
+		// nothing legitimate is eaten.
+		const digits = query
+			.replace(/^\+/, "")
+			.replace(/^00/, "")
+			.replace(/[^\d]/g, "");
 		if (digits === "") return null;
 		if (option.dial === digits) return 0;
 		if (option.dial.startsWith(digits)) return 1;

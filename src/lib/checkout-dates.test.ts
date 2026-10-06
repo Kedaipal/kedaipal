@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { addDaysYmd, quickPickDays, ymdChipLabel } from "./checkout-dates";
+import {
+	addDaysYmd,
+	quickPickDays,
+	windowHasUnpickableDay,
+	ymdChipLabel,
+} from "./checkout-dates";
 
 describe("addDaysYmd", () => {
 	it("adds days in pure calendar space", () => {
@@ -91,5 +96,45 @@ describe("quickPickDays — isSelectable filter (store opening hours, 86eyp5rav)
 			(ymd) => ymd !== "2026-07-01",
 		);
 		expect(days[0]).toEqual({ ymd: "2026-07-02", label: "Tomorrow" });
+	});
+});
+
+describe("windowHasUnpickableDay (z8r3fdm36y PR review)", () => {
+	it("is false when every day in the window is open", () => {
+		// A clean month must read as one — the note is an explanation, and there
+		// is nothing to explain here.
+		expect(windowHasUnpickableDay("2026-10-01", "2026-10-31", () => true)).toBe(
+			false,
+		);
+	});
+
+	it("is true for a closure anywhere in the window", () => {
+		expect(
+			windowHasUnpickableDay(
+				"2026-10-01",
+				"2026-10-31",
+				(ymd) => ymd !== "2026-10-17",
+			),
+		).toBe(true);
+	});
+
+	it("reaches the LAST day of the window", () => {
+		// It shipped with a 90-day cap, which `fulfilmentDateBounds` already made
+		// dead (the window ends at MAX_NOTICE_DAYS = 30). Reintroduce any cap
+		// shorter than the window and this goes red.
+		expect(
+			windowHasUnpickableDay(
+				"2026-10-01",
+				"2026-10-31",
+				(ymd) => ymd !== "2026-10-31",
+			),
+		).toBe(true);
+	});
+
+	it("says false rather than scanning a window that makes no sense", () => {
+		expect(windowHasUnpickableDay("", "2026-10-31", () => false)).toBe(false);
+		expect(
+			windowHasUnpickableDay("2026-11-01", "2026-10-01", () => false),
+		).toBe(false);
 	});
 });

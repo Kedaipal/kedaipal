@@ -37,6 +37,30 @@ export function ymdChipLabel(ymd: string): string {
 }
 
 /**
+ * Does the window hold a day the buyer can't have? Drives whether the date
+ * picker shows its "greyed-out days aren't available" note — the note is an
+ * EXPLANATION, so it appears only when there is greying to explain, and a
+ * store with no closures, no hours and no prep reads as a clean month.
+ *
+ * Scans the whole window rather than a capped prefix. It had a 90-day cap when
+ * this shipped, which was dead by construction: `fulfilmentDateBounds` ends the
+ * window at `MAX_NOTICE_DAYS` (30) days out, so it can never exceed 31 days and
+ * the cap was 3x a bound that already existed. Both checkouts kept their own
+ * copy of the loop; this is the one copy (z8r3fdm36y PR review).
+ */
+export function windowHasUnpickableDay(
+	minYmd: string,
+	maxYmd: string,
+	isSelectable: (ymd: string) => boolean,
+): boolean {
+	if (!minYmd || !maxYmd || minYmd > maxYmd) return false;
+	for (let ymd = minYmd; ymd <= maxYmd; ymd = addDaysYmd(ymd, 1)) {
+		if (!isSelectable(ymd)) return true;
+	}
+	return false;
+}
+
+/**
  * The first `count` selectable days in `[minYmd, maxYmd]`, labelled for chips.
  * `todayYmd` (today in MYT, notice-free) upgrades the first labels to
  * "Today" / "Tomorrow" when they apply — a store with a 2-day notice never

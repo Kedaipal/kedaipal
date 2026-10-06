@@ -20,9 +20,16 @@ describe("searchDialCountries", () => {
 	});
 
 	it("takes a code the way a buyer might actually type it", () => {
-		// Pasted from a contact card, dialled with the IDD prefix, or spaced out.
-		for (const q of ["+81", "81", "0081", "+8 1", "+81-"]) {
+		// Pasted from a contact card, dialled with the IDD prefix, spaced out —
+		// or belt-and-braces with BOTH the plus and the IDD (PR review FYI 3).
+		for (const q of ["+81", "81", "0081", "+8 1", "+81-", "+0081", "00 81"]) {
 			expect(top(q)).toBe("JP");
+		}
+	});
+
+	it("an international prefix with nothing after it matches nothing", () => {
+		for (const q of ["+", "00", "+00"]) {
+			expect(searchDialCountries(q)).toHaveLength(0);
 		}
 	});
 

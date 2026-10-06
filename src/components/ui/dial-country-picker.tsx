@@ -42,7 +42,7 @@ import {
 	dialCountryOption,
 	searchDialCountries,
 } from "#/lib/dial-country-search";
-import { flagEmoji, supportsFlagEmoji } from "#/lib/flag-emoji";
+import { flagEmoji, useFlagEmojiSupport } from "#/lib/flag-emoji";
 import { cn } from "#/lib/utils";
 import type { DialIso } from "../../../convex/lib/buyerPhone";
 import { NEARBY_DIAL_COUNTRIES } from "../../../convex/lib/buyerPhone";
@@ -174,11 +174,13 @@ export function DialCountryPicker({
 	flags: Partial<Record<string, (p: { title: string }) => React.ReactElement>>;
 	suggestedLabel?: string;
 }) {
-	// One answer for the whole control. Safe to read during render: the only
-	// thing that paints before hydration is the PLATE, and the plate draws the
-	// store's own country from the inline `flags` pair, so this value cannot
-	// change what SSR emitted. The list exists only after a tap.
-	const emoji = supportsFlagEmoji();
+	// One answer for the whole control, read through `useSyncExternalStore` so
+	// the first client paint matches the SSR HTML and the flags arrive a tick
+	// later. Reading the probe directly during render was wrong: the comment
+	// here used to claim SSR only ever paints an MY/SG plate, but a FOREIGN
+	// dial country can be prefilled (the `/track` repair form), and that plate
+	// would have rendered a badge on the server and a flag on the client.
+	const emoji = useFlagEmojiSupport();
 	const [open, setOpen] = useState(false);
 	const [query, setQuery] = useState("");
 	const [activeIndex, setActiveIndex] = useState(0);
@@ -328,14 +330,17 @@ export function DialCountryPicker({
 							// Names the two things a buyer actually knows — the point of
 							// the change. 16px (`text-base` via `field`) so iOS doesn't zoom.
 							placeholder="Search country or code"
-							className="pl-9 pr-10"
+							className="pl-9 pr-12"
 						/>
 						{query !== "" ? (
 							<button
 								type="button"
 								onClick={() => setQuery("")}
 								aria-label="Clear search"
-								className="absolute right-1 top-1/2 flex size-9 -translate-y-1/2 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+								// 44px of HIT AREA around a 16px glyph. An in-input adornment is
+								// conventionally smaller, but the house floor is the floor, and
+								// this one is reached mid-search with a thumb.
+								className="absolute right-0 top-1/2 flex size-11 -translate-y-1/2 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
 							>
 								<X className="size-4" />
 							</button>

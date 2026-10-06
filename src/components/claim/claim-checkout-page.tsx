@@ -38,7 +38,11 @@ import type { ClaimPagePayload } from "../../../convex/orderClaims";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { displayAddressState } from "../../lib/address-display";
 import { MASK_PII } from "../../lib/analytics-privacy";
-import { addDaysYmd, quickPickDays } from "../../lib/checkout-dates";
+import {
+	addDaysYmd,
+	quickPickDays,
+	windowHasUnpickableDay,
+} from "../../lib/checkout-dates";
 import {
 	asksForTime,
 	type FulfilmentKind,
@@ -446,16 +450,9 @@ export function ClaimCheckoutPage({
 	const quickDays = quickPickDays(minYmd, maxYmd, todayYmd, 3, (ymd) =>
 		isDaySelectable(ymd, watchedSchedule),
 	);
-	// Same bounded scan as the storefront checkout: the note under the grid is
-	// an explanation, so it only shows when something is actually greyed.
-	const hasUnpickableDays = (() => {
-		let ymd = minYmd;
-		for (let i = 0; i < 90 && ymd <= maxYmd; i++) {
-			if (!isDaySelectable(ymd, watchedSchedule)) return true;
-			ymd = addDaysYmd(ymd, 1);
-		}
-		return false;
-	})();
+	const hasUnpickableDays = windowHasUnpickableDay(minYmd, maxYmd, (ymd) =>
+		isDaySelectable(ymd, watchedSchedule),
+	);
 	const watchedLat = useStore(form.store, (s) => s.values.address.latitude);
 	const watchedLng = useStore(form.store, (s) => s.values.address.longitude);
 	const watchedState = useStore(form.store, (s) => s.values.address.state);

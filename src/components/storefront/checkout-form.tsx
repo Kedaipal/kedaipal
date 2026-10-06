@@ -58,7 +58,11 @@ import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { readAttributionSource } from "../../hooks/useSourceAttribution";
 import { displayAddressState } from "../../lib/address-display";
 import { MASK_PII } from "../../lib/analytics-privacy";
-import { addDaysYmd, quickPickDays } from "../../lib/checkout-dates";
+import {
+	addDaysYmd,
+	quickPickDays,
+	windowHasUnpickableDay,
+} from "../../lib/checkout-dates";
 import {
 	asksForTime,
 	type FulfilmentKind,
@@ -794,19 +798,9 @@ export function CheckoutPage({
 	const quickDays = quickPickDays(minYmd, maxYmd, todayYmd, 3, (ymd) =>
 		isDaySelectable(ymd, watchedSchedule),
 	);
-	// Does the grid actually grey anything out? The note under the calendar is
-	// an explanation, so it appears only when there is something to explain —
-	// a store with no closed dates, no hours and no prep shows a clean month and
-	// should read as one. Bounded: a long window doesn't need a full scan to
-	// answer "is there at least one".
-	const hasUnpickableDays = (() => {
-		let ymd = minYmd;
-		for (let i = 0; i < 90 && ymd <= maxYmd; i++) {
-			if (!isDaySelectable(ymd, watchedSchedule)) return true;
-			ymd = addDaysYmd(ymd, 1);
-		}
-		return false;
-	})();
+	const hasUnpickableDays = windowHasUnpickableDay(minYmd, maxYmd, (ymd) =>
+		isDaySelectable(ymd, watchedSchedule),
+	);
 	const watchedLat = useStore(form.store, (s) => s.values.address.latitude);
 	const watchedLng = useStore(form.store, (s) => s.values.address.longitude);
 	// Weight-mode stores zone-match on the STATE — a manual address (no pin)

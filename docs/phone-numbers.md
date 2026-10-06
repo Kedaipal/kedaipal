@@ -139,10 +139,20 @@ plate: form-bound `TextField prefix={<BuyerPhonePrefix …/>}` with the field's
       wide) and the **whole list** falls back to badges together. A device
       shows flags everywhere or badges everywhere, never a mix — which was the
       original complaint in a new coat.
-    - **The PLATE keeps the inline MY/SG SVGs.** It paints on the first byte,
-      where emoji support is unknown and a flip after hydration would flash;
-      it only ever shows the store's own country until the buyer picks
-      otherwise; and a seller's fixed plate must never degrade to letters.
+    - **The PLATE keeps the inline MY/SG SVGs.** It only ever shows the store's
+      own country until the buyer picks otherwise, and a seller's fixed plate
+      must never degrade to letters.
+    - **Read it through `useFlagEmojiSupport`, never by calling the probe in
+      render.** `useSyncExternalStore` renders `getServerSnapshot` (badge) on
+      the server and through hydration, then re-renders with the real answer,
+      so the first client paint always matches the HTML. This is not
+      theoretical: the plate is SSR'd with whatever dial country it was given,
+      and since `z8r3fdh274` that can be a FOREIGN one (the `/track` repair
+      form prefills the country of the number that failed) — the server draws
+      a badge where a capable client would draw a flag. Buyer loaders discard
+      the SSR payload today, which is the only reason nothing mismatches yet;
+      closing that double-fetch ([`86eydh4vd`](https://app.clickup.com/t/86eydh4vd))
+      would have made it a real warning and flash.
   - **One control at both breakpoints.** A popover on desktop and a sheet on
     mobile would be two codepaths for one concept, which is how a control
     starts drifting. `Sheet` already is both.

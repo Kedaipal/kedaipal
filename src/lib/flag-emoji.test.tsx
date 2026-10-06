@@ -4,6 +4,7 @@ import {
 	flagEmoji,
 	resetFlagEmojiSupportForTest,
 	supportsFlagEmoji,
+	useFlagEmojiSupport,
 } from "./flag-emoji";
 
 afterEach(() => {
@@ -91,5 +92,46 @@ describe("supportsFlagEmoji", () => {
 		supportsFlagEmoji();
 		supportsFlagEmoji();
 		expect(spy).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("useFlagEmojiSupport — SSR must match hydration (PR review FYI 1)", () => {
+	it("renders the BADGE on the server even where flags are supported", async () => {
+		// The plate is SSR'd with whatever dial country it was given, and since
+		// z8r3fdh274 that can be a FOREIGN one (the /track repair form prefills
+		// the country of the number that failed). Reading the probe directly in
+		// render drew a badge on the server and a flag on the client — a
+		// hydration mismatch waiting for 86eydh4vd to close the double-fetch.
+		// `getServerSnapshot` is what keeps the first paint honest.
+		stubCanvas(1); // a device that CAN draw flags
+		expect(supportsFlagEmoji()).toBe(true);
+
+		const { renderToStaticMarkup } = await import("react-dom/server");
+		function Probe() {
+			return <>{useFlagEmojiSupport() ? "flag" : "badge"}</>;
+		}
+		expect(renderToStaticMarkup(<Probe />)).toBe("badge");
+	});
+
+	it("upgrades to flags once mounted on a capable client", async () => {
+		stubCanvas(1);
+		const { render, screen, cleanup } = await import("@testing-library/react");
+		function Probe() {
+			return <>{useFlagEmojiSupport() ? "flag" : "badge"}</>;
+		}
+		render(<Probe />);
+		expect(screen.getByText("flag")).toBeDefined();
+		cleanup();
+	});
+
+	it("stays on badges after mount where flags don't render", async () => {
+		stubCanvas(2); // Windows: the pair falls back to two letterforms
+		const { render, screen, cleanup } = await import("@testing-library/react");
+		function Probe() {
+			return <>{useFlagEmojiSupport() ? "flag" : "badge"}</>;
+		}
+		render(<Probe />);
+		expect(screen.getByText("badge")).toBeDefined();
+		cleanup();
 	});
 });
