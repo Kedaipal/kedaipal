@@ -227,6 +227,25 @@ function PickerView({
 			</>
 		);
 
+	// The store is UNMETERED (an admin's own, z8r3fdp4er): it has no balance,
+	// so the picker is unreachable from the meter — but a bookmarked
+	// `?topup=` lands here, and the reader is likely the admin who owns it.
+	// Say what's true instead of asking them for access they already hold.
+	if (balance === null && options?.refusalMessage)
+		return (
+			<>
+				{header}
+				<p className="text-sm text-muted-foreground">
+					{options.refusalMessage}
+				</p>
+				<DialogFooter>
+					<Button variant="outline" className="tap-target" onClick={onClose}>
+						Close
+					</Button>
+				</DialogFooter>
+			</>
+		);
+
 	// No credits access at all (a teammate without the grant): the note IS
 	// the surface — the same posture as the settings AreaGate.
 	if (options === null || balance === null)

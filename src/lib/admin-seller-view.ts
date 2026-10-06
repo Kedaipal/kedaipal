@@ -666,7 +666,7 @@ export interface SellerCredits {
 	detail: string;
 	tone: CreditsTone;
 	/** The total is at or below zero — the fact the seller lock keys off
-	 * (T3). Comped and admin stores can be out and are still never locked. */
+	 * (T3). A comped store can be out and is still never locked. */
 	out: boolean;
 	/** When the total reached zero (`exhaustedAt`) — "out since". */
 	outSince?: number;
@@ -679,6 +679,16 @@ export interface SellerCredits {
 /** A store's credits in one reading, shared by the table, the phone cards,
  * the sheet, the CSV and the copy-summary so they can't disagree. */
 export function sellerCredits(row: AdminSellerRow): SellerCredits {
+	// Unmetered (z8r3fdp4er): an admin's own store is outside the credit system
+	// — no account, no grant, no debit. Asked BEFORE the row's cached figures,
+	// which a store that was metered before the gate still carries.
+	if (row.ownerIsAdmin)
+		return {
+			headline: "—",
+			detail: "Admin store — not metered",
+			tone: "muted",
+			out: false,
+		};
 	const c = row.credits;
 	if (!c)
 		return {
@@ -689,7 +699,7 @@ export function sellerCredits(row: AdminSellerRow): SellerCredits {
 		};
 	const total = c.plan + c.purchased;
 	const out = total <= 0;
-	const neverLocked = row.ownerIsAdmin || row.comped;
+	const neverLocked = row.comped;
 	const detail = [
 		`plan ${c.plan}`,
 		`bought ${c.purchased}`,

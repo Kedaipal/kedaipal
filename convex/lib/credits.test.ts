@@ -5,6 +5,8 @@ import { describe, expect, test } from "vitest";
 import {
 	cancelRefundDecision,
 	creditLockAudience,
+	creditLockExempt,
+	creditLockExemption,
 	creditLockMessage,
 	creditRegime,
 	type CreditRegimeInputs,
@@ -15,6 +17,7 @@ import {
 	monthlyCreditGrant,
 	refreshedPlanBalance,
 	sellerRefundsLeft,
+	storeIsMetered,
 	topUpBlock,
 } from "./credits";
 import {
@@ -36,7 +39,6 @@ function inputs(over: Partial<CreditRegimeInputs> = {}): CreditRegimeInputs {
 		status: "active",
 		plan: "pro",
 		comped: false,
-		ownerIsAdmin: false,
 		foundingEligible: false,
 		override: undefined,
 		annualGrant: undefined,
@@ -144,20 +146,33 @@ describe("creditRegime — by subscription status", () => {
 			expect(creditRegime(inputs({ status }))).toEqual({ kind: "none" });
 	});
 
-	test("comped, admin-owned and the missing-row fail-safe are metered monthly whatever the status", () => {
+	test("comped and the missing-row fail-safe are metered monthly whatever the status", () => {
 		expect(creditRegime(inputs({ status: "past_due", comped: true }))).toEqual({
 			kind: "monthly",
 			grant: 200,
 		});
-		// An admin store sits in `trialing` forever — a one-off grant would turn
-		// its honest meter into a debt that never refreshes.
-		expect(
-			creditRegime(inputs({ status: "trialing", ownerIsAdmin: true })),
-		).toEqual({ kind: "monthly", grant: 200 });
 		expect(creditRegime(inputs({ status: null }))).toEqual({
 			kind: "monthly",
 			grant: 200,
 		});
+	});
+});
+
+describe("unmetered stores (z8r3fdp4er)", () => {
+	test("an admin's own store is unmetered; every other store is metered", () => {
+		expect(storeIsMetered({ ownerIsAdmin: true })).toBe(false);
+		expect(storeIsMetered({ ownerIsAdmin: false })).toBe(true);
+	});
+
+	test("a sponsored store is NOT unmetered — only never locked", () => {
+		// The two states are deliberately different: a comp can end, so the
+		// balance behind it has to be real and visible the whole time.
+		expect(storeIsMetered({ ownerIsAdmin: false })).toBe(true);
+		expect(creditLockExempt({ status: "active", comped: true })).toBe(true);
+		expect(creditLockExemption({ status: null, comped: false })).toBe(
+			"sponsored",
+		);
+		expect(creditLockExemption({ status: "active", comped: false })).toBeNull();
 	});
 });
 

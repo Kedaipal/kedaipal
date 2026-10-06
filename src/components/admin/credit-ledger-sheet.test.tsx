@@ -167,6 +167,22 @@ describe("CreditLedgerBody — balances", () => {
 		renderBody();
 		expect(screen.getByText(/No credit account yet/)).toBeTruthy();
 	});
+
+	it("an UNMETERED store says so — and offers no lever (z8r3fdp4er)", () => {
+		// The same null view also means "store deleted", so the drawer has to
+		// tell the two apart instead of claiming an admin store is gone.
+		state.account = { view: null, account: null, lots: [], unmetered: true };
+		renderBody();
+		expect(screen.getByText(/Admin store — not metered/)).toBeTruthy();
+		expect(screen.queryByText(/no longer exists/)).toBeNull();
+		expect(screen.queryByRole("button", { name: /Adjust/ })).toBeNull();
+	});
+
+	it("a deleted store still says THAT", () => {
+		state.account = { view: null, account: null, lots: [], unmetered: false };
+		renderBody();
+		expect(screen.getByText(/no longer exists/)).toBeTruthy();
+	});
 });
 
 describe("CreditLedgerBody — adjust by hand", () => {

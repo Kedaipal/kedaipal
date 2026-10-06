@@ -85,12 +85,17 @@ function mockQueries({
 	invoices = [],
 	gateway = GATEWAY_OFF,
 	creditPurchases = [],
+	creditBalance,
 }: {
 	isAdmin: boolean;
 	supportWa?: string | null;
 	invoices?: unknown[];
 	/** creditPurchases.myPurchases — the paid top-ups (Credits T2). */
 	creditPurchases?: unknown[];
+	/** credits.getBalance. `null` = this store has no credits at all — an
+	 * unmetered admin store (z8r3fdp4er) or a teammate without the grant.
+	 * Omitted = still loading. */
+	creditBalance?: unknown;
 	/** billingGatewayAvailable answer. Defaults to what the server returns with
 	 * no HitPay credentials (rails off, list pricing); `null` = still loading. */
 	gateway?: Gateway | null;
@@ -102,6 +107,7 @@ function mockQueries({
 		supportWa: getFunctionName(api.contact.supportWhatsapp),
 		gateway: getFunctionName(api.subscriptionPayments.billingGatewayAvailable),
 		creditPurchases: getFunctionName(api.creditPurchases.myPurchases),
+		creditBalance: getFunctionName(api.credits.getBalance),
 	};
 	vi.mocked(useQuery).mockImplementation(((opts: {
 		__fn: FunctionReference<"query">;
@@ -115,6 +121,7 @@ function mockQueries({
 			if (name === NAME.supportWa) return supportWa ?? undefined;
 			if (name === NAME.gateway) return gateway ?? undefined;
 			if (name === NAME.creditPurchases) return creditPurchases;
+			if (name === NAME.creditBalance) return creditBalance;
 			return undefined;
 		})();
 		return { data, isPending: false };
@@ -208,6 +215,48 @@ describe("BillingTab admin plan suppression", () => {
 		expect(screen.getByText("Current plan")).toBeTruthy();
 		expect(screen.getByText("Past due")).toBeTruthy();
 		expect(screen.queryByText("Admin account")).toBeNull();
+	});
+});
+
+describe("BillingTab credits (z8r3fdp4er)", () => {
+	/** A metered store's balance — only the fields the tab's own branches read. */
+	const BALANCE = {
+		plan: 180,
+		purchased: 0,
+		total: 180,
+		periodKey: "2026-10",
+		periodGrant: 200,
+		regime: "monthly",
+		nextGrant: 200,
+		refreshesAt: Date.now() + 86400000,
+		nextExpiry: null,
+		exhaustedAt: null,
+		sellerRefundsLeft: 10,
+		customGrant: false,
+		ordersThisPeriod: 20,
+		lockExempt: null,
+	};
+
+	it("an UNMETERED store gets no credit activity card", () => {
+		// An admin's own store has no credit account, so `getBalance` is null
+		// and the ledger below it would only ever say "Nothing yet".
+		mockQueries({ isAdmin: true, creditBalance: null });
+		render(<BillingTab retailer={retailer()} />);
+		expect(screen.getByText("Admin account")).toBeTruthy();
+		expect(screen.queryByText("Credit activity")).toBeNull();
+	});
+
+	it("a teammate without the Credits grant gets no empty card either", () => {
+		viewer.role = "member";
+		mockQueries({ isAdmin: false, creditBalance: null });
+		render(<BillingTab retailer={retailer()} />);
+		expect(screen.queryByText("Credit activity")).toBeNull();
+	});
+
+	it("a metered store still gets it", () => {
+		mockQueries({ isAdmin: false, creditBalance: BALANCE });
+		render(<BillingTab retailer={retailer()} />);
+		expect(screen.getByText("Credit activity")).toBeTruthy();
 	});
 });
 

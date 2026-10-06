@@ -143,6 +143,16 @@ export function CreditLedgerBody({
 						<Skeleton className="h-20 w-full rounded-2xl" />
 						<Skeleton className="h-11 w-full rounded-xl" />
 					</div>
+				) : state.unmetered ? (
+					/* Unmetered (z8r3fdp4er): a Kedaipal admin's own store is outside
+					   the credit system, so there is no balance to show and no lever
+					   to pull — saying which is the point, since the same null view
+					   also means "store deleted". */
+					<p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
+						Admin store — not metered. Credits apply to seller stores only:
+						this one has no balance, takes no monthly grant and spends nothing
+						per order.
+					</p>
 				) : state.view === null ? (
 					<p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
 						This store no longer exists.
