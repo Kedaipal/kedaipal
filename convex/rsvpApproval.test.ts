@@ -266,6 +266,9 @@ describe("an event needs a venue", () => {
 				event: { date: EVENT_DATE },
 				variants: [{ optionValues: [], price: 15000, onHand: 0 }],
 			}),
-		).rejects.toThrow(/Add a pickup point first/);
+			// The refusal must name the fix, and since `z8r3fdm32x` the fix is a
+			// first-class Event venue — NOT the old "use a hidden pickup point"
+			// workaround that section replaced.
+		).rejects.toThrow(/Add the place this event happens first.*Event venue/s);
 	});
 });

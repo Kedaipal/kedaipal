@@ -18,10 +18,15 @@ import { Input } from "../ui/input";
 import { Select } from "../ui/select";
 import { ToggleSwitch } from "../ui/toggle-switch";
 
-/** Why an event can't be saved on a store with no pickup point — said on
- * the Event card and by the wizard, mirroring the server's refusal. */
+/** Why an event can't be saved on a store with nowhere to hold it — said on
+ * the Event card and by the wizard, mirroring the server's refusal.
+ *
+ * It points at Event venues rather than "a hidden point", which was the
+ * workaround this store of advice outlived: before `eventsOnly` (z8r3fdm32x)
+ * an events-only address had to masquerade as a deactivated pickup point, and
+ * telling a seller to do that now contradicts the section built for it. */
 export const EVENT_NO_VENUE_COPY =
-	"An event needs a venue, and this store has no pickup point yet — guests would reach the RSVP page and be turned away. A hidden point works if it's only for events.";
+	"An event needs a venue, and this store has nowhere set up yet — guests would reach the RSVP page and be turned away. Add an Event venue if the place only hosts events, or a pickup point if buyers collect there too.";
 
 /**
  * The event block's state, kept as TYPED-RAW strings like every other draft in
