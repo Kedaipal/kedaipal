@@ -14,6 +14,7 @@ import { VideoDemo } from "../components/landing/video-demo";
 import { LandingRegionProvider } from "../hooks/useLandingRegion";
 import { useMarketingLanding } from "../hooks/useMarketingLanding";
 import { DEMO_DURATION_ISO, DEMO_VIDEO } from "../lib/demo-video";
+import { jsonLdScript } from "../lib/json-ld";
 import { faqJsonLd } from "../lib/landing-faq";
 
 /**
@@ -31,7 +32,10 @@ const SEO_TITLE = "Kedaipal — WhatsApp Order Hub for Malaysian Sellers";
  * live in SEO_TITLE and the Organization description, not here — "for
  * Malaysia & Singapore" was the 20 chars that pushed the differentiator out.
  * "Free until your first order" is the start-when-you-sell framing (pricing
- * reset, 30 Aug); the page never says "trial" or a number of days again.
+ * reset, 30 Aug), and still true under the 30 Sep trial model. This line never
+ * names a trial length; the page states it once, in the FAQ answer, as "14
+ * days or 200 orders" from the first order — the two bounds together
+ * (landing-redesign.test.ts).
  */
 const SEO_DESC =
 	"Sell on WhatsApp. Never lose an order or a payment. Orders, payments and couriers on one screen. Free until your first order, no Meta setup.";
@@ -53,11 +57,12 @@ const DEMO_POSTER_URL = `${SITE_URL}${DEMO_VIDEO.landscape.poster}`;
 
 /**
  * The offer range is DERIVED from `PLAN_MONTHLY_PRICES`, never typed here —
- * the previous literal ("299") outlived the Scale reprice by weeks because
- * nothing tied it to the constant the teaser renders from.
+ * a typed literal once outlived a reprice by weeks because nothing tied it to
+ * the constant the teaser renders from. The listed tiers only: Enterprise has
+ * no public price (T6), so it can't bound a published offer range.
  */
 const OFFER_LOW = String(PLAN_MONTHLY_PRICES.MYR.starter / 100);
-const OFFER_HIGH = String(PLAN_MONTHLY_PRICES.MYR.scale / 100);
+const OFFER_HIGH = String(PLAN_MONTHLY_PRICES.MYR.pro / 100);
 
 /**
  * FAQPage entries mirror the visible FAQ by construction: `faqJsonLd` reads
@@ -143,12 +148,7 @@ export const Route = createFileRoute("/")({
 			{ name: "twitter:image", content: OG_IMAGE },
 		],
 		links: [{ rel: "canonical", href: SITE_URL }],
-		scripts: [
-			{
-				type: "application/ld+json",
-				children: JSON.stringify(jsonLd),
-			},
-		],
+		scripts: [jsonLdScript(jsonLd)],
 	}),
 	component: Landing,
 });

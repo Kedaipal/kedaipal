@@ -38,6 +38,7 @@ import {
 	requireRetailerAccess,
 } from "./lib/auth";
 import { sendEmail } from "./lib/email";
+import { identityEmail } from "./lib/identity";
 import {
 	type Locale,
 	renderTeamEmail,
@@ -87,34 +88,6 @@ export function maskEmail(email: string): string {
 	const at = email.indexOf("@");
 	if (at <= 1) return `•••${email.slice(at)}`;
 	return `${email[0]}•••${email.slice(at)}`;
-}
-
-/**
- * The Clerk identity's VERIFIED email, normalized like invite emails are.
- *
- * Verification is the whole basis for "the token proves the link, the email
- * proves the person": a seat is bound to whoever controls the invited inbox,
- * so an address the provider hasn't confirmed is not evidence of control.
- * Today that holds by configuration — Clerk is on email-code sign-in, which
- * can't complete on an unverified address — and this makes it hold by CODE, so
- * enabling password sign-up later can't quietly turn "registered the invited
- * address first" into "took the seat". The check lives here, at the one seam
- * both accept paths and the pending-invite list share, rather than at three
- * call sites one of which would eventually be forgotten.
- *
- * An ABSENT claim stays permissive: a JWT template may simply not carry
- * `email_verified`, and reading "unknown" as "unverified" would lock every
- * accept out on a config change in the harmless direction. Only an explicit
- * `false` refuses.
- */
-function identityEmail(identity: {
-	email?: unknown;
-	emailVerified?: unknown;
-}): string | undefined {
-	if (identity.emailVerified === false) return undefined;
-	return typeof identity.email === "string" && identity.email.trim().length > 0
-		? identity.email.trim().toLowerCase()
-		: undefined;
 }
 
 /** Best display name the identity offers; undefined over an empty string. */

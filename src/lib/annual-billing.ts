@@ -14,9 +14,10 @@
 import {
 	type AnnualQuote,
 	annualQuote,
-	type BillingCurrency,
 	BILLING_CURRENCIES,
+	type BillingCurrency,
 	DEFAULT_BILLING_CURRENCY,
+	type ListedPlan,
 	type Plan,
 } from "../../convex/lib/plans";
 import { daysUntil } from "./subscription";
@@ -24,18 +25,16 @@ import { daysUntil } from "./subscription";
 /**
  * Plans the annual switch is offered on.
  *
- * **Pro only.** Not Starter, by owner decision: Starter is moving to
+ * **Pro.** Not Starter, by owner decision: Starter is moving to
  * start-when-you-sell billing, so asking that seller for a year upfront
- * contradicts the premise of the tier. Not Scale either — `issueInvoice` throws
- * "Scale is unavailable for v1." (convex/invoices.ts), so offering it would
- * reproduce in-app exactly the dead-end CTA we refuse to ship on the public
- * pricing page. Add `"scale"` in the same change that makes Scale purchasable
- * (the separate Scale build — the z8r3fday24 pricing reset only moved its price).
+ * contradicts the premise of the tier. Not Enterprise either (T6): an
+ * Enterprise term — monthly or a prepaid year — is part of the contract an
+ * admin sets, never a self-serve switch.
  *
  * A Starter seller is still TOLD annual exists, in the Starter → Pro nudge —
  * a constraint is surfaced, never enforced silently.
  */
-export const ANNUAL_OFFER_PLANS: readonly Plan[] = ["pro"];
+export const ANNUAL_OFFER_PLANS: readonly ListedPlan[] = ["pro"];
 
 /**
  * Paid invoices a seller must already have before annual is offered.
@@ -177,11 +176,18 @@ export function resolveAnnualOffer(input: {
 	if (adminOwnAccount) return { kind: "hidden" };
 	if (!sub) return { kind: "hidden" };
 	if (sub.comped) return { kind: "hidden" };
+	// An Enterprise term is part of its contract (T6): the contract card
+	// states it, so there is no switch to offer and no second card to repeat
+	// it — least of all one inviting a self-serve plan change.
+	if (sub.plan === "enterprise") return { kind: "hidden" };
 
 	const pendingInvoice = invoices.find((i) => i.status === "pending");
 
 	if (pendingInvoice?.billingCycle === "annual")
-		return { kind: "pendingAnnual", invoiceNumber: pendingInvoice.invoiceNumber };
+		return {
+			kind: "pendingAnnual",
+			invoiceNumber: pendingInvoice.invoiceNumber,
+		};
 
 	if (sub.billingCycle === "annual")
 		return { kind: "onAnnual", plan: sub.plan, renewsAt: sub.currentPeriodEnd };

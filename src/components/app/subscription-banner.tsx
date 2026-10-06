@@ -4,10 +4,19 @@ import { Link } from "@tanstack/react-router";
 import { PauseCircle, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../../../convex/_generated/api";
+import { useCreditLock } from "../../hooks/useCreditLock";
+import { useDashboardRetailer } from "../../hooks/useDashboardRetailer";
+import { useStoreRole } from "../../hooks/usePermission";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../../lib/contact";
-import { useStoreRole } from "../../hooks/usePermission";
+import { TOP_UP_SEARCH } from "../../lib/credit-top-up";
+import {
+	lockCta,
+	ordersBalanceLabel,
+	ordersWaitingLabel,
+} from "../../lib/credits-ui";
 import { formatPrice } from "../../lib/format";
+import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import {
 	resolveBannerState,
 	type SubscriptionView,
@@ -29,24 +38,43 @@ import {
  *    from Billing, or switch plan first".
  *  - free period's backstop within 5 days → amber warning, dismissable (red +
  *    persistent only if the period ended and no invoice is on file).
- *  - the SOFT monthly order cap → amber upgrade nudge: dismissable at ≥80%
- *    (keyed by month, so it returns next month), persistent once the cap is
- *    passed. Orders are NEVER blocked — this is the upsell lever, not a lock.
+ *  - out of credits (Credits T3) → red, persistent, ranked right under
+ *    past-due: accepting/updating orders and editing products are paused
+ *    while orders keep arriving; one button to the way back (top up / pick a
+ *    plan / pay the invoice), or "ask the owner" for a teammate.
+ *  - credits running low (the last 20% of the month's credits — the meter's
+ *    amber and the low email's line) → amber, dismissable (keyed by the month,
+ *    so a new month's warning shows even in the same session), with
+ *    the way to stay ahead of zero for THIS reader: "Top up credits" straight
+ *    into the pack picker, "See plans" on a trial, or the meter for a
+ *    teammate who can't buy. Replaces the soft order-cap nudge.
  * Nothing for active/comped with nothing due. Warnings are dismissable for the
  * session only (sessionStorage, keyed by the deadline) so they return next login
  * and a new deadline re-shows. See docs/manual-subscription.md.
  */
 export function SubscriptionBanner({
 	subscription,
-	ordersThisMonth,
 	slug,
 }: {
 	subscription?: SubscriptionView;
-	ordersThisMonth?: number;
 	slug: string;
 }) {
 	// Who is reading this banner decides what it can ask them to do.
 	const isMember = useStoreRole() === "member";
+	const retailer = useDashboardRetailer();
+	const creditLock = useCreditLock();
+	// The balance is `credits`-area data: null for a teammate without the grant,
+	// which simply means no "running low" nudge for them.
+	const balance = useQuery(
+		convexQuery(
+			api.credits.getBalance,
+			retailer
+				? {
+						retailerId: retailer.actingAsAdmin ? retailer._id : undefined,
+					}
+				: "skip",
+		),
+	).data;
 	const skipInvoice =
 		!subscription || subscription.comped || subscription.status === "past_due";
 	const pending = useQuery(
@@ -59,7 +87,15 @@ export function SubscriptionBanner({
 		pending?.dueDate,
 		now,
 		undefined,
-		ordersThisMonth,
+		{
+			locked: creditLock.locked,
+			route: creditLock.route,
+			ordersWaiting: creditLock.ordersWaiting,
+			total: balance?.total,
+			periodGrant: balance?.periodGrant,
+			customGrant: balance?.customGrant,
+			exempt: balance ? balance.lockExempt !== null : undefined,
+		},
 	);
 
 	// Dismiss key: only the soft (amber) warnings are dismissable, keyed by their
@@ -71,8 +107,8 @@ export function SubscriptionBanner({
 				? `subwarn:first:${pending?.dueDate}`
 				: state.kind === "trialWarn" && !state.ended
 					? `subwarn:trial:${subscription?.trialEndsAt}`
-					: state.kind === "orderCapNear"
-						? `subwarn:cap:${new Date(now).toISOString().slice(0, 7)}`
+					: state.kind === "creditsLow"
+						? `subwarn:credits:${balance?.periodKey ?? ""}`
 						: null;
 	const [dismissed, dismiss] = useDismissed(dismissKey);
 	// Read above the early returns — the past-due CTA that uses it is built inside
@@ -106,38 +142,140 @@ export function SubscriptionBanner({
 		);
 	}
 
-	// Soft order-cap nudge (amber) — upsell, not a lock. "Near" is dismissable
-	// for the month; "over" stays until the month rolls or they upgrade.
-	if (state.kind === "orderCapNear" || state.kind === "orderCapOver") {
-		if (dismissed && state.kind === "orderCapNear") return null;
-		const over = state.kind === "orderCapOver";
+	// Out of credits (Credits T3): the seller can't work orders or edit
+	// products until credits are added — orders keep arriving. Persistent.
+	if (state.kind === "creditsLocked") {
+		const waiting = ordersWaitingLabel(state.ordersWaiting);
+		const cta = lockCta(state.route);
+		return (
+			<div className="flex flex-col gap-2 border-b border-red-200 bg-red-50 px-5 py-3 dark:border-red-900 dark:bg-red-950/40 sm:flex-row sm:items-center sm:justify-between lg:px-8">
+				<p className="text-sm text-foreground/90">
+					<span className="font-medium">
+						{isMember
+							? "This store is out of credits"
+							: "You're out of credits"}
+						{waiting ? ` · ${waiting}` : ""}.
+					</span>{" "}
+					{/* A teammate who may buy packs can take the way back
+					    themselves (T2); one who can't is told who can. */}
+					{creditLock.canAct
+						? "Accepting and updating orders and editing products are paused. Orders keep coming in, and you can still view, cancel and refund them."
+						: "Accepting and updating orders and editing products are paused until the owner adds credits. Orders keep coming in."}
+				</p>
+				{!creditLock.canAct ? null : (
+					<Link
+						to="/app/settings"
+						search={cta.search}
+						className="inline-flex h-9 w-fit shrink-0 items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
+					>
+						{cta.label}
+					</Link>
+				)}
+			</div>
+		);
+	}
+
+	// Credits running low (amber) — dismissable, keyed by the month. The button is
+	// the way to stay ahead of zero for THIS reader: a pack, straight into the
+	// picker, when a top-up is the way and they may buy it (the owner, or a
+	// teammate holding Credits write — never an admin acting as the store);
+	// the plans while on the trial (packs top up a paid plan); otherwise the
+	// meter, where the balances and who can buy are spelled out.
+	if (state.kind === "creditsLow") {
+		if (dismissed) return null;
+		const canBuy =
+			creditLock.route === "topup" &&
+			creditLock.canAct &&
+			retailer?.actingAsAdmin !== true;
+		const onTrial = creditLock.route === "pick_plan";
+		// The lead-in names which tone this is — the same banner now covers both
+		// (see resolveBannerState), so "Running low" must not head a store that
+		// is already into next month's credits.
+		const low = (
+			<span className="font-medium">
+				{state.total > 0 ? "Running low" : "Out of credits"}:{" "}
+				{ordersBalanceLabel(state.total)}.
+			</span>
+		);
+		return (
+			<div className="flex flex-col gap-2 border-b border-amber-200 bg-amber-50 px-5 py-3 dark:border-amber-900 dark:bg-amber-950/40 sm:flex-row sm:items-center sm:gap-3 lg:px-8">
+				<p className="flex-1 text-sm text-foreground/90">
+					{low}{" "}
+					{/* Every variant used to promise the pause — "new orders wait
+					    until credits are added". With the lock switched off
+					    (CREDIT_LOCK_ENABLED) nothing waits, so the copy states the
+					    carry-over instead, which is what actually happens and stays
+					    true either way. Same move already made for the public pricing
+					    FAQ. Reinstating the pause sentence is part of the per-order
+					    lock's copy sweep (z8r3fdmg4h), not something to leave lying
+					    here as a lie in the meantime. */}
+					{canBuy
+						? "Top up to stay ahead — bought credits carry over for 12 months, so nothing goes to waste."
+						: onTrial
+							? "Orders past your trial's allowance come off your first month's credits — pick a plan when you're ready."
+							: creditLock.canAct
+								? "Orders keep coming in; anything past your balance comes off your next credits."
+								: "Orders keep coming in; anything past the balance comes off the store's next credits — the owner tops up."}
+				</p>
+				<div className="flex shrink-0 items-center gap-2">
+					{canBuy ? (
+						<Link
+							to="/app/settings"
+							search={TOP_UP_SEARCH}
+							className="inline-flex h-9 w-fit shrink-0 items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
+						>
+							Top up credits
+						</Link>
+					) : (
+						<Link
+							to="/app/settings"
+							search={{ tab: "billing" }}
+							hash={
+								onTrial && !isMember
+									? undefined
+									: SPOTLIGHT_ANCHOR.credit_balance.anchor
+							}
+							className="inline-flex h-9 w-fit shrink-0 items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
+						>
+							{onTrial && !isMember ? "See plans" : "See credits"}
+						</Link>
+					)}
+					{dismissKey ? (
+						<button
+							type="button"
+							onClick={dismiss}
+							aria-label="Dismiss"
+							className="-mr-1 inline-flex size-9 shrink-0 items-center justify-center rounded-md text-foreground/50 hover:bg-foreground/5 hover:text-foreground"
+						>
+							<X className="size-4" />
+						</button>
+					) : null}
+				</div>
+			</div>
+		);
+	}
+
+	// Auto-charging stopped over a stranded charge (an earlier charge landed
+	// after its invoice was voided). Say what happened and that we'll resolve
+	// it WITH them — never "pay it yourself", which could be the second
+	// payment. Persistent: it clears when any bill settles.
+	if (state.kind === "autoRenewStopped") {
 		return (
 			<div className="flex items-center gap-3 border-b border-amber-200 bg-amber-50 px-5 py-3 dark:border-amber-900 dark:bg-amber-950/40 lg:px-8">
 				<p className="flex-1 text-sm text-foreground/90">
 					<span className="font-medium">
-						{over
-							? `You've passed your plan's ${state.cap} orders this month (${state.used} so far).`
-							: `${state.used} of ${state.cap} plan orders used this month.`}
+						We've stopped automatic charging for now.
 					</span>{" "}
-					Orders keep flowing as normal — upgrade for more headroom.
+					An earlier charge went through after its invoice was cancelled — we'll
+					be in touch, so there's no need to pay twice.
 				</p>
 				<Link
 					to="/app/settings"
 					search={{ tab: "billing" }}
 					className="inline-flex h-9 w-fit shrink-0 items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
 				>
-					Upgrade
+					See billing
 				</Link>
-				{!over && dismissKey ? (
-					<button
-						type="button"
-						onClick={dismiss}
-						aria-label="Dismiss"
-						className="-mr-1 shrink-0 rounded-md p-1.5 text-foreground/50 hover:bg-foreground/5 hover:text-foreground"
-					>
-						<X className="size-4" />
-					</button>
-				) : null}
 			</div>
 		);
 	}

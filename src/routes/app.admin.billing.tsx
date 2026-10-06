@@ -1,27 +1,34 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import {
 	Award,
 	Banknote,
 	CalendarClock,
 	Check,
+	ChevronDown,
+	Coins,
 	CreditCard,
 	FilePlus2,
+	Hammer,
 	ImagePlus,
 	Landmark,
 	ListChecks,
+	Loader2,
 	ReceiptText,
 	RefreshCw,
 	Send,
 	ShieldX,
+	ShoppingBag,
+	TrendingDown,
 	UserPlus,
 } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import type { TopUpRevenue } from "../../convex/creditPurchases";
 import {
 	COUNTRIES,
 	COUNTRY_LABELS,
@@ -32,8 +39,16 @@ import {
 	annualQuote,
 	BILLING_CURRENCIES,
 	type BillingCurrency,
+	enterprisePrice,
+	PLANS,
+	type Plan,
 	planPrice,
 } from "../../convex/lib/plans";
+import {
+	AutoChargeDetail,
+	AutoChargePill,
+} from "../components/admin/auto-charge-status";
+import { GatewayIssuesCard } from "../components/admin/gateway-issues-card";
 import { PageHeader } from "../components/dashboard/page-header";
 import { InvoiceDownloadButton } from "../components/settings/invoice-download-button";
 import { AppImage } from "../components/ui/app-image";
@@ -49,7 +64,9 @@ import {
 import { Input } from "../components/ui/input";
 import { MyPhoneInput } from "../components/ui/my-phone-input";
 import { Skeleton } from "../components/ui/skeleton";
+import { useActAs } from "../hooks/useActAs";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
+import { describeAutoCharge } from "../lib/auto-charge-status";
 import {
 	convexErrorMessage,
 	formatPrice,
@@ -58,6 +75,7 @@ import {
 import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
 import { buildOnboardingInviteLink } from "../lib/onboarding-link";
 import { slugify, validateStoreName } from "../lib/slug";
+import { PLAN_LABEL } from "../lib/subscription";
 
 export const Route = createFileRoute("/app/admin/billing")({
 	component: AdminBillingRoute,
@@ -117,6 +135,12 @@ function AdminBillingContent() {
 			</section>
 
 			<AdminBillingOverview />
+
+			{/* Real money that settled nothing (double payment / wrong amount).
+			    Above the tab fork on purpose: it's the most urgent thing this
+			    page can carry, it must not hide behind whichever tab is open,
+			    and it renders nothing while the queue is empty. */}
+			<GatewayIssuesCard />
 
 			<div className="grid gap-2 sm:grid-cols-2">
 				{tabs.map((t) => (
@@ -274,39 +298,187 @@ function AdminBillingOverview() {
 	];
 
 	return (
-		<div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-			{stats.map((stat) => (
-				<div
-					key={stat.label}
-					className={`flex items-center gap-3 rounded-2xl border px-3 py-3 ${stat.className}`}
-				>
-					<div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-white/70">
-						{stat.icon}
+		<div className="flex flex-col gap-2">
+			<div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+				{stats.map((stat) => (
+					<div
+						key={stat.label}
+						className={`flex items-center gap-3 rounded-2xl border px-3 py-3 ${stat.className}`}
+					>
+						<div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-white/70">
+							{stat.icon}
+						</div>
+						<div className="min-w-0">
+							<p className="text-xs font-medium opacity-75">{stat.label}</p>
+							<p className="truncate font-mono text-lg font-bold leading-tight">
+								{stat.value}
+							</p>
+							<p className="truncate text-[11px] opacity-70">{stat.helper}</p>
+						</div>
 					</div>
-					<div className="min-w-0">
-						<p className="text-xs font-medium opacity-75">{stat.label}</p>
-						<p className="truncate font-mono text-lg font-bold leading-tight">
-							{stat.value}
-						</p>
-						<p className="truncate text-[11px] opacity-70">{stat.helper}</p>
-					</div>
-				</div>
-			))}
+				))}
+			</div>
+			<CreditTotals />
 		</div>
+	);
+}
+
+/**
+ * The book-wide credit figures (Kedaipal Credits T5) — two counts of CREDITS,
+ * never money: what sellers have bought and not used (the deferred-revenue
+ * figure — service still owed) and the orders taken past zero that the next
+ * grant or pack will absorb. Beside them, the one money figure: this month's
+ * top-up revenue from paid packs, per currency (Credits T3 × T2 — it waited
+ * for the purchase table rather than guess). Exported for its states test.
+ */
+export function CreditTotals() {
+	const totals = useQuery(convexQuery(api.credits.adminCreditTotals, {})).data;
+	const revenue = useQuery(
+		convexQuery(api.creditPurchases.adminTopUpRevenue, {}),
+	).data;
+	const stores = (n: number) => `${n} store${n === 1 ? "" : "s"}`;
+	const tiles = [
+		{
+			label: "Unused bought credits",
+			value:
+				totals === undefined
+					? "..."
+					: totals.purchasedUnused.toLocaleString("en"),
+			helper:
+				totals === undefined
+					? "Deferred — service still owed"
+					: totals.storesWithPurchased === 0
+						? "No store holds any yet"
+						: `Across ${stores(totals.storesWithPurchased)} — service still owed`,
+			icon: <Coins className="size-4" />,
+			className: "border-border bg-muted/50 text-foreground",
+		},
+		{
+			label: "Orders owed",
+			value:
+				totals === undefined ? "..." : totals.ordersOwed.toLocaleString("en"),
+			helper:
+				totals === undefined
+					? "Taken past zero"
+					: totals.storesOwing === 0
+						? "No store is below zero"
+						: `${stores(totals.storesOwing)} below zero — the next grant or pack settles it`,
+			icon: <TrendingDown className="size-4" />,
+			className:
+				totals !== undefined && totals.ordersOwed > 0
+					? "border-destructive/30 bg-destructive/10 text-destructive"
+					: "border-border bg-muted/50 text-foreground",
+		},
+		topUpTile(revenue),
+	];
+	return (
+		<section aria-label="Credits" className="flex flex-col gap-2">
+			<div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+				{tiles.map((tile) => (
+					<div
+						key={tile.label}
+						className={`flex items-center gap-3 rounded-2xl border px-3 py-3 ${tile.className}`}
+					>
+						<div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-background/70">
+							{tile.icon}
+						</div>
+						<div className="min-w-0">
+							<p className="text-xs font-medium opacity-75">{tile.label}</p>
+							<p className="truncate font-mono text-lg font-bold leading-tight">
+								{tile.value}
+							</p>
+							{/* Wraps: the helper IS the explanation — cut off, it
+							    read "across 0 stores · service still …". */}
+							<p className="text-[11px] leading-snug text-pretty opacity-70">
+								{tile.helper}
+							</p>
+						</div>
+					</div>
+				))}
+			</div>
+			{totals?.truncated ? (
+				<p className="text-[11px] text-muted-foreground">
+					Counted over the first {totals.accounts.toLocaleString("en")} credit
+					accounts only — past that, these totals need a stored counter.
+				</p>
+			) : null}
+		</section>
 	);
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Onboard a client on their behalf. A retailer is always owned 1:1 by the
- * client's own Clerk login — we can't create it *for* them without an orphaned,
- * un-loginable store. So instead the admin fills the details here and gets a
- * prefilled onboarding link to send; the client opens it, signs in once, and
- * confirms — the store is created under *their* account. After they confirm, they
- * appear in the Issue-invoice picker below. See docs/manual-subscription.md.
+ * Onboard a client, two ways — ONE card, because it is one decision made at one
+ * moment with the same facts, and splitting it into two cards would make an
+ * admin read both to find out which they wanted.
+ *
+ *  - **Send them a link** (the original): the admin fills the details and gets a
+ *    prefilled onboarding link to paste. The client opens it, signs in, and
+ *    confirms; the store is created under *their* login. Right whenever the
+ *    client can be trusted to finish a form.
+ *  - **Build it for them** (docs/prebuilt-stores.md): the store is created NOW,
+ *    owned by nobody, and the admin walks straight into it via act-as to add
+ *    products and settings. The vendor claims it later by signing up with the
+ *    handover email. This is the white-glove path for a high-value vendor who
+ *    should be handed a finished shop, not a form.
+ *
+ * The card's own copy used to assert the first was the only possibility ("we
+ * can't create it for them without an orphaned, un-loginable store"). That held
+ * until a store could be unclaimed rather than orphaned — a named state with a
+ * way out. See docs/manual-subscription.md + docs/prebuilt-stores.md.
  */
+/** The top-up revenue tile: paid packs this calendar month, per currency —
+ * summed per currency like Outstanding, never flattened into one number. */
+function topUpTile(revenue: TopUpRevenue | undefined) {
+	const month =
+		revenue === undefined
+			? null
+			: new Date(`${revenue.periodKey}-01T00:00:00Z`).toLocaleString("en", {
+					month: "long",
+					timeZone: "UTC",
+				});
+	const paid = revenue
+		? (
+				Object.entries(revenue.byCurrency) as [
+					BillingCurrency,
+					TopUpRevenue["byCurrency"][BillingCurrency],
+				][]
+			).filter(([, b]) => b.purchases > 0)
+		: [];
+	const packs = paid.reduce((n, [, b]) => n + b.purchases, 0);
+	const credits = paid.reduce((n, [, b]) => n + b.credits, 0);
+	return {
+		label: month ? `Top-ups · ${month}` : "Top-ups",
+		value:
+			revenue === undefined
+				? "..."
+				: paid.length === 0
+					? formatPrice(0, "MYR")
+					: // MYR first — the server builds the record in that order.
+						paid
+							.map(([currency, b]) => formatPrice(b.amountMinor, currency))
+							.join(" + "),
+		helper:
+			revenue === undefined
+				? "Credit packs paid this month"
+				: packs === 0
+					? "No packs paid yet this month"
+					: `${packs} pack${packs === 1 ? "" : "s"} · ${credits.toLocaleString("en")} credits`,
+		icon: <ShoppingBag className="size-4" />,
+		className: "border-emerald-200 bg-emerald-50 text-emerald-800",
+	};
+}
+
 function OnboardClientCard() {
+	// Which door. Held here rather than in the URL: it is a scratch choice
+	// inside one form, and nothing links to a half-filled card.
+	const [mode, setMode] = useState<"link" | "build">("link");
+	const navigate = useNavigate();
+	const { setActAs } = useActAs();
+	const createUnclaimedStore = useMutation(api.retailers.createUnclaimedStore);
+	const startActAsSession = useMutation(api.admin.startActAsSession);
+	const [building, setBuilding] = useState(false);
 	const [storeName, setStoreName] = useState("");
 	const [slug, setSlug] = useState("");
 	const [slugEdited, setSlugEdited] = useState(false);
@@ -326,7 +498,7 @@ function OnboardClientCard() {
 	// Mirror the onboarding form: derive the slug from the name until hand-edited,
 	// and check availability live so we never hand out a link to a taken slug.
 	const derivedSlug = slugEdited ? slug : slugify(storeName);
-	const availability = useSlugAvailability(derivedSlug);
+	const availability = useSlugAvailability(derivedSlug, "create");
 	const nameCheck = validateStoreName(storeName);
 
 	// Live email pre-check (debounced) — Clerk allows one account per email and
@@ -346,8 +518,50 @@ function OnboardClientCard() {
 	).data;
 	const emailTaken = emailCheck?.exists === true;
 
+	// Build mode REQUIRES the handover email. A store built with nobody named
+	// cannot be claimed by anyone, and "I'll set it later" is a thing an admin
+	// forgets — you are building this store FOR a specific person, so name them
+	// now (Zaki, 2 Oct). It stays CHANGEABLE afterwards (Manage → Handover
+	// email), which is what covers a typo; the server keeps accepting an absent
+	// one so an admin can deliberately park a handover whose deal fell through,
+	// and the directory shouts about that state in amber.
 	const ready =
-		nameCheck.ok && availability.status === "available" && !emailTaken;
+		nameCheck.ok &&
+		availability.status === "available" &&
+		!emailTaken &&
+		(mode === "link" || emailLooksValid);
+
+	/**
+	 * Create the store now and walk straight into it. The navigate is the
+	 * easement, not a flourish: an admin who clicks "Build it for them" is about
+	 * to add products, and making them find the new store in the directory first
+	 * would be a step with no purpose.
+	 */
+	async function handleBuild() {
+		if (!ready || building) return;
+		setBuilding(true);
+		try {
+			const result = await createUnclaimedStore({
+				storeName: storeName.trim(),
+				slug: derivedSlug,
+				waPhone: waPhone.trim() || undefined,
+				country,
+				pendingOwnerEmail: email.trim() || undefined,
+			});
+			setActAs(result.retailerId);
+			void startActAsSession({ retailerId: result.retailerId }).catch(() => {});
+			toast.success(`${storeName.trim()} created — you're in it now.`, {
+				description: email.trim()
+					? `Build it out, then they claim it by signing up with ${email.trim()}.`
+					: "Set a handover email from the seller directory when you know it.",
+			});
+			navigate({ to: "/app" });
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setBuilding(false);
+		}
+	}
 
 	const link =
 		typeof window === "undefined"
@@ -381,8 +595,54 @@ function OnboardClientCard() {
 			<AdminSectionHeading
 				icon={<UserPlus className="size-5" />}
 				title="Onboard a client"
-				description="Fill what you know, copy the invite link, and send it manually. They confirm under their own login before invoicing."
+				description={
+					mode === "link"
+						? "Fill what you know, copy the invite link, and send it manually. They confirm under their own login before invoicing."
+						: "Create the store now and set it up yourself. They claim it later by signing up with the handover email — no form for them to fill."
+				}
 			/>
+
+			{/* The mode picker sits FIRST because it changes what every field below
+			    means (the email is a send-to address in one mode and a handover
+			    target in the other). Each option states its consequence — an admin
+			    picking between two onboarding paths should not have to try one to
+			    find out what it does. */}
+			<fieldset className="flex flex-col gap-2">
+				<legend className="text-sm font-medium">
+					How are they onboarding?
+				</legend>
+				<div className="grid gap-2 sm:grid-cols-2">
+					{[
+						{
+							key: "link" as const,
+							title: "Send them a link",
+							hint: "They sign up and confirm the store under their own login.",
+						},
+						{
+							key: "build" as const,
+							title: "Build it for them",
+							hint: "You create it now and fill it in. They claim it when they sign up.",
+						},
+					].map((option) => (
+						<button
+							key={option.key}
+							type="button"
+							aria-pressed={mode === option.key}
+							onClick={() => setMode(option.key)}
+							className={`flex min-h-16 flex-col items-start gap-0.5 rounded-xl border px-4 py-3 text-left transition-colors ${
+								mode === option.key
+									? "border-accent bg-accent/10"
+									: "border-input bg-background hover:border-ring"
+							}`}
+						>
+							<span className="text-sm font-semibold">{option.title}</span>
+							<span className="text-xs text-muted-foreground">
+								{option.hint}
+							</span>
+						</button>
+					))}
+				</div>
+			</fieldset>
 
 			<label className="flex flex-col gap-1 text-sm font-medium">
 				Store name
@@ -463,9 +723,9 @@ function OnboardClientCard() {
 				</label>
 				<label className="flex flex-col gap-1 text-sm font-medium">
 					<span className="flex min-h-5 items-center gap-1">
-						Client email
+						{mode === "build" ? "Handover email" : "Client email"}
 						<span className="font-normal text-muted-foreground">
-							(to send to)
+							{mode === "build" ? "(required)" : "(to send to)"}
 						</span>
 					</span>
 					<Input
@@ -481,43 +741,77 @@ function OnboardClientCard() {
 							A store ({emailCheck?.storeName}) already uses this email. They
 							can't create a second one; it's one store per login.
 						</span>
+					) : mode === "build" ? (
+						<span className="text-xs text-muted-foreground">
+							The address they'll sign up with — that sign-in hands them the
+							store. You can change it later from Manage → Handover email.
+						</span>
 					) : null}
 				</label>
 			</div>
 
+			{/* Disabled-with-reason rather than hidden in build mode: an admin
+			    onboarding a founding vendor must be told WHY the toggle is
+			    unavailable and what to do instead, not left wondering where it
+			    went. A pre-built store reserves no rank at create — a slot held by
+			    a store that may never be claimed would eat one of ten — so the
+			    rank is claimed the ordinary way, by issuing the founding invoice
+			    after handover. */}
 			<label className="flex items-start gap-2.5 text-sm">
 				<input
 					type="checkbox"
-					checked={founding && foundingAvailable}
-					disabled={!foundingAvailable}
+					checked={mode === "link" && founding && foundingAvailable}
+					disabled={!foundingAvailable || mode === "build"}
 					onChange={(e) => setFounding(e.target.checked)}
 					className="mt-0.5 size-4 disabled:opacity-50"
 				/>
 				<span>
 					<span className="font-medium">Founding Member</span>
 					<span className="block text-xs text-muted-foreground">
-						{foundingAvailable
-							? `Reserves a founding rank + the lifetime discount. Starts on the normal 14-day trial; Pro begins once they pay the founding invoice. ${spotsRemaining}/10 spots left.`
-							: "All 10 founding spots are taken."}
+						{mode === "build"
+							? "Not set at build time — a pre-built store holds no founding rank. Issue them a founding invoice after they claim it."
+							: foundingAvailable
+								? `Reserves a founding rank + the lifetime discount. Starts on the normal 14-day trial; Pro begins once they pay the founding invoice. ${spotsRemaining}/10 spots left.`
+								: "All 10 founding spots are taken."}
 					</span>
 				</span>
 			</label>
 
-			{ready && link ? (
+			{mode === "link" && ready && link ? (
 				<div className="flex flex-col gap-2 rounded-xl border border-dashed border-border bg-muted/30 p-3">
 					<p className="break-all font-mono text-xs text-muted-foreground">
 						{link}
 					</p>
 				</div>
 			) : null}
+			{/* What happens the moment they tap it — a create that also drops them
+			    into act-as is a bigger jump than a copy, so it is written down
+			    before the click rather than discovered after. */}
+			{mode === "build" ? (
+				<p className="text-xs text-muted-foreground">
+					Creating it opens the store straight away in act-as mode so you can
+					add products. Nothing is billed and it stays off kedaipal.com/stores
+					until they claim it — their 14-day free period starts the day they do.
+				</p>
+			) : null}
 
 			<Button
 				type="button"
-				onClick={handleCopy}
-				disabled={!ready}
+				onClick={mode === "build" ? () => void handleBuild() : handleCopy}
+				disabled={!ready || building}
 				className="h-11 lg:w-auto lg:self-start lg:px-6"
 			>
-				{copied ? (
+				{mode === "build" ? (
+					building ? (
+						<>
+							<Loader2 className="size-4 animate-spin" /> Creating…
+						</>
+					) : (
+						<>
+							<Hammer className="size-4" /> Create store &amp; start setting up
+						</>
+					)
+				) : copied ? (
 					<>
 						<Check className="size-4" /> Copied
 					</>
@@ -527,6 +821,20 @@ function OnboardClientCard() {
 					</>
 				)}
 			</Button>
+			{/* Disabled-with-reason — the button above goes quiet on an invalid
+			    name/slug or a taken email, and the three reasons are not the same
+			    fix. */}
+			{!ready ? (
+				<p className="text-xs text-muted-foreground">
+					{!nameCheck.ok
+						? "Enter a store name first."
+						: emailTaken
+							? "That email already runs a store — use a different one."
+							: availability.status !== "available"
+								? "Pick a store link that's available."
+								: "Add the handover email — nobody can claim the store without it."}
+				</p>
+			) : null}
 		</AdminCard>
 	);
 }
@@ -563,6 +871,7 @@ function retailerOptionLabel(r: {
 	foundingBenefitsRevoked: boolean;
 	hasPending: boolean;
 	comped: boolean;
+	unclaimed: boolean;
 }): string {
 	const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 	const parts = [`${r.storeName} (/${r.slug})`];
@@ -579,7 +888,11 @@ function retailerOptionLabel(r: {
 	if (r.hasPending) parts.push("has pending");
 	// Comped stores can't be billed (issueInvoice refuses, z8r3fdeub2) — say so
 	// in the picker rather than letting the admin draft a bill that bounces.
-	if (r.comped) parts.push("on the house");
+	// A store nobody owns yet is comped too (the `internal` setup comp), but
+	// calling that "on the house" reads as a sponsorship an admin should go and
+	// end. It is scaffolding, and the claim clears it by itself.
+	if (r.unclaimed) parts.push("waiting for its owner");
+	else if (r.comped) parts.push("on the house");
 	return parts.join(" · ");
 }
 
@@ -598,7 +911,7 @@ function IssueInvoiceForm() {
 	const issue = useMutation(api.invoices.issueInvoice);
 
 	const [retailerId, setRetailerId] = useState<Id<"retailers"> | "">("");
-	const [plan, setPlan] = useState<"starter" | "pro">("pro");
+	const [plan, setPlan] = useState<Plan>("pro");
 	const [cycle, setCycle] = useState<"monthly" | "annual">("monthly");
 	// The operator's OVERRIDE only — not the effective value. See `founding`.
 	const [foundingOverride, setFoundingOverride] = useState(false);
@@ -609,7 +922,13 @@ function IssueInvoiceForm() {
 	const blocked = selected?.hasPending === true;
 	// On the house (z8r3fdeub2) — issueInvoice refuses these server-side; the
 	// button is disabled with the reason instead of bouncing on click.
-	const compedStore = selected?.comped === true;
+	// A store nobody owns yet is ALSO comped — the `internal` setup comp — but
+	// that is scaffolding, not a sponsorship, and it clears itself into a fresh
+	// 14-day Pro trial the moment the vendor claims the store. Telling an admin
+	// to "end the comp" would have them tear down the scaffolding instead of
+	// finishing the handover, so the two states speak separately.
+	const unclaimedStore = selected?.unclaimed === true;
+	const compedStore = selected?.comped === true && !unclaimedStore;
 	// Auto-apply (and lock) the founding discount when the store is on founding
 	// PRICING — an existing Founding Member whose benefits still stand, or a store
 	// onboarded as one (foundingIntent, still on the 14-day trial) — so the
@@ -646,18 +965,53 @@ function IssueInvoiceForm() {
 	useEffect(() => {
 		setFoundingOverride(false);
 		setCurrency("MYR");
+		// A contract store ARMS its contract (z8r3fdkp8h, found live on 2 Oct):
+		// the previous default left Pro · RM 149.00 one click from issue for a
+		// store whose paid Pro bill would take it OFF its contract — the most
+		// drastic action on this form as the silent default. Picking another
+		// plan stays possible (that IS the manual off-ramp), and the line
+		// under the amount then says what paying it does.
+		setPlan(
+			retailers?.find((r) => r._id === retailerId)?.enterprise
+				? "enterprise"
+				: "pro",
+		);
 	}, [retailerId]);
 
 	// Founding is Pro-only — flipping it on forces Pro. It prices per billing
 	// currency (RM104 / S$41 monthly).
-	const effectivePlan = founding ? "pro" : plan;
+	const effectivePlan: Plan = founding ? "pro" : plan;
+	// Enterprise (T6) bills the store's CONTRACT — its fee, currency and term —
+	// so those controls show the contract's values instead of taking a pick.
+	const contract = selected?.enterprise;
+	const billsContract = effectivePlan === "enterprise";
+	const effectiveCycle =
+		billsContract && contract ? contract.billingCycle : cycle;
+	const effectiveCurrency =
+		billsContract && contract ? contract.currency : currency;
 	// Derived amount (single source of truth from convex/lib/plans).
-	const total = planPrice(effectivePlan, cycle, founding, currency);
-	const base = planPrice(effectivePlan, cycle, false, currency);
+	const total =
+		effectivePlan === "enterprise"
+			? contract
+				? enterprisePrice(contract, effectiveCycle)
+				: 0
+			: planPrice(effectivePlan, cycle, founding, currency);
+	const base =
+		effectivePlan === "enterprise"
+			? total
+			: planPrice(effectivePlan, cycle, false, currency);
 	// What an annual invoice actually buys the seller. Shown to the operator
 	// because "RM 1,490.00" alone doesn't say whether it covers ten months or
 	// twelve — and this form is where an annual switch is honoured by hand.
-	const annual = annualQuote(effectivePlan, founding, currency);
+	const annual =
+		effectivePlan === "enterprise"
+			? null
+			: annualQuote(effectivePlan, founding, currency);
+	const noContract = billsContract && !contract;
+	// The deliberate off-ramp, named before the tap: a non-enterprise bill on
+	// a contract store ends the contract when it's PAID (settle treats it as
+	// the move to Pro/Starter).
+	const offContractBill = contract !== undefined && !billsContract;
 
 	async function handleIssue() {
 		if (!retailerId) return;
@@ -668,9 +1022,9 @@ function IssueInvoiceForm() {
 			await issue({
 				retailerId,
 				plan: effectivePlan,
-				billingCycle: cycle,
+				billingCycle: effectiveCycle,
 				founding,
-				currency,
+				currency: effectiveCurrency,
 			});
 			toast.success("Invoice issued — it's now in Pending below.");
 			setRetailerId("");
@@ -701,18 +1055,28 @@ function IssueInvoiceForm() {
 
 			<label className="flex flex-col gap-1 text-sm font-medium">
 				Retailer
-				<select
-					value={retailerId}
-					onChange={(e) => setRetailerId(e.target.value as Id<"retailers">)}
-					className="min-h-11 rounded-xl border border-input bg-background px-3 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-				>
-					<option value="">Select a store…</option>
-					{retailers?.map((r) => (
-						<option key={r._id} value={r._id}>
-							{retailerOptionLabel(r)}
-						</option>
-					))}
-				</select>
+				{/* appearance-none + our own chevron, the same reason
+				    shipment-tracking.tsx gives: the native macOS caret hugs the
+				    right border and ignores padding, so on a full-width field it
+				    sits a screen away from the text it belongs to. */}
+				<div className="relative">
+					<select
+						value={retailerId}
+						onChange={(e) => setRetailerId(e.target.value as Id<"retailers">)}
+						className="min-h-11 w-full appearance-none rounded-xl border border-input bg-background px-3 pr-10 text-base outline-none transition-colors focus:border-ring focus:ring-2 focus:ring-ring/50"
+					>
+						<option value="">Select a store…</option>
+						{retailers?.map((r) => (
+							<option key={r._id} value={r._id}>
+								{retailerOptionLabel(r)}
+							</option>
+						))}
+					</select>
+					<ChevronDown
+						aria-hidden="true"
+						className="pointer-events-none absolute right-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+					/>
+				</div>
 			</label>
 
 			<div className="grid gap-4 rounded-2xl border border-border/70 bg-muted/20 p-3 lg:grid-cols-2 lg:p-4">
@@ -720,12 +1084,20 @@ function IssueInvoiceForm() {
 					<span className="text-xs font-medium text-muted-foreground">
 						Plan
 					</span>
+					{/* Every tier, in tier order. Enterprise bills the store's
+					    contract, so it needs one (set in Sellers → the store). */}
 					<div className="grid grid-cols-3 gap-1.5 rounded-xl bg-background p-1 shadow-inner shadow-border/40">
-						{(["pro", "starter"] as const).map((p) => (
+						{PLANS.map((p) => (
 							<button
 								key={p}
 								type="button"
-								disabled={founding && p !== "pro"}
+								disabled={
+									// Founding locks the plan to Pro — EXCEPT Enterprise, which
+									// a founding store may take: a contract's negotiated fee is
+									// its own price, so there is no founding discount to lose.
+									(founding && p !== "pro" && p !== "enterprise") ||
+									(p === "enterprise" && !contract)
+								}
 								onClick={() => setPlan(p)}
 								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
 									effectivePlan === p
@@ -737,10 +1109,6 @@ function IssueInvoiceForm() {
 								{p}
 							</button>
 						))}
-						<span className="flex min-h-10 flex-col items-center justify-center rounded-lg border border-dashed border-border/80 bg-muted/30 px-2 text-center text-[11px] leading-tight text-muted-foreground">
-							<span className="font-semibold">Scale</span>
-							<span className="text-[10px]">soon</span>
-						</span>
 					</div>
 				</div>
 
@@ -753,14 +1121,15 @@ function IssueInvoiceForm() {
 							<button
 								key={c}
 								type="button"
+								disabled={billsContract}
 								onClick={() => setCycle(c)}
-								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold capitalize transition-all ${
-									cycle === c
+								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold capitalize transition-all disabled:cursor-not-allowed ${
+									effectiveCycle === c
 										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
-										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground disabled:opacity-40"
 								}`}
 							>
-								{cycle === c ? <Check className="size-3.5" /> : null}
+								{effectiveCycle === c ? <Check className="size-3.5" /> : null}
 								{c}
 							</button>
 						))}
@@ -776,19 +1145,28 @@ function IssueInvoiceForm() {
 							<button
 								key={cur}
 								type="button"
+								disabled={billsContract}
 								onClick={() => setCurrency(cur)}
-								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold transition-all ${
-									currency === cur
+								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold transition-all disabled:cursor-not-allowed ${
+									effectiveCurrency === cur
 										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
-										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground disabled:opacity-40"
 								}`}
 							>
-								{currency === cur ? <Check className="size-3.5" /> : null}
+								{effectiveCurrency === cur ? (
+									<Check className="size-3.5" />
+								) : null}
 								{cur === "MYR" ? "RM (MYR)" : "S$ (SGD)"}
 							</button>
 						))}
 					</div>
-					{currency === "SGD" ? (
+					{billsContract ? (
+						<span className="text-[11px] text-muted-foreground">
+							Set by the store's Enterprise contract — the term and currency it
+							was agreed in.
+						</span>
+					) : null}
+					{effectiveCurrency === "SGD" ? (
 						<span className="text-[11px] text-muted-foreground">
 							SGD invoices carry no bank/DuitNow block — payment is arranged
 							over WhatsApp.
@@ -801,7 +1179,7 @@ function IssueInvoiceForm() {
 				<input
 					type="checkbox"
 					checked={founding}
-					disabled={isExistingFounding}
+					disabled={isExistingFounding || billsContract}
 					onChange={(e) => setFoundingOverride(e.target.checked)}
 					className="size-4 disabled:opacity-60"
 				/>
@@ -825,15 +1203,30 @@ function IssueInvoiceForm() {
 				<div className="min-w-0">
 					<p className="text-xs text-muted-foreground">Amount</p>
 					<p className="text-xl font-bold tabular-nums">
-						{formatPrice(total, currency)}
+						{noContract ? "—" : formatPrice(total, effectiveCurrency)}
 					</p>
+					{billsContract && contract ? (
+						<p className="text-xs text-muted-foreground">
+							From the contract:{" "}
+							{formatPrice(contract.baseFeeMinor, contract.currency)} a month
+							{effectiveCycle === "annual" ? " × 10 for the year" : ""}.
+						</p>
+					) : null}
+					{offContractBill ? (
+						<p className="text-xs font-medium text-amber-700 dark:text-amber-400">
+							This store is on an Enterprise contract — paying this{" "}
+							{PLAN_LABEL[effectivePlan]} bill ends the contract and moves it to{" "}
+							{PLAN_LABEL[effectivePlan]}. That's the manual off-ramp; if you
+							meant to bill the contract, pick Enterprise.
+						</p>
+					) : null}
 					{founding ? (
 						<p className="text-xs text-emerald-700">
 							{formatPrice(base, currency)} −{" "}
 							{formatPrice(base - total, currency)} founding discount
 						</p>
 					) : null}
-					{cycle === "annual" ? (
+					{annual && cycle === "annual" ? (
 						<p className="text-xs text-muted-foreground">
 							Covers {ANNUAL_MONTHS_RECEIVED} months ·{" "}
 							{formatPrice(annual.saving, currency)} saved (2 months free) ·{" "}
@@ -844,7 +1237,14 @@ function IssueInvoiceForm() {
 				<Button
 					type="button"
 					onClick={handleIssue}
-					disabled={!retailerId || busy || blocked || compedStore}
+					disabled={
+						!retailerId ||
+						busy ||
+						blocked ||
+						compedStore ||
+						unclaimedStore ||
+						noContract
+					}
 					className="h-11 w-full sm:w-auto sm:px-6"
 				>
 					{busy ? "Issuing…" : "Issue invoice"}
@@ -853,6 +1253,21 @@ function IssueInvoiceForm() {
 			{blocked ? (
 				<p className="text-xs text-amber-700">
 					This retailer already has a pending invoice — settle it first.
+				</p>
+			) : null}
+			{selected && !contract ? (
+				<p className="text-xs text-muted-foreground">
+					Enterprise bills a store's contract — put this store on one from Admin
+					· Sellers → the store → Enterprise to bill it here.
+				</p>
+			) : null}
+			{unclaimedStore ? (
+				<p className="text-xs text-amber-700">
+					Nobody owns this store yet, so there's nobody to bill — the server
+					refuses it and the daily renewal skips it.{" "}
+					{selected?.comped
+						? "It runs unbilled while you build it, and the day the vendor claims it they start a 14-day Pro trial — bill them after that."
+						: "It already carries a live plan, which keeps its current period. Billing picks up again once the new owner claims it."}
 				</p>
 			) : null}
 			{compedStore ? (
@@ -868,6 +1283,8 @@ function IssueInvoiceForm() {
 
 function PendingInvoices() {
 	const invoices = useQuery(convexQuery(api.invoices.listPending, {})).data;
+	// One clock per render, so a row's pill and its line can't disagree.
+	const now = Date.now();
 	const markPaid = useMutation(api.invoices.markPaid);
 	const voidInvoice = useMutation(api.invoices.voidInvoice);
 	const [confirming, setConfirming] = useState<
@@ -962,15 +1379,9 @@ function PendingInvoices() {
 									{/* Which RAIL this bill is on (86eyb6z4r) — so "who needs
 									    chasing vs who settles themselves" is a glance. */}
 									{inv.autoRenew ? (
-										inv.autoRenew.failedAttempts > 0 ? (
-											<span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium text-red-700 dark:bg-red-950 dark:text-red-300">
-												Auto-charge failed ×{inv.autoRenew.failedAttempts}
-											</span>
-										) : (
-											<span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
-												Auto-renew
-											</span>
-										)
+										<AutoChargePill
+											description={describeAutoCharge(inv.autoRenew, now)}
+										/>
 									) : inv.hasPayNowLink ? (
 										<span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
 											Pay-now link
@@ -983,6 +1394,13 @@ function PendingInvoices() {
 												: inv.origin === "free_period_end"
 													? "First invoice"
 													: "Renewal"}
+										</span>
+									) : null}
+									{/* Paying this takes the store off its contract (T6) —
+									    worth seeing before marking it paid or voiding it. */}
+									{inv.endsContract ? (
+										<span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+											Ends Enterprise contract
 										</span>
 									) : null}
 								</div>
@@ -1004,15 +1422,10 @@ function PendingInvoices() {
 											: "⚠ A HitPay payment landed AFTER this invoice was settled/voided — possible double payment, check the HitPay dashboard."}
 									</p>
 								) : null}
-								{inv.autoRenew && inv.autoRenew.failedAttempts > 0 ? (
-									<p className="text-xs text-muted-foreground">
-										{inv.autoRenew.lastChargeError
-											? `Last error: ${inv.autoRenew.lastChargeError}. `
-											: ""}
-										{inv.autoRenew.nextRetryAt
-											? `Next retry ${new Date(inv.autoRenew.nextRetryAt).toLocaleDateString(undefined, { day: "numeric", month: "short" })}.`
-											: "Retries exhausted — seller is on the manual rail."}
-									</p>
+								{inv.autoRenew ? (
+									<AutoChargeDetail
+										description={describeAutoCharge(inv.autoRenew, now)}
+									/>
 								) : null}
 							</div>
 							<div className="flex items-center justify-between gap-3 sm:justify-end">
@@ -1097,6 +1510,20 @@ function PendingInvoices() {
 							their history as “Cancelled” and frees them up for a corrected
 							invoice. Use this for an invoice issued by mistake — not one
 							that's been paid.
+							{voiding?.carriesScheduledChange ? (
+								<>
+									{" "}
+									<strong className="font-medium text-foreground">
+										This renewal carries a scheduled move to{" "}
+										{voiding.plan === "pro" ? "Pro" : "Starter"}
+									</strong>
+									: voiding it keeps the move scheduled, and the next daily run
+									bills it again.{" "}
+									{voiding.endsContract
+										? "To keep the store on its contract, use “Call off the move to Pro” in Sellers → the store."
+										: "The seller can call the move off from their billing page."}
+								</>
+							) : null}
 						</DialogDescription>
 					</DialogHeader>
 					<label className="flex flex-col gap-1 text-sm font-medium">
@@ -1162,6 +1589,7 @@ function AutoRenewOverview() {
 	const rows = useQuery(
 		convexQuery(api.subscriptionPayments.listAutoRenewForAdmin, {}),
 	).data;
+	const now = Date.now();
 
 	return (
 		<AdminCard>
@@ -1192,21 +1620,20 @@ function AutoRenewOverview() {
 									<span className="rounded-full bg-muted px-2 py-0.5 font-mono text-[11px] text-muted-foreground">
 										/{row.slug}
 									</span>
-									{row.failedAttempts > 0 ? (
-										<span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium text-red-700 dark:bg-red-950 dark:text-red-300">
-											Failing ×{row.failedAttempts}
-										</span>
-									) : null}
+									<AutoChargePill
+										description={describeAutoCharge(row.charge, now)}
+										showHealthy={false}
+									/>
 								</div>
 								<p className="text-xs text-muted-foreground">
 									{row.methodLabel}
 									{row.lastChargeAt
-										? ` · last charged ${new Date(row.lastChargeAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}`
+										? ` · last charged ${formatShortDate(row.lastChargeAt)}`
 										: " · no charge yet"}
-									{row.failedAttempts > 0 && row.lastChargeError
-										? ` · ${row.lastChargeError}`
-										: ""}
 								</p>
+								<AutoChargeDetail
+									description={describeAutoCharge(row.charge, now)}
+								/>
 							</div>
 						</li>
 					))}

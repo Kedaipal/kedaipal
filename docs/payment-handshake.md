@@ -4,7 +4,7 @@ The manual, two-button payment confirmation flow. **Shipped and in production** 
 
 No payment gateway is involved: this solves the "did the money land?" handshake on top of the bank-transfer / DuitNow QR flow retailers already use. Customer payment money never touches Kedaipal — the retailer owns the gateway/bank account.
 
-**Source files:** [`convex/orders.ts`](../convex/orders.ts) (`claimPayment`, `markPaymentReceived`, `generateOrderProofUploadUrl`, `getPaymentProofUrl`), [`convex/schema.ts`](../convex/schema.ts) (payment fields), [`src/routes/track.$token.tsx`](../src/routes/track.$token.tsx) (both buyer-facing halves of the handshake).
+**Source files:** [`convex/orders.ts`](../convex/orders.ts) (`claimPayment`, `markPaymentReceived`, `generateOrderProofUploadUrl`, `listPaymentProofs`), [`convex/lib/paymentClaims.ts`](../convex/lib/paymentClaims.ts) (submission history), [`convex/schema.ts`](../convex/schema.ts) (payment fields + `paymentClaims`), [`src/components/order/payment-proof-list.tsx`](../src/components/order/payment-proof-list.tsx) (the seller's proof card), [`src/routes/track.$token.tsx`](../src/routes/track.$token.tsx) (both buyer-facing halves of the handshake).
 
 > **The handshake no longer sends anything (2026-08-04, [`86eyd63r8`](https://app.clickup.com/t/86eyd63r8)).**
 > `whatsapp.notifyPaymentReceived` — the "✅ Payment received" WhatsApp — is
@@ -42,14 +42,27 @@ On the tracking page (`/track/<token>`), the shopper taps **"I've paid"**. Trust
 1. **(Optional) attach a screenshot** — `generateOrderProofUploadUrl(token)` mints a one-shot Convex storage upload URL. Rate-limited `proofUpload` (3/min per token). Refused once `received`.
 2. **`claimPayment(shortId, reference?, proofStorageId?)`** — rate-limited `paymentClaim` (5/min per shortId):
    - Rejected only if already `received` ("Payment already confirmed") — a retailer-confirmed payment can't be re-claimed.
-   - **Idempotent otherwise**: re-submitting overwrites `paymentReference` / `paymentProofStorageId` and refreshes `paymentClaimedAt`. This lets a shopper fix a typo'd reference or add a screenshot they forgot.
+   - **Resubmitting is allowed and kept as history** ([`z8r3fdn2uj`](https://app.clickup.com/t/z8r3fdn2uj)): each submission is a `paymentClaims` row (what THAT submission carried — a reference-only resubmit has no screenshot), and the order's `paymentReference` / `paymentProofStorageId` are updated to the latest values (email + WhatsApp read those). `paymentClaimedAt` is refreshed. This lets a shopper fix a typo'd reference or add a screenshot they forgot without the seller losing the first one. Capped at **20 submissions per order** (`MAX_PAYMENT_CLAIMS_PER_ORDER`) — the 21st is refused with a "message the seller on WhatsApp" error; the per-minute rate limit alone doesn't bound a day.
    - `reference` is trimmed and capped at **80 characters** (`PAYMENT_REFERENCE_MAX`).
    - Sets `paymentStatus: "claimed"`, writes a `"payment_claimed"` `orderEvents` row.
    - Schedules `notifyPaymentClaimed` email to the retailer (fire-and-forget).
 
 ## Retailer flow — mark received
 
-In the dashboard, the retailer reviews the claimed reference + proof screenshot (`getPaymentProofUrl` — **auth-gated**, ownership-checked, so shoppers can't fish proof images for arbitrary shortIds) and clicks **"Mark payment received"**.
+In the dashboard, the retailer reviews the claimed reference + proof screenshot (`listPaymentProofs` — **auth-gated**, orders-read, so shoppers can't fish proof images) and clicks **"Mark payment received"**.
+
+### Payment proof history (z8r3fdn2uj)
+
+The proof stays reachable after the payment is in — a dispute, a refund or matching the bank statement needs it long after the claim card is gone. `PaymentProofList` renders in both cards:
+
+- **Payment claimed** (amber): the lead screenshot full-width, as before — reading the amount off it is the job.
+- **Payment received** (green): a **Customer's proof** row — portrait thumbnail (tap → full size), the buyer's reference with a copy button, and when it was sent. Not rendered for a payment the seller marked by hand with no buyer claim (`paymentClaimedAt` unset).
+- **The lead** is the newest submission carrying a screenshot (`currentClaimIndex`) — a later reference-only resubmit doesn't push the screenshot out. Every other submission is under one collapsed **Other submissions (n)** row, newest first.
+- **A lead without a reference borrows one.** The commonest resubmit is "I forgot the screenshot" — the buyer's dialog starts empty, so that row is screenshot-only and becomes the lead. `borrowedLeadReference` hands the card the newest reference any other submission carried, shown with "From their submission on …", so the seller's reconciliation row never reads "Not provided" while a reference exists.
+- **A bare claim records no row.** `claimPayment` accepts neither field (the order still flips to claimed), but there's nothing to show, so no history row — otherwise twenty empty taps would hit the cap and lock the buyer out of ever attaching a screenshot. `legacyClaimFromOrder` likewise rebuilds nothing for an empty pre-table claim.
+- States: loading skeleton, no screenshot, screenshot no longer available (blob gone → `url: null`, never a broken image), one, many.
+- **Orders claimed before the table existed** have no rows: `legacyClaimFromOrder` rebuilds their one submission from the order (skipping a HitPay payment id that settlement wrote into `paymentReference`), so the proof shows immediately. One limit of the old data model: an order whose buyer sent a screenshot and THEN a reference-only resubmit before this shipped kept only the latest values, so its one rebuilt entry pairs the old screenshot with the newer reference and time — the earlier submission's own reference was already overwritten and can't be recovered. `claimPayment` writes that legacy row first on the next resubmit, and `migrations:backfillPaymentClaims` makes it a real row for everyone (idempotent, release step after deploy).
+- **Deletion:** `deleteOrderOwnedBlobs` (both the admin hard delete and the account cascade) frees every screenshot in the history and deletes the rows — overwritten screenshots used to leak.
 
 **`markPaymentReceived(orderId, note?)`** — auth-gated, ownership-checked:
 - **Idempotent** — if already `received`, returns immediately (no-op second click).

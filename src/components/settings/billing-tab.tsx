@@ -28,14 +28,14 @@ import { api } from "../../../convex/_generated/api";
 import {
 	FOUNDING_BENEFIT_WARNING_MS,
 	FOUNDING_PLAN,
-	foundingPlanLocked,
-	isUnlimited,
+	PLAN_CREDIT_GRANT,
 } from "../../../convex/lib/plans";
 import { HOLD_LABEL } from "../../../convex/lib/seasonalHold";
-import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
 import { usePermission, useStoreRole } from "../../hooks/usePermission";
+import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { resolveAnnualOffer } from "../../lib/annual-billing";
+import { mergeBillingHistory } from "../../lib/billing-history";
 import { buildWaContactLink } from "../../lib/contact";
 import {
 	type CardTarget,
@@ -48,16 +48,22 @@ import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import {
 	freePeriodState,
 	isRenewing,
-	ORDER_CAP_WARN_RATIO,
 	PLAN_LABEL,
 } from "../../lib/subscription";
+import { CreditActivity } from "../credits/credit-activity";
+import { CreditMeter } from "../credits/credit-meter";
 import { ZoomableImage } from "../ui/zoomable-image";
 import { AnnualBillingCard } from "./annual-billing-card";
 import { AutoRenewalCard } from "./auto-renewal-card";
-import { FirstInvoiceSwitch } from "./first-invoice-switch";
+import { CreditReceiptButton } from "./credit-receipt-button";
+import { EnterpriseContractCard } from "./enterprise-contract-card";
+import {
+	FirstInvoiceSwitch,
+	firstInvoiceTargets,
+} from "./first-invoice-switch";
 import { InvoiceDownloadButton } from "./invoice-download-button";
-import { PlanChangeCard } from "./plan-change-card";
 import { OwnerOnlyNote } from "./owner-only-note";
+import { PlanChangeCard } from "./plan-change-card";
 import { PlanPickerCard } from "./plan-picker-card";
 import { SeasonalHoldCard } from "./seasonal-hold-card";
 
@@ -96,11 +102,23 @@ export function BillingTab({
 	const storeArgs = { retailerId: actingAsAdmin ? retailer._id : undefined };
 	const invoices =
 		useQuery(convexQuery(api.invoices.myInvoices, storeArgs)).data ?? [];
+	// Paid credit-pack top-ups (Credits T2) share the history list. Credits
+	// READ gates them, so a teammate with billing read alone sees invoices only.
+	const creditPurchases =
+		useQuery(convexQuery(api.creditPurchases.myPurchases, storeArgs)).data ??
+		[];
 	const instructions = useQuery(
 		convexQuery(api.billing.paymentInstructions, {}),
 	).data;
 	const gateway = useQuery(
 		convexQuery(api.subscriptionPayments.billingGatewayAvailable, storeArgs),
+	).data;
+	// The same read the credit meter holds (cache-shared): the plan cards use
+	// it to say what a plan choice does to the allowance before the tap.
+	// Null for a teammate without the Credits grant — the cards then state
+	// each plan's allowance and nothing about this store's balance.
+	const creditBalance = useQuery(
+		convexQuery(api.credits.getBalance, storeArgs),
 	).data;
 	// …while billing itself is VIEW-ONLY under act-as (Zaki, 17 Sep 2026): it is
 	// the seller's money and consent, and every legitimate admin billing action
@@ -195,7 +213,10 @@ export function BillingTab({
 	const adminOwnAccount = isAdmin && !retailer.actingAsAdmin;
 
 	const pending = invoices.find((i) => i.status === "pending");
-	const history = invoices.filter((i) => i.status !== "pending");
+	const history = mergeBillingHistory(
+		invoices.filter((i) => i.status !== "pending"),
+		creditPurchases,
+	);
 	const now = Date.now();
 
 	// Annual billing is offered here rather than on /pricing: manual billing has
@@ -217,6 +238,22 @@ export function BillingTab({
 		foundingPricing && (sub?.plan ?? "pro") === FOUNDING_PLAN
 			? "Founding Pro"
 			: PLAN_LABEL[sub?.plan ?? "pro"];
+	// What the CURRENT-PLAN line says, which is not always the tier's name.
+	//
+	// During the free period a seller has neither chosen nor paid for a plan —
+	// `subscriptions.plan` holds the tier being TRIALLED (see createRetailer:
+	// "tier is chosen at conversion, not signup"). Rendering that bare as "Pro"
+	// claims both that they are on Pro and that they are paying for it, while
+	// the chip beside it says "Free · until your first order", the card below
+	// asks "Ready to choose a plan?", and the admin console files them under
+	// Trialing. The tier stays in the line because the order cap on this very
+	// card is that tier's — it is the trial of a named plan, not of nothing.
+	//
+	// Deliberately NOT applied to `planLabel` itself: the on-hold copy below
+	// reads "Your {planLabel} plan comes back", where a trial suffix would be
+	// both wrong and impossible (a held store is not trialing).
+	const currentPlanLabel =
+		sub?.status === "trialing" ? `${planLabel} trial` : planLabel;
 
 	const freePeriod = freePeriodState(sub, now);
 	const held = sub?.status === "on_hold" || sub?.held === true;
@@ -265,28 +302,6 @@ export function BillingTab({
 		(instructions.bankAccountNumber ||
 			instructions.duitnowId ||
 			instructions.qrUrl);
-
-	// Monthly order meter vs the plan's SOFT cap (hidden for comped accounts and
-	// unlimited caps). `ordersThisMonth` rides on the retailer payload.
-	const orderCap = sub?.caps?.orderCap;
-	// Hidden for comped stores (unlimited) and for a store whose comp ENDED —
-	// "included orders on your plan" is wrong when there is no plan yet.
-	const capMeter =
-		!sub?.comped &&
-		!compEnded &&
-		orderCap !== undefined &&
-		orderCap > 0 &&
-		!isUnlimited(orderCap) &&
-		retailer.ordersThisMonth !== undefined
-			? {
-					used: retailer.ordersThisMonth,
-					cap: orderCap,
-					near:
-						retailer.ordersThisMonth >=
-						Math.ceil(orderCap * ORDER_CAP_WARN_RATIO),
-					over: retailer.ordersThisMonth >= orderCap,
-				}
-			: null;
 
 	return (
 		<div className="flex flex-col gap-6 pt-2">
@@ -348,7 +363,7 @@ export function BillingTab({
 								Sponsored account
 							</p>
 							<span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700 dark:bg-violet-900/60 dark:text-violet-300">
-								No limits
+								Never locked
 							</span>
 						</div>
 						{sub.comp?.label ? (
@@ -357,9 +372,9 @@ export function BillingTab({
 							</p>
 						) : null}
 						<p className="text-xs text-violet-800/80 dark:text-violet-300/80">
-							Every feature is unlocked and there are no limits on orders.
-							There's no plan to subscribe to, change or cancel, and nothing to
-							pay.
+							Every feature is unlocked, and running out of credits never locks
+							your store. There's no plan to subscribe to, change or cancel, and
+							nothing to pay.
 						</p>
 					</div>
 				</section>
@@ -374,7 +389,7 @@ export function BillingTab({
 							<p className="mt-1 text-lg font-semibold">
 								{compEnded
 									? `Ended ${formatShortDate(compEnded.at)}`
-									: planLabel}
+									: currentPlanLabel}
 							</p>
 						</div>
 						<span
@@ -443,64 +458,45 @@ export function BillingTab({
 						</p>
 					) : null}
 
-					{/* Monthly order usage vs the plan's SOFT cap. The cap never blocks
-				    orders — passing it just escalates the upgrade nudge. */}
-					{capMeter ? (
-						<div className="flex flex-col gap-1.5 border-t border-border pt-4">
-							<div className="flex items-baseline justify-between text-xs">
-								<span className="font-semibold uppercase tracking-wide text-muted-foreground">
-									Orders this month
-								</span>
-								<span
-									className={`font-medium tabular-nums ${
-										capMeter.over
-											? "text-red-600 dark:text-red-400"
-											: capMeter.near
-												? "text-amber-700 dark:text-amber-400"
-												: "text-muted-foreground"
-									}`}
-								>
-									{capMeter.used} / {capMeter.cap}
-								</span>
-							</div>
-							<div className="h-1.5 overflow-hidden rounded-full bg-muted">
-								<div
-									className={`h-full rounded-full transition-all ${
-										capMeter.over
-											? "bg-red-500"
-											: capMeter.near
-												? "bg-amber-500"
-												: "bg-accent"
-									}`}
-									style={{
-										width: `${Math.min(100, Math.round((capMeter.used / capMeter.cap) * 100))}%`,
-									}}
-								/>
-							</div>
-							<p className="text-[11px] text-muted-foreground">
-								{capMeter.over
-									? "You're past your plan's included orders — everything keeps working, but this is the sign to upgrade."
-									: "Included orders on your plan. Going over never blocks an order."}
-							</p>
-						</div>
-					) : null}
-
 					{/* Starter never sees the annual card (ANNUAL_OFFER_PLANS is Pro
-					    only), so the constraint is explained here rather than left as
-					    an unexplained absence — "why can't I?" is exactly the question
-					    a silent gap produces. The upgrade ACTION itself now lives in
-					    the plan-change card below (it used to hand off to Arif on
-					    WhatsApp; tier changes are self-serve since 86eyb6z4r). */}
+					    only), so the constraint is explained here rather than left
+					    as an unexplained absence — "why can't I?" is exactly the
+					    question a silent gap produces. The upgrade ACTION itself lives
+					    in the plan-change card below (it used to hand off to Arif on
+					    WhatsApp; tier changes are self-serve since 86eyb6z4r). The
+					    allowance reads the grant — never a literal (Credits T3). */}
 					{sub?.plan === "starter" && sub.status === "active" ? (
 						<p className="border-t border-border pt-4 text-xs text-muted-foreground">
-							Want 200 orders/month, the customer database and the order inbox?
-							Move up to Pro below — which can also be billed annually, with two
-							months free. We don't offer annual on Starter: you shouldn't pay a
-							year upfront before the shop has proven itself.
+							Want {PLAN_CREDIT_GRANT.pro} credits a month, the customer
+							database and the order inbox? Move up to Pro below — which can
+							also be billed annually, with two months free. We don't offer
+							annual on Starter: you shouldn't pay a year upfront before the
+							shop has proven itself.
 						</p>
 					) : null}
 				</section>
 			)}
+
+			{/* Credits (T3): the balance sits right under the plan — it is the
+			    number a seller checks most, and every plan decision below changes
+			    it. Everyone sees it, comped and admin stores included (metered,
+			    never locked); a teammate without the Credits grant sees nothing. */}
+			<CreditMeter
+				variant="full"
+				retailer={retailer}
+				highlight={ring(SPOTLIGHT_ANCHOR.credit_balance.anchor)}
+			/>
+
+			{/* An Enterprise store's plan IS its contract (Credits T6): the terms
+			    sit here in place of the plan-change card and the picker, because
+			    a contract changes by conversation, never by a self-serve tap. */}
+			{sub?.plan === "enterprise" ? (
+				<EnterpriseContractCard
+					sub={sub}
+					slug={retailer.slug}
+					ownerOnly={ownerOnly}
+				/>
+			) : null}
 
 			{/* Change tier (86eyb6z4r) — a plan decision, so it sits directly under
 			    the current-plan card and above the payment mechanics. Only an ACTIVE
@@ -517,10 +513,12 @@ export function BillingTab({
 					id={SPOTLIGHT_ANCHOR.plan_change.anchor}
 					highlight={ring(SPOTLIGHT_ANCHOR.plan_change.anchor)}
 					sub={sub}
+					slug={retailer.slug}
 					currency={gateway.renewalCurrency}
 					foundingPricing={gateway.foundingPricing}
 					ownerOnly={ownerOnly}
 					openInvoiceNumber={pending?.invoiceNumber}
+					balance={creditBalance}
 				/>
 			) : null}
 
@@ -531,7 +529,11 @@ export function BillingTab({
 			    which of its four states to render. */}
 			{/* Not for a store whose comp just ended: there's no plan behind that
 			    lock to pause (the server refuses it too) — they choose a plan. */}
-			{!adminOwnAccount && sub && !sub.comped && !compEnded ? (
+			{!adminOwnAccount &&
+			sub &&
+			!sub.comped &&
+			!compEnded &&
+			sub.plan !== "enterprise" ? (
 				<SeasonalHoldCard
 					id={SPOTLIGHT_ANCHOR.seasonal_hold.anchor}
 					highlight={ring(SPOTLIGHT_ANCHOR.seasonal_hold.anchor)}
@@ -602,17 +604,15 @@ export function BillingTab({
 					    invoices only — the first invoice, or a self-serve pick. The
 					    server refuses admin-issued and hold invoices too, and a
 					    Founding Member's move off Founding Pro (they have no other
-					    tier). Waits for the gateway read: the quoted price is
-					    founding-sensitive. */}
+					    tier). Offers every other listed tier for sale; an
+					    Enterprise invoice bills a contract, so it has none. Waits
+					    for the gateway read: the quoted price is founding-sensitive. */}
 					{gateway &&
 					(pending.kind ?? "plan") === "plan" &&
 					(pending.origin === "free_period_end" ||
 						pending.origin === "self_serve") &&
-					(pending.plan === "pro" || pending.plan === "starter") &&
-					!foundingPlanLocked(
-						pending.plan === "pro" ? "starter" : "pro",
-						foundingPricing,
-					) ? (
+					pending.plan !== undefined &&
+					firstInvoiceTargets(pending.plan, foundingPricing).length > 0 ? (
 						<FirstInvoiceSwitch
 							invoicePlan={pending.plan}
 							currency={pending.currency === "SGD" ? "SGD" : "MYR"}
@@ -635,9 +635,37 @@ export function BillingTab({
 									? "Taking you to HitPay's secure payment page…"
 									: "Confirming your payment…"}
 							</div>
+						) : sub?.autoRenew?.confirming ? (
+							// A charge was SENT for this store and HitPay hasn't confirmed
+							// the outcome. Every pay option here would be the second
+							// payment if it landed, so the options go away entirely — a
+							// constraint surfaced, not enforced silently. Resolution is at
+							// most a daily sweep away; the rails come back with it (or the
+							// invoice flips paid).
+							<>
+								<p className="text-sm font-medium">How to pay</p>
+								<p className="mt-1 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+									Nothing to do right now — we've charged your saved payment
+									method and are confirming it with the payment provider. If it
+									didn't go through, we'll retry automatically and your payment
+									options come back here. See Auto-renewal below.
+								</p>
+							</>
 						) : (
 							<>
 								<p className="text-sm font-medium">How to pay</p>
+								{/* Auto-charging stopped over an earlier charge that landed
+								    after its bill was cancelled: we may count that money
+								    toward THIS bill, so paying now could be the second
+								    payment. Say so where the pay buttons are — the options
+								    stay, because we may also ask them to pay. */}
+								{sub?.autoRenew?.stopped ? (
+									<p className="mt-1 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+										Hold off for now — we're sorting out an earlier automatic
+										charge first and may count it toward this invoice. See
+										Auto-renewal below.
+									</p>
+								) : null}
 								{/* Online first (86eyb6z4r): card/banking/eWallet on HitPay's
 						    hosted page, auto-confirmed — the manual rails stay below. */}
 								{pending.gatewayPayment?.url ? (
@@ -738,6 +766,7 @@ export function BillingTab({
 			{!adminOwnAccount &&
 			!pending &&
 			!sub?.comped &&
+			sub?.plan !== "enterprise" &&
 			(sub?.status === "trialing" ||
 				sub?.status === "past_due" ||
 				sub?.status === "cancelled") ? (
@@ -751,6 +780,7 @@ export function BillingTab({
 						) : null}
 						<PlanPickerCard
 							sub={sub}
+							slug={retailer.slug}
 							currency={gateway.currency}
 							// A store whose comp ended is choosing its FIRST plan, not
 							// renewing one it never had.
@@ -760,6 +790,7 @@ export function BillingTab({
 							foundingBenefitsRevoked={gateway.foundingBenefitsRevoked}
 							ownerOnly={ownerOnly}
 							onRedirectingChange={setRedirecting}
+							balance={creditBalance}
 						/>
 					</div>
 				) : (
@@ -841,6 +872,10 @@ export function BillingTab({
 				/>
 			) : null}
 
+			{/* Credits (T3): every credit in and out — answers "why do I have
+			    37 left?" beside the bills. */}
+			<CreditActivity retailer={retailer} />
+
 			{/* History */}
 			{history.length > 0 ? (
 				<section
@@ -851,69 +886,103 @@ export function BillingTab({
 					className={`flex flex-col gap-2 rounded-2xl border bg-background p-5 scroll-mt-24 lg:p-6 ${highlightRingClass(ring(SPOTLIGHT_ANCHOR.invoice_history.anchor))}`}
 				>
 					<p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-						Invoice history
+						Billing history
 					</p>
 					<ul className="flex flex-col divide-y divide-border">
-						{history.map((inv) => (
-							<li
-								key={inv._id}
-								className="flex items-center justify-between gap-3 py-2.5 text-sm"
-							>
-								<div>
-									<span className="font-mono">{inv.invoiceNumber}</span>
-									<span className="ml-2 text-xs text-muted-foreground">
-										{inv.markedPaidAt
-											? formatShortDate(inv.markedPaidAt)
-											: inv.voidedAt
-												? formatShortDate(inv.voidedAt)
-												: ""}
-									</span>
-								</div>
-								<div className="flex items-center gap-3">
-									<span
-										className={`tabular-nums ${inv.status === "void" ? "text-muted-foreground line-through" : ""}`}
+						{history.map((row) => {
+							if (row.kind === "credit_purchase") {
+								const p = row.purchase;
+								return (
+									<li
+										key={row.key}
+										className="flex items-center justify-between gap-3 py-2.5 text-sm"
 									>
-										{formatPrice(inv.total, inv.currency)}
-									</span>
-									<span
-										className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
-											inv.status === "paid"
-												? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
-												: "bg-muted text-muted-foreground"
-										}`}
-									>
-										{inv.status === "paid"
-											? "Paid"
-											: inv.status === "void"
-												? "Cancelled"
-												: inv.status}
-									</span>
-									{/* No documents for a voided (cancelled-in-error) invoice.
+										<div className="min-w-0">
+											<span className="font-medium">{p.credits} credits</span>
+											<span className="ml-2 text-xs text-muted-foreground">
+												{formatShortDate(row.at)}
+											</span>
+											{p.boughtBy ? (
+												<span className="block truncate text-xs text-muted-foreground">
+													Bought by {p.boughtBy}
+												</span>
+											) : null}
+										</div>
+										<div className="flex items-center gap-3">
+											<span className="tabular-nums">
+												{formatPrice(p.amountMinor, p.currency)}
+											</span>
+											<span className={PAID_PILL}>Paid</span>
+											<CreditReceiptButton
+												purchaseId={p._id}
+												className="size-8"
+											/>
+										</div>
+									</li>
+								);
+							}
+							const inv = row.invoice;
+							return (
+								<li
+									key={row.key}
+									className="flex items-center justify-between gap-3 py-2.5 text-sm"
+								>
+									<div>
+										<span className="font-mono">{inv.invoiceNumber}</span>
+										<span className="ml-2 text-xs text-muted-foreground">
+											{inv.markedPaidAt
+												? formatShortDate(inv.markedPaidAt)
+												: inv.voidedAt
+													? formatShortDate(inv.voidedAt)
+													: ""}
+										</span>
+									</div>
+									<div className="flex items-center gap-3">
+										<span
+											className={`tabular-nums ${inv.status === "void" ? "text-muted-foreground line-through" : ""}`}
+										>
+											{formatPrice(inv.total, inv.currency)}
+										</span>
+										<span
+											className={
+												inv.status === "paid"
+													? PAID_PILL
+													: "rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground"
+											}
+										>
+											{inv.status === "paid"
+												? "Paid"
+												: inv.status === "void"
+													? "Cancelled"
+													: inv.status}
+										</span>
+										{/* No documents for a voided (cancelled-in-error) invoice.
 									    A PAID invoice carries two: the bill (kept for the
 									    seller's records) and the payment receipt — proof of
 									    payment for their books (z8r3fdcrzj). */}
-									{inv.status !== "void" ? (
-										<InvoiceDownloadButton
-											invoiceId={inv._id}
-											label=""
-											size="icon"
-											variant="ghost"
-											className="size-8"
-										/>
-									) : null}
-									{inv.status === "paid" ? (
-										<InvoiceDownloadButton
-											invoiceId={inv._id}
-											kind="receipt"
-											label=""
-											size="icon"
-											variant="ghost"
-											className="size-8"
-										/>
-									) : null}
-								</div>
-							</li>
-						))}
+										{inv.status !== "void" ? (
+											<InvoiceDownloadButton
+												invoiceId={inv._id}
+												label=""
+												size="icon"
+												variant="ghost"
+												className="tap-target size-8"
+											/>
+										) : null}
+										{inv.status === "paid" ? (
+											<InvoiceDownloadButton
+												invoiceId={inv._id}
+												kind="receipt"
+												label=""
+												size="icon"
+												variant="ghost"
+												className="tap-target size-8"
+											/>
+										) : null}
+									</div>
+								</li>
+							);
+						})}
 					</ul>
 				</section>
 			) : null}
@@ -959,6 +1028,11 @@ export function BillingTab({
 		</div>
 	);
 }
+
+/** The "Paid" pill of a billing-history row — one look for an invoice and a
+ * credit top-up, so the two kinds of row read as one list. */
+const PAID_PILL =
+	"rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300";
 
 /**
  * A billing CTA that leaves the page — HitPay's checkout, or a WhatsApp

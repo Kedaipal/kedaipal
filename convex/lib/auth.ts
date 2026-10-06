@@ -209,6 +209,7 @@ const AREA_LABEL: Record<PermissionArea, string> = {
 	fulfilment: "fulfilment settings",
 	payments_settings: "payment details",
 	integrations: "integrations",
+	credits: "credits",
 	billing: "billing",
 };
 

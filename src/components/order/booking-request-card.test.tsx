@@ -22,9 +22,11 @@ const d = (n: number) => SAT_3_OCT + n * DAY_MS;
 
 function renderCard(
 	order: Partial<Parameters<typeof BookingRequestCard>[0]["order"]>,
+	lockedReason?: string,
 ) {
 	render(
 		<BookingRequestCard
+			lockedReason={lockedReason}
 			order={{
 				_id: "ord_1" as Id<"orders">,
 				shortId: "ORD-3LDT",
@@ -68,5 +70,18 @@ describe("BookingRequestCard", () => {
 		expect(screen.getByText("Mon, 5 Oct 2026")).toBeTruthy();
 		expect(screen.getByText("Campsite 2 · 2 nights")).toBeTruthy();
 		expect(screen.getByText(/on those nights/)).toBeTruthy();
+	});
+
+	it("out of credits: Approve greys out and says why; Decline stays open", () => {
+		const reason =
+			"You're out of credits, so accepting and updating orders and editing products are paused.";
+		renderCard({ bookingCheckIn: d(0), bookingCheckOut: d(2) }, reason);
+		const approve = screen.getByRole("button", { name: /Approve booking/ });
+		expect((approve as HTMLButtonElement).disabled).toBe(true);
+		expect(screen.getByText(reason)).toBeTruthy();
+		// Declining releases the guest (and a never-accepted request's credit
+		// comes back), so the lock never traps it.
+		const decline = screen.getByRole("button", { name: /Decline/ });
+		expect((decline as HTMLButtonElement).disabled).toBe(false);
 	});
 });

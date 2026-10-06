@@ -115,3 +115,107 @@ describe("CostCalculator — switching region re-seeds what the visitor never to
 		});
 	});
 });
+
+/**
+ * Credits T5 (z8r3fdfu31): the card prices the plan the visitor's volume
+ * actually needs — orders a week × 52 / 12 — not a flat Pro. The three
+ * volumes the ticket named, in both currencies; the arithmetic itself is
+ * pinned in calculator.test.ts, this pins what the visitor reads.
+ */
+describe("CostCalculator — the plan behind the price", () => {
+	/** The plan block's text, NBSP-flattened. */
+	function plan(): string {
+		return (screen.getByTestId("cost-plan").textContent ?? "").replace(
+			/\u00a0/g,
+			" ",
+		);
+	}
+	/** The sticky CTA's WhatsApp message, decoded. */
+	function waMessage(): string {
+		const link = screen.getByRole("link", { name: /^Start with / });
+		return decodeURIComponent(link.getAttribute("href") ?? "");
+	}
+
+	it("20 a week: Starter covers it — and the pitch prices Starter, not Pro", () => {
+		render(<CostCalculator initialInputs={{ ordersPerWeek: 20 }} />);
+		expect(plan()).toContain("Your plan at about 87 orders a month");
+		expect(plan()).toContain("Starter");
+		expect(plan()).toContain("RM79/mo");
+		expect(plan()).toContain("Starter includes 100 credits a month");
+		expect(plan()).not.toContain("Cheaper than");
+		expect(text()).toContain("Start with Starter — RM79/mo");
+
+		switchToSingapore();
+		expect(plan()).toContain("S$29/mo");
+		expect(text()).not.toMatch(/RM\s?\d/);
+	});
+
+	it("30 a week: Starter + 1 × 50 credits, honestly set against Pro", () => {
+		render(<CostCalculator initialInputs={{ ordersPerWeek: 30 }} />);
+		expect(plan()).toContain("about 130 orders a month");
+		expect(plan()).toContain("Starter + 1 × 50 credits");
+		expect(plan()).toContain("RM124/mo");
+		// Leaning on a top-up, so the bigger plan it beat is named — Pro
+		// covers 130 on its own credits.
+		expect(plan()).toContain("Cheaper than Pro at RM149/mo");
+
+		switchToSingapore();
+		expect(plan()).toContain("Starter + 1 × 50 credits");
+		expect(plan()).toContain("S$51/mo");
+		expect(plan()).toContain("Cheaper than Pro at S$59/mo");
+	});
+
+	it("60 a week: Pro + 2 × 50 credits — Pro is the top listed tier, so no comparison", () => {
+		render(<CostCalculator initialInputs={{ ordersPerWeek: 60 }} />);
+		expect(plan()).toContain("about 260 orders a month");
+		expect(plan()).toContain("Pro + 2 × 50 credits");
+		expect(plan()).toContain("RM239/mo");
+		expect(plan()).toContain(
+			"Pro includes 200 credits a month; top-ups cover the other 60",
+		);
+		expect(plan()).toContain("last 12 months");
+		// Starter + 1 × 200 ties at RM239, and a "cheaper than" a smaller tier
+		// would be false — Enterprise has no price to compare (T6).
+		expect(plan()).not.toContain("Cheaper than");
+		expect(waMessage()).toContain(
+			"get started on Pro + 2 × 50 credits (RM239/mo)",
+		);
+		// The CTA quotes the PLAN at its own price — never the plan-plus-top-ups
+		// total, which would read like a plan price. And the multiple is over
+		// what Kedaipal costs in all, not "your subscription".
+		expect(text()).toContain("Start with Pro — RM149/mo");
+		expect(text()).not.toContain("— RM239/mo");
+		expect(text()).toMatch(/× what Kedaipal costs you/);
+		expect(text()).not.toMatch(/your subscription/i);
+
+		switchToSingapore();
+		expect(plan()).toContain("Pro + 2 × 50 credits");
+		expect(plan()).toContain("S$103/mo");
+		expect(plan()).not.toContain("Cheaper than");
+	});
+
+	it("130 a week: Pro + 2 × 200 credits in both currencies", () => {
+		render(<CostCalculator initialInputs={{ ordersPerWeek: 130 }} />);
+		expect(plan()).toContain("about 564 orders a month");
+		expect(plan()).toContain("Pro + 2 × 200 credits");
+		expect(plan()).toContain("RM469/mo");
+		expect(plan()).not.toContain("Cheaper than");
+
+		switchToSingapore();
+		expect(plan()).toContain("Pro + 2 × 200 credits");
+		expect(plan()).toContain("S$209/mo");
+		expect(text()).not.toMatch(/Scale/);
+	});
+
+	it("a verdict of not-worth-it-yet still shows which plan it was measured against", () => {
+		// No missed orders → disqualified; the plan block explains the price.
+		render(
+			<CostCalculator
+				initialInputs={{ ordersPerWeek: 20, missedPerWeek: 0 }}
+			/>,
+		);
+		expect(screen.getByText(/Nothing's leaking/)).toBeTruthy();
+		expect(plan()).toContain("Starter");
+		expect(plan()).toContain("RM79/mo");
+	});
+});

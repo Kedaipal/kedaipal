@@ -15,8 +15,10 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalMutation } from "./_generated/server";
+import { ensureCreditAccount } from "./credits";
 import { generateTrackingToken } from "./lib/order";
 import { capsForPlan } from "./lib/plans";
+import { legacyClaimFromOrder } from "./lib/paymentClaims";
 import { isOrderPaymentMethod } from "./lib/paymentMethod";
 import {
 	synthesizeDefaultStages,
@@ -352,10 +354,11 @@ export const migrateLalamoveModeToLive = internalMutation({
 
 /**
  * Re-sync the denormalized entitlement caps on every subscription row to the
- * current `PLAN_CAPS` (30 Aug 2026 pricing reset, z8r3fday24: Pro 500 → 200,
- * Scale 2,000 → 400). The caps are copied onto the row at signup and at every
- * settle, so a constant change alone leaves every EXISTING seller on the old
- * denominator — "N of 500" in Settings → Billing under a page that says 200.
+ * current `PLAN_CAPS` (30 Aug 2026 pricing reset, z8r3fday24: Pro 500 → 200;
+ * Credits T6 retired Scale for Enterprise, whose seats are unlimited). The
+ * caps are copied onto the row at signup and at every settle, so a constant
+ * change alone leaves every EXISTING seller on the old denominator — "N of
+ * 500" in Settings → Billing under a page that says 200.
  *
  * Idempotent: rows already at the canonical caps are skipped. The patch
  * deliberately leaves `updatedAt` alone — for a past_due row that field is the
@@ -364,6 +367,36 @@ export const migrateLalamoveModeToLive = internalMutation({
  * The table is one row per store (≈ hundreds), so a single collect is fine.
  * Run: `npx convex run migrations:resyncSubscriptionCaps`
  */
+/**
+ * Flag every unresolved `gatewayIssue` stamped before `gatewayIssueOpen`
+ * existed, so the admin "Payments to review" queue (which reads the
+ * `by_gateway_issue_open` index) sees them. Invoices are one-per-cycle rows,
+ * so a full collect is fine at this table's size — this is a one-off, not a
+ * hot path.
+ *
+ * Idempotent: already-flagged and already-resolved rows are skipped.
+ *
+ * Run on dev:  `npx convex run migrations:backfillGatewayIssueOpen`
+ * Run on PROD: `npx convex run migrations:backfillGatewayIssueOpen --prod`
+ * (write `--prod` yourself — the bare command runs against DEV and reports
+ * success, which reads exactly like a prod run that worked).
+ */
+export const backfillGatewayIssueOpen = internalMutation({
+	args: {},
+	handler: async (ctx): Promise<{ scanned: number; flagged: number }> => {
+		const invoices = await ctx.db.query("invoices").collect();
+		let flagged = 0;
+		for (const inv of invoices) {
+			if (!inv.gatewayIssue) continue;
+			if (inv.gatewayIssue.resolvedAt !== undefined) continue;
+			if (inv.gatewayIssueOpen === true) continue;
+			await ctx.db.patch(inv._id, { gatewayIssueOpen: true });
+			flagged++;
+		}
+		return { scanned: invoices.length, flagged };
+	},
+});
+
 export const resyncSubscriptionCaps = internalMutation({
 	args: {},
 	handler: async (ctx): Promise<{ scanned: number; patched: number }> => {
@@ -478,5 +511,96 @@ export const backfillOrderFlows = internalMutation({
 			});
 		}
 		return { patched, isDone: page.isDone };
+	},
+});
+
+/**
+ * Kedaipal Credits (86eye2ccu): open a credit account for every existing
+ * store — the AFTER-DEPLOY step of the credits release (listed in the release
+ * PR's operator checklist). Each store opens with the grant its status earns
+ * today, for the current usage period: the one-off trial allowance (200), its
+ * plan's monthly grant (Founding Pro 300, an Enterprise contract's included
+ * credits; comped and admin-owned stores their plan's), or nothing while
+ * past_due / on hold — that grant lands the moment they pay or resume. The
+ * FULL grant, never "grant minus this month's orders": nobody starts the
+ * credits era in debt or locked. No welcome credits (dropped 17 Sep 2026).
+ *
+ * Idempotent (a store that already has an account — opened at signup, or by
+ * its first order since the deploy — is only rolled, never re-granted) and
+ * batched: each run handles one page and schedules the next, so it is run
+ * ONCE per deployment. Returns this page's counts; every page logs its own.
+ */
+export const backfillCreditAccounts = internalMutation({
+	args: { cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (
+		ctx,
+		{ cursor },
+	): Promise<{ scanned: number; created: number; isDone: boolean }> => {
+		const now = Date.now();
+		const page = await ctx.db
+			.query("retailers")
+			.paginate({ numItems: 100, cursor: cursor ?? null });
+		let created = 0;
+		for (const retailer of page.page) {
+			const ensured = await ensureCreditAccount(ctx, retailer._id, now);
+			if (ensured?.created) created++;
+		}
+		console.log("[credits] backfill page", {
+			scanned: page.page.length,
+			created,
+			isDone: page.isDone,
+		});
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.migrations.backfillCreditAccounts,
+				{ cursor: page.continueCursor },
+			);
+		}
+		return { scanned: page.page.length, created, isDone: page.isDone };
+	},
+});
+
+/**
+ * Give every order claimed before `paymentClaims` existed (z8r3fdn2uj) its one
+ * history row, rebuilt from the order's own fields by `legacyClaimFromOrder` —
+ * the same rebuild the seller's order page shows meanwhile, so running this
+ * changes nothing a seller sees; it only makes the history real rows.
+ *
+ * Idempotent: an order that already has a row (claimed after deploy, or
+ * already backfilled) is skipped, and an order nobody claimed has nothing to
+ * rebuild. `updatedAt` is NOT bumped — recording history isn't a change to the
+ * sale. Batched + self-scheduling.
+ *
+ * Run: `npx convex run migrations:backfillPaymentClaims`
+ */
+export const backfillPaymentClaims = internalMutation({
+	args: { cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (ctx, { cursor }) => {
+		const page = await ctx.db
+			.query("orders")
+			.paginate({ numItems: BATCH_SIZE, cursor: cursor ?? null });
+
+		let inserted = 0;
+		for (const order of page.page) {
+			const legacy = legacyClaimFromOrder(order);
+			if (!legacy) continue;
+			const existing = await ctx.db
+				.query("paymentClaims")
+				.withIndex("by_order_createdAt", (q) => q.eq("orderId", order._id))
+				.first();
+			if (existing) continue;
+			await ctx.db.insert("paymentClaims", { orderId: order._id, ...legacy });
+			inserted++;
+		}
+
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.migrations.backfillPaymentClaims,
+				{ cursor: page.continueCursor },
+			);
+		}
+		return { inserted, isDone: page.isDone };
 	},
 });

@@ -29,6 +29,7 @@ import type {
 	BuyerQuestion,
 	BuyerQuestionInput,
 } from "../../../convex/lib/buyerQuestions";
+import type { CreditLockErrorData } from "../../../convex/lib/credits";
 import {
 	MAX_NOTICE_DAYS,
 	MAX_PREP_MINUTES,
@@ -58,6 +59,7 @@ import {
 } from "../../lib/country-setup-copy";
 import {
 	convexErrorMessage,
+	creditLockErrorOf,
 	currencySymbol,
 	parsePriceInput,
 } from "../../lib/format";
@@ -75,6 +77,7 @@ import {
 	SPOTLIGHT_ANCHOR,
 } from "../../lib/spotlight";
 import { cartesian } from "../../lib/variant";
+import { CreditLockCta, SaveLockNote } from "../credits/credit-lock-cta";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Markdown } from "../ui/markdown";
@@ -105,6 +108,7 @@ export const PREP_PRESETS = [
 	{ minutes: 240, label: "4 hours" },
 ] as const;
 
+import { NOTE_LINK_HINT } from "../../lib/linkify";
 import { CategoryPicker } from "./category-picker";
 import {
 	EMPTY_EVENT_DRAFT,
@@ -358,6 +362,14 @@ interface ProductFormProps {
 	 * competing with the primary save.
 	 */
 	stickyAction?: ReactNode;
+	/**
+	 * Set while this seller can't save products right now — the store is
+	 * view-only, out of credits (Credits T3), or they're a teammate with view
+	 * on products. Save greys out wearing `label` ("Save changes — out of
+	 * credits") and `reason` sits just above it. The fields stay editable, so
+	 * an edit already under way survives until saving is possible again.
+	 */
+	saveLock?: { reason: string; label: string };
 	/**
 	 * "create" keeps the readiness checklist even when `initialValues` are
 	 * present (the wizard handoff seeds a CREATE, not an edit). Defaults by
@@ -845,6 +857,7 @@ export function ProductForm({
 	draftRef,
 	initialEditor,
 	spotlight,
+	saveLock,
 }: ProductFormProps) {
 	// Editing an existing product vs creating a new one — the edit page leads
 	// with the summary strip; create keeps the readiness checklist. The wizard
@@ -873,6 +886,11 @@ export function ProductForm({
 	);
 	const [uploading, setUploading] = useState(false);
 	const [serverError, setServerError] = useState<string | null>(null);
+	// The credit lock's typed refusal, when that's what the save hit — its way
+	// back renders under the sentence (Credits T3).
+	const [serverLock, setServerLock] = useState<CreditLockErrorData | null>(
+		null,
+	);
 	const [showPreview, setShowPreview] = useState(false);
 	const [hidden, setHidden] = useState(initialValues?.hidden ?? false);
 	// Kind is IMMUTABLE in the form (86eyj70z1: set at create via the wizard;
@@ -976,6 +994,7 @@ export function ProductForm({
 		validators: { onChange: productDetailsSchema },
 		onSubmit: async ({ value }) => {
 			setServerError(null);
+			setServerLock(null);
 			const parsed = productDetailsSchema.parse(value);
 
 			// --- Client-side validation of options + the variant grid ----------
@@ -1114,6 +1133,7 @@ export function ProductForm({
 				});
 			} catch (err) {
 				setServerError(convexErrorMessage(err));
+				setServerLock(creditLockErrorOf(err));
 			}
 		},
 	});
@@ -1639,6 +1659,7 @@ export function ProductForm({
 						weightMode={weightMode}
 						liveStock={liveStock}
 						productName={liveStock ? form.state.values.name : undefined}
+						stockLocked={saveLock !== undefined}
 					/>
 
 					<Link
@@ -1953,10 +1974,9 @@ export function ProductForm({
 							<p className="text-xs leading-relaxed text-muted-foreground">
 								One line collecting buyers see on the product page, at checkout
 								and on their order page — the page their WhatsApp confirmation
-								links to. Paste a link (e.g. a Google Maps pin) and it becomes
-								tappable. It&apos;s copied onto each order as it&apos;s placed,
-								so editing it later never rewrites what earlier buyers were
-								told.
+								links to. {NOTE_LINK_HINT} It&apos;s copied onto each order as
+								it&apos;s placed, so editing it later never rewrites what
+								earlier buyers were told.
 							</p>
 						) : null}
 						{!pickupNoteValid ? (
@@ -1989,13 +2009,16 @@ export function ProductForm({
 			</ProductStepCard>
 
 			{serverError ? (
-				<p
+				<div
 					data-form-error
 					role="alert"
 					className="rounded-xl border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive"
 				>
-					{serverError}
-				</p>
+					<p>{serverError}</p>
+					<CreditLockCta lock={serverLock} />
+				</div>
+			) : saveLock ? (
+				<SaveLockNote reason={saveLock.reason} />
 			) : null}
 
 			{/* Sticky action bar — on a long form, save must never scroll away.
@@ -2012,11 +2035,20 @@ export function ProductForm({
 						{stickyAction}
 						<Button
 							type="submit"
-							disabled={!canSubmit || isSubmitting || uploading}
+							disabled={
+								!canSubmit ||
+								isSubmitting ||
+								uploading ||
+								saveLock !== undefined
+							}
 							className="h-12 flex-1 shadow-lg shadow-accent/20 lg:shadow-none"
 						>
 							<Save className="size-4" />
-							{isSubmitting ? "Saving…" : submitLabel}
+							{isSubmitting
+								? "Saving…"
+								: saveLock
+									? `${submitLabel} — ${saveLock.label}`
+									: submitLabel}
 						</Button>
 					</div>
 				)}

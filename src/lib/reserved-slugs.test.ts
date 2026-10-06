@@ -216,6 +216,32 @@ describe("both validators agree, with the same words", () => {
 		}
 	});
 
+	test("the marketplace + in-flight feature names are fenced (z8r3fdkmyp)", () => {
+		// The directory went live at /stores, and credits, Enterprise and RSVP
+		// are all heading for public URLs. Checked against prod on 1 Oct 2026:
+		// no store held any of these, so the fence costs no existing seller.
+		for (const s of [
+			"stores",
+			"events",
+			"categories",
+			"featured",
+			"sponsored",
+			"founding",
+			"near-me",
+			"enterprise",
+			"advertise",
+			"credits",
+			"top-up",
+			"rsvp",
+		]) {
+			expect(() => assertValidSlug(s), s).toThrow(RESERVED_SLUG_MESSAGE);
+			expect(validateSlugShape(s), s).toEqual({
+				ok: false,
+				reason: "reserved",
+			});
+		}
+	});
+
 	test("an ordinary shop handle still passes both", () => {
 		expect(assertValidSlug("Kuih-Mak-Cik")).toBe("kuih-mak-cik");
 		expect(slugSchema.parse("Kuih-Mak-Cik")).toBe("kuih-mak-cik");
