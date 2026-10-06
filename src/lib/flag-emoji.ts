@@ -48,18 +48,26 @@ let cached: boolean | undefined;
  */
 export function supportsFlagEmoji(): boolean {
 	if (cached !== undefined) return cached;
+	// No DOM to measure with. Deliberately NOT cached: this is SSR, and the
+	// client that hydrates can measure for real.
 	if (typeof document === "undefined") return false;
+	cached = measureFlagSupport();
+	return cached;
+}
+
+/** The measurement itself, kept separate from the memo so each does one job. */
+function measureFlagSupport(): boolean {
 	try {
 		const ctx = document.createElement("canvas").getContext("2d");
-		if (!ctx) return (cached = false);
+		if (!ctx) return false;
 		ctx.font = "32px system-ui";
 		const pair = ctx.measureText(flagEmoji("MY")).width;
 		const single = ctx.measureText(String.fromCodePoint(0x1f1f2)).width;
-		if (!pair || !single) return (cached = false);
-		cached = pair < single * 1.8;
-		return cached;
+		// Zero-width metrics mean we learned nothing; the badge always renders.
+		if (!pair || !single) return false;
+		return pair < single * 1.8;
 	} catch {
-		return (cached = false);
+		return false;
 	}
 }
 
