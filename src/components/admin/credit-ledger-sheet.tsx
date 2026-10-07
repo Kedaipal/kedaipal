@@ -132,9 +132,14 @@ export function CreditLedgerBody({
 					Credit ledger
 				</SheetTitle>
 				<SheetDescription>
-					Balances, open lots and every movement, newest first. Adjust by hand
-					or set a custom monthly grant below — both are logged to your admin
-					account.
+					{state?.unmetered === true
+						? // No balance, no levers — promising them here would describe a
+							// page this store never gets. Leftover rows explain THEMSELVES
+							// in the list below, which is the only place that knows whether
+							// there are any: a "history below" line here would dangle once
+							// the purge has run.
+							"Credits don't apply to this store."
+						: "Balances, open lots and every movement, newest first. Adjust by hand or set a custom monthly grant below — both are logged to your admin account."}
 				</SheetDescription>
 			</SheetHeader>
 			<div className="flex flex-col gap-6 p-5">
@@ -143,6 +148,16 @@ export function CreditLedgerBody({
 						<Skeleton className="h-20 w-full rounded-2xl" />
 						<Skeleton className="h-11 w-full rounded-xl" />
 					</div>
+				) : state.unmetered ? (
+					/* Unmetered (z8r3fdp4er): a Kedaipal admin's own store is outside
+					   the credit system, so there is no balance to show and no lever
+					   to pull — saying which is the point, since the same null view
+					   also means "store deleted". */
+					<p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
+						Admin store — not metered. Credits apply to seller stores only: this
+						one has no balance, takes no monthly grant and spends nothing per
+						order.
+					</p>
 				) : state.view === null ? (
 					<p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
 						This store no longer exists.
@@ -173,7 +188,10 @@ export function CreditLedgerBody({
 						/>
 					</>
 				)}
-				<LedgerList retailerId={seller._id} />
+				<LedgerList
+					retailerId={seller._id}
+					unmetered={state?.unmetered === true}
+				/>
 			</div>
 		</>
 	);
@@ -584,7 +602,22 @@ function GrantForm({
 	);
 }
 
-function LedgerList({ retailerId }: { retailerId: AdminSellerRow["_id"] }) {
+/**
+ * Every movement, newest first — the ADMIN's forensic view, so an unmetered
+ * store keeps whatever it recorded while it was metered (real history, and
+ * `migrations:purgeUnmeteredCreditData` is what clears it). The note above
+ * this list says the store "takes no monthly grant and spends nothing per
+ * order", which is about NOW: without a line saying so, three `+200` grant
+ * rows under that sentence read as a contradiction. Shown only when there
+ * are rows, so a purged store doesn't explain an empty list.
+ */
+function LedgerList({
+	retailerId,
+	unmetered,
+}: {
+	retailerId: AdminSellerRow["_id"];
+	unmetered: boolean;
+}) {
 	const { results, status, loadMore } = usePaginatedQuery(
 		api.credits.adminListLedger,
 		{ retailerId },
@@ -599,14 +632,24 @@ function LedgerList({ retailerId }: { retailerId: AdminSellerRow["_id"] }) {
 				</div>
 			) : results.length === 0 ? (
 				<p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
-					No credit movements yet. The first one is the store's grant.
+					{unmetered
+						? "No credit movements — this store has never been metered."
+						: "No credit movements yet. The first one is the store's grant."}
 				</p>
 			) : (
-				<ul className="flex flex-col divide-y divide-border/60 rounded-xl border border-border">
-					{results.map((row) => (
-						<LedgerItem key={row._id} row={row} />
-					))}
-				</ul>
+				<>
+					{unmetered ? (
+						<p className="text-sm text-muted-foreground">
+							From before this store stopped being metered — kept for the
+							record. Nothing moves here now.
+						</p>
+					) : null}
+					<ul className="flex flex-col divide-y divide-border/60 rounded-xl border border-border">
+						{results.map((row) => (
+							<LedgerItem key={row._id} row={row} />
+						))}
+					</ul>
+				</>
 			)}
 			{status === "CanLoadMore" || status === "LoadingMore" ? (
 				<Button

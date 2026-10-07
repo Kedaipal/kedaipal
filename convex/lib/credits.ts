@@ -60,9 +60,6 @@ export type CreditRegimeInputs = {
 	/** The subscription's plan (the tier a comped / held store keeps). */
 	plan: Plan;
 	comped: boolean;
-	/** The store is owned by a Kedaipal admin (dogfooding — never billed, stays
-	 * `trialing` forever, so it must not live on the one-off trial grant). */
-	ownerIsAdmin: boolean;
 	/** `foundingPriceEligible` for this store right now. */
 	foundingEligible: boolean;
 	/** `creditAccounts.grantOverride` — an admin-set custom monthly grant. */
@@ -112,13 +109,16 @@ export function monthlyCreditGrant(inputs: CreditRegimeInputs): number {
 
 /**
  * Which grant regime a store is in right now. Stores that are metered but
- * never locked — comped, admin-owned, and the missing-row fail-safe — are on
- * the monthly grant whatever their status says: an admin store sits in
- * `trialing` forever, and a one-off trial grant would turn its "honest meter"
- * into a debt that never refreshes.
+ * never locked — comped and the missing-row fail-safe — are on the monthly
+ * grant whatever their status says: a sponsored store sits in whatever status
+ * it had, and a one-off trial grant would turn its "honest meter" into a debt
+ * that never refreshes.
+ *
+ * An UNMETERED store (`storeIsMetered`) has no regime at all and never
+ * reaches here — `regimeFor` in convex/credits.ts answers `null` for it.
  */
 export function creditRegime(inputs: CreditRegimeInputs): CreditRegime {
-	if (inputs.status === null || inputs.comped || inputs.ownerIsAdmin)
+	if (inputs.status === null || inputs.comped)
 		return { kind: "monthly", grant: monthlyCreditGrant(inputs) };
 	switch (inputs.status) {
 		case "active":
@@ -269,28 +269,51 @@ export function lowCreditLine(periodGrant: number): number {
  */
 export const CREDIT_LOCK_ENABLED = false;
 
-/** WHY a store is metered but never locked — the copy that explains it
- * differs: a Kedaipal admin's own store is never billed; a SPONSORED store
- * (comped, or the missing-row fail-safe `resolveAccess` treats as comped) is
- * covered by Kedaipal. `null` for every store the lock applies to. */
-export type CreditLockExemption = "admin_store" | "sponsored";
+/**
+ * Does the credit system apply to this store AT ALL (z8r3fdp4er)?
+ *
+ * A Kedaipal admin's OWN store is UNMETERED: no credit account, no monthly
+ * grant, no debit per order, no meter, no activity list and nothing gated.
+ * That is a strictly stronger state than `creditLockExempt` below, which
+ * still meters — a sponsored seller's comp can end, so their balance has to
+ * be real and visible. An admin runs the product: "200 of 200" over a bar
+ * with a refresh date reads as a cap to every eye however carefully the
+ * sentence under it is worded, and the volume it was there to show already
+ * lives in Insights and the admin console.
+ *
+ * The ONE gate is `regimeFor` (convex/credits.ts), which answers `null` here
+ * — every reader and writer of a balance already funnels through it and
+ * already has a `null` branch. Sponsored stores are deliberately untouched.
+ */
+export function storeIsMetered(args: { ownerIsAdmin: boolean }): boolean {
+	return !args.ownerIsAdmin;
+}
+
+/** What an admin lever says when it is pointed at a store credits don't apply
+ * to — the console's adjust and custom-grant forms. One author, because
+ * falling through to "Store not found" is what they did before the gate. */
+export const UNMETERED_STORE_REFUSAL =
+	"Kedaipal admin stores aren't metered — there are no credits to adjust. Credits apply to seller stores only.";
+
+/** WHY a metered store is never locked: it is SPONSORED (comped, or the
+ * missing-row fail-safe `resolveAccess` treats as comped), so Kedaipal is
+ * covering it. `null` for every store the lock applies to. An admin's own
+ * store is not here — it is unmetered, so it has no balance to exempt. */
+export type CreditLockExemption = "sponsored";
 
 export function creditLockExemption(args: {
 	status: CreditBillingStatus;
 	comped: boolean;
-	ownerIsAdmin: boolean;
 }): CreditLockExemption | null {
-	if (args.ownerIsAdmin) return "admin_store";
 	if (args.status === null || args.comped) return "sponsored";
 	return null;
 }
 
-/** Stores that are metered but NEVER locked: comped, owned by a Kedaipal
- * admin, and the missing-row fail-safe. They get no balance notices either. */
+/** Stores that are metered but NEVER locked: comped and the missing-row
+ * fail-safe. They get no balance notices either. */
 export function creditLockExempt(args: {
 	status: CreditBillingStatus;
 	comped: boolean;
-	ownerIsAdmin: boolean;
 }): boolean {
 	return creditLockExemption(args) !== null;
 }

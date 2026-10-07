@@ -360,22 +360,25 @@ describe("CreditMeter — Billing (full)", () => {
 		expect(screen.queryByText("Used first")).toBeNull();
 	});
 
-	it("an admin's own store sitting in past_due is never told to pay (F1)", () => {
-		mockQueries({
-			bal: balance({ lockExempt: "admin_store" }),
-			topUp: refused("admin_store"),
-		});
+	it("an UNMETERED store renders nothing at all — no meter, no state line", () => {
+		// z8r3fdp4er: a Kedaipal admin's own store has no credit regime, so
+		// `getBalance` answers null and both variants disappear. The null is
+		// the whole mechanism — one read, every surface follows it.
+		mockQueries({ bal: null });
 		const { container } = render(
 			<CreditMeter
 				variant="full"
 				retailer={retailer({ status: "past_due" })}
 			/>,
 		);
-		expect(
-			screen.getByText(/^Kedaipal admin stores aren't billed/),
-		).toBeTruthy();
-		expect(container.textContent).not.toMatch(/Pay your invoice/);
-		expect(screen.queryByText("Top up credits")).toBeNull();
+		expect(container.textContent).toBe("");
+		const card = render(
+			<CreditMeter
+				variant="card"
+				retailer={retailer({ status: "past_due" })}
+			/>,
+		);
+		expect(card.container.textContent).toBe("");
 	});
 
 	it("a Founding Member on Pro wears the 300 badge", () => {

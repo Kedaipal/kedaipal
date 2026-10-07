@@ -74,8 +74,9 @@ export function creditRefreshLabel(
  * it does right now — the lock, a store that's never locked, a trial, an
  * unpaid / paused / ended plan (bought credits never stand in for a plan:
  * they're kept, and work again once it's active), or a custom allowance.
- * Exemptions come before the subscription status: a Kedaipal admin's store
- * sits in `trialing` or `past_due` and must never be told to pay.
+ * The exemption comes before the subscription status: a sponsored store sits
+ * in whatever status it had and must never be told to pay. (An admin's own
+ * store reaches none of this — it is unmetered and has no meter at all.)
  */
 export function creditStateLine(args: {
 	locked: boolean;
@@ -94,8 +95,6 @@ export function creditStateLine(args: {
 		return args.total < 0
 			? `Accepting and updating orders and editing products are paused. The ${orders(-args.total)} owed come off your next pack or your next monthly credits.`
 			: "Accepting and updating orders and editing products are paused until you add credits.";
-	if (args.exempt === "admin_store")
-		return "Kedaipal admin stores aren't billed — credits refresh every month and the store never locks. This is here so you can see your volume.";
 	if (args.exempt === "sponsored")
 		return "Sponsored stores are never locked — this is here so you can see your volume.";
 	if (args.regime === "trial")

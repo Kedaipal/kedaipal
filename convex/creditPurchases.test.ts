@@ -453,7 +453,7 @@ describe("createTopUp — opening a checkout", () => {
 		const t = setup();
 		installFetch();
 		await makeStore(t, { userId: ADMIN, status: "trialing" });
-		await expect(buy(t, ADMIN)).rejects.toThrow(/admin stores aren't billed/);
+		await expect(buy(t, ADMIN)).rejects.toThrow(/admin stores aren't metered/);
 		const options = await as(t, ADMIN).query(api.creditPurchases.topUpOptions, {});
 		expect(options?.refusal).toBe("admin_store");
 	});
