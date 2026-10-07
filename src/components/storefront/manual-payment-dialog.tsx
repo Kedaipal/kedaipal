@@ -162,6 +162,10 @@ export function ManualPaymentDialog({
 	 * the file is kept so Retry is one tap, and Replace is always available.
 	 */
 	async function uploadProof(file: File) {
+		// The thumbnail this replaces is already off screen, so its blob can go
+		// now rather than waiting for the next SUCCESS — a failed replacement
+		// used to hold the old one for the life of the page (PR #342 review).
+		revokePreview();
 		setProof({ status: "uploading", name: file.name });
 		setServerError(null);
 		const fail = (message: string) =>
@@ -212,19 +216,29 @@ export function ManualPaymentDialog({
 	const trimmedRef = reference.trim();
 	const uploading = proof.status === "uploading";
 	const proofReady = proof.status === "ready";
+	// A screenshot the buyer PICKED and that failed to upload holds the submit,
+	// whether or not the order already has a proof. Without this the resubmit
+	// path let them tap Update with a failed attachment sitting in the form and
+	// believe the new screenshot went through, while the seller kept the old one
+	// — the "they don't have what I sent" failure this whole change exists to
+	// end. It also split one gesture into two behaviours: the identical failure
+	// already blocked a FIRST claim, via `needsProof`.
+	const uploadFailed = proof.status === "failed";
 	// First claim: nothing goes without a screenshot. Resubmit on an order the
 	// seller can already verify: a reference on its own is a legitimate fix, but
 	// an empty resubmit that changes nothing isn't worth a row of history.
 	const needsProof = !hasExistingProof && !proofReady;
 	const nothingToSend =
 		hasExistingProof && !proofReady && trimmedRef.length === 0;
-	const canSubmit = !submitting && !uploading && !needsProof && !nothingToSend;
+	const canSubmit =
+		!submitting && !uploading && !uploadFailed && !needsProof && !nothingToSend;
 	// Said BESIDE the disabled button rather than after a tap — and suppressed
 	// while the attachment tile is already carrying the message (its spinner, or
 	// its failure + Retry), so the buyer only ever reads one instruction.
-	const blockedReason =
-		uploading || proof.status === "failed"
-			? null
+	const blockedReason = uploading
+		? null
+		: uploadFailed
+			? copy.fixUpload
 			: needsProof
 				? copy.needProof
 				: nothingToSend
@@ -485,14 +499,32 @@ export function ManualPaymentDialog({
 										<p role="alert" className="text-sm text-destructive">
 											{proof.message}
 										</p>
-										<button
-											type="button"
-											onClick={() => void uploadProof(proof.file)}
-											className="flex h-11 items-center gap-1.5 text-sm font-semibold text-destructive underline-offset-2 hover:underline"
-										>
-											<RotateCcw className="size-4" />
-											{copy.proofRetry}
-										</button>
+										<div className="flex items-center gap-4">
+											<button
+												type="button"
+												onClick={() => void uploadProof(proof.file)}
+												className="flex h-11 items-center gap-1.5 text-sm font-semibold text-destructive underline-offset-2 hover:underline"
+											>
+												<RotateCcw className="size-4" />
+												{copy.proofRetry}
+											</button>
+											{/* Give up on this screenshot. On a first claim that
+											    returns to "attach one to continue" (plus the
+											    message-the-store way out); on a resubmit it frees
+											    them to send the reference alone. */}
+											<button
+												type="button"
+												onClick={() => {
+													setProof({ status: "empty" });
+													if (fileInputRef.current) {
+														fileInputRef.current.value = "";
+													}
+												}}
+												className="flex h-11 items-center text-sm font-medium text-muted-foreground underline-offset-2 hover:underline"
+											>
+												{copy.proofDiscard}
+											</button>
+										</div>
 									</div>
 								) : null}
 

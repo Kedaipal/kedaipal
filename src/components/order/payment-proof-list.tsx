@@ -33,10 +33,17 @@ export type PaymentProofEntry = FunctionReturnType<
 export function PaymentProofList({
 	proofs,
 	tone,
+	claimedAt,
 }: {
 	/** `undefined` while loading. */
 	proofs: readonly PaymentProofEntry[] | undefined;
 	tone: "claimed" | "received";
+	/** `orders.paymentClaimedAt`, used ONLY when there are no submissions to
+	 * speak for themselves — a legacy bare "I've paid" with nothing attached.
+	 * It cannot reintroduce the two-sources-disagree bug this component was
+	 * consolidated to fix, because in that branch there is no submission to
+	 * disagree with. */
+	claimedAt?: number;
 }) {
 	if (proofs === undefined) return <ProofSkeleton tone={tone} />;
 
@@ -44,12 +51,25 @@ export function PaymentProofList({
 	if (!current) {
 		// Received with no claim = the seller marked it paid themselves (cash at
 		// the counter, a transfer they spotted) — there's nothing the buyer sent.
-		return tone === "claimed" ? (
-			<p className="text-sm text-amber-900/90 dark:text-amber-200/90">
-				No screenshot attached. Cross-check the amount and reference in your
-				bank app.
-			</p>
-		) : null;
+		if (tone !== "claimed") return null;
+		return (
+			<div className="flex flex-col gap-1">
+				<p className="text-sm text-amber-900/90 dark:text-amber-200/90">
+					No screenshot attached. Cross-check the amount and reference in your
+					bank app.
+				</p>
+				{/* WHEN they said it still decides what the seller does next: a
+				    transfer claimed five minutes ago may not have landed yet, one
+				    claimed three days ago wants chasing. The amber card used to
+				    carry this as its own row; keep it rather than lose it with the
+				    rows that moved in here (PR #342 review). */}
+				{claimedAt !== undefined ? (
+					<p className="text-xs text-amber-900/70 dark:text-amber-200/70">
+						Submitted {formatOrderTimestamp(claimedAt)}
+					</p>
+				) : null}
+			</div>
+		);
 	}
 	const others = proofs.filter((p) => !p.isCurrent);
 

@@ -82,6 +82,7 @@ export interface ManualPaymentCopy {
 	proofAttached: string;
 	proofReplace: string;
 	proofRetry: string;
+	proofDiscard: string;
 	proofHint: string;
 	proofOnFile: string;
 	proofPreviewAlt: string;
@@ -95,6 +96,7 @@ export interface ManualPaymentCopy {
 	submitUpdate: string;
 	submitting: string;
 	needProof: string;
+	fixUpload: string;
 	needChange: string;
 	rejectMessage: (reason: ImageRejectReason) => string;
 	uploadFailed: string;
@@ -148,6 +150,10 @@ export function manualPaymentCopy(
 		proofAttached: ms ? "Dilampirkan" : "Attached",
 		proofReplace: ms ? "Tukar" : "Replace",
 		proofRetry: ms ? "Cuba lagi" : "Retry",
+		// The way out of a failed attachment. Without it, holding the submit
+		// while a failure sits in the form would strand a buyer who just wants
+		// to send their reference and give up on the new screenshot.
+		proofDiscard: ms ? "Buang" : "Remove",
 		proofHint: ms ? "PNG atau JPG, sehingga 5 MB." : "PNG or JPG, up to 5 MB.",
 		// Shown instead of the required marker on a resubmit: the seller can
 		// already verify this order, so the buyer isn't being asked again.
@@ -183,6 +189,9 @@ export function manualPaymentCopy(
 		needProof: ms
 			? "Lampirkan tangkapan skrin pembayaran anda untuk teruskan."
 			: "Attach your payment screenshot to continue.",
+		fixUpload: ms
+			? "Tangkapan skrin itu tak berjaya dimuat naik — cuba lagi atau buang."
+			: "That screenshot didn't upload — retry it or remove it.",
 		needChange: ms
 			? "Lampirkan tangkapan skrin baharu atau tambah nombor rujukan untuk kemas kini."
 			: "Attach a new screenshot or add a reference number to update.",

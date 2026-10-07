@@ -140,6 +140,22 @@ describe("PaymentProofList — received card", () => {
 		).toBeNull();
 	});
 
+	it("keeps WHEN a bare claim was made, even with nothing to show", () => {
+		// A legacy "I've paid" with no reference and no screenshot. Five minutes
+		// ago may just not have landed yet; three days ago wants chasing.
+		render(
+			<PaymentProofList
+				proofs={[]}
+				tone="claimed"
+				claimedAt={Date.UTC(2026, 9, 3, 6, 14)}
+			/>,
+		);
+		expect(
+			screen.getByText(/No screenshot attached\. Cross-check the amount/),
+		).toBeTruthy();
+		expect(screen.getByText(/^Submitted /)).toBeTruthy();
+	});
+
 	it("renders nothing when the buyer never sent anything", () => {
 		const { container } = render(
 			<PaymentProofList proofs={[]} tone="received" />,

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ManualPaymentDialog } from "./manual-payment-dialog";
 
@@ -128,6 +128,76 @@ describe("ManualPaymentDialog — a resubmit on a verified order", () => {
 				"Attach a new screenshot or add a reference number to update.",
 			),
 		).toBeTruthy();
+	});
+});
+
+describe("ManualPaymentDialog — a screenshot that failed to upload", () => {
+	/** Pick a file and let `prepareImageUpload` refuse it (not an image). */
+	async function pickBadFile() {
+		const input = document.getElementById("payment-proof") as HTMLInputElement;
+		const file = new File(["nope"], "notes.txt", { type: "text/plain" });
+		Object.defineProperty(input, "files", { value: [file], writable: true });
+		fireEvent.change(input);
+		await screen.findByText(/isn't an image/);
+	}
+
+	it("holds the submit on a RESUBMIT, not just on a first claim", async () => {
+		// The asymmetry this fixes: the identical failure already blocked a first
+		// claim via the missing-proof rule, but a resubmit let the buyer tap
+		// Update believing the new screenshot went through while the seller kept
+		// the old one.
+		open({ hasExistingClaim: true, hasExistingProof: true });
+		fireEvent.change(screen.getByPlaceholderText(/TXN20260429/), {
+			target: { value: "MBB-123" },
+		});
+		expect(screen.getByRole("button", { name: "Update" })).toHaveProperty(
+			"disabled",
+			false,
+		);
+
+		await pickBadFile();
+
+		expect(screen.getByRole("button", { name: "Update" })).toHaveProperty(
+			"disabled",
+			true,
+		);
+		expect(
+			screen.getByText(
+				"That screenshot didn't upload — retry it or remove it.",
+			),
+		).toBeTruthy();
+	});
+
+	it("offers a way out, so the held submit can never strand anyone", async () => {
+		open({ hasExistingClaim: true, hasExistingProof: true });
+		fireEvent.change(screen.getByPlaceholderText(/TXN20260429/), {
+			target: { value: "MBB-123" },
+		});
+		await pickBadFile();
+
+		fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+
+		// Freed to send the reference alone — the seller still has the screenshot.
+		expect(screen.getByRole("button", { name: "Update" })).toHaveProperty(
+			"disabled",
+			false,
+		);
+	});
+
+	it("still refuses a first claim after the failure is removed", async () => {
+		open();
+		await pickBadFile();
+		fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+
+		expect(screen.getByRole("button", { name: "I've paid" })).toHaveProperty(
+			"disabled",
+			true,
+		);
+		expect(
+			screen.getByText("Attach your payment screenshot to continue."),
+		).toBeTruthy();
+		// And the way out of the requirement itself is back.
+		expect(screen.getByText(/Can't attach one\?/)).toBeTruthy();
 	});
 });
 

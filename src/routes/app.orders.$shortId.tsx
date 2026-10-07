@@ -1252,7 +1252,11 @@ function OrderDetailRoute() {
 					    belongs to. A buyer who resubmits a corrected reference left
 					    this card showing one number and the paid card another, with
 					    nothing saying which went with the receipt on screen. */}
-					<PaymentProofList proofs={paymentProofs} tone="claimed" />
+					<PaymentProofList
+						proofs={paymentProofs}
+						tone="claimed"
+						claimedAt={order.paymentClaimedAt}
+					/>
 
 					<div className="flex flex-col gap-2">
 						<Button
