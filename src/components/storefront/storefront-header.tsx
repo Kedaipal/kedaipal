@@ -197,7 +197,9 @@ export function StorefrontHeader({
 			    the sky while the logo hugged the floor — centring keeps the whole
 			    identity reading as one block. gap-2 rhythm inside the column: the
 			    mock's ~6px stack read cramped (Zaki, 28 Sep). */}
-			<div className={`flex items-center gap-3.5 ${hasCover ? "relative" : ""}`}>
+			<div
+				className={`flex items-center gap-3.5 ${hasCover ? "relative" : ""}`}
+			>
 				<StoreLogoTile
 					storeName={retailer.storeName}
 					logoUrl={retailer.logoUrl}

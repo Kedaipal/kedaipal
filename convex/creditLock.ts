@@ -53,6 +53,7 @@ import {
 	creditLockExempt,
 	creditUnlockRoute,
 	sellerRefundsLeft,
+	storeIsMetered,
 } from "./lib/credits";
 import { usagePeriodKey } from "./lib/usagePeriod";
 
@@ -102,14 +103,13 @@ export async function resolveCreditLock(
 	// is told and what the server refuses come from this answer. Turning it on
 	// is this line, not a sweep.
 	if (!CREDIT_LOCK_ENABLED) return open;
-	if (
-		creditLockExempt({
-			status,
-			comped: sub?.comped === true,
-			ownerIsAdmin: storeOwnerIsAdmin(retailer),
-		})
-	)
+	// An admin's own store is UNMETERED (z8r3fdp4er): it holds no balance, so
+	// there is nothing to be at zero. `projectedCredits` below would answer
+	// null and reach the same `open`, but a lock resolver should say where it
+	// fails open, not make the reader follow three hops to find out.
+	if (!storeIsMetered({ ownerIsAdmin: storeOwnerIsAdmin(retailer) }))
 		return open;
+	if (creditLockExempt({ status, comped: sub?.comped === true })) return open;
 	const account = await loadCreditAccount(ctx, retailer._id);
 	if (!account) return open;
 	const projected = await projectedCredits(ctx, retailer._id, account, now);

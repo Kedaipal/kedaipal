@@ -534,31 +534,40 @@ function SellerSheetBody({
 							className="flex-row items-baseline gap-2"
 						/>
 					</Row>
-					{seller.credits ? (
-						<Row label="This month">
-							<Plain>
-								{periodLabel(seller.credits.periodKey)}
-								<Muted> · {seller.credits.periodGrant} granted</Muted>
-							</Plain>
-						</Row>
+					{/* An UNMETERED store (z8r3fdp4er) stops at the balance line, which
+					    says it is not metered. The three rows below read the CACHED
+					    account, which such a store may still carry from before it was
+					    unmetered — printing "Oct 2026 · 200 granted" under "not
+					    metered" tells an admin about a grant that never landed. */}
+					{credits.metered ? (
+						<>
+							{seller.credits ? (
+								<Row label="This month">
+									<Plain>
+										{periodLabel(seller.credits.periodKey)}
+										<Muted> · {seller.credits.periodGrant} granted</Muted>
+									</Plain>
+								</Row>
+							) : null}
+							<Row label="Out of credits">
+								{credits.outSince !== undefined ? (
+									<Plain>
+										Since {formatShortDate(credits.outSince)}
+										<Muted> · {describeDays(credits.outSince, now)}</Muted>
+									</Plain>
+								) : (
+									<Plain muted>{credits.out ? "Yes" : "No"}</Plain>
+								)}
+							</Row>
+							<Row label="Custom grant">
+								{credits.customGrant !== undefined ? (
+									<Plain>{credits.customGrant} a month</Plain>
+								) : (
+									<Plain muted>None — the plan's grant</Plain>
+								)}
+							</Row>
+						</>
 					) : null}
-					<Row label="Out of credits">
-						{credits.outSince !== undefined ? (
-							<Plain>
-								Since {formatShortDate(credits.outSince)}
-								<Muted> · {describeDays(credits.outSince, now)}</Muted>
-							</Plain>
-						) : (
-							<Plain muted>{credits.out ? "Yes" : "No"}</Plain>
-						)}
-					</Row>
-					<Row label="Custom grant">
-						{credits.customGrant !== undefined ? (
-							<Plain>{credits.customGrant} a month</Plain>
-						) : (
-							<Plain muted>None — the plan's grant</Plain>
-						)}
-					</Row>
 					<div className="pt-2">
 						<Button
 							ref={ledgerButtonRef}

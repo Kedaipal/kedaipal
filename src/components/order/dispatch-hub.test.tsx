@@ -86,7 +86,9 @@ describe("when both providers are armed", () => {
 		fireEvent.click(screen.getByRole("tab", { name: /lalamove rider/i }));
 		expect(container.textContent).toContain("LALAMOVE-CARD");
 		expect(container.textContent).not.toContain("DELYVA-CARD");
-		expect(window.localStorage.getItem("kp:dispatch-provider")).toBe("lalamove");
+		expect(window.localStorage.getItem("kp:dispatch-provider")).toBe(
+			"lalamove",
+		);
 	});
 
 	it("a live LALAMOVE booking fronts its card regardless of preference", () => {
@@ -130,7 +132,10 @@ describe("a tab is only offered for a provider that renders", () => {
 	});
 
 	it("a disabled provider with a lingering JOB still gets its tab", () => {
-		state.delyva = delyva({ bookingEnabled: false, job: { status: "completed" } });
+		state.delyva = delyva({
+			bookingEnabled: false,
+			job: { status: "completed" },
+		});
 		render(<DispatchHub order={order} />);
 		expect(screen.getByRole("tab", { name: /delyva courier/i })).toBeTruthy();
 	});
@@ -141,7 +146,10 @@ describe("a tab is only offered for a provider that renders", () => {
 	// offer the tab anyway, opening onto nothing.
 	it("no tabs on a closed order where only one provider has history", () => {
 		const delivered = { ...order, status: "delivered" } as Doc<"orders">;
-		state.delyva = delyva({ job: { status: "canceled" }, blockReason: "bad_status" });
+		state.delyva = delyva({
+			job: { status: "canceled" },
+			blockReason: "bad_status",
+		});
 		const { container } = render(<DispatchHub order={delivered} />);
 		expect(screen.queryByRole("tab", { name: /lalamove rider/i })).toBeNull();
 		expect(container.textContent).toContain("DELYVA-CARD");

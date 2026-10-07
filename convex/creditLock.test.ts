@@ -435,15 +435,29 @@ describe("the seller lock at zero credits", () => {
 		});
 	});
 
-	test("comped and admin-owned stores are metered but never locked", async () => {
+	test("a comped store is metered but never locked", async () => {
 		const t = setup();
 		const comped = await store(t, { status: "active", plan: "starter", comped: true });
 		await setBalance(t, comped.retailerId, -10);
 		await t.withIdentity({ subject: OWNER }).mutation(api.products.archive, {
 			productId: comped.productId,
 		});
+	});
+
+	test("an admin's own store has no balance to lock on (z8r3fdp4er)", async () => {
+		// Unmetered: there is no account to drive to zero — `setBalance` can't
+		// even be used on it, because the adjust lever refuses an unmetered
+		// store. The seller write just works.
+		const t = setup();
 		const own = await store(t, { status: "trialing", plan: "pro" }, ADMIN);
-		await setBalance(t, own.retailerId, -10);
+		expect(
+			await t.run((ctx) =>
+				ctx.db
+					.query("creditAccounts")
+					.withIndex("by_retailer", (q) => q.eq("retailerId", own.retailerId))
+					.first(),
+			),
+		).toBeNull();
 		await t.withIdentity({ subject: ADMIN }).mutation(api.products.archive, {
 			productId: own.productId,
 		});

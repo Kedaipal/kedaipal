@@ -13,6 +13,9 @@ permissions:
 
 jobs:
   gate:
+    # NOTE: this name is the required status check in the `PR gate` ruleset
+    # (branch protection on main + staging). Renaming it silently blocks every
+    # merge waiting on a check that no longer reports — change the ruleset first.
     name: Typecheck, lint & test
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -38,9 +41,15 @@ jobs:
         run: npx @inlang/paraglide-js compile --project ./project.inlang --outdir ./src/paraglide
 
       # Kept as separate steps so the Actions UI shows which gate failed.
-      # `pnpm gate` runs the same three locally — keep them in sync.
-      - name: Lint
-        run: pnpm lint
+      # `pnpm gate` runs the same four locally — keep them in sync.
+      #
+      # `biome check`, not `biome lint`: lint alone ignores formatting and
+      # import order, so drift accumulated unseen twice (9 files cleaned in
+      # PR #70, 66 by Oct 2026). `check` is a superset of `lint` — it adds
+      # the formatter and organizeImports — and warnings still don't fail,
+      # so the only new red is genuine drift. Fix: `biome check --write <paths>`.
+      - name: Lint & format
+        run: pnpm check
 
       - name: Typecheck
         run: pnpm typecheck

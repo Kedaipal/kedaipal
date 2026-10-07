@@ -25,7 +25,9 @@ describe("OrderTotal", () => {
 	});
 
 	test("a booking deposit is NAMED, and the headline stays what the buyer paid", () => {
-		render(<OrderTotal total={11_000} securityDeposit={2_000} currency="MYR" />);
+		render(
+			<OrderTotal total={11_000} securityDeposit={2_000} currency="MYR" />,
+		);
 		// The bold figure must remain the transacted amount: it has to match the
 		// receipt, the CSV Total column and the money that actually moved.
 		expect(screen.getByText(money("RM 110\\.00"))).toBeTruthy();
@@ -44,7 +46,9 @@ describe("OrderTotal", () => {
 	});
 
 	test("an SG store states both figures in its own currency", () => {
-		render(<OrderTotal total={11_000} securityDeposit={2_000} currency="SGD" />);
+		render(
+			<OrderTotal total={11_000} securityDeposit={2_000} currency="SGD" />,
+		);
 		expect(screen.getByText(money("S\\$ 110\\.00"))).toBeTruthy();
 		expect(
 			screen.getByText(money("incl\\. S\\$ 20\\.00 refundable deposit")),

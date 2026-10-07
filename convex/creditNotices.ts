@@ -42,6 +42,7 @@ import {
 	type CreditNoticeKind,
 	type CreditUnlockRoute,
 	creditLockExempt,
+	storeIsMetered,
 	creditUnlockRoute,
 	dueCreditNotice,
 	lowCreditLine,
@@ -91,15 +92,18 @@ const EMAIL_KEY: Record<CreditNoticeKind, CreditEmailKey> = {
 	unlocked: "unlocked",
 };
 
-/** Whether a store is metered but never locked (and so never nudged). */
+/** Whether a store is never nudged about its balance: one that is metered but
+ * never locked (sponsored), or one credits don't apply to at all (an admin's
+ * own store — unmetered, so there is no balance to nudge about). */
 function exempt(
 	retailer: Doc<"retailers">,
 	sub: Doc<"subscriptions"> | null,
 ): boolean {
+	if (!storeIsMetered({ ownerIsAdmin: storeOwnerIsAdmin(retailer) }))
+		return true;
 	return creditLockExempt({
 		status: sub?.status ?? null,
 		comped: sub?.comped === true,
-		ownerIsAdmin: storeOwnerIsAdmin(retailer),
 	});
 }
 

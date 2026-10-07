@@ -49,6 +49,9 @@ const TONE_BAR: Record<CreditTone, string> = {
  * (`full`, with the two balances, the rules and the top-up). Reads
  * `credits.getBalance`, gated on the Credits permission — a teammate without
  * it sees nothing here (the lock itself still reaches them via the banner).
+ * Null ALSO means the store is unmetered (an admin's own store, z8r3fdp4er),
+ * which is how both meters disappear from it: one read answers "does this
+ * store have credits at all?" and every credit surface follows that answer.
  *
  * The two balances are always shown apart (Zaki, 1 Oct 2026): MONTHLY credits
  * are used first and reset on the 1st; BOUGHT credits are used next and carry
@@ -105,8 +108,8 @@ export function CreditMeter({
 			: null;
 
 	// Top-up opens T2's pack picker: hidden where packs aren't sold AND for a
-	// store that can never be locked (an admin's own store, a sponsored one —
-	// nothing to top up; the state line says so), disabled WITH the reason
+	// store that can never be locked (a sponsored one — nothing to top up; the
+	// state line says so), disabled WITH the reason
 	// everywhere else — T2's own sentences (`topUpOptions`), so the meter and
 	// the picker can never disagree about who may buy.
 	const showTopUp = topUp?.available === true && exempt === null;
