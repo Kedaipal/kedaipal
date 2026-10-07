@@ -33,10 +33,17 @@ export type PaymentProofEntry = FunctionReturnType<
 export function PaymentProofList({
 	proofs,
 	tone,
+	claimedAt,
 }: {
 	/** `undefined` while loading. */
 	proofs: readonly PaymentProofEntry[] | undefined;
 	tone: "claimed" | "received";
+	/** `orders.paymentClaimedAt`, used ONLY when there are no submissions to
+	 * speak for themselves — a legacy bare "I've paid" with nothing attached.
+	 * It cannot reintroduce the two-sources-disagree bug this component was
+	 * consolidated to fix, because in that branch there is no submission to
+	 * disagree with. */
+	claimedAt?: number;
 }) {
 	if (proofs === undefined) return <ProofSkeleton tone={tone} />;
 
@@ -44,12 +51,25 @@ export function PaymentProofList({
 	if (!current) {
 		// Received with no claim = the seller marked it paid themselves (cash at
 		// the counter, a transfer they spotted) — there's nothing the buyer sent.
-		return tone === "claimed" ? (
-			<p className="text-sm text-amber-900/90 dark:text-amber-200/90">
-				No screenshot attached. Cross-check the amount and reference in your
-				bank app.
-			</p>
-		) : null;
+		if (tone !== "claimed") return null;
+		return (
+			<div className="flex flex-col gap-1">
+				<p className="text-sm text-amber-900/90 dark:text-amber-200/90">
+					No screenshot attached. Cross-check the amount and reference in your
+					bank app.
+				</p>
+				{/* WHEN they said it still decides what the seller does next: a
+				    transfer claimed five minutes ago may not have landed yet, one
+				    claimed three days ago wants chasing. The amber card used to
+				    carry this as its own row; keep it rather than lose it with the
+				    rows that moved in here (PR #342 review). */}
+				{claimedAt !== undefined ? (
+					<p className="text-xs text-amber-900/70 dark:text-amber-200/70">
+						Submitted {formatOrderTimestamp(claimedAt)}
+					</p>
+				) : null}
+			</div>
+		);
 	}
 	const others = proofs.filter((p) => !p.isCurrent);
 
@@ -65,33 +85,113 @@ export function PaymentProofList({
 	);
 }
 
-/** The amber card's lead: today's full-width preview, unchanged in spirit. */
-function LargeProof({ entry }: { entry: PaymentProofEntry }) {
-	if (!entry.hasProof) {
-		return (
-			<p className="text-sm text-amber-900/90 dark:text-amber-200/90">
-				No screenshot attached. Cross-check the amount and reference in your
-				bank app.
-			</p>
-		);
-	}
-	if (!entry.url) return <ProofGoneNote />;
+/**
+ * The reference the seller reconciles by, for THIS submission: its own, else
+ * the one another submission carried (`borrowedLeadReference`).
+ *
+ * One author, called by both cards. The amber card used to read the ORDER's
+ * `paymentReference` instead — the LATEST value — so an order whose newest
+ * submission was a reference-only fix showed one number while the seller was
+ * deciding and a different one on the green card afterwards. Same order, two
+ * reference numbers, and the seller tallying against a bank statement had no
+ * way to tell which belonged to the screenshot in front of them. Found by
+ * driving it (z8r3fdnpxf).
+ */
+export function leadReference(entry: PaymentProofEntry): string | null {
+	// The borrow WINS over the lead's own: the server only ever borrows a
+	// reference that is NEWER than the lead's, and a later reference is a
+	// correction or an addition, never a regression. See `borrowedLeadReference`.
+	return entry.borrowedReference?.reference ?? entry.reference ?? null;
+}
+
+/** Where a borrowed reference came from — never presented as this submission's. */
+function BorrowedFrom({ entry }: { entry: PaymentProofEntry }) {
+	if (!entry.borrowedReference) return null;
 	return (
-		<a
-			href={entry.url}
-			target="_blank"
-			rel="noopener noreferrer"
-			aria-label="Open payment screenshot full size"
-			className="block overflow-hidden rounded-xl border border-amber-200 bg-background dark:border-amber-800"
-		>
-			<AppImage
-				src={entry.url}
-				alt="Payment receipt"
-				aspect="h-64 w-full"
-				objectFit="contain"
-				sensitive
-			/>
-		</a>
+		<span className="text-xs text-muted-foreground">
+			From their submission on{" "}
+			{formatOrderTimestamp(entry.borrowedReference.submittedAt)}
+		</span>
+	);
+}
+
+/**
+ * What the buyer sent, as the amber card states it while the seller decides.
+ * Reads the SUBMISSION the screenshot belongs to, not the order — see
+ * `leadReference`.
+ */
+function ClaimFacts({ entry }: { entry: PaymentProofEntry }) {
+	const reference = leadReference(entry);
+	return (
+		<div className="flex flex-col gap-2 rounded-xl bg-background/80 p-3">
+			<div className="flex items-start justify-between gap-3">
+				<span className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
+					Reference
+				</span>
+				{reference ? (
+					<div className="flex min-w-0 items-start gap-1">
+						{/* Wrap, never truncate: a half-shown reference can't be matched
+						    against a bank statement. */}
+						<span className="min-w-0 wrap-anywhere text-right font-mono text-sm font-medium">
+							{reference}
+						</span>
+						<CopyButton
+							value={reference}
+							ariaLabel="Copy customer's payment reference"
+							successMessage="Reference copied"
+							className="-my-2 -mr-2"
+							labelClassName="sr-only"
+						/>
+					</div>
+				) : (
+					<em className="text-right text-sm font-normal text-muted-foreground">
+						Not provided
+					</em>
+				)}
+			</div>
+			<div className="flex items-start justify-between gap-3">
+				<span className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
+					Submitted
+				</span>
+				<span className="text-right text-sm">
+					{formatOrderTimestamp(entry.submittedAt)}
+				</span>
+			</div>
+			<BorrowedFrom entry={entry} />
+		</div>
+	);
+}
+
+/** The amber card's lead: the submission's own facts, then its full-width preview. */
+function LargeProof({ entry }: { entry: PaymentProofEntry }) {
+	return (
+		<div className="flex flex-col gap-2">
+			<ClaimFacts entry={entry} />
+			{!entry.hasProof ? (
+				<p className="text-sm text-amber-900/90 dark:text-amber-200/90">
+					No screenshot attached. Cross-check the amount and reference in your
+					bank app.
+				</p>
+			) : !entry.url ? (
+				<ProofGoneNote />
+			) : (
+				<a
+					href={entry.url}
+					target="_blank"
+					rel="noopener noreferrer"
+					aria-label="Open payment screenshot full size"
+					className="block overflow-hidden rounded-xl border border-amber-200 bg-background dark:border-amber-800"
+				>
+					<AppImage
+						src={entry.url}
+						alt="Payment receipt"
+						aspect="h-64 w-full"
+						objectFit="contain"
+						sensitive
+					/>
+				</a>
+			)}
+		</div>
 	);
 }
 
@@ -99,7 +199,7 @@ function LargeProof({ entry }: { entry: PaymentProofEntry }) {
 function CompactProof({ entry }: { entry: PaymentProofEntry }) {
 	// A screenshot-only resubmit leads without a reference of its own; the
 	// seller still gets the one the buyer sent earlier, labelled as such.
-	const reference = entry.reference ?? entry.borrowedReference?.reference;
+	const reference = leadReference(entry);
 	return (
 		<div className="flex flex-col gap-2">
 			<p className="text-xs font-semibold uppercase tracking-widest text-emerald-800 dark:text-emerald-300">
@@ -128,12 +228,7 @@ function CompactProof({ entry }: { entry: PaymentProofEntry }) {
 					) : (
 						<em className="text-sm text-muted-foreground">Not provided</em>
 					)}
-					{!entry.reference && entry.borrowedReference ? (
-						<span className="text-xs text-muted-foreground">
-							From their submission on{" "}
-							{formatOrderTimestamp(entry.borrowedReference.submittedAt)}
-						</span>
-					) : null}
+					<BorrowedFrom entry={entry} />
 					<span className="text-xs text-muted-foreground">
 						Sent {formatOrderTimestamp(entry.submittedAt)}
 					</span>

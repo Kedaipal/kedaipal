@@ -23,6 +23,17 @@ function setup() {
 }
 
 /**
+ * A stored screenshot for a payment claim. Proof is mandatory on a first claim
+ * (z8r3fdnpxf), so a test about something else — the mockup gate, the token
+ * capability, a delivery charge — still has to attach one for the claim to land.
+ */
+async function storeProof(t: ReturnType<typeof setup>): Promise<string> {
+	return await t.run((ctx) =>
+		ctx.storage.store(new Blob(["png"], { type: "image/png" })),
+	);
+}
+
+/**
  * Resolve an order's high-entropy tracking token (the buyer capability) from its
  * human shortId, for buyer-facing endpoint calls. Returns a guaranteed-
  * non-matching sentinel when no order exists, so negative-path tests (unknown
@@ -1326,6 +1337,7 @@ describe("orders", () => {
 			await t.mutation(api.orders.claimPayment, {
 				token: await tk(t, shortId),
 				reference: "TXN-12345",
+				proofStorageId: await storeProof(t),
 			});
 
 			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
@@ -1377,7 +1389,11 @@ describe("orders", () => {
 			expect(order?.paymentStatus).toBe("claimed");
 		});
 
-		test("claimPayment without reference or proof still succeeds", async () => {
+		// Proof is MANDATORY (z8r3fdnpxf) — these three pin the whole rule.
+		// A claim with nothing attached used to succeed, which is how sellers
+		// ended up with "they say they paid" and went back to WhatsApp to ask
+		// for the receipt.
+		test("claimPayment rejects a first claim with no proof", async () => {
 			const t = setup();
 			const retailer = await seedRetailer(t, USER_A);
 			const productId = await seedProduct(t, USER_A, retailer._id);
@@ -1389,10 +1405,79 @@ describe("orders", () => {
 				customer,
 				deliveryAddress: validAddress,
 			});
-			await t.mutation(api.orders.claimPayment, { token: await tk(t, shortId) });
+
+			await expect(
+				t.mutation(api.orders.claimPayment, { token: await tk(t, shortId) }),
+			).rejects.toThrow(/Attach a screenshot/);
+
+			// Nothing moved: a refused claim must not leave the order looking
+			// claimed, or the seller gets the card without the image anyway.
 			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
-			expect(order?.paymentStatus).toBe("claimed");
-			expect(order?.paymentReference).toBeUndefined();
+			expect(order?.paymentStatus ?? "unpaid").toBe("unpaid");
+			expect(order?.paymentClaimedAt).toBeUndefined();
+		});
+
+		test("a reference is not a substitute for the screenshot", async () => {
+			const t = setup();
+			const retailer = await seedRetailer(t, USER_A);
+			const productId = await seedProduct(t, USER_A, retailer._id);
+			const { shortId } = await t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+			});
+
+			await expect(
+				t.mutation(api.orders.claimPayment, {
+					token: await tk(t, shortId),
+					reference: "TXN-12345",
+				}),
+			).rejects.toThrow(/Attach a screenshot/);
+			// An empty-string proof is no proof either — the guard reads the
+			// TRIMMED value, not merely "was the arg present".
+			await expect(
+				t.mutation(api.orders.claimPayment, {
+					token: await tk(t, shortId),
+					proofStorageId: "   ",
+				}),
+			).rejects.toThrow(/Attach a screenshot/);
+		});
+
+		// The rule is on the ORDER, not on each submission: the forgotten-reference
+		// fix must not demand the same image a second time.
+		test("a reference-only resubmit is allowed once a screenshot is on file", async () => {
+			const t = setup();
+			const retailer = await seedRetailer(t, USER_A);
+			const productId = await seedProduct(t, USER_A, retailer._id);
+			const { shortId } = await t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+			});
+			const png = await t.run((ctx) =>
+				ctx.storage.store(new Blob(["png"], { type: "image/png" })),
+			);
+			await t.mutation(api.orders.claimPayment, {
+				token: await tk(t, shortId),
+				proofStorageId: png,
+			});
+
+			await t.mutation(api.orders.claimPayment, {
+				token: await tk(t, shortId),
+				reference: "TXN-FORGOT",
+			});
+
+			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+			expect(order?.paymentReference).toBe("TXN-FORGOT");
+			// The screenshot survives the reference-only resubmit — it is still the
+			// thing the seller verifies against.
+			expect(order?.hasPaymentProof).toBe(true);
 		});
 
 		test("claimPayment is idempotent — second claim overwrites reference", async () => {
@@ -1411,7 +1496,10 @@ describe("orders", () => {
 			await t.mutation(api.orders.claimPayment, {
 				token: await tk(t, shortId),
 				reference: "first",
+				proofStorageId: await storeProof(t),
 			});
+			// The screenshot is already on file, so the fix is reference-only —
+			// exactly the resubmit the mandatory-proof rule has to keep legal.
 			await t.mutation(api.orders.claimPayment, {
 				token: await tk(t, shortId),
 				reference: "second",
@@ -2199,7 +2287,10 @@ describe("orders — mockup approval", () => {
 		});
 		await t.mutation(api.orders.approveMockup, { token: await tk(t, shortId) });
 
-		await t.mutation(api.orders.claimPayment, { token: await tk(t, shortId) });
+		await t.mutation(api.orders.claimPayment, {
+			token: await tk(t, shortId),
+			proofStorageId: await storeProof(t),
+		});
 		expect((await t.query(api.orders.get, { token: await tk(t, shortId) }))?.paymentStatus).toBe(
 			"claimed",
 		);
@@ -4523,7 +4614,10 @@ describe("tracking-link capability (shortId hardening)", () => {
 		const { shortId, trackingToken } = await makeOrder(t);
 		// The shortId is no longer a valid arg for the buyer mutation — only the
 		// token is accepted, and confirming via the token works.
-		await t.mutation(api.orders.claimPayment, { token: trackingToken });
+		await t.mutation(api.orders.claimPayment, {
+			token: trackingToken,
+			proofStorageId: await storeProof(t),
+		});
 		const order = await t.query(api.orders.get, { token: trackingToken });
 		expect(order?.paymentStatus).toBe("claimed");
 		// A guessed shortId-shaped token doesn't resolve to the order.
@@ -5267,7 +5361,10 @@ describe("orders — delivery charge", () => {
 			shortId: created.shortId,
 		});
 		expect(sellerOrder?.deliverySnapshot).toEqual({ fee: 2500, mode: "manual" });
-		await t.mutation(api.orders.claimPayment, { token });
+		await t.mutation(api.orders.claimPayment, {
+			token,
+			proofStorageId: await storeProof(t),
+		});
 		order = await t.query(api.orders.get, { token });
 		expect(order?.paymentStatus).toBe("claimed");
 	});
@@ -5296,7 +5393,10 @@ describe("orders — delivery charge", () => {
 		expect(order?.total).toBe(12000);
 
 		// Buyer claims → the charge is frozen against further edits.
-		await t.mutation(api.orders.claimPayment, { token });
+		await t.mutation(api.orders.claimPayment, {
+			token,
+			proofStorageId: await storeProof(t),
+		});
 		await expect(
 			asUser.mutation(api.orders.setDeliveryFee, { orderId, fee: 900 }),
 		).rejects.toThrow(/already in motion/);
