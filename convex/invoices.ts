@@ -22,6 +22,14 @@ import {
 	requireRetailerAccess,
 	resolveMyRetailerFor,
 } from "./lib/auth";
+import { ADMIN_STORE_LIST_LIMIT } from "./lib/adminDirectory";
+import { contractForAdmin } from "./lib/enterprise";
+import {
+	autoRenewAfterReplace,
+	invoiceReplaceRefusal,
+	type ReplaceableOrigin,
+	replacementKeepsAutoCharge,
+} from "./lib/invoiceReplace";
 import { isUnclaimed } from "./lib/unclaimedStore";
 import {
 	type AdminAutoChargeState,
@@ -733,6 +741,12 @@ export const issueInvoice = mutation({
 		// Optional override; normally the system sets it (issue date + grace) so the
 		// admin doesn't pick a date. The actual paid CYCLE starts at mark-paid.
 		dueDate: v.optional(v.number()),
+		// Correct a bill that was issued at the wrong tier (z8r3fdpm2p): void
+		// THIS pending invoice and issue the new one in the same transaction,
+		// so the store is never left without a bill in between. Must be the
+		// store's current pending invoice — a stale id is refused rather than
+		// voiding whatever is open now.
+		replacePendingId: v.optional(v.id("invoices")),
 	},
 	handler: async (
 		ctx,
@@ -743,8 +757,14 @@ export const issueInvoice = mutation({
 			founding,
 			currency: currencyArg,
 			dueDate: dueDateArg,
+			replacePendingId,
 		},
-	): Promise<{ invoiceId: Id<"invoices"> }> => {
+	): Promise<{
+		invoiceId: Id<"invoices">;
+		/** The bill this one replaced, if any — named back so the toast can
+		 * say what was voided. */
+		replaced: { invoiceNumber: string; keptAutoCharge: boolean } | null;
+	}> => {
 		await requireAdmin(ctx);
 		if (plan !== "enterprise" && !isPlanSelectable(plan))
 			throw new ConvexError("That plan isn't available to bill yet.");
@@ -785,16 +805,50 @@ export const issueInvoice = mutation({
 		const cycle =
 			plan === "enterprise" ? sub.billingCycle : billingCycle;
 
-		// Prevent accidental duplicate pendings — settle/void the existing one first.
+		// One open bill at a time. Without `replacePendingId` this is still a
+		// flat refusal — two live Pay-now links on one store is a double
+		// payment waiting to happen. WITH it, the admin has said which bill
+		// they mean to correct, and the void and the reissue happen in this
+		// one transaction so the store is never briefly unbilled.
 		const existingPending = await ctx.db
 			.query("invoices")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 			.filter((q) => q.eq(q.field("status"), "pending"))
 			.first();
-		if (existingPending)
+		if (existingPending && replacePendingId === undefined)
 			throw new ConvexError(
-				`This retailer already has a pending invoice (${existingPending.invoiceNumber}). Settle or void it first.`,
+				`This retailer already has a pending invoice (${existingPending.invoiceNumber}). Replace it from here, or settle/void it first.`,
 			);
+		// A stale id means the page was looking at a bill that has since been
+		// settled, voided or replaced. Never fall through to voiding whatever
+		// is open NOW — that is someone else's bill.
+		if (replacePendingId !== undefined && existingPending?._id !== replacePendingId)
+			throw new ConvexError(
+				existingPending
+					? `That bill is no longer the open one — ${existingPending.invoiceNumber} is. Reload and try again.`
+					: "That bill is no longer pending — it was settled or voided. Reload and try again.",
+			);
+
+		const replaced = existingPending ?? null;
+		if (replaced) {
+			const refusal = invoiceReplaceRefusal({
+				invoiceNumber: replaced.invoiceNumber,
+				kind: replaced.kind ?? "plan",
+				chargeInFlight: sub.autoRenew?.lastChargeAttemptAt !== undefined,
+			});
+			if (refusal) throw new ConvexError(refusal);
+			await ctx.db.patch(replaced._id, {
+				status: "void",
+				voidedAt: Date.now(),
+				voidedBy: await requireAdmin(ctx),
+				voidReason: `Replaced by a ${plan} invoice`,
+			});
+			// NOT `voidInvoice`: that one re-arms a scheduled plan change when
+			// it cancels a renewal, so the next daily run bills the change
+			// again. Here the admin IS issuing the replacement, right now and
+			// at a tier they chose — re-arming would queue a second change
+			// behind the one being created.
+		}
 
 		const invoiceId = await insertPendingInvoice(ctx, {
 			retailerId,
@@ -806,7 +860,51 @@ export const issueInvoice = mutation({
 			dueDate: dueDateArg,
 			origin: "admin",
 		});
-		return { invoiceId };
+
+		let keptAutoCharge = false;
+		if (replaced) {
+			const fresh = await ctx.db.get(invoiceId);
+			keptAutoCharge = replacementKeepsAutoCharge({
+				replacedOrigin: (replaced.origin ?? "admin") as ReplaceableOrigin,
+				replacedTotal: replaced.total,
+				replacedCurrency: replaced.currency,
+				newTotal: fresh?.total ?? Number.POSITIVE_INFINITY,
+				newCurrency: fresh?.currency ?? currency,
+				autoChargeIdle: autoChargeIdle(sub.autoRenew),
+			});
+			// The dead bill's dunning dies with it — ALWAYS, and before any
+			// decision about charging. A standing `nextRetryAt` is not inert:
+			// the daily sweep fires on it alone and charges whatever invoice is
+			// open, checking no origin. Leaving it would have the sweep charge
+			// this replacement two days later even when the rule above just
+			// answered "no" (found in review, 7 Oct). No `updatedAt`: on a
+			// past_due row that field is the lock-flip moment the founder
+			// report reads.
+			if (replaced.origin === "auto_renewal" && sub.autoRenew)
+				await ctx.db.patch(sub._id, {
+					autoRenew: autoRenewAfterReplace(sub.autoRenew),
+				});
+			if (keptAutoCharge)
+				await ctx.scheduler.runAfter(
+					0,
+					internal.subscriptionPayments.chargeDueRenewal,
+					{ invoiceId },
+				);
+			// The voided bill's Pay-now link dies with it — a payment against a
+			// void bill can only ever become a refund conversation.
+			if (replaced.gatewayRequestId)
+				await ctx.scheduler.runAfter(
+					0,
+					internal.subscriptionPayments.expireInvoiceRequest,
+					{ requestId: replaced.gatewayRequestId },
+				);
+		}
+		return {
+			invoiceId,
+			replaced: replaced
+				? { invoiceNumber: replaced.invoiceNumber, keptAutoCharge }
+				: null,
+		};
 	},
 });
 
@@ -1256,6 +1354,20 @@ export const voidInvoice = mutation({
 					pendingPlanChange: { plan: invoice.plan, requestedAt: now },
 				});
 		}
+		// Whatever the tier, a voided RENEWAL takes its dunning with it. The
+		// ladder (0 / +2d / +5d) counts failures against one bill, and that
+		// bill no longer exists: carried over, the next renewal starts
+		// mid-ladder and locks the seller sooner than its own grace promises,
+		// and `nextRetryAt` makes the daily sweep charge whatever bill is open
+		// next. Same rule the replace path applies (z8r3fdpm2p) — one helper,
+		// so a void by either door leaves the same state.
+		if (invoice.origin === "auto_renewal") {
+			const sub = await ctx.db.get(invoice.subscriptionId);
+			if (sub?.autoRenew)
+				await ctx.db.patch(sub._id, {
+					autoRenew: autoRenewAfterReplace(sub.autoRenew),
+				});
+		}
 		// A voided invoice's Pay-now link must die with it — a payment on a void
 		// bill can only ever become a refund conversation.
 		if (invoice.gatewayRequestId) {
@@ -1580,8 +1692,8 @@ export const listRetailersForAdmin = query({
 	args: {},
 	handler: async (
 		ctx,
-	): Promise<
-		Array<{
+	): Promise<{
+		stores: Array<{
 			_id: Id<"retailers">;
 			storeName: string;
 			slug: string;
@@ -1593,7 +1705,28 @@ export const listRetailersForAdmin = query({
 			 * on founding pricing. The issue form must not auto-apply (let alone
 			 * lock in) a discount the daily pass has taken away. */
 			foundingBenefitsRevoked: boolean;
-			hasPending: boolean;
+			/** The store's open bill, if any. Carried in full (not just a
+			 * boolean) so the form can offer to REPLACE it at another tier
+			 * and say, before the tap, whether their saved card will follow
+			 * (z8r3fdpm2p). Every field comes off a doc this query already
+			 * reads: no extra work. */
+			pending?: {
+				_id: Id<"invoices">;
+				invoiceNumber: string;
+				total: number;
+				currency: string;
+				plan: Plan;
+				kind: "plan" | "hold";
+				origin: ReplaceableOrigin;
+			};
+			/** The store's auto-charge is armed AND nothing is in flight — the
+			 * two conditions a replacement needs to inherit the charge. */
+			autoChargeIdle: boolean;
+			/** A charge attempt is standing with no recorded outcome. Carried
+			 * SEPARATELY from `autoChargeIdle`, which is also false for a
+			 * detached method and a stranded charge — deriving the refusal
+			 * from it refused two states the server allows. */
+			chargeInFlight: boolean;
 			/** On the house (z8r3fdeub2) — the picker labels these so nobody
 			 * drafts a bill `issueInvoice` will refuse anyway. */
 			comped: boolean;
@@ -1607,18 +1740,37 @@ export const listRetailersForAdmin = query({
 			 * same lie the Sponsored pill told before `tierPill` learned about
 			 * unclaimed stores. */
 			unclaimed: boolean;
-			/** The Enterprise contract's billing facts (T6) — an Enterprise
-			 * invoice bills exactly these, so the form shows them instead of
-			 * letting the admin pick a cycle or currency. */
-			enterprise?: {
-				baseFeeMinor: number;
-				currency: BillingCurrency;
-				billingCycle: BillingCycle;
-			};
-		}>
-	> => {
+			/** The Enterprise contract (T6) — the WHOLE deal, minus `setBy`
+			 * (a raw Clerk subject; the audit log answers "who"), plus the term
+			 * it bills on, which lives on the subscription row rather than in
+			 * the contract. An Enterprise invoice bills exactly this, so the
+			 * form shows it instead of letting the admin pick a cycle or
+			 * currency — and the negotiated numbers ride along so the billing
+			 * page can offer a live contract as the first draft of the next
+			 * one, the same way the sellers directory does (z8r3fdpm2p). It
+			 * all comes off a subscription doc already in hand: no extra read.
+			 */
+			enterprise?: Omit<
+				NonNullable<Doc<"subscriptions">["enterprise"]>,
+				"setBy"
+			> & { billingCycle: BillingCycle };
+		}>;
+		/** The book is longer than this list. Ordered newest first, so what
+		 * is missing is the OLDEST stores — the picker says so and names the
+		 * way to them, rather than silently not containing a store an admin
+		 * knows exists (z8r3fdpm2p review). */
+		capped: boolean;
+	}> => {
 		await requireAdmin(ctx);
-		const retailers = await ctx.db.query("retailers").order("desc").take(200);
+		// +1 to learn whether the book runs past the cap, the same way
+		// `BUSINESS_REPORT_ORDER_SCAN_CAP` does. The extra row is never
+		// returned.
+		const scanned = await ctx.db
+			.query("retailers")
+			.order("desc")
+			.take(ADMIN_STORE_LIST_LIMIT + 1);
+		const capped = scanned.length > ADMIN_STORE_LIST_LIMIT;
+		const retailers = scanned.slice(0, ADMIN_STORE_LIST_LIMIT);
 		const rows = [];
 		for (const r of retailers) {
 			const sub = await ctx.db
@@ -1639,20 +1791,31 @@ export const listRetailersForAdmin = query({
 				isFoundingMember: r.isFoundingMember === true,
 				foundingIntent: sub?.foundingIntent === true,
 				foundingBenefitsRevoked: r.foundingBenefitsRevokedAt !== undefined,
-				hasPending: pending !== null,
+				pending: pending
+					? {
+							_id: pending._id,
+							invoiceNumber: pending.invoiceNumber,
+							total: pending.total,
+							currency: pending.currency,
+							plan: pending.plan ?? sub?.plan ?? "pro",
+							kind: pending.kind ?? "plan",
+							origin: (pending.origin ?? "admin") as ReplaceableOrigin,
+						}
+					: undefined,
+				autoChargeIdle: autoChargeIdle(sub?.autoRenew),
+				chargeInFlight: sub?.autoRenew?.lastChargeAttemptAt !== undefined,
 				comped: sub?.comped === true,
 				unclaimed: isUnclaimed(r),
 				compLabel: sub?.comp?.label,
 				enterprise: sub?.enterprise
 					? {
-							baseFeeMinor: sub.enterprise.baseFeeMinor,
-							currency: sub.enterprise.currency,
+							...contractForAdmin(sub.enterprise),
 							billingCycle: sub.billingCycle,
 						}
 					: undefined,
 			});
 		}
-		return rows;
+		return { stores: rows, capped };
 	},
 });
 

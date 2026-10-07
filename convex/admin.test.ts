@@ -260,7 +260,7 @@ describe("admin console reads", () => {
 	test("listSellersForAdmin lists sellers for an admin and rejects others", async () => {
 		const t = setup();
 		await seedRetailer(t, OWNER);
-		const rows = await t
+		const { sellers: rows } = await t
 			.withIdentity({ subject: ADMIN })
 			.query(api.admin.listSellersForAdmin, {});
 		expect(rows.some((r) => r.ownerUserId === OWNER)).toBe(true);
@@ -278,7 +278,7 @@ describe("admin console reads", () => {
 				await t
 					.withIdentity({ subject: ADMIN })
 					.query(api.admin.listSellersForAdmin, {})
-			).find((r) => r.ownerUserId === OWNER);
+			).sellers.find((r) => r.ownerUserId === OWNER);
 		// A new store opens with the trial allowance at signup (T1).
 		const fresh = await find();
 		expect(fresh?.credits).toMatchObject({ plan: 200, purchased: 0 });
@@ -323,7 +323,7 @@ describe("admin console reads", () => {
 		await t.run(async (ctx) => {
 			await ctx.db.patch(retailer._id, { signupSource: "spotlight-thg" });
 		});
-		const rows = await t
+		const { sellers: rows } = await t
 			.withIdentity({ subject: ADMIN })
 			.query(api.admin.listSellersForAdmin, {});
 		expect(rows.find((r) => r.ownerUserId === OWNER)?.signupSource).toBe(
@@ -344,7 +344,7 @@ describe("admin console reads", () => {
 			// now, which is why the row stores an id and not the slug.
 			await ctx.db.patch(referrer._id, { storeName: "Hermoolah (renamed)" });
 		});
-		const rows = await t
+		const { sellers: rows } = await t
 			.withIdentity({ subject: ADMIN })
 			.query(api.admin.listSellersForAdmin, {});
 		expect(rows.find((r) => r.ownerUserId === OWNER)?.signupReferrer).toEqual({
@@ -361,7 +361,7 @@ describe("admin console reads", () => {
 			await ctx.db.patch(retailer._id, { signupReferrerId: referrer._id });
 			await ctx.db.delete(referrer._id);
 		});
-		const rows = await t
+		const { sellers: rows } = await t
 			.withIdentity({ subject: ADMIN })
 			.query(api.admin.listSellersForAdmin, {});
 		expect(
@@ -373,7 +373,7 @@ describe("admin console reads", () => {
 		const t = setup();
 		await seedRetailer(t, OWNER);
 		await seedRetailer(t, ADMIN);
-		const rows = await t
+		const { sellers: rows } = await t
 			.withIdentity({ subject: ADMIN })
 			.query(api.admin.listSellersForAdmin, {});
 		// The seller's store is not admin-owned; the admin's own store is.
@@ -391,7 +391,7 @@ describe("admin console reads", () => {
 				notifyWaPhone: "60198765432",
 			});
 		});
-		const rows = await t
+		const { sellers: rows } = await t
 			.withIdentity({ subject: ADMIN })
 			.query(api.admin.listSellersForAdmin, {});
 		const mine = rows.find((r) => r.ownerUserId === OWNER);
@@ -422,7 +422,7 @@ describe("admin console reads", () => {
 		});
 		const pending = (
 			await admin.query(api.admin.listSellersForAdmin, {})
-		).find((r) => r.ownerUserId === OWNER);
+		).sellers.find((r) => r.ownerUserId === OWNER);
 		expect(pending?.pendingInvoice).toMatchObject({
 			hasPayNowLink: false,
 			currency: "MYR",
@@ -434,7 +434,7 @@ describe("admin console reads", () => {
 		await admin.mutation(api.admin.startActAsSession, { retailerId: retailer._id });
 		const paid = (
 			await admin.query(api.admin.listSellersForAdmin, {})
-		).find((r) => r.ownerUserId === OWNER);
+		).sellers.find((r) => r.ownerUserId === OWNER);
 		expect(paid?.pendingInvoice).toBeUndefined();
 		expect(paid?.lastPaidInvoice?.invoiceNumber).toBe(
 			pending?.pendingInvoice?.invoiceNumber,
@@ -638,7 +638,7 @@ describe("dev-only store purge", () => {
 				retailerId: retailer._id,
 			}),
 		).rejects.toThrow(/being purged/);
-		const rows = await admin.query(api.admin.listSellersForAdmin, {});
+		const { sellers: rows } = await admin.query(api.admin.listSellersForAdmin, {});
 		expect(rows.find((r) => r._id === retailer._id)?.purging).toBe(true);
 	});
 

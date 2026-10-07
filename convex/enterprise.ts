@@ -9,18 +9,124 @@
 
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
-import { mutation } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
+import { mutation, query } from "./_generated/server";
 import { ADMIN_CREDIT_LIMIT, writeGrantOverride } from "./credits";
 import { logAdminAction, requireAdmin } from "./lib/auth";
 import {
+	contractForAdmin,
 	type EnterpriseEntry,
 	enterpriseContractCaps,
 	enterpriseContractProblem,
 	enterpriseTermChangeBlocker,
 	isMoveOffContractBill,
 } from "./lib/enterprise";
+import type { BillingCurrency, BillingCycle } from "./lib/plans";
 import { renewalCurrency } from "./lib/plans";
+import { isUnclaimed } from "./lib/unclaimedStore";
 import { seatRows } from "./lib/seats";
+
+/**
+ * Everything the contract form needs about ONE store, as its own query.
+ *
+ * The form used to be reachable from a single place — the seller sheet, which
+ * already held a fat `AdminSellerRow` — so it simply read that row. It now
+ * also opens from Admin · Billing → Issue an invoice (z8r3fdpm2p), whose
+ * picker query is deliberately lean: two index reads per retailer over 200
+ * retailers. Teaching THAT query to carry seats and a billing currency would
+ * have cost ~600 extra index reads on every billing page view, to serve a
+ * sheet that is usually never opened. So the per-store facts are fetched per
+ * store, once one is picked.
+ *
+ * Returns the same shape the sellers directory already satisfies
+ * (`EnterpriseContractSubject`), so the form has ONE subject type and neither
+ * call site maps anything.
+ */
+export const getContractContext = query({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{
+		_id: Id<"retailers">;
+		storeName: string;
+		enterprise?: Omit<
+			NonNullable<Doc<"subscriptions">["enterprise"]>,
+			"setBy"
+		>;
+		billingCurrency: BillingCurrency;
+		billingCycle?: BillingCycle;
+		subscriptionStatus?: Doc<"subscriptions">["status"];
+		comped: boolean;
+		/** Nobody owns it yet. Carried separately from `comped` because an
+		 * unclaimed store is comped too (the `internal` setup comp), and the
+		 * form must name the handover rather than tell an admin to end a
+		 * sponsorship that is really scaffolding. */
+		unclaimed: boolean;
+		/** `active` counts PEOPLE WITH ACCESS — the owner plus active members —
+		 * exactly as the sellers directory counts them, because the form
+		 * derives teammates-in-use as `active - 1 + invited` and one shared
+		 * expression beats two conventions. An unclaimed store has no owner to
+		 * count. */
+		seats: { active: number; invited: number };
+		pendingInvoice?: {
+			invoiceNumber: string;
+			plan: Doc<"subscriptions">["plan"];
+			billingCycle: BillingCycle;
+		};
+	} | null> => {
+		await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) return null;
+		const sub = await ctx.db
+			.query("subscriptions")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.first();
+		const seats = await seatRows(ctx, retailerId);
+		const pending = await ctx.db
+			.query("invoices")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.order("desc")
+			.filter((q) => q.eq(q.field("status"), "pending"))
+			.first();
+		const paid = await ctx.db
+			.query("invoices")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.order("desc")
+			.filter((q) => q.eq(q.field("status"), "paid"))
+			.first();
+		return {
+			_id: retailer._id,
+			storeName: retailer.storeName,
+			enterprise: sub?.enterprise
+				? contractForAdmin(sub.enterprise)
+				: undefined,
+			// A NEW contract is frozen in the store's billing currency — the
+			// same answer `setContract` writes, from the same helper, so the
+			// label on the fee and the stored fee can never disagree.
+			billingCurrency: renewalCurrency({
+				lastPaidCurrency: paid?.currency,
+				country: retailer.country,
+			}),
+			billingCycle: sub?.billingCycle,
+			subscriptionStatus: sub?.status,
+			comped: sub?.comped === true,
+			unclaimed: isUnclaimed(retailer),
+			seats: {
+				active: (isUnclaimed(retailer) ? 0 : 1) + seats.active.length,
+				invited: seats.invited.length,
+			},
+			pendingInvoice: pending
+				? {
+						invoiceNumber: pending.invoiceNumber,
+						plan: pending.plan ?? sub?.plan ?? "pro",
+						billingCycle:
+							pending.billingCycle ?? sub?.billingCycle ?? "monthly",
+					}
+				: undefined,
+		};
+	},
+});
 
 export const setContract = mutation({
 	args: {
