@@ -19,6 +19,12 @@ import type { PublicDeliveryQuote } from "../../../convex/delivery";
 import { SG_STATE_LABEL } from "../../../convex/lib/address";
 import { parseBuyerWaPhone } from "../../../convex/lib/buyerPhone";
 import {
+	answerPrompt,
+	answersForSubmit,
+	type BuyerQuestion,
+	firstMissingRequired,
+} from "../../../convex/lib/buyerQuestions";
+import {
 	type ClosedDateRange,
 	closureOn,
 } from "../../../convex/lib/closedDates";
@@ -46,19 +52,17 @@ import {
 } from "../../../convex/lib/openingHours";
 import { type DialIso, isDialIso } from "../../../convex/lib/phoneDial";
 import { distinctPickupNotes } from "../../../convex/lib/pickupNote";
-import {
-	answerPrompt,
-	answersForSubmit,
-	type BuyerQuestion,
-	firstMissingRequired,
-} from "../../../convex/lib/buyerQuestions";
 import { slowestPrep } from "../../../convex/lib/prepFloor";
 import type { UseCart } from "../../hooks/useCart";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { readAttributionSource } from "../../hooks/useSourceAttribution";
 import { displayAddressState } from "../../lib/address-display";
 import { MASK_PII } from "../../lib/analytics-privacy";
-import { addDaysYmd, quickPickDays } from "../../lib/checkout-dates";
+import {
+	addDaysYmd,
+	quickPickDays,
+	windowHasUnpickableDay,
+} from "../../lib/checkout-dates";
 import {
 	asksForTime,
 	type FulfilmentKind,
@@ -792,6 +796,9 @@ export function CheckoutPage({
 	// forward so three real choices still show. Follows the LIVE method and
 	// pickup point, since those decide whether the step asks for a time.
 	const quickDays = quickPickDays(minYmd, maxYmd, todayYmd, 3, (ymd) =>
+		isDaySelectable(ymd, watchedSchedule),
+	);
+	const hasUnpickableDays = windowHasUnpickableDay(minYmd, maxYmd, (ymd) =>
 		isDaySelectable(ymd, watchedSchedule),
 	);
 	const watchedLat = useStore(form.store, (s) => s.values.address.latitude);
@@ -1934,6 +1941,17 @@ export function CheckoutPage({
 														min={minYmd}
 														max={maxYmd}
 														required
+														// The chips already honoured this; the picker
+														// itself could not, so a closed day was offered
+														// and then refused (z8r3fdm36y).
+														isDayDisabled={(ymd) =>
+															!isDaySelectable(ymd, watchedSchedule)
+														}
+														unavailableNote={
+															hasUnpickableDays
+																? "Greyed-out days aren't available — the store is closed, or there isn't enough time left to prepare this order."
+																: undefined
+														}
 														description={
 															// Custom carts: the date is the buyer's ASK — the
 															// seller settles the final date in the design

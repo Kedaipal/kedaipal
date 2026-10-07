@@ -184,6 +184,10 @@ export function ProductCard({
 						// These tiles are the bulk of a store home's payload — a
 						// phone pulls ~320px files here instead of 1200px originals.
 						sizes="(min-width: 1024px) 25vw, (min-width: 640px) 33vw, 50vw"
+						// Hairline, not raised: the card around this tile already
+						// carries `hover:shadow-md`, and a shadow per tile turns a
+						// 16-tile grid into mush.
+						frame="hairline"
 					/>
 				) : (
 					<div
@@ -345,12 +349,7 @@ export function ProductCard({
 								{isBooking ? "Book" : isEvent ? "RSVP" : "Options"}
 							</Button>
 						) : (
-							<Button
-								asChild
-								size="sm"
-								variant="outline"
-								className={CTA_CLASS}
-							>
+							<Button asChild size="sm" variant="outline" className={CTA_CLASS}>
 								<Link {...pageLink}>
 									{isBooking ? (
 										<CalendarRange className="size-4" aria-hidden />

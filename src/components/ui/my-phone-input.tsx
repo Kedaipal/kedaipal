@@ -39,23 +39,17 @@
  * See docs/phone-numbers.md.
  */
 
-import { ChevronDown } from "lucide-react";
 import { Button } from "#/components/ui/button";
+import { DialCountryPicker } from "#/components/ui/dial-country-picker";
 import { Input } from "#/components/ui/input";
 import { InputPrefixFrame } from "#/components/ui/input-prefix-frame";
-import {
-	type DialIso,
-	dialCodeLabel,
-	dialCountryName,
-	NEARBY_DIAL_COUNTRIES,
-} from "../../../convex/lib/buyerPhone";
+import type { DialIso } from "../../../convex/lib/buyerPhone";
 import {
 	COUNTRY_DIAL_CODE,
 	COUNTRY_LABELS,
 	type Country,
 	isCountry,
 } from "../../../convex/lib/country";
-import { DIAL_ROWS } from "../../../convex/lib/dialCodes";
 import { detectTypedDialCode } from "../../../convex/lib/phoneDial";
 
 /**
@@ -305,34 +299,21 @@ function codeArrived(typed: string, previous: string): boolean {
 	return typed.length - suffix >= 2;
 }
 
-/** Flag-sized ISO badge for the countries without an inline flag — same 28×14
- * footprint, so the plate doesn't change width as the pick changes. */
-function IsoBadge({ iso }: { iso: DialIso }) {
-	return (
-		<span
-			aria-hidden
-			className="inline-flex h-3.5 w-7 shrink-0 items-center justify-center rounded-[2px] bg-background font-semibold text-[9px] text-foreground leading-none tracking-wide ring-1 ring-black/10 dark:ring-white/15"
-		>
-			{iso}
-		</span>
-	);
-}
-
-function optionLabel(iso: DialIso): string {
-	return `${dialCountryName(iso)} (${dialCodeLabel(iso)})`;
-}
-
 /**
- * The buyer plate's contents: flag (or ISO badge) + dial code + chevron, with a
- * native `<select>` laid invisibly over the whole plate. Native on purpose —
- * the OS picker is the mobile-friendly, accessible, zero-dependency list
- * (iOS wheel, Android sheet, desktop type-ahead); it is not the searchable
- * combobox 86eyknr2r removed, and nothing ships but a table of dial codes.
+ * The buyer plate's contents: flag (or ISO badge) + dial code + chevron, over a
+ * SEARCHABLE picker (`DialCountryPicker`, z8r3fdm36y). The whole 44px plate is
+ * the tap target, exactly as it was when a native `<select>` lay invisibly over
+ * it — what changed is what opens.
  *
- * Order: the store's country, then its `Nearby` neighbours, then every country
- * A–Z (the neighbours repeat there so an alphabetical scroll never misses one).
- * The select never carries `aria-invalid`: the error belongs to the number, and
- * focus-on-error must land in the input, not on the picker.
+ * It had to change: the select carried **241 countries** and its only search
+ * was the OS type-ahead over the option text, so `+81` — the string the plate
+ * itself prints — matched nothing, and on a phone there was no search at all.
+ * The picker matches name, ISO and dial code, and still ships no new
+ * dependency and no flag-set barrel. See `dial-country-picker.tsx` for why it
+ * is one sheet at both breakpoints rather than a popover and a sheet.
+ *
+ * The control never carries `aria-invalid`: the error belongs to the number,
+ * and focus-on-error must land in the input, not on the picker.
  */
 export function BuyerPhonePrefix({
 	storeCountry,
@@ -345,64 +326,21 @@ export function BuyerPhonePrefix({
 	dialCountry: DialIso;
 	onDialCountryChange: (iso: DialIso) => void;
 	disabled?: boolean;
-	/** The select's accessible name — "your" on the buyer's own screens; the
+	/** The control's accessible name — "your" on the buyer's own screens; the
 	 * counter, where a cashier keys someone else's number, says "the buyer's". */
 	countryLabel?: string;
 }) {
-	const nearby = NEARBY_DIAL_COUNTRIES[storeCountry];
 	return (
-		<>
-			<select
-				aria-label={countryLabel}
-				value={dialCountry}
-				disabled={disabled}
-				onChange={(e) => onDialCountryChange(e.target.value as DialIso)}
-				// 16px so iOS Safari doesn't zoom on focus, even at opacity 0.
-				className="peer absolute inset-0 z-10 h-full w-full cursor-pointer appearance-none text-base opacity-0 disabled:cursor-not-allowed"
-			>
-				<option value={storeCountry}>{optionLabel(storeCountry)}</option>
-				<optgroup label="Nearby">
-					{nearby.map((iso) => (
-						<option key={iso} value={iso}>
-							{optionLabel(iso)}
-						</option>
-					))}
-				</optgroup>
-				<optgroup label="All countries">
-					{DIAL_ROWS.map((row) => (
-						<option key={row.iso} value={row.iso}>
-							{optionLabel(row.iso)}
-						</option>
-					))}
-				</optgroup>
-			</select>
-			{/* Hover wash for the whole plate — the select above is invisible, so
-			    this is what says "tap me" on desktop. */}
-			<span
-				aria-hidden
-				// …and the keyboard's: the select itself is invisible, so a Tab onto
-				// it must show on the plate, distinct from the input's focus ring.
-				className="pointer-events-none absolute inset-0 transition-colors peer-hover:bg-muted peer-focus-visible:bg-muted peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-focus-visible:ring-inset peer-disabled:bg-transparent"
-			/>
-			<span className="relative flex items-center gap-1.5">
-				{/* The select already announces the country; the flag is decoration
-				    here, hidden rather than read twice. */}
-				<span aria-hidden className="flex">
-					{isCountry(dialCountry) ? (
-						(() => {
-							const Flag = FLAG[dialCountry];
-							return <Flag title={COUNTRY_LABELS[dialCountry]} />;
-						})()
-					) : (
-						<IsoBadge iso={dialCountry} />
-					)}
-				</span>
-				<span className="text-base font-medium tabular-nums">
-					{dialCodeLabel(dialCountry)}
-				</span>
-				<ChevronDown aria-hidden className="-ml-0.5 size-4 shrink-0" />
-			</span>
-		</>
+		<DialCountryPicker
+			storeCountry={storeCountry}
+			value={dialCountry}
+			onChange={onDialCountryChange}
+			disabled={disabled}
+			label={countryLabel}
+			// Injected rather than imported there, so the picker pulls in no flag
+			// assets of its own and MY/SG stay the only two we ship.
+			flags={FLAG}
+		/>
 	);
 }
 

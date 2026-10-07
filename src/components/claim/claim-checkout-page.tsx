@@ -38,7 +38,11 @@ import type { ClaimPagePayload } from "../../../convex/orderClaims";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { displayAddressState } from "../../lib/address-display";
 import { MASK_PII } from "../../lib/analytics-privacy";
-import { addDaysYmd, quickPickDays } from "../../lib/checkout-dates";
+import {
+	addDaysYmd,
+	quickPickDays,
+	windowHasUnpickableDay,
+} from "../../lib/checkout-dates";
 import {
 	asksForTime,
 	type FulfilmentKind,
@@ -444,6 +448,9 @@ export function ClaimCheckoutPage({
 
 	// --- Delivery fee preview (same collapse as the storefront checkout) -----
 	const quickDays = quickPickDays(minYmd, maxYmd, todayYmd, 3, (ymd) =>
+		isDaySelectable(ymd, watchedSchedule),
+	);
+	const hasUnpickableDays = windowHasUnpickableDay(minYmd, maxYmd, (ymd) =>
 		isDaySelectable(ymd, watchedSchedule),
 	);
 	const watchedLat = useStore(form.store, (s) => s.values.address.latitude);
@@ -998,6 +1005,14 @@ export function ClaimCheckoutPage({
 										min={minYmd}
 										max={maxYmd}
 										required
+										isDayDisabled={(ymd) =>
+											!isDaySelectable(ymd, watchedSchedule)
+										}
+										unavailableNote={
+											hasUnpickableDays
+												? "Greyed-out days aren't available — the store is closed, or there isn't enough time left to prepare this order."
+												: undefined
+										}
 										description={
 											// The store's hours ride on the TIME field, never
 											// the date (pickup asks for a time whenever the

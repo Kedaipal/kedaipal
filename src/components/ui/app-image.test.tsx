@@ -604,3 +604,73 @@ describe("AppImage — reduced motion", () => {
 		);
 	});
 });
+
+describe("the photo frame (z8r3fdm36y)", () => {
+	/** The hairline overlay — the only `ring-inset` span in the wrapper. */
+	function frameIn(container: HTMLElement) {
+		return container.querySelector("span.ring-inset");
+	}
+
+	it("draws no frame unless asked", () => {
+		// A full-bleed storefront cover and a brand-mark SVG both read worse
+		// framed, so this is opt-in by meaning rather than a default.
+		const { container } = render(
+			<AppImage src="https://example.com/a.jpg" alt="A" />,
+		);
+		expect(frameIn(container)).toBeNull();
+	});
+
+	it("paints the hairline ABOVE the photo, not as a border on the box", () => {
+		// A product shot on a white background has no edge of its own. The
+		// overlay is why it works at the real call sites: the grid tile's image
+		// is `absolute inset-0` inside a parent with `overflow-hidden`, which
+		// clips an outward ring away, and an inset ring on the wrapper is painted
+		// beneath its own children — so the <img> covers it.
+		const { container } = render(
+			<AppImage src="https://example.com/a.jpg" alt="A" frame="hairline" />,
+		);
+		const overlay = frameIn(container);
+		expect(overlay).not.toBeNull();
+		const img = imgIn(container);
+		expect(img).not.toBeNull();
+		// After the image in DOM order is what puts it on top.
+		expect(
+			(img as HTMLImageElement).compareDocumentPosition(overlay as Node) &
+				Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		expect(overlay?.getAttribute("aria-hidden")).toBe("true");
+		expect(overlay?.className).toContain("pointer-events-none");
+		// Reads against an arbitrary photo in both themes.
+		expect(overlay?.className).toContain("ring-black/10");
+		expect(overlay?.className).toContain("dark:ring-white/15");
+	});
+
+	it("keeps the frame when the photo is missing or dead", () => {
+		// Otherwise a grid of half-loaded tiles loses its edges exactly when the
+		// page looks most broken.
+		const { container } = render(
+			<AppImage src={null} alt="A" frame="hairline" />,
+		);
+		expect(frameIn(container)).not.toBeNull();
+	});
+
+	it("only `raised` carries the lift — a card already owns its shadow", () => {
+		// A shadow per tile turns a 16-tile grid into mush, so the grid asks for
+		// `hairline` and the free-floating gallery asks for `raised`.
+		const hair = render(
+			<AppImage src="https://example.com/a.jpg" alt="A" frame="hairline" />,
+		);
+		expect(hair.container.firstElementChild?.className).not.toContain(
+			"shadow-",
+		);
+		cleanup();
+		const raised = render(
+			<AppImage src="https://example.com/a.jpg" alt="A" frame="raised" />,
+		);
+		expect(raised.container.firstElementChild?.className).toContain("shadow-");
+		// Dark mode drops it: a navy glow on a near-black surface is a smudge.
+		expect(raised.container.firstElementChild?.className).toContain(
+			"dark:shadow-none",
+		);
+	});
+});
