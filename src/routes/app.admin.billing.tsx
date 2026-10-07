@@ -1132,13 +1132,15 @@ export function IssueInvoiceForm() {
 									founding && p !== "pro" && p !== "enterprise"
 								}
 								onClick={() => setPlan(p)}
-								className={`flex min-h-11 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
+								className={`flex min-h-11 items-center justify-center gap-1 rounded-lg border px-1.5 text-sm font-semibold sm:gap-1.5 sm:px-2 capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
 									effectivePlan === p
 										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
 										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground"
 								}`}
 							>
-								{effectivePlan === p ? <Check className="size-3.5" /> : null}
+								{effectivePlan === p ? (
+									<Check className="size-3.5 shrink-0" />
+								) : null}
 								{p}
 							</button>
 						))}
@@ -1156,14 +1158,14 @@ export function IssueInvoiceForm() {
 								type="button"
 								disabled={billsContract}
 								onClick={() => setCycle(c)}
-								className={`flex min-h-11 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold capitalize transition-all disabled:cursor-not-allowed ${
+								className={`flex min-h-11 items-center justify-center gap-1 rounded-lg border px-1.5 text-sm font-semibold sm:gap-1.5 sm:px-2 capitalize transition-all disabled:cursor-not-allowed ${
 									!noContract && effectiveCycle === c
 										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
 										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground disabled:opacity-40"
 								}`}
 							>
 								{!noContract && effectiveCycle === c ? (
-									<Check className="size-3.5" />
+									<Check className="size-3.5 shrink-0" />
 								) : null}
 								{c}
 							</button>
@@ -1182,14 +1184,14 @@ export function IssueInvoiceForm() {
 								type="button"
 								disabled={billsContract}
 								onClick={() => setCurrency(cur)}
-								className={`flex min-h-11 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold transition-all disabled:cursor-not-allowed ${
+								className={`flex min-h-11 items-center justify-center gap-1 rounded-lg border px-1.5 text-sm font-semibold sm:gap-1.5 sm:px-2 transition-all disabled:cursor-not-allowed ${
 									!noContract && effectiveCurrency === cur
 										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
 										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground disabled:opacity-40"
 								}`}
 							>
 								{!noContract && effectiveCurrency === cur ? (
-									<Check className="size-3.5" />
+									<Check className="size-3.5 shrink-0" />
 								) : null}
 								{cur === "MYR" ? "RM (MYR)" : "S$ (SGD)"}
 							</button>

@@ -58,6 +58,11 @@ export const getContractContext = query({
 		billingCycle?: BillingCycle;
 		subscriptionStatus?: Doc<"subscriptions">["status"];
 		comped: boolean;
+		/** Nobody owns it yet. Carried separately from `comped` because an
+		 * unclaimed store is comped too (the `internal` setup comp), and the
+		 * form must name the handover rather than tell an admin to end a
+		 * sponsorship that is really scaffolding. */
+		unclaimed: boolean;
 		/** `active` counts PEOPLE WITH ACCESS — the owner plus active members —
 		 * exactly as the sellers directory counts them, because the form
 		 * derives teammates-in-use as `active - 1 + invited` and one shared
@@ -106,6 +111,7 @@ export const getContractContext = query({
 			billingCycle: sub?.billingCycle,
 			subscriptionStatus: sub?.status,
 			comped: sub?.comped === true,
+			unclaimed: isUnclaimed(retailer),
 			seats: {
 				active: (isUnclaimed(retailer) ? 0 : 1) + seats.active.length,
 				invited: seats.invited.length,

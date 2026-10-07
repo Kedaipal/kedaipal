@@ -65,6 +65,13 @@ export type EnterpriseContractSubject = {
 	billingCycle?: BillingCycle;
 	subscriptionStatus?: Doc<"subscriptions">["status"];
 	comped: boolean;
+	/** Nobody owns this store yet (a pre-built store mid-handover). It is ALSO
+	 * `comped` — the `internal` setup comp keeps it unbilled while an admin
+	 * builds it — so this MUST be read first: telling an admin to "end the
+	 * comp" here would have them tear down the scaffolding instead of
+	 * finishing the handover, which is the exact lie the billing card's
+	 * picker already refuses to tell (z8r3fdpm2p, found testing). */
+	unclaimed: boolean;
 	/** `active` counts PEOPLE WITH ACCESS — the owner plus active members —
 	 * so teammates-in-use is `active - 1 + invited`. One expression, below. */
 	seats: { active: number; invited: number };
@@ -175,18 +182,43 @@ export function EnterpriseContractForm({
 	// Which contract the form was started from, so the picker shows its own
 	// effect instead of snapping back to the placeholder.
 	const [startedFrom, setStartedFrom] = useState("");
+	// The currency of a template whose MONEY was deliberately not copied.
+	const [moneyNotCopied, setMoneyNotCopied] = useState<BillingCurrency | null>(
+		null,
+	);
 
-	/** Fill every negotiated number from another deal — the fee, the credits,
-	 * the overage, the allowances and the term. NOT the contact or the notes:
-	 * those belong to the other buyer, and carrying them across is how the
-	 * wrong name ends up on a contract. */
+	/** Fill the negotiated numbers from another deal — the credits, the block,
+	 * the allowances, and the money WHEN the two deals are priced in the same
+	 * currency.
+	 *
+	 * NOT the contact or the notes: those belong to the other buyer, and
+	 * carrying them across is how the wrong name ends up on a contract.
+	 *
+	 * And NOT the fee or the overage rate across a currency boundary. A
+	 * contract's currency is frozen, so copying an RM888 deal onto an SG store
+	 * would put 888 into a field that now means S$888 — a 4× price rise that
+	 * reads like a filled form rather than a mistake. The shape of a deal
+	 * (how many credits, how big a block, how many seats) is currency-free and
+	 * still the useful part; the two money fields stay empty and say why.
+	 * Converting is not the alternative — that would invent an FX rate nobody
+	 * negotiated. */
 	const startFrom = (retailerId: string) => {
 		setStartedFrom(retailerId);
 		const from = templates.find((t) => t.retailerId === retailerId)?.contract;
-		if (!from) return;
-		setFee(majorOf(from.baseFeeMinor));
+		if (!from) {
+			setMoneyNotCopied(null);
+			return;
+		}
+		const sameCurrency = from.currency === currency;
+		setMoneyNotCopied(sameCurrency ? null : from.currency);
+		if (sameCurrency) {
+			setFee(majorOf(from.baseFeeMinor));
+			setRate(majorOf(from.overageRateMinor));
+		} else {
+			setFee("");
+			setRate("");
+		}
 		setIncluded(String(from.includedCredits));
-		setRate(majorOf(from.overageRateMinor));
 		setBlock(String(from.blockSize));
 		setTeammates(from.teammates === undefined ? "" : String(from.teammates));
 		setBroadcasts(
@@ -218,20 +250,25 @@ export function EnterpriseContractForm({
 	const refusal =
 		subject.subscriptionStatus === undefined
 			? "This store has no subscription yet — it gets one when the owner claims it; attach the contract then."
-			: subject.comped
-				? "This store is comped — end the comp before putting it on a contract."
-				: subject.subscriptionStatus === "on_hold"
-					? "This store is on Off-Season Hold — resume it before putting it on a contract."
-					: enterpriseTermChangeBlocker({
-							pending: subject.pendingInvoice
-								? {
-										invoiceNumber: subject.pendingInvoice.invoiceNumber,
-										plan: subject.pendingInvoice.plan,
-										billingCycle: subject.pendingInvoice.billingCycle,
-									}
-								: undefined,
-							billingCycle: cycle,
-						});
+			: // Before `comped`, deliberately: an unclaimed store IS comped, and
+				// the honest reason it can't go on a contract is that there is
+				// nobody to agree one with — not that someone sponsored it.
+				subject.unclaimed
+				? "Nobody owns this store yet, and a contract is an agreement with a person. Hand it over first — the claim starts their 14-day Pro trial, and you can put them on a contract after that."
+				: subject.comped
+					? "This store is comped — end the comp before putting it on a contract."
+					: subject.subscriptionStatus === "on_hold"
+						? "This store is on Off-Season Hold — resume it before putting it on a contract."
+						: enterpriseTermChangeBlocker({
+								pending: subject.pendingInvoice
+									? {
+											invoiceNumber: subject.pendingInvoice.invoiceNumber,
+											plan: subject.pendingInvoice.plan,
+											billingCycle: subject.pendingInvoice.billingCycle,
+										}
+									: undefined,
+								billingCycle: cycle,
+							});
 	const blocked = refusal ?? problem;
 
 	async function save() {
@@ -310,6 +347,16 @@ export function EnterpriseContractForm({
 							</option>
 						))}
 					</select>
+					{moneyNotCopied ? (
+						<p className="text-xs font-medium text-amber-700 dark:text-amber-400">
+							{/* The SYMBOL, never the ISO code — the code is data and the
+							    reader wants the money (`currency-literals.test.ts`). */}
+							That deal is priced in {currencySymbol(moneyNotCopied)}, this one
+							in {currencySymbol(currency)} — so its credits and allowances were
+							copied and its fee and overage rate were not. Type those for this
+							deal; we don't convert currencies.
+						</p>
+					) : null}
 					<p className="text-xs text-muted-foreground">
 						Fills the numbers only — the contact and notes stay this deal's.
 						Nothing is saved until you press the button.

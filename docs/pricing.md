@@ -522,6 +522,25 @@ Three rules hold this together:
   would have **ended the contract**. `issueInvoice` already threw on `founding`
   with any plan but Pro, so the client now agrees with the server.
 
+Three things the hands-on test fixed that reading the diff did not (7 Oct):
+
+- **An UNCLAIMED store is told to hand it over, never to "end the comp."** A
+  pre-built store is comped (the `internal` setup comp) *and* unclaimed, so a
+  ladder that reads `comped` first told the admin to end a sponsorship that is
+  really scaffolding — contradicting the billing card two inches above, which
+  says the store runs unbilled on purpose until the vendor claims it. The
+  subject carries `unclaimed` and it is read **first**.
+- **A template never copies MONEY across a currency boundary.** A contract's
+  currency is frozen, so filling an RM888 deal into an SG store's form put 888
+  into a field that now means S$888 — a 4× price rise that reads like a filled
+  form. The credits, block and allowances are currency-free and still carry;
+  the fee and overage rate stay empty and say why. Converting is not the
+  alternative: that would invent an FX rate nobody negotiated.
+- **The tier tick must be `shrink-0`.** In the billing card's 3-up plan control
+  at 393px, "Enterprise" plus its tick overflowed its box, and flex resolved it
+  by squashing the **icon to zero width** — so the selected tier silently lost
+  its tick on a phone while the label ran edge to edge.
+
 ### Setting it — `enterprise.setContract`
 
 `enterprise.setContract` (admin-only, audited as `enterprise.setContract`) in

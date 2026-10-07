@@ -428,3 +428,82 @@ describe("EnterpriseContractPage — findings from the 2 Oct hands-on test", () 
 		).toMatch(/a higher credit number lands this month/);
 	});
 });
+
+describe("EnterpriseContractPage — findings from the 7 Oct hands-on test (z8r3fdpm2p)", () => {
+	it("an UNCLAIMED store is told to hand it over, never to end the comp", () => {
+		// A pre-built store is comped (the `internal` setup comp) AND unclaimed.
+		// Reading `comped` first told the admin to "end the comp" — tearing down
+		// the scaffolding instead of finishing the handover, and contradicting
+		// the billing card two inches above it, which says the store runs
+		// unbilled on purpose until the vendor claims it.
+		renderPage(
+			seller({
+				unclaimed: true,
+				comped: true,
+				comp: { kind: "internal", grantedAt: 0 },
+			}),
+		);
+		fillHsl();
+		expect(saveButton().disabled).toBe(true);
+		expect(screen.getByText(/Nobody owns this store yet/)).toBeTruthy();
+		expect(screen.queryByText(/end the comp/)).toBeNull();
+	});
+
+	it("still tells a genuinely SPONSORED store to end its comp", () => {
+		renderPage(
+			seller({
+				unclaimed: false,
+				comped: true,
+				comp: { kind: "sponsor", label: "Partner", grantedAt: 0 },
+			}),
+		);
+		fillHsl();
+		expect(saveButton().disabled).toBe(true);
+		expect(screen.getByText(/end the comp/)).toBeTruthy();
+	});
+
+	it("never copies a deal's MONEY across a currency boundary", () => {
+		// An RM888 deal filled into an SG store's form put 888 into a field that
+		// now means S$888 — a 4× price rise that reads like a filled form.
+		// Converting is not the alternative: that invents an FX rate nobody
+		// negotiated. The shape of the deal is currency-free and still carries.
+		renderPage(seller({ billingCurrency: "SGD", country: "SG" }), [
+			template({
+				currency: "MYR",
+				baseFeeMinor: 120_000,
+				overageRateMinor: 50,
+			}),
+		]);
+		fireEvent.change(screen.getByLabelText("Start from another contract"), {
+			target: { value: "r_other" },
+		});
+
+		expect(
+			(screen.getByLabelText(/Monthly fee/) as HTMLInputElement).value,
+		).toBe("");
+		expect(
+			(screen.getByLabelText(/Overage per order credit/) as HTMLInputElement)
+				.value,
+		).toBe("");
+		// …while the currency-free shape of the deal still carries.
+		expect(
+			(screen.getByLabelText("Order credits a month") as HTMLInputElement)
+				.value,
+		).toBe("2000");
+		expect((screen.getByLabelText("Teammates") as HTMLInputElement).value).toBe(
+			"8",
+		);
+		expect(screen.getByText(/priced in RM, this one in S\$/)).toBeTruthy();
+	});
+
+	it("copies the money when both deals are in the same currency", () => {
+		renderPage(seller(), [template({ currency: "MYR" })]);
+		fireEvent.change(screen.getByLabelText("Start from another contract"), {
+			target: { value: "r_other" },
+		});
+		expect(
+			(screen.getByLabelText(/Monthly fee/) as HTMLInputElement).value,
+		).toBe("1200");
+		expect(screen.queryByText(/we don't convert currencies/)).toBeNull();
+	});
+});
