@@ -764,13 +764,66 @@ describe("the unmetered purge (operator cleanup)", () => {
 
 		const applied = await t.mutation(
 			internal.migrations.purgeUnmeteredCreditData,
-			{ apply: true },
+			{ apply: true, retailerIds: dry.stores.map((s) => s.retailerId) },
 		);
 		expect(applied.applied).toBe(true);
 		expect(await account(t, admin.retailerId)).toBeNull();
 		// The seller's ledger is never in scope, whatever the flag says.
 		expect(await account(t, seller.retailerId)).not.toBeNull();
 		expect(await ledger(t, seller.retailerId)).not.toHaveLength(0);
+	});
+
+	test("deleting without naming the stores is refused", async () => {
+		// The unmetered check alone can't protect the dangerous direction of a
+		// mis-set ADMIN_USER_IDS — a seller's id wrongly added makes their
+		// store unmetered, and a purge keyed on the same answer would select
+		// it. Naming the ids forces the operator through the dry run.
+		const t = setup();
+		const admin = await signUp(t, ADMIN);
+		await t.run((ctx) =>
+			ctx.db.insert("creditAccounts", {
+				retailerId: admin.retailerId,
+				planBalance: 200,
+				purchasedBalance: 0,
+				periodKey: "2026-09",
+				periodGrant: 200,
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			}),
+		);
+		await expect(
+			t.mutation(internal.migrations.purgeUnmeteredCreditData, {
+				apply: true,
+			}),
+		).rejects.toThrow(/needs the stores named/);
+		expect(await account(t, admin.retailerId)).not.toBeNull();
+	});
+
+	test("a named id that isn't unmetered rolls the whole run back", async () => {
+		const t = setup();
+		const admin = await signUp(t, ADMIN);
+		const seller = await makeStore(t, { status: "active", plan: "pro" });
+		await t.run((ctx) =>
+			ctx.db.insert("creditAccounts", {
+				retailerId: admin.retailerId,
+				planBalance: 200,
+				purchasedBalance: 0,
+				periodKey: "2026-09",
+				periodGrant: 200,
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			}),
+		);
+		await expect(
+			t.mutation(internal.migrations.purgeUnmeteredCreditData, {
+				apply: true,
+				retailerIds: [admin.retailerId, seller.retailerId],
+			}),
+		).rejects.toThrow(/not unmetered stores/);
+		// All-or-nothing: the admin store's rows survive the rollback, so a
+		// fat-fingered id can never half-purge the book.
+		expect(await account(t, admin.retailerId)).not.toBeNull();
+		expect(await account(t, seller.retailerId)).not.toBeNull();
 	});
 });
 

@@ -618,23 +618,36 @@ export const backfillPaymentClaims = internalMutation({
  * every sweep and can never advance them. This removes them.
  *
  * DRY RUN BY DEFAULT. With no args it reports what it would delete and touches
- * nothing; only `{ apply: true }` deletes. It refuses any store that is not
- * admin-owned, so a mis-set `ADMIN_USER_IDS` can delete a paying seller's
- * ledger neither by accident nor by argument.
+ * nothing.
+ *
+ * DELETING NAMES ITS TARGETS. `apply: true` also requires `retailerIds`, and
+ * every id must be in the unmetered set this run found — so the operator has
+ * to have READ the dry run's store names before anything is deleted. The
+ * unmetered check alone is not a safety net against the dangerous direction
+ * of a mis-set `ADMIN_USER_IDS` (PR #343 review): an admin id MISSING is
+ * harmless here, but a paying seller's id wrongly ADDED makes their store
+ * unmetered, and a purge keyed only on "is it unmetered?" would select it by
+ * the very same mistake. Naming the ids puts a human between the env var and
+ * the delete.
  *
  * Capped per run so a long ledger can't hit the transaction limit: `done`
  * comes back false when a table filled its cap — run it again until true.
  *
  * Run:
  *   npx convex run migrations:purgeUnmeteredCreditData
- *   npx convex run migrations:purgeUnmeteredCreditData '{"apply":true}'
+ *   npx convex run migrations:purgeUnmeteredCreditData '{"apply":true,"retailerIds":["<id from the dry run>"]}'
  */
 const PURGE_CAP = 1000;
 export const purgeUnmeteredCreditData = internalMutation({
-	args: { apply: v.optional(v.boolean()) },
+	args: {
+		apply: v.optional(v.boolean()),
+		/** Required with `apply` — the stores to purge, as the dry run named
+		 * them. An id the run did not find unmetered is refused. */
+		retailerIds: v.optional(v.array(v.id("retailers"))),
+	},
 	handler: async (
 		ctx,
-		{ apply },
+		{ apply, retailerIds },
 	): Promise<{
 		applied: boolean;
 		/** False when a table filled `PURGE_CAP` — run it again. */
@@ -655,6 +668,12 @@ export const purgeUnmeteredCreditData = internalMutation({
 			ledger: number;
 		}> = [];
 		let done = true;
+		const named = new Set<string>(retailerIds ?? []);
+		if (apply === true && named.size === 0)
+			throw new Error(
+				"Deleting needs the stores named: run it with no args first, then pass the retailerIds it reports as { apply: true, retailerIds: [...] }.",
+			);
+		const purged = new Set<string>();
 		for await (const retailer of ctx.db.query("retailers")) {
 			if (storeIsMetered({ ownerIsAdmin: storeOwnerIsAdmin(retailer) }))
 				continue;
@@ -688,10 +707,20 @@ export const purgeUnmeteredCreditData = internalMutation({
 				lots: lots.length,
 				ledger: ledger.length,
 			});
-			if (apply !== true) continue;
+			if (apply !== true || !named.has(retailer._id)) continue;
+			purged.add(retailer._id);
 			for (const row of [...ledger, ...lots, ...accounts])
 				await ctx.db.delete(row._id);
 		}
+		// An id that named nothing is a typo, or a store this run does not
+		// consider unmetered. Throwing here ROLLS THE WHOLE MUTATION BACK —
+		// including the deletes above — so a run is all-or-nothing and a
+		// fat-fingered id can never half-purge the book.
+		const unmatched = [...named].filter((id) => !purged.has(id));
+		if (apply === true && unmatched.length > 0)
+			throw new Error(
+				`These ids are not unmetered stores with credit data in this run, so nothing was deleted: ${unmatched.join(", ")}`,
+			);
 		console.log("[credits] unmetered purge", {
 			applied: apply === true,
 			done,

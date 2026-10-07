@@ -258,6 +258,15 @@ describe("BillingTab credits (z8r3fdp4er)", () => {
 		render(<BillingTab retailer={retailer()} />);
 		expect(screen.getByText("Credit activity")).toBeTruthy();
 	});
+
+	it("renders while the balance is still loading, so it doesn't pop in", () => {
+		// `undefined` is the read in flight, not "no credits" — hiding on it
+		// too made every seller's card appear after load instead of showing
+		// the skeleton the card owns (PR #343 review).
+		mockQueries({ isAdmin: false, creditBalance: undefined });
+		render(<BillingTab retailer={retailer()} />);
+		expect(screen.getByText("Credit activity")).toBeTruthy();
+	});
 });
 
 describe("BillingTab support WhatsApp number", () => {

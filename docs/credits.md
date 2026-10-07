@@ -160,12 +160,23 @@ metered"** rather than its stale cached figures, and the credit-ledger drawer
 says the same instead of "This store no longer exists" (the same `null` view
 means both — `adminGetAccount` returns an `unmetered` flag to tell them apart).
 
-**Legacy rows** written while such a store was metered are inert, but they sit
-below the current usage period forever, so `internalRollPeriods` re-selects
-them on every sweep and can never advance them. Clear them with
-`migrations:purgeUnmeteredCreditData` — **dry run by default**, deleting only
-on `{"apply":true}`, and refusing any store that is not admin-owned so a
-mis-set `ADMIN_USER_IDS` can never wipe a paying seller's ledger.
+**Legacy rows** written while such a store was metered are inert — every
+reader asks `regimeFor` *before* touching the account, so the meter hides
+whether or not the rows exist — but they sit below the current usage period
+forever, so `internalRollPeriods` re-selects them on every sweep and can never
+advance them. Clearing them is hygiene, not a correctness fix.
+
+`migrations:purgeUnmeteredCreditData` is **dry run by default**. Deleting
+needs `{"apply":true,"retailerIds":[…]}`, naming the stores the dry run
+reported, and a named id the run does not find unmetered **throws, rolling the
+whole mutation back** — so a run is all-or-nothing.
+
+Why naming, rather than trusting the unmetered check (PR #343 review): the
+check protects the harmless direction of a mis-set `ADMIN_USER_IDS` (an admin
+id missing) and **not the dangerous one**. A paying seller's id wrongly ADDED
+makes their store unmetered, and a purge keyed on that same answer would
+select it by the very same mistake. The dry run's store names are the real
+safety net, so deleting is made to depend on having read them.
 
 ### Plan changes
 
