@@ -111,6 +111,7 @@ import type * as lib_orderBuckets from "../lib/orderBuckets.js";
 import type * as lib_orderClaims from "../lib/orderClaims.js";
 import type * as lib_orderCsv from "../lib/orderCsv.js";
 import type * as lib_orderDocument from "../lib/orderDocument.js";
+import type * as lib_orderGate from "../lib/orderGate.js";
 import type * as lib_orderInboxFilter from "../lib/orderInboxFilter.js";
 import type * as lib_orderStatus from "../lib/orderStatus.js";
 import type * as lib_payment from "../lib/payment.js";
@@ -287,6 +288,7 @@ declare const fullApi: ApiFromModules<{
   "lib/orderClaims": typeof lib_orderClaims;
   "lib/orderCsv": typeof lib_orderCsv;
   "lib/orderDocument": typeof lib_orderDocument;
+  "lib/orderGate": typeof lib_orderGate;
   "lib/orderInboxFilter": typeof lib_orderInboxFilter;
   "lib/orderStatus": typeof lib_orderStatus;
   "lib/payment": typeof lib_payment;

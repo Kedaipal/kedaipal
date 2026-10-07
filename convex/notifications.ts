@@ -9,6 +9,7 @@
 
 import { v } from "convex/values";
 import { query } from "./_generated/server";
+import { creditGateFor, forSeller } from "./creditLock";
 import { requireRetailerAccess } from "./lib/auth";
 
 /** Terminal-failure job states — the ones worth interrupting a seller for. */
@@ -42,12 +43,19 @@ export const latestActivity = query({
 			level: "read",
 		});
 
-		// Newest order — one indexed row.
-		const newest = await ctx.db
+		// Newest order — one indexed row, REDACTED (Credits T3.1). This alert
+		// carries the buyer's name on purpose ("who it's from"), which makes it
+		// a seller read of order data like any other: an order waiting on
+		// credits still fires the alert — the seller must know work arrived —
+		// but it arrives without the name, and the inbox row it links to says
+		// what it is waiting for.
+		const gate = await creditGateFor(ctx, retailerId);
+		const newestRow = await ctx.db
 			.query("orders")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 			.order("desc")
 			.first();
+		const newest = newestRow ? forSeller(gate, newestRow) : null;
 
 		// Newest failed rider booking — bookings are rare relative to orders, so
 		// a small recency window is plenty (a failure older than the last 10

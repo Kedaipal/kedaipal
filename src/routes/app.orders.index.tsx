@@ -12,6 +12,7 @@ import {
 	Download,
 	ListChecks,
 	Loader2,
+	Lock,
 	Pin,
 	Search,
 	ShoppingBag,
@@ -56,7 +57,7 @@ import {
 } from "../../convex/lib/paymentMethod";
 import { ProFeatureTease } from "../components/app/pro-gate";
 import { ViewOnlyNote } from "../components/app/view-only-note";
-import { CreditLockNote } from "../components/credits/credit-lock-note";
+import { CreditGateNote } from "../components/credits/credit-gate-note";
 import {
 	DeliveryMethodIcon,
 	OrderContextBadge,
@@ -113,7 +114,7 @@ import { useAreaLock } from "../hooks/useStoreLock";
 import { canHardDeleteOrders } from "../lib/admin-actions";
 import { MASK_PII } from "../lib/analytics-privacy";
 import { describeAwbPaper } from "../lib/awb-labels";
-import { BULK_CREDIT_LOCK_NOTE } from "../lib/credits-ui";
+import { bulkCreditSkipNote, gatedRowLine } from "../lib/credits-ui";
 import { orderCustomerLabel } from "../lib/customer";
 import { downloadCsv } from "../lib/download";
 import {
@@ -242,6 +243,17 @@ type InboxSearch = {
 	 * so only the non-default reaches the URL — the rule `sort` and `bucket`
 	 * follow. A legacy `?nopin=true` still parses as `"off"`. */
 	pin?: Exclude<PinMode, "top">;
+	/**
+	 * Only the orders WAITING ON CREDITS, or only the ones that aren't (Credits
+	 * T3.1). A seller with 40 waiting needs to see exactly those 40, and its
+	 * twin gets them out of the way so the workable ones can be cleared.
+	 *
+	 * Spelled out in the URL rather than hidden in the filter sheet because
+	 * both the shell banner and the inbox note LINK here — "Show the 40" has to
+	 * land on a view, and a view worth linking is a view worth sharing (the
+	 * same reason `bucket` and `sort` are here).
+	 */
+	creditGated?: boolean;
 };
 
 function isFulfilmentWindow(x: unknown): x is FulfilmentWindow {
@@ -278,6 +290,22 @@ const STATUS_CHIP_HINTS: Partial<Record<StatusChipKey, string>> = {
 	ending_soon: `Active bookings finishing within ${ENDING_SOON_DAYS} days — the renewal and check-out list.`,
 	upcoming: "Booked, but not started yet.",
 };
+
+/**
+ * What the next tap on the "Waiting on credits" chip will do (Credits T3.1).
+ *
+ * THREE states, cycling, exactly like the Pinned chip beside it — because the
+ * two needs are both real: see what my next top-up opens, and get those rows
+ * out of the way so I can work the ones that are open. Two look-alike chips
+ * that cycled different numbers of states would be the "one control, one rule"
+ * failure, so this one matches its neighbour.
+ */
+const CREDIT_GATE_HINTS = {
+	all: "Orders waiting on credits are mixed in with the rest. Tap to see only them.",
+	only: "Showing only the orders waiting on credits — they open oldest first as credits land. Tap to hide them instead.",
+	hidden:
+		"Orders waiting on credits are hidden, so this is just the work you can do now. Tap to show everything.",
+} as const;
 
 /** What the next tap on the Pinned chip will do — the only way a three-state
  * control can be honest about a state the seller hasn't reached yet. */
@@ -442,6 +470,15 @@ export const Route = createFileRoute("/app/orders/")({
 					: search.nopin === true || search.nopin === "true"
 						? "off"
 						: undefined,
+			// Three states, not two: absent is "no filtering", and `false` is the
+			// real question "hide the ones I can't open yet". A bare `=== true`
+			// would collapse the last two (the undefined-is-not-false rule).
+			creditGated:
+				search.creditGated === true || search.creditGated === "true"
+					? true
+					: search.creditGated === false || search.creditGated === "false"
+						? false
+						: undefined,
 		};
 	},
 	component: OrdersRoute,
@@ -497,6 +534,7 @@ function OrdersRoute() {
 		pin: urlPin,
 		tsort,
 		tdesc = false,
+		creditGated,
 	} = Route.useSearch();
 	// TanStack Table's own sorting shape, derived from the URL so a sorted table
 	// survives refresh and can be shared.
@@ -514,10 +552,13 @@ function OrdersRoute() {
 	// but not edit — one flag, so every disabled-with-reason control below
 	// (select mode, bulk actions, pin, status moves) covers both.
 	const { readOnly, reason } = useAreaLock("orders");
-	// Out of credits (Credits T3) is narrower: select mode stays open, because
-	// cancelling in bulk still works, but every forward move greys out and the
-	// bar says why.
-	const work = useAreaLock("orders", { credits: true });
+	// Waiting on credits (Credits T3.1) is not a lock on this screen at all:
+	// a selection is routinely MIXED, and `bulkUpdateStatus` moves what it can
+	// and reports what it skipped. So the bar stays ENABLED and warns instead
+	// — disabling it would strand a seller who selected 20 orders of which 2
+	// are waiting, which is the store-wide lock's failure mode in miniature.
+	// The per-row answer rides on the ROW (`o.creditGated`), stamped by the
+	// server's redaction, so nothing here needs to ask the gate.
 	// Orders export is the ONE export the server genuinely gates (a teammate
 	// can work the inbox all day and still not walk out with the order book),
 	// and it is separate from orders itself — so the button asks the `exports`
@@ -682,10 +723,17 @@ function OrdersRoute() {
 							// or the CSV would hold different rows than the screen it came
 							// from.
 							pinMode,
+							// Waiting on credits (Credits T3.1).
+							creditGated,
 							// No limit → stable full-window subscription; we paginate below
 							// by slicing to `visibleCount`, so "Load more" never re-queries.
 						}
-					: { retailerId: retailer._id }
+					: // Starter: the inbox surfaces are Pro, but the credit gate
+						// applies at EVERY tier, so this one filter rides along —
+						// paywalling the view that finds the orders a seller is being
+						// asked to pay to open would be absurd (and the server agrees:
+						// `creditGated` is excluded from NARROWING_FILTER_KEYS).
+						{ retailerId: retailer._id, creditGated }
 				: "skip",
 		),
 		placeholderData: keepPreviousData,
@@ -921,6 +969,16 @@ function OrdersRoute() {
 	/** Cycle the pin chip: top -> only -> off -> top. "Only" comes second
 	 * because it is the useful next step from the default; "off" is the rarely
 	 * wanted escape hatch, so it sits furthest from the first tap. */
+	// undefined → true (only waiting) → false (hide waiting) → undefined.
+	// Deliberately NOT remembered per device like the pin mode: the gate is a
+	// temporary state a seller is trying to clear, so a store that tops up
+	// should not come back next week to a filter it set while in debt.
+	function cycleCreditGate() {
+		const next =
+			creditGated === undefined ? true : creditGated ? false : undefined;
+		navigate({ search: (prev) => ({ ...prev, creditGated: next }) });
+	}
+
 	function cyclePinMode() {
 		const next: PinMode =
 			pinMode === "top" ? "only" : pinMode === "only" ? "off" : "top";
@@ -1178,6 +1236,13 @@ function OrdersRoute() {
 	// Cancel, all in one "Update status" dropdown. No primary/overflow split.
 	// The list speaks the SELECTION, not the store — see buildBulkTargets.
 	const selectedOrders = orderedOrders.filter((o) => selected.has(o._id));
+	// How many of the ticked rows the batch will SKIP for credits (T3.1). The
+	// server does the skipping and reports it afterwards; this is the same
+	// answer said BEFORE the tap, which is the house rule — a disabled-with-
+	// reason beats a toast, and a will-be-skipped note beats a surprise.
+	const waitingInSelection = selectedOrders.filter(
+		(o) => o.creditGated === true && o.status !== "cancelled",
+	).length;
 	const selectionVocabs = new Map<string, BulkVocab>();
 	for (const o of selectedOrders) {
 		const kind = orderFlowKind(o);
@@ -1199,7 +1264,10 @@ function OrdersRoute() {
 			(t): BulkAction => ({
 				status: t.anchor,
 				label: t.label,
-				disabled: t.disabled || work.readOnly,
+				// `readOnly` (the view-only lock + permissions), never the credit
+				// gate: a mixed selection is normal now and the batch skips what
+				// it can't do, which the bar's note states before the tap.
+				disabled: t.disabled || readOnly,
 				reason: t.reason,
 			}),
 		)
@@ -1525,7 +1593,7 @@ function OrdersRoute() {
 			<ViewOnlyNote />
 			{/* Out of credits (Credits T3): orders keep arriving — this says how
 			    many, what's paused, and the one way back. */}
-			<CreditLockNote scope="orders" />
+			<CreditGateNote scope="inbox" />
 
 			{/* Starter: the inbox controls are a Pro feature — say so where they'd
 			    be, instead of leaving a silent gap. The order list below still works. */}
@@ -1682,6 +1750,42 @@ function OrdersRoute() {
 					    reason the view switch moved up into the header. */}
 					<div className="flex items-center gap-2">
 						<FilterChipRow className="min-w-0 flex-1">
+							{/* Waiting on credits LEADS the row (Credits T3.1), ahead of
+						    even the seller's own pins: it is the only chip here that is
+						    about money we are owed and orders the seller cannot open, so
+						    it is the most urgent thing in the inbox whenever it exists.
+						    Appended last it would be the "urgent filter sitting last"
+						    mistake the house rule names.
+
+						    It appears once something is actually waiting — a permanent
+						    "Waiting 0" would advertise a restriction most stores never
+						    hit — and ALSO whenever the filter is on at zero, for the
+						    Pinned chip's reason: topping up empties the list, and a chip
+						    that vanished with it would leave `?creditGated=true` in the
+						    URL, an empty inbox, and no way back on screen. */}
+							{(counts?.creditGated ?? 0) > 0 || creditGated !== undefined ? (
+								<FilterChip
+									tone="accent"
+									selected={creditGated !== undefined}
+									onClick={cycleCreditGate}
+									count={counts?.creditGated}
+									countTone="attention"
+									title={
+										CREDIT_GATE_HINTS[
+											creditGated === undefined
+												? "all"
+												: creditGated
+													? "only"
+													: "hidden"
+										]
+									}
+								>
+									<Lock className="size-3.5" aria-hidden="true" />
+									{creditGated === false
+										? "Waiting hidden"
+										: "Waiting on credits"}
+								</FilterChip>
+							) : null}
 							{/* Pinned leads the row (86eyrtz74) because it is the seller's
 						    OWN mark — the statuses after it are the system's opinion,
 						    this one is theirs. That is also why it is NOT part of the
@@ -1854,6 +1958,14 @@ function OrdersRoute() {
 						<ul className="flex flex-col gap-2 lg:grid lg:grid-cols-2 lg:gap-3">
 							{visibleOrders.map((o) => {
 								const isSel = selected.has(o._id);
+								// Waiting on credits (Credits T3.1). The row's buyer fields
+								// are ALREADY empty — the server redacted them, this is not a
+								// client-side hide — so the card has to put something in
+								// their place or it reads as a rendering fault. Reference,
+								// money and time survive the redaction on purpose, so the row
+								// still says what arrived and what it's worth; that is both
+								// the honest state of the inbox and the reason to top up.
+								const gated = o.creditGated === true;
 								const statusLabel = statusLabelFor(o);
 								const placedAt = formatOrderTimestamp(o.createdAt, now);
 								const age = formatStatusAge(now - o.createdAt);
@@ -1885,12 +1997,22 @@ function OrdersRoute() {
 												</span>
 											) : null}
 											{/* Mask only the name — items/prices/status are the useful replay signal. */}
-											<span
-												{...MASK_PII}
-												className="min-w-0 flex-1 truncate text-[15px] font-semibold"
-											>
-												{orderCustomerLabel(o.customer)}
-											</span>
+											{gated ? (
+												<span className="flex min-w-0 flex-1 items-center gap-1.5 text-[15px] font-semibold text-muted-foreground">
+													<Lock
+														className="size-3.5 shrink-0"
+														aria-hidden="true"
+													/>
+													<span className="truncate">Waiting on credits</span>
+												</span>
+											) : (
+												<span
+													{...MASK_PII}
+													className="min-w-0 flex-1 truncate text-[15px] font-semibold"
+												>
+													{orderCustomerLabel(o.customer)}
+												</span>
+											)}
 											<OrderTotal
 												total={o.total}
 												securityDeposit={o.securityDeposit}
@@ -1926,43 +2048,53 @@ function OrdersRoute() {
 									    can't stretch the card; per-line amounts appear from `sm:`
 									    up (phones keep the grouped list without the price column;
 									    the bold total above is the number that matters there). */}
-										<div className="mt-2 flex flex-col gap-1 rounded-xl bg-muted/50 px-2.5 py-2">
-											{withLineKeys(itemSummary.lines).map(
-												({ key, item: it }) => (
-													<div
-														key={key}
-														className="flex items-center justify-between gap-3 text-[13px] leading-5"
-													>
-														<span className="min-w-0 truncate">
-															<span className="tabular-nums text-muted-foreground">
-																{it.quantity}&times;
-															</span>{" "}
-															<span className="font-medium">{it.name}</span>
-															{it.variantLabel ? (
-																<span className="text-muted-foreground">
-																	{" "}
-																	&middot; {it.variantLabel}
-																</span>
-															) : null}
+										{gated ? (
+											// In place of the item list: what this ROW is waiting
+											// for, counted for itself. "Waiting on 2 credits" tells
+											// a seller buying one credit that it won't be this one
+											// — a store-wide sentence here would not.
+											<div className="mt-2 rounded-xl border border-dashed border-border bg-muted/40 px-2.5 py-2 text-[13px] leading-5 text-muted-foreground">
+												{gatedRowLine(o.creditsToUnlock ?? 1)}
+											</div>
+										) : (
+											<div className="mt-2 flex flex-col gap-1 rounded-xl bg-muted/50 px-2.5 py-2">
+												{withLineKeys(itemSummary.lines).map(
+													({ key, item: it }) => (
+														<div
+															key={key}
+															className="flex items-center justify-between gap-3 text-[13px] leading-5"
+														>
+															<span className="min-w-0 truncate">
+																<span className="tabular-nums text-muted-foreground">
+																	{it.quantity}&times;
+																</span>{" "}
+																<span className="font-medium">{it.name}</span>
+																{it.variantLabel ? (
+																	<span className="text-muted-foreground">
+																		{" "}
+																		&middot; {it.variantLabel}
+																	</span>
+																) : null}
+															</span>
+															<span className="hidden shrink-0 text-[12.5px] tabular-nums text-muted-foreground sm:block">
+																{formatPrice(it.lineTotal, o.currency)}
+															</span>
+														</div>
+													),
+												)}
+												{itemSummary.moreCount > 0 ? (
+													<div className="flex items-center justify-between gap-3 text-[12px] leading-5 text-muted-foreground">
+														<span>
+															+{itemSummary.moreCount} more item
+															{itemSummary.moreCount === 1 ? "" : "s"}
 														</span>
-														<span className="hidden shrink-0 text-[12.5px] tabular-nums text-muted-foreground sm:block">
-															{formatPrice(it.lineTotal, o.currency)}
+														<span className="hidden shrink-0 text-[12.5px] tabular-nums sm:block">
+															{formatPrice(itemSummary.moreAmount, o.currency)}
 														</span>
 													</div>
-												),
-											)}
-											{itemSummary.moreCount > 0 ? (
-												<div className="flex items-center justify-between gap-3 text-[12px] leading-5 text-muted-foreground">
-													<span>
-														+{itemSummary.moreCount} more item
-														{itemSummary.moreCount === 1 ? "" : "s"}
-													</span>
-													<span className="hidden shrink-0 text-[12.5px] tabular-nums sm:block">
-														{formatPrice(itemSummary.moreAmount, o.currency)}
-													</span>
-												</div>
-											) : null}
-										</div>
+												) : null}
+											</div>
+										)}
 										{/* mt-auto pins this row to the card bottom, so status +
 									    chevron align across a desktop grid row even when the
 									    neighbour card has more item lines (grid stretches all
@@ -1991,13 +2123,17 @@ function OrdersRoute() {
 									"group flex h-full w-full gap-3 rounded-2xl border bg-card p-3.5 text-left transition-all",
 									isSel
 										? "border-accent shadow-[0_0_0_3px_hsl(160_84%_39%/0.12)]"
-										: isPinned
-											? // Tinted border rather than a thicker one: a wider edge
-												// would shift this card's text 2px against its grid
-												// neighbours, which reads as a rendering bug, not as
-												// emphasis.
-												"border-accent/40 hover:border-accent hover:shadow-sm"
-											: "border-border hover:border-ring hover:shadow-sm",
+										: gated
+											? // Dashed, not red: this row is waiting, not broken,
+												// and it will open itself the moment credits land.
+												"border-dashed border-border bg-muted/30 hover:border-ring"
+											: isPinned
+												? // Tinted border rather than a thicker one: a wider edge
+													// would shift this card's text 2px against its grid
+													// neighbours, which reads as a rendering bug, not as
+													// emphasis.
+													"border-accent/40 hover:border-accent hover:shadow-sm"
+												: "border-border hover:border-ring hover:shadow-sm",
 								);
 								return (
 									<li key={o._id}>
@@ -2084,7 +2220,15 @@ function OrdersRoute() {
 					count={selected.size}
 					actions={bulkActions}
 					actionsNote={
-						work.cause === "credits" ? BULK_CREDIT_LOCK_NOTE : bulkActionsNote
+						// The credit note wins when the SELECTION actually contains
+						// waiting orders — it is the one the seller is about to be
+						// surprised by. Stacked above the vocabulary note rather than
+						// replacing it when both apply, because both are true.
+						waitingInSelection > 0
+							? [bulkCreditSkipNote(waitingInSelection), bulkActionsNote]
+									.filter(Boolean)
+									.join(" ")
+							: bulkActionsNote
 					}
 					allSelected={allSelected}
 					onApply={applyBulk}

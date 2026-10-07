@@ -10,7 +10,13 @@ import {
 	requireRetailerAccess,
 } from "./lib/auth";
 import type { PermissionLevel } from "./lib/permissions";
+import {
+	creditGateFor,
+	customerForSeller,
+	forSeller,
+} from "./creditLock";
 import { buildSearchText } from "./lib/customer";
+import { isCustomerGated } from "./lib/orderGate";
 import { revenueExcludingDeposit } from "./lib/order";
 import { assertValidWaPhone } from "./lib/slug";
 import {
@@ -91,11 +97,24 @@ export const list = query({
 					? "by_retailer_orderCount"
 					: "by_retailer_lastOrder";
 
-		return ctx.db
+		// Credits (T3.1): a buyer whose EVERY order is waiting on credits is not
+		// a customer the seller has been shown yet — the customer page carries a
+		// phone number and a purchase history, which is the manual-settlement
+		// loophole with extra steps (Zaki, 6 Oct 2026). Redacted rather than
+		// filtered out, deliberately: `paginate` with a filter gives ragged
+		// pages, and a row reading "Waiting on credits · RM 340 · 2 orders" is
+		// both honest and the reason to top up. One funded order makes a buyer
+		// known for good — see `isCustomerGated`.
+		const gate = await creditGateFor(ctx, retailerId);
+		const page = await ctx.db
 			.query("customers")
 			.withIndex(indexName, (q) => q.eq("retailerId", retailerId))
 			.order("desc")
 			.paginate(paginationOpts);
+		return {
+			...page,
+			page: page.page.map((c) => customerForSeller(gate, c)),
+		};
 	},
 });
 
@@ -123,7 +142,9 @@ export const get = query({
 			customer.orderCount > 0
 				? Math.round(customer.totalSpent / customer.orderCount)
 				: 0;
-		return { ...customer, averageOrderValue };
+		// Credits (T3.1) — same rule as `list`, applied to the detail page.
+		const gate = await creditGateFor(ctx, customer.retailerId);
+		return { ...customerForSeller(gate, customer), averageOrderValue };
 	},
 });
 
@@ -133,12 +154,18 @@ export const ordersByCustomer = query({
 		paginationOpts: paginationOptsValidator,
 	},
 	handler: async (ctx, { customerId, paginationOpts }) => {
-		await requireOwnedCustomer(ctx, customerId, "read");
-		return ctx.db
+		const { customer } = await requireOwnedCustomer(ctx, customerId, "read");
+		// Credits (T3.1): the purchase history is where a seller would read a
+		// gated order's contents from, so it redacts per row like the inbox. A
+		// returning buyer stays visible (their earlier orders are funded) and
+		// only the waiting orders go blank.
+		const gate = await creditGateFor(ctx, customer.retailerId);
+		const page = await ctx.db
 			.query("orders")
 			.withIndex("by_customer", (q) => q.eq("customerId", customerId))
 			.order("desc")
 			.paginate(paginationOpts);
+		return { ...page, page: page.page.map((o) => forSeller(gate, o)) };
 	},
 });
 
@@ -161,12 +188,29 @@ export const search = query({
 			1,
 			Math.min(limit ?? SEARCH_DEFAULT_LIMIT, SEARCH_MAX_LIMIT),
 		);
-		return ctx.db
+		// Credits (T3.1): gated buyers are FILTERED OUT here, not redacted as
+		// they are in `list` and `get`.
+		//
+		// The search index reads the STORED `searchText`, which the redaction
+		// never touches (it blanks the copy that crosses the wire). So a
+		// redacted hit would still be a hit — type a phone number, get a row
+		// back, and the seller has confirmed the buyer without ever seeing the
+		// record. That is an oracle, and an oracle is a leak.
+		//
+		// Dropping them is also the honest semantic: search is a lookup BY
+		// IDENTITY, and a gated buyer has no identity on screen to look up.
+		// They are still fully accounted for in the customer list, as a row that
+		// says what it is waiting for.
+		const gate = await creditGateFor(ctx, retailerId);
+		const hits = await ctx.db
 			.query("customers")
 			.withSearchIndex("search_customers", (q) =>
 				q.search("searchText", trimmed.toLowerCase()).eq("retailerId", retailerId),
 			)
 			.take(take);
+		return hits.filter(
+			(c) => gate.exempt || !isCustomerGated(c, gate.fundedThrough),
+		);
 	},
 });
 
@@ -275,6 +319,17 @@ export async function linkOrderToCustomer(
 		});
 		customerId = existing._id;
 	} else {
+		// Credits (T3.1): a BRAND-NEW buyer inherits their first order's queue
+		// position, so a customer record created by a gated order doesn't hand
+		// the seller the phone number that order is holding back. Stamped only
+		// here, on the insert — a RETURNING buyer is already known, and nothing
+		// a later order does should hide them again ("funded stays funded").
+		//
+		// `recordOrderCreated` runs before every `linkOrderToCustomer` call site,
+		// so the order's `creditSeq` is already written by the time we read it.
+		// Absent (a debit that faulted, or an order from before the gate) leaves
+		// this absent too, which reads as visible — the gate fails open.
+		const order = await ctx.db.get(args.orderId);
 		customerId = await ctx.db.insert("customers", {
 			retailerId: args.retailerId,
 			waPhone: args.waPhone,
@@ -284,6 +339,7 @@ export async function linkOrderToCustomer(
 			totalSpent: args.orderTotal,
 			firstOrderAt: args.orderCreatedAt,
 			lastOrderAt: args.orderCreatedAt,
+			firstOrderCreditSeq: order?.creditSeq,
 			createdAt: now,
 			updatedAt: now,
 		});

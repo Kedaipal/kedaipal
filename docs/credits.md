@@ -1,6 +1,6 @@
 # Kedaipal Credits — the order-credit ledger
 
-> **Status:** T1 (the ledger — ClickUp [`86eye2ccu`](https://app.clickup.com/t/86eye2ccu)) built. T2 top-up packs ([`z8r3fdf8ht`](https://app.clickup.com/t/z8r3fdf8ht)) built — see [Top-up packs (T2)](#top-up-packs-t2). T3 meter + seller lock + notices ([`z8r3fdf8hy`](https://app.clickup.com/t/z8r3fdf8hy)) built — see [The meter, the seller lock and the notices (T3)](#the-meter-the-seller-lock-and-the-notices-t3). **The LOCK half ships switched off** (2 Oct 2026) pending the per-order model — see [The seller lock ships SWITCHED OFF](#the-seller-lock-ships-switched-off-2-oct-2026); the meter, notices scaffolding and metering are live. T5 public surfaces + release pack (`z8r3fdfu31`) builds on it and adds its own section below. **T4 auto top-up (`z8r3fdf8wa`) was cancelled on 1 Oct 2026** (Zaki × Arif): credit packs never auto-reload — the subscription is the only recurring charge, and a pack is always a deliberate purchase on HitPay's checkout page. Decision register: `z8r3fdf8j1` (Arif, locked 17 Sep 2026) — with **Zaki's 30 Sep 2026 overrides** (refund rule, trial allowance, team permission), marked below.
+> **Status:** T1 (the ledger — ClickUp [`86eye2ccu`](https://app.clickup.com/t/86eye2ccu)) built. T2 top-up packs ([`z8r3fdf8ht`](https://app.clickup.com/t/z8r3fdf8ht)) built — see [Top-up packs (T2)](#top-up-packs-t2). T3 meter + notices ([`z8r3fdf8hy`](https://app.clickup.com/t/z8r3fdf8hy)) built — see [The meter, the seller lock and the notices (T3)](#the-meter-the-seller-lock-and-the-notices-t3). **T3.1 ([`z8r3fdmg4h`](https://app.clickup.com/t/z8r3fdmg4h)) replaced T3's store-wide lock with a PER-ORDER gate, and a gated order is invisible to the seller** — that is the live behaviour, see [The gate is PER ORDER (T3.1)](#the-gate-is-per-order-t31). T3's lock half never reached a seller (it shipped switched off for one release). T5 public surfaces + release pack (`z8r3fdfu31`) builds on it and adds its own section below. **T4 auto top-up (`z8r3fdf8wa`) was cancelled on 1 Oct 2026** (Zaki × Arif): credit packs never auto-reload — the subscription is the only recurring charge, and a pack is always a deliberate purchase on HitPay's checkout page. Decision register: `z8r3fdf8j1` (Arif, locked 17 Sep 2026) — with **Zaki's 30 Sep 2026 overrides** (refund rule, trial allowance, team permission), marked below.
 
 **1 credit = 1 order.** Every plan includes credits each month; sellers can buy
 more. From 1 Oct 2026 every order carries a real Meta messaging cost, so a flat
@@ -569,71 +569,263 @@ refund, and one that slips through lands as `late_payment`.
 - **Terms:** the picker links `/terms#credits` — T5's Credits clause. The
   picker must not be reachable in production before that clause is live.
 
-## The seller lock ships SWITCHED OFF (2 Oct 2026)
+## The gate is PER ORDER (T3.1)
 
-`CREDIT_LOCK_ENABLED` in `convex/lib/credits.ts` is `false`. **Everything below
-about the lock is built and tested; none of it runs.**
+**ClickUp:** [`z8r3fdmg4h`](https://app.clickup.com/t/z8r3fdmg4h) · **Files:**
+`convex/lib/credits.ts` (the pure arithmetic), `convex/creditLock.ts` (the
+resolver, the guard, the read-path seams), `convex/lib/orderGate.ts` (the
+redaction allowlist), `convex/creditLockCoverage.test.ts` (which writes gate,
+which reads redact), `convex/orderGate.test.ts` (the sentinel sweep),
+`src/hooks/useCreditGate.ts`, `src/components/credits/credit-gate-note.tsx`,
+`src/components/orders/gated-order-page.tsx`.
 
-**Why.** As built, the lock is store-WIDE: at a total balance of 0 or below the
-seller can't work ANY order, including ones whose credit was spent weeks ago.
-That over-reaches. An order that already paid for its credit should stay
-workable forever; only orders that arrived while the balance was at or below
-zero should wait. The per-order model is scoped separately — **this switch is
-the placeholder until it lands**, not a feature flag anyone should flip on a
-whim.
+**An order is workable once its OWN credit is paid for — and stays workable
+forever after that.** Only orders that arrived while the balance was already at
+or below zero WAIT, and they come off the queue oldest first as credits arrive.
 
-**What the switch touches — exactly two gates:**
+This replaced the store-wide lock of T3, which was built, switched off
+(`CREDIT_LOCK_ENABLED`, PR #336) and **never shipped to a seller**. Zaki's call,
+2 Oct 2026: you charge a credit for an order; you don't then hold that order
+hostage because a *later* one went unfunded. The switch and
+`creditLockOff.test.ts` are gone with it — leaving a dead global flag beside a
+per-order gate would be two rules for one idea.
 
-| Gate | Effect |
-| --- | --- |
-| `resolveCreditLock` (`convex/creditLock.ts`) | returns the `open` state immediately, so every `assertCreditsAvailable` guard passes and the dashboard payload's `creditLock` reads unlocked |
-| `creditNotices.evaluate` | returns `null`, so no `low` / `locked` / `unlocked` notice is sent and **no `notices` marker is written** — the day the lock turns on, every store is announced to cleanly instead of carrying a marker for an email nobody received |
+### The mechanism: three numbers, no ledger walk
 
-It is gated at the ONE resolver every guard and the payload read, so the off
-state can never disagree with itself: what the seller is told and what the
-server refuses come from the same answer. Every string conditioned on `locked`
-— `credits-ui.ts`'s lock lines, `CreditLockNote`, `CreditLockCta`, the meter's
-"Paused:" line, `useAreaLock(area, { credits: true })` — is therefore
-unreachable rather than wrong.
+| Where | Field | Meaning |
+| --- | --- | --- |
+| `creditAccounts` | `debitSeq` | order debits this store has ever taken (monotonic) |
+| `creditAccounts` | `fundedThrough` | the high-water mark of positions paid for — **only ever RISES** |
+| `orders` | `creditSeq` | this order's position in that sequence |
 
-⚠️ **The gate does NOT reach copy conditioned on the BALANCE.** Three surfaces
-read `total` / `creditTone` directly and never look at `locked`, so they
-survived the switch still promising a pause that no longer happens — found in
-review, and the single most important thing to know if the per-order model
-changes these predicates again:
+An order is funded iff `creditSeq <= fundedThrough`, so **the inbox answers it
+per row with no read at all** — the watermark rides the dashboard payload once
+and the comparison is local. `debitSeq - fundedThrough` is how many orders are
+waiting, so the meter's count is arithmetic too.
 
-| Surface | Read |
-| --- | --- |
-| The running-low shell banner (`resolveBannerState` → `subscription-banner.tsx`) | `creditTone(...) !== "ok"` |
-| The top-up picker's "your store unlocks" line | `balance.total <= 0 && …` |
-| The dashboard card's CTA (`credit-meter.tsx`) | `tone === "low"` |
+Both counters move in `applyEntry`, in the same patch as the balances, for
+exactly the reason the balances are cached there: one write path, so the cache
+can never disagree with the ledger.
 
-All three now state the carry-over instead, and the picker's unlock sentence is
-gated on `CREDIT_LOCK_ENABLED` so turn-on restores it. The banner also had to
-WIDEN to `!== "ok"`: `creditsLocked` outranks it while the lock is on, so with
-the lock off a store already in debt had no banner at all.
+- **On an order debit:** it claims the next `debitSeq`, which
+  `debitCreditForOrder` stamps on the order. Funded iff the total AFTER the
+  debit is **≥ 0** — a store on 1 credit takes an order, the debit leaves the
+  total at 0, and that order *did* pay for its credit. (The ticket specified
+  "at or below zero", which gates the order that spent the store's last credit.
+  Off by one; corrected.)
+- **On credits landing:** the watermark advances by `fundingAdvance(waiting,
+  creditsIn)` = `min(...)` — **one credit in frees one waiting order**, oldest
+  first. Every route does it by the same line: top-up, monthly refresh, invoice
+  settle, upgrade, Enterprise contract, admin adjust, and a cancelled order's
+  refund.
+- **On anything negative** (an expired lot, an admin clawback): nothing moves.
+  The watermark cannot fall, which is what makes "**expiry must not
+  retroactively unfund an order already worked**" true by construction rather
+  than by a check someone can delete.
 
-**What is NOT touched, deliberately:** every order still spends a credit, the
-ledger still runs negative, and grants / purchases / refunds / expiry all
-behave. So `creditLedger` is already recording `orderId` plus the running
-`planAfter` / `purchasedAfter` for every debit — **which is precisely the
-funding history the per-order rule needs, accruing from day one.** Turning the
-lock on, in either model, needs no backfill. Expiry notices are about purchased
-lots, not the lock, and keep running.
+**Why `min` and not "fill the balance back to zero first".** The two agree
+exactly whenever the debt was created by waiting orders — a store at −101
+buying a 100-pack opens the 100 oldest and keeps the 101st waiting, the rule as
+specified. They diverge only where a store owes credits that no waiting order
+created: a lot that expired under a negative plan balance, or the debt a store
+was already carrying when this shipped. There, "fill the balance first" would
+swallow a seller's whole pack and open nothing — money in, nothing happens, no
+explanation on screen. One credit, one order is the rule a seller can predict,
+and the debt still sits on the balance and still comes off the next refresh, so
+nothing is given away.
 
-**Copy that had to move with it:** the public pricing FAQ
-(`pricingpage_faq_a9`, all three locales) described the lock in detail and now
-describes only the carry-over; the v2026.10.1 release note likewise; and the
-three balance-driven surfaces in the table above. Reinstating the pause
-sentences belongs to the per-order lock's own copy sweep
-([`z8r3fdmg4h`](https://app.clickup.com/t/z8r3fdmg4h)), not to a lie left lying
-here in the meantime.
+**No backfill, and no retroactive gating.** An order with no `creditSeq` is
+FUNDED — the gate fails open, like every other missing-data answer in this
+file. So orders from before T3.1 are grandfathered, and so is an order whose
+debit faulted (`recordOrderCreated` deliberately swallows a ledger fault so
+checkout never fails): a bookkeeping fault must never be the thing that hides a
+buyer's order from the seller.
 
-**Tests, both directions.** `convex/creditLockOff.test.ts` runs against the real
-constant and pins the off state — deleting either gate turns it red (verified by
-removing each one). `convex/creditLock.test.ts` mocks the constant to `true` and
-keeps proving the lock's own behaviour, which is what we turn back on. Neither
-direction can rot while the switch is parked.
+### A gated order is INVISIBLE, not merely un-actionable
+
+Zaki, 6 Oct 2026. Greying the buttons out leaves the buyer's name, phone and
+address on screen, so a seller out of credits settles the order by hand in
+WhatsApp and the gate collects nothing. **So the redaction lives on the server
+READ PATH** — `convex/lib/orderGate.ts`, reached through `forSeller` /
+`customerForSeller` / `orderGatedForSeller` — and the client never receives
+what it isn't allowed to show. Hiding it in the UI would be theatre.
+
+**An allowlist, not a denylist.** Redaction by deletion leaks every field added
+afterwards, silently, and the thing it leaks is a phone number. So a gated row
+is BUILT from the fields that are known safe:
+
+- **kept:** `shortId`, `createdAt`/`updatedAt`, `status`, `channel`, `source`,
+  the money (`subtotal`, `total`, `currency`, the fees), how it leaves
+  (`deliveryMethod`, `fulfilmentDate`, the booking span), whether it's paid,
+  and the mockup FLAG;
+- **dropped:** the buyer (`customer`, `customerId`), the contents (`items`),
+  `deliveryAddress`, every note, every storage id (payment proof, mockup,
+  reference image), `paymentReference`, the courier fields, the gateway
+  fields, and above all **`orders.trackingToken`** — the buyer's capability for
+  `/track/`, with which the seller would simply open the buyer's own page and
+  read everything.
+
+Keeping the money and the date is deliberate: "3 orders waiting · RM 340 · one
+due Friday" is both the honest state of the inbox and the strongest reason to
+top up. A row that says nothing at all is just confusing, and confusion doesn't
+sell credits.
+
+**Redact-first, then filter.** `searchOrders` maps the whole scan window
+through `forSeller` BEFORE the predicate, the facet tallies and the sort, so
+the gate can't be enforced in one place and forgotten in another. Two
+consequences fall out rather than needing rules of their own: **search can't
+find a gated order by customer name or phone** (those fields are already
+empty), while searching the ORDER NUMBER still finds it — which is right, since
+the seller got that number in their new-order alert; and the category facet
+counts a gated order as uncategorised, a fair description of an order whose
+contents the seller can't see.
+
+**Every seller read is covered**, and which ones is a test: `orders.get` (the
+SELLER arm only — the buyer's `token` path is untouched), `searchOrders`,
+`listByRetailer`, `exportPage` / `exportByIds` (a CSV of phone numbers is the
+easiest manual-settlement route of all), `getTimeline`, `listPaymentProofs`,
+`getItemImageUrls`, `getMockupUrls`, `getCustomerImageUrl`,
+`notifications.latestActivity` (it carries the buyer's name on purpose), the
+`.ics` calendar feed (every event's title IS the guest's name, and it goes to
+Google — gated bookings are SKIPPED there rather than redacted, since an event
+with no name and no listing is noise), and the whole customer surface.
+
+**Customers.** A buyer whose EVERY order is gated is itself gated — the
+customer page carries a phone number and a purchase history, which is the
+loophole with extra steps. Answered in O(1) from `customers.firstOrderCreditSeq`,
+stamped once on the insert: orders are debited in sequence, so a buyer's first
+order carries their lowest position, and if even that is above the watermark
+then all of theirs are. Stamped ONLY on the insert, so **one funded order makes
+a buyer known for good** — the same "funded stays funded" promise. `list` and
+`get` REDACT (the aggregates survive; the identity doesn't), `ordersByCustomer`
+redacts per row, and **`search` FILTERS them out instead**: the search index
+reads the stored `searchText`, which the redaction never touches, so a redacted
+hit would still be a hit — type a phone number, get a row back, and the seller
+has confirmed the buyer without ever seeing the record. That is an oracle, and
+an oracle is a leak.
+
+**The buyer's door is untouched.** `/track/<token>` and every public buyer
+mutation key on `orders.trackingToken`, never on the seller's `shortId`, so a
+buyer sees their order in full at any seller balance — pinned by the
+storefront-parity test at +50 and −50. That test also caught `creditSeq` itself
+leaking onto the public tracking payload: not a balance, but a running count of
+every order the store has ever taken, on an unauthenticated read. Stripped.
+
+**Two tests hold this up.** `orderGate.test.ts` seeds an order whose every
+buyer-supplied field holds a sentinel, then serialises what each seller surface
+returns and asserts not one sentinel survives — a WHOLE-PAYLOAD sweep, so it
+catches a new field waved through the allowlist, a surface that forgot, and a
+nested object nobody considered. `creditLockCoverage.test.ts` then requires
+every public query in `orders` / `customers` to either redact or be excused
+with a reason, so none can be forgotten as the app grows.
+
+### NOTHING else is gated
+
+Products, categories, insights and settings are paid for by the SUBSCRIPTION,
+not by credits (Zaki, 6 Oct 2026). Gating the catalogue punishes work that
+costs Kedaipal nothing, and the per-order gate already does the collecting. All
+17 catalogue writes lost the guard, and `creditLockCoverage.test.ts` **fails if
+one grows it back** — the previous release shipped the store-wide version, and
+nothing but a test stops it returning.
+
+It follows that there is **no store-wide credit refusal at all**:
+`assertCreditsAvailable` is deleted, and the guard takes an ORDER
+(`assertOrderCreditAvailable`; actions use `internal.creditLock.assertCreditsForOrder`,
+which resolves a `shortId`). A guard that can't name an order can't be this
+gate.
+
+- **Gated** (server-enforced, per order): accepting and moving an order on
+  (`updateStatus`, `advanceToStage`, approving a booking), marking payment
+  received by hand, courier booking (Lalamove, Delyva), despatch labels
+  (`awb.generateAwbPdf` — one order; the batch skips, below), the seller's
+  receipt/invoice PDF, the payment reminder, rescheduling, setting a delivery
+  charge, and mockup work.
+- **Always open:** cancelling and refunding (booking decline, deposit
+  settlement, courier cancel, clearing a gateway refund issue) — **a seller who
+  can't SEE an order must always be able to release the buyer, and that is the
+  mitigation the whole invisibility rule rests on**; the entire catalogue;
+  pinning; settings; billing, top-up, plan changes, resume; the team; every
+  buyer-side mutation; and **order intake on every channel**, each still using
+  a credit, including below zero.
+- **A BATCH skips and says so, never refuses.** With the gate per order a
+  selection is routinely MIXED, so `bulkUpdateStatus` reports
+  `skippedCreditGated` and the label batch reports `skipped.credit_gated`
+  (rendered by `describeAwbSkips`). A batch that threw would be unusable the
+  moment one order of forty was waiting — the store-wide lock's failure mode in
+  miniature. Both are classified as the skip shape in the coverage test, which
+  asserts the counter exists and that neither throws the gate refusal.
+- **The typed refusal** still carries the sentence and the way back
+  (`CreditLockErrorData`, `kind: "credits_locked"` — unchanged, because that is
+  the wire contract `format.ts` and every toast match on), plus
+  `creditsToUnlock`: **this order's own position**, so a refused control says
+  "waiting on 3 credits" rather than quoting the store's total.
+- **Composing with the past-due lock:** unchanged, and still checked FIRST at
+  every call site and in `useAreaLock`. It is the store-wide fact, it blocks the
+  owner too, and a seller whose plan lapsed must not be told to buy credits.
+
+**The way back** (`creditUnlockRoute`, by subscription status): active → top up
+(or upgrade); trialing → pick a plan; past due → pay the invoice; on hold →
+resume; cancelled → choose a plan. **Who can take it** (`creditLockAudience`):
+the owner; a teammate holding **Credits write** when the way back is a top-up
+(they buy a pack on HitPay's page themselves — T2); every other teammate is
+told to ask the owner. One sentence (`creditLockMessage`) is the server's
+refusal and every gate surface's copy.
+
+### What the seller sees
+
+- **The banner** (app shell, red, right after past due): "3 orders waiting on
+  credits." + **Show the 3** (the filtered inbox) + the one button. A count the
+  seller can't click through to is a fact they can't act on.
+- **The inbox** carries a `creditGated` count, a **three-state chip leading the
+  chip row** — ahead of even the seller's own pins, because it is the only chip
+  about money we are owed; cycling all → only waiting → waiting hidden, exactly
+  like the Pinned chip beside it so two look-alike controls behave alike — and
+  per-row gated cards: a lock, "Waiting on credits" where the name was, and
+  "Waiting on 2 credits — top up to open it" where the item list was, on a
+  dashed border (waiting, not broken). The reference, the money and the time
+  stay. `?creditGated=true` is a URL state, because the banner and the inbox
+  note both LINK to it.
+- **The order page** becomes `GatedOrderPage` — a screen of its own, not the
+  normal page with its buttons greyed out. There is nothing left to grey out,
+  and the normal page would render a grid of empty fields that reads as a bug.
+  It shows the four surviving facts, names the order's position, offers the
+  top-up, and keeps **Cancel and tell the buyer**.
+- **The meter** gains the gated count beside the balance, linked to the
+  filtered inbox. The two numbers are deliberately not the same: "15 orders
+  owed" is the ledger's answer, "3 waiting on credits" is the one the seller can
+  act on — a cancelled waiting order still owes its credit while nobody waits
+  on it.
+- **The top-up picker** says what the pack OPENS (`opensLine`), which can never
+  over-promise because each credit frees exactly one order: a 50-pack against
+  80 waiting opens 50 and says so. It reads `ordersWaiting` off the balance,
+  not the balance itself — a store can be below zero with nothing waiting.
+- **The bulk bar** states what will be skipped BEFORE the tap
+  (`bulkCreditSkipNote`), rather than leaving it to the toast afterwards.
+- **The CSV** puts "Waiting on credits" in the **Customer cell** rather than
+  gaining a column: a seller's bookkeeping template keys on column names, so
+  the header set stays fixed (the `deliveryDirection` precedent). A line of
+  blanks with no reason would be the silent gap the house rule forbids.
+
+### Deliberately left alone
+
+- **The seller's new-order WhatsApp and email alerts.** Both carry the buyer's
+  NAME but no phone, no address and no items, so neither is the
+  manual-settlement loophole — and they are the thing that sends the seller to
+  look, where the row says what it is waiting for. Redacting the WA one means
+  re-editing an approved Meta template for a name.
+- **`orders.countActionable`.** Counts only, and a waiting order SHOULD be
+  counted: the nav badge is what sends the seller to the inbox.
+
+### Operator work (T3.1)
+
+- **The three WhatsApp templates are still unsubmitted** — deliberately, since
+  this ticket changed what they say. The exact body text to submit, en + ms, is
+  in the block comment above `creditsLowTemplateName` in `convex/lib/whatsapp.ts`.
+  Submit ONCE: re-editing an approved template re-triggers review.
+- **No migration and no backfill.** The three fields are optional widens and
+  absence reads as funded.
+- **The release note** belongs to the staging→main release that ships this, not
+  to the feature PR — `/prep-staging` writes it.
 
 ## The meter, the seller lock and the notices (T3)
 
@@ -704,93 +896,27 @@ credits from your plan", "Order ORD-7K2Q", "cancelled before you accepted it,
 credit returned", "Unused October plan credits — they don't carry over",
 "Bought credits expired (12 months)" — with the balance after it. No admin notes.
 
-### The seller lock
+### The seller lock — SUPERSEDED by T3.1
 
-- **Condition:** the projected total is **≤ 0** — the same projection the meter
-  reads (`projectedCredits`), so a store whose monthly refresh brings it back
-  above zero unlocks at its own midnight, not when the sweep runs. One check.
-- **Never locked:** comped and admin-owned stores, a store without a
-  subscription row or a credit account (fail open, like the past-due lock's
-  missing-row fail-safe). Kedaipal admins pass on their own store and in act-as.
-- **Locked** (server-enforced, `assertCreditsAvailable` / the two internal
-  queries for actions): editing the catalogue (products, variants, stock,
-  categories, import), accepting and moving an order on (`updateStatus` /
-  `bulkUpdateStatus` except to cancelled, `advanceToStage`, approving a
-  booking), marking payment received by hand, courier booking (Lalamove,
-  Delyva), despatch labels, the seller's receipt/invoice PDF, the payment
-  reminder, rescheduling, setting a delivery charge, and mockup work.
-- **Always open:** reading everything; cancelling and refunding (booking
-  decline, deposit settlement, courier cancel, clearing a gateway refund
-  issue); pinning; settings; billing, top-up, plan changes, resume; the team;
-  every buyer-side mutation; and **order intake on every channel** — storefront,
-  direct checkout, counter, claim links, bookings, RSVPs keep taking orders,
-  each using a credit, including below zero.
-- **Machine-enforced:** `creditLockCoverage.test.ts` classifies every public
-  write in the order-handling modules as locked or open (with a reason), fails
-  on a catalogue/despatch write without the guard, and fails if order intake or
-  a way back (`creditPurchases`, `invoices`, `subscriptionPayments`,
-  `subscriptions`, `billing`, `retailers`, `team`) ever carries it.
-- **A second, narrower lock** beside the past-due one (which makes a lapsed
-  store fully view-only). Where both apply the view-only one speaks: the banner
-  shows past due first, and the in-place credit note stands down.
-- **The typed refusal:** every locked write throws `ConvexError` with
-  `CreditLockErrorData` (`kind: "credits_locked"`, the sentence, the unlock
-  route, the audience) — so a save the lock refuses mid-edit shows the sentence
-  *with its way back* (`CreditLockCta`), never a dead end. `convexErrorMessage`
-  reads it as the sentence everywhere else.
+Everything T3 shipped about *which writes lock* and *what the seller sees* was
+replaced by the per-order gate — see
+[**The gate is PER ORDER (T3.1)**](#the-gate-is-per-order-t31) above, which is
+the live description. Kept here only as the trail of what changed and why:
 
-**The way back** (`creditUnlockRoute`, by subscription status): active → top
-up (or upgrade); trialing → pick a plan; past due → pay the invoice; on hold →
-resume; cancelled → choose a plan. **Who can take it** (`creditLockAudience`):
-the owner; a teammate holding **Credits write** when the way back is a top-up
-(they buy a pack on HitPay's page themselves — T2); every other teammate is
-told to ask the owner. The same sentence (`creditLockMessage`) is the server's
-refusal and every lock surface's copy.
+- the lock was **store-wide** (projected total ≤ 0 froze every order and the
+  whole catalogue). It is now **per order**, and the catalogue is never gated.
+- it was **un-actionable, not invisible** — the buyer's name, phone and address
+  stayed on screen behind greyed-out buttons, which is the manual-settlement
+  loophole the invisibility rule exists to close.
+- `assertCreditsAvailable` (store-wide) is gone; the guard takes an ORDER.
+- it never reached a seller: `CREDIT_LOCK_ENABLED = false` parked it for one
+  release (PR #336) rather than ship it.
 
-### What the seller sees
-
-- **The banner** (app shell, red, right after past due): "You're out of credits
-  · 3 new orders since you ran out" + the one button. **Running low** (amber,
-  dismissable — keyed by the month) once the store is into the last 20% of the
-  month's credits — 60 left on Founding Pro's 300, 40 on Pro, 20 on Starter, 40
-  of a trial's 200 — with the way to stay ahead of zero for THIS reader: **Top
-  up credits** straight into the picker (the owner, or a teammate holding
-  Credits write; never an admin acting as the store), **See plans** on a trial
-  (packs top up a paid plan), or **See credits** for a teammate who can't buy,
-  told the owner adds them. Never for a store that can't be locked or a custom
-  allowance. Measured on what's left IN TOTAL against the month's grant, so a
-  store with bought credits banked isn't told to buy more (Zaki, 1 Oct 2026:
-  "once base credit is 20%, show banner w/ CTA to purchase" — identical for a
-  store with no bought credits).
-- **The pack picker** says the result before the tap — and for a locked store,
-  "…Your store unlocks as soon as it's paid."
-- **`CreditLockNote`** in place on the orders inbox, the order page, the
-  products list, new/edit product, import and categories — what's paused, what
-  still works, the one button (or "ask the store owner").
-- **Every locked control greys out with its reason before the tap.** Primary
-  controls say it in the label ("Mark as Packed — out of credits"); the Lalamove
-  and Delyva cards keep their Book button, disabled, with the sentence under it,
-  and never auto-open a quote; the reschedule trigger stays tappable and opens
-  onto the reason (a tooltip is invisible on a phone); the inbox bulk bar keeps
-  Cancel and greys every forward move; the batch label dialog says why it
-  can't print. **Product forms keep their fields editable** — an edit already
-  under way survives, and saves the moment the lock lifts — with Save/Publish
-  disabled and the reason beside it; the variant editor's stock Adjust greys
-  out too (it is an immediate write). The same wiring covers the past-due
-  view-only lock and a view-only teammate, which several of these controls
-  never had.
-- **The cancel dialog** says what happens to *this* order's credit before the
-  tap (`creditLock.cancelOutlook`): it comes back (with how many more this
-  month), or it stays used because the order was accepted or the month's 10
-  are spent.
-- **The plan cards** state each plan's allowance, and what the choice does to
-  the balance before confirm: a trial converting ("your trial has used 140 of
-  its 200 orders — Starter includes 100 a month, you'd start with 100"), a
-  lapsed store paying (the month's credits land on payment, less anything
-  owed), an upgrade ("100 more land this month as soon as it's paid") and a
-  downgrade ("Starter includes 100 orders a month, from 1 Nov. You've had 140
-  so far this month"). "Credited" is no longer a plan-change word — unused
-  paid time "carries over as extra days".
+What T3 built that **did** survive unchanged, and is still described below: the
+meter, the running-low line (`lowCreditLine`, the last 20% of the month's
+credits), the balance notices and their once-a-period dedupe, the expiry
+heads-up, the exemptions (comped / admin-owned / missing-row fail-open), the
+unlock routes and the audience rules, and the cancel outlook.
 
 ### The notices
 

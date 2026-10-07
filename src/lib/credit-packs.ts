@@ -76,6 +76,28 @@ export function wholePrice(minor: number, currency: string): string {
 /** What the store will have once this pack lands, in orders — the preview
  * under the picker, so the seller sees the result of the tap before it.
  * A debt is paid first: "Covers the 15 owed and leaves 35 orders." */
+/**
+ * What a pack OPENS, beside what it does to the balance (Credits T3.1).
+ *
+ * Each credit frees exactly one waiting order, oldest first, so this can
+ * never over-promise: a 50-pack against 80 waiting opens 50 and says so.
+ * Said on the checkout line because "it unlocks your store" was the previous
+ * release's copy and it was both wrong (the store was never locked) and vague
+ * (which orders?).
+ */
+export function opensLine(waiting: number, credits: number): string {
+	const opens = Math.min(waiting, credits);
+	const left = waiting - opens;
+	const orders = (n: number) => `${n} ${n === 1 ? "order" : "orders"}`;
+	if (left === 0)
+		return `That opens ${waiting === 1 ? "the order" : `all ${orders(waiting)}`} waiting on credits.`;
+	const freed =
+		opens === 1
+			? "the oldest order"
+			: `the ${orders(opens)} that have waited longest`;
+	return `That opens ${freed} — ${orders(left)} would still be waiting.`;
+}
+
 export function afterTopUpLine(total: number, credits: number): string {
 	const after = total + credits;
 	const orders = (n: number) => `${n} ${n === 1 ? "order" : "orders"}`;

@@ -22,12 +22,16 @@ import {
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
-import { CREDIT_LOCK_ENABLED } from "../../../convex/lib/credits";
 import { useStoreRole } from "../../hooks/usePermission";
 import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../../lib/contact";
-import { afterTopUpLine, packOffers, wholePrice } from "../../lib/credit-packs";
+import {
+	afterTopUpLine,
+	opensLine,
+	packOffers,
+	wholePrice,
+} from "../../lib/credit-packs";
 import type { TopUpParam } from "../../lib/credit-top-up";
 import {
 	convexErrorMessage,
@@ -427,18 +431,18 @@ function PickerView({
 			{canBuy && pack ? (
 				<p aria-live="polite" className="text-sm font-medium tabular-nums">
 					{afterTopUpLine(balance.total, pack.credits)}
-					{/* Out of credits now, above zero after: say the lock lifts
-					    (T3) — the moment it's paid, not after a refresh. Gated on
-					    CREDIT_LOCK_ENABLED because this reads off the BALANCE, not
-					    off `locked`: with the lock switched off it promised an
-					    unlock to a store that was never locked, on the checkout
-					    line. `afterTopUpLine` above already says the true and
-					    sufficient thing ("Covers the 15 owed and leaves 35 orders"). */}
-					{CREDIT_LOCK_ENABLED &&
-					balance.total <= 0 &&
-					balance.total + pack.credits > 0 &&
-					balance.lockExempt === null
-						? " Your store unlocks as soon as it's paid."
+					{/* What this pack OPENS, said on the checkout line (Credits
+					    T3.1). Reads off `ordersWaiting` — the orders actually being
+					    held — not off the balance: a store can be below zero with
+					    nothing waiting (an expired lot, or debt from before the
+					    gate), and promising an unlock to a store that was never
+					    gated is the mistake the previous release shipped. It also
+					    can't over-promise, because each credit frees exactly one
+					    order: a 50-pack on 80 waiting opens 50 of them.
+					    `afterTopUpLine` above already covers the balance itself
+					    ("Covers the 15 owed and leaves 35 orders"). */}
+					{balance.ordersWaiting > 0 && balance.lockExempt === null
+						? ` ${opensLine(balance.ordersWaiting, pack.credits)}`
 						: null}
 				</p>
 			) : null}

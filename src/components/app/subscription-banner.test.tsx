@@ -83,11 +83,14 @@ function storeWith({
 	state.retailer = {
 		_id: "r_1",
 		actingAsAdmin,
-		creditLock: {
-			locked: false,
-			unlockRoute: route,
-			since: null,
+		// Credits T3.1: nothing waiting, so the "running low" banner is the one
+		// under test here. The waiting-orders banner has its own cases above.
+		creditGate: {
+			exempt: false,
+			fundedThrough: Number.POSITIVE_INFINITY,
+			creditsOwed: 0,
 			ordersWaiting: 0,
+			unlockRoute: route,
 		},
 	};
 }

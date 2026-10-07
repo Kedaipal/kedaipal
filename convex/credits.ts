@@ -45,8 +45,11 @@ import {
 	creditLockExemption,
 	creditRegime,
 	debitBucket,
+	debitIsFunded,
+	fundingAdvance,
 	lowCreditLine,
 	monthlyCreditGrant,
+	ordersAwaitingCredit,
 	refreshedPlanBalance,
 	sellerRefundsLeft,
 	GRANT_LEVER_CONTRACT_REFUSAL,
@@ -156,8 +159,11 @@ type EntryInput = {
  * Write one ledger row AND the cached balances it moves, in the same
  * mutation. Every balance change in the system goes through here — the
  * invariant `cache == Σ ledger` holds by construction. Also maintains
- * `exhaustedAt`: set when the total first reaches 0 or below, cleared the
- * moment it rises above 0 (by any route — refresh, top-up, upgrade, refund).
+ * `exhaustedAt` (set when the total first reaches 0 or below, cleared the
+ * moment it rises above 0 by any route — refresh, top-up, upgrade, refund)
+ * and the per-order gate's two counters, `debitSeq` / `fundedThrough`
+ * (Credits T3.1), which live here for exactly the reason the balances do:
+ * one write path, so the cache can never disagree with the ledger.
  */
 async function applyEntry(
 	ctx: MutationCtx,
@@ -183,6 +189,40 @@ async function applyEntry(
 		createdAt: now,
 	});
 	const total = planBalance + purchasedBalance;
+	// --- the per-order gate's queue (Credits T3.1, z8r3fdmg4h) --------------
+	// An ORDER DEBIT claims the next sequence number; `debitCreditForOrder`
+	// reads it back off the returned account and stamps it on the order.
+	// Anything else (a grant, a pack, a refund, an admin adjust, an expiry)
+	// leaves the sequence alone and only moves the watermark.
+	const isOrderDebit = entry.type === "debit" && entry.orderId !== undefined;
+	const prevSeq = account.debitSeq ?? 0;
+	const prevFunded = account.fundedThrough ?? 0;
+	const debitSeq = prevSeq + (isOrderDebit ? 1 : 0);
+	const fundedThrough = isOrderDebit
+		? debitIsFunded(total)
+			? // This debit left the total at or above zero, so it spent a real
+				// credit. The queue was necessarily EMPTY at that moment — credits
+				// and waiting orders cannot coexist, because `fundingAdvance` always
+				// takes the queue down by every credit that lands — so the watermark
+				// lands on this order. Were that invariant ever broken by drift, this
+				// funds the backlog rather than gating a paid-for order: the gate
+				// fails OPEN, and a seller never loses sight of a buyer over a
+				// bookkeeping fault. `creditSeqInvariant` (credits.test.ts) pins it.
+				debitSeq
+			: prevFunded
+		: // Credits LANDING move the queue: one credit in frees one waiting
+			// order, oldest first. A negative entry (an expired lot, an admin
+			// clawback) moves nothing — the watermark never falls, which is what
+			// makes "expiry never unfunds an order already worked" structural.
+			prevFunded +
+			fundingAdvance(
+				ordersAwaitingCredit(prevSeq, prevFunded),
+				Math.max(0, entry.amount),
+			);
+	const queue: Partial<Account> =
+		debitSeq === prevSeq && fundedThrough === prevFunded
+			? {}
+			: { debitSeq, fundedThrough };
 	const exhaustion: Partial<Account> =
 		total <= 0
 			? account.exhaustedAt === undefined
@@ -195,6 +235,7 @@ async function applyEntry(
 		planBalance,
 		purchasedBalance,
 		updatedAt: now,
+		...queue,
 		...exhaustion,
 		...extraPatch,
 	};
@@ -526,7 +567,7 @@ export async function debitCreditForOrder(
 			bucket = "plan";
 		}
 	}
-	await applyEntry(
+	const after = await applyEntry(
 		ctx,
 		account,
 		{
@@ -543,6 +584,16 @@ export async function debitCreditForOrder(
 		},
 		args.now,
 	);
+	// The order's place in the queue (Credits T3.1) — written here, from the
+	// number `applyEntry` just claimed, so an order can never carry a position
+	// the ledger didn't issue. Never rewritten afterwards: a position is for
+	// life, which is what makes "funded stays funded" structural.
+	//
+	// `updatedAt` is deliberately NOT touched: it drives the time-in-status
+	// badge, and spending a credit is not progress on the order (the same trap
+	// `markSeen` and `setPinned` document in schema.ts).
+	if (after.debitSeq !== undefined)
+		await ctx.db.patch(args.orderId, { creditSeq: after.debitSeq });
 }
 
 /**
@@ -818,14 +869,33 @@ export type CreditBalanceView = {
 	 * status line a billed store would read — an admin store sitting in
 	 * `trialing` or `past_due` is never asked to pay (T3 test round). */
 	lockExempt: CreditLockExemption | null;
+	/**
+	 * LIVE orders waiting on credits (Credits T3.1), capped at 99 — the number
+	 * every balance surface shows beside the balance itself.
+	 *
+	 * It rides HERE, on the balance, rather than being fetched by a hook: the
+	 * top-up picker needs it to say what a pack opens, and the picker renders
+	 * in tests and under admin act-as without the dashboard provider the gate
+	 * hook reads from. It is balance-adjacent data too, so sitting behind the
+	 * `credits` grant with the rest of it is where it belongs.
+	 *
+	 * Deliberately NOT derivable from `total`: a store can owe credits with
+	 * nothing waiting (an expired lot, or debt from before the gate shipped),
+	 * and a cancelled order still owes its credit while nobody waits on it.
+	 */
+	ordersWaiting: number;
 };
 
 /**
  * The balance as it stands NOW — including a month boundary the 00:05 MYT
  * sweep hasn't rolled yet (a query can't write) and a store with no account
  * yet (opened at signup, by its first order, or by the backfill). The seller
- * lock reads this, so a store whose refresh brings it back above zero is
- * unlocked at its own midnight, not five minutes later.
+ * gate reads this, so a store whose refresh frees its waiting orders sees that
+ * at its own midnight, not five minutes later.
+ *
+ * The per-order gate's WATERMARK is projected through the same pending roll,
+ * for exactly that reason: a meter that reads "200 left" above an order still
+ * marked "waiting on credits" is the two halves of one answer disagreeing.
  */
 export async function projectedCredits(
 	ctx: AnyCtx,
@@ -839,6 +909,10 @@ export async function projectedCredits(
 	periodKey: string;
 	periodGrant: number;
 	regime: CreditRegime;
+	/** Order debits this store has ever taken (Credits T3.1). */
+	debitSeq: number;
+	/** The gate's watermark, carried through any pending period roll. */
+	fundedThrough: number;
 } | null> {
 	const regime = await regimeFor(ctx, retailerId, account, now);
 	if (!regime) return null;
@@ -857,6 +931,15 @@ export async function projectedCredits(
 		periodGrant = account.periodGrant;
 	}
 	const purchased = account?.purchasedBalance ?? 0;
+	const debitSeq = account?.debitSeq ?? 0;
+	const funded = account?.fundedThrough ?? 0;
+	// A pending roll lands `grantNow` plan credits, and credits landing move
+	// the queue by `fundingAdvance` — the same rule `applyEntry` applies when
+	// the roll actually writes, so the projection and the write agree.
+	const rollPending =
+		account !== null &&
+		account.periodKey < periodKey &&
+		regime.kind !== "trial";
 	return {
 		plan,
 		purchased,
@@ -864,7 +947,47 @@ export async function projectedCredits(
 		periodKey,
 		periodGrant,
 		regime,
+		debitSeq,
+		fundedThrough: rollPending
+			? funded + fundingAdvance(ordersAwaitingCredit(debitSeq, funded), grantNow)
+			: funded,
 	};
+}
+
+/** Cap on the "orders waiting" count — surfaces say "99+" past it. */
+export const WAITING_COUNT_CAP = 99;
+
+/**
+ * LIVE orders above the gate's watermark, capped (Credits T3.1).
+ *
+ * A RANGE read on `by_retailer_credit_seq`, so it costs the backlog and not
+ * the table — and every caller checks `ordersAwaitingCredit` first, which for
+ * a store in credit is zero, so the common case does no read at all.
+ *
+ * Cancelled orders are skipped: they still hold a queue position (a watermark
+ * can only move from the oldest end, so there is no way to take one out of the
+ * middle) and the debt they left is real, but "3 orders waiting" must mean
+ * three orders the seller can actually be waiting on.
+ *
+ * Lives HERE rather than in creditLock.ts because `balanceView` needs it too,
+ * and creditLock.ts already imports from this module — putting it the other
+ * way round would make the two files circular.
+ */
+export async function countOrdersAwaitingCredit(
+	ctx: AnyCtx,
+	retailerId: Id<"retailers">,
+	fundedThrough: number,
+): Promise<number> {
+	let count = 0;
+	for await (const order of ctx.db
+		.query("orders")
+		.withIndex("by_retailer_credit_seq", (q) =>
+			q.eq("retailerId", retailerId).gt("creditSeq", fundedThrough),
+		)) {
+		if (order.status !== "cancelled") count++;
+		if (count >= WAITING_COUNT_CAP) break;
+	}
+	return count;
 }
 
 async function balanceView(
@@ -912,6 +1035,16 @@ async function balanceView(
 			comped: sub?.comped === true,
 			ownerIsAdmin: retailer ? storeOwnerIsAdmin(retailer) : false,
 		}),
+		// One extra read only when the arithmetic says something COULD be
+		// waiting, which for a store in credit is never.
+		ordersWaiting:
+			ordersAwaitingCredit(projected.debitSeq, projected.fundedThrough) === 0
+				? 0
+				: await countOrdersAwaitingCredit(
+						ctx,
+						retailerId,
+						projected.fundedThrough,
+					),
 	};
 }
 

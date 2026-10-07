@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { CREDIT_PACKS } from "../../convex/lib/plans";
-import { afterTopUpLine, packOffers, wholePrice } from "./credit-packs";
+import {
+	afterTopUpLine,
+	opensLine,
+	packOffers,
+	wholePrice,
+} from "./credit-packs";
 
 describe("packOffers — what each pack is worth, side by side", () => {
 	it("MYR: the 200 pack is the better value and says what it saves against 4 × 50", () => {
@@ -82,6 +87,31 @@ describe("afterTopUpLine — the result of the tap, before the tap", () => {
 		expect(afterTopUpLine(-50, 50)).toBe("Covers the 50 owed exactly.");
 		expect(afterTopUpLine(-80, 50)).toBe(
 			"Covers 50 of the 80 owed — 30 still owed after it.",
+		);
+	});
+});
+
+describe("opensLine — what the pack OPENS, before the tap (Credits T3.1)", () => {
+	it("a pack that covers the queue opens all of it", () => {
+		expect(opensLine(3, 50)).toBe(
+			"That opens all 3 orders waiting on credits.",
+		);
+		expect(opensLine(3, 3)).toBe("That opens all 3 orders waiting on credits.");
+		expect(opensLine(1, 50)).toBe("That opens the order waiting on credits.");
+	});
+
+	it("a pack smaller than the queue can never over-promise", () => {
+		// Each credit frees exactly one order, oldest first — so the sentence is
+		// arithmetic, not optimism. This is the half the old copy got wrong:
+		// "your store unlocks as soon as it's paid" was a promise a 50-pack
+		// against 80 waiting orders could not keep.
+		expect(opensLine(80, 50)).toBe(
+			"That opens the 50 orders that have waited longest — 30 orders would still be waiting.",
+		);
+		// One credit reads as "the oldest order", never "the 1 order that have
+		// waited longest".
+		expect(opensLine(2, 1)).toBe(
+			"That opens the oldest order — 1 order would still be waiting.",
 		);
 	});
 });

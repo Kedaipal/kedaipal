@@ -1,17 +1,33 @@
-// The seller lock at zero credits (Credits T3, ClickUp z8r3fdf8hy,
-// docs/credits.md). At a total balance of 0 or below the SELLER can't accept or
-// update orders, edit the catalogue, book couriers, print despatch labels or
-// hand out receipts — until credits are added by any route (top-up, upgrade,
-// the monthly refresh, a paid invoice). Cancelling and refunding, settings,
-// billing and every read stay open; order INTAKE never stops (storefront,
-// counter, claim links, bookings all keep taking orders and each uses a
-// credit); buyers never see a thing.
+// The seller gate is PER ORDER (Credits T3.1, ClickUp z8r3fdmg4h,
+// docs/credits.md). An order is workable once its own credit is paid for, and
+// stays workable forever after that. Only orders that arrived while the
+// balance was already at or below zero WAIT, and they come off the queue
+// oldest first as credits arrive.
 //
-// A SECOND, narrower lock beside the past-due one (`assertSubscriptionActive`,
+// Two things follow, and they are the whole design:
+//
+//  1. A GATED ORDER IS INVISIBLE, not merely un-actionable (Zaki, 6 Oct 2026).
+//     Greying the buttons out leaves the buyer's phone number on screen, so a
+//     seller settles the order by hand in WhatsApp and the gate collects
+//     nothing. So the REDACTION lives on the server read path — see
+//     `convex/lib/orderGate.ts` — and every seller-facing read of an order or
+//     a customer runs through it. Hiding it in the client would be theatre.
+//  2. NOTHING ELSE IS GATED. Products, categories, insights, settings and
+//     every funded order carry on untouched: those are paid for by the
+//     subscription, not by credits (Zaki, 6 Oct 2026 — this replaced a
+//     store-wide lock that was built, switched off and never shipped). The
+//     store-wide `assertCreditsAvailable` is gone with it; there is one gate
+//     and it takes an order.
+//
+// Which public writes carry the gate is a TEST, not prose —
+// creditLockCoverage.test.ts.
+//
+// A SECOND, broader lock sits beside this one (`assertSubscriptionActive`,
 // which makes a lapsed store fully view-only). The two are deliberately
-// separate guards: the credit lock must leave cancel, refund and settings open,
-// and cancel runs through the same `updateStatus` as confirm. Which public
-// writes carry this guard is a TEST, not prose — creditLockCoverage.test.ts.
+// separate guards: the credit gate must leave cancel, refund, settings and the
+// catalogue open, and cancel runs through the same `updateStatus` as confirm.
+// They compose without double-messaging because the subscription lock is
+// checked FIRST at every site and outranks this one in `useAreaLock` too.
 //
 // CALL IT UNCONDITIONALLY. Both locks let Kedaipal admins through on their own
 // `isAdmin` check (identity, `ADMIN_USER_IDS`), which is a SUPERSET of the
@@ -22,7 +38,7 @@
 //
 //   if (!access.actingAsAdmin)
 //     await assertSubscriptionActive(ctx, id);
-//     await assertCreditsAvailable(ctx, id);   // ← NOT inside the if
+//     await assertOrderCreditAvailable(ctx, order);   // ← NOT inside the if
 //
 // Right by accident, and a lie about the control flow in auth-adjacent code.
 // Those sites now brace the `if`; `creditLockCoverage.test.ts` fails on the
@@ -37,7 +53,11 @@ import {
 	type QueryCtx,
 	query,
 } from "./_generated/server";
-import { loadCreditAccount, projectedCredits } from "./credits";
+import {
+	countOrdersAwaitingCredit,
+	loadCreditAccount,
+	projectedCredits,
+} from "./credits";
 import {
 	isAdmin,
 	requireRetailerAccess,
@@ -45,63 +65,89 @@ import {
 	tryRetailerAccess,
 } from "./lib/auth";
 import {
-	CREDIT_LOCK_ENABLED,
 	type CreditUnlockRoute,
 	cancelRefundDecision,
 	creditLockAudience,
 	creditLockErrorData,
 	creditLockExempt,
 	creditUnlockRoute,
+	creditsToUnlockOrder,
+	orderCreditFunded,
+	ordersAwaitingCredit,
 	sellerRefundsLeft,
 } from "./lib/credits";
+import {
+	type SellerCustomer,
+	type SellerOrder,
+	isCustomerGated,
+	redactGatedCustomer,
+	redactGatedOrder,
+} from "./lib/orderGate";
 import { usagePeriodKey } from "./lib/usagePeriod";
 
 type AnyCtx = QueryCtx | MutationCtx;
 
-/** Cap on the "orders waiting" count — the banner says "99+" past it. */
-const WAITING_COUNT_CAP = 99;
-
-/** What the dashboard needs to render the lock — safe for every teammate
- * (no balance numbers; those stay behind the `credits` grant). */
-export type CreditLockState = {
-	locked: boolean;
+/**
+ * What the dashboard needs to answer "is THIS order gated?" for every row it
+ * holds, without a read per row — safe for every teammate (no balances; those
+ * stay behind the `credits` grant, and a sequence number is not a balance).
+ */
+export type CreditGateState = {
+	/** Nothing in this store is ever gated: comped, admin-owned, no
+	 * subscription row, or no credit account yet. Fail open. */
+	exempt: boolean;
+	/** The watermark. An order is workable iff `creditSeq <= fundedThrough`. */
+	fundedThrough: number;
+	/** Credits owed on orders that are waiting — `debitSeq - fundedThrough`,
+	 * the arithmetic bound on the queue (it counts positions, so an order
+	 * cancelled while it waited still holds one). */
+	creditsOwed: number;
+	/** LIVE orders waiting on credits, capped at 99 — the number every surface
+	 * SHOWS. Read from the queue rather than derived from `creditsOwed`, so a
+	 * seller who cancelled a waiting order isn't told it is still waiting. */
+	ordersWaiting: number;
 	/** What puts credits back — decides the copy and the one button. */
 	unlockRoute: CreditUnlockRoute;
-	/** When the balance reached zero (null while unlocked). */
-	since: number | null;
-	/** Live orders that arrived since the store ran out, capped at 99. */
-	ordersWaiting: number;
 };
 
+/** A store where nothing is gated. */
+function openGate(unlockRoute: CreditUnlockRoute): CreditGateState {
+	return {
+		exempt: true,
+		// Above every possible `creditSeq`, so `orderCreditFunded` says yes for
+		// every order without the caller having to check `exempt` as well.
+		fundedThrough: Number.POSITIVE_INFINITY,
+		creditsOwed: 0,
+		ordersWaiting: 0,
+		unlockRoute,
+	};
+}
+
 /**
- * The ONE lock resolver — the server guards and the dashboard payload both
- * read it. Exempt stores (comped, admin-owned, no subscription row) and a
- * store with no credit account yet are never locked (fail open, like the
- * past-due lock's missing-row fail-safe).
+ * The ONE gate resolver — the server guards, the read-path redaction and the
+ * dashboard payload all read it. Exempt stores (comped, admin-owned, no
+ * subscription row) and a store with no credit account yet are never gated
+ * (fail open, like the past-due lock's missing-row fail-safe).
+ *
+ * A KEDAIPAL ADMIN is never gated, here rather than at each call site: the
+ * redaction, the guards, the batch skip and the dashboard payload all read
+ * this one answer, so white-glove support sees a store exactly as it is and
+ * the client has no admin special-case left to get wrong. `isAdmin` is the
+ * identity check (`ADMIN_USER_IDS`), a SUPERSET of a call site's
+ * `access.actingAsAdmin` — it also covers an admin on their own store.
  */
-export async function resolveCreditLock(
+export async function resolveCreditGate(
 	ctx: AnyCtx,
 	retailer: Doc<"retailers">,
 	now: number,
-): Promise<CreditLockState> {
+): Promise<CreditGateState> {
 	const sub = await ctx.db
 		.query("subscriptions")
 		.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
 		.first();
 	const status = sub?.status ?? null;
 	const unlockRoute = creditUnlockRoute(status);
-	const open: CreditLockState = {
-		locked: false,
-		unlockRoute,
-		since: null,
-		ordersWaiting: 0,
-	};
-	// The lock is built and switched off (CREDIT_LOCK_ENABLED, lib/credits.ts).
-	// Gated HERE, at the ONE resolver every guard and the dashboard payload
-	// read, so the off state can never disagree with itself — what the seller
-	// is told and what the server refuses come from this answer. Turning it on
-	// is this line, not a sweep.
-	if (!CREDIT_LOCK_ENABLED) return open;
+	if (await isAdmin(ctx)) return openGate(unlockRoute);
 	if (
 		creditLockExempt({
 			status,
@@ -109,60 +155,139 @@ export async function resolveCreditLock(
 			ownerIsAdmin: storeOwnerIsAdmin(retailer),
 		})
 	)
-		return open;
+		return openGate(unlockRoute);
 	const account = await loadCreditAccount(ctx, retailer._id);
-	if (!account) return open;
+	if (!account) return openGate(unlockRoute);
 	const projected = await projectedCredits(ctx, retailer._id, account, now);
-	if (!projected || projected.total > 0) return open;
-	const since = account.exhaustedAt ?? now;
+	if (!projected) return openGate(unlockRoute);
+	const { debitSeq, fundedThrough } = projected;
+	const creditsOwed = ordersAwaitingCredit(debitSeq, fundedThrough);
 	return {
-		locked: true,
+		exempt: false,
 		unlockRoute,
-		since,
-		ordersWaiting: await ordersSince(ctx, retailer._id, since),
+		fundedThrough,
+		creditsOwed,
+		// Only read the queue when the arithmetic says there could be something
+		// in it — which for a store in credit is never, so the common case costs
+		// nothing at all.
+		ordersWaiting:
+			creditsOwed === 0
+				? 0
+				: await countOrdersAwaitingCredit(ctx, retailer._id, fundedThrough),
 	};
 }
 
-/** Live orders created at or after `since`, newest first, capped.
- *
- * Walks the `by_retailer` index (insertion order) and stops at the first row
- * older than `since`, which assumes `createdAt` runs with insertion — true for
- * every intake path, none of which backdates it. A backdated row would only
- * end the walk early, undercounting a "99+" banner figure; it can never
- * over-count or affect the lock itself. */
-async function ordersSince(
+/**
+ * The gate for one store from its id — what the READ paths use, since a query
+ * about to redact a page of orders holds a `retailerId` and not the retailer
+ * row. A missing store returns an open gate: a read that found no store has a
+ * better answer of its own than a credit refusal.
+ */
+export async function creditGateFor(
 	ctx: AnyCtx,
 	retailerId: Id<"retailers">,
-	since: number,
-): Promise<number> {
-	let count = 0;
-	for await (const order of ctx.db
-		.query("orders")
-		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-		.order("desc")) {
-		if (order.createdAt < since) break;
-		if (order.status !== "cancelled") count++;
-		if (count >= WAITING_COUNT_CAP) break;
-	}
-	return count;
+	now: number = Date.now(),
+): Promise<CreditGateState> {
+	const retailer = await ctx.db.get(retailerId);
+	return retailer
+		? await resolveCreditGate(ctx, retailer, now)
+		: openGate("topup");
+}
+
+/** Redact one order for a seller surface, given the store's gate — the ONE
+ * call every seller-facing read of an order makes, so a surface can never
+ * forget half of the rule (whether the row is gated and what it is waiting
+ * for always travel together). */
+export function forSeller(
+	gate: CreditGateState,
+	order: Doc<"orders">,
+): SellerOrder {
+	return redactGatedOrder(order, {
+		gated: isOrderGated(gate, order),
+		creditsToUnlock: creditsToUnlock(gate, order),
+	});
+}
+
+/** `forSeller` for a customer record. */
+export function customerForSeller(
+	gate: CreditGateState,
+	customer: Doc<"customers">,
+): SellerCustomer {
+	return redactGatedCustomer(
+		customer,
+		!gate.exempt && isCustomerGated(customer, gate.fundedThrough),
+	);
 }
 
 /**
- * The guard for every locked seller write (see the file header). Kedaipal
+ * Is THIS order waiting on credits, resolved from the order alone — for the
+ * per-order seller reads (the timeline, the payment proofs, the item, mockup
+ * and reference images) that hand back something OTHER than an order row and
+ * so have nothing for `forSeller` to redact. They return their own empty
+ * answer instead: no events, no claims, no image URLs.
+ *
+ * It is the gate, not the images, that is the point here: a mockup photo or a
+ * payment screenshot carries the buyer's name and sometimes their number, and
+ * an order the seller can't see must not leak through its attachments.
+ */
+export async function orderGatedForSeller(
+	ctx: AnyCtx,
+	order: Doc<"orders">,
+): Promise<boolean> {
+	const retailer = await ctx.db.get(order.retailerId);
+	if (!retailer) return false;
+	return isOrderGated(await resolveCreditGate(ctx, retailer, Date.now()), order);
+}
+
+/** Is this order waiting on credits? The one predicate every surface asks —
+ * the redaction, the guards, the inbox filter and the UI. */
+export function isOrderGated(
+	gate: CreditGateState,
+	order: { creditSeq?: number },
+): boolean {
+	return !orderCreditFunded(order.creditSeq, gate.fundedThrough);
+}
+
+/** How many credits THIS order is waiting on (0 when it's workable). */
+export function creditsToUnlock(
+	gate: CreditGateState,
+	order: { creditSeq?: number },
+): number {
+	return creditsToUnlockOrder(order.creditSeq, gate.fundedThrough);
+}
+
+/**
+ * The guard for every gated seller write (see the file header). Kedaipal
  * admins pass, as they do the past-due lock — on their own store or acting as
  * a seller. Throws a TYPED `ConvexError` (`CreditLockErrorData`) whose
- * `message` is `creditLockMessage`, so the refusal a seller reads is the
- * sentence the lock surfaces show — and the dashboard can offer the way back.
+ * `message` is `creditLockMessage` and whose `creditsToUnlock` names THIS
+ * order's place in the queue, so the refusal a seller reads is the sentence
+ * the gate surfaces show — and the dashboard can offer the way back.
+ *
+ * Takes the ORDER, never a retailerId: there is no store-wide credit refusal
+ * any more, and a guard that can't name an order can't be the credit gate.
  */
-export async function assertCreditsAvailable(
+export async function assertOrderCreditAvailable(
 	ctx: AnyCtx,
-	retailerId: Id<"retailers">,
+	order: Doc<"orders">,
 ): Promise<void> {
 	if (await isAdmin(ctx)) return;
-	const retailer = await ctx.db.get(retailerId);
+	const retailer = await ctx.db.get(order.retailerId);
 	if (!retailer) return;
-	const lock = await resolveCreditLock(ctx, retailer, Date.now());
-	if (!lock.locked) return;
+	const gate = await resolveCreditGate(ctx, retailer, Date.now());
+	if (!isOrderGated(gate, order)) return;
+	throw new ConvexError(
+		await gateRefusal(ctx, order.retailerId, gate, creditsToUnlock(gate, order)),
+	);
+}
+
+/** The typed refusal, with the way back THIS reader can take. */
+async function gateRefusal(
+	ctx: AnyCtx,
+	retailerId: Id<"retailers">,
+	gate: CreditGateState,
+	creditsToUnlockOrder: number,
+) {
 	const access = await tryRetailerAccess(ctx, retailerId, { anyMember: true });
 	const isMember = access?.role === "member";
 	// A teammate holding Credits write may buy a pack (T2), so for them a
@@ -173,42 +298,29 @@ export async function assertCreditsAvailable(
 			area: "credits",
 			level: "write",
 		})) !== null;
-	throw new ConvexError(
-		creditLockErrorData(
-			lock.unlockRoute,
-			creditLockAudience({
-				isMember,
-				canBuyCredits,
-				route: lock.unlockRoute,
-			}),
-		),
-	);
+	return creditLockErrorData({
+		route: gate.unlockRoute,
+		audience: creditLockAudience({
+			isMember,
+			canBuyCredits,
+			route: gate.unlockRoute,
+		}),
+		creditsToUnlock: creditsToUnlockOrder,
+		ordersWaiting: gate.ordersWaiting,
+	});
 }
 
 /**
- * The same lock for seller ACTIONS (courier booking, despatch labels, the
- * payment reminder, the seller's receipt), which have no `ctx.db`. OWNER- and
- * MEMBER-gated exactly like `subscriptions.assertWritable`: these run first in
- * public actions, so an anonymous or foreign caller must get the action's own
- * answer, never a lock refusal that would reveal a store's credit state.
+ * The same gate for seller ACTIONS (courier booking, despatch labels, the
+ * payment reminder, the seller's receipt), which have no `ctx.db` and know a
+ * `shortId` and nothing else. A shortId that resolves to nothing passes — the
+ * action's own "not found" is the clearer answer.
+ *
+ * OWNER- and MEMBER-gated exactly like `subscriptions.assertWritable`: these
+ * run first in public actions, so an anonymous or foreign caller must get the
+ * action's own answer, never a gate refusal that would reveal a store's credit
+ * state.
  */
-export const assertCreditsForAction = internalQuery({
-	args: { retailerId: v.id("retailers") },
-	handler: async (ctx, { retailerId }): Promise<null> => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) return null;
-		const access = await tryRetailerAccess(ctx, retailerId, {
-			anyMember: true,
-		});
-		if (!access || access.role === "admin") return null;
-		await assertCreditsAvailable(ctx, retailerId);
-		return null;
-	},
-});
-
-/** `assertCreditsForAction` for the order actions, which know a `shortId`
- * and nothing else. A shortId that resolves to nothing passes — the action's
- * own "not found" is the clearer answer. Same caller gate, same reason. */
 export const assertCreditsForOrder = internalQuery({
 	args: { shortId: v.string() },
 	handler: async (ctx, { shortId }): Promise<null> => {
@@ -223,7 +335,7 @@ export const assertCreditsForOrder = internalQuery({
 			anyMember: true,
 		});
 		if (!access || access.role === "admin") return null;
-		await assertCreditsAvailable(ctx, order.retailerId);
+		await assertOrderCreditAvailable(ctx, order);
 		return null;
 	},
 });

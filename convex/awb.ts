@@ -54,6 +54,7 @@ import {
 	sortAwbItems,
 } from "./lib/pdf/awb";
 import { buildAwbPdf } from "./lib/pdf/render";
+import { isOrderGated, resolveCreditGate } from "./creditLock";
 import { resolveSharedOrder } from "./orders";
 import { assertPlanFeature } from "./subscriptions";
 
@@ -239,9 +240,11 @@ export const generateAwbPdf = action({
 		await ctx.runQuery(internal.subscriptions.assertWritable, {
 			retailerId: inputs.retailerId,
 		});
-		await ctx.runQuery(internal.creditLock.assertCreditsForAction, {
-			retailerId: inputs.retailerId,
-		});
+		// Credits (T3.1): printing a label for an order the seller can't even see
+		// is exactly the manual workaround the gate exists to close — the label
+		// carries the buyer's name and address. Keyed on the ORDER, so an order
+		// whose credit is paid for still prints while the store is in debt.
+		await ctx.runQuery(internal.creditLock.assertCreditsForOrder, { shortId });
 		const bytes = await buildAwbPdf([inputs.label], {
 			paperSize: inputs.paperSize,
 			logo: await fetchLogoBytes(inputs.logoUrl),
@@ -305,10 +308,20 @@ export const batchPageByIds = internalQuery({
 		const skipped = emptySkipCounts();
 		const items: AwbBatchItem[] = [];
 		const includedIds: Array<Id<"orders">> = [];
+		// One gate read for the page; whether a given order sits above the
+		// watermark is then a comparison, not a read (Credits T3.1).
+		const gate = await resolveCreditGate(ctx, retailer, Date.now());
 		for (const id of orderIds) {
 			const order = await ctx.db.get(id);
 			if (!order || order.retailerId !== retailerId) {
 				skipped.not_found++;
+				continue;
+			}
+			// Checked BEFORE `labelSkipReason`: a gated order's address is hidden
+			// from the seller too, so "waiting on credits" is the true reason and
+			// "no delivery address" would be a misleading one.
+			if (isOrderGated(gate, order)) {
+				skipped.credit_gated++;
 				continue;
 			}
 			const reason = labelSkipReason(order);
@@ -452,9 +465,13 @@ export const generateAwbBatchPdf = action({
 	},
 	handler: async (ctx, { retailerId, orderIds, sort }): Promise<AwbBatchResult> => {
 		await ctx.runQuery(internal.subscriptions.assertWritable, { retailerId });
-		await ctx.runQuery(internal.creditLock.assertCreditsForAction, {
-			retailerId: retailerId,
-		});
+		// No store-wide credit gate here: a batch SKIPS the orders that are
+		// waiting on credits and names them in `skipped.credit_gated`, the same
+		// way it already handles a cancelled or address-less one. Refusing the
+		// whole print run because one order of forty is waiting would be the
+		// store-wide lock all over again. The decision is made per order inside
+		// `batchPageByIds`, which is the only place that holds both the order and
+		// the gate.
 		let ids: Array<Id<"orders">>;
 		let remaining = 0;
 		let filenamePrefix: string;

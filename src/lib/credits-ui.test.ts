@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, test } from "vitest";
 import {
+	bulkCreditSkipNote,
 	CREDIT_RULES_LINE,
 	cancelCreditLine,
 	creditActivityLabel,
@@ -8,8 +9,10 @@ import {
 	creditStateLine,
 	creditTone,
 	downgradeCreditLine,
+	gatedRowLine,
 	includedCreditsLabel,
 	lockCta,
+	orderGatedLine,
 	ordersBalanceLabel,
 	ordersWaitingLabel,
 	planPickCreditLine,
@@ -41,9 +44,9 @@ describe("the balance speaks in orders", () => {
 
 	test("the waiting count caps at 99+ and says nothing at zero", () => {
 		expect(ordersWaitingLabel(0)).toBeNull();
-		expect(ordersWaitingLabel(1)).toBe("1 new order since you ran out");
-		expect(ordersWaitingLabel(3)).toBe("3 new orders since you ran out");
-		expect(ordersWaitingLabel(99)).toBe("99+ new orders since you ran out");
+		expect(ordersWaitingLabel(1)).toBe("1 order waiting on credits");
+		expect(ordersWaitingLabel(3)).toBe("3 orders waiting on credits");
+		expect(ordersWaitingLabel(99)).toBe("99+ orders waiting on credits");
 	});
 
 	test("every unlock route gets the one button that puts credits back", () => {
@@ -317,7 +320,7 @@ describe("the monthly reset reads as a reset, never as more on top", () => {
 
 describe("the meter's state line", () => {
 	const base = {
-		locked: false,
+		ordersWaiting: 0,
 		total: 120,
 		purchased: 0,
 		regime: "monthly" as const,
@@ -362,15 +365,18 @@ describe("the meter's state line", () => {
 		);
 	});
 
-	test("the lock outranks everything, and a debt says where it goes", () => {
+	test("waiting orders outrank everything, and a debt says where it goes", () => {
 		expect(
-			creditStateLine({ ...base, locked: true, total: 0, exempt: null }),
-		).toBe(
-			"Accepting and updating orders and editing products are paused until you add credits.",
+			creditStateLine({ ...base, ordersWaiting: 2, total: 0, exempt: null }),
+		).toBe("2 orders are waiting on credits until you add credits.");
+		expect(creditStateLine({ ...base, ordersWaiting: 3, total: -15 })).toMatch(
+			/The 15 orders owed come off your next pack or your next monthly credits, oldest order first\./,
 		);
-		expect(creditStateLine({ ...base, locked: true, total: -15 })).toMatch(
-			/The 15 orders owed come off your next pack or your next monthly credits\./,
-		);
+		// It names the ORDERS, never the store: products and settings are paid
+		// for by the subscription and are never gated (Credits T3.1).
+		expect(
+			creditStateLine({ ...base, ordersWaiting: 2, total: -2 }),
+		).not.toMatch(/editing products/);
 	});
 
 	test("a trial and a custom allowance say what they are", () => {
@@ -385,6 +391,36 @@ describe("the meter's state line", () => {
 	test("the rules name the order of use", () => {
 		expect(CREDIT_RULES_LINE).toMatch(
 			/Monthly credits are used first and reset on the 1st.*Bought credits are used next and last 12 months/,
+		);
+	});
+});
+
+describe("the per-order gate's copy names the ORDER, never the store (T3.1)", () => {
+	test("a gated row says its own position, and leads to the fix", () => {
+		// A seller buying one credit has to know whether it will be THIS order.
+		expect(gatedRowLine(1)).toBe("Waiting on 1 credit — top up to open it");
+		expect(gatedRowLine(3)).toBe("Waiting on 3 credits — top up to open it");
+		// Never plural at one, never a store-wide sentence.
+		expect(gatedRowLine(1)).not.toMatch(/credits/);
+		for (const n of [1, 2, 9])
+			expect(gatedRowLine(n)).not.toMatch(/store|products|paused/i);
+	});
+
+	test("the short form is the same answer, for a disabled control", () => {
+		expect(orderGatedLine(1)).toBe("Waiting on 1 credit");
+		expect(orderGatedLine(4)).toBe("Waiting on 4 credits");
+		// 0 can't happen on a gated row, but a floor beats "Waiting on 0".
+		expect(orderGatedLine(0)).toBe("Waiting on 1 credit");
+	});
+
+	test("the bulk bar says what WILL be skipped, and that cancel still works", () => {
+		// Said before the tap. The batch skips rather than refusing, so the bar
+		// stays enabled — a note, not a disabled control.
+		expect(bulkCreditSkipNote(1)).toBe(
+			"1 of these is waiting on credits and will be skipped. Cancelling works on all of them.",
+		);
+		expect(bulkCreditSkipNote(4)).toMatch(
+			/^4 of these are waiting on credits and will be skipped\./,
 		);
 	});
 });

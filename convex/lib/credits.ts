@@ -199,12 +199,6 @@ export function sellerRefundsLeft(used: number): number {
 	return Math.max(0, SELLER_CANCEL_REFUNDS_PER_PERIOD - used);
 }
 
-/** The ONE balance check (T3): the seller can work while the total is above
- * zero. Exemptions (comped, admin-owned) are the gate's business, not this. */
-export function creditsExhausted(total: number): boolean {
-	return total <= 0;
-}
-
 /** Why a store's SUBSCRIPTION stops it buying a top-up pack, or `null` when
  * it doesn't (register item 7c + T2). Credits top up a live subscription;
  * they never replace one. Comped stores and the missing-row fail-safe pass
@@ -242,32 +236,108 @@ export function lowCreditLine(periodGrant: number): number {
 	return Math.ceil(Math.max(0, periodGrant) * LOW_CREDIT_RATIO);
 }
 
+// ---------------------------------------------------------------------------
+// The gate is PER ORDER (Credits T3.1, ClickUp z8r3fdmg4h)
+// ---------------------------------------------------------------------------
+
 /**
- * The seller lock at zero credits is BUILT but SWITCHED OFF (2 Oct 2026).
+ * An order is workable once its OWN credit is paid for — and stays workable
+ * forever after that, even when the store goes back into debt. Only orders
+ * that arrived while the balance was already at or below zero wait, and they
+ * come off the queue OLDEST FIRST as credits arrive. You charge a credit for
+ * an order; you don't then hold that order hostage because a LATER one went
+ * unfunded (Zaki, 2 Oct 2026 — this replaced a store-wide lock that was built,
+ * switched off and never shipped to a seller).
  *
- * As shipped, the lock is store-WIDE: at a total balance of 0 or below the
- * seller can't work ANY order, including ones whose credit was spent weeks
- * ago. That over-reaches — an order that already paid for its credit should
- * stay workable forever, and only orders that arrived while the balance was
- * at or below zero should wait. The per-order model is scoped separately;
- * until it lands, nothing locks.
+ * **The mechanism is two counters and one number per order**, so every
+ * question below is arithmetic rather than a walk of the ledger:
  *
- * What stays live with this off: every order still spends a credit, the
- * ledger still runs negative, grants/purchases/refunds/expiry all behave, and
- * the balance meter shows the real number. So the history the per-order rule
- * needs is accruing from day one, and flipping this to `true` (or deleting it
- * in favour of the per-order rule) needs no backfill.
+ *  - `creditAccounts.debitSeq` — how many order debits this store has ever
+ *    taken. Monotonic; one order gets one number, for life.
+ *  - `creditAccounts.fundedThrough` — the high-water mark of debit positions
+ *    that are paid for. Only ever RISES.
+ *  - `orders.creditSeq` — this order's position in that sequence.
  *
- * What this silences: the lock itself (`resolveCreditLock`, and therefore
- * every `assertCreditsAvailable` guard) and the three BALANCE notices
- * (`low` / `locked` / `unlocked`), whose copy — email, WhatsApp template and
- * banner alike — all state that order handling pauses. Expiry notices are
- * about purchased lots, not the lock, and keep running.
+ * An order is funded iff `creditSeq <= fundedThrough`, so the inbox answers it
+ * per row off a number it already holds — no per-row read. `debitSeq -
+ * fundedThrough` is how many orders are waiting, so the meter's count is
+ * arithmetic too.
  *
- * Tests that exercise the lock's own behaviour mock this to `true`; the suite
- * also pins the off-state, so neither direction can rot.
+ * **Why the watermark only rises.** A purchased lot that expires can push the
+ * balance below zero long after the orders it funded were worked. Those orders
+ * were paid for and must stay workable ("expiry must not retroactively unfund
+ * an order already worked"), and a watermark that cannot fall gives that for
+ * free — there is no code path that un-funds anything.
  */
-export const CREDIT_LOCK_ENABLED = false;
+
+/**
+ * Does a freshly written debit leave its order PAID FOR?
+ *
+ * The order spent a real credit iff the total AFTER the debit is still at or
+ * above zero: a store sitting on 1 credit takes an order, the debit leaves the
+ * total at 0, and that order did pay for its credit. Only below zero is a
+ * debt, and only a debt waits. (The ticket specified "unfunded iff the debit
+ * left the total at or below zero", which gates the order that spent the
+ * store's last credit — an off-by-one, corrected here.)
+ */
+export function debitIsFunded(totalAfterDebit: number): boolean {
+	return totalAfterDebit >= 0;
+}
+
+/**
+ * Is THIS order's credit paid for? An order with NO `creditSeq` is funded: it
+ * never spent a credit through this gate — placed before T3.1 shipped, or its
+ * debit faulted and the ledger deliberately kept the order anyway
+ * (`recordOrderCreated` swallows a debit fault so checkout never fails). Fail
+ * OPEN, like every other missing-data answer in this file: a ledger fault must
+ * never be what hides a buyer's order from the seller.
+ */
+export function orderCreditFunded(
+	creditSeq: number | undefined,
+	fundedThrough: number,
+): boolean {
+	return creditSeq === undefined || creditSeq <= fundedThrough;
+}
+
+/** How many credits THIS order is waiting on — its own place in the queue, so
+ * a gated order says "waiting on 3 credits" instead of a store-wide sentence.
+ * 0 once it is funded. */
+export function creditsToUnlockOrder(
+	creditSeq: number | undefined,
+	fundedThrough: number,
+): number {
+	return orderCreditFunded(creditSeq, fundedThrough)
+		? 0
+		: (creditSeq as number) - fundedThrough;
+}
+
+/** How many of the store's orders are waiting on credits right now. */
+export function ordersAwaitingCredit(
+	debitSeq: number,
+	fundedThrough: number,
+): number {
+	return Math.max(0, debitSeq - fundedThrough);
+}
+
+/**
+ * How far the queue moves when credits land: **one credit in frees one waiting
+ * order**, oldest first.
+ *
+ * Deliberately NOT "fill the balance back to zero first". The two agree
+ * exactly whenever the debt was created by waiting orders — a store at −101
+ * buying a 100-pack unlocks the 100 oldest and keeps the 101st waiting, which
+ * is the rule as specified. They diverge only where a store owes credits that
+ * no waiting order created: a purchased lot that expired under a negative plan
+ * balance, or the debt a store was already carrying when this gate shipped
+ * (those orders are grandfathered — they have no `creditSeq`). There, "fill
+ * the balance first" would swallow a seller's whole pack and unlock nothing:
+ * money in, nothing happens, no explanation on screen. One credit, one order
+ * is the rule a seller can predict — and the debt still sits on the balance
+ * and still comes off the next refresh, so nothing is given away.
+ */
+export function fundingAdvance(waiting: number, creditsIn: number): number {
+	return Math.max(0, Math.min(waiting, creditsIn));
+}
 
 /** WHY a store is metered but never locked — the copy that explains it
  * differs: a Kedaipal admin's own store is never billed; a SPONSORED store
@@ -319,13 +389,28 @@ export function creditUnlockRoute(status: CreditBillingStatus): CreditUnlockRout
 	}
 }
 
-const LOCK_PAUSED =
-	"accepting and updating orders and editing products are paused";
-const LOCK_STILL_OPEN =
-	"New orders keep coming in, and you can still view, cancel and refund them.";
+/** "1 order" / "15 orders" — counts are always in orders, never money. */
+function orders(n: number): string {
+	return `${n} ${n === 1 ? "order" : "orders"}`;
+}
+
+/** What the gate holds back, in the seller's words. Per-order, so it names
+ * the orders that are waiting and NOT the store: the catalogue, insights and
+ * every already-funded order carry on untouched (Zaki, 6 Oct 2026 — those are
+ * paid for by the subscription, not by credits). */
+function gateWaiting(n: number): string {
+	return n === 1
+		? "1 order is waiting on credits, so you can't open it yet"
+		: `${orders(n)} are waiting on credits, so you can't open them yet`;
+}
+
+/** The reassurance half, which is most of the point: this is not a frozen
+ * store. Said in the same breath as the refusal, every time. */
+const GATE_STILL_OPEN =
+	"Your other orders, your products and your settings all carry on as normal — and you can cancel a waiting order to release the buyer.";
 
 /**
- * Who is reading a lock sentence, by what they can do about it: the OWNER
+ * Who is reading a gate sentence, by what they can do about it: the OWNER
  * (every way back), a teammate who may buy packs (`member_topup` — Credits
  * write, T2, and a top-up is the way back), or a teammate who can only ask.
  */
@@ -346,61 +431,95 @@ export function creditLockAudience(args: {
 }
 
 /**
- * The ONE sentence a locked seller reads — the server's refusal and the
- * dashboard's lock surfaces both come from here, so they can't disagree. It
- * says what is paused, what still works, and the way out THIS reader can take:
- * a teammate who may buy packs is sent to top up; one who can't is pointed at
- * the owner.
+ * The ONE sentence a gated seller reads — the server's refusal and the
+ * dashboard's gate surfaces both come from here, so they can't disagree. It
+ * says how many orders are waiting, what still works, and the way out THIS
+ * reader can take: a teammate who may buy packs is sent to top up; one who
+ * can't is pointed at the owner.
+ *
+ * `waiting` is the store's whole queue (`ordersAwaitingCredit`), not one
+ * order's position — an individual order says "waiting on 3 credits" from
+ * `creditsToUnlockOrder` at the surface that shows it.
  */
 export function creditLockMessage(
 	route: CreditUnlockRoute,
 	audience: CreditLockAudience,
+	waiting: number,
 ): string {
+	const held = gateWaiting(Math.max(1, waiting));
 	if (audience === "member")
-		return `This store is out of credits, so ${LOCK_PAUSED}. Ask the store owner to add credits. ${LOCK_STILL_OPEN}`;
+		return `${held}. Ask the store owner to add credits. ${GATE_STILL_OPEN}`;
 	if (audience === "member_topup")
-		return `This store is out of credits, so ${LOCK_PAUSED}. Top up in Settings → Billing to carry on. ${LOCK_STILL_OPEN}`;
+		return `${held}. Top up in Settings → Billing to open ${waiting === 1 ? "it" : "them"}. ${GATE_STILL_OPEN}`;
 	switch (route) {
 		case "pick_plan":
-			return `Your trial's orders are used up, so ${LOCK_PAUSED}. Pick a plan in Settings → Billing to carry on. ${LOCK_STILL_OPEN}`;
+			return `${held} — your trial's orders are used up. Pick a plan in Settings → Billing to carry on. ${GATE_STILL_OPEN}`;
 		case "pay_invoice":
-			return `You're out of credits, so ${LOCK_PAUSED}. Pay your invoice in Settings → Billing and this month's credits land straight away. ${LOCK_STILL_OPEN}`;
+			return `${held}. Pay your invoice in Settings → Billing and this month's credits land straight away. ${GATE_STILL_OPEN}`;
 		case "resume":
-			return `You're out of credits, so ${LOCK_PAUSED}. Resume your plan in Settings → Billing and this month's credits land straight away. ${LOCK_STILL_OPEN}`;
+			return `${held}. Resume your plan in Settings → Billing and this month's credits land straight away. ${GATE_STILL_OPEN}`;
 		case "subscribe":
-			return `You're out of credits, so ${LOCK_PAUSED}. Choose a plan in Settings → Billing to carry on. ${LOCK_STILL_OPEN}`;
+			return `${held}. Choose a plan in Settings → Billing to carry on. ${GATE_STILL_OPEN}`;
 		case "topup":
-			return `You're out of credits, so ${LOCK_PAUSED}. Top up or upgrade in Settings → Billing to carry on. ${LOCK_STILL_OPEN}`;
+			return `${held}. Top up or upgrade in Settings → Billing to open ${waiting === 1 ? "it" : "them"}. ${GATE_STILL_OPEN}`;
 	}
 }
 
+/** The one line a GATED ORDER carries, wherever it appears — the locked inbox
+ * row, the locked order page, the disabled action. It names the order's own
+ * position, never the store's total, so a seller topping up one credit knows
+ * exactly what that credit opens. */
+export function orderGatedLine(creditsToUnlock: number): string {
+	return creditsToUnlock <= 1
+		? "Waiting on 1 credit"
+		: `Waiting on ${creditsToUnlock} credits`;
+}
+
+/** The phrase every gate refusal and every gate surface contains — what the
+ * copy tests and the toast matchers key on, now that the opening words carry
+ * a live count and can't be a fixed prefix. */
+export const CREDIT_GATE_PHRASE = "waiting on credits";
+
 /**
- * The TYPED refusal every locked seller write throws (`ConvexError` data), so
+ * The TYPED refusal every gated seller write throws (`ConvexError` data), so
  * the dashboard can put the one way back next to the sentence instead of just
- * printing it — a product save that can't land offers "Top up" in place, never
- * a dead end. `message` is `creditLockMessage`; `audience` says whether the
- * reader can act on `unlockRoute` (`member` can't — they ask the owner).
+ * printing it — a courier booking that can't land offers "Top up" in place,
+ * never a dead end. `message` is `creditLockMessage`; `audience` says whether
+ * the reader can act on `unlockRoute` (`member` can't — they ask the owner).
+ *
+ * The `kind` stays `credits_locked`: it is the wire contract `format.ts` and
+ * every toast already match on, and renaming it would buy nothing.
  */
 export type CreditLockErrorData = {
 	kind: "credits_locked";
 	message: string;
 	unlockRoute: CreditUnlockRoute;
 	audience: CreditLockAudience;
+	/** How many credits THIS order is waiting on (`creditsToUnlockOrder`), so
+	 * a refusal names the order rather than the store. 0 when the refusal
+	 * wasn't about one order — a bulk move, a batch of despatch labels. */
+	creditsToUnlock: number;
+	/** The store's whole queue (`ordersAwaitingCredit`). */
+	ordersWaiting: number;
 };
 
-export function creditLockErrorData(
-	route: CreditUnlockRoute,
-	audience: CreditLockAudience,
-): CreditLockErrorData {
+export function creditLockErrorData(args: {
+	route: CreditUnlockRoute;
+	audience: CreditLockAudience;
+	creditsToUnlock: number;
+	ordersWaiting: number;
+}): CreditLockErrorData {
 	return {
 		kind: "credits_locked",
-		message: creditLockMessage(route, audience),
-		unlockRoute: route,
-		audience,
+		message: creditLockMessage(args.route, args.audience, args.ordersWaiting),
+		unlockRoute: args.route,
+		audience: args.audience,
+		creditsToUnlock: args.creditsToUnlock,
+		ordersWaiting: args.ordersWaiting,
 	};
 }
 
-/** Is this `ConvexError` payload the credit lock's? */
+/** Is this `ConvexError` payload the credit gate's? */
 export function isCreditLockErrorData(
 	data: unknown,
 ): data is CreditLockErrorData {
@@ -408,13 +527,6 @@ export function isCreditLockErrorData(
 	const d = data as Record<string, unknown>;
 	return d.kind === "credits_locked" && typeof d.message === "string";
 }
-
-/** Stable opening of every lock refusal — what tests and callers match on. */
-export const CREDIT_LOCK_PREFIXES = [
-	"You're out of credits",
-	"Your trial's orders are used up",
-	"This store is out of credits",
-] as const;
 
 /** Which balance notice the store is owed, given where the balance sits now
  * and what has already gone out. Pure, so the evaluator's dedupe is testable.
