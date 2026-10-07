@@ -53,7 +53,7 @@ export function topUpRefusalMessage(
 	opts: { audience: "owner" | "member"; invoiceNumber?: string },
 ): string {
 	if (refusal === "admin_store")
-		return "Kedaipal admin stores aren't billed, so there's nothing to top up — credits refresh every month and the store never locks.";
+		return "Kedaipal admin stores aren't metered, so there's nothing to top up — they have no credit balance and never lock.";
 	// The same sentence for the owner and a teammate: there is no way out to
 	// take, because nothing is wrong.
 	if (refusal === "sponsored")

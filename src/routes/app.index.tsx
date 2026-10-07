@@ -25,7 +25,6 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
-import { useChecklistStamp } from "../hooks/useChecklistStamp";
 import type { Country } from "../../convex/lib/country";
 import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
 import { CreditMeter } from "../components/credits/credit-meter";
@@ -44,6 +43,7 @@ import { CountrySetupPanel } from "../components/settings/country-setup-panel";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
+import { useChecklistStamp } from "../hooks/useChecklistStamp";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { usePermission } from "../hooks/usePermission";
 import { MASK_PII } from "../lib/analytics-privacy";

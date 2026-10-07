@@ -5,14 +5,16 @@ import { AlertTriangle } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
-import { convexErrorMessage, formatPrice, formatShortDate } from "../../lib/format";
+import {
+	convexErrorMessage,
+	formatPrice,
+	formatShortDate,
+} from "../../lib/format";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 import { CopyButton } from "../ui/copy-button";
 import { Skeleton } from "../ui/skeleton";
 
-type GatewayIssueRow = NonNullable<
-	ReturnType<typeof useGatewayIssues>
->[number];
+type GatewayIssueRow = NonNullable<ReturnType<typeof useGatewayIssues>>[number];
 
 function useGatewayIssues() {
 	return useQuery(convexQuery(api.invoices.listGatewayIssues, {})).data;
@@ -55,8 +57,7 @@ function issueCopy(row: GatewayIssueRow): string {
 }
 
 const STATUS_PILL: Record<GatewayIssueRow["invoiceStatus"], string> = {
-	pending:
-		"bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
+	pending: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
 	paid: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
 	void: "bg-muted text-muted-foreground",
 };
@@ -76,7 +77,10 @@ export function GatewayIssuesView({
 }: {
 	issues: GatewayIssueRow[];
 	/** Resolves true on success (closes the dialog). */
-	onResolve: (invoiceId: GatewayIssueRow["invoiceId"], note?: string) => Promise<boolean>;
+	onResolve: (
+		invoiceId: GatewayIssueRow["invoiceId"],
+		note?: string,
+	) => Promise<boolean>;
 }) {
 	const [resolving, setResolving] = useState<GatewayIssueRow | null>(null);
 
@@ -92,8 +96,8 @@ export function GatewayIssuesView({
 					</p>
 					<p className="mt-0.5 text-xs text-muted-foreground">
 						Real HitPay money that settled nothing — a double payment or a
-						mismatched amount. Each needs a decision (refund it, or apply it
-						by settling a bill), then Mark resolved.
+						mismatched amount. Each needs a decision (refund it, or apply it by
+						settling a bill), then Mark resolved.
 					</p>
 				</div>
 			</div>

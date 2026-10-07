@@ -99,9 +99,7 @@ export function Faq() {
 											id={panelId}
 											aria-labelledby={buttonId}
 											initial={
-												shouldReduceMotion
-													? false
-													: { height: 0, opacity: 0 }
+												shouldReduceMotion ? false : { height: 0, opacity: 0 }
 											}
 											animate={{ height: "auto", opacity: 1 }}
 											exit={

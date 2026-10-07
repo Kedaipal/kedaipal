@@ -373,10 +373,16 @@ describe("ProductDetailSheet — a booking previews the booking flow", () => {
 
 	it("offers 'Request to book' — never a quantity stepper or Add to cart", () => {
 		renderBooking();
-		expect(screen.getByRole("button", { name: /request to book/i })).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: /request to book/i }),
+		).toBeTruthy();
 		expect(screen.queryByRole("button", { name: /add to cart/i })).toBeNull();
-		expect(screen.queryByRole("button", { name: /increase quantity/i })).toBeNull();
-		expect(screen.queryByRole("button", { name: /decrease quantity/i })).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: /increase quantity/i }),
+		).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: /decrease quantity/i }),
+		).toBeNull();
 	});
 
 	it("promises approval only when the listing actually requires it", () => {
@@ -393,6 +399,8 @@ describe("ProductDetailSheet — a booking previews the booking flow", () => {
 
 	it("states a deposit before the buyer commits", () => {
 		renderBooking({ booking: { capacityPerNight: 5, securityDeposit: 2000 } });
-		expect(screen.getByText(/RM\s?20\.00 refundable security deposit/i)).toBeTruthy();
+		expect(
+			screen.getByText(/RM\s?20\.00 refundable security deposit/i),
+		).toBeTruthy();
 	});
 });

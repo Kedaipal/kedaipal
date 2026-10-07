@@ -167,6 +167,64 @@ describe("CreditLedgerBody — balances", () => {
 		renderBody();
 		expect(screen.getByText(/No credit account yet/)).toBeTruthy();
 	});
+
+	it("an UNMETERED store says so — and offers no lever (z8r3fdp4er)", () => {
+		// The same null view also means "store deleted", so the drawer has to
+		// tell the two apart instead of claiming an admin store is gone.
+		state.account = { view: null, account: null, lots: [], unmetered: true };
+		renderBody();
+		expect(screen.getByText(/Admin store — not metered/)).toBeTruthy();
+		expect(screen.queryByText(/no longer exists/)).toBeNull();
+		expect(screen.queryByRole("button", { name: /Adjust/ })).toBeNull();
+		// ...and the description must not promise the levers it just withheld.
+		expect(screen.getByText(/Credits don't apply to this store/)).toBeTruthy();
+		expect(screen.queryByText(/set a custom monthly grant below/)).toBeNull();
+	});
+
+	it("an unmetered store's leftover rows are named as history, not a contradiction", () => {
+		// The note above says the store "takes no monthly grant and spends
+		// nothing per order" — true of NOW. Three +200 grant rows under it read
+		// as a lie unless the list says where they came from.
+		state.account = { view: null, account: null, lots: [], unmetered: true };
+		state.ledger = {
+			status: "Exhausted",
+			loadMore: vi.fn(),
+			results: [
+				{
+					_id: "l9",
+					type: "grant",
+					bucket: "plan",
+					amount: 200,
+					reason: "plan",
+					periodKey: "2026-10",
+					createdBy: "system",
+					planAfter: 200,
+					purchasedAfter: 0,
+					createdAt: NOW - DAY,
+				},
+			],
+		};
+		renderBody();
+		expect(
+			screen.getByText(/From before this store stopped being metered/),
+		).toBeTruthy();
+	});
+
+	it("a PURGED unmetered store explains the empty list in its own terms", () => {
+		state.account = { view: null, account: null, lots: [], unmetered: true };
+		renderBody();
+		expect(screen.getByText(/has never been metered/)).toBeTruthy();
+		// The metered store's "the first one is the store's grant" would be a
+		// promise of a grant that never comes.
+		expect(screen.queryByText(/No credit movements yet/)).toBeNull();
+		expect(screen.queryByText(/From before this store stopped/)).toBeNull();
+	});
+
+	it("a deleted store still says THAT", () => {
+		state.account = { view: null, account: null, lots: [], unmetered: false };
+		renderBody();
+		expect(screen.getByText(/no longer exists/)).toBeTruthy();
+	});
 });
 
 describe("CreditLedgerBody — adjust by hand", () => {

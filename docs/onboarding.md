@@ -168,7 +168,7 @@ The [`docs/README.md`](./README.md) index groups everything (including roadmap d
 ## Part 6 — Conventions
 
 - **MANDATORY before writing Convex code:** read [`convex/_generated/ai/guidelines.md`](../convex/_generated/ai/guidelines.md). It overrides general Convex knowledge (function registration, validators, pagination, auth, scheduling, file storage).
-- **Lint/format:** Biome (`pnpm lint`, `pnpm format`, `pnpm check`) — not Prettier/ESLint.
+- **Lint/format:** Biome (`pnpm check` is what CI gates — lint *and* formatting/import order; `pnpm lint` is a lint-only subset) — not Prettier/ESLint. `npx biome check --write <paths>` fixes drift; pass explicit paths, never a directory.
 - **Types:** `pnpm typecheck` (`tsc --noEmit`). Avoid `any`; validate external input with Zod ([`src/lib/schemas.ts`](../src/lib/schemas.ts)).
 - **Testing:** Vitest + `convex-test` on the edge runtime (`pnpm test`). Pure helpers in `convex/lib/*` are kept Convex-import-free precisely so they unit-test in isolation. Backend tests sit beside code as `convex/*.test.ts`; frontend lib tests as `src/lib/*.test.ts`.
 - **Immutability:** prefer new objects over in-place mutation (see repo coding rules).
@@ -191,6 +191,6 @@ Common commands:
 | `pnpm dev:all` | Convex + frontend |
 | `pnpm test` | Vitest (single run) |
 | `pnpm typecheck` | `tsc --noEmit` |
-| `pnpm check` | Biome lint + format |
+| `pnpm check` | Biome lint + format + import order (the CI gate) |
 | `pnpm seed` | Seed dev data |
 | `npx convex run <file>:<fn> '<json>'` | Invoke a Convex function directly (e.g. backfills, diagnostics) |

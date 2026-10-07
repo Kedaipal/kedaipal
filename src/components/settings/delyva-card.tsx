@@ -643,13 +643,13 @@ export function DelyvaCard({
 						</Button>
 						{locked ? (
 							<p className="text-xs text-muted-foreground">
-								Courier booking is a Pro feature — upgrade in Settings →
-								Billing to connect. (Disconnecting is never locked.)
+								Courier booking is a Pro feature — upgrade in Settings → Billing
+								to connect. (Disconnecting is never locked.)
 							</p>
 						) : !typedKey ? (
 							<p className="text-xs text-muted-foreground">
-								One key is all we need — we fetch the rest from Delyva and
-								store it encrypted.
+								One key is all we need — we fetch the rest from Delyva and store
+								it encrypted.
 							</p>
 						) : null}
 					</div>

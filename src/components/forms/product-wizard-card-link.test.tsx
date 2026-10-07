@@ -34,10 +34,7 @@ vi.mock("@tanstack/react-router", () => ({
 		search?: Record<string, string>;
 		children: React.ReactNode;
 	}) => (
-		<a
-			href={search ? `${to}?${new URLSearchParams(search)}` : to}
-			{...rest}
-		>
+		<a href={search ? `${to}?${new URLSearchParams(search)}` : to} {...rest}>
 			{children}
 		</a>
 	),

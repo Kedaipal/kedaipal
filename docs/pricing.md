@@ -413,6 +413,95 @@ at once, at the grant locked for the year they paid for
 eligibility ladder, the swap runbook and the credit-not-refund policy live in
 [`manual-subscription.md`](./manual-subscription.md#annual-billing--the-in-app-offer-sep-2026).
 
+## Changing a store's tier — when it lands, and who may do it (z8r3fdpm2p)
+
+**A tier lives on the INVOICE until that invoice is paid.** `settleInvoicePaid`
+is the only place `subscriptions.plan` is written, so issuing a bill at any tier
+changes nothing the seller can see — their plan, caps and credits are whatever
+they last *paid* for. This is why an admin can draft, correct and re-draft a
+bill freely: none of it touches the store until money lands.
+
+### The three doors, and the two different answers they give
+
+| Door | Upgrade | Downgrade |
+| --- | --- | --- |
+| Seller, `invoices.changePlan` | billed now; lands when paid | **scheduled** — nothing changes today, the new tier starts at `currentPeriodEnd` |
+| Admin, `enterprise.scheduleMoveToPro` | — | **scheduled** — the contract runs to the period end, then the renewal bills Pro |
+| Admin, `invoices.issueInvoice` at another tier | lands when paid | **lands when paid, immediately** — it does *not* wait for the period end |
+
+The third row is the one that surprises people, and it is deliberate: an
+admin-issued bill is a negotiated change ("we agreed you move to Starter from
+now"), not a self-serve request for next month. But it means the same words —
+"downgrade this store" — mean *at period end* on two doors and *on payment* on
+the third. **The admin form now says which one it is before the tap**; it is
+not something an admin can discover afterwards.
+
+### Nobody loses days they paid for
+
+Whichever door, `planChangeCarryoverDays` converts the unused remainder of a
+still-running **paid** period into days of the tier the store is moving to,
+**by value**, and adds them to the new period:
+
+- Up: 10 unused Starter days buy ~5 Pro days.
+- Down: 10 unused Pro days buy ~19 Starter days.
+
+So an immediate admin downgrade is **value-preserving, not time-preserving** —
+the seller loses the higher tier's features at once and is repaid in days. It
+is computed at **settle**, from the days genuinely unused when the money lands,
+never at issue. A store with no running paid period (past due, or on a hold)
+carries nothing — the gate is `status === "active"` and `periodPaidBy === "plan"`,
+because hold days were bought at the hold price and revaluing them at the tier
+rate is an exploit, not a credit.
+
+### Correcting a bill that was issued at the wrong tier
+
+`issueInvoice` takes an optional `replacePendingId`: it voids that bill and
+issues the corrected one **in the same transaction**, so the store is never
+briefly unbilled. Without it, a second pending bill is still refused outright —
+two live Pay-now links on one store is a double payment waiting to happen.
+
+Three rules, all in `convex/lib/invoiceReplace.ts` so the form's
+disabled-with-reason line and the server's throw are one author:
+
+- **A stale id is refused**, never resolved to "whatever is open now" — that
+  would void a bill the admin never looked at.
+- **A charge in flight refuses the replacement.** `chargeDueRenewal` stamps
+  `lastChargeAttemptAt` *before* it calls HitPay and clears it only on a
+  recorded outcome, so a standing stamp means a charge may have landed and died
+  before saying so. Voiding then is survivable — the reconcile audits a
+  *stranded charge* and switches auto-renew off — but that is a safety net, not
+  a place to walk on purpose. The daily run resolves it.
+- **The replacement inherits the card charge only downward, and only within
+  one currency.** Only a renewal ever had one armed, and only
+  `newTotal <= replacedTotal` keeps it: the seller's mandate is the amount
+  already queued against their card, so a cheaper correction stays inside it
+  and spares them a bill nothing would pay. An increase is a new ask —
+  Kedaipal never charges itself up on an admin's say-so (Zaki, 7 Oct 2026),
+  however the change was agreed. The bill still carries its Pay-now link.
+
+  Minor units are **not comparable across currencies**: S$60.00 (6000) reads
+  "cheaper" than RM79.00 (7900) and is worth roughly three times more. The
+  form picks the currency freely on a listed tier and takes the contract's
+  frozen one on Enterprise, so a mismatch is reachable; it answers *not
+  downward* rather than converting, which would invent an FX rate nobody
+  agreed — the same refusal the contract template makes.
+- **The dead bill's DUNNING dies with it**, by either door (`replacePendingId`
+  or a plain `voidInvoice` of a renewal). `failedAttempts` / `nextRetryAt` /
+  `lastChargeError` describe one bill — the schema says so — and leaving them
+  standing is not inert. After a DECLINE, `recordChargeFailure` clears the
+  attempt stamp (so `autoChargeIdle` passes and the replace is allowed) but
+  sets `nextRetryAt` +2d; the daily sweep fires on that alone, picks whatever
+  invoice is open — **it checks no origin, and neither does
+  `chargeDueRenewal`** — and charges it. A dearer correction the form had just
+  promised would never be charged therefore got charged two days later (found
+  in review, 7 Oct). One helper, `autoRenewAfterReplace`, so both doors leave
+  the same state; the ladder restarts at zero for the new bill, which is also
+  simply what a new bill deserves.
+
+Note the seller's own `invoices.switchPendingPlan` refuses renewal invoices
+outright for exactly the reason the third rule answers. That exclusion stays:
+a seller switching their own renewal has no admin to have agreed it with.
+
 ## Enterprise — a contract, not a price
 
 A store is on Enterprise **only while it carries a contract**, and only a
@@ -482,7 +571,81 @@ today — active members plus pending invites, because an invite holds a seat.
 plan actually flips: a contract EDIT is not a drop trigger, because an admin
 retyping a number must never cut off a paying customer's staff mid-month.
 
-### Setting it — Admin → Billing → seller sheet → Enterprise
+### Where it's set — two doors, one form (z8r3fdpm2p)
+
+**Both doors must be able to see the same stores.** They nearly didn't: the
+sellers directory took 500 stores and the billing picker a bare `200`, and the
+picker is ordered **newest first** — so past 200 stores the OLDEST ones simply
+were not in it, and an older store could be put on a contract from the seller
+sheet but not from billing. Silently, with a native `<select>` that just
+stopped. Both now read one exported `ADMIN_STORE_LIST_LIMIT`, a source-scan
+test refuses a literal cap on either query, and BOTH surfaces now say when the
+book runs past the list: the picker names the door that can search all of it,
+and the directory counts "Showing N of the newest 500" instead of letting
+"Showing 500 of 500" read as the whole book. The number
+matters sooner than it looks: pre-built stores are created in batches
+(`z8r3fdm6up`) at the NEWEST end, so a batch of placeholders pushes exactly
+that many real paying customers off the end of the picker.
+
+
+A contract is written from **either** place an admin works on a store, and both
+render the same `EnterpriseContractForm` (`src/components/admin/`):
+
+| Door | Chrome | When |
+| --- | --- | --- |
+| Admin · Sellers → a store → **Enterprise** | a page of the seller sheet, with a back link | reviewing a store |
+| Admin · Billing → **Issue an invoice** | a right-edge sheet off the billing card | billing a store |
+
+The billing door exists because Enterprise bills a contract, so the tier used
+to be **disabled** for any store without one — which told the admin the *tier*
+was unavailable when what was missing was a contract. Putting a store on
+Enterprise and billing it meant two tabs and picking the same store twice.
+Picking Enterprise now always works; a store with no contract gets a strip
+naming what's missing and carrying **Set up contract**, and a store that has
+one gets **Edit contract** beside it. Saving IS putting the store on Enterprise
+(`setContract` flips the plan), and the issue form picks the contract up live.
+
+Three rules hold this together:
+
+- **One form, never two.** The form owns its fields, validation, refusals,
+  preview and the "start from another contract" picker. The pages own only
+  chrome. Its subject is a narrow `EnterpriseContractSubject` — not the fat
+  `AdminSellerRow`, which merely satisfies it structurally — so the billing
+  page can feed it from `enterprise.getContractContext`, a **per-store** query
+  mounted only while the sheet is open. Teaching the 200-store billing picker
+  to carry seats and a billing currency would have cost ~600 index reads on
+  every page view to serve a sheet usually never opened.
+- **An undecided thing is shown as undecided.** With Enterprise picked and no
+  contract, the term and currency controls are locked (the contract decides
+  them) and render with **nothing selected** — leaving Monthly and RM lit would
+  be a definite claim about an undecided thing the admin cannot correct.
+- **A contract bill is never a founding bill.** Founding forces Pro among the
+  *listed* tiers only. Forcing it for Enterprise too meant a Founding Member on
+  a contract could not be billed that contract at all: the tier button looked
+  live, changed nothing, and the form drafted a founding Pro bill whose payment
+  would have **ended the contract**. `issueInvoice` already threw on `founding`
+  with any plan but Pro, so the client now agrees with the server.
+
+Three things the hands-on test fixed that reading the diff did not (7 Oct):
+
+- **An UNCLAIMED store is told to hand it over, never to "end the comp."** A
+  pre-built store is comped (the `internal` setup comp) *and* unclaimed, so a
+  ladder that reads `comped` first told the admin to end a sponsorship that is
+  really scaffolding — contradicting the billing card two inches above, which
+  says the store runs unbilled on purpose until the vendor claims it. The
+  subject carries `unclaimed` and it is read **first**.
+- **A template never copies MONEY across a currency boundary.** A contract's
+  currency is frozen, so filling an RM888 deal into an SG store's form put 888
+  into a field that now means S$888 — a 4× price rise that reads like a filled
+  form. The credits, block and allowances are currency-free and still carry;
+  the fee and overage rate stay empty and say why. Converting is not the
+  alternative: that would invent an FX rate nobody negotiated.
+- **The tier tick must be `shrink-0`.** In the billing card's 3-up plan control
+  at 393px, "Enterprise" plus its tick overflowed its box, and flex resolved it
+  by squashing the **icon to zero width** — so the selected tier silently lost
+  its tick on a phone while the label ran edge to edge.
+
+### Setting it — `enterprise.setContract`
 
 `enterprise.setContract` (admin-only, audited as `enterprise.setContract`) in
 one mutation:

@@ -10,6 +10,7 @@ import {
 	Coins,
 	CreditCard,
 	FilePlus2,
+	FileSignature,
 	Hammer,
 	ImagePlus,
 	Landmark,
@@ -29,17 +30,23 @@ import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import type { TopUpRevenue } from "../../convex/creditPurchases";
+import { ADMIN_STORE_LIST_LIMIT } from "../../convex/lib/adminDirectory";
 import {
 	COUNTRIES,
 	COUNTRY_LABELS,
 	type Country,
 } from "../../convex/lib/country";
 import {
+	invoiceReplaceRefusal,
+	replacementChargeNote,
+} from "../../convex/lib/invoiceReplace";
+import {
 	ANNUAL_MONTHS_RECEIVED,
 	annualQuote,
 	BILLING_CURRENCIES,
 	type BillingCurrency,
 	enterprisePrice,
+	isPlanUpgrade,
 	PLANS,
 	type Plan,
 	planPrice,
@@ -48,11 +55,14 @@ import {
 	AutoChargeDetail,
 	AutoChargePill,
 } from "../components/admin/auto-charge-status";
+import { contractTemplatesFrom } from "../components/admin/enterprise-contract-form";
+import { EnterpriseContractSheet } from "../components/admin/enterprise-contract-sheet";
 import { GatewayIssuesCard } from "../components/admin/gateway-issues-card";
 import { PageHeader } from "../components/dashboard/page-header";
 import { InvoiceDownloadButton } from "../components/settings/invoice-download-button";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
+import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import {
 	Dialog,
 	DialogContent,
@@ -985,7 +995,7 @@ function retailerOptionLabel(r: {
 	isFoundingMember: boolean;
 	foundingIntent: boolean;
 	foundingBenefitsRevoked: boolean;
-	hasPending: boolean;
+	pending?: { invoiceNumber: string };
 	comped: boolean;
 	unclaimed: boolean;
 }): string {
@@ -1001,7 +1011,7 @@ function retailerOptionLabel(r: {
 			r.foundingBenefitsRevoked ? "Founding · benefits ended" : "Founding",
 		);
 	else if (r.foundingIntent) parts.push("Founding (trial)");
-	if (r.hasPending) parts.push("has pending");
+	if (r.pending) parts.push("has pending");
 	// Comped stores can't be billed (issueInvoice refuses, z8r3fdeub2) — say so
 	// in the picker rather than letting the admin draft a bill that bounces.
 	// A store nobody owns yet is comped too (the `internal` setup comp), but
@@ -1017,11 +1027,16 @@ function retailerOptionLabel(r: {
  * Founding-10 member (founding toggle). Built for minimal typing: amount is
  * derived from plan + cycle + founding; the due date defaults to +14 days.
  */
-function IssueInvoiceForm() {
+export function IssueInvoiceForm() {
 	const retailerSelectId = useId();
-	const retailers = useQuery(
+	const retailerList = useQuery(
 		convexQuery(api.invoices.listRetailersForAdmin, {}),
 	).data;
+	const retailers = retailerList?.stores;
+	// The book runs past the cap, so the OLDEST stores are not in this list
+	// (it is newest-first). Said where the picker is, with the way out —
+	// never a select that silently stops containing a store (z8r3fdpm2p).
+	const storesCapped = retailerList?.capped === true;
 	const spotsRemaining = useQuery(
 		convexQuery(api.foundingMembers.getSpotsRemaining, {}),
 	).data;
@@ -1034,9 +1049,20 @@ function IssueInvoiceForm() {
 	const [foundingOverride, setFoundingOverride] = useState(false);
 	const [currency, setCurrency] = useState<BillingCurrency>("MYR");
 	const [busy, setBusy] = useState(false);
+	const [contractSheetOpen, setContractSheetOpen] = useState(false);
+	const [confirmReplace, setConfirmReplace] = useState(false);
 
 	const selected = retailers?.find((r) => r._id === retailerId);
-	const blocked = selected?.hasPending === true;
+	// Live contracts the admin could model a new deal on — off the picker list
+	// already loaded, so the "start from" dropdown costs no second query. Same
+	// helper the sellers directory uses, so the two pickers can't drift.
+	const contractTemplates = contractTemplatesFrom(
+		retailers ?? [],
+		retailerId || null,
+	);
+	// An open bill no longer blocks: the admin can REPLACE it at the tier they
+	// actually meant (z8r3fdpm2p). What it changes is the verb on the button.
+	const openBill = selected?.pending;
 	// On the house (z8r3fdeub2) — issueInvoice refuses these server-side; the
 	// button is disabled with the reason instead of bouncing on click.
 	// A store nobody owns yet is ALSO comped — the `internal` setup comp — but
@@ -1095,13 +1121,27 @@ function IssueInvoiceForm() {
 		);
 	}, [retailerId]);
 
-	// Founding is Pro-only — flipping it on forces Pro. It prices per billing
-	// currency (RM104 / S$41 monthly).
-	const effectivePlan: Plan = founding ? "pro" : plan;
+	// Founding is Pro-only among the LISTED tiers — flipping it on forces Pro.
+	// It prices per billing currency (RM104 / S$41 monthly).
+	//
+	// Enterprise is the exception, and it has to be: a Founding Member may go
+	// on a contract (Zaki, 3 Oct 2026) because a contract has no list price to
+	// discount — the negotiated fee IS the price. Forcing Pro here regardless
+	// meant a founding store on a contract could not be billed its contract at
+	// all: the Enterprise button looked live, changed nothing, and the form
+	// quietly drafted a founding Pro bill whose payment would END the contract
+	// (z8r3fdpm2p). The server already refuses `founding` on an Enterprise
+	// bill, so the two now agree.
+	const effectivePlan: Plan = founding && plan !== "enterprise" ? "pro" : plan;
 	// Enterprise (T6) bills the store's CONTRACT — its fee, currency and term —
 	// so those controls show the contract's values instead of taking a pick.
 	const contract = selected?.enterprise;
 	const billsContract = effectivePlan === "enterprise";
+	// What actually goes on the invoice, and what the checkbox may claim. A
+	// contract bill carries no founding discount — `issueInvoice` throws on
+	// `founding` with any plan but Pro — so a Founding Member's permanent
+	// membership must not tick itself onto their Enterprise bill.
+	const foundingBill = founding && !billsContract;
 	const effectiveCycle =
 		billsContract && contract ? contract.billingCycle : cycle;
 	const effectiveCurrency =
@@ -1112,7 +1152,7 @@ function IssueInvoiceForm() {
 			? contract
 				? enterprisePrice(contract, effectiveCycle)
 				: 0
-			: planPrice(effectivePlan, cycle, founding, currency);
+			: planPrice(effectivePlan, cycle, foundingBill, currency);
 	const base =
 		effectivePlan === "enterprise"
 			? total
@@ -1123,12 +1163,60 @@ function IssueInvoiceForm() {
 	const annual =
 		effectivePlan === "enterprise"
 			? null
-			: annualQuote(effectivePlan, founding, currency);
+			: annualQuote(effectivePlan, foundingBill, currency);
+	// Enterprise picked, but no contract written yet. Nothing can be billed —
+	// and the term and the currency have NO answer either. Both of those
+	// controls are locked (the contract decides them), so leaving Monthly and
+	// RM lit would be a definite claim about an undecided thing the admin is
+	// not allowed to correct — the same falsehood a parent checkbox tells when
+	// it reads unchecked over mixed children. They render with nothing
+	// selected until the contract exists.
 	const noContract = billsContract && !contract;
 	// The deliberate off-ramp, named before the tap: a non-enterprise bill on
 	// a contract store ends the contract when it's PAID (settle treats it as
 	// the move to Pro/Starter).
 	const offContractBill = contract !== undefined && !billsContract;
+	// What PAYING this bill does to the store's tier. The plan lives on the
+	// INVOICE until it settles (`settleInvoicePaid`), so issuing changes
+	// nothing — but an admin cannot see from this form WHEN the change lands,
+	// and the answer differs from the one the rest of the product gives: a
+	// seller's own downgrade is SCHEDULED to the period end, while paying an
+	// admin-issued lower-tier bill moves them at once. Undisclosed behaviour
+	// on a money action; said here instead (z8r3fdpm2p).
+	const currentPlan = selected?.plan as Plan | undefined;
+	const tierMove =
+		currentPlan && currentPlan !== effectivePlan && !offContractBill
+			? isPlanUpgrade(currentPlan, effectivePlan)
+				? "up"
+				: "down"
+			: null;
+	// Replacing an open bill — the same two pure rules the server applies, so
+	// the sentence under the button and the refusal it would throw cannot
+	// disagree.
+	const replaceRefusal = openBill
+		? invoiceReplaceRefusal({
+				invoiceNumber: openBill.invoiceNumber,
+				kind: openBill.kind,
+				// The server's own fact, not a proxy for it. Deriving this from
+				// `autoChargeIdle === false` ALSO caught a detached method and
+				// a stranded charge, so the button refused with "hasn't
+				// reported back yet" for two states the server would have
+				// allowed (review, 7 Oct).
+				chargeInFlight: selected?.chargeInFlight === true,
+			})
+		: null;
+	const replaceChargeNote =
+		openBill && !replaceRefusal && !noContract
+			? replacementChargeNote({
+					replacedOrigin: openBill.origin,
+					replacedTotal: openBill.total,
+					replacedCurrency: openBill.currency,
+					newTotal: total,
+					newCurrency: effectiveCurrency,
+					autoChargeIdle: selected?.autoChargeIdle === true,
+					newTotalLabel: formatPrice(total, effectiveCurrency),
+				})
+			: null;
 
 	async function handleIssue() {
 		if (!retailerId) return;
@@ -1136,14 +1224,29 @@ function IssueInvoiceForm() {
 		try {
 			// No dueDate — the system sets it (issue + 14 days). The paid cycle
 			// starts at mark-paid.
-			await issue({
+			const res = await issue({
 				retailerId,
 				plan: effectivePlan,
 				billingCycle: effectiveCycle,
-				founding,
+				founding: foundingBill,
 				currency: effectiveCurrency,
+				// The server re-checks that this is still the open bill, so a
+				// stale page replaces nothing.
+				...(openBill ? { replacePendingId: openBill._id } : {}),
 			});
-			toast.success("Invoice issued — it's now in Pending below.");
+			toast.success(
+				res.replaced
+					? `${res.replaced.invoiceNumber} voided — the new bill is in Pending below.`
+					: "Invoice issued — it's now in Pending below.",
+				res.replaced
+					? {
+							description: res.replaced.keptAutoCharge
+								? "Their saved card is being charged for the new amount."
+								: undefined,
+						}
+					: undefined,
+			);
+			setConfirmReplace(false);
 			setRetailerId("");
 			setFoundingOverride(false);
 			// Reset to the default so the next store isn't silently billed in SGD.
@@ -1188,6 +1291,17 @@ function IssueInvoiceForm() {
 						</option>
 					))}
 				</Select>
+				{/* Only when the book genuinely runs past the cap — a list that
+				    always claimed to be partial would be noise on the 5-store
+				    case. It names what is missing (the OLDEST, since this is
+				    newest-first) and the door that can still reach them. */}
+				{storesCapped ? (
+					<p className="text-xs text-muted-foreground">
+						Showing the newest {ADMIN_STORE_LIST_LIMIT} stores. An older one is
+						billed — and put on an Enterprise contract — from Admin · Sellers,
+						which can search the whole book.
+					</p>
+				) : null}
 			</div>
 
 			<div className="grid gap-4 rounded-2xl border border-border/70 bg-muted/20 p-3 lg:grid-cols-2 lg:p-4">
@@ -1206,17 +1320,25 @@ function IssueInvoiceForm() {
 									// Founding locks the plan to Pro — EXCEPT Enterprise, which
 									// a founding store may take: a contract's negotiated fee is
 									// its own price, so there is no founding discount to lose.
-									(founding && p !== "pro" && p !== "enterprise") ||
-									(p === "enterprise" && !contract)
+									//
+									// A missing contract no longer disables Enterprise. A dead
+									// button was the whole complaint: it told the admin the
+									// tier was unavailable when what was actually missing was
+									// a contract they could write in two taps. Picking it now
+									// opens that door (the strip below), and Issue stays
+									// disabled with its reason until the contract exists.
+									founding && p !== "pro" && p !== "enterprise"
 								}
 								onClick={() => setPlan(p)}
-								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
+								className={`flex min-h-11 items-center justify-center gap-1 rounded-lg border px-1.5 text-sm font-semibold sm:gap-1.5 sm:px-2 capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
 									effectivePlan === p
 										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
 										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground"
 								}`}
 							>
-								{effectivePlan === p ? <Check className="size-3.5" /> : null}
+								{effectivePlan === p ? (
+									<Check className="size-3.5 shrink-0" />
+								) : null}
 								{p}
 							</button>
 						))}
@@ -1234,13 +1356,15 @@ function IssueInvoiceForm() {
 								type="button"
 								disabled={billsContract}
 								onClick={() => setCycle(c)}
-								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold capitalize transition-all disabled:cursor-not-allowed ${
-									effectiveCycle === c
+								className={`flex min-h-11 items-center justify-center gap-1 rounded-lg border px-1.5 text-sm font-semibold sm:gap-1.5 sm:px-2 capitalize transition-all disabled:cursor-not-allowed ${
+									!noContract && effectiveCycle === c
 										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
 										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground disabled:opacity-40"
 								}`}
 							>
-								{effectiveCycle === c ? <Check className="size-3.5" /> : null}
+								{!noContract && effectiveCycle === c ? (
+									<Check className="size-3.5 shrink-0" />
+								) : null}
 								{c}
 							</button>
 						))}
@@ -1258,14 +1382,14 @@ function IssueInvoiceForm() {
 								type="button"
 								disabled={billsContract}
 								onClick={() => setCurrency(cur)}
-								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold transition-all disabled:cursor-not-allowed ${
-									effectiveCurrency === cur
+								className={`flex min-h-11 items-center justify-center gap-1 rounded-lg border px-1.5 text-sm font-semibold sm:gap-1.5 sm:px-2 transition-all disabled:cursor-not-allowed ${
+									!noContract && effectiveCurrency === cur
 										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
 										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground disabled:opacity-40"
 								}`}
 							>
-								{effectiveCurrency === cur ? (
-									<Check className="size-3.5" />
+								{!noContract && effectiveCurrency === cur ? (
+									<Check className="size-3.5 shrink-0" />
 								) : null}
 								{cur === "MYR" ? "RM (MYR)" : "S$ (SGD)"}
 							</button>
@@ -1273,8 +1397,9 @@ function IssueInvoiceForm() {
 					</div>
 					{billsContract ? (
 						<span className="text-[11px] text-muted-foreground">
-							Set by the store's Enterprise contract — the term and currency it
-							was agreed in.
+							{contract
+								? "Set by the store's Enterprise contract — the term and currency it was agreed in."
+								: "The contract sets both — choose the term while you write it."}
 						</span>
 					) : null}
 					{effectiveCurrency === "SGD" ? (
@@ -1286,10 +1411,67 @@ function IssueInvoiceForm() {
 				</div>
 			</div>
 
+			{/* The contract this bill reads — shown only while Enterprise is the
+			    chosen plan, because that is the only time it decides anything.
+			    Set up / Edit opens the SAME form the seller sheet renders, so a
+			    deal is negotiated in one place however you got there. */}
+			{!billsContract ? null : !contract ? (
+				<div className="flex flex-col gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
+					<div className="flex min-w-0 items-start gap-2.5">
+						<FileSignature
+							aria-hidden="true"
+							className="mt-0.5 size-4 shrink-0 text-amber-700 dark:text-amber-400"
+						/>
+						<p className="min-w-0 text-xs text-amber-700 dark:text-amber-400">
+							<span className="block text-sm font-medium">No contract yet</span>
+							Enterprise has no list price — it bills a negotiated deal. Write
+							one and this invoice bills it.
+						</p>
+					</div>
+					<Button
+						type="button"
+						variant="outline"
+						onClick={() => setContractSheetOpen(true)}
+						className="h-11 w-full shrink-0 sm:w-auto"
+					>
+						Set up contract
+					</Button>
+				</div>
+			) : (
+				<div className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
+					<div className="flex min-w-0 items-start gap-2.5">
+						<FileSignature
+							aria-hidden="true"
+							className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+						/>
+						<p className="min-w-0 text-xs text-muted-foreground">
+							<span className="block text-sm font-medium text-foreground">
+								Billing their contract
+							</span>
+							{contract.includedCredits.toLocaleString("en")} credits a month
+							{contract.contactName ? ` · ${contract.contactName}` : ""}
+						</p>
+					</div>
+					{/* Outline, not ghost: a borderless control at the edge of a
+					    card reads as a caption, and this one is the only way to
+					    correct a fee before the bill goes out. Lighter than the
+					    amber card's primary-weight "Set up contract", because here
+					    nothing is broken — but still visibly a button. */}
+					<Button
+						type="button"
+						variant="outline"
+						onClick={() => setContractSheetOpen(true)}
+						className="h-11 w-full shrink-0 sm:w-auto"
+					>
+						Edit contract
+					</Button>
+				</div>
+			)}
+
 			<label className="flex items-center gap-2.5 text-sm">
 				<input
 					type="checkbox"
-					checked={founding}
+					checked={foundingBill}
 					disabled={isExistingFounding || billsContract}
 					onChange={(e) => setFoundingOverride(e.target.checked)}
 					className="size-4 disabled:opacity-60"
@@ -1297,15 +1479,17 @@ function IssueInvoiceForm() {
 				<span>
 					<span className="font-medium">Founding Member invoice</span>
 					<span className="block text-xs text-muted-foreground">
-						{isExistingFounding
-							? "This store is a Founding Member — lifetime 30% discount applied automatically."
-							: foundingBenefitsRevoked
-								? "Founding Member, but their founding price ended after 3 months unpaid — this invoice bills at the standard price. Tick to re-grant the discount on this invoice only; to give it back for good, use Restore benefits under Founding members."
-								: `Pro only · 30% lifetime discount · claims a rank when marked paid${
-										spotsRemaining === 0
-											? " (cohort full — no rank will be claimed)"
-											: ""
-									}`}
+						{billsContract
+							? "Doesn't apply to a contract bill — a negotiated fee has no list price to discount. Membership is untouched."
+							: isExistingFounding
+								? "This store is a Founding Member — lifetime 30% discount applied automatically."
+								: foundingBenefitsRevoked
+									? "Founding Member, but their founding price ended after 3 months unpaid — this invoice bills at the standard price. Tick to re-grant the discount on this invoice only; to give it back for good, use Restore benefits under Founding members."
+									: `Pro only · 30% lifetime discount · claims a rank when marked paid${
+											spotsRemaining === 0
+												? " (cohort full — no rank will be claimed)"
+												: ""
+										}`}
 					</span>
 				</span>
 			</label>
@@ -1331,7 +1515,14 @@ function IssueInvoiceForm() {
 							meant to bill the contract, pick Enterprise.
 						</p>
 					) : null}
-					{founding ? (
+					{tierMove ? (
+						<p className="text-xs text-muted-foreground">
+							{tierMove === "up"
+								? `Paying moves them from ${PLAN_LABEL[currentPlan as Plan]} to ${PLAN_LABEL[effectivePlan]} — not before. Whatever they've already paid for carries over as ${PLAN_LABEL[effectivePlan]} days.`
+								: `Paying moves them from ${PLAN_LABEL[currentPlan as Plan]} down to ${PLAN_LABEL[effectivePlan]} straight away — an admin-issued change doesn't wait for the period to end, unlike a seller's own downgrade. Whatever they've already paid for carries over as ${PLAN_LABEL[effectivePlan]} days.`}
+						</p>
+					) : null}
+					{foundingBill ? (
 						<p className="text-xs text-emerald-700">
 							{formatPrice(base, currency)} −{" "}
 							{formatPrice(base - total, currency)} founding discount
@@ -1347,30 +1538,36 @@ function IssueInvoiceForm() {
 				</div>
 				<Button
 					type="button"
-					onClick={handleIssue}
+					onClick={openBill ? () => setConfirmReplace(true) : handleIssue}
 					disabled={
 						!retailerId ||
 						busy ||
-						blocked ||
 						compedStore ||
 						unclaimedStore ||
-						noContract
+						noContract ||
+						replaceRefusal !== null
 					}
 					className="h-11 w-full sm:w-auto sm:px-6"
 				>
-					{busy ? "Issuing…" : "Issue invoice"}
+					{busy ? "Issuing…" : openBill ? "Replace open bill" : "Issue invoice"}
 				</Button>
 			</div>
-			{blocked ? (
-				<p className="text-xs text-amber-700">
-					This retailer already has a pending invoice — settle it first.
-				</p>
-			) : null}
-			{selected && !contract ? (
-				<p className="text-xs text-muted-foreground">
-					Enterprise bills a store's contract — put this store on one from Admin
-					· Sellers → the store → Enterprise to bill it here.
-				</p>
+			{/* An open bill is a thing to CORRECT, not a wall. The old copy
+			    ("settle it first") sent the admin to another card to void it by
+			    hand — the fix for a mis-tiered bill now lives where the right
+			    one is drafted. */}
+			{openBill ? (
+				replaceRefusal ? (
+					<p className="text-xs text-amber-700">{replaceRefusal}</p>
+				) : (
+					<p className="text-xs text-muted-foreground">
+						{openBill.invoiceNumber} is open for{" "}
+						{formatPrice(openBill.total, openBill.currency)} (
+						{PLAN_LABEL[openBill.plan]}). Issuing voids it and replaces it with
+						this one — it stays in their history as cancelled.
+						{replaceChargeNote ? ` ${replaceChargeNote}` : ""}
+					</p>
+				)
 			) : null}
 			{unclaimedStore ? (
 				<p className="text-xs text-amber-700">
@@ -1388,6 +1585,37 @@ function IssueInvoiceForm() {
 					billed. End the comp from Admin · Sellers first.
 				</p>
 			) : null}
+			{/* Saving in here IS putting the store on Enterprise; the form above
+			    picks the contract up live (Convex reactivity), so the admin never
+			    re-picks the store. */}
+			{/* Replacing voids a live bill and can set a card charge going, so
+			    it states both before the tap — never a toast after it. */}
+			<ConfirmDialog
+				open={confirmReplace}
+				onOpenChange={setConfirmReplace}
+				title={`Replace ${openBill?.invoiceNumber ?? "this bill"}?`}
+				description={
+					openBill ? (
+						<>
+							{openBill.invoiceNumber} (
+							{formatPrice(openBill.total, openBill.currency)},{" "}
+							{PLAN_LABEL[openBill.plan]}) is voided and replaced with a{" "}
+							{PLAN_LABEL[effectivePlan]} bill for{" "}
+							{formatPrice(total, effectiveCurrency)}. The old one stays in
+							their history as cancelled and its Pay-now link stops working.
+							{replaceChargeNote ? ` ${replaceChargeNote}` : ""}
+						</>
+					) : null
+				}
+				confirmLabel="Replace it"
+				onConfirm={handleIssue}
+			/>
+			<EnterpriseContractSheet
+				retailerId={retailerId || null}
+				templates={contractTemplates}
+				open={contractSheetOpen}
+				onOpenChange={setContractSheetOpen}
+			/>
 		</AdminCard>
 	);
 }
