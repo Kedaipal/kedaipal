@@ -168,6 +168,21 @@
       ],
       "port": 3131,
       "autoPort": false
+    },
+    {
+      "name": "web-prebuilt-email-wt",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "-C",
+        "../kedaipal-wt-prebuilt-email",
+        "exec",
+        "vite",
+        "dev",
+        "--port",
+        "3240"
+      ],
+      "port": 3240,
+      "autoPort": false
     }
   ]
 }

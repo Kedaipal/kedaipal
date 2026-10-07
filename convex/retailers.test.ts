@@ -1797,6 +1797,10 @@ describe("orderStages (Phase 2 custom stages)", () => {
 });
 
 describe("retailers.checkEmailHasStore (admin onboard pre-check)", () => {
+	// It answers "is this address free to point a store at?" and returns the
+	// server's OWN sentence, because the write asks the same helper
+	// (`findEmailConflict`). A hint with its own copy of the rule drifts from
+	// the server and the admin finds out on submit — the bug the slug hint had.
 	const ADMIN = "user_admin_email";
 	let prev: string | undefined;
 	beforeAll(() => {
@@ -1828,25 +1832,45 @@ describe("retailers.checkEmailHasStore (admin onboard pre-check)", () => {
 		const res = await asAdmin(t).query(api.retailers.checkEmailHasStore, {
 			email: "Vendor@Example.com",
 		});
-		expect(res.exists).toBe(true);
-		expect(res.slug).toBe("email-store-1");
+		expect(res?.kind).toBe("owns");
+		expect(res?.slug).toBe("email-store-1");
 	});
 
-	test("returns not-found for an unregistered email", async () => {
+	test("flags an email another PRE-BUILT store is already waiting for", async () => {
+		// The gap that made this change necessary: the query checked
+		// `notifyEmail` alone, so typing one address into two build forms showed
+		// no warning and the create then threw. An unclaimed store has no
+		// notifyEmail by design, so only the pending index can see it — delete
+		// that branch from `findEmailConflict` and this goes red.
+		const t = setup();
+		await asAdmin(t).mutation(api.retailers.createUnclaimedStore, {
+			storeName: "Waiting Store",
+			slug: "waiting-store",
+			pendingOwnerEmail: "vendor@example.com",
+		});
+		const res = await asAdmin(t).query(api.retailers.checkEmailHasStore, {
+			email: "vendor@example.com",
+		});
+		expect(res?.kind).toBe("waiting");
+		expect(res?.slug).toBe("waiting-store");
+		expect(res?.message).toMatch(/already waiting/i);
+	});
+
+	test("returns null for an unregistered email", async () => {
 		const t = setup();
 		await seedWithEmail(t, "u_e1", "email-store-1", "vendor@example.com");
 		const res = await asAdmin(t).query(api.retailers.checkEmailHasStore, {
 			email: "nobody@example.com",
 		});
-		expect(res.exists).toBe(false);
+		expect(res).toBeNull();
 	});
 
-	test("an unparseable email is treated as not-found (no throw while typing)", async () => {
+	test("an unparseable email is treated as free (no throw while typing)", async () => {
 		const t = setup();
 		const res = await asAdmin(t).query(api.retailers.checkEmailHasStore, {
 			email: "not-an-email",
 		});
-		expect(res.exists).toBe(false);
+		expect(res).toBeNull();
 	});
 
 	test("rejects a non-admin caller", async () => {

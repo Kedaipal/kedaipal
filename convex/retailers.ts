@@ -1409,37 +1409,122 @@ export const checkSlugAvailability = query({
 	},
 });
 
+/** Why an address is not free to point a new store at. Two conflicts, two
+ * different fixes, so every caller gets the KIND and not just a boolean. */
+export type EmailConflictKind =
+	/** Another PRE-BUILT store already names this address as its claimer. */
+	| "waiting"
+	/** A live store mails this address, so that login most likely runs it. */
+	| "owns";
+
+export type EmailConflict = {
+	kind: EmailConflictKind;
+	storeName: string;
+	slug: string;
+	/** The sentence an admin reads, authored HERE so the form's hint and the
+	 * server's refusal are the same words. */
+	message: string;
+};
+
 /**
- * Admin pre-check for "onboard a client": is a store already registered to this
- * email? We're strictly 1 login : 1 store and Clerk enforces one account per
- * email, so a duplicate email means the invite link would dead-end (the client
- * would land back in their existing store). Surfacing it up front saves a wasted
- * invite. We check our own `notifyEmail` (the right question — "already owns a
- * store" — not merely "exists in Clerk"); it's stored normalized so equality is
- * exact. notifyEmail is editable, so this is a strong heuristic, not a hard
- * guarantee — the real 1:1 gate still lives in `createRetailer`. Admin-only to
- * avoid leaking whether an email is registered. See docs/vendor-identity.md.
+ * Is this address free to point a new store at? **One author for the question**,
+ * shared by the admin's pre-flight hint (`checkEmailHasStore`) and the write
+ * that enforces it (`resolvePendingOwnerEmail`) — so the form can never show a
+ * clear field for an address the server is about to refuse. That contradiction
+ * is the exact bug the slug hint had before `checkSlugAvailability` took a
+ * required `purpose` (docs/prebuilt-stores.md): a hint whose rule lives apart
+ * from its server drifts from it, and the admin finds out on submit.
+ *
+ * The two kinds:
+ *
+ *  - **`waiting`** — another pre-built store already names this address. Both
+ *    would answer `myClaimableStore`, which reads `by_pending_owner_email` with
+ *    `.first()`, so the vendor would silently get whichever the index returned
+ *    first and the other store would be invisible to the claim door. Refused
+ *    here, where an admin can read the reason, rather than at the claim, where
+ *    nobody can.
+ *  - **`owns`** — a live store MAILS this address, so that login most likely
+ *    runs it, and one login can only hold one store. **Best-effort, and the
+ *    copy says so** rather than asserting ownership: Kedaipal never stores a
+ *    login address, and `notifyEmail` is explicitly re-pointable at a shared ops
+ *    inbox (see its schema comment), so it can name a different person than the
+ *    one who signs in. Keying on it is still right — correct for every store
+ *    that never changed it — but the authoritative wall is `claimBlocker`, on
+ *    the Clerk subject at claim time. A flat refusal on a proxy signal with no
+ *    way out would be a dead end. An unclaimed store's own `notifyEmail` is
+ *    unset by design, so it can never raise this one.
+ *
+ * `selfId` is the store being edited, so re-saving the same address on the same
+ * store is not a collision with itself. `null` at create and from the query.
+ */
+async function findEmailConflict(
+	ctx: QueryCtx,
+	normalized: string,
+	selfId: Id<"retailers"> | null,
+): Promise<EmailConflict | undefined> {
+	const waiting = await ctx.db
+		.query("retailers")
+		.withIndex("by_pending_owner_email", (q) =>
+			q.eq("pendingOwnerEmail", normalized),
+		)
+		.first();
+	if (waiting && waiting._id !== selfId)
+		return {
+			kind: "waiting",
+			storeName: waiting.storeName,
+			slug: waiting.slug,
+			message: `${waiting.storeName} is already waiting for ${normalized}. One login can only hold one store — finish or clear that handover first.`,
+		};
+	const owned = await ctx.db
+		.query("retailers")
+		.withIndex("by_notify_email", (q) => q.eq("notifyEmail", normalized))
+		.first();
+	if (owned && owned._id !== selfId && !isUnclaimed(owned))
+		return {
+			kind: "owns",
+			storeName: owned.storeName,
+			slug: owned.slug,
+			message: `${owned.storeName} already uses ${normalized} as its contact email, so that login most likely owns it — and one login can only hold one store. If this is a different person, change ${owned.storeName}'s notification email first; it's the only address we can match on.`,
+		};
+	return undefined;
+}
+
+/**
+ * Admin pre-check for "onboard a client": is this email free to point a store
+ * at? We're strictly 1 login : 1 store and Clerk enforces one account per
+ * email, so a clash means the invite link (or the handover) would dead-end —
+ * the client would land back in their existing store, or a second pre-built
+ * store would become unclaimable. Surfacing it up front saves a wasted invite.
+ *
+ * It asks `findEmailConflict`, the same helper the write asks, and returns the
+ * helper's own sentence — so the hint cannot say "fine" to something
+ * `createUnclaimedStore` / `setPendingOwnerEmail` will refuse, and the two can
+ * never word the same refusal differently. It used to check `notifyEmail`
+ * ALONE, which is why typing one address into two build forms showed no warning
+ * and then failed on submit.
+ *
+ * Admin-only to avoid leaking whether an email is registered. The real 1:1 gate
+ * still lives in `createRetailer` / `claimBlocker`. See docs/vendor-identity.md.
+ *
+ * The NAME now undersells it — it answers "is this address free?", not only
+ * "does a store own it?" — but an exported query path is a deployed contract,
+ * and renaming it would leave a live bundle calling a function that no longer
+ * exists. The doc carries the meaning instead.
  */
 export const checkEmailHasStore = query({
 	args: { email: v.string() },
-	handler: async (
-		ctx,
-		{ email },
-	): Promise<{ exists: boolean; storeName?: string; slug?: string }> => {
+	/** `null` = free to use. The conflict object's presence IS the answer, so
+	 * there is no `exists` flag beside it to disagree with. */
+	handler: async (ctx, { email }): Promise<EmailConflict | null> => {
 		await requireAdmin(ctx);
 		let normalized: string;
 		try {
 			normalized = assertValidEmail(email);
 		} catch {
 			// Not a valid email yet (still typing) — nothing to warn about.
-			return { exists: false };
+			return null;
 		}
-		const existing = await ctx.db
-			.query("retailers")
-			.withIndex("by_notify_email", (q) => q.eq("notifyEmail", normalized))
-			.first();
-		if (!existing) return { exists: false };
-		return { exists: true, storeName: existing.storeName, slug: existing.slug };
+		return (await findEmailConflict(ctx, normalized, null)) ?? null;
 	},
 });
 
@@ -2089,11 +2174,17 @@ export const stampHandoverInvite = internalMutation({
 });
 
 /**
- * Validate a handover address and make sure it is the ONLY store waiting on it.
- * Two stores pointed at one inbox would both answer `myClaimableStore`, and the
- * vendor would silently get whichever the index returned first — so the second
- * one is refused here, where an admin can read the reason, rather than at the
- * claim, where nobody can.
+ * Validate a handover address and make sure nothing else is pointed at it.
+ *
+ * Both checks and both sentences live in `findEmailConflict`, which the admin's
+ * pre-flight hint (`checkEmailHasStore`) asks too — so the form warns in the
+ * same words this refuses in, and can never wave through what this rejects.
+ *
+ * Absent or blank means "we don't know yet", which is a FIRST-CLASS state, not
+ * a validation failure: an admin pre-builds before the vendor has given an
+ * address (and, in a bulk run, for twenty stores at once). The store then waits
+ * under the directory's **Unclaimed** chip with an amber "Handover — invite
+ * them" row until someone is named. See docs/prebuilt-stores.md.
  *
  * `selfId` is the store being edited (so re-saving the same address on the same
  * store is not a collision with itself); pass `null` at create.
@@ -2110,38 +2201,8 @@ async function resolvePendingOwnerEmail(
 	} catch (err) {
 		throw new ConvexError((err as Error).message);
 	}
-	const waiting = await ctx.db
-		.query("retailers")
-		.withIndex("by_pending_owner_email", (q) =>
-			q.eq("pendingOwnerEmail", normalized),
-		)
-		.first();
-	if (waiting && waiting._id !== selfId)
-		throw new ConvexError(
-			`${waiting.storeName} is already waiting for ${normalized}. One login can only hold one store — finish or clear that handover first.`,
-		);
-	// A store they ALREADY own is the same wall from the other side: the claim
-	// would refuse it (one store per login), so say so now instead of handing an
-	// admin a link that can never work.
-	//
-	// This is a BEST-EFFORT match, and the message says so rather than asserting
-	// ownership. Kedaipal never stores a login address — `notifyEmail` is the
-	// only email on the row, prefilled from Clerk at signup but explicitly
-	// re-pointable at a shared ops inbox (see its schema comment), so it can
-	// name a different person than the one who signs in. Keying on it is still
-	// right: it is correct for every store that never changed it, and the
-	// authoritative wall is `claimBlocker`, which matches on the Clerk subject
-	// at claim time. What the copy must not do is tell an admin that an address
-	// "runs" a store when all we know is that the store mails it — a flat
-	// refusal on a proxy signal, with no way out, is a dead end.
-	const owned = await ctx.db
-		.query("retailers")
-		.withIndex("by_notify_email", (q) => q.eq("notifyEmail", normalized))
-		.first();
-	if (owned && owned._id !== selfId && !isUnclaimed(owned))
-		throw new ConvexError(
-			`${owned.storeName} already uses ${normalized} as its contact email, so that login most likely owns it — and one login can only hold one store. If this is a different person, change ${owned.storeName}'s notification email first; it's the only address we can match on.`,
-		);
+	const conflict = await findEmailConflict(ctx, normalized, selfId);
+	if (conflict) throw new ConvexError(conflict.message);
 	return normalized;
 }
 
