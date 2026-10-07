@@ -123,7 +123,13 @@ export function AdminSellersContent({
 	search: SellersSearch;
 	onSearchChange: (next: SellersSearch) => void;
 }) {
-	const sellers = useQuery(convexQuery(api.admin.listSellersForAdmin, {})).data;
+	const sellerList = useQuery(
+		convexQuery(api.admin.listSellersForAdmin, {}),
+	).data;
+	const sellers = sellerList?.sellers;
+	// The book runs past the cap — this list is the NEWEST stores and the
+	// oldest are missing, so the count below must not read as the whole book.
+	const sellersCapped = sellerList?.capped === true;
 	// Dev deployments only (z8r3fdbmc9) — the server re-checks, this just keeps
 	// a control that would always refuse off the prod screen entirely.
 	const purgeEnabled =
@@ -131,6 +137,7 @@ export function AdminSellersContent({
 	return (
 		<SellerDirectory
 			sellers={sellers}
+			sellersCapped={sellersCapped}
 			purgeEnabled={purgeEnabled}
 			search={search}
 			onSearchChange={onSearchChange}
@@ -143,12 +150,17 @@ export function AdminSellersContent({
  * behind Clerk) and driven by the route test without a router. */
 export function SellerDirectory({
 	sellers,
+	sellersCapped = false,
 	purgeEnabled,
 	search,
 	onSearchChange,
 }: {
 	/** `undefined` while loading. */
 	sellers: readonly AdminSellerRow[] | undefined;
+	/** The store book runs past the query's cap, so `sellers` is the NEWEST
+	 * slice of it. Without this the count read "Showing 500 of 500" and
+	 * sounded like the whole book (z8r3fdpm2p). */
+	sellersCapped?: boolean;
 	purgeEnabled: boolean;
 	search: SellersSearch;
 	onSearchChange: (next: SellersSearch) => void;
@@ -324,7 +336,9 @@ export function SellerDirectory({
 					>
 						{sellers === undefined
 							? "Loading…"
-							: `Showing ${visible.length} of ${all.length}`}
+							: sellersCapped
+								? `Showing ${visible.length} of the newest ${all.length}`
+								: `Showing ${visible.length} of ${all.length}`}
 					</span>
 				</div>
 			</div>

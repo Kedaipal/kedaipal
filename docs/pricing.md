@@ -579,8 +579,10 @@ picker is ordered **newest first** — so past 200 stores the OLDEST ones simply
 were not in it, and an older store could be put on a contract from the seller
 sheet but not from billing. Silently, with a native `<select>` that just
 stopped. Both now read one exported `ADMIN_STORE_LIST_LIMIT`, a source-scan
-test refuses a literal cap on either query, and the picker says when the book
-runs past the list and names the door that can search all of it. The number
+test refuses a literal cap on either query, and BOTH surfaces now say when the
+book runs past the list: the picker names the door that can search all of it,
+and the directory counts "Showing N of the newest 500" instead of letting
+"Showing 500 of 500" read as the whole book. The number
 matters sooner than it looks: pre-built stores are created in batches
 (`z8r3fdm6up`) at the NEWEST end, so a batch of placeholders pushes exactly
 that many real paying customers off the end of the picker.

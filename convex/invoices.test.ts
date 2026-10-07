@@ -2429,7 +2429,9 @@ describe("the billing picker and the sellers directory list the same book (z8r3f
 		// Every store the directory can reach, the picker can reach.
 		const pickerSlugs = new Set(picker.stores.map((r) => r.slug));
 		for (const s of made) expect(pickerSlugs.has(s)).toBe(true);
-		expect(picker.stores.length).toBe(directory.length);
+		expect(picker.stores.length).toBe(directory.sellers.length);
+		// Neither surface claims truncation at this size.
+		expect(directory.capped).toBe(false);
 		// Well under the cap, so the picker must not claim to be truncated.
 		expect(picker.capped).toBe(false);
 	});

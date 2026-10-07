@@ -328,13 +328,26 @@ async function loadLastActAs(
  */
 export const listSellersForAdmin = query({
 	args: {},
-	handler: async (ctx): Promise<AdminSellerRow[]> => {
+	handler: async (
+		ctx,
+	): Promise<{
+		sellers: AdminSellerRow[];
+		/** The book runs past the cap, so this list is the NEWEST
+		 * `ADMIN_STORE_LIST_LIMIT` stores and the oldest are missing. The
+		 * directory says so rather than letting "Showing 500 of 500" read as
+		 * the whole book (z8r3fdpm2p). */
+		capped: boolean;
+	}> => {
 		await requireAdmin(ctx);
 		const adminIds = new Set(adminUserIds());
-		const retailers = await ctx.db
+		// +1 to learn whether the book runs past the cap, the same shape
+		// `BUSINESS_REPORT_ORDER_SCAN_CAP` uses. The extra row never returns.
+		const scanned = await ctx.db
 			.query("retailers")
 			.order("desc")
-			.take(SELLER_LIMIT);
+			.take(SELLER_LIMIT + 1);
+		const capped = scanned.length > SELLER_LIMIT;
+		const retailers = scanned.slice(0, SELLER_LIMIT);
 		const rows: AdminSellerRow[] = [];
 		for (const r of retailers) {
 			const sub = await loadSubscription(ctx, r._id);
@@ -484,7 +497,7 @@ export const listSellersForAdmin = query({
 			if (rb !== undefined) return 1;
 			return b.createdAt - a.createdAt;
 		});
-		return rows;
+		return { sellers: rows, capped };
 	},
 });
 
