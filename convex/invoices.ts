@@ -24,6 +24,7 @@ import {
 } from "./lib/auth";
 import { contractForAdmin } from "./lib/enterprise";
 import {
+	autoRenewAfterReplace,
 	invoiceReplaceRefusal,
 	type ReplaceableOrigin,
 	replacementKeepsAutoCharge,
@@ -865,9 +866,23 @@ export const issueInvoice = mutation({
 			keptAutoCharge = replacementKeepsAutoCharge({
 				replacedOrigin: (replaced.origin ?? "admin") as ReplaceableOrigin,
 				replacedTotal: replaced.total,
+				replacedCurrency: replaced.currency,
 				newTotal: fresh?.total ?? Number.POSITIVE_INFINITY,
+				newCurrency: fresh?.currency ?? currency,
 				autoChargeIdle: autoChargeIdle(sub.autoRenew),
 			});
+			// The dead bill's dunning dies with it — ALWAYS, and before any
+			// decision about charging. A standing `nextRetryAt` is not inert:
+			// the daily sweep fires on it alone and charges whatever invoice is
+			// open, checking no origin. Leaving it would have the sweep charge
+			// this replacement two days later even when the rule above just
+			// answered "no" (found in review, 7 Oct). No `updatedAt`: on a
+			// past_due row that field is the lock-flip moment the founder
+			// report reads.
+			if (replaced.origin === "auto_renewal" && sub.autoRenew)
+				await ctx.db.patch(sub._id, {
+					autoRenew: autoRenewAfterReplace(sub.autoRenew),
+				});
 			if (keptAutoCharge)
 				await ctx.scheduler.runAfter(
 					0,
@@ -1338,6 +1353,20 @@ export const voidInvoice = mutation({
 					pendingPlanChange: { plan: invoice.plan, requestedAt: now },
 				});
 		}
+		// Whatever the tier, a voided RENEWAL takes its dunning with it. The
+		// ladder (0 / +2d / +5d) counts failures against one bill, and that
+		// bill no longer exists: carried over, the next renewal starts
+		// mid-ladder and locks the seller sooner than its own grace promises,
+		// and `nextRetryAt` makes the daily sweep charge whatever bill is open
+		// next. Same rule the replace path applies (z8r3fdpm2p) — one helper,
+		// so a void by either door leaves the same state.
+		if (invoice.origin === "auto_renewal") {
+			const sub = await ctx.db.get(invoice.subscriptionId);
+			if (sub?.autoRenew)
+				await ctx.db.patch(sub._id, {
+					autoRenew: autoRenewAfterReplace(sub.autoRenew),
+				});
+		}
 		// A voided invoice's Pay-now link must die with it — a payment on a void
 		// bill can only ever become a refund conversation.
 		if (invoice.gatewayRequestId) {
@@ -1692,6 +1721,11 @@ export const listRetailersForAdmin = query({
 			/** The store's auto-charge is armed AND nothing is in flight — the
 			 * two conditions a replacement needs to inherit the charge. */
 			autoChargeIdle: boolean;
+			/** A charge attempt is standing with no recorded outcome. Carried
+			 * SEPARATELY from `autoChargeIdle`, which is also false for a
+			 * detached method and a stranded charge — deriving the refusal
+			 * from it refused two states the server allows. */
+			chargeInFlight: boolean;
 			/** On the house (z8r3fdeub2) — the picker labels these so nobody
 			 * drafts a bill `issueInvoice` will refuse anyway. */
 			comped: boolean;
@@ -1755,6 +1789,7 @@ export const listRetailersForAdmin = query({
 						}
 					: undefined,
 				autoChargeIdle: autoChargeIdle(sub?.autoRenew),
+				chargeInFlight: sub?.autoRenew?.lastChargeAttemptAt !== undefined,
 				comped: sub?.comped === true,
 				unclaimed: isUnclaimed(r),
 				compLabel: sub?.comp?.label,

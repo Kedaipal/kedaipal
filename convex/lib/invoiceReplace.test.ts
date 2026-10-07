@@ -3,6 +3,7 @@
 // them, so a change here moves both at once.
 import { describe, expect, it } from "vitest";
 import {
+	autoRenewAfterReplace,
 	invoiceReplaceRefusal,
 	replacementChargeNote,
 	replacementKeepsAutoCharge,
@@ -22,7 +23,9 @@ const keeps = (
 	replacementKeepsAutoCharge({
 		replacedOrigin: "auto_renewal",
 		replacedTotal: 14_900,
+		replacedCurrency: "MYR",
 		newTotal: 7_900,
+		newCurrency: "MYR",
 		autoChargeIdle: true,
 		...over,
 	});
@@ -87,7 +90,9 @@ describe("replacementChargeNote", () => {
 		replacementChargeNote({
 			replacedOrigin: "auto_renewal",
 			replacedTotal: 14_900,
+			replacedCurrency: "MYR",
 			newTotal: 7_900,
+			newCurrency: "MYR",
 			autoChargeIdle: true,
 			newTotalLabel: "RM 79.00",
 			...over,
@@ -105,5 +110,55 @@ describe("replacementChargeNote", () => {
 
 	it("says nothing about a card for a bill no card was ever charging", () => {
 		expect(note({ replacedOrigin: "admin" })).toBeNull();
+	});
+});
+
+describe("the currency guard (review, 7 Oct)", () => {
+	it("never calls a different currency 'no more than'", () => {
+		// S$60.00 (6000) reads cheaper than RM79.00 (7900) in minor units and
+		// is worth roughly three times more. The admin form picks the currency
+		// freely on a listed tier, so this is reachable.
+		expect(
+			keeps({
+				replacedTotal: 7_900,
+				replacedCurrency: "MYR",
+				newTotal: 6_000,
+				newCurrency: "SGD",
+			}),
+		).toBe(false);
+	});
+
+	it("says WHY, without inventing an exchange rate", () => {
+		const note = replacementChargeNote({
+			replacedOrigin: "auto_renewal",
+			replacedTotal: 7_900,
+			replacedCurrency: "MYR",
+			newTotal: 6_000,
+			newCurrency: "SGD",
+			autoChargeIdle: true,
+			newTotalLabel: "S$ 60.00",
+		});
+		expect(note).toMatch(/different currency/);
+		// Never "costs more" — across currencies there is no more or less.
+		expect(note).not.toMatch(/costs more/);
+	});
+});
+
+describe("autoRenewAfterReplace", () => {
+	it("drops the dead bill's dunning and keeps the mandate", () => {
+		const after = autoRenewAfterReplace({
+			provider: "hitpay" as const,
+			method: "card",
+			attachedAt: 1,
+			failedAttempts: 2,
+			nextRetryAt: 999,
+			lastChargeError: "declined",
+		});
+		expect(after.failedAttempts).toBeUndefined();
+		expect(after.nextRetryAt).toBeUndefined();
+		expect(after.lastChargeError).toBeUndefined();
+		// The saved method itself survives — only the ladder was about the bill.
+		expect(after.method).toBe("card");
+		expect(after.attachedAt).toBe(1);
 	});
 });

@@ -65,14 +65,58 @@ export function replacementKeepsAutoCharge(args: {
 	replacedOrigin: ReplaceableOrigin;
 	/** Minor units, the bill being replaced. */
 	replacedTotal: number;
+	/** The replaced bill's currency — "no more than" only means something
+	 * inside ONE of them. */
+	replacedCurrency: string;
 	/** Minor units, the corrected bill. */
 	newTotal: number;
+	newCurrency: string;
 	/** `autoChargeIdle(sub.autoRenew)` — armed, and nothing in flight. */
 	autoChargeIdle: boolean;
 }): boolean {
 	if (args.replacedOrigin !== "auto_renewal") return false;
 	if (!args.autoChargeIdle) return false;
+	// Minor units are not comparable across currencies: S$60.00 (6000) reads
+	// "cheaper" than RM79.00 (7900) and is worth roughly three times more. The
+	// admin form picks the currency freely on a listed tier and takes the
+	// contract's frozen one on Enterprise, so neither is guaranteed to match
+	// the renewal being replaced — and converting to compare would invent an
+	// FX rate nobody agreed, exactly as the contract template refuses to. A
+	// mismatch is simply not a downward move, and the seller pays by link.
+	if (args.replacedCurrency !== args.newCurrency) return false;
 	return args.newTotal <= args.replacedTotal;
+}
+
+/**
+ * The store's auto-renew with the dead bill's DUNNING dropped.
+ *
+ * `failedAttempts` / `nextRetryAt` / `lastChargeError` describe one bill — the
+ * schema says so ("Dunning state for the CURRENT pending renewal invoice").
+ * When a replacement voids that bill they describe nothing, and leaving them
+ * standing is not inert: the daily sweep fires on `nextRetryAt` alone, picks
+ * whatever invoice is open (it checks no origin, and neither does
+ * `chargeDueRenewal`), and charges it. After a DECLINE that is the live state —
+ * `recordChargeFailure` clears the attempt stamp, so `autoChargeIdle` is true
+ * and the replacement is allowed — so a dearer correction the form promised
+ * would never be charged gets charged two days later (found in review, 7 Oct).
+ *
+ * Clearing is also simply correct: a replaced bill is a new bill, and its
+ * dunning ladder starts at zero. A charge this replacement DOES inherit
+ * schedules itself, and a failure there mints a fresh ladder.
+ */
+export function autoRenewAfterReplace<
+	T extends {
+		failedAttempts?: number;
+		nextRetryAt?: number;
+		lastChargeError?: string;
+	},
+>(autoRenew: T): T {
+	return {
+		...autoRenew,
+		failedAttempts: undefined,
+		nextRetryAt: undefined,
+		lastChargeError: undefined,
+	};
 }
 
 /**
@@ -83,7 +127,9 @@ export function replacementKeepsAutoCharge(args: {
 export function replacementChargeNote(args: {
 	replacedOrigin: ReplaceableOrigin;
 	replacedTotal: number;
+	replacedCurrency: string;
 	newTotal: number;
+	newCurrency: string;
 	autoChargeIdle: boolean;
 	/** Formatted, e.g. "RM 79.00" — the caller owns money formatting. */
 	newTotalLabel: string;
@@ -91,7 +137,12 @@ export function replacementChargeNote(args: {
 	if (args.replacedOrigin !== "auto_renewal") return null;
 	if (!args.autoChargeIdle)
 		return "Their saved card won't charge this automatically — send them the Pay-now link.";
-	return replacementKeepsAutoCharge(args)
-		? `Their saved card will be charged ${args.newTotalLabel} automatically, as the renewal it replaces would have been.`
+	if (replacementKeepsAutoCharge(args))
+		return `Their saved card will be charged ${args.newTotalLabel} automatically, as the renewal it replaces would have been.`;
+	// Two different reasons, never collapsed into "costs more": across
+	// currencies there is no cheaper or dearer, and saying there is would be
+	// the note inventing an exchange rate.
+	return args.replacedCurrency !== args.newCurrency
+		? "This bills a different currency from the renewal it replaces, so their saved card won't be charged for it — send them the Pay-now link."
 		: "This costs more than the renewal it replaces, so their saved card won't be charged for it — send them the Pay-now link.";
 }

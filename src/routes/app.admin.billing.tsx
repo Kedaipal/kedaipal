@@ -1075,11 +1075,12 @@ export function IssueInvoiceForm() {
 		? invoiceReplaceRefusal({
 				invoiceNumber: openBill.invoiceNumber,
 				kind: openBill.kind,
-				// The picker reports the IDLE state (armed and nothing in
-				// flight); a charge in flight is exactly "armed but not idle".
-				chargeInFlight:
-					selected?.autoChargeIdle === false &&
-					openBill.origin === "auto_renewal",
+				// The server's own fact, not a proxy for it. Deriving this from
+				// `autoChargeIdle === false` ALSO caught a detached method and
+				// a stranded charge, so the button refused with "hasn't
+				// reported back yet" for two states the server would have
+				// allowed (review, 7 Oct).
+				chargeInFlight: selected?.chargeInFlight === true,
 			})
 		: null;
 	const replaceChargeNote =
@@ -1087,7 +1088,9 @@ export function IssueInvoiceForm() {
 			? replacementChargeNote({
 					replacedOrigin: openBill.origin,
 					replacedTotal: openBill.total,
+					replacedCurrency: openBill.currency,
 					newTotal: total,
+					newCurrency: effectiveCurrency,
 					autoChargeIdle: selected?.autoChargeIdle === true,
 					newTotalLabel: formatPrice(total, effectiveCurrency),
 				})

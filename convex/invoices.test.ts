@@ -2285,3 +2285,113 @@ describe("issueInvoice — replacing a mis-tiered bill (z8r3fdpm2p)", () => {
 		expect(after?.status).toBe("pending");
 	});
 });
+
+describe("replace + the dunning ladder (review finding, 7 Oct)", () => {
+	/** An active store, a DECLINED renewal: the attempt stamp is cleared (so
+	 * the replace is allowed) and a retry is standing. This is the commonest
+	 * state in which an admin reaches for a correction. */
+	async function seedDeclinedRenewal(
+		t: ReturnType<typeof setup>,
+		slug: string,
+	) {
+		await t
+			.withIdentity({ subject: `u_${slug}` })
+			.mutation(api.retailers.createRetailer, {
+				storeName: `Store ${slug}`,
+				slug,
+			});
+		const { retailerId, subId } = await t.run(async (ctx) => {
+			const r = await ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", slug))
+				.first();
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", r!._id))
+				.first();
+			return { retailerId: r!._id, subId: sub!._id };
+		});
+		await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		const bill = await t.run((ctx) =>
+			ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.filter((q) => q.eq(q.field("status"), "pending"))
+				.first(),
+		);
+		const now = Date.now();
+		await t.run(async (ctx) => {
+			await ctx.db.patch(bill!._id, { origin: "auto_renewal" });
+			await ctx.db.patch(subId, {
+				status: "active",
+				currentPeriodStart: now - 20 * 24 * 60 * 60 * 1000,
+				currentPeriodEnd: now + 10 * 24 * 60 * 60 * 1000,
+				autoRenew: {
+					provider: "hitpay" as const,
+					method: "card",
+					attachedAt: now,
+					// What `recordChargeFailure` leaves behind on a decline: the
+					// attempt stamp CLEARED, a retry standing.
+					failedAttempts: 1,
+					nextRetryAt: now - 1000,
+					lastChargeError: "declined",
+				},
+				// An Enterprise contract, so the dearer replacement is reachable.
+				enterprise: {
+					baseFeeMinor: 88_800,
+					currency: "MYR" as const,
+					includedCredits: 1500,
+					overageRateMinor: 60,
+					blockSize: 5000,
+					contactName: "Someone",
+					setBy: ADMIN,
+					setAt: now,
+				},
+			});
+		});
+		return { retailerId, subId, billId: bill!._id };
+	}
+
+	test("a DEARER replacement leaves no retry for the sweep to charge", async () => {
+		// The bug: `recordChargeFailure` clears the stamp but leaves
+		// `nextRetryAt`, so `autoChargeIdle` passes and the replace is allowed —
+		// then two days later the sweep finds `retryDue` plus a pending bill
+		// (it checks no origin, and nor does `chargeDueRenewal`) and charges the
+		// card the INCREASED amount the form promised it never would.
+		const t = setup();
+		const { retailerId, billId } = await seedDeclinedRenewal(t, "dun-dearer");
+
+		const res = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "enterprise",
+			billingCycle: "monthly",
+			founding: false,
+			replacePendingId: billId,
+		});
+		expect(res.replaced?.keptAutoCharge).toBe(false);
+
+		const sweep = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(sweep.autoChargeRetries).toBe(0);
+	});
+
+	test("voiding a renewal takes its dunning ladder with it", async () => {
+		// Same rule by the other door: the ladder counts failures against ONE
+		// bill, so carrying it over starts the next renewal mid-ladder.
+		const t = setup();
+		const { subId, billId } = await seedDeclinedRenewal(t, "dun-void");
+		await asAdmin(t).mutation(api.invoices.voidInvoice, { invoiceId: billId });
+		const sub = await t.run((ctx) => ctx.db.get(subId));
+		expect(sub?.autoRenew?.nextRetryAt).toBeUndefined();
+		expect(sub?.autoRenew?.failedAttempts).toBeUndefined();
+		// The mandate itself survives — only the ladder was about the bill.
+		expect(sub?.autoRenew?.method).toBe("card");
+	});
+});

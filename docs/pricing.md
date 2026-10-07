@@ -471,13 +471,32 @@ disabled-with-reason line and the server's throw are one author:
   before saying so. Voiding then is survivable — the reconcile audits a
   *stranded charge* and switches auto-renew off — but that is a safety net, not
   a place to walk on purpose. The daily run resolves it.
-- **The replacement inherits the card charge only downward.** Only a renewal
-  ever had one armed, and only `newTotal <= replacedTotal` keeps it: the
-  seller's mandate is the amount already queued against their card, so a
-  cheaper correction stays inside it and spares them a bill nothing would pay.
-  An increase is a new ask — Kedaipal never charges itself up on an admin's
-  say-so (Zaki, 7 Oct 2026), however the change was agreed. The bill still
-  carries its Pay-now link.
+- **The replacement inherits the card charge only downward, and only within
+  one currency.** Only a renewal ever had one armed, and only
+  `newTotal <= replacedTotal` keeps it: the seller's mandate is the amount
+  already queued against their card, so a cheaper correction stays inside it
+  and spares them a bill nothing would pay. An increase is a new ask —
+  Kedaipal never charges itself up on an admin's say-so (Zaki, 7 Oct 2026),
+  however the change was agreed. The bill still carries its Pay-now link.
+
+  Minor units are **not comparable across currencies**: S$60.00 (6000) reads
+  "cheaper" than RM79.00 (7900) and is worth roughly three times more. The
+  form picks the currency freely on a listed tier and takes the contract's
+  frozen one on Enterprise, so a mismatch is reachable; it answers *not
+  downward* rather than converting, which would invent an FX rate nobody
+  agreed — the same refusal the contract template makes.
+- **The dead bill's DUNNING dies with it**, by either door (`replacePendingId`
+  or a plain `voidInvoice` of a renewal). `failedAttempts` / `nextRetryAt` /
+  `lastChargeError` describe one bill — the schema says so — and leaving them
+  standing is not inert. After a DECLINE, `recordChargeFailure` clears the
+  attempt stamp (so `autoChargeIdle` passes and the replace is allowed) but
+  sets `nextRetryAt` +2d; the daily sweep fires on that alone, picks whatever
+  invoice is open — **it checks no origin, and neither does
+  `chargeDueRenewal`** — and charges it. A dearer correction the form had just
+  promised would never be charged therefore got charged two days later (found
+  in review, 7 Oct). One helper, `autoRenewAfterReplace`, so both doors leave
+  the same state; the ladder restarts at zero for the new bill, which is also
+  simply what a new bill deserves.
 
 Note the seller's own `invoices.switchPendingPlan` refuses renewal invoices
 outright for exactly the reason the third rule answers. That exclusion stays:

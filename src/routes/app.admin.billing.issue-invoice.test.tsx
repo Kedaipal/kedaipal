@@ -241,7 +241,13 @@ describe("Issue an invoice — correcting an open bill (z8r3fdpm2p)", () => {
 	});
 
 	it("refuses to replace while a card charge is unresolved", () => {
-		state.retailers = [store({ pending: RENEWAL, autoChargeIdle: false })];
+		// `chargeInFlight` is its own fact now: `autoChargeIdle === false` is
+		// ALSO true for a detached method and a stranded charge, and refusing
+		// those said "hasn't reported back yet" about a replace the server
+		// would have allowed (review, 7 Oct).
+		state.retailers = [
+			store({ pending: RENEWAL, autoChargeIdle: false, chargeInFlight: true }),
+		];
 		render(<IssueInvoiceForm />);
 		pickStore();
 
@@ -253,6 +259,29 @@ describe("Issue an invoice — correcting an open bill (z8r3fdpm2p)", () => {
 			).disabled,
 		).toBe(true);
 		expect(screen.getByText(/hasn't reported back yet/)).toBeTruthy();
+	});
+
+	it("allows the replace when the card is merely detached or stranded", () => {
+		// `autoChargeIdle` is false for THREE different reasons; only one of
+		// them is "a charge is in flight". A stranded charge or a detached
+		// method used to produce a disabled button reading "hasn't reported
+		// back yet" about a replace the server would have allowed.
+		state.retailers = [
+			store({ pending: RENEWAL, autoChargeIdle: false, chargeInFlight: false }),
+		];
+		render(<IssueInvoiceForm />);
+		pickStore();
+
+		expect(
+			(
+				screen.getByRole("button", {
+					name: /replace open bill/i,
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(false);
+		expect(screen.queryByText(/hasn't reported back yet/)).toBeNull();
+		// …and it is honest that no card will follow this one.
+		expect(screen.getByText(/won't charge this automatically/)).toBeTruthy();
 	});
 
 	it("names the bill it will void before replacing it", async () => {
