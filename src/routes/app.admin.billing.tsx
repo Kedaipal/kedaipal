@@ -35,11 +35,16 @@ import {
 	type Country,
 } from "../../convex/lib/country";
 import {
+	invoiceReplaceRefusal,
+	replacementChargeNote,
+} from "../../convex/lib/invoiceReplace";
+import {
 	ANNUAL_MONTHS_RECEIVED,
 	annualQuote,
 	BILLING_CURRENCIES,
 	type BillingCurrency,
 	enterprisePrice,
+	isPlanUpgrade,
 	PLANS,
 	type Plan,
 	planPrice,
@@ -55,6 +60,7 @@ import { PageHeader } from "../components/dashboard/page-header";
 import { InvoiceDownloadButton } from "../components/settings/invoice-download-button";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
+import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import {
 	Dialog,
 	DialogContent,
@@ -872,7 +878,7 @@ function retailerOptionLabel(r: {
 	isFoundingMember: boolean;
 	foundingIntent: boolean;
 	foundingBenefitsRevoked: boolean;
-	hasPending: boolean;
+	pending?: { invoiceNumber: string };
 	comped: boolean;
 	unclaimed: boolean;
 }): string {
@@ -888,7 +894,7 @@ function retailerOptionLabel(r: {
 			r.foundingBenefitsRevoked ? "Founding · benefits ended" : "Founding",
 		);
 	else if (r.foundingIntent) parts.push("Founding (trial)");
-	if (r.hasPending) parts.push("has pending");
+	if (r.pending) parts.push("has pending");
 	// Comped stores can't be billed (issueInvoice refuses, z8r3fdeub2) — say so
 	// in the picker rather than letting the admin draft a bill that bounces.
 	// A store nobody owns yet is comped too (the `internal` setup comp), but
@@ -922,6 +928,7 @@ export function IssueInvoiceForm() {
 	const [currency, setCurrency] = useState<BillingCurrency>("MYR");
 	const [busy, setBusy] = useState(false);
 	const [contractSheetOpen, setContractSheetOpen] = useState(false);
+	const [confirmReplace, setConfirmReplace] = useState(false);
 
 	const selected = retailers?.find((r) => r._id === retailerId);
 	// Live contracts the admin could model a new deal on — off the picker list
@@ -931,7 +938,9 @@ export function IssueInvoiceForm() {
 		retailers ?? [],
 		retailerId || null,
 	);
-	const blocked = selected?.hasPending === true;
+	// An open bill no longer blocks: the admin can REPLACE it at the tier they
+	// actually meant (z8r3fdpm2p). What it changes is the verb on the button.
+	const openBill = selected?.pending;
 	// On the house (z8r3fdeub2) — issueInvoice refuses these server-side; the
 	// button is disabled with the reason instead of bouncing on click.
 	// A store nobody owns yet is ALSO comped — the `internal` setup comp — but
@@ -1045,6 +1054,44 @@ export function IssueInvoiceForm() {
 	// a contract store ends the contract when it's PAID (settle treats it as
 	// the move to Pro/Starter).
 	const offContractBill = contract !== undefined && !billsContract;
+	// What PAYING this bill does to the store's tier. The plan lives on the
+	// INVOICE until it settles (`settleInvoicePaid`), so issuing changes
+	// nothing — but an admin cannot see from this form WHEN the change lands,
+	// and the answer differs from the one the rest of the product gives: a
+	// seller's own downgrade is SCHEDULED to the period end, while paying an
+	// admin-issued lower-tier bill moves them at once. Undisclosed behaviour
+	// on a money action; said here instead (z8r3fdpm2p).
+	const currentPlan = selected?.plan as Plan | undefined;
+	const tierMove =
+		currentPlan && currentPlan !== effectivePlan && !offContractBill
+			? isPlanUpgrade(currentPlan, effectivePlan)
+				? "up"
+				: "down"
+			: null;
+	// Replacing an open bill — the same two pure rules the server applies, so
+	// the sentence under the button and the refusal it would throw cannot
+	// disagree.
+	const replaceRefusal = openBill
+		? invoiceReplaceRefusal({
+				invoiceNumber: openBill.invoiceNumber,
+				kind: openBill.kind,
+				// The picker reports the IDLE state (armed and nothing in
+				// flight); a charge in flight is exactly "armed but not idle".
+				chargeInFlight:
+					selected?.autoChargeIdle === false &&
+					openBill.origin === "auto_renewal",
+			})
+		: null;
+	const replaceChargeNote =
+		openBill && !replaceRefusal && !noContract
+			? replacementChargeNote({
+					replacedOrigin: openBill.origin,
+					replacedTotal: openBill.total,
+					newTotal: total,
+					autoChargeIdle: selected?.autoChargeIdle === true,
+					newTotalLabel: formatPrice(total, effectiveCurrency),
+				})
+			: null;
 
 	async function handleIssue() {
 		if (!retailerId) return;
@@ -1052,14 +1099,29 @@ export function IssueInvoiceForm() {
 		try {
 			// No dueDate — the system sets it (issue + 14 days). The paid cycle
 			// starts at mark-paid.
-			await issue({
+			const res = await issue({
 				retailerId,
 				plan: effectivePlan,
 				billingCycle: effectiveCycle,
 				founding: foundingBill,
 				currency: effectiveCurrency,
+				// The server re-checks that this is still the open bill, so a
+				// stale page replaces nothing.
+				...(openBill ? { replacePendingId: openBill._id } : {}),
 			});
-			toast.success("Invoice issued — it's now in Pending below.");
+			toast.success(
+				res.replaced
+					? `${res.replaced.invoiceNumber} voided — the new bill is in Pending below.`
+					: "Invoice issued — it's now in Pending below.",
+				res.replaced
+					? {
+							description: res.replaced.keptAutoCharge
+								? "Their saved card is being charged for the new amount."
+								: undefined,
+						}
+					: undefined,
+			);
+			setConfirmReplace(false);
 			setRetailerId("");
 			setFoundingOverride(false);
 			// Reset to the default so the next store isn't silently billed in SGD.
@@ -1317,6 +1379,13 @@ export function IssueInvoiceForm() {
 							meant to bill the contract, pick Enterprise.
 						</p>
 					) : null}
+					{tierMove ? (
+						<p className="text-xs text-muted-foreground">
+							{tierMove === "up"
+								? `Paying moves them from ${PLAN_LABEL[currentPlan as Plan]} to ${PLAN_LABEL[effectivePlan]} — not before. Whatever they've already paid for carries over as ${PLAN_LABEL[effectivePlan]} days.`
+								: `Paying moves them from ${PLAN_LABEL[currentPlan as Plan]} down to ${PLAN_LABEL[effectivePlan]} straight away — an admin-issued change doesn't wait for the period to end, unlike a seller's own downgrade. Whatever they've already paid for carries over as ${PLAN_LABEL[effectivePlan]} days.`}
+						</p>
+					) : null}
 					{foundingBill ? (
 						<p className="text-xs text-emerald-700">
 							{formatPrice(base, currency)} −{" "}
@@ -1333,24 +1402,36 @@ export function IssueInvoiceForm() {
 				</div>
 				<Button
 					type="button"
-					onClick={handleIssue}
+					onClick={openBill ? () => setConfirmReplace(true) : handleIssue}
 					disabled={
 						!retailerId ||
 						busy ||
-						blocked ||
 						compedStore ||
 						unclaimedStore ||
-						noContract
+						noContract ||
+						replaceRefusal !== null
 					}
 					className="h-11 w-full sm:w-auto sm:px-6"
 				>
-					{busy ? "Issuing…" : "Issue invoice"}
+					{busy ? "Issuing…" : openBill ? "Replace open bill" : "Issue invoice"}
 				</Button>
 			</div>
-			{blocked ? (
-				<p className="text-xs text-amber-700">
-					This retailer already has a pending invoice — settle it first.
-				</p>
+			{/* An open bill is a thing to CORRECT, not a wall. The old copy
+			    ("settle it first") sent the admin to another card to void it by
+			    hand — the fix for a mis-tiered bill now lives where the right
+			    one is drafted. */}
+			{openBill ? (
+				replaceRefusal ? (
+					<p className="text-xs text-amber-700">{replaceRefusal}</p>
+				) : (
+					<p className="text-xs text-muted-foreground">
+						{openBill.invoiceNumber} is open for{" "}
+						{formatPrice(openBill.total, openBill.currency)} (
+						{PLAN_LABEL[openBill.plan]}). Issuing voids it and replaces it with
+						this one — it stays in their history as cancelled.
+						{replaceChargeNote ? ` ${replaceChargeNote}` : ""}
+					</p>
+				)
 			) : null}
 			{unclaimedStore ? (
 				<p className="text-xs text-amber-700">
@@ -1371,6 +1452,28 @@ export function IssueInvoiceForm() {
 			{/* Saving in here IS putting the store on Enterprise; the form above
 			    picks the contract up live (Convex reactivity), so the admin never
 			    re-picks the store. */}
+			{/* Replacing voids a live bill and can set a card charge going, so
+			    it states both before the tap — never a toast after it. */}
+			<ConfirmDialog
+				open={confirmReplace}
+				onOpenChange={setConfirmReplace}
+				title={`Replace ${openBill?.invoiceNumber ?? "this bill"}?`}
+				description={
+					openBill ? (
+						<>
+							{openBill.invoiceNumber} (
+							{formatPrice(openBill.total, openBill.currency)},{" "}
+							{PLAN_LABEL[openBill.plan]}) is voided and replaced with a{" "}
+							{PLAN_LABEL[effectivePlan]} bill for{" "}
+							{formatPrice(total, effectiveCurrency)}. The old one stays in
+							their history as cancelled and its Pay-now link stops working.
+							{replaceChargeNote ? ` ${replaceChargeNote}` : ""}
+						</>
+					) : null
+				}
+				confirmLabel="Replace it"
+				onConfirm={handleIssue}
+			/>
 			<EnterpriseContractSheet
 				retailerId={retailerId || null}
 				templates={contractTemplates}

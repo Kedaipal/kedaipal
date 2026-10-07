@@ -93,6 +93,7 @@ import type * as lib_identity from "../lib/identity.js";
 import type * as lib_imageContentType from "../lib/imageContentType.js";
 import type * as lib_inboundIntent from "../lib/inboundIntent.js";
 import type * as lib_insights from "../lib/insights.js";
+import type * as lib_invoiceReplace from "../lib/invoiceReplace.js";
 import type * as lib_lalamove from "../lib/lalamove.js";
 import type * as lib_lalamoveSignature from "../lib/lalamoveSignature.js";
 import type * as lib_legal from "../lib/legal.js";
@@ -269,6 +270,7 @@ declare const fullApi: ApiFromModules<{
   "lib/imageContentType": typeof lib_imageContentType;
   "lib/inboundIntent": typeof lib_inboundIntent;
   "lib/insights": typeof lib_insights;
+  "lib/invoiceReplace": typeof lib_invoiceReplace;
   "lib/lalamove": typeof lib_lalamove;
   "lib/lalamoveSignature": typeof lib_lalamoveSignature;
   "lib/legal": typeof lib_legal;

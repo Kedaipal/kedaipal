@@ -36,6 +36,30 @@ vi.mock("@tanstack/react-query", () => ({
 vi.mock("convex/react", () => ({ useMutation: () => state.issue }));
 // The sheet is the shared contract form in its own chrome, covered by its own
 // tests; here only "did the form open it" matters.
+vi.mock("../components/ui/confirm-dialog", () => ({
+	// The real one is Radix; here only "what did it say, and did confirming
+	// run the issue" matters.
+	ConfirmDialog: ({
+		open,
+		title,
+		description,
+		onConfirm,
+	}: {
+		open: boolean;
+		title: React.ReactNode;
+		description?: React.ReactNode;
+		onConfirm: () => void;
+	}) =>
+		open ? (
+			<div data-testid="confirm">
+				<p>{title}</p>
+				<p>{description}</p>
+				<button type="button" onClick={onConfirm}>
+					Replace it
+				</button>
+			</div>
+		) : null,
+}));
 vi.mock("../components/admin/enterprise-contract-sheet", () => ({
 	EnterpriseContractSheet: ({ open }: { open: boolean }) => {
 		state.sheetOpen = open;
@@ -73,7 +97,7 @@ const store = (overrides: Record<string, unknown> = {}) => ({
 	isFoundingMember: false,
 	foundingIntent: false,
 	foundingBenefitsRevoked: false,
-	hasPending: false,
+	autoChargeIdle: false,
 	comped: false,
 	unclaimed: false,
 	...overrides,
@@ -177,5 +201,103 @@ describe("Issue an invoice — the Enterprise door", () => {
 		expect(screen.queryByText("No contract yet")).toBeNull();
 		fireEvent.click(planButton("enterprise"));
 		expect(screen.getByText("No contract yet")).toBeTruthy();
+	});
+});
+
+describe("Issue an invoice — correcting an open bill (z8r3fdpm2p)", () => {
+	const RENEWAL = {
+		_id: "inv1",
+		invoiceNumber: "INV-202610-AAAA",
+		total: 14_900,
+		currency: "MYR",
+		plan: "pro" as const,
+		kind: "plan" as const,
+		origin: "auto_renewal" as const,
+	};
+
+	it("offers to replace the open bill instead of dead-ending", () => {
+		// The old copy sent the admin to another card to void it by hand.
+		state.retailers = [store({ pending: RENEWAL, autoChargeIdle: true })];
+		render(<IssueInvoiceForm />);
+		pickStore();
+
+		const btn = screen.getByRole("button", { name: /replace open bill/i });
+		expect((btn as HTMLButtonElement).disabled).toBe(false);
+		expect(screen.queryByText(/settle it first/i)).toBeNull();
+		expect(screen.getByText(/INV-202610-AAAA is open for/)).toBeTruthy();
+	});
+
+	it("promises the card charge only on a correction that costs no more", () => {
+		state.retailers = [store({ pending: RENEWAL, autoChargeIdle: true })];
+		render(<IssueInvoiceForm />);
+		pickStore();
+
+		// Default Pro (RM149) replacing a RM149 renewal — inside the mandate.
+		expect(screen.getByText(/will be charged/)).toBeTruthy();
+
+		// Starter is cheaper still — also inside it.
+		fireEvent.click(planButton("starter"));
+		expect(screen.getByText(/will be charged/)).toBeTruthy();
+	});
+
+	it("refuses to replace while a card charge is unresolved", () => {
+		state.retailers = [store({ pending: RENEWAL, autoChargeIdle: false })];
+		render(<IssueInvoiceForm />);
+		pickStore();
+
+		expect(
+			(
+				screen.getByRole("button", {
+					name: /replace open bill/i,
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(true);
+		expect(screen.getByText(/hasn't reported back yet/)).toBeTruthy();
+	});
+
+	it("names the bill it will void before replacing it", async () => {
+		state.retailers = [store({ pending: RENEWAL, autoChargeIdle: true })];
+		render(<IssueInvoiceForm />);
+		pickStore();
+
+		fireEvent.click(screen.getByRole("button", { name: /replace open bill/i }));
+		expect(screen.getByTestId("confirm")).toBeTruthy();
+		expect(screen.getByText(/Replace INV-202610-AAAA\?/)).toBeTruthy();
+
+		fireEvent.click(screen.getByRole("button", { name: "Replace it" }));
+		await vi.waitFor(() => expect(state.issue).toHaveBeenCalled());
+		expect(state.issue).toHaveBeenCalledWith(
+			expect.objectContaining({ replacePendingId: "inv1" }),
+		);
+	});
+});
+
+describe("Issue an invoice — what paying does to the tier (z8r3fdpm2p)", () => {
+	it("warns that an admin DOWNGRADE lands immediately, unlike a seller's own", () => {
+		// The surprising half: `settleInvoicePaid` flips the plan at once, while
+		// a seller's own downgrade is scheduled to the period end.
+		state.retailers = [store({ plan: "pro" })];
+		render(<IssueInvoiceForm />);
+		pickStore();
+		fireEvent.click(planButton("starter"));
+
+		expect(screen.getByText(/down to Starter straight away/)).toBeTruthy();
+		expect(screen.getByText(/unlike a seller's own downgrade/)).toBeTruthy();
+	});
+
+	it("says an upgrade lands on payment, never before", () => {
+		state.retailers = [store({ plan: "starter" })];
+		render(<IssueInvoiceForm />);
+		pickStore();
+		fireEvent.click(planButton("pro"));
+
+		expect(screen.getByText(/from Starter to Pro — not before/)).toBeTruthy();
+	});
+
+	it("says nothing when the bill isn't a tier change at all", () => {
+		state.retailers = [store({ plan: "pro" })];
+		render(<IssueInvoiceForm />);
+		pickStore();
+		expect(screen.queryByText(/straight away|not before/)).toBeNull();
 	});
 });

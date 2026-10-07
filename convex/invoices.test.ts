@@ -2058,3 +2058,230 @@ describe("billing past-due WhatsApp (z8r3fdg3mh)", () => {
 		expect(await waJobs(t)).toHaveLength(0);
 	});
 });
+
+describe("issueInvoice — replacing a mis-tiered bill (z8r3fdpm2p)", () => {
+	async function seedStore(t: ReturnType<typeof setup>, slug: string) {
+		await t
+			.withIdentity({ subject: `u_${slug}` })
+			.mutation(api.retailers.createRetailer, {
+				storeName: `Store ${slug}`,
+				slug,
+			});
+		return t.run(async (ctx) => {
+			const r = await ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", slug))
+				.first();
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", r!._id))
+				.first();
+			return { retailerId: r!._id, subId: sub!._id };
+		});
+	}
+
+	const openBill = (t: ReturnType<typeof setup>, retailerId: Id<"retailers">) =>
+		t.run((ctx) =>
+			ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.filter((q) => q.eq(q.field("status"), "pending"))
+				.first(),
+		);
+
+	test("still refuses a second bill when no replacement is named", async () => {
+		// Two live Pay-now links on one store is a double payment waiting to
+		// happen — the guard only yields to an explicit replacement.
+		const t = setup();
+		const { retailerId } = await seedStore(t, "rep-dup");
+		await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		await expect(
+			asAdmin(t).mutation(api.invoices.issueInvoice, {
+				retailerId,
+				plan: "starter",
+				billingCycle: "monthly",
+				founding: false,
+			}),
+		).rejects.toThrow(/already has a pending invoice/);
+	});
+
+	test("voids the named bill and issues the corrected one in one go", async () => {
+		const t = setup();
+		const { retailerId } = await seedStore(t, "rep-swap");
+		await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		const wrong = await openBill(t, retailerId);
+
+		const res = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "starter",
+			billingCycle: "monthly",
+			founding: false,
+			replacePendingId: wrong!._id,
+		});
+
+		expect(res.replaced?.invoiceNumber).toBe(wrong!.invoiceNumber);
+		const voided = await t.run((ctx) => ctx.db.get(wrong!._id));
+		expect(voided?.status).toBe("void");
+		// Exactly one bill open afterwards, and it's the corrected tier.
+		const open = await openBill(t, retailerId);
+		expect(open?._id).toBe(res.invoiceId);
+		expect(open?.plan).toBe("starter");
+	});
+
+	test("refuses a STALE id rather than voiding whatever is open now", async () => {
+		// The page was looking at a bill that has since been settled, voided or
+		// replaced. Falling through would void someone else's bill.
+		const t = setup();
+		const { retailerId } = await seedStore(t, "rep-stale");
+		await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		const first = await openBill(t, retailerId);
+		await asAdmin(t).mutation(api.invoices.voidInvoice, {
+			invoiceId: first!._id,
+		});
+		await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		const current = await openBill(t, retailerId);
+
+		await expect(
+			asAdmin(t).mutation(api.invoices.issueInvoice, {
+				retailerId,
+				plan: "starter",
+				billingCycle: "monthly",
+				founding: false,
+				replacePendingId: first!._id,
+			}),
+		).rejects.toThrow(/no longer the open one/);
+		// …and the real open bill is untouched.
+		const after = await t.run((ctx) => ctx.db.get(current!._id));
+		expect(after?.status).toBe("pending");
+	});
+
+	/** A renewal bill with a saved card armed — the only shape that ever had
+	 * an auto-charge scheduled against it. */
+	async function seedArmedRenewal(
+		t: ReturnType<typeof setup>,
+		slug: string,
+	) {
+		const { retailerId, subId } = await seedStore(t, slug);
+		await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		const bill = await openBill(t, retailerId);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(bill!._id, { origin: "auto_renewal" });
+			await ctx.db.patch(subId, {
+				autoRenew: {
+					provider: "hitpay" as const,
+					method: "card",
+					attachedAt: Date.now(),
+				},
+			});
+		});
+		return { retailerId, billId: bill!._id };
+	}
+
+	test("a CHEAPER correction inherits the renewal's card charge", async () => {
+		// The seller already mandated the larger amount, so charging the smaller
+		// one stays inside it — and spares them a bill nothing would pay.
+		const t = setup();
+		const { retailerId, billId } = await seedArmedRenewal(t, "rep-cheaper");
+		const res = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "starter",
+			billingCycle: "monthly",
+			founding: false,
+			replacePendingId: billId,
+		});
+		expect(res.replaced?.keptAutoCharge).toBe(true);
+	});
+
+	test("a DEARER correction never charges the card on an admin's say-so", async () => {
+		// However the change was agreed, Kedaipal does not charge itself up
+		// (Zaki, 7 Oct 2026). The bill still carries its Pay-now link.
+		const t = setup();
+		const { retailerId, billId } = await seedArmedRenewal(t, "rep-dearer");
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, {
+				enterprise: {
+					baseFeeMinor: 88_800,
+					currency: "MYR" as const,
+					includedCredits: 1500,
+					overageRateMinor: 60,
+					blockSize: 5000,
+					contactName: "Someone",
+					setBy: ADMIN,
+					setAt: Date.now(),
+				},
+			});
+		});
+		const res = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "enterprise",
+			billingCycle: "monthly",
+			founding: false,
+			replacePendingId: billId,
+		});
+		expect(res.replaced?.keptAutoCharge).toBe(false);
+	});
+
+	test("refuses while a card charge hasn't reported back", async () => {
+		const t = setup();
+		const { retailerId, subId } = await seedStore(t, "rep-inflight");
+		await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		const bill = await openBill(t, retailerId);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(subId, {
+				autoRenew: {
+					provider: "hitpay" as const,
+					method: "card",
+					attachedAt: Date.now(),
+					lastChargeAttemptAt: Date.now(),
+				},
+			});
+		});
+
+		await expect(
+			asAdmin(t).mutation(api.invoices.issueInvoice, {
+				retailerId,
+				plan: "starter",
+				billingCycle: "monthly",
+				founding: false,
+				replacePendingId: bill!._id,
+			}),
+		).rejects.toThrow(/hasn't reported back yet/);
+		// The bill it would have voided is still standing.
+		const after = await t.run((ctx) => ctx.db.get(bill!._id));
+		expect(after?.status).toBe("pending");
+	});
+});

@@ -413,6 +413,76 @@ at once, at the grant locked for the year they paid for
 eligibility ladder, the swap runbook and the credit-not-refund policy live in
 [`manual-subscription.md`](./manual-subscription.md#annual-billing--the-in-app-offer-sep-2026).
 
+## Changing a store's tier — when it lands, and who may do it (z8r3fdpm2p)
+
+**A tier lives on the INVOICE until that invoice is paid.** `settleInvoicePaid`
+is the only place `subscriptions.plan` is written, so issuing a bill at any tier
+changes nothing the seller can see — their plan, caps and credits are whatever
+they last *paid* for. This is why an admin can draft, correct and re-draft a
+bill freely: none of it touches the store until money lands.
+
+### The three doors, and the two different answers they give
+
+| Door | Upgrade | Downgrade |
+| --- | --- | --- |
+| Seller, `invoices.changePlan` | billed now; lands when paid | **scheduled** — nothing changes today, the new tier starts at `currentPeriodEnd` |
+| Admin, `enterprise.scheduleMoveToPro` | — | **scheduled** — the contract runs to the period end, then the renewal bills Pro |
+| Admin, `invoices.issueInvoice` at another tier | lands when paid | **lands when paid, immediately** — it does *not* wait for the period end |
+
+The third row is the one that surprises people, and it is deliberate: an
+admin-issued bill is a negotiated change ("we agreed you move to Starter from
+now"), not a self-serve request for next month. But it means the same words —
+"downgrade this store" — mean *at period end* on two doors and *on payment* on
+the third. **The admin form now says which one it is before the tap**; it is
+not something an admin can discover afterwards.
+
+### Nobody loses days they paid for
+
+Whichever door, `planChangeCarryoverDays` converts the unused remainder of a
+still-running **paid** period into days of the tier the store is moving to,
+**by value**, and adds them to the new period:
+
+- Up: 10 unused Starter days buy ~5 Pro days.
+- Down: 10 unused Pro days buy ~19 Starter days.
+
+So an immediate admin downgrade is **value-preserving, not time-preserving** —
+the seller loses the higher tier's features at once and is repaid in days. It
+is computed at **settle**, from the days genuinely unused when the money lands,
+never at issue. A store with no running paid period (past due, or on a hold)
+carries nothing — the gate is `status === "active"` and `periodPaidBy === "plan"`,
+because hold days were bought at the hold price and revaluing them at the tier
+rate is an exploit, not a credit.
+
+### Correcting a bill that was issued at the wrong tier
+
+`issueInvoice` takes an optional `replacePendingId`: it voids that bill and
+issues the corrected one **in the same transaction**, so the store is never
+briefly unbilled. Without it, a second pending bill is still refused outright —
+two live Pay-now links on one store is a double payment waiting to happen.
+
+Three rules, all in `convex/lib/invoiceReplace.ts` so the form's
+disabled-with-reason line and the server's throw are one author:
+
+- **A stale id is refused**, never resolved to "whatever is open now" — that
+  would void a bill the admin never looked at.
+- **A charge in flight refuses the replacement.** `chargeDueRenewal` stamps
+  `lastChargeAttemptAt` *before* it calls HitPay and clears it only on a
+  recorded outcome, so a standing stamp means a charge may have landed and died
+  before saying so. Voiding then is survivable — the reconcile audits a
+  *stranded charge* and switches auto-renew off — but that is a safety net, not
+  a place to walk on purpose. The daily run resolves it.
+- **The replacement inherits the card charge only downward.** Only a renewal
+  ever had one armed, and only `newTotal <= replacedTotal` keeps it: the
+  seller's mandate is the amount already queued against their card, so a
+  cheaper correction stays inside it and spares them a bill nothing would pay.
+  An increase is a new ask — Kedaipal never charges itself up on an admin's
+  say-so (Zaki, 7 Oct 2026), however the change was agreed. The bill still
+  carries its Pay-now link.
+
+Note the seller's own `invoices.switchPendingPlan` refuses renewal invoices
+outright for exactly the reason the third rule answers. That exclusion stays:
+a seller switching their own renewal has no admin to have agreed it with.
+
 ## Enterprise — a contract, not a price
 
 A store is on Enterprise **only while it carries a contract**, and only a

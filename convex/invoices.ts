@@ -23,6 +23,11 @@ import {
 	resolveMyRetailerFor,
 } from "./lib/auth";
 import { contractForAdmin } from "./lib/enterprise";
+import {
+	invoiceReplaceRefusal,
+	type ReplaceableOrigin,
+	replacementKeepsAutoCharge,
+} from "./lib/invoiceReplace";
 import { isUnclaimed } from "./lib/unclaimedStore";
 import {
 	type AdminAutoChargeState,
@@ -734,6 +739,12 @@ export const issueInvoice = mutation({
 		// Optional override; normally the system sets it (issue date + grace) so the
 		// admin doesn't pick a date. The actual paid CYCLE starts at mark-paid.
 		dueDate: v.optional(v.number()),
+		// Correct a bill that was issued at the wrong tier (z8r3fdpm2p): void
+		// THIS pending invoice and issue the new one in the same transaction,
+		// so the store is never left without a bill in between. Must be the
+		// store's current pending invoice — a stale id is refused rather than
+		// voiding whatever is open now.
+		replacePendingId: v.optional(v.id("invoices")),
 	},
 	handler: async (
 		ctx,
@@ -744,8 +755,14 @@ export const issueInvoice = mutation({
 			founding,
 			currency: currencyArg,
 			dueDate: dueDateArg,
+			replacePendingId,
 		},
-	): Promise<{ invoiceId: Id<"invoices"> }> => {
+	): Promise<{
+		invoiceId: Id<"invoices">;
+		/** The bill this one replaced, if any — named back so the toast can
+		 * say what was voided. */
+		replaced: { invoiceNumber: string; keptAutoCharge: boolean } | null;
+	}> => {
 		await requireAdmin(ctx);
 		if (plan !== "enterprise" && !isPlanSelectable(plan))
 			throw new ConvexError("That plan isn't available to bill yet.");
@@ -786,16 +803,50 @@ export const issueInvoice = mutation({
 		const cycle =
 			plan === "enterprise" ? sub.billingCycle : billingCycle;
 
-		// Prevent accidental duplicate pendings — settle/void the existing one first.
+		// One open bill at a time. Without `replacePendingId` this is still a
+		// flat refusal — two live Pay-now links on one store is a double
+		// payment waiting to happen. WITH it, the admin has said which bill
+		// they mean to correct, and the void and the reissue happen in this
+		// one transaction so the store is never briefly unbilled.
 		const existingPending = await ctx.db
 			.query("invoices")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 			.filter((q) => q.eq(q.field("status"), "pending"))
 			.first();
-		if (existingPending)
+		if (existingPending && replacePendingId === undefined)
 			throw new ConvexError(
-				`This retailer already has a pending invoice (${existingPending.invoiceNumber}). Settle or void it first.`,
+				`This retailer already has a pending invoice (${existingPending.invoiceNumber}). Replace it from here, or settle/void it first.`,
 			);
+		// A stale id means the page was looking at a bill that has since been
+		// settled, voided or replaced. Never fall through to voiding whatever
+		// is open NOW — that is someone else's bill.
+		if (replacePendingId !== undefined && existingPending?._id !== replacePendingId)
+			throw new ConvexError(
+				existingPending
+					? `That bill is no longer the open one — ${existingPending.invoiceNumber} is. Reload and try again.`
+					: "That bill is no longer pending — it was settled or voided. Reload and try again.",
+			);
+
+		const replaced = existingPending ?? null;
+		if (replaced) {
+			const refusal = invoiceReplaceRefusal({
+				invoiceNumber: replaced.invoiceNumber,
+				kind: replaced.kind ?? "plan",
+				chargeInFlight: sub.autoRenew?.lastChargeAttemptAt !== undefined,
+			});
+			if (refusal) throw new ConvexError(refusal);
+			await ctx.db.patch(replaced._id, {
+				status: "void",
+				voidedAt: Date.now(),
+				voidedBy: await requireAdmin(ctx),
+				voidReason: `Replaced by a ${plan} invoice`,
+			});
+			// NOT `voidInvoice`: that one re-arms a scheduled plan change when
+			// it cancels a renewal, so the next daily run bills the change
+			// again. Here the admin IS issuing the replacement, right now and
+			// at a tier they chose — re-arming would queue a second change
+			// behind the one being created.
+		}
 
 		const invoiceId = await insertPendingInvoice(ctx, {
 			retailerId,
@@ -807,7 +858,37 @@ export const issueInvoice = mutation({
 			dueDate: dueDateArg,
 			origin: "admin",
 		});
-		return { invoiceId };
+
+		let keptAutoCharge = false;
+		if (replaced) {
+			const fresh = await ctx.db.get(invoiceId);
+			keptAutoCharge = replacementKeepsAutoCharge({
+				replacedOrigin: (replaced.origin ?? "admin") as ReplaceableOrigin,
+				replacedTotal: replaced.total,
+				newTotal: fresh?.total ?? Number.POSITIVE_INFINITY,
+				autoChargeIdle: autoChargeIdle(sub.autoRenew),
+			});
+			if (keptAutoCharge)
+				await ctx.scheduler.runAfter(
+					0,
+					internal.subscriptionPayments.chargeDueRenewal,
+					{ invoiceId },
+				);
+			// The voided bill's Pay-now link dies with it — a payment against a
+			// void bill can only ever become a refund conversation.
+			if (replaced.gatewayRequestId)
+				await ctx.scheduler.runAfter(
+					0,
+					internal.subscriptionPayments.expireInvoiceRequest,
+					{ requestId: replaced.gatewayRequestId },
+				);
+		}
+		return {
+			invoiceId,
+			replaced: replaced
+				? { invoiceNumber: replaced.invoiceNumber, keptAutoCharge }
+				: null,
+		};
 	},
 });
 
@@ -1594,7 +1675,23 @@ export const listRetailersForAdmin = query({
 			 * on founding pricing. The issue form must not auto-apply (let alone
 			 * lock in) a discount the daily pass has taken away. */
 			foundingBenefitsRevoked: boolean;
-			hasPending: boolean;
+			/** The store's open bill, if any. Carried in full (not just a
+			 * boolean) so the form can offer to REPLACE it at another tier
+			 * and say, before the tap, whether their saved card will follow
+			 * (z8r3fdpm2p). Every field comes off a doc this query already
+			 * reads: no extra work. */
+			pending?: {
+				_id: Id<"invoices">;
+				invoiceNumber: string;
+				total: number;
+				currency: string;
+				plan: Plan;
+				kind: "plan" | "hold";
+				origin: ReplaceableOrigin;
+			};
+			/** The store's auto-charge is armed AND nothing is in flight — the
+			 * two conditions a replacement needs to inherit the charge. */
+			autoChargeIdle: boolean;
 			/** On the house (z8r3fdeub2) — the picker labels these so nobody
 			 * drafts a bill `issueInvoice` will refuse anyway. */
 			comped: boolean;
@@ -1646,7 +1743,18 @@ export const listRetailersForAdmin = query({
 				isFoundingMember: r.isFoundingMember === true,
 				foundingIntent: sub?.foundingIntent === true,
 				foundingBenefitsRevoked: r.foundingBenefitsRevokedAt !== undefined,
-				hasPending: pending !== null,
+				pending: pending
+					? {
+							_id: pending._id,
+							invoiceNumber: pending.invoiceNumber,
+							total: pending.total,
+							currency: pending.currency,
+							plan: pending.plan ?? sub?.plan ?? "pro",
+							kind: pending.kind ?? "plan",
+							origin: (pending.origin ?? "admin") as ReplaceableOrigin,
+						}
+					: undefined,
+				autoChargeIdle: autoChargeIdle(sub?.autoRenew),
 				comped: sub?.comped === true,
 				unclaimed: isUnclaimed(r),
 				compLabel: sub?.comp?.label,
