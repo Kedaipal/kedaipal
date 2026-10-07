@@ -29,7 +29,12 @@
 	"[css]": {
 		"editor.defaultFormatter": "biomejs.biome"
 	},
+	// CI gates `biome check` (lint + format + import order), so the editor
+	// applies both on save — otherwise formatting drift only ever surfaces as
+	// a red PR. Biome is already the default formatter for each language above;
+	// before this, nothing ever triggered it.
+	"editor.formatOnSave": true,
 	"editor.codeActionsOnSave": {
-		"source.organizeImports.biome": "explicit"
+		"source.organizeImports.biome": "always"
 	}
 }

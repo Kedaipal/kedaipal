@@ -35,8 +35,13 @@ ran lint).
 
 Steps: checkout → pnpm → Node → `pnpm install --frozen-lockfile` → paraglide
 compile (`src/paraglide/` is gitignored; typecheck and tests need it) →
-`pnpm lint` → `pnpm typecheck` → `pnpm test` → `pnpm build`. Budget:
+`pnpm check` → `pnpm typecheck` → `pnpm test` → `pnpm build`. Budget:
 `timeout-minutes: 10` (~45 s locally; a couple of minutes on a runner).
+
+The job's **`name:` is the required status check** in the `PR gate` ruleset, so
+it deliberately still reads `Typecheck, lint & test` even though the first step
+now gates formatting too. Renaming the job without editing the ruleset first
+blocks every merge on a check that no longer reports.
 
 `pnpm build` is in the gate because **`convex-deploy` runs before the
 Cloudflare build**: a build-only breakage that reached `main` would deploy a
@@ -71,6 +76,42 @@ the tree rather than the older, untrue `>=20`.
 No secrets or env vars are needed by the gate — `convex/_generated/` and
 `src/routeTree.gen.ts` are checked in, and the test suite (convex-test +
 edge-runtime) runs offline.
+
+### `biome check`, not `biome lint`
+
+The first step runs `pnpm check` (`biome check`), not `pnpm lint`. `biome lint`
+evaluates **lint rules only** — it ignores the formatter and
+`assist/source/organizeImports` entirely. For most of 2026 that meant
+`biome check` was red on `staging` with nothing surfacing it:
+
+| When | State |
+|---|---|
+| Jul 2026 | 9 files cleaned in PR #70; CI left on `biome lint` |
+| Aug 2026 | 21 errors, recorded here as a known gap |
+| Oct 2026 | 73 errors across 66 files — cleaned, and CI switched |
+
+Drift grows monotonically because nothing stops it, and it is paid for by the
+wrong person: a feature PR touching a drifted file either leaves it drifted or
+sweeps unrelated reformat churn into its diff.
+
+`check` is a strict superset of `lint`, so the switch loses no coverage. Two
+properties keep it from being noisy:
+
+- **Warnings still don't fail.** Biome exits non-zero on *errors* only. The 4
+  pre-existing warnings (3 `noTemplateCurlyInString`, 1
+  `noSuspiciousSemicolonInJsx`) report and pass, exactly as under `lint`.
+- **It is auto-fixable in one command** — `npx biome check --write <paths>` —
+  so a red format step is seconds of work, not a debugging session.
+
+The trade-off is real and accepted: a logically perfect PR can now go red on a
+tab. The root cause of that friction was fixed in the same change —
+[`.vscode/settings.json`](../.vscode/settings.json) named Biome as the default
+formatter but never set `editor.formatOnSave`, and ran `organizeImports` only
+`"explicit"`ly, so nothing ever triggered it. Both are on now, which makes the
+CI step a backstop rather than the first place drift is noticed.
+
+Scope note: `biome.json` `files.includes` is still `src/**` only, so `convex/`
+is neither linted nor formatted — tracked separately as `z8r3fdmdrf`.
 
 ## Branch protection (manual, one-time) — ✅ done 2026-08-02
 
@@ -185,9 +226,14 @@ Two things worth knowing before you turn it on:
 pnpm gate
 ```
 
-That's `pnpm lint && pnpm typecheck && pnpm test && pnpm build` — the same
+That's `pnpm check && pnpm typecheck && pnpm test && pnpm build` — the same
 four commands as the workflow's four steps (CI keeps them separate so the
 Actions UI shows which one failed). Takes ~45 s on an M-series Mac.
+
+`pnpm lint` still exists for a lint-only pass, but it is **not** what CI gates —
+use `pnpm check` (or `pnpm gate`) before pushing, or formatting drift reaches
+the PR. `npx biome check --write <paths>` fixes it; pass the failing paths
+explicitly rather than a directory, so the diff stays yours.
 
 It runs on whatever Node you have locally, which is **not** necessarily the
 pinned 24 — check with `node -v` if you're chasing a CI-only failure.
@@ -445,9 +491,9 @@ degrade into it legibly).
 
 ## Known gaps (deferred to the full CI/CD ticket)
 
-- **`pnpm check` (Biome lint + format) is red on staging** (21 format
-  errors as of Aug 2026). The gate deliberately runs `pnpm lint` only;
-  format enforcement needs a one-off `biome format --write` cleanup first.
+- ~~**`pnpm check` is red on staging**~~ — **closed Oct 2026.** The one-off
+  cleanup landed (66 files) and the gate now runs `pnpm check`; see
+  [`biome check`, not `biome lint`](#biome-check-not-biome-lint).
 - **Biome only scans `src/`** (`biome.json` `files.includes`) — `convex/`
   is not linted anywhere, in CI or locally.
 - **`deploy.yml`'s deploy jobs have no concurrency guard** — two rapid
