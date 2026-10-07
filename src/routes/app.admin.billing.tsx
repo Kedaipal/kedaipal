@@ -1,6 +1,6 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import {
 	Award,
@@ -16,6 +16,7 @@ import {
 	Landmark,
 	ListChecks,
 	Loader2,
+	Plus,
 	ReceiptText,
 	RefreshCw,
 	Send,
@@ -480,7 +481,7 @@ function topUpTile(revenue: TopUpRevenue | undefined) {
 	};
 }
 
-function OnboardClientCard() {
+export function OnboardClientCard() {
 	// Which door. Held here rather than in the URL: it is a scratch choice
 	// inside one form, and nothing links to a half-filled card.
 	const [mode, setMode] = useState<"link" | "build">("link");
@@ -499,6 +500,14 @@ function OnboardClientCard() {
 	const [country, setCountry] = useState<Country>("MY");
 	const [founding, setFounding] = useState(false);
 	const [copied, setCopied] = useState(false);
+	// Stores created from this card WITHOUT walking into them ("Create & add
+	// another") — the bulk pre-build run's running receipt, so an admin filling
+	// the form twenty times can see what has already landed without leaving to
+	// check. Not persisted: it describes this sitting at this card, and the
+	// durable record is the directory's Unclaimed filter, linked below it.
+	const [createdHere, setCreatedHere] = useState<
+		{ storeName: string; slug: string }[]
+	>([]);
 
 	const spotsRemaining = useQuery(
 		convexQuery(api.foundingMembers.getSpotsRemaining, {}),
@@ -523,49 +532,99 @@ function OnboardClientCard() {
 	const emailCheck = useQuery(
 		convexQuery(
 			api.retailers.checkEmailHasStore,
-			emailLooksValid ? { email: debouncedEmail } : "skip",
+			// `forRetailerId: null` — this store does not exist yet, so there is
+			// no self to exempt. The handover dialog passes its own id.
+			emailLooksValid ? { email: debouncedEmail, forRetailerId: null } : "skip",
 		),
 	).data;
-	const emailTaken = emailCheck?.exists === true;
+	// The server's own verdict, kind and sentence included — `checkEmailHasStore`
+	// and the write both ask `findEmailConflict`, so this hint cannot clear an
+	// address the create is about to refuse, and the two can't word it
+	// differently. Two kinds, two fixes: a live store already mails it
+	// ("owns"), or another pre-built store is already waiting for it
+	// ("waiting").
+	//
+	// `null` = free, `undefined` = still asking. Both mean "nothing to warn
+	// about yet" HERE, deliberately: this is a pre-flight hint, so a warning
+	// that flickered in while the query settled would be worse than one that
+	// arrives a beat late, and the authoritative refusal is the server's.
+	const emailConflict = emailCheck ?? undefined;
 
-	// Build mode REQUIRES the handover email. A store built with nobody named
-	// cannot be claimed by anyone, and "I'll set it later" is a thing an admin
-	// forgets — you are building this store FOR a specific person, so name them
-	// now (Zaki, 2 Oct). It stays CHANGEABLE afterwards (Manage → Handover
-	// email), which is what covers a typo; the server keeps accepting an absent
-	// one so an admin can deliberately park a handover whose deal fell through,
-	// and the directory shouts about that state in amber.
+	// The handover email is OPTIONAL in both modes. Build mode required it until
+	// the bulk pre-build run (7 Oct): stores created in one sitting ahead of a
+	// vendor list have no address yet BY DEFINITION, so a hard gate at create
+	// blocks the workflow it was meant to protect. "I'll set it later" is still
+	// the real risk, and it is answered where it can actually be seen — the
+	// directory's **Unclaimed** chip, the amber "Handover — invite them" row and
+	// the act-as banner stating plainly that nobody can claim it — not by a
+	// field an admin fills with a throwaway address to get past it. A
+	// placeholder address is strictly WORSE than a blank: it flips the row to
+	// "Handover email — set", the amber signal is gone, and twenty rows then all
+	// look finished. (The server always accepted an absent one.)
 	const ready =
 		nameCheck.ok &&
 		availability.status === "available" &&
-		!emailTaken &&
-		(mode === "link" || emailLooksValid);
+		emailConflict === undefined;
 
 	/**
-	 * Create the store now and walk straight into it. The navigate is the
-	 * easement, not a flourish: an admin who clicks "Build it for them" is about
-	 * to add products, and making them find the new store in the directory first
-	 * would be a step with no purpose.
+	 * Create the store now, then either walk straight into it or stay here for
+	 * the next one. The destination is chosen BEFORE the click, by which button
+	 * was pressed, so neither case costs a step it doesn't need:
+	 *
+	 *  - `thenOpen` — enter act-as and go to the dashboard. The navigate is the
+	 *    easement, not a flourish: an admin who clicks "Build it for them" is
+	 *    about to add products, and making them find the new store in the
+	 *    directory first would be a step with no purpose.
+	 *  - otherwise — clear the fields that name THIS store and stay on the card.
+	 *    Creating twenty stores up front used to mean exiting act-as and
+	 *    navigating back here between every one; the catalogue work happens
+	 *    later, from the directory's Unclaimed filter.
 	 */
-	async function handleBuild() {
+	async function handleBuild(thenOpen: boolean) {
 		if (!ready || building) return;
+		// Read before the resets below clear them — the closure keeps this
+		// render's values, but naming them makes the toast independent of that.
+		const name = storeName.trim();
+		const handover = email.trim();
 		setBuilding(true);
 		try {
 			const result = await createUnclaimedStore({
-				storeName: storeName.trim(),
+				storeName: name,
 				slug: derivedSlug,
 				waPhone: waPhone.trim() || undefined,
 				country,
-				pendingOwnerEmail: email.trim() || undefined,
+				pendingOwnerEmail: handover || undefined,
 			});
-			setActAs(result.retailerId);
-			void startActAsSession({ retailerId: result.retailerId }).catch(() => {});
-			toast.success(`${storeName.trim()} created — you're in it now.`, {
-				description: email.trim()
-					? `Build it out, then they claim it by signing up with ${email.trim()}.`
-					: "Set a handover email from the seller directory when you know it.",
+			if (thenOpen) {
+				setActAs(result.retailerId);
+				void startActAsSession({ retailerId: result.retailerId }).catch(
+					() => {},
+				);
+				toast.success(`${name} created — you're in it now.`, {
+					description: handover
+						? `Build it out, then they claim it by signing up with ${handover}.`
+						: "Set a handover email from the seller directory when you know it.",
+				});
+				navigate({ to: "/app" });
+				return;
+			}
+			setCreatedHere((prev) => [
+				...prev,
+				{ storeName: name, slug: result.slug },
+			]);
+			// Clear only what names this store. COUNTRY and mode stay: a batch is
+			// almost always one country, and re-picking it every time is exactly
+			// the friction this button exists to remove.
+			setStoreName("");
+			setSlug("");
+			setSlugEdited(false);
+			setWaPhone("");
+			setEmail("");
+			toast.success(`${name} created.`, {
+				description: handover
+					? `They claim it by signing up with ${handover}.`
+					: "No handover email yet — it's waiting under Sellers → Unclaimed.",
 			});
-			navigate({ to: "/app" });
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -735,7 +794,7 @@ function OnboardClientCard() {
 					<span className="flex min-h-5 items-center gap-1">
 						{mode === "build" ? "Handover email" : "Client email"}
 						<span className="font-normal text-muted-foreground">
-							{mode === "build" ? "(required)" : "(to send to)"}
+							{mode === "build" ? "(optional)" : "(to send to)"}
 						</span>
 					</span>
 					<Input
@@ -746,15 +805,20 @@ function OnboardClientCard() {
 						placeholder="client@email.com"
 						variant="field"
 					/>
-					{emailTaken ? (
+					{/* The server's own sentence, not a second copy of the rule — a
+					    "waiting" clash and an "owns" clash have different fixes and
+					    the helper words each one. */}
+					{emailConflict ? (
 						<span className="text-xs text-destructive">
-							A store ({emailCheck?.storeName}) already uses this email. They
-							can't create a second one; it's one store per login.
+							{emailConflict.message}
 						</span>
 					) : mode === "build" ? (
 						<span className="text-xs text-muted-foreground">
 							The address they'll sign up with — that sign-in hands them the
-							store. You can change it later from Manage → Handover email.
+							store. <strong className="font-medium">Leave it blank</strong> if
+							you don't have it yet: the store waits under Sellers →{" "}
+							<strong className="font-medium">Unclaimed</strong> until you set
+							it from Manage → Handover email.
 						</span>
 					) : null}
 				</label>
@@ -796,53 +860,105 @@ function OnboardClientCard() {
 			) : null}
 			{/* What happens the moment they tap it — a create that also drops them
 			    into act-as is a bigger jump than a copy, so it is written down
-			    before the click rather than discovered after. */}
+			    before the click rather than discovered after. Both buttons are
+			    named here because the difference between them IS the consequence. */}
 			{mode === "build" ? (
 				<p className="text-xs text-muted-foreground">
-					Creating it opens the store straight away in act-as mode so you can
-					add products. Nothing is billed and it stays off kedaipal.com/stores
-					until they claim it — their 14-day free period starts the day they do.
+					<strong className="font-medium">Start setting up</strong> opens the
+					store straight away in act-as mode so you can add products;{" "}
+					<strong className="font-medium">Add another</strong> leaves you here
+					with the form cleared, for building a batch up front. Either way
+					nothing is billed and it stays off kedaipal.com/stores until they
+					claim it — their 14-day free period starts the day they do.
 				</p>
 			) : null}
 
-			<Button
-				type="button"
-				onClick={mode === "build" ? () => void handleBuild() : handleCopy}
-				disabled={!ready || building}
-				className="h-11 lg:w-auto lg:self-start lg:px-6"
-			>
-				{mode === "build" ? (
-					building ? (
+			{/* The running receipt for a batch, directly above the button that
+			    grows it, so an admin clearing the form twenty times can see what
+			    already landed without leaving the card. It links to the directory's
+			    Unclaimed filter rather than growing a second directory here: that
+			    filter is already where a half-finished handover is tracked, and one
+			    idea gets one control. */}
+			{createdHere.length > 0 ? (
+				<div className="flex flex-col gap-1.5 rounded-xl border border-dashed border-border bg-muted/30 p-3">
+					<p className="text-xs font-semibold">
+						Created here · {createdHere.length}
+					</p>
+					<ul className="flex flex-col gap-0.5">
+						{createdHere.map((store) => (
+							<li key={store.slug} className="text-xs text-muted-foreground">
+								{store.storeName}{" "}
+								<span className="font-mono">/{store.slug}</span>
+							</li>
+						))}
+					</ul>
+					<Link
+						to="/app/admin/sellers"
+						search={{ status: "unclaimed" }}
+						// The one interactive element in the panel, so it carries a
+						// real 44px target rather than a 12px line of text.
+						className="inline-flex min-h-11 w-fit items-center text-xs font-medium text-accent underline-offset-2 hover:underline"
+					>
+						Open them in Sellers → Unclaimed
+					</Link>
+				</div>
+			) : null}
+
+			<div className="flex flex-col gap-2 lg:flex-row lg:self-start">
+				<Button
+					type="button"
+					onClick={mode === "build" ? () => void handleBuild(true) : handleCopy}
+					disabled={!ready || building}
+					className="h-11 lg:w-auto lg:px-6"
+				>
+					{mode === "build" ? (
+						building ? (
+							<>
+								<Loader2 className="size-4 animate-spin" /> Creating…
+							</>
+						) : (
+							<>
+								<Hammer className="size-4" /> Create store &amp; start setting
+								up
+							</>
+						)
+					) : copied ? (
 						<>
-							<Loader2 className="size-4 animate-spin" /> Creating…
+							<Check className="size-4" /> Copied
 						</>
 					) : (
 						<>
-							<Hammer className="size-4" /> Create store &amp; start setting up
+							<Send className="size-4" /> Copy invite link
 						</>
-					)
-				) : copied ? (
-					<>
-						<Check className="size-4" /> Copied
-					</>
-				) : (
-					<>
-						<Send className="size-4" /> Copy invite link
-					</>
-				)}
-			</Button>
-			{/* Disabled-with-reason — the button above goes quiet on an invalid
-			    name/slug or a taken email, and the three reasons are not the same
-			    fix. */}
+					)}
+				</Button>
+				{/* Build mode only: there is nothing to repeat in link mode, where
+				    the action is a copy and the form is the thing you keep. */}
+				{mode === "build" ? (
+					<Button
+						type="button"
+						variant="outline"
+						onClick={() => void handleBuild(false)}
+						disabled={!ready || building}
+						className="h-11 lg:w-auto lg:px-6"
+					>
+						<Plus className="size-4" /> Create &amp; add another
+					</Button>
+				) : null}
+			</div>
+			{/* Disabled-with-reason — both buttons go quiet on an invalid name or
+			    slug or a clashing email, and the three are not the same fix.
+			    For the clash it POINTS rather than restates: the field already
+			    carries the server's full sentence in destructive red a few rows
+			    up, and a muted paraphrase beside it reads as a second problem.
+			    One idea, one voice. */}
 			{!ready ? (
 				<p className="text-xs text-muted-foreground">
 					{!nameCheck.ok
 						? "Enter a store name first."
-						: emailTaken
-							? "That email already runs a store — use a different one."
-							: availability.status !== "available"
-								? "Pick a store link that's available."
-								: "Add the handover email — nobody can claim the store without it."}
+						: emailConflict
+							? "Fix the handover email above."
+							: "Pick a store link that's available."}
 				</p>
 			) : null}
 		</AdminCard>

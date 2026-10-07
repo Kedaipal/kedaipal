@@ -74,9 +74,11 @@ the one reader of the placeholder; nothing else tests the prefix by hand.
 
 1. **`/app/admin/billing#onboard`** → "Build it for them" → store name, slug,
    country, WhatsApp, and optionally the handover email → **Create store & start
-   setting up**. Creating it drops the admin straight into act-as, because an
-   admin who clicked this is about to add products and finding the store in the
-   directory first would be a step with no purpose.
+   setting up**, or **Create & add another** (see
+   [Building a batch](#building-a-batch)). The first drops the admin straight
+   into act-as, because an admin who clicked it is about to add products and
+   finding the store in the directory first would be a step with no purpose; the
+   second stays on the card with the form cleared.
 2. **Build it** through the ordinary dashboard in act-as. The banner reads
    **"Admin · building {store}"** with a hammer, not "acting as" with an alarm —
    the warning inverts, and an admin told the wrong one of those two is exactly
@@ -111,6 +113,107 @@ or sit on another store's team), `myClaimableStore` answers `blocked` rather tha
 `none`, and `HandoverBlockedBanner` explains which and how to clear it. Answering
 `none` would render the bare wizard and leave the vendor with no hint that the
 store we built them exists.
+
+## Building a batch
+
+Pre-building twenty stores ahead of a vendor list is the same feature run twenty
+times, and two things in the form were shaped for running it once.
+
+### The handover email is optional
+
+`createUnclaimedStore` always accepted an absent `pendingOwnerEmail` — *"built,
+no email yet"* is a state the design named from the start. The **form** required
+it in build mode (Zaki, 2 Oct): *"you are building this store FOR a specific
+person, so name them now"*, on the reasoning that "I'll set it later" is a thing
+an admin forgets.
+
+A batch breaks that premise. Stores created ahead of the vendor list have no
+address yet **by definition**, so the gate blocks the workflow it was meant to
+protect — and the way past it is to type a throwaway address, which is **strictly
+worse than a blank**:
+
+| | blank | a placeholder address |
+|---|---|---|
+| Directory row | amber **Handover — invite them** | green **Handover email — set** |
+| Act-as banner | "nobody can claim it" | names the wrong person |
+| Twenty rows later | the unfinished ones are obvious | they all look finished |
+
+The forgetting risk doesn't disappear with a placeholder, it goes **invisible**.
+A blank is the only state the product can shout about, and it already does — the
+**Unclaimed** chip, the amber Manage row, the act-as banner — so that is where
+the reminding lives, not in a required field. The field says
+`(optional)` and its helper line names where a nameless store waits.
+
+### Create & add another
+
+Two buttons, so the destination is chosen **before** the click and neither case
+pays for the other:
+
+| | **Create store & start setting up** | **Create & add another** |
+|---|---|---|
+| After the create | act-as + `/app` | stays on the card |
+| The form | — | cleared, except the country |
+| Right when | one store you're about to fill in | a batch built up front |
+
+The **country survives** the reset: a batch is almost always one country, and
+re-picking it twenty times is the friction the button exists to remove. A running
+**Created here · n** receipt sits directly above the buttons, and links to
+`/app/admin/sellers?status=unclaimed` rather than growing a second directory on
+the billing card — that filter is already where a half-finished handover is
+tracked, and one idea gets one control. The receipt is not persisted: it
+describes this sitting at this card, and the durable record is the directory.
+
+### One author for "is this address free?"
+
+`findEmailConflict` (`convex/retailers.ts`) answers it, and **both** the admin's
+pre-flight hint (`checkEmailHasStore`) and the write that enforces it
+(`resolvePendingOwnerEmail`) ask it — including the sentence the admin reads. A
+test asserts the hint's `message` is byte-identical to the thrown one, so neither
+side can be re-worded alone.
+
+That sharing is the fix for a real divergence: the hint checked `notifyEmail`
+**alone**, which an unclaimed store never has, so typing one address into two
+build forms showed no warning, left the button enabled, and failed on submit.
+Exactly the class of bug the slug hint had before `checkSlugAvailability` took a
+required `purpose` — a hint whose rule lives apart from its server drifts from
+it, and the admin finds out on submit.
+
+Two conflicts, because they have two different fixes:
+
+- **`waiting`** — another pre-built store already names this address. Both would
+  answer `myClaimableStore`, which reads `by_pending_owner_email` with
+  `.first()`, so the vendor would silently get whichever the index returned first
+  and the other store would be invisible to the claim door.
+- **`owns`** — a live store **mails** this address, so that login most likely runs
+  it. Best-effort, and the copy says so rather than asserting ownership (see
+  [the claim](#the-claim)); the authoritative wall is `claimBlocker`, on the Clerk
+  subject at claim time.
+
+`checkEmailHasStore` returns `EmailConflict | null` — the conflict's presence IS
+the answer, so there is no `exists` flag beside it to disagree with. Its **name**
+now undersells it, but an exported query path is a deployed contract and renaming
+it would leave a live bundle calling a function that no longer exists.
+
+**Both surfaces that name an address show the hint**, because one rule must not
+wear two behaviours:
+
+| | Build form (`#onboard`) | Manage → **Set handover email** |
+|---|---|---|
+| Warns | inline, before the click | inline, before the click |
+| `forRetailerId` | `null` — no store yet | this store's id |
+
+The dialog was the second one for a day: it offered an **enabled Save** for an
+address the server was about to refuse, and the refusal only arrived as an error
+toast *after* the click (found by driving it, 7 Oct). Both now ask
+`findEmailConflict` and print its sentence.
+
+**`checkEmailHasStore` therefore takes a REQUIRED `forRetailerId`** — a union
+with `null`, never `v.optional` — so a new call site has to state which question
+it is asking rather than inherit the wrong answer. That is the same shape, and
+the same reason, as `checkSlugAvailability`'s `purpose`: the store asking must be
+exempt from its own address (or the dialog could never re-save what it already
+has), while everyone else must still clash. `prebuiltStore.test.ts` pins both
+halves; pass `null` where the id belongs and the store collides with itself.
 
 ## The claim
 
@@ -336,7 +439,10 @@ Per CLAUDE.md, no hidden behaviour. Each rule and the place it is stated:
 | this door exists | the mode picker on `#onboard`, each option with its consequence |
 | creating it enters act-as | the line above the button, before the click |
 | no founding rank at build | the founding toggle, **disabled with reason** |
-| the handover email is optional | its label and helper line in build mode |
+| the handover email is optional | its `(optional)` label + the helper line naming where a nameless store waits |
+| what each create button does next | the consequence line above them, naming both |
+| what this sitting has created | the **Created here · n** receipt, linking to the Unclaimed worklist |
+| an address is already taken | the server's own sentence under the field — stated **once**, with the button's reason pointing at it rather than paraphrasing it. **Both** doors that name an address show it before the click |
 | the handover mechanism | `HandoverDialog` — "whoever signs up with this becomes its owner" |
 | nothing bills until claimed | the dialog, the `#onboard` card, and `sellerRail` → "Not billed until claimed" |
 | the store is unlisted until claimed | the dialog and the claim screen |

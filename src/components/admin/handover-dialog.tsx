@@ -3,9 +3,11 @@
 // (docs/prebuilt-stores.md). Mounted only while open, so the field initialises
 // from the row every time, exactly like comp-dialog.
 
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useAction, useMutation } from "convex/react";
 import { Loader2, MailCheck, Send, UserPlus } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { AdminSellerRow } from "../../../convex/admin";
@@ -56,6 +58,31 @@ export function HandoverDialog({
 	// Clearing is allowed (an admin may have been given the wrong address), so
 	// the only invalid state is a non-empty value that isn't an address.
 	const valid = clearing || looksLikeEmail(trimmed);
+
+	// The SAME pre-flight hint the build form shows, asking the SAME helper the
+	// save will ask (`findEmailConflict`). Without it this dialog offered an
+	// enabled Save for an address the server was about to refuse, and the
+	// refusal only arrived as an error toast after the click — one rule wearing
+	// two behaviours, which is exactly what "one control, one rule" forbids.
+	// `forRetailerId` is this store, so re-saving the address it already has is
+	// not a clash with itself.
+	const [debounced, setDebounced] = useState("");
+	useEffect(() => {
+		const t = setTimeout(() => setDebounced(trimmed), 350);
+		return () => clearTimeout(t);
+	}, [trimmed]);
+	const askable = !clearing && looksLikeEmail(debounced);
+	const conflict =
+		useQuery(
+			convexQuery(
+				api.retailers.checkEmailHasStore,
+				askable ? { email: debounced, forRetailerId: seller._id } : "skip",
+			),
+		).data ?? undefined;
+	// `undefined` while the answer is in flight, deliberately: a warning that
+	// flickered in mid-type would be worse than one a beat late, and the save
+	// is still refused by the server either way.
+	const saveable = valid && !unchanged && conflict === undefined;
 
 	async function save() {
 		setSaving(true);
@@ -137,6 +164,12 @@ export function HandoverDialog({
 							<p className="text-sm font-normal text-destructive">
 								✗ That doesn't look like an email address.
 							</p>
+						) : conflict ? (
+							// The server's own sentence, so this dialog and the build
+							// form can never word the same refusal differently.
+							<p className="text-sm font-normal text-destructive">
+								{conflict.message}
+							</p>
 						) : (
 							<p className="text-xs font-normal text-muted-foreground">
 								Must be the address they actually sign up with, and it has to be
@@ -208,10 +241,7 @@ export function HandoverDialog({
 					<Button variant="outline" onClick={onClose} disabled={saving}>
 						Cancel
 					</Button>
-					<Button
-						onClick={() => void save()}
-						disabled={!valid || unchanged || saving}
-					>
+					<Button onClick={() => void save()} disabled={!saveable || saving}>
 						{saving ? (
 							<Loader2 className="size-4 animate-spin" aria-hidden="true" />
 						) : null}

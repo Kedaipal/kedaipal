@@ -188,6 +188,73 @@ describe("createUnclaimedStore", () => {
 		);
 	});
 
+	test("a store builds with NO handover email — 'we don't know yet' is a state", async () => {
+		// The headline of the 7 Oct change: a batch pre-built ahead of a vendor
+		// list has no addresses yet BY DEFINITION. The store is unclaimed and
+		// nameless, and the directory shows it as such rather than refusing the
+		// build.
+		const t = setup();
+		const { retailerId } = await buildStore(t);
+		const store = await readStore(t, retailerId);
+		expect(store?.pendingOwnerEmail).toBeUndefined();
+		expect(store?.userId.startsWith(UNCLAIMED_OWNER_PREFIX)).toBe(true);
+		// Nobody can take it until an address is named — covered by "a store with
+		// NO handover email cannot be claimed by anyone" in the claim suite below.
+	});
+
+	test("the email hint an admin sees AGREES with what the create does", async () => {
+		// The sibling of the slug-hint blocker above, and the same class of bug:
+		// `checkEmailHasStore` used to check `notifyEmail` ALONE, which an
+		// unclaimed store never has — so a second build form typed with the same
+		// address showed no warning, the button stayed enabled, and the create
+		// threw. Both now ask `findEmailConflict`; delete its pending branch and
+		// both halves of this go red.
+		const t = setup();
+		await buildStore(t, { slug: "first", email: VENDOR.email });
+		const hint = await t
+			.withIdentity(ADMIN)
+			.query(api.retailers.checkEmailHasStore, {
+			email: VENDOR.email,
+			forRetailerId: null,
+		});
+		expect(hint?.kind).toBe("waiting");
+		const err = await buildStore(t, {
+			slug: "second",
+			email: VENDOR.email,
+		}).catch((e: Error) => e.message);
+		// Not merely "both refuse" — the SAME WORDS, so neither side can be
+		// re-worded without the other following.
+		expect(err).toBe(hint?.message);
+	});
+
+	test("the hint EXEMPTS the store asking — re-saving its own address is no clash", async () => {
+		// `forRetailerId` is why the handover dialog can show the same pre-flight
+		// hint the build form shows. Pass `null` there instead of the store's own
+		// id and this goes red: the store collides with ITSELF, the dialog's Save
+		// is disabled for the address it already has, and an admin can never
+		// re-send an invite after reopening it.
+		const t = setup();
+		const { retailerId } = await buildStore(t, {
+			slug: "owns-it",
+			email: VENDOR.email,
+		});
+		const asSelf = await t
+			.withIdentity(ADMIN)
+			.query(api.retailers.checkEmailHasStore, {
+				email: VENDOR.email,
+				forRetailerId: retailerId,
+			});
+		expect(asSelf).toBeNull();
+		// …and still a clash for anybody else asking.
+		const asOther = await t
+			.withIdentity(ADMIN)
+			.query(api.retailers.checkEmailHasStore, {
+				email: VENDOR.email,
+				forRetailerId: null,
+			});
+		expect(asOther?.kind).toBe("waiting");
+	});
+
 	test("an address another pre-built store is already waiting for is refused", async () => {
 		// Two stores pointed at one inbox would both answer myClaimableStore and
 		// the vendor would get whichever the index returned first.
