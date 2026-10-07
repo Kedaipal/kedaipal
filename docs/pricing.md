@@ -482,7 +482,47 @@ today — active members plus pending invites, because an invite holds a seat.
 plan actually flips: a contract EDIT is not a drop trigger, because an admin
 retyping a number must never cut off a paying customer's staff mid-month.
 
-### Setting it — Admin → Billing → seller sheet → Enterprise
+### Where it's set — two doors, one form (z8r3fdpm2p)
+
+A contract is written from **either** place an admin works on a store, and both
+render the same `EnterpriseContractForm` (`src/components/admin/`):
+
+| Door | Chrome | When |
+| --- | --- | --- |
+| Admin · Sellers → a store → **Enterprise** | a page of the seller sheet, with a back link | reviewing a store |
+| Admin · Billing → **Issue an invoice** | a right-edge sheet off the billing card | billing a store |
+
+The billing door exists because Enterprise bills a contract, so the tier used
+to be **disabled** for any store without one — which told the admin the *tier*
+was unavailable when what was missing was a contract. Putting a store on
+Enterprise and billing it meant two tabs and picking the same store twice.
+Picking Enterprise now always works; a store with no contract gets a strip
+naming what's missing and carrying **Set up contract**, and a store that has
+one gets **Edit contract** beside it. Saving IS putting the store on Enterprise
+(`setContract` flips the plan), and the issue form picks the contract up live.
+
+Three rules hold this together:
+
+- **One form, never two.** The form owns its fields, validation, refusals,
+  preview and the "start from another contract" picker. The pages own only
+  chrome. Its subject is a narrow `EnterpriseContractSubject` — not the fat
+  `AdminSellerRow`, which merely satisfies it structurally — so the billing
+  page can feed it from `enterprise.getContractContext`, a **per-store** query
+  mounted only while the sheet is open. Teaching the 200-store billing picker
+  to carry seats and a billing currency would have cost ~600 index reads on
+  every page view to serve a sheet usually never opened.
+- **An undecided thing is shown as undecided.** With Enterprise picked and no
+  contract, the term and currency controls are locked (the contract decides
+  them) and render with **nothing selected** — leaving Monthly and RM lit would
+  be a definite claim about an undecided thing the admin cannot correct.
+- **A contract bill is never a founding bill.** Founding forces Pro among the
+  *listed* tiers only. Forcing it for Enterprise too meant a Founding Member on
+  a contract could not be billed that contract at all: the tier button looked
+  live, changed nothing, and the form drafted a founding Pro bill whose payment
+  would have **ended the contract**. `issueInvoice` already threw on `founding`
+  with any plan but Pro, so the client now agrees with the server.
+
+### Setting it — `enterprise.setContract`
 
 `enterprise.setContract` (admin-only, audited as `enterprise.setContract`) in
 one mutation:

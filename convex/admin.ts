@@ -52,6 +52,7 @@ import {
 } from "./lib/plans";
 import { loadCreditAccount } from "./credits";
 import { storeIsInternal } from "./marketplace";
+import { contractForAdmin } from "./lib/enterprise";
 import { isUnclaimed } from "./lib/unclaimedStore";
 import { loadSubscription, resolveAccess } from "./subscriptions";
 
@@ -385,25 +386,15 @@ export const listSellersForAdmin = query({
 				foundingMemberRank: r.foundingMemberRank,
 				subscriptionStatus: sub?.status,
 				plan: sub?.plan,
+				// The WHOLE deal minus `setBy` — allowances included. They were
+				// once hand-listed here and the day they were left out,
+				// reopening a contract showed them blank: a fee typo-fix away
+				// from silently resetting a deal to unlimited seats (found
+				// hands-on, 2 Oct). `contractForAdmin` is a rest spread, so no
+				// future field can be dropped the same way; the admin.test.ts
+				// pin stays as the second guard.
 				enterprise: sub?.enterprise
-					? {
-							baseFeeMinor: sub.enterprise.baseFeeMinor,
-							currency: sub.enterprise.currency,
-							includedCredits: sub.enterprise.includedCredits,
-							overageRateMinor: sub.enterprise.overageRateMinor,
-							blockSize: sub.enterprise.blockSize,
-							// The per-deal allowances ride too — the edit form prefills
-							// from THIS row, and the day they were left out, reopening a
-							// contract showed them blank: a fee typo-fix away from
-							// silently resetting a deal to unlimited seats (found
-							// hands-on, 2 Oct). Optional fields slip through Omit<>
-							// typing, so the admin.test.ts pin is the guard.
-							teammates: sub.enterprise.teammates,
-							broadcastQuota: sub.enterprise.broadcastQuota,
-							contactName: sub.enterprise.contactName,
-							notes: sub.enterprise.notes,
-							setAt: sub.enterprise.setAt,
-						}
+					? contractForAdmin(sub.enterprise)
 					: undefined,
 				pendingPlanChange: sub?.pendingPlanChange,
 				enterpriseInterestAt: r.enterpriseInterestAt,

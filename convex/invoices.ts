@@ -22,6 +22,7 @@ import {
 	requireRetailerAccess,
 	resolveMyRetailerFor,
 } from "./lib/auth";
+import { contractForAdmin } from "./lib/enterprise";
 import { isUnclaimed } from "./lib/unclaimedStore";
 import {
 	type AdminAutoChargeState,
@@ -1607,14 +1608,20 @@ export const listRetailersForAdmin = query({
 			 * same lie the Sponsored pill told before `tierPill` learned about
 			 * unclaimed stores. */
 			unclaimed: boolean;
-			/** The Enterprise contract's billing facts (T6) — an Enterprise
-			 * invoice bills exactly these, so the form shows them instead of
-			 * letting the admin pick a cycle or currency. */
-			enterprise?: {
-				baseFeeMinor: number;
-				currency: BillingCurrency;
-				billingCycle: BillingCycle;
-			};
+			/** The Enterprise contract (T6) — the WHOLE deal, minus `setBy`
+			 * (a raw Clerk subject; the audit log answers "who"), plus the term
+			 * it bills on, which lives on the subscription row rather than in
+			 * the contract. An Enterprise invoice bills exactly this, so the
+			 * form shows it instead of letting the admin pick a cycle or
+			 * currency — and the negotiated numbers ride along so the billing
+			 * page can offer a live contract as the first draft of the next
+			 * one, the same way the sellers directory does (z8r3fdpm2p). It
+			 * all comes off a subscription doc already in hand: no extra read.
+			 */
+			enterprise?: Omit<
+				NonNullable<Doc<"subscriptions">["enterprise"]>,
+				"setBy"
+			> & { billingCycle: BillingCycle };
 		}>
 	> => {
 		await requireAdmin(ctx);
@@ -1645,8 +1652,7 @@ export const listRetailersForAdmin = query({
 				compLabel: sub?.comp?.label,
 				enterprise: sub?.enterprise
 					? {
-							baseFeeMinor: sub.enterprise.baseFeeMinor,
-							currency: sub.enterprise.currency,
+							...contractForAdmin(sub.enterprise),
 							billingCycle: sub.billingCycle,
 						}
 					: undefined,

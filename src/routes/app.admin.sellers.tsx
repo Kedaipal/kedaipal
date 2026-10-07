@@ -21,6 +21,7 @@ import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { AdminSellerRow } from "../../convex/admin";
 import { csvDate } from "../../convex/lib/orderCsv";
+import { contractTemplatesFrom } from "../components/admin/enterprise-contract-form";
 import { SellerCard } from "../components/admin/seller-card";
 import { SellerSheet } from "../components/admin/seller-sheet";
 import { SellerTable } from "../components/admin/seller-table";
@@ -167,12 +168,9 @@ export function SellerDirectory({
 	const detailSeller = all.find((s) => s._id === detailId) ?? null;
 	// Live contracts the open store could be modelled on — built from the list
 	// already on screen, so the "start from" picker costs no second query. The
-	// store being edited is never its own template.
-	const contractTemplates = all.flatMap((s) =>
-		s.enterprise && s._id !== detailId
-			? [{ retailerId: s._id, storeName: s.storeName, contract: s.enterprise }]
-			: [],
-	);
+	// store being edited is never its own template. Same helper the billing
+	// card's sheet uses (z8r3fdpm2p), so the two pickers can't drift.
+	const contractTemplates = contractTemplatesFrom(all, detailId);
 	const filtered = filter !== "all" || q.trim().length > 0;
 
 	function setFilter(next: SellerFilter) {
