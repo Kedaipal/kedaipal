@@ -2,8 +2,20 @@ import { CalendarDays, Palette, SlidersHorizontal, X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useState } from "react";
 import { sourceLabel } from "../../../convex/lib/attribution";
+import {
+	BOOKING_PERIOD_CHIPS,
+	BOOKING_PERIOD_LABELS,
+	type BookingPeriod,
+} from "../../../convex/lib/bookingPeriod";
 import type { Country } from "../../../convex/lib/country";
 import type { FulfilmentWindow } from "../../../convex/lib/fulfilmentDate";
+import {
+	BUCKET_LEAVES,
+	INBOX_BUCKETS,
+	INBOX_LEAF_KEYS,
+	type InboxStatusLeaf,
+	leafLabel,
+} from "../../../convex/lib/orderBuckets";
 import {
 	fulfilmentLabel,
 	ORDER_SOURCE_KEYS,
@@ -17,18 +29,6 @@ import {
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 } from "../../../convex/lib/paymentMethod";
-import {
-	BOOKING_PERIOD_CHIPS,
-	BOOKING_PERIOD_LABELS,
-	type BookingPeriod,
-} from "../../../convex/lib/bookingPeriod";
-import {
-	BUCKET_LEAVES,
-	INBOX_BUCKETS,
-	INBOX_LEAF_KEYS,
-	type InboxStatusLeaf,
-	leafLabel,
-} from "../../../convex/lib/orderBuckets";
 import { cn } from "../../lib/utils";
 import { BulkSelectRow } from "../ui/bulk-select-row";
 import { Button } from "../ui/button";

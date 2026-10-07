@@ -36,11 +36,7 @@ describe("no committed merge conflict markers", () => {
 			if (file.endsWith("no-merge-markers.test.ts")) continue;
 			const lines = contents.split("\n");
 			lines.forEach((line, i) => {
-				if (
-					line.startsWith(OPEN) ||
-					line.startsWith(CLOSE) ||
-					line === SPLIT
-				) {
+				if (line.startsWith(OPEN) || line.startsWith(CLOSE) || line === SPLIT) {
 					offenders.push(`${file}:${i + 1} — ${line.slice(0, 40)}`);
 				}
 			});

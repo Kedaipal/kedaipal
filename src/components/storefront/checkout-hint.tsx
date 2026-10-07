@@ -17,7 +17,10 @@ export function CheckoutHint({
 }) {
 	return (
 		<p className="flex items-start gap-1.5 rounded-lg bg-accent/5 px-3 py-2 text-xs text-foreground">
-			<Icon className="mt-0.5 size-3.5 shrink-0 text-accent" aria-hidden="true" />
+			<Icon
+				className="mt-0.5 size-3.5 shrink-0 text-accent"
+				aria-hidden="true"
+			/>
 			<span>{children}</span>
 		</p>
 	);

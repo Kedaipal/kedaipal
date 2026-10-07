@@ -15,7 +15,9 @@ vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ __fn: fn, args }),
 }));
 vi.mock("@tanstack/react-query", () => ({ useQuery: vi.fn() }));
-const mocks = vi.hoisted(() => ({ resolve: vi.fn(async () => ({ ok: true })) }));
+const mocks = vi.hoisted(() => ({
+	resolve: vi.fn(async () => ({ ok: true })),
+}));
 vi.mock("convex/react", () => ({ useMutation: () => mocks.resolve }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
@@ -76,9 +78,7 @@ describe("GatewayIssuesCard — the money-to-review queue", () => {
 		// The status decides the advice: voided bill → refund OR apply…
 		expect(screen.getByText(/refund it in HitPay, or apply it/)).toBeTruthy();
 		// …paid bill → a double payment, refund.
-		expect(
-			screen.getByText(/already settled — a double payment/),
-		).toBeTruthy();
+		expect(screen.getByText(/already settled — a double payment/)).toBeTruthy();
 		expect(screen.getByText("reconciled:a2bca31a:3").tagName).toBe("CODE");
 		expect(
 			screen.getAllByRole("button", { name: "Copy the HitPay reference" }),
@@ -90,10 +90,9 @@ describe("GatewayIssuesCard — the money-to-review queue", () => {
 		render(<GatewayIssuesCard />);
 		fireEvent.click(screen.getByRole("button", { name: "Mark resolved" }));
 		expect(screen.getByText(/it does not move any money/)).toBeTruthy();
-		fireEvent.change(
-			screen.getByPlaceholderText(/refunded in HitPay/),
-			{ target: { value: "refunded 30 Sep" } },
-		);
+		fireEvent.change(screen.getByPlaceholderText(/refunded in HitPay/), {
+			target: { value: "refunded 30 Sep" },
+		});
 		const confirmButtons = screen.getAllByRole("button", {
 			name: "Mark resolved",
 		});

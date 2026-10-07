@@ -2,13 +2,11 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-	INBOX_BUCKETS,
-	statusToBucket,
-} from "../../../convex/lib/orderBuckets";
-import {
 	BUCKET_LEAVES,
+	INBOX_BUCKETS,
 	INBOX_LEAF_KEYS,
 	leafBucket,
+	statusToBucket,
 } from "../../../convex/lib/orderBuckets";
 import {
 	activeFilterCount,

@@ -410,11 +410,19 @@ describe("made-to-order product — one bespoke line, existing flow", () => {
 
 describe("PurchaseHints — prep window + pickup note (z8r3fdff97)", () => {
 	function Hints({ product }: { product: StorefrontProduct }) {
-		const pp = useProductPurchase({ product, retailerId: RID, cartQuantity: 0 });
+		const pp = useProductPurchase({
+			product,
+			retailerId: RID,
+			cartQuantity: 0,
+		});
 		return <PurchaseHints pp={pp} />;
 	}
 	const puff = (extra: Record<string, unknown>) =>
-		({ ...cake(5), name: "Ice Cream Puff", ...extra }) as unknown as StorefrontProduct;
+		({
+			...cake(5),
+			name: "Ice Cream Puff",
+			...extra,
+		}) as unknown as StorefrontProduct;
 
 	it("says how long the product takes, in hours a buyer reads", () => {
 		render(<Hints product={puff({ prepMinutes: 120 })} />);

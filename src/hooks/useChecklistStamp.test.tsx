@@ -7,9 +7,9 @@
 // sharing their own link is legitimate), so this is the guard — and it used to
 // be five hand-written copies in two spellings, three of which were missing.
 
-import { renderHook } from "@testing-library/react";
 import fs from "node:fs";
 import path from "node:path";
+import { renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 const stamp = vi.fn(async () => undefined);

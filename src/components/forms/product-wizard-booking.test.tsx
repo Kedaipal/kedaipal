@@ -254,9 +254,9 @@ describe("wizard — booking kind route", () => {
 			target: { value: "1" },
 		});
 		expect(screen.getByText(/a package has one flat price/i)).toBeTruthy();
-		expect(
-			document.querySelectorAll('input[inputmode="decimal"]').length,
-		).toBe(2); // price + deposit; the weekend input is gone
+		expect(document.querySelectorAll('input[inputmode="decimal"]').length).toBe(
+			2,
+		); // price + deposit; the weekend input is gone
 		fireEvent.click(continueBtn());
 		expect(screen.queryByText("Weekend rate")).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: /publish product/i }));
@@ -291,9 +291,7 @@ describe("wizard — booking kind route", () => {
 	it("leaving booking re-asks the questions the kind had answered", () => {
 		renderWizard();
 		pickBooking();
-		fireEvent.click(
-			screen.getByRole("button", { name: /physical goods/i }),
-		);
+		fireEvent.click(screen.getByRole("button", { name: /physical goods/i }));
 		// Back on the six-step route with Choices + Preparation restored.
 		expect(screen.getByText("Step 1 of 6")).toBeTruthy();
 	});

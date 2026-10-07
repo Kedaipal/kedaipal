@@ -1,6 +1,7 @@
 import { sourceLabel } from "../../../convex/lib/attribution";
 import type { Country } from "../../../convex/lib/country";
 import type { FulfilmentWindow } from "../../../convex/lib/fulfilmentDate";
+import { INBOX_LEAF_KEYS, leafLabel } from "../../../convex/lib/orderBuckets";
 import {
 	FULFILMENT_KEYS,
 	type FulfilmentKey,
@@ -17,7 +18,6 @@ import {
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 } from "../../../convex/lib/paymentMethod";
-import { INBOX_LEAF_KEYS, leafLabel } from "../../../convex/lib/orderBuckets";
 import type { OrderStatus } from "../../lib/orderStatus";
 import type { ColumnFilterOption } from "../ui/column-filter-menu";
 
