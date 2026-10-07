@@ -1078,9 +1078,13 @@ function TrackingRoute() {
 								>
 									Pay now · {formatPrice(order.total, order.currency)}
 								</Button>
+								{/* Says the screenshot is REQUIRED before the sheet opens
+								    (z8r3fdnpxf): a buyer who learns about a mandatory field
+								    only once they're inside the form has been ambushed by it. */}
 								<p className="text-xs opacity-80">
-									Bank transfer or QR — pay in your banking app, then attach the
-									receipt so {order.storeName || "the store"} can confirm it.
+									Bank transfer or QR — pay in your banking app, then attach
+									your receipt. {order.storeName || "The store"} needs the
+									screenshot to confirm your payment.
 								</p>
 							</>
 						)
@@ -1708,9 +1712,17 @@ function TrackingRoute() {
 				onClose={() => setClaimingPayment(false)}
 				token={token}
 				shortId={order.shortId}
-				storeName={order.storeName || "the store"}
+				storeName={order.storeName || (ms ? "kedai" : "the store")}
 				methods={paymentMethods}
 				hasExistingClaim={paymentStatus === "claimed"}
+				// Proof is mandatory on the FIRST claim only (z8r3fdnpxf) — once the
+				// seller has a screenshot, a reference-only fix doesn't demand it
+				// again. Same ORDER-level rule `claimPayment` enforces.
+				hasExistingProof={order.hasPaymentProof}
+				locale={order.retailerLocale}
+				// The way out of the mandatory attachment: the vendor's own chat,
+				// where they can mark the payment received by hand.
+				storeWaPhone={order.retailerWaPhone}
 			/>
 
 			{/* Items */}

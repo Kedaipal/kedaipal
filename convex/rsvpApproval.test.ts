@@ -170,6 +170,10 @@ describe("an RSVP on an event that approves each guest", () => {
 			t.mutation(api.orders.claimPayment, {
 				token: trackingToken,
 				reference: "IBG 123",
+				// Mandatory now (z8r3fdnpxf) — the gate under test is APPROVAL.
+				proofStorageId: await t.run((ctx) =>
+					ctx.storage.store(new Blob(["png"], { type: "image/png" })),
+				),
 			}),
 		).resolves.toBeNull();
 	});

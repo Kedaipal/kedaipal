@@ -16,6 +16,27 @@ function CalendarChevron({ orientation, className, ...props }: ChevronProps) {
 	return <Icon className={cn("size-4", className)} {...props} />;
 }
 
+/**
+ * The grid shape for a calendar a THUMB drives: cells stretch to the container
+ * instead of the compact `size-9` the Insights range picker wants, and every
+ * day button clears the 44px tap-target floor.
+ *
+ * Exported (z8r3fdm36y) rather than copied: the booking checkout and the
+ * fulfilment-date picker are two call sites for one idea, and the mobile rule
+ * is the kind of thing that silently drifts when it lives twice.
+ */
+export const TOUCH_CALENDAR_CLASSNAMES = {
+	month_grid: "w-full border-collapse",
+	weekdays: "grid grid-cols-7",
+	weekday: "w-auto text-[11px] font-medium text-muted-foreground",
+	week: "mt-1 grid w-full grid-cols-7 gap-0",
+	day: "relative p-0 text-center text-sm",
+} as const;
+
+export const TOUCH_CALENDAR_STYLES = {
+	day_button: { width: "100%", minHeight: "2.75rem" },
+} as const;
+
 export type CalendarProps = React.ComponentProps<typeof DayPicker>;
 
 export function Calendar({

@@ -265,7 +265,14 @@ describe("the buyer's side stays live", () => {
 			}),
 		).resolves.toBeNull();
 		await expect(
-			t.mutation(api.orders.claimPayment, { token }),
+			t.mutation(api.orders.claimPayment, {
+				token,
+				// Mandatory now (z8r3fdnpxf) — the point here is that the LOCK
+				// doesn't reach the buyer, not what the claim carries.
+				proofStorageId: await t.run((ctx) =>
+					ctx.storage.store(new Blob(["png"], { type: "image/png" })),
+				),
+			}),
 		).resolves.toBeDefined();
 	});
 

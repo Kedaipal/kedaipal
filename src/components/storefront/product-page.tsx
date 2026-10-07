@@ -389,6 +389,7 @@ export function PageGallery({
 						caption={name}
 						wrapperClassName="w-64 shrink-0 snap-start"
 						className="aspect-square w-full rounded-2xl object-cover"
+						frame="raised"
 						sizes={GALLERY_MOBILE_SIZES}
 						// The phone's LCP element (z8r3fdegb5): a buyer arriving
 						// from a WhatsApp link paints THIS tile. It must not be
@@ -421,6 +422,7 @@ export function PageGallery({
 					caption={name}
 					wrapperClassName="block w-full"
 					className="aspect-square w-full rounded-2xl object-cover"
+					frame="raised"
 					// Desktop hero fills the left column of the two-column layout.
 					sizes={GALLERY_DESKTOP_SIZES}
 				/>
@@ -445,6 +447,7 @@ export function PageGallery({
 									aspect="size-14"
 									rounded="rounded-md"
 									sizes="56px"
+									frame="hairline"
 								/>
 							</button>
 						))}

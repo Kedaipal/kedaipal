@@ -55,8 +55,8 @@ import { components } from "../_generated/api";
  *   a small burst.
  * - `proofUpload`: public mutation that mints a one-shot Convex storage upload
  *   URL for a payment screenshot. Keyed by shortId so a single order can't
- *   exhaust the system. Slightly tighter than paymentClaim — one upload URL
- *   per claim attempt is the realistic ceiling.
+ *   exhaust the system. Sized for one URL per file the buyer PICKS, not per
+ *   claim — see the entry below.
  * - `googleAutocomplete`: public (storefront) + authenticated (settings)
  *   Convex action that proxies Google Places autocomplete. Keyed by retailerId
  *   for storefront callers and Clerk subject for settings callers. Bucket sized
@@ -156,11 +156,19 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		period: MINUTE,
 		capacity: 4,
 	},
+	// One URL per file the buyer PICKS, not per claim (z8r3fdnpxf): the sheet
+	// now uploads the moment a screenshot is chosen, so the submit can be held
+	// until the image is genuinely stored rather than hoping it lands. Picking
+	// the wrong screenshot out of a camera roll and replacing it a couple of
+	// times is ordinary behaviour, and proof is now MANDATORY — so a limiter hit
+	// here no longer costs a retry, it blocks the payment outright. Sized for
+	// fumbling rather than for one perfect attempt. Still cheap to serve: the
+	// mutation only mints a URL, and the bytes behind it are capped client-side.
 	proofUpload: {
 		kind: "token bucket",
-		rate: 3,
+		rate: 10,
 		period: MINUTE,
-		capacity: 2,
+		capacity: 5,
 	},
 	// Public mutation that mints an upload URL for a buyer's reference image on a
 	// custom/made-to-order line — BEFORE the order exists, so keyed by retailerId
