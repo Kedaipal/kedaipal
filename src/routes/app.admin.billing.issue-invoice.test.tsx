@@ -17,6 +17,7 @@ const state = vi.hoisted(() => ({
 	spots: 5 as number | undefined,
 	issue: vi.fn(),
 	sheetOpen: false,
+	capped: false,
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -30,7 +31,7 @@ vi.mock("@tanstack/react-query", () => ({
 	useQuery: (opts: { __fn: FunctionReference<"query"> }) => ({
 		data: getFunctionName(opts.__fn).startsWith("foundingMembers:")
 			? state.spots
-			: state.retailers,
+			: { stores: state.retailers, capped: state.capped },
 	}),
 }));
 vi.mock("convex/react", () => ({ useMutation: () => state.issue }));
@@ -75,6 +76,7 @@ afterEach(() => {
 	state.spots = 5;
 	state.issue = vi.fn();
 	state.sheetOpen = false;
+	state.capped = false;
 });
 
 const CONTRACT = {
@@ -328,5 +330,29 @@ describe("Issue an invoice — what paying does to the tier (z8r3fdpm2p)", () =>
 		render(<IssueInvoiceForm />);
 		pickStore();
 		expect(screen.queryByText(/straight away|not before/)).toBeNull();
+	});
+});
+
+describe("Issue an invoice — the picker's cap (z8r3fdpm2p)", () => {
+	it("says so when the book runs past the list, and names the way out", () => {
+		// The picker is newest-first, so a truncated list is missing the OLDEST
+		// stores — and silently, which is the constraint-enforced-silently
+		// CLAUDE.md forbids. It bites sooner than the number suggests: batch
+		// pre-building (PR #346) adds placeholder stores at the NEWEST end, so
+		// a batch pushes exactly that many real customers off.
+		state.retailers = [store()];
+		state.capped = true;
+		render(<IssueInvoiceForm />);
+
+		expect(screen.getByText(/Showing the newest 500 stores/)).toBeTruthy();
+		// The way out, not just the bad news.
+		expect(screen.getByText(/Admin · Sellers/)).toBeTruthy();
+	});
+
+	it("stays quiet when the whole book fits", () => {
+		state.retailers = [store()];
+		state.capped = false;
+		render(<IssueInvoiceForm />);
+		expect(screen.queryByText(/Showing the newest/)).toBeNull();
 	});
 });

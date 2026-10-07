@@ -41,6 +41,7 @@ import type * as lalamove from "../lalamove.js";
 import type * as lib_accountDeletion from "../lib/accountDeletion.js";
 import type * as lib_activation from "../lib/activation.js";
 import type * as lib_address from "../lib/address.js";
+import type * as lib_adminDirectory from "../lib/adminDirectory.js";
 import type * as lib_appVersion from "../lib/appVersion.js";
 import type * as lib_attribution from "../lib/attribution.js";
 import type * as lib_auth from "../lib/auth.js";
@@ -218,6 +219,7 @@ declare const fullApi: ApiFromModules<{
   "lib/accountDeletion": typeof lib_accountDeletion;
   "lib/activation": typeof lib_activation;
   "lib/address": typeof lib_address;
+  "lib/adminDirectory": typeof lib_adminDirectory;
   "lib/appVersion": typeof lib_appVersion;
   "lib/attribution": typeof lib_attribution;
   "lib/auth": typeof lib_auth;

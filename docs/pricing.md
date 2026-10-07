@@ -573,6 +573,19 @@ retyping a number must never cut off a paying customer's staff mid-month.
 
 ### Where it's set — two doors, one form (z8r3fdpm2p)
 
+**Both doors must be able to see the same stores.** They nearly didn't: the
+sellers directory took 500 stores and the billing picker a bare `200`, and the
+picker is ordered **newest first** — so past 200 stores the OLDEST ones simply
+were not in it, and an older store could be put on a contract from the seller
+sheet but not from billing. Silently, with a native `<select>` that just
+stopped. Both now read one exported `ADMIN_STORE_LIST_LIMIT`, a source-scan
+test refuses a literal cap on either query, and the picker says when the book
+runs past the list and names the door that can search all of it. The number
+matters sooner than it looks: pre-built stores are created in batches
+(`z8r3fdm6up`) at the NEWEST end, so a batch of placeholders pushes exactly
+that many real paying customers off the end of the picker.
+
+
 A contract is written from **either** place an admin works on a store, and both
 render the same `EnterpriseContractForm` (`src/components/admin/`):
 

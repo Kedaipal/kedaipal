@@ -13,6 +13,9 @@ import {
 } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { ADMIN_STORE_LIST_LIMIT } from "./lib/adminDirectory";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -2393,5 +2396,66 @@ describe("replace + the dunning ladder (review finding, 7 Oct)", () => {
 		expect(sub?.autoRenew?.failedAttempts).toBeUndefined();
 		// The mandate itself survives — only the ladder was about the bill.
 		expect(sub?.autoRenew?.method).toBe("card");
+	});
+});
+
+describe("the billing picker and the sellers directory list the same book (z8r3fdpm2p)", () => {
+	test("both surfaces take the SAME cap — no second hardcoded number", async () => {
+		// They disagreed: 500 in the directory against a bare 200 here. The
+		// picker is newest-first, so past 200 the OLDEST stores vanished from
+		// it while the seller sheet still reached them — and the Enterprise
+		// contract is reachable from both, so one door could not see a store
+		// the other could.
+		const t = setup();
+		const made: string[] = [];
+		for (let i = 0; i < 3; i++) {
+			const slug = `cap-store-${i}`;
+			await t
+				.withIdentity({ subject: `u_cap_${i}` })
+				.mutation(api.retailers.createRetailer, {
+					storeName: `Cap Store ${i}`,
+					slug,
+				});
+			made.push(slug);
+		}
+		const picker = await asAdmin(t).query(
+			api.invoices.listRetailersForAdmin,
+			{},
+		);
+		const directory = await asAdmin(t).query(
+			api.admin.listSellersForAdmin,
+			{},
+		);
+		// Every store the directory can reach, the picker can reach.
+		const pickerSlugs = new Set(picker.stores.map((r) => r.slug));
+		for (const s of made) expect(pickerSlugs.has(s)).toBe(true);
+		expect(picker.stores.length).toBe(directory.length);
+		// Well under the cap, so the picker must not claim to be truncated.
+		expect(picker.capped).toBe(false);
+	});
+
+	test("neither store list may hardcode its own cap", () => {
+		// The behavioural test above CANNOT reach this: at three seeded stores
+		// both queries return everything whatever their cap, so reverting the
+		// picker to `.take(200)` leaves it green (checked). The drift is a
+		// source-level fact, so it is guarded at source level — the house
+		// precedent is `src/lib/convex-read-pattern.test.ts`.
+		const root = join(__dirname);
+		for (const file of ["invoices.ts", "admin.ts"]) {
+			const src = readFileSync(join(root, file), "utf8");
+			for (const [i, line] of src.split("\n").entries()) {
+				// A `.take(<number>)` on the retailers table is the shape that
+				// drifted. Derived caps (`ADMIN_STORE_LIST_LIMIT + 1`) and takes
+				// on other tables are untouched.
+				const take = line.match(/\.take\(\s*(\d+)/);
+				if (!take) continue;
+				const window = src.split("\n").slice(Math.max(0, i - 6), i + 1).join("\n");
+				if (!/query\("retailers"\)/.test(window)) continue;
+				throw new Error(
+					`${file}:${i + 1} caps the store list with the literal ${take[1]} — use ADMIN_STORE_LIST_LIMIT so the billing picker and the sellers directory cannot disagree about which stores exist.`,
+				);
+			}
+		}
+		expect(ADMIN_STORE_LIST_LIMIT).toBeGreaterThan(0);
 	});
 });

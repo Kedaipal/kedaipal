@@ -22,6 +22,7 @@ import {
 	requireRetailerAccess,
 	resolveMyRetailerFor,
 } from "./lib/auth";
+import { ADMIN_STORE_LIST_LIMIT } from "./lib/adminDirectory";
 import { contractForAdmin } from "./lib/enterprise";
 import {
 	autoRenewAfterReplace,
@@ -1691,8 +1692,8 @@ export const listRetailersForAdmin = query({
 	args: {},
 	handler: async (
 		ctx,
-	): Promise<
-		Array<{
+	): Promise<{
+		stores: Array<{
 			_id: Id<"retailers">;
 			storeName: string;
 			slug: string;
@@ -1753,10 +1754,23 @@ export const listRetailersForAdmin = query({
 				NonNullable<Doc<"subscriptions">["enterprise"]>,
 				"setBy"
 			> & { billingCycle: BillingCycle };
-		}>
-	> => {
+		}>;
+		/** The book is longer than this list. Ordered newest first, so what
+		 * is missing is the OLDEST stores — the picker says so and names the
+		 * way to them, rather than silently not containing a store an admin
+		 * knows exists (z8r3fdpm2p review). */
+		capped: boolean;
+	}> => {
 		await requireAdmin(ctx);
-		const retailers = await ctx.db.query("retailers").order("desc").take(200);
+		// +1 to learn whether the book runs past the cap, the same way
+		// `BUSINESS_REPORT_ORDER_SCAN_CAP` does. The extra row is never
+		// returned.
+		const scanned = await ctx.db
+			.query("retailers")
+			.order("desc")
+			.take(ADMIN_STORE_LIST_LIMIT + 1);
+		const capped = scanned.length > ADMIN_STORE_LIST_LIMIT;
+		const retailers = scanned.slice(0, ADMIN_STORE_LIST_LIMIT);
 		const rows = [];
 		for (const r of retailers) {
 			const sub = await ctx.db
@@ -1801,7 +1815,7 @@ export const listRetailersForAdmin = query({
 					: undefined,
 			});
 		}
-		return rows;
+		return { stores: rows, capped };
 	},
 });
 

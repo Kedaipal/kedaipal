@@ -52,13 +52,16 @@ import {
 } from "./lib/plans";
 import { loadCreditAccount } from "./credits";
 import { storeIsInternal } from "./marketplace";
+import { ADMIN_STORE_LIST_LIMIT } from "./lib/adminDirectory";
 import { contractForAdmin } from "./lib/enterprise";
 import { isUnclaimed } from "./lib/unclaimedStore";
 import { loadSubscription, resolveAccess } from "./subscriptions";
 
 /** How many sellers the directory pulls. The Founding cohort is ~10 and the whole
- * book is small for a while yet; 500 is generous headroom without pagination. */
-const SELLER_LIMIT = 500;
+ * book is small for a while yet; 500 is generous headroom without pagination.
+ * Shared with the billing picker (`ADMIN_STORE_LIST_LIMIT`) — two lists of the
+ * same stores must not disagree about which ones exist. */
+const SELLER_LIMIT = ADMIN_STORE_LIST_LIMIT;
 /** Recent audit rows surfaced per store in the console. */
 const AUDIT_LIMIT = 50;
 

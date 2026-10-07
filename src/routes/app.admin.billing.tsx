@@ -29,6 +29,7 @@ import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import type { TopUpRevenue } from "../../convex/creditPurchases";
+import { ADMIN_STORE_LIST_LIMIT } from "../../convex/lib/adminDirectory";
 import {
 	COUNTRIES,
 	COUNTRY_LABELS,
@@ -912,9 +913,14 @@ function retailerOptionLabel(r: {
  */
 export function IssueInvoiceForm() {
 	const retailerSelectId = useId();
-	const retailers = useQuery(
+	const retailerList = useQuery(
 		convexQuery(api.invoices.listRetailersForAdmin, {}),
 	).data;
+	const retailers = retailerList?.stores;
+	// The book runs past the cap, so the OLDEST stores are not in this list
+	// (it is newest-first). Said where the picker is, with the way out —
+	// never a select that silently stops containing a store (z8r3fdpm2p).
+	const storesCapped = retailerList?.capped === true;
 	const spotsRemaining = useQuery(
 		convexQuery(api.foundingMembers.getSpotsRemaining, {}),
 	).data;
@@ -1169,6 +1175,17 @@ export function IssueInvoiceForm() {
 						</option>
 					))}
 				</Select>
+				{/* Only when the book genuinely runs past the cap — a list that
+				    always claimed to be partial would be noise on the 5-store
+				    case. It names what is missing (the OLDEST, since this is
+				    newest-first) and the door that can still reach them. */}
+				{storesCapped ? (
+					<p className="text-xs text-muted-foreground">
+						Showing the newest {ADMIN_STORE_LIST_LIMIT} stores. An older one is
+						billed — and put on an Enterprise contract — from Admin · Sellers,
+						which can search the whole book.
+					</p>
+				) : null}
 			</div>
 
 			<div className="grid gap-4 rounded-2xl border border-border/70 bg-muted/20 p-3 lg:grid-cols-2 lg:p-4">
