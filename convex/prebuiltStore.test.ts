@@ -213,7 +213,10 @@ describe("createUnclaimedStore", () => {
 		await buildStore(t, { slug: "first", email: VENDOR.email });
 		const hint = await t
 			.withIdentity(ADMIN)
-			.query(api.retailers.checkEmailHasStore, { email: VENDOR.email });
+			.query(api.retailers.checkEmailHasStore, {
+			email: VENDOR.email,
+			forRetailerId: null,
+		});
 		expect(hint?.kind).toBe("waiting");
 		const err = await buildStore(t, {
 			slug: "second",
@@ -222,6 +225,34 @@ describe("createUnclaimedStore", () => {
 		// Not merely "both refuse" — the SAME WORDS, so neither side can be
 		// re-worded without the other following.
 		expect(err).toBe(hint?.message);
+	});
+
+	test("the hint EXEMPTS the store asking — re-saving its own address is no clash", async () => {
+		// `forRetailerId` is why the handover dialog can show the same pre-flight
+		// hint the build form shows. Pass `null` there instead of the store's own
+		// id and this goes red: the store collides with ITSELF, the dialog's Save
+		// is disabled for the address it already has, and an admin can never
+		// re-send an invite after reopening it.
+		const t = setup();
+		const { retailerId } = await buildStore(t, {
+			slug: "owns-it",
+			email: VENDOR.email,
+		});
+		const asSelf = await t
+			.withIdentity(ADMIN)
+			.query(api.retailers.checkEmailHasStore, {
+				email: VENDOR.email,
+				forRetailerId: retailerId,
+			});
+		expect(asSelf).toBeNull();
+		// …and still a clash for anybody else asking.
+		const asOther = await t
+			.withIdentity(ADMIN)
+			.query(api.retailers.checkEmailHasStore, {
+				email: VENDOR.email,
+				forRetailerId: null,
+			});
+		expect(asOther?.kind).toBe("waiting");
 	});
 
 	test("an address another pre-built store is already waiting for is refused", async () => {

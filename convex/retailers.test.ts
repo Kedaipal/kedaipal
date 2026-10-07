@@ -1831,6 +1831,7 @@ describe("retailers.checkEmailHasStore (admin onboard pre-check)", () => {
 		// Stored normalized → a differently-cased lookup still matches.
 		const res = await asAdmin(t).query(api.retailers.checkEmailHasStore, {
 			email: "Vendor@Example.com",
+			forRetailerId: null,
 		});
 		expect(res?.kind).toBe("owns");
 		expect(res?.slug).toBe("email-store-1");
@@ -1850,6 +1851,7 @@ describe("retailers.checkEmailHasStore (admin onboard pre-check)", () => {
 		});
 		const res = await asAdmin(t).query(api.retailers.checkEmailHasStore, {
 			email: "vendor@example.com",
+			forRetailerId: null,
 		});
 		expect(res?.kind).toBe("waiting");
 		expect(res?.slug).toBe("waiting-store");
@@ -1861,6 +1863,7 @@ describe("retailers.checkEmailHasStore (admin onboard pre-check)", () => {
 		await seedWithEmail(t, "u_e1", "email-store-1", "vendor@example.com");
 		const res = await asAdmin(t).query(api.retailers.checkEmailHasStore, {
 			email: "nobody@example.com",
+			forRetailerId: null,
 		});
 		expect(res).toBeNull();
 	});
@@ -1869,6 +1872,7 @@ describe("retailers.checkEmailHasStore (admin onboard pre-check)", () => {
 		const t = setup();
 		const res = await asAdmin(t).query(api.retailers.checkEmailHasStore, {
 			email: "not-an-email",
+			forRetailerId: null,
 		});
 		expect(res).toBeNull();
 	});
@@ -1878,7 +1882,10 @@ describe("retailers.checkEmailHasStore (admin onboard pre-check)", () => {
 		await expect(
 			t
 				.withIdentity({ subject: "u_random" })
-				.query(api.retailers.checkEmailHasStore, { email: "vendor@example.com" }),
+				.query(api.retailers.checkEmailHasStore, {
+			email: "vendor@example.com",
+			forRetailerId: null,
+		}),
 		).rejects.toThrow(/not authorized/i);
 	});
 });

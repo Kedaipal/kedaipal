@@ -522,7 +522,9 @@ export function OnboardClientCard() {
 	const emailCheck = useQuery(
 		convexQuery(
 			api.retailers.checkEmailHasStore,
-			emailLooksValid ? { email: debouncedEmail } : "skip",
+			// `forRetailerId: null` — this store does not exist yet, so there is
+			// no self to exempt. The handover dialog passes its own id.
+			emailLooksValid ? { email: debouncedEmail, forRetailerId: null } : "skip",
 		),
 	).data;
 	// The server's own verdict, kind and sentence included — `checkEmailHasStore`

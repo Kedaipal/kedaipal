@@ -1512,10 +1512,29 @@ async function findEmailConflict(
  * exists. The doc carries the meaning instead.
  */
 export const checkEmailHasStore = query({
-	args: { email: v.string() },
+	args: {
+		email: v.string(),
+		/**
+		 * The store ASKING, so re-saving the address it already has is not a
+		 * clash with itself — `null` when the store does not exist yet (the
+		 * build form).
+		 *
+		 * **Required, and a union rather than `v.optional`**, so a new call site
+		 * has to state which question it is asking instead of inheriting the
+		 * wrong answer. That is the same shape — and the same reason — as
+		 * `checkSlugAvailability`'s `purpose`: the slug hint exempted the
+		 * caller's own slug by default, which is right for a rename and wrong
+		 * for a birth, and an admin found out on submit
+		 * (docs/prebuilt-stores.md).
+		 */
+		forRetailerId: v.union(v.id("retailers"), v.null()),
+	},
 	/** `null` = free to use. The conflict object's presence IS the answer, so
 	 * there is no `exists` flag beside it to disagree with. */
-	handler: async (ctx, { email }): Promise<EmailConflict | null> => {
+	handler: async (
+		ctx,
+		{ email, forRetailerId },
+	): Promise<EmailConflict | null> => {
 		await requireAdmin(ctx);
 		let normalized: string;
 		try {
@@ -1524,7 +1543,7 @@ export const checkEmailHasStore = query({
 			// Not a valid email yet (still typing) — nothing to warn about.
 			return null;
 		}
-		return (await findEmailConflict(ctx, normalized, null)) ?? null;
+		return (await findEmailConflict(ctx, normalized, forRetailerId)) ?? null;
 	},
 });
 

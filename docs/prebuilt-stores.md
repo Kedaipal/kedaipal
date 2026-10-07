@@ -194,6 +194,27 @@ the answer, so there is no `exists` flag beside it to disagree with. Its **name*
 now undersells it, but an exported query path is a deployed contract and renaming
 it would leave a live bundle calling a function that no longer exists.
 
+**Both surfaces that name an address show the hint**, because one rule must not
+wear two behaviours:
+
+| | Build form (`#onboard`) | Manage → **Set handover email** |
+|---|---|---|
+| Warns | inline, before the click | inline, before the click |
+| `forRetailerId` | `null` — no store yet | this store's id |
+
+The dialog was the second one for a day: it offered an **enabled Save** for an
+address the server was about to refuse, and the refusal only arrived as an error
+toast *after* the click (found by driving it, 7 Oct). Both now ask
+`findEmailConflict` and print its sentence.
+
+**`checkEmailHasStore` therefore takes a REQUIRED `forRetailerId`** — a union
+with `null`, never `v.optional` — so a new call site has to state which question
+it is asking rather than inherit the wrong answer. That is the same shape, and
+the same reason, as `checkSlugAvailability`'s `purpose`: the store asking must be
+exempt from its own address (or the dialog could never re-save what it already
+has), while everyone else must still clash. `prebuiltStore.test.ts` pins both
+halves; pass `null` where the id belongs and the store collides with itself.
+
 ## The claim
 
 `retailers.claimStore({ acceptedLegal })`:
@@ -421,7 +442,7 @@ Per CLAUDE.md, no hidden behaviour. Each rule and the place it is stated:
 | the handover email is optional | its `(optional)` label + the helper line naming where a nameless store waits |
 | what each create button does next | the consequence line above them, naming both |
 | what this sitting has created | the **Created here · n** receipt, linking to the Unclaimed worklist |
-| an address is already taken | the server's own sentence under the field — stated **once**, with the button's reason pointing at it rather than paraphrasing it |
+| an address is already taken | the server's own sentence under the field — stated **once**, with the button's reason pointing at it rather than paraphrasing it. **Both** doors that name an address show it before the click |
 | the handover mechanism | `HandoverDialog` — "whoever signs up with this becomes its owner" |
 | nothing bills until claimed | the dialog, the `#onboard` card, and `sellerRail` → "Not billed until claimed" |
 | the store is unlisted until claimed | the dialog and the claim screen |
