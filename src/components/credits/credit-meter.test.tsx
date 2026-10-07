@@ -366,11 +366,17 @@ describe("CreditMeter — Billing (full)", () => {
 		// the whole mechanism — one read, every surface follows it.
 		mockQueries({ bal: null });
 		const { container } = render(
-			<CreditMeter variant="full" retailer={retailer({ status: "past_due" })} />,
+			<CreditMeter
+				variant="full"
+				retailer={retailer({ status: "past_due" })}
+			/>,
 		);
 		expect(container.textContent).toBe("");
 		const card = render(
-			<CreditMeter variant="card" retailer={retailer({ status: "past_due" })} />,
+			<CreditMeter
+				variant="card"
+				retailer={retailer({ status: "past_due" })}
+			/>,
 		);
 		expect(card.container.textContent).toBe("");
 	});

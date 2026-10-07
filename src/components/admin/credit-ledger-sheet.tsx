@@ -154,9 +154,9 @@ export function CreditLedgerBody({
 					   to pull — saying which is the point, since the same null view
 					   also means "store deleted". */
 					<p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
-						Admin store — not metered. Credits apply to seller stores only:
-						this one has no balance, takes no monthly grant and spends nothing
-						per order.
+						Admin store — not metered. Credits apply to seller stores only: this
+						one has no balance, takes no monthly grant and spends nothing per
+						order.
 					</p>
 				) : state.view === null ? (
 					<p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">

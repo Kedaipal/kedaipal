@@ -213,9 +213,7 @@ describe("CreditLedgerBody — balances", () => {
 	it("a PURGED unmetered store explains the empty list in its own terms", () => {
 		state.account = { view: null, account: null, lots: [], unmetered: true };
 		renderBody();
-		expect(
-			screen.getByText(/has never been metered/),
-		).toBeTruthy();
+		expect(screen.getByText(/has never been metered/)).toBeTruthy();
 		// The metered store's "the first one is the store's grant" would be a
 		// promise of a grant that never comes.
 		expect(screen.queryByText(/No credit movements yet/)).toBeNull();
