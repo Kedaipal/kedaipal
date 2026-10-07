@@ -198,14 +198,19 @@ function PickerView({
 	// still latched — the Buy button would spin forever. See the hook.
 	useResetOnBfcache(useCallback(() => setPhase("idle"), []));
 
-	const header = (
+	/** The pitch describes a balance to top up, so a store that HAS none (an
+	 * UNMETERED admin store, z8r3fdp4er) takes its refusal as the description
+	 * instead: stacked, the two sentences contradict each other — "once your
+	 * monthly credits run out" above "they have no credit balance". The
+	 * dialog always carries a description, which is what Radix labels it by. */
+	const headerFor = (description: string) => (
 		<DialogHeader>
 			<DialogTitle>Top up credits</DialogTitle>
-			<DialogDescription>
-				1 credit = 1 order. Bought credits kick in once your monthly credits run
-				out, and carry over for 12 months — nothing goes to waste.
-			</DialogDescription>
+			<DialogDescription>{description}</DialogDescription>
 		</DialogHeader>
+	);
+	const header = headerFor(
+		"1 credit = 1 order. Bought credits kick in once your monthly credits run out, and carry over for 12 months — nothing goes to waste.",
 	);
 
 	if (options === undefined || balance === undefined)
@@ -234,10 +239,7 @@ function PickerView({
 	if (balance === null && options?.refusalMessage)
 		return (
 			<>
-				{header}
-				<p className="text-sm text-muted-foreground">
-					{options.refusalMessage}
-				</p>
+				{headerFor(options.refusalMessage)}
 				<DialogFooter>
 					<Button variant="outline" className="tap-target" onClick={onClose}>
 						Close

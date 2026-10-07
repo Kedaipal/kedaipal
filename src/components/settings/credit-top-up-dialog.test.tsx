@@ -508,6 +508,10 @@ describe("the picker", () => {
 		expect(screen.getByText(/admin stores aren't metered/i)).toBeTruthy();
 		expect(screen.queryByText(/You don't have access to credits/i)).toBeNull();
 		expect(screen.queryByRole("button", { name: /^Buy / })).toBeNull();
+		// The pitch describes a balance to top up — stacked above "they have no
+		// credit balance" it contradicts the refusal, so the refusal IS the
+		// description here (and the dialog keeps one, which labels it).
+		expect(screen.queryByText(/monthly credits run out/i)).toBeNull();
 	});
 
 	it("admin act-as is view-only — and reads the SELLER's store", () => {

@@ -764,10 +764,15 @@ describe("sellerCredits", () => {
 		expect(view.detail).toBe("Admin store — not metered");
 		expect(view.out).toBe(false);
 		expect(view.total).toBeUndefined();
+		// What the sheet reads to drop "This month", "Out of credits" and
+		// "Custom grant" — rows that would print the stale cache.
+		expect(view.metered).toBe(false);
 	});
 
 	it("a metered store reads its balance; a comped one at zero is never locked", () => {
 		expect(sellerCredits(row({ credits })).headline).toBe("200 left");
+		expect(sellerCredits(row({ credits })).metered).toBe(true);
+		expect(sellerCredits(row()).metered).toBe(true);
 		const comped = sellerCredits(
 			row({ comped: true, credits: { ...credits, plan: 0, purchased: 0 } }),
 		);
