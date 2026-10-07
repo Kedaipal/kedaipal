@@ -474,7 +474,9 @@ export function StockSheet({
 					: convexErrorMessage(err);
 			// Same reason as the dialog: advance the baselines the seller has now
 			// been shown, or Apply refuses forever against numbers they've accepted.
-			setOpenedAt(Object.fromEntries(lines.map((l) => [l.variantId, l.onHand])));
+			setOpenedAt(
+				Object.fromEntries(lines.map((l) => [l.variantId, l.onHand])),
+			);
 			toast.error(named);
 		} finally {
 			setSaving(false);

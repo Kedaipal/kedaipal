@@ -17,10 +17,10 @@ import {
 } from "lucide-react";
 import { Dialog as MorePrimitive } from "radix-ui";
 import { useEffect, useRef, useState } from "react";
+import { usePermission } from "../../hooks/usePermission";
 import { cn } from "../../lib/utils";
 import { AppVersionRow } from "./app-version-row";
 import { WhatsNewNavItem } from "./whats-new";
-import { usePermission } from "../../hooks/usePermission";
 
 export interface BottomNavProps {
 	// Orders the seller hasn't looked at yet (the inbox's "New" bucket). A badge
@@ -134,9 +134,7 @@ export function BottomNav({
 								// filter the inbox down to an empty "New" list every time
 								// it's used for plain navigation.
 								search:
-									newOrdersCount > 0
-										? { bucket: ["new" as const] }
-										: undefined,
+									newOrdersCount > 0 ? { bucket: ["new" as const] } : undefined,
 							} as Tab,
 						]
 					: []),

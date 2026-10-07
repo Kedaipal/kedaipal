@@ -40,7 +40,9 @@ describe("slugify", () => {
 			"something-very-very-long-store",
 		);
 		// The dropped word is the one that didn't fit, not an arbitrary cut.
-		expect(slugify("Something Very Very Long Store Name").length).toBeLessThanOrEqual(32);
+		expect(
+			slugify("Something Very Very Long Store Name").length,
+		).toBeLessThanOrEqual(32);
 		expect(slugify("Mak Cik Kuih Homemade Kuih And Catering")).toBe(
 			"mak-cik-kuih-homemade-kuih-and",
 		);

@@ -465,18 +465,16 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 		mockQueries({ isAdmin: false });
 		render(
 			<BillingTab
-				retailer={
-					retailer({
-						subscription: {
-							plan: "pro",
-							status: "active",
-							comped: false,
-							caps: { orderCap: 500, userCap: 3, broadcastQuota: 0 },
-							active: true,
-							frozen: false,
-						},
-					} as unknown as Partial<Retailer>)
-				}
+				retailer={retailer({
+					subscription: {
+						plan: "pro",
+						status: "active",
+						comped: false,
+						caps: { orderCap: 500, userCap: 3, broadcastQuota: 0 },
+						active: true,
+						frozen: false,
+					},
+				} as unknown as Partial<Retailer>)}
 			/>,
 		);
 		expect(screen.getByText("Pro")).toBeTruthy();
@@ -514,20 +512,22 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 		const base = trialing();
 		render(
 			<BillingTab
-				retailer={{
-					...base,
-					subscription: {
-						...base.subscription,
-						autoRenew: {
-							method: "card",
-							methodLabel: "Visa ·· 4242",
-							failedAttempts: 0,
-							failing: false,
-							stopped: true,
-							confirming: false,
+				retailer={
+					{
+						...base,
+						subscription: {
+							...base.subscription,
+							autoRenew: {
+								method: "card",
+								methodLabel: "Visa ·· 4242",
+								failedAttempts: 0,
+								failing: false,
+								stopped: true,
+								confirming: false,
+							},
 						},
-					},
-				} as Retailer}
+					} as Retailer
+				}
 			/>,
 		);
 		expect(screen.getByText(/we'll write your invoice/)).toBeTruthy();
@@ -912,11 +912,15 @@ describe("BillingTab — the lapsed-but-not-yet-renewed window (86eyb6z4r)", () 
 				})}
 			/>,
 		);
-		expect(screen.getByText(/confirming it with the payment provider/)).toBeTruthy();
+		expect(
+			screen.getByText(/confirming it with the payment provider/),
+		).toBeTruthy();
 		expect(screen.queryByText("Pay online now")).toBeNull();
 		expect(screen.queryByText(/DuitNow/)).toBeNull();
 		// The auto-renewal card explains, instead of claiming "Renewing now".
-		expect(screen.getByText(/waiting for the payment provider to confirm/)).toBeTruthy();
+		expect(
+			screen.getByText(/waiting for the payment provider to confirm/),
+		).toBeTruthy();
 		expect(screen.queryByText(/Renewing now/)).toBeNull();
 	});
 

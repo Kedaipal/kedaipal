@@ -81,10 +81,13 @@ pnpm test
 
 ### Lint & format
 
+`pnpm check` is what CI gates — Biome lint **plus** formatting and import
+order. `pnpm lint` is the lint-only subset.
+
 ```bash
-pnpm lint
-pnpm format
-pnpm check
+pnpm check                          # the gate
+pnpm lint                           # lint rules only
+npx biome check --write <paths>     # fix drift (explicit paths, not a directory)
 ```
 
 ---

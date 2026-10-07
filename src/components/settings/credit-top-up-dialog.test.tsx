@@ -311,9 +311,7 @@ describe("the picker", () => {
 		// A pack pays the debt first — said before the tap — and the lock
 		// lifts the moment it's paid (T3).
 		expect(
-			screen.getByText(
-				"Covers the 15 owed and leaves 35 orders.",
-			),
+			screen.getByText("Covers the 15 owed and leaves 35 orders."),
 		).toBeTruthy();
 	});
 
