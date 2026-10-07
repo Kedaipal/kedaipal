@@ -106,9 +106,17 @@ properties keep it from being noisy:
 The trade-off is real and accepted: a logically perfect PR can now go red on a
 tab. The root cause of that friction was fixed in the same change —
 [`.vscode/settings.json`](../.vscode/settings.json) named Biome as the default
-formatter but never set `editor.formatOnSave`, and ran `organizeImports` only
-`"explicit"`ly, so nothing ever triggered it. Both are on now, which makes the
-CI step a backstop rather than the first place drift is noticed.
+formatter for seven language IDs but **never set `editor.formatOnSave`**, so
+nothing triggered it. That matches the split: `format` was 55 of the 73 errors.
+It is now set **per-language, inside each Biome-owned block, not globally** — a
+global `true` would hand Markdown and YAML to whatever other formatter is
+installed, i.e. churn in files no gate checks.
+
+`organizeImports` deliberately stays `"explicit"`. In VS Code `"explicit"`
+already runs on a real save (it is the modern spelling of `true`); `"always"`
+only adds auto-save, which would reorder imports mid-typing. The 18
+`organizeImports` errors came from files written by tooling rather than
+hand-saved, and CI now catches those.
 
 Scope note: `biome.json` `files.includes` is still `src/**` only, so `convex/`
 is neither linted nor formatted — tracked separately as `z8r3fdmdrf`.

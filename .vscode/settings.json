@@ -9,32 +9,48 @@
 		"**/routeTree.gen.ts": true
 	},
 	"[javascript]": {
-		"editor.defaultFormatter": "biomejs.biome"
+		"editor.defaultFormatter": "biomejs.biome",
+		"editor.formatOnSave": true
 	},
 	"[javascriptreact]": {
-		"editor.defaultFormatter": "biomejs.biome"
+		"editor.defaultFormatter": "biomejs.biome",
+		"editor.formatOnSave": true
 	},
 	"[typescript]": {
-		"editor.defaultFormatter": "biomejs.biome"
+		"editor.defaultFormatter": "biomejs.biome",
+		"editor.formatOnSave": true
 	},
 	"[typescriptreact]": {
-		"editor.defaultFormatter": "biomejs.biome"
+		"editor.defaultFormatter": "biomejs.biome",
+		"editor.formatOnSave": true
 	},
 	"[json]": {
-		"editor.defaultFormatter": "biomejs.biome"
+		"editor.defaultFormatter": "biomejs.biome",
+		"editor.formatOnSave": true
 	},
 	"[jsonc]": {
-		"editor.defaultFormatter": "biomejs.biome"
+		"editor.defaultFormatter": "biomejs.biome",
+		"editor.formatOnSave": true
 	},
 	"[css]": {
-		"editor.defaultFormatter": "biomejs.biome"
+		"editor.defaultFormatter": "biomejs.biome",
+		"editor.formatOnSave": true
 	},
-	// CI gates `biome check` (lint + format + import order), so the editor
-	// applies both on save — otherwise formatting drift only ever surfaces as
-	// a red PR. Biome is already the default formatter for each language above;
-	// before this, nothing ever triggered it.
-	"editor.formatOnSave": true,
+	// CI gates `biome check` — lint AND formatting AND import order — so the
+	// editor has to apply the same thing on save, or drift only ever surfaces
+	// as a red PR. Biome was already the default formatter for each language
+	// above, but `editor.formatOnSave` was never set, so nothing triggered it;
+	// that is why `format` was 55 of the 73 errors cleaned in PR #345.
+	//
+	// formatOnSave is set per-language, NOT globally: Biome governs only the
+	// languages listed above, and a global `true` would hand Markdown/YAML to
+	// whatever other formatter happens to be installed — churn in files no
+	// gate checks.
+	//
+	// organizeImports stays "explicit" (runs on a real save, not on auto-save).
+	// "always" would reorder imports mid-typing, which is more intrusive than
+	// the drift it prevents — tooling-written files are caught by CI anyway.
 	"editor.codeActionsOnSave": {
-		"source.organizeImports.biome": "always"
+		"source.organizeImports.biome": "explicit"
 	}
 }
