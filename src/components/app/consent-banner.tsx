@@ -3,8 +3,8 @@ import { useMutation } from "convex/react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
-import { convexErrorMessage } from "../../lib/format";
 import { useStoreRole } from "../../hooks/usePermission";
+import { convexErrorMessage } from "../../lib/format";
 import { type AcceptedLegalVersions, consentIsStale } from "../../lib/legal";
 import { Button } from "../ui/button";
 
