@@ -114,4 +114,60 @@ describe("opensLine — what the pack OPENS, before the tap (Credits T3.1)", () 
 			"That opens the oldest order — 1 order would still be waiting.",
 		);
 	});
+
+	// PR #347 review, 9 Oct 2026. The queue advances by POSITION and a
+	// cancelled order keeps the position its debit claimed, so a credit landing
+	// on a dead position opens nothing. `min(waiting, credits)` therefore
+	// over-promised by exactly the number of dead positions in front.
+	describe("positions held by cancelled orders", () => {
+		it("THE regression: 4 live behind 2 cancelled, a 4-pack opens 2", () => {
+			// Offsets 3,4,5,6 — positions 1 and 2 are cancelled orders that still
+			// owe their credits. Before the fix this read "opens all 4 orders".
+			const line = opensLine(4, 4, [3, 4, 5, 6]);
+			expect(line).toContain(
+				"That opens the 2 orders that have waited longest",
+			);
+			expect(line).toContain("2 orders would still be waiting");
+			expect(line).not.toContain("all 4");
+		});
+
+		it("says where the missing credits went, rather than going quiet", () => {
+			expect(opensLine(4, 4, [3, 4, 5, 6])).toContain(
+				"2 credits go to orders you cancelled.",
+			);
+			expect(opensLine(2, 2, [2, 3])).toContain(
+				"1 credit goes to an order you cancelled.",
+			);
+		});
+
+		it("a pack swallowed entirely by dead positions says so plainly", () => {
+			// Worst case: the seller would otherwise tap buy and see nothing move.
+			expect(opensLine(1, 2, [3])).toBe(
+				"That doesn't open an order yet — 1 order still waiting. 2 credits go to orders you cancelled.",
+			);
+		});
+
+		it("a pack big enough still opens everything", () => {
+			expect(opensLine(4, 6, [3, 4, 5, 6])).toBe(
+				"That opens all 4 orders waiting on credits. 2 credits go to orders you cancelled.",
+			);
+		});
+
+		it("an unbroken queue is word-for-word what it always was", () => {
+			// The ordinary store has no cancelled gated orders, and its copy must
+			// not change: offsets [1..n] and the no-offsets call agree exactly.
+			for (const [waiting, credits] of [
+				[3, 50],
+				[3, 3],
+				[1, 50],
+				[80, 50],
+				[2, 1],
+			] as const) {
+				const unbroken = Array.from({ length: waiting }, (_, i) => i + 1);
+				expect(opensLine(waiting, credits, unbroken)).toBe(
+					opensLine(waiting, credits),
+				);
+			}
+		});
+	});
 });

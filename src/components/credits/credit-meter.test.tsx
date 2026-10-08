@@ -75,6 +75,7 @@ function balance(over: Partial<CreditBalanceView> = {}): CreditBalanceView {
 		// picker can read it without the dashboard provider. The meter itself
 		// takes it off the retailer payload, so this stays 0 here.
 		ordersWaiting: 0,
+		waitingOffsets: [],
 		...over,
 	};
 }

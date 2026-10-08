@@ -54,7 +54,12 @@ import {
 	sortAwbItems,
 } from "./lib/pdf/awb";
 import { buildAwbPdf } from "./lib/pdf/render";
-import { isOrderGated, resolveCreditGate } from "./creditLock";
+import {
+	creditGateFor,
+	isOrderGated,
+	resolveCreditGate,
+} from "./creditLock";
+import { GATED_CELL_LABEL } from "./lib/credits";
 import { resolveSharedOrder } from "./orders";
 import { assertPlanFeature } from "./subscriptions";
 
@@ -417,11 +422,19 @@ export const readyToShipQueue = query({
 	): Promise<{ rows: ReadyQueueRow[]; remaining: number }> => {
 		await assertBatchAccess(ctx, retailerId);
 		const { ready, remaining } = await scanReadyOrders(ctx, retailerId);
+		// Waiting on credits (Credits T3.1). A gated order shouldn't reach
+		// "ready to ship" at all — the seller can't advance it — but the one
+		// surface in this PR that leaked did so on exactly that reasoning, so
+		// this redacts rather than relies on an argument that could stop being
+		// true. `creditGateFor` is one read for the whole queue.
+		const gate = await creditGateFor(ctx, retailerId);
 		return {
 			rows: ready.map((order) => ({
 				orderId: order._id,
 				shortId: order.shortId,
-				buyerName: recipientDisplayName(order.customer),
+				buyerName: isOrderGated(gate, order)
+					? GATED_CELL_LABEL
+					: recipientDisplayName(order.customer),
 				totalUnits: order.items.reduce((sum, i) => sum + i.quantity, 0),
 				total: order.total,
 				currency: order.currency,

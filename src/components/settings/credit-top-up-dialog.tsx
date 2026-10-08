@@ -463,7 +463,7 @@ function PickerView({
 					    `afterTopUpLine` above already covers the balance itself
 					    ("Covers the 15 owed and leaves 35 orders"). */}
 					{balance.ordersWaiting > 0 && balance.lockExempt === null
-						? ` ${opensLine(balance.ordersWaiting, pack.credits)}`
+						? ` ${opensLine(balance.ordersWaiting, pack.credits, balance.waitingOffsets)}`
 						: null}
 				</p>
 			) : null}

@@ -861,10 +861,18 @@ refusal and every gate surface's copy.
   owed" is the ledger's answer, "3 waiting on credits" is the one the seller can
   act on — a cancelled waiting order still owes its credit while nobody waits
   on it.
-- **The top-up picker** says what the pack OPENS (`opensLine`), which can never
-  over-promise because each credit frees exactly one order: a 50-pack against
-  80 waiting opens 50 and says so. It reads `ordersWaiting` off the balance,
-  not the balance itself — a store can be below zero with nothing waiting.
+- **The top-up picker** says what the pack OPENS (`opensLine`), and the thing
+  that makes that hard is that the queue advances by POSITION while the count
+  reports live orders. A cancelled order keeps the position its debit claimed
+  — the watermark only moves from the oldest end, so there is no lifting one
+  out of the middle — so a credit landing on a dead position opens nothing.
+  With 4 live orders behind 2 cancelled ones the picker promised 4 and a
+  4-pack opened 2. It now reads `waitingOffsets` (where each live order sits
+  past the watermark, off the same bounded scan that already produced the
+  count) and names the difference: "2 credits go to orders you cancelled."
+  An unbroken queue is `[1, 2, 3, …]`, so the ordinary store's copy is
+  unchanged word for word. It reads these off the balance, not the balance
+  itself — a store can be below zero with nothing waiting.
 - **The bulk bar** states what will be skipped BEFORE the tap
   (`bulkCreditSkipNote`), and the toast afterwards names it too
   (`bulkStatusToast`) — before the tap is where the decision is made, after it
@@ -890,6 +898,21 @@ refusal and every gate surface's copy.
 - **One author for the phrase** (`GATED_CELL_LABEL`): the CSV cell, the inbox
   chip and the customer name all read it, rather than three hand-typed copies
   drifting apart.
+- **The BOOKING calendar blanks the guest, it never drops the row.** The grid,
+  the day sheet, `blockImpact` and `closedDates.impact` read whole order rows
+  off `bookingsOverlapping` rather than through the allowlist, so the
+  redaction never reached them — and a booking REQUEST debits at request time
+  while `holdsCapacity` keeps it on the calendar, so a request that lands at
+  or below zero is born gated and sat there with the guest's name and the
+  nights beside it. For a campsite that is the entire bypass: the guest turns
+  up on the date and no phone number is needed. One helper now answers for all
+  four (`guestNameForSeller`), and it BLANKS rather than skips, because these
+  lists exist to stop a seller blocking or closing a date that already has
+  someone on it — dropping the row would make the feature actively dangerous
+  in the name of closing a leak. The night still counts; only the identity
+  goes. `awb.readyToShipQueue` got the same treatment even though a gated
+  order shouldn't reach "ready to ship", because "unreachable today" is the
+  exact reasoning that left the calendar open.
 - **There is no in-place note.** `CreditGateNote` sat under the app-shell
   banner on the inbox and on every order page repeating the same headline, the
   same explanation and the same two buttons about 40px lower — and on a FUNDED

@@ -907,6 +907,14 @@ export type CreditBalanceView = {
 	 * and a cancelled order still owes its credit while nobody waits on it.
 	 */
 	ordersWaiting: number;
+	/**
+	 * Where those waiting orders sit relative to the watermark, ascending
+	 * (`waitingOrderOffsets`). `[1, 2, 3]` is an unbroken queue; a gap means a
+	 * cancelled order still holds that position and a credit landing on it
+	 * opens nothing. The top-up picker needs this to say what a pack opens
+	 * without over-promising — the count alone can't tell the two apart.
+	 */
+	waitingOffsets: number[];
 };
 
 /**
@@ -1001,16 +1009,44 @@ export async function countOrdersAwaitingCredit(
 	retailerId: Id<"retailers">,
 	fundedThrough: number,
 ): Promise<number> {
-	let count = 0;
+	return (await waitingOrderOffsets(ctx, retailerId, fundedThrough)).length;
+}
+
+/**
+ * How far past the watermark each LIVE waiting order sits — ascending, capped
+ * like the count. `[1, 2, 3]` is the ordinary queue; `[3, 4]` means the two
+ * nearest positions are held by cancelled orders.
+ *
+ * Those gaps are why the count alone can't answer "what does this pack open?"
+ * (Credits T3.1 review, 9 Oct 2026). The watermark advances over POSITIONS —
+ * `fundingAdvance` spends one credit per position, dead or alive — while the
+ * count deliberately reports only live orders. With 4 live orders behind 2
+ * cancelled ones the picker said "that opens all 4 orders" and a 4-pack
+ * opened 2, because the first two credits went to the gaps.
+ *
+ * A cancelled order keeps its position on purpose: the watermark only moves
+ * from the oldest end, so there is no way to lift one out of the middle, and
+ * the credit it spent is genuinely gone under the "accepted orders don't
+ * refund" rule. So the queue is honest and the PICKER does the arithmetic —
+ * `liveOrdersOpenedBy` counts the offsets a pack actually reaches.
+ */
+export async function waitingOrderOffsets(
+	ctx: AnyCtx,
+	retailerId: Id<"retailers">,
+	fundedThrough: number,
+): Promise<number[]> {
+	const offsets: number[] = [];
 	for await (const order of ctx.db
 		.query("orders")
 		.withIndex("by_retailer_credit_seq", (q) =>
 			q.eq("retailerId", retailerId).gt("creditSeq", fundedThrough),
 		)) {
-		if (order.status !== "cancelled") count++;
-		if (count >= WAITING_COUNT_CAP) break;
+		if (order.status === "cancelled") continue;
+		// The index is ordered by `creditSeq`, so these come out ascending.
+		offsets.push((order.creditSeq as number) - fundedThrough);
+		if (offsets.length >= WAITING_COUNT_CAP) break;
 	}
-	return count;
+	return offsets;
 }
 
 async function balanceView(
@@ -1037,6 +1073,10 @@ async function balanceView(
 		.query("subscriptions")
 		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 		.first();
+	const waitingOffsets =
+		ordersAwaitingCredit(projected.debitSeq, projected.fundedThrough) === 0
+			? []
+			: await waitingOrderOffsets(ctx, retailerId, projected.fundedThrough);
 	return {
 		plan,
 		purchased,
@@ -1057,15 +1097,11 @@ async function balanceView(
 			comped: sub?.comped === true,
 		}),
 		// One extra read only when the arithmetic says something COULD be
-		// waiting, which for a store in credit is never.
-		ordersWaiting:
-			ordersAwaitingCredit(projected.debitSeq, projected.fundedThrough) === 0
-				? 0
-				: await countOrdersAwaitingCredit(
-						ctx,
-						retailerId,
-						projected.fundedThrough,
-					),
+		// waiting, which for a store in credit is never. The offsets carry the
+		// count, so this is still ONE scan — the picker needs to know where the
+		// gaps are, not just how many orders sit past them.
+		ordersWaiting: waitingOffsets.length,
+		waitingOffsets,
 	};
 }
 

@@ -66,6 +66,7 @@ import {
 } from "./lib/auth";
 import {
 	type CreditUnlockRoute,
+	GATED_CELL_LABEL,
 	cancelRefundDecision,
 	creditLockAudience,
 	creditLockErrorData,
@@ -250,6 +251,35 @@ export function isOrderGated(
 	order: { creditSeq?: number },
 ): boolean {
 	return !orderCreditFunded(order.creditSeq, gate.fundedThrough);
+}
+
+/**
+ * The guest name a BOOKING surface may show (Credits T3.1).
+ *
+ * The booking calendar, the day sheet and the two impact lists each read whole
+ * order rows off `bookingsOverlapping` rather than through `forSeller`, so the
+ * allowlist never reached them — and a booking REQUEST debits its credit at
+ * request time (`bookings.ts`), so a request that lands at or below zero is
+ * born gated. `holdsCapacity` keeps every non-cancelled status, so that gated
+ * request sits on the grid with the guest's name and the nights beside it:
+ * for the booking vertical that is the whole manual-settlement bypass, since
+ * the guest simply turns up on the date and no phone number is needed. The
+ * `.ics` feed skipped gated bookings for exactly this reason; these four
+ * surfaces are the in-app mirror of it.
+ *
+ * The name is BLANKED rather than the row dropped, deliberately. These lists
+ * exist to stop a seller blocking or closing a date that already has someone
+ * on it — drop the row and the feature actively misleads, which is worse than
+ * the leak it was closing. The count, the nights and the status stay real;
+ * only the identity goes.
+ */
+export function guestNameForSeller(
+	gate: CreditGateState,
+	order: { creditSeq?: number; customer: { name?: string } },
+	fallback?: string,
+): string | undefined {
+	if (isOrderGated(gate, order)) return GATED_CELL_LABEL;
+	return order.customer.name?.trim() || fallback;
 }
 
 /** How many credits THIS order is waiting on (0 when it's workable). */

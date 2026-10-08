@@ -77,25 +77,75 @@ export function wholePrice(minor: number, currency: string): string {
  * under the picker, so the seller sees the result of the tap before it.
  * A debt is paid first: "Covers the 15 owed and leaves 35 orders." */
 /**
+ * How many LIVE waiting orders a pack of `credits` actually opens.
+ *
+ * The queue advances by POSITIONS, one credit per position, and a cancelled
+ * order keeps the position it was debited for (`waitingOrderOffsets`). So a
+ * credit landing on a dead position opens nothing, and `min(waiting, credits)`
+ * — which this used to be — over-promises by exactly the number of dead
+ * positions the pack has to pay its way past.
+ *
+ * `offsets` is each live order's distance past the watermark, ascending, so
+ * "does this pack reach it?" is `offset <= credits`. With no gaps the offsets
+ * are `[1, 2, 3, …]` and this is `min(waiting, credits)` again, which is why
+ * the ordinary case reads exactly as it did before.
+ */
+export function liveOrdersOpenedBy(
+	offsets: readonly number[],
+	credits: number,
+): number {
+	return offsets.filter((offset) => offset <= credits).length;
+}
+
+/**
  * What a pack OPENS, beside what it does to the balance (Credits T3.1).
  *
- * Each credit frees exactly one waiting order, oldest first, so this can
- * never over-promise: a 50-pack against 80 waiting opens 50 and says so.
  * Said on the checkout line because "it unlocks your store" was the previous
  * release's copy and it was both wrong (the store was never locked) and vague
  * (which orders?).
+ *
+ * It must never over-promise, which is subtler than it looks: credits are
+ * spent per queue POSITION and cancelled orders still hold theirs, so the
+ * count of waiting orders is not the count a pack opens (PR #347 review, 9 Oct
+ * 2026 — "4 live behind 2 cancelled" promised 4 and opened 2). When the two
+ * diverge the line says where the difference went, because a seller who buys
+ * 4 credits and watches 2 orders open with no explanation has been misled by
+ * us, not by the rule.
  */
-export function opensLine(waiting: number, credits: number): string {
-	const opens = Math.min(waiting, credits);
+export function opensLine(
+	waiting: number,
+	credits: number,
+	/** `CreditBalanceView.waitingOffsets`. Omitted ⇒ assume an unbroken queue,
+	 * which is what every store without a cancelled gated order has. */
+	offsets?: readonly number[],
+): string {
+	const queue = offsets ?? Array.from({ length: waiting }, (_, i) => i + 1);
+	const opens = liveOrdersOpenedBy(queue, credits);
 	const left = waiting - opens;
 	const orders = (n: number) => `${n} ${n === 1 ? "order" : "orders"}`;
+	// Credits this pack spends getting PAST positions held by cancelled
+	// orders — never promised as openings, but never hidden either.
+	//
+	// Counted up to the last order actually opened (or, when none opens, up to
+	// the first live order the pack fails to reach): dead positions beyond
+	// that are not what this pack paid for, and the balance line already says
+	// what is still owed overall.
+	const lastReached =
+		opens > 0 ? queue[opens - 1] : Math.min(credits, (queue[0] ?? 1) - 1);
+	const toDeadPositions = Math.max(0, lastReached - opens);
+	const spent =
+		toDeadPositions > 0
+			? ` ${toDeadPositions === 1 ? "1 credit goes" : `${toDeadPositions} credits go`} to ${toDeadPositions === 1 ? "an order" : "orders"} you cancelled.`
+			: "";
 	if (left === 0)
-		return `That opens ${waiting === 1 ? "the order" : `all ${orders(waiting)}`} waiting on credits.`;
+		return `That opens ${waiting === 1 ? "the order" : `all ${orders(waiting)}`} waiting on credits.${spent}`;
+	if (opens === 0)
+		return `That doesn't open an order yet — ${orders(waiting)} still waiting.${spent}`;
 	const freed =
 		opens === 1
 			? "the oldest order"
 			: `the ${orders(opens)} that have waited longest`;
-	return `That opens ${freed} — ${orders(left)} would still be waiting.`;
+	return `That opens ${freed} — ${orders(left)} would still be waiting.${spent}`;
 }
 
 export function afterTopUpLine(total: number, credits: number): string {

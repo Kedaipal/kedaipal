@@ -416,3 +416,158 @@ describe("a gated order is invisible to the seller, on every surface", () => {
 		expect(batch.skipped.credit_gated + batch.count).toBeGreaterThan(0);
 	});
 });
+
+/**
+ * The BOOKING vertical (PR #347 review, 9 Oct 2026).
+ *
+ * The sweep above walked `orders` and `customers`. It never walked the
+ * booking calendar — and a booking REQUEST debits its credit at request time,
+ * so a request that lands at or below zero is born gated. `holdsCapacity`
+ * keeps every non-cancelled status, so that request sat on the seller's grid
+ * with the guest's name and the nights beside it.
+ *
+ * For a campsite or a homestay that IS the whole bypass: the guest turns up on
+ * the date, and the seller never needed a phone number. The `.ics` feed
+ * already skipped gated bookings for this reason; these four surfaces are its
+ * in-app mirror and were missed.
+ */
+describe("a gated BOOKING never shows the guest on the seller's calendar", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+	/** MYT midnight, n days out — the alignment every booking date must hold. */
+	const day = (n: number) =>
+		Date.parse("2026-11-01T00:00:00+08:00") + n * DAY;
+
+	async function bookingStore(t: T) {
+		const asOwner = t.withIdentity({ subject: OWNER });
+		await asOwner.mutation(api.retailers.createRetailer, {
+			storeName: "Gate Camp",
+			slug: "gate-camp",
+		});
+		const retailer = await asOwner.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.first();
+			if (sub) await ctx.db.patch(sub._id, { status: "active", plan: "pro" });
+			await ensureCreditAccount(ctx, retailer._id, OCT_10);
+		});
+		const productId = await asOwner.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Riverside Plot",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			kind: "booking" as const,
+			booking: { capacityPerNight: 5 },
+			variants: [{ optionValues: [], price: 8000, onHand: 0 }],
+		});
+		return { asOwner, retailerId: retailer._id, productId };
+	}
+
+	test("the name is gone from the grid, the sheet and both impact lists", async () => {
+		const t = setup();
+		const { asOwner, retailerId, productId } = await bookingStore(t);
+		// A funded guest first, so the assertions below can tell "redacted"
+		// apart from "this surface shows nobody".
+		await t.mutation(api.bookings.requestBooking, {
+			retailerId,
+			productId,
+			checkIn: day(1),
+			checkOut: day(2),
+			customer: { name: "Funded Guest", waPhone: "0123456701" },
+		});
+		await drain(t, retailerId);
+		// Born gated: the debit for this one takes the balance below zero.
+		await t.mutation(api.bookings.requestBooking, {
+			retailerId,
+			productId,
+			checkIn: day(3),
+			checkOut: day(4),
+			customer: { name: SENTINEL.name, waPhone: SENTINEL.phone },
+		});
+
+		const calendar = await asOwner.query(api.bookingBlocks.sellerCalendar, {
+			retailerId,
+			from: day(0),
+			to: day(10),
+		});
+		expectNoSentinels(calendar, "bookingBlocks.sellerCalendar");
+
+		const sheet = await asOwner.query(api.bookingBlocks.dayBookings, {
+			retailerId,
+			date: day(3),
+		});
+		expectNoSentinels(sheet, "bookingBlocks.dayBookings");
+
+		const block = await asOwner.query(api.bookingBlocks.blockImpact, {
+			retailerId,
+			startDate: day(3),
+			endDate: day(3),
+		});
+		expectNoSentinels(block, "bookingBlocks.blockImpact");
+
+		const closed = await asOwner.query(api.closedDates.impact, {
+			retailerId,
+			startDate: day(3),
+			endDate: day(3),
+		});
+		expectNoSentinels(closed, "closedDates.impact");
+	});
+
+	test("the NIGHT still counts, so a seller can't block over a guest they can't see", async () => {
+		// Skipping the row would have been the easy redaction and the dangerous
+		// one: these lists exist to stop a seller closing a date that already
+		// has someone on it.
+		const t = setup();
+		const { asOwner, retailerId, productId } = await bookingStore(t);
+		await drain(t, retailerId);
+		await t.mutation(api.bookings.requestBooking, {
+			retailerId,
+			productId,
+			checkIn: day(3),
+			checkOut: day(4),
+			customer: { name: SENTINEL.name, waPhone: SENTINEL.phone },
+		});
+
+		const calendar = await asOwner.query(api.bookingBlocks.sellerCalendar, {
+			retailerId,
+			from: day(0),
+			to: day(10),
+		});
+		const night = calendar.days.find((d) => d.date === day(3));
+		expect(night?.booked, "the gated stay still occupies the night").toBe(1);
+
+		const sheet = await asOwner.query(api.bookingBlocks.dayBookings, {
+			retailerId,
+			date: day(3),
+		});
+		expect(sheet.length, "the day sheet still lists it").toBe(1);
+		expect(sheet[0].customerName).toBe("Waiting on credits");
+
+		const block = await asOwner.query(api.bookingBlocks.blockImpact, {
+			retailerId,
+			startDate: day(3),
+			endDate: day(3),
+		});
+		expect(block.count, "blocking this date still warns").toBe(1);
+	});
+
+	test("a FUNDED guest is untouched — the gate is per order here too", async () => {
+		const t = setup();
+		const { asOwner, retailerId, productId } = await bookingStore(t);
+		await t.mutation(api.bookings.requestBooking, {
+			retailerId,
+			productId,
+			checkIn: day(3),
+			checkOut: day(4),
+			customer: { name: "Funded Guest", waPhone: "0123456701" },
+		});
+		const sheet = await asOwner.query(api.bookingBlocks.dayBookings, {
+			retailerId,
+			date: day(3),
+		});
+		expect(sheet[0].customerName).toBe("Funded Guest");
+	});
+});

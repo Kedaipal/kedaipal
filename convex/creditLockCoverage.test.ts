@@ -42,6 +42,14 @@ const REDACTION_CALLS = [
 	"customerForSeller(",
 	"orderGatedForSeller(",
 	"isCustomerGated(",
+	// The BOOKING surfaces read whole order rows straight off
+	// `bookingsOverlapping` rather than through the allowlist, so they redact
+	// the one field that identifies the guest instead of the whole row — see
+	// `guestNameForSeller`.
+	"guestNameForSeller(",
+	// The explicit per-row test, for a surface that blanks one field of its
+	// own shape (`awb.readyToShipQueue`).
+	"isOrderGated(",
 ];
 
 /**
@@ -150,7 +158,25 @@ const OPEN_FUNCTIONS: Record<string, string> = {
  * `orderGate.test.ts` then proves the ones that DO redact actually hide every
  * buyer field, by sentinel sweep. This test proves none got forgotten.
  */
-const READ_MODULES = ["orders", "customers"];
+// Every module with a public seller read that can return ORDER data.
+//
+// This list was `["orders", "customers"]` and the PR's own description called
+// the read sweep machine enforcement — while four queries in `bookingBlocks`
+// and `closedDates` returned gated guests' names in full, because the sweep
+// never looked at those files. A list that states a completeness it doesn't
+// check is worse than no list: it stops the next person going to look.
+//
+// A booking REQUEST debits its credit at request time and `holdsCapacity`
+// keeps it on the calendar, so a request that lands at or below zero is born
+// gated and shows up on the grid, the day sheet and both impact lists. The
+// `.ics` feed already skipped gated bookings; these are its in-app mirror.
+const READ_MODULES = [
+	"orders",
+	"customers",
+	"bookingBlocks",
+	"closedDates",
+	"awb",
+];
 
 const OPEN_READS: Record<string, string> = {
 	"orders.countActionable":
@@ -158,6 +184,8 @@ const OPEN_READS: Record<string, string> = {
 	"orders.getPaymentMethods":
 		"buyer door only (token), and it returns the STORE's payment rails, never order data",
 	"customers.count": "a single number — the dashboard stat tile",
+	"bookingBlocks.hasBookingListings":
+		"a boolean — does this store sell bookings at all; reads products, never an order",
 };
 
 const CONVEX = __dirname;
