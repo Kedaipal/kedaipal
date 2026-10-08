@@ -504,6 +504,18 @@ export function orderGatedLine(creditsToUnlock: number): string {
 export const CREDIT_GATE_PHRASE = "waiting on credits";
 
 /**
+ * The gate's label where a redacted row would otherwise render a BLANK — the
+ * CSV's Customer cell, the inbox chip, the customer list's name. One author,
+ * because three hand-typed copies of a user-facing phrase is how the CSV ends
+ * up saying something the screen doesn't.
+ *
+ * It exists because "blank" is never an acceptable rendering of a redaction:
+ * an empty name reads as corrupt data, and a seller who thinks the record is
+ * broken files a bug instead of topping up.
+ */
+export const GATED_CELL_LABEL = "Waiting on credits";
+
+/**
  * The TYPED refusal every gated seller write throws (`ConvexError` data), so
  * the dashboard can put the one way back next to the sentence instead of just
  * printing it — a courier booking that can't land offers "Top up" in place,

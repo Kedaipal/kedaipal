@@ -171,6 +171,17 @@ export function bulkCreditSkipNote(waitingInSelection: number): string {
 	return `${n} of these ${n === 1 ? "is" : "are"} waiting on credits and will be skipped. Cancelling works on all of them.`;
 }
 
+/**
+ * The label on the button that filters the inbox down to the waiting orders.
+ * "Show the 1" is what a count-interpolated string does to n=1, so singular
+ * gets a pronoun; past the display cap the count is "99+" and can't be named
+ * at all, so that gets one too.
+ */
+export function showWaitingLabel(n: number): string {
+	if (n === 1) return "Show it";
+	return n >= 99 ? "Show them" : `Show the ${n}`;
+}
+
 /** Waiting-orders line for the gate surfaces: "3 orders waiting on credits". */
 export function ordersWaitingLabel(n: number): string | null {
 	if (n <= 0) return null;
@@ -178,10 +189,18 @@ export function ordersWaitingLabel(n: number): string | null {
 	return `${count} ${n === 1 ? "order" : "orders"} waiting on credits`;
 }
 
-/** The gated inbox row's own line. The seller sees the reference, the money
+/**
+ * The gated inbox row's own line. The seller sees the reference, the money
  * and the date on the row itself — this is the bit that explains the blanks,
- * so it names the row's position rather than the store's balance. */
-export function gatedRowLine(creditsToUnlock: number): string {
+ * so it names the row's position rather than the store's balance.
+ *
+ * A CANCELLED row keeps its blanks (the redaction is seq-keyed and survives
+ * the cancel on purpose) but must not keep the sales pitch: "top up to open
+ * it" on an order nobody is waiting on would sell a credit that opens
+ * nothing. Same rule the gated order PAGE follows — one idea, both surfaces.
+ */
+export function gatedRowLine(creditsToUnlock: number, status?: string): string {
+	if (status === "cancelled") return "Cancelled — details stay closed";
 	return creditsToUnlock <= 1
 		? "Waiting on 1 credit — top up to open it"
 		: `Waiting on ${creditsToUnlock} credits — top up to open it`;

@@ -16,6 +16,7 @@ import {
 	ordersBalanceLabel,
 	ordersWaitingLabel,
 	planPickCreditLine,
+	showWaitingLabel,
 } from "./credits-ui";
 import { formatShortDate } from "./format";
 
@@ -413,6 +414,31 @@ describe("the per-order gate's copy names the ORDER, never the store (T3.1)", ()
 		expect(orderGatedLine(4)).toBe("Waiting on 4 credits");
 		// 0 can't happen on a gated row, but a floor beats "Waiting on 0".
 		expect(orderGatedLine(0)).toBe("Waiting on 1 credit");
+	});
+
+	test("a cancelled gated row drops the pitch but keeps the blanks", () => {
+		// The redaction is seq-keyed and survives the cancel by design, so the
+		// row stays gated — but nobody is waiting on it, and offering a credit
+		// that would open nothing is the gated page's bug one layer out.
+		expect(gatedRowLine(1, "cancelled")).toBe(
+			"Cancelled — details stay closed",
+		);
+		expect(gatedRowLine(3, "cancelled")).toBe(
+			"Cancelled — details stay closed",
+		);
+		expect(gatedRowLine(1, "pending")).toBe(
+			"Waiting on 1 credit — top up to open it",
+		);
+	});
+
+	test('the filter button doesn\'t say "Show the 1"', () => {
+		// A count interpolated into "Show the N" reads as a typo at n=1, and
+		// past the 99+ display cap there is no number to name at all.
+		expect(showWaitingLabel(1)).toBe("Show it");
+		expect(showWaitingLabel(2)).toBe("Show the 2");
+		expect(showWaitingLabel(98)).toBe("Show the 98");
+		expect(showWaitingLabel(99)).toBe("Show them");
+		expect(showWaitingLabel(250)).toBe("Show them");
 	});
 
 	test("the bulk bar says what WILL be skipped, and that cancel still works", () => {

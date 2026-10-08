@@ -59,7 +59,6 @@ import { orderPickupNotes } from "../../convex/lib/pickupNote";
 import type { PickupSnapshot } from "../../convex/lib/whatsappCopy";
 import { ProBadge } from "../components/app/pro-gate";
 import { ViewOnlyNote } from "../components/app/view-only-note";
-import { CreditGateNote } from "../components/credits/credit-gate-note";
 import { BRAND_GLYPHS } from "../components/dashboard/brand-icons";
 import { FulfilmentDateBadge } from "../components/dashboard/fulfilment-date-badge";
 import {
@@ -862,9 +861,6 @@ function OrderDetailRoute() {
 			    nothing on it, so say that above the controls rather than letting
 			    every tap answer with a toast. Renders nothing when writable. */}
 			<ViewOnlyNote />
-			{/* Out of credits (Credits T3): the narrower lock — order work pauses,
-			    cancelling and refunding don't. Renders nothing otherwise. */}
-			<CreditGateNote scope="order" />
 
 			{/* A booking request's stage control IS approve/decline (S3): the
 			    stepper can't move it (the server refuses), so its slot holds the

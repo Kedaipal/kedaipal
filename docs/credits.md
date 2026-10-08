@@ -635,8 +635,8 @@ refund, and one that slips through lands as `late_payment`.
 resolver, the guard, the read-path seams), `convex/lib/orderGate.ts` (the
 redaction allowlist), `convex/creditLockCoverage.test.ts` (which writes gate,
 which reads redact), `convex/orderGate.test.ts` (the sentinel sweep),
-`src/hooks/useCreditGate.ts`, `src/components/credits/credit-gate-note.tsx`,
-`src/components/orders/gated-order-page.tsx`.
+`src/hooks/useCreditGate.ts`, `src/components/orders/gated-order-page.tsx`,
+`src/lib/bulk-skip-reasons.ts`.
 
 **An order is workable once its OWN credit is paid for — and stays workable
 forever after that.** Only orders that arrived while the balance was already at
@@ -813,6 +813,13 @@ gate.
   moment one order of forty was waiting — the store-wide lock's failure mode in
   miniature. Both are classified as the skip shape in the coverage test, which
   asserts the counter exists and that neither throws the gate refusal.
+  **Returning the counter is only half of it** — the inbox shipped naming four
+  of the five skip reasons, so a mixed batch toasted "Updated 1 · skipped 1"
+  with no reason at all, the silent skip the house rule forbids. The phrases
+  now live in `src/lib/bulk-skip-reasons.ts` as a `Record` over
+  `keyof FunctionReturnType<typeof api.orders.bulkUpdateStatus>`, so a new
+  `skipped*` counter is a COMPILE error until it has words. A test asserting
+  today's reasons could not have caught the one that was missing.
 - **The typed refusal** still carries the sentence and the way back
   (`CreditLockErrorData`, `kind: "credits_locked"` — unchanged, because that is
   the wire contract `format.ts` and every toast match on), plus
@@ -859,7 +866,36 @@ refusal and every gate surface's copy.
   80 waiting opens 50 and says so. It reads `ordersWaiting` off the balance,
   not the balance itself — a store can be below zero with nothing waiting.
 - **The bulk bar** states what will be skipped BEFORE the tap
-  (`bulkCreditSkipNote`), rather than leaving it to the toast afterwards.
+  (`bulkCreditSkipNote`), and the toast afterwards names it too
+  (`bulkStatusToast`) — before the tap is where the decision is made, after it
+  is where the seller learns which rows didn't move.
+- **The gated order PAGE** is its own screen, with three states: waiting,
+  waiting-and-you-can't-buy, and **cancelled**. The last one matters because
+  the redaction is seq-keyed and survives the cancel by design, so the page has
+  to know that `creditGated` no longer means "waiting" — it first shipped
+  offering "Cancel and tell the buyer" on an order already cancelled. Its
+  Fulfilment fact reads through `formatFulfilmentDateTime`, never
+  `formatOrderTimestamp`: a fulfilment date is stored at MYT midnight with the
+  time in a separate field, so a timestamp formatter prints "12:00 am" as if
+  the buyer had asked for midnight.
+- **The gated CUSTOMER row** says "Waiting on credits" where the name would be,
+  on all three surfaces (`sellerCustomerName` — the list table, the mobile card
+  and the detail page title, which also carries one line of why). The
+  redaction blanks `name` AND `waPhone`, so `getDisplayName` falls through to
+  `formatPhone("")` and returns an EMPTY STRING: the row shipped as a nameless
+  line with a lifetime value beside it, which reads as corrupt data rather than
+  a deliberate state. `customers.get` was also annotated
+  `Promise<Doc<"customers"> & …>`, which silently dropped `creditGated` from
+  the wire type — the client could not have told the two apart.
+- **One author for the phrase** (`GATED_CELL_LABEL`): the CSV cell, the inbox
+  chip and the customer name all read it, rather than three hand-typed copies
+  drifting apart.
+- **There is no in-place note.** `CreditGateNote` sat under the app-shell
+  banner on the inbox and on every order page repeating the same headline, the
+  same explanation and the same two buttons about 40px lower — and on a FUNDED
+  order's page it announced a restriction that order didn't have. The banner is
+  the store-level message and carries the filter link; the rows, the bulk bar
+  and the gated page carry the per-order one. One idea, one control.
 - **The CSV** puts "Waiting on credits" in the **Customer cell** rather than
   gaining a column: a seller's bookkeeping template keys on column names, so
   the header set stays fixed (the `deliveryDirection` precedent). A line of

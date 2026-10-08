@@ -14,6 +14,7 @@
 
 import { sourceLabel } from "./attribution";
 import { formatItemAnswers } from "./buyerQuestions";
+import { GATED_CELL_LABEL } from "./credits";
 import { orderCustomerLabel } from "./customer";
 import { formatFulfilmentTime } from "./fulfilmentDate";
 import {
@@ -585,7 +586,7 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		// blanks with no reason is the silent gap the no-silent-skip rule exists
 		// to stop. The Phone cell stays empty — one explanation per row.
 		value: (o) =>
-			o.creditGated ? "Waiting on credits" : orderCustomerLabel(o.customer, ""),
+			o.creditGated ? GATED_CELL_LABEL : orderCustomerLabel(o.customer, ""),
 	},
 	{
 		key: "phone",

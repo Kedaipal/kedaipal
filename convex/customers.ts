@@ -16,7 +16,7 @@ import {
 	forSeller,
 } from "./creditLock";
 import { buildSearchText } from "./lib/customer";
-import { isCustomerGated } from "./lib/orderGate";
+import { isCustomerGated, type SellerCustomer } from "./lib/orderGate";
 import { revenueExcludingDeposit } from "./lib/order";
 import { assertValidWaPhone } from "./lib/slug";
 import {
@@ -136,7 +136,11 @@ export const get = query({
 	handler: async (
 		ctx,
 		{ customerId },
-	): Promise<(Doc<"customers"> & { averageOrderValue: number }) | null> => {
+		// `SellerCustomer`, not `Doc<"customers">`: the redaction stamps
+		// `creditGated` and the narrower annotation silently dropped it from the
+		// wire type, so the detail page couldn't tell a gated customer from one
+		// with no name — which is exactly how it shipped rendering a blank.
+	): Promise<(SellerCustomer & { averageOrderValue: number }) | null> => {
 		const { customer } = await requireOwnedCustomer(ctx, customerId, "read");
 		const averageOrderValue =
 			customer.orderCount > 0

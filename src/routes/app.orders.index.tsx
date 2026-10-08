@@ -57,7 +57,6 @@ import {
 } from "../../convex/lib/paymentMethod";
 import { ProFeatureTease } from "../components/app/pro-gate";
 import { ViewOnlyNote } from "../components/app/view-only-note";
-import { CreditGateNote } from "../components/credits/credit-gate-note";
 import {
 	DeliveryMethodIcon,
 	OrderContextBadge,
@@ -114,6 +113,7 @@ import { useAreaLock } from "../hooks/useStoreLock";
 import { canHardDeleteOrders } from "../lib/admin-actions";
 import { MASK_PII } from "../lib/analytics-privacy";
 import { describeAwbPaper } from "../lib/awb-labels";
+import { bulkStatusToast } from "../lib/bulk-skip-reasons";
 import { bulkCreditSkipNote, gatedRowLine } from "../lib/credits-ui";
 import { orderCustomerLabel } from "../lib/customer";
 import { downloadCsv } from "../lib/download";
@@ -1288,34 +1288,10 @@ function OrdersRoute() {
 				status,
 				cancellationNote,
 			});
-			// Name the actionable skip reasons — a bare "skipped 2" leaves the
-			// seller guessing why their bulk action half-worked.
-			const skipReasons = [
-				res.skippedAwaitingCollection > 0
-					? `${res.skippedAwaitingCollection} still with your customer`
-					: null,
-				res.skippedRiderManaged > 0
-					? `${res.skippedRiderManaged} with a rider on the way`
-					: null,
-				// Cancelled orders can't be reopened — their stock is already back
-				// (86eypn8ye). Named so the seller learns the rule rather than
-				// re-selecting the same rows and watching nothing happen.
-				res.skippedCancelled > 0
-					? `${res.skippedCancelled} already cancelled`
-					: null,
-				// A booking is never "Packed"; an RSVP is never "Packed" or
-				// "Ready for Pickup" — those stages don't exist for them.
-				res.skippedNoSuchStage > 0
-					? `${res.skippedNoSuchStage} without that stage (bookings/RSVPs)`
-					: null,
-			].filter(Boolean);
-			toast.success(
-				res.skipped > 0
-					? `Updated ${res.updated} · skipped ${res.skipped}${
-							skipReasons.length > 0 ? ` (${skipReasons.join(", ")})` : ""
-						}`
-					: `Updated ${res.updated} order${res.updated === 1 ? "" : "s"}`,
-			);
+			// Every skip names itself (`bulkStatusToast`), and which reasons exist
+			// is derived from the mutation's own return type — so a new counter
+			// can't be left unread the way `skippedCreditGated` was.
+			toast.success(bulkStatusToast(res));
 			// Clear the selection but STAY in select mode — the bulk bar (and the
 			// Radix layers it owns) must not unmount while a popover/confirm dialog
 			// may still be closing, or `pointer-events:none` leaks onto the body and
@@ -1591,9 +1567,6 @@ function OrdersRoute() {
 
 			{/* A lapsed store can read this inbox and act on nothing in it. */}
 			<ViewOnlyNote />
-			{/* Out of credits (Credits T3): orders keep arriving — this says how
-			    many, what's paused, and the one way back. */}
-			<CreditGateNote scope="inbox" />
 
 			{/* Starter: the inbox controls are a Pro feature — say so where they'd
 			    be, instead of leaving a silent gap. The order list below still works. */}
@@ -2054,7 +2027,7 @@ function OrdersRoute() {
 											// a seller buying one credit that it won't be this one
 											// — a store-wide sentence here would not.
 											<div className="mt-2 rounded-xl border border-dashed border-border bg-muted/40 px-2.5 py-2 text-[13px] leading-5 text-muted-foreground">
-												{gatedRowLine(o.creditsToUnlock ?? 1)}
+												{gatedRowLine(o.creditsToUnlock ?? 1, o.status)}
 											</div>
 										) : (
 											<div className="mt-2 flex flex-col gap-1 rounded-xl bg-muted/50 px-2.5 py-2">

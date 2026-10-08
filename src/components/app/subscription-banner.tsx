@@ -14,6 +14,7 @@ import {
 	lockCta,
 	ordersBalanceLabel,
 	ordersWaitingLabel,
+	showWaitingLabel,
 } from "../../lib/credits-ui";
 import { formatPrice } from "../../lib/format";
 import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
@@ -166,8 +167,7 @@ export function SubscriptionBanner({
 						search={{ creditGated: true }}
 						className="inline-flex h-9 items-center rounded-lg border border-border bg-background px-3.5 text-sm font-medium text-foreground"
 					>
-						Show{" "}
-						{state.ordersWaiting >= 99 ? "them" : `the ${state.ordersWaiting}`}
+						{showWaitingLabel(state.ordersWaiting)}
 					</Link>
 					{!creditLock.canAct ? null : (
 						<Link

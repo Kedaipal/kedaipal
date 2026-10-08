@@ -5,18 +5,20 @@ import {
 	getCoreRowModel,
 	useReactTable,
 } from "@tanstack/react-table";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Lock } from "lucide-react";
 import { useMemo } from "react";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import { MASK_PII } from "../../lib/analytics-privacy";
-import { formatPhone, getDisplayName } from "../../lib/customer";
+import { formatPhone, sellerCustomerName } from "../../lib/customer";
 import { formatPrice, formatRelativeTime } from "../../lib/format";
 import { cn } from "../../lib/utils";
 import { CustomerCard } from "./customer-card";
 
 export type CustomerSort = "recency" | "ltv" | "orderCount";
 
-type Customer = Doc<"customers">;
+/** The server's row: a customer document plus the gate flag (Credits T3.1,
+ * `SellerCustomer`). */
+type Customer = Doc<"customers"> & { creditGated?: boolean };
 
 interface CustomerListProps {
 	customers: Customer[];
@@ -47,15 +49,30 @@ export function CustomerList({
 				cell: ({ row }) => {
 					const c = row.original;
 					const hasName = Boolean(c.name?.trim() || c.waProfileName?.trim());
+					// Waiting on credits (Credits T3.1): the name and phone were
+					// redacted server-side, so this cell says what it is waiting for
+					// rather than rendering the blank the redaction leaves behind. The
+					// aggregate columns beside it stay real — they are the top-up
+					// argument, and the row still opens (the detail page says the same
+					// thing, so the link is never a dead end).
+					const gated = c.creditGated === true;
 					return (
 						<div className="flex min-w-0 flex-col">
 							<Link
 								to="/app/customers/$customerId"
 								params={{ customerId: c._id }}
-								className="truncate font-medium hover:underline"
+								className={cn(
+									"truncate hover:underline",
+									gated
+										? "inline-flex items-center gap-1.5 font-medium text-muted-foreground"
+										: "font-medium",
+								)}
 								onClick={(e) => e.stopPropagation()}
 							>
-								{getDisplayName(c)}
+								{gated ? (
+									<Lock className="size-3.5 shrink-0" aria-hidden="true" />
+								) : null}
+								{sellerCustomerName(c)}
 							</Link>
 							{hasName ? (
 								<span className="truncate font-mono text-xs text-muted-foreground">
