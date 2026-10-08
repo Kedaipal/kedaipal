@@ -14,8 +14,11 @@
  */
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { internalMutation } from "./_generated/server";
 import { ensureCreditAccount } from "./credits";
+import { storeOwnerIsAdmin } from "./lib/auth";
+import { storeIsMetered } from "./lib/credits";
 import { generateTrackingToken } from "./lib/order";
 import { capsForPlan } from "./lib/plans";
 import { legacyClaimFromOrder } from "./lib/paymentClaims";
@@ -602,5 +605,127 @@ export const backfillPaymentClaims = internalMutation({
 			);
 		}
 		return { inserted, isDone: page.isDone };
+	},
+});
+
+/**
+ * Purge the credit data of UNMETERED stores (z8r3fdp4er).
+ *
+ * A Kedaipal admin's own store is outside the credit system: `regimeFor`
+ * answers `null` for it, so nothing reads or writes its account any more. The
+ * rows it grew while it WAS metered are inert — but they sit below the current
+ * usage period forever, so `credits:internalRollPeriods` re-selects them on
+ * every sweep and can never advance them. This removes them.
+ *
+ * DRY RUN BY DEFAULT. With no args it reports what it would delete and touches
+ * nothing.
+ *
+ * DELETING NAMES ITS TARGETS. `apply: true` also requires `retailerIds`, and
+ * every id must be in the unmetered set this run found — so the operator has
+ * to have READ the dry run's store names before anything is deleted. The
+ * unmetered check alone is not a safety net against the dangerous direction
+ * of a mis-set `ADMIN_USER_IDS` (PR #343 review): an admin id MISSING is
+ * harmless here, but a paying seller's id wrongly ADDED makes their store
+ * unmetered, and a purge keyed only on "is it unmetered?" would select it by
+ * the very same mistake. Naming the ids puts a human between the env var and
+ * the delete.
+ *
+ * Capped per run so a long ledger can't hit the transaction limit: `done`
+ * comes back false when a table filled its cap — run it again until true.
+ *
+ * Run:
+ *   npx convex run migrations:purgeUnmeteredCreditData
+ *   npx convex run migrations:purgeUnmeteredCreditData '{"apply":true,"retailerIds":["<id from the dry run>"]}'
+ */
+const PURGE_CAP = 1000;
+export const purgeUnmeteredCreditData = internalMutation({
+	args: {
+		apply: v.optional(v.boolean()),
+		/** Required with `apply` — the stores to purge, as the dry run named
+		 * them. An id the run did not find unmetered is refused. */
+		retailerIds: v.optional(v.array(v.id("retailers"))),
+	},
+	handler: async (
+		ctx,
+		{ apply, retailerIds },
+	): Promise<{
+		applied: boolean;
+		/** False when a table filled `PURGE_CAP` — run it again. */
+		done: boolean;
+		stores: Array<{
+			retailerId: Id<"retailers">;
+			storeName: string;
+			accounts: number;
+			lots: number;
+			ledger: number;
+		}>;
+	}> => {
+		const stores: Array<{
+			retailerId: Id<"retailers">;
+			storeName: string;
+			accounts: number;
+			lots: number;
+			ledger: number;
+		}> = [];
+		let done = true;
+		const named = new Set<string>(retailerIds ?? []);
+		if (apply === true && named.size === 0)
+			throw new Error(
+				"Deleting needs the stores named: run it with no args first, then pass the retailerIds it reports as { apply: true, retailerIds: [...] }.",
+			);
+		const purged = new Set<string>();
+		for await (const retailer of ctx.db.query("retailers")) {
+			if (storeIsMetered({ ownerIsAdmin: storeOwnerIsAdmin(retailer) }))
+				continue;
+			const accounts = await ctx.db
+				.query("creditAccounts")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.take(PURGE_CAP);
+			const lots = await ctx.db
+				.query("creditLots")
+				.withIndex("by_retailer_open_expiry", (q) =>
+					q.eq("retailerId", retailer._id),
+				)
+				.take(PURGE_CAP);
+			const ledger = await ctx.db
+				.query("creditLedger")
+				.withIndex("by_retailer_created", (q) =>
+					q.eq("retailerId", retailer._id),
+				)
+				.take(PURGE_CAP);
+			if (
+				accounts.length === PURGE_CAP ||
+				lots.length === PURGE_CAP ||
+				ledger.length === PURGE_CAP
+			)
+				done = false;
+			if (accounts.length + lots.length + ledger.length === 0) continue;
+			stores.push({
+				retailerId: retailer._id,
+				storeName: retailer.storeName,
+				accounts: accounts.length,
+				lots: lots.length,
+				ledger: ledger.length,
+			});
+			if (apply !== true || !named.has(retailer._id)) continue;
+			purged.add(retailer._id);
+			for (const row of [...ledger, ...lots, ...accounts])
+				await ctx.db.delete(row._id);
+		}
+		// An id that named nothing is a typo, or a store this run does not
+		// consider unmetered. Throwing here ROLLS THE WHOLE MUTATION BACK —
+		// including the deletes above — so a run is all-or-nothing and a
+		// fat-fingered id can never half-purge the book.
+		const unmatched = [...named].filter((id) => !purged.has(id));
+		if (apply === true && unmatched.length > 0)
+			throw new Error(
+				`These ids are not unmetered stores with credit data in this run, so nothing was deleted: ${unmatched.join(", ")}`,
+			);
+		console.log("[credits] unmetered purge", {
+			applied: apply === true,
+			done,
+			stores,
+		});
+		return { applied: apply === true, done, stores };
 	},
 });

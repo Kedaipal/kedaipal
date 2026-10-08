@@ -873,8 +873,16 @@ export function BillingTab({
 			) : null}
 
 			{/* Credits (T3): every credit in and out — answers "why do I have
-			    37 left?" beside the bills. */}
-			<CreditActivity retailer={retailer} />
+			    37 left?" beside the bills. Gated on the balance the meter above
+			    reads (cache-shared, no second request): an explicit null means
+			    this reader has no credits to account for — an UNMETERED admin
+			    store (z8r3fdp4er), or a teammate without the Credits grant —
+			    and an empty "Nothing yet" card is worse than no card.
+			    `undefined` is NOT that answer, it's the read in flight: hiding
+			    on it too made every METERED store (so every seller) pop this
+			    card in after load instead of showing the skeleton it owns. The
+			    rarer unmetered reader trades a brief skeleton for that. */}
+			{creditBalance !== null ? <CreditActivity retailer={retailer} /> : null}
 
 			{/* History */}
 			{history.length > 0 ? (

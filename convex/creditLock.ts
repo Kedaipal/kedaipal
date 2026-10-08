@@ -75,6 +75,7 @@ import {
 	orderCreditFunded,
 	ordersAwaitingCredit,
 	sellerRefundsLeft,
+	storeIsMetered,
 } from "./lib/credits";
 import {
 	type SellerCustomer,
@@ -147,14 +148,17 @@ export async function resolveCreditGate(
 		.first();
 	const status = sub?.status ?? null;
 	const unlockRoute = creditUnlockRoute(status);
+	// A Kedaipal admin CALLER is never gated (see the doc above) — identity,
+	// not store ownership, so it also covers white-glove act-as.
 	if (await isAdmin(ctx)) return openGate(unlockRoute);
-	if (
-		creditLockExempt({
-			status,
-			comped: sub?.comped === true,
-			ownerIsAdmin: storeOwnerIsAdmin(retailer),
-		})
-	)
+	// An admin's own STORE is UNMETERED (z8r3fdp4er): it holds no balance, so
+	// there is nothing to be at zero. `projectedCredits` below would answer
+	// null and reach the same open gate, but a gate resolver should say where
+	// it fails open, not make the reader follow three hops to find out.
+	if (!storeIsMetered({ ownerIsAdmin: storeOwnerIsAdmin(retailer) }))
+		return openGate(unlockRoute);
+	// SPONSORED: comped, or the missing-subscription fail-safe.
+	if (creditLockExempt({ status, comped: sub?.comped === true }))
 		return openGate(unlockRoute);
 	const account = await loadCreditAccount(ctx, retailer._id);
 	if (!account) return openGate(unlockRoute);

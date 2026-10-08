@@ -13,6 +13,9 @@ import {
 } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { ADMIN_STORE_LIST_LIMIT } from "./lib/adminDirectory";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -2056,5 +2059,405 @@ describe("billing past-due WhatsApp (z8r3fdg3mh)", () => {
 		// Both ladder stages ran (see the recovery-chain suite) and neither
 		// spent a template. WhatsApp is the lock moment only.
 		expect(await waJobs(t)).toHaveLength(0);
+	});
+});
+
+describe("issueInvoice — replacing a mis-tiered bill (z8r3fdpm2p)", () => {
+	async function seedStore(t: ReturnType<typeof setup>, slug: string) {
+		await t
+			.withIdentity({ subject: `u_${slug}` })
+			.mutation(api.retailers.createRetailer, {
+				storeName: `Store ${slug}`,
+				slug,
+			});
+		return t.run(async (ctx) => {
+			const r = await ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", slug))
+				.first();
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", r!._id))
+				.first();
+			return { retailerId: r!._id, subId: sub!._id };
+		});
+	}
+
+	const openBill = (t: ReturnType<typeof setup>, retailerId: Id<"retailers">) =>
+		t.run((ctx) =>
+			ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.filter((q) => q.eq(q.field("status"), "pending"))
+				.first(),
+		);
+
+	test("still refuses a second bill when no replacement is named", async () => {
+		// Two live Pay-now links on one store is a double payment waiting to
+		// happen — the guard only yields to an explicit replacement.
+		const t = setup();
+		const { retailerId } = await seedStore(t, "rep-dup");
+		await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		await expect(
+			asAdmin(t).mutation(api.invoices.issueInvoice, {
+				retailerId,
+				plan: "starter",
+				billingCycle: "monthly",
+				founding: false,
+			}),
+		).rejects.toThrow(/already has a pending invoice/);
+	});
+
+	test("voids the named bill and issues the corrected one in one go", async () => {
+		const t = setup();
+		const { retailerId } = await seedStore(t, "rep-swap");
+		await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		const wrong = await openBill(t, retailerId);
+
+		const res = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "starter",
+			billingCycle: "monthly",
+			founding: false,
+			replacePendingId: wrong!._id,
+		});
+
+		expect(res.replaced?.invoiceNumber).toBe(wrong!.invoiceNumber);
+		const voided = await t.run((ctx) => ctx.db.get(wrong!._id));
+		expect(voided?.status).toBe("void");
+		// Exactly one bill open afterwards, and it's the corrected tier.
+		const open = await openBill(t, retailerId);
+		expect(open?._id).toBe(res.invoiceId);
+		expect(open?.plan).toBe("starter");
+	});
+
+	test("refuses a STALE id rather than voiding whatever is open now", async () => {
+		// The page was looking at a bill that has since been settled, voided or
+		// replaced. Falling through would void someone else's bill.
+		const t = setup();
+		const { retailerId } = await seedStore(t, "rep-stale");
+		await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		const first = await openBill(t, retailerId);
+		await asAdmin(t).mutation(api.invoices.voidInvoice, {
+			invoiceId: first!._id,
+		});
+		await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		const current = await openBill(t, retailerId);
+
+		await expect(
+			asAdmin(t).mutation(api.invoices.issueInvoice, {
+				retailerId,
+				plan: "starter",
+				billingCycle: "monthly",
+				founding: false,
+				replacePendingId: first!._id,
+			}),
+		).rejects.toThrow(/no longer the open one/);
+		// …and the real open bill is untouched.
+		const after = await t.run((ctx) => ctx.db.get(current!._id));
+		expect(after?.status).toBe("pending");
+	});
+
+	/** A renewal bill with a saved card armed — the only shape that ever had
+	 * an auto-charge scheduled against it. */
+	async function seedArmedRenewal(
+		t: ReturnType<typeof setup>,
+		slug: string,
+	) {
+		const { retailerId, subId } = await seedStore(t, slug);
+		await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		const bill = await openBill(t, retailerId);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(bill!._id, { origin: "auto_renewal" });
+			await ctx.db.patch(subId, {
+				autoRenew: {
+					provider: "hitpay" as const,
+					method: "card",
+					attachedAt: Date.now(),
+				},
+			});
+		});
+		return { retailerId, billId: bill!._id };
+	}
+
+	test("a CHEAPER correction inherits the renewal's card charge", async () => {
+		// The seller already mandated the larger amount, so charging the smaller
+		// one stays inside it — and spares them a bill nothing would pay.
+		const t = setup();
+		const { retailerId, billId } = await seedArmedRenewal(t, "rep-cheaper");
+		const res = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "starter",
+			billingCycle: "monthly",
+			founding: false,
+			replacePendingId: billId,
+		});
+		expect(res.replaced?.keptAutoCharge).toBe(true);
+	});
+
+	test("a DEARER correction never charges the card on an admin's say-so", async () => {
+		// However the change was agreed, Kedaipal does not charge itself up
+		// (Zaki, 7 Oct 2026). The bill still carries its Pay-now link.
+		const t = setup();
+		const { retailerId, billId } = await seedArmedRenewal(t, "rep-dearer");
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, {
+				enterprise: {
+					baseFeeMinor: 88_800,
+					currency: "MYR" as const,
+					includedCredits: 1500,
+					overageRateMinor: 60,
+					blockSize: 5000,
+					contactName: "Someone",
+					setBy: ADMIN,
+					setAt: Date.now(),
+				},
+			});
+		});
+		const res = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "enterprise",
+			billingCycle: "monthly",
+			founding: false,
+			replacePendingId: billId,
+		});
+		expect(res.replaced?.keptAutoCharge).toBe(false);
+	});
+
+	test("refuses while a card charge hasn't reported back", async () => {
+		const t = setup();
+		const { retailerId, subId } = await seedStore(t, "rep-inflight");
+		await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		const bill = await openBill(t, retailerId);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(subId, {
+				autoRenew: {
+					provider: "hitpay" as const,
+					method: "card",
+					attachedAt: Date.now(),
+					lastChargeAttemptAt: Date.now(),
+				},
+			});
+		});
+
+		await expect(
+			asAdmin(t).mutation(api.invoices.issueInvoice, {
+				retailerId,
+				plan: "starter",
+				billingCycle: "monthly",
+				founding: false,
+				replacePendingId: bill!._id,
+			}),
+		).rejects.toThrow(/hasn't reported back yet/);
+		// The bill it would have voided is still standing.
+		const after = await t.run((ctx) => ctx.db.get(bill!._id));
+		expect(after?.status).toBe("pending");
+	});
+});
+
+describe("replace + the dunning ladder (review finding, 7 Oct)", () => {
+	/** An active store, a DECLINED renewal: the attempt stamp is cleared (so
+	 * the replace is allowed) and a retry is standing. This is the commonest
+	 * state in which an admin reaches for a correction. */
+	async function seedDeclinedRenewal(
+		t: ReturnType<typeof setup>,
+		slug: string,
+	) {
+		await t
+			.withIdentity({ subject: `u_${slug}` })
+			.mutation(api.retailers.createRetailer, {
+				storeName: `Store ${slug}`,
+				slug,
+			});
+		const { retailerId, subId } = await t.run(async (ctx) => {
+			const r = await ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", slug))
+				.first();
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", r!._id))
+				.first();
+			return { retailerId: r!._id, subId: sub!._id };
+		});
+		await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		const bill = await t.run((ctx) =>
+			ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.filter((q) => q.eq(q.field("status"), "pending"))
+				.first(),
+		);
+		const now = Date.now();
+		await t.run(async (ctx) => {
+			await ctx.db.patch(bill!._id, { origin: "auto_renewal" });
+			await ctx.db.patch(subId, {
+				status: "active",
+				currentPeriodStart: now - 20 * 24 * 60 * 60 * 1000,
+				currentPeriodEnd: now + 10 * 24 * 60 * 60 * 1000,
+				autoRenew: {
+					provider: "hitpay" as const,
+					method: "card",
+					attachedAt: now,
+					// What `recordChargeFailure` leaves behind on a decline: the
+					// attempt stamp CLEARED, a retry standing.
+					failedAttempts: 1,
+					nextRetryAt: now - 1000,
+					lastChargeError: "declined",
+				},
+				// An Enterprise contract, so the dearer replacement is reachable.
+				enterprise: {
+					baseFeeMinor: 88_800,
+					currency: "MYR" as const,
+					includedCredits: 1500,
+					overageRateMinor: 60,
+					blockSize: 5000,
+					contactName: "Someone",
+					setBy: ADMIN,
+					setAt: now,
+				},
+			});
+		});
+		return { retailerId, subId, billId: bill!._id };
+	}
+
+	test("a DEARER replacement leaves no retry for the sweep to charge", async () => {
+		// The bug: `recordChargeFailure` clears the stamp but leaves
+		// `nextRetryAt`, so `autoChargeIdle` passes and the replace is allowed —
+		// then two days later the sweep finds `retryDue` plus a pending bill
+		// (it checks no origin, and nor does `chargeDueRenewal`) and charges the
+		// card the INCREASED amount the form promised it never would.
+		const t = setup();
+		const { retailerId, billId } = await seedDeclinedRenewal(t, "dun-dearer");
+
+		const res = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "enterprise",
+			billingCycle: "monthly",
+			founding: false,
+			replacePendingId: billId,
+		});
+		expect(res.replaced?.keptAutoCharge).toBe(false);
+
+		const sweep = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(sweep.autoChargeRetries).toBe(0);
+	});
+
+	test("voiding a renewal takes its dunning ladder with it", async () => {
+		// Same rule by the other door: the ladder counts failures against ONE
+		// bill, so carrying it over starts the next renewal mid-ladder.
+		const t = setup();
+		const { subId, billId } = await seedDeclinedRenewal(t, "dun-void");
+		await asAdmin(t).mutation(api.invoices.voidInvoice, { invoiceId: billId });
+		const sub = await t.run((ctx) => ctx.db.get(subId));
+		expect(sub?.autoRenew?.nextRetryAt).toBeUndefined();
+		expect(sub?.autoRenew?.failedAttempts).toBeUndefined();
+		// The mandate itself survives — only the ladder was about the bill.
+		expect(sub?.autoRenew?.method).toBe("card");
+	});
+});
+
+describe("the billing picker and the sellers directory list the same book (z8r3fdpm2p)", () => {
+	test("both surfaces take the SAME cap — no second hardcoded number", async () => {
+		// They disagreed: 500 in the directory against a bare 200 here. The
+		// picker is newest-first, so past 200 the OLDEST stores vanished from
+		// it while the seller sheet still reached them — and the Enterprise
+		// contract is reachable from both, so one door could not see a store
+		// the other could.
+		const t = setup();
+		const made: string[] = [];
+		for (let i = 0; i < 3; i++) {
+			const slug = `cap-store-${i}`;
+			await t
+				.withIdentity({ subject: `u_cap_${i}` })
+				.mutation(api.retailers.createRetailer, {
+					storeName: `Cap Store ${i}`,
+					slug,
+				});
+			made.push(slug);
+		}
+		const picker = await asAdmin(t).query(
+			api.invoices.listRetailersForAdmin,
+			{},
+		);
+		const directory = await asAdmin(t).query(
+			api.admin.listSellersForAdmin,
+			{},
+		);
+		// Every store the directory can reach, the picker can reach.
+		const pickerSlugs = new Set(picker.stores.map((r) => r.slug));
+		for (const s of made) expect(pickerSlugs.has(s)).toBe(true);
+		expect(picker.stores.length).toBe(directory.sellers.length);
+		// Neither surface claims truncation at this size.
+		expect(directory.capped).toBe(false);
+		// Well under the cap, so the picker must not claim to be truncated.
+		expect(picker.capped).toBe(false);
+	});
+
+	test("neither store list may hardcode its own cap", () => {
+		// The behavioural test above CANNOT reach this: at three seeded stores
+		// both queries return everything whatever their cap, so reverting the
+		// picker to `.take(200)` leaves it green (checked). The drift is a
+		// source-level fact, so it is guarded at source level — the house
+		// precedent is `src/lib/convex-read-pattern.test.ts`.
+		const root = join(__dirname);
+		for (const file of ["invoices.ts", "admin.ts"]) {
+			const src = readFileSync(join(root, file), "utf8");
+			for (const [i, line] of src.split("\n").entries()) {
+				// A `.take(<number>)` on the retailers table is the shape that
+				// drifted. Derived caps (`ADMIN_STORE_LIST_LIMIT + 1`) and takes
+				// on other tables are untouched.
+				const take = line.match(/\.take\(\s*(\d+)/);
+				if (!take) continue;
+				const window = src.split("\n").slice(Math.max(0, i - 6), i + 1).join("\n");
+				if (!/query\("retailers"\)/.test(window)) continue;
+				throw new Error(
+					`${file}:${i + 1} caps the store list with the literal ${take[1]} — use ADMIN_STORE_LIST_LIMIT so the billing picker and the sellers directory cannot disagree about which stores exist.`,
+				);
+			}
+		}
+		expect(ADMIN_STORE_LIST_LIMIT).toBeGreaterThan(0);
 	});
 });

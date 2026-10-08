@@ -19,6 +19,25 @@ export type EnterpriseEntry = {
  * 5,000 credits at RM0.60). */
 export const ENTERPRISE_BLOCK_SIZE_DEFAULT = 5000;
 
+/**
+ * A stored contract as the ADMIN console may see it: everything except
+ * `setBy`, a raw Clerk subject that never crosses to the client (the audit log
+ * answers "who"). Generic and rest-based rather than field-by-field, so it is
+ * exhaustive BY CONSTRUCTION — three payloads carry this object now (the
+ * sellers directory, the billing picker and the contract sheet's subject,
+ * z8r3fdpm2p), and the one time it was hand-mapped the per-deal allowances
+ * were left out: reopening a contract showed blank seat and broadcast fields,
+ * so a fee typo-fix was one save away from resetting a live deal to unlimited.
+ * `Omit<>` does not catch that — an optional field dropped from an object
+ * literal still typechecks — but a rest spread cannot drop one at all.
+ */
+export function contractForAdmin<T extends { setBy: string }>(
+	contract: T,
+): Omit<T, "setBy"> {
+	const { setBy: _setBy, ...rest } = contract;
+	return rest;
+}
+
 /** Typo guards — said beside the button, refused by the server. A monthly fee
  * above RM1,000,000 or a block above a million credits is a slipped zero. */
 export const ENTERPRISE_FEE_MAX_MINOR = 100_000_000;

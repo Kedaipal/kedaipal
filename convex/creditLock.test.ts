@@ -643,7 +643,7 @@ describe("the per-order gate", () => {
 		await confirm();
 	});
 
-	test("comped and admin-owned stores are metered but never locked", async () => {
+	test("a comped store is metered but never locked", async () => {
 		const t = setup();
 		const comped = await store(t, { status: "active", plan: "starter", comped: true });
 		const compedOrder = await gatedOrder(t, comped);
@@ -651,8 +651,29 @@ describe("the per-order gate", () => {
 			orderId: compedOrder._id,
 			status: "confirmed",
 		});
+	});
+
+	test("an admin's own store has no balance to lock on (z8r3fdp4er)", async () => {
+		// Unmetered: there is no account to drive to zero — `setBalance` can't
+		// even be used on it, because the adjust lever refuses an unmetered
+		// store. The seller write just works.
+		const t = setup();
 		const own = await store(t, { status: "trialing", plan: "pro" }, ADMIN);
-		const ownOrder = await gatedOrder(t, own);
+		// No credit account at all — that is what unmetered means.
+		expect(
+			await t.run((ctx) =>
+				ctx.db
+					.query("creditAccounts")
+					.withIndex("by_retailer", (q) => q.eq("retailerId", own.retailerId))
+					.first(),
+			),
+		).toBeNull();
+		// And an ORDER write — what the gate actually covers since T3.1, where
+		// `products.archive` no longer does — just works. The order never got a
+		// `creditSeq` (no account ⇒ no debit), so it reads as funded: the gate
+		// failing open by construction rather than by an exemption branch.
+		const ownOrder = await storefrontOrder(t, own.retailerId, own.productId);
+		expect(ownOrder.creditSeq).toBeUndefined();
 		await t.withIdentity({ subject: ADMIN }).mutation(api.orders.updateStatus, {
 			orderId: ownOrder._id,
 			status: "confirmed",

@@ -137,7 +137,7 @@ describe("createUnclaimedStore", () => {
 	test("the directory counts NO seats on it — there is no owner to count", async () => {
 		const t = setup();
 		const { retailerId } = await buildStore(t, { email: VENDOR.email });
-		const before = await t
+		const { sellers: before } = await t
 			.withIdentity(ADMIN)
 			.query(api.admin.listSellersForAdmin, {});
 		expect(before.find((r) => r._id === retailerId)).toMatchObject({
@@ -149,7 +149,7 @@ describe("createUnclaimedStore", () => {
 		await t
 			.withIdentity(VENDOR)
 			.mutation(api.retailers.claimStore, { acceptedLegal: true });
-		const after = await t
+		const { sellers: after } = await t
 			.withIdentity(ADMIN)
 			.query(api.admin.listSellersForAdmin, {});
 		expect(after.find((r) => r._id === retailerId)).toMatchObject({

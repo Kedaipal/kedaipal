@@ -113,11 +113,70 @@ still gets its first invoice.
 | `past_due` | None; a positive leftover is still forfeited | When the invoice is paid (`settleInvoicePaid`) |
 | `on_hold` | None (a technical guard until Off-Season Hold is retired, z8r3fdfuhr) | On resume |
 | `cancelled` | None; purchased credits keep their expiry and work again on resubscribe | On the next paid invoice |
-| **comped**, **admin-owned**, **missing subscription row** | The plan's monthly grant **whatever the status** | — |
+| **comped**, **missing subscription row** | The plan's monthly grant **whatever the status** | — |
+| **admin-owned** | **None — the store is unmetered**, see below | Never |
 
-Comped and admin-owned stores are metered for an honest number and are **never
-locked**. An admin's own store sits in `trialing` forever, so it runs on the
-monthly grant rather than a one-off trial allowance that would never refresh.
+Comped stores are metered for an honest number and are **never locked**: a comp
+can end, so the balance behind it has to be real and visible the whole time.
+
+### Unmetered: an admin's own store (z8r3fdp4er)
+
+A Kedaipal admin's own store is **outside the credit system** — a strictly
+stronger state than "metered but never locked":
+
+| | comped / sponsored | **admin-owned (unmetered)** |
+| --- | --- | --- |
+| Credit account | yes | **none** |
+| Debited per order | yes | **no** |
+| Monthly grant | yes | **no** |
+| Meter + activity UI | yes | **hidden** |
+| Lock | never | never (nothing to lock) |
+
+It used to be metered "so you can see your volume", which put **"200 of 200"
+over a bar with a refresh date** on the one account that has no limit —
+a cap to every eye, whatever the sentence underneath said (Zaki, 6 Oct 2026).
+Volume already lives in Insights and in the admin console.
+
+**The gate is one function**: `regimeFor` (`convex/credits.ts`) answers `null`
+for a store `storeIsMetered` rejects. Every reader and writer of a balance
+funnels through it and already had a `null` branch for a store that no longer
+exists, so the whole behaviour follows from that one answer: no account
+(`ensureCreditAccount`), no debit (`debitCreditForOrder`), no refund
+(`refundCreditForOrder`), no monthly refresh (`rollPeriod`), no balance
+(`projectedCredits` → `balanceView` → `getBalance` → **every meter hides**) and
+no lock (`resolveCreditLock`). Delete the gate and the unmetered tests go red.
+
+Two things the gate does NOT cover, each guarded where it lives:
+
+- `ensureCreditAccount` asks for the regime **before** its existing-row
+  shortcut. A store metered before this change still holds an account; without
+  that ordering it would have kept spending from it.
+- The admin levers (`credits.adminAdjust`, `credits.adminSetGrantOverride`) and
+  `creditPurchases.createTopUp` refuse an unmetered store **by name**
+  (`UNMETERED_STORE_REFUSAL`) instead of falling through to "Store not found".
+
+The admin console reads it too: the seller row prints **"Admin store — not
+metered"** rather than its stale cached figures, and the credit-ledger drawer
+says the same instead of "This store no longer exists" (the same `null` view
+means both — `adminGetAccount` returns an `unmetered` flag to tell them apart).
+
+**Legacy rows** written while such a store was metered are inert — every
+reader asks `regimeFor` *before* touching the account, so the meter hides
+whether or not the rows exist — but they sit below the current usage period
+forever, so `internalRollPeriods` re-selects them on every sweep and can never
+advance them. Clearing them is hygiene, not a correctness fix.
+
+`migrations:purgeUnmeteredCreditData` is **dry run by default**. Deleting
+needs `{"apply":true,"retailerIds":[…]}`, naming the stores the dry run
+reported, and a named id the run does not find unmetered **throws, rolling the
+whole mutation back** — so a run is all-or-nothing.
+
+Why naming, rather than trusting the unmetered check (PR #343 review): the
+check protects the harmless direction of a mis-set `ADMIN_USER_IDS` (an admin
+id missing) and **not the dangerous one**. A paying seller's id wrongly ADDED
+makes their store unmetered, and a purge keyed on that same answer would
+select it by the very same mistake. The dry run's store names are the real
+safety net, so deleting is made to depend on having read them.
 
 ### Plan changes
 
@@ -381,14 +440,14 @@ refusal and the picker's disabled-with-reason line are one author
 | `past_due` | "Your invoice INV-… is overdue. Pay it first…" | **Pay INV-…** (its Pay-now link), else View the invoice |
 | `on_hold` | "Your plan is on Off-Season Hold. Resume it first…" | Resume your plan |
 | `cancelled` | "Your subscription has ended. Choose a plan first…" | Choose a plan |
-| admin's own store | "Kedaipal admin stores aren't billed…" | — |
+| admin's own store (unmetered) | "Kedaipal admin stores aren't metered…" | — |
 | sponsored (comped, or no subscription row) | "Sponsored stores never run out, so there's nothing to top up…" | — |
 
 A teammate reads the same reason addressed to them ("Ask the store owner to…")
 and gets no button: every way out is a billing write, which is the owner's.
-**A Kedaipal admin's own store** is its own refusal (a judgment call beyond the
-ticket): it sits in `trialing` forever and is never locked, so "pick a plan
-first" would be advice it can't take. **A sponsored store** (Zaki, 1 Oct 2026)
+**A Kedaipal admin's own store** is its own refusal: it is unmetered
+(z8r3fdp4er), so there is no balance a pack could add to — and the picker is
+unreachable from the UI anyway, since the meter that opens it is hidden. **A sponsored store** (Zaki, 1 Oct 2026)
 is refused for the same reason — its credits are a meter, never a lock, so a
 pack would be money for nothing; the missing-row fail-safe resolves as comped
 and is refused alongside it. Neither refusal has a way-out button: nothing is
@@ -860,8 +919,8 @@ One `CreditMeter`, two places (one control, one rule):
   the rule in plain words at the foot (monthly credits are used first and reset
   on the 1st — they don't carry over; bought credits are used next and last 12
   months; a cancelled never-accepted order gives its credit back, up to 10 a
-  month). A store that can't buy and holds no bought credits (sponsored, an
-  admin's own, a trial) shows the one tile.
+  month). A store that can't buy and holds no bought credits (sponsored, a
+  trial) shows the one tile. An UNMETERED store shows no meter at all.
 
 **The reset reads as a reset** (Zaki's test round): "300 more on 1 Oct" read as
 300 ADDED; monthly credits go BACK to the allowance. `creditRefreshLabel`

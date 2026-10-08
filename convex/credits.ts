@@ -52,7 +52,9 @@ import {
 	ordersAwaitingCredit,
 	refreshedPlanBalance,
 	sellerRefundsLeft,
+	storeIsMetered,
 	GRANT_LEVER_CONTRACT_REFUSAL,
+	UNMETERED_STORE_REFUSAL,
 } from "./lib/credits";
 import {
 	type BillingCycle,
@@ -110,7 +112,6 @@ async function regimeInputs(
 		// The missing-row fail-safe resolves to Pro in `resolveAccess`.
 		plan: sub?.plan ?? "pro",
 		comped: sub?.comped === true,
-		ownerIsAdmin: storeOwnerIsAdmin(retailer),
 		foundingEligible: foundingPriceEligible({
 			isFoundingMember: retailer.isFoundingMember === true,
 			foundingIntent: sub?.foundingIntent === true,
@@ -125,6 +126,19 @@ async function regimeInputs(
 	};
 }
 
+/**
+ * How this store is granted plan credits — or `null` when the question does
+ * not apply to it.
+ *
+ * `null` is THE gate for an unmetered store (`storeIsMetered`, z8r3fdp4er):
+ * a Kedaipal admin's own store has no credit regime, so it grows no account
+ * (`ensureCreditAccount`), spends nothing per order (`debitCreditForOrder`),
+ * refreshes nothing at a month boundary (`rollPeriod`), reports no balance
+ * (`projectedCredits` → `balanceView` → `getBalance` → every meter) and can
+ * never be locked (`resolveCreditLock`). Every one of those already had a
+ * `null` branch for a store that no longer exists, which is the other reason
+ * this answers `null`. Delete the gate and the unmetered tests go red.
+ */
 async function regimeFor(
 	ctx: AnyCtx,
 	retailerId: Id<"retailers">,
@@ -133,6 +147,8 @@ async function regimeFor(
 ): Promise<CreditRegime | null> {
 	const retailer = await ctx.db.get(retailerId);
 	if (!retailer) return null;
+	if (!storeIsMetered({ ownerIsAdmin: storeOwnerIsAdmin(retailer) }))
+		return null;
 	return creditRegime(await regimeInputs(ctx, retailer, account, now));
 }
 
@@ -388,11 +404,15 @@ export async function ensureCreditAccount(
 	now: number,
 ): Promise<{ account: Account; created: boolean } | null> {
 	const existing = await loadCreditAccount(ctx, retailerId);
+	// The regime is asked FIRST, before the existing-row shortcut: an unmetered
+	// store that still holds a legacy account (one written before z8r3fdp4er,
+	// or before an owner became an admin) must stop being debited the moment
+	// the gate lands, not once its row is purged.
+	const regime = await regimeFor(ctx, retailerId, existing, now);
+	if (!regime) return null;
 	if (existing) {
 		return { account: await rollPeriod(ctx, existing, now), created: false };
 	}
-	const regime = await regimeFor(ctx, retailerId, null, now);
-	if (!regime) return null;
 	const grant = regime.kind === "none" ? 0 : regime.grant;
 	const periodKey = usagePeriodKey(now);
 	const id = await ctx.db.insert("creditAccounts", {
@@ -611,6 +631,9 @@ export async function refundCreditForOrder(
 	const { order, cause, now } = args;
 	const existing = await loadCreditAccount(ctx, order.retailerId);
 	if (!existing) return;
+	// Unmetered (or gone): nothing was spent, so nothing comes back — and a
+	// legacy account is never credited into. Mirrors `ensureCreditAccount`.
+	if (!(await regimeFor(ctx, order.retailerId, existing, now))) return;
 	const history = await ledgerForOrder(ctx, order.retailerId, order._id);
 	const debits = history
 		.filter((r) => r.type === "debit")
@@ -864,10 +887,10 @@ export type CreditBalanceView = {
 	 * compares the new allowance against: "you've had 140 this month, Starter
 	 * includes 100". */
 	ordersThisPeriod: number;
-	/** Why this store is never locked (an admin's own store, or a sponsored
-	 * one), or null when the lock applies. The meter says it instead of the
-	 * status line a billed store would read — an admin store sitting in
-	 * `trialing` or `past_due` is never asked to pay (T3 test round). */
+	/** Why this store is never locked (it is sponsored), or null when the lock
+	 * applies. The meter says it instead of the status line a billed store
+	 * would read — a comped store sitting in `trialing` or `past_due` is never
+	 * asked to pay (T3 test round). An unmetered store has no view at all. */
 	lockExempt: CreditLockExemption | null;
 	/**
 	 * LIVE orders waiting on credits (Credits T3.1), capped at 99 — the number
@@ -1010,7 +1033,6 @@ async function balanceView(
 			q.eq("retailerId", retailerId).eq("monthStart", monthStartMyt(now)),
 		)
 		.unique();
-	const retailer = await ctx.db.get(retailerId);
 	const sub = await ctx.db
 		.query("subscriptions")
 		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
@@ -1033,7 +1055,6 @@ async function balanceView(
 		lockExempt: creditLockExemption({
 			status: sub?.status ?? null,
 			comped: sub?.comped === true,
-			ownerIsAdmin: retailer ? storeOwnerIsAdmin(retailer) : false,
 		}),
 		// One extra read only when the arithmetic says something COULD be
 		// waiting, which for a store in credit is never.
@@ -1105,6 +1126,10 @@ export const listActivity = query({
 	handler: async (ctx, { retailerId, paginationOpts }) => {
 		const retailer = await creditsStore(ctx, retailerId);
 		if (!retailer) return { page: [], isDone: true, continueCursor: "" };
+		// Unmetered: nothing moves, and whatever legacy rows the table still
+		// holds are not this store's story any more (z8r3fdp4er).
+		if (!storeIsMetered({ ownerIsAdmin: storeOwnerIsAdmin(retailer) }))
+			return { page: [], isDone: true, continueCursor: "" };
 		const result = await ctx.db
 			.query("creditLedger")
 			.withIndex("by_retailer_created", (q) =>
@@ -1144,6 +1169,7 @@ export const adminGetAccount = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }) => {
 		await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
 		const account = await loadCreditAccount(ctx, retailerId);
 		const view = await balanceView(ctx, retailerId, account, Date.now());
 		const lots = await ctx.db
@@ -1152,7 +1178,12 @@ export const adminGetAccount = query({
 				q.eq("retailerId", retailerId).eq("open", true),
 			)
 			.take(50);
-		return { view, account, lots };
+		// A null view has two causes and the drawer must tell them apart: the
+		// store is gone, or credits don't apply to it (z8r3fdp4er).
+		const unmetered =
+			retailer !== null &&
+			!storeIsMetered({ ownerIsAdmin: storeOwnerIsAdmin(retailer) });
+		return { view, account, lots, unmetered };
 	},
 });
 
@@ -1209,6 +1240,8 @@ export const adminAdjust = mutation({
 		const adminSubject = await requireAdmin(ctx);
 		const retailer = await ctx.db.get(retailerId);
 		if (!retailer) throw new ConvexError("Store not found");
+		if (!storeIsMetered({ ownerIsAdmin: storeOwnerIsAdmin(retailer) }))
+			throw new ConvexError(UNMETERED_STORE_REFUSAL);
 		if (!Number.isInteger(amount) || amount === 0)
 			throw new ConvexError(
 				"Enter a whole number of credits — positive to add, negative to take away.",
@@ -1376,6 +1409,8 @@ export const adminSetGrantOverride = mutation({
 		const adminSubject = await requireAdmin(ctx);
 		const retailer = await ctx.db.get(retailerId);
 		if (!retailer) throw new ConvexError("Store not found");
+		if (!storeIsMetered({ ownerIsAdmin: storeOwnerIsAdmin(retailer) }))
+			throw new ConvexError(UNMETERED_STORE_REFUSAL);
 		const problem = grant === null ? null : grantOverrideProblem(grant);
 		if (problem) throw new ConvexError(problem);
 		const sub = await ctx.db

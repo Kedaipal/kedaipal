@@ -334,10 +334,12 @@ describe("the meter's state line", () => {
 		expect(creditStateLine(base)).toBeNull();
 	});
 
-	test("an admin's own store is never asked to pay — whatever its status says", () => {
+	test("a sponsored store is never asked to pay — whatever its status says", () => {
+		// An admin's own store has no line here at all: it is unmetered
+		// (z8r3fdp4er), so there is no meter for a line to sit under.
 		for (const status of ["trialing", "past_due", "active"] as const) {
-			const line = creditStateLine({ ...base, status, exempt: "admin_store" });
-			expect(line).toMatch(/^Kedaipal admin stores aren't billed/);
+			const line = creditStateLine({ ...base, status, exempt: "sponsored" });
+			expect(line).toMatch(/^Sponsored stores are never locked/);
 			expect(line).not.toMatch(/Pay your invoice|Pick a plan/);
 		}
 	});
