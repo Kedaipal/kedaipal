@@ -29,12 +29,17 @@ export function focusFirstInvalidField(
 	const target =
 		control ?? formEl.querySelector<HTMLElement>("[data-form-error]");
 	if (!target) return false;
-	// Optional-called: jsdom doesn't implement it, and this now runs from the
-	// wizard's own rAF where a throw is an unhandled error rather than a
-	// failed assertion. Scrolling is the nicety; focusing is the job.
-	target.scrollIntoView?.({ behavior: "smooth", block: "center" });
-	// Focus only a real control — the smooth scroll already centred it, so skip
-	// focus's own instant jump (which would fight the animation).
+	// INSTANT, not smooth. Measured in Chrome on the product form: a smooth
+	// scrollIntoView over a long distance moved the page 0px, while the same
+	// call without `behavior` jumped correctly — so every form's "take me to
+	// the error" was focusing an input 2000px off-screen and looking, to the
+	// seller, like the button did nothing (z8r3fdcw72 visual pass; the bug is
+	// older than that ticket and affects every `submitThenFocusError` caller).
+	// Optional-called because jsdom doesn't implement it and this also runs
+	// from the wizard's rAF, where a throw is an unhandled error.
+	target.scrollIntoView?.({ block: "center" });
+	// Focus only a real control — scrollIntoView has already centred it, so
+	// skip focus's own second jump.
 	if (control?.matches("input, textarea, select, [contenteditable='true']")) {
 		control.focus({ preventScroll: true });
 	}

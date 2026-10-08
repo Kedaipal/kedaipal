@@ -14,7 +14,7 @@ import type { api } from "../../../convex/_generated/api";
 import { formatEventBadge } from "../../../convex/lib/productEvent";
 import { usePromoClock } from "../../hooks/usePromoClock";
 import { bookingPriceSuffix, weekendRateSuffix } from "../../lib/booking-dates";
-import { formatClaimCountdown } from "../../lib/countdown";
+import { formatTimeLeft } from "../../lib/countdown";
 import { formatPrice } from "../../lib/format";
 import {
 	effectivePriceFrom,
@@ -311,8 +311,8 @@ export function ProductCard({
 											product.promoPriceFrom !== undefined
 												? `${formatPrice(product.promoPriceFrom, product.currency)} `
 												: ""
-										}in ${formatClaimCountdown(countdownAt - promoClock)}`
-									: formatClaimCountdown(countdownAt - promoClock)}
+										}in ${formatTimeLeft(countdownAt - promoClock)}`
+									: formatTimeLeft(countdownAt - promoClock)}
 							</span>
 						) : (
 							<span className="font-medium">

@@ -170,3 +170,27 @@ describe("ClaimTimerBar", () => {
 		expect(screen.getByTestId("countdown-cut").dataset.stage).toBe("ok");
 	});
 });
+
+describe("a long window reads as hours, not hundreds of minutes", () => {
+	test("a 10-hour promotion says 10h 0m, never 599:xx", () => {
+		vi.useFakeTimers();
+		// The strip was written for a 15-minute claim and printed raw m:ss. A
+		// promotion can run for a DAY, and the band read "638:31" live on the
+		// product page — a number no buyer can decode. The product card already
+		// used the human format, so the two surfaces disagreed as well.
+		render(
+			<ClaimTimerBar
+				expiresAt={Date.now() + 10 * 60 * 60_000}
+				windowMinutes={24 * 60}
+				onExpired={vi.fn()}
+			/>,
+		);
+		expect(print().getByText("10h 0m")).toBeTruthy();
+	});
+
+	test("under the hour it still ticks in m:ss — that's the urgency zone", () => {
+		vi.useFakeTimers();
+		renderBar(9 * 60_000 + 5_000);
+		expect(print().getByText("9:05")).toBeTruthy();
+	});
+});

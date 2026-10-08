@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import {
 	type CountdownStage,
 	countdownStage,
-	formatCountdown,
+	formatTimeLeft,
 } from "../../lib/countdown";
 import { cn } from "../../lib/utils";
 
@@ -119,7 +119,10 @@ export function CountdownStrip({
 	const done = remaining <= 0 || sealed === 0;
 	const cutPct = `${(cut * 100).toFixed(1)}%`;
 	const sealedPct = `${(sealed * 100).toFixed(1)}%`;
-	const digits = formatCountdown(remaining);
+	// The HUMAN format, not the raw m:ss primitive: a promotion can run for a
+	// day, and a band reading "638:31" tells a buyer nothing (seen live). The
+	// product card already spoke this way, so the two surfaces now agree.
+	const digits = formatTimeLeft(remaining);
 
 	// The GHOST's digits keep the stage colour; its label does not. By the
 	// final minute the fill is nearly gone, so a red that lives only in the
@@ -130,9 +133,15 @@ export function CountdownStrip({
 	// Rendered for real, a 2px split read as TWO washed-out lines and the final
 	// minute (the one that matters) had no legible clock at all. What cut paper
 	// actually does is MISREGISTER the print: the halves slide a hair apart and
-	// sideways, so the word stays one word. Hence ±1px, a 2° shear and a
-	// foreground-derived grey rather than muted-foreground, which was too faint
-	// to read against the opening.
+	// sideways, so the word stays one word. Hence ±1px and a 2° shear.
+	//
+	// The opacity is HIGH on purpose. Half-opacity was tuned when the paper was
+	// white and the ink dark, where fading read as a smudge; on the dark band
+	// the same figure is light ink on near-black and fading reads as GONE —
+	// rendered side by side, the final minute's red clock was all but invisible
+	// (z8r3fdr60v, second visual pass). Misregistering print doesn't thin the
+	// ink, so the dirt comes from the offset, the shear and the blur, never
+	// from transparency.
 	const ghostBase =
 		"pointer-events-none absolute inset-0 flex items-center justify-center gap-2 whitespace-nowrap text-countdown-ink";
 	// Inline, not `blur-[0.3px]`: Tailwind v4 emits NOTHING for a sub-pixel
@@ -229,7 +238,7 @@ export function CountdownStrip({
 				)}
 				style={{
 					clipPath: done ? "inset(0 0 50% 0)" : `inset(0 0 50% ${sealedPct})`,
-					opacity: 0.5,
+					opacity: 0.88,
 					filter: SMUDGE,
 				}}
 				aria-hidden
@@ -249,7 +258,7 @@ export function CountdownStrip({
 				)}
 				style={{
 					clipPath: done ? "inset(50% 0 0 0)" : `inset(50% 0 0 ${sealedPct})`,
-					opacity: 0.45,
+					opacity: 0.82,
 					filter: SMUDGE,
 				}}
 				aria-hidden

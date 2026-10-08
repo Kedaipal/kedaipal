@@ -13,11 +13,18 @@ export function formatCountdown(remainingMs: number): string {
 }
 
 /**
- * Claim windows span 15 minutes to days, so above an hour the seconds are
- * noise: "23h 59m" ≥ 1h, "14:32" below it (the urgency zone, where a ticking
- * seconds column earns its place).
+ * The house "time left" format, shared by every countdown surface. Windows
+ * span minutes to days, so above an hour the seconds are noise: "23h 59m"
+ * ≥ 1h, "14:32" below it (the urgency zone, where a ticking seconds column
+ * earns its place).
+ *
+ * Named for the claim bar it was written for, back when 15 minutes was the
+ * only window in the product. A promotion can run for a DAY (z8r3fdcw72) and
+ * the raw `formatCountdown` printed that as "1439:59" — so this is what any
+ * countdown shows a human, and `formatCountdown` is the minutes-and-seconds
+ * primitive underneath it.
  */
-export function formatClaimCountdown(remainingMs: number): string {
+export function formatTimeLeft(remainingMs: number): string {
 	const total = Math.max(0, Math.floor(remainingMs / 1000));
 	if (total >= 3600) {
 		const h = Math.floor(total / 3600);
