@@ -271,6 +271,12 @@ export type PlanFeatures = {
 	 * add-on SKU). Gates only ENABLING the toggle — disabling and clearing the
 	 * number stay un-gated so a downgraded seller is never trapped. */
 	waOrderAlerts: boolean;
+	/** Promo price + flash sale (z8r3fdcw72): SETTING a promo config on a
+	 * product. Gates only the seller configuring — an active promo on a
+	 * downgraded store stops APPLYING (effective price = list, badge reads
+	 * "Promo paused (Pro)") but the config is paused, never deleted, so an
+	 * upgrade revives it untouched. */
+	promo: boolean;
 };
 
 export type PlanFeature = keyof PlanFeatures;
@@ -287,6 +293,7 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		onlinePayments: false,
 		events: false,
 		waOrderAlerts: false,
+		promo: false,
 	},
 	pro: {
 		crm: true,
@@ -299,6 +306,7 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		onlinePayments: true,
 		events: true,
 		waOrderAlerts: true,
+		promo: true,
 	},
 	// Enterprise gets everything Pro has. Its extras are seats (above) and
 	// terms (the contract); multi-outlet and priority support are sold as
@@ -315,6 +323,7 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		onlinePayments: true,
 		events: true,
 		waOrderAlerts: true,
+		promo: true,
 	},
 };
 
