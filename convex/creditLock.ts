@@ -377,7 +377,9 @@ export const assertCreditsForOrder = internalQuery({
 /** Whether cancelling THIS order gives its credit back — so the cancel dialog
  * can say so before the tap (no hidden rule). */
 export type CancelCreditOutlook =
-	| { kind: "refund"; refundsLeftAfter: number }
+	/** `gated` ⇒ the credit comes back and this cancel costs no allowance, so
+	 * the dialog must not quote a remaining count that won't move. */
+	| { kind: "refund"; refundsLeftAfter: number; gated?: true }
 	| { kind: "kept"; reason: "accepted" | "allowance_used" }
 	/** No credit was ever used for this order (placed before credits). */
 	| { kind: "not_charged" };
@@ -408,13 +410,22 @@ export const cancelOutlook = query({
 			account?.sellerRefunds?.periodKey === periodKey
 				? account.sellerRefunds.count
 				: 0;
+		const gated = !orderCreditFunded(
+			order.creditSeq,
+			account?.fundedThrough ?? 0,
+		);
 		const decision = cancelRefundDecision({
 			cause: "seller",
 			statusAtCancel: order.status,
 			sellerRefundsUsed: used,
+			gated,
 		});
-		return decision.refund
-			? { kind: "refund", refundsLeftAfter: sellerRefundsLeft(used + 1) }
-			: { kind: "kept", reason: decision.reason };
+		if (!decision.refund) return { kind: "kept", reason: decision.reason };
+		// A gated cancel spends no allowance, so the count it would quote is
+		// the count it already had — say nothing about it rather than imply
+		// this cancel used one up.
+		return gated
+			? { kind: "refund", refundsLeftAfter: sellerRefundsLeft(used), gated }
+			: { kind: "refund", refundsLeftAfter: sellerRefundsLeft(used + 1) };
 	},
 });

@@ -244,6 +244,70 @@ describe("cancelRefundDecision — only an order that never got going", () => {
 		expect(sellerRefundsLeft(0)).toBe(SELLER_CANCEL_REFUNDS_PER_PERIOD);
 		expect(sellerRefundsLeft(SELLER_CANCEL_REFUNDS_PER_PERIOD + 3)).toBe(0);
 	});
+
+	// Zaki, 9 Oct 2026. `NEVER_ACCEPTED_STATUSES` is a proxy for "the seller
+	// got something out of this order", and auto-confirm invalidated it:
+	// `confirmedAtCreate` fires on every storefront order that left a phone
+	// while the confirm template is configured, so `pending` is nearly
+	// unreachable in production and every seller cancel read as "accepted".
+	// Once T3.1 made unfunded orders invisible, that charged sellers a credit
+	// for an order they were never allowed to open — and cancelling, the
+	// gate's own prescribed way out, was the act that burned it.
+	describe("an order the seller was never allowed to SEE", () => {
+		test("always refunds, whatever status auto-confirm gave it", () => {
+			for (const statusAtCancel of [
+				"pending",
+				"confirmed",
+				"packed",
+				"booking_requested",
+			]) {
+				expect(
+					cancelRefundDecision({
+						cause: "seller",
+						statusAtCancel,
+						sellerRefundsUsed: 0,
+						gated: true,
+					}),
+					statusAtCancel,
+				).toEqual({ refund: true, countsAgainstAllowance: false });
+			}
+		});
+
+		test("never spends an allowance, even with the month's refunds used up", () => {
+			// Otherwise a seller in a bad month goes straight back to paying for
+			// orders they cannot see — the exact thing this closes.
+			expect(
+				cancelRefundDecision({
+					cause: "seller",
+					statusAtCancel: "confirmed",
+					sellerRefundsUsed: SELLER_CANCEL_REFUNDS_PER_PERIOD,
+					gated: true,
+				}),
+			).toEqual({ refund: true, countsAgainstAllowance: false });
+		});
+
+		test("a FUNDED order is judged exactly as before", () => {
+			// The gate arm must not loosen the ordinary rule: an order the
+			// seller could see and accepted still keeps its credit.
+			expect(
+				cancelRefundDecision({
+					cause: "seller",
+					statusAtCancel: "confirmed",
+					sellerRefundsUsed: 0,
+					gated: false,
+				}),
+			).toEqual({ refund: false, reason: "accepted" });
+			// Absent `gated` reads as funded — the grandfathered orders that
+			// never had a creditSeq.
+			expect(
+				cancelRefundDecision({
+					cause: "seller",
+					statusAtCancel: "confirmed",
+					sellerRefundsUsed: 0,
+				}),
+			).toEqual({ refund: false, reason: "accepted" });
+		});
+	});
 });
 
 describe("topUpBlock — credits top up a live subscription, never replace one", () => {

@@ -184,8 +184,31 @@ export function cancelRefundDecision(args: {
 	statusAtCancel: string;
 	/** Seller refunds already given this usage period. */
 	sellerRefundsUsed: number;
+	/**
+	 * The order is still WAITING ON CREDITS (Credits T3.1) — its own credit was
+	 * never funded, so the seller has not been allowed to see it.
+	 */
+	gated?: boolean;
 }): CancelRefundDecision {
 	if (args.cause !== "seller")
+		return { refund: true, countsAgainstAllowance: false };
+	// A GATED order always gives its credit back, and never spends an
+	// allowance (Zaki, 9 Oct 2026).
+	//
+	// `NEVER_ACCEPTED_STATUSES` is a PROXY for "the seller got something out of
+	// this order", and auto-confirm quietly invalidated it: `confirmedAtCreate`
+	// fires whenever the buyer left a phone and the confirm template is
+	// configured, which is every storefront order in production. So `pending`
+	// is nearly unreachable, every seller cancel reads as "accepted", and once
+	// T3.1 made unfunded orders INVISIBLE the rule started charging sellers a
+	// credit for an order they were never allowed to open — with cancelling,
+	// the gate's own prescribed way out, as the act that burned it.
+	//
+	// Testing the gate directly rather than widening the status set, because
+	// the question was never really about status: a gated order delivers zero
+	// value by construction. Not exploitable either — the only way to earn the
+	// refund is to be denied the order first, and you end up with no order.
+	if (args.gated === true)
 		return { refund: true, countsAgainstAllowance: false };
 	if (!NEVER_ACCEPTED_STATUSES.has(args.statusAtCancel))
 		return { refund: false, reason: "accepted" };

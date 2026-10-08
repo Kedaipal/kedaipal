@@ -287,6 +287,12 @@ export function cancelCreditLine(outlook: CancelCreditOutlook): string | null {
 		case "not_charged":
 			return null;
 		case "refund":
+			// A GATED order's credit always comes back and costs no allowance
+			// (Credits T3.1): the seller was never allowed to open it, so there
+			// is no monthly count to quote and quoting one would imply this
+			// cancel spent it.
+			if (outlook.gated)
+				return "The credit it used comes back to you — you were never able to open this one.";
 			return outlook.refundsLeftAfter > 0
 				? `The credit it used comes back to you (${outlook.refundsLeftAfter} more this month).`
 				: "The credit it used comes back to you — the last one this month.";

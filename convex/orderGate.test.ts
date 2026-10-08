@@ -571,3 +571,115 @@ describe("a gated BOOKING never shows the guest on the seller's calendar", () =>
 		expect(sheet[0].customerName).toBe("Funded Guest");
 	});
 });
+
+/**
+ * Cancelling an order the seller was never allowed to open (Zaki, 9 Oct 2026).
+ *
+ * `NEVER_ACCEPTED_STATUSES` is a proxy for "the seller got something out of
+ * this order", and auto-confirm invalidated it: `confirmedAtCreate` fires on
+ * every storefront order that left a phone while the confirm template is
+ * configured, so `pending` is nearly unreachable in production. Every seller
+ * cancel therefore read as "accepted" and kept the credit — which, once T3.1
+ * made unfunded orders invisible, charged sellers for an order they could not
+ * see, with cancelling (the gate's own prescribed way out) as the act that
+ * burned it.
+ */
+describe("cancelling a gated order gives the credit back", () => {
+	test("the credit returns and the queue position goes with it", async () => {
+		const t = setup();
+		const s = await seed(t);
+		await drain(t, s.retailerId);
+		const gated = await placeOrder(t, s.retailerId, s.productId);
+
+		const before = await t.run((ctx) =>
+			ctx.db
+				.query("creditAccounts")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", s.retailerId))
+				.first(),
+		);
+		// Born into debt, holding position 1, which nothing has funded.
+		expect(before?.planBalance).toBe(-1);
+		expect(before?.debitSeq).toBe(1);
+		expect(before?.fundedThrough).toBe(0);
+
+		await t
+			.withIdentity({ subject: OWNER })
+			.mutation(api.orders.updateStatus, {
+				orderId: gated._id,
+				status: "cancelled",
+			});
+
+		const after = await t.run((ctx) =>
+			ctx.db
+				.query("creditAccounts")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", s.retailerId))
+				.first(),
+		);
+		expect(after?.planBalance, "the credit comes back").toBe(0);
+		// AND the position is released, which is the review's dead-hole bug
+		// closing itself: the refund runs through `applyEntry` with +1, and
+		// `fundingAdvance` walks the watermark past the freed position. Without
+		// it the store would owe nothing yet still have a position that eats
+		// the first credit of the next pack.
+		expect(after?.fundedThrough, "no dead position left behind").toBe(1);
+	});
+
+	test("it costs no monthly allowance — a bad month can't start charging again", async () => {
+		const t = setup();
+		const s = await seed(t);
+		await drain(t, s.retailerId);
+		const gated = await placeOrder(t, s.retailerId, s.productId);
+		await t
+			.withIdentity({ subject: OWNER })
+			.mutation(api.orders.updateStatus, {
+				orderId: gated._id,
+				status: "cancelled",
+			});
+		const account = await t.run((ctx) =>
+			ctx.db
+				.query("creditAccounts")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", s.retailerId))
+				.first(),
+		);
+		expect(account?.sellerRefunds?.count ?? 0).toBe(0);
+	});
+
+	test("a FUNDED order the seller accepted still keeps its credit", async () => {
+		// The gate arm must not loosen the ordinary rule.
+		//
+		// Note the explicit move to `confirmed`: this suite has no
+		// `WHATSAPP_ORDER_CONFIRM_TEMPLATE`, so `confirmedAtCreate` is false
+		// and orders are born `pending` here — while in production they are
+		// born `confirmed`. That gap is exactly why the unfair charge was
+		// invisible to the suite: every test order was already in the one
+		// status the refund rule forgives.
+		const t = setup();
+		const s = await seed(t);
+		const funded = await placeOrder(t, s.retailerId, s.productId);
+		await t
+			.withIdentity({ subject: OWNER })
+			.mutation(api.orders.updateStatus, {
+				orderId: funded._id,
+				status: "confirmed",
+			});
+		const before = await t.run((ctx) =>
+			ctx.db
+				.query("creditAccounts")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", s.retailerId))
+				.first(),
+		);
+		await t
+			.withIdentity({ subject: OWNER })
+			.mutation(api.orders.updateStatus, {
+				orderId: funded._id,
+				status: "cancelled",
+			});
+		const after = await t.run((ctx) =>
+			ctx.db
+				.query("creditAccounts")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", s.retailerId))
+				.first(),
+		);
+		expect(after?.planBalance).toBe(before?.planBalance);
+	});
+});

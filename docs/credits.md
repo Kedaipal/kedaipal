@@ -861,6 +861,33 @@ refusal and every gate surface's copy.
   owed" is the ledger's answer, "3 waiting on credits" is the one the seller can
   act on — a cancelled waiting order still owes its credit while nobody waits
   on it.
+- **Cancelling a GATED order always gives its credit back**, and never spends
+  one of the month's 10 seller refunds (Zaki, 9 Oct 2026).
+  `NEVER_ACCEPTED_STATUSES` (`pending`, `booking_requested`) is a PROXY for
+  "the seller got something out of this order", and auto-confirm quietly
+  invalidated it: `confirmedAtCreate` fires whenever the buyer left a phone
+  and `WHATSAPP_ORDER_CONFIRM_TEMPLATE` is configured, which is every
+  storefront order in production. So `pending` is nearly unreachable, every
+  seller cancel read as "accepted", and once T3.1 made unfunded orders
+  INVISIBLE the rule charged sellers a credit for an order they were never
+  allowed to open — with cancelling, the gate's own prescribed way out, as the
+  act that burned it. The rule now tests the GATE rather than widening the
+  status set, because the question was never about status: a gated order
+  delivers zero value by construction. Not exploitable — the only route to the
+  refund is being denied the order first, and you end up with no order.
+  **It also closes the dead-position bug on its own**: the refund runs through
+  `applyEntry` with `+1`, so `fundingAdvance` walks the watermark past the
+  freed position instead of leaving a hole for the next pack to pay past.
+  Rejected on the way in: **charging the credit at PAYMENT instead of at
+  creation**. `markPaymentReceived` is a seller mutation and manual bank
+  transfer is the dominant flow, so it would mean charging when the seller
+  clicks a button they control; and the mockup round-trip, COD and counter
+  sales all do their work before payment, which would un-meter the made-to-
+  order cohort that is the ICP.
+- **The suite could not have caught this**, which is worth remembering: the
+  convex-test env has no confirm template, so test orders are born `pending`
+  — already in the one status the refund rule forgives. Any rule keyed on a
+  status that production sets differently needs a test that sets it too.
 - **The top-up picker** says what the pack OPENS (`opensLine`), and the thing
   that makes that hard is that the queue advances by POSITION while the count
   reports live orders. A cancelled order keeps the position its debit claimed

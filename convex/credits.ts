@@ -42,6 +42,7 @@ import {
 	type CreditRegime,
 	type CreditRegimeInputs,
 	cancelRefundDecision,
+	orderCreditFunded,
 	creditLockExemption,
 	creditRegime,
 	debitBucket,
@@ -648,6 +649,10 @@ export async function refundCreditForOrder(
 		cause,
 		statusAtCancel: order.status,
 		sellerRefundsUsed: used,
+		// Waiting on credits at the moment it was cancelled — read off the
+		// account we already hold, so no extra read and no import from
+		// creditLock.ts (which imports THIS module).
+		gated: !orderCreditFunded(order.creditSeq, account.fundedThrough ?? 0),
 	});
 	if (!decision.refund) return;
 	const last = debits[debits.length - 1];
