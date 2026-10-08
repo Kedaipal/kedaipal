@@ -418,6 +418,16 @@
 		var(--primary);
 	--color-cta-mesh-foreground:
 		var(--cta-mesh-foreground);
+	--color-countdown-paper:
+		var(--countdown-paper);
+	--color-countdown-ink:
+		var(--countdown-ink);
+	--color-countdown-ok:
+		var(--countdown-ok);
+	--color-countdown-low:
+		var(--countdown-low);
+	--color-countdown-critical:
+		var(--countdown-critical);
 	--color-popover-foreground:
 		var(--popover-foreground);
 	--color-popover:
@@ -467,6 +477,21 @@
 	   (see bg-cta-mesh below), so its foreground must stay fixed-light too;
 	   --primary-foreground flips in .dark and would go navy-on-navy there. */
 	--cta-mesh-foreground: hsl(210 40% 98%);
+
+	/* Countdown strip (the SLB) — receipt paper that stays DARK in BOTH themes,
+	   for the same reason bg-cta-mesh does. The obvious spelling, `bg-primary`
+	   + `text-accent` (what the claim bar shipped as), breaks in .dark: both
+	   --primary and --accent resolve to mint there, so the figures would sit
+	   mint-on-mint. Fixed surface ⇒ its ink and stage ramp are fixed too, and
+	   are the ON-DARK variants: the light-surface pair (accent-emphasis,
+	   amber-700, red-700) fails contrast here exactly as the raw tokens fail
+	   on white. One ramp, one author — every surface the strip lands on gets
+	   the same colours. */
+	--countdown-paper: hsl(222 47% 11%);
+	--countdown-ink: hsl(210 40% 98%);
+	--countdown-ok: hsl(158 64% 52%);
+	--countdown-low: hsl(43 96% 56%);
+	--countdown-critical: hsl(0 91% 71%);
 
 	/* Secondary — soft slate */
 	--secondary: hsl(210 40% 96%);

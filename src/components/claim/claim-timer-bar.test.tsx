@@ -100,21 +100,21 @@ describe("ClaimTimerBar", () => {
 		vi.useFakeTimers();
 		renderBar(10 * 60_000);
 		expect(screen.getByTestId("countdown-cut").dataset.stage).toBe("ok");
-		expect(print().getByText("10:00").className).toContain(
-			"text-accent-emphasis",
-		);
+		expect(print().getByText("10:00").className).toContain("text-countdown-ok");
 		cleanup();
 
 		// 2 min of a 15-min window (≤ 25%): amber.
 		renderBar(2 * 60_000);
 		expect(screen.getByTestId("countdown-cut").dataset.stage).toBe("low");
-		expect(print().getByText("2:00").className).toContain("text-amber-700");
+		expect(print().getByText("2:00").className).toContain("text-countdown-low");
 		cleanup();
 
 		// Final minute: red.
 		renderBar(45_000);
 		expect(screen.getByTestId("countdown-cut").dataset.stage).toBe("critical");
-		expect(print().getByText("0:45").className).toContain("text-red-700");
+		expect(print().getByText("0:45").className).toContain(
+			"text-countdown-critical",
+		);
 	});
 
 	test("the stage colour survives the cut — the wake's digits carry it too", () => {
@@ -125,9 +125,37 @@ describe("ClaimTimerBar", () => {
 		renderBar(45_000);
 		const reds = screen
 			.getAllByText("0:45")
-			.filter((el) => el.className.includes("text-red-700"));
+			.filter((el) => el.className.includes("text-countdown-critical"));
 		// The crisp print plus both halves of the ghost.
 		expect(reds.length).toBe(3);
+	});
+
+	test("the paper is the FIXED dark surface, never the flipping --primary pair", () => {
+		vi.useFakeTimers();
+		renderBar(5 * 60_000);
+		const strip = screen.getByTestId("countdown-cut").parentElement;
+		// `bg-primary` + `text-accent` is the obvious spelling and the one the
+		// claim bar shipped as. It is wrong: BOTH resolve to mint in .dark, so
+		// the figures would sit mint-on-mint. If someone "simplifies" back to
+		// the semantic pair, this goes red before a buyer finds it.
+		expect(strip?.className).toContain("bg-countdown-paper");
+		expect(strip?.className).not.toContain("bg-primary");
+		expect(strip?.className).not.toContain("bg-card");
+	});
+
+	test("the blades stay inside the strip at both ends of the run", () => {
+		vi.useFakeTimers();
+		// Centring a 20px icon on the cut puts half of it outside the strip at
+		// 0% and at 100%, and overflow-hidden shears the blades off — worst in
+		// the final seconds, the one moment it is being watched.
+		// They ride an inset track, so the percentage IS the cut position and
+		// the 12px inset keeps the icon's own width inside the strip.
+		renderBar((WINDOW_MIN / 4) * 60_000); // 25% left
+		expect(screen.getByTestId("countdown-blades").style.left).toBe("25%");
+		cleanup();
+
+		renderBar(-1000); // fully cut: parked flush, not hanging off the edge
+		expect(screen.getByTestId("countdown-blades").style.left).toBe("0%");
 	});
 
 	test("a 24h window is NOT amber at 20 minutes — urgency keys on time left, not fraction", () => {

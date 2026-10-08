@@ -92,6 +92,7 @@ import {
 	eventEndDateIssue,
 	eventSubmitValue,
 } from "./event-fields";
+import { focusAfterRender } from "./focus-error";
 import { PackageDayCounting, type StoreSchedule } from "./package-day-counting";
 import {
 	buildSubmitVariants,
@@ -1232,6 +1233,7 @@ export function ProductWizard({
 		initialState === undefined && linkedCard !== undefined ? linkedCard : null,
 	);
 	const revealRef = useRef<HTMLElement | null>(null);
+	const wizardRef = useRef<HTMLDivElement | null>(null);
 	// One callback ref for whichever element is the target (a card's wrapper
 	// or the event hint) — a RefObject would be typed to a single tag.
 	const setRevealTarget = (el: HTMLElement | null) => {
@@ -1403,8 +1405,17 @@ export function ProductWizard({
 		price: row.price,
 		promoPrice: row.promoPrice ?? "",
 	}));
-	function setRowPromoPrice(key: string, next: string) {
-		setRow(Number.parseInt(key, 10), { promoPrice: next });
+	/** ONE patch for however many rows changed — `setRow` in a loop reads
+	 * `rows` from this render's closure, so N calls collapse to the last one
+	 * ("30% off" discounted only the final choice). Mirrors `fillAllPrices`
+	 * just below, which has always written the whole grid in one go. */
+	function setPromoPrices(next: Record<string, string>) {
+		patchEditor({
+			rows: rows.map((row, i) => {
+				const value = next[String(i)];
+				return value === undefined ? row : { ...row, promoPrice: value };
+			}),
+		});
 	}
 
 	// --- Editor manipulation (same semantics as the full editor) -------------
@@ -1729,6 +1740,12 @@ export function ProductWizard({
 		});
 		if (found.length > 0) {
 			setIssues(found);
+			// Otherwise Continue is a button that does nothing, with the reason
+			// off-screen above — the stepper's own rule is that text problems
+			// surface ON Continue, which only works if the seller is taken to
+			// them (found by hand-testing: a sale price over list silently
+			// blocked the step).
+			focusAfterRender(wizardRef.current);
 			return;
 		}
 		setIssues([]);
@@ -1763,6 +1780,7 @@ export function ProductWizard({
 				setStep(s);
 				// A review-step issue lives inside the More-options disclosure.
 				if (s === REVIEW_STEP) setMoreOpen(true);
+				focusAfterRender(wizardRef.current);
 				return;
 			}
 		}
@@ -1916,7 +1934,7 @@ export function ProductWizard({
 	const revealMargin = "scroll-mb-56 lg:scroll-mb-0";
 
 	return (
-		<div className="flex flex-col gap-4">
+		<div ref={wizardRef} className="flex flex-col gap-4">
 			{/* Header: back + step title + progress dots + cancel. Four items on one
 			    narrow row, so the gap tightens on mobile and only the CURRENT dot
 			    widens — completed steps stay small (still accent-coloured, so
@@ -2734,7 +2752,7 @@ export function ProductWizard({
 								draft={state.promo}
 								onChange={(promo) => patch({ promo })}
 								rows={promoRows}
-								onRowPromoPrice={setRowPromoPrice}
+								onPromoPrices={setPromoPrices}
 								currency={currency}
 								locked={promoLocked}
 								flashAllowed={!state.event.on}

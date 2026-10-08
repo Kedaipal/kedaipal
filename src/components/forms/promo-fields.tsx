@@ -1,4 +1,5 @@
 import { Scissors, Tag, TriangleAlert } from "lucide-react";
+import { useId } from "react";
 import {
 	DEFAULT_PROMO_LABEL,
 	MAX_PROMO_PAY_WINDOW_MINUTES,
@@ -257,7 +258,7 @@ export function PromoFields({
 	draft,
 	onChange,
 	rows,
-	onRowPromoPrice,
+	onPromoPrices,
 	currency,
 	locked,
 	flashAllowed = true,
@@ -269,7 +270,11 @@ export function PromoFields({
 	draft: PromoDraft;
 	onChange: (next: PromoDraft) => void;
 	rows: PromoRow[];
-	onRowPromoPrice: (key: string, next: string) => void;
+	/** Takes a BATCH, always — keyed by row. Quick fill writes every row in
+	 * one call, so a parent that merges per call can't collapse N updates
+	 * into one row (it did: "30% off" discounted only the last choice).
+	 * A single field passes a one-entry record. */
+	onPromoPrices: (next: Record<string, string>) => void;
 	currency: string;
 	locked?: boolean;
 	/** False on booking/event listings — capacity and seats already cap them,
@@ -280,6 +285,7 @@ export function PromoFields({
 	noToggle?: boolean;
 	now: number;
 }) {
+	const fieldId = useId();
 	const set = (patch: Partial<PromoDraft>) => onChange({ ...draft, ...patch });
 	const open = draft.on || noToggle === true;
 	const issue = promoDraftIssue(draft, now);
@@ -288,12 +294,14 @@ export function PromoFields({
 		cap !== undefined && creditBalance !== undefined && cap > creditBalance;
 
 	const applyPercent = (percent: number) => {
+		const next: Record<string, string> = {};
 		for (const row of rows) {
 			const list = parsePriceInput(row.price);
 			if (list === null) continue;
 			const sale = promoPriceFromPercent(Math.round(list * 100), percent);
-			onRowPromoPrice(row.key, sale === null ? "" : (sale / 100).toFixed(2));
+			next[row.key] = sale === null ? "" : (sale / 100).toFixed(2);
 		}
+		onPromoPrices(next);
 	};
 
 	const chip = (active: boolean) =>
@@ -353,34 +361,56 @@ export function PromoFields({
 							{rows.map((row) => {
 								const list = parsePriceInput(row.price);
 								const sale = parsePriceInput(row.promoPrice);
-								const bad =
-									row.promoPrice.trim().length > 0 &&
-									(sale === null || list === null || sale <= 0 || sale >= list);
+								// The SAME rule `buildSubmitVariants` gates the save on, and
+								// the only place it is ever SAID. The submit-time copy was
+								// written and then rendered by nobody, so Save and Continue
+								// were silent no-ops: the button did nothing, forever, with
+								// the reason nowhere on screen (found by hand-testing).
+								// Shown live while typing, not just on submit.
+								const saleIssue =
+									row.promoPrice.trim().length === 0
+										? undefined
+										: sale === null || list === null || sale <= 0
+											? "Numbers only — e.g. 31.50."
+											: sale >= list
+												? "Must be below the normal price."
+												: undefined;
+								const errorId = `${fieldId}-${row.key}-err`;
 								return (
-									<div
-										key={row.key}
-										className="flex items-center justify-between gap-3"
-									>
-										<div className="min-w-0">
-											<p className="truncate text-sm font-medium">
-												{row.label}
-											</p>
-											<p className="text-xs text-muted-foreground line-through">
-												{list === null
-													? "—"
-													: formatPrice(Math.round(list * 100), currency)}
-											</p>
+									<div key={row.key} className="flex flex-col gap-1">
+										<div className="flex items-center justify-between gap-3">
+											<div className="min-w-0">
+												<p className="truncate text-sm font-medium">
+													{row.label}
+												</p>
+												<p className="text-xs text-muted-foreground line-through">
+													{list === null
+														? "—"
+														: formatPrice(Math.round(list * 100), currency)}
+												</p>
+											</div>
+											<Input
+												aria-label={`Sale price for ${row.label}`}
+												aria-describedby={saleIssue ? errorId : undefined}
+												variant="field"
+												inputMode="decimal"
+												placeholder="0.00"
+												isError={saleIssue !== undefined}
+												className="w-28 text-right"
+												value={row.promoPrice}
+												onChange={(e) =>
+													onPromoPrices({ [row.key]: e.target.value })
+												}
+											/>
 										</div>
-										<Input
-											aria-label={`Sale price for ${row.label}`}
-											variant="field"
-											inputMode="decimal"
-											placeholder="0.00"
-											isError={bad}
-											className="w-28 text-right"
-											value={row.promoPrice}
-											onChange={(e) => onRowPromoPrice(row.key, e.target.value)}
-										/>
+										{saleIssue ? (
+											<p
+												id={errorId}
+												className="text-right text-xs font-medium text-destructive"
+											>
+												{saleIssue}
+											</p>
+										) : null}
 									</div>
 								);
 							})}

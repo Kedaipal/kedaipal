@@ -18,7 +18,10 @@ import type { FormEvent } from "react";
  * specific, actionable target.
  */
 export function focusFirstInvalidField(
-	formEl: HTMLFormElement | null | undefined,
+	// Any container, not just a <form>: the product wizard is a stepper whose
+	// Continue is a plain button, and it needs the same "take me to the error"
+	// behaviour. Nothing here is form-specific — it is a querySelector.
+	formEl: HTMLElement | null | undefined,
 ): boolean {
 	if (!formEl) return false;
 	// First invalid control in DOM order — visually the topmost error.
@@ -26,7 +29,10 @@ export function focusFirstInvalidField(
 	const target =
 		control ?? formEl.querySelector<HTMLElement>("[data-form-error]");
 	if (!target) return false;
-	target.scrollIntoView({ behavior: "smooth", block: "center" });
+	// Optional-called: jsdom doesn't implement it, and this now runs from the
+	// wizard's own rAF where a throw is an unhandled error rather than a
+	// failed assertion. Scrolling is the nicety; focusing is the job.
+	target.scrollIntoView?.({ behavior: "smooth", block: "center" });
 	// Focus only a real control — the smooth scroll already centred it, so skip
 	// focus's own instant jump (which would fight the animation).
 	if (control?.matches("input, textarea, select, [contenteditable='true']")) {
@@ -41,11 +47,21 @@ export function focusFirstInvalidField(
 // any real commit latency) until the invalid state is in the DOM.
 const FOCUS_RETRY_FRAMES = 5;
 
-function focusWhenRendered(formEl: HTMLFormElement, attemptsLeft: number) {
+function focusWhenRendered(formEl: HTMLElement, attemptsLeft: number) {
 	requestAnimationFrame(() => {
 		if (focusFirstInvalidField(formEl)) return;
 		if (attemptsLeft > 0) focusWhenRendered(formEl, attemptsLeft - 1);
 	});
+}
+
+/**
+ * Same "take me to the error" behaviour for a container that ISN'T a form —
+ * the product wizard's Continue is a plain button. Call it right after the
+ * state update that marks the fields invalid; the frame retry below handles
+ * the commit latency.
+ */
+export function focusAfterRender(el: HTMLElement | null | undefined): void {
+	if (el) focusWhenRendered(el, FOCUS_RETRY_FRAMES);
 }
 
 /**

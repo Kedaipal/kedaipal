@@ -1072,13 +1072,16 @@ export function ProductForm({
 		price: row.price,
 		promoPrice: row.promoPrice ?? "",
 	}));
-	function setRowPromoPrice(key: string, next: string) {
-		const index = Number.parseInt(key, 10);
+	/** ONE state write for however many rows changed. Per-row writes in a loop
+	 * each read `editor` from this render's closure, so N of them collapse to
+	 * the last one — "30% off" discounted only the final choice. */
+	function setPromoPrices(next: Record<string, string>) {
 		setEditor({
 			...editor,
-			rows: editor.rows.map((row, i) =>
-				i === index ? { ...row, promoPrice: next } : row,
-			),
+			rows: editor.rows.map((row, i) => {
+				const value = next[String(i)];
+				return value === undefined ? row : { ...row, promoPrice: value };
+			}),
 		});
 	}
 
@@ -1790,7 +1793,7 @@ export function ProductForm({
 					draft={promoDraft}
 					onChange={setPromoDraft}
 					rows={promoRows}
-					onRowPromoPrice={setRowPromoPrice}
+					onPromoPrices={setPromoPrices}
 					currency={currency}
 					locked={promoLocked}
 					flashAllowed={!isBooking && !eventDraft.on}

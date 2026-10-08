@@ -365,7 +365,23 @@ export function CheckoutPage({
 	);
 	const minRulesBlocked = qtyShortfalls.length > 0 || valueShortfall > 0;
 
-	const [serverError, setServerError] = useState<string | null>(null);
+	// A server refusal is about the CART it judged, so it carries that cart's
+	// signature and stops showing the moment the cart changes — the same shape
+	// `fulfilmentRefusal` below uses for the day/time it judged. A bare string
+	// outlived its own truth: "Max 2 of X per order during this sale" stayed on
+	// screen after the buyer dropped to 2, after the prices were re-accepted
+	// and after the sale had ENDED, sitting next to an enabled Place order
+	// (found by hand-testing).
+	const [serverError, setServerError] = useState<{
+		message: string;
+		cart: string;
+	} | null>(null);
+	/** Lines + quantities: what a cart-level refusal was judged against. */
+	const cartSignature = cart.items
+		.map((i) => `${i.variantId}:${i.quantity}`)
+		.join("|");
+	const refuseServer = (message: string) =>
+		setServerError({ message, cart: cartSignature });
 	// A submit refusal about the chosen day or time, tied to the inputs it
 	// judged (`fulfilmentInputsKey`). It shows only while those stand: once the
 	// buyer fixes the time, a sentence saying the old one won't work would sit
@@ -559,7 +575,7 @@ export function CheckoutPage({
 			// reason on screen; this guard covers a race (e.g. Enter key mid-render).
 			if (minRulesBlocked) return;
 			if (noCheckoutPhone) {
-				setServerError(
+				refuseServer(
 					"Order checkout is temporarily unavailable. Please try again shortly.",
 				);
 				return;
@@ -739,7 +755,7 @@ export function CheckoutPage({
 					setServerRepriced(true);
 					return;
 				}
-				setServerError(convexErrorMessage(err));
+				refuseServer(convexErrorMessage(err));
 			}
 		},
 	});
@@ -838,7 +854,9 @@ export function CheckoutPage({
 	const refusal =
 		fulfilmentRefusal?.inputs === watchedInputs
 			? fulfilmentRefusal.message
-			: serverError;
+			: serverError?.cart === cartSignature
+				? serverError.message
+				: null;
 	// Parsed once for the two consumers below; NaN (cleared field) reads as
 	// "no time" so the quote falls back to the day-level pricing.
 	const watchedTimeMinutes = (() => {

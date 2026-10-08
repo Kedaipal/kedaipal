@@ -276,12 +276,32 @@ export function useProductPurchase({
 			? Number.POSITIVE_INFINITY
 			: Math.max(0, eventSeatsLeft - cartQuantity);
 	const eventFull = eventSeatsLeft !== undefined && eventSeatsLeft <= 0;
+	// A live flash sale's per-order cap is a ceiling of exactly the same kind
+	// as stock and seats, so it joins the same Math.min rather than becoming a
+	// second mechanism. Counted against what's ALREADY in the cart because the
+	// server sums every variant of the product in the order
+	// (`orders.create`). Without it the stepper happily climbed past the cap
+	// its own hint printed, and the server refused with a bare sentence that
+	// has no recovery action — unlike the units-left case, which throws the
+	// typed price_changed error the checkout knows how to fix.
+	const promoState = product?.promoState;
+	const perOrderCeiling =
+		promoState?.phase === "live" && promoState.maxPerOrder !== undefined
+			? Math.max(0, promoState.maxPerOrder - cartQuantity)
+			: Number.POSITIVE_INFINITY;
+	/** The cart ALREADY holds the whole per-order allowance. `maxQty` floors at
+	 * 1 so the stepper always shows a number, which would otherwise let one
+	 * more through — so this gates the ACTION rather than the display. */
+	const promoCapReached = perOrderCeiling === 0;
+	const promoMaxPerOrder =
+		promoState?.phase === "live" ? promoState.maxPerOrder : undefined;
 	const maxQty = selectedVariant
 		? Math.max(
 				1,
 				Math.min(
 					variantBlocks ? Math.max(1, selectedVariant.onHand) : 99,
 					seatCeiling,
+					perOrderCeiling,
 				),
 			)
 		: 1;
@@ -421,6 +441,8 @@ export function useProductPurchase({
 		maxQty,
 		eventSeatsLeft,
 		eventFull,
+		promoCapReached,
+		promoMaxPerOrder,
 		minQuantity,
 		minFloor,
 		minUnreachable,
@@ -683,8 +705,21 @@ export function PurchaseHints({ pp }: { pp: ProductPurchase }) {
 				</div>
 			) : null}
 			{maxPerOrder !== undefined ? (
-				<p className="mt-3 text-xs text-muted-foreground">
-					{`Max ${maxPerOrder} per order during this sale`}
+				// Says which state the buyer is in, because the stepper now stops
+				// at this number: a ceiling you hit with no word for it reads as a
+				// broken button (CLAUDE.md — a constraint is surfaced, never
+				// enforced silently).
+				<p
+					className={cn(
+						"mt-3 text-xs",
+						pp.promoCapReached
+							? "font-medium text-foreground"
+							: "text-muted-foreground",
+					)}
+				>
+					{pp.promoCapReached
+						? `That's the limit — max ${maxPerOrder} per order during this sale.`
+						: `Max ${maxPerOrder} per order during this sale`}
 				</p>
 			) : null}
 			{/* Stock hint — only meaningful for hard-block variants. On an EVENT
@@ -1056,7 +1091,10 @@ function PurchaseStepper({ pp }: { pp: ProductPurchase }) {
 					pp.setQuantity(Math.min(pp.maxQty, pp.displayQuantity + 1))
 				}
 				disabled={
-					pp.displayQuantity >= pp.maxQty || !pp.sellable || pp.minUnreachable
+					pp.displayQuantity >= pp.maxQty ||
+					!pp.sellable ||
+					pp.minUnreachable ||
+					pp.promoCapReached
 				}
 				className="flex size-11 items-center justify-center rounded-full border border-border disabled:opacity-40"
 				aria-label="Increase quantity"
@@ -1085,7 +1123,9 @@ function AddToCartButton({
 	return (
 		<Button
 			type="button"
-			disabled={paused || !pp.sellable || pp.minUnreachable}
+			disabled={
+				paused || !pp.sellable || pp.minUnreachable || pp.promoCapReached
+			}
 			onClick={() =>
 				pp.product &&
 				pp.selectedVariant &&
@@ -1095,15 +1135,17 @@ function AddToCartButton({
 		>
 			{paused
 				? ORDERING_PAUSED_CTA
-				: pp.minUnreachable
-					? "Not enough stock"
-					: !pp.selectedVariant
-						? pp.hasOptions
-							? "Select options"
-							: "Unavailable"
-						: !pp.sellable
-							? "Out of stock"
-							: "Add to cart"}
+				: pp.promoCapReached
+					? "Sale limit reached"
+					: pp.minUnreachable
+						? "Not enough stock"
+						: !pp.selectedVariant
+							? pp.hasOptions
+								? "Select options"
+								: "Unavailable"
+							: !pp.sellable
+								? "Out of stock"
+								: "Add to cart"}
 		</Button>
 	);
 }
