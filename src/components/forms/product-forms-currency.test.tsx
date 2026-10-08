@@ -77,6 +77,7 @@ function renderWizard(currency: string, initialState: WizardState) {
 			retailerId={"r1" as never}
 			categoriesLocked={false}
 			eventsLocked={false}
+			promoLocked={false}
 			currency={currency}
 			initialState={initialState}
 			onSubmit={vi.fn() as never}

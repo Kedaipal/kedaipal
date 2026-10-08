@@ -430,3 +430,30 @@ describe("formatDraftPrice — seller-typed amounts in summaries", () => {
 		expect(formatDraftPriceRange(12, 12, "SGD")).toBe(`S$${NB}12`);
 	});
 });
+
+describe("convexErrorMessage — a typed payload never reaches the buyer raw", () => {
+	test("an unclaimed typed payload becomes the generic line, never [object Object]", () => {
+		// The landmine this guards: `String({...})` is "[object Object]", which
+		// a buyer read once from the rate limiter's payload and again from the
+		// price-changed guard's. A new typed error must fail SAFE.
+		const message = convexErrorMessage(
+			new ConvexError({ kind: "something_new", lines: [1, 2] }),
+		);
+		expect(message).toBe(GENERIC_SERVER_FAILURE);
+		expect(message).not.toContain("object Object");
+	});
+
+	test("a typed payload carrying its own sentence still speaks", () => {
+		expect(
+			convexErrorMessage(
+				new ConvexError({ kind: "whatever", message: "Pick a pickup point." }),
+			),
+		).toBe("Pick a pickup point.");
+	});
+
+	test("a plain string payload is unchanged", () => {
+		expect(convexErrorMessage(new ConvexError("Out of stock"))).toBe(
+			"Out of stock",
+		);
+	});
+});

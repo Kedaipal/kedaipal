@@ -57,7 +57,25 @@ export function convexErrorMessage(err: unknown): string {
 		// The credit lock (Credits T3) is typed so a surface can offer its way
 		// back (`creditLockErrorOf`); everywhere else it reads as its sentence.
 		if (isCreditLockErrorData(err.data)) return err.data.message;
-		return typeof err.data === "string" ? err.data : String(err.data);
+		if (typeof err.data === "string") return err.data;
+		// A TYPED payload no branch above claimed. Never `String(...)` it:
+		// that yields the literal "[object Object]", which a buyer has now
+		// read twice — once from the rate limiter's payload (see the note at
+		// the top of this function) and once from the price-changed guard's
+		// (z8r3fdcw72). A payload that carries its own sentence can still
+		// speak; anything else becomes the generic line and stays in the
+		// console, where the Convex client already logs the whole thing.
+		//
+		// This is the FALLBACK, not the pattern: a typed error meant for a
+		// person gets a branch above, next to its own guard.
+		if (
+			typeof err.data === "object" &&
+			err.data !== null &&
+			typeof (err.data as { message?: unknown }).message === "string"
+		) {
+			return (err.data as { message: string }).message;
+		}
+		return GENERIC_SERVER_FAILURE;
 	}
 	return unwrapServerError(
 		err instanceof Error ? err.message : String(err ?? ""),

@@ -103,6 +103,14 @@ import {
 } from "./product-form";
 import { type ProductImage, ProductImagesField } from "./product-images-field";
 import {
+	EMPTY_PROMO_DRAFT,
+	type PromoDraft,
+	PromoFields,
+	type PromoRow,
+	promoDraftIssue,
+	promoSubmitValue,
+} from "./promo-fields";
+import {
 	AXIS_PRESETS,
 	type CustomLineDraft,
 	emptyCustomLine,
@@ -214,6 +222,11 @@ export type WizardState = {
 	 * every product must answer, and "is this an event?" is a no for almost
 	 * every one of them. Never offered on a booking listing. */
 	event: EventDraft;
+	/** Promotion (z8r3fdcw72) — an OPTIONAL block at the foot of the Price
+	 * step, not a step of its own: a sale price is a price decision, and a
+	 * wizard step everyone taps past for a feature most products never use is
+	 * friction on every single create. Collapsed until the seller asks. */
+	promo: PromoDraft;
 	/** Review "More options" — buyer questions (`z8r3fdkjek`), as typed. In the
 	 * drawer for the event's reason: most products ask nothing. Never on a
 	 * booking listing. */
@@ -257,6 +270,7 @@ export function emptyWizardState(defaultKind?: ProductKind): WizardState {
 		prepMinutes: "",
 		pickupNote: "",
 		event: { ...EMPTY_EVENT_DRAFT },
+		promo: { ...EMPTY_PROMO_DRAFT },
 		buyerQuestions: [],
 	};
 }
@@ -681,8 +695,22 @@ export function wizardStepIssues(
 						message: issue.message,
 					});
 				}
+				// A sale price that doesn't undercut its own line stops the step
+				// too — the Promotion block lives here, so its refusals belong
+				// here (z8r3fdcw72).
+				if (issue.where === "row" && issue.field === "promoPrice") {
+					issues.push({
+						field: `promoPrice:${rowKey(rows[issue.index])}`,
+						message: issue.message,
+					});
+				}
 			}
 		}
+	}
+	// A half-filled promotion can't pass the step that sets it either.
+	if (step === 3) {
+		const promoIssue = promoDraftIssue(state.promo, Date.now());
+		if (promoIssue) issues.push({ field: "promo", message: promoIssue });
 	}
 	if (step === 4) {
 		if (!state.fulfilmentAnswered) {
@@ -812,12 +840,13 @@ export function buildWizardSubmitValues(
 				: undefined,
 		hidden: state.hidden,
 		kind,
-		// The wizard deliberately does NOT offer a promotion: creating a product
-		// and merchandising it are different jobs, and a sale is something a
-		// seller runs on a product that already EXISTS. `null` is the explicit
-		// "no promotion" answer (never `undefined`, which reads as "no change");
-		// the seller sets one in the full form, which is one tap away.
-		promo: null,
+		// `null` when the block is switched off — the spelling that CLEARS a
+		// promotion, never `undefined` ("no change"). Flash extras are refused
+		// on booking and event listings server-side, so the draft never sends
+		// them there (`assertFlashFieldsAllowed`).
+		promo: promoSubmitValue(state.promo, Date.now(), {
+			flashAllowed: kind !== "booking" && !state.event.on,
+		}),
 		// Kind + booking config travel together (the server enforces the pairing).
 		booking:
 			kind === "booking"
@@ -967,6 +996,7 @@ export function formDraftToWizardState(draft: ProductFormDraft): WizardState {
 		// round-trips as "Physical goods" (same stored kind, wizard-session
 		// affordance only; locked in 86eyj70z1).
 		kindCard: cardFromKind(draft.kind),
+		promo: draft.promoDraft ?? { ...EMPTY_PROMO_DRAFT },
 		capacityPerNight: draft.capacityPerNight,
 		packageLength: draft.packageLength ?? "",
 		packageUnit: draft.packageUnit ?? "month",
@@ -1125,6 +1155,7 @@ export function ProductWizard({
 	retailerId,
 	categoriesLocked,
 	eventsLocked,
+	promoLocked,
 	currency,
 	defaultKind,
 	onSubmit,
@@ -1148,6 +1179,9 @@ export function ProductWizard({
 	/** Client mirror of the `events` plan gate — the toggle disables with the
 	 * Pro hint. Server enforces it too. */
 	eventsLocked: boolean;
+	/** Client mirror of the `promo` plan gate (z8r3fdcw72) — the toggle in
+	 * the Price step disables with the Pro hint. Server enforces it. */
+	promoLocked: boolean;
 	currency: string;
 	/** The store's `storeType`, when set — pre-answers step 0's kind card
 	 * ("Your store type" badge); the seller can still tap another. */
@@ -1360,6 +1394,18 @@ export function ProductWizard({
 
 	const issueFor = (field: string): string | undefined =>
 		issues.find((i) => i.field === field)?.message;
+
+	// The Promotion block edits sale prices on the SAME rows the price grid
+	// above it owns — one substrate, two writers, exactly as in the full form.
+	const promoRows: PromoRow[] = rows.map((row, index) => ({
+		key: String(index),
+		label: rowKey(row) || state.name.trim() || "This item",
+		price: row.price,
+		promoPrice: row.promoPrice ?? "",
+	}));
+	function setRowPromoPrice(key: string, next: string) {
+		setRow(Number.parseInt(key, 10), { promoPrice: next });
+	}
 
 	// --- Editor manipulation (same semantics as the full editor) -------------
 	function setOptions(nextOptions: OptionAxis[]) {
@@ -2677,6 +2723,25 @@ export function ProductWizard({
 								{showAxes ? "choice" : "item"}
 							</button>
 						)}
+						{/* Promotion (z8r3fdcw72) — here, at the foot of the step that
+						    sets the price, rather than as a step of its own: a sale
+						    price IS a price, and a wizard step everyone taps past for
+						    something most products never use is friction on every
+						    create. Collapsed until the seller flips the toggle, so it
+						    costs a line of text until it is wanted. */}
+						<div className="mt-2 border-t border-border pt-4">
+							<PromoFields
+								draft={state.promo}
+								onChange={(promo) => patch({ promo })}
+								rows={promoRows}
+								onRowPromoPrice={setRowPromoPrice}
+								currency={currency}
+								locked={promoLocked}
+								flashAllowed={!state.event.on}
+								flashBlockedReason="Flash-sale extras don't apply to an event — seats already cap it. The sale price still does."
+								now={Date.now()}
+							/>
+						</div>
 					</>
 				) : null}
 

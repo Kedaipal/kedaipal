@@ -176,6 +176,12 @@ export function ProductCard({
 	const hasSaleStrip = countdownAt !== undefined || unitsLeft !== undefined;
 	const hasBottomChips =
 		event !== undefined || hasCustom || minQuantity >= 2 || hasSaleStrip;
+	// A LIVE flash sale breathes (Zaki, 9 Oct) — a slow mint heartbeat that
+	// pulls the eye across a grid. Only a TIMED sale, never a plain discount:
+	// urgency you can't run out of isn't urgency, and a storefront where every
+	// card pulsed would read as decoration. The ring is separate from the
+	// animation so reduced motion still shows which card is on sale.
+	const flashGlow = saleOn && promoEndsAt !== undefined;
 	const pageLink = {
 		to: "/$slug/p/$productSlug",
 		params: { slug: storeSlug, productSlug: product.slug },
@@ -189,7 +195,14 @@ export function ProductCard({
 		// and the CTAs `mt-auto`, so filling is all that was missing.
 		// The photo is inset (`p-1.5` + its own radius) per the polish pass —
 		// the card reads as a tile holding a photo, not a photo with a caption.
-		<div className="group flex h-full flex-col overflow-hidden rounded-[18px] border border-border bg-card p-1.5 transition-shadow duration-200 hover:shadow-md">
+		<div
+			className={cn(
+				"group flex h-full flex-col overflow-hidden rounded-[18px] border bg-card p-1.5 transition-shadow duration-200 hover:shadow-md",
+				flashGlow
+					? "border-accent/50 ring-2 ring-accent/35 animate-kp-flash-glow motion-reduce:animate-none"
+					: "border-border",
+			)}
+		>
 			<Link
 				{...pageLink}
 				// The photo is decorative here — the name link right below is the

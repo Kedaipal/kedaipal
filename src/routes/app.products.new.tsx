@@ -213,6 +213,7 @@ function NewProductRoute() {
 					saveLock={saveLock}
 					categoriesLocked={categoriesLocked}
 					eventsLocked={eventsLocked}
+					promoLocked={promoLocked}
 					currency={retailer.currency}
 					defaultKind={retailer.storeType}
 					storeSchedule={{
