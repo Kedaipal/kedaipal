@@ -279,6 +279,7 @@
 	"pricingpage_feat_inbox": "订单收件箱",
 	"pricingpage_feat_online_payments": "在线支付（HitPay）",
 	"pricingpage_feat_categories": "产品分类",
+	"pricingpage_feat_promo": "促销与限时抢购价（含倒数计时）",
 	"pricingpage_feat_radius": "按距离分段的配送收费",
 	"pricingpage_feat_lalamove": "Lalamove 配送（骑手实时报价）",
 	"pricingpage_feat_wa_alerts": "订单 WhatsApp 通知卖家",

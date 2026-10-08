@@ -398,6 +398,15 @@ function useFeatures(): Feature[] {
 			enterprise: true,
 		},
 		{
+			// Shipped (z8r3fdcw72) — PLAN_FEATURES.promo. A sale price with an
+			// end date, and the flash layer (unit cap, max per order, payment
+			// hold) on top of it.
+			label: m.pricingpage_feat_promo(),
+			starter: false,
+			pro: true,
+			enterprise: true,
+		},
+		{
 			// Shipped (86extzdr8) — PLAN_FEATURES.radiusDelivery.
 			label: m.pricingpage_feat_radius(),
 			starter: false,
