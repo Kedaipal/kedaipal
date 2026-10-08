@@ -4,7 +4,7 @@ import { Link } from "@tanstack/react-router";
 import { PauseCircle, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../../../convex/_generated/api";
-import { useCreditLock } from "../../hooks/useCreditLock";
+import { useCreditGate } from "../../hooks/useCreditGate";
 import { useDashboardRetailer } from "../../hooks/useDashboardRetailer";
 import { useStoreRole } from "../../hooks/usePermission";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
@@ -14,6 +14,7 @@ import {
 	lockCta,
 	ordersBalanceLabel,
 	ordersWaitingLabel,
+	showWaitingLabel,
 } from "../../lib/credits-ui";
 import { formatPrice } from "../../lib/format";
 import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
@@ -62,7 +63,7 @@ export function SubscriptionBanner({
 	// Who is reading this banner decides what it can ask them to do.
 	const isMember = useStoreRole() === "member";
 	const retailer = useDashboardRetailer();
-	const creditLock = useCreditLock();
+	const creditLock = useCreditGate();
 	// The balance is `credits`-area data: null for a teammate without the grant,
 	// which simply means no "running low" nudge for them.
 	const balance = useQuery(
@@ -88,7 +89,6 @@ export function SubscriptionBanner({
 		now,
 		undefined,
 		{
-			locked: creditLock.locked,
 			route: creditLock.route,
 			ordersWaiting: creditLock.ordersWaiting,
 			total: balance?.total,
@@ -142,35 +142,43 @@ export function SubscriptionBanner({
 		);
 	}
 
-	// Out of credits (Credits T3): the seller can't work orders or edit
-	// products until credits are added — orders keep arriving. Persistent.
-	if (state.kind === "creditsLocked") {
+	// Orders waiting on credits (Credits T3.1): the seller can't OPEN them
+	// until credits land, and they open oldest first. Never store-wide — the
+	// catalogue, the settings and every order that already paid for its credit
+	// carry on, and saying otherwise would be the banner lying about the rule.
+	// Persistent, and the one banner that offers the filter: a count of 40 that
+	// the seller can't click through to is a fact they can't act on.
+	if (state.kind === "creditsWaiting") {
 		const waiting = ordersWaitingLabel(state.ordersWaiting);
 		const cta = lockCta(state.route);
 		return (
 			<div className="flex flex-col gap-2 border-b border-red-200 bg-red-50 px-5 py-3 dark:border-red-900 dark:bg-red-950/40 sm:flex-row sm:items-center sm:justify-between lg:px-8">
 				<p className="text-sm text-foreground/90">
-					<span className="font-medium">
-						{isMember
-							? "This store is out of credits"
-							: "You're out of credits"}
-						{waiting ? ` · ${waiting}` : ""}.
-					</span>{" "}
+					<span className="font-medium">{waiting}.</span>{" "}
 					{/* A teammate who may buy packs can take the way back
 					    themselves (T2); one who can't is told who can. */}
 					{creditLock.canAct
-						? "Accepting and updating orders and editing products are paused. Orders keep coming in, and you can still view, cancel and refund them."
-						: "Accepting and updating orders and editing products are paused until the owner adds credits. Orders keep coming in."}
+						? "You can't open them until credits land — they open oldest first. Everything else carries on, and cancelling always works."
+						: "The owner needs to add credits before they can be opened. Everything else carries on."}
 				</p>
-				{!creditLock.canAct ? null : (
+				<div className="flex w-fit shrink-0 items-center gap-2">
 					<Link
-						to="/app/settings"
-						search={cta.search}
-						className="inline-flex h-9 w-fit shrink-0 items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
+						to="/app/orders"
+						search={{ creditGated: true }}
+						className="inline-flex h-9 items-center rounded-lg border border-border bg-background px-3.5 text-sm font-medium text-foreground"
 					>
-						{cta.label}
+						{showWaitingLabel(state.ordersWaiting)}
 					</Link>
-				)}
+					{!creditLock.canAct ? null : (
+						<Link
+							to="/app/settings"
+							search={cta.search}
+							className="inline-flex h-9 items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
+						>
+							{cta.label}
+						</Link>
+					)}
+				</div>
 			</div>
 		);
 	}
@@ -201,14 +209,16 @@ export function SubscriptionBanner({
 			<div className="flex flex-col gap-2 border-b border-amber-200 bg-amber-50 px-5 py-3 dark:border-amber-900 dark:bg-amber-950/40 sm:flex-row sm:items-center sm:gap-3 lg:px-8">
 				<p className="flex-1 text-sm text-foreground/90">
 					{low}{" "}
-					{/* Every variant used to promise the pause — "new orders wait
-					    until credits are added". With the lock switched off
-					    (CREDIT_LOCK_ENABLED) nothing waits, so the copy states the
-					    carry-over instead, which is what actually happens and stays
-					    true either way. Same move already made for the public pricing
-					    FAQ. Reinstating the pause sentence is part of the per-order
-					    lock's copy sweep (z8r3fdmg4h), not something to leave lying
-					    here as a lie in the meantime. */}
+					{/* This is the RUNNING-LOW banner, so nothing is waiting yet —
+					    the waiting-orders banner above owns that state and says so
+					    with a count and a filter. The copy therefore states the
+					    carry-over, which is what actually happens here. It used to
+					    promise a pause ("new orders wait until credits are added")
+					    while reading off the BALANCE and never off the gate, which is
+					    how it kept promising a pause for a release after the lock was
+					    switched off (T3 review). Per order (T3.1) the sentence would
+					    be wrong in a second way too: a store can be below zero with
+					    nothing waiting at all. */}
 					{canBuy
 						? "Top up to stay ahead — bought credits carry over for 12 months, so nothing goes to waste."
 						: onTrial

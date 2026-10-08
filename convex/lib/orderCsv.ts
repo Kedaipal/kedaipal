@@ -14,6 +14,7 @@
 
 import { sourceLabel } from "./attribution";
 import { formatItemAnswers } from "./buyerQuestions";
+import { GATED_CELL_LABEL } from "./credits";
 import { orderCustomerLabel } from "./customer";
 import { formatFulfilmentTime } from "./fulfilmentDate";
 import {
@@ -269,6 +270,15 @@ export type CsvOrder = {
 	/** Marketing origin the buyer arrived from (86eyq0eq9). Insights reports it;
 	 * the export now carries it so the two can be reconciled. */
 	attributionSource?: string;
+	/** Waiting on credits (Credits T3.1). Carried so the CUSTOMER cell can say
+	 * so rather than printing a blank — a redacted row with no explanation is
+	 * exactly the silent gap the house rule forbids, and a seller reconciling a
+	 * spreadsheet needs to know the row is incomplete ON PURPOSE.
+	 *
+	 * Deliberately a VALUE in an existing cell, not a new column: a seller's
+	 * bookkeeping template keys on column names, so the header set stays fixed
+	 * (the same reasoning as `deliveryDirection` above). */
+	creditGated?: boolean;
 	customer: { name?: string; waPhone?: string };
 	items: Array<{
 		name: string;
@@ -570,7 +580,13 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		// "" (not "Anonymous") stays the default for a phone-only order with no
 		// name, so existing exports are unchanged; an anonymous walk-in (no phone)
 		// reads "Walk-in customer" instead of blank.
-		value: (o) => orderCustomerLabel(o.customer, ""),
+		//
+		// A row waiting on credits says so HERE (Credits T3.1): the buyer's name
+		// and every other buyer column are redacted server-side, and a line of
+		// blanks with no reason is the silent gap the no-silent-skip rule exists
+		// to stop. The Phone cell stays empty — one explanation per row.
+		value: (o) =>
+			o.creditGated ? GATED_CELL_LABEL : orderCustomerLabel(o.customer, ""),
 	},
 	{
 		key: "phone",

@@ -18,6 +18,7 @@ import type {
 const SKIP_COPY: Record<AwbSkipReason, (n: number) => string> = {
 	no_address: (n) => `${n} for pickup (no delivery address)`,
 	cancelled: (n) => `${n} cancelled`,
+	credit_gated: (n) => `${n} waiting on credits`,
 	not_found: (n) => `${n} no longer in your orders`,
 };
 
@@ -25,6 +26,9 @@ const SKIP_COPY: Record<AwbSkipReason, (n: number) => string> = {
  * odd happened" case last. Explicit rather than relying on object key order. */
 const SKIP_ORDER: readonly AwbSkipReason[] = [
 	"no_address",
+	// Before `cancelled`: it is the one the seller can DO something about, and
+	// the top-up is the action the line should lead them to.
+	"credit_gated",
 	"cancelled",
 	"not_found",
 ];

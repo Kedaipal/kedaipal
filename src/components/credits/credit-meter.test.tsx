@@ -71,6 +71,11 @@ function balance(over: Partial<CreditBalanceView> = {}): CreditBalanceView {
 		customGrant: false,
 		ordersThisPeriod: 80,
 		lockExempt: null,
+		// Credits T3.1 — the gated-order count rides the BALANCE so the top-up
+		// picker can read it without the dashboard provider. The meter itself
+		// takes it off the retailer payload, so this stays 0 here.
+		ordersWaiting: 0,
+		waitingOffsets: [],
 		...over,
 	};
 }
@@ -90,20 +95,28 @@ function retailer({
 	comped?: boolean;
 	plan?: string;
 	founding?: boolean;
+	/** Credits T3.1: `locked` now means "some orders are waiting on credits".
+	 * There is no store-wide lock any more — the catalogue and the settings are
+	 * never gated — so the meter branches on the WAITING COUNT, and a fixture
+	 * saying `locked` means "give me at least one waiting order". */
 	locked?: boolean;
 	route?: string;
 	waiting?: number;
 } = {}): Retailer {
+	const ordersWaiting = locked ? Math.max(1, waiting) : 0;
 	return {
 		_id: "r_1",
 		slug: "kedai",
 		isFoundingMember: founding,
 		subscription: { plan, status, comped },
-		creditLock: {
-			locked,
+		creditGate: {
+			exempt: false,
+			// The watermark sits below every order's position while something is
+			// waiting, and above all of them when nothing is.
+			fundedThrough: ordersWaiting > 0 ? 0 : Number.POSITIVE_INFINITY,
+			creditsOwed: ordersWaiting,
+			ordersWaiting,
 			unlockRoute: route,
-			since: locked ? Date.now() : null,
-			ordersWaiting: waiting,
 		},
 	} as unknown as Retailer;
 }
@@ -248,11 +261,12 @@ describe("CreditMeter — Billing (full)", () => {
 		expect(screen.getByTestId("credit-balance").textContent).toBe(
 			"0 orders left",
 		);
+		// Per order, never store-wide (Credits T3.1): the catalogue and the
+		// settings carry on, so the line names the orders that are held.
 		expect(
-			screen.getByText(
-				"Accepting and updating orders and editing products are paused until you add credits.",
-			),
+			screen.getByText("1 order is waiting on credits until you add credits."),
 		).toBeTruthy();
+		expect(screen.queryByText(/editing products/)).toBeNull();
 	});
 
 	it("below zero: how far, and that it comes off the next pack or grant", () => {
@@ -266,7 +280,7 @@ describe("CreditMeter — Billing (full)", () => {
 		expect(screen.getByText("15 owed")).toBeTruthy();
 		expect(
 			screen.getByText(
-				/The 15 orders owed come off your next pack or your next monthly credits/,
+				/The 15 orders owed come off your next pack or your next monthly credits, oldest order first/,
 			),
 		).toBeTruthy();
 	});
@@ -528,9 +542,7 @@ describe("CreditMeter — dashboard home (card)", () => {
 			/>,
 		);
 		expect(
-			screen.getByText(
-				"Paused: accepting and updating orders, editing products.",
-			),
+			screen.getByText("Waiting: 1 order, opening oldest first."),
 		).toBeTruthy();
 		expect(screen.getByRole("link", { name: "Pick a plan" })).toBeTruthy();
 	});
@@ -557,12 +569,14 @@ describe("CreditMeter — dashboard home (card)", () => {
 	});
 });
 
-describe("the card's one button, with the seller lock switched off", () => {
+describe("the card's one button when nothing is waiting", () => {
 	// `creditTone` returns "out" (not "low") at a balance of zero or below, and
-	// the locked branch — which used to cover that state — is unreachable while
-	// CREDIT_LOCK_ENABLED is false. Gating the top-up on "low" alone therefore
-	// left a store IN DEBT with no action button while a store merely running
-	// low got one: the urgency ladder upside down.
+	// the waiting-orders branch — which used to cover that state back when the
+	// lock was store-wide — is unreachable while nothing is waiting, which a
+	// store below zero genuinely can be (an expired lot, or debt from before
+	// the gate). Gating the top-up on "low" alone therefore left a store IN
+	// DEBT with no action button while a store merely running low got one: the
+	// urgency ladder upside down.
 	it("offers Top up at a debt balance, not only when running low", () => {
 		mockQueries({ bal: balance({ plan: -15, total: -15 }) });
 		render(<CreditMeter variant="card" retailer={retailer()} />);

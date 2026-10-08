@@ -28,6 +28,7 @@ import {
 	inclusiveEndToExclusive,
 } from "./lib/icsFeed";
 import { generateTrackingToken } from "./lib/order";
+import { isOrderGated, resolveCreditGate } from "./creditLock";
 import { effectiveKind } from "./lib/productKind";
 
 /** How far back the feed reaches (past work keeps its history in GCal) and how
@@ -184,6 +185,15 @@ export const feedByToken = internalQuery({
 			.unique();
 		if (!retailer) return null;
 
+		// Credits (T3.1): the .ics hands booking details to an EXTERNAL calendar,
+		// where every event's summary is the guest's name. A booking waiting on
+		// credits must not reach it — the feed is one of the easiest ways to
+		// read a gated order without opening the dashboard at all. There is no
+		// signed-in identity on this path (the feed URL is its own capability),
+		// so `resolveCreditGate` simply applies; an admin store, a comped store
+		// and a store in credit all resolve to an open gate as usual.
+		const gate = await resolveCreditGate(ctx, retailer, Date.now());
+
 		const today = todayMytMidnight(Date.now());
 		const from = today - FEED_PAST_DAYS * DAY_MS;
 		const to = today + FEED_FUTURE_DAYS * DAY_MS;
@@ -218,6 +228,14 @@ export const feedByToken = internalQuery({
 				// one extra exclusion: it self-destructs on a 24h clock, and
 				// Google refreshes about daily, so it would mostly be dead noise.
 				if (order.status === "booking_requested") continue;
+				// Waiting on credits (Credits T3.1) — SKIPPED, not redacted. An
+				// .ics event's whole payload is the guest's name and the listing;
+				// with both removed it is noise in the seller's calendar, and a
+				// title that has to change once the order is funded is worse than
+				// an event that appears then (Google refreshes about daily). The
+				// waiting orders are surfaced where they can be acted on: the
+				// inbox count, the chip, and the credit banner.
+				if (isOrderGated(gate, order)) continue;
 				// An open-days package (z8r3fdhpm7) is drawn only on the days it
 				// counts — one event per unbroken run, matching the in-app grid,
 				// which drops the member on a skipped day. Everything else is one
@@ -279,6 +297,8 @@ export const feedByToken = internalQuery({
 			// out of sight. Booking REQUESTS are the one exception, excluded in
 			// the pass above because they self-destruct on a 24 h clock.
 			if (order.status === "cancelled") continue;
+			// Waiting on credits (Credits T3.1) — see the booking pass above.
+			if (isOrderGated(gate, order)) continue;
 			events.push({
 				uid: `order-${order.shortId}`,
 				summary: `${order.customer.name?.trim() || "Order"} — ${describeOrderItems(order.items)}`,

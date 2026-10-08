@@ -10,6 +10,7 @@
  */
 
 import { ConvexError } from "convex/values";
+import { GATED_CELL_LABEL } from "./credits";
 import { formatInternational } from "./phoneDial";
 
 /** Min/max length for a buyer name — one rule for every capture point. */
@@ -92,6 +93,29 @@ export function getDisplayName(customer: DisplayableCustomer): string {
 	const profile = customer.waProfileName?.trim();
 	if (profile) return profile;
 	return formatPhone(customer.waPhone);
+}
+
+/**
+ * The name a SELLER surface shows for a customer row (Credits T3.1).
+ *
+ * A gated customer is redacted server-side down to their aggregates — blank
+ * name, blank phone — so `getDisplayName` falls all the way through to
+ * `formatPhone("")` and returns an EMPTY STRING. That rendered as a nameless
+ * row with a lifetime value next to it, which reads as corrupt data rather
+ * than a deliberate state, and a seller who thinks the record is broken files
+ * a bug instead of topping up.
+ *
+ * `convex/customers.ts` already documented the intended row ("Waiting on
+ * credits · RM 340 · 2 orders") — this is the function that makes the screen
+ * match that comment, and it is one author for all three surfaces (the list
+ * table, the mobile card, the detail page title).
+ */
+export function sellerCustomerName(
+	customer: DisplayableCustomer & { creditGated?: boolean },
+): string {
+	return customer.creditGated === true
+		? GATED_CELL_LABEL
+		: getDisplayName(customer);
 }
 
 /**

@@ -68,9 +68,19 @@ function searchHaystack(o: CsvOrder): string {
  * calendar but must pay to ask "who is here right now" is incoherent. It cannot
  * be used to dodge the gate either: a period only ever matches an order carrying
  * a booking span, so on a product inbox it returns nothing.
+ *
+ * `creditGated` (Credits T3.1) is excluded for the same reason as `pinMode`:
+ * the credit gate applies at EVERY tier, so a Starter store with 40 orders
+ * waiting must be able to see exactly those forty. Paywalling the one filter
+ * that finds the orders a seller is being asked to pay to open would be
+ * absurd. It can't be used to dodge the gate either — it only ever NARROWS to
+ * rows that are already redacted.
  */
 const NARROWING_FILTER_KEYS: Record<
-	Exclude<keyof InboxFilterArgs, "searchText" | "pinMode" | "bookingPeriods">,
+	Exclude<
+		keyof InboxFilterArgs,
+		"searchText" | "pinMode" | "bookingPeriods" | "creditGated"
+	>,
 	true
 > = {
 	paymentStatuses: true,
@@ -263,6 +273,20 @@ export type InboxFilterArgs = {
 	 * diverge (the invariant this module exists for).
 	 */
 	pinMode?: PinMode;
+	/**
+	 * Only orders WAITING ON CREDITS (Credits T3.1), or only ones that aren't.
+	 *
+	 * `true` is the one a seller reaches for — "show me what my next top-up
+	 * opens" — and the inbox offers it as a chip whenever the count is above
+	 * zero. `false` is its twin, for getting the waiting rows out of the way
+	 * and working the orders that ARE open; absent means no filtering, so a
+	 * client sending `false` is asking a real question, not switching the
+	 * filter off.
+	 *
+	 * Reads `creditGated`, which the server stamps during redaction — so the
+	 * filter can only ever agree with what the row actually shows.
+	 */
+	creditGated?: boolean;
 };
 
 /** See `InboxFilterArgs.pinMode`. */
@@ -291,6 +315,10 @@ export type FilterableOrder = CsvOrder & {
 	 * column on every seller's export to serve a chip. */
 	bookingCheckIn?: number;
 	bookingCheckOut?: number;
+	/** Waiting on credits (Credits T3.1) — stamped by the server's redaction,
+	 * never computed here: the filter and the row's own contents then come from
+	 * one decision and cannot disagree. */
+	creditGated?: boolean;
 };
 
 /** An order is awaiting the seller's mockup action. */
@@ -355,6 +383,14 @@ export function buildInboxPredicate(
 		if (pinMode === "only" && o.pinnedAt === undefined) return false;
 		// Pin privilege short-circuits EVERY rule below (86eyrtz74).
 		if (pinMode === "top" && o.pinnedAt !== undefined) return true;
+		// Waiting on credits (Credits T3.1). Placed with the ordinary filters
+		// rather than above the pin short-circuit, so it behaves like every other
+		// one: a pinned order still rides on top, which is what pinning is for.
+		if (
+			args.creditGated !== undefined &&
+			(o.creditGated === true) !== args.creditGated
+		)
+			return false;
 		// ONE flat status set: status leaves and booking periods OR together
 		// (owner call, 1 Sep — see InboxFilterArgs.statuses). Same shape as the
 		// category arm below, and for the same reason: two ways of naming a

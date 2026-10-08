@@ -1440,6 +1440,14 @@ export default defineSchema({
 		totalSpent: v.number(),
 		firstOrderAt: v.number(),
 		lastOrderAt: v.number(),
+		// `creditSeq` of the order that CREATED this customer record (Credits
+		// T3.1, z8r3fdmg4h). Orders are debited in sequence, so the first one is
+		// the lowest: if even that is above `fundedThrough` then every order this
+		// buyer has placed is gated, and the record must not hand the seller a
+		// phone number the gate is holding back. Stamped once, never updated —
+		// one funded order makes a buyer known for good. Absent = visible (every
+		// customer from before the gate).
+		firstOrderCreditSeq: v.optional(v.number()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
@@ -2170,10 +2178,22 @@ export default defineSchema({
 		// webhook identifies messages ONLY by this id, so it's the correlation key
 		// that lets a delivery failure find its order (see by_confirmation_wamid).
 		confirmationPushWamid: v.optional(v.string()),
+		// This order's place in the store's credit-debit sequence (Credits T3.1,
+		// z8r3fdmg4h) — stamped by `debitCreditForOrder` when the order spends
+		// its credit. The order is workable iff this is at or below
+		// `creditAccounts.fundedThrough`; ABSENT means workable, always (an
+		// order from before the per-order gate, or one whose debit faulted and
+		// was deliberately kept — the gate fails open, see
+		// `orderCreditFunded`). Never rewritten: an order's position is for life.
+		creditSeq: v.optional(v.number()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
 		.index("by_retailer", ["retailerId"])
+		// The inbox's "Waiting on credits" filter and the admin's reconcile:
+		// every order of one store whose `creditSeq` is above the watermark, in
+		// queue order. A range read, so it costs the backlog and not the table.
+		.index("by_retailer_credit_seq", ["retailerId", "creditSeq"])
 		.index("by_retailer_status", ["retailerId", "status"])
 		.index("by_retailer_payment", ["retailerId", "paymentStatus"])
 		.index("by_retailer_mockup", ["retailerId", "mockupStatus"])
@@ -3072,6 +3092,17 @@ export default defineSchema({
 		// above 0. A fact about the balance, not a lock: comped and admin stores
 		// carry it too and are never locked (the seller-lock gate decides).
 		exhaustedAt: v.optional(v.number()),
+		// How many order debits this store has ever taken (Credits T3.1,
+		// z8r3fdmg4h). Monotonic, never reset by a period boundary — it is a
+		// sequence, not a balance. Each debit claims the next number and stamps
+		// it on its order as `orders.creditSeq`.
+		debitSeq: v.optional(v.number()),
+		// The high-water mark of debit positions that are PAID FOR. An order is
+		// workable iff `orders.creditSeq <= fundedThrough`, and
+		// `debitSeq - fundedThrough` is how many orders are waiting. Only ever
+		// RISES — which is what makes "expiry never retroactively unfunds an
+		// order already worked" true by construction rather than by a check.
+		fundedThrough: v.optional(v.number()),
 		// Balance notices already sent this period (low / locked …) — the
 		// once-per-period dedupe the notice sender (Credits T3) keeps. Declared
 		// here so every credits branch shares one schema.

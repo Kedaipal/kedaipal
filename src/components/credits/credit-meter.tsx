@@ -2,12 +2,12 @@ import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import type { FunctionReturnType } from "convex/server";
-import { Award, Gauge } from "lucide-react";
+import { Award, Gauge, Lock } from "lucide-react";
 import type { ReactNode } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { CreditBalanceView } from "../../../convex/credits";
 import { TOP_UP_VIEW_ONLY_MESSAGE } from "../../../convex/lib/creditPurchases";
-import { useCreditLockFor } from "../../hooks/useCreditLock";
+import { useCreditGateFor } from "../../hooks/useCreditGate";
 import {
 	type FixHighlight,
 	highlightRingClass,
@@ -21,6 +21,7 @@ import {
 	creditTone,
 	lockCta,
 	ordersBalanceLabel,
+	ordersWaitingLabel,
 } from "../../lib/credits-ui";
 import { formatShortDate } from "../../lib/format";
 import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
@@ -83,7 +84,7 @@ export function CreditMeter({
 	const topUp = useQuery(
 		convexQuery(api.creditPurchases.topUpOptions, storeArgs),
 	).data;
-	const lock = useCreditLockFor(retailer);
+	const lock = useCreditGateFor(retailer);
 
 	if (balance === undefined)
 		return variant === "card" ? (
@@ -120,7 +121,7 @@ export function CreditMeter({
 	const canTopUp = topUpReason === null && !topUpNoWrite;
 
 	const stateLine = creditStateLine({
-		locked: lock.locked,
+		ordersWaiting: lock.ordersWaiting,
 		total: balance.total,
 		purchased: balance.purchased,
 		regime: balance.regime,
@@ -148,12 +149,31 @@ export function CreditMeter({
 	);
 
 	const headline = (
-		<p
-			className={`text-2xl font-semibold tabular-nums ${TONE_TEXT[tone]}`}
-			data-testid="credit-balance"
-		>
-			{ordersBalanceLabel(balance.total)}
-		</p>
+		<div className="flex flex-col gap-0.5">
+			<p
+				className={`text-2xl font-semibold tabular-nums ${TONE_TEXT[tone]}`}
+				data-testid="credit-balance"
+			>
+				{ordersBalanceLabel(balance.total)}
+			</p>
+			{/* The gated-order count BESIDE the balance (Credits T3.1). "15 orders
+			    owed" is the ledger's answer; "3 waiting on credits" is the one the
+			    seller can act on, and the two are not the same number — a
+			    cancelled waiting order still owes its credit but nobody is waiting
+			    on it. Linked, because a count the seller can't click through to is
+			    a fact they can't act on. */}
+			{lock.ordersWaiting > 0 ? (
+				<Link
+					to="/app/orders"
+					search={{ creditGated: true }}
+					className="inline-flex w-fit items-center gap-1 text-xs font-medium text-muted-foreground underline-offset-2 hover:underline"
+					data-testid="credit-orders-waiting"
+				>
+					<Lock className="size-3" aria-hidden="true" />
+					{ordersWaitingLabel(lock.ordersWaiting)}
+				</Link>
+			) : null}
+		</div>
 	);
 
 	if (variant === "card") {
@@ -164,9 +184,9 @@ export function CreditMeter({
 		// switched off) left a store IN DEBT with no action button while a store
 		// merely running low got one: the urgency ladder upside down.
 		const cta =
-			lock.locked && lock.canAct
+			lock.anyWaiting && lock.canAct
 				? lockCta(lock.route)
-				: !lock.locked &&
+				: !lock.anyWaiting &&
 						(tone === "out" || tone === "low") &&
 						showTopUp &&
 						canTopUp
@@ -184,8 +204,10 @@ export function CreditMeter({
 					</p>
 				</div>
 				<p className="text-xs text-muted-foreground">
-					{lock.locked
-						? "Paused: accepting and updating orders, editing products."
+					{lock.anyWaiting
+						? // Per order, never store-wide: products, settings and every
+							// funded order carry on (Credits T3.1).
+							`Waiting: ${lock.ordersWaiting} ${lock.ordersWaiting === 1 ? "order" : "orders"}, opening oldest first.`
 						: (refresh ??
 							(balance.regime === "trial"
 								? "Trial orders — pick a plan to keep going once they're used."
@@ -273,7 +295,7 @@ export function CreditMeter({
 			</div>
 			{stateLine ? (
 				<p
-					className={`text-sm ${lock.locked ? "font-medium text-foreground" : "text-muted-foreground"}`}
+					className={`text-sm ${lock.anyWaiting ? "font-medium text-foreground" : "text-muted-foreground"}`}
 				>
 					{stateLine}
 				</p>
