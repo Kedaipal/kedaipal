@@ -79,4 +79,42 @@ describe("ClaimTimerBar", () => {
 		);
 		expect(screen.getByTestId("claim-timer-progress").style.width).toBe("0%");
 	});
+
+	test("the fill turns amber in the low stage and red in the final minute", () => {
+		vi.useFakeTimers();
+		// Plenty left: mint.
+		renderBar(10 * 60_000);
+		expect(screen.getByTestId("claim-timer-progress").className).toContain(
+			"bg-accent",
+		);
+		cleanup();
+
+		// 2 min of a 15-min window (≤ 25%): amber.
+		renderBar(2 * 60_000);
+		expect(screen.getByTestId("claim-timer-progress").className).toContain(
+			"bg-amber-400",
+		);
+		cleanup();
+
+		// Final minute: red.
+		renderBar(45_000);
+		expect(screen.getByTestId("claim-timer-progress").className).toContain(
+			"bg-destructive",
+		);
+	});
+
+	test("a 24h window is NOT amber at 20 minutes — urgency keys on time left, not fraction", () => {
+		vi.useFakeTimers();
+		const now = Date.now();
+		render(
+			<ClaimTimerBar
+				expiresAt={now + 20 * 60_000}
+				windowMinutes={24 * 60}
+				onExpired={vi.fn()}
+			/>,
+		);
+		expect(screen.getByTestId("claim-timer-progress").className).toContain(
+			"bg-accent",
+		);
+	});
 });

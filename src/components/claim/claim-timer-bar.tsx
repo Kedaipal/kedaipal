@@ -1,11 +1,17 @@
 import { Clock } from "lucide-react";
 import { useEffect, useState } from "react";
-import { formatCountdown } from "../../lib/countdown";
+import {
+	type CountdownStage,
+	countdownStage,
+	formatCountdown,
+} from "../../lib/countdown";
 
 /**
- * The claim link's countdown bar (86eyq0epn, variant A of the three treatments
- * reviewed on the design canvas) — sticky, navy, mint clock over a thin
- * progress line.
+ * The claim link's countdown bar (86eyq0epn variant A, legibility pass
+ * z8r3fdr60v) — sticky, navy, mint clock over an 8px progress line whose
+ * right edge visibly recedes, turning amber then red as time runs out
+ * (`countdownStage` owns the thresholds — shared with the flash-sale
+ * countdown, z8r3fdcw72).
  *
  * Lives in its own module rather than inside `claim-checkout-page` because it
  * is purely presentational: the checkout module pulls in the Convex api, the
@@ -17,6 +23,18 @@ import { formatCountdown } from "../../lib/countdown";
  * `expiresAt`, so a paused tab, a wrong device clock or a mounted-after-expiry
  * render can't buy the buyer a locked price they no longer hold.
  */
+const STAGE_TEXT: Record<CountdownStage, string> = {
+	ok: "text-accent",
+	low: "text-amber-400",
+	critical: "text-destructive",
+};
+
+const STAGE_FILL: Record<CountdownStage, string> = {
+	ok: "bg-accent",
+	low: "bg-amber-400",
+	critical: "bg-destructive",
+};
+
 export function ClaimTimerBar({
 	expiresAt,
 	windowMinutes,
@@ -40,22 +58,26 @@ export function ClaimTimerBar({
 	// full — the opposite of the truth).
 	const total = windowMinutes > 0 ? windowMinutes * 60 * 1000 : 0;
 	const fraction = total > 0 ? Math.max(0, Math.min(1, remaining / total)) : 0;
+	const stage = countdownStage(remaining, total);
 	return (
 		<div className="sticky top-0 z-40 bg-primary text-primary-foreground">
-			<div className="relative mx-auto flex max-w-5xl items-center justify-center gap-2 px-4 pb-[11px] pt-[9px]">
-				<Clock className="size-3.5 shrink-0 text-accent" aria-hidden />
+			<div className="relative mx-auto flex max-w-5xl items-center justify-center gap-2 px-4 pb-4 pt-[9px]">
+				<Clock
+					className={`size-3.5 shrink-0 ${STAGE_TEXT[stage]}`}
+					aria-hidden
+				/>
 				<p className="text-[13px] font-medium">Price locked for</p>
 				<p
-					className="font-mono text-sm font-bold tabular-nums text-accent"
+					className={`font-mono text-sm font-bold tabular-nums ${STAGE_TEXT[stage]}`}
 					aria-live="off"
 				>
 					{formatCountdown(remaining)}
 				</p>
 			</div>
-			<div className="absolute inset-x-0 bottom-0 h-[3px] bg-primary-foreground/15">
+			<div className="absolute inset-x-0 bottom-0 h-2 bg-primary-foreground/15">
 				<div
 					data-testid="claim-timer-progress"
-					className="h-full bg-accent transition-[width] duration-1000 ease-linear motion-reduce:transition-none"
+					className={`h-full rounded-r-full transition-[width] duration-1000 ease-linear motion-reduce:transition-none ${STAGE_FILL[stage]}`}
 					style={{ width: `${fraction * 100}%` }}
 				/>
 			</div>

@@ -433,8 +433,14 @@ outcome.
 - Token capability = `generateTrackingToken()` (the `/track` posture:
   unguessable, noindex, never echoed into meta). Clerk-free buyer surface
   (`BUYER_ROUTE_IDS`), SSR via `ssrRead` soft-degrade.
-- **Open:** the variant-A sticky timer bar ("Price locked for 14:32", mint
-  clock + progress line, `ClaimTimerBar`) over a slimmed storefront checkout:
+- **Open:** the variant-A sticky timer bar ("Price locked for 14:32",
+  `ClaimTimerBar`) over a slimmed storefront checkout. Legibility pass
+  z8r3fdr60v: the progress line is 8px (was a 3px hairline that read as a
+  border), anchored left with a rounded receding right edge, and the fill +
+  digits stage mint → amber (≤25% left) → red (≤10%) via `countdownStage`
+  (`src/lib/countdown.ts`) — thresholds capped in absolute time (10 min /
+  60 s) so a 24h window never sits amber all afternoon. The same stage rule
+  is the one the flash-sale countdown mounts (z8r3fdcw72). Then:
   read-only Order Ticket (frozen lines, "price set by the store"), numbered
   sections — 1 details (name editable, phone locked to the number the link
   was sent to), 2 method/address (shared `AddressFieldset`, pickup picker,
