@@ -433,8 +433,27 @@ outcome.
 - Token capability = `generateTrackingToken()` (the `/track` posture:
   unguessable, noindex, never echoed into meta). Clerk-free buyer surface
   (`BUYER_ROUTE_IDS`), SSR via `ssrRead` soft-degrade.
-- **Open:** the variant-A sticky timer bar ("Price locked for 14:32", mint
-  clock + progress line, `ClaimTimerBar`) over a slimmed storefront checkout:
+- **Open:** the sticky countdown ("Price locked for 14:32", `ClaimTimerBar`)
+  over a slimmed storefront checkout. **Restyled to the house scissors strip
+  in z8r3fdr60v** — it shipped as a 3px progress hairline under a navy bar,
+  which read as a border, not a timer. `ClaimTimerBar` is now a thin sticky
+  wrapper around `CountdownStrip` (`src/components/ui/countdown-strip.tsx`):
+  a receipt being cut along its dotted line, right to left, scissors riding
+  the cut, the countdown printed down the middle — crisp on the sealed half
+  and a misregistered, smudged ghost of itself in the wake. Dashes and digits
+  stage mint → amber (≤25% left) → red (≤10%) via `countdownStage`
+  (`src/lib/countdown.ts`), thresholds capped in absolute time (10 min /
+  60 s) so a 24h window never sits amber all afternoon. **Colour is urgency,
+  geometry is progress** — the two answer different questions, so a long
+  window can be nearly cut while the digits are still mint.
+  **A live countdown is ALWAYS the page's top band** (`CountdownBand`,
+  full-bleed and sticky under the store header) — never an inline panel
+  element, so the clock stays on screen through a long checkout and every
+  page that has one puts it in the same place. The storefront checkout and
+  product page mount the same band (z8r3fdcw72), so a claim's clock and a
+  flash sale's can never drift apart; the product CARD is the deliberate
+  exception (at ~180px the blades and ghost turn to mush, so it keeps a
+  compact image overlay, which also keeps card heights uniform). Then:
   read-only Order Ticket (frozen lines, "price set by the store"), numbered
   sections — 1 details (name editable, phone locked to the number the link
   was sent to), 2 method/address (shared `AddressFieldset`, pickup picker,

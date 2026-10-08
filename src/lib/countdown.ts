@@ -26,3 +26,34 @@ export function formatClaimCountdown(remainingMs: number): string {
 	}
 	return formatCountdown(remainingMs);
 }
+
+/** Urgency stage of a running countdown: colours the bar and the digits. */
+export type CountdownStage = "ok" | "low" | "critical";
+
+const LOW_FRACTION = 0.25;
+const LOW_CAP_MS = 10 * 60_000;
+const CRITICAL_FRACTION = 0.1;
+const CRITICAL_CAP_MS = 60_000;
+
+/**
+ * One rule for every countdown surface (claim bar today, flash-sale bar next —
+ * z8r3fdcw72): "low" at 25% of the window left, "critical" at 10%, but each
+ * threshold is CAPPED in absolute time (10 min / 60 s). The cap is the point:
+ * a 24-hour claim window must not sit amber all afternoon — urgency colours
+ * key on time remaining, never on fraction alone. A malformed zero window
+ * falls back to the absolute caps.
+ */
+export function countdownStage(
+	remainingMs: number,
+	totalMs: number,
+): CountdownStage {
+	const lowAt =
+		totalMs > 0 ? Math.min(totalMs * LOW_FRACTION, LOW_CAP_MS) : LOW_CAP_MS;
+	const criticalAt =
+		totalMs > 0
+			? Math.min(totalMs * CRITICAL_FRACTION, CRITICAL_CAP_MS)
+			: CRITICAL_CAP_MS;
+	if (remainingMs <= criticalAt) return "critical";
+	if (remainingMs <= lowAt) return "low";
+	return "ok";
+}
