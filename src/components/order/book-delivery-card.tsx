@@ -333,7 +333,7 @@ export function BookDeliveryCard({
 		!["completed", "canceled", "expired", "rejected"].includes(job.status)
 			? job
 			: null;
-	// In a country rider booking doesn't serve (COUNTRY_RIDER_BOOKING — MY and
+	// In a country rider booking doesn't serve (COUNTRY_COURIER_BOOKING.lalamove — MY and
 	// SG both do today) the card has nothing true to offer — not a Book button,
 	// and not the "set Lalamove up" hint either, since there is no setup that
 	// would work. A completed or failed trip from before a country switch

@@ -1,6 +1,7 @@
 // Retailer-facing email copy catalog. Pure — no Convex imports — to keep testable.
 // Trilingual (en / ms / zh) parity with the WhatsApp retailer alerts.
 
+import type { CourierProviderId } from "./courierProviders";
 import type { Locale } from "./locale";
 
 export type { Locale } from "./locale";
@@ -69,7 +70,7 @@ export type RetailerEmailVars = {
 	// Which booking provider the failed job belonged to (86eyjpv6z). Absent =
 	// "lalamove" (every pre-Delyva caller), so old scheduled sends render
 	// unchanged.
-	deliveryProvider?: "lalamove" | "delyva";
+	deliveryProvider?: CourierProviderId;
 	// True when the order has a made-to-order custom item that needs a mockup
 	// approved before it can be packed (and before the buyer is asked to pay).
 	// Surfaced on the newOrder / orderConfirmed alerts so the seller knows to act.

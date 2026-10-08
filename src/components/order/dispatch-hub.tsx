@@ -30,19 +30,25 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
+import {
+	COURIER_PROVIDER_IDS,
+	type CourierProviderId,
+} from "../../../convex/lib/courierProviders";
 import { isActiveJobStatus } from "../../../convex/lib/deliveryJobs";
 import { delyvaSurface, lalamoveSurface } from "../../lib/dispatch-surface";
 import { BookDeliveryCard } from "./book-delivery-card";
 import { DelyvaDispatchCard } from "./delyva-dispatch-card";
 
-type Provider = "lalamove" | "delyva";
+type Provider = CourierProviderId;
 
 const STORAGE_KEY = "kp:dispatch-provider";
 
 function storedChoice(): Provider | null {
 	try {
 		const v = localStorage.getItem(STORAGE_KEY);
-		return v === "lalamove" || v === "delyva" ? v : null;
+		return v !== null && (COURIER_PROVIDER_IDS as readonly string[]).includes(v)
+			? (v as Provider)
+			: null;
 	} catch {
 		return null;
 	}

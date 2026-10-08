@@ -172,6 +172,7 @@ import {
 } from "./lib/orderStatus";
 import { type PaymentMethod, resolvePaymentMethods } from "./lib/payment";
 import { type Country, DEFAULT_COUNTRY } from "./lib/country";
+import type { CourierProviderId } from "./lib/courierProviders";
 import {
 	type OrderReceiptData,
 	orderToReceiptData,
@@ -3556,7 +3557,7 @@ async function riderOwnsTransition(
 	ctx: MutationCtx,
 	order: Doc<"orders">,
 	targetAnchor: "confirmed" | "packed" | "shipped" | "delivered",
-): Promise<"lalamove" | "delyva" | null> {
+): Promise<CourierProviderId | null> {
 	if (!isRiderManagedTransition(targetAnchor, order.status)) return null;
 	// Collection orders (86eyg0n8e): the rider drives the FRONT of the flow —
 	// the webhook moves the JOB only, and the order stays the seller's to
@@ -3589,7 +3590,7 @@ async function riderOwnsTransition(
 /** Seller-facing message for a blocked manual advance, per the provider that
  * owns the live job. The order-detail stepper offers an explicit "Update
  * manually" confirm that overrides it. */
-function riderGateMessage(provider: "lalamove" | "delyva"): string {
+function riderGateMessage(provider: CourierProviderId): string {
 	return provider === "delyva"
 		? "A Delyva courier booking is on this order — it updates itself when the courier collects and delivers, with the tracking number attached. Open the order and use “Update manually” to move it yourself."
 		: "A Lalamove rider is on this order — with your Lalamove webhook set up, it updates itself when the rider picks up or drops off. Open the order and use “Update manually” to move it yourself.";

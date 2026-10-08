@@ -5,16 +5,16 @@ import {
 	lalamoveBookingArmed,
 	storeBooksCouriers,
 } from "./courierBooking";
-import { COUNTRY_DELYVA_BOOKING, COUNTRY_RIDER_BOOKING } from "./delivery";
+import { COUNTRY_COURIER_BOOKING } from "./courierProviders";
 
-// Both market tables allow MY and SG today, so the country gate is proven by
+// Both registry rows allow MY and SG today, so the country gate is proven by
 // closing one for the duration of a test — the predicates must read it, not
 // assume it.
-const RIDER_GATE = { ...COUNTRY_RIDER_BOOKING };
-const DELYVA_GATE = { ...COUNTRY_DELYVA_BOOKING };
+const RIDER_GATE = { ...COUNTRY_COURIER_BOOKING.lalamove };
+const DELYVA_GATE = { ...COUNTRY_COURIER_BOOKING.delyva };
 afterEach(() => {
-	Object.assign(COUNTRY_RIDER_BOOKING, RIDER_GATE);
-	Object.assign(COUNTRY_DELYVA_BOOKING, DELYVA_GATE);
+	Object.assign(COUNTRY_COURIER_BOOKING.lalamove, RIDER_GATE);
+	Object.assign(COUNTRY_COURIER_BOOKING.delyva, DELYVA_GATE);
 });
 
 const LALAMOVE_ON = { enabled: true };
@@ -40,7 +40,7 @@ describe("lalamoveBookingArmed", () => {
 	});
 
 	test("a country the rider market is closed in is not armed", () => {
-		COUNTRY_RIDER_BOOKING.SG = false;
+		COUNTRY_COURIER_BOOKING.lalamove.SG = false;
 		expect(
 			lalamoveBookingArmed({ country: "SG", deliveryBooking: LALAMOVE_ON }),
 		).toBe(false);
@@ -50,7 +50,7 @@ describe("lalamoveBookingArmed", () => {
 	});
 
 	test("a store with no stored country is judged as the default (MY)", () => {
-		COUNTRY_RIDER_BOOKING.MY = false;
+		COUNTRY_COURIER_BOOKING.lalamove.MY = false;
 		expect(lalamoveBookingArmed({ deliveryBooking: LALAMOVE_ON })).toBe(false);
 	});
 });
@@ -85,11 +85,11 @@ describe("delyvaBookingArmed", () => {
 	});
 
 	test("a country Delyva is closed in is not armed; no country reads as MY", () => {
-		COUNTRY_DELYVA_BOOKING.SG = false;
+		COUNTRY_COURIER_BOOKING.delyva.SG = false;
 		expect(
 			delyvaBookingArmed({ country: "SG", delyva: DELYVA_CONNECTED }),
 		).toBe(false);
-		COUNTRY_DELYVA_BOOKING.MY = false;
+		COUNTRY_COURIER_BOOKING.delyva.MY = false;
 		expect(delyvaBookingArmed({ delyva: DELYVA_CONNECTED })).toBe(false);
 	});
 });

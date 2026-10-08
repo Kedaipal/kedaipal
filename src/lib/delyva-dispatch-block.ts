@@ -13,7 +13,7 @@ import { MARKET_NUMBER_ADJECTIVE } from "./dispatch-block";
 const BLOCK_COPY: Record<DelyvaDispatchBlock, string> = {
 	// The only reason with no fix to offer — the card hides itself for this one;
 	// the line is the fallback for surfaces that can't. Market-neutral on
-	// purpose: COUNTRY_DELYVA_BOOKING serves every country we sell in today.
+	// purpose: COUNTRY_COURIER_BOOKING.delyva serves every country we sell in today.
 	country_unsupported:
 		"Delyva courier booking isn't available for stores in your country yet — arrange the courier yourself and add the tracking number below.",
 	not_delivery: "This is a self-collect order — there's no parcel to send out.",
