@@ -433,14 +433,23 @@ outcome.
 - Token capability = `generateTrackingToken()` (the `/track` posture:
   unguessable, noindex, never echoed into meta). Clerk-free buyer surface
   (`BUYER_ROUTE_IDS`), SSR via `ssrRead` soft-degrade.
-- **Open:** the variant-A sticky timer bar ("Price locked for 14:32",
-  `ClaimTimerBar`) over a slimmed storefront checkout. Legibility pass
-  z8r3fdr60v: the progress line is 8px (was a 3px hairline that read as a
-  border), anchored left with a rounded receding right edge, and the fill +
-  digits stage mint → amber (≤25% left) → red (≤10%) via `countdownStage`
-  (`src/lib/countdown.ts`) — thresholds capped in absolute time (10 min /
-  60 s) so a 24h window never sits amber all afternoon. The same stage rule
-  is the one the flash-sale countdown mounts (z8r3fdcw72). Then:
+- **Open:** the sticky countdown ("Price locked for 14:32", `ClaimTimerBar`)
+  over a slimmed storefront checkout. **Restyled to the house scissors strip
+  in z8r3fdr60v** — it shipped as a 3px progress hairline under a navy bar,
+  which read as a border, not a timer. `ClaimTimerBar` is now a thin sticky
+  wrapper around `CountdownStrip` (`src/components/ui/countdown-strip.tsx`):
+  a receipt being cut along its dotted line, right to left, scissors riding
+  the cut, the countdown printed down the middle — crisp on the sealed half
+  and a misregistered, smudged ghost of itself in the wake. Dashes and digits
+  stage mint → amber (≤25% left) → red (≤10%) via `countdownStage`
+  (`src/lib/countdown.ts`), thresholds capped in absolute time (10 min /
+  60 s) so a 24h window never sits amber all afternoon. **Colour is urgency,
+  geometry is progress** — the two answer different questions, so a long
+  window can be nearly cut while the digits are still mint.
+  `CountdownStrip` is the one component the storefront's flash countdown
+  mounts too (z8r3fdcw72), so a claim's clock and a flash sale's can never
+  drift apart; the product CARD is the deliberate exception (at ~180px the
+  blades and ghost turn to mush, so it keeps a compact overlay). Then:
   read-only Order Ticket (frozen lines, "price set by the store"), numbered
   sections — 1 details (name editable, phone locked to the number the link
   was sent to), 2 method/address (shared `AddressFieldset`, pickup picker,
