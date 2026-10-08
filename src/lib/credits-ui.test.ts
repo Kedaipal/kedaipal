@@ -142,6 +142,23 @@ describe("the cancel dialog says what happens to the order's credit", () => {
 	test("an order that never used a credit says nothing", () => {
 		expect(cancelCreditLine({ kind: "not_charged" })).toBeNull();
 	});
+
+	test("a GATED order quotes no monthly count, because it spends none", () => {
+		// Cancelling an order the seller was never allowed to open always
+		// refunds and never touches the 10-a-month allowance (Zaki, 9 Oct
+		// 2026). Quoting "(9 more this month)" here would say this cancel had
+		// spent one — the number wouldn't move, and the sentence would be the
+		// dialog lying about the rule it exists to explain.
+		const line = cancelCreditLine({
+			kind: "refund",
+			refundsLeftAfter: 9,
+			gated: true,
+		});
+		expect(line).toBe(
+			"The credit it used comes back to you — you were never able to open this one.",
+		);
+		expect(line).not.toMatch(/this month/);
+	});
 });
 
 describe("plan choices state the allowance and what they do to the balance", () => {
