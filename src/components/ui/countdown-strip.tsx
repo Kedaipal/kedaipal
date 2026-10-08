@@ -121,6 +121,11 @@ export function CountdownStrip({
 	const sealedPct = `${(sealed * 100).toFixed(1)}%`;
 	const digits = formatCountdown(remaining);
 
+	// The GHOST's digits keep the stage colour; its label does not. By the
+	// final minute the fill is nearly gone, so a red that lives only in the
+	// paper is a red nobody sees — the clock is the one thing still on screen,
+	// and it has to carry the warning (Zaki, 9 Oct). The label stays grey so
+	// the wake still reads as smudged print rather than as a second live row.
 	// The wake has to stay READABLE — "a bit dirty and distorted", not erased.
 	// Rendered for real, a 2px split read as TWO washed-out lines and the final
 	// minute (the one that matters) had no legible clock at all. What cut paper
@@ -203,7 +208,12 @@ export function CountdownStrip({
 				}}
 				aria-hidden
 			>
-				<StripRow icon={icon} label={label} digits={digits} />
+				<StripRow
+					icon={icon}
+					label={label}
+					digits={digits}
+					toneClass={STAGE_TONE[stage]}
+				/>
 			</div>
 			<div
 				className={cn(
@@ -218,7 +228,12 @@ export function CountdownStrip({
 				}}
 				aria-hidden
 			>
-				<StripRow icon={icon} label={label} digits={digits} />
+				<StripRow
+					icon={icon}
+					label={label}
+					digits={digits}
+					toneClass={STAGE_TONE[stage]}
+				/>
 			</div>
 			{/* The blades, always sitting ON the cut. Mirrored so they point the
 			    way they travel. */}

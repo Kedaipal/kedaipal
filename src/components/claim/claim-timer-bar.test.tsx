@@ -117,6 +117,19 @@ describe("ClaimTimerBar", () => {
 		expect(print().getByText("0:45").className).toContain("text-red-700");
 	});
 
+	test("the stage colour survives the cut — the wake's digits carry it too", () => {
+		vi.useFakeTimers();
+		// By the final minute the fill is nearly gone, so a colour that lives
+		// only in the paper is a colour nobody sees. The clock is what's left
+		// on screen, and it has to carry the warning.
+		renderBar(45_000);
+		const reds = screen
+			.getAllByText("0:45")
+			.filter((el) => el.className.includes("text-red-700"));
+		// The crisp print plus both halves of the ghost.
+		expect(reds.length).toBe(3);
+	});
+
 	test("a 24h window is NOT amber at 20 minutes — urgency keys on time left, not fraction", () => {
 		vi.useFakeTimers();
 		render(
