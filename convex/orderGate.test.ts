@@ -25,6 +25,8 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { api } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { ensureCreditAccount } from "./credits";
+import { isOrderGated } from "./creditLock";
+import { isCustomerGated } from "./lib/orderGate";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -624,6 +626,84 @@ describe("cancelling a gated order gives the credit back", () => {
 		expect(after?.fundedThrough, "no dead position left behind").toBe(1);
 	});
 
+	// THE loophole the first version of this fix opened (found in Chrome, 9
+	// Oct). The refund is a credit landing, so it walks the watermark one
+	// position — and when the cancelled order held the oldest unfunded
+	// position, the watermark passed its OWN creditSeq and every seller
+	// surface un-redacted it. Cancel became "reveal the buyer for free",
+	// repeatable, which is the bypass the whole gate exists to stop.
+	test("the cancelled order stays INVISIBLE even though the watermark moved", async () => {
+		const t = setup();
+		const s = await seed(t);
+		await drain(t, s.retailerId);
+		const gated = await placeOrder(t, s.retailerId, s.productId);
+		await t
+			.withIdentity({ subject: OWNER })
+			.mutation(api.orders.updateStatus, {
+				orderId: gated._id,
+				status: "cancelled",
+			});
+
+		const account = await t.run((ctx) =>
+			ctx.db
+				.query("creditAccounts")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", s.retailerId))
+				.first(),
+		);
+		const row = await t.run((ctx) => ctx.db.get(gated._id));
+		// The watermark DID move past it — that is correct, and is what stops
+		// the dead position eating the next credit.
+		expect(account?.fundedThrough).toBe(row?.creditSeq);
+		// …and the order is still closed, on its own stamp rather than on the
+		// comparison the watermark just lost.
+		expect(row?.neverFunded).toBe(true);
+
+		const asOwner = t.withIdentity({ subject: OWNER });
+		expectNoSentinels(
+			await asOwner.query(api.orders.get, { shortId: gated.shortId }),
+			"orders.get after a gated cancel",
+		);
+		expectNoSentinels(
+			await asOwner.query(api.orders.searchOrders, {
+				retailerId: s.retailerId,
+				searchText: SENTINEL.name,
+			}),
+			"orders.searchOrders after a gated cancel",
+		);
+	});
+
+	test("the BUYER behind it stays closed too — the phone is the bypass", async () => {
+		// Same walk, one table over: `firstOrderCreditSeq` is a comparison
+		// against the same watermark, so the customer record would have handed
+		// back the name and number.
+		const t = setup();
+		const s = await seed(t);
+		await drain(t, s.retailerId);
+		const gated = await placeOrder(t, s.retailerId, s.productId);
+		await t
+			.withIdentity({ subject: OWNER })
+			.mutation(api.orders.updateStatus, {
+				orderId: gated._id,
+				status: "cancelled",
+			});
+		const asOwner = t.withIdentity({ subject: OWNER });
+		expectNoSentinels(
+			await asOwner.query(api.customers.list, {
+				retailerId: s.retailerId,
+				sort: "recency",
+				paginationOpts: { numItems: 20, cursor: null },
+			}),
+			"customers.list after a gated cancel",
+		);
+		expectNoSentinels(
+			await asOwner.query(api.customers.search, {
+				retailerId: s.retailerId,
+				term: SENTINEL.phone,
+			}),
+			"customers.search after a gated cancel",
+		);
+	});
+
 	test("it costs no monthly allowance — a bad month can't start charging again", async () => {
 		const t = setup();
 		const s = await seed(t);
@@ -642,6 +722,47 @@ describe("cancelling a gated order gives the credit back", () => {
 				.first(),
 		);
 		expect(account?.sellerRefunds?.count ?? 0).toBe(0);
+	});
+
+	test("a returning buyer who IS paid for becomes visible again", async () => {
+		// The stamp must not be a life sentence. A buyer whose first order was
+		// cancelled while gated, who then orders again with credits in the
+		// account, is a buyer the seller has paid for — `linkOrderToCustomer`
+		// re-points `firstOrderCreditSeq` at the new order and drops the stamp.
+		const t = setup();
+		const s = await seed(t);
+		await drain(t, s.retailerId);
+		const gated = await placeOrder(t, s.retailerId, s.productId);
+		await t
+			.withIdentity({ subject: OWNER })
+			.mutation(api.orders.updateStatus, {
+				orderId: gated._id,
+				status: "cancelled",
+			});
+		// Credits land, then the same buyer comes back.
+		await t.withIdentity({ subject: ADMIN }).mutation(api.credits.adminAdjust, {
+			retailerId: s.retailerId,
+			bucket: "plan",
+			amount: 5,
+			note: "top up before the repeat order",
+		});
+		await placeOrder(t, s.retailerId, s.productId);
+
+		const customer = await t.run(async (ctx) => {
+			const rows = await ctx.db.query("customers").collect();
+			return rows.find((c) => c.retailerId === s.retailerId) ?? null;
+		});
+		expect(customer?.neverFunded, "the stamp is cleared").toBeUndefined();
+
+		const listed = await t
+			.withIdentity({ subject: OWNER })
+			.query(api.customers.list, {
+				retailerId: s.retailerId,
+				sort: "recency",
+				paginationOpts: { numItems: 20, cursor: null },
+			});
+		expect(listed.page[0]?.creditGated, "no longer redacted").toBeUndefined();
+		expect(listed.page[0]?.waPhone).toBe(SENTINEL.phone);
 	});
 
 	test("a FUNDED order the seller accepted still keeps its credit", async () => {
@@ -681,5 +802,54 @@ describe("cancelling a gated order gives the credit back", () => {
 				.first(),
 		);
 		expect(after?.planBalance).toBe(before?.planBalance);
+	});
+});
+
+/**
+ * The two gate predicates, directly — the stamp added an arm that is NOT a
+ * comparison, so the exempt short-circuit it sits behind has to be explicit.
+ */
+describe("the gate predicates with a neverFunded stamp", () => {
+	const metered = {
+		exempt: false,
+		fundedThrough: 10,
+		creditsOwed: 0,
+		ordersWaiting: 0,
+		unlockRoute: "topup" as const,
+	};
+
+	test("a stamped order is closed even when the watermark covers it", () => {
+		// creditSeq 4 <= fundedThrough 10, so the comparison says "funded" —
+		// this is exactly the state a refund leaves behind.
+		expect(isOrderGated(metered, { creditSeq: 4 })).toBe(false);
+		expect(isOrderGated(metered, { creditSeq: 4, neverFunded: true })).toBe(
+			true,
+		);
+	});
+
+	test("an EXEMPT store sees everything, stamp or no stamp", () => {
+		// Admin-owned, comped and unmetered stores are never gated, and the
+		// stamp must not out-rank that — a white-glove admin working a store
+		// has to see the order they are being asked about.
+		const exempt = { ...metered, exempt: true, fundedThrough: 0 };
+		expect(isOrderGated(exempt, { creditSeq: 99, neverFunded: true })).toBe(
+			false,
+		);
+	});
+
+	test("a stamped customer is closed even when the watermark covers them", () => {
+		expect(isCustomerGated({ firstOrderCreditSeq: 4 }, 10)).toBe(false);
+		expect(
+			isCustomerGated({ firstOrderCreditSeq: 4, neverFunded: true }, 10),
+		).toBe(true);
+	});
+
+	test("an unstamped, unfunded row is still judged by the watermark", () => {
+		// The stamp ADDS a reason to hide; it must not remove the original one.
+		expect(isOrderGated(metered, { creditSeq: 11 })).toBe(true);
+		expect(isCustomerGated({ firstOrderCreditSeq: 11 }, 10)).toBe(true);
+		// And a grandfathered row (no position at all) stays visible.
+		expect(isOrderGated(metered, {})).toBe(false);
+		expect(isCustomerGated({}, 10)).toBe(false);
 	});
 });

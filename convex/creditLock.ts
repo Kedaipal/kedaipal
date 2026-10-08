@@ -248,8 +248,17 @@ export async function orderGatedForSeller(
  * the redaction, the guards, the inbox filter and the UI. */
 export function isOrderGated(
 	gate: CreditGateState,
-	order: { creditSeq?: number },
+	order: { creditSeq?: number; neverFunded?: boolean },
 ): boolean {
+	// An exempt store (admin-owned, comped, unmetered) sees everything. Said
+	// explicitly rather than relying on `fundedThrough` being Infinity,
+	// because `neverFunded` below is not a comparison and Infinity can't
+	// out-rank it.
+	if (gate.exempt) return false;
+	// Cancelled while gated: closed for good, whatever the watermark says.
+	// See `orders.neverFunded` in schema.ts — the refund moves the watermark,
+	// and without this the cancelled order un-redacts ITSELF.
+	if (order.neverFunded === true) return true;
 	return !orderCreditFunded(order.creditSeq, gate.fundedThrough);
 }
 
@@ -275,7 +284,11 @@ export function isOrderGated(
  */
 export function guestNameForSeller(
 	gate: CreditGateState,
-	order: { creditSeq?: number; customer: { name?: string } },
+	order: {
+		creditSeq?: number;
+		neverFunded?: boolean;
+		customer: { name?: string };
+	},
 	fallback?: string,
 ): string | undefined {
 	if (isOrderGated(gate, order)) return GATED_CELL_LABEL;

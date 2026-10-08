@@ -645,16 +645,45 @@ export async function refundCreditForOrder(
 		account.sellerRefunds?.periodKey === account.periodKey
 			? account.sellerRefunds.count
 			: 0;
+	// Waiting on credits at the moment it was cancelled — read off the account
+	// we already hold, so no extra read and no import from creditLock.ts
+	// (which imports THIS module).
+	const gated = !orderCreditFunded(order.creditSeq, account.fundedThrough ?? 0);
 	const decision = cancelRefundDecision({
 		cause,
 		statusAtCancel: order.status,
 		sellerRefundsUsed: used,
-		// Waiting on credits at the moment it was cancelled — read off the
-		// account we already hold, so no extra read and no import from
-		// creditLock.ts (which imports THIS module).
-		gated: !orderCreditFunded(order.creditSeq, account.fundedThrough ?? 0),
+		gated,
 	});
 	if (!decision.refund) return;
+	// CLOSE IT FOR GOOD before the refund lands. The refund is a credit
+	// arriving, so `applyEntry` walks the watermark forward one position — and
+	// when this order held the oldest unfunded position, the watermark passes
+	// its own `creditSeq` and every seller surface un-redacts it. The seller
+	// would get the buyer's name, phone, items and tracking token back for an
+	// order they paid nothing for, which is the bypass the gate exists to
+	// stop, on demand and repeatable. See `orders.neverFunded` in schema.ts.
+	//
+	// Stamped for EVERY cause, not just a seller cancel: the unpaid-order
+	// sweep refunds too (`cause: "system"`, hourly), so without this a gated
+	// order reveals itself with no seller action at all.
+	//
+	// `updatedAt` is deliberately left alone, like every other credit patch —
+	// a credit moving is not progress on the order.
+	if (gated) {
+		await ctx.db.patch(order._id, { neverFunded: true });
+		// The buyer too, when this order is the one that created their record:
+		// the same watermark walk would otherwise expose the phone number.
+		if (order.customerId !== undefined) {
+			const customer = await ctx.db.get(order.customerId);
+			if (
+				customer &&
+				customer.firstOrderCreditSeq !== undefined &&
+				customer.firstOrderCreditSeq === order.creditSeq
+			)
+				await ctx.db.patch(customer._id, { neverFunded: true });
+		}
+	}
 	const last = debits[debits.length - 1];
 	let bucket = last.bucket;
 	let lotId = last.lotId;

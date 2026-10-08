@@ -861,6 +861,24 @@ refusal and every gate surface's copy.
   owed" is the ledger's answer, "3 waiting on credits" is the one the seller can
   act on — a cancelled waiting order still owes its credit while nobody waits
   on it.
+- **A cancelled gated order stays CLOSED — `orders.neverFunded`.** The refund
+  below is a credit landing, so `applyEntry` walks the watermark one position;
+  when the cancelled order held the oldest unfunded position the watermark
+  passes its own `creditSeq`, every surface un-redacts it, and "cancel" becomes
+  "reveal this buyer for free", repeatable. **A watermark cannot express "this
+  position is spent but this order stays shut"** — not advancing only delays
+  the reveal to the next credit, and skipping dead positions still moves the
+  mark past them. So the gate is `neverFunded === true || creditSeq >
+  fundedThrough`: the watermark advances (no dead position, the next LIVE order
+  opens), and the stamp keeps the dead one shut. `customers.neverFunded` is the
+  same stamp one table over, because `firstOrderCreditSeq` is a comparison
+  against the same watermark and what it leaks is the phone number; it is
+  CLEARED when the buyer orders again, so a returning buyer who is paid for
+  becomes visible. Stamped for EVERY cancel cause, not just a seller's — the
+  unpaid-order sweep refunds too, so without it a gated order revealed itself
+  with no seller action at all. Found by driving Chrome, after the refund
+  change below had already passed its unit and integration tests: the tests
+  asserted the credit came back and never asked what the seller could now see.
 - **Cancelling a GATED order always gives its credit back**, and never spends
   one of the month's 10 seller refunds (Zaki, 9 Oct 2026).
   `NEVER_ACCEPTED_STATUSES` (`pending`, `booking_requested`) is a PROXY for
