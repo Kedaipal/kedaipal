@@ -446,10 +446,14 @@ outcome.
   60 s) so a 24h window never sits amber all afternoon. **Colour is urgency,
   geometry is progress** — the two answer different questions, so a long
   window can be nearly cut while the digits are still mint.
-  `CountdownStrip` is the one component the storefront's flash countdown
-  mounts too (z8r3fdcw72), so a claim's clock and a flash sale's can never
-  drift apart; the product CARD is the deliberate exception (at ~180px the
-  blades and ghost turn to mush, so it keeps a compact overlay). Then:
+  **A live countdown is ALWAYS the page's top band** (`CountdownBand`,
+  full-bleed and sticky under the store header) — never an inline panel
+  element, so the clock stays on screen through a long checkout and every
+  page that has one puts it in the same place. The storefront checkout and
+  product page mount the same band (z8r3fdcw72), so a claim's clock and a
+  flash sale's can never drift apart; the product CARD is the deliberate
+  exception (at ~180px the blades and ghost turn to mush, so it keeps a
+  compact image overlay, which also keeps card heights uniform). Then:
   read-only Order Ticket (frozen lines, "price set by the store"), numbered
   sections — 1 details (name editable, phone locked to the number the link
   was sent to), 2 method/address (shared `AddressFieldset`, pickup picker,

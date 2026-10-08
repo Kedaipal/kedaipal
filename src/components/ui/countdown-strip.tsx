@@ -19,10 +19,12 @@ import { cn } from "../../lib/utils";
  * it speaks the receipt language the checkout ticket already uses
  * (`checkout-summary` — bg-card, dashed border rules, mono figures).
  *
- * ONE component, three mounts: the claim checkout header (`ClaimTimerBar`),
- * the checkout page's flash banner and the product page's flash panel
- * (z8r3fdcw72). Deliberately NOT the product card — at ~180px wide the blades
- * and the ghost text turn to mush, so the card keeps its compact overlay.
+ * **A live countdown is ALWAYS the page's top band** (`CountdownBand`, below)
+ * — never an inline panel element, never two treatments for one idea. Mounts:
+ * the claim checkout (`ClaimTimerBar`), the storefront checkout and the
+ * product page (z8r3fdcw72). Deliberately NOT the product card — at ~180px
+ * wide the blades and the ghost text turn to mush, so the card keeps its
+ * compact image overlay, which also keeps card heights uniform.
  *
  * Presentational only. It ticks its own clock for the display and calls
  * `onExpired` when the deadline passes, but the server is always the
@@ -232,6 +234,47 @@ export function CountdownStrip({
 					)}
 				/>
 			</div>
+		</div>
+	);
+}
+
+/**
+ * The SLB's one and only placement: a full-bleed sticky band at the top of the
+ * page, directly under the store header (Zaki, 8 Oct — "always at top, header
+ * kind of thing, so it's consistent on whichever page uses it").
+ *
+ * Deliberately NOT an inline card inside a panel. A countdown that is a page
+ * banner on one screen and a widget inside a box on the next is two patterns
+ * for one idea; the band also means the clock stays on screen while the buyer
+ * scrolls through a long checkout, which is the whole point of a deadline.
+ *
+ * Full-bleed and square-cornered so it reads as chrome rather than content —
+ * and on a wide viewport the dotted line runs the whole way, which is exactly
+ * what a long receipt being cut should look like.
+ */
+export function CountdownBand({
+	expiresAt,
+	totalMs,
+	label,
+	icon,
+	onExpired,
+}: {
+	expiresAt: number;
+	totalMs: number;
+	label: string;
+	icon?: LucideIcon;
+	onExpired?: () => void;
+}) {
+	return (
+		<div className="sticky top-0 z-40">
+			<CountdownStrip
+				expiresAt={expiresAt}
+				totalMs={totalMs}
+				label={label}
+				icon={icon}
+				onExpired={onExpired}
+				className="rounded-none border-b border-border/70 ring-0 shadow-[0_1px_6px_rgba(15,23,42,0.06)]"
+			/>
 		</div>
 	);
 }
