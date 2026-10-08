@@ -281,20 +281,36 @@ describe("convexErrorMessage — rate-limit payload", () => {
 	});
 });
 
-describe("convexErrorMessage — the credit lock's typed refusal (Credits T3)", () => {
+describe("convexErrorMessage — the credit gate's typed refusal (Credits T3.1)", () => {
 	it("reads as its sentence, never [object Object]", () => {
-		const data = creditLockErrorData("topup", "owner");
+		const data = creditLockErrorData({
+			route: "topup",
+			audience: "owner",
+			creditsToUnlock: 1,
+			ordersWaiting: 3,
+		});
 		const err = new ConvexError(data);
 		expect(convexErrorMessage(err)).toBe(data.message);
-		expect(convexErrorMessage(err)).toMatch(/^You're out of credits/);
+		expect(convexErrorMessage(err)).toMatch(/^3 orders are waiting on credits/);
 	});
 
-	it("hands a surface the way back, and nothing for any other error", () => {
-		const err = new ConvexError(creditLockErrorData("pick_plan", "member"));
+	it("hands a surface the way back AND the order's position", () => {
+		const err = new ConvexError(
+			creditLockErrorData({
+				route: "pick_plan",
+				audience: "member",
+				creditsToUnlock: 2,
+				ordersWaiting: 5,
+			}),
+		);
 		expect(creditLockErrorOf(err)).toMatchObject({
 			kind: "credits_locked",
 			unlockRoute: "pick_plan",
 			audience: "member",
+			// The ORDER's own place in the queue, so a refused control can say
+			// "waiting on 2 credits" rather than quoting the store's total.
+			creditsToUnlock: 2,
+			ordersWaiting: 5,
 		});
 		expect(creditLockErrorOf(new ConvexError("Only 2 in stock"))).toBeNull();
 		expect(creditLockErrorOf(new Error("boom"))).toBeNull();

@@ -7,7 +7,6 @@ import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { ViewOnlyNote } from "../components/app/view-only-note";
-import { CreditLockNote } from "../components/credits/credit-lock-note";
 import { PageHeader } from "../components/dashboard/page-header";
 import {
 	ProductForm,
@@ -82,7 +81,7 @@ function NewProductRoute() {
 	// and form stay usable: a lock can lift in minutes (a top-up), and a draft
 	// built meanwhile publishes the moment it does. Only Publish/Create grey
 	// out, with the reason beside them.
-	const productsLock = useAreaLock("products", { credits: true });
+	const productsLock = useAreaLock("products");
 	const saveLock = productsLock.readOnly
 		? { reason: productsLock.reason, label: lockLabel(productsLock.cause) }
 		: undefined;
@@ -207,7 +206,6 @@ function NewProductRoute() {
 		return (
 			<div className="flex flex-col gap-4 lg:max-w-2xl">
 				<ViewOnlyNote />
-				<CreditLockNote scope="products" />
 				<ProductWizard
 					retailerId={retailer._id}
 					saveLock={saveLock}
@@ -247,7 +245,6 @@ function NewProductRoute() {
 			</div>
 			<h2 className="text-xl font-bold lg:hidden">New product</h2>
 			<ViewOnlyNote />
-			<CreditLockNote scope="products" />
 
 			{/* Way back to the guided setup — lossless (same draft substrate). */}
 			<button

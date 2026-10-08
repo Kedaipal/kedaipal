@@ -39,14 +39,22 @@ import {
 } from "./lib/imageContentType";
 import type { CancelCause } from "./lib/credits";
 import { requireCustomerName } from "./lib/customer";
-import { assertCreditsAvailable } from "./creditLock";
+import {
+	type CreditGateState,
+	assertOrderCreditAvailable,
+	creditGateFor,
+	forSeller,
+	isOrderGated,
+	orderGatedForSeller,
+	resolveCreditGate,
+} from "./creditLock";
+import { effectivePrice, isPromoActive, promoUnitsLeft } from "./lib/promo";
+import { promoUnitsRequested, tallyPromoUnits } from "./lib/promoTally";
 import {
 	assertPlanFeature,
 	assertSubscriptionActive,
 	getAccess,
 } from "./subscriptions";
-import { effectivePrice, isPromoActive, promoUnitsLeft } from "./lib/promo";
-import { promoUnitsRequested, tallyPromoUnits } from "./lib/promoTally";
 import {
 	recordOrderCancelled,
 	recordOrderCreated,
@@ -2047,6 +2055,15 @@ async function orderEvent(
 }
 
 export type OrderWithStatusLabels = Doc<"orders"> & {
+	/** Waiting on credits (Credits T3.1). Present and `true` ONLY on the
+	 * SELLER door, and only for an order whose own credit isn't paid for yet —
+	 * the payload is then the redacted row, so the order page renders its own
+	 * gated screen rather than a grid of empty fields. Never on the buyer's
+	 * token path: a buyer sees their order in full at any seller balance. */
+	creditGated?: true;
+	/** How many credits open it — "waiting on 3 credits", the order's own
+	 * position rather than the store's total. */
+	creditsToUnlock?: number;
 	/** RSVP to a fixed-date event — the fulfilment moment belongs to the event,
 	 * not to this order, so the reschedule affordance disables with the reason
 	 * (and the buyer's tracking page says the date is the event's). */
@@ -2150,6 +2167,32 @@ export const get = query({
 		// authenticated seller/admin (`shortId`) path keeps the full snapshot for
 		// the order-detail "— 7.4 km" audit line. See convex/delivery.ts.
 		const isBuyerRead = token !== undefined;
+		// Credits (T3.1): an order waiting on credits is INVISIBLE to the seller,
+		// not merely un-actionable — greying the buttons out would leave the
+		// buyer's name, phone and address on screen and the seller would settle
+		// it by hand in WhatsApp (Zaki, 6 Oct 2026). So this returns early with
+		// the redacted row rather than enriching a row it must not send: no
+		// storage URLs are minted, no booking context is computed, and critically
+		// no `trackingToken` crosses — with that token the seller could simply
+		// open the buyer's own `/track/` page and read everything.
+		//
+		// The BUYER's door is untouched: `isBuyerRead` means they arrived with
+		// the capability token, and they see their order in full at any seller
+		// balance (pinned by the storefront-parity test at +50 and −50).
+		if (!isBuyerRead && retailer) {
+			const gate = await resolveCreditGate(ctx, retailer, Date.now());
+			if (isOrderGated(gate, order))
+				return {
+					...forSeller(gate, order),
+					retailerLocale: (retailer.locale ?? "en") as Locale,
+					retailerCountry: retailer.country ?? DEFAULT_COUNTRY,
+					storeName: retailer.storeName ?? "",
+					// The order page reads this to decide whether a claim needs a
+					// screenshot. A gated order shows no claims at all, so the
+					// honest answer here is "nothing to show".
+					hasPaymentProof: false,
+				};
+		}
 		// Rider drop-off photo (Lalamove POD) — one indexed read, and only on
 		// the delivered end-state of delivery orders, so the hot pending/active
 		// tracking path pays nothing. Collection orders (86eyg0n8e) never
@@ -2281,6 +2324,15 @@ export const get = query({
 				};
 			})()),
 			deliverySnapshot: isBuyerRead ? undefined : order.deliverySnapshot,
+			// The store's debit SEQUENCE number (Credits T3.1) — stripped on the
+			// buyer path with the two below. It is not a balance, but it IS a
+			// running count of every order this store has ever taken, and this
+			// read is unauthenticated: anyone holding one tracking link would
+			// learn the store's lifetime order volume. The buyer has no use for
+			// it; the seller's own surfaces need it to place the row in the queue.
+			// (Caught by the +50/−50 buyer-parity test, which greps the whole
+			// payload for /credit/i — exactly what that guard is for.)
+			creditSeq: isBuyerRead ? undefined : order.creditSeq,
 			// Meta's message id has no buyer use and this read is unauthenticated —
 			// strip it on the token path alongside the delivery snapshot. The
 			// buyer-facing cards branch on `confirmationPushStatus`, never the wamid.
@@ -2572,6 +2624,11 @@ export const listPaymentProofs = query({
 			level: "read",
 		});
 
+		// Credits (T3.1): a payment screenshot is the buyer's own photo, often
+		// with their name and number in it — an order the seller can't see must
+		// not leak through its attachments.
+		if (await orderGatedForSeller(ctx, order)) return [];
+
 		const claims = await orderPaymentClaims(ctx, order);
 		const current = currentClaimIndex(claims);
 		const borrowed = borrowedLeadReference(claims, current);
@@ -2613,38 +2670,54 @@ export const listByRetailer = query({
 			area: "orders",
 			level: "read",
 		});
+		// Credits (T3.1): one gate for the page, and the redaction applied to
+		// every arm below — Home's recent-orders strip is a seller read of order
+		// rows like any other, and a strip of buyer names is the same loophole
+		// as the inbox.
+		const gate = await creditGateFor(ctx, retailerId);
+		const redact = (page: {
+			page: Doc<"orders">[];
+			isDone: boolean;
+			continueCursor: string;
+		}) => ({ ...page, page: page.page.map((o) => forSeller(gate, o)) });
 
 		if (mockupPending) {
 			// "changes_requested" and "pending" are adjacent on the index (nothing
 			// sorts between them), so a single contiguous range is exactly the
 			// seller-actionable set — fully indexed + paginatable. Ordered desc by
 			// index key: pending group (newest first), then changes_requested.
-			return ctx.db
-				.query("orders")
-				.withIndex("by_retailer_mockup", (q) =>
-					q
-						.eq("retailerId", retailerId)
-						.gte("mockupStatus", "changes_requested")
-						.lte("mockupStatus", "pending"),
-				)
-				.order("desc")
-				.paginate(paginationOpts);
+			return redact(
+				await ctx.db
+					.query("orders")
+					.withIndex("by_retailer_mockup", (q) =>
+						q
+							.eq("retailerId", retailerId)
+							.gte("mockupStatus", "changes_requested")
+							.lte("mockupStatus", "pending"),
+					)
+					.order("desc")
+					.paginate(paginationOpts),
+			);
 		}
 
 		if (status) {
-			return ctx.db
-				.query("orders")
-				.withIndex("by_retailer_status", (q) =>
-					q.eq("retailerId", retailerId).eq("status", status),
-				)
-				.order("desc")
-				.paginate(paginationOpts);
+			return redact(
+				await ctx.db
+					.query("orders")
+					.withIndex("by_retailer_status", (q) =>
+						q.eq("retailerId", retailerId).eq("status", status),
+					)
+					.order("desc")
+					.paginate(paginationOpts),
+			);
 		}
-		return ctx.db
-			.query("orders")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-			.order("desc")
-			.paginate(paginationOpts);
+		return redact(
+			await ctx.db
+				.query("orders")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.order("desc")
+				.paginate(paginationOpts),
+		);
 	},
 });
 
@@ -2857,6 +2930,10 @@ export const searchOrders = query({
 		// tags), so this is v.string() rather than a literal union; the picker is
 		// driven by `availableSources` below. Distinct dimension from `source`.
 		attributionSources: v.optional(v.array(v.string())),
+		// Waiting on credits (Credits T3.1) — all-tier, like `pinMode`: see
+		// NARROWING_FILTER_KEYS for why the one filter that finds the orders a
+		// seller is being asked to pay to open is never itself paywalled.
+		creditGated: v.optional(v.boolean()),
 		searchText: v.optional(v.string()),
 		// What the seller's pins do to this list (86eyrtz74, extended 1 Sep):
 		// "top" keeps PINNED orders even when they fail the filters, "off"
@@ -2899,6 +2976,7 @@ export const searchOrders = query({
 			searchText,
 			showPinned,
 			pinMode,
+			creditGated,
 			limit,
 		},
 	) => {
@@ -2939,20 +3017,47 @@ export const searchOrders = query({
 			searchText,
 			showPinned,
 			pinMode,
+			creditGated,
 		});
 		if (narrowsTheInbox(filters) && !access.actingAsAdmin)
 			await assertPlanFeature(ctx, retailerId, "orderInbox");
 
-		const all = await ctx.db
-			.query("orders")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-			.order("desc")
-			.take(MAX_INBOX_SCAN);
+		// ONE clock for the whole handler: the counts, the predicate and the
+		// credit gate must all answer from the same instant, or a request that
+		// straddles midnight can count a row it then filters out.
+		const now0 = Date.now();
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+
+		// Credits (T3.1): REDACT FIRST, before anything else looks at the window.
+		//
+		// Everything downstream — the filter predicate, the search, the facet
+		// tallies, the sort, the payload — then operates on rows that already
+		// have the buyer stripped out of them, so the gate cannot be enforced in
+		// one place and forgotten in another. Two consequences are deliberate
+		// and worth naming, because both would otherwise need a rule of their
+		// own that could drift from this one:
+		//
+		//  - SEARCH can't find a gated order by customer name or phone: those
+		//    fields are empty by the time `buildInboxPredicate` reads them.
+		//    Searching the ORDER NUMBER still finds it, which is exactly right
+		//    — the seller got that number in their new-order alert.
+		//  - the CATEGORY facet counts a gated order as uncategorised, because
+		//    its lines are gone. "3 Uncategorized" is a fair description of an
+		//    order whose contents the seller can't see.
+		const gate = await resolveCreditGate(ctx, retailer, now0);
+		const all = (
+			await ctx.db
+				.query("orders")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.order("desc")
+				.take(MAX_INBOX_SCAN)
+		).map((o) => forSeller(gate, o));
 
 		// Bucket counts (+ cross-cutting counts: mockup-pending, due-today, unpaid)
 		// over the full set — independent of the active filters/search so the chips,
 		// the due-today banner, and the Home "today strip" always show true totals.
-		const now = Date.now();
+		const now = now0;
 		const counts = {
 			new: 0,
 			in_progress: 0,
@@ -2986,6 +3091,14 @@ export const searchOrders = query({
 			 * inbox. See convex/lib/pdf/awb.ts `isReadyToShipForLabel`.
 			 */
 			readyToShip: 0,
+			/**
+			 * Orders WAITING ON CREDITS (Credits T3.1) — counted over the FULL
+			 * window like every other count, so the chip states the store's real
+			 * backlog and doesn't move as the seller filters it. Cancelled rows
+			 * are excluded by the same rule the meter uses: a cancelled order
+			 * still holds its queue position, but nobody is waiting on it.
+			 */
+			creditGated: 0,
 			/**
 			 * Orders the seller has pinned (86eyrtz74). Counted over the FULL set
 			 * like every other count, so the Pinned chip states the real total and
@@ -3053,6 +3166,8 @@ export const searchOrders = query({
 			if (matchesBookingPeriod(o, "upcoming", now)) counts.bookingUpcoming++;
 			if (isReadyToShipForLabel(o)) counts.readyToShip++;
 			if (o.pinnedAt !== undefined) counts.pinned++;
+			if (o.creditGated === true && o.status !== "cancelled")
+				counts.creditGated++;
 			bump(checkoutSourceTally, o.source ?? "storefront");
 			bump(fulfilmentTally, fulfilmentKey(o));
 			bump(paymentStatusTally, o.paymentStatus ?? "unpaid");
@@ -3200,6 +3315,11 @@ const exportFilterValidators = {
 	// the rows the seller was looking at.
 	fulfilments: v.optional(v.array(fulfilmentKeyValidator)),
 	searchText: v.optional(v.string()),
+	// Waiting on credits (Credits T3.1) — in the shared set for the same reason
+	// every other filter is: an export of a filtered view must contain exactly
+	// the rows the seller was looking at. (Their buyer columns are redacted
+	// either way — see `orderToCsvSource`.)
+	creditGated: v.optional(v.boolean()),
 	// Pin mode (86eyrtz74) — kept in the SHARED validator set so an export of a
 	// filtered view contains exactly the rows the seller was looking at, forced-in
 	// pins included and a pinned-only view exported as pinned-only. See
@@ -3224,8 +3344,9 @@ const EXPORT_SCAN_CAP = 20_000;
  * reach a spreadsheet). `categories` is filled in separately by the caller (see
  * `attachOrderCategories`) because it needs extra reads.
  */
-function orderToCsvSource(o: Doc<"orders">): CsvOrder {
+function orderToCsvSource(o: Doc<"orders"> & { creditGated?: boolean }): CsvOrder {
 	return {
+		creditGated: o.creditGated,
 		shortId: o.shortId,
 		createdAt: o.createdAt,
 		fulfilmentDate: o.fulfilmentDate,
@@ -3389,6 +3510,8 @@ export const getTimeline = query({
 			area: "orders",
 			level: "read",
 		});
+		// Credits (T3.1): event notes quote the buyer and the order's contents.
+		if (await orderGatedForSeller(ctx, order)) return [];
 		const events = await ctx.db
 			.query("orderEvents")
 			.withIndex("by_order", (q) => q.eq("orderId", order._id))
@@ -3486,11 +3609,18 @@ export const exportPage = internalQuery({
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 			.order("desc")
 			.paginate(paginationOpts);
+		// Credits (T3.1): redact BEFORE the predicate, exactly as `searchOrders`
+		// does — so the export can't become the loophole (a CSV of phone numbers
+		// is the easiest manual-settlement route of all), and so an export of a
+		// filtered view still contains the rows the seller was looking at.
+		const gate = await creditGateFor(ctx, retailerId, now ?? Date.now());
 		const predicate = buildInboxPredicate(
 			toInboxFilterArgs(filters),
 			now ?? Date.now(),
 		);
-		const matched = page.page.filter(predicate);
+		const matched = page.page
+			.map((o) => forSeller(gate, o))
+			.filter(predicate);
 		return {
 			rows: matched.map(orderToCsvSource),
 			scanned: page.page.length,
@@ -3510,7 +3640,10 @@ export const exportByIds = internalQuery({
 		const owned = fetched.filter(
 			(o): o is Doc<"orders"> => o?.retailerId === retailerId,
 		);
-		return owned.map(orderToCsvSource);
+		// Same redaction as `exportPage` — a ticked selection is not a way round
+		// the gate (Credits T3.1).
+		const gate = await creditGateFor(ctx, retailerId);
+		return owned.map((o) => orderToCsvSource(forSeller(gate, o)));
 	},
 });
 
@@ -4030,9 +4163,11 @@ export const updateStatus = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
-		// Credits (T3): moving an order forward is locked at zero credits;
-		// cancelling never is — a locked seller must be able to release a buyer.
-		if (status !== "cancelled") await assertCreditsAvailable(ctx, order.retailerId);
+		// Credits (T3.1): moving an order forward needs THIS order's credit paid
+		// for; cancelling never does — a gated seller must always be able to
+		// release a buyer, which is the whole mitigation for an order they can't
+		// yet see.
+		if (status !== "cancelled") await assertOrderCreditAvailable(ctx, order);
 
 		// Cancelled is TERMINAL — the same rule advanceToStage already enforces
 		// (86eypn8ye). Not a UX nicety: cancelling RESTORES reserved stock, and
@@ -4150,6 +4285,12 @@ export const bulkUpdateStatus = mutation({
 		 * — e.g. "Mark as Packed" on a booking or an event RSVP. Named so the
 		 * toast can say why nothing moved (the house no-silent-skip rule). */
 		skippedNoSuchStage: number;
+		/** Of `skipped`, how many are WAITING ON CREDITS (Credits T3.1). The
+		 * gate is per order now, so a selection is routinely MIXED — the batch
+		 * moves what it can and names what it couldn't, which is the only
+		 * honest answer. Refusing the whole batch because one order of forty is
+		 * waiting would be the store-wide lock all over again. */
+		skippedCreditGated: number;
 	}> => {
 		if (orderIds.length === 0)
 			return {
@@ -4159,6 +4300,7 @@ export const bulkUpdateStatus = mutation({
 				skippedRiderManaged: 0,
 				skippedCancelled: 0,
 				skippedNoSuchStage: 0,
+				skippedCreditGated: 0,
 			};
 		if (orderIds.length > 100)
 			throw new ConvexError("Too many orders selected (max 100)");
@@ -4169,12 +4311,14 @@ export const bulkUpdateStatus = mutation({
 		let skippedRiderManaged = 0;
 		let skippedCancelled = 0;
 		let skippedNoSuchStage = 0;
+		let skippedCreditGated = 0;
 		// The inbox multi-select is single-retailer, so every id resolves to the
 		// same access descriptor; keep the last one for a single batch audit row.
 		let batchAccess: RetailerAccess | undefined;
 		// Single-retailer by construction (same comment as `batchAccess`), so the
 		// stage config is one read for the whole batch rather than one per order.
 		let retailer: Doc<"retailers"> | null = null;
+		let gate: CreditGateState | null = null;
 		for (const orderId of orderIds) {
 			const order = await ctx.db.get(orderId);
 			if (!order) throw new ConvexError("Order not found");
@@ -4195,13 +4339,15 @@ export const bulkUpdateStatus = mutation({
 			// reads for one refusal. The admin bypass lives inside the guard.
 			if (firstResolve) {
 				await assertSubscriptionActive(ctx, order.retailerId);
-				// Credits (T3): moving orders forward is locked at zero credits;
-				// cancelling never is — a locked seller must be able to release
-				// buyers. Once per batch, for the same reason as the lock above.
-				if (status !== "cancelled")
-					await assertCreditsAvailable(ctx, order.retailerId);
 			}
 			if (firstResolve) retailer = await ctx.db.get(order.retailerId);
+			// The credit gate, resolved ONCE for the batch (single-retailer by
+			// construction, like the two gates above) but APPLIED PER ORDER —
+			// which is the difference between this and every other batch gate
+			// here. `gate` is the store's watermark; whether a given order sits
+			// above it is `isOrderGated`, one comparison and no read.
+			if (firstResolve && retailer)
+				gate = await resolveCreditGate(ctx, retailer, Date.now());
 
 			// Skip no-ops + transitions blocked by the mockup gate (don't fail the
 			// whole batch on one ineligible order).
@@ -4218,6 +4364,18 @@ export const bulkUpdateStatus = mutation({
 			if (order.status === "cancelled" && status !== "cancelled") {
 				skipped++;
 				skippedCancelled++;
+				continue;
+			}
+			// Waiting on credits (Credits T3.1): the seller can't see this order,
+			// so they certainly can't move it on. Cancel is the exception, as it
+			// is for every gate here — releasing a buyer is never blocked.
+			if (
+				status !== "cancelled" &&
+				gate !== null &&
+				isOrderGated(gate, order)
+			) {
+				skipped++;
+				skippedCreditGated++;
 				continue;
 			}
 			// A booking request only exits via approve/decline (or cancel) — bulk
@@ -4303,6 +4461,7 @@ export const bulkUpdateStatus = mutation({
 			skippedRiderManaged,
 			skippedCancelled,
 			skippedNoSuchStage,
+			skippedCreditGated,
 		};
 	},
 });
@@ -4518,7 +4677,7 @@ export const advanceToStage = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
-		await assertCreditsAvailable(ctx, order.retailerId);
+		await assertOrderCreditAvailable(ctx, order);
 		const retailer = access.retailer;
 
 		if (order.status === "cancelled") {
@@ -4684,7 +4843,7 @@ export const setShipmentTracking = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
-		await assertCreditsAvailable(ctx, order.retailerId);
+		await assertOrderCreditAvailable(ctx, order);
 
 		// All-blank input resolves to all-undefined = tracking cleared.
 		const shipment = resolveShipmentFields({
@@ -4936,7 +5095,7 @@ export const setDeliveryFee = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
-		await assertCreditsAvailable(ctx, order.retailerId);
+		await assertOrderCreditAvailable(ctx, order);
 		if ((order.deliveryMethod ?? "delivery") !== "delivery")
 			throw new ConvexError("Only delivery orders carry a delivery charge");
 		if (order.status === "cancelled")
@@ -5058,7 +5217,7 @@ export const rescheduleFulfilment = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
-		await assertCreditsAvailable(ctx, order.retailerId);
+		await assertOrderCreditAvailable(ctx, order);
 		if (order.status === "cancelled")
 			throw new ConvexError("This order was cancelled");
 		if (order.status === "shipped" || order.status === "delivered")
@@ -5503,7 +5662,7 @@ export const markPaymentReceived = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
-		await assertCreditsAvailable(ctx, order.retailerId);
+		await assertOrderCreditAvailable(ctx, order);
 
 		if (order.paymentStatus === "received") {
 			// Idempotent — second click is a no-op.
@@ -5837,6 +5996,10 @@ export const getCustomerImageUrl = query({
 	handler: async (ctx, { shortId, token }): Promise<string | null> => {
 		const order = await resolveSharedOrder(ctx, { token, shortId });
 		if (!order?.customerImageStorageId) return null;
+		// Credits (T3.1) — seller arm only: the buyer always sees their own
+		// reference photo, whatever the store's balance.
+		if (token === undefined && (await orderGatedForSeller(ctx, order)))
+			return null;
 		return (await ctx.storage.getUrl(order.customerImageStorageId)) ?? null;
 	},
 });
@@ -5955,7 +6118,7 @@ export const submitMockup = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
-		await assertCreditsAvailable(ctx, order.retailerId);
+		await assertOrderCreditAvailable(ctx, order);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		if (order.mockupStatus === "approved")
@@ -6045,7 +6208,7 @@ export const updateMockupQuote = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
-		await assertCreditsAvailable(ctx, order.retailerId);
+		await assertOrderCreditAvailable(ctx, order);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		if (order.mockupStatus === "approved")
@@ -6173,7 +6336,7 @@ export const waiveMockup = mutation({
 			level: "write",
 		});
 		await assertSubscriptionActive(ctx, order.retailerId);
-		await assertCreditsAvailable(ctx, order.retailerId);
+		await assertOrderCreditAvailable(ctx, order);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		if (order.mockupStatus === "approved" || order.mockupWaivedAt !== undefined)
@@ -6367,6 +6530,9 @@ export const getMockupUrls = query({
 	handler: async (ctx, { shortId, token }): Promise<string[]> => {
 		const order = await resolveSharedOrder(ctx, { token, shortId });
 		if (!order) return [];
+		// Credits (T3.1) — seller arm only, as in `getCustomerImageUrl`.
+		if (token === undefined && (await orderGatedForSeller(ctx, order)))
+			return [];
 		const urls = await Promise.all(
 			resolveMockupImageIds(order).map((id) => ctx.storage.getUrl(id)),
 		);
@@ -6403,6 +6569,11 @@ export const getItemImageUrls = query({
 	handler: async (ctx, { shortId, token }): Promise<(string | null)[]> => {
 		const order = await resolveSharedOrder(ctx, { token, shortId });
 		if (!order) return [];
+		// Credits (T3.1) — seller arm only. The item images ARE the order's
+		// contents; the redacted row carries no lines, so this must carry no
+		// thumbnails for them either.
+		if (token === undefined && (await orderGatedForSeller(ctx, order)))
+			return [];
 
 		const variantIds = new Set<Id<"productVariants">>();
 		const productIds = new Set<Id<"products">>();

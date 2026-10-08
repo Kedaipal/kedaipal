@@ -383,7 +383,7 @@
 	"pricingpage_faq_q8": "Is my price changing?",
 	"pricingpage_faq_a8": "No. Starter and Pro keep their monthly prices, and the credits are included in them — they're not a new charge. You only ever pay more if you choose to top up or move up a plan.",
 	"pricingpage_faq_q9": "What happens if I run out of credits?",
-	"pricingpage_faq_a9": "Your shop keeps taking every order — the storefront never pauses, and your buyers never notice. Orders that arrive while you're at zero come off your next credits, so topping up, moving up a plan or waiting for your monthly credits clears the balance. You can always see, cancel and refund an order.",
+	"pricingpage_faq_a9": "Your shop keeps taking every order — the storefront never pauses, and your buyers never notice. Orders that arrive while you're at zero wait on credits: you can see that they came in and what they're worth, but not open them until credits land, and they open oldest first. Everything you've already paid a credit for carries on as normal, as do your products and settings — and you can always cancel an order to release the buyer.",
 	"pricingpage_faq_q10": "Do unused credits carry over?",
 	"pricingpage_faq_a10": "Your plan's monthly credits don't — they reset at the start of each month. Credits you buy as a top-up last {months} months from the day you buy them, and they're only used once your monthly credits run out.",
 	"pricingpage_faq_q11": "Do I get the same credits on the annual plan?",

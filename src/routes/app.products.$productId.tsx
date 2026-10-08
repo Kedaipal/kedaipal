@@ -16,7 +16,6 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { EventRsvpPanel } from "../components/app/event-rsvp-panel";
 import { ViewOnlyNote } from "../components/app/view-only-note";
-import { CreditLockNote } from "../components/credits/credit-lock-note";
 import {
 	PageHeader,
 	PageHeaderSkeleton,
@@ -183,7 +182,7 @@ function EditProductRoute() {
 	// T3), or a teammate with view on products. Every write on this page greys
 	// out together; the form's fields stay editable so an edit already under
 	// way survives until saving is possible again.
-	const productsLock = useAreaLock("products", { credits: true });
+	const productsLock = useAreaLock("products");
 	const saveLock = productsLock.readOnly
 		? { reason: productsLock.reason, label: lockLabel(productsLock.cause) }
 		: undefined;
@@ -322,7 +321,6 @@ function EditProductRoute() {
 			{/* Why nothing here saves right now — a lapsed store, or one out of
 			    credits (Credits T3). Each renders nothing otherwise. */}
 			<ViewOnlyNote />
-			<CreditLockNote scope="products" />
 
 			<ProductForm
 				key={product._id}

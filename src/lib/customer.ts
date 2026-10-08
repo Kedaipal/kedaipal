@@ -12,4 +12,5 @@ export {
 	formatPhone,
 	getDisplayName,
 	orderCustomerLabel,
+	sellerCustomerName,
 } from "../../convex/lib/customer";

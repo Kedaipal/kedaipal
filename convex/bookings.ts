@@ -76,9 +76,9 @@ import {
 	MAX_CUSTOMER_NOTE,
 	requireOrderAccess,
 } from "./orders";
-import { assertCreditsAvailable } from "./creditLock";
-import { assertSubscriptionActive, getAccess } from "./subscriptions";
+import { assertOrderCreditAvailable } from "./creditLock";
 import { effectivePrice } from "./lib/promo";
+import { assertSubscriptionActive, getAccess } from "./subscriptions";
 import { orderingPausedMessage } from "./lib/seasonalHold";
 import { recordOrderCreated } from "./subscriptionUsage";
 
@@ -677,7 +677,7 @@ export const approveBookingRequest = mutation({
 		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, order.retailerId);
 		}
-		await assertCreditsAvailable(ctx, order.retailerId);
+		await assertOrderCreditAvailable(ctx, order);
 
 		// The one transition path: timeline event, activation stamp, stage reset.
 		// notifyStatusChange skips `confirmed`, so nothing generic goes out.
