@@ -232,3 +232,30 @@ export function promoDiscountTotal(order: {
 		return sum + (item.listPrice - item.price) * item.quantity;
 	}, 0);
 }
+
+/**
+ * What `orders.create` throws when it refuses to charge a number the buyer
+ * wasn't shown (z8r3fdcw72) — the `CreditLockErrorData` posture: a typed
+ * payload with a guard, so the checkout can switch into a fixable state
+ * instead of printing an error at someone.
+ *
+ * `reason: "units"` is a capped sale straddle (the cart wants more than the
+ * pool has left); `"subtotal"` is the `expectedSubtotal` mismatch.
+ */
+export type PriceChangedErrorData = {
+	kind: "price_changed";
+	reason: "units" | "subtotal";
+	productName?: string;
+	unitsLeft?: number;
+	expected?: number;
+	actual?: number;
+	lines: Array<{ variantId: string; now: number; listPrice?: number }>;
+};
+
+/** Is this `ConvexError` payload the price-changed guard's? */
+export function isPriceChangedErrorData(
+	data: unknown,
+): data is PriceChangedErrorData {
+	if (typeof data !== "object" || data === null) return false;
+	return (data as Record<string, unknown>).kind === "price_changed";
+}

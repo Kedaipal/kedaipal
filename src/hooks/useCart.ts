@@ -103,6 +103,11 @@ type CartAction =
 			/** undefined clears the answer. */
 			answer: string | undefined;
 	  }
+	| {
+			type: "REPRICE";
+			/** variantId → the line's price NOW, in minor units. */
+			prices: Record<string, number>;
+	  }
 	| { type: "CLEAR" }
 	| { type: "HYDRATE"; items: CartItem[]; retailerId: string };
 
@@ -175,6 +180,21 @@ function reducer(state: CartState, action: CartAction): CartState {
 					};
 				}),
 			};
+		case "REPRICE": {
+			// A promotion that started or ended while items sat in the cart
+			// (z8r3fdcw72). The buyer is SHOWN the change and taps to accept it
+			// — this never fires on its own, because a price moving under
+			// someone mid-checkout is exactly what the price-changed guard at
+			// `orders.create` exists to refuse.
+			let touched = false;
+			const items = state.items.map((item) => {
+				const next = action.prices[item.variantId];
+				if (next === undefined || next === item.price) return item;
+				touched = true;
+				return { ...item, price: next };
+			});
+			return touched ? { ...state, items } : state;
+		}
 		case "REMOVE":
 			return {
 				...state,
@@ -301,6 +321,11 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 		[],
 	);
 	const clearCart = useCallback(() => dispatch({ type: "CLEAR" }), []);
+	/** Accept the live prices for the named lines (z8r3fdcw72). */
+	const repriceItems = useCallback(
+		(prices: Record<string, number>) => dispatch({ type: "REPRICE", prices }),
+		[],
+	);
 	const setAnswer = useCallback(
 		(
 			variantId: Id<"productVariants">,
@@ -363,6 +388,7 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 		quickRemoveProduct,
 		removeItem,
 		clearCart,
+		repriceItems,
 		setAnswer,
 		quantityForProduct,
 	};

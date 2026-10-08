@@ -124,6 +124,7 @@ function cartStub(): UseCart {
 		updateQuantity: vi.fn(),
 		removeItem: vi.fn(),
 		clearCart: vi.fn(),
+		repriceItems: vi.fn(),
 		setAnswer: vi.fn(),
 		quickRemoveProduct: vi.fn(),
 		quantityForProduct: () => 1,
@@ -461,5 +462,99 @@ describe("CheckoutPage — buyer questions (z8r3fdkjek)", async () => {
 		fireEvent.click(screen.getAllByRole("button", { name: "Place order" })[0]);
 		await waitFor(() => expect(state.createOrder).toHaveBeenCalledTimes(1));
 		expect(state.createOrder.mock.calls[0][0].items[0].answers).toBeUndefined();
+	});
+});
+
+/**
+ * Prices that moved while the basket sat there (z8r3fdcw72). The server
+ * refuses the order outright via `expectedSubtotal`; this is the honest UI
+ * half — the buyer is never asked to pay a number they weren't shown, and the
+ * way out sits next to the sentence rather than in a toast.
+ */
+describe("price changed under the buyer", () => {
+	function fillBuyer() {
+		fireEvent.change(screen.getByRole("textbox", { name: /^Your name/ }), {
+			target: { value: "Aisyah Rahman" },
+		});
+		changePhone("012-345 6789");
+	}
+
+	it("sends the item subtotal the buyer is looking at", async () => {
+		state.listed = [];
+		renderCheckout({ method: "pickup" });
+		fillBuyer();
+		fireEvent.click(screen.getAllByRole("button", { name: "Place order" })[0]);
+		await waitFor(() => expect(state.createOrder).toHaveBeenCalledTimes(1));
+		const [args] = state.createOrder.mock.calls[0];
+		expect(args.expectedSubtotal).toBe(4500);
+	});
+
+	it("blocks Place order and names the new price when a promotion ends mid-checkout", () => {
+		// The cart line was added at RM45; the catalogue now prices it at RM60.
+		state.listed = [
+			{
+				_id: "prod_1",
+				variants: [{ _id: "var_1", price: 6000 }],
+				buyerQuestions: [],
+			},
+		];
+		renderCheckout({ method: "pickup" });
+		fillBuyer();
+		expect(
+			screen.getAllByText(/Kek Pandan is now RM\s?60\.00/).length,
+		).toBeGreaterThan(0);
+		const place = screen.getAllByRole("button", { name: "Place order" })[0];
+		expect((place as HTMLButtonElement).disabled).toBe(true);
+	});
+
+	it("offers one button that accepts the new prices", () => {
+		state.listed = [
+			{
+				_id: "prod_1",
+				variants: [{ _id: "var_1", price: 6000 }],
+				buyerQuestions: [],
+			},
+		];
+		const cart = cartStub();
+		renderCheckout({ method: "pickup", cart });
+		fillBuyer();
+		const update = screen.getAllByRole("button", {
+			name: /Update prices/,
+		})[0];
+		// The button states what the items come to, so "accept" is informed.
+		expect(update.textContent).toMatch(/RM\s?60\.00/);
+		fireEvent.click(update);
+		expect(cart.repriceItems).toHaveBeenCalledWith({ var_1: 6000 });
+	});
+
+	it("a sale that STARTED under the buyer is surfaced too, never silently charged", () => {
+		state.listed = [
+			{
+				_id: "prod_1",
+				variants: [{ _id: "var_1", price: 4500, promoPrice: 3150 }],
+				promoState: { phase: "live", label: "Raya" },
+				buyerQuestions: [],
+			},
+		];
+		renderCheckout({ method: "pickup" });
+		fillBuyer();
+		expect(
+			screen.getAllByText(/Kek Pandan is now RM\s?31\.50/).length,
+		).toBeGreaterThan(0);
+	});
+
+	it("an unchanged price leaves checkout alone", () => {
+		state.listed = [
+			{
+				_id: "prod_1",
+				variants: [{ _id: "var_1", price: 4500 }],
+				buyerQuestions: [],
+			},
+		];
+		renderCheckout({ method: "pickup" });
+		fillBuyer();
+		expect(screen.queryByRole("button", { name: /Update prices/ })).toBeNull();
+		const place = screen.getAllByRole("button", { name: "Place order" })[0];
+		expect((place as HTMLButtonElement).disabled).toBe(false);
 	});
 });

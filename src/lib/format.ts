@@ -18,6 +18,10 @@ import {
 	isCreditLockErrorData,
 } from "../../convex/lib/credits";
 import { formatInternational } from "../../convex/lib/phoneDial";
+import {
+	isPriceChangedErrorData,
+	type PriceChangedErrorData,
+} from "../../convex/lib/promo";
 import { STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
 
 /**
@@ -64,6 +68,17 @@ export function convexErrorMessage(err: unknown): string {
  * surfaces that put the way back next to the sentence (Credits T3). */
 export function creditLockErrorOf(err: unknown): CreditLockErrorData | null {
 	return err instanceof ConvexError && isCreditLockErrorData(err.data)
+		? err.data
+		: null;
+}
+
+/** The price-changed guard's typed refusal inside a caught error, or `null`
+ * (z8r3fdcw72). Checkout switches into a fixable state on it rather than
+ * printing it: `convexErrorMessage` would stringify the payload. */
+export function priceChangedErrorOf(
+	err: unknown,
+): PriceChangedErrorData | null {
+	return err instanceof ConvexError && isPriceChangedErrorData(err.data)
 		? err.data
 		: null;
 }

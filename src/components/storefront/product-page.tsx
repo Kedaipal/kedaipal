@@ -1,13 +1,16 @@
 import { Link, useNavigate } from "@tanstack/react-router";
-import { CalendarClock, CalendarRange } from "lucide-react";
+import { CalendarClock, CalendarRange, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
+import { usePromoClock } from "../../hooks/usePromoClock";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { bookingPriceSuffix, weekendRateSuffix } from "../../lib/booking-dates";
 import { formatPrice } from "../../lib/format";
+import type { PromoState } from "../../lib/promo";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
+import { CountdownBand } from "../ui/countdown-strip";
 import { Markdown } from "../ui/markdown";
 import { ZoomableImage } from "../ui/zoomable-image";
 import type { StorefrontProduct } from "./product-card";
@@ -102,6 +105,10 @@ export function ProductPageView({
 				slug={storeSlug}
 				shareUrl={canonicalUrl}
 			/>
+			{/* The countdown is ALWAYS the page's top band (z8r3fdr60v), directly
+			    under the store header — same component, same place, on the claim
+			    checkout, here and on the storefront checkout. */}
+			<ProductPromoBand product={product} />
 			<SeasonalBreakNotice storeName={retailer.storeName} />
 
 			<div className="mt-4 px-5 lg:flex lg:items-start lg:gap-10 lg:px-8">
@@ -455,5 +462,42 @@ export function PageGallery({
 				) : null}
 			</div>
 		</>
+	);
+}
+
+/**
+ * The scissors countdown for a product with a timed promotion — counting down
+ * TO the drop when it is scheduled, and to the end once it is live.
+ *
+ * Renders nothing for a plain discount: there is no deadline to show, and a
+ * band that never moves is furniture. Mounted as the page's top band, under
+ * the store header, exactly where the claim checkout and the storefront
+ * checkout put theirs (z8r3fdcw72 / z8r3fdr60v).
+ */
+function ProductPromoBand({
+	product,
+}: {
+	product: { promoState?: PromoState };
+}) {
+	const state = product.promoState;
+	const clock = usePromoClock(state);
+	if (!state) return null;
+	const teasing = state.phase === "scheduled";
+	const deadline = teasing ? state.startsAt : state.endsAt;
+	if (deadline === undefined || deadline <= clock) return null;
+	// What the cut measures against: the whole sale while it runs, and — for a
+	// teaser, which has no "beginning" to measure from — the hour before the
+	// drop, so the strip reads as filling up rather than sitting still.
+	const total =
+		teasing || state.startsAt === undefined
+			? Math.max(deadline - clock, 60 * 60_000)
+			: deadline - state.startsAt;
+	return (
+		<CountdownBand
+			expiresAt={deadline}
+			totalMs={total}
+			label={teasing ? `${state.label} starts in` : `${state.label} ends in`}
+			icon={Zap}
+		/>
 	);
 }

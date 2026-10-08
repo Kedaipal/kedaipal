@@ -54,6 +54,7 @@ import { type DialIso, isDialIso } from "../../../convex/lib/phoneDial";
 import { distinctPickupNotes } from "../../../convex/lib/pickupNote";
 import { slowestPrep } from "../../../convex/lib/prepFloor";
 import type { UseCart } from "../../hooks/useCart";
+import { usePromoClock } from "../../hooks/usePromoClock";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { readAttributionSource } from "../../hooks/useSourceAttribution";
 import { displayAddressState } from "../../lib/address-display";
@@ -78,6 +79,7 @@ import {
 	convexErrorMessage,
 	formatMobile,
 	formatPrice,
+	priceChangedErrorOf,
 } from "../../lib/format";
 import {
 	type CopyPart,
@@ -88,6 +90,11 @@ import {
 } from "../../lib/fulfilment-time-issue";
 import { composeCustomerNote } from "../../lib/order-note";
 import { overseasCourierNote } from "../../lib/overseas-courier-note";
+import {
+	cartItemSubtotal,
+	type PromoState,
+	repricedCartLines,
+} from "../../lib/promo";
 import { loadSavedAddress, saveAddress } from "../../lib/saved-address";
 import {
 	type CheckoutAddressValues,
@@ -697,6 +704,10 @@ export function CheckoutPage({
 					// The session's captured ?src=/utm_source tag (86eyq0eq9) —
 					// undefined = direct. Server re-sanitizes; never blocks the order.
 					attributionSource: readAttributionSource(storeSlug),
+					// What the buyer is looking at (z8r3fdcw72). The server refuses
+					// the order rather than charging a different number; absent, it
+					// keeps the old behaviour, so a stale tab still works.
+					expectedSubtotal: cartItemSubtotal(cart.items),
 				});
 				if (effectiveMethod === "delivery") saveAddress(country, value.address);
 				setSubmitted(true);
@@ -719,6 +730,15 @@ export function CheckoutPage({
 					search: confirmedAtCreate ? {} : { send: 1 },
 				});
 			} catch (err) {
+				// The price-changed guard is not an error to read — it is a state
+				// to fix. Flip into it so the CTA disables with a named reason and
+				// the "Update prices" action appears, exactly as the client-side
+				// detection does. `convexErrorMessage` would stringify the typed
+				// data to "[object Object]".
+				if (priceChangedErrorOf(err) !== null) {
+					setServerRepriced(true);
+					return;
+				}
 				setServerError(convexErrorMessage(err));
 			}
 		},
@@ -1102,6 +1122,47 @@ export function CheckoutPage({
 		return cap !== undefined && item.quantity > cap;
 	});
 
+	// Prices that moved while the basket sat there (z8r3fdcw72) — a promotion
+	// that ended, sold out, or started. The cart freezes what a line was added
+	// at, so without this the buyer would tap Place order on a number the
+	// server is about to refuse (`expectedSubtotal`). Same ladder as the stock
+	// gate above: named reason, disabled button, fix offered in place.
+	// The flash in this basket that ends FIRST — it owns the countdown band and
+	// the clock, because it is the one that will change the total soonest.
+	const soonestPromo = useMemo(() => {
+		const inCart = new Set(cart.items.map((i) => i.productId as string));
+		const live = (listedProducts ?? [])
+			.filter(
+				(p: { _id: string; promoState?: PromoState }) =>
+					inCart.has(p._id as string) &&
+					p.promoState?.phase === "live" &&
+					p.promoState.endsAt !== undefined,
+			)
+			.map((p: { promoState?: PromoState }) => p.promoState as PromoState);
+		return live.sort((a, b) => (a.endsAt ?? 0) - (b.endsAt ?? 0))[0];
+	}, [cart.items, listedProducts]);
+	const promoClock = usePromoClock(soonestPromo);
+	const repriced = useMemo(
+		() =>
+			repricedCartLines(
+				cart.items.map((i) => ({ ...i, variantId: i.variantId as string })),
+				(variantId) => {
+					for (const product of listedProducts ?? []) {
+						const variant = product.variants?.find(
+							(v: { _id: string }) => (v._id as string) === variantId,
+						);
+						if (variant) return { variant, promoState: product.promoState };
+					}
+					return undefined;
+				},
+				promoClock,
+			),
+		[cart.items, listedProducts, promoClock],
+	);
+	// Server's own verdict, when it refuses a stale subtotal outright.
+	const [serverRepriced, setServerRepriced] = useState(false);
+	const priceChanged = repriced.length > 0 || serverRepriced;
+
 	// The address the buyer has actually committed to. Manual mode fills line1
 	// without a pin; the search fills both. Empty means nothing to deliver to,
 	// which keeps the CTA disabled — with a reason, never silently.
@@ -1172,17 +1233,21 @@ export function CheckoutPage({
 				? "Below the store's minimum — see your order summary"
 				: overStockLine
 					? `Only ${stockCapFor(overStockLine.variantId)} × ${overStockLine.name} left — lower the quantity to continue`
-					: unansweredLine?.missing
-						? `${answerPrompt(unansweredLine.missing.label)} for ${unansweredLine.item.name}`
-						: addressIncomplete
-							? collectsFromCustomer
-								? "Add your collection address to continue"
-								: "Add your delivery address to continue"
-							: quoteForDelivery?.kind === "calculating"
+					: priceChanged
+						? repriced.length > 0
+							? `${repriced[0].line.name} is now ${formatPrice(repriced[0].now, cart.currency)} — review your order before paying`
+							: "Prices changed while you were checking out — review your order before paying"
+						: unansweredLine?.missing
+							? `${answerPrompt(unansweredLine.missing.label)} for ${unansweredLine.item.name}`
+							: addressIncomplete
 								? collectsFromCustomer
-									? "Calculating your collection fee…"
-									: "Calculating your delivery fee…"
-								: (deliveryBlockedLine ?? null);
+									? "Add your collection address to continue"
+									: "Add your delivery address to continue"
+								: quoteForDelivery?.kind === "calculating"
+									? collectsFromCustomer
+										? "Calculating your collection fee…"
+										: "Calculating your delivery fee…"
+									: (deliveryBlockedLine ?? null);
 
 	const submitButton = (
 		<form.Subscribe
@@ -1208,6 +1273,7 @@ export function CheckoutPage({
 						minRulesBlocked ||
 						// A line now exceeds live stock (server enforces it too).
 						overStockLine !== undefined ||
+						priceChanged ||
 						// A required buyer question is unanswered (server too).
 						unansweredLine !== undefined
 					}
@@ -1228,7 +1294,48 @@ export function CheckoutPage({
 	// mobile sticky bar): why it's disabled, or why a press was refused. The
 	// refusal used to render at the foot of the form column, on desktop a
 	// screen away from the button in the summary card (z8r3fdff8r).
-	const ctaNoticeLine = blockedReason ? (
+	// The one blocked state that ships its own way out: a price moved, so the
+	// buyer is shown WHAT moved and one button to accept it. Everything else
+	// in the ladder is fixed by editing the order, which the summary already
+	// offers (z8r3fdcw72).
+	const acceptNewPrices = () => {
+		cart.repriceItems(
+			Object.fromEntries(
+				repriced.map(({ line, now }) => [line.variantId as string, now]),
+			),
+		);
+		setServerRepriced(false);
+	};
+	const ctaNoticeLine = priceChanged ? (
+		<div
+			role="alert"
+			className="flex flex-col items-center gap-2 rounded-xl border border-destructive/35 bg-destructive/5 px-3 py-2.5"
+		>
+			<p className="text-center text-xs font-medium text-destructive">
+				{blockedReason}
+			</p>
+			<Button
+				type="button"
+				variant="outline"
+				className="h-9 w-full text-xs font-semibold"
+				onClick={acceptNewPrices}
+			>
+				{repriced.length > 0
+					? `Update prices · items now ${formatPrice(
+							cartItemSubtotal(
+								cart.items.map((item) => {
+									const change = repriced.find(
+										(r) => r.line.variantId === item.variantId,
+									);
+									return change ? { ...item, price: change.now } : item;
+								}),
+							),
+							cart.currency,
+						)}`
+					: "Review your order"}
+			</Button>
+		</div>
+	) : blockedReason ? (
 		<p className="text-center text-xs font-medium text-destructive">
 			{blockedReason}
 		</p>
