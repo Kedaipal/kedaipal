@@ -21,14 +21,46 @@ describe("describeAwbSkips", () => {
 
 	test("lists every reason present, in a stable order", () => {
 		expect(
-			describeAwbSkips({ cancelled: 1, no_address: 3, not_found: 2 }),
+			describeAwbSkips({
+				cancelled: 1,
+				no_address: 3,
+				not_found: 2,
+				credit_gated: 0,
+			}),
 		).toBe(
 			"Skipped 3 for pickup (no delivery address), 1 cancelled, 2 no longer in your orders.",
 		);
 	});
 
+	test("waiting on credits is named, and sits where it can be acted on", () => {
+		// Credits T3.1: the batch SKIPS gated orders rather than refusing, so
+		// this line is how the seller learns it happened at all — the house
+		// no-silent-skip rule. It sits before `cancelled` because it is the one
+		// the seller can do something about.
+		expect(describeAwbSkips({ ...emptySkipCounts(), credit_gated: 2 })).toBe(
+			"Skipped 2 waiting on credits.",
+		);
+		expect(
+			describeAwbSkips({
+				cancelled: 1,
+				no_address: 1,
+				not_found: 0,
+				credit_gated: 3,
+			}),
+		).toBe(
+			"Skipped 1 for pickup (no delivery address), 3 waiting on credits, 1 cancelled.",
+		);
+	});
+
 	test("totalSkipped sums every reason", () => {
-		expect(totalSkipped({ cancelled: 1, no_address: 3, not_found: 2 })).toBe(6);
+		expect(
+			totalSkipped({
+				cancelled: 1,
+				no_address: 3,
+				not_found: 2,
+				credit_gated: 0,
+			}),
+		).toBe(6);
 		expect(totalSkipped(emptySkipCounts())).toBe(0);
 	});
 });

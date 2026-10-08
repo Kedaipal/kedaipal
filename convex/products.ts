@@ -70,7 +70,6 @@ import {
 } from "./lib/popularProducts";
 import { rateLimiter } from "./lib/rateLimiter";
 import { SLUG_MAX, SLUG_MIN, slugify } from "./lib/slug";
-import { assertCreditsAvailable } from "./creditLock";
 import {
 	assertOwnStoreActive,
 	assertPlanFeature,
@@ -993,7 +992,6 @@ export const create = mutation({
 		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, args.retailerId);
 		}
-		await assertCreditsAvailable(ctx, args.retailerId);
 
 		// Product cap — counts archived rows too, so deleting (not archiving) is
 		// what frees a slot. An admin operating the store (act-as) is exempt: a
@@ -1416,7 +1414,6 @@ export const update = mutation({
 		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, ownedProduct.retailerId);
 		}
-		await assertCreditsAvailable(ctx, ownedProduct.retailerId);
 
 		if (
 			fields.imageStorageIds !== undefined &&
@@ -1556,7 +1553,6 @@ export const saveVariantGrid = mutation({
 		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, product.retailerId);
 		}
-		await assertCreditsAvailable(ctx, product.retailerId);
 
 		const options = normalizeOptionsOrThrow(args.options);
 		const variants = validateVariantSet(options, args.variants);
@@ -1702,7 +1698,6 @@ export const updateVariant = mutation({
 			"write",
 		);
 		await assertSubscriptionActive(ctx, existing.retailerId);
-		await assertCreditsAvailable(ctx, existing.retailerId);
 
 		if (fields.price !== undefined && fields.price < 0)
 			throw new ConvexError("Price must be non-negative");
@@ -1831,7 +1826,6 @@ export const adjustStock = mutation({
 			if (!access.actingAsAdmin) {
 				await assertSubscriptionActive(ctx, variant.retailerId);
 			}
-			await assertCreditsAvailable(ctx, variant.retailerId);
 
 			// A bespoke line is priced on a quote and never counted — `onHand` is
 			// coerced to 0 on every write path. Offering to adjust it would invent a
@@ -1898,7 +1892,6 @@ export const archive = mutation({
 			"write",
 		);
 		await assertSubscriptionActive(ctx, product.retailerId);
-		await assertCreditsAvailable(ctx, product.retailerId);
 		const wasVisible = isProductVisible(product);
 		await ctx.db.patch(productId, {
 			active: false,
@@ -1941,7 +1934,6 @@ export const deletePermanently = mutation({
 			"write",
 		);
 		await assertSubscriptionActive(ctx, product.retailerId);
-		await assertCreditsAvailable(ctx, product.retailerId);
 
 		if (product.orderedAt !== undefined)
 			throw new ConvexError(
@@ -2201,7 +2193,6 @@ export const bulkUpsert = mutation({
 		await rateLimiter.limit(ctx, "productBulkImport", { key: userId, throws: true });
 		const access = await requireRetailerOwnership(ctx, args.retailerId, "write");
 		await assertSubscriptionActive(ctx, args.retailerId);
-		await assertCreditsAvailable(ctx, args.retailerId);
 
 		const products = args.products as ImportProduct[];
 		if (products.length === 0) throw new ConvexError("No products to import");
@@ -2613,7 +2604,6 @@ export const reorder = mutation({
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		const access = await requireRetailerOwnership(ctx, retailerId, "write");
 		await assertSubscriptionActive(ctx, retailerId);
-		await assertCreditsAvailable(ctx, retailerId);
 
 		const rows = await ctx.db
 			.query("products")

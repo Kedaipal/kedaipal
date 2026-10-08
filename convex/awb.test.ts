@@ -232,7 +232,12 @@ describe("generateAwbBatchPdf (a selection)", () => {
 		expect(res.count).toBe(2);
 		expect(isPdf(res.pdf)).toBe(true);
 		expect(res.filename).toMatch(/^labels-\d{4}-\d{2}-\d{2}\.pdf$/);
-		expect(res.skipped).toEqual({ cancelled: 0, no_address: 0, not_found: 0 });
+		expect(res.skipped).toEqual({
+			cancelled: 0,
+			no_address: 0,
+			not_found: 0,
+			credit_gated: 0,
+		});
 	});
 
 	test("counts what it left out, by reason — never a silent drop", async () => {
@@ -254,7 +259,12 @@ describe("generateAwbBatchPdf (a selection)", () => {
 			orderIds: [printable.id, pickup.id, cancelled.id],
 		});
 		expect(res.count).toBe(1);
-		expect(res.skipped).toEqual({ cancelled: 1, no_address: 1, not_found: 0 });
+		expect(res.skipped).toEqual({
+			cancelled: 1,
+			no_address: 1,
+			not_found: 0,
+			credit_gated: 0,
+		});
 	});
 
 	test("drops another store's ids instead of printing its addresses", async () => {

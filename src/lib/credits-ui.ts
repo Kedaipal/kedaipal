@@ -22,10 +22,12 @@ import { TOP_UP_SEARCH } from "./credit-top-up";
 import { formatShortDate } from "./format";
 
 export {
+	CREDIT_GATE_PHRASE,
 	creditLockAudience,
 	creditLockMessage,
 	LOW_CREDIT_RATIO,
 	lowCreditLine,
+	orderGatedLine,
 } from "../../convex/lib/credits";
 export type { CreditUnlockRoute };
 
@@ -79,7 +81,10 @@ export function creditRefreshLabel(
  * store reaches none of this — it is unmetered and has no meter at all.)
  */
 export function creditStateLine(args: {
-	locked: boolean;
+	/** Orders waiting on credits right now (Credits T3.1) — 0 when none are.
+	 * Replaces the old store-wide `locked` boolean: the meter's line has to say
+	 * how many orders are held, not that the store is. */
+	ordersWaiting: number;
 	total: number;
 	purchased: number;
 	regime: CreditBalanceView["regime"];
@@ -91,10 +96,16 @@ export function creditStateLine(args: {
 	 * contract's, and is named as such. */
 	enterprise?: boolean;
 }): string | null {
-	if (args.locked)
+	if (args.ordersWaiting > 0) {
+		const held = `${orders(args.ordersWaiting)} ${args.ordersWaiting === 1 ? "is" : "are"} waiting on credits`;
+		// Per order, never store-wide: the catalogue, the settings and every
+		// order that already paid for its credit carry on (Zaki, 6 Oct 2026).
+		// A sentence claiming "editing products is paused" would be the copy
+		// lying about the rule — which is exactly what shipped last release.
 		return args.total < 0
-			? `Accepting and updating orders and editing products are paused. The ${orders(-args.total)} owed come off your next pack or your next monthly credits.`
-			: "Accepting and updating orders and editing products are paused until you add credits.";
+			? `${held}. The ${orders(-args.total)} owed come off your next pack or your next monthly credits, oldest order first.`
+			: `${held} until you add credits.`;
+	}
 	if (args.exempt === "sponsored")
 		return "Sponsored stores are never locked — this is here so you can see your volume.";
 	if (args.regime === "trial")
@@ -151,17 +162,48 @@ export function lockCta(route: CreditUnlockRoute): {
 	}
 }
 
-/** The inbox bulk bar's line while the store is out of credits — shorter than
- * `creditLockMessage` because it sits in a narrow popover; the note at the top
- * of the inbox carries the full sentence and the way back. */
-export const BULK_CREDIT_LOCK_NOTE =
-	"Out of credits — moving orders on is paused. Cancelling still works.";
+/** The inbox bulk bar's line when the SELECTION contains orders waiting on
+ * credits — shorter than `creditLockMessage` because it sits in a narrow
+ * popover, and it says what will happen rather than refusing: the batch moves
+ * what it can. The note at the top of the inbox carries the full sentence. */
+export function bulkCreditSkipNote(waitingInSelection: number): string {
+	const n = waitingInSelection;
+	return `${n} of these ${n === 1 ? "is" : "are"} waiting on credits and will be skipped. Cancelling works on all of them.`;
+}
 
-/** Waiting-orders line for the lock surfaces: "3 new orders since you ran out". */
+/**
+ * The label on the button that filters the inbox down to the waiting orders.
+ * "Show the 1" is what a count-interpolated string does to n=1, so singular
+ * gets a pronoun; past the display cap the count is "99+" and can't be named
+ * at all, so that gets one too.
+ */
+export function showWaitingLabel(n: number): string {
+	if (n === 1) return "Show it";
+	return n >= 99 ? "Show them" : `Show the ${n}`;
+}
+
+/** Waiting-orders line for the gate surfaces: "3 orders waiting on credits". */
 export function ordersWaitingLabel(n: number): string | null {
 	if (n <= 0) return null;
 	const count = n >= 99 ? "99+" : String(n);
-	return `${count} new ${n === 1 ? "order" : "orders"} since you ran out`;
+	return `${count} ${n === 1 ? "order" : "orders"} waiting on credits`;
+}
+
+/**
+ * The gated inbox row's own line. The seller sees the reference, the money
+ * and the date on the row itself — this is the bit that explains the blanks,
+ * so it names the row's position rather than the store's balance.
+ *
+ * A CANCELLED row keeps its blanks (the redaction is seq-keyed and survives
+ * the cancel on purpose) but must not keep the sales pitch: "top up to open
+ * it" on an order nobody is waiting on would sell a credit that opens
+ * nothing. Same rule the gated order PAGE follows — one idea, both surfaces.
+ */
+export function gatedRowLine(creditsToUnlock: number, status?: string): string {
+	if (status === "cancelled") return "Cancelled — details stay closed";
+	return creditsToUnlock <= 1
+		? "Waiting on 1 credit — top up to open it"
+		: `Waiting on ${creditsToUnlock} credits — top up to open it`;
 }
 
 type ActivityRow = {

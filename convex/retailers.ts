@@ -298,7 +298,7 @@ import {
 	sellerNewOrderTemplateName,
 } from "./lib/whatsapp";
 import { TEMPLATE_MAX_LENGTH } from "./lib/whatsappCopy";
-import { type CreditLockState, resolveCreditLock } from "./creditLock";
+import { type CreditGateState, resolveCreditGate } from "./creditLock";
 import { ensureCreditAccount } from "./credits";
 import {
 	assertSupportedCurrency,
@@ -1007,12 +1007,17 @@ type RetailerPublic = {
 	// A MEMBER's per-area grants (deny-by-default; convex/lib/permissions.ts).
 	// Absent for owner/admin — they hold every grant implicitly.
 	permissions?: MemberPermissions;
-	// Credits T3 (z8r3fdf8hy): is the store out of credits, why, and how many
-	// orders have arrived since — what the lock banner and every disabled
-	// control read. Deliberately NO balance numbers: every teammate needs to
-	// know WHY a button is disabled, but the balance itself is `credits`-area
-	// data (credits.getBalance). Never on the storefront payload.
-	creditLock?: CreditLockState;
+	// Credits T3.1 (z8r3fdmg4h): the per-order gate's WATERMARK, plus how many
+	// orders are waiting on credits and the one way back. The watermark is what
+	// lets the dashboard answer "is this row gated?" for a whole inbox without a
+	// read per row — `isOrderGated(gate, order)` is one comparison.
+	//
+	// Deliberately NO balance numbers: every teammate needs to know WHY a
+	// control is disabled, but the balance itself is `credits`-area data
+	// (credits.getBalance). A debit SEQUENCE number is not a balance — it says
+	// nothing about money, only about queue position. Never on the storefront
+	// payload.
+	creditGate?: CreditGateState;
 };
 
 async function loadRetailerForUser(
@@ -1162,7 +1167,7 @@ async function buildRetailerPublic(
 		sendingPauseReason: sendingLimits?.pauseReason,
 		role: opts?.role,
 		permissions: opts?.permissions,
-		creditLock: await resolveCreditLock(ctx, row, Date.now()),
+		creditGate: await resolveCreditGate(ctx, row, Date.now()),
 	};
 }
 
