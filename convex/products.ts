@@ -58,6 +58,16 @@ import {
 	type PackageUnit,
 } from "./lib/productKind";
 import {
+	assertValidPromoPrice,
+	effectivePrice,
+	isPromoActive,
+	promoPhase,
+	promoUnitsLeft,
+	sanitizePromo,
+	DEFAULT_PROMO_LABEL,
+} from "./lib/promo";
+import { tallyPromoUnits } from "./lib/promoTally";
+import {
 	assertProductCap,
 	MAX_PRODUCTS_PER_RETAILER,
 	productCapState,
@@ -75,7 +85,9 @@ import {
 	assertOwnStoreActive,
 	assertPlanFeature,
 	assertSubscriptionActive,
+	getAccess,
 } from "./subscriptions";
+import type { Plan } from "./lib/plans";
 import {
 	cartesian,
 	DEFAULT_CUSTOM_LABEL,
@@ -281,7 +293,7 @@ async function loadVariants(ctx: QueryCtx, productId: Id<"products">) {
 export async function productWithVariants(
 	ctx: QueryCtx,
 	product: Doc<"products">,
-	opts: { activeOnly: boolean; forOwner?: boolean },
+	opts: { activeOnly: boolean; forOwner?: boolean; plan: Plan },
 ) {
 	const base = await withImageUrls(ctx, product);
 	// Seller-only fields are stripped unless the caller is an owner/admin surface.
@@ -301,7 +313,10 @@ export async function productWithVariants(
 	// letting TS infer a union: a Convex query has ONE return type regardless of
 	// the runtime auth branch, so the shape has to admit the field being absent.
 	// The stripped object is assignable precisely because the field is optional.
-	const { orderedAt: _orderedAt, ...publicBase } = base;
+	// `promo` (the raw config) is seller-only like `orderedAt`: the buyer-safe
+	// slice travels as `promoState` below, so cap sizes, pay windows and a
+	// paused config never cross the public wire raw.
+	const { orderedAt: _orderedAt, promo: _promoCfg, ...publicBase } = base;
 	const visibleBase: typeof base =
 		opts.forOwner === true ? base : publicBase;
 	const all = await loadVariants(ctx, product._id);
@@ -354,6 +369,84 @@ export async function productWithVariants(
 		eventSeatsLeft = seatsLeft(product.event, tally.taken);
 		if (opts.forOwner === true) eventSeatsTaken = tally.taken;
 	}
+	// Promo state (z8r3fdcw72), the event-seats posture: resolved ONCE here so
+	// the card, sheet, page, counter default and dashboard badge all read the
+	// same answer as the order doors. Read-time check against Date.now() (the
+	// isEventPassed precedent — no cron; the ticking countdown is the client's
+	// clock, the server stays the authority at create). Plan-gated: a paused
+	// promo (Starter) publishes NO state and the variants' sale prices are
+	// stripped, so a buyer never sees a sale the doors won't honour. The flash
+	// tally is one bounded read, only for a live capped sale.
+	const promoNow = Date.now();
+	let promoState:
+		| {
+				phase: "scheduled" | "live";
+				label: string;
+				startsAt?: number;
+				endsAt?: number;
+				unitCap?: number;
+				unitsLeft?: number;
+				maxPerOrder?: number;
+		  }
+		| undefined;
+	if (
+		product.promo !== undefined &&
+		isPromoActive(
+			{ promo: { ...product.promo, startsAt: undefined } },
+			opts.plan,
+			promoNow,
+		)
+	) {
+		// The plan check above is phase-independent (start stripped); the real
+		// phase decides between the teaser and the live sale.
+		const phase = promoPhase(product.promo, promoNow);
+		if (phase === "scheduled" || phase === "live") {
+			const flashApplies = product.event === undefined;
+			const capped = flashApplies && product.promo.unitCap !== undefined;
+			const unitsLeft =
+				phase === "live" && capped
+					? promoUnitsLeft(
+							product.promo.unitCap,
+							await tallyPromoUnits(ctx, {
+								retailerId: product.retailerId,
+								productId: product._id,
+								runId: product.promo.runId,
+								startsAt: product.promo.startsAt ?? 0,
+							}),
+						)
+					: undefined;
+			promoState = {
+				phase,
+				label: product.promo.label ?? DEFAULT_PROMO_LABEL,
+				startsAt: product.promo.startsAt,
+				endsAt: product.promo.endsAt,
+				unitCap: capped ? product.promo.unitCap : undefined,
+				unitsLeft,
+				maxPerOrder: flashApplies ? product.promo.maxPerOrder : undefined,
+			};
+		}
+	}
+	const promoLive = promoState?.phase === "live";
+	// Sale prices ride the variant payload only while they can actually apply;
+	// the teaser keeps them too (the card says "RM 31.50 at 8:00 PM").
+	const shownVariants =
+		promoState !== undefined || opts.forOwner === true
+			? variants
+			: variants.map((vr) =>
+					vr.promoPrice === undefined ? vr : { ...vr, promoPrice: undefined },
+				);
+	// Discounted "From" for the strike-through pair on cards: min effective
+	// price across priced variants, present only when it differs from the list.
+	let promoPriceFrom: number | undefined;
+	if (promoLive) {
+		const effective = variants
+			.filter((vr) => !isQuoteVariant(vr))
+			.map((vr) =>
+				effectivePrice(vr, product, opts.plan, promoNow, promoState?.unitsLeft),
+			);
+		const min = effective.length ? Math.min(...effective) : 0;
+		if (prices.length && min < Math.min(...prices)) promoPriceFrom = min;
+	}
 	return {
 		...visibleBase,
 		eventSeatsLeft,
@@ -361,10 +454,12 @@ export async function productWithVariants(
 		// Always usable by the storefront's product-page links, even before the
 		// slug backfill has stamped this row.
 		slug: effectiveSlug(product),
-		variants,
+		variants: shownVariants,
 		variantCount: variants.length,
 		priceFrom: prices.length ? Math.min(...prices) : 0,
 		priceTo: prices.length ? Math.max(...prices) : 0,
+		promoState,
+		promoPriceFrom,
 		hasQuotePricing,
 		totalOnHand,
 		inStock,
@@ -432,6 +527,38 @@ const optionAxisValidator = v.object({
 	values: v.array(v.string()),
 });
 
+/** Promo config input (z8r3fdcw72) — the server mints/keeps `runId`
+ * (`sanitizePromo`), never the client. */
+const promoInputValidator = v.object({
+	label: v.optional(v.string()),
+	startsAt: v.optional(v.number()),
+	endsAt: v.optional(v.number()),
+	unitCap: v.optional(v.number()),
+	maxPerOrder: v.optional(v.number()),
+	payWithinMinutes: v.optional(v.number()),
+});
+
+/** Flash extras are refused where capacity/seats already govern (v1) — the
+ * copy says so instead of hiding the fields silently (the step mirrors it). */
+function assertFlashFieldsAllowed(
+	input: { unitCap?: number; maxPerOrder?: number; payWithinMinutes?: number },
+	listing: { isBooking: boolean; isEvent: boolean },
+): void {
+	const hasFlash =
+		input.unitCap !== undefined ||
+		input.maxPerOrder !== undefined ||
+		input.payWithinMinutes !== undefined;
+	if (!hasFlash) return;
+	if (listing.isBooking)
+		throw new ConvexError(
+			"Flash-sale extras don't apply to a booking listing — capacity already caps it. The promo price still does.",
+		);
+	if (listing.isEvent)
+		throw new ConvexError(
+			"Flash-sale extras don't apply to an event — seats already cap it. The promo price still does.",
+		);
+}
+
 const variantInputValidator = v.object({
 	// Positionally aligned with the product's option axes; [] for the implicit
 	// default variant of a no-axes product AND for the custom line (the two are
@@ -439,6 +566,8 @@ const variantInputValidator = v.object({
 	optionValues: v.array(v.string()),
 	sku: v.optional(v.string()),
 	price: v.number(),
+	// Sale price (z8r3fdcw72): > 0 and < price, refused on custom/quote lines.
+	promoPrice: v.optional(v.number()),
 	onHand: v.number(),
 	parcelWeightG: v.optional(v.number()),
 	imageStorageIds: v.optional(v.array(v.string())),
@@ -456,6 +585,7 @@ type VariantInput = {
 	optionValues: string[];
 	sku?: string;
 	price: number;
+	promoPrice?: number;
 	onHand: number;
 	parcelWeightG?: number;
 	imageStorageIds?: string[];
@@ -559,6 +689,22 @@ function validateVariantSet(
 
 	if (customLines.length > 1)
 		throw new ConvexError("A product can have at most one custom option");
+
+	// Promo prices (z8r3fdcw72): one author for create AND update. A custom
+	// line's price is agreed per order, so a sale price on it is meaningless;
+	// a filled price must undercut its own variant's list price.
+	for (const vr of variants) {
+		if (vr.promoPrice === undefined) continue;
+		if (vr.isCustom === true)
+			throw new ConvexError(
+				"A custom line's price is agreed per order — it can't carry a promo price",
+			);
+		try {
+			assertValidPromoPrice(vr.promoPrice, vr.price);
+		} catch (err) {
+			throw new ConvexError((err as Error).message);
+		}
+	}
 
 	/**
 	 * A product's sellable lines are the cartesian **matrix ∪ the custom line**,
@@ -695,13 +841,18 @@ export const list = query({
 			)
 			.collect();
 		rows.sort(bySortOrder);
+		// Resolved once per query, passed down: promo gating is per-STORE, and
+		// per-product resolution would re-read the subscription row N times.
+		const plan = (await getAccess(ctx, retailerId)).plan;
 		return Promise.all(
 			// A finished event takes itself off the storefront the morning after
 			// (`hiddenFromStorefront`) — no cron, no seller action. Filtered in
 			// memory beside the hidden flags for the same reason they are.
 			rows
 				.filter((row) => !hiddenFromStorefront(row))
-				.map((row) => productWithVariants(ctx, row, { activeOnly: true })),
+				.map((row) =>
+					productWithVariants(ctx, row, { activeOnly: true, plan }),
+				),
 		);
 	},
 });
@@ -727,6 +878,7 @@ export const listForCounter = query({
 			)
 			.collect();
 		rows.sort(bySortOrder);
+		const plan = (await getAccess(ctx, retailerId)).plan;
 		return Promise.all(
 			rows
 				// Booking listings never sell at the counter (86eyj70z1/S2): a stay
@@ -739,6 +891,7 @@ export const listForCounter = query({
 					const product = await productWithVariants(ctx, row, {
 						activeOnly: true,
 						forOwner: true,
+						plan,
 					});
 					// An event product's binding number at the counter is SEATS, not
 					// stock — the rows show min(stock, seats) and the stepper stops
@@ -836,10 +989,15 @@ export const listAll = query({
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 			.collect();
 		rows.sort(byActiveThenSort);
+		const plan = (await getAccess(ctx, retailerId)).plan;
 		return Promise.all(
 				// Owner-gated dashboard read — seller-only fields stay in.
 			rows.map((row) =>
-				productWithVariants(ctx, row, { activeOnly: false, forOwner: true }),
+				productWithVariants(ctx, row, {
+					activeOnly: false,
+					forOwner: true,
+					plan,
+				}),
 			),
 		);
 	},
@@ -881,6 +1039,7 @@ export const get = query({
 		return productWithVariants(ctx, row, {
 			activeOnly: !canEdit,
 			forOwner: canEdit,
+			plan: (await getAccess(ctx, row.retailerId)).plan,
 		});
 	},
 });
@@ -946,6 +1105,9 @@ export const create = mutation({
 				requiresApproval: v.optional(v.boolean()),
 			}),
 		),
+		// Promo price + flash sale config (z8r3fdcw72). Pro-gated; the server
+		// mints `runId` (sanitizePromo), never the client.
+		promo: v.optional(promoInputValidator),
 		// Kind + booking config land together at create and the kind is immutable
 		// after (update deliberately has no kind arg) — see schema comment.
 		kind: v.optional(
@@ -1096,6 +1258,25 @@ export const create = mutation({
 			args.buyerQuestions,
 		);
 
+		// Promo config at create (z8r3fdcw72). Pro-gated on SET only — clearing
+		// and plain saves stay un-gated so a downgraded seller is never trapped.
+		// Flash extras are refused on booking/event listings (capacity and seats
+		// already govern them); the promo PRICE itself still applies there.
+		let promo: Doc<"products">["promo"];
+		if (args.promo !== undefined) {
+			if (!access.actingAsAdmin)
+				await assertPlanFeature(ctx, args.retailerId, "promo");
+			assertFlashFieldsAllowed(args.promo, {
+				isBooking: effectiveKind(kind) === "booking",
+				isEvent: event !== undefined,
+			});
+			try {
+				promo = sanitizePromo(args.promo, undefined, Date.now());
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
+
 		// Cross-variant SKU uniqueness against the rest of this retailer's catalog.
 		for (const variant of variants) {
 			if (variant.sku)
@@ -1124,6 +1305,7 @@ export const create = mutation({
 			kind: kind === "physical" ? undefined : kind,
 			booking,
 			event,
+			promo,
 			buyerQuestions,
 			sortOrder: args.sortOrder,
 			active: true,
@@ -1154,6 +1336,7 @@ async function insertVariants(
 			optionValues: variant.optionValues,
 			sku: variant.sku,
 			price: variant.price,
+			promoPrice: variant.promoPrice,
 			onHand: variant.onHand,
 			reserved: 0,
 			parcelWeightG: variant.parcelWeightG ?? 0,
@@ -1366,6 +1549,10 @@ export const update = mutation({
 				v.null(),
 			),
 		),
+		// Promo price + flash sale config (z8r3fdcw72). `undefined` = no change;
+		// `null` turns the promotion OFF (the `event` posture). Whole-object
+		// replace; the server keeps/regenerates `runId` (sanitizePromo).
+		promo: v.optional(v.union(promoInputValidator, v.null())),
 		// Booking config edit. The kind itself is immutable (no kind arg here,
 		// by design); capacity, package length, instant-book and the deposit are
 		// the knobs a seller re-tunes. Rejected on non-booking products. A
@@ -1502,6 +1689,36 @@ export const update = mutation({
 			}
 		}
 
+		// Promo config (z8r3fdcw72). Setting is Pro-gated; CLEARING never is —
+		// a downgraded seller can always turn their paused promo off. Flash
+		// extras refused where capacity/seats already govern, judged on the
+		// POST-save event state so one save can't sneak both in.
+		if (fields.promo !== undefined) {
+			if (fields.promo === null) {
+				updates.promo = undefined;
+			} else {
+				if (!access.actingAsAdmin)
+					await assertPlanFeature(ctx, ownedProduct.retailerId, "promo");
+				const willBeEvent =
+					fields.event !== undefined
+						? fields.event !== null
+						: ownedProduct.event !== undefined;
+				assertFlashFieldsAllowed(fields.promo, {
+					isBooking: effectiveKind(ownedProduct.kind) === "booking",
+					isEvent: willBeEvent,
+				});
+				try {
+					updates.promo = sanitizePromo(
+						fields.promo,
+						ownedProduct.promo,
+						Date.now(),
+					);
+				} catch (err) {
+					throw new ConvexError((err as Error).message);
+				}
+			}
+		}
+
 		// Lazy slug convergence for legacy rows (pre-slug catalog): the first
 		// edit gives the product its permanent URL, using the freshest name.
 		// Existing slugs are STABLE — a rename never rewrites them, so links a
@@ -1600,6 +1817,10 @@ export const saveVariantGrid = mutation({
 				await ctx.db.patch(prior._id, {
 					sku: variant.sku,
 					price: variant.price,
+					// Written every save (undefined clears): the Promotion step
+					// edits sale prices through this same grid, and a stale sale
+					// price surviving a clear would keep discounting silently.
+					promoPrice: variant.promoPrice,
 					// `onHand` is deliberately ABSENT (86eypn8ye). The form renders a
 					// count when it opens; by the time Save is tapped that number can
 					// be minutes stale, and writing it back resurrects everything sold
@@ -1626,6 +1847,7 @@ export const saveVariantGrid = mutation({
 					optionValues: variant.optionValues,
 					sku: variant.sku,
 					price: variant.price,
+					promoPrice: variant.promoPrice,
 					onHand: variant.onHand,
 					reserved: 0,
 					parcelWeightG: variant.parcelWeightG ?? 0,
@@ -2693,7 +2915,10 @@ export const getPublicBySlug = query({
 			hiddenFromStorefront(row)
 		)
 			return null;
-		return productWithVariants(ctx, row, { activeOnly: true });
+		return productWithVariants(ctx, row, {
+			activeOnly: true,
+			plan: (await getAccess(ctx, retailerId)).plan,
+		});
 	},
 });
 

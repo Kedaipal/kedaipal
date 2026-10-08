@@ -60,15 +60,23 @@ export async function tallyPromoUnits(
 }
 
 /**
- * Sale units a cart is about to consume for one product — the same
- * quantity-sum rule as the tally (the `seatsRequested` posture), so "taken"
- * and "about to take" are counted one way.
+ * Sale units a cart is about to consume for one product — the same rule the
+ * tally applies (the `seatsRequested` posture): only lines that actually
+ * priced at the sale price (promoRunId stamped) consume units, so a variant
+ * the seller never filled a promo price for rides the same cart without
+ * touching the pool.
  */
 export function promoUnitsRequested(
-	items: ReadonlyArray<{ productId: Id<"products">; quantity: number }>,
+	items: ReadonlyArray<{
+		productId: Id<"products">;
+		quantity: number;
+		promoRunId?: string;
+	}>,
 	productId: Id<"products">,
 ): number {
 	return items
-		.filter((item) => item.productId === productId)
+		.filter(
+			(item) => item.productId === productId && item.promoRunId !== undefined,
+		)
 		.reduce((sum, item) => sum + item.quantity, 0);
 }

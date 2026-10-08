@@ -56,7 +56,9 @@ import {
 	requireRetailerAccess,
 	resolveMyRetailer,
 } from "./lib/auth";
-import { assertSubscriptionActive } from "./subscriptions";
+import { assertSubscriptionActive, getAccess } from "./subscriptions";
+import { effectivePrice, isPromoActive, promoUnitsLeft } from "./lib/promo";
+import { tallyPromoUnits } from "./lib/promoTally";
 import { type Country, DEFAULT_COUNTRY } from "./lib/country";
 import { storeBooksCouriers } from "./lib/courierBooking";
 import { getDisplayName, requireCustomerName } from "./lib/customer";
@@ -139,6 +141,18 @@ async function freezeClaimLines(
 		Id<"productVariants">,
 		{ qty: number; block: boolean; onHand: number }
 	>();
+	// Promo pricing at SEND (z8r3fdcw72): the claim's default price is the
+	// effective price the storefront is showing right now, and it LOCKS with
+	// the claim (the price-lock rule wins even if the cap is hit before the
+	// buyer commits — the unit only counts against the pool at commit, when
+	// the order line carries the runId). Seller-entered prices override and
+	// are not promo sales. One bounded tally per distinct product.
+	const now = Date.now();
+	const storePlan = (await getAccess(ctx, retailerId)).plan;
+	const promoByProduct = new Map<
+		Id<"products">,
+		{ runId: string; unitsLeft: number | undefined } | null
+	>();
 	for (const item of items) {
 		if (!Number.isInteger(item.quantity) || item.quantity < 1)
 			throw new ConvexError("Quantity must be a positive integer");
@@ -164,13 +178,52 @@ async function freezeClaimLines(
 				`"${product.name}" is an event — share its storefront link so guests RSVP to the fixed date.`,
 			);
 		let unitPrice: number;
+		let soldOnPromo = false;
+		let promoRunId: string | undefined;
 		if (variant.isCustom === true || item.unitPrice !== undefined) {
 			const entered = item.unitPrice;
 			if (entered === undefined || !Number.isInteger(entered) || entered <= 0)
 				throw new ConvexError(`Set a price for "${displayName}"`);
 			unitPrice = entered;
 		} else {
-			unitPrice = variant.price;
+			let promoCtx = promoByProduct.get(variant.productId);
+			if (promoCtx === undefined) {
+				promoCtx = null;
+				const promo = product.promo;
+				if (promo !== undefined && isPromoActive({ promo }, storePlan, now)) {
+					const unitsLeft =
+						promo.unitCap !== undefined
+							? promoUnitsLeft(
+									promo.unitCap,
+									await tallyPromoUnits(ctx, {
+										retailerId,
+										productId: variant.productId,
+										runId: promo.runId,
+										startsAt: promo.startsAt ?? 0,
+									}),
+								)
+							: undefined;
+					promoCtx = { runId: promo.runId, unitsLeft };
+				}
+				promoByProduct.set(variant.productId, promoCtx);
+			}
+			// A send that would overshoot the remaining pool locks LIST for that
+			// line (the seller can still key a price by hand); otherwise the
+			// sale price locks, and the pool drains for lines later in this
+			// same claim.
+			const straddlesCap =
+				promoCtx !== null &&
+				promoCtx.unitsLeft !== undefined &&
+				item.quantity > promoCtx.unitsLeft;
+			unitPrice = straddlesCap
+				? variant.price
+				: effectivePrice(variant, product, storePlan, now, promoCtx?.unitsLeft);
+			if (unitPrice < variant.price && promoCtx !== null) {
+				soldOnPromo = true;
+				promoRunId = promoCtx.runId;
+				if (promoCtx.unitsLeft !== undefined)
+					promoCtx.unitsLeft -= item.quantity;
+			}
 		}
 		const block =
 			(variant.blockWhenOutOfStock ?? product.blockWhenOutOfStock) === true;
@@ -191,6 +244,8 @@ async function freezeClaimLines(
 			name: product.name,
 			variantLabel: label || undefined,
 			price: unitPrice,
+			listPrice: soldOnPromo ? variant.price : undefined,
+			promoRunId,
 			quantity: item.quantity,
 			// The seller answers the product's questions at the counter before
 			// sending (z8r3fdkjek); frozen here, copied verbatim at commit. The
