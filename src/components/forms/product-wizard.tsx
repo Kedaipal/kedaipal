@@ -812,6 +812,12 @@ export function buildWizardSubmitValues(
 				: undefined,
 		hidden: state.hidden,
 		kind,
+		// The wizard deliberately does NOT offer a promotion: creating a product
+		// and merchandising it are different jobs, and a sale is something a
+		// seller runs on a product that already EXISTS. `null` is the explicit
+		// "no promotion" answer (never `undefined`, which reads as "no change");
+		// the seller sets one in the full form, which is one tap away.
+		promo: null,
 		// Kind + booking config travel together (the server enforces the pairing).
 		booking:
 			kind === "booking"

@@ -334,6 +334,9 @@ function EditProductRoute() {
 					!retailer.actingAsAdmin &&
 					!hasFeature(retailer.subscription, "categories")
 				}
+				promoLocked={
+					!retailer.actingAsAdmin && !hasFeature(retailer.subscription, "promo")
+				}
 				eventsLocked={
 					!retailer.actingAsAdmin &&
 					!hasFeature(retailer.subscription, "events")
@@ -376,10 +379,14 @@ function EditProductRoute() {
 					imageStorageIds: product.imageStorageIds,
 					imageUrls: product.imageUrls,
 					options: product.options ?? [],
+					// The raw promo config is owner-only in the projection, so it
+					// is readable here and nowhere a buyer can see it.
+					promo: product.promo,
 					variants: product.variants.map((vr) => ({
 						optionValues: vr.optionValues,
 						sku: vr.sku,
 						price: vr.price,
+						promoPrice: vr.promoPrice,
 						onHand: vr.onHand,
 						active: vr.active,
 						// Resolved per-variant server-side (override ?? product default).
@@ -465,6 +472,10 @@ function EditProductRoute() {
 						// `null` clears a stored event (toggle off); the form never
 						// sends undefined, so an event can always be turned off.
 						event: values.event,
+						// Same `null` = clear contract as `event` (z8r3fdcw72), and
+						// clearing is deliberately un-gated server-side so a store
+						// that drops to Starter can still switch a promotion off.
+						promo: values.promo,
 						buyerQuestions: values.buyerQuestions,
 					});
 					await saveVariantGrid({

@@ -157,6 +157,7 @@ describe("edit form — money labels in the store's symbol", () => {
 				retailerId={"r1" as never}
 				categoriesLocked={false}
 				eventsLocked={false}
+				promoLocked={false}
 				currency={currency}
 				submitLabel="Save"
 				onSubmit={vi.fn()}
