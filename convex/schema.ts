@@ -6,6 +6,7 @@ import {
 	itemAnswerInputValidator,
 } from "./lib/buyerQuestions";
 import { countryValidator } from "./lib/country";
+import { courierProviderValidator } from "./lib/courierProviders";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 import { memberPermissionsValidator } from "./lib/permissions";
 
@@ -1830,14 +1831,12 @@ export default defineSchema({
 				// Which provider's price the buyer actually paid, and every quote
 				// that competed for it (mode "live"). Absent on "lalamove" rows —
 				// there was only ever one bidder.
-				quoteProvider: v.optional(
-					v.union(v.literal("lalamove"), v.literal("delyva")),
-				),
+				quoteProvider: v.optional(courierProviderValidator),
 				quoteServiceName: v.optional(v.string()),
 				quotesConsidered: v.optional(
 					v.array(
 						v.object({
-							provider: v.union(v.literal("lalamove"), v.literal("delyva")),
+							provider: courierProviderValidator,
 							fee: v.number(),
 							currency: v.string(),
 						}),
@@ -2377,7 +2376,7 @@ export default defineSchema({
 		// provider-aware. Rows are transient (consumed at create, purged daily),
 		// so this narrows to required on its own within a day of deploy —
 		// widen → migrate → narrow, with the migration being the clock.
-		provider: v.optional(v.union(v.literal("lalamove"), v.literal("delyva"))),
+		provider: v.optional(courierProviderValidator),
 		// Lalamove quotation id — reused at create for the snapshot audit trail.
 		// Optional since z8r3fdbvdy: a Delyva quote has no id to bind to (its
 		// prices are indicative and never expire; dispatch re-prices anyway).
@@ -2413,7 +2412,7 @@ export default defineSchema({
 		considered: v.optional(
 			v.array(
 				v.object({
-					provider: v.union(v.literal("lalamove"), v.literal("delyva")),
+					provider: courierProviderValidator,
 					fee: v.number(),
 					currency: v.string(),
 				}),
@@ -2439,7 +2438,7 @@ export default defineSchema({
 		retailerId: v.id("retailers"),
 		// Which booking provider ran this job. Lalamove = intra-city rider;
 		// Delyva (86eyjpv6z) = nationwide parcel/cold-chain courier aggregator.
-		provider: v.union(v.literal("lalamove"), v.literal("delyva")),
+		provider: courierProviderValidator,
 		// Unset while the row is a pre-call RESERVATION (inserted atomically
 		// before the POST /v3/orders side effect so two concurrent confirms can't
 		// both dispatch a rider); patched in by commitBooking once Lalamove
