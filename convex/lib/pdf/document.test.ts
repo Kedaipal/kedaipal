@@ -232,6 +232,27 @@ describe("orderToReceiptData", () => {
 		});
 		expect(standard.deliveryDirection).toBeUndefined();
 	});
+	test("a line sold on promo carries its list price; an ordinary one doesn't", () => {
+		const items = orderToReceiptData({
+			order: {
+				...baseOrder,
+				items: [
+					// Sold below list → the receipt can print "was RM45.00 each".
+					{ name: "Box", quantity: 2, price: 3150, listPrice: 4500 },
+					// Sold at list → nothing to say.
+					{ name: "Tin", quantity: 1, price: 2800 },
+					// Bad data: a list price that doesn't undercut must not print
+					// "was RM28.00" beside RM28.00.
+					{ name: "Jar", quantity: 1, price: 2800, listPrice: 2800 },
+				],
+			},
+			storeName: "Sweet Co",
+			paymentMethods: [],
+		}).items;
+		expect(items[0].listPrice).toBe(4500);
+		expect(items[1].listPrice).toBeUndefined();
+		expect(items[2].listPrice).toBeUndefined();
+	});
 });
 
 describe("invoiceToSubscriptionData", () => {

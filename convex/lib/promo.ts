@@ -210,3 +210,25 @@ export function assertValidPromoPrice(
 	if (promoPrice <= 0 || promoPrice >= listPrice)
 		throw new Error("A promo price must be above zero and below the list price.");
 }
+
+/**
+ * What a sale cost the seller on one order, in sen: Σ (listPrice − price) × qty
+ * over the lines that actually sold below list.
+ *
+ * Reads only the FROZEN pair on each line, never the product's live promo, so
+ * it stays true after the promo ends, is re-run with a fresh `runId`, or is
+ * deleted outright. Lines with no `listPrice` sold at list and contribute 0,
+ * which makes this safely 0 for every order that predates the feature.
+ *
+ * One author for the CSV column, the receipt PDF's saving line and any later
+ * "promo discount given" KPI.
+ */
+export function promoDiscountTotal(order: {
+	items: ReadonlyArray<{ price: number; listPrice?: number; quantity: number }>;
+}): number {
+	return order.items.reduce((sum, item) => {
+		if (item.listPrice === undefined || item.listPrice <= item.price)
+			return sum;
+		return sum + (item.listPrice - item.price) * item.quantity;
+	}, 0);
+}

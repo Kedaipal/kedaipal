@@ -9,6 +9,7 @@ import {
 	promoUnitsLeft,
 	sanitizePromo,
 	assertValidPromoPrice,
+	promoDiscountTotal,
 	type PromoConfig,
 } from "./promo";
 
@@ -191,5 +192,37 @@ describe("mintPromoRunId", () => {
 		const a = mintPromoRunId();
 		expect(a).toHaveLength(12);
 		expect(mintPromoRunId()).not.toBe(a);
+	});
+});
+
+describe("promoDiscountTotal", () => {
+	test("sums (listPrice − price) × qty over the lines that sold below list", () => {
+		expect(
+			promoDiscountTotal({
+				items: [
+					{ price: 3150, listPrice: 4500, quantity: 2 }, // saved 1350 ×2
+					{ price: 2240, listPrice: 2800, quantity: 1 }, // saved 560
+					{ price: 1000, quantity: 3 }, // sold at list
+				],
+			}),
+		).toBe(1350 * 2 + 560);
+	});
+
+	test("an order with no promo lines is 0, which is every pre-feature order", () => {
+		expect(
+			promoDiscountTotal({ items: [{ price: 4500, quantity: 2 }] }),
+		).toBe(0);
+	});
+
+	test("a listPrice at or below the charged price contributes nothing", () => {
+		// Bad data must never print a negative "saving".
+		expect(
+			promoDiscountTotal({
+				items: [
+					{ price: 4500, listPrice: 4500, quantity: 1 },
+					{ price: 4500, listPrice: 3000, quantity: 1 },
+				],
+			}),
+		).toBe(0);
 	});
 });
