@@ -25,6 +25,7 @@ import {
 	PLAN_CREDIT_GRANT,
 	type Plan,
 	SELLER_CANCEL_REFUNDS_PER_PERIOD,
+	storeHasFullAccess,
 	TRIAL_CREDIT_GRANT,
 } from "./plans";
 
@@ -41,7 +42,7 @@ import {
  * and thrown by `credits.adminSetGrantOverride` — one author.
  */
 export const GRANT_LEVER_CONTRACT_REFUSAL =
-	"A custom allowance on a listed plan is an Enterprise deal with no contract record. Put the store on a contract — it can keep this plan's exact terms — or comp it if it's sponsored. Clearing an old custom grant still works.";
+	"A custom allowance on a listed plan is an Enterprise deal with no contract record. Put the store on a contract — it can keep this plan's exact terms. (A comp is not the route: a sponsored store is unmetered, so it has no allowance to set.) Clearing an old custom grant still works.";
 
 export type CreditBucket = "plan" | "purchased";
 
@@ -57,9 +58,8 @@ export type CreditBillingStatus =
 
 export type CreditRegimeInputs = {
 	status: CreditBillingStatus;
-	/** The subscription's plan (the tier a comped / held store keeps). */
+	/** The subscription's plan (the tier a held store keeps). */
 	plan: Plan;
-	comped: boolean;
 	/** `foundingPriceEligible` for this store right now. */
 	foundingEligible: boolean;
 	/** `creditAccounts.grantOverride` — an admin-set custom monthly grant. */
@@ -108,17 +108,19 @@ export function monthlyCreditGrant(inputs: CreditRegimeInputs): number {
 }
 
 /**
- * Which grant regime a store is in right now. Stores that are metered but
- * never locked — comped and the missing-row fail-safe — are on the monthly
- * grant whatever their status says: a sponsored store sits in whatever status
- * it had, and a one-off trial grant would turn its "honest meter" into a debt
- * that never refreshes.
+ * Which grant regime a store is in right now. The one store that is metered
+ * but never locked — the missing-subscription-row fail-safe, which
+ * `resolveAccess` treats as comped full access — is on the monthly grant
+ * whatever its (absent) status says: a one-off trial grant would turn its
+ * "honest meter" into a debt that never refreshes.
  *
  * An UNMETERED store (`storeIsMetered`) has no regime at all and never
- * reaches here — `regimeFor` in convex/credits.ts answers `null` for it.
+ * reaches here — `regimeFor` in convex/credits.ts answers `null` for it. That
+ * is why there is no `comped` arm: since z8r3fdrph7 a comp is unmetered, so
+ * an arm for it would be a branch no caller can enter.
  */
 export function creditRegime(inputs: CreditRegimeInputs): CreditRegime {
-	if (inputs.status === null || inputs.comped)
+	if (inputs.status === null)
 		return { kind: "monthly", grant: monthlyCreditGrant(inputs) };
 	switch (inputs.status) {
 		case "active":
@@ -201,16 +203,14 @@ export function sellerRefundsLeft(used: number): number {
 
 /** Why a store's SUBSCRIPTION stops it buying a top-up pack, or `null` when
  * it doesn't (register item 7c + T2). Credits top up a live subscription;
- * they never replace one. Comped stores and the missing-row fail-safe pass
- * this rule — T2's `topUpRefusal` refuses them on its own ground: they are
- * never locked, so a pack would buy nothing. */
+ * they never replace one. The missing-row fail-safe passes this rule — T2's
+ * `topUpRefusal` refuses it on its own ground: it is never locked, so a pack
+ * would buy nothing. An unmetered store (admin-owned or comped) is refused by
+ * `topUpRefusal` before it reaches here. */
 export type TopUpBlock = "trialing" | "past_due" | "on_hold" | "cancelled";
 
-export function topUpBlock(
-	status: CreditBillingStatus,
-	comped: boolean,
-): TopUpBlock | null {
-	if (status === null || comped || status === "active") return null;
+export function topUpBlock(status: CreditBillingStatus): TopUpBlock | null {
+	if (status === null || status === "active") return null;
 	return status;
 }
 
@@ -340,50 +340,77 @@ export function fundingAdvance(waiting: number, creditsIn: number): number {
 }
 
 /**
- * Does the credit system apply to this store AT ALL (z8r3fdp4er)?
+ * Does the credit system apply to this store AT ALL (z8r3fdp4er, widened to
+ * sponsored stores by z8r3fdrph7)?
  *
- * A Kedaipal admin's OWN store is UNMETERED: no credit account, no monthly
- * grant, no debit per order, no meter, no activity list and nothing gated.
- * That is a strictly stronger state than `creditLockExempt` below, which
- * still meters — a sponsored seller's comp can end, so their balance has to
- * be real and visible. An admin runs the product: "200 of 200" over a bar
- * with a refresh date reads as a cap to every eye however carefully the
- * sentence under it is worded, and the volume it was there to show already
- * lives in Insights and the admin console.
+ * An UNMETERED store has no credit account, no monthly grant, no debit per
+ * order, no meter, no activity list and nothing gated. Two kinds of store are
+ * unmetered, and they are the same two that `fullAccessCaps()` gives no limits
+ * to — one answer, so the credit layer and the entitlement layer cannot
+ * disagree about what "no limits" means:
+ *
+ *  - a Kedaipal admin's OWN store (dogfooding, never billed);
+ *  - a SPONSORED store (`comped`) — a comp grants what an admin's own store
+ *    gets, not "free Pro" (z8r3fdeub2).
+ *
+ * `z8r3fdp4er` originally carved sponsored stores OUT of this on the grounds
+ * that a comp can end, so the balance should stay real and visible. Zaki
+ * reversed that on 10 Oct 2026: the carve-out meant a sponsored seller read
+ * "200 of 200" over a bar with a refresh date — which is a cap to every eye
+ * however carefully the sentence under it is worded — while
+ * `fullAccessCaps()` and the admin console's own comp hint ("Every feature,
+ * no limits, never billed") both promised them no limit. The volume the meter
+ * was there to show already lives in Insights and the admin console.
+ *
+ * The MISSING-SUB-ROW fail-safe (`status === null`) is deliberately NOT here.
+ * `resolveAccess` treats it as comped full access, but it is a data fault, not
+ * a granted sponsorship: metered-but-never-locked keeps a record accruing while
+ * blocking nothing, which is the safer way to fail. It is also the one case
+ * `CreditLockExemption` below still answers for.
  *
  * The ONE gate is `regimeFor` (convex/credits.ts), which answers `null` here
  * — every reader and writer of a balance already funnels through it and
- * already has a `null` branch. Sponsored stores are deliberately untouched.
+ * already has a `null` branch.
  */
-export function storeIsMetered(args: { ownerIsAdmin: boolean }): boolean {
-	return !args.ownerIsAdmin;
+export function storeIsMetered(args: {
+	ownerIsAdmin: boolean;
+	comped: boolean;
+}): boolean {
+	return !storeHasFullAccess(args);
 }
 
 /** What an admin lever says when it is pointed at a store credits don't apply
  * to — the console's adjust and custom-grant forms. One author, because
- * falling through to "Store not found" is what they did before the gate. */
+ * falling through to "Store not found" is what they did before the gate.
+ * Says "admin and sponsored" rather than naming which, because the lever is
+ * refused identically for both and the row beside it already says which. */
 export const UNMETERED_STORE_REFUSAL =
-	"Kedaipal admin stores aren't metered — there are no credits to adjust. Credits apply to seller stores only.";
+	"Kedaipal admin and sponsored stores aren't metered — there are no credits to adjust. Credits apply to billed seller stores only.";
 
-/** WHY a metered store is never locked: it is SPONSORED (comped, or the
- * missing-row fail-safe `resolveAccess` treats as comped), so Kedaipal is
- * covering it. `null` for every store the lock applies to. An admin's own
- * store is not here — it is unmetered, so it has no balance to exempt. */
+/** WHY a metered store is never locked: the missing-row fail-safe, which
+ * `resolveAccess` treats as comped full access. `null` for every store the
+ * lock applies to.
+ *
+ * An admin's own store and a `comped` one are NOT here — they are unmetered
+ * (`storeIsMetered`), so they have no balance to exempt. `comped` stays in
+ * this function's arguments because it is what the fail-safe is being treated
+ * AS: a store that reaches here with `comped: true` has a subscription row
+ * saying so and no regime to lock, which the gate above has already answered.
+ * Keeping it makes that fall-through explicit rather than relying on the
+ * caller's order. */
 export type CreditLockExemption = "sponsored";
 
 export function creditLockExemption(args: {
 	status: CreditBillingStatus;
-	comped: boolean;
 }): CreditLockExemption | null {
-	if (args.status === null || args.comped) return "sponsored";
+	if (args.status === null) return "sponsored";
 	return null;
 }
 
-/** Stores that are metered but NEVER locked: comped and the missing-row
- * fail-safe. They get no balance notices either. */
+/** The store that is metered but NEVER locked: the missing-row fail-safe. It
+ * gets no balance notices either. */
 export function creditLockExempt(args: {
 	status: CreditBillingStatus;
-	comped: boolean;
 }): boolean {
 	return creditLockExemption(args) !== null;
 }

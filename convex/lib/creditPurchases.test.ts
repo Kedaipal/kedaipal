@@ -88,8 +88,17 @@ describe("topUpRefusalMessage — every refusal names the way out", () => {
 
 	test("a sponsored store is told there's nothing to top up — the same words for everyone", () => {
 		const owner = topUpRefusalMessage("sponsored", { audience: "owner" });
-		expect(owner).toMatch(/^Sponsored stores never run out/);
+		expect(owner).toMatch(/^Sponsored stores aren't metered/);
 		expect(topUpRefusalMessage("sponsored", { audience: "member" })).toBe(owner);
+	});
+
+	test("no refusal claims a sponsored store's credits refresh — they don't exist (z8r3fdrph7)", () => {
+		// The old sentence said "credits refresh every month", which was true
+		// while a comp was metered and became a lie the moment it wasn't.
+		for (const audience of ["owner", "member"] as const)
+			expect(topUpRefusalMessage("sponsored", { audience })).not.toMatch(
+				/refresh/i,
+			);
 	});
 
 	test("never money-balance language — order counts only", () => {

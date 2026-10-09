@@ -57,11 +57,11 @@ import {
 	countOrdersAwaitingCredit,
 	loadCreditAccount,
 	projectedCredits,
+	storeUnmetered,
 } from "./credits";
 import {
 	isAdmin,
 	requireRetailerAccess,
-	storeOwnerIsAdmin,
 	tryRetailerAccess,
 } from "./lib/auth";
 import {
@@ -76,7 +76,6 @@ import {
 	orderCreditFunded,
 	ordersAwaitingCredit,
 	sellerRefundsLeft,
-	storeIsMetered,
 } from "./lib/credits";
 import {
 	type SellerCustomer,
@@ -95,8 +94,8 @@ type AnyCtx = QueryCtx | MutationCtx;
  * stay behind the `credits` grant, and a sequence number is not a balance).
  */
 export type CreditGateState = {
-	/** Nothing in this store is ever gated: comped, admin-owned, no
-	 * subscription row, or no credit account yet. Fail open. */
+	/** Nothing in this store is ever gated: UNMETERED (admin-owned or comped),
+	 * no subscription row, or no credit account yet. Fail open. */
 	exempt: boolean;
 	/** The watermark. An order is workable iff `creditSeq <= fundedThrough`. */
 	fundedThrough: number;
@@ -127,9 +126,10 @@ function openGate(unlockRoute: CreditUnlockRoute): CreditGateState {
 
 /**
  * The ONE gate resolver — the server guards, the read-path redaction and the
- * dashboard payload all read it. Exempt stores (comped, admin-owned, no
- * subscription row) and a store with no credit account yet are never gated
- * (fail open, like the past-due lock's missing-row fail-safe).
+ * dashboard payload all read it. Unmetered stores (admin-owned or comped —
+ * they hold no balance at all), the missing-subscription-row fail-safe and a
+ * store with no credit account yet are never gated (fail open, like the
+ * past-due lock's missing-row fail-safe).
  *
  * A KEDAIPAL ADMIN is never gated, here rather than at each call site: the
  * redaction, the guards, the batch skip and the dashboard payload all read
@@ -152,15 +152,16 @@ export async function resolveCreditGate(
 	// A Kedaipal admin CALLER is never gated (see the doc above) — identity,
 	// not store ownership, so it also covers white-glove act-as.
 	if (await isAdmin(ctx)) return openGate(unlockRoute);
-	// An admin's own STORE is UNMETERED (z8r3fdp4er): it holds no balance, so
-	// there is nothing to be at zero. `projectedCredits` below would answer
-	// null and reach the same open gate, but a gate resolver should say where
-	// it fails open, not make the reader follow three hops to find out.
-	if (!storeIsMetered({ ownerIsAdmin: storeOwnerIsAdmin(retailer) }))
-		return openGate(unlockRoute);
-	// SPONSORED: comped, or the missing-subscription fail-safe.
-	if (creditLockExempt({ status, comped: sub?.comped === true }))
-		return openGate(unlockRoute);
+	// An UNMETERED store (z8r3fdp4er + z8r3fdrph7 — an admin's own, or a
+	// SPONSORED one) holds no balance, so there is nothing to be at zero.
+	// `projectedCredits` below would answer null and reach the same open gate,
+	// but a gate resolver should say where it fails open, not make the reader
+	// follow three hops to find out.
+	if (storeUnmetered(retailer, sub)) return openGate(unlockRoute);
+	// The missing-subscription fail-safe, which `resolveAccess` treats as
+	// sponsored full access: metered, so the ledger keeps a record, but never
+	// locked.
+	if (creditLockExempt({ status })) return openGate(unlockRoute);
 	const account = await loadCreditAccount(ctx, retailer._id);
 	if (!account) return openGate(unlockRoute);
 	const projected = await projectedCredits(ctx, retailer._id, account, now);

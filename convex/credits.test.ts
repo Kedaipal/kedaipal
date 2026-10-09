@@ -16,7 +16,10 @@ import {
 	ensureCreditAccount,
 	refundCreditForOrder,
 } from "./credits";
-import type { CancelCause } from "./lib/credits";
+import {
+	type CancelCause,
+	GRANT_LEVER_CONTRACT_REFUSAL,
+} from "./lib/credits";
 import type { Plan } from "./lib/plans";
 import { SELLER_CANCEL_REFUNDS_PER_PERIOD } from "./lib/plans";
 import schema from "./schema";
@@ -608,16 +611,17 @@ describe("usage periods", () => {
 		});
 	});
 
-	test("a comped store is metered on the monthly grant", async () => {
+	test("a comped store takes no monthly grant — it is unmetered (z8r3fdrph7)", async () => {
 		const t = setup();
 		const comped = await makeStore(t, {
 			status: "active",
 			plan: "starter",
 			comped: true,
 		});
+		expect(await account(t, comped.retailerId)).toBeNull();
 		vi.setSystemTime(NOV_1);
 		await t.mutation(internal.credits.internalRollPeriods, {});
-		expect((await account(t, comped.retailerId))?.planBalance).toBe(100);
+		expect(await account(t, comped.retailerId)).toBeNull();
 	});
 
 	test("founding Pro is granted 300 a month", async () => {
@@ -740,6 +744,186 @@ describe("an admin's own store is unmetered", () => {
 		await order(t, seller.retailerId);
 		expect((await account(t, seller.retailerId))?.planBalance).toBe(199);
 		expect(await ledger(t, seller.retailerId)).not.toHaveLength(0);
+	});
+});
+
+describe("a SPONSORED store is unmetered too (z8r3fdrph7)", () => {
+	/** A comped store, built the way an admin's toggle builds one. */
+	const comp = (t: T, over: Partial<Doc<"subscriptions">> = {}) =>
+		makeStore(t, {
+			status: "active",
+			plan: "pro",
+			comped: true,
+			comp: {
+				kind: "partner",
+				label: "Campfest",
+				grantedBy: ADMIN,
+				grantedAt: Date.now(),
+			},
+			...over,
+		});
+
+	test("orders spend nothing and no account is opened", async () => {
+		const t = setup();
+		const sponsored = await comp(t);
+		for (let i = 0; i < 5; i++) await order(t, sponsored.retailerId);
+		expect(await account(t, sponsored.retailerId)).toBeNull();
+		expect(await ledger(t, sponsored.retailerId)).toHaveLength(0);
+	});
+
+	test("a store METERED BEFORE the comp stops being debited, and its bought credits survive", async () => {
+		// The path that bites, twice over: `ensureCreditAccount` shortcuts on an
+		// existing row, and a real sponsorship is usually switched on over a
+		// store that was already billed — so it arrives carrying a balance AND
+		// a paid-for pack. Nothing may move, and nothing may be destroyed.
+		const t = setup();
+		const seller = await makeStore(t, { status: "active", plan: "pro" });
+		await order(t, seller.retailerId);
+		expect((await account(t, seller.retailerId))?.planBalance).toBe(199);
+		await t.run((ctx) =>
+			ctx.db.insert("creditLots", {
+				retailerId: seller.retailerId,
+				credits: 200,
+				remaining: 200,
+				open: true,
+				source: "purchase",
+				refId: "pack-1",
+				expiresAt: Date.now() + 365 * DAY,
+				createdAt: Date.now(),
+			}),
+		);
+		await t.run((ctx) => ctx.db.patch(seller.subId, { comped: true }));
+
+		await order(t, seller.retailerId);
+		expect((await account(t, seller.retailerId))?.planBalance).toBe(199);
+		expect(await ledger(t, seller.retailerId)).toHaveLength(2);
+		// The month boundary lands no grant and forfeits nothing.
+		vi.setSystemTime(NOV_1);
+		await t.mutation(internal.credits.internalRollPeriods, {});
+		const rolled = await account(t, seller.retailerId);
+		expect(rolled?.periodKey).toBe("2026-10");
+		expect(rolled?.planBalance).toBe(199);
+		// And the pack is still there, untouched — the reason the purge is
+		// deliberately keyed on admin ownership and not on this gate.
+		expect(await lots(t, seller.retailerId)).toHaveLength(1);
+	});
+
+	test("a sponsored store's bought lot still EXPIRES on time — it is not frozen and resurrected", async () => {
+		// `internalExpireLots` reads the account directly rather than the
+		// regime, on purpose: freeze a lot while a comp runs and it would come
+		// back as live credits the day the comp ends, months past its date.
+		const t = setup();
+		const seller = await makeStore(t, { status: "active", plan: "pro" });
+		await t.run((ctx) =>
+			ctx.db.insert("creditLots", {
+				retailerId: seller.retailerId,
+				credits: 50,
+				remaining: 50,
+				open: true,
+				source: "purchase",
+				refId: "pack-old",
+				expiresAt: Date.now() + DAY,
+				createdAt: Date.now(),
+			}),
+		);
+		await t.run(async (ctx) => {
+			const a = await ctx.db
+				.query("creditAccounts")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", seller.retailerId))
+				.first();
+			if (a) await ctx.db.patch(a._id, { purchasedBalance: 50 });
+			await ctx.db.patch(seller.subId, { comped: true });
+		});
+		vi.setSystemTime(Date.now() + 2 * DAY);
+		await t.mutation(internal.credits.internalExpireLots, {});
+		expect((await lots(t, seller.retailerId))[0]?.open).toBe(false);
+		expect((await account(t, seller.retailerId))?.purchasedBalance).toBe(0);
+	});
+
+	test("the balance, the activity list and the gate are all empty, so every meter hides", async () => {
+		const t = setup();
+		await comp(t);
+		const asOwner = t.withIdentity({ subject: OWNER });
+		expect(await asOwner.query(api.credits.getBalance, {})).toBeNull();
+		const activity = await asOwner.query(api.credits.listActivity, {
+			paginationOpts: { numItems: 10, cursor: null },
+		});
+		expect(activity.page).toHaveLength(0);
+		const me = await asOwner.query(api.retailers.getMyRetailer, {});
+		expect(me?.creditGate?.exempt).toBe(true);
+		expect(me?.creditGate?.ordersWaiting ?? 0).toBe(0);
+		// The one boolean every client surface reads for "no limits".
+		expect(me?.fullAccess).toBe(true);
+	});
+
+	test("the admin levers refuse it by name — including the grant lever a comp used to be FOR", async () => {
+		const t = setup();
+		const sponsored = await comp(t);
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+		await expect(
+			asAdmin.mutation(api.credits.adminAdjust, {
+				retailerId: sponsored.retailerId,
+				bucket: "plan",
+				amount: 50,
+				note: "goodwill for the partner",
+			}),
+		).rejects.toThrow(/aren't metered/);
+		// Before this change a comp was the sponsored case the custom-grant
+		// lever existed to serve, and its refusal copy told admins to "comp it
+		// if it's sponsored". A comp now carries no allowance at all.
+		await expect(
+			asAdmin.mutation(api.credits.adminSetGrantOverride, {
+				retailerId: sponsored.retailerId,
+				grant: 500,
+			}),
+		).rejects.toThrow(/aren't metered/);
+		expect(GRANT_LEVER_CONTRACT_REFUSAL).not.toMatch(/comp it if it's sponsored/);
+	});
+
+	test("turning the comp OFF meters the store again, from that moment", async () => {
+		const t = setup();
+		const sponsored = await comp(t);
+		await order(t, sponsored.retailerId);
+		expect(await account(t, sponsored.retailerId)).toBeNull();
+		// An admin switches it off: the store lapses to past_due (z8r3fdeub2),
+		// so it earns no grant until it pays — but it IS metered again, which
+		// is what makes "a comp can end" safe without metering it throughout.
+		await t.run((ctx) =>
+			ctx.db.patch(sponsored.subId, { comped: false, status: "past_due" }),
+		);
+		await order(t, sponsored.retailerId);
+		const reopened = await account(t, sponsored.retailerId);
+		expect(reopened).not.toBeNull();
+		expect(reopened?.planBalance).toBe(-1);
+		// Nothing from the sponsored months is charged to them.
+		expect(await ledger(t, sponsored.retailerId)).toHaveLength(1);
+	});
+
+	test("the purge leaves a sponsored store alone — its rows may be paid for", async () => {
+		const t = setup();
+		const sponsored = await comp(t);
+		await t.run((ctx) =>
+			ctx.db.insert("creditAccounts", {
+				retailerId: sponsored.retailerId,
+				planBalance: 12,
+				purchasedBalance: 200,
+				periodKey: "2026-09",
+				periodGrant: 200,
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			}),
+		);
+		const dry = await t.mutation(internal.migrations.purgeUnmeteredCreditData, {});
+		expect(dry.stores.map((s) => s.retailerId)).not.toContain(
+			sponsored.retailerId,
+		);
+		await expect(
+			t.mutation(internal.migrations.purgeUnmeteredCreditData, {
+				apply: true,
+				retailerIds: [sponsored.retailerId],
+			}),
+		).rejects.toThrow(/not unmetered stores/);
+		expect(await account(t, sponsored.retailerId)).not.toBeNull();
 	});
 });
 
@@ -965,13 +1149,25 @@ describe("admin", () => {
 
 	test("a custom grant beats the tier; a higher one lands its difference now, clearing it waits for the next period", async () => {
 		const t = setup();
-		// COMPED: since the Enterprise follow-up (z8r3fdkp8h) a recurring
-		// custom allowance is only for sponsored or contracted stores — a
-		// comp is the sponsored case this behaviour now belongs to.
-		const { retailerId } = await makeStore(t, {
+		// A CONTRACT is the only host left for this behaviour. z8r3fdkp8h made
+		// a recurring custom allowance sponsored-or-contracted; z8r3fdrph7 then
+		// made a sponsored store UNMETERED, so it has no allowance to set and
+		// the lever refuses it (covered below). Clearing an override still
+		// drops the store to its plan's grant — read off `plan`, which an
+		// Enterprise row keeps for the day the contract ends.
+		const { retailerId, subId } = await makeStore(t, {
 			status: "active",
-			plan: "starter",
-			comped: true,
+			plan: "enterprise",
+			enterprise: {
+				baseFeeMinor: 88800,
+				currency: "MYR",
+				includedCredits: 1000,
+				overageRateMinor: 60,
+				blockSize: 100,
+				contactName: "Arif",
+				setBy: ADMIN,
+				setAt: Date.now(),
+			},
 		});
 		const asAdmin = t.withIdentity({ subject: ADMIN });
 		await asAdmin.mutation(api.credits.adminSetGrantOverride, { retailerId, grant: 1000 });
@@ -980,6 +1176,13 @@ describe("admin", () => {
 			periodGrant: 1000,
 			grantOverride: 1000,
 		});
+		// Clearing a contract's override is refused on the contract's own
+		// ground (its included credits ARE the override), so drop the store to
+		// a listed plan first — the state the lever's "clearing always works"
+		// rule is about.
+		await t.run((ctx) =>
+			ctx.db.patch(subId, { plan: "starter", enterprise: undefined }),
+		);
 		await asAdmin.mutation(api.credits.adminSetGrantOverride, { retailerId, grant: null });
 		expect((await account(t, retailerId))?.planBalance).toBe(1000);
 		vi.setSystemTime(NOV_1);
@@ -990,9 +1193,10 @@ describe("admin", () => {
 	test("SETTING a custom grant on a listed plan is refused — that deal is a contract now; clearing a stale one still works", async () => {
 		// Zaki, 2 Oct 2026: a Pro store with 1,500 credits is an Enterprise
 		// deal with no contract record — the contract can carry Pro's exact
-		// fee, so "same price, more credits" is a contract too. Comped stays
-		// allowed (sponsored); enterprise edits the contract (covered in
-		// enterprise.test.ts).
+		// fee, so "same price, more credits" is a contract too. A CONTRACT is
+		// now the only store that may be SET (enterprise edits the contract,
+		// covered in enterprise.test.ts): since z8r3fdrph7 a comped store is
+		// unmetered, and the lever refuses it before this rule is reached.
 		const t = setup();
 		const { retailerId } = await makeStore(t, { status: "active", plan: "pro" });
 		const asAdmin = t.withIdentity({ subject: ADMIN });

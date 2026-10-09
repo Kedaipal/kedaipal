@@ -645,9 +645,16 @@ describe("BillingTab comp accounts (z8r3fdeub2)", () => {
 			/>,
 		);
 		expect(screen.getByText("Sponsored account")).toBeTruthy();
-		expect(screen.getByText("Never locked")).toBeTruthy();
+		expect(screen.getByText("No limits")).toBeTruthy();
 		expect(screen.getByText("Sponsored by Maybank SME")).toBeTruthy();
-		expect(screen.getByText(/never\s+locks your store/)).toBeTruthy();
+		// This card is the ONLY place a sponsored seller is told their limits
+		// are off: the credit meter is absent for them (z8r3fdrph7), and a
+		// ceiling that silently isn't there is still undiscoverable behaviour.
+		// So the three limits are named here, in words.
+		expect(screen.getByText(/no monthly\s+order limit/)).toBeTruthy();
+		expect(screen.getByText(/no product limit/)).toBeTruthy();
+		expect(screen.getByText(/no credits to run down/)).toBeTruthy();
+		expect(screen.getByText(/can never be locked/)).toBeTruthy();
 		// A comp has no end date — nothing may suggest one.
 		expect(screen.queryByText(/until|expires|ends/i)).toBeNull();
 		// Not a plan: no tier, meter or any billing door.

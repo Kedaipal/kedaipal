@@ -33,6 +33,7 @@ import {
 	PLAN_CREDIT_GRANT,
 	PLAN_MONTHLY_PRICES,
 	SELLER_CANCEL_REFUNDS_PER_PERIOD,
+	storeHasFullAccess,
 	TRIAL_CREDIT_GRANT,
 } from "./plans";
 
@@ -42,7 +43,6 @@ function inputs(over: Partial<CreditRegimeInputs> = {}): CreditRegimeInputs {
 	return {
 		status: "active",
 		plan: "pro",
-		comped: false,
 		foundingEligible: false,
 		override: undefined,
 		annualGrant: undefined,
@@ -150,11 +150,7 @@ describe("creditRegime — by subscription status", () => {
 			expect(creditRegime(inputs({ status }))).toEqual({ kind: "none" });
 	});
 
-	test("comped and the missing-row fail-safe are metered monthly whatever the status", () => {
-		expect(creditRegime(inputs({ status: "past_due", comped: true }))).toEqual({
-			kind: "monthly",
-			grant: 200,
-		});
+	test("the missing-row fail-safe is metered monthly despite having no status", () => {
 		expect(creditRegime(inputs({ status: null }))).toEqual({
 			kind: "monthly",
 			grant: 200,
@@ -162,21 +158,32 @@ describe("creditRegime — by subscription status", () => {
 	});
 });
 
-describe("unmetered stores (z8r3fdp4er)", () => {
-	test("an admin's own store is unmetered; every other store is metered", () => {
-		expect(storeIsMetered({ ownerIsAdmin: true })).toBe(false);
-		expect(storeIsMetered({ ownerIsAdmin: false })).toBe(true);
+describe("unmetered stores (z8r3fdp4er + z8r3fdrph7)", () => {
+	test("an admin's own store AND a sponsored one are unmetered — a comp means admin limits", () => {
+		expect(storeIsMetered({ ownerIsAdmin: true, comped: false })).toBe(false);
+		expect(storeIsMetered({ ownerIsAdmin: false, comped: true })).toBe(false);
+		expect(storeIsMetered({ ownerIsAdmin: true, comped: true })).toBe(false);
+		expect(storeIsMetered({ ownerIsAdmin: false, comped: false })).toBe(true);
 	});
 
-	test("a sponsored store is NOT unmetered — only never locked", () => {
-		// The two states are deliberately different: a comp can end, so the
-		// balance behind it has to be real and visible the whole time.
-		expect(storeIsMetered({ ownerIsAdmin: false })).toBe(true);
-		expect(creditLockExempt({ status: "active", comped: true })).toBe(true);
-		expect(creditLockExemption({ status: null, comped: false })).toBe(
-			"sponsored",
-		);
-		expect(creditLockExemption({ status: "active", comped: false })).toBeNull();
+	test("unmetered IS the entitlement layer's full access — one predicate, no drift", () => {
+		// z8r3fdp4er unmetered admin stores but left comped ones metered, so a
+		// sponsored seller read "200 of 200" while `fullAccessCaps()` said
+		// unlimited. Pinned as an equality so the two can never part again.
+		for (const ownerIsAdmin of [true, false])
+			for (const comped of [true, false])
+				expect(storeIsMetered({ ownerIsAdmin, comped })).toBe(
+					!storeHasFullAccess({ ownerIsAdmin, comped }),
+				);
+	});
+
+	test("the missing-row fail-safe stays METERED — never locked, but it keeps a record", () => {
+		// Deliberately NOT unmetered: a rowless store is a data fault, not a
+		// granted sponsorship, so its volume still leaves a ledger behind.
+		expect(storeIsMetered({ ownerIsAdmin: false, comped: false })).toBe(true);
+		expect(creditLockExemption({ status: null })).toBe("sponsored");
+		expect(creditLockExempt({ status: null })).toBe(true);
+		expect(creditLockExemption({ status: "active" })).toBeNull();
 	});
 });
 
@@ -247,15 +254,14 @@ describe("cancelRefundDecision — only an order that never got going", () => {
 });
 
 describe("topUpBlock — credits top up a live subscription, never replace one", () => {
-	test("active, comped and the fail-safe pass the subscription rule (T2 then refuses the last two as sponsored)", () => {
-		expect(topUpBlock("active", false)).toBeNull();
-		expect(topUpBlock("past_due", true)).toBeNull();
-		expect(topUpBlock(null, false)).toBeNull();
+	test("active and the fail-safe pass the subscription rule (T2 refuses the fail-safe as sponsored)", () => {
+		expect(topUpBlock("active")).toBeNull();
+		expect(topUpBlock(null)).toBeNull();
 	});
 
 	test("trialing, past_due, on_hold and cancelled say why not", () => {
 		for (const status of ["trialing", "past_due", "on_hold", "cancelled"] as const)
-			expect(topUpBlock(status, false)).toBe(status);
+			expect(topUpBlock(status)).toBe(status);
 	});
 });
 

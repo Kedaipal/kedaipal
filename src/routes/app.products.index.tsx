@@ -22,6 +22,7 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import {
 	productCapBlockReason,
+	productCapExemption,
 	productCapState,
 } from "../../convex/lib/productCap";
 import { formatEventBadge, isEventPassed } from "../../convex/lib/productEvent";
@@ -255,14 +256,18 @@ function ProductsRoute() {
 
 	// Product cap. `counts.all` is the right input by construction: `listAll`
 	// returns every row, active AND archived, which is exactly what the cap
-	// counts. Client mirror of the server gate (server is the lock) — admin
-	// act-as is exempt so a white-glove catalog can be stocked past the ceiling.
-	const cap = productCapState(counts.all, retailer?.actingAsAdmin === true);
+	// counts. Client mirror of the server gate (server is the lock) — exempt for
+	// admin act-as, so a white-glove catalog can be stocked past the ceiling,
+	// and for a FULL-ACCESS store (admin-owned or sponsored), which has no plan
+	// to cap. Both inputs ride on the retailer payload and the OR lives in
+	// `productCapExemptFor`, so this cannot disagree with what the save does.
+	const capExempt = productCapExemption({
+		actingAsAdmin: retailer?.actingAsAdmin === true,
+		fullAccess: retailer?.fullAccess === true,
+	});
+	const cap = productCapState(counts.all, capExempt);
 	// null while there's room — one source for the disabled button and its reason.
-	const capBlockReason = productCapBlockReason(
-		counts.all,
-		retailer?.actingAsAdmin === true,
-	);
+	const capBlockReason = productCapBlockReason(counts.all, capExempt);
 	// Team members (86exr91r4): a read-only grant must not be handed
 	// create/reorder/export affordances that the server will refuse.
 	const productsPerm = usePermission("products");

@@ -23,13 +23,16 @@ export const CREDIT_PURCHASE_HITPAY_EXPIRY = "1440 mins";
 
 /** Why a store can't buy a pack right now: T1's subscription rule
  * (`topUpBlock` — a pack tops up a PAID plan, so trial, overdue, held and
- * ended plans are refused), plus the two kinds of store that can never be
- * locked and so have nothing to top up:
+ * ended plans are refused), plus the two kinds of store that have nothing to
+ * top up at all:
  *  - a Kedaipal admin's own store — never billed, and permanently
  *    `trialing`, where "pick a plan first" would be advice it can't take;
- *  - a SPONSORED store (comped, or the missing-row fail-safe `resolveAccess`
- *    treats as comped) — its credits are a meter, never a lock, so a pack
- *    would be money for nothing (Zaki, 1 Oct 2026). */
+ *  - a SPONSORED store — comped (UNMETERED since z8r3fdrph7, so there is no
+ *    balance a pack could add to), or the missing-row fail-safe
+ *    `resolveAccess` treats as comped, whose credits are a meter and never a
+ *    lock, so a pack would be money for nothing (Zaki, 1 Oct 2026). The two
+ *    share one refusal because what the reader must do is identical —
+ *    nothing — and the fail-safe is a data fault that should never exist. */
 export type TopUpRefusal = TopUpBlock | "admin_store" | "sponsored";
 
 export function topUpRefusal(args: {
@@ -39,7 +42,7 @@ export function topUpRefusal(args: {
 }): TopUpRefusal | null {
 	if (args.ownerIsAdmin) return "admin_store";
 	if (args.comped || args.status === null) return "sponsored";
-	return topUpBlock(args.status, args.comped);
+	return topUpBlock(args.status);
 }
 
 /**
@@ -57,7 +60,7 @@ export function topUpRefusalMessage(
 	// The same sentence for the owner and a teammate: there is no way out to
 	// take, because nothing is wrong.
 	if (refusal === "sponsored")
-		return "Sponsored stores never run out, so there's nothing to top up — credits refresh every month and the store never locks.";
+		return "Sponsored stores aren't metered, so there's nothing to top up — no monthly limit, no balance to run down, and the store never locks.";
 	if (opts.audience === "member") {
 		switch (refusal) {
 			case "trialing":

@@ -735,7 +735,7 @@ a small top-up late in a month is still a top-up.
 
 ### Running out
 
-Same lock rules as Pro unless comped (`creditLockExemption`). A contract store
+Same lock rules as Pro (`creditLockExemption`). A contract store
 is never nudged to move up — `upgradeHint` is Starter-only and the running-low
 email's plan line is too.
 

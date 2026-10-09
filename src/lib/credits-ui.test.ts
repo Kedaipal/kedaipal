@@ -335,20 +335,22 @@ describe("the meter's state line", () => {
 		expect(creditStateLine(base)).toBeNull();
 	});
 
-	test("a sponsored store is never asked to pay — whatever its status says", () => {
-		// An admin's own store has no line here at all: it is unmetered
-		// (z8r3fdp4er), so there is no meter for a line to sit under.
+	test("an exempt store is never asked to pay — whatever its status says", () => {
+		// Neither an admin's own store nor a SPONSORED one has a line here at
+		// all: both are unmetered (z8r3fdp4er + z8r3fdrph7), so there is no
+		// meter for a line to sit under. What reaches this arm is the
+		// missing-subscription-row fail-safe, which stays metered.
 		for (const status of ["trialing", "past_due", "active"] as const) {
 			const line = creditStateLine({ ...base, status, exempt: "sponsored" });
-			expect(line).toMatch(/^Sponsored stores are never locked/);
+			expect(line).toMatch(/^This store is never locked/);
 			expect(line).not.toMatch(/Pay your invoice|Pick a plan/);
 		}
 	});
 
-	test("a sponsored store is told it never locks", () => {
+	test("the exempt line never claims to be about a comp — a comp has no meter", () => {
 		expect(
 			creditStateLine({ ...base, status: "past_due", exempt: "sponsored" }),
-		).toMatch(/^Sponsored stores are never locked/);
+		).not.toMatch(/sponsored/i);
 	});
 
 	test("bought credits never stand in for a plan — they're kept for when it's active", () => {

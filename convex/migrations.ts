@@ -18,7 +18,6 @@ import type { Id } from "./_generated/dataModel";
 import { internalMutation } from "./_generated/server";
 import { ensureCreditAccount } from "./credits";
 import { storeOwnerIsAdmin } from "./lib/auth";
-import { storeIsMetered } from "./lib/credits";
 import { generateTrackingToken } from "./lib/order";
 import { capsForPlan } from "./lib/plans";
 import { legacyClaimFromOrder } from "./lib/paymentClaims";
@@ -523,8 +522,10 @@ export const backfillOrderFlows = internalMutation({
  * PR's operator checklist). Each store opens with the grant its status earns
  * today, for the current usage period: the one-off trial allowance (200), its
  * plan's monthly grant (Founding Pro 300, an Enterprise contract's included
- * credits; comped and admin-owned stores their plan's), or nothing while
- * past_due / on hold — that grant lands the moment they pay or resume. The
+ * credits), or nothing while past_due / on hold — that grant lands the moment
+ * they pay or resume. An UNMETERED store (admin-owned or comped) is skipped
+ * entirely: `ensureCreditAccount` answers null for it (z8r3fdp4er +
+ * z8r3fdrph7), so it opens no account at all. The
  * FULL grant, never "grant minus this month's orders": nobody starts the
  * credits era in debt or locked. No welcome credits (dropped 17 Sep 2026).
  *
@@ -609,13 +610,26 @@ export const backfillPaymentClaims = internalMutation({
 });
 
 /**
- * Purge the credit data of UNMETERED stores (z8r3fdp4er).
+ * Purge the credit data of ADMIN-OWNED stores (z8r3fdp4er).
  *
  * A Kedaipal admin's own store is outside the credit system: `regimeFor`
  * answers `null` for it, so nothing reads or writes its account any more. The
  * rows it grew while it WAS metered are inert — but they sit below the current
  * usage period forever, so `credits:internalRollPeriods` re-selects them on
  * every sweep and can never advance them. This removes them.
+ *
+ * DELIBERATELY NARROWER THAN `storeIsMetered` (z8r3fdrph7). A SPONSORED
+ * (comped) store is unmetered too, and its rows are inert for the same
+ * reason — but it can hold BOUGHT credits, 12-month `creditLots` a seller
+ * paid real money for before the comp was switched on. A comp is a toggle an
+ * admin can turn off, and when it goes off the store is metered again and
+ * those lots must still be there. Purging them would destroy credits we sold.
+ * So this is keyed on admin ownership alone, not on the gate beside it, and
+ * an admin's own store can never be in that position (it is never sold a
+ * pack — `topUpRefusal` refuses it). Sponsored stores keep their rows inert
+ * instead, and `internalExpireLots` still retires their lots on schedule
+ * (it reads the account directly, not the regime), so nothing freezes and
+ * nothing is resurrected when a comp ends.
  *
  * DRY RUN BY DEFAULT. With no args it reports what it would delete and touches
  * nothing.
@@ -675,8 +689,9 @@ export const purgeUnmeteredCreditData = internalMutation({
 			);
 		const purged = new Set<string>();
 		for await (const retailer of ctx.db.query("retailers")) {
-			if (storeIsMetered({ ownerIsAdmin: storeOwnerIsAdmin(retailer) }))
-				continue;
+			// Admin ownership, NOT `storeIsMetered` — see the note above on why
+			// a sponsored store's rows are deliberately left alone.
+			if (!storeOwnerIsAdmin(retailer)) continue;
 			const accounts = await ctx.db
 				.query("creditAccounts")
 				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))

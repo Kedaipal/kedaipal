@@ -5,6 +5,7 @@ import {
 	MAX_PRODUCTS_PER_RETAILER as CAP,
 	PRODUCT_COUNTER_VISIBLE_AT,
 	productCapBlockReason,
+	productCapExemption,
 	productCapState,
 } from "./productCap";
 
@@ -39,7 +40,7 @@ describe("productCapState", () => {
 	});
 
 	test("exempt callers are never at the cap, however full the store is", () => {
-		const s = productCapState(CAP + 50, true);
+		const s = productCapState(CAP + 50, "admin_acting");
 		expect(s.exempt).toBe(true);
 		expect(s.atCap).toBe(false);
 		// Still honest about the store being over the ceiling — exemption is about
@@ -76,7 +77,8 @@ describe("productCapBlockReason", () => {
 	});
 
 	test("an exempt caller is never blocked", () => {
-		expect(productCapBlockReason(CAP, true)).toBeNull();
+		expect(productCapBlockReason(CAP, "admin_acting")).toBeNull();
+		expect(productCapBlockReason(CAP, "full_access")).toBeNull();
 	});
 });
 
@@ -107,7 +109,8 @@ describe("assertProductCap", () => {
 	});
 
 	test("exempt callers pass however far past the ceiling they are", () => {
-		expect(() => assertProductCap(CAP + 100, 50, true)).not.toThrow();
+		expect(() => assertProductCap(CAP + 100, 50, "admin_acting")).not.toThrow();
+		expect(() => assertProductCap(CAP + 100, 50, "full_access")).not.toThrow();
 	});
 });
 
@@ -118,8 +121,45 @@ describe("fitsWithinProductCap", () => {
 	});
 
 	test("an exempt caller fits regardless — remaining alone would say otherwise", () => {
-		const s = productCapState(CAP + 50, true);
+		const s = productCapState(CAP + 50, "admin_acting");
 		expect(s.remaining).toBe(0);
 		expect(fitsWithinProductCap(s, 30)).toBe(true);
+	});
+});
+
+describe("who the cap doesn't apply to (z8r3fdrph7)", () => {
+	test("a full-access store is exempt; admin act-as is exempt; a plain seller is not", () => {
+		expect(
+			productCapExemption({ actingAsAdmin: false, fullAccess: true }),
+		).toBe("full_access");
+		expect(
+			productCapExemption({ actingAsAdmin: true, fullAccess: false }),
+		).toBe("admin_acting");
+		expect(
+			productCapExemption({ actingAsAdmin: false, fullAccess: false }),
+		).toBeNull();
+	});
+
+	test("full access WINS over act-as — an admin standing in an uncapped store is still in one", () => {
+		expect(
+			productCapExemption({ actingAsAdmin: true, fullAccess: true }),
+		).toBe("full_access");
+	});
+
+	test("the COUNTER hides for a store with no ceiling, and stays for admin act-as", () => {
+		// The whole point of telling the two reasons apart: "180 of 200 used"
+		// in front of a store with no limit is the product-page version of the
+		// "200 of 200" credit bar this ticket removed. An admin act-as, by
+		// contrast, needs to see the SELLER's real ceiling.
+		expect(productCapState(CAP - 1, "full_access").showCounter).toBe(false);
+		expect(productCapState(CAP + 50, "full_access").showCounter).toBe(false);
+		expect(productCapState(CAP - 1, "admin_acting").showCounter).toBe(true);
+		expect(productCapState(CAP - 1).showCounter).toBe(true);
+	});
+
+	test("a full-access store has room for any number of new rows", () => {
+		const s = productCapState(CAP + 300, "full_access");
+		expect(s.atCap).toBe(false);
+		expect(fitsWithinProductCap(s, 500)).toBe(true);
 	});
 });

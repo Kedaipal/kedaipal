@@ -106,8 +106,12 @@ export function creditStateLine(args: {
 			? `${held}. The ${orders(-args.total)} owed come off your next pack or your next monthly credits, oldest order first.`
 			: `${held} until you add credits.`;
 	}
+	// Reachable only for the missing-subscription-row FAIL-SAFE since
+	// z8r3fdrph7: a real comp is UNMETERED, so it has no balance and this meter
+	// never renders for it. `resolveAccess` treats a rowless store as sponsored,
+	// and it stays metered-but-never-locked so its volume leaves a record.
 	if (args.exempt === "sponsored")
-		return "Sponsored stores are never locked — this is here so you can see your volume.";
+		return "This store is never locked — the balance is here so you can see your volume.";
 	if (args.regime === "trial")
 		return `Your free trial includes ${TRIAL_CREDIT_GRANT} orders, counted from your first order. Pick a plan when they're used or your first invoice comes due.`;
 	const bought = args.purchased;

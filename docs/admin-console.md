@@ -434,6 +434,24 @@ the same `FULL_ACCESS_PLAN` / `fullAccessCaps()` resolution) minus admin
 access, and the seller can't subscribe, change plan, pause or cancel. **It has
 no end date**: it stays on until an admin turns it off.
 
+"No limits" is literal, and since **z8r3fdrph7** that includes the two ceilings
+that were still being drawn for comped stores: the store is **UNMETERED** (no
+credit account, no monthly grant, no debit per order, no meter — the seller row
+reads *"Sponsored — not metered"* and the credit-ledger drawer offers no lever)
+and the **200-product cap is lifted** on the seller's own login. `z8r3fdp4er`
+had unmetered admin stores only and explicitly left comps metered, so a
+sponsored seller read "200 of 200" over a bar while this very dialog promised
+"Every feature, no limits, never billed"; Zaki withdrew that carve-out on
+10 Oct 2026. The one author of "no limits" is now `storeHasFullAccess`
+(`convex/lib/plans.ts`), read by the entitlement caps, the credit gate and the
+product cap alike. See [`credits.md`](./credits.md#unmetered-an-admins-own-store-and-a-sponsored-one-z8r3fdp4er--z8r3fdrph7)
+and [`product-cap.md`](./product-cap.md#who-the-cap-doesnt-apply-to).
+
+Because a comp carries no allowance, the **custom monthly grant lever is
+contract-only**: it refuses a comped store with the unmetered sentence, and
+`GRANT_LEVER_CONTRACT_REFUSAL` no longer tells admins to "comp it if it's
+sponsored".
+
 The Manage menu's comp item opens one dialog. It states the toggle's
 position up front ("Off", or "On · since {date}") and is the single surface to
 **turn it on** (kind, seller-facing label, admin-only note), **edit** those

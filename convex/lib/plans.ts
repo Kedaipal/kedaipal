@@ -1059,11 +1059,42 @@ export function capsForPlan(plan: Plan): PlanCaps {
  * (z8r3fdeub2) — one definition, so the two can never drift. The top tier. */
 export const FULL_ACCESS_PLAN: Plan = "enterprise";
 
+/**
+ * Does this store get FULL ACCESS — every feature and no limits of any kind?
+ *
+ * THE one author of that question, so the entitlement caps
+ * (`fullAccessCaps` below), the credit gate (`storeIsMetered`,
+ * convex/lib/credits.ts) and the product cap (convex/lib/productCap.ts) can
+ * never disagree about which stores are uncapped. They disagreed once and it
+ * shipped: z8r3fdp4er took admin stores out of the credit system but left
+ * comped ones metered, so a sponsored seller read "200 of 200" over a bar
+ * while this module's own caps said unlimited (z8r3fdrph7).
+ *
+ * Two stores qualify, by Zaki's decision of 17 Sep 2026 — "a comp gets the
+ * same limit as admin":
+ *  - an admin's OWN store (dogfooding, never billed);
+ *  - a SPONSORED store (`subscriptions.comped`).
+ *
+ * The missing-subscription-row FAIL-SAFE also resolves to full access, but it
+ * does so in `resolveAccess`'s own `!sub` branch rather than here: it is a
+ * data fault, not a granted sponsorship, and the credit gate deliberately
+ * keeps it METERED (never locked) so its volume still leaves a record. Pass a
+ * store that has a row; one without is answered upstream.
+ */
+export function storeHasFullAccess(args: {
+	ownerIsAdmin: boolean;
+	comped: boolean;
+}): boolean {
+	return args.ownerIsAdmin || args.comped;
+}
+
 /** Entitlement caps for full access: no limits on anything — orders, seats or
  * broadcasts (Zaki, 17 Sep: a comp gets "the same limit as admin"). Resolved
  * at read time by `resolveAccess`, never stored, so turning full access off
- * needs no cap rewrite. When broadcasts ship, this is where their cost for
- * admin + comped stores gets decided. */
+ * needs no cap rewrite. The product cap follows the same answer via
+ * `storeHasFullAccess` (it is not a `PlanCaps` entry, because catalogue size
+ * is still not a tier lever — see convex/lib/productCap.ts). When broadcasts
+ * ship, this is where their cost for admin + comped stores gets decided. */
 export function fullAccessCaps(): PlanCaps {
 	return {
 		orderCap: UNLIMITED,
