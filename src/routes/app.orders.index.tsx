@@ -114,7 +114,11 @@ import { canHardDeleteOrders } from "../lib/admin-actions";
 import { MASK_PII } from "../lib/analytics-privacy";
 import { describeAwbPaper } from "../lib/awb-labels";
 import { bulkStatusToast } from "../lib/bulk-skip-reasons";
-import { bulkCreditSkipNote, gatedRowLine } from "../lib/credits-ui";
+import {
+	bulkCreditSkipNote,
+	gatedNameCell,
+	gatedRowLine,
+} from "../lib/credits-ui";
 import { orderCustomerLabel } from "../lib/customer";
 import { downloadCsv } from "../lib/download";
 import {
@@ -1976,7 +1980,9 @@ function OrdersRoute() {
 														className="size-3.5 shrink-0"
 														aria-hidden="true"
 													/>
-													<span className="truncate">Waiting on credits</span>
+													<span className="truncate">
+														{gatedNameCell(o.status)}
+													</span>
 												</span>
 											) : (
 												<span

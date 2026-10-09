@@ -25,6 +25,7 @@ export {
 	CREDIT_GATE_PHRASE,
 	creditLockAudience,
 	creditLockMessage,
+	gatedNameCell,
 	LOW_CREDIT_RATIO,
 	lowCreditLine,
 	orderGatedLine,

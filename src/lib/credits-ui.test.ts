@@ -9,6 +9,7 @@ import {
 	creditStateLine,
 	creditTone,
 	downgradeCreditLine,
+	gatedNameCell,
 	gatedRowLine,
 	includedCreditsLabel,
 	lockCta,
@@ -431,6 +432,17 @@ describe("the per-order gate's copy names the ORDER, never the store (T3.1)", ()
 		expect(orderGatedLine(4)).toBe("Waiting on 4 credits");
 		// 0 can't happen on a gated row, but a floor beats "Waiting on 0".
 		expect(orderGatedLine(0)).toBe("Waiting on 1 credit");
+	});
+
+	test('the name slot stops saying "waiting" once the order is cancelled', () => {
+		// The card used to read "Waiting on credits" in the name slot beside a
+		// Cancelled badge and a "Cancelled — details stay closed" body: one
+		// card contradicting itself twice. The row IS still redacted
+		// (`orders.neverFunded`), so the slot keeps something true to say.
+		expect(gatedNameCell(undefined)).toBe("Waiting on credits");
+		expect(gatedNameCell("pending")).toBe("Waiting on credits");
+		expect(gatedNameCell("confirmed")).toBe("Waiting on credits");
+		expect(gatedNameCell("cancelled")).toBe("Details closed");
 	});
 
 	test("a cancelled gated row drops the pitch but keeps the blanks", () => {

@@ -317,8 +317,14 @@ function Fact({
 			<dt className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
 				{label}
 			</dt>
+			{/* WRAPS, never truncates. At 393px the grid is two columns and
+			    `truncate` cut "10 Oct, 12:45 am" to "10 Oct, 12:45 a…" — on the
+			    one screen whose entire job is that these four facts are all the
+			    seller gets, hiding part of one is the page failing at its only
+			    task. None of these values can run long enough to need the clip
+			    (a reference, a date, a money amount), so wrapping is free. */}
 			<dd
-				className={`mt-0.5 truncate text-sm font-medium ${mono ? "font-mono tabular-nums" : ""}`}
+				className={`mt-0.5 break-words text-sm font-medium ${mono ? "font-mono tabular-nums" : ""}`}
 			>
 				{value}
 			</dd>

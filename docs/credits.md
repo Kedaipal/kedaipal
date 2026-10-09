@@ -942,7 +942,15 @@ refusal and every gate surface's copy.
   the wire type — the client could not have told the two apart.
 - **One author for the phrase** (`GATED_CELL_LABEL`): the CSV cell, the inbox
   chip and the customer name all read it, rather than three hand-typed copies
-  drifting apart.
+  drifting apart. Once the order is CANCELLED the same slot reads **"Details
+  closed"** (`gatedNameCell`) — "Waiting on credits" beside a Cancelled badge
+  and a "Cancelled — details stay closed" body was one card contradicting
+  itself twice, and the details genuinely do stay closed (`neverFunded`), so
+  the slot still has something true to say.
+- **The gated page's facts WRAP, they never truncate.** At 393px the grid is
+  two columns and `truncate` cut "10 Oct, 12:45 am" to "…12:45 a…" — on the
+  one screen whose entire job is that those four facts are all the seller
+  gets, clipping one is the page failing at its only task.
 - **The BOOKING calendar blanks the guest, it never drops the row.** The grid,
   the day sheet, `blockImpact` and `closedDates.impact` read whole order rows
   off `bookingsOverlapping` rather than through the allowlist, so the

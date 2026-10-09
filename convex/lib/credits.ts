@@ -539,6 +539,20 @@ export const CREDIT_GATE_PHRASE = "waiting on credits";
 export const GATED_CELL_LABEL = "Waiting on credits";
 
 /**
+ * The same slot once the order is CANCELLED. "Waiting on credits" beside a
+ * Cancelled badge is the card contradicting itself — nothing is waiting on
+ * that order any more, and the gate's own page stopped saying it for exactly
+ * this reason. The details DO stay closed (`orders.neverFunded`), so the slot
+ * still has something true to say.
+ */
+export const GATED_CLOSED_LABEL = "Details closed";
+
+/** What a redacted row shows where the buyer's name would be. */
+export function gatedNameCell(status?: string): string {
+	return status === "cancelled" ? GATED_CLOSED_LABEL : GATED_CELL_LABEL;
+}
+
+/**
  * The TYPED refusal every gated seller write throws (`ConvexError` data), so
  * the dashboard can put the one way back next to the sentence instead of just
  * printing it — a courier booking that can't land offers "Top up" in place,
