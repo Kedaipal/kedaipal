@@ -433,8 +433,66 @@ outcome.
 - Token capability = `generateTrackingToken()` (the `/track` posture:
   unguessable, noindex, never echoed into meta). Clerk-free buyer surface
   (`BUYER_ROUTE_IDS`), SSR via `ssrRead` soft-degrade.
-- **Open:** the variant-A sticky timer bar ("Price locked for 14:32", mint
-  clock + progress line, `ClaimTimerBar`) over a slimmed storefront checkout:
+- **Open:** the sticky countdown ("Price locked for 14:32", `ClaimTimerBar`)
+  over a slimmed storefront checkout. **Restyled to the house scissors strip
+  in z8r3fdr60v** — it shipped as a 3px progress hairline under a navy bar,
+  which read as a border, not a timer. `ClaimTimerBar` is now a thin sticky
+  wrapper around `CountdownStrip` (`src/components/ui/countdown-strip.tsx`):
+  a receipt being cut along its dotted line, right to left, scissors riding
+  the cut, the countdown printed down the middle — crisp on the sealed half
+  and a misregistered, smudged ghost of itself in the wake. Dashes and digits
+  stage mint → amber (≤25% left) → red (≤10%) via `countdownStage`
+  (`src/lib/countdown.ts`), thresholds capped in absolute time (10 min /
+  60 s) so a 24h window never sits amber all afternoon. **Colour is urgency,
+  geometry is progress** — the two answer different questions, so a long
+  window can be nearly cut while the digits are still mint.
+  **The paper is a FIXED dark surface** (`--countdown-paper` / `-ink` /
+  `-ok` / `-low` / `-critical` in `styles.css`, the `bg-cta-mesh`
+  precedent) — it keeps the navy-and-mint language the bar shipped with,
+  but NOT by spelling it `bg-primary` + `text-accent`: both of those
+  resolve to mint in `.dark`, which would put the figures mint-on-mint. A
+  fixed surface means a fixed ramp, so the stage colours are the on-dark
+  variants, and a test fails if anyone simplifies it back. The wake's
+  ghosts sit at high opacity for the same reason: half-opacity was tuned
+  when the paper was white and the ink dark, where fading reads as a
+  smudge; on dark it reads as erased, and the final minute's red clock
+  vanished. Misregistering print doesn't thin ink — the dirt is offset,
+  shear and blur.
+  **The opening is a GENTLE LIFT off the paper** (`--countdown-cut`, ~11
+  points of lightness) and the SHAPE carries the tear, not the brightness.
+  That ratio is the whole trick and it took three wrong turns to find: what
+  made the bright strip work was never a strong paper-vs-opening contrast,
+  it was that the ink contrasted hard with BOTH grounds, so the tear read
+  as a tonal shift while the words stayed solid across it. Crank the two
+  grounds apart instead — a darker opening, a mid one, then a properly
+  light one were all tried — and the ink is forced either to fail on one
+  side or to change colour halfway through a word. One light ink, one ramp,
+  everywhere. The wedge opens WIDER THAN THE PRINT IS TALL and springs open
+  fast behind the blades rather than tapering evenly, because the figures
+  sit mid-band: a narrow or slowly-widening opening strands the tops and
+  tails of the glyphs on the paper either side and the word reads as a
+  smear half-scrubbed out.
+  **Contract for any consumer:** `onExpired` fires **exactly once per
+  deadline** (guarded on the deadline, not a bare flag, so a strip handed a
+  new already-past deadline still fires), the clock **stops** at zero rather
+  than re-rendering a finished strip every second, and the fully-cut state
+  carries an `sr-only` "… — ended" because every visible layer at that point
+  is `aria-hidden`. Today's consumers all unmount at the deadline and the
+  claim page's handler is idempotent, so none of the three is load-bearing
+  yet — they are the contract the next consumer inherits (raised as FYIs on
+  the PR #348 review). **40px tall**, not 56: as a page-top band under a 65px
+  store header it has to read as a strip of tape across a header, not as a
+  second one. Figures use `formatTimeLeft`, which rolls to "10h 36m" above
+  the hour — a promotion can run for a day, and the raw `m:ss` primitive
+  printed that as "638:31".
+  **A live countdown is ALWAYS the page's top band** (`CountdownBand`,
+  full-bleed and sticky under the store header) — never an inline panel
+  element, so the clock stays on screen through a long checkout and every
+  page that has one puts it in the same place. The storefront checkout and
+  product page mount the same band (z8r3fdcw72), so a claim's clock and a
+  flash sale's can never drift apart; the product CARD is the deliberate
+  exception (at ~180px the blades and ghost turn to mush, so it keeps a
+  compact image overlay, which also keeps card heights uniform). Then:
   read-only Order Ticket (frozen lines, "price set by the store"), numbered
   sections — 1 details (name editable, phone locked to the number the link
   was sent to), 2 method/address (shared `AddressFieldset`, pickup picker,

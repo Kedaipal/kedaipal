@@ -394,6 +394,18 @@
 		var(--primary);
 	--color-cta-mesh-foreground:
 		var(--cta-mesh-foreground);
+	--color-countdown-paper:
+		var(--countdown-paper);
+	--color-countdown-ink:
+		var(--countdown-ink);
+	--color-countdown-ok:
+		var(--countdown-ok);
+	--color-countdown-low:
+		var(--countdown-low);
+	--color-countdown-critical:
+		var(--countdown-critical);
+	--color-countdown-cut:
+		var(--countdown-cut);
 	--color-popover-foreground:
 		var(--popover-foreground);
 	--color-popover:
@@ -443,6 +455,41 @@
 	   (see bg-cta-mesh below), so its foreground must stay fixed-light too;
 	   --primary-foreground flips in .dark and would go navy-on-navy there. */
 	--cta-mesh-foreground: hsl(210 40% 98%);
+
+	/* Countdown strip (the SLB) — receipt paper that stays DARK in BOTH themes,
+	   for the same reason bg-cta-mesh does. The obvious spelling, `bg-primary`
+	   + `text-accent` (what this bar shipped as), breaks in .dark: both
+	   --primary and --accent resolve to mint there, so the figures would sit
+	   mint-on-mint. Fixed surface ⇒ its ink and stage ramp are fixed too, and
+	   are the ON-DARK variants: the light-surface pair (accent-emphasis,
+	   amber-700, red-700) fails contrast here exactly as the raw tokens fail
+	   on white. One ramp, one author — every surface the strip lands on gets
+	   the same colours.
+
+	   PAPER IS THE NAVY, THE CUT IS LIGHTER — you are seeing the page THROUGH
+	   the tear. The first dark pass made both near-black and the tear vanished
+	   (Zaki, 9 Oct — "can't really see the torn page"); the fix is a plain
+	   lightness step between the two, as the bright version had, and the darker
+	   of the two is the paper because that is what the band reads as. ~23
+	   points of lightness apart, wider than the bright version's ~12, because
+	   the eye reads equal steps as smaller down at this end of the scale.
+	   The opening is only a GENTLE LIFT off the paper — about 11 points of
+	   lightness, the same soft step the bright version had between white card
+	   and its grey opening. That ratio is the whole trick, and it took three
+	   wrong turns to see it: what made the bright strip work was never a
+	   strong paper-vs-opening contrast, it was that the INK contrasted hard
+	   with BOTH grounds, so the tear read as a tonal shift while the words
+	   stayed solid across it. Crank the two grounds apart instead (tried: a
+	   dark opening, a mid one, then a properly light one) and the ink is
+	   forced to fail on one side or to change colour halfway through a word,
+	   which looks exactly as bad as it sounds. So: one light ink, one ramp,
+	   everywhere — the SHAPE carries the tear, not the brightness. */
+	--countdown-paper: hsl(222 47% 11%);
+	--countdown-cut: hsl(217 33% 22%);
+	--countdown-ink: hsl(210 40% 98%);
+	--countdown-ok: hsl(158 64% 52%);
+	--countdown-low: hsl(43 96% 56%);
+	--countdown-critical: hsl(0 91% 71%);
 
 	/* Secondary — soft slate */
 	--secondary: hsl(210 40% 96%);
