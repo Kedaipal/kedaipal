@@ -525,6 +525,7 @@ const FEATURE_LABEL: Record<PlanFeature, string> = {
 	onlinePayments: "Online payments (HitPay)",
 	events: "Event RSVPs",
 	waOrderAlerts: "WhatsApp order alerts",
+	promo: "Promo and flash-sale prices",
 };
 
 /**

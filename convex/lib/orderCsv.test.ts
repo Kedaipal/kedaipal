@@ -66,8 +66,8 @@ describe("orderToCsvRow", () => {
 		deliveryMethod: "delivery",
 		customer: { name: "Aisha", waPhone: "+60123456789" },
 		items: [
-			{ name: "Cake", variantLabel: "1kg", quantity: 2 },
-			{ name: "Brownie", quantity: 1 },
+			{ name: "Cake", variantLabel: "1kg", quantity: 2, price: 1000 },
+			{ name: "Brownie", quantity: 1, price: 1000 },
 		],
 		subtotal: 12500,
 		total: 12500,
@@ -329,7 +329,7 @@ describe("orderToCsvRow — security deposit (86eyn4kee)", () => {
 			status: "confirmed",
 			deliveryMethod: "booking",
 			customer: { name: "Guest", waPhone: "+60123456789" },
-			items: [{ name: "Riverside Plot", quantity: 2 }],
+			items: [{ name: "Riverside Plot", quantity: 2, price: 1000 }],
 			subtotal: 16_000,
 			securityDeposit: 10_000,
 			total: 26_000,
@@ -342,7 +342,7 @@ describe("orderToCsvRow — security deposit (86eyn4kee)", () => {
 			status: "confirmed",
 			deliveryMethod: "delivery",
 			customer: { name: "Aisha", waPhone: "+60123456789" },
-			items: [{ name: "Cake", quantity: 1 }],
+			items: [{ name: "Cake", quantity: 1, price: 1000 }],
 			subtotal: 5_000,
 			total: 5_000,
 			currency: "MYR",
@@ -359,7 +359,7 @@ describe("ordersToCsv", () => {
 				createdAt: JUN_30_MYT,
 				status: "pending",
 				customer: { name: "A" },
-				items: [{ name: "X", quantity: 1 }],
+				items: [{ name: "X", quantity: 1, price: 1000 }],
 				subtotal: 100,
 				total: 100,
 				currency: "MYR",
@@ -389,7 +389,7 @@ const minimal: CsvOrder = {
 	createdAt: JUN_30_MYT,
 	status: "confirmed",
 	customer: { name: "Aisha" },
-	items: [{ name: "Cake", quantity: 1 }],
+	items: [{ name: "Cake", quantity: 1, price: 1000 }],
 	subtotal: 10000,
 	total: 10000,
 	currency: "MYR",
@@ -491,8 +491,8 @@ describe("categories column — frozen per line at sale time", () => {
 	const twoLines = (a?: string[], b?: string[]): CsvOrder => ({
 		...minimal,
 		items: [
-			{ name: "Kek Lapis", quantity: 1, categoryNames: a },
-			{ name: "Karipap", quantity: 2, categoryNames: b },
+			{ name: "Kek Lapis", quantity: 1, categoryNames: a, price: 1000 },
+			{ name: "Karipap", quantity: 2, categoryNames: b, price: 1000 },
 		],
 	});
 
@@ -535,9 +535,9 @@ describe("pickup notes column (z8r3fdff97)", () => {
 		deliveryMethod: "self_collect",
 		pickupSnapshot: { label: "Huff & Puff SS2", address: "22 Jalan SS2/64" },
 		items: [
-			{ name: "Ice cream puff", quantity: 6, pickupNote: "Bring an ice bag." },
-			{ name: "Cream puff", quantity: 6, pickupNote: "Side counter." },
-			{ name: "Choux", quantity: 2, pickupNote: "Bring an ice bag." },
+			{ name: "Ice cream puff", quantity: 6, pickupNote: "Bring an ice bag.", price: 1000 },
+			{ name: "Cream puff", quantity: 6, pickupNote: "Side counter.", price: 1000 },
+			{ name: "Choux", quantity: 2, pickupNote: "Bring an ice bag.", price: 1000 },
 		],
 	};
 
@@ -582,7 +582,7 @@ describe("pickup notes column (z8r3fdff97)", () => {
 	test("a note that starts like a formula is escaped", () => {
 		const hostile: CsvOrder = {
 			...puffs,
-			items: [{ name: "Puff", quantity: 1, pickupNote: "=HYPERLINK(1)" }],
+			items: [{ name: "Puff", quantity: 1, pickupNote: "=HYPERLINK(1)", price: 1000 }],
 		};
 		expect(ordersToCsv([hostile])).toContain("'=HYPERLINK(1)");
 	});
@@ -700,7 +700,7 @@ describe("the money run stays adjacent", () => {
 			status: "confirmed",
 			deliveryMethod: "booking",
 			customer: { name: "Guest", waPhone: "+60123456789" },
-			items: [{ name: "Riverside Plot", quantity: 2 }],
+			items: [{ name: "Riverside Plot", quantity: 2, price: 1000 }],
 			subtotal: 16_000,
 			securityDeposit: 10_000,
 			total: 26_000,

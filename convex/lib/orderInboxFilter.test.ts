@@ -15,7 +15,7 @@ function order(overrides: Partial<FilterableOrder> = {}): FilterableOrder {
 		createdAt: 1_000,
 		shortId: "ORD-0001",
 		customer: { name: "Aisha", waPhone: "+60123456789" },
-		items: [{ name: "Vanilla Cake", variantLabel: "1kg", quantity: 1 }],
+		items: [{ name: "Vanilla Cake", variantLabel: "1kg", quantity: 1, price: 1000 }],
 		subtotal: 12500,
 		total: 12500,
 		currency: "MYR",
@@ -194,18 +194,18 @@ describe("buildInboxPredicate — statuses (86eyrtz74)", () => {
 
 describe("buildInboxPredicate — categories (86eyrtz74)", () => {
 	const cake = order({
-		items: [{ name: "Kek Lapis", quantity: 1, categoryNames: ["Cakes"] }],
+		items: [{ name: "Kek Lapis", quantity: 1, categoryNames: ["Cakes"], price: 1000 }],
 	});
 	const mixed = order({
 		items: [
-			{ name: "Kek Lapis", quantity: 1, categoryNames: ["Cakes"] },
-			{ name: "Teh Ais", quantity: 1, categoryNames: ["Drinks"] },
+			{ name: "Kek Lapis", quantity: 1, categoryNames: ["Cakes"], price: 1000 },
+			{ name: "Teh Ais", quantity: 1, categoryNames: ["Drinks"], price: 1000 },
 		],
 	});
 	const uncategorised = order({
-		items: [{ name: "Custom", quantity: 1, categoryNames: [] }],
+		items: [{ name: "Custom", quantity: 1, categoryNames: [], price: 1000 }],
 	});
-	const legacy = order({ items: [{ name: "Old order", quantity: 1 }] });
+	const legacy = order({ items: [{ name: "Old order", quantity: 1, price: 1000 }] });
 
 	test("undefined / empty means no category filtering", () => {
 		for (const args of [
@@ -743,7 +743,7 @@ describe("buildInboxPredicate — search spans every column (86eyrtz74)", () => 
 	const rich = order({
 		shortId: "ORD-7788",
 		customer: { name: "Nurul Ain", waPhone: "+60123456789" },
-		items: [{ name: "Kek Lapis", variantLabel: "1kg", quantity: 2 }],
+		items: [{ name: "Kek Lapis", variantLabel: "1kg", quantity: 2, price: 1000 }],
 		deliveryAddress: {
 			line1: "12 Jalan Kenari 5",
 			city: "Puchong",
@@ -793,8 +793,7 @@ describe("buildInboxPredicate — search spans every column (86eyrtz74)", () => 
 			{
 				name: "Ice cream puff",
 				quantity: 6,
-				pickupNote: "Bring an ice bag.",
-			},
+				pickupNote: "Bring an ice bag.", price: 1000 },
 		];
 		const collect = order({ deliveryMethod: "self_collect", items: lines });
 		const delivered = order({ deliveryMethod: "delivery", items: lines });

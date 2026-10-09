@@ -11,8 +11,10 @@ import {
 	FileSpreadsheet,
 	FolderOpen,
 	Search,
+	Tag,
 	Upload,
 	X,
+	Zap,
 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -694,7 +696,22 @@ function ProductCard({
 						) : (
 							<>
 								{showFrom ? "From " : ""}
-								{formatPrice(p.priceFrom, p.currency)}
+								{/* The seller's own catalogue must show what buyers are
+								    actually being charged. It printed the LIST price with
+								    no hint a sale was running, so a seller scanning the
+								    list could not tell which products were discounted or
+								    at what — the one place they'd look to check
+								    (found by hand-testing). */}
+								{p.promoPriceFrom !== undefined ? (
+									<>
+										{formatPrice(p.promoPriceFrom, p.currency)}{" "}
+										<span className="font-normal text-muted-foreground line-through">
+											{formatPrice(p.priceFrom, p.currency)}
+										</span>
+									</>
+								) : (
+									formatPrice(p.priceFrom, p.currency)
+								)}
 							</>
 						)}
 					</span>
@@ -737,6 +754,29 @@ function ProductCard({
 				</span>
 			</div>
 			<div className="flex shrink-0 flex-col items-end gap-1">
+				{/* FIRST in this column, above the standing rules below it: a sale
+				    is the only thing here with a clock on it. Same two treatments
+				    the buyer's card uses — dark + bolt for a timed flash, mint +
+				    tag for a plain discount — so the seller recognises what the
+				    shopper is seeing instead of learning a second vocabulary. */}
+				{p.active && p.promoState !== undefined ? (
+					<span
+						className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+							p.promoState.endsAt !== undefined
+								? "bg-foreground text-background"
+								: "bg-accent/15 text-accent-emphasis"
+						}`}
+					>
+						{p.promoState.endsAt !== undefined ? (
+							<Zap className="size-3" aria-hidden />
+						) : (
+							<Tag className="size-3" aria-hidden />
+						)}
+						{p.promoState.phase === "scheduled"
+							? "Scheduled"
+							: p.promoState.label}
+					</span>
+				) : null}
 				{p.active && (p.minQuantity ?? 0) >= 2 ? (
 					// Minimum-order-quantity rule — flagged on the list so the seller
 					// can see at a glance which products carry it. See minOrderRules.

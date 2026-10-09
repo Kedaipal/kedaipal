@@ -1,0 +1,96 @@
+// The ONE flash-sale unit tally (z8r3fdcw72), the `eventSeats` posture: the
+// storefront's "12 of 30 left", the seller's products-list badge and
+// `orders.create`'s cap refusal all count through THIS function, so the
+// number a buyer saw and the number the gate enforced can never disagree.
+//
+// No counter row and no lock table: Convex mutations are OCC transactions,
+// so tallying inside the order mutation IS the lock — two carts racing for
+// the last sale unit serialise, and the loser gets the price-changed
+// refusal. Cancelled and auto-expired orders simply drop out of the tally,
+// which is how their units return to the pool with zero bookkeeping.
+
+import type { Doc, Id } from "../_generated/dataModel";
+import type { MutationCtx, QueryCtx } from "../_generated/server";
+
+/** An order still holding its flash units. `cancelled` is the ONLY release —
+ * mirrors `eventSeats.holdsSeats` / `bookingAvailability.holdsCapacity`
+ * deliberately: same question, same answer. */
+export function holdsPromoUnits(status: Doc<"orders">["status"]): boolean {
+	return status !== "cancelled";
+}
+
+/**
+ * Units already sold under one promo run. Bounded read: `by_retailer` across
+ * the run's window — from `startsAt` (sanitizePromo guarantees a capped promo
+ * has one) to `endsAt` where there is one — so the scan covers one seller's
+ * orders inside the sale, cheap enough for the public storefront read that
+ * shows units left.
+ *
+ * The right-hand bound is free correctness-wise: an order created after the
+ * window shut cannot carry this run's `promoRunId`, because the doors won't
+ * price at the sale price any more. Without it the range stayed open and a
+ * sale that is still "live" kept re-reading an order history that grows for
+ * as long as the shop trades.
+ *
+ * Counts `items[].quantity` where the line's frozen `promoRunId` matches:
+ * product-level, summed across variants (the cap's mental model), and only
+ * lines that actually SOLD at the sale price count against it — a line
+ * bought at list during the sale (cap already hit, or added pre-start)
+ * carries no runId and never consumes a unit.
+ */
+export async function tallyPromoUnits(
+	ctx: QueryCtx | MutationCtx,
+	args: {
+		retailerId: Id<"retailers">;
+		productId: Id<"products">;
+		runId: string;
+		startsAt: number;
+		/** Absent for an open-ended sale — see the note on the caller. */
+		endsAt?: number;
+	},
+): Promise<number> {
+	const inWindow = await ctx.db
+		.query("orders")
+		.withIndex("by_retailer", (q) => {
+			const from = q
+				.eq("retailerId", args.retailerId)
+				.gte("_creationTime", args.startsAt);
+			return args.endsAt === undefined
+				? from
+				: from.lte("_creationTime", args.endsAt);
+		})
+		.collect();
+
+	let taken = 0;
+	for (const order of inWindow) {
+		if (!holdsPromoUnits(order.status)) continue;
+		for (const item of order.items) {
+			if (item.promoRunId !== args.runId) continue;
+			if (item.productId !== args.productId) continue;
+			taken += item.quantity;
+		}
+	}
+	return taken;
+}
+
+/**
+ * Sale units a cart is about to consume for one product — the same rule the
+ * tally applies (the `seatsRequested` posture): only lines that actually
+ * priced at the sale price (promoRunId stamped) consume units, so a variant
+ * the seller never filled a promo price for rides the same cart without
+ * touching the pool.
+ */
+export function promoUnitsRequested(
+	items: ReadonlyArray<{
+		productId: Id<"products">;
+		quantity: number;
+		promoRunId?: string;
+	}>,
+	productId: Id<"products">,
+): number {
+	return items
+		.filter(
+			(item) => item.productId === productId && item.promoRunId !== undefined,
+		)
+		.reduce((sum, item) => sum + item.quantity, 0);
+}

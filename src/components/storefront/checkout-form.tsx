@@ -54,6 +54,7 @@ import { type DialIso, isDialIso } from "../../../convex/lib/phoneDial";
 import { distinctPickupNotes } from "../../../convex/lib/pickupNote";
 import { slowestPrep } from "../../../convex/lib/prepFloor";
 import type { UseCart } from "../../hooks/useCart";
+import { usePromoClock } from "../../hooks/usePromoClock";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { readAttributionSource } from "../../hooks/useSourceAttribution";
 import { displayAddressState } from "../../lib/address-display";
@@ -78,6 +79,8 @@ import {
 	convexErrorMessage,
 	formatMobile,
 	formatPrice,
+	type PriceChangedErrorData,
+	priceChangedErrorOf,
 } from "../../lib/format";
 import {
 	type CopyPart,
@@ -88,6 +91,11 @@ import {
 } from "../../lib/fulfilment-time-issue";
 import { composeCustomerNote } from "../../lib/order-note";
 import { overseasCourierNote } from "../../lib/overseas-courier-note";
+import {
+	cartItemSubtotal,
+	type PromoState,
+	repricedCartLines,
+} from "../../lib/promo";
 import { loadSavedAddress, saveAddress } from "../../lib/saved-address";
 import {
 	type CheckoutAddressValues,
@@ -358,7 +366,23 @@ export function CheckoutPage({
 	);
 	const minRulesBlocked = qtyShortfalls.length > 0 || valueShortfall > 0;
 
-	const [serverError, setServerError] = useState<string | null>(null);
+	// A server refusal is about the CART it judged, so it carries that cart's
+	// signature and stops showing the moment the cart changes — the same shape
+	// `fulfilmentRefusal` below uses for the day/time it judged. A bare string
+	// outlived its own truth: "Max 2 of X per order during this sale" stayed on
+	// screen after the buyer dropped to 2, after the prices were re-accepted
+	// and after the sale had ENDED, sitting next to an enabled Place order
+	// (found by hand-testing).
+	const [serverError, setServerError] = useState<{
+		message: string;
+		cart: string;
+	} | null>(null);
+	/** Lines + quantities: what a cart-level refusal was judged against. */
+	const cartSignature = cart.items
+		.map((i) => `${i.variantId}:${i.quantity}`)
+		.join("|");
+	const refuseServer = (message: string) =>
+		setServerError({ message, cart: cartSignature });
 	// A submit refusal about the chosen day or time, tied to the inputs it
 	// judged (`fulfilmentInputsKey`). It shows only while those stand: once the
 	// buyer fixes the time, a sentence saying the old one won't work would sit
@@ -552,7 +576,7 @@ export function CheckoutPage({
 			// reason on screen; this guard covers a race (e.g. Enter key mid-render).
 			if (minRulesBlocked) return;
 			if (noCheckoutPhone) {
-				setServerError(
+				refuseServer(
 					"Order checkout is temporarily unavailable. Please try again shortly.",
 				);
 				return;
@@ -697,6 +721,10 @@ export function CheckoutPage({
 					// The session's captured ?src=/utm_source tag (86eyq0eq9) —
 					// undefined = direct. Server re-sanitizes; never blocks the order.
 					attributionSource: readAttributionSource(storeSlug),
+					// What the buyer is looking at (z8r3fdcw72). The server refuses
+					// the order rather than charging a different number; absent, it
+					// keeps the old behaviour, so a stale tab still works.
+					expectedSubtotal: cartItemSubtotal(cart.items),
 				});
 				if (effectiveMethod === "delivery") saveAddress(country, value.address);
 				setSubmitted(true);
@@ -719,7 +747,17 @@ export function CheckoutPage({
 					search: confirmedAtCreate ? {} : { send: 1 },
 				});
 			} catch (err) {
-				setServerError(convexErrorMessage(err));
+				// The price-changed guard is not an error to read — it is a state
+				// to fix. Flip into it so the CTA disables with a named reason and
+				// the "Update prices" action appears, exactly as the client-side
+				// detection does. `convexErrorMessage` would stringify the typed
+				// data to "[object Object]".
+				const priceChange = priceChangedErrorOf(err);
+				if (priceChange !== null) {
+					setServerRefusal(priceChange);
+					return;
+				}
+				refuseServer(convexErrorMessage(err));
 			}
 		},
 	});
@@ -818,7 +856,9 @@ export function CheckoutPage({
 	const refusal =
 		fulfilmentRefusal?.inputs === watchedInputs
 			? fulfilmentRefusal.message
-			: serverError;
+			: serverError?.cart === cartSignature
+				? serverError.message
+				: null;
 	// Parsed once for the two consumers below; NaN (cleared field) reads as
 	// "no time" so the quote falls back to the day-level pricing.
 	const watchedTimeMinutes = (() => {
@@ -1102,6 +1142,71 @@ export function CheckoutPage({
 		return cap !== undefined && item.quantity > cap;
 	});
 
+	// Prices that moved while the basket sat there (z8r3fdcw72) — a promotion
+	// that ended, sold out, or started. The cart freezes what a line was added
+	// at, so without this the buyer would tap Place order on a number the
+	// server is about to refuse (`expectedSubtotal`). Same ladder as the stock
+	// gate above: named reason, disabled button, fix offered in place.
+	// The flash in this basket that ends FIRST — it owns the countdown band and
+	// the clock, because it is the one that will change the total soonest.
+	const soonestPromo = useMemo(() => {
+		const inCart = new Set(cart.items.map((i) => i.productId as string));
+		const live = (listedProducts ?? [])
+			.filter(
+				(p: { _id: string; promoState?: PromoState }) =>
+					inCart.has(p._id as string) &&
+					p.promoState?.phase === "live" &&
+					p.promoState.endsAt !== undefined,
+			)
+			.map((p: { promoState?: PromoState }) => p.promoState as PromoState);
+		return live.sort((a, b) => (a.endsAt ?? 0) - (b.endsAt ?? 0))[0];
+	}, [cart.items, listedProducts]);
+	const promoClock = usePromoClock(soonestPromo);
+	const repriced = useMemo(
+		() =>
+			repricedCartLines(
+				cart.items.map((i) => ({ ...i, variantId: i.variantId as string })),
+				(variantId) => {
+					for (const product of listedProducts ?? []) {
+						const variant = product.variants?.find(
+							(v: { _id: string }) => (v._id as string) === variantId,
+						);
+						if (variant) return { variant, promoState: product.promoState };
+					}
+					return undefined;
+				},
+				promoClock,
+			),
+		[cart.items, listedProducts, promoClock],
+	);
+	// Server's own verdict, when it refuses a stale subtotal outright.
+	// The REFUSAL ITSELF, not a boolean. The door sends `reason`, the product
+	// name and the units left precisely so this surface can say what went
+	// wrong and what to do; throwing that away left the cap-straddle case
+	// ("wants 5, 3 left") showing a generic "prices changed" and an action
+	// that fixed nothing — the client's own view still reads 3 > 0, so it
+	// finds nothing to reprice and every resubmit is refused identically.
+	const [serverRefusal, setServerRefusal] =
+		useState<PriceChangedErrorData | null>(null);
+	/** A straddle the buyer must fix in the cart: the pool still has units,
+	 * just fewer than they asked for. Accepting prices cannot resolve it. */
+	const capStraddle =
+		serverRefusal?.reason === "units" &&
+		(serverRefusal.unitsLeft ?? 0) > 0 &&
+		serverRefusal.productName !== undefined
+			? { name: serverRefusal.productName, left: serverRefusal.unitsLeft ?? 0 }
+			: null;
+	/** Prices the SERVER resolved, for the sold-out case the client can't see
+	 * on its own (its `unitsLeft` is a stale read). */
+	const serverPrices = useMemo(
+		() =>
+			serverRefusal && !capStraddle
+				? new Map(serverRefusal.lines.map((l) => [l.variantId, l.now]))
+				: null,
+		[serverRefusal, capStraddle],
+	);
+	const priceChanged = repriced.length > 0 || serverRefusal !== null;
+
 	// The address the buyer has actually committed to. Manual mode fills line1
 	// without a pin; the search fills both. Empty means nothing to deliver to,
 	// which keeps the CTA disabled — with a reason, never silently.
@@ -1172,17 +1277,23 @@ export function CheckoutPage({
 				? "Below the store's minimum — see your order summary"
 				: overStockLine
 					? `Only ${stockCapFor(overStockLine.variantId)} × ${overStockLine.name} left — lower the quantity to continue`
-					: unansweredLine?.missing
-						? `${answerPrompt(unansweredLine.missing.label)} for ${unansweredLine.item.name}`
-						: addressIncomplete
-							? collectsFromCustomer
-								? "Add your collection address to continue"
-								: "Add your delivery address to continue"
-							: quoteForDelivery?.kind === "calculating"
-								? collectsFromCustomer
-									? "Calculating your collection fee…"
-									: "Calculating your delivery fee…"
-								: (deliveryBlockedLine ?? null);
+					: capStraddle
+						? `Only ${capStraddle.left} left at the sale price for ${capStraddle.name} — lower the quantity to continue`
+						: priceChanged
+							? repriced.length > 0
+								? `${repriced[0].line.name} is now ${formatPrice(repriced[0].now, cart.currency)} — review your order before paying`
+								: "Prices changed while you were checking out — review your order before paying"
+							: unansweredLine?.missing
+								? `${answerPrompt(unansweredLine.missing.label)} for ${unansweredLine.item.name}`
+								: addressIncomplete
+									? collectsFromCustomer
+										? "Add your collection address to continue"
+										: "Add your delivery address to continue"
+									: quoteForDelivery?.kind === "calculating"
+										? collectsFromCustomer
+											? "Calculating your collection fee…"
+											: "Calculating your delivery fee…"
+										: (deliveryBlockedLine ?? null);
 
 	const submitButton = (
 		<form.Subscribe
@@ -1208,6 +1319,7 @@ export function CheckoutPage({
 						minRulesBlocked ||
 						// A line now exceeds live stock (server enforces it too).
 						overStockLine !== undefined ||
+						priceChanged ||
 						// A required buyer question is unanswered (server too).
 						unansweredLine !== undefined
 					}
@@ -1228,7 +1340,65 @@ export function CheckoutPage({
 	// mobile sticky bar): why it's disabled, or why a press was refused. The
 	// refusal used to render at the foot of the form column, on desktop a
 	// screen away from the button in the summary card (z8r3fdff8r).
-	const ctaNoticeLine = blockedReason ? (
+	// The one blocked state that ships its own way out: a price moved, so the
+	// buyer is shown WHAT moved and one button to accept it. Everything else
+	// in the ladder is fixed by editing the order, which the summary already
+	// offers (z8r3fdcw72).
+	const acceptNewPrices = () => {
+		// The server's figures win when it sent them: a sale that sold out
+		// under the buyer is invisible to the client, whose `unitsLeft` is the
+		// count from its last read.
+		const next: Record<string, number> = Object.fromEntries(
+			repriced.map(({ line, now }) => [line.variantId as string, now]),
+		);
+		if (serverPrices)
+			for (const [variantId, price] of serverPrices) next[variantId] = price;
+		cart.repriceItems(next);
+		setServerRefusal(null);
+	};
+	/** The cart as accepting would leave it — the label must name the figure
+	 * the buyer would actually be agreeing to, so it is computed from the same
+	 * merge `acceptNewPrices` applies rather than from `repriced` alone. */
+	const acceptedSubtotal = cartItemSubtotal(
+		cart.items.map((item) => {
+			const fromServer = serverPrices?.get(item.variantId as string);
+			if (fromServer !== undefined) return { ...item, price: fromServer };
+			const change = repriced.find((r) => r.line.variantId === item.variantId);
+			return change ? { ...item, price: change.now } : item;
+		}),
+	);
+	const acceptChangesAnything =
+		acceptedSubtotal !== cartItemSubtotal(cart.items);
+	const ctaNoticeLine = priceChanged ? (
+		<div
+			role="alert"
+			className="flex flex-col items-center gap-2 rounded-xl border border-destructive/35 bg-destructive/5 px-3 py-2.5"
+		>
+			<p className="text-center text-xs font-medium text-destructive">
+				{blockedReason}
+			</p>
+			{/* No action on a cap straddle: the pool still has units, just fewer
+			    than they asked for, so there is no price to accept — the fix is
+			    the quantity stepper in the ticket beside this. An "Update
+			    prices" button here cleared the flag and changed nothing, and the
+			    resubmit was refused identically. Same reasoning if accepting
+			    would move no money: a button whose only effect is to let you be
+			    refused again is worse than no button. */}
+			{capStraddle || !acceptChangesAnything ? null : (
+				<Button
+					type="button"
+					variant="outline"
+					className="h-9 w-full text-xs font-semibold"
+					onClick={acceptNewPrices}
+				>
+					{`Update prices · items now ${formatPrice(
+						acceptedSubtotal,
+						cart.currency,
+					)}`}
+				</Button>
+			)}
+		</div>
+	) : blockedReason ? (
 		<p className="text-center text-xs font-medium text-destructive">
 			{blockedReason}
 		</p>

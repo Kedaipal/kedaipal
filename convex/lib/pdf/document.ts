@@ -73,6 +73,9 @@ export type ReceiptLineItem = {
 	variantLabel?: string;
 	quantity: number;
 	unitPrice: number; // sen
+	/** List price when this line sold BELOW it (z8r3fdcw72) — prints the
+	 * "was RM X" the buyer saw. Absent on an ordinary line. */
+	listPrice?: number; // sen
 };
 
 /** A payment destination flattened to printable lines (bank block or a QR note). */
@@ -186,6 +189,7 @@ type OrderForReceipt = {
 		variantLabel?: string;
 		quantity: number;
 		price: number;
+		listPrice?: number;
 	}>;
 	subtotal: number;
 	pickupFee?: number;
@@ -334,6 +338,12 @@ export function orderToReceiptData(args: {
 			variantLabel: printable(it.variantLabel),
 			quantity: it.quantity,
 			unitPrice: it.price,
+			// Only when it actually undercut the list price — a stale or equal
+			// value would print "was RM50" beside RM50.
+			listPrice:
+				it.listPrice !== undefined && it.listPrice > it.price
+					? it.listPrice
+					: undefined,
 		})),
 		subtotal: order.subtotal,
 		pickupFee:

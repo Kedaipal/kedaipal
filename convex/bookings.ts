@@ -77,7 +77,8 @@ import {
 	requireOrderAccess,
 } from "./orders";
 import { assertOrderCreditAvailable } from "./creditLock";
-import { assertSubscriptionActive } from "./subscriptions";
+import { effectivePrice } from "./lib/promo";
+import { assertSubscriptionActive, getAccess } from "./subscriptions";
 import { orderingPausedMessage } from "./lib/seasonalHold";
 import { recordOrderCreated } from "./subscriptionUsage";
 
@@ -97,12 +98,19 @@ function buildStayLines(
 	variant: Doc<"productVariants">,
 	checkIn: number,
 	checkOut: number,
+	// The promo-resolved nightly rate (z8r3fdcw72) — callers price through
+	// convex/lib/promo so this function stays pure. The weekend surcharge
+	// keeps its own rate: promoPrice is per VARIANT, and the weekend price
+	// lives on the listing, so a promo discounts the base nights only.
+	nightlyPrice: number = variant.price,
 ): Doc<"orders">["items"] {
 	const base = {
 		productId: product._id,
 		variantId: variant._id,
 		name: product.name,
 	};
+	const nightlyListPrice =
+		nightlyPrice < variant.price ? variant.price : undefined;
 	const weekendPrice = product.booking?.weekendPrice;
 	const weekendDays = product.booking?.weekendDays;
 	if (weekendPrice === undefined || weekendDays === undefined) {
@@ -110,7 +118,8 @@ function buildStayLines(
 			{
 				...base,
 				variantLabel: undefined,
-				price: variant.price,
+				price: nightlyPrice,
+				listPrice: nightlyListPrice,
 				quantity: nightsBetween(checkIn, checkOut),
 			},
 		];
@@ -125,7 +134,8 @@ function buildStayLines(
 		lines.push({
 			...base,
 			variantLabel: WEEKDAY_NIGHTS_LABEL,
-			price: variant.price,
+			price: nightlyPrice,
+			listPrice: nightlyListPrice,
 			quantity: weekdayNights,
 		});
 	}
@@ -435,6 +445,18 @@ export const requestBooking = mutation({
 		// deposit): a later price edit never re-describes a placed booking. A
 		// stay that is all one kind writes one line; a listing without the rate
 		// writes today's unlabelled line.
+		// Promo price (z8r3fdcw72): the nightly/package rate goes through the
+		// same pricing module as every other order door. Flash mechanics (cap,
+		// payment hold) never apply to bookings in v1 — capacity already
+		// governs — so no runId is stamped and no tally runs; `listPrice`
+		// still prints the saving.
+		const storePlan = (await getAccess(ctx, args.retailerId)).plan;
+		const effectiveRate = effectivePrice(
+			variant,
+			product,
+			storePlan,
+			Date.now(),
+		);
 		const items = isPackageListing
 			? [
 					{
@@ -442,11 +464,13 @@ export const requestBooking = mutation({
 						variantId: variant._id,
 						name: product.name,
 						variantLabel: undefined,
-						price: variant.price,
+						price: effectiveRate,
+						listPrice:
+							effectiveRate < variant.price ? variant.price : undefined,
 						quantity: packageQuantity,
 					},
 				]
-			: buildStayLines(product, variant, checkIn, checkOut);
+			: buildStayLines(product, variant, checkIn, checkOut, effectiveRate);
 		// The refundable security deposit rides the one payment (86eyn4kee):
 		// frozen from the listing NOW (snapshot posture — a later policy edit
 		// never changes a placed booking) and folded into `total` through the
