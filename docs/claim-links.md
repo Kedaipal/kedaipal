@@ -471,7 +471,16 @@ outcome.
   fast behind the blades rather than tapering evenly, because the figures
   sit mid-band: a narrow or slowly-widening opening strands the tops and
   tails of the glyphs on the paper either side and the word reads as a
-  smear half-scrubbed out. **40px tall**, not 56: as a page-top band under a 65px
+  smear half-scrubbed out.
+  **Contract for any consumer:** `onExpired` fires **exactly once per
+  deadline** (guarded on the deadline, not a bare flag, so a strip handed a
+  new already-past deadline still fires), the clock **stops** at zero rather
+  than re-rendering a finished strip every second, and the fully-cut state
+  carries an `sr-only` "… — ended" because every visible layer at that point
+  is `aria-hidden`. Today's consumers all unmount at the deadline and the
+  claim page's handler is idempotent, so none of the three is load-bearing
+  yet — they are the contract the next consumer inherits (raised as FYIs on
+  the PR #348 review). **40px tall**, not 56: as a page-top band under a 65px
   store header it has to read as a strip of tape across a header, not as a
   second one. Figures use `formatTimeLeft`, which rolls to "10h 36m" above
   the hour — a promotion can run for a day, and the raw `m:ss` primitive

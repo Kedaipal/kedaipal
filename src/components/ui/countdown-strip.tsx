@@ -1,5 +1,5 @@
 import { Clock, type LucideIcon, Scissors } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
 	type CountdownStage,
 	countdownStage,
@@ -107,14 +107,35 @@ export function CountdownStrip({
 	className?: string;
 }) {
 	const [now, setNow] = useState(() => Date.now());
+	// The clock STOPS at the deadline. Left running it re-rendered the whole
+	// strip every second forever on a surface that had nothing left to count,
+	// and — because `remaining` changes on every tick — it also re-fired the
+	// effect below once a second, for as long as the strip stayed mounted.
+	// Keyed on `expiresAt` so a strip handed a new deadline (another claim, a
+	// second sale) re-arms instead of staying frozen.
 	useEffect(() => {
-		const timer = setInterval(() => setNow(Date.now()), 1000);
+		setNow(Date.now());
+		if (Date.now() >= expiresAt) return;
+		const timer = setInterval(() => {
+			const t = Date.now();
+			setNow(t);
+			if (t >= expiresAt) clearInterval(timer);
+		}, 1000);
 		return () => clearInterval(timer);
-	}, []);
+	}, [expiresAt]);
 	const remaining = expiresAt - now;
+	// EXACTLY ONCE per deadline. `onExpired` is how the claim page hands over
+	// to its expired state; the claim's own handler happens to be idempotent,
+	// but this is a shared component and the next consumer inherits whatever
+	// it does here — "at least once a second" is not a contract to hand out.
+	// Keyed on the deadline rather than a bare boolean so a NEW deadline that
+	// is already past still fires.
+	const firedFor = useRef<number | null>(null);
 	useEffect(() => {
-		if (remaining <= 0) onExpired?.();
-	}, [remaining, onExpired]);
+		if (remaining > 0 || firedFor.current === expiresAt) return;
+		firedFor.current = expiresAt;
+		onExpired?.();
+	}, [remaining, expiresAt, onExpired]);
 
 	// A malformed/absent window resolves to "no time left" rather than a NaN
 	// width React would drop (which would render a fully SEALED strip — the
@@ -229,6 +250,15 @@ export function CountdownStrip({
 					/>
 				</div>
 			</div>
+			{/* Cut clean through: the crisp layer is gone and every remaining
+			    layer is decorative, so without this a screen reader gets an
+			    empty strip while sighted users still read "0:00". The live
+			    consumers all unmount at the deadline, which is why nobody has
+			    hit it — but `onExpired` is optional and this component is
+			    shared, so the next one to leave it mounted would. */}
+			{done ? (
+				<span className="sr-only">{`${label} ${digits} — ended`}</span>
+			) : null}
 			{/* Crisp on the sealed half — the one layer screen readers get. */}
 			{done ? null : (
 				<div
