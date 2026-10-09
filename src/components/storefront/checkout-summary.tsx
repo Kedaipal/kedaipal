@@ -1,4 +1,12 @@
-import { ChevronDown, Minus, Package, Plus, Trash2, Truck } from "lucide-react";
+import {
+	ChevronDown,
+	Minus,
+	Package,
+	Plus,
+	Ticket,
+	Trash2,
+	Truck,
+} from "lucide-react";
 import { type ReactNode, useState } from "react";
 import type { PublicDeliveryQuote } from "../../../convex/delivery";
 import type { CartItem, UseCart } from "../../hooks/useCart";
@@ -380,6 +388,18 @@ interface CheckoutTotalsProps {
 	 * its floor — the seller settles both on the mockup. Prints "+ your quote"
 	 * beside the total, the same posture as a pending delivery fee (86eyhn4mr). */
 	awaitingQuote?: boolean;
+	/** The voucher's deduction in minor units (`z8r3fdr617`), 0 for none. The
+	 * ONE subtractive line in the receipt, so it renders as a credit (a minus
+	 * and the accent colour) rather than quietly joining the charges above it.
+	 * Computed by the caller through the shared `previewDiscount`, so it is the
+	 * sen the server will charge. */
+	voucherDiscount?: number;
+	/** The applied code, printed on its receipt line — the buyer should be able
+	 * to see WHICH voucher is taking money off. */
+	voucherCode?: string;
+	/** The "Have a voucher?" control itself, rendered under the charges and
+	 * above the TOTAL rule, so applying one visibly moves the number below it. */
+	voucherField?: ReactNode;
 }
 
 /**
@@ -415,9 +435,14 @@ export function CheckoutTotals({
 	minRuleAlerts,
 	collectsFromCustomer = false,
 	awaitingQuote = false,
+	voucherDiscount = 0,
+	voucherCode,
+	voucherField,
 }: CheckoutTotalsProps) {
 	const deliveryFee = quote?.kind === "fee" ? quote.fee : 0;
-	const total = subtotal + pickupFee + deliveryFee;
+	// The discount is CLAMPED to the item subtotal upstream, so it can never
+	// drive this below the fees — the same invariant the server holds.
+	const total = subtotal + pickupFee + deliveryFee - voucherDiscount;
 	const feeLabel = collectsFromCustomer ? "Collection" : "Delivery";
 	const pendingParts = pendingTotalParts({
 		awaitingQuote,
@@ -467,6 +492,17 @@ export function CheckoutTotals({
 			{quote?.kind === "calculating" ? (
 				<FeeLine icon={truck} label={feeLabel} value="Calculating…" pulse />
 			) : null}
+
+			{voucherDiscount > 0 ? (
+				<FeeLine
+					icon={<Ticket className="size-3.5 shrink-0" aria-hidden />}
+					label={voucherCode ? `Voucher · ${voucherCode}` : "Voucher"}
+					value={`−${receiptAmount(voucherDiscount)}`}
+					accent
+				/>
+			) : null}
+
+			{voucherField ? <div className="pt-2">{voucherField}</div> : null}
 
 			<div className="mt-2 flex items-center justify-between border-t-2 border-dashed border-border pt-3">
 				<span className="-rotate-2 rounded-md border-2 border-accent/50 px-2 py-0.5 font-mono text-[11px] font-extrabold uppercase tracking-[0.14em] text-accent-emphasis">

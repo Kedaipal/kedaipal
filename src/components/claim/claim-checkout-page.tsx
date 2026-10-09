@@ -34,6 +34,7 @@ import {
 } from "../../../convex/lib/openingHours";
 import { distinctPickupNotes } from "../../../convex/lib/pickupNote";
 import { slowestPrep } from "../../../convex/lib/prepFloor";
+import { voucherDiscountFor } from "../../../convex/lib/vouchers";
 import type { ClaimPagePayload } from "../../../convex/orderClaims";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { displayAddressState } from "../../lib/address-display";
@@ -694,7 +695,18 @@ export function ClaimCheckoutPage({
 		quoteForDelivery === undefined ||
 		quoteForDelivery.kind === "fee" ||
 		quoteForDelivery.kind === "free";
-	const displayTotal = open.itemsTotal + pickupFee + deliveryFee;
+	// The seller's voucher as the SERVER judges it right now (`z8r3fdr617`) —
+	// not as it was frozen at send. `applied` prices the ticket; `dropped` means
+	// the code was spent or voided in the meantime, and the notice below says so
+	// BEFORE the buyer fills the form. The commit recomputes from the same read,
+	// so the total confirmed here is the total charged.
+	const voucher = open.voucher;
+	const voucherDiscount =
+		voucher?.kind === "applied"
+			? voucherDiscountFor(voucher.terms, open.itemsTotal)
+			: 0;
+	const displayTotal =
+		open.itemsTotal + pickupFee + deliveryFee - voucherDiscount;
 
 	const feeNounShort = collectsFromCustomer ? "collection fee" : "delivery fee";
 	const deliveryBlockedLine = (() => {
@@ -765,6 +777,10 @@ export function ClaimCheckoutPage({
 			}
 			feeSettled={feeSettled}
 			displayTotal={displayTotal}
+			voucherDiscount={voucherDiscount}
+			voucherCode={
+				voucher?.kind === "applied" ? voucher.snapshot.code : undefined
+			}
 		/>
 	);
 
@@ -773,7 +789,27 @@ export function ClaimCheckoutPage({
 			<div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:gap-8">
 				{/* Desktop: sticky ticket right, sections left (storefront layout). */}
 				<div className="lg:order-2 lg:w-96 lg:shrink-0">
-					<div className="lg:sticky lg:top-16">{ticket}</div>
+					<div className="flex flex-col gap-3 lg:sticky lg:top-16">
+						{/* A voucher that died between send and commit. Said HERE, on
+						    load, above the price it changes — the one thing this must
+						    never do is let the buyer confirm a total they were not
+						    shown. Refusing the commit instead would strand them: only
+						    the store can issue another link. */}
+						{voucher?.kind === "dropped" ? (
+							// `<output>` rather than a `<p role="status">`: it carries the
+							// implicit live-region role, so the notice is announced
+							// without the redundant attribute biome (rightly) rejects.
+							// `block` because output is inline by default.
+							<output className="block rounded-xl border border-dashed border-border bg-muted/40 px-3 py-2.5 text-xs text-muted-foreground">
+								<span className="font-semibold text-foreground">
+									The voucher on this link can't be used.
+								</span>{" "}
+								{voucher.message} The total below is what you'll pay — message{" "}
+								{storeName} if you think that's wrong.
+							</output>
+						) : null}
+						{ticket}
+					</div>
 				</div>
 
 				<div className="flex min-w-0 flex-1 flex-col gap-4 lg:order-1">

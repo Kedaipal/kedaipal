@@ -3268,6 +3268,13 @@ function orderToCsvSource(o: Doc<"orders"> & { creditGated?: boolean }): CsvOrde
 		pickupFee: o.pickupFee,
 		deliveryFee: o.deliveryFee,
 		securityDeposit: o.securityDeposit,
+		// The voucher (`z8r3fdr617`): the discount is an ADDEND of the CSV's
+		// money run (printed negative) and the code lets a giveaway run be
+		// reconciled. This projection is explicit field-by-field, so a new money
+		// field left out here exports a Total that doesn't balance — pinned by
+		// orderCsv.test.ts's reconciliation tests.
+		voucherDiscount: o.voucherDiscount,
+		voucherCode: o.voucherSnapshot?.code,
 		deliveryFeePending: o.deliveryFeePending,
 		total: o.total,
 		currency: o.currency,

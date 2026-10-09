@@ -617,7 +617,7 @@ describe("vouchers.checkCode", () => {
 // ---------------------------------------------------------------------------
 
 describe("counter checkout", () => {
-	test("a code on the draft is spent by the sale", async () => {
+	test("the sale spends the code and keeps the draft in canonical form", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const variantId = await seedVariant(t, USER_A, retailer._id, 1500);
@@ -642,7 +642,12 @@ describe("counter checkout", () => {
 
 		const { orderId } = await asUser.mutation(
 			api.counterCheckout.createOrderFromSession,
-			{ sessionId, items: [{ variantId, quantity: 2 }], paidInPerson: true },
+			{
+				sessionId,
+				items: [{ variantId, quantity: 2 }],
+				paidInPerson: true,
+				voucherCode: vouchers[0].code,
+			},
 		);
 		const order = await t.run((ctx) => ctx.db.get(orderId));
 		expect(order?.subtotal).toBe(3000);
@@ -650,6 +655,42 @@ describe("counter checkout", () => {
 		expect(order?.total).toBe(2500);
 		expect((await t.run((ctx) => ctx.db.get(vouchers[0].id)))?.status).toBe(
 			"redeemed",
+		);
+	});
+
+	test("the door reads the ARGUMENT, never the debounced draft", async () => {
+		// The draft is a 700ms autosave; items are already passed explicitly for
+		// exactly this reason, and the voucher now is too. A sale that passes no
+		// code charges full price even with one sitting in the draft — which is
+		// what makes "applied in the panel" and "charged on the order" the same
+		// fact instead of a race the seller can lose.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, 1500);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const { vouchers } = await asUser.mutation(api.vouchers.create, {
+			retailerId: retailer._id,
+			kind: "fixed",
+			value: 500,
+		});
+		const sessionId = await startWalkIn(t, USER_A);
+		await asUser.mutation(api.counterCheckout.saveSessionDraft, {
+			sessionId,
+			draft: {
+				items: [{ variantId, quantity: 1 }],
+				voucherCode: vouchers[0].code,
+			},
+		});
+		const { orderId } = await asUser.mutation(
+			api.counterCheckout.createOrderFromSession,
+			{ sessionId, items: [{ variantId, quantity: 1 }], paidInPerson: true },
+		);
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.total).toBe(1500);
+		expect(order?.voucherId).toBeUndefined();
+		// …and the code is still spendable, not burned by a sale that ignored it.
+		expect((await t.run((ctx) => ctx.db.get(vouchers[0].id)))?.status).toBe(
+			"active",
 		);
 	});
 
@@ -673,8 +714,13 @@ describe("counter checkout", () => {
 		});
 		const { orderId } = await asUser.mutation(
 			api.counterCheckout.createOrderFromSession,
-			// "Paid now · Cash" on a free order would contradict the page.
-			{ sessionId, items: [{ variantId, quantity: 1 }], paidInPerson: true },
+			{
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				// "Paid now · Cash" on a free order would contradict the page.
+				paidInPerson: true,
+				voucherCode: vouchers[0].code,
+			},
 		);
 		const order = await t.run((ctx) => ctx.db.get(orderId));
 		expect(order?.total).toBe(0);
@@ -709,6 +755,7 @@ describe("counter checkout", () => {
 				sessionId,
 				items: [{ variantId, quantity: 1 }],
 				paidInPerson: true,
+				voucherCode: vouchers[0].code,
 			}),
 		).rejects.toThrow(/no longer valid/i);
 	});
@@ -761,6 +808,7 @@ describe("claim link", () => {
 			sessionId,
 			items: [{ variantId, quantity: 1 }],
 			windowMinutes: 60,
+			voucherCode: vouchers[0].code,
 		});
 		return { retailer, variantId, voucher: vouchers[0], token, asUser };
 	}
@@ -889,6 +937,7 @@ describe("claim link", () => {
 				sessionId,
 				items: [{ variantId, quantity: 1 }],
 				windowMinutes: 60,
+				voucherCode: vouchers[0].code,
 			}),
 		).rejects.toThrow(/no longer valid/i);
 	});

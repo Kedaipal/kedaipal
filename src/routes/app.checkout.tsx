@@ -98,6 +98,11 @@ import {
 import { Input } from "../components/ui/input";
 import { Select } from "../components/ui/select";
 import {
+	type AppliedVoucher,
+	previewDiscount,
+	VoucherField,
+} from "../components/vouchers/voucher-field";
+import {
 	useActAsRetailerId,
 	useDashboardRetailer,
 } from "../hooks/useDashboardRetailer";
@@ -998,6 +1003,9 @@ type SessionDraft = {
 	fulfilmentDate?: number;
 	paidInPerson?: boolean;
 	paymentMethod?: OrderPaymentMethod;
+	/** Canonical voucher code (`z8r3fdr617`) — a scratchpad value like the
+	 * prices above, re-resolved at whichever door the session goes through. */
+	voucherCode?: string;
 };
 
 /** "2500" cents → "25.00" for the custom-price input. */
@@ -1396,6 +1404,16 @@ function BuildOrderScreen({
 	const anonymous = !buyer.waPhone;
 	const paid = anonymous ? true : paidInPerson;
 	const [submitting, setSubmitting] = useState(false);
+	// The voucher the seller keyed off the buyer's QR (`z8r3fdr617`). Seeded
+	// from the draft so a refresh or a jump to another customer keeps it, and
+	// re-resolved authoritatively at whichever door this session goes through:
+	// `createOrderFromSession` spends it, `sendClaim` freezes it onto the claim.
+	const [voucher, setVoucher] = useState<AppliedVoucher | null>(null);
+	// Seed the FIELD from the draft's code. Only the code is stored (the draft
+	// is a scratchpad, not a validated row), so it is re-checked on mount —
+	// which is the right behaviour anyway: a code that lapsed while the cart sat
+	// open must show as refused here, not be honoured silently.
+	const draftVoucherCode = draft?.voucherCode;
 	// Final review modal — a deliberate last look at items/prices/total before the
 	// order is created, so a busy vendor can't fat-finger a price or quantity and
 	// only notice after the buyer has paid. (Counter-only: the storefront buyer
@@ -1468,6 +1486,8 @@ function BuildOrderScreen({
 				})),
 				windowMinutes,
 				attributionSource: claimSource,
+				// Explicit, for the same reason as the create path above.
+				voucherCode: voucher?.code,
 			});
 			toast.success(
 				`WhatsApp link sent to ${buyer.displayName ?? "the buyer"} — you'll see the order the moment they complete it.`,
@@ -1618,7 +1638,14 @@ function BuildOrderScreen({
 	}
 
 	const cartEntries = [...cart.entries()];
-	const total = cartEntries.reduce((s, [, l]) => s + l.price * l.qty, 0);
+	// Gross of the voucher — the figure the discount is computed FROM, and what
+	// the receipt's item lines sum to.
+	const itemsTotal = cartEntries.reduce((s, [, l]) => s + l.price * l.qty, 0);
+	const voucherDiscount = previewDiscount(voucher, itemsTotal);
+	// What the buyer actually pays. Everything downstream — the panel total, the
+	// review modal, the free-order rule that suppresses "Paid now · Cash" —
+	// reads this, so a voucher can't leave one of them quoting the old price.
+	const total = itemsTotal - voucherDiscount;
 
 	// Autosave the in-progress order to the session (debounced) so a refresh,
 	// reconnect, or jumping to another customer never loses it. We only start
@@ -1642,9 +1669,10 @@ function BuildOrderScreen({
 				fulfilmentDate: Number.isNaN(epoch) ? undefined : epoch,
 				paidInPerson: paid,
 				paymentMethod: paid ? method : undefined,
+				voucherCode: voucher?.code,
 			};
 		},
-		[fulfilmentDate, paid, method, lineAnswers],
+		[fulfilmentDate, paid, method, lineAnswers, voucher],
 	);
 	const draftPayload = useMemo<SessionDraft>(
 		() => buildDraftPayload(cart),
@@ -1679,6 +1707,10 @@ function BuildOrderScreen({
 					unitPrice: l.isCustom || isAdjusted(l) ? l.price : undefined,
 					answers: lineAnswers(variantId, l),
 				})),
+				// Explicit, like `items` — the draft's copy is a DEBOUNCED
+				// autosave and would lose a code applied seconds ago, after the
+				// review modal had already shown the discount (`z8r3fdr617`).
+				voucherCode: voucher?.code,
 				paidInPerson: effectivePaid,
 				paymentMethod: effectivePaid ? method : undefined,
 				fulfilmentDate: Number.isNaN(fulfilmentEpoch)
@@ -2408,6 +2440,40 @@ function BuildOrderScreen({
 					</div>
 
 					<div className="shrink-0 border-t border-border bg-muted/20 p-4">
+						{/* The voucher, right above the total it changes (`z8r3fdr617`).
+						    Both pay modes take one: ringing it up spends the code, and
+						    SEND freezes it into the claim beside the line prices — so a
+						    seller never has to work out which path honours it. */}
+						<div className="mb-3">
+							<VoucherField
+								retailerId={retailerId}
+								currency={currency}
+								itemSubtotal={itemsTotal}
+								applied={voucher}
+								onApply={setVoucher}
+								onRemove={() => setVoucher(null)}
+								initialCode={draftVoucherCode}
+								label="Add a voucher"
+							/>
+						</div>
+						{voucherDiscount > 0 ? (
+							<div className="mb-1.5 flex items-center justify-between text-sm">
+								<span className="text-muted-foreground">Items</span>
+								<span className="tabular-nums text-muted-foreground">
+									{formatPrice(itemsTotal, currency)}
+								</span>
+							</div>
+						) : null}
+						{voucherDiscount > 0 ? (
+							<div className="mb-1.5 flex items-center justify-between text-sm">
+								<span className="truncate text-accent-emphasis">
+									Voucher · {voucher?.code}
+								</span>
+								<span className="shrink-0 tabular-nums font-medium text-accent-emphasis">
+									−{formatPrice(voucherDiscount, currency)}
+								</span>
+							</div>
+						) : null}
 						<div className="mb-3 flex items-center justify-between text-sm">
 							{/* Send mode is a price COMMITMENT, not a sum — and it is the
 							    items total, since the buyer's delivery is added on their

@@ -2662,13 +2662,16 @@ export default defineSchema({
 				paidInPerson: v.optional(v.boolean()),
 				paymentMethod: v.optional(orderPaymentMethodValidator),
 				// Voucher code the seller keyed off the buyer's QR or read out
-				// (`z8r3fdr617`). The CODE only — non-authoritative, exactly like
-				// the draft prices above it, and re-resolved at whichever door the
-				// session finally goes through: `createOrderFromSession` spends it,
-				// `sendClaim` freezes it onto the claim. Storing the code rather
-				// than the row id is what lets the one field serve both, and means
-				// a voucher that lapses while a cart sits open is caught at the
-				// door rather than quietly honoured.
+				// (`z8r3fdr617`). RESTORE ONLY — a scratchpad like the draft
+				// prices above it, so a refresh or a jump to another customer
+				// brings the code back into the field.
+				//
+				// Neither door reads it: `createOrderFromSession` and `sendClaim`
+				// both take the code as an EXPLICIT argument, exactly as they take
+				// `items`. This row is a DEBOUNCED autosave, so a door reading it
+				// would drop a code applied in the second before the seller tapped
+				// the button — after the panel had already shown the discount,
+				// which is the one outcome a money control must never produce.
 				voucherCode: v.optional(v.string()),
 			}),
 		),

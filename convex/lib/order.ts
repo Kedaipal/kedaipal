@@ -1,7 +1,11 @@
 // Pure helpers for order creation. No Convex imports — keep testable in isolation.
 
 import { todayMytMidnight } from "./fulfilmentDate";
-import { type VoucherTerms, voucherDiscountFor } from "./vouchers";
+import {
+	type VoucherSnapshot,
+	type VoucherTerms,
+	voucherDiscountFor,
+} from "./vouchers";
 
 // Alphabet excludes O, 0, I, 1 to avoid visual ambiguity in WhatsApp messages.
 const SHORT_ID_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -153,7 +157,9 @@ export type OrderExtrasSource = {
 	pickupFee?: number;
 	deliveryFee?: number;
 	securityDeposit?: number;
-	voucherSnapshot?: VoucherTerms;
+	/** The frozen snapshot carries the CODE too (it is what the buyer was
+	 * told); only the terms reach the maths. */
+	voucherSnapshot?: VoucherSnapshot;
 };
 
 /**

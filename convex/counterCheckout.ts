@@ -796,6 +796,13 @@ export const createOrderFromSession = mutation({
 		// person, so it's validated against a 0-day notice (today always allowed),
 		// ignoring the storefront buyer-notice setting. See convex/lib/fulfilmentDate.ts.
 		fulfilmentDate: v.optional(v.number()),
+		// The voucher the seller keyed (`z8r3fdr617`), passed EXPLICITLY like
+		// `items` rather than read off `session.draft`. The draft is a DEBOUNCED
+		// autosave, so reading it here would lose a code applied in the second
+		// before the seller tapped Create — after the panel had already shown
+		// the discount. The draft copy exists only to restore the field on a
+		// refresh; this argument is what the sale is priced on.
+		voucherCode: v.optional(v.string()),
 	},
 	handler: async (
 		ctx,
@@ -1017,19 +1024,18 @@ export const createOrderFromSession = mutation({
 				throw new ConvexError(seatsExhaustedMessage(name, left));
 		}
 
-		// The voucher the seller keyed onto the draft (`z8r3fdr617`). Resolved
-		// authoritatively HERE — the draft holds a code, never a validated row,
-		// so one that lapsed or was spent elsewhere while the cart sat open is
-		// caught at this door. Refuses the sale rather than ringing it up at a
+		// The voucher the seller keyed (`z8r3fdr617`). Resolved authoritatively
+		// HERE — the panel's check was only for the tick, so one that lapsed or
+		// was spent elsewhere while the cart sat open is caught at this door. Refuses the sale rather than ringing it up at a
 		// price the seller didn't quote: the buyer is standing right there, and
 		// the seller can drop the code and take the money.
 		let voucherTerms: VoucherTerms | undefined;
 		let redeemedVoucherId: Id<"vouchers"> | undefined;
 		let voucherSnapshot: VoucherSnapshot | undefined;
-		if (session.draft?.voucherCode) {
+		if (args.voucherCode?.trim()) {
 			const { voucher, terms } = await resolveVoucherOrThrow(ctx, {
 				retailerId: retailer._id,
-				code: session.draft.voucherCode,
+				code: args.voucherCode,
 				now,
 			});
 			voucherTerms = terms;

@@ -233,6 +233,11 @@ export const sendClaim = mutation({
 		// Where this buyer came from (86eyq0eq9) — the seller's own answer,
 		// remembered as the store default for the rest of the session.
 		attributionSource: v.optional(v.string()),
+		// The voucher to freeze onto the claim (`z8r3fdr617`), passed
+		// EXPLICITLY like `items` — see the note on
+		// `counterCheckout.createOrderFromSession`: the session draft is a
+		// debounced autosave and would lose a just-applied code.
+		voucherCode: v.optional(v.string()),
 	},
 	handler: async (
 		ctx,
@@ -275,8 +280,7 @@ export const sendClaim = mutation({
 		const sanitizedSource = sanitizeAttributionSource(args.attributionSource);
 		const now = Date.now();
 
-		// The voucher (`z8r3fdr617`), taken off the session draft and FROZEN onto
-		// the claim beside the line prices — the buyer's ticket has to show the
+		// The voucher (`z8r3fdr617`), FROZEN onto the claim beside the line prices — the buyer's ticket has to show the
 		// price they were promised. Deliberately NOT redeemed here: a claim is an
 		// offer, not an order, so the code stays spendable until the buyer
 		// commits (which is also what stops an abandoned link burning a voucher).
@@ -284,10 +288,10 @@ export const sendClaim = mutation({
 		// fix it before the buyer ever sees a price.
 		let voucherId: Id<"vouchers"> | undefined;
 		let voucherSnapshot: VoucherSnapshot | undefined;
-		if (session.draft?.voucherCode) {
+		if (args.voucherCode?.trim()) {
 			const resolved = await resolveVoucherOrThrow(ctx, {
 				retailerId: retailer._id,
-				code: session.draft.voucherCode,
+				code: args.voucherCode,
 				now,
 			});
 			voucherId = resolved.voucher._id;

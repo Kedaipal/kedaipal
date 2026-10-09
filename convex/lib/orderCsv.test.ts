@@ -430,8 +430,59 @@ describe("totals reconcile (the arithmetic hole)", () => {
 		}
 	});
 
+	// The voucher's own reconciliation (`z8r3fdr617`). It is the first column
+	// that SUBTRACTS, so it prints negative — a column reading "10.00" for money
+	// that came off would break the identity on every voucher order, which is
+	// the exact shape of the bug `Custom work` exists to fix.
+	test("Voucher prints NEGATIVE, so the money run still sums to Total", () => {
+		const shapes: CsvOrder[] = [
+			// fixed voucher
+			{ ...minimal, subtotal: 12500, voucherDiscount: 1000, total: 11500 },
+			// alongside fees: the discount never eats them
+			{
+				...minimal,
+				subtotal: 12500,
+				pickupFee: 500,
+				deliveryFee: 800,
+				voucherDiscount: 1000,
+				total: 12800,
+			},
+			// a 100% voucher with fees left standing
+			{
+				...minimal,
+				subtotal: 12500,
+				deliveryFee: 800,
+				voucherDiscount: 12500,
+				total: 800,
+			},
+		];
+		for (const o of shapes) {
+			expect(Number(cell(o, "Voucher"))).toBeLessThan(0);
+			const sum =
+				Number(cell(o, "Subtotal")) +
+				Number(cell(o, "Custom work")) +
+				Number(cell(o, "Pickup fee")) +
+				Number(cell(o, "Delivery fee")) +
+				Number(cell(o, "Security deposit")) +
+				Number(cell(o, "Voucher"));
+			expect(sum.toFixed(2)).toBe(cell(o, "Total"));
+		}
+	});
+
+	test("the code rides along so a giveaway run can be reconciled", () => {
+		expect(
+			cell({ ...minimal, voucherCode: "KP-7F3K-Q2WM" }, "Voucher code"),
+		).toBe("KP-7F3K-Q2WM");
+		expect(cell(minimal, "Voucher code")).toBe("");
+	});
+
 	test("every money column prints 0.00, never blank, so the sum works", () => {
-		for (const label of ["Custom work", "Pickup fee", "Delivery fee"]) {
+		for (const label of [
+			"Custom work",
+			"Pickup fee",
+			"Delivery fee",
+			"Voucher",
+		]) {
 			expect(cell(minimal, label)).toBe("0.00");
 		}
 	});
@@ -679,15 +730,19 @@ describe("the money run stays adjacent", () => {
 	// addends: Security deposit joined it in S5 (`86eyn4kee`) because a booking
 	// deposit is collected in the same payment and folds into `total` through
 	// the same extras seam as the fees — leaving it outside the run would make
-	// the identity read FALSE on every booking order.
-	test("Subtotal · Custom work · Pickup fee · Delivery fee · Security deposit · Total are consecutive", () => {
+	// the identity read FALSE on every booking order. `Voucher` joined for the
+	// same reason (`z8r3fdr617`) — it is folded into `total` through the same
+	// extras seam, just with the opposite sign, so leaving it out would make the
+	// identity read false on every voucher order.
+	test("Subtotal · Custom work · Pickup fee · Delivery fee · Security deposit · Voucher · Total are consecutive", () => {
 		const start = CSV_COLUMNS.indexOf("Subtotal");
-		expect(CSV_COLUMNS.slice(start, start + 6)).toEqual([
+		expect(CSV_COLUMNS.slice(start, start + 7)).toEqual([
 			"Subtotal",
 			"Custom work",
 			"Pickup fee",
 			"Delivery fee",
 			"Security deposit",
+			"Voucher",
 			"Total",
 		]);
 	});

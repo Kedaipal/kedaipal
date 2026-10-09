@@ -122,6 +122,15 @@ export type OrderReceiptData = {
 	// Refundable security deposit (sen) on a booking order — its own totals
 	// row labelled refundable, so the paper never overstates the price.
 	securityDeposit?: number;
+	// Voucher discount (sen, `z8r3fdr617`) — its own NEGATIVE totals row, by
+	// the same rule as every charge above it: the subtotal→total gap is always
+	// explained on paper. The only row that subtracts, so it prints signed and
+	// in the discount ink (the founding-discount precedent on the subscription
+	// invoice). Undefined = no voucher.
+	voucherDiscount?: number;
+	// The code, so the printed receipt names WHICH voucher was spent — a seller
+	// reconciling a giveaway run needs that, and so does a buyer querying it.
+	voucherCode?: string;
 	total: number; // sen
 	currency: string;
 	fulfilmentDate?: number;
@@ -194,6 +203,8 @@ type OrderForReceipt = {
 	deliveryDirection?: "standard" | "collection";
 	deliveryFeePending?: boolean;
 	securityDeposit?: number;
+	voucherDiscount?: number;
+	voucherSnapshot?: { code: string };
 	total: number;
 	currency: string;
 	fulfilmentDate?: number;
@@ -352,6 +363,11 @@ export function orderToReceiptData(args: {
 			order.securityDeposit && order.securityDeposit > 0
 				? order.securityDeposit
 				: undefined,
+		voucherDiscount:
+			order.voucherDiscount && order.voucherDiscount > 0
+				? order.voucherDiscount
+				: undefined,
+		voucherCode: printable(order.voucherSnapshot?.code),
 		total: order.total,
 		currency: order.currency,
 		fulfilmentDate: order.fulfilmentDate,

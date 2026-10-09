@@ -13,6 +13,7 @@ import {
 	ShoppingBag,
 	Siren,
 	Store,
+	Ticket,
 	Users,
 } from "lucide-react";
 import { Dialog as MorePrimitive } from "radix-ui";
@@ -39,6 +40,7 @@ export interface BottomNavProps {
 	// CRM is plan-locked for this seller (Starter) — mark the Customers row with
 	// a "Pro" chip so the upgrade wall behind it is never a surprise.
 	crmLocked?: boolean;
+	vouchersLocked?: boolean;
 	// Insights is plan-locked (Starter) — same treatment on the Insights tab.
 	insightsLocked?: boolean;
 }
@@ -72,6 +74,7 @@ export function BottomNav({
 	adminNav,
 	hasStore,
 	crmLocked,
+	vouchersLocked,
 	insightsLocked,
 }: BottomNavProps) {
 	// Team members (86exr91r4): a member's tabs are the areas they can read
@@ -168,6 +171,7 @@ export function BottomNav({
 						onOpenChange={setMoreOpen}
 						active={moreOpen || onMoreRoute}
 						crmLocked={crmLocked}
+						vouchersLocked={vouchersLocked}
 					/>
 				) : null}
 			</div>
@@ -272,14 +276,17 @@ function MoreTab({
 	onOpenChange,
 	active,
 	crmLocked,
+	vouchersLocked,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	active: boolean;
 	crmLocked?: boolean;
+	vouchersLocked?: boolean;
 }) {
 	const productsPerm = usePermission("products");
 	const customersPerm = usePermission("customers");
+	const vouchersPerm = usePermission("vouchers");
 
 	const close = () => onOpenChange(false);
 	return (
@@ -319,6 +326,16 @@ function MoreTab({
 							label="Customers"
 							sub="Buyer history & notes"
 							pro={crmLocked}
+							onNavigate={close}
+						/>
+					) : null}
+					{vouchersPerm.canRead ? (
+						<MoreRow
+							to="/app/vouchers"
+							icon={Ticket}
+							label="Vouchers"
+							sub="Single-use discount codes"
+							pro={vouchersLocked}
 							onNavigate={close}
 						/>
 					) : null}

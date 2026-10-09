@@ -14,6 +14,7 @@ import {
 	ShoppingBag,
 	Siren,
 	Store,
+	Ticket,
 	Users,
 } from "lucide-react";
 import type { MouseEventHandler, ReactNode } from "react";
@@ -57,6 +58,7 @@ export function Sidebar({
 	const ordersPerm = usePermission("orders");
 	const productsPerm = usePermission("products");
 	const customersPerm = usePermission("customers");
+	const vouchersPerm = usePermission("vouchers");
 	const insightsPerm = usePermission("insights");
 
 	const [collapsed, setCollapsed] = useSidebarCollapsed();
@@ -182,6 +184,22 @@ export function Sidebar({
 								pro={
 									!retailer.actingAsAdmin &&
 									!hasFeature(retailer.subscription, "crm")
+								}
+							/>
+						) : null}
+						{vouchersPerm.canRead ? (
+							<SidebarLink
+								to="/app/vouchers"
+								icon={Ticket}
+								label="Vouchers"
+								collapsed={collapsed}
+								// ISSUING is the Pro capability, so the badge marks the page
+								// the way Customers and Insights do — but the route itself is
+								// never walled: a downgraded store keeps the codes it already
+								// sent, and has to be able to void them.
+								pro={
+									!retailer.actingAsAdmin &&
+									!hasFeature(retailer.subscription, "vouchers")
 								}
 							/>
 						) : null}
