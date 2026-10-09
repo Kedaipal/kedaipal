@@ -457,7 +457,21 @@ outcome.
   when the paper was white and the ink dark, where fading reads as a
   smudge; on dark it reads as erased, and the final minute's red clock
   vanished. Misregistering print doesn't thin ink — the dirt is offset,
-  shear and blur. **40px tall**, not 56: as a page-top band under a 65px
+  shear and blur.
+  **The opening is a GENTLE LIFT off the paper** (`--countdown-cut`, ~11
+  points of lightness) and the SHAPE carries the tear, not the brightness.
+  That ratio is the whole trick and it took three wrong turns to find: what
+  made the bright strip work was never a strong paper-vs-opening contrast,
+  it was that the ink contrasted hard with BOTH grounds, so the tear read
+  as a tonal shift while the words stayed solid across it. Crank the two
+  grounds apart instead — a darker opening, a mid one, then a properly
+  light one were all tried — and the ink is forced either to fail on one
+  side or to change colour halfway through a word. One light ink, one ramp,
+  everywhere. The wedge opens WIDER THAN THE PRINT IS TALL and springs open
+  fast behind the blades rather than tapering evenly, because the figures
+  sit mid-band: a narrow or slowly-widening opening strands the tops and
+  tails of the glyphs on the paper either side and the word reads as a
+  smear half-scrubbed out. **40px tall**, not 56: as a page-top band under a 65px
   store header it has to read as a strip of tape across a header, not as a
   second one. Figures use `formatTimeLeft`, which rolls to "10h 36m" above
   the hour — a promotion can run for a day, and the raw `m:ss` primitive
