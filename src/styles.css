@@ -110,6 +110,30 @@
 	animation: kp-spotlight 1.6s ease-out 3;
 }
 
+/* A product card on a LIVE flash sale (z8r3fdcw72). A slow mint heartbeat —
+   a halo that breathes out and fades, 2.4s, infinite — to pull the eye across
+   a grid without strobing it. Deliberately gentler and slower than
+   kp-spotlight above, which fires three times and stops: this one runs for as
+   long as the sale does, so it has to be something you can sit next to.
+
+   The RING is not part of the animation. box-shadow is a single property, so
+   an animation that owned it would erase the ring between pulses — and under
+   `prefers-reduced-motion`, where the animation is switched off entirely, the
+   ring is the whole indication that remains. Hence: ring utility on the
+   element, halo in the keyframes. */
+@keyframes kp-flash-glow {
+	0%,
+	100% {
+		box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent) 45%, transparent);
+	}
+	50% {
+		box-shadow: 0 0 0 10px color-mix(in oklab, var(--accent) 0%, transparent);
+	}
+}
+@utility animate-kp-flash-glow {
+	animation: kp-flash-glow 2.4s ease-out infinite;
+}
+
 /* Pop-in for a badge or stamp that just changed (hero stage): one quick
    overshoot from small, then rest. Keyed remounts retrigger it. */
 @keyframes kp-pop {

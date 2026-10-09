@@ -73,6 +73,7 @@ function wizard({
 			retailerId={"r1" as never}
 			categoriesLocked={false}
 			eventsLocked={eventsLocked}
+			promoLocked={false}
 			currency={currency}
 			defaultKind={defaultKind}
 			linkedCard={linkedCard}

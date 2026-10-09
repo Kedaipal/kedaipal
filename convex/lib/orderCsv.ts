@@ -24,6 +24,7 @@ import {
 	type OrderStatus,
 } from "./orderStatus";
 import { PAYMENT_METHOD_LABELS } from "./paymentMethod";
+import { promoDiscountTotal } from "./promo";
 import { orderPickupNotes } from "./pickupNote";
 
 // Malaysia is UTC+8, no DST — render the calendar day with a fixed offset.
@@ -293,6 +294,11 @@ export type CsvOrder = {
 		pickupNote?: string;
 		/** Buyer-question answers, frozen with their labels (z8r3fdkjek). */
 		answers?: Array<{ label: string; answer: string }>;
+		/** Frozen unit price (minor units). */
+		price: number;
+		/** Frozen list price, present only when the line sold BELOW it
+		 * (z8r3fdcw72) — the pair the "Promo discount" column reads. */
+		listPrice?: number;
 	}>;
 	subtotal: number;
 	/** Accepted/proposed mockup quote on a made-to-order order (minor units).
@@ -402,6 +408,7 @@ export type OrderColumnKey =
 	| "deliveryFee"
 	| "securityDeposit"
 	| "total"
+	| "promoDiscount"
 	| "currency"
 	| "feePending"
 	| "note"
@@ -872,6 +879,25 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		width: 110,
 		value: (o) => csvAmount(o.total),
 		sortKey: (o) => o.total,
+	},
+	{
+		// What the sale cost the seller on this order (z8r3fdcw72): the sum of
+		// (listPrice − price) × quantity over the lines that sold below list.
+		// Derived from the FROZEN pair on each line, so it stays true after the
+		// promo ends, is re-run, or is deleted. 0 for every ordinary order.
+		//
+		// Deliberately OUTSIDE the Subtotal→Total addend run: the discount is
+		// already baked into each line's frozen price, so it is reported, never
+		// summed. Dropping it between the addends would make the left-to-right
+		// arithmetic read false — which is what `the money run stays adjacent`
+		// pins, and what it caught when this column first landed there.
+		key: "promoDiscount",
+		label: "Promo discount",
+		group: "money",
+		numeric: true,
+		width: 126,
+		value: (o) => csvAmount(promoDiscountTotal(o)),
+		sortKey: (o) => promoDiscountTotal(o),
 	},
 	{
 		key: "currency",

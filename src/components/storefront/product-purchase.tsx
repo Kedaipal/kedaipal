@@ -17,8 +17,10 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import { formatPrepDuration } from "../../../convex/lib/fulfilmentDate";
 import { formatEventMoment } from "../../../convex/lib/productEvent";
 import type { UseCart } from "../../hooks/useCart";
+import { usePromoClock } from "../../hooks/usePromoClock";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
+import { effectivePriceFrom, effectiveVariantPrice } from "../../lib/promo";
 import { shareLink } from "../../lib/share";
 import { cn } from "../../lib/utils";
 import {
@@ -46,7 +48,13 @@ export type CustomAddPayload = { note?: string; imageStorageId?: string };
  * the same way — a small muted word ahead of the amount, never part of the big
  * bold number it qualifies.
  */
-export type PriceLabelValue = { from?: boolean; text: string };
+export type PriceLabelValue = {
+	from?: boolean;
+	text: string;
+	/** The list price, struck through beside the sale price (z8r3fdcw72).
+	 * Present only while a promotion is actually in force. */
+	was?: string;
+};
 
 /**
  * The one renderer for a storefront headline price (product page + detail
@@ -68,6 +76,11 @@ export function PriceLabel({
 				</span>
 			) : null}
 			{value.text}
+			{value.was ? (
+				<span className="ml-2 align-baseline text-sm font-medium text-muted-foreground line-through">
+					{value.was}
+				</span>
+			) : null}
 		</p>
 	);
 }
@@ -263,12 +276,32 @@ export function useProductPurchase({
 			? Number.POSITIVE_INFINITY
 			: Math.max(0, eventSeatsLeft - cartQuantity);
 	const eventFull = eventSeatsLeft !== undefined && eventSeatsLeft <= 0;
+	// A live flash sale's per-order cap is a ceiling of exactly the same kind
+	// as stock and seats, so it joins the same Math.min rather than becoming a
+	// second mechanism. Counted against what's ALREADY in the cart because the
+	// server sums every variant of the product in the order
+	// (`orders.create`). Without it the stepper happily climbed past the cap
+	// its own hint printed, and the server refused with a bare sentence that
+	// has no recovery action — unlike the units-left case, which throws the
+	// typed price_changed error the checkout knows how to fix.
+	const promoState = product?.promoState;
+	const perOrderCeiling =
+		promoState?.phase === "live" && promoState.maxPerOrder !== undefined
+			? Math.max(0, promoState.maxPerOrder - cartQuantity)
+			: Number.POSITIVE_INFINITY;
+	/** The cart ALREADY holds the whole per-order allowance. `maxQty` floors at
+	 * 1 so the stepper always shows a number, which would otherwise let one
+	 * more through — so this gates the ACTION rather than the display. */
+	const promoCapReached = perOrderCeiling === 0;
+	const promoMaxPerOrder =
+		promoState?.phase === "live" ? promoState.maxPerOrder : undefined;
 	const maxQty = selectedVariant
 		? Math.max(
 				1,
 				Math.min(
 					variantBlocks ? Math.max(1, selectedVariant.onHand) : 99,
 					seatCeiling,
+					perOrderCeiling,
 				),
 			)
 		: 1;
@@ -290,6 +323,8 @@ export function useProductPurchase({
 	// Never render/add more than the stock ceiling, even if the min default
 	// exceeds it (the buyer sees the stock hint explain the tension).
 	const displayQuantity = Math.min(quantity, maxQty);
+	// Ticks only while this product has a deadline to watch (z8r3fdcw72).
+	const promoClock = usePromoClock(product?.promoState);
 
 	function toggle(axisIndex: number, value: string) {
 		setSelection((prev) => {
@@ -317,11 +352,40 @@ export function useProductPurchase({
 	 * exact price: a custom line elsewhere on the product doesn't make that
 	 * fixed size negotiable.
 	 */
+	// What the selected line costs RIGHT NOW. The server has already decided
+	// whether the promotion applies (plan, window, cap) and stripped the sale
+	// prices when it doesn't; `promoClock` only carries the passing of time, so
+	// a page left open stops quoting a sale the instant its window shuts.
+	const selectedEffective =
+		selectedVariant !== null && selectedVariant !== undefined
+			? effectiveVariantPrice(selectedVariant, product?.promoState, promoClock)
+			: undefined;
+	const selectedOnPromo =
+		selectedVariant != null &&
+		selectedEffective !== undefined &&
+		selectedEffective < selectedVariant.price;
+	const fromEffective =
+		product !== null && product !== undefined
+			? effectivePriceFrom(product, promoClock)
+			: undefined;
+	const fromOnPromo =
+		product != null &&
+		fromEffective !== undefined &&
+		fromEffective < product.priceFrom;
+
 	const priceLabel: PriceLabelValue = product
 		? selectedVariant
 			? selectedIsQuote
 				? { text: "Price on quote" }
-				: { text: formatPrice(selectedVariant.price, product.currency) }
+				: {
+						text: formatPrice(
+							selectedEffective ?? selectedVariant.price,
+							product.currency,
+						),
+						was: selectedOnPromo
+							? formatPrice(selectedVariant.price, product.currency)
+							: undefined,
+					}
 			: product.hasQuotePricing && product.priceTo === 0
 				? { text: "Price on quote" }
 				: {
@@ -329,7 +393,13 @@ export function useProductPurchase({
 							priceVaries ||
 							product.hasQuotePricing ||
 							hasStartingPrice(variants),
-						text: formatPrice(product.priceFrom, product.currency),
+						text: formatPrice(
+							fromEffective ?? product.priceFrom,
+							product.currency,
+						),
+						was: fromOnPromo
+							? formatPrice(product.priceFrom, product.currency)
+							: undefined,
 					}
 		: { text: "" };
 
@@ -349,8 +419,8 @@ export function useProductPurchase({
 	const totalPreview =
 		selectedVariant && sellable && !selectedIsQuote
 			? {
-					unit: selectedVariant.price,
-					total: selectedVariant.price * displayQuantity,
+					unit: selectedEffective ?? selectedVariant.price,
+					total: (selectedEffective ?? selectedVariant.price) * displayQuantity,
 				}
 			: null;
 
@@ -371,6 +441,8 @@ export function useProductPurchase({
 		maxQty,
 		eventSeatsLeft,
 		eventFull,
+		promoCapReached,
+		promoMaxPerOrder,
 		minQuantity,
 		minFloor,
 		minUnreachable,
@@ -420,7 +492,10 @@ export function addVariantToCart(
 			productId: p._id,
 			name: p.name,
 			optionLabel: label || undefined,
-			price: variant.price,
+			// The sale price, when one is in force (z8r3fdcw72). The cart freezes
+			// what it was added at — checkout reconciles against the live
+			// catalogue, and `orders.create` is the final authority.
+			price: effectiveVariantPrice(variant, p.promoState, Date.now()),
 			currency: p.currency,
 			imageUrl: variant.imageUrls[0] ?? p.imageUrls[0],
 			quoteOnRequest: variant.requiresProof === true && variant.price === 0,
@@ -591,8 +666,73 @@ export function PurchaseHints({ pp }: { pp: ProductPurchase }) {
 	const pickupNote = pp.product?.pickupNote?.trim();
 	const product = pp.product;
 	if (!product) return null;
+	const promo = product.promoState;
+	// How many are left AT THE SALE PRICE. Its own line, above the buy box,
+	// because it is the one fact the countdown band at the top of the page
+	// cannot carry — and the one that decides whether to hurry (z8r3fdcw72).
+	const saleUnitsLeft =
+		promo?.phase === "live" &&
+		promo.unitCap !== undefined &&
+		promo.unitsLeft !== undefined
+			? promo.unitsLeft
+			: undefined;
+	const maxPerOrder = promo?.phase === "live" ? promo.maxPerOrder : undefined;
+	const payWithin =
+		promo?.phase === "live" ? promo.payWithinMinutes : undefined;
 	return (
 		<>
+			{saleUnitsLeft !== undefined ? (
+				<div className="mt-3 flex flex-col gap-1.5 rounded-xl border border-accent/30 bg-accent/5 px-3 py-2.5">
+					<p className="text-sm font-semibold text-accent-emphasis">
+						{saleUnitsLeft > 0
+							? `${saleUnitsLeft} of ${promo?.unitCap} left at this price`
+							: "The sale price has sold out"}
+					</p>
+					<div
+						className="h-1.5 overflow-hidden rounded-full bg-accent/20"
+						aria-hidden
+					>
+						<div
+							className="h-full rounded-full bg-accent"
+							style={{
+								width: `${Math.max(0, Math.min(100, (saleUnitsLeft / (promo?.unitCap ?? 1)) * 100))}%`,
+							}}
+						/>
+					</div>
+					<p className="text-xs text-muted-foreground">
+						{saleUnitsLeft > 0
+							? "After that it goes back to the normal price."
+							: "It is back at the normal price now."}
+					</p>
+				</div>
+			) : null}
+			{payWithin !== undefined ? (
+				// Stated where they decide, not on the track page afterwards. A
+				// deadline the buyer only meets once it has already cancelled
+				// their order is enforced silently, which the house rule forbids
+				// — and this is a buyer who orders then goes to WhatsApp.
+				<p className="mt-3 text-xs text-muted-foreground">
+					{`Pay within ${payWithin} ${payWithin === 1 ? "minute" : "minutes"} of ordering or the sale price is released.`}
+				</p>
+			) : null}
+			{maxPerOrder !== undefined ? (
+				// Says which state the buyer is in, because the stepper now stops
+				// at this number: a ceiling you hit with no word for it reads as a
+				// broken button (CLAUDE.md — a constraint is surfaced, never
+				// enforced silently).
+				<p
+					className={cn(
+						"mt-3 text-xs",
+						pp.promoCapReached
+							? "font-medium text-foreground"
+							: "text-muted-foreground",
+					)}
+				>
+					{pp.promoCapReached
+						? `That's the limit — max ${maxPerOrder} per order during this sale.`
+						: `Max ${maxPerOrder} per order during this sale`}
+				</p>
+			) : null}
 			{/* Stock hint — only meaningful for hard-block variants. On an EVENT
 			    the seats chip above already carries availability, so this line
 			    speaks only when THIS option's stock binds tighter than the seat
@@ -962,7 +1102,10 @@ function PurchaseStepper({ pp }: { pp: ProductPurchase }) {
 					pp.setQuantity(Math.min(pp.maxQty, pp.displayQuantity + 1))
 				}
 				disabled={
-					pp.displayQuantity >= pp.maxQty || !pp.sellable || pp.minUnreachable
+					pp.displayQuantity >= pp.maxQty ||
+					!pp.sellable ||
+					pp.minUnreachable ||
+					pp.promoCapReached
 				}
 				className="flex size-11 items-center justify-center rounded-full border border-border disabled:opacity-40"
 				aria-label="Increase quantity"
@@ -991,7 +1134,9 @@ function AddToCartButton({
 	return (
 		<Button
 			type="button"
-			disabled={paused || !pp.sellable || pp.minUnreachable}
+			disabled={
+				paused || !pp.sellable || pp.minUnreachable || pp.promoCapReached
+			}
 			onClick={() =>
 				pp.product &&
 				pp.selectedVariant &&
@@ -1001,15 +1146,17 @@ function AddToCartButton({
 		>
 			{paused
 				? ORDERING_PAUSED_CTA
-				: pp.minUnreachable
-					? "Not enough stock"
-					: !pp.selectedVariant
-						? pp.hasOptions
-							? "Select options"
-							: "Unavailable"
-						: !pp.sellable
-							? "Out of stock"
-							: "Add to cart"}
+				: pp.promoCapReached
+					? "Sale limit reached"
+					: pp.minUnreachable
+						? "Not enough stock"
+						: !pp.selectedVariant
+							? pp.hasOptions
+								? "Select options"
+								: "Unavailable"
+							: !pp.sellable
+								? "Out of stock"
+								: "Add to cart"}
 		</Button>
 	);
 }

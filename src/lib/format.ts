@@ -18,6 +18,10 @@ import {
 	isCreditLockErrorData,
 } from "../../convex/lib/credits";
 import { formatInternational } from "../../convex/lib/phoneDial";
+import {
+	isPriceChangedErrorData,
+	type PriceChangedErrorData,
+} from "../../convex/lib/promo";
 import { STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
 
 /**
@@ -53,7 +57,25 @@ export function convexErrorMessage(err: unknown): string {
 		// The credit lock (Credits T3) is typed so a surface can offer its way
 		// back (`creditLockErrorOf`); everywhere else it reads as its sentence.
 		if (isCreditLockErrorData(err.data)) return err.data.message;
-		return typeof err.data === "string" ? err.data : String(err.data);
+		if (typeof err.data === "string") return err.data;
+		// A TYPED payload no branch above claimed. Never `String(...)` it:
+		// that yields the literal "[object Object]", which a buyer has now
+		// read twice — once from the rate limiter's payload (see the note at
+		// the top of this function) and once from the price-changed guard's
+		// (z8r3fdcw72). A payload that carries its own sentence can still
+		// speak; anything else becomes the generic line and stays in the
+		// console, where the Convex client already logs the whole thing.
+		//
+		// This is the FALLBACK, not the pattern: a typed error meant for a
+		// person gets a branch above, next to its own guard.
+		if (
+			typeof err.data === "object" &&
+			err.data !== null &&
+			typeof (err.data as { message?: unknown }).message === "string"
+		) {
+			return (err.data as { message: string }).message;
+		}
+		return GENERIC_SERVER_FAILURE;
 	}
 	return unwrapServerError(
 		err instanceof Error ? err.message : String(err ?? ""),
@@ -67,6 +89,21 @@ export function creditLockErrorOf(err: unknown): CreditLockErrorData | null {
 		? err.data
 		: null;
 }
+
+/** The price-changed guard's typed refusal inside a caught error, or `null`
+ * (z8r3fdcw72). Checkout switches into a fixable state on it rather than
+ * printing it: `convexErrorMessage` would stringify the payload. */
+export function priceChangedErrorOf(
+	err: unknown,
+): PriceChangedErrorData | null {
+	return err instanceof ConvexError && isPriceChangedErrorData(err.data)
+		? err.data
+		: null;
+}
+
+/** Re-exported so a surface can read the payload without reaching past
+ * this module into `convex/lib` — `priceChangedErrorOf` is the only way in. */
+export type { PriceChangedErrorData };
 
 /**
  * Convex hands a server-side failure to the client as ONE string with the

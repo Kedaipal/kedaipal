@@ -15,7 +15,7 @@ const ORDER: CsvOrder = {
 	createdAt: 0,
 	status: "confirmed",
 	customer: { name: "Aisha" },
-	items: [{ name: "Cake", quantity: 1 }],
+	items: [{ name: "Cake", quantity: 1, price: 1000 }],
 	subtotal: 1000,
 	total: 1000,
 	currency: "MYR",

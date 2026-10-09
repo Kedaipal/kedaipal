@@ -464,3 +464,111 @@ describe("PurchaseHints — prep window + pickup note (z8r3fdff97)", () => {
 		expect(screen.queryByText("Collecting?")).toBeNull();
 	});
 });
+
+/**
+ * A flash sale's per-order cap (z8r3fdcw72). The stepper used to climb past
+ * the number its own hint printed, and `orders.create` then refused with a
+ * bare sentence that carries no recovery action — unlike the units-left case,
+ * which throws the typed price_changed error the checkout knows how to fix.
+ * So the cap has to bind on the CLIENT, as one more ceiling in the same
+ * Math.min as stock and seats.
+ */
+describe("per-order cap on a live flash sale", () => {
+	/** One size, plenty of stock, so the cap is the only thing that can bind. */
+	function flashProduct(maxPerOrder: number | undefined): StorefrontProduct {
+		return {
+			_id: "pf",
+			name: "Keropok",
+			slug: "keropok",
+			currency: "MYR",
+			imageUrls: [],
+			options: [],
+			priceFrom: 500,
+			priceTo: 500,
+			inStock: true,
+			totalOnHand: 50,
+			promoState:
+				maxPerOrder === undefined
+					? undefined
+					: {
+							phase: "live",
+							label: "Flash",
+							endsAt: Date.now() + 3_600_000,
+							maxPerOrder,
+						},
+			variants: [
+				{
+					_id: "v1",
+					optionValues: [],
+					onHand: 50,
+					active: true,
+					blockWhenOutOfStock: true,
+					requiresProof: false,
+					price: 500,
+					promoPrice: 400,
+					imageUrls: [],
+				},
+			],
+		} as unknown as StorefrontProduct;
+	}
+
+	function Stepper({
+		product,
+		cartQuantity,
+	}: {
+		product: StorefrontProduct;
+		cartQuantity: number;
+	}) {
+		const pp = useProductPurchase({ product, retailerId: RID, cartQuantity });
+		return (
+			<>
+				<PurchaseActions pp={pp} onAdd={vi.fn()} />
+				<PurchaseHints pp={pp} />
+			</>
+		);
+	}
+
+	const plus = () => screen.getByRole("button", { name: /increase quantity/i });
+
+	it("stops the stepper at the cap, with 50 in stock", () => {
+		render(<Stepper product={flashProduct(2)} cartQuantity={0} />);
+		fireEvent.click(plus()); // 1 → 2
+		expect(screen.getByText("2")).toBeTruthy();
+		// Stock would allow 50. The sale says 2, so the control says 2.
+		expect(plus().hasAttribute("disabled")).toBe(true);
+	});
+
+	it("counts what the cart ALREADY holds — the server sums the whole order", () => {
+		render(<Stepper product={flashProduct(2)} cartQuantity={1} />);
+		// One is already in the cart, so only one more may be added.
+		expect(plus().hasAttribute("disabled")).toBe(true);
+	});
+
+	it("at the cap the ADD is refused, not just the stepper", () => {
+		// maxQty floors at 1 so a number always shows; without gating the
+		// action that floor would let one more through past the cap.
+		render(<Stepper product={flashProduct(2)} cartQuantity={2} />);
+		expect(
+			screen.getByRole("button", { name: /sale limit reached/i }),
+		).toBeTruthy();
+	});
+
+	it("says which state the buyer is in, so the stop is never silent", () => {
+		const { unmount } = render(
+			<Stepper product={flashProduct(2)} cartQuantity={0} />,
+		);
+		expect(screen.getByText(/Max 2 per order during this sale/)).toBeTruthy();
+		unmount();
+
+		render(<Stepper product={flashProduct(2)} cartQuantity={2} />);
+		expect(screen.getByText(/That's the limit/)).toBeTruthy();
+	});
+
+	it("no cap, no ceiling — an uncapped sale leaves the stepper alone", () => {
+		render(<Stepper product={flashProduct(undefined)} cartQuantity={0} />);
+		fireEvent.click(plus());
+		fireEvent.click(plus());
+		expect(screen.getByText("3")).toBeTruthy();
+		expect(plus().hasAttribute("disabled")).toBe(false);
+	});
+});

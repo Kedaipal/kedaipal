@@ -44,11 +44,17 @@ import {
 	assertOrderCreditAvailable,
 	creditGateFor,
 	forSeller,
-	orderGatedForSeller,
 	isOrderGated,
+	orderGatedForSeller,
 	resolveCreditGate,
 } from "./creditLock";
-import { assertPlanFeature, assertSubscriptionActive } from "./subscriptions";
+import { effectivePrice, isPromoActive, promoUnitsLeft } from "./lib/promo";
+import { promoUnitsRequested, tallyPromoUnits } from "./lib/promoTally";
+import {
+	assertPlanFeature,
+	assertSubscriptionActive,
+	getAccess,
+} from "./subscriptions";
 import {
 	recordOrderCancelled,
 	recordOrderCreated,
@@ -539,6 +545,10 @@ type OrderItemSnapshot = {
 	name: string;
 	variantLabel?: string;
 	price: number;
+	/** List price, present ONLY when the line sold below it (z8r3fdcw72). */
+	listPrice?: number;
+	/** Promo run the line sold under — the flash tally groups by this. */
+	promoRunId?: string;
 	quantity: number;
 	/** Whether this line reserved stock at create — frozen (86eypn8ye). */
 	stockReserved: boolean;
@@ -913,6 +923,13 @@ export const create = mutation({
 		// the server re-sanitizes (authoritative); a bad value can never block
 		// the order — it buckets to "other". See convex/lib/attribution.ts.
 		attributionSource: v.optional(v.string()),
+		// Price-changed guard (z8r3fdcw72): the item subtotal (sen) the buyer
+		// SAW when they tapped Place order. When present and the server-resolved
+		// subtotal differs (promo ended / flash sold out between render and
+		// submit), the create refuses with a typed `price_changed` ConvexError
+		// instead of silently charging a different number. Absent (stale client)
+		// keeps the old behaviour — widen-only.
+		expectedSubtotal: v.optional(v.number()),
 	},
 	handler: async (
 		ctx,
@@ -1108,6 +1125,26 @@ export const create = mutation({
 		// Parcel-weight inputs (86eyeea1n, pricing mode "weight") — collected from
 		// the same resolved variants so the fee weighs exactly what was ordered.
 		const weightItems: CartWeightItem[] = [];
+
+		// ── Promo pricing context (z8r3fdcw72) ────────────────────────────────
+		// Resolved ONCE per create: the store's plan gates whether any promo
+		// speaks (paused on Starter, never deleted), and each distinct product
+		// pays at most one bounded tally read. Create and the storefront read
+		// price through the same pure helpers, so the number the buyer saw and
+		// the number frozen here can never be computed two different ways.
+		const now = Date.now();
+		const storePlan = (await getAccess(ctx, args.retailerId)).plan;
+		const promoByProduct = new Map<
+			Id<"products">,
+			{
+				runId: string;
+				unitsLeft: number | undefined;
+				maxPerOrder: number | undefined;
+				payWithinMinutes: number | undefined;
+				productName: string;
+			} | null
+		>();
+
 		for (const item of args.items) {
 			if (!Number.isInteger(item.quantity) || item.quantity < 1)
 				throw new ConvexError("Quantity must be a positive integer");
@@ -1186,6 +1223,54 @@ export const create = mutation({
 				block,
 				onHand: variant.onHand,
 			});
+			// Promo context, once per distinct product. Flash mechanics (cap,
+			// max-per-order, payment hold) never apply to an event line in v1 —
+			// seats and the RSVP flow already own capacity and payment — but the
+			// promo PRICE does, so the saving still prints.
+			let promoCtx = promoByProduct.get(variant.productId);
+			if (promoCtx === undefined) {
+				promoCtx = null;
+				const promo = product.promo;
+				if (promo !== undefined && isPromoActive({ promo }, storePlan, now)) {
+					const flashApplies = product.event === undefined;
+					const unitsLeft =
+						flashApplies && promo.unitCap !== undefined
+							? promoUnitsLeft(
+									promo.unitCap,
+									await tallyPromoUnits(ctx, {
+										retailerId: args.retailerId,
+										productId: variant.productId,
+										runId: promo.runId,
+										// sanitizePromo guarantees a capped run has a
+										// concrete start; 0 is a never-reached fallback.
+										startsAt: promo.startsAt ?? 0,
+										endsAt: promo.endsAt,
+									}),
+								)
+							: undefined;
+					promoCtx = {
+						runId: promo.runId,
+						unitsLeft,
+						maxPerOrder: flashApplies ? promo.maxPerOrder : undefined,
+						payWithinMinutes:
+							flashApplies && promo.unitCap !== undefined
+								? promo.payWithinMinutes
+								: undefined,
+						productName: product.name,
+					};
+				}
+				promoByProduct.set(variant.productId, promoCtx);
+			}
+			// Server truth: the line freezes the EFFECTIVE price; the list price
+			// rides along only when it differed, so receipts can say the saving.
+			const linePrice = effectivePrice(
+				variant,
+				product,
+				storePlan,
+				now,
+				promoCtx?.unitsLeft,
+			);
+			const soldOnPromo = linePrice < variant.price;
 			snapshotItems.push({
 				// Frozen so a later flag flip can't make the cancel-restore
 				// asymmetric (86eypn8ye) — see the schema comment.
@@ -1194,7 +1279,9 @@ export const create = mutation({
 				variantId,
 				name: product.name,
 				variantLabel: label || undefined,
-				price: variant.price,
+				price: linePrice,
+				listPrice: soldOnPromo ? variant.price : undefined,
+				promoRunId: soldOnPromo && promoCtx ? promoCtx.runId : undefined,
 				quantity: item.quantity,
 				// Frozen like `name` and `price`: a seller who later edits "side
 				// counter" to "front door" must not rewrite the instruction this
@@ -1241,6 +1328,63 @@ export const create = mutation({
 			(sum, i) => sum + i.price * i.quantity,
 			0,
 		);
+
+		// ── Flash gates + price-changed guard (z8r3fdcw72) ───────────────────
+		// Cap straddle is refused, never split-priced: a cart that wants 5 when
+		// 3 are left gets the typed refusal naming the line, and the checkout
+		// re-renders at live prices. The tally already counted inside THIS
+		// mutation, so two carts racing the last unit serialise on OCC.
+		for (const [productId, promoCtx] of promoByProduct) {
+			if (promoCtx === null) continue;
+			if (promoCtx.maxPerOrder !== undefined) {
+				const requestedAll = snapshotItems
+					.filter((i) => i.productId === productId)
+					.reduce((sum, i) => sum + i.quantity, 0);
+				if (requestedAll > promoCtx.maxPerOrder)
+					throw new ConvexError(
+						`Max ${promoCtx.maxPerOrder} of "${promoCtx.productName}" per order during this sale`,
+					);
+			}
+			if (promoCtx.unitsLeft !== undefined) {
+				const saleRequested = promoUnitsRequested(snapshotItems, productId);
+				if (saleRequested > promoCtx.unitsLeft)
+					throw new ConvexError({
+						kind: "price_changed" as const,
+						reason: "units" as const,
+						productName: promoCtx.productName,
+						unitsLeft: promoCtx.unitsLeft,
+						lines: snapshotItems
+							.filter(
+								(i) => i.productId === productId && i.promoRunId !== undefined,
+							)
+							.map((i) => ({
+								variantId: i.variantId,
+								now: i.price,
+								listPrice: i.listPrice,
+							})),
+					});
+			}
+		}
+		// The buyer never pays a number they weren't shown: when the client said
+		// what subtotal it rendered and the server resolves a different one
+		// (promo ended / flash sold out between paint and submit), refuse with
+		// the live per-line prices so checkout re-renders and names the change.
+		if (
+			args.expectedSubtotal !== undefined &&
+			args.expectedSubtotal !== itemSubtotal
+		) {
+			throw new ConvexError({
+				kind: "price_changed" as const,
+				reason: "subtotal" as const,
+				expected: args.expectedSubtotal,
+				actual: itemSubtotal,
+				lines: snapshotItems.map((i) => ({
+					variantId: i.variantId,
+					now: i.price,
+					listPrice: i.listPrice,
+				})),
+			});
+		}
 
 		// Minimum order rules (86ey9unyx) — the authoritative gate; the storefront
 		// mirrors both checks pre-submit via the same shared module, so a buyer
@@ -1579,7 +1723,6 @@ export const create = mutation({
 			pickupFee: sanitizedPickupSnapshot?.fee,
 			deliveryFee: deliverySnapshot?.fee,
 		});
-		const now = Date.now();
 
 		// Reserve stock for hard-block variants, in the same transaction (atomic;
 		// rolls back on any failure). Convex mutations are OCC transactions — both
@@ -1644,6 +1787,24 @@ export const create = mutation({
 			customerWaPhone !== undefined &&
 			orderConfirmTemplateName() !== undefined;
 
+		// Flash payment hold (z8r3fdcw72): a line sold under a CAPPED sale with
+		// a pay-within window stamps the deadline at create; the existing
+		// cancelUnpaidDueOrders cron then cancels it unpaid (cancelCause
+		// "system"), which restores stock, refunds the credit and — because the
+		// tally skips cancelled orders — returns the sale units to the pool.
+		// Uncapped promos never set a deadline; several flash products in one
+		// cart take the STRICTEST window (the honest reading of "pay within").
+		let paymentDueAt: number | undefined;
+		for (const promoCtx of promoByProduct.values()) {
+			if (promoCtx === null || promoCtx.payWithinMinutes === undefined)
+				continue;
+			if (!snapshotItems.some((i) => i.promoRunId === promoCtx.runId))
+				continue;
+			const dueAt = now + promoCtx.payWithinMinutes * 60_000;
+			paymentDueAt =
+				paymentDueAt === undefined ? dueAt : Math.min(paymentDueAt, dueAt);
+		}
+
 		const orderId = await ctx.db.insert("orders", {
 			retailerId: args.retailerId,
 			shortId,
@@ -1687,6 +1848,7 @@ export const create = mutation({
 			// indistinguishable from one whose send is still in flight, and the
 			// tracking page needs to tell the buyer which it is.
 			confirmationPushStatus: confirmedAtCreate ? "sending" : undefined,
+			paymentDueAt,
 			statusChangedAt: now,
 			createdAt: now,
 			updatedAt: now,
