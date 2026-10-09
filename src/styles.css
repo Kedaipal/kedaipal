@@ -480,7 +480,7 @@
 
 	/* Countdown strip (the SLB) — receipt paper that stays DARK in BOTH themes,
 	   for the same reason bg-cta-mesh does. The obvious spelling, `bg-primary`
-	   + `text-accent` (what the claim bar shipped as), breaks in .dark: both
+	   + `text-accent` (what this bar shipped as), breaks in .dark: both
 	   --primary and --accent resolve to mint there, so the figures would sit
 	   mint-on-mint. Fixed surface ⇒ its ink and stage ramp are fixed too, and
 	   are the ON-DARK variants: the light-surface pair (accent-emphasis,

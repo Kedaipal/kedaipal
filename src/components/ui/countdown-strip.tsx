@@ -152,7 +152,12 @@ export function CountdownStrip({
 	return (
 		<div
 			className={cn(
-				"relative h-14 overflow-hidden rounded-xl bg-countdown-paper text-countdown-ink ring-1 ring-white/10",
+				// h-10, not h-14: as a page-top band this sits directly under the store
+				// header, and at 56px it read as a second header rather than a strip
+				// of tape across one (Zaki, 9 Oct). 40px is the announcement-bar
+				// height — subordinate at a glance, still a 44px-safe tap area is
+				// not needed because nothing in here is tappable.
+				"relative h-10 overflow-hidden rounded-xl bg-countdown-paper text-countdown-ink ring-1 ring-white/10",
 				className,
 			)}
 		>
