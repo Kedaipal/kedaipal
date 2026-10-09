@@ -6,6 +6,7 @@ import {
 	type PromoState,
 	promoLive,
 	promoPercentOff,
+	promoTeasing,
 	repricedCartLines,
 } from "./promo";
 
@@ -25,7 +26,7 @@ const live: PromoState = {
 };
 
 describe("promoLive", () => {
-	test("no state, or a scheduled teaser, is not live", () => {
+	test("no state, or a teaser whose drop hasn't opened, is not live", () => {
 		expect(promoLive(undefined, NOW)).toBe(false);
 		expect(
 			promoLive(
@@ -47,6 +48,60 @@ describe("promoLive", () => {
 	test("a capped sale with nothing left is over, whatever the clock says", () => {
 		expect(promoLive({ ...live, unitCap: 30, unitsLeft: 0 }, NOW)).toBe(false);
 		expect(promoLive({ ...live, unitCap: 30, unitsLeft: 1 }, NOW)).toBe(true);
+	});
+});
+
+describe("the drop opens on the CLIENT's clock (PR #350 review, finding 1)", () => {
+	const teaser: PromoState = {
+		phase: "scheduled",
+		label: "Flash",
+		startsAt: NOW + MIN,
+		endsAt: NOW + 30 * MIN,
+	};
+
+	test("a page sitting on the teaser goes live at startsAt, with no refetch", () => {
+		// `phase` is a SERVER read and nothing writes at `startsAt`, so a
+		// Convex subscription has no reason to re-run at the drop. Waiting for
+		// it means the buyer the teaser told to wait watches the clock hit zero
+		// and still sees the list price — then orders, and the door refuses on
+		// a subtotal the client cannot explain or fix.
+		expect(promoLive(teaser, NOW)).toBe(false);
+		expect(promoLive(teaser, NOW + MIN)).toBe(true);
+		expect(promoLive(teaser, NOW + 29 * MIN)).toBe(true);
+	});
+
+	test("…and stops teasing at the same instant, so the band flips its label", () => {
+		expect(promoTeasing(teaser, NOW)).toBe(true);
+		expect(promoTeasing(teaser, NOW + MIN)).toBe(false);
+	});
+
+	test("the two ends are symmetric — it still closes on the clock", () => {
+		expect(promoLive(teaser, NOW + 30 * MIN)).toBe(false);
+	});
+
+	test("a teaser with no start is not something the clock can open", () => {
+		const noStart: PromoState = { phase: "scheduled", label: "Flash" };
+		expect(promoTeasing(noStart, NOW)).toBe(true);
+		expect(promoLive(noStart, NOW)).toBe(false);
+	});
+
+	test("the price actually drops at the flip — the whole point", () => {
+		const variant = { price: 4500, promoPrice: 3150 };
+		expect(effectiveVariantPrice(variant, teaser, NOW)).toBe(4500);
+		expect(effectiveVariantPrice(variant, teaser, NOW + MIN)).toBe(3150);
+	});
+
+	test("so does the headline From price, which needs the server's teaser figure", () => {
+		// `promoPriceFrom` is published during the teaser precisely so this
+		// works without a refetch; if it were still live-only this would stay
+		// at the list price and the card would lie.
+		const product = {
+			promoState: teaser,
+			priceFrom: 4500,
+			promoPriceFrom: 3150,
+		};
+		expect(effectivePriceFrom(product, NOW)).toBe(4500);
+		expect(effectivePriceFrom(product, NOW + MIN)).toBe(3150);
 	});
 });
 

@@ -386,6 +386,7 @@ export async function productWithVariants(
 				unitCap?: number;
 				unitsLeft?: number;
 				maxPerOrder?: number;
+				payWithinMinutes?: number;
 		  }
 		| undefined;
 	if (
@@ -411,6 +412,7 @@ export async function productWithVariants(
 								productId: product._id,
 								runId: product.promo.runId,
 								startsAt: product.promo.startsAt ?? 0,
+								endsAt: product.promo.endsAt,
 							}),
 						)
 					: undefined;
@@ -422,6 +424,14 @@ export async function productWithVariants(
 				unitCap: capped ? product.promo.unitCap : undefined,
 				unitsLeft,
 				maxPerOrder: flashApplies ? product.promo.maxPerOrder : undefined,
+				// The buyer is the one who LOSES the order to this deadline, so
+				// they have to be told before they commit — the cron cancels an
+				// unpaid flash order and this buyer's habit is to place it and
+				// go straight to WhatsApp. Previously the first mention of a
+				// deadline was the track-page countdown, after the fact.
+				payWithinMinutes: flashApplies
+					? product.promo.payWithinMinutes
+					: undefined,
 			};
 		}
 	}
@@ -436,13 +446,28 @@ export async function productWithVariants(
 				);
 	// Discounted "From" for the strike-through pair on cards: min effective
 	// price across priced variants, present only when it differs from the list.
+	//
+	// Published for a SCHEDULED teaser too, not just a live sale. Two things
+	// need it: the teaser names the price it drops TO ("RM 31.50 in 1h 11m" —
+	// "in 1h 11m" alone asks the buyer to come back for a number nobody told
+	// them), and the client flips to the sale price on its own clock at
+	// `startsAt` (see `promoLive`), which it can only do if the discounted
+	// figure is already in hand. Publishing it early is safe: every surface
+	// gates on `promoLive`, which stays false until the drop opens.
 	let promoPriceFrom: number | undefined;
-	if (promoLive) {
-		const effective = variants
-			.filter((vr) => !isQuoteVariant(vr))
-			.map((vr) =>
-				effectivePrice(vr, product, opts.plan, promoNow, promoState?.unitsLeft),
-			);
+	if (promoState !== undefined) {
+		const priced = variants.filter((vr) => !isQuoteVariant(vr));
+		const effective = priced.map((vr) =>
+			promoLive
+				? effectivePrice(vr, product, opts.plan, promoNow, promoState.unitsLeft)
+				: // Teaser: what it WILL cost, by the same rule the live branch
+					// applies — a sale price only counts when it undercuts its own line.
+					vr.promoPrice !== undefined &&
+						vr.promoPrice > 0 &&
+						vr.promoPrice < vr.price
+					? vr.promoPrice
+					: vr.price,
+		);
 		const min = effective.length ? Math.min(...effective) : 0;
 		if (prices.length && min < Math.min(...prices)) promoPriceFrom = min;
 	}

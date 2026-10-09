@@ -200,6 +200,7 @@ async function freezeClaimLines(
 										productId: variant.productId,
 										runId: promo.runId,
 										startsAt: promo.startsAt ?? 0,
+										endsAt: promo.endsAt,
 									}),
 								)
 							: undefined;

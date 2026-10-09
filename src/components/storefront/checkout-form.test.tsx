@@ -7,6 +7,7 @@ import {
 	waitFor,
 } from "@testing-library/react";
 import { getFunctionName } from "convex/server";
+import { ConvexError } from "convex/values";
 import {
 	afterEach,
 	beforeAll,
@@ -348,6 +349,59 @@ describe("CheckoutPage — submit", async () => {
 		const [args] = state.createOrder.mock.calls[0];
 		expect(args.customer.waDialCountry).toBe("MY");
 		expect(args.customer.waPhone).toBe("012-345 6789");
+	});
+});
+
+describe("CheckoutPage — a cap straddle says what to do (PR #350 review)", async () => {
+	/** The door's typed refusal when the cart wants more than the pool holds. */
+	function straddle(unitsLeft: number) {
+		return new ConvexError({
+			kind: "price_changed" as const,
+			reason: "units" as const,
+			productName: "Brownie Box",
+			unitsLeft,
+			lines: [],
+		});
+	}
+
+	async function submitAndFail(err: unknown) {
+		renderCheckout({ method: "pickup" });
+		fireEvent.change(screen.getByRole("textbox", { name: /^Your name/ }), {
+			target: { value: "Aisyah Rahman" },
+		});
+		changePhone("012-345 6789");
+		state.createOrder.mockRejectedValueOnce(err);
+		fireEvent.click(screen.getAllByRole("button", { name: "Place order" })[0]);
+		await waitFor(() => expect(state.createOrder).toHaveBeenCalledTimes(1));
+	}
+
+	it("names the product and the units left, and says to lower the quantity", async () => {
+		// The door sends `productName` and `unitsLeft` precisely so this
+		// surface can be specific. Dropping them left a generic "prices
+		// changed" that the buyer could do nothing with.
+		await submitAndFail(straddle(3));
+		await waitFor(() =>
+			expect(
+				screen.getAllByText(
+					/Only 3 left at the sale price for Brownie Box — lower the quantity/,
+				).length,
+			).toBeGreaterThan(0),
+		);
+	});
+
+	it("offers NO action, because accepting prices cannot fix a quantity", async () => {
+		// The old "Review your order" button only cleared the flag, so the
+		// resubmit was refused identically — a dead end dressed as a fix.
+		await submitAndFail(straddle(3));
+		await waitFor(() =>
+			expect(screen.getAllByText(/lower the quantity/).length).toBeGreaterThan(
+				0,
+			),
+		);
+		expect(screen.queryByRole("button", { name: /Update prices/ })).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: /Review your order/ }),
+		).toBeNull();
 	});
 });
 

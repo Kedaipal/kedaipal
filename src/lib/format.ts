@@ -101,6 +101,10 @@ export function priceChangedErrorOf(
 		: null;
 }
 
+/** Re-exported so a surface can read the payload without reaching past
+ * this module into `convex/lib` — `priceChangedErrorOf` is the only way in. */
+export type { PriceChangedErrorData };
+
 /**
  * Convex hands a server-side failure to the client as ONE string with the
  * machinery wrapped around the thrown message:

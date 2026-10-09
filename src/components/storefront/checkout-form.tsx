@@ -79,6 +79,7 @@ import {
 	convexErrorMessage,
 	formatMobile,
 	formatPrice,
+	type PriceChangedErrorData,
 	priceChangedErrorOf,
 } from "../../lib/format";
 import {
@@ -751,8 +752,9 @@ export function CheckoutPage({
 				// the "Update prices" action appears, exactly as the client-side
 				// detection does. `convexErrorMessage` would stringify the typed
 				// data to "[object Object]".
-				if (priceChangedErrorOf(err) !== null) {
-					setServerRepriced(true);
+				const priceChange = priceChangedErrorOf(err);
+				if (priceChange !== null) {
+					setServerRefusal(priceChange);
 					return;
 				}
 				refuseServer(convexErrorMessage(err));
@@ -1178,8 +1180,32 @@ export function CheckoutPage({
 		[cart.items, listedProducts, promoClock],
 	);
 	// Server's own verdict, when it refuses a stale subtotal outright.
-	const [serverRepriced, setServerRepriced] = useState(false);
-	const priceChanged = repriced.length > 0 || serverRepriced;
+	// The REFUSAL ITSELF, not a boolean. The door sends `reason`, the product
+	// name and the units left precisely so this surface can say what went
+	// wrong and what to do; throwing that away left the cap-straddle case
+	// ("wants 5, 3 left") showing a generic "prices changed" and an action
+	// that fixed nothing — the client's own view still reads 3 > 0, so it
+	// finds nothing to reprice and every resubmit is refused identically.
+	const [serverRefusal, setServerRefusal] =
+		useState<PriceChangedErrorData | null>(null);
+	/** A straddle the buyer must fix in the cart: the pool still has units,
+	 * just fewer than they asked for. Accepting prices cannot resolve it. */
+	const capStraddle =
+		serverRefusal?.reason === "units" &&
+		(serverRefusal.unitsLeft ?? 0) > 0 &&
+		serverRefusal.productName !== undefined
+			? { name: serverRefusal.productName, left: serverRefusal.unitsLeft ?? 0 }
+			: null;
+	/** Prices the SERVER resolved, for the sold-out case the client can't see
+	 * on its own (its `unitsLeft` is a stale read). */
+	const serverPrices = useMemo(
+		() =>
+			serverRefusal && !capStraddle
+				? new Map(serverRefusal.lines.map((l) => [l.variantId, l.now]))
+				: null,
+		[serverRefusal, capStraddle],
+	);
+	const priceChanged = repriced.length > 0 || serverRefusal !== null;
 
 	// The address the buyer has actually committed to. Manual mode fills line1
 	// without a pin; the search fills both. Empty means nothing to deliver to,
@@ -1251,21 +1277,23 @@ export function CheckoutPage({
 				? "Below the store's minimum — see your order summary"
 				: overStockLine
 					? `Only ${stockCapFor(overStockLine.variantId)} × ${overStockLine.name} left — lower the quantity to continue`
-					: priceChanged
-						? repriced.length > 0
-							? `${repriced[0].line.name} is now ${formatPrice(repriced[0].now, cart.currency)} — review your order before paying`
-							: "Prices changed while you were checking out — review your order before paying"
-						: unansweredLine?.missing
-							? `${answerPrompt(unansweredLine.missing.label)} for ${unansweredLine.item.name}`
-							: addressIncomplete
-								? collectsFromCustomer
-									? "Add your collection address to continue"
-									: "Add your delivery address to continue"
-								: quoteForDelivery?.kind === "calculating"
+					: capStraddle
+						? `Only ${capStraddle.left} left at the sale price for ${capStraddle.name} — lower the quantity to continue`
+						: priceChanged
+							? repriced.length > 0
+								? `${repriced[0].line.name} is now ${formatPrice(repriced[0].now, cart.currency)} — review your order before paying`
+								: "Prices changed while you were checking out — review your order before paying"
+							: unansweredLine?.missing
+								? `${answerPrompt(unansweredLine.missing.label)} for ${unansweredLine.item.name}`
+								: addressIncomplete
 									? collectsFromCustomer
-										? "Calculating your collection fee…"
-										: "Calculating your delivery fee…"
-									: (deliveryBlockedLine ?? null);
+										? "Add your collection address to continue"
+										: "Add your delivery address to continue"
+									: quoteForDelivery?.kind === "calculating"
+										? collectsFromCustomer
+											? "Calculating your collection fee…"
+											: "Calculating your delivery fee…"
+										: (deliveryBlockedLine ?? null);
 
 	const submitButton = (
 		<form.Subscribe
@@ -1317,13 +1345,30 @@ export function CheckoutPage({
 	// in the ladder is fixed by editing the order, which the summary already
 	// offers (z8r3fdcw72).
 	const acceptNewPrices = () => {
-		cart.repriceItems(
-			Object.fromEntries(
-				repriced.map(({ line, now }) => [line.variantId as string, now]),
-			),
+		// The server's figures win when it sent them: a sale that sold out
+		// under the buyer is invisible to the client, whose `unitsLeft` is the
+		// count from its last read.
+		const next: Record<string, number> = Object.fromEntries(
+			repriced.map(({ line, now }) => [line.variantId as string, now]),
 		);
-		setServerRepriced(false);
+		if (serverPrices)
+			for (const [variantId, price] of serverPrices) next[variantId] = price;
+		cart.repriceItems(next);
+		setServerRefusal(null);
 	};
+	/** The cart as accepting would leave it — the label must name the figure
+	 * the buyer would actually be agreeing to, so it is computed from the same
+	 * merge `acceptNewPrices` applies rather than from `repriced` alone. */
+	const acceptedSubtotal = cartItemSubtotal(
+		cart.items.map((item) => {
+			const fromServer = serverPrices?.get(item.variantId as string);
+			if (fromServer !== undefined) return { ...item, price: fromServer };
+			const change = repriced.find((r) => r.line.variantId === item.variantId);
+			return change ? { ...item, price: change.now } : item;
+		}),
+	);
+	const acceptChangesAnything =
+		acceptedSubtotal !== cartItemSubtotal(cart.items);
 	const ctaNoticeLine = priceChanged ? (
 		<div
 			role="alert"
@@ -1332,26 +1377,26 @@ export function CheckoutPage({
 			<p className="text-center text-xs font-medium text-destructive">
 				{blockedReason}
 			</p>
-			<Button
-				type="button"
-				variant="outline"
-				className="h-9 w-full text-xs font-semibold"
-				onClick={acceptNewPrices}
-			>
-				{repriced.length > 0
-					? `Update prices · items now ${formatPrice(
-							cartItemSubtotal(
-								cart.items.map((item) => {
-									const change = repriced.find(
-										(r) => r.line.variantId === item.variantId,
-									);
-									return change ? { ...item, price: change.now } : item;
-								}),
-							),
-							cart.currency,
-						)}`
-					: "Review your order"}
-			</Button>
+			{/* No action on a cap straddle: the pool still has units, just fewer
+			    than they asked for, so there is no price to accept — the fix is
+			    the quantity stepper in the ticket beside this. An "Update
+			    prices" button here cleared the flag and changed nothing, and the
+			    resubmit was refused identically. Same reasoning if accepting
+			    would move no money: a button whose only effect is to let you be
+			    refused again is worse than no button. */}
+			{capStraddle || !acceptChangesAnything ? null : (
+				<Button
+					type="button"
+					variant="outline"
+					className="h-9 w-full text-xs font-semibold"
+					onClick={acceptNewPrices}
+				>
+					{`Update prices · items now ${formatPrice(
+						acceptedSubtotal,
+						cart.currency,
+					)}`}
+				</Button>
+			)}
 		</div>
 	) : blockedReason ? (
 		<p className="text-center text-xs font-medium text-destructive">
