@@ -57,6 +57,7 @@ export const DELETION_PHASES = [
 	"customers",
 	"pickupLocations",
 	"counterCheckoutSessions",
+	"orderClaims",
 	"subscriptions",
 	"subscriptionUsage",
 	"creditPurchases",
@@ -236,6 +237,33 @@ export async function runDeletionPhase(
 				.withIndex("by_retailer_status", (q) => q.eq("retailerId", retailerId))
 				.take(limit);
 			for (const session of rows) await ctx.db.delete(session._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "orderClaims": {
+			// DELETED, not retained (claim links, 86eyq0epn). A claim is an OFFER
+			// the seller sent a buyer — required `waPhone`, optional `buyerName`,
+			// plus the frozen line snapshot — and never a record of what Kedaipal
+			// CHARGED the seller, which is the one thing the header's retention
+			// block keeps. Nothing survives the tenant to justify holding a
+			// buyer's number, so the rows go.
+			//
+			// This phase is the doer the claim cron defers to: `purgeStaleClaims`
+			// sweeps `expired`/`cancelled` rows past CLAIM_RETENTION_MS and
+			// deliberately exempts `completed` ones, on the grounds that "order
+			// retention is the PDPA pack's job" (convex/lib/orderClaims.ts). That
+			// job had no doer here, so a completed claim kept its buyer's phone
+			// and name indefinitely after the store was erased.
+			//
+			// Index prefix: by_retailer_status with only the retailerId bound
+			// covers every status (same shape as counterCheckoutSessions above).
+			// No blobs to free — a claim holds no storage ids. Position is not
+			// load-bearing: rows are found by retailer, never through the
+			// `sessionId` the phase above has already deleted.
+			const rows = await ctx.db
+				.query("orderClaims")
+				.withIndex("by_retailer_status", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const claim of rows) await ctx.db.delete(claim._id);
 			return { processed: rows.length, done: rows.length < limit };
 		}
 		case "subscriptions": {

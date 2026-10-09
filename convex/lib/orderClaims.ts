@@ -69,7 +69,10 @@ export const CLAIM_MAX_SENDS = 3;
 
 /** Dead claims (expired / cancelled) hold buyer PII (phone + name) — purged
  * after the same retention as dead counter sessions. Completed claims are kept
- * (they link to an order; order retention is the PDPA pack's job). */
+ * (they link to an order), and the PDPA pack erases them with the tenant: the
+ * `orderClaims` phase in convex/lib/accountDeletion.ts. Nothing else deletes a
+ * completed claim, so that phase is the only thing keeping this exemption from
+ * meaning "forever". */
 export const CLAIM_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** Validate + normalize a seller-chosen window. Throws on a non-integer or

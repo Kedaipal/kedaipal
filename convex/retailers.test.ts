@@ -1179,6 +1179,38 @@ describe("retailers deleteUser (internal cascade)", () => {
 				createdAt: now,
 				updatedAt: now,
 			});
+			const claimId = await ctx.db.insert("orderClaims", {
+				retailerId: ids.retailerId,
+				// The session seeded above — a claim is sent FROM one, and the
+				// session row dies a phase earlier, so this ref dangled too.
+				sessionId,
+				sellerUserId: USER_A,
+				// `completed` deliberately, same reason as the session above: the
+				// daily purgeStaleClaims cron sweeps only expired / cancelled
+				// claims, so a completed one held the buyer's phone + name
+				// forever — with no phase here, "forever" outlived the store.
+				status: "completed",
+				waPhone: "60123456789",
+				buyerName: "Ali",
+				lines: [
+					{
+						productId: ids.productId,
+						variantId: ids.variantId,
+						name: "Kuih",
+						price: 500,
+						quantity: 1,
+					},
+				],
+				currency: "MYR",
+				token: "claim_testtoken0001",
+				expiresAt: now + 60_000,
+				windowMinutes: 15,
+				sentCount: 1,
+				lastSentAt: now,
+				orderId: ids.orderId,
+				createdAt: now,
+				updatedAt: now,
+			});
 			const usageId = await ctx.db.insert("subscriptionUsage", {
 				retailerId: ids.retailerId,
 				monthStart: now,
@@ -1240,6 +1272,7 @@ describe("retailers deleteUser (internal cascade)", () => {
 				mockupId,
 				pickupId,
 				sessionId,
+				claimId,
 				usageId,
 				foundingId,
 				limitsId,
@@ -1268,6 +1301,7 @@ describe("retailers deleteUser (internal cascade)", () => {
 			// Previously orphaned — now all gone.
 			expect(await ctx.db.get(extra.pickupId)).toBeNull();
 			expect(await ctx.db.get(extra.sessionId)).toBeNull();
+			expect(await ctx.db.get(extra.claimId)).toBeNull();
 			expect(await ctx.db.get(extra.usageId)).toBeNull();
 			expect(await ctx.db.get(extra.foundingId)).toBeNull();
 			expect(await ctx.db.get(extra.limitsId)).toBeNull();
