@@ -29,6 +29,18 @@
  *    delete them: it closes every still-pending checkout (below).
  *  - `adminAuditLog` rows — an audit trail must outlive the tenant it audited
  *    (`targetId`s are doc ids / last-4 only, never buyer PII).
+ *  - `messageLogRollups` rows — the PERMANENT WhatsApp cost ledger (retailer ×
+ *    MYT month × category × status). `purgeExpiredOutboundLog` folds every
+ *    expiring `outboundMessageLog` row into its bucket precisely so aggregate
+ *    cost accounting survives the 90-day purge "forever" (lib/retention.ts),
+ *    and Meta bills us per send from Oct 2026 — so this is a record of what
+ *    Kedaipal was CHARGED for a seller's traffic, the same class as an
+ *    invoice. The rollup deliberately drops `toWaPhone`/`templateName`, so it
+ *    carries counts and no buyer PII. The raw per-send rows (which do carry
+ *    the buyer's number) ARE deleted, by the `outboundMessageLog` phase.
+ *    `retailerId` is left dangling rather than cleared: it is the ledger's
+ *    grouping key, and blanking it would merge a deleted tenant's months into
+ *    the tenant-less bucket and corrupt both.
  *  - `optOuts` rows are the buyer's standing suppression instruction, GLOBAL
  *    across every retailer on the shared WABA — deleting one would re-enable
  *    messages the buyer said stop to. The phase only clears
@@ -52,6 +64,7 @@ export const DELETION_PHASES = [
 	"products",
 	"productCategories",
 	"categories",
+	"bookingBlocks",
 	"deliveryJobs",
 	"deliveryQuotes",
 	"customers",
@@ -188,6 +201,22 @@ export async function runDeletionPhase(
 				await deleteBlob(ctx, category.imageStorageId);
 				await ctx.db.delete(category._id);
 			}
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "bookingBlocks": {
+			// Availability windows the seller closed off ("Maintenance — river
+			// deck repair"). Tenant-owned calendar config: no buyer PII and no
+			// money, so nothing argues for keeping it once the store is gone.
+			// Grouped with the catalogue phases above rather than appended,
+			// because a block is a product's availability — the `productId` it
+			// may carry points at rows the `products` phase has already deleted.
+			// Index prefix: by_retailer_start with only the retailerId bound
+			// covers every window.
+			const rows = await ctx.db
+				.query("bookingBlocks")
+				.withIndex("by_retailer_start", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const block of rows) await ctx.db.delete(block._id);
 			return { processed: rows.length, done: rows.length < limit };
 		}
 		case "deliveryJobs": {

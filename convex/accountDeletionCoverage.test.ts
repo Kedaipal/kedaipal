@@ -19,12 +19,22 @@ import { DELETION_PHASES } from "./lib/accountDeletion";
  * buyers' numbers stayed.
  *
  * So this reads the tables out of `schema.ts` rather than trusting a list
- * here: a table whose fields look like a person's contact details must be
- * VISITED by the cascade, or the author has to classify it below and say what
- * erases it instead. Sibling of `creditLockCoverage.test.ts` /
- * `sellerLockCoverage.test.ts` — and a list that claims a completeness it
- * doesn't check is worse than no list, because it stops the next person going
- * to look.
+ * here, and enforces three rules:
+ *
+ *  1. a table whose fields look like a person's contact details must be
+ *     VISITED by a phase — PDPA erasure has no "keep it" answer;
+ *  2. every `retailerId`-keyed table must be visited OR classified as
+ *     retained by decision, with a reason — otherwise its rows simply dangle
+ *     after teardown, which is how `bookingBlocks` and `messageLogRollups`
+ *     were found (both unvisited, and one of them wrongly so);
+ *  3. a table retained by decision must carry NO person-identifying field.
+ *     The code header asserts in prose that each retained table holds "no
+ *     buyer PII" — rule 3 is what makes that claim checkable, so retention
+ *     can never quietly become a way to keep a buyer's phone number.
+ *
+ * Sibling of `creditLockCoverage.test.ts` / `sellerLockCoverage.test.ts` — and
+ * a list that claims a completeness it doesn't check is worse than no list,
+ * because it stops the next person going to look.
  *
  * Scope note: membership proves the cascade VISITS a table. What it does there
  * is the phase's own call — `optOuts` is visited to clear an attribution ref
@@ -64,6 +74,24 @@ const PHASE_TABLES: Record<string, readonly string[]> = {
 	// variants and category junctions with it. (`productCategories` also has
 	// its own leftovers-sweep phase.)
 	products: ["products", "productVariants", "productCategories"],
+};
+
+/**
+ * RETAINED BY DECISION — mirrors the block at the top of
+ * `convex/lib/accountDeletion.ts`. A table here is deliberately NOT erased
+ * with the tenant, and the reason has to say why keeping it is right. Their
+ * `retailerId` refs dangle afterwards, which is expected for a retained record
+ * of a deleted tenant. Rule 3 below proves none of them holds buyer PII.
+ */
+const RETAINED_BY_DECISION: Record<string, string> = {
+	invoices:
+		"financial record of what Kedaipal charged the seller — a business must be able to produce its own invoicing history after a customer leaves",
+	creditLedger:
+		"the financial record of what the seller bought and spent; purchased credits are deferred revenue until spent or expired",
+	adminAuditLog:
+		"an audit trail must outlive the tenant it audited — 'who at Kedaipal touched this store?' is unanswerable if the answer is deleted with the store",
+	messageLogRollups:
+		"the PERMANENT WhatsApp cost ledger: purgeExpiredOutboundLog folds every expiring outboundMessageLog row into it so aggregate cost accounting survives the 90-day purge, and Meta bills per send — a record of what Kedaipal was charged for this seller's traffic. The raw rows, which carry the buyer's number, ARE deleted",
 };
 
 /** `\tname: defineTable({` — every table is declared at one tab of indent. */
@@ -117,13 +145,14 @@ describe("the account-deletion cascade covers every table holding PII", () => {
 		const unvisited = [...TABLES]
 			.map(([table, fields]) => ({ table, pii: piiFields(fields) }))
 			.filter(({ table, pii }) => pii.length > 0 && !VISITED.has(table))
-			.map(({ table, pii }) => `${table} (${pii.join(", ")})`);
+			.map(({ table, pii }) => `${table} (${pii.join(", ")})`)
+			.join(" · ");
 
 		// A failure here is a PDPA gap, not a test to relax: add a phase to
 		// DELETION_PHASES + runDeletionPhase, or — if another phase's cascade
 		// already erases these rows — list the table under that phase in
 		// PHASE_TABLES above and name the cascade that does it.
-		expect(unvisited).toEqual([]);
+		expect(unvisited).toBe("");
 	});
 
 	test("the cascade visits orderClaims — the gap this test was written for", () => {
@@ -134,6 +163,48 @@ describe("the account-deletion cascade covers every table holding PII", () => {
 			"buyerName",
 		]);
 		expect(DELETION_PHASES).toContain("orderClaims");
+	});
+
+	test("every retailerId-keyed table is visited or retained by decision", () => {
+		// Rule 2. Not a PDPA rule — a completeness one: an unclassified
+		// tenant-keyed table just leaves rows behind pointing at a retailer row
+		// that no longer exists. Both tables this caught were real:
+		// `bookingBlocks` wanted a phase, `messageLogRollups` wanted retaining.
+		const unclassified = [...TABLES]
+			.filter(([, fields]) => fields.includes("retailerId"))
+			.map(([table]) => table)
+			.filter(
+				(table) => !VISITED.has(table) && !(table in RETAINED_BY_DECISION),
+			)
+			.join(" · ");
+
+		// Add a phase, or add the table to RETAINED_BY_DECISION with the reason
+		// keeping it is right — and mirror that reason in the header block of
+		// convex/lib/accountDeletion.ts.
+		expect(unclassified).toBe("");
+	});
+
+	test("nothing retained by decision holds person-identifying data", () => {
+		// Rule 3 — the check behind the header's "no buyer PII" claim. Without
+		// it, "retained by decision" is an unaudited hole in the erasure path.
+		const leaks = Object.keys(RETAINED_BY_DECISION)
+			.map((table) => ({ table, pii: piiFields(TABLES.get(table) ?? []) }))
+			.filter(({ pii }) => pii.length > 0)
+			.map(({ table, pii }) => `${table} (${pii.join(", ")})`)
+			.join(" · ");
+
+		expect(leaks).toBe("");
+	});
+
+	test("RETAINED_BY_DECISION names real tables, and none of them has a phase", () => {
+		for (const table of Object.keys(RETAINED_BY_DECISION)) {
+			expect([...TABLES.keys()]).toContain(table);
+			// A table can't be both erased and retained. `creditPurchases` is the
+			// near-miss: it IS retained, but its phase exists to expire pending
+			// checkouts rather than to delete rows — so it is deliberately not
+			// listed here, and `retailers.test.ts` pins that behaviour.
+			expect(VISITED.has(table)).toBe(false);
+		}
 	});
 
 	test("PHASE_TABLES names real phases and real tables", () => {
@@ -149,7 +220,7 @@ describe("the account-deletion cascade covers every table holding PII", () => {
 		// coverage while sweeping nothing.
 		const unknown = DELETION_PHASES.filter(
 			(phase) => !(PHASE_TABLES[phase] ?? [phase]).some((t) => TABLES.has(t)),
-		);
-		expect(unknown).toEqual([]);
+		).join(" · ");
+		expect(unknown).toBe("");
 	});
 });

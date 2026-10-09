@@ -1133,7 +1133,7 @@ describe("retailers deleteUser (internal cascade)", () => {
 	 * retained-by-DECISION tables, the optOut attribution clear, and all three
 	 * order blob kinds (the account cascade used to free only the proof).
 	 */
-	test("erases every previously-orphaned table, keeps the two retained by decision", async () => {
+	test("erases every previously-orphaned table, keeps the rows retained by decision", async () => {
 		vi.useFakeTimers();
 		const t = setup();
 		const ids = await seedFullTenant(t, USER_A, "orphan-sweep");
@@ -1211,6 +1211,16 @@ describe("retailers deleteUser (internal cascade)", () => {
 				createdAt: now,
 				updatedAt: now,
 			});
+			const blockId = await ctx.db.insert("bookingBlocks", {
+				retailerId: ids.retailerId,
+				productId: ids.productId,
+				startDate: now,
+				endDate: now + 2 * 24 * 60 * 60 * 1000,
+				// A seller's private note — no buyer PII and no money, so the
+				// block is tenant config that goes with the tenant.
+				note: "Maintenance — river deck repair",
+				createdAt: now,
+			});
 			const usageId = await ctx.db.insert("subscriptionUsage", {
 				retailerId: ids.retailerId,
 				monthStart: now,
@@ -1253,6 +1263,22 @@ describe("retailers deleteUser (internal cascade)", () => {
 				status: "paid",
 				createdAt: now,
 			});
+			// Retained by decision too, and the one that is easy to get wrong:
+			// messageLogRollups is the PERMANENT WhatsApp cost ledger
+			// (purgeExpiredOutboundLog folds every expiring raw row into it so
+			// aggregate cost accounting outlives the 90-day purge, and Meta
+			// bills per send). It deliberately carries no toWaPhone — counts
+			// only — so erasing it would destroy billing history to no
+			// privacy end. The RAW rows, which do hold the buyer's number, are
+			// deleted by the outboundMessageLog phase above.
+			const rollupId = await ctx.db.insert("messageLogRollups", {
+				retailerId: ids.retailerId,
+				month: "2026-10",
+				category: "transactional",
+				status: "sent",
+				count: 7,
+				updatedAt: now,
+			});
 			const auditId = await ctx.db.insert("adminAuditLog", {
 				adminUserId: "admin_user",
 				retailerId: ids.retailerId,
@@ -1277,6 +1303,8 @@ describe("retailers deleteUser (internal cascade)", () => {
 				foundingId,
 				limitsId,
 				logId,
+				blockId,
+				rollupId,
 				invoiceId,
 				auditId,
 				optOutId,
@@ -1306,6 +1334,7 @@ describe("retailers deleteUser (internal cascade)", () => {
 			expect(await ctx.db.get(extra.foundingId)).toBeNull();
 			expect(await ctx.db.get(extra.limitsId)).toBeNull();
 			expect(await ctx.db.get(extra.logId)).toBeNull();
+			expect(await ctx.db.get(extra.blockId)).toBeNull();
 			expect(await ctx.db.get(extra.subscriptionId)).toBeNull();
 
 			// The two blobs the old cascade leaked, plus the one it did free.
@@ -1318,6 +1347,14 @@ describe("retailers deleteUser (internal cascade)", () => {
 			// a silent cascade addition.
 			expect(await ctx.db.get(extra.invoiceId)).not.toBeNull();
 			expect(await ctx.db.get(extra.auditId)).not.toBeNull();
+			// The WhatsApp cost ledger survives, and keeps its retailerId: that
+			// field is the ledger's grouping key, so blanking it would merge a
+			// deleted tenant's months into the tenant-less bucket and corrupt
+			// both. A dangling ref is the expected shape of a retained record.
+			const rollup = await ctx.db.get(extra.rollupId);
+			expect(rollup).not.toBeNull();
+			expect(rollup?.retailerId).toBe(ids.retailerId);
+			expect(rollup?.count).toBe(7);
 
 			// The opt-out itself survives (the buyer's standing instruction), with
 			// no dangling reference to the deleted store.

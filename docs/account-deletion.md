@@ -13,7 +13,8 @@ In phase order (`DELETION_PHASES` in
 orders (+ their `orderEvents`, their `paymentClaims` rows and **all three**
 owned blobs — buyer reference image, payment proof, mockup image(s)) → products
 (via the shared `deleteProductCascade`: variants, images, junctions) → leftover
-`productCategories` → categories (+ tile blobs) → `deliveryJobs` (+ POD
+`productCategories` → categories (+ tile blobs) → `bookingBlocks` (the
+seller's closed-off availability windows) → `deliveryJobs` (+ POD
 photos) → `deliveryQuotes` → `customers` → `pickupLocations` (manager name +
 phone) → `counterCheckoutSessions` (buyer phone + pushname) → `orderClaims`
 (buyer phone + name) → `subscriptions` (+ voiding pending invoices, killing
@@ -49,6 +50,7 @@ outright.
 | `adminAuditLog` | An audit trail must outlive the tenant it audits — "who at Kedaipal touched this store?" is unanswerable if the answer is deleted with the store. Rows hold ids and last-4 hints, never buyer PII. |
 | `creditLedger` rows | The financial record of what the seller bought and spent (purchased credits are deferred revenue until spent or expired). Seller billing data, no buyer PII. |
 | `creditPurchases` rows + their receipt PDFs | What the seller paid Kedaipal for top-up packs — the same kind of record as an invoice. The phase doesn't delete them; it expires every still-pending checkout so a payment can't land in a deleted store. |
+| `messageLogRollups` rows | The **permanent WhatsApp cost ledger** (retailer × MYT month × category × status). `purgeExpiredOutboundLog` folds every expiring `outboundMessageLog` row into its bucket precisely so aggregate cost accounting outlives the 90-day purge, and Meta bills us per send from Oct 2026 — so this is a record of what Kedaipal was *charged* for a seller's traffic, the same class as an invoice. The rollup deliberately drops `toWaPhone`/`templateName`, so it holds counts and no buyer PII; the **raw** per-send rows, which do carry the buyer's number, are deleted by the `outboundMessageLog` phase. `retailerId` is left dangling rather than cleared — it is the ledger's grouping key, and blanking it would merge a deleted tenant's months into the tenant-less bucket and corrupt both. |
 | `optOuts` rows | A row is the buyer's **global** standing instruction ("do not message me") across the whole shared WABA number — it is not the seller's data to erase, and deleting it would silently re-consent that buyer. Only `triggeredByRetailerId` is cleared, so no dangling reference remains. |
 
 If any of these ever changes, change it as a decision here — not as a silent
@@ -121,22 +123,44 @@ cascade — so a new table with a `waPhone` on it is a new PDPA obligation, and
 anyone to update. That is exactly how `orderClaims` was missed.
 
 [`convex/accountDeletionCoverage.test.ts`](../convex/accountDeletionCoverage.test.ts)
-closes that loop: it reads the tables straight out of `schema.ts`, flags any
-whose field names look like a person's contact details (phone / email /
-address / a qualified `*Name`), and fails unless the cascade **visits** each
-one. A new table either gets a phase, or gets listed under the phase whose
-cascade already erases it (`PHASE_TABLES`, which today records that the
-`orders` phase takes `orderEvents` + `paymentClaims` and the `products` phase
-takes `productVariants` + `productCategories`). The failure names the table and
-the offending fields, so the author has to decide rather than guess.
+closes that loop. It reads the tables straight out of `schema.ts` and enforces
+three rules:
+
+1. **A table whose fields look like a person's contact details** (phone /
+   email / address / a qualified `*Name`) must be **visited** by a phase. PDPA
+   erasure has no "keep it" answer.
+2. **Every `retailerId`-keyed table** must be visited **or** classified as
+   retained by decision, with a reason. Otherwise its rows just dangle after
+   teardown.
+3. **Nothing retained by decision may hold person-identifying data.** The
+   header above asserts in prose that each retained table carries "no buyer
+   PII" — rule 3 is what makes that claim checkable, so retention can never
+   quietly become a way to keep a buyer's phone number.
+
+A new table either gets a phase, or gets listed under the phase whose cascade
+already erases it (`PHASE_TABLES`, which records that the `orders` phase takes
+`orderEvents` + `paymentClaims` and the `products` phase takes
+`productVariants` + `productCategories`), or goes in `RETAINED_BY_DECISION`
+with its reason. Every failure names the table and the offending fields, so
+the author has to decide rather than guess.
+
+**Rule 2 immediately found two more unvisited tables, and they wanted opposite
+treatment** — which is the argument for the rule being a test rather than a
+convention. `bookingBlocks` (a seller's closed-off availability windows: no
+PII, no money) wanted a phase and got one. `messageLogRollups` wanted
+**retaining**: it reads like a leftover log table, but it is the permanent
+WhatsApp cost ledger, and a phase deleting it would have destroyed billing
+history to no privacy end.
 
 Membership proves the cascade *visits* a table; what it does there is the
-phase's own call (`optOuts` is visited to keep its row on purpose). The
-row-level outcomes are asserted in `retailers.test.ts`.
+phase's own call (`optOuts` is visited to keep its row on purpose, and
+`creditPurchases`' phase expires pending checkouts rather than deleting rows).
+The row-level outcomes are asserted in `retailers.test.ts`.
 
 Tests: `convex/retailers.test.ts` → "retailers deleteUser (internal cascade)"
 covers full-tenant purge, cross-tenant isolation, every previously-orphaned
-table (`orderClaims` included, seeded `completed` — the status no cron sweeps),
-the retained-by-decision rows, the opt-out attribution clear, all three blob
-kinds, and multi-page self-chaining completion. Plus
+table (`orderClaims` included, seeded `completed` — the status no cron sweeps,
+and `bookingBlocks`), the retained-by-decision rows (including
+`messageLogRollups` keeping its `retailerId`), the opt-out attribution clear,
+all three blob kinds, and multi-page self-chaining completion. Plus
 `accountDeletionCoverage.test.ts` above.
