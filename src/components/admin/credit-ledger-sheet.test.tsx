@@ -81,9 +81,25 @@ function renderBody(onBack?: () => void, who: AdminSellerRow = seller) {
 	);
 }
 
-/** Since the Enterprise follow-up (z8r3fdkp8h) SETTING a recurring grant is
- * only for sponsored (comped) or contracted stores — the plain fixture above
- * now gets the reason instead of the lever. */
+/** SETTING a recurring grant is a CONTRACT's job only: z8r3fdkp8h narrowed it
+ * to sponsored-or-contracted, then z8r3fdrph7 made a sponsored store unmetered
+ * (no allowance to set, and no `view` to render a lever under). So the plain
+ * fixture above gets the reason, and this one gets the lever. */
+const contractSeller = {
+	_id: "r_lekor",
+	storeName: "Lekor Mr.Ganu",
+	plan: "enterprise",
+	enterprise: { blockSize: 100 },
+} as unknown as AdminSellerRow;
+
+/** An admin's own store and a sponsored one are both UNMETERED, and the
+ * drawer must say WHICH — the next step differs. */
+const adminSeller = {
+	_id: "r_openmarket",
+	storeName: "OpenMarket",
+	ownerIsAdmin: true,
+} as unknown as AdminSellerRow;
+
 const compedSeller = {
 	_id: "r_lekor",
 	storeName: "Lekor Mr.Ganu",
@@ -172,13 +188,26 @@ describe("CreditLedgerBody — balances", () => {
 		// The same null view also means "store deleted", so the drawer has to
 		// tell the two apart instead of claiming an admin store is gone.
 		state.account = { view: null, account: null, lots: [], unmetered: true };
-		renderBody();
+		renderBody(undefined, adminSeller);
 		expect(screen.getByText(/Admin store — not metered/)).toBeTruthy();
 		expect(screen.queryByText(/no longer exists/)).toBeNull();
 		expect(screen.queryByRole("button", { name: /Adjust/ })).toBeNull();
 		// ...and the description must not promise the levers it just withheld.
 		expect(screen.getByText(/Credits don't apply to this store/)).toBeTruthy();
 		expect(screen.queryByText(/set a custom monthly grant below/)).toBeNull();
+	});
+
+	it("a SPONSORED store says so too, and says the comp is what to turn off (z8r3fdrph7)", () => {
+		// Not "Admin store": a comp is a toggle, so the admin's next move is a
+		// different one, and the drawer naming the wrong kind would send them
+		// looking for a setting this store doesn't have.
+		state.account = { view: null, account: null, lots: [], unmetered: true };
+		renderBody(undefined, compedSeller);
+		expect(screen.getByText(/Sponsored store — not metered/)).toBeTruthy();
+		expect(screen.getByText(/metered again/)).toBeTruthy();
+		expect(screen.queryByText(/Admin store/)).toBeNull();
+		expect(screen.queryByRole("button", { name: /Adjust/ })).toBeNull();
+		expect(screen.queryByLabelText("Credits a month")).toBeNull();
 	});
 
 	it("an unmetered store's leftover rows are named as history, not a contradiction", () => {
@@ -279,8 +308,8 @@ describe("CreditLedgerBody — adjust by hand", () => {
 });
 
 describe("CreditLedgerBody — custom monthly grant", () => {
-	it("sets a whole-number grant on a COMPED store, and says what a clear does", async () => {
-		renderBody(undefined, compedSeller);
+	it("sets a whole-number grant on a CONTRACT store, and says what a clear does", async () => {
+		renderBody(undefined, contractSeller);
 		fireEvent.change(screen.getByLabelText("Credits a month"), {
 			target: { value: "1000" },
 		});
@@ -316,14 +345,15 @@ describe("CreditLedgerBody — custom monthly grant", () => {
 		});
 	});
 
-	it("a store with a custom grant can clear it back to the plan's", () => {
+	it("a contract store's lever is live and shows the grant it already holds", () => {
 		state.account = {
 			view: view({ customGrant: true }),
 			account: { _id: "a1", grantOverride: 1000 },
 			lots: [],
 		};
-		renderBody(undefined, compedSeller);
+		renderBody(undefined, contractSeller);
 		expect(screen.getByText("1000 a month")).toBeTruthy();
+		expect(screen.queryByText(/contract record/)).toBeNull();
 		fireEvent.click(
 			screen.getByRole("button", { name: "Clear — use the plan's grant" }),
 		);

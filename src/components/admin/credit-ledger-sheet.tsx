@@ -17,6 +17,7 @@ import type { Doc } from "../../../convex/_generated/dataModel";
 import type { AdminSellerRow } from "../../../convex/admin";
 import { GRANT_LEVER_CONTRACT_REFUSAL } from "../../../convex/lib/credits";
 import { PURCHASED_CREDIT_LIFETIME_MONTHS } from "../../../convex/lib/plans";
+import { sellerUnmeteredNote } from "../../lib/admin-seller-view";
 import { convexErrorMessage, formatShortDate } from "../../lib/format";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
@@ -149,14 +150,13 @@ export function CreditLedgerBody({
 						<Skeleton className="h-11 w-full rounded-xl" />
 					</div>
 				) : state.unmetered ? (
-					/* Unmetered (z8r3fdp4er): a Kedaipal admin's own store is outside
-					   the credit system, so there is no balance to show and no lever
-					   to pull — saying which is the point, since the same null view
-					   also means "store deleted". */
+					/* Unmetered (z8r3fdp4er + z8r3fdrph7): an admin's own store and a
+					   SPONSORED one are outside the credit system, so there is no
+					   balance to show and no lever to pull — saying WHICH is the point,
+					   since the same null view also means "store deleted", and a comp
+					   is a toggle the admin may be about to turn off. */
 					<p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
-						Admin store — not metered. Credits apply to seller stores only: this
-						one has no balance, takes no monthly grant and spends nothing per
-						order.
+						{sellerUnmeteredNote(seller)}
 					</p>
 				) : state.view === null ? (
 					<p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
@@ -178,13 +178,13 @@ export function CreditLedgerBody({
 							retailerId={seller._id}
 							customGrant={state.account?.grantOverride}
 							periodGrant={state.view.periodGrant}
-							// SETTING a recurring allowance is a contract's or a comp's
-							// job now (GRANT_LEVER_CONTRACT_REFUSAL) — a list-price plan
-							// gets the reason, not a lever.
-							setLocked={
-								!(seller.plan === "enterprise" && seller.enterprise) &&
-								!seller.comped
-							}
+							// SETTING a recurring allowance is a CONTRACT's job
+							// (GRANT_LEVER_CONTRACT_REFUSAL) — a list-price plan gets the
+							// reason, not a lever. A comp used to be the other allowed
+							// case; since z8r3fdrph7 it is unmetered, so it has no
+							// allowance to set and never reaches this form at all (its
+							// `view` is null and the unmetered note renders instead).
+							setLocked={!(seller.plan === "enterprise" && seller.enterprise)}
 						/>
 					</>
 				)}
@@ -486,8 +486,8 @@ function GrantForm({
 	retailerId: AdminSellerRow["_id"];
 	customGrant: number | undefined;
 	periodGrant: number;
-	/** A list-price plan (not comped, no contract): setting is refused with
-	 * the one-author reason; clearing a stale grant still works. */
+	/** A list-price plan (no contract): setting is refused with the one-author
+	 * reason; clearing a stale grant still works. */
 	setLocked: boolean;
 }) {
 	const setGrant = useMutation(api.credits.adminSetGrantOverride);

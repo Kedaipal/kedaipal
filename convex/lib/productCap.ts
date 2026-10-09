@@ -15,7 +15,18 @@ import { ConvexError } from "convex/values";
  *   representing their shop rather than persuade them to upgrade — `orderCap`
  *   is the monetization lever. A store that genuinely needs >200 distinct SKUs
  *   is an Enterprise conversation handled by hand (see the admin escape below),
- *   not a paywall.
+ *   not a paywall. It is therefore NOT a `PlanCaps` entry: a tier never buys
+ *   you more products.
+ *
+ * - **A FULL-ACCESS store is uncapped (z8r3fdrph7).** "No limits" has one
+ *   author, `storeHasFullAccess` in convex/lib/plans.ts, and the two stores it
+ *   names — an admin's own, and a SPONSORED (comped) one — are uncapped here
+ *   as well as in `fullAccessCaps()`. That is not a tier making catalogue size
+ *   negotiable; it is the absence of a plan. Zaki, 10 Oct 2026: a comp has "no
+ *   restrictions in number of products and credit limit per month, just that
+ *   they don't have admin access". Note this is a property of the STORE, where
+ *   the act-as escape below is a property of the CALLER — a sponsored seller is
+ *   uncapped on their own login, which is the whole point.
  *
  * - **The cap counts TOTAL rows — active AND archived.** Three reasons, in
  *   order of weight:
@@ -70,34 +81,78 @@ export type ProductCapState = {
 	/** No more products may be added by this caller. */
 	atCap: boolean;
 	/**
-	 * This caller bypasses the cap entirely (Kedaipal admin act-as). Exposed
-	 * rather than left implicit because "is there room for N more?" can't be
-	 * answered from `remaining` alone — an exempt caller always has room, and a
-	 * client that reasoned from `remaining` would wrongly block a white-glove
-	 * bulk import.
+	 * The cap does not apply here — admin act-as, or a full-access store (see
+	 * `ProductCapExemption` for why the two are told apart).
+	 * Exposed rather than left implicit because "is there room for N more?"
+	 * can't be answered from `remaining` alone — an exempt caller always has
+	 * room, and a client that reasoned from `remaining` would wrongly block a
+	 * white-glove bulk import or a sponsored seller's own.
 	 */
 	exempt: boolean;
 	/**
-	 * The store already holds MORE than the cap. Only reachable when a Kedaipal
-	 * admin stocked it past the ceiling on the seller's behalf (see
-	 * `exemptFromProductCap`) — so the UI must not render "250 of 200", which
-	 * reads as a bug rather than a bespoke arrangement.
+	 * The store already holds MORE than the cap. Only reachable through an
+	 * exemption — a Kedaipal admin stocked it past the ceiling on the seller's
+	 * behalf, or the store has full access — so the UI must not render
+	 * "250 of 200", which reads as a bug rather than a bespoke arrangement.
 	 */
 	overCap: boolean;
-	/** Surface the counter in the dashboard header. */
+	/** Surface the counter in the dashboard header. False for a store with no
+	 * ceiling (`full_access`) however many products it holds. */
 	showCounter: boolean;
 };
 
 /**
- * Resolve the cap state for a store. `exempt` is the admin escape hatch — a
- * Kedaipal admin operating the store (act-as) can stock it past the ceiling for
- * a white-glove Enterprise setup, matching how admin act-as already bypasses
- * the subscription soft-lock. The seller themselves stays capped, which is the
- * intended asymmetry: we cater to an oversized catalog by hand rather than
- * shipping a self-serve tier we haven't designed yet.
+ * Resolve the cap state for a store. `exempt` means the cap does not apply,
+ * for either of two independent reasons (resolved by `productCapExempt` in
+ * convex/products.ts, which is the one place that answers it):
+ *  - the CALLER is a Kedaipal admin operating someone else's store (act-as) —
+ *    a white-glove catalogue gets stocked past the ceiling by hand, matching
+ *    how act-as already bypasses the subscription soft-lock. A list-price
+ *    seller stays capped on their own login, which is the intended asymmetry:
+ *    we cater to an oversized catalog by hand rather than shipping a
+ *    self-serve tier we haven't designed yet.
+ *  - the STORE has full access (`storeHasFullAccess`) — admin-owned or
+ *    sponsored. There is no plan behind it to cap.
  */
-export function productCapState(used: number, exempt = false): ProductCapState {
+/**
+ * WHY the cap is lifted — not just that it is. The two reasons differ in what
+ * the seller should SEE, which a boolean cannot carry:
+ *
+ *  - `admin_acting`: the CALLER is a Kedaipal admin on someone else's store
+ *    (act-as). This call may exceed the ceiling, but the store still HAS one
+ *    — its seller is capped the moment the admin leaves — so the counter
+ *    stays on screen. That is the number the admin needs to see.
+ *  - `full_access`: the STORE has no ceiling at all (`storeHasFullAccess` —
+ *    admin-owned or sponsored). The counter is HIDDEN: "180 of 200 used" in
+ *    front of a store with no limit is the same wrong impression the credit
+ *    meter's "200 of 200" gave sponsored sellers (z8r3fdrph7), and shipping
+ *    the fix on one surface while the other kept printing a ceiling would
+ *    just move the bug.
+ */
+export type ProductCapExemption = "admin_acting" | "full_access";
+
+/**
+ * Which exemption applies, or null. The PURE half of `productCapExempt`
+ * (convex/products.ts), whose two inputs the dashboard already holds on its
+ * retailer payload (`actingAsAdmin`, `fullAccess`). One author, so the
+ * counter and the disabled New button can never disagree with what the save
+ * will do. `full_access` wins when both hold — an admin standing in an
+ * uncapped store is still in an uncapped store.
+ */
+export function productCapExemption(args: {
+	actingAsAdmin: boolean;
+	fullAccess: boolean;
+}): ProductCapExemption | null {
+	if (args.fullAccess) return "full_access";
+	return args.actingAsAdmin ? "admin_acting" : null;
+}
+
+export function productCapState(
+	used: number,
+	exemption: ProductCapExemption | null = null,
+): ProductCapState {
 	const remaining = Math.max(0, MAX_PRODUCTS_PER_RETAILER - used);
+	const exempt = exemption !== null;
 	return {
 		used,
 		cap: MAX_PRODUCTS_PER_RETAILER,
@@ -105,7 +160,8 @@ export function productCapState(used: number, exempt = false): ProductCapState {
 		atCap: !exempt && used >= MAX_PRODUCTS_PER_RETAILER,
 		exempt,
 		overCap: used > MAX_PRODUCTS_PER_RETAILER,
-		showCounter: used >= PRODUCT_COUNTER_VISIBLE_AT,
+		showCounter:
+			used >= PRODUCT_COUNTER_VISIBLE_AT && exemption !== "full_access",
 	};
 }
 
@@ -130,9 +186,9 @@ export function fitsWithinProductCap(
  */
 export function productCapBlockReason(
 	used: number,
-	exempt = false,
+	exemption: ProductCapExemption | null = null,
 ): string | null {
-	if (!productCapState(used, exempt).atCap) return null;
+	if (!productCapState(used, exemption).atCap) return null;
 	return `You've reached the ${MAX_PRODUCTS_PER_RETAILER}-product limit. Delete a product you no longer sell to free up a slot, or message us if you need more.`;
 }
 
@@ -149,9 +205,9 @@ export function productCapBlockReason(
 export function assertProductCap(
 	used: number,
 	adding: number,
-	exempt = false,
+	exemption: ProductCapExemption | null = null,
 ): void {
-	if (exempt || used + adding <= MAX_PRODUCTS_PER_RETAILER) return;
+	if (exemption !== null || used + adding <= MAX_PRODUCTS_PER_RETAILER) return;
 	const remaining = Math.max(0, MAX_PRODUCTS_PER_RETAILER - used);
 	if (adding <= 1) {
 		throw new ConvexError(

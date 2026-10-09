@@ -949,8 +949,15 @@ describe("balance notices", () => {
 
 	test("no notices for comped stores; a custom grant gets no low nudge but does hear about a lock", async () => {
 		const t = setup();
-		const comped = await store(t, { status: "active", plan: "pro", comped: true });
+		// A comped store is UNMETERED (z8r3fdrph7), so it cannot be put at -5
+		// through the admin ledger at all — the lever refuses it. Drive the
+		// balance down first, THEN comp it: that is also the real-world order
+		// (a sponsorship is switched on over a store that was being billed),
+		// and it leaves a NEGATIVE balance sitting on the row, which is the
+		// state a notice sweep would nudge about if the gate ever slipped.
+		const comped = await store(t, { status: "active", plan: "pro" });
 		await setBalance(t, comped.retailerId, -5);
+		await t.run((ctx) => ctx.db.patch(comped.subId, { comped: true }));
 		expect(await evaluate(t, comped.retailerId)).toBeNull();
 
 		// A custom allowance now lives on a CONTRACT (the lever is comps and

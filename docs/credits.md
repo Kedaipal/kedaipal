@@ -60,10 +60,10 @@ Enterprise](./pricing.md#enterprise--a-contract-not-a-price)) is granted its
 contract's **`includedCredits`** every month, and those credits live in exactly
 one field: `creditAccounts.grantOverride`. `enterprise.setContract` writes the
 override in the same mutation that saves the contract, and
-`credits.adminSetGrantOverride` — which since the z8r3fdkp8h follow-up only
-accepts a NUMBER on comped or contract stores (`GRANT_LEVER_CONTRACT_REFUSAL`:
-a custom allowance on a listed plan is a contract with no record; clearing a
-stale grant always works) — on a contract store edits the contract's
+`credits.adminSetGrantOverride` — which accepts a NUMBER only on a CONTRACT
+store (`GRANT_LEVER_CONTRACT_REFUSAL`: a custom allowance on a listed plan is a
+contract with no record; clearing a stale grant always works; a comped store is
+unmetered since z8r3fdrph7 and has no allowance to set) — on a contract store edits the contract's
 number too (under the contract's own rule — at least 1 — and stamping who
 changed it) — changing one changes the other, and clearing the override is
 refused while the store is on a contract. Raising it lands the difference this
@@ -82,7 +82,7 @@ credits, counted in "Unused bought credits". The seller's activity list reads
 "Enterprise block — extra credits under your contract". The top-up dialog
 names the contract's block rate beside the packs, with an "Ask us for a block"
 chat for the owner (`topUpOptions.contractBlock`); the packs themselves stay on
-sale. Lock rules are Pro's unless comped, and a contract store is never shown
+sale. Lock rules are Pro's, and a contract store is never shown
 an upgrade hint — there is no plan above a contract.
 
 ### The trial: 14 days or 200 orders, whichever comes first
@@ -113,29 +113,50 @@ still gets its first invoice.
 | `past_due` | None; a positive leftover is still forfeited | When the invoice is paid (`settleInvoicePaid`) |
 | `on_hold` | None (a technical guard until Off-Season Hold is retired, z8r3fdfuhr) | On resume |
 | `cancelled` | None; purchased credits keep their expiry and work again on resubscribe | On the next paid invoice |
-| **comped**, **missing subscription row** | The plan's monthly grant **whatever the status** | — |
-| **admin-owned** | **None — the store is unmetered**, see below | Never |
+| **missing subscription row** | The plan's monthly grant **whatever the status** | — |
+| **admin-owned**, **comped** | **None — the store is unmetered**, see below | Never |
 
-Comped stores are metered for an honest number and are **never locked**: a comp
-can end, so the balance behind it has to be real and visible the whole time.
+The missing-row fail-safe is metered for an honest number and is **never
+locked** — see "the one store that is metered but never locked" below.
 
-### Unmetered: an admin's own store (z8r3fdp4er)
+### Unmetered: an admin's own store AND a sponsored one (z8r3fdp4er → z8r3fdrph7)
 
-A Kedaipal admin's own store is **outside the credit system** — a strictly
-stronger state than "metered but never locked":
+An admin's own store and a **comped (sponsored)** store are both **outside the
+credit system** — a strictly stronger state than "metered but never locked":
 
-| | comped / sponsored | **admin-owned (unmetered)** |
+| | missing sub row (fail-safe) | **admin-owned / comped (unmetered)** |
 | --- | --- | --- |
 | Credit account | yes | **none** |
 | Debited per order | yes | **no** |
 | Monthly grant | yes | **no** |
 | Meter + activity UI | yes | **hidden** |
+| Product cap (200) | applies | **lifted** |
 | Lock | never | never (nothing to lock) |
 
-It used to be metered "so you can see your volume", which put **"200 of 200"
-over a bar with a refresh date** on the one account that has no limit —
-a cap to every eye, whatever the sentence underneath said (Zaki, 6 Oct 2026).
-Volume already lives in Insights and in the admin console.
+An admin store used to be metered "so you can see your volume", which put
+**"200 of 200" over a bar with a refresh date** on an account that has no
+limit — a cap to every eye, whatever the sentence underneath said (Zaki,
+6 Oct 2026). Volume already lives in Insights and in the admin console.
+
+`z8r3fdp4er` fixed that for admin stores only, and said so in as many words:
+*"Sponsored/comped stores are NOT changed — a comp can end, so the balance
+behind it has to be real and visible."* **Zaki withdrew that carve-out on
+10 Oct 2026** (`z8r3fdrph7`): a comp grants what an admin's own store gets —
+"no restrictions in number of products and credit limit per month, just that
+they don't have admin access" — so leaving comps metered meant a sponsored
+seller read the identical "200 of 200" bar while `fullAccessCaps()` and the
+admin console's own comp hint ("Every feature, no limits, never billed")
+both promised them no limit.
+
+"A comp can end" is still true and still safe: turning a comp off meters the
+store again **from that moment**, with no credit charged for the sponsored
+months and no debt carried into the paid ones. It is pinned by a test.
+
+**"No limits" has ONE author**: `storeHasFullAccess` (`convex/lib/plans.ts`),
+beside `fullAccessCaps()`. `storeIsMetered` delegates to it, the product cap
+reads it, and the entitlement caps are built from the same answer — so the
+credit layer and the entitlement layer cannot part again. The equality is
+test-pinned, not just documented.
 
 **The gate is one function**: `regimeFor` (`convex/credits.ts`) answers `null`
 for a store `storeIsMetered` rejects. Every reader and writer of a balance
@@ -156,15 +177,47 @@ Two things the gate does NOT cover, each guarded where it lives:
   (`UNMETERED_STORE_REFUSAL`) instead of falling through to "Store not found".
 
 The admin console reads it too: the seller row prints **"Admin store — not
-metered"** rather than its stale cached figures, and the credit-ledger drawer
-says the same instead of "This store no longer exists" (the same `null` view
-means both — `adminGetAccount` returns an `unmetered` flag to tell them apart).
+metered"** / **"Sponsored — not metered"** rather than its stale cached figures
+(a comped store that was billed last month still carries `plan 200 · bought 0`,
+and printing it is the directory repeating the very number the seller's meter
+stopped showing), and the credit-ledger drawer says the same instead of "This
+store no longer exists" (the same `null` view means both — `adminGetAccount`
+returns an `unmetered` flag to tell them apart). The two unmetered kinds are
+named APART — `sellerUnmeteredNote` — because the admin's next step differs: an
+admin store is permanent, a comp is a toggle whose next state is "metered
+again".
+
+**The seller is TOLD, not left to infer it.** The credit meter simply vanishing
+would be undiscoverable behaviour, so the violet **Sponsored account · No
+limits** card in Settings → Billing names all three in words: "no monthly order
+limit, no product limit, and no credits to run down, so your store can never be
+locked". That card is the only place a sponsored seller learns it, which is why
+its copy is test-pinned.
+
+**The admin grant lever is now contract-only.** A recurring custom allowance
+used to be "sponsored or contracted" (`z8r3fdkp8h`), and
+`GRANT_LEVER_CONTRACT_REFUSAL` told admins to *"comp it if it's sponsored"*. A
+comp carries no allowance any more, so `adminSetGrantOverride` refuses a comped
+store with `UNMETERED_STORE_REFUSAL` and that sentence no longer offers the
+route. An Enterprise contract is the only store that may be SET; clearing a
+stale grant still works anywhere.
 
 **Legacy rows** written while such a store was metered are inert — every
 reader asks `regimeFor` *before* touching the account, so the meter hides
 whether or not the rows exist — but they sit below the current usage period
 forever, so `internalRollPeriods` re-selects them on every sweep and can never
 advance them. Clearing them is hygiene, not a correctness fix.
+
+**The purge is deliberately narrower than the gate — admin-owned only.** A
+sponsored store can hold **bought credits**: 12-month `creditLots` a seller paid
+real money for before the comp was switched on. A comp is a toggle an admin can
+turn off, and when it goes off those lots must still be there — so purging a
+comped store would destroy credits we sold. An admin's own store can never be
+in that position (`topUpRefusal` refuses it a pack), which is why the narrower
+key is safe. Sponsored stores keep their rows inert instead, and
+`internalExpireLots` still retires their lots on schedule (it reads the account
+directly, not the regime), so nothing freezes while a comp runs and nothing is
+resurrected when it ends. Both halves are test-pinned.
 
 `migrations:purgeUnmeteredCreditData` is **dry run by default**. Deleting
 needs `{"apply":true,"retailerIds":[…]}`, naming the stores the dry run
@@ -440,18 +493,20 @@ refusal and the picker's disabled-with-reason line are one author
 | `past_due` | "Your invoice INV-… is overdue. Pay it first…" | **Pay INV-…** (its Pay-now link), else View the invoice |
 | `on_hold` | "Your plan is on Off-Season Hold. Resume it first…" | Resume your plan |
 | `cancelled` | "Your subscription has ended. Choose a plan first…" | Choose a plan |
-| admin's own store (unmetered) | "Kedaipal admin stores aren't metered…" | — |
-| sponsored (comped, or no subscription row) | "Sponsored stores never run out, so there's nothing to top up…" | — |
+| unmetered store (admin-owned or comped) | "Kedaipal admin and sponsored stores aren't metered…" | — |
+| sponsored (no subscription row — the fail-safe) | "Sponsored stores aren't metered, so there's nothing to top up…" | — |
 
 A teammate reads the same reason addressed to them ("Ask the store owner to…")
 and gets no button: every way out is a billing write, which is the owner's.
-**A Kedaipal admin's own store** is its own refusal: it is unmetered
-(z8r3fdp4er), so there is no balance a pack could add to — and the picker is
-unreachable from the UI anyway, since the meter that opens it is hidden. **A sponsored store** (Zaki, 1 Oct 2026)
-is refused for the same reason — its credits are a meter, never a lock, so a
-pack would be money for nothing; the missing-row fail-safe resolves as comped
-and is refused alongside it. Neither refusal has a way-out button: nothing is
-wrong.
+**An UNMETERED store** is its own refusal — an admin's own (z8r3fdp4er) or a
+**comped** one (z8r3fdrph7): there is no balance a pack could add to, and the
+picker is unreachable from the UI anyway, since the meter that opens it is
+hidden. The **missing-row fail-safe** is refused alongside them (Zaki,
+1 Oct 2026): it IS metered, but its credits are a meter and never a lock, so a
+pack would be money for nothing. It shares the sponsored sentence, which is why
+that sentence says "aren't metered" and no longer claims credits refresh —
+the old wording became a lie the moment a comp stopped being metered. No
+refusal has a way-out button: nothing is wrong.
 
 **The person**: credits **WRITE** (`requireRetailerAccess(…, {area: "credits",
 level: "write"})`) — the owner and an admin always, a teammate only with the
@@ -978,8 +1033,10 @@ One `CreditMeter`, two places (one control, one rule):
   the rule in plain words at the foot (monthly credits are used first and reset
   on the 1st — they don't carry over; bought credits are used next and last 12
   months; a cancelled never-accepted order gives its credit back, up to 10 a
-  month). A store that can't buy and holds no bought credits (sponsored, a
-  trial) shows the one tile. An UNMETERED store shows no meter at all.
+  month). A store that can't buy and holds no bought credits (the fail-safe, a
+  trial) shows the one tile. An UNMETERED store — admin-owned or **comped** —
+  shows no meter at all; the Sponsored card in Settings → Billing is where a
+  comped seller is told their limits are off instead.
 
 **The reset reads as a reset** (Zaki's test round): "300 more on 1 Oct" read as
 300 ADDED; monthly credits go BACK to the allowance. `creditRefreshLabel`
@@ -992,11 +1049,12 @@ with the banner and the low email), red at 0. Every state is designed —
 `creditStateLine` is the one author: loading, trial ("200 orders from your
 first order"), active, founding (the 300 badge), past due / on hold / ended
 ("…your 150 bought credits are kept, and work again once your plan is active"
-— bought credits never stand in for a plan), sponsored ("never locked — here so
-you can see your volume"), **an admin's own store** ("aren't billed… never
-locks" — keyed on `getBalance`'s new `lockExempt`, never on the raw status: an
-admin store sits in `past_due` or `trialing` and was being told to pay its
-invoice), custom allowance, at zero, below zero ("the 15 owed come off your
+— bought credits never stand in for a plan), the fail-safe ("This store is
+never locked — the balance is here so you can see your volume" — keyed on
+`getBalance`'s `lockExempt`, never on the raw status: an exempt store sits in
+`past_due` or `trialing` and was being told to pay its invoice; unmetered
+stores never reach this line at all, since they have no meter), custom
+allowance, at zero, below zero ("the 15 owed come off your
 next pack or your next monthly credits"). Top up is **hidden** where packs
 aren't sold and for a store that can never be locked (the state line says why
 instead), and **disabled with T2's own sentence** everywhere else
@@ -1033,7 +1091,8 @@ the live description. Kept here only as the trail of what changed and why:
 What T3 built that **did** survive unchanged, and is still described below: the
 meter, the running-low line (`lowCreditLine`, the last 20% of the month's
 credits), the balance notices and their once-a-period dedupe, the expiry
-heads-up, the exemptions (comped / admin-owned / missing-row fail-open), the
+heads-up, the exemptions (unmetered: admin-owned / comped; plus the metered
+missing-row fail-open), the
 unlock routes and the audience rules, and the cancel outlook.
 
 ### The notices
@@ -1050,7 +1109,7 @@ unlock routes and the audience rules, and the cancel outlook.
   it.
 - **What:** `low` (the last 20% of the month's credits — was a flat 10 until
   Zaki's test round, 1 Oct 2026; the meter's amber and the banner move with it,
-  one line — never for comped stores or a custom allowance), `locked`, `still_locked` (a refresh left the store at or below
+  one line — never for an exempt store or a custom allowance), `locked`, `still_locked` (a refresh left the store at or below
   zero — says how many orders short, or "at 0"), `unlocked`, and `expiring`
   (a bought lot expires within 14 days — once per lot via
   `creditLots.expiryNoticeAt`, a daily 00:15 MYT sweep, one email per store).

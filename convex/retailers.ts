@@ -254,7 +254,12 @@ import {
 	sanitizeOpeningHours,
 } from "./lib/openingHours";
 import { rateLimiter } from "./lib/rateLimiter";
-import { capsForPlan, DAY_MS, TRIAL_DAYS } from "./lib/plans";
+import {
+	capsForPlan,
+	DAY_MS,
+	storeHasFullAccess,
+	TRIAL_DAYS,
+} from "./lib/plans";
 import {
 	type AccessState,
 	assertPlanFeature,
@@ -319,6 +324,7 @@ import {
 	requireAdmin,
 	refusalMessage,
 	requireRetailerAccess,
+	storeOwnerIsAdmin,
 } from "./lib/auth";
 import {
 	hasPermission,
@@ -983,6 +989,16 @@ type RetailerPublic = {
 	// (not the owner). Drives the persistent "Acting as {store}" dashboard banner.
 	// Only ever set by the admin act-as read path. See docs/admin-console.md.
 	actingAsAdmin?: boolean;
+	// "This store has NO LIMITS of any kind" — `storeHasFullAccess`
+	// (convex/lib/plans.ts): an admin's own store, or a SPONSORED (comped) one.
+	// ONE boolean rather than letting each surface re-derive admin-ness and the
+	// comp flag, because surfaces that re-derived it is how a sponsored seller
+	// came to read "200 of 200" while their own caps said unlimited
+	// (z8r3fdrph7). Today it lifts the 200-product cap client-side
+	// (`productCapExemptFor`); `subscription.caps` is NOT a substitute —
+	// Enterprise is unlimited too and is very much on a plan.
+	// Only ever set when true, so ordinary payloads are byte-identical.
+	fullAccess?: boolean;
 	// True while this store has no owner yet — an admin pre-built it and the
 	// vendor hasn't claimed it (docs/prebuilt-stores.md). Set on every payload
 	// rather than only the admin read: the act-as banner has to say WHICH kind
@@ -1163,6 +1179,11 @@ async function buildRetailerPublic(
 		isFoundingMember: row.isFoundingMember,
 		foundingMemberRank: row.foundingMemberRank,
 		orderingPaused: row.orderingPausedAt !== undefined,
+		fullAccess:
+			storeHasFullAccess({
+				ownerIsAdmin: storeOwnerIsAdmin(row),
+				comped: sub?.comped === true,
+			}) || undefined,
 		sendingPaused: !!sendingLimits?.pausedAt,
 		sendingPauseReason: sendingLimits?.pauseReason,
 		role: opts?.role,

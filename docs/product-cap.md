@@ -68,14 +68,40 @@ imports, and seasonal SKUs that never sold.
 stamp only means the seller archives instead of deletes, while a wrongly-cleared one would let them
 erase a product that live order rows point at.
 
-### Admin override
+### Who the cap doesn't apply to
 
-A Kedaipal admin operating a store via act-as **bypasses the cap**, matching how act-as already
-bypasses the subscription soft-lock. This is how a white-glove Enterprise catalog gets stocked past
-the ceiling without shipping a self-serve tier we haven't designed.
+Two exemptions, and `ProductCapExemption` keeps them APART because they differ in what the seller
+should SEE:
 
-The exemption is the **admin's, not the store's**: a store sitting at 250 because an admin put it
-there still can't add a 251st product under its own login. Pinned by test.
+| | `admin_acting` | `full_access` |
+| --- | --- | --- |
+| Whose exemption | the **CALLER's** — an admin on someone else's store (act-as) | the **STORE's** — `storeHasFullAccess`: admin-owned or **comped** |
+| May exceed 200 | yes | yes |
+| Counter ("180 of 200 used") | **shown** — that is the seller's real ceiling, and the admin needs to see it | **hidden** — there is no ceiling to approach |
+| Holds on the seller's own login | no | **yes** |
+
+**`admin_acting`** matches how act-as already bypasses the subscription soft-lock: it is how a
+white-glove Enterprise catalog gets stocked past the ceiling without shipping a self-serve tier we
+haven't designed. The exemption is the admin's, not the store's — a store sitting at 250 because an
+admin put it there still can't add a 251st product under its own login. Pinned by test.
+
+**`full_access`** (z8r3fdrph7, Zaki 10 Oct 2026: a comp means "no restrictions in number of products
+and credit limit per month") is the store's, so a sponsored vendor adds their 201st product
+themselves with no admin present. It reads the ONE author of "no limits",
+`storeHasFullAccess` in `convex/lib/plans.ts`, which the credit gate (`storeIsMetered`) and the
+entitlement caps (`fullAccessCaps`) also read — the drift between two answers to that question is
+what made a sponsored seller read a "200 of 200" credit bar ([`credits.md`](./credits.md#unmetered-an-admins-own-store-and-a-sponsored-one-z8r3fdp4er--z8r3fdrph7)).
+
+This fixed an **admin's own store** too, which was capped at 200 all along: `actingAsAdmin` is
+`retailer.userId !== adminUserId`, so it is false on your own store and the one account with no
+limits was the one still hitting the ceiling.
+
+Note what this is NOT: a tier lever. `MAX_PRODUCTS_PER_RETAILER` stays a flat constant and never
+enters `PlanCaps` — Starter, Pro and Enterprise all hold 200. A comp is not a tier; it is the
+absence of a plan.
+
+**`full_access` wins over `admin_acting`** when both hold: an admin standing in an uncapped store is
+still in an uncapped store, so the counter stays hidden.
 
 ## How it's built
 
@@ -87,7 +113,15 @@ never disagree about what blocks a save (the `minOrderRules.ts` pattern).
 
 `ProductCapState` carries `exempt` explicitly, because "is there room for N more?" can't be answered
 from `remaining` alone — an exempt caller always has room, and a client reasoning from `remaining`
-would wrongly block a white-glove bulk import.
+would wrongly block a white-glove bulk import or a sponsored seller's own.
+
+`productCapExemption({ actingAsAdmin, fullAccess })` is the one author of WHICH exemption applies.
+The server resolves it in `productCapExempt` (`convex/products.ts`) — one helper for all four call
+sites (`create`, `bulkUpsert`, `capState`, `bulkUpsertPreview`), because a disagreement between
+them is a seller told "12 of these 60 fit" by a preview and then refused by the save. The dashboard
+calls the same pure function with the two booleans its retailer payload already holds
+(`actingAsAdmin`, and `fullAccess` — added by z8r3fdrph7 so no client has to re-derive admin-ness
+and the comp flag for itself).
 
 ### `products.orderedAt` — the O(1) "has it sold?" answer
 
@@ -185,7 +219,8 @@ the at-cap card, the import maths, and the whole test suite, so tests stay green
   variant's images is its own ticket if the numbers demand it.
 - **An actual Enterprise tier.** The admin override is the manual answer until one exists.
 - **A per-retailer cap override field.** Deliberately avoided — the admin act-as bypass achieves the
-  same outcome with no schema change.
+  same outcome with no schema change, and a full-access store is uncapped by `storeHasFullAccess`
+  rather than by a stored number.
 
 ## Tests
 
