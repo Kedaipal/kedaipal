@@ -548,7 +548,9 @@ describe("per-order cap on a live flash sale", () => {
 		// maxQty floors at 1 so a number always shows; without gating the
 		// action that floor would let one more through past the cap.
 		render(<Stepper product={flashProduct(2)} cartQuantity={2} />);
-		expect(screen.getByRole("button", { name: /sale limit reached/i })).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: /sale limit reached/i }),
+		).toBeTruthy();
 	});
 
 	it("says which state the buyer is in, so the stop is never silent", () => {
