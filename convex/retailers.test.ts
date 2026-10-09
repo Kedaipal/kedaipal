@@ -1374,6 +1374,45 @@ describe("retailers deleteUser (internal cascade)", () => {
 		// Well past DELETE_USER_BATCH (25) so the cascade must self-chain.
 		await t.run(async (ctx) => {
 			const now = Date.now();
+			// The NEW phases get their own over-batch piles. A bounded phase that
+			// never drains is invisible on a small tenant — every row this
+			// branch's phases delete fits in one batch in the test above — so
+			// prove both chain past the limit, not just `orders`.
+			const sessionId = await ctx.db.insert("counterCheckoutSessions", {
+				retailerId: ids.retailerId,
+				sellerUserId: USER_A,
+				token: "KPS-bulktoken0001",
+				status: "completed",
+				waPhone: "60123456789",
+				expiresAt: now + 60_000,
+				createdAt: now,
+				updatedAt: now,
+			});
+			for (let i = 0; i < 40; i++) {
+				await ctx.db.insert("orderClaims", {
+					retailerId: ids.retailerId,
+					sessionId,
+					sellerUserId: USER_A,
+					status: "completed",
+					waPhone: "60123456789",
+					buyerName: `Bulk ${i}`,
+					lines: [],
+					currency: "MYR",
+					token: `claim_bulk_${i}`,
+					expiresAt: now + 60_000,
+					windowMinutes: 15,
+					sentCount: 1,
+					lastSentAt: now,
+					createdAt: now,
+					updatedAt: now,
+				});
+				await ctx.db.insert("bookingBlocks", {
+					retailerId: ids.retailerId,
+					startDate: now + i * 86_400_000,
+					endDate: now + i * 86_400_000 + 86_400_000,
+					createdAt: now,
+				});
+			}
 			for (let i = 0; i < 60; i++) {
 				const orderId = await ctx.db.insert("orders", {
 					retailerId: ids.retailerId,
@@ -1412,6 +1451,10 @@ describe("retailers deleteUser (internal cascade)", () => {
 			expect(orders).toHaveLength(0);
 			const events = await ctx.db.query("orderEvents").collect();
 			expect(events).toHaveLength(0);
+			// Both new phases drained across continuations, not just their first
+			// batch of 25.
+			expect(await ctx.db.query("orderClaims").collect()).toHaveLength(0);
+			expect(await ctx.db.query("bookingBlocks").collect()).toHaveLength(0);
 		});
 		vi.useRealTimers();
 	});
