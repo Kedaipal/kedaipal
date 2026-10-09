@@ -446,6 +446,22 @@ outcome.
   60 s) so a 24h window never sits amber all afternoon. **Colour is urgency,
   geometry is progress** — the two answer different questions, so a long
   window can be nearly cut while the digits are still mint.
+  **The paper is a FIXED dark surface** (`--countdown-paper` / `-ink` /
+  `-ok` / `-low` / `-critical` in `styles.css`, the `bg-cta-mesh`
+  precedent) — it keeps the navy-and-mint language the bar shipped with,
+  but NOT by spelling it `bg-primary` + `text-accent`: both of those
+  resolve to mint in `.dark`, which would put the figures mint-on-mint. A
+  fixed surface means a fixed ramp, so the stage colours are the on-dark
+  variants, and a test fails if anyone simplifies it back. The wake's
+  ghosts sit at high opacity for the same reason: half-opacity was tuned
+  when the paper was white and the ink dark, where fading reads as a
+  smudge; on dark it reads as erased, and the final minute's red clock
+  vanished. Misregistering print doesn't thin ink — the dirt is offset,
+  shear and blur. **40px tall**, not 56: as a page-top band under a 65px
+  store header it has to read as a strip of tape across a header, not as a
+  second one. Figures use `formatTimeLeft`, which rolls to "10h 36m" above
+  the hour — a promotion can run for a day, and the raw `m:ss` primitive
+  printed that as "638:31".
   **A live countdown is ALWAYS the page's top band** (`CountdownBand`,
   full-bleed and sticky under the store header) — never an inline panel
   element, so the clock stays on screen through a long checkout and every

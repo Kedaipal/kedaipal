@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { countdownStage, formatClaimCountdown } from "./countdown";
+import { countdownStage, formatTimeLeft } from "./countdown";
 
 const MIN = 60_000;
 
@@ -50,9 +50,9 @@ describe("countdownStage", () => {
 	});
 });
 
-describe("formatClaimCountdown", () => {
+describe("formatTimeLeft", () => {
 	test("hours read as 23h 59m, the urgency zone keeps ticking seconds", () => {
-		expect(formatClaimCountdown(24 * 60 * MIN - MIN)).toBe("23h 59m");
-		expect(formatClaimCountdown(59 * MIN + 32_000)).toBe("59:32");
+		expect(formatTimeLeft(24 * 60 * MIN - MIN)).toBe("23h 59m");
+		expect(formatTimeLeft(59 * MIN + 32_000)).toBe("59:32");
 	});
 });
