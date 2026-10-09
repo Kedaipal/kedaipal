@@ -154,6 +154,8 @@ import type * as lib_trackingToken from "../lib/trackingToken.js";
 import type * as lib_unclaimedStore from "../lib/unclaimedStore.js";
 import type * as lib_usagePeriod from "../lib/usagePeriod.js";
 import type * as lib_variant from "../lib/variant.js";
+import type * as lib_voucherRedemption from "../lib/voucherRedemption.js";
+import type * as lib_vouchers from "../lib/vouchers.js";
 import type * as lib_wabaLimits from "../lib/wabaLimits.js";
 import type * as lib_wabaTemplateWebhook from "../lib/wabaTemplateWebhook.js";
 import type * as lib_wabaWebhook from "../lib/wabaWebhook.js";
@@ -177,6 +179,7 @@ import type * as subscriptionPayments from "../subscriptionPayments.js";
 import type * as subscriptionUsage from "../subscriptionUsage.js";
 import type * as subscriptions from "../subscriptions.js";
 import type * as team from "../team.js";
+import type * as vouchers from "../vouchers.js";
 import type * as wabaProtection from "../wabaProtection.js";
 import type * as whatsapp from "../whatsapp.js";
 
@@ -333,6 +336,8 @@ declare const fullApi: ApiFromModules<{
   "lib/unclaimedStore": typeof lib_unclaimedStore;
   "lib/usagePeriod": typeof lib_usagePeriod;
   "lib/variant": typeof lib_variant;
+  "lib/voucherRedemption": typeof lib_voucherRedemption;
+  "lib/vouchers": typeof lib_vouchers;
   "lib/wabaLimits": typeof lib_wabaLimits;
   "lib/wabaTemplateWebhook": typeof lib_wabaTemplateWebhook;
   "lib/wabaWebhook": typeof lib_wabaWebhook;
@@ -356,6 +361,7 @@ declare const fullApi: ApiFromModules<{
   subscriptionUsage: typeof subscriptionUsage;
   subscriptions: typeof subscriptions;
   team: typeof team;
+  vouchers: typeof vouchers;
   wabaProtection: typeof wabaProtection;
   whatsapp: typeof whatsapp;
 }>;

@@ -57,6 +57,7 @@ export const DELETION_PHASES = [
 	"customers",
 	"pickupLocations",
 	"counterCheckoutSessions",
+	"vouchers",
 	"subscriptions",
 	"subscriptionUsage",
 	"creditPurchases",
@@ -236,6 +237,21 @@ export async function runDeletionPhase(
 				.withIndex("by_retailer_status", (q) => q.eq("retailerId", retailerId))
 				.take(limit);
 			for (const session of rows) await ctx.db.delete(session._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "vouchers": {
+			// Seller-issued discount codes (`z8r3fdr617`). Deleted outright, not
+			// retained: unlike an invoice or a credit-ledger row, a voucher is
+			// not a record of money that changed hands — what the seller actually
+			// gave away is already in the ORDER's `voucherSnapshot` and
+			// `voucherDiscount`, and those orders go with the tenant. The
+			// `redeemedOrderId` refs dangle the moment the `orders` phase above
+			// has run, which is exactly why this phase follows it.
+			const rows = await ctx.db
+				.query("vouchers")
+				.withIndex("by_retailer_created", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const voucher of rows) await ctx.db.delete(voucher._id);
 			return { processed: rows.length, done: rows.length < limit };
 		}
 		case "subscriptions": {

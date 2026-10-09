@@ -1552,8 +1552,43 @@ export default defineSchema({
 				answers: v.optional(v.array(frozenAnswerValidator)),
 			}),
 		),
+		// Σ lines, ALWAYS GROSS of the voucher discount. Load-bearing: the
+		// min-order rules and the free-delivery thresholds judge the
+		// PRE-discount subtotal (docs/vouchers.md), and both read this field —
+		// netting the discount in here would silently move every threshold in
+		// the app. `total` is the net figure.
 		subtotal: v.number(),
 		total: v.number(),
+		// The voucher spent on this order (`z8r3fdr617`) — at most one, ever.
+		// Three fields rather than one, each with a different job:
+		//
+		//   voucherId       the row, so the seller's list can link a redeemed
+		//                   voucher to its order and `reverseCancellationEffects`
+		//                   can hand it back on cancel.
+		//   voucherSnapshot the frozen TERMS + code. The terms are what
+		//                   `computeOrderTotals` re-reads on every recompute (a
+		//                   percentage has to follow the live subtotal when the
+		//                   custom-decline drops a line), and freezing them means
+		//                   a later void can never restate a placed order's
+		//                   discount. The code is frozen for the same reason the
+		//                   pickup note is: it is what the buyer was told.
+		//   voucherDiscount the computed sen, mirrored for cheap reads (receipt,
+		//                   CSV, tracking page, inbox) — always equal to
+		//                   `computeOrderTotals(...).discount`, which is why
+		//                   every site that patches `total` patches this too.
+		//
+		// Unset on every order that carries no voucher, which is every order
+		// predating the feature — deliberately not backfilled (there is nothing
+		// to backfill: no voucher was spent).
+		voucherId: v.optional(v.id("vouchers")),
+		voucherSnapshot: v.optional(
+			v.object({
+				code: v.string(),
+				kind: v.union(v.literal("fixed"), v.literal("percent")),
+				value: v.number(),
+			}),
+		),
+		voucherDiscount: v.optional(v.number()),
 		currency: v.string(),
 		status: v.union(
 			v.literal("pending"),
@@ -2626,6 +2661,15 @@ export default defineSchema({
 				fulfilmentDate: v.optional(v.number()),
 				paidInPerson: v.optional(v.boolean()),
 				paymentMethod: v.optional(orderPaymentMethodValidator),
+				// Voucher code the seller keyed off the buyer's QR or read out
+				// (`z8r3fdr617`). The CODE only — non-authoritative, exactly like
+				// the draft prices above it, and re-resolved at whichever door the
+				// session finally goes through: `createOrderFromSession` spends it,
+				// `sendClaim` freezes it onto the claim. Storing the code rather
+				// than the row id is what lets the one field serve both, and means
+				// a voucher that lapses while a cart sits open is caught at the
+				// door rather than quietly honoured.
+				voucherCode: v.optional(v.string()),
 			}),
 		),
 		boundAt: v.optional(v.number()),
@@ -2682,6 +2726,25 @@ export default defineSchema({
 			}),
 		),
 		currency: v.string(),
+		// A voucher the seller applied AT SEND (`z8r3fdr617`), frozen like the
+		// line prices above it so the buyer's claim ticket shows the price they
+		// were promised. NOT redeemed yet — the flip happens in the commit, with
+		// the order insert, like every other door.
+		//
+		// Which means the row can stop being redeemable between send and commit
+		// (the seller keys the same code at the counter, or voids it). The claim
+		// page RE-VALIDATES on every read and says so above the ticket rather
+		// than letting the commit dead-end: a buyer who followed a link must
+		// always be able to finish, and the total they confirm is the total they
+		// are charged. See docs/vouchers.md.
+		voucherId: v.optional(v.id("vouchers")),
+		voucherSnapshot: v.optional(
+			v.object({
+				code: v.string(),
+				kind: v.union(v.literal("fixed"), v.literal("percent")),
+				value: v.number(),
+			}),
+		),
 		// Buyer capability for /claim/<token> — same generator + posture as
 		// orders.trackingToken (unguessable, never the shortId).
 		token: v.string(),
@@ -2744,6 +2807,90 @@ export default defineSchema({
 		.index("by_status_expiry", ["status", "expiresAt"])
 		// One-live-claim-per-session lookup at send + counter build-screen state.
 		.index("by_session", ["sessionId"]),
+
+	// --- Vouchers (docs/vouchers.md, z8r3fdr617) -----------------------------
+	// A seller-issued, single-use discount: one row = one unique code = one
+	// redemption, deducted from ONE order. The buyer-specific discount lever;
+	// the product-level one (promo price / flash sale) changes the LINE PRICE
+	// and is a separate mechanism that stacks with this.
+	//
+	// Redemption is ATOMIC with order create — the row flips to `redeemed` in
+	// the same mutation that inserts the order, so two checkouts racing one
+	// code serialise on Convex's OCC and exactly one wins. That is the whole
+	// concurrency story; there is no reservation state to leak.
+	vouchers: defineTable({
+		retailerId: v.id("retailers"),
+		// Canonical `KP-XXXX-XXXX` (convex/lib/vouchers.ts). Crypto-random over
+		// an alphabet with no O/0/I/1, because this code gets read down a phone
+		// line and keyed off a buyer's screenshot at a stall.
+		//
+		// Unique GLOBALLY, not per store, and the `by_code` index is what keeps
+		// it so (create retries on collision). Global uniqueness buys a real
+		// property: a code typed at the wrong store resolves to a row whose
+		// `retailerId` does not match and is refused as "not valid for this
+		// store" — it can never silently match a DIFFERENT store's voucher,
+		// which a per-store index would have made possible the moment two
+		// stores minted the same 8 symbols.
+		code: v.string(),
+		// What it is worth. `fixed` → minor units of `currency`; `percent` →
+		// whole percent of the ITEM SUBTOTAL (1–100). The discount itself is
+		// computed by `voucherDiscountFor`, never stored here — a percentage has
+		// no sen value until it meets a basket.
+		kind: v.union(v.literal("fixed"), v.literal("percent")),
+		value: v.number(),
+		// The store's currency at issue — frozen so a store that later switches
+		// country can't restate what an outstanding fixed voucher is worth.
+		// Carried on percentage rows too (they display in it) but unused by the
+		// maths.
+		currency: v.string(),
+		// MYT midnight of the LAST day the code works — the `fulfilmentDate`
+		// convention, so the whole date vocabulary (picker, formatter, ymd
+		// round-trip) is reused. The voucher dies when that day ENDS; see
+		// `isVoucherExpired`. Unset = no expiry, which is a real answer and the
+		// default.
+		expiresAt: v.optional(v.number()),
+		// The three states a row can be IN. `expired` is deliberately NOT one
+		// of them: it is judged at read time against the clock
+		// (`resolveVoucherStatus`), so no cron flips vouchers and there is no
+		// window where the database and the truth disagree.
+		status: v.union(
+			v.literal("active"),
+			v.literal("redeemed"),
+			v.literal("voided"),
+		),
+		// Set together at redemption. `redeemedOrderId` is what lets the list
+		// link a spent voucher to its order — and what a cancel clears when the
+		// voucher goes back to `active`.
+		redeemedOrderId: v.optional(v.id("orders")),
+		redeemedAt: v.optional(v.number()),
+		// Set together on void. Soft by design: the row and its history stay,
+		// the code simply stops redeeming. There is no hard delete in v1.
+		voidedAt: v.optional(v.number()),
+		// The seller's private note on WHY — never shown to a buyer.
+		voidReason: v.optional(v.string()),
+		// The seller's private label ("Raya giveaway", "Apology — late order").
+		// Never shown to a buyer; it exists so a list of 20 identical-looking
+		// codes is still readable in three months.
+		note: v.optional(v.string()),
+		// Groups one "create 20" run so the list can show, share and void a
+		// batch as a unit. Unset on a singly-issued voucher.
+		batchId: v.optional(v.string()),
+		// Clerk subject of whoever issued it (owner or a team member holding
+		// `vouchers: write`) — issuing a voucher gives away money, so "who
+		// minted this" is real information. Unset for admin act-as, which
+		// adminAuditLog traces instead.
+		createdByUserId: v.optional(v.string()),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		// Redemption lookup AND the global-uniqueness check at create.
+		.index("by_code", ["code"])
+		// The seller's list, filtered by status. `expired` is not a stored
+		// status, so the expired filter reads the `active` range and judges the
+		// clock — see `vouchers.list`.
+		.index("by_retailer_status", ["retailerId", "status"])
+		// The list's default order (newest first) and the batch grouping.
+		.index("by_retailer_created", ["retailerId", "createdAt"]),
 
 	// --- Manual subscription billing (docs/manual-subscription.md) -----------
 	// Per-retailer subscription. One row per retailer (created in-transaction by

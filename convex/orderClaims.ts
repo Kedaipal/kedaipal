@@ -75,9 +75,17 @@ import {
 } from "./lib/orderClaims";
 import {
 	computeOrderTotals,
+	storedDiscount,
 	generateShortId,
 	generateTrackingToken,
 } from "./lib/order";
+import {
+	type ClaimVoucherState,
+	claimVoucherState,
+	redeemVoucher,
+	resolveVoucherOrThrow,
+} from "./lib/voucherRedemption";
+import type { VoucherSnapshot } from "./lib/vouchers";
 import { asksForTime, fulfilmentKind } from "./lib/fulfilmentShape";
 import type { OpeningHours } from "./lib/openingHours";
 import { type ClosedDateRange, closedDateIssue } from "./lib/closedDates";
@@ -267,6 +275,25 @@ export const sendClaim = mutation({
 		const sanitizedSource = sanitizeAttributionSource(args.attributionSource);
 		const now = Date.now();
 
+		// The voucher (`z8r3fdr617`), taken off the session draft and FROZEN onto
+		// the claim beside the line prices — the buyer's ticket has to show the
+		// price they were promised. Deliberately NOT redeemed here: a claim is an
+		// offer, not an order, so the code stays spendable until the buyer
+		// commits (which is also what stops an abandoned link burning a voucher).
+		// Refuses the SEND on a bad code — the seller is at the counter and can
+		// fix it before the buyer ever sees a price.
+		let voucherId: Id<"vouchers"> | undefined;
+		let voucherSnapshot: VoucherSnapshot | undefined;
+		if (session.draft?.voucherCode) {
+			const resolved = await resolveVoucherOrThrow(ctx, {
+				retailerId: retailer._id,
+				code: session.draft.voucherCode,
+				now,
+			});
+			voucherId = resolved.voucher._id;
+			voucherSnapshot = { code: resolved.voucher.code, ...resolved.terms };
+		}
+
 		// Supersede: the previous open claim for this session dies with this send
 		// (its link renders "cancelled" from the next read).
 		const priorClaims = await ctx.db
@@ -290,6 +317,8 @@ export const sendClaim = mutation({
 			buyerName: session.waProfileName,
 			lines,
 			currency: retailer.currency ?? "MYR",
+			voucherId,
+			voucherSnapshot,
 			token,
 			status: "open",
 			expiresAt,
@@ -551,6 +580,14 @@ export interface ClaimPagePayload {
 		waPhone: string;
 		expiresAt: number;
 		windowMinutes: number;
+		/**
+		 * The seller's voucher, as it stands RIGHT NOW (`z8r3fdr617`) — not as
+		 * it was at send. `applied` prices the ticket; `dropped` tells the buyer
+		 * why the discount they may have been promised isn't there, BEFORE they
+		 * fill the form, and the commit then charges exactly what the page
+		 * showed. Absent = no voucher on this claim.
+		 */
+		voucher?: ClaimVoucherState;
 	};
 	/** Present once COMPLETED — the idempotent re-open shows the order. */
 	completed?: { trackingToken?: string; shortId: string };
@@ -639,6 +676,7 @@ export const getByToken = query({
 				waPhone: claim.waPhone,
 				expiresAt: claim.expiresAt,
 				windowMinutes: claim.windowMinutes,
+				voucher: await claimVoucherState(ctx, claim, now),
 			};
 		}
 		if (status === "completed" && claim.orderId) {
@@ -995,9 +1033,23 @@ export const commit = mutation({
 			? ("collection" as const)
 			: undefined;
 
-		const { subtotal, total } = computeOrderTotals(claim.lines, {
+		// The claim's frozen voucher (`z8r3fdr617`), re-validated at the door like
+		// everything else — it was checked at SEND and may have been spent at the
+		// counter or voided since.
+		//
+		// This is the ONE door that does not refuse a bad code, and the reason is
+		// the buyer: they followed a link, filled in an address and a date, and
+		// refusing here would dead-end them with no way through (only the seller
+		// can resend). So an unspendable voucher DROPS, and the claim page — which
+		// asks `claimVoucherState` on every read — has already said so above the
+		// ticket, so the total the buyer confirms is the total they are charged.
+		// Silently honouring it, or silently charging full price, are the two
+		// things this must never do. See docs/vouchers.md.
+		const voucherState = await claimVoucherState(ctx, claim, now);
+		const { subtotal, discount, total } = computeOrderTotals(claim.lines, {
 			pickupFee: sanitizedPickupSnapshot?.fee,
 			deliveryFee: deliverySnapshot?.fee,
+			voucher: voucherState.kind === "applied" ? voucherState.terms : undefined,
 		});
 
 		// Decrement hard-block stock — the commit IS the sale (OCC transaction,
@@ -1056,6 +1108,14 @@ export const commit = mutation({
 			}),
 			subtotal,
 			total,
+			// Only recorded when the voucher actually applied — an order that
+			// dropped a lapsed code carries no voucher at all, which is the
+			// honest record of what was charged.
+			voucherId:
+				voucherState.kind === "applied" ? voucherState.voucherId : undefined,
+			voucherSnapshot:
+				voucherState.kind === "applied" ? voucherState.snapshot : undefined,
+			voucherDiscount: storedDiscount(discount),
 			currency: claim.currency,
 			status: confirmedAtCreate ? "confirmed" : "pending",
 			channel: "whatsapp",
@@ -1089,6 +1149,15 @@ export const commit = mutation({
 			createdAt: now,
 			updatedAt: now,
 		});
+
+		// Spend the voucher in the transaction that created the order — the claim
+		// held it only as an offer until now (lib/voucherRedemption.ts).
+		if (voucherState.kind === "applied")
+			await redeemVoucher(ctx, {
+				voucherId: voucherState.voucherId,
+				orderId,
+				now,
+			});
 
 		await ctx.db.insert("orderEvents", {
 			orderId,

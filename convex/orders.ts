@@ -136,9 +136,17 @@ import {
 	generateTrackingToken,
 	isCollectionGateClosed,
 	isMockupGateClosed,
+	orderExtras,
 	revenueExcludingDeposit,
+	storedDiscount,
 } from "./lib/order";
 import { deleteOrderOwnedBlobs } from "./lib/orderBlobs";
+import {
+	redeemVoucher,
+	releaseOrderVoucher,
+	resolveVoucherOrThrow,
+} from "./lib/voucherRedemption";
+import type { VoucherSnapshot, VoucherTerms } from "./lib/vouchers";
 import {
 	borrowedLeadReference,
 	currentClaimIndex,
@@ -913,6 +921,14 @@ export const create = mutation({
 		// the server re-sanitizes (authoritative); a bad value can never block
 		// the order — it buckets to "other". See convex/lib/attribution.ts.
 		attributionSource: v.optional(v.string()),
+		// Voucher code the buyer typed (or arrived with via `?voucher=`), in
+		// whatever shape they typed it — normalized server-side (`z8r3fdr617`).
+		// RE-VALIDATED here however many times the client checked it: the
+		// client's check is for the field's tick, this is the one that decides.
+		// A bad code REFUSES the order rather than silently dropping the
+		// discount — the buyer is on the page and can fix or remove it, and
+		// quietly charging full price is the one outcome we never ship.
+		voucherCode: v.optional(v.string()),
 	},
 	handler: async (
 		ctx,
@@ -1572,14 +1588,41 @@ export const create = mutation({
 			? ("collection" as const)
 			: undefined;
 
+		const now = Date.now();
+
+		// The voucher (`z8r3fdr617`). Resolved AFTER the min-order rules and the
+		// delivery resolution above, which is the whole guard rail: both judge
+		// the PRE-discount subtotal, so a code can never unlock free delivery or
+		// talk its way past a minimum. Its own limiter bucket, keyed per store,
+		// so hammering codes at one storefront can't be used to find a live one
+		// (and can't spend the order limiter's budget either).
+		let voucherTerms: VoucherTerms | undefined;
+		let redeemedVoucherId: Id<"vouchers"> | undefined;
+		let voucherSnapshot: VoucherSnapshot | undefined;
+		if (args.voucherCode !== undefined && args.voucherCode.trim() !== "") {
+			await rateLimiter.limit(ctx, "voucherRedeem", {
+				key: args.retailerId,
+				throws: true,
+			});
+			const { voucher, terms } = await resolveVoucherOrThrow(ctx, {
+				retailerId: args.retailerId,
+				code: args.voucherCode,
+				now,
+			});
+			voucherTerms = terms;
+			redeemedVoucherId = voucher._id;
+			voucherSnapshot = { code: voucher.code, ...terms };
+		}
+
 		// The chosen pickup point's frozen fee and the delivery charge ride the
 		// same extras seam as the mockup quote — total = subtotal + fees from the
-		// very first insert.
-		const { subtotal, total } = computeOrderTotals(snapshotItems, {
+		// very first insert — and the voucher comes off the item subtotal, the
+		// one subtractive term the total carries (see computeOrderTotals).
+		const { subtotal, discount, total } = computeOrderTotals(snapshotItems, {
 			pickupFee: sanitizedPickupSnapshot?.fee,
 			deliveryFee: deliverySnapshot?.fee,
+			voucher: voucherTerms,
 		});
-		const now = Date.now();
 
 		// Reserve stock for hard-block variants, in the same transaction (atomic;
 		// rolls back on any failure). Convex mutations are OCC transactions — both
@@ -1687,10 +1730,21 @@ export const create = mutation({
 			// indistinguishable from one whose send is still in flight, and the
 			// tracking page needs to tell the buyer which it is.
 			confirmationPushStatus: confirmedAtCreate ? "sending" : undefined,
+			// The voucher, frozen onto the order (see schema). The row itself is
+			// flipped to `redeemed` just below — same mutation, same transaction.
+			voucherId: redeemedVoucherId,
+			voucherSnapshot,
+			voucherDiscount: storedDiscount(discount),
 			statusChangedAt: now,
 			createdAt: now,
 			updatedAt: now,
 		});
+
+		// Spend the code, in the transaction that created the order it paid for.
+		// Two checkouts racing one voucher conflict on OCC here and exactly one
+		// wins; the loser retries, re-reads a `redeemed` row and is refused.
+		if (redeemedVoucherId)
+			await redeemVoucher(ctx, { voucherId: redeemedVoucherId, orderId, now });
 
 		await ctx.db.insert("orderEvents", {
 			orderId,
@@ -3664,6 +3718,12 @@ async function reverseCancellationEffects(
 	// linkage — every created order was counted) and give its credit back if it
 	// never got going. See convex/subscriptionUsage.ts.
 	await recordOrderCancelled(ctx, { order, cause, now });
+
+	// Hand the voucher back (`z8r3fdr617`). Unlike the CREDIT, this does not
+	// depend on `cause`: the seller issued the code to that buyer, so a
+	// cancellation the buyer never asked for must not also cost them their
+	// discount. No-op for the orders — nearly all of them — carrying none.
+	await releaseOrderVoucher(ctx, order, now);
 }
 
 /**
@@ -4876,9 +4936,8 @@ export const updateDeliveryAddress = mutation({
 			cartWeight,
 			liveQuote,
 		);
-		const { subtotal, total } = computeOrderTotals(order.items, {
-			quotedAmount: order.mockupQuotedAmount,
-			pickupFee: order.pickupFee,
+		const { subtotal, discount, total } = computeOrderTotals(order.items, {
+			...orderExtras(order),
 			deliveryFee: resolved.snapshot?.fee,
 		});
 		// Keep the customer's denormalized totalSpent in step with the new total.
@@ -4901,6 +4960,7 @@ export const updateDeliveryAddress = mutation({
 			deliveryFeePendingReason: storablePendingReason(resolved.pendingReason),
 			subtotal,
 			total,
+			voucherDiscount: storedDiscount(discount),
 			updatedAt: now,
 		});
 		await ctx.db.insert("orderEvents", {
@@ -4955,9 +5015,8 @@ export const setDeliveryFee = mutation({
 		const snapshot: DeliverySnapshot | undefined =
 			fee > 0 ? { fee, mode: "manual" } : undefined;
 		const now = Date.now();
-		const { subtotal, total } = computeOrderTotals(order.items, {
-			quotedAmount: order.mockupQuotedAmount,
-			pickupFee: order.pickupFee,
+		const { subtotal, discount, total } = computeOrderTotals(order.items, {
+			...orderExtras(order),
 			deliveryFee: snapshot?.fee,
 		});
 		// Keep the customer's denormalized totalSpent in step with the new total.
@@ -4977,6 +5036,7 @@ export const setDeliveryFee = mutation({
 			deliveryFeePendingReason: undefined,
 			subtotal,
 			total,
+			voucherDiscount: storedDiscount(discount),
 			// A fee-pending order was UNPAYABLE, so its payment deadline was
 			// suspended (the auto-cancel sweep skips fee-pending rows). The fee
 			// landing is the moment it becomes payable — guarantee the runway,
@@ -5226,10 +5286,9 @@ export const updatePickupLocation = mutation({
 		// gate above means no payment has been taken yet). The mockup quote, an
 		// independent extra, is preserved.
 		const snapshot = buildPickupSnapshot(location);
-		const { subtotal, total } = computeOrderTotals(order.items, {
-			quotedAmount: order.mockupQuotedAmount,
+		const { subtotal, discount, total } = computeOrderTotals(order.items, {
+			...orderExtras(order),
 			pickupFee: snapshot.fee,
-			deliveryFee: order.deliveryFee,
 		});
 		// Keep the customer's denormalized totalSpent in step with the new total.
 		if (order.customerId && total !== order.total)
@@ -5246,6 +5305,7 @@ export const updatePickupLocation = mutation({
 			pickupFee: snapshot.fee,
 			subtotal,
 			total,
+			voucherDiscount: storedDiscount(discount),
 			updatedAt: now,
 		});
 		await ctx.db.insert("orderEvents", {
@@ -5975,12 +6035,12 @@ export const submitMockup = mutation({
 		);
 
 		const now = Date.now();
-		// Quote, pickup fee and delivery fee are independent extras — carry the
-		// frozen fees so re-pricing the custom work never drops a charge.
-		const { subtotal, total } = computeOrderTotals(order.items, {
+		// Quote, fees, deposit and voucher are independent terms — spread the
+		// order's own so re-pricing the custom work never drops a charge or a
+		// discount (see `orderExtras`).
+		const { subtotal, discount, total } = computeOrderTotals(order.items, {
+			...orderExtras(order),
 			quotedAmount: effectiveQuote,
-			pickupFee: order.pickupFee,
-			deliveryFee: order.deliveryFee,
 		});
 		// Keep the customer's denormalized totalSpent in step with the new total.
 		if (order.customerId)
@@ -6003,6 +6063,7 @@ export const submitMockup = mutation({
 			mockupQuotedAmount: effectiveQuote,
 			subtotal,
 			total,
+			voucherDiscount: storedDiscount(discount),
 			updatedAt: now,
 		});
 		await ctx.db.insert("orderEvents", {
@@ -6060,11 +6121,10 @@ export const updateMockupQuote = mutation({
 			order.mockupQuotedAmount,
 		);
 		const now = Date.now();
-		// Same extras rule as submitMockup — keep the frozen fees.
-		const { subtotal, total } = computeOrderTotals(order.items, {
+		// Same extras rule as submitMockup — keep everything the order carries.
+		const { subtotal, discount, total } = computeOrderTotals(order.items, {
+			...orderExtras(order),
 			quotedAmount: effectiveQuote,
-			pickupFee: order.pickupFee,
-			deliveryFee: order.deliveryFee,
 		});
 		// Keep the customer's denormalized totalSpent in step with the new total.
 		if (order.customerId)
@@ -6077,6 +6137,7 @@ export const updateMockupQuote = mutation({
 			mockupQuotedAmount: effectiveQuote,
 			subtotal,
 			total,
+			voucherDiscount: storedDiscount(discount),
 			updatedAt: now,
 		});
 		await ctx.db.insert("orderEvents", {
@@ -6295,6 +6356,10 @@ export const declineMockupItem = mutation({
 			// (mirrors applyStatusTransition — this cancel path bypasses that
 			// helper). The BUYER backed out, so the credit always returns.
 			await recordOrderCancelled(ctx, { order, cause: "buyer", now });
+			// …and so does the voucher, for the same reason the other cancel seam
+			// hands it back. This path open-codes its reversal, so it has to ask
+			// explicitly — `voucher-release.test.ts` pins all three seams.
+			await releaseOrderVoucher(ctx, order, now);
 			await ctx.db.patch(order._id, {
 				status: "cancelled",
 				mockupStatus: undefined,
@@ -6324,10 +6389,15 @@ export const declineMockupItem = mutation({
 
 		// Mixed order → keep the ready-made items, drop the custom one, clear the
 		// quote + gate, recompute the total. The pickup fee survives — the buyer
-		// still collects the remaining items at the same paid point.
-		const { subtotal, total } = computeOrderTotals(kept, {
-			pickupFee: order.pickupFee,
-			deliveryFee: order.deliveryFee,
+		// still collects the remaining items at the same paid point — and so
+		// does the voucher: the buyer backed out of ONE line, not out of the
+		// discount they were given. This is the site where carrying the TERMS
+		// rather than a frozen sen figure earns its keep — a percentage now
+		// re-reads the smaller subtotal, and a fixed voucher re-clamps to it,
+		// so neither can end up discounting more than the remaining goods.
+		const { subtotal, discount, total } = computeOrderTotals(kept, {
+			...orderExtras(order),
+			quotedAmount: undefined,
 		});
 		if (order.customerId)
 			await adjustAggregatesForTotalChange(ctx, {
@@ -6339,6 +6409,7 @@ export const declineMockupItem = mutation({
 			items: kept,
 			subtotal,
 			total,
+			voucherDiscount: storedDiscount(discount),
 			mockupStatus: undefined,
 			mockupQuotedAmount: undefined,
 			updatedAt: now,
