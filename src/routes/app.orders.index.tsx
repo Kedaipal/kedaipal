@@ -114,7 +114,11 @@ import { canHardDeleteOrders } from "../lib/admin-actions";
 import { MASK_PII } from "../lib/analytics-privacy";
 import { describeAwbPaper } from "../lib/awb-labels";
 import { bulkStatusToast } from "../lib/bulk-skip-reasons";
-import { bulkCreditSkipNote, gatedRowLine } from "../lib/credits-ui";
+import {
+	bulkCreditSkipNote,
+	gatedNameCell,
+	gatedRowLine,
+} from "../lib/credits-ui";
 import { orderCustomerLabel } from "../lib/customer";
 import { downloadCsv } from "../lib/download";
 import {
@@ -1976,7 +1980,9 @@ function OrdersRoute() {
 														className="size-3.5 shrink-0"
 														aria-hidden="true"
 													/>
-													<span className="truncate">Waiting on credits</span>
+													<span className="truncate">
+														{gatedNameCell(o.status)}
+													</span>
 												</span>
 											) : (
 												<span
@@ -2072,7 +2078,17 @@ function OrdersRoute() {
 									    chevron align across a desktop grid row even when the
 									    neighbour card has more item lines (grid stretches all
 									    cells in a row to the tallest; see cardClass h-full). */}
-										<div className="mt-auto flex items-center gap-1.5 pt-2.5">
+										{/* WRAPS. `StatusBadge` ellipsises as a last resort —
+									    deliberately, so a long custom stage name can't break
+									    the pill into two ragged fragments — but on a 393px
+									    card beside a long due-date chip ("Overdue · 8 Oct
+									    2026") that last resort fired on the ordinary case
+									    and "Confirmed" rendered as "Confirm…". The status
+									    word and the due date are both things the seller
+									    came here to read, so neither is the one that gives
+									    way: the row takes a second line instead. Desktop
+									    has the width and is unchanged. */}
+										<div className="mt-auto flex flex-wrap items-center gap-x-1.5 gap-y-1.5 pt-2.5">
 											<StatusBadge
 												status={o.status as OrderStatus}
 												label={statusLabel}

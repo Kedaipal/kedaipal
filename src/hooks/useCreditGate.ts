@@ -9,6 +9,13 @@ import {
 import { useDashboardRetailer } from "./useDashboardRetailer";
 import { usePermission, useStoreRole } from "./usePermission";
 
+/**
+ * What these predicates need off an order row. `creditGated` is the server's
+ * own verdict and outranks the comparison — since `orders.neverFunded` a row
+ * can be gated with its position at or below the watermark.
+ */
+type GatedOrderRow = { creditSeq?: number; creditGated?: boolean };
+
 export type CreditGateView = {
 	/** Any order in this store is waiting on credits — what the banner, the
 	 * meter's badge and the inbox chip read. NOT a store-wide lock: an
@@ -32,10 +39,10 @@ export type CreditGateView = {
 	 * and every row asks — one comparison, no read. An order with no
 	 * `creditSeq` never spent a credit through the gate and is always
 	 * workable (the gate fails open, mirroring the server). */
-	gatesOrder: (order: { creditSeq?: number } | null | undefined) => boolean;
+	gatesOrder: (order: GatedOrderRow | null | undefined) => boolean;
 	/** How many credits open THIS order — "waiting on 3 credits". 0 when it is
 	 * already workable. */
-	creditsToUnlock: (order: { creditSeq?: number } | null | undefined) => number;
+	creditsToUnlock: (order: GatedOrderRow | null | undefined) => number;
 };
 
 type GateSource =
@@ -83,8 +90,23 @@ export function creditGateView(
 			? Number.POSITIVE_INFINITY
 			: gate.fundedThrough;
 	const ordersWaiting = bypass ? 0 : (gate?.ordersWaiting ?? 0);
-	const gatesOrder = (order: { creditSeq?: number } | null | undefined) =>
-		order?.creditSeq !== undefined && order.creditSeq > fundedThrough;
+	// `creditGated` FIRST, then the comparison. The server stamps that flag
+	// whenever it redacted the row, and since T3.1's `orders.neverFunded` a
+	// row can be gated with its `creditSeq` at or below the watermark — a
+	// cancelled gated order, whose credit was refunded and whose position the
+	// watermark then walked past. Comparing alone would have this client
+	// disagree with the server about exactly those rows. Unreachable today
+	// (the route hands a redacted row to `GatedOrderPage` before any control
+	// asks), but "unreachable today" is the reasoning that left the booking
+	// calendar leaking for a whole release.
+	const gatesOrder = (order: GatedOrderRow | null | undefined) =>
+		// `bypass` first. The flag arm below is NOT a comparison, so the
+		// Infinity watermark an exempt store carries cannot out-rank it — the
+		// same trap `isOrderGated` has on the server, and an admin acting as a
+		// store must be able to work the order they were asked about.
+		!bypass &&
+		(order?.creditGated === true ||
+			(order?.creditSeq !== undefined && order.creditSeq > fundedThrough));
 	return {
 		anyWaiting: ordersWaiting > 0,
 		fundedThrough,
@@ -95,7 +117,12 @@ export function creditGateView(
 		canAct: audience !== "member",
 		gatesOrder,
 		creditsToUnlock: (order) =>
-			gatesOrder(order) ? (order?.creditSeq as number) - fundedThrough : 0,
+			gatesOrder(order)
+				? // A flag-gated row can sit at or below the watermark, which
+					// would make the subtraction zero or negative; no number of
+					// credits opens it, so the floor of 1 is what the copy wants.
+					Math.max(1, (order?.creditSeq ?? 0) - fundedThrough)
+				: 0,
 	};
 }
 
