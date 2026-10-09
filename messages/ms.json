@@ -382,7 +382,7 @@
 	"pricingpage_faq_q8": "Adakah harga saya berubah?",
 	"pricingpage_faq_a8": "Tidak. Starter dan Pro kekal pada harga bulanan yang sama, dan kredit sudah termasuk di dalamnya — ia bukan caj baharu. Anda hanya bayar lebih jika anda memilih untuk tambah kredit atau naik pelan.",
 	"pricingpage_faq_q9": "Apa yang berlaku jika kredit saya habis?",
-	"pricingpage_faq_a9": "Kedai anda terus menerima setiap pesanan — etalase tidak pernah berhenti, dan pembeli anda tidak perasan apa-apa. Pesanan yang masuk semasa kredit anda sifar akan ditolak daripada kredit anda yang seterusnya, jadi menambah kredit, naik pelan atau menunggu kredit bulanan akan melangsaikan baki itu. Anda sentiasa boleh melihat, membatalkan dan memulangkan wang pesanan.",
+	"pricingpage_faq_a9": "Kedai anda terus menerima setiap pesanan — etalase tidak pernah berhenti, dan pembeli anda tidak perasan apa-apa. Pesanan yang masuk semasa kredit anda sifar akan menunggu kredit: anda boleh lihat ia masuk dan jumlahnya, tetapi tidak boleh membukanya sehingga kredit masuk, dan ia dibuka yang paling lama dahulu. Semua pesanan yang sudah berkredit tidak terjejas, begitu juga produk dan tetapan anda — dan anda sentiasa boleh membatalkan pesanan untuk melepaskan pembeli.",
 	"pricingpage_faq_q10": "Adakah kredit yang tidak digunakan dibawa ke bulan depan?",
 	"pricingpage_faq_a10": "Kredit bulanan pelan anda tidak — ia ditetapkan semula pada awal setiap bulan. Kredit yang anda beli melalui tambah kredit kekal {months} bulan dari hari anda membelinya, dan hanya digunakan selepas kredit bulanan anda habis.",
 	"pricingpage_faq_q11": "Adakah saya dapat kredit yang sama dengan pelan tahunan?",

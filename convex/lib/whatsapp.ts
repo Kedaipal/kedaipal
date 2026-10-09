@@ -162,6 +162,35 @@ export function billingPastDueTemplateName(): string | undefined {
  * Button (all three): URL `https://kedaipal.com/app/settings?tab={{1}}` ← the
  * value `billing` — the shape `billing_past_due_utility` already uses. Added
  * via Meta's **Add variable** control, never hand-typed braces.
+ *
+ * ## NOT YET SUBMITTED TO META — and the body text to submit (Credits T3.1)
+ *
+ * They were deliberately held back from review while the gate was store-wide,
+ * because T3.1 changed what they say: there is no store-wide pause any more,
+ * so a body claiming "editing products is paused" would be approved and then
+ * wrong. Re-editing an APPROVED template re-triggers review, so submit once,
+ * with the wording below, which matches `creditEmailCopy.ts` word for word.
+ * The PARAM SHAPES above are unchanged, so nothing in this file moves.
+ *
+ * `credits_low_utility`
+ *  en: {{1}} — {{2}} left on Kedaipal. New orders keep arriving; once you run
+ *      out you won't be able to open the new ones until credits land.
+ *  ms: {{1}} — tinggal {{2}} di Kedaipal. Pesanan baharu terus masuk; sebaik
+ *      kredit habis anda tidak boleh membukanya sehingga kredit masuk.
+ *
+ * `credits_locked_utility`
+ *  en: {{1}} — you're at {{2}}, so new orders are waiting on credits. They
+ *      open oldest first once credits land. Your other orders, your products
+ *      and your settings carry on, and cancelling always works.
+ *  ms: {{1}} — baki anda {{2}}, jadi pesanan baharu menunggu kredit. Ia dibuka
+ *      yang paling lama dahulu sebaik kredit masuk. Pesanan lain, produk dan
+ *      tetapan anda tidak terjejas, dan pembatalan sentiasa boleh.
+ *
+ * `credits_unlocked_utility`
+ *  en: {{1}} — credits added, {{2}} left. The orders that were waiting are
+ *      open again, oldest first.
+ *  ms: {{1}} — kredit ditambah, tinggal {{2}}. Pesanan yang menunggu kini
+ *      dibuka, yang paling lama dahulu.
  */
 export function creditsLowTemplateName(): string | undefined {
 	const name = process.env.WHATSAPP_CREDITS_LOW_TEMPLATE;

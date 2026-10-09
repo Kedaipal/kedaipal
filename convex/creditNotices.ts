@@ -38,7 +38,6 @@ import {
 	renderCreditEmail,
 } from "./lib/creditEmailCopy";
 import {
-	CREDIT_LOCK_ENABLED,
 	type CreditNoticeKind,
 	type CreditUnlockRoute,
 	creditLockExempt,
@@ -132,22 +131,16 @@ export const evaluate = internalMutation({
 		ctx,
 		{ retailerId, route: inRoute },
 	): Promise<CreditNoticeKind | null> => {
-		// All three balance notices — low, locked, unlocked — state that order
-		// handling pauses. With the lock switched off (CREDIT_LOCK_ENABLED) that
-		// is false, so none of them is sent, and no `notices` bookkeeping is
-		// written: the day the lock turns on, every store is announced to
-		// cleanly rather than carrying a marker for a notice nobody received.
-		// Expiry notices (internalExpiryNotices) are about purchased lots, not
-		// the lock, and are untouched.
+		// The three balance notices run for real now that the gate is per order
+		// (Credits T3.1). They were suppressed for one release by
+		// `CREDIT_LOCK_ENABLED` while the store-wide lock sat switched off, and
+		// nothing was written to `creditAccounts.notices` in that time — which
+		// was the point: every store is announced to cleanly on this release
+		// rather than carrying a dedupe marker for an email nobody received.
 		//
-		// SCOPE: this gate covers the EMAIL and the WhatsApp template only.
-		// `creditAccounts.notices` is send-dedupe bookkeeping — nothing renders
-		// from it — so the in-app banner is NOT silenced here and never was. It
-		// reads the balance directly through `resolveBannerState`, so its copy
-		// had to be corrected at the source instead (subscription-banner.tsx).
-		// An earlier version of this comment claimed the banner, which is how
-		// the banner kept promising a pause for a release.
-		if (!CREDIT_LOCK_ENABLED) return null;
+		// What each one says changed with the rule. "You're out" is now "your
+		// newest orders are waiting" — see `creditEmailCopy.ts` and
+		// `creditLockMessage`, which share the sentence with the server refusal.
 		const retailer = await ctx.db.get(retailerId);
 		if (!retailer) return null;
 		const account = await loadCreditAccount(ctx, retailerId);

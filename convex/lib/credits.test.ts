@@ -10,11 +10,15 @@ import {
 	creditLockMessage,
 	creditRegime,
 	type CreditRegimeInputs,
-	creditsExhausted,
+	creditsToUnlockOrder,
 	debitBucket,
+	debitIsFunded,
+	fundingAdvance,
 	dueCreditNotice,
 	lowCreditLine,
 	monthlyCreditGrant,
+	orderCreditFunded,
+	ordersAwaitingCredit,
 	refreshedPlanBalance,
 	sellerRefundsLeft,
 	storeIsMetered,
@@ -191,12 +195,6 @@ describe("refresh + spend order", () => {
 		expect(debitBucket(0, 0)).toBe("plan");
 		expect(debitBucket(-3, 0)).toBe("plan");
 	});
-
-	test("exhausted is the ONE check: total at or below zero", () => {
-		expect(creditsExhausted(1)).toBe(false);
-		expect(creditsExhausted(0)).toBe(true);
-		expect(creditsExhausted(-5)).toBe(true);
-	});
 });
 
 describe("cancelRefundDecision — only an order that never got going", () => {
@@ -261,7 +259,7 @@ describe("topUpBlock — credits top up a live subscription, never replace one",
 	});
 });
 
-describe("the lock sentence speaks to what the reader can do (Credits T3 × T2)", () => {
+describe("the gate sentence speaks to what the reader can do (Credits T3.1 × T2)", () => {
 	test("the owner gets every way back; a teammate who can only ask, the owner", () => {
 		expect(
 			creditLockAudience({ isMember: false, canBuyCredits: false, route: "topup" }),
@@ -269,8 +267,8 @@ describe("the lock sentence speaks to what the reader can do (Credits T3 × T2)"
 		expect(
 			creditLockAudience({ isMember: true, canBuyCredits: false, route: "topup" }),
 		).toBe("member");
-		expect(creditLockMessage("topup", "member")).toMatch(
-			/^This store is out of credits.*Ask the store owner to add credits/,
+		expect(creditLockMessage("topup", "member", 3)).toMatch(
+			/^3 orders are waiting on credits.*Ask the store owner to add credits/,
 		);
 	});
 
@@ -278,8 +276,8 @@ describe("the lock sentence speaks to what the reader can do (Credits T3 × T2)"
 		expect(
 			creditLockAudience({ isMember: true, canBuyCredits: true, route: "topup" }),
 		).toBe("member_topup");
-		expect(creditLockMessage("topup", "member_topup")).toMatch(
-			/^This store is out of credits.*Top up in Settings → Billing to carry on/,
+		expect(creditLockMessage("topup", "member_topup", 2)).toMatch(
+			/^2 orders are waiting on credits.*Top up in Settings → Billing to open them/,
 		);
 		for (const route of ["pick_plan", "pay_invoice", "resume", "subscribe"] as const)
 			expect(
@@ -287,12 +285,78 @@ describe("the lock sentence speaks to what the reader can do (Credits T3 × T2)"
 			).toBe("member");
 	});
 
-	test("every version says what's paused and what still works", () => {
+	test("every version names the ORDERS and says the rest of the store is fine", () => {
+		// The store-wide sentence ("editing products are paused") was a promise
+		// T3.1 makes false — the catalogue is never gated now, so a sentence
+		// claiming otherwise would be the copy lying about the rule.
 		for (const audience of ["owner", "member_topup", "member"] as const) {
-			const m = creditLockMessage("topup", audience);
-			expect(m).toMatch(/accepting and updating orders and editing products are paused/);
-			expect(m).toMatch(/New orders keep coming in, and you can still view, cancel and refund them\./);
+			const m = creditLockMessage("topup", audience, 4);
+			expect(m).toMatch(/4 orders are waiting on credits/);
+			expect(m).toMatch(
+				/Your other orders, your products and your settings all carry on as normal/,
+			);
+			expect(m).toMatch(/cancel a waiting order to release the buyer/);
+			expect(m).not.toMatch(/editing products are paused/);
 		}
+	});
+
+	test("one waiting order reads in the singular, on every route", () => {
+		for (const route of [
+			"topup",
+			"pick_plan",
+			"pay_invoice",
+			"resume",
+			"subscribe",
+		] as const) {
+			const m = creditLockMessage(route, "owner", 1);
+			expect(m, route).toMatch(/^1 order is waiting on credits, so you can't open it yet/);
+		}
+	});
+});
+
+describe("the per-order gate's arithmetic (Credits T3.1)", () => {
+	test("a debit that leaves the total AT zero paid for itself", () => {
+		// The ticket said "unfunded iff the debit left the total at or below
+		// zero", which gates the order that spent the store's last credit.
+		expect(debitIsFunded(0)).toBe(true);
+		expect(debitIsFunded(5)).toBe(true);
+		expect(debitIsFunded(-1)).toBe(false);
+	});
+
+	test("no stamp means funded — the gate fails open", () => {
+		// An order from before T3.1, or one whose debit faulted and was
+		// deliberately kept. A bookkeeping fault must never hide a buyer's order.
+		expect(orderCreditFunded(undefined, 0)).toBe(true);
+		expect(creditsToUnlockOrder(undefined, 0)).toBe(0);
+	});
+
+	test("an order is funded at or below the watermark, and says its own position", () => {
+		expect(orderCreditFunded(7, 7)).toBe(true);
+		expect(orderCreditFunded(8, 7)).toBe(false);
+		expect(creditsToUnlockOrder(8, 7)).toBe(1);
+		expect(creditsToUnlockOrder(10, 7)).toBe(3);
+		expect(creditsToUnlockOrder(7, 7)).toBe(0);
+	});
+
+	test("one credit in frees one waiting order — never more, never fewer", () => {
+		// Zaki's worked example: 101 waiting, a 100-pack lands, 100 open.
+		expect(fundingAdvance(101, 100)).toBe(100);
+		// A pack bigger than the queue frees the queue and no more.
+		expect(fundingAdvance(3, 100)).toBe(3);
+		// Nothing waiting, nothing to free.
+		expect(fundingAdvance(0, 100)).toBe(0);
+		// Deliberately NOT "fill the balance to zero first": that would swallow
+		// a seller's pack and unlock nothing when the debt came from an expired
+		// lot or from before this gate shipped.
+		expect(fundingAdvance(3, 1)).toBe(1);
+	});
+
+	test("the queue is the gap between the two counters", () => {
+		expect(ordersAwaitingCredit(10, 7)).toBe(3);
+		expect(ordersAwaitingCredit(7, 7)).toBe(0);
+		// A watermark that somehow ran ahead reads as nothing waiting, never a
+		// negative count.
+		expect(ordersAwaitingCredit(5, 7)).toBe(0);
 	});
 });
 

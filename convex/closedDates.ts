@@ -20,6 +20,7 @@ import { ConvexError, v } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { logAdminAction, requireRetailerAccess } from "./lib/auth";
 import { bookingsOverlapping } from "./lib/bookingAvailability";
+import { creditGateFor, guestNameForSeller } from "./creditLock";
 import {
 	type ClosedDateRange,
 	MAX_CLOSED_RANGE_DAYS,
@@ -183,6 +184,9 @@ export const impact = query({
 			customerName?: string;
 			kind: "order" | "booking";
 		}> = [];
+		// Waiting on credits (Credits T3.1): both sample passes below read
+		// whole order rows, so they need the gate the allowlist never reached.
+		const gate = await creditGateFor(ctx, access.retailer._id);
 
 		const due = await ctx.db
 			.query("orders")
@@ -205,7 +209,9 @@ export const impact = query({
 		for (const order of openOrders.slice(0, IMPACT_SAMPLES)) {
 			samples.push({
 				shortId: order.shortId,
-				customerName: order.customer.name,
+				// Waiting on credits (Credits T3.1) — the row stays so the
+				// seller doesn't close a date over someone, the name does not.
+				customerName: guestNameForSeller(gate, order),
 				kind: "order",
 			});
 		}
@@ -231,7 +237,7 @@ export const impact = query({
 				if (samples.length < IMPACT_SAMPLES) {
 					samples.push({
 						shortId: order.shortId,
-						customerName: order.customer.name,
+						customerName: guestNameForSeller(gate, order),
 						kind: "booking",
 					});
 				}

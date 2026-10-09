@@ -705,10 +705,13 @@ describe("an admin's own store is unmetered", () => {
 			paginationOpts: { numItems: 10, cursor: null },
 		});
 		expect(activity.page).toHaveLength(0);
-		// ...and the seller lock can never close on it (the dashboard reads the
-		// resolver's answer off the retailer payload).
+		// ...and the credit GATE can never close on it (the dashboard reads the
+		// resolver's answer off the retailer payload). Per order since T3.1, so
+		// the question is "is anything waiting?", and an unmetered store holds
+		// no account to put an order behind.
 		const me = await asAdmin.query(api.retailers.getMyRetailer, {});
-		expect(me?.creditLock?.locked ?? false).toBe(false);
+		expect(me?.creditGate?.exempt).toBe(true);
+		expect(me?.creditGate?.ordersWaiting ?? 0).toBe(0);
 	});
 
 	test("the admin levers refuse it by name, not with \"Store not found\"", async () => {

@@ -26,7 +26,6 @@ import { formatEventBadge, isEventPassed } from "../../convex/lib/productEvent";
 import { NeedsAccessNote } from "../components/app/owner-only-note";
 import { ProBadge } from "../components/app/pro-gate";
 import { ViewOnlyNote } from "../components/app/view-only-note";
-import { CreditLockNote } from "../components/credits/credit-lock-note";
 import { PageHeader } from "../components/dashboard/page-header";
 import {
 	StockAdjustDialog,
@@ -270,7 +269,7 @@ function ProductsRoute() {
 	// store lapsed (view-only), it ran out of credits (Credits T3), or this
 	// teammate holds view on products. One author for each sentence, shared
 	// with every other gated surface, so the words can't drift.
-	const productsLock = useAreaLock("products", { credits: true });
+	const productsLock = useAreaLock("products");
 	const writeBlockReason = productsLock.readOnly ? productsLock.reason : null;
 	// How many rows the spotlight key applies to — decides whether the banner
 	// says "open one below" or "you don't have one yet". Counted over every
@@ -460,7 +459,6 @@ function ProductsRoute() {
 			    greys out: a lapsed store, one out of credits (Credits T3), or a
 			    teammate with view on products. Each renders nothing otherwise. */}
 			<ViewOnlyNote />
-			<CreditLockNote scope="products" />
 			<NeedsAccessNote area="products" />
 
 			{spot && products !== undefined ? (

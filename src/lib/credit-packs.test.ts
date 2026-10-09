@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { CREDIT_PACKS } from "../../convex/lib/plans";
-import { afterTopUpLine, packOffers, wholePrice } from "./credit-packs";
+import {
+	afterTopUpLine,
+	opensLine,
+	packOffers,
+	wholePrice,
+} from "./credit-packs";
 
 describe("packOffers — what each pack is worth, side by side", () => {
 	it("MYR: the 200 pack is the better value and says what it saves against 4 × 50", () => {
@@ -83,5 +88,86 @@ describe("afterTopUpLine — the result of the tap, before the tap", () => {
 		expect(afterTopUpLine(-80, 50)).toBe(
 			"Covers 50 of the 80 owed — 30 still owed after it.",
 		);
+	});
+});
+
+describe("opensLine — what the pack OPENS, before the tap (Credits T3.1)", () => {
+	it("a pack that covers the queue opens all of it", () => {
+		expect(opensLine(3, 50)).toBe(
+			"That opens all 3 orders waiting on credits.",
+		);
+		expect(opensLine(3, 3)).toBe("That opens all 3 orders waiting on credits.");
+		expect(opensLine(1, 50)).toBe("That opens the order waiting on credits.");
+	});
+
+	it("a pack smaller than the queue can never over-promise", () => {
+		// Each credit frees exactly one order, oldest first — so the sentence is
+		// arithmetic, not optimism. This is the half the old copy got wrong:
+		// "your store unlocks as soon as it's paid" was a promise a 50-pack
+		// against 80 waiting orders could not keep.
+		expect(opensLine(80, 50)).toBe(
+			"That opens the 50 orders that have waited longest — 30 orders would still be waiting.",
+		);
+		// One credit reads as "the oldest order", never "the 1 order that have
+		// waited longest".
+		expect(opensLine(2, 1)).toBe(
+			"That opens the oldest order — 1 order would still be waiting.",
+		);
+	});
+
+	// PR #347 review, 9 Oct 2026. The queue advances by POSITION and a
+	// cancelled order keeps the position its debit claimed, so a credit landing
+	// on a dead position opens nothing. `min(waiting, credits)` therefore
+	// over-promised by exactly the number of dead positions in front.
+	describe("positions held by cancelled orders", () => {
+		it("THE regression: 4 live behind 2 cancelled, a 4-pack opens 2", () => {
+			// Offsets 3,4,5,6 — positions 1 and 2 are cancelled orders that still
+			// owe their credits. Before the fix this read "opens all 4 orders".
+			const line = opensLine(4, 4, [3, 4, 5, 6]);
+			expect(line).toContain(
+				"That opens the 2 orders that have waited longest",
+			);
+			expect(line).toContain("2 orders would still be waiting");
+			expect(line).not.toContain("all 4");
+		});
+
+		it("says where the missing credits went, rather than going quiet", () => {
+			expect(opensLine(4, 4, [3, 4, 5, 6])).toContain(
+				"2 credits go to orders you cancelled.",
+			);
+			expect(opensLine(2, 2, [2, 3])).toContain(
+				"1 credit goes to an order you cancelled.",
+			);
+		});
+
+		it("a pack swallowed entirely by dead positions says so plainly", () => {
+			// Worst case: the seller would otherwise tap buy and see nothing move.
+			expect(opensLine(1, 2, [3])).toBe(
+				"That doesn't open an order yet — 1 order still waiting. 2 credits go to orders you cancelled.",
+			);
+		});
+
+		it("a pack big enough still opens everything", () => {
+			expect(opensLine(4, 6, [3, 4, 5, 6])).toBe(
+				"That opens all 4 orders waiting on credits. 2 credits go to orders you cancelled.",
+			);
+		});
+
+		it("an unbroken queue is word-for-word what it always was", () => {
+			// The ordinary store has no cancelled gated orders, and its copy must
+			// not change: offsets [1..n] and the no-offsets call agree exactly.
+			for (const [waiting, credits] of [
+				[3, 50],
+				[3, 3],
+				[1, 50],
+				[80, 50],
+				[2, 1],
+			] as const) {
+				const unbroken = Array.from({ length: waiting }, (_, i) => i + 1);
+				expect(opensLine(waiting, credits, unbroken)).toBe(
+					opensLine(waiting, credits),
+				);
+			}
+		});
 	});
 });

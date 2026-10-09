@@ -10,6 +10,7 @@
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
+import { creditGateFor, guestNameForSeller } from "./creditLock";
 import { requireRetailerAccess, logAdminAction } from "./lib/auth";
 import {
 	bookingsOverlapping,
@@ -250,6 +251,10 @@ export const sellerCalendar = query({
 		// would be a second look-back bound to get wrong.
 		const totals = new Map<number, number>();
 		const guestsByNight = new Map<number, Array<{ shortId: string; name: string }>>();
+		// Waiting on credits (Credits T3.1): the COUNT stays honest, the name
+		// does not survive — see `guestNameForSeller`. Resolved once for the
+		// whole grid rather than per night.
+		const gate = await creditGateFor(ctx, access.retailer._id);
 		for (const listing of scoped) {
 			for (const order of await bookingsOverlapping(
 				ctx,
@@ -272,7 +277,7 @@ export const sellerCalendar = query({
 					if (named.length < GUESTS_PER_NIGHT) {
 						named.push({
 							shortId: order.shortId,
-							name: order.customer.name?.trim() || "Guest",
+							name: guestNameForSeller(gate, order, "Guest") ?? "Guest",
 						});
 						guestsByNight.set(night, named);
 					}
@@ -409,6 +414,9 @@ export const blockImpact = query({
 
 		const seen = new Set<string>();
 		const samples: Array<{ shortId: string; customerName?: string }> = [];
+		// Waiting on credits (Credits T3.1) — the row stays (a seller must not
+		// block a date over a guest they can't see), the name does not.
+		const gate = await creditGateFor(ctx, access.retailer._id);
 		for (const listing of scoped) {
 			// THE shared bounded scan, so a long package that started months ago
 			// still counts against a block placed over it.
@@ -424,7 +432,7 @@ export const blockImpact = query({
 				if (samples.length < BLOCK_IMPACT_SAMPLES) {
 					samples.push({
 						shortId: order.shortId,
-						customerName: order.customer.name,
+						customerName: guestNameForSeller(gate, order),
 					});
 				}
 			}
@@ -500,6 +508,10 @@ export const dayBookings = query({
 			packaged: boolean;
 			skippedDays?: number[];
 		}> = [];
+		// Waiting on credits (Credits T3.1): the day sheet is the grid's
+		// detail view, so it follows the grid's rule — nights and status real,
+		// identity withheld.
+		const gate = await creditGateFor(ctx, access.retailer._id);
 		for (const listing of scoped) {
 			// THE shared bounded scan — never a hand-rolled look-back here again.
 			const holders = await bookingsOverlapping(
@@ -513,7 +525,7 @@ export const dayBookings = query({
 				if (!occupiesNight(order, args.date)) continue;
 				rows.push({
 					shortId: order.shortId,
-					customerName: order.customer.name,
+					customerName: guestNameForSeller(gate, order),
 					checkIn: order.bookingCheckIn as number,
 					checkOut: order.bookingCheckOut as number,
 					status: order.status,
