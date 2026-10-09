@@ -1133,7 +1133,7 @@ describe("retailers deleteUser (internal cascade)", () => {
 	 * retained-by-DECISION tables, the optOut attribution clear, and all three
 	 * order blob kinds (the account cascade used to free only the proof).
 	 */
-	test("erases every previously-orphaned table, keeps the two retained by decision", async () => {
+	test("erases every previously-orphaned table, keeps the rows retained by decision", async () => {
 		vi.useFakeTimers();
 		const t = setup();
 		const ids = await seedFullTenant(t, USER_A, "orphan-sweep");
@@ -1179,6 +1179,48 @@ describe("retailers deleteUser (internal cascade)", () => {
 				createdAt: now,
 				updatedAt: now,
 			});
+			const claimId = await ctx.db.insert("orderClaims", {
+				retailerId: ids.retailerId,
+				// The session seeded above — a claim is sent FROM one, and the
+				// session row dies a phase earlier, so this ref dangled too.
+				sessionId,
+				sellerUserId: USER_A,
+				// `completed` deliberately, same reason as the session above: the
+				// daily purgeStaleClaims cron sweeps only expired / cancelled
+				// claims, so a completed one held the buyer's phone + name
+				// forever — with no phase here, "forever" outlived the store.
+				status: "completed",
+				waPhone: "60123456789",
+				buyerName: "Ali",
+				lines: [
+					{
+						productId: ids.productId,
+						variantId: ids.variantId,
+						name: "Kuih",
+						price: 500,
+						quantity: 1,
+					},
+				],
+				currency: "MYR",
+				token: "claim_testtoken0001",
+				expiresAt: now + 60_000,
+				windowMinutes: 15,
+				sentCount: 1,
+				lastSentAt: now,
+				orderId: ids.orderId,
+				createdAt: now,
+				updatedAt: now,
+			});
+			const blockId = await ctx.db.insert("bookingBlocks", {
+				retailerId: ids.retailerId,
+				productId: ids.productId,
+				startDate: now,
+				endDate: now + 2 * 24 * 60 * 60 * 1000,
+				// A seller's private note — no buyer PII and no money, so the
+				// block is tenant config that goes with the tenant.
+				note: "Maintenance — river deck repair",
+				createdAt: now,
+			});
 			const usageId = await ctx.db.insert("subscriptionUsage", {
 				retailerId: ids.retailerId,
 				monthStart: now,
@@ -1221,6 +1263,22 @@ describe("retailers deleteUser (internal cascade)", () => {
 				status: "paid",
 				createdAt: now,
 			});
+			// Retained by decision too, and the one that is easy to get wrong:
+			// messageLogRollups is the PERMANENT WhatsApp cost ledger
+			// (purgeExpiredOutboundLog folds every expiring raw row into it so
+			// aggregate cost accounting outlives the 90-day purge, and Meta
+			// bills per send). It deliberately carries no toWaPhone — counts
+			// only — so erasing it would destroy billing history to no
+			// privacy end. The RAW rows, which do hold the buyer's number, are
+			// deleted by the outboundMessageLog phase above.
+			const rollupId = await ctx.db.insert("messageLogRollups", {
+				retailerId: ids.retailerId,
+				month: "2026-10",
+				category: "transactional",
+				status: "sent",
+				count: 7,
+				updatedAt: now,
+			});
 			const auditId = await ctx.db.insert("adminAuditLog", {
 				adminUserId: "admin_user",
 				retailerId: ids.retailerId,
@@ -1240,10 +1298,13 @@ describe("retailers deleteUser (internal cascade)", () => {
 				mockupId,
 				pickupId,
 				sessionId,
+				claimId,
 				usageId,
 				foundingId,
 				limitsId,
 				logId,
+				blockId,
+				rollupId,
 				invoiceId,
 				auditId,
 				optOutId,
@@ -1268,10 +1329,12 @@ describe("retailers deleteUser (internal cascade)", () => {
 			// Previously orphaned — now all gone.
 			expect(await ctx.db.get(extra.pickupId)).toBeNull();
 			expect(await ctx.db.get(extra.sessionId)).toBeNull();
+			expect(await ctx.db.get(extra.claimId)).toBeNull();
 			expect(await ctx.db.get(extra.usageId)).toBeNull();
 			expect(await ctx.db.get(extra.foundingId)).toBeNull();
 			expect(await ctx.db.get(extra.limitsId)).toBeNull();
 			expect(await ctx.db.get(extra.logId)).toBeNull();
+			expect(await ctx.db.get(extra.blockId)).toBeNull();
 			expect(await ctx.db.get(extra.subscriptionId)).toBeNull();
 
 			// The two blobs the old cascade leaked, plus the one it did free.
@@ -1284,6 +1347,14 @@ describe("retailers deleteUser (internal cascade)", () => {
 			// a silent cascade addition.
 			expect(await ctx.db.get(extra.invoiceId)).not.toBeNull();
 			expect(await ctx.db.get(extra.auditId)).not.toBeNull();
+			// The WhatsApp cost ledger survives, and keeps its retailerId: that
+			// field is the ledger's grouping key, so blanking it would merge a
+			// deleted tenant's months into the tenant-less bucket and corrupt
+			// both. A dangling ref is the expected shape of a retained record.
+			const rollup = await ctx.db.get(extra.rollupId);
+			expect(rollup).not.toBeNull();
+			expect(rollup?.retailerId).toBe(ids.retailerId);
+			expect(rollup?.count).toBe(7);
 
 			// The opt-out itself survives (the buyer's standing instruction), with
 			// no dangling reference to the deleted store.
@@ -1303,6 +1374,45 @@ describe("retailers deleteUser (internal cascade)", () => {
 		// Well past DELETE_USER_BATCH (25) so the cascade must self-chain.
 		await t.run(async (ctx) => {
 			const now = Date.now();
+			// The NEW phases get their own over-batch piles. A bounded phase that
+			// never drains is invisible on a small tenant — every row this
+			// branch's phases delete fits in one batch in the test above — so
+			// prove both chain past the limit, not just `orders`.
+			const sessionId = await ctx.db.insert("counterCheckoutSessions", {
+				retailerId: ids.retailerId,
+				sellerUserId: USER_A,
+				token: "KPS-bulktoken0001",
+				status: "completed",
+				waPhone: "60123456789",
+				expiresAt: now + 60_000,
+				createdAt: now,
+				updatedAt: now,
+			});
+			for (let i = 0; i < 40; i++) {
+				await ctx.db.insert("orderClaims", {
+					retailerId: ids.retailerId,
+					sessionId,
+					sellerUserId: USER_A,
+					status: "completed",
+					waPhone: "60123456789",
+					buyerName: `Bulk ${i}`,
+					lines: [],
+					currency: "MYR",
+					token: `claim_bulk_${i}`,
+					expiresAt: now + 60_000,
+					windowMinutes: 15,
+					sentCount: 1,
+					lastSentAt: now,
+					createdAt: now,
+					updatedAt: now,
+				});
+				await ctx.db.insert("bookingBlocks", {
+					retailerId: ids.retailerId,
+					startDate: now + i * 86_400_000,
+					endDate: now + i * 86_400_000 + 86_400_000,
+					createdAt: now,
+				});
+			}
 			for (let i = 0; i < 60; i++) {
 				const orderId = await ctx.db.insert("orders", {
 					retailerId: ids.retailerId,
@@ -1341,6 +1451,10 @@ describe("retailers deleteUser (internal cascade)", () => {
 			expect(orders).toHaveLength(0);
 			const events = await ctx.db.query("orderEvents").collect();
 			expect(events).toHaveLength(0);
+			// Both new phases drained across continuations, not just their first
+			// batch of 25.
+			expect(await ctx.db.query("orderClaims").collect()).toHaveLength(0);
+			expect(await ctx.db.query("bookingBlocks").collect()).toHaveLength(0);
 		});
 		vi.useRealTimers();
 	});
