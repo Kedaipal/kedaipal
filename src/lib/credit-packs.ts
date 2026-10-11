@@ -123,29 +123,24 @@ export function opensLine(
 	const opens = liveOrdersOpenedBy(queue, credits);
 	const left = waiting - opens;
 	const orders = (n: number) => `${n} ${n === 1 ? "order" : "orders"}`;
-	// Credits this pack spends getting PAST positions held by cancelled
-	// orders — never promised as openings, but never hidden either.
-	//
-	// Counted up to the last order actually opened (or, when none opens, up to
-	// the first live order the pack fails to reach): dead positions beyond
-	// that are not what this pack paid for, and the balance line already says
-	// what is still owed overall.
-	const lastReached =
-		opens > 0 ? queue[opens - 1] : Math.min(credits, (queue[0] ?? 1) - 1);
-	const toDeadPositions = Math.max(0, lastReached - opens);
-	const spent =
-		toDeadPositions > 0
-			? ` ${toDeadPositions === 1 ? "1 credit goes" : `${toDeadPositions} credits go`} to ${toDeadPositions === 1 ? "an order" : "orders"} you cancelled.`
-			: "";
 	if (left === 0)
-		return `That opens ${waiting === 1 ? "the order" : `all ${orders(waiting)}`} waiting on credits.${spent}`;
-	if (opens === 0)
-		return `That doesn't open an order yet — ${orders(waiting)} still waiting.${spent}`;
+		return `That opens ${waiting === 1 ? "the order" : `all ${orders(waiting)}`} waiting on credits.`;
+	if (opens === 0) {
+		// The pack doesn't reach the oldest waiting order, so say how far short
+		// it falls. Deliberately NOT "N credits go to orders you cancelled":
+		// that read as a wasted credit, and it isn't one — a cancelled gated
+		// order's refund moves the watermark the same single position its
+		// order held, so positions and debt stay in lockstep and every credit
+		// the seller buys pays down real debt. Verified on dev: paying exactly
+		// the debt always clears the live queue.
+		const need = queue[0] ?? credits + 1;
+		return `That doesn't open an order yet — the one waiting needs ${need === 1 ? "1 credit" : `${need} credits`}.`;
+	}
 	const freed =
 		opens === 1
 			? "the oldest order"
 			: `the ${orders(opens)} that have waited longest`;
-	return `That opens ${freed} — ${orders(left)} would still be waiting.${spent}`;
+	return `That opens ${freed} — ${orders(left)} would still be waiting.`;
 }
 
 export function afterTopUpLine(total: number, credits: number): string {
