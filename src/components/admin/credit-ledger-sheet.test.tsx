@@ -197,6 +197,36 @@ describe("CreditLedgerBody — balances", () => {
 		expect(screen.queryByText(/set a custom monthly grant below/)).toBeNull();
 	});
 
+	it("a sponsored store's PRESERVED bought lots are visible to the admin (PR #353 review)", () => {
+		// The narrower purge exists to protect exactly these, so an admin
+		// weighing "end this comp" or "purge this" has to be able to SEE them.
+		// Before this they were invisible until the comp was already off —
+		// which is after the decision.
+		state.account = {
+			view: null,
+			account: null,
+			lots: [
+				{
+					_id: "lot9",
+					credits: 200,
+					remaining: 150,
+					expiresAt: NOW + 200 * DAY,
+				},
+			],
+			unmetered: true,
+		};
+		renderBody(undefined, compedSeller);
+		expect(screen.getByText(/Bought credits held for later/)).toBeTruthy();
+		expect(screen.getByText("150 of 200")).toBeTruthy();
+		expect(screen.getByText(/nothing here is deleted/)).toBeTruthy();
+	});
+
+	it("…and says nothing about lots when there are none", () => {
+		state.account = { view: null, account: null, lots: [], unmetered: true };
+		renderBody(undefined, compedSeller);
+		expect(screen.queryByText(/Bought credits held for later/)).toBeNull();
+	});
+
 	it("a SPONSORED store says so too, and says the comp is what to turn off (z8r3fdrph7)", () => {
 		// Not "Admin store": a comp is a toggle, so the admin's next move is a
 		// different one, and the drawer naming the wrong kind would send them

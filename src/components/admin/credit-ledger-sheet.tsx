@@ -155,9 +155,46 @@ export function CreditLedgerBody({
 					   balance to show and no lever to pull — saying WHICH is the point,
 					   since the same null view also means "store deleted", and a comp
 					   is a toggle the admin may be about to turn off. */
-					<p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
-						{sellerUnmeteredNote(seller)}
-					</p>
+					<div className="flex flex-col gap-3">
+						<p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
+							{sellerUnmeteredNote(seller)}
+						</p>
+						{/* The lots the narrower purge exists to PROTECT (z8r3fdrph7).
+						    A sponsored store can be holding credits its seller paid
+						    for before the comp, which is exactly why
+						    `purgeUnmeteredCreditData` refuses to touch a comped
+						    store — so an admin weighing "end this comp" or "purge
+						    this" must be able to see them. Without this they are
+						    invisible until the comp is already off, which is after
+						    the decision. */}
+						{state.lots.length > 0 ? (
+							<div className="flex flex-col gap-1">
+								<p className="text-xs font-medium">
+									Bought credits held for later
+								</p>
+								<ul className="flex flex-col divide-y divide-border/60 rounded-xl border border-border text-[13px]">
+									{state.lots.map((lot) => (
+										<li
+											key={lot._id}
+											className="flex items-center justify-between gap-3 px-3 py-2"
+										>
+											<span className="tabular-nums">
+												{lot.remaining} of {lot.credits}
+											</span>
+											<span className="text-muted-foreground">
+												expires {formatShortDate(lot.expiresAt)}
+											</span>
+										</li>
+									))}
+								</ul>
+								<p className="text-xs text-muted-foreground">
+									Paid for before this store stopped being metered. They keep
+									expiring on schedule and are spendable again the moment it is
+									metered again — nothing here is deleted.
+								</p>
+							</div>
+						) : null}
+					</div>
 				) : state.view === null ? (
 					<p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
 						This store no longer exists.
