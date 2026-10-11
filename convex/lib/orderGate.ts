@@ -182,9 +182,15 @@ type GatedRow = Pick<Doc<"orders">, (typeof GATED_ORDER_FIELDS)[number]> & {
  * the order gate makes. Absent ⇒ visible (every customer from before T3.1).
  */
 export function isCustomerGated(
-	customer: { firstOrderCreditSeq?: number },
+	customer: { firstOrderCreditSeq?: number; neverFunded?: boolean },
 	fundedThrough: number,
 ): boolean {
+	// The order that created this record was cancelled while gated, so the
+	// refund walked the watermark past `firstOrderCreditSeq` and the
+	// comparison below would now say "visible" for a buyer the seller has
+	// never been shown. Same trap as `orders.neverFunded`, one table over —
+	// and the thing it leaks is the phone number.
+	if (customer.neverFunded === true) return true;
 	return (
 		customer.firstOrderCreditSeq !== undefined &&
 		customer.firstOrderCreditSeq > fundedThrough
@@ -203,6 +209,11 @@ const GATED_CUSTOMER_FIELDS = [
 	"firstOrderAt",
 	"lastOrderAt",
 	"firstOrderCreditSeq",
+	// Not buyer data — the seller's own verdict on this record, carried so the
+	// name slot can say "Details closed" for a buyer whose every order was
+	// cancelled while gated instead of "Waiting on credits", which would be
+	// the list contradicting itself the way the order card used to.
+	"neverFunded",
 	"createdAt",
 	"updatedAt",
 ] as const satisfies readonly (

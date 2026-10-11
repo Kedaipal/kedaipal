@@ -9,6 +9,7 @@ import {
 	creditStateLine,
 	creditTone,
 	downgradeCreditLine,
+	gatedNameCell,
 	gatedRowLine,
 	includedCreditsLabel,
 	lockCta,
@@ -141,6 +142,23 @@ describe("the cancel dialog says what happens to the order's credit", () => {
 
 	test("an order that never used a credit says nothing", () => {
 		expect(cancelCreditLine({ kind: "not_charged" })).toBeNull();
+	});
+
+	test("a GATED order quotes no monthly count, because it spends none", () => {
+		// Cancelling an order the seller was never allowed to open always
+		// refunds and never touches the 10-a-month allowance (Zaki, 9 Oct
+		// 2026). Quoting "(9 more this month)" here would say this cancel had
+		// spent one — the number wouldn't move, and the sentence would be the
+		// dialog lying about the rule it exists to explain.
+		const line = cancelCreditLine({
+			kind: "refund",
+			refundsLeftAfter: 9,
+			gated: true,
+		});
+		expect(line).toBe(
+			"The credit it used comes back to you — you were never able to open this one.",
+		);
+		expect(line).not.toMatch(/this month/);
 	});
 });
 
@@ -414,6 +432,17 @@ describe("the per-order gate's copy names the ORDER, never the store (T3.1)", ()
 		expect(orderGatedLine(4)).toBe("Waiting on 4 credits");
 		// 0 can't happen on a gated row, but a floor beats "Waiting on 0".
 		expect(orderGatedLine(0)).toBe("Waiting on 1 credit");
+	});
+
+	test('the name slot stops saying "waiting" once the order is cancelled', () => {
+		// The card used to read "Waiting on credits" in the name slot beside a
+		// Cancelled badge and a "Cancelled — details stay closed" body: one
+		// card contradicting itself twice. The row IS still redacted
+		// (`orders.neverFunded`), so the slot keeps something true to say.
+		expect(gatedNameCell(undefined)).toBe("Waiting on credits");
+		expect(gatedNameCell("pending")).toBe("Waiting on credits");
+		expect(gatedNameCell("confirmed")).toBe("Waiting on credits");
+		expect(gatedNameCell("cancelled")).toBe("Details closed");
 	});
 
 	test("a cancelled gated row drops the pitch but keeps the blanks", () => {

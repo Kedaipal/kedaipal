@@ -69,7 +69,7 @@ export function useAreaLock(
 		 * `null`/`undefined` reads as "not gated", so a control whose order
 		 * hasn't loaded yet never flashes disabled.
 		 */
-		creditOrder?: { creditSeq?: number } | null;
+		creditOrder?: { creditSeq?: number; creditGated?: boolean } | null;
 	},
 ): {
 	readOnly: boolean;

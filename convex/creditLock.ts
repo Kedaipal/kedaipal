@@ -57,6 +57,7 @@ import {
 	countOrdersAwaitingCredit,
 	loadCreditAccount,
 	projectedCredits,
+	storeGateExempt,
 } from "./credits";
 import {
 	isAdmin,
@@ -248,8 +249,17 @@ export async function orderGatedForSeller(
  * the redaction, the guards, the inbox filter and the UI. */
 export function isOrderGated(
 	gate: CreditGateState,
-	order: { creditSeq?: number },
+	order: { creditSeq?: number; neverFunded?: boolean },
 ): boolean {
+	// An exempt store (admin-owned, comped, unmetered) sees everything. Said
+	// explicitly rather than relying on `fundedThrough` being Infinity,
+	// because `neverFunded` below is not a comparison and Infinity can't
+	// out-rank it.
+	if (gate.exempt) return false;
+	// Cancelled while gated: closed for good, whatever the watermark says.
+	// See `orders.neverFunded` in schema.ts — the refund moves the watermark,
+	// and without this the cancelled order un-redacts ITSELF.
+	if (order.neverFunded === true) return true;
 	return !orderCreditFunded(order.creditSeq, gate.fundedThrough);
 }
 
@@ -275,7 +285,11 @@ export function isOrderGated(
  */
 export function guestNameForSeller(
 	gate: CreditGateState,
-	order: { creditSeq?: number; customer: { name?: string } },
+	order: {
+		creditSeq?: number;
+		neverFunded?: boolean;
+		customer: { name?: string };
+	},
 	fallback?: string,
 ): string | undefined {
 	if (isOrderGated(gate, order)) return GATED_CELL_LABEL;
@@ -377,7 +391,9 @@ export const assertCreditsForOrder = internalQuery({
 /** Whether cancelling THIS order gives its credit back — so the cancel dialog
  * can say so before the tap (no hidden rule). */
 export type CancelCreditOutlook =
-	| { kind: "refund"; refundsLeftAfter: number }
+	/** `gated` ⇒ the credit comes back and this cancel costs no allowance, so
+	 * the dialog must not quote a remaining count that won't move. */
+	| { kind: "refund"; refundsLeftAfter: number; gated?: true }
 	| { kind: "kept"; reason: "accepted" | "allowance_used" }
 	/** No credit was ever used for this order (placed before credits). */
 	| { kind: "not_charged" };
@@ -408,13 +424,26 @@ export const cancelOutlook = query({
 			account?.sellerRefunds?.periodKey === periodKey
 				? account.sellerRefunds.count
 				: 0;
+		// The SAME store-level exemption the refund itself applies, so the
+		// dialog can never promise something the cancel won't do. A comped
+		// store is metered but its gate is open, and the raw comparison alone
+		// would tell a seller "you were never able to open this one" about an
+		// order sitting on their screen.
+		const gated =
+			!(await storeGateExempt(ctx, order.retailerId)) &&
+			!orderCreditFunded(order.creditSeq, account?.fundedThrough ?? 0);
 		const decision = cancelRefundDecision({
 			cause: "seller",
 			statusAtCancel: order.status,
 			sellerRefundsUsed: used,
+			gated,
 		});
-		return decision.refund
-			? { kind: "refund", refundsLeftAfter: sellerRefundsLeft(used + 1) }
-			: { kind: "kept", reason: decision.reason };
+		if (!decision.refund) return { kind: "kept", reason: decision.reason };
+		// A gated cancel spends no allowance, so the count it would quote is
+		// the count it already had — say nothing about it rather than imply
+		// this cancel used one up.
+		return gated
+			? { kind: "refund", refundsLeftAfter: sellerRefundsLeft(used), gated }
+			: { kind: "refund", refundsLeftAfter: sellerRefundsLeft(used + 1) };
 	},
 });

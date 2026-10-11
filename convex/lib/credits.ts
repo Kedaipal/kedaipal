@@ -159,7 +159,28 @@ export type CancelCause =
 	/** A Kedaipal admin hard-deleted a live order. */
 	| "admin";
 
-/** Statuses an order holds before the seller has accepted it. */
+/**
+ * Statuses an order holds before the seller has accepted it.
+ *
+ * READ THE NEXT PARAGRAPH BEFORE TRUSTING THIS SET. It is a proxy for "the
+ * seller got something out of this order", and auto-confirm has made it a
+ * narrow one: `confirmedAtCreate` (orders.ts) fires whenever the buyer left a
+ * phone AND `WHATSAPP_ORDER_CONFIRM_TEMPLATE` is configured, which is every
+ * storefront order in production. So a storefront order is born `confirmed`,
+ * `pending` is nearly unreachable there, and a seller cancel almost always
+ * reads as "accepted" and keeps the credit spent — the deliberate late-cancel
+ * rule (Zaki, 30 Sep 2026), but sharper than the status names suggest.
+ *
+ * In practice the 10-a-month allowance protects counter / anonymous walk-in
+ * orders (no phone ⇒ born `pending`) and booking requests. It is also why
+ * `cancelRefundDecision` takes `gated` separately: an order the seller was
+ * never allowed to SEE delivers zero value whatever its status, so it must
+ * not be judged by this set. See docs/credits.md#refunds.
+ *
+ * `pending` is about WHO HAS ACCEPTED the order, never about money — payment
+ * lives on `paymentStatus`, and a made-to-order job awaiting its mockup is
+ * `confirmed` with `mockupStatus: "pending"`.
+ */
 const NEVER_ACCEPTED_STATUSES: ReadonlySet<string> = new Set([
 	"pending",
 	"booking_requested",
@@ -184,8 +205,31 @@ export function cancelRefundDecision(args: {
 	statusAtCancel: string;
 	/** Seller refunds already given this usage period. */
 	sellerRefundsUsed: number;
+	/**
+	 * The order is still WAITING ON CREDITS (Credits T3.1) — its own credit was
+	 * never funded, so the seller has not been allowed to see it.
+	 */
+	gated?: boolean;
 }): CancelRefundDecision {
 	if (args.cause !== "seller")
+		return { refund: true, countsAgainstAllowance: false };
+	// A GATED order always gives its credit back, and never spends an
+	// allowance (Zaki, 9 Oct 2026).
+	//
+	// `NEVER_ACCEPTED_STATUSES` is a PROXY for "the seller got something out of
+	// this order", and auto-confirm quietly invalidated it: `confirmedAtCreate`
+	// fires whenever the buyer left a phone and the confirm template is
+	// configured, which is every storefront order in production. So `pending`
+	// is nearly unreachable, every seller cancel reads as "accepted", and once
+	// T3.1 made unfunded orders INVISIBLE the rule started charging sellers a
+	// credit for an order they were never allowed to open — with cancelling,
+	// the gate's own prescribed way out, as the act that burned it.
+	//
+	// Testing the gate directly rather than widening the status set, because
+	// the question was never really about status: a gated order delivers zero
+	// value by construction. Not exploitable either — the only way to earn the
+	// refund is to be denied the order first, and you end up with no order.
+	if (args.gated === true)
 		return { refund: true, countsAgainstAllowance: false };
 	if (!NEVER_ACCEPTED_STATUSES.has(args.statusAtCancel))
 		return { refund: false, reason: "accepted" };
@@ -514,6 +558,20 @@ export const CREDIT_GATE_PHRASE = "waiting on credits";
  * broken files a bug instead of topping up.
  */
 export const GATED_CELL_LABEL = "Waiting on credits";
+
+/**
+ * The same slot once the order is CANCELLED. "Waiting on credits" beside a
+ * Cancelled badge is the card contradicting itself — nothing is waiting on
+ * that order any more, and the gate's own page stopped saying it for exactly
+ * this reason. The details DO stay closed (`orders.neverFunded`), so the slot
+ * still has something true to say.
+ */
+export const GATED_CLOSED_LABEL = "Details closed";
+
+/** What a redacted row shows where the buyer's name would be. */
+export function gatedNameCell(status?: string): string {
+	return status === "cancelled" ? GATED_CLOSED_LABEL : GATED_CELL_LABEL;
+}
 
 /**
  * The TYPED refusal every gated seller write throws (`ConvexError` data), so
