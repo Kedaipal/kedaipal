@@ -1727,19 +1727,46 @@ export const adminCreditTotals = query({
  * store's meter right on the 1st too. Batched + self-rescheduling.
  */
 export const internalRollPeriods = internalMutation({
-	args: {},
-	handler: async (ctx): Promise<{ rolled: number }> => {
+	args: {
+		/** Where the previous pass stopped. Absent = start of the sweep; the
+		 * cron always calls it that way. */
+		cursor: v.optional(v.union(v.string(), v.null())),
+	},
+	handler: async (ctx, { cursor }): Promise<{ rolled: number }> => {
 		const now = Date.now();
 		const current = usagePeriodKey(now);
-		const stale = await ctx.db
+		// PAGINATED, not `.take(SWEEP_BATCH)` + "reschedule while the batch is
+		// full". `rollPeriod` returns an UNMETERED account untouched — it never
+		// patches `periodKey`, deliberately, because the stale key is what makes
+		// the first roll after a comp ends expire and re-grant. So such an
+		// account stays inside this `< current` range FOREVER, and the range is
+		// scanned oldest-first, which puts inert rows at the head of every
+		// batch. Re-taking them was merely wasteful at a handful; at
+		// SWEEP_BATCH of them the batch is always full and always makes no
+		// progress, so the sweep reschedules itself endlessly AND never reaches
+		// the metered stores behind them — quiet sellers' monthly grants simply
+		// stop landing. The cursor steps over what it cannot advance.
+		//
+		// Safe to paginate while mutating the same index: a rolled account's
+		// `periodKey` becomes `current`, which moves it OUT of this range, and
+		// only rows at or before the cursor are ever touched.
+		//
+		// z8r3fdp4er created the inert population (admin stores, where the
+		// purge is the documented hygiene); z8r3fdrph7 enlarged it with comped
+		// stores and deliberately will NOT purge those, because their bought
+		// lots have to survive the comp. Stepping over them is the remedy that
+		// works for both.
+		const page = await ctx.db
 			.query("creditAccounts")
 			.withIndex("by_period", (q) => q.lt("periodKey", current))
-			.take(SWEEP_BATCH);
-		for (const account of stale) await rollPeriod(ctx, account, now);
-		if (stale.length === SWEEP_BATCH) {
-			await ctx.scheduler.runAfter(0, internal.credits.internalRollPeriods, {});
+			.paginate({ numItems: SWEEP_BATCH, cursor: cursor ?? null });
+		for (const account of page.page) await rollPeriod(ctx, account, now);
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(0, internal.credits.internalRollPeriods, {
+				cursor: page.continueCursor,
+			});
 		}
-		return { rolled: stale.length };
+		return { rolled: page.page.length };
 	},
 });
 

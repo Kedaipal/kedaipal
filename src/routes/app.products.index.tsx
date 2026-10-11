@@ -260,7 +260,7 @@ function ProductsRoute() {
 	// admin act-as, so a white-glove catalog can be stocked past the ceiling,
 	// and for a FULL-ACCESS store (admin-owned or sponsored), which has no plan
 	// to cap. Both inputs ride on the retailer payload and the OR lives in
-	// `productCapExemptFor`, so this cannot disagree with what the save does.
+	// `productCapExemption`, so this cannot disagree with what the save does.
 	const capExempt = productCapExemption({
 		actingAsAdmin: retailer?.actingAsAdmin === true,
 		fullAccess: retailer?.fullAccess === true,

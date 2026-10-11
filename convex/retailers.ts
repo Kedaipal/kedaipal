@@ -995,7 +995,7 @@ type RetailerPublic = {
 	// comp flag, because surfaces that re-derived it is how a sponsored seller
 	// came to read "200 of 200" while their own caps said unlimited
 	// (z8r3fdrph7). Today it lifts the 200-product cap client-side
-	// (`productCapExemptFor`); `subscription.caps` is NOT a substitute —
+	// (`productCapExemption`); `subscription.caps` is NOT a substitute —
 	// Enterprise is unlimited too and is very much on a plan.
 	// Only ever set when true, so ordinary payloads are byte-identical.
 	fullAccess?: boolean;

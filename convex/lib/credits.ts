@@ -431,17 +431,24 @@ export function storeIsMetered(args: {
 export const UNMETERED_STORE_REFUSAL =
 	"Kedaipal admin and sponsored stores aren't metered — there are no credits to adjust. Credits apply to billed seller stores only.";
 
-/** WHY a metered store is never locked: the missing-row fail-safe, which
- * `resolveAccess` treats as comped full access. `null` for every store the
- * lock applies to.
+/**
+ * WHY a metered store is never locked: the missing-subscription-row fail-safe,
+ * which `resolveAccess` treats as comped full access. `null` for every store
+ * the lock applies to.
  *
- * An admin's own store and a `comped` one are NOT here — they are unmetered
- * (`storeIsMetered`), so they have no balance to exempt. `comped` stays in
- * this function's arguments because it is what the fail-safe is being treated
- * AS: a store that reaches here with `comped: true` has a subscription row
- * saying so and no regime to lock, which the gate above has already answered.
- * Keeping it makes that fall-through explicit rather than relying on the
- * caller's order. */
+ * An admin's own store and a `comped` one never reach this function at all —
+ * they are UNMETERED (`storeIsMetered`), so they have no balance to exempt.
+ * That is enforced by CALLER ORDER, not by this signature: every call site
+ * (`resolveCreditGate`, `balanceView`, `creditNotices.exempt`,
+ * `storeGateExempt`) checks `storeUnmetered` first and returns before getting
+ * here. The argument list is `{ status }` alone precisely because `comped`
+ * would be dead here — a store that still has a subscription row saying
+ * `comped: true` was already answered upstream.
+ *
+ * So a new caller MUST ask `storeUnmetered` before asking this. Reaching here
+ * with an unmetered store would return `null` and report it as lockable, which
+ * is the wrong answer for a store that has no balance at all.
+ */
 export type CreditLockExemption = "sponsored";
 
 export function creditLockExemption(args: {

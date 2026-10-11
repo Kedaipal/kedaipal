@@ -241,8 +241,29 @@ stale grant still works anywhere.
 **Legacy rows** written while such a store was metered are inert — every
 reader asks `regimeFor` *before* touching the account, so the meter hides
 whether or not the rows exist — but they sit below the current usage period
-forever, so `internalRollPeriods` re-selects them on every sweep and can never
-advance them. Clearing them is hygiene, not a correctness fix.
+forever, because `rollPeriod` returns an unmetered account untouched and never
+patches its `periodKey`. (That is deliberate: the stale key is what makes the
+first roll after a comp ends expire and re-grant.) Clearing them is hygiene,
+not a correctness fix.
+
+**The sweep steps over them (PR #353 review).** `internalRollPeriods` scans
+`by_period`'s `< current` range OLDEST-FIRST, so inert rows sit at the head of
+every batch. It used to `.take(SWEEP_BATCH)` and reschedule itself whenever the
+batch came back full — which at `SWEEP_BATCH` inert accounts means a batch that
+is always full and always makes zero progress: the sweep **reschedules itself
+endlessly and never reaches the metered stores behind them**, so quiet sellers'
+monthly grants silently stop landing (active stores self-heal via the lazy roll
+on debit). It is now **cursor-paginated**, rescheduling on `continueCursor`
+rather than on batch fullness, so what it cannot advance it steps over. Pinned
+by a test that seeds a full batch of inert comped accounts behind one paying
+seller; reverting the fix makes convex-test fail with *"infinitely recursive
+scheduled functions"*.
+
+This is why it had to be fixed here rather than ticketed: `z8r3fdp4er` created
+the inert population (admin stores, where the purge is the documented hygiene),
+and this change enlarges it with comped stores **and deliberately refuses to
+purge those** — their bought lots must survive the comp. Stepping over them is
+the one remedy that serves both populations.
 
 **The purge is deliberately narrower than the gate — admin-owned only.** A
 sponsored store can hold **bought credits**: 12-month `creditLots` a seller paid

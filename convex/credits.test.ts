@@ -927,6 +927,78 @@ describe("a SPONSORED store is unmetered too (z8r3fdrph7)", () => {
 	});
 });
 
+describe("the monthly sweep steps over accounts it cannot advance", () => {
+	/**
+	 * `rollPeriod` returns an UNMETERED account untouched — it never patches
+	 * `periodKey`, deliberately, because the stale key is what makes the first
+	 * roll after a comp ends expire and re-grant. The consequence is that such
+	 * an account stays inside `by_period`'s `< current` range FOREVER, and the
+	 * sweep selects that range oldest-first. So inert rows sit at the head of
+	 * every batch and are re-taken on every pass.
+	 *
+	 * z8r3fdp4er created the population (admin stores, purgeable as hygiene);
+	 * z8r3fdrph7 enlarged it with comped stores AND deliberately refuses to
+	 * purge those (their bought lots must survive). The sweep has to step over
+	 * them instead.
+	 */
+	const staleAccount = async (t: T, retailerId: Id<"retailers">) =>
+		t.run((ctx) =>
+			ctx.db.insert("creditAccounts", {
+				retailerId,
+				planBalance: 10,
+				purchasedBalance: 0,
+				periodKey: "2026-08",
+				periodGrant: 200,
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			}),
+		);
+
+	test("a metered store behind a full batch of inert accounts still gets its month", async () => {
+		const t = setup();
+		// SWEEP_BATCH inert accounts, all stamped older than the metered one so
+		// `by_period` puts them first. Comped, so nothing can ever advance them
+		// and the purge deliberately won't remove them.
+		for (let i = 0; i < 100; i++) {
+			const ids = await signUp(t, `user_inert_${i}`);
+			await t.run(async (ctx) => {
+				const sub = await ctx.db
+					.query("subscriptions")
+					.withIndex("by_retailer", (q) => q.eq("retailerId", ids.retailerId))
+					.first();
+				if (sub) await ctx.db.patch(sub._id, { comped: true });
+				const acct = await ctx.db
+					.query("creditAccounts")
+					.withIndex("by_retailer", (q) => q.eq("retailerId", ids.retailerId))
+					.first();
+				if (acct) await ctx.db.delete(acct._id);
+			});
+			await staleAccount(t, ids.retailerId);
+		}
+		// One ordinary paying seller, stamped NEWER so it sorts last.
+		const seller = await makeStore(t, { status: "active", plan: "pro" });
+		await t.run(async (ctx) => {
+			const acct = await ctx.db
+				.query("creditAccounts")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", seller.retailerId))
+				.first();
+			if (acct)
+				await ctx.db.patch(acct._id, { periodKey: "2026-09", planBalance: 3 });
+		});
+
+		vi.setSystemTime(NOV_1);
+		// Before the fix the first pass takes 100 inert rows, advances none of
+		// them, and reschedules itself on a full batch — forever, with the
+		// seller never reached however many passes run.
+		await t.mutation(internal.credits.internalRollPeriods, {});
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+		const rolled = await account(t, seller.retailerId);
+		expect(rolled?.periodKey, "the seller's month landed").toBe("2026-11");
+		expect(rolled?.planBalance, "forfeited 3, granted Pro's 200").toBe(200);
+	});
+});
+
 describe("the unmetered purge (operator cleanup)", () => {
 	test("dry run reports and deletes nothing; apply clears the store", async () => {
 		const t = setup();
