@@ -208,6 +208,28 @@ limit, no product limit, and no credits to run down, so your store can never be
 locked". That card is the only place a sponsored seller learns it, which is why
 its copy is test-pinned.
 
+**That card keys on `retailer.fullAccess`, NOT on `sub.comped`** — the two look
+interchangeable and are not. `resolveAccess` reports `comped: true` for a store
+with no subscription row as well (failing open), and that store stays METERED.
+Keying the card on `comped` put "nothing is capped — no monthly order limit…
+no credits to run down" directly above its live "200 of 200" meter: the exact
+contradiction this ticket removed from comped stores, reintroduced one state
+over. Found by driving it (`/test-code`, 11 Oct 2026), not by a test — the unit
+tests all passed, because every fixture that said `comped` was a real comp. A
+rowless store now falls through to the ordinary Current-plan card, which agrees
+with the meter beneath it. The plan CONTROLS stay keyed on `comped`:
+`subscribeSelf` throws without a subscription row, so offering that store a
+picker would only produce an error.
+
+The same split applies to the top-up refusal, which has **three** un-toppable
+kinds rather than two, because the true sentence differs:
+
+| kind | store | what is true of it |
+| --- | --- | --- |
+| `admin_store` | an admin's own | unmetered — no balance at all |
+| `sponsored` | comped | unmetered — no monthly limit, nothing to run down |
+| `never_locked` | no subscription row | **metered** — it has a grant and a balance; it simply can never be locked, so a pack buys it nothing |
+
 **The admin grant lever is now contract-only.** A recurring custom allowance
 used to be "sponsored or contracted" (`z8r3fdkp8h`), and
 `GRANT_LEVER_CONTRACT_REFUSAL` told admins to *"comp it if it's sponsored"*. A
