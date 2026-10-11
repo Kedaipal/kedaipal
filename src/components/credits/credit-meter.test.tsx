@@ -359,7 +359,26 @@ describe("CreditMeter — Billing (full)", () => {
 		).toBeTruthy();
 	});
 
-	it("comped: metered, never locked, said so — and nothing to top up", () => {
+	it("a COMPED store renders nothing — it is unmetered, like an admin's own (z8r3fdrph7)", () => {
+		// The bug this closed: a sponsored seller read "N orders left" over a
+		// bar scaled to 200 with "Back to 200 on 1 Nov", under a sentence
+		// explaining that none of it could lock them. `getBalance` answers null
+		// for them now, so there is no card to misread.
+		mockQueries({ bal: null, topUp: refused("sponsored") });
+		const { container } = render(
+			<CreditMeter variant="full" retailer={retailer({ comped: true })} />,
+		);
+		expect(container.textContent).toBe("");
+		const card = render(
+			<CreditMeter variant="card" retailer={retailer({ comped: true })} />,
+		);
+		expect(card.container.textContent).toBe("");
+	});
+
+	it("the fail-safe (no subscription row) still meters, and says it never locks", () => {
+		// `resolveAccess` treats a rowless store as sponsored full access, but
+		// it stays metered on purpose: a data fault, not a granted comp, so its
+		// volume keeps leaving a record. This is the one reader of that line.
 		mockQueries({
 			bal: balance({ lockExempt: "sponsored" }),
 			topUp: refused("sponsored"),
@@ -367,7 +386,7 @@ describe("CreditMeter — Billing (full)", () => {
 		render(
 			<CreditMeter variant="full" retailer={retailer({ comped: true })} />,
 		);
-		expect(screen.getByText(/Sponsored stores are never locked/)).toBeTruthy();
+		expect(screen.getByText(/This store is never locked/)).toBeTruthy();
 		expect(screen.queryByText("Top up credits")).toBeNull();
 		// One balance, so no order of use to explain.
 		expect(screen.queryByText("Bought credits")).toBeNull();

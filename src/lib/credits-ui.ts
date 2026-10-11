@@ -77,9 +77,11 @@ export function creditRefreshLabel(
  * it does right now — the lock, a store that's never locked, a trial, an
  * unpaid / paused / ended plan (bought credits never stand in for a plan:
  * they're kept, and work again once it's active), or a custom allowance.
- * The exemption comes before the subscription status: a sponsored store sits
- * in whatever status it had and must never be told to pay. (An admin's own
- * store reaches none of this — it is unmetered and has no meter at all.)
+ * The exemption comes before the subscription status: an exempt store sits in
+ * whatever status it had and must never be told to pay. (An UNMETERED store —
+ * an admin's own, or a comped one since z8r3fdrph7 — reaches none of this: it
+ * has no balance, so no meter for a line to sit under. What still reaches the
+ * exempt arm is the missing-subscription-row fail-safe.)
  */
 export function creditStateLine(args: {
 	/** Orders waiting on credits right now (Credits T3.1) — 0 when none are.
@@ -107,8 +109,12 @@ export function creditStateLine(args: {
 			? `${held}. The ${orders(-args.total)} owed come off your next pack or your next monthly credits, oldest order first.`
 			: `${held} until you add credits.`;
 	}
+	// Reachable only for the missing-subscription-row FAIL-SAFE since
+	// z8r3fdrph7: a real comp is UNMETERED, so it has no balance and this meter
+	// never renders for it. `resolveAccess` treats a rowless store as sponsored,
+	// and it stays metered-but-never-locked so its volume leaves a record.
 	if (args.exempt === "sponsored")
-		return "Sponsored stores are never locked — this is here so you can see your volume.";
+		return "This store is never locked — the balance is here so you can see your volume.";
 	if (args.regime === "trial")
 		return `Your free trial includes ${TRIAL_CREDIT_GRANT} orders, counted from your first order. Pick a plan when they're used or your first invoice comes due.`;
 	const bought = args.purchased;

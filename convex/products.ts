@@ -26,6 +26,7 @@ import {
 	logAdminAction,
 	type RetailerAccess,
 	requireRetailerAccess,
+	storeOwnerIsAdmin,
 	tryRetailerAccess,
 } from "./lib/auth";
 import type { PermissionLevel } from "./lib/permissions";
@@ -70,6 +71,8 @@ import { tallyPromoUnits } from "./lib/promoTally";
 import {
 	assertProductCap,
 	MAX_PRODUCTS_PER_RETAILER,
+	type ProductCapExemption,
+	productCapExemption,
 	productCapState,
 } from "./lib/productCap";
 import { deleteProductCascade } from "./lib/productDelete";
@@ -85,8 +88,9 @@ import {
 	assertPlanFeature,
 	assertSubscriptionActive,
 	getAccess,
+	loadSubscription,
 } from "./subscriptions";
-import type { Plan } from "./lib/plans";
+import { type Plan, storeHasFullAccess } from "./lib/plans";
 import {
 	cartesian,
 	DEFAULT_CUSTOM_LABEL,
@@ -226,6 +230,33 @@ async function requireRetailerOwnership(
 	level: PermissionLevel,
 ): Promise<RetailerAccess> {
 	return requireRetailerAccess(ctx, retailerId, { area: "products", level });
+}
+
+/**
+ * Does the 200-product cap apply to this call? ONE author, because four
+ * surfaces ask it — `create`, `bulkUpsert`, the `capState` counter and the
+ * import preview — and a disagreement between them is a seller told "12 of
+ * these 60 fit" by a preview and then refused by the save, or the reverse.
+ *
+ * Two independent reasons to be exempt, different in kind:
+ *  - the CALLER is a Kedaipal admin operating someone else's store (act-as);
+ *  - the STORE has full access (`storeHasFullAccess` — admin-owned or
+ *    SPONSORED, z8r3fdrph7), so there is no plan behind it to cap. Unlike
+ *    act-as this holds on the seller's OWN login, which is the point: a
+ *    sponsored vendor adds their 250th product themselves.
+ */
+async function productCapExempt(
+	ctx: QueryCtx | MutationCtx,
+	access: RetailerAccess,
+): Promise<ProductCapExemption | null> {
+	const sub = await loadSubscription(ctx, access.retailer._id);
+	return productCapExemption({
+		actingAsAdmin: access.actingAsAdmin,
+		fullAccess: storeHasFullAccess({
+			ownerIsAdmin: storeOwnerIsAdmin(access.retailer),
+			comped: sub?.comped === true,
+		}),
+	});
 }
 
 // Widened to accept a QueryCtx (the `requireRetailerOwnership` shape) so
@@ -999,7 +1030,7 @@ export const capState = query({
 		const access = await requireRetailerOwnership(ctx, retailerId, "read");
 		return productCapState(
 			await countProductsForRetailer(ctx, retailerId),
-			access.actingAsAdmin,
+			await productCapExempt(ctx, access),
 		);
 	},
 });
@@ -1181,13 +1212,14 @@ export const create = mutation({
 		}
 
 		// Product cap — counts archived rows too, so deleting (not archiving) is
-		// what frees a slot. An admin operating the store (act-as) is exempt: a
+		// what frees a slot. Exempt for an admin operating the store (act-as: a
 		// white-glove Enterprise catalog gets stocked past the ceiling by hand,
-		// the same posture as the subscription soft-lock bypass above.
+		// the same posture as the subscription soft-lock bypass above) and for a
+		// full-access store, which has no plan to cap (`productCapExempt`).
 		assertProductCap(
 			await countProductsForRetailer(ctx, args.retailerId),
 			1,
-			access.actingAsAdmin,
+			await productCapExempt(ctx, access),
 		);
 
 		if (args.name.trim().length === 0) throw new ConvexError("Name is required");
@@ -2473,12 +2505,12 @@ export const bulkUpsert = mutation({
 
 		// Product cap — only the rows that would be INSERTED consume a slot; a
 		// sheet that just updates existing products by SKU never touches it.
-		// Admin act-as is exempt (see products.create).
+		// Admin act-as and full-access stores are exempt (see products.create).
 		const insertCount = classified.filter((x) => x.c.mode === "create").length;
 		assertProductCap(
 			await countProductsForRetailer(ctx, args.retailerId),
 			insertCount,
-			access.actingAsAdmin,
+			await productCapExempt(ctx, access),
 		);
 
 		const now = Date.now();
@@ -2818,7 +2850,7 @@ export const bulkUpsertPreview = query({
 			// client can read it off any one of them.
 			cap: productCapState(
 				await countProductsForRetailer(ctx, args.retailerId),
-				access.actingAsAdmin,
+				await productCapExempt(ctx, access),
 			),
 		};
 	},
