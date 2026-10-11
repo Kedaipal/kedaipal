@@ -152,6 +152,20 @@ both promised them no limit.
 store again **from that moment**, with no credit charged for the sponsored
 months and no debt carried into the paid ones. It is pinned by a test.
 
+**What this retired in `z8r3fdmg4h`'s follow-up (PR #351).** `storeGateExempt`
+(`convex/credits.ts`) exists because a comped store was metered: past its
+monthly grant its orders carried `creditSeq > fundedThrough`, so the raw
+comparison called them gated — and cancelling one refunded an accepted order,
+told the seller *"you were never able to open this one"* about an order on
+their screen, and stamped `orders.neverFunded` on data they legitimately had,
+a stamp dormant only while the comp lasted and with **no clearing path
+afterwards**. Unmetering the comp removes that state instead of widening the
+check: no account, no `creditSeq`, nothing for a watermark to out-rank.
+`storeGateExempt` keeps its job for the two cases that remain — an unmetered
+store, and the **missing-sub-row fail-safe**, which stays metered and is
+therefore the only store that can reach a drained balance with an open gate
+(it has its own tests in `orderGate.test.ts` for exactly that reason).
+
 **"No limits" has ONE author**: `storeHasFullAccess` (`convex/lib/plans.ts`),
 beside `fullAccessCaps()`. `storeIsMetered` delegates to it, the product cap
 reads it, and the entitlement caps are built from the same answer — so the
@@ -257,9 +271,36 @@ already spent when it's created.
 | **The system** — an unanswered booking request expired, an unpaid claim-link order passed its payment deadline | Always |
 | **The buyer** — declined the custom item on a custom-only order | Always |
 | **A Kedaipal admin** — hard-deleted a live order | Always |
+| **The seller**, on an order still **waiting on credits** | Always, and it costs **no** allowance (T3.1 — see below) |
 | **The seller** (or an admin working their store) — cancel or booking decline | Only if the order was **never accepted** (`pending` / `booking_requested`), and at most **10 a month** (`SELLER_CANCEL_REFUNDS_PER_PERIOD`) |
 
-An accepted order keeps its credit. A refund returns to the bucket — and the
+### The late-cancel rule, and why it bites more often than it reads
+
+**An accepted order keeps its credit** — cancel it after you have started work
+and the credit stays spent. That is the deliberate 30 Sep rule, and it is the
+sentence a support conversation will turn on, so it is worth stating plainly:
+*the seller carries the cost of an order they accepted and then cancelled.*
+
+What makes it sharper than the table suggests is **auto-confirm**.
+`confirmedAtCreate` (`orders.ts`) is true whenever the buyer left a phone
+number **and** `WHATSAPP_ORDER_CONFIRM_TEMPLATE` is configured — which is every
+storefront order in production. So a storefront order is born `confirmed`, not
+`pending`, and **`pending` is nearly unreachable there**. In practice:
+
+- a seller cancelling a storefront order almost always reads as *accepted* and
+  keeps the credit spent;
+- the 10-a-month allowance therefore protects mostly **counter / anonymous
+  walk-in** orders (no phone ⇒ born `pending`) and **booking requests**;
+- which is exactly why T3.1 had to add the gated arm above. Before it, a seller
+  was charged for an order they were never allowed to *see*, because
+  auto-confirm made it look accepted — and cancelling, the gate's own
+  prescribed way out, was the act that burned the credit.
+
+`pending` is about **who has accepted the order**, not about money. Payment
+lives on a separate field (`paymentStatus`: `unpaid` / `claimed` / `received`),
+so an unpaid order can sit at `confirmed`, `packed` or `delivered`, and a
+made-to-order job awaiting its mockup is `confirmed` with
+`mockupStatus: "pending"` — a different field again. A refund returns to the bucket — and the
 lot — the credit came out of. Only an order this ledger actually debited can be
 refunded, so an order from before credits launched, or one already refunded,
 never mints a credit. There is no un-cancel path in the codebase; if one is ever
@@ -916,6 +957,51 @@ refusal and every gate surface's copy.
   owed" is the ledger's answer, "3 waiting on credits" is the one the seller can
   act on — a cancelled waiting order still owes its credit while nobody waits
   on it.
+- **A cancelled gated order stays CLOSED — `orders.neverFunded`.** The refund
+  below is a credit landing, so `applyEntry` walks the watermark one position;
+  when the cancelled order held the oldest unfunded position the watermark
+  passes its own `creditSeq`, every surface un-redacts it, and "cancel" becomes
+  "reveal this buyer for free", repeatable. **A watermark cannot express "this
+  position is spent but this order stays shut"** — not advancing only delays
+  the reveal to the next credit, and skipping dead positions still moves the
+  mark past them. So the gate is `neverFunded === true || creditSeq >
+  fundedThrough`: the watermark advances (no dead position, the next LIVE order
+  opens), and the stamp keeps the dead one shut. `customers.neverFunded` is the
+  same stamp one table over, because `firstOrderCreditSeq` is a comparison
+  against the same watermark and what it leaks is the phone number; it is
+  CLEARED when the buyer orders again, so a returning buyer who is paid for
+  becomes visible. Stamped for EVERY cancel cause, not just a seller's — the
+  unpaid-order sweep refunds too, so without it a gated order revealed itself
+  with no seller action at all. Found by driving Chrome, after the refund
+  change below had already passed its unit and integration tests: the tests
+  asserted the credit came back and never asked what the seller could now see.
+- **Cancelling a GATED order always gives its credit back**, and never spends
+  one of the month's 10 seller refunds (Zaki, 9 Oct 2026).
+  `NEVER_ACCEPTED_STATUSES` (`pending`, `booking_requested`) is a PROXY for
+  "the seller got something out of this order", and auto-confirm quietly
+  invalidated it: `confirmedAtCreate` fires whenever the buyer left a phone
+  and `WHATSAPP_ORDER_CONFIRM_TEMPLATE` is configured, which is every
+  storefront order in production. So `pending` is nearly unreachable, every
+  seller cancel read as "accepted", and once T3.1 made unfunded orders
+  INVISIBLE the rule charged sellers a credit for an order they were never
+  allowed to open — with cancelling, the gate's own prescribed way out, as the
+  act that burned it. The rule now tests the GATE rather than widening the
+  status set, because the question was never about status: a gated order
+  delivers zero value by construction. Not exploitable — the only route to the
+  refund is being denied the order first, and you end up with no order.
+  **It also closes the dead-position bug on its own**: the refund runs through
+  `applyEntry` with `+1`, so `fundingAdvance` walks the watermark past the
+  freed position instead of leaving a hole for the next pack to pay past.
+  Rejected on the way in: **charging the credit at PAYMENT instead of at
+  creation**. `markPaymentReceived` is a seller mutation and manual bank
+  transfer is the dominant flow, so it would mean charging when the seller
+  clicks a button they control; and the mockup round-trip, COD and counter
+  sales all do their work before payment, which would un-meter the made-to-
+  order cohort that is the ICP.
+- **The suite could not have caught this**, which is worth remembering: the
+  convex-test env has no confirm template, so test orders are born `pending`
+  — already in the one status the refund rule forgives. Any rule keyed on a
+  status that production sets differently needs a test that sets it too.
 - **The top-up picker** says what the pack OPENS (`opensLine`), and the thing
   that makes that hard is that the queue advances by POSITION while the count
   reports live orders. A cancelled order keeps the position its debit claimed
@@ -952,7 +1038,15 @@ refusal and every gate surface's copy.
   the wire type — the client could not have told the two apart.
 - **One author for the phrase** (`GATED_CELL_LABEL`): the CSV cell, the inbox
   chip and the customer name all read it, rather than three hand-typed copies
-  drifting apart.
+  drifting apart. Once the order is CANCELLED the same slot reads **"Details
+  closed"** (`gatedNameCell`) — "Waiting on credits" beside a Cancelled badge
+  and a "Cancelled — details stay closed" body was one card contradicting
+  itself twice, and the details genuinely do stay closed (`neverFunded`), so
+  the slot still has something true to say.
+- **The gated page's facts WRAP, they never truncate.** At 393px the grid is
+  two columns and `truncate` cut "10 Oct, 12:45 am" to "…12:45 a…" — on the
+  one screen whose entire job is that those four facts are all the seller
+  gets, clipping one is the page failing at its only task.
 - **The BOOKING calendar blanks the guest, it never drops the row.** The grid,
   the day sheet, `blockImpact` and `closedDates.impact` read whole order rows
   off `bookingsOverlapping` rather than through the allowlist, so the

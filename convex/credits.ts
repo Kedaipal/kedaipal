@@ -42,6 +42,8 @@ import {
 	type CreditRegime,
 	type CreditRegimeInputs,
 	cancelRefundDecision,
+	orderCreditFunded,
+	creditLockExempt,
 	creditLockExemption,
 	creditRegime,
 	debitBucket,
@@ -651,6 +653,73 @@ export async function debitCreditForOrder(
 }
 
 /**
+ * The lowest `creditSeq` among a customer's orders that are still live,
+ * ignoring `exceptOrderId` (the one being cancelled right now, which the
+ * caller already knows is going). `undefined` when nothing of theirs
+ * survives.
+ *
+ * One indexed read on a cancel path, not a hot one.
+ */
+async function oldestLiveOrderSeq(
+	ctx: MutationCtx,
+	customerId: Id<"customers">,
+	exceptOrderId: Id<"orders">,
+): Promise<number | undefined> {
+	let oldest: number | undefined;
+	for (const o of await ctx.db
+		.query("orders")
+		.withIndex("by_customer", (q) => q.eq("customerId", customerId))
+		.collect()) {
+		if (o._id === exceptOrderId) continue;
+		if (o.status === "cancelled") continue;
+		if (o.creditSeq === undefined) continue;
+		if (oldest === undefined || o.creditSeq < oldest) oldest = o.creditSeq;
+	}
+	return oldest;
+}
+
+/**
+ * Is this store's gate OPEN whatever its balance — the unmetered and
+ * fail-safe arms of `resolveCreditGate`, as a STORE-level fact.
+ *
+ * The write side needs this and the read side already had it, which is the
+ * asymmetry that made it necessary (PR #351 review). It was written for the
+ * COMPED store, which was then metered: `creditRegime` gave it the monthly
+ * grant, so once it ran past that grant its orders carried
+ * `creditSeq > fundedThrough` and the raw comparison called them gated — even
+ * though the seller saw and worked every one of them. Cancelling such an order
+ * refunded an accepted order against the late-cancel rule, told the seller
+ * "you were never able to open this one" about an order on their screen, and
+ * stamped `neverFunded` on data they legitimately had: a stamp dormant only
+ * while the comp lasted, with no clearing path afterwards.
+ *
+ * **z8r3fdrph7 removed that whole class of bug** rather than widening this
+ * check: a comped store is UNMETERED now, so it grows no account, its orders
+ * carry no `creditSeq` at all, and `orderCreditFunded` answers "funded" on the
+ * absent value. There is no over-grant state left for a comp to reach. This
+ * function still earns its keep for the two cases that remain — an UNMETERED
+ * store (admin-owned or comped) and the missing-subscription-row fail-safe,
+ * which stays metered-but-never-locked — and it is still what keeps the write
+ * side from stamping `neverFunded` on a store that was never denied anything.
+ *
+ * Deliberately NOT the admin-CALLER arm that `resolveCreditGate` checks first.
+ * That one is about who is looking; this is about whether the STORE was ever
+ * denied the order, which is what decides the refund and the stamp. An admin
+ * working a normal metered store still cancels a genuinely gated order.
+ */
+export async function storeGateExempt(
+	ctx: AnyCtx,
+	retailerId: Id<"retailers">,
+): Promise<boolean> {
+	const retailer = await ctx.db.get(retailerId);
+	// Fail OPEN on a missing store, like every other arm of the gate.
+	if (!retailer) return true;
+	const sub = await subscriptionRow(ctx, retailerId);
+	if (storeUnmetered(retailer, sub)) return true;
+	return creditLockExempt({ status: sub?.status ?? null });
+}
+
+/**
  * Give an order's credit back when the order ended before it ever got going
  * (`cancelRefundDecision`). Only an order this ledger actually debited can be
  * refunded — an order from before credits launched, or one already refunded,
@@ -678,12 +747,72 @@ export async function refundCreditForOrder(
 		account.sellerRefunds?.periodKey === account.periodKey
 			? account.sellerRefunds.count
 			: 0;
+	// Waiting on credits at the moment it was cancelled — read off the account
+	// we already hold, so no extra read and no import from creditLock.ts
+	// (which imports THIS module).
+	// Exempt stores are never "gated" however the watermark reads — see
+	// `storeGateExempt`. Checked BEFORE the comparison, exactly as the
+	// read-side predicates do it.
+	const gated =
+		!(await storeGateExempt(ctx, order.retailerId)) &&
+		!orderCreditFunded(order.creditSeq, account.fundedThrough ?? 0);
 	const decision = cancelRefundDecision({
 		cause,
 		statusAtCancel: order.status,
 		sellerRefundsUsed: used,
+		gated,
 	});
 	if (!decision.refund) return;
+	// CLOSE IT FOR GOOD before the refund lands. The refund is a credit
+	// arriving, so `applyEntry` walks the watermark forward one position — and
+	// when this order held the oldest unfunded position, the watermark passes
+	// its own `creditSeq` and every seller surface un-redacts it. The seller
+	// would get the buyer's name, phone, items and tracking token back for an
+	// order they paid nothing for, which is the bypass the gate exists to
+	// stop, on demand and repeatable. See `orders.neverFunded` in schema.ts.
+	//
+	// Stamped for EVERY cause, not just a seller cancel: the unpaid-order
+	// sweep refunds too (`cause: "system"`, every minute), so without this a
+	// gated order reveals itself with no seller action at all.
+	//
+	// `updatedAt` is deliberately left alone, like every other credit patch —
+	// a credit moving is not progress on the order.
+	if (gated) {
+		await ctx.db.patch(order._id, { neverFunded: true });
+		// The buyer too, when this order is the one that created their record:
+		// the same watermark walk would otherwise expose the phone number.
+		//
+		// But only when it leaves them with NOTHING live. A buyer who placed
+		// two orders at zero credits, had the first cancelled (the unpaid
+		// sweep does this with no seller action) and whose second then gets
+		// funded is a buyer the seller HAS paid for — stamping would hide them
+		// from the Customer DB while their order page shows name, phone and
+		// items, which is two surfaces contradicting each other and breaks the
+		// "one funded order makes a buyer known for good" promise. So the
+		// record is re-pointed at their oldest surviving order instead, and
+		// THAT order's own funding decides — the same shape
+		// `linkOrderToCustomer` uses when a stamped buyer returns.
+		if (order.customerId !== undefined) {
+			const customer = await ctx.db.get(order.customerId);
+			if (
+				customer &&
+				customer.firstOrderCreditSeq !== undefined &&
+				customer.firstOrderCreditSeq === order.creditSeq
+			) {
+				const oldestLive = await oldestLiveOrderSeq(
+					ctx,
+					customer._id,
+					order._id,
+				);
+				await ctx.db.patch(
+					customer._id,
+					oldestLive === undefined
+						? { neverFunded: true }
+						: { firstOrderCreditSeq: oldestLive },
+				);
+			}
+		}
+	}
 	const last = debits[debits.length - 1];
 	let bucket = last.bucket;
 	let lotId = last.lotId;
