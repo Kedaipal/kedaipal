@@ -99,21 +99,54 @@ export async function loadCreditAccount(
 		.first();
 }
 
-async function regimeInputs(
+/**
+ * The store's subscription row, or null — module-local, deliberately not
+ * `subscriptions.loadSubscription` (importing it here would close a cycle:
+ * subscriptions.ts already imports `landCreditGrant` from this file). It
+ * replaces the three inline copies of this same query this module carried,
+ * because credit code reads the row for two separate questions and must not
+ * fetch it twice per gate: is this store metered at all (`storeUnmetered`,
+ * which needs `comped`), and which grant regime does it earn (`creditRegime`,
+ * which needs `status`/`plan`).
+ */
+async function subscriptionRow(
 	ctx: AnyCtx,
+	retailerId: Id<"retailers">,
+): Promise<Doc<"subscriptions"> | null> {
+	return ctx.db
+		.query("subscriptions")
+		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+		.first();
+}
+
+/**
+ * Is this store outside the credit system entirely (z8r3fdp4er + z8r3fdrph7)?
+ *
+ * ONE call shape for every gate, so a new one cannot forget that a comp is
+ * unmetered too — forgetting exactly that is what put a "200 of 200" bar in
+ * front of sponsored sellers for four days. Takes the rows rather than the
+ * ctx so the caller that also needs the regime loads the subscription once.
+ */
+export function storeUnmetered(
 	retailer: Doc<"retailers">,
+	sub: Doc<"subscriptions"> | null,
+): boolean {
+	return !storeIsMetered({
+		ownerIsAdmin: storeOwnerIsAdmin(retailer),
+		comped: sub?.comped === true,
+	});
+}
+
+function regimeInputs(
+	retailer: Doc<"retailers">,
+	sub: Doc<"subscriptions"> | null,
 	account: Pick<Account, "grantOverride" | "annualGrant"> | null,
 	now: number,
-): Promise<CreditRegimeInputs> {
-	const sub = await ctx.db
-		.query("subscriptions")
-		.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
-		.first();
+): CreditRegimeInputs {
 	return {
 		status: sub?.status ?? null,
 		// The missing-row fail-safe resolves to Pro in `resolveAccess`.
 		plan: sub?.plan ?? "pro",
-		comped: sub?.comped === true,
 		foundingEligible: foundingPriceEligible({
 			isFoundingMember: retailer.isFoundingMember === true,
 			foundingIntent: sub?.foundingIntent === true,
@@ -132,14 +165,15 @@ async function regimeInputs(
  * How this store is granted plan credits — or `null` when the question does
  * not apply to it.
  *
- * `null` is THE gate for an unmetered store (`storeIsMetered`, z8r3fdp4er):
- * a Kedaipal admin's own store has no credit regime, so it grows no account
- * (`ensureCreditAccount`), spends nothing per order (`debitCreditForOrder`),
- * refreshes nothing at a month boundary (`rollPeriod`), reports no balance
- * (`projectedCredits` → `balanceView` → `getBalance` → every meter) and can
- * never be locked (`resolveCreditLock`). Every one of those already had a
- * `null` branch for a store that no longer exists, which is the other reason
- * this answers `null`. Delete the gate and the unmetered tests go red.
+ * `null` is THE gate for an unmetered store (`storeIsMetered`, z8r3fdp4er +
+ * z8r3fdrph7): an admin's own store and a SPONSORED (comped) one have no
+ * credit regime, so they grow no account (`ensureCreditAccount`), spend
+ * nothing per order (`debitCreditForOrder`), refresh nothing at a month
+ * boundary (`rollPeriod`), report no balance (`projectedCredits` →
+ * `balanceView` → `getBalance` → every meter) and can never be locked
+ * (`resolveCreditLock`). Every one of those already had a `null` branch for a
+ * store that no longer exists, which is the other reason this answers `null`.
+ * Delete the gate and the unmetered tests go red.
  */
 async function regimeFor(
 	ctx: AnyCtx,
@@ -149,9 +183,9 @@ async function regimeFor(
 ): Promise<CreditRegime | null> {
 	const retailer = await ctx.db.get(retailerId);
 	if (!retailer) return null;
-	if (!storeIsMetered({ ownerIsAdmin: storeOwnerIsAdmin(retailer) }))
-		return null;
-	return creditRegime(await regimeInputs(ctx, retailer, account, now));
+	const sub = await subscriptionRow(ctx, retailerId);
+	if (storeUnmetered(retailer, sub)) return null;
+	return creditRegime(regimeInputs(retailer, sub, account, now));
 }
 
 // ---------------------------------------------------------------------------
@@ -645,19 +679,28 @@ async function oldestLiveOrderSeq(
 }
 
 /**
- * Is this store's gate OPEN whatever its balance — the sponsored and unmetered
- * arms of `resolveCreditGate`, as a STORE-level fact.
+ * Is this store's gate OPEN whatever its balance — the unmetered and
+ * fail-safe arms of `resolveCreditGate`, as a STORE-level fact.
  *
  * The write side needs this and the read side already had it, which is the
- * asymmetry that made it necessary (PR #351 review). A COMPED store is
- * deliberately metered — `creditRegime` gives it the monthly grant — so once
- * it runs past that grant its orders carry `creditSeq > fundedThrough` and the
- * raw comparison calls them gated. But its gate is open: the seller sees and
- * works every one of them. Without this check, cancelling such an order
+ * asymmetry that made it necessary (PR #351 review). It was written for the
+ * COMPED store, which was then metered: `creditRegime` gave it the monthly
+ * grant, so once it ran past that grant its orders carried
+ * `creditSeq > fundedThrough` and the raw comparison called them gated — even
+ * though the seller saw and worked every one of them. Cancelling such an order
  * refunded an accepted order against the late-cancel rule, told the seller
  * "you were never able to open this one" about an order on their screen, and
- * stamped `neverFunded` on data they legitimately had — a stamp that is
- * dormant only while the comp lasts and has no clearing path afterwards.
+ * stamped `neverFunded` on data they legitimately had: a stamp dormant only
+ * while the comp lasted, with no clearing path afterwards.
+ *
+ * **z8r3fdrph7 removed that whole class of bug** rather than widening this
+ * check: a comped store is UNMETERED now, so it grows no account, its orders
+ * carry no `creditSeq` at all, and `orderCreditFunded` answers "funded" on the
+ * absent value. There is no over-grant state left for a comp to reach. This
+ * function still earns its keep for the two cases that remain — an UNMETERED
+ * store (admin-owned or comped) and the missing-subscription-row fail-safe,
+ * which stays metered-but-never-locked — and it is still what keeps the write
+ * side from stamping `neverFunded` on a store that was never denied anything.
  *
  * Deliberately NOT the admin-CALLER arm that `resolveCreditGate` checks first.
  * That one is about who is looking; this is about whether the STORE was ever
@@ -671,15 +714,9 @@ export async function storeGateExempt(
 	const retailer = await ctx.db.get(retailerId);
 	// Fail OPEN on a missing store, like every other arm of the gate.
 	if (!retailer) return true;
-	if (!storeIsMetered({ ownerIsAdmin: storeOwnerIsAdmin(retailer) })) return true;
-	const sub = await ctx.db
-		.query("subscriptions")
-		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-		.first();
-	return creditLockExempt({
-		status: sub?.status ?? null,
-		comped: sub?.comped === true,
-	});
+	const sub = await subscriptionRow(ctx, retailerId);
+	if (storeUnmetered(retailer, sub)) return true;
+	return creditLockExempt({ status: sub?.status ?? null });
 }
 
 /**
@@ -899,7 +936,8 @@ export async function applyCreditsOnSettle(
 	if (!ensured) return;
 	let account = ensured.account;
 
-	const inputs = await regimeInputs(ctx, retailer, account, args.now);
+	const sub = await subscriptionRow(ctx, args.retailerId);
+	const inputs = regimeInputs(retailer, sub, account, args.now);
 	const unlockedGrant = monthlyCreditGrant({
 		...inputs,
 		annualGrant: undefined,
@@ -1195,10 +1233,7 @@ async function balanceView(
 			q.eq("retailerId", retailerId).eq("monthStart", monthStartMyt(now)),
 		)
 		.unique();
-	const sub = await ctx.db
-		.query("subscriptions")
-		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-		.first();
+	const sub = await subscriptionRow(ctx, retailerId);
 	const waitingOffsets =
 		ordersAwaitingCredit(projected.debitSeq, projected.fundedThrough) === 0
 			? []
@@ -1218,10 +1253,7 @@ async function balanceView(
 		sellerRefundsLeft: sellerRefundsLeft(refundsUsed),
 		customGrant: account?.grantOverride !== undefined,
 		ordersThisPeriod: usage?.orders ?? 0,
-		lockExempt: creditLockExemption({
-			status: sub?.status ?? null,
-			comped: sub?.comped === true,
-		}),
+		lockExempt: creditLockExemption({ status: sub?.status ?? null }),
 		// One extra read only when the arithmetic says something COULD be
 		// waiting, which for a store in credit is never. The offsets carry the
 		// count, so this is still ONE scan — the picker needs to know where the
@@ -1290,7 +1322,7 @@ export const listActivity = query({
 		if (!retailer) return { page: [], isDone: true, continueCursor: "" };
 		// Unmetered: nothing moves, and whatever legacy rows the table still
 		// holds are not this store's story any more (z8r3fdp4er).
-		if (!storeIsMetered({ ownerIsAdmin: storeOwnerIsAdmin(retailer) }))
+		if (storeUnmetered(retailer, await subscriptionRow(ctx, retailer._id)))
 			return { page: [], isDone: true, continueCursor: "" };
 		const result = await ctx.db
 			.query("creditLedger")
@@ -1344,7 +1376,7 @@ export const adminGetAccount = query({
 		// store is gone, or credits don't apply to it (z8r3fdp4er).
 		const unmetered =
 			retailer !== null &&
-			!storeIsMetered({ ownerIsAdmin: storeOwnerIsAdmin(retailer) });
+			storeUnmetered(retailer, await subscriptionRow(ctx, retailerId));
 		return { view, account, lots, unmetered };
 	},
 });
@@ -1402,7 +1434,7 @@ export const adminAdjust = mutation({
 		const adminSubject = await requireAdmin(ctx);
 		const retailer = await ctx.db.get(retailerId);
 		if (!retailer) throw new ConvexError("Store not found");
-		if (!storeIsMetered({ ownerIsAdmin: storeOwnerIsAdmin(retailer) }))
+		if (storeUnmetered(retailer, await subscriptionRow(ctx, retailerId)))
 			throw new ConvexError(UNMETERED_STORE_REFUSAL);
 		if (!Number.isInteger(amount) || amount === 0)
 			throw new ConvexError(
@@ -1571,24 +1603,22 @@ export const adminSetGrantOverride = mutation({
 		const adminSubject = await requireAdmin(ctx);
 		const retailer = await ctx.db.get(retailerId);
 		if (!retailer) throw new ConvexError("Store not found");
-		if (!storeIsMetered({ ownerIsAdmin: storeOwnerIsAdmin(retailer) }))
+		const sub = await subscriptionRow(ctx, retailerId);
+		// Unmetered stores have no allowance to set — an admin's own store, and
+		// since z8r3fdrph7 a SPONSORED one. The lever used to point admins AT a
+		// comp ("comp it if it's sponsored") precisely because a comp carried a
+		// grant; now a comp carries no limit at all, so this is the refusal a
+		// comped store gets and the copy below no longer offers that route.
+		if (storeUnmetered(retailer, sub))
 			throw new ConvexError(UNMETERED_STORE_REFUSAL);
 		const problem = grant === null ? null : grantOverrideProblem(grant);
 		if (problem) throw new ConvexError(problem);
-		const sub = await ctx.db
-			.query("subscriptions")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-			.first();
-		// SETTING a recurring allowance is reserved for a comp (sponsored) or a
-		// contract (where the branch below edits the contract's own number) —
-		// a list-price plan with a custom grant is a deal nothing recorded.
-		// CLEARING always works: a stale grant must never be trapped behind
-		// the rule that retired it.
-		if (
-			grant !== null &&
-			sub?.comped !== true &&
-			!(sub?.plan === "enterprise" && sub.enterprise)
-		)
+		// SETTING a recurring allowance is reserved for a CONTRACT (where the
+		// branch below edits the contract's own number) — a list-price plan
+		// with a custom grant is a deal nothing recorded. CLEARING always
+		// works: a stale grant must never be trapped behind the rule that
+		// retired it.
+		if (grant !== null && !(sub?.plan === "enterprise" && sub.enterprise))
 			throw new ConvexError(GRANT_LEVER_CONTRACT_REFUSAL);
 		if (sub?.plan === "enterprise" && sub.enterprise) {
 			if (grant === null)
@@ -1697,19 +1727,46 @@ export const adminCreditTotals = query({
  * store's meter right on the 1st too. Batched + self-rescheduling.
  */
 export const internalRollPeriods = internalMutation({
-	args: {},
-	handler: async (ctx): Promise<{ rolled: number }> => {
+	args: {
+		/** Where the previous pass stopped. Absent = start of the sweep; the
+		 * cron always calls it that way. */
+		cursor: v.optional(v.union(v.string(), v.null())),
+	},
+	handler: async (ctx, { cursor }): Promise<{ rolled: number }> => {
 		const now = Date.now();
 		const current = usagePeriodKey(now);
-		const stale = await ctx.db
+		// PAGINATED, not `.take(SWEEP_BATCH)` + "reschedule while the batch is
+		// full". `rollPeriod` returns an UNMETERED account untouched — it never
+		// patches `periodKey`, deliberately, because the stale key is what makes
+		// the first roll after a comp ends expire and re-grant. So such an
+		// account stays inside this `< current` range FOREVER, and the range is
+		// scanned oldest-first, which puts inert rows at the head of every
+		// batch. Re-taking them was merely wasteful at a handful; at
+		// SWEEP_BATCH of them the batch is always full and always makes no
+		// progress, so the sweep reschedules itself endlessly AND never reaches
+		// the metered stores behind them — quiet sellers' monthly grants simply
+		// stop landing. The cursor steps over what it cannot advance.
+		//
+		// Safe to paginate while mutating the same index: a rolled account's
+		// `periodKey` becomes `current`, which moves it OUT of this range, and
+		// only rows at or before the cursor are ever touched.
+		//
+		// z8r3fdp4er created the inert population (admin stores, where the
+		// purge is the documented hygiene); z8r3fdrph7 enlarged it with comped
+		// stores and deliberately will NOT purge those, because their bought
+		// lots have to survive the comp. Stepping over them is the remedy that
+		// works for both.
+		const page = await ctx.db
 			.query("creditAccounts")
 			.withIndex("by_period", (q) => q.lt("periodKey", current))
-			.take(SWEEP_BATCH);
-		for (const account of stale) await rollPeriod(ctx, account, now);
-		if (stale.length === SWEEP_BATCH) {
-			await ctx.scheduler.runAfter(0, internal.credits.internalRollPeriods, {});
+			.paginate({ numItems: SWEEP_BATCH, cursor: cursor ?? null });
+		for (const account of page.page) await rollPeriod(ctx, account, now);
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(0, internal.credits.internalRollPeriods, {
+				cursor: page.continueCursor,
+			});
 		}
-		return { rolled: stale.length };
+		return { rolled: page.page.length };
 	},
 });
 

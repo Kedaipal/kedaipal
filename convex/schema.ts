@@ -3169,8 +3169,10 @@ export default defineSchema({
 			v.object({ periodKey: v.string(), count: v.number() }),
 		),
 		// When the TOTAL balance last fell to 0 or below; cleared when it rises
-		// above 0. A fact about the balance, not a lock: comped and admin stores
-		// carry it too and are never locked (the seller-lock gate decides).
+		// above 0. A fact about the balance, not a lock — the per-order gate
+		// decides what is actually held. An UNMETERED store (admin-owned or
+		// comped, z8r3fdrph7) never reaches here at all: it takes no debits, so
+		// a legacy row's stamp just sits where the comp found it.
 		exhaustedAt: v.optional(v.number()),
 		// How many order debits this store has ever taken (Credits T3.1,
 		// z8r3fdmg4h). Monotonic, never reset by a period boundary — it is a

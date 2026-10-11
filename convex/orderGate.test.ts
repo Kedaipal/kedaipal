@@ -865,7 +865,26 @@ describe("the gate predicates with a neverFunded stamp", () => {
  * they legitimately had — a stamp that goes live the moment the comp ends and
  * has no clearing path.
  */
-describe("a COMPED store is metered but never gated", () => {
+describe("a COMPED store is UNMETERED, so nothing of its can be gated", () => {
+	/**
+	 * These three guarantees were written for a comped store that was METERED
+	 * (PR #351): it took the monthly grant, so past that grant its orders
+	 * carried `creditSeq > fundedThrough`, the raw comparison called them
+	 * gated, and `storeGateExempt` had to rescue them. z8r3fdrph7 removed the
+	 * state instead — a comp spends nothing per order, so its orders carry no
+	 * `creditSeq` — and the same three guarantees now hold STRUCTURALLY. They
+	 * are kept, and sharpened to assert the stronger facts, because they are
+	 * what a future change to the gate would break.
+	 *
+	 * The store arrives here CARRYING AN ACCOUNT, because `seed` signs it up
+	 * before the comp is switched on — which is also the real-world order: you
+	 * comp a store that was being billed. So the assertion is that the account
+	 * goes INERT, not that it never existed. Nothing may move it, and nothing
+	 * may be destroyed either (it holds credits the seller may have paid for).
+	 *
+	 * Note there is no `drain` here any more: a comped store cannot be drained
+	 * (`adminAdjust` refuses an unmetered store), which is itself the point.
+	 */
 	async function compedStore(t: T) {
 		const s = await seed(t);
 		await t.run(async (ctx) => {
@@ -878,11 +897,29 @@ describe("a COMPED store is metered but never gated", () => {
 		return s;
 	}
 
-	test("its order past the grant is NOT gated, and the seller sees it whole", async () => {
+	const accountOf = (t: T, retailerId: Id<"retailers">) =>
+		t.run((ctx) =>
+			ctx.db
+				.query("creditAccounts")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first(),
+		);
+
+	test("its orders carry no creditSeq at all, and the seller sees them whole", async () => {
 		const t = setup();
 		const s = await compedStore(t);
-		await drain(t, s.retailerId);
+		const before = await accountOf(t, s.retailerId);
 		const order = await placeOrder(t, s.retailerId, s.productId);
+		const row = await t.run((ctx) => ctx.db.get(order._id));
+		// The stronger fact: there is no position to compare at all, so the
+		// watermark comparison is never even reached.
+		expect(row?.creditSeq, "no credit was spent, so no position").toBe(
+			undefined,
+		);
+		expect(
+			(await accountOf(t, s.retailerId))?.planBalance,
+			"the account it arrived with went inert",
+		).toBe(before?.planBalance);
 		const seen = await t
 			.withIdentity({ subject: OWNER })
 			.query(api.orders.get, { shortId: order.shortId });
@@ -890,10 +927,10 @@ describe("a COMPED store is metered but never gated", () => {
 		expect(seen?.customer?.name).toBe(SENTINEL.name);
 	});
 
-	test("cancelling it keeps the credit and writes NO stamp", async () => {
+	test("cancelling it moves no balance and writes NO stamp", async () => {
 		const t = setup();
 		const s = await compedStore(t);
-		await drain(t, s.retailerId);
+		const before = await accountOf(t, s.retailerId);
 		const order = await placeOrder(t, s.retailerId, s.productId);
 		// Accepted, like every production storefront order.
 		const asOwner = t.withIdentity({ subject: OWNER });
@@ -901,26 +938,15 @@ describe("a COMPED store is metered but never gated", () => {
 			orderId: order._id,
 			status: "confirmed",
 		});
-		const before = await t.run((ctx) =>
-			ctx.db
-				.query("creditAccounts")
-				.withIndex("by_retailer", (q) => q.eq("retailerId", s.retailerId))
-				.first(),
-		);
 		await asOwner.mutation(api.orders.updateStatus, {
 			orderId: order._id,
 			status: "cancelled",
 		});
-		const after = await t.run((ctx) =>
-			ctx.db
-				.query("creditAccounts")
-				.withIndex("by_retailer", (q) => q.eq("retailerId", s.retailerId))
-				.first(),
-		);
 		const row = await t.run((ctx) => ctx.db.get(order._id));
-		expect(after?.planBalance, "the late-cancel rule still applies").toBe(
-			before?.planBalance,
-		);
+		expect(
+			(await accountOf(t, s.retailerId))?.planBalance,
+			"nothing debited, so nothing to refund either way",
+		).toBe(before?.planBalance);
 		expect(row?.neverFunded, "no permanent stamp on data they could see").toBe(
 			undefined,
 		);
@@ -929,7 +955,6 @@ describe("a COMPED store is metered but never gated", () => {
 	test("the cancel dialog doesn't claim they couldn't open it", async () => {
 		const t = setup();
 		const s = await compedStore(t);
-		await drain(t, s.retailerId);
 		const order = await placeOrder(t, s.retailerId, s.productId);
 		const outlook = await t
 			.withIdentity({ subject: OWNER })
@@ -938,6 +963,73 @@ describe("a COMPED store is metered but never gated", () => {
 		expect(
 			outlook && "gated" in outlook ? outlook.gated : undefined,
 		).toBeUndefined();
+	});
+});
+
+/**
+ * `storeGateExempt` was written for the comped store, which can no longer
+ * reach the state it rescued. This is the case it still serves, so the branch
+ * stays covered: a store with NO SUBSCRIPTION ROW. `resolveAccess` treats it
+ * as comped full access, but z8r3fdrph7 deliberately keeps it METERED — a data
+ * fault should still leave a ledger behind — so it DOES take a grant, DOES
+ * spend per order, and can therefore reach a balance of zero while its gate
+ * stays open. Delete `storeGateExempt`'s `creditLockExempt` arm and these go
+ * red.
+ */
+describe("the missing-subscription-row fail-safe is metered, never gated", () => {
+	async function rowlessStore(t: T) {
+		const s = await seed(t);
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", s.retailerId))
+				.first();
+			if (sub) await ctx.db.delete(sub._id);
+		});
+		return s;
+	}
+
+	test("an order placed at a drained balance is still seen whole", async () => {
+		const t = setup();
+		const s = await rowlessStore(t);
+		await drain(t, s.retailerId);
+		const order = await placeOrder(t, s.retailerId, s.productId);
+		const row = await t.run((ctx) => ctx.db.get(order._id));
+		// Metered: it really did spend a credit and take a position past the
+		// watermark — so this is the raw comparison being overruled, not an
+		// absent value passing by default.
+		expect(row?.creditSeq, "metered, so it holds a position").not.toBe(
+			undefined,
+		);
+		const seen = await t
+			.withIdentity({ subject: OWNER })
+			.query(api.orders.get, { shortId: order.shortId });
+		expect(seen?.creditGated).toBeUndefined();
+		expect(seen?.customer?.name).toBe(SENTINEL.name);
+	});
+
+	test("cancelling it writes no neverFunded stamp, and the dialog stays quiet", async () => {
+		const t = setup();
+		const s = await rowlessStore(t);
+		await drain(t, s.retailerId);
+		const order = await placeOrder(t, s.retailerId, s.productId);
+		const asOwner = t.withIdentity({ subject: OWNER });
+		const outlook = await asOwner.query(api.creditLock.cancelOutlook, {
+			orderId: order._id,
+		});
+		expect(
+			outlook && "gated" in outlook ? outlook.gated : undefined,
+		).toBeUndefined();
+		await asOwner.mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "confirmed",
+		});
+		await asOwner.mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "cancelled",
+		});
+		const row = await t.run((ctx) => ctx.db.get(order._id));
+		expect(row?.neverFunded, "it was never denied the order").toBe(undefined);
 	});
 });
 

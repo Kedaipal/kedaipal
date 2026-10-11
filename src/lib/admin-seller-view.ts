@@ -685,13 +685,18 @@ export interface SellerCredits {
 /** A store's credits in one reading, shared by the table, the phone cards,
  * the sheet, the CSV and the copy-summary so they can't disagree. */
 export function sellerCredits(row: AdminSellerRow): SellerCredits {
-	// Unmetered (z8r3fdp4er): an admin's own store is outside the credit system
-	// — no account, no grant, no debit. Asked BEFORE the row's cached figures,
-	// which a store that was metered before the gate still carries.
-	if (row.ownerIsAdmin)
+	// Unmetered (z8r3fdp4er + z8r3fdrph7): an admin's own store AND a SPONSORED
+	// one are outside the credit system — no account, no grant, no debit. Asked
+	// BEFORE the row's cached figures, which a store that was metered before
+	// the gate still carries: a comped store that was billed last month still
+	// holds "plan 200 · bought 0", and printing it here is the directory
+	// repeating the very claim this ticket removed from the seller's meter.
+	if (row.ownerIsAdmin || row.comped)
 		return {
 			headline: "—",
-			detail: "Admin store — not metered",
+			detail: row.ownerIsAdmin
+				? "Admin store — not metered"
+				: "Sponsored — not metered",
 			tone: "muted",
 			out: false,
 			metered: false,
@@ -724,6 +729,18 @@ export function sellerCredits(row: AdminSellerRow): SellerCredits {
 		total,
 		metered: true,
 	};
+}
+
+/**
+ * What the credit-ledger drawer says when credits don't apply to a store.
+ * One author for both sentences, because the two unmetered kinds owe the
+ * admin different next steps: an admin store is permanent, a comp is a toggle
+ * whose next state is "metered again".
+ */
+export function sellerUnmeteredNote(row: AdminSellerRow): string {
+	return row.ownerIsAdmin
+		? "Admin store — not metered. Credits apply to billed seller stores only: this one has no balance, takes no monthly grant and spends nothing per order."
+		: "Sponsored store — not metered. A comp grants what an admin's own store gets, which is no limits at all: no balance, no monthly grant, nothing spent per order. Turn the comp off and the store is metered again from that moment, starting with the month's grant.";
 }
 
 export const SELLER_STATUS_LABEL: Record<SellerBucket, string> = {
