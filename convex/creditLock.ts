@@ -57,6 +57,7 @@ import {
 	countOrdersAwaitingCredit,
 	loadCreditAccount,
 	projectedCredits,
+	storeGateExempt,
 } from "./credits";
 import {
 	isAdmin,
@@ -423,10 +424,14 @@ export const cancelOutlook = query({
 			account?.sellerRefunds?.periodKey === periodKey
 				? account.sellerRefunds.count
 				: 0;
-		const gated = !orderCreditFunded(
-			order.creditSeq,
-			account?.fundedThrough ?? 0,
-		);
+		// The SAME store-level exemption the refund itself applies, so the
+		// dialog can never promise something the cancel won't do. A comped
+		// store is metered but its gate is open, and the raw comparison alone
+		// would tell a seller "you were never able to open this one" about an
+		// order sitting on their screen.
+		const gated =
+			!(await storeGateExempt(ctx, order.retailerId)) &&
+			!orderCreditFunded(order.creditSeq, account?.fundedThrough ?? 0);
 		const decision = cancelRefundDecision({
 			cause: "seller",
 			statusAtCancel: order.status,

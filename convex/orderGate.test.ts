@@ -853,3 +853,161 @@ describe("the gate predicates with a neverFunded stamp", () => {
 		expect(isCustomerGated({}, 10)).toBe(false);
 	});
 });
+
+/**
+ * The write side must apply the SAME exemption the read side does (PR #351
+ * review). A COMPED store is deliberately metered — `creditRegime` hands it
+ * the monthly grant — so past that grant its orders carry
+ * `creditSeq > fundedThrough` while its GATE IS OPEN and the seller sees and
+ * works every one of them. Judging the refund on the raw comparison alone
+ * refunded an accepted order, told the seller "you were never able to open
+ * this one" about an order on their screen, and stamped `neverFunded` on data
+ * they legitimately had — a stamp that goes live the moment the comp ends and
+ * has no clearing path.
+ */
+describe("a COMPED store is metered but never gated", () => {
+	async function compedStore(t: T) {
+		const s = await seed(t);
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", s.retailerId))
+				.first();
+			if (sub) await ctx.db.patch(sub._id, { comped: true });
+		});
+		return s;
+	}
+
+	test("its order past the grant is NOT gated, and the seller sees it whole", async () => {
+		const t = setup();
+		const s = await compedStore(t);
+		await drain(t, s.retailerId);
+		const order = await placeOrder(t, s.retailerId, s.productId);
+		const seen = await t
+			.withIdentity({ subject: OWNER })
+			.query(api.orders.get, { shortId: order.shortId });
+		expect(seen?.creditGated).toBeUndefined();
+		expect(seen?.customer?.name).toBe(SENTINEL.name);
+	});
+
+	test("cancelling it keeps the credit and writes NO stamp", async () => {
+		const t = setup();
+		const s = await compedStore(t);
+		await drain(t, s.retailerId);
+		const order = await placeOrder(t, s.retailerId, s.productId);
+		// Accepted, like every production storefront order.
+		const asOwner = t.withIdentity({ subject: OWNER });
+		await asOwner.mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "confirmed",
+		});
+		const before = await t.run((ctx) =>
+			ctx.db
+				.query("creditAccounts")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", s.retailerId))
+				.first(),
+		);
+		await asOwner.mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "cancelled",
+		});
+		const after = await t.run((ctx) =>
+			ctx.db
+				.query("creditAccounts")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", s.retailerId))
+				.first(),
+		);
+		const row = await t.run((ctx) => ctx.db.get(order._id));
+		expect(after?.planBalance, "the late-cancel rule still applies").toBe(
+			before?.planBalance,
+		);
+		expect(row?.neverFunded, "no permanent stamp on data they could see").toBe(
+			undefined,
+		);
+	});
+
+	test("the cancel dialog doesn't claim they couldn't open it", async () => {
+		const t = setup();
+		const s = await compedStore(t);
+		await drain(t, s.retailerId);
+		const order = await placeOrder(t, s.retailerId, s.productId);
+		const outlook = await t
+			.withIdentity({ subject: OWNER })
+			.query(api.creditLock.cancelOutlook, { orderId: order._id });
+		// Whatever it says, it must not be the gated sentence.
+		expect(
+			outlook && "gated" in outlook ? outlook.gated : undefined,
+		).toBeUndefined();
+	});
+});
+
+/**
+ * The customer stamp must not outlive the reason for it (PR #351 review).
+ */
+describe("a buyer with a surviving order stays known", () => {
+	test("cancelling their FIRST order re-points the record, it doesn't close it", async () => {
+		const t = setup();
+		const s = await seed(t);
+		await drain(t, s.retailerId);
+		// Two orders at zero: A creates the customer record, B follows.
+		const a = await placeOrder(t, s.retailerId, s.productId);
+		const b = await placeOrder(t, s.retailerId, s.productId);
+		await t
+			.withIdentity({ subject: OWNER })
+			.mutation(api.orders.updateStatus, {
+				orderId: a._id,
+				status: "cancelled",
+			});
+
+		const customer = await t.run(async (ctx) => {
+			const rows = await ctx.db.query("customers").collect();
+			return rows.find((c) => c.retailerId === s.retailerId) ?? null;
+		});
+		const bRow = await t.run((ctx) => ctx.db.get(b._id));
+		expect(customer?.neverFunded, "B is still live, so no stamp").toBe(
+			undefined,
+		);
+		expect(
+			customer?.firstOrderCreditSeq,
+			"re-pointed at the oldest surviving order",
+		).toBe(bRow?.creditSeq);
+
+		// Credits land: B opens, and the buyer must open WITH it.
+		await t.withIdentity({ subject: ADMIN }).mutation(api.credits.adminAdjust, {
+			retailerId: s.retailerId,
+			bucket: "plan",
+			amount: 5,
+			note: "fund the surviving order",
+		});
+		const listed = await t
+			.withIdentity({ subject: OWNER })
+			.query(api.customers.list, {
+				retailerId: s.retailerId,
+				sort: "recency",
+				paginationOpts: { numItems: 20, cursor: null },
+			});
+		expect(
+			listed.page[0]?.creditGated,
+			"the Customer DB must not deny a buyer whose live order is open",
+		).toBeUndefined();
+		expect(listed.page[0]?.waPhone).toBe(SENTINEL.phone);
+	});
+
+	test("with nothing left alive, the record still closes", async () => {
+		const t = setup();
+		const s = await seed(t);
+		await drain(t, s.retailerId);
+		const only = await placeOrder(t, s.retailerId, s.productId);
+		await t
+			.withIdentity({ subject: OWNER })
+			.mutation(api.orders.updateStatus, {
+				orderId: only._id,
+				status: "cancelled",
+			});
+		const customer = await t.run(async (ctx) => {
+			const rows = await ctx.db.query("customers").collect();
+			return rows.find((c) => c.retailerId === s.retailerId) ?? null;
+		});
+		expect(customer?.neverFunded).toBe(true);
+	});
+});

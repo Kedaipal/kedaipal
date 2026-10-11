@@ -209,6 +209,11 @@ const GATED_CUSTOMER_FIELDS = [
 	"firstOrderAt",
 	"lastOrderAt",
 	"firstOrderCreditSeq",
+	// Not buyer data — the seller's own verdict on this record, carried so the
+	// name slot can say "Details closed" for a buyer whose every order was
+	// cancelled while gated instead of "Waiting on credits", which would be
+	// the list contradicting itself the way the order card used to.
+	"neverFunded",
 	"createdAt",
 	"updatedAt",
 ] as const satisfies readonly (
