@@ -159,7 +159,28 @@ export type CancelCause =
 	/** A Kedaipal admin hard-deleted a live order. */
 	| "admin";
 
-/** Statuses an order holds before the seller has accepted it. */
+/**
+ * Statuses an order holds before the seller has accepted it.
+ *
+ * READ THE NEXT PARAGRAPH BEFORE TRUSTING THIS SET. It is a proxy for "the
+ * seller got something out of this order", and auto-confirm has made it a
+ * narrow one: `confirmedAtCreate` (orders.ts) fires whenever the buyer left a
+ * phone AND `WHATSAPP_ORDER_CONFIRM_TEMPLATE` is configured, which is every
+ * storefront order in production. So a storefront order is born `confirmed`,
+ * `pending` is nearly unreachable there, and a seller cancel almost always
+ * reads as "accepted" and keeps the credit spent — the deliberate late-cancel
+ * rule (Zaki, 30 Sep 2026), but sharper than the status names suggest.
+ *
+ * In practice the 10-a-month allowance protects counter / anonymous walk-in
+ * orders (no phone ⇒ born `pending`) and booking requests. It is also why
+ * `cancelRefundDecision` takes `gated` separately: an order the seller was
+ * never allowed to SEE delivers zero value whatever its status, so it must
+ * not be judged by this set. See docs/credits.md#refunds.
+ *
+ * `pending` is about WHO HAS ACCEPTED the order, never about money — payment
+ * lives on `paymentStatus`, and a made-to-order job awaiting its mockup is
+ * `confirmed` with `mockupStatus: "pending"`.
+ */
 const NEVER_ACCEPTED_STATUSES: ReadonlySet<string> = new Set([
 	"pending",
 	"booking_requested",

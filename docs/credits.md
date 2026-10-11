@@ -204,9 +204,36 @@ already spent when it's created.
 | **The system** — an unanswered booking request expired, an unpaid claim-link order passed its payment deadline | Always |
 | **The buyer** — declined the custom item on a custom-only order | Always |
 | **A Kedaipal admin** — hard-deleted a live order | Always |
+| **The seller**, on an order still **waiting on credits** | Always, and it costs **no** allowance (T3.1 — see below) |
 | **The seller** (or an admin working their store) — cancel or booking decline | Only if the order was **never accepted** (`pending` / `booking_requested`), and at most **10 a month** (`SELLER_CANCEL_REFUNDS_PER_PERIOD`) |
 
-An accepted order keeps its credit. A refund returns to the bucket — and the
+### The late-cancel rule, and why it bites more often than it reads
+
+**An accepted order keeps its credit** — cancel it after you have started work
+and the credit stays spent. That is the deliberate 30 Sep rule, and it is the
+sentence a support conversation will turn on, so it is worth stating plainly:
+*the seller carries the cost of an order they accepted and then cancelled.*
+
+What makes it sharper than the table suggests is **auto-confirm**.
+`confirmedAtCreate` (`orders.ts`) is true whenever the buyer left a phone
+number **and** `WHATSAPP_ORDER_CONFIRM_TEMPLATE` is configured — which is every
+storefront order in production. So a storefront order is born `confirmed`, not
+`pending`, and **`pending` is nearly unreachable there**. In practice:
+
+- a seller cancelling a storefront order almost always reads as *accepted* and
+  keeps the credit spent;
+- the 10-a-month allowance therefore protects mostly **counter / anonymous
+  walk-in** orders (no phone ⇒ born `pending`) and **booking requests**;
+- which is exactly why T3.1 had to add the gated arm above. Before it, a seller
+  was charged for an order they were never allowed to *see*, because
+  auto-confirm made it look accepted — and cancelling, the gate's own
+  prescribed way out, was the act that burned the credit.
+
+`pending` is about **who has accepted the order**, not about money. Payment
+lives on a separate field (`paymentStatus`: `unpaid` / `claimed` / `received`),
+so an unpaid order can sit at `confirmed`, `packed` or `delivered`, and a
+made-to-order job awaiting its mockup is `confirmed` with
+`mockupStatus: "pending"` — a different field again. A refund returns to the bucket — and the
 lot — the credit came out of. Only an order this ledger actually debited can be
 refunded, so an order from before credits launched, or one already refunded,
 never mints a credit. There is no un-cancel path in the codebase; if one is ever
