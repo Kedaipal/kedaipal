@@ -104,25 +104,23 @@ async function toRow(
  * order inbox would never be; if a store ever runs giveaways at a scale that
  * makes this hot, the move is a paginated list, not a cleverer index.
  *
+ * Returns the WHOLE book, unfiltered, and the client filters and groups it
+ * (`src/lib/voucher-groups.ts`). Two reasons, both structural rather than
+ * preference: a BATCH parent has to state what became of the whole run while
+ * a filter shows one of its children, which needs the unfiltered rows in
+ * hand; and the status chips then switch with no round trip. The scan is the
+ * same either way — `expired` is judged at read time, so even a filtered
+ * query had to walk everything.
+ *
  * READ grant, and deliberately NOT Pro-gated: a store that downgrades keeps
  * seeing the codes it already issued (decided 8 Oct 2026) — the alternative
  * hides outstanding promises the seller still has to honour.
  */
 export const list = query({
-	args: {
-		retailerId: v.id("retailers"),
-		status: v.optional(
-			v.union(
-				v.literal("active"),
-				v.literal("redeemed"),
-				v.literal("voided"),
-				v.literal("expired"),
-			),
-		),
-	},
+	args: { retailerId: v.id("retailers") },
 	handler: async (
 		ctx,
-		{ retailerId, status },
+		{ retailerId },
 	): Promise<{ vouchers: VoucherRow[]; counts: VoucherCounts }> => {
 		await requireRetailerAccess(ctx, retailerId, {
 			area: "vouchers",
@@ -143,16 +141,13 @@ export const list = query({
 		};
 		for (const voucher of all) counts[resolveVoucherStatus(voucher, now)]++;
 
-		const matching = all.filter(
-			(voucher) =>
-				status === undefined || resolveVoucherStatus(voucher, now) === status,
-		);
 		return {
-			vouchers: await Promise.all(matching.map((vo) => toRow(ctx, vo, now))),
+			vouchers: await Promise.all(all.map((vo) => toRow(ctx, vo, now))),
 			counts,
 		};
 	},
 });
+
 
 /**
  * Is this code good, and what is it worth? The buyer's storefront field, the
@@ -379,6 +374,53 @@ export const voidVoucher = mutation({
 			updatedAt: now,
 		});
 		await logAdminAction(ctx, access, "vouchers.voidVoucher", voucherId);
+	},
+});
+
+/**
+ * Rename a batch — the ONE bulk "update" a run of codes actually needs.
+ *
+ * A voucher's VALUE is immutable once issued (a code already in a buyer's
+ * hand must not change what it is worth), so the only thing a seller can
+ * usefully change in bulk is what the run is CALLED. That name is what makes
+ * a list of twenty look-alike codes readable three months later, and a seller
+ * who skipped it at issue time has no other way back to it.
+ *
+ * The name lives on each row's `note` rather than in a batches table: there
+ * is no such table, a batch is at most `VOUCHER_BATCH_MAX` rows, and keeping
+ * it denormalised means the list needs no join. Renaming patches them all in
+ * one transaction, including spent and voided rows — the name describes the
+ * RUN, so a history row that dropped out of it would orphan itself in the UI.
+ */
+export const renameBatch = mutation({
+	args: {
+		retailerId: v.id("retailers"),
+		batchId: v.string(),
+		/** Empty clears the name — the group then falls back to its size and
+		 * date, which is still a stable thing to point at. */
+		note: v.string(),
+	},
+	handler: async (ctx, { retailerId, batchId, note }): Promise<number> => {
+		const access = await requireRetailerAccess(ctx, retailerId, {
+			area: "vouchers",
+			level: "write",
+		});
+		if (!access.actingAsAdmin) await assertSubscriptionActive(ctx, retailerId);
+
+		const rows = (
+			await ctx.db
+				.query("vouchers")
+				.withIndex("by_retailer_created", (q) => q.eq("retailerId", retailerId))
+				.collect()
+		).filter((vo) => vo.batchId === batchId);
+		if (rows.length === 0) throw new ConvexError("That batch no longer exists");
+
+		const now = Date.now();
+		const clean = note.trim().slice(0, VOUCHER_NOTE_MAX) || undefined;
+		for (const row of rows)
+			await ctx.db.patch(row._id, { note: clean, updatedAt: now });
+		await logAdminAction(ctx, access, "vouchers.renameBatch", retailerId);
+		return rows.length;
 	},
 });
 

@@ -2,18 +2,33 @@ import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
-import { Plus, Ticket } from "lucide-react";
+import { Lock, Plus, Ticket } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
-import type { VoucherStatus } from "../../convex/lib/vouchers";
+import {
+	VOUCHER_NOTE_MAX,
+	type VoucherStatus,
+} from "../../convex/lib/vouchers";
 import { NeedsAccessNote } from "../components/app/owner-only-note";
+import { ViewOnlyNote } from "../components/app/view-only-note";
 import { PageHeader } from "../components/dashboard/page-header";
 import { Button } from "../components/ui/button";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "../components/ui/dialog";
+import { Field, FieldDescription, FieldLabel } from "../components/ui/field";
 import { FilterChip, FilterChipRow } from "../components/ui/filter-chip";
+import { Input } from "../components/ui/input";
 import { IssueVoucherDialog } from "../components/vouchers/issue-voucher-dialog";
+import { VoucherBatchCard } from "../components/vouchers/voucher-batch-card";
 import {
 	VoucherList,
 	VoucherListSkeleton,
@@ -25,7 +40,14 @@ import {
 } from "../components/vouchers/voucher-share-sheet";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { usePermission } from "../hooks/usePermission";
-import { isStoreReadOnly, isVoucherIssuingLocked } from "../lib/subscription";
+import { useAreaLock } from "../hooks/useStoreLock";
+import { isVoucherIssuingLocked } from "../lib/subscription";
+import {
+	batchFallbackName,
+	batchVoidableCount,
+	groupVouchers,
+	type VoucherGroup,
+} from "../lib/voucher-groups";
 
 /**
  * Vouchers (`z8r3fdr617`) — the seller's issue-and-track surface.
@@ -45,6 +67,9 @@ export const Route = createFileRoute("/app/vouchers/")({
 	component: VouchersRoute,
 });
 
+/** A grouped run, as the card and the batch dialogs pass it around. */
+type BatchGroup = Extract<VoucherGroup<VoucherRowView>, { kind: "batch" }>;
+
 const FILTERS: Array<{ key: VoucherStatus | "all"; label: string }> = [
 	{ key: "active", label: "Active" },
 	{ key: "redeemed", label: "Used" },
@@ -55,22 +80,31 @@ const FILTERS: Array<{ key: VoucherStatus | "all"; label: string }> = [
 
 function VouchersRoute() {
 	const retailer = useDashboardRetailer();
-	const { canRead, canWrite } = usePermission("vouchers");
+	const { canRead } = usePermission("vouchers");
+	// The ONE lock hook every greyed-with-reason control reads (useStoreLock.ts):
+	// subscription view-only (admin-aware — a Kedaipal admin is never locked,
+	// mirroring the server's assertSubscriptionActive bypass) composed with the
+	// member write grant, in the house priority. Hand-deriving this here is how
+	// the first /test-code pass found an admin shown a seller's view-only
+	// sentence over a button the server would have accepted.
+	const areaLock = useAreaLock("vouchers");
 	const [filter, setFilter] = useState<VoucherStatus | "all">("active");
 	const [issuing, setIssuing] = useState(false);
 	const [sharing, setSharing] = useState<ShareableVoucher | null>(null);
 	const [voiding, setVoiding] = useState<VoucherRowView | null>(null);
+	const [voidingBatch, setVoidingBatch] = useState<BatchGroup | null>(null);
+	const [renaming, setRenaming] = useState<BatchGroup | null>(null);
+	const [renameText, setRenameText] = useState("");
 	const voidVoucher = useMutation(api.vouchers.voidVoucher);
+	const voidBatch = useMutation(api.vouchers.voidBatch);
+	const renameBatch = useMutation(api.vouchers.renameBatch);
 
+	// The whole book in one read; the chips filter it in memory and
+	// `groupVouchers` collapses runs (see the query's own note on why).
 	const result = useQuery(
 		convexQuery(
 			api.vouchers.list,
-			retailer && canRead
-				? {
-						retailerId: retailer._id,
-						...(filter === "all" ? {} : { status: filter }),
-					}
-				: "skip",
+			retailer && canRead ? { retailerId: retailer._id } : "skip",
 		),
 	).data;
 
@@ -87,20 +121,27 @@ function VouchersRoute() {
 		);
 	}
 
+	// Captured after the guard above: the batch handlers are hoisted function
+	// declarations, so TS can't carry the narrowing into them.
+	const retailerId = retailer._id;
 	const currency = retailer.currency ?? DEFAULT_CURRENCY;
 	const loading = result === undefined;
 	const vouchers = result?.vouchers ?? [];
 	const counts = result?.counts;
 	const issuingLocked = isVoucherIssuingLocked(retailer);
-	const storeReadOnly = isStoreReadOnly(retailer);
-	// One reason, resolved in priority order, shown wherever the button is.
-	const issueBlockedReason = !canWrite
-		? "Ask the store owner for edit access to vouchers."
-		: storeReadOnly
-			? "Your store is view-only until the subscription is settled."
-			: issuingLocked
-				? "Issuing vouchers is part of the Pro plan — you can still share and void the codes you've already created."
-				: null;
+	// One reason, in the house priority (subscription outranks the grant,
+	// `useAreaLock` decides); the Pro gate speaks only when nothing locks.
+	const issueBlockedReason = areaLock.readOnly
+		? areaLock.reason
+		: issuingLocked
+			? "Issuing vouchers is part of the Pro plan — you can still share and void the codes you've already created."
+			: null;
+
+	// Filter in memory, then group: a batch parent keeps counting the whole run
+	// even while a chip is showing one of its children.
+	const shown =
+		filter === "all" ? vouchers : vouchers.filter((v) => v.status === filter);
+	const groups = groupVouchers(shown, vouchers);
 
 	const subtitle = loading
 		? "Loading…"
@@ -117,6 +158,42 @@ function VouchersRoute() {
 			toast.error(err instanceof Error ? err.message : "Couldn't void it");
 		} finally {
 			setVoiding(null);
+		}
+	}
+
+	async function confirmVoidBatch() {
+		if (!voidingBatch) return;
+		try {
+			const { voided, skippedRedeemed } = await voidBatch({
+				retailerId,
+				batchId: voidingBatch.batchId,
+			});
+			// Name the skip rather than silently doing less than the button said.
+			toast.success(
+				skippedRedeemed > 0
+					? `${voided} voided · ${skippedRedeemed} already used, left alone`
+					: `${voided} ${voided === 1 ? "code" : "codes"} voided`,
+			);
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Couldn't void them");
+		} finally {
+			setVoidingBatch(null);
+		}
+	}
+
+	async function confirmRename() {
+		if (!renaming) return;
+		try {
+			await renameBatch({
+				retailerId,
+				batchId: renaming.batchId,
+				note: renameText,
+			});
+			toast.success("Batch renamed");
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Couldn't rename it");
+		} finally {
+			setRenaming(null);
 		}
 	}
 
@@ -147,11 +224,17 @@ function VouchersRoute() {
 			</div>
 
 			{/* The gate's reason, where the seller is clicking — never a silent
-			    disabled button. */}
-			{issueBlockedReason !== null ? (
-				<p className="rounded-xl border border-dashed border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-					{issueBlockedReason}
-				</p>
+			    disabled button. The SUBSCRIPTION case renders the house
+			    ViewOnlyNote (self-hiding, links to Billing); the other causes
+			    (grant, Pro) wear the same Lock-note clothes so one visual means
+			    "why the action is off" — the first /test-code pass read the old
+			    dashed box as a disabled search bar. */}
+			<ViewOnlyNote />
+			{issueBlockedReason !== null && areaLock.cause !== "subscription" ? (
+				<div className="flex items-start gap-2.5 rounded-xl border border-border bg-muted/50 p-3 text-muted-foreground">
+					<Lock className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+					<p className="text-xs leading-relaxed">{issueBlockedReason}</p>
+				</div>
 			) : null}
 
 			{/* Filter chips carry their counts, so a chip can show its number
@@ -180,15 +263,37 @@ function VouchersRoute() {
 
 			{loading ? (
 				<VoucherListSkeleton />
-			) : vouchers.length === 0 ? (
+			) : groups.length === 0 ? (
 				<EmptyState filter={filter} everIssued={hasAny(counts)} />
 			) : (
-				<VoucherList
-					vouchers={vouchers}
-					canWrite={canWrite && !storeReadOnly}
-					onShare={(v) => setSharing(v)}
-					onVoid={(v) => setVoiding(v)}
-				/>
+				<ul className="flex flex-col gap-2">
+					{groups.map((group) =>
+						group.kind === "batch" ? (
+							<VoucherBatchCard
+								key={group.key}
+								group={group}
+								canWrite={!areaLock.readOnly}
+								onShare={(v) => setSharing(v)}
+								onVoid={(v) => setVoiding(v)}
+								onVoidBatch={(g) => setVoidingBatch(g)}
+								onRename={(g) => {
+									setRenameText(g.note ?? "");
+									setRenaming(g);
+								}}
+							/>
+						) : (
+							// A singly-issued voucher is its own object — no parent to
+							// collapse into, so it keeps the plain row.
+							<VoucherList
+								key={group.key}
+								vouchers={[group.voucher]}
+								canWrite={!areaLock.readOnly}
+								onShare={(v) => setSharing(v)}
+								onVoid={(v) => setVoiding(v)}
+							/>
+						),
+					)}
+				</ul>
 			)}
 
 			<IssueVoucherDialog
@@ -215,6 +320,78 @@ function VouchersRoute() {
 				storeName={retailer.storeName}
 				slug={retailer.slug}
 				onClose={() => setSharing(null)}
+			/>
+
+			{/* Rename — the one bulk UPDATE a run needs (a voucher's value is
+			    immutable once issued, so there is nothing else to change in
+			    bulk). Reuses the house confirm shell rather than a bespoke
+			    modal for one field. */}
+			<Dialog
+				open={renaming !== null}
+				onOpenChange={(o) => !o && setRenaming(null)}
+			>
+				<DialogContent className="sm:max-w-sm">
+					<DialogHeader>
+						<DialogTitle>Name this batch</DialogTitle>
+						<DialogDescription>
+							{renaming
+								? `${renaming.totalCount} codes issued together. Only you see this name — it's how you'll find the run again.`
+								: ""}
+						</DialogDescription>
+					</DialogHeader>
+					<Field>
+						<FieldLabel htmlFor="batch-name">Batch name</FieldLabel>
+						<Input
+							id="batch-name"
+							variant="field"
+							maxLength={VOUCHER_NOTE_MAX}
+							placeholder={
+								renaming
+									? batchFallbackName(renaming.totalCount, renaming.createdAt)
+									: ""
+							}
+							value={renameText}
+							onChange={(e) => setRenameText(e.target.value)}
+						/>
+						<FieldDescription>
+							Leave it empty to go back to “
+							{renaming
+								? batchFallbackName(renaming.totalCount, renaming.createdAt)
+								: ""}
+							”.
+						</FieldDescription>
+					</Field>
+					<DialogFooter>
+						<Button
+							variant="outline"
+							className="tap-target"
+							onClick={() => setRenaming(null)}
+						>
+							Cancel
+						</Button>
+						<Button className="tap-target" onClick={confirmRename}>
+							Save name
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+
+			<ConfirmDialog
+				open={voidingBatch !== null}
+				onOpenChange={(o) => !o && setVoidingBatch(null)}
+				title={
+					voidingBatch
+						? `Void ${batchVoidableCount(voidingBatch.counts)} remaining codes?`
+						: ""
+				}
+				description={
+					voidingBatch
+						? `Every code in “${voidingBatch.note ?? batchFallbackName(voidingBatch.totalCount, voidingBatch.createdAt)}” that hasn't been used stops working straight away. Codes already spent are left alone — a placed order can't be clawed back. The run stays in your list with its history.`
+						: ""
+				}
+				confirmLabel="Void them"
+				destructive
+				onConfirm={confirmVoidBatch}
 			/>
 
 			<ConfirmDialog

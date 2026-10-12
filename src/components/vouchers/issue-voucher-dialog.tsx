@@ -29,7 +29,6 @@ import { Field, FieldDescription, FieldLabel } from "../ui/field";
 import { Input } from "../ui/input";
 import { InputPrefixFrame } from "../ui/input-prefix-frame";
 import { ModeButton } from "../ui/mode-button";
-import { Textarea } from "../ui/textarea";
 
 /**
  * Issue one voucher, or a run of them (`z8r3fdr617`).
@@ -180,6 +179,12 @@ export function IssueVoucherDialog({
 								subtitle="% off the items"
 							/>
 						</div>
+						{/* Both modes wear the SAME plate frame, so switching between
+						    them doesn't jump the dialog's height or move the helper
+						    line under it. The percentage plate sits on the RIGHT
+						    (a percent follows its number; a currency precedes it),
+						    which also stops "%" reading as a stray glyph before an
+						    empty field. */}
 						{kind === "fixed" ? (
 							<InputPrefixFrame
 								prefix={currencySymbol(currency)}
@@ -196,7 +201,11 @@ export function IssueVoucherDialog({
 								/>
 							</InputPrefixFrame>
 						) : (
-							<InputPrefixFrame prefix="%" invalid={valueError !== null}>
+							<InputPrefixFrame
+								prefix="%"
+								side="end"
+								invalid={valueError !== null}
+							>
 								<Input
 									id="voucher-worth"
 									variant="bare"
@@ -278,24 +287,32 @@ export function IssueVoucherDialog({
 						)}
 					</Field>
 
+					{/* For a RUN this is the batch's name: the list groups a batch
+					    under it, so it is the handle the seller gets the whole run
+					    back by. Still optional — an unnamed run falls back to its
+					    size and date — but asked for here, where the run exists,
+					    rather than only as a rename afterwards. A single voucher
+					    keeps the quieter "label". */}
 					<Field>
 						<FieldLabel htmlFor="voucher-note">
-							Label{" "}
+							{howMany > 1 ? "Batch name" : "Label"}{" "}
 							<span className="font-normal text-muted-foreground">
 								(optional)
 							</span>
 						</FieldLabel>
-						<Textarea
+						<Input
 							id="voucher-note"
-							rows={2}
+							variant="field"
 							maxLength={VOUCHER_NOTE_MAX}
-							placeholder="Raya giveaway"
+							placeholder={howMany > 1 ? "Raya market stack" : "Raya giveaway"}
 							value={note}
 							onChange={(e) => setNote(e.target.value)}
 						/>
 						<FieldDescription>
-							Only you see this — it's how you'll tell 20 look-alike codes apart
-							in three months.
+							{howMany > 1
+								? "Only you see it. The list groups these codes under this name — without one they show as “" +
+									`${howMany} vouchers · today”.`
+								: "Only you see this — it's how you'll tell look-alike codes apart in three months."}
 						</FieldDescription>
 					</Field>
 				</div>

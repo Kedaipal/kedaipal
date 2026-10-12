@@ -48,19 +48,27 @@ export function VoucherList({
 	onShare,
 	onVoid,
 	canWrite,
+	/** Rendered nested under a batch parent: the card loses its own border and
+	 * tightens, so a run reads as ONE object rather than N floating cards. */
+	nested = false,
 }: {
 	vouchers: ReadonlyArray<VoucherRowView>;
 	onShare: (voucher: VoucherRowView) => void;
 	onVoid: (voucher: VoucherRowView) => void;
 	/** A teammate with read-only on `vouchers` sees the book and no actions. */
 	canWrite: boolean;
+	nested?: boolean;
 }) {
 	return (
-		<ul className="flex flex-col gap-2">
+		<ul className={nested ? "flex flex-col" : "flex flex-col gap-2"}>
 			{vouchers.map((voucher) => (
 				<li
 					key={voucher.id}
-					className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4 sm:flex-row sm:items-center sm:gap-4"
+					className={
+						nested
+							? "flex flex-col gap-3 border-t border-border/70 px-4 py-3 first:border-t-0 sm:flex-row sm:items-center sm:gap-4"
+							: "flex flex-col gap-3 rounded-2xl border border-border bg-card p-4 sm:flex-row sm:items-center sm:gap-4"
+					}
 				>
 					<div className="flex min-w-0 flex-1 flex-col gap-1">
 						<div className="flex min-w-0 flex-wrap items-center gap-2">

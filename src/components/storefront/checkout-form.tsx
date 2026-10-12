@@ -1662,6 +1662,7 @@ export function CheckoutPage({
 											voucherCode={voucher?.code}
 											voucherField={
 												<VoucherField
+													variant="receipt"
 													retailerId={retailerId}
 													currency={cart.currency}
 													itemSubtotal={cart.total}

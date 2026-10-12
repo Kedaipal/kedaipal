@@ -2285,6 +2285,14 @@ function OrderDetailRoute() {
 				description={[
 					"Stock is restored and this can't be undone. The customer is NOT sent a WhatsApp — the reason you give below is what they see on their order page.",
 					cancelOutlook ? cancelCreditLine(cancelOutlook) : null,
+					// This dialog's job is to enumerate what cancelling DOES, so a
+					// consequence the seller can act on belongs in it: the voucher
+					// goes back on the shelf and the buyer can spend it again
+					// (`z8r3fdr617` — the credit's rule and the voucher's differ, so
+					// they are two sentences, not one).
+					order.voucherSnapshot
+						? `Voucher ${order.voucherSnapshot.code} goes back to active — this buyer can use it again.`
+						: null,
 					hasActiveRiderBooking
 						? `⚠️ A Lalamove rider booking is still active on this order — cancel it from the ${dispatchCardName} card too, or you may pay for a wasted trip.`
 						: null,

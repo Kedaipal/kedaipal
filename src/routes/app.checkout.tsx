@@ -121,6 +121,7 @@ import {
 } from "../lib/counter-stock";
 import { convexErrorMessage, currencySymbol, formatPrice } from "../lib/format";
 import { priceDelta } from "../lib/price-delta";
+import { effectiveVariantPrice, type PromoState } from "../lib/promo";
 import { cn } from "../lib/utils";
 
 export const Route = createFileRoute("/app/checkout")({
@@ -993,6 +994,29 @@ function PriceDeltaChip({
 	);
 }
 
+/**
+ * What a variant costs AT THE COUNTER right now (`z8r3fdcw72` × `z8r3fdr617`).
+ *
+ * The counter is a seller surface, so it reads `listForCounter`, which hands
+ * back `promoState` and the variants' `promoPrice` exactly as the storefront
+ * payload does — it simply never used them, while
+ * `counterCheckout.createOrderFromSession` has always resolved the promo
+ * server-side. The result was a panel quoting the LIST price and an order
+ * recording the PROMO one; with a voucher on top the two bases diverged
+ * further still. One helper, the same `effectiveVariantPrice` the storefront
+ * prices with, so the seller's number and the server's cannot drift again.
+ *
+ * `Date.now()` is read per call rather than held: a counter panel is open for
+ * minutes, and a sale that lapses mid-sale must stop discounting at the next
+ * render rather than at the next reload.
+ */
+function counterPrice(
+	variant: { price: number; promoPrice?: number },
+	product: { promoState?: PromoState },
+): number {
+	return effectiveVariantPrice(variant, product.promoState, Date.now());
+}
+
 type SessionDraft = {
 	items: Array<{
 		variantId: Id<"productVariants">;
@@ -1096,8 +1120,8 @@ function counterProductMeta(
 		nonCustom.length === 0
 			? "Custom price"
 			: (() => {
-					const lo = Math.min(...nonCustom.map((v) => v.price));
-					const hi = Math.max(...nonCustom.map((v) => v.price));
+					const lo = Math.min(...nonCustom.map((v) => counterPrice(v, p)));
+					const hi = Math.max(...nonCustom.map((v) => counterPrice(v, p)));
 					const base =
 						lo === hi
 							? formatPrice(lo, currency)
@@ -1258,7 +1282,19 @@ function ProductVariantRows({
 						<div className="min-w-0">
 							<p className="truncate text-sm">{label || "Default"}</p>
 							<p className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
-								<span>{formatPrice(vr.price, currency)}</span>
+								{/* The PROMO price when one is live (z8r3fdcw72). The
+								    counter used to price from the list while
+								    `createOrderFromSession` resolved the promo, so the
+								    seller confirmed one number and the order recorded a
+								    lower one — on a cash sale, real money (found in the
+								    z8r3fdr617 /test-code pass). Same helper the
+								    storefront prices with. */}
+								<span>{formatPrice(counterPrice(vr, product), currency)}</span>
+								{counterPrice(vr, product) !== vr.price ? (
+									<span className="line-through opacity-60">
+										{formatPrice(vr.price, currency)}
+									</span>
+								) : null}
 								{stockNote ? (
 									<span
 										className={cn(
@@ -1292,9 +1328,12 @@ function ProductVariantRows({
 										{
 											name: product.name,
 											label,
-											price: vr.price,
+											price: counterPrice(vr, product),
 											qty: 0,
-											catalogPrice: vr.price,
+											// The price an unadjusted line is "at" — the promo
+											// price when one is live, so the adjusted-price
+											// badge compares against what is really charged.
+											catalogPrice: counterPrice(vr, product),
 										},
 										1,
 									)
@@ -1537,7 +1576,9 @@ function BuildOrderScreen({
 				lookup.set(vr._id, {
 					name: p.name,
 					label,
-					price: vr.price,
+					// Promo-aware, like the picker above: a draft resumed after a
+					// sale opened must not re-seed the list price.
+					price: counterPrice(vr, p),
 					isCustom: vr.isCustom === true,
 				});
 			}
@@ -2607,6 +2648,9 @@ function BuildOrderScreen({
 				}}
 				buyerName={buyer.displayName}
 				lines={cartEntries.map(([variantId, l]) => ({ variantId, line: l }))}
+				itemsTotal={itemsTotal}
+				voucherDiscount={voucherDiscount}
+				voucherCode={voucher?.code}
 				total={total}
 				currency={currency}
 				fulfilmentLabel={(() => {
@@ -2924,6 +2968,9 @@ function ConfirmCheckoutDialog({
 	onOpenChange,
 	buyerName,
 	lines,
+	itemsTotal,
+	voucherDiscount,
+	voucherCode,
 	total,
 	currency,
 	fulfilmentLabel,
@@ -2935,6 +2982,15 @@ function ConfirmCheckoutDialog({
 	onOpenChange: (open: boolean) => void;
 	buyerName: string | undefined;
 	lines: Array<{ variantId: string; line: CartLine }>;
+	/** Σ lines, gross of the voucher. */
+	itemsTotal: number;
+	/** What the voucher takes off (`z8r3fdr617`), 0 for none. This dialog is
+	 * the seller's deliberate last look before the order exists, so a
+	 * subtotal→total gap it does not explain is the one thing it must never
+	 * show — found in its own /test-code pass, where it printed items RM50
+	 * over a total of RM45. */
+	voucherDiscount: number;
+	voucherCode?: string;
 	total: number;
 	currency: string;
 	fulfilmentLabel: string;
@@ -2994,6 +3050,24 @@ function ConfirmCheckoutDialog({
 					</ul>
 
 					<div className="flex flex-col gap-1.5 rounded-xl bg-muted/50 p-3 text-sm">
+						{voucherDiscount > 0 ? (
+							<>
+								<div className="flex items-center justify-between gap-3">
+									<span className="text-muted-foreground">Items</span>
+									<span className="tabular-nums text-muted-foreground">
+										{formatPrice(itemsTotal, currency)}
+									</span>
+								</div>
+								<div className="flex items-center justify-between gap-3">
+									<span className="min-w-0 truncate text-accent-emphasis">
+										Voucher{voucherCode ? ` · ${voucherCode}` : ""}
+									</span>
+									<span className="shrink-0 font-medium tabular-nums text-accent-emphasis">
+										−{formatPrice(voucherDiscount, currency)}
+									</span>
+								</div>
+							</>
+						) : null}
 						<div className="flex items-center justify-between gap-3">
 							<span className="text-muted-foreground">Collection</span>
 							<span className="font-medium">{fulfilmentLabel}</span>

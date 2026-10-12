@@ -196,3 +196,67 @@ describe("previewDiscount — the shared preview", () => {
 		expect(previewDiscount(null, 5000)).toBe(0);
 	});
 });
+
+/**
+ * The RECEIPT skin (`z8r3fdr617`, Zaki 12 Oct). Same control, same states,
+ * same refusal copy — different house. What must be true of it is that it
+ * stops introducing form chrome into a printed ticket, and that the applied
+ * state no longer repeats what the receipt's own voucher line already says.
+ */
+describe("the receipt skin", () => {
+	it("closes to a ticket-caption action, not a chrome link", () => {
+		renderField({ variant: "receipt" });
+		const open = screen.getByRole("button", { name: /voucher code/i });
+		expect(open.className).toContain("font-mono");
+		expect(open.className).toContain("uppercase");
+	});
+
+	it("opens to a mono field with a stamped Apply — no Input chrome", () => {
+		renderField({ variant: "receipt" });
+		fireEvent.click(screen.getByRole("button", { name: /voucher code/i }));
+		const input = screen.getByLabelText("Voucher code");
+		expect(input.className).toContain("font-mono");
+		// The ticket's rows are dotted leaders; a bordered box is the thing
+		// that read as "a form dropped on a receipt".
+		expect(input.className).toContain("border-dotted");
+		expect(input.className).not.toContain("rounded-xl");
+		expect(screen.getByRole("button", { name: "Apply" }).className).toContain(
+			"tracking-[0.14em]",
+		);
+	});
+
+	it("applied shows ONLY the way out — the receipt line states the rest", () => {
+		renderField({
+			variant: "receipt",
+			applied: { code: "KP-7F3K-Q2WM", kind: "fixed", value: 1000 },
+		});
+		// The green panel and its "RM10.00 off applied" headline are gone; the
+		// caller renders the discount as a receipt line instead.
+		expect(screen.queryByText(/off applied/)).toBeNull();
+		expect(
+			screen.getByRole("button", { name: /remove voucher KP-7F3K-Q2WM/i }),
+		).toBeTruthy();
+	});
+
+	it("still refuses with the shared sentence, under the field", async () => {
+		checkCode.mockResolvedValue({ ok: false, refusal: "voided" });
+		renderField({ variant: "receipt" });
+		fireEvent.click(screen.getByRole("button", { name: /voucher code/i }));
+		fireEvent.change(screen.getByLabelText("Voucher code"), {
+			target: { value: "KP-7F3K-Q2WM" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+		const alert = await screen.findByRole("alert");
+		expect(alert.textContent).toMatch(/no longer valid/i);
+		expect(alert.className).toContain("font-mono");
+	});
+
+	it("the PANEL skin keeps its own chrome", () => {
+		// The counter is a dashboard surface; the receipt grammar would be as
+		// wrong there as the chrome was on the ticket.
+		renderField({
+			applied: { code: "KP-7F3K-Q2WM", kind: "fixed", value: 1000 },
+		});
+		expect(screen.getByText(/off applied/)).toBeTruthy();
+	});
+});

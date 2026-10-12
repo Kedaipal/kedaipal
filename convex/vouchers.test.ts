@@ -378,7 +378,7 @@ describe("vouchers.voidVoucher", () => {
 // ---------------------------------------------------------------------------
 
 describe("vouchers.list", () => {
-	test("counts and filters every state, with expired judged live", async () => {
+	test("returns the whole book with every state resolved, expired judged live", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const variantId = await seedVariant(t, USER_A, retailer._id);
@@ -426,15 +426,15 @@ describe("vouchers.list", () => {
 		});
 		expect(all.vouchers).toHaveLength(4);
 
-		const expired = await asUser.query(api.vouchers.list, {
-			retailerId: retailer._id,
-			status: "expired",
-		});
-		expect(expired.vouchers).toHaveLength(1);
-		expect(expired.vouchers[0].id).toBe(vouchers[2].id);
-		// Counts are the WHOLE book regardless of the filter, so a chip can show
-		// its number while a tab is empty.
-		expect(expired.counts.active).toBe(1);
+		// Every row comes back with its RESOLVED status — the lapsed one reads
+		// `expired` with no cron having touched it, which is what lets the
+		// client filter and group without a second query (voucher-groups.ts).
+		expect(
+			all.vouchers.find((row) => row.id === vouchers[2].id)?.status,
+		).toBe("expired");
+		expect(all.vouchers.filter((row) => row.status === "expired")).toHaveLength(
+			1,
+		);
 	});
 
 	test("a redeemed row links to the order it paid for", async () => {
@@ -463,10 +463,10 @@ describe("vouchers.list", () => {
 		});
 		const { vouchers: rows } = await asUser.query(api.vouchers.list, {
 			retailerId: retailer._id,
-			status: "redeemed",
 		});
-		expect(rows[0].redeemedOrder?.shortId).toBe(shortId);
-		expect(rows[0].redeemedOrder?.total).toBe(4000);
+		const spent = rows.find((row) => row.status === "redeemed");
+		expect(spent?.redeemedOrder?.shortId).toBe(shortId);
+		expect(spent?.redeemedOrder?.total).toBe(4000);
 	});
 
 	test("history stays readable on a DOWNGRADED store", async () => {

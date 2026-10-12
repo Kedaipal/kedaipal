@@ -85,15 +85,22 @@ function VoucherShareBody({
 		formatPrice(sen, voucher.currency),
 	);
 	const link = voucherCheckoutUrl(slug, voucher.code);
-	const expiryLine =
-		voucher.expiresAt === undefined
-			? "It has no expiry date."
-			: `Valid until ${new Date(voucher.expiresAt).toLocaleDateString("en-MY", {
+	const { expiresAt } = voucher;
+	const expiryDate =
+		expiresAt === undefined
+			? ""
+			: new Date(expiresAt).toLocaleDateString("en-MY", {
 					day: "numeric",
 					month: "long",
 					year: "numeric",
 					timeZone: "Asia/Kuala_Lumpur",
-				})}.`;
+				});
+	// The buyer's message gets a full sentence; the dialog subtitle gets a
+	// property (see its own note).
+	const expiryLine =
+		expiresAt === undefined
+			? "It has no expiry date."
+			: `Valid until ${expiryDate}.`;
 	// Names the store, the value and the expiry — a bare link tells the buyer
 	// nothing and reads like spam in a WhatsApp thread.
 	const waText = `Here's your ${worth} voucher for ${storeName} 🎁\n\nCode: ${voucher.code}\n${expiryLine}\n\nTap to shop with it already applied:\n${link}`;
@@ -103,8 +110,13 @@ function VoucherShareBody({
 		<>
 			<DialogHeader>
 				<DialogTitle>Share this voucher</DialogTitle>
+				{/* A sentence doesn't belong inside a dot-run — "one use · It has no
+				    expiry date" read as a fragment. The expiry is phrased as a
+				    PROPERTY here and as a sentence in the WhatsApp message, which
+				    is the one place it needs to stand alone. */}
 				<DialogDescription>
-					{worth} · one use · {expiryLine.replace(/\.$/, "")}
+					{worth} · one use ·{" "}
+					{expiresAt === undefined ? "no expiry" : `valid until ${expiryDate}`}
 				</DialogDescription>
 			</DialogHeader>
 

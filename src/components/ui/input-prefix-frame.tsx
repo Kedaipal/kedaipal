@@ -17,18 +17,42 @@ import { cn } from "#/lib/utils";
  */
 export function InputPrefixFrame({
 	prefix,
+	side = "start",
 	invalid = false,
 	disabled = false,
 	className,
 	children,
 }: {
 	prefix: ReactNode;
+	/**
+	 * Which end the plate is welded to. `start` for a unit that PRECEDES its
+	 * number (`RM`, `+60`); `end` for one that FOLLOWS it (`%`, `kg`, `km`) —
+	 * a "%" plate on the left renders "%10", which is not how anyone writes a
+	 * percentage (`z8r3fdr617`).
+	 */
+	side?: "start" | "end";
 	invalid?: boolean;
 	disabled?: boolean;
 	className?: string;
 	/** The control itself — render it with `variant="bare"`. */
 	children: ReactNode;
 }) {
+	// Same plate either way; only which border divides it from the field
+	// changes, so both ends keep one rounded frame.
+	const plate = (
+		// `select-none` so a drag-select of the value doesn't sweep the fixed
+		// part into the copy. `relative` so a plate that hosts a control (the
+		// buyer phone picker's overlaid <select>) can cover all of it,
+		// padding included — the whole 44px plate is the tap target.
+		<span
+			className={cn(
+				"relative flex select-none items-center gap-1.5 self-stretch bg-muted/60 px-3 text-muted-foreground",
+				side === "start" ? "border-r border-input" : "border-l border-input",
+			)}
+		>
+			{prefix}
+		</span>
+	);
 	return (
 		// Mirrors the `field` input variant's chrome on the WRAPPER so the prefix
 		// and the input read as one control. Focus + invalid styling has to be
@@ -46,14 +70,9 @@ export function InputPrefixFrame({
 				className,
 			)}
 		>
-			{/* `select-none` so a drag-select of the value doesn't sweep the fixed
-			    part into the copy. `relative` so a plate that hosts a control (the
-			    buyer phone picker's overlaid <select>) can cover all of it,
-			    padding included — the whole 44px plate is the tap target. */}
-			<span className="relative flex select-none items-center gap-1.5 self-stretch border-r border-input bg-muted/60 px-3 text-muted-foreground">
-				{prefix}
-			</span>
+			{side === "start" ? plate : null}
 			{children}
+			{side === "end" ? plate : null}
 		</div>
 	);
 }

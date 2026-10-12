@@ -505,3 +505,39 @@ describe("CheckoutTotals — the voucher line", () => {
 		).toBeTruthy();
 	});
 });
+
+describe("CheckoutTotals — the voucher line is an ITEM-style disclosure", () => {
+	it("hides the remove until the line is tapped, like a product line", () => {
+		render(
+			<CheckoutTotals
+				subtotal={5000}
+				currency="MYR"
+				pickupFee={0}
+				voucherDiscount={1000}
+				voucherCode="KP-7F3K-Q2WM"
+				voucherField={<button type="button">Remove voucher</button>}
+			/>,
+		);
+		// Collapsed: the line states the discount and nothing else competes.
+		expect(screen.queryByRole("button", { name: "Remove voucher" })).toBeNull();
+		const line = screen.getByRole("button", { name: /Voucher · KP-7F3K-Q2WM/ });
+		expect(line.getAttribute("aria-expanded")).toBe("false");
+
+		fireEvent.click(line);
+		expect(line.getAttribute("aria-expanded")).toBe("true");
+		expect(screen.getByRole("button", { name: "Remove voucher" })).toBeTruthy();
+	});
+
+	it("with no voucher the slot renders the open control directly", () => {
+		// Un-applied there is no line to tap, so the control is simply there.
+		render(
+			<CheckoutTotals
+				subtotal={5000}
+				currency="MYR"
+				pickupFee={0}
+				voucherField={<button type="button">+ Voucher code</button>}
+			/>,
+		);
+		expect(screen.getByRole("button", { name: "+ Voucher code" })).toBeTruthy();
+	});
+});

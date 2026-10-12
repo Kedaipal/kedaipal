@@ -164,6 +164,8 @@ const OPEN_FUNCTIONS: Record<string, string> = {
 		"withdrawing a promise is like cancel: always open, never trapped",
 	"vouchers.voidBatch":
 		"withdrawing a whole run is like cancel: always open, never trapped",
+	"vouchers.renameBatch":
+		"renaming a run changes a private label, not an order — nothing to meter",
 	// Settings are always open.
 	"delyva.connect": "settings: connecting a courier account",
 	"delyva.resubscribeWebhooks": "settings: re-registers the courier webhooks",

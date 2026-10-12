@@ -1,5 +1,5 @@
 import { useMutation } from "convex/react";
-import { Check, Loader2, Ticket, X } from "lucide-react";
+import { Check, Loader2, Ticket, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
@@ -50,6 +50,7 @@ export function VoucherField({
 	initialCode,
 	disabled = false,
 	label = "Have a voucher?",
+	variant = "panel",
 }: {
 	retailerId: Id<"retailers">;
 	currency: string;
@@ -64,6 +65,18 @@ export function VoucherField({
 	initialCode?: string;
 	disabled?: boolean;
 	label?: string;
+	/**
+	 * Which house the control is standing in. `panel` is the dashboard's
+	 * (bordered input + outline button); `receipt` is the buyer's Order
+	 * Ticket, where the same control wears mono type, a dotted leader and a
+	 * stamped APPLY so it reads as a line of the printed receipt rather than
+	 * a form dropped on top of one.
+	 *
+	 * One control, two skins — deliberately NOT two components: the states,
+	 * the normalisation, the refusal copy and the shared discount maths are
+	 * the thing that must never diverge, and they don't.
+	 */
+	variant?: "panel" | "receipt";
 }) {
 	const checkCode = useMutation(api.vouchers.checkCode);
 	const [open, setOpen] = useState(initialCode !== undefined);
@@ -114,10 +127,42 @@ export function VoucherField({
 		void apply(initialCode);
 	}, [initialCode, apply]);
 
+	// Typed-but-unapplied guess, so Apply can disable until the code could be
+	// real rather than refusing a half-typed one at the server.
+	const guess = normalizeVoucherCode(code);
+	const receipt = variant === "receipt";
+
+	// ── APPLIED ─────────────────────────────────────────────────────────────
+	// On the RECEIPT the discount is already stated by its own line in the
+	// money block, so a second green panel repeating it is noise. The caller
+	// renders that line; this control then only has to offer the way out, and
+	// it does so exactly like a product line does — tap to disclose, trash in
+	// the same icon well (`z8r3fdr617`, Zaki 12 Oct).
 	if (applied) {
 		const worth = formatVoucherTerms(applied, (sen) =>
 			formatPrice(sen, currency),
 		);
+		if (receipt) {
+			return (
+				<div className="flex items-center justify-between gap-3 pb-1 pt-0.5">
+					<button
+						type="button"
+						onClick={onRemove}
+						disabled={disabled}
+						className="flex w-fit items-center gap-1 rounded-lg pr-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-destructive disabled:opacity-50"
+						aria-label={`Remove voucher ${applied.code}`}
+					>
+						<span className="tap-target flex size-8 shrink-0 items-center justify-center">
+							<Trash2 className="size-4" aria-hidden />
+						</span>
+						Remove voucher
+					</button>
+					<span className="shrink-0 text-xs text-muted-foreground">
+						{worth}
+					</span>
+				</div>
+			);
+		}
 		return (
 			<div className="flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/5 px-3 py-2.5">
 				<Check className="size-4 shrink-0 text-accent-emphasis" aria-hidden />
@@ -129,8 +174,6 @@ export function VoucherField({
 						{applied.code}
 					</p>
 				</div>
-				{/* Removable in place — a panel states what is currently on and lets
-				    it be taken off where it is shown. */}
 				<button
 					type="button"
 					onClick={onRemove}
@@ -144,23 +187,108 @@ export function VoucherField({
 		);
 	}
 
+	// ── CLOSED ──────────────────────────────────────────────────────────────
+	// One quiet line. On the receipt it is a peer of "+ Add more items" and
+	// wears the ticket's caption type, so the footer reads as two actions of
+	// equal weight rather than a stray link.
 	if (!open) {
 		return (
 			<button
 				type="button"
 				onClick={() => setOpen(true)}
 				disabled={disabled}
-				className="tap-target flex w-fit items-center gap-1.5 text-sm font-semibold text-accent-emphasis underline-offset-2 hover:underline disabled:opacity-50"
+				className={
+					receipt
+						? "tap-target flex w-fit items-center gap-1 font-mono text-[10px] uppercase tracking-[0.18em] text-accent-emphasis disabled:opacity-50"
+						: "tap-target flex w-fit items-center gap-1.5 text-sm font-semibold text-accent-emphasis underline-offset-2 hover:underline disabled:opacity-50"
+				}
 			>
-				<Ticket className="size-4" aria-hidden />
-				{label}
+				{receipt ? "+ Voucher code" : <Ticket className="size-4" aria-hidden />}
+				{receipt ? null : label}
 			</button>
 		);
 	}
 
-	// Typed-but-unapplied preview, so "10% off" means something before the tap.
-	const guess = normalizeVoucherCode(code);
+	// ── OPEN ────────────────────────────────────────────────────────────────
+	// The receipt skin IS a receipt line: ticket glyph, mono field on the same
+	// dotted leader every charge row uses, and a stamped APPLY in the TOTAL's
+	// type. Nothing new enters the ticket's grammar, which is the whole point
+	// — the old chrome input and outline button read as a form dropped into a
+	// printed receipt.
+	if (receipt) {
+		return (
+			<div className="flex flex-col">
+				<div className="flex items-center gap-2 py-1 font-mono text-[13px] leading-6">
+					<Ticket
+						aria-hidden
+						className={`size-3.5 shrink-0 translate-y-0.5 ${
+							refusal ? "text-destructive" : "text-muted-foreground"
+						}`}
+					/>
+					<input
+						aria-label="Voucher code"
+						autoCapitalize="characters"
+						autoComplete="off"
+						spellCheck={false}
+						placeholder="voucher code"
+						value={code}
+						disabled={disabled || checking}
+						onChange={(e) => {
+							setCode(e.target.value);
+							setRefusal(null);
+						}}
+						onKeyDown={(e) => {
+							if (e.key === "Enter") {
+								e.preventDefault();
+								void apply(code);
+							}
+						}}
+						className={`min-w-0 flex-1 border-b-2 border-dotted bg-transparent pb-0.5 font-mono text-[13px] uppercase tracking-wider placeholder:tracking-normal placeholder:text-muted-foreground/60 focus:outline-none disabled:opacity-60 ${
+							refusal
+								? "border-destructive text-destructive"
+								: "border-border focus:border-accent"
+						}`}
+					/>
+					<button
+						type="button"
+						onClick={() => void apply(code)}
+						disabled={disabled || checking || guess === null}
+						className="tap-target shrink-0 font-mono text-[11px] font-extrabold uppercase tracking-[0.14em] text-accent-emphasis disabled:opacity-40"
+					>
+						{checking ? (
+							<Loader2 className="size-4 animate-spin" aria-hidden />
+						) : (
+							"Apply"
+						)}
+					</button>
+					<button
+						type="button"
+						onClick={() => {
+							setOpen(false);
+							setCode("");
+							setRefusal(null);
+						}}
+						className="tap-target flex shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
+						aria-label="Close voucher field"
+					>
+						<X className="size-3.5" aria-hidden />
+					</button>
+				</div>
+				{/* Indented to the receipt's text column (the glyph gutter), so a
+				    refusal reads as a note on the line above it. */}
+				{refusal ? (
+					<p
+						role="alert"
+						className="pl-5 font-mono text-[11px] leading-5 text-destructive"
+					>
+						{refusal}
+					</p>
+				) : null}
+			</div>
+		);
+	}
 
+	// ── OPEN · panel skin (the counter) ─────────────────────────────────────
 	return (
 		<div className="flex flex-col gap-2">
 			<div className="flex items-center gap-2">
@@ -212,7 +340,6 @@ export function VoucherField({
 					<X className="size-4" aria-hidden />
 				</button>
 			</div>
-			{/* The refusal lives under the field it belongs to. */}
 			{refusal ? (
 				<p role="alert" className="text-xs font-medium text-destructive">
 					{refusal}
@@ -222,18 +349,17 @@ export function VoucherField({
 					Codes read <span className="font-mono">KP-XXXX-XXXX</span> — keep
 					typing.
 				</p>
+			) : itemSubtotal <= 0 ? (
+				// The counter can sit with an empty cart and the field open; the
+				// receipt can't (the empty-cart panel replaces the whole ticket).
+				<p className="text-xs text-muted-foreground">
+					Add something to the order first — a voucher comes off the items.
+				</p>
 			) : (
 				<p className="text-xs text-muted-foreground">
 					One voucher per order. It comes off the items, not delivery.
 				</p>
 			)}
-			{/* Honest about the cap before the tap, where the basket is small
-			    enough for a fixed voucher to be clipped by it. */}
-			{itemSubtotal <= 0 ? (
-				<p className="text-xs text-muted-foreground">
-					Add something to the basket first.
-				</p>
-			) : null}
 		</div>
 	);
 }

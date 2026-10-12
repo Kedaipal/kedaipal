@@ -1,12 +1,4 @@
-import {
-	ChevronDown,
-	Minus,
-	Package,
-	Plus,
-	Ticket,
-	Trash2,
-	Truck,
-} from "lucide-react";
+import { ChevronDown, Minus, Package, Plus, Trash2, Truck } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import type { PublicDeliveryQuote } from "../../../convex/delivery";
 import type { CartItem, UseCart } from "../../hooks/useCart";
@@ -397,8 +389,15 @@ interface CheckoutTotalsProps {
 	/** The applied code, printed on its receipt line — the buyer should be able
 	 * to see WHICH voucher is taking money off. */
 	voucherCode?: string;
-	/** The "Have a voucher?" control itself, rendered under the charges and
-	 * above the TOTAL rule, so applying one visibly moves the number below it. */
+	/**
+	 * The voucher control (`VoucherField variant="receipt"`), rendered under
+	 * the charges and above the TOTAL rule so applying one visibly moves the
+	 * number below it.
+	 *
+	 * While a voucher IS applied this holds only the remove affordance, and it
+	 * is shown by tapping the voucher's own receipt line — the line already
+	 * states the discount, so a second panel repeating it was noise.
+	 */
 	voucherField?: ReactNode;
 }
 
@@ -439,6 +438,10 @@ export function CheckoutTotals({
 	voucherCode,
 	voucherField,
 }: CheckoutTotalsProps) {
+	// The applied voucher line discloses its remove the way an ITEM line
+	// discloses its stepper — same interaction, so the ticket has one idea of
+	// "tap a line to change it".
+	const [voucherOpen, setVoucherOpen] = useState(false);
 	const deliveryFee = quote?.kind === "fee" ? quote.fee : 0;
 	// The discount is CLAMPED to the item subtotal upstream, so it can never
 	// drive this below the fees — the same invariant the server holds.
@@ -493,16 +496,46 @@ export function CheckoutTotals({
 				<FeeLine icon={truck} label={feeLabel} value="Calculating…" pulse />
 			) : null}
 
+			{/* The voucher's own receipt line. It behaves like an ITEM line, not
+			    a fee line: tapping it discloses the way to take it off, in the
+			    same icon well a product line puts its trash in. That is why the
+			    applied state needs no panel of its own — this line already says
+			    what is on, and the disclosure is where it comes off
+			    (`z8r3fdr617`, Zaki 12 Oct). */}
 			{voucherDiscount > 0 ? (
-				<FeeLine
-					icon={<Ticket className="size-3.5 shrink-0" aria-hidden />}
-					label={voucherCode ? `Voucher · ${voucherCode}` : "Voucher"}
-					value={`−${receiptAmount(voucherDiscount)}`}
-					accent
-				/>
-			) : null}
-
-			{voucherField ? <div className="pt-2">{voucherField}</div> : null}
+				<>
+					<button
+						type="button"
+						aria-expanded={voucherOpen}
+						onClick={() => setVoucherOpen((v) => !v)}
+						className="flex w-full items-baseline gap-2 py-0.5 text-left font-mono text-[13px] leading-6 text-accent-emphasis"
+					>
+						<ChevronDown
+							aria-hidden
+							className={`size-3 shrink-0 translate-y-0.5 transition-transform motion-reduce:transition-none ${
+								voucherOpen ? "rotate-180" : ""
+							}`}
+						/>
+						<span className="min-w-0 wrap-anywhere">
+							{voucherCode ? `Voucher · ${voucherCode}` : "Voucher"}
+						</span>
+						<span
+							aria-hidden
+							className="flex-1 border-b-2 border-dotted border-border"
+						/>
+						<span className="shrink-0 tabular-nums">
+							−{receiptAmount(voucherDiscount)}
+						</span>
+					</button>
+					{voucherOpen ? voucherField : null}
+				</>
+			) : (
+				// Not applied: the control is its own quiet line in the money
+				// block — closed it is one caption, open it is a receipt row.
+				// Kept HERE rather than in the ticket footer so the whole control
+				// lives in one component, beside the number it changes.
+				voucherField
+			)}
 
 			<div className="mt-2 flex items-center justify-between border-t-2 border-dashed border-border pt-3">
 				<span className="-rotate-2 rounded-md border-2 border-accent/50 px-2 py-0.5 font-mono text-[11px] font-extrabold uppercase tracking-[0.14em] text-accent-emphasis">
