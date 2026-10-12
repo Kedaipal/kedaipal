@@ -47,16 +47,27 @@ export function focusFirstInvalidField(
 }
 
 // React 18 commits state updates from async callbacks via a scheduler macrotask,
-// which can land AFTER the first animation frame — so a single-frame check can
-// race the render and find nothing. Retry across a few frames (~5 is far beyond
-// any real commit latency) until the invalid state is in the DOM.
-const FOCUS_RETRY_FRAMES = 5;
+// which can land after the first check — so a single look can race the render
+// and find nothing. Retry a few times (~6 ticks is far beyond any real commit
+// latency) until the invalid state is in the DOM.
+//
+// The retry rides a TIMER, never `requestAnimationFrame`. A document whose
+// `visibilityState` is "hidden" does not run rAF callbacks at all, and "hidden"
+// is not an exotic state: a Chrome window fully covered by another app is
+// hidden, which is precisely how this behaviour gets hand-tested. So the whole
+// chain ran — submit, settle, `.finally()` — and then stopped dead at the rAF
+// that never fired, making "take me to the error" look permanently broken in
+// the only environment anyone ever checks it in, while a seller's visible page
+// was the one place it worked (z8r3fdrkq2). A timer fires in both states.
+const FOCUS_RETRY_ATTEMPTS = 5;
+// ~One frame. The budget (6 looks over ~96ms) is unchanged from the rAF version.
+const FOCUS_RETRY_MS = 16;
 
 function focusWhenRendered(formEl: HTMLElement, attemptsLeft: number) {
-	requestAnimationFrame(() => {
+	setTimeout(() => {
 		if (focusFirstInvalidField(formEl)) return;
 		if (attemptsLeft > 0) focusWhenRendered(formEl, attemptsLeft - 1);
-	});
+	}, FOCUS_RETRY_MS);
 }
 
 /**
@@ -66,7 +77,7 @@ function focusWhenRendered(formEl: HTMLElement, attemptsLeft: number) {
  * the commit latency.
  */
 export function focusAfterRender(el: HTMLElement | null | undefined): void {
-	if (el) focusWhenRendered(el, FOCUS_RETRY_FRAMES);
+	if (el) focusWhenRendered(el, FOCUS_RETRY_ATTEMPTS);
 }
 
 /**
@@ -82,7 +93,20 @@ export function submitThenFocusError(
 	e.stopPropagation();
 	// Capture synchronously — currentTarget is cleared once the handler returns.
 	const formEl = e.currentTarget as HTMLFormElement;
-	void form.handleSubmit().finally(() => {
-		focusWhenRendered(formEl, FOCUS_RETRY_FRAMES);
-	});
+	void form
+		.handleSubmit()
+		// `finally`, never `then`: a submit that THREW is still a refused save,
+		// and that is exactly when the seller needs taking to the problem.
+		.finally(() => {
+			focusWhenRendered(formEl, FOCUS_RETRY_ATTEMPTS);
+		})
+		// TanStack re-throws whatever the form's own `onSubmit` threw (FormApi
+		// `catch { … throw err }`). Left alone, that lands as an unhandled
+		// rejection — a seam-level wart that buries whatever else is in the
+		// console. The form itself owns telling the seller (its `onSubmit`
+		// catches and writes the server-error line), so here it is logged and
+		// stops. Same posture as `src/lib/ssr-read.ts`.
+		.catch((err: unknown) => {
+			console.error("Form submit failed", err);
+		});
 }
