@@ -833,7 +833,10 @@ the store is active again — no new link.
 `buyerPaymentsPaused(ctx, retailerId)` in `convex/subscriptions.ts` =
 `resolveAccess(sub).frozen` (past due or comp ended, not comped). **Not
 paused:** trialing (the free period and the first-invoice window), comped,
-on hold, a missing row (fails open). Change it there and every door follows.
+on hold, a missing row (fails open), and a store **owned by a Kedaipal admin**
+(`storeOwnerIsAdmin`) — never soft-locked, so pausing its buyers would have
+the seller's dashboard and the buyer's page disagree (found by `/test-code` on
+IndoMart). Change it there and every door follows.
 
 **The doors it closes** (each pinned in `convex/buyerPaymentsPaused.test.ts`;
 deleting any gate turns a test red):

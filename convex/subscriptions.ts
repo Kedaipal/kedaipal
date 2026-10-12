@@ -334,7 +334,12 @@ export async function getAccess(
  * the same order page the moment the store is active again.
  *
  * Deliberately NOT paused: trialing (free period + first-invoice window),
- * comped, on-hold, and a missing row (fail open, like `resolveAccess`). A
+ * comped, on-hold, a missing row (fail open, like `resolveAccess`), and a
+ * store OWNED BY A KEDAIPAL ADMIN — dogfooded free for ever and never
+ * soft-locked, so pausing its buyers would have the two sides disagree
+ * (found by /test-code on IndoMart: no lock banner, yet buyers paused).
+ * Identity-blind on the owner (`storeOwnerIsAdmin`), like the free-period
+ * skip, because a buyer has no identity to check. A
  * scammer on a fresh store never reaches `past_due`, so widening this to
  * "never paid" is the open follow-up decision — change it HERE and every
  * door follows.
@@ -345,16 +350,21 @@ export async function getAccess(
  */
 export function buyerPaymentsPausedFor(
 	sub: Doc<"subscriptions"> | null,
+	owner?: { userId: string } | null,
 ): boolean {
-	return resolveAccess(sub).frozen;
+	if (!resolveAccess(sub).frozen) return false;
+	return !(owner && storeOwnerIsAdmin(owner));
 }
 
-/** `buyerPaymentsPausedFor`, loading the store's subscription. */
+/** `buyerPaymentsPausedFor`, loading the store's subscription — and its
+ * owner only when the subscription is frozen, so an open store pays one read. */
 export async function buyerPaymentsPaused(
 	ctx: AnyCtx,
 	retailerId: Id<"retailers">,
 ): Promise<boolean> {
-	return buyerPaymentsPausedFor(await loadSubscription(ctx, retailerId));
+	const sub = await loadSubscription(ctx, retailerId);
+	if (!buyerPaymentsPausedFor(sub)) return false;
+	return buyerPaymentsPausedFor(sub, await ctx.db.get(retailerId));
 }
 
 /**

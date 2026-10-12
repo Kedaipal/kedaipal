@@ -143,6 +143,22 @@ describe("buyerPaymentsPausedFor — the one rule", () => {
 		// A missing row fails OPEN, like resolveAccess.
 		expect(buyerPaymentsPausedFor(null)).toBe(false);
 	});
+
+	test("an ADMIN-owned store is never paused — it is never soft-locked either", () => {
+		const prev = process.env.ADMIN_USER_IDS;
+		process.env.ADMIN_USER_IDS = "user_admin";
+		try {
+			const lapsed = row({ status: "past_due" });
+			expect(buyerPaymentsPausedFor(lapsed, { userId: "user_admin" })).toBe(
+				false,
+			);
+			expect(buyerPaymentsPausedFor(lapsed, { userId: "user_seller" })).toBe(
+				true,
+			);
+		} finally {
+			process.env.ADMIN_USER_IDS = prev;
+		}
+	});
 });
 
 describe("the payment doors while a store is lapsed", () => {
@@ -163,6 +179,21 @@ describe("the payment doors while a store is lapsed", () => {
 			gatewayAvailable: false,
 			paymentsPaused: true,
 		});
+	});
+
+	test("an admin's own lapsed store keeps taking payments (the door, not just the rule)", async () => {
+		const t = setup();
+		const { retailerId, token } = await seedOrder(t);
+		await setSub(t, retailerId);
+		const prev = process.env.ADMIN_USER_IDS;
+		process.env.ADMIN_USER_IDS = OWNER;
+		try {
+			const info = await t.query(api.orders.getPaymentMethods, { token });
+			expect(info?.paymentsPaused).toBe(false);
+			expect(info?.methods).toHaveLength(1);
+		} finally {
+			process.env.ADMIN_USER_IDS = prev;
+		}
 	});
 
 	test("payments reopen on the same order the moment the store is active", async () => {
