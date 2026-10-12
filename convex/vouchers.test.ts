@@ -934,6 +934,59 @@ describe("claim link", () => {
 		expect(completed?.total).toBe(2500);
 	});
 
+	/**
+	 * The one case neither branch could write alone: a voucher claim on a
+	 * store whose payments are PAUSED (`z8r3fdr6gg` landed on staging while
+	 * this was in review).
+	 *
+	 * The two features meet on the same screen and must not blur into each
+	 * other: "you can't pay yet" and "this is what you'll pay" are different
+	 * sentences about different things. A lapsed store's buyers can still
+	 * ORDER — that is the whole point of that feature — so the voucher must
+	 * still apply, still be spent, and the total must still be the discounted
+	 * one. Only the paying is shut.
+	 */
+	test("a lapsed store still honours the voucher — only the paying is shut", async () => {
+		const t = setup();
+		const { token, retailer, voucher } = await claimWithVoucher(t);
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.first();
+			if (!sub) throw new Error("no subscription row");
+			await ctx.db.patch(sub._id, { status: "past_due" });
+		});
+
+		const page = await t.query(api.orderClaims.getByToken, { token });
+		// Both true at once, and neither softens the other.
+		expect(page?.store.paymentsPaused).toBe(true);
+		expect(page?.open?.voucher).toMatchObject({ kind: "applied" });
+
+		const { shortId } = await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "delivery",
+			deliveryAddress: {
+				line1: "12 Jln Mawar",
+				city: "PJ",
+				state: "Selangor",
+				postcode: "47301",
+			},
+			fulfilmentDate: todayMytMidnight() + DAY_MS,
+		});
+		const order = await t.run((ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		expect(order?.total).toBe(2500);
+		expect(order?.voucherDiscount).toBe(500);
+		expect((await t.run((ctx) => ctx.db.get(voucher.id)))?.status).toBe(
+			"redeemed",
+		);
+	});
+
 	test("a voucher spent elsewhere DROPS with a notice — never a dead end", async () => {
 		// The one door that doesn't refuse: the buyer followed a link and only
 		// the seller can issue another, so refusing would strand them. The page

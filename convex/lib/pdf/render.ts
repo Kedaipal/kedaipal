@@ -712,13 +712,20 @@ export async function buildOrderReceiptPdf(
 		y -= 12;
 	}
 
-	paymentCard(d, paid ? "How you paid" : "How to pay", data.paymentBlocks, y);
+	paymentCard(
+		d,
+		paid ? "How you paid" : data.paymentsPaused ? "Payment" : "How to pay",
+		data.paymentBlocks,
+		y,
+	);
 
 	footer(
 		d,
 		paid
 			? `Thank you for your purchase at ${data.storeName} via Kedaipal.`
-			: `Please use ${data.orderShortId} as your payment reference. Thank you for ordering from ${data.storeName} via Kedaipal.`,
+			: data.paymentsPaused
+				? `Thank you for ordering from ${data.storeName} via Kedaipal.`
+				: `Please use ${data.orderShortId} as your payment reference. Thank you for ordering from ${data.storeName} via Kedaipal.`,
 		// The seller's document to their buyer → it carries the growth mark,
 		// tagged as the receipt surface and attributed to the store.
 		{ poweredByUrl: poweredByHref("receipt", data.storeSlug) },

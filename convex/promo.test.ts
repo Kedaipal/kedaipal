@@ -302,6 +302,26 @@ describe("orders.create — flash cap", () => {
 		expect(order.paymentDueAt).toBeGreaterThanOrEqual(before + 59 * 60_000);
 		expect(order.paymentDueAt).toBeLessThanOrEqual(Date.now() + 61 * 60_000);
 	});
+
+	test("a LAPSED store's flash sale stamps no deadline — the buyer can't pay inside it (z8r3fdr6gg)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const productId = await seedPromoProduct(t, retailer._id, {
+			unitCap: 10,
+			payWithinMinutes: 60,
+		});
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.first();
+			if (!sub) throw new Error("no subscription row");
+			await ctx.db.patch(sub._id, { status: "past_due" });
+		});
+		const { shortId } = await createOrder(t, retailer._id, productId, 1);
+		const order = await orderByShortId(t, shortId);
+		expect(order.paymentDueAt).toBeUndefined();
+	});
 });
 
 describe("orders.create — price-changed guard", () => {

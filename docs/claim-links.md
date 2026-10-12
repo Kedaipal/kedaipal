@@ -555,6 +555,10 @@ outcome.
 - **Expired / cancelled:** calm dead-end — nothing charged, wa.me into the
   seller's chat with a prefilled ask, "Browse the store instead".
 
+## A lapsed store's claim carries no payment deadline (z8r3fdr6gg)
+
+While the store's buyer payments are paused (past due), the buyer can still commit a claim, but there is nothing they can pay with, so a deadline would be a trap: `commit` stamps no `paymentDueAt`, and `cancelUnpaidDueOrders` **lifts** a deadline that falls due during the pause instead of cancelling the order (the stock stays held; the seller can cancel by hand once they're back). The claim page and the order page say payments are paused. One edge accepted on purpose: an order whose deadline is still running when the store comes back keeps whatever is left of it. See [`manual-subscription.md`](./manual-subscription.md#buyer-payments-pause-while-a-store-is-lapsed-z8r3fdr6gg).
+
 ## Off-Season Hold closes every claim door (z8r3fday24)
 
 A claim is the only order invitation that can already be sitting in a buyer's

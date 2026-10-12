@@ -76,6 +76,7 @@ import { PickupNotes } from "../order/pickup-notes";
 import { AddressFieldset } from "../storefront/address-fieldset";
 import { sanitizeAddress } from "../storefront/checkout-form";
 import { CheckoutHint } from "../storefront/checkout-hint";
+import { PaymentsPausedNotice } from "../storefront/payments-paused-notice";
 import {
 	PickupLocationRadioList,
 	PickupSummaryCard,
@@ -787,6 +788,13 @@ export function ClaimCheckoutPage({
 				{/* Desktop: sticky ticket right, sections left (storefront layout). */}
 				<div className="lg:order-2 lg:w-96 lg:shrink-0">
 					<div className="flex flex-col gap-3 lg:sticky lg:top-16">
+						{/* Above the ticket, as on every checkout (z8r3fdr6gg). */}
+						<PaymentsPausedNotice
+							paused={store.paymentsPaused}
+							storeName={storeName}
+							// A fee still to be quoted is a payment to come.
+							free={displayTotal === 0 && feeSettled}
+						/>
 						{/* A voucher that died between send and commit. Said HERE, on
 						    load, above the price it changes — the one thing this must
 						    never do is let the buyer confirm a total they were not
@@ -1185,9 +1193,9 @@ export function ClaimCheckoutPage({
 									: `Confirm order · ${formatPrice(displayTotal, store.currency)} + ${feeNounShort}`}
 						</Button>
 						<p className="text-center text-xs text-muted-foreground">
-							Nothing is charged yet — you pay on your order page next, online
-							or by bank transfer. Your price hold continues there until
-							payment.
+							{store.paymentsPaused
+								? "Nothing is charged — you'll pay on your order page once the store is taking payments again."
+								: "Nothing is charged yet — you pay on your order page next, online or by bank transfer. Your price hold continues there until payment."}
 						</p>
 					</div>
 				</div>
@@ -1217,8 +1225,9 @@ export function ClaimCheckoutPage({
 								: `Confirm order · ${formatPrice(displayTotal, store.currency)} + ${feeNounShort}`}
 					</Button>
 					<p className="text-center text-[11px] text-muted-foreground">
-						Nothing is charged yet — you pay next; the hold continues until
-						payment.
+						{store.paymentsPaused
+							? "Nothing is charged — you'll pay later, from your order page."
+							: "Nothing is charged yet — you pay next; the hold continues until payment."}
 					</p>
 				</div>
 			</div>
