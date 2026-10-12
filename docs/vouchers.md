@@ -1,6 +1,8 @@
 # Vouchers — seller-issued single-use codes
 
 > **Status: shipped** (ClickUp `z8r3fdr617`, scoped 8 Oct 2026, built 9 Oct).
+> Reviewed and revised 10–12 Oct (batch grouping, the receipt skin, four
+> findings from the Chrome pass).
 > This doc was written ahead of the code on purpose — the redemption model
 > (especially *how the QR is used*) was decided at scoping and the build
 > implements what's written here. Everything below is now live; the
@@ -79,14 +81,86 @@ already used (naming the order), or another voucher already on this order.
 ## Lifecycle and the seller's controls
 
 - **Create**: single or batch ("create 20"), value + optional expiry (store
-  time zone, end of day). Vouchers list shows status filters (active /
-  redeemed / expired / voided), each row linking a redeemed voucher to its
-  order.
+  time zone, end of day), plus an optional **name** — the batch's handle, asked
+  for where the run is created rather than only offered as a rename afterwards.
+  Vouchers list shows status filters (active / redeemed / expired / voided),
+  each row linking a redeemed voucher to its order.
+- **Rename a batch**: the only bulk *update* that exists, deliberately — see
+  "A batch is one object" below.
 - **Void**: any time, with an optional private reason. Soft — the row and its
   history stay; the code simply stops redeeming, with copy that says so.
-  There is no hard delete in v1.
+  There is no hard delete in v1. **Void the rest of a batch** in one action,
+  named with its own count ("Void 14 left").
 - **Expiry** is judged inside the redeem mutation against `Date.now()`; the
   list and the buyer-facing error render it, no cron flips anything.
+
+## A batch is one object, not twenty rows
+
+A "create 20" run listed flat is twenty cards differing in **eight random
+characters**. The seller cannot tell which run a code came from, which run they
+just made, or act on a run at all. So a batch collapses to **one parent**
+carrying the three things they actually need — what it is **called**, how
+**big** it is, and what has **become of** it ("20 codes · 14 active, 6 used") —
+and expanding it reveals the very same `VoucherList` rows a standalone voucher
+uses, so a code reads and behaves identically wherever it is found.
+
+- **Collapsed by default.** The codes are the detail; the *run* is the object,
+  and a seller scanning their book is looking for "the Raya giveaway", not for
+  `KP-7F3K-Q2WM`.
+- **The parent counts the WHOLE run, even under a filter.** With the `active`
+  chip on, a part-spent run of 20 still says "20 codes · 14 active, 6 used" and
+  adds "· showing 14". Recounting it as the filter's subset would tell the
+  seller their run had shrunk.
+- **Grouping is a pure helper** (`src/lib/voucher-groups.ts`:
+  `groupVouchers(shown, all)`), given both the filtered rows *and* the whole
+  book for exactly that reason — not logic buried in a component.
+- **The name lives on each row's `note`**, not in a `batches` table. A batch is
+  ≤50 rows (`VOUCHER_BATCH_MAX`), so denormalising means the list needs no
+  join, and a single voucher's quieter "label" is the same field.
+- **An unnamed run falls back to its size and date** ("20 vouchers · 9 Oct"),
+  so a batch is never a nameless blob — and the fallback is stated in the
+  create dialog's helper line, so the seller knows naming it is worth doing
+  *before* they have twenty codes.
+- **Bulk work on a run is Rename and Void-remaining, and that is the whole
+  set.** A voucher's **value is immutable once issued** — a code already in a
+  buyer's hand must never change what it is worth — so the name is the one
+  thing left to change, and it is precisely the thing that makes the run
+  findable. "Void N left" names its count and **disappears** once nothing is
+  left to call off, rather than sitting there promising something the server
+  rightly refuses. "Copy all codes" sits inside the expanded run, one per line.
+
+`vouchers.list` returns the **whole book unfiltered** and the client filters
+it. Two structural reasons: a parent has to state the run's totals while a chip
+shows one child, and the chips then switch with no round trip. The scan was
+always full anyway — `expired` is judged at read time, so there is no index
+that could answer a status filter.
+
+## The buyer's field: one control, two skins
+
+`voucher-field.tsx` is the **only** voucher input in the app, worn by the
+storefront checkout, the counter panel and the claim flow. It has two skins and
+they are skins, **not two components**: the open/closed/applied/refused states,
+the normalisation, the refusal copy and the shared discount maths are exactly
+what must never diverge between the buyer typing a code and the seller keying
+one.
+
+| Skin | Where | What it looks like |
+|---|---|---|
+| `panel` | Counter order panel | House form chrome — a bordered input and an outline button, like every other dashboard field |
+| `receipt` | Storefront checkout ticket | Caption-type `+ Voucher code` when closed; open, a **mono** field on the same dotted leader every charge row uses, with a stamped `Apply` set in the TOTAL's type |
+
+The storefront ticket is a *printed receipt*, and a bordered input with an
+outline button dropped onto one reads as a form stapled to a document. The
+counter keeps the panel skin for the mirror-image reason: receipt grammar would
+be as wrong on a dashboard as the chrome was on the ticket.
+
+**There is no green "applied" panel.** The receipt's own voucher line already
+states the code and what it took off, so a panel beneath it repeated the same
+fact in a louder voice. Instead that line **is** the control: it is an
+item-style disclosure (`aria-expanded`, a chevron), and tapping it reveals the
+remove in the same 44px icon well a product line puts its trash in. The ticket
+then has **one** idea of "tap a line to change it", which is the grammar the
+item rows already taught.
 
 ## Guard rails
 
@@ -169,13 +243,14 @@ file's own test).
 | Code, value, status, refusal copy (pure) | `convex/lib/vouchers.ts` |
 | Resolve / redeem / release / claim state (ctx) | `convex/lib/voucherRedemption.ts` |
 | Totals seam + `orderExtras` | `convex/lib/order.ts` |
-| Issue, void, void-batch, list, code check | `convex/vouchers.ts` |
+| Issue, rename-batch, void, void-batch, list, code check | `convex/vouchers.ts` |
 | Storefront redemption | `orders.create` (`voucherCode` arg) |
 | Counter redemption | `counterCheckout.createOrderFromSession` (explicit `voucherCode` arg) |
 | Claim redemption | `orderClaims.sendClaim` freezes, `commit` spends |
 | Hand-back on cancel | `reverseCancellationEffects` + `declineMockupItem` |
 | Seller surface | `src/routes/app.vouchers.index.tsx`, `src/components/vouchers/*` |
-| Buyer / counter field | `src/components/vouchers/voucher-field.tsx` (ONE control, both surfaces) |
+| Buyer / counter field | `src/components/vouchers/voucher-field.tsx` (ONE control, two skins) |
+| Batch grouping (pure) | `src/lib/voucher-groups.ts` + `voucher-batch-card.tsx` |
 | `?voucher=` carried across browsing | `src/hooks/useVoucherParam.ts` |
 | Tenant teardown | `vouchers` phase in `convex/lib/accountDeletion.ts` |
 
@@ -211,6 +286,20 @@ file's own test).
 - **A voided voucher is never resurrected by a cancellation.** The seller
   withdrew it on purpose.
 
+- **A batch's NAME is renameable; its value is not.** `renameBatch` is the only
+  bulk update, because a code in a buyer's hand must not change what it is
+  worth. It writes a private label, so it is classified in
+  `creditLockCoverage.test.ts` as having nothing to meter.
+
+- **The list's lock is the house hook, not a hand-derived one.** The first
+  build read `isStoreReadOnly(retailer)` directly and dropped its second
+  `isAdmin` argument, so an **admin** was shown a seller's sentence — "Your
+  store is view-only until the subscription is settled" — over a New-voucher
+  button the server would happily have accepted (reported by Zaki, 10 Oct).
+  The page now uses `useAreaLock("vouchers")` + `ViewOnlyNote` like every other
+  area, which is admin-aware by construction. The lesson is general: a lock
+  re-derived at a call site is a lock that will disagree with the server.
+
 - **Both counter doors take the code as an ARGUMENT, never off the session
   draft.** The draft is a 700 ms debounced autosave — `items` are already
   passed explicitly for exactly that reason — so a door reading it would drop a
@@ -229,10 +318,18 @@ file's own test).
   back, the empty-cart panel SAYS it is being held, and it is forgotten once
   spent so a second checkout in the same tab can't re-apply a redeemed code.
 
-### The one found bug, fixed in passing
+### The bugs found in passing
 
 `orders.updateDeliveryAddress` refuses `self_collect` but **not** `booking`, so
 a booking order could reach it — and with `securityDeposit` missing from its
 hand-written extras, the deposit was silently deleted from `total`. Spreading
 `orderExtras(order)` fixes it; `voucherRedemption.test.ts` pins it with a test
 that fails if the site is reverted to its literal.
+
+And a second, which is **promo's, not this feature's**: the counter panel
+priced its lines from the LIST price while `createOrderFromSession` resolved
+the PROMO one, so the seller confirmed RM50 and the order recorded RM40 — real
+money at a cash till. It was reproduced with **no voucher involved**, which is
+how it was established as pre-existing, and fixed here because it blocked
+testing the counter's voucher line. See
+[promo-price.md](./promo-price.md#the-counter-panel-quotes-a-price-so-it-calls-the-same-helper).
