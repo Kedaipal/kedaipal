@@ -96,7 +96,14 @@ describe("MASK_PII sweep coverage (86eyn25g9)", () => {
 		["src/components/dashboard/customer-list.tsx", 1],
 		["src/routes/app.orders.$shortId.tsx", 5],
 		["src/routes/app.orders.index.tsx", 1],
-		["src/routes/app.index.tsx", 1],
+		// NOT src/routes/app.index.tsx. Home carried one masked surface — the
+		// recent-orders list, which showed buyer names — and the sales-first
+		// redesign removed it (z8r3fdrgzj decision 3: the Orders tab and the New
+		// cell already cover it). Everything Home renders now is a COUNT, a
+		// product name or a source label; the Customers card deliberately shows
+		// numbers rather than the board's avatar initials, which would have been
+		// PII. Re-add this row the moment Home shows a buyer's name, phone,
+		// address or note again.
 		["src/routes/app.customers.$customerId.tsx", 1],
 		["src/routes/app.checkout.tsx", 6],
 		["src/components/order/order-document-actions.tsx", 1],

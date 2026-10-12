@@ -42,6 +42,27 @@ export function creditTone(total: number, periodGrant: number): CreditTone {
 	return total <= lowCreditLine(periodGrant) ? "low" : "ok";
 }
 
+/**
+ * Where the credit card sits on Home (z8r3fdrgzj decision 6).
+ *
+ * Position IS the urgency signal, so it is derived from the tone rather than
+ * chosen per surface: a healthy balance is reference material and belongs at
+ * the bottom with the other store settings; a low one is a decision to make
+ * soon and sits where the seller's eye already is, under the action strip; an
+ * empty one has stopped the store accepting orders and goes above everything,
+ * because nothing below it matters until it is fixed.
+ *
+ * Deriving it means the card can never be low-toned amber while sitting
+ * politely at the foot of the page.
+ */
+export type CreditPlacement = "top" | "under-strip" | "store";
+
+export function creditPlacement(tone: CreditTone): CreditPlacement {
+	if (tone === "out") return "top";
+	if (tone === "low") return "under-strip";
+	return "store";
+}
+
 /** "1 order" / "15 orders". */
 function orders(n: number): string {
 	return `${n} ${n === 1 ? "order" : "orders"}`;

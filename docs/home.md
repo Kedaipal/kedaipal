@@ -135,3 +135,66 @@ seller to look.
 > never swept. `getTodayPulse` follows the existing pattern. Whether a gated
 > order's revenue belongs in Insights is a credit-gate design question, not a
 > Home question — worth its own ticket.
+
+---
+
+## The page (T1 + T3)
+
+`src/routes/app.index.tsx` is now the **state switch and nothing else** — it
+resolves which shape the store is in, assembles the setup checklist, and hands
+rendering to `src/components/home/*`. It was 1,185 lines holding every shape
+inline, which is why changes to the steady page kept breaking onboarding.
+
+### The five shapes
+
+| Phase | When | What leads |
+| --- | --- | --- |
+| `new` | no required step done | Welcome card + the three-step row |
+| `waiting` | set up, `!activatedAt` | Share card, then an empty sales frame |
+| `first` | within 7 days of `activatedAt` | Celebration, then the real hero |
+| `steady` | everything else | Strip → exceptions → sales → plan ahead |
+| loading | `products` unresolved | `HomeSkeleton`, shaped like the real zones |
+
+`products` decides the shape, so the skeleton holds until it resolves — a flip
+after first paint is the thing the skeleton exists to prevent.
+
+### Order on mobile
+
+Greeting → (credit card if `out`) → action strip → (credit card if `low`) →
+exception rows → Sales (chips + hero + three cards) → Plan ahead → Your store
+(credit card if `ok`, share card).
+
+### Rules worth knowing before changing it
+
+- **The strip says each number once.** "Needs attention" used to repeat the
+  strip's own counts as rows. The exception rows now carry only what the strip
+  *cannot* say: unpaid orders older than `STALE_UNPAID_DAYS`, and out-of-stock
+  products. No row may duplicate a strip count.
+- **One period control** governs the hero AND the three cards, so the page can
+  never show a 30-day headline over a 7-day chart. It lives in the URL (`?p=`)
+  and is omitted when it is the default, so the common URL stays clean while a
+  refresh still keeps the seller's window.
+- **Plan ahead is period-independent.** The chips change what the store has
+  already earned; Plan ahead answers what is coming. Tying it to "30 days"
+  would be a forecast of the past.
+- **Credit placement is derived from tone**, never chosen per surface
+  (`creditPlacement`), so the card can never be amber while sitting politely at
+  the foot of the page. On Home the promoted card replaces the shell banner's
+  credit branches so the lock sentence is not said twice.
+- **Out of credits relabels, never disables.** The strip cells stay links —
+  a seller who cannot see an order must always be able to release the buyer.
+- **Home renders NO buyer PII.** The recent-orders list was the only masked
+  surface and the redesign removed it, so `src/routes/app.index.tsx` was taken
+  out of the `MASK_PII` sweep table with that reasoning recorded there. The
+  Customers card deliberately shows counts rather than the design's avatar
+  initials, which would have been PII. Re-add the row the moment a buyer's
+  name, phone, address or note appears here again.
+
+### Looking at it
+
+`/app` is Clerk-gated, so the components cannot be reached in a preview without
+signing in. They were reviewed by rendering the real components to static HTML
+with the production stylesheet (the harness pattern) — which is how three
+defects were caught that reading the Tailwind would not have shown: the
+out-of-credits sub-labels clipping to "accepting pa…", the hero printing
+"RM 4,860.00" at 42px, and the stale-unpaid row carrying a redundant year.

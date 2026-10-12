@@ -5,6 +5,7 @@ import {
 	CREDIT_RULES_LINE,
 	cancelCreditLine,
 	creditActivityLabel,
+	creditPlacement,
 	creditRefreshLabel,
 	creditStateLine,
 	creditTone,
@@ -481,5 +482,24 @@ describe("the per-order gate's copy names the ORDER, never the store (T3.1)", ()
 		expect(bulkCreditSkipNote(4)).toMatch(
 			/^4 of these are waiting on credits and will be skipped\./,
 		);
+	});
+});
+
+describe("creditPlacement — position is the urgency signal", () => {
+	test("a healthy balance is reference material, at the foot of the page", () => {
+		expect(creditPlacement("ok")).toBe("store");
+	});
+
+	test("running low moves it under the action strip, where the eye is", () => {
+		expect(creditPlacement("low")).toBe("under-strip");
+	});
+
+	test("out of credits goes above everything — nothing below it matters yet", () => {
+		expect(creditPlacement("out")).toBe("top");
+	});
+
+	test("every tone has a home, so a card can never be placeless", () => {
+		for (const tone of ["ok", "low", "out"] as const)
+			expect(["top", "under-strip", "store"]).toContain(creditPlacement(tone));
 	});
 });
