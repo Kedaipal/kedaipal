@@ -36,7 +36,7 @@ function claim(overrides: Record<string, unknown> = {}) {
 		expiresAt: NOW + 8 * 60_000,
 		windowMinutes: 15,
 		currency: "MYR",
-		itemsTotal: 24600,
+		total: 24600,
 		lines: [
 			{
 				name: "Ribeye MS5",

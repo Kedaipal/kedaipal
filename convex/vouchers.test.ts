@@ -869,6 +869,71 @@ describe("claim link", () => {
 		);
 	});
 
+	/**
+	 * Every seller-side figure for a claim is NET of its voucher
+	 * (`z8r3fdr617`). The hands-on pass found all three printing the gross:
+	 * a claim sent at RM 25.00 read "RM 30.00" in the claims list, on the
+	 * frozen "waiting on buyer" screen whose entire job is to mirror what the
+	 * buyer sees, and in the buyer's own page header above its own ticket.
+	 */
+	test("the seller's claim figures are net of the voucher, not the items total", async () => {
+		const t = setup();
+		const { token, asUser } = await claimWithVoucher(t);
+
+		// The claims list row.
+		const [row] = await asUser.query(api.orderClaims.listClaims, {});
+		expect(row.total).toBe(2500); // 3000 items − 500 voucher
+
+		// The frozen counter screen — same claim, same number.
+		const claim = await t.run(async (ctx) =>
+			ctx.db
+				.query("orderClaims")
+				.withIndex("by_token", (q) => q.eq("token", token))
+				.unique(),
+		);
+		const session = await asUser.query(
+			api.counterCheckout.getCheckoutSession,
+			{ sessionId: claim!.sessionId },
+		);
+		expect(session?.liveClaim?.total).toBe(2500);
+
+		// And the buyer's page prices from the same rule.
+		const page = await t.query(api.orderClaims.getByToken, { token });
+		expect(page?.open?.itemsTotal).toBe(3000);
+		expect(page?.open?.voucher).toMatchObject({ kind: "applied" });
+	});
+
+	/**
+	 * The trap that makes "just judge it live everywhere" wrong: once the claim
+	 * COMPLETES, its voucher is `redeemed`, so `claimVoucherState` answers
+	 * `dropped` — and a row that re-judged would hand back the GROSS for the
+	 * one case where the discount definitely happened. Completed rows read the
+	 * order instead.
+	 */
+	test("a completed claim reads the ORDER's total, not a re-judged voucher", async () => {
+		const t = setup();
+		const { token, asUser, voucher } = await claimWithVoucher(t);
+		await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "delivery",
+			deliveryAddress: {
+				line1: "12 Jln Mawar",
+				city: "PJ",
+				state: "Selangor",
+				postcode: "47301",
+			},
+			fulfilmentDate: todayMytMidnight() + DAY_MS,
+		});
+		// The voucher really is spent — this is what would mislead a re-judge.
+		expect((await t.run((ctx) => ctx.db.get(voucher.id)))?.status).toBe(
+			"redeemed",
+		);
+
+		const rows = await asUser.query(api.orderClaims.listClaims, {});
+		const completed = rows.find((r) => r.status === "completed");
+		expect(completed?.total).toBe(2500);
+	});
+
 	test("a voucher spent elsewhere DROPS with a notice — never a dead end", async () => {
 		// The one door that doesn't refuse: the buyer followed a link and only
 		// the seller can issue another, so refusing would strand them. The page

@@ -264,7 +264,7 @@ function VouchersRoute() {
 			{loading ? (
 				<VoucherListSkeleton />
 			) : groups.length === 0 ? (
-				<EmptyState filter={filter} everIssued={hasAny(counts)} />
+				<EmptyState filter={filter} counts={counts} />
 			) : (
 				<ul className="flex flex-col gap-2">
 					{groups.map((group) =>
@@ -420,12 +420,12 @@ function hasAny(counts: Record<VoucherStatus, number> | undefined): boolean {
  */
 function EmptyState({
 	filter,
-	everIssued,
+	counts,
 }: {
 	filter: VoucherStatus | "all";
-	everIssued: boolean;
+	counts: Record<VoucherStatus, number> | undefined;
 }) {
-	const filtered = everIssued && filter !== "all";
+	const filtered = hasAny(counts) && filter !== "all";
 	return (
 		<div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-border px-6 py-10 text-center">
 			<div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
@@ -435,7 +435,11 @@ function EmptyState({
 				<div>
 					<p className="font-medium">No {labelFor(filter)} vouchers</p>
 					<p className="mt-1 text-sm text-muted-foreground">
-						Your other vouchers are under the different filters above.
+						{/* Name WHERE they are, not just that they're elsewhere —
+						    the counts are already in hand, and "the different
+						    filters above" made the seller read all four chips to
+						    find out which one holds anything. */}
+						Your vouchers are under {elsewhereLine(counts, filter)}.
 					</p>
 				</div>
 			) : (
@@ -450,6 +454,26 @@ function EmptyState({
 			)}
 		</div>
 	);
+}
+
+/**
+ * "Active (1) and Voided (7)" — the filters that actually hold something,
+ * excluding the empty one the seller is standing on. Falls back to the vague
+ * form only if the counts haven't loaded, which is the one case where naming
+ * them would be a guess.
+ */
+export function elsewhereLine(
+	counts: Record<VoucherStatus, number> | undefined,
+	filter: VoucherStatus | "all",
+): string {
+	if (!counts) return "the other filters above";
+	const named = FILTERS.filter(
+		(f): f is (typeof FILTERS)[number] & { key: VoucherStatus } =>
+			f.key !== "all" && f.key !== filter && counts[f.key] > 0,
+	).map((f) => `${f.label} (${counts[f.key]})`);
+	if (named.length === 0) return "the other filters above";
+	if (named.length === 1) return named[0];
+	return `${named.slice(0, -1).join(", ")} and ${named[named.length - 1]}`;
 }
 
 function labelFor(filter: VoucherStatus | "all"): string {

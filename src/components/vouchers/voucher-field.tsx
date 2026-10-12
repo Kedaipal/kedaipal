@@ -219,9 +219,16 @@ export function VoucherField({
 		return (
 			<div className="flex flex-col">
 				<div className="flex items-center gap-2 py-1 font-mono text-[13px] leading-6">
+					{/* Centred on the ROW, the glyph reads LOW against the code:
+					    the input carries `pb-0.5` and a 2px dotted rule, so ~4px
+					    of its box sits under the text and drags the row's centre
+					    down with it. Lift the icon by that much to sit on the
+					    text's own centre instead. (It was `translate-y-0.5`,
+					    tuned when the input was 13px; the 16px bump that keeps
+					    iOS from zooming moved the baseline out from under it.) */}
 					<Ticket
 						aria-hidden
-						className={`size-3.5 shrink-0 translate-y-0.5 ${
+						className={`size-3.5 shrink-0 -translate-y-0.5 ${
 							refusal ? "text-destructive" : "text-muted-foreground"
 						}`}
 					/>

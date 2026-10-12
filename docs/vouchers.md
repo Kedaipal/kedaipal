@@ -294,6 +294,19 @@ file's own test).
 - **A voided voucher is never resurrected by a cancellation.** The seller
   withdrew it on purpose.
 
+- **What a claim is worth is answered per STATUS, and the completed case is a
+  trap.** Once a claim completes, its voucher is `redeemed` — so a row that
+  re-judged the voucher live would get `dropped` back and print the **gross**
+  for exactly the claims where the discount definitely happened. So
+  `ClaimListRow.total` reads the **order's** recorded total when there is one,
+  and items-minus-the-live-voucher otherwise. Judging live for an open claim is
+  the right answer there for the mirror-image reason: a voucher voided after
+  sending really has stopped discounting, and the seller's list should say so
+  at the same moment the buyer's page does. Fees stay out of an open claim's
+  figure — they depend on choices the buyer hasn't made and only ever ADD.
+  Both halves are mutation-tested; dropping the order short-circuit turns the
+  completed case red with `expected 3000 to be 2500`.
+
 - **`claimVoucherDiscount` is the one author of what a claim's voucher takes
   off.** Only an `applied` voucher discounts — a `dropped` one must price at
   FULL and say why, which is the entire reason the claim degrades instead of
@@ -352,10 +365,10 @@ how it was established as pre-existing, and fixed here because it blocked
 testing the counter's voucher line. See
 [promo-price.md](./promo-price.md#the-counter-panel-quotes-a-price-so-it-calls-the-same-helper).
 
-And a third, this one the feature's own: the claim page **header** printed
-`itemsTotal`, which equalled the total until a voucher could subtract from it.
-See the `claimVoucherDiscount` decision above. The seller's claims list
-(`send-claim.tsx`, `waiting-on-buyer.tsx`) still prints `itemsTotal` and is
-therefore gross on a voucher claim — left as a reported finding rather than
-changed, because fixing it needs a new field on `ClaimListRow` and the figure
-there has always meant "items" (a delivery fee already made it differ).
+And a third, this one the feature's own: **every seller-side figure for a
+claim printed the GROSS items total.** A claim sent at RM 32.00 read
+"RM 40.00" in the claims list, on the frozen "waiting on buyer" screen (whose
+whole job is to mirror what the buyer is looking at) and in the buyer's own
+page header, directly above its own ticket reading "TOTAL RM 32.00".
+`itemsTotal` equalled the total until a voucher could subtract from it; all
+four surfaces now take the net. See "What a claim is worth" below.

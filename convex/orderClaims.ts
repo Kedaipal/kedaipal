@@ -83,6 +83,7 @@ import {
 } from "./lib/order";
 import {
 	type ClaimVoucherState,
+	claimVoucherDiscount,
 	claimVoucherState,
 	redeemVoucher,
 	resolveVoucherOrThrow,
@@ -484,7 +485,27 @@ export interface ClaimListRow {
 	buyerName: string;
 	waPhone: string;
 	itemCount: number;
-	itemsTotal: number;
+	/**
+	 * What this claim COMES TO — net of its voucher, not the items figure
+	 * (`z8r3fdr617`). It replaced `itemsTotal`, which was the same number until
+	 * a voucher could subtract from it and then had the seller's list reading
+	 * "RM 40.00" for a claim they had sent at RM 32.00.
+	 *
+	 * Per status, because "what it comes to" genuinely differs:
+	 * - **completed** — the ORDER's recorded total, the only real money here.
+	 *   It also sidesteps a trap: a completed claim's voucher is now
+	 *   `redeemed`, so asking `claimVoucherState` would answer `dropped` and
+	 *   hand back the gross for the very rows where the discount definitely
+	 *   happened.
+	 * - **anything else** — items minus the LIVE voucher state, the same read
+	 *   the buyer's own claim page prices from, so the two can't disagree. A
+	 *   voucher voided after sending stops discounting here too, which is the
+	 *   truth about the offer as it now stands.
+	 *
+	 * Fees are deliberately absent on an open claim: they depend on choices the
+	 * buyer hasn't made yet, and they only ever ADD.
+	 */
+	total: number;
 	currency: string;
 	token: string;
 	expiresAt: number;
@@ -554,10 +575,22 @@ export const listClaims = query({
 		const out: ClaimListRow[] = [];
 		for (const claim of [...open, ...settled]) {
 			let orderShortId: string | undefined;
+			let orderTotal: number | undefined;
 			if (claim.orderId) {
 				const order = await ctx.db.get(claim.orderId);
 				orderShortId = order?.shortId;
+				orderTotal = order?.total;
 			}
+			const itemsTotal = claimItemsTotal(claim.lines);
+			// See `ClaimListRow.total` for why completed reads the order and
+			// everything else judges the voucher live.
+			const total =
+				orderTotal ??
+				itemsTotal -
+					claimVoucherDiscount(
+						await claimVoucherState(ctx, claim, now),
+						itemsTotal,
+					);
 			out.push({
 				claimId: claim._id,
 				sessionId: claim.sessionId,
@@ -570,7 +603,7 @@ export const listClaims = query({
 				}),
 				waPhone: claim.waPhone,
 				itemCount: claim.lines.reduce((n, l) => n + l.quantity, 0),
-				itemsTotal: claimItemsTotal(claim.lines),
+				total,
 				currency: claim.currency,
 				token: claim.token,
 				expiresAt: claim.expiresAt,

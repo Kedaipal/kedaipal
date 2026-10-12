@@ -1584,7 +1584,7 @@ describe("orderClaims — the checkout is frozen while its link is out", () => {
 		});
 		expect(session?.liveClaim?.claimId).toBe(claimId);
 		expect(session?.liveClaim?.lines).toHaveLength(1);
-		expect(session?.liveClaim?.itemsTotal).toBe(12000);
+		expect(session?.liveClaim?.total).toBe(12000);
 
 		await asA.mutation(api.orderClaims.cancelClaim, { claimId });
 		const released = await asA.query(api.counterCheckout.getCheckoutSession, {

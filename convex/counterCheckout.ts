@@ -80,6 +80,8 @@ import {
 	generateTrackingToken,
 } from "./lib/order";
 import {
+	claimVoucherDiscount,
+	claimVoucherState,
 	redeemVoucher,
 	resolveVoucherOrThrow,
 } from "./lib/voucherRedemption";
@@ -275,7 +277,13 @@ export const getCheckoutSession = query({
 			expiresAt: number;
 			windowMinutes: number;
 			currency: string;
-			itemsTotal: number;
+			/**
+			 * Net of the claim's voucher (`z8r3fdr617`) — this screen exists to
+			 * show the seller WHAT THE BUYER IS LOOKING AT, so a gross figure
+			 * here is the one number on it that wouldn't match. Always judged
+			 * live, since a live claim's voucher is by definition unspent.
+			 */
+			total: number;
 			lines: Array<{
 				name: string;
 				variantLabel: string | undefined;
@@ -325,6 +333,18 @@ export const getCheckoutSession = query({
 
 		const now = Date.now();
 		const claim = await liveClaimForSession(ctx, sessionId, now);
+		// Net of the claim's voucher, so the seller's frozen view matches the
+		// buyer's ticket to the sen (`z8r3fdr617`). A live claim's voucher is
+		// by definition unspent, so the live state is the right one to ask.
+		const claimItems =
+			claim?.lines.reduce((sum, l) => sum + l.price * l.quantity, 0) ?? 0;
+		const claimLiveTotal = claim
+			? claimItems -
+				claimVoucherDiscount(
+					await claimVoucherState(ctx, claim, now),
+					claimItems,
+				)
+			: 0;
 
 		return {
 			status: effectiveStatus(session, now),
@@ -342,10 +362,7 @@ export const getCheckoutSession = query({
 						expiresAt: claim.expiresAt,
 						windowMinutes: claim.windowMinutes,
 						currency: claim.currency,
-						itemsTotal: claim.lines.reduce(
-							(sum, l) => sum + l.price * l.quantity,
-							0,
-						),
+						total: claimLiveTotal,
 						lines: claim.lines.map((l) => ({
 							name: l.name,
 							variantLabel: l.variantLabel,
