@@ -212,15 +212,15 @@ describe("buildHomeSalesView", () => {
 			range,
 			rangePayload: rangePayload({
 				customers: [
-					{ id: "a", firstOrderAt: range.from - DAY },
-					{ id: "b", firstOrderAt: range.from + DAY },
+					{ id: "a", firstOrderAt: range.from - DAY, initial: "A" },
+					{ id: "b", firstOrderAt: range.from + DAY, initial: "B" },
 				],
 			}),
 			todayPayload: todayPayload({
 				// "a" again (a regular who ordered twice) plus one genuinely new.
 				customers: [
-					{ id: "a", firstOrderAt: range.from - DAY },
-					{ id: "c", firstOrderAt: range.to },
+					{ id: "a", firstOrderAt: range.from - DAY, initial: "A" },
+					{ id: "c", firstOrderAt: range.to, initial: "C" },
 				],
 			}),
 			previousPayload: null,

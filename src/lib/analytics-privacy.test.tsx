@@ -94,6 +94,11 @@ describe("MASK_PII sweep coverage (86eyn25g9)", () => {
 		["src/components/dashboard/customer-card.tsx", 1],
 		["src/components/dashboard/customer-detail.tsx", 1],
 		["src/components/dashboard/customer-list.tsx", 1],
+		// Home's Customers card draws the board's avatar stack — one initial per
+		// buyer. An initial beside that buyer's order history is still identity,
+		// and Home is a Clarity-recorded page, so the stack carries the mask
+		// (z8r3fdrgzj, Zaki 13 Oct 2026).
+		["src/components/home/customers-card.tsx", 1],
 		["src/routes/app.orders.$shortId.tsx", 5],
 		["src/routes/app.orders.index.tsx", 1],
 		// NOT src/routes/app.index.tsx. Home carried one masked surface — the

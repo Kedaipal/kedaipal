@@ -27,6 +27,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { type QueryCtx, query } from "./_generated/server";
 import { requireRetailerAccess } from "./lib/auth";
+import { getDisplayName } from "./lib/customer";
 import { isMytMidnight, todayMytMidnight } from "./lib/fulfilmentDate";
 import {
 	type Bucketing,
@@ -183,13 +184,37 @@ async function resolveCustomers(
 	for (const doc of docs) {
 		// A customer deleted since the order was placed has no identity left to
 		// classify; its revenue still counts, it just stops being a head.
-		if (doc) customers.push({ id: doc._id, firstOrderAt: doc.firstOrderAt });
+		if (doc)
+			customers.push({
+				id: doc._id,
+				firstOrderAt: doc.firstOrderAt,
+				initial: initialOf(doc),
+			});
 	}
 	return { customers, customersCapped };
 }
 
-/** A distinct buyer in a window, with the timestamp that decides returning vs new. */
-export type CustomerIdentity = { id: string; firstOrderAt: number };
+/**
+ * A distinct buyer in a window, with the timestamp that decides returning vs
+ * new and ONE character for the avatar stack the design draws.
+ *
+ * One character, never the name: the stack shows three faces and a "+39", so a
+ * single initial is all it can render — and Home runs session recording, which
+ * makes every extra character of buyer identity a cost with no benefit. The
+ * client masks even this (`MASK_PII` on the stack), so it is belt and braces.
+ */
+export type CustomerIdentity = {
+	id: string;
+	firstOrderAt: number;
+	/** Uppercase first letter of the display name; "?" when it has none. */
+	initial: string;
+};
+
+/** First letter of a buyer's display name, for the avatar stack. */
+function initialOf(doc: Doc<"customers">): string {
+	const letter = getDisplayName(doc).match(/[a-z0-9]/i)?.[0];
+	return letter ? letter.toUpperCase() : "?";
+}
 
 export type InsightsRangeResult =
 	| { gated: true }

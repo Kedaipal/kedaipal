@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { ChevronRight, Moon, Users } from "lucide-react";
+import { MASK_PII } from "../../lib/analytics-privacy";
 import {
 	customersHeadline,
 	type HomePeriod,
@@ -7,6 +8,7 @@ import {
 	PERIOD_CARD_LABEL,
 } from "../../lib/home-copy";
 import type { CustomerSplit } from "../../lib/insights-view";
+import { cn } from "../../lib/utils";
 import { InsightCard } from "./insight-card";
 
 /**
@@ -52,15 +54,40 @@ export function CustomersCard({
 		>
 			{split.total > 0 ? (
 				<div className="flex flex-col gap-2">
-					<div className="flex items-baseline justify-between gap-2 text-[11px] text-muted-foreground">
+					<div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+						{/* The board's avatar stack. MASKED: Home runs Clarity session
+						    recording, and an initial beside a buyer's order history is
+						    still buyer identity. One character each is all the stack can
+						    render anyway, so the server never sends more (Zaki, 13 Oct
+						    2026 — add them, masked). `customers-card.tsx` is in the
+						    MASK_PII sweep so this can't be quietly dropped. */}
+						<span {...MASK_PII} className="flex items-center">
+							{split.initials.map((face, i) => (
+								<span
+									key={face.id}
+									className={cn(
+										"flex size-6 items-center justify-center rounded-full border-2 border-card text-[10px] font-bold",
+										i === 0
+											? "bg-foreground text-background"
+											: i === 1
+												? "bg-accent text-accent-foreground"
+												: "bg-muted text-foreground",
+										i > 0 && "-ml-2",
+									)}
+								>
+									{face.letter}
+								</span>
+							))}
+							{split.total > split.initials.length ? (
+								<span className="-ml-2 flex h-6 items-center rounded-full border-2 border-card bg-muted px-1.5 text-[10px] font-bold text-muted-foreground tabular-nums">
+									+{split.total - split.initials.length}
+								</span>
+							) : null}
+						</span>
 						<span className="tabular-nums">
+							{split.capped ? "at least " : ""}
 							{split.total} customer{split.total === 1 ? "" : "s"}
 						</span>
-						{split.capped ? (
-							<span title="More customers than the page can count exactly">
-								at least
-							</span>
-						) : null}
 					</div>
 					<div
 						className="flex h-2 overflow-hidden rounded-full bg-muted"
