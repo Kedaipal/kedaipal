@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { cn } from "../../lib/utils";
 import { AppImage } from "../ui/app-image";
 
@@ -54,11 +55,16 @@ export function formatTodayLong(now: Date = new Date()): string {
  */
 export function HomeGreeting({
 	retailer,
+	actions,
 }: {
 	retailer: { logoUrl?: string; storeName: string };
+	/** Desktop-only header actions (Open store / New order), as the board draws
+	 * them — on a phone these live in the bottom nav and the share card, so
+	 * repeating them in the header would be two doors to one room. */
+	actions?: ReactNode;
 }) {
 	return (
-		<header className="flex items-center gap-3">
+		<header className="flex items-center gap-3 lg:min-h-11">
 			<StoreAvatar
 				retailer={retailer}
 				className="size-12 rounded-2xl text-lg lg:size-14 lg:text-xl"
@@ -75,6 +81,11 @@ export function HomeGreeting({
 					<span className="kp-highlight">{retailer.storeName}</span>
 				</h1>
 			</div>
+			{actions ? (
+				<div className="ml-auto hidden shrink-0 items-center gap-2 lg:flex">
+					{actions}
+				</div>
+			) : null}
 		</header>
 	);
 }

@@ -106,8 +106,24 @@ vi.mock("../components/dashboard/first-order-celebration", () => ({
 	FirstOrderCelebration: () => <div data-testid="celebration">live!</div>,
 }));
 // The sales half owns its own reads; this suite only cares THAT it is there.
+// The real SalesSection owns the money queries, which this suite does not care
+// about — but it also HOSTS the desktop rail, so the stub must still render the
+// `exceptions` and `planAhead` it is handed, or the page's operational half
+// would vanish from every assertion below while working fine in the app.
 vi.mock("../components/home/sales-section", () => ({
-	SalesSection: () => <div data-testid="sales-section">sales</div>,
+	SalesSection: ({
+		exceptions,
+		planAhead,
+	}: {
+		exceptions?: ReactNode;
+		planAhead?: ReactNode;
+	}) => (
+		<div data-testid="sales-section">
+			sales
+			{exceptions}
+			{planAhead}
+		</div>
+	),
 }));
 
 const { Route } = await import("./app.index");

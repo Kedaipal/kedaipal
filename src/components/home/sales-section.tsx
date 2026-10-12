@@ -1,5 +1,6 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { todayMytMidnight } from "../../../convex/lib/fulfilmentDate";
@@ -43,11 +44,25 @@ export function SalesSection({
 	currency,
 	period,
 	onPeriodChange,
+	exceptions,
+	planAhead,
 }: {
 	retailerId: Id<"retailers">;
 	currency: string;
 	period: HomePeriod;
 	onPeriodChange: (next: HomePeriod) => void;
+	/**
+	 * The desktop board's RIGHT RAIL, beside the hero: the exception rows above
+	 * the Plan ahead card. They are passed in rather than read here because they
+	 * answer operational questions, not sales ones — this component owns the
+	 * money, the page owns what sits next to it.
+	 *
+	 * On a phone there is no rail: `display: contents` dissolves it and the
+	 * `order` classes below put each piece back where the mobile board has it —
+	 * exceptions above the chips, Plan ahead below the cards.
+	 */
+	exceptions?: ReactNode;
+	planAhead?: ReactNode;
 }) {
 	const plan = homeQueryPlan(period);
 	const todayStart = todayMytMidnight();
@@ -188,64 +203,88 @@ export function SalesSection({
 
 	return (
 		<section className="flex flex-col gap-3">
-			<PeriodChips
-				value={period}
-				onChange={onPeriodChange}
-				lockedBeyondToday={gated}
-			/>
-			<SalesHero
-				view={view}
-				currency={currency}
-				bars={bars}
-				chartTitle={
-					period === "today" ? "Today against the last 6 days" : "Daily sales"
-				}
-				// The day AND what it made — "Best: Sat" alone tells the seller
-				// nothing the bars above it don't already show.
-				bestBarLabel={
-					best && best.earned > 0 && period !== "today"
-						? `${best.label} · ${heroAmount(best.earned, currency)}`
-						: null
-				}
-				lastWeekdayName={lastWeekdayName}
-				lastWeekdayEarned={lastWeekdayEarned}
-				insightsSearch={drill}
-			/>
-			{view.depositsExcluded > 0 ? (
-				<DepositNote
-					depositsExcluded={view.depositsExcluded}
-					currency={currency}
+			{/* Mobile order is the Main board's: exceptions, then the Sales
+			    heading, the hero, the cards, and Plan ahead last. On `lg` every
+			    `order-*` resets and the DOM order takes over, which is the desktop
+			    board's: heading, then hero beside its rail, then the cards. */}
+			<div className="order-2 lg:order-none">
+				<PeriodChips
+					value={period}
+					onChange={onPeriodChange}
+					lockedBeyondToday={gated}
 				/>
-			) : null}
+			</div>
 
-			{gated ? (
-				<ProTeaserCard />
-			) : !enough ? (
-				<InsightThreshold line={insightThresholdLine(view.orderCount)} />
-			) : (
-				<div className="flex flex-col gap-3 lg:grid lg:grid-cols-3 lg:items-start">
-					<BestSellersCard
-						period={period}
-						products={view.products}
-						earned={view.earned}
+			<div className="contents lg:flex lg:flex-wrap lg:items-start lg:gap-4">
+				<div className="order-3 flex min-w-0 flex-col gap-3 lg:order-none lg:flex-[999_1_520px]">
+					<SalesHero
+						view={view}
 						currency={currency}
+						bars={bars}
+						chartTitle={
+							period === "today"
+								? "Today against the last 6 days"
+								: "Daily sales"
+						}
+						bestBarLabel={
+							best && best.earned > 0 && period !== "today"
+								? `${best.label} · ${heroAmount(best.earned, currency)}`
+								: null
+						}
+						lastWeekdayName={lastWeekdayName}
+						lastWeekdayEarned={lastWeekdayEarned}
 						insightsSearch={drill}
 					/>
-					<CustomersCard
-						period={period}
-						split={view.customers}
-						lapsed={lapsed}
-						quietDays={QUIET_DAYS}
-					/>
-					<SourcesCard
-						period={period}
-						sources={view.sources}
-						currency={currency}
-						insightsSearch={drill}
-						range={plan.range}
-					/>
+					{view.depositsExcluded > 0 ? (
+						<DepositNote
+							depositsExcluded={view.depositsExcluded}
+							currency={currency}
+						/>
+					) : null}
 				</div>
-			)}
+
+				{exceptions || planAhead ? (
+					<div className="contents lg:flex lg:flex-[1_1_320px] lg:flex-col lg:gap-3">
+						{exceptions ? (
+							<div className="order-1 lg:order-none">{exceptions}</div>
+						) : null}
+						{planAhead ? (
+							<div className="order-5 lg:order-none">{planAhead}</div>
+						) : null}
+					</div>
+				) : null}
+			</div>
+
+			<div className="order-4 lg:order-none">
+				{gated ? (
+					<ProTeaserCard />
+				) : !enough ? (
+					<InsightThreshold line={insightThresholdLine(view.orderCount)} />
+				) : (
+					<div className="grid gap-4 lg:grid-cols-[repeat(auto-fit,minmax(min(320px,100%),1fr))] lg:items-start">
+						<BestSellersCard
+							period={period}
+							products={view.products}
+							earned={view.earned}
+							currency={currency}
+							insightsSearch={drill}
+						/>
+						<CustomersCard
+							period={period}
+							split={view.customers}
+							lapsed={lapsed}
+							quietDays={QUIET_DAYS}
+						/>
+						<SourcesCard
+							period={period}
+							sources={view.sources}
+							currency={currency}
+							insightsSearch={drill}
+							range={plan.range}
+						/>
+					</div>
+				)}
+			</div>
 		</section>
 	);
 }

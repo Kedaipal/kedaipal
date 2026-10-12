@@ -1,14 +1,17 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import {
 	CreditCard,
+	ExternalLink,
 	MapPin,
 	MessageCircle,
 	Package,
 	Phone,
+	Plus,
 	Share2,
 	Sparkles,
+	Store,
 } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
@@ -32,11 +35,11 @@ import {
 	ChecklistRow,
 	SetupChecklist,
 } from "../components/home/setup-checklist";
-
 import { ShareCard } from "../components/home/share-card";
 import { HomeGreeting } from "../components/home/store-avatar";
 import { WelcomeCard } from "../components/home/welcome-card";
 import { CountrySetupPanel } from "../components/settings/country-setup-panel";
+import { Button } from "../components/ui/button";
 import { useChecklistStamp } from "../hooks/useChecklistStamp";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { usePermission } from "../hooks/usePermission";
@@ -359,11 +362,33 @@ function DashboardHome() {
 		/>
 	);
 
+	const exceptionRows =
+		phase === "steady" || phase === "first" ? (
+			<ExceptionRows
+				staleUnpaid={{
+					count: counts?.unpaidStale ?? 0,
+					amount: counts?.unpaidStaleAmount ?? 0,
+					oldestAt: counts?.unpaidStaleOldestAt ?? 0,
+				}}
+				outOfStock={outOfStock}
+				currency={currency}
+			/>
+		) : null;
+
+	const planAheadCard =
+		(phase === "steady" || phase === "first") &&
+		dueByDay &&
+		dueByDay.length > 0 ? (
+			<PlanAheadCard days={dueByDay} todayStart={todayMytMidnight()} />
+		) : null;
+
 	const salesSection = canSeeInsights ? (
 		<SalesSection
 			retailerId={retailer._id}
 			currency={currency}
 			period={period}
+			exceptions={exceptionRows}
+			planAhead={planAheadCard}
 			onPeriodChange={(next) =>
 				navigate({
 					search: next === "7d" ? {} : { p: next },
@@ -399,7 +424,29 @@ function DashboardHome() {
 		 * inside it, which is the rail the board draws.
 		 */
 		<div className="mx-auto flex w-full max-w-5xl flex-col gap-6 lg:gap-8">
-			<HomeGreeting retailer={retailer} />
+			<HomeGreeting
+				retailer={retailer}
+				actions={
+					<>
+						<Button asChild variant="outline" size="sm" className="h-10">
+							<a
+								href={`/${retailer.slug}`}
+								target="_blank"
+								rel="noopener noreferrer"
+							>
+								<ExternalLink className="size-4" aria-hidden="true" />
+								Open store
+							</a>
+						</Button>
+						<Button asChild size="sm" className="h-10">
+							<Link to="/app/checkout">
+								<Plus className="size-4" aria-hidden="true" />
+								New order
+							</Link>
+						</Button>
+					</>
+				}
+			/>
 
 			{/* Out of credits: above everything, because nothing below it can be
 			    acted on until it is fixed. */}
@@ -427,18 +474,6 @@ function DashboardHome() {
 			{phase !== "new" && phase !== "waiting" ? strip : null}
 			{placement === "under-strip" ? creditCard : null}
 
-			{phase === "steady" || phase === "first" ? (
-				<ExceptionRows
-					staleUnpaid={{
-						count: counts?.unpaidStale ?? 0,
-						amount: counts?.unpaidStaleAmount ?? 0,
-						oldestAt: counts?.unpaidStaleOldestAt ?? 0,
-					}}
-					outOfStock={outOfStock}
-					currency={currency}
-				/>
-			) : null}
-
 			{/* The share card LEADS while the store is waiting for its first order
 			    — at that moment it is the only thing that can start one. */}
 			{phase === "waiting" ? shareCard : null}
@@ -450,25 +485,27 @@ function DashboardHome() {
 
 			{phase === "waiting" ? <EmptySalesCard /> : null}
 			{phase === "new" || phase === "waiting" ? null : salesSection}
+			{/* Without the insights grant there is no Sales section to host the
+			    rail, so the operational half still renders on its own. */}
+			{!canSeeInsights && phase !== "new" && phase !== "waiting" ? (
+				<>
+					{exceptionRows}
+					{planAheadCard}
+				</>
+			) : null}
 			{phase === "new" || phase === "waiting" ? null : checklist}
 
-			{phase === "steady" || phase === "first" ? (
-				dueByDay && dueByDay.length > 0 ? (
-					<section className="flex flex-col gap-3">
-						<h2 className="font-heading text-lg font-extrabold tracking-tight">
-							Plan ahead
-						</h2>
-						<PlanAheadCard days={dueByDay} todayStart={todayMytMidnight()} />
-					</section>
-				) : null
-			) : null}
-
 			<section className="flex flex-col gap-3">
-				<h2 className="font-heading text-lg font-extrabold tracking-tight">
+				<h2 className="flex items-center gap-2 font-heading text-lg font-extrabold tracking-tight lg:text-xl">
+					<span className="flex size-[26px] shrink-0 items-center justify-center rounded-lg bg-accent/15 text-accent-emphasis">
+						<Store className="size-3.5" aria-hidden="true" />
+					</span>
 					Your store
 				</h2>
-				{placement === "store" ? creditCard : null}
-				{phase === "waiting" ? null : shareCard}
+				<div className="grid gap-4 lg:grid-cols-[repeat(auto-fit,minmax(min(320px,100%),1fr))] lg:items-start">
+					{placement === "store" ? creditCard : null}
+					{phase === "waiting" ? null : shareCard}
+				</div>
 			</section>
 
 			<StorefrontQrDialog

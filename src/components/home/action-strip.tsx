@@ -55,9 +55,14 @@ export function ActionStrip({
 	paused?: boolean;
 }) {
 	return (
+		// Two shapes, because the boards draw two. On a phone the cells are
+		// narrow columns (icon over number over label) in a 3-up grid whose money
+		// cell gets the extra width. From `sm` they become the desktop board's
+		// wide rows — icon, label stack, then the figure at the right edge — and
+		// auto-fit so they wrap to one per line rather than squeezing.
 		<section
 			aria-label="Needs you today"
-			className="grid grid-cols-[1fr_1fr_1.3fr] gap-2"
+			className="grid grid-cols-[1fr_1fr_1.3fr] gap-2 sm:grid-cols-[repeat(auto-fit,minmax(min(220px,100%),1fr))] sm:gap-3"
 		>
 			<Cell
 				icon={Bell}
@@ -147,39 +152,54 @@ function Cell({
 		<Link
 			to={to}
 			search={search}
-			className="flex min-h-[104px] min-w-0 flex-col gap-1.5 rounded-[18px] border border-border bg-card p-3 shadow-[0_1px_2px_rgb(15_23_41/0.04)] transition-colors hover:bg-muted/40"
+			className="flex min-h-[104px] min-w-0 flex-col gap-1.5 rounded-[18px] border border-border bg-card p-3 shadow-[0_1px_2px_rgb(15_23_41/0.04)] transition-colors hover:bg-muted/40 sm:min-h-0 sm:flex-row sm:items-center sm:gap-3.5 sm:rounded-[20px] sm:px-[18px] sm:py-3.5"
 		>
 			<span
 				className={cn(
-					"flex size-7 shrink-0 items-center justify-center rounded-[9px]",
+					"flex size-7 shrink-0 items-center justify-center rounded-[9px] sm:size-10 sm:rounded-xl",
 					TONE_TILE[tone],
 				)}
 			>
-				<Icon className="size-[15px]" aria-hidden="true" />
+				<Icon className="size-[15px] sm:size-5" aria-hidden="true" />
 			</span>
-			<span className="flex min-w-0 flex-col gap-px">
+			{/* On a phone this column carries the figure too; from `sm` the figure
+			    moves out to the right edge, so the column holds only the words. */}
+			<span className="flex min-w-0 flex-col gap-px sm:flex-1 sm:gap-0.5">
 				{loading ? (
-					<Skeleton className="h-6 w-10" />
+					<Skeleton className="h-6 w-10 sm:hidden" />
 				) : (
 					<span
 						title={valueTitle}
 						className={cn(
-							"truncate font-heading text-xl font-extrabold leading-tight tabular-nums",
+							"truncate font-heading text-xl font-extrabold leading-tight tabular-nums sm:hidden",
 							TONE_VALUE[tone],
 						)}
 					>
 						{value}
 					</span>
 				)}
-				<span className="text-xs font-semibold">{label}</span>
+				<span className="text-xs font-semibold sm:text-[13px]">{label}</span>
 				{/* NOT truncated. "accepting paused" is longer than the cell and was
 				    clipping to "accepting pa…" — which hides the one thing the
 				    out-of-credits state exists to say. The sub-label is the least
 				    important line in the cell, so it wraps instead. */}
-				<span className="text-[11px] leading-tight text-muted-foreground">
+				<span className="text-[11px] leading-tight text-muted-foreground sm:text-xs">
 					{sub}
 				</span>
 			</span>
+			{loading ? (
+				<Skeleton className="hidden h-7 w-12 shrink-0 sm:block" />
+			) : (
+				<span
+					title={valueTitle}
+					className={cn(
+						"hidden shrink-0 font-heading text-[26px] font-extrabold leading-none tabular-nums sm:block",
+						TONE_VALUE[tone],
+					)}
+				>
+					{value}
+				</span>
+			)}
 		</Link>
 	);
 }

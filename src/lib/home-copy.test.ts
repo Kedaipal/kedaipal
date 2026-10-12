@@ -18,6 +18,9 @@ import {
 	planAheadHeadline,
 	shouldCollapseDoneSteps,
 	staleUnpaidRow,
+	TILE_TINT_MAX,
+	TILE_TINT_MIN,
+	tileTintPct,
 	topSourceHeadline,
 	zeroEarnedLine,
 } from "./home-copy";
@@ -522,5 +525,38 @@ describe("a zero baseline is not a comparison", () => {
 				}),
 			),
 		).toBe("RM 740.00 more than the 7 days before");
+	});
+});
+
+describe("tileTintPct — the Plan ahead ramp", () => {
+	test("reproduces the design board's own tiles", () => {
+		expect(tileTintPct(3)).toBe(20);
+		expect(tileTintPct(4)).toBe(23);
+		expect(tileTintPct(5)).toBe(26);
+		expect(tileTintPct(6)).toBe(29);
+		expect(tileTintPct(7)).toBe(32);
+	});
+
+	test("a day with nothing due is not tinted at all", () => {
+		// Not "very light green" — an empty day is a different kind of day.
+		expect(tileTintPct(0)).toBeNull();
+	});
+
+	test("heavy days stop at the ceiling rather than running to solid", () => {
+		expect(tileTintPct(50)).toBe(TILE_TINT_MAX);
+		expect(tileTintPct(500)).toBe(TILE_TINT_MAX);
+	});
+
+	test("one order still reads as a tinted day", () => {
+		expect(tileTintPct(1)).toBe(TILE_TINT_MIN);
+	});
+
+	test("the ramp only ever rises", () => {
+		let prev = 0;
+		for (let n = 1; n <= 30; n++) {
+			const v = tileTintPct(n) ?? 0;
+			expect(v).toBeGreaterThanOrEqual(prev);
+			prev = v;
+		}
 	});
 });

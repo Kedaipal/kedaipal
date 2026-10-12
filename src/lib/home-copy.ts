@@ -344,3 +344,26 @@ export function heroAmount(minorUnits: number, currency: string): string {
 	const full = formatPriceCompact(minorUnits, currency);
 	return minorUnits % 100 === 0 ? full.replace(/\.00\b/, "") : full;
 }
+
+/**
+ * How strongly a Plan-ahead tile is tinted — percent of `--accent` mixed into
+ * the card colour (z8r3fdrgzj, read off the design board).
+ *
+ * The board's own tiles run 3→20%, 4→23%, 5→26%, 6→29%, 7→32%, which is a flat
+ * three points per order on an eleven-point base. Absolute rather than relative
+ * to the busiest day, deliberately: the same workload should look the same
+ * shade whatever else that week holds, so a seller reads "dark green = heavy"
+ * once instead of relearning it every week.
+ *
+ * Clamped, because the ramp is a reading aid and not a measurement — past the
+ * ceiling the day is simply "very busy", and the number in the tile says how
+ * busy. A day with nothing due is not tinted at all; it is a different kind of
+ * day, not a very light one.
+ */
+export const TILE_TINT_MIN = 14;
+export const TILE_TINT_MAX = 45;
+
+export function tileTintPct(count: number): number | null {
+	if (count <= 0) return null;
+	return Math.min(TILE_TINT_MAX, Math.max(TILE_TINT_MIN, 11 + 3 * count));
+}

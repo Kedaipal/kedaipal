@@ -29,12 +29,13 @@ export function PeriodChips({
 }) {
 	return (
 		<div className="flex flex-col gap-1.5">
-			<div className="flex items-center gap-2">
-				<h2 className="flex items-center gap-1.5 font-heading text-lg font-extrabold tracking-tight">
-					<TrendingUp
-						className="size-4 text-accent-emphasis"
-						aria-hidden="true"
-					/>
+			<div className="flex min-h-11 items-center gap-2">
+				<h2 className="flex items-center gap-2 font-heading text-lg font-extrabold tracking-tight lg:text-xl">
+					{/* The house's section mark: a 26px accent tile, as every other
+					    section heading on the board wears. */}
+					<span className="flex size-[26px] shrink-0 items-center justify-center rounded-lg bg-accent/15 text-accent-emphasis">
+						<TrendingUp className="size-3.5" aria-hidden="true" />
+					</span>
 					Sales
 				</h2>
 				{/* A fieldset, not a div with role="group": three chips that set one
