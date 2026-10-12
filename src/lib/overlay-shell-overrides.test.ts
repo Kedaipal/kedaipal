@@ -4,7 +4,13 @@ import { join, relative } from "node:path";
 import { describe, expect, test } from "vitest";
 
 /**
- * Machine enforcement for the dialog shell's height contract (PR #273).
+ * Machine enforcement for the OVERLAY shells' height contracts — `DialogContent`
+ * (PR #273) and `DropdownMenuContent` (the admin Sellers "Manage" menu, whose
+ * seven described items overflowed a laptop window with the first item,
+ * "Open store", pushed above the top edge and unreachable).
+ *
+ * Both shells cap their height and scroll the y-axis, and in both the caller
+ * can quietly undo it, so both are policed here by one scan.
  *
  * `DialogContent` caps itself at `calc(100dvh-2rem)` and scrolls the y-axis,
  * because a dialog is centred with `-translate-y-1/2`: without the pair, content
@@ -40,12 +46,12 @@ function sourceFiles(dir: string, acc: string[] = []): string[] {
 const FILES = sourceFiles(SRC);
 
 /**
- * Every `<DialogContent …>` opening tag's attribute text. Brace-aware so a
- * `>` inside `className={cond ? … : …}` doesn't end the tag early.
+ * Every `<Component …>` opening tag's attribute text. Brace-aware so a `>`
+ * inside `className={cond ? … : …}` doesn't end the tag early.
  */
-function dialogContentTags(source: string): string[] {
+function openingTags(source: string, component: string): string[] {
 	const tags: string[] = [];
-	const open = /<DialogContent(?=[\s/>])/g;
+	const open = new RegExp(`<${component}(?=[\\s/>])`, "g");
 	let m = open.exec(source);
 	while (m !== null) {
 		let depth = 0;
@@ -86,7 +92,7 @@ describe("DialogContent call sites keep the shell's height contract", () => {
 		// A matcher that silently finds nothing is worse than no test — it also
 		// stops anyone from writing a real one.
 		const withDialogs = FILES.filter(
-			(f) => dialogContentTags(readFileSync(f, "utf8")).length > 0,
+			(f) => openingTags(readFileSync(f, "utf8"), "DialogContent").length > 0,
 		);
 		expect(withDialogs.length).toBeGreaterThan(10);
 		expect(
@@ -97,7 +103,7 @@ describe("DialogContent call sites keep the shell's height contract", () => {
 		const checkout = FILES.find((f) => f.endsWith("app.checkout.tsx"));
 		if (!checkout) throw new Error("app.checkout.tsx not found");
 		expect(
-			dialogContentTags(readFileSync(checkout, "utf8")).some((t) =>
+			openingTags(readFileSync(checkout, "utf8"), "DialogContent").some((t) =>
 				t.includes("max-h-"),
 			),
 			"app.checkout.tsx passes its own max-h to a DialogContent; not seeing it means attributes are being truncated.",
@@ -107,7 +113,10 @@ describe("DialogContent call sites keep the shell's height contract", () => {
 	test("no call site overrides the shell's overflow or removes its cap", () => {
 		const offenders: string[] = [];
 		for (const file of FILES) {
-			for (const tag of dialogContentTags(readFileSync(file, "utf8"))) {
+			for (const tag of openingTags(
+				readFileSync(file, "utf8"),
+				"DialogContent",
+			)) {
 				const bad = FORBIDDEN.filter((re) => re.test(tag));
 				if (bad.length)
 					offenders.push(
@@ -128,6 +137,83 @@ describe("DialogContent call sites keep the shell's height contract", () => {
 				"If a region inside the dialog should scroll while the rest holds still,",
 				"put the max-h + overflow-y-auto on THAT region, not on DialogContent.",
 				"A different `max-h-*` on the shell is fine; removing the cap is not.",
+				"See docs/design-system.md.",
+			].join("\n"),
+		).toEqual([]);
+	});
+});
+
+/**
+ * The menu shell's forbidden set. It differs from the dialog's in one place:
+ * a menu is anchored to its trigger, so its cap is Radix's measured
+ * `--radix-dropdown-menu-content-available-height` rather than a dvh figure.
+ * A caller pinning its own `max-h-*` would ignore the space actually below the
+ * trigger, so — unlike the dialog, where any cap is a cap — only the measured
+ * one is right here, and overriding it at all is forbidden.
+ */
+const MENU_FORBIDDEN = [
+	// The shorthand replaces BOTH axes — always wrong here.
+	/\boverflow-(?:auto|hidden|clip|visible|scroll)\b/,
+	// Kills the scroll, so a tall menu is clipped again.
+	/\boverflow-y-(?:hidden|clip|visible)\b/,
+	// The x-axis is what keeps the rounded corners clipping.
+	/\boverflow-x-(?:auto|visible|scroll)\b/,
+	// Any cap of the caller's own, including removing it outright.
+	/\bmax-h-/,
+];
+
+describe("DropdownMenuContent call sites keep the shell's height contract", () => {
+	test("the scan finds the call sites it is meant to police", () => {
+		const withMenus = FILES.filter(
+			(f) =>
+				openingTags(readFileSync(f, "utf8"), "DropdownMenuContent").length > 0,
+		);
+		// Five real call sites today, plus the primitive's own test.
+		expect(withMenus.length).toBeGreaterThan(3);
+		expect(
+			withMenus.some((f) => f.endsWith("seller-manage-menu.tsx")),
+			"seller-manage-menu.tsx is the call site this contract was written for; not seeing it means the tag scanner is broken.",
+		).toBe(true);
+		// And it must actually read the attributes, not just the tag name.
+		const manage = FILES.find((f) => f.endsWith("seller-manage-menu.tsx"));
+		if (!manage) throw new Error("seller-manage-menu.tsx not found");
+		expect(
+			openingTags(readFileSync(manage, "utf8"), "DropdownMenuContent").some(
+				(t) => t.includes("w-72"),
+			),
+			"seller-manage-menu.tsx passes w-72 to its DropdownMenuContent; not seeing it means attributes are being truncated.",
+		).toBe(true);
+	});
+
+	test("no call site overrides the shell's overflow or its measured cap", () => {
+		const offenders: string[] = [];
+		for (const file of FILES) {
+			if (file.endsWith("dropdown-menu.test.tsx")) continue; // asserts the contract itself
+			for (const tag of openingTags(
+				readFileSync(file, "utf8"),
+				"DropdownMenuContent",
+			)) {
+				const bad = MENU_FORBIDDEN.filter((re) => re.test(tag));
+				if (bad.length)
+					offenders.push(
+						`${relative(SRC, file)} — ${bad.map((re) => String(re)).join(", ")}`,
+					);
+			}
+		}
+
+		expect(
+			offenders,
+			[
+				"These DropdownMenuContent call sites pass a class that undoes the",
+				"shell's height contract. cn() is twMerge, so the caller's class WINS",
+				"and the shell's own",
+				"`max-h-(--radix-dropdown-menu-content-available-height) overflow-y-auto`",
+				"is stripped — which puts a tall menu's top items back above the",
+				"viewport with nothing to scroll back to.",
+				"",
+				"The cap must stay Radix's measured available height: a hand-picked",
+				"max-h ignores how much room is actually below the trigger. If a region",
+				"inside the menu should scroll on its own, put the max-h on THAT region.",
 				"See docs/design-system.md.",
 			].join("\n"),
 		).toEqual([]);

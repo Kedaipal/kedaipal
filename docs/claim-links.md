@@ -96,7 +96,11 @@ covers general order-on-behalf: phone orders, DM quotes, repeat customers.
   second its own countdown hits zero, and a 5-min cron
   (`expireStaleClaims`) keeps the status buckets true. Dead claims
   (expired/cancelled) hold buyer PII and are purged after ~30 days
-  (`purgeStaleClaims`); completed claims are kept (they link to an order).
+  (`purgeStaleClaims`); completed claims are kept (they link to an order) and
+  are erased with the seller's account by the `orderClaims` phase of the
+  deletion cascade ([`docs/account-deletion.md`](./account-deletion.md)) —
+  nothing else deletes one, so that phase is what keeps "kept" from meaning
+  "forever".
 
 ## How the timer works, mechanically (dev)
 
