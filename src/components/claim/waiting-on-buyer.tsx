@@ -22,7 +22,8 @@ export type LiveClaim = {
 	expiresAt: number;
 	windowMinutes: number;
 	currency: string;
-	itemsTotal: number;
+	/** Net of the voucher — see `ClaimListRow.total`. */
+	total: number;
 	lines: Array<{
 		name: string;
 		variantLabel: string | undefined;
@@ -163,7 +164,7 @@ export function WaitingOnBuyerScreen({
 						Locked total
 					</span>
 					<span className="text-lg font-bold tabular-nums">
-						{formatPrice(claim.itemsTotal, claim.currency)}
+						{formatPrice(claim.total, claim.currency)}
 					</span>
 				</div>
 

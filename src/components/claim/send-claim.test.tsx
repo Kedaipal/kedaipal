@@ -42,7 +42,7 @@ function claim(overrides: Record<string, unknown> = {}) {
 		buyerName: "Aina Hamzah",
 		waPhone: "60123456789",
 		itemCount: 2,
-		itemsTotal: 21600,
+		total: 21600,
 		currency: "MYR",
 		token: "tok_abc",
 		expiresAt: NOW + 12 * 60_000,

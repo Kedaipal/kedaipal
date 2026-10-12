@@ -238,6 +238,11 @@ function AppShell() {
 							!retailer.actingAsAdmin &&
 							!hasFeature(retailer.subscription, "insights")
 						}
+						vouchersLocked={
+							!!retailer &&
+							!retailer.actingAsAdmin &&
+							!hasFeature(retailer.subscription, "vouchers")
+						}
 					/>
 				</div>
 			</div>

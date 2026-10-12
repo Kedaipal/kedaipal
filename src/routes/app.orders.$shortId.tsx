@@ -1864,6 +1864,23 @@ function OrderDetailRoute() {
 						</span>
 					</div>
 				) : null}
+				{/* The voucher (`z8r3fdr617`) — mirrors the buyer's tracking page so
+				    both sides reconcile the same breakdown, and links to the voucher
+				    book so "which code was this?" is one tap. The one subtractive
+				    line, so it carries its sign and the accent colour. */}
+				{order.voucherDiscount && order.voucherDiscount > 0 ? (
+					<div className="flex items-center justify-between gap-3 px-3 text-sm text-accent-emphasis">
+						<span className="min-w-0 truncate">
+							Voucher
+							{order.voucherSnapshot?.code
+								? ` · ${order.voucherSnapshot.code}`
+								: ""}
+						</span>
+						<span className="shrink-0 font-medium tabular-nums">
+							−{formatPrice(order.voucherDiscount, order.currency)}
+						</span>
+					</div>
+				) : null}
 				<div className="flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2.5 text-sm font-bold">
 					<span>Total</span>
 					<span className="tabular-nums">
@@ -2268,6 +2285,14 @@ function OrderDetailRoute() {
 				description={[
 					"Stock is restored and this can't be undone. The customer is NOT sent a WhatsApp — the reason you give below is what they see on their order page.",
 					cancelOutlook ? cancelCreditLine(cancelOutlook) : null,
+					// This dialog's job is to enumerate what cancelling DOES, so a
+					// consequence the seller can act on belongs in it: the voucher
+					// goes back on the shelf and the buyer can spend it again
+					// (`z8r3fdr617` — the credit's rule and the voucher's differ, so
+					// they are two sentences, not one).
+					order.voucherSnapshot
+						? `Voucher ${order.voucherSnapshot.code} goes back to active — this buyer can use it again.`
+						: null,
 					hasActiveRiderBooking
 						? `⚠️ A Lalamove rider booking is still active on this order — cancel it from the ${dispatchCardName} card too, or you may pay for a wasted trip.`
 						: null,

@@ -105,7 +105,7 @@ export function ClaimsPanel({
 										</span>
 										<span className="block text-xs text-muted-foreground">
 											{claim.itemCount} item{claim.itemCount === 1 ? "" : "s"} ·{" "}
-											{formatPrice(claim.itemsTotal, claim.currency)}
+											{formatPrice(claim.total, claim.currency)}
 										</span>
 									</span>
 									<ChevronRight
@@ -184,7 +184,7 @@ export function ClaimsPanel({
 										? "Expired · nothing charged"
 										: "Cancelled"}
 								{" · "}
-								{formatPrice(claim.itemsTotal, claim.currency)}
+								{formatPrice(claim.total, claim.currency)}
 							</p>
 						</div>
 						{claim.status === "completed" && claim.orderShortId ? (

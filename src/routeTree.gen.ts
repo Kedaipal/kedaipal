@@ -31,6 +31,7 @@ import { Route as AppPosterRouteImport } from './routes/app.poster'
 import { Route as AppInsightsRouteImport } from './routes/app.insights'
 import { Route as AppCheckoutRouteImport } from './routes/app.checkout'
 import { Route as SlugCheckoutRouteImport } from './routes/$slug_.checkout'
+import { Route as AppVouchersIndexRouteImport } from './routes/app.vouchers.index'
 import { Route as AppProductsIndexRouteImport } from './routes/app.products.index'
 import { Route as AppOrdersIndexRouteImport } from './routes/app.orders.index'
 import { Route as AppCustomersIndexRouteImport } from './routes/app.customers.index'
@@ -157,6 +158,11 @@ const SlugCheckoutRoute = SlugCheckoutRouteImport.update({
   path: '/$slug/checkout',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppVouchersIndexRoute = AppVouchersIndexRouteImport.update({
+  id: '/vouchers/',
+  path: '/vouchers/',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppProductsIndexRoute = AppProductsIndexRouteImport.update({
   id: '/products/',
   path: '/products/',
@@ -271,6 +277,7 @@ export interface FileRoutesByFullPath {
   '/app/customers/': typeof AppCustomersIndexRoute
   '/app/orders/': typeof AppOrdersIndexRoute
   '/app/products/': typeof AppProductsIndexRoute
+  '/app/vouchers/': typeof AppVouchersIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -309,6 +316,7 @@ export interface FileRoutesByTo {
   '/app/customers': typeof AppCustomersIndexRoute
   '/app/orders': typeof AppOrdersIndexRoute
   '/app/products': typeof AppProductsIndexRoute
+  '/app/vouchers': typeof AppVouchersIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -349,6 +357,7 @@ export interface FileRoutesById {
   '/app/customers/': typeof AppCustomersIndexRoute
   '/app/orders/': typeof AppOrdersIndexRoute
   '/app/products/': typeof AppProductsIndexRoute
+  '/app/vouchers/': typeof AppVouchersIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -390,6 +399,7 @@ export interface FileRouteTypes {
     | '/app/customers/'
     | '/app/orders/'
     | '/app/products/'
+    | '/app/vouchers/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -428,6 +438,7 @@ export interface FileRouteTypes {
     | '/app/customers'
     | '/app/orders'
     | '/app/products'
+    | '/app/vouchers'
   id:
     | '__root__'
     | '/'
@@ -467,6 +478,7 @@ export interface FileRouteTypes {
     | '/app/customers/'
     | '/app/orders/'
     | '/app/products/'
+    | '/app/vouchers/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -647,6 +659,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SlugCheckoutRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/app/vouchers/': {
+      id: '/app/vouchers/'
+      path: '/vouchers'
+      fullPath: '/app/vouchers/'
+      preLoaderRoute: typeof AppVouchersIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/app/products/': {
       id: '/app/products/'
       path: '/products'
@@ -774,6 +793,7 @@ interface AppRouteChildren {
   AppCustomersIndexRoute: typeof AppCustomersIndexRoute
   AppOrdersIndexRoute: typeof AppOrdersIndexRoute
   AppProductsIndexRoute: typeof AppProductsIndexRoute
+  AppVouchersIndexRoute: typeof AppVouchersIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -795,6 +815,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppCustomersIndexRoute: AppCustomersIndexRoute,
   AppOrdersIndexRoute: AppOrdersIndexRoute,
   AppProductsIndexRoute: AppProductsIndexRoute,
+  AppVouchersIndexRoute: AppVouchersIndexRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

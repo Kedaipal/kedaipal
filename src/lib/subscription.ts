@@ -135,6 +135,31 @@ export function isOrderInboxLocked(
 }
 
 /**
+ * True when this seller cannot ISSUE vouchers (`z8r3fdr617`) — Starter, not
+ * admin act-as. Same shape and fail-open posture as its siblings.
+ *
+ * Narrower than the other two on purpose: it gates the ISSUE control only, not
+ * the page. A downgraded store keeps its voucher LIST (the 8 Oct decision —
+ * codes it already sent are promises it still has to honour, so hiding them
+ * would be worse than useless), keeps the ability to VOID them, and buyers
+ * holding one keep redeeming it. So call sites disable the button with the
+ * reason beside it rather than walling the route; the list query is never
+ * skipped on this.
+ */
+export function isVoucherIssuingLocked(
+	retailer:
+		| { actingAsAdmin?: boolean; subscription?: SubscriptionView }
+		| null
+		| undefined,
+): boolean {
+	return (
+		!!retailer &&
+		!retailer.actingAsAdmin &&
+		!hasFeature(retailer.subscription, "vouchers")
+	);
+}
+
+/**
  * True when this dashboard is VIEW-ONLY (z8r3fdeub2, 19 Sep 2026): the store's
  * subscription lapsed — an unpaid invoice, or an admin turning its comp upgrade
  * off — so the server refuses every seller write, orders included. Same shape

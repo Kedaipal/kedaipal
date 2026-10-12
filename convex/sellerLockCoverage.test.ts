@@ -58,6 +58,14 @@ const UNLOCKED: Record<string, string> = {
 	"orders.updateDeliveryAddress": "buyer: edits their own delivery address",
 	"orders.updatePickupLocation": "buyer: changes where they collect",
 	"orders.claimPayment": "buyer: 'I've paid'",
+	// A voucher CHECK is a buyer-side read dressed as a mutation (it spends
+	// rate-limiter budget and nothing else — see convex/vouchers.ts). Buyer
+	// surfaces never vary with the seller's billing state, and a buyer holding
+	// a code must learn what it is worth even if the store has lapsed; the
+	// ORDER is what a lapsed store can't take, and `orders.create` is where
+	// that is decided. Issuing and voiding ARE guarded.
+	"vouchers.checkCode":
+		"buyer: asks what a code they were given is worth — no write, no order",
 	"orders.generateOrderProofUploadUrl": "buyer: uploads their payment proof",
 	"orders.generateCustomImageUploadUrl": "buyer: uploads a reference image",
 	"orders.approveMockup": "buyer: approves the seller's mockup",

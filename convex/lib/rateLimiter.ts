@@ -179,6 +179,44 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		period: MINUTE,
 		capacity: 2,
 	},
+	// Voucher codes (`z8r3fdr617`), keyed by retailerId at both doors. Their
+	// OWN bucket, deliberately, for two reasons: a voucher code is the only
+	// GUESSABLE secret the storefront accepts, and sharing `orderCreate`'s
+	// budget would mean someone probing codes could starve a live drop of real
+	// checkouts.
+	//
+	//   `voucherCheck` — the storefront field's "is this code good?" probe and
+	//   the `?voucher=` link's on-load check. The tighter of the two, because
+	//   it is the one an attacker would hammer: 8 symbols over a 32-symbol
+	//   alphabet is 2^40 codes, and 20/min per store puts an exhaustive search
+	//   at roughly a hundred thousand years. Sized generously for a human
+	//   typing (debounced client-side) and for a shared link being opened by a
+	//   whole WhatsApp group at once.
+	//
+	//   `voucherRedeem` — only reached when an order is actually being placed
+	//   with a code, so it rides behind the order limiters as a second ceiling
+	//   on the same act. Lower volume than checking by construction.
+	voucherCheck: {
+		kind: "token bucket",
+		rate: 20,
+		period: MINUTE,
+		capacity: 10,
+	},
+	voucherRedeem: {
+		kind: "token bucket",
+		rate: 10,
+		period: MINUTE,
+		capacity: 5,
+	},
+	// Authenticated seller voucher ISSUING (keyed by Clerk subject) — minting
+	// codes writes a row each and a batch writes up to 50, so this is sized
+	// like `productBulkImport` rather than like a read.
+	voucherIssue: {
+		kind: "token bucket",
+		rate: 10,
+		period: MINUTE,
+		capacity: 5,
+	},
 	// Public buyer mockup approve / request-changes actions (keyed by retailerId).
 	mockupReview: {
 		kind: "token bucket",

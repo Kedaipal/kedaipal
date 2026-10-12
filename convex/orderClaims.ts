@@ -85,9 +85,18 @@ import {
 } from "./lib/orderClaims";
 import {
 	computeOrderTotals,
+	storedDiscount,
 	generateShortId,
 	generateTrackingToken,
 } from "./lib/order";
+import {
+	type ClaimVoucherState,
+	claimVoucherDiscount,
+	claimVoucherState,
+	redeemVoucher,
+	resolveVoucherOrThrow,
+} from "./lib/voucherRedemption";
+import type { VoucherSnapshot } from "./lib/vouchers";
 import { asksForTime, fulfilmentKind } from "./lib/fulfilmentShape";
 import type { OpeningHours } from "./lib/openingHours";
 import { type ClosedDateRange, closedDateIssue } from "./lib/closedDates";
@@ -97,6 +106,7 @@ import {
 	storablePendingReason,
 	summarizeCartWeight,
 } from "./lib/delivery";
+import { creditGateFor, forSeller } from "./creditLock";
 import { rateLimiter } from "./lib/rateLimiter";
 import {
 	freezeLineAnswers,
@@ -289,6 +299,11 @@ export const sendClaim = mutation({
 		// Where this buyer came from (86eyq0eq9) — the seller's own answer,
 		// remembered as the store default for the rest of the session.
 		attributionSource: v.optional(v.string()),
+		// The voucher to freeze onto the claim (`z8r3fdr617`), passed
+		// EXPLICITLY like `items` — see the note on
+		// `counterCheckout.createOrderFromSession`: the session draft is a
+		// debounced autosave and would lose a just-applied code.
+		voucherCode: v.optional(v.string()),
 	},
 	handler: async (
 		ctx,
@@ -331,6 +346,24 @@ export const sendClaim = mutation({
 		const sanitizedSource = sanitizeAttributionSource(args.attributionSource);
 		const now = Date.now();
 
+		// The voucher (`z8r3fdr617`), FROZEN onto the claim beside the line prices — the buyer's ticket has to show the
+		// price they were promised. Deliberately NOT redeemed here: a claim is an
+		// offer, not an order, so the code stays spendable until the buyer
+		// commits (which is also what stops an abandoned link burning a voucher).
+		// Refuses the SEND on a bad code — the seller is at the counter and can
+		// fix it before the buyer ever sees a price.
+		let voucherId: Id<"vouchers"> | undefined;
+		let voucherSnapshot: VoucherSnapshot | undefined;
+		if (args.voucherCode?.trim()) {
+			const resolved = await resolveVoucherOrThrow(ctx, {
+				retailerId: retailer._id,
+				code: args.voucherCode,
+				now,
+			});
+			voucherId = resolved.voucher._id;
+			voucherSnapshot = { code: resolved.voucher.code, ...resolved.terms };
+		}
+
 		// Supersede: the previous open claim for this session dies with this send
 		// (its link renders "cancelled" from the next read).
 		const priorClaims = await ctx.db
@@ -354,6 +387,8 @@ export const sendClaim = mutation({
 			buyerName: session.waProfileName,
 			lines,
 			currency: retailer.currency ?? "MYR",
+			voucherId,
+			voucherSnapshot,
 			token,
 			status: "open",
 			expiresAt,
@@ -459,7 +494,27 @@ export interface ClaimListRow {
 	buyerName: string;
 	waPhone: string;
 	itemCount: number;
-	itemsTotal: number;
+	/**
+	 * What this claim COMES TO — net of its voucher, not the items figure
+	 * (`z8r3fdr617`). It replaced `itemsTotal`, which was the same number until
+	 * a voucher could subtract from it and then had the seller's list reading
+	 * "RM 40.00" for a claim they had sent at RM 32.00.
+	 *
+	 * Per status, because "what it comes to" genuinely differs:
+	 * - **completed** — the ORDER's recorded total, the only real money here.
+	 *   It also sidesteps a trap: a completed claim's voucher is now
+	 *   `redeemed`, so asking `claimVoucherState` would answer `dropped` and
+	 *   hand back the gross for the very rows where the discount definitely
+	 *   happened.
+	 * - **anything else** — items minus the LIVE voucher state, the same read
+	 *   the buyer's own claim page prices from, so the two can't disagree. A
+	 *   voucher voided after sending stops discounting here too, which is the
+	 *   truth about the offer as it now stands.
+	 *
+	 * Fees are deliberately absent on an open claim: they depend on choices the
+	 * buyer hasn't made yet, and they only ever ADD.
+	 */
+	total: number;
 	currency: string;
 	token: string;
 	expiresAt: number;
@@ -526,13 +581,38 @@ export const listClaims = query({
 			settled.push(...rows);
 		}
 
+		// A completed claim names the order it became, so this is a seller read
+		// of ORDER data under T3.1 — a claim that commits while the store is at
+		// or below zero credits produces a GATED order. Every row goes through
+		// `forSeller`, so the allowlist governs rather than a promise that the
+		// two fields taken here happen to be safe.
+		//
+		// `buyerName`/`waPhone` below come from the CLAIM, not the order, and
+		// are deliberately not redacted: the seller TYPED that number into the
+		// counter to send the link. The gate exists to withhold a contact the
+		// seller never had, and there is nothing to withhold from someone about
+		// a number they entered themselves.
+		const gate = await creditGateFor(ctx, resolvedRetailerId, now);
 		const out: ClaimListRow[] = [];
 		for (const claim of [...open, ...settled]) {
 			let orderShortId: string | undefined;
+			let orderTotal: number | undefined;
 			if (claim.orderId) {
-				const order = await ctx.db.get(claim.orderId);
+				const raw = await ctx.db.get(claim.orderId);
+				const order = raw ? forSeller(gate, raw) : null;
 				orderShortId = order?.shortId;
+				orderTotal = order?.total;
 			}
+			const itemsTotal = claimItemsTotal(claim.lines);
+			// See `ClaimListRow.total` for why completed reads the order and
+			// everything else judges the voucher live.
+			const total =
+				orderTotal ??
+				itemsTotal -
+					claimVoucherDiscount(
+						await claimVoucherState(ctx, claim, now),
+						itemsTotal,
+					);
 			out.push({
 				claimId: claim._id,
 				sessionId: claim.sessionId,
@@ -545,7 +625,7 @@ export const listClaims = query({
 				}),
 				waPhone: claim.waPhone,
 				itemCount: claim.lines.reduce((n, l) => n + l.quantity, 0),
-				itemsTotal: claimItemsTotal(claim.lines),
+				total,
 				currency: claim.currency,
 				token: claim.token,
 				expiresAt: claim.expiresAt,
@@ -618,6 +698,14 @@ export interface ClaimPagePayload {
 		waPhone: string;
 		expiresAt: number;
 		windowMinutes: number;
+		/**
+		 * The seller's voucher, as it stands RIGHT NOW (`z8r3fdr617`) — not as
+		 * it was at send. `applied` prices the ticket; `dropped` tells the buyer
+		 * why the discount they may have been promised isn't there, BEFORE they
+		 * fill the form, and the commit then charges exactly what the page
+		 * showed. Absent = no voucher on this claim.
+		 */
+		voucher?: ClaimVoucherState;
 	};
 	/** Present once COMPLETED — the idempotent re-open shows the order. */
 	completed?: { trackingToken?: string; shortId: string };
@@ -707,6 +795,7 @@ export const getByToken = query({
 				waPhone: claim.waPhone,
 				expiresAt: claim.expiresAt,
 				windowMinutes: claim.windowMinutes,
+				voucher: await claimVoucherState(ctx, claim, now),
 			};
 		}
 		if (status === "completed" && claim.orderId) {
@@ -1064,9 +1153,23 @@ export const commit = mutation({
 			? ("collection" as const)
 			: undefined;
 
-		const { subtotal, total } = computeOrderTotals(claim.lines, {
+		// The claim's frozen voucher (`z8r3fdr617`), re-validated at the door like
+		// everything else — it was checked at SEND and may have been spent at the
+		// counter or voided since.
+		//
+		// This is the ONE door that does not refuse a bad code, and the reason is
+		// the buyer: they followed a link, filled in an address and a date, and
+		// refusing here would dead-end them with no way through (only the seller
+		// can resend). So an unspendable voucher DROPS, and the claim page — which
+		// asks `claimVoucherState` on every read — has already said so above the
+		// ticket, so the total the buyer confirms is the total they are charged.
+		// Silently honouring it, or silently charging full price, are the two
+		// things this must never do. See docs/vouchers.md.
+		const voucherState = await claimVoucherState(ctx, claim, now);
+		const { subtotal, discount, total } = computeOrderTotals(claim.lines, {
 			pickupFee: sanitizedPickupSnapshot?.fee,
 			deliveryFee: deliverySnapshot?.fee,
+			voucher: voucherState.kind === "applied" ? voucherState.terms : undefined,
 		});
 
 		// Decrement hard-block stock — the commit IS the sale (OCC transaction,
@@ -1125,6 +1228,14 @@ export const commit = mutation({
 			}),
 			subtotal,
 			total,
+			// Only recorded when the voucher actually applied — an order that
+			// dropped a lapsed code carries no voucher at all, which is the
+			// honest record of what was charged.
+			voucherId:
+				voucherState.kind === "applied" ? voucherState.voucherId : undefined,
+			voucherSnapshot:
+				voucherState.kind === "applied" ? voucherState.snapshot : undefined,
+			voucherDiscount: storedDiscount(discount),
 			currency: claim.currency,
 			status: confirmedAtCreate ? "confirmed" : "pending",
 			channel: "whatsapp",
@@ -1161,6 +1272,15 @@ export const commit = mutation({
 			createdAt: now,
 			updatedAt: now,
 		});
+
+		// Spend the voucher in the transaction that created the order — the claim
+		// held it only as an offer until now (lib/voucherRedemption.ts).
+		if (voucherState.kind === "applied")
+			await redeemVoucher(ctx, {
+				voucherId: voucherState.voucherId,
+				orderId,
+				now,
+			});
 
 		await ctx.db.insert("orderEvents", {
 			orderId,
