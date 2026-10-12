@@ -91,7 +91,10 @@ export function VoucherList({
 						<p className="text-xs text-muted-foreground">
 							<OutcomeLine voucher={voucher} />
 						</p>
-						{voucher.note ? (
+						{/* Nested, the note is the BATCH's name and the parent card is
+						    already titled with it — printing it again on all six rows
+						    says the same word six times inside the thing it names. */}
+						{voucher.note && !nested ? (
 							<p className="truncate text-xs italic text-muted-foreground">
 								{voucher.note}
 							</p>

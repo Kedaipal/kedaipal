@@ -7,6 +7,7 @@ import type { Id } from "./_generated/dataModel";
 import { DAY_MS, todayMytMidnight } from "./lib/fulfilmentDate";
 import schema from "./schema";
 import { VOUCHER_BATCH_MAX } from "./lib/vouchers";
+import { claimVoucherDiscount } from "./lib/voucherRedemption";
 
 /**
  * The voucher module (`z8r3fdr617`): issuing, voiding, the seller's list and
@@ -940,5 +941,67 @@ describe("claim link", () => {
 				voucherCode: vouchers[0].code,
 			}),
 		).rejects.toThrow(/no longer valid/i);
+	});
+});
+
+/**
+ * `claimVoucherDiscount` — the ONE author of what a claim's voucher takes off
+ * (`z8r3fdr617`).
+ *
+ * It exists because the rule was written twice: once in the claim page's
+ * maths and once, during the hands-on pass, in the page HEADER — which had
+ * been printing the GROSS items figure, so a claim sent at RM 32.00 greeted
+ * the buyer with "RM 40.00" directly above a ticket reading "TOTAL RM 32.00".
+ * Two copies of a money rule is how those two numbers part company, so there
+ * is one copy and these tests hold it to the `applied`-only contract.
+ */
+describe("claimVoucherDiscount", () => {
+	test("an applied voucher discounts; dropped and none never do", () => {
+		const terms = { kind: "percent", value: 20 } as const;
+		const snapshot = { code: "KP-TEST-CODE", kind: "percent" as const, value: 20 };
+
+		expect(
+			claimVoucherDiscount(
+				{
+					kind: "applied",
+					voucherId: "v1" as Id<"vouchers">,
+					snapshot,
+					terms,
+				},
+				4000,
+			),
+		).toBe(800);
+
+		// The whole reason the claim page degrades instead of refusing: a
+		// dropped voucher must price at FULL and say why. A non-zero here
+		// would quote the buyer a discount the commit then declines to give.
+		expect(
+			claimVoucherDiscount(
+				{
+					kind: "dropped",
+					snapshot,
+					refusal: "voided",
+					message: "This voucher is no longer valid.",
+				},
+				4000,
+			),
+		).toBe(0);
+
+		expect(claimVoucherDiscount({ kind: "none" }, 4000)).toBe(0);
+		expect(claimVoucherDiscount(undefined, 4000)).toBe(0);
+	});
+
+	test("it clamps to the item subtotal, so a claim total can't go negative", () => {
+		expect(
+			claimVoucherDiscount(
+				{
+					kind: "applied",
+					voucherId: "v2" as Id<"vouchers">,
+					snapshot: { code: "KP-BIG0-0000", kind: "fixed" as const, value: 5000 },
+					terms: { kind: "fixed", value: 5000 },
+				},
+				3000,
+			),
+		).toBe(3000);
 	});
 });

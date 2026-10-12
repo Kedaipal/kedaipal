@@ -21,6 +21,7 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import {
 	normalizeVoucherCode,
 	refusalForVoucher,
+	voucherDiscountFor,
 	type VoucherRefusal,
 	voucherRefusalErrorData,
 	voucherRefusalMessage,
@@ -147,6 +148,24 @@ export type ClaimVoucherState =
 			refusal: VoucherRefusal;
 			message: string;
 		};
+
+/**
+ * What a claim's voucher takes off, from its state alone (`z8r3fdr617`).
+ *
+ * Only an `applied` voucher discounts: a `dropped` one is exactly the case
+ * where the buyer must be charged the full price and TOLD why, so it has to
+ * return 0 here or the page would quote a discount the commit then refuses to
+ * honour. Every surface that prices a claim asks this — the ticket, the
+ * confirm button and the page header — so none of them can disagree.
+ */
+export function claimVoucherDiscount(
+	voucher: ClaimVoucherState | undefined,
+	itemSubtotal: number,
+): number {
+	return voucher?.kind === "applied"
+		? voucherDiscountFor(voucher.terms, itemSubtotal)
+		: 0;
+}
 
 export async function claimVoucherState(
 	ctx: QueryCtx,

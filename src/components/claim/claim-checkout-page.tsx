@@ -34,7 +34,7 @@ import {
 } from "../../../convex/lib/openingHours";
 import { distinctPickupNotes } from "../../../convex/lib/pickupNote";
 import { slowestPrep } from "../../../convex/lib/prepFloor";
-import { voucherDiscountFor } from "../../../convex/lib/vouchers";
+import { claimVoucherDiscount } from "../../../convex/lib/voucherRedemption";
 import type { ClaimPagePayload } from "../../../convex/orderClaims";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { displayAddressState } from "../../lib/address-display";
@@ -701,10 +701,7 @@ export function ClaimCheckoutPage({
 	// BEFORE the buyer fills the form. The commit recomputes from the same read,
 	// so the total confirmed here is the total charged.
 	const voucher = open.voucher;
-	const voucherDiscount =
-		voucher?.kind === "applied"
-			? voucherDiscountFor(voucher.terms, open.itemsTotal)
-			: 0;
+	const voucherDiscount = claimVoucherDiscount(voucher, open.itemsTotal);
 	const displayTotal =
 		open.itemsTotal + pickupFee + deliveryFee - voucherDiscount;
 

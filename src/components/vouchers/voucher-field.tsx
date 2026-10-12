@@ -243,7 +243,13 @@ export function VoucherField({
 								void apply(code);
 							}
 						}}
-						className={`min-w-0 flex-1 border-b-2 border-dotted bg-transparent pb-0.5 font-mono text-[13px] uppercase tracking-wider placeholder:tracking-normal placeholder:text-muted-foreground/60 focus:outline-none disabled:opacity-60 ${
+						// 16px, NOT the row's 13px: iOS Safari zooms the whole page
+						// when a focused input is under 16px, so a buyer tapping this
+						// on an iPhone would have the ticket lurch at them. Every
+						// other input on this checkout is already 16px — this was the
+						// only one that wasn't. The row keeps its 13px; only the
+						// control the thumb lands in is bumped.
+						className={`min-w-0 flex-1 border-b-2 border-dotted bg-transparent pb-0.5 font-mono text-base uppercase tracking-wider placeholder:tracking-normal placeholder:text-muted-foreground/60 focus:outline-none disabled:opacity-60 ${
 							refusal
 								? "border-destructive text-destructive"
 								: "border-border focus:border-accent"

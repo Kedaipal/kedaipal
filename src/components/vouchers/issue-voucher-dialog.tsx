@@ -153,7 +153,7 @@ export function IssueVoucherDialog({
 				}
 			}}
 		>
-			<DialogContent className="sm:max-w-md">
+			<DialogContent className="sm:max-w-lg">
 				<DialogHeader>
 					<DialogTitle>New voucher</DialogTitle>
 					<DialogDescription>
@@ -179,16 +179,26 @@ export function IssueVoucherDialog({
 								subtitle="% off the items"
 							/>
 						</div>
-						{/* Both modes wear the SAME plate frame, so switching between
-						    them doesn't jump the dialog's height or move the helper
-						    line under it. The percentage plate sits on the RIGHT
-						    (a percent follows its number; a currency precedes it),
-						    which also stops "%" reading as a stray glyph before an
-						    empty field. */}
+						{/* Both modes wear the SAME plate frame at the SAME width, so
+						    switching between them doesn't move the field or the
+						    helper line under it. Keep BOTH helper lines to ONE line at
+						    this dialog width: they differ per mode, so a two-line one
+						    makes the dialog jump height on a mode switch — and at
+						    783px of room it then clipped the Create button on open. The percentage plate sits on
+						    the RIGHT (a percent follows its number; a currency
+						    precedes it), which also stops "%" reading as a stray
+						    glyph before an empty field.
+
+						    Sized to its content, not to the dialog: a price and a
+						    percentage are both SHORT quantities, and a full-bleed box
+						    strands the unit an inch from its number — the "How many"
+						    field below already sets the house shape for a numeric
+						    answer. */}
 						{kind === "fixed" ? (
 							<InputPrefixFrame
 								prefix={currencySymbol(currency)}
 								invalid={valueError !== null}
+								className={VALUE_FIELD_WIDTH}
 							>
 								<Input
 									id="voucher-worth"
@@ -205,6 +215,7 @@ export function IssueVoucherDialog({
 								prefix="%"
 								side="end"
 								invalid={valueError !== null}
+								className={VALUE_FIELD_WIDTH}
 							>
 								<Input
 									id="voucher-worth"
@@ -224,7 +235,7 @@ export function IssueVoucherDialog({
 						) : (
 							<FieldDescription>
 								{kind === "fixed"
-									? `Capped at the order's item total — ${formatPrice(5000, currency)} off a ${formatPrice(3000, currency)} basket takes ${formatPrice(3000, currency)}, and delivery is still paid.`
+									? `Capped at the item total — ${formatPrice(5000, currency)} off a ${formatPrice(3000, currency)} basket takes ${formatPrice(3000, currency)}.`
 									: "Taken off the item total, after any promo prices."}
 							</FieldDescription>
 						)}
@@ -355,6 +366,10 @@ export function IssueVoucherDialog({
 		</Dialog>
 	);
 }
+
+/** One width for both modes — wide enough for `1,000.00` behind an `RM`
+ * plate, narrow enough that `%` still sits beside its number. */
+const VALUE_FIELD_WIDTH = "max-w-40";
 
 /** The store's own currency symbol for the plate — never a hardcoded "RM"
  * (an SG store bills in SGD, and the plate would be the first thing to lie). */

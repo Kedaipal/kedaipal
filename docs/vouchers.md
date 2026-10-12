@@ -154,6 +154,14 @@ outline button dropped onto one reads as a form stapled to a document. The
 counter keeps the panel skin for the mirror-image reason: receipt grammar would
 be as wrong on a dashboard as the chrome was on the ticket.
 
+The receipt skin's small type stops at the **control**: the row is 13px mono,
+the input inside it is 16px, because iOS Safari zooms the whole page when a
+focused input is under 16px — and every other field on this checkout was
+already 16px. The frame-level rule behind the panel skin's spacing lives in
+[design-system.md](./design-system.md) (`InputPrefixFrame` lends its control
+`min-h-11 px-3 text-base`; a `bare` input is `px-0`, so the end the plate is
+not welded to would otherwise put the value hard against the border).
+
 **There is no green "applied" panel.** The receipt's own voucher line already
 states the code and what it took off, so a panel beneath it repeated the same
 fact in a louder voice. Instead that line **is** the control: it is an
@@ -286,6 +294,16 @@ file's own test).
 - **A voided voucher is never resurrected by a cancellation.** The seller
   withdrew it on purpose.
 
+- **`claimVoucherDiscount` is the one author of what a claim's voucher takes
+  off.** Only an `applied` voucher discounts — a `dropped` one must price at
+  FULL and say why, which is the entire reason the claim degrades instead of
+  refusing. The rule was briefly written twice (the ticket's maths, then the
+  page header), and the second copy is exactly how the header came to print the
+  **gross** items figure: a claim sent at RM 32.00 greeted the buyer with
+  "RM 40.00" directly above a ticket reading "TOTAL RM 32.00" (found in the
+  hands-on pass, 12 Oct). The header subtracts the voucher but **not** fees,
+  which depend on choices the buyer hasn't made yet and only ever ADD.
+
 - **A batch's NAME is renameable; its value is not.** `renameBatch` is the only
   bulk update, because a code in a buyer's hand must not change what it is
   worth. It writes a private label, so it is classified in
@@ -333,3 +351,11 @@ money at a cash till. It was reproduced with **no voucher involved**, which is
 how it was established as pre-existing, and fixed here because it blocked
 testing the counter's voucher line. See
 [promo-price.md](./promo-price.md#the-counter-panel-quotes-a-price-so-it-calls-the-same-helper).
+
+And a third, this one the feature's own: the claim page **header** printed
+`itemsTotal`, which equalled the total until a voucher could subtract from it.
+See the `claimVoucherDiscount` decision above. The seller's claims list
+(`send-claim.tsx`, `waiting-on-buyer.tsx`) still prints `itemsTotal` and is
+therefore gross on a voucher claim — left as a reported finding rather than
+changed, because fixing it needs a new field on `ClaimListRow` and the figure
+there has always meant "items" (a delivery fee already made it differ).

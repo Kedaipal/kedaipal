@@ -15,6 +15,19 @@ import { cn } from "#/lib/utils";
  * contains** — the caller's schema must accept a value typed without it, or the
  * plate tells the user to do something the validator then rejects.
  */
+/**
+ * The metrics the frame lends its control: the `field` variant's 44px floor,
+ * its horizontal padding and its type size, applied to the direct-child input.
+ *
+ * It lives HERE and not at each call site because a `bare` input is `px-0` —
+ * the plate normally supplies the only gap there is, so the end a plate is
+ * NOT welded to puts the value hard against the border. That shipped in the
+ * voucher dialog's percentage field (`10` touching the frame, spotted by Zaki,
+ * 12 Oct `z8r3fdr617`) after the same three classes had been hand-copied at
+ * three call sites — one control, one rule, so the frame owns them.
+ */
+const SLOT_METRICS = "[&>input]:min-h-11 [&>input]:px-3 [&>input]:text-base";
+
 export function InputPrefixFrame({
 	prefix,
 	side = "start",
@@ -34,7 +47,11 @@ export function InputPrefixFrame({
 	invalid?: boolean;
 	disabled?: boolean;
 	className?: string;
-	/** The control itself — render it with `variant="bare"`. */
+	/**
+	 * The control itself — render it with `variant="bare"`. The frame supplies
+	 * its height, padding and type size (see `SLOT_METRICS`); a call site does
+	 * not repeat them.
+	 */
 	children: ReactNode;
 }) {
 	// Same plate either way; only which border divides it from the field
@@ -61,6 +78,7 @@ export function InputPrefixFrame({
 		<div
 			className={cn(
 				"flex min-h-11 items-center overflow-hidden rounded-xl border border-input bg-transparent transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50 dark:bg-input/30",
+				SLOT_METRICS,
 				disabled && "cursor-not-allowed bg-input/50 opacity-50",
 				// Invalid keeps its red border and ring under focus too — the
 				// focus-within classes above would otherwise repaint it mint and hide

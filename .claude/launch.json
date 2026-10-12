@@ -183,6 +183,21 @@
       ],
       "port": 3230,
       "autoPort": false
+    },
+    {
+      "name": "web-vouchers-wt",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "-C",
+        "../kedaipal-wt-z8r3fdr617",
+        "exec",
+        "vite",
+        "dev",
+        "--port",
+        "3240"
+      ],
+      "port": 3240,
+      "autoPort": false
     }
   ]
 }
