@@ -302,10 +302,12 @@ export type BannerState =
 			daysLeft?: number;
 	  }
 	| { kind: "trialWarn"; daysLeft: number; ended: boolean }
-	/** Credits T3: out of credits — accepting/updating orders and editing
-	 * products are paused; orders keep arriving. Persistent. */
+	/** Credits T3.1: orders are WAITING ON CREDITS — the seller can't open them
+	 * until credits land, and they open oldest first. Never store-wide: the
+	 * catalogue, the settings and every order that already paid for its credit
+	 * carry on. Persistent, and the one banner that links the filtered inbox. */
 	| {
-			kind: "creditsLocked";
+			kind: "creditsWaiting";
 			ordersWaiting: number;
 			route: CreditUnlockRoute;
 	  }
@@ -313,13 +315,15 @@ export type BannerState =
 	 * — the meter's amber and the low email's line). Dismissable. */
 	| { kind: "creditsLow"; total: number };
 
-/** What the banner knows about credits. `locked` + `route` + `ordersWaiting`
- * ride the dashboard payload for everyone; the balance only for someone who
- * can see credits (undefined → no low nudge). */
+/** What the banner knows about credits. `ordersWaiting` + `route` ride the
+ * dashboard payload for everyone; the balance only for someone who can see
+ * credits (undefined → no low nudge). */
 export type BannerCredits = {
-	locked: boolean;
-	route: CreditUnlockRoute;
+	/** LIVE orders waiting on credits (Credits T3.1). Replaces the store-wide
+	 * `locked` boolean — the banner's job is now to say how many orders are
+	 * held and offer the filter that finds them. */
 	ordersWaiting: number;
+	route: CreditUnlockRoute;
 	total?: number;
 	periodGrant?: number;
 	customGrant?: boolean;
@@ -341,12 +345,12 @@ export function resolveBannerState(
 	if (sub.status === "past_due")
 		return sub.compEnded ? { kind: "compEnded" } : { kind: "pastDue" };
 
-	// Out of credits blocks work NOW — above every deadline below, and above
-	// the saved-method banners: those are about how the next bill gets paid,
-	// this is about orders not being taken today.
-	if (credits?.locked)
+	// Orders waiting on credits is work blocked NOW — above every deadline
+	// below, and above the saved-method banners: those are about how the next
+	// bill gets paid, this is about orders the seller can't open today.
+	if (credits !== undefined && credits.ordersWaiting > 0)
 		return {
-			kind: "creditsLocked",
+			kind: "creditsWaiting",
 			ordersWaiting: credits.ordersWaiting,
 			route: credits.route,
 		};
@@ -400,12 +404,13 @@ export function resolveBannerState(
 			return { kind: "trialWarn", daysLeft: free.daysLeft, ended: false };
 	}
 
-	// `low` OR `out`. While the lock is on, `creditsLocked` above catches the
-	// zero-and-below store — but that branch reads `credits.locked`, and with
-	// the lock switched off (CREDIT_LOCK_ENABLED) it never fires, which left a
-	// store already into next month's credits with no banner at all. The two
-	// tones share one banner whose lead-in names which it is; when the lock
-	// returns, `creditsLocked` outranks this again and nothing here changes.
+	// `low` OR `out`. `creditsWaiting` above outranks this whenever an order is
+	// actually being held — but a store can be at or below zero with NOTHING
+	// waiting (every order it took was funded, and the debt came from an
+	// expired lot or from before the gate shipped), and that store still needs
+	// telling. So this branch stays widened to `!== "ok"` rather than "low":
+	// narrowing it to amber is what left a store already into next month's
+	// credits with no banner at all (found in the T3 review).
 	if (
 		credits?.total !== undefined &&
 		credits.periodGrant !== undefined &&

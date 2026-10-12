@@ -6,7 +6,7 @@ import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { ClaimSendOutcome } from "../../../convex/lib/orderClaims";
 import { MASK_PII } from "../../lib/analytics-privacy";
-import { formatClaimCountdown } from "../../lib/countdown";
+import { formatTimeLeft } from "../../lib/countdown";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 import {
@@ -110,7 +110,7 @@ export function WaitingOnBuyerScreen({
 						}`}
 					>
 						<Clock className="size-3.5" aria-hidden />
-						{stillOpen ? formatClaimCountdown(remaining) : "Expired"}
+						{stillOpen ? formatTimeLeft(remaining) : "Expired"}
 					</span>
 				</div>
 

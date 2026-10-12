@@ -8,7 +8,9 @@ import {
 	orderCustomerLabel,
 	requireCustomerName,
 	sanitizeCustomerName,
+	sellerCustomerName,
 } from "./customer";
+import { GATED_CELL_LABEL } from "./credits";
 
 describe("formatPhone", () => {
 	test("formats a Malaysian number with +60 prefix", () => {
@@ -34,6 +36,45 @@ describe("formatPhone", () => {
 
 	test("returns empty string for empty input", () => {
 		expect(formatPhone("")).toBe("");
+	});
+});
+
+// Credits T3.1 — the gated row used to render an EMPTY name, because the
+// server blanks both `name` and `waPhone` and `getDisplayName` then falls
+// through to `formatPhone("")`. The blank read as corrupt data.
+describe("sellerCustomerName", () => {
+	test("names the gate instead of the blank the redaction leaves", () => {
+		// Exactly what `redactGatedCustomer` produces: aggregates, no identity.
+		expect(sellerCustomerName({ waPhone: "", creditGated: true })).toBe(
+			GATED_CELL_LABEL,
+		);
+	});
+
+	test("the redacted row would otherwise be nameless", () => {
+		// The bug this exists for. If `getDisplayName` ever grows a fallback of
+		// its own this goes red, and the wrapper can be reconsidered.
+		expect(getDisplayName({ waPhone: "" })).toBe("");
+	});
+
+	test("an ungated customer is untouched", () => {
+		expect(
+			sellerCustomerName({ name: "Aisha", waPhone: "60123456789" }),
+		).toBe("Aisha");
+		expect(sellerCustomerName({ waPhone: "60123456789" })).toBe(
+			"+60 123456789",
+		);
+	});
+
+	test("a gated flag wins over a name the row should not be showing", () => {
+		// Defence in depth: a stale client cache holding a pre-gate row must not
+		// out-rank the flag the server just stamped.
+		expect(
+			sellerCustomerName({
+				name: "Aisha",
+				waPhone: "60123456789",
+				creditGated: true,
+			}),
+		).toBe(GATED_CELL_LABEL);
 	});
 });
 

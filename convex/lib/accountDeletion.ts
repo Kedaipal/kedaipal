@@ -29,6 +29,18 @@
  *    delete them: it closes every still-pending checkout (below).
  *  - `adminAuditLog` rows — an audit trail must outlive the tenant it audited
  *    (`targetId`s are doc ids / last-4 only, never buyer PII).
+ *  - `messageLogRollups` rows — the PERMANENT WhatsApp cost ledger (retailer ×
+ *    MYT month × category × status). `purgeExpiredOutboundLog` folds every
+ *    expiring `outboundMessageLog` row into its bucket precisely so aggregate
+ *    cost accounting survives the 90-day purge "forever" (lib/retention.ts),
+ *    and Meta bills us per send from Oct 2026 — so this is a record of what
+ *    Kedaipal was CHARGED for a seller's traffic, the same class as an
+ *    invoice. The rollup deliberately drops `toWaPhone`/`templateName`, so it
+ *    carries counts and no buyer PII. The raw per-send rows (which do carry
+ *    the buyer's number) ARE deleted, by the `outboundMessageLog` phase.
+ *    `retailerId` is left dangling rather than cleared: it is the ledger's
+ *    grouping key, and blanking it would merge a deleted tenant's months into
+ *    the tenant-less bucket and corrupt both.
  *  - `optOuts` rows are the buyer's standing suppression instruction, GLOBAL
  *    across every retailer on the shared WABA — deleting one would re-enable
  *    messages the buyer said stop to. The phase only clears
@@ -52,11 +64,13 @@ export const DELETION_PHASES = [
 	"products",
 	"productCategories",
 	"categories",
+	"bookingBlocks",
 	"deliveryJobs",
 	"deliveryQuotes",
 	"customers",
 	"pickupLocations",
 	"counterCheckoutSessions",
+	"orderClaims",
 	"subscriptions",
 	"subscriptionUsage",
 	"creditPurchases",
@@ -189,6 +203,22 @@ export async function runDeletionPhase(
 			}
 			return { processed: rows.length, done: rows.length < limit };
 		}
+		case "bookingBlocks": {
+			// Availability windows the seller closed off ("Maintenance — river
+			// deck repair"). Tenant-owned calendar config: no buyer PII and no
+			// money, so nothing argues for keeping it once the store is gone.
+			// Grouped with the catalogue phases above rather than appended,
+			// because a block is a product's availability — the `productId` it
+			// may carry points at rows the `products` phase has already deleted.
+			// Index prefix: by_retailer_start with only the retailerId bound
+			// covers every window.
+			const rows = await ctx.db
+				.query("bookingBlocks")
+				.withIndex("by_retailer_start", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const block of rows) await ctx.db.delete(block._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
 		case "deliveryJobs": {
 			const rows = await ctx.db
 				.query("deliveryJobs")
@@ -236,6 +266,33 @@ export async function runDeletionPhase(
 				.withIndex("by_retailer_status", (q) => q.eq("retailerId", retailerId))
 				.take(limit);
 			for (const session of rows) await ctx.db.delete(session._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "orderClaims": {
+			// DELETED, not retained (claim links, 86eyq0epn). A claim is an OFFER
+			// the seller sent a buyer — required `waPhone`, optional `buyerName`,
+			// plus the frozen line snapshot — and never a record of what Kedaipal
+			// CHARGED the seller, which is the one thing the header's retention
+			// block keeps. Nothing survives the tenant to justify holding a
+			// buyer's number, so the rows go.
+			//
+			// This phase is the doer the claim cron defers to: `purgeStaleClaims`
+			// sweeps `expired`/`cancelled` rows past CLAIM_RETENTION_MS and
+			// deliberately exempts `completed` ones, on the grounds that "order
+			// retention is the PDPA pack's job" (convex/lib/orderClaims.ts). That
+			// job had no doer here, so a completed claim kept its buyer's phone
+			// and name indefinitely after the store was erased.
+			//
+			// Index prefix: by_retailer_status with only the retailerId bound
+			// covers every status (same shape as counterCheckoutSessions above).
+			// No blobs to free — a claim holds no storage ids. Position is not
+			// load-bearing: rows are found by retailer, never through the
+			// `sessionId` the phase above has already deleted.
+			const rows = await ctx.db
+				.query("orderClaims")
+				.withIndex("by_retailer_status", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const claim of rows) await ctx.db.delete(claim._id);
 			return { processed: rows.length, done: rows.length < limit };
 		}
 		case "subscriptions": {

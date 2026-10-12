@@ -57,6 +57,7 @@ function renderForm({
 			retailerId={"r1" as never}
 			categoriesLocked={false}
 			eventsLocked={false}
+			promoLocked={false}
 			currency="MYR"
 			submitLabel="Save"
 			mode="edit"

@@ -605,6 +605,21 @@ export async function buildOrderReceiptPdf(
 			draw(page, font, item.variantLabel, MARGIN + 12, y, 8.5, FAINT);
 			y -= 13;
 		}
+		// What the buyer saved on this line (z8r3fdcw72). Printed from the
+		// FROZEN list price, so a receipt reprinted months later still says
+		// what the sale was worth on the day.
+		if (item.listPrice !== undefined && item.listPrice > item.unitPrice) {
+			draw(
+				page,
+				font,
+				`was ${formatMoney(item.listPrice, data.currency)} each`,
+				MARGIN + 12,
+				y,
+				8.5,
+				FAINT,
+			);
+			y -= 13;
+		}
 		y -= 5;
 		rule(page, y + 6);
 		y -= 6;
@@ -684,13 +699,20 @@ export async function buildOrderReceiptPdf(
 		y -= 12;
 	}
 
-	paymentCard(d, paid ? "How you paid" : "How to pay", data.paymentBlocks, y);
+	paymentCard(
+		d,
+		paid ? "How you paid" : data.paymentsPaused ? "Payment" : "How to pay",
+		data.paymentBlocks,
+		y,
+	);
 
 	footer(
 		d,
 		paid
 			? `Thank you for your purchase at ${data.storeName} via Kedaipal.`
-			: `Please use ${data.orderShortId} as your payment reference. Thank you for ordering from ${data.storeName} via Kedaipal.`,
+			: data.paymentsPaused
+				? `Thank you for ordering from ${data.storeName} via Kedaipal.`
+				: `Please use ${data.orderShortId} as your payment reference. Thank you for ordering from ${data.storeName} via Kedaipal.`,
 		// The seller's document to their buyer → it carries the growth mark,
 		// tagged as the receipt surface and attributed to the store.
 		{ poweredByUrl: poweredByHref("receipt", data.storeSlug) },

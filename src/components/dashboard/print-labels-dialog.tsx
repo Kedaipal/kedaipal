@@ -74,7 +74,11 @@ type PrintLabelsDialogProps = CommonProps &
 export function PrintLabelsDialog(props: PrintLabelsDialogProps) {
 	const { open, onOpenChange, retailerId, paperLabel } = props;
 	const generate = useAction(api.awb.generateAwbBatchPdf);
-	const lock = useAreaLock("orders", { credits: true });
+	// NOT credit-gated: the batch skips the orders waiting on credits and
+	// reports them in `skipped.credit_gated`, which `describeAwbSkips` reads
+	// out (Credits T3.1). Disabling the whole dialog because one order of forty
+	// is waiting is the store-wide lock's failure mode.
+	const lock = useAreaLock("orders");
 	const [sort, setSort] = useState<AwbSort>("fulfilment");
 	const [busy, setBusy] = useState(false);
 

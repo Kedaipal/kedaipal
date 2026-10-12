@@ -1,7 +1,8 @@
 import { Link } from "@tanstack/react-router";
+import { Lock } from "lucide-react";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import { MASK_PII } from "../../lib/analytics-privacy";
-import { formatPhone, getDisplayName } from "../../lib/customer";
+import { formatPhone, sellerCustomerName } from "../../lib/customer";
 import {
 	formatPrice,
 	formatPriceCompact,
@@ -38,14 +39,18 @@ export function CustomerCard({
 	customer,
 	currency,
 }: {
-	customer: Doc<"customers">;
+	customer: Doc<"customers"> & { creditGated?: boolean };
 	currency: string;
 }) {
-	const displayName = getDisplayName(customer);
+	const displayName = sellerCustomerName(customer);
 	const initials = nameInitials(customer);
 	const hasName = Boolean(
 		customer.name?.trim() || customer.waProfileName?.trim(),
 	);
+	// Waiting on credits (Credits T3.1) — the desktop table's rule, on the
+	// phone. The avatar carries the lock instead of the "#" a nameless row
+	// would otherwise get, so the state is legible before reading the name.
+	const gated = customer.creditGated === true;
 
 	return (
 		<Link
@@ -61,10 +66,15 @@ export function CustomerCard({
 				)}
 				aria-hidden
 			>
-				{initials ?? "#"}
+				{gated ? <Lock className="size-4" /> : (initials ?? "#")}
 			</div>
 			<div className="flex min-w-0 flex-1 flex-col gap-0.5">
-				<span className="truncate text-[14.5px] font-semibold">
+				<span
+					className={cn(
+						"truncate text-[14.5px] font-semibold",
+						gated && "text-muted-foreground",
+					)}
+				>
 					{displayName}
 				</span>
 				<span className="truncate text-[12.5px] text-muted-foreground">

@@ -49,7 +49,9 @@ import {
 	requireRetailerAccess,
 	tryRetailerAccess,
 } from "./lib/auth";
-import { assertSubscriptionActive } from "./subscriptions";
+import { assertSubscriptionActive, getAccess } from "./subscriptions";
+import { effectivePrice, isPromoActive, promoUnitsLeft } from "./lib/promo";
+import { tallyPromoUnits } from "./lib/promoTally";
 import {
 	getDisplayName,
 	normalizeOptionalCustomerName,
@@ -830,12 +832,26 @@ export const createOrderFromSession = mutation({
 			name: string;
 			variantLabel?: string;
 			price: number;
+			/** List price, present ONLY when the line sold below it (z8r3fdcw72). */
+			listPrice?: number;
+			/** Promo run the line sold under — counter sales share the flash pool. */
+			promoRunId?: string;
 			quantity: number;
 			/** Whether this line reserved stock at create — frozen (86eypn8ye). */
 			stockReserved: boolean;
 			/** Buyer-question answers the seller keyed (z8r3fdkjek). */
 			answers?: FrozenAnswer[];
 		}[] = [];
+		// Promo context (z8r3fdcw72): the counter DEFAULTS to the effective
+		// price and its sale lines count against the same flash pool as the
+		// storefront ("one pool"). One bounded tally per distinct product. A
+		// seller price adjustment (or a custom line's agreed price) overrides
+		// the default and is NOT a promo sale — no runId, no pool unit.
+		const storePlan = (await getAccess(ctx, retailer._id)).plan;
+		const promoByProduct = new Map<
+			Id<"products">,
+			{ runId: string; unitsLeft: number | undefined } | null
+		>();
 		const requestedByVariant = new Map<
 			Id<"productVariants">,
 			{ qty: number; block: boolean; onHand: number }
@@ -877,6 +893,8 @@ export const createOrderFromSession = mutation({
 			// back to the authoritative variant price. See docs/custom-option.md +
 			// docs/counter-checkout.md ("Seller price adjustment").
 			let unitPrice: number;
+			let soldOnPromo = false;
+			let promoRunId: string | undefined;
 			if (variant.isCustom === true || item.unitPrice !== undefined) {
 				// A positive integer in sen — the SAME rule as any other price
 				// (products.ts). No artificial ceiling: we can't know the vendor's
@@ -891,7 +909,52 @@ export const createOrderFromSession = mutation({
 					throw new ConvexError(`Set a price for "${displayName}"`);
 				unitPrice = entered;
 			} else {
-				unitPrice = variant.price;
+				// Default = the effective price (promo-aware, z8r3fdcw72). Same
+				// helpers as the storefront + orders.create, so the counter can
+				// never quote a sale the storefront wouldn't.
+				let promoCtx = promoByProduct.get(variant.productId);
+				if (promoCtx === undefined) {
+					promoCtx = null;
+					const promo = product.promo;
+					if (
+						promo !== undefined &&
+						isPromoActive({ promo }, storePlan, now) &&
+						product.event === undefined
+					) {
+						const unitsLeft =
+							promo.unitCap !== undefined
+								? promoUnitsLeft(
+										promo.unitCap,
+										await tallyPromoUnits(ctx, {
+											retailerId: retailer._id,
+											productId: variant.productId,
+											runId: promo.runId,
+											startsAt: promo.startsAt ?? 0,
+											endsAt: promo.endsAt,
+										}),
+									)
+								: undefined;
+						promoCtx = { runId: promo.runId, unitsLeft };
+					}
+					promoByProduct.set(variant.productId, promoCtx);
+				}
+				// A line that would overshoot the remaining pool defaults to LIST
+				// (the storefront refuses the same straddle; here the seller is
+				// present and can still adjust the price by hand). Lines earlier
+				// in this same order drain the pool as they take sale units.
+				const straddlesCap =
+					promoCtx !== null &&
+					promoCtx.unitsLeft !== undefined &&
+					item.quantity > promoCtx.unitsLeft;
+				unitPrice = straddlesCap
+					? variant.price
+					: effectivePrice(variant, product, storePlan, now, promoCtx?.unitsLeft);
+				if (unitPrice < variant.price && promoCtx !== null) {
+					soldOnPromo = true;
+					promoRunId = promoCtx.runId;
+					if (promoCtx.unitsLeft !== undefined)
+						promoCtx.unitsLeft -= item.quantity;
+				}
 			}
 			if (product.event !== undefined) {
 				eventProducts.set(variant.productId, {
@@ -924,6 +987,8 @@ export const createOrderFromSession = mutation({
 				name: product.name,
 				variantLabel: label || undefined,
 				price: unitPrice,
+				listPrice: soldOnPromo ? variant.price : undefined,
+				promoRunId,
 				quantity: item.quantity,
 				// The seller answers on the walk-in's behalf; required still
 				// enforced — the same rule as the storefront (z8r3fdkjek).

@@ -3339,6 +3339,9 @@ describe("orders — inbox search", () => {
 			readyToShip: 0,
 			// Nothing pinned (86eyrtz74 — pinning is covered below).
 			pinned: 0,
+			// This fixture's store is in credit, so no order is waiting on one
+			// (Credits T3.1 — the gate's own counts live in orderGate.test.ts).
+			creditGated: 0,
 			// No booking orders in this fixture (S8). The assertion is
 			// deliberately exhaustive: a new count field has to be accounted for
 			// here consciously, not absorbed silently.
@@ -6358,6 +6361,9 @@ describe("orders — Lalamove rider gate on manual advances", () => {
 			skippedRiderManaged: 1,
 			skippedNoSuchStage: 0,
 			skippedCancelled: 0,
+			// In credit, so nothing is waiting on one (Credits T3.1 — the mixed
+			// selection is covered in creditLock.test.ts).
+			skippedCreditGated: 0,
 		});
 		expect((await t.run((ctx) => ctx.db.get(gated._id)))?.status).toBe("packed");
 		expect((await t.run((ctx) => ctx.db.get(plain._id)))?.status).toBe(

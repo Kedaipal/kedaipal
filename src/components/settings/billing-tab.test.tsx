@@ -619,6 +619,10 @@ describe("BillingTab comp accounts (z8r3fdeub2)", () => {
 	const DAY = 24 * 60 * 60 * 1000;
 	const comped = (comp?: Record<string, unknown>) =>
 		retailer({
+			// A real comp carries BOTH: `comped` on the subscription and
+			// `fullAccess` on the payload (`storeHasFullAccess`). The card keys
+			// on the second — see `failSafe` below for why.
+			fullAccess: true,
 			subscription: {
 				plan: "pro",
 				status: "active",
@@ -629,6 +633,24 @@ describe("BillingTab comp accounts (z8r3fdeub2)", () => {
 					userCap: 1_000_000_000,
 					broadcastQuota: 500,
 				},
+				active: true,
+				frozen: false,
+			},
+		} as unknown as Partial<Retailer>);
+
+	/**
+	 * A store with NO SUBSCRIPTION ROW. `resolveAccess` reports `comped: true`
+	 * for it so a data fault can never lock a seller out — but it stays
+	 * METERED, so it is the one "comped-looking" store that really does have a
+	 * monthly limit and a balance. No `fullAccess`.
+	 */
+	const failSafe = () =>
+		retailer({
+			subscription: {
+				plan: "pro",
+				status: "active",
+				comped: true,
+				caps: { orderCap: 200, userCap: 3, broadcastQuota: 100 },
 				active: true,
 				frozen: false,
 			},
@@ -645,9 +667,16 @@ describe("BillingTab comp accounts (z8r3fdeub2)", () => {
 			/>,
 		);
 		expect(screen.getByText("Sponsored account")).toBeTruthy();
-		expect(screen.getByText("Never locked")).toBeTruthy();
+		expect(screen.getByText("No limits")).toBeTruthy();
 		expect(screen.getByText("Sponsored by Maybank SME")).toBeTruthy();
-		expect(screen.getByText(/never\s+locks your store/)).toBeTruthy();
+		// This card is the ONLY place a sponsored seller is told their limits
+		// are off: the credit meter is absent for them (z8r3fdrph7), and a
+		// ceiling that silently isn't there is still undiscoverable behaviour.
+		// So the three limits are named here, in words.
+		expect(screen.getByText(/no monthly\s+order limit/)).toBeTruthy();
+		expect(screen.getByText(/no product limit/)).toBeTruthy();
+		expect(screen.getByText(/no credits to run down/)).toBeTruthy();
+		expect(screen.getByText(/can never be locked/)).toBeTruthy();
 		// A comp has no end date — nothing may suggest one.
 		expect(screen.queryByText(/until|expires|ends/i)).toBeNull();
 		// Not a plan: no tier, meter or any billing door.
@@ -657,6 +686,25 @@ describe("BillingTab comp accounts (z8r3fdeub2)", () => {
 		expect(screen.queryByText(/Subscribe to/)).toBeNull();
 		expect(screen.queryByText(/Off-Season Hold/)).toBeNull();
 		expect(screen.queryByText("Auto-renewal")).toBeNull();
+	});
+
+	it("a METERED store never claims it has no limits (/test-code finding)", () => {
+		// The card used to key on `sub.comped`, which is ALSO true for a store
+		// with no subscription row — a store that keeps a real 200 grant. That
+		// put "nothing is capped — no monthly order limit… no credits to run
+		// down" directly above its live "200 of 200" meter: the exact
+		// contradiction z8r3fdrph7 removed from comped stores. It now keys on
+		// `fullAccess`, so this store falls through to the ordinary plan card,
+		// which agrees with the meter under it.
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(<BillingTab retailer={failSafe()} />);
+		expect(screen.queryByText("Sponsored account")).toBeNull();
+		expect(screen.queryByText("No limits")).toBeNull();
+		expect(screen.queryByText(/no monthly\s+order limit/)).toBeNull();
+		expect(screen.queryByText(/no credits to run down/)).toBeNull();
+		// It is an active Pro store as far as `resolveAccess` is concerned, so
+		// that is what it says.
+		expect(screen.getByText("Current plan")).toBeTruthy();
 	});
 
 	it("a comp with no label still reads as a sponsored account", () => {

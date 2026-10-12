@@ -11,8 +11,10 @@ import {
 	FileSpreadsheet,
 	FolderOpen,
 	Search,
+	Tag,
 	Upload,
 	X,
+	Zap,
 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -20,13 +22,13 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import {
 	productCapBlockReason,
+	productCapExemption,
 	productCapState,
 } from "../../convex/lib/productCap";
 import { formatEventBadge, isEventPassed } from "../../convex/lib/productEvent";
 import { NeedsAccessNote } from "../components/app/owner-only-note";
 import { ProBadge } from "../components/app/pro-gate";
 import { ViewOnlyNote } from "../components/app/view-only-note";
-import { CreditLockNote } from "../components/credits/credit-lock-note";
 import { PageHeader } from "../components/dashboard/page-header";
 import {
 	StockAdjustDialog,
@@ -254,14 +256,18 @@ function ProductsRoute() {
 
 	// Product cap. `counts.all` is the right input by construction: `listAll`
 	// returns every row, active AND archived, which is exactly what the cap
-	// counts. Client mirror of the server gate (server is the lock) — admin
-	// act-as is exempt so a white-glove catalog can be stocked past the ceiling.
-	const cap = productCapState(counts.all, retailer?.actingAsAdmin === true);
+	// counts. Client mirror of the server gate (server is the lock) — exempt for
+	// admin act-as, so a white-glove catalog can be stocked past the ceiling,
+	// and for a FULL-ACCESS store (admin-owned or sponsored), which has no plan
+	// to cap. Both inputs ride on the retailer payload and the OR lives in
+	// `productCapExemption`, so this cannot disagree with what the save does.
+	const capExempt = productCapExemption({
+		actingAsAdmin: retailer?.actingAsAdmin === true,
+		fullAccess: retailer?.fullAccess === true,
+	});
+	const cap = productCapState(counts.all, capExempt);
 	// null while there's room — one source for the disabled button and its reason.
-	const capBlockReason = productCapBlockReason(
-		counts.all,
-		retailer?.actingAsAdmin === true,
-	);
+	const capBlockReason = productCapBlockReason(counts.all, capExempt);
 	// Team members (86exr91r4): a read-only grant must not be handed
 	// create/reorder/export affordances that the server will refuse.
 	const productsPerm = usePermission("products");
@@ -270,7 +276,7 @@ function ProductsRoute() {
 	// store lapsed (view-only), it ran out of credits (Credits T3), or this
 	// teammate holds view on products. One author for each sentence, shared
 	// with every other gated surface, so the words can't drift.
-	const productsLock = useAreaLock("products", { credits: true });
+	const productsLock = useAreaLock("products");
 	const writeBlockReason = productsLock.readOnly ? productsLock.reason : null;
 	// How many rows the spotlight key applies to — decides whether the banner
 	// says "open one below" or "you don't have one yet". Counted over every
@@ -460,7 +466,6 @@ function ProductsRoute() {
 			    greys out: a lapsed store, one out of credits (Credits T3), or a
 			    teammate with view on products. Each renders nothing otherwise. */}
 			<ViewOnlyNote />
-			<CreditLockNote scope="products" />
 			<NeedsAccessNote area="products" />
 
 			{spot && products !== undefined ? (
@@ -696,7 +701,22 @@ function ProductCard({
 						) : (
 							<>
 								{showFrom ? "From " : ""}
-								{formatPrice(p.priceFrom, p.currency)}
+								{/* The seller's own catalogue must show what buyers are
+								    actually being charged. It printed the LIST price with
+								    no hint a sale was running, so a seller scanning the
+								    list could not tell which products were discounted or
+								    at what — the one place they'd look to check
+								    (found by hand-testing). */}
+								{p.promoPriceFrom !== undefined ? (
+									<>
+										{formatPrice(p.promoPriceFrom, p.currency)}{" "}
+										<span className="font-normal text-muted-foreground line-through">
+											{formatPrice(p.priceFrom, p.currency)}
+										</span>
+									</>
+								) : (
+									formatPrice(p.priceFrom, p.currency)
+								)}
 							</>
 						)}
 					</span>
@@ -739,6 +759,29 @@ function ProductCard({
 				</span>
 			</div>
 			<div className="flex shrink-0 flex-col items-end gap-1">
+				{/* FIRST in this column, above the standing rules below it: a sale
+				    is the only thing here with a clock on it. Same two treatments
+				    the buyer's card uses — dark + bolt for a timed flash, mint +
+				    tag for a plain discount — so the seller recognises what the
+				    shopper is seeing instead of learning a second vocabulary. */}
+				{p.active && p.promoState !== undefined ? (
+					<span
+						className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+							p.promoState.endsAt !== undefined
+								? "bg-foreground text-background"
+								: "bg-accent/15 text-accent-emphasis"
+						}`}
+					>
+						{p.promoState.endsAt !== undefined ? (
+							<Zap className="size-3" aria-hidden />
+						) : (
+							<Tag className="size-3" aria-hidden />
+						)}
+						{p.promoState.phase === "scheduled"
+							? "Scheduled"
+							: p.promoState.label}
+					</span>
+				) : null}
 				{p.active && (p.minQuantity ?? 0) >= 2 ? (
 					// Minimum-order-quantity rule — flagged on the list so the seller
 					// can see at a glance which products carry it. See minOrderRules.

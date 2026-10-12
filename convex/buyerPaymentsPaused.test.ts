@@ -279,6 +279,8 @@ describe("what each side is told", () => {
 			},
 		]);
 		expect(JSON.stringify(inputs?.data)).not.toContain("5123 4567 8901");
+		// The renderer reads this to drop "How to pay" + the transfer-ref footer.
+		expect(inputs?.data.paymentsPaused).toBe(true);
 	});
 
 	test("a PAID receipt is unchanged by the pause", async () => {
@@ -293,6 +295,7 @@ describe("what each side is told", () => {
 		await setSub(t, retailerId);
 		const inputs = await t.query(internal.orders.receiptPdfInputs, { token });
 		expect(inputs?.data.paymentBlocks[0]?.label).toBe("Maybank");
+		expect(inputs?.data.paymentsPaused).toBeUndefined();
 	});
 
 	test("the WhatsApp confirm reply knows the store is paused", async () => {

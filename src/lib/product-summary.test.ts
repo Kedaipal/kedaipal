@@ -479,3 +479,67 @@ describe("describeProduct — an SG store reads S$, never SGD", () => {
 		expect(summary).not.toMatch(/SGD/);
 	});
 });
+
+describe("describeProduct — a live sale is in the summary (z8r3fdcw72)", () => {
+	it("names the sale price beside the list price", () => {
+		// The strip claims to summarise the product, and it printed only the
+		// LIST price while a promotion was running — so the seller opening the
+		// product to check their sale read the old number (found by hand-testing).
+		expect(
+			describeProduct(
+				{
+					options: [],
+					rows: [row({ price: "10.00", promoPrice: "7.00" })],
+					customLine: null,
+				},
+				"MYR",
+			),
+		).toBe("One item · From stock · RM 10 · Sale RM 7");
+	});
+
+	it("spans the sale across choices", () => {
+		const out = describeProduct(
+			{
+				options: [{ name: "Size", values: ["S", "L"] }],
+				rows: [
+					row({ optionValues: ["S"], price: "10.00", promoPrice: "7.00" }),
+					row({ optionValues: ["L"], price: "20.00", promoPrice: "14.00" }),
+				],
+				customLine: null,
+			},
+			"MYR",
+		);
+		// Non-breaking spaces inside the money strings — match on the shape.
+		expect(out).toMatch(/Sale RM\s7–14$/u);
+	});
+
+	it("says nothing when no line is on promotion", () => {
+		expect(
+			describeProduct(
+				{ options: [], rows: [row({ price: "10.00" })], customLine: null },
+				"MYR",
+			),
+		).not.toContain("Sale");
+	});
+
+	it("ignores an INACTIVE line's sale price — it isn't being sold", () => {
+		expect(
+			describeProduct(
+				{
+					options: [{ name: "Size", values: ["S", "L"] }],
+					rows: [
+						row({ optionValues: ["S"], price: "10.00" }),
+						row({
+							optionValues: ["L"],
+							price: "20.00",
+							promoPrice: "14.00",
+							active: false,
+						}),
+					],
+					customLine: null,
+				},
+				"MYR",
+			),
+		).not.toContain("Sale");
+	});
+});

@@ -200,3 +200,62 @@ describe("collectOptionIssues", () => {
 		).toEqual([]);
 	});
 });
+
+describe("buildSubmitVariants — sale prices (z8r3fdcw72)", () => {
+	it("converts a valid sale price to minor units and leaves blanks off promo", () => {
+		const result = buildSubmitVariants(
+			[row({ price: "45.00", promoPrice: "31.50" }), row({ price: "45.00" })],
+			null,
+		);
+		expect("variants" in result).toBe(true);
+		if ("variants" in result) {
+			expect(result.variants[0].promoPrice).toBe(3150);
+			// Blank = this line simply isn't on promotion, which is the default.
+			expect(result.variants[1].promoPrice).toBeUndefined();
+		}
+	});
+
+	it("refuses a sale price that doesn't undercut its OWN line", () => {
+		const atList = buildSubmitVariants(
+			[row({ price: "45.00", promoPrice: "45.00" })],
+			null,
+		);
+		expect("issues" in atList).toBe(true);
+		if ("issues" in atList) {
+			expect(atList.issues).toEqual([
+				{
+					where: "row",
+					index: 0,
+					field: "promoPrice",
+					message: "A sale price has to be below this line's normal price.",
+				},
+			]);
+		}
+		const above = buildSubmitVariants(
+			[row({ price: "45.00", promoPrice: "50.00" })],
+			null,
+		);
+		expect("issues" in above).toBe(true);
+		if ("issues" in above) expect(above.issues[0].field).toBe("promoPrice");
+	});
+
+	it("names a sale price that isn't a number at all", () => {
+		const result = buildSubmitVariants(
+			[row({ price: "45.00", promoPrice: "half price" })],
+			null,
+		);
+		expect("issues" in result).toBe(true);
+		if ("issues" in result) {
+			expect(result.issues[0]).toMatchObject({ field: "promoPrice" });
+			expect(result.issues[0].message).toMatch(/numbers only/);
+		}
+	});
+
+	it("an inactive row's sale price is not policed — it sells nothing", () => {
+		const result = buildSubmitVariants(
+			[row({ active: false, price: "45.00", promoPrice: "99.00" })],
+			null,
+		);
+		expect("variants" in result).toBe(true);
+	});
+});

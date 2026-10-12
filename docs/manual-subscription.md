@@ -843,8 +843,8 @@ deleting any gate turns a test red):
 | `orders.getPaymentMethods` (the only source of bank/QR details) | `{ methods: [], gatewayAvailable: false, paymentsPaused: true }` — the numbers never leave the server |
 | `hitpay.createCheckout` | refused **before** reusing a still-fresh link |
 | `orders.claimPayment` / `generateOrderProofUploadUrl` | a NEW claim refused; an order claimed before the pause can still update its proof |
-| Receipt/invoice PDF (`receiptPdfInputs`) | an unpaid document prints a "Payments paused" block instead of "How to pay"; a paid receipt is unchanged |
-| Claim-link payment deadline | `commit` stamps none; `cancelUnpaidDueOrders` **lifts** a deadline that falls due during a pause instead of cancelling (a window the buyer can't pay inside is a trap) |
+| Receipt/invoice PDF (`receiptPdfInputs`) | an unpaid document's card is headed "Payment" with a "Payments paused" block instead of "How to pay", and the footer asks for no transfer reference; a paid receipt is unchanged |
+| Payment deadlines (claim links + capped flash sales' "pay within") | `orderClaims.commit` and `orders.create` stamp none; `cancelUnpaidDueOrders` **lifts** a deadline that falls due during a pause instead of cancelling (a window the buyer can't pay inside is a trap) |
 | WhatsApp confirm reply (legacy wa.me path) | the transfer-reference line becomes the paused line; the button reads "View order" |
 | `orders.get` (buyer read) | never carries `gatewayCheckoutUrl` — the raw URL would bypass every check above |
 
@@ -862,7 +862,11 @@ anti-scam line — *"Please don't pay the seller outside Kedaipal until then."*
   the summary column, beside the total — hidden for a free order.
 - **Order page**: the payment card's disabled "Payments paused" button + line,
   after the more specific holds (mockup, delivery charge, a HitPay return
-  being verified); the claim-link countdown hides.
+  being verified); the claim-link countdown hides, and the "Order placed" card
+  stops promising "how to pay" is here. While `getPaymentMethods` is still
+  loading the card shows a disabled "Checking payment options…", never the
+  Pay-now it would otherwise fall through to (it flashed a live Pay now on a
+  lapsed store before the paused state arrived — found by `/test-code`).
 - **Seller**: the past-due / comp-ended banner, the billing tab, the overdue
   and comp-ended emails (en/ms/zh), the lock error, and — the urgency lever —
   the **invoice reminder** email now warns that buyers won't be able to pay
