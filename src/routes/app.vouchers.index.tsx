@@ -129,13 +129,23 @@ function VouchersRoute() {
 	const vouchers = result?.vouchers ?? [];
 	const counts = result?.counts;
 	const issuingLocked = isVoucherIssuingLocked(retailer);
+	// The server's answer, not a re-derivation: `vouchers.list` asks the same
+	// `storeCanUseVouchers` the redemption doors ask, so the pill on a row and
+	// the refusal a buyer gets can never disagree (the admin-lock lesson).
+	const redemptionPaused = result?.paused ?? false;
 	// One reason, in the house priority (subscription outranks the grant,
 	// `useAreaLock` decides); the Pro gate speaks only when nothing locks.
 	const issueBlockedReason = areaLock.readOnly
 		? areaLock.reason
-		: issuingLocked
-			? "Issuing vouchers is part of the Pro plan — you can still share and void the codes you've already created."
-			: null;
+		: redemptionPaused
+			? // NOT "you can still share them": below Pro the codes don't
+				// redeem either, and telling a seller to keep sharing a dead code
+				// is how their buyer finds out at the till. State the pause, then
+				// the one lever they still have.
+				"Vouchers are part of the Pro plan. The codes you've issued are paused — buyers can't redeem them until you're back on Pro, and nothing is lost in the meantime. You can still void any you'd rather not honour."
+			: issuingLocked
+				? "Issuing vouchers is part of the Pro plan — you can still share and void the codes you've already created."
+				: null;
 
 	// Filter in memory, then group: a batch parent keeps counting the whole run
 	// even while a chip is showing one of its children.
@@ -273,6 +283,7 @@ function VouchersRoute() {
 								key={group.key}
 								group={group}
 								canWrite={!areaLock.readOnly}
+								paused={redemptionPaused}
 								onShare={(v) => setSharing(v)}
 								onVoid={(v) => setVoiding(v)}
 								onVoidBatch={(g) => setVoidingBatch(g)}
@@ -288,6 +299,7 @@ function VouchersRoute() {
 								key={group.key}
 								vouchers={[group.voucher]}
 								canWrite={!areaLock.readOnly}
+								paused={redemptionPaused}
 								onShare={(v) => setSharing(v)}
 								onVoid={(v) => setVoiding(v)}
 							/>

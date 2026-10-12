@@ -170,6 +170,55 @@ remove in the same 44px icon well a product line puts its trash in. The ticket
 then has **one** idea of "tap a line to change it", which is the grammar the
 item rows already taught.
 
+## The plan gate — and when the field even appears
+
+Two different questions, answered by two helpers in
+`convex/lib/voucherRedemption.ts`. They are easy to conflate and must not be:
+
+| Helper | Question | Used by |
+|---|---|---|
+| `storeCanUseVouchers` | **Could a code redeem here?** | the one shared resolve path, so every door agrees |
+| `storeShowsVoucherEntry` | **Should the field even render?** | the storefront payload + the counter panel |
+
+**The gate.** `storeCanUseVouchers` is `getAccess(...).features.vouchers` —
+the very predicate the seller's own `assertPlanFeature` reads, so the door a
+buyer knocks on and the door the seller issues from can never disagree. It
+takes no view of the *caller*: a buyer is anonymous, and a code must not
+redeem or refuse based on who is holding the phone. It sits inside
+`resolveVoucherForOrder`, which is what makes the storefront, the counter and
+the claim-at-send refuse identically; `claimVoucherState` carries it
+separately, because a frozen claim never goes back through that path.
+
+**The affordance.** `storeShowsVoucherEntry` is the gate **plus** "has this
+store ever issued one". A store that has issued nothing has no code for
+anyone to type, so the field could only ever refuse — a dead control on the
+surface we most want uncluttered. It is published as one derived bit,
+`acceptsVouchers`, beside `paymentsPaused` on the public store payload; never
+a count, never the plan.
+
+- **"Ever issued", not "has an ACTIVE voucher."** A live count would hide the
+  field at the worst possible moment: the buyer whose code was just voided
+  would find no input at all, instead of the honest "This voucher is no
+  longer valid" built for exactly that. It also leaks less — "this shop has
+  used vouchers at some point" says far less than "there is a live code out
+  there right now", which is what the rate limiter exists to protect.
+- **The affordance implies the gate, never the reverse.** A `?voucher=` link
+  reaches `orders.create` without passing the field, so hiding the control
+  can never be the whole answer — the door re-asks.
+
+**What the seller sees.** `vouchers.list` returns `paused`, and an `active`
+row then wears **Paused** instead of Active, under a line naming the reason
+and the one lever left (Void). The rows really are `active` — what changed is
+the store — so saying "Active" would be true of the data and a lie on screen:
+the seller would read Active, their buyer would be refused, and the seller
+would rightly blame us.
+
+**What the buyer sees.** `"This store isn't accepting vouchers right now."`
+Neutral, and it never mentions a plan: the store's billing arrangement is not
+its customer's business, and "they downgraded" invites a buyer to judge a
+shop for something between the shop and us. It mirrors the payments-paused
+copy, the house precedent for this exact shape.
+
 ## Guard rails
 
 - Redemption and the code-check endpoint are **rate-limited** (own bucket in
@@ -178,8 +227,12 @@ item rows already taught.
   deposits — and is clamped so the total never goes below zero. Minimum-order
   and free-delivery thresholds judge the *pre-discount* subtotal.
 - A voucher order still uses one credit (`recordOrderCreated` unchanged).
-- Pro-gated (decided 8 Oct): creating vouchers is a Pro capability; already
-  -issued history stays visible on a downgraded store.
+- **Pro-gated, and the gate follows a downgrade** (ticket left this open as
+  "needs Arif's call"; decided by Zaki 12 Oct). Issuing is Pro, and so is
+  **redeeming**: below Pro every door refuses with `store_ineligible`.
+  Nothing is destroyed — the rows stay `active`, the list and Void stay, and
+  re-upgrading makes every unspent code spendable again. See "The plan gate"
+  below.
 
 ## How it is built
 
@@ -284,9 +337,15 @@ file's own test).
   Redeeming at the counter needs `orders: write` only, so a front-desk helper
   can take a voucher without being able to mint one. Left off both team
   presets deliberately.
-- **The route is not plan-walled.** Issuing is the Pro capability; the LIST is
-  not, because a downgraded store still has outstanding codes it has to honour
-  and void. The gate lands on one button, with its reason beside it.
+- **The route is not plan-walled, but redemption is.** The LIST stays open on
+  a downgraded store — it still has codes to read and void — while every
+  redemption door refuses. The first build had redemption survive a downgrade,
+  on the reasoning that outstanding codes are promises already made. That was
+  wrong twice over: the ticket never settled plan gating (it says "needs
+  Arif's call"), and the sibling feature had already settled the shape —
+  `isPromoActive` folds the plan in, which is *"why a downgraded store's
+  storefront quietly sells at list while the config survives"*. A capability
+  that survives a downgrade is not one.
 - **Void refuses a redeemed voucher.** It has been spent and the order is the
   record; voiding one would imply the discount could be clawed back off a
   placed order. `voidBatch` therefore skips spent rows and names the skip

@@ -1,5 +1,12 @@
 import { Link } from "@tanstack/react-router";
-import { Ban, CalendarX, CheckCircle2, Share2, Ticket } from "lucide-react";
+import {
+	Ban,
+	CalendarX,
+	CheckCircle2,
+	PauseCircle,
+	Share2,
+	Ticket,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { VoucherKind, VoucherStatus } from "../../../convex/lib/vouchers";
@@ -48,6 +55,7 @@ export function VoucherList({
 	onShare,
 	onVoid,
 	canWrite,
+	paused = false,
 	/** Rendered nested under a batch parent: the card loses its own border and
 	 * tightens, so a run reads as ONE object rather than N floating cards. */
 	nested = false,
@@ -57,6 +65,14 @@ export function VoucherList({
 	onVoid: (voucher: VoucherRowView) => void;
 	/** A teammate with read-only on `vouchers` sees the book and no actions. */
 	canWrite: boolean;
+	/**
+	 * The STORE can't redeem right now (below the plan that carries vouchers,
+	 * `z8r3fdr617`). The rows are still `active` — true of the voucher, and
+	 * misleading on screen, so an active row wears "Paused" instead. Without
+	 * this the seller reads Active, their buyer is refused, and the seller
+	 * rightly blames us.
+	 */
+	paused?: boolean;
 	nested?: boolean;
 }) {
 	return (
@@ -86,7 +102,7 @@ export function VoucherList({
 									formatPrice(sen, voucher.currency),
 								)}
 							</span>
-							<StatusPill status={voucher.status} />
+							<StatusPill status={voucher.status} paused={paused} />
 						</div>
 						<p className="text-xs text-muted-foreground">
 							<OutcomeLine voucher={voucher} />
@@ -163,7 +179,22 @@ function OutcomeLine({ voucher }: { voucher: VoucherRowView }): ReactNode {
 	}
 }
 
-function StatusPill({ status }: { status: VoucherStatus }) {
+function StatusPill({
+	status,
+	paused = false,
+}: {
+	status: VoucherStatus;
+	paused?: boolean;
+}) {
+	// Only an ACTIVE row changes: a spent or voided code is unaffected by the
+	// store's plan, and relabelling those would overstate what the gate does.
+	if (paused && status === "active")
+		return (
+			<span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold text-muted-foreground">
+				<PauseCircle className="size-3" aria-hidden />
+				Paused
+			</span>
+		);
 	const look: Record<
 		VoucherStatus,
 		{ label: string; className: string; icon: ReactNode }

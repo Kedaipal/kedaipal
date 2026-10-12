@@ -254,6 +254,13 @@ export type VoucherRefusal =
 	| "expired"
 	| "voided"
 	| "redeemed"
+	/**
+	 * The STORE can't redeem vouchers right now — it has dropped below the
+	 * plan that carries the feature (`z8r3fdr617`). A property of the shop,
+	 * not of the code: the voucher row is still `active`, and re-upgrading
+	 * makes it spendable again, exactly as a promo price returns.
+	 */
+	| "store_ineligible"
 	| "already_on_order";
 
 /** The buyer- and seller-facing sentence for each refusal. One author, so the
@@ -279,6 +286,12 @@ export function voucherRefusalMessage(
 			return opts.usedOnOrder
 				? `This voucher was already used on ${opts.usedOnOrder}.`
 				: "This voucher has already been used.";
+		case "store_ineligible":
+			// Neutral, and it never mentions a plan: the store's billing is not
+			// the buyer's business, and "they downgraded" invites the buyer to
+			// judge a shop for something between the shop and us. Mirrors the
+			// payments-paused copy, the house precedent for this exact shape.
+			return "This store isn't accepting vouchers right now.";
 		case "already_on_order":
 			return "One voucher per order — remove the current one first.";
 	}

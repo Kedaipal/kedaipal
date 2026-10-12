@@ -298,6 +298,7 @@ function ActiveSession({
 			<BuildOrderScreen
 				retailerId={retailer._id}
 				sessionId={sessionId}
+				acceptsVouchers={session.acceptsVouchers}
 				buyer={{
 					displayName: session.displayName,
 					waPhone: session.waPhone,
@@ -1364,6 +1365,7 @@ function BuildOrderScreen({
 	currency,
 	country,
 	draft,
+	acceptsVouchers,
 	defaultClaimWindowMinutes,
 	defaultClaimSource,
 	onCreated,
@@ -1387,6 +1389,10 @@ function BuildOrderScreen({
 	 * offers (SG has no DuitNow/TnG/FPX). See lib/paymentMethod.ts. */
 	country: Country;
 	draft: SessionDraft | undefined;
+	/** Show the voucher field (`z8r3fdr617`) — false when the store is below
+	 * the plan carrying vouchers, or has never issued one, so no code the
+	 * seller could key would be accepted. */
+	acceptsVouchers: boolean;
 	/** Claim links (86eyq0epn): the store's remembered payment window. */
 	defaultClaimWindowMinutes: number | undefined;
 	/** Claim links: the store's remembered marketing origin (86eyq0eq9). */
@@ -2485,18 +2491,20 @@ function BuildOrderScreen({
 						    Both pay modes take one: ringing it up spends the code, and
 						    SEND freezes it into the claim beside the line prices — so a
 						    seller never has to work out which path honours it. */}
-						<div className="mb-3">
-							<VoucherField
-								retailerId={retailerId}
-								currency={currency}
-								itemSubtotal={itemsTotal}
-								applied={voucher}
-								onApply={setVoucher}
-								onRemove={() => setVoucher(null)}
-								initialCode={draftVoucherCode}
-								label="Add a voucher"
-							/>
-						</div>
+						{acceptsVouchers ? (
+							<div className="mb-3">
+								<VoucherField
+									retailerId={retailerId}
+									currency={currency}
+									itemSubtotal={itemsTotal}
+									applied={voucher}
+									onApply={setVoucher}
+									onRemove={() => setVoucher(null)}
+									initialCode={draftVoucherCode}
+									label="Add a voucher"
+								/>
+							</div>
+						) : null}
 						{voucherDiscount > 0 ? (
 							<div className="mb-1.5 flex items-center justify-between text-sm">
 								<span className="text-muted-foreground">Items</span>

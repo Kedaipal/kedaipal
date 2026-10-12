@@ -331,6 +331,7 @@ function CheckoutRoute() {
 						minOrderValue={retailer.minOrderValue}
 						pickupLocations={pickupLocations ?? []}
 						voucherCode={voucher}
+						acceptsVouchers={retailer.acceptsVouchers ?? false}
 						paymentsPaused={retailer.paymentsPaused}
 					/>
 				</div>

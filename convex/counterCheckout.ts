@@ -84,6 +84,7 @@ import {
 	claimVoucherState,
 	redeemVoucher,
 	resolveVoucherOrThrow,
+	storeShowsVoucherEntry,
 } from "./lib/voucherRedemption";
 import {
 	normalizeVoucherCode,
@@ -267,6 +268,10 @@ export const getCheckoutSession = query({
 		customer: { orderCount: number; totalSpent: number; lastOrderAt: number } | null;
 		// Autosaved in-progress order, so a resume restores the cart + selections.
 		draft: Doc<"counterCheckoutSessions">["draft"];
+		// Show the voucher field on this panel? (`z8r3fdr617`) Same bit the
+		// buyer's storefront uses, deliberately: the seller keying a code and
+		// the buyer typing one must not see different doors.
+		acceptsVouchers: boolean;
 		// A claim link that is still out (86eyq0epn). Non-null = this checkout is
 		// FROZEN: the screen renders the read-only "waiting on buyer" view and
 		// both edit mutations refuse. Carries the frozen snapshot rather than the
@@ -355,6 +360,7 @@ export const getCheckoutSession = query({
 			orderId: session.orderId,
 			customer,
 			draft: session.draft,
+			acceptsVouchers: await storeShowsVoucherEntry(ctx, session.retailerId),
 			liveClaim: claim
 				? {
 						claimId: claim._id,

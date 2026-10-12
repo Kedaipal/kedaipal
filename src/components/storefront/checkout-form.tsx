@@ -197,6 +197,13 @@ interface CheckoutPageProps {
 	/** The store is lapsed, so this order can't be paid yet (z8r3fdr6gg) —
 	 * the summary column says so before the buyer commits. */
 	paymentsPaused?: boolean;
+	/**
+	 * Render the voucher entry at all (`z8r3fdr617`). False for a store that
+	 * is below the plan carrying vouchers, or has never issued one — either
+	 * way no code the buyer could type would be accepted, and a control that
+	 * can only refuse does not belong on a checkout.
+	 */
+	acceptsVouchers?: boolean;
 }
 
 interface SanitizedDeliveryAddress {
@@ -283,6 +290,7 @@ export function CheckoutPage({
 	pickupLocations,
 	voucherCode,
 	paymentsPaused,
+	acceptsVouchers = false,
 }: CheckoutPageProps) {
 	// The route reserves exactly this bar's height as bottom padding — see the
 	// bar's own comment near the bottom of this component.
@@ -1677,16 +1685,18 @@ export function CheckoutPage({
 											voucherDiscount={previewDiscount(voucher, cart.total)}
 											voucherCode={voucher?.code}
 											voucherField={
-												<VoucherField
-													variant="receipt"
-													retailerId={retailerId}
-													currency={cart.currency}
-													itemSubtotal={cart.total}
-													applied={voucher}
-													onApply={setVoucher}
-													onRemove={() => setVoucher(null)}
-													initialCode={initialVoucherCode}
-												/>
+												acceptsVouchers ? (
+													<VoucherField
+														variant="receipt"
+														retailerId={retailerId}
+														currency={cart.currency}
+														itemSubtotal={cart.total}
+														applied={voucher}
+														onApply={setVoucher}
+														onRemove={() => setVoucher(null)}
+														initialCode={initialVoucherCode}
+													/>
+												) : null
 											}
 										/>
 									}

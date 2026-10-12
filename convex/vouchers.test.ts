@@ -987,6 +987,50 @@ describe("claim link", () => {
 		);
 	});
 
+	test("a claim sent on Pro drops its voucher once the store falls below", async () => {
+		// `claimVoucherState` is its OWN path — a frozen claim never goes back
+		// through `resolveVoucherForOrder` — so it carries the gate separately
+		// and needs its own proof. The buyer is told above the ticket before
+		// they fill the form, and the commit then charges what the page showed:
+		// the degrade-don't-refuse rule, now covering one more reason.
+		const t = setup();
+		const { token, retailer } = await claimWithVoucher(t);
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.first();
+			await ctx.db.patch(sub!._id, { plan: "starter", status: "active" });
+		});
+
+		const page = await t.query(api.orderClaims.getByToken, { token });
+		expect(page?.open?.voucher).toMatchObject({
+			kind: "dropped",
+			refusal: "store_ineligible",
+		});
+
+		const { shortId } = await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "delivery",
+			deliveryAddress: {
+				line1: "12 Jln Mawar",
+				city: "PJ",
+				state: "Selangor",
+				postcode: "47301",
+			},
+			fulfilmentDate: todayMytMidnight() + DAY_MS,
+		});
+		const order = await t.run((ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		// Full price, no voucher recorded — exactly what the page showed.
+		expect(order?.total).toBe(3000);
+		expect(order?.voucherDiscount).toBeUndefined();
+	});
+
 	test("a voucher spent elsewhere DROPS with a notice — never a dead end", async () => {
 		// The one door that doesn't refuse: the buyer followed a link and only
 		// the seller can issue another, so refusing would strand them. The page
@@ -1121,5 +1165,170 @@ describe("claimVoucherDiscount", () => {
 				3000,
 			),
 		).toBe(3000);
+	});
+});
+
+/**
+ * Vouchers are a PRO capability, and a capability that survives a downgrade
+ * is not one (`z8r3fdr617`, decided by Zaki 12 Oct after the ticket left plan
+ * gating open as "needs Arif's call").
+ *
+ * The sibling settled the shape first: `isPromoActive` folds the plan in,
+ * which "is why a downgraded store's storefront quietly sells at list while
+ * the config survives". Vouchers follow, so the two levers can't mean
+ * different things. Nothing is destroyed — the rows stay `active`, the seller
+ * keeps the list and keeps Void, and re-upgrading makes every unspent code
+ * spendable again.
+ */
+describe("the store's plan gates redemption", () => {
+	/** Drop the store to Starter — the one plan without `vouchers`. */
+	async function downgrade(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+	) {
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			if (!sub) throw new Error("no subscription row");
+			await ctx.db.patch(sub._id, { plan: "starter", status: "active" });
+		});
+	}
+
+	test("a code issued on Pro stops redeeming below it, and comes back on upgrade", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const { vouchers } = await asUser.mutation(api.vouchers.create, {
+			retailerId: retailer._id,
+			kind: "fixed",
+			value: 500,
+		});
+		const code = vouchers[0].code;
+
+		// On Pro the code is good.
+		expect(
+			await asUser.mutation(api.vouchers.checkCode, {
+				retailerId: retailer._id,
+				code,
+			}),
+		).toMatchObject({ ok: true });
+
+		await downgrade(t, retailer._id);
+
+		// Below it, the STORE is the reason — never the code, which is untouched.
+		expect(
+			await asUser.mutation(api.vouchers.checkCode, {
+				retailerId: retailer._id,
+				code,
+			}),
+		).toMatchObject({ ok: false, refusal: "store_ineligible" });
+		expect((await t.run((ctx) => ctx.db.get(vouchers[0].id)))?.status).toBe(
+			"active",
+		);
+
+		// Back on Pro and it spends again — the point of keeping the rows.
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.first();
+			await ctx.db.patch(sub!._id, { plan: "pro" });
+		});
+		expect(
+			await asUser.mutation(api.vouchers.checkCode, {
+				retailerId: retailer._id,
+				code,
+			}),
+		).toMatchObject({ ok: true });
+	});
+
+	test("the storefront order door refuses too — the field is not the gate", async () => {
+		// A `?voucher=` link reaches `orders.create` without passing the field,
+		// so hiding the control can never be the whole answer.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, 3000);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const { vouchers } = await asUser.mutation(api.vouchers.create, {
+			retailerId: retailer._id,
+			kind: "fixed",
+			value: 500,
+		});
+		await downgrade(t, retailer._id);
+
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ variantId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer: { name: "Aisyah", waPhone: "60123456789" },
+				deliveryAddress: {
+					line1: "12 Jln Mawar",
+					city: "PJ",
+					state: "Selangor",
+					postcode: "47301",
+				},
+				voucherCode: vouchers[0].code,
+			}),
+		).rejects.toThrow(/isn't accepting vouchers right now/i);
+	});
+
+	test("the seller's list says PAUSED rather than letting the rows read Active", async () => {
+		// The rows really are `active`; what changed is the store. If the list
+		// didn't say so, the seller would read Active, their buyer would be
+		// refused, and the seller would rightly blame us.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.vouchers.create, {
+			retailerId: retailer._id,
+			kind: "fixed",
+			value: 500,
+		});
+
+		const before = await asUser.query(api.vouchers.list, {
+			retailerId: retailer._id,
+		});
+		expect(before.paused).toBe(false);
+
+		await downgrade(t, retailer._id);
+		const after = await asUser.query(api.vouchers.list, {
+			retailerId: retailer._id,
+		});
+		expect(after.paused).toBe(true);
+		// Still listed, still active, still voidable — nothing is destroyed.
+		expect(after.vouchers[0].status).toBe("active");
+	});
+
+	/** `getRetailerBySlug` answers ok / redirect / notFound; the storefront bit
+	 * only exists on the first, so narrow before reading it. */
+	async function publicStore(t: ReturnType<typeof setup>, slug: string) {
+		const res = await t.query(api.retailers.getRetailerBySlug, { slug });
+		if (res.status !== "ok") throw new Error(`store not ok: ${res.status}`);
+		return res.retailer;
+	}
+
+	test("the checkout hides the field when no code could ever be typed", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+
+		// Pro, but nothing issued yet: no code exists, so the field would only
+		// ever refuse. (This is the case Zaki asked about first.)
+		expect((await publicStore(t, retailer.slug)).acceptsVouchers).toBe(false);
+
+		await asUser.mutation(api.vouchers.create, {
+			retailerId: retailer._id,
+			kind: "fixed",
+			value: 500,
+		});
+		expect((await publicStore(t, retailer.slug)).acceptsVouchers).toBe(true);
+
+		// Downgraded with codes outstanding: hidden, because none of them work.
+		await downgrade(t, retailer._id);
+		expect((await publicStore(t, retailer.slug)).acceptsVouchers).toBe(false);
 	});
 });

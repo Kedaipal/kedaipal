@@ -32,6 +32,7 @@ import { VoucherList, type VoucherRowView } from "./voucher-list";
 export function VoucherBatchCard({
 	group,
 	canWrite,
+	paused = false,
 	onShare,
 	onVoid,
 	onVoidBatch,
@@ -39,6 +40,9 @@ export function VoucherBatchCard({
 }: {
 	group: Extract<VoucherGroup<VoucherRowView>, { kind: "batch" }>;
 	canWrite: boolean;
+	/** The store can't redeem right now — passed straight to `VoucherList`,
+	 * which turns an active row's pill from Active to Paused. */
+	paused?: boolean;
 	onShare: (voucher: VoucherRowView) => void;
 	onVoid: (voucher: VoucherRowView) => void;
 	onVoidBatch: (
@@ -117,6 +121,7 @@ export function VoucherBatchCard({
 					<VoucherList
 						vouchers={group.vouchers}
 						canWrite={canWrite}
+						paused={paused}
 						onShare={onShare}
 						onVoid={onVoid}
 						nested

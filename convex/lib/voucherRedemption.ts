@@ -18,6 +18,7 @@
 import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
+import { getAccess } from "../subscriptions";
 import {
 	normalizeVoucherCode,
 	refusalForVoucher,
@@ -49,6 +50,73 @@ export type VoucherResolution =
  * `retailerId` is a real row that this store must not be able to spend, and
  * saying "not found" avoids confirming that it exists at all.
  */
+/**
+ * Can this STORE redeem a voucher right now? (`z8r3fdr617`)
+ *
+ * Vouchers are a Pro capability, and a capability that survives a downgrade
+ * is not one. The sibling feature already settled the shape: `isPromoActive`
+ * folds the plan in, which "is why a downgraded store's storefront quietly
+ * sells at list while the config survives" — the config is kept, the benefit
+ * is not. Vouchers follow, so the two levers can't mean different things.
+ *
+ * Deliberately a property of the SHOP, read through the same `getAccess` the
+ * seller's own `assertPlanFeature` uses, so the door a buyer knocks on and
+ * the door the seller issues from can never disagree. It takes no view of the
+ * caller — a buyer is anonymous, and a code must not redeem or refuse based
+ * on who is holding the phone.
+ *
+ * Nothing is destroyed: the rows stay `active`, the seller keeps the list and
+ * keeps Void, and re-upgrading makes every unspent code spendable again.
+ *
+ * KNOWN EDGE: `assertPlanFeature` lets an ADMIN issue past the gate (its
+ * white-glove bypass, keyed on the caller). A voucher minted that way for a
+ * store below Pro cannot be redeemed, because this door asks about the store.
+ * That is the right precedence — the shop's entitlement decides what its
+ * buyers get — but it means admin-issued codes on a Starter store are inert.
+ */
+export async function storeCanUseVouchers(
+	ctx: QueryCtx,
+	retailerId: Id<"retailers">,
+): Promise<boolean> {
+	return (await getAccess(ctx, retailerId)).features.vouchers;
+}
+
+/**
+ * Should a checkout show the voucher ENTRY at all? (`z8r3fdr617`)
+ *
+ * Two conditions, and they answer different questions:
+ *   1. `storeCanUseVouchers` — could a code redeem here? (the gate)
+ *   2. has this store ever issued one — could a code EXIST here?
+ *
+ * A store that has never issued a voucher has no code for anyone to type, so
+ * the field can only ever refuse; a store below Pro likewise. Showing it
+ * anyway puts a dead control on the buyer's checkout, which is the surface we
+ * most want uncluttered.
+ *
+ * "Ever issued" rather than "has an ACTIVE voucher" on purpose. A live count
+ * would hide the field at the worst possible moment — the buyer whose code
+ * was just voided would find no input at all, instead of the honest "This
+ * voucher is no longer valid" we built for exactly that. It also leaks less:
+ * "this shop has used vouchers at some point" says far less than "there is a
+ * live code out there right now", which is the thing the rate limiter exists
+ * to protect.
+ *
+ * The affordance implies the gate, never the reverse: anything this returns
+ * true for can redeem, but `resolveVoucherForOrder` still re-asks, because a
+ * `?voucher=` link reaches the door without passing the field.
+ */
+export async function storeShowsVoucherEntry(
+	ctx: QueryCtx,
+	retailerId: Id<"retailers">,
+): Promise<boolean> {
+	if (!(await storeCanUseVouchers(ctx, retailerId))) return false;
+	const anyVoucher = await ctx.db
+		.query("vouchers")
+		.withIndex("by_retailer_created", (q) => q.eq("retailerId", retailerId))
+		.first();
+	return anyVoucher !== null;
+}
+
 export async function resolveVoucherForOrder(
 	ctx: QueryCtx,
 	args: { retailerId: Id<"retailers">; code: string; now: number },
@@ -62,6 +130,12 @@ export async function resolveVoucherForOrder(
 		.unique();
 	if (!voucher || voucher.retailerId !== args.retailerId)
 		return { ok: false, refusal: "not_found" };
+
+	// Asked only once a real code for THIS store is in hand: an unknown code
+	// should cost a subscription read, and "not found" is the honest answer
+	// to it either way.
+	if (!(await storeCanUseVouchers(ctx, args.retailerId)))
+		return { ok: false, refusal: "store_ineligible" };
 
 	const refusal = refusalForVoucher(voucher, args.now);
 	if (refusal !== null) {
@@ -184,7 +258,12 @@ export async function claimVoucherState(
 			refusal: "voided",
 			message: voucherRefusalMessage("voided"),
 		};
-	const refusal = refusalForVoucher(voucher, now);
+	// A claim sent while the store was Pro, opened after it dropped: the
+	// discount is gone, and the page's `dropped` machinery is exactly how the
+	// buyer is told before they fill the form.
+	const refusal = (await storeCanUseVouchers(ctx, claim.retailerId))
+		? refusalForVoucher(voucher, now)
+		: ("store_ineligible" as const);
 	if (refusal !== null) {
 		const usedOnOrder =
 			refusal === "redeemed" && voucher.redeemedOrderId

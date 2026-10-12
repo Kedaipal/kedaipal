@@ -17,7 +17,10 @@ import {
 } from "./_generated/server";
 import { logAdminAction, requireRetailerAccess } from "./lib/auth";
 import { rateLimiter } from "./lib/rateLimiter";
-import { resolveVoucherForOrder } from "./lib/voucherRedemption";
+import {
+	resolveVoucherForOrder,
+	storeCanUseVouchers,
+} from "./lib/voucherRedemption";
 import {
 	generateVoucherCode,
 	isVoucherExpired,
@@ -121,7 +124,21 @@ export const list = query({
 	handler: async (
 		ctx,
 		{ retailerId },
-	): Promise<{ vouchers: VoucherRow[]; counts: VoucherCounts }> => {
+	): Promise<{
+		vouchers: VoucherRow[];
+		counts: VoucherCounts;
+		/**
+		 * The store is below the plan that carries vouchers, so none of these
+		 * codes can be redeemed right now (`z8r3fdr617`).
+		 *
+		 * The list has to be told, because the rows stay `active` — which is
+		 * TRUE of the voucher and misleading on screen: without this the
+		 * seller reads "Active", their buyer is refused, and the seller
+		 * rightly blames us. A constraint is surfaced, never enforced
+		 * silently.
+		 */
+		paused: boolean;
+	}> => {
 		await requireRetailerAccess(ctx, retailerId, {
 			area: "vouchers",
 			level: "read",
@@ -144,6 +161,7 @@ export const list = query({
 		return {
 			vouchers: await Promise.all(all.map((vo) => toRow(ctx, vo, now))),
 			counts,
+			paused: !(await storeCanUseVouchers(ctx, retailerId)),
 		};
 	},
 });
