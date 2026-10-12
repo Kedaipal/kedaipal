@@ -42,7 +42,7 @@ product, plan, now, unitsLeft)`. Every order door calls it:
 | Door | Note |
 |---|---|
 | `orders.create` | Freezes `price` + `listPrice` + `promoRunId`; runs the cap, max-per-order and price-changed guards |
-| `counterCheckout.createOrderFromSession` | Defaults to the effective price; a seller price adjustment overrides it and is **not** a promo sale |
+| `counterCheckout.createOrderFromSession` | Defaults to the effective price; a seller price adjustment overrides it and is **not** a promo sale. Counts against the cap, but deliberately does **not** enforce `maxPerOrder` — the seller is standing there, and a per-order limit exists to stop one online buyer clearing the pool, not to argue with the person at the counter |
 | `orderClaims.sendClaim` | Locks the sale price at send; the unit counts against the pool at **commit** (the price-lock rule wins) |
 | `bookings.requestBooking` | Nightly/package rate only — no flash mechanics (capacity already caps a stay); the weekend surcharge keeps its own rate |
 
@@ -99,20 +99,34 @@ Starter can always switch a promotion off. A promotion on a downgraded store
 is *paused*, not deleted — `effectivePrice` returns the list price and the
 storefront publishes no `promoState` at all.
 
-**The wizard deliberately offers no promotion.** Creating a product and
-merchandising it are different jobs; it sends `promo: null` and the full form
-is one tap away.
+**The wizard offers the promotion too**, as a collapsed optional block at the
+foot of its Price step — not a step of its own. The first cut left it out on
+the reasoning that creating a product and merchandising it are different jobs,
+which read fine on paper and badly in practice: a seller setting up a flash
+sale had to create the product, leave the wizard, reopen it in the full form
+and set the promotion there, for a feature whose whole point is being quick
+off the mark. It validates through the same `promoDraftIssue` at the step that
+owns it and submits through the same `promoSubmitValue`, so there is one
+author for the rules and the wizard cannot drift from the form.
 
 ## What the buyer sees
 
 `productWithVariants` publishes a buyer-safe `promoState` (`phase`, `label`,
-`startsAt`, `endsAt`, `unitCap`, `unitsLeft`, `maxPerOrder`) plus
-`promoPriceFrom`, and **strips every `promoPrice`** when the promotion can't
-apply — so the storefront can never show a sale the order doors would refuse.
+`startsAt`, `endsAt`, `unitCap`, `unitsLeft`, `maxPerOrder`,
+`payWithinMinutes`) plus `promoPriceFrom`, and **strips every `promoPrice`**
+when the promotion can't apply — so the storefront can never show a sale the order doors would refuse.
 The raw config stays owner-only.
 
 `src/lib/promo.ts` is the storefront half. It re-derives nothing; it owns the
-**clock**, so a page left open stops quoting a sale the moment the window
+**clock at BOTH ends** — `phase` is a server read and nothing writes at
+`startsAt` or `endsAt`, so a Convex subscription has no reason to re-run at
+either boundary. A page sitting on a teaser therefore flips to the sale price
+on its own clock at `startsAt` (`promoTeasing` / `promoLive`), which is why
+`promoPriceFrom` is published for a scheduled run and not only a live one.
+Only the close was handled at first; the open was missing, and the buyer the
+teaser had told to wait watched the countdown hit zero, still saw the list
+price, ordered, and hit a refusal their client could neither explain nor
+clear (PR #350 review). It stops quoting a sale the moment the window
 shuts. `usePromoClock` ticks only while there is a deadline to watch.
 
 - **Cards** carry the whole sale story *on the image* — badge, countdown,

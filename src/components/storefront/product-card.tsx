@@ -20,6 +20,7 @@ import {
 	effectivePriceFrom,
 	promoLive,
 	promoPercentOff,
+	promoTeasing,
 } from "../../lib/promo";
 import { cn } from "../../lib/utils";
 import { hasStartingPrice, minQuantityUnreachable } from "../../lib/variant";
@@ -162,7 +163,7 @@ export function ProductCard({
 	const percentOff = saleOn
 		? promoPercentOff(product.priceFrom, salePriceFrom)
 		: null;
-	const teasing = product.promoState?.phase === "scheduled";
+	const teasing = promoTeasing(product.promoState, promoClock);
 	const promoEndsAt = product.promoState?.endsAt;
 	const promoStartsAt = product.promoState?.startsAt;
 	const countdownAt = teasing

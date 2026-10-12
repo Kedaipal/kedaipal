@@ -1,5 +1,5 @@
 import { Clock, type LucideIcon, Scissors } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
 	type CountdownStage,
 	countdownStage,
@@ -32,12 +32,19 @@ import { cn } from "../../lib/utils";
  * expiry; `orders.create` re-resolves promo prices).
  */
 
-/** Paper falling open behind the blades: a wedge that widens as it travels. */
+/** Paper falling open behind the blades: a wedge that widens as it travels.
+ *
+ * It opens WIDER than the print is tall — roughly 70% of the strip at the far
+ * end against ~14px of type in a 40px band. That is not a styling nicety: the
+ * ghost figures lie on the opening and are inked for it, so a wedge the height
+ * of the text leaves the tops and tails of the glyphs stranded on the paper
+ * either side, and the word reads as a smear half-scrubbed out (measured, 9
+ * Oct). Cut paper falls apart; it does not part by a hairline. */
 const WEDGE_CUTTING =
-	"polygon(0 50%, 18% 46%, 38% 42%, 62% 38%, 82% 35%, 100% 32%, 100% 68%, 82% 65%, 62% 62%, 38% 58%, 18% 54%)";
+	"polygon(0 50%, 8% 38%, 20% 28%, 40% 21%, 70% 18%, 100% 16%, 100% 84%, 70% 82%, 40% 79%, 20% 72%, 8% 62%)";
 /** Fully cut: both halves hang open across the whole strip. */
 const WEDGE_DONE =
-	"polygon(0 42%, 18% 39%, 38% 36%, 62% 34%, 82% 33%, 100% 32%, 100% 68%, 82% 67%, 62% 66%, 38% 64%, 18% 61%, 0 58%)";
+	"polygon(0 30%, 18% 25%, 38% 21%, 62% 18%, 82% 17%, 100% 16%, 100% 84%, 82% 83%, 62% 82%, 38% 79%, 18% 75%, 0 70%)";
 
 /** Figures + icon colour per stage, on the fixed-dark paper (see the
  * `--countdown-*` comment in styles.css for why the surface never flips). */
@@ -100,14 +107,35 @@ export function CountdownStrip({
 	className?: string;
 }) {
 	const [now, setNow] = useState(() => Date.now());
+	// The clock STOPS at the deadline. Left running it re-rendered the whole
+	// strip every second forever on a surface that had nothing left to count,
+	// and — because `remaining` changes on every tick — it also re-fired the
+	// effect below once a second, for as long as the strip stayed mounted.
+	// Keyed on `expiresAt` so a strip handed a new deadline (another claim, a
+	// second sale) re-arms instead of staying frozen.
 	useEffect(() => {
-		const timer = setInterval(() => setNow(Date.now()), 1000);
+		setNow(Date.now());
+		if (Date.now() >= expiresAt) return;
+		const timer = setInterval(() => {
+			const t = Date.now();
+			setNow(t);
+			if (t >= expiresAt) clearInterval(timer);
+		}, 1000);
 		return () => clearInterval(timer);
-	}, []);
+	}, [expiresAt]);
 	const remaining = expiresAt - now;
+	// EXACTLY ONCE per deadline. `onExpired` is how the claim page hands over
+	// to its expired state; the claim's own handler happens to be idempotent,
+	// but this is a shared component and the next consumer inherits whatever
+	// it does here — "at least once a second" is not a contract to hand out.
+	// Keyed on the deadline rather than a bare boolean so a NEW deadline that
+	// is already past still fires.
+	const firedFor = useRef<number | null>(null);
 	useEffect(() => {
-		if (remaining <= 0) onExpired?.();
-	}, [remaining, onExpired]);
+		if (remaining > 0 || firedFor.current === expiresAt) return;
+		firedFor.current = expiresAt;
+		onExpired?.();
+	}, [remaining, expiresAt, onExpired]);
 
 	// A malformed/absent window resolves to "no time left" rather than a NaN
 	// width React would drop (which would render a fully SEALED strip — the
@@ -166,12 +194,14 @@ export function CountdownStrip({
 				data-testid="countdown-cut"
 				data-stage={stage}
 				className={cn(
-					// The opening is a VOID, not the page showing through: on paper
-					// this dark the literal reading (a white gap) would be a bright
-					// wedge growing across the chrome, louder than the figures it is
-					// supposed to be revealing. Plain black at 35% keeps the band one
-					// object and lets the blades and the dash carry the motion.
-					"absolute inset-y-0 right-0 bg-black/35 shadow-[inset_0_1px_5px_rgba(0,0,0,0.45)]",
+					// The opening is a VOID (the navy), not the page showing through:
+					// the literal reading — a white gap — would be a bright wedge
+					// growing across the chrome, louder than the figures it is meant
+					// to be revealing. It is a TOKEN rather than black-at-opacity
+					// because opacity over the paper is what made the first dark pass
+					// unreadable: the two were within a few points of lightness and
+					// the tear disappeared. A fixed pair can be checked.
+					"absolute inset-y-0 right-0 bg-countdown-cut shadow-[inset_0_1px_5px_rgba(0,0,0,0.5)]",
 					ANIMATE,
 				)}
 				style={{
@@ -208,14 +238,27 @@ export function CountdownStrip({
 					style={{ left: done ? "0%" : sealedPct }}
 					aria-hidden
 				>
+					{/* Light blades with a dark halo: they ride the boundary, so at
+					    any moment half of them is on the navy paper and half on the
+					    light opening. A single flat colour disappears into one side
+					    or the other; the halo buys legibility on both. */}
 					<Scissors
 						className={cn(
-							"size-5 -scale-x-100",
-							done ? "text-countdown-ink/50" : "text-countdown-ink",
+							"size-5 -scale-x-100 [filter:drop-shadow(0_0_1.5px_rgba(8,13,26,0.9))]",
+							done ? "text-countdown-ink/60" : "text-countdown-ink",
 						)}
 					/>
 				</div>
 			</div>
+			{/* Cut clean through: the crisp layer is gone and every remaining
+			    layer is decorative, so without this a screen reader gets an
+			    empty strip while sighted users still read "0:00". The live
+			    consumers all unmount at the deadline, which is why nobody has
+			    hit it — but `onExpired` is optional and this component is
+			    shared, so the next one to leave it mounted would. */}
+			{done ? (
+				<span className="sr-only">{`${label} ${digits} — ended`}</span>
+			) : null}
 			{/* Crisp on the sealed half — the one layer screen readers get. */}
 			{done ? null : (
 				<div

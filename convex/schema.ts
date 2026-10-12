@@ -1484,6 +1484,15 @@ export default defineSchema({
 		// one funded order makes a buyer known for good. Absent = visible (every
 		// customer from before the gate).
 		firstOrderCreditSeq: v.optional(v.number()),
+		// The order that created this record was cancelled while GATED, so this
+		// buyer has never been paid for (Credits T3.1, 9 Oct 2026). Same reason as
+		// `orders.neverFunded`: the refund advances the watermark past
+		// `firstOrderCreditSeq`, which would otherwise reveal the name and phone
+		// of a buyer the seller never bought sight of. CLEARED when the buyer
+		// orders again — `linkOrderToCustomer` re-points `firstOrderCreditSeq` at
+		// the new order, so that order's own funding decides, and a returning
+		// buyer who pays is visible again.
+		neverFunded: v.optional(v.boolean()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
@@ -2232,6 +2241,25 @@ export default defineSchema({
 		// was deliberately kept — the gate fails open, see
 		// `orderCreditFunded`). Never rewritten: an order's position is for life.
 		creditSeq: v.optional(v.number()),
+		// This order's credit was NEVER paid for, and the order is over (Credits
+		// T3.1, 9 Oct 2026). Stamped when a GATED order is cancelled and its
+		// credit refunded.
+		//
+		// It exists because `fundedThrough` is a WATERMARK and a watermark cannot
+		// express "this position is spent but this order stays closed". The
+		// refund is a credit landing, so it advances the watermark one position —
+		// and when the cancelled order held the oldest unfunded position, the
+		// watermark passes its own `creditSeq` and every seller surface un-redacts
+		// it. That handed back the buyer's name, phone, items and tracking token
+		// for an order the seller paid nothing for: the manual-settlement bypass
+		// the whole gate exists to prevent, on demand and repeatable.
+		//
+		// So the gate is `neverFunded === true || creditSeq > fundedThrough`. The
+		// watermark still advances (no dead position left to eat a later credit,
+		// and the next LIVE order opens as it should); this keeps the dead one
+		// closed for good. Absent = judged by the watermark alone, which is every
+		// order that was never cancelled while gated.
+		neverFunded: v.optional(v.boolean()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
@@ -3141,8 +3169,10 @@ export default defineSchema({
 			v.object({ periodKey: v.string(), count: v.number() }),
 		),
 		// When the TOTAL balance last fell to 0 or below; cleared when it rises
-		// above 0. A fact about the balance, not a lock: comped and admin stores
-		// carry it too and are never locked (the seller-lock gate decides).
+		// above 0. A fact about the balance, not a lock — the per-order gate
+		// decides what is actually held. An UNMETERED store (admin-owned or
+		// comped, z8r3fdrph7) never reaches here at all: it takes no debits, so
+		// a legacy row's stamp just sits where the comp found it.
 		exhaustedAt: v.optional(v.number()),
 		// How many order debits this store has ever taken (Credits T3.1,
 		// z8r3fdmg4h). Monotonic, never reset by a period boundary — it is a

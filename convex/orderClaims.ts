@@ -200,6 +200,7 @@ async function freezeClaimLines(
 										productId: variant.productId,
 										runId: promo.runId,
 										startsAt: promo.startsAt ?? 0,
+										endsAt: promo.endsAt,
 									}),
 								)
 							: undefined;
@@ -1320,8 +1321,9 @@ export const expireStaleClaims = internalMutation({
 /**
  * Daily purge: DELETE dead claims (expired / cancelled) past the retention
  * window — they hold buyer PII (phone + name) and serve no further purpose.
- * Completed claims are kept (they link to an order; order retention is the
- * PDPA pack's job). Mirrors counterCheckout.purgeStaleSessions.
+ * Completed claims are kept (they link to an order); account deletion is what
+ * erases those, via the `orderClaims` phase in lib/accountDeletion.ts. Mirrors
+ * counterCheckout.purgeStaleSessions.
  */
 export const purgeStaleClaims = internalMutation({
 	args: {

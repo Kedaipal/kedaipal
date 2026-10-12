@@ -20,10 +20,17 @@ export function holdsPromoUnits(status: Doc<"orders">["status"]): boolean {
 }
 
 /**
- * Units already sold under one promo run. Bounded read: `by_retailer` from
- * the run's `startsAt` (sanitizePromo guarantees a capped promo has one), so
- * the scan covers one seller's orders inside the sale window — cheap enough
- * for the public storefront read that shows units left.
+ * Units already sold under one promo run. Bounded read: `by_retailer` across
+ * the run's window — from `startsAt` (sanitizePromo guarantees a capped promo
+ * has one) to `endsAt` where there is one — so the scan covers one seller's
+ * orders inside the sale, cheap enough for the public storefront read that
+ * shows units left.
+ *
+ * The right-hand bound is free correctness-wise: an order created after the
+ * window shut cannot carry this run's `promoRunId`, because the doors won't
+ * price at the sale price any more. Without it the range stayed open and a
+ * sale that is still "live" kept re-reading an order history that grows for
+ * as long as the shop trades.
  *
  * Counts `items[].quantity` where the line's frozen `promoRunId` matches:
  * product-level, summed across variants (the cap's mental model), and only
@@ -38,13 +45,20 @@ export async function tallyPromoUnits(
 		productId: Id<"products">;
 		runId: string;
 		startsAt: number;
+		/** Absent for an open-ended sale — see the note on the caller. */
+		endsAt?: number;
 	},
 ): Promise<number> {
 	const inWindow = await ctx.db
 		.query("orders")
-		.withIndex("by_retailer", (q) =>
-			q.eq("retailerId", args.retailerId).gte("_creationTime", args.startsAt),
-		)
+		.withIndex("by_retailer", (q) => {
+			const from = q
+				.eq("retailerId", args.retailerId)
+				.gte("_creationTime", args.startsAt);
+			return args.endsAt === undefined
+				? from
+				: from.lte("_creationTime", args.endsAt);
+		})
 		.collect();
 
 	let taken = 0;

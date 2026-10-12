@@ -194,3 +194,96 @@ describe("a long window reads as hours, not hundreds of minutes", () => {
 		expect(print().getByText("9:05")).toBeTruthy();
 	});
 });
+
+/**
+ * Both raised as non-blocking FYIs on the PR #348 review, and both real. The
+ * live consumers happen to be immune — the claim page swaps on `onExpired`,
+ * and z8r3fdcw72's two band mounts unmount the moment the deadline passes and
+ * pass no `onExpired` at all — but this is a shared exported component with an
+ * OPTIONAL `onExpired`, so the next consumer to leave it mounted inherits both.
+ */
+describe("what an expired strip owes its consumer", () => {
+	test("onExpired fires ONCE, not once a second", () => {
+		vi.useFakeTimers();
+		const onExpired = renderBar(1500);
+		act(() => {
+			vi.advanceTimersByTime(2000);
+		});
+		expect(onExpired).toHaveBeenCalledTimes(1);
+
+		// Ten more seconds of sitting on an expired strip must stay at one.
+		act(() => {
+			vi.advanceTimersByTime(10_000);
+		});
+		expect(onExpired).toHaveBeenCalledTimes(1);
+	});
+
+	test("…and a parent that re-renders with an inline callback can't re-fire it", () => {
+		vi.useFakeTimers();
+		// The effect depends on `onExpired`, so an inline arrow — the common
+		// way to write this — hands it a new identity on every parent render
+		// and re-runs it. Stopping the clock does NOT cover this case: the
+		// deadline guard is what does, and without it each parent render past
+		// zero is another call.
+		const spy = vi.fn();
+		const expiresAt = Date.now() - 1000;
+		const Parent = () => (
+			<ClaimTimerBar
+				expiresAt={expiresAt}
+				windowMinutes={WINDOW_MIN}
+				onExpired={() => spy()}
+			/>
+		);
+		const { rerender } = render(<Parent />);
+		expect(spy).toHaveBeenCalledTimes(1);
+
+		rerender(<Parent />);
+		rerender(<Parent />);
+		expect(spy).toHaveBeenCalledTimes(1);
+	});
+
+	test("a NEW deadline re-arms it — the guard is per-deadline, not once ever", () => {
+		vi.useFakeTimers();
+		const onExpired = vi.fn();
+		const now = Date.now();
+		const { rerender } = render(
+			<ClaimTimerBar
+				expiresAt={now - 1000}
+				windowMinutes={WINDOW_MIN}
+				onExpired={onExpired}
+			/>,
+		);
+		expect(onExpired).toHaveBeenCalledTimes(1);
+
+		// Same component, a different claim that is also already past.
+		rerender(
+			<ClaimTimerBar
+				expiresAt={now - 500}
+				windowMinutes={WINDOW_MIN}
+				onExpired={onExpired}
+			/>,
+		);
+		expect(onExpired).toHaveBeenCalledTimes(2);
+	});
+
+	test("the clock stops at the deadline instead of ticking forever", () => {
+		vi.useFakeTimers();
+		renderBar(2000);
+		act(() => {
+			vi.advanceTimersByTime(3000);
+		});
+		// Nothing left to count: no pending interval should remain, so a strip
+		// parked on an expired page stops re-rendering every second.
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	test("a fully cut strip still says something to a screen reader", () => {
+		vi.useFakeTimers();
+		renderBar(-5000);
+		// The crisp layer is gone and every other layer is aria-hidden, so
+		// without this a screen reader gets an empty band while sighted users
+		// read "0:00".
+		expect(screen.queryByTestId("countdown-print")).toBeNull();
+		expect(screen.getByText(/0:00 — ended/)).toBeTruthy();
+	});
+});

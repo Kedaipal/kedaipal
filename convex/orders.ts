@@ -1244,6 +1244,7 @@ export const create = mutation({
 										// sanitizePromo guarantees a capped run has a
 										// concrete start; 0 is a never-reached fallback.
 										startsAt: promo.startsAt ?? 0,
+										endsAt: promo.endsAt,
 									}),
 								)
 							: undefined;

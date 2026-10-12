@@ -96,7 +96,11 @@ covers general order-on-behalf: phone orders, DM quotes, repeat customers.
   second its own countdown hits zero, and a 5-min cron
   (`expireStaleClaims`) keeps the status buckets true. Dead claims
   (expired/cancelled) hold buyer PII and are purged after ~30 days
-  (`purgeStaleClaims`); completed claims are kept (they link to an order).
+  (`purgeStaleClaims`); completed claims are kept (they link to an order) and
+  are erased with the seller's account by the `orderClaims` phase of the
+  deletion cascade ([`docs/account-deletion.md`](./account-deletion.md)) —
+  nothing else deletes one, so that phase is what keeps "kept" from meaning
+  "forever".
 
 ## How the timer works, mechanically (dev)
 
@@ -457,7 +461,30 @@ outcome.
   when the paper was white and the ink dark, where fading reads as a
   smudge; on dark it reads as erased, and the final minute's red clock
   vanished. Misregistering print doesn't thin ink — the dirt is offset,
-  shear and blur. **40px tall**, not 56: as a page-top band under a 65px
+  shear and blur.
+  **The opening is a GENTLE LIFT off the paper** (`--countdown-cut`, ~11
+  points of lightness) and the SHAPE carries the tear, not the brightness.
+  That ratio is the whole trick and it took three wrong turns to find: what
+  made the bright strip work was never a strong paper-vs-opening contrast,
+  it was that the ink contrasted hard with BOTH grounds, so the tear read
+  as a tonal shift while the words stayed solid across it. Crank the two
+  grounds apart instead — a darker opening, a mid one, then a properly
+  light one were all tried — and the ink is forced either to fail on one
+  side or to change colour halfway through a word. One light ink, one ramp,
+  everywhere. The wedge opens WIDER THAN THE PRINT IS TALL and springs open
+  fast behind the blades rather than tapering evenly, because the figures
+  sit mid-band: a narrow or slowly-widening opening strands the tops and
+  tails of the glyphs on the paper either side and the word reads as a
+  smear half-scrubbed out.
+  **Contract for any consumer:** `onExpired` fires **exactly once per
+  deadline** (guarded on the deadline, not a bare flag, so a strip handed a
+  new already-past deadline still fires), the clock **stops** at zero rather
+  than re-rendering a finished strip every second, and the fully-cut state
+  carries an `sr-only` "… — ended" because every visible layer at that point
+  is `aria-hidden`. Today's consumers all unmount at the deadline and the
+  claim page's handler is idempotent, so none of the three is load-bearing
+  yet — they are the contract the next consumer inherits (raised as FYIs on
+  the PR #348 review). **40px tall**, not 56: as a page-top band under a 65px
   store header it has to read as a strip of tape across a header, not as a
   second one. Figures use `formatTimeLeft`, which rolls to "10h 36m" above
   the hour — a promotion can run for a day, and the raw `m:ss` primitive

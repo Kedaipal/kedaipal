@@ -18,6 +18,9 @@ export type PromoState = {
 	unitCap?: number;
 	unitsLeft?: number;
 	maxPerOrder?: number;
+	/** Minutes a flash order has to be paid before the cron releases it. The
+	 * buyer must be told at the point of commitment, not on the track page. */
+	payWithinMinutes?: number;
 };
 
 export type PromoVariantLike = { price: number; promoPrice?: number };
@@ -28,11 +31,36 @@ export type PromoProductLike = {
 	promoPriceFrom?: number;
 };
 
-/** Is the sale price in force right now? False for a scheduled teaser (the
- * drop hasn't opened), and false the instant the window closes under an open
- * page. */
+/** Has the drop not opened yet? Clock-aware, so a page sitting on the teaser
+ * stops teasing the moment the sale starts — `phase` is a server read and
+ * NOTHING writes at `startsAt`, so waiting for it to change means waiting for
+ * an unrelated write. */
+export function promoTeasing(
+	state: PromoState | undefined,
+	now: number,
+): boolean {
+	if (!state || state.phase !== "scheduled") return false;
+	return state.startsAt === undefined || now < state.startsAt;
+}
+
+/** Is the sale price in force right now? False before the drop opens, and
+ * false the instant the window closes under an open page.
+ *
+ * Both ends are judged on the CLIENT's clock, and that symmetry is the point.
+ * `phase` is computed server-side at read time and Convex only re-runs a
+ * subscription when DATA changes — nothing writes at `startsAt`, so a page
+ * open across the drop would otherwise sit on `"scheduled"` indefinitely:
+ * band gone, badge and price still at list, Add to cart still quoting list.
+ * Order from that state and the door resolves the SALE price, `expectedSubtotal`
+ * mismatches, and the refusal is unrecoverable — the client compares against
+ * its own stale "not on sale" view, finds nothing to reprice, and every
+ * resubmit is refused the same way until a reload. The close was already
+ * handled here; the open is the missing half. */
 export function promoLive(state: PromoState | undefined, now: number): boolean {
-	if (!state || state.phase !== "live") return false;
+	if (!state) return false;
+	if (state.phase === "scheduled") {
+		if (promoTeasing(state, now)) return false;
+	} else if (state.phase !== "live") return false;
 	if (state.endsAt !== undefined && now >= state.endsAt) return false;
 	// A capped sale sold out while the page was open: the server stops
 	// publishing a sale price on the next read, but until then the count it

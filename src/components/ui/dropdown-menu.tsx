@@ -28,6 +28,20 @@ function DropdownMenuGroup({
 	);
 }
 
+/**
+ * A menu taller than the space below its trigger must SCROLL, never be clipped.
+ * Radix measures that space and exposes it as
+ * `--radix-dropdown-menu-content-available-height`; without a cap it lays the
+ * menu out at full height, collision handling slides it up until the first
+ * items sit above the viewport, and the bare `overflow-hidden` this used to
+ * carry hid BOTH axes — so there was nothing to scroll back to. Reported on the
+ * admin Sellers "Manage" menu, whose seven described items overflow a laptop
+ * window: "Open store" was unreachable.
+ *
+ * The cap and the scroll travel together — either alone is the bug. Same fix,
+ * same reasoning as DialogContent (PR #273); see `dialog.test.tsx`. The x-axis
+ * stays hidden because it is what keeps the rounded corners clipping.
+ */
 function DropdownMenuContent({
 	className,
 	align = "end",
@@ -41,7 +55,7 @@ function DropdownMenuContent({
 				align={align}
 				sideOffset={sideOffset}
 				className={cn(
-					"z-50 min-w-56 origin-(--radix-dropdown-menu-content-transform-origin) overflow-hidden rounded-xl bg-popover p-1.5 text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-hidden duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+					"z-50 max-h-(--radix-dropdown-menu-content-available-height) min-w-56 origin-(--radix-dropdown-menu-content-transform-origin) overflow-y-auto overflow-x-hidden rounded-xl bg-popover p-1.5 text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-hidden duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
 					className,
 				)}
 				{...props}

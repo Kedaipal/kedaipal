@@ -7,7 +7,7 @@ import { usePromoClock } from "../../hooks/usePromoClock";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { bookingPriceSuffix, weekendRateSuffix } from "../../lib/booking-dates";
 import { formatPrice } from "../../lib/format";
-import type { PromoState } from "../../lib/promo";
+import { type PromoState, promoTeasing } from "../../lib/promo";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { CountdownBand } from "../ui/countdown-strip";
@@ -482,7 +482,7 @@ function ProductPromoBand({
 	const state = product.promoState;
 	const clock = usePromoClock(state);
 	if (!state) return null;
-	const teasing = state.phase === "scheduled";
+	const teasing = promoTeasing(state, clock);
 	const deadline = teasing ? state.startsAt : state.endsAt;
 	if (deadline === undefined || deadline <= clock) return null;
 	// What the cut measures against: the whole sale while it runs, and — for a

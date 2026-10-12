@@ -308,6 +308,20 @@ export async function linkOrderToCustomer(
 		// subsequent refreshWaProfileName call (in the same WhatsApp confirm
 		// flow) would otherwise fill in — checkout name beats raw pushname.
 		const name = existing.name ?? seedName;
+		// Credits (T3.1): a buyer whose record was closed because their only
+		// order was cancelled while gated (`neverFunded`) gets a fresh start
+		// here. Re-point `firstOrderCreditSeq` at THIS order and drop the
+		// stamp, so the new order's own funding decides whether they are
+		// visible — a returning buyer who is paid for must not stay hidden by
+		// a cancellation months ago, and one whose new order is also gated
+		// stays hidden on that order's own merit.
+		const reopened =
+			existing.neverFunded === true
+				? {
+						neverFunded: undefined,
+						firstOrderCreditSeq: (await ctx.db.get(args.orderId))?.creditSeq,
+					}
+				: {};
 		await ctx.db.patch(existing._id, {
 			name,
 			orderCount: existing.orderCount + 1,
@@ -320,6 +334,7 @@ export async function linkOrderToCustomer(
 				waPhone: existing.waPhone,
 			}),
 			updatedAt: now,
+			...reopened,
 		});
 		customerId = existing._id;
 	} else {

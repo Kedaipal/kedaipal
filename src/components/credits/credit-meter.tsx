@@ -50,9 +50,12 @@ const TONE_BAR: Record<CreditTone, string> = {
  * (`full`, with the two balances, the rules and the top-up). Reads
  * `credits.getBalance`, gated on the Credits permission — a teammate without
  * it sees nothing here (the lock itself still reaches them via the banner).
- * Null ALSO means the store is unmetered (an admin's own store, z8r3fdp4er),
- * which is how both meters disappear from it: one read answers "does this
- * store have credits at all?" and every credit surface follows that answer.
+ * Null ALSO means the store is UNMETERED — an admin's own store (z8r3fdp4er)
+ * or a SPONSORED one (z8r3fdrph7) — which is how both meters disappear from
+ * it: one read answers "does this store have credits at all?" and every
+ * credit surface follows that answer. A sponsored seller is told their limits
+ * are off by the Sponsored card in Settings → Billing, not by this card's
+ * absence.
  *
  * The two balances are always shown apart (Zaki, 1 Oct 2026): MONTHLY credits
  * are used first and reset on the 1st; BOUGHT credits are used next and carry

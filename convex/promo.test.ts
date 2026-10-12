@@ -437,4 +437,55 @@ describe("storefront projection — promoState", () => {
 		expect(pausedRow?.promoPriceFrom).toBeUndefined();
 		expect(pausedRow?.variants[0]?.promoPrice).toBeUndefined();
 	});
+
+	test("a SCHEDULED teaser publishes the discounted From price too (PR #350 review)", async () => {
+		// Two things need it before the drop: the teaser names the price it
+		// falls to ("RM 31.50 in 1h 11m" — a countdown to a number nobody was
+		// told is no teaser), and the client flips to the sale price on its own
+		// clock at `startsAt`, which it can only do with the figure in hand.
+		// Publishing early is safe: every surface gates on `promoLive`.
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const productId = await seedPromoProduct(t, retailer._id, {
+			startsAt: Date.now() + 60 * 60_000,
+			endsAt: Date.now() + 2 * 60 * 60_000,
+		});
+		const rows = (await t.query(api.products.list, {
+			retailerId: retailer._id,
+		})) as Array<{
+			_id: Id<"products">;
+			promoState?: { phase: string; startsAt?: number };
+			promoPriceFrom?: number;
+			priceFrom: number;
+			variants: Array<{ promoPrice?: number }>;
+		}>;
+		const row = rows.find((p) => p._id === productId);
+		expect(row?.promoState?.phase).toBe("scheduled");
+		expect(row?.promoPriceFrom).toBe(3150);
+		// The list price is untouched — nothing is discounted yet.
+		expect(row?.priceFrom).toBe(4500);
+		// And the variant sale price rides along, as the teaser already did.
+		expect(row?.variants[0]?.promoPrice).toBe(3150);
+	});
+
+	test("the pay window reaches the buyer BEFORE they order (PR #350 review)", async () => {
+		// The cron cancels an unpaid flash order; the buyer is the one who
+		// loses it. Previously the first mention of a deadline was the track
+		// page, after committing.
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const productId = await seedPromoProduct(t, retailer._id, {
+			unitCap: 30,
+			payWithinMinutes: 30,
+		});
+		const rows = (await t.query(api.products.list, {
+			retailerId: retailer._id,
+		})) as Array<{
+			_id: Id<"products">;
+			promoState?: { payWithinMinutes?: number };
+		}>;
+		expect(
+			rows.find((p) => p._id === productId)?.promoState?.payWithinMinutes,
+		).toBe(30);
+	});
 });

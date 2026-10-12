@@ -10,7 +10,7 @@
  */
 
 import { ConvexError } from "convex/values";
-import { GATED_CELL_LABEL } from "./credits";
+import { GATED_CELL_LABEL, GATED_CLOSED_LABEL } from "./credits";
 import { formatInternational } from "./phoneDial";
 
 /** Min/max length for a buyer name — one rule for every capture point. */
@@ -111,11 +111,17 @@ export function getDisplayName(customer: DisplayableCustomer): string {
  * table, the mobile card, the detail page title).
  */
 export function sellerCustomerName(
-	customer: DisplayableCustomer & { creditGated?: boolean },
+	customer: DisplayableCustomer & {
+		creditGated?: boolean;
+		neverFunded?: boolean;
+	},
 ): string {
-	return customer.creditGated === true
-		? GATED_CELL_LABEL
-		: getDisplayName(customer);
+	if (customer.creditGated !== true) return getDisplayName(customer);
+	// Every order this buyer ever placed was cancelled while gated, so nothing
+	// is waiting on them — `gatedNameCell` draws the same distinction on the
+	// order card, and a row saying "Waiting on credits" next to no waiting
+	// order is the list contradicting itself.
+	return customer.neverFunded === true ? GATED_CLOSED_LABEL : GATED_CELL_LABEL;
 }
 
 /**

@@ -677,6 +677,8 @@ export function PurchaseHints({ pp }: { pp: ProductPurchase }) {
 			? promo.unitsLeft
 			: undefined;
 	const maxPerOrder = promo?.phase === "live" ? promo.maxPerOrder : undefined;
+	const payWithin =
+		promo?.phase === "live" ? promo.payWithinMinutes : undefined;
 	return (
 		<>
 			{saleUnitsLeft !== undefined ? (
@@ -703,6 +705,15 @@ export function PurchaseHints({ pp }: { pp: ProductPurchase }) {
 							: "It is back at the normal price now."}
 					</p>
 				</div>
+			) : null}
+			{payWithin !== undefined ? (
+				// Stated where they decide, not on the track page afterwards. A
+				// deadline the buyer only meets once it has already cancelled
+				// their order is enforced silently, which the house rule forbids
+				// — and this is a buyer who orders then goes to WhatsApp.
+				<p className="mt-3 text-xs text-muted-foreground">
+					{`Pay within ${payWithin} ${payWithin === 1 ? "minute" : "minutes"} of ordering or the sale price is released.`}
+				</p>
 			) : null}
 			{maxPerOrder !== undefined ? (
 				// Says which state the buyer is in, because the stepper now stops
