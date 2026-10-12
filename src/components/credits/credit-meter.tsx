@@ -6,7 +6,9 @@ import { Award, Gauge, Lock } from "lucide-react";
 import type { ReactNode } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { CreditBalanceView } from "../../../convex/credits";
+import { USAGE_PACE_DAYS } from "../../../convex/credits";
 import { TOP_UP_VIEW_ONLY_MESSAGE } from "../../../convex/lib/creditPurchases";
+import { todayMytMidnight } from "../../../convex/lib/fulfilmentDate";
 import { useCreditGateFor } from "../../hooks/useCreditGate";
 import {
 	type FixHighlight,
@@ -24,6 +26,7 @@ import {
 	ordersWaitingLabel,
 } from "../../lib/credits-ui";
 import { formatShortDate } from "../../lib/format";
+import { creditPaceLine } from "../../lib/home-copy";
 import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import { cn } from "../../lib/utils";
 import { NeedsAccessNote } from "../app/owner-only-note";
@@ -88,6 +91,20 @@ export function CreditMeter({
 		convexQuery(api.creditPurchases.topUpOptions, storeArgs),
 	).data;
 	const lock = useCreditGateFor(retailer);
+	// The burn rate behind "about N days of orders at this week's pace" (T2).
+	// `since` is a MYT midnight minus the window, never `Date.now()`, so the
+	// query is stable within a day and cacheable.
+	const pace = useQuery(
+		convexQuery(
+			api.credits.getUsagePace,
+			retailer
+				? {
+						retailerId: actingAsAdmin ? retailer._id : undefined,
+						since: todayMytMidnight() - USAGE_PACE_DAYS * 24 * 60 * 60 * 1000,
+					}
+				: "skip",
+		),
+	).data;
 
 	if (balance === undefined)
 		return variant === "card" ? (
@@ -195,11 +212,29 @@ export function CreditMeter({
 						canTopUp
 					? { label: "Top up credits", search: TOP_UP_SEARCH }
 					: null;
+		// What sits between the headline and the bar, by tone — the boards' own
+		// order (z8r3fdrgzj). Out: the full lock sentence, because a seller who
+		// cannot accept orders needs to read WHY and what still works, not a
+		// four-word summary. Low: the pace forecast, which is the whole point of
+		// warning early. Otherwise nothing — a healthy balance needs no sentence.
+		const detail = lock.anyWaiting
+			? lock.reason
+			: tone === "low"
+				? creditPaceLine({
+						balance: balance.total,
+						perDay: pace?.perDay ?? 0,
+					})
+				: null;
 		return (
 			<section className="flex flex-col gap-3 rounded-2xl border border-input bg-background p-5">
 				{header}
 				<div className="flex flex-col gap-2">
 					{headline}
+					{detail ? (
+						<p className="text-xs leading-relaxed text-muted-foreground">
+							{detail}
+						</p>
+					) : null}
 					<MonthlyBar balance={balance} tone={tone} />
 					<p className="text-xs text-muted-foreground tabular-nums">
 						{monthlyFigure(balance)} {monthlyNoun(balance)} ·{" "}
@@ -207,14 +242,10 @@ export function CreditMeter({
 					</p>
 				</div>
 				<p className="text-xs text-muted-foreground">
-					{lock.anyWaiting
-						? // Per order, never store-wide: products, settings and every
-							// funded order carry on (Credits T3.1).
-							`Waiting: ${lock.ordersWaiting} ${lock.ordersWaiting === 1 ? "order" : "orders"}, opening oldest first.`
-						: (refresh ??
-							(balance.regime === "trial"
-								? "Trial orders — pick a plan to keep going once they're used."
-								: "Monthly credits reset on the 1st."))}
+					{refresh ??
+						(balance.regime === "trial"
+							? "Trial orders — pick a plan to keep going once they're used."
+							: "Monthly credits reset on the 1st.")}
 				</p>
 				<div className="flex flex-wrap gap-2">
 					{cta ? (

@@ -146,15 +146,20 @@ function refused(refusal: TopUpRefusal): TopUp {
 function mockQueries({
 	bal,
 	topUp = CAN_BUY,
+	perDay,
 }: {
 	/** `undefined` = still loading; `null` = no Credits grant. */
 	bal: CreditBalanceView | null | undefined;
 	topUp?: TopUp;
+	/** Credits burned per day over the pace window (T2) — drives the low-tone
+	 * forecast line. */
+	perDay?: number;
 }) {
 	const NAME = {
 		balance: getFunctionName(api.credits.getBalance),
 		topUp: getFunctionName(api.creditPurchases.topUpOptions),
 		admin: getFunctionName(api.billing.amIAdmin),
+		pace: getFunctionName(api.credits.getUsagePace),
 	};
 	vi.mocked(useQuery).mockImplementation(((opts: {
 		__fn: FunctionReference<"query">;
@@ -167,7 +172,11 @@ function mockQueries({
 					? topUp
 					: name === NAME.admin
 						? false
-						: undefined;
+						: name === NAME.pace
+							? perDay === undefined
+								? null
+								: { consumed: perDay * 7, perDay, windowDays: 7 }
+							: undefined;
 		return { data, isPending: false };
 	}) as unknown as typeof useQuery);
 }
@@ -560,9 +569,14 @@ describe("CreditMeter — dashboard home (card)", () => {
 				})}
 			/>,
 		);
-		expect(
-			screen.getByText("Waiting: 1 order, opening oldest first."),
-		).toBeTruthy();
+		// The FULL lock sentence, not a four-word summary (z8r3fdrgzj, from the
+		// Credits · out board). A seller who cannot accept orders needs to read
+		// why, what still works, and the way back — "Waiting: 1 order" said none
+		// of that, and this card is the only place it is said on Home.
+		expect(screen.getByText(/trial's orders are used up/i)).toBeTruthy();
+		// …including the reassurance that the rest of the store keeps working,
+		// which is the half a seller most needs when the page says "paused".
+		expect(screen.getByText(/carry on as normal/i)).toBeTruthy();
 		expect(screen.getByRole("link", { name: "Pick a plan" })).toBeTruthy();
 	});
 
@@ -616,5 +630,52 @@ describe("the card's one button when nothing is waiting", () => {
 		});
 		render(<CreditMeter variant="card" retailer={retailer()} />);
 		expect(screen.queryByRole("link", { name: "Top up credits" })).toBeNull();
+	});
+});
+
+describe("CreditMeter — the card's tone sentence (z8r3fdrgzj)", () => {
+	afterEach(() => cleanup());
+
+	it("LOW forecasts how long the balance lasts at this week's pace", () => {
+		// The Credits · low board's whole point: warn early enough to act, in a
+		// unit the seller thinks in (days of trading), not a bare number.
+		mockQueries({
+			bal: balance({ plan: 31, total: 31, periodGrant: 200 }),
+			perDay: 10,
+		});
+		render(<CreditMeter variant="card" retailer={retailer()} />);
+		expect(
+			screen.getByText("About 3 days of orders at this week's pace"),
+		).toBeTruthy();
+	});
+
+	it("…but says nothing when there is no pace to forecast from", () => {
+		// Below one order a day the division produces "about 97 days", which is
+		// arithmetic dressed as a forecast.
+		mockQueries({
+			bal: balance({ plan: 31, total: 31, periodGrant: 200 }),
+			perDay: 0.5,
+		});
+		render(<CreditMeter variant="card" retailer={retailer()} />);
+		expect(screen.queryByText(/at this week's pace/)).toBeNull();
+	});
+
+	it("a HEALTHY balance gets no tone sentence at all", () => {
+		mockQueries({
+			bal: balance({ plan: 184, total: 184, periodGrant: 200 }),
+			perDay: 10,
+		});
+		render(<CreditMeter variant="card" retailer={retailer()} />);
+		expect(screen.queryByText(/at this week's pace/)).toBeNull();
+	});
+
+	it("the pace line never reaches Settings → Billing's full variant", () => {
+		// T3's constraint: nothing on the billing page changes.
+		mockQueries({
+			bal: balance({ plan: 31, total: 31, periodGrant: 200 }),
+			perDay: 10,
+		});
+		render(<CreditMeter variant="full" retailer={retailer()} />);
+		expect(screen.queryByText(/at this week's pace/)).toBeNull();
 	});
 });
