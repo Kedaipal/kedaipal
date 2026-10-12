@@ -73,7 +73,9 @@ import {
 import {
 	assertValidFulfilmentDate,
 	assertValidFulfilmentTime,
+	DAY_MS,
 	hhmmFromMinutes,
+	isMytMidnight,
 	matchesFulfilmentWindow,
 	ymdFromEpoch,
 } from "./lib/fulfilmentDate";
@@ -108,8 +110,11 @@ import {
 } from "./lib/minOrderRules";
 import {
 	foldLegacyBuckets,
+	isOpenUnpaid,
+	isStaleUnpaid,
 	isUnseenOrder,
 	leafBucket,
+	orderBucket,
 	orderLeaf,
 } from "./lib/orderBuckets";
 import {
@@ -2871,6 +2876,82 @@ const statusLeafValidator = v.union(
 	v.literal("cancelled"),
 );
 
+/** How many days of lookahead the Home "Plan ahead" card asks for. */
+export const DUE_BY_DAY_MAX_DAYS = 14;
+
+/**
+ * Orders due per MYT day over a short forward window — the "Plan ahead" strip
+ * on Home (z8r3fdrgzj). Indexed on `by_retailer_fulfilment`, bounded to the
+ * window, so it never walks the store's history.
+ *
+ * `fromMyt` comes from the client (a MYT midnight) rather than `Date.now()`
+ * here, for the same reason Insights does it: a query that reads the clock
+ * cannot be cached and re-runs forever.
+ *
+ * Counted EXACTLY as the inbox's "Due today" chip counts, by deliberate reuse
+ * of its two rules, because Home shows both numbers on one screen and a page
+ * that contradicts itself is worse than a page with one fewer number:
+ *
+ *  - OPEN orders only (new / in-progress). A delivered Saturday order needs no
+ *    prep, and counting it would make Saturday look heavier than the work is.
+ *  - NEVER counter orders. A counter sale stamps today as its fulfilment date
+ *    at create — it is a receipt, not a promise — so at a counter-heavy store
+ *    they would swamp every tile (86ey8r734).
+ *
+ * Returns one entry per day INCLUDING empty ones, so the strip renders a full
+ * week and a quiet Wednesday is visibly quiet rather than missing.
+ */
+export const countDueByDay = query({
+	args: {
+		retailerId: v.id("retailers"),
+		fromMyt: v.number(),
+		days: v.number(),
+	},
+	handler: async (
+		ctx,
+		{ retailerId, fromMyt, days },
+	): Promise<{ start: number; count: number }[]> => {
+		await requireRetailerAccess(ctx, retailerId, {
+			area: "orders",
+			level: "read",
+		});
+		if (!isMytMidnight(fromMyt))
+			throw new Error("Plan-ahead window must start at MYT midnight");
+		const span = Math.floor(days);
+		if (span < 1 || span > DUE_BY_DAY_MAX_DAYS)
+			throw new Error(
+				`Plan-ahead window must span 1–${DUE_BY_DAY_MAX_DAYS} days`,
+			);
+
+		const toExclusive = fromMyt + span * DAY_MS;
+		const due = await ctx.db
+			.query("orders")
+			.withIndex("by_retailer_fulfilment", (q) =>
+				q
+					.eq("retailerId", retailerId)
+					.gte("fulfilmentDate", fromMyt)
+					.lt("fulfilmentDate", toExclusive),
+			)
+			.collect();
+
+		const buckets = Array.from({ length: span }, (_, i) => ({
+			start: fromMyt + i * DAY_MS,
+			count: 0,
+		}));
+		for (const o of due) {
+			if (o.source === "counter") continue;
+			const bucket = orderBucket(o);
+			if (bucket !== "new" && bucket !== "in_progress") continue;
+			// `fulfilmentDate` is itself a MYT midnight, so the index range above
+			// already placed it — this is integer division, not a timezone
+			// conversion, and cannot drift.
+			const i = Math.floor(((o.fulfilmentDate ?? fromMyt) - fromMyt) / DAY_MS);
+			if (i >= 0 && i < span) buckets[i].count += 1;
+		}
+		return buckets;
+	},
+});
+
 /**
  * Order inbox: one query that returns the filtered/searched page **plus** the
  * per-bucket counts (over the full set, independent of the active filters), in a
@@ -3098,6 +3179,16 @@ export const searchOrders = query({
 			unpaid: 0,
 			/** Sum of `total` across those unpaid open orders (RM outstanding). */
 			unpaidAmount: 0,
+			/** Of those, the ones older than `STALE_UNPAID_DAYS` — the chasing
+			 * work Home calls out as an exception row. A STRICT SUBSET of
+			 * `unpaid`, so "3 of 9" always reads true (z8r3fdrgzj). */
+			unpaidStale: 0,
+			/** Sum of `total` across the stale subset. */
+			unpaidStaleAmount: 0,
+			/** `createdAt` of the OLDEST stale unpaid order, 0 when none — Home
+			 * says "oldest is from Wed 30 Sep" and needs the date, not just a
+			 * count. */
+			unpaidStaleOldestAt: 0,
 			/**
 			 * Booking periods (S8) — how many stays/memberships are running now,
 			 * ending within the week, or still to start.
@@ -3185,9 +3276,19 @@ export const searchOrders = query({
 			) {
 				counts.dueToday++;
 			}
-			if (open && (o.paymentStatus ?? "unpaid") !== "received") {
+			// One author for "unpaid" (`isOpenUnpaid`), so the stale subset below
+			// can never be computed from a different idea than its own total.
+			if (isOpenUnpaid(o)) {
 				counts.unpaid++;
 				counts.unpaidAmount += o.total;
+				if (isStaleUnpaid(o, now)) {
+					counts.unpaidStale++;
+					counts.unpaidStaleAmount += o.total;
+					counts.unpaidStaleOldestAt = Math.min(
+						counts.unpaidStaleOldestAt || o.createdAt,
+						o.createdAt,
+					);
+				}
 			}
 			if (matchesBookingPeriod(o, "active", now)) counts.bookingActive++;
 			if (matchesBookingPeriod(o, "ending_soon", now)) counts.bookingEndingSoon++;

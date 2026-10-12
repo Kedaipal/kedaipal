@@ -131,6 +131,45 @@ export const count = query({
 	},
 });
 
+/** Display cap for the lapsed-regulars line — past this the card says "20+".
+ * Also the scan bound: we stop as soon as one more than the cap has matched. */
+export const LAPSED_REGULARS_CAP = 20;
+
+/**
+ * How many REGULARS have gone quiet — customers with ≥ 2 orders whose last
+ * order predates `before` (the client passes a MYT midnight minus the quiet
+ * window, so no `Date.now()` lands inside a cached query).
+ *
+ * "Regular" is the whole point: a one-off buyer who never came back is not a
+ * lapsed relationship, it is a normal buyer, and counting them would turn this
+ * line into a slow-growing number nobody can act on. `orderCount >= 2` is the
+ * cheapest honest definition of "had a habit".
+ *
+ * Returns at most `LAPSED_REGULARS_CAP + 1`, which the card renders as "20+" —
+ * the exact number past 20 changes nothing about what the seller does next, and
+ * capping keeps the scan bounded on a store with a long dormant tail. Ordered
+ * most-recently-lapsed first so the bound keeps the actionable end.
+ */
+export const countLapsedRegulars = query({
+	args: { retailerId: v.id("retailers"), before: v.number() },
+	handler: async (
+		ctx,
+		{ retailerId, before },
+	): Promise<{ count: number; capped: boolean }> => {
+		await requireRetailerOwner(ctx, retailerId, "read");
+		const rows = await ctx.db
+			.query("customers")
+			.withIndex("by_retailer_lastOrder", (q) =>
+				q.eq("retailerId", retailerId).lt("lastOrderAt", before),
+			)
+			.order("desc")
+			.filter((q) => q.gte(q.field("orderCount"), 2))
+			.take(LAPSED_REGULARS_CAP + 1);
+		const capped = rows.length > LAPSED_REGULARS_CAP;
+		return { count: capped ? LAPSED_REGULARS_CAP : rows.length, capped };
+	},
+});
+
 export const get = query({
 	args: { customerId: v.id("customers") },
 	handler: async (

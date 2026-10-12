@@ -49,6 +49,13 @@ const MAX_RANGE_DAYS = 366;
  * 365-day range; `capped` is surfaced if a seller ever exceeds it. */
 const ANALYTICS_SCAN_CAP = 10_000;
 
+/** Bound the distinct-customer set returned per window. The Home Customers card
+ * merges range + today as SETS (the same buyer can appear in both), so the ids
+ * have to cross the wire — but an unbounded set would grow with the store. Well
+ * above the ICP's distinct buyers in a 30-day window; past it `customersCapped`
+ * is surfaced and the card says so rather than quietly under-reporting. */
+const CUSTOMER_SET_CAP = 2_000;
+
 /** `createdAt` (app clock, set just before insert) and `_creationTime` (db clock)
  * track within milliseconds. We index-range on `_creationTime` for speed but the
  * revenue anchor is `createdAt`, so widen the index window by this buffer then
@@ -73,6 +80,7 @@ function toInput(o: OrderDoc): InsightsOrderInput {
 		paymentMethod: o.paymentMethod,
 		source: o.source,
 		attributionSource: o.attributionSource,
+		customerId: o.customerId,
 		items: o.items,
 	};
 }
@@ -150,6 +158,39 @@ async function topProductsWithThumbnails(
 	return attachThumbnails(ctx, union);
 }
 
+/**
+ * One customer-identity row per distinct id on the window's revenue orders.
+ *
+ * `firstOrderAt` rides along rather than a server-side returning/new verdict on
+ * purpose: "returning" means "first ordered BEFORE this window started", and the
+ * Home card's window is a closed range PLUS today, resolved on the client. If
+ * each query classified against its own `from`, today's call would call almost
+ * everyone returning and the union would be nonsense. One window, one `from`,
+ * one classification — `splitCustomers` in `src/lib/insights-view.ts`.
+ */
+async function resolveCustomers(
+	ctx: QueryCtx,
+	customerIds: string[],
+): Promise<{ customers: CustomerIdentity[]; customersCapped: boolean }> {
+	const customersCapped = customerIds.length > CUSTOMER_SET_CAP;
+	const bounded = customersCapped
+		? customerIds.slice(0, CUSTOMER_SET_CAP)
+		: customerIds;
+	const docs = await Promise.all(
+		bounded.map((id) => ctx.db.get(id as Id<"customers">)),
+	);
+	const customers: CustomerIdentity[] = [];
+	for (const doc of docs) {
+		// A customer deleted since the order was placed has no identity left to
+		// classify; its revenue still counts, it just stops being a head.
+		if (doc) customers.push({ id: doc._id, firstOrderAt: doc.firstOrderAt });
+	}
+	return { customers, customersCapped };
+}
+
+/** A distinct buyer in a window, with the timestamp that decides returning vs new. */
+export type CustomerIdentity = { id: string; firstOrderAt: number };
+
 export type InsightsRangeResult =
 	| { gated: true }
 	| {
@@ -165,6 +206,8 @@ export type InsightsRangeResult =
 			sources: SourceStat[];
 			bucketing: Bucketing;
 			capped: boolean;
+			customers: CustomerIdentity[];
+			customersCapped: boolean;
 	  };
 
 /**
@@ -220,6 +263,7 @@ export const getInsightsRange = query({
 			sources: agg.sources,
 			bucketing,
 			capped,
+			...(await resolveCustomers(ctx, agg.customerIds)),
 		};
 	},
 });
@@ -236,6 +280,8 @@ export type InsightsTodayResult =
 			products: ProductStat[];
 			payments: PaymentStat[];
 			sources: SourceStat[];
+			customers: CustomerIdentity[];
+			customersCapped: boolean;
 	  };
 
 /**
@@ -278,6 +324,54 @@ export const getTodayStats = query({
 			products,
 			payments: agg.payments,
 			sources: agg.sources,
+			...(await resolveCustomers(ctx, agg.customerIds)),
+		};
+	},
+});
+
+export type InsightsTodayPulse = {
+	/** Server's MYT midnight for today, so the client buckets without its own clock. */
+	today: number;
+	earned: number;
+	depositsExcluded: number;
+	collected: number;
+	orderCount: number;
+};
+
+/**
+ * Today's three numbers for Home — earned, collected, order count — with NO plan
+ * gate (z8r3fdrgzj decision 1). Every plan sees what it made today; the 7/30-day
+ * views, the trend and the insight cards stay Pro via `getInsightsRange` /
+ * `getTodayStats`, which keep their `{ gated: true }` branch.
+ *
+ * Still an `insights` AREA read: the plan decides whether a store has paid for
+ * trends, the grant decides whether this teammate is allowed near the store's
+ * money at all. Loosening the first never loosens the second.
+ *
+ * Deliberately NOT a thinner `getTodayStats` — that query carries products,
+ * payments, sources and customer identities, all of which are the Pro product.
+ * A shared handler with a flag would make it one edit away from leaking them.
+ */
+export const getTodayPulse = query({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<InsightsTodayPulse> => {
+		await requireRetailerAccess(ctx, retailerId, {
+			area: "insights",
+			level: "read",
+		});
+
+		const today = todayMytMidnight(Date.now());
+		const { orders } = await scanRange(ctx, retailerId, today, today + DAY_MS);
+		const agg = reduceInsights(orders.map(toInput), {
+			from: today,
+			bucketing: "day",
+		});
+		return {
+			today,
+			earned: agg.earned,
+			depositsExcluded: agg.depositsExcluded,
+			collected: agg.collected,
+			orderCount: agg.orderCount,
 		};
 	},
 });

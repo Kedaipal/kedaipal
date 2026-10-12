@@ -184,6 +184,10 @@ const OPEN_READS: Record<string, string> = {
 	"orders.getPaymentMethods":
 		"buyer door only (token), and it returns the STORE's payment rails, never order data",
 	"customers.count": "a single number — the dashboard stat tile",
+	"customers.countLapsedRegulars":
+		"a single number — how many regulars have gone quiet; no customer data, and a gated buyer who HAS lapsed is still a lapsed relationship worth winning back",
+	"orders.countDueByDay":
+		"per-day counts only, no order data — and like the nav badge, a waiting order SHOULD be counted: Home is what tells the seller Saturday is heavy, and hiding the work would misstate the week",
 	"bookingBlocks.hasBookingListings":
 		"a boolean — does this store sell bookings at all; reads products, never an order",
 };

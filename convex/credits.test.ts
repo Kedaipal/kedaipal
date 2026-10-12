@@ -1499,3 +1499,139 @@ describe("every cancel names who ended the order", () => {
 		expect(offenders).toEqual([]);
 	});
 });
+
+describe("getUsagePace — how fast this store is actually burning credits", () => {
+	/** The window the client asks for: a MYT midnight minus the pace window. */
+	const SINCE = OCT_10 - 7 * DAY;
+
+	/** The signed-in read. Null only means "no store for this caller", which the
+	 * signed-out test asserts directly — everywhere else it is a seed failure. */
+	const pace = async (t: T, retailerId: Id<"retailers">) => {
+		const p = await t
+			.withIdentity({ subject: OWNER })
+			.query(api.credits.getUsagePace, { retailerId, since: SINCE });
+		if (!p) throw new Error("expected a pace for a signed-in owner");
+		return p;
+	};
+
+	/** Run `fn` with the clock moved back, then restore it. */
+	async function atDaysAgo(days: number, fn: () => Promise<void>) {
+		vi.setSystemTime(OCT_10 - days * DAY);
+		try {
+			await fn();
+		} finally {
+			vi.setSystemTime(OCT_10);
+		}
+	}
+
+	test("seven orders in the window is a pace of one a day", async () => {
+		const t = setup();
+		const { retailerId } = await makeStore(t, { status: "active", plan: "pro" });
+		for (let i = 0; i < 7; i++) await order(t, retailerId);
+		expect(await pace(t, retailerId)).toEqual({
+			consumed: 7,
+			perDay: 1,
+			windowDays: 7,
+		});
+	});
+
+	test("a quiet week is zero, not a throw", async () => {
+		const t = setup();
+		const { retailerId } = await makeStore(t, { status: "active", plan: "pro" });
+		expect(await pace(t, retailerId)).toEqual({
+			consumed: 0,
+			perDay: 0,
+			windowDays: 7,
+		});
+	});
+
+	test("orders from before the window do not count", async () => {
+		const t = setup();
+		const { retailerId } = await makeStore(t, { status: "active", plan: "pro" });
+		await atDaysAgo(10, async () => {
+			await order(t, retailerId);
+			await order(t, retailerId);
+		});
+		await order(t, retailerId);
+		expect((await pace(t, retailerId)).consumed).toBe(1);
+	});
+
+	test("a refunded order did not consume a credit, so it nets off", async () => {
+		const t = setup();
+		const { retailerId } = await makeStore(t, { status: "active", plan: "pro" });
+		const a = await order(t, retailerId);
+		await order(t, retailerId);
+		await cancel(t, a.orderId, "buyer");
+		expect((await pace(t, retailerId)).consumed).toBe(1);
+	});
+
+	test("a debit that is not an ORDER is not demand", async () => {
+		// Today every debit/refund carries an orderId, so this row cannot arise
+		// from the app — which is the point. The pace means "order consumption",
+		// and the day someone adds a non-order debit (an admin clawback, a
+		// per-message charge) it must not read as a week of furious trading.
+		// Pinned here so that rule survives a writer this query never saw.
+		const t = setup();
+		const { retailerId } = await makeStore(t, { status: "active", plan: "pro" });
+		await order(t, retailerId);
+		await t.run(async (ctx) => {
+			await ctx.db.insert("creditLedger", {
+				retailerId,
+				type: "debit",
+				bucket: "plan",
+				amount: -50,
+				reason: "adjust",
+				periodKey: "2026-10",
+				createdBy: "system",
+				planAfter: 0,
+				purchasedAfter: 0,
+				createdAt: Date.now(),
+			});
+		});
+		expect((await pace(t, retailerId)).consumed).toBe(1);
+	});
+
+	test("a month's grant is not a week of furious trading", async () => {
+		// Grants, top-ups and expiries all move the balance but say nothing
+		// about demand — only entries carrying an orderId are consumption.
+		const t = setup();
+		const ids = await makeStore(t, { status: "active", plan: "pro" });
+		await pay(t, ids, "pro");
+		expect((await pace(t, ids.retailerId)).consumed).toBe(0);
+	});
+
+	test("never negative — a week of nothing but cancellations is 'no pace'", async () => {
+		const t = setup();
+		const { retailerId } = await makeStore(t, { status: "active", plan: "pro" });
+		// Debit outside the window, refund inside it: the refund alone would
+		// make `consumed` negative and forecast a growing balance.
+		let placed: Id<"orders"> | undefined;
+		await atDaysAgo(10, async () => {
+			placed = (await order(t, retailerId)).orderId;
+		});
+		if (!placed) throw new Error("seed failed");
+		await cancel(t, placed, "buyer");
+		const p = await pace(t, retailerId);
+		expect(p.consumed).toBe(0);
+		expect(p.perDay).toBe(0);
+	});
+
+	test("another store's burn is not mine", async () => {
+		const t = setup();
+		const mine = await makeStore(t, { status: "active", plan: "pro" });
+		const theirs = await makeStore(t, { status: "active", plan: "pro" }, {
+			userId: "user_credits_other",
+		});
+		for (let i = 0; i < 3; i++) await order(t, theirs.retailerId);
+		expect((await pace(t, mine.retailerId)).consumed).toBe(0);
+	});
+
+	test("a signed-out caller gets nothing", async () => {
+		const t = setup();
+		const { retailerId } = await makeStore(t, { status: "active", plan: "pro" });
+		await order(t, retailerId);
+		expect(await t.query(api.credits.getUsagePace, { retailerId, since: SINCE })).toBe(
+			null,
+		);
+	});
+});

@@ -3334,6 +3334,12 @@ describe("orders — inbox search", () => {
 			dueToday: 0,
 			unpaid: 2,
 			unpaidAmount: o1.total + o2.total,
+			// Both unpaid orders were created just now, so neither has gone
+			// stale yet (z8r3fdrgzj — the 3-day boundary is pinned in its own
+			// describe below). `unpaidStaleOldestAt` is 0, never a stray epoch.
+			unpaidStale: 0,
+			unpaidStaleAmount: 0,
+			unpaidStaleOldestAt: 0,
 			// Nothing is packed AND paid here, so the despatch queue is empty
 			// (86eyp63mp — covered properly in convex/awb.test.ts).
 			readyToShip: 0,
@@ -11327,5 +11333,304 @@ describe("orders.getTimeline — the seller Activity card (86exr91r4)", () => {
 			actor: { you: true, isOwner: true },
 		});
 		expect(timeline[1].actor).toBeUndefined();
+	});
+});
+
+describe("countDueByDay — Plan ahead counts exactly what Due today counts", () => {
+	/** Create a real order, then set the three fields the forecast reads. */
+	async function dueOrder(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+		over: { fulfilmentDate?: number; status?: string; source?: string },
+	) {
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Test Buyer", waPhone: "60120000900" },
+			deliveryAddress: validAddress,
+		});
+		await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			if (!o) throw new Error("order not found");
+			await ctx.db.patch(o._id, {
+				fulfilmentDate: over.fulfilmentDate,
+				...(over.status ? { status: over.status as never } : {}),
+				...(over.source ? { source: over.source as never } : {}),
+			});
+		});
+	}
+
+	const ask = async (
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		fromMyt: number,
+		days = 7,
+	) =>
+		t
+			.withIdentity({ subject: USER_A })
+			.query(api.orders.countDueByDay, { retailerId, fromMyt, days });
+
+	test("every day in the window renders, including the empty ones", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const from = todayMytMidnight(Date.now());
+		const days = await ask(t, r._id, from);
+		expect(days).toHaveLength(7);
+		expect(days.map((d) => d.start)).toEqual(
+			Array.from({ length: 7 }, (_, i) => from + i * DAY_MS),
+		);
+		expect(days.every((d) => d.count === 0)).toBe(true);
+	});
+
+	test("an order lands in its own MYT day, not the one next door", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const from = todayMytMidnight(Date.now());
+		await dueOrder(t, r._id, p, { fulfilmentDate: from + 3 * DAY_MS });
+		const days = await ask(t, r._id, from);
+		expect(days[3].count).toBe(1);
+		expect(days.filter((d) => d.count > 0)).toHaveLength(1);
+	});
+
+	test("the first and last day of the window are inside it", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const from = todayMytMidnight(Date.now());
+		await dueOrder(t, r._id, p, { fulfilmentDate: from });
+		await dueOrder(t, r._id, p, { fulfilmentDate: from + 6 * DAY_MS });
+		const days = await ask(t, r._id, from);
+		expect(days[0].count).toBe(1);
+		expect(days[6].count).toBe(1);
+	});
+
+	test("the day AFTER the window is outside it", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const from = todayMytMidnight(Date.now());
+		await dueOrder(t, r._id, p, { fulfilmentDate: from + 7 * DAY_MS });
+		const days = await ask(t, r._id, from);
+		expect(days.every((d) => d.count === 0)).toBe(true);
+	});
+
+	test("yesterday is outside it", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const from = todayMytMidnight(Date.now());
+		await dueOrder(t, r._id, p, { fulfilmentDate: from - DAY_MS });
+		const days = await ask(t, r._id, from);
+		expect(days.every((d) => d.count === 0)).toBe(true);
+	});
+
+	test("COUNTER orders never count — their date is a receipt, not a promise", async () => {
+		// A counter sale stamps today at create; counting it would swamp every
+		// tile at a counter-heavy store (86ey8r734), exactly as it would have
+		// swamped the inbox's Due today chip.
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const from = todayMytMidnight(Date.now());
+		await dueOrder(t, r._id, p, { fulfilmentDate: from, source: "counter" });
+		const days = await ask(t, r._id, from);
+		expect(days[0].count).toBe(0);
+	});
+
+	test("finished and cancelled orders are not work left to do", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const from = todayMytMidnight(Date.now());
+		await dueOrder(t, r._id, p, {
+			fulfilmentDate: from + DAY_MS,
+			status: "delivered",
+		});
+		await dueOrder(t, r._id, p, {
+			fulfilmentDate: from + DAY_MS,
+			status: "cancelled",
+		});
+		await dueOrder(t, r._id, p, {
+			fulfilmentDate: from + DAY_MS,
+			status: "confirmed",
+		});
+		const days = await ask(t, r._id, from);
+		expect(days[1].count).toBe(1);
+	});
+
+	test("orders with no fulfilment date at all are not due on any day", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const from = todayMytMidnight(Date.now());
+		await dueOrder(t, r._id, p, { fulfilmentDate: undefined });
+		const days = await ask(t, r._id, from);
+		expect(days.every((d) => d.count === 0)).toBe(true);
+	});
+
+	test("another store's orders never appear", async () => {
+		const t = setup();
+		const mine = await seedRetailer(t, USER_A);
+		const theirs = await seedRetailer(t, USER_B);
+		const p = await seedProduct(t, USER_B, theirs._id);
+		const from = todayMytMidnight(Date.now());
+		await dueOrder(t, theirs._id, p, { fulfilmentDate: from });
+		const days = await ask(t, mine._id, from);
+		expect(days.every((d) => d.count === 0)).toBe(true);
+	});
+
+	test("the window must start at MYT midnight", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const from = todayMytMidnight(Date.now());
+		await expect(ask(t, r._id, from + 1)).rejects.toThrow(/MYT midnight/);
+	});
+
+	test("the span is bounded on both ends", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const from = todayMytMidnight(Date.now());
+		await expect(ask(t, r._id, from, 0)).rejects.toThrow(/1–14 days/);
+		await expect(ask(t, r._id, from, 15)).rejects.toThrow(/1–14 days/);
+	});
+});
+
+describe("searchOrders counts — unpaid that has gone stale", () => {
+	/** An order whose age and payment state we control. */
+	async function agedOrder(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+		over: { ageDays: number; paymentStatus?: string; status?: string },
+	) {
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Test Buyer", waPhone: "60120000901" },
+			deliveryAddress: validAddress,
+		});
+		await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			if (!o) throw new Error("order not found");
+			await ctx.db.patch(o._id, {
+				createdAt: Date.now() - over.ageDays * DAY_MS,
+				...(over.paymentStatus
+					? { paymentStatus: over.paymentStatus as never }
+					: {}),
+				...(over.status ? { status: over.status as never } : {}),
+			});
+		});
+		return shortId;
+	}
+
+	const counts = async (
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+	) =>
+		(
+			await t
+				.withIdentity({ subject: USER_A })
+				.query(api.orders.searchOrders, { retailerId, limit: 1 })
+		).counts;
+
+	test("an unpaid order older than three days is stale", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await agedOrder(t, r._id, p, { ageDays: 4, status: "confirmed" });
+		const c = await counts(t, r._id);
+		expect(c.unpaid).toBe(1);
+		expect(c.unpaidStale).toBe(1);
+		expect(c.unpaidStaleAmount).toBeGreaterThan(0);
+	});
+
+	test("stale is a STRICT SUBSET of unpaid, so '3 of 9' always reads true", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await agedOrder(t, r._id, p, { ageDays: 5, status: "confirmed" });
+		await agedOrder(t, r._id, p, { ageDays: 4, status: "confirmed" });
+		await agedOrder(t, r._id, p, { ageDays: 0, status: "confirmed" });
+		const c = await counts(t, r._id);
+		expect(c.unpaid).toBe(3);
+		expect(c.unpaidStale).toBe(2);
+		expect(c.unpaidStale).toBeLessThanOrEqual(c.unpaid);
+		expect(c.unpaidStaleAmount).toBeLessThanOrEqual(c.unpaidAmount);
+	});
+
+	test("exactly three days old is not yet stale — the bound is strict", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await agedOrder(t, r._id, p, { ageDays: 3, status: "confirmed" });
+		expect((await counts(t, r._id)).unpaidStale).toBe(0);
+	});
+
+	test("a CLAIMED payment still counts — somebody is waiting on a human", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await agedOrder(t, r._id, p, {
+			ageDays: 6,
+			status: "confirmed",
+			paymentStatus: "claimed",
+		});
+		expect((await counts(t, r._id)).unpaidStale).toBe(1);
+	});
+
+	test("money already received is never stale, however old", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await agedOrder(t, r._id, p, {
+			ageDays: 40,
+			status: "confirmed",
+			paymentStatus: "received",
+		});
+		const c = await counts(t, r._id);
+		expect(c.unpaid).toBe(0);
+		expect(c.unpaidStale).toBe(0);
+	});
+
+	test("a cancelled order is not money to chase", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await agedOrder(t, r._id, p, { ageDays: 10, status: "cancelled" });
+		expect((await counts(t, r._id)).unpaidStale).toBe(0);
+	});
+
+	test("the oldest stale order's date is reported, not just a count", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await agedOrder(t, r._id, p, { ageDays: 4, status: "confirmed" });
+		await agedOrder(t, r._id, p, { ageDays: 9, status: "confirmed" });
+		const c = await counts(t, r._id);
+		const ageDays = (Date.now() - c.unpaidStaleOldestAt) / DAY_MS;
+		expect(ageDays).toBeGreaterThan(8.9);
+		expect(ageDays).toBeLessThan(9.1);
+	});
+
+	test("no stale orders → zero and no date, never a stray epoch", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await agedOrder(t, r._id, p, { ageDays: 0, status: "confirmed" });
+		const c = await counts(t, r._id);
+		expect(c.unpaidStale).toBe(0);
+		expect(c.unpaidStaleOldestAt).toBe(0);
 	});
 });

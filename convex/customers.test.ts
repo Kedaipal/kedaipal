@@ -654,3 +654,125 @@ describe("customers — count", () => {
 		).rejects.toThrow(/forbidden/i);
 	});
 });
+
+describe("countLapsedRegulars — who had a habit and stopped", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+	/** The "quiet for 30 days" cutoff the client passes (a MYT midnight − 30d). */
+	const BEFORE = 1_790_000_000_000;
+
+	async function seedCustomer(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		over: { lastOrderAt: number; orderCount: number; phone: string },
+	) {
+		await t.run(async (ctx) => {
+			await ctx.db.insert("customers", {
+				retailerId,
+				waPhone: over.phone,
+				searchText: over.phone,
+				orderCount: over.orderCount,
+				totalSpent: 10_000 * over.orderCount,
+				firstOrderAt: over.lastOrderAt - 60 * DAY,
+				lastOrderAt: over.lastOrderAt,
+				createdAt: over.lastOrderAt - 60 * DAY,
+				updatedAt: over.lastOrderAt,
+			});
+		});
+	}
+
+	const count = async (
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+	) =>
+		t
+			.withIdentity({ subject: USER_A })
+			.query(api.customers.countLapsedRegulars, { retailerId, before: BEFORE });
+
+	test("a regular quiet past the cutoff counts", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		await seedCustomer(t, r._id, {
+			lastOrderAt: BEFORE - DAY,
+			orderCount: 2,
+			phone: "60120000001",
+		});
+		expect(await count(t, r._id)).toEqual({ count: 1, capped: false });
+	});
+
+	test("a ONE-OFF buyer is not a lapsed relationship", async () => {
+		// Someone who bought once and never came back is a normal buyer, not a
+		// habit that stopped — counting them makes the line un-actionable.
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		await seedCustomer(t, r._id, {
+			lastOrderAt: BEFORE - DAY,
+			orderCount: 1,
+			phone: "60120000002",
+		});
+		expect((await count(t, r._id)).count).toBe(0);
+	});
+
+	test("exactly AT the cutoff is still active — the bound is strict", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		await seedCustomer(t, r._id, {
+			lastOrderAt: BEFORE,
+			orderCount: 3,
+			phone: "60120000003",
+		});
+		expect((await count(t, r._id)).count).toBe(0);
+	});
+
+	test("one millisecond before the cutoff has lapsed", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		await seedCustomer(t, r._id, {
+			lastOrderAt: BEFORE - 1,
+			orderCount: 3,
+			phone: "60120000004",
+		});
+		expect((await count(t, r._id)).count).toBe(1);
+	});
+
+	test("a still-active regular never counts", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		await seedCustomer(t, r._id, {
+			lastOrderAt: BEFORE + 5 * DAY,
+			orderCount: 9,
+			phone: "60120000005",
+		});
+		expect((await count(t, r._id)).count).toBe(0);
+	});
+
+	test("past the display cap it reports 20 and says it is capped", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		for (let i = 0; i < 25; i++) {
+			await seedCustomer(t, r._id, {
+				lastOrderAt: BEFORE - (i + 1) * DAY,
+				orderCount: 2,
+				phone: `6012100${String(i).padStart(4, "0")}`,
+			});
+		}
+		expect(await count(t, r._id)).toEqual({ count: 20, capped: true });
+	});
+
+	test("another store's lapsed regulars are not mine", async () => {
+		const t = setup();
+		const mine = await seedRetailer(t, USER_A);
+		const theirs = await seedRetailer(t, USER_B);
+		await seedCustomer(t, theirs._id, {
+			lastOrderAt: BEFORE - DAY,
+			orderCount: 4,
+			phone: "60120000006",
+		});
+		expect((await count(t, mine._id)).count).toBe(0);
+	});
+
+	test("no customers at all → zero, not a throw", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		expect(await count(t, r._id)).toEqual({ count: 0, capped: false });
+	});
+});
