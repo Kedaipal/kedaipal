@@ -121,6 +121,7 @@ import {
 	CheckoutTotals,
 	pendingTotalParts,
 } from "./checkout-summary";
+import { PaymentsPausedNotice } from "./payments-paused-notice";
 import {
 	PickupLocationRadioList,
 	PickupSummaryCard,
@@ -180,6 +181,9 @@ interface CheckoutPageProps {
 	 * See convex/lib/minOrderRules.ts. */
 	minOrderValue: number | undefined;
 	pickupLocations: ReadonlyArray<PublicPickupLocation>;
+	/** The store is lapsed, so this order can't be paid yet (z8r3fdr6gg) —
+	 * the summary column says so before the buyer commits. */
+	paymentsPaused?: boolean;
 }
 
 interface SanitizedDeliveryAddress {
@@ -264,6 +268,7 @@ export function CheckoutPage({
 	closedDates,
 	minOrderValue,
 	pickupLocations,
+	paymentsPaused,
 }: CheckoutPageProps) {
 	// The route reserves exactly this bar's height as bottom padding — see the
 	// bar's own comment near the bottom of this component.
@@ -1487,6 +1492,17 @@ export function CheckoutPage({
 				{/* Order summary — first thing on mobile (this page IS the review),
 				    sticky right rail on desktop. */}
 				<div className="flex flex-col gap-4 lg:sticky lg:top-6 lg:order-2 lg:w-96 lg:shrink-0">
+					{/* ABOVE the ticket, so it's read before the commitment: the
+					    first thing on mobile, and above the desktop CTA (which
+					    lives inside the ticket's footer — below it, the notice
+					    would be read after the tap it qualifies). A free cart has
+					    nothing to pay; an unquoted custom line does (its price is
+					    pending), so it keeps the notice. */}
+					<PaymentsPausedNotice
+						paused={paymentsPaused}
+						storeName={storeName}
+						free={cart.total === 0 && !hasCustomLine}
+					/>
 					<form.Subscribe
 						selector={(s) => ({
 							deliveryMethod: s.values.deliveryMethod,

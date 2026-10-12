@@ -228,6 +228,7 @@ function CheckoutRoute() {
 							locale={retailer.locale}
 							country={retailer.country}
 							cartItemCount={cart.itemCount}
+							paymentsPaused={retailer.paymentsPaused}
 						/>
 					</div>
 				</div>
@@ -260,6 +261,7 @@ function CheckoutRoute() {
 							country={retailer.country}
 							confirmPushEnabled={retailer.confirmPushEnabled ?? false}
 							cartItemCount={cart.itemCount}
+							paymentsPaused={retailer.paymentsPaused}
 						/>
 					</div>
 				</div>
@@ -315,6 +317,7 @@ function CheckoutRoute() {
 						closedDates={retailer.closedDates}
 						minOrderValue={retailer.minOrderValue}
 						pickupLocations={pickupLocations ?? []}
+						paymentsPaused={retailer.paymentsPaused}
 					/>
 				</div>
 			</div>

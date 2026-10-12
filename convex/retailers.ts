@@ -265,6 +265,7 @@ import {
 	assertPlanFeature,
 	assertOwnStoreActive,
 	assertSubscriptionActive,
+	buyerPaymentsPaused,
 	insertSetupComp,
 	loadSubscription,
 	resolveAccess,
@@ -978,6 +979,12 @@ type RetailerPublic = {
 	// cart CTAs; every order-create path refuses with the same reason). A store
 	// setting, not billing state — the subscription itself stays owner-only.
 	orderingPaused?: boolean;
+	// Buyer payments paused because the store is lapsed (z8r3fdr6gg) — the ONE
+	// public bit of billing state, set on the storefront payload only so every
+	// checkout can say "you can order, you'll pay later" before the buyer
+	// commits. Never the status or the reason; the rule is
+	// `subscriptions.buyerPaymentsPaused`.
+	paymentsPaused?: boolean;
 	// Outbound WhatsApp kill-switch state (OWNER-only, like `subscription`), read
 	// from `retailerSendingLimits`. When paused, the gateway blocks this seller's
 	// NON-transactional WhatsApp sends (order confirmations/status still flow); the
@@ -1335,10 +1342,12 @@ export const getRetailerBySlug = query({
 					openingHours: active.openingHours,
 					closedDates: active.closedDates,
 					minOrderValue: active.minOrderValue,
-					// Founding badge is public-safe; subscription state is NOT included.
+					// Founding badge is public-safe; subscription state is NOT
+					// included — beyond the one `paymentsPaused` bit.
 					isFoundingMember: active.isFoundingMember,
 					foundingMemberRank: active.foundingMemberRank,
 					orderingPaused: active.orderingPausedAt !== undefined,
+					paymentsPaused: await buyerPaymentsPaused(ctx, active._id),
 					marketplaceUnlisted: active.marketplaceUnlistedAt !== undefined,
 					// paymentInstructions intentionally omitted from the public
 					// storefront payload — only revealed in the WhatsApp confirm

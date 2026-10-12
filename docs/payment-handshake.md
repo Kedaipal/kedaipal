@@ -37,6 +37,8 @@ stateDiagram-v2
 
 ## Shopper flow — claim payment
 
+> **A lapsed store takes no payment** (`z8r3fdr6gg`): while the store is past due, `getPaymentMethods` returns no methods and `paymentsPaused: true`, the payment card shows a disabled "Payments paused" state, and `claimPayment` refuses a NEW claim (an order claimed before the pause can still update its proof). See [`manual-subscription.md`](./manual-subscription.md#buyer-payments-pause-while-a-store-is-lapsed-z8r3fdr6gg).
+
 On the tracking page (`/track/<token>`), the shopper taps **"I've paid"**. Trust model: knowing the high-entropy `orders.trackingToken` is the capability (the human `shortId` is NOT a secret — see [`infra-cost-scaling.md` §6](./infra-cost-scaling.md)).
 
 1. **Attach a screenshot — MANDATORY, and the first field** ([`z8r3fdnpxf`](https://app.clickup.com/t/z8r3fdnpxf)). `generateOrderProofUploadUrl(token)` mints a one-shot Convex storage upload URL. Rate-limited `proofUpload` (**10/min per token, burst 5**) — sized for one URL per file the buyer PICKS, because the sheet uploads on selection rather than on submit. Refused once `received`. See **Proof is mandatory** below.

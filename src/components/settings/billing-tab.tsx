@@ -435,9 +435,9 @@ export function BillingTab({
 					</div>
 					{compEnded ? (
 						<p className="text-xs text-muted-foreground">
-							Your storefront stays live and buyers can still order. Your
-							dashboard is view-only — choose a plan below to start working
-							again.
+							Your storefront stays live and buyers can still order, but they
+							can't pay you on Kedaipal until you choose a plan. Your dashboard
+							is view-only — choose a plan below to start working again.
 						</p>
 					) : null}
 					{held ? (

@@ -88,7 +88,7 @@ const t = {
 		wasPrefix: "was",
 		foundingDiscount: "founding discount",
 		storeStaysLive:
-			"Your storefront stays live and buyers can still order — your dashboard is view-only until you pay.",
+			"Your storefront stays live and buyers can still order — but until you pay, they can't pay you on Kedaipal and your dashboard is view-only.",
 		choosePlan: "Choose a plan",
 		payNow: "Pay online now",
 		payNowHint: "Card, banking or eWallet — confirmed automatically.",
@@ -127,7 +127,7 @@ const t = {
 		wasPrefix: "asal",
 		foundingDiscount: "diskaun pengasas",
 		storeStaysLive:
-			"Etalase anda kekal aktif dan pembeli masih boleh memesan — papan pemuka anda hanya boleh dilihat sehingga anda membayar.",
+			"Etalase anda kekal aktif dan pembeli masih boleh memesan — tetapi sehingga anda membayar, mereka tidak boleh membayar anda di Kedaipal dan papan pemuka anda hanya boleh dilihat.",
 		choosePlan: "Pilih pelan",
 		payNow: "Bayar dalam talian",
 		payNowHint: "Kad, perbankan atau eWallet — disahkan secara automatik.",
@@ -167,7 +167,7 @@ const t = {
 		wasPrefix: "原价",
 		foundingDiscount: "创始会员折扣",
 		storeStaysLive:
-			"您的店面继续在线，买家仍可下单 —— 付款前您的后台仅可查看。",
+			"您的店面继续在线，买家仍可下单 —— 但在您付款之前，买家无法通过 Kedaipal 向您付款，您的后台也仅可查看。",
 		choosePlan: "选择套餐",
 		payNow: "立即在线付款",
 		payNowHint: "银行卡、网银或电子钱包 —— 自动确认到账。",
@@ -465,11 +465,11 @@ const render: Record<
 				"en",
 				"invoiceReminder",
 				"Your invoice is due soon",
-				`Hi ${escapeHtml(v.storeName)}, this is a quick reminder to settle your Kedaipal invoice before the due date.`,
+				`Hi ${escapeHtml(v.storeName)}, this is a quick reminder to settle your Kedaipal invoice before the due date. If it's still unpaid after that, your dashboard goes view-only and buyers can't pay you on Kedaipal until it's settled.`,
 				v,
 				t.en.cta,
 			);
-			const text = `⏰ Reminder: invoice ${v.invoiceNumber} due ${v.dueDateFormatted}\n${planText("en", v)}\nPay before then to keep your store fully active.\n\n${payText("en", v)}\n\n${v.billingUrl}`;
+			const text = `⏰ Reminder: invoice ${v.invoiceNumber} due ${v.dueDateFormatted}\n${planText("en", v)}\nPay before then to keep your store fully active — after it, buyers can't pay you on Kedaipal until it's settled.\n\n${payText("en", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		invoiceOverdue: (v) => {
@@ -572,11 +572,11 @@ const render: Record<
 				"ms",
 				"invoiceReminder",
 				"Bil anda hampir tiba tempoh",
-				`Hai ${escapeHtml(v.storeName)}, ini peringatan ringkas untuk menjelaskan bil Kedaipal anda sebelum tarikh akhir.`,
+				`Hai ${escapeHtml(v.storeName)}, ini peringatan ringkas untuk menjelaskan bil Kedaipal anda sebelum tarikh akhir. Jika masih belum dibayar selepas itu, papan pemuka anda hanya boleh dilihat dan pembeli tidak boleh membayar anda di Kedaipal sehingga ia dijelaskan.`,
 				v,
 				t.ms.cta,
 			);
-			const text = `⏰ Peringatan: bil ${v.invoiceNumber} perlu dibayar ${v.dueDateFormatted}\n${planText("ms", v)}\nBayar sebelum itu untuk memastikan kedai anda aktif sepenuhnya.\n\n${payText("ms", v)}\n\n${v.billingUrl}`;
+			const text = `⏰ Peringatan: bil ${v.invoiceNumber} perlu dibayar ${v.dueDateFormatted}\n${planText("ms", v)}\nBayar sebelum itu untuk memastikan kedai anda aktif sepenuhnya — selepas itu, pembeli tidak boleh membayar anda di Kedaipal sehingga ia dijelaskan.\n\n${payText("ms", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		invoiceOverdue: (v) => {
@@ -676,11 +676,11 @@ const render: Record<
 				"zh",
 				"invoiceReminder",
 				"您的账单即将到期",
-				`您好 ${escapeHtml(v.storeName)}，提醒您在到期日前付清 Kedaipal 账单。`,
+				`您好 ${escapeHtml(v.storeName)}，提醒您在到期日前付清 Kedaipal 账单。逾期未付的话，您的后台将仅可查看，买家也无法通过 Kedaipal 向您付款，直到账单付清。`,
 				v,
 				t.zh.cta,
 			);
-			const text = `⏰ 提醒：账单 ${v.invoiceNumber} 将于 ${v.dueDateFormatted} 到期\n${planText("zh", v)}\n请在到期前付款，让您的商店保持完整运作。\n\n${payText("zh", v)}\n\n${v.billingUrl}`;
+			const text = `⏰ 提醒：账单 ${v.invoiceNumber} 将于 ${v.dueDateFormatted} 到期\n${planText("zh", v)}\n请在到期前付款，让您的商店保持完整运作 —— 逾期后，买家将无法通过 Kedaipal 向您付款，直到账单付清。\n\n${payText("zh", v)}\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		invoiceOverdue: (v) => {
@@ -839,10 +839,10 @@ const trialRender: Record<
 			const subject = "🎁 Your sponsored Kedaipal access has ended";
 			const lines = [
 				`Hi ${escapeHtml(v.storeName)}, your complimentary Kedaipal access${via} has ended.`,
-				"Your storefront stays live and buyers can still place orders — nothing on their side changes. Your dashboard is view-only until you choose a plan: you can see everything, but working orders, editing products and changing settings are all paused. Paying online unlocks it straight away.",
+				"Your storefront stays live and buyers can still place orders — but they can't pay you on Kedaipal until you choose a plan. Your dashboard is view-only until then: you can see everything, but working orders, editing products and changing settings are all paused. Paying online unlocks it straight away.",
 			];
 			const html = wrapHtml("🎁", "Your sponsored access has ended", lines, v.billingUrl, t.en.choosePlan);
-			const text = `🎁 Your sponsored Kedaipal access${v.sponsorLabel ? ` (${v.sponsorLabel})` : ""} has ended.\nYour storefront stays live and buyers can still order. Your dashboard is view-only until you choose a plan — paying online unlocks it straight away.\n\n${v.billingUrl}`;
+			const text = `🎁 Your sponsored Kedaipal access${v.sponsorLabel ? ` (${v.sponsorLabel})` : ""} has ended.\nYour storefront stays live and buyers can still order, but they can't pay you on Kedaipal and your dashboard is view-only until you choose a plan — paying online unlocks it straight away.\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		foundingBenefitsEndingSoon: (v) => {
@@ -889,10 +889,10 @@ const trialRender: Record<
 			const subject = "🎁 Akses tajaan Kedaipal anda telah tamat";
 			const lines = [
 				`Hai ${escapeHtml(v.storeName)}, akses percuma Kedaipal anda${via} telah tamat.`,
-				"Etalase anda kekal aktif dan pembeli masih boleh membuat pesanan — tiada apa yang berubah bagi mereka. Papan pemuka anda hanya boleh dilihat sehingga anda memilih pelan: anda nampak semuanya, tetapi menguruskan pesanan, menyunting produk dan menukar tetapan semuanya dijeda. Bayaran dalam talian membukanya serta-merta.",
+				"Etalase anda kekal aktif dan pembeli masih boleh membuat pesanan — tetapi mereka tidak boleh membayar anda di Kedaipal sehingga anda memilih pelan. Papan pemuka anda hanya boleh dilihat sehingga anda memilih pelan: anda nampak semuanya, tetapi menguruskan pesanan, menyunting produk dan menukar tetapan semuanya dijeda. Bayaran dalam talian membukanya serta-merta.",
 			];
 			const html = wrapHtml("🎁", "Akses tajaan anda telah tamat", lines, v.billingUrl, t.ms.choosePlan);
-			const text = `🎁 Akses tajaan Kedaipal anda${v.sponsorLabel ? ` (${v.sponsorLabel})` : ""} telah tamat.\nEtalase anda kekal aktif dan pembeli masih boleh memesan. Papan pemuka anda hanya boleh dilihat sehingga anda memilih pelan — bayaran dalam talian membukanya serta-merta.\n\n${v.billingUrl}`;
+			const text = `🎁 Akses tajaan Kedaipal anda${v.sponsorLabel ? ` (${v.sponsorLabel})` : ""} telah tamat.\nEtalase anda kekal aktif dan pembeli masih boleh memesan, tetapi mereka tidak boleh membayar anda di Kedaipal dan papan pemuka anda hanya boleh dilihat sehingga anda memilih pelan — bayaran dalam talian membukanya serta-merta.\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		foundingBenefitsEndingSoon: (v) => {
@@ -939,10 +939,10 @@ const trialRender: Record<
 			const subject = "🎁 您的 Kedaipal 赞助权益已结束";
 			const lines = [
 				`您好 ${escapeHtml(v.storeName)}，您的 Kedaipal 免费权益${via}已经结束。`,
-				"您的商店继续在线，买家仍可下单 —— 他们那边没有任何变化。在您选择套餐之前，后台仅可查看：您能看到全部内容，但处理订单、编辑商品和更改设置都已暂停。在线付款后立即恢复。",
+				"您的商店继续在线，买家仍可下单 —— 但在您选择套餐之前，买家无法通过 Kedaipal 向您付款，后台也仅可查看：您能看到全部内容，但处理订单、编辑商品和更改设置都已暂停。在线付款后立即恢复。",
 			];
 			const html = wrapHtml("🎁", "您的赞助权益已结束", lines, v.billingUrl, t.zh.choosePlan);
-			const text = `🎁 您的 Kedaipal 赞助权益${v.sponsorLabel ? `（${v.sponsorLabel}）` : ""}已结束。\n商店继续在线，买家仍可下单。在您选择套餐之前后台仅可查看 —— 在线付款后立即恢复。\n\n${v.billingUrl}`;
+			const text = `🎁 您的 Kedaipal 赞助权益${v.sponsorLabel ? `（${v.sponsorLabel}）` : ""}已结束。\n商店继续在线，买家仍可下单，但在您选择套餐之前，买家无法通过 Kedaipal 向您付款，后台也仅可查看 —— 在线付款后立即恢复。\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 		foundingBenefitsEndingSoon: (v) => {

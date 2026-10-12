@@ -225,6 +225,7 @@ export const PENDING_TOTAL_LABEL: Record<Locale, string> = {
 
 export type SystemMessageKey =
 	| "transferReferenceLine"
+	| "paymentsPausedLine"
 	| "mockupPendingConfirm"
 	| "deliveryFeePendingConfirm"
 	| "storeQrConnected"
@@ -237,6 +238,10 @@ export type SystemMessageKey =
 
 type SystemCopy = {
 	transferReferenceLine: (v: CopyVars) => string;
+	// Replaces the transfer reference while the store's buyer payments are
+	// paused (z8r3fdr6gg): there is nothing to transfer yet, and the one line
+	// that keeps a buyer from paying off-platform belongs in the reply too.
+	paymentsPausedLine: (v: CopyVars) => string;
 	// Confirm reply for an order that still has a custom item awaiting buyer
 	// mockup approval — payment is intentionally deferred (no "I've paid" yet).
 	mockupPendingConfirm: (v: CopyVars) => string;
@@ -280,6 +285,8 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 	en: {
 		transferReferenceLine: ({ shortId }) =>
 			`Use ${shortId} as your transfer reference so we can match it.`,
+		paymentsPausedLine: ({ storeName }) =>
+			`${storeName} isn't taking payments on Kedaipal right now — you can pay from your order page once they are. Please don't pay outside Kedaipal until then.`,
 		mockupPendingConfirm: ({ shortId, storeName, contactPhone, trackingUrl }) =>
 			`✅ Order ${shortId} received! It includes a custom item, so ${storeName} will prepare a design for you to approve first — no payment needed yet. The design, price and payment details will all be on your order page below, so keep this link.${
 				trackingUrl ? `\n\nTrack your order: ${trackingUrl}` : ""
@@ -320,6 +327,8 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 	ms: {
 		transferReferenceLine: ({ shortId }) =>
 			`Gunakan ${shortId} sebagai rujukan pemindahan supaya kami boleh padankan.`,
+		paymentsPausedLine: ({ storeName }) =>
+			`${storeName} tidak menerima bayaran di Kedaipal buat masa ini — anda boleh bayar dari halaman pesanan anda sebaik sahaja mereka menerimanya. Sila jangan bayar di luar Kedaipal sehingga itu.`,
 		mockupPendingConfirm: ({ shortId, storeName, contactPhone, trackingUrl }) =>
 			`✅ Pesanan ${shortId} diterima! Ia termasuk item custom, jadi ${storeName} akan sediakan reka bentuk untuk kelulusan anda dahulu — belum perlu bayar lagi. Reka bentuk, harga dan maklumat pembayaran semuanya ada di halaman pesanan anda di bawah, jadi simpan pautan ini.${
 				trackingUrl ? `\n\nJejak pesanan anda: ${trackingUrl}` : ""
@@ -360,6 +369,8 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 	zh: {
 		transferReferenceLine: ({ shortId }) =>
 			`转账时请填写 ${shortId} 作为备注，方便我们核对。`,
+		paymentsPausedLine: ({ storeName }) =>
+			`${storeName} 目前暂不通过 Kedaipal 收款 —— 恢复后您可以在订单页面付款。在此之前，请不要在 Kedaipal 以外付款。`,
 		mockupPendingConfirm: ({ shortId, storeName, contactPhone, trackingUrl }) =>
 			`✅ 订单 ${shortId} 已收到！里面有客制化商品，${storeName} 会先准备设计稿供您确认 —— 暂时不用付款。设计稿、价格和付款详情都会显示在下方的订单页面，请保存此链接。${
 				trackingUrl ? `\n\n查看订单状态：${trackingUrl}` : ""

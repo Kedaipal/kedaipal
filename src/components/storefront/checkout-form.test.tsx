@@ -150,6 +150,7 @@ function renderCheckout(
 		method?: "delivery" | "pickup";
 		closedDates?: ClosedDateRange[];
 		cart?: UseCart;
+		paymentsPaused?: boolean;
 	} = {},
 ) {
 	const pickupOnly = opts.method === "pickup";
@@ -172,6 +173,7 @@ function renderCheckout(
 			closedDates={opts.closedDates}
 			minOrderValue={undefined}
 			pickupLocations={pickupOnly ? [PICKUP] : []}
+			paymentsPaused={opts.paymentsPaused}
 		/>,
 	);
 	return result;
@@ -516,6 +518,37 @@ describe("CheckoutPage — buyer questions (z8r3fdkjek)", async () => {
 		fireEvent.click(screen.getAllByRole("button", { name: "Place order" })[0]);
 		await waitFor(() => expect(state.createOrder).toHaveBeenCalledTimes(1));
 		expect(state.createOrder.mock.calls[0][0].items[0].answers).toBeUndefined();
+	});
+});
+
+describe("CheckoutPage — a lapsed store's payments are paused (z8r3fdr6gg)", () => {
+	it("says so before the buyer commits — the order can still be placed", () => {
+		renderCheckout({ paymentsPaused: true });
+		expect(screen.getByText("Payments paused")).toBeTruthy();
+		expect(
+			screen.getByText(
+				/Kek Mama isn't taking payments on Kedaipal right now\. You can still place your order/,
+			),
+		).toBeTruthy();
+		expect(
+			screen.getByText(/don't pay the seller outside Kedaipal/),
+		).toBeTruthy();
+		// Ordering is untouched: the CTA is still "Place order".
+		expect(
+			screen.getAllByRole("button", { name: "Place order" }).length,
+		).toBeGreaterThan(0);
+	});
+
+	it("shows nothing while payments are open", () => {
+		renderCheckout();
+		expect(screen.queryByText("Payments paused")).toBeNull();
+	});
+
+	it("shows nothing for a free cart — there is nothing to pay", () => {
+		const free = { ...cartStub(), total: 0 };
+		free.items = free.items.map((i) => ({ ...i, price: 0 }));
+		renderCheckout({ paymentsPaused: true, cart: free });
+		expect(screen.queryByText("Payments paused")).toBeNull();
 	});
 });
 
