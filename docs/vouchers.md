@@ -1,8 +1,11 @@
 # Vouchers — seller-issued single-use codes
 
 > **Status: shipped** (ClickUp `z8r3fdr617`, scoped 8 Oct 2026, built 9 Oct).
-> Reviewed and revised 10–12 Oct (batch grouping, the receipt skin, four
-> findings from the Chrome pass).
+> Reviewed and revised 10–12 Oct: batch grouping, the receipt skin, the
+> findings from the Chrome pass, and — settled late, after the ticket had left
+> it to Arif — **the plan gate**, which now follows a downgrade the way promo
+> already did. See "The plan gate" below; it is the one decision here that
+> changed after the first build.
 > This doc was written ahead of the code on purpose — the redemption model
 > (especially *how the QR is used*) was decided at scoping and the build
 > implements what's written here. Everything below is now live; the
