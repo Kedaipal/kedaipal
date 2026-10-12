@@ -144,6 +144,17 @@ already erases it (`PHASE_TABLES`, which records that the `orders` phase takes
 with its reason. Every failure names the table and the offending fields, so
 the author has to decide rather than guess.
 
+The scan **resolves shared validators**, because a table need not declare its
+fields inline: `retailerMembers.permissions` is `memberPermissionsValidator`,
+`orderClaims.lines[].answers[]` is `frozenAnswerValidator`, and a shared
+validator may itself spread a field bag (`buyerQuestionValidator` is
+`v.object({ id, ...questionFields })`). A scan matching only `name: v.…` would
+be blind to all of it, so a future `buyerContactValidator` carrying a `waPhone`
+would shrink rule 1's coverage to nothing that mattered. Top-level `const`
+definitions in `schema.ts` and in each `./lib/*` module it imports from are
+parsed, and spreads followed transitively; a guard test fails if that ever
+stops resolving the validators we know about.
+
 **Rule 2 immediately found two more unvisited tables, and they wanted opposite
 treatment** — which is the argument for the rule being a test rather than a
 convention. `bookingBlocks` (a seller's closed-off availability windows: no

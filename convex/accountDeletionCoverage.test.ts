@@ -97,10 +97,93 @@ const RETAINED_BY_DECISION: Record<string, string> = {
 /** `\tname: defineTable({` — every table is declared at one tab of indent. */
 const TABLE_HEADER = /^\t(\w+): defineTable\(\{/gm;
 
+/** Comments are prose, not columns — the schema says `waPhone` constantly. */
+const stripComments = (text: string) =>
+	text
+		.split("\n")
+		.filter((line) => !line.trim().startsWith("//"))
+		.join("\n");
+
+/** Every `name: v.…` in a block, nested objects included. */
+const declaredFields = (block: string) =>
+	[...stripComments(block).matchAll(/(\w+):\s*v\./g)].map((m) => m[1]);
+
 /**
- * Table name → its declared field names, read from the schema source. Comment
- * lines are stripped first: the schema's prose mentions `waPhone` constantly,
- * and a comment is not a column.
+ * A table can declare fields through a SHARED validator rather than inline —
+ * `permissions: memberPermissionsValidator`, or `frozenAnswerValidator` inside
+ * `orderClaims.lines` — and a shared validator can itself SPREAD a field bag
+ * (`buyerQuestionValidator` is `v.object({ id, ...questionFields })`). Both are
+ * invisible to a scan that only matches `name: v.…`, so a future
+ * `buyerContactValidator` carrying a `waPhone` would silently shrink rule 1's
+ * coverage to nothing that mattered.
+ *
+ * So resolve both: every top-level `const <name> = v.…` or `const <name> = {…}`
+ * in schema.ts and in each `./lib/*` module it imports from, with spreads
+ * followed transitively. `resolvesSharedValidators` below fails if this ever
+ * stops finding the ones we know about — a resolver that silently resolves
+ * nothing is the same blind spot wearing a disguise.
+ */
+function validatorFields(): Map<string, string[]> {
+	const blocks = new Map<string, { fields: string[]; spreads: string[] }>();
+
+	const addFrom = (src: string) => {
+		for (const def of src.matchAll(/^(?:export )?const (\w+) = (v\.|\{)/gm)) {
+			// Walk balanced delimiters. Ending the block at "the next const"
+			// instead looked fine and was badly wrong: the next top-level const
+			// can be hundreds of lines away, so `orderStageEntry` swallowed most
+			// of schema.ts and resolved to 868 "fields" — every table referencing
+			// it would have inherited the whole schema's field names.
+			const [open, close] = def[2] === "{" ? ["{", "}"] : ["(", ")"];
+			const from = src.indexOf(open, (def.index ?? 0) + def[0].length - 1);
+			if (from === -1) continue;
+			let depth = 0;
+			let i = from;
+			for (; i < src.length; i++) {
+				if (src[i] === open) depth++;
+				else if (src[i] === close && --depth === 0) break;
+			}
+			const block = stripComments(src.slice(from, i));
+			blocks.set(def[1], {
+				fields: declaredFields(block),
+				spreads: [...block.matchAll(/\.\.\.(\w+)/g)].map((m) => m[1]),
+			});
+		}
+	};
+
+	const schema = readFileSync(join(__dirname, "schema.ts"), "utf8");
+	addFrom(schema);
+	for (const m of schema.matchAll(/from "\.\/(lib\/\w+)"/g)) {
+		try {
+			addFrom(readFileSync(join(__dirname, `${m[1]}.ts`), "utf8"));
+		} catch {
+			// not a module we can read — nothing to resolve from it
+		}
+	}
+
+	// Follow spreads, guarding against a cycle.
+	const resolve = (name: string, seen: Set<string>): string[] => {
+		const block = blocks.get(name);
+		if (!block || seen.has(name)) return [];
+		seen.add(name);
+		return [
+			...block.fields,
+			...block.spreads.flatMap((s) => resolve(s, seen)),
+		];
+	};
+
+	const out = new Map<string, string[]>();
+	for (const name of blocks.keys()) {
+		const fields = [...new Set(resolve(name, new Set()))];
+		if (fields.length) out.set(name, fields);
+	}
+	return out;
+}
+
+const VALIDATORS = validatorFields();
+
+/**
+ * Table name → its declared field names, read from the schema source, with any
+ * shared validator it references resolved into the list.
  */
 function schemaTables(): Map<string, string[]> {
 	const src = readFileSync(join(__dirname, "schema.ts"), "utf8");
@@ -108,15 +191,14 @@ function schemaTables(): Map<string, string[]> {
 	const out = new Map<string, string[]>();
 	heads.forEach((head, i) => {
 		const end = i + 1 < heads.length ? heads[i + 1].index : src.length;
-		const body = (head.index === undefined ? "" : src.slice(head.index, end))
-			.split("\n")
-			.filter((line) => !line.trim().startsWith("//"))
-			.join("\n");
-		// Field declarations, nested ones inside v.object() included.
-		out.set(
-			head[1],
-			[...body.matchAll(/(\w+):\s*v\./g)].map((m) => m[1]),
+		const body = stripComments(
+			head.index === undefined ? "" : src.slice(head.index, end),
 		);
+		const fields = declaredFields(body);
+		for (const [name, shared] of VALIDATORS) {
+			if (new RegExp(`\\b${name}\\b`).test(body)) fields.push(...shared);
+		}
+		out.set(head[1], [...new Set(fields)]);
 	});
 	return out;
 }
@@ -139,6 +221,27 @@ describe("the account-deletion cascade covers every table holding PII", () => {
 		expect(TABLES.size).toBeGreaterThan(25);
 		expect(TABLES.get("orderClaims")).toContain("waPhone");
 		expect(TABLES.get("products")).toContain("price");
+	});
+
+	test("resolvesSharedValidators — the scan sees through imports and spreads", () => {
+		// Without this the resolver could quietly resolve nothing and every rule
+		// below would narrow to inline fields again, passing all the while.
+		expect(VALIDATORS.has("frozenAnswerValidator")).toBe(true);
+		expect(VALIDATORS.has("memberPermissionsValidator")).toBe(true);
+
+		// Imported validator: `answer` reaches orderClaims only through
+		// frozenAnswerValidator, inside `lines[].answers[]`.
+		const claims = TABLES.get("orderClaims") ?? [];
+		expect(claims).toContain("answer");
+		expect(claims).toContain("waPhone"); // …and the inline fields survive
+
+		// Spread: buyerQuestionValidator is `v.object({ id, ...questionFields })`,
+		// so `label` is two hops from any table that uses it.
+		expect(VALIDATORS.get("buyerQuestionValidator")).toContain("label");
+
+		// Blocks end at their own closing delimiter, not at the next `const`.
+		// orderStageEntry once resolved to 868 fields — most of schema.ts.
+		expect((VALIDATORS.get("orderStageEntry") ?? []).length).toBeLessThan(30);
 	});
 
 	test("every table with person-identifying fields is visited by a phase", () => {

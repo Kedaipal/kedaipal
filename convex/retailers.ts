@@ -3872,22 +3872,12 @@ const DELETE_USER_BATCH = 25;
  * passed by hand. Progress is logged per phase (counts + ids only, never
  * phone numbers or message bodies).
  *
- * Sweeps, in order (see DELETION_PHASES in convex/lib/accountDeletion.ts):
- * orders (+ events + buyer image / payment proof / mockup blobs via the shared
- * `orderBlobs` helper), products (shared `deleteProductCascade`: variants +
- * images + junctions), leftover junctions, categories (+ tile blobs),
- * deliveryJobs (+ POD blobs), deliveryQuotes, customers, pickupLocations
- * (manager name/phone), counterCheckoutSessions (buyer phone/pushname),
- * subscriptions, subscriptionUsage, foundingMembers, retailerSendingLimits,
- * outboundMessageLog (buyer phones), slugHistory, then optOuts attribution,
- * and finally the retailer's own blobs + row.
- *
- * RETAINED BY DECISION (not omissions): `invoices` rows + their frozen PDF
- * blobs (financial records of what Kedaipal charged the seller — no buyer
- * PII) and `adminAuditLog` rows (an audit trail must outlive the tenant it
- * audited). `optOuts` rows are the buyer's GLOBAL suppression instruction and
- * are never deleted — only their `triggeredByRetailerId` attribution is
- * cleared. Rationale lives in convex/lib/accountDeletion.ts + the doc below.
+ * WHAT it sweeps, and what it RETAINS BY DECISION, is deliberately not listed
+ * here. `DELETION_PHASES` in convex/lib/accountDeletion.ts is the list, and the
+ * header above it carries the reasoning for every retained table; this docstring
+ * used to re-enumerate both and had drifted out of date on both counts — a
+ * third copy of a list is a third thing to forget. Read the phase list there, or
+ * docs/account-deletion.md for the prose version.
  *
  * The retailer row is deleted in the FINAL phase, so every continuation batch
  * can re-resolve the tenant by userId; each phase is idempotent, so re-running
