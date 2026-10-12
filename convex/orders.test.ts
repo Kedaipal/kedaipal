@@ -11634,3 +11634,114 @@ describe("searchOrders counts — unpaid that has gone stale", () => {
 		expect(c.unpaidStaleOldestAt).toBe(0);
 	});
 });
+
+describe("searchOrders — the DUE window (what Plan ahead opens)", () => {
+	/** An order due on a given day, with a controllable status and source. */
+	async function dueOn(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+		over: { fulfilmentDate?: number; status?: string; source?: string },
+	) {
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Test Buyer", waPhone: "60120000902" },
+			deliveryAddress: validAddress,
+		});
+		await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			if (!o) throw new Error("order not found");
+			await ctx.db.patch(o._id, {
+				fulfilmentDate: over.fulfilmentDate,
+				...(over.status ? { status: over.status as never } : {}),
+				...(over.source ? { source: over.source as never } : {}),
+			});
+		});
+		return shortId;
+	}
+
+	const search = async (
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		args: Record<string, unknown>,
+	) =>
+		t
+			.withIdentity({ subject: USER_A })
+			.query(api.orders.searchOrders, { retailerId, ...args });
+
+	test("a due window returns the orders due in it, not the ones PLACED in it", async () => {
+		// The bug Home shipped with: a tile counting orders DUE today linked to
+		// `from`/`to`, which bound `createdAt`, so "2 due" opened a list of 6.
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const day = todayMytMidnight(Date.now()) + 3 * DAY_MS;
+		await dueOn(t, r._id, p, { fulfilmentDate: day });
+		await dueOn(t, r._id, p, { fulfilmentDate: day + DAY_MS });
+		// Placed today, due nowhere near the window.
+		await dueOn(t, r._id, p, { fulfilmentDate: undefined });
+
+		const res = await search(t, r._id, {
+			fulfilmentFrom: day,
+			fulfilmentTo: day,
+		});
+		expect(res.total).toBe(1);
+	});
+
+	test("an order with NO fulfilment date is never due", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await dueOn(t, r._id, p, { fulfilmentDate: undefined });
+		const day = todayMytMidnight(Date.now());
+		const res = await search(t, r._id, {
+			fulfilmentFrom: day,
+			fulfilmentTo: day + 6 * DAY_MS,
+		});
+		expect(res.total).toBe(0);
+	});
+
+	test("both bounds are inclusive", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const from = todayMytMidnight(Date.now());
+		const to = from + 6 * DAY_MS;
+		await dueOn(t, r._id, p, { fulfilmentDate: from });
+		await dueOn(t, r._id, p, { fulfilmentDate: to });
+		await dueOn(t, r._id, p, { fulfilmentDate: to + DAY_MS });
+		const res = await search(t, r._id, {
+			fulfilmentFrom: from,
+			fulfilmentTo: to,
+		});
+		expect(res.total).toBe(2);
+	});
+
+	test("the due window ANDs with the status and source filters, so a tile's list matches its count", async () => {
+		// Plan ahead counts OPEN, non-counter orders. The link carries both, or
+		// the list is wider than the number the seller tapped.
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const day = todayMytMidnight(Date.now());
+		await dueOn(t, r._id, p, { fulfilmentDate: day, status: "confirmed" });
+		await dueOn(t, r._id, p, { fulfilmentDate: day, status: "delivered" });
+		await dueOn(t, r._id, p, { fulfilmentDate: day, source: "counter" });
+
+		const res = await search(t, r._id, {
+			fulfilmentFrom: day,
+			fulfilmentTo: day,
+			// The leaves the `?bucket=new&bucket=in_progress` link folds into —
+			// "open", exactly as `countDueByDay` defines it.
+			statuses: [...BUCKET_LEAVES.new, ...BUCKET_LEAVES.in_progress],
+			sources: ["storefront", "claim"],
+		});
+		expect(res.total).toBe(1);
+	});
+});

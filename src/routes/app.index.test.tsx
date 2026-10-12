@@ -41,7 +41,22 @@ vi.mock("@tanstack/react-router", () => ({
 		...opts,
 		useSearch: () => state.search,
 	}),
-	Link: ({ children }: { children: ReactNode }) => <a href="/">{children}</a>,
+	// Carries `to` AND `search`, because what these links CARRY is the thing
+	// under test: a count that opens a differently-scoped list is the bug class
+	// this suite exists to catch.
+	Link: ({
+		children,
+		to,
+		search,
+	}: {
+		children: ReactNode;
+		to?: string;
+		search?: unknown;
+	}) => (
+		<a href={to ?? "/"} data-search={JSON.stringify(search ?? null)}>
+			{children}
+		</a>
+	),
 	useNavigate: () => vi.fn(),
 }));
 vi.mock("@convex-dev/react-query", () => ({
@@ -118,7 +133,7 @@ beforeEach(() => {
 	vi.useFakeTimers();
 	vi.setSystemTime(NOW);
 	state.retailer = retailer();
-	state.products = [{ _id: "p1", stock: 5 }];
+	state.products = [{ _id: "p1", active: true, inStock: true }];
 	state.counts = {
 		new: 3,
 		dueToday: 6,
@@ -275,13 +290,83 @@ describe("permission and exception states", () => {
 	});
 
 	it("out-of-stock products raise their own row", () => {
+		// `inStock` is the field the product card itself reads. The first version
+		// of this row tested `p.stock`, which does not exist on this payload, so
+		// `(undefined ?? 0) <= 0` was true for every product and the row counted
+		// the whole catalogue — the archived row below is what pins that.
 		state.products = [
-			{ _id: "p1", stock: 0 },
-			{ _id: "p2", stock: 0 },
-			{ _id: "p3", stock: 4 },
+			{ _id: "p1", active: true, inStock: false },
+			{ _id: "p2", active: true, inStock: false },
+			{ _id: "p3", active: true, inStock: true },
 		];
 		render(<Home />);
 		expect(screen.getByText("2 products are out of stock")).toBeTruthy();
+	});
+
+	it("an ARCHIVED product that is out of stock raises nothing", () => {
+		// Buyers can't reach it either way, so it is not an exception to act on.
+		state.products = [
+			{ _id: "p1", active: false, inStock: false },
+			{ _id: "p2", active: true, inStock: true },
+		];
+		render(<Home />);
+		expect(screen.queryByLabelText("Needs a look")).toBeNull();
+	});
+
+	it("every count links to a list that answers the SAME question", () => {
+		// The whole class of bug found in testing: the strip said "2 New orders"
+		// and opened all six, because `statuses=` is not a param the inbox reads.
+		state.counts = { ...state.counts, new: 2 };
+		render(<Home />);
+		const link = (label: string) => {
+			const a = screen
+				.getAllByRole("link")
+				.find((x) => x.textContent?.includes(label));
+			return {
+				to: a?.getAttribute("href") ?? "",
+				search: JSON.parse(a?.getAttribute("data-search") ?? "null"),
+			};
+		};
+		const newOrders = link("New orders");
+		expect(newOrders.to).toBe("/app/orders");
+		// The count IS the new bucket, so the link must be the new bucket.
+		expect(newOrders.search).toEqual({ bucket: ["new"] });
+
+		const collect = link("To collect");
+		expect(collect.to).toBe("/app/orders");
+		// "Not received" is unpaid AND claimed — both, or the list is narrower
+		// than the total above it. And OPEN only: the count starts from open
+		// work, so without the buckets "2 unpaid" opened four.
+		expect(collect.search).toEqual({
+			pay: ["unpaid", "claimed"],
+			bucket: ["new", "in_progress"],
+		});
+
+		const due = link("Due today");
+		expect(due.to).toBe("/app/orders");
+		// Open, non-counter, due today — all three rules the count applies.
+		expect(due.search).toEqual({
+			fwin: "today",
+			bucket: ["new", "in_progress"],
+			sources: ["storefront", "claim"],
+		});
+
+		// Params the inbox does not read must never appear: they are dropped
+		// silently, which is how "2" opened a list of 6.
+		for (const l of [newOrders, collect, due])
+			for (const key of Object.keys(l.search ?? {}))
+				expect([
+					"bucket",
+					"pay",
+					"fwin",
+					"from",
+					"to",
+					"ffrom",
+					"fto",
+					"st",
+					"asrc",
+					"sources",
+				]).toContain(key);
 	});
 
 	it("a clean store raises no exception rows at all", () => {

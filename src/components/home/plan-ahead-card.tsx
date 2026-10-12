@@ -61,7 +61,20 @@ export function PlanAheadCard({
 						<li key={d.start} className="min-w-0 flex-1">
 							<Link
 								to="/app/orders"
-								search={{ from: d.start, to: d.start + 86_399_999 }}
+								// The SAME question the tile counted: orders DUE that day
+								// (`ffrom`/`fto` bound `fulfilmentDate`), still open, and
+								// never counter sales. `from`/`to` would bound when the
+								// order was PLACED instead — which is why a tile reading
+								// "2" opened a list of 6.
+								search={{
+									ffrom: d.start,
+									fto: d.start,
+									bucket: ["new", "in_progress"] as const,
+									// Everything that is not a walk-in. An order with no
+									// source recorded reads as "storefront", the same
+									// default the count applies.
+									sources: ["storefront", "claim"] as const,
+								}}
 								aria-label={`${isToday ? "Today" : weekdayLong(d.start)}, ${d.count} ${d.count === 1 ? "order" : "orders"} due`}
 								className="flex min-h-11 flex-col items-center gap-1 rounded-xl py-1 transition-opacity hover:opacity-80"
 							>

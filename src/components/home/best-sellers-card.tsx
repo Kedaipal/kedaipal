@@ -6,7 +6,7 @@ import {
 	type HomePeriod,
 	PERIOD_CARD_LABEL,
 } from "../../lib/home-copy";
-import { type OrdersDrillSearch, productSharePct } from "../../lib/home-view";
+import { type InsightsRangeSearch, productSharePct } from "../../lib/home-view";
 import { AppImage } from "../ui/app-image";
 import { InsightCard } from "./insight-card";
 
@@ -29,7 +29,7 @@ export function BestSellersCard({
 	products: ReadonlyArray<ProductStat>;
 	earned: number;
 	currency: string;
-	insightsSearch: OrdersDrillSearch;
+	insightsSearch: InsightsRangeSearch;
 }) {
 	const top = products.slice(0, 3);
 	if (top.length === 0) return null;

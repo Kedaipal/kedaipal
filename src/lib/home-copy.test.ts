@@ -470,3 +470,57 @@ describe("heroAmount", () => {
 		expect(sp(heroAmount(1_929_000, MYR))).not.toContain(".00");
 	});
 });
+
+describe("a zero baseline is not a comparison", () => {
+	test("a weekday the store earned nothing on is not a benchmark", () => {
+		// "Last Monday you closed at RM 0.00" reads as a fault, and it is the
+		// normal state for a new store — found by driving the real page.
+		expect(
+			comparisonSentence({
+				period: "today",
+				currency: MYR,
+				earned: 11_700,
+				previousEarned: null,
+				lastWeekdayName: "Monday",
+				lastWeekdayEarned: 0,
+			}),
+		).toBeNull();
+	});
+
+	test("a previous window of nothing says what THIS window is instead", () => {
+		// "RM 117.00 more than the 7 days before" claims a week of trading that
+		// never happened.
+		expect(
+			comparisonSentence({
+				period: "7d",
+				currency: MYR,
+				earned: 11_700,
+				previousEarned: 0,
+			}),
+		).toBe("Your first sales in this window");
+	});
+
+	test("…and says nothing at all when this window is empty too", () => {
+		expect(
+			comparisonSentence({
+				period: "7d",
+				currency: MYR,
+				earned: 0,
+				previousEarned: 0,
+			}),
+		).toBeNull();
+	});
+
+	test("a real previous window still gets the money difference", () => {
+		expect(
+			sp(
+				comparisonSentence({
+					period: "7d",
+					currency: MYR,
+					earned: 486_000,
+					previousEarned: 412_000,
+				}),
+			),
+		).toBe("RM 740.00 more than the 7 days before");
+	});
+});

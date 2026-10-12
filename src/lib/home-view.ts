@@ -161,6 +161,19 @@ export type OrdersDrillSearch = {
 	asrc?: string[];
 };
 
+/**
+ * The range an Insights link hands over — the window the seller was looking at
+ * on Home, in the shape `/app/insights` reads. Distinct from
+ * `ordersDrillSearch` because the two answer different questions: that one
+ * narrows a LIST of orders, this one positions a REPORT.
+ */
+export type InsightsRangeSearch = { from: number; to: number };
+
+export function insightsRangeSearch(range: HomeRange): InsightsRangeSearch {
+	// Both bounds are the MYT midnights Insights validates and the picker owns.
+	return { from: range.from, to: range.to };
+}
+
 export function ordersDrillSearch(opts: {
 	range: HomeRange;
 	/** Narrow to one attribution source (the Sources card's rows). */

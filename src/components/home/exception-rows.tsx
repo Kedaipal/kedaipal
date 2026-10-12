@@ -44,6 +44,9 @@ export function ExceptionRows({
 	outOfStock: number;
 	currency: string;
 }) {
+	// The instant the count was taken from, so the list the row opens holds the
+	// same orders the row counted.
+	const staleBefore = Date.now() - STALE_UNPAID_DAYS * 24 * 60 * 60 * 1000;
 	const stale = staleUnpaidRow({
 		count: staleUnpaid.count,
 		amount: staleUnpaid.amount,
@@ -63,7 +66,14 @@ export function ExceptionRows({
 					title={stale.title}
 					detail={stale.detail}
 					to="/app/orders"
-					search={{ payment: "unpaid" as const, stale: true }}
+					// Exactly `isStaleUnpaid`: open and not-received (`pay`), placed
+					// before the staleness cutoff (`to`, which bounds `createdAt`).
+					// T2 guessed this would need a new `stale=1` param — it does not,
+					// because the inbox's own date bound already asks the question.
+					search={{
+						pay: ["unpaid", "claimed"] as const,
+						to: staleBefore,
+					}}
 				/>
 			) : null}
 			{outOfStock > 0 ? (

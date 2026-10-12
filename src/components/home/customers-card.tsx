@@ -6,7 +6,6 @@ import {
 	lapsedRegularsLine,
 	PERIOD_CARD_LABEL,
 } from "../../lib/home-copy";
-import type { OrdersDrillSearch } from "../../lib/home-view";
 import type { CustomerSplit } from "../../lib/insights-view";
 import { InsightCard } from "./insight-card";
 
@@ -22,14 +21,12 @@ export function CustomersCard({
 	split,
 	lapsed,
 	quietDays,
-	insightsSearch,
 }: {
 	period: HomePeriod;
 	split: CustomerSplit;
 	/** From `customers.countLapsedRegulars`; undefined while loading. */
 	lapsed: { count: number; capped: boolean } | undefined;
 	quietDays: number;
-	insightsSearch: OrdersDrillSearch;
 }) {
 	const returningPct =
 		split.total > 0 ? Math.round((split.returning / split.total) * 100) : 0;
@@ -52,7 +49,6 @@ export function CustomersCard({
 			})}
 			footerLabel="See every customer"
 			footerTo="/app/customers"
-			footerSearch={insightsSearch}
 		>
 			{split.total > 0 ? (
 				<div className="flex flex-col gap-2">
@@ -103,7 +99,6 @@ export function CustomersCard({
 			{lapsedLine ? (
 				<Link
 					to="/app/customers"
-					search={{ sort: "lastOrder" as const }}
 					className="-mx-1 flex min-h-11 items-center gap-2.5 rounded-xl border border-border bg-muted/40 px-2.5 py-2 transition-colors hover:bg-muted"
 				>
 					<span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground">

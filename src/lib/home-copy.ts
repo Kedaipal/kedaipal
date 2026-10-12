@@ -95,12 +95,22 @@ export function comparisonSentence(opts: {
 		if (
 			opts.lastWeekdayName === undefined ||
 			opts.lastWeekdayEarned === undefined ||
-			opts.lastWeekdayEarned === null
+			opts.lastWeekdayEarned === null ||
+			// A weekday the store earned nothing on is not a benchmark. "Last
+			// Monday you closed at RM 0.00" reads as a fault rather than a
+			// comparison, and it is the normal state for a new store — the same
+			// reason `deltaPercent` refuses a zero base.
+			opts.lastWeekdayEarned <= 0
 		)
 			return null;
 		return `Last ${opts.lastWeekdayName} you closed at ${formatPrice(opts.lastWeekdayEarned, currency)}`;
 	}
+	// Nothing to compare against: "RM 117 more than the 7 days before" claims a
+	// previous week of trading that did not happen. Say what this window is
+	// instead, which is the true and useful statement.
 	if (previousEarned === null) return null;
+	if (previousEarned <= 0)
+		return earned > 0 ? "Your first sales in this window" : null;
 	const window = period === "7d" ? "7 days" : "30 days";
 	const delta = earned - previousEarned;
 	if (delta === 0) return `The same as the ${window} before`;

@@ -6,12 +6,13 @@ import { todayMytMidnight } from "../../../convex/lib/fulfilmentDate";
 import {
 	type HomePeriod,
 	hasEnoughForInsights,
+	heroAmount,
 	insightThresholdLine,
 } from "../../lib/home-copy";
 import {
 	buildHomeSalesView,
 	homeQueryPlan,
-	ordersDrillSearch,
+	insightsRangeSearch,
 } from "../../lib/home-view";
 import type { RangePayload, TodayPayload } from "../../lib/insights-view";
 import { DepositNote } from "../insights/deposit-note";
@@ -180,7 +181,9 @@ export function SalesSection({
 		(m, b) => (b.earned > (m?.earned ?? -1) ? b : m),
 		null as (typeof bars)[number] | null,
 	);
-	const drill = ordersDrillSearch({ range: plan.range });
+	// The window the seller is looking at, handed to Insights so "Open full
+	// Insights" lands on the same figures rather than Insights' own default.
+	const drill = insightsRangeSearch(plan.range);
 	const enough = hasEnoughForInsights(view.orderCount);
 
 	return (
@@ -197,8 +200,12 @@ export function SalesSection({
 				chartTitle={
 					period === "today" ? "Today against the last 6 days" : "Daily sales"
 				}
+				// The day AND what it made — "Best: Sat" alone tells the seller
+				// nothing the bars above it don't already show.
 				bestBarLabel={
-					best && best.earned > 0 && period !== "today" ? best.label : null
+					best && best.earned > 0 && period !== "today"
+						? `${best.label} · ${heroAmount(best.earned, currency)}`
+						: null
 				}
 				lastWeekdayName={lastWeekdayName}
 				lastWeekdayEarned={lastWeekdayEarned}
@@ -229,13 +236,13 @@ export function SalesSection({
 						split={view.customers}
 						lapsed={lapsed}
 						quietDays={QUIET_DAYS}
-						insightsSearch={drill}
 					/>
 					<SourcesCard
 						period={period}
 						sources={view.sources}
 						currency={currency}
 						insightsSearch={drill}
+						range={plan.range}
 					/>
 				</div>
 			)}

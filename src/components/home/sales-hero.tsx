@@ -14,7 +14,7 @@ import {
 	PERIOD_EYEBROW,
 	zeroEarnedLine,
 } from "../../lib/home-copy";
-import type { HomeSalesView, OrdersDrillSearch } from "../../lib/home-view";
+import type { HomeSalesView, InsightsRangeSearch } from "../../lib/home-view";
 import { cn } from "../../lib/utils";
 
 /**
@@ -47,7 +47,7 @@ export function SalesHero({
 	bestBarLabel: string | null;
 	lastWeekdayName?: string;
 	lastWeekdayEarned?: number | null;
-	insightsSearch: OrdersDrillSearch;
+	insightsSearch: InsightsRangeSearch;
 }) {
 	const { period, earned, collected, orderCount, aov, uncollected } = view;
 	const delta = deltaPercent({

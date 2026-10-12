@@ -280,8 +280,12 @@ function DashboardHome() {
 
 	const counts = inboxSnapshot?.counts;
 	const countsLoading = inboxSnapshot === undefined;
+	// The SAME rule the product card prints as "Sold out" (`app.products.index`),
+	// so the row and the list it opens can never disagree. `p.stock` does not
+	// exist on this payload — reading it made the test `(undefined ?? 0) <= 0`,
+	// which is true for every product, so the row counted the whole catalogue.
 	const outOfStock = (products ?? []).filter(
-		(p) => (p.stock ?? 0) <= 0 && p.blockWhenOutOfStock !== false,
+		(p) => p.active && !p.inStock,
 	).length;
 
 	// Credits: tone decides WHERE the card goes (decision 6), so the page's
@@ -364,6 +368,10 @@ function DashboardHome() {
 				navigate({
 					search: next === "7d" ? {} : { p: next },
 					replace: true,
+					// The chips sit beside the hero, far down the page. Without this
+					// the router restores scroll to the top on every tap, so the
+					// seller is thrown away from the figures they just changed.
+					resetScroll: false,
 				})
 			}
 		/>
@@ -382,7 +390,15 @@ function DashboardHome() {
 	);
 
 	return (
-		<div className="flex flex-col gap-6 lg:gap-8">
+		/*
+		 * Desktop gets a READING WIDTH, not the full window (z8r3fdnt5u, absorbed
+		 * here). Stretched edge to edge, the action strip's three cells grew to
+		 * ~470px each around a two-digit number, and the hero's daily bars spread
+		 * across ~1090px — a chart so wide that six quiet days read as a broken
+		 * axis rather than a quiet week. The three insight cards still go 3-up
+		 * inside it, which is the rail the board draws.
+		 */
+		<div className="mx-auto flex w-full max-w-5xl flex-col gap-6 lg:gap-8">
 			<HomeGreeting retailer={retailer} />
 
 			{/* Out of credits: above everything, because nothing below it can be
@@ -427,10 +443,14 @@ function DashboardHome() {
 			    — at that moment it is the only thing that can start one. */}
 			{phase === "waiting" ? shareCard : null}
 
-			{checklist}
+			{/* Before the first order the checklist IS the page's job, so it leads.
+			    Once money exists, sales lead and setup follows — the order the
+			    Onboarding-3 board draws. */}
+			{phase === "new" || phase === "waiting" ? checklist : null}
 
 			{phase === "waiting" ? <EmptySalesCard /> : null}
-			{phase === "new" ? null : phase === "waiting" ? null : salesSection}
+			{phase === "new" || phase === "waiting" ? null : salesSection}
+			{phase === "new" || phase === "waiting" ? null : checklist}
 
 			{phase === "steady" || phase === "first" ? (
 				dueByDay && dueByDay.length > 0 ? (

@@ -2,7 +2,10 @@ import { Link } from "@tanstack/react-router";
 import type { LucideIcon } from "lucide-react";
 import { ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";
-import type { OrdersDrillSearch } from "../../lib/home-view";
+import type {
+	InsightsRangeSearch,
+	OrdersDrillSearch,
+} from "../../lib/home-view";
 import { cn } from "../../lib/utils";
 
 /**
@@ -33,7 +36,7 @@ export function InsightCard({
 	/** The drill-in. Omitted when there is nothing more to see. */
 	footerLabel?: string;
 	footerTo?: string;
-	footerSearch?: OrdersDrillSearch;
+	footerSearch?: OrdersDrillSearch | InsightsRangeSearch;
 	className?: string;
 }) {
 	return (

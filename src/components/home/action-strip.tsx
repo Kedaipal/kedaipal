@@ -1,9 +1,27 @@
 import { Link } from "@tanstack/react-router";
 import type { LucideIcon } from "lucide-react";
 import { Banknote, Bell, CalendarCheck } from "lucide-react";
-import { formatPriceCompact } from "../../lib/format";
+import { formatPrice } from "../../lib/format";
+import { heroAmount } from "../../lib/home-copy";
 import { cn } from "../../lib/utils";
 import { Skeleton } from "../ui/skeleton";
+
+/**
+ * The buckets every strip count is computed over: OPEN work.
+ *
+ * `counts.dueToday` and `counts.unpaid` both start from "is this order still
+ * open", so every link must carry it too. Without it, "To collect: 2 unpaid"
+ * opened four — the two open ones plus two settled orders that happen to carry
+ * an unpaid status. A count and the list it opens have to ask one question.
+ */
+const OPEN_BUCKETS = ["new", "in_progress"] as const;
+
+/**
+ * Everything that is not a walk-in. A counter sale stamps today as its
+ * fulfilment date at create, so `counts.dueToday` excludes it; an order with no
+ * source recorded reads as "storefront", the same default the count applies.
+ */
+const NOT_COUNTER = ["storefront", "claim"] as const;
 
 /**
  * The three things that might need the seller right now (z8r3fdrgzj).
@@ -49,7 +67,10 @@ export function ActionStrip({
 				label="New orders"
 				sub={paused ? "accepting paused" : "to confirm"}
 				to="/app/orders"
-				search={{ statuses: ["pending"] as const }}
+				// The count is the NEW BUCKET, so the link must be too — `statuses`
+				// is not a param this inbox reads (it reads `st` / `bucket`), so the
+				// old value was dropped and "2 New orders" opened all 6.
+				search={{ bucket: ["new"] as const }}
 			/>
 			<Cell
 				icon={CalendarCheck}
@@ -59,18 +80,31 @@ export function ActionStrip({
 				label="Due today"
 				sub={paused ? "updates paused" : "to prepare"}
 				to="/app/orders"
-				search={{ fwin: "today" as const }}
+				// Open, non-counter, due today — the three rules `counts.dueToday`
+				// is built from, so the chip's number and this list agree.
+				search={{
+					fwin: "today" as const,
+					bucket: OPEN_BUCKETS,
+					sources: NOT_COUNTER,
+				}}
 			/>
 			<Cell
 				icon={Banknote}
 				tone="plain"
 				loading={loading}
-				value={formatPriceCompact(unpaidAmount, currency)}
-				valueTitle={String(unpaidAmount / 100)}
+				// `heroAmount`, not the plain format: at 334px "RM 81.00" clipped to
+				// "RM 81…" — the figure the cell exists to show. A whole-ringgit
+				// total drops the two decimals that were costing it the fit, and
+				// the full-precision number stays in the title.
+				value={heroAmount(unpaidAmount, currency)}
+				valueTitle={formatPrice(unpaidAmount, currency)}
 				label="To collect"
 				sub={`${unpaidCount} unpaid`}
 				to="/app/orders"
-				search={{ payment: "unpaid" as const }}
+				// "To collect" counts every open order whose money has not arrived —
+				// unpaid AND claimed-but-unverified (`isOpenUnpaid`). The param is
+				// `pay`, and it takes both, or the list is narrower than its own total.
+				search={{ pay: ["unpaid", "claimed"] as const, bucket: OPEN_BUCKETS }}
 			/>
 		</section>
 	);

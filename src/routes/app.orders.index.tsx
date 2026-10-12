@@ -191,6 +191,11 @@ type InboxSearch = {
 	mockup?: boolean;
 	/** Fulfilment-date urgency window (Today / Tomorrow / This week). */
 	fwin?: FulfilmentWindow;
+	/** Orders DUE between these two MYT midnights, inclusive — the arbitrary-span
+	 * twin of `fwin`, which only names three windows. Home's Plan ahead tiles
+	 * open one day each through it (z8r3fdrgzj). */
+	ffrom?: number;
+	fto?: number;
 	/** Checkout surfaces to keep (online / counter / claim link). MULTI since
 	 * 86eyrtz74 — "everything that isn't a walk-in" is a real question that one
 	 * value can't ask. A legacy singular `?source=` is still read and folded in,
@@ -437,6 +442,8 @@ export const Route = createFileRoute("/app/orders/")({
 			mockup:
 				search.mockup === true || search.mockup === "true" ? true : undefined,
 			fwin: isFulfilmentWindow(search.fwin) ? search.fwin : undefined,
+			ffrom: typeof search.ffrom === "number" ? search.ffrom : undefined,
+			fto: typeof search.fto === "number" ? search.fto : undefined,
 			// A pre-widen `?source=counter` folds into the list, so a bookmark or a
 			// link shared before this shipped still filters (86eyrtz74).
 			sources: sources.length > 0 ? sources : undefined,
@@ -528,6 +535,8 @@ function OrdersRoute() {
 		to,
 		mockup = false,
 		fwin,
+		ffrom,
+		fto,
 		sources = [],
 		ful = [],
 		st = [],
@@ -715,6 +724,8 @@ function OrdersRoute() {
 							dateTo: to,
 							mockupPending: mockup || undefined,
 							fulfilmentWindow: fwin,
+							fulfilmentFrom: ffrom,
+							fulfilmentTo: fto,
 							sources: sources.length > 0 ? sources : undefined,
 							fulfilments: ful.length > 0 ? ful : undefined,
 							statuses: st.length > 0 ? st : undefined,
@@ -913,6 +924,8 @@ function OrdersRoute() {
 		to != null ||
 		mockup ||
 		fwin != null ||
+		ffrom != null ||
+		fto != null ||
 		sources.length > 0 ||
 		ful.length > 0 ||
 		cat.length > 0 ||
@@ -1397,6 +1410,8 @@ function OrdersRoute() {
 					dateTo: to,
 					mockupPending: mockup || undefined,
 					fulfilmentWindow: fwin,
+					fulfilmentFrom: ffrom,
+					fulfilmentTo: fto,
 					sources: sources.length > 0 ? sources : undefined,
 					fulfilments: ful.length > 0 ? ful : undefined,
 					statuses: st.length > 0 ? st : undefined,
