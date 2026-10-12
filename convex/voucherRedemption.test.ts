@@ -306,6 +306,60 @@ describe("storefront checkout", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Stacking with promo prices (z8r3fdcw72 × z8r3fdr617)
+// ---------------------------------------------------------------------------
+
+describe("a voucher stacks ON TOP of a promo price", () => {
+	// The two are deliberately SEPARATE mechanisms (CLAUDE.md): a promo changes
+	// the LINE PRICE, a voucher is an ORDER-LEVEL deduction. Stacking means the
+	// voucher's base is whatever the lines now sum to — the PROMO subtotal —
+	// and neither branch could test this before they merged.
+	test("the discount computes from the promo subtotal, and the guard judges it too", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		// RM45 list / RM31.50 promo — the promo.test.ts fixture shape.
+		const productId = await asUser.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Brownie Box",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			blockWhenOutOfStock: false,
+			promo: { label: "Raya Sale" },
+			variants: [
+				{ optionValues: [], price: 4500, promoPrice: 3150, onHand: 100 },
+			],
+		});
+		const voucher = await mintVoucher(t, USER_A, retailer._id, {
+			kind: "percent",
+			value: 10,
+		});
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 2 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+			voucherCode: voucher.code,
+			// The price-changed guard judges the GROSS (promo) subtotal the buyer
+			// saw — the voucher must not enter that comparison, or every voucher
+			// order would refuse as "price changed".
+			expectedSubtotal: 6300,
+		});
+		const order = await readOrder(t, await orderIdOf(t, shortId));
+		// Lines froze the PROMO price…
+		expect(order.items[0].price).toBe(3150);
+		expect(order.subtotal).toBe(6300);
+		// …and the voucher took 10% of the PROMO subtotal, not the list one
+		// (10% of 9000 = 900 would be the bug).
+		expect(order.voucherDiscount).toBe(630);
+		expect(order.total).toBe(5670);
+	});
+});
+
+// ---------------------------------------------------------------------------
 // The race — the reason redemption is atomic with the insert
 // ---------------------------------------------------------------------------
 

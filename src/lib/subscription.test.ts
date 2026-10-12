@@ -584,6 +584,7 @@ describe("hasFeature (client plan gate)", () => {
 				onlinePayments: false,
 				events: false,
 				waOrderAlerts: false,
+				promo: false,
 				vouchers: false,
 			},
 		});
@@ -607,6 +608,7 @@ describe("hasFeature (client plan gate)", () => {
 				onlinePayments: true,
 				events: true,
 				waOrderAlerts: true,
+				promo: true,
 				vouchers: true,
 			},
 		});
@@ -638,6 +640,7 @@ describe("isCrmLocked", () => {
 			onlinePayments: false,
 			events: false,
 			waOrderAlerts: false,
+			promo: false,
 			vouchers: false,
 		},
 	});
@@ -682,6 +685,7 @@ describe("isOrderInboxLocked (order-detail 'Came from' drill-down, 86eyq0eq9)", 
 			onlinePayments: false,
 			events: false,
 			waOrderAlerts: false,
+			promo: false,
 			vouchers: false,
 		},
 	});
@@ -727,6 +731,7 @@ describe("isOrderInboxLocked (order-detail 'Came from' drill-down, 86eyq0eq9)", 
 				onlinePayments: false,
 				events: false,
 				waOrderAlerts: false,
+				promo: false,
 				vouchers: false,
 			},
 		});

@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import { useActAsRetailerId } from "../../hooks/useActAs";
 import { MASK_PII } from "../../lib/analytics-privacy";
-import { formatClaimCountdown } from "../../lib/countdown";
+import { formatTimeLeft } from "../../lib/countdown";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import {
 	ClaimCopyLinkButton,
@@ -121,7 +121,7 @@ export function ClaimsPanel({
 									}`}
 								>
 									<Clock className="size-3" aria-hidden />
-									{stillOpen ? formatClaimCountdown(remaining) : "Expired"}
+									{stillOpen ? formatTimeLeft(remaining) : "Expired"}
 								</span>
 								<div className="flex w-full shrink-0 gap-2 sm:w-auto">
 									<ClaimCopyLinkButton

@@ -131,25 +131,33 @@ describe("opensLine — what the pack OPENS, before the tap (Credits T3.1)", () 
 			expect(line).not.toContain("all 4");
 		});
 
-		it("says where the missing credits went, rather than going quiet", () => {
-			expect(opensLine(4, 4, [3, 4, 5, 6])).toContain(
-				"2 credits go to orders you cancelled.",
+		it("a pack that can't reach the oldest says how far short it falls", () => {
+			// Verified on dev (10 Oct): a cancelled gated order's refund moves
+			// the watermark the single position that order held, so positions
+			// and debt stay in lockstep and no credit is ever wasted — paying
+			// exactly the debt always clears the live queue. So the line names
+			// the SHORTFALL; an earlier draft blamed "orders you cancelled",
+			// which read as a wasted credit and was not true.
+			expect(opensLine(1, 2, [3])).toBe(
+				"That doesn't open an order yet — the one waiting needs 3 credits.",
 			);
-			expect(opensLine(2, 2, [2, 3])).toContain(
-				"1 credit goes to an order you cancelled.",
+			expect(opensLine(1, 1, [2])).toBe(
+				"That doesn't open an order yet — the one waiting needs 2 credits.",
 			);
 		});
 
-		it("a pack swallowed entirely by dead positions says so plainly", () => {
-			// Worst case: the seller would otherwise tap buy and see nothing move.
-			expect(opensLine(1, 2, [3])).toBe(
-				"That doesn't open an order yet — 1 order still waiting. 2 credits go to orders you cancelled.",
-			);
+		it("never blames a cancellation for a credit that paid down real debt", () => {
+			for (const line of [
+				opensLine(4, 4, [3, 4, 5, 6]),
+				opensLine(1, 2, [3]),
+				opensLine(4, 6, [3, 4, 5, 6]),
+			])
+				expect(line).not.toMatch(/you cancelled/);
 		});
 
 		it("a pack big enough still opens everything", () => {
 			expect(opensLine(4, 6, [3, 4, 5, 6])).toBe(
-				"That opens all 4 orders waiting on credits. 2 credits go to orders you cancelled.",
+				"That opens all 4 orders waiting on credits.",
 			);
 		});
 

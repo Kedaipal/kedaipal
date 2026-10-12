@@ -235,6 +235,7 @@ describe("plan gating — CRM (Pro+)", () => {
 			onlinePayments: true,
 			events: true,
 			waOrderAlerts: true,
+			promo: true,
 			vouchers: true,
 		});
 
@@ -251,6 +252,7 @@ describe("plan gating — CRM (Pro+)", () => {
 			onlinePayments: false,
 			events: false,
 			waOrderAlerts: false,
+			promo: false,
 			vouchers: false,
 		});
 	});
@@ -276,6 +278,7 @@ describe("plan gating — CRM (Pro+)", () => {
 		onlinePayments: true,
 		events: true,
 		waOrderAlerts: true,
+			promo: true,
 		vouchers: true,
 		});
 		// subscriptions.current (billing nav) resolves the same way.

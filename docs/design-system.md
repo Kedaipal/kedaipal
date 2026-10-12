@@ -92,7 +92,7 @@ Don't hand-roll what exists. From [`src/components/ui/`](../src/components/ui/):
 | Phone — buyer | `BuyerPhoneInput` (plain state) / `TextField prefix={<BuyerPhonePrefix />}` (form-bound) | the same plate **with a country picker** — every number a buyer gives. See below. |
 | Composite control | `InputPrefixFrame` | one border owning a plate + a `bare` input (the `+60` plate, the buyer picker, an "RM"). |
 | Modal | `Dialog*` | `DialogFooter` is full-bleed + reverses on mobile. Confirm-only flows → `ConfirmDialog` — **never `window.confirm`/`alert`**: a native dialog is unstyled, theme-blind, and BLOCKS the renderer until it is dismissed (the product wizard's discard froze the page for as long as it stood, found in the z8r3fdff97 test round). **`DialogContent` caps itself at `calc(100dvh-2rem)` and scrolls** — put long content straight in, no hand-rolled `max-h`; see below. |
-| Popover / menu | `Popover`, `DropdownMenu*` (radix) | `DropdownMenu` = a keyboard-navigable action menu (trigger → items). Use to group related actions behind one control instead of a row of competing buttons (e.g. the counter-checkout header's "New order"). Open a `Dialog` from an item via controlled state in `onSelect` — the menu→dialog focus handoff is clean. |
+| Popover / menu | `Popover`, `DropdownMenu*` (radix) | `DropdownMenu` = a keyboard-navigable action menu (trigger → items). Use to group related actions behind one control instead of a row of competing buttons (e.g. the counter-checkout header's "New order"). Open a `Dialog` from an item via controlled state in `onSelect` — the menu→dialog focus handoff is clean. **`DropdownMenuContent` caps itself at the room Radix measured below the trigger and scrolls** — pass width, never your own `max-h`; see below. |
 | Copy-to-clipboard | `CopyButton` | one-tap copy w/ feedback (order IDs, bank details). |
 | Reorderable list | `SortableList` | **the** sorting standard (@dnd-kit, mobile-safe). **Never** arrow-button reordering. |
 | Loading state | `Skeleton` | prefer skeletons over spinners for content. |
@@ -209,7 +209,7 @@ This makes failure *recoverable* — it does not make the images small. The payl
 
 ## Patterns & anti-patterns
 - **Focus:** every interactive element needs the visible ring (`focus-visible:ring-3 ring-ring/50`) — primitives already do; preserve it on custom elements.
-- **Form errors take you to the problem.** A `useAppForm` form's `onSubmit` must go through `submitThenFocusError(form, e)` ([`src/components/forms/focus-error.ts`](../src/components/forms/focus-error.ts)) instead of a bare `form.handleSubmit()`. On a failed submit it scrolls to and focuses the **first** invalid control (in DOM order, retrying a few frames so it never races React's commit) so the seller never hunts a long form for a red line. Field controls already set `aria-invalid` (via `isError`) and show their message beneath via `FieldError`. **Submit-time business rules must also be addressed to their exact input** — the pattern is the product variant grid's `VariantIssue` (`{where, index, field, message}` from `buildSubmitVariants`/`collectOptionIssues` → the editor marks that cell `aria-invalid` + message beneath, cleared on edit); same idea for the checkout pickup picker (`error` prop on the radio list) and the pickup dialog's address/fee. A `data-form-error` banner is the **fallback for true server errors only**, never for a validation the UI could point at.
+- **Form errors take you to the problem.** A `useAppForm` form's `onSubmit` must go through `submitThenFocusError(form, e)` ([`src/components/forms/focus-error.ts`](../src/components/forms/focus-error.ts)) instead of a bare `form.handleSubmit()`. On a failed submit it scrolls to and focuses the **first** invalid control (in DOM order, re-looking on a short timer so it never races React's commit) so the seller never hunts a long form for a red line. **That retry rides a timer, never `requestAnimationFrame`** — a document whose `visibilityState` is `"hidden"` runs no rAF callbacks at all, and a Chrome window fully covered by another app is hidden, which is exactly how this gets hand-tested. On rAF the whole chain ran (submit → settle → `.finally()`) and then stopped dead, so "take me to the error" looked permanently broken in the only environment anyone ever checks it in, while the seller's visible page was the one place it worked (`z8r3fdrkq2`). jsdom fires rAF regardless of visibility, so only the test that stubs rAF out can see this — keep it. Field controls already set `aria-invalid` (via `isError`) and show their message beneath via `FieldError`. **Submit-time business rules must also be addressed to their exact input** — the pattern is the product variant grid's `VariantIssue` (`{where, index, field, message}` from `buildSubmitVariants`/`collectOptionIssues` → the editor marks that cell `aria-invalid` + message beneath, cleared on edit); same idea for the checkout pickup picker (`error` prop on the radio list) and the pickup dialog's address/fee. A `data-form-error` banner is the **fallback for true server errors only**, never for a validation the UI could point at.
 - **A server error reaches a person as a sentence, never as a stack trace.** Every `toast.error` / inline server error goes through `convexErrorMessage` ([`src/lib/format.ts`](../src/lib/format.ts)) — never `err.message`, which is the raw `[CONVEX M(x:y)] [Request ID: …] Server Error / Uncaught Error: … / at …` blob the Convex client builds. What survives is decided by the error's CLASS, not by how its words read: `ConvexError` is copy we wrote for a human and is shown as-is (**so throw `ConvexError`, not `Error`, for anything a user can trigger**); a plain `Error` that crossed the wire has its wrapper stripped; a `TypeError`/`RangeError`/… is a bug of ours and becomes one generic line, because "Cannot read properties of undefined" is not something a seller can act on. Pinned by `src/lib/format.test.ts` — the wrapper, the request id and the frames can never appear on screen. This became a rule after a refused teammate was shown `Uncaught Error: Forbidden at requireRetailerAccess (convex/lib/auth.ts:156)` (26 Sep, `86exr91r4`).
 - **Cap + clamp every free-text description.** Public-facing free text (store/product/category descriptions, pickup notes) needs BOTH a server-enforced length cap (shared const, e.g. `STORE_DESCRIPTION_MAX`) AND a display `line-clamp-*` wherever it renders in a card/list/header, so one long value can't break the layout. Rule of thumb: storefront header blurb → `line-clamp-2`; a 1-line label/subtitle → `line-clamp-1`; long-form product copy renders via `Markdown` only in a dedicated scrollable panel (the product detail sheet), never raw in a tight row.
 - **Disabled-with-reason > wrong-but-enabled** (CTO lens). A disabled Button + one-line why beats an enabled button that errors.
@@ -228,10 +228,26 @@ This makes failure *recoverable* — it does not make the images small. The payl
   at 1006 and failing a hit test. 17 of the app's 20 shared-shell dialogs were
   exposed. `overflow-x` stays `hidden` — that is what rounds the full-bleed
   footer's corners — so never collapse the pair back to bare `overflow-hidden`.
-  **Machine-enforced** by `src/lib/dialog-shell-overrides.test.ts`: `cn()` is
+  **Machine-enforced** by `src/lib/overlay-shell-overrides.test.ts`: `cn()` is
   `twMerge`, so a call site passing `overflow-hidden` or `max-h-none` would
   silently strip the shell's own classes and restore the bug. A *different*
   `max-h-*` is fine — it is still a cap.
+- **Nor is a menu.** `DropdownMenuContent` caps at
+  `--radix-dropdown-menu-content-available-height` — the room Radix measured
+  below the trigger — and scrolls the y-axis, for the same reason one
+  primitive over. A menu is *anchored*, so when it outgrows that room Radix
+  slides it upward until its first items sit above the viewport; with the bare
+  `overflow-hidden` it used to carry, both axes were hidden and there was
+  nothing to scroll back to. Found on the admin Sellers **Manage** menu, whose
+  seven described items overflow a laptop window: "Open store" — the first
+  item, and the one an admin reaches for most — was off the top edge and
+  unreachable by mouse, keyboard or trackpad. Measured in the live page: a
+  453px menu in 300px of room reported `scrollHeight === clientHeight`, i.e. no
+  scroll existed at all; capped and scrollable it gives 153px of travel.
+  Unlike the dialog, **the caller must not pass its own `max-h-*`** — a
+  hand-picked cap ignores how much room is actually below the trigger. Width
+  classes (`w-72`, `w-64`) are the normal thing to pass and are fine. Same
+  machine enforcement, same file.
 - **Centred dialog: `calc(100dvh-2rem)`. Bottom sheet: `max-h-[90dvh]`.** Both
   appear in the codebase and that is not drift. A centred modal is pushed off
   BOTH edges by `-translate-y-1/2`, so it wants the same 1rem gutter its

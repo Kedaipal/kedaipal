@@ -57,11 +57,12 @@ import {
 	countOrdersAwaitingCredit,
 	loadCreditAccount,
 	projectedCredits,
+	storeGateExempt,
+	storeUnmetered,
 } from "./credits";
 import {
 	isAdmin,
 	requireRetailerAccess,
-	storeOwnerIsAdmin,
 	tryRetailerAccess,
 } from "./lib/auth";
 import {
@@ -76,7 +77,6 @@ import {
 	orderCreditFunded,
 	ordersAwaitingCredit,
 	sellerRefundsLeft,
-	storeIsMetered,
 } from "./lib/credits";
 import {
 	type SellerCustomer,
@@ -95,8 +95,8 @@ type AnyCtx = QueryCtx | MutationCtx;
  * stay behind the `credits` grant, and a sequence number is not a balance).
  */
 export type CreditGateState = {
-	/** Nothing in this store is ever gated: comped, admin-owned, no
-	 * subscription row, or no credit account yet. Fail open. */
+	/** Nothing in this store is ever gated: UNMETERED (admin-owned or comped),
+	 * no subscription row, or no credit account yet. Fail open. */
 	exempt: boolean;
 	/** The watermark. An order is workable iff `creditSeq <= fundedThrough`. */
 	fundedThrough: number;
@@ -127,9 +127,10 @@ function openGate(unlockRoute: CreditUnlockRoute): CreditGateState {
 
 /**
  * The ONE gate resolver — the server guards, the read-path redaction and the
- * dashboard payload all read it. Exempt stores (comped, admin-owned, no
- * subscription row) and a store with no credit account yet are never gated
- * (fail open, like the past-due lock's missing-row fail-safe).
+ * dashboard payload all read it. Unmetered stores (admin-owned or comped —
+ * they hold no balance at all), the missing-subscription-row fail-safe and a
+ * store with no credit account yet are never gated (fail open, like the
+ * past-due lock's missing-row fail-safe).
  *
  * A KEDAIPAL ADMIN is never gated, here rather than at each call site: the
  * redaction, the guards, the batch skip and the dashboard payload all read
@@ -152,15 +153,16 @@ export async function resolveCreditGate(
 	// A Kedaipal admin CALLER is never gated (see the doc above) — identity,
 	// not store ownership, so it also covers white-glove act-as.
 	if (await isAdmin(ctx)) return openGate(unlockRoute);
-	// An admin's own STORE is UNMETERED (z8r3fdp4er): it holds no balance, so
-	// there is nothing to be at zero. `projectedCredits` below would answer
-	// null and reach the same open gate, but a gate resolver should say where
-	// it fails open, not make the reader follow three hops to find out.
-	if (!storeIsMetered({ ownerIsAdmin: storeOwnerIsAdmin(retailer) }))
-		return openGate(unlockRoute);
-	// SPONSORED: comped, or the missing-subscription fail-safe.
-	if (creditLockExempt({ status, comped: sub?.comped === true }))
-		return openGate(unlockRoute);
+	// An UNMETERED store (z8r3fdp4er + z8r3fdrph7 — an admin's own, or a
+	// SPONSORED one) holds no balance, so there is nothing to be at zero.
+	// `projectedCredits` below would answer null and reach the same open gate,
+	// but a gate resolver should say where it fails open, not make the reader
+	// follow three hops to find out.
+	if (storeUnmetered(retailer, sub)) return openGate(unlockRoute);
+	// The missing-subscription fail-safe, which `resolveAccess` treats as
+	// sponsored full access: metered, so the ledger keeps a record, but never
+	// locked.
+	if (creditLockExempt({ status })) return openGate(unlockRoute);
 	const account = await loadCreditAccount(ctx, retailer._id);
 	if (!account) return openGate(unlockRoute);
 	const projected = await projectedCredits(ctx, retailer._id, account, now);
@@ -248,8 +250,17 @@ export async function orderGatedForSeller(
  * the redaction, the guards, the inbox filter and the UI. */
 export function isOrderGated(
 	gate: CreditGateState,
-	order: { creditSeq?: number },
+	order: { creditSeq?: number; neverFunded?: boolean },
 ): boolean {
+	// An exempt store sees everything — UNMETERED (admin-owned or comped), the
+	// missing-row fail-safe, or no credit account yet. Said explicitly rather
+	// than relying on `fundedThrough` being Infinity, because `neverFunded`
+	// below is not a comparison and Infinity can't out-rank it.
+	if (gate.exempt) return false;
+	// Cancelled while gated: closed for good, whatever the watermark says.
+	// See `orders.neverFunded` in schema.ts — the refund moves the watermark,
+	// and without this the cancelled order un-redacts ITSELF.
+	if (order.neverFunded === true) return true;
 	return !orderCreditFunded(order.creditSeq, gate.fundedThrough);
 }
 
@@ -275,7 +286,11 @@ export function isOrderGated(
  */
 export function guestNameForSeller(
 	gate: CreditGateState,
-	order: { creditSeq?: number; customer: { name?: string } },
+	order: {
+		creditSeq?: number;
+		neverFunded?: boolean;
+		customer: { name?: string };
+	},
 	fallback?: string,
 ): string | undefined {
 	if (isOrderGated(gate, order)) return GATED_CELL_LABEL;
@@ -377,7 +392,9 @@ export const assertCreditsForOrder = internalQuery({
 /** Whether cancelling THIS order gives its credit back — so the cancel dialog
  * can say so before the tap (no hidden rule). */
 export type CancelCreditOutlook =
-	| { kind: "refund"; refundsLeftAfter: number }
+	/** `gated` ⇒ the credit comes back and this cancel costs no allowance, so
+	 * the dialog must not quote a remaining count that won't move. */
+	| { kind: "refund"; refundsLeftAfter: number; gated?: true }
 	| { kind: "kept"; reason: "accepted" | "allowance_used" }
 	/** No credit was ever used for this order (placed before credits). */
 	| { kind: "not_charged" };
@@ -408,13 +425,29 @@ export const cancelOutlook = query({
 			account?.sellerRefunds?.periodKey === periodKey
 				? account.sellerRefunds.count
 				: 0;
+		// The SAME store-level exemption the refund itself applies, so the
+		// dialog can never promise something the cancel won't do. Since
+		// z8r3fdrph7 an unmetered store (admin-owned or comped) has no
+		// `creditSeq` on its orders at all, so the raw comparison already
+		// answers "funded" there; what this still catches is the
+		// missing-subscription-row fail-safe, which IS metered — the raw
+		// comparison alone would tell that seller "you were never able to open
+		// this one" about an order sitting on their screen.
+		const gated =
+			!(await storeGateExempt(ctx, order.retailerId)) &&
+			!orderCreditFunded(order.creditSeq, account?.fundedThrough ?? 0);
 		const decision = cancelRefundDecision({
 			cause: "seller",
 			statusAtCancel: order.status,
 			sellerRefundsUsed: used,
+			gated,
 		});
-		return decision.refund
-			? { kind: "refund", refundsLeftAfter: sellerRefundsLeft(used + 1) }
-			: { kind: "kept", reason: decision.reason };
+		if (!decision.refund) return { kind: "kept", reason: decision.reason };
+		// A gated cancel spends no allowance, so the count it would quote is
+		// the count it already had — say nothing about it rather than imply
+		// this cancel used one up.
+		return gated
+			? { kind: "refund", refundsLeftAfter: sellerRefundsLeft(used), gated }
+			: { kind: "refund", refundsLeftAfter: sellerRefundsLeft(used + 1) };
 	},
 });

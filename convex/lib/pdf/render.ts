@@ -605,6 +605,21 @@ export async function buildOrderReceiptPdf(
 			draw(page, font, item.variantLabel, MARGIN + 12, y, 8.5, FAINT);
 			y -= 13;
 		}
+		// What the buyer saved on this line (z8r3fdcw72). Printed from the
+		// FROZEN list price, so a receipt reprinted months later still says
+		// what the sale was worth on the day.
+		if (item.listPrice !== undefined && item.listPrice > item.unitPrice) {
+			draw(
+				page,
+				font,
+				`was ${formatMoney(item.listPrice, data.currency)} each`,
+				MARGIN + 12,
+				y,
+				8.5,
+				FAINT,
+			);
+			y -= 13;
+		}
 		y -= 5;
 		rule(page, y + 6);
 		y -= 6;

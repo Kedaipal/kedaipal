@@ -27,6 +27,7 @@ import {
 	sellerSeatsPhrase,
 	sellerSummaryText,
 	sellersToCsv,
+	sellerUnmeteredNote,
 	sortSellers,
 } from "./admin-seller-view";
 import { formatShortDate } from "./format";
@@ -769,16 +770,36 @@ describe("sellerCredits", () => {
 		expect(view.metered).toBe(false);
 	});
 
-	it("a metered store reads its balance; a comped one at zero is never locked", () => {
+	it("a metered store reads its balance", () => {
 		expect(sellerCredits(row({ credits })).headline).toBe("200 left");
 		expect(sellerCredits(row({ credits })).metered).toBe(true);
 		expect(sellerCredits(row()).metered).toBe(true);
-		const comped = sellerCredits(
-			row({ comped: true, credits: { ...credits, plan: 0, purchased: 0 } }),
-		);
-		expect(comped.out).toBe(true);
-		expect(comped.detail).toMatch(/never locked/);
+	});
+
+	it("a SPONSORED store reads 'not metered', never its stale cache (z8r3fdrph7)", () => {
+		// The row keeps whatever figures it carried while it was billed — the
+		// directory printing "plan 200 · bought 0" beside a comp is the admin
+		// console repeating the very "200" the seller's meter no longer shows.
+		const comped = sellerCredits(row({ comped: true, credits }));
+		expect(comped.metered).toBe(false);
+		expect(comped.headline).toBe("—");
+		expect(comped.detail).toBe("Sponsored — not metered");
 		expect(comped.tone).toBe("muted");
+		expect(comped.out).toBe(false);
+		// An admin's own store is told apart from it: the next step differs,
+		// since a comp is a toggle and an admin store is permanent.
+		expect(sellerCredits(row({ ownerIsAdmin: true, credits })).detail).toBe(
+			"Admin store — not metered",
+		);
+	});
+
+	it("the unmetered note names WHICH kind — a comp's next state is 'metered again'", () => {
+		expect(sellerUnmeteredNote(row({ ownerIsAdmin: true }))).toMatch(
+			/^Admin store — not metered/,
+		);
+		const sponsored = sellerUnmeteredNote(row({ comped: true }));
+		expect(sponsored).toMatch(/^Sponsored store — not metered/);
+		expect(sponsored).toMatch(/metered again/);
 	});
 
 	it("a store with no account yet says so", () => {

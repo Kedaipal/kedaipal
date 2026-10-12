@@ -80,6 +80,7 @@ describe("resolveAccess (pure)", () => {
 			onlinePayments: false,
 			events: false,
 			waOrderAlerts: false,
+			promo: false,
 			vouchers: false,
 		});
 		expect(resolveAccess(sub({ plan: "pro" })).features).toEqual({
@@ -93,6 +94,7 @@ describe("resolveAccess (pure)", () => {
 			onlinePayments: true,
 			events: true,
 			waOrderAlerts: true,
+			promo: true,
 			vouchers: true,
 		});
 		// Fail safe: a missing row gets Pro features, never a lockout.
@@ -107,6 +109,7 @@ describe("resolveAccess (pure)", () => {
 			onlinePayments: true,
 			events: true,
 			waOrderAlerts: true,
+			promo: true,
 			vouchers: true,
 		});
 	});
@@ -128,6 +131,7 @@ describe("resolveAccess (pure)", () => {
 		onlinePayments: true,
 		events: true,
 		waOrderAlerts: true,
+			promo: true,
 		vouchers: true,
 		});
 		expect(a.active).toBe(true);
