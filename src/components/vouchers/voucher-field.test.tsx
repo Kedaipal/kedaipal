@@ -260,3 +260,46 @@ describe("the receipt skin", () => {
 		expect(screen.getByText(/off applied/)).toBeTruthy();
 	});
 });
+
+/**
+ * A refusal from the ORDER DOOR, not the field (`z8r3fdr617`, PR #357
+ * review). The door re-validates, so it can refuse a code the field checked
+ * happily a minute earlier — someone else spent it, the seller voided it.
+ *
+ * It used to land as a page-level banner while the applied line and its
+ * discount stayed drawn on the ticket, so the buyer read a total nobody was
+ * going to charge them. The parent now removes the voucher (which corrects
+ * the total on the spot) and hands the sentence here, where they applied it.
+ */
+describe("a refusal handed back by the order door", () => {
+	it("opens the field and states the reason", () => {
+		renderField({ serverRefusal: "This voucher has already been used." });
+		expect(
+			screen.getByText("This voucher has already been used."),
+		).toBeDefined();
+		// Open, not collapsed — the sentence has nowhere else to sit.
+		expect(screen.getByLabelText("Voucher code")).toBeDefined();
+	});
+
+	it("is not shown when the door said nothing", () => {
+		renderField();
+		expect(screen.queryByLabelText("Voucher code")).toBeNull();
+	});
+
+	it("yields to the field's own answer once the buyer types again", async () => {
+		// The buyer has acted since the server spoke, so the newer sentence is
+		// the true one — a stale refusal must not sit under a fresh attempt.
+		checkCode.mockResolvedValue({ ok: false, refusal: "expired" });
+		renderField({ serverRefusal: "This voucher has already been used." });
+		fireEvent.change(screen.getByLabelText("Voucher code"), {
+			target: { value: "KP-7F3K-Q2WM" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: /apply/i }));
+		await waitFor(() =>
+			expect(screen.getByText("This voucher has expired.")).toBeDefined(),
+		);
+		expect(
+			screen.queryByText("This voucher has already been used."),
+		).toBeNull();
+	});
+});

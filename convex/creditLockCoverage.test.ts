@@ -196,12 +196,20 @@ const OPEN_FUNCTIONS: Record<string, string> = {
 // keeps it on the calendar, so a request that lands at or below zero is born
 // gated and shows up on the grid, the day sheet and both impact lists. The
 // `.ics` feed already skipped gated bookings; these are its in-app mirror.
+//
+// `vouchers` joined on review of PR #357 (`z8r3fdr617`): a spent voucher names
+// the order it went to, so `vouchers.list` is a seller read of order data and
+// had been sitting outside this sweep entirely — the same way `bookingBlocks`
+// and `closedDates` were, and for the same reason (nobody added the file).
+// `orderClaims` joined with it: its list grew an `order.total` read.
 const READ_MODULES = [
 	"orders",
 	"customers",
 	"bookingBlocks",
 	"closedDates",
 	"awb",
+	"vouchers",
+	"orderClaims",
 ];
 
 const OPEN_READS: Record<string, string> = {
@@ -212,6 +220,8 @@ const OPEN_READS: Record<string, string> = {
 	"customers.count": "a single number — the dashboard stat tile",
 	"bookingBlocks.hasBookingListings":
 		"a boolean — does this store sell bookings at all; reads products, never an order",
+	"orderClaims.getByToken":
+		"buyer door only (unguessable claim token, never enumerable) — the credit gate withholds an order from the SELLER, never from the buyer who placed it, so redacting here would hide a buyer's own ticket from them",
 };
 
 const CONVEX = __dirname;

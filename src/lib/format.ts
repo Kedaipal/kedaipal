@@ -23,6 +23,7 @@ import {
 	type PriceChangedErrorData,
 } from "../../convex/lib/promo";
 import { STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
+import { isVoucherRefusalErrorData } from "../../convex/lib/vouchers";
 
 /**
  * Extract a clean error message from a Convex mutation error — the one thing
@@ -98,6 +99,19 @@ export function priceChangedErrorOf(
 ): PriceChangedErrorData | null {
 	return err instanceof ConvexError && isPriceChangedErrorData(err.data)
 		? err.data
+		: null;
+}
+
+/**
+ * A voucher the server refused at ORDER CREATE (`z8r3fdr617`). Same shape as
+ * `priceChangedErrorOf` and for the same reason: it is not an error to read,
+ * it is a state to fix — the code has to come OFF the ticket, or the buyer is
+ * left reading a discount they are not getting under a banner saying it
+ * failed.
+ */
+export function voucherRefusedErrorOf(err: unknown): string | null {
+	return err instanceof ConvexError && isVoucherRefusalErrorData(err.data)
+		? err.data.message
 		: null;
 }
 

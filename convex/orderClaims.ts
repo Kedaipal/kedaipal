@@ -106,6 +106,7 @@ import {
 	storablePendingReason,
 	summarizeCartWeight,
 } from "./lib/delivery";
+import { creditGateFor, forSeller } from "./creditLock";
 import { rateLimiter } from "./lib/rateLimiter";
 import {
 	freezeLineAnswers,
@@ -580,12 +581,25 @@ export const listClaims = query({
 			settled.push(...rows);
 		}
 
+		// A completed claim names the order it became, so this is a seller read
+		// of ORDER data under T3.1 — a claim that commits while the store is at
+		// or below zero credits produces a GATED order. Every row goes through
+		// `forSeller`, so the allowlist governs rather than a promise that the
+		// two fields taken here happen to be safe.
+		//
+		// `buyerName`/`waPhone` below come from the CLAIM, not the order, and
+		// are deliberately not redacted: the seller TYPED that number into the
+		// counter to send the link. The gate exists to withhold a contact the
+		// seller never had, and there is nothing to withhold from someone about
+		// a number they entered themselves.
+		const gate = await creditGateFor(ctx, resolvedRetailerId, now);
 		const out: ClaimListRow[] = [];
 		for (const claim of [...open, ...settled]) {
 			let orderShortId: string | undefined;
 			let orderTotal: number | undefined;
 			if (claim.orderId) {
-				const order = await ctx.db.get(claim.orderId);
+				const raw = await ctx.db.get(claim.orderId);
+				const order = raw ? forSeller(gate, raw) : null;
 				orderShortId = order?.shortId;
 				orderTotal = order?.total;
 			}

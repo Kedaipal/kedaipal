@@ -318,6 +318,40 @@ file's own test).
 | `?voucher=` carried across browsing | `src/hooks/useVoucherParam.ts` |
 | Tenant teardown | `vouchers` phase in `convex/lib/accountDeletion.ts` |
 
+### A refused code is a state to fix, not an error to read
+
+Both doors re-validate, so either can refuse a code the field checked happily
+a minute earlier — someone else spent it, the seller voided it, the store
+dropped below Pro. When `orders.create` refuses, the checkout **removes the
+voucher** (which corrects the ticket's total on the spot) and hands the
+sentence back to the field, via `serverRefusal`. It used to land as a
+page-level banner while the applied line and its discount stayed drawn, so
+the buyer read a total nobody was going to charge them.
+
+This mirrors the price-changed guard exactly (`priceChangedErrorOf` →
+`voucherRefusedErrorOf`, both in `src/lib/format.ts`): a typed payload the
+surface turns into a state, never a string it prints over the page. The
+field's own refusal always outranks the server's, because the buyer has typed
+since the server spoke.
+
+### The seller's list is a read of ORDER data
+
+A spent voucher names the order it went to, which puts `vouchers.list` under
+the T3.1 rule — *a gated order is invisible*. The order goes through
+`forSeller` **in the query's own body**, so the allowlist governs
+structurally: the two fields taken (`shortId`, `total`) are both on
+`GATED_ORDER_FIELDS` and leak nothing today, but the next field added here
+would be picked off a redacted row rather than a raw one. `toRow` is pure and
+takes the already-redacted summary, which is what keeps the redaction visible
+at the surface that answers for it.
+
+Excusing the read in `OPEN_READS` instead would have stated a safety it
+doesn't check — the exact failure `creditLockCoverage.test.ts` was written
+about (*"a list that states a completeness it doesn't check is worse than no
+list"*). `vouchers` and `orderClaims` are both in `READ_MODULES` now;
+`orderClaims.getByToken` is excused there as a **buyer** door, since the gate
+withholds an order from the seller and never from the buyer who placed it.
+
 ### Decisions worth keeping
 
 - **Codes are globally unique**, not per store (`by_code`). A code typed at the

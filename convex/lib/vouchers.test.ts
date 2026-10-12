@@ -54,6 +54,29 @@ describe("voucher codes", () => {
 		}
 	});
 
+	test("a code whose BODY starts KP still reads in its bare form", () => {
+		// ~1 in 1024 codes begin `KP` after the prefix, and stripping the
+		// prefix unconditionally ate two of their characters: `KPABCDEF` came
+		// back six long and was refused, while the full `KP-KPAB-CDEF` worked
+		// — so the bug only ever bit the buyer who typed what they were read
+		// out (PR #357 review).
+		expect(normalizeVoucherCode("KPAB-CDEF")).toBe("KP-KPAB-CDEF");
+		expect(normalizeVoucherCode("kpabcdef")).toBe("KP-KPAB-CDEF");
+		expect(normalizeVoucherCode("KP-KPAB-CDEF")).toBe("KP-KPAB-CDEF");
+		expect(normalizeVoucherCode("KPKPABCDEF")).toBe("KP-KPAB-CDEF");
+	});
+
+	test("reading both ways never maps two codes onto one", () => {
+		// The reason the above is a parse and not the character repair the
+		// alphabet forbids: a body is exactly 8, so an 8-char input can only BE
+		// a body and a 10-char one can only be prefixed. Both readings are
+		// never valid at once, so nothing is guessed.
+		expect(normalizeVoucherCode("KPABCDEFGH")).toBe("KP-ABCD-EFGH");
+		expect(normalizeVoucherCode("ABCDEFGH")).toBe("KP-ABCD-EFGH");
+		// 6 after the prefix and 8 raw — only the second reading is whole.
+		expect(normalizeVoucherCode("KPABCDEF")).toBe("KP-KPAB-CDEF");
+	});
+
 	test("normalize rejects rather than repairing an ambiguous character", () => {
 		// No real code contains O/0/I/1, so a typed one is an error. Folding it
 		// (0→O) would map two distinct codes onto one and could hand a buyer

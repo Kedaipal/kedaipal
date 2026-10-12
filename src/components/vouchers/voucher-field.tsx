@@ -50,6 +50,7 @@ export function VoucherField({
 	initialCode,
 	disabled = false,
 	label = "Have a voucher?",
+	serverRefusal,
 	variant = "panel",
 }: {
 	retailerId: Id<"retailers">;
@@ -66,6 +67,18 @@ export function VoucherField({
 	disabled?: boolean;
 	label?: string;
 	/**
+	 * A refusal the SERVER gave at order create (`z8r3fdr617`). The door
+	 * re-validates and can refuse a code the field happily checked moments
+	 * earlier — someone else spent it, the seller voided it — and that answer
+	 * belongs where the buyer applied it, not in a page-level banner above a
+	 * ticket still showing the discount.
+	 *
+	 * Rendered, never synced into state: the parent clears the applied voucher
+	 * at the same moment, so the ticket's total corrects itself and this is
+	 * just the sentence explaining why.
+	 */
+	serverRefusal?: string;
+	/**
 	 * Which house the control is standing in. `panel` is the dashboard's
 	 * (bordered input + outline button); `receipt` is the buyer's Order
 	 * Ticket, where the same control wears mono type, a dotted leader and a
@@ -79,10 +92,17 @@ export function VoucherField({
 	variant?: "panel" | "receipt";
 }) {
 	const checkCode = useMutation(api.vouchers.checkCode);
-	const [open, setOpen] = useState(initialCode !== undefined);
+	const [openedByBuyer, setOpen] = useState(initialCode !== undefined);
+	// Forced open while a server refusal stands: it is the only place the
+	// sentence can sit, and the parent has just removed the code that was on
+	// the ticket.
+	const open = openedByBuyer || serverRefusal !== undefined;
 	const [code, setCode] = useState("");
 	const [checking, setChecking] = useState(false);
-	const [refusal, setRefusal] = useState<string | null>(null);
+	const [ownRefusal, setRefusal] = useState<string | null>(null);
+	// The field's own answer wins while it has one — the buyer has typed since
+	// the server spoke, so the newer sentence is the true one.
+	const refusal = ownRefusal ?? serverRefusal ?? null;
 
 	const apply = useCallback(
 		async (raw: string) => {

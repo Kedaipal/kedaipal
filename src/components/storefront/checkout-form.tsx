@@ -85,6 +85,7 @@ import {
 	formatPrice,
 	type PriceChangedErrorData,
 	priceChangedErrorOf,
+	voucherRefusedErrorOf,
 } from "../../lib/format";
 import {
 	type CopyPart,
@@ -411,6 +412,11 @@ export function CheckoutPage({
 	// screen after the buyer dropped to 2, after the prices were re-accepted
 	// and after the sale had ENDED, sitting next to an enabled Place order
 	// (found by hand-testing).
+	// Set only by a refusal from `orders.create`; cleared the moment the buyer
+	// applies or removes anything, so a stale sentence can't outlive its cause.
+	const [voucherServerRefusal, setVoucherServerRefusal] = useState<
+		string | undefined
+	>(undefined);
 	const [serverError, setServerError] = useState<{
 		message: string;
 		cart: string;
@@ -801,6 +807,19 @@ export function CheckoutPage({
 				const priceChange = priceChangedErrorOf(err);
 				if (priceChange !== null) {
 					setServerRefusal(priceChange);
+					return;
+				}
+				// Same posture as the price-changed guard: a state to fix, not an
+				// error to read. The door re-validates, so it can refuse a code
+				// the field checked a minute ago (someone else spent it, the
+				// seller voided it) — take the voucher OFF, which corrects the
+				// ticket's total on the spot, and put the reason back under the
+				// field where the buyer applied it. Leaving the discount drawn
+				// under a banner saying it failed shows a price nobody will pay.
+				const voucherRefusal = voucherRefusedErrorOf(err);
+				if (voucherRefusal !== null) {
+					setVoucher(null);
+					setVoucherServerRefusal(voucherRefusal);
 					return;
 				}
 				refuseServer(convexErrorMessage(err));
@@ -1692,8 +1711,15 @@ export function CheckoutPage({
 														currency={cart.currency}
 														itemSubtotal={cart.total}
 														applied={voucher}
-														onApply={setVoucher}
-														onRemove={() => setVoucher(null)}
+														onApply={(v) => {
+															setVoucherServerRefusal(undefined);
+															setVoucher(v);
+														}}
+														onRemove={() => {
+															setVoucherServerRefusal(undefined);
+															setVoucher(null);
+														}}
+														serverRefusal={voucherServerRefusal}
 														initialCode={initialVoucherCode}
 													/>
 												) : null

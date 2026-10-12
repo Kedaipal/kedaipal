@@ -9,14 +9,10 @@
 
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import {
-	type MutationCtx,
-	type QueryCtx,
-	mutation,
-	query,
-} from "./_generated/server";
+import { type MutationCtx, mutation, query } from "./_generated/server";
 import { logAdminAction, requireRetailerAccess } from "./lib/auth";
 import { rateLimiter } from "./lib/rateLimiter";
+import { creditGateFor, forSeller } from "./creditLock";
 import {
 	resolveVoucherForOrder,
 	storeCanUseVouchers,
@@ -66,14 +62,21 @@ export type VoucherRow = {
  * empty tab can say which one is empty. Resolved, so `expired` is real. */
 export type VoucherCounts = Record<VoucherStatus, number>;
 
-async function toRow(
-	ctx: QueryCtx | MutationCtx,
+/**
+ * One voucher as the seller's list shows it.
+ *
+ * PURE, and it takes the spent order's summary rather than fetching it. The
+ * fetch and its redaction live in the caller, in the query's own body, for
+ * two reasons: the T3.1 read sweep scans a query's body for the redaction
+ * seam and cannot see through a helper, and more usefully, "this read touches
+ * order data" is then visible at the surface that answers for it.
+ */
+function toRow(
 	voucher: Doc<"vouchers">,
 	now: number,
-): Promise<VoucherRow> {
-	const order = voucher.redeemedOrderId
-		? await ctx.db.get(voucher.redeemedOrderId)
-		: null;
+	/** Already through `forSeller` — never a raw order row. */
+	redeemedOrder: { shortId: string; total: number } | undefined,
+): VoucherRow {
 	return {
 		id: voucher._id,
 		code: voucher.code,
@@ -84,9 +87,7 @@ async function toRow(
 		expiresAt: voucher.expiresAt,
 		note: voucher.note,
 		batchId: voucher.batchId,
-		redeemedOrder: order
-			? { shortId: order.shortId, total: order.total }
-			: undefined,
+		redeemedOrder,
 		redeemedAt: voucher.redeemedAt,
 		voidedAt: voucher.voidedAt,
 		voidReason: voucher.voidReason,
@@ -158,8 +159,33 @@ export const list = query({
 		};
 		for (const voucher of all) counts[resolveVoucherStatus(voucher, now)]++;
 
+		// A spent voucher names the order it went to, which makes this a seller
+		// read of ORDER data under the T3.1 rule ("a gated order is
+		// invisible"). Every row goes through `forSeller`, so the allowlist
+		// governs structurally: the two fields taken here are both on
+		// `GATED_ORDER_FIELDS` and leak nothing today, but the next field added
+		// would be picked off a REDACTED row rather than a raw one. Excusing
+		// this read instead would state a safety it doesn't check — the exact
+		// failure `creditLockCoverage.test.ts` exists to prevent.
+		//
+		// The gate is resolved ONCE for the page: it is a property of the
+		// store, not of a row.
+		const gate = await creditGateFor(ctx, retailerId, now);
+		const vouchers = await Promise.all(
+			all.map(async (vo) => {
+				const raw = vo.redeemedOrderId
+					? await ctx.db.get(vo.redeemedOrderId)
+					: null;
+				const order = raw ? forSeller(gate, raw) : null;
+				return toRow(
+					vo,
+					now,
+					order ? { shortId: order.shortId, total: order.total } : undefined,
+				);
+			}),
+		);
 		return {
-			vouchers: await Promise.all(all.map((vo) => toRow(ctx, vo, now))),
+			vouchers,
 			counts,
 			paused: !(await storeCanUseVouchers(ctx, retailerId)),
 		};
@@ -188,7 +214,7 @@ export const checkCode = mutation({
 		ctx,
 		{ retailerId, code },
 	): Promise<
-		| { ok: true; code: string; terms: VoucherTerms; discountOnSubtotal?: number }
+		| { ok: true; code: string; terms: VoucherTerms }
 		| { ok: false; refusal: VoucherRefusal; usedOnOrder?: string }
 	> => {
 		await rateLimiter.limit(ctx, "voucherCheck", {
@@ -301,7 +327,9 @@ export const create = mutation({
 
 		await logAdminAction(ctx, access, "vouchers.create", retailerId);
 		return {
-			vouchers: await Promise.all(created.map((vo) => toRow(ctx, vo, now))),
+			// Freshly minted rows are `active` and carry no order, so there is
+			// nothing here for the gate to redact.
+			vouchers: created.map((vo) => toRow(vo, now, undefined)),
 			batchId,
 		};
 	},

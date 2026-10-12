@@ -69,9 +69,22 @@ function formatVoucherCode(body: string): string {
  */
 export function normalizeVoucherCode(input: string): string | null {
 	const stripped = input.toUpperCase().replace(/[^A-Z0-9]/g, "");
-	const body = stripped.startsWith(VOUCHER_CODE_PREFIX)
+	// Strip the prefix only when what's left is a whole body. Unconditional
+	// stripping refused the BARE form of any code whose body happens to begin
+	// `KP` — about 1 in 1024 of them — because `KPABCDEF` lost two characters
+	// and came back six long (PR #357 review).
+	//
+	// This reads both ways without ever guessing: a body is exactly
+	// `VOUCHER_BODY_LENGTH`, so an input of that length can only BE a body,
+	// and one of prefix+body length can only be prefixed. The two readings are
+	// never both valid, which is what keeps this a parse and not the character
+	// repair `VOUCHER_ALPHABET` forbids — nothing here can map two distinct
+	// codes onto one.
+	const unprefixed = stripped.startsWith(VOUCHER_CODE_PREFIX)
 		? stripped.slice(VOUCHER_CODE_PREFIX.length)
-		: stripped;
+		: null;
+	const body =
+		unprefixed?.length === VOUCHER_BODY_LENGTH ? unprefixed : stripped;
 	if (body.length !== VOUCHER_BODY_LENGTH) return null;
 	for (const ch of body) if (!VOUCHER_ALPHABET.includes(ch)) return null;
 	return formatVoucherCode(body);
