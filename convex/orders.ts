@@ -186,7 +186,7 @@ import {
 	type StatusLabels,
 } from "./lib/orderStatus";
 import { type PaymentMethod, resolvePaymentMethods } from "./lib/payment";
-import { paymentsPausedRefusal } from "./lib/buyerPayments";
+import { paymentsPausedClaimRefusal } from "./lib/buyerPayments";
 import { type Country, DEFAULT_COUNTRY } from "./lib/country";
 import {
 	type OrderReceiptData,
@@ -5508,7 +5508,7 @@ export const claimPayment = mutation({
 			(await buyerPaymentsPaused(ctx, order.retailerId))
 		) {
 			const retailer = await ctx.db.get(order.retailerId);
-			throw new ConvexError(paymentsPausedRefusal(retailer?.storeName));
+			throw new ConvexError(paymentsPausedClaimRefusal(retailer?.storeName));
 		}
 		// Payment is gated behind mockup approval — the buyer's tracking page
 		// disables "I've paid" while the gate is closed; reject a direct call too.
@@ -6004,7 +6004,7 @@ export const generateOrderProofUploadUrl = mutation({
 			(await buyerPaymentsPaused(ctx, order.retailerId))
 		) {
 			const retailer = await ctx.db.get(order.retailerId);
-			throw new ConvexError(paymentsPausedRefusal(retailer?.storeName));
+			throw new ConvexError(paymentsPausedClaimRefusal(retailer?.storeName));
 		}
 
 		return ctx.storage.generateUploadUrl();

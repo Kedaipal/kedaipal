@@ -779,6 +779,8 @@ export function ClaimCheckoutPage({
 						<PaymentsPausedNotice
 							paused={store.paymentsPaused}
 							storeName={storeName}
+							// A fee still to be quoted is a payment to come.
+							free={displayTotal === 0 && feeSettled}
 						/>
 						{ticket}
 					</div>

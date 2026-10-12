@@ -851,6 +851,17 @@ deleting any gate turns a test red):
 | WhatsApp confirm reply (legacy wa.me path) | the transfer-reference line becomes the paused line; the button reads "View order" |
 | `orders.get` (buyer read) | never carries `gatewayCheckoutUrl` — the raw URL would bypass every check above |
 
+**A new payment ask must check it.** The seller's manual payment reminder and
+the counter's pay-later message don't call the predicate — they're unreachable
+while paused only because the seller soft-lock refuses them first. An
+**automated** ask (the roadmap's reminders cron, a new channel) has no seller
+in the loop, so it must call `buyerPaymentsPaused` itself.
+
+**A buyer who already paid** (a transfer just before the pause) gets
+`paymentsPausedClaimRefusal` — "keep your receipt, attach it once they're
+back" — not the generic "you can pay later", and the order page says the same.
+Claims stay closed on purpose: nobody can confirm one until the store returns.
+
 **Never paused:** placing the order (every order door), HitPay's webhook and
 `verifyCheckout` for a link minted before the pause (the money already moved),
 and the seller's own manual mark-received (they're view-only anyway).

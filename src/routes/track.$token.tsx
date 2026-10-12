@@ -915,8 +915,11 @@ function TrackingRoute() {
 			paymentStatus === "unpaid" &&
 			!deliveryFeeHeld &&
 			!gatewayIssueUnresolved &&
-			// No deadline runs while the buyer can't pay (the sweep lifts it).
-			!paymentsPaused ? (
+			// No deadline runs while the buyer can't pay (the sweep lifts it) —
+			// and none is shown until the payment query has said which it is,
+			// or a lapsed store's countdown flashes before the paused card.
+			!paymentsPaused &&
+			!(showPaymentSection && paymentInfo === undefined) ? (
 				<PaymentDueCountdown dueAt={order.paymentDueAt} />
 			) : null}
 

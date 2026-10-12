@@ -457,7 +457,14 @@ export function BookingCheckoutForm({
 		<>
 			{/* First, above the receipt — read before the commitment, the
 			    same place the cart checkout puts it (z8r3fdr6gg). */}
-			<PaymentsPausedNotice paused={paymentsPaused} storeName={storeName} />
+			<PaymentsPausedNotice
+				paused={paymentsPaused}
+				storeName={storeName}
+				// A zero-rate listing with no deposit has nothing to pay.
+				free={
+					unitPrice === 0 && (weekendPrice ?? 0) === 0 && securityDeposit === 0
+				}
+			/>
 			<div className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 				<h2 className="font-heading text-sm font-bold">
 					{isPackage

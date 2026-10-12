@@ -215,9 +215,11 @@ describe("the payment doors while a store is lapsed", () => {
 		await expect(
 			t.mutation(api.orders.generateOrderProofUploadUrl, { token }),
 		).rejects.toThrow(PAUSED);
+		// A claim means "I already paid" — the refusal must not tell that buyer
+		// to pay later; it tells them to keep the receipt (PR #355 review).
 		await expect(
 			t.mutation(api.orders.claimPayment, { token, proofStorageId: proof }),
-		).rejects.toThrow(PAUSED);
+		).rejects.toThrow(/Already paid them\? Keep your receipt/);
 	});
 
 	test("an order claimed BEFORE the pause can still update its proof", async () => {

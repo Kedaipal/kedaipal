@@ -347,6 +347,11 @@ export async function getAccess(
  * Read on public buyer paths, so it is a pure function of the row (no
  * missing-row warning, unlike `getAccess`) and its public projection is one
  * boolean — never the status or the reason.
+ *
+ * ANY new path that asks a buyer to pay — a reminder cron, a new channel —
+ * must ask this itself. The two existing payment asks it doesn't touch (the
+ * seller's manual reminder, counter pay-later) are safe only because they sit
+ * behind the seller soft-lock; an automated send has no seller in the loop.
  */
 export function buyerPaymentsPausedFor(
 	sub: Doc<"subscriptions"> | null,

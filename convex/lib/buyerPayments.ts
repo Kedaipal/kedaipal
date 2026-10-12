@@ -25,10 +25,19 @@ export function paymentsPausedCheckoutLine(storeName: string | undefined): strin
 
 /** The order page, where the payment card would be. */
 export function paymentsPausedOrderLine(storeName: string | undefined): string {
-	return `${storeLabel(storeName)} isn't taking payments on Kedaipal right now. Your order is saved — you can pay right here once they are. Please don't pay the seller outside Kedaipal until then.`;
+	return `${storeLabel(storeName)} isn't taking payments on Kedaipal right now. Your order is saved — you can pay right here once they are. Please don't pay the seller outside Kedaipal until then. Already paid them? Keep your receipt — you can attach it here once they're back.`;
 }
 
 /** Server refusal for a direct call to a payment door while paused. */
 export function paymentsPausedRefusal(storeName: string | undefined): string {
 	return `${storeLabel(storeName)} isn't taking payments on Kedaipal right now — your order is saved, and you can pay from your order page once they are.`;
+}
+
+/** Server refusal for the "I've paid" door while paused. A claim means the
+ * buyer says they ALREADY paid (often a transfer made just before the pause),
+ * so "you can pay later" would be wrong for exactly the person asking: tell
+ * them to keep the receipt, and that it can be attached once the store is
+ * back — the seller can't confirm a payment before then anyway. */
+export function paymentsPausedClaimRefusal(storeName: string | undefined): string {
+	return `${storeLabel(storeName)} isn't taking payments on Kedaipal right now, so a payment can't be confirmed here yet. Already paid them? Keep your receipt — you can attach it on your order page once they're back.`;
 }

@@ -31,6 +31,7 @@ import { BookingCheckoutForm } from "./booking-checkout-form";
 const state = vi.hoisted(() => ({
 	request: vi.fn(),
 	availability: undefined as Record<string, unknown> | undefined,
+	product: undefined as Record<string, unknown> | undefined,
 }));
 vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
@@ -39,7 +40,7 @@ vi.mock("@tanstack/react-query", () => ({
 	keepPreviousData: (previous: unknown) => previous,
 	useQuery: ({ fn }: { fn: Parameters<typeof getFunctionName>[0] }) =>
 		getFunctionName(fn) === "products:getPublicBySlug"
-			? { data: PRODUCT }
+			? { data: state.product ?? PRODUCT }
 			: {
 					data: state.availability ?? AVAILABILITY,
 					isPlaceholderData: false,
@@ -93,6 +94,7 @@ afterEach(() => {
 	vi.useRealTimers();
 	vi.clearAllMocks();
 	state.availability = undefined;
+	state.product = undefined;
 });
 
 /**
@@ -493,6 +495,12 @@ describe("BookingCheckoutForm — a lapsed store's payments are paused (z8r3fdr6
 
 	it("says nothing while payments are open", () => {
 		renderForm();
+		expect(screen.queryByText("Payments paused")).toBeNull();
+	});
+
+	it("says nothing for a zero-rate listing with no deposit — nothing to pay", () => {
+		state.product = { ...PRODUCT, variants: [{ price: 0 }] };
+		renderForm("MY", undefined, true);
 		expect(screen.queryByText("Payments paused")).toBeNull();
 	});
 });
