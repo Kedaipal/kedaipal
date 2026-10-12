@@ -7,10 +7,12 @@
 //  1. FAIL SAFE — a missing subscription row resolves to FULL access (comped),
 //     logged, never locked. So a backfill miss degrades to "works", not "locked
 //     out" (ticket launch-blocker EC).
-//  2. The storefront + order pipeline NEVER call this — they're public and stay
-//     live regardless of subscription status. The soft lock freezes the SELLER's
-//     dashboard and nothing else: a lapsed store is view-only, while its buyers
-//     browse, order, pay, track and edit their own orders exactly as before.
+//  2. The storefront + order pipeline NEVER call the guard — they're public and
+//     stay live regardless of subscription status. The soft lock freezes the
+//     SELLER's dashboard: a lapsed store is view-only, while its buyers browse,
+//     order, track and edit their own orders exactly as before. The one thing
+//     a buyer loses is PAYING (z8r3fdr6gg) — `buyerPaymentsPaused` below is
+//     the single read buyer payment paths make, and it never refuses an order.
 //
 // See docs/manual-subscription.md.
 
@@ -320,6 +322,42 @@ export async function getAccess(
 }
 
 /**
+ * Buyer payments PAUSE while a store is lapsed (z8r3fdr6gg) — the ONE place
+ * that rule lives. A lapsed store (an overdue invoice, or an admin-ended comp:
+ * exactly `resolveAccess(...).frozen`) is view-only, so it cannot mark an
+ * order paid, advance it or fulfil it. A buyer who pays it gets an order
+ * nobody on the platform can act on, and Kedaipal would be lending its
+ * credibility to a payment request from a store that has stopped paying us.
+ * So while it lasts the buyer can still ORDER, but every payment door is shut:
+ * no bank/QR details, no HitPay checkout, no new "I've paid" claim, no "How to
+ * pay" block on the receipt, no claim-link payment deadline. It reopens on
+ * the same order page the moment the store is active again.
+ *
+ * Deliberately NOT paused: trialing (free period + first-invoice window),
+ * comped, on-hold, and a missing row (fail open, like `resolveAccess`). A
+ * scammer on a fresh store never reaches `past_due`, so widening this to
+ * "never paid" is the open follow-up decision — change it HERE and every
+ * door follows.
+ *
+ * Read on public buyer paths, so it is a pure function of the row (no
+ * missing-row warning, unlike `getAccess`) and its public projection is one
+ * boolean — never the status or the reason.
+ */
+export function buyerPaymentsPausedFor(
+	sub: Doc<"subscriptions"> | null,
+): boolean {
+	return resolveAccess(sub).frozen;
+}
+
+/** `buyerPaymentsPausedFor`, loading the store's subscription. */
+export async function buyerPaymentsPaused(
+	ctx: AnyCtx,
+	retailerId: Id<"retailers">,
+): Promise<boolean> {
+	return buyerPaymentsPausedFor(await loadSubscription(ctx, retailerId));
+}
+
+/**
  * Minutes between the first order and its invoice — deliberately NOT 0.
  * Product: the seller's inbox beat belongs to the ORDER at that moment; the
  * "your first order is in — here's your first invoice" email landing a few
@@ -417,8 +455,8 @@ export async function assertSubscriptionActive(
 			// A lock from a comp ending has no invoice behind it (z8r3fdeub2) —
 			// "pay your invoice" would send the seller hunting for a bill.
 			access.compEnded
-				? "Your sponsored access has ended, so your store is view-only. Choose a plan in Settings → Billing to start working again — your storefront stays live and buyers can still order in the meantime."
-				: "Your subscription is past due, so your store is view-only. Pay your invoice to start working again — your storefront stays live and buyers can still order in the meantime.",
+				? "Your sponsored access has ended, so your store is view-only. Choose a plan in Settings → Billing to start working again — your storefront stays live and buyers can still order in the meantime, but they can't pay you on Kedaipal until you do."
+				: "Your subscription is past due, so your store is view-only. Pay your invoice to start working again — your storefront stays live and buyers can still order in the meantime, but they can't pay you on Kedaipal until you do.",
 		);
 	}
 }
@@ -834,7 +872,7 @@ export const setSeasonalHold = mutation({
  * The ONE comp-ending path (z8r3fdeub2): an admin turned the comp upgrade off,
  * and the store becomes an EXPIRED seller — `past_due` with no invoice, the
  * same lock a lapsed subscription is in. The storefront stays live and buyers
- * keep ordering (the order pipeline never reads subscription status);
+ * keep ordering, though they can't pay until it settles (`buyerPaymentsPaused`);
  * dashboard growth-writes are refused by `assertSubscriptionActive` until the
  * seller picks a plan and pays, which settles the row to `active` like any
  * renewal. No free period: a comped store already had its runway, and a trial

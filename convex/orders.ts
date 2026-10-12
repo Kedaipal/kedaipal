@@ -40,7 +40,11 @@ import {
 import type { CancelCause } from "./lib/credits";
 import { requireCustomerName } from "./lib/customer";
 import { assertCreditsAvailable } from "./creditLock";
-import { assertPlanFeature, assertSubscriptionActive } from "./subscriptions";
+import {
+	assertPlanFeature,
+	assertSubscriptionActive,
+	buyerPaymentsPaused,
+} from "./subscriptions";
 import {
 	recordOrderCancelled,
 	recordOrderCreated,
@@ -171,6 +175,7 @@ import {
 	type StatusLabels,
 } from "./lib/orderStatus";
 import { type PaymentMethod, resolvePaymentMethods } from "./lib/payment";
+import { paymentsPausedRefusal } from "./lib/buyerPayments";
 import { type Country, DEFAULT_COUNTRY } from "./lib/country";
 import {
 	type OrderReceiptData,
@@ -2126,6 +2131,11 @@ export const get = query({
 			confirmationPushWamid: isBuyerRead
 				? undefined
 				: order.confirmationPushWamid,
+			// A minted HitPay link is a payment door. The buyer's only way to it
+			// is `hitpay.createCheckout`, which re-checks every hold and the
+			// store's paused state (z8r3fdr6gg) — so the raw URL never rides
+			// this unauthenticated read, where it would bypass all of them.
+			gatewayCheckoutUrl: isBuyerRead ? undefined : order.gatewayCheckoutUrl,
 			statusLabels: retailer?.statusLabels as StatusLabels | undefined,
 			orderStages: retailer?.orderStages as OrderStage[] | undefined,
 			orderFlows: retailer?.orderFlows as OrderFlows | undefined,
@@ -2170,12 +2180,17 @@ export const receiptPdfInputs = internalQuery({
 		const order = await resolveSharedOrder(ctx, { token, shortId });
 		if (!order) return null;
 		const retailer = await ctx.db.get(order.retailerId);
+		const paymentsPaused = await buyerPaymentsPaused(ctx, order.retailerId);
 		return {
 			shortId: order.shortId,
 			data: orderToReceiptData({
 				order,
 				storeName: retailer?.storeName ?? "",
 				paymentMethods: retailer ? resolvePaymentMethods(retailer) : [],
+				// A lapsed store's unpaid bill prints the paused notice instead of
+				// the numbers (z8r3fdr6gg) — the seller's copy too: forwarded, it's
+				// the same payment request the order page withholds.
+				paymentsPaused,
 				// Legal identity for the "From" block (z8r3fdcrzj). Seller-typed
 				// specifically for buyer documents — NEVER swap in businessAddress
 				// here (that's the private delivery origin, often a home).
@@ -2318,6 +2333,10 @@ export const sendPaymentReminder = action({
  * message (86eyd63r8) carries the tracking link, not the numbers. Legacy-aware
  * via `resolvePaymentMethods`; QR storage ids resolved to URLs. Returns `null`
  * when the seller has nothing configured (track page hides it).
+ *
+ * While the store is lapsed (z8r3fdr6gg) it returns NO methods and no gateway,
+ * only `paymentsPaused: true` — the page renders the paused notice instead of
+ * the payment card, and the numbers never leave the server.
  */
 export const getPaymentMethods = query({
 	args: { token: v.string() },
@@ -2336,11 +2355,17 @@ export const getPaymentMethods = query({
 		// explainer names only methods this seller actually offers. Undefined =
 		// not yet probed → the page uses a generic "bank or eWallet" line.
 		gatewayMethods?: string[];
+		// The store is lapsed, so it can't take this payment (z8r3fdr6gg) —
+		// `methods` is empty and `gatewayAvailable` false whenever this is set.
+		paymentsPaused: boolean;
 	} | null> => {
 		const order = await orderByToken(ctx, token);
 		if (!order) return null;
 		const retailer = await ctx.db.get(order.retailerId);
 		if (!retailer) return null;
+		if (await buyerPaymentsPaused(ctx, retailer._id)) {
+			return { methods: [], gatewayAvailable: false, paymentsPaused: true };
+		}
 
 		const gatewayAvailable =
 			hitpayCheckoutConfigured(retailer.hitpay) &&
@@ -2368,6 +2393,7 @@ export const getPaymentMethods = query({
 			gatewayMethods: gatewayAvailable
 				? retailer.hitpay?.paymentMethods
 				: undefined,
+			paymentsPaused: false,
 		};
 	},
 });
@@ -5151,6 +5177,17 @@ export const claimPayment = mutation({
 		if (order.status === "booking_requested") {
 			throw new ConvexError(AWAITING_APPROVAL_PAYMENT_MESSAGE);
 		}
+		// A lapsed store takes no payment (z8r3fdr6gg) — the page shows no
+		// methods, so a NEW claim means money sent off-platform to a store that
+		// can't act on it. An order already claimed may still update its proof:
+		// that is evidence for a payment made before the pause, not a new one.
+		if (
+			(order.paymentStatus ?? "unpaid") === "unpaid" &&
+			(await buyerPaymentsPaused(ctx, order.retailerId))
+		) {
+			const retailer = await ctx.db.get(order.retailerId);
+			throw new ConvexError(paymentsPausedRefusal(retailer?.storeName));
+		}
 		// Payment is gated behind mockup approval — the buyer's tracking page
 		// disables "I've paid" while the gate is closed; reject a direct call too.
 		if (isMockupGateClosed(order)) {
@@ -5637,6 +5674,15 @@ export const generateOrderProofUploadUrl = mutation({
 		if (!order) throw new ConvexError("Order not found");
 		if (order.paymentStatus === "received") {
 			throw new ConvexError("Payment already confirmed");
+		}
+		// Same rule as claimPayment: no new claim's upload while the store is
+		// lapsed (z8r3fdr6gg); an existing claim can still replace its proof.
+		if (
+			(order.paymentStatus ?? "unpaid") === "unpaid" &&
+			(await buyerPaymentsPaused(ctx, order.retailerId))
+		) {
+			const retailer = await ctx.db.get(order.retailerId);
+			throw new ConvexError(paymentsPausedRefusal(retailer?.storeName));
 		}
 
 		return ctx.storage.generateUploadUrl();

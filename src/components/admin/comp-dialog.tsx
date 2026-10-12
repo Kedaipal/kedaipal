@@ -83,7 +83,7 @@ export function CompDialog({
 				`Comp upgrade off — ${seller.storeName} is now an expired store.`,
 				{
 					description:
-						"Storefront stays live; their dashboard is view-only until they choose a plan. They've been emailed.",
+						"Storefront stays live, but buyers can't pay them on Kedaipal and their dashboard is view-only until they choose a plan. They've been emailed.",
 				},
 			);
 			setOffOpen(false);
@@ -230,11 +230,12 @@ export function CompDialog({
 				description={
 					<>
 						The store becomes an <strong>expired seller</strong> straight away:
-						the storefront stays live and buyers can still order, but the
-						seller's dashboard goes <strong>view-only</strong> — they can't work
-						their orders, edit products or change settings until they choose a
-						plan and pay. No free period, and they're emailed that their
-						sponsored access has ended. You can turn it back on any time.
+						the storefront stays live and buyers can still order, but buyers{" "}
+						<strong>can't pay</strong> them on Kedaipal and the seller's
+						dashboard goes <strong>view-only</strong> — they can't work their
+						orders, edit products or change settings until they choose a plan
+						and pay. No free period, and they're emailed that their sponsored
+						access has ended. You can turn it back on any time.
 					</>
 				}
 				confirmLabel="Turn off comp upgrade"

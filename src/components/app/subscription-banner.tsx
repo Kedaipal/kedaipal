@@ -316,8 +316,9 @@ export function SubscriptionBanner({
 			<div className="flex flex-col gap-2 border-b border-red-200 bg-red-50 px-5 py-3 dark:border-red-900 dark:bg-red-950/40 sm:flex-row sm:items-center sm:justify-between lg:px-8">
 				<p className="text-sm text-foreground/90">
 					<span className="font-medium">Your sponsored access has ended.</span>{" "}
-					Your dashboard is view-only until you choose a plan — your storefront
-					stays live and buyers can still order.
+					Your dashboard is view-only and buyers can't pay you on Kedaipal until
+					you choose a plan — your storefront stays live and they can still
+					order.
 				</p>
 				<div className="flex shrink-0 items-center gap-2">
 					<a
@@ -358,8 +359,8 @@ export function SubscriptionBanner({
 							: "Your subscription is past due."}
 					</span>{" "}
 					{isMember
-						? "The dashboard is view-only until the owner renews — the storefront stays live and buyers can still order."
-						: "Your dashboard is view-only until you pay — your storefront stays live and buyers can still order."}
+						? "The dashboard is view-only and buyers can't pay on Kedaipal until the owner renews — the storefront stays live and they can still order."
+						: "Your dashboard is view-only and buyers can't pay you on Kedaipal until you pay — your storefront stays live and they can still order."}
 				</p>
 				<div
 					className={`flex shrink-0 items-center gap-2 ${isMember ? "hidden" : ""}`}

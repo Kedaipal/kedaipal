@@ -27,6 +27,10 @@ import {
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
+import {
+	PAYMENTS_PAUSED_HEADING,
+	paymentsPausedOrderLine,
+} from "../../convex/lib/buyerPayments";
 import { isSafeTrackingUrl } from "../../convex/lib/couriers";
 import {
 	DAY_MS,
@@ -439,6 +443,9 @@ function TrackingRoute() {
 	const gatewayMethodsLabel = describeGatewayMethods(
 		paymentInfo?.gatewayMethods,
 	);
+	// The store is lapsed (z8r3fdr6gg): the server sent no methods and no
+	// gateway, and the card says why in place of the Pay-now door.
+	const paymentsPaused = paymentInfo?.paymentsPaused === true;
 	const [editingAddress, setEditingAddress] = useState(false);
 	// The manual-payment sheet (methods + I've-paid proof in one door) — opened
 	// by the payment card's primary button on manual stores, the bank-transfer
@@ -906,7 +913,9 @@ function TrackingRoute() {
 			order.paymentDueAt !== undefined &&
 			paymentStatus === "unpaid" &&
 			!deliveryFeeHeld &&
-			!gatewayIssueUnresolved ? (
+			!gatewayIssueUnresolved &&
+			// No deadline runs while the buyer can't pay (the sweep lifts it).
+			!paymentsPaused ? (
 				<PaymentDueCountdown dueAt={order.paymentDueAt} />
 			) : null}
 
@@ -1042,6 +1051,19 @@ function TrackingRoute() {
 								</Button>
 								<p className="text-xs opacity-80">
 									Checking with HitPay — this usually takes a few seconds.
+								</p>
+							</>
+						) : paymentsPaused ? (
+							// After the holds above (they're more specific, and the
+							// payment query is skipped while they stand) and after a
+							// HitPay return being verified — money that may already
+							// have moved is confirmed whatever the store's state.
+							<>
+								<Button disabled className="h-12 w-full text-base">
+									{PAYMENTS_PAUSED_HEADING}
+								</Button>
+								<p className="text-xs opacity-80">
+									{paymentsPausedOrderLine(order.storeName)}
 								</p>
 							</>
 						) : gatewayAvailable ? (

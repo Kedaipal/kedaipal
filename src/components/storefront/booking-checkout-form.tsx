@@ -66,6 +66,7 @@ import { BuyerPhoneCountrySwitch, BuyerPhoneInput } from "../ui/my-phone-input";
 import { Skeleton } from "../ui/skeleton";
 import { BookingCalendar, BookingCalendarLegend } from "./booking-calendar";
 import { CheckoutSection } from "./checkout-form";
+import { PaymentsPausedNotice } from "./payments-paused-notice";
 import {
 	BasketKeptNote,
 	StandaloneCheckoutLayout,
@@ -89,6 +90,7 @@ export function BookingCheckoutForm({
 	locale,
 	country,
 	cartItemCount,
+	paymentsPaused,
 }: {
 	retailerId: Id<"retailers">;
 	storeName: string;
@@ -99,6 +101,9 @@ export function BookingCheckoutForm({
 	 * order and never touches the cart (`z8r3fdhh45`) — the count is here only
 	 * so the page can SAY so rather than leave the buyer guessing. */
 	cartItemCount: number;
+	/** The store is lapsed, so this order can't be paid yet (z8r3fdr6gg) —
+	 * the summary says so before the buyer commits. */
+	paymentsPaused?: boolean;
 	/** The store's country (SG-lite) — the phone picker's default, and the
 	 * country an untouched picker is judged by, so a booking checkout accepts
 	 * exactly what the ordinary checkout does. */
@@ -450,6 +455,9 @@ export function BookingCheckoutForm({
 
 	const summary = (
 		<>
+			{/* First, above the receipt — read before the commitment, the
+			    same place the cart checkout puts it (z8r3fdr6gg). */}
+			<PaymentsPausedNotice paused={paymentsPaused} storeName={storeName} />
 			<div className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 				<h2 className="font-heading text-sm font-bold">
 					{isPackage

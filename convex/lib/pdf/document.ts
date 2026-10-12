@@ -10,6 +10,10 @@
 // Money is stored in MINOR units (sen) everywhere — see src/lib/format.ts — so
 // every amount here is sen and `formatMoney` divides by 100.
 
+import {
+	PAYMENTS_PAUSED_HEADING,
+	paymentsPausedRefusal,
+} from "../buyerPayments";
 import { formatPhone } from "../customer";
 import {
 	gatewayPaymentMethodLabel,
@@ -306,6 +310,10 @@ export function orderToReceiptData(args: {
 	country?: string;
 	// For the powered-by link's `&store=` attribution — see OrderReceiptData.
 	storeSlug?: string;
+	// The store is lapsed (z8r3fdr6gg): an unpaid document prints the paused
+	// notice in place of the bank details — a forwarded invoice is the same
+	// payment request the order page withholds.
+	paymentsPaused?: boolean;
 }): OrderReceiptData {
 	const { order, storeName, paymentMethods } = args;
 	const status = order.paymentStatus ?? "unpaid";
@@ -356,7 +364,15 @@ export function orderToReceiptData(args: {
 		currency: order.currency,
 		fulfilmentDate: order.fulfilmentDate,
 		customerNote: printable(order.customerNote),
-		paymentBlocks: paymentMethodsToBlocks(paymentMethods),
+		paymentBlocks:
+			args.paymentsPaused && !paid
+				? [
+						{
+							label: PAYMENTS_PAUSED_HEADING,
+							lines: [paymentsPausedRefusal(printable(storeName))],
+						},
+					]
+				: paymentMethodsToBlocks(paymentMethods),
 	};
 }
 

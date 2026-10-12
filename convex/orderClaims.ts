@@ -17,7 +17,11 @@
  *    (expired ⇒ dead link + released price); at commit it CARRIES onto the
  *    order as `paymentDueAt` and runs until real money, with the sweep below
  *    auto-cancelling a due unpaid order so the stock comes back (Zaki,
- *    27 Aug — the Agoda model). Resend never moves the deadline.
+ *    27 Aug — the Agoda model). Resend never moves the deadline. A store
+ *    whose buyer payments are PAUSED (lapsed, z8r3fdr6gg) gets no deadline:
+ *    a window the buyer cannot pay inside is a trap, not a hold — commit
+ *    stamps none, and the sweep lifts one that falls due during a pause
+ *    instead of cancelling the order.
  *  - Resend is cooled down + capped (convex/lib/orderClaims.ts) so the seller
  *    can't spam the buyer's WhatsApp.
  *  - Commit mirrors the STOREFRONT validation set (address shape, delivery
@@ -56,7 +60,10 @@ import {
 	requireRetailerAccess,
 	resolveMyRetailer,
 } from "./lib/auth";
-import { assertSubscriptionActive } from "./subscriptions";
+import {
+	assertSubscriptionActive,
+	buyerPaymentsPaused,
+} from "./subscriptions";
 import { type Country, DEFAULT_COUNTRY } from "./lib/country";
 import { storeBooksCouriers } from "./lib/courierBooking";
 import { getDisplayName, requireCustomerName } from "./lib/customer";
@@ -539,6 +546,9 @@ export interface ClaimPagePayload {
 		 * buyer learns on LOAD, not after filling in an address the commit
 		 * would refuse. */
 		orderingPaused: boolean;
+		/** The store is lapsed, so the order this commits can't be paid yet
+		 * (z8r3fdr6gg). One bit — never the subscription status. */
+		paymentsPaused: boolean;
 	};
 	/** Present only while the claim is OPEN. */
 	open?: {
@@ -626,6 +636,7 @@ export const getByToken = query({
 				closedDates: retailer.closedDates,
 				confirmPushEnabled: orderConfirmTemplateName() !== undefined,
 				orderingPaused: retailer.orderingPausedAt !== undefined,
+				paymentsPaused: await buyerPaymentsPaused(ctx, retailer._id),
 			},
 		};
 		if (status === "open") {
@@ -732,6 +743,7 @@ export const commit = mutation({
 		if (retailer.orderingPausedAt !== undefined)
 			throw new ConvexError(orderingPausedMessage(retailer.storeName));
 		const retailerCountry = retailer.country ?? DEFAULT_COUNTRY;
+		const paymentsPaused = await buyerPaymentsPaused(ctx, retailer._id);
 
 		// Same spend ceiling as any public order create — the commit schedules
 		// the same Meta-billed confirmation push.
@@ -1082,8 +1094,11 @@ export const commit = mutation({
 			// The claim's window CONTINUES onto the order (Zaki, 27 Aug — the
 			// Agoda model): stock just decremented, so the hold must run until
 			// real money. Floored to a full runway so a buyer who spent most of
-			// the window on the form still has a real chance to pay.
-			paymentDueAt: paymentDueAtCommit(claim.expiresAt, now),
+			// the window on the form still has a real chance to pay. None while
+			// the store can't take payment (z8r3fdr6gg — see the file header).
+			paymentDueAt: paymentsPaused
+				? undefined
+				: paymentDueAtCommit(claim.expiresAt, now),
 			confirmationPushStatus: confirmedAtCreate ? "sending" : undefined,
 			statusChangedAt: now,
 			createdAt: now,
@@ -1211,8 +1226,22 @@ export const cancelUnpaidDueOrders = internalMutation({
 			)
 			.paginate({ numItems: 50, cursor: cursor ?? null });
 		let cancelled = 0;
+		// One subscription read per store per page, not per order.
+		const pausedByStore = new Map<Id<"retailers">, boolean>();
 		for (const order of page.page) {
 			if (!isAutoCancelDue(order, now)) continue;
+			let paused = pausedByStore.get(order.retailerId);
+			if (paused === undefined) {
+				paused = await buyerPaymentsPaused(ctx, order.retailerId);
+				pausedByStore.set(order.retailerId, paused);
+			}
+			if (paused) {
+				// The buyer couldn't pay inside this window (z8r3fdr6gg), so it
+				// isn't theirs to have missed: lift the deadline, keep the order.
+				// The seller can still cancel it by hand once they're back.
+				await ctx.db.patch(order._id, { paymentDueAt: undefined });
+				continue;
+			}
 			await applyStatusTransition(ctx, order, "cancelled", {
 				note: "payment_window_expired",
 				cancelCause: "system",
