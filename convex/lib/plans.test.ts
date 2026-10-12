@@ -59,6 +59,7 @@ describe("plans — feature entitlements", () => {
 			events: false,
 			waOrderAlerts: false,
 			promo: false,
+			vouchers: false,
 		});
 	});
 
@@ -75,6 +76,7 @@ describe("plans — feature entitlements", () => {
 			events: true,
 			waOrderAlerts: true,
 			promo: true,
+			vouchers: true,
 		});
 		expect(featuresForPlan("enterprise")).toEqual({
 			crm: true,
@@ -88,6 +90,7 @@ describe("plans — feature entitlements", () => {
 			events: true,
 			waOrderAlerts: true,
 			promo: true,
+			vouchers: true,
 		});
 	});
 

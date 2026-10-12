@@ -4,6 +4,7 @@ import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { Clock, MessageCircle } from "lucide-react";
 import { useCallback, useState } from "react";
 import { api } from "../../convex/_generated/api";
+import { claimVoucherDiscount } from "../../convex/lib/voucherRedemption";
 import type { ClaimPagePayload } from "../../convex/orderClaims";
 import { ClaimCheckoutPage } from "../components/claim/claim-checkout-page";
 import { ClaimTimerBar } from "../components/claim/claim-timer-bar";
@@ -300,7 +301,13 @@ function ClaimRoute() {
 								<span {...MASK_PII}>{open.buyerName}</span>
 							</>
 						) : null}
-						{` · ${formatPrice(open.itemsTotal, store.currency)}`}
+						{/* NET of the voucher, not the items figure (`z8r3fdr617`).
+						    The voucher is locked at send, so it is knowable here —
+						    fees are not, since they depend on choices the buyer
+						    hasn't made yet, and they only ever ADD. Printing the
+						    gross put "RM 40.00" in the header directly above a
+						    ticket reading "TOTAL RM 32.00". */}
+						{` · ${formatPrice(open.itemsTotal - claimVoucherDiscount(open.voucher, open.itemsTotal), store.currency)}`}
 					</>
 				}
 			/>

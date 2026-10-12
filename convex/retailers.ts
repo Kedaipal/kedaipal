@@ -254,6 +254,7 @@ import {
 	sanitizeOpeningHours,
 } from "./lib/openingHours";
 import { rateLimiter } from "./lib/rateLimiter";
+import { storeShowsVoucherEntry } from "./lib/voucherRedemption";
 import {
 	capsForPlan,
 	DAY_MS,
@@ -985,6 +986,11 @@ type RetailerPublic = {
 	// commits. Never the status or the reason; the rule is
 	// `subscriptions.buyerPaymentsPaused`.
 	paymentsPaused?: boolean;
+	// Does this store's checkout show a voucher field? (`z8r3fdr617`) True
+	// only when the store is on a plan that carries vouchers AND has issued at
+	// least one — otherwise the control could only ever refuse. Like
+	// `paymentsPaused`, a single derived bit: never the plan, never a count.
+	acceptsVouchers?: boolean;
 	// Outbound WhatsApp kill-switch state (OWNER-only, like `subscription`), read
 	// from `retailerSendingLimits`. When paused, the gateway blocks this seller's
 	// NON-transactional WhatsApp sends (order confirmations/status still flow); the
@@ -1348,6 +1354,7 @@ export const getRetailerBySlug = query({
 					foundingMemberRank: active.foundingMemberRank,
 					orderingPaused: active.orderingPausedAt !== undefined,
 					paymentsPaused: await buyerPaymentsPaused(ctx, active._id),
+					acceptsVouchers: await storeShowsVoucherEntry(ctx, active._id),
 					marketplaceUnlisted: active.marketplaceUnlistedAt !== undefined,
 					// paymentInstructions intentionally omitted from the public
 					// storefront payload — only revealed in the WhatsApp confirm

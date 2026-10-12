@@ -579,6 +579,7 @@ const FEATURE_LABEL: Record<PlanFeature, string> = {
 	events: "Event RSVPs",
 	waOrderAlerts: "WhatsApp order alerts",
 	promo: "Promo and flash-sale prices",
+	vouchers: "Issuing voucher codes",
 };
 
 /**

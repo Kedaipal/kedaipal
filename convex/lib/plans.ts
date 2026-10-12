@@ -277,6 +277,14 @@ export type PlanFeatures = {
 	 * "Promo paused (Pro)") but the config is paused, never deleted, so an
 	 * upgrade revives it untouched. */
 	promo: boolean;
+	/** Vouchers (`z8r3fdr617`): issuing single-use discount codes. Pro because
+	 * it is a demand-generation lever, not part of taking an order — and it is
+	 * the one feature that gives money away, so it belongs with the paid tier's
+	 * marketing tools. Gates only ISSUING: voiding a voucher, and REDEEMING an
+	 * outstanding one, stay all-tier, so a store that downgrades neither traps
+	 * its seller nor strands a buyer holding a code it already sent. Already
+	 * -issued history stays readable on every plan (decided 8 Oct 2026). */
+	vouchers: boolean;
 };
 
 export type PlanFeature = keyof PlanFeatures;
@@ -294,6 +302,7 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		events: false,
 		waOrderAlerts: false,
 		promo: false,
+		vouchers: false,
 	},
 	pro: {
 		crm: true,
@@ -307,6 +316,7 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		events: true,
 		waOrderAlerts: true,
 		promo: true,
+		vouchers: true,
 	},
 	// Enterprise gets everything Pro has. Its extras are seats (above) and
 	// terms (the contract); multi-outlet and priority support are sold as
@@ -324,6 +334,7 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		events: true,
 		waOrderAlerts: true,
 		promo: true,
+		vouchers: true,
 	},
 };
 

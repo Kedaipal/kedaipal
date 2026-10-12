@@ -57,6 +57,10 @@ import type { UseCart } from "../../hooks/useCart";
 import { usePromoClock } from "../../hooks/usePromoClock";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { readAttributionSource } from "../../hooks/useSourceAttribution";
+import {
+	clearVoucherParam,
+	readVoucherParam,
+} from "../../hooks/useVoucherParam";
 import { displayAddressState } from "../../lib/address-display";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import {
@@ -81,6 +85,7 @@ import {
 	formatPrice,
 	type PriceChangedErrorData,
 	priceChangedErrorOf,
+	voucherRefusedErrorOf,
 } from "../../lib/format";
 import {
 	type CopyPart,
@@ -114,6 +119,11 @@ import {
 	BuyerPhonePrefix,
 	buyerPhonePlaceholder,
 } from "../ui/my-phone-input";
+import {
+	type AppliedVoucher,
+	previewDiscount,
+	VoucherField,
+} from "../vouchers/voucher-field";
 import { AddressFieldset } from "./address-fieldset";
 import { CheckoutHint } from "./checkout-hint";
 import {
@@ -181,9 +191,20 @@ interface CheckoutPageProps {
 	 * See convex/lib/minOrderRules.ts. */
 	minOrderValue: number | undefined;
 	pickupLocations: ReadonlyArray<PublicPickupLocation>;
+	/** A voucher code from `?voucher=` (`z8r3fdr617`) — applied on mount with
+	 * the field open, so the buyer sees what landed and can take it off, rather
+	 * than finding a discount they can't account for. */
+	voucherCode?: string;
 	/** The store is lapsed, so this order can't be paid yet (z8r3fdr6gg) —
 	 * the summary column says so before the buyer commits. */
 	paymentsPaused?: boolean;
+	/**
+	 * Render the voucher entry at all (`z8r3fdr617`). False for a store that
+	 * is below the plan carrying vouchers, or has never issued one — either
+	 * way no code the buyer could type would be accepted, and a control that
+	 * can only refuse does not belong on a checkout.
+	 */
+	acceptsVouchers?: boolean;
 }
 
 interface SanitizedDeliveryAddress {
@@ -268,7 +289,9 @@ export function CheckoutPage({
 	closedDates,
 	minOrderValue,
 	pickupLocations,
+	voucherCode,
 	paymentsPaused,
+	acceptsVouchers = false,
 }: CheckoutPageProps) {
 	// The route reserves exactly this bar's height as bottom padding — see the
 	// bar's own comment near the bottom of this component.
@@ -279,6 +302,17 @@ export function CheckoutPage({
 	// the frame before navigation lands on the tracking page — this flag keeps
 	// the layout up instead.
 	const [submitted, setSubmitted] = useState(false);
+	// The applied voucher (`z8r3fdr617`). Held here rather than in the form,
+	// because it prices the RECEIPT (which lives outside the form's field tree)
+	// and is re-validated server-side at create regardless.
+	const [voucher, setVoucher] = useState<AppliedVoucher | null>(null);
+	// The code to pre-apply: this hit's `?voucher=`, else the one the session
+	// has been holding since the buyer followed the link with an empty cart
+	// (`z8r3fdr617` — see useVoucherParam). Read once on mount; after that the
+	// field owns the state.
+	const [initialVoucherCode] = useState(
+		() => voucherCode ?? readVoucherParam(storeSlug),
+	);
 
 	const goToStore = useCallback(
 		() => navigate({ to: "/$slug", params: { slug: storeSlug } }),
@@ -378,6 +412,11 @@ export function CheckoutPage({
 	// screen after the buyer dropped to 2, after the prices were re-accepted
 	// and after the sale had ENDED, sitting next to an enabled Place order
 	// (found by hand-testing).
+	// Set only by a refusal from `orders.create`; cleared the moment the buyer
+	// applies or removes anything, so a stale sentence can't outlive its cause.
+	const [voucherServerRefusal, setVoucherServerRefusal] = useState<
+		string | undefined
+	>(undefined);
 	const [serverError, setServerError] = useState<{
 		message: string;
 		cart: string;
@@ -730,7 +769,15 @@ export function CheckoutPage({
 					// the order rather than charging a different number; absent, it
 					// keeps the old behaviour, so a stale tab still works.
 					expectedSubtotal: cartItemSubtotal(cart.items),
+					// Re-validated server-side (the field's check was only for the
+					// tick) — a code that died in the meantime refuses the order
+					// rather than quietly charging full price.
+					voucherCode: voucher?.code,
 				});
+				// Spent — forget the held code, or the next checkout in this tab
+				// re-applies a redeemed voucher and is refused for no visible
+				// reason.
+				if (voucher) clearVoucherParam(storeSlug);
 				if (effectiveMethod === "delivery") saveAddress(country, value.address);
 				setSubmitted(true);
 				cart.clearCart();
@@ -760,6 +807,19 @@ export function CheckoutPage({
 				const priceChange = priceChangedErrorOf(err);
 				if (priceChange !== null) {
 					setServerRefusal(priceChange);
+					return;
+				}
+				// Same posture as the price-changed guard: a state to fix, not an
+				// error to read. The door re-validates, so it can refuse a code
+				// the field checked a minute ago (someone else spent it, the
+				// seller voided it) — take the voucher OFF, which corrects the
+				// ticket's total on the spot, and put the reason back under the
+				// field where the buyer applied it. Leaving the discount drawn
+				// under a banner saying it failed shows a price nobody will pay.
+				const voucherRefusal = voucherRefusedErrorOf(err);
+				if (voucherRefusal !== null) {
+					setVoucher(null);
+					setVoucherServerRefusal(voucherRefusal);
 					return;
 				}
 				refuseServer(convexErrorMessage(err));
@@ -1243,6 +1303,16 @@ export function CheckoutPage({
 					Add something from {storeName} first — your cart is saved on this
 					device.
 				</p>
+				{/* The whole point of a `?voucher=` link is that it is tapped
+				    BEFORE shopping, so this is the state the buyer most often
+				    lands in. Saying the code is held is what stops it reading as
+				    lost. */}
+				{initialVoucherCode ? (
+					<p className="max-w-[36ch] rounded-lg bg-accent/10 px-3 py-2 text-sm font-medium text-accent-emphasis">
+						Your voucher <span className="font-mono">{initialVoucherCode}</span>{" "}
+						is saved — we'll apply it when you check out.
+					</p>
+				) : null}
 				<Button type="button" onClick={goToStore} className="tap-target mt-1">
 					Browse {storeName}
 				</Button>
@@ -1631,6 +1701,29 @@ export function CheckoutPage({
 												deliveryMethod === "delivery" && collectsFromCustomer
 											}
 											awaitingQuote={hasCustomLine}
+											voucherDiscount={previewDiscount(voucher, cart.total)}
+											voucherCode={voucher?.code}
+											voucherField={
+												acceptsVouchers ? (
+													<VoucherField
+														variant="receipt"
+														retailerId={retailerId}
+														currency={cart.currency}
+														itemSubtotal={cart.total}
+														applied={voucher}
+														onApply={(v) => {
+															setVoucherServerRefusal(undefined);
+															setVoucher(v);
+														}}
+														onRemove={() => {
+															setVoucherServerRefusal(undefined);
+															setVoucher(null);
+														}}
+														serverRefusal={voucherServerRefusal}
+														initialCode={initialVoucherCode}
+													/>
+												) : null
+											}
 										/>
 									}
 									footer={
@@ -2340,7 +2433,13 @@ export function CheckoutPage({
 									<span className="text-sm text-muted-foreground">Total</span>
 									<span className="text-lg font-bold tabular-nums">
 										{formatPrice(
-											cart.total + pickupFee + deliveryFee,
+											cart.total +
+												pickupFee +
+												deliveryFee -
+												// The same shared preview the receipt uses — the two
+												// totals share a screen at desktop widths and must
+												// never disagree.
+												previewDiscount(voucher, cart.total),
 											cart.currency,
 										)}
 										{pendingParts.length > 0 ? (

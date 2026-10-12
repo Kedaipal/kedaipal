@@ -59,8 +59,19 @@ const REDACTION_CALLS = [
  */
 const NEVER_GATED_MODULES = ["products", "categories"];
 
-/** Order-handling modules: every public write is classified below. */
-const MIXED_MODULES = ["orders", "bookings", "lalamove", "delyva", "awb"];
+/** Order-handling modules: every public write is classified below.
+ *
+ * `vouchers` (`z8r3fdr617`) joins the list even though it handles no orders
+ * directly: a voucher only exists to be spent ON an order, so "does the credit
+ * gate reach this?" is a question each of its writes has to answer out loud. */
+const MIXED_MODULES = [
+	"orders",
+	"bookings",
+	"lalamove",
+	"delyva",
+	"awb",
+	"vouchers",
+];
 
 const GATED_FUNCTIONS = [
 	// Accepting and moving an order forward (cancel excepted inside).
@@ -140,6 +151,21 @@ const OPEN_FUNCTIONS: Record<string, string> = {
 		"cleans up abandoned uploads — never trap a cleanup",
 	"orders.deleteOrder": "Kedaipal admin only",
 	"orders.bulkDeleteOrders": "Kedaipal admin only",
+	// Vouchers (`z8r3fdr617`). NONE of these is credit-gated, and the reason is
+	// the same one that un-gated the catalogue in T3.1: credits meter ORDERS,
+	// and the order a voucher is eventually spent on pays its own credit at
+	// intake — which never stops. Gating the issuing of codes would be the
+	// store-wide lock creeping back in through a side door.
+	"vouchers.create":
+		"issuing a code is marketing, not order work — the order it is spent on pays its own credit",
+	"vouchers.checkCode":
+		"buyer: asks what a code is worth — buyers never feel a seller's balance",
+	"vouchers.voidVoucher":
+		"withdrawing a promise is like cancel: always open, never trapped",
+	"vouchers.voidBatch":
+		"withdrawing a whole run is like cancel: always open, never trapped",
+	"vouchers.renameBatch":
+		"renaming a run changes a private label, not an order — nothing to meter",
 	// Settings are always open.
 	"delyva.connect": "settings: connecting a courier account",
 	"delyva.resubscribeWebhooks": "settings: re-registers the courier webhooks",
@@ -170,12 +196,20 @@ const OPEN_FUNCTIONS: Record<string, string> = {
 // keeps it on the calendar, so a request that lands at or below zero is born
 // gated and shows up on the grid, the day sheet and both impact lists. The
 // `.ics` feed already skipped gated bookings; these are its in-app mirror.
+//
+// `vouchers` joined on review of PR #357 (`z8r3fdr617`): a spent voucher names
+// the order it went to, so `vouchers.list` is a seller read of order data and
+// had been sitting outside this sweep entirely — the same way `bookingBlocks`
+// and `closedDates` were, and for the same reason (nobody added the file).
+// `orderClaims` joined with it: its list grew an `order.total` read.
 const READ_MODULES = [
 	"orders",
 	"customers",
 	"bookingBlocks",
 	"closedDates",
 	"awb",
+	"vouchers",
+	"orderClaims",
 ];
 
 const OPEN_READS: Record<string, string> = {
@@ -190,6 +224,8 @@ const OPEN_READS: Record<string, string> = {
 		"per-day counts only, no order data — and like the nav badge, a waiting order SHOULD be counted: Home is what tells the seller Saturday is heavy, and hiding the work would misstate the week",
 	"bookingBlocks.hasBookingListings":
 		"a boolean — does this store sell bookings at all; reads products, never an order",
+	"orderClaims.getByToken":
+		"buyer door only (unguessable claim token, never enumerable) — the credit gate withholds an order from the SELLER, never from the buyer who placed it, so redacting here would hide a buyer's own ticket from them",
 };
 
 const CONVEX = __dirname;

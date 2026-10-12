@@ -51,6 +51,24 @@ mutations are OCC transactions, so the tally *is* the lock. Cancelled and
 auto-expired orders drop out of it, which is how their units return to the
 pool with no bookkeeping at all.
 
+### The counter panel quotes a price, so it calls the same helper
+
+`createOrderFromSession` defaults to the effective price, which makes the
+**seller's own counter panel** a price-quoting surface and not merely a form:
+the number on it is the one the seller reads out and takes cash for. It priced
+every line from `variant.price` — the **list** price — while the mutation
+resolved the promo one, so a basket of RM40-promo stock showed "Review order ·
+RM 50.00" and recorded RM40. On a cash sale that gap is real money, counted
+wrong at the till, with nothing on either side flagging it.
+
+`src/lib/promo.ts` already exported `effectiveVariantPrice`; the counter simply
+never called it. One `counterPrice(variant, product)` helper in
+`src/routes/app.checkout.tsx` now feeds **all four** readers — the line row,
+the variant picker, the draft rehydrate and the "from" range — so the panel's
+number and the server's cannot part again. Found while testing vouchers
+(`z8r3fdr617`) and **reproduced with no voucher involved**, which is what
+established it as promo's bug rather than the voucher seam's.
+
 ## The guards
 
 - **Cap straddle** — a cart wanting 5 when 3 remain is refused, never split

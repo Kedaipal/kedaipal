@@ -673,6 +673,19 @@ export async function buildOrderReceiptPdf(
 		);
 		y -= 18;
 	}
+	// The voucher — the ONE subtractive row, so it prints signed and in the
+	// discount ink, exactly like the subscription invoice's founding discount.
+	// Last of the adjustments, immediately above the bar it reduces.
+	if (data.voucherDiscount && data.voucherDiscount > 0) {
+		totalsRow(
+			d,
+			data.voucherCode ? `Voucher ${data.voucherCode}` : "Voucher",
+			formatMoney(-data.voucherDiscount, data.currency),
+			y,
+			{ color: GREEN_INK },
+		);
+		y -= 18;
+	}
 	y = totalBar(d, "Total", formatMoney(data.total, data.currency), y);
 	if (data.deliveryFeePending) {
 		draw(

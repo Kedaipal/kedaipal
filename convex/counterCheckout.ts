@@ -75,9 +75,22 @@ import {
 } from "./lib/orderClaims";
 import {
 	computeOrderTotals,
+	storedDiscount,
 	generateShortId,
 	generateTrackingToken,
 } from "./lib/order";
+import {
+	claimVoucherDiscount,
+	claimVoucherState,
+	redeemVoucher,
+	resolveVoucherOrThrow,
+	storeShowsVoucherEntry,
+} from "./lib/voucherRedemption";
+import {
+	normalizeVoucherCode,
+	type VoucherSnapshot,
+	type VoucherTerms,
+} from "./lib/vouchers";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 import type { PickupSnapshot } from "./lib/whatsappCopy";
 import { buildEventVenueSnapshot, resolveEventVenue } from "./orders";
@@ -255,6 +268,10 @@ export const getCheckoutSession = query({
 		customer: { orderCount: number; totalSpent: number; lastOrderAt: number } | null;
 		// Autosaved in-progress order, so a resume restores the cart + selections.
 		draft: Doc<"counterCheckoutSessions">["draft"];
+		// Show the voucher field on this panel? (`z8r3fdr617`) Same bit the
+		// buyer's storefront uses, deliberately: the seller keying a code and
+		// the buyer typing one must not see different doors.
+		acceptsVouchers: boolean;
 		// A claim link that is still out (86eyq0epn). Non-null = this checkout is
 		// FROZEN: the screen renders the read-only "waiting on buyer" view and
 		// both edit mutations refuse. Carries the frozen snapshot rather than the
@@ -265,7 +282,13 @@ export const getCheckoutSession = query({
 			expiresAt: number;
 			windowMinutes: number;
 			currency: string;
-			itemsTotal: number;
+			/**
+			 * Net of the claim's voucher (`z8r3fdr617`) — this screen exists to
+			 * show the seller WHAT THE BUYER IS LOOKING AT, so a gross figure
+			 * here is the one number on it that wouldn't match. Always judged
+			 * live, since a live claim's voucher is by definition unspent.
+			 */
+			total: number;
 			lines: Array<{
 				name: string;
 				variantLabel: string | undefined;
@@ -315,6 +338,18 @@ export const getCheckoutSession = query({
 
 		const now = Date.now();
 		const claim = await liveClaimForSession(ctx, sessionId, now);
+		// Net of the claim's voucher, so the seller's frozen view matches the
+		// buyer's ticket to the sen (`z8r3fdr617`). A live claim's voucher is
+		// by definition unspent, so the live state is the right one to ask.
+		const claimItems =
+			claim?.lines.reduce((sum, l) => sum + l.price * l.quantity, 0) ?? 0;
+		const claimLiveTotal = claim
+			? claimItems -
+				claimVoucherDiscount(
+					await claimVoucherState(ctx, claim, now),
+					claimItems,
+				)
+			: 0;
 
 		return {
 			status: effectiveStatus(session, now),
@@ -325,6 +360,7 @@ export const getCheckoutSession = query({
 			orderId: session.orderId,
 			customer,
 			draft: session.draft,
+			acceptsVouchers: await storeShowsVoucherEntry(ctx, session.retailerId),
 			liveClaim: claim
 				? {
 						claimId: claim._id,
@@ -332,10 +368,7 @@ export const getCheckoutSession = query({
 						expiresAt: claim.expiresAt,
 						windowMinutes: claim.windowMinutes,
 						currency: claim.currency,
-						itemsTotal: claim.lines.reduce(
-							(sum, l) => sum + l.price * l.quantity,
-							0,
-						),
+						total: claimLiveTotal,
 						lines: claim.lines.map((l) => ({
 							name: l.name,
 							variantLabel: l.variantLabel,
@@ -584,6 +617,13 @@ const draftValidator = v.object({
 	fulfilmentDate: v.optional(v.number()),
 	paidInPerson: v.optional(v.boolean()),
 	paymentMethod: v.optional(orderPaymentMethodValidator),
+	// Voucher code (`z8r3fdr617`) — a scratchpad value like the prices, kept
+	// only in its canonical spelling so the door that spends it doesn't have to
+	// re-parse whatever was typed. An unparseable code is DROPPED here rather
+	// than rejected: this is a debounced autosave running while the seller is
+	// mid-keystroke, and failing the save would lose the rest of the cart.
+	// The seller's live feedback comes from the code-check query instead.
+	voucherCode: v.optional(v.string()),
 });
 
 /**
@@ -634,7 +674,15 @@ export const saveSessionDraft = mutation({
 
 		const now = Date.now();
 		await ctx.db.patch(sessionId, {
-			draft: { ...draft, items },
+			draft: {
+				...draft,
+				items,
+				// Canonical spelling or nothing — see `draftValidator`.
+				voucherCode:
+					draft.voucherCode === undefined
+						? undefined
+						: (normalizeVoucherCode(draft.voucherCode) ?? undefined),
+			},
 			expiresAt: now + OPEN_SESSION_TTL_MS, // slide the idle window
 			updatedAt: now,
 		});
@@ -773,6 +821,13 @@ export const createOrderFromSession = mutation({
 		// person, so it's validated against a 0-day notice (today always allowed),
 		// ignoring the storefront buyer-notice setting. See convex/lib/fulfilmentDate.ts.
 		fulfilmentDate: v.optional(v.number()),
+		// The voucher the seller keyed (`z8r3fdr617`), passed EXPLICITLY like
+		// `items` rather than read off `session.draft`. The draft is a DEBOUNCED
+		// autosave, so reading it here would lose a code applied in the second
+		// before the seller tapped Create — after the panel had already shown
+		// the discount. The draft copy exists only to restore the field on a
+		// refresh; this argument is what the sale is priced on.
+		voucherCode: v.optional(v.string()),
 	},
 	handler: async (
 		ctx,
@@ -1057,7 +1112,28 @@ export const createOrderFromSession = mutation({
 				throw new ConvexError(seatsExhaustedMessage(name, left));
 		}
 
-		const { subtotal, total } = computeOrderTotals(snapshotItems);
+		// The voucher the seller keyed (`z8r3fdr617`). Resolved authoritatively
+		// HERE — the panel's check was only for the tick, so one that lapsed or
+		// was spent elsewhere while the cart sat open is caught at this door. Refuses the sale rather than ringing it up at a
+		// price the seller didn't quote: the buyer is standing right there, and
+		// the seller can drop the code and take the money.
+		let voucherTerms: VoucherTerms | undefined;
+		let redeemedVoucherId: Id<"vouchers"> | undefined;
+		let voucherSnapshot: VoucherSnapshot | undefined;
+		if (args.voucherCode?.trim()) {
+			const { voucher, terms } = await resolveVoucherOrThrow(ctx, {
+				retailerId: retailer._id,
+				code: args.voucherCode,
+				now,
+			});
+			voucherTerms = terms;
+			redeemedVoucherId = voucher._id;
+			voucherSnapshot = { code: voucher.code, ...terms };
+		}
+
+		const { subtotal, discount, total } = computeOrderTotals(snapshotItems, {
+			voucher: voucherTerms,
+		});
 
 		// Reserve stock for hard-block variants (same OCC transaction).
 		for (const [variantId, { qty, block, onHand }] of requestedByVariant) {
@@ -1115,10 +1191,19 @@ export const createOrderFromSession = mutation({
 			// Who rang this up (86exr91r4) — owner or team member at the counter;
 			// admin act-as stays in adminAuditLog, never on the order.
 			createdByUserId: access.role === "admin" ? undefined : access.userId,
+			// The voucher, frozen onto the order; the row flips just below.
+			voucherId: redeemedVoucherId,
+			voucherSnapshot,
+			voucherDiscount: storedDiscount(discount),
 			statusChangedAt: now,
 			createdAt: now,
 			updatedAt: now,
 		});
+
+		// Spend the code in the transaction that created the order (OCC makes the
+		// race safe — see lib/voucherRedemption.ts).
+		if (redeemedVoucherId)
+			await redeemVoucher(ctx, { voucherId: redeemedVoucherId, orderId, now });
 
 		const actorUserId = access.role === "admin" ? undefined : access.userId;
 		await ctx.db.insert("orderEvents", {

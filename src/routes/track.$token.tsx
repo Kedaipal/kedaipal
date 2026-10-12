@@ -1844,6 +1844,23 @@ function TrackingRoute() {
 						</span>
 					</div>
 				) : null}
+				{/* The voucher (`z8r3fdr617`) — the one SUBTRACTIVE line, so it is
+				    signed and accented rather than reading as another charge. Last
+				    of the adjustments, immediately above the total it reduces, and
+				    named by its code so the buyer can see which voucher did it. */}
+				{order.voucherDiscount && order.voucherDiscount > 0 ? (
+					<div className="flex items-center justify-between gap-3 px-3 text-sm text-accent-emphasis">
+						<span className="min-w-0 truncate">
+							{ms ? "Voucher" : "Voucher"}
+							{order.voucherSnapshot?.code
+								? ` · ${order.voucherSnapshot.code}`
+								: ""}
+						</span>
+						<span className="shrink-0 font-medium tabular-nums">
+							−{formatPrice(order.voucherDiscount, order.currency)}
+						</span>
+					</div>
+				) : null}
 				<div className="flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2.5 text-sm font-bold">
 					<span>Total</span>
 					<span className="tabular-nums">

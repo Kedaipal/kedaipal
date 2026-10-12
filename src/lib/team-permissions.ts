@@ -49,6 +49,13 @@ export const AREA_COPY: Record<PermissionArea, AreaCopy> = {
 		label: "Bookings",
 		description: "Booking listings, blocked dates and the calendar.",
 	},
+	vouchers: {
+		label: "Vouchers",
+		description:
+			"The voucher list and what each code was spent on. Edit also lets them issue and void codes.",
+		caveat:
+			"Issuing a voucher gives money away, so it's off by default. Taking a voucher on a sale needs no grant here — that comes with Orders.",
+	},
 	insights: {
 		label: "Business insights",
 		description: "Revenue totals, trends and best sellers.",
@@ -107,6 +114,9 @@ export const AREA_GROUPS: ReadonlyArray<{
 	{
 		label: "Sensitive",
 		areas: [
+			// Issuing a code is a money-giving capability — grouped with the
+			// grants the presets deliberately leave off, and left off both.
+			"vouchers",
 			"insights",
 			"exports",
 			"payments_settings",

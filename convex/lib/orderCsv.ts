@@ -319,6 +319,16 @@ export type CsvOrder = {
 	 * inside `total`, so a bookkeeper subtracts this column to reconcile
 	 * against Insights, which already excludes it. */
 	securityDeposit?: number;
+	/** Voucher discount (minor units, `z8r3fdr617`) — the ONLY SUBTRACTIVE
+	 * member of the money run, so its column prints a NEGATIVE amount. That is
+	 * what keeps the stated identity true by inspection: a column printing
+	 * `10.00` for money that came OFF the total would make every voucher order
+	 * fail to balance, which is the exact bug `Custom work` was added to fix.
+	 * Same "0.00 never blank" rule as its neighbours. */
+	voucherDiscount?: number;
+	/** The code spent, so a seller reconciling a giveaway run can tell which
+	 * voucher paid for which order. Outside the money run (it isn't an addend). */
+	voucherCode?: string;
 	/** True while the delivery charge is still unquoted: `total` is provisional
 	 * and understates the final bill. Without this column the Total column lies
 	 * with no way to tell which rows are affected. */
@@ -407,6 +417,8 @@ export type OrderColumnKey =
 	| "pickupFee"
 	| "deliveryFee"
 	| "securityDeposit"
+	| "voucherDiscount"
+	| "voucherCode"
 	| "total"
 	| "promoDiscount"
 	| "currency"
@@ -526,8 +538,10 @@ export function fulfilmentMomentSortKey(o: CsvOrder): number | undefined {
  * relative order — new columns are interleaved where they belong rather than
  * bolted on the end, so a seller's name-keyed spreadsheet template still reads
  * left-to-right in the same sequence. The one thing that MUST stay adjacent is
- * the money run: `Subtotal · Custom work · Pickup fee · Delivery fee · Total`
- * reconciles by inspection, which is the whole point of adding Custom work.
+ * the money run: `Subtotal · Custom work · Pickup fee · Delivery fee ·
+ * Security deposit · Voucher · Total` reconciles by inspection, which is the
+ * whole point of adding Custom work. `Voucher` prints NEGATIVE — it is an
+ * addend like the rest, just a subtractive one.
  *
  * DELIBERATELY ABSENT: `trackingToken`. It is the capability that unlocks the
  * buyer's no-auth tracking page (see schema `orders.trackingToken`), so it must
@@ -873,6 +887,20 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		sortKey: (o) => o.securityDeposit ?? 0,
 	},
 	{
+		// The one subtractive addend — see `voucherDiscount` on CsvOrder for why
+		// the printed figure is negative.
+		key: "voucherDiscount",
+		label: "Voucher",
+		group: "money",
+		numeric: true,
+		width: 110,
+		value: (o) =>
+			o.voucherDiscount && o.voucherDiscount > 0
+				? csvAmount(-o.voucherDiscount)
+				: csvAmount(0),
+		sortKey: (o) => -(o.voucherDiscount ?? 0),
+	},
+	{
 		key: "total",
 		label: "Total",
 		group: "money",
@@ -907,6 +935,13 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		group: "money",
 		width: 96,
 		value: (o) => o.currency,
+	},
+	{
+		key: "voucherCode",
+		label: "Voucher code",
+		group: "money",
+		width: 132,
+		value: (o) => o.voucherCode ?? "",
 	},
 	{
 		key: "feePending",
