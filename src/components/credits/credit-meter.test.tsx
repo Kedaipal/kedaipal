@@ -10,6 +10,7 @@ import {
 	type TopUpRefusal,
 	topUpRefusalMessage,
 } from "../../../convex/lib/creditPurchases";
+import { TRIAL_CREDIT_GRANT } from "../../../convex/lib/plans";
 import { formatShortDate } from "../../lib/format";
 import { CreditMeter } from "./credit-meter";
 
@@ -677,5 +678,38 @@ describe("CreditMeter — the card's tone sentence (z8r3fdrgzj)", () => {
 		});
 		render(<CreditMeter variant="full" retailer={retailer()} />);
 		expect(screen.queryByText(/at this week's pace/)).toBeNull();
+	});
+});
+
+describe("CreditMeter — the trial card (z8r3fdrgzj board: Onboarding 1)", () => {
+	afterEach(() => cleanup());
+
+	const trial = () =>
+		balance({ plan: 200, total: 200, periodGrant: 200, regime: "trial" });
+
+	it("says WHICH kind of balance this is before saying how much is left", () => {
+		// A trial balance does not refresh, it runs out — the tag is the warning.
+		mockQueries({ bal: trial() });
+		render(<CreditMeter variant="card" retailer={retailer()} />);
+		expect(screen.getByText("Free trial")).toBeTruthy();
+	});
+
+	it("carries the trial sentence, built from the grant and never a literal", () => {
+		mockQueries({ bal: trial() });
+		render(<CreditMeter variant="card" retailer={retailer()} />);
+		expect(
+			screen.getByText(
+				new RegExp(`free trial includes ${TRIAL_CREDIT_GRANT} orders`, "i"),
+			),
+		).toBeTruthy();
+		// …and NOT the generic line it used to show instead.
+		expect(screen.queryByText(/^Trial orders —/)).toBeNull();
+	});
+
+	it("a monthly store gets neither the tag nor the trial sentence", () => {
+		mockQueries({ bal: balance({ plan: 184, total: 184, periodGrant: 200 }) });
+		render(<CreditMeter variant="card" retailer={retailer()} />);
+		expect(screen.queryByText("Free trial")).toBeNull();
+		expect(screen.queryByText(/free trial includes/i)).toBeNull();
 	});
 });

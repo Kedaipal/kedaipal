@@ -2,7 +2,7 @@ import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import type { FunctionReturnType } from "convex/server";
-import { Award, Gauge, Lock } from "lucide-react";
+import { Award, Gauge, Lock, Sparkles } from "lucide-react";
 import type { ReactNode } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { CreditBalanceView } from "../../../convex/credits";
@@ -164,6 +164,14 @@ export function CreditMeter({
 					<Award className="size-3" aria-hidden="true" />
 					Founding · 300 a month
 				</span>
+			) : balance.regime === "trial" ? (
+				/* The board's tag. A trial balance behaves differently from a
+				   monthly one — it does not refresh, it runs out — so the card says
+				   which kind of balance this is before it says how much is left. */
+				<span className="inline-flex items-center gap-1 rounded-full bg-accent/15 px-2 py-0.5 text-[11px] font-medium text-accent-emphasis">
+					<Sparkles className="size-3" aria-hidden="true" />
+					Free trial
+				</span>
 			) : null}
 		</div>
 	);
@@ -241,11 +249,13 @@ export function CreditMeter({
 						{balance.purchased} bought
 					</p>
 				</div>
-				<p className="text-xs text-muted-foreground">
-					{refresh ??
-						(balance.regime === "trial"
-							? "Trial orders — pick a plan to keep going once they're used."
-							: "Monthly credits reset on the 1st.")}
+				<p className="text-xs leading-relaxed text-muted-foreground">
+					{/* `creditStateLine` already writes the board's trial sentence, out
+					    of `TRIAL_CREDIT_GRANT` rather than a literal — the card simply
+					    was not using it, and showed a generic one-liner instead. */}
+					{balance.regime === "trial"
+						? stateLine
+						: (refresh ?? "Monthly credits reset on the 1st.")}
 				</p>
 				<div className="flex flex-wrap gap-2">
 					{cta ? (
