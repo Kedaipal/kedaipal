@@ -2,8 +2,23 @@ import { CalendarDays, Palette, SlidersHorizontal, X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useState } from "react";
 import { sourceLabel } from "../../../convex/lib/attribution";
+import {
+	BOOKING_PERIOD_CHIPS,
+	BOOKING_PERIOD_LABELS,
+	type BookingPeriod,
+} from "../../../convex/lib/bookingPeriod";
 import type { Country } from "../../../convex/lib/country";
-import type { FulfilmentWindow } from "../../../convex/lib/fulfilmentDate";
+import {
+	type FulfilmentWindow,
+	ymdFromEpoch,
+} from "../../../convex/lib/fulfilmentDate";
+import {
+	BUCKET_LEAVES,
+	INBOX_BUCKETS,
+	INBOX_LEAF_KEYS,
+	type InboxStatusLeaf,
+	leafLabel,
+} from "../../../convex/lib/orderBuckets";
 import {
 	fulfilmentLabel,
 	ORDER_SOURCE_KEYS,
@@ -17,18 +32,6 @@ import {
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 } from "../../../convex/lib/paymentMethod";
-import {
-	BOOKING_PERIOD_CHIPS,
-	BOOKING_PERIOD_LABELS,
-	type BookingPeriod,
-} from "../../../convex/lib/bookingPeriod";
-import {
-	BUCKET_LEAVES,
-	INBOX_BUCKETS,
-	INBOX_LEAF_KEYS,
-	type InboxStatusLeaf,
-	leafLabel,
-} from "../../../convex/lib/orderBuckets";
 import { cn } from "../../lib/utils";
 import { BulkSelectRow } from "../ui/bulk-select-row";
 import { Button } from "../ui/button";
@@ -82,6 +85,20 @@ export interface OrderFilterValue {
 	mockup: boolean;
 	/** Fulfilment-date urgency window (Today / Tomorrow / This week). */
 	fwin?: FulfilmentWindow;
+	/**
+	 * An ARBITRARY due span, inclusive, as MYT midnights — the same axis as
+	 * `fwin` and mutually exclusive with it. "Due when" is ONE question, and two
+	 * controls answering it would AND into a window the seller never asked for
+	 * (`fwin: "today"` plus a Thursday span matches nothing at all).
+	 *
+	 * No picker writes it: it arrives on the URL from Home's Plan ahead tiles,
+	 * which open any single day of the next seven (z8r3fdrgzj) where `fwin` only
+	 * names three windows. The panel's job is therefore to SHOW it and let it
+	 * go, which is why it gets a row of its own in the Due date section instead
+	 * of being a filter silently in force.
+	 */
+	dueFrom?: number;
+	dueTo?: number;
 	/**
 	 * Checkout surfaces to keep (online / counter / claim link). MULTI since
 	 * 86eyrtz74, matching every other enumerable filter — "everything that isn't
@@ -146,7 +163,7 @@ export function activeFilterCount(v: OrderFilterValue): number {
 		(v.methodUnspecified ? 1 : 0) +
 		(v.from != null || v.to != null ? 1 : 0) +
 		(v.mockup ? 1 : 0) +
-		(v.fwin != null ? 1 : 0) +
+		(v.fwin != null || v.dueFrom != null || v.dueTo != null ? 1 : 0) +
 		v.sources.length +
 		v.fulfilments.length +
 		v.statuses.length +
@@ -212,6 +229,74 @@ function formatShortDate(ms?: number): string | null {
 		day: "numeric",
 		month: "short",
 	}).format(new Date(ms));
+}
+
+/**
+ * A due span in two renderings: the panel's own row ("Thu 16 Oct") and the
+ * applied-filter chip above the list ("Due Thu 16 Oct"). One function so the
+ * two surfaces can never name the same window differently.
+ *
+ * MYT, like every other date the dashboard prints — and like the Plan ahead
+ * tile the span almost always came from. A seller who tapped "Thu" has to find
+ * the word "Thu" on the list they land on, or the filter is unexplained.
+ */
+export function dueSpanLabels(
+	from?: number,
+	to?: number,
+): { row: string; chip: string } {
+	const day = (ms: number, weekday: boolean) =>
+		new Date(ms).toLocaleDateString("en-GB", {
+			...(weekday ? { weekday: "short" as const } : {}),
+			day: "numeric",
+			month: "short",
+			timeZone: "Asia/Kuala_Lumpur",
+		});
+	if (from != null && to != null) {
+		// One day is the common case (a Plan ahead tile), and a single date wants
+		// its weekday: "Thu 16 Oct" is the tile's own word plus the date.
+		const span =
+			ymdFromEpoch(from) === ymdFromEpoch(to)
+				? day(from, true)
+				: `${day(from, false)} – ${day(to, false)}`;
+		return { row: span, chip: `Due ${span}` };
+	}
+	// Half-open spans are not reachable from any control — only from a
+	// hand-written URL — but they filter, so they get said out loud too.
+	if (from != null)
+		return {
+			row: `From ${day(from, false)}`,
+			chip: `Due from ${day(from, false)}`,
+		};
+	const end = day(to as number, false);
+	return { row: `Until ${end}`, chip: `Due until ${end}` };
+}
+
+/**
+ * The due-date axis as ONE token, whether it came from the three named windows
+ * or from a Home tile's span — and clearing it clears the whole axis, because
+ * the seller sees one filter and expects one tap to end it.
+ */
+function dueToken(v: OrderFilterValue): FilterToken | null {
+	const clear = (x: OrderFilterValue) => ({
+		...x,
+		fwin: undefined,
+		dueFrom: undefined,
+		dueTo: undefined,
+	});
+	if (v.fwin) {
+		const label = DUE_WINDOWS.find((w) => w.value === v.fwin)?.label ?? v.fwin;
+		return {
+			key: `fwin-${v.fwin}`,
+			label: `Due ${label.toLowerCase()}`,
+			clear,
+		};
+	}
+	if (v.dueFrom == null && v.dueTo == null) return null;
+	return {
+		key: "due-span",
+		label: dueSpanLabels(v.dueFrom, v.dueTo).chip,
+		clear,
+	};
 }
 
 /** One applied-filter token: its label + how to clear just that filter. */
@@ -294,14 +379,8 @@ function activeFilterTokens(
 			}),
 		});
 	}
-	if (v.fwin) {
-		const label = DUE_WINDOWS.find((w) => w.value === v.fwin)?.label ?? v.fwin;
-		tokens.push({
-			key: `fwin-${v.fwin}`,
-			label: `Due ${label.toLowerCase()}`,
-			clear: (x) => ({ ...x, fwin: undefined }),
-		});
-	}
+	const due = dueToken(v);
+	if (due) tokens.push(due);
 	if (v.mockup) {
 		tokens.push({
 			key: "mockup",
@@ -352,6 +431,8 @@ export function clearedFilters(): OrderFilterValue {
 		to: undefined,
 		mockup: false,
 		fwin: undefined,
+		dueFrom: undefined,
+		dueTo: undefined,
 		sources: [],
 		fulfilments: [],
 		statuses: [],
@@ -1024,10 +1105,33 @@ export function OrderFilters({
 													onChange({
 														...value,
 														fwin: value.fwin === w.value ? undefined : w.value,
+														// Picking a named window retires the span — one
+														// axis, one answer. Without this the two AND and
+														// the list empties for no stated reason.
+														dueFrom: undefined,
+														dueTo: undefined,
 													})
 												}
 											/>
 										))}
+										{/* A span Home handed us on the URL. It is the same axis as
+									    the three rows above, so it renders AS one of them —
+									    selected, and switchable off in place — rather than
+									    narrowing the list with nothing on screen saying so. */}
+										{value.dueFrom != null || value.dueTo != null ? (
+											<FilterOptionRow
+												label={dueSpanLabels(value.dueFrom, value.dueTo).row}
+												shape="radio"
+												selected
+												onToggle={() =>
+													onChange({
+														...value,
+														dueFrom: undefined,
+														dueTo: undefined,
+													})
+												}
+											/>
+										) : null}
 									</FilterSection>
 
 									<FilterSection title="Order date">

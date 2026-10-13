@@ -3,7 +3,13 @@
 // single-key connect, the demo-account warning, the Pro gate (which never
 // traps a downgraded seller), and the country-aware pickup-address rules.
 // The on/off toggle lives in Fulfilment → Courier booking, not here.
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import { getFunctionName } from "convex/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../../convex/_generated/api";
@@ -145,7 +151,9 @@ describe("account card", () => {
 	it("offers the connect form straight away when nothing is connected", () => {
 		render(card());
 		expect(screen.getByLabelText(/delyva api key/i)).toBeTruthy();
-		expect(screen.getByRole("button", { name: /connect delyva/i })).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: /connect delyva/i }),
+		).toBeTruthy();
 	});
 
 	it("shows the account settings once connected, plus the cross-tab pointer", () => {
@@ -343,7 +351,9 @@ describe("Singapore (z8r3fdbqmc)", () => {
 	it("is offered to a Singapore store like any other", () => {
 		state.settings = disconnected();
 		render(card({ country: "SG" }));
-		expect(screen.getByRole("button", { name: /connect delyva/i })).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: /connect delyva/i }),
+		).toBeTruthy();
 		expect(
 			screen.queryByText(/isn't available in your store's country/i),
 		).toBeNull();
@@ -373,7 +383,9 @@ describe("Singapore (z8r3fdbqmc)", () => {
 		fireEvent.change(screen.getByLabelText(/postal code/i), {
 			target: { value: "018956" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: /save pickup address/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /save pickup address/i }),
+		);
 		await waitFor(() => expect(state.mutation).toHaveBeenCalled());
 		expect(state.mutation).toHaveBeenCalledWith({
 			retailerId: undefined,
@@ -396,7 +408,9 @@ describe("Singapore (z8r3fdbqmc)", () => {
 		fireEvent.change(screen.getByLabelText(/postal code/i), {
 			target: { value: "01895" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: /save pickup address/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /save pickup address/i }),
+		);
 		expect(screen.getByText(/6-digit postal code/i)).toBeTruthy();
 		expect(state.mutation).not.toHaveBeenCalled();
 	});
@@ -458,7 +472,9 @@ describe("connected settings", () => {
 	it("flags a missing pickup address before the first booking fails", () => {
 		state.settings = settings({ pickupAddress: undefined });
 		render(card());
-		expect(screen.getByText(/Add this before your first booking/i)).toBeTruthy();
+		expect(
+			screen.getByText(/Add this before your first booking/i),
+		).toBeTruthy();
 	});
 });
 
@@ -470,9 +486,9 @@ describe("pickup address", () => {
 	it("fills every structured field from an address search", () => {
 		render(card());
 		fireEvent.click(screen.getByLabelText(/address search/i));
-		expect((screen.getByLabelText(/street address/i) as HTMLInputElement).value).toBe(
-			"12 Jalan Ampang",
-		);
+		expect(
+			(screen.getByLabelText(/street address/i) as HTMLInputElement).value,
+		).toBe("12 Jalan Ampang");
 		expect((screen.getByLabelText(/city/i) as HTMLInputElement).value).toBe(
 			"Kuala Lumpur",
 		);
@@ -490,7 +506,9 @@ describe("pickup address", () => {
 		fireEvent.change(screen.getByLabelText(/postcode/i), {
 			target: { value: "50480" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: /save pickup address/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /save pickup address/i }),
+		);
 		await waitFor(() => expect(state.mutation).toHaveBeenCalled());
 		expect(state.mutation?.mock.calls[0][0].pickupAddress.postcode).toBe(
 			"50480",
@@ -503,7 +521,9 @@ describe("pickup address", () => {
 		fireEvent.change(screen.getByLabelText(/postcode/i), {
 			target: { value: "504" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: /save pickup address/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /save pickup address/i }),
+		);
 		expect(screen.getByText(/5-digit postcode/i)).toBeTruthy();
 		expect(state.mutation).not.toHaveBeenCalled();
 	});

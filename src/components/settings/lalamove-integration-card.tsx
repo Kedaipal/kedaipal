@@ -53,8 +53,7 @@ export function LalamoveIntegrationCard({
 	const [saving, setSaving] = useState(false);
 
 	const hasStoredKey = !!deliveryBooking?.apiKeyHint;
-	const typedBothKeys =
-		apiKey.trim().length > 0 && apiSecret.trim().length > 0;
+	const typedBothKeys = apiKey.trim().length > 0 && apiSecret.trim().length > 0;
 
 	async function saveKeys() {
 		setSaving(true);

@@ -23,7 +23,6 @@ import {
 	ProFeatureWall,
 } from "../components/app/pro-gate";
 import { ViewOnlyNote } from "../components/app/view-only-note";
-import { CreditLockNote } from "../components/credits/credit-lock-note";
 import { CategoryEditDialog } from "../components/dashboard/category-edit-dialog";
 import { PageHeader } from "../components/dashboard/page-header";
 import { AppImage } from "../components/ui/app-image";
@@ -92,7 +91,7 @@ function CategoriesRoute() {
 	// store is view-only, out of credits (Credits T3), or for a teammate with
 	// view on products. Unlike the Pro gate below this blocks archive and hide
 	// too — the notes under the header say which lock it is.
-	const writeLock = useAreaLock("products", { credits: true });
+	const writeLock = useAreaLock("products");
 	const readOnly = writeLock.readOnly;
 
 	if (!retailer) return null;
@@ -178,7 +177,6 @@ function CategoriesRoute() {
 			{/* Why nothing here changes right now. Each renders nothing unless it
 			    applies; the credit note stands down under view-only. */}
 			<ViewOnlyNote />
-			<CreditLockNote scope="products" />
 			<NeedsAccessNote area="products" />
 
 			{locked ? (

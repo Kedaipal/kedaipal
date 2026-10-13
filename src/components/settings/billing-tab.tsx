@@ -212,6 +212,26 @@ export function BillingTab({
 	// (billing is the seller's money; see `ownerOnly`). See docs/admin-console.md.
 	const adminOwnAccount = isAdmin && !retailer.actingAsAdmin;
 
+	/**
+	 * Does the "Sponsored account · No limits" card apply?
+	 *
+	 * `retailer.fullAccess` (`storeHasFullAccess`), NOT `sub.comped`. They look
+	 * interchangeable and are not: `resolveAccess` reports `comped: true` for a
+	 * store with NO SUBSCRIPTION ROW as well, to fail open so a data fault can
+	 * never lock a seller out — but that store is deliberately still METERED
+	 * (docs/credits.md). Keying the card on `comped` put "nothing is capped —
+	 * no monthly order limit… no credits to run down" directly above a live
+	 * "200 of 200" meter for it, which is the exact contradiction z8r3fdrph7
+	 * removed from comped stores. Found by driving it, not by a test.
+	 *
+	 * A rowless store falls through to the ordinary Current-plan card instead,
+	 * which is honest: `resolveAccess` says it is an active Pro store, and the
+	 * meter below it then agrees. The plan CONTROLS stay keyed on `comped`
+	 * further down — `subscribeSelf` throws without a subscription row, so
+	 * offering that store a picker would only produce an error.
+	 */
+	const sponsoredAccount = retailer.fullAccess === true;
+
 	const pending = invoices.find((i) => i.status === "pending");
 	const history = mergeBillingHistory(
 		invoices.filter((i) => i.status !== "pending"),
@@ -350,11 +370,17 @@ export function BillingTab({
 						</p>
 					</div>
 				</section>
-			) : sub?.comped ? (
+			) : sponsoredAccount ? (
 				/* Sponsored (comped) store — like the admin note above, NOT a plan:
 				   no tier, meter, countdown or renew apparatus, because a comp is a
 				   toggle an admin turns on with no end date, and there is nothing to
-				   subscribe to, change, pause or cancel (z8r3fdeub2). */
+				   subscribe to, change, pause or cancel (z8r3fdeub2).
+				   This card is also the ONLY place a sponsored seller is told their
+				   limits are off (z8r3fdrph7). The credit meter below is absent for
+				   them by design, and a ceiling that silently isn't there is still
+				   undiscoverable behaviour — so the limits are named here in words
+				   rather than left to be inferred from a missing card.
+				   Keyed on `fullAccess`, NOT on `sub.comped` — see above. */
 				<section className="flex items-start gap-3 rounded-2xl border border-violet-200 bg-violet-50 p-5 dark:border-violet-900 dark:bg-violet-950/40 lg:p-6">
 					<Gift className="mt-0.5 size-5 shrink-0 text-violet-600 dark:text-violet-300" />
 					<div className="flex min-w-0 flex-col gap-1.5">
@@ -363,18 +389,19 @@ export function BillingTab({
 								Sponsored account
 							</p>
 							<span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700 dark:bg-violet-900/60 dark:text-violet-300">
-								Never locked
+								No limits
 							</span>
 						</div>
-						{sub.comp?.label ? (
+						{sub?.comp?.label ? (
 							<p className="text-sm text-violet-900 dark:text-violet-200">
 								{sub.comp.label}
 							</p>
 						) : null}
 						<p className="text-xs text-violet-800/80 dark:text-violet-300/80">
-							Every feature is unlocked, and running out of credits never locks
-							your store. There's no plan to subscribe to, change or cancel, and
-							nothing to pay.
+							Every feature is unlocked and nothing is capped — no monthly order
+							limit, no product limit, and no credits to run down, so your store
+							can never be locked. There's no plan to subscribe to, change or
+							cancel, and nothing to pay.
 						</p>
 					</div>
 				</section>
@@ -408,9 +435,9 @@ export function BillingTab({
 					</div>
 					{compEnded ? (
 						<p className="text-xs text-muted-foreground">
-							Your storefront stays live and buyers can still order. Your
-							dashboard is view-only — choose a plan below to start working
-							again.
+							Your storefront stays live and buyers can still order, but they
+							can't pay you on Kedaipal until you choose a plan. Your dashboard
+							is view-only — choose a plan below to start working again.
 						</p>
 					) : null}
 					{held ? (
@@ -479,8 +506,10 @@ export function BillingTab({
 
 			{/* Credits (T3): the balance sits right under the plan — it is the
 			    number a seller checks most, and every plan decision below changes
-			    it. Everyone sees it, comped and admin stores included (metered,
-			    never locked); a teammate without the Credits grant sees nothing. */}
+			    it. Absent entirely for an UNMETERED store — an admin's own
+			    (z8r3fdp4er) or a SPONSORED one (z8r3fdrph7), which have no balance
+			    to show; the Sponsored card above says so in words instead. A
+			    teammate without the Credits grant also sees nothing. */}
 			<CreditMeter
 				variant="full"
 				retailer={retailer}
@@ -873,8 +902,17 @@ export function BillingTab({
 			) : null}
 
 			{/* Credits (T3): every credit in and out — answers "why do I have
-			    37 left?" beside the bills. */}
-			<CreditActivity retailer={retailer} />
+			    37 left?" beside the bills. Gated on the balance the meter above
+			    reads (cache-shared, no second request): an explicit null means
+			    this reader has no credits to account for — an UNMETERED store
+			    (admin-owned, z8r3fdp4er, or sponsored, z8r3fdrph7), or a teammate
+			    without the Credits grant — and an empty "Nothing yet" card is
+			    worse than no card.
+			    `undefined` is NOT that answer, it's the read in flight: hiding
+			    on it too made every METERED store (so every seller) pop this
+			    card in after load instead of showing the skeleton it owns. The
+			    rarer unmetered reader trades a brief skeleton for that. */}
+			{creditBalance !== null ? <CreditActivity retailer={retailer} /> : null}
 
 			{/* History */}
 			{history.length > 0 ? (

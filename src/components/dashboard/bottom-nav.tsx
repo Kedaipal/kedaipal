@@ -13,14 +13,15 @@ import {
 	ShoppingBag,
 	Siren,
 	Store,
+	Ticket,
 	Users,
 } from "lucide-react";
 import { Dialog as MorePrimitive } from "radix-ui";
 import { useEffect, useRef, useState } from "react";
+import { usePermission } from "../../hooks/usePermission";
 import { cn } from "../../lib/utils";
 import { AppVersionRow } from "./app-version-row";
 import { WhatsNewNavItem } from "./whats-new";
-import { usePermission } from "../../hooks/usePermission";
 
 export interface BottomNavProps {
 	// Orders the seller hasn't looked at yet (the inbox's "New" bucket). A badge
@@ -39,6 +40,7 @@ export interface BottomNavProps {
 	// CRM is plan-locked for this seller (Starter) — mark the Customers row with
 	// a "Pro" chip so the upgrade wall behind it is never a surprise.
 	crmLocked?: boolean;
+	vouchersLocked?: boolean;
 	// Insights is plan-locked (Starter) — same treatment on the Insights tab.
 	insightsLocked?: boolean;
 }
@@ -72,6 +74,7 @@ export function BottomNav({
 	adminNav,
 	hasStore,
 	crmLocked,
+	vouchersLocked,
 	insightsLocked,
 }: BottomNavProps) {
 	// Team members (86exr91r4): a member's tabs are the areas they can read
@@ -134,9 +137,7 @@ export function BottomNav({
 								// filter the inbox down to an empty "New" list every time
 								// it's used for plain navigation.
 								search:
-									newOrdersCount > 0
-										? { bucket: ["new" as const] }
-										: undefined,
+									newOrdersCount > 0 ? { bucket: ["new" as const] } : undefined,
 							} as Tab,
 						]
 					: []),
@@ -170,6 +171,7 @@ export function BottomNav({
 						onOpenChange={setMoreOpen}
 						active={moreOpen || onMoreRoute}
 						crmLocked={crmLocked}
+						vouchersLocked={vouchersLocked}
 					/>
 				) : null}
 			</div>
@@ -274,14 +276,17 @@ function MoreTab({
 	onOpenChange,
 	active,
 	crmLocked,
+	vouchersLocked,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	active: boolean;
 	crmLocked?: boolean;
+	vouchersLocked?: boolean;
 }) {
 	const productsPerm = usePermission("products");
 	const customersPerm = usePermission("customers");
+	const vouchersPerm = usePermission("vouchers");
 
 	const close = () => onOpenChange(false);
 	return (
@@ -321,6 +326,16 @@ function MoreTab({
 							label="Customers"
 							sub="Buyer history & notes"
 							pro={crmLocked}
+							onNavigate={close}
+						/>
+					) : null}
+					{vouchersPerm.canRead ? (
+						<MoreRow
+							to="/app/vouchers"
+							icon={Ticket}
+							label="Vouchers"
+							sub="Single-use discount codes"
+							pro={vouchersLocked}
 							onNavigate={close}
 						/>
 					) : null}

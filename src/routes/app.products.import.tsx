@@ -14,7 +14,6 @@ import { fitsWithinProductCap } from "../../convex/lib/productCap";
 import { MAX_VARIANTS_PER_PRODUCT } from "../../convex/lib/variant";
 import { NeedsAccessNote } from "../components/app/owner-only-note";
 import { ViewOnlyNote } from "../components/app/view-only-note";
-import { CreditLockNote } from "../components/credits/credit-lock-note";
 import { PageHeader } from "../components/dashboard/page-header";
 import { Button } from "../components/ui/button";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
@@ -176,7 +175,7 @@ function ImportProductsRoute() {
 	// An import writes the catalogue, so it waits out the same locks every
 	// product save does (view-only, out of credits, a view-only teammate).
 	// Reading the file and previewing stay open — only Confirm greys out.
-	const importLock = useAreaLock("products", { credits: true });
+	const importLock = useAreaLock("products");
 
 	if (!retailer) return null;
 
@@ -310,7 +309,6 @@ function ImportProductsRoute() {
 			</div>
 
 			<ViewOnlyNote />
-			<CreditLockNote scope="products" />
 			<NeedsAccessNote area="products" />
 
 			<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">

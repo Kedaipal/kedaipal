@@ -14,11 +14,13 @@ import {
 	ShoppingBag,
 	Siren,
 	Store,
+	Ticket,
 	Users,
 } from "lucide-react";
 import type { MouseEventHandler, ReactNode } from "react";
 import type { api } from "../../../convex/_generated/api";
 import { useActAs } from "../../hooks/useActAs";
+import { usePermission } from "../../hooks/usePermission";
 import { useSidebarCollapsed } from "../../hooks/useSidebarCollapsed";
 import { hasFeature } from "../../lib/subscription";
 import { cn } from "../../lib/utils";
@@ -27,7 +29,6 @@ import { AppImage } from "../ui/app-image";
 import { AppVersionRow } from "./app-version-row";
 import { TierPill } from "./tier-pill";
 import { WhatsNewNavItem } from "./whats-new";
-import { usePermission } from "../../hooks/usePermission";
 
 type Retailer = NonNullable<
 	FunctionReturnType<typeof api.retailers.getMyRetailer>
@@ -57,6 +58,7 @@ export function Sidebar({
 	const ordersPerm = usePermission("orders");
 	const productsPerm = usePermission("products");
 	const customersPerm = usePermission("customers");
+	const vouchersPerm = usePermission("vouchers");
 	const insightsPerm = usePermission("insights");
 
 	const [collapsed, setCollapsed] = useSidebarCollapsed();
@@ -141,63 +143,79 @@ export function Sidebar({
 							collapsed={collapsed}
 						/>
 						{productsPerm.canRead ? (
-						<SidebarLink
-							to="/app/products"
-							icon={Package}
-							label="Products"
-							collapsed={collapsed}
-						/>
+							<SidebarLink
+								to="/app/products"
+								icon={Package}
+								label="Products"
+								collapsed={collapsed}
+							/>
 						) : null}
 						{ordersPerm.canRead ? (
-						<SidebarLink
-							to="/app/orders"
-							icon={ShoppingBag}
-							label="Orders"
-							collapsed={collapsed}
-							badge={newOrdersCount}
-							// Land on exactly what the badge counted — but only while
-							// there IS something new, so the link stays plain navigation
-							// the rest of the time. Mirrors the bottom nav.
-							search={
-								newOrdersCount > 0 ? { bucket: ["new" as const] } : undefined
-							}
-						/>
+							<SidebarLink
+								to="/app/orders"
+								icon={ShoppingBag}
+								label="Orders"
+								collapsed={collapsed}
+								badge={newOrdersCount}
+								// Land on exactly what the badge counted — but only while
+								// there IS something new, so the link stays plain navigation
+								// the rest of the time. Mirrors the bottom nav.
+								search={
+									newOrdersCount > 0 ? { bucket: ["new" as const] } : undefined
+								}
+							/>
 						) : null}
 						{ordersPerm.canWrite ? (
-						<SidebarLink
-							to="/app/checkout"
-							icon={QrCode}
-							label="Counter"
-							collapsed={collapsed}
-						/>
+							<SidebarLink
+								to="/app/checkout"
+								icon={QrCode}
+								label="Counter"
+								collapsed={collapsed}
+							/>
 						) : null}
 						{customersPerm.canRead ? (
-						<SidebarLink
-							to="/app/customers"
-							icon={Users}
-							label="Customers"
-							collapsed={collapsed}
-							// CRM is Pro+ — mark it in nav so the gate is never a surprise
-							// (the route shows the upgrade wall). Act-as admins see through.
-							pro={
-								!retailer.actingAsAdmin &&
-								!hasFeature(retailer.subscription, "crm")
-							}
-						/>
+							<SidebarLink
+								to="/app/customers"
+								icon={Users}
+								label="Customers"
+								collapsed={collapsed}
+								// CRM is Pro+ — mark it in nav so the gate is never a surprise
+								// (the route shows the upgrade wall). Act-as admins see through.
+								pro={
+									!retailer.actingAsAdmin &&
+									!hasFeature(retailer.subscription, "crm")
+								}
+							/>
+						) : null}
+						{vouchersPerm.canRead ? (
+							<SidebarLink
+								to="/app/vouchers"
+								icon={Ticket}
+								label="Vouchers"
+								collapsed={collapsed}
+								// ISSUING is the Pro capability, so the badge marks the page
+								// the way Customers and Insights do — but the route itself is
+								// never walled: a downgraded store keeps the codes it already
+								// sent, and has to be able to void them.
+								pro={
+									!retailer.actingAsAdmin &&
+									!hasFeature(retailer.subscription, "vouchers")
+								}
+							/>
 						) : null}
 						{insightsPerm.canRead ? (
-						<SidebarLink
-							to="/app/insights"
-							icon={LineChart}
-							label="Insights"
-							collapsed={collapsed}
-							// Insights is Pro+ — mark it in nav so the gate is never a
-							// surprise (the route shows the teaser). Act-as admins see through.
-							pro={
-								!retailer.actingAsAdmin &&
-								!hasFeature(retailer.subscription, "insights")
-							}
-						/>
+							<SidebarLink
+								to="/app/insights"
+								icon={LineChart}
+								label="Insights"
+								collapsed={collapsed}
+								// Insights is Pro+ — mark it in nav so the gate is never a
+								// surprise (the route shows the teaser). Act-as admins see through.
+								pro={
+									!retailer.actingAsAdmin &&
+									!hasFeature(retailer.subscription, "insights")
+								}
+							/>
 						) : null}
 						<SidebarLink
 							to="/app/settings"

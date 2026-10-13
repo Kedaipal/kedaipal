@@ -90,7 +90,10 @@ export function Hero() {
 						className="mt-1 flex w-full flex-col items-center gap-3 sm:w-auto"
 					>
 						{isSignedIn ? (
-							<Link to="/app" className={`${ctaPillClass("accent")} w-full sm:w-fit`}>
+							<Link
+								to="/app"
+								className={`${ctaPillClass("accent")} w-full sm:w-fit`}
+							>
 								{m.nav_go_to_dashboard()}
 								<ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
 							</Link>

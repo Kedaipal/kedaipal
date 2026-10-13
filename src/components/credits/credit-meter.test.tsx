@@ -10,6 +10,7 @@ import {
 	type TopUpRefusal,
 	topUpRefusalMessage,
 } from "../../../convex/lib/creditPurchases";
+import { TRIAL_CREDIT_GRANT } from "../../../convex/lib/plans";
 import { formatShortDate } from "../../lib/format";
 import { CreditMeter } from "./credit-meter";
 
@@ -71,6 +72,11 @@ function balance(over: Partial<CreditBalanceView> = {}): CreditBalanceView {
 		customGrant: false,
 		ordersThisPeriod: 80,
 		lockExempt: null,
+		// Credits T3.1 — the gated-order count rides the BALANCE so the top-up
+		// picker can read it without the dashboard provider. The meter itself
+		// takes it off the retailer payload, so this stays 0 here.
+		ordersWaiting: 0,
+		waitingOffsets: [],
 		...over,
 	};
 }
@@ -90,20 +96,28 @@ function retailer({
 	comped?: boolean;
 	plan?: string;
 	founding?: boolean;
+	/** Credits T3.1: `locked` now means "some orders are waiting on credits".
+	 * There is no store-wide lock any more — the catalogue and the settings are
+	 * never gated — so the meter branches on the WAITING COUNT, and a fixture
+	 * saying `locked` means "give me at least one waiting order". */
 	locked?: boolean;
 	route?: string;
 	waiting?: number;
 } = {}): Retailer {
+	const ordersWaiting = locked ? Math.max(1, waiting) : 0;
 	return {
 		_id: "r_1",
 		slug: "kedai",
 		isFoundingMember: founding,
 		subscription: { plan, status, comped },
-		creditLock: {
-			locked,
+		creditGate: {
+			exempt: false,
+			// The watermark sits below every order's position while something is
+			// waiting, and above all of them when nothing is.
+			fundedThrough: ordersWaiting > 0 ? 0 : Number.POSITIVE_INFINITY,
+			creditsOwed: ordersWaiting,
+			ordersWaiting,
 			unlockRoute: route,
-			since: locked ? Date.now() : null,
-			ordersWaiting: waiting,
 		},
 	} as unknown as Retailer;
 }
@@ -133,15 +147,20 @@ function refused(refusal: TopUpRefusal): TopUp {
 function mockQueries({
 	bal,
 	topUp = CAN_BUY,
+	perDay,
 }: {
 	/** `undefined` = still loading; `null` = no Credits grant. */
 	bal: CreditBalanceView | null | undefined;
 	topUp?: TopUp;
+	/** Credits burned per day over the pace window (T2) — drives the low-tone
+	 * forecast line. */
+	perDay?: number;
 }) {
 	const NAME = {
 		balance: getFunctionName(api.credits.getBalance),
 		topUp: getFunctionName(api.creditPurchases.topUpOptions),
 		admin: getFunctionName(api.billing.amIAdmin),
+		pace: getFunctionName(api.credits.getUsagePace),
 	};
 	vi.mocked(useQuery).mockImplementation(((opts: {
 		__fn: FunctionReference<"query">;
@@ -154,7 +173,11 @@ function mockQueries({
 					? topUp
 					: name === NAME.admin
 						? false
-						: undefined;
+						: name === NAME.pace
+							? perDay === undefined
+								? null
+								: { consumed: perDay * 7, perDay, windowDays: 7 }
+							: undefined;
 		return { data, isPending: false };
 	}) as unknown as typeof useQuery);
 }
@@ -248,11 +271,12 @@ describe("CreditMeter — Billing (full)", () => {
 		expect(screen.getByTestId("credit-balance").textContent).toBe(
 			"0 orders left",
 		);
+		// Per order, never store-wide (Credits T3.1): the catalogue and the
+		// settings carry on, so the line names the orders that are held.
 		expect(
-			screen.getByText(
-				"Accepting and updating orders and editing products are paused until you add credits.",
-			),
+			screen.getByText("1 order is waiting on credits until you add credits."),
 		).toBeTruthy();
+		expect(screen.queryByText(/editing products/)).toBeNull();
 	});
 
 	it("below zero: how far, and that it comes off the next pack or grant", () => {
@@ -266,7 +290,7 @@ describe("CreditMeter — Billing (full)", () => {
 		expect(screen.getByText("15 owed")).toBeTruthy();
 		expect(
 			screen.getByText(
-				/The 15 orders owed come off your next pack or your next monthly credits/,
+				/The 15 orders owed come off your next pack or your next monthly credits, oldest order first/,
 			),
 		).toBeTruthy();
 	});
@@ -345,7 +369,26 @@ describe("CreditMeter — Billing (full)", () => {
 		).toBeTruthy();
 	});
 
-	it("comped: metered, never locked, said so — and nothing to top up", () => {
+	it("a COMPED store renders nothing — it is unmetered, like an admin's own (z8r3fdrph7)", () => {
+		// The bug this closed: a sponsored seller read "N orders left" over a
+		// bar scaled to 200 with "Back to 200 on 1 Nov", under a sentence
+		// explaining that none of it could lock them. `getBalance` answers null
+		// for them now, so there is no card to misread.
+		mockQueries({ bal: null, topUp: refused("sponsored") });
+		const { container } = render(
+			<CreditMeter variant="full" retailer={retailer({ comped: true })} />,
+		);
+		expect(container.textContent).toBe("");
+		const card = render(
+			<CreditMeter variant="card" retailer={retailer({ comped: true })} />,
+		);
+		expect(card.container.textContent).toBe("");
+	});
+
+	it("the fail-safe (no subscription row) still meters, and says it never locks", () => {
+		// `resolveAccess` treats a rowless store as sponsored full access, but
+		// it stays metered on purpose: a data fault, not a granted comp, so its
+		// volume keeps leaving a record. This is the one reader of that line.
 		mockQueries({
 			bal: balance({ lockExempt: "sponsored" }),
 			topUp: refused("sponsored"),
@@ -353,29 +396,32 @@ describe("CreditMeter — Billing (full)", () => {
 		render(
 			<CreditMeter variant="full" retailer={retailer({ comped: true })} />,
 		);
-		expect(screen.getByText(/Sponsored stores are never locked/)).toBeTruthy();
+		expect(screen.getByText(/This store is never locked/)).toBeTruthy();
 		expect(screen.queryByText("Top up credits")).toBeNull();
 		// One balance, so no order of use to explain.
 		expect(screen.queryByText("Bought credits")).toBeNull();
 		expect(screen.queryByText("Used first")).toBeNull();
 	});
 
-	it("an admin's own store sitting in past_due is never told to pay (F1)", () => {
-		mockQueries({
-			bal: balance({ lockExempt: "admin_store" }),
-			topUp: refused("admin_store"),
-		});
+	it("an UNMETERED store renders nothing at all — no meter, no state line", () => {
+		// z8r3fdp4er: a Kedaipal admin's own store has no credit regime, so
+		// `getBalance` answers null and both variants disappear. The null is
+		// the whole mechanism — one read, every surface follows it.
+		mockQueries({ bal: null });
 		const { container } = render(
 			<CreditMeter
 				variant="full"
 				retailer={retailer({ status: "past_due" })}
 			/>,
 		);
-		expect(
-			screen.getByText(/^Kedaipal admin stores aren't billed/),
-		).toBeTruthy();
-		expect(container.textContent).not.toMatch(/Pay your invoice/);
-		expect(screen.queryByText("Top up credits")).toBeNull();
+		expect(container.textContent).toBe("");
+		const card = render(
+			<CreditMeter
+				variant="card"
+				retailer={retailer({ status: "past_due" })}
+			/>,
+		);
+		expect(card.container.textContent).toBe("");
 	});
 
 	it("a Founding Member on Pro wears the 300 badge", () => {
@@ -524,11 +570,14 @@ describe("CreditMeter — dashboard home (card)", () => {
 				})}
 			/>,
 		);
-		expect(
-			screen.getByText(
-				"Paused: accepting and updating orders, editing products.",
-			),
-		).toBeTruthy();
+		// The FULL lock sentence, not a four-word summary (z8r3fdrgzj, from the
+		// Credits · out board). A seller who cannot accept orders needs to read
+		// why, what still works, and the way back — "Waiting: 1 order" said none
+		// of that, and this card is the only place it is said on Home.
+		expect(screen.getByText(/trial's orders are used up/i)).toBeTruthy();
+		// …including the reassurance that the rest of the store keeps working,
+		// which is the half a seller most needs when the page says "paused".
+		expect(screen.getByText(/carry on as normal/i)).toBeTruthy();
 		expect(screen.getByRole("link", { name: "Pick a plan" })).toBeTruthy();
 	});
 
@@ -554,12 +603,14 @@ describe("CreditMeter — dashboard home (card)", () => {
 	});
 });
 
-describe("the card's one button, with the seller lock switched off", () => {
+describe("the card's one button when nothing is waiting", () => {
 	// `creditTone` returns "out" (not "low") at a balance of zero or below, and
-	// the locked branch — which used to cover that state — is unreachable while
-	// CREDIT_LOCK_ENABLED is false. Gating the top-up on "low" alone therefore
-	// left a store IN DEBT with no action button while a store merely running
-	// low got one: the urgency ladder upside down.
+	// the waiting-orders branch — which used to cover that state back when the
+	// lock was store-wide — is unreachable while nothing is waiting, which a
+	// store below zero genuinely can be (an expired lot, or debt from before
+	// the gate). Gating the top-up on "low" alone therefore left a store IN
+	// DEBT with no action button while a store merely running low got one: the
+	// urgency ladder upside down.
 	it("offers Top up at a debt balance, not only when running low", () => {
 		mockQueries({ bal: balance({ plan: -15, total: -15 }) });
 		render(<CreditMeter variant="card" retailer={retailer()} />);
@@ -580,5 +631,85 @@ describe("the card's one button, with the seller lock switched off", () => {
 		});
 		render(<CreditMeter variant="card" retailer={retailer()} />);
 		expect(screen.queryByRole("link", { name: "Top up credits" })).toBeNull();
+	});
+});
+
+describe("CreditMeter — the card's tone sentence (z8r3fdrgzj)", () => {
+	afterEach(() => cleanup());
+
+	it("LOW forecasts how long the balance lasts at this week's pace", () => {
+		// The Credits · low board's whole point: warn early enough to act, in a
+		// unit the seller thinks in (days of trading), not a bare number.
+		mockQueries({
+			bal: balance({ plan: 31, total: 31, periodGrant: 200 }),
+			perDay: 10,
+		});
+		render(<CreditMeter variant="card" retailer={retailer()} />);
+		expect(
+			screen.getByText("About 3 days of orders at this week's pace"),
+		).toBeTruthy();
+	});
+
+	it("…but says nothing when there is no pace to forecast from", () => {
+		// Below one order a day the division produces "about 97 days", which is
+		// arithmetic dressed as a forecast.
+		mockQueries({
+			bal: balance({ plan: 31, total: 31, periodGrant: 200 }),
+			perDay: 0.5,
+		});
+		render(<CreditMeter variant="card" retailer={retailer()} />);
+		expect(screen.queryByText(/at this week's pace/)).toBeNull();
+	});
+
+	it("a HEALTHY balance gets no tone sentence at all", () => {
+		mockQueries({
+			bal: balance({ plan: 184, total: 184, periodGrant: 200 }),
+			perDay: 10,
+		});
+		render(<CreditMeter variant="card" retailer={retailer()} />);
+		expect(screen.queryByText(/at this week's pace/)).toBeNull();
+	});
+
+	it("the pace line never reaches Settings → Billing's full variant", () => {
+		// T3's constraint: nothing on the billing page changes.
+		mockQueries({
+			bal: balance({ plan: 31, total: 31, periodGrant: 200 }),
+			perDay: 10,
+		});
+		render(<CreditMeter variant="full" retailer={retailer()} />);
+		expect(screen.queryByText(/at this week's pace/)).toBeNull();
+	});
+});
+
+describe("CreditMeter — the trial card (z8r3fdrgzj board: Onboarding 1)", () => {
+	afterEach(() => cleanup());
+
+	const trial = () =>
+		balance({ plan: 200, total: 200, periodGrant: 200, regime: "trial" });
+
+	it("says WHICH kind of balance this is before saying how much is left", () => {
+		// A trial balance does not refresh, it runs out — the tag is the warning.
+		mockQueries({ bal: trial() });
+		render(<CreditMeter variant="card" retailer={retailer()} />);
+		expect(screen.getByText("Free trial")).toBeTruthy();
+	});
+
+	it("carries the trial sentence, built from the grant and never a literal", () => {
+		mockQueries({ bal: trial() });
+		render(<CreditMeter variant="card" retailer={retailer()} />);
+		expect(
+			screen.getByText(
+				new RegExp(`free trial includes ${TRIAL_CREDIT_GRANT} orders`, "i"),
+			),
+		).toBeTruthy();
+		// …and NOT the generic line it used to show instead.
+		expect(screen.queryByText(/^Trial orders —/)).toBeNull();
+	});
+
+	it("a monthly store gets neither the tag nor the trial sentence", () => {
+		mockQueries({ bal: balance({ plan: 184, total: 184, periodGrant: 200 }) });
+		render(<CreditMeter variant="card" retailer={retailer()} />);
+		expect(screen.queryByText("Free trial")).toBeNull();
+		expect(screen.queryByText(/free trial includes/i)).toBeNull();
 	});
 });

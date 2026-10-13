@@ -281,20 +281,36 @@ describe("convexErrorMessage — rate-limit payload", () => {
 	});
 });
 
-describe("convexErrorMessage — the credit lock's typed refusal (Credits T3)", () => {
+describe("convexErrorMessage — the credit gate's typed refusal (Credits T3.1)", () => {
 	it("reads as its sentence, never [object Object]", () => {
-		const data = creditLockErrorData("topup", "owner");
+		const data = creditLockErrorData({
+			route: "topup",
+			audience: "owner",
+			creditsToUnlock: 1,
+			ordersWaiting: 3,
+		});
 		const err = new ConvexError(data);
 		expect(convexErrorMessage(err)).toBe(data.message);
-		expect(convexErrorMessage(err)).toMatch(/^You're out of credits/);
+		expect(convexErrorMessage(err)).toMatch(/^3 orders are waiting on credits/);
 	});
 
-	it("hands a surface the way back, and nothing for any other error", () => {
-		const err = new ConvexError(creditLockErrorData("pick_plan", "member"));
+	it("hands a surface the way back AND the order's position", () => {
+		const err = new ConvexError(
+			creditLockErrorData({
+				route: "pick_plan",
+				audience: "member",
+				creditsToUnlock: 2,
+				ordersWaiting: 5,
+			}),
+		);
 		expect(creditLockErrorOf(err)).toMatchObject({
 			kind: "credits_locked",
 			unlockRoute: "pick_plan",
 			audience: "member",
+			// The ORDER's own place in the queue, so a refused control can say
+			// "waiting on 2 credits" rather than quoting the store's total.
+			creditsToUnlock: 2,
+			ordersWaiting: 5,
 		});
 		expect(creditLockErrorOf(new ConvexError("Only 2 in stock"))).toBeNull();
 		expect(creditLockErrorOf(new Error("boom"))).toBeNull();
@@ -428,5 +444,32 @@ describe("formatDraftPrice — seller-typed amounts in summaries", () => {
 	test("a range says the symbol once; meeting ends collapse to one price", () => {
 		expect(formatDraftPriceRange(12, 28.5, "MYR")).toBe(`RM${NB}12–28.50`);
 		expect(formatDraftPriceRange(12, 12, "SGD")).toBe(`S$${NB}12`);
+	});
+});
+
+describe("convexErrorMessage — a typed payload never reaches the buyer raw", () => {
+	test("an unclaimed typed payload becomes the generic line, never [object Object]", () => {
+		// The landmine this guards: `String({...})` is "[object Object]", which
+		// a buyer read once from the rate limiter's payload and again from the
+		// price-changed guard's. A new typed error must fail SAFE.
+		const message = convexErrorMessage(
+			new ConvexError({ kind: "something_new", lines: [1, 2] }),
+		);
+		expect(message).toBe(GENERIC_SERVER_FAILURE);
+		expect(message).not.toContain("object Object");
+	});
+
+	test("a typed payload carrying its own sentence still speaks", () => {
+		expect(
+			convexErrorMessage(
+				new ConvexError({ kind: "whatever", message: "Pick a pickup point." }),
+			),
+		).toBe("Pick a pickup point.");
+	});
+
+	test("a plain string payload is unchanged", () => {
+		expect(convexErrorMessage(new ConvexError("Out of stock"))).toBe(
+			"Out of stock",
+		);
 	});
 });

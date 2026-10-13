@@ -108,6 +108,7 @@ export function ProductDetailSheet({
 										caption={product.name}
 										wrapperClassName="w-64 shrink-0 snap-start sm:w-full"
 										className="aspect-square w-full rounded-2xl object-cover"
+										frame="raised"
 									/>
 								))}
 							</div>

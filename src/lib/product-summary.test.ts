@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
 	describeProduct,
 	isSecurityDepositInRange,
-	securityDepositRangeMessage,
 	type SummaryInput,
+	securityDepositRangeMessage,
 	weekendRateConsequence,
 } from "./product-summary";
 
@@ -230,7 +230,9 @@ describe("describeProduct — weekend rate (S13)", () => {
 				},
 				"MYR",
 			),
-		).toBe("Booking · 5 spots/night · RM\u00a080/night · RM\u00a0120 Fri & Sat");
+		).toBe(
+			"Booking · 5 spots/night · RM\u00a080/night · RM\u00a0120 Fri & Sat",
+		);
 	});
 
 	it("a package never shows it — one flat price", () => {
@@ -268,7 +270,11 @@ describe("describeProduct — weekend rate (S13)", () => {
 			describeProduct(
 				{
 					...base,
-					booking: { capacityPerNight: "1", weekendPrice: "120", weekendDays: [] },
+					booking: {
+						capacityPerNight: "1",
+						weekendPrice: "120",
+						weekendDays: [],
+					},
 				},
 				"MYR",
 			),
@@ -341,8 +347,8 @@ describe("describeProduct — a package names its UNIT (hotfix to #280)", () => 
 				},
 				"MYR",
 			),
-		// The strip wears the store's symbol — this case once pinned the raw
-		// ISO code ("MYR 100/month") as correct.
+			// The strip wears the store's symbol — this case once pinned the raw
+			// ISO code ("MYR 100/month") as correct.
 		).toBe("Booking · 1-month package · 1 at a time · RM 100/month");
 	});
 
@@ -450,8 +456,20 @@ describe("describeProduct — an SG store reads S$, never SGD", () => {
 			{
 				options: [{ name: "Size", values: ["S", "L"] }],
 				rows: [
-					{ optionValues: ["S"], price: "12", active: true, blockWhenOutOfStock: true, requiresProof: false },
-					{ optionValues: ["L"], price: "28.50", active: true, blockWhenOutOfStock: true, requiresProof: false },
+					{
+						optionValues: ["S"],
+						price: "12",
+						active: true,
+						blockWhenOutOfStock: true,
+						requiresProof: false,
+					},
+					{
+						optionValues: ["L"],
+						price: "28.50",
+						active: true,
+						blockWhenOutOfStock: true,
+						requiresProof: false,
+					},
 				],
 				customLine: null,
 			},
@@ -459,5 +477,69 @@ describe("describeProduct — an SG store reads S$, never SGD", () => {
 		);
 		expect(summary).toContain("S$\u00a012–28.50");
 		expect(summary).not.toMatch(/SGD/);
+	});
+});
+
+describe("describeProduct — a live sale is in the summary (z8r3fdcw72)", () => {
+	it("names the sale price beside the list price", () => {
+		// The strip claims to summarise the product, and it printed only the
+		// LIST price while a promotion was running — so the seller opening the
+		// product to check their sale read the old number (found by hand-testing).
+		expect(
+			describeProduct(
+				{
+					options: [],
+					rows: [row({ price: "10.00", promoPrice: "7.00" })],
+					customLine: null,
+				},
+				"MYR",
+			),
+		).toBe("One item · From stock · RM 10 · Sale RM 7");
+	});
+
+	it("spans the sale across choices", () => {
+		const out = describeProduct(
+			{
+				options: [{ name: "Size", values: ["S", "L"] }],
+				rows: [
+					row({ optionValues: ["S"], price: "10.00", promoPrice: "7.00" }),
+					row({ optionValues: ["L"], price: "20.00", promoPrice: "14.00" }),
+				],
+				customLine: null,
+			},
+			"MYR",
+		);
+		// Non-breaking spaces inside the money strings — match on the shape.
+		expect(out).toMatch(/Sale RM\s7–14$/u);
+	});
+
+	it("says nothing when no line is on promotion", () => {
+		expect(
+			describeProduct(
+				{ options: [], rows: [row({ price: "10.00" })], customLine: null },
+				"MYR",
+			),
+		).not.toContain("Sale");
+	});
+
+	it("ignores an INACTIVE line's sale price — it isn't being sold", () => {
+		expect(
+			describeProduct(
+				{
+					options: [{ name: "Size", values: ["S", "L"] }],
+					rows: [
+						row({ optionValues: ["S"], price: "10.00" }),
+						row({
+							optionValues: ["L"],
+							price: "20.00",
+							promoPrice: "14.00",
+							active: false,
+						}),
+					],
+					customLine: null,
+				},
+				"MYR",
+			),
+		).not.toContain("Sale");
 	});
 });

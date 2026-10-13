@@ -6,7 +6,6 @@ import { ImagePlus, Loader2, Printer, RefreshCw } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
-import { useChecklistStamp } from "../hooks/useChecklistStamp";
 import { DEFAULT_COUNTRY } from "../../convex/lib/country";
 import {
 	PageHeader,
@@ -22,6 +21,7 @@ import {
 import { Button } from "../components/ui/button";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import { Skeleton } from "../components/ui/skeleton";
+import { useChecklistStamp } from "../hooks/useChecklistStamp";
 import {
 	useActAsRetailerId,
 	useDashboardRetailer,

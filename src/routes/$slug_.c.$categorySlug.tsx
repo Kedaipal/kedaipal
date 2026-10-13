@@ -19,6 +19,7 @@ import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
 import { useCaptureAttribution } from "../hooks/useSourceAttribution";
+import { useCaptureVoucherParam } from "../hooks/useVoucherParam";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
 import { absoluteProxiedImageUrl } from "../lib/image-proxy";
 import { ssrRead } from "../lib/ssr-read";
@@ -206,6 +207,9 @@ function CategoryRoute() {
 	const { slug, categorySlug } = Route.useParams();
 	// Category deep links get shared too — capture the ?src= tag here as well.
 	useCaptureAttribution(slug);
+	// A `?voucher=` link lands on an EMPTY cart, so the code has to survive the
+	// browsing that follows (`z8r3fdr617`) — same reason as the line above.
+	useCaptureVoucherParam(slug);
 	// Live queries keep the page reactive after the SSR'd loader response.
 	const result = useQuery(
 		convexQuery(api.retailers.getRetailerBySlug, { slug }),

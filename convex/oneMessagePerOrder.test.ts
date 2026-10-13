@@ -233,6 +233,10 @@ describe("one message per order — the whole lifecycle", () => {
 		// The buyer says they've paid → the seller's second alert.
 		await t.mutation(api.orders.claimPayment, {
 			token: await tokenOf(t, orderId),
+			// Mandatory now (z8r3fdnpxf); this test is about the ALERT, not the proof.
+			proofStorageId: await t.run((ctx) =>
+				ctx.storage.store(new Blob(["png"], { type: "image/png" })),
+			),
 		});
 
 		expect(await sellerAlertJobs(t)).toEqual([

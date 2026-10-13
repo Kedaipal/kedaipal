@@ -198,7 +198,10 @@ function Harness({ initial = {} }: { initial?: SellersSearch }) {
 }
 
 function renderDirectory(initial?: SellersSearch) {
-	queryData.set(getFunctionName(api.admin.listSellersForAdmin), ROWS);
+	queryData.set(getFunctionName(api.admin.listSellersForAdmin), {
+		sellers: ROWS,
+		capped: false,
+	});
 	queryData.set(getFunctionName(api.admin.devStorePurgeEnabled), true);
 	return render(<Harness initial={initial} />);
 }
@@ -414,44 +417,47 @@ describe("directory — detail sheet", () => {
 	it("a contract's allowances read on the sheet, not only inside the edit form", async () => {
 		// A negotiated term the summary hides is a term the next admin
 		// discovers by hitting it (z8r3fdkp8h seats/broadcasts).
-		queryData.set(getFunctionName(api.admin.listSellersForAdmin), [
-			seller({
-				_id: "r_hsl" as AdminSellerRow["_id"],
-				storeName: "Mama's Delights",
-				slug: "mamas-delights",
-				subscriptionStatus: "active",
-				plan: "enterprise",
-				billingCycle: "monthly",
-				enterprise: {
-					baseFeeMinor: 88_800,
-					currency: "MYR",
-					includedCredits: 1500,
-					overageRateMinor: 60,
-					blockSize: 5000,
-					teammates: 12,
-					broadcastQuota: 500,
-					contactName: "HSL Food GM",
-					setAt: at(-1),
-				},
-			}),
-			seller({
-				_id: "r_unl" as AdminSellerRow["_id"],
-				storeName: "Unlimited Deal",
-				slug: "unlimited-deal",
-				subscriptionStatus: "active",
-				plan: "enterprise",
-				billingCycle: "monthly",
-				enterprise: {
-					baseFeeMinor: 120_000,
-					currency: "MYR",
-					includedCredits: 2000,
-					overageRateMinor: 50,
-					blockSize: 5000,
-					contactName: "Someone",
-					setAt: at(-1),
-				},
-			}),
-		]);
+		queryData.set(getFunctionName(api.admin.listSellersForAdmin), {
+			capped: false,
+			sellers: [
+				seller({
+					_id: "r_hsl" as AdminSellerRow["_id"],
+					storeName: "Mama's Delights",
+					slug: "mamas-delights",
+					subscriptionStatus: "active",
+					plan: "enterprise",
+					billingCycle: "monthly",
+					enterprise: {
+						baseFeeMinor: 88_800,
+						currency: "MYR",
+						includedCredits: 1500,
+						overageRateMinor: 60,
+						blockSize: 5000,
+						teammates: 12,
+						broadcastQuota: 500,
+						contactName: "HSL Food GM",
+						setAt: at(-1),
+					},
+				}),
+				seller({
+					_id: "r_unl" as AdminSellerRow["_id"],
+					storeName: "Unlimited Deal",
+					slug: "unlimited-deal",
+					subscriptionStatus: "active",
+					plan: "enterprise",
+					billingCycle: "monthly",
+					enterprise: {
+						baseFeeMinor: 120_000,
+						currency: "MYR",
+						includedCredits: 2000,
+						overageRateMinor: 50,
+						blockSize: 5000,
+						contactName: "Someone",
+						setAt: at(-1),
+					},
+				}),
+			],
+		});
 		queryData.set(getFunctionName(api.admin.devStorePurgeEnabled), false);
 		render(<Harness />);
 
@@ -473,16 +479,19 @@ describe("directory — detail sheet", () => {
 		// The lead exists so an ask can't be forgotten (z8r3fdkp8h follow-up):
 		// a chip in the owes-action front group, and the answer (contract or
 		// dismiss) right where the admin already works.
-		queryData.set(getFunctionName(api.admin.listSellersForAdmin), [
-			ROWS[0],
-			seller({
-				_id: "r_lead" as AdminSellerRow["_id"],
-				storeName: "Mama's Delights",
-				slug: "mamas-delights",
-				subscriptionStatus: "trialing",
-				enterpriseInterestAt: at(-3),
-			}),
-		]);
+		queryData.set(getFunctionName(api.admin.listSellersForAdmin), {
+			capped: false,
+			sellers: [
+				ROWS[0],
+				seller({
+					_id: "r_lead" as AdminSellerRow["_id"],
+					storeName: "Mama's Delights",
+					slug: "mamas-delights",
+					subscriptionStatus: "trialing",
+					enterpriseInterestAt: at(-3),
+				}),
+			],
+		});
 		queryData.set(getFunctionName(api.admin.devStorePurgeEnabled), false);
 		render(<Harness initial={{ status: "wants_enterprise" }} />);
 
@@ -824,5 +833,26 @@ describe("directory — credits", () => {
 			"Custom grant",
 		])
 			expect(header).toContain(column);
+	});
+});
+
+describe("the directory's count never claims the whole book (z8r3fdpm2p)", () => {
+	it("says 'of the newest N' when the book runs past the cap", () => {
+		// `Showing 500 of 500` read as the whole book while the oldest stores
+		// were simply not in the list. Same silent truncation the billing
+		// picker had, one surface over.
+		queryData.set(getFunctionName(api.admin.listSellersForAdmin), {
+			sellers: ROWS,
+			capped: true,
+		});
+		queryData.set(getFunctionName(api.admin.devStorePurgeEnabled), false);
+		render(<Harness />);
+		expect(screen.getByText(/of the newest \d+/)).toBeTruthy();
+	});
+
+	it("counts plainly when the whole book fits", () => {
+		renderDirectory();
+		expect(screen.queryByText(/of the newest/)).toBeNull();
+		expect(screen.getByText(/Showing \d+ of \d+/)).toBeTruthy();
 	});
 });

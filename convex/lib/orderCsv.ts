@@ -14,6 +14,7 @@
 
 import { sourceLabel } from "./attribution";
 import { formatItemAnswers } from "./buyerQuestions";
+import { gatedNameCell } from "./credits";
 import { orderCustomerLabel } from "./customer";
 import { formatFulfilmentTime } from "./fulfilmentDate";
 import {
@@ -23,6 +24,7 @@ import {
 	type OrderStatus,
 } from "./orderStatus";
 import { PAYMENT_METHOD_LABELS } from "./paymentMethod";
+import { promoDiscountTotal } from "./promo";
 import { orderPickupNotes } from "./pickupNote";
 
 // Malaysia is UTC+8, no DST — render the calendar day with a fixed offset.
@@ -269,6 +271,15 @@ export type CsvOrder = {
 	/** Marketing origin the buyer arrived from (86eyq0eq9). Insights reports it;
 	 * the export now carries it so the two can be reconciled. */
 	attributionSource?: string;
+	/** Waiting on credits (Credits T3.1). Carried so the CUSTOMER cell can say
+	 * so rather than printing a blank — a redacted row with no explanation is
+	 * exactly the silent gap the house rule forbids, and a seller reconciling a
+	 * spreadsheet needs to know the row is incomplete ON PURPOSE.
+	 *
+	 * Deliberately a VALUE in an existing cell, not a new column: a seller's
+	 * bookkeeping template keys on column names, so the header set stays fixed
+	 * (the same reasoning as `deliveryDirection` above). */
+	creditGated?: boolean;
 	customer: { name?: string; waPhone?: string };
 	items: Array<{
 		name: string;
@@ -283,6 +294,11 @@ export type CsvOrder = {
 		pickupNote?: string;
 		/** Buyer-question answers, frozen with their labels (z8r3fdkjek). */
 		answers?: Array<{ label: string; answer: string }>;
+		/** Frozen unit price (minor units). */
+		price: number;
+		/** Frozen list price, present only when the line sold BELOW it
+		 * (z8r3fdcw72) — the pair the "Promo discount" column reads. */
+		listPrice?: number;
 	}>;
 	subtotal: number;
 	/** Accepted/proposed mockup quote on a made-to-order order (minor units).
@@ -303,6 +319,16 @@ export type CsvOrder = {
 	 * inside `total`, so a bookkeeper subtracts this column to reconcile
 	 * against Insights, which already excludes it. */
 	securityDeposit?: number;
+	/** Voucher discount (minor units, `z8r3fdr617`) — the ONLY SUBTRACTIVE
+	 * member of the money run, so its column prints a NEGATIVE amount. That is
+	 * what keeps the stated identity true by inspection: a column printing
+	 * `10.00` for money that came OFF the total would make every voucher order
+	 * fail to balance, which is the exact bug `Custom work` was added to fix.
+	 * Same "0.00 never blank" rule as its neighbours. */
+	voucherDiscount?: number;
+	/** The code spent, so a seller reconciling a giveaway run can tell which
+	 * voucher paid for which order. Outside the money run (it isn't an addend). */
+	voucherCode?: string;
 	/** True while the delivery charge is still unquoted: `total` is provisional
 	 * and understates the final bill. Without this column the Total column lies
 	 * with no way to tell which rows are affected. */
@@ -391,7 +417,10 @@ export type OrderColumnKey =
 	| "pickupFee"
 	| "deliveryFee"
 	| "securityDeposit"
+	| "voucherDiscount"
+	| "voucherCode"
 	| "total"
+	| "promoDiscount"
 	| "currency"
 	| "feePending"
 	| "note"
@@ -509,8 +538,10 @@ export function fulfilmentMomentSortKey(o: CsvOrder): number | undefined {
  * relative order — new columns are interleaved where they belong rather than
  * bolted on the end, so a seller's name-keyed spreadsheet template still reads
  * left-to-right in the same sequence. The one thing that MUST stay adjacent is
- * the money run: `Subtotal · Custom work · Pickup fee · Delivery fee · Total`
- * reconciles by inspection, which is the whole point of adding Custom work.
+ * the money run: `Subtotal · Custom work · Pickup fee · Delivery fee ·
+ * Security deposit · Voucher · Total` reconciles by inspection, which is the
+ * whole point of adding Custom work. `Voucher` prints NEGATIVE — it is an
+ * addend like the rest, just a subtractive one.
  *
  * DELIBERATELY ABSENT: `trackingToken`. It is the capability that unlocks the
  * buyer's no-auth tracking page (see schema `orders.trackingToken`), so it must
@@ -570,7 +601,15 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		// "" (not "Anonymous") stays the default for a phone-only order with no
 		// name, so existing exports are unchanged; an anonymous walk-in (no phone)
 		// reads "Walk-in customer" instead of blank.
-		value: (o) => orderCustomerLabel(o.customer, ""),
+		//
+		// A row waiting on credits says so HERE (Credits T3.1): the buyer's name
+		// and every other buyer column are redacted server-side, and a line of
+		// blanks with no reason is the silent gap the no-silent-skip rule exists
+		// to stop. The Phone cell stays empty — one explanation per row.
+		value: (o) =>
+			o.creditGated
+				? gatedNameCell(o.status)
+				: orderCustomerLabel(o.customer, ""),
 	},
 	{
 		key: "phone",
@@ -848,6 +887,20 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		sortKey: (o) => o.securityDeposit ?? 0,
 	},
 	{
+		// The one subtractive addend — see `voucherDiscount` on CsvOrder for why
+		// the printed figure is negative.
+		key: "voucherDiscount",
+		label: "Voucher",
+		group: "money",
+		numeric: true,
+		width: 110,
+		value: (o) =>
+			o.voucherDiscount && o.voucherDiscount > 0
+				? csvAmount(-o.voucherDiscount)
+				: csvAmount(0),
+		sortKey: (o) => -(o.voucherDiscount ?? 0),
+	},
+	{
 		key: "total",
 		label: "Total",
 		group: "money",
@@ -858,11 +911,37 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		sortKey: (o) => o.total,
 	},
 	{
+		// What the sale cost the seller on this order (z8r3fdcw72): the sum of
+		// (listPrice − price) × quantity over the lines that sold below list.
+		// Derived from the FROZEN pair on each line, so it stays true after the
+		// promo ends, is re-run, or is deleted. 0 for every ordinary order.
+		//
+		// Deliberately OUTSIDE the Subtotal→Total addend run: the discount is
+		// already baked into each line's frozen price, so it is reported, never
+		// summed. Dropping it between the addends would make the left-to-right
+		// arithmetic read false — which is what `the money run stays adjacent`
+		// pins, and what it caught when this column first landed there.
+		key: "promoDiscount",
+		label: "Promo discount",
+		group: "money",
+		numeric: true,
+		width: 126,
+		value: (o) => csvAmount(promoDiscountTotal(o)),
+		sortKey: (o) => promoDiscountTotal(o),
+	},
+	{
 		key: "currency",
 		label: "Currency",
 		group: "money",
 		width: 96,
 		value: (o) => o.currency,
+	},
+	{
+		key: "voucherCode",
+		label: "Voucher code",
+		group: "money",
+		width: 132,
+		value: (o) => o.voucherCode ?? "",
 	},
 	{
 		key: "feePending",

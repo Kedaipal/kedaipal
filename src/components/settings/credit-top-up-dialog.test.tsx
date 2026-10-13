@@ -311,9 +311,7 @@ describe("the picker", () => {
 		// A pack pays the debt first — said before the tap — and the lock
 		// lifts the moment it's paid (T3).
 		expect(
-			screen.getByText(
-				"Covers the 15 owed and leaves 35 orders.",
-			),
+			screen.getByText("Covers the 15 owed and leaves 35 orders."),
 		).toBeTruthy();
 	});
 
@@ -489,6 +487,29 @@ describe("the picker", () => {
 		renderDialog();
 		expect(screen.getByText(/You don't have access to credits/i)).toBeTruthy();
 		expect(screen.queryByRole("button", { name: /^Buy / })).toBeNull();
+	});
+
+	it("an UNMETERED store says so, instead of asking its own admin for access", () => {
+		// z8r3fdp4er: the meter that opens this picker is gone, but a bookmarked
+		// `?topup=` still lands here — and `balance === null` alone would render
+		// the teammate's "you don't have access" note at the store's owner.
+		mockReads({
+			options: {
+				...OPTIONS,
+				refusal: "admin_store",
+				refusalMessage:
+					"Kedaipal admin stores aren't metered, so there's nothing to top up — they have no credit balance and never lock.",
+			},
+			balance: null,
+		});
+		renderDialog();
+		expect(screen.getByText(/admin stores aren't metered/i)).toBeTruthy();
+		expect(screen.queryByText(/You don't have access to credits/i)).toBeNull();
+		expect(screen.queryByRole("button", { name: /^Buy / })).toBeNull();
+		// The pitch describes a balance to top up — stacked above "they have no
+		// credit balance" it contradicts the refusal, so the refusal IS the
+		// description here (and the dialog keeps one, which labels it).
+		expect(screen.queryByText(/monthly credits run out/i)).toBeNull();
 	});
 
 	it("admin act-as is view-only — and reads the SELLER's store", () => {

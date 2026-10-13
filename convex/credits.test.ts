@@ -16,7 +16,10 @@ import {
 	ensureCreditAccount,
 	refundCreditForOrder,
 } from "./credits";
-import type { CancelCause } from "./lib/credits";
+import {
+	type CancelCause,
+	GRANT_LEVER_CONTRACT_REFUSAL,
+} from "./lib/credits";
 import type { Plan } from "./lib/plans";
 import { SELLER_CANCEL_REFUNDS_PER_PERIOD } from "./lib/plans";
 import schema from "./schema";
@@ -608,19 +611,17 @@ describe("usage periods", () => {
 		});
 	});
 
-	test("comped and admin-owned stores are metered on the monthly grant", async () => {
+	test("a comped store takes no monthly grant — it is unmetered (z8r3fdrph7)", async () => {
 		const t = setup();
 		const comped = await makeStore(t, {
 			status: "active",
 			plan: "starter",
 			comped: true,
 		});
-		const admin = await signUp(t, ADMIN); // an admin's own store stays trialing
-		for (let i = 0; i < 5; i++) await order(t, admin.retailerId);
+		expect(await account(t, comped.retailerId)).toBeNull();
 		vi.setSystemTime(NOV_1);
 		await t.mutation(internal.credits.internalRollPeriods, {});
-		expect((await account(t, comped.retailerId))?.planBalance).toBe(100);
-		expect((await account(t, admin.retailerId))?.planBalance).toBe(200);
+		expect(await account(t, comped.retailerId)).toBeNull();
 	});
 
 	test("founding Pro is granted 300 a month", async () => {
@@ -634,6 +635,454 @@ describe("usage periods", () => {
 		vi.setSystemTime(NOV_1);
 		await t.mutation(internal.credits.internalRollPeriods, {});
 		expect((await account(t, retailerId))?.planBalance).toBe(300);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Unmetered stores (z8r3fdp4er)
+// ---------------------------------------------------------------------------
+
+describe("an admin's own store is unmetered", () => {
+	test("signing up opens no credit account, and orders spend nothing", async () => {
+		const t = setup();
+		const admin = await signUp(t, ADMIN);
+		for (let i = 0; i < 5; i++) await order(t, admin.retailerId);
+		expect(await account(t, admin.retailerId)).toBeNull();
+		expect(await ledger(t, admin.retailerId)).toHaveLength(0);
+	});
+
+	test("a LEGACY account stops being debited the moment the gate lands", async () => {
+		// The path that bites: `ensureCreditAccount` used to shortcut on an
+		// existing row before it ever asked for a regime, so a store metered
+		// before this change would have kept spending. Seeded by hand because
+		// no code path can open one for an admin store any more.
+		const t = setup();
+		const admin = await signUp(t, ADMIN);
+		await t.run((ctx) =>
+			ctx.db.insert("creditAccounts", {
+				retailerId: admin.retailerId,
+				planBalance: 200,
+				purchasedBalance: 0,
+				periodKey: "2026-09",
+				periodGrant: 200,
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			}),
+		);
+		await order(t, admin.retailerId);
+		expect((await account(t, admin.retailerId))?.planBalance).toBe(200);
+		expect(await ledger(t, admin.retailerId)).toHaveLength(0);
+		// And the monthly sweep lands no grant on it either.
+		vi.setSystemTime(NOV_1);
+		await t.mutation(internal.credits.internalRollPeriods, {});
+		const rolled = await account(t, admin.retailerId);
+		expect(rolled?.periodKey).toBe("2026-09");
+		expect(rolled?.planBalance).toBe(200);
+	});
+
+	test("cancelling an order on a legacy account refunds nothing into it", async () => {
+		const t = setup();
+		const admin = await signUp(t, ADMIN);
+		await t.run((ctx) =>
+			ctx.db.insert("creditAccounts", {
+				retailerId: admin.retailerId,
+				planBalance: 10,
+				purchasedBalance: 0,
+				periodKey: "2026-10",
+				periodGrant: 200,
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			}),
+		);
+		const o = await order(t, admin.retailerId);
+		await cancel(t, o.orderId, "seller");
+		expect((await account(t, admin.retailerId))?.planBalance).toBe(10);
+		expect(await ledger(t, admin.retailerId)).toHaveLength(0);
+	});
+
+	test("the balance and the activity list are empty, so every meter hides", async () => {
+		const t = setup();
+		await signUp(t, ADMIN);
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+		expect(await asAdmin.query(api.credits.getBalance, {})).toBeNull();
+		const activity = await asAdmin.query(api.credits.listActivity, {
+			paginationOpts: { numItems: 10, cursor: null },
+		});
+		expect(activity.page).toHaveLength(0);
+		// ...and the credit GATE can never close on it (the dashboard reads the
+		// resolver's answer off the retailer payload). Per order since T3.1, so
+		// the question is "is anything waiting?", and an unmetered store holds
+		// no account to put an order behind.
+		const me = await asAdmin.query(api.retailers.getMyRetailer, {});
+		expect(me?.creditGate?.exempt).toBe(true);
+		expect(me?.creditGate?.ordersWaiting ?? 0).toBe(0);
+	});
+
+	test("the admin levers refuse it by name, not with \"Store not found\"", async () => {
+		const t = setup();
+		const admin = await signUp(t, ADMIN);
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+		await expect(
+			asAdmin.mutation(api.credits.adminAdjust, {
+				retailerId: admin.retailerId,
+				bucket: "plan",
+				amount: 50,
+				note: "goodwill",
+			}),
+		).rejects.toThrow(/aren't metered/);
+		await expect(
+			asAdmin.mutation(api.credits.adminSetGrantOverride, {
+				retailerId: admin.retailerId,
+				grant: 500,
+			}),
+		).rejects.toThrow(/aren't metered/);
+	});
+
+	test("a SELLER store is untouched by all of it", async () => {
+		const t = setup();
+		const seller = await makeStore(t, { status: "active", plan: "pro" });
+		await order(t, seller.retailerId);
+		expect((await account(t, seller.retailerId))?.planBalance).toBe(199);
+		expect(await ledger(t, seller.retailerId)).not.toHaveLength(0);
+	});
+});
+
+describe("a SPONSORED store is unmetered too (z8r3fdrph7)", () => {
+	/** A comped store, built the way an admin's toggle builds one. */
+	const comp = (t: T, over: Partial<Doc<"subscriptions">> = {}) =>
+		makeStore(t, {
+			status: "active",
+			plan: "pro",
+			comped: true,
+			comp: {
+				kind: "partner",
+				label: "Campfest",
+				grantedBy: ADMIN,
+				grantedAt: Date.now(),
+			},
+			...over,
+		});
+
+	test("orders spend nothing and no account is opened", async () => {
+		const t = setup();
+		const sponsored = await comp(t);
+		for (let i = 0; i < 5; i++) await order(t, sponsored.retailerId);
+		expect(await account(t, sponsored.retailerId)).toBeNull();
+		expect(await ledger(t, sponsored.retailerId)).toHaveLength(0);
+	});
+
+	test("a store METERED BEFORE the comp stops being debited, and its bought credits survive", async () => {
+		// The path that bites, twice over: `ensureCreditAccount` shortcuts on an
+		// existing row, and a real sponsorship is usually switched on over a
+		// store that was already billed — so it arrives carrying a balance AND
+		// a paid-for pack. Nothing may move, and nothing may be destroyed.
+		const t = setup();
+		const seller = await makeStore(t, { status: "active", plan: "pro" });
+		await order(t, seller.retailerId);
+		expect((await account(t, seller.retailerId))?.planBalance).toBe(199);
+		await t.run((ctx) =>
+			ctx.db.insert("creditLots", {
+				retailerId: seller.retailerId,
+				credits: 200,
+				remaining: 200,
+				open: true,
+				source: "purchase",
+				refId: "pack-1",
+				expiresAt: Date.now() + 365 * DAY,
+				createdAt: Date.now(),
+			}),
+		);
+		await t.run((ctx) => ctx.db.patch(seller.subId, { comped: true }));
+
+		await order(t, seller.retailerId);
+		expect((await account(t, seller.retailerId))?.planBalance).toBe(199);
+		expect(await ledger(t, seller.retailerId)).toHaveLength(2);
+		// The month boundary lands no grant and forfeits nothing.
+		vi.setSystemTime(NOV_1);
+		await t.mutation(internal.credits.internalRollPeriods, {});
+		const rolled = await account(t, seller.retailerId);
+		expect(rolled?.periodKey).toBe("2026-10");
+		expect(rolled?.planBalance).toBe(199);
+		// And the pack is still there, untouched — the reason the purge is
+		// deliberately keyed on admin ownership and not on this gate.
+		expect(await lots(t, seller.retailerId)).toHaveLength(1);
+	});
+
+	test("a sponsored store's bought lot still EXPIRES on time — it is not frozen and resurrected", async () => {
+		// `internalExpireLots` reads the account directly rather than the
+		// regime, on purpose: freeze a lot while a comp runs and it would come
+		// back as live credits the day the comp ends, months past its date.
+		const t = setup();
+		const seller = await makeStore(t, { status: "active", plan: "pro" });
+		await t.run((ctx) =>
+			ctx.db.insert("creditLots", {
+				retailerId: seller.retailerId,
+				credits: 50,
+				remaining: 50,
+				open: true,
+				source: "purchase",
+				refId: "pack-old",
+				expiresAt: Date.now() + DAY,
+				createdAt: Date.now(),
+			}),
+		);
+		await t.run(async (ctx) => {
+			const a = await ctx.db
+				.query("creditAccounts")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", seller.retailerId))
+				.first();
+			if (a) await ctx.db.patch(a._id, { purchasedBalance: 50 });
+			await ctx.db.patch(seller.subId, { comped: true });
+		});
+		vi.setSystemTime(Date.now() + 2 * DAY);
+		await t.mutation(internal.credits.internalExpireLots, {});
+		expect((await lots(t, seller.retailerId))[0]?.open).toBe(false);
+		expect((await account(t, seller.retailerId))?.purchasedBalance).toBe(0);
+	});
+
+	test("the balance, the activity list and the gate are all empty, so every meter hides", async () => {
+		const t = setup();
+		await comp(t);
+		const asOwner = t.withIdentity({ subject: OWNER });
+		expect(await asOwner.query(api.credits.getBalance, {})).toBeNull();
+		const activity = await asOwner.query(api.credits.listActivity, {
+			paginationOpts: { numItems: 10, cursor: null },
+		});
+		expect(activity.page).toHaveLength(0);
+		const me = await asOwner.query(api.retailers.getMyRetailer, {});
+		expect(me?.creditGate?.exempt).toBe(true);
+		expect(me?.creditGate?.ordersWaiting ?? 0).toBe(0);
+		// The one boolean every client surface reads for "no limits".
+		expect(me?.fullAccess).toBe(true);
+	});
+
+	test("the admin levers refuse it by name — including the grant lever a comp used to be FOR", async () => {
+		const t = setup();
+		const sponsored = await comp(t);
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+		await expect(
+			asAdmin.mutation(api.credits.adminAdjust, {
+				retailerId: sponsored.retailerId,
+				bucket: "plan",
+				amount: 50,
+				note: "goodwill for the partner",
+			}),
+		).rejects.toThrow(/aren't metered/);
+		// Before this change a comp was the sponsored case the custom-grant
+		// lever existed to serve, and its refusal copy told admins to "comp it
+		// if it's sponsored". A comp now carries no allowance at all.
+		await expect(
+			asAdmin.mutation(api.credits.adminSetGrantOverride, {
+				retailerId: sponsored.retailerId,
+				grant: 500,
+			}),
+		).rejects.toThrow(/aren't metered/);
+		expect(GRANT_LEVER_CONTRACT_REFUSAL).not.toMatch(/comp it if it's sponsored/);
+	});
+
+	test("turning the comp OFF meters the store again, from that moment", async () => {
+		const t = setup();
+		const sponsored = await comp(t);
+		await order(t, sponsored.retailerId);
+		expect(await account(t, sponsored.retailerId)).toBeNull();
+		// An admin switches it off: the store lapses to past_due (z8r3fdeub2),
+		// so it earns no grant until it pays — but it IS metered again, which
+		// is what makes "a comp can end" safe without metering it throughout.
+		await t.run((ctx) =>
+			ctx.db.patch(sponsored.subId, { comped: false, status: "past_due" }),
+		);
+		await order(t, sponsored.retailerId);
+		const reopened = await account(t, sponsored.retailerId);
+		expect(reopened).not.toBeNull();
+		expect(reopened?.planBalance).toBe(-1);
+		// Nothing from the sponsored months is charged to them.
+		expect(await ledger(t, sponsored.retailerId)).toHaveLength(1);
+	});
+
+	test("the purge leaves a sponsored store alone — its rows may be paid for", async () => {
+		const t = setup();
+		const sponsored = await comp(t);
+		await t.run((ctx) =>
+			ctx.db.insert("creditAccounts", {
+				retailerId: sponsored.retailerId,
+				planBalance: 12,
+				purchasedBalance: 200,
+				periodKey: "2026-09",
+				periodGrant: 200,
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			}),
+		);
+		const dry = await t.mutation(internal.migrations.purgeUnmeteredCreditData, {});
+		expect(dry.stores.map((s) => s.retailerId)).not.toContain(
+			sponsored.retailerId,
+		);
+		await expect(
+			t.mutation(internal.migrations.purgeUnmeteredCreditData, {
+				apply: true,
+				retailerIds: [sponsored.retailerId],
+			}),
+		).rejects.toThrow(/not unmetered stores/);
+		expect(await account(t, sponsored.retailerId)).not.toBeNull();
+	});
+});
+
+describe("the monthly sweep steps over accounts it cannot advance", () => {
+	/**
+	 * `rollPeriod` returns an UNMETERED account untouched — it never patches
+	 * `periodKey`, deliberately, because the stale key is what makes the first
+	 * roll after a comp ends expire and re-grant. The consequence is that such
+	 * an account stays inside `by_period`'s `< current` range FOREVER, and the
+	 * sweep selects that range oldest-first. So inert rows sit at the head of
+	 * every batch and are re-taken on every pass.
+	 *
+	 * z8r3fdp4er created the population (admin stores, purgeable as hygiene);
+	 * z8r3fdrph7 enlarged it with comped stores AND deliberately refuses to
+	 * purge those (their bought lots must survive). The sweep has to step over
+	 * them instead.
+	 */
+	const staleAccount = async (t: T, retailerId: Id<"retailers">) =>
+		t.run((ctx) =>
+			ctx.db.insert("creditAccounts", {
+				retailerId,
+				planBalance: 10,
+				purchasedBalance: 0,
+				periodKey: "2026-08",
+				periodGrant: 200,
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			}),
+		);
+
+	test("a metered store behind a full batch of inert accounts still gets its month", async () => {
+		const t = setup();
+		// SWEEP_BATCH inert accounts, all stamped older than the metered one so
+		// `by_period` puts them first. Comped, so nothing can ever advance them
+		// and the purge deliberately won't remove them.
+		for (let i = 0; i < 100; i++) {
+			const ids = await signUp(t, `user_inert_${i}`);
+			await t.run(async (ctx) => {
+				const sub = await ctx.db
+					.query("subscriptions")
+					.withIndex("by_retailer", (q) => q.eq("retailerId", ids.retailerId))
+					.first();
+				if (sub) await ctx.db.patch(sub._id, { comped: true });
+				const acct = await ctx.db
+					.query("creditAccounts")
+					.withIndex("by_retailer", (q) => q.eq("retailerId", ids.retailerId))
+					.first();
+				if (acct) await ctx.db.delete(acct._id);
+			});
+			await staleAccount(t, ids.retailerId);
+		}
+		// One ordinary paying seller, stamped NEWER so it sorts last.
+		const seller = await makeStore(t, { status: "active", plan: "pro" });
+		await t.run(async (ctx) => {
+			const acct = await ctx.db
+				.query("creditAccounts")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", seller.retailerId))
+				.first();
+			if (acct)
+				await ctx.db.patch(acct._id, { periodKey: "2026-09", planBalance: 3 });
+		});
+
+		vi.setSystemTime(NOV_1);
+		// Before the fix the first pass takes 100 inert rows, advances none of
+		// them, and reschedules itself on a full batch — forever, with the
+		// seller never reached however many passes run.
+		await t.mutation(internal.credits.internalRollPeriods, {});
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+		const rolled = await account(t, seller.retailerId);
+		expect(rolled?.periodKey, "the seller's month landed").toBe("2026-11");
+		expect(rolled?.planBalance, "forfeited 3, granted Pro's 200").toBe(200);
+	});
+});
+
+describe("the unmetered purge (operator cleanup)", () => {
+	test("dry run reports and deletes nothing; apply clears the store", async () => {
+		const t = setup();
+		const admin = await signUp(t, ADMIN);
+		const seller = await makeStore(t, { status: "active", plan: "pro" });
+		await order(t, seller.retailerId);
+		await t.run((ctx) =>
+			ctx.db.insert("creditAccounts", {
+				retailerId: admin.retailerId,
+				planBalance: 200,
+				purchasedBalance: 0,
+				periodKey: "2026-09",
+				periodGrant: 200,
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			}),
+		);
+		const dry = await t.mutation(internal.migrations.purgeUnmeteredCreditData, {});
+		expect(dry.applied).toBe(false);
+		expect(dry.stores.map((s) => s.retailerId)).toEqual([admin.retailerId]);
+		expect(await account(t, admin.retailerId)).not.toBeNull();
+
+		const applied = await t.mutation(
+			internal.migrations.purgeUnmeteredCreditData,
+			{ apply: true, retailerIds: dry.stores.map((s) => s.retailerId) },
+		);
+		expect(applied.applied).toBe(true);
+		expect(await account(t, admin.retailerId)).toBeNull();
+		// The seller's ledger is never in scope, whatever the flag says.
+		expect(await account(t, seller.retailerId)).not.toBeNull();
+		expect(await ledger(t, seller.retailerId)).not.toHaveLength(0);
+	});
+
+	test("deleting without naming the stores is refused", async () => {
+		// The unmetered check alone can't protect the dangerous direction of a
+		// mis-set ADMIN_USER_IDS — a seller's id wrongly added makes their
+		// store unmetered, and a purge keyed on the same answer would select
+		// it. Naming the ids forces the operator through the dry run.
+		const t = setup();
+		const admin = await signUp(t, ADMIN);
+		await t.run((ctx) =>
+			ctx.db.insert("creditAccounts", {
+				retailerId: admin.retailerId,
+				planBalance: 200,
+				purchasedBalance: 0,
+				periodKey: "2026-09",
+				periodGrant: 200,
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			}),
+		);
+		await expect(
+			t.mutation(internal.migrations.purgeUnmeteredCreditData, {
+				apply: true,
+			}),
+		).rejects.toThrow(/needs the stores named/);
+		expect(await account(t, admin.retailerId)).not.toBeNull();
+	});
+
+	test("a named id that isn't unmetered rolls the whole run back", async () => {
+		const t = setup();
+		const admin = await signUp(t, ADMIN);
+		const seller = await makeStore(t, { status: "active", plan: "pro" });
+		await t.run((ctx) =>
+			ctx.db.insert("creditAccounts", {
+				retailerId: admin.retailerId,
+				planBalance: 200,
+				purchasedBalance: 0,
+				periodKey: "2026-09",
+				periodGrant: 200,
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			}),
+		);
+		await expect(
+			t.mutation(internal.migrations.purgeUnmeteredCreditData, {
+				apply: true,
+				retailerIds: [admin.retailerId, seller.retailerId],
+			}),
+		).rejects.toThrow(/not unmetered stores/);
+		// All-or-nothing: the admin store's rows survive the rollback, so a
+		// fat-fingered id can never half-purge the book.
+		expect(await account(t, admin.retailerId)).not.toBeNull();
+		expect(await account(t, seller.retailerId)).not.toBeNull();
 	});
 });
 
@@ -772,13 +1221,25 @@ describe("admin", () => {
 
 	test("a custom grant beats the tier; a higher one lands its difference now, clearing it waits for the next period", async () => {
 		const t = setup();
-		// COMPED: since the Enterprise follow-up (z8r3fdkp8h) a recurring
-		// custom allowance is only for sponsored or contracted stores — a
-		// comp is the sponsored case this behaviour now belongs to.
-		const { retailerId } = await makeStore(t, {
+		// A CONTRACT is the only host left for this behaviour. z8r3fdkp8h made
+		// a recurring custom allowance sponsored-or-contracted; z8r3fdrph7 then
+		// made a sponsored store UNMETERED, so it has no allowance to set and
+		// the lever refuses it (covered below). Clearing an override still
+		// drops the store to its plan's grant — read off `plan`, which an
+		// Enterprise row keeps for the day the contract ends.
+		const { retailerId, subId } = await makeStore(t, {
 			status: "active",
-			plan: "starter",
-			comped: true,
+			plan: "enterprise",
+			enterprise: {
+				baseFeeMinor: 88800,
+				currency: "MYR",
+				includedCredits: 1000,
+				overageRateMinor: 60,
+				blockSize: 100,
+				contactName: "Arif",
+				setBy: ADMIN,
+				setAt: Date.now(),
+			},
 		});
 		const asAdmin = t.withIdentity({ subject: ADMIN });
 		await asAdmin.mutation(api.credits.adminSetGrantOverride, { retailerId, grant: 1000 });
@@ -787,6 +1248,13 @@ describe("admin", () => {
 			periodGrant: 1000,
 			grantOverride: 1000,
 		});
+		// Clearing a contract's override is refused on the contract's own
+		// ground (its included credits ARE the override), so drop the store to
+		// a listed plan first — the state the lever's "clearing always works"
+		// rule is about.
+		await t.run((ctx) =>
+			ctx.db.patch(subId, { plan: "starter", enterprise: undefined }),
+		);
 		await asAdmin.mutation(api.credits.adminSetGrantOverride, { retailerId, grant: null });
 		expect((await account(t, retailerId))?.planBalance).toBe(1000);
 		vi.setSystemTime(NOV_1);
@@ -797,9 +1265,10 @@ describe("admin", () => {
 	test("SETTING a custom grant on a listed plan is refused — that deal is a contract now; clearing a stale one still works", async () => {
 		// Zaki, 2 Oct 2026: a Pro store with 1,500 credits is an Enterprise
 		// deal with no contract record — the contract can carry Pro's exact
-		// fee, so "same price, more credits" is a contract too. Comped stays
-		// allowed (sponsored); enterprise edits the contract (covered in
-		// enterprise.test.ts).
+		// fee, so "same price, more credits" is a contract too. A CONTRACT is
+		// now the only store that may be SET (enterprise edits the contract,
+		// covered in enterprise.test.ts): since z8r3fdrph7 a comped store is
+		// unmetered, and the lever refuses it before this rule is reached.
 		const t = setup();
 		const { retailerId } = await makeStore(t, { status: "active", plan: "pro" });
 		const asAdmin = t.withIdentity({ subject: ADMIN });
@@ -1028,5 +1497,155 @@ describe("every cancel names who ended the order", () => {
 		}
 		expect(checked).toBeGreaterThanOrEqual(5);
 		expect(offenders).toEqual([]);
+	});
+});
+
+describe("getUsagePace — how fast this store is actually burning credits", () => {
+	/** The window the client asks for: a MYT midnight minus the pace window. */
+	const SINCE = OCT_10 - 7 * DAY;
+
+	/** The signed-in read. Null only means "no store for this caller", which the
+	 * signed-out test asserts directly — everywhere else it is a seed failure. */
+	const pace = async (t: T, retailerId: Id<"retailers">) => {
+		const p = await t
+			.withIdentity({ subject: OWNER })
+			.query(api.credits.getUsagePace, { retailerId, since: SINCE });
+		if (!p) throw new Error("expected a pace for a signed-in owner");
+		return p;
+	};
+
+	/** Run `fn` with the clock moved back, then restore it. */
+	async function atDaysAgo(days: number, fn: () => Promise<void>) {
+		vi.setSystemTime(OCT_10 - days * DAY);
+		try {
+			await fn();
+		} finally {
+			vi.setSystemTime(OCT_10);
+		}
+	}
+
+	test("seven orders in the window is a pace of one a day", async () => {
+		const t = setup();
+		const { retailerId } = await makeStore(t, { status: "active", plan: "pro" });
+		for (let i = 0; i < 7; i++) await order(t, retailerId);
+		expect(await pace(t, retailerId)).toEqual({
+			consumed: 7,
+			perDay: 1,
+			windowDays: 7,
+		});
+	});
+
+	test("a quiet week is zero, not a throw", async () => {
+		const t = setup();
+		const { retailerId } = await makeStore(t, { status: "active", plan: "pro" });
+		expect(await pace(t, retailerId)).toEqual({
+			consumed: 0,
+			perDay: 0,
+			windowDays: 7,
+		});
+	});
+
+	test("orders from before the window do not count", async () => {
+		const t = setup();
+		const { retailerId } = await makeStore(t, { status: "active", plan: "pro" });
+		await atDaysAgo(10, async () => {
+			await order(t, retailerId);
+			await order(t, retailerId);
+		});
+		await order(t, retailerId);
+		expect((await pace(t, retailerId)).consumed).toBe(1);
+	});
+
+	test("a refunded order did not consume a credit, so it nets off", async () => {
+		const t = setup();
+		const { retailerId } = await makeStore(t, { status: "active", plan: "pro" });
+		const a = await order(t, retailerId);
+		await order(t, retailerId);
+		await cancel(t, a.orderId, "buyer");
+		expect((await pace(t, retailerId)).consumed).toBe(1);
+	});
+
+	test("a debit that is not an ORDER is not demand", async () => {
+		// Today every debit/refund carries an orderId, so this row cannot arise
+		// from the app — which is the point. The pace means "order consumption",
+		// and the day someone adds a non-order debit (an admin clawback, a
+		// per-message charge) it must not read as a week of furious trading.
+		// Pinned here so that rule survives a writer this query never saw.
+		const t = setup();
+		const { retailerId } = await makeStore(t, { status: "active", plan: "pro" });
+		await order(t, retailerId);
+		await t.run(async (ctx) => {
+			await ctx.db.insert("creditLedger", {
+				retailerId,
+				type: "debit",
+				bucket: "plan",
+				amount: -50,
+				reason: "adjust",
+				periodKey: "2026-10",
+				createdBy: "system",
+				planAfter: 0,
+				purchasedAfter: 0,
+				createdAt: Date.now(),
+			});
+		});
+		expect((await pace(t, retailerId)).consumed).toBe(1);
+	});
+
+	test("a month's grant is not a week of furious trading", async () => {
+		// Grants, top-ups and expiries all move the balance but say nothing
+		// about demand — only entries carrying an orderId are consumption.
+		const t = setup();
+		const ids = await makeStore(t, { status: "active", plan: "pro" });
+		await pay(t, ids, "pro");
+		expect((await pace(t, ids.retailerId)).consumed).toBe(0);
+	});
+
+	test("never negative — a week of nothing but cancellations is 'no pace'", async () => {
+		const t = setup();
+		const { retailerId } = await makeStore(t, { status: "active", plan: "pro" });
+		// Debit outside the window, refund inside it: the refund alone would
+		// make `consumed` negative and forecast a growing balance.
+		let placed: Id<"orders"> | undefined;
+		await atDaysAgo(10, async () => {
+			placed = (await order(t, retailerId)).orderId;
+		});
+		if (!placed) throw new Error("seed failed");
+		await cancel(t, placed, "buyer");
+		const p = await pace(t, retailerId);
+		expect(p.consumed).toBe(0);
+		expect(p.perDay).toBe(0);
+	});
+
+	test("another store's burn is not mine", async () => {
+		const t = setup();
+		const mine = await makeStore(t, { status: "active", plan: "pro" });
+		const theirs = await makeStore(t, { status: "active", plan: "pro" }, {
+			userId: "user_credits_other",
+		});
+		for (let i = 0; i < 3; i++) await order(t, theirs.retailerId);
+		expect((await pace(t, mine.retailerId)).consumed).toBe(0);
+	});
+
+	test("a hand-passed `since` of 0 cannot walk the whole ledger", async () => {
+		// `since` rides in from the client so the query stays cacheable, which
+		// means it can be anything. The scan is bounded whatever it is handed —
+		// the answer here is still only this week's orders because that is all
+		// this store has, but the READ is a constant either way.
+		const t = setup();
+		const { retailerId } = await makeStore(t, { status: "active", plan: "pro" });
+		for (let i = 0; i < 3; i++) await order(t, retailerId);
+		const wide = await t
+			.withIdentity({ subject: OWNER })
+			.query(api.credits.getUsagePace, { retailerId, since: 0 });
+		expect(wide?.consumed).toBe(3);
+	});
+
+	test("a signed-out caller gets nothing", async () => {
+		const t = setup();
+		const { retailerId } = await makeStore(t, { status: "active", plan: "pro" });
+		await order(t, retailerId);
+		expect(await t.query(api.credits.getUsagePace, { retailerId, since: SINCE })).toBe(
+			null,
+		);
 	});
 });

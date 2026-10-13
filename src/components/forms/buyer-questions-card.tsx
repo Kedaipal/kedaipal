@@ -27,6 +27,7 @@ import {
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { ModeButton } from "../ui/mode-button";
+import { Select } from "../ui/select";
 import { ToggleSwitch } from "../ui/toggle-switch";
 
 export type QuestionDraft = {
@@ -147,9 +148,6 @@ export function questionRowIssues(q: QuestionDraft): {
 	}
 	return issues;
 }
-
-const SELECT_CLASS =
-	"h-11 w-full rounded-xl border border-input bg-background px-2 text-sm";
 
 export function BuyerQuestionsEditor({
 	draft,
@@ -430,9 +428,10 @@ function QuestionRow({
 						</p>
 					) : (
 						<div className="grid gap-2 sm:grid-cols-2">
-							<select
+							<Select
 								id={`bq-when-${question.id}`}
-								className={SELECT_CLASS}
+								variant="field"
+								className="w-full"
 								value={question.showWhenId}
 								onChange={(e) =>
 									onPatch({ showWhenId: e.target.value, showWhenOption: "" })
@@ -444,11 +443,12 @@ function QuestionRow({
 										{t.label.trim() || `Question ${earlier.indexOf(t) + 1}`}
 									</option>
 								))}
-							</select>
+							</Select>
 							{trigger ? (
-								<select
+								<Select
 									aria-label="…is answered with"
-									className={SELECT_CLASS}
+									variant="field"
+									className="w-full"
 									value={question.showWhenOption}
 									onChange={(e) => onPatch({ showWhenOption: e.target.value })}
 								>
@@ -458,7 +458,7 @@ function QuestionRow({
 											is “{o}”
 										</option>
 									))}
-								</select>
+								</Select>
 							) : null}
 						</div>
 					)}

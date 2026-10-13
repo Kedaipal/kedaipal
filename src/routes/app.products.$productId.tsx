@@ -16,7 +16,6 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { EventRsvpPanel } from "../components/app/event-rsvp-panel";
 import { ViewOnlyNote } from "../components/app/view-only-note";
-import { CreditLockNote } from "../components/credits/credit-lock-note";
 import {
 	PageHeader,
 	PageHeaderSkeleton,
@@ -183,7 +182,7 @@ function EditProductRoute() {
 	// T3), or a teammate with view on products. Every write on this page greys
 	// out together; the form's fields stay editable so an edit already under
 	// way survives until saving is possible again.
-	const productsLock = useAreaLock("products", { credits: true });
+	const productsLock = useAreaLock("products");
 	const saveLock = productsLock.readOnly
 		? { reason: productsLock.reason, label: lockLabel(productsLock.cause) }
 		: undefined;
@@ -322,7 +321,6 @@ function EditProductRoute() {
 			{/* Why nothing here saves right now — a lapsed store, or one out of
 			    credits (Credits T3). Each renders nothing otherwise. */}
 			<ViewOnlyNote />
-			<CreditLockNote scope="products" />
 
 			<ProductForm
 				key={product._id}
@@ -333,6 +331,9 @@ function EditProductRoute() {
 				categoriesLocked={
 					!retailer.actingAsAdmin &&
 					!hasFeature(retailer.subscription, "categories")
+				}
+				promoLocked={
+					!retailer.actingAsAdmin && !hasFeature(retailer.subscription, "promo")
 				}
 				eventsLocked={
 					!retailer.actingAsAdmin &&
@@ -376,10 +377,14 @@ function EditProductRoute() {
 					imageStorageIds: product.imageStorageIds,
 					imageUrls: product.imageUrls,
 					options: product.options ?? [],
+					// The raw promo config is owner-only in the projection, so it
+					// is readable here and nowhere a buyer can see it.
+					promo: product.promo,
 					variants: product.variants.map((vr) => ({
 						optionValues: vr.optionValues,
 						sku: vr.sku,
 						price: vr.price,
+						promoPrice: vr.promoPrice,
 						onHand: vr.onHand,
 						active: vr.active,
 						// Resolved per-variant server-side (override ?? product default).
@@ -465,6 +470,10 @@ function EditProductRoute() {
 						// `null` clears a stored event (toggle off); the form never
 						// sends undefined, so an event can always be turned off.
 						event: values.event,
+						// Same `null` = clear contract as `event` (z8r3fdcw72), and
+						// clearing is deliberately un-gated server-side so a store
+						// that drops to Starter can still switch a promotion off.
+						promo: values.promo,
 						buyerQuestions: values.buyerQuestions,
 					});
 					await saveVariantGrid({

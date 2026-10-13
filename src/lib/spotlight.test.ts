@@ -126,6 +126,10 @@ describe("spotlight registry", () => {
 		expect(PRODUCT_SPOTLIGHT.prep_time.applies({ kind: "booking" })).toBe(
 			false,
 		);
+		// promo renders on every kind, so every row forwards — a booking and an
+		// event included, where the card says why the flash extras don't apply.
+		for (const kind of [undefined, "physical", "booking", "service"])
+			expect(PRODUCT_SPOTLIGHT.promo.applies({ kind })).toBe(true);
 	});
 
 	test("anchors shared with the post-switch checklist are the same string", () => {
@@ -150,6 +154,10 @@ describe("spotlight registry", () => {
 		expect(spotlightHref("business_details")).toBe(
 			"/app/settings?tab=store&spot=business_details",
 		);
+		// Its own card, not the Pickup card above it (z8r3fdm32x).
+		expect(spotlightHref("event_venues")).toBe(
+			"/app/settings?tab=fulfilment&spot=event_venues",
+		);
 	});
 
 	test("a product-page key lands on the products LIST, not a guessed product", () => {
@@ -158,6 +166,7 @@ describe("spotlight registry", () => {
 		expect(spotlightHref("weekend_rate")).toBe(
 			"/app/products?spot=weekend_rate",
 		);
+		expect(spotlightHref("promo")).toBe("/app/products?spot=promo");
 	});
 
 	test("isSpotlightKey admits registry keys only", () => {

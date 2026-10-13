@@ -2,76 +2,78 @@ import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import {
-	ArrowRight,
-	Banknote,
-	Bell,
-	CalendarCheck,
-	CheckCircle2,
-	ChevronDown,
-	ChevronRight,
 	CreditCard,
 	ExternalLink,
-	LineChart,
-	Lock,
-	type LucideIcon,
 	MapPin,
 	MessageCircle,
 	Package,
 	Phone,
-	Printer,
-	QrCode,
+	Plus,
 	Share2,
 	Sparkles,
+	Store,
 } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
-import { useChecklistStamp } from "../hooks/useChecklistStamp";
 import type { Country } from "../../convex/lib/country";
 import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
+import { todayMytMidnight } from "../../convex/lib/fulfilmentDate";
 import { CreditMeter } from "../components/credits/credit-meter";
 import { FirstOrderCelebration } from "../components/dashboard/first-order-celebration";
 import { GreetingChecklistRow } from "../components/dashboard/greeting-checklist-row";
-import { PageHeaderSkeleton } from "../components/dashboard/page-header";
 import { ShareLinkChecklistRow } from "../components/dashboard/share-link-checklist-row";
-import {
-	type OrderStatus as AnchorStatus,
-	StatusBadge,
-} from "../components/dashboard/status-badge";
 import { StorefrontQrDialog } from "../components/dashboard/storefront-qr-dialog";
-import { TaggedShareLinks } from "../components/dashboard/tagged-share-links";
 import { WhiteGloveCard } from "../components/dashboard/white-glove-card";
+import { ActionStrip } from "../components/home/action-strip";
+import { EmptySalesCard } from "../components/home/empty-sales-card";
+import { ExceptionRows } from "../components/home/exception-rows";
+import { HomeSkeleton } from "../components/home/home-skeleton";
+import { PlanAheadCard } from "../components/home/plan-ahead-card";
+import { SalesSection } from "../components/home/sales-section";
+import {
+	type ChecklistItem,
+	ChecklistRow,
+	SetupChecklist,
+} from "../components/home/setup-checklist";
+import { ShareCard } from "../components/home/share-card";
+import { HomeGreeting } from "../components/home/store-avatar";
+import { WelcomeCard } from "../components/home/welcome-card";
 import { CountrySetupPanel } from "../components/settings/country-setup-panel";
-import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
-import { Skeleton } from "../components/ui/skeleton";
+import { useChecklistStamp } from "../hooks/useChecklistStamp";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { usePermission } from "../hooks/usePermission";
-import { MASK_PII } from "../lib/analytics-privacy";
-import {
-	formatPrice,
-	formatPriceCompact,
-	formatRelativeTime,
-} from "../lib/format";
-import {
-	type DeliveryMethod,
-	type OrderStatus,
-	resolveAnchorLabel,
-	resolveCurrentStage,
-	resolveStages,
-	type StatusLabels,
-	stageLabel,
-} from "../lib/orderStatus";
+import { creditPlacement, creditTone } from "../lib/credits-ui";
+import { type HomePeriod, parseHomePeriod } from "../lib/home-copy";
 import { storefrontUrl as buildStorefrontUrl } from "../lib/storefront-url";
 import { subscribeStepCopy } from "../lib/subscribe-step";
-import {
-	freePeriodState,
-	hasFeature,
-	hasSubscribed,
-} from "../lib/subscription";
-import { cn } from "../lib/utils";
+import { freePeriodState, hasSubscribed } from "../lib/subscription";
 
+/**
+ * Dashboard Home (z8r3fdrgzj) — sales first.
+ *
+ * This file is the STATE SWITCH and nothing else: it resolves which of the
+ * page's five shapes the store is in, assembles the setup checklist, and hands
+ * the rendering to `src/components/home/*`. It used to be 1,185 lines holding
+ * the layout for every one of those shapes inline, which is why a change to the
+ * steady-state page kept breaking onboarding.
+ *
+ * The five shapes, in the order a store meets them:
+ *   new      — nothing set up: welcome card, how it works, the checklist.
+ *   waiting  — set up, no order yet: the share card leads, sales frame empty.
+ *   first    — first order within the celebration window: the milestone.
+ *   steady   — the reference board: strip, exceptions, sales, plan ahead.
+ * plus `loading`, which paints a skeleton shaped like whichever is coming.
+ *
+ * Dark mode is deliberately out of scope here (Zaki, 12 Oct 2026) — see
+ * docs/home.md.
+ */
 export const Route = createFileRoute("/app/")({
 	component: DashboardHome,
+	validateSearch: (search: Record<string, unknown>): { p?: HomePeriod } =>
+		// Only pinned when it differs from the default, so the common URL stays
+		// clean — but it round-trips, so a refresh keeps the seller's window.
+		search.p === undefined ? {} : { p: parseHomePeriod(search.p) },
 });
 
 // Named per store country (z8r3fdbmc9) — DuitNow is a Malaysian rail; an SG
@@ -82,89 +84,30 @@ const PAYMENT_STEP_WHY: Record<Country, string> = {
 };
 
 /**
- * How long the first-order celebration stays on the dashboard after activation.
- * A transient "you're live!" moment that self-clears — no stored dismissal state
- * needed (we just compare against `retailer.activatedAt`).
+ * How long the first-order celebration stays on Home after activation. A
+ * transient "you're live!" moment that self-clears — no stored dismissal needed
+ * (we compare against `retailer.activatedAt`).
  */
 const ACTIVATION_CELEBRATION_MS = 7 * 24 * 60 * 60 * 1000;
 
-function DashboardSkeleton() {
-	return (
-		<div className="flex flex-col gap-6 lg:gap-8">
-			<PageHeaderSkeleton hasSubtitle />
-			{/* Hero section */}
-			<section className="rounded-3xl border border-border bg-card p-6">
-				<div className="flex flex-col gap-3">
-					<Skeleton className="h-3 w-24" />
-					<div className="flex items-center gap-3">
-						<Skeleton className="h-14 w-14 rounded-2xl" />
-						<Skeleton className="h-7 w-40" />
-					</div>
-					<Skeleton className="h-4 w-56" />
-					<div className="mt-2 flex gap-2">
-						<Skeleton className="h-11 flex-1 rounded-md" />
-						<Skeleton className="h-11 flex-1 rounded-md" />
-						<Skeleton className="h-11 w-11 rounded-md" />
-					</div>
-				</div>
-			</section>
-
-			{/* Stats grid */}
-			<section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-				{[0, 1, 2, 3].map((n) => (
-					<div
-						key={n}
-						className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4"
-					>
-						<Skeleton className="h-8 w-8 rounded-lg" />
-						<div className="flex flex-col gap-1.5">
-							<Skeleton className="h-7 w-10" />
-							<Skeleton className="h-3 w-16" />
-							<Skeleton className="h-3 w-20" />
-						</div>
-					</div>
-				))}
-			</section>
-
-			{/* Recent orders */}
-			<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-5">
-				<div className="flex items-center justify-between">
-					<Skeleton className="h-4 w-24" />
-					<Skeleton className="h-3 w-16" />
-				</div>
-				{[0, 1, 2].map((n) => (
-					<div
-						key={n}
-						className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-3"
-					>
-						<div className="flex flex-col gap-1.5">
-							<Skeleton className="h-4 w-20" />
-							<Skeleton className="h-3 w-32" />
-						</div>
-						<div className="flex flex-col items-end gap-1.5">
-							<Skeleton className="h-4 w-16" />
-							<Skeleton className="h-4 w-14 rounded-full" />
-						</div>
-					</div>
-				))}
-			</section>
-		</div>
-	);
-}
+/** Days of lookahead the Plan ahead strip shows. */
+const PLAN_AHEAD_DAYS = 7;
 
 function DashboardHome() {
 	const retailer = useDashboardRetailer();
-	// A teammate only sees the Insights card if they can open it.
 	const canSeeInsights = usePermission("insights").canRead;
-	const navigate = useNavigate();
+	const navigate = useNavigate({ from: "/app" });
+	const search = Route.useSearch();
+	const period: HomePeriod = parseHomePeriod(search.p);
+
 	const products = useQuery(
 		convexQuery(
 			api.products.listAll,
 			retailer ? { retailerId: retailer._id } : "skip",
 		),
 	).data;
-	// One inbox snapshot powers the whole "today strip" + attention list — the
-	// same counts seam the orders inbox subscribes to (see orders.searchOrders).
+	// One inbox snapshot powers the strip AND the stale-unpaid exception row —
+	// the same counts seam the orders inbox subscribes to.
 	const inboxSnapshot = useQuery(
 		convexQuery(
 			api.orders.searchOrders,
@@ -179,115 +122,65 @@ function DashboardHome() {
 			retailer ? { retailerId: retailer._id } : "skip",
 		),
 	).data;
-	const recentOrdersPage = useQuery(
+	const dueByDay = useQuery(
 		convexQuery(
-			api.orders.listByRetailer,
+			api.orders.countDueByDay,
 			retailer
 				? {
 						retailerId: retailer._id,
-						paginationOpts: { numItems: 5, cursor: null },
+						fromMyt: todayMytMidnight(),
+						days: PLAN_AHEAD_DAYS,
 					}
 				: "skip",
 		),
 	).data;
-	const [copied, setCopied] = useState(false);
+	const creditBalance = useQuery(
+		convexQuery(
+			api.credits.getBalance,
+			retailer
+				? { retailerId: retailer.actingAsAdmin ? retailer._id : undefined }
+				: "skip",
+		),
+	).data;
+
 	const [qrOpen, setQrOpen] = useState(false);
-	// Which "Optional extras" row is expanded (accordion — one at a time, all
-	// collapsed by default so the optional group stays compact).
-	const [openOptional, setOpenOptional] = useState<string | null>(null);
 	const { stamp: markLinkShared } = useChecklistStamp(
 		api.retailers.markLinkShared,
 	);
 
-	if (!retailer) return <DashboardSkeleton />;
-
-	const productsLoading = products === undefined;
-	const countsLoading = inboxSnapshot === undefined;
-	const recentOrdersLoading = recentOrdersPage === undefined;
-
-	// `products` determines `isNew` / `requiredDone`, which switches the entire
-	// layout (welcome banner vs. hero vs. checklist phase). Hold the skeleton until
-	// it resolves to avoid a jarring flip after first paint.
-	if (productsLoading) return <DashboardSkeleton />;
+	if (!retailer) return <HomeSkeleton />;
+	// `products` decides the whole layout (new vs waiting vs steady), so hold
+	// the skeleton until it resolves rather than flipping after first paint.
+	if (products === undefined) return <HomeSkeleton />;
 
 	const storefrontUrl = buildStorefrontUrl(retailer.slug);
+	const currency = retailer.currency ?? DEFAULT_CURRENCY;
 
-	// Copying the link or opening the QR — from anywhere on the dashboard (hero,
-	// activation banner, or the checklist share step) — is the soft "shared" proxy
-	// that stamps `linkSharedAt` and completes the share step. Fire-and-forget so a
-	// failed stamp never blocks the action; idempotent server-side.
 	function stampShare() {
 		void markLinkShared().catch(() => {
 			// ignore — the seller still copied / saw the QR
 		});
 	}
 
-	async function copy() {
-		try {
-			await navigator.clipboard.writeText(storefrontUrl);
-			setCopied(true);
-			setTimeout(() => setCopied(false), 1800);
-			stampShare();
-		} catch {
-			// ignore
-		}
-	}
-
-	function openQr() {
-		stampShare();
-		setQrOpen(true);
-	}
-
 	const hasWaPhone = Boolean(retailer.waPhone?.trim());
-	const productCount = products?.length ?? 0;
-	const hasProduct = productCount > 0;
+	const hasProduct = (products?.length ?? 0) > 0;
 	const hasPayment = (retailer.paymentMethods?.length ?? 0) > 0;
-	// Activation funnel. `activated` (first confirmed order) is the real finish
-	// line; `linkShared` is the soft "shared their link" proxy. Once activated, the
-	// share step counts as done regardless of the proxy.
 	const activatedAt = retailer.activatedAt;
 	const activated = Boolean(activatedAt);
 	const linkShared = Boolean(retailer.linkSharedAt);
-
-	// Onboarding "complete" gate: the vendor has converted from the free period
-	// to a paid plan (subscribe step). Derived from the embedded subscription —
-	// no separate stamp needed. Free stores stay `trialing` until their first
-	// invoice is paid (start-when-you-sell, z8r3fday24).
 	const subscription = retailer.subscription;
 	const subscribed = hasSubscribed(subscription);
 	const freePeriod = freePeriodState(subscription, Date.now());
-
-	// Recent-order badges share the seller's status vocabulary. Dashboard chrome
-	// is EN-only, so resolve in EN with the retailer's primary fulfilment method.
-	const statusLabels = retailer.statusLabels as StatusLabels | undefined;
-	const retailerMethod: DeliveryMethod = retailer.offerSelfCollect
-		? "self_collect"
-		: "delivery";
-	const stages = resolveStages({
-		orderFlows: retailer.orderFlows,
-		orderStages: retailer.orderStages,
-		labels: statusLabels,
-		deliveryMethod: retailerMethod,
-	});
-
-	// The Fulfilment step is shown to EVERY retailer — delivery is universal, and
-	// this is where a delivery-only seller learns pickup-only is even an option.
-	// Two paths dismiss it (reusing the existing pickupSetupSeen signal — the
-	// Fulfilment tab sets it on mount):
-	//   1. The retailer opens the Fulfilment settings tab — pickupSetupSeen flips
-	//      true, step shows as strikethrough done.
-	//   2. The retailer adds an active pickup location — hasAnyActive flips true.
 	const hasPickupLocation = pickupStatus?.hasAny ?? false;
 	const pickupSetupSeen = retailer.pickupSetupSeen ?? false;
 
-	// Step numbers are derived from position below (not hardcoded), so any
-	// conditional item being excluded auto-renumbers the rest with no gaps.
 	const checklistItems: Omit<ChecklistItem, "step">[] = [
 		{
 			key: "wa",
 			done: hasWaPhone,
 			icon: Phone,
 			title: "Add your WhatsApp number",
+			shortTitle: "WhatsApp number",
 			why: "Shoppers tap Checkout and their cart arrives as a WhatsApp message to this number. Without it, orders can't reach you.",
 			time: "~1 min",
 			cta: "Go to Settings",
@@ -295,14 +188,11 @@ function DashboardHome() {
 			tab: "whatsapp",
 		},
 		{
-			// One door, the Products page — a COLLAPSED row is a single link, so
-			// pointing it at the import route forced every tap straight into the
-			// Excel upload. The Products page is the chooser: its empty state
-			// offers "+ New product" and "Import from spreadsheet" side by side.
 			key: "product",
 			done: hasProduct,
 			icon: Package,
 			title: "Add your products",
+			shortTitle: "products",
 			why: "Add products one at a time, or import your whole catalogue from a spreadsheet in one go — you'll get both options on the Products page.",
 			time: "~5 min",
 			cta: "Add products",
@@ -313,6 +203,7 @@ function DashboardHome() {
 			done: hasPayment,
 			icon: CreditCard,
 			title: "Add payment details",
+			shortTitle: "payment details",
 			why: PAYMENT_STEP_WHY[retailer.country],
 			time: "~2 min",
 			cta: "Go to Settings",
@@ -324,9 +215,9 @@ function DashboardHome() {
 			done: linkShared || activated,
 			icon: Share2,
 			title: "Share your store link",
+			shortTitle: "store link",
 			why: "Setup is only half the job — orders start when customers can reach your store. Copy your link (or grab the QR) and put it where buyers already see you.",
 			time: "~1 min",
-			// Interactive row (copy / QR) — handled by ShareLinkChecklistRow, not a link.
 			cta: "",
 			to: "",
 		},
@@ -335,6 +226,7 @@ function DashboardHome() {
 			done: retailer.onboardingGreetingSetup ?? false,
 			icon: MessageCircle,
 			title: "Auto-reply when customers message you directly",
+			shortTitle: "auto-reply",
 			why: "Set a free greeting on your WhatsApp Business app so customers who message your personal number get your store link instantly — before you even pick up your phone.",
 			time: "~2 min",
 			cta: "",
@@ -346,6 +238,7 @@ function DashboardHome() {
 			done: pickupSetupSeen || hasPickupLocation,
 			icon: MapPin,
 			title: "Set up delivery & pickup",
+			shortTitle: "delivery & pickup",
 			why: "Delivery is on by default — buyers just type their address. Add self-collect points if you offer pickup, or switch to pickup-only. You decide how buyers get their order.",
 			time: "~2 min",
 			cta: "Go to Settings",
@@ -354,14 +247,10 @@ function DashboardHome() {
 			optional: true,
 		},
 		{
-			// The capstone: onboarding isn't "complete" until the trial vendor
-			// converts to a paid plan. `subscribed` reads off the embedded
-			// subscription (trialing → not yet; comped pilots already count).
 			key: "subscribe",
 			done: subscribed,
 			icon: Sparkles,
-			// Title, the real trial as one line, and the CTA — per free-period
-			// state, from src/lib/subscribe-step.ts (tested there).
+			shortTitle: "your plan",
 			...subscribeStepCopy(freePeriod),
 			time: "~2 min",
 			to: "/app/settings",
@@ -369,9 +258,6 @@ function DashboardHome() {
 		},
 	];
 
-	// Required steps drive the must-do path + progress; they're numbered 1..N.
-	// Optional steps (greeting, fulfilment) sit in a lighter "Optional extras"
-	// group below — never numbered, never block completion.
 	const requiredSteps: ChecklistItem[] = checklistItems
 		.filter((item) => !item.optional)
 		.map((item, i) => ({ ...item, step: i + 1 }));
@@ -380,40 +266,49 @@ function DashboardHome() {
 		.map((item) => ({ ...item, step: 0 }));
 
 	const completedCount = requiredSteps.filter((c) => c.done).length;
-	const isNew = completedCount === 0;
-
-	// Onboarding is "complete" only when every REQUIRED step is done — and the
-	// final required step is "Subscribe to a plan", so the checklist stays up
-	// (even after setup + first order) until the trial vendor converts to paid.
 	const requiredDone = requiredSteps.every((c) => c.done);
-	// First-order milestone (`activatedAt`) is a SEPARATE, transient overlay — it
-	// celebrates activation for a window regardless of subscription state, so a
-	// vendor who lands order #1 mid-trial gets the moment while still being nudged
-	// to subscribe below.
 	const showCelebration =
 		activatedAt !== undefined &&
 		Date.now() - activatedAt < ACTIVATION_CELEBRATION_MS;
 
-	const counts = inboxSnapshot?.counts;
-	const newCount = counts?.new ?? 0;
-	const dueTodayCount = counts?.dueToday ?? 0;
-	const unpaidCount = counts?.unpaid ?? 0;
-	const unpaidAmount = counts?.unpaidAmount ?? 0;
-	const currency = retailer.currency ?? DEFAULT_CURRENCY;
-	const recentOrders = recentOrdersPage?.page ?? [];
-	const anythingNeedsAttention =
-		newCount > 0 || dueTodayCount > 0 || unpaidCount > 0;
+	/** Which of the page's shapes this store is in. */
+	const phase: "new" | "waiting" | "first" | "steady" =
+		completedCount === 0
+			? "new"
+			: !activated
+				? "waiting"
+				: showCelebration
+					? "first"
+					: "steady";
 
-	// Map a checklist item to its row variant — the "share" and "greeting" steps
-	// are interactive self-contained cards, the rest are links. `onToggle` (only
-	// passed for the optional group) makes a collapsed row expand on tap instead
-	// of auto-expanding the active one.
+	const counts = inboxSnapshot?.counts;
+	const countsLoading = inboxSnapshot === undefined;
+	// The SAME rule the product card prints as "Sold out" (`app.products.index`),
+	// so the row and the list it opens can never disagree. `p.stock` does not
+	// exist on this payload — reading it made the test `(undefined ?? 0) <= 0`,
+	// which is true for every product, so the row counted the whole catalogue.
+	const outOfStock = (products ?? []).filter(
+		(p) => p.active && !p.inStock,
+	).length;
+
+	// Credits: tone decides WHERE the card goes (decision 6), so the page's
+	// layout states the urgency before the seller reads a word of it.
+	const tone =
+		creditBalance && creditBalance !== null
+			? creditTone(creditBalance.total, creditBalance.periodGrant)
+			: null;
+	const placement = tone ? creditPlacement(tone) : null;
+	const creditCard = creditBalance ? (
+		<CreditMeter variant="card" retailer={retailer} />
+	) : null;
+	const outOfCredits = tone === "out";
+
 	const renderChecklistRow = (
 		item: ChecklistItem,
 		expanded: boolean,
 		onToggle?: () => void,
 	) => {
-		if (item.key === "greeting") {
+		if (item.key === "greeting")
 			return (
 				<GreetingChecklistRow
 					key={item.key}
@@ -425,8 +320,7 @@ function DashboardHome() {
 					locale={retailer.locale}
 				/>
 			);
-		}
-		if (item.key === "share") {
+		if (item.key === "share")
 			return (
 				<ShareLinkChecklistRow
 					key={item.key}
@@ -437,7 +331,6 @@ function DashboardHome() {
 					onOpenQr={() => setQrOpen(true)}
 				/>
 			);
-		}
 		return (
 			<ChecklistRow
 				key={item.key}
@@ -448,186 +341,174 @@ function DashboardHome() {
 		);
 	};
 
+	const shareCard = (
+		<ShareCard
+			slug={retailer.slug}
+			storefrontUrl={storefrontUrl}
+			onCopy={stampShare}
+			onOpenQr={() => {
+				stampShare();
+				setQrOpen(true);
+			}}
+		/>
+	);
+
+	const checklist = requiredDone ? null : (
+		<SetupChecklist
+			requiredSteps={requiredSteps}
+			optionalSteps={optionalSteps}
+			renderRow={renderChecklistRow}
+			title={phase === "new" ? "Complete your setup" : "Finish setting up"}
+		/>
+	);
+
+	const exceptionRows =
+		phase === "steady" || phase === "first" ? (
+			<ExceptionRows
+				staleUnpaid={{
+					count: counts?.unpaidStale ?? 0,
+					amount: counts?.unpaidStaleAmount ?? 0,
+					oldestAt: counts?.unpaidStaleOldestAt ?? 0,
+				}}
+				outOfStock={outOfStock}
+				currency={currency}
+			/>
+		) : null;
+
+	const planAheadCard =
+		(phase === "steady" || phase === "first") &&
+		dueByDay &&
+		dueByDay.length > 0 ? (
+			<PlanAheadCard days={dueByDay} todayStart={todayMytMidnight()} />
+		) : null;
+
+	const salesSection = canSeeInsights ? (
+		<SalesSection
+			retailerId={retailer._id}
+			currency={currency}
+			period={period}
+			exceptions={exceptionRows}
+			planAhead={planAheadCard}
+			onPeriodChange={(next) =>
+				navigate({
+					search: next === "7d" ? {} : { p: next },
+					replace: true,
+					// The chips sit beside the hero, far down the page. Without this
+					// the router restores scroll to the top on every tap, so the
+					// seller is thrown away from the figures they just changed.
+					resetScroll: false,
+				})
+			}
+		/>
+	) : null;
+
+	const strip = (
+		<ActionStrip
+			loading={countsLoading}
+			newCount={counts?.new ?? 0}
+			dueTodayCount={counts?.dueToday ?? 0}
+			unpaidCount={counts?.unpaid ?? 0}
+			unpaidAmount={counts?.unpaidAmount ?? 0}
+			currency={currency}
+			paused={outOfCredits}
+		/>
+	);
+
 	return (
-		<div className="flex flex-col gap-6 lg:gap-8">
-			{/* Desktop greeting header — leads with the store's own logo so the
-			    dashboard feels like the vendor's, not generic chrome. */}
-			<div className="hidden items-center gap-4 border-b border-border pb-5 lg:flex">
-				<StoreAvatar
-					retailer={retailer}
-					className="size-14 rounded-2xl text-xl"
-				/>
-				<div className="flex min-w-0 flex-col gap-0.5">
-					<h1 className="truncate font-heading text-2xl font-extrabold leading-tight tracking-tight">
-						{timeGreeting()}, {retailer.storeName}
-					</h1>
-					<p className="text-sm text-muted-foreground">{formatTodayLong()}</p>
-				</div>
-			</div>
-			{/* Greeting header — mobile. */}
-			<div className="flex items-center justify-between gap-3 lg:hidden">
-				<div className="flex min-w-0 flex-col">
-					<h2 className="truncate font-heading text-[22px] font-extrabold leading-tight tracking-tight">
-						{timeGreeting()}, {retailer.storeName}
-					</h2>
-					<span className="text-[13px] text-muted-foreground">
-						{formatTodayLong()}
-					</span>
-				</div>
-				<Link
-					to="/app/settings"
-					search={{ tab: "store" as const }}
-					aria-label="Store settings"
-				>
-					<StoreAvatar retailer={retailer} className="size-10 rounded-2xl" />
-				</Link>
-			</div>
+		/*
+		 * Desktop gets a READING WIDTH, not the full window (z8r3fdnt5u, absorbed
+		 * here). Stretched edge to edge, the action strip's three cells grew to
+		 * ~470px each around a two-digit number, and the hero's daily bars spread
+		 * across ~1090px — a chart so wide that six quiet days read as a broken
+		 * axis rather than a quiet week. The three insight cards still go 3-up
+		 * inside it, which is the rail the board draws.
+		 */
+		<div className="mx-auto flex w-full max-w-5xl flex-col gap-6 lg:gap-8">
+			<HomeGreeting
+				retailer={retailer}
+				actions={
+					<>
+						<Button asChild variant="outline" size="sm" className="h-10">
+							<a
+								href={`/${retailer.slug}`}
+								target="_blank"
+								rel="noopener noreferrer"
+							>
+								<ExternalLink className="size-4" aria-hidden="true" />
+								Open store
+							</a>
+						</Button>
+						<Button asChild size="sm" className="h-10">
+							<Link to="/app/checkout">
+								<Plus className="size-4" aria-hidden="true" />
+								New order
+							</Link>
+						</Button>
+					</>
+				}
+			/>
+
+			{/* Out of credits: above everything, because nothing below it can be
+			    acted on until it is fixed. */}
+			{placement === "top" ? creditCard : null}
+
 			<WhiteGloveCard slug={retailer.slug} />
-			{/* Above everything the seller does daily, because a wrong bank
-			    account or pickup address costs real money and they may have
-			    switched country and closed the tab. Renders nothing for a store
-			    that has never switched (86eyqgujv). */}
+			{/* Above everything the seller does daily, because a wrong country
+			    makes every price and rail wrong. */}
 			<CountrySetupPanel
 				variant="banner"
 				onGoToFix={(tab, key) =>
 					navigate({ to: "/app/settings", search: { tab, fix: key } })
 				}
 			/>
-			{/* Welcome banner — only for brand-new users */}
-			{isNew ? (
-				<section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-accent/20 via-accent/10 to-background p-6 lg:max-w-2xl">
-					<div
-						className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-accent/20 blur-3xl"
-						aria-hidden="true"
-					/>
-					<div className="relative flex flex-col gap-2">
-						<p className="text-xs font-semibold uppercase tracking-widest text-accent">
-							Welcome to Kedaipal 👋
-						</p>
-						<h2 className="text-2xl font-bold leading-snug">
-							Let's get your store ready
-						</h2>
-						<p className="text-sm text-muted-foreground">
-							Your storefront is live at{" "}
-							<span className="font-mono text-foreground">
-								kedaipal.com/{retailer.slug}
-							</span>
-							. Complete the steps below and you'll be accepting WhatsApp orders
-							in minutes.
-						</p>
-					</div>
-				</section>
-			) : (
-				/* Today strip — three tappable counts that answer the morning
-				   questions (what's due, what's new, who hasn't paid) and deep-link
-				   into the pre-filtered inbox. Due-today gets the hero cell. */
-				<section className="grid grid-cols-3 gap-2 lg:max-w-2xl">
-					<Link
-						to="/app/orders"
-						search={{ fwin: "today" as const }}
-						className="flex flex-col gap-0.5 rounded-2xl bg-foreground px-3.5 py-3 text-background transition-opacity hover:opacity-95"
-					>
-						{countsLoading ? (
-							<Skeleton className="h-7 w-8 bg-background/20" />
-						) : (
-							<span className="font-heading text-[22px] font-extrabold leading-tight text-accent">
-								{dueTodayCount}
-							</span>
-						)}
-						<span className="text-[11px] font-semibold text-background/75">
-							Due today
-						</span>
-					</Link>
-					<Link
-						to="/app/orders"
-						search={{ bucket: ["new" as const] }}
-						className="flex flex-col gap-0.5 rounded-2xl border border-border bg-card px-3.5 py-3 transition-colors hover:bg-accent/5"
-					>
-						{countsLoading ? (
-							<Skeleton className="h-7 w-8" />
-						) : (
-							<span
-								className={`font-heading text-[22px] font-extrabold leading-tight ${newCount > 0 ? "text-amber-700 dark:text-amber-400" : ""}`}
-							>
-								{newCount}
-							</span>
-						)}
-						<span className="text-[11px] font-semibold text-muted-foreground">
-							New orders
-						</span>
-					</Link>
-					<Link
-						to="/app/orders"
-						search={{ pay: ["unpaid", "claimed"] as ("unpaid" | "claimed")[] }}
-						className="flex flex-col gap-0.5 rounded-2xl border border-border bg-card px-3.5 py-3 transition-colors hover:bg-accent/5"
-					>
-						{countsLoading ? (
-							<Skeleton className="h-7 w-8" />
-						) : (
-							<span className="font-heading text-[22px] font-extrabold leading-tight">
-								{unpaidCount}
-							</span>
-						)}
-						<span className="text-[11px] font-semibold text-muted-foreground">
-							Unpaid
-						</span>
-					</Link>
-				</section>
-			)}
 
-			{/* Credits (T3) — the quick look, right under today's counts because
-			    it answers the same question ("can I work today's orders?"). The
-			    same meter Settings → Billing shows, with a way in; a teammate
-			    without the Credits grant sees nothing (the shell banner still
-			    tells them if the store is locked). */}
-			<div className="lg:max-w-2xl">
-				<CreditMeter variant="card" retailer={retailer} />
-			</div>
+			{phase === "new" ? <WelcomeCard slug={retailer.slug} /> : null}
 
-			{/* Share card — the dashed "ticket" from the landing page. Always the
-			    top verb for a live store: put the link where buyers already are. */}
-			{!isNew ? (
-				<section className="flex flex-col gap-3 rounded-2xl border-2 border-dashed border-foreground/20 bg-card p-4 lg:max-w-2xl">
-					<div className="flex items-center justify-between gap-3">
-						<div className="flex min-w-0 flex-col gap-0.5">
-							<span className="text-[11px] font-bold uppercase tracking-[0.08em] text-muted-foreground">
-								Your store link
-							</span>
-							<span className="truncate font-mono text-sm font-medium">
-								kedaipal.com/
-								<span className="kp-highlight">{retailer.slug}</span>
-							</span>
-						</div>
-						<Button
-							variant="secondary"
-							size="icon"
-							className="size-11 shrink-0 rounded-xl"
-							onClick={openQr}
-							aria-label="Show QR code"
-						>
-							<QrCode className="size-5" />
-						</Button>
-					</div>
-					<div className="flex gap-2">
-						<Button onClick={copy} className="h-11 flex-1">
-							{copied ? "Copied!" : "Copy link"}
-						</Button>
-						<Button asChild variant="outline" className="h-11 flex-1">
-							<a
-								href={`/${retailer.slug}`}
-								target="_blank"
-								rel="noopener noreferrer"
-							>
-								<ExternalLink className="size-4" />
-								Open live
-							</a>
-						</Button>
-					</div>
-					{/* Campaign-tagged variants of the same link (86eyq0eq9) — sits
-					    with the link actions, never on a QR surface. */}
-					<TaggedShareLinks storefrontUrl={storefrontUrl} onCopy={stampShare} />
-				</section>
+			{phase === "first" && activatedAt !== undefined ? (
+				<FirstOrderCelebration
+					slug={retailer.slug}
+					storeName={retailer.storeName}
+				/>
 			) : null}
+
+			{phase !== "new" && phase !== "waiting" ? strip : null}
+			{placement === "under-strip" ? creditCard : null}
+
+			{/* The share card LEADS while the store is waiting for its first order
+			    — at that moment it is the only thing that can start one. */}
+			{phase === "waiting" ? shareCard : null}
+
+			{/* Before the first order the checklist IS the page's job, so it leads.
+			    Once money exists, sales lead and setup follows — the order the
+			    Onboarding-3 board draws. */}
+			{phase === "new" || phase === "waiting" ? checklist : null}
+
+			{phase === "waiting" ? <EmptySalesCard /> : null}
+			{phase === "new" || phase === "waiting" ? null : salesSection}
+			{/* Without the insights grant there is no Sales section to host the
+			    rail, so the operational half still renders on its own. */}
+			{!canSeeInsights && phase !== "new" && phase !== "waiting" ? (
+				<>
+					{exceptionRows}
+					{planAheadCard}
+				</>
+			) : null}
+			{phase === "new" || phase === "waiting" ? null : checklist}
+
+			<section className="flex flex-col gap-3">
+				<h2 className="flex items-center gap-2 font-heading text-lg font-extrabold tracking-tight lg:text-xl">
+					<span className="flex size-[26px] shrink-0 items-center justify-center rounded-lg bg-accent/15 text-accent-emphasis">
+						<Store className="size-3.5" aria-hidden="true" />
+					</span>
+					Your store
+				</h2>
+				{/* Same rule as the insight row above — the credit card and the
+				    share card end level. */}
+				<div className="grid gap-4 lg:grid-cols-[repeat(auto-fit,minmax(min(320px,100%),1fr))]">
+					{placement === "store" ? creditCard : null}
+					{phase === "waiting" ? null : shareCard}
+				</div>
+			</section>
 
 			<StorefrontQrDialog
 				open={qrOpen}
@@ -635,551 +516,6 @@ function DashboardHome() {
 				storeName={retailer.storeName}
 				storefrontUrl={storefrontUrl}
 			/>
-
-			{/* Promote your store — self-serve A4 QR poster. Sits with the other
-			    share actions in both the new-user and returning-user layouts. */}
-			<Link
-				to="/app/poster"
-				className="flex items-center gap-3 rounded-2xl border border-border bg-card px-3.5 py-3 transition-colors hover:bg-accent/5 lg:max-w-2xl"
-			>
-				<span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent">
-					<Printer className="size-5" aria-hidden="true" />
-				</span>
-				<span className="flex min-w-0 flex-1 flex-col gap-0.5">
-					<span className="text-sm font-semibold">Promote your store</span>
-					<span className="text-xs text-muted-foreground">
-						Print a free A4 poster with QR codes for counter and online orders
-					</span>
-				</span>
-				<ArrowRight className="size-4 shrink-0 text-muted-foreground" />
-			</Link>
-
-			{/* Insights — the "what actually sells / how much did I make" surface.
-			    Pro feature; Starter still sees the card (lock-badged) as the upsell.
-			    A TEAMMATE without the insights grant doesn't: the sidebar already
-			    hides it, and a card that routes them into the "ask the owner" wall
-			    is the same destination answering two different ways (86exr91r4). */}
-			{canSeeInsights ? (
-				<Link
-					to="/app/insights"
-					className="flex items-center gap-3 rounded-2xl border border-border bg-card px-3.5 py-3 transition-colors hover:bg-accent/5 lg:max-w-2xl"
-				>
-					<span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent">
-						<LineChart className="size-5" aria-hidden="true" />
-					</span>
-					<span className="flex min-w-0 flex-1 flex-col gap-0.5">
-						<span className="flex items-center gap-2">
-							<span className="text-sm font-semibold">Insights</span>
-							{hasFeature(retailer.subscription, "insights") ? null : (
-								<span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
-									<Lock className="size-2.5" />
-									Pro
-								</span>
-							)}
-						</span>
-						<span className="text-xs text-muted-foreground">
-							Revenue, best sellers and trends at a glance
-						</span>
-					</span>
-					<ArrowRight className="size-4 shrink-0 text-muted-foreground" />
-				</Link>
-			) : null}
-
-			{/* How it works — only for brand-new users */}
-			{isNew ? (
-				<section className="flex flex-col gap-3 lg:max-w-2xl">
-					<h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-						How Kedaipal works
-					</h3>
-					<div className="grid grid-cols-3 gap-2">
-						{[
-							{ icon: Share2, label: "You share your store link" },
-							{ icon: MessageCircle, label: "Shoppers order via WhatsApp" },
-							{ icon: CheckCircle2, label: "You confirm & update status" },
-						].map((step, i) => (
-							<div
-								key={step.label}
-								className="flex flex-col items-center gap-2 rounded-2xl border border-border bg-card p-3 text-center"
-							>
-								<div className="flex h-9 w-9 items-center justify-center rounded-full bg-accent/10 text-accent">
-									<step.icon className="size-4" />
-								</div>
-								<p className="text-[11px] font-medium leading-tight text-foreground">
-									{i + 1}. {step.label}
-								</p>
-							</div>
-						))}
-					</div>
-				</section>
-			) : null}
-
-			{/* First-order milestone — a transient overlay, independent of the
-			    checklist (a vendor can land order #1 while still mid-trial).
-			    Constrained to match the primary column above (today strip / share /
-			    needs-attention are all lg:max-w-2xl). */}
-			{showCelebration ? (
-				<div className="lg:max-w-2xl">
-					<FirstOrderCelebration
-						slug={retailer.slug}
-						storeName={retailer.storeName}
-					/>
-				</div>
-			) : null}
-
-			{/* Setup checklist — stays until every required step (incl. "Subscribe
-			    to a plan") is done, i.e. onboarding is complete. */}
-			{!requiredDone ? (
-				<section className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-5 lg:max-w-2xl">
-					<div className="flex items-center justify-between">
-						<h3 className="font-semibold">
-							{isNew ? "Complete your setup" : "Finish setting up"}
-						</h3>
-						<span className="text-xs text-muted-foreground">
-							{completedCount}/{requiredSteps.length} done
-						</span>
-					</div>
-					<div
-						className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
-						aria-hidden="true"
-					>
-						<div
-							className="h-full bg-accent transition-all duration-500"
-							style={{
-								width: `${(completedCount / requiredSteps.length) * 100}%`,
-							}}
-						/>
-					</div>
-					{/* Required path — numbered, with the active step auto-expanded. */}
-					<ul className="flex flex-col gap-3">
-						{requiredSteps.map((item, i) =>
-							renderChecklistRow(
-								item,
-								!item.done && requiredSteps.slice(0, i).every((c) => c.done),
-							),
-						)}
-					</ul>
-
-					{/* Optional extras — lighter group, collapsed, tap-to-expand. */}
-					{optionalSteps.length > 0 ? (
-						<div className="flex flex-col gap-3 border-t border-border pt-4">
-							<div className="flex items-center justify-between">
-								<h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-									Optional extras
-								</h4>
-								<span className="text-[11px] text-muted-foreground">
-									Set up anytime
-								</span>
-							</div>
-							<ul className="flex flex-col gap-2">
-								{optionalSteps.map((item) =>
-									renderChecklistRow(item, openOptional === item.key, () =>
-										setOpenOptional((prev) =>
-											prev === item.key ? null : item.key,
-										),
-									),
-								)}
-							</ul>
-						</div>
-					) : null}
-				</section>
-			) : null}
-
-			{/* Needs attention — actionable rows, each with a destination. Rows only
-			    render when there's something to act on; the whole section hides
-			    when the seller is caught up. */}
-			{!isNew && !countsLoading && anythingNeedsAttention ? (
-				<section className="flex flex-col gap-2 lg:max-w-2xl">
-					<div className="flex items-center justify-between">
-						<h3 className="font-heading text-base font-extrabold">
-							Needs attention
-						</h3>
-						<Link
-							to="/app/orders"
-							className="text-[13px] font-semibold text-accent-emphasis hover:underline"
-						>
-							Orders →
-						</Link>
-					</div>
-					{newCount > 0 ? (
-						<AttentionRow
-							to="/app/orders"
-							search={{ bucket: ["new" as const] }}
-							icon={Bell}
-							tint="bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-400"
-							title={`${newCount} new order${newCount === 1 ? "" : "s"} to confirm`}
-							sub="From your WhatsApp storefront"
-						/>
-					) : null}
-					{dueTodayCount > 0 ? (
-						<AttentionRow
-							to="/app/orders"
-							search={{ fwin: "today" as const }}
-							icon={CalendarCheck}
-							tint="bg-accent/15 text-accent-emphasis"
-							title={`${dueTodayCount} order${dueTodayCount === 1 ? "" : "s"} due today`}
-							sub="See what to prepare first"
-						/>
-					) : null}
-					{unpaidCount > 0 ? (
-						<AttentionRow
-							to="/app/orders"
-							search={{
-								pay: ["unpaid", "claimed"] as ("unpaid" | "claimed")[],
-							}}
-							icon={Banknote}
-							tint="bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400"
-							title={`${unpaidCount} unpaid order${unpaidCount === 1 ? "" : "s"}`}
-							sub={`${formatPriceCompact(unpaidAmount, currency)} outstanding`}
-						/>
-					) : null}
-				</section>
-			) : null}
-
-			{/* Recent orders */}
-			{!isNew ? (
-				<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-5">
-					<div className="flex items-center justify-between">
-						<h3 className="font-heading text-base font-extrabold">
-							Recent orders
-						</h3>
-						<Link
-							to="/app/orders"
-							className="text-[13px] font-semibold text-accent-emphasis hover:underline"
-						>
-							View all →
-						</Link>
-					</div>
-					{recentOrdersLoading ? (
-						<RecentOrdersSkeleton />
-					) : recentOrders.length === 0 ? (
-						<EmptyOrders hasProduct={hasProduct} />
-					) : (
-						<ul className="flex flex-col gap-2">
-							{recentOrders.map((order) => (
-								<li key={order._id}>
-									<Link
-										to="/app/orders/$shortId"
-										params={{ shortId: order.shortId }}
-										className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-3 transition-colors hover:bg-accent/5"
-									>
-										<div className="flex min-w-0 flex-col gap-0.5">
-											<p
-												{...MASK_PII}
-												className="truncate text-sm font-semibold"
-											>
-												{order.customer?.name ?? "Anonymous"}
-											</p>
-											<p className="truncate text-xs text-muted-foreground">
-												<span className="font-mono">#{order.shortId}</span>
-												{" · "}
-												{formatRelativeTime(order.createdAt)}
-											</p>
-										</div>
-										<div className="flex shrink-0 flex-col items-end gap-1 lg:flex-row lg:items-center lg:gap-3">
-											<p className="text-sm font-semibold tabular-nums">
-												{formatPrice(order.total, order.currency)}
-											</p>
-											<StatusBadge
-												status={order.status as AnchorStatus}
-												label={(() => {
-													const cs = resolveCurrentStage(
-														{
-															status: order.status,
-															currentStageId: order.currentStageId,
-														},
-														stages,
-													);
-													return cs
-														? stageLabel(cs, "en")
-														: resolveAnchorLabel(order.status as OrderStatus, {
-																orderFlows: retailer.orderFlows,
-																stages,
-																labels: statusLabels,
-																deliveryMethod: (order.deliveryMethod ??
-																	"delivery") as DeliveryMethod,
-																locale: "en",
-															});
-												})()}
-											/>
-										</div>
-									</Link>
-								</li>
-							))}
-						</ul>
-					)}
-				</section>
-			) : null}
 		</div>
-	);
-}
-
-type SettingsTab = "store" | "whatsapp" | "payments" | "fulfilment" | "billing";
-
-export type ChecklistItem = {
-	key: string;
-	step: number;
-	done: boolean;
-	icon: LucideIcon;
-	title: string;
-	why: string;
-	time: string;
-	cta: string;
-	to: string;
-	tab?: SettingsTab;
-	/**
-	 * Optional secondary action shown beneath the primary CTA (e.g. "add one"
-	 * alongside the recommended bulk import). Only rendered in the expanded row.
-	 */
-
-	/** Renders an "Optional" pill so the seller knows they can skip. */
-	optional?: boolean;
-};
-
-function ChecklistRow({
-	item,
-	expanded,
-	onToggle,
-}: {
-	item: ChecklistItem;
-	expanded: boolean;
-	/** When provided (optional group), a collapsed row expands on tap instead of
-	 * navigating; the leading badge becomes a dot + a chevron is shown. */
-	onToggle?: () => void;
-}) {
-	const Icon = item.icon;
-
-	if (item.done) {
-		return (
-			// min-h matches the two-line pending rows (uniform-cards rule).
-			<li className="flex min-h-[4.125rem] items-center gap-3 rounded-xl border border-border bg-muted/30 px-4 py-3">
-				<div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent text-accent-foreground">
-					<CheckIcon />
-				</div>
-				<p className="flex-1 text-sm font-medium text-muted-foreground line-through">
-					{item.title}
-				</p>
-				<span className="text-xs text-muted-foreground">Done</span>
-			</li>
-		);
-	}
-
-	if (expanded) {
-		return (
-			<li className="flex flex-col gap-3 rounded-xl border-2 border-accent/30 bg-accent/5 p-4">
-				<div className="flex items-start gap-3">
-					<div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/15 text-accent">
-						<Icon className="size-4" />
-					</div>
-					<div className="flex-1">
-						<div className="flex items-center gap-2">
-							{item.optional ? (
-								<span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
-									Optional
-								</span>
-							) : (
-								<span className="text-[10px] font-bold uppercase tracking-wider text-accent">
-									Step {item.step}
-								</span>
-							)}
-							<span className="text-[10px] text-muted-foreground">
-								{item.time}
-							</span>
-						</div>
-						<p className="mt-0.5 text-sm font-semibold">{item.title}</p>
-						<p className="mt-1 text-xs text-muted-foreground leading-relaxed">
-							{item.why}
-						</p>
-					</div>
-				</div>
-				<Link to={item.to} search={item.tab ? { tab: item.tab } : undefined}>
-					<Button size="sm" className="h-11 w-full gap-2">
-						{item.cta}
-						<ArrowRight className="size-3.5" />
-					</Button>
-				</Link>
-			</li>
-		);
-	}
-
-	// Optional group: collapsed row is a tap-to-expand toggle (no number, chevron).
-	if (onToggle) {
-		return (
-			<li>
-				<button
-					type="button"
-					onClick={onToggle}
-					className="flex w-full items-center gap-3 rounded-xl border border-border bg-background px-4 py-3 text-left transition-colors hover:bg-accent/5"
-				>
-					<div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
-						<Icon className="size-3" />
-					</div>
-					<div className="flex-1">
-						<p className="text-sm font-medium">{item.title}</p>
-						<p className="text-xs text-muted-foreground">{item.time}</p>
-					</div>
-					<ChevronDown className="size-4 shrink-0 text-muted-foreground" />
-				</button>
-			</li>
-		);
-	}
-
-	// Required group: collapsed row navigates straight to its destination.
-	return (
-		<li>
-			<Link
-				to={item.to}
-				search={item.tab ? { tab: item.tab } : undefined}
-				className="block"
-			>
-				<div className="flex items-center gap-3 rounded-xl border border-border bg-background px-4 py-3 transition-colors hover:bg-accent/5">
-					<div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 border-border bg-background text-[10px] font-bold text-muted-foreground">
-						{item.step}
-					</div>
-					<div className="flex-1">
-						<p className="text-sm font-medium">{item.title}</p>
-						<p className="text-xs text-muted-foreground">{item.time}</p>
-					</div>
-					<ArrowRight className="size-4 shrink-0 text-muted-foreground" />
-				</div>
-			</Link>
-		</li>
-	);
-}
-
-/** Greeting keyed to the seller's local clock (MYT in practice). */
-/** Store logo when set, else the store initial on the brand navy tile. */
-function StoreAvatar({
-	retailer,
-	className,
-}: {
-	retailer: { logoUrl?: string; storeName: string };
-	className?: string;
-}) {
-	return (
-		<span
-			className={cn(
-				"flex shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-foreground font-heading text-[15px] font-extrabold text-background",
-				className,
-			)}
-			aria-hidden="true"
-		>
-			<AppImage
-				src={retailer.logoUrl}
-				alt=""
-				aspect="size-full"
-				fallback={
-					<span className="flex h-full w-full items-center justify-center">
-						{retailer.storeName.charAt(0).toUpperCase()}
-					</span>
-				}
-			/>
-		</span>
-	);
-}
-
-function timeGreeting(now: Date = new Date()): string {
-	const h = now.getHours();
-	if (h < 12) return "Good morning";
-	if (h < 18) return "Good afternoon";
-	return "Good evening";
-}
-
-function formatTodayLong(now: Date = new Date()): string {
-	return new Intl.DateTimeFormat("en-MY", {
-		weekday: "long",
-		day: "numeric",
-		month: "long",
-	}).format(now);
-}
-
-/** One actionable "needs attention" row: icon, what, where it takes you. */
-function AttentionRow({
-	to,
-	search,
-	icon: Icon,
-	tint,
-	title,
-	sub,
-}: {
-	to: string;
-	search?: Record<string, unknown>;
-	icon: LucideIcon;
-	tint: string;
-	title: string;
-	sub: string;
-}) {
-	return (
-		<Link
-			to={to}
-			search={search}
-			className="flex items-center gap-3 rounded-2xl border border-border bg-card px-3.5 py-3 transition-colors hover:bg-accent/5"
-		>
-			<span
-				className={`flex size-10 shrink-0 items-center justify-center rounded-xl ${tint}`}
-			>
-				<Icon className="size-5" aria-hidden="true" />
-			</span>
-			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
-				<span className="truncate text-sm font-semibold">{title}</span>
-				<span className="truncate text-xs text-muted-foreground">{sub}</span>
-			</span>
-			<ChevronRight
-				className="size-4.5 shrink-0 text-muted-foreground/50"
-				aria-hidden="true"
-			/>
-		</Link>
-	);
-}
-
-function RecentOrdersSkeleton() {
-	return (
-		<ul className="flex flex-col gap-2">
-			{[0, 1, 2].map((n) => (
-				<li
-					key={n}
-					className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-3"
-				>
-					<div className="flex min-w-0 flex-col gap-1.5">
-						<Skeleton className="h-4 w-20" />
-						<Skeleton className="h-3 w-32" />
-					</div>
-					<div className="flex shrink-0 flex-col items-end gap-1 lg:flex-row lg:items-center lg:gap-3">
-						<Skeleton className="h-4 w-16" />
-						<Skeleton className="h-4 w-14 rounded-full" />
-					</div>
-				</li>
-			))}
-		</ul>
-	);
-}
-
-function EmptyOrders({ hasProduct }: { hasProduct: boolean }) {
-	return (
-		<div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border px-4 py-8 text-center">
-			<p className="text-sm font-medium">No orders yet</p>
-			<p className="max-w-xs text-xs text-muted-foreground">
-				{hasProduct
-					? "Share your storefront link to start receiving orders via WhatsApp."
-					: "Add a product first, then share your storefront link."}
-			</p>
-		</div>
-	);
-}
-
-function CheckIcon() {
-	return (
-		<svg
-			xmlns="http://www.w3.org/2000/svg"
-			viewBox="0 0 20 20"
-			fill="currentColor"
-			className="h-3 w-3"
-			aria-hidden="true"
-		>
-			<path
-				fillRule="evenodd"
-				d="M16.704 5.29a1 1 0 010 1.42l-8 8a1 1 0 01-1.42 0l-4-4a1 1 0 011.42-1.42L8 12.59l7.29-7.3a1 1 0 011.414 0z"
-				clipRule="evenodd"
-			/>
-		</svg>
 	);
 }

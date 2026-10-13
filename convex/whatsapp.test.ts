@@ -15,6 +15,17 @@ function setup() {
 	return t;
 }
 
+/**
+ * A stored screenshot for a payment claim. Proof is mandatory on a first claim
+ * (z8r3fdnpxf), so a test about something else — an email, a WhatsApp alert, a
+ * lock — still has to attach one for the claim to land at all.
+ */
+async function storeProof(t: ReturnType<typeof setup>): Promise<string> {
+	return await t.run((ctx) =>
+		ctx.storage.store(new Blob(["png"], { type: "image/png" })),
+	);
+}
+
 /** Resolve an order's buyer tracking token from its shortId (see orders.test.ts). */
 async function tk(
 	t: ReturnType<typeof setup>,
@@ -1765,6 +1776,7 @@ describe("seller WhatsApp order alerts (86eyhw9zy)", () => {
 		await t.mutation(api.orders.claimPayment, {
 			token: await tk(t, shortId),
 			reference: "MBB1234",
+			proofStorageId: await storeProof(t),
 		});
 		const jobs = await t.run((ctx) =>
 			ctx.db.system.query("_scheduled_functions").collect(),

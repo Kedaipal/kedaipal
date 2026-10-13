@@ -85,12 +85,17 @@ function mockQueries({
 	invoices = [],
 	gateway = GATEWAY_OFF,
 	creditPurchases = [],
+	creditBalance,
 }: {
 	isAdmin: boolean;
 	supportWa?: string | null;
 	invoices?: unknown[];
 	/** creditPurchases.myPurchases — the paid top-ups (Credits T2). */
 	creditPurchases?: unknown[];
+	/** credits.getBalance. `null` = this store has no credits at all — an
+	 * unmetered admin store (z8r3fdp4er) or a teammate without the grant.
+	 * Omitted = still loading. */
+	creditBalance?: unknown;
 	/** billingGatewayAvailable answer. Defaults to what the server returns with
 	 * no HitPay credentials (rails off, list pricing); `null` = still loading. */
 	gateway?: Gateway | null;
@@ -102,6 +107,7 @@ function mockQueries({
 		supportWa: getFunctionName(api.contact.supportWhatsapp),
 		gateway: getFunctionName(api.subscriptionPayments.billingGatewayAvailable),
 		creditPurchases: getFunctionName(api.creditPurchases.myPurchases),
+		creditBalance: getFunctionName(api.credits.getBalance),
 	};
 	vi.mocked(useQuery).mockImplementation(((opts: {
 		__fn: FunctionReference<"query">;
@@ -115,6 +121,7 @@ function mockQueries({
 			if (name === NAME.supportWa) return supportWa ?? undefined;
 			if (name === NAME.gateway) return gateway ?? undefined;
 			if (name === NAME.creditPurchases) return creditPurchases;
+			if (name === NAME.creditBalance) return creditBalance;
 			return undefined;
 		})();
 		return { data, isPending: false };
@@ -208,6 +215,57 @@ describe("BillingTab admin plan suppression", () => {
 		expect(screen.getByText("Current plan")).toBeTruthy();
 		expect(screen.getByText("Past due")).toBeTruthy();
 		expect(screen.queryByText("Admin account")).toBeNull();
+	});
+});
+
+describe("BillingTab credits (z8r3fdp4er)", () => {
+	/** A metered store's balance — only the fields the tab's own branches read. */
+	const BALANCE = {
+		plan: 180,
+		purchased: 0,
+		total: 180,
+		periodKey: "2026-10",
+		periodGrant: 200,
+		regime: "monthly",
+		nextGrant: 200,
+		refreshesAt: Date.now() + 86400000,
+		nextExpiry: null,
+		exhaustedAt: null,
+		sellerRefundsLeft: 10,
+		customGrant: false,
+		ordersThisPeriod: 20,
+		lockExempt: null,
+	};
+
+	it("an UNMETERED store gets no credit activity card", () => {
+		// An admin's own store has no credit account, so `getBalance` is null
+		// and the ledger below it would only ever say "Nothing yet".
+		mockQueries({ isAdmin: true, creditBalance: null });
+		render(<BillingTab retailer={retailer()} />);
+		expect(screen.getByText("Admin account")).toBeTruthy();
+		expect(screen.queryByText("Credit activity")).toBeNull();
+	});
+
+	it("a teammate without the Credits grant gets no empty card either", () => {
+		viewer.role = "member";
+		mockQueries({ isAdmin: false, creditBalance: null });
+		render(<BillingTab retailer={retailer()} />);
+		expect(screen.queryByText("Credit activity")).toBeNull();
+	});
+
+	it("a metered store still gets it", () => {
+		mockQueries({ isAdmin: false, creditBalance: BALANCE });
+		render(<BillingTab retailer={retailer()} />);
+		expect(screen.getByText("Credit activity")).toBeTruthy();
+	});
+
+	it("renders while the balance is still loading, so it doesn't pop in", () => {
+		// `undefined` is the read in flight, not "no credits" — hiding on it
+		// too made every seller's card appear after load instead of showing
+		// the skeleton the card owns (PR #343 review).
+		mockQueries({ isAdmin: false, creditBalance: undefined });
+		render(<BillingTab retailer={retailer()} />);
+		expect(screen.getByText("Credit activity")).toBeTruthy();
 	});
 });
 
@@ -407,18 +465,16 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 		mockQueries({ isAdmin: false });
 		render(
 			<BillingTab
-				retailer={
-					retailer({
-						subscription: {
-							plan: "pro",
-							status: "active",
-							comped: false,
-							caps: { orderCap: 500, userCap: 3, broadcastQuota: 0 },
-							active: true,
-							frozen: false,
-						},
-					} as unknown as Partial<Retailer>)
-				}
+				retailer={retailer({
+					subscription: {
+						plan: "pro",
+						status: "active",
+						comped: false,
+						caps: { orderCap: 500, userCap: 3, broadcastQuota: 0 },
+						active: true,
+						frozen: false,
+					},
+				} as unknown as Partial<Retailer>)}
 			/>,
 		);
 		expect(screen.getByText("Pro")).toBeTruthy();
@@ -456,20 +512,22 @@ describe("BillingTab self-serve + auto-renewal gating (86eyb6z4r)", () => {
 		const base = trialing();
 		render(
 			<BillingTab
-				retailer={{
-					...base,
-					subscription: {
-						...base.subscription,
-						autoRenew: {
-							method: "card",
-							methodLabel: "Visa ·· 4242",
-							failedAttempts: 0,
-							failing: false,
-							stopped: true,
-							confirming: false,
+				retailer={
+					{
+						...base,
+						subscription: {
+							...base.subscription,
+							autoRenew: {
+								method: "card",
+								methodLabel: "Visa ·· 4242",
+								failedAttempts: 0,
+								failing: false,
+								stopped: true,
+								confirming: false,
+							},
 						},
-					},
-				} as Retailer}
+					} as Retailer
+				}
 			/>,
 		);
 		expect(screen.getByText(/we'll write your invoice/)).toBeTruthy();
@@ -561,6 +619,10 @@ describe("BillingTab comp accounts (z8r3fdeub2)", () => {
 	const DAY = 24 * 60 * 60 * 1000;
 	const comped = (comp?: Record<string, unknown>) =>
 		retailer({
+			// A real comp carries BOTH: `comped` on the subscription and
+			// `fullAccess` on the payload (`storeHasFullAccess`). The card keys
+			// on the second — see `failSafe` below for why.
+			fullAccess: true,
 			subscription: {
 				plan: "pro",
 				status: "active",
@@ -571,6 +633,24 @@ describe("BillingTab comp accounts (z8r3fdeub2)", () => {
 					userCap: 1_000_000_000,
 					broadcastQuota: 500,
 				},
+				active: true,
+				frozen: false,
+			},
+		} as unknown as Partial<Retailer>);
+
+	/**
+	 * A store with NO SUBSCRIPTION ROW. `resolveAccess` reports `comped: true`
+	 * for it so a data fault can never lock a seller out — but it stays
+	 * METERED, so it is the one "comped-looking" store that really does have a
+	 * monthly limit and a balance. No `fullAccess`.
+	 */
+	const failSafe = () =>
+		retailer({
+			subscription: {
+				plan: "pro",
+				status: "active",
+				comped: true,
+				caps: { orderCap: 200, userCap: 3, broadcastQuota: 100 },
 				active: true,
 				frozen: false,
 			},
@@ -587,9 +667,16 @@ describe("BillingTab comp accounts (z8r3fdeub2)", () => {
 			/>,
 		);
 		expect(screen.getByText("Sponsored account")).toBeTruthy();
-		expect(screen.getByText("Never locked")).toBeTruthy();
+		expect(screen.getByText("No limits")).toBeTruthy();
 		expect(screen.getByText("Sponsored by Maybank SME")).toBeTruthy();
-		expect(screen.getByText(/never\s+locks your store/)).toBeTruthy();
+		// This card is the ONLY place a sponsored seller is told their limits
+		// are off: the credit meter is absent for them (z8r3fdrph7), and a
+		// ceiling that silently isn't there is still undiscoverable behaviour.
+		// So the three limits are named here, in words.
+		expect(screen.getByText(/no monthly\s+order limit/)).toBeTruthy();
+		expect(screen.getByText(/no product limit/)).toBeTruthy();
+		expect(screen.getByText(/no credits to run down/)).toBeTruthy();
+		expect(screen.getByText(/can never be locked/)).toBeTruthy();
 		// A comp has no end date — nothing may suggest one.
 		expect(screen.queryByText(/until|expires|ends/i)).toBeNull();
 		// Not a plan: no tier, meter or any billing door.
@@ -599,6 +686,25 @@ describe("BillingTab comp accounts (z8r3fdeub2)", () => {
 		expect(screen.queryByText(/Subscribe to/)).toBeNull();
 		expect(screen.queryByText(/Off-Season Hold/)).toBeNull();
 		expect(screen.queryByText("Auto-renewal")).toBeNull();
+	});
+
+	it("a METERED store never claims it has no limits (/test-code finding)", () => {
+		// The card used to key on `sub.comped`, which is ALSO true for a store
+		// with no subscription row — a store that keeps a real 200 grant. That
+		// put "nothing is capped — no monthly order limit… no credits to run
+		// down" directly above its live "200 of 200" meter: the exact
+		// contradiction z8r3fdrph7 removed from comped stores. It now keys on
+		// `fullAccess`, so this store falls through to the ordinary plan card,
+		// which agrees with the meter under it.
+		mockQueries({ isAdmin: false, gateway: GATEWAY_ON });
+		render(<BillingTab retailer={failSafe()} />);
+		expect(screen.queryByText("Sponsored account")).toBeNull();
+		expect(screen.queryByText("No limits")).toBeNull();
+		expect(screen.queryByText(/no monthly\s+order limit/)).toBeNull();
+		expect(screen.queryByText(/no credits to run down/)).toBeNull();
+		// It is an active Pro store as far as `resolveAccess` is concerned, so
+		// that is what it says.
+		expect(screen.getByText("Current plan")).toBeTruthy();
 	});
 
 	it("a comp with no label still reads as a sponsored account", () => {
@@ -854,11 +960,15 @@ describe("BillingTab — the lapsed-but-not-yet-renewed window (86eyb6z4r)", () 
 				})}
 			/>,
 		);
-		expect(screen.getByText(/confirming it with the payment provider/)).toBeTruthy();
+		expect(
+			screen.getByText(/confirming it with the payment provider/),
+		).toBeTruthy();
 		expect(screen.queryByText("Pay online now")).toBeNull();
 		expect(screen.queryByText(/DuitNow/)).toBeNull();
 		// The auto-renewal card explains, instead of claiming "Renewing now".
-		expect(screen.getByText(/waiting for the payment provider to confirm/)).toBeTruthy();
+		expect(
+			screen.getByText(/waiting for the payment provider to confirm/),
+		).toBeTruthy();
 		expect(screen.queryByText(/Renewing now/)).toBeNull();
 	});
 

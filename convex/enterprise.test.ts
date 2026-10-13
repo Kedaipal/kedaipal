@@ -297,7 +297,7 @@ describe("putting a store on a contract — the review round (1 Oct)", () => {
 				createdAt: Date.now() - 20 * DAY,
 			}),
 		);
-		const rows = await asAdmin(t).query(api.admin.listSellersForAdmin, {});
+		const { sellers: rows } = await asAdmin(t).query(api.admin.listSellersForAdmin, {});
 		const row = rows.find((r) => r._id === s.retailerId);
 		expect(row?.billingCurrency).toBe("MYR");
 		await asAdmin(t).mutation(api.enterprise.setContract, {
@@ -984,7 +984,7 @@ describe("the contract's own allowances (seats + broadcasts)", () => {
 			broadcastQuota: 500,
 			notes: "Signed 2 Oct",
 		});
-		const rows = await asAdmin(t).query(api.admin.listSellersForAdmin, {});
+		const { sellers: rows } = await asAdmin(t).query(api.admin.listSellersForAdmin, {});
 		const row = rows.find((r) => r._id === s.retailerId);
 		expect(row?.enterprise).toMatchObject({
 			baseFeeMinor: HSL.baseFeeMinor,
@@ -1108,7 +1108,7 @@ describe("enterprise leads — who asked, so nobody forgets (z8r3fdkp8h follow-u
 		await t
 			.withIdentity({ subject: OWNER })
 			.mutation(api.enterprise.markInterest, {});
-		const rows = await asAdmin(t).query(api.admin.listSellersForAdmin, {});
+		const { sellers: rows } = await asAdmin(t).query(api.admin.listSellersForAdmin, {});
 		const row = rows.find((r) => r._id === s.retailerId);
 		expect(row?.enterpriseInterestAt).toBeDefined();
 	});
@@ -1143,5 +1143,115 @@ describe("a Founding Member can go on a contract", () => {
 		expect(sub?.enterprise?.baseFeeMinor).toBe(HSL.baseFeeMinor);
 		const retailer = await t.run(async (ctx) => ctx.db.get(store.retailerId));
 		expect(retailer?.isFoundingMember).toBe(true);
+	});
+});
+
+describe("getContractContext — the contract form's subject (z8r3fdpm2p)", () => {
+	it("answers only an admin", async () => {
+		const t = setup();
+		const store = await activeStore(t);
+		await expect(
+			t
+				.withIdentity({ subject: OWNER })
+				.query(api.enterprise.getContractContext, {
+					retailerId: store.retailerId,
+				}),
+		).rejects.toThrow();
+	});
+
+	it("counts seats the way the form reads them — owner included", async () => {
+		// The form derives teammates-in-use as `active - 1 + invited`, the one
+		// expression both its call sites share. If this query counted MEMBERS
+		// instead of PEOPLE, every contract would be measured against one
+		// teammate fewer than the store actually has, and a contract could be
+		// saved that throws a paying customer's staff out mid-month.
+		const t = setup();
+		const store = await activeStore(t);
+		await t.run(async (ctx) => {
+			await ctx.db.insert("retailerMembers", {
+				retailerId: store.retailerId,
+				email: "staff@example.com",
+				status: "active",
+				permissions: {},
+				invitedAt: Date.now(),
+				invitedBy: OWNER,
+			});
+			await ctx.db.insert("retailerMembers", {
+				retailerId: store.retailerId,
+				email: "pending@example.com",
+				status: "invited",
+				permissions: {},
+				invitedAt: Date.now(),
+				invitedBy: OWNER,
+			});
+		});
+
+		const ctx = await asAdmin(t).query(api.enterprise.getContractContext, {
+			retailerId: store.retailerId,
+		});
+		expect(ctx?.seats).toEqual({ active: 2, invited: 1 });
+	});
+
+	it("carries the whole contract, allowances included", async () => {
+		// `Omit<>` lets an optional field slip out of a hand-written payload —
+		// the way the seat and broadcast allowances once vanished from the
+		// sellers directory and reopening a contract showed them blank.
+		const t = setup();
+		const store = await activeStore(t);
+		await asAdmin(t).mutation(api.enterprise.setContract, {
+			retailerId: store.retailerId,
+			...HSL,
+			teammates: 12,
+			broadcastQuota: 4000,
+			notes: "Signed 30 Sep",
+		});
+
+		const ctx = await asAdmin(t).query(api.enterprise.getContractContext, {
+			retailerId: store.retailerId,
+		});
+		expect(ctx?.enterprise).toMatchObject({
+			baseFeeMinor: HSL.baseFeeMinor,
+			includedCredits: HSL.includedCredits,
+			overageRateMinor: HSL.overageRateMinor,
+			blockSize: HSL.blockSize,
+			teammates: 12,
+			broadcastQuota: 4000,
+			contactName: HSL.contactName,
+			notes: "Signed 30 Sep",
+		});
+		// A raw Clerk subject never crosses to the client.
+		expect(ctx?.enterprise).not.toHaveProperty("setBy");
+	});
+
+	it("names the currency a NEW contract would be frozen in", async () => {
+		// Same answer `setContract` writes, from the same helper — so the form
+		// can't label the fee in one currency and store it in another.
+		const t = setup();
+		const store = await activeStore(t, { userId: "user_ent_sg", country: "SG" });
+		const ctx = await asAdmin(t).query(api.enterprise.getContractContext, {
+			retailerId: store.retailerId,
+		});
+		expect(ctx?.billingCurrency).toBe("SGD");
+	});
+
+	it("carries the open bill, so the term blocker speaks before the tap", async () => {
+		const t = setup();
+		const store = await activeStore(t);
+		await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId: store.retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+			currency: "MYR",
+		});
+
+		const ctx = await asAdmin(t).query(api.enterprise.getContractContext, {
+			retailerId: store.retailerId,
+		});
+		expect(ctx?.pendingInvoice).toMatchObject({
+			plan: "pro",
+			billingCycle: "monthly",
+		});
+		expect(ctx?.pendingInvoice?.invoiceNumber).toBeTruthy();
 	});
 });

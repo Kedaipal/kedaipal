@@ -90,6 +90,7 @@ export function CategoryRail({
 									aspect="absolute inset-0"
 									// Fixed 124px tiles on mobile; a quarter-row on desktop.
 									sizes="(min-width: 1024px) 25vw, 124px"
+									frame="hairline"
 								/>
 							) : (
 								<div

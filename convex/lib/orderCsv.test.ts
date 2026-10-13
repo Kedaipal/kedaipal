@@ -66,8 +66,8 @@ describe("orderToCsvRow", () => {
 		deliveryMethod: "delivery",
 		customer: { name: "Aisha", waPhone: "+60123456789" },
 		items: [
-			{ name: "Cake", variantLabel: "1kg", quantity: 2 },
-			{ name: "Brownie", quantity: 1 },
+			{ name: "Cake", variantLabel: "1kg", quantity: 2, price: 1000 },
+			{ name: "Brownie", quantity: 1, price: 1000 },
 		],
 		subtotal: 12500,
 		total: 12500,
@@ -329,7 +329,7 @@ describe("orderToCsvRow — security deposit (86eyn4kee)", () => {
 			status: "confirmed",
 			deliveryMethod: "booking",
 			customer: { name: "Guest", waPhone: "+60123456789" },
-			items: [{ name: "Riverside Plot", quantity: 2 }],
+			items: [{ name: "Riverside Plot", quantity: 2, price: 1000 }],
 			subtotal: 16_000,
 			securityDeposit: 10_000,
 			total: 26_000,
@@ -342,7 +342,7 @@ describe("orderToCsvRow — security deposit (86eyn4kee)", () => {
 			status: "confirmed",
 			deliveryMethod: "delivery",
 			customer: { name: "Aisha", waPhone: "+60123456789" },
-			items: [{ name: "Cake", quantity: 1 }],
+			items: [{ name: "Cake", quantity: 1, price: 1000 }],
 			subtotal: 5_000,
 			total: 5_000,
 			currency: "MYR",
@@ -359,7 +359,7 @@ describe("ordersToCsv", () => {
 				createdAt: JUN_30_MYT,
 				status: "pending",
 				customer: { name: "A" },
-				items: [{ name: "X", quantity: 1 }],
+				items: [{ name: "X", quantity: 1, price: 1000 }],
 				subtotal: 100,
 				total: 100,
 				currency: "MYR",
@@ -389,7 +389,7 @@ const minimal: CsvOrder = {
 	createdAt: JUN_30_MYT,
 	status: "confirmed",
 	customer: { name: "Aisha" },
-	items: [{ name: "Cake", quantity: 1 }],
+	items: [{ name: "Cake", quantity: 1, price: 1000 }],
 	subtotal: 10000,
 	total: 10000,
 	currency: "MYR",
@@ -430,8 +430,59 @@ describe("totals reconcile (the arithmetic hole)", () => {
 		}
 	});
 
+	// The voucher's own reconciliation (`z8r3fdr617`). It is the first column
+	// that SUBTRACTS, so it prints negative — a column reading "10.00" for money
+	// that came off would break the identity on every voucher order, which is
+	// the exact shape of the bug `Custom work` exists to fix.
+	test("Voucher prints NEGATIVE, so the money run still sums to Total", () => {
+		const shapes: CsvOrder[] = [
+			// fixed voucher
+			{ ...minimal, subtotal: 12500, voucherDiscount: 1000, total: 11500 },
+			// alongside fees: the discount never eats them
+			{
+				...minimal,
+				subtotal: 12500,
+				pickupFee: 500,
+				deliveryFee: 800,
+				voucherDiscount: 1000,
+				total: 12800,
+			},
+			// a 100% voucher with fees left standing
+			{
+				...minimal,
+				subtotal: 12500,
+				deliveryFee: 800,
+				voucherDiscount: 12500,
+				total: 800,
+			},
+		];
+		for (const o of shapes) {
+			expect(Number(cell(o, "Voucher"))).toBeLessThan(0);
+			const sum =
+				Number(cell(o, "Subtotal")) +
+				Number(cell(o, "Custom work")) +
+				Number(cell(o, "Pickup fee")) +
+				Number(cell(o, "Delivery fee")) +
+				Number(cell(o, "Security deposit")) +
+				Number(cell(o, "Voucher"));
+			expect(sum.toFixed(2)).toBe(cell(o, "Total"));
+		}
+	});
+
+	test("the code rides along so a giveaway run can be reconciled", () => {
+		expect(
+			cell({ ...minimal, voucherCode: "KP-7F3K-Q2WM" }, "Voucher code"),
+		).toBe("KP-7F3K-Q2WM");
+		expect(cell(minimal, "Voucher code")).toBe("");
+	});
+
 	test("every money column prints 0.00, never blank, so the sum works", () => {
-		for (const label of ["Custom work", "Pickup fee", "Delivery fee"]) {
+		for (const label of [
+			"Custom work",
+			"Pickup fee",
+			"Delivery fee",
+			"Voucher",
+		]) {
 			expect(cell(minimal, label)).toBe("0.00");
 		}
 	});
@@ -491,8 +542,8 @@ describe("categories column — frozen per line at sale time", () => {
 	const twoLines = (a?: string[], b?: string[]): CsvOrder => ({
 		...minimal,
 		items: [
-			{ name: "Kek Lapis", quantity: 1, categoryNames: a },
-			{ name: "Karipap", quantity: 2, categoryNames: b },
+			{ name: "Kek Lapis", quantity: 1, categoryNames: a, price: 1000 },
+			{ name: "Karipap", quantity: 2, categoryNames: b, price: 1000 },
 		],
 	});
 
@@ -535,9 +586,9 @@ describe("pickup notes column (z8r3fdff97)", () => {
 		deliveryMethod: "self_collect",
 		pickupSnapshot: { label: "Huff & Puff SS2", address: "22 Jalan SS2/64" },
 		items: [
-			{ name: "Ice cream puff", quantity: 6, pickupNote: "Bring an ice bag." },
-			{ name: "Cream puff", quantity: 6, pickupNote: "Side counter." },
-			{ name: "Choux", quantity: 2, pickupNote: "Bring an ice bag." },
+			{ name: "Ice cream puff", quantity: 6, pickupNote: "Bring an ice bag.", price: 1000 },
+			{ name: "Cream puff", quantity: 6, pickupNote: "Side counter.", price: 1000 },
+			{ name: "Choux", quantity: 2, pickupNote: "Bring an ice bag.", price: 1000 },
 		],
 	};
 
@@ -582,7 +633,7 @@ describe("pickup notes column (z8r3fdff97)", () => {
 	test("a note that starts like a formula is escaped", () => {
 		const hostile: CsvOrder = {
 			...puffs,
-			items: [{ name: "Puff", quantity: 1, pickupNote: "=HYPERLINK(1)" }],
+			items: [{ name: "Puff", quantity: 1, pickupNote: "=HYPERLINK(1)", price: 1000 }],
 		};
 		expect(ordersToCsv([hostile])).toContain("'=HYPERLINK(1)");
 	});
@@ -679,15 +730,19 @@ describe("the money run stays adjacent", () => {
 	// addends: Security deposit joined it in S5 (`86eyn4kee`) because a booking
 	// deposit is collected in the same payment and folds into `total` through
 	// the same extras seam as the fees — leaving it outside the run would make
-	// the identity read FALSE on every booking order.
-	test("Subtotal · Custom work · Pickup fee · Delivery fee · Security deposit · Total are consecutive", () => {
+	// the identity read FALSE on every booking order. `Voucher` joined for the
+	// same reason (`z8r3fdr617`) — it is folded into `total` through the same
+	// extras seam, just with the opposite sign, so leaving it out would make the
+	// identity read false on every voucher order.
+	test("Subtotal · Custom work · Pickup fee · Delivery fee · Security deposit · Voucher · Total are consecutive", () => {
 		const start = CSV_COLUMNS.indexOf("Subtotal");
-		expect(CSV_COLUMNS.slice(start, start + 6)).toEqual([
+		expect(CSV_COLUMNS.slice(start, start + 7)).toEqual([
 			"Subtotal",
 			"Custom work",
 			"Pickup fee",
 			"Delivery fee",
 			"Security deposit",
+			"Voucher",
 			"Total",
 		]);
 	});
@@ -700,7 +755,7 @@ describe("the money run stays adjacent", () => {
 			status: "confirmed",
 			deliveryMethod: "booking",
 			customer: { name: "Guest", waPhone: "+60123456789" },
-			items: [{ name: "Riverside Plot", quantity: 2 }],
+			items: [{ name: "Riverside Plot", quantity: 2, price: 1000 }],
 			subtotal: 16_000,
 			securityDeposit: 10_000,
 			total: 26_000,

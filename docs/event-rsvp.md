@@ -207,11 +207,12 @@ For an RSVP order:
    titled **Venue** ("set by the store, the same for every guest"), and
    `orders.create` overrides whatever pickup id the client sent via
    `resolveEventVenue`. The counter runs the same resolver, so the two doors
-   can never seat one event at different venues. **A HIDDEN pickup point is a
-   first-class venue** (round 5): `isActive: false` removes a point from the
-   buyer's standard-order choice, never from an event it hosts — an
-   *RSVP-only location* IS a hidden point, so no separate "event locations"
-   table/section exists. The resolver honours the named venue whatever its
+   can never seat one event at different venues. **A venue the buyer can't
+   choose is still a first-class venue**: the resolver honours the named venue
+   whatever its checkout status. Round 5 expressed that as `isActive: false`
+   — an *RSVP-only location* WAS a hidden point — which `z8r3fdm32x` has since
+   replaced with an explicit `eventsOnly` flag (see "Event venues have their
+   own home" below); the resolver itself is unchanged. It honours the named venue whatever its
    active state (rerouting guests to the "first active" outlet would be a
    wrong address, strictly worse than a hidden one); the fallback for
    legacy/unset venues is first active point, else first point at all. The
@@ -256,6 +257,70 @@ For an RSVP order:
    atomic: Convex mutations are OCC transactions, so two guests racing for the
    last seat serialise and the second one's tally already includes the first.
    No reservation table, no lock row.
+
+## Event venues have their own home (`z8r3fdm32x`)
+
+An RSVP-only venue used to be expressed by **deactivating** a pickup point.
+That worked — the resolver never cared about `isActive` — but it overloaded one
+flag with two unrelated meanings, *retired* and *events only*, and the seller
+paid for it: live venues sat behind the collapsed "Show inactive" disclosure in
+Settings, the venue picker labelled them "hidden from buyers" (true, and
+misleading about an address in daily use), and a store whose only active points
+were venues could trip "Pickup is on but you have no active points yet".
+
+`pickupLocations.eventsOnly?: boolean` separates them. A venue is **active**
+(it is in use) and simply **not choosable** at checkout. Unset reads as false,
+so legacy rows need no backfill, and a point with the flag off stays fully
+venue-eligible — "my shop, which is also where I run the class" is the flag
+left off, not a duplicate row.
+
+**Why not a third `locationType`.** That value is FROZEN onto
+`orders.pickupSnapshot` and read in ~two dozen places — WhatsApp copy, email,
+`/track`, order detail — nearly all as binary `=== "drop_off" ? … : …`
+ternaries, so a third literal would fall silently into the self-collect branch
+everywhere (the frozen-status bug class). It would also force an either/or the
+seller doesn't have: kind says *where the guest stands*, `eventsOnly` says
+*which flows the address is offered in*. They are orthogonal, and the edit
+dialog surfaces them as two controls for that reason.
+
+**Five reads had to agree**, and one author now settles them —
+`convex/lib/pickupChoice.ts` (`isChoosablePickupPoint` / `pickupChoiceRefusal`):
+
+| Read | Why it must exclude a venue |
+|---|---|
+| `listActivePublicBySlug` | the storefront picker — a venue is not an option |
+| `hasAnyActive` | ticks the dashboard's pickup checklist step; a venue means pickup still isn't set up |
+| `orders.create` | the "does this store offer pickup?" probe. **Count a venue and a venue-only store demands a `pickupLocationId` the buyer was never shown** — checkout dead-ends |
+| `orderClaims` | the same probe at the claim door |
+| `pickupLocations.setActive` + `retailers.updateSettings` | the fulfilment invariant (≥1 working method). Count a venue and the seller can turn off their last real point, or switch to pickup-only, and strand the storefront |
+
+The three **country-setup** reads deliberately still see every location: a
+venue's address reaches buyers on an event order page, so a wrong-country venue
+must still raise its checklist row.
+
+Both order doors also refuse a venue sent as a pickup choice, with wording that
+differs from the retired-point refusal on purpose — "no longer available" is
+true of a retired point and misleading about a venue, which is very much
+available, just not as something to pick.
+
+**In Settings → Fulfilment** the venues get their own card, directly after
+Pickup and *not* inside it: the Pickup card is governed by the "Offer pickup on
+the storefront" toggle, so a store that only runs events would otherwise find
+its venues buried in a switched-off section. The card shows when the store has
+the `events` feature **or** already has a venue, so a downgrade can never make
+configured data invisible. Both cards render the same `LocationList` — they are
+the same objects, filtered — so they can't drift into looking like two
+features.
+
+**The picker groups** (Event venues → Pickup points → Turned off) via
+`<optgroup>`, which the iOS wheel and Android sheet render natively. Order
+inside a group stays the seller's own `sortOrder`. "Alphabetical first" was
+rejected: an invisible ordering rule teaches nothing about *why* an option sits
+where it does, and sorting one surface alphabetically while every other reads
+`sortOrder` is two rules for one list. An inactive point keeps its "— inactive"
+suffix even though its heading repeats it, because a closed `<select>` shows
+only the option text. The word matches the row toggle in Settings on purpose —
+one concept, one word, rather than coining a third name for `isActive: false`.
 
 ## The other doors
 

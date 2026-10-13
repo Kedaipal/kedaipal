@@ -39,7 +39,10 @@ function MethodChip({
 	if (!method.src) {
 		return (
 			<span
-				className={cn(logoPillClass, "h-11 px-4 text-sm font-bold text-slate-800")}
+				className={cn(
+					logoPillClass,
+					"h-11 px-4 text-sm font-bold text-slate-800",
+				)}
 			>
 				{method.name}
 			</span>

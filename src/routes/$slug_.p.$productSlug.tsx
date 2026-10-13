@@ -16,6 +16,7 @@ import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
 import { useCaptureAttribution } from "../hooks/useSourceAttribution";
+import { useCaptureVoucherParam } from "../hooks/useVoucherParam";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
 import {
 	absoluteProxiedImageUrl,
@@ -295,6 +296,9 @@ function ProductRoute() {
 	const { slug, productSlug } = Route.useParams();
 	// Product links are the ones pasted in bios/lives — capture the ?src= tag.
 	useCaptureAttribution(slug);
+	// A `?voucher=` link lands on an EMPTY cart, so the code has to survive the
+	// browsing that follows (`z8r3fdr617`) — same reason as the line above.
+	useCaptureVoucherParam(slug);
 	// Live queries keep the page reactive after the SSR'd loader response —
 	// stock, prices and visibility update in place.
 	const result = useQuery(

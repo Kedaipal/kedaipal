@@ -52,12 +52,16 @@ import {
 } from "./lib/plans";
 import { loadCreditAccount } from "./credits";
 import { storeIsInternal } from "./marketplace";
+import { ADMIN_STORE_LIST_LIMIT } from "./lib/adminDirectory";
+import { contractForAdmin } from "./lib/enterprise";
 import { isUnclaimed } from "./lib/unclaimedStore";
 import { loadSubscription, resolveAccess } from "./subscriptions";
 
 /** How many sellers the directory pulls. The Founding cohort is ~10 and the whole
- * book is small for a while yet; 500 is generous headroom without pagination. */
-const SELLER_LIMIT = 500;
+ * book is small for a while yet; 500 is generous headroom without pagination.
+ * Shared with the billing picker (`ADMIN_STORE_LIST_LIMIT`) — two lists of the
+ * same stores must not disagree about which ones exist. */
+const SELLER_LIMIT = ADMIN_STORE_LIST_LIMIT;
 /** Recent audit rows surfaced per store in the console. */
 const AUDIT_LIMIT = 50;
 
@@ -324,13 +328,26 @@ async function loadLastActAs(
  */
 export const listSellersForAdmin = query({
 	args: {},
-	handler: async (ctx): Promise<AdminSellerRow[]> => {
+	handler: async (
+		ctx,
+	): Promise<{
+		sellers: AdminSellerRow[];
+		/** The book runs past the cap, so this list is the NEWEST
+		 * `ADMIN_STORE_LIST_LIMIT` stores and the oldest are missing. The
+		 * directory says so rather than letting "Showing 500 of 500" read as
+		 * the whole book (z8r3fdpm2p). */
+		capped: boolean;
+	}> => {
 		await requireAdmin(ctx);
 		const adminIds = new Set(adminUserIds());
-		const retailers = await ctx.db
+		// +1 to learn whether the book runs past the cap, the same shape
+		// `BUSINESS_REPORT_ORDER_SCAN_CAP` uses. The extra row never returns.
+		const scanned = await ctx.db
 			.query("retailers")
 			.order("desc")
-			.take(SELLER_LIMIT);
+			.take(SELLER_LIMIT + 1);
+		const capped = scanned.length > SELLER_LIMIT;
+		const retailers = scanned.slice(0, SELLER_LIMIT);
 		const rows: AdminSellerRow[] = [];
 		for (const r of retailers) {
 			const sub = await loadSubscription(ctx, r._id);
@@ -385,25 +402,15 @@ export const listSellersForAdmin = query({
 				foundingMemberRank: r.foundingMemberRank,
 				subscriptionStatus: sub?.status,
 				plan: sub?.plan,
+				// The WHOLE deal minus `setBy` — allowances included. They were
+				// once hand-listed here and the day they were left out,
+				// reopening a contract showed them blank: a fee typo-fix away
+				// from silently resetting a deal to unlimited seats (found
+				// hands-on, 2 Oct). `contractForAdmin` is a rest spread, so no
+				// future field can be dropped the same way; the admin.test.ts
+				// pin stays as the second guard.
 				enterprise: sub?.enterprise
-					? {
-							baseFeeMinor: sub.enterprise.baseFeeMinor,
-							currency: sub.enterprise.currency,
-							includedCredits: sub.enterprise.includedCredits,
-							overageRateMinor: sub.enterprise.overageRateMinor,
-							blockSize: sub.enterprise.blockSize,
-							// The per-deal allowances ride too — the edit form prefills
-							// from THIS row, and the day they were left out, reopening a
-							// contract showed them blank: a fee typo-fix away from
-							// silently resetting a deal to unlimited seats (found
-							// hands-on, 2 Oct). Optional fields slip through Omit<>
-							// typing, so the admin.test.ts pin is the guard.
-							teammates: sub.enterprise.teammates,
-							broadcastQuota: sub.enterprise.broadcastQuota,
-							contactName: sub.enterprise.contactName,
-							notes: sub.enterprise.notes,
-							setAt: sub.enterprise.setAt,
-						}
+					? contractForAdmin(sub.enterprise)
 					: undefined,
 				pendingPlanChange: sub?.pendingPlanChange,
 				enterpriseInterestAt: r.enterpriseInterestAt,
@@ -490,7 +497,7 @@ export const listSellersForAdmin = query({
 			if (rb !== undefined) return 1;
 			return b.createdAt - a.createdAt;
 		});
-		return rows;
+		return { sellers: rows, capped };
 	},
 });
 

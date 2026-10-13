@@ -3,8 +3,8 @@
 // prices a seller by rules they haven't been moved to — a deploy must never
 // change anyone's fee on its own, only the migration may.
 import { act, renderHook } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getFunctionName } from "convex/server";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { useLiveDeliveryQuote } from "./use-live-delivery-quote";
@@ -39,9 +39,7 @@ function args(over: Record<string, unknown> = {}) {
 			state: "Kuala Lumpur",
 			postcode: "50450",
 		}),
-		items: [
-			{ variantId: "variant_1" as Id<"productVariants">, quantity: 2 },
-		],
+		items: [{ variantId: "variant_1" as Id<"productVariants">, quantity: 2 }],
 		...over,
 	};
 }
@@ -153,4 +151,4 @@ describe("every surface must supply the cart (PR #253 review, HIGH)", () => {
 		// optional-and-omitted at any call site in this file.
 		expect(args().items.length).toBeGreaterThan(0);
 	});
-})
+});

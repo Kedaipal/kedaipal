@@ -307,7 +307,7 @@ describe("admin sponsorship — set / end", () => {
 		});
 		// The admin directory row carries the window — the pill and the
 		// Manage item read it from here.
-		const row = (await asAdmin.query(api.admin.listSellersForAdmin, {})).find(
+		const row = (await asAdmin.query(api.admin.listSellersForAdmin, {})).sellers.find(
 			(r) => r._id === retailerId,
 		);
 		expect(row?.marketplace.sponsoredUntil).toBe(future);
@@ -424,7 +424,7 @@ describe("comped stores ride Store highlights; internal stores never list", () =
 			}),
 		).toEqual({ hasVisibleProduct: true, internal: true, hidden: null });
 
-		const rows = await asAdmin.query(api.admin.listSellersForAdmin, {});
+		const { sellers: rows } = await asAdmin.query(api.admin.listSellersForAdmin, {});
 		expect(
 			rows.find((r) => r.slug === "kedai-internal")?.marketplace.internal,
 		).toBe(true);
@@ -475,7 +475,7 @@ describe("admin hide from /stores — moderation over the seller's switch", () =
 			hidden: { note: "Add real product photos and we'll relist you." },
 		});
 		// …and the admin row carries it for the pill, menu and sheet.
-		const row = (await asAdmin.query(api.admin.listSellersForAdmin, {})).find(
+		const row = (await asAdmin.query(api.admin.listSellersForAdmin, {})).sellers.find(
 			(r) => r._id === retailerId,
 		);
 		expect(row?.marketplace.hidden?.note).toBe(

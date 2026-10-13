@@ -2,7 +2,7 @@ import { Check, Copy, ExternalLink, QrCode } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import { useChecklistStamp } from "../../hooks/useChecklistStamp";
-import type { ChecklistItem } from "../../routes/app.index";
+import type { ChecklistItem } from "../home/setup-checklist";
 import { Button } from "../ui/button";
 
 const SHARE_SPOTS = [

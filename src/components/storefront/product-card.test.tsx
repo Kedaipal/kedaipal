@@ -176,7 +176,9 @@ describe("ProductCard — in-cart stepper (z8r3fdegb5)", () => {
 			cartQuantity: 4,
 		});
 		const label = "Remove Ceramic mug from cart — minimum order is 4";
-		const minus = await waitFor(() => screen.getByRole("button", { name: label }));
+		const minus = await waitFor(() =>
+			screen.getByRole("button", { name: label }),
+		);
 		// `title` for the mouse, accessible name for everyone else.
 		expect(minus.getAttribute("title")).toBe(label);
 		expect(screen.queryByRole("button", { name: /Remove one/ })).toBeNull();

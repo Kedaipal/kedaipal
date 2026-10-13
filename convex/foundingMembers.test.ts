@@ -762,15 +762,15 @@ describe("the admin issue form can't hand the discount straight back", () => {
 
 		let row = (
 			await asAdmin.query(api.invoices.listRetailersForAdmin, {})
-		).find((r) => r._id === s.retailerId);
+		).stores.find((r) => r._id === s.retailerId);
 		expect(row?.isFoundingMember).toBe(true);
 		expect(row?.foundingBenefitsRevoked).toBe(false);
 
 		await runPass(t);
 
-		row = (await asAdmin.query(api.invoices.listRetailersForAdmin, {})).find(
-			(r) => r._id === s.retailerId,
-		);
+		row = (
+			await asAdmin.query(api.invoices.listRetailersForAdmin, {})
+		).stores.find((r) => r._id === s.retailerId);
 		// Membership is still reported — the console shows both facts.
 		expect(row?.isFoundingMember).toBe(true);
 		expect(row?.foundingBenefitsRevoked).toBe(true);

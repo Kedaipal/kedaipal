@@ -1,18 +1,24 @@
 // @vitest-environment node
 import { describe, expect, test } from "vitest";
 import {
+	bulkCreditSkipNote,
 	CREDIT_RULES_LINE,
 	cancelCreditLine,
 	creditActivityLabel,
+	creditPlacement,
 	creditRefreshLabel,
 	creditStateLine,
 	creditTone,
 	downgradeCreditLine,
+	gatedNameCell,
+	gatedRowLine,
 	includedCreditsLabel,
 	lockCta,
+	orderGatedLine,
 	ordersBalanceLabel,
 	ordersWaitingLabel,
 	planPickCreditLine,
+	showWaitingLabel,
 } from "./credits-ui";
 import { formatShortDate } from "./format";
 
@@ -41,9 +47,9 @@ describe("the balance speaks in orders", () => {
 
 	test("the waiting count caps at 99+ and says nothing at zero", () => {
 		expect(ordersWaitingLabel(0)).toBeNull();
-		expect(ordersWaitingLabel(1)).toBe("1 new order since you ran out");
-		expect(ordersWaitingLabel(3)).toBe("3 new orders since you ran out");
-		expect(ordersWaitingLabel(99)).toBe("99+ new orders since you ran out");
+		expect(ordersWaitingLabel(1)).toBe("1 order waiting on credits");
+		expect(ordersWaitingLabel(3)).toBe("3 orders waiting on credits");
+		expect(ordersWaitingLabel(99)).toBe("99+ orders waiting on credits");
 	});
 
 	test("every unlock route gets the one button that puts credits back", () => {
@@ -137,6 +143,23 @@ describe("the cancel dialog says what happens to the order's credit", () => {
 
 	test("an order that never used a credit says nothing", () => {
 		expect(cancelCreditLine({ kind: "not_charged" })).toBeNull();
+	});
+
+	test("a GATED order quotes no monthly count, because it spends none", () => {
+		// Cancelling an order the seller was never allowed to open always
+		// refunds and never touches the 10-a-month allowance (Zaki, 9 Oct
+		// 2026). Quoting "(9 more this month)" here would say this cancel had
+		// spent one — the number wouldn't move, and the sentence would be the
+		// dialog lying about the rule it exists to explain.
+		const line = cancelCreditLine({
+			kind: "refund",
+			refundsLeftAfter: 9,
+			gated: true,
+		});
+		expect(line).toBe(
+			"The credit it used comes back to you — you were never able to open this one.",
+		);
+		expect(line).not.toMatch(/this month/);
 	});
 });
 
@@ -317,7 +340,7 @@ describe("the monthly reset reads as a reset, never as more on top", () => {
 
 describe("the meter's state line", () => {
 	const base = {
-		locked: false,
+		ordersWaiting: 0,
 		total: 120,
 		purchased: 0,
 		regime: "monthly" as const,
@@ -331,18 +354,22 @@ describe("the meter's state line", () => {
 		expect(creditStateLine(base)).toBeNull();
 	});
 
-	test("an admin's own store is never asked to pay — whatever its status says", () => {
+	test("an exempt store is never asked to pay — whatever its status says", () => {
+		// Neither an admin's own store nor a SPONSORED one has a line here at
+		// all: both are unmetered (z8r3fdp4er + z8r3fdrph7), so there is no
+		// meter for a line to sit under. What reaches this arm is the
+		// missing-subscription-row fail-safe, which stays metered.
 		for (const status of ["trialing", "past_due", "active"] as const) {
-			const line = creditStateLine({ ...base, status, exempt: "admin_store" });
-			expect(line).toMatch(/^Kedaipal admin stores aren't billed/);
+			const line = creditStateLine({ ...base, status, exempt: "sponsored" });
+			expect(line).toMatch(/^This store is never locked/);
 			expect(line).not.toMatch(/Pay your invoice|Pick a plan/);
 		}
 	});
 
-	test("a sponsored store is told it never locks", () => {
+	test("the exempt line never claims to be about a comp — a comp has no meter", () => {
 		expect(
 			creditStateLine({ ...base, status: "past_due", exempt: "sponsored" }),
-		).toMatch(/^Sponsored stores are never locked/);
+		).not.toMatch(/sponsored/i);
 	});
 
 	test("bought credits never stand in for a plan — they're kept for when it's active", () => {
@@ -362,15 +389,18 @@ describe("the meter's state line", () => {
 		);
 	});
 
-	test("the lock outranks everything, and a debt says where it goes", () => {
+	test("waiting orders outrank everything, and a debt says where it goes", () => {
 		expect(
-			creditStateLine({ ...base, locked: true, total: 0, exempt: null }),
-		).toBe(
-			"Accepting and updating orders and editing products are paused until you add credits.",
+			creditStateLine({ ...base, ordersWaiting: 2, total: 0, exempt: null }),
+		).toBe("2 orders are waiting on credits until you add credits.");
+		expect(creditStateLine({ ...base, ordersWaiting: 3, total: -15 })).toMatch(
+			/The 15 orders owed come off your next pack or your next monthly credits, oldest order first\./,
 		);
-		expect(creditStateLine({ ...base, locked: true, total: -15 })).toMatch(
-			/The 15 orders owed come off your next pack or your next monthly credits\./,
-		);
+		// It names the ORDERS, never the store: products and settings are paid
+		// for by the subscription and are never gated (Credits T3.1).
+		expect(
+			creditStateLine({ ...base, ordersWaiting: 2, total: -2 }),
+		).not.toMatch(/editing products/);
 	});
 
 	test("a trial and a custom allowance say what they are", () => {
@@ -386,5 +416,90 @@ describe("the meter's state line", () => {
 		expect(CREDIT_RULES_LINE).toMatch(
 			/Monthly credits are used first and reset on the 1st.*Bought credits are used next and last 12 months/,
 		);
+	});
+});
+
+describe("the per-order gate's copy names the ORDER, never the store (T3.1)", () => {
+	test("a gated row says its own position, and leads to the fix", () => {
+		// A seller buying one credit has to know whether it will be THIS order.
+		expect(gatedRowLine(1)).toBe("Waiting on 1 credit — top up to open it");
+		expect(gatedRowLine(3)).toBe("Waiting on 3 credits — top up to open it");
+		// Never plural at one, never a store-wide sentence.
+		expect(gatedRowLine(1)).not.toMatch(/credits/);
+		for (const n of [1, 2, 9])
+			expect(gatedRowLine(n)).not.toMatch(/store|products|paused/i);
+	});
+
+	test("the short form is the same answer, for a disabled control", () => {
+		expect(orderGatedLine(1)).toBe("Waiting on 1 credit");
+		expect(orderGatedLine(4)).toBe("Waiting on 4 credits");
+		// 0 can't happen on a gated row, but a floor beats "Waiting on 0".
+		expect(orderGatedLine(0)).toBe("Waiting on 1 credit");
+	});
+
+	test('the name slot stops saying "waiting" once the order is cancelled', () => {
+		// The card used to read "Waiting on credits" in the name slot beside a
+		// Cancelled badge and a "Cancelled — details stay closed" body: one
+		// card contradicting itself twice. The row IS still redacted
+		// (`orders.neverFunded`), so the slot keeps something true to say.
+		expect(gatedNameCell(undefined)).toBe("Waiting on credits");
+		expect(gatedNameCell("pending")).toBe("Waiting on credits");
+		expect(gatedNameCell("confirmed")).toBe("Waiting on credits");
+		expect(gatedNameCell("cancelled")).toBe("Details closed");
+	});
+
+	test("a cancelled gated row drops the pitch but keeps the blanks", () => {
+		// The redaction is seq-keyed and survives the cancel by design, so the
+		// row stays gated — but nobody is waiting on it, and offering a credit
+		// that would open nothing is the gated page's bug one layer out.
+		expect(gatedRowLine(1, "cancelled")).toBe(
+			"Cancelled — details stay closed",
+		);
+		expect(gatedRowLine(3, "cancelled")).toBe(
+			"Cancelled — details stay closed",
+		);
+		expect(gatedRowLine(1, "pending")).toBe(
+			"Waiting on 1 credit — top up to open it",
+		);
+	});
+
+	test('the filter button doesn\'t say "Show the 1"', () => {
+		// A count interpolated into "Show the N" reads as a typo at n=1, and
+		// past the 99+ display cap there is no number to name at all.
+		expect(showWaitingLabel(1)).toBe("Show it");
+		expect(showWaitingLabel(2)).toBe("Show the 2");
+		expect(showWaitingLabel(98)).toBe("Show the 98");
+		expect(showWaitingLabel(99)).toBe("Show them");
+		expect(showWaitingLabel(250)).toBe("Show them");
+	});
+
+	test("the bulk bar says what WILL be skipped, and that cancel still works", () => {
+		// Said before the tap. The batch skips rather than refusing, so the bar
+		// stays enabled — a note, not a disabled control.
+		expect(bulkCreditSkipNote(1)).toBe(
+			"1 of these is waiting on credits and will be skipped. Cancelling works on all of them.",
+		);
+		expect(bulkCreditSkipNote(4)).toMatch(
+			/^4 of these are waiting on credits and will be skipped\./,
+		);
+	});
+});
+
+describe("creditPlacement — position is the urgency signal", () => {
+	test("a healthy balance is reference material, at the foot of the page", () => {
+		expect(creditPlacement("ok")).toBe("store");
+	});
+
+	test("running low moves it under the action strip, where the eye is", () => {
+		expect(creditPlacement("low")).toBe("under-strip");
+	});
+
+	test("out of credits goes above everything — nothing below it matters yet", () => {
+		expect(creditPlacement("out")).toBe("top");
+	});
+
+	test("every tone has a home, so a card can never be placeless", () => {
+		for (const tone of ["ok", "low", "out"] as const)
+			expect(["top", "under-strip", "store"]).toContain(creditPlacement(tone));
 	});
 });
