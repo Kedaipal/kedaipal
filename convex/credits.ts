@@ -1292,6 +1292,74 @@ export const getBalance = query({
 	},
 });
 
+/** The pace window Home forecasts from — one week of real trading, long enough
+ * to average over a quiet Monday and a heavy Saturday. */
+export const USAGE_PACE_DAYS = 7;
+
+/** Rows the pace scan will read, whatever `since` it is handed.
+ *
+ * `since` comes from the client so the query stays cacheable, which means a
+ * hand-edited call could pass 0 and ask for the store's entire ledger. A week
+ * of trading is a few hundred rows at the top of the ICP, so this bound is far
+ * above any honest window and still turns "collect everything" into a constant.
+ */
+const USAGE_PACE_SCAN_CAP = 2_000;
+
+export type CreditUsagePace = {
+	/** Net credits consumed by orders over the window. */
+	consumed: number;
+	/** `consumed / USAGE_PACE_DAYS`, unrounded — the caller decides how to say it. */
+	perDay: number;
+	windowDays: number;
+};
+
+/**
+ * How fast this store is actually burning credits, so the low-balance card can
+ * say "about 3 days of orders at this week's pace" instead of a bare number the
+ * seller has to translate themselves.
+ *
+ * Counts ORDER CONSUMPTION only — debits that carry an `orderId`, net of the
+ * refunds that carry one. Grants, top-ups, expiries and admin adjusts all move
+ * the balance but say nothing about demand, and including them would make a
+ * monthly refresh read as a week of furious trading.
+ *
+ * `since` comes from the client (a MYT midnight minus the window) rather than
+ * `Date.now()` here, so the query is stable within a day and cacheable — the
+ * same discipline the Insights range uses.
+ *
+ * Never negative: a week of nothing but cancellations is "no pace", not a
+ * forecast that the balance is growing.
+ */
+export const getUsagePace = query({
+	args: { retailerId: v.optional(v.id("retailers")), since: v.number() },
+	handler: async (
+		ctx,
+		{ retailerId, since },
+	): Promise<CreditUsagePace | null> => {
+		const retailer = await creditsStore(ctx, retailerId);
+		if (!retailer) return null;
+		const rows = await ctx.db
+			.query("creditLedger")
+			.withIndex("by_retailer_created", (q) =>
+				q.eq("retailerId", retailer._id).gte("createdAt", since),
+			)
+			.take(USAGE_PACE_SCAN_CAP);
+		let consumed = 0;
+		for (const r of rows) {
+			if (r.orderId === undefined) continue;
+			// `amount` is signed against the balance: a debit is negative, its
+			// refund positive. Negating turns the pair into "credits consumed".
+			if (r.type === "debit" || r.type === "refund") consumed -= r.amount;
+		}
+		consumed = Math.max(0, consumed);
+		return {
+			consumed,
+			perDay: consumed / USAGE_PACE_DAYS,
+			windowDays: USAGE_PACE_DAYS,
+		};
+	},
+});
+
 /** One row of the seller's "Credit activity" list. Admin notes are left off —
  * they're written for the ledger, not for the seller. */
 export type CreditActivityRow = Pick<
