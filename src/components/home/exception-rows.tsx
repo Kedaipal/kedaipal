@@ -45,8 +45,12 @@ export function ExceptionRows({
 	currency: string;
 }) {
 	// The instant the count was taken from, so the list the row opens holds the
-	// same orders the row counted.
-	const staleBefore = Date.now() - STALE_UNPAID_DAYS * 24 * 60 * 60 * 1000;
+	// same orders the row counted. Floored to the minute: unrounded, every render
+	// produced a different `to` and so a different href for the same row, which
+	// is churn the seller can't see and a link that can't be compared.
+	const staleBefore =
+		Math.floor(Date.now() / 60_000) * 60_000 -
+		STALE_UNPAID_DAYS * 24 * 60 * 60 * 1000;
 	const stale = staleUnpaidRow({
 		count: staleUnpaid.count,
 		amount: staleUnpaid.amount,
@@ -66,11 +70,18 @@ export function ExceptionRows({
 					title={stale.title}
 					detail={stale.detail}
 					to="/app/orders"
-					// Exactly `isStaleUnpaid`: open and not-received (`pay`), placed
-					// before the staleness cutoff (`to`, which bounds `createdAt`).
-					// T2 guessed this would need a new `stale=1` param — it does not,
-					// because the inbox's own date bound already asks the question.
+					// Exactly `isStaleUnpaid`: OPEN (`bucket`), not-received (`pay`),
+					// placed before the staleness cutoff (`to`, which bounds
+					// `createdAt`). T2 guessed this would need a new `stale=1` param —
+					// it does not, because the inbox's own date bound already asks the
+					// question.
+					//
+					// `bucket` is load-bearing and shipped missing (PR #358 review):
+					// `isStaleUnpaid` is a strict subset of `isOpenUnpaid`, so without
+					// it a delivered or cancelled order still carrying an unpaid status
+					// joined the list — the same defect this PR fixed for "To collect".
 					search={{
+						bucket: ["new", "in_progress"] as const,
 						pay: ["unpaid", "claimed"] as const,
 						to: staleBefore,
 					}}

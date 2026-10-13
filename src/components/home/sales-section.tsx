@@ -107,16 +107,24 @@ export function SalesSection({
 		convexQuery(api.analytics.getTodayPulse, { retailerId }),
 	).data;
 
-	const lapsed = useQuery(
-		convexQuery(api.customers.countLapsedRegulars, {
-			retailerId,
-			before: todayStart - QUIET_DAYS * DAY_MS,
-		}),
-	).data;
-
 	const gated =
 		rangeResult?.gated === true ||
 		(plan.closed === null && todayStats?.gated === true);
+
+	// Only the Customers card renders this, and a gated store never gets that
+	// card — so asking is a subscription whose answer has nowhere to go. The
+	// server would return `null` cheaply either way; this just doesn't ask.
+	const lapsed = useQuery(
+		convexQuery(
+			api.customers.countLapsedRegulars,
+			gated
+				? "skip"
+				: {
+						retailerId,
+						before: todayStart - QUIET_DAYS * DAY_MS,
+					},
+		),
+	).data;
 
 	/**
 	 * What the page is ACTUALLY showing.
@@ -183,7 +191,13 @@ export function SalesSection({
 
 	// Chart: the window's own days, plus today's column. For the today view the
 	// grid comes from the context range, so the bar chart still shows a week.
-	const contextTrend = rangePayload?.trend ?? [];
+	//
+	// `null` when the closed range is GATED, which is not the same as a week of
+	// zeroes: on Starter `getInsightsRange` refuses every closed range, and
+	// treating that as `[]` drew six flat bars under "Today against the last 6
+	// days" — a Starter who sold RM 800 yesterday was shown a chart saying they
+	// sold nothing all week (PR #358 review). No answer is not an answer of zero.
+	const contextTrend = gated ? null : (rangePayload?.trend ?? []);
 	const bars = buildBars({
 		period: shownPeriod,
 		trend: view.trend,
@@ -192,13 +206,15 @@ export function SalesSection({
 		todayEarned: todayPayload?.earned ?? 0,
 	});
 
+	// Same rule as the bars: a gated range cannot say what last Monday earned,
+	// and "you closed at RM 0.00" would be a figure we do not have.
 	const lastWeekdayEarned =
-		shownPlan.lastWeekdayStart !== null
+		contextTrend !== null && shownPlan.lastWeekdayStart !== null
 			? (contextTrend.find((b) => b.start === shownPlan.lastWeekdayStart)
 					?.earned ?? 0)
 			: null;
 	const lastWeekdayName =
-		shownPlan.lastWeekdayStart !== null
+		contextTrend !== null && shownPlan.lastWeekdayStart !== null
 			? new Date(shownPlan.lastWeekdayStart).toLocaleDateString("en-GB", {
 					weekday: "long",
 					timeZone: "Asia/Kuala_Lumpur",
@@ -318,7 +334,8 @@ export function SalesSection({
 function buildBars(opts: {
 	period: HomePeriod;
 	trend: ReadonlyArray<{ start: number; earned: number }>;
-	contextTrend: ReadonlyArray<{ start: number; earned: number }>;
+	/** `null` = the closed range is gated, so there is no context to draw. */
+	contextTrend: ReadonlyArray<{ start: number; earned: number }> | null;
 	todayStart: number;
 	todayEarned: number;
 }): { start: number; earned: number; label: string }[] {
@@ -334,6 +351,19 @@ function buildBars(opts: {
 			earned: b.earned,
 			label: label(b.start),
 		}));
+
+	// Gated: today's column alone. `SalesHero` draws the chart only at
+	// `bars.length > 1`, so one bar hides it — the figures stay, and the Pro
+	// teaser below says why the week is missing. Better a chart we don't draw
+	// than one that invents the days we are not allowed to read.
+	if (opts.contextTrend === null)
+		return [
+			{
+				start: opts.todayStart,
+				earned: opts.todayEarned,
+				label: label(opts.todayStart),
+			},
+		];
 
 	const byStart = new Map(opts.contextTrend.map((b) => [b.start, b.earned]));
 	const out: { start: number; earned: number; label: string }[] = [];

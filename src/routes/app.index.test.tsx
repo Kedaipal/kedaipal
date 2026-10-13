@@ -367,9 +367,35 @@ describe("permission and exception states", () => {
 			sources: ["storefront", "claim"],
 		});
 
+		// The stale-unpaid exception row answers a STRICTER question than "To
+		// collect" — a strict subset of `isOpenUnpaid` — so it needs every rule
+		// that one has plus the age bound. It shipped without `bucket`, which let
+		// a delivered order carrying an unpaid status into the list (PR #358
+		// review): exactly the defect fixed for "To collect" two assertions up.
+		state.counts = {
+			...state.counts,
+			unpaidStale: 3,
+			unpaidStaleAmount: 480_00,
+			unpaidStaleOldestAt: NOW - 5 * DAY,
+		};
+		cleanup();
+		// A clock OFF the minute, or the flooring below is unobservable: `NOW` is
+		// exactly 12:00:00, so `to % 60_000` is 0 whether or not anything floors
+		// it, and the assertion would pass against the bug it exists to catch.
+		vi.setSystemTime(NOW + 37_123);
+		render(<Home />);
+		const stale = link("unpaid orders are over 3 days old");
+		expect(stale.to).toBe("/app/orders");
+		expect(stale.search.bucket).toEqual(["new", "in_progress"]);
+		expect(stale.search.pay).toEqual(["unpaid", "claimed"]);
+		// The age bound, floored to the minute so the href is stable between
+		// renders rather than new on every tick.
+		expect(stale.search.to).toBe(NOW - 3 * DAY);
+		vi.setSystemTime(NOW);
+
 		// Params the inbox does not read must never appear: they are dropped
 		// silently, which is how "2" opened a list of 6.
-		for (const l of [newOrders, collect, due])
+		for (const l of [newOrders, collect, due, stale])
 			for (const key of Object.keys(l.search ?? {}))
 				expect([
 					"bucket",

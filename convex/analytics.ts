@@ -27,7 +27,6 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { type QueryCtx, query } from "./_generated/server";
 import { requireRetailerAccess } from "./lib/auth";
-import { getDisplayName } from "./lib/customer";
 import { isMytMidnight, todayMytMidnight } from "./lib/fulfilmentDate";
 import {
 	type Bucketing,
@@ -210,9 +209,18 @@ export type CustomerIdentity = {
 	initial: string;
 };
 
-/** First letter of a buyer's display name, for the avatar stack. */
+/**
+ * First letter of a buyer's NAME, for the avatar stack.
+ *
+ * Deliberately not `getDisplayName`: its last resort is the formatted phone, so
+ * every nameless buyer came back as "6" — MY and SG numbers both start with it,
+ * which turned a store with unnamed WhatsApp buyers into a column of identical
+ * sixes (PR #358 review). A phone digit is not an initial, and "?" at least
+ * reads as "we don't know".
+ */
 function initialOf(doc: Doc<"customers">): string {
-	const letter = getDisplayName(doc).match(/[a-z0-9]/i)?.[0];
+	const named = doc.name?.trim() || doc.waProfileName?.trim() || "";
+	const letter = named.match(/[a-z0-9]/i)?.[0];
 	return letter ? letter.toUpperCase() : "?";
 }
 

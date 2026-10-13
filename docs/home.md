@@ -54,6 +54,17 @@ Both still require the **`insights` area grant**. The plan decides whether a
 store has paid for trends; the grant decides whether this teammate may go near
 the store's money at all. Loosening the first never loosens the second.
 
+**A refusal is not an answer of zero.** `getInsightsRange` returns
+`{ gated: true }` for *every* closed range on Starter, and the first version
+read that as an empty trend — so the hero drew six flat bars under "Today
+against the last 6 days" and a Starter who sold RM 800 yesterday was shown a
+chart saying they sold nothing all week. The context trend is now `null` when
+gated, distinct from `[]`, and one bar makes `SalesHero` hide the chart
+altogether: today's figures stay, the Pro teaser below says why the week is
+missing, and the "last Monday you closed at…" line goes quiet for the same
+reason. Starter stores pay us, and this is the one chart they can see — it had
+to be right or absent, never invented.
+
 ### Returning vs new customers: ids cross the wire, not verdicts
 
 Home's window is a **closed range plus today**, answered by two queries. The
@@ -117,6 +128,26 @@ than a page with one fewer number:
 Every day in the window is returned **including empty ones**, so a quiet
 Wednesday renders as visibly quiet rather than missing.
 
+#### A tile's filter has to be visible and removable on the other side
+
+A tile opens the inbox on `ffrom`/`fto`, an arbitrary inclusive due span — the
+panel's own due control (`fwin`) only names Today / Tomorrow / This week, and
+Plan ahead offers seven days. That span is the **same axis** as `fwin`, so the
+two are mutually exclusive and render as ONE filter: one applied chip ("Due Thu
+16 Oct"), one entry in "Clear all (N)", and a selected row inside the Due date
+section that switches it off in place. Picking a named window retires the span
+rather than ANDing with it, because a Thursday span AND today is the empty set.
+
+The first version counted the span as an active filter without rendering or
+clearing it, which made the empty state a **dead end**: a seller tapping an
+empty Thursday got "No orders match your filters → Clear filters", tapped it,
+and the list stayed empty with nothing on screen to blame. The vocabulary now
+lives in one place — [`src/lib/inbox-filter-params.ts`](../src/lib/inbox-filter-params.ts)
+— and both "is anything filtering?" and "what does Clear all clear?" derive
+from it, so the next filter param cannot be counted without being clearable.
+The due-today banner reads the span too, and stops offering to filter to today
+when the seller arrived from the Today tile.
+
 ### Stale unpaid is a strict subset of unpaid
 
 `STALE_UNPAID_DAYS = 3` (`convex/lib/orderBuckets.ts`). Both counts come from
@@ -128,6 +159,13 @@ unpaid orders are over 3 days old" and have both halves mean the same thing.
 one most worth chasing, because somebody is waiting on a human to look.
 `unpaidStaleOldestAt` rides along so the row can say "oldest is from Wed 30 Sep"
 rather than only a count.
+
+Because it is a **strict subset**, the row's link has to carry every rule
+`isOpenUnpaid` applies *and* the age bound: open buckets, not-received, placed
+before the cutoff. It shipped without the bucket, which let a delivered order
+still carrying an unpaid status into the list — the same defect this redesign
+had already fixed for "To collect". The cutoff is floored to the minute so the
+href is stable between renders instead of new on every tick.
 
 **Two "outstanding" figures exist and must never be merged:** the sales hero's
 "not paid yet" is *this period's* revenue orders; the strip's "To collect" is
@@ -213,12 +251,15 @@ exception rows → Sales (chips + hero + three cards) → Plan ahead → Your st
   credit branches so the lock sentence is not said twice.
 - **Out of credits relabels, never disables.** The strip cells stay links —
   a seller who cannot see an order must always be able to release the buyer.
-- **Home renders NO buyer PII.** The recent-orders list was the only masked
-  surface and the redesign removed it, so `src/routes/app.index.tsx` was taken
-  out of the `MASK_PII` sweep table with that reasoning recorded there. The
-  Customers card deliberately shows counts rather than the design's avatar
-  initials, which would have been PII. Re-add the row the moment a buyer's
-  name, phone, address or note appears here again.
+- **Home's only buyer-identity surface is one masked initial per face.** The
+  recent-orders list was the page's masked surface and the redesign removed it,
+  so `src/routes/app.index.tsx` left the `MASK_PII` sweep table with that
+  reasoning recorded there. The Customers card then brought the board's avatar
+  stack back, so `src/components/home/customers-card.tsx` carries a row of its
+  own: an initial beside that buyer's order history is still identity, and Home
+  is Clarity-recorded. Everything else Home renders is a count, a product name
+  or a source label. Re-add the route's row the moment a buyer's name, phone,
+  address or note appears on the page itself.
 
 ### Looking at it
 

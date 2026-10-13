@@ -801,3 +801,112 @@ describe("OrderFilters — Fulfilment", () => {
 		);
 	});
 });
+
+/**
+ * The due-date axis (PR #358 review).
+ *
+ * Home's Plan ahead tiles open an arbitrary single day through `ffrom`/`fto`,
+ * where the panel's own control only names three windows. The span shipped
+ * READ by the route and COUNTED as active, but nothing rendered it and nothing
+ * cleared it — so a seller who tapped "2 due Thursday" landed on a list
+ * narrowed to one day with no sign of it, and on an empty Thursday the
+ * resulting "Clear filters" left the list just as empty. Both halves are one
+ * question, so they are one filter, one chip and one clear.
+ */
+describe("OrderFilters — the due-date axis is one control", () => {
+	const DUE = Date.parse("2026-10-15T00:00:00+08:00");
+	const LATER = Date.parse("2026-10-22T00:00:00+08:00");
+
+	it("counts a span as ONE filter, exactly like the named window", () => {
+		expect(activeFilterCount({ ...EMPTY, mockup: false, fwin: "today" })).toBe(
+			1,
+		);
+		expect(
+			activeFilterCount({ ...EMPTY, mockup: false, dueFrom: DUE, dueTo: DUE }),
+		).toBe(1);
+		// And never two — they are the same axis, so a value in each is still
+		// one answer to "due when".
+		expect(
+			activeFilterCount({
+				...EMPTY,
+				mockup: false,
+				fwin: "today",
+				dueFrom: DUE,
+				dueTo: DUE,
+			}),
+		).toBe(1);
+	});
+
+	it("names a single day with its weekday, and a span with both dates", () => {
+		renderFilters({
+			value: { ...EMPTY, mockup: false, dueFrom: DUE, dueTo: DUE },
+		});
+		// The word the Plan ahead tile used, so the seller recognises the filter
+		// they just tapped.
+		expect(screen.getAllByText(/Thu 15 Oct/).length).toBeGreaterThan(0);
+		cleanup();
+		renderFilters({
+			value: { ...EMPTY, mockup: false, dueFrom: DUE, dueTo: LATER },
+		});
+		expect(screen.getAllByText(/15 Oct – 22 Oct/).length).toBeGreaterThan(0);
+	});
+
+	it("shows the span as a removable chip above the list", () => {
+		const { onChange } = renderFilters({
+			value: { ...EMPTY, mockup: false, dueFrom: DUE, dueTo: DUE },
+		});
+		openFilters();
+		fireEvent.click(
+			screen.getAllByRole("button", {
+				name: /remove filter: due thu 15 oct/i,
+			})[0],
+		);
+		// The WHOLE axis goes, not half of it.
+		const next = onChange.mock.calls[0][0] as OrderFilterValue;
+		expect(next.dueFrom).toBeUndefined();
+		expect(next.dueTo).toBeUndefined();
+		expect(next.fwin).toBeUndefined();
+	});
+
+	it("offers the span as a selected row in Due date, switchable off in place", () => {
+		const { onChange } = renderFilters({
+			value: { ...EMPTY, mockup: false, dueFrom: DUE, dueTo: DUE },
+		});
+		openFilters();
+		const row = screen.getByRole("button", { name: optionNamed("Thu 15 Oct") });
+		expect(row.getAttribute("aria-pressed")).toBe("true");
+		fireEvent.click(row);
+		const next = onChange.mock.calls[0][0] as OrderFilterValue;
+		expect(next.dueFrom).toBeUndefined();
+		expect(next.dueTo).toBeUndefined();
+	});
+
+	it("picking a named window retires the span rather than ANDing with it", () => {
+		const { onChange } = renderFilters({
+			value: { ...EMPTY, mockup: false, dueFrom: DUE, dueTo: DUE },
+		});
+		openFilters();
+		fireEvent.click(screen.getByRole("button", { name: optionNamed("Today") }));
+		// Both in force would match nothing at all: a Thursday span ANDed with
+		// today is the empty set, and the seller asked for one thing.
+		const next = onChange.mock.calls[0][0] as OrderFilterValue;
+		expect(next.fwin).toBe("today");
+		expect(next.dueFrom).toBeUndefined();
+		expect(next.dueTo).toBeUndefined();
+	});
+
+	it("Clear all counts and clears the span", () => {
+		const { onChange } = renderFilters({
+			value: { ...EMPTY, mockup: false, dueFrom: DUE, dueTo: DUE },
+		});
+		openFilters();
+		fireEvent.click(screen.getByRole("button", { name: "Clear all (1)" }));
+		const next = onChange.mock.calls[0][0] as OrderFilterValue;
+		expect(next.dueFrom).toBeUndefined();
+		expect(next.dueTo).toBeUndefined();
+		// The key must be PRESENT and undefined, not absent: the route spreads
+		// this over the URL, and a missing key leaves the old value in place.
+		expect("dueFrom" in next).toBe(true);
+		expect("dueTo" in next).toBe(true);
+	});
+});
