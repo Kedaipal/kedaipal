@@ -77,6 +77,31 @@ is what "27 of 42 customers" honestly means. The id set is capped at
 `CUSTOMER_SET_CAP` (2,000) with a `customersCapped` flag, surfaced rather than
 silently truncated.
 
+**Who can see those ids, and why it is allowed.** The ids ride on the Insights
+reads, which are gated on the **`insights`** area grant — so a teammate holding
+`insights` but *not* `customers` receives them. That is deliberate and it is the
+boundary worth naming, because it is the one place this feature widens who sees
+anything customer-shaped.
+
+What they receive is a list of opaque Convex ids, a `firstOrderAt` timestamp
+and `initial` — **one** uppercase character, because the avatar stack the design
+draws can render exactly one, and `MASK_PII` hides even that. No name, no phone,
+no address, no spend, no order history: nothing that resolves to a person
+without a second read they are not allowed to make. Every door onto the
+customer themself — `customers.get`, `customers.list`,
+`customers.search`, the customer page — still requires the **`customers`** grant
+*and* the `crm` plan feature, and `countLapsedRegulars` returns `null` rather
+than a figure for a reader without them. The ids exist on Home for exactly one
+purpose: to be de-duplicated across two windows so "27 of 42" is not invented
+by adding two counts together.
+
+**What would change this answer.** That one character is the ceiling, not a
+starting point. The moment this payload carries anything a reader could turn
+into a person — a full name, a phone, a spend figure, an order count — it stops
+being an opaque key and becomes customer data, and it belongs behind the
+`customers` grant like everything else. Treat adding a field here as a
+permission decision, not a payload one.
+
 ### Plan ahead counts exactly what "Due today" counts
 
 `countDueByDay` deliberately reuses the inbox chip's two rules, because Home
