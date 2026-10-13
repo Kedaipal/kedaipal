@@ -68,7 +68,14 @@ import { hasFeature } from "../lib/subscription";
 import { cn } from "../lib/utils";
 import { hasStartingPrice, variantLabel } from "../lib/variant";
 
-type StatusFilter = "all" | "active" | "archived";
+/**
+ * The list's one narrowing control. "Out of stock" joined it rather than
+ * arriving as a separate filter (z8r3fdrgzj): a seller narrowing the list is
+ * doing ONE thing, and a second control beside this one would be two ways to
+ * ask the same kind of question. It is also what Home's "N products are out of
+ * stock" row opens, so the row's count and this list are the same set.
+ */
+type StatusFilter = "all" | "active" | "archived" | "out_of_stock";
 
 type ProductListItem = FunctionReturnType<typeof api.products.listAll>[number];
 
@@ -81,8 +88,10 @@ export const Route = createFileRoute("/app/products/")({
 	// settings key pasted here) is dropped rather than forwarded.
 	validateSearch: (
 		search: Record<string, unknown>,
-	): { spot?: ProductSpotlightKey } =>
-		isProductSpotlightKey(search.spot) ? { spot: search.spot } : {},
+	): { spot?: ProductSpotlightKey; stock?: "out" } => ({
+		...(isProductSpotlightKey(search.spot) ? { spot: search.spot } : {}),
+		...(search.stock === "out" ? { stock: "out" as const } : {}),
+	}),
 	component: ProductsRoute,
 });
 
@@ -218,7 +227,7 @@ function CategoriesLink({
 
 function ProductsRoute() {
 	const retailer = useDashboardRetailer();
-	const { spot } = Route.useSearch();
+	const { spot, stock: stockParam } = Route.useSearch();
 	const navigate = useNavigate();
 	// Client mirror of the `categories` plan gate (server is the lock) — only
 	// used to badge the Categories link; admin act-as sees through it.
@@ -235,7 +244,12 @@ function ProductsRoute() {
 	).data;
 	const [rawQuery, setRawQuery] = useState("");
 	const [query, setQuery] = useState("");
-	const [status, setStatus] = useState<StatusFilter>("all");
+	// A link can open the list already narrowed; the chip row then SHOWS which
+	// position is on, so the seller can see why the list is short and clear it
+	// in one tap rather than wondering where their products went.
+	const [status, setStatus] = useState<StatusFilter>(
+		stockParam === "out" ? "out_of_stock" : "all",
+	);
 	const [exporting, setExporting] = useState<"csv" | "xlsx" | null>(null);
 
 	useEffect(() => {
@@ -243,14 +257,19 @@ function ProductsRoute() {
 		return () => clearTimeout(t);
 	}, [rawQuery]);
 
-	const counts = useMemo(() => {
-		if (!products) return { all: 0, active: 0, archived: 0 };
+	const counts = useMemo((): Record<StatusFilter, number> => {
+		if (!products) return { all: 0, active: 0, archived: 0, out_of_stock: 0 };
 		let active = 0;
-		for (const p of products) if (p.active) active++;
+		let outOfStock = 0;
+		for (const p of products) {
+			if (p.active) active++;
+			if (p.active && !p.inStock) outOfStock++;
+		}
 		return {
 			all: products.length,
 			active,
 			archived: products.length - active,
+			out_of_stock: outOfStock,
 		};
 	}, [products]);
 
@@ -304,6 +323,9 @@ function ProductsRoute() {
 		return products.filter((p) => {
 			if (status === "active" && !p.active) return false;
 			if (status === "archived" && p.active) return false;
+			// Identical to the card's own `outOfStock`, so the chip and the word on
+			// the card can never disagree about what sold out means.
+			if (status === "out_of_stock" && !(p.active && !p.inStock)) return false;
 			if (q && !p.name.toLowerCase().includes(q)) return false;
 			return true;
 		});
@@ -327,6 +349,7 @@ function ProductsRoute() {
 		{ key: "all", label: "All" },
 		{ key: "active", label: "Active" },
 		{ key: "archived", label: "Archived" },
+		{ key: "out_of_stock", label: "Out of stock" },
 	];
 
 	const clearFilters = () => {

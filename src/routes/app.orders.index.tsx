@@ -31,7 +31,11 @@ import {
 	describeBookingPeriod,
 	ENDING_SOON_DAYS,
 } from "../../convex/lib/bookingPeriod";
-import type { FulfilmentWindow } from "../../convex/lib/fulfilmentDate";
+import {
+	type FulfilmentWindow,
+	todayMytMidnight,
+	ymdFromEpoch,
+} from "../../convex/lib/fulfilmentDate";
 import {
 	foldLegacyBuckets,
 	formatStatusAge,
@@ -129,6 +133,10 @@ import {
 import { type BulkVocab, buildBulkTargets } from "../lib/inbox-bulk-targets";
 import { type InboxEmptyCopy, inboxEmptyCopy } from "../lib/inbox-empty-copy";
 import {
+	anyInboxFilterActive,
+	clearedInboxFilters,
+} from "../lib/inbox-filter-params";
+import {
 	statusChipSelected as chipSelected,
 	isBucketChip,
 	type StatusChipKey,
@@ -191,6 +199,11 @@ type InboxSearch = {
 	mockup?: boolean;
 	/** Fulfilment-date urgency window (Today / Tomorrow / This week). */
 	fwin?: FulfilmentWindow;
+	/** Orders DUE between these two MYT midnights, inclusive — the arbitrary-span
+	 * twin of `fwin`, which only names three windows. Home's Plan ahead tiles
+	 * open one day each through it (z8r3fdrgzj). */
+	ffrom?: number;
+	fto?: number;
 	/** Checkout surfaces to keep (online / counter / claim link). MULTI since
 	 * 86eyrtz74 — "everything that isn't a walk-in" is a real question that one
 	 * value can't ask. A legacy singular `?source=` is still read and folded in,
@@ -437,6 +450,8 @@ export const Route = createFileRoute("/app/orders/")({
 			mockup:
 				search.mockup === true || search.mockup === "true" ? true : undefined,
 			fwin: isFulfilmentWindow(search.fwin) ? search.fwin : undefined,
+			ffrom: typeof search.ffrom === "number" ? search.ffrom : undefined,
+			fto: typeof search.fto === "number" ? search.fto : undefined,
 			// A pre-widen `?source=counter` folds into the list, so a bookmark or a
 			// link shared before this shipped still filters (86eyrtz74).
 			sources: sources.length > 0 ? sources : undefined,
@@ -528,6 +543,8 @@ function OrdersRoute() {
 		to,
 		mockup = false,
 		fwin,
+		ffrom,
+		fto,
 		sources = [],
 		ful = [],
 		st = [],
@@ -659,6 +676,8 @@ function OrdersRoute() {
 		to,
 		mockup,
 		fwin,
+		ffrom,
+		fto,
 		sourcesKey,
 		fulKey,
 		stKey,
@@ -715,6 +734,8 @@ function OrdersRoute() {
 							dateTo: to,
 							mockupPending: mockup || undefined,
 							fulfilmentWindow: fwin,
+							fulfilmentFrom: ffrom,
+							fulfilmentTo: fto,
 							sources: sources.length > 0 ? sources : undefined,
 							fulfilments: ful.length > 0 ? ful : undefined,
 							statuses: st.length > 0 ? st : undefined,
@@ -899,25 +920,43 @@ function OrdersRoute() {
 		: undefined;
 	const now = Date.now();
 	const searching = debounced.length > 0;
+	/**
+	 * Already looking at what is due today — through the panel's named window OR
+	 * through Home's Today tile, which sends the same day as an explicit span.
+	 * The due-today banner offers to apply this, so without the second half it
+	 * invites a seller who arrived from the Today tile to filter to today again
+	 * (PR #358 review).
+	 */
+	const todayYmd = ymdFromEpoch(todayMytMidnight());
+	const viewingDueToday =
+		fwin === "today" ||
+		(ffrom != null &&
+			fto != null &&
+			ymdFromEpoch(ffrom) === todayYmd &&
+			ymdFromEpoch(fto) === todayYmd);
+
 	// Every active filter OUTSIDE the status axis. `st`/`period` deliberately
 	// don't count: the chip row is the seller's PLACE — the old bucket segment
 	// control's successor — so a chip tap must not flip the empty state to "No
 	// orders match your filters" (which buried the per-bucket copy, PR #243
 	// review), and "Clear filters" must not throw the seller back to All. The
 	// panel's own "Clear all (N)" is the control that owns the whole axis.
-	const filtersActive =
-		pay.length > 0 ||
-		method.length > 0 ||
-		munspec ||
-		from != null ||
-		to != null ||
-		mockup ||
-		fwin != null ||
-		sources.length > 0 ||
-		ful.length > 0 ||
-		cat.length > 0 ||
-		catunspec ||
-		asrc.length > 0;
+	const filtersActive = anyInboxFilterActive({
+		pay,
+		method,
+		munspec,
+		from,
+		to,
+		mockup,
+		fwin,
+		ffrom,
+		fto,
+		sources,
+		ful,
+		cat,
+		catunspec,
+		asrc,
+	});
 
 	// ONE empty-state copy for both views — the table used to hardcode its own,
 	// so the same state read differently depending on which view you were in.
@@ -1099,29 +1138,11 @@ function OrdersRoute() {
 	function clearAllFilters() {
 		navigate({
 			replace: true,
-			search: (prev) => ({
-				...prev,
-				pay: undefined,
-				method: undefined,
-				munspec: undefined,
-				from: undefined,
-				to: undefined,
-				mockup: undefined,
-				fwin: undefined,
-				sources: undefined,
-				ful: undefined,
-				// The status axis clears too — BOTH halves. This is the table's
-				// "start over below" button, and in table view the axis is set from
-				// the Status column's own filter funnel, so leaving it would strand
-				// the seller on the very filter the row is telling them about. It
-				// used to clear `st` but not `period` — half the chip row (PR #243
-				// review).
-				st: undefined,
-				period: undefined,
-				cat: undefined,
-				catunspec: undefined,
-				asrc: undefined,
-			}),
+			// Every clearable param, from the one list that also decides what
+			// COUNTS as a filter — see lib/inbox-filter-params.ts. Spelling them
+			// out here is how the due span (`ffrom`/`fto`) came to be counted but
+			// never cleared, which made this button a dead end.
+			search: (prev) => ({ ...prev, ...clearedInboxFilters() }),
 		});
 	}
 
@@ -1140,6 +1161,8 @@ function OrdersRoute() {
 				to: next.to,
 				mockup: next.mockup ? true : undefined,
 				fwin: next.fwin,
+				ffrom: next.dueFrom,
+				fto: next.dueTo,
 				asrc:
 					next.attributionSources.length > 0
 						? next.attributionSources
@@ -1397,6 +1420,8 @@ function OrdersRoute() {
 					dateTo: to,
 					mockupPending: mockup || undefined,
 					fulfilmentWindow: fwin,
+					fulfilmentFrom: ffrom,
+					fulfilmentTo: fto,
 					sources: sources.length > 0 ? sources : undefined,
 					fulfilments: ful.length > 0 ? ful : undefined,
 					statuses: st.length > 0 ? st : undefined,
@@ -1690,6 +1715,8 @@ function OrdersRoute() {
 								to,
 								mockup,
 								fwin,
+								dueFrom: ffrom,
+								dueTo: fto,
 								sources,
 								fulfilments: ful,
 								statuses: st,
@@ -1839,11 +1866,20 @@ function OrdersRoute() {
 			{inboxEnabled &&
 			!loading &&
 			(counts?.dueToday ?? 0) > 0 &&
-			fwin !== "today" ? (
+			!viewingDueToday ? (
 				<button
 					type="button"
 					onClick={() =>
-						navigate({ search: (prev) => ({ ...prev, fwin: "today" }) })
+						navigate({
+							search: (prev) => ({
+								...prev,
+								fwin: "today",
+								// Retire any span it replaces: "due when" is one axis, and
+								// a Thursday span ANDed with today matches nothing.
+								ffrom: undefined,
+								fto: undefined,
+							}),
+						})
 					}
 					className="flex items-center gap-2.5 rounded-2xl bg-foreground px-4 py-3 text-left text-background transition-opacity hover:opacity-95"
 				>

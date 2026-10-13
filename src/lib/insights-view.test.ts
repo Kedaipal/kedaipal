@@ -180,10 +180,12 @@ describe("splitCustomers — the range and today are one set, classified once", 
 	const knownBefore = (id: string): CustomerIdentity => ({
 		id,
 		firstOrderAt: FROM - DAY,
+		initial: id[0].toUpperCase(),
 	});
 	const inside = (id: string): CustomerIdentity => ({
 		id,
 		firstOrderAt: FROM + DAY,
+		initial: id[0].toUpperCase(),
 	});
 
 	test("a buyer in BOTH halves counts once, not twice", () => {
@@ -209,14 +211,18 @@ describe("splitCustomers — the range and today are one set, classified once", 
 	});
 
 	test("first order exactly AT from is new — the window is inclusive of its start", () => {
-		const split = splitCustomers([{ id: "c3", firstOrderAt: FROM }], [], FROM);
+		const split = splitCustomers(
+			[{ id: "c3", firstOrderAt: FROM, initial: "C" }],
+			[],
+			FROM,
+		);
 		expect(split.returning).toBe(0);
 		expect(split.fresh).toBe(1);
 	});
 
 	test("one millisecond before from is returning", () => {
 		const split = splitCustomers(
-			[{ id: "c4", firstOrderAt: FROM - 1 }],
+			[{ id: "c4", firstOrderAt: FROM - 1, initial: "C" }],
 			[],
 			FROM,
 		);
@@ -241,8 +247,8 @@ describe("splitCustomers — the range and today are one set, classified once", 
 	// timestamp happens to arrive second, so that case never reaches the guard.
 	test("disagreeing payloads keep the EARLIEST first order (earlier in range)", () => {
 		const split = splitCustomers(
-			[{ id: "c5", firstOrderAt: FROM - DAY }],
-			[{ id: "c5", firstOrderAt: FROM + DAY }],
+			[{ id: "c5", firstOrderAt: FROM - DAY, initial: "C" }],
+			[{ id: "c5", firstOrderAt: FROM + DAY, initial: "C" }],
 			FROM,
 		);
 		expect(split.total).toBe(1);
@@ -251,8 +257,8 @@ describe("splitCustomers — the range and today are one set, classified once", 
 
 	test("disagreeing payloads keep the EARLIEST first order (earlier in today)", () => {
 		const split = splitCustomers(
-			[{ id: "c6", firstOrderAt: FROM + DAY }],
-			[{ id: "c6", firstOrderAt: FROM - DAY }],
+			[{ id: "c6", firstOrderAt: FROM + DAY, initial: "C" }],
+			[{ id: "c6", firstOrderAt: FROM - DAY, initial: "C" }],
 			FROM,
 		);
 		expect(split.total).toBe(1);
@@ -265,6 +271,7 @@ describe("splitCustomers — the range and today are one set, classified once", 
 			returning: 0,
 			fresh: 0,
 			capped: false,
+			initials: [],
 		});
 	});
 
@@ -280,11 +287,11 @@ describe("buildInsightsView carries the customer split", () => {
 			to: D1 + 2 * DAY,
 			bucketing: "day",
 			range: rangePayload({
-				customers: [{ id: "a", firstOrderAt: D1 - DAY }],
+				customers: [{ id: "a", firstOrderAt: D1 - DAY, initial: "A" }],
 				customersCapped: true,
 			}),
 			today: todayPayload({
-				customers: [{ id: "b", firstOrderAt: D1 + DAY }],
+				customers: [{ id: "b", firstOrderAt: D1 + DAY, initial: "B" }],
 			}),
 			includeToday: true,
 		});
@@ -300,13 +307,48 @@ describe("buildInsightsView carries the customer split", () => {
 			to: D1 + 2 * DAY,
 			bucketing: "day",
 			range: rangePayload({
-				customers: [{ id: "a", firstOrderAt: D1 - DAY }],
+				customers: [{ id: "a", firstOrderAt: D1 - DAY, initial: "A" }],
 			}),
 			today: todayPayload({
-				customers: [{ id: "b", firstOrderAt: D1 + DAY }],
+				customers: [{ id: "b", firstOrderAt: D1 + DAY, initial: "B" }],
 			}),
 			includeToday: false,
 		});
 		expect(view.customers.total).toBe(1);
+	});
+});
+
+describe("the avatar stack's initials", () => {
+	const FROM2 = D1;
+	const who = (id: string, initial: string): CustomerIdentity => ({
+		id,
+		firstOrderAt: FROM2 - DAY,
+		initial,
+	});
+
+	test("carries at most three, in the order the buyers were seen", () => {
+		// Three is what the card draws; everyone else is the "+39".
+		const split = splitCustomers(
+			[who("a", "A"), who("b", "H"), who("c", "M"), who("d", "Z")],
+			[],
+			FROM2,
+		);
+		expect(split.initials.map((f) => f.letter)).toEqual(["A", "H", "M"]);
+		expect(split.total).toBe(4);
+	});
+
+	test("a buyer in both halves contributes ONE face, not two", () => {
+		const split = splitCustomers([who("a", "A")], [who("a", "A")], FROM2);
+		expect(split.initials.map((f) => f.letter)).toEqual(["A"]);
+		expect(split.total).toBe(1);
+	});
+
+	test("fewer than three buyers gives fewer faces, never blanks", () => {
+		const split = splitCustomers([who("a", "A")], [], FROM2);
+		expect(split.initials.map((f) => f.letter)).toEqual(["A"]);
+	});
+
+	test("no buyers at all gives no faces", () => {
+		expect(splitCustomers([], [], FROM2).initials).toEqual([]);
 	});
 });

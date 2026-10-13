@@ -89,6 +89,8 @@ const NARROWING_FILTER_KEYS: Record<
 	dateFrom: true,
 	dateTo: true,
 	fulfilmentWindow: true,
+	fulfilmentFrom: true,
+	fulfilmentTo: true,
 	mockupPending: true,
 	statuses: true,
 	categories: true,
@@ -146,6 +148,22 @@ export type InboxFilterArgs = {
 	dateFrom?: number;
 	dateTo?: number;
 	fulfilmentWindow?: "today" | "tomorrow" | "this_week";
+	/**
+	 * Orders DUE in a window — `fulfilmentDate` between these two, inclusive.
+	 *
+	 * The deliberate twin of `dateFrom`/`dateTo` above, and its neighbour for
+	 * that reason: those bound when the order was PLACED, these bound when it is
+	 * PROMISED. Home's "Plan ahead" strip counts by fulfilment date, so without
+	 * this a tile saying "2 due Thursday" could only ever open "orders placed on
+	 * Thursday" — a different question with a different answer (z8r3fdrgzj).
+	 *
+	 * `fulfilmentWindow` answers the same axis for the three named windows a
+	 * seller picks from a chip; this one answers an arbitrary day or span, which
+	 * a chip cannot express. An order with no fulfilment date is never due, so it
+	 * never matches — the same rule `fulfilmentWindow` already applies.
+	 */
+	fulfilmentFrom?: number;
+	fulfilmentTo?: number;
 	mockupPending?: boolean;
 	/**
 	 * THE status axis — one flat set of leaves (1 Sep). Empty or undefined = no
@@ -446,6 +464,18 @@ export function buildInboxPredicate(
 		if (args.fulfilmentWindow !== undefined) {
 			if (o.fulfilmentDate === undefined) return false;
 			if (!matchesFulfilmentWindow(o.fulfilmentDate, args.fulfilmentWindow))
+				return false;
+		}
+		// Due-date bounds. An order with no fulfilment date is not due at all, so
+		// it falls out of any due window — never "undated therefore everything".
+		if (args.fulfilmentFrom !== undefined || args.fulfilmentTo !== undefined) {
+			if (o.fulfilmentDate === undefined) return false;
+			if (
+				args.fulfilmentFrom !== undefined &&
+				o.fulfilmentDate < args.fulfilmentFrom
+			)
+				return false;
+			if (args.fulfilmentTo !== undefined && o.fulfilmentDate > args.fulfilmentTo)
 				return false;
 		}
 		if (term.length > 0) {

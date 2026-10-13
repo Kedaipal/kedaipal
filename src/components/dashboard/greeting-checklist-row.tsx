@@ -4,7 +4,7 @@ import { api } from "../../../convex/_generated/api";
 import type { Locale } from "../../../convex/lib/locale";
 import { useChecklistStamp } from "../../hooks/useChecklistStamp";
 import { cn } from "../../lib/utils";
-import type { ChecklistItem } from "../../routes/app.index";
+import type { ChecklistItem } from "../home/setup-checklist";
 import { Button } from "../ui/button";
 
 // Reuses the store's WhatsApp `Locale` (en/ms/zh) — the greeting message is

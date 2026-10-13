@@ -3061,6 +3061,10 @@ export const searchOrders = query({
 				v.literal("this_week"),
 			),
 		),
+		// Orders DUE within an arbitrary span (MYT midnights), the twin of
+		// dateFrom/dateTo. Home's Plan ahead tiles open one day each.
+		fulfilmentFrom: v.optional(v.number()),
+		fulfilmentTo: v.optional(v.number()),
 		// Cross-cutting: only orders awaiting the seller's mockup action
 		// (mockupStatus pending / changes_requested). ANDs with the other filters.
 		mockupPending: v.optional(v.boolean()),
@@ -3129,6 +3133,8 @@ export const searchOrders = query({
 			dateFrom,
 			dateTo,
 			fulfilmentWindow,
+			fulfilmentFrom,
+			fulfilmentTo,
 			mockupPending,
 			source,
 			sources,
@@ -3170,6 +3176,8 @@ export const searchOrders = query({
 			dateFrom,
 			dateTo,
 			fulfilmentWindow,
+			fulfilmentFrom,
+			fulfilmentTo,
 			mockupPending,
 			source,
 			sources,
@@ -3477,6 +3485,11 @@ const exportFilterValidators = {
 			v.literal("this_week"),
 		),
 	),
+	// Carried here too, so an export of a due-window view holds exactly the
+	// rows the seller was looking at — the invariant this shared shape exists
+	// to protect.
+	fulfilmentFrom: v.optional(v.number()),
+	fulfilmentTo: v.optional(v.number()),
 	mockupPending: v.optional(v.boolean()),
 	source: v.optional(orderSourceValidator),
 	// Exact order status (86eyrtz74) — multi-select, ANDed with `bucket`. The
