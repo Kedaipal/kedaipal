@@ -26,8 +26,11 @@ export function CustomersCard({
 }: {
 	period: HomePeriod;
 	split: CustomerSplit;
-	/** From `customers.countLapsedRegulars`; undefined while loading. */
-	lapsed: { count: number; capped: boolean } | undefined;
+	/** From `customers.countLapsedRegulars`: undefined while loading, NULL when
+	 * the reader cannot have it (Starter, or a teammate without the customers
+	 * grant). Either way the line simply does not render — the lock is its
+	 * absence, not an error. */
+	lapsed: { count: number; capped: boolean } | undefined | null;
 	quietDays: number;
 }) {
 	const returningPct =
