@@ -8,6 +8,7 @@ import {
 	logAdminAction,
 	type RetailerAccess,
 	requireRetailerAccess,
+	tryRetailerAccess,
 } from "./lib/auth";
 import type { PermissionLevel } from "./lib/permissions";
 import {
@@ -22,6 +23,7 @@ import { assertValidWaPhone } from "./lib/slug";
 import {
 	assertPlanFeature,
 	assertSubscriptionActive,
+	getAccess,
 } from "./subscriptions";
 
 const SEARCH_DEFAULT_LIMIT = 20;
@@ -131,8 +133,7 @@ export const count = query({
 	},
 });
 
-/** Display cap for the lapsed-regulars line — past this the card says "20+".
- * Also the scan bound: we stop as soon as one more than the cap has matched. */
+/** Display cap for the lapsed-regulars line — past this the card says "20+". */
 export const LAPSED_REGULARS_CAP = 20;
 
 /**
@@ -146,17 +147,42 @@ export const LAPSED_REGULARS_CAP = 20;
  * cheapest honest definition of "had a habit".
  *
  * Returns at most `LAPSED_REGULARS_CAP + 1`, which the card renders as "20+" —
- * the exact number past 20 changes nothing about what the seller does next, and
- * capping keeps the scan bounded on a store with a long dormant tail. Ordered
- * most-recently-lapsed first so the bound keeps the actionable end.
+ * the exact number past 20 changes nothing about what the seller does next.
+ * Ordered most-recently-lapsed first, so what the cap keeps is the actionable
+ * end. Note the cap bounds what is RETURNED, not what is read: `orderCount` is
+ * filtered after the index, so a store with a long tail of one-off lapsed
+ * buyers walks that tail before it finds 21 regulars. Same cost shape as
+ * `customers.count`, and fine at the ICP's scale.
+ *
+ * NULL means "not for this reader", never an error. Home renders for every
+ * plan (decision 1 — today is free) and fires this read before it knows whether
+ * the store is gated, so a throw here would be a guaranteed failed call on
+ * every Starter page view, and a teammate holding `insights` but not
+ * `customers` would crash the same way. Its siblings on that page
+ * (`getInsightsRange`, `getTodayStats`) answer the plan question instead of
+ * throwing; this one agrees with them. The CARD simply does not render the
+ * line — the lock is the absence, not a crash.
  */
 export const countLapsedRegulars = query({
 	args: { retailerId: v.id("retailers"), before: v.number() },
 	handler: async (
 		ctx,
 		{ retailerId, before },
-	): Promise<{ count: number; capped: boolean }> => {
-		await requireRetailerOwner(ctx, retailerId, "read");
+	): Promise<{ count: number; capped: boolean } | null> => {
+		// The GRANT is a soft answer here (`tryRetailerAccess`), for the reason
+		// that helper exists: a read inside a screen a member legitimately sees,
+		// where a missing grant is a locked state rather than a fault.
+		const access = await tryRetailerAccess(ctx, retailerId, {
+			area: "customers",
+			level: "read",
+		});
+		if (!access) return null;
+		// …and so is the PLAN. Admin act-as keeps support working on a Starter
+		// store, exactly as `requireRetailerOwner` allows elsewhere in this file.
+		if (!access.actingAsAdmin) {
+			const plan = await getAccess(ctx, retailerId);
+			if (!plan.features.crm) return null;
+		}
 		const rows = await ctx.db
 			.query("customers")
 			.withIndex("by_retailer_lastOrder", (q) =>

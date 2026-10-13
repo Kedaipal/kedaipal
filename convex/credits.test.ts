@@ -1626,6 +1626,20 @@ describe("getUsagePace — how fast this store is actually burning credits", () 
 		expect((await pace(t, mine.retailerId)).consumed).toBe(0);
 	});
 
+	test("a hand-passed `since` of 0 cannot walk the whole ledger", async () => {
+		// `since` rides in from the client so the query stays cacheable, which
+		// means it can be anything. The scan is bounded whatever it is handed —
+		// the answer here is still only this week's orders because that is all
+		// this store has, but the READ is a constant either way.
+		const t = setup();
+		const { retailerId } = await makeStore(t, { status: "active", plan: "pro" });
+		for (let i = 0; i < 3; i++) await order(t, retailerId);
+		const wide = await t
+			.withIdentity({ subject: OWNER })
+			.query(api.credits.getUsagePace, { retailerId, since: 0 });
+		expect(wide?.consumed).toBe(3);
+	});
+
 	test("a signed-out caller gets nothing", async () => {
 		const t = setup();
 		const { retailerId } = await makeStore(t, { status: "active", plan: "pro" });

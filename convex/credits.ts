@@ -1296,6 +1296,15 @@ export const getBalance = query({
  * to average over a quiet Monday and a heavy Saturday. */
 export const USAGE_PACE_DAYS = 7;
 
+/** Rows the pace scan will read, whatever `since` it is handed.
+ *
+ * `since` comes from the client so the query stays cacheable, which means a
+ * hand-edited call could pass 0 and ask for the store's entire ledger. A week
+ * of trading is a few hundred rows at the top of the ICP, so this bound is far
+ * above any honest window and still turns "collect everything" into a constant.
+ */
+const USAGE_PACE_SCAN_CAP = 2_000;
+
 export type CreditUsagePace = {
 	/** Net credits consumed by orders over the window. */
 	consumed: number;
@@ -1334,7 +1343,7 @@ export const getUsagePace = query({
 			.withIndex("by_retailer_created", (q) =>
 				q.eq("retailerId", retailer._id).gte("createdAt", since),
 			)
-			.collect();
+			.take(USAGE_PACE_SCAN_CAP);
 		let consumed = 0;
 		for (const r of rows) {
 			if (r.orderId === undefined) continue;

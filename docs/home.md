@@ -22,10 +22,15 @@ out).
 ## The reads (T2)
 
 Five reads feed the page beyond what Insights already computed. All are on
-existing indexes; **no schema change**. Every one takes its window boundary
-from the CLIENT as a MYT-midnight epoch rather than reading `Date.now()`
-itself, so the query is stable within a day and Convex can cache it — the same
-discipline `getInsightsRange` follows.
+existing indexes; **no schema change**.
+
+Every read over a RANGE takes its window boundary from the CLIENT as a
+MYT-midnight epoch rather than reading `Date.now()` itself, so the query is
+stable within a day and Convex can cache it — the same discipline
+`getInsightsRange` follows. `getTodayPulse` is the exception and reads the
+clock server-side, exactly as `getTodayStats` does: "today" is not a boundary
+the client gets to choose, and that query is deliberately live rather than
+cached — it re-runs as orders land.
 
 | Read | Where | Feeds |
 | --- | --- | --- |
