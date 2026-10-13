@@ -1784,6 +1784,8 @@ export function ProductForm({
 			    (capacity already caps a stay), which the block says rather than
 			    hiding the fields. */}
 			<ProductStepCard
+				id={SPOTLIGHT_ANCHOR.promo.anchor}
+				highlight={ringFor(SPOTLIGHT_ANCHOR.promo.anchor)}
 				icon={<Scissors className="size-5 -scale-x-100" />}
 				kicker="Selling"
 				title="Promotion"
