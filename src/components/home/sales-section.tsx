@@ -9,6 +9,7 @@ import {
 	hasEnoughForInsights,
 	heroAmount,
 	insightThresholdLine,
+	shownHomePeriod,
 } from "../../lib/home-copy";
 import {
 	buildHomeSalesView,
@@ -117,6 +118,18 @@ export function SalesSection({
 		rangeResult?.gated === true ||
 		(plan.closed === null && todayStats?.gated === true);
 
+	/**
+	 * What the page is ACTUALLY showing.
+	 *
+	 * A Starter store can only be told about today, so a disabled "7 days" chip
+	 * must not stay selected and the hero must not keep the "last 7 days"
+	 * eyebrow over today's figures — the numbers were right and the label was
+	 * lying, which is worse than either alone. The chip the seller cannot use
+	 * cannot be the chip that is on.
+	 */
+	const shownPeriod = shownHomePeriod(period, gated);
+	const shownPlan = gated ? homeQueryPlan("today") : plan;
+
 	const loading =
 		todayPulse === undefined ||
 		(plan.closed !== null && rangeResult === undefined) ||
@@ -159,11 +172,11 @@ export function SalesSection({
 				: null;
 
 	const view = buildHomeSalesView({
-		period,
-		range: plan.range,
+		period: shownPeriod,
+		range: shownPlan.range,
 		// Today's context range feeds the chart and the comparison, never the
 		// headline — see `homeQueryPlan`.
-		rangePayload: plan.includeClosedInTotals ? rangePayload : null,
+		rangePayload: shownPlan.includeClosedInTotals ? rangePayload : null,
 		todayPayload,
 		previousPayload,
 	});
@@ -172,7 +185,7 @@ export function SalesSection({
 	// grid comes from the context range, so the bar chart still shows a week.
 	const contextTrend = rangePayload?.trend ?? [];
 	const bars = buildBars({
-		period,
+		period: shownPeriod,
 		trend: view.trend,
 		contextTrend,
 		todayStart,
@@ -180,13 +193,13 @@ export function SalesSection({
 	});
 
 	const lastWeekdayEarned =
-		plan.lastWeekdayStart !== null
-			? (contextTrend.find((b) => b.start === plan.lastWeekdayStart)?.earned ??
-				0)
+		shownPlan.lastWeekdayStart !== null
+			? (contextTrend.find((b) => b.start === shownPlan.lastWeekdayStart)
+					?.earned ?? 0)
 			: null;
 	const lastWeekdayName =
-		plan.lastWeekdayStart !== null
-			? new Date(plan.lastWeekdayStart).toLocaleDateString("en-GB", {
+		shownPlan.lastWeekdayStart !== null
+			? new Date(shownPlan.lastWeekdayStart).toLocaleDateString("en-GB", {
 					weekday: "long",
 					timeZone: "Asia/Kuala_Lumpur",
 				})
@@ -198,7 +211,7 @@ export function SalesSection({
 	);
 	// The window the seller is looking at, handed to Insights so "Open full
 	// Insights" lands on the same figures rather than Insights' own default.
-	const drill = insightsRangeSearch(plan.range);
+	const drill = insightsRangeSearch(shownPlan.range);
 	const enough = hasEnoughForInsights(view.orderCount);
 
 	return (
@@ -209,7 +222,7 @@ export function SalesSection({
 			    board's: heading, then hero beside its rail, then the cards. */}
 			<div className="order-2 lg:order-none">
 				<PeriodChips
-					value={period}
+					value={shownPeriod}
 					onChange={onPeriodChange}
 					lockedBeyondToday={gated}
 				/>
@@ -222,12 +235,12 @@ export function SalesSection({
 						currency={currency}
 						bars={bars}
 						chartTitle={
-							period === "today"
+							shownPeriod === "today"
 								? "Today against the last 6 days"
 								: "Daily sales"
 						}
 						bestBarLabel={
-							best && best.earned > 0 && period !== "today"
+							best && best.earned > 0 && shownPeriod !== "today"
 								? `${best.label} · ${heroAmount(best.earned, currency)}`
 								: null
 						}
@@ -261,26 +274,31 @@ export function SalesSection({
 				) : !enough ? (
 					<InsightThreshold line={insightThresholdLine(view.orderCount)} />
 				) : (
-					<div className="grid gap-4 lg:grid-cols-[repeat(auto-fit,minmax(min(320px,100%),1fr))] lg:items-start">
+					// NOT `items-start`: the three cards share a row height, so their
+					// bottom edges and footer links line up instead of stepping down by
+					// whatever each one happened to contain (Zaki, 13 Oct 2026).
+					// `InsightCard` already pushes its footer with `mt-auto`, so the
+					// extra height lands as space above the link, not in the evidence.
+					<div className="grid gap-4 lg:grid-cols-[repeat(auto-fit,minmax(min(320px,100%),1fr))]">
 						<BestSellersCard
-							period={period}
+							period={shownPeriod}
 							products={view.products}
 							earned={view.earned}
 							currency={currency}
 							insightsSearch={drill}
 						/>
 						<CustomersCard
-							period={period}
+							period={shownPeriod}
 							split={view.customers}
 							lapsed={lapsed}
 							quietDays={QUIET_DAYS}
 						/>
 						<SourcesCard
-							period={period}
+							period={shownPeriod}
 							sources={view.sources}
 							currency={currency}
 							insightsSearch={drill}
-							range={plan.range}
+							range={shownPlan.range}
 						/>
 					</div>
 				)}

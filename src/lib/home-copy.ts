@@ -367,3 +367,22 @@ export function tileTintPct(count: number): number | null {
 	if (count <= 0) return null;
 	return Math.min(TILE_TINT_MAX, Math.max(TILE_TINT_MIN, 11 + 3 * count));
 }
+
+/**
+ * The window the page can actually SHOW, as opposed to the one the URL asks for.
+ *
+ * A Starter store is only told about today, so the two longer chips are
+ * disabled — and a disabled chip must never be the selected one. Without this
+ * the page kept "7 days" lit and the hero kept the "last 7 days" eyebrow while
+ * the figures underneath were today's: the numbers were right and the label was
+ * lying, which is worse than either on its own.
+ *
+ * The URL is left alone. The seller's stored preference survives the upgrade,
+ * so the window they picked comes back the moment it is theirs to use.
+ */
+export function shownHomePeriod(
+	period: HomePeriod,
+	gatedBeyondToday: boolean,
+): HomePeriod {
+	return gatedBeyondToday ? "today" : period;
+}

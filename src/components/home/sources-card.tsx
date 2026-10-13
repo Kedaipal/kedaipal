@@ -104,7 +104,7 @@ export function SourcesCard({
 				<Link
 					to="/app/settings"
 					search={{ tab: "whatsapp" }}
-					className="-mx-1 flex min-h-11 items-center text-sm font-semibold text-accent-emphasis hover:underline"
+					className="-mx-1 mt-auto flex min-h-11 items-center text-sm font-semibold text-accent-emphasis hover:underline"
 				>
 					Set up tagged links
 				</Link>

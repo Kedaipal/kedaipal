@@ -502,7 +502,9 @@ function DashboardHome() {
 					</span>
 					Your store
 				</h2>
-				<div className="grid gap-4 lg:grid-cols-[repeat(auto-fit,minmax(min(320px,100%),1fr))] lg:items-start">
+				{/* Same rule as the insight row above — the credit card and the
+				    share card end level. */}
+				<div className="grid gap-4 lg:grid-cols-[repeat(auto-fit,minmax(min(320px,100%),1fr))]">
 					{placement === "store" ? creditCard : null}
 					{phase === "waiting" ? null : shareCard}
 				</div>

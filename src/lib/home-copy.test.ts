@@ -17,6 +17,7 @@ import {
 	periodDays,
 	planAheadHeadline,
 	shouldCollapseDoneSteps,
+	shownHomePeriod,
 	staleUnpaidRow,
 	TILE_TINT_MAX,
 	TILE_TINT_MIN,
@@ -558,5 +559,17 @@ describe("tileTintPct — the Plan ahead ramp", () => {
 			expect(v).toBeGreaterThanOrEqual(prev);
 			prev = v;
 		}
+	});
+});
+
+describe("shownHomePeriod — a disabled chip is never the selected chip", () => {
+	test("a gated store is shown today, whatever the URL asked for", () => {
+		for (const p of ["today", "7d", "30d"] as const)
+			expect(shownHomePeriod(p, true)).toBe("today");
+	});
+
+	test("an ungated store gets exactly what it asked for", () => {
+		for (const p of ["today", "7d", "30d"] as const)
+			expect(shownHomePeriod(p, false)).toBe(p);
 	});
 });
