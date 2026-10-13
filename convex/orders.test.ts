@@ -11503,6 +11503,21 @@ describe("countDueByDay — Plan ahead counts exactly what Due today counts", ()
 });
 
 describe("searchOrders counts — unpaid that has gone stale", () => {
+	// The clock is FROZEN for this block. Staleness is a strict comparison
+	// against "now", and the handler samples its own `Date.now()` a beat after
+	// the test stamps `createdAt` — so an order aged to exactly the boundary
+	// reads as stale by however many milliseconds elapsed in between, and the
+	// "exactly three days" case is unobservable with a live clock. It passed
+	// until the handler got marginally slower, which is the definition of a
+	// test that was never really asserting its own boundary.
+	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.setSystemTime(Date.parse("2026-10-12T12:00:00+08:00"));
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
 	/** An order whose age and payment state we control. */
 	async function agedOrder(
 		t: ReturnType<typeof setup>,

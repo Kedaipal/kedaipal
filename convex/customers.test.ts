@@ -688,6 +688,17 @@ describe("countLapsedRegulars — who had a habit and stopped", () => {
 			.withIdentity({ subject: USER_A })
 			.query(api.customers.countLapsedRegulars, { retailerId, before: BEFORE });
 
+	/** The same read where a figure is expected — null is a gated answer, which
+	 * only the gate tests assert, so everywhere else it is a seed failure. */
+	const counted = async (
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+	) => {
+		const r = await count(t, retailerId);
+		if (!r) throw new Error("expected a count for a Pro owner");
+		return r;
+	};
+
 	test("a regular quiet past the cutoff counts", async () => {
 		const t = setup();
 		const r = await seedRetailer(t, USER_A);
@@ -696,7 +707,7 @@ describe("countLapsedRegulars — who had a habit and stopped", () => {
 			orderCount: 2,
 			phone: "60120000001",
 		});
-		expect(await count(t, r._id)).toEqual({ count: 1, capped: false });
+		expect(await counted(t, r._id)).toEqual({ count: 1, capped: false });
 	});
 
 	test("a ONE-OFF buyer is not a lapsed relationship", async () => {
@@ -709,7 +720,7 @@ describe("countLapsedRegulars — who had a habit and stopped", () => {
 			orderCount: 1,
 			phone: "60120000002",
 		});
-		expect((await count(t, r._id)).count).toBe(0);
+		expect((await counted(t, r._id)).count).toBe(0);
 	});
 
 	test("exactly AT the cutoff is still active — the bound is strict", async () => {
@@ -720,7 +731,7 @@ describe("countLapsedRegulars — who had a habit and stopped", () => {
 			orderCount: 3,
 			phone: "60120000003",
 		});
-		expect((await count(t, r._id)).count).toBe(0);
+		expect((await counted(t, r._id)).count).toBe(0);
 	});
 
 	test("one millisecond before the cutoff has lapsed", async () => {
@@ -731,7 +742,7 @@ describe("countLapsedRegulars — who had a habit and stopped", () => {
 			orderCount: 3,
 			phone: "60120000004",
 		});
-		expect((await count(t, r._id)).count).toBe(1);
+		expect((await counted(t, r._id)).count).toBe(1);
 	});
 
 	test("a still-active regular never counts", async () => {
@@ -742,7 +753,7 @@ describe("countLapsedRegulars — who had a habit and stopped", () => {
 			orderCount: 9,
 			phone: "60120000005",
 		});
-		expect((await count(t, r._id)).count).toBe(0);
+		expect((await counted(t, r._id)).count).toBe(0);
 	});
 
 	test("past the display cap it reports 20 and says it is capped", async () => {
@@ -755,7 +766,7 @@ describe("countLapsedRegulars — who had a habit and stopped", () => {
 				phone: `6012100${String(i).padStart(4, "0")}`,
 			});
 		}
-		expect(await count(t, r._id)).toEqual({ count: 20, capped: true });
+		expect(await counted(t, r._id)).toEqual({ count: 20, capped: true });
 	});
 
 	test("another store's lapsed regulars are not mine", async () => {
@@ -767,12 +778,70 @@ describe("countLapsedRegulars — who had a habit and stopped", () => {
 			orderCount: 4,
 			phone: "60120000006",
 		});
-		expect((await count(t, mine._id)).count).toBe(0);
+		expect((await counted(t, mine._id)).count).toBe(0);
+	});
+
+	test("a STARTER store gets a gated answer, never a throw", async () => {
+		// Home renders for every plan (decision 1, "today is free"), and the
+		// Sales section fires this read before it knows whether the store is
+		// gated — so a throw here is a guaranteed failed call on every Starter
+		// page view. Its siblings on the same page (`getInsightsRange`,
+		// `getTodayStats`) answer the plan question instead of throwing, and
+		// this one has to agree with them.
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", r._id))
+				.first();
+			if (sub) await ctx.db.patch(sub._id, { plan: "starter", status: "active" });
+		});
+		await seedCustomer(t, r._id, {
+			lastOrderAt: BEFORE - DAY,
+			orderCount: 4,
+			phone: "60120000007",
+		});
+		expect(await count(t, r._id)).toBeNull();
+	});
+
+	test("a teammate without the customers grant gets the same gated answer", async () => {
+		// Home's Sales section renders for anyone holding `insights`, and fires
+		// this read — so a missing CUSTOMERS grant must lock the line, not crash
+		// the page. `tryRetailerAccess` is the helper that exists for exactly
+		// this; the owner's own read is unaffected.
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		await seedCustomer(t, r._id, {
+			lastOrderAt: BEFORE - DAY,
+			orderCount: 4,
+			phone: "60120000008",
+		});
+		const stranger = await t
+			.withIdentity({ subject: USER_B })
+			.query(api.customers.countLapsedRegulars, {
+				retailerId: r._id,
+				before: BEFORE,
+			});
+		expect(stranger).toBeNull();
+		// …and the owner still gets their figure.
+		expect((await counted(t, r._id)).count).toBe(1);
+	});
+
+	test("a signed-out caller gets nothing", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		expect(
+			await t.query(api.customers.countLapsedRegulars, {
+				retailerId: r._id,
+				before: BEFORE,
+			}),
+		).toBeNull();
 	});
 
 	test("no customers at all → zero, not a throw", async () => {
 		const t = setup();
 		const r = await seedRetailer(t, USER_A);
-		expect(await count(t, r._id)).toEqual({ count: 0, capped: false });
+		expect(await counted(t, r._id)).toEqual({ count: 0, capped: false });
 	});
 });
