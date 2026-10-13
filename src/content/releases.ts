@@ -181,6 +181,87 @@ export interface Release {
  */
 export const RELEASES: Release[] = [
 	{
+		version: "2026.10.2",
+		date: "2026-10-13",
+		// Notable on two triggers. Something MOVED: Home is rebuilt around
+		// sales, and the Recent orders list a seller opened every morning is
+		// gone from it. And the deciding one — the credit rule changes under the
+		// seller's feet. v2026.10.1 told them "run out and nothing stops"; from
+		// this release an order that arrives at zero lands with its buyer and
+		// items closed. A seller who reads nothing will one day see an inbox row
+		// with no name on it and think the order is broken or lost, on the very
+		// morning they most need to act on it. The dot would not reach them first.
+		notable: true,
+		entries: [
+			{
+				kind: "enhancement",
+				title: {
+					en: "Home leads with what you sold, and what needs you today",
+				},
+				body: {
+					en: "Home used to open on three counts and a list of recent orders. It now leads with what needs you today — new orders, what's due, money to collect — then this week's sales against last week's, your best seller, who came back and where your orders came from. Every number opens the orders it counted, and a week-ahead strip shows your busiest day coming. Recent orders live in Orders now. Today's sales are on every plan; the 7- and 30-day views and the insight cards are Pro.",
+				},
+				href: "/app",
+				hrefLabel: { en: "Open Home" },
+				icon: "chart",
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Orders that arrive after your credits run out wait to be opened",
+				},
+				body: {
+					en: "Until now, running out of credits changed nothing on your side. From this release, an order that lands once your balance is at zero still shows in your inbox, but its buyer and items stay closed until credits come in. Each credit opens one waiting order, oldest first — from a top-up, your monthly credits or a paid invoice. A banner counts what's waiting, and a Waiting on credits filter finds them. Orders you already have stay open, and cancelling a waiting one always gives its credit back. On every plan.",
+				},
+				href: spotlightHref("credit_balance"),
+				hrefLabel: { en: "See your balance" },
+				icon: "gauge",
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Put a product on sale, or run a flash sale with a countdown",
+				},
+				body: {
+					en: "Set a sale price on any product and pick how long it runs — it snaps back to the normal price by itself when time is up. Buyers see a badge and the old price struck through, plus a live countdown on a timed sale. For a flash sale, sell only the first so-many units at that price, cap how many go in one order, and have unpaid orders cancel themselves so the units go back on sale. The Promotion card sits under each product's price. On Pro.",
+				},
+				href: spotlightHref("promo"),
+				hrefLabel: { en: "Set up a promotion" },
+			},
+			{
+				kind: "feature",
+				title: { en: "Hand out single-use voucher codes" },
+				body: {
+					en: "Say sorry for a late order, thank a regular or run a giveaway. Vouchers, a new page in your menu, makes codes worth an amount or a percentage off, with an expiry if you want one — one at a time, or twenty at once under a batch name. Share each as a code, a QR for your counter or a link that opens checkout with it applied. A code works once, comes off the items after any sale price, and works again if its order is cancelled. On Pro.",
+				},
+				// The page itself, not a ring: Vouchers is a route of its own, and
+				// "New voucher" is the first thing on it.
+				href: "/app/vouchers",
+				hrefLabel: { en: "Create a voucher" },
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Event venues get a card of their own",
+				},
+				body: {
+					en: "A hall you only use for events had to be a pickup point you switched off, so it hid behind Show inactive. Venues now have their own card in Fulfilment, right under Pickup. Turn on Only hosts events and buyers never see it at checkout; leave it off and one place can be both your pickup point and your venue. A venue set up the old way still works — to move it across, open it, turn on Only hosts events, then switch it back on. Events are on Pro.",
+				},
+				href: spotlightHref("event_venues"),
+				hrefLabel: { en: "See your venues" },
+			},
+			{
+				kind: "enhancement",
+				title: { en: 'Every "I\'ve paid" now comes with the screenshot' },
+				body: {
+					en: "A buyer paying by bank transfer or QR could tap I've paid with nothing attached, and you were left scrolling the chat for proof. The payment screenshot is now the first thing their form asks for, and the button waits until it's attached — a buyer who really can't is told to message you on WhatsApp instead. When a buyer sends more than one, your order page shows the newest reference everywhere and says which submission it came from. On every plan.",
+				},
+				// No link: nothing to switch on. It reaches the seller on the next
+				// order a buyer marks paid — the v2026.09.8 overseas-number posture.
+			},
+		],
+	},
+	{
 		version: "2026.10.1",
 		date: "2026-10-02",
 		// Notable, and not a close call — all three triggers are lit at once.
@@ -203,7 +284,7 @@ export const RELEASES: Release[] = [
 					en: "Every order spends a credit, and the balance is on the page",
 				},
 				body: {
-					en: "Your plan's monthly allowance used to be a quiet line that counted up and did nothing much. It is now a balance you can act on: Starter comes with 100 credits a month, Pro with 200, Founding Pro with 300, and one order spends one. The meter sits right under your plan, and warns you once you are into the last fifth of the month. Run out and nothing stops: your storefront keeps taking orders and they come off your next credits, so a top-up or the 1st of the month clears the balance. Cancel an order nobody had started on and the credit comes back. On every plan.",
+					en: "Your plan's monthly allowance used to be a quiet line that counted up and did nothing much. It is now a balance you can act on: Starter comes with 100 credits a month, Pro with 200, Founding Pro with 300, and one order spends one. The meter sits right under your plan, and warns you once you are into the last fifth of the month. Run out and your storefront keeps taking orders, and they come off your next credits, so a top-up or the 1st of the month clears the balance. Cancel an order nobody had started on and the credit comes back. On every plan.",
 				},
 				href: spotlightHref("credit_balance"),
 				hrefLabel: { en: "See your balance" },
