@@ -588,6 +588,16 @@ export const handleInbound = internalAction({
 				}
 				return;
 			}
+			if (start.result === "unavailable") {
+				// A reply to the buyer's own message, not a new send: the store
+				// isn't taking counter orders (hold / Kedaipal's switch).
+				try {
+					await wa.send(fromPhone, { kind: "text", body: start.message });
+				} catch (err) {
+					console.error("WA store-qr unavailable reply failed", err);
+				}
+				return;
+			}
 			const body = renderSystemMessage(
 				start.locale,
 				start.result === "started" ? "storeQrConnected" : "storeQrBusy",

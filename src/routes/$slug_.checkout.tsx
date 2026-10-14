@@ -17,6 +17,7 @@ import {
 	OrderingPausedProvider,
 	SeasonalBreakNotice,
 } from "../components/storefront/seasonal-break";
+import { StoreUnavailable } from "../components/storefront/store-unavailable";
 import { StorefrontAppBar } from "../components/storefront/storefront-app-bar";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { CountdownBand } from "../components/ui/countdown-strip";
@@ -95,6 +96,9 @@ export const Route = createFileRoute("/$slug_/checkout")({
 		if (result.status === "notFound") {
 			throw notFound();
 		}
+		// Taken offline by Kedaipal (z8r3fdudf7): no store data to preload —
+		// the component renders the neutral unavailable page (noindex).
+		if (result.status === "unavailable") return null;
 
 		return {
 			storeName: result.retailer.storeName,
@@ -179,6 +183,9 @@ function CheckoutRoute() {
 	// Without the cart gate the first committed render shows the empty-cart
 	// panel — with a "Browse {store}" button that navigates away from checkout
 	// — before the buyer's items hydrate from localStorage.
+	if (result?.status === "unavailable") {
+		return <StoreUnavailable storeName={result.storeName} />;
+	}
 	if (!retailer || !cart.hydrated) {
 		return <CheckoutSkeleton />;
 	}
@@ -188,7 +195,7 @@ function CheckoutRoute() {
 	// kept (localStorage) for when the store reopens.
 	if (retailer.orderingPaused) {
 		return (
-			<OrderingPausedProvider paused>
+			<OrderingPausedProvider paused pausedBy={retailer.orderingPausedBy}>
 				<div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col pb-10">
 					<StorefrontAppBar retailer={retailer} slug={retailer.slug} />
 					<SeasonalBreakNotice storeName={retailer.storeName} />
@@ -197,9 +204,10 @@ function CheckoutRoute() {
 							Checkout
 						</h1>
 						<p className="mt-2 text-sm text-muted-foreground">
-							{retailer.storeName} isn't taking orders this season, so there's
-							nothing to check out yet. Your basket is saved for when they're
-							back.
+							{retailer.orderingPausedBy?.by === "hold"
+								? `${retailer.storeName} isn't taking orders this season, so there's nothing to check out yet.`
+								: `${retailer.storeName} isn't taking orders right now, so there's nothing to check out yet.`}{" "}
+							Your basket is saved for when they're back.
 						</p>
 						<Link
 							to="/$slug"

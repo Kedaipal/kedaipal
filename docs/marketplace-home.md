@@ -37,6 +37,10 @@ A store lists when ALL hold:
    20 active rows checked. An empty storefront is a dead end we don't route
    buyers into.
 4. **Not purging** (`purgeStartedAt` unset).
+   Separate from the hide: an admin can take the whole store **offline**
+   ([store-availability.md](./store-availability.md), `z8r3fdudf7`), which
+   also drops it from the directory and the sitemap, because its storefront
+   is gone. Hiding only moves the listing.
 
 **Billing state is deliberately absent** — the storefront never hides on
 subscription state (convex/subscriptions.ts invariant) and the directory

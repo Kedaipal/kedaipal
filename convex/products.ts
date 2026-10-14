@@ -1,4 +1,5 @@
 import { ConvexError, v } from "convex/values";
+import { offlineStoreIds } from "./storeAvailability";
 import {
 	formatFulfilmentDate,
 	isMytMidnight,
@@ -3049,7 +3050,11 @@ export const listForSitemap = query({
 	): Promise<
 		Array<{ storeSlug: string; productSlug: string; updatedAt: number }>
 	> => {
-		const retailers = await ctx.db.query("retailers").collect();
+		const offline = await offlineStoreIds(ctx);
+		const retailers = (await ctx.db.query("retailers").collect()).filter(
+			// An offline store's product pages are the "unavailable" screen.
+			(r) => !offline.has(r._id),
+		);
 		const out: Array<{
 			storeSlug: string;
 			productSlug: string;

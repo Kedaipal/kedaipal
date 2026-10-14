@@ -31,7 +31,11 @@ export type SellerBucket =
 	| "admin"
 	| "none";
 
-export type SellerFilter = "all" | SellerBucket | "wants_enterprise";
+export type SellerFilter =
+	| "all"
+	| SellerBucket
+	| "wants_enterprise"
+	| "unavailable";
 
 /** Chip order. Past due sits first after All — it is the urgent bucket, and
  * an urgent filter never sits last (CLAUDE.md, "own the structure"). Unclaimed
@@ -47,6 +51,10 @@ export const SELLER_FILTERS: readonly SellerFilter[] = [
 	"past_due",
 	"unclaimed",
 	"wants_enterprise",
+	// Paused / offline (z8r3fdudf7) — orthogonal to billing status like the
+	// lead filter, and in the front group: a store not taking orders is
+	// either something Kedaipal did or something to check on.
+	"unavailable",
 	"trialing",
 	"active",
 	"on_hold",
@@ -68,6 +76,7 @@ export const SELLER_FILTER_LABEL: Record<SellerFilter, string> = {
 	admin: "Admin",
 	none: "No subscription",
 	wants_enterprise: "Wants Enterprise",
+	unavailable: "Paused / offline",
 };
 
 /** The empty state's noun for a filter — "No {noun}{ match …}". The chip
@@ -76,6 +85,7 @@ export const SELLER_FILTER_LABEL: Record<SellerFilter, string> = {
  * phrase is owned here beside the labels. */
 export function sellerFilterEmptyNoun(filter: SellerFilter): string {
 	if (filter === "wants_enterprise") return "open Enterprise asks";
+	if (filter === "unavailable") return "paused or offline stores";
 	return `${SELLER_FILTER_LABEL[filter].toLowerCase()} sellers`;
 }
 
@@ -116,10 +126,12 @@ export function countSellerBuckets(
 		admin: 0,
 		none: 0,
 		wants_enterprise: 0,
+		unavailable: 0,
 	};
 	for (const row of rows) {
 		counts[sellerBucket(row)] += 1;
 		if (isEnterpriseLead(row)) counts.wants_enterprise += 1;
+		if (row.availability.state !== "open") counts.unavailable += 1;
 	}
 	return counts;
 }
@@ -242,7 +254,9 @@ export function filterSellers(
 				? true
 				: filter === "wants_enterprise"
 					? isEnterpriseLead(row)
-					: sellerBucket(row) === filter) && matchesSellerSearch(row, query),
+					: filter === "unavailable"
+						? row.availability.state !== "open"
+						: sellerBucket(row) === filter) && matchesSellerSearch(row, query),
 	);
 }
 
@@ -450,6 +464,13 @@ export function sellerReason(row: AdminSellerRow): string | undefined {
 		return row.pendingOwnerEmail
 			? "Built by us · waiting to be claimed"
 			: "Built by us · set a handover email";
+	// Not taking orders (z8r3fdudf7) — said before billing, because it is
+	// what the store's buyers are feeling right now.
+	const a = row.availability;
+	if (a.state === "offline") return "Offline · taken down by Kedaipal";
+	if (a.state === "paused" && a.by === "admin") return "Paused by Kedaipal";
+	if (a.state === "paused" && a.by === "seller")
+		return a.note ? `Paused by seller · “${a.note}”` : "Paused by seller";
 	if (row.ownerIsAdmin || row.comped) return undefined;
 	const failed = row.autoRenew?.failedAttempts ?? 0;
 	if (failed > 0) {

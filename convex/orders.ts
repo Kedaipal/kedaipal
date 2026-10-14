@@ -1,5 +1,6 @@
 import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
+import { assertTakesBuyerOrders } from "./storeAvailability";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
@@ -94,7 +95,6 @@ import {
 } from "./lib/productEvent";
 import { closedDateIssue } from "./lib/closedDates";
 import { assertWithinOpeningHours } from "./lib/openingHours";
-import { orderingPausedMessage } from "./lib/seasonalHold";
 import { orderDocumentTitle } from "./lib/orderDocument";
 import { matchesBookingPeriod } from "./lib/bookingPeriod";
 import {
@@ -1017,8 +1017,9 @@ export const create = mutation({
 		if (!retailer) throw new ConvexError("Retailer not found");
 		// Off-Season Hold (z8r3fday24): the seller's own "ordering is paused"
 		// switch — a STORE setting like opening hours, never billing status.
-		if (retailer.orderingPausedAt !== undefined)
-			throw new ConvexError(orderingPausedMessage(retailer.storeName));
+		// Store availability (z8r3fdudf7) — the seller's pause, Kedaipal's
+		// pause/offline and Off-Season Hold, resolved in ONE place.
+		await assertTakesBuyerOrders(ctx, retailer);
 		const retailerCountry = retailer.country ?? DEFAULT_COUNTRY;
 
 		// Address shape follows the STORE's country — SG stores take 6-digit

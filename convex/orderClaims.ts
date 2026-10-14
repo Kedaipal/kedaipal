@@ -36,6 +36,11 @@
  */
 
 import { ConvexError, v } from "convex/values";
+import { takesCounterOrders } from "./lib/storeAvailability";
+import {
+	assertTakesCounterOrders,
+	storeAvailabilityOf,
+} from "./storeAvailability";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
@@ -51,7 +56,6 @@ import {
 	isChoosablePickupPoint,
 	pickupChoiceRefusal,
 } from "./lib/pickupChoice";
-import { orderingPausedMessage } from "./lib/seasonalHold";
 import { recordOrderCreated } from "./subscriptionUsage";
 import { assertValidAddress } from "./lib/address";
 import { sanitizeAttributionSource } from "./lib/attribution";
@@ -322,8 +326,10 @@ export const sendClaim = mutation({
 		await assertSubscriptionActive(ctx, session.retailerId);
 		const retailer = access.retailer;
 		// Off-Season Hold (z8r3fday24): a paused store sends no claim links.
-		if (retailer.orderingPausedAt !== undefined)
-			throw new ConvexError(orderingPausedMessage(retailer.storeName));
+		// A claim link is a COUNTER sale finished on the buyer's phone, so it
+		// follows the counter's rule (z8r3fdudf7): open under the seller's own
+		// pause, closed by a hold or Kedaipal's switch.
+		await assertTakesCounterOrders(ctx, retailer);
 		if (session.status !== "buyer_identified")
 			throw new ConvexError("This checkout isn't open any more");
 		if (!session.waPhone)
@@ -438,8 +444,7 @@ export const resendClaim = mutation({
 		await assertSubscriptionActive(ctx, claim.retailerId);
 		// Re-sending pushes a fresh link into the buyer's chat — a new order
 		// invitation, refused while paused exactly like sendClaim.
-		if (access.retailer.orderingPausedAt !== undefined)
-			throw new ConvexError(orderingPausedMessage(access.retailer.storeName));
+		await assertTakesCounterOrders(ctx, access.retailer);
 		const now = Date.now();
 		if (effectiveClaimStatus(claim, now) !== "open")
 			throw new ConvexError(
@@ -683,6 +688,10 @@ export interface ClaimPagePayload {
 		 * buyer learns on LOAD, not after filling in an address the commit
 		 * would refuse. */
 		orderingPaused: boolean;
+		/** Why, when it is (`z8r3fdudf7`) — the page words a hold and
+		 * Kedaipal's switch differently. Never "seller": their own pause leaves
+		 * the counter (and so a claim) open. */
+		orderingPausedBy?: "seller" | "hold" | "admin";
 		/** The store is lapsed, so the order this commits can't be paid yet
 		 * (z8r3fdr6gg). One bit — never the subscription status. */
 		paymentsPaused: boolean;
@@ -757,6 +766,7 @@ export const getByToken = query({
 			}
 		}
 
+		const availability = await storeAvailabilityOf(ctx, retailer);
 		const payload: ClaimPagePayload = {
 			status,
 			store: {
@@ -780,7 +790,11 @@ export const getByToken = query({
 				openingHours: retailer.openingHours as OpeningHours | undefined,
 				closedDates: retailer.closedDates,
 				confirmPushEnabled: orderConfirmTemplateName() !== undefined,
-				orderingPaused: retailer.orderingPausedAt !== undefined,
+				// Counter rule (a claim is a counter sale): closed only by a hold
+				// or Kedaipal's switch, and the page words each its own way.
+				orderingPaused: !takesCounterOrders(availability),
+				orderingPausedBy:
+					availability.state === "open" ? undefined : availability.by,
 				paymentsPaused: await buyerPaymentsPaused(ctx, retailer._id),
 			},
 		};
@@ -886,8 +900,7 @@ export const commit = mutation({
 		// reaches here: getByToken carries `orderingPaused` and the page renders a
 		// dead end on load. Idempotent re-commits are handled ABOVE this line, so
 		// a buyer who already completed still gets their order back.
-		if (retailer.orderingPausedAt !== undefined)
-			throw new ConvexError(orderingPausedMessage(retailer.storeName));
+		await assertTakesCounterOrders(ctx, retailer);
 		const retailerCountry = retailer.country ?? DEFAULT_COUNTRY;
 		const paymentsPaused = await buyerPaymentsPaused(ctx, retailer._id);
 

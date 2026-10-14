@@ -55,6 +55,12 @@ import { storeIsInternal } from "./marketplace";
 import { ADMIN_STORE_LIST_LIMIT } from "./lib/adminDirectory";
 import { contractForAdmin } from "./lib/enterprise";
 import { isUnclaimed } from "./lib/unclaimedStore";
+import {
+	cleanAvailabilityNote,
+	resolveStoreAvailability,
+	type StoreAvailability,
+} from "./lib/storeAvailability";
+import { loadAvailabilityRow } from "./storeAvailability";
 import { loadSubscription, resolveAccess } from "./subscriptions";
 
 /** How many sellers the directory pulls. The Founding cohort is ~10 and the whole
@@ -66,6 +72,14 @@ const SELLER_LIMIT = ADMIN_STORE_LIST_LIMIT;
 const AUDIT_LIMIT = 50;
 
 export type AdminSellerRow = {
+	/** Store availability (`z8r3fdudf7`) — the resolved state, from the one
+	 * resolver the order doors use, plus Kedaipal's own switch and note so the
+	 * sheet can show and lift it. */
+	availability: StoreAvailability;
+	adminAvailability?: { mode: "paused" | "offline"; note?: string; at?: number };
+	/** The seller's own pause, which an admin switch on top hides from the
+	 * resolved state — so "Reopen" can say what will still be off. */
+	sellerPaused?: boolean;
 	_id: Id<"retailers">;
 	storeName: string;
 	slug: string;
@@ -349,7 +363,15 @@ export const listSellersForAdmin = query({
 		const capped = scanned.length > SELLER_LIMIT;
 		const retailers = scanned.slice(0, SELLER_LIMIT);
 		const rows: AdminSellerRow[] = [];
+		// One read of the (small) availability table, not one per store.
+		const availabilityRows = new Map(
+			(await ctx.db.query("storeAvailability").collect()).map((a) => [
+				a.retailerId as string,
+				a,
+			]),
+		);
 		for (const r of retailers) {
+			const availabilityRow = availabilityRows.get(r._id);
 			const sub = await loadSubscription(ctx, r._id);
 			// Dangling once the referrer is purged (no referential integrity) —
 			// a missing doc simply reads as "no referrer".
@@ -440,6 +462,19 @@ export const listSellersForAdmin = query({
 				handoverInviteSentAt: r.handoverInviteSentAt,
 				claimedAt: r.claimedAt,
 				purging: r.purgeStartedAt !== undefined,
+				availability: resolveStoreAvailability({
+					holdPausedAt: r.orderingPausedAt,
+					row: availabilityRow,
+				}),
+				adminAvailability:
+					availabilityRow?.adminMode !== undefined
+						? {
+								mode: availabilityRow.adminMode,
+								note: availabilityRow.adminNote,
+								at: availabilityRow.adminAt,
+							}
+						: undefined,
+				sellerPaused: availabilityRow?.sellerPausedAt !== undefined || undefined,
 				marketplace: {
 					unlistedAt: r.marketplaceUnlistedAt,
 					sponsoredUntil: r.marketplaceSponsoredUntil,
@@ -658,6 +693,74 @@ export const showOnMarketplace = mutation({
 			action: "admin.showOnMarketplace",
 			targetId: retailerId,
 			ts: Date.now(),
+		});
+	},
+});
+
+/**
+ * Kedaipal switches a store off (`z8r3fdudf7`): `paused` keeps the storefront
+ * browse-only and closes every order door INCLUDING the counter; `offline`
+ * takes the storefront itself down (neutral unavailable page, off /stores and
+ * the sitemap). Its own stamp, so it never clears the seller's pause or an
+ * Off-Season Hold, and lifting it reveals whichever of those is still on.
+ * The note is shown to the SELLER ("Kedaipal paused this store: …") — never
+ * to buyers, who only ever see a neutral "isn't available right now".
+ * Existing orders are untouched: tracking pages, transactional messages and
+ * the seller's progress / refund controls all keep working.
+ */
+export const setStoreAvailability = mutation({
+	args: {
+		retailerId: v.id("retailers"),
+		mode: v.union(v.literal("paused"), v.literal("offline")),
+		note: v.optional(v.string()),
+	},
+	handler: async (ctx, { retailerId, mode, note }): Promise<void> => {
+		const adminUserId = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		const now = Date.now();
+		const fields = {
+			adminMode: mode,
+			adminNote: cleanAvailabilityNote(note),
+			adminAt: now,
+			adminByUserId: adminUserId,
+			updatedAt: now,
+		};
+		const row = await loadAvailabilityRow(ctx, retailerId);
+		if (row) await ctx.db.patch(row._id, fields);
+		else await ctx.db.insert("storeAvailability", { retailerId, ...fields });
+		await ctx.db.insert("adminAuditLog", {
+			adminUserId,
+			retailerId,
+			action: mode === "offline" ? "admin.takeStoreOffline" : "admin.pauseStore",
+			targetId: retailerId,
+			ts: now,
+		});
+	},
+});
+
+/** Lift Kedaipal's switch. The seller's own pause and a hold, if either is
+ * on, keep speaking — a reopen never silently reopens what someone else shut. */
+export const clearStoreAvailability = mutation({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<void> => {
+		const adminUserId = await requireAdmin(ctx);
+		const row = await loadAvailabilityRow(ctx, retailerId);
+		if (!row || row.adminMode === undefined) return;
+		const now = Date.now();
+		await ctx.db.patch(row._id, {
+			adminMode: undefined,
+			adminNote: undefined,
+			adminAt: undefined,
+			adminByUserId: undefined,
+			updatedAt: now,
+		});
+		await ctx.db.insert("adminAuditLog", {
+			adminUserId,
+			retailerId,
+			action: "admin.reopenStore",
+			targetId: retailerId,
+			ts: now,
 		});
 	},
 });

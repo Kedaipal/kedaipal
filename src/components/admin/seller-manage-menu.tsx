@@ -13,6 +13,9 @@ import {
 	Info,
 	Loader2,
 	Megaphone,
+	PauseCircle,
+	PlayCircle,
+	PowerOff,
 	Store,
 	Trash2,
 	UserPlus,
@@ -23,6 +26,7 @@ import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { AdminSellerRow } from "../../../convex/admin";
 import { HIDDEN_NOTE_MAX } from "../../../convex/lib/marketplaceListing";
+import { STORE_PAUSE_NOTE_MAX } from "../../../convex/lib/storeAvailability";
 import { useActAs } from "../../hooks/useActAs";
 import {
 	highlightedThroughLabel,
@@ -96,6 +100,12 @@ export function SellerManageMenu({
 	const purgeStore = useMutation(api.admin.purgeStoreForAdmin);
 	const hideStore = useMutation(api.admin.hideFromMarketplace);
 	const showStore = useMutation(api.admin.showOnMarketplace);
+	const setAvailability = useMutation(api.admin.setStoreAvailability);
+	const clearAvailability = useMutation(api.admin.clearStoreAvailability);
+	const [availabilityOpen, setAvailabilityOpen] = useState<
+		"paused" | "offline" | null
+	>(null);
+	const adminSwitch = seller.adminAvailability;
 	const [purgeOpen, setPurgeOpen] = useState(false);
 	const [hideOpen, setHideOpen] = useState(false);
 	const [compOpen, setCompOpen] = useState(false);
@@ -163,6 +173,50 @@ export function SellerManageMenu({
 				seller.marketplace.unlistedAt !== undefined
 					? `${seller.storeName} is no longer hidden, but the seller has opted out, so it still won't show.`
 					: `${seller.storeName} can appear on /stores again.`,
+			);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		}
+	}
+
+	// Kedaipal's store switch (z8r3fdudf7). Confirmed with a note the seller
+	// reads; never touches billing or orders already placed.
+	async function confirmAvailability(note?: string) {
+		if (!availabilityOpen) return;
+		try {
+			await setAvailability({
+				retailerId: seller._id,
+				mode: availabilityOpen,
+				note,
+			});
+			toast.success(
+				availabilityOpen === "offline"
+					? `${seller.storeName} is offline — its storefront now says it isn't available.`
+					: `${seller.storeName} is paused — buyers can browse but not order.`,
+			);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+			throw err;
+		}
+	}
+
+	// Reopening restores what was there before — one click, undone by the
+	// same menu — and the toast says when the seller's own pause or an
+	// Off-Season Hold still keeps orders off.
+	async function reopen() {
+		try {
+			await clearAvailability({ retailerId: seller._id });
+			// What's left underneath Kedaipal's switch, in the resolver's order.
+			const stillOff =
+				seller.subscriptionStatus === "on_hold"
+					? "an Off-Season Hold"
+					: seller.sellerPaused
+						? "the seller's own pause"
+						: undefined;
+			toast.success(
+				stillOff
+					? `Kedaipal's switch is off, but ${seller.storeName} is still not taking orders — ${stillOff}.`
+					: `${seller.storeName} is open for orders again.`,
 			);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -398,6 +452,67 @@ export function SellerManageMenu({
 							</span>
 						</span>
 					</DropdownMenuItem>
+					{/* Store availability (z8r3fdudf7) — after the /stores items:
+					    those move the store's LISTING, these its whole ordering. */}
+					{adminSwitch ? (
+						<DropdownMenuItem
+							onSelect={() => void reopen()}
+							className="items-start"
+						>
+							<PlayCircle
+								className="mt-0.5 size-4 text-accent-emphasis"
+								aria-hidden="true"
+							/>
+							<span className="flex min-w-0 flex-col">
+								<span className="font-medium">Reopen store</span>
+								<span className="text-xs text-muted-foreground">
+									{adminSwitch.mode === "offline" ? "Offline" : "Paused"} by
+									Kedaipal
+									{adminSwitch.at !== undefined
+										? ` since ${formatShortDate(adminSwitch.at)}`
+										: ""}
+								</span>
+							</span>
+						</DropdownMenuItem>
+					) : null}
+					{adminSwitch?.mode !== "paused" ? (
+						<DropdownMenuItem
+							onSelect={() => setAvailabilityOpen("paused")}
+							className="items-start"
+						>
+							<PauseCircle
+								className="mt-0.5 size-4 text-muted-foreground"
+								aria-hidden="true"
+							/>
+							<span className="flex min-w-0 flex-col">
+								<span className="font-medium">
+									{adminSwitch?.mode === "offline"
+										? "Bring back as paused"
+										: "Pause ordering"}
+								</span>
+								<span className="text-xs text-muted-foreground">
+									Browse-only — every order door closes, the counter too
+								</span>
+							</span>
+						</DropdownMenuItem>
+					) : null}
+					{adminSwitch?.mode !== "offline" ? (
+						<DropdownMenuItem
+							onSelect={() => setAvailabilityOpen("offline")}
+							className="items-start"
+						>
+							<PowerOff
+								className="mt-0.5 size-4 text-muted-foreground"
+								aria-hidden="true"
+							/>
+							<span className="flex min-w-0 flex-col">
+								<span className="font-medium">Take store offline</span>
+								<span className="text-xs text-muted-foreground">
+									Storefront says "isn't available" — off /stores and search
+								</span>
+							</span>
+						</DropdownMenuItem>
+					) : null}
 					{purgeEnabled ? (
 						<>
 							<DropdownMenuSeparator />
@@ -459,6 +574,46 @@ export function SellerManageMenu({
 				}}
 				confirmLabel="Hide from /stores"
 				onConfirm={confirmHide}
+			/>
+			<ConfirmDialog
+				open={availabilityOpen !== null}
+				onOpenChange={(o) => !o && setAvailabilityOpen(null)}
+				destructive={availabilityOpen === "offline"}
+				title={
+					availabilityOpen === "offline"
+						? `Take ${seller.storeName} offline?`
+						: `Pause ordering at ${seller.storeName}?`
+				}
+				description={
+					availabilityOpen === "offline" ? (
+						<>
+							Its storefront, product pages and checkout show a neutral “isn't
+							available right now” page, and it leaves /stores, the sitemap and
+							search. Orders already placed carry on: buyers keep their tracking
+							links and order messages, and the seller can still progress, mark
+							paid and refund them. Billing is untouched. Reopen from this menu.
+						</>
+					) : (
+						<>
+							Buyers can still browse the storefront but can't order — the
+							checkout, bookings, RSVPs, claim links and the counter all refuse.
+							Buyers see a calm “not taking orders right now”, never why. Orders
+							already placed carry on, and billing is untouched. The seller
+							can't reopen it themselves; you can, from this menu.
+						</>
+					)
+				}
+				reason={{
+					label: "Note to the seller",
+					placeholder: "e.g. Pulled out of Campfest — message Arif to reopen.",
+					maxLength: STORE_PAUSE_NOTE_MAX,
+					helper:
+						"Shown to the seller on their dashboard and in Settings → Store. Never to buyers.",
+				}}
+				confirmLabel={
+					availabilityOpen === "offline" ? "Take it offline" : "Pause ordering"
+				}
+				onConfirm={confirmAvailability}
 			/>
 			{purgeEnabled ? (
 				<ConfirmDialog

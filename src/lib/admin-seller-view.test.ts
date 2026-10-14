@@ -40,6 +40,7 @@ const at = (days: number) => NOW + days * DAY;
 function row(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 	return {
 		_id: "r1" as AdminSellerRow["_id"],
+		availability: { state: "open" },
 		storeName: "Bearcamp Malaysia",
 		slug: "bearcamp-malaysia",
 		ownerUserId: "u1",
@@ -804,5 +805,33 @@ describe("sellerCredits", () => {
 
 	it("a store with no account yet says so", () => {
 		expect(sellerCredits(row()).detail).toBe("No credit account yet");
+	});
+});
+
+describe("store availability in the directory (z8r3fdudf7)", () => {
+	const paused = row({
+		availability: { state: "paused", by: "seller", note: "Back on 1 Nov" },
+	});
+	const offline = row({
+		_id: "r2" as AdminSellerRow["_id"],
+		availability: { state: "offline", by: "admin" },
+	});
+	const open = row({ _id: "r3" as AdminSellerRow["_id"] });
+
+	it("the status line says whose switch it is", () => {
+		expect(sellerReason(paused)).toBe("Paused by seller · “Back on 1 Nov”");
+		expect(sellerReason(offline)).toBe("Offline · taken down by Kedaipal");
+		expect(
+			sellerReason(row({ availability: { state: "paused", by: "admin" } })),
+		).toBe("Paused by Kedaipal");
+	});
+
+	it("'Paused / offline' counts and filters across every billing status", () => {
+		const rows = [paused, offline, open];
+		expect(countSellerBuckets(rows).unavailable).toBe(2);
+		expect(filterSellers(rows, "unavailable", "").map((r) => r._id)).toEqual([
+			paused._id,
+			offline._id,
+		]);
 	});
 });

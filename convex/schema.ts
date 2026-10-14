@@ -2975,6 +2975,35 @@ export default defineSchema({
 		// The list's default order (newest first) and the batch grouping.
 		.index("by_retailer_created", ["retailerId", "createdAt"]),
 
+	/**
+	 * Store availability (`z8r3fdudf7`) — the seller's "Accepting orders"
+	 * switch and Kedaipal's pause / take-offline, ONE row per store that has
+	 * ever used either. Resolved with the Off-Season Hold stamp
+	 * (`retailers.orderingPausedAt`) by `convex/lib/storeAvailability.ts`,
+	 * the one author every order door and surface asks.
+	 *
+	 * Its own table rather than fields on `retailers`: a new field on that row
+	 * poisons the shared dev deployment for every branch without it the moment
+	 * one store uses the feature, and a patch to the retailer row re-runs
+	 * every open storefront subscription. A separate stamp per author (seller,
+	 * admin) so one can never clear the other's.
+	 */
+	storeAvailability: defineTable({
+		retailerId: v.id("retailers"),
+		// Seller pause: buyers browse, can't order; the counter stays open.
+		sellerPausedAt: v.optional(v.number()),
+		// Shown to buyers on the paused banner ("Back on 1 Nov"). ≤140 chars.
+		sellerPauseNote: v.optional(v.string()),
+		// Kedaipal moderation: `paused` = browse-only, counter closed too;
+		// `offline` = storefront gone (neutral unavailable page, off /stores,
+		// off the sitemap). The seller sees the note; buyers never do.
+		adminMode: v.optional(v.union(v.literal("paused"), v.literal("offline"))),
+		adminNote: v.optional(v.string()),
+		adminAt: v.optional(v.number()),
+		adminByUserId: v.optional(v.string()),
+		updatedAt: v.number(),
+	}).index("by_retailer", ["retailerId"]),
+
 	// --- Manual subscription billing (docs/manual-subscription.md) -----------
 	// Per-retailer subscription. One row per retailer (created in-transaction by
 	// createRetailer). Entitlement caps are DENORMALIZED here so feature-gating

@@ -17,6 +17,7 @@ import {
 	OrderingPausedProvider,
 	SeasonalBreakNotice,
 } from "../components/storefront/seasonal-break";
+import { StoreUnavailable } from "../components/storefront/store-unavailable";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { StorefrontHeader } from "../components/storefront/storefront-header";
 import { Skeleton } from "../components/ui/skeleton";
@@ -78,6 +79,9 @@ export const Route = createFileRoute("/$slug")({
 		if (result.status === "notFound") {
 			throw notFound();
 		}
+		// Taken offline by Kedaipal (z8r3fdudf7): no store data to preload —
+		// the component renders the neutral unavailable page (noindex).
+		if (result.status === "unavailable") return null;
 
 		const retailer = result.retailer;
 
@@ -292,6 +296,9 @@ function StorefrontRoute() {
 		result && result.status === "ok" ? result.retailer._id : undefined,
 	);
 
+	if (result?.status === "unavailable") {
+		return <StoreUnavailable storeName={result.storeName} />;
+	}
 	if (result === undefined || result.status !== "ok") {
 		return <StorefrontSkeleton />;
 	}
@@ -299,7 +306,10 @@ function StorefrontRoute() {
 	const retailer = result.retailer;
 
 	return (
-		<OrderingPausedProvider paused={retailer.orderingPaused === true}>
+		<OrderingPausedProvider
+			paused={retailer.orderingPaused === true}
+			pausedBy={retailer.orderingPausedBy}
+		>
 			{/* pb-28 keeps ≥96px clear under the content for the floating cart
 			    pill (z8r3fdegb5) so it never sits on the footer. */}
 			<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-28">
