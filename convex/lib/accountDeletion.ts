@@ -73,6 +73,7 @@ export const DELETION_PHASES = [
 	"orderClaims",
 	"vouchers",
 	"promotions",
+	"storeAvailability",
 	"subscriptions",
 	"subscriptionUsage",
 	"creditPurchases",
@@ -333,6 +334,16 @@ export async function runDeletionPhase(
 				processed: members.length + rows.length,
 				done: rows.length < limit - members.length,
 			};
+		}
+		case "storeAvailability": {
+			// The seller's pause / Kedaipal's switch (`z8r3fdudf7`) — one row
+			// per store at most; it describes a storefront that is going.
+			const rows = await ctx.db
+				.query("storeAvailability")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const row of rows) await ctx.db.delete(row._id);
+			return { processed: rows.length, done: rows.length < limit };
 		}
 		case "subscriptions": {
 			// A deleted tenant must not leave MONEY rails live (86eyb6z4r):

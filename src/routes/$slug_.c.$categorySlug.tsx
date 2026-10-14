@@ -14,6 +14,11 @@ import {
 	OrderingPausedProvider,
 	SeasonalBreakNotice,
 } from "../components/storefront/seasonal-break";
+import {
+	StoreUnavailable,
+	type StoreUnavailableLoaderData,
+	storeUnavailableHead,
+} from "../components/storefront/store-unavailable";
 import { StorefrontAppBar } from "../components/storefront/storefront-app-bar";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { Skeleton } from "../components/ui/skeleton";
@@ -43,7 +48,9 @@ interface CategoryLoaderData {
  * pages and checkout — only the product set is scoped to the category.
  */
 export const Route = createFileRoute("/$slug_/c/$categorySlug")({
-	loader: async ({ params }): Promise<CategoryLoaderData | null> => {
+	loader: async ({
+		params,
+	}): Promise<CategoryLoaderData | StoreUnavailableLoaderData | null> => {
 		const client = getConvexHttpClient();
 		const retailerRead = await ssrRead(() =>
 			client.query(api.retailers.getRetailerBySlug, { slug: params.slug }),
@@ -65,6 +72,11 @@ export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 		if (result.status === "notFound") {
 			throw notFound();
 		}
+		// Taken offline by Kedaipal (z8r3fdudf7): no store data to preload —
+		// the component renders the neutral unavailable page, and head()
+		// takes it out of search in the SSR HTML.
+		if (result.status === "unavailable")
+			return { unavailable: true, storeName: result.storeName };
 		const retailer = result.retailer;
 
 		// Unknown or archived category → 404, never a silent empty page.
@@ -109,6 +121,8 @@ export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 	},
 	head: ({ loaderData }) => {
 		if (!loaderData) return {};
+		if ("unavailable" in loaderData)
+			return storeUnavailableHead(loaderData.storeName);
 		const {
 			storeName,
 			categoryName,
@@ -224,6 +238,9 @@ function CategoryRoute() {
 	// Same per-retailer cart as the store home — items carry across pages.
 	const cart = useCart(retailer?._id);
 
+	if (result?.status === "unavailable") {
+		return <StoreUnavailable storeName={result.storeName} />;
+	}
 	if (!retailer || page === undefined) {
 		return <CategorySkeleton />;
 	}
@@ -233,7 +250,10 @@ function CategoryRoute() {
 	}
 
 	return (
-		<OrderingPausedProvider paused={retailer.orderingPaused === true}>
+		<OrderingPausedProvider
+			paused={retailer.orderingPaused === true}
+			pausedBy={retailer.orderingPausedBy}
+		>
 			{/* pb-28 keeps ≥96px clear for the floating cart pill (z8r3fdegb5). */}
 			<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-28">
 				{/* Compact app bar (z8r3fdegb5): whose store this is, the way back,

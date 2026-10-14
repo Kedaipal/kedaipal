@@ -1,4 +1,9 @@
 import { v } from "convex/values";
+import {
+	takesBuyerOrders,
+	takesCounterOrders,
+} from "./lib/storeAvailability";
+import { offlineStoreIds, storeAvailabilityOf } from "./storeAvailability";
 
 // One customisable key survives the one-message-per-order cut (86eyd63r8):
 // `confirm`, the write-in reply for a buyer who messages their ORD- reference
@@ -980,6 +985,11 @@ type RetailerPublic = {
 	// cart CTAs; every order-create path refuses with the same reason). A store
 	// setting, not billing state — the subscription itself stays owner-only.
 	orderingPaused?: boolean;
+	/** Why ordering is off (`z8r3fdudf7`), when it is: the storefront banner's
+	 * wording follows it. `note` is the SELLER's to their buyers ("Back on 1
+	 * Nov") and is never set for Kedaipal's switch — buyers only ever see a
+	 * neutral sentence for that. Unset = taking orders. */
+	orderingPausedBy?: { by: "seller" | "hold" | "admin"; note?: string };
 	// Buyer payments paused because the store is lapsed (z8r3fdr6gg) — the ONE
 	// public bit of billing state, set on the storefront payload only so every
 	// checkout can say "you can order, you'll pay later" before the buyer
@@ -1191,7 +1201,9 @@ async function buildRetailerPublic(
 		claimLinkSource: row.claimLinkSource,
 		isFoundingMember: row.isFoundingMember,
 		foundingMemberRank: row.foundingMemberRank,
-		orderingPaused: row.orderingPausedAt !== undefined,
+		// The dashboard's till question: is the COUNTER closed? (A seller's
+		// own pause closes online orders only — see storeAvailability.)
+		orderingPaused: !takesCounterOrders(await storeAvailabilityOf(ctx, row)),
 		fullAccess:
 			storeHasFullAccess({
 				ownerIsAdmin: storeOwnerIsAdmin(row),
@@ -1294,6 +1306,10 @@ export const getRetailerBySlug = query({
 		| { status: "ok"; retailer: RetailerPublic }
 		| { status: "redirect"; to: string }
 		| { status: "notFound" }
+		// Taken offline by Kedaipal (`z8r3fdudf7`): the store's NAME only, for
+		// the neutral "isn't available right now" page — no catalogue, no
+		// contact numbers, nothing to order from.
+		| { status: "unavailable"; storeName: string }
 	> => {
 		const normalized = slug.trim().toLowerCase();
 		if (normalized.length === 0) return { status: "notFound" };
@@ -1303,6 +1319,9 @@ export const getRetailerBySlug = query({
 			.withIndex("by_slug", (q) => q.eq("slug", normalized))
 			.first();
 		if (active) {
+			const availability = await storeAvailabilityOf(ctx, active);
+			if (availability.state === "offline")
+				return { status: "unavailable", storeName: active.storeName };
 			let logoUrl: string | undefined;
 			if (active.logoStorageId) {
 				const url = await ctx.storage.getUrl(active.logoStorageId);
@@ -1352,7 +1371,15 @@ export const getRetailerBySlug = query({
 					// included — beyond the one `paymentsPaused` bit.
 					isFoundingMember: active.isFoundingMember,
 					foundingMemberRank: active.foundingMemberRank,
-					orderingPaused: active.orderingPausedAt !== undefined,
+					orderingPaused: !takesBuyerOrders(availability),
+					orderingPausedBy:
+						availability.state === "open"
+							? undefined
+							: {
+									by: availability.by,
+									note:
+										availability.by === "seller" ? availability.note : undefined,
+								},
 					paymentsPaused: await buyerPaymentsPaused(ctx, active._id),
 					acceptsVouchers: await storeShowsVoucherEntry(ctx, active._id),
 					marketplaceUnlisted: active.marketplaceUnlistedAt !== undefined,
@@ -3830,8 +3857,12 @@ export const listSlugsForSitemap = query({
 	args: {},
 	handler: async (ctx): Promise<Array<{ slug: string; updatedAt: number }>> => {
 		const rows = await ctx.db.query("retailers").collect();
+		const offline = await offlineStoreIds(ctx);
 		return (
 			rows
+				// Taken offline by Kedaipal (z8r3fdudf7): the page is a noindex
+				// "unavailable" screen — never hand it to a crawler.
+				.filter((r) => !offline.has(r._id))
 				// A pre-built store's storefront works by direct link — that is how
 				// an admin shows the vendor their shop before handover — but it is
 				// nobody's shop yet, so it must not be submitted to search engines.

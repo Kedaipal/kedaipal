@@ -1,4 +1,6 @@
 import { v } from "convex/values";
+import { takesBuyerOrders } from "./lib/storeAvailability";
+import { availabilityResolver } from "./storeAvailability";
 import type { Doc, Id } from "./_generated/dataModel";
 import { type QueryCtx, query } from "./_generated/server";
 import { adminUserIds, requireRetailerAccess } from "./lib/auth";
@@ -193,6 +195,7 @@ export const listStores = query({
 		const now = Date.now();
 		const adminIds = adminUserIds();
 		const rows = await ctx.db.query("retailers").collect();
+		const availabilityOf = await availabilityResolver(ctx);
 		const cards: Array<{ card: MarketplaceStoreCard; row: Doc<"retailers"> }> =
 			[];
 		for (const row of rows) {
@@ -206,6 +209,7 @@ export const listStores = query({
 					purgeStartedAt: row.purgeStartedAt,
 					internal: storeIsInternal(row, sub, adminIds),
 					hiddenByAdmin: row.marketplaceHidden !== undefined,
+					offline: availabilityOf(row).state === "offline",
 				})
 			)
 				continue;
@@ -245,7 +249,11 @@ export const listStores = query({
 					isFoundingMember: row.isFoundingMember,
 					foundingMemberRank: row.foundingMemberRank,
 					sponsored,
-					orderingPaused: row.orderingPausedAt !== undefined,
+					// Any pause (seller, hold, Kedaipal) reads "not taking orders"
+					// on the card, from the one resolver the order doors use.
+					orderingPaused: !takesBuyerOrders(
+						availabilityOf(row),
+					),
 					createdAt: row.createdAt,
 				},
 			});

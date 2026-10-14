@@ -53,6 +53,10 @@ export interface PrimaryActionInput {
 	 * Blocks BOTH modes: every door refuses it, and a claim link must never be
 	 * dead on arrival over an answer only the seller can give. */
 	unansweredQuestion?: string;
+	/** Why the counter is closed (`useCounterClosedReason`) — an Off-Season
+	 * Hold or Kedaipal's switch. Outranks every other reason in BOTH modes:
+	 * nothing about this cart matters while no order can be placed. */
+	closed?: string;
 	/** Formatted money for the label, e.g. "RM 20.00". */
 	money: string;
 	windowMinutes: number;
@@ -84,17 +88,20 @@ export function counterPrimaryAction(input: PrimaryActionInput): PrimaryAction {
 		eventName,
 		mixedRsvp,
 		unansweredQuestion,
+		closed,
 	} = input;
 	if (mode === "send") {
-		const reason = empty
-			? "Add an item first"
-			: mixedRsvp !== undefined
-				? `An RSVP is its own order — remove "${mixedRsvp}" or ring it up separately`
-				: eventName !== undefined
-					? `"${eventName}" is an event — share its storefront link so guests RSVP to the fixed date`
-					: unpriced
-						? "Set a price for every custom item first"
-						: unansweredQuestion;
+		const reason = closed
+			? closed
+			: empty
+				? "Add an item first"
+				: mixedRsvp !== undefined
+					? `An RSVP is its own order — remove "${mixedRsvp}" or ring it up separately`
+					: eventName !== undefined
+						? `"${eventName}" is an event — share its storefront link so guests RSVP to the fixed date`
+						: unpriced
+							? "Set a price for every custom item first"
+							: unansweredQuestion;
 		const runwayMinutes = Math.round(CLAIM_PAYMENT_RUNWAY_MS / 60_000);
 		return {
 			// Shows the MONEY, mirroring the counter primary: the price is what a
@@ -110,14 +117,19 @@ export function counterPrimaryAction(input: PrimaryActionInput): PrimaryAction {
 				`${buyerName ? `${buyerName} gets` : "They get"} the link on WhatsApp and ${buyerName ? "has" : "have"} ${describeClaimWindow(windowMinutes)} to complete it, then at least ${runwayMinutes} minutes to pay. Nothing is charged until they pay.`,
 		};
 	}
-	const counterReason = empty
-		? "Add an item first"
-		: mixedRsvp !== undefined
-			? `An RSVP is its own order — remove "${mixedRsvp}" or ring it up separately`
-			: unansweredQuestion;
+	const counterReason = closed
+		? closed
+		: empty
+			? "Add an item first"
+			: mixedRsvp !== undefined
+				? `An RSVP is its own order — remove "${mixedRsvp}" or ring it up separately`
+				: unansweredQuestion;
 	return {
 		label: `Review order · ${money}`,
 		disabled: counterReason !== undefined,
 		reason: counterReason,
+		// The counter path needs no sub-line — except a closed counter, whose
+		// reason must be READ, not hovered for.
+		helper: closed,
 	};
 }
