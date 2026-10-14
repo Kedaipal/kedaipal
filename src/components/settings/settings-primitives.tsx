@@ -14,7 +14,7 @@
  * the exception: they stay visible, in the body, where the seller acts on them.
  */
 
-import { Check, ChevronDown, ChevronRight, Info, Plug } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Plug } from "lucide-react";
 import type { ReactNode } from "react";
 import {
 	type FixHighlight,
@@ -408,24 +408,6 @@ export function SettingsSection({
 		<div className="flex min-w-0 flex-col gap-2.5">
 			<SectionLabel>{label}</SectionLabel>
 			<div className="flex min-w-0 flex-col gap-4">{children}</div>
-		</div>
-	);
-}
-
-export function InfoBanner({
-	title,
-	children,
-}: {
-	title: string;
-	children: ReactNode;
-}) {
-	return (
-		<div className="flex gap-3 rounded-xl border border-accent/20 bg-accent/5 px-4 py-3.5">
-			<Info className="size-4 shrink-0 text-accent mt-0.5" aria-hidden="true" />
-			<div className="flex flex-col gap-1.5 text-sm text-muted-foreground leading-relaxed">
-				<p className="font-medium text-foreground">{title}</p>
-				{children}
-			</div>
 		</div>
 	);
 }

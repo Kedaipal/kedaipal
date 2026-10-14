@@ -53,7 +53,6 @@ import {
 	type Locale,
 	type MessageTemplates,
 	TEMPLATE_KEYS,
-	type TemplateKey,
 } from "../../convex/lib/whatsappCopy";
 import { AreaGate } from "../components/app/area-gate";
 import {
@@ -70,7 +69,7 @@ import { CreditTopUpDialog } from "../components/settings/credit-top-up-dialog";
 import { FulfilmentTab } from "../components/settings/fulfilment-tab";
 import { IntegrationsTab } from "../components/settings/integrations-tab";
 import { MarketplaceCard } from "../components/settings/marketplace-card";
-import { NotificationsCard } from "../components/settings/notifications-card";
+import { OrderAlertsCard } from "../components/settings/order-alerts-card";
 import { OrderFlowsSection } from "../components/settings/order-flows-card";
 import {
 	SettingsIndex,
@@ -79,13 +78,16 @@ import {
 } from "../components/settings/settings-nav";
 import {
 	Card,
-	InfoBanner,
+	Glance,
+	HelperBullets,
+	InfoDisclosure,
 	SAVE_BTN_CLASS,
 	SectionHeading,
 	SectionLabel,
+	SettingsColumns,
+	SettingsSection,
 } from "../components/settings/settings-primitives";
 import { TeamTab } from "../components/settings/team-tab";
-import { WaOrderAlertsCard } from "../components/settings/wa-order-alerts-card";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -113,16 +115,14 @@ import {
 } from "../lib/country-setup-copy";
 import { parseTopUpParam, type TopUpParam } from "../lib/credit-top-up";
 import { PRICING_MODE_UI, pricingModeOf } from "../lib/delivery-modes";
-import { convexErrorMessage } from "../lib/format";
+import { convexErrorMessage, formatMobile } from "../lib/format";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
 import { NOTE_LINK_HINT } from "../lib/linkify";
+import { editableTemplates, TEMPLATE_LOCALES } from "../lib/message-templates";
 import type { StatusLabels } from "../lib/orderStatus";
 import { normalizeMobileDigits, toNationalPhoneInput } from "../lib/phone";
 import { reorderByIds } from "../lib/reorder";
-import {
-	settingsNotifyEmailFormSchema,
-	settingsWaPhoneFormSchema,
-} from "../lib/schemas";
+import { settingsWaPhoneFormSchema } from "../lib/schemas";
 import { validateStoreName } from "../lib/slug";
 import {
 	isSettingsSpotlightKey,
@@ -265,6 +265,13 @@ const SETTINGS_GROUPS: ReadonlyArray<{
 	},
 	{ label: "Connections", tabs: ["integrations", "bookings"] },
 ];
+
+/** The store type as a glance word ("Set · Food & goods"). */
+const STORE_TYPE_SHORT: Record<"physical" | "service" | "booking", string> = {
+	physical: "Food & goods",
+	service: "Service",
+	booking: "Booking",
+};
 
 const SETTINGS_TAB_LABELS = Object.fromEntries(
 	SETTINGS_TABS.map((t) => [t.id, t.label]),
@@ -493,6 +500,9 @@ function SettingsRoute() {
 		[renameSlugMutation, actAsRetailerId],
 	);
 	const updateSettings = useUpdateSettings();
+	// A teammate can't change the account-level alert channels (owner-only on
+	// the server) — the alerts card disables those rows with the reason.
+	const storePerm = usePermission("store_settings");
 
 	// URL is the source of truth for the active tab, so deep links (e.g. the
 	// "View billing" banner → ?tab=billing) actually switch the tab even when the
@@ -596,7 +606,8 @@ function SettingsRoute() {
 		<Card>
 			<SectionHeading
 				title="Storefront URL"
-				description="Rename your public storefront slug. Old links keep redirecting for 90 days."
+				description="Your public link — old links keep redirecting for 90 days after a rename."
+				glance={<Glance tone="grey">/{retailer.slug}</Glance>}
 			/>
 			<form onSubmit={onSubmit} className="flex flex-col gap-3">
 				<div className="flex items-center rounded-xl border border-input bg-background pl-4 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/50">
@@ -757,130 +768,203 @@ function SettingsRoute() {
 					</h2>
 					{activeTab === "store" ? (
 						<AreaGate area="store_settings">
-							<div className="flex flex-col gap-6 pt-2">
-								<Card>
-									<StoreNameForm
-										current={retailer.storeName}
-										onSave={(storeName) => updateSettings({ storeName })}
-									/>
-								</Card>
-								<Card
-									id={SPOTLIGHT_ANCHOR.business_details.anchor}
-									highlight={ringFor(SPOTLIGHT_ANCHOR.business_details.anchor)}
-								>
-									<BusinessIdentityForm
-										current={retailer.businessIdentity}
-										country={retailer.country}
-										onSave={(businessIdentity) =>
-											updateSettings({ businessIdentity })
-										}
-									/>
-								</Card>
-								<Card>
-									<NotificationsCard />
-								</Card>
-								{/* Notification surfaces live together: browser (above), WhatsApp,
-						    email (below). The WA card only mounts when the deployment has
-						    an approved seller template configured (86eyhw9zy). */}
-								{retailer.waOrderAlertsAvailable ? (
-									<Card
-										id={SETTINGS_ANCHOR.notify_wa_phone}
-										highlight={ringFor(SETTINGS_ANCHOR.notify_wa_phone)}
-									>
-										<WaOrderAlertsCard
-											enabled={retailer.orderWaAlerts === true}
-											currentPhone={retailer.notifyWaPhone ?? ""}
-											fallbackPhone={retailer.waPhone ?? ""}
-											optedOut={retailer.notifyWaPhoneOptedOut === true}
-											canUse={hasFeature(
-												retailer.subscription,
-												"waOrderAlerts",
-											)}
-											country={retailer.country}
-											onSave={(patch) => updateSettings(patch)}
-										/>
-									</Card>
-								) : null}
-								<Card>
-									<NotifyEmailForm
-										current={retailer.notifyEmail ?? ""}
-										onSave={(notifyEmail) => updateSettings({ notifyEmail })}
-									/>
-								</Card>
-								<Card>
-									<StoreDescriptionForm
-										current={retailer.storeDescription ?? ""}
-										onSave={(storeDescription) =>
-											updateSettings({ storeDescription })
-										}
-									/>
-								</Card>
-								{/* Right under the description — the card the marketplace
-							    builds from is the card this section just wrote. */}
-								<Card
-									id={SPOTLIGHT_ANCHOR.store_listing.anchor}
-									highlight={ringFor(SPOTLIGHT_ANCHOR.store_listing.anchor)}
-								>
-									<MarketplaceCard
-										storeName={retailer.storeName}
-										unlisted={retailer.marketplaceUnlisted === true}
-										area={retailer.storeArea ?? ""}
-										readiness={listingReadiness}
-										onSave={(patch) => updateSettings(patch)}
-									/>
-								</Card>
-								<Card>
-									<StoreTypeForm
-										current={retailer.storeType}
-										onSave={(storeType) => updateSettings({ storeType })}
-									/>
-								</Card>
-								{slugRenameForm}
-								<Card>
-									<LogoForm
-										currentLogoUrl={retailer.logoUrl}
-										onSave={(logoStorageId) =>
-											updateSettings({ logoStorageId })
-										}
-									/>
-								</Card>
-								<Card>
-									<CoverImageForm
-										currentCoverUrl={retailer.coverImageUrl}
-										onSave={(coverImageStorageId) =>
-											updateSettings({ coverImageStorageId })
-										}
-									/>
-								</Card>
-								<Card
-									id={SPOTLIGHT_ANCHOR.store_country.anchor}
-									highlight={ringFor(SPOTLIGHT_ANCHOR.store_country.anchor)}
-								>
-									<CountryForm
-										current={retailer.country}
-										currency={retailer.currency}
-										deliveryConfig={retailer.deliveryConfig}
-										deliveryBooking={retailer.deliveryBooking}
-										waPhone={retailer.waPhone}
-										notifyWaPhone={retailer.notifyWaPhone}
-										onSave={(patch) => updateSettings(patch)}
-									/>
-									{/* Directly under the picker, so "what did that just do?"
-							    is answered where the question was asked. Renders
-							    nothing for a store that has never switched. */}
-									<CountrySetupPanel
-										onGoToFix={(tab, key) =>
-											navigate({ search: { tab, fix: key } })
-										}
-									/>
-								</Card>
-								<Card>
-									<CurrencyForm
-										current={retailer.currency}
-										onSave={(currency) => updateSettings({ currency })}
-									/>
-								</Card>
-							</div>
+							{/* 10A: four sections ordered by how often they're touched.
+						    Identity + Brand on the left, the set-once account
+						    sections on the right (xl and up; one column below). */}
+							<SettingsColumns
+								left={
+									<>
+										<SettingsSection label="Identity">
+											<Card>
+												<StoreNameForm
+													current={retailer.storeName}
+													onSave={(storeName) => updateSettings({ storeName })}
+												/>
+											</Card>
+											{slugRenameForm}
+											<Card>
+												<SectionHeading
+													title="Description & store type"
+													description="What buyers read under your name, and the type new products start as."
+													glance={
+														<Glance tone="grey">
+															{[
+																retailer.storeDescription?.trim()
+																	? "Set"
+																	: "No description",
+																retailer.storeType
+																	? STORE_TYPE_SHORT[retailer.storeType]
+																	: null,
+															]
+																.filter(Boolean)
+																.join(" · ")}
+														</Glance>
+													}
+												/>
+												<StoreDescriptionForm
+													current={retailer.storeDescription ?? ""}
+													onSave={(storeDescription) =>
+														updateSettings({ storeDescription })
+													}
+												/>
+												<div className="border-t border-border/60 pt-4">
+													<StoreTypeForm
+														current={retailer.storeType}
+														onSave={(storeType) =>
+															updateSettings({ storeType })
+														}
+													/>
+												</div>
+											</Card>
+											{/* The directory card is built from the name, description
+										    and area above — it belongs with them. */}
+											<Card
+												id={SPOTLIGHT_ANCHOR.store_listing.anchor}
+												highlight={ringFor(
+													SPOTLIGHT_ANCHOR.store_listing.anchor,
+												)}
+											>
+												<MarketplaceCard
+													storeName={retailer.storeName}
+													unlisted={retailer.marketplaceUnlisted === true}
+													area={retailer.storeArea ?? ""}
+													readiness={listingReadiness}
+													onSave={(patch) => updateSettings(patch)}
+												/>
+											</Card>
+										</SettingsSection>
+										<SettingsSection label="Brand">
+											<Card>
+												<SectionHeading
+													title="Logo & cover image"
+													description="How your storefront header looks — and the preview when you share your link."
+													glance={
+														retailer.logoUrl && retailer.coverImageUrl ? (
+															<Glance>Both set</Glance>
+														) : retailer.logoUrl || retailer.coverImageUrl ? (
+															<Glance tone="grey">
+																{retailer.logoUrl ? "Logo only" : "Cover only"}
+															</Glance>
+														) : (
+															<Glance tone="grey">Not set</Glance>
+														)
+													}
+												/>
+												<LogoForm
+													currentLogoUrl={retailer.logoUrl}
+													onSave={(logoStorageId) =>
+														updateSettings({ logoStorageId })
+													}
+												/>
+												<div className="border-t border-border/60 pt-4">
+													<CoverImageForm
+														currentCoverUrl={retailer.coverImageUrl}
+														onSave={(coverImageStorageId) =>
+															updateSettings({ coverImageStorageId })
+														}
+													/>
+												</div>
+											</Card>
+										</SettingsSection>
+									</>
+								}
+								right={
+									<>
+										{/* Every field here is owner-only on the server, so a
+									    teammate reads it with the reason instead of
+									    meeting a refused save. */}
+										<SettingsSection label="Business & country">
+											<AreaGate area="store_settings" ownerOnly>
+												<div className="flex flex-col gap-4">
+													<Card
+														id={SPOTLIGHT_ANCHOR.business_details.anchor}
+														highlight={ringFor(
+															SPOTLIGHT_ANCHOR.business_details.anchor,
+														)}
+													>
+														<BusinessIdentityForm
+															current={retailer.businessIdentity}
+															country={retailer.country}
+															onSave={(businessIdentity) =>
+																updateSettings({ businessIdentity })
+															}
+														/>
+													</Card>
+													<Card
+														id={SPOTLIGHT_ANCHOR.store_country.anchor}
+														highlight={ringFor(
+															SPOTLIGHT_ANCHOR.store_country.anchor,
+														)}
+													>
+														<SectionHeading
+															title="Country & currency"
+															description="Where your store operates and the currency it prices in."
+															glance={
+																<Glance tone="grey">
+																	{retailer.country} · {retailer.currency}
+																</Glance>
+															}
+														/>
+														<CountryForm
+															current={retailer.country}
+															currency={retailer.currency}
+															deliveryConfig={retailer.deliveryConfig}
+															deliveryBooking={retailer.deliveryBooking}
+															waPhone={retailer.waPhone}
+															notifyWaPhone={retailer.notifyWaPhone}
+															onSave={(patch) => updateSettings(patch)}
+														/>
+														{/* Directly under the picker, so "what did that just
+													    do?" is answered where the question was asked.
+													    Renders nothing for a store that never switched. */}
+														<CountrySetupPanel
+															onGoToFix={(tab, key) =>
+																navigate({ search: { tab, fix: key } })
+															}
+														/>
+														<div className="border-t border-border/60 pt-4">
+															<CurrencyForm
+																current={retailer.currency}
+																onSave={(currency) =>
+																	updateSettings({ currency })
+																}
+															/>
+														</div>
+													</Card>
+												</div>
+											</AreaGate>
+										</SettingsSection>
+										<SettingsSection label="Alerts & defaults">
+											<Card
+												id={SETTINGS_ANCHOR.notify_wa_phone}
+												highlight={ringFor(SETTINGS_ANCHOR.notify_wa_phone)}
+											>
+												<OrderAlertsCard
+													whatsapp={
+														retailer.waOrderAlertsAvailable
+															? {
+																	enabled: retailer.orderWaAlerts === true,
+																	currentPhone: retailer.notifyWaPhone ?? "",
+																	fallbackPhone: retailer.waPhone ?? "",
+																	optedOut:
+																		retailer.notifyWaPhoneOptedOut === true,
+																	canUse: hasFeature(
+																		retailer.subscription,
+																		"waOrderAlerts",
+																	),
+																}
+															: undefined
+													}
+													notifyEmail={retailer.notifyEmail ?? ""}
+													country={retailer.country}
+													canEditAccount={storePerm.role !== "member"}
+													onSave={(patch) => updateSettings(patch)}
+												/>
+											</Card>
+										</SettingsSection>
+									</>
+								}
+							/>
 						</AreaGate>
 					) : null}
 
@@ -922,30 +1006,15 @@ function SettingsRoute() {
 					{activeTab === "whatsapp" ? (
 						<AreaGate area="store_settings" ownerOnly>
 							<div className="flex flex-col gap-6 pt-2">
-								<InfoBanner title="How WhatsApp works on Kedaipal">
-									<p>
-										Every order sends the buyer{" "}
-										<span className="font-medium text-foreground">
-											one WhatsApp message
-										</span>{" "}
-										— the confirmation — from{" "}
-										<span className="font-medium text-foreground">
-											Kedaipal's shared WhatsApp Business number
-										</span>{" "}
-										on your behalf, no Meta account needed.
-									</p>
-									<p>
-										That message links to the buyer's own order page, which
-										updates itself. Packing, shipping, payment and cancellation
-										no longer send a WhatsApp — the buyer sees them on that
-										page.
-									</p>
-									<p>
-										Add your personal WhatsApp number below so buyers can reach
-										you directly. It appears as a tappable contact link on their
-										order page.
-									</p>
-								</InfoBanner>
+								<InfoDisclosure summary="How WhatsApp works on Kedaipal">
+									<HelperBullets
+										items={[
+											"Each order sends the buyer one WhatsApp — the confirmation — from Kedaipal's shared number, on your behalf. No Meta account needed.",
+											"It links to the buyer's own order page, which updates itself as you pack, ship and get paid — those steps don't send a WhatsApp.",
+											"Your contact number below shows there as a tap-to-chat link.",
+										]}
+									/>
+								</InfoDisclosure>
 
 								<Card
 									id={SETTINGS_ANCHOR.wa_phone}
@@ -1148,6 +1217,9 @@ function StoreNameForm({
 			<SectionHeading
 				title="Business name"
 				description="Shown on your storefront header and WhatsApp messages."
+				glance={
+					current.trim() ? <Glance tone="grey">{current}</Glance> : undefined
+				}
 			/>
 			<div className="flex flex-col gap-1.5">
 				<Input
@@ -1262,9 +1334,25 @@ function BusinessIdentityForm({
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
 			<SectionHeading
-				title="Business details"
-				description="Printed in the “From” section of the invoices and receipts your customers download — what a company's finance team needs to accept your invoice. Only the fields you fill in appear; leave everything blank to show just your store name."
+				title="Legal identity"
+				description="Printed in the “From” section of the invoices and receipts your customers download."
+				glance={
+					<Glance tone="grey">
+						{fields.some(([, saved]) => (saved ?? "").trim())
+							? "On invoices"
+							: "Store name only"}
+					</Glance>
+				}
 			/>
+			<InfoDisclosure summary="What to fill in">
+				<HelperBullets
+					items={[
+						"What a company's finance team needs before it accepts your invoice",
+						"Only the fields you fill in appear on the document",
+						"Leave everything blank to show just your store name",
+					]}
+				/>
+			</InfoDisclosure>
 			<div className="flex flex-col gap-3">
 				<label className="flex flex-col gap-1.5">
 					<span className={fieldLabel}>Registered business name</span>
@@ -1375,8 +1463,9 @@ function StoreDescriptionForm({
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
 			<SectionHeading
+				level="sub"
 				title="Store description"
-				description="A short line shown on your storefront under your store name — say what you sell, your lead time, or area. Leave blank to hide it."
+				description="Shown under your store name — what you sell, your lead time or area. Leave blank to hide it."
 			/>
 			<div className="flex flex-col gap-1.5">
 				<textarea
@@ -1460,9 +1549,18 @@ function StoreTypeForm({
 	return (
 		<div className="flex flex-col gap-4">
 			<SectionHeading
+				level="sub"
 				title="What does your store sell?"
-				description="Pre-selects the matching type when you add a new product — you can still pick a different type per product, and existing products never change. Tap again to clear."
+				description="Pre-selects the type when you add a product — tap the selected one again to clear."
 			/>
+			<InfoDisclosure summary="How store type works">
+				<HelperBullets
+					items={[
+						"Only a starting point — you can still pick another type on any product",
+						"Existing products never change",
+					]}
+				/>
+			</InfoDisclosure>
 			<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
 				{cards.map((card) => {
 					const selected = current === card.value;
@@ -1552,8 +1650,9 @@ function LogoForm({
 	return (
 		<div className="flex flex-col gap-4">
 			<SectionHeading
-				title="Store logo"
-				description="Square images work best. Shown on your storefront header and dashboard. Max ~2MB."
+				level="sub"
+				title="Logo"
+				description="Square works best — shown on your storefront header and dashboard. Max ~2MB."
 			/>
 
 			{previewUrl ? (
@@ -1658,8 +1757,9 @@ function CoverImageForm({
 	return (
 		<div className="flex flex-col gap-4">
 			<SectionHeading
+				level="sub"
 				title="Cover image"
-				description="Best size 1200 × 400 px (wide 3:1). Fills your storefront header and shows as the preview when you share your link. Max ~2MB."
+				description="1200 × 400 px (3:1) works best — it fills your header and previews when you share your link. Max ~2MB."
 			/>
 
 			{previewUrl ? (
@@ -2205,17 +2305,14 @@ function PaymentMethodsForm({
 	);
 }
 
-// Only the keys still in TEMPLATE_KEYS are editable — the status/fallback copy
-// no longer has a sender, so it has no label here either. Partial + fallback so
-// a key added back to TEMPLATE_KEYS renders instead of crashing.
-const TEMPLATE_LABELS: Partial<Record<TemplateKey, string>> = {
-	confirm: "Your reply",
-};
-
 // The card earns its place on one narrow job: a buyer who types their order
 // number into the shared number gets this reply. The order's own confirmation is
 // a fixed Meta template and is NOT editable here — if TEMPLATE_KEYS ever empties
 // out, delete this card rather than shipping an editor that changes nothing.
+//
+// One collapsed row per language (86eye9xd4, 11A): the first line of what goes
+// out, and whether it's Kedaipal's default or the seller's own — the chip
+// answers "what have I changed?" without opening anything.
 function MessageTemplatesForm({
 	current,
 	onSave,
@@ -2223,108 +2320,160 @@ function MessageTemplatesForm({
 	current: MessageTemplates | undefined;
 	onSave: (templates: MessageTemplates) => Promise<unknown>;
 }) {
-	const [activeLocale, setActiveLocale] = useState<Locale>("en");
-	const [draft, setDraft] = useState<MessageTemplates>(() => current ?? {});
+	const saved = editableTemplates(current);
+	const [open, setOpen] = useState<Locale | null>(null);
+	const [value, setValue] = useState("");
+	const [saving, setSaving] = useState(false);
+	const key = TEMPLATE_KEYS[0];
+	const customisedCount = TEMPLATE_LOCALES.filter((loc) =>
+		Boolean(saved[loc]?.[key]),
+	).length;
 
-	function setField(locale: Locale, key: TemplateKey, value: string) {
-		setDraft((prev) => ({
-			...prev,
-			[locale]: { ...(prev[locale] ?? {}), [key]: value },
-		}));
+	function openRow(loc: Locale) {
+		setOpen(loc);
+		setValue(saved[loc]?.[key] ?? "");
 	}
 
-	function resetField(locale: Locale, key: TemplateKey) {
-		setDraft((prev) => {
-			const next = { ...(prev[locale] ?? {}) };
-			delete next[key];
-			return { ...prev, [locale]: next };
-		});
-	}
-
-	async function handleSubmit(e: FormEvent) {
-		e.preventDefault();
+	async function save(loc: Locale, next: string) {
+		const rest = { ...saved };
+		const trimmed = next.trim();
+		rest[loc] = trimmed ? { ...(rest[loc] ?? {}), [key]: trimmed } : {};
+		setSaving(true);
 		try {
-			await onSave(draft);
-			toast.success("Templates saved.");
+			await onSave(editableTemplates(rest));
+			toast.success(
+				trimmed
+					? `${LOCALE_LABELS[loc]} reply saved.`
+					: `${LOCALE_LABELS[loc]} is back to the default reply.`,
+			);
+			setOpen(null);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
 		}
 	}
 
-	const locales: Locale[] = ["en", "ms", "zh"];
-
 	return (
-		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
-			<div className="flex flex-col gap-1">
-				<h3 className="text-sm font-semibold text-foreground">
-					Reply when a buyer messages their order number
-				</h3>
-				<p className="text-xs text-muted-foreground leading-relaxed">
-					The confirmation your buyers receive is a fixed Meta-approved template
-					— WhatsApp's rule for messaging someone who hasn't replied yet — so it
-					can't be customised. This copy is the reply sent when a buyer writes
-					their order number (e.g. <code className="font-mono">ORD-1234</code>)
-					to our shared number. Use{" "}
-					<code className="font-mono">{"{shortId}"}</code> and{" "}
-					<code className="font-mono">{"{storeName}"}</code> as variables. Leave
-					blank to use the default.
-				</p>
-			</div>
+		<div className="flex flex-col gap-4">
+			<SectionHeading
+				title="Order-number reply"
+				description={
+					<>
+						What our shared number replies when a buyer sends their order number
+						(e.g. <code className="font-mono">ORD-1234</code>).
+					</>
+				}
+				glance={
+					customisedCount > 0 ? (
+						<Glance>Customised</Glance>
+					) : (
+						<Glance tone="grey">Default</Glance>
+					)
+				}
+			/>
 
-			<div className="flex gap-2 border-b border-input">
-				{locales.map((loc) => (
-					<button
-						key={loc}
-						type="button"
-						onClick={() => setActiveLocale(loc)}
-						className={`min-h-11 px-4 text-sm font-medium ${
-							activeLocale === loc
-								? "border-b-2 border-primary text-primary"
-								: "text-muted-foreground"
-						}`}
-					>
-						{LOCALE_LABELS[loc]}
-					</button>
-				))}
-			</div>
-
-			<div className="flex flex-col gap-4">
-				{TEMPLATE_KEYS.map((key) => {
-					const value = draft[activeLocale]?.[key] ?? "";
-					const placeholder = defaultTemplate(activeLocale, key);
+			<div className="flex flex-col">
+				{TEMPLATE_LOCALES.map((loc) => {
+					const custom = saved[loc]?.[key];
+					const preview = (custom ?? defaultTemplate(loc, key)).split("\n")[0];
+					const isOpen = open === loc;
 					return (
-						<label key={key} className="flex flex-col gap-1">
-							<div className="flex items-center justify-between">
-								<span className="text-sm font-medium">
-									{TEMPLATE_LABELS[key] ?? key}
+						<div
+							key={loc}
+							className="flex flex-col border-t border-border/60 first:border-t-0"
+						>
+							<button
+								type="button"
+								aria-expanded={isOpen}
+								onClick={() => (isOpen ? setOpen(null) : openRow(loc))}
+								className="flex min-h-14 w-full items-center gap-3 py-2 text-left focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+							>
+								<span className="flex min-w-0 flex-1 flex-col">
+									<span className="text-sm font-semibold text-foreground">
+										{LOCALE_LABELS[loc]}
+									</span>
+									<span className="truncate text-xs text-muted-foreground">
+										{preview}
+									</span>
 								</span>
-								{value ? (
-									<button
-										type="button"
-										onClick={() => resetField(activeLocale, key)}
-										className="text-xs text-muted-foreground underline"
-									>
-										Reset to default
-									</button>
-								) : null}
-							</div>
-							<textarea
-								value={value}
-								onChange={(e) => setField(activeLocale, key, e.target.value)}
-								placeholder={placeholder}
-								rows={3}
-								maxLength={1000}
-								className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-							/>
-						</label>
+								{custom ? (
+									<Glance>Customised</Glance>
+								) : (
+									<Glance tone="grey">Default</Glance>
+								)}
+								<ChevronDown
+									aria-hidden
+									className={cn(
+										"size-4 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none",
+										isOpen && "rotate-180",
+									)}
+								/>
+							</button>
+							{isOpen ? (
+								<div className="flex flex-col gap-3 pb-4">
+									<textarea
+										aria-label={`${LOCALE_LABELS[loc]} reply`}
+										value={value}
+										onChange={(e) => setValue(e.target.value)}
+										placeholder={defaultTemplate(loc, key)}
+										rows={3}
+										maxLength={1000}
+										className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+									/>
+									<p className="text-xs text-muted-foreground">
+										Leave blank to use the default shown.
+									</p>
+									<div className="flex flex-wrap gap-2">
+										<Button
+											type="button"
+											className="h-11"
+											isLoading={saving}
+											disabled={saving || value.trim() === (custom ?? "")}
+											onClick={() => void save(loc, value)}
+										>
+											Save reply
+										</Button>
+										{custom ? (
+											<Button
+												type="button"
+												variant="outline"
+												className="h-11"
+												disabled={saving}
+												onClick={() => void save(loc, "")}
+											>
+												Reset to default
+											</Button>
+										) : null}
+										<Button
+											type="button"
+											variant="ghost"
+											className="h-11"
+											onClick={() => setOpen(null)}
+										>
+											Cancel
+										</Button>
+									</div>
+								</div>
+							) : null}
+						</div>
 					);
 				})}
 			</div>
 
-			<Button type="submit" className={SAVE_BTN_CLASS}>
-				Save templates
-			</Button>
-		</form>
+			<InfoDisclosure summary="Why the confirmation can't be edited">
+				<HelperBullets
+					items={[
+						"The order confirmation is a fixed Meta-approved template — WhatsApp's rule for messaging someone who hasn't written first",
+						"This reply is what goes out when a buyer writes their order number to our shared number",
+						<>
+							Use <code className="font-mono">{"{shortId}"}</code> and{" "}
+							<code className="font-mono">{"{storeName}"}</code> as variables
+						</>,
+					]}
+				/>
+			</InfoDisclosure>
+		</div>
 	);
 }
 
@@ -2337,53 +2486,56 @@ function LocaleForm({
 }) {
 	const localeSelectId = useId();
 	const [value, setValue] = useState<Locale>(current);
+	const [saving, setSaving] = useState(false);
 	const dirty = value !== current;
 
 	async function handleSubmit(e: FormEvent) {
 		e.preventDefault();
+		setSaving(true);
 		try {
 			await onSave(value);
 			toast.success("Language saved.");
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
 		}
 	}
 
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
-			<div className="flex flex-col gap-2">
-				<label htmlFor={localeSelectId} className="text-sm font-medium">
-					Message language
-				</label>
-				<Select
-					id={localeSelectId}
-					variant="field"
-					className="w-full"
-					value={value}
-					onChange={(e) => setValue(e.target.value as Locale)}
-				>
-					{LOCALE_OPTIONS.map((opt) => (
-						<option key={opt.value} value={opt.value}>
-							{opt.label}
-						</option>
-					))}
-				</Select>
-				{/* The field reaches further than its old "sent to shoppers" copy
-				    admitted: retailer email alerts have always rendered in it, and
-				    the WhatsApp order alerts (86eyhw9zy) now do too. */}
-				<span className="text-xs text-muted-foreground">
-					Used for the order confirmation buyers receive and their order page —
-					and for the order alerts we send you on WhatsApp.
-				</span>
-			</div>
-
-			<Button type="submit" disabled={!dirty} className={SAVE_BTN_CLASS}>
-				Save language
+			{/* The language reaches further than "sent to shoppers": retailer
+			    email alerts have always rendered in it, and the WhatsApp order
+			    alerts (86eyhw9zy) do too. */}
+			<SectionHeading
+				title="Message language"
+				description="Used for the confirmation buyers receive, their order page, and the alerts we send you."
+				glance={<Glance tone="grey">{LOCALE_LABELS[current]}</Glance>}
+			/>
+			<Select
+				id={localeSelectId}
+				aria-label="Message language"
+				variant="field"
+				className="w-full"
+				value={value}
+				onChange={(e) => setValue(e.target.value as Locale)}
+			>
+				{LOCALE_OPTIONS.map((opt) => (
+					<option key={opt.value} value={opt.value}>
+						{opt.label}
+					</option>
+				))}
+			</Select>
+			<Button
+				type="submit"
+				disabled={!dirty || saving}
+				className={SAVE_BTN_CLASS}
+			>
+				{saving ? "Saving…" : "Save language"}
 			</Button>
 		</form>
 	);
 }
-
 function CountryForm({
 	current,
 	currency,
@@ -2441,7 +2593,7 @@ function CountryForm({
 						label="Store country"
 						options={COUNTRY_OPTIONS}
 						required
-						description="Where your store operates. Checkout accepts this country's phone numbers and addresses, and buyers see forms that match it."
+						description="Checkout accepts this country's phone numbers and addresses."
 					/>
 				)}
 			</form.AppField>
@@ -2570,11 +2722,20 @@ function CurrencyForm({
 						label="Storefront currency"
 						options={CURRENCY_OPTIONS}
 						required
-						// currency-literal-ok: the switch explainer names both currencies on purpose.
-						description="Used for product prices and order totals. Changing it switches every product to the new currency — amounts keep their numbers (RM 12 becomes S$ 12), so re-check your prices after switching. Orders already placed keep the currency they were placed in, but Insights and customer lifetime totals add those older amounts up as plain numbers, so totals that span the change won't convert."
+						description="Used for product prices and order totals."
 					/>
 				)}
 			</form.AppField>
+			<InfoDisclosure summary="Before you change currency">
+				<HelperBullets
+					items={[
+						// currency-literal-ok: the switch explainer names both currencies on purpose.
+						"Every product switches — amounts keep their numbers (RM 12 becomes S$ 12), so re-check your prices",
+						"Orders already placed keep the currency they were placed in",
+						"Insights and customer lifetime totals add older amounts up as plain numbers, so totals that span the change won't convert",
+					]}
+				/>
+			</InfoDisclosure>
 
 			<form.Subscribe
 				selector={(s) => ({
@@ -2600,77 +2761,12 @@ function CurrencyForm({
 	);
 }
 
-function NotifyEmailForm({
-	current,
-	onSave,
-}: {
-	current: string;
-	onSave: (notifyEmail: string) => Promise<unknown>;
-}) {
-	const form = useAppForm({
-		defaultValues: { notifyEmail: current },
-		validators: { onChange: settingsNotifyEmailFormSchema },
-		onSubmit: async ({ value }) => {
-			try {
-				await onSave(value.notifyEmail.trim());
-				toast.success("Notification email saved.");
-			} catch (err) {
-				toast.error(convexErrorMessage(err));
-			}
-		},
-	});
-
-	function handleSubmit(e: FormEvent) {
-		submitThenFocusError(form, e);
-	}
-
-	return (
-		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
-			<form.AppField name="notifyEmail">
-				{(field) => (
-					<field.TextField
-						label="Notification email"
-						placeholder="orders@yourstore.com"
-						type="email"
-						inputMode="email"
-						description="We'll email you here whenever a new order arrives or a buyer says they've paid. If WhatsApp order alerts are on, these arrive on WhatsApp instead — and this email is the backup if one can't be delivered. Leave blank to turn off email notifications."
-					/>
-				)}
-			</form.AppField>
-
-			<form.Subscribe
-				selector={(s) => ({
-					canSubmit: s.canSubmit,
-					isSubmitting: s.isSubmitting,
-					values: s.values,
-				})}
-			>
-				{({ canSubmit, isSubmitting, values }) => {
-					const dirty = values.notifyEmail.trim() !== current.trim();
-					return (
-						<Button
-							type="submit"
-							disabled={!dirty || !canSubmit || isSubmitting}
-							className={SAVE_BTN_CLASS}
-						>
-							{isSubmitting ? "Saving…" : "Save email"}
-						</Button>
-					);
-				}}
-			</form.Subscribe>
-		</form>
-	);
-}
-
-// The seller-contact description names the store's own mobile kind. The MY
-// line also names the Lalamove sender-contact role — Lalamove is MY-market, so
-// that sentence would be a false promise on an SG store.
-// An order sends the buyer exactly one WhatsApp (the confirmation), so this
-// number's real home is the buyer's order page — that's where they reach the
-// seller for the rest of the order's life. Don't promise "updates" here.
+// The field hint under the seller's contact number. Its card already says
+// where buyers see it; this names the number kind and the rider role (the
+// store's own number is the Lalamove sender contact in both markets).
 const WA_PHONE_DESCRIPTION: Record<Country, string> = {
-	MY: "Shown to buyers on their order page (and in the order confirmation) so they can message you directly. Malaysian mobile — it's also the sender contact when a rider collects from you.",
-	SG: "Shown to buyers on their order page (and in the order confirmation) so they can message you directly. Singapore mobile with WhatsApp.",
+	MY: "Malaysian mobile with WhatsApp — riders also call it when they collect from you.",
+	SG: "Singapore mobile with WhatsApp — riders also call it when they collect from you.",
 };
 
 function WaPhoneForm({
@@ -2705,10 +2801,21 @@ function WaPhoneForm({
 
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
+			<SectionHeading
+				title="Contact number"
+				description="Buyers tap it on their order page to message you directly."
+				glance={
+					current.trim() ? (
+						<Glance tone="grey">{formatMobile(current)}</Glance>
+					) : (
+						<Glance tone="warn">Not set</Glance>
+					)
+				}
+			/>
 			<form.AppField name="waPhone">
 				{(field) => (
 					<field.TextField
-						label="Your contact WhatsApp number"
+						label="Your WhatsApp number"
 						type="tel"
 						inputMode="tel"
 						autoComplete="tel"
