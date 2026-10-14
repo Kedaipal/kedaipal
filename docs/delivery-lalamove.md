@@ -496,6 +496,14 @@ order stays where it is until the seller advances it by hand, which since
 "Update manually" escape; see the manual-advance gate below). Dev
 deployment URL: `https://qualified-chihuahua-441.convex.site/webhook/lalamove`.
 
+**Tip a booking stuck finding a rider (86eye9xd4):** while a job is
+`assigning`, the rider card and its Deliveries row offer **Add tip** —
+Lalamove's priority fee (`POST /v3/orders/{id}/priority-fee`, body
+`{ data: { priorityFee: "5.00" } }`), fixed steps and a per-booking cap from
+`convex/lib/lalamoveTip.ts`, charged to the seller's wallet and added to the
+job's `priorityFee` + `costActual`. See
+[`deliveries.md`](./deliveries.md#add-a-tip--a-booking-still-finding-a-rider).
+
 **Manual-advance gate while the rider drives (26 Jul hotfix; tightened
 3 Aug; server-enforced 14 Aug, ClickUp `86eydum6y`):** while an order has
 an **ACTIVE** rider job, the order-detail stepper's advance into a

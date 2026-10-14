@@ -41,6 +41,7 @@ import { formatPrice } from "../../lib/format";
 import { cn } from "../../lib/utils";
 import { ProBadge } from "../app/pro-gate";
 import { PrintLabelsDialog } from "../dashboard/print-labels-dialog";
+import { AddTipDialog, canTipMore } from "../order/add-tip-dialog";
 import { Card, Glance, SectionHeading } from "../settings/settings-primitives";
 import { Button } from "../ui/button";
 import { FilterChip, FilterChipRow } from "../ui/filter-chip";
@@ -397,6 +398,12 @@ function BookingsCard({ overview }: { overview: DeliveriesOverview }) {
 	);
 }
 
+/** "12 min" / "2 h" — how long a booking has waited for a rider. */
+function waitedFor(since: number): string {
+	const minutes = Math.max(1, Math.round((Date.now() - since) / 60_000));
+	return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h`;
+}
+
 const BOOKING_GRID =
 	"lg:grid-cols-[7.5rem_10rem_minmax(0,1fr)_6rem_auto] lg:items-center lg:gap-x-3";
 
@@ -423,6 +430,7 @@ function BookingLine({
 				provider: job.provider,
 				collection: job.direction === "collection",
 			})}
+			{job.tippable ? ` · ${waitedFor(job.createdAt)}` : null}
 		</span>
 	);
 	return (
@@ -456,14 +464,21 @@ function BookingLine({
 				{cost}
 			</span>
 			<span className="flex justify-end">
-				<BookingAction job={job} />
+				<BookingAction job={job} currency={currency} />
 			</span>
 		</li>
 	);
 }
 
 /** The one thing this booking's state asks for — never a menu. */
-function BookingAction({ job }: { job: DeliveryJobRow }) {
+function BookingAction({
+	job,
+	currency,
+}: {
+	job: DeliveryJobRow;
+	currency: string;
+}) {
+	const [tipping, setTipping] = useState(false);
 	const toOrder = (label: string, emphasis = false) => (
 		<Button
 			asChild
@@ -478,6 +493,29 @@ function BookingAction({ job }: { job: DeliveryJobRow }) {
 	);
 	if (job.group === "failed")
 		return job.rebookable ? toOrder("Rebook", true) : null;
+	// Still no rider: the lever is a tip (86eye9xd4), right where it's seen.
+	if (job.tippable && canTipMore(currency, job.priorityFee ?? 0))
+		return (
+			<>
+				<Button
+					type="button"
+					size="sm"
+					variant="outline"
+					className="tap-target"
+					onClick={() => setTipping(true)}
+				>
+					Add tip
+				</Button>
+				<AddTipDialog
+					open={tipping}
+					onOpenChange={setTipping}
+					shortId={job.shortId}
+					currency={currency}
+					fare={job.cost}
+					tipped={job.priorityFee ?? 0}
+				/>
+			</>
+		);
 	if (job.group === "active" && job.shareLink)
 		return (
 			<Button asChild size="sm" variant="outline" className="tap-target">

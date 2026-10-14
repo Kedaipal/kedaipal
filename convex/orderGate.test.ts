@@ -186,9 +186,11 @@ describe("a gated order is invisible to the seller, on every surface", () => {
 		const s = await seed(t);
 		await drain(t, s.retailerId);
 		const order = await placeOrder(t, s.retailerId, s.productId);
-		// Packed and waiting on a courier, AND with a failed rider booking —
-		// so the gated order sits in both of the page's lists.
+		// A second gated order, packed with no booking yet: the To-ship queue.
+		const parcel = await placeOrder(t, s.retailerId, s.productId);
+		// The first is packed with a failed rider booking: Courier bookings.
 		await t.run(async (ctx) => {
+			await ctx.db.patch(parcel._id, { status: "packed" });
 			await ctx.db.patch(order._id, { status: "packed" });
 			await ctx.db.insert("deliveryJobs", {
 				orderId: order._id,
@@ -209,7 +211,7 @@ describe("a gated order is invisible to the seller, on every surface", () => {
 			.query(api.deliveries.overview, { retailerId: s.retailerId });
 		expectNoSentinels(overview, "deliveries.overview");
 		expect(overview.toShip.map((r) => [r.shortId, r.gated])).toEqual([
-			[order.shortId, true],
+			[parcel.shortId, true],
 		]);
 		expect(overview.jobs[0]).toMatchObject({ shortId: order.shortId, gated: true });
 	});

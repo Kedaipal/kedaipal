@@ -21,6 +21,11 @@ vi.mock("@tanstack/react-router", () => ({
 		...props
 	}: Record<string, unknown> & { to?: string }) => <a href={to} {...props} />,
 }));
+vi.mock("../order/add-tip-dialog", () => ({
+	canTipMore: (_c: string, tipped: number) => tipped < 2000,
+	AddTipDialog: ({ open, shortId }: { open: boolean; shortId: string }) =>
+		open ? <div role="dialog">tip {shortId}</div> : null,
+}));
 vi.mock("../dashboard/print-labels-dialog", () => ({
 	PrintLabelsDialog: ({ open }: { open: boolean }) =>
 		open ? <div role="dialog">print queue</div> : null,
@@ -46,6 +51,7 @@ function job(over: Partial<DeliveryJobRow>): DeliveryJobRow {
 		createdAt: 1,
 		orderSettled: false,
 		rebookable: false,
+		tippable: false,
 		hasProof: false,
 		gated: false,
 		...over,
@@ -228,6 +234,37 @@ describe("DeliveriesView", () => {
 		expect(screen.getAllByRole("link", { name: "Rebook" })).toHaveLength(1);
 		// Phone and desktop each carry the label; CSS shows one.
 		expect(screen.getAllByText("Rider on the way").length).toBeGreaterThan(0);
+	});
+
+	it("a booking still finding a rider says how long, and offers a tip", () => {
+		renderView(
+			overview({
+				booksCouriers: true,
+				jobs: [
+					job({
+						shortId: "ORD-1042",
+						status: "assigning",
+						tippable: true,
+						createdAt: Date.now() - 12 * 60_000,
+					}),
+				],
+			}),
+		);
+		expect(
+			screen.getAllByText(/Finding rider · 12 min/).length,
+		).toBeGreaterThan(0);
+		fireEvent.click(screen.getByRole("button", { name: "Add tip" }));
+		expect(screen.getByRole("dialog").textContent).toBe("tip ORD-1042");
+	});
+
+	it("a booking at its tip limit falls back to its usual action", () => {
+		renderView(
+			overview({
+				booksCouriers: true,
+				jobs: [job({ status: "assigning", tippable: true, priorityFee: 2000 })],
+			}),
+		);
+		expect(screen.queryByRole("button", { name: "Add tip" })).toBeNull();
 	});
 
 	it("filters bookings by state, and an empty filter says so", () => {

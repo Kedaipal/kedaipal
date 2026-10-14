@@ -45,6 +45,7 @@ import {
 	toLalamoveContactPhone,
 	toLalamovePhone,
 } from "./lib/lalamove";
+import { priorityFeeWire, TIP_OPTIONS } from "./lib/lalamoveTip";
 import { formatBusinessAddress } from "./lib/address";
 import { DEFAULT_COUNTRY } from "./lib/country";
 import { lalamoveBookingArmed } from "./lib/courierBooking";
@@ -1838,6 +1839,151 @@ export const cancelBooking = action({
 	},
 });
 
+// ---------------------------------------------------------------------------
+// Tip a booking that's waiting for a rider (86eye9xd4)
+// ---------------------------------------------------------------------------
+
+export type TipRefusal =
+	| "no_booking"
+	| "rider_found"
+	| "bad_amount"
+	| "over_cap";
+
+/** The active Lalamove booking a tip would land on, with what's been tipped. */
+export const getTipContext = internalQuery({
+	args: { shortId: v.string() },
+	handler: async (
+		ctx,
+		{ shortId },
+	): Promise<
+		| { ok: false; reason: TipRefusal }
+		| {
+				ok: true;
+				jobId: Id<"deliveryJobs">;
+				providerOrderId: string;
+				credentials: LalamoveCredentials;
+				market: LalamoveMarket;
+				tipped: number;
+		  }
+	> => {
+		const order = await resolveSharedOrder(ctx, { shortId });
+		if (!order) return { ok: false, reason: "no_booking" };
+		// Spending the store's money is orders WORK, not a read.
+		await requireRetailerAccess(ctx, order.retailerId, {
+			area: "orders",
+			level: "write",
+		});
+		const jobs = await ctx.db
+			.query("deliveryJobs")
+			.withIndex("by_order", (q) => q.eq("orderId", order._id))
+			.collect();
+		const active = jobs.find(
+			(j) => j.provider === "lalamove" && isActiveJobStatus(j.status),
+		);
+		if (!active || active.providerOrderId === undefined)
+			return { ok: false, reason: "no_booking" };
+		// Lalamove only takes a priority fee while it is still finding a rider.
+		if (active.status !== "assigning") return { ok: false, reason: "rider_found" };
+		const retailer = await ctx.db.get(order.retailerId);
+		const credentials = resolveLalamoveCredentials(
+			retailer?.deliveryBooking as BookingConfig | undefined,
+			retailer?.country,
+		);
+		if (!credentials) return { ok: false, reason: "no_booking" };
+		return {
+			ok: true,
+			jobId: active._id,
+			providerOrderId: active.providerOrderId,
+			credentials,
+			market: credentials.market,
+			tipped: active.priorityFee ?? 0,
+		};
+	},
+});
+
+export const recordPriorityFee = internalMutation({
+	args: { jobId: v.id("deliveryJobs"), amount: v.number() },
+	handler: async (ctx, { jobId, amount }) => {
+		const job = await ctx.db.get(jobId);
+		if (!job) return;
+		await ctx.db.patch(jobId, {
+			priorityFee: (job.priorityFee ?? 0) + amount,
+			costActual: job.costActual + amount,
+			updatedAt: Date.now(),
+		});
+	},
+});
+
+/**
+ * Add a tip to a booking stuck finding a rider — Lalamove's priority fee
+ * (`POST /v3/orders/{id}/priority-fee`). A booking that nobody accepts
+ * EXPIRES; a tip is the lever that makes a nearby rider take it. Fixed steps
+ * and a per-booking cap (`TIP_OPTIONS`); charged to the seller's own
+ * Lalamove wallet; never undone.
+ */
+export const addPriorityFee = action({
+	args: { shortId: v.string(), amount: v.number() },
+	handler: async (
+		ctx,
+		{ shortId, amount },
+	): Promise<{ ok: true; tipped: number } | { ok: false; message: string }> => {
+		await ctx.runQuery(internal.subscriptions.assertWritableForOrder, {
+			shortId,
+		});
+		await ctx.runQuery(internal.creditLock.assertCreditsForOrder, {
+			shortId,
+		});
+		const target = await ctx.runQuery(internal.lalamove.getTipContext, {
+			shortId,
+		});
+		if (!target.ok) {
+			return {
+				ok: false,
+				message:
+					target.reason === "rider_found"
+						? "A rider has already taken this booking — no tip needed."
+						: "There's no Lalamove booking waiting for a rider on this order.",
+			};
+		}
+		const rule = TIP_OPTIONS[target.market];
+		if (!rule.amounts.includes(amount)) {
+			return { ok: false, message: "Pick one of the tip amounts shown." };
+		}
+		if (target.tipped + amount > rule.cap) {
+			return {
+				ok: false,
+				message: "That's past the tip limit for one booking.",
+			};
+		}
+		try {
+			await callLalamove(
+				target.credentials,
+				"POST",
+				`/v3/orders/${target.providerOrderId}/priority-fee`,
+				{ data: { priorityFee: priorityFeeWire(amount) } },
+			);
+		} catch (err) {
+			console.warn("[lalamove] priority fee failed", {
+				shortId,
+				message: err instanceof Error ? err.message : String(err),
+			});
+			return {
+				ok: false,
+				message:
+					err instanceof LalamoveApiError &&
+					classifyBookingFailure(err.body) === "wallet"
+						? "Your Lalamove wallet doesn't have enough for the tip — top it up, then try again."
+						: "Lalamove didn't take the tip — the booking may have just been accepted. Check its status and try again if it's still waiting.",
+			};
+		}
+		await ctx.runMutation(internal.lalamove.recordPriorityFee, {
+			jobId: target.jobId,
+			amount,
+		});
+		return { ok: true, tipped: target.tipped + amount };
+	},
+});
+
 export const getCancelContext = internalQuery({
 	args: { shortId: v.string() },
 	handler: async (
@@ -1914,6 +2060,8 @@ export type DeliveryJobView = {
 	 * lets the card say "Scheduled · 3:30 PM" instead of sitting on
 	 * "Finding rider" for hours. Unset = immediate booking. */
 	scheduledAt?: number;
+	/** Tips added while it waited for a rider — already inside costActual. */
+	priorityFee?: number;
 };
 
 /**
@@ -2043,6 +2191,7 @@ export const getDeliveryJob = query({
 						// which is exactly what those trips were.
 						deliveryDirection: latest.deliveryDirection ?? "standard",
 						scheduledAt: latest.scheduledAt,
+						priorityFee: latest.priorityFee,
 					}
 				: null,
 			blockReason,

@@ -2624,6 +2624,10 @@ export default defineSchema({
 		// the buyer-paid orders.deliveryFee is expected (dispatch re-quotes) and
 		// lives HERE, never rewriting the order.
 		costActual: v.number(),
+		// Tip added while the booking waited for a rider (86eye9xd4) —
+		// Lalamove's priority fee, minor units, cumulative and ALREADY included
+		// in costActual. Undefined = no tip.
+		priorityFee: v.optional(v.number()),
 		// Lalamove: the 5-minute quotation the booking was placed against.
 		// Delyva: the service CODE picked in the dispatch dialog (their quotes
 		// are indicative, not id-bound — create re-prices), so this stays the

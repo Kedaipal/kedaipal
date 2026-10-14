@@ -90,9 +90,28 @@ waiting — and loses everything that leads back to the buyer: destination,
 tracking links and proof photos. `deliveries` is in `READ_MODULES`
 (`creditLockCoverage.test.ts`) and swept by `orderGate.test.ts`.
 
+## Add a tip — a booking still finding a rider
+
+A Lalamove booking nobody accepts **expires** (on the store this was built
+against, 15 of 18 failed bookings had). Lalamove's priority fee —
+`POST /v3/orders/{id}/priority-fee` — is the lever, so a booking still
+`assigning` offers **Add tip** where it's seen: the order page's rider card and
+its row here (with how long it has waited: "Finding rider · 12 min").
+
+- **Fixed steps, a cap per booking** (`convex/lib/lalamoveTip.ts`, import-free
+  so the dashboard reads the same numbers): MY RM 2 / 5 / 10 up to RM 20,
+  SG S$1 / 2 / 5 up to S$10. Never a free amount field.
+- **The dialog says the cost before the tap:** each step shows the trip's new
+  total; it's charged to the seller's own Lalamove wallet; it can't be taken
+  back; what's been added so far.
+- **Server is the lock** (`lalamove.addPriorityFee`): orders WRITE, the order's
+  own credit gate, only while `assigning`, only a listed step, never past the
+  cap. A success adds the fee to `deliveryJobs.priorityFee` and `costActual`
+  (so the month's spend and "Booking cost … (incl. RM 5 tip)" include it); a
+  refusal records nothing and says why (a rider just took it, or the wallet
+  is short).
+
 ## Not built (named follow-ups)
 
-- **Add a tip** — Lalamove's free priority-fee call on a booking stuck in
-  *assigning*. A money-spending action: it needs its own confirm and a cap.
 - Delivery spend in Insights, fed by the same ledger.
 - Delyva wallet balance (Delyva has no balance webhook; would need polling).

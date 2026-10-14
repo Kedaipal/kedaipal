@@ -89,6 +89,8 @@ const GATED_FUNCTIONS = [
 	"orders.waiveMockup",
 	"lalamove.prepareBooking",
 	"lalamove.confirmBooking",
+	// Tipping spends the store's money on THIS order's rider (86eye9xd4).
+	"lalamove.addPriorityFee",
 	"delyva.prepareBooking",
 	"delyva.confirmBooking",
 	// Chasing and documents.

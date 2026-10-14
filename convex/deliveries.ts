@@ -68,6 +68,10 @@ export type DeliveryJobRow = {
 	shareLink?: string;
 	hasProof: boolean;
 	awb?: string;
+	/** Still finding a Lalamove rider, so a tip (priority fee) can help. */
+	tippable: boolean;
+	/** Tips already on it — inside `cost`. */
+	priorityFee?: number;
 	gated: boolean;
 };
 
@@ -209,6 +213,13 @@ export const overview = query({
 				shareLink: gated ? undefined : job.shareLink,
 				hasProof: !gated && (job.podImageStorageIds?.length ?? 0) > 0,
 				awb: job.awb,
+				tippable:
+					!gated &&
+					job.provider === "lalamove" &&
+					job.status === "assigning" &&
+					job.providerOrderId !== undefined &&
+					!(job.scheduledAt !== undefined && job.scheduledAt > now),
+				priorityFee: job.priorityFee,
 				gated,
 			});
 		}

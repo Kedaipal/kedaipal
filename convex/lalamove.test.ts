@@ -2388,3 +2388,98 @@ describe("webhook setup state (86eye9xd4, 5A)", () => {
 		expect((await summary(t))?.webhookRegisteredAt).toBeUndefined();
 	});
 });
+
+describe("addPriorityFee — tip a booking still finding a rider (86eye9xd4)", () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	async function stuckBooking(
+		t: ReturnType<typeof setup>,
+		over: Partial<Doc<"deliveryJobs">> = {},
+	) {
+		const retailer = await seedRetailer(t);
+		await t.withIdentity({ subject: USER }).mutation(api.retailers.updateSettings, {
+			deliveryBooking: {
+				// A booking already out is what's being tipped — the arm switch
+				// only governs NEW bookings.
+				enabled: false,
+				vehicleType: "MOTORCYCLE",
+				apiKey: "pk_test_tip",
+				apiSecret: "sk_test_tip",
+			},
+		});
+		const orderId = await seedOrder(t, retailer._id, { status: "packed" });
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			status: "assigning",
+			costActual: 920,
+			...over,
+		});
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		return { shortId: order?.shortId ?? "", jobId };
+	}
+
+	const tip = (t: ReturnType<typeof setup>, shortId: string, amount: number) =>
+		t
+			.withIdentity({ subject: USER })
+			.action(api.lalamove.addPriorityFee, { shortId, amount });
+
+	test("adds the fee at Lalamove and onto what the booking cost", async () => {
+		const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+		const t = setup();
+		const { shortId, jobId } = await stuckBooking(t);
+		expect(await tip(t, shortId, 500)).toEqual({ ok: true, tipped: 500 });
+		const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+		expect(url).toBe("https://rest.sandbox.lalamove.com/v3/orders/LLM-1/priority-fee");
+		expect(init.method).toBe("POST");
+		expect(JSON.parse(String(init.body))).toEqual({ data: { priorityFee: "5.00" } });
+		const job = await t.run((ctx) => ctx.db.get(jobId));
+		expect(job).toMatchObject({ priorityFee: 500, costActual: 1420 });
+	});
+
+	test("only the amounts shown, and never past the per-booking cap", async () => {
+		const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+		const t = setup();
+		const { shortId } = await stuckBooking(t, { priorityFee: 1500 });
+		expect(await tip(t, shortId, 700)).toMatchObject({ ok: false });
+		expect(await tip(t, shortId, 1000)).toMatchObject({
+			ok: false,
+			message: /limit/,
+		});
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	test("a rider already on it needs no tip", async () => {
+		vi.stubGlobal("fetch", vi.fn());
+		const t = setup();
+		const { shortId } = await stuckBooking(t, { status: "ongoing" });
+		expect(await tip(t, shortId, 500)).toMatchObject({
+			ok: false,
+			message: /already taken/,
+		});
+	});
+
+	test("a refusal records nothing, and says why", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response("bad", { status: 422 })),
+		);
+		const t = setup();
+		const { shortId, jobId } = await stuckBooking(t);
+		expect(await tip(t, shortId, 500)).toMatchObject({ ok: false });
+		const job = await t.run((ctx) => ctx.db.get(jobId));
+		expect(job?.priorityFee).toBeUndefined();
+		expect(job?.costActual).toBe(920);
+	});
+
+	test("another store's seller can't tip it", async () => {
+		vi.stubGlobal("fetch", vi.fn());
+		const t = setup();
+		const { shortId } = await stuckBooking(t);
+		await expect(
+			t
+				.withIdentity({ subject: "user_stranger" })
+				.action(api.lalamove.addPriorityFee, { shortId, amount: 500 }),
+		).rejects.toThrow();
+	});
+});
