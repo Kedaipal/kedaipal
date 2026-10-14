@@ -131,6 +131,7 @@ import {
 	type PromoRow,
 	type PromoSubmitValue,
 	promoDraftFrom,
+	promoDraftValid,
 	promoSubmitValue,
 } from "./promo-fields";
 import {
@@ -1155,6 +1156,10 @@ export function ProductForm({
 			// Questions are validated by the server's own sanitizer; the card
 			// shows its message inline. Never on a booking (always sends []).
 			if (!isBooking && !questionsDraftValid(questionsDraft)) return;
+			// The Promotion card states its issue inline (and is the
+			// `data-form-error` the focus helper scrolls to). Mostly a twin of
+			// the server's refusals; "on but nothing on sale" is client-only.
+			if (!promoDraftValid(promoDraft, Date.now(), editor.rows)) return;
 			if (
 				isBooking &&
 				(!capacityValid || !depositValid || !packageValid || !weekendValid)

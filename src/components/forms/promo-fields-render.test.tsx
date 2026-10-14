@@ -30,12 +30,17 @@ const ROWS: PromoRow[] = [
 	{ key: "2", label: "Large", price: "10.00", promoPrice: "" },
 ];
 
-function Harness() {
-	const [draft, setDraft] = useState<PromoDraft>({
-		...EMPTY_PROMO_DRAFT,
-		on: true,
-	});
-	const [rows, setRows] = useState<PromoRow[]>(ROWS);
+function Harness({
+	initialDraft = { ...EMPTY_PROMO_DRAFT, on: true },
+	initialRows = ROWS,
+	locked,
+}: {
+	initialDraft?: PromoDraft;
+	initialRows?: PromoRow[];
+	locked?: boolean;
+} = {}) {
+	const [draft, setDraft] = useState<PromoDraft>(initialDraft);
+	const [rows, setRows] = useState<PromoRow[]>(initialRows);
 	return (
 		<PromoFields
 			draft={draft}
@@ -50,6 +55,7 @@ function Harness() {
 				)
 			}
 			currency="SGD"
+			locked={locked}
 			now={Date.now()}
 		/>
 	);
@@ -116,5 +122,167 @@ describe("a refused sale price states its reason", () => {
 
 		expect(screen.queryByText(/Must be below/)).toBeNull();
 		expect(saleInputs()[0].getAttribute("aria-invalid")).not.toBe("true");
+	});
+});
+
+/**
+ * Clear (z8r3fdudm3). Switching the promotion off only HID its fields — the
+ * label, window, caps and every sale price came back on the next switch-on —
+ * so starting over meant emptying each line by hand. One control resets the
+ * whole card; Undo puts it back while nothing has been typed since.
+ */
+describe("clear sale prices & settings", () => {
+	const clearButton = () =>
+		screen.getByRole("button", { name: "Clear sale prices & settings" });
+	const values = () => saleInputs().map((el) => (el as HTMLInputElement).value);
+	const label = () => screen.getByLabelText(/^Label/) as HTMLInputElement;
+	const cap = () =>
+		screen.getByLabelText(/units at this price/) as HTMLInputElement;
+
+	function fillEverything() {
+		fireEvent.click(screen.getByRole("button", { name: "30% off" }));
+		fireEvent.change(label(), { target: { value: "Raya" } });
+		fireEvent.change(cap(), { target: { value: "20" } });
+		fireEvent.click(screen.getByRole("button", { name: "No end date" }));
+	}
+
+	test("nothing to clear on a fresh card — disabled, and says why", () => {
+		render(<Harness />);
+		expect((clearButton() as HTMLButtonElement).disabled).toBe(true);
+		expect(screen.getByText("Nothing to clear yet.")).toBeTruthy();
+	});
+
+	test("one tap empties every sale price and setting, and leaves it switched on", () => {
+		render(<Harness />);
+		fillEverything();
+		expect(values()).toEqual(["14.00", "14.00", "7.00"]);
+
+		fireEvent.click(clearButton());
+
+		expect(values()).toEqual(["", "", ""]);
+		expect(label().value).toBe("");
+		expect(cap().value).toBe("");
+		// Back to the default window, not left on "No end date".
+		expect(
+			screen
+				.getByRole("button", { name: "For 1 hour" })
+				.className.includes("border-accent"),
+		).toBe(true);
+		// Clear starts over; it is not the off switch.
+		expect(screen.getByRole("switch").getAttribute("aria-checked")).toBe(
+			"true",
+		);
+		expect(
+			screen.getByText(
+				"Cleared. Nothing changes on your store until you save.",
+			),
+		).toBeTruthy();
+	});
+
+	test("Undo puts back exactly what was cleared", () => {
+		render(<Harness />);
+		fillEverything();
+		fireEvent.click(clearButton());
+		fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+
+		expect(values()).toEqual(["14.00", "14.00", "7.00"]);
+		expect(label().value).toBe("Raya");
+		expect(cap().value).toBe("20");
+		expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+	});
+
+	test("any edit after clearing drops Undo, so it can't overwrite new input", () => {
+		render(<Harness />);
+		fillEverything();
+		fireEvent.click(clearButton());
+		fireEvent.change(saleInputs()[0], { target: { value: "5.00" } });
+
+		expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+		expect((clearButton() as HTMLButtonElement).disabled).toBe(false);
+	});
+
+	test("…a setting edit drops it too, not only a price", () => {
+		render(<Harness />);
+		fillEverything();
+		fireEvent.click(clearButton());
+		fireEvent.change(label(), { target: { value: "Merdeka" } });
+
+		expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+	});
+
+	test("switched on with nothing on sale names the way out, as the focus target", () => {
+		render(<Harness />);
+		const issue = screen.getByText(
+			"Set a sale price on at least one line, or switch the promotion off.",
+		);
+		// What "take me to the error" scrolls to when Save is refused here.
+		expect(issue.hasAttribute("data-form-error")).toBe(true);
+
+		fireEvent.change(saleInputs()[0], { target: { value: "5.00" } });
+		expect(
+			screen.queryByText(/Set a sale price on at least one line/),
+		).toBeNull();
+	});
+});
+
+/**
+ * Setting a promotion is Pro; switching one OFF never is (the server's rule).
+ * The toggle used to be disabled outright on a locked store, so a seller who
+ * dropped to Starter could neither remove a paused promotion nor — because
+ * every save re-sent it and hit the Pro gate — save any other edit.
+ */
+describe("a locked (Starter) store", () => {
+	test("with a paused promotion can switch it off, and is told it's paused", () => {
+		render(
+			<Harness
+				locked
+				initialRows={ROWS.map((r) => ({ ...r, promoPrice: "5.00" }))}
+			/>,
+		);
+		const toggle = screen.getByRole("switch") as HTMLButtonElement;
+		expect(toggle.disabled).toBe(false);
+		expect(screen.getByText(/This promotion is paused/)).toBeTruthy();
+
+		fireEvent.click(toggle);
+		expect(toggle.getAttribute("aria-checked")).toBe("false");
+		// …and can't switch it back on.
+		expect(toggle.disabled).toBe(true);
+	});
+
+	test("shows the paused promotion READ-ONLY — every edit would be refused on save (PR #365 review)", () => {
+		render(
+			<Harness
+				locked
+				initialRows={ROWS.map((r) => ({ ...r, promoPrice: "5.00" }))}
+			/>,
+		);
+		for (const input of saleInputs())
+			expect(input.matches(":disabled")).toBe(true);
+		expect(
+			screen.getByRole("button", { name: "30% off" }).matches(":disabled"),
+		).toBe(true);
+		expect(screen.getByLabelText(/Label/).matches(":disabled")).toBe(true);
+		// The one live control is the switch — off is never Pro-gated.
+		expect((screen.getByRole("switch") as HTMLButtonElement).disabled).toBe(
+			false,
+		);
+	});
+
+	test("an unlocked store's fields stay editable", () => {
+		render(<Harness />);
+		for (const input of saleInputs())
+			expect(input.matches(":disabled")).toBe(false);
+	});
+
+	test("is not offered Clear — the move there is switching it off", () => {
+		render(
+			<Harness
+				locked
+				initialRows={ROWS.map((r) => ({ ...r, promoPrice: "5.00" }))}
+			/>,
+		);
+		expect(
+			screen.queryByRole("button", { name: "Clear sale prices & settings" }),
+		).toBeNull();
 	});
 });

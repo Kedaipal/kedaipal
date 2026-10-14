@@ -1,5 +1,5 @@
-import { Scissors, Tag, TriangleAlert } from "lucide-react";
-import { useId } from "react";
+import { RotateCcw, Scissors, Tag, TriangleAlert } from "lucide-react";
+import { useId, useState } from "react";
 import {
 	DEFAULT_PROMO_LABEL,
 	MAX_PROMO_PAY_WINDOW_MINUTES,
@@ -182,12 +182,24 @@ export function promoSubmitValue(
 	};
 }
 
-/** Mirrors `sanitizePromo` so the form never offers a Save the server refuses. */
+/** Mirrors `sanitizePromo` so the form never offers a Save the server refuses.
+ *
+ * Plus one rule the server does NOT make, given the sellable `rows`: a
+ * promotion that's switched on must put at least one line on sale. The server
+ * stores such a config happily, and the buyer then gets a promotion with
+ * nothing in it. Clear (z8r3fdudm3) makes that state one tap away, so the form
+ * names the way out instead of saving it. */
 export function promoDraftIssue(
 	draft: PromoDraft,
 	now: number,
+	rows?: readonly { promoPrice?: string }[],
 ): string | undefined {
 	if (!draft.on) return undefined;
+	if (
+		rows !== undefined &&
+		!rows.some((r) => (r.promoPrice ?? "").trim().length > 0)
+	)
+		return "Set a sale price on at least one line, or switch the promotion off.";
 	if (draft.label.trim().length > PROMO_LABEL_MAX_CHARS)
 		return `Keep the promo label to ${PROMO_LABEL_MAX_CHARS} characters.`;
 	const value = promoSubmitValue(draft, now);
@@ -217,8 +229,12 @@ export function promoDraftIssue(
 	return undefined;
 }
 
-export function promoDraftValid(draft: PromoDraft, now: number): boolean {
-	return promoDraftIssue(draft, now) === undefined;
+export function promoDraftValid(
+	draft: PromoDraft,
+	now: number,
+	rows?: readonly { promoPrice?: string }[],
+): boolean {
+	return promoDraftIssue(draft, now, rows) === undefined;
 }
 
 /** The sentence under the two pickers — what the answers ADD UP TO, so a
@@ -254,6 +270,16 @@ export type PromoRow = {
 	promoPrice: string;
 };
 
+/** Whether "Clear" has anything to clear (z8r3fdudm3): a sale price on any
+ * line, or any setting moved off its default. `on` is not a setting — Clear
+ * resets the form, it doesn't switch the promotion off — so it never counts. */
+export function promoFieldsDirty(draft: PromoDraft, rows: PromoRow[]): boolean {
+	if (rows.some((row) => row.promoPrice.trim().length > 0)) return true;
+	return (Object.keys(EMPTY_PROMO_DRAFT) as (keyof PromoDraft)[]).some(
+		(key) => key !== "on" && draft[key] !== EMPTY_PROMO_DRAFT[key],
+	);
+}
+
 export function PromoFields({
 	draft,
 	onChange,
@@ -286,12 +312,49 @@ export function PromoFields({
 	now: number;
 }) {
 	const fieldId = useId();
-	const set = (patch: Partial<PromoDraft>) => onChange({ ...draft, ...patch });
+	// What "Clear" wiped, so Undo can put it back (z8r3fdudm3). Undo lives
+	// inline where Clear was, never in a toast: a toast's handler would run
+	// with the props of the render that cleared, and the form's price setter
+	// maps the editor rows it closed over, so a late Undo would overwrite
+	// anything typed since. Inline, it always runs with the current props —
+	// and any edit drops the snapshot, so it can never undo over new input.
+	const [cleared, setCleared] = useState<{
+		draft: PromoDraft;
+		prices: Record<string, string>;
+	} | null>(null);
+	const set = (patch: Partial<PromoDraft>) => {
+		setCleared(null);
+		onChange({ ...draft, ...patch });
+	};
+	const setPrices = (next: Record<string, string>) => {
+		setCleared(null);
+		onPromoPrices(next);
+	};
 	const open = draft.on || noToggle === true;
-	const issue = promoDraftIssue(draft, now);
+	const issue = promoDraftIssue(draft, now, rows);
 	const cap = positiveInt(draft.unitCap);
 	const creditsShort =
 		cap !== undefined && creditBalance !== undefined && cap > creditBalance;
+
+	const dirty = promoFieldsDirty(draft, rows);
+	const clearFields = () => {
+		const prices: Record<string, string> = {};
+		const empty: Record<string, string> = {};
+		for (const row of rows) {
+			prices[row.key] = row.promoPrice;
+			empty[row.key] = "";
+		}
+		// `on` survives: the seller asked to start over, not to switch it off.
+		onChange({ ...EMPTY_PROMO_DRAFT, on: draft.on });
+		onPromoPrices(empty);
+		setCleared({ draft, prices });
+	};
+	const undoClear = () => {
+		if (!cleared) return;
+		onChange(cleared.draft);
+		onPromoPrices(cleared.prices);
+		setCleared(null);
+	};
 
 	const applyPercent = (percent: number) => {
 		const next: Record<string, string> = {};
@@ -301,7 +364,7 @@ export function PromoFields({
 			const sale = promoPriceFromPercent(Math.round(list * 100), percent);
 			next[row.key] = sale === null ? "" : (sale / 100).toFixed(2);
 		}
-		onPromoPrices(next);
+		setPrices(next);
 	};
 
 	const chip = (active: boolean) =>
@@ -322,23 +385,35 @@ export function PromoFields({
 						</h4>
 						<p className="mt-1 text-xs text-muted-foreground">
 							{locked
-								? "Promotions are part of the Pro plan. Upgrade in Settings → Billing to run sale prices."
+								? draft.on
+									? "This promotion is paused — promotions are part of the Pro plan. Switch it off and save to remove it, or upgrade in Settings → Billing to run it again."
+									: "Promotions are part of the Pro plan. Upgrade in Settings → Billing to run sale prices."
 								: "A lower price for a while — it snaps back by itself when the promotion ends."}
 						</p>
 					</div>
+					{/* Setting is Pro-gated; switching OFF never is (the server's
+					    rule, docs/promo-price.md), so a store that dropped to
+					    Starter can always remove a promotion it set while on Pro. */}
 					<ToggleSwitch
 						on={draft.on}
 						onChange={(on) => set({ on })}
-						disabled={locked}
+						disabled={locked && !draft.on}
 						label="Run a promotion on this product"
 					/>
 				</div>
 			)}
 
 			{open ? (
-				<div
+				// A LOCKED (Starter) store's paused promotion is read-only: every
+				// edit here would be refused by the server's Pro gate on save, so an
+				// editable field would be wrong-but-enabled (PR #365 review). The
+				// copy above says it's paused and that switching it off is the move;
+				// the toggle sits outside this fieldset, so that stays live. A
+				// disabled <fieldset> disables every control inside it natively.
+				<fieldset
+					disabled={locked === true}
 					className={cn(
-						"flex flex-col gap-5",
+						"flex min-w-0 flex-col gap-5 disabled:opacity-60",
 						noToggle ? null : "border-t border-border pt-4",
 					)}
 				>
@@ -399,7 +474,7 @@ export function PromoFields({
 												className="w-28 text-right"
 												value={row.promoPrice}
 												onChange={(e) =>
-													onPromoPrices({ [row.key]: e.target.value })
+													setPrices({ [row.key]: e.target.value })
 												}
 											/>
 										</div>
@@ -629,10 +704,51 @@ export function PromoFields({
 						</p>
 					) : null}
 
+					{/* `data-form-error`: the target "take me to the error" scrolls
+					    to when Save or Continue is refused on this card. */}
 					{issue ? (
-						<p className="text-xs font-medium text-destructive">{issue}</p>
+						<p data-form-error className="text-xs font-medium text-destructive">
+							{issue}
+						</p>
 					) : null}
-				</div>
+
+					{/* Start over (z8r3fdudm3). The foot of the card, below every
+					    field it empties. It resets the FORM only — nothing reaches
+					    the store until Save — and is not offered on a locked store,
+					    where the move is switching the paused promotion off. */}
+					{locked ? null : (
+						<div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-border pt-3">
+							<p className="text-xs text-muted-foreground" aria-live="polite">
+								{cleared
+									? "Cleared. Nothing changes on your store until you save."
+									: dirty
+										? noToggle
+											? "Empties every sale price and setting above."
+											: "Empties this form. To stop a running promotion, switch it off and save."
+										: "Nothing to clear yet."}
+							</p>
+							{cleared ? (
+								<button
+									type="button"
+									onClick={undoClear}
+									className="tap-target inline-flex items-center gap-1.5 text-sm font-semibold text-accent-emphasis hover:underline"
+								>
+									Undo
+								</button>
+							) : (
+								<button
+									type="button"
+									onClick={clearFields}
+									disabled={!dirty}
+									className="tap-target inline-flex items-center gap-1.5 text-sm font-semibold text-accent-emphasis hover:underline disabled:cursor-not-allowed disabled:text-muted-foreground disabled:no-underline"
+								>
+									<RotateCcw className="size-3.5" aria-hidden />
+									Clear sale prices & settings
+								</button>
+							)}
+						</div>
+					)}
+				</fieldset>
 			) : null}
 		</div>
 	);
