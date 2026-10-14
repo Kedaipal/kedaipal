@@ -63,5 +63,14 @@ export async function deleteProductCascade(
 		.collect();
 	for (const junction of junctions) await ctx.db.delete(junction._id);
 
+	// Bulk-promotion memberships (z8r3fducfd). The promotion row itself
+	// outlives the product (it may hold others, and is history either way);
+	// only this product's place in it goes.
+	const memberships = await ctx.db
+		.query("promotionMembers")
+		.withIndex("by_product", (q) => q.eq("productId", product._id))
+		.collect();
+	for (const member of memberships) await ctx.db.delete(member._id);
+
 	await ctx.db.delete(product._id);
 }

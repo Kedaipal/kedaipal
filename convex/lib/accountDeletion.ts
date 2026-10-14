@@ -72,6 +72,7 @@ export const DELETION_PHASES = [
 	"counterCheckoutSessions",
 	"orderClaims",
 	"vouchers",
+	"promotions",
 	"subscriptions",
 	"subscriptionUsage",
 	"creditPurchases",
@@ -310,6 +311,28 @@ export async function runDeletionPhase(
 				.take(limit);
 			for (const voucher of rows) await ctx.db.delete(voucher._id);
 			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "promotions": {
+			// Bulk promotions (`z8r3fducfd`). Pure catalogue grouping — the
+			// prices they wrote lived on the products, already gone with the
+			// `products` phase, and an order keeps its own frozen line price.
+			// Members first (a product's own rows also go with its cascade;
+			// this sweeps the rest), then the promotions they pointed at.
+			const members = await ctx.db
+				.query("promotionMembers")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const member of members) await ctx.db.delete(member._id);
+			if (members.length === limit) return { processed: members.length, done: false };
+			const rows = await ctx.db
+				.query("promotions")
+				.withIndex("by_retailer_created", (q) => q.eq("retailerId", retailerId))
+				.take(limit - members.length);
+			for (const promotion of rows) await ctx.db.delete(promotion._id);
+			return {
+				processed: members.length + rows.length,
+				done: rows.length < limit - members.length,
+			};
 		}
 		case "subscriptions": {
 			// A deleted tenant must not leave MONEY rails live (86eyb6z4r):

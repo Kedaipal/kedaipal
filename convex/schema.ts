@@ -2975,6 +2975,82 @@ export default defineSchema({
 		// The list's default order (newest first) and the batch grouping.
 		.index("by_retailer_created", ["retailerId", "createdAt"]),
 
+	/**
+	 * A bulk promotion (`z8r3fducfd`) — ONE set of terms (percent off, window,
+	 * label, flash extras) applied to many products, edited and ended as one.
+	 *
+	 * The promotion is the GROUPING and EDIT handle, never a second pricing
+	 * path: its writes fan out to each member product's `products.promo` and
+	 * its variants' `promoPrice`, and `convex/lib/promo.ts` stays the one
+	 * read-time authority. Membership lives in `promotionMembers`, not as a
+	 * field on `products`, so a product row never carries anything a branch
+	 * without this feature doesn't declare (the shared-dev-deployment rule).
+	 * See docs/promo-price.md#promotions-bulk.
+	 */
+	promotions: defineTable({
+		retailerId: v.id("retailers"),
+		// Badge label; render-time default "Promo" (≤20 chars, sanitizePromo).
+		label: v.optional(v.string()),
+		// What the review step's prices were computed from. Display + the
+		// default for products added later; the stored per-variant prices on
+		// each member are what actually applies.
+		percentOff: v.number(),
+		// The shared window (ms epoch). Unset start = runs from when it was
+		// applied; unset end = a plain discount (no countdown).
+		startsAt: v.optional(v.number()),
+		endsAt: v.optional(v.number()),
+		// Flash extras, per PRODUCT (the unit cap is each product's own pool —
+		// the tally keys on productId + runId). Skipped on booking/event members.
+		unitCap: v.optional(v.number()),
+		maxPerOrder: v.optional(v.number()),
+		payWithinMinutes: v.optional(v.number()),
+		// Set by "End now". Members are then cleared in batches; the row is
+		// kept as history (and as the source for "Run again").
+		endedAt: v.optional(v.number()),
+		createdByUserId: v.optional(v.string()),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	}).index("by_retailer_created", ["retailerId", "createdAt"]),
+
+	/**
+	 * One product inside a promotion, and the work still owed to it.
+	 *
+	 * `state` is a small queue so a promotion of any size is applied and
+	 * cleared in batches that fit a transaction (200 products × up to 100
+	 * choices each is past a single mutation's write budget):
+	 *   pending  → its prices still have to be written     → applied
+	 *   clearing → the promotion ended / it was removed     → cleared
+	 *   moved    → it joined another promotion (terminal; the new one
+	 *              overwrites the product, so nothing is cleared)
+	 * `cleared` and `moved` rows are kept as history for "Run again".
+	 */
+	promotionMembers: defineTable({
+		promotionId: v.id("promotions"),
+		retailerId: v.id("retailers"),
+		productId: v.id("products"),
+		// The sale price per variant, as reviewed (sen). A variant not listed
+		// is "not on promo" and is written WITHOUT a sale price.
+		prices: v.array(
+			v.object({ variantId: v.id("productVariants"), promoPrice: v.number() }),
+		),
+		state: v.union(
+			v.literal("pending"),
+			v.literal("applied"),
+			v.literal("clearing"),
+			v.literal("cleared"),
+			v.literal("moved"),
+		),
+		// The `products.promo.runId` this promotion last wrote. Clearing only
+		// touches the product while its promo is still this run — a product
+		// the seller has since re-priced by hand is left alone.
+		runId: v.optional(v.string()),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_promotion_state", ["promotionId", "state"])
+		.index("by_product", ["productId"])
+		.index("by_retailer", ["retailerId"]),
+
 	// --- Manual subscription billing (docs/manual-subscription.md) -----------
 	// Per-retailer subscription. One row per retailer (created in-transaction by
 	// createRetailer). Entitlement caps are DENORMALIZED here so feature-gating
