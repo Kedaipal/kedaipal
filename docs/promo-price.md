@@ -111,11 +111,40 @@ Flash extras hide behind the reason they don't apply on booking/event
 listings, mirroring `assertFlashFieldsAllowed` — the fields never vanish
 silently. The credits nudge appears when the cap exceeds the store's balance.
 
+**Starting over — "Clear sale prices & settings"** (`z8r3fdudm3`). Switching
+the promotion off only *hides* its fields: label, window, caps and every sale
+price come back on the next switch-on. So the card's foot carries one control
+that resets the whole card in one tap (draft → `EMPTY_PROMO_DRAFT`, every
+line's sale price → blank, in one `onPromoPrices` batch). It **keeps the
+switch where it was**, because starting over is not switching off, and it
+resets the form only: nothing reaches the store until Save, so there's no
+confirm. **Undo** sits inline where the button was, never in a toast. A
+toast's handler would run with the props of the render that cleared, and the
+form's price setter maps the editor rows it closed over, so a late Undo would
+overwrite anything typed since. Any edit drops the Undo. With nothing to
+clear, the button is disabled and the line says so (`promoFieldsDirty`).
+
+**A switched-on promotion must put something on sale.** `promoDraftIssue`
+takes the card's rows, and on with every sale price blank it says *"Set a
+sale price on at least one line, or switch the promotion off."* This is the
+one rule with **no server twin**: the server would store the config, and the
+buyer would get a promotion with nothing in it. Clear makes that state one tap
+away, so the form refuses it. The full form now gates Save on
+`promoDraftValid` (it previously relied on the server's refusals), the wizard
+gates its Price step, and the issue line is the `data-form-error` the focus
+helper scrolls to.
+
 **Pro gate:** setting is gated (disabled-with-reason in place, the
 `EventFields` posture); **clearing never is**, so a store that drops to
-Starter can always switch a promotion off. A promotion on a downgraded store
-is *paused*, not deleted — `effectivePrice` returns the list price and the
-storefront publishes no `promoState` at all.
+Starter can always switch a promotion off. The toggle is disabled only while
+it's **off** on a locked store. It used to be disabled outright, which left a
+downgraded seller unable to remove a paused promotion, and (because every
+save re-sends a switched-on promotion and hits the Pro gate) unable to save
+any other edit to that product. The locked card says the promotion is paused
+and how to remove it. Clear is not offered there, because switching off is
+the move. A promotion on a downgraded store is *paused*, not deleted:
+`effectivePrice` returns the list price and the storefront publishes no
+`promoState` at all.
 
 **The wizard offers the promotion too**, as a collapsed optional block at the
 foot of its Price step — not a step of its own. The first cut left it out on

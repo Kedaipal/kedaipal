@@ -4,6 +4,7 @@ import {
 	type PromoDraft,
 	promoDraftFrom,
 	promoDraftIssue,
+	promoFieldsDirty,
 	promoSubmitValue,
 	promoWindowSentence,
 } from "./promo-fields";
@@ -156,6 +157,56 @@ describe("promoDraftIssue — every server refusal has a client twin", () => {
 		expect(
 			promoDraftIssue(draft({ payWithinMinutes: 8 * 24 * 60 }), NOW),
 		).toMatch(/5 minutes and 7 days/);
+	});
+});
+
+describe("promoDraftIssue — a switched-on promotion must put something on sale", () => {
+	const blank = [{ promoPrice: "" }, { promoPrice: "  " }];
+
+	test("on, with no line on sale, names the way out", () => {
+		expect(promoDraftIssue(draft(), NOW, blank)).toBe(
+			"Set a sale price on at least one line, or switch the promotion off.",
+		);
+	});
+
+	test("one line on sale is enough", () => {
+		expect(
+			promoDraftIssue(draft(), NOW, [...blank, { promoPrice: "5.00" }]),
+		).toBeUndefined();
+	});
+
+	test("off never asks for a price", () => {
+		expect(promoDraftIssue(draft({ on: false }), NOW, blank)).toBeUndefined();
+	});
+
+	test("without rows, only the server's twins apply", () => {
+		expect(promoDraftIssue(draft(), NOW)).toBeUndefined();
+	});
+});
+
+describe("promoFieldsDirty — whether Clear has anything to clear", () => {
+	const blankRows = [{ key: "0", label: "One", price: "10", promoPrice: "" }];
+
+	test("the default draft with no sale prices is clean, switched on or off", () => {
+		expect(promoFieldsDirty(draft(), blankRows)).toBe(false);
+		expect(promoFieldsDirty(draft({ on: false }), blankRows)).toBe(false);
+	});
+
+	test("a sale price on any line is something to clear", () => {
+		expect(
+			promoFieldsDirty(draft(), [{ ...blankRows[0], promoPrice: "5.00" }]),
+		).toBe(true);
+	});
+
+	test("any setting moved off its default is something to clear", () => {
+		expect(promoFieldsDirty(draft({ label: "Raya" }), blankRows)).toBe(true);
+		expect(promoFieldsDirty(draft({ endMode: "open" }), blankRows)).toBe(true);
+		expect(promoFieldsDirty(draft({ durationMinutes: 30 }), blankRows)).toBe(
+			true,
+		);
+		expect(promoFieldsDirty(draft({ payWithinMinutes: 15 }), blankRows)).toBe(
+			true,
+		);
 	});
 });
 
