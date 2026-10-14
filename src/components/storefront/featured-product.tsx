@@ -122,7 +122,7 @@ function FeaturedProductInner({
 			    grid. scroll-padding moves the snapport in to match. (The
 			    trailing edge was always fine; only the snapped rest position
 			    was wrong.) */}
-			<div className="-mx-5 mt-2 flex snap-x scroll-pl-5 gap-3 overflow-x-auto px-5 pb-1 [scrollbar-width:none] lg:-mx-8 lg:scroll-pl-8 lg:px-8 [&::-webkit-scrollbar]:hidden">
+			<div className="-mx-5 mt-2 flex snap-x scroll-pl-5 gap-3 overflow-x-auto px-5 pb-1 scrollbar-none lg:-mx-8 lg:scroll-pl-8 lg:px-8">
 				{featured.map((product, index) => (
 					<div
 						key={product._id}

@@ -13,6 +13,7 @@ import {
 	ShieldCheck,
 	ShoppingBag,
 	Siren,
+	Sparkles,
 	Store,
 	Users,
 } from "lucide-react";
@@ -236,6 +237,13 @@ export function Sidebar({
 							onClick={exitActAs}
 							icon={ShieldCheck}
 							label="Billing"
+							collapsed={collapsed}
+						/>
+						<SidebarLink
+							to="/app/admin/marketplace"
+							onClick={exitActAs}
+							icon={Sparkles}
+							label="Marketplace"
 							collapsed={collapsed}
 						/>
 						<SidebarLink

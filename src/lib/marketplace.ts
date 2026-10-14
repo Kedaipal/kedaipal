@@ -12,6 +12,7 @@ import {
 	WEEKDAY_NAMES_SHORT,
 } from "../../convex/lib/openingHours";
 import type { MarketplaceStoreCard } from "../../convex/marketplace";
+import { parseShowcaseSlugParam } from "../../convex/lib/showcase";
 
 /**
  * Marketplace page derivations (z8r3fdkmyp) — pure, so the search/chip/region
@@ -42,6 +43,9 @@ export const SEARCH_QUERY_MAX = 80;
 export function parseMarketplaceSearch(search: Record<string, unknown>): {
 	q?: string;
 	filter?: Exclude<MarketplaceChip, "all">;
+	/** `?showcase=<slug>` (z8r3fdr6mv): the focused view of one showcase —
+	 * the link on a booth QR. An unknown slug renders the plain page. */
+	showcase?: string;
 } {
 	// Trim BEFORE the cap, so padding never spends the 80-char budget.
 	const q =
@@ -49,7 +53,12 @@ export function parseMarketplaceSearch(search: Record<string, unknown>): {
 			? search.q.trim().slice(0, SEARCH_QUERY_MAX) || undefined
 			: undefined;
 	const filter = FILTER_CHIPS.find((chip) => chip === search.filter);
-	return { ...(q ? { q } : {}), ...(filter ? { filter } : {}) };
+	const showcase = parseShowcaseSlugParam(search.showcase);
+	return {
+		...(q ? { q } : {}),
+		...(filter ? { filter } : {}),
+		...(showcase ? { showcase } : {}),
+	};
 }
 
 /**

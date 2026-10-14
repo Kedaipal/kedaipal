@@ -52,6 +52,17 @@
 	min-width: 2.75rem;
 }
 
+/* A swipe rail scrolls without painting a scrollbar. Phones already overlay
+   theirs; desktop browsers and devtools' phone emulation draw a permanent grey
+   bar under every chip row and card rail. The rail's peek (the next card cut
+   off at the edge) is what tells a buyer there's more, never the bar. */
+@utility scrollbar-none {
+	scrollbar-width: none;
+	&::-webkit-scrollbar {
+		display: none;
+	}
+}
+
 @utility safe-bottom {
 	padding-bottom: env(safe-area-inset-bottom);
 }
@@ -306,6 +317,83 @@
 	background-size: 200px 200px, auto, auto;
 	background-repeat: repeat, no-repeat, no-repeat;
 	background-color: hsl(0 0% 100%);
+}
+
+/* =============================================
+   Marketplace showcases (z8r3fdr6mv) — curated looks
+   =============================================
+   An admin picks a MOOD, never a colour: every theme is a dark ground with
+   light text, so the banner, the ticket's info panel and the compact band read
+   the same in light and dark mode with one text treatment. The palette lives
+   here, as variables on one class, so the components stay on semantic tokens
+   (`bg-[var(--sc-a)]`) and a new theme is one block in this file plus its id
+   in convex/lib/showcase.ts. The ticket "paper" is deliberately NOT a theme
+   variable and does not flip in dark mode — it is a cream ticket in every
+   theme, which is what makes the row read as one pile of tickets. */
+@utility kp-showcase {
+	--sc-paper: hsl(40 100% 97%);
+	--sc-tear: hsl(39 45% 64%);
+	--sc-ink: hsl(28 100% 24%);
+	--sc-ink-soft: hsl(38 79% 34%);
+	--sc-a: hsl(160 58% 10%);
+	--sc-b: hsl(157 52% 15%);
+	--sc-accent: hsl(43 96% 56%);
+	--sc-accent-fg: hsl(35 100% 12%);
+	--sc-text: hsl(0 0% 100%);
+	--sc-text-soft: hsl(214 32% 83%);
+}
+@utility kp-showcase-campfire {
+	--sc-a: hsl(160 58% 10%);
+	--sc-b: hsl(157 52% 15%);
+	--sc-accent: hsl(43 96% 56%);
+	--sc-accent-fg: hsl(35 100% 12%);
+}
+@utility kp-showcase-festive {
+	--sc-a: hsl(343 71% 17%);
+	--sc-b: hsl(344 66% 32%);
+	--sc-accent: hsl(43 86% 63%);
+	--sc-accent-fg: hsl(35 100% 12%);
+}
+@utility kp-showcase-ocean {
+	--sc-a: hsl(213 73% 16%);
+	--sc-b: hsl(209 70% 25%);
+	--sc-accent: hsl(199 95% 74%);
+	--sc-accent-fg: hsl(213 73% 12%);
+}
+@utility kp-showcase-sunset {
+	--sc-a: hsl(15 84% 19%);
+	--sc-b: hsl(21 90% 40%);
+	--sc-accent: hsl(48 96% 77%);
+	--sc-accent-fg: hsl(20 90% 14%);
+}
+@utility kp-showcase-midnight {
+	--sc-a: hsl(222 47% 11%);
+	--sc-b: hsl(263 83% 23%);
+	--sc-accent: hsl(255 92% 85%);
+	--sc-accent-fg: hsl(263 70% 16%);
+}
+@utility kp-showcase-kedaipal {
+	--sc-a: hsl(222 47% 11%);
+	--sc-b: hsl(160 84% 20%);
+	--sc-accent: hsl(160 84% 60%);
+	--sc-accent-fg: hsl(222 47% 11%);
+}
+
+/* The showcase's dark ground. */
+@utility bg-showcase {
+	background-image: linear-gradient(170deg, var(--sc-a) 0%, var(--sc-b) 100%);
+}
+
+/* A store cover inside a ticket panel: dark fade from the left so the name
+   stays legible over any photo — a cover that already carries its own words
+   (an event banner) is the case this exists for. */
+@utility bg-showcase-scrim {
+	background-image: linear-gradient(
+		90deg,
+		hsl(215 30% 6% / 0.82) 0%,
+		hsl(215 30% 6% / 0.6) 55%,
+		hsl(215 30% 6% / 0.3) 100%
+	);
 }
 
 /* Final CTA mesh — mint glow on deep navy */

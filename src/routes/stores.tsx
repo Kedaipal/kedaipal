@@ -5,10 +5,19 @@ import { Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../../convex/_generated/api";
 import { COUNTRY_LABELS, type Country } from "../../convex/lib/country";
+import type { PublicShowcase } from "../../convex/showcases";
 import { RegionToggle } from "../components/landing/landing-ui";
 import { FoundingShelf } from "../components/marketplace/founding-shelf";
+import {
+	ShowcaseBand,
+	ShowcaseStage,
+} from "../components/marketplace/showcase-stage";
 import { SponsoredCard } from "../components/marketplace/sponsored-card";
 import { StoreCard } from "../components/marketplace/store-card";
+import {
+	StoresCompactHeader,
+	useScrolledPast,
+} from "../components/marketplace/stores-compact-header";
 import { SectionHeading } from "../components/storefront/section-heading";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
@@ -23,6 +32,10 @@ import {
 	partitionStores,
 	SEARCH_QUERY_MAX,
 } from "../lib/marketplace";
+import {
+	joinShowcaseMembers,
+	showcasesForRegion,
+} from "../lib/showcase";
 import { ssrRead } from "../lib/ssr-read";
 
 /**
@@ -42,6 +55,11 @@ import { ssrRead } from "../lib/ssr-read";
 interface StoresLoaderData {
 	/** Slug + name of every listed store, for the ItemList JSON-LD (capped). */
 	stores: Array<{ slug: string; storeName: string }>;
+	/** The showcase `?showcase=` names, when it is live — its title, tagline
+	 * and cover feed the page's OG tags so the booth-QR link unfurls as the
+	 * event in WhatsApp (z8r3fdr6mv). Absent for the plain page or a slug
+	 * that is not live. */
+	focusedShowcase?: Pick<PublicShowcase, "title" | "tagline" | "coverImageUrl">;
 }
 
 const JSON_LD_STORE_CAP = 50;
@@ -53,32 +71,61 @@ const PAGE_DESCRIPTION =
 
 export const Route = createFileRoute("/stores")({
 	validateSearch: parseMarketplaceSearch,
-	loader: async (): Promise<StoresLoaderData | null> => {
+	// The focused showcase is the one search param the loader reads — for the
+	// OG tags only. Search and filter stay client-side over the one payload.
+	loaderDeps: ({ search }) => ({ showcase: search.showcase }),
+	loader: async ({ deps }): Promise<StoresLoaderData | null> => {
 		const client = getConvexHttpClient();
 		// Soft-degrade like every buyer loader (86eyheqzv): a transient upstream
 		// failure renders the shell and the client query paints the directory.
 		const read = await ssrRead(() => client.query(api.marketplace.listStores));
 		if (!read.ok) return null;
+		const showcases = deps.showcase
+			? await ssrRead(() => client.query(api.showcases.listShowcases))
+			: null;
+		const focused = showcases?.ok
+			? showcases.value.find((s) => s.slug === deps.showcase)
+			: undefined;
 		return {
 			stores: read.value
 				.slice(0, JSON_LD_STORE_CAP)
 				.map(({ slug, storeName }) => ({ slug, storeName })),
+			...(focused
+				? {
+						focusedShowcase: {
+							title: focused.title,
+							tagline: focused.tagline,
+							coverImageUrl: focused.coverImageUrl,
+						},
+					}
+				: {}),
 		};
 	},
 	head: ({ loaderData }) => {
 		const canonicalUrl = `${SITE_URL}/stores`;
+		const focused = loaderData?.focusedShowcase;
+		// A shared showcase link unfurls as the EVENT ("Malaysia Campfest 2026
+		// on Kedaipal"), cover and all; the canonical stays the bare directory.
+		const title = focused ? `${focused.title} on Kedaipal` : PAGE_TITLE;
+		const description = focused?.tagline ?? PAGE_DESCRIPTION;
 		const meta = [
-			{ title: PAGE_TITLE },
-			{ name: "description", content: PAGE_DESCRIPTION },
+			{ title },
+			{ name: "description", content: description },
 			{ name: "robots", content: "index, follow" },
 			{ property: "og:type", content: "website" },
 			{ property: "og:site_name", content: "Kedaipal" },
-			{ property: "og:title", content: PAGE_TITLE },
-			{ property: "og:description", content: PAGE_DESCRIPTION },
+			{ property: "og:title", content: title },
+			{ property: "og:description", content: description },
 			{ property: "og:url", content: canonicalUrl },
-			{ name: "twitter:card", content: "summary" },
-			{ name: "twitter:title", content: PAGE_TITLE },
-			{ name: "twitter:description", content: PAGE_DESCRIPTION },
+			...(focused?.coverImageUrl
+				? [{ property: "og:image", content: focused.coverImageUrl }]
+				: []),
+			{
+				name: "twitter:card",
+				content: focused?.coverImageUrl ? "summary_large_image" : "summary",
+			},
+			{ name: "twitter:title", content: title },
+			{ name: "twitter:description", content: description },
 		];
 		const scripts =
 			loaderData && loaderData.stores.length > 0
@@ -115,12 +162,17 @@ const CHIPS: Array<{ id: MarketplaceChip; label: string; dot?: boolean }> = [
 /** A horizontal rail that snaps: `scroll-px-*` matches the gutter, or
  * `snap-start` pulls the first card flush to the screen edge on load. */
 const RAIL_CLASS =
-	"flex snap-x gap-3 overflow-x-auto scroll-px-5 px-5 pb-1 lg:scroll-px-8 lg:px-8";
+	"flex snap-x gap-3 overflow-x-auto scrollbar-none scroll-px-5 px-5 pb-1 lg:scroll-px-8 lg:px-8";
 
 function MarketplacePage() {
 	const cards = useQuery(convexQuery(api.marketplace.listStores, {})).data;
+	const showcases = useQuery(
+		convexQuery(api.showcases.listShowcases, {}),
+	).data;
 	const [region, setRegion] = useLandingRegion();
-	const { q, filter } = Route.useSearch();
+	const { q, filter, showcase: focusedSlug } = Route.useSearch();
+	// The compact header takes over once the hero's chips scroll out above.
+	const [heroEndRef, scrolledPast] = useScrolledPast<HTMLDivElement>();
 	const navigate = Route.useNavigate();
 	const chip: MarketplaceChip = filter ?? "all";
 	// The input's own buffer, seeded from the URL. The URL is written on every
@@ -176,6 +228,32 @@ function MarketplacePage() {
 		: [];
 	const { sponsored, founding } = partitionStores(regionCards);
 	const refined = search.trim().length > 0 || chip !== "all";
+	// Showcases (z8r3fdr6mv): live ones for this region, each member joined
+	// to its directory card. Regions never blend here either. Ones with no
+	// joinable member render nothing (a banner with no stores is a dead end).
+	const regionShowcases = showcases
+		? showcasesForRegion(showcases, region)
+				.map((s) => ({ showcase: s, tickets: joinShowcaseMembers(s, regionCards) }))
+				.filter((s) => s.tickets.length > 0)
+		: [];
+	const focused = focusedSlug
+		? regionShowcases.find((s) => s.showcase.slug === focusedSlug)
+		: undefined;
+	// A focused link to a showcase that is no longer live (ended, unpublished,
+	// or in the other region) lands on the plain page with a one-line why —
+	// a printed QR outlives an event, and the buyer who scans it deserves a
+	// sentence, not a silently ordinary page.
+	const focusedMissing =
+		focusedSlug !== undefined && showcases !== undefined && !focused;
+	const [stageShowcase, ...bandShowcases] = focused
+		? regionShowcases.filter((s) => s !== focused)
+		: regionShowcases;
+	function leaveShowcase() {
+		void navigate({
+			search: (prev) => ({ ...prev, showcase: undefined }),
+			replace: true,
+		});
+	}
 	// An empty REGION carries its own "be the first" CTA; the band below it
 	// would repeat the identical button, so it steps aside (one ask, once).
 	const regionEmpty = !refined && visible.length === 0;
@@ -258,7 +336,7 @@ function MarketplacePage() {
 						</form>
 					</search>
 
-					<div className="mt-3.5 flex gap-2 overflow-x-auto px-5 lg:justify-center">
+					<div className="mt-3.5 flex gap-2 overflow-x-auto scrollbar-none px-5 lg:justify-center">
 						{CHIPS.map(({ id, label, dot }) => {
 							const active = chip === id;
 							return (
@@ -287,11 +365,71 @@ function MarketplacePage() {
 				</div>
 			</div>
 
+			{/* Zero-height sentinel: the compact header is live once this has
+			    scrolled out above the viewport. */}
+			<div ref={heroEndRef} aria-hidden className="h-px w-full" />
+			<StoresCompactHeader
+				visible={scrolledPast}
+				search={search}
+				onSearch={setSearch}
+				chip={chip}
+				chips={CHIPS}
+				onChip={setChip}
+				region={region}
+				onRegion={setRegion}
+				maxLength={SEARCH_QUERY_MAX}
+			/>
+
 			<div className="mx-auto flex w-full max-w-6xl grow flex-col">
 				{cards === undefined ? (
 					<MarketplaceSkeleton />
 				) : (
 					<main className="flex flex-col">
+						{focused ? (
+							<div className="mt-5">
+								<ShowcaseStage
+									showcase={focused.showcase}
+									tickets={focused.tickets}
+									now={now}
+									mode="focused"
+									railClassName={RAIL_CLASS}
+									onBack={leaveShowcase}
+								/>
+							</div>
+						) : null}
+						{focusedMissing ? (
+							<p className="mx-5 mt-5 rounded-2xl border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground lg:mx-8">
+								That showcase isn't on right now — here's every store on
+								Kedaipal instead.
+							</p>
+						) : null}
+						{!refined && stageShowcase ? (
+							<div className="mt-5 flex flex-col gap-3">
+								{focused ? (
+									<ShowcaseBand
+										showcase={stageShowcase.showcase}
+										tickets={stageShowcase.tickets}
+										now={now}
+									/>
+								) : (
+									<ShowcaseStage
+										showcase={stageShowcase.showcase}
+										tickets={stageShowcase.tickets}
+										now={now}
+										mode="stage"
+										railClassName={RAIL_CLASS}
+									/>
+								)}
+								{bandShowcases.map((s) => (
+									<ShowcaseBand
+										key={s.showcase.slug}
+										showcase={s.showcase}
+										tickets={s.tickets}
+										now={now}
+									/>
+								))}
+							</div>
+						) : null}
 						{!refined && sponsored.length > 0 ? (
 							<section className="mt-7 flex flex-col gap-3">
 								<div className="px-5 lg:px-8">
