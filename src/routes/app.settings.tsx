@@ -343,43 +343,60 @@ export const Route = createFileRoute("/app/settings")({
 });
 
 function SettingsSkeleton() {
+	// The shape of the page that loads into it: the grouped index on a phone,
+	// the section rail beside a column of cards from lg. Rows per group mirror
+	// SETTINGS_GROUPS so nothing jumps when the real nav lands.
+	const groups = [3, 4, 2];
 	return (
-		<div className="flex flex-col gap-6 lg:max-w-2xl">
+		<div className="flex max-w-6xl flex-col gap-6">
 			<PageHeaderSkeleton hasSubtitle />
-			<section className="flex flex-col gap-2 lg:hidden">
-				<Skeleton className="h-7 w-24" />
-				<Skeleton className="h-4 w-48" />
-			</section>
 
-			{/* Tab bar */}
-			<div className="flex gap-1 border-b border-input">
-				{[64, 88, 80, 96].map((w) => (
-					<Skeleton
-						key={w}
-						className="h-11 rounded-none"
-						style={{ width: w }}
-					/>
+			{/* Mobile: the grouped index. */}
+			<div className="flex flex-col gap-4 lg:hidden">
+				<Skeleton className="h-16 w-full rounded-2xl" />
+				{groups.map((rows, g) => (
+					<div key={g} className="flex flex-col gap-1.5">
+						<Skeleton className="h-3 w-16" />
+						<div className="flex flex-col divide-y divide-border rounded-2xl border border-border bg-card px-3.5">
+							{Array.from({ length: rows }, (_, r) => (
+								<div key={r} className="flex min-h-[52px] items-center gap-3">
+									<Skeleton className="h-4 w-24" />
+									<Skeleton className="ml-auto h-4 w-16" />
+								</div>
+							))}
+						</div>
+					</div>
 				))}
 			</div>
 
-			{/* Form cards */}
-			<div className="flex flex-col gap-6 pt-2">
-				{[0, 1, 2].map((n) => (
-					<section
-						key={n}
-						className="flex flex-col gap-4 rounded-2xl border border-input bg-background p-4"
-					>
-						<div className="flex flex-col gap-1.5">
-							<Skeleton className="h-4 w-32" />
-							<Skeleton className="h-3 w-2/3" />
+			{/* Desktop: rail + content. */}
+			<div className="hidden lg:grid lg:grid-cols-[13rem_minmax(0,1fr)] lg:items-start lg:gap-8">
+				<div className="flex flex-col gap-5">
+					{groups.map((rows, g) => (
+						<div key={g} className="flex flex-col gap-1">
+							<Skeleton className="mx-2 mb-1 h-3 w-14" />
+							{Array.from({ length: rows }, (_, r) => (
+								<Skeleton key={r} className="h-10 w-full rounded-xl" />
+							))}
 						</div>
-						<div className="flex flex-col gap-2">
-							<Skeleton className="h-3 w-20" />
+					))}
+				</div>
+				<div className="flex flex-col gap-6">
+					<Skeleton className="h-7 w-32" />
+					{[0, 1].map((n) => (
+						<section
+							key={n}
+							className="flex flex-col gap-4 rounded-2xl border bg-background p-6"
+						>
+							<div className="flex flex-col gap-1.5">
+								<Skeleton className="h-4 w-32" />
+								<Skeleton className="h-3 w-2/3" />
+							</div>
 							<Skeleton className="h-11 w-full rounded-xl" />
-						</div>
-						<Skeleton className="h-12 w-full rounded-md" />
-					</section>
-				))}
+							<Skeleton className="h-11 w-full rounded-xl" />
+						</section>
+					))}
+				</div>
 			</div>
 		</div>
 	);
@@ -731,7 +748,7 @@ function SettingsRoute() {
 						type="button"
 						onClick={backToIndex}
 						aria-label="Back to settings"
-						className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted"
+						className="flex size-11 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted"
 					>
 						<ArrowLeft className="size-5" />
 					</button>
