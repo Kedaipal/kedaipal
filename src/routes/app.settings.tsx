@@ -16,7 +16,6 @@ import {
 	Plus,
 	QrCode,
 	ReceiptText,
-	ShieldCheck,
 	Store,
 	Trash2,
 	UsersRound,
@@ -74,10 +73,16 @@ import { MarketplaceCard } from "../components/settings/marketplace-card";
 import { NotificationsCard } from "../components/settings/notifications-card";
 import { OrderFlowsSection } from "../components/settings/order-flows-card";
 import {
+	SettingsIndex,
+	SettingsRail,
+	type TabGlance,
+} from "../components/settings/settings-nav";
+import {
 	Card,
 	InfoBanner,
 	SAVE_BTN_CLASS,
 	SectionHeading,
+	SectionLabel,
 } from "../components/settings/settings-primitives";
 import { TeamTab } from "../components/settings/team-tab";
 import { WaOrderAlertsCard } from "../components/settings/wa-order-alerts-card";
@@ -95,6 +100,7 @@ import {
 	useActAsRetailerId,
 	useDashboardRetailer,
 } from "../hooks/useDashboardRetailer";
+import { usePermission } from "../hooks/usePermission";
 import { useRevealOnAdd } from "../hooks/useRevealOnAdd";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { useUpdateSettings } from "../hooks/useUpdateSettings";
@@ -106,6 +112,7 @@ import {
 	SETTINGS_ANCHOR,
 } from "../lib/country-setup-copy";
 import { parseTopUpParam, type TopUpParam } from "../lib/credit-top-up";
+import { PRICING_MODE_UI, pricingModeOf } from "../lib/delivery-modes";
 import { convexErrorMessage } from "../lib/format";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
 import { NOTE_LINK_HINT } from "../lib/linkify";
@@ -242,8 +249,11 @@ const SETTINGS_TAB_IDS: ReadonlyArray<SettingsTab> = SETTINGS_TABS.map(
 	(t) => t.id,
 );
 
-// The mobile index groups sections by meaning: your store's identity/account
-// vs how you sell. Desktop keeps the flat tab grid (all destinations visible).
+// One structure for both navs (86eye9xd4, 14A): the mobile index and the
+// desktop rail show these groups, in this order. Split by rhythm, not by
+// topic — Store is who you are and what you pay us; Selling is the daily
+// levers; Connections is the accounts you paste in once. A ten-item "Selling"
+// pile mixed the two rhythms, and tab ten would have landed in it by default.
 const SETTINGS_GROUPS: ReadonlyArray<{
 	label: string;
 	tabs: SettingsTab[];
@@ -251,16 +261,14 @@ const SETTINGS_GROUPS: ReadonlyArray<{
 	{ label: "Store", tabs: ["store", "team", "billing"] },
 	{
 		label: "Selling",
-		tabs: [
-			"whatsapp",
-			"payments",
-			"fulfilment",
-			"integrations",
-			"bookings",
-			"order-status",
-		],
+		tabs: ["payments", "fulfilment", "order-status", "whatsapp"],
 	},
+	{ label: "Connections", tabs: ["integrations", "bookings"] },
 ];
+
+const SETTINGS_TAB_LABELS = Object.fromEntries(
+	SETTINGS_TABS.map((t) => [t.id, t.label]),
+) as Record<SettingsTab, string>;
 
 /**
  * `id` is the deep-link anchor: the post-switch checklist links to the exact
@@ -366,6 +374,104 @@ function SettingsSkeleton() {
 	);
 }
 
+/**
+ * Each tab's live state in a few words — the seam both navs read (the
+ * desktop rail's sublabel, the mobile index's right-hand value), so a tab
+ * never says one thing in one and another in the other. `warn` is reserved
+ * for "this needs you" (no contact number, nothing for buyers to pay with).
+ */
+function useSettingsGlances(
+	retailer: ReturnType<typeof useDashboardRetailer>,
+	{
+		adminOwnStore,
+		hasBookingListings,
+	}: { adminOwnStore: boolean; hasBookingListings: boolean },
+): Partial<Record<SettingsTab, TabGlance>> {
+	const actAsRetailerId = useActAsRetailerId();
+	const bookingsPerm = usePermission("bookings");
+	const team = useQuery(
+		convexQuery(
+			api.team.list,
+			retailer ? { retailerId: retailer._id } : "skip",
+		),
+	).data;
+	// Same args as the Fulfilment / Integrations callers, so it's one cache entry.
+	const delyva = useQuery(
+		convexQuery(api.delyva.getSettings, { retailerId: actAsRetailerId }),
+	).data;
+	const feed = useQuery(
+		convexQuery(
+			api.calendarFeed.getCalendarFeed,
+			retailer && hasBookingListings && bookingsPerm.canRead
+				? { retailerId: retailer._id }
+				: "skip",
+		),
+	).data;
+	if (!retailer) return {};
+
+	const seats = team?.seats.activeCount;
+	const methods = retailer.paymentMethods?.length ?? 0;
+	const hitpayOn =
+		retailer.hitpay?.enabled === true && retailer.hitpay.hasCredentials;
+	const deliveryOn = retailer.offerDelivery !== false;
+	const pickupOn = retailer.offerSelfCollect === true;
+	// "Connected" counts accounts with keys stored; Delyva only counts where
+	// the store's country can book it at all.
+	const integrations = [
+		Boolean(retailer.deliveryBooking?.apiKeyHint),
+		Boolean(retailer.hitpay?.hasCredentials),
+		...(delyva?.countryAllowed ? [delyva.connected] : []),
+	];
+	const customisedFlows =
+		Object.values(retailer.orderFlows ?? {}).some(
+			(stages) => (stages?.length ?? 0) > 0,
+		) || (retailer.orderStages?.length ?? 0) > 0;
+
+	return {
+		store: { text: retailer.storeName },
+		team:
+			seats === undefined
+				? undefined
+				: {
+						text:
+							seats === 0
+								? "Just you"
+								: `${seats} seat${seats === 1 ? "" : "s"}`,
+					},
+		billing: retailer.subscription
+			? {
+					text: tierPill(
+						retailer.subscription,
+						Date.now(),
+						undefined,
+						adminOwnStore,
+					).label,
+				}
+			: undefined,
+		whatsapp: retailer.waPhone?.trim()
+			? { text: "Connected" }
+			: { text: "Add number", tone: "warn" },
+		payments: hitpayOn
+			? { text: "HitPay" }
+			: methods > 0
+				? { text: `${methods} method${methods === 1 ? "" : "s"}` }
+				: { text: "Not set up", tone: "warn" },
+		fulfilment: deliveryOn
+			? { text: PRICING_MODE_UI[pricingModeOf(retailer.deliveryConfig)].title }
+			: pickupOn
+				? { text: "Pickup only" }
+				: { text: "Off", tone: "warn" },
+		"order-status": { text: customisedFlows ? "Customised" : "Default" },
+		integrations: {
+			text: `${integrations.filter(Boolean).length} of ${integrations.length}`,
+		},
+		bookings:
+			feed === undefined
+				? undefined
+				: { text: feed.token ? "Feed on" : "Not set up" },
+	};
+}
+
 function SettingsRoute() {
 	const actAsRetailerId = useActAsRetailerId();
 	const retailer = useDashboardRetailer();
@@ -422,13 +528,14 @@ function SettingsRoute() {
 			retailer && activeTab === "store" ? { retailerId: retailer._id } : "skip",
 		),
 	).data;
-	const visibleTabs = SETTINGS_TABS.filter(
-		(t) => t.id !== "bookings" || hasBookingListings,
-	);
 	const visibleGroups = SETTINGS_GROUPS.map((g) => ({
 		...g,
 		tabs: g.tabs.filter((id) => id !== "bookings" || hasBookingListings),
 	}));
+	const glances = useSettingsGlances(retailer, {
+		adminOwnStore,
+		hasBookingListings,
+	});
 	const navigate = Route.useNavigate();
 	// A top-up request (`?topup=`) is consumed once by the dialog, then dropped
 	// from the URL without a history entry — a refresh never replays it.
@@ -518,7 +625,7 @@ function SettingsRoute() {
 	);
 
 	return (
-		<div className="flex flex-col gap-6 lg:max-w-2xl">
+		<div className="flex max-w-6xl flex-col gap-6">
 			<PageHeader
 				title="Settings"
 				subtitle={
@@ -568,70 +675,12 @@ function SettingsRoute() {
 						/>
 					</div>
 
-					{visibleGroups.map((group) => (
-						<div key={group.label} className="flex flex-col gap-1.5">
-							<span className="pl-1 text-[11px] font-bold uppercase tracking-[0.08em] text-muted-foreground/80">
-								{group.label}
-							</span>
-							<div className="overflow-hidden rounded-2xl border border-border bg-card">
-								{group.tabs.map((id, i) => {
-									const t = SETTINGS_TABS.find((x) => x.id === id);
-									if (!t) return null;
-									// Status at a glance where we have live state — no tap
-									// needed to check health.
-									const subtitle =
-										t.id === "billing" && retailer.subscription
-											? tierPill(
-													retailer.subscription,
-													Date.now(),
-													// Keep the plain tier label here (founding rank stays
-													// on the header pill only); just fold in the admin case.
-													undefined,
-													adminOwnStore,
-												).label
-											: t.description;
-									const waConnected =
-										t.id === "whatsapp" && Boolean(retailer.waPhone?.trim());
-									return (
-										<button
-											key={t.id}
-											type="button"
-											onClick={() => setActiveTab(t.id)}
-											className={`flex min-h-[60px] w-full items-center gap-3 px-3.5 py-3 text-left transition-colors hover:bg-muted/50 ${
-												i > 0 ? "border-t border-border/60" : ""
-											}`}
-										>
-											<span
-												className={`flex size-9 shrink-0 items-center justify-center rounded-[10px] ${
-													waConnected
-														? "bg-accent/15 text-accent-emphasis"
-														: "bg-muted text-foreground"
-												}`}
-											>
-												{t.icon}
-											</span>
-											<span className="flex min-w-0 flex-1 flex-col">
-												<span className="text-sm font-semibold">{t.label}</span>
-												<span className="truncate text-xs text-muted-foreground">
-													{subtitle}
-												</span>
-											</span>
-											{waConnected ? (
-												<span className="shrink-0 rounded-full bg-accent/15 px-2 py-0.5 text-[11px] font-bold text-accent-emphasis">
-													Connected
-												</span>
-											) : (
-												<ChevronRight
-													className="size-4 shrink-0 text-muted-foreground/50"
-													aria-hidden="true"
-												/>
-											)}
-										</button>
-									);
-								})}
-							</div>
-						</div>
-					))}
+					<SettingsIndex
+						groups={visibleGroups}
+						labels={SETTINGS_TAB_LABELS}
+						glances={glances}
+						onSelect={setActiveTab}
+					/>
 
 					{/* Kedaipal admins: the console entry lives here on mobile (desktop
 					    has the sidebar Admin group). Once inside /app/admin/*, the
@@ -639,26 +688,21 @@ function SettingsRoute() {
 					    tab back to this store. See docs/admin-console.md. */}
 					{isAdmin ? (
 						<div className="flex flex-col gap-1.5">
-							<span className="pl-1 text-[11px] font-bold uppercase tracking-[0.08em] text-muted-foreground/80">
-								Admin
-							</span>
-							<div className="overflow-hidden rounded-2xl border border-border bg-card">
+							<SectionLabel>Admin</SectionLabel>
+							<div className="overflow-hidden rounded-2xl border border-border bg-card px-3.5">
 								<Link
 									to="/app/admin/sellers"
-									className="flex min-h-[60px] w-full items-center gap-3 px-3.5 py-3 text-left transition-colors hover:bg-muted/50"
+									className="flex min-h-[52px] w-full items-center gap-3 text-left focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50"
 								>
-									<span className="flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
-										<ShieldCheck className="size-4.5" aria-hidden="true" />
+									<span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+										Admin console
 									</span>
-									<span className="flex min-w-0 flex-1 flex-col">
-										<span className="text-sm font-semibold">Admin console</span>
-										<span className="truncate text-xs text-muted-foreground">
-											All sellers, billing &amp; WABA safety
-										</span>
+									<span className="max-w-[55%] truncate text-right text-sm font-semibold text-foreground">
+										Sellers &amp; billing
 									</span>
 									<ChevronRight
-										className="size-4 shrink-0 text-muted-foreground/50"
-										aria-hidden="true"
+										aria-hidden
+										className="size-4 shrink-0 text-muted-foreground/60"
 									/>
 								</Link>
 							</div>
@@ -682,373 +726,372 @@ function SettingsRoute() {
 				</div>
 			)}
 
-			{/* ---- Desktop: flat tab grid (all destinations visible at once). */}
-			<div className="hidden gap-2 lg:grid lg:grid-cols-3">
-				{visibleTabs.map((t) => (
-					<button
-						key={t.id}
-						type="button"
-						onClick={() => setActiveTab(t.id)}
-						className={`flex items-center gap-3 rounded-2xl border p-3 text-left transition-all ${
-							activeTab === t.id
-								? "border-accent bg-accent/10 text-foreground shadow-sm"
-								: "border-border bg-card text-muted-foreground hover:border-foreground/20 hover:text-foreground"
-						}`}
-					>
-						<span
-							className={`flex size-8 shrink-0 items-center justify-center rounded-xl ${
-								activeTab === t.id
-									? "bg-accent text-accent-foreground"
-									: "bg-muted text-muted-foreground"
-							}`}
-						>
-							{t.icon}
-						</span>
-						<span className="min-w-0">
-							<span className="block text-sm font-semibold leading-tight">
-								{t.label}
-							</span>
-							<span className="mt-0.5 hidden text-xs leading-snug text-muted-foreground sm:block">
-								{t.description}
-							</span>
-						</span>
-					</button>
-				))}
-			</div>
+			{/* ---- Desktop: the section rail beside the content (2A). Mobile keeps
+			     its grouped index above; the rail is the same groups and glances. */}
+			<div className="lg:grid lg:grid-cols-[13rem_minmax(0,1fr)] lg:items-start lg:gap-8">
+				<div className="hidden lg:block">
+					<SettingsRail
+						groups={visibleGroups}
+						labels={SETTINGS_TAB_LABELS}
+						glances={glances}
+						active={activeTab}
+						onSelect={setActiveTab}
+					/>
+				</div>
 
-			{/* Section content — hidden on mobile while the index is showing
-			    (desktop always renders the active section, defaulting to Store). */}
-			<div
-				className={
-					tab === undefined ? "hidden lg:flex lg:flex-col lg:gap-6" : "contents"
-				}
-			>
-				{activeTab === "store" ? (
-					<AreaGate area="store_settings">
-						<div className="flex flex-col gap-6 pt-2">
-							<Card>
-								<StoreNameForm
-									current={retailer.storeName}
-									onSave={(storeName) => updateSettings({ storeName })}
-								/>
-							</Card>
-							<Card
-								id={SPOTLIGHT_ANCHOR.business_details.anchor}
-								highlight={ringFor(SPOTLIGHT_ANCHOR.business_details.anchor)}
-							>
-								<BusinessIdentityForm
-									current={retailer.businessIdentity}
-									country={retailer.country}
-									onSave={(businessIdentity) =>
-										updateSettings({ businessIdentity })
-									}
-								/>
-							</Card>
-							<Card>
-								<NotificationsCard />
-							</Card>
-							{/* Notification surfaces live together: browser (above), WhatsApp,
+				{/* Section content — hidden on mobile while the index is showing
+				    (desktop always renders the active section, defaulting to Store).
+				    Store and Fulfilment lay their cards out in two columns from xl;
+				    every other tab stays one readable column. */}
+				<div
+					className={cn(
+						"min-w-0 flex-col gap-6",
+						tab === undefined ? "hidden lg:flex" : "flex",
+						activeTab !== "store" &&
+							activeTab !== "fulfilment" &&
+							"lg:max-w-2xl",
+					)}
+				>
+					<h2 className="hidden font-heading text-xl font-extrabold leading-tight lg:block">
+						{SETTINGS_TAB_LABELS[activeTab]}
+					</h2>
+					{activeTab === "store" ? (
+						<AreaGate area="store_settings">
+							<div className="flex flex-col gap-6 pt-2">
+								<Card>
+									<StoreNameForm
+										current={retailer.storeName}
+										onSave={(storeName) => updateSettings({ storeName })}
+									/>
+								</Card>
+								<Card
+									id={SPOTLIGHT_ANCHOR.business_details.anchor}
+									highlight={ringFor(SPOTLIGHT_ANCHOR.business_details.anchor)}
+								>
+									<BusinessIdentityForm
+										current={retailer.businessIdentity}
+										country={retailer.country}
+										onSave={(businessIdentity) =>
+											updateSettings({ businessIdentity })
+										}
+									/>
+								</Card>
+								<Card>
+									<NotificationsCard />
+								</Card>
+								{/* Notification surfaces live together: browser (above), WhatsApp,
 						    email (below). The WA card only mounts when the deployment has
 						    an approved seller template configured (86eyhw9zy). */}
-							{retailer.waOrderAlertsAvailable ? (
+								{retailer.waOrderAlertsAvailable ? (
+									<Card
+										id={SETTINGS_ANCHOR.notify_wa_phone}
+										highlight={ringFor(SETTINGS_ANCHOR.notify_wa_phone)}
+									>
+										<WaOrderAlertsCard
+											enabled={retailer.orderWaAlerts === true}
+											currentPhone={retailer.notifyWaPhone ?? ""}
+											fallbackPhone={retailer.waPhone ?? ""}
+											optedOut={retailer.notifyWaPhoneOptedOut === true}
+											canUse={hasFeature(
+												retailer.subscription,
+												"waOrderAlerts",
+											)}
+											country={retailer.country}
+											onSave={(patch) => updateSettings(patch)}
+										/>
+									</Card>
+								) : null}
+								<Card>
+									<NotifyEmailForm
+										current={retailer.notifyEmail ?? ""}
+										onSave={(notifyEmail) => updateSettings({ notifyEmail })}
+									/>
+								</Card>
+								<Card>
+									<StoreDescriptionForm
+										current={retailer.storeDescription ?? ""}
+										onSave={(storeDescription) =>
+											updateSettings({ storeDescription })
+										}
+									/>
+								</Card>
+								{/* Right under the description — the card the marketplace
+							    builds from is the card this section just wrote. */}
 								<Card
-									id={SETTINGS_ANCHOR.notify_wa_phone}
-									highlight={ringFor(SETTINGS_ANCHOR.notify_wa_phone)}
+									id={SPOTLIGHT_ANCHOR.store_listing.anchor}
+									highlight={ringFor(SPOTLIGHT_ANCHOR.store_listing.anchor)}
 								>
-									<WaOrderAlertsCard
-										enabled={retailer.orderWaAlerts === true}
-										currentPhone={retailer.notifyWaPhone ?? ""}
-										fallbackPhone={retailer.waPhone ?? ""}
-										optedOut={retailer.notifyWaPhoneOptedOut === true}
-										canUse={hasFeature(retailer.subscription, "waOrderAlerts")}
-										country={retailer.country}
+									<MarketplaceCard
+										storeName={retailer.storeName}
+										unlisted={retailer.marketplaceUnlisted === true}
+										area={retailer.storeArea ?? ""}
+										readiness={listingReadiness}
 										onSave={(patch) => updateSettings(patch)}
 									/>
 								</Card>
-							) : null}
-							<Card>
-								<NotifyEmailForm
-									current={retailer.notifyEmail ?? ""}
-									onSave={(notifyEmail) => updateSettings({ notifyEmail })}
-								/>
-							</Card>
-							<Card>
-								<StoreDescriptionForm
-									current={retailer.storeDescription ?? ""}
-									onSave={(storeDescription) =>
-										updateSettings({ storeDescription })
-									}
-								/>
-							</Card>
-							{/* Right under the description — the card the marketplace
-							    builds from is the card this section just wrote. */}
-							<Card
-								id={SPOTLIGHT_ANCHOR.store_listing.anchor}
-								highlight={ringFor(SPOTLIGHT_ANCHOR.store_listing.anchor)}
-							>
-								<MarketplaceCard
-									storeName={retailer.storeName}
-									unlisted={retailer.marketplaceUnlisted === true}
-									area={retailer.storeArea ?? ""}
-									readiness={listingReadiness}
-									onSave={(patch) => updateSettings(patch)}
-								/>
-							</Card>
-							<Card>
-								<StoreTypeForm
-									current={retailer.storeType}
-									onSave={(storeType) => updateSettings({ storeType })}
-								/>
-							</Card>
-							{slugRenameForm}
-							<Card>
-								<LogoForm
-									currentLogoUrl={retailer.logoUrl}
-									onSave={(logoStorageId) => updateSettings({ logoStorageId })}
-								/>
-							</Card>
-							<Card>
-								<CoverImageForm
-									currentCoverUrl={retailer.coverImageUrl}
-									onSave={(coverImageStorageId) =>
-										updateSettings({ coverImageStorageId })
-									}
-								/>
-							</Card>
-							<Card
-								id={SPOTLIGHT_ANCHOR.store_country.anchor}
-								highlight={ringFor(SPOTLIGHT_ANCHOR.store_country.anchor)}
-							>
-								<CountryForm
-									current={retailer.country}
-									currency={retailer.currency}
-									deliveryConfig={retailer.deliveryConfig}
-									deliveryBooking={retailer.deliveryBooking}
-									waPhone={retailer.waPhone}
-									notifyWaPhone={retailer.notifyWaPhone}
-									onSave={(patch) => updateSettings(patch)}
-								/>
-								{/* Directly under the picker, so "what did that just do?"
+								<Card>
+									<StoreTypeForm
+										current={retailer.storeType}
+										onSave={(storeType) => updateSettings({ storeType })}
+									/>
+								</Card>
+								{slugRenameForm}
+								<Card>
+									<LogoForm
+										currentLogoUrl={retailer.logoUrl}
+										onSave={(logoStorageId) =>
+											updateSettings({ logoStorageId })
+										}
+									/>
+								</Card>
+								<Card>
+									<CoverImageForm
+										currentCoverUrl={retailer.coverImageUrl}
+										onSave={(coverImageStorageId) =>
+											updateSettings({ coverImageStorageId })
+										}
+									/>
+								</Card>
+								<Card
+									id={SPOTLIGHT_ANCHOR.store_country.anchor}
+									highlight={ringFor(SPOTLIGHT_ANCHOR.store_country.anchor)}
+								>
+									<CountryForm
+										current={retailer.country}
+										currency={retailer.currency}
+										deliveryConfig={retailer.deliveryConfig}
+										deliveryBooking={retailer.deliveryBooking}
+										waPhone={retailer.waPhone}
+										notifyWaPhone={retailer.notifyWaPhone}
+										onSave={(patch) => updateSettings(patch)}
+									/>
+									{/* Directly under the picker, so "what did that just do?"
 							    is answered where the question was asked. Renders
 							    nothing for a store that has never switched. */}
-								<CountrySetupPanel
-									onGoToFix={(tab, key) =>
-										navigate({ search: { tab, fix: key } })
+									<CountrySetupPanel
+										onGoToFix={(tab, key) =>
+											navigate({ search: { tab, fix: key } })
+										}
+									/>
+								</Card>
+								<Card>
+									<CurrencyForm
+										current={retailer.currency}
+										onSave={(currency) => updateSettings({ currency })}
+									/>
+								</Card>
+							</div>
+						</AreaGate>
+					) : null}
+
+					{activeTab === "team" ? (
+						<TeamTab retailerId={retailer._id} storeName={retailer.storeName} />
+					) : null}
+
+					{activeTab === "billing" ? (
+						<>
+							<AreaGate area="billing">
+								<BillingTab
+									retailer={retailer}
+									target={cardTarget}
+									billingReturn={
+										autorenew === "return"
+											? "autorenew"
+											: paid === "return"
+												? "paid"
+												: undefined
+									}
+									onBillingReturnHandled={() =>
+										navigate({ search: { tab: "billing" }, replace: true })
 									}
 								/>
-							</Card>
-							<Card>
-								<CurrencyForm
-									current={retailer.currency}
-									onSave={(currency) => updateSettings({ currency })}
-								/>
-							</Card>
-						</div>
-					</AreaGate>
-				) : null}
-
-				{activeTab === "team" ? (
-					<TeamTab retailerId={retailer._id} storeName={retailer.storeName} />
-				) : null}
-
-				{activeTab === "billing" ? (
-					<>
-						<AreaGate area="billing">
-							<BillingTab
-								retailer={retailer}
-								target={cardTarget}
-								billingReturn={
-									autorenew === "return"
-										? "autorenew"
-										: paid === "return"
-											? "paid"
-											: undefined
-								}
-								onBillingReturnHandled={() =>
-									navigate({ search: { tab: "billing" }, replace: true })
-								}
-							/>
-						</AreaGate>
-						{/* Beside the gate, not inside it: buying credits is the
+							</AreaGate>
+							{/* Beside the gate, not inside it: buying credits is the
 						    CREDITS grant, and a teammate can hold credits write
 						    without billing read — inside, the gate would hide the
 						    only place they can buy. The dialog checks its own
 						    access (credits read to see, write to buy). */}
-						<CreditTopUpDialog
-							retailer={retailer}
-							request={topup}
-							onRequestHandled={stripTopUpParam}
-						/>
-					</>
-				) : null}
+							<CreditTopUpDialog
+								retailer={retailer}
+								request={topup}
+								onRequestHandled={stripTopUpParam}
+							/>
+						</>
+					) : null}
 
-				{activeTab === "whatsapp" ? (
-					<AreaGate area="store_settings" ownerOnly>
-						<div className="flex flex-col gap-6 pt-2">
-							<InfoBanner title="How WhatsApp works on Kedaipal">
-								<p>
-									Every order sends the buyer{" "}
-									<span className="font-medium text-foreground">
-										one WhatsApp message
-									</span>{" "}
-									— the confirmation — from{" "}
-									<span className="font-medium text-foreground">
-										Kedaipal's shared WhatsApp Business number
-									</span>{" "}
-									on your behalf, no Meta account needed.
-								</p>
-								<p>
-									That message links to the buyer's own order page, which
-									updates itself. Packing, shipping, payment and cancellation no
-									longer send a WhatsApp — the buyer sees them on that page.
-								</p>
-								<p>
-									Add your personal WhatsApp number below so buyers can reach
-									you directly. It appears as a tappable contact link on their
-									order page.
-								</p>
-							</InfoBanner>
+					{activeTab === "whatsapp" ? (
+						<AreaGate area="store_settings" ownerOnly>
+							<div className="flex flex-col gap-6 pt-2">
+								<InfoBanner title="How WhatsApp works on Kedaipal">
+									<p>
+										Every order sends the buyer{" "}
+										<span className="font-medium text-foreground">
+											one WhatsApp message
+										</span>{" "}
+										— the confirmation — from{" "}
+										<span className="font-medium text-foreground">
+											Kedaipal's shared WhatsApp Business number
+										</span>{" "}
+										on your behalf, no Meta account needed.
+									</p>
+									<p>
+										That message links to the buyer's own order page, which
+										updates itself. Packing, shipping, payment and cancellation
+										no longer send a WhatsApp — the buyer sees them on that
+										page.
+									</p>
+									<p>
+										Add your personal WhatsApp number below so buyers can reach
+										you directly. It appears as a tappable contact link on their
+										order page.
+									</p>
+								</InfoBanner>
 
-							<Card
-								id={SETTINGS_ANCHOR.wa_phone}
-								highlight={ringFor(SETTINGS_ANCHOR.wa_phone)}
-							>
-								<WaPhoneForm
-									current={retailer.waPhone ?? ""}
-									country={retailer.country}
-									onSave={(waPhone) => updateSettings({ waPhone })}
-								/>
-							</Card>
-							<Card>
-								<LocaleForm
-									current={retailer.locale}
-									onSave={(locale) => updateSettings({ locale })}
-								/>
-							</Card>
-							<Card
-								id={SETTINGS_ANCHOR.message_copy}
-								highlight={ringFor(SETTINGS_ANCHOR.message_copy)}
-							>
-								<MessageTemplatesForm
-									current={retailer.messageTemplates}
-									onSave={(messageTemplates) =>
-										updateSettings({ messageTemplates })
-									}
-								/>
-							</Card>
-						</div>
-					</AreaGate>
-				) : null}
+								<Card
+									id={SETTINGS_ANCHOR.wa_phone}
+									highlight={ringFor(SETTINGS_ANCHOR.wa_phone)}
+								>
+									<WaPhoneForm
+										current={retailer.waPhone ?? ""}
+										country={retailer.country}
+										onSave={(waPhone) => updateSettings({ waPhone })}
+									/>
+								</Card>
+								<Card>
+									<LocaleForm
+										current={retailer.locale}
+										onSave={(locale) => updateSettings({ locale })}
+									/>
+								</Card>
+								<Card
+									id={SETTINGS_ANCHOR.message_copy}
+									highlight={ringFor(SETTINGS_ANCHOR.message_copy)}
+								>
+									<MessageTemplatesForm
+										current={retailer.messageTemplates}
+										onSave={(messageTemplates) =>
+											updateSettings({ messageTemplates })
+										}
+									/>
+								</Card>
+							</div>
+						</AreaGate>
+					) : null}
 
-				{activeTab === "payments" ? (
-					<AreaGate area="payments_settings">
-						<div className="flex flex-col gap-6 pt-2">
-							<Card
-								id={SETTINGS_ANCHOR.payment_methods}
-								highlight={ringFor(SETTINGS_ANCHOR.payment_methods)}
-							>
-								<PaymentMethodsForm
-									current={retailer.paymentMethods ?? []}
-									country={retailer.country}
-									onSave={(paymentMethods) =>
-										updateSettings({ paymentMethods })
-									}
-								/>
-							</Card>
-							{/* HitPay moved to Settings → Integrations (2 Sep IA rework) —
+					{activeTab === "payments" ? (
+						<AreaGate area="payments_settings">
+							<div className="flex flex-col gap-6 pt-2">
+								<Card
+									id={SETTINGS_ANCHOR.payment_methods}
+									highlight={ringFor(SETTINGS_ANCHOR.payment_methods)}
+								>
+									<PaymentMethodsForm
+										current={retailer.paymentMethods ?? []}
+										country={retailer.country}
+										onSave={(paymentMethods) =>
+											updateSettings({ paymentMethods })
+										}
+									/>
+								</Card>
+								{/* HitPay moved to Settings → Integrations (2 Sep IA rework) —
 						    one home for every third-party account. The pointer keeps the
 						    old home from reading as "online payments are gone". */}
-							<p className="px-1 text-xs text-muted-foreground">
-								Online payments (HitPay) moved to{" "}
-								<button
-									type="button"
-									onClick={() => navigate({ search: { tab: "integrations" } })}
-									className="font-medium text-accent hover:underline"
-								>
-									Settings → Integrations
-								</button>
-								— connect your account there; buyers keep seeing Pay now on
-								their orders as before.
-							</p>
-							{/* Says plainly that nothing chases the buyer automatically, and
+								<p className="px-1 text-xs text-muted-foreground">
+									Online payments (HitPay) moved to{" "}
+									<button
+										type="button"
+										onClick={() =>
+											navigate({ search: { tab: "integrations" } })
+										}
+										className="font-medium text-accent hover:underline"
+									>
+										Settings → Integrations
+									</button>
+									— connect your account there; buyers keep seeing Pay now on
+									their orders as before.
+								</p>
+								{/* Says plainly that nothing chases the buyer automatically, and
 						    names the one manual tool that exists — so the behaviour is
 						    discoverable without a seller assuming a nudge went out that
 						    didn't (docs/payment-reminder.md). */}
-							<p className="px-1 text-xs text-muted-foreground">
-								Kedaipal doesn't chase unpaid orders automatically. Each order
-								gets one WhatsApp — the confirmation — and it links the buyer to
-								their order page, where these payment details and the “I've
-								paid” button live. If an order is still unpaid on day 11, a
-								“Send payment reminder” button appears on its order page (once
-								per day, until day 14) — sending it is always your call.
-							</p>
-						</div>
-					</AreaGate>
-				) : null}
+								<p className="px-1 text-xs text-muted-foreground">
+									Kedaipal doesn't chase unpaid orders automatically. Each order
+									gets one WhatsApp — the confirmation — and it links the buyer
+									to their order page, where these payment details and the “I've
+									paid” button live. If an order is still unpaid on day 11, a
+									“Send payment reminder” button appears on its order page (once
+									per day, until day 14) — sending it is always your call.
+								</p>
+							</div>
+						</AreaGate>
+					) : null}
 
-				{activeTab === "fulfilment" ? (
-					<AreaGate area="fulfilment">
-						<FulfilmentTab
-							target={cardTarget}
-							currency={retailer.currency}
-							retailerId={retailer._id}
-							country={retailer.country}
-							offerSelfCollect={retailer.offerSelfCollect ?? false}
-							offerDelivery={retailer.offerDelivery ?? true}
-							deliveryConfig={retailer.deliveryConfig}
-							businessAddress={retailer.businessAddress}
-							deliveryBooking={retailer.deliveryBooking}
-							minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
-							openingHours={retailer.openingHours}
-							closedDates={retailer.closedDates}
-							hasBookingListings={hasBookingListings}
-							minOrderValue={retailer.minOrderValue}
-							awbConfig={retailer.awbConfig}
-							subscription={retailer.subscription}
-						/>
-					</AreaGate>
-				) : null}
+					{activeTab === "fulfilment" ? (
+						<AreaGate area="fulfilment">
+							<FulfilmentTab
+								target={cardTarget}
+								currency={retailer.currency}
+								retailerId={retailer._id}
+								country={retailer.country}
+								offerSelfCollect={retailer.offerSelfCollect ?? false}
+								offerDelivery={retailer.offerDelivery ?? true}
+								deliveryConfig={retailer.deliveryConfig}
+								businessAddress={retailer.businessAddress}
+								deliveryBooking={retailer.deliveryBooking}
+								minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
+								openingHours={retailer.openingHours}
+								closedDates={retailer.closedDates}
+								hasBookingListings={hasBookingListings}
+								minOrderValue={retailer.minOrderValue}
+								awbConfig={retailer.awbConfig}
+								subscription={retailer.subscription}
+							/>
+						</AreaGate>
+					) : null}
 
-				{activeTab === "integrations" ? (
-					<AreaGate area="integrations">
-						<IntegrationsTab
-							target={cardTarget}
-							retailerId={retailer._id}
-							country={retailer.country}
-							deliveryBooking={retailer.deliveryBooking}
-							hitpay={retailer.hitpay}
-							subscription={retailer.subscription}
-							onSave={updateSettings}
-						/>
-					</AreaGate>
-				) : null}
+					{activeTab === "integrations" ? (
+						<AreaGate area="integrations">
+							<IntegrationsTab
+								target={cardTarget}
+								retailerId={retailer._id}
+								country={retailer.country}
+								deliveryBooking={retailer.deliveryBooking}
+								hitpay={retailer.hitpay}
+								subscription={retailer.subscription}
+								onSave={updateSettings}
+							/>
+						</AreaGate>
+					) : null}
 
-				{activeTab === "bookings" ? (
-					<AreaGate area="bookings">
-						<div className="flex flex-col gap-6 pt-2">
-							<BookingsTab retailerId={retailer._id} />
-						</div>
-					</AreaGate>
-				) : null}
+					{activeTab === "bookings" ? (
+						<AreaGate area="bookings">
+							<div className="flex flex-col gap-6 pt-2">
+								<BookingsTab retailerId={retailer._id} />
+							</div>
+						</AreaGate>
+					) : null}
 
-				{activeTab === "order-status" ? (
-					<AreaGate area="store_settings">
-						<OrderFlowsSection
-							input={{
-								orderFlows: retailer.orderFlows,
-								orderStages: retailer.orderStages,
-								statusLabels: retailer.statusLabels as StatusLabels | undefined,
-								// Undefined reads as TRUE for delivery (legacy stores always had
-								// it) and as FALSE for pickup — same rule as the storefront.
-								offerDelivery: retailer.offerDelivery !== false,
-								offerSelfCollect: retailer.offerSelfCollect === true,
-								hasBookingListings,
-								hasEventListings,
-							}}
-							onSave={(orderFlows) => updateSettings({ orderFlows })}
-						/>
-					</AreaGate>
-				) : null}
+					{activeTab === "order-status" ? (
+						<AreaGate area="store_settings">
+							<OrderFlowsSection
+								input={{
+									orderFlows: retailer.orderFlows,
+									orderStages: retailer.orderStages,
+									statusLabels: retailer.statusLabels as
+										| StatusLabels
+										| undefined,
+									// Undefined reads as TRUE for delivery (legacy stores always had
+									// it) and as FALSE for pickup — same rule as the storefront.
+									offerDelivery: retailer.offerDelivery !== false,
+									offerSelfCollect: retailer.offerSelfCollect === true,
+									hasBookingListings,
+									hasEventListings,
+								}}
+								onSave={(orderFlows) => updateSettings({ orderFlows })}
+							/>
+						</AreaGate>
+					) : null}
+				</div>
 			</div>
 		</div>
 	);
