@@ -2,7 +2,7 @@
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { PROMOTION_BATCH_WRITES } from "./lib/promotions";
 import schema from "./schema";
@@ -563,6 +563,163 @@ describe("a big promotion is applied in batches", () => {
 		expect((await variant(t, last.variantIds[11]))?.promoPrice).toBe(
 			Math.round(list[11] * 0.8),
 		);
+	});
+});
+
+describe("leaving and editing while the queue is still running (PR #368 review)", () => {
+	test("End now during a re-apply takes EVERY sale off — a re-queued member still carries our run", async () => {
+		vi.useFakeTimers();
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const list = Array.from({ length: 12 }, (_, i) => 1000 + i * 100);
+		const seeded = [];
+		for (let i = 0; i < 40; i++)
+			seeded.push(await seedProduct(t, retailer._id, `P${i}`, list));
+		const asUser = t.withIdentity({ subject: USER });
+		const members = seeded.map((p) => twentyOff(p, list));
+		const promotionId = await asUser.mutation(api.promotions.create, {
+			retailerId: retailer._id,
+			percentOff: 20,
+			members,
+		});
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+		// An edit to 30% off re-prices every line of all 40, past one batch, so
+		// some are still `pending` — with the OLD run on their product — when
+		// End lands.
+		await asUser.mutation(api.promotions.update, {
+			promotionId,
+			percentOff: 30,
+			label: "Renamed",
+			members: seeded.map((p) => ({
+				productId: p.productId,
+				prices: p.variantIds.map((variantId, i) => ({
+					variantId,
+					promoPrice: Math.round(list[i] * 0.7),
+				})),
+			})),
+		});
+		const mid = await asUser.query(api.promotions.get, { promotionId });
+		expect(mid?.queue.pending).toBeGreaterThan(0);
+		await asUser.mutation(api.promotions.end, { promotionId });
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+		// Was: the still-pending ones were marked `cleared` and kept selling at
+		// the sale price under a promotion that read "Ended".
+		for (const p of seeded) {
+			expect((await product(t, p.productId))?.promo).toBeUndefined();
+			for (const id of p.variantIds)
+				expect((await variant(t, id))?.promoPrice).toBeUndefined();
+		}
+	});
+
+	test("× during a re-apply takes the sale off that product too", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const a = await seedProduct(t, retailer._id, "A", [2000]);
+		const asUser = t.withIdentity({ subject: USER });
+		const promotionId = await asUser.mutation(api.promotions.create, {
+			retailerId: retailer._id,
+			percentOff: 20,
+			members: [twentyOff(a, [2000])],
+		});
+		// Simulate an edit's re-queue landing between batches: pending, but the
+		// product still carries this promotion's run.
+		await t.run(async (ctx) => {
+			const m = await ctx.db
+				.query("promotionMembers")
+				.withIndex("by_product", (q) => q.eq("productId", a.productId))
+				.first();
+			if (m) await ctx.db.patch(m._id, { state: "pending" });
+		});
+		await asUser.mutation(api.promotions.removeProducts, {
+			promotionId,
+			productIds: [a.productId],
+		});
+		expect((await product(t, a.productId))?.promo).toBeUndefined();
+		expect((await variant(t, a.variantIds[0]))?.promoPrice).toBeUndefined();
+	});
+
+	test("a re-queued member whose window closed mid-queue comes OFF, not left on the old run", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const a = await seedProduct(t, retailer._id, "A", [2000]);
+		const asUser = t.withIdentity({ subject: USER });
+		const promotionId = await asUser.mutation(api.promotions.create, {
+			retailerId: retailer._id,
+			percentOff: 20,
+			members: [twentyOff(a, [2000])],
+		});
+		// An edit re-queued it, then its new end passed before the continuation
+		// ran: applying now throws in sanitizePromo.
+		await t.run(async (ctx) => {
+			const m = await ctx.db
+				.query("promotionMembers")
+				.withIndex("by_product", (q) => q.eq("productId", a.productId))
+				.first();
+			if (m) await ctx.db.patch(m._id, { state: "pending" });
+			await ctx.db.patch(promotionId, { endsAt: Date.now() - 1000 });
+		});
+		await t.mutation(internal.promotions.processQueue, { promotionId });
+		// Was: marked `cleared` with the OLD run still selling on the product.
+		expect((await product(t, a.productId))?.promo).toBeUndefined();
+		expect((await variant(t, a.variantIds[0]))?.promoPrice).toBeUndefined();
+	});
+
+	test("an edit's new terms reach EVERY open member, not only the ones it sent", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const a = await seedProduct(t, retailer._id, "A", [2000]);
+		const b = await seedProduct(t, retailer._id, "B", [1000]);
+		const asUser = t.withIdentity({ subject: USER });
+		const promotionId = await asUser.mutation(api.promotions.create, {
+			retailerId: retailer._id,
+			percentOff: 20,
+			members: [twentyOff(a, [2000])],
+		});
+		// A teammate adds B while the owner's edit tab (holding only A) is open.
+		await asUser.mutation(api.promotions.addProducts, {
+			promotionId,
+			members: [twentyOff(b, [1000])],
+		});
+		const endsAt = Date.now() + 5 * HOUR;
+		await asUser.mutation(api.promotions.update, {
+			promotionId,
+			percentOff: 20,
+			label: "Late night",
+			endsAt,
+			members: [twentyOff(a, [2000])],
+		});
+		// Was: B kept the old (no-end, no-label) terms under the new ones.
+		const promoB = (await product(t, b.productId))?.promo;
+		expect(promoB?.endsAt).toBe(endsAt);
+		expect(promoB?.label).toBe("Late night");
+		// …at the prices it was added with.
+		expect((await variant(t, b.variantIds[0]))?.promoPrice).toBe(800);
+	});
+
+	test("× on a promotion whose time RAN OUT (a stale tab) leaves its history alone", async () => {
+		vi.useFakeTimers();
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const a = await seedProduct(t, retailer._id, "A", [2000]);
+		const b = await seedProduct(t, retailer._id, "B", [1000]);
+		const asUser = t.withIdentity({ subject: USER });
+		const promotionId = await asUser.mutation(api.promotions.create, {
+			retailerId: retailer._id,
+			percentOff: 20,
+			endsAt: Date.now() + HOUR,
+			members: [twentyOff(a, [2000]), twentyOff(b, [1000])],
+		});
+		// Ended by its window, not "End now": the members are still `applied`,
+		// so without the guard × would stamp one and shrink the history.
+		vi.setSystemTime(Date.now() + 2 * HOUR);
+		await asUser.mutation(api.promotions.removeProducts, {
+			promotionId,
+			productIds: [a.productId],
+		});
+		const detail = await asUser.query(api.promotions.get, { promotionId });
+		expect(detail?.products.map((p) => p.name).sort()).toEqual(["A", "B"]);
 	});
 });
 

@@ -244,9 +244,11 @@ async function applyMember(
 		);
 	} catch {
 		// The window closed while the queue was still running (an end time a
-		// few seconds out). The promotion reads as ended; leave the product.
-		await ctx.db.patch(member._id, { state: "cleared", updatedAt: now });
-		return 1;
+		// few seconds out). The promotion reads as ended. A member this
+		// promotion wrote BEFORE (an edit re-queued it) still has the old run on
+		// its product, so that comes off; `clearMember` touches the product only
+		// while it carries our run, and marks the member cleared either way.
+		return await clearMember(ctx, member, now);
 	}
 	await ctx.db.patch(product._id, { promo, updatedAt: now });
 	const prices = new Map(
@@ -303,6 +305,23 @@ async function clearMember(
 	}
 	await ctx.db.patch(member._id, { state: "cleared", updatedAt: now });
 	return writes;
+}
+
+/**
+ * The state a member moves to when it LEAVES (End now, ×). Decided by whether
+ * this promotion has EVER written the product (`runId`), not by the current
+ * state: an edit re-queues applied members as `pending` without touching the
+ * product, so a "pending" member can still have this promotion's sale on it.
+ * Marking that one `cleared` left the storefront selling at the sale price
+ * under a promotion that read "Ended" (PR #368 review). `clearMember` still
+ * guards on the runId match, so a product re-priced by hand stays untouched.
+ */
+function leavingState(
+	member: Doc<"promotionMembers">,
+): "clearing" | "cleared" {
+	return member.runId !== undefined || member.state === "applied"
+		? "clearing"
+		: "cleared";
 }
 
 /**
@@ -580,14 +599,25 @@ export const update = mutation({
 			),
 			updatedAt: now,
 		});
+		const repriced = new Set<string>();
 		for (const row of staged) {
 			const member = byProduct.get(row.productId);
 			if (!member) continue;
+			repriced.add(row.productId);
 			await ctx.db.patch(member._id, {
 				prices: row.prices,
 				state: "pending",
 				updatedAt: now,
 			});
+		}
+		// The new TERMS reach every open member, not just the ones in the
+		// payload: one a teammate added while this edit was open (or a stale
+		// edit tab) would otherwise keep the old window and label under the
+		// new one, and with its runId still matching, no surface could show
+		// it (PR #368 review). It keeps its own reviewed prices.
+		for (const member of current) {
+			if (repriced.has(member.productId)) continue;
+			await ctx.db.patch(member._id, { state: "pending", updatedAt: now });
 		}
 		await runQueue(ctx, promotionId);
 		await logAdminAction(ctx, access, "promotions.update", promotionId);
@@ -659,13 +689,15 @@ export const removeProducts = mutation({
 			await assertSubscriptionActive(ctx, promotion.retailerId);
 		}
 		const now = Date.now();
+		// A stale tab on an ended promotion: its products already went back,
+		// and stamping `removedAt` now would shrink its history and Run again.
+		if (!promotionIsOpen(promotion, now)) return;
 		const wanted = new Set<string>(productIds);
 		let removed = 0;
 		for (const member of await openMembers(ctx, promotionId)) {
 			if (!wanted.has(member.productId)) continue;
-			// Never applied: nothing of ours is on the product.
 			await ctx.db.patch(member._id, {
-				state: member.state === "applied" ? "clearing" : "cleared",
+				state: leavingState(member),
 				removedAt: now,
 				updatedAt: now,
 			});
@@ -694,7 +726,7 @@ export const end = mutation({
 		await ctx.db.patch(promotionId, { endedAt: now, updatedAt: now });
 		for (const member of await openMembers(ctx, promotionId))
 			await ctx.db.patch(member._id, {
-				state: member.state === "applied" ? "clearing" : "cleared",
+				state: leavingState(member),
 				updatedAt: now,
 			});
 		await runQueue(ctx, promotionId);

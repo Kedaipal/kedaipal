@@ -273,6 +273,19 @@ the review's Save names the limit before the seller gets there.
   open would hand every later edit `undefined` against that stamp — **a mere
   rename reset every product's sold count** (caught by test). "Now" on an edit
   means "keep running from when it started".
+- **Leaving is decided by `runId`, not by state.** An edit re-queues every
+  member as `pending` without touching its product, so mid-queue a "pending"
+  member can still have this promotion's sale on it. **End now**, **×** and a
+  window that closes mid-queue all move a member that has EVER written its
+  product (`runId` set) to `clearing`, never straight to `cleared`
+  (`leavingState`, `applyMember`'s catch). Before this, ending a large
+  promotion mid-edit left products selling at the sale price under a
+  promotion that read "Ended" (PR #368 review).
+- **An edit's terms reach every open member.** `update` re-queues the members
+  it was sent with their new prices, and every *other* open member (one a
+  teammate added while the edit was open) with its own prices, so no product
+  is left on the old window or label. **×** on a promotion that has already
+  ended is a no-op, so a stale tab can't shrink its history.
 - **Clearing only touches what it wrote.** `clearMember` patches a product
   only while its promo still carries this promotion's `runId`; a product the
   seller has since re-priced by hand is left alone, and the detail page says
