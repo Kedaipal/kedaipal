@@ -235,7 +235,15 @@ export function SalesSection({
 			{/* Mobile order is the Main board's: exceptions, then the Sales
 			    heading, the hero, the cards, and Plan ahead last. On `lg` every
 			    `order-*` resets and the DOM order takes over, which is the desktop
-			    board's: heading, then hero beside its rail, then the cards. */}
+			    board's: heading, then hero beside its rail, then the cards.
+
+			    Hero and rail share a row HEIGHT (`lg:items-stretch`, Zaki, 14 Oct
+			    2026): the rail grows and shrinks with whatever it carries (unpaid
+			    only, unpaid + out of stock, plus Plan ahead), and a hero that
+			    stopped at its own height left a hole beside a taller rail. The hero
+			    fills its column (`lg:flex-1`), so it is never shorter than the
+			    rail; when the hero is the taller one, the rail's cards keep their
+			    own height and sit at the top. */}
 			<div className="order-2 lg:order-none">
 				<PeriodChips
 					value={shownPeriod}
@@ -244,9 +252,10 @@ export function SalesSection({
 				/>
 			</div>
 
-			<div className="contents lg:flex lg:flex-wrap lg:items-start lg:gap-4">
+			<div className="contents lg:flex lg:flex-wrap lg:items-stretch lg:gap-4">
 				<div className="order-3 flex min-w-0 flex-col gap-3 lg:order-none lg:flex-[999_1_520px]">
 					<SalesHero
+						className="lg:flex-1"
 						view={view}
 						currency={currency}
 						bars={bars}

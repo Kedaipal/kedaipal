@@ -315,4 +315,24 @@ describe("the bar row has a height on a phone", () => {
 		expect(cls).not.toMatch(/(^|\s)flex-1(\s|$)/);
 		expect(cls).toContain("lg:flex-1");
 	});
+
+	/**
+	 * The hero is never shorter than the rail beside it (Zaki, 14 Oct 2026).
+	 * The rail's height depends on what it carries (unpaid only, + out of
+	 * stock, + Plan ahead), and a row aligned `items-start` left the hero
+	 * stopped 328px above a full rail. Measured in a real browser: with
+	 * `items-stretch` + the hero `lg:flex-1` the two bottoms meet exactly, the
+	 * extra height goes into the bars, and a taller hero leaves the rail's
+	 * cards at their own height. Pinned as the class contract, as above.
+	 */
+	it("stretches the hero to the rail's height on desktop only", () => {
+		renderOngated();
+		const hero = screen.getByRole("img").closest("section");
+		const row = hero?.parentElement?.parentElement;
+		expect(hero?.className).toContain("lg:flex-1");
+		// Phone stacks the hero; a base-width flex-1 would zero its height.
+		expect(hero?.className).not.toMatch(/(^|\s)flex-1(\s|$)/);
+		expect(row?.className).toContain("lg:items-stretch");
+		expect(row?.className).not.toContain("items-start");
+	});
 });

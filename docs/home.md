@@ -176,6 +176,15 @@ Two layout rules make it hold:
   desktop, where `lg:flex-row` stretches the chart column against the figures
   beside it. The row is now a fixed 84px at the base width and takes `lg:flex-1`
   only where there is space to grow into.
+- **The hero is never shorter than the rail beside it.** The rail's height
+  depends on what it carries (stale unpaid only, plus out of stock, plus Plan
+  ahead), and with the row aligned `lg:items-start` a full rail left the hero
+  ending 328px above it. The row is `lg:items-stretch` and the hero takes
+  `lg:flex-1` in its column (`SalesHero` takes a `className` for it), so the two
+  bottoms meet exactly. The extra height goes into the **bars**, since they're
+  the `lg:flex-1` row, while the stats and "Open full Insights" stay pinned to
+  the foot by `mt-auto`. When the hero is the taller one, the rail's cards keep
+  their own height and sit at the top. Desktop only: on a phone the two stack.
 
 ### Stale unpaid is a strict subset of unpaid
 
