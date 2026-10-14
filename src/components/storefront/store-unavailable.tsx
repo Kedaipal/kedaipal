@@ -12,14 +12,15 @@ import { Button } from "../ui/button";
  * right place, and gives them somewhere to go next. A buyer with an order
  * already placed still has their tracking link; that page is never affected.
  *
- * `noindex` is rendered here (React 19 hoists it into <head>) so an offline
- * store drops out of search the same way it drops off /stores and the
- * sitemap.
+ * `noindex` and the store-named title come from the ROUTE's `head()`
+ * (`storeUnavailableHead`), so they are in the server-rendered HTML a crawler
+ * reads. A `<meta>` rendered here was hoisted only in the browser: the SSR
+ * page carried the root's "index, follow" and the generic title, and once
+ * hydrated it carried BOTH robots tags (found hands-on).
  */
 export function StoreUnavailable({ storeName }: { storeName: string }) {
 	return (
 		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-4 px-6 text-center">
-			<meta name="robots" content="noindex, nofollow" />
 			<div className="flex size-14 items-center justify-center rounded-2xl bg-muted">
 				<Store className="size-6 text-muted-foreground" aria-hidden />
 			</div>
@@ -35,4 +36,24 @@ export function StoreUnavailable({ storeName }: { storeName: string }) {
 			</Button>
 		</main>
 	);
+}
+
+/** What a buyer route's loader returns for an offline store — just enough
+ * for `head()`; the page itself renders from the live query. */
+export type StoreUnavailableLoaderData = {
+	unavailable: true;
+	storeName: string;
+};
+
+/** The `head()` of every buyer route while the store is offline: out of
+ * search (it is already off /stores and both sitemaps), and a tab title that
+ * names the store the buyer was looking for. Replaces the root's
+ * "index, follow" rather than adding a second robots tag. */
+export function storeUnavailableHead(storeName: string) {
+	return {
+		meta: [
+			{ title: `${storeName} isn't available right now | Kedaipal` },
+			{ name: "robots", content: "noindex, nofollow" },
+		],
+	};
 }

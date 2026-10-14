@@ -12,7 +12,11 @@ import {
 	ProductPageView,
 } from "../components/storefront/product-page";
 import { OrderingPausedProvider } from "../components/storefront/seasonal-break";
-import { StoreUnavailable } from "../components/storefront/store-unavailable";
+import {
+	StoreUnavailable,
+	type StoreUnavailableLoaderData,
+	storeUnavailableHead,
+} from "../components/storefront/store-unavailable";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
@@ -60,7 +64,9 @@ interface ProductLoaderData {
  * routing trick as the category + checkout pages ($slug.tsx is a leaf).
  */
 export const Route = createFileRoute("/$slug_/p/$productSlug")({
-	loader: async ({ params }): Promise<ProductLoaderData | null> => {
+	loader: async ({
+		params,
+	}): Promise<ProductLoaderData | StoreUnavailableLoaderData | null> => {
 		const client = getConvexHttpClient();
 		const retailerRead = await ssrRead(() =>
 			client.query(api.retailers.getRetailerBySlug, { slug: params.slug }),
@@ -83,8 +89,10 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 			throw notFound();
 		}
 		// Taken offline by Kedaipal (z8r3fdudf7): no store data to preload —
-		// the component renders the neutral unavailable page (noindex).
-		if (result.status === "unavailable") return null;
+		// the component renders the neutral unavailable page, and head()
+		// takes it out of search in the SSR HTML.
+		if (result.status === "unavailable")
+			return { unavailable: true, storeName: result.storeName };
 		const retailer = result.retailer;
 
 		// Unknown, archived, hidden or category-suppressed → 404, never a leak.
@@ -137,6 +145,8 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 	},
 	head: ({ loaderData }) => {
 		if (!loaderData) return {};
+		if ("unavailable" in loaderData)
+			return storeUnavailableHead(loaderData.storeName);
 		const {
 			storeName,
 			productName,

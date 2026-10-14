@@ -157,7 +157,7 @@ async function assertOrderingNotPaused(
 	ctx: QueryCtx | MutationCtx,
 	retailer: Doc<"retailers">,
 ): Promise<void> {
-	await assertTakesCounterOrders(ctx, retailer);
+	await assertTakesCounterOrders(ctx, retailer, "seller");
 }
 
 async function requireCounterRetailer(

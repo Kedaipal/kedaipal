@@ -12,6 +12,7 @@ import { mutation, type QueryCtx, query } from "./_generated/server";
 import { logAdminAction, requireRetailerAccess } from "./lib/auth";
 import {
 	cleanAvailabilityNote,
+	counterClosedMessage,
 	resolveStoreAvailability,
 	type StoreAvailability,
 	takesBuyerOrders,
@@ -57,14 +58,23 @@ export async function assertTakesBuyerOrders(
 }
 
 /** The COUNTER's door — open under the seller's own pause (they paused
- * online orders, not their till), closed by a hold or any admin switch. */
+ * online orders, not their till), closed by a hold or any admin switch.
+ * `audience` is REQUIRED because the door is reached from both sides of the
+ * counter: the seller ringing up or sending a claim link gets the seller's
+ * sentence (who closed it, and the way back); a buyer committing a claim gets
+ * the storefront's. */
 export async function assertTakesCounterOrders(
 	ctx: QueryCtx,
 	retailer: Doc<"retailers">,
+	audience: "seller" | "buyer",
 ): Promise<void> {
 	const availability = await storeAvailabilityOf(ctx, retailer);
-	if (!takesCounterOrders(availability))
-		throw new ConvexError(unavailableMessage(availability, retailer.storeName));
+	if (takesCounterOrders(availability)) return;
+	throw new ConvexError(
+		audience === "seller"
+			? counterClosedMessage(availability)
+			: unavailableMessage(availability, retailer.storeName),
+	);
 }
 
 /** Every store Kedaipal has taken OFFLINE — for the directory and the

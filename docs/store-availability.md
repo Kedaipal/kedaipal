@@ -52,6 +52,13 @@ Every function that inserts an order calls a guard, and
 | `orderClaims.sendClaim` / `resend` / `commit` | counter. A claim link is a counter sale finished on the buyer's phone |
 | Store-QR poster scan (`startSessionFromStoreQr`) | counter. A closed counter replies with the neutral sentence instead of opening a session that can never ring up |
 
+The counter guard takes a **required `audience`**, because that door is
+reached from both sides of the till. The seller ringing up, or sending or
+resending a claim link, is refused with **`counterClosedMessage`**: who closed
+it, and the one way back ("Message us" for Kedaipal's switch, Billing for a
+hold). A buyer committing a claim gets the storefront's sentence. The first
+cut gave the seller the buyer's "Browse the menu and check back soon".
+
 The same coverage test forbids reading `orderingPausedAt` anywhere but the
 resolver's feeders, because a raw check would see the hold and miss the other
 two switches.
@@ -69,8 +76,14 @@ their note) and for Kedaipal's pause (no note). The banner line *is* the
 server's refusal sentence (`unavailableMessage`), so a stale tab's error reads
 like the page. An **offline** store's storefront, product, category and
 checkout pages render `StoreUnavailable`: the store's name, "isn't available
-right now", a link to /stores, and `noindex`. The payload carries the name
-only (`status: "unavailable"`). Kedaipal's switch is always **neutral** for
+right now", and a link to /stores. The payload carries the name only
+(`status: "unavailable"`). **`noindex` and the store-named title are in the
+server-rendered head:** each route's loader returns
+`{ unavailable: true, storeName }`, and its `head()` answers with
+`storeUnavailableHead`, which **replaces** the root's "index, follow". The
+first cut rendered the robots `<meta>` inside the component. React hoists
+that only in the browser, so the SSR HTML a crawler reads said "index,
+follow" under a generic title, and the hydrated page carried both tags. Kedaipal's switch is always **neutral** for
 buyers, never "suspended" or "unpaid" (the `lib/buyerPayments.ts` rule).
 
 **Seller.** Settings → Store opens with the **Store status** card. It comes
@@ -80,7 +93,12 @@ says the counter keeps working and billing continues (pointing at Off-Season
 Hold). Under a hold or Kedaipal's switch it is **disabled with its reason**:
 our note plus "Message us", or the way to Billing. A dashboard-wide banner
 shows while paused: amber with one-tap **Resume orders** for their own pause,
-red with **Message us** for ours.
+red with **Message us** for ours. Under a hold or Kedaipal's switch the
+**Counter page** says it is closed under its header, greys **New order**, and
+disables the checkout's primary button with the same sentence as its helper
+line (`useCounterClosedReason`). Open checkouts stay listed and can still be
+cancelled. The first cut left the counter looking fully open until the final
+tap was refused.
 
 **Admin.** The Manage menu has **Pause ordering**, **Take store offline** and
 **Reopen store**, each confirmed with a note to the seller and audited

@@ -93,6 +93,24 @@ export function unavailableMessage(
 		: `${storeName} isn't taking orders right now. Browse the menu and check back soon.`;
 }
 
+/**
+ * The sentence the SELLER sees when their counter is closed — on the Counter
+ * page before they tap, and as the refusal from the counter and claim-link
+ * doors. Never the buyer sentence above: "Browse the menu and check back
+ * soon" said to the person behind the till reads as nonsense (found
+ * hands-on). Says who closed it and the one way back. `""` while the counter
+ * is open, including under the seller's own pause (they paused online orders,
+ * not their till).
+ */
+export function counterClosedMessage(a: StoreAvailability): string {
+	if (takesCounterOrders(a) || a.state === "open") return "";
+	if (a.by === "hold")
+		return "Your store is on an Off-Season Hold, so the counter is closed too. Resume your plan in Billing to take orders again.";
+	return a.state === "offline"
+		? "Kedaipal has taken your store offline, so the counter can't take orders either. Message us from the banner above to ask why."
+		: "Kedaipal has paused ordering at your store, so the counter can't take orders either. Message us from the banner above to ask why.";
+}
+
 /** Normalise a seller- or admin-typed note: trimmed, capped, blank = none. */
 export function cleanAvailabilityNote(note: string | undefined): string | undefined {
 	const t = note?.trim().replace(/\s+/g, " ");

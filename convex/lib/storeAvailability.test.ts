@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	cleanAvailabilityNote,
+	counterClosedMessage,
 	resolveStoreAvailability,
 	STORE_PAUSE_NOTE_MAX,
 	takesBuyerOrders,
@@ -93,6 +94,39 @@ describe("unavailableMessage — what a refused buyer reads", () => {
 		expect(unavailableMessage({ state: "paused", by: "hold" }, "Kek")).toMatch(
 			/seasonal break/,
 		);
+	});
+});
+
+describe("counterClosedMessage — the SELLER's sentence at a closed till", () => {
+	it("is empty while the counter is open, the seller's own pause included", () => {
+		expect(counterClosedMessage({ state: "open" })).toBe("");
+		expect(
+			counterClosedMessage({ state: "paused", by: "seller", note: "Back soon" }),
+		).toBe("");
+	});
+
+	it("names who closed it and the one way back — never buyer copy", () => {
+		const admin = counterClosedMessage({ state: "paused", by: "admin" });
+		expect(admin).toMatch(/^Kedaipal has paused ordering at your store/);
+		expect(admin).toMatch(/Message us/);
+		expect(
+			counterClosedMessage({ state: "offline", by: "admin" }),
+		).toMatch(/^Kedaipal has taken your store offline/);
+		expect(counterClosedMessage({ state: "paused", by: "hold" })).toMatch(
+			/Off-Season Hold.*Billing/,
+		);
+		for (const a of [
+			{ state: "paused", by: "admin" },
+			{ state: "offline", by: "admin" },
+			{ state: "paused", by: "hold" },
+		] as const)
+			expect(counterClosedMessage(a)).not.toMatch(/Browse the menu|check back/);
+	});
+
+	it("never repeats Kedaipal's private note to the seller's till either", () => {
+		expect(
+			counterClosedMessage({ state: "paused", by: "admin", note: "Unpaid" }),
+		).not.toMatch(/Unpaid/);
 	});
 });
 

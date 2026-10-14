@@ -142,6 +142,21 @@ describe("Kedaipal's switch", () => {
 		expect(JSON.stringify(scan)).not.toMatch(/sponsorship/i);
 	});
 
+	test("the SELLER ringing up at a closed counter is told who closed it — never the buyer's 'browse the menu'", async () => {
+		const t = setup();
+		const { owner, admin, retailerId } = await seed(t);
+		await admin.mutation(api.admin.setStoreAvailability, {
+			retailerId,
+			mode: "paused",
+		});
+		const refusal = owner
+			.mutation(api.counterCheckout.startAnonymousSession, {})
+			.catch((err: Error) => err.message);
+		const message = await refusal;
+		expect(message).toMatch(/Kedaipal has paused ordering at your store/);
+		expect(message).not.toMatch(/Browse the menu/);
+	});
+
 	test("offline: the storefront payload carries the name and nothing else; off /stores and the sitemap", async () => {
 		const t = setup();
 		const { admin, retailerId } = await seed(t);

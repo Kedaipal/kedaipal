@@ -17,7 +17,11 @@ import {
 	OrderingPausedProvider,
 	SeasonalBreakNotice,
 } from "../components/storefront/seasonal-break";
-import { StoreUnavailable } from "../components/storefront/store-unavailable";
+import {
+	StoreUnavailable,
+	type StoreUnavailableLoaderData,
+	storeUnavailableHead,
+} from "../components/storefront/store-unavailable";
 import { StorefrontAppBar } from "../components/storefront/storefront-app-bar";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { CountdownBand } from "../components/ui/countdown-strip";
@@ -74,7 +78,9 @@ export const Route = createFileRoute("/$slug_/checkout")({
 			? { voucher: search.voucher }
 			: {};
 	},
-	loader: async ({ params }): Promise<CheckoutLoaderData | null> => {
+	loader: async ({
+		params,
+	}): Promise<CheckoutLoaderData | StoreUnavailableLoaderData | null> => {
 		const client = getConvexHttpClient();
 		const read = await ssrRead(() =>
 			client.query(api.retailers.getRetailerBySlug, { slug: params.slug }),
@@ -97,8 +103,10 @@ export const Route = createFileRoute("/$slug_/checkout")({
 			throw notFound();
 		}
 		// Taken offline by Kedaipal (z8r3fdudf7): no store data to preload —
-		// the component renders the neutral unavailable page (noindex).
-		if (result.status === "unavailable") return null;
+		// the component renders the neutral unavailable page, and head()
+		// takes it out of search in the SSR HTML.
+		if (result.status === "unavailable")
+			return { unavailable: true, storeName: result.storeName };
 
 		return {
 			storeName: result.retailer.storeName,
@@ -107,6 +115,8 @@ export const Route = createFileRoute("/$slug_/checkout")({
 	},
 	head: ({ loaderData }) => {
 		if (!loaderData) return {};
+		if ("unavailable" in loaderData)
+			return storeUnavailableHead(loaderData.storeName);
 		return {
 			meta: [
 				{ title: `Checkout — ${loaderData.storeName} | Kedaipal` },

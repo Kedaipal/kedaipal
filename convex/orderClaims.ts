@@ -329,7 +329,7 @@ export const sendClaim = mutation({
 		// A claim link is a COUNTER sale finished on the buyer's phone, so it
 		// follows the counter's rule (z8r3fdudf7): open under the seller's own
 		// pause, closed by a hold or Kedaipal's switch.
-		await assertTakesCounterOrders(ctx, retailer);
+		await assertTakesCounterOrders(ctx, retailer, "seller");
 		if (session.status !== "buyer_identified")
 			throw new ConvexError("This checkout isn't open any more");
 		if (!session.waPhone)
@@ -444,7 +444,7 @@ export const resendClaim = mutation({
 		await assertSubscriptionActive(ctx, claim.retailerId);
 		// Re-sending pushes a fresh link into the buyer's chat — a new order
 		// invitation, refused while paused exactly like sendClaim.
-		await assertTakesCounterOrders(ctx, access.retailer);
+		await assertTakesCounterOrders(ctx, access.retailer, "seller");
 		const now = Date.now();
 		if (effectiveClaimStatus(claim, now) !== "open")
 			throw new ConvexError(
@@ -900,7 +900,7 @@ export const commit = mutation({
 		// reaches here: getByToken carries `orderingPaused` and the page renders a
 		// dead end on load. Idempotent re-commits are handled ABOVE this line, so
 		// a buyer who already completed still gets their order back.
-		await assertTakesCounterOrders(ctx, retailer);
+		await assertTakesCounterOrders(ctx, retailer, "buyer");
 		const retailerCountry = retailer.country ?? DEFAULT_COUNTRY;
 		const paymentsPaused = await buyerPaymentsPaused(ctx, retailer._id);
 
