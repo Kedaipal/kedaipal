@@ -154,7 +154,17 @@ shuts. `usePromoClock` ticks only while there is a deadline to watch.
   may not be able to order, which outranks a reason to want to. Navy + bolt
   when timed, mint for a plain discount. A teaser names the price *and* the
   wait ("RM 31.50 in 1h 11m"); add-to-cart stays at the list price until the
-  drop.
+  drop. A **live timed** sale also gives the card a mint ring and a slow
+  heartbeat (`animate-kp-flash-glow`, `src/styles.css`): a halo that leaves
+  the card **outward only**, fades, and rests before the next beat. It never
+  contracts back in (`z8r3fdudm2`). A plain discount never pulses, because
+  urgency you can't run out of isn't urgency. The keyframes paint the ring
+  themselves, since an animation owns the whole `box-shadow` and would
+  otherwise erase `ring-2`. Under reduced motion the static ring is all that
+  remains. The halo reaches **12px** — the grid's `gap-3`, and the room the
+  Popular shelf's scroller leaves on every side. A horizontal scroller clips
+  the Y axis too, so any scroller holding a card needs that 12px top and
+  bottom, not just at the sides, or the pulse is cut flat above and below.
 - **Product page** mounts the countdown band at the top and puts "12 of 30
   left at this price" above the buy box — the one fact the band can't carry.
 - **Checkout** mounts the same band, driven by the flash that ends **soonest**
