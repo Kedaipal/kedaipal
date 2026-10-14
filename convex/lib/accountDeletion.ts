@@ -46,6 +46,11 @@
  *    messages the buyer said stop to. The phase only clears
  *    `triggeredByRetailerId` on rows pointing at the deleted tenant, so no
  *    dangling ref remains while the suppression itself stands.
+ *  - `marketplaceShowcases` rows are Kedaipal's own curation of /stores
+ *    (z8r3fdr6mv), not the tenant's data — a showcase outlives any one store
+ *    in it. The phase only drops the deleted store from each showcase's
+ *    `members`, so no dangling ref remains and the admin's member count stays
+ *    honest. A showcase holds no PII (retailer ids + booth labels).
  *
  * Every phase is idempotent (take-a-batch-and-delete, or a cursor scan whose
  * matches are patched exactly once), so re-entry after a crash just resumes.
@@ -83,6 +88,7 @@ export const DELETION_PHASES = [
 	"outboundMessageLog",
 	"slugHistory",
 	"optOuts",
+	"marketplaceShowcases",
 	"retailer",
 ] as const;
 
@@ -101,6 +107,7 @@ export type DeletionPhase = (typeof DELETION_PHASES)[number];
 export const PAGINATED_PHASES: ReadonlySet<DeletionPhase> = new Set([
 	"slugHistory",
 	"optOuts",
+	"marketplaceShowcases",
 ]);
 
 /** Arg validator for the driver's continuation state. Built from
@@ -112,9 +119,9 @@ export const deletionPhaseValidator = v.union(
 export type DeletionPhaseResult = {
 	/**
 	 * Documents processed this call — deleted rows for the indexed phases,
-	 * SCANNED rows for the two full-table-scan phases (`slugHistory`,
-	 * `optOuts`), because scanning is what consumes the transaction budget
-	 * there even when nothing matches.
+	 * SCANNED rows for the full-table-scan phases (`slugHistory`, `optOuts`,
+	 * `marketplaceShowcases`), because scanning is what consumes the
+	 * transaction budget there even when nothing matches.
 	 */
 	processed: number;
 	/** True when this phase has nothing left for the tenant. */
@@ -499,6 +506,31 @@ export async function runDeletionPhase(
 			for (const row of page.page) {
 				if (row.triggeredByRetailerId === retailerId) {
 					await ctx.db.patch(row._id, { triggeredByRetailerId: undefined });
+				}
+			}
+			return {
+				processed: page.page.length,
+				done: page.isDone,
+				cursor: page.continueCursor,
+			};
+		}
+		case "marketplaceShowcases": {
+			// NEVER deleted — a showcase is Kedaipal's curation of /stores and
+			// outlives any one store in it (z8r3fdr6mv). The deleted store is
+			// dropped from each showcase's member list so no ref dangles. Members
+			// are an array on the row, so no index can find "showcases holding
+			// this store" — paginated full-table scan over a table that holds a
+			// handful of rows by construction; patched rows keep their index
+			// position so the cursor walk is exact.
+			const page = await ctx.db
+				.query("marketplaceShowcases")
+				.paginate({ numItems: limit, cursor });
+			for (const row of page.page) {
+				if (row.members.some((m) => m.retailerId === retailerId)) {
+					await ctx.db.patch(row._id, {
+						members: row.members.filter((m) => m.retailerId !== retailerId),
+						updatedAt: Date.now(),
+					});
 				}
 			}
 			return {

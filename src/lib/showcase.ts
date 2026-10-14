@@ -48,7 +48,11 @@ export function joinShowcaseMembers(
 	for (const member of showcase.members) {
 		const card = bySlug.get(member.slug);
 		if (!card) continue;
-		out.push({ card, label: member.label, coverImageUrl: member.coverImageUrl });
+		out.push({
+			card,
+			label: member.label,
+			coverImageUrl: member.coverImageUrl,
+		});
 	}
 	return out;
 }
@@ -108,7 +112,12 @@ export function showcaseTimeFacts(
 	showcase: Pick<PublicShowcase, "startsAt" | "endsAt">,
 	now: number,
 ): { live: string; range?: string } {
-	const range = dateRange(showcase.startsAt, showcase.endsAt);
+	// With no start there is no range to print — the live chip already says
+	// "Until Fri", and "Until 16 Oct" beside it would be the same fact twice.
+	const range =
+		showcase.startsAt !== undefined
+			? dateRange(showcase.startsAt, showcase.endsAt)
+			: undefined;
 	if (showcase.endsAt === undefined) return { live: "Happening now", range };
 	const today = todayMytMidnight(now);
 	// The end is exclusive; the showcase's last DAY is the day before the end
@@ -140,7 +149,10 @@ export function dateRange(
 	if (startsAt !== undefined && last !== undefined) {
 		const a = new Date(startsAt + 8 * 60 * 60 * 1000);
 		const b = new Date(last + 8 * 60 * 60 * 1000);
-		if (a.getUTCMonth() === b.getUTCMonth() && a.getUTCDate() !== b.getUTCDate())
+		if (
+			a.getUTCMonth() === b.getUTCMonth() &&
+			a.getUTCDate() !== b.getUTCDate()
+		)
 			return `${a.getUTCDate()}–${short(last)}`;
 		if (a.getUTCMonth() === b.getUTCMonth()) return short(last);
 		return `${short(startsAt)} – ${short(last)}`;

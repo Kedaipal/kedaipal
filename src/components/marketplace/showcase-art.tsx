@@ -18,7 +18,7 @@ export function ShowcaseArt({
 	const outdoors = theme === "campfire" || theme === "sunset";
 	return (
 		<svg
-			aria-hidden
+			aria-hidden="true"
 			viewBox="0 0 400 240"
 			preserveAspectRatio="xMidYMax slice"
 			className={className}
@@ -53,9 +53,9 @@ export function ShowcaseArt({
 						d="M0 210 L48 170 L96 202 L150 156 L210 206 L262 168 L320 206 L400 182 L400 240 L0 240Z"
 						fill="var(--sc-a)"
 					/>
-					<circle cx="300" cy="206" r="46" fill={`url(#sc-glow-${theme})`} />
-					<path d="M272 216 L300 170 L328 216Z" fill="var(--sc-accent)" />
-					<path d="M294 216 L300 200 L306 216Z" fill="var(--sc-a)" />
+					<circle cx="340" cy="206" r="46" fill={`url(#sc-glow-${theme})`} />
+					<path d="M312 216 L340 170 L368 216Z" fill="var(--sc-accent)" />
+					<path d="M334 216 L340 200 L346 216Z" fill="var(--sc-a)" />
 				</>
 			) : (
 				<>

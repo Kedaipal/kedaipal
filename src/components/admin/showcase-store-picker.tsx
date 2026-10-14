@@ -124,9 +124,7 @@ export function ShowcaseStorePicker({
 								onClick={toggleAll}
 								className="min-h-9 font-bold text-accent-emphasis"
 							>
-								{allPicked
-									? "Clear selection"
-									: `Select all ${addable.length}`}
+								{allPicked ? "Clear selection" : `Select all ${addable.length}`}
 							</button>
 						) : null}
 					</div>
@@ -221,7 +219,9 @@ function PickerRow({
 					<span
 						className={cn(
 							"truncate text-xs",
-							warning ? "font-semibold text-amber-700 dark:text-amber-300" : "text-muted-foreground",
+							warning
+								? "font-semibold text-amber-700 dark:text-amber-300"
+								: "text-muted-foreground",
 						)}
 					>
 						{inShowcase

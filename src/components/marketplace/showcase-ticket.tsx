@@ -72,7 +72,10 @@ export function ShowcaseTicket({
 								sizes="(min-width: 1024px) 300px, 80vw"
 								objectFit="cover"
 							/>
-							<span aria-hidden className="absolute inset-0 bg-showcase-scrim" />
+							<span
+								aria-hidden
+								className="absolute inset-0 bg-showcase-scrim"
+							/>
 						</>
 					) : (
 						<span
@@ -140,7 +143,7 @@ function StubLabel({ label }: { label: string }) {
 	if (match?.[1]) {
 		return (
 			<>
-				<span className="max-w-[64px] truncate text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--sc-ink-soft)]">
+				<span className="line-clamp-2 max-w-[64px] text-center text-[9px] font-bold uppercase leading-[1.2] tracking-[0.12em] text-[var(--sc-ink-soft)]">
 					{match[1]}
 				</span>
 				<span className="font-mono text-[20px] font-bold leading-tight text-[var(--sc-ink)]">

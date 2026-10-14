@@ -32,10 +32,7 @@ import {
 	partitionStores,
 	SEARCH_QUERY_MAX,
 } from "../lib/marketplace";
-import {
-	joinShowcaseMembers,
-	showcasesForRegion,
-} from "../lib/showcase";
+import { joinShowcaseMembers, showcasesForRegion } from "../lib/showcase";
 import { ssrRead } from "../lib/ssr-read";
 
 /**
@@ -166,9 +163,7 @@ const RAIL_CLASS =
 
 function MarketplacePage() {
 	const cards = useQuery(convexQuery(api.marketplace.listStores, {})).data;
-	const showcases = useQuery(
-		convexQuery(api.showcases.listShowcases, {}),
-	).data;
+	const showcases = useQuery(convexQuery(api.showcases.listShowcases, {})).data;
 	const [region, setRegion] = useLandingRegion();
 	const { q, filter, showcase: focusedSlug } = Route.useSearch();
 	// The compact header takes over once the hero's chips scroll out above.
@@ -233,7 +228,10 @@ function MarketplacePage() {
 	// joinable member render nothing (a banner with no stores is a dead end).
 	const regionShowcases = showcases
 		? showcasesForRegion(showcases, region)
-				.map((s) => ({ showcase: s, tickets: joinShowcaseMembers(s, regionCards) }))
+				.map((s) => ({
+					showcase: s,
+					tickets: joinShowcaseMembers(s, regionCards),
+				}))
 				.filter((s) => s.tickets.length > 0)
 		: [];
 	const focused = focusedSlug
@@ -290,78 +288,89 @@ function MarketplacePage() {
 						</div>
 					</header>
 
-					<div className="flex flex-col items-center px-5 pt-5 text-center lg:pt-8">
-						<AppImage
-							src="/logo.svg"
-							alt=""
-							aspect="h-12 w-auto lg:h-14"
-							fill={false}
-							priority
-						/>
-						<h1 className="tracking-display mt-3 font-heading text-[25px] font-extrabold leading-tight lg:text-[2.6rem]">
-							Find your next{" "}
-							<span className="kp-highlight text-accent">favourite store</span>
-						</h1>
-						<p className="mt-2 max-w-md text-sm leading-relaxed text-muted-foreground lg:max-w-xl lg:text-[15px]">
-							Browse real sellers on Kedaipal — order on their store, confirmed
-							over WhatsApp.
-						</p>
-					</div>
-
-					{/* <search> is the semantic landmark; the inner form keeps Enter
-					    from navigating (search is live-as-you-type). */}
-					<search className="mt-4 flex justify-center px-5">
-						<form
-							className="flex w-full justify-center"
-							onSubmit={(e) => e.preventDefault()}
-						>
-							<div className="flex h-12 w-full max-w-xl items-center gap-2.5 rounded-full border border-border bg-card pl-5 pr-1.5 shadow-sm transition-shadow focus-within:ring-3 focus-within:ring-ring/40">
-								<input
-									type="search"
-									value={search}
-									onChange={(e) => setSearch(e.target.value)}
-									placeholder="Search stores…"
-									aria-label="Search stores"
-									maxLength={SEARCH_QUERY_MAX}
-									className="min-w-0 grow bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
+					{/* A booth-QR landing (`?showcase=`) is about the EVENT: the hero's
+					    pitch, search and chips step aside and the showcase is the first
+					    thing on screen. "All stores" on the stage brings them back.
+					    Judged on the slug alone so the hero doesn't flash in while the
+					    showcases load, and returns if the slug turns out not to be live. */}
+					{focusedSlug !== undefined && !focusedMissing ? null : (
+						<>
+							<div className="flex flex-col items-center px-5 pt-5 text-center lg:pt-8">
+								<AppImage
+									src="/logo.svg"
+									alt=""
+									aspect="h-12 w-auto lg:h-14"
+									fill={false}
+									priority
 								/>
-								<button
-									type="submit"
-									aria-label="Search"
-									className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent text-accent-foreground transition-colors hover:bg-accent/90"
-								>
-									<Search className="size-4" />
-								</button>
+								<h1 className="tracking-display mt-3 font-heading text-[25px] font-extrabold leading-tight lg:text-[2.6rem]">
+									Find your next{" "}
+									<span className="kp-highlight text-accent">
+										favourite store
+									</span>
+								</h1>
+								<p className="mt-2 max-w-md text-sm leading-relaxed text-muted-foreground lg:max-w-xl lg:text-[15px]">
+									Browse real sellers on Kedaipal — order on their store,
+									confirmed over WhatsApp.
+								</p>
 							</div>
-						</form>
-					</search>
 
-					<div className="mt-3.5 flex gap-2 overflow-x-auto scrollbar-none px-5 lg:justify-center">
-						{CHIPS.map(({ id, label, dot }) => {
-							const active = chip === id;
-							return (
-								<button
-									key={id}
-									type="button"
-									aria-pressed={active}
-									onClick={() => setChip(id)}
-									className={`tap-target flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-xs font-semibold transition-colors ${
-										active
-											? "bg-primary text-primary-foreground"
-											: "border border-border bg-card text-foreground hover:bg-muted"
-									}`}
+							{/* <search> is the semantic landmark; the inner form keeps Enter
+					    from navigating (search is live-as-you-type). */}
+							<search className="mt-4 flex justify-center px-5">
+								<form
+									className="flex w-full justify-center"
+									onSubmit={(e) => e.preventDefault()}
 								>
-									{dot ? (
-										<span
-											aria-hidden
-											className="size-1.5 rounded-full bg-accent"
+									<div className="flex h-12 w-full max-w-xl items-center gap-2.5 rounded-full border border-border bg-card pl-5 pr-1.5 shadow-sm transition-shadow focus-within:ring-3 focus-within:ring-ring/40">
+										<input
+											type="search"
+											value={search}
+											onChange={(e) => setSearch(e.target.value)}
+											placeholder="Search stores…"
+											aria-label="Search stores"
+											maxLength={SEARCH_QUERY_MAX}
+											className="min-w-0 grow bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
 										/>
-									) : null}
-									{label}
-								</button>
-							);
-						})}
-					</div>
+										<button
+											type="submit"
+											aria-label="Search"
+											className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent text-accent-foreground transition-colors hover:bg-accent/90"
+										>
+											<Search className="size-4" />
+										</button>
+									</div>
+								</form>
+							</search>
+
+							<div className="mt-3.5 flex gap-2 overflow-x-auto scrollbar-none px-5 lg:justify-center">
+								{CHIPS.map(({ id, label, dot }) => {
+									const active = chip === id;
+									return (
+										<button
+											key={id}
+											type="button"
+											aria-pressed={active}
+											onClick={() => setChip(id)}
+											className={`tap-target flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-xs font-semibold transition-colors ${
+												active
+													? "bg-primary text-primary-foreground"
+													: "border border-border bg-card text-foreground hover:bg-muted"
+											}`}
+										>
+											{dot ? (
+												<span
+													aria-hidden
+													className="size-1.5 rounded-full bg-accent"
+												/>
+											) : null}
+											{label}
+										</button>
+									);
+								})}
+							</div>
+						</>
+					)}
 				</div>
 			</div>
 

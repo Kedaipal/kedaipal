@@ -1,14 +1,18 @@
 import { Link } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
 import { toast } from "sonner";
+import { formatFulfilmentDate } from "../../../convex/lib/fulfilmentDate";
 import {
 	collapseStoreArea,
 	STORE_AREA_MAX,
 } from "../../../convex/lib/marketplaceListing";
+import type { FeaturedIn } from "../../../convex/showcases";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../../lib/contact";
 import { convexErrorMessage } from "../../lib/format";
+import { showcasePath } from "../../lib/showcase";
 import { Button } from "../ui/button";
+import { CopyButton } from "../ui/copy-button";
 import { Input } from "../ui/input";
 import { ToggleSwitch } from "../ui/toggle-switch";
 import { SAVE_BTN_CLASS, SectionHeading } from "./settings-primitives";
@@ -35,6 +39,8 @@ type ListingReadiness = {
 	hasVisibleProduct: boolean;
 	internal: boolean;
 	hidden: { note?: string } | null;
+	/** Published showcases this store is in (z8r3fdr6mv). */
+	featuredIn: FeaturedIn[];
 };
 
 export function MarketplaceCard({
@@ -134,6 +140,9 @@ export function MarketplaceCard({
 					label="List my store on the Kedaipal marketplace"
 				/>
 			</div>
+			{readiness?.featuredIn.map((f) => (
+				<FeaturedCard key={f.slug} featured={f} storeName={storeName} />
+			))}
 			<form onSubmit={handleAreaSubmit} className="flex flex-col gap-1.5">
 				<label htmlFor="marketplace-area" className="text-sm font-medium">
 					Area shown on your card
@@ -258,5 +267,77 @@ function HiddenByKedaipal({
 				Ask us about it on WhatsApp
 			</a>
 		</span>
+	);
+}
+
+/**
+ * Kedaipal put this store in a showcase (z8r3fdr6mv) — a time-boxed section
+ * at the top of /stores. The seller is TOLD, with the booth label we gave
+ * them, the link they can share, and a way to tell us the label is wrong:
+ * being featured without knowing is the hidden behaviour the house rules
+ * forbid. One card per showcase; drafts never reach here.
+ */
+function FeaturedCard({
+	featured,
+	storeName,
+}: {
+	featured: FeaturedIn;
+	storeName: string;
+}) {
+	const supportWa = useSupportWaNumber();
+	const path = showcasePath(featured.slug);
+	const fullUrl = `https://kedaipal.com${path}`;
+	const askUrl = buildWaContactLink(
+		`Hi Kedaipal, about ${storeName} in the "${featured.title}" showcase on kedaipal.com/stores —`,
+		supportWa,
+	);
+	const when =
+		featured.state === "scheduled" && featured.startsAt !== undefined
+			? `from ${formatFulfilmentDate(featured.startsAt, { weekday: false, year: false })}`
+			: featured.endsAt !== undefined
+				? `until ${formatFulfilmentDate(featured.endsAt - 1, { weekday: false, year: false })}`
+				: "with no end date";
+	return (
+		<div className="flex flex-col gap-3 rounded-2xl border border-accent/30 bg-accent/5 p-4">
+			<div className="flex flex-col gap-0.5">
+				<span className="text-[11px] font-bold uppercase tracking-wider text-accent-emphasis">
+					{featured.state === "scheduled"
+						? "You'll be featured"
+						: "You're featured"}
+				</span>
+				<span className="font-heading text-base font-extrabold">
+					{featured.title}
+				</span>
+				<span className="text-xs text-muted-foreground">
+					{featured.label ? (
+						<>
+							Shown as <b className="text-foreground">{featured.label}</b> ·{" "}
+						</>
+					) : null}
+					on /stores {when}
+				</span>
+			</div>
+			<div className="flex flex-wrap gap-2">
+				<CopyButton value={fullUrl} label="Copy showcase link" />
+				<Button asChild variant="outline" className="tap-target font-semibold">
+					<a href={path} target="_blank" rel="noreferrer">
+						View on /stores
+					</a>
+				</Button>
+			</div>
+			<span className="text-xs text-muted-foreground">
+				Kedaipal picked your store for this showcase.{" "}
+				{featured.label ? "Booth label wrong? " : ""}
+				<a
+					href={askUrl}
+					target="_blank"
+					rel="noreferrer"
+					className="font-medium text-accent-emphasis underline underline-offset-2"
+				>
+					Tell us on WhatsApp
+				</a>
+				.
+			</span>
+		</div>
 	);
 }

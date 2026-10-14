@@ -129,8 +129,8 @@ export function AdminMarketplaceContent() {
 				<div className="flex flex-col gap-0.5 sm:flex-row sm:items-baseline sm:justify-between">
 					<h3 className="font-heading text-base font-extrabold">Showcases</h3>
 					<p className="text-xs text-muted-foreground">
-						Shown at the top of /stores, above Store highlights, in this
-						order. Drag to reorder.
+						Shown at the top of /stores, above Store highlights, in this order.
+						Drag to reorder.
 					</p>
 				</div>
 

@@ -40,6 +40,7 @@ export function ShowcaseStage({
 	mode,
 	railClassName,
 	onBack,
+	forcePhone = false,
 }: {
 	showcase: PublicShowcase;
 	tickets: ShowcaseTicketData[];
@@ -49,7 +50,11 @@ export function ShowcaseStage({
 	railClassName: string;
 	/** Focused view only: leave the showcase for the full directory. */
 	onBack?: () => void;
+	/** Render the phone layout whatever the viewport — the admin editor's
+	 * preview is a phone-wide column on a desktop screen. */
+	forcePhone?: boolean;
 }) {
+	const lg = (classes: string) => (forcePhone ? "" : classes);
 	const facts = showcaseTimeFacts(showcase, now);
 	const total = tickets.length;
 	const focused = mode === "focused";
@@ -63,7 +68,8 @@ export function ShowcaseStage({
 			aria-labelledby={headingId}
 			className={cn(
 				showcaseThemeClass(showcase.theme),
-				"relative mx-3 overflow-hidden rounded-[28px] bg-showcase text-white lg:mx-8 lg:rounded-[32px]",
+				"relative mx-3 overflow-hidden rounded-[28px] bg-showcase text-white",
+				lg("lg:mx-8 lg:rounded-[32px]"),
 				// The pile hangs out of its cell — the stage must not clip it.
 				"[--sc-surface:var(--sc-b)]",
 			)}
@@ -88,7 +94,10 @@ export function ShowcaseStage({
 			) : (
 				<ShowcaseArt
 					theme={showcase.theme}
-					className="absolute inset-x-0 top-0 h-[230px] w-full lg:h-full lg:w-[460px]"
+					className={cn(
+						"absolute inset-x-0 top-0 h-[230px] w-full",
+						lg("lg:h-full lg:w-[460px]"),
+					)}
 				/>
 			)}
 
@@ -96,11 +105,18 @@ export function ShowcaseStage({
 				className={cn(
 					"relative flex flex-col",
 					focused
-						? "lg:px-10 lg:pt-10"
-						: "lg:grid lg:grid-cols-[340px_minmax(0,1fr)] lg:gap-9 lg:px-10 lg:py-10",
+						? lg("lg:px-10 lg:pt-10")
+						: lg(
+								"lg:grid lg:grid-cols-[340px_minmax(0,1fr)] lg:gap-9 lg:px-10 lg:py-10",
+							),
 				)}
 			>
-				<div className="flex flex-col gap-2.5 px-5 pt-5 lg:px-0 lg:pt-0">
+				<div
+					className={cn(
+						"flex flex-col gap-2.5 px-5 pt-5",
+						lg("lg:px-0 lg:pt-0"),
+					)}
+				>
 					{focused ? (
 						<button
 							type="button"
@@ -130,8 +146,11 @@ export function ShowcaseStage({
 						className={cn(
 							"font-heading font-black leading-[1.02] tracking-[-0.025em]",
 							focused
-								? "mt-2 text-[31px] lg:text-[44px]"
-								: "mt-[62px] max-w-[260px] text-[31px] lg:mt-1 lg:max-w-none lg:text-[44px]",
+								? cn("mt-2 text-[31px]", lg("lg:text-[44px]"))
+								: cn(
+										"mt-[62px] max-w-[260px] text-[31px]",
+										lg("lg:mt-1 lg:max-w-none lg:text-[44px]"),
+									),
 						)}
 					>
 						{showcase.title}
@@ -141,7 +160,7 @@ export function ShowcaseStage({
 							{showcase.tagline}
 						</p>
 					) : null}
-					{focused || total === 0 ? null : (
+					{focused || total === 0 || forcePhone ? null : (
 						<div className="mt-1 hidden gap-2.5 lg:flex">
 							<Link
 								to="/stores"
@@ -178,7 +197,8 @@ export function ShowcaseStage({
 						<ul
 							className={cn(
 								railClassName,
-								"mt-5 gap-3 pb-3 pt-2 lg:hidden",
+								"mt-5 gap-3 pb-3 pt-2",
+								lg("lg:hidden"),
 							)}
 						>
 							{tickets.map((ticket) => (
@@ -191,9 +211,14 @@ export function ShowcaseStage({
 							))}
 						</ul>
 						{total > 1 ? (
-							<RailDots count={total} className="lg:hidden" />
+							<RailDots count={total} className={lg("lg:hidden")} />
 						) : null}
-						<div className="flex items-center justify-between px-5 pb-3.5 pt-1 lg:hidden">
+						<div
+							className={cn(
+								"flex items-center justify-between px-5 pb-3.5 pt-1",
+								lg("lg:hidden"),
+							)}
+						>
 							<span className="text-xs text-white/60">
 								{total} {total === 1 ? "store" : "stores"}
 							</span>
@@ -208,7 +233,12 @@ export function ShowcaseStage({
 						</div>
 
 						{/* Desktop: the grid, and the pile. */}
-						<ul className="hidden content-center gap-x-5 gap-y-[22px] lg:grid lg:grid-cols-2">
+						<ul
+							className={cn(
+								"hidden content-center gap-x-5 gap-y-[22px]",
+								lg("lg:grid lg:grid-cols-2"),
+							)}
+						>
 							{shown.map((ticket) => (
 								<li key={ticket.card.slug}>
 									<ShowcaseTicket ticket={ticket} now={now} />
@@ -288,24 +318,20 @@ function TicketPile({
 							opacity: isTop || open ? 1 : 0.94,
 						}}
 					>
-						<ShowcaseTicket
-							ticket={ticket}
-							now={now}
-							inert={!isTop && !open}
-						/>
-						{isTop ? (
-							<Link
-								to="/stores"
-								search={{ showcase: slug }}
-								className="tap-target absolute -right-2.5 -top-3 z-10 inline-flex items-center gap-1 rounded-full bg-[var(--sc-accent)] px-3 py-1.5 text-xs font-extrabold text-[var(--sc-accent-fg)] shadow-[0_6px_16px_-6px_rgb(0_0_0/0.6)] hover:brightness-105"
-							>
-								+{pile.length} more · See all {total}
-								<ArrowRight aria-hidden className="size-3.5" />
-							</Link>
-						) : null}
+						<ShowcaseTicket ticket={ticket} now={now} inert={!isTop && !open} />
 					</div>
 				);
 			})}
+			{/* Anchored to the CELL, not the top ticket, so it never sits on a
+			    store's name whichever way the fan is tilted. */}
+			<Link
+				to="/stores"
+				search={{ showcase: slug }}
+				className="tap-target absolute -right-2 -top-4 z-20 inline-flex items-center gap-1 rounded-full bg-[var(--sc-accent)] px-3 py-1.5 text-xs font-extrabold text-[var(--sc-accent-fg)] shadow-[0_6px_16px_-6px_rgb(0_0_0/0.6)] hover:brightness-105"
+			>
+				+{pile.length} more · See all {total}
+				<ArrowRight aria-hidden className="size-3.5" />
+			</Link>
 		</div>
 	);
 }

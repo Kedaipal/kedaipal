@@ -1,12 +1,15 @@
 import type { Country } from "../../convex/lib/country";
 import {
+	DAY_MS,
 	formatFulfilmentDate,
 	formatFulfilmentTime,
 } from "../../convex/lib/fulfilmentDate";
 import type { ShowcaseState, ShowcaseTheme } from "../../convex/lib/showcase";
 import type { NotListedReason } from "../../convex/marketplace";
-import type { AdminShowcase, AdminShowcaseMember } from "../../convex/showcases";
-import { DAY_MS } from "../../convex/lib/fulfilmentDate";
+import type {
+	AdminShowcase,
+	AdminShowcaseMember,
+} from "../../convex/showcases";
 
 /**
  * Admin-side showcase derivations (z8r3fdr6mv) — pure, so the status pill,
@@ -38,7 +41,8 @@ export function showcaseStatusLabel(
 			};
 		case "ended":
 			return {
-				label: `Ended ${row.endsAt !== undefined ? formatFulfilmentDate(row.endsAt - 1, { weekday: false, year: false }) : ""}`.trim(),
+				label:
+					`Ended ${row.endsAt !== undefined ? formatFulfilmentDate(row.endsAt - 1, { weekday: false, year: false }) : ""}`.trim(),
 				tone: "ended",
 			};
 		default:
@@ -53,7 +57,8 @@ export function showcaseMetaLine(
 ): string {
 	const from =
 		row.startsAt !== undefined ? formatDateTime(row.startsAt) : "on publish";
-	const until = row.endsAt !== undefined ? formatDateTime(row.endsAt) : "no end date";
+	const until =
+		row.endsAt !== undefined ? formatDateTime(row.endsAt) : "no end date";
 	return `${row.country} · ${from} → ${until} · ${themeLabel}`;
 }
 
@@ -90,7 +95,10 @@ export type ShowcaseDraft = {
 	theme: ShowcaseTheme;
 	startsAt: number | undefined;
 	endsAt: number | undefined;
-	members: Array<{ retailerId: AdminShowcaseMember["retailerId"]; label: string }>;
+	members: Array<{
+		retailerId: AdminShowcaseMember["retailerId"];
+		label: string;
+	}>;
 };
 
 export function draftFromRow(row: AdminShowcase): ShowcaseDraft {
@@ -135,7 +143,8 @@ export function describeChanges(
 		const afterIds = new Set(after.map((m) => m.retailerId));
 		const added = after.filter((m) => !beforeIds.has(m.retailerId)).length;
 		const removed = before.filter((m) => !afterIds.has(m.retailerId)).length;
-		if (added > 0) changes.push(`${added} ${added === 1 ? "store" : "stores"} added`);
+		if (added > 0)
+			changes.push(`${added} ${added === 1 ? "store" : "stores"} added`);
 		if (removed > 0)
 			changes.push(`${removed} ${removed === 1 ? "store" : "stores"} removed`);
 		if (added === 0 && removed === 0) changes.push("store order");

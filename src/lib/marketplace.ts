@@ -11,8 +11,8 @@ import {
 	openNowStatus,
 	WEEKDAY_NAMES_SHORT,
 } from "../../convex/lib/openingHours";
-import type { MarketplaceStoreCard } from "../../convex/marketplace";
 import { parseShowcaseSlugParam } from "../../convex/lib/showcase";
+import type { MarketplaceStoreCard } from "../../convex/marketplace";
 
 /**
  * Marketplace page derivations (z8r3fdkmyp) — pure, so the search/chip/region

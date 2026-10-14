@@ -200,6 +200,160 @@ HTML parser judge each hostile name and fails on any other source file naming
   documented ceiling. Upgrade path: denormalize a `marketplaceListedAt` and
   index it once the table warrants it.
 
+## Showcases — a time-boxed section at the top, for an event (z8r3fdr6mv)
+
+An admin can group the stores at an event — Malaysia Campfest, a Deepavali
+bazaar, a partner pop-up — under one banner at the top of `/stores`, above
+Store highlights, for as long as the event runs. Built for Campfest
+(16–18 Oct 2026) and reusable for every fair after it, which is why nothing
+in the code names an event. Mockups that drove the build (four rounds):
+https://claude.ai/artifact/EsLcV4wWjkMnWJdbY9ZAkd — the picks were the D7
+"stage" (the mobile ticket, unchanged, on a 2-column grid beside the title)
+and a fanned **pile** of the real remaining tickets for "+N more".
+
+**Vocabulary: a *showcase*, never an "event".** "Event" already means three
+things in this codebase (an RSVP product, an event venue, the `event`
+order-flow kind), and the directory was already bitten once by a name
+collision ("Sponsor" the comp kind vs the "Sponsored" rail). Buyers never see
+the word — they see the showcase's own title.
+
+### The model
+
+`marketplaceShowcases` (schema) — one row per showcase; the rules in
+`convex/lib/showcase.ts`, the functions in `convex/showcases.ts`.
+
+- **Members ride the row as a capped array** (`SHOWCASE_MEMBER_CAP` = 40)
+  of `{ retailerId, label? }` — the booth label is the one per-store fact a
+  showcase adds. A bazaar with more Kedaipal stores than that is a second
+  showcase, so the document stays bounded.
+- **The window is read-time, there is no cron.** `showcaseState(row, now)`
+  is the one author: `draft` (unpublished — outranks the dates, a half-built
+  showcase never reaches buyers) → `scheduled` (starts later) → `live` →
+  `ended` (`endsAt` is exclusive, so a midnight end names the day before).
+  The buyer page's minute tick re-evaluates it, so a showcase disappears
+  from an open page the moment it ends.
+- **The slug is minted once, from the title, and never rewritten**
+  (`showcaseSlugFromTitle`, `-2`/`-3` on a clash). It is the
+  `/stores?showcase=<slug>` handle on the booth QR, and a printed QR must
+  survive a title edit.
+- **Themes are a closed set of dark grounds** (`SHOWCASE_THEMES`), each a
+  block of CSS variables in `styles.css` (`kp-showcase-<theme>`). An admin
+  picks a mood, never a colour, so the banner, the ticket's info panel and
+  the compact band carry one text treatment in light and dark mode. A cover
+  photo is optional and is darkened under the title whatever it is.
+- **Every write is audited** under its own function name
+  (`showcases.create` … `showcases.remove`) via `logGlobalAdminAction`,
+  with the showcase as `targetId` — a showcase has no store in scope.
+- **A deleted store leaves its showcases.** The account-deletion cascade
+  has a `marketplaceShowcases` phase (paginated, like `optOuts`) that drops
+  the tenant from every member list; the showcase itself survives — it is
+  Kedaipal's curation, not the tenant's data, and holds no PII.
+
+### Who shows — the directory's one rule, applied twice
+
+A member only SHOWS if the store passes the directory's listable rule, and
+that rule has one author: `notListedReason` (`convex/marketplace.ts`),
+which `listStores` and the showcase functions both read.
+
+- **Server side, `listShowcases` drops unlistable members** so the public
+  payload never carries a store the directory hides — an admin-hidden
+  store's cover must not ride out on a showcase. A showcase whose members
+  are all unlistable is not in the payload at all (an empty banner is a dead
+  end). The payload is slugs + labels + covers, no ids, no `publishedAt`.
+- **Client side, `joinShowcaseMembers` joins each slug to its directory
+  card** (name, logo, hours), in the admin's order, and drops a slug the
+  directory doesn't carry — only possible in the moment between a store
+  leaving the directory and the showcase payload catching up.
+- **The admin is told, never surprised:** `getForAdmin` names the reason on
+  every member row (`NOT_LISTED_COPY`: opted out, hidden by Kedaipal,
+  internal, purging, no visible product), and the editor's preview says
+  "6 of 8 stores show to buyers". A store that won't show is still addable
+  — the booth may open tomorrow — but its row says so.
+
+### The buyer page
+
+- **The stage** (`ShowcaseStage`, mode `stage`): the showcase's dark ground
+  and art (or cover), the time chip ("Happening now", "Ends today", "Ends
+  tomorrow", "Until Sun"/"Until 18 Oct" — `showcaseTimeFacts`), the title
+  and tagline, and the stores as **tickets**. On a phone the tickets swipe
+  in a rail (the next one peeks, dots say how many) with "See all N →";
+  from `lg` the title stands left and up to five tickets stand on a 2-column
+  grid, and past five the rest become a **fanned pile of the real tickets**
+  in the sixth cell (`splitStage`, `PILE_FAN_MAX`) — honest about the
+  count, each still a link to its store, tickets under the top one inert
+  until the fan opens on hover/focus, the badge anchored to the cell so it
+  never sits on a name.
+- **The ticket** (`ShowcaseTicket`) is ONE shape at every size: an info
+  panel (the store's own cover under a dark fade, or the showcase's theme
+  ground with the initials watermarked large — so every panel is dark and
+  every name is white whatever each store uploaded), the directory's own
+  live status line under a dashed tear, and a stub with the booth label
+  ("BOOTH / B4", "FOOD COURT / 7") or a tent mark reading "At event". The
+  paper is cream in every theme and in dark mode: it is a ticket.
+- **Several live at once stack, never carousel.** The first in admin order
+  gets the stage; the rest get a `ShowcaseBand` (title, "Also on · until…",
+  a strip of store tiles, See all). Each stage already owns a sideways
+  rail, and a carousel inside a carousel fights the thumb; and nothing
+  auto-rotates — content that moves while someone is aiming a tap is
+  frustrating and needs a pause control.
+- **The focused view** (`/stores?showcase=<slug>`, mode `focused`) is the
+  booth-QR landing: the hero's pitch, search and chips step aside, the
+  showcase is the first thing on screen with EVERY ticket laid out, an
+  "All stores" way back, and a Copy-link button. The loader reads the slug
+  (`loaderDeps`) so the page's OG tags carry the showcase's title, tagline
+  and cover — the link unfurls as the event in WhatsApp — while the
+  canonical stays the bare `/stores`. A slug that is not live (the event
+  ended, the QR outlived it) lands on the plain page with one line saying
+  so; `parseShowcaseSlugParam` degrades anything else to "no showcase".
+- **The compact header** (`StoresCompactHeader`): once the hero's chips
+  scroll out above (one `IntersectionObserver` on a sentinel,
+  `useScrolledPast`), a frosted bar takes over with the logo, a floating
+  search, the region switch — and on desktop the chips and the seller CTA.
+  It is a second VIEW of the hero's search/filter state, not a second
+  control. On a phone an active filter rides inside the search pill as a
+  removable token, so the bar stays one row. Shipped in the same PR because
+  it is the same page; it is what makes a long showcase page navigable.
+- **Every swipe rail hides its scrollbar** (`scrollbar-none` in
+  `styles.css`, replacing three copy-pasted `[scrollbar-width:none]`
+  hacks across eight rails): phones overlay theirs, but desktop browsers
+  and devtools' phone emulation painted a permanent grey bar under every
+  chip row. The peek says "there's more", never the bar.
+
+### Admin · Marketplace
+
+A new admin tab (`/app/admin/marketplace`, sidebar + bottom nav), the
+meaning-based home for "what Kedaipal curates on /stores". Showcases are
+listed in /stores order (drag to reorder, `SortableList`), each with a
+thumbnail of its look, a status pill (Live · ends in N days / Scheduled ·
+starts 1 Nov / Draft · buyers can't see it / Ended), the facts an admin
+scans for, and Edit / View on /stores / a menu (Copy link, Publish or
+Unpublish, Delete…). Ended ones fold away but are kept. A note says Store
+highlights are still set per store from Sellers → Manage.
+
+**New showcase** asks two things — title and region — and lands in the
+editor as a draft (the region can't change once stores are in, because
+every member must share it). **The editor** (`ShowcaseEditor`): Details,
+Look (theme swatches + cover upload, saves on upload), When buyers see it
+(show from / until, "No end date", and a sentence saying exactly when it
+comes off), Stores (add via a picker sheet over the admin seller directory
+narrowed to the region, with search and select-all; drag to order; a booth
+label per row; a tri-state select-all with bulk remove), Take it down
+(Unpublish keeps it as a draft; Delete is for good, behind a confirm). The
+**buyer preview is the real `ShowcaseStage`** fed the draft (`forcePhone`),
+so it never lies about a store's hours or cover, and the pinned save bar
+names what is unsaved ("Unsaved: theme, 2 booth labels"). Publish is a
+separate act from Save — `publish` is refused for an empty showcase by
+name.
+
+### The seller is told
+
+`marketplace.myListingReadiness` gained `featuredIn`: the published
+showcases this store is in (drafts stay private). The Settings → Store →
+Marketplace listing card shows a "You're featured in …" card per showcase
+with the booth label Kedaipal gave them, the link to copy, and a WhatsApp
+line to tell us the label is wrong — being featured without knowing is the
+hidden behaviour the house rules forbid.
+
 ## Tests
 
 `convex/lib/marketplaceListing.test.ts` (each listable clause bites),
@@ -212,7 +366,17 @@ the stored shape, discoverability link), `src/components/admin/highlight-dialog.
 (start / update-needs-a-change / end via its own mutation, inclusive end date, opted-out warning, comp switch, internal store), the directory pill in `app.admin.sellers.test.tsx`,
 `src/components/storefront/storefront-footer.test.tsx` (the discover link),
 `parseMarketplaceSearch` cases for the URL state, and `src/lib/json-ld.test.ts`
-(escaping + the gate). Admin hide: the clause in `marketplaceListing.test.ts`,
+(escaping + the gate). Showcases (z8r3fdr6mv): `convex/lib/showcase.test.ts`
+(state machine incl. the exclusive end, sanitizers, slug + param parsing),
+`convex/showcases.test.ts` (admin gate, create → publish → buyers end to
+end, the read-time window, unpublish/remove, members obeying the listable
+rule with the reason named, region refusals, dedupe + cap, reorder, every
+write in the audit log, the seller's `featuredIn`), `src/lib/showcase.test.ts`
+(join, split, time facts, ranges), `src/lib/admin-showcase.test.ts` (status
+labels, the unsaved-changes summary, datetime round trip),
+`src/components/marketplace/showcase-ticket.test.tsx` (ticket link + stub +
+cover/fallback + inert, stage "See all", the pile, the focused view) and the
+Marketplace tab in `bottom-nav.test.tsx`. Admin hide: the clause in `marketplaceListing.test.ts`,
 end to end in `marketplace.test.ts` (admin-only, the seller's switch can't
 relist past it, the note reaches the seller card but never the public
 payload, idempotent audit, internal refused), the pill + Manage item in

@@ -38,7 +38,12 @@ function renderCard(
 			storeName="Kedai Mak Su"
 			unlisted={false}
 			area=""
-			readiness={{ hasVisibleProduct: true, internal: false, hidden: null }}
+			readiness={{
+				hasVisibleProduct: true,
+				internal: false,
+				hidden: null,
+				featuredIn: [],
+			}}
 			onSave={onSave}
 			{...props}
 		/>,
@@ -60,7 +65,12 @@ describe("MarketplaceCard — the switch line tells the truth", () => {
 
 	test("ON but no visible product: never claims to be shown, and points at the fix", () => {
 		renderCard({
-			readiness: { hasVisibleProduct: false, internal: false, hidden: null },
+			readiness: {
+				hasVisibleProduct: false,
+				internal: false,
+				hidden: null,
+				featuredIn: [],
+			},
 		});
 		expect(screen.queryByText(/Shown in the directory/)).toBeNull();
 		expect(screen.getByText(/not shown yet/)).toBeTruthy();
@@ -79,7 +89,12 @@ describe("MarketplaceCard — the switch line tells the truth", () => {
 	test("opted out: hidden, with the direct-link reassurance, whatever the products", () => {
 		renderCard({
 			unlisted: true,
-			readiness: { hasVisibleProduct: true, internal: false, hidden: null },
+			readiness: {
+				hasVisibleProduct: true,
+				internal: false,
+				hidden: null,
+				featuredIn: [],
+			},
 		});
 		expect(
 			screen.getByText(/buyers can still reach your direct link/i),
@@ -95,7 +110,12 @@ describe("MarketplaceCard — the switch line tells the truth", () => {
 describe("MarketplaceCard — internal stores", () => {
 	test("a Kedaipal/test store is told it's never listed, even with the switch on and products live", () => {
 		renderCard({
-			readiness: { hasVisibleProduct: true, internal: true, hidden: null },
+			readiness: {
+				hasVisibleProduct: true,
+				internal: true,
+				hidden: null,
+				featuredIn: [],
+			},
 		});
 		expect(screen.getByText(/never listed on the marketplace/)).toBeTruthy();
 		expect(screen.queryByText(/Shown in the directory/)).toBeNull();
@@ -109,6 +129,7 @@ describe("MarketplaceCard — hidden by Kedaipal", () => {
 				hasVisibleProduct: true,
 				internal: false,
 				hidden: { note: "Add real product photos and we'll relist you." },
+				featuredIn: [],
 			},
 		});
 		expect(screen.getByText(/Kedaipal has hidden your store/)).toBeTruthy();
@@ -128,7 +149,12 @@ describe("MarketplaceCard — hidden by Kedaipal", () => {
 	test("outranks the seller's own opt-out — flipping the switch would not list it", () => {
 		renderCard({
 			unlisted: true,
-			readiness: { hasVisibleProduct: true, internal: false, hidden: {} },
+			readiness: {
+				hasVisibleProduct: true,
+				internal: false,
+				hidden: {},
+				featuredIn: [],
+			},
 		});
 		expect(screen.getByText(/Kedaipal has hidden your store/)).toBeTruthy();
 		expect(
@@ -140,7 +166,12 @@ describe("MarketplaceCard — hidden by Kedaipal", () => {
 	test("the switch's toast says what the switch did, never that the store is shown", async () => {
 		const onSave = renderCard({
 			unlisted: true,
-			readiness: { hasVisibleProduct: true, internal: false, hidden: {} },
+			readiness: {
+				hasVisibleProduct: true,
+				internal: false,
+				hidden: {},
+				featuredIn: [],
+			},
 		});
 		fireEvent.click(screen.getByRole("switch", { name: /List my store/ }));
 		expect(onSave).toHaveBeenCalledWith({ marketplaceListed: true });
