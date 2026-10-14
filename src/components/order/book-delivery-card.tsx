@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
+import type { DeliveryJobStatus } from "../../../convex/lib/deliveryJobs";
 import {
 	formatFulfilmentDateTime,
 	hhmmFromMinutes,
@@ -29,6 +30,11 @@ import {
 import type { LalamoveMarket } from "../../../convex/lib/lalamove";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import { formatCountdown } from "../../lib/countdown";
+import {
+	JOB_TONE_CLASS,
+	jobStatusLabel,
+	jobStatusTone,
+} from "../../lib/delivery-job-status";
 import {
 	dispatchBlockCopy,
 	riderContactFallbackCopy,
@@ -1320,34 +1326,17 @@ function JobStatusPill({
 	status,
 	collection,
 }: {
-	status: string;
+	status: DeliveryJobStatus;
 	collection: boolean;
 }) {
-	// Delivered is a terminal, settled state — match the order status badge's
-	// green rather than the in-progress mint. Collection trips end at the
-	// SELLER's outlet, so "Delivered" would misread — "Arrived" it is.
-	if (status === "completed") {
-		return (
-			<span className="rounded-full bg-green-100 px-2.5 py-1 text-xs font-medium text-green-800 dark:bg-green-950 dark:text-green-200">
-				{collection ? "Arrived" : "Delivered"}
-			</span>
-		);
-	}
-	const label =
-		status === "assigning"
-			? "Finding rider"
-			: status === "ongoing"
-				? collection
-					? "Heading to customer"
-					: "Rider on the way"
-				: status === "picked_up"
-					? collection
-						? "Collected"
-						: "Picked up"
-					: status;
+	// Delivered is a terminal, settled state — the order status badge's green
+	// rather than the in-progress mint. Words from the shared author, so this
+	// card and the Deliveries page never disagree.
 	return (
-		<span className="rounded-full bg-accent/15 px-2.5 py-1 text-xs font-medium text-accent-emphasis">
-			{label}
+		<span
+			className={`rounded-full px-2.5 py-1 text-xs font-medium ${JOB_TONE_CLASS[jobStatusTone(status)]}`}
+		>
+			{jobStatusLabel(status, { provider: "lalamove", collection })}
 		</span>
 	);
 }

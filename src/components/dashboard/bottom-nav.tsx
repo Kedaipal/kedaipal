@@ -14,6 +14,7 @@ import {
 	Siren,
 	Store,
 	Ticket,
+	Truck,
 	Users,
 } from "lucide-react";
 import { Dialog as MorePrimitive } from "radix-ui";
@@ -63,8 +64,10 @@ type Tab = {
  * list instead of fighting for a 7th tab. See docs/app-redesign.md.
  */
 const MORE_ROUTES = [
+	"/app/deliveries",
 	"/app/products",
 	"/app/customers",
+	"/app/vouchers",
 	"/app/settings",
 	"/app/poster",
 ] as const;
@@ -284,6 +287,7 @@ function MoreTab({
 	crmLocked?: boolean;
 	vouchersLocked?: boolean;
 }) {
+	const ordersPerm = usePermission("orders");
 	const productsPerm = usePermission("products");
 	const customersPerm = usePermission("customers");
 	const vouchersPerm = usePermission("vouchers");
@@ -310,6 +314,16 @@ function MoreTab({
 					style={{ bottom: "calc(var(--app-bottomnav-h, 4.75rem) + 0.5rem)" }}
 				>
 					<MorePrimitive.Title className="sr-only">More</MorePrimitive.Title>
+					{/* First: it is the Orders tab's follow-through (86eye9xd4). */}
+					{ordersPerm.canRead ? (
+						<MoreRow
+							to="/app/deliveries"
+							icon={Truck}
+							label="Deliveries"
+							sub="Parcels to send & couriers on the road"
+							onNavigate={close}
+						/>
+					) : null}
 					{productsPerm.canRead ? (
 						<MoreRow
 							to="/app/products"

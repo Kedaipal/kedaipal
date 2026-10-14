@@ -15,16 +15,19 @@
  * cost a real vendor 26 hours) rides the key step.
  */
 
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useAction } from "convex/react";
 import { ExternalLink, FlaskConical } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
+import type { Id } from "../../../convex/_generated/dataModel";
 import type { DeliveryBookingSummary } from "../../../convex/retailers";
 import { useActAsRetailerId } from "../../hooks/useActAs";
 import { clientEnv } from "../../lib/env";
-import { convexErrorMessage } from "../../lib/format";
+import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -55,10 +58,12 @@ type BookingPatch = {
 };
 
 export function LalamoveIntegrationCard({
+	retailerId,
 	deliveryBooking,
 	businessAddress,
 	onSave,
 }: {
+	retailerId: Id<"retailers">;
 	deliveryBooking: DeliveryBookingSummary | undefined;
 	/** The store's pickup point — where every rider is sent. Edited under
 	 * Fulfilment; this card only reports whether it's there. */
@@ -75,6 +80,14 @@ export function LalamoveIntegrationCard({
 	const [showPaste, setShowPaste] = useState(false);
 
 	const hasStoredKey = !!deliveryBooking?.apiKeyHint;
+	// The balance Lalamove last reported (86eye9xd4, 6A) — shown once, beside
+	// the key, as proof the key works. The daily view is on Deliveries.
+	const wallet = useQuery(
+		convexQuery(
+			api.courierWallets.lalamoveWallet,
+			hasStoredKey ? { retailerId } : "skip",
+		),
+	).data;
 	const typedBothKeys = apiKey.trim().length > 0 && apiSecret.trim().length > 0;
 	const webhookKnown = deliveryBooking?.webhookRegisteredAt !== undefined;
 	const doneCount =
@@ -214,6 +227,21 @@ export function LalamoveIntegrationCard({
 									…{deliveryBooking?.apiKeyHint}
 								</span>{" "}
 								·{" "}
+								{wallet ? (
+									<>
+										wallet{" "}
+										<span
+											className={
+												wallet.low
+													? "font-semibold text-amber-700 dark:text-amber-300"
+													: "font-medium text-foreground"
+											}
+										>
+											{formatPrice(wallet.balance, wallet.currency)}
+										</span>{" "}
+										·{" "}
+									</>
+								) : null}
 								<button
 									type="button"
 									onClick={() => setEditingKeys(true)}

@@ -96,6 +96,9 @@ export type DeliveriesOverview = {
 		needsAttention: number;
 		toShip: number;
 		inTransit: number;
+		/** Packed + paid parcels whose despatch label prints — the same
+		 * predicate as the print queue (`isReadyToShipForLabel`). */
+		labelsReady: number;
 	};
 	/** This calendar month's successful-or-live bookings and what they cost. */
 	month: { start: number; bookings: number; cost: number; partial: boolean };
@@ -270,6 +273,7 @@ export const overview = query({
 				needsAttention,
 				toShip: toShipAll.length,
 				inTransit: inTransitAll.length,
+				labelsReady: packed.filter(isReadyToShipForLabel).length,
 			},
 			month,
 			// Oldest first — the parcel that's waited longest goes out first.

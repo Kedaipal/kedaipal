@@ -29,6 +29,7 @@ import { Route as ClaimTokenRouteImport } from './routes/claim.$token'
 import { Route as AppSettingsRouteImport } from './routes/app.settings'
 import { Route as AppPosterRouteImport } from './routes/app.poster'
 import { Route as AppInsightsRouteImport } from './routes/app.insights'
+import { Route as AppDeliveriesRouteImport } from './routes/app.deliveries'
 import { Route as AppCheckoutRouteImport } from './routes/app.checkout'
 import { Route as SlugCheckoutRouteImport } from './routes/$slug_.checkout'
 import { Route as AppVouchersIndexRouteImport } from './routes/app.vouchers.index'
@@ -149,6 +150,11 @@ const AppInsightsRoute = AppInsightsRouteImport.update({
   path: '/insights',
   getParentRoute: () => AppRoute,
 } as any)
+const AppDeliveriesRoute = AppDeliveriesRouteImport.update({
+  id: '/deliveries',
+  path: '/deliveries',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppCheckoutRoute = AppCheckoutRouteImport.update({
   id: '/checkout',
   path: '/checkout',
@@ -260,6 +266,7 @@ export interface FileRoutesByFullPath {
   '/terms': typeof TermsRoute
   '/$slug/checkout': typeof SlugCheckoutRoute
   '/app/checkout': typeof AppCheckoutRoute
+  '/app/deliveries': typeof AppDeliveriesRoute
   '/app/insights': typeof AppInsightsRoute
   '/app/poster': typeof AppPosterRoute
   '/app/settings': typeof AppSettingsRoute
@@ -300,6 +307,7 @@ export interface FileRoutesByTo {
   '/terms': typeof TermsRoute
   '/$slug/checkout': typeof SlugCheckoutRoute
   '/app/checkout': typeof AppCheckoutRoute
+  '/app/deliveries': typeof AppDeliveriesRoute
   '/app/insights': typeof AppInsightsRoute
   '/app/poster': typeof AppPosterRoute
   '/app/settings': typeof AppSettingsRoute
@@ -342,6 +350,7 @@ export interface FileRoutesById {
   '/terms': typeof TermsRoute
   '/$slug_/checkout': typeof SlugCheckoutRoute
   '/app/checkout': typeof AppCheckoutRoute
+  '/app/deliveries': typeof AppDeliveriesRoute
   '/app/insights': typeof AppInsightsRoute
   '/app/poster': typeof AppPosterRoute
   '/app/settings': typeof AppSettingsRoute
@@ -385,6 +394,7 @@ export interface FileRouteTypes {
     | '/terms'
     | '/$slug/checkout'
     | '/app/checkout'
+    | '/app/deliveries'
     | '/app/insights'
     | '/app/poster'
     | '/app/settings'
@@ -425,6 +435,7 @@ export interface FileRouteTypes {
     | '/terms'
     | '/$slug/checkout'
     | '/app/checkout'
+    | '/app/deliveries'
     | '/app/insights'
     | '/app/poster'
     | '/app/settings'
@@ -466,6 +477,7 @@ export interface FileRouteTypes {
     | '/terms'
     | '/$slug_/checkout'
     | '/app/checkout'
+    | '/app/deliveries'
     | '/app/insights'
     | '/app/poster'
     | '/app/settings'
@@ -658,6 +670,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppInsightsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/app/deliveries': {
+      id: '/app/deliveries'
+      path: '/deliveries'
+      fullPath: '/app/deliveries'
+      preLoaderRoute: typeof AppDeliveriesRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/app/checkout': {
       id: '/app/checkout'
       path: '/checkout'
@@ -796,6 +815,7 @@ declare module '@tanstack/react-router' {
 
 interface AppRouteChildren {
   AppCheckoutRoute: typeof AppCheckoutRoute
+  AppDeliveriesRoute: typeof AppDeliveriesRoute
   AppInsightsRoute: typeof AppInsightsRoute
   AppPosterRoute: typeof AppPosterRoute
   AppSettingsRoute: typeof AppSettingsRoute
@@ -819,6 +839,7 @@ interface AppRouteChildren {
 
 const AppRouteChildren: AppRouteChildren = {
   AppCheckoutRoute: AppCheckoutRoute,
+  AppDeliveriesRoute: AppDeliveriesRoute,
   AppInsightsRoute: AppInsightsRoute,
   AppPosterRoute: AppPosterRoute,
   AppSettingsRoute: AppSettingsRoute,

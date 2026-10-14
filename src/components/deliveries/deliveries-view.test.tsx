@@ -1,0 +1,238 @@
+// @vitest-environment jsdom
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+	DeliveriesOverview,
+	DeliveryJobRow,
+	ParcelRow,
+} from "../../../convex/deliveries";
+
+/**
+ * The Deliveries page body (86eye9xd4, 6A): it adapts to how the store ships,
+ * every booking row carries the one action its state needs, and a store with
+ * nothing to show is told how deliveries get here.
+ */
+
+vi.mock("@tanstack/react-router", () => ({
+	Link: ({
+		to,
+		params: _p,
+		search: _s,
+		...props
+	}: Record<string, unknown> & { to?: string }) => <a href={to} {...props} />,
+}));
+vi.mock("../dashboard/print-labels-dialog", () => ({
+	PrintLabelsDialog: ({ open }: { open: boolean }) =>
+		open ? <div role="dialog">print queue</div> : null,
+}));
+
+import { deliveriesHomeRows } from "../home/deliveries-card";
+import { DeliveriesView, monthGlance } from "./deliveries-view";
+
+afterEach(cleanup);
+
+function job(over: Partial<DeliveryJobRow>): DeliveryJobRow {
+	return {
+		jobId: `j${Math.random()}` as never,
+		orderId: "o1" as never,
+		shortId: "ORD-1041",
+		provider: "lalamove",
+		status: "ongoing",
+		group: "active",
+		direction: "standard",
+		carrier: "Azman",
+		vehicle: "Bike",
+		cost: 1160,
+		createdAt: 1,
+		orderSettled: false,
+		hasProof: false,
+		gated: false,
+		...over,
+	};
+}
+
+function parcel(over: Partial<ParcelRow>): ParcelRow {
+	return {
+		orderId: `p${Math.random()}` as never,
+		shortId: "ORD-1044",
+		destination: "Kuching, Sarawak",
+		deliveryFee: 3000,
+		labelReady: true,
+		gated: false,
+		...over,
+	};
+}
+
+function overview(over: Partial<DeliveriesOverview> = {}): DeliveriesOverview {
+	return {
+		currency: "MYR",
+		wallet: null,
+		booksCouriers: false,
+		shipsParcels: false,
+		jobs: [],
+		counts: {
+			active: 0,
+			needsAttention: 0,
+			toShip: 0,
+			inTransit: 0,
+			labelsReady: 0,
+		},
+		month: {
+			start: Date.UTC(2026, 9, 1),
+			bookings: 0,
+			cost: 0,
+			partial: false,
+		},
+		toShip: [],
+		inTransit: [],
+		...over,
+	};
+}
+
+const renderView = (o: DeliveriesOverview) =>
+	render(
+		<DeliveriesView overview={o} retailerId={"r1" as never} paperLabel="A6" />,
+	);
+
+describe("DeliveriesView", () => {
+	it("a store that doesn't deliver is told how deliveries get here", () => {
+		renderView(overview());
+		expect(screen.getByText("No deliveries yet")).toBeTruthy();
+		expect(screen.getByRole("link", { name: "Set up delivery" })).toBeTruthy();
+	});
+
+	it("a parcel seller sees the queue, oldest first, with labels one tap away", () => {
+		renderView(
+			overview({
+				shipsParcels: true,
+				counts: {
+					active: 0,
+					needsAttention: 0,
+					toShip: 2,
+					inTransit: 0,
+					labelsReady: 2,
+				},
+				toShip: [
+					parcel({ shortId: "ORD-1043" }),
+					parcel({ shortId: "ORD-1044", gated: true, destination: undefined }),
+				],
+			}),
+		);
+		expect(screen.getByText("2 parcels")).toBeTruthy();
+		expect(screen.getAllByRole("link", { name: "Add number" })).toHaveLength(2);
+		// A gated order keeps its number and says why the rest is missing.
+		expect(screen.getByText(/Waiting on credits/)).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: /Print labels/ }));
+		expect(screen.getByRole("dialog")).toBeTruthy();
+	});
+
+	it("labels at zero are disabled with their reason, never a dead click", () => {
+		renderView(overview({ shipsParcels: true }));
+		const print = screen.getByRole("button", { name: /Print labels/ });
+		expect((print as HTMLButtonElement).disabled).toBe(true);
+		expect(print.getAttribute("title")).toMatch(/Nothing is packed and paid/);
+		expect(screen.getByText("All out")).toBeTruthy();
+	});
+
+	it("each booking carries the one action its state needs", () => {
+		renderView(
+			overview({
+				booksCouriers: true,
+				counts: {
+					active: 1,
+					needsAttention: 1,
+					toShip: 0,
+					inTransit: 0,
+					labelsReady: 0,
+				},
+				jobs: [
+					job({ shortId: "ORD-1", shareLink: "https://share.lalamove.com/x" }),
+					job({
+						shortId: "ORD-2",
+						status: "completed",
+						group: "completed",
+						hasProof: true,
+					}),
+					job({ shortId: "ORD-3", status: "rejected", group: "failed" }),
+					job({
+						shortId: "ORD-4",
+						status: "expired",
+						group: "failed",
+						orderSettled: true,
+					}),
+				],
+			}),
+		);
+		expect(screen.getByText("1 to rebook")).toBeTruthy();
+		expect(
+			screen.getByRole("link", { name: /Track/ }).getAttribute("href"),
+		).toBe("https://share.lalamove.com/x");
+		expect(screen.getByRole("link", { name: "Photo" })).toBeTruthy();
+		// Only the failure that still matters asks for a rebook.
+		expect(screen.getAllByRole("link", { name: "Rebook" })).toHaveLength(1);
+		expect(screen.getByText("Rider on the way")).toBeTruthy();
+	});
+
+	it("filters bookings by state, and an empty filter says so", () => {
+		renderView(
+			overview({
+				booksCouriers: true,
+				jobs: [job({ shortId: "ORD-1" })],
+			}),
+		);
+		fireEvent.click(screen.getByRole("button", { name: /Failed/ }));
+		expect(screen.getByText("No failed bookings.")).toBeTruthy();
+		expect(screen.queryByText("ORD-1")).toBeNull();
+	});
+
+	it("warns about a low wallet before a booking fails", () => {
+		renderView(
+			overview({
+				booksCouriers: true,
+				wallet: { balance: 1240, currency: "MYR", at: 1, low: true },
+			}),
+		);
+		expect(screen.getByLabelText("Lalamove wallet low")).toBeTruthy();
+	});
+});
+
+describe("monthGlance + Home rows", () => {
+	it("marks a month the scan couldn't finish as a floor", () => {
+		expect(
+			monthGlance(
+				overview({
+					month: {
+						start: Date.UTC(2026, 9, 1),
+						bookings: 23,
+						cost: 41200,
+						partial: true,
+					},
+				}),
+			),
+		).toMatch(/Oct · 23\+ · RM\s?412\.00/);
+	});
+
+	it("Home leads with what needs doing", () => {
+		const rows = deliveriesHomeRows(
+			overview({
+				booksCouriers: true,
+				shipsParcels: true,
+				counts: {
+					active: 2,
+					needsAttention: 1,
+					toShip: 4,
+					inTransit: 6,
+					labelsReady: 0,
+				},
+				month: { start: 0, bookings: 23, cost: 41200, partial: false },
+			}),
+		);
+		expect(rows.map((r) => r.label)).toEqual([
+			"Needs attention",
+			"To ship",
+			"On the road",
+			"In transit",
+			"This month",
+		]);
+	});
+});

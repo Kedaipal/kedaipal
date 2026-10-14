@@ -16,6 +16,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const registerWebhook = vi.fn();
 vi.mock("convex/react", () => ({ useAction: () => registerWebhook }));
+const wallet = vi.hoisted(() => ({ current: null as unknown }));
+vi.mock("@convex-dev/react-query", () => ({
+	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
+}));
+vi.mock("@tanstack/react-query", () => ({
+	useQuery: () => ({ data: wallet.current }),
+}));
 vi.mock("../../hooks/useActAs", () => ({
 	useActAsRetailerId: () => undefined,
 }));
@@ -53,6 +60,7 @@ function renderCard(overrides: Partial<Props> = {}) {
 	const onSave = vi.fn().mockResolvedValue({ ok: true });
 	render(
 		<LalamoveIntegrationCard
+			retailerId={"r1" as never}
 			deliveryBooking={KEYED}
 			businessAddress={HQ}
 			onSave={onSave}
@@ -65,6 +73,7 @@ function renderCard(overrides: Partial<Props> = {}) {
 afterEach(() => {
 	cleanup();
 	vi.clearAllMocks();
+	wallet.current = null;
 });
 
 describe("LalamoveIntegrationCard — setup checklist", () => {
@@ -144,6 +153,12 @@ describe("LalamoveIntegrationCard — setup checklist", () => {
 				},
 			}),
 		);
+	});
+
+	it("shows the reported wallet beside the key, amber when low (6A)", () => {
+		wallet.current = { balance: 1240, currency: "MYR", at: 1, low: true };
+		renderCard();
+		expect(screen.getByText("RM 12.40").className).toContain("amber");
 	});
 
 	it("sandbox keys say what they cost on the key step", () => {

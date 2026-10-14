@@ -101,6 +101,7 @@ export function IntegrationsTab({
 				highlight={ring(SPOTLIGHT_ANCHOR.lalamove.anchor)}
 			>
 				<LalamoveIntegrationCard
+					retailerId={retailerId}
 					deliveryBooking={deliveryBooking}
 					businessAddress={businessAddress}
 					onSave={onSave}

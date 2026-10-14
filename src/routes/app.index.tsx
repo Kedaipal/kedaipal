@@ -24,7 +24,9 @@ import { GreetingChecklistRow } from "../components/dashboard/greeting-checklist
 import { ShareLinkChecklistRow } from "../components/dashboard/share-link-checklist-row";
 import { StorefrontQrDialog } from "../components/dashboard/storefront-qr-dialog";
 import { WhiteGloveCard } from "../components/dashboard/white-glove-card";
+import { LowWalletBanner } from "../components/deliveries/deliveries-view";
 import { ActionStrip } from "../components/home/action-strip";
+import { DeliveriesHomeCard } from "../components/home/deliveries-card";
 import { EmptySalesCard } from "../components/home/empty-sales-card";
 import { ExceptionRows } from "../components/home/exception-rows";
 import { HomeSkeleton } from "../components/home/home-skeleton";
@@ -96,6 +98,7 @@ const PLAN_AHEAD_DAYS = 7;
 function DashboardHome() {
 	const retailer = useDashboardRetailer();
 	const canSeeInsights = usePermission("insights").canRead;
+	const canSeeOrders = usePermission("orders").canRead;
 	const navigate = useNavigate({ from: "/app" });
 	const search = Route.useSearch();
 	const period: HomePeriod = parseHomePeriod(search.p);
@@ -114,6 +117,14 @@ function DashboardHome() {
 			retailer
 				? { retailerId: retailer._id, bucket: "all" as const, limit: 1 }
 				: "skip",
+		),
+	).data;
+	// The Deliveries page's own read (86eye9xd4, 6A) — Home's card and the
+	// low-wallet banner share its cache, so the page opens instantly.
+	const deliveries = useQuery(
+		convexQuery(
+			api.deliveries.overview,
+			retailer && canSeeOrders ? { retailerId: retailer._id } : "skip",
 		),
 	).data;
 	const pickupStatus = useQuery(
@@ -461,6 +472,8 @@ function DashboardHome() {
 					navigate({ to: "/app/settings", search: { tab, fix: key } })
 				}
 			/>
+			{/* Before the next booking fails, not after (86eye9xd4, 6A). */}
+			<LowWalletBanner wallet={deliveries?.wallet ?? null} />
 
 			{phase === "new" ? <WelcomeCard slug={retailer.slug} /> : null}
 
@@ -492,6 +505,11 @@ function DashboardHome() {
 					{exceptionRows}
 					{planAheadCard}
 				</>
+			) : null}
+			{/* The orders followed out the door — after the money and what
+			    needs a look, before setup (86eye9xd4, 6A). */}
+			{phase !== "new" && phase !== "waiting" && deliveries ? (
+				<DeliveriesHomeCard overview={deliveries} />
 			) : null}
 			{phase === "new" || phase === "waiting" ? null : checklist}
 

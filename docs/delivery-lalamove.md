@@ -405,7 +405,7 @@ secrets → verify → act → ack. Lalamove-specific twists:
 | `ORDER_AMOUNT_CHANGED` | **after** matching/completion when the final charge differs from the quote — waiting-time fees, priority fee/tip added, toll adjustments | `costActual` updated on the job | the card's "Booking cost" updates reactively (the drift ledger vs buyer-paid fee) | nothing — buyer price is frozen |
 | `ORDER_REPLACED` | Lalamove's **cancel-and-clone**: for post-match adjustments THEY cancel the original and re-create it under a new orderId (sequence: CANCELED old → ORDER_REPLACED → clone's own events) | job repointed to the new id, **revived** to "assigning", stale failure cleared | card returns to active; if the clone-cancel briefly emailed a failure, the booking visibly recovers (rare, self-healing) | nothing |
 | `POD_STATUS_CHANGED` | rider uploaded the drop-off photo / signature | trigger only — the truth is read from `GET /v3/orders` by the idempotent `fetchPodImages` (also scheduled at COMPLETED, whichever lands first wins; the loser's blobs are cleaned) | photo thumbnails on the delivered dispatch card | **"Delivery photo" card on the order page** — page-only (`86eyd63r8`) |
-| `WALLET_BALANCE_CHANGED` | vendor wallet balance moved | logged only (proactive low-balance banner = named follow-up) | — | — |
+| `WALLET_BALANCE_CHANGED` | vendor wallet balance moved | stored on `courierWallets` (attributed by key fingerprint, verified by the store's secret) → the low-wallet banner + balance on Deliveries / Home / Integrations ([`deliveries.md`](./deliveries.md#the-courier-wallet)) | — | — |
 | `ORDER_CREATED` (undocumented but real) | at booking | logged only | — | — |
 
 **Proof of delivery (POD) — rider drop-off photo:** every placed order
@@ -1083,8 +1083,6 @@ Full step table, credential rules + the POD injector: [`dev-scripts.md`](./dev-s
 
 ## Follow-ups (named, not built)
 
-- Low-balance banner from `WALLET_BALANCE_CHANGED` (store last-known
-  balance, warn before a booking ever fails).
 - Prompt to cancel the Lalamove job inside the order-cancel flow (today the
   job card's cancel button is the path).
 - Multi-outlet origin (per-dispatch origin picker) — dispatch already reads
