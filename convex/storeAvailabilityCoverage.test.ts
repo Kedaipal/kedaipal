@@ -74,6 +74,29 @@ describe("every order door asks whether the store takes orders", () => {
 	});
 });
 
+describe("an offline store's public catalogue answers empty (PR #369 review)", () => {
+	// The buyer routes gate on `getRetailerBySlug` first, but these are public
+	// Convex queries: a direct call must not hand out an offline store's
+	// catalogue either. A new public catalogue read belongs on this list.
+	const READS: Array<[file: string, fn: string]> = [
+		["products.ts", "list"],
+		["products.ts", "getPublicBySlug"],
+		["products.ts", "popularProducts"],
+		["categories.ts", "listActivePublic"],
+		["categories.ts", "getPublicPage"],
+	];
+	for (const [file, fn] of READS) {
+		test(`${file.replace(/\.ts$/, "")}.${fn} checks isStoreOffline`, () => {
+			const text = sources.find((s) => s.file === file)?.text ?? "";
+			const start = text.indexOf(`export const ${fn} = query(`);
+			expect(start, `${fn} not found in ${file}`).toBeGreaterThan(-1);
+			const next = text.indexOf("\nexport ", start + 1);
+			const body = text.slice(start, next === -1 ? undefined : next);
+			expect(body.includes("isStoreOffline(")).toBe(true);
+		});
+	}
+});
+
 describe("the hold stamp is only read through the resolver", () => {
 	// Files allowed to touch `orderingPausedAt`: the resolver's feeders (they
 	// pass it in as `holdPausedAt`) and the hold's own writer.

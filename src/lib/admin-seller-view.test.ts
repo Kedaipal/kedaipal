@@ -14,6 +14,7 @@ import {
 	isSellerFilter,
 	isSellerSort,
 	matchesSellerSearch,
+	reopenedToast,
 	SELLER_FILTERS,
 	sellerBucket,
 	sellerCompMenuItem,
@@ -833,5 +834,21 @@ describe("store availability in the directory (z8r3fdudf7)", () => {
 			paused._id,
 			offline._id,
 		]);
+	});
+});
+
+describe("reopenedToast — from the resolver's answer, never a status proxy (PR #369 review)", () => {
+	it("open: says so", () => {
+		expect(reopenedToast("Corks Out", { state: "open" })).toBe(
+			"Corks Out is open for orders again.",
+		);
+	});
+	it("names what still keeps orders off", () => {
+		expect(reopenedToast("Corks Out", { state: "paused", by: "hold" })).toMatch(
+			/still not taking orders — an Off-Season Hold\.$/,
+		);
+		expect(
+			reopenedToast("Corks Out", { state: "paused", by: "seller", note: "x" }),
+		).toMatch(/the seller's own pause\.$/);
 	});
 });

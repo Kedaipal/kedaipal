@@ -87,6 +87,44 @@ export async function offlineStoreIds(ctx: QueryCtx): Promise<Set<string>> {
 	);
 }
 
+/**
+ * The resolver for a walk over MANY stores (the /stores directory): the
+ * availability table is read ONCE and each store resolves from it in memory,
+ * instead of an indexed read per store on top of a full read for the offline
+ * filter (PR #369 review). Same answer as `storeAvailabilityOf`.
+ */
+export async function availabilityResolver(
+	ctx: QueryCtx,
+): Promise<(retailer: Doc<"retailers">) => StoreAvailability> {
+	const rows = new Map(
+		(await ctx.db.query("storeAvailability").collect()).map((r) => [
+			r.retailerId as string,
+			r,
+		]),
+	);
+	return (retailer) =>
+		resolveStoreAvailability({
+			holdPausedAt: retailer.orderingPausedAt,
+			row: rows.get(retailer._id),
+		});
+}
+
+/**
+ * Is this store OFFLINE (Kedaipal took it down)? For the public catalogue
+ * reads — product list, product page, category rail and page, the popular
+ * shelf — which answer empty for an offline store, so "no catalogue" holds
+ * for a direct Convex call too, not just for the routes that gate on
+ * `getRetailerBySlug` first (PR #369 review). One indexed read; offline is
+ * admin-only state, so the retailer row isn't needed. Paused stores keep
+ * their catalogue: buyers can still browse.
+ */
+export async function isStoreOffline(
+	ctx: QueryCtx,
+	retailerId: Id<"retailers">,
+): Promise<boolean> {
+	return (await loadAvailabilityRow(ctx, retailerId))?.adminMode === "offline";
+}
+
 /** The seller's switch: "Accepting orders" on or off, with an optional note
  * buyers see on the paused banner. Never touches billing. */
 export const setAcceptingOrders = mutation({

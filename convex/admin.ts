@@ -60,7 +60,7 @@ import {
 	resolveStoreAvailability,
 	type StoreAvailability,
 } from "./lib/storeAvailability";
-import { loadAvailabilityRow } from "./storeAvailability";
+import { loadAvailabilityRow, storeAvailabilityOf } from "./storeAvailability";
 import { loadSubscription, resolveAccess } from "./subscriptions";
 
 /** How many sellers the directory pulls. The Founding cohort is ~10 and the whole
@@ -741,12 +741,21 @@ export const setStoreAvailability = mutation({
 
 /** Lift Kedaipal's switch. The seller's own pause and a hold, if either is
  * on, keep speaking — a reopen never silently reopens what someone else shut. */
+/**
+ * "Reopen store" — lifts Kedaipal's switch only. Returns the store's state
+ * AFTERWARDS from the resolver, so the admin toast says what still keeps
+ * orders off (a hold, the seller's own pause) from the same author every
+ * door uses, never from a status proxy (PR #369 review).
+ */
 export const clearStoreAvailability = mutation({
 	args: { retailerId: v.id("retailers") },
-	handler: async (ctx, { retailerId }): Promise<void> => {
+	handler: async (ctx, { retailerId }): Promise<StoreAvailability> => {
 		const adminUserId = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
 		const row = await loadAvailabilityRow(ctx, retailerId);
-		if (!row || row.adminMode === undefined) return;
+		if (!row || row.adminMode === undefined)
+			return storeAvailabilityOf(ctx, retailer);
 		const now = Date.now();
 		await ctx.db.patch(row._id, {
 			adminMode: undefined,
@@ -762,6 +771,7 @@ export const clearStoreAvailability = mutation({
 			targetId: retailerId,
 			ts: now,
 		});
+		return storeAvailabilityOf(ctx, retailer);
 	},
 });
 

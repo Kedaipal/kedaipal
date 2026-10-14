@@ -30,6 +30,7 @@ import { STORE_PAUSE_NOTE_MAX } from "../../../convex/lib/storeAvailability";
 import { useActAs } from "../../hooks/useActAs";
 import {
 	highlightedThroughLabel,
+	reopenedToast,
 	sellerCompMenuItem,
 	sellerHighlight,
 } from "../../lib/admin-seller-view";
@@ -205,19 +206,10 @@ export function SellerManageMenu({
 	// Off-Season Hold still keeps orders off.
 	async function reopen() {
 		try {
-			await clearAvailability({ retailerId: seller._id });
-			// What's left underneath Kedaipal's switch, in the resolver's order.
-			const stillOff =
-				seller.subscriptionStatus === "on_hold"
-					? "an Off-Season Hold"
-					: seller.sellerPaused
-						? "the seller's own pause"
-						: undefined;
-			toast.success(
-				stillOff
-					? `Kedaipal's switch is off, but ${seller.storeName} is still not taking orders — ${stillOff}.`
-					: `${seller.storeName} is open for orders again.`,
-			);
+			// The server answers with what's left underneath Kedaipal's switch,
+			// from the resolver every order door uses.
+			const after = await clearAvailability({ retailerId: seller._id });
+			toast.success(reopenedToast(seller.storeName, after));
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		}

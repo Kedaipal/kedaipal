@@ -199,11 +199,47 @@ describe("Kedaipal's switch", () => {
 		const { owner, admin, retailerId, productId } = await seed(t);
 		await owner.mutation(api.storeAvailability.setAcceptingOrders, { retailerId, accepting: false });
 		await admin.mutation(api.admin.setStoreAvailability, { retailerId, mode: "offline" });
-		await admin.mutation(api.admin.clearStoreAvailability, { retailerId });
+		// The admin toast reads THIS — the resolver's answer, not a status proxy.
+		expect(
+			await admin.mutation(api.admin.clearStoreAvailability, { retailerId }),
+		).toMatchObject({ state: "paused", by: "seller" });
 
 		const status = await owner.query(api.storeAvailability.forSeller, { retailerId });
 		expect(status.availability).toMatchObject({ state: "paused", by: "seller" });
 		await expect(order(t, retailerId, productId)).rejects.toThrow(/isn't taking orders/);
+	});
+
+	test("reopening a store with nothing else holding it answers open", async () => {
+		const t = setup();
+		const { admin, retailerId } = await seed(t);
+		await admin.mutation(api.admin.setStoreAvailability, { retailerId, mode: "paused" });
+		expect(
+			await admin.mutation(api.admin.clearStoreAvailability, { retailerId }),
+		).toEqual({ state: "open" });
+	});
+
+	test("offline: the public catalogue reads answer EMPTY too, not just the routes (PR #369 review)", async () => {
+		const t = setup();
+		const { admin, retailerId, productId } = await seed(t);
+		const slug = await t.run(async (ctx) => (await ctx.db.get(productId))?.slug);
+		if (!slug) throw new Error("seeded product has no slug");
+		const read = async () => ({
+			list: await t.query(api.products.list, { retailerId }),
+			page: await t.query(api.products.getPublicBySlug, { retailerId, slug }),
+		});
+		// Baseline: the catalogue answers while open, so "empty" below is the
+		// switch and not a store with nothing in it.
+		const open = await read();
+		expect(open.list).toHaveLength(1);
+		expect(open.page).not.toBeNull();
+
+		// A Kedaipal PAUSE keeps the catalogue — buyers can still browse.
+		await admin.mutation(api.admin.setStoreAvailability, { retailerId, mode: "paused" });
+		expect((await read()).list).toHaveLength(1);
+
+		await admin.mutation(api.admin.setStoreAvailability, { retailerId, mode: "offline" });
+		expect(await read()).toEqual({ list: [], page: null });
+		expect(await t.query(api.categories.listActivePublic, { retailerId })).toEqual([]);
 	});
 
 	test("only an admin can set it, and every write is audited", async () => {

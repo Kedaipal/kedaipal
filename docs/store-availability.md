@@ -83,8 +83,18 @@ server-rendered head:** each route's loader returns
 `storeUnavailableHead`, which **replaces** the root's "index, follow". The
 first cut rendered the robots `<meta>` inside the component. React hoists
 that only in the browser, so the SSR HTML a crawler reads said "index,
-follow" under a generic title, and the hydrated page carried both tags. Kedaipal's switch is always **neutral** for
-buyers, never "suspended" or "unpaid" (the `lib/buyerPayments.ts` rule).
+follow" under a generic title, and the hydrated page carried both tags.
+**The public catalogue reads answer empty for an offline store too**
+(`products.list`, `products.getPublicBySlug`, `products.popularProducts`,
+`categories.listActivePublic`, `categories.getPublicPage`, via
+`isStoreOffline`), so "no catalogue" holds for a direct Convex call, not
+only for the routes that ask `getRetailerBySlug` first.
+`storeAvailabilityCoverage.test.ts` lists them, and a new public catalogue
+read belongs on that list. A **pause** keeps the catalogue: buyers can still
+browse. `bookings.availability` is left open: it takes a product id the
+caller already has and only says which nights are full, and every booking
+door refuses. Kedaipal's switch is always **neutral** for buyers, never
+"suspended" or "unpaid" (the `lib/buyerPayments.ts` rule).
 
 **Seller.** Settings → Store opens with the **Store status** card. It comes
 first because it is the most consequential setting there. "Accepting orders"
@@ -102,7 +112,11 @@ tap was refused.
 
 **Admin.** The Manage menu has **Pause ordering**, **Take store offline** and
 **Reopen store**, each confirmed with a note to the seller and audited
-(`admin.pauseStore`, `admin.takeStoreOffline`, `admin.reopenStore`). The
+(`admin.pauseStore`, `admin.takeStoreOffline`, `admin.reopenStore`).
+`clearStoreAvailability` returns the store's state **after** lifting the
+switch, from the resolver, and the toast (`reopenedToast`) names what still
+keeps orders off (a hold, the seller's own pause) from that answer, never from
+`subscriptionStatus`. The
 seller sheet shows a **Store status** row. The directory's status line names
 whose switch it is, and a **Paused / offline** filter chip sits in the front
 group.

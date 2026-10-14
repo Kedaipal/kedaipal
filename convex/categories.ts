@@ -23,6 +23,7 @@ import {
 	assertSubscriptionActive,
 	getAccess,
 } from "./subscriptions";
+import { isStoreOffline } from "./storeAvailability";
 
 const NAME_MAX = 60;
 const DESCRIPTION_MAX = 280;
@@ -190,6 +191,8 @@ export const listActivePublic = query({
 			productCount: number;
 		}>
 	> => {
+		// Offline (Kedaipal took the store down): no public catalogue (z8r3fdudf7).
+		if (await isStoreOffline(ctx, retailerId)) return [];
 		const rows = await ctx.db
 			.query("categories")
 			.withIndex("by_retailer_active", (q) =>
@@ -228,6 +231,8 @@ export const getPublicPage = query({
 	handler: async (ctx, { retailerId, categorySlug }) => {
 		const normalized = categorySlug.trim().toLowerCase();
 		if (normalized.length === 0) return null;
+		// Offline (Kedaipal took the store down): no public catalogue (z8r3fdudf7).
+		if (await isStoreOffline(ctx, retailerId)) return null;
 		const category = await ctx.db
 			.query("categories")
 			.withIndex("by_retailer_slug", (q) =>

@@ -1,5 +1,5 @@
 import { ConvexError, v } from "convex/values";
-import { offlineStoreIds } from "./storeAvailability";
+import { isStoreOffline, offlineStoreIds } from "./storeAvailability";
 import {
 	formatFulfilmentDate,
 	isMytMidnight,
@@ -879,6 +879,8 @@ function byActiveThenSort(a: Doc<"products">, b: Doc<"products">): number {
 export const list = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }) => {
+		// Offline (Kedaipal took the store down): no public catalogue (z8r3fdudf7).
+		if (await isStoreOffline(ctx, retailerId)) return [];
 		const rows = await ctx.db
 			.query("products")
 			.withIndex("by_retailer_active", (q) =>
@@ -2942,6 +2944,8 @@ export const getPublicBySlug = query({
 	handler: async (ctx, { retailerId, slug }) => {
 		const normalized = slug.trim().toLowerCase();
 		if (normalized.length === 0) return null;
+		// Offline (Kedaipal took the store down): no public catalogue (z8r3fdudf7).
+		if (await isStoreOffline(ctx, retailerId)) return null;
 		const indexed = await ctx.db
 			.query("products")
 			.withIndex("by_retailer_slug", (q) =>
@@ -3131,6 +3135,8 @@ export const popularProducts = query({
 		if (!isMytMidnight(since)) {
 			throw new ConvexError("since must be an MYT-midnight epoch");
 		}
+		// Offline (Kedaipal took the store down): no public catalogue (z8r3fdudf7).
+		if (await isStoreOffline(ctx, retailerId)) return [];
 		const recent = await ctx.db
 			.query("orders")
 			.withIndex("by_retailer", (q) =>

@@ -10,6 +10,7 @@ import {
 	highlightSource,
 } from "../../convex/lib/marketplaceListing";
 import { csvDate, toCsv } from "../../convex/lib/orderCsv";
+import type { StoreAvailability } from "../../convex/lib/storeAvailability";
 import { formatMobile, formatPrice, formatShortDate } from "./format";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -459,6 +460,21 @@ export function sellerExpiry(row: AdminSellerRow, now: number): SellerExpiry {
 
 /** Why the status is what it is, when the pill alone would leave the admin
  * guessing. Absent when the pill says it all. */
+/**
+ * The toast after "Reopen store" (`z8r3fdudf7`), from the state the server
+ * returns AFTER lifting Kedaipal's switch — the resolver's own answer, never
+ * a status proxy such as `subscriptionStatus === "on_hold"` (PR #369 review).
+ */
+export function reopenedToast(
+	storeName: string,
+	after: StoreAvailability,
+): string {
+	if (after.state === "open") return `${storeName} is open for orders again.`;
+	const stillOff =
+		after.by === "hold" ? "an Off-Season Hold" : "the seller's own pause";
+	return `Kedaipal's switch is off, but ${storeName} is still not taking orders — ${stillOff}.`;
+}
+
 export function sellerReason(row: AdminSellerRow): string | undefined {
 	if (row.unclaimed)
 		return row.pendingOwnerEmail
