@@ -17,6 +17,7 @@ import {
 	SHOWCASE_SCAN_CAP,
 	type ShowcaseState,
 	type ShowcaseTheme,
+	sanitizeShowcaseColor,
 	sanitizeShowcaseLabel,
 	sanitizeShowcaseTagline,
 	sanitizeShowcaseTitle,
@@ -24,7 +25,12 @@ import {
 	showcaseState,
 	showcaseThemeValidator,
 } from "./lib/showcase";
-import { type NotListedReason, notListedReason } from "./marketplace";
+import {
+	type NotListedReason,
+	notListedReason,
+	storeIsInternal,
+} from "./marketplace";
+import { loadSubscription } from "./subscriptions";
 
 /**
  * Marketplace showcases (z8r3fdr6mv) — see `lib/showcase.ts` for the rules
@@ -61,6 +67,8 @@ export type PublicShowcase = {
 	tagline?: string;
 	country: Country;
 	theme: ShowcaseTheme;
+	/** The `custom` look's colour; absent for every other look. */
+	customColor?: string;
 	coverImageUrl?: string;
 	startsAt?: number;
 	endsAt?: number;
@@ -110,6 +118,9 @@ export const listShowcases = query({
 				tagline: row.tagline,
 				country: row.country,
 				theme: row.theme,
+				...(row.theme === "custom" && row.customColor
+					? { customColor: row.customColor }
+					: {}),
 				coverImageUrl: await storageUrl(ctx, row.coverImageStorageId),
 				startsAt: row.startsAt,
 				endsAt: row.endsAt,
@@ -210,6 +221,9 @@ export type AdminShowcase = {
 	tagline?: string;
 	country: Country;
 	theme: ShowcaseTheme;
+	/** Kept across look switches (the editor restores it), so it can be set
+	 * while `theme` is not `custom`. */
+	customColor?: string;
 	coverImageUrl?: string;
 	startsAt?: number;
 	endsAt?: number;
@@ -257,6 +271,7 @@ async function toAdminShowcase(
 		tagline: row.tagline,
 		country: row.country,
 		theme: row.theme,
+		customColor: row.customColor,
 		coverImageUrl: await storageUrl(ctx, row.coverImageStorageId),
 		startsAt: row.startsAt,
 		endsAt: row.endsAt,
@@ -379,6 +394,7 @@ export const update = mutation({
 		tagline: v.optional(v.union(v.string(), v.null())),
 		country: v.optional(countryValidator),
 		theme: v.optional(showcaseThemeValidator),
+		customColor: v.optional(v.string()),
 		coverImageStorageId: v.optional(v.union(v.string(), v.null())),
 		startsAt: v.optional(v.union(v.number(), v.null())),
 		endsAt: v.optional(v.union(v.number(), v.null())),
@@ -394,6 +410,18 @@ export const update = mutation({
 				sanitizeShowcaseTagline(patch.tagline ?? undefined),
 			);
 		if (patch.theme !== undefined) next.theme = patch.theme;
+		if (patch.customColor !== undefined)
+			next.customColor = guarded(() =>
+				sanitizeShowcaseColor(patch.customColor ?? ""),
+			);
+		// The custom look IS its colour — without one there is nothing to
+		// paint, so the pair is refused rather than silently falling back.
+		if (
+			(next.theme ?? row.theme) === "custom" &&
+			(next.customColor ?? row.customColor) === undefined
+		) {
+			throw new ConvexError("Pick a colour for the custom look");
+		}
 		if (patch.startsAt !== undefined) next.startsAt = patch.startsAt ?? undefined;
 		if (patch.endsAt !== undefined) next.endsAt = patch.endsAt ?? undefined;
 		guarded(() =>
@@ -431,7 +459,10 @@ export const update = mutation({
  * one save from the editor, and the list is at most `SHOWCASE_MEMBER_CAP`
  * long, so a full replace is cheaper than a diff and can't half-apply.
  * Every store must exist and sit in the showcase's region; duplicates are
- * collapsed to the first mention.
+ * collapsed to the first mention. A Kedaipal or test store can't be ADDED —
+ * it is never listed on /stores, so it could only ever be a dead row (the
+ * picker greys it out with the same reason). One already in the list is left
+ * alone, so a save never fails on a row the admin didn't touch.
  */
 export const setMembers = mutation({
 	args: {
@@ -446,6 +477,8 @@ export const setMembers = mutation({
 	handler: async (ctx, { showcaseId, members }): Promise<void> => {
 		const adminUserId = await requireAdmin(ctx);
 		const row = await loadShowcase(ctx, showcaseId);
+		const already = new Set(row.members.map((m) => m.retailerId));
+		const adminIds = adminUserIds();
 		const seen = new Set<Id<"retailers">>();
 		const clean: Doc<"marketplaceShowcases">["members"] = [];
 		for (const member of members) {
@@ -456,6 +489,18 @@ export const setMembers = mutation({
 			if ((retailer.country ?? DEFAULT_COUNTRY) !== row.country) {
 				throw new ConvexError(
 					`${retailer.storeName} is not a ${row.country} store — a showcase's stores must all be in its region`,
+				);
+			}
+			if (
+				!already.has(member.retailerId) &&
+				storeIsInternal(
+					retailer,
+					await loadSubscription(ctx, retailer._id),
+					adminIds,
+				)
+			) {
+				throw new ConvexError(
+					`${retailer.storeName} is a Kedaipal or test store — it never shows on /stores`,
 				);
 			}
 			const label = guarded(() => sanitizeShowcaseLabel(member.label));

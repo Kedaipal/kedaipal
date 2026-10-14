@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { Tent } from "lucide-react";
-import { type ShowcaseTicketData, ticketPlace } from "../../lib/showcase";
+import type { ShowcaseTicketData } from "../../lib/showcase";
 import { cn } from "../../lib/utils";
 import { storeInitials } from "../storefront/storefront-header";
 import { AppImage } from "../ui/app-image";
@@ -43,7 +43,9 @@ export function ShowcaseTicket({
 	inert?: boolean;
 }) {
 	const { card } = ticket;
-	const place = ticketPlace(ticket);
+	// The stub carries the booth; the line under the name is where the store
+	// is from. Printing the label here too said "Booth A1" twice on one ticket.
+	const place = card.storeArea;
 	const initials = storeInitials(card.storeName);
 	return (
 		<Link

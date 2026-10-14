@@ -306,6 +306,83 @@ describe("members obey the directory's listable rule", () => {
 	});
 });
 
+describe("a Kedaipal or test store can't be added", () => {
+	test("adding one is refused by name; one already in the list survives a save", async () => {
+		const t = setup();
+		const listable = await seedListableStore(t, "user_sc_i1", "kedai-i1");
+		// Owned by an admin login ⇒ an internal store, never on /stores.
+		const internal = await seedListableStore(t, ADMIN, "house-demo");
+		const { asAdmin, showcaseId } = await createShowcase(t);
+		await expect(
+			asAdmin.mutation(api.showcases.setMembers, {
+				showcaseId,
+				members: [{ retailerId: listable }, { retailerId: internal }],
+			}),
+		).rejects.toThrow(/Kedaipal or test store/);
+		// A row that predates the rule is left alone: relabelling the OTHER
+		// member must not fail on a store the admin didn't touch.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(showcaseId, {
+				members: [{ retailerId: listable }, { retailerId: internal }],
+			});
+		});
+		await asAdmin.mutation(api.showcases.setMembers, {
+			showcaseId,
+			members: [
+				{ retailerId: listable, label: "Booth B4" },
+				{ retailerId: internal },
+			],
+		});
+		const admin = await asAdmin.query(api.showcases.getForAdmin, { showcaseId });
+		expect(admin?.members.map((m) => [m.slug, m.notListed])).toEqual([
+			["kedai-i1", null],
+			["house-demo", "internal"],
+		]);
+	});
+});
+
+describe("the custom look", () => {
+	test("custom needs a colour; a bad one is refused; buyers get it only on the custom look", async () => {
+		const t = setup();
+		const store = await seedListableStore(t, "user_sc_c1", "kedai-c1");
+		const { asAdmin, showcaseId } = await createShowcase(t);
+		await asAdmin.mutation(api.showcases.setMembers, {
+			showcaseId,
+			members: [{ retailerId: store }],
+		});
+		await asAdmin.mutation(api.showcases.publish, { showcaseId });
+
+		await expect(
+			asAdmin.mutation(api.showcases.update, { showcaseId, theme: "custom" }),
+		).rejects.toThrow(/Pick a colour/);
+		await expect(
+			asAdmin.mutation(api.showcases.update, {
+				showcaseId,
+				theme: "custom",
+				customColor: "pink",
+			}),
+		).rejects.toThrow(/#rrggbb/);
+
+		await asAdmin.mutation(api.showcases.update, {
+			showcaseId,
+			theme: "custom",
+			customColor: "#FF00AA",
+		});
+		let [pub] = await t.query(api.showcases.listShowcases);
+		expect(pub.theme).toBe("custom");
+		expect(pub.customColor).toBe("#ff00aa");
+
+		// Switching back to a curated look keeps the pick for the admin (so
+		// Custom restores it) but stops sending it to buyers.
+		await asAdmin.mutation(api.showcases.update, { showcaseId, theme: "plain" });
+		[pub] = await t.query(api.showcases.listShowcases);
+		expect(pub.theme).toBe("plain");
+		expect(pub.customColor).toBeUndefined();
+		const admin = await asAdmin.query(api.showcases.getForAdmin, { showcaseId });
+		expect(admin?.customColor).toBe("#ff00aa");
+	});
+});
+
 describe("ordering + the window rule at the door", () => {
 	test("reorder rewrites /stores order; buyers get it in that order", async () => {
 		const t = setup();

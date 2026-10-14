@@ -9,6 +9,7 @@ import type { Country } from "../../../convex/lib/country";
 import { SHOWCASE_MEMBER_CAP } from "../../../convex/lib/showcase";
 import { cn } from "../../lib/utils";
 import { StoreLogoTile } from "../storefront/storefront-header";
+import { BulkSelectRow } from "../ui/bulk-select-row";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import {
@@ -29,11 +30,13 @@ export type PickedStore = {
 
 /**
  * "Add stores" for a showcase (z8r3fdr6mv): the admin seller directory,
- * narrowed to the showcase's region, with search, select-all-matches and one
- * "Add N stores" button. A store that won't show on /stores (hidden,
- * opted out, internal) is still addable — the admin may be lining up a
- * booth that opens tomorrow — but its row says so, so nothing is a surprise
- * on the stage. Stores already in the showcase are shown ticked and
+ * narrowed to the showcase's region, with search, a tri-state select-all
+ * over the matches (the editor's own `BulkSelectRow` — one idea, one control)
+ * and one "Add N stores" button. A store hidden by Kedaipal or opted out is
+ * still addable — it can come back, and the admin may be lining up a booth
+ * that opens tomorrow — but its row says so. A Kedaipal or test store is
+ * NOT: it never lists, so it is greyed out with that reason, left out of
+ * select-all, and refused by `setMembers` too. Stores already in the showcase are shown ticked and
  * disabled rather than hidden: "why can't I find Rimba Gear?" is answered
  * by seeing it. Booth labels are set after adding, in the editor row.
  */
@@ -70,9 +73,10 @@ export function ShowcaseStorePicker({
 				s.storeName.toLowerCase().includes(q) ||
 				s.slug.toLowerCase().includes(q)),
 	);
-	const addable = candidates.filter((s) => !alreadyIn.has(s._id));
-	const allPicked =
-		addable.length > 0 && addable.every((s) => picked.has(s._id));
+	const addable = candidates.filter(
+		(s) => !alreadyIn.has(s._id) && !s.marketplace.internal,
+	);
+	const pickedHere = addable.filter((s) => picked.has(s._id)).length;
 	const overCap = picked.size > capacityLeft;
 
 	function toggle(id: Id<"retailers">) {
@@ -83,11 +87,13 @@ export function ShowcaseStorePicker({
 			return next;
 		});
 	}
-	function toggleAll() {
+	function toggleAll(selectAll: boolean) {
 		setPicked((prev) => {
 			const next = new Set(prev);
-			if (allPicked) for (const s of addable) next.delete(s._id);
-			else for (const s of addable) next.add(s._id);
+			for (const s of addable) {
+				if (selectAll) next.add(s._id);
+				else next.delete(s._id);
+			}
 			return next;
 		});
 	}
@@ -129,22 +135,25 @@ export function ShowcaseStorePicker({
 							className="pl-9"
 						/>
 					</div>
-					<div className="mt-1 flex items-center justify-between text-xs text-muted-foreground">
-						<span>
-							{sellerList === undefined
-								? "Loading…"
-								: `${candidates.length} ${candidates.length === 1 ? "match" : "matches"}${candidates.length - addable.length > 0 ? ` · ${candidates.length - addable.length} already in` : ""}`}
-						</span>
-						{addable.length > 0 ? (
-							<button
-								type="button"
-								onClick={toggleAll}
-								className="min-h-9 font-bold text-accent-emphasis"
-							>
-								{allPicked ? "Clear selection" : `Select all ${addable.length}`}
-							</button>
-						) : null}
-					</div>
+					<p className="mt-1 text-xs text-muted-foreground">
+						{sellerList === undefined
+							? "Loading…"
+							: `${candidates.length} ${candidates.length === 1 ? "match" : "matches"}${candidates.length - addable.length > 0 ? ` · ${candidates.length - addable.length} can't be added` : ""}`}
+					</p>
+					{addable.length > 1 ? (
+						<BulkSelectRow
+							label={
+								q.length > 0
+									? `All ${addable.length} matches`
+									: `All ${addable.length} stores`
+							}
+							selected={pickedHere}
+							total={addable.length}
+							unit="stores"
+							tone="master"
+							onToggle={toggleAll}
+						/>
+					) : null}
 				</SheetHeader>
 
 				<ul className="min-h-0 grow overflow-y-auto">
@@ -207,8 +216,9 @@ function PickerRow({
 	checked: boolean;
 	onToggle: () => void;
 }) {
+	const blocked = !inShowcase && seller.marketplace.internal;
 	const warning = seller.marketplace.internal
-		? "A Kedaipal or test store — never shown on /stores"
+		? "A Kedaipal or test store — never shown on /stores, can't be added"
 		: seller.marketplace.hidden
 			? "Hidden from /stores by Kedaipal — won't show"
 			: seller.marketplace.unlistedAt !== undefined
@@ -219,16 +229,16 @@ function PickerRow({
 			<label
 				className={cn(
 					"flex min-h-[60px] cursor-pointer items-center gap-3 border-b border-border/60 px-4 py-2.5 transition-colors hover:bg-muted/50 has-[:focus-visible]:bg-muted/50",
-					inShowcase && "cursor-default opacity-60",
+					(inShowcase || blocked) && "cursor-default opacity-60",
 				)}
 			>
 				<input
 					type="checkbox"
 					className="size-5 shrink-0 accent-primary"
 					checked={inShowcase || checked}
-					disabled={inShowcase}
+					disabled={inShowcase || blocked}
 					onChange={onToggle}
-					aria-label={`${seller.storeName}${inShowcase ? " (already in this showcase)" : ""}`}
+					aria-label={`${seller.storeName}${inShowcase ? " (already in this showcase)" : blocked ? " (can't be added — a Kedaipal or test store)" : ""}`}
 				/>
 				<StoreLogoTile storeName={seller.storeName} size="bar" />
 				<span className="flex min-w-0 flex-col">

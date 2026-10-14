@@ -86,7 +86,7 @@ function renderNav(props: Partial<BottomNavProps> = {}, initialPath = "/app") {
 		stub("/app/settings"),
 		stub("/app/admin/sellers"),
 		stub("/app/admin/billing"),
-		stub("/app/admin/marketplace"),
+		stub("/app/admin/showcases"),
 		stub("/app/admin/waba"),
 	]);
 	const router = createRouter({
@@ -191,7 +191,7 @@ describe("BottomNav — 5-tab bar + More sheet", () => {
 		renderNav({ adminNav: true }, "/app/admin/sellers");
 		await waitFor(() => expect(screen.getByText("Sellers")).toBeTruthy());
 		expect(screen.getByText("Billing")).toBeTruthy();
-		expect(screen.getByText("Marketplace")).toBeTruthy();
+		expect(screen.getByText("Showcases")).toBeTruthy();
 		expect(screen.getByText("WABA")).toBeTruthy();
 		expect(screen.queryByText("More")).toBeNull();
 		// Storeless admin has no seller app to return to → no "App" tab.

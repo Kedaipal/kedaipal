@@ -8,7 +8,7 @@ import { ShowcaseEditor } from "../components/admin/showcase-editor";
 import { Skeleton } from "../components/ui/skeleton";
 
 /** Admin · one showcase's editor (z8r3fdr6mv). */
-export const Route = createFileRoute("/app/admin/marketplace/$showcaseId")({
+export const Route = createFileRoute("/app/admin/showcases/$showcaseId")({
 	component: AdminShowcaseRoute,
 });
 

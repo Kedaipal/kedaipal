@@ -1,9 +1,10 @@
+import { useId } from "react";
 import type { ShowcaseTheme } from "../../../convex/lib/showcase";
 
 /**
  * The banner art behind a showcase title when the admin uploaded no cover
- * (z8r3fdr6mv). Drawn in the theme's own variables, so one drawing wears six
- * palettes; two scenes, picked by the theme's mood: an outdoors scene (hills,
+ * (z8r3fdr6mv). Drawn in the theme's own variables, so one drawing wears
+ * every palette (a custom colour included); two scenes, picked by the theme's mood: an outdoors scene (hills,
  * a tent, a fire) for the earthy themes, and a night-sky scene (stars, a
  * moon, a glow) for the rest. Purely decorative — `aria-hidden`, and it never
  * carries information the title doesn't.
@@ -16,6 +17,10 @@ export function ShowcaseArt({
 	className?: string;
 }) {
 	const outdoors = theme === "campfire" || theme === "sunset";
+	// Per-instance: the gradient's colour resolves where it is DEFINED, so a
+	// shared id let the first showcase on the page paint every other one's
+	// glow — two custom colours side by side made that visible.
+	const glowId = `sc-glow-${useId().replace(/:/g, "")}`;
 	return (
 		<svg
 			aria-hidden="true"
@@ -24,7 +29,7 @@ export function ShowcaseArt({
 			className={className}
 		>
 			<defs>
-				<radialGradient id={`sc-glow-${theme}`} cx="50%" cy="50%" r="50%">
+				<radialGradient id={glowId} cx="50%" cy="50%" r="50%">
 					<stop offset="0" stopColor="var(--sc-accent)" stopOpacity="0.5" />
 					<stop offset="1" stopColor="var(--sc-accent)" stopOpacity="0" />
 				</radialGradient>
@@ -53,13 +58,13 @@ export function ShowcaseArt({
 						d="M0 210 L48 170 L96 202 L150 156 L210 206 L262 168 L320 206 L400 182 L400 240 L0 240Z"
 						fill="var(--sc-a)"
 					/>
-					<circle cx="340" cy="206" r="46" fill={`url(#sc-glow-${theme})`} />
+					<circle cx="340" cy="206" r="46" fill={`url(#${glowId})`} />
 					<path d="M312 216 L340 170 L368 216Z" fill="var(--sc-accent)" />
 					<path d="M334 216 L340 200 L346 216Z" fill="var(--sc-a)" />
 				</>
 			) : (
 				<>
-					<circle cx="300" cy="200" r="70" fill={`url(#sc-glow-${theme})`} />
+					<circle cx="300" cy="200" r="70" fill={`url(#${glowId})`} />
 					<path
 						d="M0 200 Q100 150 200 200 T400 200 L400 240 L0 240Z"
 						fill="white"

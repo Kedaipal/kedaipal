@@ -4,12 +4,17 @@ import {
 	formatFulfilmentDate,
 	formatFulfilmentTime,
 } from "../../convex/lib/fulfilmentDate";
-import type { ShowcaseState, ShowcaseTheme } from "../../convex/lib/showcase";
+import {
+	type ShowcaseState,
+	type ShowcaseTheme,
+	showcaseState,
+} from "../../convex/lib/showcase";
 import type { NotListedReason } from "../../convex/marketplace";
 import type {
 	AdminShowcase,
 	AdminShowcaseMember,
 } from "../../convex/showcases";
+import { showcaseDaysLeft } from "./showcase";
 
 /**
  * Admin-side showcase derivations (z8r3fdr6mv) — pure, so the status pill,
@@ -25,12 +30,16 @@ export function showcaseStatusLabel(
 	switch (row.state) {
 		case "live": {
 			if (row.endsAt === undefined) return { label: "Live", tone: "live" };
-			const days = Math.ceil((row.endsAt - now) / DAY_MS);
+			// Calendar days in MYT — the buyer chip's own count, so the admin
+			// and the buyer never disagree on how long is left.
+			const days = showcaseDaysLeft(row.endsAt, now);
 			return {
 				label:
-					days <= 1
+					days <= 0
 						? "Live · ends today"
-						: `Live · ends in ${days} ${days === 1 ? "day" : "days"}`,
+						: days === 1
+							? "Live · ends tomorrow"
+							: `Live · ends in ${days} days`,
 				tone: "live",
 			};
 		}
@@ -122,6 +131,9 @@ export type ShowcaseDraft = {
 	tagline: string;
 	country: Country;
 	theme: ShowcaseTheme;
+	/** The colour wheel's pick — kept while another look is chosen, so
+	 * switching back to Custom restores it. */
+	customColor: string | undefined;
 	startsAt: number | undefined;
 	endsAt: number | undefined;
 	members: Array<{
@@ -136,6 +148,7 @@ export function draftFromRow(row: AdminShowcase): ShowcaseDraft {
 		tagline: row.tagline ?? "",
 		country: row.country,
 		theme: row.theme,
+		customColor: row.customColor,
 		startsAt: row.startsAt,
 		endsAt: row.endsAt,
 		members: row.members.map((m) => ({
@@ -160,6 +173,8 @@ export function describeChanges(
 	if (collapse(draft.tagline) !== (row.tagline ?? "")) changes.push("tagline");
 	if (draft.country !== row.country) changes.push("region");
 	if (draft.theme !== row.theme) changes.push("theme");
+	else if (draft.theme === "custom" && draft.customColor !== row.customColor)
+		changes.push("colour");
 	if (draft.startsAt !== row.startsAt || draft.endsAt !== row.endsAt)
 		changes.push("dates");
 	const before = row.members;
@@ -187,6 +202,93 @@ export function describeChanges(
 			);
 	}
 	return changes;
+}
+
+/**
+ * What pressing Save will do to buyers, from the DRAFT's dates — never the
+ * saved row's state. The first build read the saved state, so moving "Show
+ * from" into the future on a live showcase still said "Save · live on
+ * /stores now" while the save was about to take it off /stores.
+ *
+ * `button` is the Save label; `toast` the line after it lands.
+ */
+export function saveOutcome(
+	draft: Pick<ShowcaseDraft, "startsAt" | "endsAt">,
+	row: Pick<AdminShowcase, "publishedAt" | "state">,
+	now: number,
+): { button: string; toast: string } {
+	if (row.publishedAt === undefined)
+		return { button: "Save", toast: "Saved — still a draft." };
+	const next = showcaseState(
+		{
+			publishedAt: row.publishedAt,
+			startsAt: draft.startsAt,
+			endsAt: draft.endsAt,
+		},
+		now,
+	);
+	const wasLive = row.state === "live";
+	switch (next) {
+		case "live":
+			return {
+				button: "Save · live on /stores now",
+				toast: wasLive
+					? "Saved — live on /stores now."
+					: "Saved — it's on /stores now.",
+			};
+		case "scheduled": {
+			const at = formatDateTime(draft.startsAt ?? now);
+			return wasLive
+				? {
+						button: `Save · off /stores until ${at}`,
+						toast: `Saved — off /stores until ${at}.`,
+					}
+				: {
+						button: `Save · on /stores from ${at}`,
+						toast: `Saved — on /stores from ${at}.`,
+					};
+		}
+		default:
+			return wasLive
+				? {
+						button: "Save · takes it off /stores now",
+						toast: "Saved — it has ended and is off /stores.",
+					}
+				: {
+						button: "Save · already ended",
+						toast: "Saved — it has ended, so buyers don't see it.",
+					};
+	}
+}
+
+/**
+ * The saved row changed under an open editor — a save, a cover upload, or
+ * another admin. Each field the admin has NOT touched takes the new saved
+ * value; each field they have touched keeps their edit. The first build
+ * re-seeded the whole draft on every change, so uploading a cover silently
+ * threw away an unsaved title.
+ */
+export function rebaseDraft(
+	draft: ShowcaseDraft,
+	before: AdminShowcase,
+	after: AdminShowcase,
+): ShowcaseDraft {
+	const base = draftFromRow(before);
+	const next = draftFromRow(after);
+	const same = (a: unknown, b: unknown) =>
+		JSON.stringify(a) === JSON.stringify(b);
+	const pick = <K extends keyof ShowcaseDraft>(key: K): ShowcaseDraft[K] =>
+		same(draft[key], base[key]) ? next[key] : draft[key];
+	return {
+		title: pick("title"),
+		tagline: pick("tagline"),
+		country: pick("country"),
+		theme: pick("theme"),
+		customColor: pick("customColor"),
+		startsAt: pick("startsAt"),
+		endsAt: pick("endsAt"),
+		members: pick("members"),
+	};
 }
 
 /** The member row's one-line reason, in the admin's words. */

@@ -258,10 +258,10 @@ export function Sidebar({
 							collapsed={collapsed}
 						/>
 						<SidebarLink
-							to="/app/admin/marketplace"
+							to="/app/admin/showcases"
 							onClick={exitActAs}
 							icon={Sparkles}
-							label="Marketplace"
+							label="Showcases"
 							collapsed={collapsed}
 						/>
 						<SidebarLink

@@ -10,6 +10,7 @@ import { RegionToggle } from "../components/landing/landing-ui";
 import { FoundingShelf } from "../components/marketplace/founding-shelf";
 import {
 	ShowcaseBand,
+	ShowcaseDivider,
 	ShowcaseStage,
 } from "../components/marketplace/showcase-stage";
 import { SponsoredCard } from "../components/marketplace/sponsored-card";
@@ -413,7 +414,19 @@ function MarketplacePage() {
 							</p>
 						) : null}
 						{!refined && stageShowcase ? (
-							<div className="mt-5 flex flex-col gap-3">
+							<section
+								aria-label="Happening now"
+								className="mt-5 flex flex-col gap-3"
+							>
+								{focused ? (
+									// The focused view's own showcase is above; everything
+									// here is the OTHER ones, so they are all bands.
+									<ShowcaseDivider label="More happening now" />
+								) : (
+									<div className="px-5 lg:px-8">
+										<SectionHeading title="Happening now" />
+									</div>
+								)}
 								{focused ? (
 									<ShowcaseBand
 										showcase={stageShowcase.showcase}
@@ -429,6 +442,9 @@ function MarketplacePage() {
 										railClassName={RAIL_CLASS}
 									/>
 								)}
+								{!focused && bandShowcases.length > 0 ? (
+									<ShowcaseDivider label="More happening now" />
+								) : null}
 								{bandShowcases.map((s) => (
 									<ShowcaseBand
 										key={s.showcase.slug}
@@ -437,7 +453,7 @@ function MarketplacePage() {
 										now={now}
 									/>
 								))}
-							</div>
+							</section>
 						) : null}
 						{!refined && sponsored.length > 0 ? (
 							<section className="mt-7 flex flex-col gap-3">

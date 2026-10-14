@@ -86,6 +86,22 @@ describe("ShowcaseTicket", () => {
 		expect(screen.getByText("Open now")).toBeTruthy();
 	});
 
+	it("the booth is said ONCE — on the stub; the line under the name is the area", async () => {
+		renderInRouter(
+			<ShowcaseTicket
+				ticket={{
+					card: card("rimba-gear", { storeArea: "Shah Alam" }),
+					label: "Booth B4",
+				}}
+				now={NOW}
+			/>,
+		);
+		await screen.findByRole("link");
+		expect(screen.getByText("Shah Alam")).toBeTruthy();
+		// The hands-on test found "Booth B4" under the name AND on the stub.
+		expect(screen.queryByText("Booth B4")).toBeNull();
+	});
+
 	it("no booth label → the tent stub, and the area stands in under the name", async () => {
 		renderInRouter(
 			<ShowcaseTicket
@@ -215,5 +231,35 @@ describe("ShowcaseStage", () => {
 		expect(left).toBe(true);
 		expect(screen.queryByText(/more · See all/)).toBeNull();
 		expect(document.querySelectorAll('a[href="/s6"]').length).toBe(1);
+	});
+});
+
+describe("rail dots follow the swipe", () => {
+	it("the bar moves to the last dot when the rail is scrolled to its end", async () => {
+		const { act, fireEvent } = await import("@testing-library/react");
+		const tickets = ["a", "b", "c", "d"].map((slug) => ({ card: card(slug) }));
+		renderInRouter(
+			<ShowcaseStage
+				showcase={showcase}
+				tickets={tickets}
+				now={NOW}
+				mode="stage"
+				railClassName="flex overflow-x-auto"
+			/>,
+		);
+		await screen.findAllByRole("link", { name: /Store a/ });
+		const rail = document.querySelector("section ul") as HTMLUListElement;
+		const dots = () =>
+			[...(rail.parentElement?.querySelectorAll("[aria-hidden] > span") ?? [])]
+				.filter((el) => el.className.includes("h-1.5"))
+				.map((el) => el.className.includes("w-[18px]"));
+		expect(dots()).toEqual([true, false, false, false]);
+		Object.defineProperty(rail, "scrollWidth", { value: 1200 });
+		Object.defineProperty(rail, "clientWidth", { value: 375 });
+		rail.scrollLeft = 825;
+		act(() => {
+			fireEvent.scroll(rail);
+		});
+		expect(dots()).toEqual([false, false, false, true]);
 	});
 });

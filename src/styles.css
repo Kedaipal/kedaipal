@@ -353,54 +353,90 @@
    (`bg-[var(--sc-a)]`) and a new theme is one block in this file plus its id
    in convex/lib/showcase.ts. The ticket "paper" is deliberately NOT a theme
    variable and does not flip in dark mode — it is a cream ticket in every
-   theme, which is what makes the row read as one pile of tickets. */
+   theme, which is what makes the row read as one pile of tickets.
+   EVERY variable is defined by exactly one class: the base holds what no
+   look changes, each look holds its whole palette. Tailwind orders utilities
+   by how many declarations they carry, not by name, so a variable set in
+   both the base and a look is won by whichever the sort puts later — "No
+   tint" (more declarations) lost its neutral ground to the base's green.
+   `showcase.test.ts` fails if a variable is ever defined twice.
+   The cover scrim reads its strengths from `--sc-scrim-*` (defaults in
+   `bg-showcase-cover-scrim`), so a look can lighten it — "No tint" does. */
 @utility kp-showcase {
 	--sc-paper: hsl(40 100% 97%);
 	--sc-tear: hsl(39 45% 64%);
 	--sc-ink: hsl(28 100% 24%);
 	--sc-ink-soft: hsl(38 79% 34%);
-	--sc-a: hsl(160 58% 10%);
-	--sc-b: hsl(157 52% 15%);
-	--sc-accent: hsl(43 96% 56%);
-	--sc-accent-fg: hsl(35 100% 12%);
 	--sc-text: hsl(0 0% 100%);
-	--sc-text-soft: hsl(214 32% 83%);
 }
 @utility kp-showcase-campfire {
 	--sc-a: hsl(160 58% 10%);
 	--sc-b: hsl(157 52% 15%);
 	--sc-accent: hsl(43 96% 56%);
 	--sc-accent-fg: hsl(35 100% 12%);
+	--sc-text-soft: hsl(214 32% 83%);
 }
 @utility kp-showcase-festive {
 	--sc-a: hsl(343 71% 17%);
 	--sc-b: hsl(344 66% 32%);
 	--sc-accent: hsl(43 86% 63%);
 	--sc-accent-fg: hsl(35 100% 12%);
+	--sc-text-soft: hsl(214 32% 83%);
 }
 @utility kp-showcase-ocean {
 	--sc-a: hsl(213 73% 16%);
 	--sc-b: hsl(209 70% 25%);
 	--sc-accent: hsl(199 95% 74%);
 	--sc-accent-fg: hsl(213 73% 12%);
+	--sc-text-soft: hsl(214 32% 83%);
 }
 @utility kp-showcase-sunset {
 	--sc-a: hsl(15 84% 19%);
 	--sc-b: hsl(21 90% 40%);
 	--sc-accent: hsl(48 96% 77%);
 	--sc-accent-fg: hsl(20 90% 14%);
+	--sc-text-soft: hsl(214 32% 83%);
 }
 @utility kp-showcase-midnight {
 	--sc-a: hsl(222 47% 11%);
 	--sc-b: hsl(263 83% 23%);
 	--sc-accent: hsl(255 92% 85%);
 	--sc-accent-fg: hsl(263 70% 16%);
+	--sc-text-soft: hsl(214 32% 83%);
 }
 @utility kp-showcase-kedaipal {
 	--sc-a: hsl(222 47% 11%);
 	--sc-b: hsl(160 84% 20%);
 	--sc-accent: hsl(160 84% 60%);
 	--sc-accent-fg: hsl(222 47% 11%);
+	--sc-text-soft: hsl(214 32% 83%);
+}
+/* "No tint": the admin's cover in its own colours. The ground is neutral
+   charcoal (what shows with no cover), and the cover's shade is neutral AND
+   lighter — only enough behind the words to keep white text readable. */
+@utility kp-showcase-plain {
+	--sc-a: hsl(0 0% 7%);
+	--sc-b: hsl(0 0% 16%);
+	--sc-accent: hsl(0 0% 98%);
+	--sc-accent-fg: hsl(0 0% 9%);
+	--sc-text-soft: hsl(0 0% 88%);
+	--sc-scrim-top: 72%;
+	--sc-scrim-mid: 36%;
+	--sc-scrim-foot: 55%;
+	--sc-scrim-left: 84%;
+	--sc-scrim-left-mid: 52%;
+	--sc-scrim-right: 0%;
+	--sc-scrim-edge: 0%;
+}
+/* The colour-wheel look. Its palette is set INLINE from the admin's pick
+   (`customShowcasePalette`, src/lib/showcase-color.ts, which pins the shade);
+   these are only the fallback should a row ever lack its colour. */
+@utility kp-showcase-custom {
+	--sc-a: hsl(160 58% 10%);
+	--sc-b: hsl(157 52% 15%);
+	--sc-accent: hsl(43 96% 56%);
+	--sc-accent-fg: hsl(35 100% 12%);
+	--sc-text-soft: hsl(214 32% 83%);
 }
 
 /* A showcase ticket's die-cut (z8r3fdr6mv): three REAL holes — top and
@@ -444,19 +480,23 @@
 @utility bg-showcase-cover-scrim {
 	background-image: linear-gradient(
 		180deg,
-		color-mix(in oklab, var(--sc-a) 88%, transparent) 0%,
-		color-mix(in oklab, var(--sc-a) 70%, transparent) 45%,
-		color-mix(in oklab, var(--sc-b) 82%, transparent) 100%
+		color-mix(in oklab, var(--sc-a) var(--sc-scrim-top, 88%), transparent) 0%,
+		color-mix(in oklab, var(--sc-a) var(--sc-scrim-mid, 70%), transparent) 45%,
+		color-mix(in oklab, var(--sc-b) var(--sc-scrim-foot, 82%), transparent) 100%
 	);
-	@media (min-width: 1024px) {
-		background-image: linear-gradient(
-			90deg,
-			color-mix(in oklab, var(--sc-a) 92%, transparent) 0%,
-			color-mix(in oklab, var(--sc-a) 78%, transparent) 38%,
-			color-mix(in oklab, var(--sc-b) 45%, transparent) 70%,
-			color-mix(in oklab, var(--sc-b) 30%, transparent) 100%
-		);
-	}
+}
+/* The desktop stage's fade (title column on the left). A separate utility
+   applied with `lg:`, not a media query inside the phone one: the admin
+   preview renders the PHONE stage on a desktop screen, and a viewport query
+   painted the desktop fade over the phone layout there. */
+@utility bg-showcase-cover-scrim-wide {
+	background-image: linear-gradient(
+		90deg,
+		color-mix(in oklab, var(--sc-a) var(--sc-scrim-left, 92%), transparent) 0%,
+		color-mix(in oklab, var(--sc-a) var(--sc-scrim-left-mid, 78%), transparent) 38%,
+		color-mix(in oklab, var(--sc-b) var(--sc-scrim-right, 45%), transparent) 70%,
+		color-mix(in oklab, var(--sc-b) var(--sc-scrim-edge, 30%), transparent) 100%
+	);
 }
 
 /* A store cover inside a ticket panel: dark fade from the left so the name

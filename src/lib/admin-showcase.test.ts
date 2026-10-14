@@ -8,6 +8,8 @@ import {
 	describeChanges,
 	draftFromRow,
 	fromDateTimeLocal,
+	rebaseDraft,
+	saveOutcome,
 	showcaseStatusLabel,
 	toDateTimeLocal,
 	visibilitySummary,
@@ -58,6 +60,14 @@ describe("showcaseStatusLabel", () => {
 		expect(
 			showcaseStatusLabel({ state: "live", endsAt: NOW + 3600_000 }, NOW).label,
 		).toBe("Live · ends today");
+		// Calendar days, the buyer chip's count: 11 PM tonight-plus-one is
+		// "tomorrow" even though it is under 36 hours away.
+		expect(
+			showcaseStatusLabel(
+				{ state: "live", endsAt: Date.UTC(2026, 9, 18, 15, 0) },
+				NOW,
+			).label,
+		).toBe("Live · ends tomorrow");
 		expect(showcaseStatusLabel({ state: "live" }, NOW)).toEqual({
 			label: "Live",
 			tone: "live",
@@ -86,6 +96,19 @@ describe("describeChanges — the save bar names what is unsaved", () => {
 		const d = draftFromRow(r);
 		d.title = "  Malaysia   Campfest 2026 ";
 		expect(describeChanges(d, r)).toEqual([]);
+	});
+	test("a new colour on the custom look is named; a colour on another look is not", () => {
+		const r = row({ theme: "custom", customColor: "#1f7a55" });
+		expect(
+			describeChanges({ ...draftFromRow(r), customColor: "#a3264d" }, r),
+		).toEqual(["colour"]);
+		const curated = row({ customColor: "#1f7a55" });
+		expect(
+			describeChanges(
+				{ ...draftFromRow(curated), customColor: "#a3264d" },
+				curated,
+			),
+		).toEqual([]);
 	});
 	test("field edits are named", () => {
 		const r = row();
@@ -174,5 +197,64 @@ describe("visibilitySummary", () => {
 		expect(
 			visibilitySummary([member("a"), member("b", { notListed: "opted_out" })]),
 		).toBe("1 of 2 stores show to buyers.");
+	});
+});
+
+describe("saveOutcome — Save says what the save will do to buyers", () => {
+	const live = row({ state: "live", publishedAt: NOW - DAY });
+	test("a live showcase that stays live", () => {
+		expect(
+			saveOutcome({ startsAt: undefined, endsAt: NOW + DAY }, live, NOW).button,
+		).toBe("Save · live on /stores now");
+	});
+	test("moving the start into the future takes a live one OFF /stores", () => {
+		// The hands-on test: the button still said "live on /stores now".
+		const out = saveOutcome(
+			{ startsAt: NOW + 2 * DAY, endsAt: NOW + 3 * DAY },
+			live,
+			NOW,
+		);
+		expect(out.button).toMatch(/^Save · off \/stores until /);
+		expect(out.toast).toMatch(/^Saved — off \/stores until /);
+	});
+	test("an end in the past takes it off now", () => {
+		expect(
+			saveOutcome({ startsAt: undefined, endsAt: NOW - 1 }, live, NOW).button,
+		).toBe("Save · takes it off /stores now");
+	});
+	test("a draft is just saved — publishing is its own act", () => {
+		expect(
+			saveOutcome({ startsAt: undefined, endsAt: undefined }, row(), NOW),
+		).toEqual({ button: "Save", toast: "Saved — still a draft." });
+	});
+	test("a published, scheduled one names when it goes on", () => {
+		const scheduled = row({ state: "scheduled", publishedAt: NOW - DAY });
+		expect(
+			saveOutcome({ startsAt: NOW + DAY, endsAt: undefined }, scheduled, NOW)
+				.button,
+		).toMatch(/^Save · on \/stores from /);
+	});
+});
+
+describe("rebaseDraft — a save elsewhere never eats an unsaved edit", () => {
+	test("untouched fields take the new saved value; touched ones keep the edit", () => {
+		const before = row();
+		const draft = {
+			...draftFromRow(before),
+			title: "Campfest — typed, unsaved",
+		};
+		// A cover upload (or another admin) saved a new theme meanwhile.
+		const after = row({ theme: "ocean", updatedAt: NOW });
+		const next = rebaseDraft(draft, before, after);
+		expect(next.title).toBe("Campfest — typed, unsaved");
+		expect(next.theme).toBe("ocean");
+	});
+	test("after the admin's own save, the draft matches the row — nothing unsaved", () => {
+		const before = row();
+		const draft = { ...draftFromRow(before), theme: "sunset" as const };
+		const after = row({ theme: "sunset", updatedAt: NOW });
+		expect(describeChanges(rebaseDraft(draft, before, after), after)).toEqual(
+			[],
+		);
 	});
 });

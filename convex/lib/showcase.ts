@@ -40,12 +40,20 @@ export const SHOWCASE_MEMBER_CAP = 40;
 export const SHOWCASE_SCAN_CAP = 100;
 
 /**
- * The curated looks. Every theme is a DARK ground with light text, so the
- * banner, the ticket fallback panel and the compact band read correctly in
- * light AND dark mode with one text treatment — which is also why an admin
- * picks a mood here and never a raw colour. The CSS for each lives in
- * `src/lib/showcase-theme.ts`; this is the closed set the schema, the editor
- * and the buyer page all agree on.
+ * The looks. Every one is a DARK ground with light text, so the banner, the
+ * ticket fallback panel and the compact band read correctly in light AND
+ * dark mode with one text treatment. The CSS for each lives in `styles.css`
+ * (`kp-showcase-<theme>`); this is the closed set the schema, the editor and
+ * the buyer page all agree on.
+ *
+ * - Six curated moods.
+ * - `plain` — "No tint": the cover photo in its own colours. Only a neutral
+ *   shade sits behind the WORDS (white text straight on a bright photo is
+ *   unreadable); with no cover it is plain charcoal.
+ * - `custom` — the admin picks the HUE with a colour wheel and we pick the
+ *   shade (`customShowcasePalette` in `src/lib/showcase-color.ts` pins the
+ *   lightness), so no pick can put white text on a pale ground. Its colour
+ *   lives in `customColor`.
  */
 export const SHOWCASE_THEMES = [
 	"campfire",
@@ -54,6 +62,8 @@ export const SHOWCASE_THEMES = [
 	"sunset",
 	"midnight",
 	"kedaipal",
+	"plain",
+	"custom",
 ] as const;
 
 export type ShowcaseTheme = (typeof SHOWCASE_THEMES)[number];
@@ -65,7 +75,38 @@ export const SHOWCASE_THEME_LABELS: Record<ShowcaseTheme, string> = {
 	sunset: "Sunset",
 	midnight: "Midnight",
 	kedaipal: "Kedaipal",
+	plain: "No tint",
+	custom: "Custom",
 };
+
+/**
+ * Where the colour wheel starts when the admin first opens Custom: the
+ * current look's own colour, so the switch is a nudge from what they had,
+ * not a jump to an arbitrary default.
+ */
+export const SHOWCASE_THEME_SEED_COLOR: Record<ShowcaseTheme, string> = {
+	campfire: "#1f7a55",
+	festive: "#a3264d",
+	ocean: "#2563a8",
+	sunset: "#c2410c",
+	midnight: "#5b21b6",
+	kedaipal: "#10b981",
+	plain: "#525252",
+	custom: "#1f7a55",
+};
+
+/** A custom look's colour: `#rrggbb`, lower-case — the one shape the editor
+ * sends and the palette reads. */
+export function isShowcaseColor(value: unknown): value is string {
+	return typeof value === "string" && /^#[0-9a-f]{6}$/.test(value);
+}
+
+export function sanitizeShowcaseColor(input: string): string {
+	const color = input.trim().toLowerCase();
+	if (!isShowcaseColor(color))
+		throw new Error("Pick a colour as #rrggbb, e.g. #1f7a55");
+	return color;
+}
 
 export const DEFAULT_SHOWCASE_THEME: ShowcaseTheme = "campfire";
 

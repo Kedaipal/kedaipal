@@ -28,18 +28,19 @@ import { convexErrorMessage } from "../lib/format";
 import { cn } from "../lib/utils";
 
 /**
- * Admin · Marketplace (z8r3fdr6mv) — what Kedaipal curates on
- * kedaipal.com/stores. Today that is the showcases; Store highlights are
- * still set per store from the Sellers directory, and a note here says so
- * rather than leaving an admin to hunt. Showcases are listed in /stores
+ * Admin · Showcases (z8r3fdr6mv) — the event sections Kedaipal curates at
+ * the top of kedaipal.com/stores. (Named for what it holds: it was briefly
+ * "Marketplace", which read as the whole directory.) Store highlights are
+ * still set per store from the Sellers directory, and a note at the foot
+ * says so rather than leaving an admin to hunt. Showcases are listed in /stores
  * order (drag to change it), the ended ones folded away but kept — an event
  * that happened is a record, not rubbish.
  */
-export const Route = createFileRoute("/app/admin/marketplace/")({
-	component: AdminMarketplaceRoute,
+export const Route = createFileRoute("/app/admin/showcases/")({
+	component: AdminShowcasesRoute,
 });
 
-function AdminMarketplaceRoute() {
+function AdminShowcasesRoute() {
 	// Client gate is cosmetic — every showcases function is `requireAdmin`.
 	const isAdmin = useQuery(convexQuery(api.billing.amIAdmin, {})).data;
 	if (isAdmin === undefined) {
@@ -62,10 +63,10 @@ function AdminMarketplaceRoute() {
 			</div>
 		);
 	}
-	return <AdminMarketplaceContent />;
+	return <AdminShowcasesContent />;
 }
 
-export function AdminMarketplaceContent() {
+export function AdminShowcasesContent() {
 	const showcases = useQuery(convexQuery(api.showcases.listForAdmin, {})).data;
 	const reorder = useMutation(api.showcases.reorder);
 	const [creating, setCreating] = useState(false);
@@ -98,10 +99,10 @@ export function AdminMarketplaceContent() {
 	return (
 		<div className="flex flex-col gap-6 lg:max-w-4xl">
 			<PageHeader
-				title="Marketplace"
+				title="Showcases"
 				subtitle={
 					<>
-						Curate what buyers see on{" "}
+						Event sections at the top of{" "}
 						<a
 							href="/stores"
 							target="_blank"
@@ -117,22 +118,19 @@ export function AdminMarketplaceContent() {
 			/>
 			<section className="flex items-start justify-between gap-3 lg:hidden">
 				<div className="flex flex-col gap-0.5">
-					<h2 className="text-xl font-bold">Marketplace</h2>
+					<h2 className="text-xl font-bold">Showcases</h2>
 					<p className="text-sm text-muted-foreground">
-						Curate what buyers see on /stores
+						Event sections at the top of /stores
 					</p>
 				</div>
 				{newButton}
 			</section>
 
 			<section className="flex flex-col gap-3">
-				<div className="flex flex-col gap-0.5 sm:flex-row sm:items-baseline sm:justify-between">
-					<h3 className="font-heading text-base font-extrabold">Showcases</h3>
-					<p className="text-xs text-muted-foreground">
-						Shown at the top of /stores, above Store highlights, in this order.
-						Drag to reorder.
-					</p>
-				</div>
+				<p className="text-xs text-muted-foreground">
+					Buyers see them under "Happening now", above Store highlights, in this
+					order. Drag to reorder.
+				</p>
 
 				{showcases === undefined ? (
 					<div className="flex flex-col gap-3">
@@ -243,7 +241,7 @@ function NewShowcaseDialog({
 			onOpenChange(false);
 			setTitle("");
 			void navigate({
-				to: "/app/admin/marketplace/$showcaseId",
+				to: "/app/admin/showcases/$showcaseId",
 				params: { showcaseId },
 			});
 		} catch (err) {

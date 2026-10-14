@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import type { Country } from "../../convex/lib/country";
 import {
 	DAY_MS,
@@ -9,6 +10,7 @@ import { WEEKDAY_NAMES_SHORT } from "../../convex/lib/openingHours";
 import type { ShowcaseTheme } from "../../convex/lib/showcase";
 import type { MarketplaceStoreCard } from "../../convex/marketplace";
 import type { PublicShowcase } from "../../convex/showcases";
+import { customShowcasePalette } from "./showcase-color";
 
 /**
  * Marketplace showcase derivations for the buyer page (z8r3fdr6mv) — pure,
@@ -32,6 +34,26 @@ export function showcaseThemeClass(theme: ShowcaseTheme): string {
 }
 
 /**
+ * Everything an element needs to wear a showcase's look: the theme class,
+ * and — for the `custom` look — the palette derived from its colour as
+ * inline variables (a colour picked on a wheel can't be a pre-written
+ * class). Every surface that paints a showcase ground goes through this, so
+ * a custom look can't render as Campfire on one of them.
+ */
+export function showcaseLook(look: {
+	theme: ShowcaseTheme;
+	customColor?: string;
+}): { className: string; style?: CSSProperties } {
+	return {
+		className: SHOWCASE_THEME_CLASS[look.theme],
+		style:
+			look.theme === "custom" && look.customColor
+				? (customShowcasePalette(look.customColor) as CSSProperties)
+				: undefined,
+	};
+}
+
+/**
  * Every theme's class, spelled out IN FULL. Tailwind only emits a utility it
  * can find written in the source — a class assembled at runtime
  * (`kp-showcase-${theme}`) is never generated, and every showcase silently
@@ -45,6 +67,8 @@ export const SHOWCASE_THEME_CLASS: Record<ShowcaseTheme, string> = {
 	sunset: "kp-showcase kp-showcase-sunset",
 	midnight: "kp-showcase kp-showcase-midnight",
 	kedaipal: "kp-showcase kp-showcase-kedaipal",
+	plain: "kp-showcase kp-showcase-plain",
+	custom: "kp-showcase kp-showcase-custom",
 };
 
 /**
@@ -135,12 +159,8 @@ export function showcaseTimeFacts(
 			? dateRange(showcase.startsAt, showcase.endsAt)
 			: undefined;
 	if (showcase.endsAt === undefined) return { live: "Happening now", range };
-	const today = todayMytMidnight(now);
-	// The end is exclusive; the showcase's last DAY is the day before the end
-	// instant when it ends at a midnight, so judge the day that contains the
-	// final millisecond.
+	const daysAhead = showcaseDaysLeft(showcase.endsAt, now);
 	const lastDay = todayMytMidnight(showcase.endsAt - 1);
-	const daysAhead = Math.round((lastDay - today) / DAY_MS);
 	if (daysAhead <= 0) return { live: "Ends today", range };
 	if (daysAhead === 1) return { live: "Ends tomorrow", range };
 	if (daysAhead < 7)
@@ -152,6 +172,22 @@ export function showcaseTimeFacts(
 		live: `Until ${formatFulfilmentDate(lastDay, { weekday: false, year: false })}`,
 		range,
 	};
+}
+
+/**
+ * How many CALENDAR days (MYT) until a showcase's last day: 0 = it ends
+ * today, 1 = tomorrow. The one author for "how long is left" — the buyer's
+ * chip and the admin's status pill both read it. (The pill once counted
+ * 24-hour blocks and rounded up, so Campfest read "ends in 2 days" in the
+ * admin while buyers saw "Ends tomorrow".)
+ *
+ * The end is exclusive; the last DAY is the one holding the final
+ * millisecond, so a showcase ending at midnight ends the day before.
+ */
+export function showcaseDaysLeft(endsAt: number, now: number): number {
+	return Math.round(
+		(todayMytMidnight(endsAt - 1) - todayMytMidnight(now)) / DAY_MS,
+	);
 }
 
 /** "16–18 Oct", "16 Oct – 3 Nov", "Until 3 Nov", or nothing. */
@@ -176,12 +212,6 @@ export function dateRange(
 	if (last !== undefined) return `Until ${short(last)}`;
 	if (startsAt !== undefined) return `From ${short(startsAt)}`;
 	return undefined;
-}
-
-/** The ticket's one-line "where" under the name — the booth label when the
- * admin gave one, else the store's area. */
-export function ticketPlace(ticket: ShowcaseTicketData): string | undefined {
-	return ticket.label ?? ticket.card.storeArea;
 }
 
 /** The `/stores?showcase=` link for a showcase — one author, used by the

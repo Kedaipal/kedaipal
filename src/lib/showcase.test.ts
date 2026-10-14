@@ -10,12 +10,13 @@ import {
 	PILE_FAN_MAX,
 	SHOWCASE_THEME_CLASS,
 	STAGE_GRID_TICKETS,
+	showcaseDaysLeft,
+	showcaseLook,
 	showcasePath,
 	showcasesForRegion,
 	showcaseThemeClass,
 	showcaseTimeFacts,
 	splitStage,
-	ticketPlace,
 } from "./showcase";
 
 /** Sat 17 Oct 2026 12:00 MYT. */
@@ -144,18 +145,73 @@ describe("theme classes — Tailwind only emits what it can READ", () => {
 	});
 });
 
-describe("small authors", () => {
-	test("ticketPlace prefers the booth label over the store's area", () => {
-		expect(ticketPlace({ card: card("a", { storeArea: "Ampang" }) })).toBe(
-			"Ampang",
-		);
-		expect(
-			ticketPlace({ card: card("a", { storeArea: "Ampang" }), label: "B4" }),
-		).toBe("B4");
+describe("a look's palette can't be overridden by the base", () => {
+	test("no variable is set by both kp-showcase and a look", () => {
+		// Tailwind orders utilities by declaration count, not name, so a
+		// variable set in both is won by whichever sorts later. "No tint"
+		// carries more declarations than the base, sorted first, and rendered
+		// with Campfire's green under a black-and-white cover.
+		const css = readFileSync(resolve(__dirname, "../styles.css"), "utf8");
+		const varsOf = (name: string) => {
+			const block = new RegExp(`@utility ${name} \\{([^}]*)\\}`).exec(css);
+			if (!block) throw new Error(`missing @utility ${name}`);
+			return new Set(
+				[...block[1].matchAll(/(--sc-[a-z-]+)\s*:/g)].map((m) => m[1]),
+			);
+		};
+		const base = varsOf("kp-showcase");
+		for (const theme of SHOWCASE_THEMES) {
+			const look = varsOf(`kp-showcase-${theme}`);
+			expect(
+				[...look].filter((v) => base.has(v)),
+				theme,
+			).toEqual([]);
+		}
 	});
+});
+
+describe("small authors", () => {
 	test("showcasePath is the booth-QR link", () => {
 		expect(showcasePath("campfest-2026")).toBe(
 			"/stores?showcase=campfest-2026",
 		);
+	});
+});
+
+describe("showcaseDaysLeft — the one count of how long is left", () => {
+	test("calendar days in MYT, not 24-hour blocks", () => {
+		// 03:00 MYT on Thu 15 Oct; ends 11:22 MYT on Fri 16 Oct — 32 hours
+		// away, so 24-hour blocks rounded up said "2 days" while the buyer chip
+		// said "Ends tomorrow".
+		const thu3am = Date.UTC(2026, 9, 14, 19, 0);
+		const fri1122 = Date.UTC(2026, 9, 16, 3, 22);
+		expect(showcaseDaysLeft(fri1122, thu3am)).toBe(1);
+		expect(showcaseTimeFacts({ endsAt: fri1122 }, thu3am).live).toBe(
+			"Ends tomorrow",
+		);
+	});
+	test("an end at midnight belongs to the day before", () => {
+		expect(showcaseDaysLeft(myt(2026, 10, 18), NOW)).toBe(0);
+		expect(showcaseDaysLeft(myt(2026, 10, 19), NOW)).toBe(1);
+	});
+});
+
+describe("showcaseLook — every surface wears the same look", () => {
+	test("a curated look is its class alone", () => {
+		expect(showcaseLook({ theme: "ocean" })).toEqual({
+			className: "kp-showcase kp-showcase-ocean",
+			style: undefined,
+		});
+	});
+	test("custom carries its palette inline; a colour on another look is ignored", () => {
+		const custom = showcaseLook({ theme: "custom", customColor: "#ff00aa" });
+		expect(custom.className).toBe("kp-showcase kp-showcase-custom");
+		expect(custom.style).toMatchObject({
+			"--sc-a": expect.stringMatching(/^oklch\(/),
+			"--sc-accent": expect.stringMatching(/^oklch\(/),
+		});
+		expect(
+			showcaseLook({ theme: "festive", customColor: "#ff00aa" }).style,
+		).toBeUndefined();
 	});
 });

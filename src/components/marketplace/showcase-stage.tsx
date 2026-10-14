@@ -5,8 +5,8 @@ import type { PublicShowcase } from "../../../convex/showcases";
 import {
 	PILE_FAN_MAX,
 	type ShowcaseTicketData,
+	showcaseLook,
 	showcasePath,
-	showcaseThemeClass,
 	showcaseTimeFacts,
 	splitStage,
 } from "../../lib/showcase";
@@ -62,12 +62,16 @@ export function ShowcaseStage({
 		? { shown: tickets, pile: [] }
 		: splitStage(tickets);
 	const headingId = `showcase-${showcase.slug}`;
+	const look = showcaseLook(showcase);
+	const railRef = useRef<HTMLUListElement>(null);
+	const activeTicket = useRailPosition(railRef);
 
 	return (
 		<section
 			aria-labelledby={headingId}
+			style={look.style}
 			className={cn(
-				showcaseThemeClass(showcase.theme),
+				look.className,
 				"relative mx-3 overflow-hidden rounded-[28px] bg-showcase text-white",
 				lg("lg:mx-8 lg:rounded-[32px]"),
 			)}
@@ -86,7 +90,10 @@ export function ShowcaseStage({
 					    readable — the admin editor says so beside the upload. */}
 					<span
 						aria-hidden
-						className="absolute inset-0 bg-showcase-cover-scrim"
+						className={cn(
+							"absolute inset-0 bg-showcase-cover-scrim",
+							lg("lg:bg-showcase-cover-scrim-wide"),
+						)}
 					/>
 				</>
 			) : (
@@ -207,6 +214,7 @@ export function ShowcaseStage({
 					<>
 						{/* Phone: the rail. */}
 						<ul
+							ref={railRef}
 							className={cn(
 								railClassName,
 								"mt-5 gap-3 pb-3 pt-2",
@@ -223,7 +231,11 @@ export function ShowcaseStage({
 							))}
 						</ul>
 						{total > 1 ? (
-							<RailDots count={total} className={lg("lg:hidden")} />
+							<RailDots
+								count={total}
+								active={activeTicket}
+								className={lg("lg:hidden")}
+							/>
 						) : null}
 						<div
 							className={cn(
@@ -348,24 +360,79 @@ function TicketPile({
 	);
 }
 
-/** The rail's position dots — one per ticket, the active one a short bar.
- * Decorative (`aria-hidden`): the rail itself is the list. */
-function RailDots({ count, className }: { count: number; className?: string }) {
-	// No JS scroll tracking: the first dot is always the bar. The dots say
-	// "there are N, swipe", which is all they need to; a live scroll-spy would
-	// cost an effect per showcase for a cosmetic.
+/**
+ * Which ticket the rail is showing: the one whose left edge sits nearest the
+ * rail's snap line. Scrolled to the end, the LAST ticket counts as current —
+ * the final ticket can never reach the snap line on a wide phone, and a bar
+ * that stops one short of the end reads as "there's more". Measured on the
+ * scroll event itself (≤ 40 tickets, a few rects), so it also tracks in a
+ * tab where animation frames are paused.
+ */
+function useRailPosition(
+	railRef: React.RefObject<HTMLUListElement | null>,
+): number {
+	const [active, setActive] = useState(0);
+	useEffect(() => {
+		const rail = railRef.current;
+		if (!rail) return;
+		function measure(el: HTMLUListElement) {
+			const items = el.children;
+			if (items.length === 0) return;
+			if (el.scrollLeft + el.clientWidth >= el.scrollWidth - 2) {
+				setActive(items.length - 1);
+				return;
+			}
+			const snapLine =
+				el.getBoundingClientRect().left +
+				Number.parseFloat(getComputedStyle(el).scrollPaddingLeft || "0");
+			let best = 0;
+			let bestDistance = Number.POSITIVE_INFINITY;
+			for (let i = 0; i < items.length; i++) {
+				const d = Math.abs(items[i].getBoundingClientRect().left - snapLine);
+				if (d < bestDistance) {
+					best = i;
+					bestDistance = d;
+				}
+			}
+			setActive(best);
+		}
+		const onScroll = () => measure(rail);
+		rail.addEventListener("scroll", onScroll, { passive: true });
+		return () => rail.removeEventListener("scroll", onScroll);
+	}, [railRef]);
+	return active;
+}
+
+/** The rail's position dots — one per ticket, the current one a short bar
+ * that follows the swipe. Decorative (`aria-hidden`): the rail itself is
+ * the list. Past 12 tickets the dots stop multiplying and the bar moves
+ * proportionally. */
+function RailDots({
+	count,
+	active,
+	className,
+}: {
+	count: number;
+	active: number;
+	className?: string;
+}) {
+	const dots = Math.min(count, 12);
+	const current =
+		count <= dots ? active : Math.round((active * (dots - 1)) / (count - 1));
 	return (
 		<div
 			aria-hidden
 			className={cn("flex justify-center gap-1.5 pt-1", className)}
 		>
-			{Array.from({ length: Math.min(count, 12) }, (_, i) => (
+			{Array.from({ length: dots }, (_, i) => (
 				<span
 					// biome-ignore lint/suspicious/noArrayIndexKey: purely positional, never reordered
 					key={i}
 					className={cn(
-						"h-1.5 rounded-full",
-						i === 0 ? "w-[18px] bg-[var(--sc-accent)]" : "w-1.5 bg-white/30",
+						"h-1.5 rounded-full transition-[width,background-color] duration-200 motion-reduce:transition-none",
+						i === current
+							? "w-[18px] bg-[var(--sc-accent)]"
+							: "w-1.5 bg-white/30",
 					)}
 				/>
 			))}
@@ -424,6 +491,25 @@ export function CopyShowcaseLink({
 }
 
 /**
+ * The line between the showcase in front and the others on at the same time
+ * — "More happening now", centred between hairlines, so the bands read as a
+ * separate group rather than more of the showcase above (the focused view
+ * read them as part of the event the buyer had opened). The bands under it
+ * no longer say "Also on": the divider says it once.
+ */
+export function ShowcaseDivider({ label }: { label: string }) {
+	return (
+		<div className="flex items-center gap-3 px-5 pt-2 lg:px-8">
+			<span aria-hidden className="h-px grow bg-border" />
+			<h2 className="shrink-0 font-heading text-[13px] font-extrabold tracking-tight text-muted-foreground lg:text-sm">
+				{label}
+			</h2>
+			<span aria-hidden className="h-px grow bg-border" />
+		</div>
+	);
+}
+
+/**
  * A showcase that is live at the same time as the one on the stage: a
  * compact band under it — title, when it ends, a strip of its store tiles
  * and the door to its focused view — so a second event never fights the
@@ -445,12 +531,14 @@ export function ShowcaseBand({
 	const faces = tickets.slice(0, 8);
 	const restPhone = total - Math.min(total, 4);
 	const restDesktop = total - Math.min(total, 8);
+	const look = showcaseLook(showcase);
 	return (
 		<Link
 			to="/stores"
 			search={{ showcase: showcase.slug }}
+			style={look.style}
 			className={cn(
-				showcaseThemeClass(showcase.theme),
+				look.className,
 				"relative mx-3 flex items-center gap-4 overflow-hidden rounded-[22px] bg-showcase px-4 py-3.5 text-white transition-[translate] hover:-translate-y-0.5 motion-reduce:transition-none lg:mx-8 lg:px-6 lg:py-4",
 			)}
 		>
@@ -460,7 +548,7 @@ export function ShowcaseBand({
 						aria-hidden
 						className="size-1.5 rounded-full bg-[var(--sc-accent)]"
 					/>
-					<span suppressHydrationWarning>Also on · {facts.live}</span>
+					<span suppressHydrationWarning>{facts.live}</span>
 				</span>
 				<span className="truncate font-heading text-[19px] font-black tracking-[-0.02em] lg:text-[22px]">
 					{showcase.title}

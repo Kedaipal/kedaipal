@@ -236,11 +236,35 @@ the word — they see the showcase's own title.
   (`showcaseSlugFromTitle`, `-2`/`-3` on a clash). It is the
   `/stores?showcase=<slug>` handle on the booth QR, and a printed QR must
   survive a title edit.
-- **Themes are a closed set of dark grounds** (`SHOWCASE_THEMES`), each a
-  block of CSS variables in `styles.css` (`kp-showcase-<theme>`). An admin
-  picks a mood, never a colour, so the banner, the ticket's info panel and
-  the compact band carry one text treatment in light and dark mode. A cover
-  photo is optional and is darkened under the title whatever it is.
+- **Looks are a closed set of dark grounds** (`SHOWCASE_THEMES`), each a
+  block of CSS variables in `styles.css` (`kp-showcase-<theme>`), so the
+  banner, the ticket's info panel and the compact band carry one text
+  treatment in light and dark mode. Six curated moods, plus:
+  - **No tint** (`plain`) — the admin's cover in its own colours. The
+    cover scrim reads its strengths from `--sc-scrim-*`, and this look turns
+    it neutral and light: shade only behind the WORDS, because white text
+    straight on a bright photo can't be read. With no cover it is plain
+    charcoal.
+  - **Custom** (`custom` + `customColor`, `#rrggbb`) — a colour wheel
+    (`react-colorful`, pinned 5.6.1). **The admin picks the hue; we pick
+    the shade:** `customShowcasePalette` (`src/lib/showcase-color.ts`)
+    converts the pick to OKLCH and pins the lightness of the ground and the
+    accent (perceptual, so a yellow and a blue at the same `L` read equally
+    dark), capping chroma. No pick can put the white title on a pale
+    ground. The palette is set inline by `showcaseLook`, which every surface
+    that paints a showcase goes through; `update` refuses `custom` with no
+    colour, and the colour is kept across look switches so switching back
+    restores it (buyers only receive it while the look is `custom`).
+  A cover photo is optional; the editor names a small one (< 1200px wide)
+  the moment it lands rather than refusing it.
+  **Every theme variable has ONE defining class** — the base holds what no
+  look changes, each look its whole palette. Tailwind orders utilities by
+  declaration count, not name, so a variable set in both is won by
+  whichever sorts later; No tint lost its neutral ground to the base's green
+  that way. `showcase.test.ts` fails on a duplicate. The cover fade is two
+  utilities (`bg-showcase-cover-scrim` + `lg:bg-showcase-cover-scrim-wide`),
+  never a media query, so the editor's phone preview on a desktop screen
+  shades like a phone.
 - **Every write is audited** under its own function name
   (`showcases.create` … `showcases.remove`) via `logGlobalAdminAction`,
   with the showcase as `targetId` — a showcase has no store in scope.
@@ -267,8 +291,12 @@ which `listStores` and the showcase functions both read.
 - **The admin is told, never surprised:** `getForAdmin` names the reason on
   every member row (`NOT_LISTED_COPY`: opted out, hidden by Kedaipal,
   internal, purging, no visible product), and the editor's preview says
-  "6 of 8 stores show to buyers". A store that won't show is still addable
-  — the booth may open tomorrow — but its row says so.
+  "6 of 8 stores show to buyers". A store hidden by Kedaipal or opted out
+  is still addable — it can come back, the booth may open tomorrow — but
+  its row says so. **A Kedaipal or test store can't be added**: it never
+  lists, so the picker greys it out with that reason and `setMembers`
+  refuses it (a row already in the list is left alone, so a save never
+  fails on a member the admin didn't touch).
 
 ### The buyer page
 
@@ -276,7 +304,8 @@ which `listStores` and the showcase functions both read.
   and art (or cover), the time chip ("Happening now", "Ends today", "Ends
   tomorrow", "Until Sun"/"Until 18 Oct" — `showcaseTimeFacts`), the title
   and tagline, and the stores as **tickets**. On a phone the tickets swipe
-  in a rail (the next one peeks, dots say how many) with "See all N →";
+  in a rail (the next one peeks; the dots follow the swipe, measured on the
+  rail's scroll event) with "See all N →";
   from `lg` the title stands left and up to five tickets stand on a 2-column
   grid, and past five the rest become a **fanned pile of the real tickets**
   in the sixth cell (`splitStage`, `PILE_FAN_MAX`) — honest about the
@@ -289,10 +318,16 @@ which `listStores` and the showcase functions both read.
   every name is white whatever each store uploaded), the directory's own
   live status line under a dashed tear, and a stub with the booth label
   ("BOOTH / B4", "FOOD COURT / 7") or a tent mark reading "At event". The
+  booth is said once, on the stub; the line under the name is the store's
+  area. The notches are a real CSS-mask die-cut (`kp-ticket-cut`), so a
+  cover or gradient behind the ticket shows through them. The
   paper is cream in every theme and in dark mode: it is a ticket.
-- **Several live at once stack, never carousel.** The first in admin order
-  gets the stage; the rest get a `ShowcaseBand` (title, "Also on · until…",
-  a strip of store tiles, See all). Each stage already owns a sideways
+- **Several live at once stack, never carousel**, under one "Happening now"
+  heading (buyer words — they never see "showcase"). The first in admin
+  order gets the stage; the rest get a `ShowcaseBand` (title, the time chip,
+  a strip of store tiles, See all) under a centred **"More happening now"**
+  divider (`ShowcaseDivider`), which the focused view uses too, so the
+  other events read as a separate group from the one the buyer opened. Each stage already owns a sideways
   rail, and a carousel inside a carousel fights the thumb; and nothing
   auto-rotates — content that moves while someone is aiming a tap is
   frustrating and needs a pause control.
@@ -319,12 +354,14 @@ which `listStores` and the showcase functions both read.
   and devtools' phone emulation painted a permanent grey bar under every
   chip row. The peek says "there's more", never the bar.
 
-### Admin · Marketplace
+### Admin · Showcases
 
-A new admin tab (`/app/admin/marketplace`, sidebar + bottom nav), the
-meaning-based home for "what Kedaipal curates on /stores". Showcases are
+A new admin tab (`/app/admin/showcases`, sidebar + bottom nav), named for
+what it holds (it was briefly "Marketplace", which read as the whole
+directory). Showcases are
 listed in /stores order (drag to reorder, `SortableList`), each with a
-thumbnail of its look, a status pill (Live · ends in N days / Scheduled ·
+thumbnail of its look, a status pill (Live · ends tomorrow / ends in N days — calendar days in MYT through
+`showcaseDaysLeft`, the buyer chip's own count / Scheduled ·
 starts 1 Nov / Draft · buyers can't see it / Ended), the facts an admin
 scans for, and Edit / View on /stores / a menu (Copy link, Publish or
 Unpublish, Delete…). Ended ones fold away but are kept. A note says Store
@@ -333,17 +370,27 @@ highlights are still set per store from Sellers → Manage.
 **New showcase** asks two things — title and region — and lands in the
 editor as a draft (the region can't change once stores are in, because
 every member must share it). **The editor** (`ShowcaseEditor`): Details,
-Look (theme swatches + cover upload, saves on upload), When buyers see it
-(show from / until, "No end date", and a sentence saying exactly when it
+Look (eight swatches incl. No tint and Custom, the colour wheel under
+Custom, cover upload that saves on upload), When buyers see it (show from /
+until, "No end date", and a sentence naming when it goes on and when it
 comes off), Stores (add via a picker sheet over the admin seller directory
-narrowed to the region, with search and select-all; drag to order; a booth
-label per row; a tri-state select-all with bulk remove), Take it down
+narrowed to the region, with search and a tri-state select-all — the same
+`BulkSelectRow` as the member list; drag to order; a booth label per row;
+bulk remove), Take it down
 (Unpublish keeps it as a draft; Delete is for good, behind a confirm). The
 **buyer preview is the real `ShowcaseStage`** fed the draft (`forcePhone`),
 so it never lies about a store's hours or cover, and the pinned save bar
-names what is unsaved ("Unsaved: theme, 2 booth labels"). Publish is a
-separate act from Save — `publish` is refused for an empty showcase by
-name.
+names what is unsaved ("Unsaved: theme, 2 booth labels") with **Discard
+changes** beside it. **Save says what it will do to buyers**
+(`saveOutcome`, from the DRAFT's dates): "live on /stores now", "off
+/stores until 17 Oct, 9:00 AM" when a new start moves a live showcase back,
+"takes it off /stores now" for an end in the past — and the toast after it
+says the same. Leaving with unsaved edits asks first (`useBlocker`, plus the
+browser's own prompt on reload/close). When the saved row changes under an
+open editor (a save, a cover upload, another admin), `rebaseDraft` merges
+field by field — untouched fields take the new value, edited ones keep the
+edit — so a cover upload can't eat an unsaved title. Publish is a separate
+act from Save — `publish` is refused for an empty showcase by name.
 
 ### The seller is told
 
@@ -370,13 +417,17 @@ the stored shape, discoverability link), `src/components/admin/highlight-dialog.
 (state machine incl. the exclusive end, sanitizers, slug + param parsing),
 `convex/showcases.test.ts` (admin gate, create → publish → buyers end to
 end, the read-time window, unpublish/remove, members obeying the listable
-rule with the reason named, region refusals, dedupe + cap, reorder, every
-write in the audit log, the seller's `featuredIn`), `src/lib/showcase.test.ts`
-(join, split, time facts, ranges), `src/lib/admin-showcase.test.ts` (status
-labels, the unsaved-changes summary, datetime round trip),
-`src/components/marketplace/showcase-ticket.test.tsx` (ticket link + stub +
-cover/fallback + inert, stage "See all", the pile, the focused view) and the
-Marketplace tab in `bottom-nav.test.tsx`. Admin hide: the clause in `marketplaceListing.test.ts`,
+rule with the reason named, region refusals, an internal store refused on
+add but left alone once in, dedupe + cap, reorder, the custom look's colour
+rules, every write in the audit log, the seller's `featuredIn`),
+`src/lib/showcase.test.ts` (join, split, time facts, ranges, `showcaseDaysLeft`,
+`showcaseLook`, the theme-class literal guard), `src/lib/showcase-color.test.ts`
+(OKLCH anchors; every pick lands at the pinned shade), `src/lib/admin-showcase.test.ts`
+(status labels, the unsaved-changes summary, `saveOutcome`, `rebaseDraft`,
+MYT datetime round trip), `src/components/marketplace/showcase-ticket.test.tsx`
+(ticket link + stub + cover/fallback + inert, the die-cut, the booth said
+once, the rail dots following the swipe, stage "See all", the pile, the
+focused view) and the Showcases tab in `bottom-nav.test.tsx`. Admin hide: the clause in `marketplaceListing.test.ts`,
 end to end in `marketplace.test.ts` (admin-only, the seller's switch can't
 relist past it, the note reaches the seller card but never the public
 payload, idempotent audit, internal refused), the pill + Manage item in

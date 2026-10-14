@@ -1041,6 +1041,9 @@ export default defineSchema({
 		tagline: v.optional(v.string()),
 		country: countryValidator,
 		theme: showcaseThemeValidator,
+		// `#rrggbb` — the colour-wheel pick for the `custom` look. Kept when
+		// the admin switches to another look, so switching back restores it.
+		customColor: v.optional(v.string()),
 		// A Convex storage id (string, like retailers.coverImageStorageId);
 		// unset = the theme's own art carries the banner.
 		coverImageStorageId: v.optional(v.string()),

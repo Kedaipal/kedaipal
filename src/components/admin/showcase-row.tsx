@@ -11,7 +11,7 @@ import {
 	showcaseStatusLabel,
 } from "../../lib/admin-showcase";
 import { convexErrorMessage } from "../../lib/format";
-import { showcasePath, showcaseThemeClass } from "../../lib/showcase";
+import { showcaseLook, showcasePath } from "../../lib/showcase";
 import { cn } from "../../lib/utils";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
@@ -106,7 +106,7 @@ export function ShowcaseRow({
 					) : null}
 					<Button asChild className="tap-target font-bold">
 						<Link
-							to="/app/admin/marketplace/$showcaseId"
+							to="/app/admin/showcases/$showcaseId"
 							params={{ showcaseId: showcase._id }}
 						>
 							Edit
@@ -120,11 +120,13 @@ export function ShowcaseRow({
 }
 
 function Thumb({ showcase }: { showcase: AdminShowcase }) {
+	const look = showcaseLook(showcase);
 	return (
 		<span
 			aria-hidden
+			style={look.style}
 			className={cn(
-				showcaseThemeClass(showcase.theme),
+				look.className,
 				"relative hidden h-[74px] w-[132px] shrink-0 overflow-hidden rounded-xl bg-showcase sm:block",
 			)}
 		>

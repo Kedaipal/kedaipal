@@ -47,8 +47,8 @@ import { Route as AppAdminSellersRouteImport } from './routes/app.admin.sellers'
 import { Route as AppAdminBillingRouteImport } from './routes/app.admin.billing'
 import { Route as SlugPProductSlugRouteImport } from './routes/$slug_.p.$productSlug'
 import { Route as SlugCCategorySlugRouteImport } from './routes/$slug_.c.$categorySlug'
-import { Route as AppAdminMarketplaceIndexRouteImport } from './routes/app.admin.marketplace.index'
-import { Route as AppAdminMarketplaceShowcaseIdRouteImport } from './routes/app.admin.marketplace.$showcaseId'
+import { Route as AppAdminShowcasesIndexRouteImport } from './routes/app.admin.showcases.index'
+import { Route as AppAdminShowcasesShowcaseIdRouteImport } from './routes/app.admin.showcases.$showcaseId'
 
 const TermsRoute = TermsRouteImport.update({
   id: '/terms',
@@ -240,16 +240,15 @@ const SlugCCategorySlugRoute = SlugCCategorySlugRouteImport.update({
   path: '/$slug/c/$categorySlug',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AppAdminMarketplaceIndexRoute =
-  AppAdminMarketplaceIndexRouteImport.update({
-    id: '/admin/marketplace/',
-    path: '/admin/marketplace/',
-    getParentRoute: () => AppRoute,
-  } as any)
-const AppAdminMarketplaceShowcaseIdRoute =
-  AppAdminMarketplaceShowcaseIdRouteImport.update({
-    id: '/admin/marketplace/$showcaseId',
-    path: '/admin/marketplace/$showcaseId',
+const AppAdminShowcasesIndexRoute = AppAdminShowcasesIndexRouteImport.update({
+  id: '/admin/showcases/',
+  path: '/admin/showcases/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppAdminShowcasesShowcaseIdRoute =
+  AppAdminShowcasesShowcaseIdRouteImport.update({
+    id: '/admin/showcases/$showcaseId',
+    path: '/admin/showcases/$showcaseId',
     getParentRoute: () => AppRoute,
   } as any)
 
@@ -292,8 +291,8 @@ export interface FileRoutesByFullPath {
   '/app/orders/': typeof AppOrdersIndexRoute
   '/app/products/': typeof AppProductsIndexRoute
   '/app/vouchers/': typeof AppVouchersIndexRoute
-  '/app/admin/marketplace/$showcaseId': typeof AppAdminMarketplaceShowcaseIdRoute
-  '/app/admin/marketplace/': typeof AppAdminMarketplaceIndexRoute
+  '/app/admin/showcases/$showcaseId': typeof AppAdminShowcasesShowcaseIdRoute
+  '/app/admin/showcases/': typeof AppAdminShowcasesIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -333,8 +332,8 @@ export interface FileRoutesByTo {
   '/app/orders': typeof AppOrdersIndexRoute
   '/app/products': typeof AppProductsIndexRoute
   '/app/vouchers': typeof AppVouchersIndexRoute
-  '/app/admin/marketplace/$showcaseId': typeof AppAdminMarketplaceShowcaseIdRoute
-  '/app/admin/marketplace': typeof AppAdminMarketplaceIndexRoute
+  '/app/admin/showcases/$showcaseId': typeof AppAdminShowcasesShowcaseIdRoute
+  '/app/admin/showcases': typeof AppAdminShowcasesIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -376,8 +375,8 @@ export interface FileRoutesById {
   '/app/orders/': typeof AppOrdersIndexRoute
   '/app/products/': typeof AppProductsIndexRoute
   '/app/vouchers/': typeof AppVouchersIndexRoute
-  '/app/admin/marketplace/$showcaseId': typeof AppAdminMarketplaceShowcaseIdRoute
-  '/app/admin/marketplace/': typeof AppAdminMarketplaceIndexRoute
+  '/app/admin/showcases/$showcaseId': typeof AppAdminShowcasesShowcaseIdRoute
+  '/app/admin/showcases/': typeof AppAdminShowcasesIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -420,8 +419,8 @@ export interface FileRouteTypes {
     | '/app/orders/'
     | '/app/products/'
     | '/app/vouchers/'
-    | '/app/admin/marketplace/$showcaseId'
-    | '/app/admin/marketplace/'
+    | '/app/admin/showcases/$showcaseId'
+    | '/app/admin/showcases/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -461,8 +460,8 @@ export interface FileRouteTypes {
     | '/app/orders'
     | '/app/products'
     | '/app/vouchers'
-    | '/app/admin/marketplace/$showcaseId'
-    | '/app/admin/marketplace'
+    | '/app/admin/showcases/$showcaseId'
+    | '/app/admin/showcases'
   id:
     | '__root__'
     | '/'
@@ -503,8 +502,8 @@ export interface FileRouteTypes {
     | '/app/orders/'
     | '/app/products/'
     | '/app/vouchers/'
-    | '/app/admin/marketplace/$showcaseId'
-    | '/app/admin/marketplace/'
+    | '/app/admin/showcases/$showcaseId'
+    | '/app/admin/showcases/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -797,18 +796,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SlugCCategorySlugRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/app/admin/marketplace/': {
-      id: '/app/admin/marketplace/'
-      path: '/admin/marketplace'
-      fullPath: '/app/admin/marketplace/'
-      preLoaderRoute: typeof AppAdminMarketplaceIndexRouteImport
+    '/app/admin/showcases/': {
+      id: '/app/admin/showcases/'
+      path: '/admin/showcases'
+      fullPath: '/app/admin/showcases/'
+      preLoaderRoute: typeof AppAdminShowcasesIndexRouteImport
       parentRoute: typeof AppRoute
     }
-    '/app/admin/marketplace/$showcaseId': {
-      id: '/app/admin/marketplace/$showcaseId'
-      path: '/admin/marketplace/$showcaseId'
-      fullPath: '/app/admin/marketplace/$showcaseId'
-      preLoaderRoute: typeof AppAdminMarketplaceShowcaseIdRouteImport
+    '/app/admin/showcases/$showcaseId': {
+      id: '/app/admin/showcases/$showcaseId'
+      path: '/admin/showcases/$showcaseId'
+      fullPath: '/app/admin/showcases/$showcaseId'
+      preLoaderRoute: typeof AppAdminShowcasesShowcaseIdRouteImport
       parentRoute: typeof AppRoute
     }
   }
@@ -834,8 +833,8 @@ interface AppRouteChildren {
   AppOrdersIndexRoute: typeof AppOrdersIndexRoute
   AppProductsIndexRoute: typeof AppProductsIndexRoute
   AppVouchersIndexRoute: typeof AppVouchersIndexRoute
-  AppAdminMarketplaceShowcaseIdRoute: typeof AppAdminMarketplaceShowcaseIdRoute
-  AppAdminMarketplaceIndexRoute: typeof AppAdminMarketplaceIndexRoute
+  AppAdminShowcasesShowcaseIdRoute: typeof AppAdminShowcasesShowcaseIdRoute
+  AppAdminShowcasesIndexRoute: typeof AppAdminShowcasesIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -858,8 +857,8 @@ const AppRouteChildren: AppRouteChildren = {
   AppOrdersIndexRoute: AppOrdersIndexRoute,
   AppProductsIndexRoute: AppProductsIndexRoute,
   AppVouchersIndexRoute: AppVouchersIndexRoute,
-  AppAdminMarketplaceShowcaseIdRoute: AppAdminMarketplaceShowcaseIdRoute,
-  AppAdminMarketplaceIndexRoute: AppAdminMarketplaceIndexRoute,
+  AppAdminShowcasesShowcaseIdRoute: AppAdminShowcasesShowcaseIdRoute,
+  AppAdminShowcasesIndexRoute: AppAdminShowcasesIndexRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
