@@ -118,7 +118,7 @@
    next to.
 
    OUTWARD ONLY (z8r3fdudm2). The halo's spread never shrinks inside a cycle:
-   it fades in on the ring (2px), travels out to 14px as it fades away, and
+   it fades in on the ring (2px), travels out to 12px as it fades away, and
    rests there invisible until the loop restarts. A there-and-back keyframe
    (0 → 10px → 0) read as the ring being sucked back into the card. The
    restart is invisible because the halo is fully transparent at both ends.
@@ -128,7 +128,15 @@
    so a halo-only keyframe erased the ring for as long as the sale ran. The
    `ring-2 ring-accent/35` utility stays on the element for
    `prefers-reduced-motion`, where the animation is off and the ring is the
-   whole indication that remains — this layer matches it exactly. */
+   whole indication that remains — this layer matches it exactly.
+
+   12px is a BUDGET, not a taste: it is the grid's `gap-3`, so a halo never
+   paints over the next card, and it is the vertical room the Popular shelf
+   leaves inside its scroller. A horizontal scroller clips on BOTH axes
+   (overflow-x: auto forces overflow-y to clip too), so a shelf with only its
+   side padding showed the pulse left and right and cut it off top and bottom.
+   Any scroller that holds a ProductCard must leave 12px on every side —
+   `flash-glow-keyframes.test.ts` holds the shelf to it. */
 @keyframes kp-flash-glow {
 	0% {
 		box-shadow:
@@ -144,7 +152,7 @@
 	100% {
 		box-shadow:
 			0 0 0 2px color-mix(in oklab, var(--accent) 35%, transparent),
-			0 0 0 14px color-mix(in oklab, var(--accent) 0%, transparent);
+			0 0 0 12px color-mix(in oklab, var(--accent) 0%, transparent);
 	}
 }
 @utility animate-kp-flash-glow {

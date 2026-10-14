@@ -17,9 +17,21 @@ import { describe, expect, test } from "vitest";
  *
  * Plus the seam: the halo is fully transparent at both ends, so the loop
  * restart can't be seen.
+ *
+ * 3. IT FITS. The halo's reach is a 12px budget — the grid's `gap-3`, and
+ *    the room the Popular shelf's scroller leaves on every side. A horizontal
+ *    scroller clips the Y axis too, so with only side padding the pulse was
+ *    cut off top and bottom and breathed left/right only (Zaki, 14 Oct).
  */
 
 const css = readFileSync(join(__dirname, "..", "styles.css"), "utf8");
+const shelf = readFileSync(
+	join(__dirname, "..", "components", "storefront", "featured-product.tsx"),
+	"utf8",
+);
+
+/** The 12px a card's halo may reach — `gap-3` / `p-3` in Tailwind. */
+const HALO_BUDGET_PX = 12;
 
 type Layer = { spread: number; alpha: number };
 type Frame = { at: number; ring: Layer; halo: Layer };
@@ -74,5 +86,25 @@ describe("kp-flash-glow keyframes", () => {
 	test("the halo is invisible at both ends, so the restart has no seam", () => {
 		expect(frames[0].halo.alpha).toBe(0);
 		expect(frames.at(-1)?.halo.alpha).toBe(0);
+	});
+
+	test("the halo never reaches past the 12px budget", () => {
+		for (const f of frames) {
+			expect(f.halo.spread).toBeLessThanOrEqual(HALO_BUDGET_PX);
+		}
+	});
+});
+
+describe("the Popular shelf leaves the halo room on every side", () => {
+	const scroller = shelf.match(/className="([^"]*overflow-x-auto[^"]*)"/)?.[1];
+
+	test("the scroller is found", () => {
+		expect(scroller).toBeDefined();
+	});
+
+	test("12px above and below the cards — overflow-x clips the Y axis too", () => {
+		const classes = scroller?.split(/\s+/) ?? [];
+		expect(classes).toContain("pt-3");
+		expect(classes).toContain("pb-3");
 	});
 });
