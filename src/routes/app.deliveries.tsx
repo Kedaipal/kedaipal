@@ -65,6 +65,21 @@ function DeliveriesRoute() {
 					) : null
 				}
 			/>
+			{/* PageHeader is desktop-only; a phone gets the title row every
+			    other dashboard page carries, with the same glances. */}
+			<div className="flex flex-col gap-2 lg:hidden">
+				<h1 className="font-heading text-[22px] font-extrabold leading-tight tracking-tight">
+					Deliveries
+				</h1>
+				{overview.booksCouriers || overview.wallet ? (
+					<div className="flex flex-wrap items-center gap-2">
+						{overview.booksCouriers ? (
+							<Glance tone="grey">{monthGlance(overview)}</Glance>
+						) : null}
+						<WalletGlance wallet={overview.wallet} />
+					</div>
+				) : null}
+			</div>
 			<DeliveriesView
 				overview={overview}
 				retailerId={retailer._id}

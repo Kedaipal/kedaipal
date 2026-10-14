@@ -27,6 +27,7 @@ import {
 	type DeliveryJobStatus,
 	isActiveJobStatus,
 } from "./lib/deliveryJobs";
+import { storeBooksCouriers } from "./lib/courierBooking";
 import { hasLalamoveCredentials } from "./lib/lalamove";
 import { isReadyToShipForLabel } from "./lib/pdf/awb";
 
@@ -59,6 +60,9 @@ export type DeliveryJobRow = {
 	/** The order this job belongs to has moved on (shipped by other means,
 	 * cancelled) — a failed booking on it needs nothing. */
 	orderSettled: boolean;
+	/** A failed booking that still needs one: the order's NEWEST attempt, on
+	 * an order still waiting. Older failures on the same order are history. */
+	rebookable: boolean;
 	/** Live tracking + the proof photo lead to the buyer's address, so a
 	 * credit-gated order drops them. */
 	shareLink?: string;
@@ -87,6 +91,10 @@ export type DeliveriesOverview = {
 	wallet: WalletView;
 	/** Has this store ever booked, or set up, a courier account? */
 	booksCouriers: boolean;
+	/** A rider or courier can be booked from an order right now (Lalamove or
+	 * Delyva switched on) — the To-ship queue's next step is "Book", not
+	 * "Add number". */
+	bookingArmed: boolean;
 	/** Does it hand parcels to a courier itself (needs a consignment number)? */
 	shipsParcels: boolean;
 	jobs: DeliveryJobRow[];
@@ -151,8 +159,9 @@ export const overview = query({
 			jobs.length === JOB_SCAN &&
 			(jobs[jobs.length - 1]?.createdAt ?? 0) >= start;
 
-		// Orders that already have a live or delivered booking aren't parcels
-		// waiting on a consignment number.
+		// Any order with a booking — live, delivered or failed — is accounted
+		// for in Courier bookings (a failed one as "to rebook"), so the To-ship
+		// queue never asks for the same order twice.
 		const bookedOrders = new Set<Id<"orders">>();
 		const jobRows: DeliveryJobRow[] = [];
 		let active = 0;
@@ -160,7 +169,7 @@ export const overview = query({
 		const seenOrders = new Set<Id<"orders">>();
 		for (const job of jobs) {
 			const group = groupOf(job.status);
-			if (group !== "failed") bookedOrders.add(job.orderId);
+			bookedOrders.add(job.orderId);
 			const order = await orderOf(job.orderId);
 			const orderSettled =
 				!order ||
@@ -172,9 +181,8 @@ export const overview = query({
 			// that was then rebooked needs nothing.
 			const newestForOrder = !seenOrders.has(job.orderId);
 			seenOrders.add(job.orderId);
-			if (group === "failed" && newestForOrder && !orderSettled) {
-				needsAttention++;
-			}
+			const rebookable = group === "failed" && newestForOrder && !orderSettled;
+			if (rebookable) needsAttention++;
 			if (jobRows.length >= JOB_ROWS || !order) continue;
 			const gated = isOrderGated(gate, order);
 			jobRows.push({
@@ -197,6 +205,7 @@ export const overview = query({
 				createdAt: job.createdAt,
 				failureReason: job.failureReason,
 				orderSettled,
+				rebookable,
 				shareLink: gated ? undefined : job.shareLink,
 				hasProof: !gated && (job.podImageStorageIds?.length ?? 0) > 0,
 				awb: job.awb,
@@ -266,6 +275,7 @@ export const overview = query({
 			currency: retailer.currency ?? DEFAULT_CURRENCY,
 			wallet: await readLalamoveWallet(ctx, retailerId),
 			booksCouriers,
+			bookingArmed: storeBooksCouriers(retailer),
 			shipsParcels,
 			jobs: jobRows,
 			counts: {

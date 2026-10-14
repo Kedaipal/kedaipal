@@ -45,6 +45,7 @@ function job(over: Partial<DeliveryJobRow>): DeliveryJobRow {
 		cost: 1160,
 		createdAt: 1,
 		orderSettled: false,
+		rebookable: false,
 		hasProof: false,
 		gated: false,
 		...over,
@@ -68,6 +69,7 @@ function overview(over: Partial<DeliveriesOverview> = {}): DeliveriesOverview {
 		currency: "MYR",
 		wallet: null,
 		booksCouriers: false,
+		bookingArmed: false,
 		shipsParcels: false,
 		jobs: [],
 		counts: {
@@ -131,6 +133,28 @@ describe("DeliveriesView", () => {
 		expect(screen.getByRole("dialog")).toBeTruthy();
 	});
 
+	it("a store that books couriers is asked to Book, not to add a number", () => {
+		renderView(
+			overview({
+				shipsParcels: true,
+				bookingArmed: true,
+				counts: {
+					active: 0,
+					needsAttention: 0,
+					toShip: 1,
+					inTransit: 0,
+					labelsReady: 0,
+				},
+				toShip: [parcel({})],
+			}),
+		);
+		expect(screen.getByRole("link", { name: "Book" })).toBeTruthy();
+		expect(screen.queryByRole("link", { name: "Add number" })).toBeNull();
+		expect(
+			screen.getByText(/Book a rider or courier from each order/),
+		).toBeTruthy();
+	});
+
 	it("labels at zero are disabled with their reason, never a dead click", () => {
 		renderView(overview({ shipsParcels: true }));
 		const print = screen.getByRole("button", { name: /Print labels/ });
@@ -178,7 +202,14 @@ describe("DeliveriesView", () => {
 						group: "completed",
 						hasProof: true,
 					}),
-					job({ shortId: "ORD-3", status: "rejected", group: "failed" }),
+					job({
+						shortId: "ORD-3",
+						status: "rejected",
+						group: "failed",
+						rebookable: true,
+					}),
+					// An older failure on the same order is history, not a task.
+					job({ shortId: "ORD-3", status: "expired", group: "failed" }),
 					job({
 						shortId: "ORD-4",
 						status: "expired",
@@ -236,6 +267,16 @@ describe("monthGlance + Home rows", () => {
 				}),
 			),
 		).toMatch(/Oct · 23\+ · RM\s?412\.00/);
+	});
+
+	it("names the month in Malaysia time, whatever the device zone says", () => {
+		// 1 Oct 00:00 MYT is still 30 Sep in UTC — the label must read Oct.
+		const start = Date.UTC(2026, 9, 1) - 8 * 3_600_000;
+		expect(
+			monthGlance(
+				overview({ month: { start, bookings: 0, cost: 0, partial: false } }),
+			),
+		).toMatch(/^Oct · 0/);
 	});
 
 	it("Home leads with what needs doing", () => {

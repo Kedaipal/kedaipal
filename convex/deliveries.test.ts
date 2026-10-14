@@ -104,6 +104,10 @@ describe("deliveries.overview", () => {
 		expect(o.booksCouriers).toBe(true);
 		const failed = o.jobs.filter((j) => j.group === "failed");
 		expect(failed.map((j) => j.orderSettled).sort()).toEqual([false, false, true]);
+		// Exactly one failure asks for a rebook — the page and the count agree.
+		expect(o.jobs.filter((j) => j.rebookable).map((j) => j.orderId)).toEqual([
+			waiting,
+		]);
 	});
 
 	test("the parcel queue: packed, by courier, no number yet, nothing else carrying it", async () => {
@@ -115,6 +119,10 @@ describe("deliveries.overview", () => {
 		await order(t, retailerId, { trackingNo: "JT123" });
 		const riderOut = await order(t, retailerId);
 		await job(t, retailerId, riderOut);
+		// A failed booking puts the order under "to rebook", never ALSO in the
+		// queue — one order, one ask.
+		const failedBooking = await order(t, retailerId);
+		await job(t, retailerId, failedBooking, { status: "expired" });
 		await order(t, retailerId, {
 			status: "shipped",
 			courierName: "J&T",
@@ -133,8 +141,10 @@ describe("deliveries.overview", () => {
 			courierName: "J&T",
 			trackingNo: "631234567890",
 		});
-		expect(o.counts).toMatchObject({ toShip: 1, inTransit: 1 });
+		expect(o.counts).toMatchObject({ toShip: 1, inTransit: 1, needsAttention: 1 });
 		expect(o.shipsParcels).toBe(true);
+		// Nothing switched on to book with: the queue's next step is a number.
+		expect(o.bookingArmed).toBe(false);
 	});
 
 	test("the month counts what went out or is going, never the failures", async () => {

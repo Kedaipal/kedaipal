@@ -45,7 +45,12 @@ import { Card, Glance, SectionHeading } from "../settings/settings-primitives";
 import { Button } from "../ui/button";
 import { FilterChip, FilterChipRow } from "../ui/filter-chip";
 
-const MONTH = new Intl.DateTimeFormat("en-MY", { month: "short" });
+// Malaysia/Singapore time (both UTC+8) — the month the server counted, not
+// the viewer's device zone; en-US for "Oct"/"Sep" rather than en-MY's "Sept".
+const MONTH = new Intl.DateTimeFormat("en-US", {
+	month: "short",
+	timeZone: "Asia/Kuala_Lumpur",
+});
 
 /** "Oct · 23 · RM 412.00" — the month's bookings at a glance. */
 export function monthGlance(o: DeliveriesOverview): string {
@@ -145,7 +150,11 @@ function ToShipCard({
 		<Card>
 			<SectionHeading
 				title="To ship"
-				description="Book with your courier, then add each consignment number — your buyer sees it on their order page."
+				description={
+					overview.bookingArmed
+						? "Book a rider or courier from each order — or add a consignment number if you send it yourself."
+						: "Book with your courier, then add each consignment number — your buyer sees it on their order page."
+				}
 				glance={
 					counts.toShip > 0 ? (
 						<Glance tone="warn">
@@ -206,7 +215,7 @@ function ToShipCard({
 							key={row.orderId}
 							row={row}
 							currency={currency}
-							action="add"
+							action={overview.bookingArmed ? "book" : "add"}
 						/>
 					))}
 				</ul>
@@ -259,10 +268,10 @@ function ParcelLine({
 }: {
 	row: ParcelRow;
 	currency: string;
-	action: "add" | "track";
+	action: "add" | "book" | "track";
 }) {
 	const detail =
-		action === "add"
+		action !== "track"
 			? [
 					row.gated ? GATED_CELL_LABEL : row.destination,
 					row.deliveryFee !== undefined
@@ -285,10 +294,10 @@ function ParcelLine({
 					{detail.filter(Boolean).join(" · ") || "—"}
 				</p>
 			</div>
-			{action === "add" ? (
+			{action !== "track" ? (
 				<Button asChild size="sm" variant="outline" className="tap-target">
 					<Link to="/app/orders/$shortId" params={{ shortId: row.shortId }}>
-						Add number
+						{action === "book" ? "Book" : "Add number"}
 					</Link>
 				</Button>
 			) : row.trackingUrl ? (
@@ -346,11 +355,7 @@ function BookingsCard({ overview }: { overview: DeliveriesOverview }) {
 								key={f.id}
 								selected={filter === f.id}
 								count={countFor(f.id)}
-								countTone={
-									f.id === "failed" && counts.needsAttention > 0
-										? "attention"
-										: "muted"
-								}
+								countTone="muted"
 								onClick={() => setFilter(f.id)}
 							>
 								{f.label}
@@ -472,7 +477,7 @@ function BookingAction({ job }: { job: DeliveryJobRow }) {
 		</Button>
 	);
 	if (job.group === "failed")
-		return job.orderSettled ? null : toOrder("Rebook", true);
+		return job.rebookable ? toOrder("Rebook", true) : null;
 	if (job.group === "active" && job.shareLink)
 		return (
 			<Button asChild size="sm" variant="outline" className="tap-target">
