@@ -524,6 +524,49 @@ export const markWebhookRegistered = internalMutation({
 });
 
 /**
+ * Stores whose webhook demonstrably works from BEFORE the setup checklist
+ * existed (86eye9xd4): a job with `lastEventAt` received a verified event
+ * (`applyWebhookEvent` only runs after the signature checks), so the
+ * checklist's webhook step must read done — not "Action needed" on an account
+ * that has been updating itself for months. Idempotent (stamped stores are
+ * skipped) and self-continuing; operator step, once per deployment.
+ *
+ * Run: `npx convex run lalamove:backfillWebhookKnown`
+ */
+export const backfillWebhookKnown = internalMutation({
+	args: { cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (ctx, { cursor }): Promise<{ stamped: number }> => {
+		const page = await ctx.db
+			.query("retailers")
+			.paginate({ numItems: 50, cursor: cursor ?? null });
+		let stamped = 0;
+		for (const retailer of page.page) {
+			const booking = retailer.deliveryBooking;
+			if (!booking?.apiKey || booking.webhookRegisteredAt !== undefined) continue;
+			const jobs = await ctx.db
+				.query("deliveryJobs")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.order("desc")
+				.take(50);
+			const heard = jobs.find(
+				(j) => j.provider === "lalamove" && j.lastEventAt !== undefined,
+			);
+			if (!heard?.lastEventAt) continue;
+			await ctx.db.patch(retailer._id, {
+				deliveryBooking: { ...booking, webhookRegisteredAt: heard.lastEventAt },
+			});
+			stamped++;
+		}
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(0, internal.lalamove.backfillWebhookKnown, {
+				cursor: page.continueCursor,
+			});
+		}
+		return { stamped };
+	},
+});
+
+/**
  * Point the seller's Lalamove account at our webhook — `PATCH /v3/webhook`,
  * free, so the Partner Portal copy-paste becomes one tap. Lalamove keeps ONE
  * webhook URL per account, so this replaces whatever was there; the settings

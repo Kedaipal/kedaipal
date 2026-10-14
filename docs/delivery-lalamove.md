@@ -486,7 +486,10 @@ when Lalamove refuses. A **verified event** for one of the store's jobs also
 stamps `webhookRegisteredAt` (once — `stampWebhookKnown` in
 `applyWebhookEvent`), so a hand-pasted webhook ticks the step too; **typing
 a new key clears it**, because a different account has its own webhook
-setting. Graceful degradation if a seller skips it:
+setting. Stores whose bookings heard back BEFORE the checklist existed are
+stamped by `npx convex run lalamove:backfillWebhookKnown` (operator step,
+once per deployment) — without it every working store would read "Action
+needed" after the deploy. Graceful degradation if a seller skips it:
 bookings still work, but shipped/delivered stop being automatic — the
 order stays where it is until the seller advances it by hand, which since
 3 Aug costs one confirm per transition while a booking is active (the

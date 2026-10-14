@@ -2334,6 +2334,28 @@ describe("webhook setup state (86eye9xd4, 5A)", () => {
 		expect((await summary(t))?.webhookRegisteredAt).toBeTypeOf("number");
 	});
 
+	test("the backfill ticks a store whose bookings already heard back, and only it", async () => {
+		const t = setup();
+		const retailer = await seedKeyedStore(t);
+		const orderId = await seedOrder(t, retailer._id);
+		await seedJob(t, retailer._id, orderId, { lastEventAt: 1234 });
+		const first = await t.mutation(internal.lalamove.backfillWebhookKnown, {});
+		expect(first.stamped).toBe(1);
+		expect((await summary(t))?.webhookRegisteredAt).toBe(1234);
+		const again = await t.mutation(internal.lalamove.backfillWebhookKnown, {});
+		expect(again.stamped).toBe(0);
+	});
+
+	test("the backfill leaves a store that never heard back asking", async () => {
+		const t = setup();
+		const retailer = await seedKeyedStore(t);
+		const orderId = await seedOrder(t, retailer._id);
+		await seedJob(t, retailer._id, orderId);
+		const result = await t.mutation(internal.lalamove.backfillWebhookKnown, {});
+		expect(result.stamped).toBe(0);
+		expect((await summary(t))?.webhookRegisteredAt).toBeUndefined();
+	});
+
 	test("new keys are a new account — the step asks again", async () => {
 		const t = setup();
 		const retailer = await seedKeyedStore(t);
