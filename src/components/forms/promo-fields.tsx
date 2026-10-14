@@ -31,9 +31,15 @@ export type PromoDraft = {
 	on: boolean;
 	/** Badge wording; blank falls back to `DEFAULT_PROMO_LABEL` on display. */
 	label: string;
-	/** "now" = starts when they save; "schedule" = the drop fields below. */
-	startMode: "now" | "schedule";
-	/** "YYYY-MM-DD" / "HH:MM" — only read when `startMode` is "schedule". */
+	/** "now" = starts when they save; "schedule" = the drop fields below;
+	 * "started" = a saved promotion re-opened after its start has passed. A
+	 * running sale's start is a FACT, so it is shown, never offered as a
+	 * choice — "Now" would silently restart it and "Schedule a start…" would
+	 * invite moving a sale that is already selling. Only `promoDraftFrom`
+	 * seeds it; nothing the seller taps can reach it. */
+	startMode: "now" | "schedule" | "started";
+	/** "YYYY-MM-DD" / "HH:MM" — read when `startMode` is "schedule" or
+	 * "started". */
 	startDate: string;
 	startTime: string;
 	/** How long it runs. `minutes` uses `durationMinutes`; `until` uses the
@@ -110,7 +116,9 @@ function positiveInt(raw: string): number | undefined {
 	return Number.isInteger(n) && n > 0 && String(n) === t ? n : undefined;
 }
 
-/** Seed from a saved product (or the empty draft when it has no promotion). */
+/** Seed from a saved product (or the empty draft when it has no promotion).
+ * `now` decides whether a stored start is still ahead ("schedule") or has
+ * already happened ("started"). */
 export function promoDraftFrom(
 	promo:
 		| {
@@ -122,6 +130,7 @@ export function promoDraftFrom(
 				payWithinMinutes?: number;
 		  }
 		| undefined,
+	now: number = Date.now(),
 ): PromoDraft {
 	if (!promo) return { ...EMPTY_PROMO_DRAFT };
 	const ymd = (ms: number) => {
@@ -137,10 +146,16 @@ export function promoDraftFrom(
 	return {
 		on: true,
 		label: promo.label ?? "",
-		// A stored start is always re-shown as a scheduled one: "now" has
-		// already happened by the time anyone re-opens the form, and offering
-		// to re-start it silently would move a running sale.
-		startMode: promo.startsAt !== undefined ? "schedule" : "now",
+		// A stored start is never re-shown as "now": that has already happened
+		// by the time anyone re-opens the form, and offering it would silently
+		// restart a running sale. One still ahead stays editable; one that has
+		// passed is the running sale's history, shown and not offered.
+		startMode:
+			promo.startsAt === undefined
+				? "now"
+				: promo.startsAt <= now
+					? "started"
+					: "schedule",
 		startDate: start?.date ?? "",
 		startTime: start?.time ?? "",
 		endMode: promo.endsAt !== undefined ? "until" : "open",
@@ -161,7 +176,7 @@ export function promoSubmitValue(
 ): PromoSubmitValue {
 	if (!draft.on) return null;
 	const startsAt =
-		draft.startMode === "schedule"
+		draft.startMode !== "now"
 			? epochFrom(draft.startDate, draft.startTime)
 			: undefined;
 	const endsAt =
@@ -254,10 +269,25 @@ export function promoWindowSentence(draft: PromoDraft, now: number): string {
 	const from =
 		value.startsAt === undefined
 			? "Runs from the moment you save"
-			: `Runs from ${when(value.startsAt)}`;
+			: draft.startMode === "started"
+				? `Running since ${when(value.startsAt)}`
+				: `Runs from ${when(value.startsAt)}`;
 	if (value.endsAt === undefined)
 		return `${from} until you turn it off — a plain discount, no countdown.`;
 	return `${from} until ${when(value.endsAt)}.`;
+}
+
+/** "Wed 14 Oct, 8:30 pm" — the start a running sale is shown with. */
+function startedLabel(date: string, time: string): string {
+	const ms = epochFrom(date, time);
+	if (ms === undefined) return "earlier";
+	return new Date(ms).toLocaleString(undefined, {
+		weekday: "short",
+		day: "numeric",
+		month: "short",
+		hour: "numeric",
+		minute: "2-digit",
+	});
 }
 
 /** One sellable line the promotion can price. */
@@ -291,6 +321,8 @@ export function PromoFields({
 	flashBlockedReason,
 	creditBalance,
 	noToggle,
+	pricing = "rows",
+	terms = "edit",
 	now,
 }: {
 	draft: PromoDraft;
@@ -309,6 +341,15 @@ export function PromoFields({
 	flashBlockedReason?: string;
 	creditBalance?: number;
 	noToggle?: boolean;
+	/** `"none"` asks only the TERMS — label, window, flash extras — with no
+	 * sale price per line. The bulk promotion flow (z8r3fducfd) prices its
+	 * lines on a review step of its own, across many products, so the same
+	 * questions are asked by the same component and never re-drawn. */
+	pricing?: "rows" | "none";
+	/** `"none"` is the mirror: sale prices only. A product inside a bulk
+	 * promotion takes its window, label and flash extras from the PROMOTION,
+	 * so its own form edits just its lines (the per-product override). */
+	terms?: "edit" | "none";
 	now: number;
 }) {
 	const fieldId = useId();
@@ -331,7 +372,10 @@ export function PromoFields({
 		onPromoPrices(next);
 	};
 	const open = draft.on || noToggle === true;
-	const issue = promoDraftIssue(draft, now, rows);
+	const issue =
+		terms === "none"
+			? undefined
+			: promoDraftIssue(draft, now, pricing === "rows" ? rows : undefined);
 	const cap = positiveInt(draft.unitCap);
 	const creditsShort =
 		cap !== undefined && creditBalance !== undefined && cap > creditBalance;
@@ -418,290 +462,318 @@ export function PromoFields({
 					)}
 				>
 					{/* Sale price per sellable line. */}
-					<div className="flex flex-col gap-3">
-						<div className="flex flex-wrap items-center gap-2">
-							<span className="text-xs font-semibold">Quick fill</span>
-							{PROMO_PERCENT_PRESETS.map((percent) => (
-								<button
-									key={percent}
-									type="button"
-									onClick={() => applyPercent(percent)}
-									className={chip(false)}
-								>
-									{percent}% off
-								</button>
-							))}
-						</div>
-						<div className="flex flex-col gap-2">
-							{rows.map((row) => {
-								const list = parsePriceInput(row.price);
-								const sale = parsePriceInput(row.promoPrice);
-								// The SAME rule `buildSubmitVariants` gates the save on, and
-								// the only place it is ever SAID. The submit-time copy was
-								// written and then rendered by nobody, so Save and Continue
-								// were silent no-ops: the button did nothing, forever, with
-								// the reason nowhere on screen (found by hand-testing).
-								// Shown live while typing, not just on submit.
-								const saleIssue =
-									row.promoPrice.trim().length === 0
-										? undefined
-										: sale === null || list === null || sale <= 0
-											? "Numbers only — e.g. 31.50."
-											: sale >= list
-												? "Must be below the normal price."
-												: undefined;
-								const errorId = `${fieldId}-${row.key}-err`;
-								return (
-									<div key={row.key} className="flex flex-col gap-1">
-										<div className="flex items-center justify-between gap-3">
-											<div className="min-w-0">
-												<p className="truncate text-sm font-medium">
-													{row.label}
-												</p>
-												<p className="text-xs text-muted-foreground line-through">
-													{list === null
-														? "—"
-														: formatPrice(Math.round(list * 100), currency)}
-												</p>
-											</div>
-											<Input
-												aria-label={`Sale price for ${row.label}`}
-												aria-describedby={saleIssue ? errorId : undefined}
-												variant="field"
-												inputMode="decimal"
-												placeholder="0.00"
-												isError={saleIssue !== undefined}
-												className="w-28 text-right"
-												value={row.promoPrice}
-												onChange={(e) =>
-													setPrices({ [row.key]: e.target.value })
-												}
-											/>
-										</div>
-										{saleIssue ? (
-											<p
-												id={errorId}
-												className="text-right text-xs font-medium text-destructive"
-											>
-												{saleIssue}
-											</p>
-										) : null}
-									</div>
-								);
-							})}
-						</div>
-						<p className="text-xs text-muted-foreground">
-							Quick fill rounds to the nearest 5 sen. Leave a line blank to keep
-							it at its normal price; a sale price must be below it.
-						</p>
-					</div>
-
-					{/* Badge wording. */}
-					<div className="flex flex-col gap-1.5">
-						<label htmlFor="promo-label" className="text-xs font-semibold">
-							Label{" "}
-							<span className="font-normal text-muted-foreground">
-								(shown on the badge)
-							</span>
-						</label>
-						<Input
-							id="promo-label"
-							variant="field"
-							className="w-56"
-							maxLength={PROMO_LABEL_MAX_CHARS}
-							placeholder={DEFAULT_PROMO_LABEL}
-							value={draft.label}
-							onChange={(e) => set({ label: e.target.value })}
-						/>
-					</div>
-
-					{/* WHEN it starts — asked separately from how long it runs. */}
-					<div className="flex flex-col gap-2">
-						<span className="text-xs font-semibold">When does it start?</span>
-						<div className="flex flex-wrap gap-2">
-							<button
-								type="button"
-								onClick={() => set({ startMode: "now" })}
-								className={chip(draft.startMode === "now")}
-							>
-								Now
-							</button>
-							<button
-								type="button"
-								onClick={() => set({ startMode: "schedule" })}
-								className={chip(draft.startMode === "schedule")}
-							>
-								Schedule a start…
-							</button>
-						</div>
-						{draft.startMode === "schedule" ? (
-							<div className="flex flex-wrap gap-2">
-								<Input
-									aria-label="Promotion start date"
-									type="date"
-									variant="field"
-									className="w-44"
-									value={draft.startDate}
-									onChange={(e) => set({ startDate: e.target.value })}
-								/>
-								<Input
-									aria-label="Promotion start time"
-									type="time"
-									variant="field"
-									className="w-36"
-									value={draft.startTime}
-									onChange={(e) => set({ startTime: e.target.value })}
-								/>
-							</div>
-						) : null}
-					</div>
-
-					{/* HOW LONG it runs. */}
-					<div className="flex flex-col gap-2">
-						<span className="text-xs font-semibold">How long does it run?</span>
-						<div className="flex flex-wrap gap-2">
-							{PROMO_DURATION_PRESETS.map((preset) => (
-								<button
-									key={preset.minutes}
-									type="button"
-									onClick={() =>
-										set({
-											endMode: "minutes",
-											durationMinutes: preset.minutes,
-										})
-									}
-									className={chip(
-										draft.endMode === "minutes" &&
-											draft.durationMinutes === preset.minutes,
-									)}
-								>
-									For {preset.label}
-								</button>
-							))}
-							<button
-								type="button"
-								onClick={() => set({ endMode: "until" })}
-								className={chip(draft.endMode === "until")}
-							>
-								Until a date…
-							</button>
-							<button
-								type="button"
-								onClick={() => set({ endMode: "open" })}
-								className={chip(draft.endMode === "open")}
-							>
-								No end date
-							</button>
-						</div>
-						{draft.endMode === "until" ? (
-							<div className="flex flex-wrap gap-2">
-								<Input
-									aria-label="Promotion end date"
-									type="date"
-									variant="field"
-									className="w-44"
-									value={draft.endDate}
-									onChange={(e) => set({ endDate: e.target.value })}
-								/>
-								<Input
-									aria-label="Promotion end time"
-									type="time"
-									variant="field"
-									className="w-36"
-									value={draft.endTime}
-									onChange={(e) => set({ endTime: e.target.value })}
-								/>
-							</div>
-						) : null}
-						<p className="flex items-center gap-2 rounded-lg bg-accent/8 px-3 py-2 text-xs font-medium text-accent-emphasis">
-							<Scissors
-								className="size-3.5 shrink-0 -scale-x-100"
-								aria-hidden
-							/>
-							{promoWindowSentence(draft, now)}
-						</p>
-						<p className="text-xs text-muted-foreground">
-							A timed promotion shows a live countdown on your storefront. "No
-							end date" is a plain discount — badge and strike-through, no
-							timer.
-						</p>
-					</div>
-
-					{/* Flash extras. */}
-					{flashAllowed ? (
-						<div className="flex flex-col gap-3 border-t border-border pt-4">
-							<div className="flex items-center gap-2">
-								<Tag className="size-3.5" aria-hidden />
-								<span className="text-sm font-semibold">Flash sale extras</span>
-								<span className="text-xs text-muted-foreground">optional</span>
-							</div>
-							<div className="flex items-center justify-between gap-3">
-								<label htmlFor="promo-cap" className="text-sm">
-									Only the first <b>N</b> units at this price
-								</label>
-								<Input
-									id="promo-cap"
-									variant="field"
-									inputMode="numeric"
-									className="w-24 text-right"
-									placeholder="—"
-									value={draft.unitCap}
-									onChange={(e) => set({ unitCap: e.target.value })}
-								/>
-							</div>
-							<div className="flex items-center justify-between gap-3">
-								<label htmlFor="promo-max" className="text-sm">
-									Max per order
-								</label>
-								<Input
-									id="promo-max"
-									variant="field"
-									inputMode="numeric"
-									className="w-24 text-right"
-									placeholder="—"
-									value={draft.maxPerOrder}
-									onChange={(e) => set({ maxPerOrder: e.target.value })}
-								/>
+					{pricing === "rows" ? (
+						<div className="flex flex-col gap-3">
+							<div className="flex flex-wrap items-center gap-2">
+								<span className="text-xs font-semibold">Quick fill</span>
+								{PROMO_PERCENT_PRESETS.map((percent) => (
+									<button
+										key={percent}
+										type="button"
+										onClick={() => applyPercent(percent)}
+										className={chip(false)}
+									>
+										{percent}% off
+									</button>
+								))}
 							</div>
 							<div className="flex flex-col gap-2">
-								<span className="text-sm">Buyers must pay within</span>
-								<div className="flex flex-wrap gap-2">
-									{PROMO_PAY_WINDOW_CHOICES.map((choice) => (
+								{rows.map((row) => {
+									const list = parsePriceInput(row.price);
+									const sale = parsePriceInput(row.promoPrice);
+									// The SAME rule `buildSubmitVariants` gates the save on, and
+									// the only place it is ever SAID. The submit-time copy was
+									// written and then rendered by nobody, so Save and Continue
+									// were silent no-ops: the button did nothing, forever, with
+									// the reason nowhere on screen (found by hand-testing).
+									// Shown live while typing, not just on submit.
+									const saleIssue =
+										row.promoPrice.trim().length === 0
+											? undefined
+											: sale === null || list === null || sale <= 0
+												? "Numbers only — e.g. 31.50."
+												: sale >= list
+													? "Must be below the normal price."
+													: undefined;
+									const errorId = `${fieldId}-${row.key}-err`;
+									return (
+										<div key={row.key} className="flex flex-col gap-1">
+											<div className="flex items-center justify-between gap-3">
+												<div className="min-w-0">
+													<p className="truncate text-sm font-medium">
+														{row.label}
+													</p>
+													<p className="text-xs text-muted-foreground line-through">
+														{list === null
+															? "—"
+															: formatPrice(Math.round(list * 100), currency)}
+													</p>
+												</div>
+												<Input
+													aria-label={`Sale price for ${row.label}`}
+													aria-describedby={saleIssue ? errorId : undefined}
+													variant="field"
+													inputMode="decimal"
+													placeholder="0.00"
+													isError={saleIssue !== undefined}
+													className="w-28 text-right"
+													value={row.promoPrice}
+													onChange={(e) =>
+														setPrices({ [row.key]: e.target.value })
+													}
+												/>
+											</div>
+											{saleIssue ? (
+												<p
+													id={errorId}
+													className="text-right text-xs font-medium text-destructive"
+												>
+													{saleIssue}
+												</p>
+											) : null}
+										</div>
+									);
+								})}
+							</div>
+							<p className="text-xs text-muted-foreground">
+								Quick fill rounds to the nearest 5 sen. Leave a line blank to
+								keep it at its normal price; a sale price must be below it.
+							</p>
+						</div>
+					) : null}
+
+					{terms === "edit" ? (
+						<>
+							{/* Badge wording. */}
+							<div className="flex flex-col gap-1.5">
+								<label htmlFor="promo-label" className="text-xs font-semibold">
+									Label{" "}
+									<span className="font-normal text-muted-foreground">
+										(shown on the badge)
+									</span>
+								</label>
+								<Input
+									id="promo-label"
+									variant="field"
+									className="w-56"
+									maxLength={PROMO_LABEL_MAX_CHARS}
+									placeholder={DEFAULT_PROMO_LABEL}
+									value={draft.label}
+									onChange={(e) => set({ label: e.target.value })}
+								/>
+							</div>
+
+							{/* WHEN it starts — asked separately from how long it runs.
+							    Not asked at all once it has: a running sale's start is
+							    stated, so the only questions left are about its end. */}
+							{draft.startMode === "started" ? (
+								<div className="flex flex-col gap-1">
+									<span className="text-xs font-semibold">Started</span>
+									<p className="text-sm text-muted-foreground">
+										It's already running — it started{" "}
+										{startedLabel(draft.startDate, draft.startTime)}.
+									</p>
+								</div>
+							) : (
+								<div className="flex flex-col gap-2">
+									<span className="text-xs font-semibold">
+										When does it start?
+									</span>
+									<div className="flex flex-wrap gap-2">
 										<button
-											key={choice.minutes}
 											type="button"
-											onClick={() => set({ payWithinMinutes: choice.minutes })}
+											onClick={() => set({ startMode: "now" })}
+											className={chip(draft.startMode === "now")}
+										>
+											Now
+										</button>
+										<button
+											type="button"
+											onClick={() => set({ startMode: "schedule" })}
+											className={chip(draft.startMode === "schedule")}
+										>
+											Schedule a start…
+										</button>
+									</div>
+									{draft.startMode === "schedule" ? (
+										<div className="flex flex-wrap gap-2">
+											<Input
+												aria-label="Promotion start date"
+												type="date"
+												variant="field"
+												className="w-44"
+												value={draft.startDate}
+												onChange={(e) => set({ startDate: e.target.value })}
+											/>
+											<Input
+												aria-label="Promotion start time"
+												type="time"
+												variant="field"
+												className="w-36"
+												value={draft.startTime}
+												onChange={(e) => set({ startTime: e.target.value })}
+											/>
+										</div>
+									) : null}
+								</div>
+							)}
+
+							{/* HOW LONG it runs. */}
+							<div className="flex flex-col gap-2">
+								<span className="text-xs font-semibold">
+									How long does it run?
+								</span>
+								<div className="flex flex-wrap gap-2">
+									{PROMO_DURATION_PRESETS.map((preset) => (
+										<button
+											key={preset.minutes}
+											type="button"
+											onClick={() =>
+												set({
+													endMode: "minutes",
+													durationMinutes: preset.minutes,
+												})
+											}
 											className={chip(
-												draft.payWithinMinutes === choice.minutes,
+												draft.endMode === "minutes" &&
+													draft.durationMinutes === preset.minutes,
 											)}
 										>
-											{choice.label}
+											For {preset.label}
 										</button>
 									))}
+									<button
+										type="button"
+										onClick={() => set({ endMode: "until" })}
+										className={chip(draft.endMode === "until")}
+									>
+										Until a date…
+									</button>
+									<button
+										type="button"
+										onClick={() => set({ endMode: "open" })}
+										className={chip(draft.endMode === "open")}
+									>
+										No end date
+									</button>
 								</div>
-								<p className="text-xs text-muted-foreground">
-									Unpaid orders cancel themselves and release their units back
-									to the sale.
-								</p>
-							</div>
-							{creditsShort ? (
-								<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900">
-									<TriangleAlert
-										className="mt-0.5 size-3.5 shrink-0"
+								{draft.endMode === "until" ? (
+									<div className="flex flex-wrap gap-2">
+										<Input
+											aria-label="Promotion end date"
+											type="date"
+											variant="field"
+											className="w-44"
+											value={draft.endDate}
+											onChange={(e) => set({ endDate: e.target.value })}
+										/>
+										<Input
+											aria-label="Promotion end time"
+											type="time"
+											variant="field"
+											className="w-36"
+											value={draft.endTime}
+											onChange={(e) => set({ endTime: e.target.value })}
+										/>
+									</div>
+								) : null}
+								<p className="flex items-center gap-2 rounded-lg bg-accent/8 px-3 py-2 text-xs font-medium text-accent-emphasis">
+									<Scissors
+										className="size-3.5 shrink-0 -scale-x-100"
 										aria-hidden
 									/>
-									<span>
-										This sale can take up to {cap} orders — you have{" "}
-										{creditBalance} credits. Top up in Settings → Billing so a
-										busy sale doesn't lock your dashboard.
-									</span>
+									{promoWindowSentence(draft, now)}
+								</p>
+								<p className="text-xs text-muted-foreground">
+									A timed promotion shows a live countdown on your storefront.
+									"No end date" is a plain discount — badge and strike-through,
+									no timer.
+								</p>
+							</div>
+
+							{/* Flash extras. */}
+							{flashAllowed ? (
+								<div className="flex flex-col gap-3 border-t border-border pt-4">
+									<div className="flex items-center gap-2">
+										<Tag className="size-3.5" aria-hidden />
+										<span className="text-sm font-semibold">
+											Flash sale extras
+										</span>
+										<span className="text-xs text-muted-foreground">
+											optional
+										</span>
+									</div>
+									<div className="flex items-center justify-between gap-3">
+										<label htmlFor="promo-cap" className="text-sm">
+											Only the first <b>N</b> units at this price
+										</label>
+										<Input
+											id="promo-cap"
+											variant="field"
+											inputMode="numeric"
+											className="w-24 text-right"
+											placeholder="—"
+											value={draft.unitCap}
+											onChange={(e) => set({ unitCap: e.target.value })}
+										/>
+									</div>
+									<div className="flex items-center justify-between gap-3">
+										<label htmlFor="promo-max" className="text-sm">
+											Max per order
+										</label>
+										<Input
+											id="promo-max"
+											variant="field"
+											inputMode="numeric"
+											className="w-24 text-right"
+											placeholder="—"
+											value={draft.maxPerOrder}
+											onChange={(e) => set({ maxPerOrder: e.target.value })}
+										/>
+									</div>
+									<div className="flex flex-col gap-2">
+										<span className="text-sm">Buyers must pay within</span>
+										<div className="flex flex-wrap gap-2">
+											{PROMO_PAY_WINDOW_CHOICES.map((choice) => (
+												<button
+													key={choice.minutes}
+													type="button"
+													onClick={() =>
+														set({ payWithinMinutes: choice.minutes })
+													}
+													className={chip(
+														draft.payWithinMinutes === choice.minutes,
+													)}
+												>
+													{choice.label}
+												</button>
+											))}
+										</div>
+										<p className="text-xs text-muted-foreground">
+											Unpaid orders cancel themselves and release their units
+											back to the sale.
+										</p>
+									</div>
+									{creditsShort ? (
+										<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900">
+											<TriangleAlert
+												className="mt-0.5 size-3.5 shrink-0"
+												aria-hidden
+											/>
+											<span>
+												This sale can take up to {cap} orders — you have{" "}
+												{creditBalance} credits. Top up in Settings → Billing so
+												a busy sale doesn't lock your dashboard.
+											</span>
+										</p>
+									) : null}
+								</div>
+							) : flashBlockedReason ? (
+								<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+									{flashBlockedReason}
 								</p>
 							) : null}
-						</div>
-					) : flashBlockedReason ? (
-						<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-							{flashBlockedReason}
-						</p>
+						</>
 					) : null}
 
 					{/* `data-form-error`: the target "take me to the error" scrolls
@@ -716,7 +788,7 @@ export function PromoFields({
 					    field it empties. It resets the FORM only — nothing reaches
 					    the store until Save — and is not offered on a locked store,
 					    where the move is switching the paused promotion off. */}
-					{locked ? null : (
+					{locked || pricing === "none" || terms === "none" ? null : (
 						<div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-border pt-3">
 							<p className="text-xs text-muted-foreground" aria-live="polite">
 								{cleared

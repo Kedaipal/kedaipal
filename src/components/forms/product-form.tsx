@@ -191,8 +191,11 @@ export interface ProductFormSubmitValues {
 	event: EventSubmitValue;
 	/** Promotion config (z8r3fdcw72). `null` CLEARS a stored promotion —
 	 * `undefined` would mean "no change" and strand one the seller just
-	 * switched off, the same trap `event` documents above. */
-	promo: PromoSubmitValue;
+	 * switched off, the same trap `event` documents above. So `undefined` is
+	 * sent in exactly ONE case: a product inside a bulk promotion
+	 * (z8r3fducfd), whose config belongs to the promotion and is never this
+	 * form's to change — `products.update` refuses it outright. */
+	promo: PromoSubmitValue | undefined;
 	// FULL category membership (the picker's staged selection) — the caller
 	// diffs it via categories.setProductCategories. See docs/product-categories.md.
 	categoryIds: Id<"categories">[];
@@ -289,6 +292,17 @@ interface ProductFormProps {
 	 * "Run a promotion" toggle disables with the Pro hint. Server enforces it,
 	 * and CLEARING is never gated so a downgraded seller is not trapped. */
 	promoLocked: boolean;
+	/** The bulk promotion this product belongs to (z8r3fducfd), if any. The
+	 * Promotion card then says so and links to it, and edits only this
+	 * product's sale prices — the window, label and flash extras are the
+	 * promotion's. */
+	groupedPromotion?: {
+		promotionId: string;
+		label?: string;
+		percentOff: number;
+		startsAt?: number;
+		endsAt?: number;
+	} | null;
 	/** The store's credit balance, for the "this sale can take more orders
 	 * than you have credits" nudge. Undefined = don't show it. */
 	creditBalance?: number;
@@ -911,6 +925,7 @@ export function ProductForm({
 	categoriesLocked,
 	eventsLocked,
 	promoLocked,
+	groupedPromotion,
 	creditBalance,
 	eventRsvpCount,
 	initialValues,
@@ -1159,7 +1174,11 @@ export function ProductForm({
 			// The Promotion card states its issue inline (and is the
 			// `data-form-error` the focus helper scrolls to). Mostly a twin of
 			// the server's refusals; "on but nothing on sale" is client-only.
-			if (!promoDraftValid(promoDraft, Date.now(), editor.rows)) return;
+			if (
+				!groupedPromotion &&
+				!promoDraftValid(promoDraft, Date.now(), editor.rows)
+			)
+				return;
 			if (
 				isBooking &&
 				(!capacityValid || !depositValid || !packageValid || !weekendValid)
@@ -1227,9 +1246,11 @@ export function ProductForm({
 					// `null` when off — the spelling that CLEARS. A booking listing
 					// never renders the block, so it always sends null.
 					event: isBooking ? null : eventSubmitValue(eventDraft),
-					promo: promoSubmitValue(promoDraft, Date.now(), {
-						flashAllowed: !isBooking && !eventDraft.on,
-					}),
+					promo: groupedPromotion
+						? undefined
+						: promoSubmitValue(promoDraft, Date.now(), {
+								flashAllowed: !isBooking && !eventDraft.on,
+							}),
 					buyerQuestions: isBooking ? [] : questionsSubmitValue(questionsDraft),
 					categoryIds,
 					imageStorageIds: images.map((i) => i.id),
@@ -1796,9 +1817,14 @@ export function ProductForm({
 				title="Promotion"
 				description="Run a sale price for a while — it snaps back by itself."
 			>
+				{groupedPromotion ? (
+					<GroupedPromotionNote promotion={groupedPromotion} />
+				) : null}
 				<PromoFields
-					draft={promoDraft}
+					draft={groupedPromotion ? { ...promoDraft, on: true } : promoDraft}
 					onChange={setPromoDraft}
+					noToggle={groupedPromotion ? true : undefined}
+					terms={groupedPromotion ? "none" : "edit"}
 					rows={promoRows}
 					onPromoPrices={setPromoPrices}
 					currency={currency}
@@ -2195,5 +2221,55 @@ export function ProductForm({
 				)}
 			</form.Subscribe>
 		</form>
+	);
+}
+
+/** The Promotion card's header for a product inside a bulk promotion
+ * (z8r3fducfd): which promotion, its terms, and the way to change them —
+ * stated where the seller is looking, so the missing window fields read as
+ * "owned elsewhere", never as "gone". */
+function GroupedPromotionNote({
+	promotion,
+}: {
+	promotion: NonNullable<ProductFormProps["groupedPromotion"]>;
+}) {
+	const when = (ms: number) =>
+		new Date(ms).toLocaleString("en-MY", {
+			weekday: "short",
+			day: "numeric",
+			month: "short",
+			hour: "numeric",
+			minute: "2-digit",
+		});
+	return (
+		<div className="mb-4 flex flex-col gap-3">
+			<div className="flex items-center gap-3 rounded-xl border border-accent/30 bg-accent/8 p-3">
+				<div className="flex min-w-0 flex-1 flex-col gap-0.5">
+					<span className="text-sm">
+						Part of <b>{promotion.label ?? "a promotion"}</b>
+					</span>
+					<span className="text-xs font-semibold text-accent-emphasis">
+						{promotion.percentOff}% off ·{" "}
+						{promotion.startsAt !== undefined && promotion.startsAt > Date.now()
+							? `starts ${when(promotion.startsAt)}`
+							: promotion.endsAt !== undefined
+								? `ends ${when(promotion.endsAt)}`
+								: "no end date"}
+					</span>
+				</div>
+				<Link
+					to="/app/promotions/$promotionId"
+					params={{ promotionId: promotion.promotionId }}
+					className="tap-target inline-flex shrink-0 items-center px-1 text-[13px] font-semibold text-accent-emphasis hover:underline"
+				>
+					Edit promotion
+				</Link>
+			</div>
+			<p className="text-xs text-muted-foreground">
+				The dates, name and flash extras belong to the promotion and change
+				there for every product in it. The sale prices below are this product's
+				own — change one, or clear it to keep that line at its normal price.
+			</p>
+		</div>
 	);
 }

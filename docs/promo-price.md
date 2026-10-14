@@ -221,3 +221,128 @@ ends, is re-run or is deleted.
 - The receipt PDF prints **"was RM X each"** under a discounted line.
 - Insights needs nothing: line revenue is the frozen sale price, correct by
   construction.
+
+## Promotions (bulk)
+
+`z8r3fducfd` — many products on **one** promotion, set, edited and ended as
+one. Built for Yap ("I got 20 item to set"): before it, a 20-product happy hour
+was 20 product-form edits to start and 20 more to end.
+
+### The promotion is a handle, not a price
+
+A promotion (`promotions`) holds the terms — percent, window, label, flash
+extras — and its members (`promotionMembers`) hold each product's reviewed
+sale prices. Every write **fans out to the existing single-product fields**:
+`products.promo` (through `sanitizePromo`, so the `runId` rule is the same one)
+and `productVariants.promoPrice`. Nothing that prices anything changed:
+`effectivePrice`, the tally, the order doors and the storefront don't know
+promotions exist. Ending a promotion clears what it wrote; the frozen order
+lines (`listPrice`, `promoRunId`) are untouched, so receipts and the CSV stay
+right.
+
+**Membership is its own table, not a field on `products`.** The ticket
+proposed `products.promo.promotionId`. A new field on an existing table
+poisons the shared dev deployment for every branch without it the moment one
+row carries it (see the September collision), and it would have needed a
+migration for nothing — `promotionMembers.by_product` answers "is this product
+held?" in one index read.
+
+### The queue
+
+`200 products × 100 choices` is past one transaction's write budget, so a
+member is a tiny state machine — `pending → applied`, `clearing → cleared`,
+plus a terminal `moved` — worked by `runQueue` in batches of
+`PROMOTION_BATCH_WRITES`. The first batch runs inside the seller's own
+mutation (a few dozen products are live the moment they tap); the rest is a
+scheduled `processQueue` continuation, and the dashboard reads **Applying…**
+until it lands. Clearing runs before applying, so "End now" takes prices off
+first. One promotion carries at most `MAX_PROMOTION_PRICES` (4,000) sale
+prices, which keeps its own reads (detail page, edit review) inside a query;
+the review's Save names the limit before the seller gets there.
+
+### Rules worth knowing
+
+- **One promotion per product, never taken over silently.** A product already
+  on another *open* promotion, or carrying its own live/scheduled sale, is
+  disabled in the picker with its reason and joins only by an explicit
+  **Move here** — `create`/`addProducts` refuse anything already on sale that
+  isn't named in `move`. A promotion whose window has passed holds nothing.
+- **The start is always stored concrete.** A capped "start now" product stamps
+  its own start, and `sanitizePromo` keeps a run (and its unit-cap pool) only
+  while the window it's handed is identical. A promotion that left its start
+  open would hand every later edit `undefined` against that stamp — **a mere
+  rename reset every product's sold count** (caught by test). "Now" on an edit
+  means "keep running from when it started".
+- **Leaving is decided by `runId`, not by state.** An edit re-queues every
+  member as `pending` without touching its product, so mid-queue a "pending"
+  member can still have this promotion's sale on it. **End now**, **×** and a
+  window that closes mid-queue all move a member that has EVER written its
+  product (`runId` set) to `clearing`, never straight to `cleared`
+  (`leavingState`, `applyMember`'s catch). Before this, ending a large
+  promotion mid-edit left products selling at the sale price under a
+  promotion that read "Ended" (PR #368 review).
+- **An edit's terms reach every open member.** `update` re-queues the members
+  it was sent with their new prices, and every *other* open member (one a
+  teammate added while the edit was open) with its own prices, so no product
+  is left on the old window or label. **×** on a promotion that has already
+  ended is a no-op, so a stale tab can't shrink its history.
+- **Clearing only touches what it wrote.** `clearMember` patches a product
+  only while its promo still carries this promotion's `runId`; a product the
+  seller has since re-priced by hand is left alone, and the detail page says
+  so ("Re-priced by hand since — ending won't touch it").
+- **Bookings and events take the price, not the flash extras** (capacity and
+  seats already cap them) — `memberPromoInput`, said on the review step. A
+  product with nothing that can go on sale (quote-only, ≤ 5 sen) is left out
+  of a new promotion and named.
+- **Gates.** Setting (create / update / add) is Pro and takes the lapsed-store
+  lock, like the single-product promo. **Ending and removing are never
+  Pro-gated**, so a downgraded store can always switch a sale off. No credit
+  gate — the catalogue is paid for by the subscription
+  (`creditLockCoverage.test.ts` lists `promotions` with `products`).
+- **× takes one product out, instantly, with an Undo.** A single product is
+  cheap to put back, so there's no confirm (End keeps its confirm: it puts a
+  whole sale back). The toast's Undo re-adds it at the prices this promotion
+  gave it (`addProducts`, so it's Pro — a store that can't set promotions gets
+  the toast without Undo). A taken-out member is stamped `removedAt`, so an
+  **ended** promotion's history and its **Run again** are the products it
+  *ended on*, not every product that ever passed through it. Without the
+  stamp, × and End both left `cleared` rows, and the ended page listed more
+  products than its own count.
+- **A running sale's start is stated, not asked.** Re-opening a promotion (or
+  a product's own sale) whose start has passed seeds `startMode: "started"`:
+  the terms show "It's already running — it started Wed 14 Oct, 8:30 pm" in
+  place of the Now / Schedule a start… chips, and saving keeps that start.
+  "Schedule a start…" with a past date was an invitation to move a sale that
+  was already selling.
+- **The product form can't fight it.** A grouped product's Promotion card
+  reads "Part of **Happy Hour** · Edit promotion", edits only its own sale
+  prices (`PromoFields terms="none"`), and sends no `promo` at all;
+  `products.update` refuses a promo change on a grouped product from a stale
+  tab, naming the promotion.
+
+### Where it lives
+
+`/app/promotions`, its own nav entry **right after Products**. It is catalogue
+pricing (the `products` permission area), so it sits with the catalogue.
+
+It is deliberately **not** merged with Vouchers (Zaki, 14 Oct 2026). A first
+cut made the two one "Promotions" page with tabs, because the voucher ticket
+had anticipated a shared home. It was reverted before merge: a sale price
+changes a product's price before anyone checks out, while a voucher is a code
+one buyer redeems at checkout. Each has its own create, edit and end, and a
+seller looking for one should never have to know it is a tab under the other.
+
+The picker lives **inside the flow**, not as a select mode on the Products
+list. That list is a drag-to-reorder grid, and "Add products" to a running
+promotion needs the same picker anyway.
+
+| Piece | Where |
+|---|---|
+| Rules (pure) | `convex/lib/promotions.ts` |
+| Writes, queue, reads | `convex/promotions.ts` |
+| Flow rules (pure) | `src/lib/promotion-flow.ts` |
+| Picker / review / flow | `src/components/promotions/*` |
+| Routes | `src/routes/app.promotions.*` |
+| Nav entry | `sidebar.tsx`, `bottom-nav.tsx` (after Products) |
+| Product form grouped state | `GroupedPromotionNote` in `product-form.tsx` |
+

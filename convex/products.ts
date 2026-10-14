@@ -68,6 +68,7 @@ import {
 	DEFAULT_PROMO_LABEL,
 } from "./lib/promo";
 import { tallyPromoUnits } from "./lib/promoTally";
+import { productPromotion } from "./promotions";
 import {
 	assertProductCap,
 	MAX_PRODUCTS_PER_RETAILER,
@@ -1748,6 +1749,15 @@ export const update = mutation({
 		// extras refused where capacity/seats already govern, judged on the
 		// POST-save event state so one save can't sneak both in.
 		if (fields.promo !== undefined) {
+			// A product inside a bulk promotion (z8r3fducfd) takes its window,
+			// label and flash extras from the PROMOTION — the product form
+			// shows them read-only and sends no promo at all. Only a stale tab
+			// gets here; it is told where the setting now lives.
+			const holder = await productPromotion(ctx, productId);
+			if (holder)
+				throw new ConvexError(
+					`This product is part of ${holder.label ?? "a promotion"} — change its dates, label or flash extras on the promotion, or remove the product from it.`,
+				);
 			if (fields.promo === null) {
 				updates.promo = undefined;
 			} else {
