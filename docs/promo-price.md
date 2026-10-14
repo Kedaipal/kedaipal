@@ -280,14 +280,19 @@ the review's Save names the limit before the seller gets there.
 
 ### Where it lives
 
-`/app/promotions` — **Sale prices** and **Voucher codes** tabs, one nav entry
-("Promotions") replacing "Vouchers". A voucher and a bulk sale answer the same
-question ("what am I offering off?"), and the voucher ticket built its page to
-move here. The tabs follow the seller's grants (`products` vs `vouchers`
-areas), so a teammate sees exactly what their role reads. `/app/vouchers`
-redirects to the Voucher codes tab. The picker lives **inside the flow**, not
-as a select mode on the Products list: that list is a drag-to-reorder grid,
-and "Add products" to a running promotion needs the same picker anyway.
+`/app/promotions`, its own nav entry **right after Products**. It is catalogue
+pricing (the `products` permission area), so it sits with the catalogue.
+
+It is deliberately **not** merged with Vouchers (Zaki, 14 Oct 2026). A first
+cut made the two one "Promotions" page with tabs, because the voucher ticket
+had anticipated a shared home. It was reverted before merge: a sale price
+changes a product's price before anyone checks out, while a voucher is a code
+one buyer redeems at checkout. Each has its own create, edit and end, and a
+seller looking for one should never have to know it is a tab under the other.
+
+The picker lives **inside the flow**, not as a select mode on the Products
+list. That list is a drag-to-reorder grid, and "Add products" to a running
+promotion needs the same picker anyway.
 
 | Piece | Where |
 |---|---|
@@ -296,5 +301,6 @@ and "Add products" to a running promotion needs the same picker anyway.
 | Flow rules (pure) | `src/lib/promotion-flow.ts` |
 | Picker / review / flow | `src/components/promotions/*` |
 | Routes | `src/routes/app.promotions.*` |
+| Nav entry | `sidebar.tsx`, `bottom-nav.tsx` (after Products) |
 | Product form grouped state | `GroupedPromotionNote` in `product-form.tsx` |
 

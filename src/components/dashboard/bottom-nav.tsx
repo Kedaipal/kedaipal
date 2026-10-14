@@ -14,6 +14,7 @@ import {
 	Siren,
 	Store,
 	Tag,
+	Ticket,
 	Users,
 } from "lucide-react";
 import { Dialog as MorePrimitive } from "radix-ui";
@@ -40,7 +41,8 @@ export interface BottomNavProps {
 	// CRM is plan-locked for this seller (Starter) — mark the Customers row with
 	// a "Pro" chip so the upgrade wall behind it is never a surprise.
 	crmLocked?: boolean;
-	// Promotions (bulk sale prices + vouchers) are plan-locked (Starter).
+	vouchersLocked?: boolean;
+	// Promotions (bulk sale prices) are plan-locked (Starter).
 	promotionsLocked?: boolean;
 	// Insights is plan-locked (Starter) — same treatment on the Insights tab.
 	insightsLocked?: boolean;
@@ -67,6 +69,7 @@ const MORE_ROUTES = [
 	"/app/products",
 	"/app/customers",
 	"/app/promotions",
+	"/app/vouchers",
 	"/app/settings",
 	"/app/poster",
 ] as const;
@@ -76,6 +79,7 @@ export function BottomNav({
 	adminNav,
 	hasStore,
 	crmLocked,
+	vouchersLocked,
 	promotionsLocked,
 	insightsLocked,
 }: BottomNavProps) {
@@ -173,6 +177,7 @@ export function BottomNav({
 						onOpenChange={setMoreOpen}
 						active={moreOpen || onMoreRoute}
 						crmLocked={crmLocked}
+						vouchersLocked={vouchersLocked}
 						promotionsLocked={promotionsLocked}
 					/>
 				) : null}
@@ -278,12 +283,14 @@ function MoreTab({
 	onOpenChange,
 	active,
 	crmLocked,
+	vouchersLocked,
 	promotionsLocked,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	active: boolean;
 	crmLocked?: boolean;
+	vouchersLocked?: boolean;
 	promotionsLocked?: boolean;
 }) {
 	const productsPerm = usePermission("products");
@@ -321,6 +328,16 @@ function MoreTab({
 							onNavigate={close}
 						/>
 					) : null}
+					{productsPerm.canRead ? (
+						<MoreRow
+							to="/app/promotions"
+							icon={Tag}
+							label="Promotions"
+							sub="Sale prices on many products"
+							pro={promotionsLocked}
+							onNavigate={close}
+						/>
+					) : null}
 					{customersPerm.canRead ? (
 						<MoreRow
 							to="/app/customers"
@@ -331,13 +348,13 @@ function MoreTab({
 							onNavigate={close}
 						/>
 					) : null}
-					{productsPerm.canRead || vouchersPerm.canRead ? (
+					{vouchersPerm.canRead ? (
 						<MoreRow
-							to="/app/promotions"
-							icon={Tag}
-							label="Promotions"
-							sub="Sale prices & voucher codes"
-							pro={promotionsLocked}
+							to="/app/vouchers"
+							icon={Ticket}
+							label="Vouchers"
+							sub="Single-use discount codes"
+							pro={vouchersLocked}
 							onNavigate={close}
 						/>
 					) : null}
