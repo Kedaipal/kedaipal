@@ -176,6 +176,25 @@ describe("a gated (Starter) store", () => {
 		renderSection();
 		expect(screen.getByText(/Insights/i)).toBeTruthy();
 	});
+
+	it("puts the Pro teaser in the hero's column, under the chartless hero (PR #366)", () => {
+		renderSection();
+		const hero = screen
+			.getByRole("link", { name: /Open full Insights/ })
+			.closest("section");
+		const teaser = screen
+			.getByText(/See what is really selling/)
+			.closest("section");
+		// Same column, teaser after the hero: it fills the room beside a tall
+		// rail on desktop and still follows the hero directly on a phone.
+		if (!hero || !teaser) throw new Error("hero and teaser must both render");
+		expect(teaser.parentElement).toBe(hero.parentElement);
+		expect(
+			hero.compareDocumentPosition(teaser) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		// Exactly one teaser — not also in the cards' slot below.
+		expect(screen.getAllByText(/See what is really selling/)).toHaveLength(1);
+	});
 });
 
 describe("an ungated store", () => {

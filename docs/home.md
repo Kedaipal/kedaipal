@@ -189,9 +189,12 @@ Two layout rules make it hold:
   take extra height. A gated (Starter) hero draws no chart (`bars.length <= 1`),
   and stretched beside a full rail it was a 660px dark card with a 433px void
   between the figures and the stats (PR #366 review). So it keeps its own
-  height, its "Open full Insights" sits at the foot beside the stats
-  (`lg:self-end`), and the space below it is plain page, not a hole inside a
-  dark card.
+  height, and its "Open full Insights" sits at the foot beside the stats
+  (`lg:self-end`). The room beside a tall rail goes to the **Pro teaser**,
+  which for a gated store renders in the hero's column, under the hero, not in
+  the cards' slot below (Zaki, 14 Oct 2026). Measured at 1180px beside a 660px
+  rail: hero 272 + teaser 390 = a 674px column. On a phone the column stacks
+  hero then teaser, the order it already had.
 
 ### Stale unpaid is a strict subset of unpaid
 
