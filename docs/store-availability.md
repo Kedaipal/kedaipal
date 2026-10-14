@@ -101,7 +101,14 @@ first because it is the most consequential setting there. "Accepting orders"
 saves on flip, with an optional buyer note (140 chars), and the helper line
 says the counter keeps working and billing continues (pointing at Off-Season
 Hold). Under a hold or Kedaipal's switch it is **disabled with its reason**:
-our note plus "Message us", or the way to Billing. A dashboard-wide banner
+our note plus "Message us", or the way to Billing. **A lapsed (past due or
+comp-ended) store keeps the switch** (Zaki, 15 Oct 2026): its storefront
+still takes orders by design, so pausing is the seller's only way to stop
+that, and resuming only returns to that default. `setAcceptingOrders` is the
+one seller write exempt from the view-only lock (`sellerLockCoverage.test.ts`,
+"winding down"), and the card and banner read
+`useAreaLock("store_settings", { openWhenLapsed: true })`, so the Store
+settings grant still applies to a teammate. A dashboard-wide banner
 shows while paused: amber with one-tap **Resume orders** for their own pause,
 red with **Message us** for ours. Under a hold or Kedaipal's switch the
 **Counter page** says it is closed under its header, greys **New order**, and

@@ -271,6 +271,40 @@ describe("Kedaipal's switch", () => {
 	});
 });
 
+describe("a LAPSED store can still wind down (Zaki, 15 Oct 2026)", () => {
+	test("past due: the seller can pause and resume, while other writes stay view-only", async () => {
+		const t = setup();
+		const { owner, retailerId, productId } = await seed(t);
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			if (!sub) throw new Error("no subscription row");
+			await ctx.db.patch(sub._id, { status: "past_due" });
+		});
+		// The lock is real for everything else…
+		await expect(
+			owner.mutation(api.products.update, { productId, name: "Renamed" }),
+		).rejects.toThrow(/past due/);
+		// …but a lapsed store keeps TAKING orders, so the way to stop that stays open.
+		await owner.mutation(api.storeAvailability.setAcceptingOrders, {
+			retailerId,
+			accepting: false,
+			note: "Back soon",
+		});
+		await expect(order(t, retailerId, productId)).rejects.toThrow(
+			/isn't taking orders right now/,
+		);
+		await owner.mutation(api.storeAvailability.setAcceptingOrders, {
+			retailerId,
+			accepting: true,
+		});
+		const status = await owner.query(api.storeAvailability.forSeller, { retailerId });
+		expect(status.availability).toEqual({ state: "open" });
+	});
+});
+
 describe("Off-Season Hold keeps its own stamp", () => {
 	test("ending a hold never lifts the seller's own pause", async () => {
 		const t = setup();

@@ -45,7 +45,7 @@ export function StoreStatusCard({
 		convexQuery(api.storeAvailability.forSeller, { retailerId }),
 	).data;
 	const setAccepting = useMutation(api.storeAvailability.setAcceptingOrders);
-	const areaLock = useAreaLock("store_settings");
+	const areaLock = useAreaLock("store_settings", { openWhenLapsed: true });
 	const supportWa = useSupportWaNumber();
 	const [saving, setSaving] = useState(false);
 	const [note, setNote] = useState<string | null>(null);

@@ -36,7 +36,7 @@ export function StoreAvailabilityBanner({
 		convexQuery(api.storeAvailability.forSeller, { retailerId }),
 	).data;
 	const setAccepting = useMutation(api.storeAvailability.setAcceptingOrders);
-	const areaLock = useAreaLock("store_settings");
+	const areaLock = useAreaLock("store_settings", { openWhenLapsed: true });
 	const supportWa = useSupportWaNumber();
 	const [resuming, setResuming] = useState(false);
 

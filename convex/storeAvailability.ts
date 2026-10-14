@@ -19,7 +19,6 @@ import {
 	takesCounterOrders,
 	unavailableMessage,
 } from "./lib/storeAvailability";
-import { assertSubscriptionActive } from "./subscriptions";
 
 export async function loadAvailabilityRow(
 	ctx: QueryCtx,
@@ -134,13 +133,16 @@ export const setAcceptingOrders = mutation({
 		note: v.optional(v.string()),
 	},
 	handler: async (ctx, { retailerId, accepting, note }): Promise<void> => {
+		// NOT behind the view-only lock (Zaki, 15 Oct 2026). A lapsed store
+		// keeps taking orders by design ("buyers can still order in the
+		// meantime"), so this switch is the one way its seller can STOP that,
+		// and turning it back on only returns them to that same default. It
+		// changes nothing else and the counter stays open either way. The
+		// grant still applies: a teammate needs Store settings edit.
 		const access = await requireRetailerAccess(ctx, retailerId, {
 			area: "store_settings",
 			level: "write",
 		});
-		if (!access.actingAsAdmin) {
-			await assertSubscriptionActive(ctx, retailerId);
-		}
 		const row = await loadAvailabilityRow(ctx, retailerId);
 		// Disabled-with-reason in the UI; refused here for a stale tab. A
 		// seller switch under an admin one would read "open" and do nothing.
