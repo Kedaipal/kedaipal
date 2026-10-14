@@ -312,7 +312,7 @@ file's own test).
 | Counter redemption | `counterCheckout.createOrderFromSession` (explicit `voucherCode` arg) |
 | Claim redemption | `orderClaims.sendClaim` freezes, `commit` spends |
 | Hand-back on cancel | `reverseCancellationEffects` + `declineMockupItem` |
-| Seller surface | `src/routes/app.vouchers.index.tsx`, `src/components/vouchers/*` |
+| Seller surface | `src/components/vouchers/vouchers-panel.tsx` (the **Voucher codes** tab of `/app/promotions` since `z8r3fducfd`; `/app/vouchers` redirects there), `src/components/vouchers/*` |
 | Buyer / counter field | `src/components/vouchers/voucher-field.tsx` (ONE control, two skins) |
 | Batch grouping (pure) | `src/lib/voucher-groups.ts` + `voucher-batch-card.tsx` |
 | `?voucher=` carried across browsing | `src/hooks/useVoucherParam.ts` |

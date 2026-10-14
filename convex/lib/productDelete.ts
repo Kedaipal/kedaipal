@@ -70,7 +70,17 @@ export async function deleteProductCascade(
 		.query("promotionMembers")
 		.withIndex("by_product", (q) => q.eq("productId", product._id))
 		.collect();
-	for (const member of memberships) await ctx.db.delete(member._id);
+	for (const member of memberships) {
+		// Still counted on its promotion's row: the count drops with it.
+		if (member.state === "pending" || member.state === "applied") {
+			const promotion = await ctx.db.get(member.promotionId);
+			if (promotion)
+				await ctx.db.patch(promotion._id, {
+					productCount: Math.max(0, promotion.productCount - 1),
+				});
+		}
+		await ctx.db.delete(member._id);
+	}
 
 	await ctx.db.delete(product._id);
 }

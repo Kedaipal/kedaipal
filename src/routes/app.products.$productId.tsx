@@ -160,6 +160,14 @@ function EditProductRoute() {
 			productId: productId as Id<"products">,
 		}),
 	).data;
+	// The bulk promotion holding this product (z8r3fducfd), or null. Awaited
+	// with the product: the Promotion card mounts once, and must know before
+	// it does whether its window is its own or the promotion's.
+	const groupedPromotion = useQuery(
+		convexQuery(api.promotions.forProduct, {
+			productId: productId as Id<"products">,
+		}),
+	).data;
 	const update = useMutation(api.products.update);
 	const saveVariantGrid = useMutation(api.products.saveVariantGrid);
 	const setProductCategories = useMutation(api.categories.setProductCategories);
@@ -188,7 +196,12 @@ function EditProductRoute() {
 		: undefined;
 	const locked = saveLock !== undefined;
 
-	if (product === undefined || categoryIds === undefined || !retailer) {
+	if (
+		product === undefined ||
+		categoryIds === undefined ||
+		groupedPromotion === undefined ||
+		!retailer
+	) {
 		return <ProductDetailSkeleton />;
 	}
 	if (product === null) {
@@ -332,6 +345,7 @@ function EditProductRoute() {
 					!retailer.actingAsAdmin &&
 					!hasFeature(retailer.subscription, "categories")
 				}
+				groupedPromotion={groupedPromotion}
 				promoLocked={
 					!retailer.actingAsAdmin && !hasFeature(retailer.subscription, "promo")
 				}

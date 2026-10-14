@@ -151,6 +151,7 @@ describe("create — applies the terms to every product", () => {
 		expect(promotions[0]._id).toBe(promotionId);
 		expect(promotions[0].productCount).toBe(2);
 		expect(promotions[0].queue.pending).toBe(0);
+		expect(promotions[0].queue.clearing).toBe(0);
 	});
 
 	test("a line the review left out is written with NO sale price — even one it had before", async () => {
@@ -269,6 +270,13 @@ describe("a product is never taken over silently", () => {
 		});
 		expect((await product(t, p.productId))?.promo?.label).toBe("Happy Hour");
 		expect((await variant(t, p.variantIds[0]))?.promoPrice).toBe(1000);
+		// The count on each row follows the product: it left Raya Sale.
+		const { promotions } = await asUser.query(api.promotions.list, {
+			retailerId: retailer._id,
+		});
+		const byLabel = new Map(promotions.map((p) => [p.label, p.productCount]));
+		expect(byLabel.get("Raya Sale")).toBe(0);
+		expect(byLabel.get("Happy Hour")).toBe(1);
 		// The old promotion let go without clearing over the new price.
 		const old = await asUser.query(api.promotions.get, { promotionId: first });
 		expect(old?.products).toHaveLength(0);
@@ -421,6 +429,10 @@ describe("the Pro gate", () => {
 		expect((await variant(t, a.variantIds[0]))?.promoPrice).toBeUndefined();
 		// The other member is untouched.
 		expect((await variant(t, b.variantIds[0]))?.promoPrice).toBe(800);
+		const { promotions } = await asUser.query(api.promotions.list, {
+			retailerId: retailer._id,
+		});
+		expect(promotions[0].productCount).toBe(1);
 	});
 });
 

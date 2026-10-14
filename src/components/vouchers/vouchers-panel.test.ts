@@ -7,7 +7,7 @@
  * the sentence may as well answer the question.
  */
 import { describe, expect, it } from "vitest";
-import { elsewhereLine } from "./app.vouchers.index";
+import { elsewhereLine } from "./vouchers-panel";
 
 const counts = { active: 1, redeemed: 3, expired: 0, voided: 7 };
 

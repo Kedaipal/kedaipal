@@ -232,6 +232,7 @@ async function applyMember(
 	// of ours on the product to clear later.
 	if (!product?.active) {
 		await ctx.db.patch(member._id, { state: "cleared", updatedAt: now });
+		await bumpProductCount(ctx, promotion._id, -1, now);
 		return 1;
 	}
 	let promo: Doc<"products">["promo"];
@@ -371,8 +372,12 @@ async function insertMembers(
 	// The product's old promotion lets go WITHOUT clearing — this one is
 	// about to overwrite the product, and clearing first would flash it to
 	// full price between the two writes.
-	for (const id of moveFrom)
+	for (const id of moveFrom) {
+		const left = await ctx.db.get(id);
 		await ctx.db.patch(id, { state: "moved", updatedAt: now });
+		if (left) await bumpProductCount(ctx, left.promotionId, -1, now);
+	}
+	await bumpProductCount(ctx, promotion._id, staged.length, now);
 	for (const row of staged)
 		await ctx.db.insert("promotionMembers", {
 			promotionId: promotion._id,
@@ -383,6 +388,20 @@ async function insertMembers(
 			createdAt: now,
 			updatedAt: now,
 		});
+}
+
+async function bumpProductCount(
+	ctx: MutationCtx,
+	promotionId: Id<"promotions">,
+	delta: number,
+	now: number,
+): Promise<void> {
+	const row = await ctx.db.get(promotionId);
+	if (!row || delta === 0) return;
+	await ctx.db.patch(promotionId, {
+		productCount: Math.max(0, row.productCount + delta),
+		updatedAt: now,
+	});
 }
 
 async function openMembers(
@@ -487,6 +506,7 @@ export const create = mutation({
 		);
 		const promotionId = await ctx.db.insert("promotions", {
 			retailerId,
+			productCount: 0,
 			...termsPatch(terms, concreteStart(terms.startsAt, undefined, now)),
 			createdByUserId: access.userId,
 			createdAt: now,
@@ -640,6 +660,7 @@ export const removeProducts = mutation({
 		}
 		const now = Date.now();
 		const wanted = new Set<string>(productIds);
+		let removed = 0;
 		for (const member of await openMembers(ctx, promotionId)) {
 			if (!wanted.has(member.productId)) continue;
 			// Never applied: nothing of ours is on the product.
@@ -647,8 +668,9 @@ export const removeProducts = mutation({
 				state: member.state === "applied" ? "clearing" : "cleared",
 				updatedAt: now,
 			});
+			removed++;
 		}
-		await ctx.db.patch(promotionId, { updatedAt: now });
+		await bumpProductCount(ctx, promotionId, -removed, now);
 		await runQueue(ctx, promotionId);
 		await logAdminAction(ctx, access, "promotions.removeProducts", promotionId);
 	},
@@ -700,8 +722,25 @@ async function queueCounts(ctx: QueryCtx, promotionId: Id<"promotions">) {
 	return { pending, applied, clearing, cleared };
 }
 
-/** The Promotions home: newest first, with each one's queue so the client
- * can phase it on its own clock (`promotionPhase`). */
+/** Is any member of this promotion in `state`? One index read, never a count. */
+async function anyInState(
+	ctx: QueryCtx,
+	promotionId: Id<"promotions">,
+	state: "pending" | "clearing",
+): Promise<boolean> {
+	return (
+		(await ctx.db
+			.query("promotionMembers")
+			.withIndex("by_promotion_state", (q) =>
+				q.eq("promotionId", promotionId).eq("state", state),
+			)
+			.first()) !== null
+	);
+}
+
+/** The Promotions home: newest first, each row phased on the client's own
+ * clock (`promotionPhase`). Reads ONE document per promotion plus two
+ * existence checks — never its members, which can number 200 each. */
 export const list = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }) => {
@@ -717,7 +756,12 @@ export const list = query({
 			.take(100);
 		const promotions = await Promise.all(
 			rows.map(async (p) => {
-				const queue = await queueCounts(ctx, p._id);
+				const [pending, clearing] = await Promise.all([
+					anyInState(ctx, p._id, "pending"),
+					anyInState(ctx, p._id, "clearing"),
+				]);
+				// The phase rule only asks "is there any?", so 1 stands for yes.
+				const queue = { pending: pending ? 1 : 0, clearing: clearing ? 1 : 0 };
 				return {
 					_id: p._id,
 					label: p.label,
@@ -728,11 +772,8 @@ export const list = query({
 					createdAt: p.createdAt,
 					unitCap: p.unitCap,
 					queue,
-					// Live products, or — once it's over — how many it ran on.
-					productCount:
-						p.endedAt === undefined && promotionIsOpen(p, Date.now())
-							? queue.pending + queue.applied
-							: queue.pending + queue.applied + queue.clearing + queue.cleared,
+					// Products it holds, or — once it's over — ran on.
+					productCount: p.productCount,
 				};
 			}),
 		);

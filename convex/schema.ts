@@ -3004,6 +3004,11 @@ export default defineSchema({
 		unitCap: v.optional(v.number()),
 		maxPerOrder: v.optional(v.number()),
 		payWithinMinutes: v.optional(v.number()),
+		// Products it holds (or, once ended, ran on) — kept on the row so the
+		// Promotions list reads one document per promotion, never its members.
+		// +1 per product added; −1 per product removed or moved to another
+		// promotion. Ending keeps it: "ran on 12 products" is the history.
+		productCount: v.number(),
 		// Set by "End now". Members are then cleared in batches; the row is
 		// kept as history (and as the source for "Run again").
 		endedAt: v.optional(v.number()),

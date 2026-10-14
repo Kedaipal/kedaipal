@@ -13,7 +13,7 @@ import {
 	ShoppingBag,
 	Siren,
 	Store,
-	Ticket,
+	Tag,
 	Users,
 } from "lucide-react";
 import { Dialog as MorePrimitive } from "radix-ui";
@@ -40,7 +40,8 @@ export interface BottomNavProps {
 	// CRM is plan-locked for this seller (Starter) — mark the Customers row with
 	// a "Pro" chip so the upgrade wall behind it is never a surprise.
 	crmLocked?: boolean;
-	vouchersLocked?: boolean;
+	// Promotions (bulk sale prices + vouchers) are plan-locked (Starter).
+	promotionsLocked?: boolean;
 	// Insights is plan-locked (Starter) — same treatment on the Insights tab.
 	insightsLocked?: boolean;
 }
@@ -65,6 +66,7 @@ type Tab = {
 const MORE_ROUTES = [
 	"/app/products",
 	"/app/customers",
+	"/app/promotions",
 	"/app/settings",
 	"/app/poster",
 ] as const;
@@ -74,7 +76,7 @@ export function BottomNav({
 	adminNav,
 	hasStore,
 	crmLocked,
-	vouchersLocked,
+	promotionsLocked,
 	insightsLocked,
 }: BottomNavProps) {
 	// Team members (86exr91r4): a member's tabs are the areas they can read
@@ -171,7 +173,7 @@ export function BottomNav({
 						onOpenChange={setMoreOpen}
 						active={moreOpen || onMoreRoute}
 						crmLocked={crmLocked}
-						vouchersLocked={vouchersLocked}
+						promotionsLocked={promotionsLocked}
 					/>
 				) : null}
 			</div>
@@ -276,13 +278,13 @@ function MoreTab({
 	onOpenChange,
 	active,
 	crmLocked,
-	vouchersLocked,
+	promotionsLocked,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	active: boolean;
 	crmLocked?: boolean;
-	vouchersLocked?: boolean;
+	promotionsLocked?: boolean;
 }) {
 	const productsPerm = usePermission("products");
 	const customersPerm = usePermission("customers");
@@ -329,13 +331,13 @@ function MoreTab({
 							onNavigate={close}
 						/>
 					) : null}
-					{vouchersPerm.canRead ? (
+					{productsPerm.canRead || vouchersPerm.canRead ? (
 						<MoreRow
-							to="/app/vouchers"
-							icon={Ticket}
-							label="Vouchers"
-							sub="Single-use discount codes"
-							pro={vouchersLocked}
+							to="/app/promotions"
+							icon={Tag}
+							label="Promotions"
+							sub="Sale prices & voucher codes"
+							pro={promotionsLocked}
 							onNavigate={close}
 						/>
 					) : null}

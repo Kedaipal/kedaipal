@@ -14,7 +14,7 @@ import {
 	ShoppingBag,
 	Siren,
 	Store,
-	Ticket,
+	Tag,
 	Users,
 } from "lucide-react";
 import type { MouseEventHandler, ReactNode } from "react";
@@ -187,18 +187,21 @@ export function Sidebar({
 								}
 							/>
 						) : null}
-						{vouchersPerm.canRead ? (
+						{/* Promotions (z8r3fducfd) — bulk sale prices + voucher codes, one
+						    home. Shown to anyone who can read EITHER tab; the page shows
+						    only the tabs their grant reaches. SETTING either is Pro, so
+						    the badge marks the page the way Customers and Insights do —
+						    but the route is never walled: a downgraded store keeps its
+						    codes and its paused sales, and must be able to end them. */}
+						{productsPerm.canRead || vouchersPerm.canRead ? (
 							<SidebarLink
-								to="/app/vouchers"
-								icon={Ticket}
-								label="Vouchers"
+								to="/app/promotions"
+								icon={Tag}
+								label="Promotions"
 								collapsed={collapsed}
-								// ISSUING is the Pro capability, so the badge marks the page
-								// the way Customers and Insights do — but the route itself is
-								// never walled: a downgraded store keeps the codes it already
-								// sent, and has to be able to void them.
 								pro={
 									!retailer.actingAsAdmin &&
+									!hasFeature(retailer.subscription, "promo") &&
 									!hasFeature(retailer.subscription, "vouchers")
 								}
 							/>
