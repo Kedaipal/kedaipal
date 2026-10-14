@@ -57,7 +57,9 @@ const REDACTION_CALLS = [
  * write here may carry the gate. This list is the inverse of what it was
  * before T3.1, which is the whole point of having it.
  */
-const NEVER_GATED_MODULES = ["products", "categories"];
+// `promotions` (`z8r3fducfd`) is the catalogue too: a bulk promotion only
+// writes product prices, so it is paid for by the subscription like them.
+const NEVER_GATED_MODULES = ["products", "categories", "promotions"];
 
 /** Order-handling modules: every public write is classified below.
  *

@@ -710,7 +710,7 @@ export function wizardStepIssues(
 	}
 	// A half-filled promotion can't pass the step that sets it either.
 	if (step === 3) {
-		const promoIssue = promoDraftIssue(state.promo, Date.now());
+		const promoIssue = promoDraftIssue(state.promo, Date.now(), rows);
 		if (promoIssue) issues.push({ field: "promo", message: promoIssue });
 	}
 	if (step === 4) {
