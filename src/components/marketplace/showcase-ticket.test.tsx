@@ -114,6 +114,19 @@ describe("ShowcaseTicket", () => {
 		expect(screen.getAllByText("SB").length).toBeGreaterThan(0);
 	});
 
+	it("the notches are a real die-cut, never painted circles", async () => {
+		renderInRouter(
+			<ShowcaseTicket ticket={{ card: card("a"), label: "B4" }} now={NOW} />,
+		);
+		await screen.findByText("Store a");
+		// The holes come from the `kp-ticket-cut` mask, so a cover photo or a
+		// gradient behind the ticket shows THROUGH them. The first build painted
+		// round spans in the theme colour, which only passed for holes on that
+		// one flat colour — none may come back.
+		expect(document.querySelector(".kp-ticket-cut")).toBeTruthy();
+		expect(document.querySelector("a .rounded-full.size-4")).toBeNull();
+	});
+
 	it("inert tickets (under the pile) are out of the tab order and hidden from readers", async () => {
 		renderInRouter(
 			<ShowcaseTicket ticket={{ card: card("a") }} now={NOW} inert />,
@@ -147,6 +160,22 @@ describe("ShowcaseStage", () => {
 		expect(seeAll[0].getAttribute("href")).toBe(
 			"/stores?showcase=campfest-2026",
 		);
+	});
+
+	it("no stores (the admin preview only): a hint, never 'See all 0'", async () => {
+		renderInRouter(
+			<ShowcaseStage
+				showcase={showcase}
+				tickets={[]}
+				now={NOW}
+				mode="stage"
+				railClassName="flex"
+			/>,
+		);
+		expect(
+			await screen.findByText("Stores you add appear here as tickets."),
+		).toBeTruthy();
+		expect(screen.queryByText(/See all/)).toBeNull();
 	});
 
 	it("seven stores: five stand on the desktop grid and the pile badge counts the rest", async () => {

@@ -35,7 +35,7 @@ import { cn } from "../lib/utils";
  * order (drag to change it), the ended ones folded away but kept — an event
  * that happened is a record, not rubbish.
  */
-export const Route = createFileRoute("/app/admin/marketplace")({
+export const Route = createFileRoute("/app/admin/marketplace/")({
 	component: AdminMarketplaceRoute,
 });
 

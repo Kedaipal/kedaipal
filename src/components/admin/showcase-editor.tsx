@@ -33,6 +33,7 @@ import {
 	showcaseStatusLabel,
 	toDateTimeLocal,
 	visibilitySummary,
+	windowError,
 } from "../../lib/admin-showcase";
 import { convexErrorMessage } from "../../lib/format";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
@@ -54,7 +55,7 @@ import { Skeleton } from "../ui/skeleton";
 import { SortableList } from "../ui/sortable-list";
 import { Textarea } from "../ui/textarea";
 import { StatusPill } from "./showcase-row";
-import { ShowcaseStorePicker } from "./showcase-store-picker";
+import { type PickedStore, ShowcaseStorePicker } from "./showcase-store-picker";
 
 /**
  * The showcase editor (z8r3fdr6mv). Four cards — Details, Look, When buyers
@@ -124,10 +125,16 @@ function EditorForm({ row }: { row: AdminShowcase }) {
 	const [uploading, setUploading] = useState(false);
 	const [confirmDelete, setConfirmDelete] = useState(false);
 	const [noEnd, setNoEnd] = useState(row.endsAt === undefined);
+	// Names for stores added since the last save — the picker knows them, so a
+	// new row reads "Kopi Unggun" at once instead of "New store".
+	const [picked, setPicked] = useState<
+		ReadonlyMap<Id<"retailers">, PickedStore>
+	>(() => new Map());
 	const now = Date.now();
 	const status = showcaseStatusLabel(row, now);
 	const changes = describeChanges(draft, row);
 	const dirty = changes.length > 0;
+	const datesWrong = windowError(draft);
 	const memberById = new Map(row.members.map((m) => [m.retailerId, m]));
 	const membersInShowcase = new Set(draft.members.map((m) => m.retailerId));
 
@@ -231,13 +238,18 @@ function EditorForm({ row }: { row: AdminShowcase }) {
 		}
 	}
 
-	function addMembers(ids: Id<"retailers">[]) {
+	function addMembers(stores: PickedStore[]) {
+		setPicked((prev) => {
+			const next = new Map(prev);
+			for (const s of stores) next.set(s.retailerId, s);
+			return next;
+		});
 		patch({
 			members: [
 				...draft.members,
-				...ids
-					.filter((id) => !membersInShowcase.has(id))
-					.map((retailerId) => ({ retailerId, label: "" })),
+				...stores
+					.filter((s) => !membersInShowcase.has(s.retailerId))
+					.map((s) => ({ retailerId: s.retailerId, label: "" })),
 			],
 		});
 	}
@@ -279,7 +291,7 @@ function EditorForm({ row }: { row: AdminShowcase }) {
 	).length;
 
 	return (
-		<div className="flex flex-col gap-5 pb-28 lg:max-w-5xl">
+		<div className="flex flex-col gap-5 pb-28 lg:max-w-5xl lg:pb-0">
 			<PageHeader
 				title={row.title}
 				subtitle={
@@ -450,6 +462,9 @@ function EditorForm({ row }: { row: AdminShowcase }) {
 
 					{/* When */}
 					<EditorCard title="When buyers see it">
+						<p className="-mt-2 text-xs text-muted-foreground">
+							Times are Malaysia time (MYT), whatever your device is set to.
+						</p>
 						<div className="grid gap-4 sm:grid-cols-2">
 							<Labelled
 								id="showcase-starts"
@@ -473,6 +488,7 @@ function EditorForm({ row }: { row: AdminShowcase }) {
 									type="datetime-local"
 									value={toDateTimeLocal(draft.endsAt)}
 									disabled={noEnd}
+									isError={datesWrong !== null}
 									onChange={(e) =>
 										patch({ endsAt: fromDateTimeLocal(e.target.value) })
 									}
@@ -491,6 +507,11 @@ function EditorForm({ row }: { row: AdminShowcase }) {
 								</label>
 							</Labelled>
 						</div>
+						{datesWrong ? (
+							<p role="alert" className="text-sm font-medium text-destructive">
+								{datesWrong}
+							</p>
+						) : null}
 						<p className="rounded-xl bg-muted/60 px-3.5 py-2.5 text-xs leading-relaxed text-muted-foreground">
 							{draft.endsAt !== undefined ? (
 								<>
@@ -586,6 +607,7 @@ function EditorForm({ row }: { row: AdminShowcase }) {
 										<MemberRow
 											member={member}
 											saved={memberById.get(member.retailerId)}
+											picked={picked.get(member.retailerId)}
 											handle={handle}
 											compact={state.isSorting}
 											checked={selected.has(member.retailerId)}
@@ -681,11 +703,26 @@ function EditorForm({ row }: { row: AdminShowcase }) {
 				</aside>
 			</div>
 
-			{/* Save bar — fixed, every action bar's posture (design-system §4). */}
-			<div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur lg:left-[var(--sidebar-w,0px)]">
+			{/* Save bar — fixed to the bottom of a phone (design-system §4); from
+			    lg it rides at the foot of the editor column, the product page's
+			    posture, so it never sits over the sidebar. */}
+			<div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur lg:sticky lg:bottom-4 lg:rounded-2xl lg:border lg:pb-3 lg:shadow-[0_10px_30px_-18px_color-mix(in_oklab,var(--foreground)_40%,transparent)]">
 				<div className="mx-auto flex max-w-5xl flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-					<span className="text-center text-xs text-muted-foreground sm:text-left">
-						{dirty ? `Unsaved: ${changes.join(", ")}` : "Everything is saved."}
+					<span
+						className={cn(
+							"text-center text-xs sm:text-left",
+							datesWrong
+								? "font-medium text-destructive"
+								: "text-muted-foreground",
+						)}
+					>
+						{datesWrong
+							? `Fix the dates to save — ${datesWrong}`
+							: row.publishedAt === undefined && draft.members.length === 0
+								? "Add at least one store to publish."
+								: dirty
+									? `Unsaved: ${changes.join(", ")}`
+									: "Everything is saved."}
 					</span>
 					<div className="flex gap-2">
 						{row.publishedAt === undefined ? (
@@ -693,13 +730,10 @@ function EditorForm({ row }: { row: AdminShowcase }) {
 								type="button"
 								variant="outline"
 								onClick={() => void handlePublish()}
-								disabled={saving || draft.members.length === 0}
-								className="tap-target grow font-bold sm:grow-0"
-								title={
-									draft.members.length === 0
-										? "Add at least one store before publishing"
-										: undefined
+								disabled={
+									saving || draft.members.length === 0 || datesWrong !== null
 								}
+								className="tap-target grow font-bold sm:grow-0"
 							>
 								{dirty ? "Save & publish" : "Publish"}
 							</Button>
@@ -707,7 +741,7 @@ function EditorForm({ row }: { row: AdminShowcase }) {
 						<Button
 							type="button"
 							onClick={() => void save()}
-							disabled={!dirty || saving}
+							disabled={!dirty || saving || datesWrong !== null}
 							isLoading={saving}
 							className="tap-target grow font-bold sm:grow-0"
 						>
@@ -868,6 +902,7 @@ function ThemeSwatch({
 function MemberRow({
 	member,
 	saved,
+	picked,
 	handle,
 	compact,
 	checked,
@@ -878,6 +913,8 @@ function MemberRow({
 	member: ShowcaseDraft["members"][number];
 	/** The saved row for this store — undefined until the first save. */
 	saved: AdminShowcaseMember | undefined;
+	/** Name + slug from the picker, for a store added since the last save. */
+	picked: PickedStore | undefined;
 	handle: React.ReactNode;
 	compact: boolean;
 	checked: boolean;
@@ -885,7 +922,8 @@ function MemberRow({
 	onLabel: (label: string) => void;
 	onRemove: () => void;
 }) {
-	const name = saved?.storeName ?? "New store";
+	const name = saved?.storeName ?? picked?.storeName ?? "Store";
+	const slug = saved?.slug ?? picked?.slug;
 	const warning = saved?.notListed ? NOT_LISTED_COPY[saved.notListed] : null;
 	return (
 		<div
@@ -916,7 +954,9 @@ function MemberRow({
 							)}
 						>
 							{warning ??
-								(saved ? `/${saved.slug}` : "Saves with the showcase")}
+								(saved
+									? `/${slug}`
+									: `/${slug} · added — save to add it to the preview`)}
 						</span>
 					</span>
 				</div>

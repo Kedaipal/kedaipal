@@ -28,8 +28,24 @@ export type ShowcaseTicketData = {
 
 /** The theme's CSS class — the palette is variables on it (styles.css). */
 export function showcaseThemeClass(theme: ShowcaseTheme): string {
-	return `kp-showcase kp-showcase-${theme}`;
+	return SHOWCASE_THEME_CLASS[theme];
 }
+
+/**
+ * Every theme's class, spelled out IN FULL. Tailwind only emits a utility it
+ * can find written in the source — a class assembled at runtime
+ * (`kp-showcase-${theme}`) is never generated, and every showcase silently
+ * rendered as the base (Campfire) palette until the hands-on test caught it.
+ * `showcase.test.ts` fails if a theme is missing here or in styles.css.
+ */
+export const SHOWCASE_THEME_CLASS: Record<ShowcaseTheme, string> = {
+	campfire: "kp-showcase kp-showcase-campfire",
+	festive: "kp-showcase kp-showcase-festive",
+	ocean: "kp-showcase kp-showcase-ocean",
+	sunset: "kp-showcase kp-showcase-sunset",
+	midnight: "kp-showcase kp-showcase-midnight",
+	kedaipal: "kp-showcase kp-showcase-kedaipal",
+};
 
 /**
  * Join a showcase's members to the directory's cards. A member whose slug the

@@ -56,7 +56,9 @@ export function showcaseMetaLine(
 	themeLabel: string,
 ): string {
 	const from =
-		row.startsAt !== undefined ? formatDateTime(row.startsAt) : "on publish";
+		row.startsAt !== undefined
+			? formatDateTime(row.startsAt)
+			: "when published";
 	const until =
 		row.endsAt !== undefined ? formatDateTime(row.endsAt) : "no end date";
 	return `${row.country} · ${from} → ${until} · ${themeLabel}`;
@@ -68,22 +70,49 @@ export function formatDateTime(epoch: number): string {
 	return `${formatFulfilmentDate(epoch, { weekday: false, year: false })}, ${formatFulfilmentTime(minutes)}`;
 }
 
+/** Malaysia time is UTC+8 with no daylight saving — the house clock. */
+const MYT_OFFSET_MS = 8 * 60 * 60 * 1000;
+
 /**
- * The editor's native `datetime-local` value for an epoch, and back. The
- * browser's local zone on purpose: the admin reads the picker in their own
- * time, and every admin is in MYT (the house clock), so the two agree.
+ * The editor's native `datetime-local` value for an epoch, and back — in
+ * MALAYSIA time, whatever zone the admin's browser is set to. A
+ * `datetime-local` has no zone, and reading it with `new Date(value)` uses the
+ * browser's: the hands-on test ran on a Chrome set to GMT+7, where "18 Oct
+ * 23:59" was stored as 00:59 MYT on the 19th — and every other date in the
+ * app (the time chip, "comes off at…", the buyer page) is MYT. The field's
+ * label says so.
  */
 export function toDateTimeLocal(epoch: number | undefined): string {
 	if (epoch === undefined) return "";
-	const d = new Date(epoch);
+	const d = new Date(epoch + MYT_OFFSET_MS);
 	const pad = (n: number) => String(n).padStart(2, "0");
-	return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+	return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
 
 export function fromDateTimeLocal(value: string): number | undefined {
-	if (!value) return undefined;
-	const epoch = new Date(value).getTime();
-	return Number.isNaN(epoch) ? undefined : epoch;
+	const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value);
+	if (!match) return undefined;
+	const [, y, mo, d, h, mi] = match.map(Number);
+	return Date.UTC(y, mo - 1, d, h, mi) - MYT_OFFSET_MS;
+}
+
+/**
+ * The editor's window refusal, BEFORE the tap (the server refuses the same
+ * pair with the same words): an end at or before the start is a showcase
+ * that can never be live.
+ */
+export function windowError(draft: {
+	startsAt: number | undefined;
+	endsAt: number | undefined;
+}): string | null {
+	if (
+		draft.startsAt !== undefined &&
+		draft.endsAt !== undefined &&
+		draft.endsAt <= draft.startsAt
+	) {
+		return "“Show until” must be after “Show from”.";
+	}
+	return null;
 }
 
 /** What the editor holds while the admin types — the row's editable fields

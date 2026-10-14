@@ -11,6 +11,7 @@ import {
 	showcaseStatusLabel,
 	toDateTimeLocal,
 	visibilitySummary,
+	windowError,
 } from "./admin-showcase";
 
 const NOW = Date.UTC(2026, 9, 17, 4, 0, 0);
@@ -133,13 +134,34 @@ describe("describeChanges — the save bar names what is unsaved", () => {
 	});
 });
 
-describe("datetime-local round trip", () => {
-	test("an epoch survives the picker and back; blank is undefined", () => {
-		const epoch = new Date(2026, 9, 18, 23, 59).getTime();
+describe("datetime-local is MALAYSIA time, whatever the browser's zone", () => {
+	test("the picker's wall clock is read and written in MYT (UTC+8)", () => {
+		// 18 Oct 2026 23:59 MYT = 15:59 UTC. On a GMT+7 Chrome, `new Date(value)`
+		// stored 00:59 MYT on the 19th — the hands-on test's bug.
+		const mytEnd = Date.UTC(2026, 9, 18, 15, 59);
+		expect(fromDateTimeLocal("2026-10-18T23:59")).toBe(mytEnd);
+		expect(toDateTimeLocal(mytEnd)).toBe("2026-10-18T23:59");
+	});
+	test("round trip; blank and junk are undefined", () => {
+		const epoch = Date.UTC(2026, 0, 1, 1, 30);
 		expect(fromDateTimeLocal(toDateTimeLocal(epoch))).toBe(epoch);
 		expect(toDateTimeLocal(undefined)).toBe("");
 		expect(fromDateTimeLocal("")).toBeUndefined();
 		expect(fromDateTimeLocal("not a date")).toBeUndefined();
+	});
+});
+
+describe("windowError — the refusal before the tap", () => {
+	test("an end at or before the start is named; open ends are fine", () => {
+		expect(windowError({ startsAt: NOW, endsAt: NOW - 1 })).toMatch(
+			/must be after/,
+		);
+		expect(windowError({ startsAt: NOW, endsAt: NOW })).toMatch(
+			/must be after/,
+		);
+		expect(windowError({ startsAt: NOW, endsAt: NOW + 1 })).toBeNull();
+		expect(windowError({ startsAt: undefined, endsAt: NOW })).toBeNull();
+		expect(windowError({ startsAt: NOW, endsAt: undefined })).toBeNull();
 	});
 });
 

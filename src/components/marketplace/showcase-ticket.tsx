@@ -1,6 +1,5 @@
 import { Link } from "@tanstack/react-router";
 import { Tent } from "lucide-react";
-import type { ReactNode } from "react";
 import { type ShowcaseTicketData, ticketPlace } from "../../lib/showcase";
 import { cn } from "../../lib/utils";
 import { storeInitials } from "../storefront/storefront-header";
@@ -23,9 +22,12 @@ import { StoreStatusLine } from "./store-card";
  *   mark reading "at the event" when the admin gave none.
  *
  * The paper is cream in every theme and in dark mode too — it is a ticket.
- * The notches are cut in the theme's ground colour; the ticket only ever
- * sits on a showcase surface, so they read as holes. `onSurface` names which
- * variable to cut them with.
+ * The notches are REAL holes (`kp-ticket-cut`, a CSS mask), so whatever sits
+ * behind the ticket — a theme gradient, the glow, an admin's cover photo —
+ * shows through them. The first build painted circles in the theme colour,
+ * which only read as holes on that one flat colour (caught in the hands-on
+ * test). The link casts the shadow as a `drop-shadow`, which follows the cut
+ * outline; a box-shadow would be clipped away by the mask.
  */
 export function ShowcaseTicket({
 	ticket,
@@ -50,84 +52,82 @@ export function ShowcaseTicket({
 			tabIndex={inert ? -1 : undefined}
 			aria-hidden={inert || undefined}
 			className={cn(
-				"group relative flex overflow-visible rounded-2xl bg-[var(--sc-paper)] text-foreground shadow-[0_12px_28px_-14px_rgb(0_0_0/0.65)] transition-[translate,box-shadow] duration-200 ease-out focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-[var(--sc-accent)]/60 motion-reduce:transition-none",
+				"group relative block rounded-2xl text-foreground drop-shadow-[0_10px_14px_rgb(0_0_0/0.32)] transition-[translate,filter] duration-200 ease-out focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[var(--sc-accent)] motion-reduce:transition-none",
 				inert
 					? "pointer-events-none"
-					: "hover:-translate-y-0.5 hover:shadow-[0_18px_34px_-14px_rgb(0_0_0/0.7)] motion-reduce:hover:translate-y-0",
+					: "hover:-translate-y-0.5 hover:drop-shadow-[0_16px_20px_rgb(0_0_0/0.4)] motion-reduce:hover:translate-y-0",
 				className,
 			)}
 		>
-			<Notch className="-top-2 right-[64px]" />
-			<Notch className="-bottom-2 right-[64px]" />
-			<Notch className="-left-2 top-[76px]" />
-
-			<span className="flex min-w-0 grow flex-col">
-				<span className="relative flex h-[84px] items-center overflow-hidden rounded-tl-2xl bg-showcase px-3.5">
-					{ticket.coverImageUrl ? (
-						<>
-							<AppImage
-								src={ticket.coverImageUrl}
-								alt=""
-								aspect="absolute inset-0 h-full w-full"
-								sizes="(min-width: 1024px) 300px, 80vw"
-								objectFit="cover"
-							/>
+			<span className="kp-ticket-cut flex overflow-hidden rounded-2xl bg-[var(--sc-paper)]">
+				<span className="flex min-w-0 grow flex-col">
+					<span className="relative flex h-[84px] items-center overflow-hidden bg-showcase px-3.5">
+						{ticket.coverImageUrl ? (
+							<>
+								<AppImage
+									src={ticket.coverImageUrl}
+									alt=""
+									aspect="absolute inset-0 h-full w-full"
+									sizes="(min-width: 1024px) 300px, 80vw"
+									objectFit="cover"
+								/>
+								<span
+									aria-hidden
+									className="absolute inset-0 bg-showcase-scrim"
+								/>
+							</>
+						) : (
 							<span
 								aria-hidden
-								className="absolute inset-0 bg-showcase-scrim"
-							/>
-						</>
-					) : (
-						<span
-							aria-hidden
-							className="pointer-events-none absolute -right-1.5 -top-3.5 select-none font-heading text-[88px] font-black leading-none tracking-[-0.05em] text-white/[0.08]"
-						>
-							{initials}
-						</span>
-					)}
-					<span className="relative flex min-w-0 items-center gap-2.5 text-white">
-						<span className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-xl border-2 border-white/90 bg-primary font-heading text-[13px] font-extrabold text-primary-foreground">
-							{card.logoUrl ? (
-								<AppImage
-									src={card.logoUrl}
-									alt=""
-									aspect="size-full"
-									sizes="40px"
-									objectFit="contain"
-									className="bg-background"
-								/>
-							) : (
-								initials
-							)}
-						</span>
-						<span className="flex min-w-0 flex-col">
-							<span className="truncate font-heading text-[15px] font-extrabold leading-tight">
-								{card.storeName}
+								className="pointer-events-none absolute -right-1.5 -top-3.5 select-none font-heading text-[88px] font-black leading-none tracking-[-0.05em] text-white/[0.08]"
+							>
+								{initials}
 							</span>
-							{place ? (
-								<span className="truncate text-[11.5px] text-white/80">
-									{place}
+						)}
+						<span className="relative flex min-w-0 items-center gap-2.5 text-white">
+							<span className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-xl border-2 border-white/90 bg-primary font-heading text-[13px] font-extrabold text-primary-foreground">
+								{card.logoUrl ? (
+									<AppImage
+										src={card.logoUrl}
+										alt=""
+										aspect="size-full"
+										sizes="40px"
+										objectFit="contain"
+										className="bg-background"
+									/>
+								) : (
+									initials
+								)}
+							</span>
+							<span className="flex min-w-0 flex-col">
+								<span className="truncate font-heading text-[15px] font-extrabold leading-tight">
+									{card.storeName}
 								</span>
-							) : null}
+								{place ? (
+									<span className="truncate text-[11.5px] text-white/80">
+										{place}
+									</span>
+								) : null}
+							</span>
 						</span>
 					</span>
+					<span className="flex items-center border-t-2 border-dashed border-[var(--sc-tear)] px-3.5 pb-2.5 pt-2">
+						<StoreStatusLine card={card} now={now} showArea={false} />
+					</span>
 				</span>
-				<span className="flex items-center border-t-2 border-dashed border-[var(--sc-tear)] px-3.5 pb-2.5 pt-2">
-					<StoreStatusLine card={card} now={now} showArea={false} />
-				</span>
-			</span>
 
-			<span className="flex w-[72px] shrink-0 flex-col items-center justify-center border-l-2 border-dashed border-[var(--sc-tear)]">
-				{ticket.label ? (
-					<StubLabel label={ticket.label} />
-				) : (
-					<>
-						<Tent aria-hidden className="size-6 text-[var(--sc-ink-soft)]" />
-						<span className="mt-1 text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--sc-ink-soft)]">
-							At event
-						</span>
-					</>
-				)}
+				<span className="flex w-[72px] shrink-0 flex-col items-center justify-center border-l-2 border-dashed border-[var(--sc-tear)]">
+					{ticket.label ? (
+						<StubLabel label={ticket.label} />
+					) : (
+						<>
+							<Tent aria-hidden className="size-6 text-[var(--sc-ink-soft)]" />
+							<span className="mt-1 text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--sc-ink-soft)]">
+								At event
+							</span>
+						</>
+					)}
+				</span>
 			</span>
 		</Link>
 	);
@@ -156,17 +156,5 @@ function StubLabel({ label }: { label: string }) {
 		<span className="max-w-[64px] text-center font-mono text-[12px] font-bold leading-tight text-[var(--sc-ink)]">
 			{label}
 		</span>
-	);
-}
-
-function Notch({ className }: { className: string }): ReactNode {
-	return (
-		<span
-			aria-hidden
-			className={cn(
-				"absolute size-4 rounded-full bg-[var(--sc-surface,var(--sc-b))]",
-				className,
-			)}
-		/>
 	);
 }

@@ -70,8 +70,6 @@ export function ShowcaseStage({
 				showcaseThemeClass(showcase.theme),
 				"relative mx-3 overflow-hidden rounded-[28px] bg-showcase text-white",
 				lg("lg:mx-8 lg:rounded-[32px]"),
-				// The pile hangs out of its cell — the stage must not clip it.
-				"[--sc-surface:var(--sc-b)]",
 			)}
 		>
 			{showcase.coverImageUrl ? (
@@ -88,7 +86,7 @@ export function ShowcaseStage({
 					    readable — the admin editor says so beside the upload. */}
 					<span
 						aria-hidden
-						className="absolute inset-0 bg-[linear-gradient(180deg,var(--sc-a)_0%,transparent_55%,var(--sc-b)_100%)] opacity-90"
+						className="absolute inset-0 bg-showcase-cover-scrim"
 					/>
 				</>
 			) : (
@@ -96,7 +94,14 @@ export function ShowcaseStage({
 					theme={showcase.theme}
 					className={cn(
 						"absolute inset-x-0 top-0 h-[230px] w-full",
-						lg("lg:h-full lg:w-[460px]"),
+						// The wide focused banner: the art spans it. The stage: the art
+						// sits behind the title column and FADES out under the
+						// tickets — a hard edge read as a seam in the hands-on test.
+						focused
+							? lg("lg:h-[300px]")
+							: lg(
+									"lg:h-full lg:w-[520px] lg:[mask-image:linear-gradient(to_right,black_70%,transparent)]",
+								),
 					)}
 				/>
 			)}
@@ -191,6 +196,13 @@ export function ShowcaseStage({
 							</li>
 						))}
 					</ul>
+				) : total === 0 ? (
+					// Buyers never see this — `listShowcases` drops a showcase with
+					// no listable store. It is the admin preview's empty state, and a
+					// "See all 0 →" there would be a link to nothing.
+					<p className="mx-5 mb-5 mt-6 rounded-2xl border border-dashed border-white/25 px-4 py-6 text-center text-[13px] text-white/70">
+						Stores you add appear here as tickets.
+					</p>
 				) : (
 					<>
 						{/* Phone: the rail. */}
@@ -428,8 +440,11 @@ export function ShowcaseBand({
 }) {
 	const facts = showcaseTimeFacts(showcase, now);
 	const total = tickets.length;
-	const faces = tickets.slice(0, 4);
-	const rest = total - faces.length;
+	// Four faces on a phone; the desktop band is wide enough for eight, and a
+	// full-width bar holding four tiny tiles read as empty.
+	const faces = tickets.slice(0, 8);
+	const restPhone = total - Math.min(total, 4);
+	const restDesktop = total - Math.min(total, 8);
 	return (
 		<Link
 			to="/stores"
@@ -452,10 +467,13 @@ export function ShowcaseBand({
 				</span>
 				<span className="flex items-center gap-2 text-xs text-[var(--sc-text-soft)]">
 					<span className="flex pl-2">
-						{faces.map((t) => (
+						{faces.map((t, i) => (
 							<span
 								key={t.card.slug}
-								className="-ml-2 flex size-7 items-center justify-center overflow-hidden rounded-[9px] border-2 border-[var(--sc-b)] bg-primary font-heading text-[10px] font-extrabold text-primary-foreground"
+								className={cn(
+									"-ml-2 flex size-7 items-center justify-center overflow-hidden rounded-[9px] border-2 border-[var(--sc-b)] bg-primary font-heading text-[10px] font-extrabold text-primary-foreground lg:size-8",
+									i >= 4 && "hidden lg:flex",
+								)}
 							>
 								{t.card.logoUrl ? (
 									<AppImage
@@ -471,9 +489,14 @@ export function ShowcaseBand({
 								)}
 							</span>
 						))}
-						{rest > 0 ? (
-							<span className="-ml-2 flex size-7 items-center justify-center rounded-[9px] border-2 border-[var(--sc-b)] bg-white/15 text-[10px] font-bold">
-								+{rest}
+						{restPhone > 0 ? (
+							<span className="-ml-2 flex size-7 items-center justify-center rounded-[9px] border-2 border-[var(--sc-b)] bg-white/15 text-[10px] font-bold lg:hidden">
+								+{restPhone}
+							</span>
+						) : null}
+						{restDesktop > 0 ? (
+							<span className="-ml-2 hidden size-8 items-center justify-center rounded-[9px] border-2 border-[var(--sc-b)] bg-white/15 text-[10px] font-bold lg:flex">
+								+{restDesktop}
 							</span>
 						) : null}
 					</span>

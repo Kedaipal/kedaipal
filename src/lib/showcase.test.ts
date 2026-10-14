@@ -1,13 +1,18 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, test } from "vitest";
+import { SHOWCASE_THEMES } from "../../convex/lib/showcase";
 import type { MarketplaceStoreCard } from "../../convex/marketplace";
 import type { PublicShowcase } from "../../convex/showcases";
 import {
 	dateRange,
 	joinShowcaseMembers,
 	PILE_FAN_MAX,
+	SHOWCASE_THEME_CLASS,
 	STAGE_GRID_TICKETS,
 	showcasePath,
 	showcasesForRegion,
+	showcaseThemeClass,
 	showcaseTimeFacts,
 	splitStage,
 	ticketPlace,
@@ -121,6 +126,21 @@ describe("showcaseTimeFacts — what the chip says", () => {
 		expect(dateRange(myt(2026, 10, 18), myt(2026, 10, 19))).toBe("18 Oct");
 		expect(dateRange(undefined, myt(2026, 10, 19))).toBe("Until 18 Oct");
 		expect(dateRange(undefined, undefined)).toBeUndefined();
+	});
+});
+
+describe("theme classes — Tailwind only emits what it can READ", () => {
+	const css = readFileSync(resolve(__dirname, "../styles.css"), "utf8");
+	const source = readFileSync(resolve(__dirname, "showcase.ts"), "utf8");
+	test.each(
+		SHOWCASE_THEMES,
+	)("%s: a utility in styles.css, spelled out in full in the source", (theme) => {
+		expect(css).toContain(`@utility kp-showcase-${theme} {`);
+		// The literal must appear in a scanned file; a runtime-assembled
+		// `kp-showcase-${theme}` is never generated — every showcase rendered
+		// as Campfire until the hands-on test caught it.
+		expect(source).toContain(`"kp-showcase kp-showcase-${theme}"`);
+		expect(showcaseThemeClass(theme)).toBe(SHOWCASE_THEME_CLASS[theme]);
 	});
 });
 

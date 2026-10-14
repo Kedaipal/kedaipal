@@ -20,6 +20,13 @@ import {
 } from "../ui/sheet";
 import { Skeleton } from "../ui/skeleton";
 
+/** What the editor needs to show a just-added store before it is saved. */
+export type PickedStore = {
+	retailerId: Id<"retailers">;
+	storeName: string;
+	slug: string;
+};
+
 /**
  * "Add stores" for a showcase (z8r3fdr6mv): the admin seller directory,
  * narrowed to the showcase's region, with search, select-all-matches and one
@@ -45,7 +52,9 @@ export function ShowcaseStorePicker({
 	country: Country;
 	alreadyIn: ReadonlySet<Id<"retailers">>;
 	capacityLeft: number;
-	onAdd: (retailerIds: Id<"retailers">[]) => void;
+	/** The picked stores WITH their names, so the editor's new rows read as
+	 * the store from the moment they're added, not "New store" until a save. */
+	onAdd: (stores: PickedStore[]) => void;
 }) {
 	const sellerList = useQuery(
 		convexQuery(api.admin.listSellersForAdmin, open ? {} : "skip"),
@@ -83,7 +92,15 @@ export function ShowcaseStorePicker({
 		});
 	}
 	function commit() {
-		onAdd([...picked]);
+		onAdd(
+			(sellerList?.sellers ?? [])
+				.filter((s) => picked.has(s._id))
+				.map((s) => ({
+					retailerId: s._id,
+					storeName: s.storeName,
+					slug: s.slug,
+				})),
+		);
 		setPicked(new Set());
 		setQuery("");
 		onOpenChange(false);

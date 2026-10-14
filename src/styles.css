@@ -403,9 +403,60 @@
 	--sc-accent-fg: hsl(222 47% 11%);
 }
 
+/* A showcase ticket's die-cut (z8r3fdr6mv): three REAL holes — top and
+   bottom where the stub's perforation meets the edge, and the left end of the
+   tear under the info panel. A mask, not painted circles: a painted notch is
+   only invisible on the one flat colour it was painted in, and the ticket sits
+   on gradients, glows and admin-uploaded cover photos. Each layer is "opaque
+   everywhere except one circle"; `intersect` keeps what every layer keeps.
+   The positions are the ticket's own geometry: the stub is 72px wide with a
+   2px dashed border (line centre 71px from the right), and the info panel is
+   84px tall above a 2px tear (centre at 85px). The shadow cannot be a
+   box-shadow (the mask clips it) — the wrapper casts a `drop-shadow`, which
+   follows the cut outline. */
+@utility kp-ticket-cut {
+	--cut-r: 9px;
+	--cut-x: calc(100% - 71px);
+	--cut-y: 85px;
+	--cut-hole: transparent calc(var(--cut-r) - 0.5px), #000 var(--cut-r);
+	-webkit-mask:
+		radial-gradient(circle var(--cut-r) at var(--cut-x) 0, var(--cut-hole)),
+		radial-gradient(circle var(--cut-r) at var(--cut-x) 100%, var(--cut-hole)),
+		radial-gradient(circle var(--cut-r) at 0 var(--cut-y), var(--cut-hole));
+	-webkit-mask-composite: source-in;
+	mask:
+		radial-gradient(circle var(--cut-r) at var(--cut-x) 0, var(--cut-hole)),
+		radial-gradient(circle var(--cut-r) at var(--cut-x) 100%, var(--cut-hole)),
+		radial-gradient(circle var(--cut-r) at 0 var(--cut-y), var(--cut-hole));
+	mask-composite: intersect;
+}
+
 /* The showcase's dark ground. */
 @utility bg-showcase {
 	background-image: linear-gradient(170deg, var(--sc-a) 0%, var(--sc-b) 100%);
+}
+
+/* A showcase's own cover photo under its title (z8r3fdr6mv). The admin is
+   told "we darken it so the title stays readable" — so the fade is weighted
+   to where the TEXT is: the top on a phone (title, tagline, then the ticket
+   rail), the left column on desktop. The first cut faded to fully
+   transparent mid-banner and a bright campsite photo erased the tagline. */
+@utility bg-showcase-cover-scrim {
+	background-image: linear-gradient(
+		180deg,
+		color-mix(in oklab, var(--sc-a) 88%, transparent) 0%,
+		color-mix(in oklab, var(--sc-a) 70%, transparent) 45%,
+		color-mix(in oklab, var(--sc-b) 82%, transparent) 100%
+	);
+	@media (min-width: 1024px) {
+		background-image: linear-gradient(
+			90deg,
+			color-mix(in oklab, var(--sc-a) 92%, transparent) 0%,
+			color-mix(in oklab, var(--sc-a) 78%, transparent) 38%,
+			color-mix(in oklab, var(--sc-b) 45%, transparent) 70%,
+			color-mix(in oklab, var(--sc-b) 30%, transparent) 100%
+		);
+	}
 }
 
 /* A store cover inside a ticket panel: dark fade from the left so the name
