@@ -63,6 +63,7 @@ export function IntegrationsTab({
 	retailerId,
 	country,
 	deliveryBooking,
+	businessAddress,
 	hitpay,
 	subscription,
 	onSave,
@@ -73,6 +74,8 @@ export function IntegrationsTab({
 	retailerId: Doc<"retailers">["_id"];
 	country: Country;
 	deliveryBooking: DeliveryBookingSummary | undefined;
+	/** Lalamove's first setup step — riders are sent here. */
+	businessAddress: { label: string } | undefined;
 	hitpay: HitpaySummary | undefined;
 	subscription: SubscriptionView | undefined;
 	/** The act-as-aware settings mutation, threaded from the route (the
@@ -88,8 +91,9 @@ export function IntegrationsTab({
 		<div className="flex flex-col gap-6 pt-2">
 			<p className="px-1 text-xs text-muted-foreground">
 				Your own accounts with the services Kedaipal can drive. Connecting one
-				doesn&apos;t switch anything on by itself — delivery and booking
-				behaviour is chosen under Fulfilment, online payments under Payments.
+				doesn&apos;t switch anything on by itself — delivery pricing and courier
+				booking are chosen under Fulfilment → Delivery pricing, how buyers pay
+				under Payments.
 			</p>
 
 			<AccountCard
@@ -98,6 +102,7 @@ export function IntegrationsTab({
 			>
 				<LalamoveIntegrationCard
 					deliveryBooking={deliveryBooking}
+					businessAddress={businessAddress}
 					onSave={onSave}
 				/>
 			</AccountCard>

@@ -2257,3 +2257,112 @@ describe("overseas buyer numbers (z8r3fdh274) — the rider calls the store", ()
 		});
 	});
 });
+
+describe("webhook setup state (86eye9xd4, 5A)", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		vi.unstubAllEnvs();
+	});
+
+	async function seedKeyedStore(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t);
+		await t.withIdentity({ subject: USER }).mutation(api.retailers.updateSettings, {
+			deliveryBooking: {
+				enabled: false,
+				vehicleType: "MOTORCYCLE",
+				apiKey: "pk_test_abcd",
+				apiSecret: "sk_test_abcd",
+			},
+		});
+		return retailer;
+	}
+
+	const summary = async (t: ReturnType<typeof setup>) =>
+		(await t.withIdentity({ subject: USER }).query(api.retailers.getMyRetailer))
+			?.deliveryBooking;
+
+	test("one tap PATCHes our URL into the account and ticks the step", async () => {
+		vi.stubEnv("CONVEX_SITE_URL", "https://kedai.convex.site");
+		const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+		const t = setup();
+		await seedKeyedStore(t);
+		expect((await summary(t))?.webhookRegisteredAt).toBeUndefined();
+
+		const result = await t
+			.withIdentity({ subject: USER })
+			.action(api.lalamove.registerWebhook, {});
+		expect(result).toEqual({ ok: true });
+		const [url, init] = fetchMock.mock.calls[0] as unknown as [
+			string,
+			RequestInit,
+		];
+		expect(url).toBe("https://rest.sandbox.lalamove.com/v3/webhook");
+		expect(init.method).toBe("PATCH");
+		expect(JSON.parse(String(init.body))).toEqual({
+			data: { url: "https://kedai.convex.site/webhook/lalamove" },
+		});
+		expect((await summary(t))?.webhookRegisteredAt).toBeTypeOf("number");
+	});
+
+	test("a refusal leaves the step open and says to paste by hand", async () => {
+		vi.stubEnv("CONVEX_SITE_URL", "https://kedai.convex.site");
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response("nope", { status: 401 })),
+		);
+		const t = setup();
+		await seedKeyedStore(t);
+		const result = await t
+			.withIdentity({ subject: USER })
+			.action(api.lalamove.registerWebhook, {});
+		expect(result).toMatchObject({ ok: false, message: /Partner Portal/ });
+		expect((await summary(t))?.webhookRegisteredAt).toBeUndefined();
+	});
+
+	test("the first verified event proves a hand-pasted webhook", async () => {
+		const t = setup();
+		const retailer = await seedKeyedStore(t);
+		const orderId = await seedOrder(t, retailer._id);
+		const jobId = await seedJob(t, retailer._id, orderId);
+		await t.mutation(internal.lalamove.applyWebhookEvent, {
+			jobId,
+			eventType: "ORDER_STATUS_CHANGED",
+			data: statusEvent("ON_GOING", "2026-10-14T03:00:00.000Z"),
+			eventTimestamp: Date.now(),
+		});
+		expect((await summary(t))?.webhookRegisteredAt).toBeTypeOf("number");
+	});
+
+	test("new keys are a new account — the step asks again", async () => {
+		const t = setup();
+		const retailer = await seedKeyedStore(t);
+		await t.run((ctx) =>
+			ctx.db.get(retailer._id).then((r) =>
+				ctx.db.patch(retailer._id, {
+					deliveryBooking: {
+						...(r?.deliveryBooking as NonNullable<
+							Doc<"retailers">["deliveryBooking"]
+						>),
+						webhookRegisteredAt: 1,
+					},
+				}),
+			),
+		);
+		const asUser = t.withIdentity({ subject: USER });
+		// A rider-option save keeps it…
+		await asUser.mutation(api.retailers.updateSettings, {
+			deliveryBooking: { vehicleType: "CAR" },
+		});
+		expect((await summary(t))?.webhookRegisteredAt).toBe(1);
+		// …a typed key clears it.
+		await asUser.mutation(api.retailers.updateSettings, {
+			deliveryBooking: {
+				vehicleType: "CAR",
+				apiKey: "pk_test_wxyz",
+				apiSecret: "sk_test_wxyz",
+			},
+		});
+		expect((await summary(t))?.webhookRegisteredAt).toBeUndefined();
+	});
+});

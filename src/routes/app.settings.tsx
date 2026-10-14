@@ -1115,6 +1115,7 @@ function SettingsRoute() {
 								retailerId={retailer._id}
 								country={retailer.country}
 								deliveryBooking={retailer.deliveryBooking}
+								businessAddress={retailer.businessAddress}
 								hitpay={retailer.hitpay}
 								subscription={retailer.subscription}
 								onSave={updateSettings}

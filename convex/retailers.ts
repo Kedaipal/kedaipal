@@ -472,6 +472,8 @@ type DeliveryBooking = {
 	 * (86eypncfy) for the same reason as the hint — ciphertext has no prefix
 	 * to read. */
 	env?: "sandbox" | "production";
+	/** See schema — the account is known to send us its webhooks. */
+	webhookRegisteredAt?: number;
 };
 
 /** Owner-read summary of the booking config — the API secret NEVER crosses
@@ -493,6 +495,8 @@ export type DeliveryBookingSummary = {
 	 * rather than assuming production, because assuming wrong is exactly the
 	 * failure this field exists to stop. */
 	env?: "sandbox" | "production";
+	/** The webhook step of the Integrations setup checklist (86eye9xd4). */
+	webhookRegisteredAt?: number;
 };
 
 function summarizeDeliveryBooking(
@@ -521,6 +525,7 @@ function summarizeDeliveryBooking(
 			(booking.apiKey && !isEncrypted(booking.apiKey)
 				? inferLalamoveEnv(booking.apiKey)
 				: undefined),
+		webhookRegisteredAt: booking.webhookRegisteredAt,
 	};
 }
 
@@ -3047,6 +3052,12 @@ export const updateSettings = mutation({
 							: args.deliveryBooking.apiKey.trim()
 								? inferLalamoveEnv(args.deliveryBooking.apiKey.trim())
 								: undefined,
+					// A typed key is a (possibly) different account, whose webhook
+					// setting we know nothing about — the checklist asks again.
+					webhookRegisteredAt:
+						args.deliveryBooking.apiKey === undefined
+							? prev?.webhookRegisteredAt
+							: undefined,
 				};
 				// A key without its secret (or vice versa) can never authenticate —
 				// refuse half a credential up front so the failure is at save time

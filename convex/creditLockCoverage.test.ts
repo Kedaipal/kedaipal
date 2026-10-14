@@ -169,6 +169,7 @@ const OPEN_FUNCTIONS: Record<string, string> = {
 	// Settings are always open.
 	"delyva.connect": "settings: connecting a courier account",
 	"delyva.resubscribeWebhooks": "settings: re-registers the courier webhooks",
+	"lalamove.registerWebhook": "settings: registers the rider webhook",
 	"delyva.refreshEnvironment": "settings: re-reads the courier account's mode",
 	"delyva.disconnect": "settings: removing a courier account is never trapped",
 	"delyva.updateSettings": "settings: courier defaults and preferences",

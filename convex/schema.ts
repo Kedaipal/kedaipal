@@ -556,6 +556,14 @@ export default defineSchema({
 				deliveryDirection: v.optional(
 					v.union(v.literal("standard"), v.literal("collection")),
 				),
+				// When this store's Lalamove account is KNOWN to deliver its
+				// webhooks to us (86eye9xd4, 5A): stamped by our one-tap
+				// `PATCH /v3/webhook`, or by the first verified event for one of
+				// its jobs (proof a manual paste worked). Cleared when the key
+				// changes — a different account has its own webhook setting.
+				// Undefined = not known, which the setup checklist shows as the
+				// step still to do.
+				webhookRegisteredAt: v.optional(v.number()),
 			}),
 		),
 		// HitPay online payments (86eyb6z3a) — BYO-ONLY like deliveryBooking above:

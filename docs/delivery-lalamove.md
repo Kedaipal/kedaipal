@@ -474,10 +474,19 @@ Terminal failures email the seller (EN+BM `deliveryJobFailed` template),
 raise a browser alert on devices with order alerts on, leave the order
 untouched, and the card offers one-tap rebook.
 
-**Registration is per SELLER** (BYO-only): each vendor pastes OUR webhook
-URL into THEIR Partner Portal → Developers → Webhook URL (Version 3). The
-settings card surfaces the exact URL with a copy button and the vendor
-guide walks it (Step E5). Graceful degradation if a seller skips it:
+**Registration is per SELLER** (BYO-only), and since 86eye9xd4 (5A) it is
+**one tap**: the Integrations card's setup checklist (pickup address → API
+key → webhook) calls `lalamove.registerWebhook`, which sends Lalamove's free
+`PATCH /v3/webhook` with `{ data: { url: <CONVEX_SITE_URL>/webhook/lalamove } }`
+on the seller's own keys and stamps `deliveryBooking.webhookRegisteredAt`.
+Lalamove keeps ONE webhook URL per account, so this replaces whatever the
+account pointed at. The manual paste (Partner Portal → Developers → Webhook
+URL, Version 3; vendor guide Step E5) stays as the fallback the card opens
+when Lalamove refuses. A **verified event** for one of the store's jobs also
+stamps `webhookRegisteredAt` (once — `stampWebhookKnown` in
+`applyWebhookEvent`), so a hand-pasted webhook ticks the step too; **typing
+a new key clears it**, because a different account has its own webhook
+setting. Graceful degradation if a seller skips it:
 bookings still work, but shipped/delivered stop being automatic — the
 order stays where it is until the seller advances it by hand, which since
 3 Aug costs one confirm per transition while a booking is active (the

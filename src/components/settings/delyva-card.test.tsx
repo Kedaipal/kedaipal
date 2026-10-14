@@ -342,7 +342,7 @@ describe("plan gate", () => {
 		state.settings = settings();
 		render(card({ canUse: false }));
 		expect(screen.getByRole("button", { name: /disconnect/i })).toBeTruthy();
-		expect(screen.getByRole("button", { name: /replace key/i })).toBeTruthy();
+		expect(screen.getByRole("button", { name: /^replace$/i })).toBeTruthy();
 	});
 });
 
@@ -465,16 +465,24 @@ describe("connected settings", () => {
 		const { container } = render(card());
 
 		expect(container.textContent).toContain("won't move to Shipped");
-		fireEvent.click(screen.getByRole("button", { name: /retry now/i }));
+		fireEvent.click(screen.getByRole("button", { name: /register again/i }));
 		await waitFor(() => expect(resubscribe).toHaveBeenCalled());
 	});
 
 	it("flags a missing pickup address before the first booking fails", () => {
 		state.settings = settings({ pickupAddress: undefined });
 		render(card());
-		expect(
-			screen.getByText(/Add this before your first booking/i),
-		).toBeTruthy();
+		// The checklist's pickup step needs action, and the header counts it.
+		expect(screen.getByText("Setup 2 of 3")).toBeTruthy();
+		expect(screen.getAllByText("(action needed)")).toHaveLength(1);
+	});
+
+	it("a fully set-up account reads as ticked steps and one chip (86eye9xd4)", () => {
+		state.settings = settings({ isDemo: false });
+		render(card());
+		expect(screen.getByText("Connected")).toBeTruthy();
+		expect(screen.queryByText("(action needed)")).toBeNull();
+		expect(screen.getAllByText("(done)")).toHaveLength(3);
 	});
 });
 

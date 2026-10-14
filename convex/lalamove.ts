@@ -11,12 +11,13 @@
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { requireRetailerAccess } from "./lib/auth";
+import { requireRetailerAccess, resolveMyRetailer } from "./lib/auth";
 import {
 	action,
 	internalAction,
 	internalMutation,
 	internalQuery,
+	type MutationCtx,
 	query,
 	type QueryCtx,
 } from "./_generated/server";
@@ -464,6 +465,113 @@ export const getWebhookContext = internalQuery({
 	},
 });
 
+/** Mark the store's Lalamove webhook as known-good, unless it already is. */
+async function stampWebhookKnown(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+): Promise<void> {
+	const retailer = await ctx.db.get(retailerId);
+	const booking = retailer?.deliveryBooking;
+	if (!retailer || !booking || booking.webhookRegisteredAt !== undefined) return;
+	await ctx.db.patch(retailerId, {
+		deliveryBooking: { ...booking, webhookRegisteredAt: Date.now() },
+	});
+}
+
+// ---------------------------------------------------------------------------
+// One-tap webhook registration (86eye9xd4, 5A)
+// ---------------------------------------------------------------------------
+
+/** Integrations write + the stored key pair, for registering the webhook. */
+export const getWebhookRegistrationContext = internalQuery({
+	args: { retailerId: v.optional(v.id("retailers")) },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{
+		retailerId: Id<"retailers">;
+		credentials: LalamoveCredentials;
+	} | null> => {
+		let target = retailerId;
+		if (!target) {
+			const my = await resolveMyRetailer(ctx);
+			if (!my) throw new ConvexError("No store found");
+			target = my.retailer._id;
+		}
+		const access = await requireRetailerAccess(ctx, target, {
+			area: "integrations",
+			level: "write",
+		});
+		const credentials = resolveLalamoveCredentials(
+			access.retailer.deliveryBooking as BookingConfig | undefined,
+			access.retailer.country,
+		);
+		return credentials ? { retailerId: target, credentials } : null;
+	},
+});
+
+export const markWebhookRegistered = internalMutation({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }) => {
+		const retailer = await ctx.db.get(retailerId);
+		const booking = retailer?.deliveryBooking;
+		if (!retailer || !booking) return;
+		await ctx.db.patch(retailerId, {
+			deliveryBooking: { ...booking, webhookRegisteredAt: Date.now() },
+			updatedAt: Date.now(),
+		});
+	},
+});
+
+/**
+ * Point the seller's Lalamove account at our webhook — `PATCH /v3/webhook`,
+ * free, so the Partner Portal copy-paste becomes one tap. Lalamove keeps ONE
+ * webhook URL per account, so this replaces whatever was there; the settings
+ * card says so before the tap. The manual paste stays as the fallback when
+ * Lalamove refuses (shown with the URL to copy).
+ */
+export const registerWebhook = action({
+	args: { retailerId: v.optional(v.id("retailers")) },
+	handler: async (
+		ctx,
+		args,
+	): Promise<{ ok: true } | { ok: false; message: string }> => {
+		const target = await ctx.runQuery(
+			internal.lalamove.getWebhookRegistrationContext,
+			{ retailerId: args.retailerId },
+		);
+		if (!target) return { ok: false, message: "Save your Lalamove keys first." };
+		await ctx.runQuery(internal.subscriptions.assertWritable, {
+			retailerId: target.retailerId,
+		});
+		const siteUrl = process.env.CONVEX_SITE_URL;
+		if (!siteUrl) {
+			return {
+				ok: false,
+				message: "The webhook address isn't available — paste it by hand below.",
+			};
+		}
+		try {
+			await callLalamove(target.credentials, "PATCH", "/v3/webhook", {
+				data: { url: `${siteUrl}/webhook/lalamove` },
+			});
+		} catch (err) {
+			console.warn("[lalamove] webhook registration failed", {
+				message: err instanceof Error ? err.message : String(err),
+			});
+			return {
+				ok: false,
+				message:
+					"Lalamove didn't accept the registration — paste the address in your Partner Portal instead.",
+			};
+		}
+		await ctx.runMutation(internal.lalamove.markWebhookRegistered, {
+			retailerId: target.retailerId,
+		});
+		return { ok: true };
+	},
+});
+
 /** Order statuses that may auto-advance from a rider event. `pending` is
  * deliberately absent — an unconfirmed order never ships itself. */
 const SHIPPABLE_FROM = new Set(["confirmed", "packed"]);
@@ -492,6 +600,11 @@ export const applyWebhookEvent = internalMutation({
 	handler: async (ctx, { jobId, eventType, data, eventTimestamp }) => {
 		const job = await ctx.db.get(jobId);
 		if (!job) return;
+		// A verified event is proof this store's webhook reaches us — however
+		// it was set up — so the Integrations checklist can tick it (86eye9xd4).
+		// Once only: a per-event retailer patch would re-run every open
+		// storefront tab for nothing.
+		await stampWebhookKnown(ctx, job.retailerId);
 		const payload = (data ?? {}) as Record<string, unknown>;
 		const orderData = (payload.order ?? {}) as Record<string, unknown>;
 		const eventAt = parseLalamoveEventTime(data, eventTimestamp);
