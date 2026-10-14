@@ -59,7 +59,6 @@ import { orderPickupNotes } from "../../convex/lib/pickupNote";
 import type { PickupSnapshot } from "../../convex/lib/whatsappCopy";
 import { ProBadge } from "../components/app/pro-gate";
 import { ViewOnlyNote } from "../components/app/view-only-note";
-import { CreditLockNote } from "../components/credits/credit-lock-note";
 import { BRAND_GLYPHS } from "../components/dashboard/brand-icons";
 import { FulfilmentDateBadge } from "../components/dashboard/fulfilment-date-badge";
 import {
@@ -92,6 +91,7 @@ import {
 	type ShipmentFields,
 	ShipmentTrackingCard,
 } from "../components/order/shipment-tracking";
+import { GatedOrderPage } from "../components/orders/gated-order-page";
 import {
 	DeliveryAddressDisplay,
 	formatAddressInline,
@@ -344,11 +344,17 @@ function OrderDetailRoute() {
 	// this teammate holds view on orders and not edit. Sixteen controls on this
 	// page already branch on `readOnly`; they now cover the grant too.
 	const { readOnly, reason } = useAreaLock("orders");
-	// Out of credits (Credits T3) is narrower than view-only: the seller can
-	// still cancel, refund and pin, but not move an order on, take payment by
-	// hand, book a courier or hand out a receipt. Those controls read `work`
+	// Waiting on credits (Credits T3.1) is narrower than view-only: the seller
+	// can still cancel, refund and pin, but not move an order on, take payment
+	// by hand, book a courier or hand out a receipt. Those controls read `work`
 	// (which includes view-only); cancel and pin stay on `readOnly`.
-	const work = useAreaLock("orders", { credits: true });
+	//
+	// Passing the ORDER, not a boolean: the gate is per order now, so a store
+	// in debt still works every order whose credit was already paid for. In
+	// practice a GATED order never reaches these controls (the early return
+	// below hands it to `GatedOrderPage` instead) — this is the defence in
+	// depth for a stale tab whose data has gone gated under it.
+	const work = useAreaLock("orders", { creditOrder: order ?? null });
 	const workLockedReason = work.readOnly ? work.reason : undefined;
 	// What a greyed-out primary control says after its label.
 	const workLockLabel = lockLabel(work.cause);
@@ -564,6 +570,16 @@ function OrderDetailRoute() {
 	}
 	if (order === null) {
 		return <p className="text-sm text-destructive">Order not found.</p>;
+	}
+	// Waiting on credits (Credits T3.1): a whole screen of its own, not this
+	// page with its buttons greyed out. The server has already redacted the
+	// payload — no buyer, no lines, no tracking token — so there is nothing
+	// here left to grey out, and rendering the normal page would be a grid of
+	// empty fields that reads as a bug. `GatedOrderPage` shows what survives
+	// the redaction and keeps CANCEL available, which is the one thing a seller
+	// who can't see an order must still be able to do.
+	if (order.creditGated === true) {
+		return <GatedOrderPage order={order} />;
 	}
 
 	const deliveryMethod = (order.deliveryMethod ?? "delivery") as DeliveryMethod;
@@ -845,9 +861,6 @@ function OrderDetailRoute() {
 			    nothing on it, so say that above the controls rather than letting
 			    every tap answer with a toast. Renders nothing when writable. */}
 			<ViewOnlyNote />
-			{/* Out of credits (Credits T3): the narrower lock — order work pauses,
-			    cancelling and refunding don't. Renders nothing otherwise. */}
-			<CreditLockNote scope="orders" />
 
 			{/* A booking request's stage control IS approve/decline (S3): the
 			    stepper can't move it (the server refuses), so its slot holds the
@@ -1851,6 +1864,23 @@ function OrderDetailRoute() {
 						</span>
 					</div>
 				) : null}
+				{/* The voucher (`z8r3fdr617`) — mirrors the buyer's tracking page so
+				    both sides reconcile the same breakdown, and links to the voucher
+				    book so "which code was this?" is one tap. The one subtractive
+				    line, so it carries its sign and the accent colour. */}
+				{order.voucherDiscount && order.voucherDiscount > 0 ? (
+					<div className="flex items-center justify-between gap-3 px-3 text-sm text-accent-emphasis">
+						<span className="min-w-0 truncate">
+							Voucher
+							{order.voucherSnapshot?.code
+								? ` · ${order.voucherSnapshot.code}`
+								: ""}
+						</span>
+						<span className="shrink-0 font-medium tabular-nums">
+							−{formatPrice(order.voucherDiscount, order.currency)}
+						</span>
+					</div>
+				) : null}
 				<div className="flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2.5 text-sm font-bold">
 					<span>Total</span>
 					<span className="tabular-nums">
@@ -2255,6 +2285,14 @@ function OrderDetailRoute() {
 				description={[
 					"Stock is restored and this can't be undone. The customer is NOT sent a WhatsApp — the reason you give below is what they see on their order page.",
 					cancelOutlook ? cancelCreditLine(cancelOutlook) : null,
+					// This dialog's job is to enumerate what cancelling DOES, so a
+					// consequence the seller can act on belongs in it: the voucher
+					// goes back on the shelf and the buyer can spend it again
+					// (`z8r3fdr617` — the credit's rule and the voucher's differ, so
+					// they are two sentences, not one).
+					order.voucherSnapshot
+						? `Voucher ${order.voucherSnapshot.code} goes back to active — this buyer can use it again.`
+						: null,
 					hasActiveRiderBooking
 						? `⚠️ A Lalamove rider booking is still active on this order — cancel it from the ${dispatchCardName} card too, or you may pay for a wasted trip.`
 						: null,

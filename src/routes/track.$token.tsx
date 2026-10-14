@@ -27,6 +27,10 @@ import {
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
+import {
+	PAYMENTS_PAUSED_HEADING,
+	paymentsPausedOrderLine,
+} from "../../convex/lib/buyerPayments";
 import { isSafeTrackingUrl } from "../../convex/lib/couriers";
 import {
 	DAY_MS,
@@ -439,6 +443,9 @@ function TrackingRoute() {
 	const gatewayMethodsLabel = describeGatewayMethods(
 		paymentInfo?.gatewayMethods,
 	);
+	// The store is lapsed (z8r3fdr6gg): the server sent no methods and no
+	// gateway, and the card says why in place of the Pay-now door.
+	const paymentsPaused = paymentInfo?.paymentsPaused === true;
 	const [editingAddress, setEditingAddress] = useState(false);
 	// The manual-payment sheet (methods + I've-paid proof in one door) — opened
 	// by the payment card's primary button on manual stores, the bank-transfer
@@ -742,6 +749,7 @@ function TrackingRoute() {
 						ms={order.retailerLocale === "ms"}
 						checkoutPhone={order.checkoutPhone}
 						free={isFreeOrder(order)}
+						paymentsPaused={paymentsPaused}
 					/>
 				) : null
 			) : null}
@@ -906,7 +914,12 @@ function TrackingRoute() {
 			order.paymentDueAt !== undefined &&
 			paymentStatus === "unpaid" &&
 			!deliveryFeeHeld &&
-			!gatewayIssueUnresolved ? (
+			!gatewayIssueUnresolved &&
+			// No deadline runs while the buyer can't pay (the sweep lifts it) —
+			// and none is shown until the payment query has said which it is,
+			// or a lapsed store's countdown flashes before the paused card.
+			!paymentsPaused &&
+			!(showPaymentSection && paymentInfo === undefined) ? (
 				<PaymentDueCountdown dueAt={order.paymentDueAt} />
 			) : null}
 
@@ -1042,6 +1055,28 @@ function TrackingRoute() {
 								</Button>
 								<p className="text-xs opacity-80">
 									Checking with HitPay — this usually takes a few seconds.
+								</p>
+							</>
+						) : showPaymentSection && paymentInfo === undefined ? (
+							// Still asking the server how this order can be paid. Never
+							// fall through to a Pay-now that might not exist: on a
+							// lapsed store it flashed a live "Pay now" before the
+							// paused state arrived (z8r3fdr6gg test). `null` = nothing
+							// configured, which the manual branch below still handles.
+							<Button disabled isLoading className="h-12 w-full text-base">
+								Checking payment options…
+							</Button>
+						) : paymentsPaused ? (
+							// After the holds above (they're more specific, and the
+							// payment query is skipped while they stand) and after a
+							// HitPay return being verified — money that may already
+							// have moved is confirmed whatever the store's state.
+							<>
+								<Button disabled className="h-12 w-full text-base">
+									{PAYMENTS_PAUSED_HEADING}
+								</Button>
+								<p className="text-xs opacity-80">
+									{paymentsPausedOrderLine(order.storeName)}
 								</p>
 							</>
 						) : gatewayAvailable ? (
@@ -1809,6 +1844,23 @@ function TrackingRoute() {
 						</span>
 					</div>
 				) : null}
+				{/* The voucher (`z8r3fdr617`) — the one SUBTRACTIVE line, so it is
+				    signed and accented rather than reading as another charge. Last
+				    of the adjustments, immediately above the total it reduces, and
+				    named by its code so the buyer can see which voucher did it. */}
+				{order.voucherDiscount && order.voucherDiscount > 0 ? (
+					<div className="flex items-center justify-between gap-3 px-3 text-sm text-accent-emphasis">
+						<span className="min-w-0 truncate">
+							{ms ? "Voucher" : "Voucher"}
+							{order.voucherSnapshot?.code
+								? ` · ${order.voucherSnapshot.code}`
+								: ""}
+						</span>
+						<span className="shrink-0 font-medium tabular-nums">
+							−{formatPrice(order.voucherDiscount, order.currency)}
+						</span>
+					</div>
+				) : null}
 				<div className="flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2.5 text-sm font-bold">
 					<span>Total</span>
 					<span className="tabular-nums">
@@ -2003,11 +2055,15 @@ function ConfirmationSentCard({
 	ms,
 	checkoutPhone,
 	free,
+	paymentsPaused,
 }: {
 	ms: boolean;
 	checkoutPhone: string;
 	/** `isFreeOrder` — a free RSVP has no "how to pay" for this card to point at. */
 	free: boolean;
+	/** The store is lapsed (z8r3fdr6gg): the card below says payments are
+	 * paused, so this one mustn't promise "how to pay" is here right now. */
+	paymentsPaused: boolean;
 }) {
 	return (
 		<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-accent/40 bg-accent/5 p-4">
@@ -2028,10 +2084,14 @@ function ConfirmationSentCard({
 				{ms
 					? free
 						? "Tak perlu hantar apa-apa dan tiada bayaran diperlukan. Itulah satu-satunya mesej yang kami hantar — status terkini dan resit anda ada di sini. Simpan pautan ini."
-						: "Tak perlu hantar apa-apa. Itulah satu-satunya mesej yang kami hantar — selebihnya ada di sini: cara membayar, status terkini dan resit anda. Simpan pautan ini."
+						: paymentsPaused
+							? "Tak perlu hantar apa-apa. Itulah satu-satunya mesej yang kami hantar — status terkini dan resit anda ada di sini, dan cara membayar akan muncul di sini sebaik sahaja kedai menerima bayaran. Simpan pautan ini."
+							: "Tak perlu hantar apa-apa. Itulah satu-satunya mesej yang kami hantar — selebihnya ada di sini: cara membayar, status terkini dan resit anda. Simpan pautan ini."
 					: free
 						? "Nothing to send and nothing to pay. That's the only message we'll send you — your latest status and your receipt live here. Keep this link."
-						: "Nothing to send. That's the only message we'll send you — everything else is here: how to pay, your latest status, and your receipt. Keep this link."}
+						: paymentsPaused
+							? "Nothing to send. That's the only message we'll send you — your latest status and your receipt live here, and how to pay appears here once the store is taking payments. Keep this link."
+							: "Nothing to send. That's the only message we'll send you — everything else is here: how to pay, your latest status, and your receipt. Keep this link."}
 			</p>
 			<Button asChild variant="outline" className="h-11 w-full">
 				<a

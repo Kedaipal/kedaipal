@@ -39,14 +39,39 @@ describe("credit notice emails (Credits T3)", () => {
 		}
 	});
 
-	test("the lock says what's paused AND what still works, and that orders keep coming", () => {
+	test("the notice names the ORDERS, says they open oldest first, and never claims a store-wide pause", () => {
+		// Credits T3.1: the gate is per order and nothing else is gated, so a
+		// sentence promising "editing products is paused" would be the email
+		// lying about the rule — which is what the store-wide version said.
 		const out = renderCreditEmail("en", "locked", vars({ balance: 0 }));
+		expect(out.subject).toMatch(/waiting on credits/);
+		expect(out.html).toMatch(/waiting on credits/);
+		expect(out.html).toMatch(/oldest first/);
 		expect(out.html).toMatch(
-			/Paused until you add credits:.*accepting and updating orders, and editing products/,
+			/Carrying on as normal:.*your products, and your settings/,
 		);
-		expect(out.html).toMatch(/Still working:.*cancelling and refunding/);
-		expect(out.subject).toMatch(/orders are still coming in/);
+		// The release valve, stated: a seller who can't see an order must know
+		// they can still release the buyer.
+		expect(out.html).toMatch(/cancel a waiting order to release the buyer/);
+		for (const part of [out.subject, out.html, out.text])
+			expect(part).not.toMatch(/editing products|products .*paused/);
 	});
+
+	test.each(LOCALES)(
+		"%s: no locale still promises a store-wide pause",
+		(locale) => {
+			// The copy sweep had to move all three locales, not just English —
+			// the one that is easy to forget is the one nobody on the team reads.
+			for (const key of ["low", "locked", "stillLocked", "unlocked"] as const) {
+				const out = renderCreditEmail(locale, key, vars({ balance: 0 }));
+				for (const part of [out.subject, out.html, out.text]) {
+					expect(part, `${locale}/${key}`).not.toMatch(
+						/editing products|mengubah produk|编辑商品/,
+					);
+				}
+			}
+		},
+	);
 
 	test("still locked after a refresh: says how far short", () => {
 		const out = renderCreditEmail("en", "stillLocked", vars({ balance: -15 }));

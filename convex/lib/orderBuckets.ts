@@ -284,3 +284,45 @@ export function statusAgeSeverity(
 	if (hrs >= 4) return "warn";
 	return "normal";
 }
+
+/**
+ * How old an unpaid order has to be before Home calls it out as chasing work
+ * (z8r3fdrgzj). Three days is the point a seller stops remembering the order
+ * without being reminded — short enough to still be collectable, long enough
+ * that an order placed on a Friday evening is not nagged about on Saturday.
+ */
+export const STALE_UNPAID_DAYS = 3;
+
+/** What the collection predicates need on top of bucketing: whether the money
+ * arrived, and when the order was placed. `BucketableOrder` stays the minimal
+ * status shape it has always been. */
+export type CollectableOrder = BucketableOrder & {
+	paymentStatus?: string;
+	createdAt: number;
+};
+
+/**
+ * Is this an OPEN order whose money has not arrived? The definition behind both
+ * the inbox's "To collect" figure and Home's strip — one author, so the two can
+ * never disagree about what "unpaid" means.
+ *
+ * "Not received" rather than "unpaid", deliberately: an order the buyer has
+ * CLAIMED to have paid is still money the seller does not have, and it is the
+ * one most worth chasing, because somebody is waiting on a human to look.
+ */
+export function isOpenUnpaid(order: CollectableOrder): boolean {
+	const b = orderBucket(order);
+	if (b !== "new" && b !== "in_progress") return false;
+	return (order.paymentStatus ?? "unpaid") !== "received";
+}
+
+/**
+ * Open, unpaid, and older than `STALE_UNPAID_DAYS` — a STRICT SUBSET of
+ * `isOpenUnpaid`, which is what lets Home say "3 of your 9 unpaid orders are
+ * over 3 days old" without the two numbers being computed from different ideas.
+ * Age is measured from `createdAt`, the same anchor revenue uses.
+ */
+export function isStaleUnpaid(order: CollectableOrder, now: number): boolean {
+	if (!isOpenUnpaid(order)) return false;
+	return order.createdAt < now - STALE_UNPAID_DAYS * 24 * 60 * 60 * 1000;
+}

@@ -63,6 +63,11 @@ export type InsightsOrderInput = {
 	source?: string;
 	/** Stamped `?src=` tag, when the buyer arrived with one (86eyq0eq9). */
 	attributionSource?: string;
+	/** Aggregated customer this order was linked to at create. Unset on orders
+	 * that arrived without a phone (link-in-bio checkout) and on anything from
+	 * before the backfill — those orders count toward revenue but have no
+	 * identity to count, so they never reach `customerIds`. */
+	customerId?: string;
 	items: ReadonlyArray<{
 		productId: string;
 		variantId?: string;
@@ -131,6 +136,12 @@ export type InsightsAggregate = {
 	payments: PaymentStat[];
 	/** By-source rows over earned revenue, sorted by revenue desc. */
 	sources: SourceStat[];
+	/** Distinct `customerId`s seen on revenue orders in this window, insertion
+	 * ordered. IDS, not counts, because the Home Customers card merges a closed
+	 * range with today and the same customer can appear in both — counts cannot
+	 * be summed without double-counting them (z8r3fdrgzq). Orders with no
+	 * `customerId` contribute nothing. */
+	customerIds: string[];
 };
 
 /** Average order value (minor units) — earned ÷ revenue-order count, 0 when none. */
@@ -196,10 +207,13 @@ export function reduceInsights(
 	const trendMap = new Map<number, TrendBucket>();
 	const paymentMap = new Map<string, PaymentStat>();
 	const sourceMap = new Map<string, SourceStat>();
+	// A Set, so a customer with six orders in the window counts once.
+	const customerIds = new Set<string>();
 
 	for (const o of orders) {
 		if (!isRevenueOrder(o.status)) continue;
 		orderCount += 1;
+		if (o.customerId) customerIds.add(o.customerId);
 		// Revenue excludes the refundable security deposit (held money the
 		// seller gives back after check-out — the revenueExcludingDeposit rule,
 		// inlined since this module stays dependency-light).
@@ -280,6 +294,7 @@ export function reduceInsights(
 		trend: [...trendMap.values()].sort((a, b) => a.start - b.start),
 		payments: [...paymentMap.values()].sort((a, b) => b.revenue - a.revenue),
 		sources: [...sourceMap.values()].sort((a, b) => b.revenue - a.revenue),
+		customerIds: [...customerIds],
 	};
 }
 

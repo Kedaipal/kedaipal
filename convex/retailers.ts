@@ -254,12 +254,19 @@ import {
 	sanitizeOpeningHours,
 } from "./lib/openingHours";
 import { rateLimiter } from "./lib/rateLimiter";
-import { capsForPlan, DAY_MS, TRIAL_DAYS } from "./lib/plans";
+import { storeShowsVoucherEntry } from "./lib/voucherRedemption";
+import {
+	capsForPlan,
+	DAY_MS,
+	storeHasFullAccess,
+	TRIAL_DAYS,
+} from "./lib/plans";
 import {
 	type AccessState,
 	assertPlanFeature,
 	assertOwnStoreActive,
 	assertSubscriptionActive,
+	buyerPaymentsPaused,
 	insertSetupComp,
 	loadSubscription,
 	resolveAccess,
@@ -298,7 +305,7 @@ import {
 	sellerNewOrderTemplateName,
 } from "./lib/whatsapp";
 import { TEMPLATE_MAX_LENGTH } from "./lib/whatsappCopy";
-import { type CreditLockState, resolveCreditLock } from "./creditLock";
+import { type CreditGateState, resolveCreditGate } from "./creditLock";
 import { ensureCreditAccount } from "./credits";
 import {
 	assertSupportedCurrency,
@@ -319,6 +326,7 @@ import {
 	requireAdmin,
 	refusalMessage,
 	requireRetailerAccess,
+	storeOwnerIsAdmin,
 } from "./lib/auth";
 import {
 	hasPermission,
@@ -972,6 +980,17 @@ type RetailerPublic = {
 	// cart CTAs; every order-create path refuses with the same reason). A store
 	// setting, not billing state — the subscription itself stays owner-only.
 	orderingPaused?: boolean;
+	// Buyer payments paused because the store is lapsed (z8r3fdr6gg) — the ONE
+	// public bit of billing state, set on the storefront payload only so every
+	// checkout can say "you can order, you'll pay later" before the buyer
+	// commits. Never the status or the reason; the rule is
+	// `subscriptions.buyerPaymentsPaused`.
+	paymentsPaused?: boolean;
+	// Does this store's checkout show a voucher field? (`z8r3fdr617`) True
+	// only when the store is on a plan that carries vouchers AND has issued at
+	// least one — otherwise the control could only ever refuse. Like
+	// `paymentsPaused`, a single derived bit: never the plan, never a count.
+	acceptsVouchers?: boolean;
 	// Outbound WhatsApp kill-switch state (OWNER-only, like `subscription`), read
 	// from `retailerSendingLimits`. When paused, the gateway blocks this seller's
 	// NON-transactional WhatsApp sends (order confirmations/status still flow); the
@@ -983,6 +1002,16 @@ type RetailerPublic = {
 	// (not the owner). Drives the persistent "Acting as {store}" dashboard banner.
 	// Only ever set by the admin act-as read path. See docs/admin-console.md.
 	actingAsAdmin?: boolean;
+	// "This store has NO LIMITS of any kind" — `storeHasFullAccess`
+	// (convex/lib/plans.ts): an admin's own store, or a SPONSORED (comped) one.
+	// ONE boolean rather than letting each surface re-derive admin-ness and the
+	// comp flag, because surfaces that re-derived it is how a sponsored seller
+	// came to read "200 of 200" while their own caps said unlimited
+	// (z8r3fdrph7). Today it lifts the 200-product cap client-side
+	// (`productCapExemption`); `subscription.caps` is NOT a substitute —
+	// Enterprise is unlimited too and is very much on a plan.
+	// Only ever set when true, so ordinary payloads are byte-identical.
+	fullAccess?: boolean;
 	// True while this store has no owner yet — an admin pre-built it and the
 	// vendor hasn't claimed it (docs/prebuilt-stores.md). Set on every payload
 	// rather than only the admin read: the act-as banner has to say WHICH kind
@@ -1007,12 +1036,17 @@ type RetailerPublic = {
 	// A MEMBER's per-area grants (deny-by-default; convex/lib/permissions.ts).
 	// Absent for owner/admin — they hold every grant implicitly.
 	permissions?: MemberPermissions;
-	// Credits T3 (z8r3fdf8hy): is the store out of credits, why, and how many
-	// orders have arrived since — what the lock banner and every disabled
-	// control read. Deliberately NO balance numbers: every teammate needs to
-	// know WHY a button is disabled, but the balance itself is `credits`-area
-	// data (credits.getBalance). Never on the storefront payload.
-	creditLock?: CreditLockState;
+	// Credits T3.1 (z8r3fdmg4h): the per-order gate's WATERMARK, plus how many
+	// orders are waiting on credits and the one way back. The watermark is what
+	// lets the dashboard answer "is this row gated?" for a whole inbox without a
+	// read per row — `isOrderGated(gate, order)` is one comparison.
+	//
+	// Deliberately NO balance numbers: every teammate needs to know WHY a
+	// control is disabled, but the balance itself is `credits`-area data
+	// (credits.getBalance). A debit SEQUENCE number is not a balance — it says
+	// nothing about money, only about queue position. Never on the storefront
+	// payload.
+	creditGate?: CreditGateState;
 };
 
 async function loadRetailerForUser(
@@ -1158,11 +1192,16 @@ async function buildRetailerPublic(
 		isFoundingMember: row.isFoundingMember,
 		foundingMemberRank: row.foundingMemberRank,
 		orderingPaused: row.orderingPausedAt !== undefined,
+		fullAccess:
+			storeHasFullAccess({
+				ownerIsAdmin: storeOwnerIsAdmin(row),
+				comped: sub?.comped === true,
+			}) || undefined,
 		sendingPaused: !!sendingLimits?.pausedAt,
 		sendingPauseReason: sendingLimits?.pauseReason,
 		role: opts?.role,
 		permissions: opts?.permissions,
-		creditLock: await resolveCreditLock(ctx, row, Date.now()),
+		creditGate: await resolveCreditGate(ctx, row, Date.now()),
 	};
 }
 
@@ -1309,10 +1348,13 @@ export const getRetailerBySlug = query({
 					openingHours: active.openingHours,
 					closedDates: active.closedDates,
 					minOrderValue: active.minOrderValue,
-					// Founding badge is public-safe; subscription state is NOT included.
+					// Founding badge is public-safe; subscription state is NOT
+					// included — beyond the one `paymentsPaused` bit.
 					isFoundingMember: active.isFoundingMember,
 					foundingMemberRank: active.foundingMemberRank,
 					orderingPaused: active.orderingPausedAt !== undefined,
+					paymentsPaused: await buyerPaymentsPaused(ctx, active._id),
+					acceptsVouchers: await storeShowsVoucherEntry(ctx, active._id),
 					marketplaceUnlisted: active.marketplaceUnlistedAt !== undefined,
 					// paymentInstructions intentionally omitted from the public
 					// storefront payload — only revealed in the WhatsApp confirm
@@ -3846,22 +3888,12 @@ const DELETE_USER_BATCH = 25;
  * passed by hand. Progress is logged per phase (counts + ids only, never
  * phone numbers or message bodies).
  *
- * Sweeps, in order (see DELETION_PHASES in convex/lib/accountDeletion.ts):
- * orders (+ events + buyer image / payment proof / mockup blobs via the shared
- * `orderBlobs` helper), products (shared `deleteProductCascade`: variants +
- * images + junctions), leftover junctions, categories (+ tile blobs),
- * deliveryJobs (+ POD blobs), deliveryQuotes, customers, pickupLocations
- * (manager name/phone), counterCheckoutSessions (buyer phone/pushname),
- * subscriptions, subscriptionUsage, foundingMembers, retailerSendingLimits,
- * outboundMessageLog (buyer phones), slugHistory, then optOuts attribution,
- * and finally the retailer's own blobs + row.
- *
- * RETAINED BY DECISION (not omissions): `invoices` rows + their frozen PDF
- * blobs (financial records of what Kedaipal charged the seller — no buyer
- * PII) and `adminAuditLog` rows (an audit trail must outlive the tenant it
- * audited). `optOuts` rows are the buyer's GLOBAL suppression instruction and
- * are never deleted — only their `triggeredByRetailerId` attribution is
- * cleared. Rationale lives in convex/lib/accountDeletion.ts + the doc below.
+ * WHAT it sweeps, and what it RETAINS BY DECISION, is deliberately not listed
+ * here. `DELETION_PHASES` in convex/lib/accountDeletion.ts is the list, and the
+ * header above it carries the reasoning for every retained table; this docstring
+ * used to re-enumerate both and had drifted out of date on both counts — a
+ * third copy of a list is a third thing to forget. Read the phase list there, or
+ * docs/account-deletion.md for the prose version.
  *
  * The retailer row is deleted in the FINAL phase, so every continuation batch
  * can re-resolve the tenant by userId; each phase is idempotent, so re-running

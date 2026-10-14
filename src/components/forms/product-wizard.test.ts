@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { overCapMessage } from "../../../convex/lib/variant";
 import { isKindCard, KIND_CARDS } from "../../lib/kind-card";
+import { EMPTY_EVENT_DRAFT } from "./event-fields";
 import type { ProductFormDraft } from "./product-form";
 import {
 	buildWizardSubmitValues,
@@ -18,6 +19,7 @@ import {
 	wizardStepIssues,
 	wizardSteps,
 } from "./product-wizard";
+import { EMPTY_PROMO_DRAFT } from "./promo-fields";
 import { rebuildRows, type VariantRow } from "./variant-editor";
 
 function row(partial: Partial<VariantRow> = {}): VariantRow {
@@ -1125,5 +1127,73 @@ describe("open-days packages in the wizard (z8r3fdhpm7)", () => {
 	it("round-trips through the full-form handoff", () => {
 		const handoff = wizardHandoff(course());
 		expect(handoff.initialValues.skipsClosedDays).toBe(true);
+	});
+});
+
+describe("the Promotion block in the wizard (z8r3fdcw72)", () => {
+	/** The ICP case with one priced line, optionally on sale. */
+	function priced(promoPrice?: string): WizardState {
+		const base = browniesState();
+		return {
+			...base,
+			editor: {
+				...base.editor,
+				rows: [row({ price: "45.00", stock: "5", promoPrice })],
+			},
+		};
+	}
+
+	it("a brand-new wizard sends no promotion", () => {
+		// `null`, never `undefined` — "no promotion", not "don't touch one".
+		expect(buildWizardSubmitValues(priced()).promo).toBeNull();
+	});
+
+	it("a promotion switched on at create rides the same submit", () => {
+		const built = buildWizardSubmitValues({
+			...priced("31.50"),
+			promo: {
+				...EMPTY_PROMO_DRAFT,
+				on: true,
+				label: "Raya",
+				endMode: "minutes",
+				durationMinutes: 60,
+			},
+		});
+		expect(built.promo?.label).toBe("Raya");
+		expect(built.promo?.endsAt).toBeGreaterThan(Date.now());
+		expect(built.variants[0].promoPrice).toBe(3150);
+	});
+
+	it("a half-filled promotion stops the Price step", () => {
+		const issues = wizardStepIssues(
+			{
+				...priced(),
+				promo: {
+					...EMPTY_PROMO_DRAFT,
+					on: true,
+					endMode: "until",
+					endDate: "",
+				},
+			},
+			3,
+		);
+		expect(issues.some((i) => i.field === "promo")).toBe(true);
+	});
+
+	it("an event listing never sends flash extras — seats already cap it", () => {
+		const built = buildWizardSubmitValues({
+			...priced("31.50"),
+			event: { ...EMPTY_EVENT_DRAFT, on: true, date: "2026-12-01" },
+			promo: {
+				...EMPTY_PROMO_DRAFT,
+				on: true,
+				unitCap: "30",
+				maxPerOrder: "2",
+				payWithinMinutes: 60,
+			},
+		});
+		expect(built.promo?.unitCap).toBeUndefined();
+		expect(built.promo?.maxPerOrder).toBeUndefined();
+		expect(built.promo?.payWithinMinutes).toBeUndefined();
 	});
 });

@@ -8,14 +8,22 @@ import {
 	logAdminAction,
 	type RetailerAccess,
 	requireRetailerAccess,
+	tryRetailerAccess,
 } from "./lib/auth";
 import type { PermissionLevel } from "./lib/permissions";
+import {
+	creditGateFor,
+	customerForSeller,
+	forSeller,
+} from "./creditLock";
 import { buildSearchText } from "./lib/customer";
+import { isCustomerGated, type SellerCustomer } from "./lib/orderGate";
 import { revenueExcludingDeposit } from "./lib/order";
 import { assertValidWaPhone } from "./lib/slug";
 import {
 	assertPlanFeature,
 	assertSubscriptionActive,
+	getAccess,
 } from "./subscriptions";
 
 const SEARCH_DEFAULT_LIMIT = 20;
@@ -91,11 +99,24 @@ export const list = query({
 					? "by_retailer_orderCount"
 					: "by_retailer_lastOrder";
 
-		return ctx.db
+		// Credits (T3.1): a buyer whose EVERY order is waiting on credits is not
+		// a customer the seller has been shown yet — the customer page carries a
+		// phone number and a purchase history, which is the manual-settlement
+		// loophole with extra steps (Zaki, 6 Oct 2026). Redacted rather than
+		// filtered out, deliberately: `paginate` with a filter gives ragged
+		// pages, and a row reading "Waiting on credits · RM 340 · 2 orders" is
+		// both honest and the reason to top up. One funded order makes a buyer
+		// known for good — see `isCustomerGated`.
+		const gate = await creditGateFor(ctx, retailerId);
+		const page = await ctx.db
 			.query("customers")
 			.withIndex(indexName, (q) => q.eq("retailerId", retailerId))
 			.order("desc")
 			.paginate(paginationOpts);
+		return {
+			...page,
+			page: page.page.map((c) => customerForSeller(gate, c)),
+		};
 	},
 });
 
@@ -112,18 +133,87 @@ export const count = query({
 	},
 });
 
+/** Display cap for the lapsed-regulars line — past this the card says "20+". */
+export const LAPSED_REGULARS_CAP = 20;
+
+/**
+ * How many REGULARS have gone quiet — customers with ≥ 2 orders whose last
+ * order predates `before` (the client passes a MYT midnight minus the quiet
+ * window, so no `Date.now()` lands inside a cached query).
+ *
+ * "Regular" is the whole point: a one-off buyer who never came back is not a
+ * lapsed relationship, it is a normal buyer, and counting them would turn this
+ * line into a slow-growing number nobody can act on. `orderCount >= 2` is the
+ * cheapest honest definition of "had a habit".
+ *
+ * Returns at most `LAPSED_REGULARS_CAP + 1`, which the card renders as "20+" —
+ * the exact number past 20 changes nothing about what the seller does next.
+ * Ordered most-recently-lapsed first, so what the cap keeps is the actionable
+ * end. Note the cap bounds what is RETURNED, not what is read: `orderCount` is
+ * filtered after the index, so a store with a long tail of one-off lapsed
+ * buyers walks that tail before it finds 21 regulars. Same cost shape as
+ * `customers.count`, and fine at the ICP's scale.
+ *
+ * NULL means "not for this reader", never an error. Home renders for every
+ * plan (decision 1 — today is free) and fires this read before it knows whether
+ * the store is gated, so a throw here would be a guaranteed failed call on
+ * every Starter page view, and a teammate holding `insights` but not
+ * `customers` would crash the same way. Its siblings on that page
+ * (`getInsightsRange`, `getTodayStats`) answer the plan question instead of
+ * throwing; this one agrees with them. The CARD simply does not render the
+ * line — the lock is the absence, not a crash.
+ */
+export const countLapsedRegulars = query({
+	args: { retailerId: v.id("retailers"), before: v.number() },
+	handler: async (
+		ctx,
+		{ retailerId, before },
+	): Promise<{ count: number; capped: boolean } | null> => {
+		// The GRANT is a soft answer here (`tryRetailerAccess`), for the reason
+		// that helper exists: a read inside a screen a member legitimately sees,
+		// where a missing grant is a locked state rather than a fault.
+		const access = await tryRetailerAccess(ctx, retailerId, {
+			area: "customers",
+			level: "read",
+		});
+		if (!access) return null;
+		// …and so is the PLAN. Admin act-as keeps support working on a Starter
+		// store, exactly as `requireRetailerOwner` allows elsewhere in this file.
+		if (!access.actingAsAdmin) {
+			const plan = await getAccess(ctx, retailerId);
+			if (!plan.features.crm) return null;
+		}
+		const rows = await ctx.db
+			.query("customers")
+			.withIndex("by_retailer_lastOrder", (q) =>
+				q.eq("retailerId", retailerId).lt("lastOrderAt", before),
+			)
+			.order("desc")
+			.filter((q) => q.gte(q.field("orderCount"), 2))
+			.take(LAPSED_REGULARS_CAP + 1);
+		const capped = rows.length > LAPSED_REGULARS_CAP;
+		return { count: capped ? LAPSED_REGULARS_CAP : rows.length, capped };
+	},
+});
+
 export const get = query({
 	args: { customerId: v.id("customers") },
 	handler: async (
 		ctx,
 		{ customerId },
-	): Promise<(Doc<"customers"> & { averageOrderValue: number }) | null> => {
+		// `SellerCustomer`, not `Doc<"customers">`: the redaction stamps
+		// `creditGated` and the narrower annotation silently dropped it from the
+		// wire type, so the detail page couldn't tell a gated customer from one
+		// with no name — which is exactly how it shipped rendering a blank.
+	): Promise<(SellerCustomer & { averageOrderValue: number }) | null> => {
 		const { customer } = await requireOwnedCustomer(ctx, customerId, "read");
 		const averageOrderValue =
 			customer.orderCount > 0
 				? Math.round(customer.totalSpent / customer.orderCount)
 				: 0;
-		return { ...customer, averageOrderValue };
+		// Credits (T3.1) — same rule as `list`, applied to the detail page.
+		const gate = await creditGateFor(ctx, customer.retailerId);
+		return { ...customerForSeller(gate, customer), averageOrderValue };
 	},
 });
 
@@ -133,12 +223,18 @@ export const ordersByCustomer = query({
 		paginationOpts: paginationOptsValidator,
 	},
 	handler: async (ctx, { customerId, paginationOpts }) => {
-		await requireOwnedCustomer(ctx, customerId, "read");
-		return ctx.db
+		const { customer } = await requireOwnedCustomer(ctx, customerId, "read");
+		// Credits (T3.1): the purchase history is where a seller would read a
+		// gated order's contents from, so it redacts per row like the inbox. A
+		// returning buyer stays visible (their earlier orders are funded) and
+		// only the waiting orders go blank.
+		const gate = await creditGateFor(ctx, customer.retailerId);
+		const page = await ctx.db
 			.query("orders")
 			.withIndex("by_customer", (q) => q.eq("customerId", customerId))
 			.order("desc")
 			.paginate(paginationOpts);
+		return { ...page, page: page.page.map((o) => forSeller(gate, o)) };
 	},
 });
 
@@ -161,12 +257,29 @@ export const search = query({
 			1,
 			Math.min(limit ?? SEARCH_DEFAULT_LIMIT, SEARCH_MAX_LIMIT),
 		);
-		return ctx.db
+		// Credits (T3.1): gated buyers are FILTERED OUT here, not redacted as
+		// they are in `list` and `get`.
+		//
+		// The search index reads the STORED `searchText`, which the redaction
+		// never touches (it blanks the copy that crosses the wire). So a
+		// redacted hit would still be a hit — type a phone number, get a row
+		// back, and the seller has confirmed the buyer without ever seeing the
+		// record. That is an oracle, and an oracle is a leak.
+		//
+		// Dropping them is also the honest semantic: search is a lookup BY
+		// IDENTITY, and a gated buyer has no identity on screen to look up.
+		// They are still fully accounted for in the customer list, as a row that
+		// says what it is waiting for.
+		const gate = await creditGateFor(ctx, retailerId);
+		const hits = await ctx.db
 			.query("customers")
 			.withSearchIndex("search_customers", (q) =>
 				q.search("searchText", trimmed.toLowerCase()).eq("retailerId", retailerId),
 			)
 			.take(take);
+		return hits.filter(
+			(c) => gate.exempt || !isCustomerGated(c, gate.fundedThrough),
+		);
 	},
 });
 
@@ -260,6 +373,20 @@ export async function linkOrderToCustomer(
 		// subsequent refreshWaProfileName call (in the same WhatsApp confirm
 		// flow) would otherwise fill in — checkout name beats raw pushname.
 		const name = existing.name ?? seedName;
+		// Credits (T3.1): a buyer whose record was closed because their only
+		// order was cancelled while gated (`neverFunded`) gets a fresh start
+		// here. Re-point `firstOrderCreditSeq` at THIS order and drop the
+		// stamp, so the new order's own funding decides whether they are
+		// visible — a returning buyer who is paid for must not stay hidden by
+		// a cancellation months ago, and one whose new order is also gated
+		// stays hidden on that order's own merit.
+		const reopened =
+			existing.neverFunded === true
+				? {
+						neverFunded: undefined,
+						firstOrderCreditSeq: (await ctx.db.get(args.orderId))?.creditSeq,
+					}
+				: {};
 		await ctx.db.patch(existing._id, {
 			name,
 			orderCount: existing.orderCount + 1,
@@ -272,9 +399,21 @@ export async function linkOrderToCustomer(
 				waPhone: existing.waPhone,
 			}),
 			updatedAt: now,
+			...reopened,
 		});
 		customerId = existing._id;
 	} else {
+		// Credits (T3.1): a BRAND-NEW buyer inherits their first order's queue
+		// position, so a customer record created by a gated order doesn't hand
+		// the seller the phone number that order is holding back. Stamped only
+		// here, on the insert — a RETURNING buyer is already known, and nothing
+		// a later order does should hide them again ("funded stays funded").
+		//
+		// `recordOrderCreated` runs before every `linkOrderToCustomer` call site,
+		// so the order's `creditSeq` is already written by the time we read it.
+		// Absent (a debit that faulted, or an order from before the gate) leaves
+		// this absent too, which reads as visible — the gate fails open.
+		const order = await ctx.db.get(args.orderId);
 		customerId = await ctx.db.insert("customers", {
 			retailerId: args.retailerId,
 			waPhone: args.waPhone,
@@ -284,6 +423,7 @@ export async function linkOrderToCustomer(
 			totalSpent: args.orderTotal,
 			firstOrderAt: args.orderCreatedAt,
 			lastOrderAt: args.orderCreatedAt,
+			firstOrderCreditSeq: order?.creditSeq,
 			createdAt: now,
 			updatedAt: now,
 		});

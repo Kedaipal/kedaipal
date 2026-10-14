@@ -134,7 +134,6 @@ export const getInvoiceForEmail = internalQuery({
 				? monthlyCreditGrant({
 						status: "active",
 						plan,
-						comped: false,
 						foundingEligible: (invoice.foundingDiscount ?? 0) > 0,
 						override: leavesContract ? undefined : account?.grantOverride,
 						annualGrant: undefined,

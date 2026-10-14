@@ -518,7 +518,15 @@ describe("post-lock recovery chain (z8r3fdg3mh)", () => {
 		// stray capital after an em-dash.
 		expect(html).not.toMatch(/— Your storefront/);
 		expect(html).toMatch(/Hi Mak Kuih, invoice INV-202607-AB12 is 3 days past due\./);
-		expect((html.match(/view-only until you pay/g) ?? []).length).toBe(1);
+		// The lock sentence also names the BUYER's side since z8r3fdr6gg —
+		// still said once.
+		expect(
+			(
+				html.match(
+					/until you pay, they can&#39;t pay you on Kedaipal and your dashboard is view-only/g,
+				) ?? []
+			).length,
+		).toBe(1);
 	});
 
 	it("the hold offer is a PANEL with its own price and button, not buried prose", () => {

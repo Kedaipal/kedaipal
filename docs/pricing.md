@@ -453,6 +453,40 @@ carries nothing — the gate is `status === "active"` and `periodPaidBy === "pla
 because hold days were bought at the hold price and revaluing them at the tier
 rate is an exploit, not a credit.
 
+### Losing a feature keeps the CONFIG and withdraws the BENEFIT
+
+Two Pro levers leave something behind when a store drops: a product's promo
+config, and a store's issued vouchers. Both follow the same rule, and it is
+worth stating because the alternative is tempting and wrong.
+
+- **Promo / flash** — `isPromoActive` folds the plan in, which is *"why a
+  downgraded store's storefront quietly sells at list while the config
+  survives"* (`convex/lib/promo.ts`). Nothing is deleted; buyers simply pay
+  list until the store is back.
+- **Vouchers** — same shape (`z8r3fdr617`). `storeCanUseVouchers` gates the
+  one shared resolve path, so every door refuses with `store_ineligible`:
+  the storefront field, the counter panel, the claim link and the `?voucher=`
+  URL. The rows stay `active`, the seller keeps the list and keeps **Void**,
+  and re-upgrading makes every unspent code spendable again.
+
+**A capability that survives a downgrade is not one.** Keeping the rows but
+withdrawing the benefit is what makes the tier real without destroying work a
+seller paid to create.
+
+The cost is paid on the buyer's side and has to be handled, not hidden: a
+voucher is a token in a named buyer's hand, unlike an ambient promo price
+nobody was promised. So the refusal is neutral and never mentions billing
+(*"This store isn't accepting vouchers right now"* — the store's arrangement
+with us is not its customer's business), and the seller's own list stops
+showing those codes as **Active** and shows **Paused** with the reason. A
+seller reading Active while their buyer is refused would rightly blame us.
+
+**Known edge:** `assertPlanFeature` lets an ADMIN issue past the gate (its
+white-glove bypass, keyed on the caller). A code minted that way for a store
+below Pro is inert, because redemption asks about the *store*. That
+precedence is correct — the shop's entitlement decides what its buyers get —
+but it means admin-issued codes on a Starter store cannot be spent.
+
 ### Correcting a bill that was issued at the wrong tier
 
 `issueInvoice` takes an optional `replacePendingId`: it voids that bill and
@@ -735,7 +769,7 @@ a small top-up late in a month is still a top-up.
 
 ### Running out
 
-Same lock rules as Pro unless comped (`creditLockExemption`). A contract store
+Same lock rules as Pro (`creditLockExemption`). A contract store
 is never nudged to move up — `upgradeHint` is Starter-only and the running-low
 email's plan line is too.
 

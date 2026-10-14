@@ -704,7 +704,10 @@ export function FulfilmentTab({
 			    only runs events and never offers pickup would find its venues
 			    buried inside a switched-off section (z8r3fdm32x). */}
 			{showEventVenues ? (
-				<Card>
+				<Card
+					id={SPOTLIGHT_ANCHOR.event_venues.anchor}
+					highlight={ring(SPOTLIGHT_ANCHOR.event_venues.anchor)}
+				>
 					<div className="flex items-center justify-between gap-3">
 						<SectionHeading
 							title="Event venues"

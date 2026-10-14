@@ -10,6 +10,10 @@
 // Money is stored in MINOR units (sen) everywhere — see src/lib/format.ts — so
 // every amount here is sen and `formatMoney` divides by 100.
 
+import {
+	PAYMENTS_PAUSED_HEADING,
+	paymentsPausedRefusal,
+} from "../buyerPayments";
 import { formatPhone } from "../customer";
 import {
 	gatewayPaymentMethodLabel,
@@ -73,6 +77,9 @@ export type ReceiptLineItem = {
 	variantLabel?: string;
 	quantity: number;
 	unitPrice: number; // sen
+	/** List price when this line sold BELOW it (z8r3fdcw72) — prints the
+	 * "was RM X" the buyer saw. Absent on an ordinary line. */
+	listPrice?: number; // sen
 };
 
 /** A payment destination flattened to printable lines (bank block or a QR note). */
@@ -122,11 +129,24 @@ export type OrderReceiptData = {
 	// Refundable security deposit (sen) on a booking order — its own totals
 	// row labelled refundable, so the paper never overstates the price.
 	securityDeposit?: number;
+	// Voucher discount (sen, `z8r3fdr617`) — its own NEGATIVE totals row, by
+	// the same rule as every charge above it: the subtotal→total gap is always
+	// explained on paper. The only row that subtracts, so it prints signed and
+	// in the discount ink (the founding-discount precedent on the subscription
+	// invoice). Undefined = no voucher.
+	voucherDiscount?: number;
+	// The code, so the printed receipt names WHICH voucher was spent — a seller
+	// reconciling a giveaway run needs that, and so does a buyer querying it.
+	voucherCode?: string;
 	total: number; // sen
 	currency: string;
 	fulfilmentDate?: number;
 	customerNote?: string;
 	paymentBlocks: PaymentBlock[];
+	/** Unpaid while the store's buyer payments are paused (z8r3fdr6gg): the
+	 * card is headed "Payment", not "How to pay", and the footer asks for no
+	 * transfer reference — there is nothing to transfer yet. */
+	paymentsPaused?: boolean;
 };
 
 export type SubscriptionInvoiceData = {
@@ -186,6 +206,7 @@ type OrderForReceipt = {
 		variantLabel?: string;
 		quantity: number;
 		price: number;
+		listPrice?: number;
 	}>;
 	subtotal: number;
 	pickupFee?: number;
@@ -194,6 +215,8 @@ type OrderForReceipt = {
 	deliveryDirection?: "standard" | "collection";
 	deliveryFeePending?: boolean;
 	securityDeposit?: number;
+	voucherDiscount?: number;
+	voucherSnapshot?: { code: string };
 	total: number;
 	currency: string;
 	fulfilmentDate?: number;
@@ -306,6 +329,10 @@ export function orderToReceiptData(args: {
 	country?: string;
 	// For the powered-by link's `&store=` attribution — see OrderReceiptData.
 	storeSlug?: string;
+	// The store is lapsed (z8r3fdr6gg): an unpaid document prints the paused
+	// notice in place of the bank details — a forwarded invoice is the same
+	// payment request the order page withholds.
+	paymentsPaused?: boolean;
 }): OrderReceiptData {
 	const { order, storeName, paymentMethods } = args;
 	const status = order.paymentStatus ?? "unpaid";
@@ -334,6 +361,12 @@ export function orderToReceiptData(args: {
 			variantLabel: printable(it.variantLabel),
 			quantity: it.quantity,
 			unitPrice: it.price,
+			// Only when it actually undercut the list price — a stale or equal
+			// value would print "was RM50" beside RM50.
+			listPrice:
+				it.listPrice !== undefined && it.listPrice > it.price
+					? it.listPrice
+					: undefined,
 		})),
 		subtotal: order.subtotal,
 		pickupFee:
@@ -352,11 +385,25 @@ export function orderToReceiptData(args: {
 			order.securityDeposit && order.securityDeposit > 0
 				? order.securityDeposit
 				: undefined,
+		voucherDiscount:
+			order.voucherDiscount && order.voucherDiscount > 0
+				? order.voucherDiscount
+				: undefined,
+		voucherCode: printable(order.voucherSnapshot?.code),
 		total: order.total,
 		currency: order.currency,
 		fulfilmentDate: order.fulfilmentDate,
 		customerNote: printable(order.customerNote),
-		paymentBlocks: paymentMethodsToBlocks(paymentMethods),
+		paymentsPaused: args.paymentsPaused && !paid ? true : undefined,
+		paymentBlocks:
+			args.paymentsPaused && !paid
+				? [
+						{
+							label: PAYMENTS_PAUSED_HEADING,
+							lines: [paymentsPausedRefusal(printable(storeName))],
+						},
+					]
+				: paymentMethodsToBlocks(paymentMethods),
 	};
 }
 

@@ -2472,6 +2472,125 @@ describe("product cap", () => {
 		).rejects.toThrow(/limit/i);
 	});
 
+	/** Switch a store's subscription to a live comp, the way an admin's toggle
+	 *  does. The cap exemption is the STORE's here, not the caller's. */
+	async function comp(t: ReturnType<typeof setup>, retailerId: Id<"retailers">) {
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			if (!sub) throw new Error("no subscription");
+			await ctx.db.patch(sub._id, {
+				comped: true,
+				comp: {
+					kind: "partner",
+					label: "Campfest",
+					grantedBy: ADMIN,
+					grantedAt: Date.now(),
+				},
+			});
+		});
+	}
+
+	test("a SPONSORED store is uncapped on the SELLER's own login (z8r3fdrph7)", async () => {
+		// Zaki, 10 Oct 2026: a comp means admin limits — "no restrictions in
+		// number of products". Unlike admin act-as this is the store's, so the
+		// seller adds their 201st product themselves, with no admin present.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await fillCatalog(t, retailer._id, CAP);
+		const asA = t.withIdentity({ subject: USER_A });
+		// Capped before the comp — so this test can't pass by never reaching
+		// the gate.
+		await expect(
+			asA.mutation(
+				api.products.create,
+				baseProduct(retailer._id, { name: "Before comp", sortOrder: 900 }),
+			),
+		).rejects.toThrow(/limit/i);
+
+		await comp(t, retailer._id);
+		await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "After comp", sortOrder: 901 }),
+		);
+		const state = await asA.query(api.products.capState, {
+			retailerId: retailer._id,
+		});
+		expect(state.used).toBe(CAP + 1);
+		expect(state.exempt).toBe(true);
+		// No ceiling, so no ratio: the counter would otherwise print
+		// "201 of 200 used" to a store that has no 200.
+		expect(state.showCounter).toBe(false);
+	});
+
+	test("an ADMIN's own store is uncapped too — act-as was never the point", async () => {
+		// Before this, `actingAsAdmin` was false on an admin's OWN store
+		// (`retailer.userId === adminUserId`), so the one account with no
+		// limits was the one still capped at 200.
+		const t = setup();
+		const retailer = await seedRetailer(t, ADMIN);
+		await fillCatalog(t, retailer._id, CAP);
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+		await asAdmin.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Dogfood", sortOrder: 900 }),
+		);
+		const state = await asAdmin.query(api.products.capState, {
+			retailerId: retailer._id,
+		});
+		expect(state.used).toBe(CAP + 1);
+		expect(state.showCounter).toBe(false);
+	});
+
+	test("a sponsored store imports a sheet that would never fit a Pro store", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await fillCatalog(t, retailer._id, CAP - 1);
+		const asA = t.withIdentity({ subject: USER_A });
+		const sheet = {
+			retailerId: retailer._id,
+			currency: "MYR" as const,
+			products: [
+				importSingle("Sheet A", { price: 1000, stock: 1 }),
+				importSingle("Sheet B", { price: 1000, stock: 1 }),
+				importSingle("Sheet C", { price: 1000, stock: 1 }),
+			],
+		};
+		await expect(asA.mutation(api.products.bulkUpsert, sheet)).rejects.toThrow(
+			/Only 1 of these 3/,
+		);
+		await comp(t, retailer._id);
+		const result = await asA.mutation(api.products.bulkUpsert, sheet);
+		expect(result.created).toBe(3);
+	});
+
+	test("a plain Pro seller is still capped — the cap is not a tier lever", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_B);
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.first();
+			if (sub) await ctx.db.patch(sub._id, { status: "active", plan: "pro" });
+		});
+		await fillCatalog(t, retailer._id, CAP);
+		const asB = t.withIdentity({ subject: USER_B });
+		await expect(
+			asB.mutation(
+				api.products.create,
+				baseProduct(retailer._id, { name: "Pro try", sortOrder: 900 }),
+			),
+		).rejects.toThrow(/limit/i);
+		const state = await asB.query(api.products.capState, {
+			retailerId: retailer._id,
+		});
+		expect(state.exempt).toBe(false);
+		expect(state.atCap).toBe(true);
+	});
+
 	test("bulk import refuses a sheet that doesn't fit, and says how many would", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);

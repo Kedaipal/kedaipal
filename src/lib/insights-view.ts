@@ -95,6 +95,8 @@ export type RangePayload = {
 	sources: SourceStat[];
 	bucketing: Bucketing;
 	capped: boolean;
+	customers: CustomerIdentity[];
+	customersCapped: boolean;
 };
 
 export type TodayPayload = {
@@ -106,6 +108,8 @@ export type TodayPayload = {
 	products: ProductStat[];
 	payments: PaymentStat[];
 	sources: SourceStat[];
+	customers: CustomerIdentity[];
+	customersCapped: boolean;
 };
 
 export type InsightsView = {
@@ -123,7 +127,71 @@ export type InsightsView = {
 	products: ProductStat[];
 	payments: PaymentStat[];
 	sources: SourceStat[];
+	/** Distinct buyers in the window, split returning vs first-time. */
+	customers: CustomerSplit;
 };
+
+/** A distinct buyer in a window, with the timestamp that decides returning vs new. */
+export type CustomerIdentity = {
+	id: string;
+	firstOrderAt: number;
+	/** One character for the avatar stack — see `convex/analytics.ts`. */
+	initial: string;
+};
+
+export type CustomerSplit = {
+	/** Distinct identified buyers in the window. */
+	total: number;
+	/** Had already ordered before the window opened. */
+	returning: number;
+	/** First ever ordered inside this window. */
+	fresh: number;
+	/** The id set hit the server cap, so these are floors, not totals. */
+	capped: boolean;
+	/** Up to three faces for the avatar stack, in the order seen. Carries the
+	 * buyer's id purely as a stable render key — two buyers can share a letter. */
+	initials: { id: string; letter: string }[];
+};
+
+/**
+ * Union the closed range's buyers with today's and classify each ONCE against
+ * the window's own `from`.
+ *
+ * Both halves have to be unioned as a SET before anything is counted: a regular
+ * who ordered on Tuesday and again this morning is in both payloads and is one
+ * customer, so adding two counts would invent a buyer. And classification has
+ * to happen after the union, against ONE `from` — were each query to decide
+ * returning-vs-new against its own window, today's call would label nearly
+ * everyone "returning" (they ordered before this morning) and the merged split
+ * would be meaningless.
+ */
+export function splitCustomers(
+	range: ReadonlyArray<CustomerIdentity>,
+	today: ReadonlyArray<CustomerIdentity>,
+	from: number,
+	capped = false,
+): CustomerSplit {
+	const seen = new Map<string, { firstOrderAt: number; initial: string }>();
+	for (const c of [...range, ...today]) {
+		// Keep the EARLIEST firstOrderAt if the two payloads ever disagree — a
+		// buyer's first order can only move backwards as more history is seen.
+		const prev = seen.get(c.id);
+		if (prev === undefined || c.firstOrderAt < prev.firstOrderAt)
+			seen.set(c.id, { firstOrderAt: c.firstOrderAt, initial: c.initial });
+	}
+	let returning = 0;
+	for (const v of seen.values()) if (v.firstOrderAt < from) returning += 1;
+	return {
+		total: seen.size,
+		returning,
+		fresh: seen.size - returning,
+		capped,
+		// Three, because that is what the card draws — the rest are the "+39".
+		initials: [...seen.entries()]
+			.slice(0, 3)
+			.map(([id, v]) => ({ id, letter: v.initial })),
+	};
+}
 
 /**
  * Merge the closed-range result and the live today result onto one grid. Either
@@ -194,6 +262,12 @@ export function buildInsightsView(opts: {
 		products,
 		payments,
 		sources,
+		customers: splitCustomers(
+			range?.customers ?? [],
+			today?.customers ?? [],
+			from,
+			(range?.customersCapped ?? false) || (today?.customersCapped ?? false),
+		),
 	};
 }
 

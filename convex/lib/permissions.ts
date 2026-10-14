@@ -29,6 +29,13 @@ export const PERMISSION_AREAS = [
 	"products", // products + categories + variants + bulk import
 	"customers", // CRM list, detail, notes
 	"bookings", // booking listings, blocks, calendar feed
+	// Vouchers (`z8r3fdr617`). Its OWN area rather than a ride-along on
+	// `orders`, because issuing a voucher GIVES MONEY AWAY — a capability that
+	// must not arrive free with "move this order to packed". Read = see the
+	// list and what has been spent; write = issue and void. REDEEMING a code
+	// on a sale is part of ringing it up and needs `orders: write` only, so a
+	// counter helper can take a voucher without being able to mint one.
+	"vouchers",
 	// Aggregates + data egress — sensitive, expected to stay off for most helpers.
 	"insights", // /app/insights + every revenue/aggregate dashboard widget
 	"exports", // every CSV export (orders, products, customers)
@@ -71,6 +78,7 @@ export const MAX_GRANTABLE: Record<PermissionArea, PermissionLevel> = {
 	products: "write",
 	customers: "write",
 	bookings: "write",
+	vouchers: "write",
 	insights: "read",
 	exports: "read",
 	store_settings: "write",
@@ -93,6 +101,7 @@ export const memberPermissionsValidator = v.object({
 	products: v.optional(level),
 	customers: v.optional(level),
 	bookings: v.optional(level),
+	vouchers: v.optional(level),
 	insights: v.optional(level),
 	exports: v.optional(level),
 	store_settings: v.optional(level),
