@@ -181,6 +181,39 @@ async function placeOrder(
 // ---------------------------------------------------------------------------
 
 describe("a gated order is invisible to the seller, on every surface", () => {
+	test("Deliveries keeps the number and drops the destination (86eye9xd4)", async () => {
+		const t = setup();
+		const s = await seed(t);
+		await drain(t, s.retailerId);
+		const order = await placeOrder(t, s.retailerId, s.productId);
+		// Packed and waiting on a courier, AND with a failed rider booking —
+		// so the gated order sits in both of the page's lists.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(order._id, { status: "packed" });
+			await ctx.db.insert("deliveryJobs", {
+				orderId: order._id,
+				retailerId: s.retailerId,
+				provider: "lalamove",
+				providerOrderId: "LLM-GATE",
+				status: "rejected",
+				costActual: 900,
+				quotationId: "q",
+				vehicleType: "MOTORCYCLE",
+				shareLink: `https://share.lalamove.com/?${SENTINEL.city}`,
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			});
+		});
+		const overview = await t
+			.withIdentity({ subject: OWNER })
+			.query(api.deliveries.overview, { retailerId: s.retailerId });
+		expectNoSentinels(overview, "deliveries.overview");
+		expect(overview.toShip.map((r) => [r.shortId, r.gated])).toEqual([
+			[order.shortId, true],
+		]);
+		expect(overview.jobs[0]).toMatchObject({ shortId: order.shortId, gated: true });
+	});
+
 	test("not one buyer field survives any seller read", async () => {
 		const t = setup();
 		const s = await seed(t);

@@ -67,6 +67,7 @@ export const DELETION_PHASES = [
 	"bookingBlocks",
 	"deliveryJobs",
 	"deliveryQuotes",
+	"courierWallets",
 	"customers",
 	"pickupLocations",
 	"counterCheckoutSessions",
@@ -241,7 +242,17 @@ export async function runDeletionPhase(
 			for (const quote of rows) await ctx.db.delete(quote._id);
 			return { processed: rows.length, done: rows.length < limit };
 		}
-		case "customers": {
+		case "courierWallets": {
+			const rows = await ctx.db
+				.query("courierWallets")
+				.withIndex("by_retailer_provider", (q) =>
+					q.eq("retailerId", retailerId),
+				)
+				.take(limit);
+			for (const wallet of rows) await ctx.db.delete(wallet._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+				case "customers": {
 			const rows = await ctx.db
 				.query("customers")
 				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))

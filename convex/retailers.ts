@@ -328,6 +328,7 @@ import {
 	requireRetailerAccess,
 	storeOwnerIsAdmin,
 } from "./lib/auth";
+import { syncLalamoveWallet } from "./courierWallets";
 import {
 	hasPermission,
 	type MemberPermissions,
@@ -2998,6 +2999,8 @@ export const updateSettings = mutation({
 					);
 				}
 				patch.deliveryBooking = undefined;
+				// No key, no wallet to report (86eye9xd4, 6A).
+				await syncLalamoveWallet(ctx, retailer._id, null);
 			} else {
 				// Key semantics mirror logoStorageId: `undefined` = keep the stored
 				// value (so toggling enable/vehicle never silently wipes keys),
@@ -3118,6 +3121,15 @@ export const updateSettings = mutation({
 					}
 				}
 				patch.deliveryBooking = clean;
+				// The plaintext key exists only in this call — stamp the wallet
+				// fingerprint now, before encryption replaces it (86eye9xd4, 6A).
+				if (args.deliveryBooking.apiKey !== undefined) {
+					await syncLalamoveWallet(
+						ctx,
+						retailer._id,
+						args.deliveryBooking.apiKey.trim() || null,
+					);
+				}
 			}
 		}
 		if (args.hitpay !== undefined) {

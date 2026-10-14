@@ -2571,6 +2571,30 @@ export default defineSchema({
 	// failed/cancelled jobs stay as history and a rebook inserts a new row.
 	// `by_provider_order` is the webhook lookup; `by_retailer` keeps per-store
 	// range reads cheap.
+	// A seller's courier WALLET as the courier reports it (86eye9xd4, 6A).
+	// Lalamove pushes the balance on a WALLET_BALANCE_CHANGED webhook — there
+	// is no endpoint to poll — and that event carries no order, only the
+	// sender's API key. Stored keys are encrypted at rest (86eyn25gk), so the
+	// key can't be matched against them: `keyFingerprint` (SHA-256 of the
+	// plaintext key, stamped when the key is saved) is what attributes the
+	// event to a store, whose own secret then verifies it. Own table rather
+	// than fields on `retailers`: a balance moves on every booking, and a
+	// retailer patch re-runs every open storefront tab.
+	courierWallets: defineTable({
+		retailerId: v.id("retailers"),
+		provider: v.literal("lalamove"),
+		keyFingerprint: v.string(),
+		// Minor units (sen / cents) in `currency`, as of `balanceAt` — the
+		// courier's own event time, so a late event can't overwrite a newer one.
+		// Undefined until the first event arrives.
+		balance: v.optional(v.number()),
+		currency: v.optional(v.string()),
+		balanceAt: v.optional(v.number()),
+		updatedAt: v.number(),
+	})
+		.index("by_retailer_provider", ["retailerId", "provider"])
+		.index("by_fingerprint", ["keyFingerprint"]),
+
 	deliveryJobs: defineTable({
 		orderId: v.id("orders"),
 		retailerId: v.id("retailers"),
