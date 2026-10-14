@@ -115,7 +115,11 @@ import {
 } from "../lib/country-setup-copy";
 import { parseTopUpParam, type TopUpParam } from "../lib/credit-top-up";
 import { PRICING_MODE_UI, pricingModeOf } from "../lib/delivery-modes";
-import { convexErrorMessage, formatMobile } from "../lib/format";
+import {
+	convexErrorMessage,
+	currencySymbol,
+	formatMobile,
+} from "../lib/format";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
 import { NOTE_LINK_HINT } from "../lib/linkify";
 import { editableTemplates, TEMPLATE_LOCALES } from "../lib/message-templates";
@@ -901,7 +905,8 @@ function SettingsRoute() {
 															description="Where your store operates and the currency it prices in."
 															glance={
 																<Glance tone="grey">
-																	{retailer.country} · {retailer.currency}
+																	{retailer.country} ·{" "}
+																	{currencySymbol(retailer.currency)}
 																</Glance>
 															}
 														/>
@@ -1106,7 +1111,6 @@ function SettingsRoute() {
 								offerDelivery={retailer.offerDelivery ?? true}
 								deliveryConfig={retailer.deliveryConfig}
 								businessAddress={retailer.businessAddress}
-								deliveryBooking={retailer.deliveryBooking}
 								minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
 								openingHours={retailer.openingHours}
 								closedDates={retailer.closedDates}

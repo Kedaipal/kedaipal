@@ -441,7 +441,12 @@ const deliveryConfigValidator = v.union(
 // env) and is Pro-gated. Secrets never leave the server — reads expose only
 // a summary (see DeliveryBookingSummary).
 const deliveryBookingValidator = v.object({
-	enabled: v.boolean(),
+	// undefined = keep the stored arm state (86eye9xd4). The delivery-pricing
+	// page saves rider options (vehicle, direction, prompt) with live pricing;
+	// arming or disarming riders is the Courier-booking toggle's job alone, so
+	// that save must be able to leave `enabled` untouched rather than restate a
+	// value that may already be stale.
+	enabled: v.optional(v.boolean()),
 	vehicleType: v.union(v.literal("MOTORCYCLE"), v.literal("CAR")),
 	apiKey: v.optional(v.string()),
 	apiSecret: v.optional(v.string()),
@@ -2920,11 +2925,14 @@ export const updateSettings = mutation({
 					// vehicle + origin) — require booking enabled in the effective
 					// state so a dead pricing mode (every order fee-pending) can't
 					// be stored. Same Pro gate as enabling booking itself.
-					const effectiveBooking =
-						args.deliveryBooking !== undefined
-							? args.deliveryBooking
-							: (retailer.deliveryBooking as DeliveryBooking | undefined);
-					if (!effectiveBooking?.enabled) {
+					const storedBooking = retailer.deliveryBooking as
+						| DeliveryBooking
+						| undefined;
+					const effectiveEnabled =
+						args.deliveryBooking === null
+							? false
+							: (args.deliveryBooking?.enabled ?? storedBooking?.enabled);
+					if (!effectiveEnabled) {
 						throw new ConvexError(
 							"Turn on Lalamove delivery booking first — live quotes use its credentials and vehicle type.",
 						);
@@ -2956,7 +2964,7 @@ export const updateSettings = mutation({
 				// empty string = clear.
 				const prev = retailer.deliveryBooking as DeliveryBooking | undefined;
 				const clean: DeliveryBooking = {
-					enabled: args.deliveryBooking.enabled,
+					enabled: args.deliveryBooking.enabled ?? prev?.enabled ?? false,
 					vehicleType: args.deliveryBooking.vehicleType,
 					promptBookOnPacked:
 						args.deliveryBooking.promptBookOnPacked ??

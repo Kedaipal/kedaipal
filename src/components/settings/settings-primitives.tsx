@@ -15,7 +15,7 @@
  */
 
 import { Check, ChevronDown, ChevronRight, Plug } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import {
 	type FixHighlight,
 	highlightRingClass,
@@ -268,6 +268,7 @@ export function SummaryRow({
 	value,
 	sublabel,
 	onClick,
+	expanded,
 	ariaLabel,
 }: {
 	label: ReactNode;
@@ -275,6 +276,9 @@ export function SummaryRow({
 	/** A muted second line under the label (e.g. "13 states · RM 8–30"). */
 	sublabel?: ReactNode;
 	onClick?: () => void;
+	/** Set when the row opens its editor IN PLACE (a down chevron that turns)
+	 * rather than going somewhere (the right chevron). */
+	expanded?: boolean;
 	ariaLabel?: string;
 }) {
 	const body = (
@@ -289,7 +293,15 @@ export function SummaryRow({
 			</span>
 			<span className="ml-auto flex shrink-0 items-center gap-1.5 text-right text-sm font-medium text-foreground">
 				{value}
-				{onClick ? (
+				{onClick && expanded !== undefined ? (
+					<ChevronDown
+						aria-hidden
+						className={cn(
+							"size-4 text-muted-foreground/60 transition-transform duration-150 motion-reduce:transition-none",
+							expanded && "rotate-180",
+						)}
+					/>
+				) : onClick ? (
 					<ChevronRight
 						aria-hidden
 						className="size-4 text-muted-foreground/60"
@@ -305,6 +317,7 @@ export function SummaryRow({
 			type="button"
 			onClick={onClick}
 			aria-label={ariaLabel}
+			aria-expanded={expanded}
 			className={cn(
 				rowClass,
 				"-mx-2 w-[calc(100%+1rem)] rounded-lg px-2 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
@@ -314,6 +327,53 @@ export function SummaryRow({
 		</button>
 	) : (
 		<div className={rowClass}>{body}</div>
+	);
+}
+
+/**
+ * A summary row that opens its editor IN PLACE (86eye9xd4, 9A): the card
+ * reads as the store's configuration without opening anything, and one tap
+ * edits a value where it's read. `id` is the deep-link anchor — a checklist
+ * or What's-new link that targets the row opens it and rings it, so the
+ * seller lands on the open editor rather than a collapsed line.
+ */
+export function ExpandableRow({
+	id,
+	highlight,
+	label,
+	value,
+	sublabel,
+	children,
+}: {
+	id?: string;
+	highlight?: FixHighlight;
+	label: ReactNode;
+	value?: ReactNode;
+	sublabel?: ReactNode;
+	children: ReactNode;
+}) {
+	const [open, setOpen] = useState(highlight !== undefined);
+	return (
+		<div
+			id={id}
+			data-fix-highlight={highlight ?? undefined}
+			className={cn(
+				"flex scroll-mt-24 flex-col border-t border-border/60 first:border-t-0",
+				highlight &&
+					`-mx-2 rounded-xl border px-2 ${highlightRingClass(highlight)}`,
+			)}
+		>
+			<SummaryRow
+				label={label}
+				value={value}
+				sublabel={sublabel}
+				expanded={open}
+				onClick={() => setOpen((o) => !o)}
+			/>
+			{open ? (
+				<div className="flex flex-col gap-4 pb-4 pt-1">{children}</div>
+			) : null}
+		</div>
 	);
 }
 

@@ -3518,3 +3518,43 @@ describe("public booksCouriers bit (z8r3fdh274)", () => {
 		expect(await booksCouriers(t, "delyva-couriers")).toBe(true);
 	});
 });
+
+describe("rider options save without touching the arm switch (86eye9xd4)", () => {
+	// The delivery-pricing page saves vehicle / direction / prompt-to-book with
+	// live pricing. Before, a "live" store's save sent none of them (they were
+	// editable and silently dropped); sending them with a restated `enabled`
+	// could re-arm riders the seller had switched off. `enabled` omitted now
+	// means "keep what's stored", like its two sibling fields.
+	const originAddress = {
+		label: "12 Jln Kilang, Shah Alam",
+		latitude: 3.0,
+		longitude: 101.5,
+	};
+	const keys = { apiKey: "pk_test_abc", apiSecret: "sk_test_def" };
+
+	for (const armed of [true, false]) {
+		test(`rider options persist and riders stay ${armed ? "armed" : "off"}`, async () => {
+			const t = setup();
+			const asA = await seed(t, USER_A, `rider-opts-${armed ? "on" : "off"}`);
+			await asA.mutation(api.retailers.updateSettings, {
+				businessAddress: originAddress,
+				deliveryConfig: { mode: "flat", fee: 500 },
+				deliveryBooking: { enabled: armed, vehicleType: "MOTORCYCLE", ...keys },
+			});
+			await asA.mutation(api.retailers.updateSettings, {
+				deliveryBooking: {
+					vehicleType: "CAR",
+					promptBookOnPacked: true,
+					deliveryDirection: "collection",
+				},
+			});
+			const booking = (await asA.query(api.retailers.getMyRetailer))
+				?.deliveryBooking;
+			expect(booking?.enabled).toBe(armed);
+			expect(booking?.vehicleType).toBe("CAR");
+			expect(booking?.promptBookOnPacked).toBe(true);
+			expect(booking?.deliveryDirection).toBe("collection");
+			expect(booking?.hasCredentials).toBe(true);
+		});
+	}
+});
