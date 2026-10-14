@@ -142,7 +142,11 @@ downgraded seller unable to remove a paused promotion, and (because every
 save re-sends a switched-on promotion and hits the Pro gate) unable to save
 any other edit to that product. The locked card says the promotion is paused
 and how to remove it. Clear is not offered there, because switching off is
-the move. A promotion on a downgraded store is *paused*, not deleted:
+the move. The rest of the card (sale prices, Quick fill, label, window,
+extras) is **read-only** under the lock, inside a disabled `<fieldset>`:
+every save that keeps the promotion on is refused by the server's Pro gate,
+so an editable field there would be wrong-but-enabled (PR #365 review). The
+switch sits outside the fieldset and stays live. A promotion on a downgraded store is *paused*, not deleted:
 `effectivePrice` returns the list price and the storefront publishes no
 `promoState` at all.
 

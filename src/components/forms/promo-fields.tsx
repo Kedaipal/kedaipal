@@ -404,9 +404,16 @@ export function PromoFields({
 			)}
 
 			{open ? (
-				<div
+				// A LOCKED (Starter) store's paused promotion is read-only: every
+				// edit here would be refused by the server's Pro gate on save, so an
+				// editable field would be wrong-but-enabled (PR #365 review). The
+				// copy above says it's paused and that switching it off is the move;
+				// the toggle sits outside this fieldset, so that stays live. A
+				// disabled <fieldset> disables every control inside it natively.
+				<fieldset
+					disabled={locked === true}
 					className={cn(
-						"flex flex-col gap-5",
+						"flex min-w-0 flex-col gap-5 disabled:opacity-60",
 						noToggle ? null : "border-t border-border pt-4",
 					)}
 				>
@@ -741,7 +748,7 @@ export function PromoFields({
 							)}
 						</div>
 					)}
-				</div>
+				</fieldset>
 			) : null}
 		</div>
 	);
