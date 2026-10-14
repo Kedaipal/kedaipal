@@ -54,24 +54,65 @@ vi.mock("@tanstack/react-query", () => ({
 	},
 }));
 
-/** Today's three figures — all a Starter store is ever told. */
+/**
+ * Today's three figures — all a Starter store is ever told.
+ *
+ * `today` is the SERVER's MYT midnight, not a money figure: the view buckets
+ * today's column at that timestamp rather than reading a clock of its own. An
+ * earlier fixture put sen here, which landed today's takings in a 1970 bucket
+ * outside the grid and quietly added a 31st bar to a 30-day chart.
+ */
 const PULSE = {
-	today: 80_000,
+	today: Date.parse("2026-10-05T00:00:00+08:00"),
 	earned: 80_000,
 	depositsExcluded: 0,
 	collected: 40_000,
 	orderCount: 2,
 };
 
-function renderSection() {
+function renderSection(period: "today" | "7d" | "30d" = "today") {
 	render(
 		<SalesSection
 			retailerId={"r1" as Id<"retailers">}
 			currency="MYR"
-			period="today"
+			period={period}
 			onPeriodChange={vi.fn()}
 		/>,
 	);
+}
+
+/** The labels the axis actually prints, in order, blanks dropped. */
+function axisTicks(): string[] {
+	const row = screen.getByRole("img").nextElementSibling;
+	return [...(row?.querySelectorAll("span span") ?? [])]
+		.map((n) => n.textContent?.trim() ?? "")
+		.filter(Boolean);
+}
+
+/**
+ * An ungated CLOSED-range payload covering `days` whole days ending at
+ * `endingAt` — which for 7d/30d is YESTERDAY, because the view appends today's
+ * live column itself. `days` is therefore one less than the bars on screen.
+ */
+function rangeOver(days: number, endingAt: number) {
+	return {
+		gated: false,
+		earned: 0,
+		depositsExcluded: 0,
+		collected: 0,
+		orderCount: 0,
+		aov: 0,
+		products: [],
+		payments: [],
+		sources: [],
+		customers: [],
+		customersCapped: false,
+		trend: Array.from({ length: days }, (_, i) => ({
+			start: endingAt - (days - 1 - i) * DAY,
+			earned: 10_000,
+			orderCount: 1,
+		})),
+	};
 }
 
 beforeEach(() => {
@@ -151,5 +192,127 @@ describe("an ungated store", () => {
 		renderSection();
 		expect(screen.getByText("Today against the last 6 days")).toBeTruthy();
 		expect(screen.getByRole("img")).toBeTruthy();
+	});
+});
+
+/**
+ * The axis (Zaki, 14 Oct 2026).
+ *
+ * One label per bar works at seven and collapses at thirty: the weekday names
+ * ran together as "TueWedThuFriSatSun". The weekday is also the wrong UNIT over
+ * a month — "Tue" names four different days, so "Best: Thu" could not be looked
+ * up — so the 30-day view prints dates on a weekly cadence instead.
+ */
+describe("the chart's axis", () => {
+	it("labels every bar with its weekday over 7 days", () => {
+		const todayStart = todayMytMidnight();
+		state.range = rangeOver(6, todayStart - DAY);
+		state.todayStats = {
+			...PULSE,
+			gated: false,
+			products: [],
+			payments: [],
+			sources: [],
+			customers: [],
+			customersCapped: false,
+		};
+		state.todayPulse = PULSE;
+		renderSection("7d");
+		const ticks = axisTicks();
+		expect(ticks).toHaveLength(7);
+		// Weekdays, not dates — at seven bars each name fits its own column.
+		expect(ticks.every((t) => /^[A-Z][a-z]{2}$/.test(t))).toBe(true);
+	});
+
+	it("thins 30 days to WEEKLY date ticks, anchored to the most recent day", () => {
+		const todayStart = todayMytMidnight();
+		state.range = rangeOver(29, todayStart - DAY);
+		state.todayStats = {
+			...PULSE,
+			gated: false,
+			products: [],
+			payments: [],
+			sources: [],
+			customers: [],
+			customersCapped: false,
+		};
+		state.todayPulse = PULSE;
+		renderSection("30d");
+		const ticks = axisTicks();
+		// 30 bars, every 7th counted back from the last = 5 labels, not 30.
+		expect(ticks).toHaveLength(5);
+		// Dates, never weekdays: "Tue" appears four times in a month and names
+		// no particular day.
+		for (const t of ticks) expect(t).toMatch(/^\d{1,2} [A-Z][a-z]+$/);
+		// The right-hand end is always labelled — the thinning eats into the old
+		// end, so the most recent day is never the unlabelled one.
+		const last = new Date(todayStart).toLocaleDateString("en-GB", {
+			day: "numeric",
+			month: "short",
+			timeZone: "Asia/Kuala_Lumpur",
+		});
+		expect(ticks[ticks.length - 1]).toBe(last);
+	});
+
+	it("every bar carries its day and takings, so thinning loses nothing", () => {
+		const todayStart = todayMytMidnight();
+		state.range = rangeOver(29, todayStart - DAY);
+		state.todayStats = {
+			...PULSE,
+			gated: false,
+			products: [],
+			payments: [],
+			sources: [],
+			customers: [],
+			customersCapped: false,
+		};
+		state.todayPulse = PULSE;
+		renderSection("30d");
+		const bars = [...screen.getByRole("img").children];
+		expect(bars).toHaveLength(30);
+		// Including the 25 the axis does not name.
+		for (const b of bars)
+			expect(b.getAttribute("title")).toMatch(
+				/^[A-Z][a-z]{2} \d{1,2} [A-Z][a-z]+ · RM/,
+			);
+	});
+});
+
+/**
+ * The bar row's height (Zaki, 14 Oct 2026 — found while fixing the axis).
+ *
+ * It shipped as `h-[84px] flex-1`. `flex-1` is `flex: 1 1 0%`, and in this
+ * COLUMN that zero is a height basis — below `lg` the parent has no height to
+ * grow into, so the row resolved to 1px and Home's chart rendered as a bare
+ * axis with no bars at all on every phone. It only ever worked on desktop,
+ * where `lg:flex-row` stretches this column against the figures beside it.
+ *
+ * jsdom has no layout engine, so this pins the class contract rather than the
+ * measurement; the 1px → 84px difference was measured in a real browser.
+ */
+describe("the bar row has a height on a phone", () => {
+	function renderOngated() {
+		const todayStart = todayMytMidnight();
+		state.range = rangeOver(6, todayStart - DAY);
+		state.todayStats = {
+			...PULSE,
+			gated: false,
+			products: [],
+			payments: [],
+			sources: [],
+			customers: [],
+			customersCapped: false,
+		};
+		state.todayPulse = PULSE;
+		renderSection("7d");
+		return screen.getByRole("img").className;
+	}
+
+	it("grows into the column only from lg, never at the base width", () => {
+		const cls = renderOngated();
+		expect(cls).toContain("h-[84px]");
+		// The base width must not carry a zero flex-basis in a column.
+		expect(cls).not.toMatch(/(^|\s)flex-1(\s|$)/);
+		expect(cls).toContain("lg:flex-1");
 	});
 });

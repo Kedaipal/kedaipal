@@ -148,6 +148,35 @@ from it, so the next filter param cannot be counted without being clearable.
 The due-today banner reads the span too, and stops offering to filter to today
 when the seller arrived from the Today tile.
 
+### The chart's axis is not one label per bar
+
+Seven weekday names fit the hero's width. Thirty do not — they ran together as
+an unbroken `TueWedThuFriSatSun` smear. And over a month the weekday is the
+wrong **unit** anyway: "Tue" names four different days, so "Best: Thu" could
+not be looked up.
+
+So the 30-day view prints **dates on a weekly cadence** (`16 Sept · 23 Sept ·
+30 Sept · 7 Oct · 14 Oct`), counted back from the LAST bar so the most recent
+day always carries a label and the thinning eats into the old end. Shorter
+windows keep a weekday on every bar, which is what the board draws. Nothing is
+lost: **every** bar carries a `title` with its full day and takings, so the 25
+unlabelled columns still answer on hover.
+
+Two layout rules make it hold:
+
+- **The label is positioned, not aligned.** A date is wider than its own
+  column, and `text-align` cannot pull overflowing text back — in LTR it spills
+  right whatever the alignment, which clipped `14 Oct` to `14 Oc` against the
+  card edge on a phone. Ticks are absolutely positioned: centred normally,
+  pinned `left-0`/`right-0` at the two ends.
+- **The bar row has a height below `lg`.** It shipped as `h-[84px] flex-1`, and
+  `flex-1` is `flex: 1 1 0%` — in that column the zero is a *height* basis, and
+  below `lg` the parent has no height to grow into, so the row resolved to
+  **1px and the chart drew no bars at all on any phone**. It only ever worked on
+  desktop, where `lg:flex-row` stretches the chart column against the figures
+  beside it. The row is now a fixed 84px at the base width and takes `lg:flex-1`
+  only where there is space to grow into.
+
 ### Stale unpaid is a strict subset of unpaid
 
 `STALE_UNPAID_DAYS = 3` (`convex/lib/orderBuckets.ts`). Both counts come from
