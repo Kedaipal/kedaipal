@@ -195,7 +195,8 @@ describe("DeliveriesView", () => {
 		expect(screen.getByRole("link", { name: "Photo" })).toBeTruthy();
 		// Only the failure that still matters asks for a rebook.
 		expect(screen.getAllByRole("link", { name: "Rebook" })).toHaveLength(1);
-		expect(screen.getByText("Rider on the way")).toBeTruthy();
+		// Phone and desktop each carry the label; CSS shows one.
+		expect(screen.getAllByText("Rider on the way").length).toBeGreaterThan(0);
 	});
 
 	it("filters bookings by state, and an empty filter says so", () => {

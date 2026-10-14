@@ -362,31 +362,28 @@ function BookingsCard({ overview }: { overview: DeliveriesOverview }) {
 							No {filter} bookings.
 						</p>
 					) : (
-						<div className="-mx-1 overflow-x-auto">
-							<table className="w-full min-w-0 text-sm">
-								<thead className="sr-only sm:not-sr-only">
-									<tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-										<th className="px-1 pb-2 font-semibold">Order</th>
-										<th className="px-1 pb-2 font-semibold">Status</th>
-										<th className="hidden px-1 pb-2 font-semibold sm:table-cell">
-											Rider / courier
-										</th>
-										<th className="px-1 pb-2 text-right font-semibold">Cost</th>
-										<th className="px-1 pb-2">
-											<span className="sr-only">Action</span>
-										</th>
-									</tr>
-								</thead>
-								<tbody className="divide-y divide-border">
-									{shown.map((job) => (
-										<BookingLine
-											key={job.jobId}
-											job={job}
-											currency={currency}
-										/>
-									))}
-								</tbody>
-							</table>
+						<div className="flex flex-col">
+							{/* Column heads on desktop; a phone reads each row as a
+							    stacked card with its action on the right, never a table
+							    that scrolls its buttons out of view. */}
+							<div
+								aria-hidden
+								className={cn(
+									BOOKING_GRID,
+									"hidden pb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground lg:grid",
+								)}
+							>
+								<span>Order</span>
+								<span>Status</span>
+								<span>Rider / courier</span>
+								<span className="text-right">Cost</span>
+								<span />
+							</div>
+							<ul className="flex flex-col divide-y divide-border">
+								{shown.map((job) => (
+									<BookingLine key={job.jobId} job={job} currency={currency} />
+								))}
+							</ul>
 						</div>
 					)}
 				</>
@@ -394,6 +391,9 @@ function BookingsCard({ overview }: { overview: DeliveriesOverview }) {
 		</Card>
 	);
 }
+
+const BOOKING_GRID =
+	"lg:grid-cols-[7.5rem_10rem_minmax(0,1fr)_6rem_auto] lg:items-center lg:gap-x-3";
 
 function BookingLine({
 	job,
@@ -403,47 +403,57 @@ function BookingLine({
 	currency: string;
 }) {
 	const tone = jobStatusTone(job.status);
-	const carrier = [job.carrier, job.vehicle?.toLowerCase()]
-		.filter(Boolean)
-		.join(" · ");
+	const carrier =
+		[job.carrier, job.vehicle].filter(Boolean).join(" · ") ||
+		(job.provider === "delyva" ? "Delyva" : "Lalamove");
+	const cost = tone === "failed" ? "—" : formatPrice(job.cost, currency);
+	const status = (
+		<span
+			className={cn(
+				"w-fit whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium",
+				JOB_TONE_CLASS[tone],
+			)}
+		>
+			{jobStatusLabel(job.status, {
+				provider: job.provider,
+				collection: job.direction === "collection",
+			})}
+		</span>
+	);
 	return (
-		<tr className="align-middle">
-			<td className="px-1 py-2.5">
+		<li
+			className={cn(
+				"grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 py-2.5",
+				BOOKING_GRID,
+			)}
+		>
+			<div className="flex min-w-0 flex-col gap-1">
 				<Link
 					to="/app/orders/$shortId"
 					params={{ shortId: job.shortId }}
-					className="font-mono text-sm font-semibold hover:underline"
+					className="w-fit font-mono text-sm font-semibold hover:underline"
 				>
 					{job.shortId}
 				</Link>
-				{/* The carrier column folds under the order on a phone. */}
-				<p className="truncate text-xs text-muted-foreground sm:hidden">
-					{carrier || (job.provider === "delyva" ? "Delyva" : "Lalamove")}
-				</p>
-			</td>
-			<td className="px-1 py-2.5">
-				<span
-					className={cn(
-						"whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium",
-						JOB_TONE_CLASS[tone],
-					)}
-				>
-					{jobStatusLabel(job.status, {
-						provider: job.provider,
-						collection: job.direction === "collection",
-					})}
+				{/* Phone: status, carrier and cost fold under the order. */}
+				<span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground lg:hidden">
+					{status}
+					<span className="truncate">
+						{carrier} · <span className="tabular-nums">{cost}</span>
+					</span>
 				</span>
-			</td>
-			<td className="hidden px-1 py-2.5 text-muted-foreground sm:table-cell">
-				{carrier || "—"}
-			</td>
-			<td className="px-1 py-2.5 text-right tabular-nums">
-				{tone === "failed" ? "—" : formatPrice(job.cost, currency)}
-			</td>
-			<td className="px-1 py-2.5 text-right">
+			</div>
+			<span className="hidden lg:block">{status}</span>
+			<span className="hidden truncate text-sm text-muted-foreground lg:block">
+				{carrier}
+			</span>
+			<span className="hidden text-right text-sm tabular-nums lg:block">
+				{cost}
+			</span>
+			<span className="flex justify-end">
 				<BookingAction job={job} />
-			</td>
-		</tr>
+			</span>
+		</li>
 	);
 }
 
