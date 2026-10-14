@@ -23,6 +23,12 @@ removal and grant edits bite on the member's next call.
   `integrations` and needs no new permission row. This keeps the Team page ~11
   rows forever and avoids contradictions (hiding a revenue tile while the
   order list shows per-order amounts).
+- **A credential field's non-credential choice follows where it's made**
+  (86eye9xd4, `refinedSettingsArea` in `convex/retailers.ts`): `hitpay:
+  { enabled }` alone is "How buyers pay" → `payments_settings`, and a
+  `deliveryBooking` carrying only rider options (vehicle, collection,
+  prompt-to-book) saves with live delivery pricing → `fulfilment`. Keys,
+  disconnect and the rider arm switch stay `integrations`.
 - **none / read / write** per area, write implies read, **deny-by-default**:
   an absent key is no access, and an area added later starts at "none" for
   every existing member automatically.

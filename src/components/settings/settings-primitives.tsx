@@ -33,16 +33,24 @@ export function Card({
 	children,
 	id,
 	highlight,
+	dashed = false,
 }: {
 	children: ReactNode;
 	id?: string;
 	highlight?: FixHighlight;
+	/** Saved but not in use right now — the manual methods while HitPay is
+	 * the way buyers pay. Same anatomy, a quieter edge. */
+	dashed?: boolean;
 }) {
 	return (
 		<section
 			id={id}
 			data-fix-highlight={highlight ?? undefined}
-			className={`flex min-w-0 flex-col gap-4 rounded-2xl border bg-background p-5 scroll-mt-24 lg:p-6 ${highlightRingClass(highlight)}`}
+			className={cn(
+				"flex min-w-0 flex-col gap-4 rounded-2xl border bg-background p-5 scroll-mt-24 lg:p-6",
+				dashed && "border-dashed",
+				highlightRingClass(highlight),
+			)}
 		>
 			{children}
 		</section>

@@ -2456,12 +2456,18 @@ export const receiptPdfInputs = internalQuery({
 		if (!order) return null;
 		const retailer = await ctx.db.get(order.retailerId);
 		const paymentsPaused = await buyerPaymentsPaused(ctx, order.retailerId);
+		// The document asks for payment the same way the order page does: an
+		// order HitPay can take points at Pay now instead of printing the
+		// manual details (86eye9xd4, 8A).
+		const payOnline = retailer ? gatewayCanTake(retailer, order) : false;
 		return {
 			shortId: order.shortId,
 			data: orderToReceiptData({
 				order,
 				storeName: retailer?.storeName ?? "",
-				paymentMethods: retailer ? resolvePaymentMethods(retailer) : [],
+				paymentMethods:
+					retailer && !payOnline ? resolvePaymentMethods(retailer) : [],
+				payOnline,
 				// A lapsed store's unpaid bill prints the paused notice instead of
 				// the numbers (z8r3fdr6gg) — the seller's copy too: forwarded, it's
 				// the same payment request the order page withholds.
@@ -2602,6 +2608,25 @@ export const sendPaymentReminder = action({
 });
 
 /**
+ * Whether the seller's HitPay checkout can take THIS order's payment right
+ * now (86eyb6z3a) — connection on + credentials stored + payment still open +
+ * both price holds clear + total within HitPay's floor. The one author of the
+ * buyer's "Pay now" door and of the rule that hides the manual details while
+ * it's open (86eye9xd4); `hitpay.createCheckout` re-checks everything, so this
+ * is presentation, not authorization.
+ */
+function gatewayCanTake(retailer: Doc<"retailers">, order: Doc<"orders">) {
+	return (
+		hitpayCheckoutConfigured(retailer.hitpay) &&
+		order.status !== "cancelled" &&
+		(order.paymentStatus ?? "unpaid") === "unpaid" &&
+		!isMockupGateClosed(order) &&
+		order.deliveryFeePending !== true &&
+		order.total >= HITPAY_MIN_AMOUNT_SEN
+	);
+}
+
+/**
  * Public: resolve the seller's payment methods for the buyer's tracking page,
  * keyed by the tracking token (the capability). This page is the ONLY place a
  * buyer sees bank details — they left WhatsApp in 86ey98ju1, and the order's one
@@ -2642,15 +2667,13 @@ export const getPaymentMethods = query({
 			return { methods: [], gatewayAvailable: false, paymentsPaused: true };
 		}
 
-		const gatewayAvailable =
-			hitpayCheckoutConfigured(retailer.hitpay) &&
-			order.status !== "cancelled" &&
-			(order.paymentStatus ?? "unpaid") === "unpaid" &&
-			!isMockupGateClosed(order) &&
-			order.deliveryFeePending !== true &&
-			order.total >= HITPAY_MIN_AMOUNT_SEN;
+		const gatewayAvailable = gatewayCanTake(retailer, order);
 
-		const methods = resolvePaymentMethods(retailer);
+		// HitPay on means it is THE way buyers pay (86eye9xd4, 8A): an order
+		// the gateway can take never sees the manual details, so every payment
+		// confirms itself. Any order it can't take — under HitPay's minimum, a
+		// manual claim made before the switch — keeps them as the fallback.
+		const methods = gatewayAvailable ? [] : resolvePaymentMethods(retailer);
 		if (methods.length === 0 && !gatewayAvailable) return null;
 
 		const resolved: Array<PaymentMethod & { qrImageUrl?: string }> = [];

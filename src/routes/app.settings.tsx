@@ -67,6 +67,10 @@ import { BookingsTab } from "../components/settings/bookings-tab";
 import { CountrySetupPanel } from "../components/settings/country-setup-panel";
 import { CreditTopUpDialog } from "../components/settings/credit-top-up-dialog";
 import { FulfilmentTab } from "../components/settings/fulfilment-tab";
+import {
+	HitpayAccountCard,
+	HowBuyersPayCard,
+} from "../components/settings/how-buyers-pay-card";
 import { IntegrationsTab } from "../components/settings/integrations-tab";
 import { MarketplaceCard } from "../components/settings/marketplace-card";
 import { OrderAlertsCard } from "../components/settings/order-alerts-card";
@@ -78,6 +82,7 @@ import {
 } from "../components/settings/settings-nav";
 import {
 	Card,
+	ExpandableRow,
 	Glance,
 	HelperBullets,
 	InfoDisclosure,
@@ -345,8 +350,7 @@ export const Route = createFileRoute("/app/settings")({
 function SettingsSkeleton() {
 	// The shape of the page that loads into it: the grouped index on a phone,
 	// the section rail beside a column of cards from lg. Rows per group mirror
-	// SETTINGS_GROUPS so nothing jumps when the real nav lands.
-	const groups = [3, 4, 2];
+	// SETTINGS_GROUPS itself, so nothing jumps when the real nav lands.
 	return (
 		<div className="flex max-w-6xl flex-col gap-6">
 			<PageHeaderSkeleton hasSubtitle />
@@ -354,12 +358,12 @@ function SettingsSkeleton() {
 			{/* Mobile: the grouped index. */}
 			<div className="flex flex-col gap-4 lg:hidden">
 				<Skeleton className="h-16 w-full rounded-2xl" />
-				{groups.map((rows, g) => (
-					<div key={g} className="flex flex-col gap-1.5">
+				{SETTINGS_GROUPS.map((group) => (
+					<div key={group.label} className="flex flex-col gap-1.5">
 						<Skeleton className="h-3 w-16" />
 						<div className="flex flex-col divide-y divide-border rounded-2xl border border-border bg-card px-3.5">
-							{Array.from({ length: rows }, (_, r) => (
-								<div key={r} className="flex min-h-[52px] items-center gap-3">
+							{group.tabs.map((tab) => (
+								<div key={tab} className="flex min-h-[52px] items-center gap-3">
 									<Skeleton className="h-4 w-24" />
 									<Skeleton className="ml-auto h-4 w-16" />
 								</div>
@@ -372,18 +376,18 @@ function SettingsSkeleton() {
 			{/* Desktop: rail + content. */}
 			<div className="hidden lg:grid lg:grid-cols-[13rem_minmax(0,1fr)] lg:items-start lg:gap-8">
 				<div className="flex flex-col gap-5">
-					{groups.map((rows, g) => (
-						<div key={g} className="flex flex-col gap-1">
+					{SETTINGS_GROUPS.map((group) => (
+						<div key={group.label} className="flex flex-col gap-1">
 							<Skeleton className="mx-2 mb-1 h-3 w-14" />
-							{Array.from({ length: rows }, (_, r) => (
-								<Skeleton key={r} className="h-10 w-full rounded-xl" />
+							{group.tabs.map((tab) => (
+								<Skeleton key={tab} className="h-10 w-full rounded-xl" />
 							))}
 						</div>
 					))}
 				</div>
 				<div className="flex flex-col gap-6">
 					<Skeleton className="h-7 w-32" />
-					{[0, 1].map((n) => (
+					{["first", "second"].map((n) => (
 						<section
 							key={n}
 							className="flex flex-col gap-4 rounded-2xl border bg-background p-6"
@@ -1071,49 +1075,14 @@ function SettingsRoute() {
 
 					{activeTab === "payments" ? (
 						<AreaGate area="payments_settings">
-							<div className="flex flex-col gap-6 pt-2">
-								<Card
-									id={SETTINGS_ANCHOR.payment_methods}
-									highlight={ringFor(SETTINGS_ANCHOR.payment_methods)}
-								>
-									<PaymentMethodsForm
-										current={retailer.paymentMethods ?? []}
-										country={retailer.country}
-										onSave={(paymentMethods) =>
-											updateSettings({ paymentMethods })
-										}
-									/>
-								</Card>
-								{/* HitPay moved to Settings → Integrations (2 Sep IA rework) —
-						    one home for every third-party account. The pointer keeps the
-						    old home from reading as "online payments are gone". */}
-								<p className="px-1 text-xs text-muted-foreground">
-									Online payments (HitPay) moved to{" "}
-									<button
-										type="button"
-										onClick={() =>
-											navigate({ search: { tab: "integrations" } })
-										}
-										className="font-medium text-accent hover:underline"
-									>
-										Settings → Integrations
-									</button>
-									— connect your account there; buyers keep seeing Pay now on
-									their orders as before.
-								</p>
-								{/* Says plainly that nothing chases the buyer automatically, and
-						    names the one manual tool that exists — so the behaviour is
-						    discoverable without a seller assuming a nudge went out that
-						    didn't (docs/payment-reminder.md). */}
-								<p className="px-1 text-xs text-muted-foreground">
-									Kedaipal doesn't chase unpaid orders automatically. Each order
-									gets one WhatsApp — the confirmation — and it links the buyer
-									to their order page, where these payment details and the “I've
-									paid” button live. If an order is still unpaid on day 11, a
-									“Send payment reminder” button appears on its order page (once
-									per day, until day 14) — sending it is always your call.
-								</p>
-							</div>
+							<PaymentsTabBody
+								retailer={retailer}
+								highlight={ringFor(SETTINGS_ANCHOR.payment_methods)}
+								onSave={updateSettings}
+								onOpenIntegrations={() =>
+									navigate({ search: { tab: "integrations" } })
+								}
+							/>
 						</AreaGate>
 					) : null}
 
@@ -1149,6 +1118,7 @@ function SettingsRoute() {
 								hitpay={retailer.hitpay}
 								subscription={retailer.subscription}
 								onSave={updateSettings}
+								onOpenPayments={() => navigate({ search: { tab: "payments" } })}
 							/>
 						</AreaGate>
 					) : null}
@@ -1857,6 +1827,122 @@ function newDraft(type: "bank" | "qr"): MethodDraft {
 // Placeholder examples per store country (z8r3fdbmc9) — "Maybank / DuitNow /
 // Sdn Bhd" on a Singapore store reads as someone else's app. Examples only;
 // the fields stay free text.
+/**
+ * Settings → Payments (86eye9xd4, 8A + 1B). The decision first — how buyers
+ * pay — then the details that decision uses. While HitPay is the way buyers
+ * pay, the manual methods stay saved in a quieter dashed card: hidden from
+ * buyers on every order HitPay can take, still shown on one it can't (under
+ * its minimum), and one tap from coming back.
+ */
+function PaymentsTabBody({
+	retailer,
+	highlight,
+	onSave,
+	onOpenIntegrations,
+}: {
+	retailer: NonNullable<ReturnType<typeof useDashboardRetailer>>;
+	highlight: FixHighlight | undefined;
+	onSave: ReturnType<typeof useUpdateSettings>;
+	onOpenIntegrations: () => void;
+}) {
+	const methods = retailer.paymentMethods ?? [];
+	const online =
+		retailer.hitpay?.hasCredentials === true && retailer.hitpay.enabled;
+	const methodNames = methods.map((m) => m.label);
+	const form = (
+		<PaymentMethodsForm
+			current={methods}
+			country={retailer.country}
+			onSave={(paymentMethods) => onSave({ paymentMethods })}
+		/>
+	);
+	return (
+		<div className="flex flex-col gap-6">
+			<HowBuyersPayCard
+				hitpay={retailer.hitpay}
+				canUse={hasFeature(retailer.subscription, "onlinePayments")}
+				manualCount={methods.length}
+				onSave={onSave}
+				onOpenIntegrations={onOpenIntegrations}
+			/>
+			{online ? (
+				// A deep link to the methods lands on the editor row and opens it.
+				<Card dashed>
+					<SectionHeading
+						title="Manual methods"
+						description={
+							methods.length > 0
+								? `${listPhrase(methodNames)}. Kept for the day you switch back — and still shown on an order too small for HitPay.`
+								: "None saved. Add a bank or QR here before you switch back to manual transfer."
+						}
+						glance={<Glance tone="grey">Saved, hidden</Glance>}
+					/>
+					<ExpandableRow
+						id={SETTINGS_ANCHOR.payment_methods}
+						label="Edit methods"
+						value={
+							<span className="font-normal text-muted-foreground">
+								{methods.length} saved
+							</span>
+						}
+						highlight={highlight}
+					>
+						{form}
+					</ExpandableRow>
+				</Card>
+			) : (
+				<Card id={SETTINGS_ANCHOR.payment_methods} highlight={highlight}>
+					<SectionHeading
+						title="Payment methods"
+						description="What buyers use to pay you — shown on their private order page."
+						glance={
+							methods.length > 0 ? (
+								<Glance>
+									{methods.length} {methods.length === 1 ? "method" : "methods"}
+								</Glance>
+							) : (
+								<Glance tone="warn">None yet</Glance>
+							)
+						}
+					/>
+					<InfoDisclosure summary="How buyers see this">
+						<HelperBullets
+							items={[
+								"Never pasted into the WhatsApp chat — each buyer gets a private order-page link",
+								"Account numbers copy in one tap",
+								"Never shown on your public storefront",
+								"Drag the handle to reorder",
+							]}
+						/>
+					</InfoDisclosure>
+					{form}
+					{/* Says plainly that nothing chases the buyer automatically, and
+					    names the one manual tool that exists (docs/payment-reminder.md). */}
+					<InfoDisclosure summary="If a buyer hasn't paid">
+						<HelperBullets
+							items={[
+								"Kedaipal doesn't chase unpaid orders automatically — each order gets one WhatsApp, the confirmation, linking to the order page",
+								"From day 11 unpaid, a “Send payment reminder” button appears on the order page — once a day, until day 14",
+								"Sending it is always your call",
+							]}
+						/>
+					</InfoDisclosure>
+				</Card>
+			)}
+			<HitpayAccountCard
+				hitpay={retailer.hitpay}
+				onOpenIntegrations={onOpenIntegrations}
+			/>
+		</div>
+	);
+}
+
+/** "A", "A and B", "A, B and C" — the manual card's one-line inventory. */
+function listPhrase(items: string[]): string {
+	if (items.length <= 1) return items[0] ?? "";
+	return `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
+}
+
 const BANK_PLACEHOLDER: Record<Country, string> = {
 	MY: "Maybank",
 	SG: "DBS",
@@ -2240,11 +2326,6 @@ function PaymentMethodsForm({
 
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-6">
-			<SectionHeading
-				title="Payment methods"
-				description="Add your banks and QR codes. For your buyers' security, these are no longer pasted into the WhatsApp chat — instead the order confirmation links each buyer to their own order page, where all of them show with one-tap copy. Never shown on your public storefront. Drag the handle to reorder within each group."
-			/>
-
 			{/* Bank accounts — shown on the buyer's order page (linked from WhatsApp). */}
 			<div className="flex flex-col gap-3">
 				<div className="flex items-center justify-between gap-2">
@@ -2255,7 +2336,7 @@ function PaymentMethodsForm({
 					<Button
 						type="button"
 						variant="outline"
-						className="h-9"
+						className="h-11 lg:h-9"
 						onClick={() => addMethod("bank")}
 						disabled={atCap}
 					>
@@ -2288,7 +2369,7 @@ function PaymentMethodsForm({
 					<Button
 						type="button"
 						variant="outline"
-						className="h-9"
+						className="h-11 lg:h-9"
 						onClick={() => addMethod("qr")}
 						disabled={atCap}
 					>

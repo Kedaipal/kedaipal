@@ -66,6 +66,7 @@ export function IntegrationsTab({
 	hitpay,
 	subscription,
 	onSave,
+	onOpenPayments,
 }: {
 	/** Deep-link target — which card to ring, and how (see FulfilmentTab). */
 	target?: CardTarget;
@@ -78,6 +79,8 @@ export function IntegrationsTab({
 	 * presentational cards patch through it; the Delyva card owns its own
 	 * Convex namespace and act-as internally). */
 	onSave: ReturnType<typeof useUpdateSettings>;
+	/** Payments → How buyers pay, where HitPay is switched on (86eye9xd4). */
+	onOpenPayments: () => void;
 }) {
 	const ring = (anchor: string): FixHighlight | undefined =>
 		target?.anchor === anchor ? target.highlight : undefined;
@@ -121,6 +124,7 @@ export function IntegrationsTab({
 					canUse={hasFeature(subscription, "onlinePayments")}
 					country={country}
 					onSave={onSave}
+					onChooseHowBuyersPay={onOpenPayments}
 				/>
 			</AccountCard>
 		</div>

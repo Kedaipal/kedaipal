@@ -1097,13 +1097,18 @@ function TrackingRoute() {
 									{order.storeName || "the store"}'s secure HitPay page — your
 									order confirms automatically.
 								</p>
-								<button
-									type="button"
-									onClick={() => setClaimingPayment(true)}
-									className="self-start text-sm font-medium underline-offset-2 hover:underline"
-								>
-									Paid by bank transfer instead? Tell the store
-								</button>
+								{/* Only while the store still offers its manual details for
+								    this order — a HitPay store withholds them (86eye9xd4),
+								    and a door to an empty sheet is a dead end. */}
+								{paymentMethods.length > 0 ? (
+									<button
+										type="button"
+										onClick={() => setClaimingPayment(true)}
+										className="self-start text-sm font-medium underline-offset-2 hover:underline"
+									>
+										Paid by bank transfer instead? Tell the store
+									</button>
+								) : null}
 							</>
 						) : (
 							<>

@@ -723,7 +723,7 @@ export async function buildOrderReceiptPdf(
 		d,
 		paid
 			? `Thank you for your purchase at ${data.storeName} via Kedaipal.`
-			: data.paymentsPaused
+			: data.paymentsPaused || data.payOnline
 				? `Thank you for ordering from ${data.storeName} via Kedaipal.`
 				: `Please use ${data.orderShortId} as your payment reference. Thank you for ordering from ${data.storeName} via Kedaipal.`,
 		// The seller's document to their buyer → it carries the growth mark,

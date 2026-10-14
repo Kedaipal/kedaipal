@@ -26,6 +26,7 @@ function renderTab(target?: { anchor: string; highlight: "spotlight" }) {
 			hitpay={undefined}
 			subscription={undefined}
 			onSave={vi.fn() as never}
+			onOpenPayments={vi.fn()}
 		/>,
 	);
 }

@@ -26,7 +26,7 @@ import { ConfirmDialog } from "../ui/confirm-dialog";
 import { Input } from "../ui/input";
 
 /** Secret-free connection summary — mirrors retailers.HitpaySummary. */
-type HitpaySummary = {
+export type HitpaySummary = {
 	enabled: boolean;
 	hasCredentials: boolean;
 	mode?: "sandbox" | "production";
@@ -47,6 +47,7 @@ export function OnlinePaymentsCard({
 	canUse,
 	country,
 	onSave,
+	onChooseHowBuyersPay,
 }: {
 	hitpay: HitpaySummary | undefined;
 	/** Client mirror of PLAN_FEATURES.onlinePayments (server is the lock). */
@@ -54,6 +55,9 @@ export function OnlinePaymentsCard({
 	/** Store country — picks the pitched rails + the eligibility/settlement copy. */
 	country: Country;
 	onSave: (patch: HitpayPatch) => Promise<unknown>;
+	/** Opens Payments → How buyers pay, where HitPay is switched on or off
+	 * (86eye9xd4, 8A). This card owns the account; that one owns the choice. */
+	onChooseHowBuyersPay: () => void;
 }) {
 	const copy = COUNTRY_COPY[country];
 	const [apiKey, setApiKey] = useState("");
@@ -98,8 +102,9 @@ export function OnlinePaymentsCard({
 					{!canUse ? <ProBadge /> : null}
 				</div>
 				<p className="text-sm text-muted-foreground">
-					Let buyers pay online through your own HitPay account. Your bank &amp;
-					QR details above stay as the manual fallback.
+					Let buyers pay online through your own HitPay account. While it&apos;s
+					how buyers pay, your bank &amp; QR details are hidden from them and
+					every payment confirms itself.
 				</p>
 			</div>
 
@@ -125,14 +130,14 @@ export function OnlinePaymentsCard({
 											: "bg-muted text-muted-foreground"
 									}`}
 								>
-									{hitpay?.enabled ? "On" : "Paused"}
+									{hitpay?.enabled ? "In use" : "Not in use"}
 								</span>
 							</div>
 						</div>
 						<p className="text-xs text-muted-foreground">
 							{hitpay?.enabled
-								? "Buyers see a Pay now button on their order page. Payments confirm the order automatically and you're notified on WhatsApp-side as usual."
-								: "Paused — buyers don't see Pay now right now. Your keys are kept, so resuming is one tap."}
+								? "Buyers pay with Pay now on their order page, and the order confirms itself. Your bank & QR details are hidden from them."
+								: "Buyers pay by manual transfer right now. Your keys are kept, so switching to HitPay is one tap under Payments."}
 						</p>
 						{/* The account's ACTUAL rails (probed truth) — never a promise.
 						    checkedAt-with-no-list = HitPay rejected the key. */}
@@ -214,25 +219,16 @@ export function OnlinePaymentsCard({
 							</>
 						) : (
 							<>
-								{/* Pausing is never gated; RESUMING is enabling, so a
-								    downgraded seller gets disabled-with-reason instead of a
-								    button that fails server-side (house style). */}
+								{/* Whether buyers pay through HitPay is decided in ONE place
+								    — Payments → How buyers pay — so it is a pointer here, not
+								    a second switch (86eye9xd4). */}
 								<Button
 									type="button"
 									variant={hitpay?.enabled ? "outline" : "default"}
 									className="h-11"
-									isLoading={saving}
-									disabled={!hitpay?.enabled && !canUse}
-									onClick={() =>
-										save(
-											{ hitpay: { enabled: !(hitpay?.enabled ?? false) } },
-											hitpay?.enabled
-												? "Online payments paused"
-												: "Online payments on — buyers now see Pay now",
-										)
-									}
+									onClick={onChooseHowBuyersPay}
 								>
-									{hitpay?.enabled ? "Pause" : "Resume"}
+									Choose how buyers pay
 								</Button>
 								<Button
 									type="button"
@@ -252,12 +248,6 @@ export function OnlinePaymentsCard({
 							</>
 						)}
 					</div>
-					{!editingKeys && !hitpay?.enabled && !canUse ? (
-						<p className="text-xs text-muted-foreground">
-							Resuming online payments needs Pro — upgrade in Settings →
-							Billing. Your keys are kept meanwhile.
-						</p>
-					) : null}
 					<ConfirmDialog
 						open={confirmingDisconnect}
 						onOpenChange={setConfirmingDisconnect}
@@ -359,13 +349,16 @@ export function OnlinePaymentsCard({
 							onClick={() =>
 								save(
 									{
+										// Connecting stores the account; it doesn't change how
+										// buyers pay — that's chosen under Payments (86eye9xd4),
+										// like every other account on this tab.
 										hitpay: {
-											enabled: true,
+											enabled: false,
 											apiKey: apiKey.trim(),
 											salt: salt.trim(),
 										},
 									},
-									"HitPay connected — buyers now see Pay now on their orders",
+									"HitPay connected — switch buyers to it under Payments → How buyers pay",
 								)
 							}
 							isLoading={saving}
@@ -374,6 +367,11 @@ export function OnlinePaymentsCard({
 						>
 							Connect HitPay
 						</Button>
+						<p className="text-xs text-muted-foreground">
+							Connecting stores your keys. To take payments through HitPay,
+							choose it under Payments → How buyers pay — your bank &amp; QR
+							details are then hidden from buyers.
+						</p>
 						{locked ? (
 							<p className="text-xs text-muted-foreground">
 								Online payments is a Pro feature — upgrade in Settings → Billing
@@ -540,6 +538,7 @@ function KeyInputs({
 			<Input
 				type="text"
 				name="hitpay-api-key"
+				aria-label="HitPay API key"
 				autoComplete="off"
 				data-1p-ignore
 				data-lpignore="true"
@@ -553,6 +552,7 @@ function KeyInputs({
 			<Input
 				type="text"
 				name="hitpay-salt"
+				aria-label="HitPay salt"
 				autoComplete="off"
 				data-1p-ignore
 				data-lpignore="true"

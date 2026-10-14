@@ -2515,6 +2515,40 @@ const SETTINGS_FIELD_AREA: Record<
 };
 
 /**
+ * Two credential fields carry a non-credential choice, and that choice is
+ * decided where it's used, not where the keys live (86eye9xd4):
+ *  - `hitpay: { enabled }` alone is "How buyers pay" on the Payments tab —
+ *    payments_settings. Keys, or `null` (disconnect), stay integrations.
+ *  - `deliveryBooking` carrying only rider options (vehicle, collection,
+ *    prompt-to-book) saves with live delivery pricing — fulfilment. The arm
+ *    switch and keys stay integrations.
+ * Returns undefined for everything else, so the field map stands.
+ */
+const RIDER_OPTION_KEYS = new Set([
+	"vehicleType",
+	"promptBookOnPacked",
+	"deliveryDirection",
+]);
+function refinedSettingsArea(
+	key: string,
+	value: unknown,
+): PermissionArea | undefined {
+	if (value === null || typeof value !== "object") return undefined;
+	const keys = Object.keys(value).filter(
+		(k) => (value as Record<string, unknown>)[k] !== undefined,
+	);
+	if (key === "hitpay" && keys.length === 1 && keys[0] === "enabled")
+		return "payments_settings";
+	if (
+		key === "deliveryBooking" &&
+		keys.length > 0 &&
+		keys.every((k) => RIDER_OPTION_KEYS.has(k))
+	)
+		return "fulfilment";
+	return undefined;
+}
+
+/**
  * Enforce the field map for a MEMBER save: every field present in this call
  * must be editable under their grants; "owner" fields never are. Owner and
  * admin skip (the gate already admitted them for everything).
@@ -2532,8 +2566,9 @@ function assertSettingsFieldAccess(
 ): void {
 	if (access.role !== "member") return;
 	const grants = access.membership?.permissions ?? {};
-	for (const [key, area] of Object.entries(SETTINGS_FIELD_AREA)) {
+	for (const [key, fieldArea] of Object.entries(SETTINGS_FIELD_AREA)) {
 		if (args[key] === undefined) continue;
+		const area = refinedSettingsArea(key, args[key]) ?? fieldArea;
 		if (area === "owner")
 			throw new ConvexError(refusalMessage({ ownerOnly: true }));
 		if (!hasPermission(grants, area, "write"))
