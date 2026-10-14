@@ -89,9 +89,14 @@ function overview(over: Partial<DeliveriesOverview> = {}): DeliveriesOverview {
 	};
 }
 
-const renderView = (o: DeliveriesOverview) =>
+const renderView = (o: DeliveriesOverview, canPrint = true) =>
 	render(
-		<DeliveriesView overview={o} retailerId={"r1" as never} paperLabel="A6" />,
+		<DeliveriesView
+			overview={o}
+			retailerId={"r1" as never}
+			paperLabel="A6"
+			canPrintLabels={canPrint}
+		/>,
 	);
 
 describe("DeliveriesView", () => {
@@ -132,6 +137,26 @@ describe("DeliveriesView", () => {
 		expect((print as HTMLButtonElement).disabled).toBe(true);
 		expect(print.getAttribute("title")).toMatch(/Nothing is packed and paid/);
 		expect(screen.getByText("All out")).toBeTruthy();
+	});
+
+	it("Starter sees batch printing as Pro, with the reason — not a refusal", () => {
+		renderView(
+			overview({
+				shipsParcels: true,
+				counts: {
+					active: 0,
+					needsAttention: 0,
+					toShip: 1,
+					inTransit: 0,
+					labelsReady: 1,
+				},
+				toShip: [parcel({})],
+			}),
+			false,
+		);
+		const print = screen.getByRole("button", { name: /Print labels/ });
+		expect((print as HTMLButtonElement).disabled).toBe(true);
+		expect(screen.getByText(/is a Pro feature/)).toBeTruthy();
 	});
 
 	it("each booking carries the one action its state needs", () => {

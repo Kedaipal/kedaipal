@@ -16,6 +16,7 @@ import { Glance } from "../components/settings/settings-primitives";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { describeAwbPaper } from "../lib/awb-labels";
+import { hasFeature } from "../lib/subscription";
 
 /**
  * Deliveries (86eye9xd4, 6A) — where delivery is CHECKED, as Settings is
@@ -70,6 +71,10 @@ function DeliveriesRoute() {
 				paperLabel={describeAwbPaper(
 					resolveAwbConfig(retailer.awbConfig).paperSize,
 				)}
+				canPrintLabels={
+					retailer.actingAsAdmin === true ||
+					hasFeature(retailer.subscription, "orderInbox")
+				}
 			/>
 		</div>
 	);

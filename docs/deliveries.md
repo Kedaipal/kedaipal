@@ -50,7 +50,10 @@ collection trip *arrives* rather than *delivers*).
 
 The print queue (`PrintLabelsDialog` queue mode, see
 [`despatch-labels.md`](./despatch-labels.md)) opens from **To ship** — the
-queue it prints. The Orders inbox keeps its *Ready to ship* strip, now a
+queue it prints. Batch printing stays **Pro** (`orderInbox`, enforced by
+`awb.generateAwbBatchPdf`): Starter sees the button disabled with the reason
+and the Pro chip, and each order still prints its own label from its page.
+The Orders inbox keeps its *Ready to ship* strip, now a
 pointer with the same count that opens Deliveries; printing a ticked
 **selection** stays in the inbox's bulk bar.
 

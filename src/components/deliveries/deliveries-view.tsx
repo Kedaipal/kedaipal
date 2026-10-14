@@ -39,6 +39,7 @@ import {
 } from "../../lib/delivery-job-status";
 import { formatPrice } from "../../lib/format";
 import { cn } from "../../lib/utils";
+import { ProBadge } from "../app/pro-gate";
 import { PrintLabelsDialog } from "../dashboard/print-labels-dialog";
 import { Card, Glance, SectionHeading } from "../settings/settings-primitives";
 import { Button } from "../ui/button";
@@ -95,11 +96,15 @@ export function DeliveriesView({
 	overview,
 	retailerId,
 	paperLabel,
+	canPrintLabels,
 }: {
 	overview: DeliveriesOverview;
 	retailerId: Id<"retailers">;
 	/** The store's saved label size, for the print dialog. */
 	paperLabel: string;
+	/** Batch label printing is a Pro capability (`orderInbox`, enforced by
+	 * `awb.generateAwbBatchPdf`) — Starter sees it disabled with the reason. */
+	canPrintLabels: boolean;
 }) {
 	const { booksCouriers, shipsParcels } = overview;
 	if (!booksCouriers && !shipsParcels) return <NothingYet />;
@@ -111,6 +116,7 @@ export function DeliveriesView({
 					overview={overview}
 					retailerId={retailerId}
 					paperLabel={paperLabel}
+					canPrintLabels={canPrintLabels}
 				/>
 			) : null}
 			{booksCouriers ? <BookingsCard overview={overview} /> : null}
@@ -125,10 +131,12 @@ function ToShipCard({
 	overview,
 	retailerId,
 	paperLabel,
+	canPrintLabels,
 }: {
 	overview: DeliveriesOverview;
 	retailerId: Id<"retailers">;
 	paperLabel: string;
+	canPrintLabels: boolean;
 }) {
 	const [printing, setPrinting] = useState(false);
 	const { toShip, counts, currency } = overview;
@@ -157,26 +165,31 @@ function ToShipCard({
 					className="size-5 shrink-0 text-muted-foreground"
 				/>
 				<p className="min-w-0 flex-1 text-xs text-muted-foreground">
-					{labels > 0
-						? `${labels} packed and paid — labels ready to print.`
-						: "Packed and paid orders print their despatch labels from here."}
+					{!canPrintLabels
+						? "Printing every ready label at once is a Pro feature — upgrade under Settings → Billing. Each order still prints its own."
+						: labels > 0
+							? `${labels} packed and paid — labels ready to print.`
+							: "Packed and paid orders print their despatch labels from here."}
 				</p>
 				<Button
 					type="button"
 					size="sm"
 					variant={labels > 0 ? "default" : "outline"}
 					className="tap-target shrink-0"
-					disabled={labels === 0}
+					disabled={labels === 0 || !canPrintLabels}
 					title={
-						labels === 0
-							? "Nothing is packed and paid for yet"
-							: `Choose and print ${labels} label${labels === 1 ? "" : "s"}`
+						!canPrintLabels
+							? "A Pro feature"
+							: labels === 0
+								? "Nothing is packed and paid for yet"
+								: `Choose and print ${labels} label${labels === 1 ? "" : "s"}`
 					}
 					onClick={() => setPrinting(true)}
 				>
 					<Printer className="size-4" />
 					Print labels
-					{labels > 0 ? (
+					{!canPrintLabels ? <ProBadge /> : null}
+					{labels > 0 && canPrintLabels ? (
 						<span className="font-bold tabular-nums">{labels}</span>
 					) : null}
 				</Button>
