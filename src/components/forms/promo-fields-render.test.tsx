@@ -250,6 +250,31 @@ describe("a locked (Starter) store", () => {
 		expect(toggle.disabled).toBe(true);
 	});
 
+	test("shows the paused promotion READ-ONLY — every edit would be refused on save (PR #365 review)", () => {
+		render(
+			<Harness
+				locked
+				initialRows={ROWS.map((r) => ({ ...r, promoPrice: "5.00" }))}
+			/>,
+		);
+		for (const input of saleInputs())
+			expect(input.matches(":disabled")).toBe(true);
+		expect(
+			screen.getByRole("button", { name: "30% off" }).matches(":disabled"),
+		).toBe(true);
+		expect(screen.getByLabelText(/Label/).matches(":disabled")).toBe(true);
+		// The one live control is the switch — off is never Pro-gated.
+		expect((screen.getByRole("switch") as HTMLButtonElement).disabled).toBe(
+			false,
+		);
+	});
+
+	test("an unlocked store's fields stay editable", () => {
+		render(<Harness />);
+		for (const input of saleInputs())
+			expect(input.matches(":disabled")).toBe(false);
+	});
+
 	test("is not offered Clear — the move there is switching it off", () => {
 		render(
 			<Harness
