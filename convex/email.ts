@@ -307,8 +307,13 @@ export const notifyRetailerOrderAlert = internalAction({
 			return;
 		}
 
+		// A request awaiting the seller's approval (a booking, or an RSVP on an
+		// event that approves each guest — `z8r3fdkjek`) is NEW work for them,
+		// never "confirmed".
 		const alertKey: RetailerEmailKey =
-			meta.status === "pending" ? "newOrder" : "orderConfirmed";
+			meta.status === "pending" || meta.status === "booking_requested"
+				? "newOrder"
+				: "orderConfirmed";
 		const totalFormatted = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
 		const dashboardUrl = `${process.env.SITE_URL ?? "https://kedaipal.com"}/app/orders/${meta.shortId}`;
 

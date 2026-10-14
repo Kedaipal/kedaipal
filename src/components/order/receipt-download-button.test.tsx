@@ -30,6 +30,21 @@ describe("ReceiptDownloadButton", () => {
 		expect(screen.queryByText(/receipt/i)).toBeNull();
 	});
 
+	// Credits T3: handing out a receipt is order work the credit lock pauses —
+	// the seller's button greys out. The buyer's own copy never takes the prop.
+	it("the seller's button disables while the store can't hand one out", () => {
+		render(
+			<ReceiptDownloadButton
+				shortId="ORD-1"
+				paid={true}
+				lockedReason="You're out of credits…"
+			/>,
+		);
+		const button = screen.getByRole("button", { name: /download receipt/i });
+		expect((button as HTMLButtonElement).disabled).toBe(true);
+		expect(button.getAttribute("title")).toBe("You're out of credits…");
+	});
+
 	it("appends the PDF hint for the buyer tracking page", () => {
 		render(<ReceiptDownloadButton token="tok" paid={false} pdfHint />);
 		expect(

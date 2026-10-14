@@ -4,8 +4,8 @@ import { shareLink } from "../../lib/share";
 import { FoundingMemberBadge } from "./founding-member-badge";
 import { hasHoursLine, OpeningHoursLine } from "./opening-hours-line";
 import {
-	StoreLogoTile,
 	type StorefrontHeaderRetailer,
+	StoreLogoTile,
 } from "./storefront-header";
 
 /**

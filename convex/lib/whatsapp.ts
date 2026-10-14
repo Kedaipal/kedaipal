@@ -146,6 +146,71 @@ export function billingPastDueTemplateName(): string | undefined {
 }
 
 /**
+ * Kedaipal Credits balance notices (Credits T3, ClickUp z8r3fdf8hy) — three
+ * Meta utility templates to the SELLER's alert number (`notifyWaPhone`), each
+ * the louder second tap beside an email that always goes out. Same env-gating
+ * posture as every sibling: unset ⇒ nothing is attempted and the email carries
+ * it alone, so the code ships decoupled from Meta review.
+ *
+ * Registered by Zaki (30 Sep 2026) in English (`en`) + Malay (`ms`) under one
+ * name each, category Utility, no header, optional footer "1 credit = 1 order".
+ * Body params, in order:
+ *  - `credits_low_utility`: {{1}} store name, {{2}} orders left (e.g. "10");
+ *  - `credits_locked_utility`: {{1}} store name, {{2}} the balance in words
+ *    ("0 orders left" / "15 orders owed", localized — `creditBalancePhrase`);
+ *  - `credits_unlocked_utility`: {{1}} store name, {{2}} orders left.
+ * Button (all three): URL `https://kedaipal.com/app/settings?tab={{1}}` ← the
+ * value `billing` — the shape `billing_past_due_utility` already uses. Added
+ * via Meta's **Add variable** control, never hand-typed braces.
+ *
+ * ## NOT YET SUBMITTED TO META — and the body text to submit (Credits T3.1)
+ *
+ * They were deliberately held back from review while the gate was store-wide,
+ * because T3.1 changed what they say: there is no store-wide pause any more,
+ * so a body claiming "editing products is paused" would be approved and then
+ * wrong. Re-editing an APPROVED template re-triggers review, so submit once,
+ * with the wording below, which matches `creditEmailCopy.ts` word for word.
+ * The PARAM SHAPES above are unchanged, so nothing in this file moves.
+ *
+ * `credits_low_utility`
+ *  en: {{1}} — {{2}} left on Kedaipal. New orders keep arriving; once you run
+ *      out you won't be able to open the new ones until credits land.
+ *  ms: {{1}} — tinggal {{2}} di Kedaipal. Pesanan baharu terus masuk; sebaik
+ *      kredit habis anda tidak boleh membukanya sehingga kredit masuk.
+ *
+ * `credits_locked_utility`
+ *  en: {{1}} — you're at {{2}}, so new orders are waiting on credits. They
+ *      open oldest first once credits land. Your other orders, your products
+ *      and your settings carry on, and cancelling always works.
+ *  ms: {{1}} — baki anda {{2}}, jadi pesanan baharu menunggu kredit. Ia dibuka
+ *      yang paling lama dahulu sebaik kredit masuk. Pesanan lain, produk dan
+ *      tetapan anda tidak terjejas, dan pembatalan sentiasa boleh.
+ *
+ * `credits_unlocked_utility`
+ *  en: {{1}} — credits added, {{2}} left. The orders that were waiting are
+ *      open again, oldest first.
+ *  ms: {{1}} — kredit ditambah, tinggal {{2}}. Pesanan yang menunggu kini
+ *      dibuka, yang paling lama dahulu.
+ */
+export function creditsLowTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_CREDITS_LOW_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+/** See creditsLowTemplateName — out of credits (also re-sent when a monthly
+ * refresh leaves the store still below zero). */
+export function creditsLockedTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_CREDITS_LOCKED_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+/** See creditsLowTemplateName — credits are back above zero. */
+export function creditsUnlockedTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_CREDITS_UNLOCKED_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+/**
  * Every Meta template this deployment is configured to send, keyed by the
  * env var that names it — the ONE registry the admin console's template
  * panel reads, so a new template can't be sent without also being watched.
@@ -192,6 +257,21 @@ export function configuredTemplates(): Array<{
 			envVar: "WHATSAPP_BILLING_PAST_DUE_TEMPLATE",
 			purpose: "Seller alert — subscription past due (dashboard locked)",
 			name: billingPastDueTemplateName(),
+		},
+		{
+			envVar: "WHATSAPP_CREDITS_LOW_TEMPLATE",
+			purpose: "Seller alert — 10 orders left (credits)",
+			name: creditsLowTemplateName(),
+		},
+		{
+			envVar: "WHATSAPP_CREDITS_LOCKED_TEMPLATE",
+			purpose: "Seller alert — out of credits (orders still coming in)",
+			name: creditsLockedTemplateName(),
+		},
+		{
+			envVar: "WHATSAPP_CREDITS_UNLOCKED_TEMPLATE",
+			purpose: "Seller alert — credits back above zero",
+			name: creditsUnlockedTemplateName(),
 		},
 	];
 }

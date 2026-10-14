@@ -99,8 +99,14 @@ export function BookDeliveryCard({
 	advanceWithoutRider,
 	onAdvanceBookUnavailable,
 	embedded = false,
+	lockedReason,
 }: {
 	order: Doc<"orders">;
+	/** Set while the store can't book right now — out of credits (Credits T3)
+	 * or view-only. The Book button stays where it is, disabled, with this
+	 * sentence under it, and nothing auto-opens a quote the server would
+	 * refuse. Cancelling a live booking stays open: it releases the order. */
+	lockedReason?: string;
 	/** Rendered inside the dispatch hub's shell, which already draws the
 	 * border and padding around the provider switch — so the card drops its
 	 * own chrome rather than nesting a card in a card. */
@@ -203,6 +209,7 @@ export function BookDeliveryCard({
 		if (!dispatch || prev === undefined) return; // loading / mount baseline
 		const justPacked = prev !== "packed" && order.status === "packed";
 		if (!justPacked) return;
+		if (lockedReason) return; // the Book button says why
 		if (!dispatch.promptBookOnPacked) return;
 		if (order.paymentStatus !== "received") return; // only paid orders
 		if (dispatch.blockReason !== null) return; // not bookable (keys/pin/plan/…)
@@ -267,6 +274,7 @@ export function BookDeliveryCard({
 		prevTokenRef.current = bookRequestToken;
 		if (bookRequestToken === prev) return;
 		if (!dispatch || dispatch.blockReason !== null) return;
+		if (lockedReason) return; // the Book button says why
 		// Same collection stop as the packed prompt. Unreachable today (a
 		// collection order's advance never raises this token) — kept as defence
 		// in depth so a future caller can't auto-dispatch a collection the
@@ -830,7 +838,15 @@ export function BookDeliveryCard({
 
 			{/* Book / rebook — or the disabled-with-reason state. */}
 			{!activeJob && bookable && !collectionDone ? (
-				blockReason === null || blockReason === "job_active" ? (
+				lockedReason ? (
+					<div className="flex flex-col gap-2">
+						<Button type="button" className="h-11 w-full" disabled>
+							<Truck className="size-4" />{" "}
+							{collection ? "Send rider to collect" : "Book delivery"}
+						</Button>
+						<p className="text-xs text-muted-foreground">{lockedReason}</p>
+					</div>
+				) : blockReason === null || blockReason === "job_active" ? (
 					<Button
 						type="button"
 						className="h-11 w-full"

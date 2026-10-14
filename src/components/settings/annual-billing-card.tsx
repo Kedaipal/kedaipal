@@ -156,7 +156,7 @@ export function AnnualBillingCard({
 					: ""}{" "}
 				{foundingPro
 					? "As a Founding Member you stay on Founding Pro for the whole year, at your founding price."
-					: "If you change plan part-way through, the months you haven't used are credited to the new one."}
+					: "Move up a plan part-way through and the time you've already paid for carries over as extra days; move down and the change waits until your year is up."}
 			</NoteCard>
 		);
 	}

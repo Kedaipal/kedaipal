@@ -18,7 +18,11 @@ import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidCategorySlug } from "./lib/slug";
 import { hiddenFromStorefront } from "./lib/productEvent";
 import { productWithVariants } from "./products";
-import { assertPlanFeature, assertSubscriptionActive } from "./subscriptions";
+import {
+	assertPlanFeature,
+	assertSubscriptionActive,
+	getAccess,
+} from "./subscriptions";
 
 const NAME_MAX = 60;
 const DESCRIPTION_MAX = 280;
@@ -240,6 +244,7 @@ export const getPublicPage = query({
 			.withIndex("by_category_sort", (q) => q.eq("categoryId", category._id))
 			.take(CATEGORY_PAGE_PRODUCT_LIMIT);
 		const products = [];
+		const plan = (await getAccess(ctx, retailerId)).plan;
 		for (const junction of junctions) {
 			const product = await ctx.db.get(junction.productId);
 			// Same visibility rules as products.list: active, not hidden, and not
@@ -247,7 +252,7 @@ export const getPublicPage = query({
 			if (!product || !product.active || product.hidden === true) continue;
 			if (hiddenFromStorefront(product)) continue;
 			products.push(
-				await productWithVariants(ctx, product, { activeOnly: true }),
+				await productWithVariants(ctx, product, { activeOnly: true, plan }),
 			);
 		}
 		return {
@@ -459,8 +464,9 @@ export const update = mutation({
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		// Soft-lock (growth-write); admin act-as bypasses.
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, category.retailerId);
+		}
 		// Editing category structure is Pro; archive/restore (setActive) is the
 		// un-gated escape hatch, not this. Admin act-as bypasses.
 		if (!access.actingAsAdmin)
@@ -527,8 +533,9 @@ export const setActive = mutation({
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		// Soft-lock (growth-write); admin act-as bypasses.
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, category.retailerId);
+		}
 		if (category.active === active) return; // idempotent
 
 		const patch: Partial<Doc<"categories">> = {
@@ -624,8 +631,9 @@ export const reorderProducts = mutation({
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		// Soft-lock (growth-write); admin act-as bypasses.
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, category.retailerId);
+		}
 		// Structure-building — Pro. Admin act-as bypasses.
 		if (!access.actingAsAdmin)
 			await assertPlanFeature(ctx, category.retailerId, "categories");
@@ -685,8 +693,9 @@ export const setProductCategories = mutation({
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		// Soft-lock (growth-write); admin act-as bypasses.
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, product.retailerId);
+		}
 
 		const requested = new Set(categoryIds);
 		if (requested.size !== categoryIds.length) {
@@ -804,8 +813,9 @@ export const setHidden = mutation({
 		);
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, category.retailerId);
+		}
 		if ((category.hidden ?? false) === hidden) return; // idempotent
 
 		await ctx.db.patch(categoryId, { hidden, updatedAt: Date.now() });

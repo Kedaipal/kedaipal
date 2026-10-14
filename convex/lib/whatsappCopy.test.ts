@@ -472,6 +472,26 @@ describe("collection service (86eyg0n8e) — confirm wording", () => {
 	});
 });
 
+describe("Markdown links in notes reach WhatsApp as plain text (z8r3fdn2uj)", () => {
+	test("a product pickup note", () => {
+		const out = renderPickupNotes("en", [
+			"Use the [side door](https://maps.app.goo.gl/side).",
+		]);
+		expect(out).toContain("• Use the side door: https://maps.app.goo.gl/side.");
+		expect(out).not.toContain("](");
+	});
+
+	test("a pickup point's own note", () => {
+		const out = renderPickupBlock("en", {
+			label: "Main shop",
+			address: "12 Jalan Mawar, Petaling Jaya",
+			notes: "[Parking guide](https://x.co/park)",
+		});
+		expect(out).toContain("Parking guide: https://x.co/park");
+		expect(out).not.toContain("](");
+	});
+});
+
 describe("renderPickupNotes (z8r3fdff97)", () => {
 	test("says nothing when there is nothing to say", () => {
 		// Callers concatenate unconditionally — renderPickupBlock's posture.

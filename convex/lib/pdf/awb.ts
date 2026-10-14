@@ -96,18 +96,27 @@ export type AwbLabelData = {
 // --- Eligibility -----------------------------------------------------------
 
 /** Why an order can't be given a despatch label. */
-export type AwbSkipReason = "cancelled" | "no_address" | "not_found";
+export type AwbSkipReason =
+	| "cancelled"
+	| "no_address"
+	| "not_found"
+	/** Waiting on credits (Credits T3.1) — the seller can't see this order, so
+	 * they certainly can't print its address on a parcel. Decided by the gate
+	 * at the call site, not by `labelSkipReason`, which is pure and knows
+	 * nothing about a store's balance. */
+	| "credit_gated";
 
 export const AWB_SKIP_REASONS: readonly AwbSkipReason[] = [
 	"cancelled",
 	"no_address",
 	"not_found",
+	"credit_gated",
 ];
 
 export type AwbSkipCounts = Record<AwbSkipReason, number>;
 
 export function emptySkipCounts(): AwbSkipCounts {
-	return { cancelled: 0, no_address: 0, not_found: 0 };
+	return { cancelled: 0, no_address: 0, not_found: 0, credit_gated: 0 };
 }
 
 type EligibilityOrder = {

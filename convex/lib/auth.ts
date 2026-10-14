@@ -203,12 +203,14 @@ const AREA_LABEL: Record<PermissionArea, string> = {
 	products: "products",
 	customers: "customers",
 	bookings: "bookings",
+	vouchers: "vouchers",
 	insights: "business insights",
 	exports: "data export",
 	store_settings: "store settings",
 	fulfilment: "fulfilment settings",
 	payments_settings: "payment details",
 	integrations: "integrations",
+	credits: "credits",
 	billing: "billing",
 };
 

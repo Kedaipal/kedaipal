@@ -6,7 +6,7 @@ import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { ClaimSendOutcome } from "../../../convex/lib/orderClaims";
 import { MASK_PII } from "../../lib/analytics-privacy";
-import { formatClaimCountdown } from "../../lib/countdown";
+import { formatTimeLeft } from "../../lib/countdown";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 import {
@@ -22,7 +22,8 @@ export type LiveClaim = {
 	expiresAt: number;
 	windowMinutes: number;
 	currency: string;
-	itemsTotal: number;
+	/** Net of the voucher — see `ClaimListRow.total`. */
+	total: number;
 	lines: Array<{
 		name: string;
 		variantLabel: string | undefined;
@@ -110,7 +111,7 @@ export function WaitingOnBuyerScreen({
 						}`}
 					>
 						<Clock className="size-3.5" aria-hidden />
-						{stillOpen ? formatClaimCountdown(remaining) : "Expired"}
+						{stillOpen ? formatTimeLeft(remaining) : "Expired"}
 					</span>
 				</div>
 
@@ -163,7 +164,7 @@ export function WaitingOnBuyerScreen({
 						Locked total
 					</span>
 					<span className="text-lg font-bold tabular-nums">
-						{formatPrice(claim.itemsTotal, claim.currency)}
+						{formatPrice(claim.total, claim.currency)}
 					</span>
 				</div>
 

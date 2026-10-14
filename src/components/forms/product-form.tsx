@@ -10,8 +10,10 @@ import {
 	EyeOff,
 	Info,
 	Layers3,
+	MessageSquareText,
 	PackageCheck,
 	Save,
+	Scissors,
 	Store,
 } from "lucide-react";
 import {
@@ -24,6 +26,11 @@ import {
 } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import type {
+	BuyerQuestion,
+	BuyerQuestionInput,
+} from "../../../convex/lib/buyerQuestions";
+import type { CreditLockErrorData } from "../../../convex/lib/credits";
 import {
 	MAX_NOTICE_DAYS,
 	MAX_PREP_MINUTES,
@@ -53,6 +60,7 @@ import {
 } from "../../lib/country-setup-copy";
 import {
 	convexErrorMessage,
+	creditLockErrorOf,
 	currencySymbol,
 	parsePriceInput,
 } from "../../lib/format";
@@ -69,12 +77,20 @@ import {
 	type ProductSpotlightKey,
 	SPOTLIGHT_ANCHOR,
 } from "../../lib/spotlight";
-import { cartesian } from "../../lib/variant";
+import { cartesian, variantLabel } from "../../lib/variant";
+import { CreditLockCta, SaveLockNote } from "../credits/credit-lock-cta";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Markdown } from "../ui/markdown";
 import { Textarea } from "../ui/textarea";
 import { ToggleSwitch } from "../ui/toggle-switch";
+import {
+	type BuyerQuestionsDraft,
+	BuyerQuestionsEditor,
+	questionsDraftFrom,
+	questionsDraftValid,
+	questionsSubmitValue,
+} from "./buyer-questions-card";
 
 /**
  * Prep-time shortcuts. The field is MINUTES because that is what the floor
@@ -93,6 +109,7 @@ export const PREP_PRESETS = [
 	{ minutes: 240, label: "4 hours" },
 ] as const;
 
+import { NOTE_LINK_HINT } from "../../lib/linkify";
 import { CategoryPicker } from "./category-picker";
 import {
 	EMPTY_EVENT_DRAFT,
@@ -107,6 +124,15 @@ import { submitThenFocusError } from "./focus-error";
 import { useAppForm } from "./form";
 import { PackageDayCounting, type StoreSchedule } from "./package-day-counting";
 import { type ProductImage, ProductImagesField } from "./product-images-field";
+import {
+	EMPTY_PROMO_DRAFT,
+	type PromoDraft,
+	PromoFields,
+	type PromoRow,
+	type PromoSubmitValue,
+	promoDraftFrom,
+	promoSubmitValue,
+} from "./promo-fields";
 import {
 	type CustomLineDraft,
 	type LiveVariantStock,
@@ -156,10 +182,16 @@ export interface ProductFormSubmitValues {
 	// Minimum order quantity (summed across variants). undefined = no minimum;
 	// the caller sends 0 to clear on edit. See convex/lib/minOrderRules.ts.
 	minQuantity?: number;
+	// Buyer questions (`z8r3fdkjek`). Always an array — `[]` clears on edit.
+	buyerQuestions: BuyerQuestionInput[];
 	// Fixed event date (`z8r3fdff9u`). `null` CLEARS a stored event (the toggle
 	// turned off); an object sets/replaces it. Never `undefined` from this form
 	// — that spelling means "no change", which would strand a cleared event.
 	event: EventSubmitValue;
+	/** Promotion config (z8r3fdcw72). `null` CLEARS a stored promotion —
+	 * `undefined` would mean "no change" and strand one the seller just
+	 * switched off, the same trap `event` documents above. */
+	promo: PromoSubmitValue;
 	// FULL category membership (the picker's staged selection) — the caller
 	// diffs it via categories.setProductCategories. See docs/product-categories.md.
 	categoryIds: Id<"categories">[];
@@ -169,6 +201,8 @@ export interface ProductFormSubmitValues {
 		optionValues: string[];
 		sku?: string;
 		price: number;
+		/** Sale price in minor units (z8r3fdcw72); absent = not on promotion. */
+		promoPrice?: number;
 		onHand: number;
 		active: boolean;
 		blockWhenOutOfStock: boolean;
@@ -234,6 +268,11 @@ export type ProductFormDraft = {
 	/** Event block, as typed. Optional so pre-event draft literals (tests,
 	 * stored wizard handoffs) stay valid. */
 	event?: EventDraft;
+	/** Promotion block, as typed. Optional for the same reason `event` is:
+	 * draft literals written before promotions must stay valid. */
+	promoDraft?: PromoDraft;
+	/** Buyer questions, as typed (`z8r3fdkjek`). Optional for the same reason. */
+	buyerQuestions?: BuyerQuestionsDraft;
 };
 
 interface ProductFormProps {
@@ -245,6 +284,13 @@ interface ProductFormProps {
 	/** Client mirror of the `events` plan gate (`z8r3fdff9u`): when true the
 	 * "This is an event" toggle disables with the Pro hint. Server enforces it. */
 	eventsLocked: boolean;
+	/** Client mirror of the `promo` plan gate (z8r3fdcw72): when true the
+	 * "Run a promotion" toggle disables with the Pro hint. Server enforces it,
+	 * and CLEARING is never gated so a downgraded seller is not trapped. */
+	promoLocked: boolean;
+	/** The store's credit balance, for the "this sale can take more orders
+	 * than you have credits" nudge. Undefined = don't show it. */
+	creditBalance?: number;
 	/** Live (non-cancelled) RSVPs on this product — locks the date + the toggle
 	 * once > 0, matching the server's refusal. Undefined on create. */
 	eventRsvpCount?: number;
@@ -285,6 +331,14 @@ interface ProductFormProps {
 		 * which must survive a round-trip with half-typed values intact. Wins
 		 * over `event` when both are present. */
 		eventDraft?: EventDraft;
+		/** The Promotion card's in-progress draft, so a wizard handoff and a
+		 * round-trip back never lose a half-typed sale (z8r3fdcw72). */
+		promoDraft?: PromoDraft;
+		/** Stored buyer questions (`z8r3fdkjek`). */
+		buyerQuestions?: BuyerQuestion[];
+		/** Questions as a draft — the wizard handoff's spelling; wins over
+		 * `buyerQuestions` (the `eventDraft` rule). */
+		buyerQuestionsDraft?: BuyerQuestionsDraft;
 		categoryIds?: Id<"categories">[];
 		// Deprecated product-level defaults — used only to seed per-variant flags
 		// for legacy products whose variants predate the per-variant columns.
@@ -292,11 +346,21 @@ interface ProductFormProps {
 		requiresProof?: boolean;
 		imageStorageIds?: string[];
 		imageUrls?: string[];
+		promo?: {
+			label?: string;
+			startsAt?: number;
+			endsAt?: number;
+			unitCap?: number;
+			maxPerOrder?: number;
+			payWithinMinutes?: number;
+		};
 		options?: { name: string; values: string[] }[];
 		variants?: {
 			optionValues: string[];
 			sku?: string;
 			price: number;
+			/** Stored sale price in minor units (z8r3fdcw72). */
+			promoPrice?: number;
 			onHand: number;
 			active?: boolean;
 			blockWhenOutOfStock?: boolean;
@@ -337,6 +401,14 @@ interface ProductFormProps {
 	 * competing with the primary save.
 	 */
 	stickyAction?: ReactNode;
+	/**
+	 * Set while this seller can't save products right now — the store is
+	 * view-only, out of credits (Credits T3), or they're a teammate with view
+	 * on products. Save greys out wearing `label` ("Save changes — out of
+	 * credits") and `reason` sits just above it. The fields stay editable, so
+	 * an edit already under way survives until saving is possible again.
+	 */
+	saveLock?: { reason: string; label: string };
 	/**
 	 * "create" keeps the readiness checklist even when `initialValues` are
 	 * present (the wizard handoff seeds a CREATE, not an edit). Defaults by
@@ -384,6 +456,10 @@ function initialEditorState(
 				optionValues: vr.optionValues,
 				sku: vr.sku ?? "",
 				price: (vr.price / 100).toFixed(2),
+				promoPrice:
+					vr.promoPrice !== undefined && vr.promoPrice > 0
+						? (vr.promoPrice / 100).toFixed(2)
+						: "",
 				stock: String(vr.onHand),
 				active: vr.active ?? true,
 				blockWhenOutOfStock: vr.blockWhenOutOfStock ?? blockFallback,
@@ -509,6 +585,8 @@ export function buildSubmitVariants(
 		// silently truncating) anything non-numeric — see src/lib/format.ts.
 		const priceNum = parsePriceInput(row.price.trim());
 		const priceOk = priceNum !== null;
+		const promoRaw = (row.promoPrice ?? "").trim();
+		const promoNum = promoRaw.length > 0 ? parsePriceInput(promoRaw) : null;
 		const stockOk = INT_RE.test(row.stock.trim());
 		// Parcel weight (86eyeea1n): optional whole grams. Blank = 0 = unset —
 		// sent explicitly so clearing the field really clears the stored weight
@@ -542,6 +620,23 @@ export function buildSubmitVariants(
 							: "Not a valid price — numbers only (e.g. 120 or 120.50).",
 				});
 			}
+			// A sale price has to undercut its OWN line's list price — the same
+			// rule `assertValidPromoPrice` enforces at the mutation, mirrored
+			// here so the seller is told before the round trip.
+			if (
+				promoRaw.length > 0 &&
+				(promoNum === null || !priceOk || promoNum <= 0 || promoNum >= priceNum)
+			) {
+				issues.push({
+					where: "row",
+					index,
+					field: "promoPrice",
+					message:
+						promoNum === null
+							? "Not a valid sale price — numbers only (e.g. 31.50)."
+							: "A sale price has to be below this line's normal price.",
+				});
+			}
 			if (row.blockWhenOutOfStock && !stockOk) {
 				issues.push({
 					where: "row",
@@ -555,6 +650,10 @@ export function buildSubmitVariants(
 			optionValues: row.optionValues,
 			sku: row.sku.trim() || undefined,
 			price: priceOk ? Math.round(priceNum * 100) : 0,
+			promoPrice:
+				promoNum !== null && priceOk && promoNum > 0 && promoNum < priceNum
+					? Math.round(promoNum * 100)
+					: undefined,
 			onHand: stockOk ? Number.parseInt(row.stock, 10) : 0,
 			active: row.active,
 			blockWhenOutOfStock: row.blockWhenOutOfStock,
@@ -810,6 +909,8 @@ export function ProductForm({
 	retailerId,
 	categoriesLocked,
 	eventsLocked,
+	promoLocked,
+	creditBalance,
 	eventRsvpCount,
 	initialValues,
 	currency,
@@ -824,6 +925,7 @@ export function ProductForm({
 	draftRef,
 	initialEditor,
 	spotlight,
+	saveLock,
 }: ProductFormProps) {
 	// Editing an existing product vs creating a new one — the edit page leads
 	// with the summary strip; create keeps the readiness checklist. The wizard
@@ -852,6 +954,11 @@ export function ProductForm({
 	);
 	const [uploading, setUploading] = useState(false);
 	const [serverError, setServerError] = useState<string | null>(null);
+	// The credit lock's typed refusal, when that's what the save hit — its way
+	// back renders under the sentence (Credits T3).
+	const [serverLock, setServerLock] = useState<CreditLockErrorData | null>(
+		null,
+	);
 	const [showPreview, setShowPreview] = useState(false);
 	const [hidden, setHidden] = useState(initialValues?.hidden ?? false);
 	// Kind is IMMUTABLE in the form (86eyj70z1: set at create via the wizard;
@@ -917,6 +1024,8 @@ export function ProductForm({
 		_id: r._id as string,
 		label: r.label,
 		isActive: r.isActive,
+		// Drives the picker's grouping (z8r3fdm32x).
+		eventsOnly: r.eventsOnly,
 		// Carried so the picker can say that an event never charges it — see
 		// buildEventVenueSnapshot (z8r3fdjgvd).
 		fee: r.fee,
@@ -926,6 +1035,18 @@ export function ProductForm({
 			initialValues?.eventDraft ??
 			eventDraftFrom(initialValues?.event) ??
 			EMPTY_EVENT_DRAFT,
+	);
+	const [promoDraft, setPromoDraft] = useState<PromoDraft>(
+		() =>
+			initialValues?.promoDraft ??
+			promoDraftFrom(initialValues?.promo) ??
+			EMPTY_PROMO_DRAFT,
+	);
+	const [questionsRevealed, setQuestionsRevealed] = useState(false);
+	const [questionsDraft, setQuestionsDraft] = useState<BuyerQuestionsDraft>(
+		() =>
+			initialValues?.buyerQuestionsDraft ??
+			questionsDraftFrom(initialValues?.buyerQuestions),
 	);
 	const [categoryIds, setCategoryIds] = useState<Id<"categories">[]>(
 		initialValues?.categoryIds ?? [],
@@ -941,6 +1062,29 @@ export function ProductForm({
 		setEditorIssues([]);
 	}
 
+	// The Promotion card edits sale prices on the SAME rows the pricing grid
+	// owns — one substrate, two writers — so a line added, renamed or removed
+	// in the grid can never drift from the promotion. Rows are keyed by their
+	// option label, which is what the grid itself keys identity on.
+	const promoRows: PromoRow[] = editor.rows.map((row, index) => ({
+		key: String(index),
+		label: variantLabel(row.optionValues) || "This product",
+		price: row.price,
+		promoPrice: row.promoPrice ?? "",
+	}));
+	/** ONE state write for however many rows changed. Per-row writes in a loop
+	 * each read `editor` from this render's closure, so N of them collapse to
+	 * the last one — "30% off" discounted only the final choice. */
+	function setPromoPrices(next: Record<string, string>) {
+		setEditor({
+			...editor,
+			rows: editor.rows.map((row, i) => {
+				const value = next[String(i)];
+				return value === undefined ? row : { ...row, promoPrice: value };
+			}),
+		});
+	}
+
 	const form = useAppForm({
 		defaultValues: {
 			name: initialValues?.name ?? "",
@@ -949,6 +1093,7 @@ export function ProductForm({
 		validators: { onChange: productDetailsSchema },
 		onSubmit: async ({ value }) => {
 			setServerError(null);
+			setServerLock(null);
 			const parsed = productDetailsSchema.parse(value);
 
 			// --- Client-side validation of options + the variant grid ----------
@@ -1003,9 +1148,13 @@ export function ProductForm({
 				!eventDraftValid(eventDraft, {
 					allowPastDate: (eventRsvpCount ?? 0) > 0,
 					requireVenue: (eventVenues?.length ?? 0) > 1,
+					noVenue: eventVenues !== undefined && eventVenues.length === 0,
 				})
 			)
 				return;
+			// Questions are validated by the server's own sanitizer; the card
+			// shows its message inline. Never on a booking (always sends []).
+			if (!isBooking && !questionsDraftValid(questionsDraft)) return;
 			if (
 				isBooking &&
 				(!capacityValid || !depositValid || !packageValid || !weekendValid)
@@ -1073,6 +1222,10 @@ export function ProductForm({
 					// `null` when off — the spelling that CLEARS. A booking listing
 					// never renders the block, so it always sends null.
 					event: isBooking ? null : eventSubmitValue(eventDraft),
+					promo: promoSubmitValue(promoDraft, Date.now(), {
+						flashAllowed: !isBooking && !eventDraft.on,
+					}),
+					buyerQuestions: isBooking ? [] : questionsSubmitValue(questionsDraft),
 					categoryIds,
 					imageStorageIds: images.map((i) => i.id),
 					// Derived from the SAME reconciled pair as `variants` above, so the
@@ -1082,6 +1235,7 @@ export function ProductForm({
 				});
 			} catch (err) {
 				setServerError(convexErrorMessage(err));
+				setServerLock(creditLockErrorOf(err));
 			}
 		},
 	});
@@ -1113,6 +1267,8 @@ export function ProductForm({
 			prepMinutes: prepDraft,
 			pickupNote: pickupNoteDraft,
 			event: eventDraft,
+			promoDraft,
+			buyerQuestions: questionsDraft,
 		});
 		return () => {
 			draftRef.current = null;
@@ -1120,6 +1276,9 @@ export function ProductForm({
 	});
 
 	function handleSubmit(e: FormEvent) {
+		// From the first save attempt on, every question row shows its
+		// problem — before it, only rows the seller has touched do.
+		setQuestionsRevealed(true);
 		submitThenFocusError(form, e);
 	}
 
@@ -1603,6 +1762,7 @@ export function ProductForm({
 						weightMode={weightMode}
 						liveStock={liveStock}
 						productName={liveStock ? form.state.values.name : undefined}
+						stockLocked={saveLock !== undefined}
 					/>
 
 					<Link
@@ -1615,6 +1775,39 @@ export function ProductForm({
 					</Link>
 				</ProductStepCard>
 			)}
+
+			{/* Promotion (z8r3fdcw72). Directly under pricing, because it is a
+			    PRICE decision — the list price above, what it sells for right
+			    now here — and above Event/Order rules, which are about how the
+			    product may be ordered rather than what it costs. A booking's
+			    nightly rate can go on promotion, but the flash extras can't
+			    (capacity already caps a stay), which the block says rather than
+			    hiding the fields. */}
+			<ProductStepCard
+				id={SPOTLIGHT_ANCHOR.promo.anchor}
+				highlight={ringFor(SPOTLIGHT_ANCHOR.promo.anchor)}
+				icon={<Scissors className="size-5 -scale-x-100" />}
+				kicker="Selling"
+				title="Promotion"
+				description="Run a sale price for a while — it snaps back by itself."
+			>
+				<PromoFields
+					draft={promoDraft}
+					onChange={setPromoDraft}
+					rows={promoRows}
+					onPromoPrices={setPromoPrices}
+					currency={currency}
+					locked={promoLocked}
+					flashAllowed={!isBooking && !eventDraft.on}
+					flashBlockedReason={
+						isBooking
+							? "Flash-sale extras don't apply to a booking listing — capacity already caps it. The sale price still does."
+							: "Flash-sale extras don't apply to an event — seats already cap it. The sale price still does."
+					}
+					creditBalance={creditBalance}
+					now={Date.now()}
+				/>
+			</ProductStepCard>
 
 			{/* Event mode (`z8r3fdff9u`). Its OWN card, above Order rules, because
 			    it isn't a limit on how a buyer may order — it changes what the
@@ -1635,6 +1828,26 @@ export function ProductForm({
 						locked={eventsLocked}
 						rsvpCount={eventRsvpCount}
 						venues={eventVenues}
+					/>
+				</ProductStepCard>
+			)}
+
+			{/* Buyer questions (`z8r3fdkjek`) — what the buyer is ASKED at
+			    checkout. After Event (an RSVP's "what are you bringing?" reads as
+			    part of the event) and before Order rules, because it isn't a
+			    limit on how they order. Never on a booking listing: its checkout
+			    has no line to hang answers on. */}
+			{isBooking ? null : (
+				<ProductStepCard
+					icon={<MessageSquareText className="size-5" />}
+					kicker="Selling"
+					title="Ask the buyer"
+					description="Up to 3 questions answered at checkout. Optional."
+				>
+					<BuyerQuestionsEditor
+						draft={questionsDraft}
+						onChange={setQuestionsDraft}
+						revealAll={questionsRevealed}
 					/>
 				</ProductStepCard>
 			)}
@@ -1897,9 +2110,9 @@ export function ProductForm({
 							<p className="text-xs leading-relaxed text-muted-foreground">
 								One line collecting buyers see on the product page, at checkout
 								and on their order page — the page their WhatsApp confirmation
-								links to. It&apos;s copied onto each order as it&apos;s placed,
-								so editing it later never rewrites what earlier buyers were
-								told.
+								links to. {NOTE_LINK_HINT} It&apos;s copied onto each order as
+								it&apos;s placed, so editing it later never rewrites what
+								earlier buyers were told.
 							</p>
 						) : null}
 						{!pickupNoteValid ? (
@@ -1932,13 +2145,16 @@ export function ProductForm({
 			</ProductStepCard>
 
 			{serverError ? (
-				<p
+				<div
 					data-form-error
 					role="alert"
 					className="rounded-xl border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive"
 				>
-					{serverError}
-				</p>
+					<p>{serverError}</p>
+					<CreditLockCta lock={serverLock} />
+				</div>
+			) : saveLock ? (
+				<SaveLockNote reason={saveLock.reason} />
 			) : null}
 
 			{/* Sticky action bar — on a long form, save must never scroll away.
@@ -1955,11 +2171,20 @@ export function ProductForm({
 						{stickyAction}
 						<Button
 							type="submit"
-							disabled={!canSubmit || isSubmitting || uploading}
+							disabled={
+								!canSubmit ||
+								isSubmitting ||
+								uploading ||
+								saveLock !== undefined
+							}
 							className="h-12 flex-1 shadow-lg shadow-accent/20 lg:shadow-none"
 						>
 							<Save className="size-4" />
-							{isSubmitting ? "Saving…" : submitLabel}
+							{isSubmitting
+								? "Saving…"
+								: saveLock
+									? `${submitLabel} — ${saveLock.label}`
+									: submitLabel}
 						</Button>
 					</div>
 				)}

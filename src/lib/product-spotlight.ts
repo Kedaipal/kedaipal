@@ -55,4 +55,14 @@ export const PRODUCT_SPOTLIGHT: Record<
 		// note announced.
 		applies: (product) => effectiveKind(product.kind) !== "booking",
 	},
+	promo: {
+		title: "A promotion runs on each product",
+		body: "Open a product below and we'll take you straight to its Promotion card, under the price, where the sale price, its dates and the flash-sale limits live.",
+		empty:
+			"You don't have a product yet. Create one and its Promotion card sits right under the price.",
+		// Every kind: the card renders on all of them. A booking or an event
+		// shows the flash-sale extras' place with the reason they don't apply,
+		// and the sale price itself still works there.
+		applies: () => true,
+	},
 };

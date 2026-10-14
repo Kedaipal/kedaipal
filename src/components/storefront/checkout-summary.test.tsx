@@ -45,6 +45,7 @@ function makeCart(items: CartItem[]): UseCart {
 		updateQuantity: vi.fn(),
 		removeItem: vi.fn(),
 		clearCart: vi.fn(),
+		setAnswer: vi.fn(),
 		quantityForProduct: vi.fn(() => 0),
 	} as unknown as UseCart;
 }
@@ -441,5 +442,102 @@ describe("checkout receipt — long names stay readable (z8r3fdhpaj)", () => {
 		// nothing, so the class is the contract.
 		const row = container.querySelector("li button");
 		expect(row?.className).toContain("py-2.5");
+	});
+});
+
+/**
+ * The voucher row (`z8r3fdr617`) — the ONE subtractive line the receipt has
+ * ever had. It must read as a credit, not join the charges above it, and the
+ * printed TOTAL must be net of it: the receipt and the mobile bottom bar share
+ * a screen at desktop widths, so a discount that moved one and not the other
+ * is the exact drift this card's shared helpers exist to prevent.
+ */
+describe("CheckoutTotals — the voucher line", () => {
+	it("prints the discount SIGNED and takes it off the total", () => {
+		render(
+			<CheckoutTotals
+				subtotal={5000}
+				currency="MYR"
+				pickupFee={0}
+				voucherDiscount={1000}
+				voucherCode="KP-7F3K-Q2WM"
+			/>,
+		);
+		expect(screen.getByText("−10.00")).toBeTruthy();
+		expect(screen.getByText(/Voucher · KP-7F3K-Q2WM/)).toBeTruthy();
+		expect(screen.getByText(/RM.?40\.00/)).toBeTruthy();
+	});
+
+	it("never eats a fee — the courier is still paid", () => {
+		// A RM50 code on a RM30 basket with RM8 delivery: the goods go to zero,
+		// the delivery stands. Mirrors the server's clamp.
+		render(
+			<CheckoutTotals
+				subtotal={3000}
+				currency="MYR"
+				pickupFee={0}
+				quote={{ kind: "fee", fee: 800 } as CheckoutQuoteView}
+				voucherDiscount={3000}
+			/>,
+		);
+		expect(screen.getByText(/RM.?8\.00/)).toBeTruthy();
+	});
+
+	it("renders no voucher line when there is none", () => {
+		render(<CheckoutTotals subtotal={5000} currency="MYR" pickupFee={0} />);
+		expect(screen.queryByText(/Voucher/)).toBeNull();
+		expect(screen.getByText(/RM.?50\.00/)).toBeTruthy();
+	});
+
+	it("hosts the field between the charges and the TOTAL rule", () => {
+		// Applying a voucher must visibly move the number BELOW the control —
+		// which is why the slot sits here and not under the total.
+		render(
+			<CheckoutTotals
+				subtotal={5000}
+				currency="MYR"
+				pickupFee={0}
+				voucherField={<button type="button">Have a voucher?</button>}
+			/>,
+		);
+		expect(
+			screen.getByRole("button", { name: "Have a voucher?" }),
+		).toBeTruthy();
+	});
+});
+
+describe("CheckoutTotals — the voucher line is an ITEM-style disclosure", () => {
+	it("hides the remove until the line is tapped, like a product line", () => {
+		render(
+			<CheckoutTotals
+				subtotal={5000}
+				currency="MYR"
+				pickupFee={0}
+				voucherDiscount={1000}
+				voucherCode="KP-7F3K-Q2WM"
+				voucherField={<button type="button">Remove voucher</button>}
+			/>,
+		);
+		// Collapsed: the line states the discount and nothing else competes.
+		expect(screen.queryByRole("button", { name: "Remove voucher" })).toBeNull();
+		const line = screen.getByRole("button", { name: /Voucher · KP-7F3K-Q2WM/ });
+		expect(line.getAttribute("aria-expanded")).toBe("false");
+
+		fireEvent.click(line);
+		expect(line.getAttribute("aria-expanded")).toBe("true");
+		expect(screen.getByRole("button", { name: "Remove voucher" })).toBeTruthy();
+	});
+
+	it("with no voucher the slot renders the open control directly", () => {
+		// Un-applied there is no line to tap, so the control is simply there.
+		render(
+			<CheckoutTotals
+				subtotal={5000}
+				currency="MYR"
+				pickupFee={0}
+				voucherField={<button type="button">+ Voucher code</button>}
+			/>,
+		);
+		expect(screen.getByRole("button", { name: "+ Voucher code" })).toBeTruthy();
 	});
 });

@@ -54,12 +54,13 @@ whichever side catches it: *"Reserved by Kedaipal — pick another slug"*.
 
 | Group | Examples | Source of truth |
 | --- | --- | --- |
-| Live routes | `app`, `track`, `claim`, `pricing`, `privacy`, `terms`, `cost` | derived from `src/routes/` on disk |
+| Live routes | `app`, `track`, `claim`, `pricing`, `privacy`, `terms`, `cost`, `stores` | derived from `src/routes/` on disk |
 | `public/` folders | `img`, `guides`, `poster`, `video` | derived from `public/` on disk |
 | Platform | `api`, `assets`, `admin`, `webhooks`, `status`, `www` | curated |
 | Auth aliases | `login`, `signup`, `register`, `reset-password`, `account` | curated |
-| Marketing pages we may add | `help`, `blog`, `changelog`, `partners`, `directory` | curated |
-| Dashboard / buyer nouns | `orders`, `products`, `billing`, `checkout`, `pay`, `invoice` | curated |
+| Marketing pages we may add | `help`, `blog`, `changelog`, `partners`, `directory`, `enterprise`, `advertise` | curated |
+| Dashboard / buyer nouns | `orders`, `products`, `billing`, `checkout`, `pay`, `invoice`, `credits`, `top-up`, `rsvp` | curated |
+| Marketplace sub-pages | `events`, `categories`, `featured`, `sponsored`, `founding`, `near-me` | curated — the `/stores` directory's next shelves (z8r3fdkmyp) |
 | Generic tenant words | `store`, `shop`, `seller`, `vendor`, `official`, `verified` | curated |
 | Environments + bug literals | `demo`, `staging`, `sandbox`, `null`, `undefined` | curated |
 | Brand, **anywhere** in the text | `kedaipal-support`, `official-kedaipal`, `kedai-pal`, `Kedai Pal` | `containsBrand` — inside one token, or across separators when the match ends on a token boundary |
@@ -92,7 +93,9 @@ ordinary Malay `kedai` is untouched. Copy is one constant per rule
 `assertValidCategorySlug` skips the list); and existing stores — the check runs
 on the **new** slug at create/rename only, so a store already on a word that
 later becomes reserved keeps working. No dev or prod store sat on one when the
-list was rebuilt (Sep 2026).
+list was rebuilt (Sep 2026), and prod was re-checked (stores + slug history,
+read-only) before the marketplace round added `stores` and the 17 names above
+(1 Oct 2026, z8r3fdkmyp) — 41 stores, zero collisions.
 
 To reserve a new word: add it to the right group in `reservedSlugs.ts`. A new
 route needs no thought at all — the test names the missing entry.

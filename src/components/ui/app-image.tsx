@@ -27,6 +27,9 @@ import { Skeleton } from "./skeleton";
 
 type ImageStatus = "loading" | "loaded" | "error";
 
+/** See `FRAME_WRAPPER` below for what each level is for. */
+export type ImageFrame = "hairline" | "raised";
+
 /**
  * How many times a failed load is retried before the error state becomes
  * terminal. Bounded on purpose: the original no-retry rule existed so a dead
@@ -121,6 +124,13 @@ export interface AppImageProps {
 	 * is the classic "percentage width in an indefinite container" CSS trap.
 	 */
 	fill?: boolean;
+	/**
+	 * Draw a photo edge (and, at `raised`, a soft lift). Opt-in by MEANING, not
+	 * a default: a full-bleed storefront cover, a brand-mark SVG and the
+	 * founding emblem all read worse with a frame around them. See
+	 * `FRAME_WRAPPER`.
+	 */
+	frame?: ImageFrame;
 }
 
 /** Local upload previews (`URL.createObjectURL`) and inline data URIs resolve
@@ -129,6 +139,49 @@ export interface AppImageProps {
 function isLocalPreviewUrl(src: string): boolean {
 	return src.startsWith("blob:") || src.startsWith("data:");
 }
+
+/**
+ * Photo-edge treatments (`frame`), z8r3fdm36y.
+ *
+ * A product shot on a white studio background has no edge of its own: against
+ * `bg-card` or `bg-background` the tile reads as a caption with nothing above
+ * it, and on a store home that is most of the page. The store logo already
+ * wore a hairline (`storefront-header.tsx`) while the product grid beside it
+ * did not, so the inconsistency was visible on one screen.
+ *
+ * Two levels, because the surfaces genuinely differ — the shadow is NOT
+ * decoration applied evenly:
+ *
+ * - `hairline` — the photo sits inside something that already owns the
+ *   elevation (a product card, a thumbnail button, a category tile). A second
+ *   shadow there turns a 16-tile grid into mush, so this is the edge only.
+ * - `raised` — the photo floats straight on the page (the product-page hero,
+ *   the detail-sheet gallery), so it carries its own lift. Reuses the house
+ *   soft-lift shadow already in `checkout-summary.tsx`, rather than minting a
+ *   second shadow vocabulary.
+ *
+ * The hairline is drawn as an **overlay** (see the render below), never as a
+ * `border` or an outward `ring` on the wrapper. Both of those fail at the real
+ * call sites: the grid tile's AppImage is `absolute inset-0` inside a parent
+ * with `overflow-hidden`, which clips an outward ring away entirely, and an
+ * `inset` ring is painted beneath the element's own children — so the `<img>`
+ * covers it. An overlay after the image in DOM order paints above the photo,
+ * is never clipped, and costs no layout shift.
+ *
+ * `ring-black/10 dark:ring-white/15` and not `border-border`: the edge has to
+ * read against an ARBITRARY photo, and a fixed token hairline disappears
+ * against a photo of its own lightness. This is the same alpha-neutral idiom
+ * the phone plate's flags already use (`my-phone-input.tsx`).
+ */
+const FRAME_HAIRLINE = "ring-1 ring-inset ring-black/10 dark:ring-white/15";
+
+const FRAME_WRAPPER: Record<ImageFrame, string> = {
+	hairline: "",
+	// Dark mode drops the shadow: a navy glow under a photo on a near-black
+	// surface is invisible at best and a grey smudge at worst — the hairline is
+	// what does the work there.
+	raised: "shadow-[0_2px_12px_rgba(15,23,42,0.08)] dark:shadow-none",
+};
 
 function DefaultFallback({ alt }: { alt: string }) {
 	const decorative = alt === "";
@@ -159,6 +212,7 @@ export function AppImage({
 	fill = true,
 	sizes,
 	sensitive = false,
+	frame,
 }: AppImageProps) {
 	const hasSrc = typeof src === "string" && src.length > 0;
 	const isLocalPreview = hasSrc && isLocalPreviewUrl(src);
@@ -236,6 +290,7 @@ export function AppImage({
 		"relative block overflow-hidden",
 		aspect,
 		rounded,
+		frame ? FRAME_WRAPPER[frame] : undefined,
 		className,
 	);
 
@@ -243,6 +298,16 @@ export function AppImage({
 		return (
 			<span className={wrapperClassName}>
 				{fallback ?? <DefaultFallback alt={alt} />}
+				{/* The photo edge, painted ABOVE the image — see `FRAME_HAIRLINE`. */}
+				{frame ? (
+					<span
+						aria-hidden
+						className={cn(
+							"pointer-events-none absolute inset-0 rounded-[inherit]",
+							FRAME_HAIRLINE,
+						)}
+					/>
+				) : null}
 			</span>
 		);
 	}
@@ -300,6 +365,16 @@ export function AppImage({
 				onLoad={() => setStatus("loaded")}
 				onError={handleError}
 			/>
+			{/* The photo edge, painted ABOVE the image — see `FRAME_HAIRLINE`. */}
+			{frame ? (
+				<span
+					aria-hidden
+					className={cn(
+						"pointer-events-none absolute inset-0 rounded-[inherit]",
+						FRAME_HAIRLINE,
+					)}
+				/>
+			) : null}
 		</span>
 	);
 }

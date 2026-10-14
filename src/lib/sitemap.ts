@@ -34,6 +34,9 @@ export function buildSitemapXml({
 	const urls = [
 		`  <url>\n    <loc>${siteUrl}/</loc>\n    <changefreq>weekly</changefreq>\n    <priority>1.0</priority>\n  </url>`,
 		`  <url>\n    <loc>${siteUrl}/pricing</loc>\n    <changefreq>weekly</changefreq>\n    <priority>0.9</priority>\n  </url>`,
+		// Marketplace home (z8r3fdkmyp) — the buyer-facing store directory. Daily:
+		// its content is the store list, which moves as often as the stores do.
+		`  <url>\n    <loc>${siteUrl}/stores</loc>\n    <changefreq>daily</changefreq>\n    <priority>0.9</priority>\n  </url>`,
 		`  <url>\n    <loc>${siteUrl}/cost</loc>\n    <changefreq>monthly</changefreq>\n    <priority>0.7</priority>\n  </url>`,
 		// Legal pack (86eyn25gu): public policies should be crawlable — the
 		// Privacy Policy is linked from every checkout and WhatsApp notice.

@@ -41,7 +41,7 @@ import { components } from "../_generated/api";
  *   one person can be made to receive, which a store-wide limit alone doesn't.
  *   Resend spends both too — its 60s cooldown throttles the rate but caps no
  *   total, so on its own it still allowed ~60 mails/hour at one address.
- *   Sized well above a real store: Scale is owner + 5, and a generous
+ *   Sized well above a real store: Pro is owner + 2, and a generous
  *   onboarding is five invites, a few typo re-sends and a couple of nudges.
  * - `productWrite`: authenticated retailer mutations. Keyed by Clerk subject so
  *   a single user cannot bulk-trash inventory.
@@ -55,8 +55,8 @@ import { components } from "../_generated/api";
  *   a small burst.
  * - `proofUpload`: public mutation that mints a one-shot Convex storage upload
  *   URL for a payment screenshot. Keyed by shortId so a single order can't
- *   exhaust the system. Slightly tighter than paymentClaim — one upload URL
- *   per claim attempt is the realistic ceiling.
+ *   exhaust the system. Sized for one URL per file the buyer PICKS, not per
+ *   claim — see the entry below.
  * - `googleAutocomplete`: public (storefront) + authenticated (settings)
  *   Convex action that proxies Google Places autocomplete. Keyed by retailerId
  *   for storefront callers and Clerk subject for settings callers. Bucket sized
@@ -156,11 +156,19 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		period: MINUTE,
 		capacity: 4,
 	},
+	// One URL per file the buyer PICKS, not per claim (z8r3fdnpxf): the sheet
+	// now uploads the moment a screenshot is chosen, so the submit can be held
+	// until the image is genuinely stored rather than hoping it lands. Picking
+	// the wrong screenshot out of a camera roll and replacing it a couple of
+	// times is ordinary behaviour, and proof is now MANDATORY — so a limiter hit
+	// here no longer costs a retry, it blocks the payment outright. Sized for
+	// fumbling rather than for one perfect attempt. Still cheap to serve: the
+	// mutation only mints a URL, and the bytes behind it are capped client-side.
 	proofUpload: {
 		kind: "token bucket",
-		rate: 3,
+		rate: 10,
 		period: MINUTE,
-		capacity: 2,
+		capacity: 5,
 	},
 	// Public mutation that mints an upload URL for a buyer's reference image on a
 	// custom/made-to-order line — BEFORE the order exists, so keyed by retailerId
@@ -170,6 +178,44 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		rate: 3,
 		period: MINUTE,
 		capacity: 2,
+	},
+	// Voucher codes (`z8r3fdr617`), keyed by retailerId at both doors. Their
+	// OWN bucket, deliberately, for two reasons: a voucher code is the only
+	// GUESSABLE secret the storefront accepts, and sharing `orderCreate`'s
+	// budget would mean someone probing codes could starve a live drop of real
+	// checkouts.
+	//
+	//   `voucherCheck` — the storefront field's "is this code good?" probe and
+	//   the `?voucher=` link's on-load check. The tighter of the two, because
+	//   it is the one an attacker would hammer: 8 symbols over a 32-symbol
+	//   alphabet is 2^40 codes, and 20/min per store puts an exhaustive search
+	//   at roughly a hundred thousand years. Sized generously for a human
+	//   typing (debounced client-side) and for a shared link being opened by a
+	//   whole WhatsApp group at once.
+	//
+	//   `voucherRedeem` — only reached when an order is actually being placed
+	//   with a code, so it rides behind the order limiters as a second ceiling
+	//   on the same act. Lower volume than checking by construction.
+	voucherCheck: {
+		kind: "token bucket",
+		rate: 20,
+		period: MINUTE,
+		capacity: 10,
+	},
+	voucherRedeem: {
+		kind: "token bucket",
+		rate: 10,
+		period: MINUTE,
+		capacity: 5,
+	},
+	// Authenticated seller voucher ISSUING (keyed by Clerk subject) — minting
+	// codes writes a row each and a batch writes up to 50, so this is sized
+	// like `productBulkImport` rather than like a read.
+	voucherIssue: {
+		kind: "token bucket",
+		rate: 10,
+		period: MINUTE,
+		capacity: 5,
 	},
 	// Public buyer mockup approve / request-changes actions (keyed by retailerId).
 	mockupReview: {

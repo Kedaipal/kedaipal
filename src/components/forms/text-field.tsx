@@ -63,7 +63,7 @@ export function TextField({
 			onBlur={() => field.handleBlur()}
 			variant={prefix ? "bare" : "field"}
 			isError={isInvalid}
-			className={cn(mono && "font-mono", prefix && "min-h-11 px-3 text-base")}
+			className={cn(mono && "font-mono")}
 		/>
 	);
 

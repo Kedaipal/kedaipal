@@ -58,6 +58,14 @@ const UNLOCKED: Record<string, string> = {
 	"orders.updateDeliveryAddress": "buyer: edits their own delivery address",
 	"orders.updatePickupLocation": "buyer: changes where they collect",
 	"orders.claimPayment": "buyer: 'I've paid'",
+	// A voucher CHECK is a buyer-side read dressed as a mutation (it spends
+	// rate-limiter budget and nothing else — see convex/vouchers.ts). Buyer
+	// surfaces never vary with the seller's billing state, and a buyer holding
+	// a code must learn what it is worth even if the store has lapsed; the
+	// ORDER is what a lapsed store can't take, and `orders.create` is where
+	// that is decided. Issuing and voiding ARE guarded.
+	"vouchers.checkCode":
+		"buyer: asks what a code they were given is worth — no write, no order",
 	"orders.generateOrderProofUploadUrl": "buyer: uploads their payment proof",
 	"orders.generateCustomImageUploadUrl": "buyer: uploads a reference image",
 	"orders.approveMockup": "buyer: approves the seller's mockup",
@@ -74,6 +82,8 @@ const UNLOCKED: Record<string, string> = {
 
 	// 2. Billing — the door out. Locking these locks the seller in.
 	"invoices.subscribeSelf": "billing: buying a plan IS the unlock",
+	"enterprise.markInterest":
+		"billing: asking about Enterprise is a door out — a locked 1,500-order shop tapping Talk to Arif is exactly the lead the stamp exists for",
 	"invoices.changePlan": "billing: schedule a plan change",
 	"invoices.cancelPlanChange": "billing: undo that",
 	"invoices.switchPendingPlan": "billing: change the plan before paying",
@@ -84,9 +94,19 @@ const UNLOCKED: Record<string, string> = {
 	"subscriptionPayments.finishAutoRenewSetup": "billing: save a payment method",
 	"subscriptionPayments.cancelAutoRenew":
 		"billing: turning auto-renewal off must never need an active sub — that would be a trap",
+	"creditPurchases.createTopUp":
+		"billing: buying credits is the door out of the credit lock (T3) — locking it would trap an out-of-credits seller. A lapsed (past_due) store is refused by topUpRefusal instead, with copy pointing at its invoice",
+	"creditPurchases.verifyCreditPurchase":
+		"billing: confirm a top-up payment that already happened",
+	"creditPurchases.getOrCreateReceiptPdfUrl":
+		"billing: read their own top-up receipt",
 
 	// 3. Account, legal, onboarding state, and read-only artifacts.
 	"retailers.createRetailer": "no store yet — nothing to lock",
+	"retailers.claimStore":
+		"no store yet — the caller is taking over a pre-built one, and the store it claims is comped (docs/prebuilt-stores.md)",
+	"retailers.sendHandoverInvite":
+		"Kedaipal admin only — it emails a store's pending owner, and the caller is never the seller whose lock this is (docs/prebuilt-stores.md)",
 	"retailers.recordConsentAcceptance": "legal consent is never withheld",
 	"retailers.ensureNotifyEmailFromIdentity": "account housekeeping",
 	"retailers.ackCountrySetup": "dismisses a banner",

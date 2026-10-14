@@ -1,3 +1,5 @@
+import { Link } from "@tanstack/react-router";
+import { ArrowRight } from "lucide-react";
 import {
 	type PoweredBySurface,
 	poweredByHref,
@@ -27,12 +29,24 @@ import { AppImage } from "../ui/app-image";
 export function StorefrontFooter({
 	slug,
 	surface = "storefront",
+	discover = false,
 }: {
 	/** The store whose page this is. Omit only where none is in scope yet
 	 * (a loading skeleton, a not-found page for an unknown slug). */
 	slug?: string;
 	/** Which buyer surface the badge sits on — picks the `?src=` tag. */
 	surface?: PoweredBySurface;
+	/**
+	 * Show "Discover more stores" — the buyer's door to the /stores directory
+	 * (z8r3fdkmyp). Opt-in per page, ON only where a buyer is BROWSING (store
+	 * home, category, product, store-not-found): never at checkout, a claim or
+	 * an order page, where it would only pull a buyer out of a purchase. The
+	 * caller also passes false for a store that opted out of the marketplace.
+	 * Kept here at the foot, quiet, rather than as a Kedaipal mark at the top:
+	 * the top of a storefront is the seller's brand, and a header logo would
+	 * walk their own buyers to competitors first (Zaki, 1 Oct 2026).
+	 */
+	discover?: boolean;
 }) {
 	return (
 		<footer
@@ -52,6 +66,20 @@ export function StorefrontFooter({
 			// silently stops applying (that regression shipped once already).
 			className="mt-auto px-5 pb-6 pt-8 lg:px-8"
 		>
+			{discover ? (
+				<div className="mb-5 flex justify-center">
+					<Link
+						to="/stores"
+						className="group inline-flex min-h-11 items-center gap-1.5 rounded-full px-4 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent/10 hover:text-accent-emphasis focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+					>
+						Discover more stores on Kedaipal
+						<ArrowRight
+							aria-hidden
+							className="size-3.5 transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none"
+						/>
+					</Link>
+				</div>
+			) : null}
 			<div className="flex justify-center">
 				<a
 					href={poweredByHref(surface, slug)}

@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { Instagram, Mail, Music2 } from "lucide-react";
 import { LEGAL_CONTACT_EMAIL } from "../../lib/legal";
+import { BLOG_URL } from "../../lib/site-links";
 import { m } from "../../paraglide/messages";
 import { AppImage } from "../ui/app-image";
 import { PaymentStripCompact } from "./payment-methods";
@@ -27,7 +28,7 @@ export function Footer() {
 						</p>
 					</div>
 
-					<div className="grid gap-8 sm:grid-cols-[minmax(0,1fr)_auto] sm:gap-12">
+					<div className="grid gap-8 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:gap-12">
 						<div>
 							<h2 className="text-xs font-semibold uppercase tracking-[0.18em] text-accent">
 								{m.footer_contact()}
@@ -60,6 +61,23 @@ export function Footer() {
 								</a>
 							</div>
 						</div>
+
+						<nav aria-labelledby="footer-explore-heading">
+							<h2
+								id="footer-explore-heading"
+								className="text-xs font-semibold uppercase tracking-[0.18em] text-primary-foreground/45"
+							>
+								{m.footer_explore()}
+							</h2>
+							<div className="mt-4 flex flex-col items-start gap-3 text-sm text-primary-foreground/65">
+								<Link to="/stores" className={legalLinkClass}>
+									{m.footer_browse_stores()}
+								</Link>
+								<a href={BLOG_URL} className={legalLinkClass}>
+									{m.footer_blog()}
+								</a>
+							</div>
+						</nav>
 
 						<nav aria-labelledby="footer-legal-heading">
 							<h2

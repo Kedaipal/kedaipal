@@ -23,7 +23,14 @@ vi.mock("@tanstack/react-query", () => ({
 	useQuery: () => ({ data: undefined, isPending: true }),
 }));
 vi.mock("@tanstack/react-router", () => ({
-	Link: ({ to, children, ...rest }: { to: string; children: React.ReactNode }) => (
+	Link: ({
+		to,
+		children,
+		...rest
+	}: {
+		to: string;
+		children: React.ReactNode;
+	}) => (
 		<a href={to} {...rest}>
 			{children}
 		</a>
@@ -31,8 +38,16 @@ vi.mock("@tanstack/react-router", () => ({
 }));
 
 import { ProductForm } from "./product-form";
-import { emptyWizardState, ProductWizard, type WizardState } from "./product-wizard";
-import { emptyRow, VariantEditor, type VariantEditorState } from "./variant-editor";
+import {
+	emptyWizardState,
+	ProductWizard,
+	type WizardState,
+} from "./product-wizard";
+import {
+	emptyRow,
+	VariantEditor,
+	type VariantEditorState,
+} from "./variant-editor";
 
 afterEach(cleanup);
 
@@ -62,6 +77,7 @@ function renderWizard(currency: string, initialState: WizardState) {
 			retailerId={"r1" as never}
 			categoriesLocked={false}
 			eventsLocked={false}
+			promoLocked={false}
 			currency={currency}
 			initialState={initialState}
 			onSubmit={vi.fn() as never}
@@ -142,6 +158,7 @@ describe("edit form — money labels in the store's symbol", () => {
 				retailerId={"r1" as never}
 				categoriesLocked={false}
 				eventsLocked={false}
+				promoLocked={false}
 				currency={currency}
 				submitLabel="Save"
 				onSubmit={vi.fn()}
@@ -213,7 +230,9 @@ describe("variant editor — price labels in the store's symbol", () => {
 				currency="MYR"
 			/>,
 		);
-		expect(screen.getAllByText(/Starting price \(RM\)/).length).toBeGreaterThan(0);
+		expect(screen.getAllByText(/Starting price \(RM\)/).length).toBeGreaterThan(
+			0,
+		);
 		expect(screen.getAllByText(/From RM …/).length).toBeGreaterThan(0);
 		expectNoIsoCode();
 	});

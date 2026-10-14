@@ -1,3 +1,4 @@
+import { answerLabelPrefix } from "../../../convex/lib/buyerQuestions";
 import { formatPrice } from "../../lib/format";
 import {
 	RECEIPT_LABEL_CLASS,
@@ -26,6 +27,8 @@ export function ClaimTicket({
 	fulfilmentAmount,
 	feeSettled,
 	displayTotal,
+	voucherDiscount = 0,
+	voucherCode,
 }: {
 	storeName: string;
 	currency: string;
@@ -35,6 +38,9 @@ export function ClaimTicket({
 		variantLabel?: string;
 		price: number;
 		quantity: number;
+		/** Answers the seller keyed at the counter (z8r3fdkjek) — read-only
+		 * here; the buyer confirms them by committing. */
+		answers?: ReadonlyArray<{ label: string; answer: string }>;
 	}>;
 	/** "Pickup" / "Delivery" / "Collection" — the page knows which. */
 	fulfilmentLabel: string;
@@ -42,6 +48,11 @@ export function ClaimTicket({
 	fulfilmentAmount: string;
 	feeSettled: boolean;
 	displayTotal: number;
+	/** The seller's voucher on this claim (`z8r3fdr617`), already judged LIVE by
+	 * the server — so a code spent or voided since the link was sent is simply
+	 * absent here, and the page's own notice explains it. 0 = none. */
+	voucherDiscount?: number;
+	voucherCode?: string;
 }) {
 	return (
 		<section
@@ -78,6 +89,11 @@ export function ClaimTicket({
 									{line.variantLabel}
 								</span>
 							) : null}
+							{(line.answers ?? []).map((a) => (
+								<span key={a.label} className={RECEIPT_VARIANT_CLASS}>
+									{answerLabelPrefix(a.label)} {a.answer}
+								</span>
+							))}
 						</span>
 						<span
 							aria-hidden
@@ -98,6 +114,22 @@ export function ClaimTicket({
 					/>
 					<span className="shrink-0 tabular-nums">{fulfilmentAmount}</span>
 				</li>
+				{voucherDiscount > 0 ? (
+					<li
+						className={`flex items-baseline gap-2 py-1 text-accent-emphasis ${CLAIM_LINES_TICKET}`}
+					>
+						<span className="min-w-0 truncate">
+							{voucherCode ? `Voucher · ${voucherCode}` : "Voucher"}
+						</span>
+						<span
+							aria-hidden
+							className="flex-1 border-b-2 border-dotted border-border"
+						/>
+						<span className="shrink-0 tabular-nums">
+							−{(voucherDiscount / 100).toFixed(2)}
+						</span>
+					</li>
+				) : null}
 			</ul>
 			<div className="flex items-baseline gap-2 border-t-2 border-dashed border-border pt-2.5">
 				<p className="font-heading flex-1 text-sm font-extrabold uppercase tracking-[0.04em]">

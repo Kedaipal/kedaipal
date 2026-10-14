@@ -484,6 +484,10 @@ http.route({
 						amountSen: event.amountSen ?? -1,
 						currency: event.currency ?? "",
 						methodCode: event.methodCode ?? recurring.methodCode,
+						// A charge event on the recurring-billing session IS the
+						// saved-method rail — it may advance the counter and
+						// answer an attempt stamp.
+						viaSessionCharge: true,
 					},
 				);
 				console.log("HitPay event webhook processed", {
@@ -532,14 +536,16 @@ http.route({
 			paymentRequestId: requestId,
 		});
 		if (!context) {
-			// Not a buyer order — a subscription-invoice Pay-now request?
-			// (Kedaipal's own account, so the verifying salt is the env one.)
-			const invoiceContext = await ctx.runQuery(
-				internal.subscriptionPayments.resolveInvoiceRequestContext,
+			// Not a buyer order — a request minted on KEDAIPAL's own account: a
+			// subscription invoice's Pay-now link or a credit-pack checkout
+			// (Credits T2)? One resolver, one hop; the verifying salt is the env
+			// one for both.
+			const billingContext = await ctx.runQuery(
+				internal.subscriptionPayments.resolveBillingRequestContext,
 				{ paymentRequestId: requestId },
 			);
-			if (invoiceContext) {
-				return handleInvoiceCompletionWebhook(ctx, fields, invoiceContext);
+			if (billingContext) {
+				return handleBillingCompletionWebhook(ctx, fields, billingContext);
 			}
 			console.log("HitPay webhook: no matching order, ignoring", {
 				requestId,
@@ -612,36 +618,44 @@ http.route({
 });
 
 /**
- * v1 completion webhook for a SUBSCRIPTION-INVOICE Pay-now request
- * (86eyb6z4r): same wire format as the buyer-order branch above, but the
- * request was minted on KEDAIPAL's own account, so the verifying salt is the
- * env credential (plaintext — never a per-seller stored secret). Settles
- * through invoices.internalSettleFromGateway, whose amount check + duplicate
- * guard mirror receiveGatewayPayment's posture.
+ * v1 completion webhook for a request minted on KEDAIPAL's own account — a
+ * SUBSCRIPTION-INVOICE Pay-now link (86eyb6z4r) or a CREDIT-PACK checkout
+ * (Credits T2, z8r3fdf8ht). Same wire format as the buyer-order branch above,
+ * but the verifying salt is the env credential (plaintext — never a
+ * per-seller stored secret). Each settle owns its amount check and duplicate
+ * guard (invoices.internalSettleFromGateway / creditPurchases.settlePurchase),
+ * mirroring receiveGatewayPayment's posture.
  */
-async function handleInvoiceCompletionWebhook(
+async function handleBillingCompletionWebhook(
 	ctx: ActionCtx,
 	fields: Record<string, string>,
-	invoiceContext: { invoiceId: Id<"invoices"> },
+	context:
+		| { kind: "invoice"; invoiceId: Id<"invoices"> }
+		| { kind: "credit_purchase"; purchaseId: Id<"creditPurchases"> },
 ): Promise<Response> {
 	const requestId = fields.payment_request_id;
+	const label = context.kind === "invoice" ? "invoice" : "credit purchase";
 	const salt = process.env.HITPAY_BILLING_SALT;
 	if (!salt) {
 		// A request we minted with credentials that have since vanished — our
 		// misconfiguration, fail closed.
 		console.error(
-			"HitPay invoice webhook rejected: HITPAY_BILLING_SALT not configured",
+			`HitPay ${label} webhook rejected: HITPAY_BILLING_SALT not configured`,
 			{ requestId },
 		);
 		return new Response("server misconfigured", { status: 500 });
 	}
 	const valid = await verifyHitpayWebhook(fields, salt);
 	if (!valid) {
-		console.warn("HitPay invoice webhook rejected: invalid hmac", { requestId });
+		console.warn(`HitPay ${label} webhook rejected: invalid hmac`, {
+			requestId,
+		});
 		return new Response("invalid signature", { status: 401 });
 	}
 	if (fields.status !== "completed") {
-		console.log("HitPay invoice webhook: non-completed status, acking", {
+		// Authentic but not a settlement (a declined attempt) — the checkout
+		// stays open for another try until it expires, so nothing changes.
+		console.log(`HitPay ${label} webhook: non-completed status, acking`, {
 			requestId,
 			status: fields.status,
 		});
@@ -649,22 +663,31 @@ async function handleInvoiceCompletionWebhook(
 	}
 	const amountSen = decimalStringToSen(fields.amount ?? "");
 	if (amountSen === null || !fields.payment_id) {
-		console.error("HitPay invoice webhook: malformed completed payload", {
+		console.error(`HitPay ${label} webhook: malformed completed payload`, {
 			requestId,
 			amount: fields.amount,
 		});
 		return new Response("ok", { status: 200 });
 	}
-	const result = await ctx.runMutation(
-		internal.invoices.internalSettleFromGateway,
-		{
-			invoiceId: invoiceContext.invoiceId,
-			paymentId: fields.payment_id,
-			amountSen,
-			currency: fields.currency ?? "",
-		},
-	);
-	console.log("HitPay invoice webhook processed", {
+	const payment = {
+		paymentId: fields.payment_id,
+		amountSen,
+		currency: fields.currency ?? "",
+	};
+	const result =
+		context.kind === "invoice"
+			? await ctx.runMutation(internal.invoices.internalSettleFromGateway, {
+					invoiceId: context.invoiceId,
+					...payment,
+					// v1 completion = the seller paid the Pay-now link — never the
+					// saved-method session, so no counter bump, no stamp answer.
+					viaSessionCharge: false,
+				})
+			: await ctx.runMutation(internal.creditPurchases.settlePurchase, {
+					purchaseId: context.purchaseId,
+					...payment,
+				});
+	console.log(`HitPay ${label} webhook processed`, {
 		requestId,
 		applied: result.applied,
 		reason: result.reason,

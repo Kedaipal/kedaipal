@@ -14,7 +14,7 @@ import {
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { MASK_PII } from "../lib/analytics-privacy";
-import { getDisplayName } from "../lib/customer";
+import { sellerCustomerName } from "../lib/customer";
 import { isCrmLocked } from "../lib/subscription";
 
 export const Route = createFileRoute("/app/customers/$customerId")({
@@ -77,8 +77,15 @@ function CustomerDetailRoute() {
 		);
 	}
 
-	const displayName = getDisplayName(customer);
+	const displayName = sellerCustomerName(customer);
 	const currency = retailer?.currency ?? DEFAULT_CURRENCY;
+	// Waiting on credits (Credits T3.1): every order this buyer has placed is
+	// still unfunded, so the server redacted their name, phone and purchase
+	// history. The list row says the same thing — this says WHY, so the page
+	// the row links to isn't a wall of blanks. No button: the app-shell banner
+	// already carries the top-up, and two of them was the duplication the
+	// in-place note got deleted for.
+	const gated = customer.creditGated === true;
 
 	return (
 		// MASK_PII on the route wrapper: the buyer's name renders in the desktop
@@ -102,6 +109,12 @@ function CustomerDetailRoute() {
 			<h2 className="text-2xl font-bold tracking-tight lg:hidden">
 				{displayName}
 			</h2>
+			{gated ? (
+				<p className="-mt-2 text-sm text-muted-foreground lg:-mt-3">
+					Their name, number and order details open once credits land — the
+					oldest order opens first. What they&rsquo;ve spent with you is below.
+				</p>
+			) : null}
 
 			<CustomerDetail
 				customer={customer}

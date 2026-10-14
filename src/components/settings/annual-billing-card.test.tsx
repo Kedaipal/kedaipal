@@ -249,7 +249,7 @@ describe("AnnualBillingCard — states", () => {
 		expect(screen.queryByRole("link")).toBeNull();
 	});
 
-	it("onAnnual states the credit position without promising an email", () => {
+	it("onAnnual states the carry-over position without promising an email", () => {
 		renderCard(
 			state({
 				subscription: {
@@ -260,12 +260,15 @@ describe("AnnualBillingCard — states", () => {
 				},
 			}),
 		);
-		expect(screen.getByText(/credited to the new one/)).toBeTruthy();
+		expect(screen.getByText(/carries over as extra days/)).toBeTruthy();
+		// "Credit" is the order-credit word now (Credits T3) — plan changes speak
+		// in days, never "credited".
+		expect(screen.queryByText(/credited/)).toBeNull();
 		// The renewal chase is a log line today — never promise a reminder here.
 		expect(screen.queryByText(/we'll email|we will email|remind/i)).toBeNull();
 	});
 
-	it("a Founding Member already on annual is told they stay on Founding Pro — no plan-change credit", () => {
+	it("a Founding Member already on annual is told they stay on Founding Pro — no plan-change carry-over", () => {
 		renderCard(
 			state({
 				founding: true,
@@ -281,7 +284,7 @@ describe("AnnualBillingCard — states", () => {
 		const note = screen.getByText(/invoiced once a/).textContent ?? "";
 		expect(note).toMatch(/^Founding Pro, invoiced once a/);
 		expect(note).toContain("you stay on Founding Pro for the whole year");
-		expect(note).not.toMatch(/change plan|credited to the new one/);
+		expect(note).not.toMatch(/Move up a plan|extra days/);
 	});
 
 	it("switchDeferred explains the wait instead of a button that misbehaves", () => {

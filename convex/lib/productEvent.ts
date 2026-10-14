@@ -76,6 +76,9 @@ export type ProductEvent = {
 	 * first active point so a venue deactivated later never strands a guest
 	 * mid-RSVP. Stored as the id string to keep this module Convex-free. */
 	venueId?: string;
+	/** "Approve each RSVP before the guest pays" (`z8r3fdkjek`). `true` or
+	 * unset — one spelling. See docs/event-rsvp.md "Approving RSVPs". */
+	requiresApproval?: boolean;
 };
 
 export type EventInput = {
@@ -84,6 +87,7 @@ export type EventInput = {
 	seats?: number;
 	endDate?: number;
 	venueId?: string;
+	requiresApproval?: boolean;
 };
 
 /**
@@ -147,8 +151,9 @@ export function sanitizeEvent(
 	}
 
 	const venueId = raw.venueId?.trim() ? raw.venueId : undefined;
+	const requiresApproval = raw.requiresApproval === true ? true : undefined;
 
-	return { date: raw.date, timeMinutes, seats, endDate, venueId };
+	return { date: raw.date, timeMinutes, seats, endDate, venueId, requiresApproval };
 }
 
 /** Inclusive length of the event in days (1 for a one-day event). */

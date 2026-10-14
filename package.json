@@ -1,6 +1,6 @@
 {
   "name": "kedaipal",
-  "version": "2026.09.8",
+  "version": "2026.10.2",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.18.0",
@@ -18,7 +18,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "gate": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "gate": "pnpm check && pnpm typecheck && pnpm test && pnpm build",
     "format": "biome format",
     "lint": "biome lint",
     "check": "biome check",

@@ -205,3 +205,52 @@ describe("OrderItemLine", () => {
 		expect(screen.getByText("RM 160.00")).toBeTruthy();
 	});
 });
+
+describe("OrderItemLine — buyer answers (z8r3fdkjek)", () => {
+	it("prints each answer as Label: answer under the line", () => {
+		line({
+			name: "Into The Falls",
+			answers: [
+				{ label: "What are you bringing?", answer: "Helinox tent" },
+				{ label: "Tent model", answer: "Tactical One" },
+			],
+		});
+		// A question keeps its own "?" — never "bringing?:".
+		expect(screen.getByText("What are you bringing?")).toBeTruthy();
+		expect(screen.getByText("Tent model:")).toBeTruthy();
+		expect(screen.getByText("Helinox tent")).toBeTruthy();
+		expect(screen.getByText("Tactical One")).toBeTruthy();
+	});
+
+	it("flows a long question and its answer as wrapping text, not a squeezed column", () => {
+		// The reported bug: a flex row with a `shrink-0` label let a long
+		// question take the full width, wrapping the answer one letter per line.
+		line({
+			answers: [
+				{
+					label:
+						"What tent will you be using during the campmeet? eg Helinox V-tarp",
+					answer: "Helinox furniture tent",
+				},
+			],
+		});
+		const dt = screen.getByText(/What tent will you be using/);
+		const row = dt.parentElement as HTMLElement;
+		expect(row.className).not.toMatch(/\bflex\b/);
+		expect(dt.className).toMatch(/\binline\b/);
+		expect(dt.className).not.toMatch(/shrink-0/);
+		expect(screen.getByText("Helinox furniture tent").className).toMatch(
+			/\binline\b/,
+		);
+	});
+
+	it("renders an answer as text, never as markup", () => {
+		line({ answers: [{ label: "Message", answer: "<b>Happy</b>" }] });
+		expect(screen.getByText("<b>Happy</b>")).toBeTruthy();
+	});
+
+	it("adds nothing when there are no answers", () => {
+		const { container } = line();
+		expect(container.querySelector("dl")).toBeNull();
+	});
+});

@@ -81,7 +81,10 @@ export function CenterSnapCarousel({
 	return (
 		<div
 			ref={emblaRef}
-			className={cn("-mx-5 overflow-hidden md:mx-0 md:overflow-visible", className)}
+			className={cn(
+				"-mx-5 overflow-hidden md:mx-0 md:overflow-visible",
+				className,
+			)}
 		>
 			<div className={cn("flex touch-pan-y", desktopClass)}>{children}</div>
 		</div>
@@ -173,7 +176,11 @@ interface RegionToggleProps {
  * full country name rides `aria-label` per button so a screen-reader user
  * hears "Malaysia" / "Singapore", not two letters.
  */
-export function RegionToggle({ region, onChange, className }: RegionToggleProps) {
+export function RegionToggle({
+	region,
+	onChange,
+	className,
+}: RegionToggleProps) {
 	return (
 		<fieldset
 			aria-label={m.region_toggle_label()}
@@ -247,7 +254,9 @@ export function LogoMarqueeRow({
 			<div
 				className={cn(
 					"flex hover:[animation-play-state:paused]",
-					reverse ? "animate-kp-marquee-slow-reverse" : "animate-kp-marquee-slow",
+					reverse
+						? "animate-kp-marquee-slow-reverse"
+						: "animate-kp-marquee-slow",
 				)}
 			>
 				{copy(false)}

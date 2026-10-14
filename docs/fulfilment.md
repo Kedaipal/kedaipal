@@ -556,13 +556,33 @@ in [`fulfilment-date.md`](./fulfilment-date.md).
   table/CSV has a **Pickup notes** column, and both fields ride the product spreadsheet
   import/export.
 - **Buyer surfaces.** The product page ("Collecting?" under the purchase controls, clamped to
-  three lines), checkout (one deduped **"Before you collect"** block under the chosen pickup
+  three lines with a **Show more** that appears only when the clamp actually hides text —
+  `ClampedNote`, so a link past line three is never unreachable), checkout (one deduped **"Before you collect"** block under the chosen pickup
   point, read live from the product), and `/track` (in the "Pick up at" card while the order
   is live; hidden once cancelled or delivered). One component, `PickupNotes`, and one heading
   per locale (`PICKUP_NOTES_HEADING`) everywhere. The **point's own note** — the seller's
   "Notes for buyers" on the location — sits directly above it on `/track` and the seller order
   page, so it carries its own heading, **"About this spot"**: two instruction boxes in one card,
   each saying whose it is (the place vs. what was bought).
+- **Links ([`z8r3fdn2uj`](https://app.clickup.com/t/z8r3fdn2uj)).** Two spellings, one rule
+  (`convex/lib/noteLinks.ts`): a bare `https://…` / `www.…` URL, and a Markdown link
+  `[Parking guide](https://…)` — so a 90-character Maps URL doesn't eat half the 200-character
+  note and the buyer taps words, not a wall of characters. Nothing else is Markdown; the note
+  stays one plain line. Pages render both via `LinkifiedText` (`src/lib/linkify.ts`).
+  **Plain-text channels can't render a link**, so `noteToPlainText` spells `[label](url)` out as
+  `label: url` — WhatsApp (`renderPickupNotes`, `renderPickupBlock`), the buyer's wa.me message
+  and the PDF receipt all go through it, so raw brackets never reach a buyer, and WhatsApp
+  links the URL on its own. (Before this the rule was "bare URLs only" precisely to avoid raw
+  brackets in WhatsApp; the conversion removes that reason.) The 200-character cap counts the
+  stored text, Markdown included. Only http/https ever reaches an `href` — `[x](javascript:…)`
+  doesn't even match, so it stays text. The same applies to the **point's own note** ("About
+  this spot" on `/track` and the seller order page, the checkout picker, the Settings list) and
+  to a **payment method's note** (the buyer's "I've paid" dialog, the PDF). Every seller field
+  whose note reaches a buyer says so underneath (`NOTE_LINK_HINT`).
+- **The checkout picker shows each point's note.** With several pickup points the radio list
+  used to show label, address and maps link only — the point's note reached the buyer only
+  after ordering. Each option now carries it (two lines, `ClampedNote`); tapping a link or
+  **Show more** inside the option never selects it.
 - **WhatsApp — honestly scoped.** `renderPickupNotes` appends "📝 Before you collect" and the
   notes inside the pickup block of the **free-form** confirm (legacy / no-template path), the
   **mockup-gated** confirm, and the **free-form** manual payment reminder. The **Meta template

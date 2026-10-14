@@ -202,8 +202,8 @@ are **untouched**.
 ### Effort / tier
 
 **S–M, ~1.5–2.5 days.** Additive, no migration, no state-machine change.
-**Tier: ship ungated for now** — available on all current tiers (Starter/Pro). Scale
-is on hold until packaging is decided, so there are no tier checks in Phase 1;
+**Tier: ship ungated for now** — available on all current tiers (Starter/Pro, and
+Enterprise since T6), so there are no tier checks in Phase 1;
 tier-gating (if any) is a separate future ticket. The existing free `self_collect`
 preset is unchanged.
 
@@ -332,8 +332,8 @@ or deleted.
 
 **M–L, ~5–8 days** (schema + stage CRUD + ordered settings editor + dynamic
 dashboard transitions + dynamic tracking timeline + per-stage WA copy/notify +
-anchor-mapped gates + migration + tests + docs). Tier: TBD (revisit when Scale
-packaging is decided; ships ungated unless gating infra exists by then).
+anchor-mapped gates + migration + tests + docs). Tier: TBD (ships ungated unless
+gating infra exists by then).
 
 ### Phase 2 — as shipped
 

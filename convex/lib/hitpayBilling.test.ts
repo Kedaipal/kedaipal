@@ -3,12 +3,18 @@ import {
 	AUTO_CHARGE_MAX_ATTEMPTS,
 	AUTO_CHARGE_RETRY_DELAYS_MS,
 	AUTO_RENEW_METHODS,
+	adminAutoChargeState,
+	autoChargeAllowed,
 	autoRenewMethodLabel,
 	buildAutoRenewSessionParams,
+	buildCreditPackPaymentRequestParams,
 	buildInvoicePaymentRequestParams,
 	extractRecurringEvent,
+	gatewayPaymentMethodLabel,
 	gatewayPaymentMethodTag,
+	isGatewayPaymentTag,
 	nextChargeRetryAt,
+	readSessionChargeCount,
 	resolveBillingGatewayCredentials,
 	verifyEventSignature,
 } from "./hitpayBilling";
@@ -162,6 +168,65 @@ describe("buildInvoicePaymentRequestParams", () => {
 			webhookUrl: "",
 		});
 		expect(params.get("webhook")).toBeNull();
+	});
+});
+
+describe("buildCreditPackPaymentRequestParams (Credits T2)", () => {
+	const inputs = {
+		purchaseNumber: "CRD-202610-AB12",
+		packLabel: "50-credit pack",
+		storeName: "Kek Mahsuri",
+		amountSen: 4500,
+		currency: "MYR" as const,
+		redirectUrl: "https://kedaipal.com/app/settings?tab=billing&topup=return",
+		webhookUrl: "https://x.convex.site/webhook/hitpay",
+		customerEmail: "owner@kek.example",
+	};
+
+	test("the invoice link's twin: amount, reference, webhook, comms off", () => {
+		const params = buildCreditPackPaymentRequestParams(inputs);
+		expect(params.get("amount")).toBe("45.00");
+		expect(params.get("currency")).toBe("MYR");
+		expect(params.get("reference_number")).toBe("CRD-202610-AB12");
+		expect(params.get("purpose")).toBe(
+			"Kedaipal 50-credit pack CRD-202610-AB12 — Kek Mahsuri",
+		);
+		expect(params.get("redirect_url")).toBe(inputs.redirectUrl);
+		expect(params.get("webhook")).toBe(inputs.webhookUrl);
+		expect(params.get("email")).toBe("owner@kek.example");
+		expect(params.get("send_sms")).toBe("false");
+		expect(params.get("send_email")).toBe("false");
+	});
+
+	test("unlike an invoice link, it EXPIRES — in the minutes grammar sandbox verified", () => {
+		expect(buildCreditPackPaymentRequestParams(inputs).get("expires_after")).toBe(
+			"1440 mins",
+		);
+	});
+
+	test("the shared base left the invoice link byte-identical", () => {
+		const params = buildInvoicePaymentRequestParams({
+			invoiceNumber: "INV-202609-AB12",
+			storeName: "Kek Mahsuri",
+			amountSen: 10400,
+			currency: "MYR",
+			redirectUrl: "https://kedaipal.com/app/settings?tab=billing&paid=return",
+			webhookUrl: "https://x.convex.site/webhook/hitpay",
+			customerEmail: "owner@kek.example",
+		});
+		expect(params.toString()).toBe(
+			new URLSearchParams({
+				amount: "104.00",
+				currency: "MYR",
+				purpose: "Kedaipal subscription INV-202609-AB12 — Kek Mahsuri",
+				reference_number: "INV-202609-AB12",
+				redirect_url: "https://kedaipal.com/app/settings?tab=billing&paid=return",
+				webhook: "https://x.convex.site/webhook/hitpay",
+				send_sms: "false",
+				send_email: "false",
+				email: "owner@kek.example",
+			}).toString(),
+		);
 	});
 });
 
@@ -424,6 +489,103 @@ describe("extractRecurringEvent", () => {
 	});
 });
 
+describe("readSessionChargeCount", () => {
+	/** A save-card session as HitPay's sandbox GET returned it (30 Sep 2026),
+	 * customer fields left out. Its three auto-charges settled RM79 + RM149 +
+	 * RM79 — so `total_charge` is a COUNT, not the RM307 sum — while the
+	 * documented `times_charged` sits there null. */
+	const CAPTURED_SAVE_CARD_SESSION = {
+		id: "a2bca31a-a34e-4a9f-8be8-2fd4e4fda71e",
+		status: "active",
+		cycle: "save_card",
+		cycle_repeat: null,
+		amount: 79,
+		price: 79,
+		currency: "myr",
+		payment_provider_charge_method: "touch_n_go",
+		times_charged: null,
+		times_to_be_charged: null,
+		total_charge: 3,
+		created_at: "2026-09-13T22:45:39",
+		updated_at: "2026-09-13T22:45:45",
+		webhook_last_attempt: null,
+		webhook_retry_count: 0,
+	};
+
+	test("a save-card session counts in total_charge — its times_charged is null", () => {
+		expect(readSessionChargeCount(CAPTURED_SAVE_CARD_SESSION)).toBe(3);
+	});
+
+	test("a session that never charged reads 0 — a real answer, not 'unknown'", () => {
+		expect(
+			readSessionChargeCount({ ...CAPTURED_SAVE_CARD_SESSION, total_charge: 0 }),
+		).toBe(0);
+	});
+
+	test("the documented times_charged is the fallback when total_charge is absent", () => {
+		expect(readSessionChargeCount({ status: "active", times_charged: 2 })).toBe(2);
+	});
+
+	test("a whole-number string is a count", () => {
+		expect(readSessionChargeCount({ total_charge: " 4 " })).toBe(4);
+	});
+
+	test("no usable count → undefined, never zero: the caller must not charge blind", () => {
+		expect(readSessionChargeCount({ status: "active" })).toBeUndefined();
+		expect(
+			readSessionChargeCount({ times_charged: null, total_charge: null }),
+		).toBeUndefined();
+		expect(readSessionChargeCount({ total_charge: -1 })).toBeUndefined();
+		expect(readSessionChargeCount({ total_charge: 1.5 })).toBeUndefined();
+		expect(readSessionChargeCount({ total_charge: "3 charges" })).toBeUndefined();
+	});
+});
+
+describe("autoChargeAllowed — the one rule every charge scheduler asks", () => {
+	const stranded = {
+		invoiceId: "inv_old",
+		invoiceNumber: "INV-OLD",
+		amountSen: 14900,
+		currency: "MYR",
+		paymentId: "reconciled:rb_1:1",
+		at: 1,
+	};
+
+	test("no saved method → nothing to charge", () => {
+		expect(autoChargeAllowed(undefined)).toBe(false);
+	});
+
+	test("a saved method charges — unless a stranded charge is waiting on a human", () => {
+		expect(autoChargeAllowed({})).toBe(true);
+		expect(autoChargeAllowed({ strandedCharge: stranded })).toBe(false);
+	});
+
+	test("the admin projection carries the stranded charge and the unresolved stamp", () => {
+		const state = adminAutoChargeState({
+			method: "card",
+			failedAttempts: 1,
+			lastChargeAttemptAt: 42,
+			strandedCharge: stranded,
+		});
+		expect(state).toEqual({
+			method: "card",
+			failedAttempts: 1,
+			nextRetryAt: undefined,
+			lastChargeError: undefined,
+			unresolvedAttemptAt: 42,
+			// No invoice id: the admin reads the NUMBER; the id is server business.
+			stranded: {
+				invoiceNumber: "INV-OLD",
+				amountSen: 14900,
+				currency: "MYR",
+				paymentId: "reconciled:rb_1:1",
+				at: 1,
+			},
+		});
+		expect(adminAutoChargeState({ method: "card" }).failedAttempts).toBe(0);
+	});
+});
+
 describe("dunning schedule", () => {
 	test("attempt 1 fails → retry in 2 days; attempt 2 → 3 more; attempt 3 → done", () => {
 		const now = 1_000_000;
@@ -452,5 +614,22 @@ describe("labels + method tags", () => {
 		expect(gatewayPaymentMethodTag("Touch_N_Go")).toBe("hitpay_touch_n_go");
 		expect(gatewayPaymentMethodTag(undefined)).toBe("hitpay");
 		expect(gatewayPaymentMethodTag("  ")).toBe("hitpay");
+	});
+
+	test("a receipt names the rail, never the raw tag; unknown reads 'Online payment'", () => {
+		expect(gatewayPaymentMethodLabel("hitpay_card")).toBe("Card");
+		expect(gatewayPaymentMethodLabel("hitpay_touch_n_go")).toBe("Touch 'n Go");
+		expect(gatewayPaymentMethodLabel("hitpay_duitnow")).toBe("DuitNow");
+		expect(gatewayPaymentMethodLabel("hitpay_paynow_online")).toBe("PayNow");
+		expect(gatewayPaymentMethodLabel("hitpay")).toBe("Online payment");
+		expect(gatewayPaymentMethodLabel("hitpay_new_wallet")).toBe("Online payment");
+	});
+
+	test("only tags the gateway wrote count as gateway tags — an admin's words don't", () => {
+		expect(isGatewayPaymentTag("hitpay")).toBe(true);
+		expect(isGatewayPaymentTag("hitpay_card")).toBe(true);
+		expect(isGatewayPaymentTag("duitnow")).toBe(false);
+		expect(isGatewayPaymentTag("bank_transfer")).toBe(false);
+		expect(isGatewayPaymentTag("hitpayment by cheque")).toBe(false);
 	});
 });

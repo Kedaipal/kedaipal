@@ -56,10 +56,14 @@ const ITEM_TYPES: ReadonlyArray<{ value: DelyvaItemType; label: string }> = [
 export function DelyvaDispatchCard({
 	order,
 	embedded = false,
+	lockedReason,
 }: {
 	order: Doc<"orders">;
 	/** Rendered inside the dispatch hub's shell — see BookDeliveryCard. */
 	embedded?: boolean;
+	/** Set while the store can't book right now (out of credits, or
+	 * view-only) — see BookDeliveryCard. Cancelling stays open. */
+	lockedReason?: string;
 }) {
 	const dispatch = useQuery(
 		convexQuery(api.delyva.getDispatchState, { shortId: order.shortId }),
@@ -352,7 +356,7 @@ export function DelyvaDispatchCard({
 						</Button>
 					) : null}
 				</div>
-			) : bookable ? (
+			) : bookable && !lockedReason ? (
 				<>
 					{/* Where the courier collects — surfaced BEFORE the first quote so a
 					    stale pickup address (imported from Delyva's profile at connect)
@@ -705,9 +709,15 @@ export function DelyvaDispatchCard({
 					<Button type="button" className="h-11 w-full" disabled>
 						<Truck className="size-4" /> Book a courier
 					</Button>
+					{/* The store-wide lock outranks this order's own block: it stops
+					    every booking, and it is the one the seller can clear today. */}
 					<p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-						{blockReason === "plan_gated" ? <ProBadge /> : null}
-						{delyvaBlockCopy(blockReason ?? "")}
+						{lockedReason ?? (
+							<>
+								{blockReason === "plan_gated" ? <ProBadge /> : null}
+								{delyvaBlockCopy(blockReason ?? "")}
+							</>
+						)}
 					</p>
 				</div>
 			)}

@@ -17,6 +17,7 @@ import {
 } from "./orderBuckets";
 import {
 	type CsvOrder,
+	fulfilmentKey,
 	ORDER_COLUMNS,
 	orderColumnDisplay,
 } from "./orderCsv";
@@ -67,9 +68,19 @@ function searchHaystack(o: CsvOrder): string {
  * calendar but must pay to ask "who is here right now" is incoherent. It cannot
  * be used to dodge the gate either: a period only ever matches an order carrying
  * a booking span, so on a product inbox it returns nothing.
+ *
+ * `creditGated` (Credits T3.1) is excluded for the same reason as `pinMode`:
+ * the credit gate applies at EVERY tier, so a Starter store with 40 orders
+ * waiting must be able to see exactly those forty. Paywalling the one filter
+ * that finds the orders a seller is being asked to pay to open would be
+ * absurd. It can't be used to dodge the gate either — it only ever NARROWS to
+ * rows that are already redacted.
  */
 const NARROWING_FILTER_KEYS: Record<
-	Exclude<keyof InboxFilterArgs, "searchText" | "pinMode" | "bookingPeriods">,
+	Exclude<
+		keyof InboxFilterArgs,
+		"searchText" | "pinMode" | "bookingPeriods" | "creditGated"
+	>,
 	true
 > = {
 	paymentStatuses: true,
@@ -78,12 +89,15 @@ const NARROWING_FILTER_KEYS: Record<
 	dateFrom: true,
 	dateTo: true,
 	fulfilmentWindow: true,
+	fulfilmentFrom: true,
+	fulfilmentTo: true,
 	mockupPending: true,
 	statuses: true,
 	categories: true,
 	categoriesUnspecified: true,
 	sources: true,
 	attributionSources: true,
+	fulfilments: true,
 };
 
 /** True when these args ask for anything beyond "the newest orders, unfiltered"
@@ -134,6 +148,22 @@ export type InboxFilterArgs = {
 	dateFrom?: number;
 	dateTo?: number;
 	fulfilmentWindow?: "today" | "tomorrow" | "this_week";
+	/**
+	 * Orders DUE in a window — `fulfilmentDate` between these two, inclusive.
+	 *
+	 * The deliberate twin of `dateFrom`/`dateTo` above, and its neighbour for
+	 * that reason: those bound when the order was PLACED, these bound when it is
+	 * PROMISED. Home's "Plan ahead" strip counts by fulfilment date, so without
+	 * this a tile saying "2 due Thursday" could only ever open "orders placed on
+	 * Thursday" — a different question with a different answer (z8r3fdrgzj).
+	 *
+	 * `fulfilmentWindow` answers the same axis for the three named windows a
+	 * seller picks from a chip; this one answers an arbitrary day or span, which
+	 * a chip cannot express. An order with no fulfilment date is never due, so it
+	 * never matches — the same rule `fulfilmentWindow` already applies.
+	 */
+	fulfilmentFrom?: number;
+	fulfilmentTo?: number;
 	mockupPending?: boolean;
 	/**
 	 * THE status axis — one flat set of leaves (1 Sep). Empty or undefined = no
@@ -184,6 +214,25 @@ export type InboxFilterArgs = {
 	// not counter" is a real question and a single value can't ask it. Empty or
 	// undefined = no source filtering. See orders.source in convex/schema.ts.
 	sources?: Array<"storefront" | "counter" | "claim">;
+	/**
+	 * How the order LEAVES — the `fulfilmentKey` values: delivery, self_collect,
+	 * drop_off, collection, booking (z8r3fdfau9). Multi-select; empty or
+	 * undefined = no fulfilment filtering.
+	 *
+	 * The deliberate twin of `sources` above, and its neighbour for that reason:
+	 * that field is how the order came IN (which checkout surface), this one is
+	 * how it goes OUT. They answer opposite halves of the same question and a
+	 * seller reaches for them together — "today's counter sales" and "today's
+	 * deliveries" are the same kind of ask.
+	 *
+	 * Matched through `fulfilmentKey`, never through `deliveryMethod` directly,
+	 * so the filter, the table column and the CSV cell are physically incapable
+	 * of disagreeing — including on the two refinements that override the bare
+	 * method (a collection order is not a delivery; a meetup point is not the
+	 * seller's shop). A legacy order with no method matches **Delivery**, which
+	 * is what its row already says on screen.
+	 */
+	fulfilments?: string[];
 	// Marketing origin (86eyq0eq9) — the `attributionBucket` keys the seller
 	// picked: a stamped `?src=` tag, "counter", or "direct". MULTI-select (an
 	// OR within the filter, ANDed with the rest), because "how did my socials
@@ -242,6 +291,20 @@ export type InboxFilterArgs = {
 	 * diverge (the invariant this module exists for).
 	 */
 	pinMode?: PinMode;
+	/**
+	 * Only orders WAITING ON CREDITS (Credits T3.1), or only ones that aren't.
+	 *
+	 * `true` is the one a seller reaches for — "show me what my next top-up
+	 * opens" — and the inbox offers it as a chip whenever the count is above
+	 * zero. `false` is its twin, for getting the waiting rows out of the way
+	 * and working the orders that ARE open; absent means no filtering, so a
+	 * client sending `false` is asking a real question, not switching the
+	 * filter off.
+	 *
+	 * Reads `creditGated`, which the server stamps during redaction — so the
+	 * filter can only ever agree with what the row actually shows.
+	 */
+	creditGated?: boolean;
 };
 
 /** See `InboxFilterArgs.pinMode`. */
@@ -270,6 +333,10 @@ export type FilterableOrder = CsvOrder & {
 	 * column on every seller's export to serve a chip. */
 	bookingCheckIn?: number;
 	bookingCheckOut?: number;
+	/** Waiting on credits (Credits T3.1) — stamped by the server's redaction,
+	 * never computed here: the filter and the row's own contents then come from
+	 * one decision and cannot disagree. */
+	creditGated?: boolean;
 };
 
 /** An order is awaiting the seller's mockup action. */
@@ -319,6 +386,10 @@ export function buildInboxPredicate(
 		args.sources && args.sources.length > 0
 			? new Set<string>(args.sources)
 			: null;
+	const fulfilmentSet =
+		args.fulfilments && args.fulfilments.length > 0
+			? new Set<string>(args.fulfilments)
+			: null;
 	const periodList =
 		args.bookingPeriods && args.bookingPeriods.length > 0
 			? args.bookingPeriods
@@ -330,6 +401,14 @@ export function buildInboxPredicate(
 		if (pinMode === "only" && o.pinnedAt === undefined) return false;
 		// Pin privilege short-circuits EVERY rule below (86eyrtz74).
 		if (pinMode === "top" && o.pinnedAt !== undefined) return true;
+		// Waiting on credits (Credits T3.1). Placed with the ordinary filters
+		// rather than above the pin short-circuit, so it behaves like every other
+		// one: a pinned order still rides on top, which is what pinning is for.
+		if (
+			args.creditGated !== undefined &&
+			(o.creditGated === true) !== args.creditGated
+		)
+			return false;
 		// ONE flat status set: status leaves and booking periods OR together
 		// (owner call, 1 Sep — see InboxFilterArgs.statuses). Same shape as the
 		// category arm below, and for the same reason: two ways of naming a
@@ -359,6 +438,12 @@ export function buildInboxPredicate(
 		}
 		// Source filter — legacy/undefined source reads as "storefront".
 		if (sourceSet && !sourceSet.has(o.source ?? "storefront")) return false;
+		// Fulfilment filter — through the registry's own `fulfilmentKey`, so the
+		// rows this keeps are exactly the rows whose Fulfilment cell shows the
+		// ticked word. It already folds in the two overrides (collection beats
+		// delivery, drop-off beats self-collect) and the legacy default, so none
+		// of that logic gets a second, drifting copy here.
+		if (fulfilmentSet && !fulfilmentSet.has(fulfilmentKey(o))) return false;
 		// Marketing-origin filter — bucketed through the SAME resolver Insights
 		// reports with (attribution.ts), so a row in the by-source breakdown and
 		// the inbox it drills into can never disagree about which orders count.
@@ -379,6 +464,18 @@ export function buildInboxPredicate(
 		if (args.fulfilmentWindow !== undefined) {
 			if (o.fulfilmentDate === undefined) return false;
 			if (!matchesFulfilmentWindow(o.fulfilmentDate, args.fulfilmentWindow))
+				return false;
+		}
+		// Due-date bounds. An order with no fulfilment date is not due at all, so
+		// it falls out of any due window — never "undated therefore everything".
+		if (args.fulfilmentFrom !== undefined || args.fulfilmentTo !== undefined) {
+			if (o.fulfilmentDate === undefined) return false;
+			if (
+				args.fulfilmentFrom !== undefined &&
+				o.fulfilmentDate < args.fulfilmentFrom
+			)
+				return false;
+			if (args.fulfilmentTo !== undefined && o.fulfilmentDate > args.fulfilmentTo)
 				return false;
 		}
 		if (term.length > 0) {

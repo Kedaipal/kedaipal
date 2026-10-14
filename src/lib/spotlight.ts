@@ -94,6 +94,12 @@ export const SPOTLIGHT_ANCHOR = {
 		tab: "store",
 		anchor: "settings-business-details",
 	},
+	// The credit balance card (Credits T3, z8r3fdf8hy), directly under the plan
+	// — the number a seller checks most. Reuses the anchor the out-of-credits
+	// banner's "See credits" link already carries (`#credits`), rather than
+	// minting a second id for the same card; both now read it from here and
+	// spotlight.test.ts pins the agreement.
+	credit_balance: { page: "settings", tab: "billing", anchor: "credits" },
 	store_country: { page: "settings", tab: "store", anchor: "settings-country" },
 	// The Business address card — the post-switch checklist already anchors it
 	// (`?fix=business_address`), so this key reuses that exact id, as the
@@ -121,6 +127,34 @@ export const SPOTLIGHT_ANCHOR = {
 		tab: "fulfilment",
 		anchor: "settings-closed-dates",
 	},
+	// The Pickup points card (z8r3fdjgvd) — where an event venue is picked and
+	// where the "guests aren't charged the fee" line now sits. Reuses the
+	// post-switch checklist's own anchor rather than minting a second id for
+	// the same card; the agreement is pinned in spotlight.test.ts.
+	pickup_points: {
+		page: "settings",
+		tab: "fulfilment",
+		anchor: "settings-pickup",
+	},
+	// The Event venues card (z8r3fdm32x), directly after Pickup and NOT inside
+	// it — a venue no longer masquerades as a deactivated pickup point, so it
+	// has a card of its own, and the v2026.10.2 note lands on it rather than
+	// on the Pickup card above. It renders on a plan with events or for a store
+	// that already has a venue; anywhere else the link opens Fulfilment with
+	// nothing to ring, and the note names the plan.
+	event_venues: {
+		page: "settings",
+		tab: "fulfilment",
+		anchor: "settings-event-venues",
+	},
+	// The Store listing card (z8r3fdkmyp), right under the store description the
+	// public directory builds its card from — where the area line is typed and
+	// where a seller takes the shop off /stores.
+	store_listing: {
+		page: "settings",
+		tab: "store",
+		anchor: "settings-marketplace",
+	},
 	// The Pricing & capacity card of a stay listing — where the weekend rate
 	// (S13, z8r3fddkp8) lives. The card, not the field: every spotlight rings
 	// a card, and the field is its third row, labelled "Weekend rate".
@@ -129,6 +163,9 @@ export const SPOTLIGHT_ANCHOR = {
 	// and the pickup note live there, beside the minimum quantity and notice
 	// rules they compose with.
 	prep_time: { page: "product", anchor: "product-order-rules" },
+	// The Promotion card (z8r3fdcw72), directly under the price on every kind
+	// of product — the sale price, its window and the flash-sale extras.
+	promo: { page: "product", anchor: "product-promo" },
 } as const satisfies Record<string, SpotlightTarget>;
 
 export type SpotlightKey = keyof typeof SPOTLIGHT_ANCHOR;

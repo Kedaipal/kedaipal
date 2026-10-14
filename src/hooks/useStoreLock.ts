@@ -1,8 +1,10 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../convex/_generated/api";
+import { orderGatedLine } from "../lib/credits-ui";
 import { isStoreReadOnly, storeReadOnlyReason } from "../lib/subscription";
 import { AREA_COPY, type PermissionArea } from "../lib/team-permissions";
+import { useCreditGate } from "./useCreditGate";
 import { useDashboardRetailer } from "./useDashboardRetailer";
 import { usePermission, useStoreRole } from "./usePermission";
 
@@ -45,18 +47,69 @@ export function useStoreLock(): { readOnly: boolean; reason: string } {
  * Reads nothing new: `usePermission` resolves off the same cached retailer
  * payload the shell already holds.
  */
-export function useAreaLock(area: PermissionArea): {
+/** Which lock is speaking, so a greyed-out control can name it in its label
+ * (`lockLabel`) while the full sentence lives in `reason`. */
+export type AreaLockCause = "subscription" | "credits" | "permission";
+
+export function useAreaLock(
+	area: PermissionArea,
+	opts?: {
+		/**
+		 * The ORDER this control acts on, when the credit gate applies to it
+		 * (Credits T3.1): accepting or moving it forward, taking payment by
+		 * hand, booking a courier, printing a label, handing out a receipt.
+		 *
+		 * An ORDER, not a boolean — that is the whole of T3.1. The gate used to
+		 * be store-wide, so a boolean was enough; now the answer depends on
+		 * WHICH order, because one that already paid for its credit stays
+		 * workable for life. Leave it out for what is never gated: cancel,
+		 * refund, pinning, settings, and the catalogue (which the subscription
+		 * pays for, not credits).
+		 *
+		 * `null`/`undefined` reads as "not gated", so a control whose order
+		 * hasn't loaded yet never flashes disabled.
+		 */
+		creditOrder?: { creditSeq?: number; creditGated?: boolean } | null;
+	},
+): {
 	readOnly: boolean;
 	reason: string;
+	cause: AreaLockCause | null;
 } {
 	const store = useStoreLock();
+	const gate = useCreditGate();
 	const { canWrite, role } = usePermission(area);
-	if (store.readOnly) return store;
+	if (store.readOnly) return { ...store, cause: "subscription" };
+	// The SUBSCRIPTION lock is checked first and wins: it is the store-wide
+	// fact, it blocks the owner too, and a seller whose plan lapsed must not be
+	// told to buy credits (the two gates compose without double-messaging —
+	// `assertSubscriptionActive` runs before `assertOrderCreditAvailable` at
+	// every server call site for the same reason).
+	if (opts?.creditOrder !== undefined && gate.gatesOrder(opts.creditOrder)) {
+		const credits = gate.creditsToUnlock(opts.creditOrder);
+		return {
+			readOnly: true,
+			// The order's OWN position first, then the way back — never a
+			// store-wide sentence on a control attached to one order.
+			reason: `${orderGatedLine(credits)}. ${gate.reason}`,
+			cause: "credits",
+		};
+	}
 	// `role` is undefined until the payload lands — no lock, so nothing flashes
 	// disabled for an owner on first paint.
 	if (role === "member" && !canWrite)
-		return { readOnly: true, reason: writeBlockReason(area) };
-	return store;
+		return {
+			readOnly: true,
+			reason: writeBlockReason(area),
+			cause: "permission",
+		};
+	return { ...store, cause: null };
+}
+
+/** The few words a greyed-out primary control carries after its label
+ * ("Mark as Packed — waiting on credits"); the sentence is `reason`. */
+export function lockLabel(cause: AreaLockCause | null): string {
+	return cause === "credits" ? "waiting on credits" : "view-only";
 }
 
 /** The ONE sentence a teammate reads when they hold view on an area and reach

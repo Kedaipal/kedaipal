@@ -14,6 +14,17 @@
 All three moves confirmed by Arif, 1 Sep 2026, against the 30 Aug "Kedaipal
 Pricing Reset" artifact.
 
+> **30 Sep 2026 — superseded in part by Credits T5 (`z8r3fdfu31`).** The trial
+> changed shape (Zaki, 30 Sep): free until the first order, then **14 days or
+> 200 orders** of everything in Pro, whichever comes first. The `/pricing` rows
+> in §2 and the landing's `pricing_sub` / `faq_a_8` shipped in T5 with that
+> model and with Kedaipal Credits — the tables below now show the SHIPPED copy
+> for those keys, `{placeholders}` and all. **§3 (the Off-Season Hold card and
+> teaser strip) will not ship**: no public surface mentions the Hold (the
+> credits decision; the status itself is retired in `z8r3fdfuhr`). The
+> authoritative map of public credits copy is
+> [`credits.md` → Public surfaces](./credits.md#public-surfaces-t5).
+
 ## 1. Confirmed numbers (Zaki's constants, `convex/lib/plans.ts`)
 
 | Constant | Current | Confirmed |
@@ -49,37 +60,47 @@ backstop, the order is the trigger.
 | --- | --- | --- | --- |
 | `nav_start_free` | Start free | Mula percuma | 免费开始 |
 | `hero_trust` _(retired in landing v2 — the trust line's render site was cut with the old hero; kept here as the record of the copy)_ | Free until your first order · No credit card · No Meta setup · Live in 5 minutes | Percuma sehingga pesanan pertama · Tiada kad kredit · Tiada setup Meta · Hidup dalam 5 minit | 收到第一笔订单前完全免费 · 无需信用卡 · 无需 Meta 设置 · 5 分钟即可上线 |
-| `pricing_sub` | Start free on every plan — your first bill only comes when your first live order does, or on day 15. No credit card to start. Kedaipal never touches your order money — your customers pay you directly. | Mula percuma untuk setiap pelan — bil pertama anda hanya tiba bila pesanan pertama masuk, atau pada hari ke-15. Tiada kad kredit untuk bermula. Kedaipal tidak pernah sentuh wang pesanan anda — pelanggan bayar terus kepada anda. | 每个方案都免费开始 —— 第一张账单只在您收到第一笔订单（或第 15 天）时才产生。开始不需要信用卡。随时取消，随时导出您的资料。 |
+| `pricing_sub` _(T5, 30 Sep)_ | Start free on every plan — no credit card. Your first order gives you {days} days or {orders} orders, whichever comes first, to try everything in Pro; then you pick your plan. Kedaipal never touches your order money — your customers pay you directly. | Mula percuma untuk setiap pelan — tiada kad kredit. Pesanan pertama anda memberi {days} hari atau {orders} pesanan, mana yang dahulu, untuk mencuba semua ciri Pro; kemudian anda pilih pelan. Kedaipal tidak pernah sentuh wang pesanan anda — pelanggan bayar terus kepada anda. | 每个方案都免费开始 —— 不需要信用卡。从第一笔订单起，您有 {days} 天或 {orders} 张订单（以先到者为准）免费体验 Pro 的全部功能，之后再选择方案。Kedaipal 从不经手您的订单款项 —— 顾客直接付款给您。 |
+| `pricing_sub_credits` _(new, T5)_ | Every plan includes a monthly order allowance — 1 credit per order, with top-ups for a busy month. | Setiap pelan termasuk peruntukan pesanan bulanan — 1 kredit setiap pesanan, dan boleh tambah kredit pada bulan sibuk. | 每个方案每月都包含订单额度 —— 每张订单用 1 点，旺季不够还可以充值。 |
 | `pricing_cta` | Start free — pay when you sell | Mula percuma — bayar bila anda menjual | 免费开始 —— 有生意才付费 |
 | `faq_q_8` | When do I start paying? | Bila saya mula membayar? | 我什么时候开始付费？ |
-| `faq_a_8` | You get the full product free from day one — no credit card. Your first invoice only fires when you take your first live order, or on day 15, whichever comes first. Cancel any time before that and pay nothing. | Anda dapat produk penuh percuma dari hari pertama — tiada kad kredit. Invois pertama anda hanya dikeluarkan bila anda terima pesanan pertama, atau pada hari ke-15, mana yang dulu. Batalkan bila-bila masa sebelum itu dan tak perlu bayar apa-apa. | 从第一天起就能免费使用完整产品 —— 不需要信用卡。第一张发票只在您收到第一笔订单（或第 15 天，以先到者为准）时才开出。在那之前随时取消，完全不收费。 |
+| `faq_a_8` _(T5, 30 Sep — literal numbers: FAQ answers render param-less for the FAQPage mirror, pinned to the constants by `landing-redesign.test.ts`)_ | Not until you sell. Sign up and set up free, with no credit card. Your first live order gives you 14 days or 200 orders — whichever comes first — to try everything in Pro, and brings your first invoice, due when those 14 days are up: pick your plan and pay it then. Haven't sold by day 15? The invoice comes anyway, on the same terms. Cancel before paying and you owe nothing. | Tidak sehingga anda menjual. Daftar dan sediakan kedai secara percuma, tanpa kad kredit. Pesanan pertama anda memberi 14 hari atau 200 pesanan — mana yang dahulu — untuk mencuba semua ciri Pro, dan membawa invois pertama anda, yang perlu dibayar bila 14 hari itu tamat: pilih pelan anda dan bayar ketika itu. Belum ada jualan menjelang hari ke-15? Invois tetap tiba, dengan syarat yang sama. Batalkan sebelum membayar dan anda tidak berhutang apa-apa. | 有生意才需要付费。免费注册、免费设置，不需要信用卡。您的第一笔订单会给您 14 天或 200 张订单（以先到者为准）免费体验 Pro 的全部功能，同时开出第一张发票，在这 14 天结束时到期：届时选择方案并付款即可。到第 15 天还没有订单？发票也会照常开出，条件相同。付款前取消，完全不收费。 |
 | `final_sub` | Free until you sell. No credit card. No Meta setup. Your storefront is live in 5 minutes. | Percuma sehingga anda menjual. Tiada kad kredit. Tiada setup Meta. Etalase anda hidup dalam 5 minit. | 有生意才付费。不需要信用卡。不用设置 Meta。您的商店 5 分钟内就能上线。 |
 | `final_cta` | Start free — pay when you sell | Mula percuma — bayar bila anda menjual | 免费开始 —— 有生意才付费 |
 
-### `/pricing` (`pricingpage_*`)
+### `/pricing` (`pricingpage_*`) — shipped 30 Sep 2026 in T5
+
+The `{days}` / `{orders}` / `{backstopDay}` placeholders are
+`INVOICE_DUE_GRACE_DAYS` / `TRIAL_CREDIT_GRANT` / `TRIAL_DAYS + 1`.
 
 | Key | en (new) | ms (new) | zh (new) |
 | --- | --- | --- | --- |
 | `pricingpage_hero_highlight` | Free until you sell. | Percuma sehingga anda menjual. | 有生意才付费。 |
-| `pricingpage_hero_sub` | Try every Pro feature free — no credit card, no Meta setup. Your first invoice comes with your first live order, or on day 15, whichever comes first. | Cuba setiap ciri Pro percuma — tiada kad kredit, tiada persediaan Meta. Invois pertama anda tiba bersama pesanan pertama, atau pada hari ke-15, mana yang dulu. | 免费试用所有 Pro 功能 —— 不需要信用卡，不用设置 Meta。第一张发票随您的第一笔订单（或第 15 天，以先到者为准）才产生。 |
+| `pricingpage_hero_sub` | No credit card, no Meta setup. Your first order gives you {days} days or {orders} orders — whichever comes first — to try everything in Pro. Then pick the plan that fits. | Tiada kad kredit, tiada persediaan Meta. Pesanan pertama anda memberi {days} hari atau {orders} pesanan — mana yang dahulu — untuk mencuba semua ciri Pro. Kemudian pilih pelan yang sesuai. | 不需要信用卡，不用设置 Meta。从第一笔订单起，您有 {days} 天或 {orders} 张订单（以先到者为准）免费体验 Pro 的全部功能，之后再选择适合的方案。 |
 | `pricingpage_cta_trial` | Start free — pay when you sell | Mula percuma — bayar bila anda menjual | 免费开始 —— 有生意才付费 |
 | `pricingpage_faq_q5` | When do I start paying? | Bila saya mula membayar? | 我什么时候开始付费？ |
-| `pricingpage_faq_a5` | You get full access to Pro features free — no credit card to start. Your first invoice fires when you take your first live order, or on day 15, whichever comes first; then pick the plan that fits (Starter, Pro, or Scale) to keep going. Cancel any time before that and pay nothing. | Anda dapat akses penuh ciri Pro secara percuma — tiada kad kredit untuk mula. Invois pertama dikeluarkan bila anda terima pesanan pertama, atau pada hari ke-15, mana yang dulu; kemudian pilih pelan yang sesuai (Starter, Pro, atau Scale) untuk teruskan. Batalkan bila-bila masa sebelum itu dan tak perlu bayar apa-apa. | 您可以免费完整使用所有 Pro 功能 —— 开始不需要信用卡。第一张发票在您收到第一笔订单（或第 15 天，以先到者为准）时开出；之后选择适合的方案（Starter、Pro 或 Scale）继续使用。在那之前随时取消，完全不收费。 |
+| `pricingpage_faq_a5` | Not until you sell — sign up free, no credit card. Your first order gives you {days} days or {orders} orders, whichever comes first, to try everything in Pro, and brings your first invoice: pick Starter, Pro or Scale and pay it before those {days} days are up. Haven't sold by day {backstopDay}? The invoice comes then instead, on the same terms. Cancel before paying and you owe nothing. | Tidak sehingga anda menjual — daftar percuma, tanpa kad kredit. Pesanan pertama anda memberi {days} hari atau {orders} pesanan, mana yang dahulu, untuk mencuba semua ciri Pro, dan membawa invois pertama anda: pilih Starter, Pro atau Scale dan bayar sebelum {days} hari itu tamat. Belum ada jualan menjelang hari ke-{backstopDay}? Invois tiba ketika itu, dengan syarat yang sama. Batalkan sebelum membayar dan anda tidak berhutang apa-apa. | 有生意才需要付费 —— 免费注册，不需要信用卡。您的第一笔订单会给您 {days} 天或 {orders} 张订单（以先到者为准）免费体验 Pro 的全部功能，同时开出第一张发票：在这 {days} 天结束前选择 Starter、Pro 或 Scale 并付款即可。到第 {backstopDay} 天还没有订单？发票会在当天开出，条件相同。付款前取消，完全不收费。 |
 | `pricingpage_cta_heading` | Start free. Pay when you sell. | Mula percuma. Bayar bila anda menjual. | 免费开始。有生意才付费。 |
-| `pricingpage_cta_sub` | No credit card. No Meta setup. Full access from day one — your first bill waits for your first order (or day 15). Cancel anytime and keep your data. | Tiada kad kredit. Tiada persediaan Meta. Akses penuh dari hari pertama — bil pertama anda menunggu pesanan pertama (atau hari ke-15). Batalkan bila-bila masa dan data anda kekal milik anda. | 不需要信用卡。不用设置 Meta。从第一天起就有完整使用权限 —— 第一张账单等到您的第一笔订单（或第 15 天）才产生。随时可以取消，资料始终归您所有。 |
+| `pricingpage_cta_sub` | No credit card. No Meta setup. Your first order gives you {days} days or {orders} orders to try everything in Pro — cancel anytime and keep your data. | Tiada kad kredit. Tiada persediaan Meta. Pesanan pertama anda memberi {days} hari atau {orders} pesanan untuk mencuba semua ciri Pro — batalkan bila-bila masa dan data anda kekal milik anda. | 不需要信用卡。不用设置 Meta。第一笔订单起有 {days} 天或 {orders} 张订单免费体验 Pro 的全部功能 —— 随时可以取消，资料始终归您所有。 |
 | `pricingpage_cta_trial_btn` | Start free — pay when you sell | Mula percuma — bayar bila anda menjual | 免费开始 —— 有生意才付费 |
 
 ### SEO / structured data (hardcoded, moves WITH the RM399 constant)
 
-- `src/routes/pricing.tsx` `SEO_DESC`: "Simple, transparent pricing for WhatsApp
-  sellers. Start free — pay when you sell. Starter RM79/mo, Pro RM149/mo, Scale
-  RM399/mo flat — S$ pricing for Singapore." (SEO desc keeps currency by design,
-  see `pricing.md`.)
+- `src/routes/pricing.tsx` `SEO_DESC` _(T5, 30 Sep — now DERIVED from
+  `PLAN_MONTHLY_PRICES` + `PLAN_CREDIT_GRANT`)_: "Free until you sell. Starter
+  RM79, Pro RM149, Scale RM399 a month — 100, 200 or 500 orders included, no
+  per-message fees. S$ pricing for Singapore." (SEO desc keeps currency by
+  design, see `pricing.md`.)
 - `src/routes/index.tsx`: landing `SEO_DESC` drops "14-day free trial" for
   "free until you sell"; JSON-LD `highPrice: "299"` → `"399"`, offer
   `description` → "Free until your first order, no credit card required".
 
-## 3. Off-Season Hold — card copy (wave 2, this ticket)
+## 3. Off-Season Hold — card copy (wave 2, this ticket) — WILL NOT SHIP
+
+> **Retired 30 Sep 2026.** The credits decision keeps the Off-Season Hold off
+> every public surface (no card, no teaser strip, no FAQ entry); the status
+> itself is retired separately in `z8r3fdfuhr`. Kept below only as the record of
+> what was drafted.
 
 A **fourth card on `/pricing` only**, visually consistent with the tier cards
 but data-separate (it is a status, not a plan — no signup CTA). The landing

@@ -231,7 +231,7 @@ describe("a lapsed store is view-only", () => {
 // ---------------------------------------------------------------------------
 
 describe("the buyer's side stays live", () => {
-	test("a lapsed store still takes orders, payment claims and address edits", async () => {
+	test("a lapsed store still takes orders and address edits — but not payments (z8r3fdr6gg)", async () => {
 		const t = setup();
 		const { retailer, productId, shortId } = await seedStore(t);
 		await setStatus(t, retailer._id, "past_due");
@@ -264,9 +264,17 @@ describe("the buyer's side stays live", () => {
 				deliveryAddress: { ...validAddress, line1: "99 Jln Baru" },
 			}),
 		).resolves.toBeNull();
+		// …except PAY it: a lapsed store can't confirm a payment, so the buyer
+		// isn't asked to make one (z8r3fdr6gg — every payment door is pinned in
+		// buyerPaymentsPaused.test.ts). The order itself is untouched.
 		await expect(
-			t.mutation(api.orders.claimPayment, { token }),
-		).resolves.toBeDefined();
+			t.mutation(api.orders.claimPayment, {
+				token,
+				proofStorageId: await t.run((ctx) =>
+					ctx.storage.store(new Blob(["png"], { type: "image/png" })),
+				),
+			}),
+		).rejects.toThrow(/isn't taking payments on Kedaipal right now/);
 	});
 
 	test("paying the invoice unlocks the store in the same breath", async () => {

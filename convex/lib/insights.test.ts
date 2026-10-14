@@ -481,3 +481,52 @@ describe("topProducts", () => {
 		]);
 	});
 });
+
+describe("reduceInsights collects distinct customerIds", () => {
+	const reduce = (orders: InsightsOrderInput[]) =>
+		reduceInsights(orders, { from: D1, bucketing: "day" });
+
+	test("a buyer with six orders in the window counts once", () => {
+		const agg = reduce([
+			order({ customerId: "c1" }),
+			order({ customerId: "c1" }),
+			order({ customerId: "c1" }),
+		]);
+		expect(agg.customerIds).toEqual(["c1"]);
+		expect(agg.orderCount).toBe(3);
+	});
+
+	test("orders with no customerId contribute no identity but still earn", () => {
+		// Link-in-bio checkout arrives without a phone, so there is no customer
+		// to count — the money is real, the head is not knowable.
+		const agg = reduce([order({ customerId: undefined }), order({ customerId: "c1" })]);
+		expect(agg.customerIds).toEqual(["c1"]);
+		expect(agg.orderCount).toBe(2);
+		expect(agg.earned).toBe(20_000);
+	});
+
+	test("non-revenue orders never contribute a customer", () => {
+		// A cancelled order's buyer is not a customer of this window, exactly as
+		// their money is not revenue in it.
+		const agg = reduce([
+			order({ status: "cancelled", customerId: "ghost" }),
+			order({ status: "pending", customerId: "ghost2" }),
+			order({ status: "delivered", customerId: "real" }),
+		]);
+		expect(agg.customerIds).toEqual(["real"]);
+	});
+
+	test("no orders → empty, never undefined", () => {
+		expect(reduce([]).customerIds).toEqual([]);
+	});
+
+	test("distinct buyers all appear", () => {
+		const agg = reduce([
+			order({ customerId: "a" }),
+			order({ customerId: "b" }),
+			order({ customerId: "a" }),
+			order({ customerId: "c" }),
+		]);
+		expect([...agg.customerIds].sort()).toEqual(["a", "b", "c"]);
+	});
+});

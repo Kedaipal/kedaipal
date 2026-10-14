@@ -7,6 +7,7 @@ import {
 	waitFor,
 } from "@testing-library/react";
 import { getFunctionName } from "convex/server";
+import { ConvexError } from "convex/values";
 import {
 	afterEach,
 	beforeAll,
@@ -19,12 +20,12 @@ import {
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { ClosedDateRange } from "../../../convex/lib/closedDates";
 import type { Country } from "../../../convex/lib/country";
-import {
-	DAY_MS,
-	todayMytMidnight,
-	ymdFromEpoch,
-} from "../../../convex/lib/fulfilmentDate";
+import { DAY_MS, todayMytMidnight } from "../../../convex/lib/fulfilmentDate";
 import type { UseCart } from "../../hooks/useCart";
+import {
+	phonePlateCode,
+	pickPhoneCountry,
+} from "../../lib/test/buyer-phone-picker";
 import { CheckoutPage } from "./checkout-form";
 import type { PublicPickupLocation } from "./pickup-location-options";
 
@@ -32,7 +33,12 @@ import type { PublicPickupLocation } from "./pickup-location-options";
 // pair, not `convex/react` (docs/frontend-caching.md, send-claim.test.tsx),
 // answering by function name. `orders.create` is the one mutation; its args
 // are what the submit test reads back.
-const state = vi.hoisted(() => ({ createOrder: vi.fn() }));
+const state = vi.hoisted(() => ({
+	createOrder: vi.fn(),
+	// The live catalog `products:list` answers with — [] unless a test lists
+	// a product (buyer questions are read from here, z8r3fdkjek).
+	listed: [] as unknown[],
+}));
 vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
 }));
@@ -48,7 +54,7 @@ vi.mock("@tanstack/react-query", () => ({
 		switch (getFunctionName(fn)) {
 			// Nothing listed: every cart line falls back to its own snapshot.
 			case "products:list":
-				return { data: [] };
+				return { data: state.listed };
 			// A free-delivery store — no quote gate in the way of the phone field.
 			case "delivery:quote":
 				return { data: { kind: "free" } };
@@ -119,6 +125,8 @@ function cartStub(): UseCart {
 		updateQuantity: vi.fn(),
 		removeItem: vi.fn(),
 		clearCart: vi.fn(),
+		repriceItems: vi.fn(),
+		setAnswer: vi.fn(),
 		quickRemoveProduct: vi.fn(),
 		quantityForProduct: () => 1,
 	};
@@ -141,12 +149,14 @@ function renderCheckout(
 		booksCouriers?: boolean;
 		method?: "delivery" | "pickup";
 		closedDates?: ClosedDateRange[];
+		cart?: UseCart;
+		paymentsPaused?: boolean;
 	} = {},
 ) {
 	const pickupOnly = opts.method === "pickup";
-	render(
+	const result = render(
 		<CheckoutPage
-			cart={cartStub()}
+			cart={opts.cart ?? cartStub()}
 			retailerId={"ret_1" as Id<"retailers">}
 			storeName="Kek Mama"
 			storeSlug="kek-mama"
@@ -163,14 +173,17 @@ function renderCheckout(
 			closedDates={opts.closedDates}
 			minOrderValue={undefined}
 			pickupLocations={pickupOnly ? [PICKUP] : []}
+			paymentsPaused={opts.paymentsPaused}
 		/>,
 	);
+	return result;
 }
 
-const picker = () =>
-	screen.getByRole("combobox", {
-		name: "Country of your WhatsApp number",
-	}) as HTMLSelectElement;
+/** The plate's control — a searchable sheet since z8r3fdm36y, driven through
+ * the shared helpers so this file holds no copy of its shape. */
+const plateCode = () => phonePlateCode();
+const pick = (name: string, query?: string) =>
+	pickPhoneCountry(name, { query });
 const phoneInput = () =>
 	screen.getByRole("textbox", { name: /^WhatsApp number/ }) as HTMLInputElement;
 
@@ -181,13 +194,24 @@ function changePhone(value: string) {
 }
 
 /** Typing, one character at a time, each appended to whatever the box holds
- * after the previous keystroke (including any rewrite the field made). */
+ * after the previous keystroke (including any rewrite the field made).
+ *
+ * The node is resolved ONCE, not per keystroke. `getByRole` with a `name`
+ * matcher computes an accessible name and a `getComputedStyle` visibility
+ * check for every textbox in the checkout — ~20ms in jsdom, against ~9ms for
+ * the re-render it wraps. Resolving it twice per character made a 15-character
+ * number 80% query overhead, and left this test one busy CI box away from the
+ * 5s timeout: it awaits nothing, so that timeout never measured the test, only
+ * the machine (vitest fails a synchronous body whose wall clock overruns).
+ * React keeps the same input node across the country switch this test trips
+ * mid-number, so the reference stays live — `isConnected` is the tripwire if a
+ * future change remounts the field, which would also drop the buyer's caret. */
 function typePhone(text: string) {
+	const input = phoneInput();
 	for (const ch of text) {
-		fireEvent.change(phoneInput(), {
-			target: { value: phoneInput().value + ch },
-		});
+		fireEvent.change(input, { target: { value: input.value + ch } });
 	}
+	expect(input.isConnected).toBe(true);
 }
 
 // parseBuyerWaPhone's rejection when the digits fit the OTHER store country.
@@ -198,7 +222,7 @@ const OVERSEAS_NOTE =
 describe("CheckoutPage — WhatsApp number from any country (z8r3fdh274)", () => {
 	it("opens on the store's country, with the input the switch refocuses", () => {
 		renderCheckout({ country: "SG" });
-		expect(picker().value).toBe("SG");
+		expect(plateCode()).toBe("+65");
 		// BuyerPhoneCountrySwitch focuses by id; TextField ids its input with
 		// the field name.
 		expect(phoneInput().id).toBe("waPhone");
@@ -207,7 +231,7 @@ describe("CheckoutPage — WhatsApp number from any country (z8r3fdh274)", () =>
 	it("typing a +44 number from empty moves the picker to GB and keeps only the national part", () => {
 		renderCheckout();
 		typePhone("+44 7911 123456");
-		expect(picker().value).toBe("GB");
+		expect(plateCode()).toBe("+44");
 		// The code went to the plate, never to the box (`+44 | +44 7911…`).
 		expect(phoneInput().value).not.toContain("+44");
 		// Exact: the switch lands on "+44" and empties the box, and the space
@@ -218,7 +242,7 @@ describe("CheckoutPage — WhatsApp number from any country (z8r3fdh274)", () =>
 	it("a pasted or autofilled +44 number does the same, leaving exactly the national part", () => {
 		renderCheckout();
 		changePhone("+44 7911 123456");
-		expect(picker().value).toBe("GB");
+		expect(plateCode()).toBe("+44");
 		expect(phoneInput().value).toBe("7911 123456");
 	});
 
@@ -231,18 +255,18 @@ describe("CheckoutPage — WhatsApp number from any country (z8r3fdh274)", () =>
 		// of what the box actually held, it would read as a keystroke and leave
 		// "+65 9123 4567" under a GB plate.
 		changePhone("+65 9123 4567");
-		expect(picker().value).toBe("SG");
+		expect(plateCode()).toBe("+65");
 		expect(phoneInput().value).toBe("9123 4567");
 	});
 
 	it("a '+' slipped in front of digits already typed does NOT switch the country", () => {
 		renderCheckout();
 		typePhone("12-345 6789");
-		expect(picker().value).toBe("MY");
+		expect(plateCode()).toBe("+60");
 		// "+12-345 6789" completes "+1" — judged without the value it replaced,
 		// that would jump the plate to the United States and eat the 1.
 		changePhone(`+${phoneInput().value}`);
-		expect(picker().value).toBe("MY");
+		expect(plateCode()).toBe("+60");
 		expect(phoneInput().value).toBe("+12-345 6789");
 	});
 
@@ -258,7 +282,7 @@ describe("CheckoutPage — WhatsApp number from any country (z8r3fdh274)", () =>
 		switchButton.focus();
 		fireEvent.click(switchButton);
 
-		expect(picker().value).toBe("SG");
+		expect(plateCode()).toBe("+65");
 		expect(phoneInput().value).toBe("9123 4567");
 		expect(screen.queryByText(SG_UNDER_MY)).toBeNull();
 		expect(screen.queryByRole("button", { name: /^Switch to/ })).toBeNull();
@@ -271,35 +295,35 @@ describe("CheckoutPage — WhatsApp number from any country (z8r3fdh274)", () =>
 	});
 });
 
-describe("CheckoutPage — overseas courier note", () => {
-	it("a courier-booking store, delivery, a GB number: the rider-calls-the-store note shows", () => {
+describe("CheckoutPage — overseas courier note", async () => {
+	it("a courier-booking store, delivery, a GB number: the rider-calls-the-store note shows", async () => {
 		renderCheckout({ booksCouriers: true });
-		fireEvent.change(picker(), { target: { value: "GB" } });
+		await pick("United Kingdom");
 		expect(screen.getByText(OVERSEAS_NOTE)).toBeTruthy();
 	});
 
 	it("the same store with a Malaysian number shows nothing — the local happy path is unchanged", () => {
 		renderCheckout({ booksCouriers: true });
-		expect(picker().value).toBe("MY");
+		expect(plateCode()).toBe("+60");
 		expect(screen.queryByText(/is from outside Malaysia/)).toBeNull();
 	});
 
-	it("a store that books no couriers never shows it, whatever the number", () => {
+	it("a store that books no couriers never shows it, whatever the number", async () => {
 		renderCheckout({ booksCouriers: false });
-		fireEvent.change(picker(), { target: { value: "GB" } });
-		expect(picker().value).toBe("GB");
+		await pick("United Kingdom");
+		expect(plateCode()).toBe("+44");
 		expect(screen.queryByText(/is from outside Malaysia/)).toBeNull();
 	});
 });
 
-describe("CheckoutPage — submit", () => {
+describe("CheckoutPage — submit", async () => {
 	it("sends the picked dial country with the number as typed", async () => {
 		renderCheckout({ method: "pickup" });
 		fireEvent.change(screen.getByRole("textbox", { name: /^Your name/ }), {
 			target: { value: "Aisyah Rahman" },
 		});
 		changePhone("+44 7911 123456");
-		expect(picker().value).toBe("GB");
+		expect(plateCode()).toBe("+44");
 
 		fireEvent.click(screen.getAllByRole("button", { name: "Place order" })[0]);
 
@@ -330,7 +354,60 @@ describe("CheckoutPage — submit", () => {
 	});
 });
 
-describe("CheckoutPage — closed dates (z8r3fdhpm7)", () => {
+describe("CheckoutPage — a cap straddle says what to do (PR #350 review)", async () => {
+	/** The door's typed refusal when the cart wants more than the pool holds. */
+	function straddle(unitsLeft: number) {
+		return new ConvexError({
+			kind: "price_changed" as const,
+			reason: "units" as const,
+			productName: "Brownie Box",
+			unitsLeft,
+			lines: [],
+		});
+	}
+
+	async function submitAndFail(err: unknown) {
+		renderCheckout({ method: "pickup" });
+		fireEvent.change(screen.getByRole("textbox", { name: /^Your name/ }), {
+			target: { value: "Aisyah Rahman" },
+		});
+		changePhone("012-345 6789");
+		state.createOrder.mockRejectedValueOnce(err);
+		fireEvent.click(screen.getAllByRole("button", { name: "Place order" })[0]);
+		await waitFor(() => expect(state.createOrder).toHaveBeenCalledTimes(1));
+	}
+
+	it("names the product and the units left, and says to lower the quantity", async () => {
+		// The door sends `productName` and `unitsLeft` precisely so this
+		// surface can be specific. Dropping them left a generic "prices
+		// changed" that the buyer could do nothing with.
+		await submitAndFail(straddle(3));
+		await waitFor(() =>
+			expect(
+				screen.getAllByText(
+					/Only 3 left at the sale price for Brownie Box — lower the quantity/,
+				).length,
+			).toBeGreaterThan(0),
+		);
+	});
+
+	it("offers NO action, because accepting prices cannot fix a quantity", async () => {
+		// The old "Review your order" button only cleared the flag, so the
+		// resubmit was refused identically — a dead end dressed as a fix.
+		await submitAndFail(straddle(3));
+		await waitFor(() =>
+			expect(screen.getAllByText(/lower the quantity/).length).toBeGreaterThan(
+				0,
+			),
+		);
+		expect(screen.queryByRole("button", { name: /Update prices/ })).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: /Review your order/ }),
+		).toBeNull();
+	});
+});
+
+describe("CheckoutPage — closed dates (z8r3fdhpm7)", async () => {
 	// Read after `beforeEach` fakes the clock — "today" is the faked one.
 	let today = 0;
 	let raya: ClosedDateRange;
@@ -353,15 +430,218 @@ describe("CheckoutPage — closed dates (z8r3fdhpm7)", () => {
 		expect(args.fulfilmentDate).toBe(today + 2 * DAY_MS);
 	});
 
-	it("a closed date typed into the date field is explained in the server's words", async () => {
+	it("a closed date can't be picked at all — the calendar refuses it", async () => {
+		// This replaces "a closed date TYPED into the date field is explained":
+		// the field was a native <input type="date">, which takes min/max and
+		// nothing else, so every closed day inside the window was offered and the
+		// buyer learned it was wrong only after choosing. Since z8r3fdm36y the
+		// grid greys it instead (z8r3fdm36y) — disabled-with-reason over
+		// wrong-but-enabled. Drop `isDayDisabled` from the DateField call and
+		// this goes red.
 		renderCheckout({ method: "pickup", closedDates: [raya] });
-		fireEvent.change(screen.getByLabelText(/^Date/), {
-			target: { value: ymdFromEpoch(today + DAY_MS) },
+		fireEvent.click(screen.getByLabelText(/^Date/));
+		const closed = new Date(today + DAY_MS);
+		const weekday = closed.toLocaleDateString("en-US", { weekday: "long" });
+		const cell = await screen.findByRole("button", {
+			name: new RegExp(`${weekday}, \\w+ ${closed.getDate()}(st|nd|rd|th)`),
 		});
+		expect(cell.hasAttribute("disabled")).toBe(true);
+	});
+});
+
+describe("CheckoutPage — buyer questions (z8r3fdkjek)", async () => {
+	const CAKE_QUESTIONS = [
+		{
+			id: "msg00001",
+			label: "Message on the cake",
+			type: "text",
+			required: true,
+		},
+	];
+	afterEach(() => {
+		state.listed = [];
+	});
+
+	function fillBuyer() {
+		fireEvent.change(screen.getByRole("textbox", { name: /^Your name/ }), {
+			target: { value: "Aisyah Rahman" },
+		});
+		changePhone("012-345 6789");
+	}
+
+	it("asks the line's question, blocks Place order until it's answered", () => {
+		state.listed = [
+			{ _id: "prod_1", variants: [], buyerQuestions: CAKE_QUESTIONS },
+		];
+		const cart = cartStub();
+		renderCheckout({ method: "pickup", cart });
+		fillBuyer();
+		expect(screen.getByText("A few questions")).toBeTruthy();
 		expect(
-			await screen.findByText(
-				/Kek Mama is closed .*\(Hari Raya\) — pick another day\./,
+			screen.getAllByText("Answer “Message on the cake” for Kek Pandan").length,
+		).toBeGreaterThan(0);
+		const place = screen.getAllByRole("button", { name: "Place order" })[0];
+		expect((place as HTMLButtonElement).disabled).toBe(true);
+		fireEvent.change(screen.getByLabelText("Message on the cake"), {
+			target: { value: "Happy 40th" },
+		});
+		expect(cart.setAnswer).toHaveBeenCalledWith(
+			"var_1",
+			"msg00001",
+			"Happy 40th",
+		);
+	});
+
+	it("sends the stored answers for the line", async () => {
+		state.listed = [
+			{ _id: "prod_1", variants: [], buyerQuestions: CAKE_QUESTIONS },
+		];
+		const cart = cartStub();
+		cart.items[0] = {
+			...cart.items[0],
+			answers: { msg00001: "Happy 40th", gone0001: "stale" },
+		};
+		renderCheckout({ method: "pickup", cart });
+		fillBuyer();
+		fireEvent.click(screen.getAllByRole("button", { name: "Place order" })[0]);
+		await waitFor(() => expect(state.createOrder).toHaveBeenCalledTimes(1));
+		const [args] = state.createOrder.mock.calls[0];
+		expect(args.items[0].answers).toEqual([
+			{ questionId: "msg00001", answer: "Happy 40th" },
+		]);
+	});
+
+	it("a product with no questions shows no section and sends no answers", async () => {
+		renderCheckout({ method: "pickup" });
+		fillBuyer();
+		expect(screen.queryByText("A few questions")).toBeNull();
+		fireEvent.click(screen.getAllByRole("button", { name: "Place order" })[0]);
+		await waitFor(() => expect(state.createOrder).toHaveBeenCalledTimes(1));
+		expect(state.createOrder.mock.calls[0][0].items[0].answers).toBeUndefined();
+	});
+});
+
+describe("CheckoutPage — a lapsed store's payments are paused (z8r3fdr6gg)", () => {
+	it("says so before the buyer commits — the order can still be placed", () => {
+		renderCheckout({ paymentsPaused: true });
+		expect(screen.getByText("Payments paused")).toBeTruthy();
+		expect(
+			screen.getByText(
+				/Kek Mama isn't taking payments on Kedaipal right now\. You can still place your order/,
 			),
 		).toBeTruthy();
+		expect(
+			screen.getByText(/don't pay the seller outside Kedaipal/),
+		).toBeTruthy();
+		// Ordering is untouched: the CTA is still "Place order".
+		expect(
+			screen.getAllByRole("button", { name: "Place order" }).length,
+		).toBeGreaterThan(0);
+	});
+
+	it("shows nothing while payments are open", () => {
+		renderCheckout();
+		expect(screen.queryByText("Payments paused")).toBeNull();
+	});
+
+	it("shows nothing for a free cart — there is nothing to pay", () => {
+		const free = { ...cartStub(), total: 0 };
+		free.items = free.items.map((i) => ({ ...i, price: 0 }));
+		renderCheckout({ paymentsPaused: true, cart: free });
+		expect(screen.queryByText("Payments paused")).toBeNull();
+	});
+});
+
+/**
+ * Prices that moved while the basket sat there (z8r3fdcw72). The server
+ * refuses the order outright via `expectedSubtotal`; this is the honest UI
+ * half — the buyer is never asked to pay a number they weren't shown, and the
+ * way out sits next to the sentence rather than in a toast.
+ */
+describe("price changed under the buyer", () => {
+	function fillBuyer() {
+		fireEvent.change(screen.getByRole("textbox", { name: /^Your name/ }), {
+			target: { value: "Aisyah Rahman" },
+		});
+		changePhone("012-345 6789");
+	}
+
+	it("sends the item subtotal the buyer is looking at", async () => {
+		state.listed = [];
+		renderCheckout({ method: "pickup" });
+		fillBuyer();
+		fireEvent.click(screen.getAllByRole("button", { name: "Place order" })[0]);
+		await waitFor(() => expect(state.createOrder).toHaveBeenCalledTimes(1));
+		const [args] = state.createOrder.mock.calls[0];
+		expect(args.expectedSubtotal).toBe(4500);
+	});
+
+	it("blocks Place order and names the new price when a promotion ends mid-checkout", () => {
+		// The cart line was added at RM45; the catalogue now prices it at RM60.
+		state.listed = [
+			{
+				_id: "prod_1",
+				variants: [{ _id: "var_1", price: 6000 }],
+				buyerQuestions: [],
+			},
+		];
+		renderCheckout({ method: "pickup" });
+		fillBuyer();
+		expect(
+			screen.getAllByText(/Kek Pandan is now RM\s?60\.00/).length,
+		).toBeGreaterThan(0);
+		const place = screen.getAllByRole("button", { name: "Place order" })[0];
+		expect((place as HTMLButtonElement).disabled).toBe(true);
+	});
+
+	it("offers one button that accepts the new prices", () => {
+		state.listed = [
+			{
+				_id: "prod_1",
+				variants: [{ _id: "var_1", price: 6000 }],
+				buyerQuestions: [],
+			},
+		];
+		const cart = cartStub();
+		renderCheckout({ method: "pickup", cart });
+		fillBuyer();
+		const update = screen.getAllByRole("button", {
+			name: /Update prices/,
+		})[0];
+		// The button states what the items come to, so "accept" is informed.
+		expect(update.textContent).toMatch(/RM\s?60\.00/);
+		fireEvent.click(update);
+		expect(cart.repriceItems).toHaveBeenCalledWith({ var_1: 6000 });
+	});
+
+	it("a sale that STARTED under the buyer is surfaced too, never silently charged", () => {
+		state.listed = [
+			{
+				_id: "prod_1",
+				variants: [{ _id: "var_1", price: 4500, promoPrice: 3150 }],
+				promoState: { phase: "live", label: "Raya" },
+				buyerQuestions: [],
+			},
+		];
+		renderCheckout({ method: "pickup" });
+		fillBuyer();
+		expect(
+			screen.getAllByText(/Kek Pandan is now RM\s?31\.50/).length,
+		).toBeGreaterThan(0);
+	});
+
+	it("an unchanged price leaves checkout alone", () => {
+		state.listed = [
+			{
+				_id: "prod_1",
+				variants: [{ _id: "var_1", price: 4500 }],
+				buyerQuestions: [],
+			},
+		];
+		renderCheckout({ method: "pickup" });
+		fillBuyer();
+		expect(screen.queryByRole("button", { name: /Update prices/ })).toBeNull();
+		const place = screen.getAllByRole("button", { name: "Place order" })[0];
+		expect((place as HTMLButtonElement).disabled).toBe(false);
 	});
 });

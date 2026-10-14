@@ -3,29 +3,37 @@ import { Check } from "lucide-react";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
+import type { CreditBalanceView } from "../../../convex/credits";
 import {
 	ANNUAL_MONTHS_CHARGED,
 	type BillingCurrency,
 	FOUNDING_PLAN,
+	FOUNDING_PRO_CREDIT_GRANT,
 	foundingPlanLocked,
+	isPlanSelectable,
+	LISTED_PLANS,
+	type ListedPlan,
+	PLAN_CREDIT_GRANT,
 	planPrice,
 } from "../../../convex/lib/plans";
 import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
+import { includedCreditsLabel, planPickCreditLine } from "../../lib/credits-ui";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import type { SubscriptionView } from "../../lib/subscription";
+import { EnterpriseOffer } from "./enterprise-offer";
 import { OwnerOnlyNote } from "./owner-only-note";
 
-type PickablePlan = "starter" | "pro";
 type Cycle = "monthly" | "annual";
 
-const PLAN_PITCH: Record<PickablePlan, { name: string; pitch: string }> = {
+const PLAN_PITCH: Record<ListedPlan, { name: string; pitch: string }> = {
 	starter: {
 		name: "Starter",
 		pitch: "Storefront, orders + WhatsApp confirmations",
 	},
 	pro: {
 		name: "Pro",
-		pitch: "Everything in Starter + customer database, order inbox, insights, online payments",
+		pitch:
+			"Everything in Starter + customer database, order inbox, insights, online payments",
 	},
 };
 
@@ -40,10 +48,12 @@ const PLAN_PITCH: Record<PickablePlan, { name: string; pitch: string }> = {
  *
  * A store on founding pricing is offered Founding Pro and nothing else — the
  * cycle is still theirs to choose (Zaki, 17 Sep 2026). `subscribeSelf` refuses
- * any other tier server-side.
+ * any other tier server-side. Everyone else also sees Enterprise, which is
+ * never subscribed to here: it opens a chat with Arif (Credits T6).
  */
 export function PlanPickerCard({
 	sub,
+	slug,
 	currency,
 	renewing,
 	foundingPricing,
@@ -51,8 +61,11 @@ export function PlanPickerCard({
 	foundingBenefitsRevoked = false,
 	ownerOnly = false,
 	onRedirectingChange,
+	balance,
 }: {
 	sub: SubscriptionView;
+	/** The store's slug — named in the Enterprise chat's opening line. */
+	slug: string;
 	currency: BillingCurrency;
 	/** past_due / cancelled ⇒ "renew" framing instead of "choose". */
 	renewing: boolean;
@@ -73,20 +86,25 @@ export function PlanPickerCard({
 	/** Signals the tab that a HitPay redirect is in flight, so the freshly
 	 * created invoice's card shows a spinner instead of the manual rails. */
 	onRedirectingChange?: (redirecting: boolean) => void;
+	/** The store's credits (Credits T3), when the viewer may see them — so the
+	 * picker can say what the chosen plan does to the balance before the tap.
+	 * Absent/null: the plans still state their allowance, nothing more. */
+	balance?: CreditBalanceView | null;
 }) {
 	const subscribeSelf = useMutation(api.invoices.subscribeSelf);
 	const startAutoRenewSetup = useAction(
 		api.subscriptionPayments.startAutoRenewSetup,
 	);
 	const founding = foundingPricing;
-	// Only the tiers this store may buy: a Founding Member stays on Founding Pro.
-	const plans = (["starter", "pro"] as const).filter(
-		(p) => !foundingPlanLocked(p, founding),
+	// Only the listed tiers this store may buy, and a Founding Member stays on
+	// Founding Pro. Enterprise is never a pick here — it has its own row.
+	const plans = LISTED_PLANS.filter(
+		(p) => isPlanSelectable(p) && !foundingPlanLocked(p, founding),
 	);
 	// Default to the seller's current plan (a renewal shouldn't nudge them off
 	// it), which is Pro for every trial.
-	const [picked, setPlan] = useState<PickablePlan>(
-		sub.plan === "starter" ? "starter" : "pro",
+	const [picked, setPlan] = useState<ListedPlan>(
+		sub.plan === "enterprise" ? "pro" : sub.plan,
 	);
 	// Derived, not stored: founding pricing is a live server answer, and a
 	// selection it rules out must never be what Subscribe sends.
@@ -106,13 +124,38 @@ export function PlanPickerCard({
 	// lapse, a voided bill, or a sponsorship that ended) never sees HitPay's
 	// page: subscribeSelf charges the method on file straight away. The words
 	// before the tap must say THAT — the amount and the method are the consent.
-	const savedMethod = sub.autoRenew?.methodLabel;
+	// Two states pause that promise while the method stays on file: STOPPED
+	// (a stranded charge; a human is sorting the money out) and CONFIRMING
+	// (a sent charge whose outcome HitPay hasn't confirmed). Subscribing then
+	// only writes the invoice — never promise a charge the server won't fire.
+	const stopped = sub.autoRenew?.stopped === true;
+	const confirming = sub.autoRenew?.confirming === true;
+	const paused = stopped || confirming;
+	const savedMethod = paused ? undefined : sub.autoRenew?.methodLabel;
+	/** Why the invoice isn't being charged right now — the toast + copy pair. */
+	const pausedReason = stopped
+		? "Automatic charging is stopped for now — see Auto-renewal below before paying."
+		: "We're confirming an earlier automatic payment first — once that's done, this invoice is charged automatically.";
 	const price = formatPrice(
 		planPrice(plan, cycle, founding && plan === "pro", currency),
 		currency,
 	);
-	const planName = (p: PickablePlan) =>
+	const planName = (p: ListedPlan) =>
 		founding && p === FOUNDING_PLAN ? "Founding Pro" : PLAN_PITCH[p].name;
+	// The allowance each plan grants — the same founding eligibility the
+	// server's grant uses (`foundingPriceEligible`), so the number quoted is
+	// the number that lands.
+	const grantFor = (p: ListedPlan) =>
+		founding && p === FOUNDING_PLAN
+			? FOUNDING_PRO_CREDIT_GRANT
+			: PLAN_CREDIT_GRANT[p];
+	const creditLine = balance
+		? planPickCreditLine({
+				balance,
+				grant: grantFor(plan),
+				planName: planName(plan),
+			})
+		: null;
 
 	// Subscribing IS enrolling in auto-renewal (owner decision, 11 Sep 2026),
 	// like every mainstream subscription: invoice created, then straight to
@@ -136,6 +179,19 @@ export function PlanPickerCard({
 				onRedirectingChange?.(false);
 				return;
 			}
+			if (sub.autoRenew !== undefined) {
+				// A method on file that the server chose not to charge (stopped,
+				// or an earlier charge still being confirmed). The invoice is
+				// written; the authorisation page would only refuse ("already
+				// on") — this branch exists so NO state with a saved method can
+				// ever fall through to it and end on an error toast.
+				toast.success("Your invoice is ready", {
+					description: pausedReason,
+				});
+				setBusy(false);
+				onRedirectingChange?.(false);
+				return;
+			}
 			const { url } = await startAutoRenewSetup({});
 			window.location.assign(url);
 		} catch (err) {
@@ -152,7 +208,7 @@ export function PlanPickerCard({
 	// before the redirect, so a seller who abandons HitPay's page comes back to
 	// a pending invoice with the Pay-now button AND the bank/DuitNow details.
 
-	const priceLine = (p: PickablePlan) => {
+	const priceLine = (p: ListedPlan) => {
 		const foundingApplies = founding && p === "pro";
 		const monthly = planPrice(p, "monthly", foundingApplies, currency);
 		const total = planPrice(p, cycle, foundingApplies, currency);
@@ -169,9 +225,13 @@ export function PlanPickerCard({
 				</p>
 				<p className="mt-1 text-xs text-muted-foreground">
 					{founding ? "Choose monthly or yearly" : "Pick a plan"} —{" "}
-					{savedMethod
-						? `we'll charge your saved ${savedMethod} and your plan activates as soon as it goes through.`
-						: "you'll pay on HitPay's secure page and your plan activates straight away."}
+					{paused
+						? stopped
+							? "we'll write your invoice. Automatic charging is stopped for now, so nothing is charged — see Auto-renewal below."
+							: "we'll write your invoice. We're confirming an earlier automatic payment first, then it's charged automatically — see Auto-renewal below."
+						: savedMethod
+							? `we'll charge your saved ${savedMethod} and your plan activates as soon as it goes through.`
+							: "you'll pay on HitPay's secure page and your plan activates straight away."}
 				</p>
 				{founding ? (
 					<p className="mt-2 text-xs text-muted-foreground">
@@ -239,6 +299,9 @@ export function PlanPickerCard({
 							<p className="mt-1.5 text-sm font-medium tabular-nums">
 								{priceLine(p)}
 							</p>
+							<p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+								{includedCreditsLabel(grantFor(p))}
+							</p>
 						</div>
 					);
 					// One plan on offer (a Founding Member) is a summary, not a
@@ -280,6 +343,14 @@ export function PlanPickerCard({
 				})}
 			</div>
 
+			{/* What the chosen plan does to this store's credits — a trial moving
+			    to a smaller allowance sees it here, not after paying. */}
+			{creditLine ? (
+				<p className="rounded-lg bg-muted/60 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+					{creditLine}
+				</p>
+			) : null}
+
 			<div className="flex flex-col gap-2">
 				<button
 					type="button"
@@ -288,18 +359,36 @@ export function PlanPickerCard({
 					className="inline-flex h-11 w-fit items-center rounded-lg bg-foreground px-4 text-sm font-medium text-background disabled:opacity-60"
 				>
 					{busy
-						? savedMethod
-							? "Charging your saved method…"
-							: "Opening secure payment…"
+						? paused
+							? "Writing your invoice…"
+							: savedMethod
+								? "Charging your saved method…"
+								: "Opening secure payment…"
 						: `Subscribe to ${planName(plan)}`}
 				</button>
 				{ownerOnly ? <OwnerOnlyNote /> : null}
 				<p className="text-[11px] text-muted-foreground">
-					{savedMethod
-						? `We'll charge ${price} to your saved ${savedMethod} now — then it renews automatically each ${cycle === "annual" ? "year" : "month"}. Turn auto-renewal off any time from its card below.`
-						: `You'll authorise a card or Touch 'n Go once on HitPay's secure page and be charged ${price} now — then it renews automatically each ${cycle === "annual" ? "year" : "month"}. Turn it off any time; Kedaipal never sees your card or wallet details.`}
+					{paused
+						? stopped
+							? `Your ${price} invoice appears on this page. Your saved ${sub.autoRenew?.methodLabel ?? "payment method"} won't be charged while automatic charging is stopped.`
+							: `Your ${price} invoice appears on this page and is charged to your saved ${sub.autoRenew?.methodLabel ?? "payment method"} automatically once your earlier payment is confirmed.`
+						: savedMethod
+							? `We'll charge ${price} to your saved ${savedMethod} now — then it renews automatically each ${cycle === "annual" ? "year" : "month"}. Turn auto-renewal off any time from its card below.`
+							: `You'll authorise a card or Touch 'n Go once on HitPay's secure page and be charged ${price} now — then it renews automatically each ${cycle === "annual" ? "year" : "month"}. Turn it off any time; Kedaipal never sees your card or wallet details.`}
 				</p>
 			</div>
+
+			{/* Enterprise: the store that outgrows Pro plus packs — a chat, never
+			    a checkout, so it comes AFTER the pick → consequence → Subscribe
+			    run rather than splitting it. Not for a Founding Member (Founding
+			    Pro only). Disabled for a view-only viewer, with its reason beside
+			    it — the Subscribe note sits a paragraph above. */}
+			{founding ? null : (
+				<>
+					<EnterpriseOffer slug={slug} ownerOnly={ownerOnly} />
+					{ownerOnly ? <OwnerOnlyNote /> : null}
+				</>
+			)}
 		</section>
 	);
 }

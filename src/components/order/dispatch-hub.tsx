@@ -53,6 +53,7 @@ export function DispatchHub({
 	bookRequestToken,
 	advanceWithoutRider,
 	onAdvanceBookUnavailable,
+	lockedReason,
 }: {
 	order: Doc<"orders">;
 	bookRequestToken?: number;
@@ -60,6 +61,9 @@ export function DispatchHub({
 		typeof BookDeliveryCard
 	>[0]["advanceWithoutRider"];
 	onAdvanceBookUnavailable?: () => void;
+	/** Why the store can't book right now (out of credits, or view-only) —
+	 * handed to whichever card is showing. */
+	lockedReason?: string;
 }) {
 	// The same subscriptions the cards themselves hold — Convex dedupes, so
 	// the hub's peek costs nothing extra.
@@ -92,8 +96,9 @@ export function DispatchHub({
 					bookRequestToken={bookRequestToken}
 					advanceWithoutRider={advanceWithoutRider}
 					onAdvanceBookUnavailable={onAdvanceBookUnavailable}
+					lockedReason={lockedReason}
 				/>
-				<DelyvaDispatchCard order={order} />
+				<DelyvaDispatchCard order={order} lockedReason={lockedReason} />
 			</>
 		);
 	}
@@ -161,10 +166,15 @@ export function DispatchHub({
 						bookRequestToken={bookRequestToken}
 						advanceWithoutRider={advanceWithoutRider}
 						onAdvanceBookUnavailable={onAdvanceBookUnavailable}
+						lockedReason={lockedReason}
 						embedded
 					/>
 				) : (
-					<DelyvaDispatchCard order={order} embedded />
+					<DelyvaDispatchCard
+						order={order}
+						lockedReason={lockedReason}
+						embedded
+					/>
 				)}
 			</div>
 		</section>

@@ -6,6 +6,7 @@ import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { ViewOnlyNote } from "../components/app/view-only-note";
 import { PageHeader } from "../components/dashboard/page-header";
 import {
 	ProductForm,
@@ -20,6 +21,7 @@ import {
 } from "../components/forms/product-wizard";
 import { Button } from "../components/ui/button";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { lockLabel, useAreaLock } from "../hooks/useStoreLock";
 import { isKindCard, type KindCard } from "../lib/kind-card";
 import { hasFeature } from "../lib/subscription";
 
@@ -74,6 +76,15 @@ function NewProductRoute() {
 	// Set once the product row exists — makes a post-create failure (categories)
 	// retryable without minting a second product.
 	const createdProductId = useRef<Id<"products"> | null>(null);
+	// Can't create right now — view-only, out of credits (Credits T3), or a
+	// teammate with view on products. Unlike the cap wall below, the wizard
+	// and form stay usable: a lock can lift in minutes (a top-up), and a draft
+	// built meanwhile publishes the moment it does. Only Publish/Create grey
+	// out, with the reason beside them.
+	const productsLock = useAreaLock("products");
+	const saveLock = productsLock.readOnly
+		? { reason: productsLock.reason, label: lockLabel(productsLock.cause) }
+		: undefined;
 
 	if (!retailer) return null;
 
@@ -83,6 +94,10 @@ function NewProductRoute() {
 	// the Pro hint rather than erroring on save.
 	const eventsLocked =
 		!retailer.actingAsAdmin && !hasFeature(retailer.subscription, "events");
+	// Promotions (z8r3fdcw72) — same client mirror, same posture: the toggle
+	// disables with the Pro hint instead of erroring on save.
+	const promoLocked =
+		!retailer.actingAsAdmin && !hasFeature(retailer.subscription, "promo");
 
 	async function handleCreate(values: ProductFormSubmitValues) {
 		if (!retailer) return;
@@ -114,6 +129,11 @@ function NewProductRoute() {
 				// stayed green because they call the API directly. The payload scan
 				// test now pins it.)
 				event: values.event ?? undefined,
+				// Same null→undefined conversion as `event` directly above: the
+				// create validator takes an object or nothing, and there is no
+				// stored promotion to clear on a product that doesn't exist yet.
+				promo: values.promo ?? undefined,
+				buyerQuestions: values.buyerQuestions,
 				variants: values.variants,
 			}));
 		createdProductId.current = productId;
@@ -185,10 +205,13 @@ function NewProductRoute() {
 	if (form !== "full") {
 		return (
 			<div className="flex flex-col gap-4 lg:max-w-2xl">
+				<ViewOnlyNote />
 				<ProductWizard
 					retailerId={retailer._id}
+					saveLock={saveLock}
 					categoriesLocked={categoriesLocked}
 					eventsLocked={eventsLocked}
+					promoLocked={promoLocked}
 					currency={retailer.currency}
 					defaultKind={retailer.storeType}
 					storeSchedule={{
@@ -221,6 +244,7 @@ function NewProductRoute() {
 				</Link>
 			</div>
 			<h2 className="text-xl font-bold lg:hidden">New product</h2>
+			<ViewOnlyNote />
 
 			{/* Way back to the guided setup — lossless (same draft substrate). */}
 			<button
@@ -235,6 +259,7 @@ function NewProductRoute() {
 				retailerId={retailer._id}
 				categoriesLocked={categoriesLocked}
 				eventsLocked={eventsLocked}
+				promoLocked={promoLocked}
 				initialValues={wizardDraft?.initialValues}
 				initialEditor={wizardDraft?.initialEditor}
 				mode="create"
@@ -247,6 +272,7 @@ function NewProductRoute() {
 					closedDates: retailer.closedDates,
 				}}
 				offerSelfCollect={retailer.offerSelfCollect !== false}
+				saveLock={saveLock}
 				onSubmit={handleCreate}
 			/>
 		</div>

@@ -1,7 +1,9 @@
 import { ConvexError } from "convex/values";
 import { describe, expect, it, test } from "vitest";
+import { creditLockErrorData } from "../../convex/lib/credits";
 import {
 	convexErrorMessage,
+	creditLockErrorOf,
 	currencySymbol,
 	formatDraftAmount,
 	formatDraftPrice,
@@ -188,9 +190,13 @@ describe("formatMobile", () => {
 		expect(formatMobile("")).toBe("");
 	});
 
-	it("splits any other country's number as +CC NATIONAL (z8r3fdh274)", () => {
+	it("splits any other country's number as +CC then 3s and 4s (z8r3fdh274)", () => {
 		// Buyers can pick any country — the code they picked reads apart from
-		// the number they typed, so a wrong code is visible at a glance.
+		// the number they typed, so a wrong code is visible at a glance, and the
+		// national run is grouped short enough to check a digit at a time. The
+		// grouping is `groupNational`'s generic reading aid, deliberately NOT
+		// each country's own convention (a UK mobile conventionally reads
+		// "7911 123456"), which would mean shipping every numbering plan.
 		expect(formatMobile("447911123456")).toBe("+44 791 112 3456");
 		expect(formatMobile("14155550123")).toBe("+1 415 555 0123");
 		expect(formatMobile("+81 90-1234-5678")).toBe("+81 901 234 5678");
@@ -198,6 +204,15 @@ describe("formatMobile", () => {
 
 	it("an unknown calling code still falls back to +digits", () => {
 		expect(formatMobile("99912345678")).toBe("+99912345678");
+	});
+
+	it("a KNOWN code with a national part of the wrong length also falls back", () => {
+		// The grouping is only reached when the national part is a length that
+		// code actually uses. Otherwise a malformed row would be dressed up as a
+		// well-formed number — `+44 791 1123 4` reads like a real GB mobile with
+		// a typo, when what we really have is digits we cannot vouch for.
+		expect(formatMobile("4479111234")).toBe("+4479111234"); // GB national 8, not 10
+		expect(formatMobile("44791112345678")).toBe("+44791112345678"); // 12, not 10
 	});
 });
 
@@ -263,6 +278,42 @@ describe("convexErrorMessage — rate-limit payload", () => {
 		expect(convexErrorMessage(new ConvexError("Only 2 in stock"))).toBe(
 			"Only 2 in stock",
 		);
+	});
+});
+
+describe("convexErrorMessage — the credit gate's typed refusal (Credits T3.1)", () => {
+	it("reads as its sentence, never [object Object]", () => {
+		const data = creditLockErrorData({
+			route: "topup",
+			audience: "owner",
+			creditsToUnlock: 1,
+			ordersWaiting: 3,
+		});
+		const err = new ConvexError(data);
+		expect(convexErrorMessage(err)).toBe(data.message);
+		expect(convexErrorMessage(err)).toMatch(/^3 orders are waiting on credits/);
+	});
+
+	it("hands a surface the way back AND the order's position", () => {
+		const err = new ConvexError(
+			creditLockErrorData({
+				route: "pick_plan",
+				audience: "member",
+				creditsToUnlock: 2,
+				ordersWaiting: 5,
+			}),
+		);
+		expect(creditLockErrorOf(err)).toMatchObject({
+			kind: "credits_locked",
+			unlockRoute: "pick_plan",
+			audience: "member",
+			// The ORDER's own place in the queue, so a refused control can say
+			// "waiting on 2 credits" rather than quoting the store's total.
+			creditsToUnlock: 2,
+			ordersWaiting: 5,
+		});
+		expect(creditLockErrorOf(new ConvexError("Only 2 in stock"))).toBeNull();
+		expect(creditLockErrorOf(new Error("boom"))).toBeNull();
 	});
 });
 
@@ -393,5 +444,32 @@ describe("formatDraftPrice — seller-typed amounts in summaries", () => {
 	test("a range says the symbol once; meeting ends collapse to one price", () => {
 		expect(formatDraftPriceRange(12, 28.5, "MYR")).toBe(`RM${NB}12–28.50`);
 		expect(formatDraftPriceRange(12, 12, "SGD")).toBe(`S$${NB}12`);
+	});
+});
+
+describe("convexErrorMessage — a typed payload never reaches the buyer raw", () => {
+	test("an unclaimed typed payload becomes the generic line, never [object Object]", () => {
+		// The landmine this guards: `String({...})` is "[object Object]", which
+		// a buyer read once from the rate limiter's payload and again from the
+		// price-changed guard's. A new typed error must fail SAFE.
+		const message = convexErrorMessage(
+			new ConvexError({ kind: "something_new", lines: [1, 2] }),
+		);
+		expect(message).toBe(GENERIC_SERVER_FAILURE);
+		expect(message).not.toContain("object Object");
+	});
+
+	test("a typed payload carrying its own sentence still speaks", () => {
+		expect(
+			convexErrorMessage(
+				new ConvexError({ kind: "whatever", message: "Pick a pickup point." }),
+			),
+		).toBe("Pick a pickup point.");
+	});
+
+	test("a plain string payload is unchanged", () => {
+		expect(convexErrorMessage(new ConvexError("Out of stock"))).toBe(
+			"Out of stock",
+		);
 	});
 });

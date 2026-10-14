@@ -1373,6 +1373,67 @@ describe("orderClaims — payment deadline (the carried timer)", () => {
 		expect((await t.run((ctx) => ctx.db.get(variantId)))?.onHand).toBe(10);
 	});
 
+	// Buyer payments paused on a lapsed store (z8r3fdr6gg): a deadline the
+	// buyer cannot pay inside is a trap, so none runs while the pause holds.
+	async function lapse(t: ReturnType<typeof setup>, retailerId: Id<"retailers">) {
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			if (!sub) throw new Error("no subscription row");
+			await ctx.db.patch(sub._id, { status: "past_due" });
+		});
+	}
+
+	test("a lapsed store's sweep LIFTS a due deadline instead of cancelling the order", async () => {
+		const t = setup();
+		const { orderId, variantId, retailer } = await committedOrder(t);
+		await lapse(t, retailer._id);
+		await t.run((ctx) => ctx.db.patch(orderId, { paymentDueAt: Date.now() - 1000 }));
+
+		const result = await t.mutation(
+			internal.orderClaims.cancelUnpaidDueOrders,
+			{},
+		);
+		expect(result.cancelled).toBe(0);
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.status).not.toBe("cancelled");
+		expect(order?.paymentDueAt).toBeUndefined();
+		// The hold stands: the order still owns its stock.
+		expect((await t.run((ctx) => ctx.db.get(variantId)))?.onHand).toBe(8);
+	});
+
+	test("a claim committed while the store is lapsed carries no payment deadline", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, { onHand: 10 });
+		const sessionId = await seedSession(t, USER_A);
+		const { claimId, token } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orderClaims.sendClaim, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				windowMinutes: 15,
+			});
+		// Sent while active, opened after the lapse — the realistic order.
+		await lapse(t, retailer._id);
+		const page = await t.query(api.orderClaims.getByToken, { token });
+		expect(page?.store.paymentsPaused).toBe(true);
+
+		await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "delivery",
+			deliveryAddress: MY_ADDRESS,
+		});
+		const order = await t.run(async (ctx) => {
+			const claim = await ctx.db.get(claimId);
+			return claim?.orderId ? ctx.db.get(claim.orderId) : null;
+		});
+		expect(order).not.toBeNull();
+		expect(order?.paymentDueAt).toBeUndefined();
+	});
+
 	test("the sweep leaves protected orders alone: claimed, fee-pending, live gateway session, already-fulfilling", async () => {
 		const t = setup();
 		const { orderId } = await committedOrder(t);
@@ -1584,7 +1645,7 @@ describe("orderClaims — the checkout is frozen while its link is out", () => {
 		});
 		expect(session?.liveClaim?.claimId).toBe(claimId);
 		expect(session?.liveClaim?.lines).toHaveLength(1);
-		expect(session?.liveClaim?.itemsTotal).toBe(12000);
+		expect(session?.liveClaim?.total).toBe(12000);
 
 		await asA.mutation(api.orderClaims.cancelClaim, { claimId });
 		const released = await asA.query(api.counterCheckout.getCheckoutSession, {

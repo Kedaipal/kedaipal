@@ -168,7 +168,7 @@ Insights rides the shared plan-feature seam (`86ey5tywf`/plan-gating work), **no
 a bespoke gate — `insights` is one key in `PlanFeatures`:
 
 - `PLAN_FEATURES.insights` in `convex/lib/plans.ts` — `false` for Starter, `true`
-  for Pro/Scale. `resolveAccess` folds it onto `AccessState.features` via
+  for Pro/Enterprise. `resolveAccess` folds it onto `AccessState.features` via
   `featuresForPlan`, so **comped** and the fail-safe (missing subscription → Pro
   features) grant access, and a **Pro trial** passes.
 - **Enforced server-side**: both queries read `getAccess(ctx, retailerId)` and

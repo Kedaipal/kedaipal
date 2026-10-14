@@ -19,8 +19,28 @@
  *    data only (no buyer PII) and must survive the tenant for bookkeeping/tax.
  *    Their `retailerId`/`subscriptionId` refs dangle after deletion — expected
  *    for a retained record of a deleted tenant.
+ *  - `creditLedger` rows (Credits, 86eye2ccu) — the financial record of what
+ *    the seller bought and spent (purchased credits are deferred revenue until
+ *    spent or expired). Like invoices: seller billing data, no buyer PII, kept
+ *    for bookkeeping. Their `retailerId`/`orderId` refs dangle — expected.
+ *  - `creditPurchases` rows + their `receiptPdfStorageId` blobs (Credits T2,
+ *    z8r3fdf8ht) — what the seller paid Kedaipal for top-up packs, the same
+ *    kind of record as an invoice. Their `creditPurchases` PHASE doesn't
+ *    delete them: it closes every still-pending checkout (below).
  *  - `adminAuditLog` rows — an audit trail must outlive the tenant it audited
  *    (`targetId`s are doc ids / last-4 only, never buyer PII).
+ *  - `messageLogRollups` rows — the PERMANENT WhatsApp cost ledger (retailer ×
+ *    MYT month × category × status). `purgeExpiredOutboundLog` folds every
+ *    expiring `outboundMessageLog` row into its bucket precisely so aggregate
+ *    cost accounting survives the 90-day purge "forever" (lib/retention.ts),
+ *    and Meta bills us per send from Oct 2026 — so this is a record of what
+ *    Kedaipal was CHARGED for a seller's traffic, the same class as an
+ *    invoice. The rollup deliberately drops `toWaPhone`/`templateName`, so it
+ *    carries counts and no buyer PII. The raw per-send rows (which do carry
+ *    the buyer's number) ARE deleted, by the `outboundMessageLog` phase.
+ *    `retailerId` is left dangling rather than cleared: it is the ledger's
+ *    grouping key, and blanking it would merge a deleted tenant's months into
+ *    the tenant-less bucket and corrupt both.
  *  - `optOuts` rows are the buyer's standing suppression instruction, GLOBAL
  *    across every retailer on the shared WABA — deleting one would re-enable
  *    messages the buyer said stop to. The phase only clears
@@ -44,13 +64,19 @@ export const DELETION_PHASES = [
 	"products",
 	"productCategories",
 	"categories",
+	"bookingBlocks",
 	"deliveryJobs",
 	"deliveryQuotes",
 	"customers",
 	"pickupLocations",
 	"counterCheckoutSessions",
+	"orderClaims",
+	"vouchers",
 	"subscriptions",
 	"subscriptionUsage",
+	"creditPurchases",
+	"creditAccounts",
+	"creditLots",
 	"foundingMembers",
 	"retailerMembers",
 	"retailerSendingLimits",
@@ -178,6 +204,22 @@ export async function runDeletionPhase(
 			}
 			return { processed: rows.length, done: rows.length < limit };
 		}
+		case "bookingBlocks": {
+			// Availability windows the seller closed off ("Maintenance — river
+			// deck repair"). Tenant-owned calendar config: no buyer PII and no
+			// money, so nothing argues for keeping it once the store is gone.
+			// Grouped with the catalogue phases above rather than appended,
+			// because a block is a product's availability — the `productId` it
+			// may carry points at rows the `products` phase has already deleted.
+			// Index prefix: by_retailer_start with only the retailerId bound
+			// covers every window.
+			const rows = await ctx.db
+				.query("bookingBlocks")
+				.withIndex("by_retailer_start", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const block of rows) await ctx.db.delete(block._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
 		case "deliveryJobs": {
 			const rows = await ctx.db
 				.query("deliveryJobs")
@@ -225,6 +267,48 @@ export async function runDeletionPhase(
 				.withIndex("by_retailer_status", (q) => q.eq("retailerId", retailerId))
 				.take(limit);
 			for (const session of rows) await ctx.db.delete(session._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "orderClaims": {
+			// DELETED, not retained (claim links, 86eyq0epn). A claim is an OFFER
+			// the seller sent a buyer — required `waPhone`, optional `buyerName`,
+			// plus the frozen line snapshot — and never a record of what Kedaipal
+			// CHARGED the seller, which is the one thing the header's retention
+			// block keeps. Nothing survives the tenant to justify holding a
+			// buyer's number, so the rows go.
+			//
+			// This phase is the doer the claim cron defers to: `purgeStaleClaims`
+			// sweeps `expired`/`cancelled` rows past CLAIM_RETENTION_MS and
+			// deliberately exempts `completed` ones, on the grounds that "order
+			// retention is the PDPA pack's job" (convex/lib/orderClaims.ts). That
+			// job had no doer here, so a completed claim kept its buyer's phone
+			// and name indefinitely after the store was erased.
+			//
+			// Index prefix: by_retailer_status with only the retailerId bound
+			// covers every status (same shape as counterCheckoutSessions above).
+			// No blobs to free — a claim holds no storage ids. Position is not
+			// load-bearing: rows are found by retailer, never through the
+			// `sessionId` the phase above has already deleted.
+			const rows = await ctx.db
+				.query("orderClaims")
+				.withIndex("by_retailer_status", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const claim of rows) await ctx.db.delete(claim._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "vouchers": {
+			// Seller-issued discount codes (`z8r3fdr617`). Deleted outright, not
+			// retained: unlike an invoice or a credit-ledger row, a voucher is
+			// not a record of money that changed hands — what the seller actually
+			// gave away is already in the ORDER's `voucherSnapshot` and
+			// `voucherDiscount`, and those orders go with the tenant. The
+			// `redeemedOrderId` refs dangle the moment the `orders` phase above
+			// has run, which is exactly why this phase follows it.
+			const rows = await ctx.db
+				.query("vouchers")
+				.withIndex("by_retailer_created", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const voucher of rows) await ctx.db.delete(voucher._id);
 			return { processed: rows.length, done: rows.length < limit };
 		}
 		case "subscriptions": {
@@ -282,6 +366,57 @@ export async function runDeletionPhase(
 				.withIndex("by_retailer_month", (q) => q.eq("retailerId", retailerId))
 				.take(limit);
 			for (const usage of rows) await ctx.db.delete(usage._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "creditPurchases": {
+			// Retained by decision (see the header) — but, like a pending
+			// invoice, a live top-up checkout must not outlive the store: a
+			// payment into a deleted store is only ever a refund. Expire every
+			// pending purchase and kill its HitPay link; a payment that still
+			// slips through is stamped `late_payment` and never credited.
+			// Expired rows drop out of the index range, so re-entry never
+			// redoes work.
+			const pending = await ctx.db
+				.query("creditPurchases")
+				.withIndex("by_retailer_status_created", (q) =>
+					q.eq("retailerId", retailerId).eq("status", "pending"),
+				)
+				.take(limit);
+			for (const purchase of pending) {
+				await ctx.db.patch(purchase._id, {
+					status: "expired",
+					expiredAt: Date.now(),
+				});
+				if (purchase.gatewayRequestId) {
+					await ctx.scheduler.runAfter(
+						0,
+						internal.creditPurchases.deletePurchaseRequest,
+						{ requestId: purchase.gatewayRequestId },
+					);
+				}
+			}
+			return { processed: pending.length, done: pending.length < limit };
+		}
+		case "creditAccounts": {
+			// The cached balance row (Credits, 86eye2ccu) — derived state, gone with
+			// the tenant. The LEDGER is retained (see the header).
+			const rows = await ctx.db
+				.query("creditAccounts")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const account of rows) await ctx.db.delete(account._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "creditLots": {
+			// Index prefix: by_retailer_open_expiry with only the retailerId bound
+			// — open and spent lots alike.
+			const rows = await ctx.db
+				.query("creditLots")
+				.withIndex("by_retailer_open_expiry", (q) =>
+					q.eq("retailerId", retailerId),
+				)
+				.take(limit);
+			for (const lot of rows) await ctx.db.delete(lot._id);
 			return { processed: rows.length, done: rows.length < limit };
 		}
 		case "foundingMembers": {

@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import {
 	animate,
 	motion,
@@ -40,15 +41,31 @@ const CARDS: SellerCard[] = [
 	{ label: m.proof_kind_1, body: m.proof_kind_1_body, image: "seller-lekor" },
 	{ label: m.proof_kind_12, body: m.proof_kind_12_body, image: "seller-live" },
 	{ label: m.proof_kind_8, body: m.proof_kind_8_body, image: "seller-fashion" },
-	{ label: m.proof_kind_2, body: m.proof_kind_2_body, image: "seller-tentwash" },
+	{
+		label: m.proof_kind_2,
+		body: m.proof_kind_2_body,
+		image: "seller-tentwash",
+	},
 	{ label: m.proof_kind_4, body: m.proof_kind_4_body, image: "seller-dessert" },
-	{ label: m.proof_kind_11, body: m.proof_kind_11_body, image: "seller-prints" },
+	{
+		label: m.proof_kind_11,
+		body: m.proof_kind_11_body,
+		image: "seller-prints",
+	},
 	{ label: m.proof_kind_3, body: m.proof_kind_3_body, image: "seller-fish" },
 	{ label: m.proof_kind_5, body: m.proof_kind_5_body, image: "seller-cake" },
 	{ label: m.proof_kind_6, body: m.proof_kind_6_body, image: "seller-meat" },
-	{ label: m.proof_kind_7, body: m.proof_kind_7_body, image: "seller-campsite" },
+	{
+		label: m.proof_kind_7,
+		body: m.proof_kind_7_body,
+		image: "seller-campsite",
+	},
 	{ label: m.proof_kind_9, body: m.proof_kind_9_body, image: "seller-fitness" },
-	{ label: m.proof_kind_10, body: m.proof_kind_10_body, image: "seller-frozen" },
+	{
+		label: m.proof_kind_10,
+		body: m.proof_kind_10_body,
+		image: "seller-frozen",
+	},
 ];
 
 /** One arrow-press advances roughly one card (width + gap). */
@@ -58,10 +75,7 @@ const DRIFT = 0.022;
 
 function CardGroup({ hidden = false }: { hidden?: boolean }) {
 	return (
-		<div
-			aria-hidden={hidden || undefined}
-			className="flex shrink-0 gap-5 pr-5"
-		>
+		<div aria-hidden={hidden || undefined} className="flex shrink-0 gap-5 pr-5">
 			{CARDS.map((card) => (
 				<article
 					key={card.image}
@@ -111,13 +125,17 @@ function CardGroup({ hidden = false }: { hidden?: boolean }) {
 						<span className="text-sm text-cta-mesh-foreground/65">
 							{m.proof_stat_1_label()}
 						</span>
-						<span className="text-base font-bold">{m.proof_stat_1_value()}</span>
+						<span className="text-base font-bold">
+							{m.proof_stat_1_value()}
+						</span>
 					</div>
 					<div className="flex items-center justify-between gap-2">
 						<span className="text-sm text-cta-mesh-foreground/65">
 							{m.proof_stat_2_label()}
 						</span>
-						<span className="text-base font-bold">{m.proof_stat_2_value()}</span>
+						<span className="text-base font-bold">
+							{m.proof_stat_2_value()}
+						</span>
 					</div>
 				</div>
 			</article>
@@ -199,6 +217,20 @@ export function RealSellers() {
 						<p className="text-base leading-relaxed text-muted-foreground md:text-lg lg:text-right">
 							{m.proof_sub()}
 						</p>
+						{/* The proof's own next step: these are real stores, so let a
+						    visitor walk into them (z8r3fdkmyp). The landing's one
+						    buyer-shaped door — on the proof, not in the hero, which
+						    stays the seller's pitch. */}
+						<Link
+							to="/stores"
+							className="group inline-flex min-h-11 items-center gap-1.5 self-start text-sm font-semibold text-accent-emphasis underline-offset-4 hover:underline lg:self-end"
+						>
+							{m.proof_browse_stores()}
+							<ArrowRight
+								aria-hidden
+								className="size-4 transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none"
+							/>
+						</Link>
 						<div className="hidden gap-2 md:flex">
 							<button
 								type="button"

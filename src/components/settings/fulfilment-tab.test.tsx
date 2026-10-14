@@ -14,7 +14,11 @@ import { type FunctionReference, getFunctionName } from "convex/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../../convex/_generated/api";
 import { COUNTRY_CURRENCY } from "../../../convex/lib/country";
-import { ActAsProvider } from "../../hooks/useActAs";
+import {
+	ACT_AS_STORAGE_KEY,
+	ActAsProvider,
+	serializeActAsRecord,
+} from "../../hooks/useActAs";
 import { SETTINGS_ANCHOR } from "../../lib/country-setup-copy";
 import { FulfilmentTab } from "./fulfilment-tab";
 
@@ -31,6 +35,16 @@ vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ __fn: fn, args }),
 }));
 vi.mock("@tanstack/react-query", () => ({ useQuery: vi.fn() }));
+// An act-as session answers only to the admin who started it, in that Clerk
+// session (z8r3fdkqn6) — the viewer here IS that admin, so a record primed for
+// ADMIN_SESSION is honoured exactly as on a refreshed act-as dashboard.
+const ADMIN_SESSION = vi.hoisted(() => ({
+	userId: "user_admin",
+	sessionId: "sess_admin",
+}));
+vi.mock("../../hooks/useActAsViewer", () => ({
+	useActAsViewer: () => ({ session: ADMIN_SESSION, isAdmin: true }),
+}));
 // The address autocomplete loads the Google Places script on mount — inert
 // stub; nothing here exercises it (default charge mode is "free").
 vi.mock("../forms/google-address-autocomplete", () => ({
@@ -56,6 +70,15 @@ const NAME = {
 };
 
 const SELLER_ID = "rt_seller_1";
+
+/** Prime the act-as session before mount — the provider reads it from
+ * sessionStorage, same as a refreshed act-as dashboard. */
+function primeActAsSession() {
+	window.sessionStorage.setItem(
+		ACT_AS_STORAGE_KEY,
+		serializeActAsRecord({ ...ADMIN_SESSION, retailerId: SELLER_ID as never }),
+	);
+}
 
 describe("FulfilmentTab act-as wiring", () => {
 	let updateSettings: ReturnType<typeof vi.fn>;
@@ -120,10 +143,7 @@ describe("FulfilmentTab act-as wiring", () => {
 	}
 
 	it("saves settings with the acted-as retailerId in admin act-as", async () => {
-		// Prime the act-as session before mount — the provider reads it from
-		// sessionStorage, same as a refreshed act-as dashboard. Key mirrors
-		// STORAGE_KEY in useActAs.tsx.
-		window.sessionStorage.setItem("kp:actAsRetailerId", SELLER_ID);
+		primeActAsSession();
 		renderTab();
 		saveMinNotice();
 		await waitFor(() =>
@@ -151,7 +171,7 @@ describe("FulfilmentTab act-as wiring", () => {
 	});
 
 	it("skips the pickupSetupSeen stamp under act-as (identity-resolved — it would mark the admin's own checklist)", () => {
-		window.sessionStorage.setItem("kp:actAsRetailerId", SELLER_ID);
+		primeActAsSession();
 		renderTab();
 		expect(markSeen).not.toHaveBeenCalled();
 	});

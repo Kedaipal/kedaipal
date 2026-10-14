@@ -117,6 +117,12 @@ status updates all cost nothing. This is why the WhatsApp wedge is cheap to run.
 
 ## 4. Tier economics — why "Scale = infinite WA messages" must change
 
+> **Historical analysis (Jun–Aug 2026).** Scale was retired for **Enterprise**
+> on 1 Oct 2026 (Credits T6, [`pricing.md`](./pricing.md#enterprise--a-contract-not-a-price)).
+> An Enterprise store carries Pro's broadcast quota (100) until broadcasts
+> ship, when its contract prices them — the per-deal contract is where this
+> liability is now decided. The section below is kept as the reasoning.
+
 `convex/lib/plans.ts` currently sets `scale.broadcastQuota = Infinity`
 (`UNLIMITED` sentinel). **This is an unbounded financial liability**: every
 broadcast a Scale retailer sends is a marketing template Kedaipal pays Meta for,

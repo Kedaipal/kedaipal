@@ -20,3 +20,14 @@ export function storefrontOrigin(): string {
 export function storefrontUrl(slug: string): string {
 	return `${storefrontOrigin()}/${slug}`;
 }
+
+/**
+ * Checkout, with a voucher already applied (`z8r3fdr617`) — the "link" of the
+ * share sheet's code/QR/link trio, and what a buyer shopping on their own phone
+ * needs (they can't scan their own screen). One author, so the share sheet, the
+ * WhatsApp message and any future send build the same URL; the checkout route
+ * reads the param back through `?voucher=`.
+ */
+export function voucherCheckoutUrl(slug: string, code: string): string {
+	return `${storefrontUrl(slug)}/checkout?voucher=${encodeURIComponent(code)}`;
+}

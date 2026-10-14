@@ -14,6 +14,16 @@ import {
 
 const SETTINGS_ROUTE = join(__dirname, "../routes/app.settings.tsx");
 const SETTINGS_COMPONENTS = join(__dirname, "../components/settings");
+// A settings card does not have to live in `components/settings`: the credit
+// balance card is the same component the dashboard renders in its compact
+// variant, so it sits in `components/credits` and the billing tab mounts it.
+// The guarantee this test makes is "a card renders the anchor", not "the file
+// is in one folder" — so the directories a settings TAB mounts cards from are
+// all scanned.
+const SETTINGS_CARD_DIRS = [
+	SETTINGS_COMPONENTS,
+	join(__dirname, "../components/credits"),
+];
 const PRODUCT_FORM = join(__dirname, "../components/forms/product-form.tsx");
 
 const settingsEntries = Object.entries(SPOTLIGHT_ANCHOR).filter(
@@ -54,9 +64,11 @@ describe("spotlight registry", () => {
 		// anchor can't leave a stale literal behind.
 		const sources = [
 			readFileSync(SETTINGS_ROUTE, "utf8"),
-			...readdirSync(SETTINGS_COMPONENTS)
-				.filter((f) => f.endsWith(".tsx") && !f.endsWith(".test.tsx"))
-				.map((f) => readFileSync(join(SETTINGS_COMPONENTS, f), "utf8")),
+			...SETTINGS_CARD_DIRS.flatMap((dir) =>
+				readdirSync(dir)
+					.filter((f) => f.endsWith(".tsx") && !f.endsWith(".test.tsx"))
+					.map((f) => readFileSync(join(dir, f), "utf8")),
+			),
 		].join("\n");
 		for (const [key, { anchor }] of settingsEntries) {
 			// A card the post-switch checklist already anchors keeps taking its
@@ -114,6 +126,10 @@ describe("spotlight registry", () => {
 		expect(PRODUCT_SPOTLIGHT.prep_time.applies({ kind: "booking" })).toBe(
 			false,
 		);
+		// promo renders on every kind, so every row forwards — a booking and an
+		// event included, where the card says why the flash extras don't apply.
+		for (const kind of [undefined, "physical", "booking", "service"])
+			expect(PRODUCT_SPOTLIGHT.promo.applies({ kind })).toBe(true);
 	});
 
 	test("anchors shared with the post-switch checklist are the same string", () => {
@@ -126,6 +142,9 @@ describe("spotlight registry", () => {
 		expect(SPOTLIGHT_ANCHOR.business_address.anchor).toBe(
 			SETTINGS_ANCHOR.business_address,
 		);
+		expect(SPOTLIGHT_ANCHOR.pickup_points.anchor).toBe(
+			SETTINGS_ANCHOR.pickup_addresses,
+		);
 	});
 
 	test("spotlightHref carries the tab AND the key, from one source", () => {
@@ -135,6 +154,10 @@ describe("spotlight registry", () => {
 		expect(spotlightHref("business_details")).toBe(
 			"/app/settings?tab=store&spot=business_details",
 		);
+		// Its own card, not the Pickup card above it (z8r3fdm32x).
+		expect(spotlightHref("event_venues")).toBe(
+			"/app/settings?tab=fulfilment&spot=event_venues",
+		);
 	});
 
 	test("a product-page key lands on the products LIST, not a guessed product", () => {
@@ -143,6 +166,7 @@ describe("spotlight registry", () => {
 		expect(spotlightHref("weekend_rate")).toBe(
 			"/app/products?spot=weekend_rate",
 		);
+		expect(spotlightHref("promo")).toBe("/app/products?spot=promo");
 	});
 
 	test("isSpotlightKey admits registry keys only", () => {

@@ -1376,7 +1376,7 @@ describe("pickupLocations — fulfilment invariant on setActive", () => {
 async function setPlan(
 	t: ReturnType<typeof setup>,
 	retailerId: Id<"retailers">,
-	plan: "starter" | "pro" | "scale",
+	plan: "starter" | "pro" | "enterprise",
 ) {
 	await t.run(async (ctx) => {
 		const sub = await ctx.db

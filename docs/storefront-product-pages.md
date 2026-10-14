@@ -163,7 +163,10 @@ state, different `_id` resets).
   a browse-the-store exit. `robots: index, follow` + canonical + OG (product
   photo → cover → logo precedence) + `Product` JSON-LD (`Offer` /
   `AggregateOffer`; quote-only products carry **no** offers block rather than
-  advertising RM 0).
+  advertising RM 0). The JSON-LD goes through `jsonLdScript`
+  (`src/lib/json-ld.ts`), like every route's: product and store names are
+  seller text, and a raw `JSON.stringify` in a head script lets a
+  `</script>` inside a name run as markup.
 
 ## Discoverability — the pages have to be findable
 

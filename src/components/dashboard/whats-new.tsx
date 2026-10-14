@@ -9,6 +9,7 @@ import {
 	ChartLine,
 	Check,
 	Clock,
+	Gauge,
 	History,
 	type LucideIcon,
 	Megaphone,
@@ -215,6 +216,7 @@ const ENTRY_ICONS: Record<ReleaseIconName, LucideIcon> = {
 	calendar: CalendarRange,
 	"calendar-clock": CalendarClock,
 	users: UsersRound,
+	gauge: Gauge,
 };
 
 /**

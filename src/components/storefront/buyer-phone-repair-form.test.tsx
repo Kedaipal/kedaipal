@@ -9,6 +9,7 @@ import {
 import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Country } from "../../../convex/lib/country";
+import { phonePlateCode } from "../../lib/test/buyer-phone-picker";
 import { BuyerPhoneRepairForm } from "./buyer-phone-repair-form";
 
 // No reads — only the mutation half of the Convex pair needs stubbing
@@ -51,10 +52,10 @@ function renderForm({
 	);
 }
 
-const picker = () =>
-	screen.getByRole("combobox", {
-		name: "Country of your WhatsApp number",
-	}) as HTMLSelectElement;
+const PICKER_LABEL = "Country of your WhatsApp number";
+/** The plate's control — a searchable sheet since z8r3fdm36y, driven
+ * through the shared helpers so this file holds no copy of its shape. */
+const plateCode = () => phonePlateCode(PICKER_LABEL);
 const phoneInput = () =>
 	screen.getByRole("textbox", {
 		name: "Your WhatsApp number",
@@ -72,12 +73,12 @@ describe("BuyerPhoneRepairForm — the picker's default", () => {
 	it("opens on the country of the number that failed", () => {
 		// A buyer who typo'd a Japanese number most likely retypes a Japanese one.
 		renderForm({ failedWaPhone: "819012345670", storeCountry: "MY" });
-		expect(picker().value).toBe("JP");
+		expect(plateCode()).toBe("+81");
 	});
 
 	it("an SG buyer at an MY store gets +65 back", () => {
 		renderForm({ failedWaPhone: "6591234560", storeCountry: "MY" });
-		expect(picker().value).toBe("SG");
+		expect(plateCode()).toBe("+65");
 	});
 
 	it("falls back to the store's country when no number is held", () => {
@@ -91,7 +92,7 @@ describe("BuyerPhoneRepairForm — the picker's default", () => {
 				onCancel={() => {}}
 			/>,
 		);
-		expect(picker().value).toBe("SG");
+		expect(plateCode()).toBe("+65");
 	});
 
 	it("focuses the field — the buyer just tapped 'Update my number'", () => {
@@ -100,7 +101,7 @@ describe("BuyerPhoneRepairForm — the picker's default", () => {
 	});
 });
 
-describe("BuyerPhoneRepairForm — saving", () => {
+describe("BuyerPhoneRepairForm — saving", async () => {
 	it("a number the parser refuses can't be sent, and says why — disabled, not a dead click", () => {
 		// Same rule as the counter's bind: the button is out while the number
 		// can't be sent, and a line says what's missing. Nothing reaches the
@@ -175,7 +176,7 @@ describe("BuyerPhoneRepairForm — saving", () => {
 		});
 		switchButton.focus();
 		fireEvent.click(switchButton);
-		expect(picker().value).toBe("SG");
+		expect(plateCode()).toBe("+65");
 		// The button unmounts with the fix — focus lands back in the number,
 		// not at the top of the page.
 		expect(document.activeElement).toBe(phoneInput());

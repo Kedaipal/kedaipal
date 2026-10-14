@@ -14,7 +14,9 @@ export const FAQ_PRIMARY_IDS = [1, 3, 13, 12, 11, 7, 10] as const;
 /** Revealed by "See all questions" — never in the structured data. */
 export const FAQ_SECONDARY_IDS = [9, 8, 2, 4, 5, 6] as const;
 
-export type FaqId = (typeof FAQ_PRIMARY_IDS)[number] | (typeof FAQ_SECONDARY_IDS)[number];
+export type FaqId =
+	| (typeof FAQ_PRIMARY_IDS)[number]
+	| (typeof FAQ_SECONDARY_IDS)[number];
 
 /** A compiled paraglide message: `(inputs?, { locale? })` → string. */
 type Message = (

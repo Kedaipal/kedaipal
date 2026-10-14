@@ -480,7 +480,7 @@ describe("migrateLalamoveModeToLive (z8r3fdbvdy)", () => {
 	});
 })
 
-describe("resyncSubscriptionCaps (z8r3fday24 — Pro 200 / Scale 400)", () => {
+describe("resyncSubscriptionCaps — every row carries PLAN_CAPS for its plan (z8r3fday24)", () => {
 	test("re-syncs stale denormalized caps, skips canonical rows, never touches updatedAt", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t);

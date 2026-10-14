@@ -1,4 +1,9 @@
-import { AnimatePresence, motion, useInView, useReducedMotion } from "framer-motion";
+import {
+	AnimatePresence,
+	motion,
+	useInView,
+	useReducedMotion,
+} from "framer-motion";
 import { Check } from "lucide-react";
 import { useRef } from "react";
 import { useBeatLoop } from "../../hooks/useBeatLoop";

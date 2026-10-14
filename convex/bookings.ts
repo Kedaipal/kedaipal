@@ -76,7 +76,9 @@ import {
 	MAX_CUSTOMER_NOTE,
 	requireOrderAccess,
 } from "./orders";
-import { assertSubscriptionActive } from "./subscriptions";
+import { assertOrderCreditAvailable } from "./creditLock";
+import { effectivePrice } from "./lib/promo";
+import { assertSubscriptionActive, getAccess } from "./subscriptions";
 import { orderingPausedMessage } from "./lib/seasonalHold";
 import { recordOrderCreated } from "./subscriptionUsage";
 
@@ -96,12 +98,19 @@ function buildStayLines(
 	variant: Doc<"productVariants">,
 	checkIn: number,
 	checkOut: number,
+	// The promo-resolved nightly rate (z8r3fdcw72) — callers price through
+	// convex/lib/promo so this function stays pure. The weekend surcharge
+	// keeps its own rate: promoPrice is per VARIANT, and the weekend price
+	// lives on the listing, so a promo discounts the base nights only.
+	nightlyPrice: number = variant.price,
 ): Doc<"orders">["items"] {
 	const base = {
 		productId: product._id,
 		variantId: variant._id,
 		name: product.name,
 	};
+	const nightlyListPrice =
+		nightlyPrice < variant.price ? variant.price : undefined;
 	const weekendPrice = product.booking?.weekendPrice;
 	const weekendDays = product.booking?.weekendDays;
 	if (weekendPrice === undefined || weekendDays === undefined) {
@@ -109,7 +118,8 @@ function buildStayLines(
 			{
 				...base,
 				variantLabel: undefined,
-				price: variant.price,
+				price: nightlyPrice,
+				listPrice: nightlyListPrice,
 				quantity: nightsBetween(checkIn, checkOut),
 			},
 		];
@@ -124,7 +134,8 @@ function buildStayLines(
 		lines.push({
 			...base,
 			variantLabel: WEEKDAY_NIGHTS_LABEL,
-			price: variant.price,
+			price: nightlyPrice,
+			listPrice: nightlyListPrice,
 			quantity: weekdayNights,
 		});
 	}
@@ -434,6 +445,18 @@ export const requestBooking = mutation({
 		// deposit): a later price edit never re-describes a placed booking. A
 		// stay that is all one kind writes one line; a listing without the rate
 		// writes today's unlabelled line.
+		// Promo price (z8r3fdcw72): the nightly/package rate goes through the
+		// same pricing module as every other order door. Flash mechanics (cap,
+		// payment hold) never apply to bookings in v1 — capacity already
+		// governs — so no runId is stamped and no tally runs; `listPrice`
+		// still prints the saving.
+		const storePlan = (await getAccess(ctx, args.retailerId)).plan;
+		const effectiveRate = effectivePrice(
+			variant,
+			product,
+			storePlan,
+			Date.now(),
+		);
 		const items = isPackageListing
 			? [
 					{
@@ -441,11 +464,13 @@ export const requestBooking = mutation({
 						variantId: variant._id,
 						name: product.name,
 						variantLabel: undefined,
-						price: variant.price,
+						price: effectiveRate,
+						listPrice:
+							effectiveRate < variant.price ? variant.price : undefined,
 						quantity: packageQuantity,
 					},
 				]
-			: buildStayLines(product, variant, checkIn, checkOut);
+			: buildStayLines(product, variant, checkIn, checkOut, effectiveRate);
 		// The refundable security deposit rides the one payment (86eyn4kee):
 		// frozen from the listing NOW (snapshot posture — a later policy edit
 		// never changes a placed booking) and folded into `total` through the
@@ -546,9 +571,16 @@ export const requestBooking = mutation({
 		// every other confirm site makes.
 		if (instantBook) await stampRetailerActivation(ctx, args.retailerId, now);
 
-		// Same bookkeeping as any created order: usage meter (soft cap), the
-		// sold-once stamp (protects the listing from permanent delete), CRM link.
-		await recordOrderCreated(ctx, args.retailerId, now);
+		// Same bookkeeping as any created order: usage meter (soft cap) + its
+		// credit, the sold-once stamp (protects the listing from permanent
+		// delete), CRM link. A request-to-book uses its credit now and gets it
+		// back if the request is declined or expires unanswered.
+		await recordOrderCreated(ctx, {
+			retailerId: args.retailerId,
+			orderId,
+			orderShortId: shortId,
+			createdAt: now,
+		});
 		await stampProductsOrdered(ctx, items, now);
 		await linkOrderToCustomer(ctx, {
 			retailerId: args.retailerId,
@@ -588,24 +620,41 @@ export const requestBooking = mutation({
 	},
 });
 
+/**
+ * `booking_requested` is the generic "awaiting the seller's approval" status:
+ * a booking request, or an RSVP on an event that approves each guest
+ * (`z8r3fdkjek`). The mechanics are identical; only the nouns differ.
+ */
+function requestNouns(order: { eventRsvp?: boolean }): {
+	thing: "booking" | "RSVP";
+	held: string;
+	again: string;
+} {
+	return order.eventRsvp === true
+		? { thing: "RSVP", held: "the seat was released", again: "RSVP again" }
+		: { thing: "booking", held: "the dates were released", again: "book again" };
+}
+
 /** Cause-true refusals for acting on a request that is no longer one. */
 function assertStillRequested(order: {
 	status: string;
 	bookingResolution?: "declined" | "expired";
+	eventRsvp?: boolean;
 }): void {
 	if (order.status === "booking_requested") return;
+	const n = requestNouns(order);
 	if (order.bookingResolution === "expired") {
 		throw new ConvexError(
-			"This request expired after 24 hours and the dates were released — ask the guest to book again",
+			`This request expired after 24 hours and ${n.held} — ask the guest to ${n.again}`,
 		);
 	}
 	if (order.bookingResolution === "declined") {
 		throw new ConvexError("This request was already declined");
 	}
 	if (order.status === "cancelled") {
-		throw new ConvexError("This booking was cancelled");
+		throw new ConvexError(`This ${n.thing} was cancelled`);
 	}
-	throw new ConvexError("This booking was already approved");
+	throw new ConvexError(`This ${n.thing} was already approved`);
 }
 
 /**
@@ -625,13 +674,15 @@ export const approveBookingRequest = mutation({
 			level: "write",
 		});
 		assertStillRequested(order);
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, order.retailerId);
+		}
+		await assertOrderCreditAvailable(ctx, order);
 
 		// The one transition path: timeline event, activation stamp, stage reset.
 		// notifyStatusChange skips `confirmed`, so nothing generic goes out.
 		await applyStatusTransition(ctx, order, "confirmed", {
-			note: "Booking approved",
+			note: order.eventRsvp === true ? "RSVP approved" : "Booking approved",
 			actorUserId: access.role === "admin" ? undefined : access.userId,
 		});
 
@@ -699,8 +750,11 @@ export const declineBookingRequest = mutation({
 			{ ...order, bookingResolution: "declined" },
 			"cancelled",
 			{
-				note: `Booking declined: ${trimmed}`,
+				note: `${order.eventRsvp === true ? "RSVP" : "Booking"} declined: ${trimmed}`,
 				actorUserId: access.role === "admin" ? undefined : access.userId,
+				// Declining a request the seller never accepted — the strictest refund
+				// rule applies (never accepted, within the monthly allowance).
+				cancelCause: "seller",
 			},
 		);
 		await logAdminAction(ctx, access, "bookings.decline", orderId);
@@ -795,7 +849,8 @@ export const expireStaleRequests = internalMutation({
 			// expired", never a bare "cancelled").
 			await ctx.db.patch(order._id, { bookingResolution: "expired" });
 			await applyStatusTransition(ctx, order, "cancelled", {
-				note: "Booking request expired — not answered within 24 hours",
+				note: `${order.eventRsvp === true ? "RSVP" : "Booking"} request expired — not answered within 24 hours`,
+				cancelCause: "system",
 			});
 		}
 	},

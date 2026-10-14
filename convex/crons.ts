@@ -143,4 +143,34 @@ crons.daily(
 	{},
 );
 
+// Kedaipal Credits (86eye2ccu, docs/credits.md): roll every credit account a
+// month boundary has passed — the plan grant lands and a positive leftover is
+// forfeited. 16:05 UTC = 00:05 MYT/SGT, so the new month's credits arrive at the
+// seller's own midnight on the 1st, not UTC's. Daily, so a missed run heals the
+// next day; every debit also rolls its own account lazily.
+crons.daily(
+	"roll credit periods",
+	{ hourUTC: 16, minuteUTC: 5 },
+	internal.credits.internalRollPeriods,
+	{},
+);
+
+// Credits: retire whatever is left of each purchased lot 12 months after it
+// landed (00:10 MYT), one `expire` ledger row per lot.
+crons.daily(
+	"expire purchased credits",
+	{ hourUTC: 16, minuteUTC: 10 },
+	internal.credits.internalExpireLots,
+	{},
+);
+
+// Credits T3: email each store 14 days before any of its bought credits expire
+// (00:15 MYT), once per lot, one email per store.
+crons.daily(
+	"credit expiry notices",
+	{ hourUTC: 16, minuteUTC: 15 },
+	internal.creditNotices.internalExpiryNotices,
+	{},
+);
+
 export default crons;

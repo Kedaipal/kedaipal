@@ -348,6 +348,95 @@ is still accepted on the wire and folded in by `toInboxFilterArgs`, and a legacy
   out of In-progress while still being worked. Payment is a multi-select filter.
 - **Phase it:** Phase 1 was the inbox; Phase 2 added bulk actions.
 
+## Fulfilment — how the order goes out ([`z8r3fdfau9`](https://app.clickup.com/t/z8r3fdfau9))
+
+The inbox could filter on every enumerable thing about an order **except the one
+a seller planning tomorrow actually asks**: which of these do I deliver, and
+which are people coming to collect? The `Fulfilment` column had shipped with the
+table and was the only default-visible enumerable column with no header funnel.
+
+Five options, and they are **exactly the values `fulfilmentKey()` can return**
+(`convex/lib/orderCsv.ts`) — the filter is built from the registry rather than
+holding its own list, because the picker offering a word the column can't print
+is the `storefront` / "Online" drift this file already records:
+
+| key | label | rule |
+| --- | --- | --- |
+| `delivery` | Delivery | the method, or no method at all (every legacy order) |
+| `self_collect` | Self-collect | pickup at the seller's own place |
+| `drop_off` | Drop-off | pickup at an agreed meetup point |
+| `collection` | We collect | `deliveryDirection === "collection"` — the opposite trip |
+| `booking` | Booking | nothing ships; the guest turns up on check-in day |
+| `event` | Event | an RSVP to a fixed-moment event — **stored `self_collect`** |
+
+An RSVP to an approval-gated event (`z8r3fdkjek`) waits in the
+`booking_requested` **status** — the one bookings already use — while staying an
+RSVP. Status and fulfilment are different axes and neither bends the other: that
+order is an **Event** awaiting approval, not a Booking. `eventRsvp` is what tells
+the two apart, which is exactly why the key is derived from `orderFlowKind`
+rather than from the status or the method.
+
+**`fulfilmentKey` is built on `orderFlowKind`, and two refinements sit on top of
+it.** The flow kind comes first and that is not tidiness: an **event RSVP is
+stored `deliveryMethod: "self_collect"`** (the buyer collects at the venue) and
+is told apart only by the frozen `orders.eventRsvp` marker, so reading the
+method files every RSVP under "Self-collect" — the exact flattening this
+function exists to undo for drop-off. `orderStatus.ts` states the rule in one
+line: *derive with `orderFlowKind`, never by re-reading products*.
+
+The two refinements are the cases the stage flow doesn't care about but the
+seller's day does, and **each is gated on its own kind**: a `collection` order is
+stored `deliveryMethod: "delivery"` but the rider goes buyer→store
+([`86eyg0n8e`](https://app.clickup.com/t/86eyg0n8e)), and a `drop_off` order is
+stored `self_collect` but the seller is standing at a pasar, not behind their
+counter ([`86ey30yhr`](https://app.clickup.com/t/86ey30yhr)). Gating each on its
+kind is what keeps the flow kind winning — a booking or an RSVP can never be
+relabelled by a stray direction or a snapshot it had no business carrying.
+Writing those two as an early return instead makes the branch **unreachable**
+(the same value falls out of the tail), and an unreachable guard is one no test
+can hold — which is how it was caught.
+
+Because the column, the funnel, the predicate and the CSV all call this one
+function, the rows a tick keeps are exactly the rows whose cell shows the ticked
+word — a structural guarantee, not a convention to remember.
+
+**Adding a flow kind means adding it here too.** `FULFILMENT_KEYS` is a superset
+of `OrderFlowKind` (it adds the two refinements), so a new kind needs a key, a
+label, a `fulfilmentKeyValidator` literal, and — the one that fails silently —
+whatever field identifies it carried through `orderToCsvSource`.
+
+**Drop-off was promoted into the column as part of this.** It is already its own
+word in buyer emails, WhatsApp copy and the Settings pickup badges; only the
+inbox flattened it into "Self-collect", so a seller running three pasar meetups
+could not tell them apart in the table without also adding the Pickup-location
+column, and could not filter to them at all. ⚠️ **The CSV's `Fulfilment` cell
+therefore changed value** from `self_collect` to `drop_off` on those rows — no
+data changed, but a seller with a spreadsheet formula keyed on `self_collect`
+has to widen it. Call it out in release notes.
+
+**The dimension is presence-driven and hides itself.** `fulfilmentChoicesFrom`
+offers the kinds this seller's window actually contains, in registry order
+(never by count — a list that reshuffles as orders land has to be re-read every
+time), plus anything already **selected**: a lit filter with no visible row is a
+filter the seller cannot switch off, the rule `methodChoicesFor` already follows
+for payment rails. `fulfilmentFilterApplies` is the single "is this worth
+showing" test, asked by **both** the panel section and the column funnel, so the
+two appear and disappear together — a delivery-only store sees neither rather
+than a control that can only narrow to what it already has.
+
+Placement is deliberate: the panel section sits **directly under Order type**,
+not appended after Order date. The two are one journey read twice — how it came
+IN, how it goes OUT — and a seller reaches for them together.
+
+Wiring, all of it the same shape every other dimension uses: `?ful=`
+(`?ful=["delivery","drop_off"]` — the router's JSON array form, same as `pay`
+and `asrc`; a bare `?ful=delivery` is accepted and heals into it)
+→ `InboxFilterArgs.fulfilments` → `buildInboxPredicate` → the CSV export through
+the shared predicate. It is in `NARROWING_FILTER_KEYS`, so it sits behind the
+same Pro gate as payment and category (that record is compiler-enforced complete
+— the reason a filter added without touching it can no longer fail the gate open
+silently).
+
 ## Views: Cards and Table (86eyrtz74)
 
 `?view=table` switches the list to a spreadsheet-shaped table. It exists for a
@@ -573,10 +662,14 @@ WhatsApp.
   "these orders, by total" is worth sharing, unlike a 36-toggle layout.
 - **Filter from the column header** (86eyrtz74). A funnel in the header of
   every filterable column opens a multi-select list of that column's values.
-  Filterable today: **Status, Categories, Order type, Came from, Payment,
-  Payment method** (multi) and **Fulfilment date** (single — the due windows
-  overlap, so offering them as a set would let a seller build a combination that
-  reads like an intersection and behaves like a union).
+  Filterable today: **Status, Categories, Order type, Fulfilment, Came from,
+  Payment, Payment method** (multi) and **Fulfilment date** (single — the due
+  windows overlap, so offering them as a set would let a seller build a
+  combination that reads like an intersection and behaves like a union).
+  **Fulfilment's funnel is conditional** — it is registered only when the window
+  holds more than one kind, so on a delivery-only store the header has no funnel
+  rather than one that opens onto a single row (see the Fulfilment section
+  above).
   - **`ui/column-filter-menu.tsx` is generic** and knows nothing about orders —
     it takes options, a selection and a handler, so the next table reuses it
     whole. Everything order-specific (which columns, where the options come
@@ -921,8 +1014,11 @@ and escalates for `pending` **or** unseen.
 - **`order-time-badge.tsx`** — "time in status" pill (e.g. "2h"). Only **pending**
   escalates: amber >4h, red >24h (the missed-order risk window); other statuses
   are neutral.
-- **`order-filters.tsx`** — one coherent filter set: an **"Order type"** pair
-  (Online / Counter → `source`), a **"Came from"** multi-select (marketing
+- **`order-filters.tsx`** — one coherent filter set: an **"Order type"**
+  multi-select (Storefront / Counter / Claim link → `sources`), a
+  **"Fulfilment"** multi-select directly beneath it (how the order goes out →
+  `fulfilments`, z8r3fdfau9 — the twin of Order type, and hidden entirely on a
+  store with only one kind), a **"Came from"** multi-select (marketing
   origin → `attributionSources`, 86eyq0eq9 — a SEPARATE dimension from Order
   type: that is the checkout surface, this is where the buyer arrived from; its
   chips come from the query's `availableSources` because seller tags are
@@ -955,6 +1051,24 @@ and escalates for `pending` **or** unseen.
   opened, never re-inflates as a seen order advances, and a legacy confirmed
   order is never counted. `bottom-nav.test.tsx` covers the badge value + that it
   lands on `?bucket=new` (and doesn't filter when there's nothing new).
+
+- `convex/lib/orderCsv.test.ts` → fulfilment — `fulfilmentKey` precedence
+  (collection beats the method, drop-off beats self-collect, no method reads as
+  delivery) and that every key has a real label rather than falling through to
+  `humanizeEnum`.
+- `convex/lib/orderInboxFilter.test.ts` → "fulfilments" — each kind matches only
+  its own orders, several OR together, an empty list filters nothing, it ANDs
+  with payment, and it gates like every other narrowing filter.
+- `convex/orders.test.ts` → fulfilment — facets tallied over the UNFILTERED
+  window, every registry key accepted by the wire validator, and the CSV's
+  `Fulfilment` cell reading `drop_off` (which catches the export projection
+  silently dropping `pickupSnapshot.locationType`).
+- `order-column-filters.test.ts` — the funnel's options read exactly like the
+  column (the fulfilment case builds the order that produces each key), and the
+  funnel is absent until there is a second kind.
+- `order-filters.test.tsx` → "Fulfilment" — hidden on a one-kind store, shown
+  with registry labels + counts, select-all writes exactly what it offered, a
+  selected-but-absent kind stays pickable, each kind is its own token.
 
 ## Phase 2 — bulk actions (shipped)
 

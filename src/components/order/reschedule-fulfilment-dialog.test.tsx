@@ -153,6 +153,37 @@ describe("RescheduleFulfilmentDialog — form", () => {
 		expect(screen.getByText(/booking is active/i)).toBeTruthy();
 		expect(screen.queryByText("Save changes")).toBeNull();
 	});
+
+	// Credits T3: out of credits (or view-only), the trigger stays TAPPABLE —
+	// a tooltip is invisible on a phone — and opens onto the reason instead of
+	// a form the server would refuse. And it never spends a live quote.
+	it("a store that can't do order work opens onto the reason, not the form", async () => {
+		const reason =
+			"You're out of credits, so accepting and updating orders and editing products are paused.";
+		state.dispatch = {
+			job: null,
+			blockReason: null,
+			bookingEnabled: true,
+			riderOnlyStore: true,
+			promptBookOnPacked: false,
+		};
+		const prepare = vi.fn();
+		state.action = prepare;
+		render(
+			<RescheduleFulfilmentDialog
+				order={threeAmOrder()}
+				lockedReason={reason}
+			/>,
+		);
+		fireEvent.click(screen.getByText("Reschedule"));
+
+		expect(screen.getByText("Changing the date is paused")).toBeTruthy();
+		expect(screen.getByText(reason)).toBeTruthy();
+		expect(screen.queryByText("Save changes")).toBeNull();
+		// Past the 500ms debounce: still no quotation call.
+		await new Promise((r) => setTimeout(r, 700));
+		expect(prepare).not.toHaveBeenCalled();
+	});
 });
 
 describe("RescheduleFulfilmentDialog — self-collect pickup time (z8r3fdff97)", () => {

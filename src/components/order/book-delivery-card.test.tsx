@@ -1315,3 +1315,56 @@ describe("BookDeliveryCard — dispatch can't be tapped by accident (86eypjfuf)"
 		expect(action.mock.calls[1][0]).toHaveProperty("quotationId", "q1");
 	});
 });
+
+describe("BookDeliveryCard — out of credits (Credits T3)", () => {
+	const REASON =
+		"You're out of credits, so accepting and updating orders and editing products are paused.";
+	const bookableOrder = {
+		shortId: "ORD-LOCK",
+		deliveryMethod: "delivery",
+		status: "confirmed",
+		currency: "MYR",
+		paymentStatus: "received",
+	} as unknown as Doc<"orders">;
+	const bookable = {
+		promptBookOnPacked: true,
+		bookingEnabled: true,
+		blockReason: null,
+		job: null,
+	};
+
+	it("keeps Book delivery in place, disabled, with the reason under it", () => {
+		state.dispatch = bookable;
+		render(<BookDeliveryCard order={bookableOrder} lockedReason={REASON} />);
+		const book = screen.getByRole("button", { name: /Book delivery/ });
+		expect((book as HTMLButtonElement).disabled).toBe(true);
+		expect(screen.getByText(REASON)).toBeTruthy();
+	});
+
+	it("never auto-opens a quote the server would refuse — not on Packed, not on a manual advance", async () => {
+		const prepare = vi.fn();
+		state.action = prepare;
+		state.dispatch = bookable;
+		const { rerender } = render(
+			<BookDeliveryCard order={bookableOrder} lockedReason={REASON} />,
+		);
+		// A packed transition would normally prompt (paid + due today)…
+		rerender(
+			<BookDeliveryCard
+				order={{ ...bookableOrder, status: "packed" } as Doc<"orders">}
+				lockedReason={REASON}
+			/>,
+		);
+		// …and so would the stepper's book request.
+		rerender(
+			<BookDeliveryCard
+				order={{ ...bookableOrder, status: "packed" } as Doc<"orders">}
+				lockedReason={REASON}
+				bookRequestToken={1}
+			/>,
+		);
+		await waitFor(() => {
+			expect(prepare).not.toHaveBeenCalled();
+		});
+	});
+});

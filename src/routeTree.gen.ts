@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as TermsRouteImport } from './routes/terms'
+import { Route as StoresRouteImport } from './routes/stores'
 import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as PricingRouteImport } from './routes/pricing'
@@ -30,6 +31,7 @@ import { Route as AppPosterRouteImport } from './routes/app.poster'
 import { Route as AppInsightsRouteImport } from './routes/app.insights'
 import { Route as AppCheckoutRouteImport } from './routes/app.checkout'
 import { Route as SlugCheckoutRouteImport } from './routes/$slug_.checkout'
+import { Route as AppVouchersIndexRouteImport } from './routes/app.vouchers.index'
 import { Route as AppProductsIndexRouteImport } from './routes/app.products.index'
 import { Route as AppOrdersIndexRouteImport } from './routes/app.orders.index'
 import { Route as AppCustomersIndexRouteImport } from './routes/app.customers.index'
@@ -49,6 +51,11 @@ import { Route as SlugCCategorySlugRouteImport } from './routes/$slug_.c.$catego
 const TermsRoute = TermsRouteImport.update({
   id: '/terms',
   path: '/terms',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const StoresRoute = StoresRouteImport.update({
+  id: '/stores',
+  path: '/stores',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
@@ -151,6 +158,11 @@ const SlugCheckoutRoute = SlugCheckoutRouteImport.update({
   path: '/$slug/checkout',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppVouchersIndexRoute = AppVouchersIndexRouteImport.update({
+  id: '/vouchers/',
+  path: '/vouchers/',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppProductsIndexRoute = AppProductsIndexRouteImport.update({
   id: '/products/',
   path: '/products/',
@@ -237,6 +249,7 @@ export interface FileRoutesByFullPath {
   '/pricing': typeof PricingRoute
   '/privacy': typeof PrivacyRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
+  '/stores': typeof StoresRoute
   '/terms': typeof TermsRoute
   '/$slug/checkout': typeof SlugCheckoutRoute
   '/app/checkout': typeof AppCheckoutRoute
@@ -264,6 +277,7 @@ export interface FileRoutesByFullPath {
   '/app/customers/': typeof AppCustomersIndexRoute
   '/app/orders/': typeof AppOrdersIndexRoute
   '/app/products/': typeof AppProductsIndexRoute
+  '/app/vouchers/': typeof AppVouchersIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -274,6 +288,7 @@ export interface FileRoutesByTo {
   '/pricing': typeof PricingRoute
   '/privacy': typeof PrivacyRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
+  '/stores': typeof StoresRoute
   '/terms': typeof TermsRoute
   '/$slug/checkout': typeof SlugCheckoutRoute
   '/app/checkout': typeof AppCheckoutRoute
@@ -301,6 +316,7 @@ export interface FileRoutesByTo {
   '/app/customers': typeof AppCustomersIndexRoute
   '/app/orders': typeof AppOrdersIndexRoute
   '/app/products': typeof AppProductsIndexRoute
+  '/app/vouchers': typeof AppVouchersIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -313,6 +329,7 @@ export interface FileRoutesById {
   '/pricing': typeof PricingRoute
   '/privacy': typeof PrivacyRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
+  '/stores': typeof StoresRoute
   '/terms': typeof TermsRoute
   '/$slug_/checkout': typeof SlugCheckoutRoute
   '/app/checkout': typeof AppCheckoutRoute
@@ -340,6 +357,7 @@ export interface FileRoutesById {
   '/app/customers/': typeof AppCustomersIndexRoute
   '/app/orders/': typeof AppOrdersIndexRoute
   '/app/products/': typeof AppProductsIndexRoute
+  '/app/vouchers/': typeof AppVouchersIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -353,6 +371,7 @@ export interface FileRouteTypes {
     | '/pricing'
     | '/privacy'
     | '/sitemap.xml'
+    | '/stores'
     | '/terms'
     | '/$slug/checkout'
     | '/app/checkout'
@@ -380,6 +399,7 @@ export interface FileRouteTypes {
     | '/app/customers/'
     | '/app/orders/'
     | '/app/products/'
+    | '/app/vouchers/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -390,6 +410,7 @@ export interface FileRouteTypes {
     | '/pricing'
     | '/privacy'
     | '/sitemap.xml'
+    | '/stores'
     | '/terms'
     | '/$slug/checkout'
     | '/app/checkout'
@@ -417,6 +438,7 @@ export interface FileRouteTypes {
     | '/app/customers'
     | '/app/orders'
     | '/app/products'
+    | '/app/vouchers'
   id:
     | '__root__'
     | '/'
@@ -428,6 +450,7 @@ export interface FileRouteTypes {
     | '/pricing'
     | '/privacy'
     | '/sitemap.xml'
+    | '/stores'
     | '/terms'
     | '/$slug_/checkout'
     | '/app/checkout'
@@ -455,6 +478,7 @@ export interface FileRouteTypes {
     | '/app/customers/'
     | '/app/orders/'
     | '/app/products/'
+    | '/app/vouchers/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -467,6 +491,7 @@ export interface RootRouteChildren {
   PricingRoute: typeof PricingRoute
   PrivacyRoute: typeof PrivacyRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
+  StoresRoute: typeof StoresRoute
   TermsRoute: typeof TermsRoute
   SlugCheckoutRoute: typeof SlugCheckoutRoute
   ClaimTokenRoute: typeof ClaimTokenRoute
@@ -485,6 +510,13 @@ declare module '@tanstack/react-router' {
       path: '/terms'
       fullPath: '/terms'
       preLoaderRoute: typeof TermsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/stores': {
+      id: '/stores'
+      path: '/stores'
+      fullPath: '/stores'
+      preLoaderRoute: typeof StoresRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/sitemap.xml': {
@@ -627,6 +659,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SlugCheckoutRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/app/vouchers/': {
+      id: '/app/vouchers/'
+      path: '/vouchers'
+      fullPath: '/app/vouchers/'
+      preLoaderRoute: typeof AppVouchersIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/app/products/': {
       id: '/app/products/'
       path: '/products'
@@ -754,6 +793,7 @@ interface AppRouteChildren {
   AppCustomersIndexRoute: typeof AppCustomersIndexRoute
   AppOrdersIndexRoute: typeof AppOrdersIndexRoute
   AppProductsIndexRoute: typeof AppProductsIndexRoute
+  AppVouchersIndexRoute: typeof AppVouchersIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -775,6 +815,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppCustomersIndexRoute: AppCustomersIndexRoute,
   AppOrdersIndexRoute: AppOrdersIndexRoute,
   AppProductsIndexRoute: AppProductsIndexRoute,
+  AppVouchersIndexRoute: AppVouchersIndexRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
@@ -789,6 +830,7 @@ const rootRouteChildren: RootRouteChildren = {
   PricingRoute: PricingRoute,
   PrivacyRoute: PrivacyRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
+  StoresRoute: StoresRoute,
   TermsRoute: TermsRoute,
   SlugCheckoutRoute: SlugCheckoutRoute,
   ClaimTokenRoute: ClaimTokenRoute,

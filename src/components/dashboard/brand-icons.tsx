@@ -86,7 +86,9 @@ export function GrabIcon({ className }: GlyphProps) {
 	return <Glyph className={className} path={GRAB_PATH} brand="Grab" />;
 }
 export function FoodpandaIcon({ className }: GlyphProps) {
-	return <Glyph className={className} path={FOODPANDA_PATH} brand="foodpanda" />;
+	return (
+		<Glyph className={className} path={FOODPANDA_PATH} brand="foodpanda" />
+	);
 }
 
 export function WhatsAppIcon({ className }: GlyphProps) {

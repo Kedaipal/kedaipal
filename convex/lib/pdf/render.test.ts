@@ -10,10 +10,15 @@ import {
 } from "pdf-lib";
 import { describe, expect, test } from "vitest";
 import type { AwbLabelData } from "./awb";
-import type { OrderReceiptData, SubscriptionInvoiceData } from "./document";
+import type {
+	CreditPurchaseReceiptData,
+	OrderReceiptData,
+	SubscriptionInvoiceData,
+} from "./document";
 import {
 	__wrapForTest as wrapForTest,
 	buildAwbPdf,
+	buildCreditPurchaseReceiptPdf,
 	buildOrderReceiptPdf,
 	buildSubscriptionInvoicePdf,
 } from "./render";
@@ -525,5 +530,57 @@ describe("Powered by Kedaipal on paper (z8r3fdcwd0)", () => {
 		const tcs = [...body.matchAll(/([\d.]+) Tc/g)].map((m) => Number(m[1]));
 		expect(tcs.length).toBeGreaterThan(0);
 		expect(tcs.at(-1)).toBe(0);
+	});
+});
+
+describe("buildCreditPurchaseReceiptPdf (Credits T2)", () => {
+	const data: CreditPurchaseReceiptData = {
+		purchaseNumber: "CRD-202610-AB12",
+		billedToName: "Sweet Co",
+		billedToContact: "60123456789",
+		paidAt: Date.UTC(2026, 9, 10, 4),
+		methodLabel: "Touch 'n Go",
+		lineLabel: "Kedaipal order credits - 50-credit pack",
+		credits: 50,
+		amount: 4500,
+		currency: "MYR",
+		expiresAt: Date.UTC(2027, 9, 10, 4),
+		boughtBy: "Aisyah",
+	};
+
+	test("a receipt that says what was bought, for how much, how, until when, and the rules", async () => {
+		const bytes = await buildCreditPurchaseReceiptPdf(data);
+		expect(isPdf(bytes)).toBe(true);
+		expect(await drawsText(bytes, "RECEIPT")).toBe(true);
+		expect(await drawsText(bytes, "CRD-202610-AB12")).toBe(true);
+		expect(await drawsText(bytes, "Kedaipal order credits - 50-credit pack")).toBe(true);
+		expect(await drawsText(bytes, "RM 45.00")).toBe(true);
+		expect(await drawsText(bytes, "Paid: 10 Oct 2026 (Touch 'n Go)")).toBe(true);
+		expect(
+			await drawsText(
+				bytes,
+				"Valid until 10 Oct 2027. Non-refundable and not redeemable for cash.",
+			),
+		).toBe(true);
+		expect(await drawsText(bytes, "Bought by: Aisyah")).toBe(true);
+		// Kedaipal's own document — no "Powered by" about itself.
+		expect(await drawsText(bytes, "POWERED BY")).toBe(false);
+	});
+
+	test("renders without the optional facts (no rail, no expiry, owner-bought)", async () => {
+		const bytes = await buildCreditPurchaseReceiptPdf({
+			...data,
+			methodLabel: undefined,
+			expiresAt: undefined,
+			boughtBy: undefined,
+		});
+		expect(isPdf(bytes)).toBe(true);
+		expect(await drawsText(bytes, "Bought by")).toBe(false);
+		expect(
+			await drawsText(
+				bytes,
+				"Valid for 12 months. Non-refundable and not redeemable for cash.",
+			),
+		).toBe(true);
 	});
 });

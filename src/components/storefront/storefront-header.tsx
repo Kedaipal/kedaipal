@@ -42,7 +42,9 @@ export function storeInitials(name: string): string {
  * The store's square logo tile — the uploaded logo when there is one, the
  * store's initials otherwise (a hole where the brand should be reads as
  * broken, and the initials tile is what the seller sees in the mock).
- * Two sizes: 56px in the store-home hero, 32px in the subpage app bar.
+ * Three sizes: 56px in the store-home hero, 32px in the subpage app bar, and
+ * 48px on the marketplace directory's store cards (z8r3fdkmyp) — one author
+ * so a store's brand block looks the same wherever a card carries it.
  */
 export function StoreLogoTile({
 	storeName,
@@ -52,9 +54,30 @@ export function StoreLogoTile({
 }: {
 	storeName: string;
 	logoUrl?: string | null;
-	size: "hero" | "bar";
+	size: "hero" | "bar" | "card";
 	onCover?: boolean;
 }) {
+	if (size === "card") {
+		return logoUrl ? (
+			<AppImage
+				src={logoUrl}
+				alt={`${storeName} logo`}
+				aspect="size-12 shrink-0"
+				sizes="48px"
+				rounded="rounded-[14px]"
+				objectFit="contain"
+				className="border border-border bg-background"
+			/>
+		) : (
+			<span
+				aria-hidden
+				className="flex size-12 shrink-0 items-center justify-center rounded-[14px] bg-primary text-[15px] font-extrabold text-primary-foreground"
+			>
+				{storeInitials(storeName)}
+			</span>
+		);
+	}
+
 	if (size === "bar") {
 		return logoUrl ? (
 			<AppImage
@@ -174,7 +197,9 @@ export function StorefrontHeader({
 			    the sky while the logo hugged the floor — centring keeps the whole
 			    identity reading as one block. gap-2 rhythm inside the column: the
 			    mock's ~6px stack read cramped (Zaki, 28 Sep). */}
-			<div className={`flex items-center gap-3.5 ${hasCover ? "relative" : ""}`}>
+			<div
+				className={`flex items-center gap-3.5 ${hasCover ? "relative" : ""}`}
+			>
 				<StoreLogoTile
 					storeName={retailer.storeName}
 					logoUrl={retailer.logoUrl}

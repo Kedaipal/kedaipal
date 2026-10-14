@@ -1,6 +1,11 @@
 import { describe, expect, test } from "vitest";
 import * as server from "../../convex/lib/customer";
-import { formatPhone, getDisplayName, orderCustomerLabel } from "./customer";
+import {
+	formatPhone,
+	getDisplayName,
+	orderCustomerLabel,
+	sellerCustomerName,
+} from "./customer";
 
 // The behaviour is tested once, beside its author (`convex/lib/customer.test.ts`).
 // What this pins is that the dashboard renders through THAT code — a hand copy
@@ -10,5 +15,6 @@ describe("dashboard customer helpers", () => {
 		expect(formatPhone).toBe(server.formatPhone);
 		expect(getDisplayName).toBe(server.getDisplayName);
 		expect(orderCustomerLabel).toBe(server.orderCustomerLabel);
+		expect(sellerCustomerName).toBe(server.sellerCustomerName);
 	});
 });

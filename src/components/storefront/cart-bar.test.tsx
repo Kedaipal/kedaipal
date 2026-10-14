@@ -30,6 +30,7 @@ function cartStub(overrides: Partial<UseCart> = {}): UseCart {
 		removeItem: vi.fn(),
 		removeEventLines: vi.fn(),
 		clearCart: vi.fn(),
+		setAnswer: vi.fn(),
 		quantityForProduct: () => 0,
 		...overrides,
 	} as UseCart;

@@ -160,6 +160,8 @@ every payment-request create), so:
 
 ## Guard model — where each rule lives
 
+> **Lapsed store** (`z8r3fdr6gg`): `getCheckoutContext` carries `paymentsPaused` and `createCheckout` refuses **before** the fresh-link reuse, so no checkout — new or reused — is handed out while the store is past due. A payment on a link minted before the pause is still applied by the webhook / `verifyCheckout` (the money already moved). `orders.get` no longer returns `gatewayCheckoutUrl` to the buyer. See [`manual-subscription.md`](./manual-subscription.md#buyer-payments-pause-while-a-store-is-lapsed-z8r3fdr6gg).
+
 - **Holds gate the MINT, not the webhook.** `createCheckout` refuses while
   the mockup gate is closed or the delivery fee is pending (same copy
   family as `claimPayment`). By webhook time money has moved, so the

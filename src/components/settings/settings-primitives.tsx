@@ -47,7 +47,9 @@ export function SectionHeading({
 	description,
 }: {
 	title: string;
-	description?: string;
+	/** Plain text, or inline markup (a link in the helper line) — it renders
+	 * inside the description <p> either way. */
+	description?: ReactNode;
 }) {
 	return (
 		<div className="flex flex-col gap-1">

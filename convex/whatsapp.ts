@@ -65,6 +65,7 @@ import {
 	type PickupSnapshot,
 } from "./lib/whatsappCopy";
 import { classifyInbound } from "./lib/inboundIntent";
+import { buyerPaymentsPaused } from "./subscriptions";
 
 /**
  * Internal mutation invoked by handleInbound when an ORD-XXXX is matched.
@@ -339,6 +340,11 @@ export const getRetailerLocaleForOrder = internalQuery({
 		// skips the payment block entirely. See `resolveEventLabel`.
 		isFree: boolean;
 		eventLabel: string | undefined;
+		// A request still waiting for the seller's approval (`z8r3fdkjek`) —
+		// nothing is payable, so the reply says so instead of asking for money.
+		awaitingApproval: boolean;
+		// The store is lapsed (z8r3fdr6gg) — the reply asks for no transfer.
+		paymentsPaused: boolean;
 	} | null> => {
 		const order = await ctx.db
 			.query("orders")
@@ -369,6 +375,8 @@ export const getRetailerLocaleForOrder = internalQuery({
 			deliveryFeePending: order.deliveryFeePending === true,
 			isFree: isFreeOrder(order),
 			eventLabel: await resolveEventLabel(ctx, order),
+			awaitingApproval: order.status === "booking_requested",
+			paymentsPaused: await buyerPaymentsPaused(ctx, order.retailerId),
 		};
 	},
 });
@@ -411,6 +419,10 @@ async function sendPaymentMessage(
 		// e.g. the always-on "Powered by Kedaipal" growth line on order
 		// confirmations. Include its own leading newlines.
 		footerLine?: string;
+		// The store is lapsed (z8r3fdr6gg): no transfer reference, the paused
+		// line in its place, and the button opens the order rather than
+		// promising a payment the page will refuse.
+		paymentsPaused?: boolean;
 	},
 ): Promise<void> {
 	const {
@@ -424,14 +436,16 @@ async function sendPaymentMessage(
 		deliverySnapshot,
 		currency,
 		footerLine = "",
+		paymentsPaused = false,
 	} = args;
 	// Hard-coded, non-overridable: tells the shopper to use the order ID as the
 	// transfer reference — the only deterministic way to match a bank
 	// notification to an order, so it's always present.
-	const transferReferenceLine = renderSystemMessage(locale, "transferReferenceLine", {
-		shortId,
-		storeName,
-	});
+	const transferReferenceLine = renderSystemMessage(
+		locale,
+		paymentsPaused ? "paymentsPausedLine" : "transferReferenceLine",
+		{ shortId, storeName },
+	);
 	const pickupBlock = renderPickupBlock(locale, pickupSnapshot, currency);
 	// Appended INSIDE the pickup block, not after the payment ask: it is part
 	// of "here is where you're going and what to bring", not of "here is how
@@ -460,7 +474,7 @@ async function sendPaymentMessage(
 		await wa.send(toPhone, {
 			kind: "cta",
 			body,
-			buttonText: "Make payment",
+			buttonText: paymentsPaused ? "View order" : "Make payment",
 			url: trackingUrl,
 			imageUrl: brandImageUrl,
 		});
@@ -685,6 +699,26 @@ export const handleInbound = internalAction({
 				: null);
 		const trackingUrl = `${appUrl}/track/${trackingToken ?? ""}`;
 
+		if (meta?.awaitingApproval) {
+			// An RSVP/booking the seller hasn't approved (`z8r3fdkjek`): the
+			// normal confirm would ask for money the page won't take. Say it's a
+			// request instead; the payment ask comes with the approval.
+			const body =
+				renderSystemMessage(locale, "requestAwaitingApproval", {
+					shortId,
+					storeName,
+					contactPhone,
+					trackingUrl,
+					eventLabel: meta.eventLabel,
+				}) + poweredByLine(locale);
+			try {
+				await sellerWa.send(fromPhone, { kind: "text", body });
+			} catch (err) {
+				console.error("WA awaiting-approval reply failed", err);
+			}
+			return;
+		}
+
 		if (meta?.mockupPending) {
 			// Order still has a custom item awaiting buyer mockup approval — defer
 			// the payment ask. Same branded layout as the normal confirm (logo
@@ -803,6 +837,7 @@ export const handleInbound = internalAction({
 				// Always-on growth line — appended here (not in the confirm template)
 				// so a retailer's template override can't strip it. See poweredByLine.
 				footerLine: poweredByLine(locale),
+				paymentsPaused: meta?.paymentsPaused === true,
 			});
 		}
 

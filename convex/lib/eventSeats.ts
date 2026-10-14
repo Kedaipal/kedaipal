@@ -34,6 +34,12 @@ export type SeatTally = {
 	 * so a seller reading the panel sees them in the order guests picked them
 	 * rather than a hash order that reshuffles on every render. */
 	byOption: Map<string, number>;
+	/** Buyer-question answers (`z8r3fdkjek`), weighted by seats exactly like
+	 * `byOption`: questionId → answer → seats. Keyed by id, not label, so a
+	 * reworded question keeps one tally; the answer is the frozen option text,
+	 * so a renamed option still counts under the name the guest picked. Text
+	 * answers are counted too; the caller keeps only choice questions. */
+	byAnswer: Map<string, Map<string, number>>;
 };
 
 /** Label used when an event product has no option axes, so there is nothing
@@ -65,6 +71,7 @@ export async function tallyEventSeats(
 		.collect();
 
 	const byOption = new Map<string, number>();
+	const byAnswer = new Map<string, Map<string, number>>();
 	let taken = 0;
 	for (const order of sameDay) {
 		if (!holdsSeats(order.status)) continue;
@@ -75,9 +82,14 @@ export async function tallyEventSeats(
 			const label = item.variantLabel ?? UNLABELLED_OPTION;
 			byOption.set(label, (byOption.get(label) ?? 0) + item.quantity);
 			taken += item.quantity;
+			for (const answer of item.answers ?? []) {
+				const counts = byAnswer.get(answer.questionId) ?? new Map<string, number>();
+				counts.set(answer.answer, (counts.get(answer.answer) ?? 0) + item.quantity);
+				byAnswer.set(answer.questionId, counts);
+			}
 		}
 	}
-	return { taken, byOption };
+	return { taken, byOption, byAnswer };
 }
 
 /**
@@ -107,4 +119,45 @@ export function seatsExhaustedMessage(
 	if (left <= 0)
 		return `${productName} is fully booked — no seats left for this event.`;
 	return `Only ${left} seat${left === 1 ? "" : "s"} left for ${productName}.`;
+}
+
+/** One choice question's headcount on the RSVPs panel. */
+export type QuestionTally = {
+	questionId: string;
+	label: string;
+	options: Array<{ label: string; seats: number }>;
+};
+
+/**
+ * Per-choice-question tallies for the RSVPs panel (`z8r3fdkjek`), in the
+ * product's question order. Options follow the product's CURRENT order, then
+ * any frozen answer no longer offered (a renamed/removed option) is appended —
+ * those guests still exist and still need a tent pitch. Zero-count current
+ * options are kept so the seller sees "Helinox tent 0", not a missing row.
+ */
+export function questionTallies(
+	questions:
+		| ReadonlyArray<{
+				id: string;
+				label: string;
+				type: "choice" | "text";
+				options?: string[];
+		  }>
+		| undefined,
+	byAnswer: SeatTally["byAnswer"],
+): QuestionTally[] {
+	const out: QuestionTally[] = [];
+	for (const question of questions ?? []) {
+		if (question.type !== "choice") continue;
+		const counts = byAnswer.get(question.id) ?? new Map<string, number>();
+		const current = question.options ?? [];
+		const options = current.map((label) => ({
+			label,
+			seats: counts.get(label) ?? 0,
+		}));
+		for (const [label, seats] of counts)
+			if (!current.includes(label)) options.push({ label, seats });
+		out.push({ questionId: question.id, label: question.label, options });
+	}
+	return out;
 }

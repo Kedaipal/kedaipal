@@ -41,6 +41,7 @@ const LIVE_ROUTES = [
 	"privacy",
 	"sign-in",
 	"sign-up",
+	"stores", // the marketplace home (z8r3fdkmyp) — moved up from GENERIC
 	"terms",
 	"track",
 ] as const;
@@ -104,9 +105,13 @@ const AUTH = [
  * changelog, partner/referral programmes, a public directory of stores.
  * Registering `help` today would cost us the URL the day we write a help
  * centre, and a rename is a broken link for every buyer who saved it.
+ * `enterprise` is the custom-contract tier's sales page (z8r3fdkp8h — sold
+ * by conversation, so it is exactly the tier that gets a "talk to us" URL);
+ * `advertise` is where marketplace sponsorship would be sold (z8r3fdkmyp).
  */
 const MARKETING = [
 	"about",
+	"advertise",
 	"affiliate",
 	"affiliates",
 	"blog",
@@ -118,6 +123,7 @@ const MARKETING = [
 	"directory",
 	"discover",
 	"docs",
+	"enterprise",
 	"explore",
 	"faq",
 	"guide",
@@ -142,6 +148,10 @@ const MARKETING = [
  * gets tired — and a vendor sitting on `orders` would block that forever.
  * Also the buyer-facing nouns (`checkout`, `pay`, `invoice`, `receipt`) that
  * a future hosted-checkout or shareable-invoice surface would want at the root.
+ * `credit`/`credits`/`top-up` are the credit wallet's nouns (z8r3fdf8ht) — a
+ * hosted top-up page is the same shape as a hosted checkout; `rsvp` is the
+ * standalone event checkout (`?rsvp=` today, z8r3fdhh45), the obvious
+ * candidate for a root-level shareable RSVP link.
  */
 const PRODUCT = [
 	"billing",
@@ -150,6 +160,8 @@ const PRODUCT = [
 	"calendar",
 	"cart",
 	"checkout",
+	"credit",
+	"credits",
 	"customer",
 	"customers",
 	"dashboard",
@@ -176,14 +188,38 @@ const PRODUCT = [
 	"profile",
 	"receipt",
 	"receipts",
+	"rsvp",
 	"settings",
 	"subscribe",
 	"subscription",
 	"team",
 	"teams",
+	"top-up",
+	"topup",
 	"upgrade",
 	"user",
 	"users",
+] as const;
+
+/**
+ * The marketplace directory's natural sub-pages (z8r3fdkmyp). `/stores` is
+ * live; these are the shelves it grows next — browse by category (the named
+ * follow-up), an events directory over Event RSVP, the sponsored and
+ * founding shelves as pages of their own, and local discovery. Fenced now
+ * because the directory is exactly where a seller-held name would collide
+ * first: a store at `/events` would sit on top of the events listing.
+ */
+const MARKETPLACE = [
+	"categories",
+	"category",
+	"event",
+	"events",
+	"featured",
+	"founders",
+	"founding",
+	"near-me",
+	"nearby",
+	"sponsored",
 ] as const;
 
 /**
@@ -205,7 +241,7 @@ const GENERIC = [
 	"shop",
 	"shops",
 	"store",
-	"stores",
+	// "stores" graduated to LIVE_ROUTES — it IS the directory now (z8r3fdkmyp).
 	"vendor",
 	"vendors",
 	"verified",
@@ -247,6 +283,7 @@ export const RESERVED_SLUG_GROUPS = {
 	AUTH,
 	MARKETING,
 	PRODUCT,
+	MARKETPLACE,
 	GENERIC,
 	ENVIRONMENT,
 } as const;

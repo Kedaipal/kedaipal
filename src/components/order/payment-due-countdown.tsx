@@ -1,6 +1,6 @@
 import { Clock } from "lucide-react";
 import { useEffect, useState } from "react";
-import { formatClaimCountdown } from "../../lib/countdown";
+import { formatTimeLeft } from "../../lib/countdown";
 
 /**
  * The payment deadline on the buyer's order page (86eyq0epn) — the claim
@@ -52,7 +52,7 @@ export function PaymentDueCountdown({ dueAt }: { dueAt: number }) {
 				<span className="font-semibold">
 					Complete payment within{" "}
 					<span className="font-mono tabular-nums">
-						{formatClaimCountdown(remaining)}
+						{formatTimeLeft(remaining)}
 					</span>
 				</span>{" "}
 				— after that this order is cancelled and the items are released.

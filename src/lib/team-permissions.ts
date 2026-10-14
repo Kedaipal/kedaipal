@@ -49,6 +49,13 @@ export const AREA_COPY: Record<PermissionArea, AreaCopy> = {
 		label: "Bookings",
 		description: "Booking listings, blocked dates and the calendar.",
 	},
+	vouchers: {
+		label: "Vouchers",
+		description:
+			"The voucher list and what each code was spent on. Edit also lets them issue and void codes.",
+		caveat:
+			"Issuing a voucher gives money away, so it's off by default. Taking a voucher on a sale needs no grant here — that comes with Orders.",
+	},
 	insights: {
 		label: "Business insights",
 		description: "Revenue totals, trends and best sellers.",
@@ -80,6 +87,13 @@ export const AREA_COPY: Record<PermissionArea, AreaCopy> = {
 		label: "Integrations",
 		description: "Lalamove, Delyva and HitPay accounts.",
 	},
+	credits: {
+		label: "Credits",
+		description:
+			"The store's order credits and their history. Edit also lets them buy credit packs.",
+		caveat:
+			"They pay for packs on the checkout page themselves — your saved card is never charged, and you're emailed every purchase.",
+	},
 	billing: {
 		label: "Billing",
 		description: "Your Kedaipal subscription and invoices (view only).",
@@ -100,10 +114,14 @@ export const AREA_GROUPS: ReadonlyArray<{
 	{
 		label: "Sensitive",
 		areas: [
+			// Issuing a code is a money-giving capability — grouped with the
+			// grants the presets deliberately leave off, and left off both.
+			"vouchers",
 			"insights",
 			"exports",
 			"payments_settings",
 			"integrations",
+			"credits",
 			"billing",
 		],
 	},
@@ -133,7 +151,7 @@ export const TEAM_PRESETS: TeamPreset[] = [
 		id: "manager",
 		label: "Store manager",
 		description:
-			"Everything a helper can, plus editing products, customers, store and fulfilment settings, and viewing insights.",
+			"Everything a helper can, plus editing products, customers, store and fulfilment settings, and viewing insights and credits.",
 		grants: {
 			orders: "write",
 			products: "write",
@@ -142,6 +160,9 @@ export const TEAM_PRESETS: TeamPreset[] = [
 			store_settings: "write",
 			fulfilment: "write",
 			insights: "read",
+			// A manager runs the shop day to day, so they should see a low credit
+			// balance coming. Buying stays off until the owner grants it.
+			credits: "read",
 		},
 	},
 ];

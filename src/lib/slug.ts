@@ -23,6 +23,9 @@ import { STORE_NAME_MAX, STORE_NAME_MIN } from "../../convex/lib/slug";
  * - trim leading/trailing dashes
  * - truncate to 32 chars (dash-safe)
  */
+export const SLUG_MIN = 3;
+export const SLUG_MAX = 32;
+
 export function slugify(input: string): string {
 	const normalized = input
 		.normalize("NFKD")
@@ -32,12 +35,22 @@ export function slugify(input: string): string {
 		.replace(/-+/g, "-")
 		.replace(/^-|-$/g, "");
 
-	if (normalized.length <= 32) return normalized;
-	return normalized.slice(0, 32).replace(/-$/, "");
+	if (normalized.length <= SLUG_MAX) return normalized;
+	// Cut back to the last WHOLE word, not mid-word. A hard slice leaves the
+	// seller staring at a URL that ends in a fragment — "Something Very Very
+	// Long Store Name" became `something-very-very-long-store-n`, which reads
+	// like a typo and is the first impression of their own shop. Falling back to
+	// the last dash gives `something-very-very-long-store`.
+	//
+	// The fragment is kept only when there is no earlier dash to fall back to
+	// (one very long word), since a slug must still reach SLUG_MIN and "" would
+	// leave the field empty with nothing to explain it.
+	const cut = normalized.slice(0, SLUG_MAX);
+	const lastDash = cut.lastIndexOf("-");
+	const trimmed = lastDash >= SLUG_MIN ? cut.slice(0, lastDash) : cut;
+	return trimmed.replace(/-$/, "");
 }
 
-export const SLUG_MIN = 3;
-export const SLUG_MAX = 32;
 const SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 export const slugSchema = z

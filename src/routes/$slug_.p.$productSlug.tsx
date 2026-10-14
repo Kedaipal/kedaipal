@@ -16,12 +16,14 @@ import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
 import { useCaptureAttribution } from "../hooks/useSourceAttribution";
+import { useCaptureVoucherParam } from "../hooks/useVoucherParam";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
 import {
 	absoluteProxiedImageUrl,
 	imageSrcSet,
 	proxiedImageUrl,
 } from "../lib/image-proxy";
+import { jsonLdScript } from "../lib/json-ld";
 import { ssrRead } from "../lib/ssr-read";
 import { hasStartingPrice } from "../lib/variant";
 
@@ -236,9 +238,7 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 						]
 					: []),
 			],
-			scripts: [
-				{ type: "application/ld+json", children: JSON.stringify(jsonLd) },
-			],
+			scripts: [jsonLdScript(jsonLd)],
 		};
 	},
 	notFoundComponent: ProductNotFound,
@@ -296,6 +296,9 @@ function ProductRoute() {
 	const { slug, productSlug } = Route.useParams();
 	// Product links are the ones pasted in bios/lives — capture the ?src= tag.
 	useCaptureAttribution(slug);
+	// A `?voucher=` link lands on an EMPTY cart, so the code has to survive the
+	// browsing that follows (`z8r3fdr617`) — same reason as the line above.
+	useCaptureVoucherParam(slug);
 	// Live queries keep the page reactive after the SSR'd loader response —
 	// stock, prices and visibility update in place.
 	const result = useQuery(
@@ -347,7 +350,10 @@ function ProductRoute() {
 				/>
 				{/* Direct flex child so its `mt-auto` anchors it to the bottom of the
 			    page — same placement as the store home and category pages. */}
-				<StorefrontFooter slug={slug} />
+				<StorefrontFooter
+					slug={slug}
+					discover={retailer.marketplaceUnlisted !== true}
+				/>
 			</div>
 		</OrderingPausedProvider>
 	);

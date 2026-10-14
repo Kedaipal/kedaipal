@@ -44,6 +44,34 @@ describe("PickupNotes", () => {
 		).toBeTruthy();
 	});
 
+	it("makes a bare URL in a note tappable, opening safely in a new tab", () => {
+		render(
+			<PickupNotes
+				notes={["Pin: https://maps.app.goo.gl/abc123 — side gate."]}
+				audience="buyer"
+			/>,
+		);
+		const link = screen.getByRole("link", {
+			name: "https://maps.app.goo.gl/abc123",
+		});
+		expect(link.getAttribute("href")).toBe("https://maps.app.goo.gl/abc123");
+		expect(link.getAttribute("target")).toBe("_blank");
+		expect(link.getAttribute("rel")).toContain("noopener");
+		expect(screen.getByText(/side gate\./)).toBeTruthy();
+	});
+
+	it("links URLs inside every note of a list", () => {
+		render(
+			<PickupNotes
+				notes={["Side counter.", "Parking: www.example.com/park"]}
+				audience="seller"
+			/>,
+		);
+		expect(screen.getByRole("link").getAttribute("href")).toBe(
+			"https://www.example.com/park",
+		);
+	});
+
 	it("renders a note as TEXT — markup in a seller's note is never interpreted", () => {
 		render(
 			<PickupNotes

@@ -21,6 +21,7 @@ import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { AdminSellerRow } from "../../convex/admin";
 import { csvDate } from "../../convex/lib/orderCsv";
+import { contractTemplatesFrom } from "../components/admin/enterprise-contract-form";
 import { SellerCard } from "../components/admin/seller-card";
 import { SellerSheet } from "../components/admin/seller-sheet";
 import { SellerTable } from "../components/admin/seller-table";
@@ -46,6 +47,7 @@ import {
 	SELLER_SORTS,
 	type SellerFilter,
 	type SellerSort,
+	sellerFilterEmptyNoun,
 	sellersToCsv,
 	sortSellers,
 } from "../lib/admin-seller-view";
@@ -121,7 +123,13 @@ export function AdminSellersContent({
 	search: SellersSearch;
 	onSearchChange: (next: SellersSearch) => void;
 }) {
-	const sellers = useQuery(convexQuery(api.admin.listSellersForAdmin, {})).data;
+	const sellerList = useQuery(
+		convexQuery(api.admin.listSellersForAdmin, {}),
+	).data;
+	const sellers = sellerList?.sellers;
+	// The book runs past the cap — this list is the NEWEST stores and the
+	// oldest are missing, so the count below must not read as the whole book.
+	const sellersCapped = sellerList?.capped === true;
 	// Dev deployments only (z8r3fdbmc9) — the server re-checks, this just keeps
 	// a control that would always refuse off the prod screen entirely.
 	const purgeEnabled =
@@ -129,6 +137,7 @@ export function AdminSellersContent({
 	return (
 		<SellerDirectory
 			sellers={sellers}
+			sellersCapped={sellersCapped}
 			purgeEnabled={purgeEnabled}
 			search={search}
 			onSearchChange={onSearchChange}
@@ -141,12 +150,17 @@ export function AdminSellersContent({
  * behind Clerk) and driven by the route test without a router. */
 export function SellerDirectory({
 	sellers,
+	sellersCapped = false,
 	purgeEnabled,
 	search,
 	onSearchChange,
 }: {
 	/** `undefined` while loading. */
 	sellers: readonly AdminSellerRow[] | undefined;
+	/** The store book runs past the query's cap, so `sellers` is the NEWEST
+	 * slice of it. Without this the count read "Showing 500 of 500" and
+	 * sounded like the whole book (z8r3fdpm2p). */
+	sellersCapped?: boolean;
 	purgeEnabled: boolean;
 	search: SellersSearch;
 	onSearchChange: (next: SellersSearch) => void;
@@ -164,6 +178,11 @@ export function SellerDirectory({
 	const counts = countSellerBuckets(all);
 	const visible = sortSellers(filterSellers(all, filter, q), sort, now);
 	const detailSeller = all.find((s) => s._id === detailId) ?? null;
+	// Live contracts the open store could be modelled on — built from the list
+	// already on screen, so the "start from" picker costs no second query. The
+	// store being edited is never its own template. Same helper the billing
+	// card's sheet uses (z8r3fdpm2p), so the two pickers can't drift.
+	const contractTemplates = contractTemplatesFrom(all, detailId);
 	const filtered = filter !== "all" || q.trim().length > 0;
 
 	function setFilter(next: SellerFilter) {
@@ -317,7 +336,9 @@ export function SellerDirectory({
 					>
 						{sellers === undefined
 							? "Loading…"
-							: `Showing ${visible.length} of ${all.length}`}
+							: sellersCapped
+								? `Showing ${visible.length} of the newest ${all.length}`
+								: `Showing ${visible.length} of ${all.length}`}
 					</span>
 				</div>
 			</div>
@@ -353,15 +374,17 @@ export function SellerDirectory({
 						{all.length === 0
 							? "No sellers yet"
 							: filter !== "all"
-								? `No ${SELLER_FILTER_LABEL[filter].toLowerCase()} sellers${q.trim() ? ` match “${q.trim()}”` : ""}`
+								? `No ${sellerFilterEmptyNoun(filter)}${q.trim() ? ` match “${q.trim()}”` : ""}`
 								: `No sellers match “${q.trim()}”`}
 					</p>
 					<p className="max-w-xs text-sm text-muted-foreground">
 						{all.length === 0
 							? "Stores appear here once a seller finishes onboarding."
-							: filter !== "all"
-								? "They may be in another status — clear the filter to search every store."
-								: "Try the store name, its slug, the owner's email or their phone."}
+							: filter === "wants_enterprise"
+								? "Nobody's waiting. Sellers land here when they tap “Talk to Arif” in the app, and leave when a contract lands or you dismiss the ask."
+								: filter !== "all"
+									? "They may be in another status — clear the filter to search every store."
+									: "Try the store name, its slug, the owner's email or their phone."}
 					</p>
 					{filtered ? (
 						<Button
@@ -396,6 +419,7 @@ export function SellerDirectory({
 
 			<SellerSheet
 				seller={detailSeller}
+				contractTemplates={contractTemplates}
 				open={detailId !== null}
 				onOpenChange={(open) => {
 					if (!open) setDetailId(null);

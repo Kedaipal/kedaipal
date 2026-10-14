@@ -28,6 +28,7 @@ import {
 	type ReactNode,
 	useCallback,
 	useEffect,
+	useId,
 	useState,
 } from "react";
 import { toast } from "sonner";
@@ -66,8 +67,10 @@ import { useAppForm } from "../components/forms/form";
 import { BillingTab } from "../components/settings/billing-tab";
 import { BookingsTab } from "../components/settings/bookings-tab";
 import { CountrySetupPanel } from "../components/settings/country-setup-panel";
+import { CreditTopUpDialog } from "../components/settings/credit-top-up-dialog";
 import { FulfilmentTab } from "../components/settings/fulfilment-tab";
 import { IntegrationsTab } from "../components/settings/integrations-tab";
+import { MarketplaceCard } from "../components/settings/marketplace-card";
 import { NotificationsCard } from "../components/settings/notifications-card";
 import { OrderFlowsSection } from "../components/settings/order-flows-card";
 import {
@@ -85,6 +88,7 @@ import {
 	MOBILE_PLACEHOLDER,
 	MyPhonePrefix,
 } from "../components/ui/my-phone-input";
+import { Select } from "../components/ui/select";
 import { Skeleton } from "../components/ui/skeleton";
 import { SortableList } from "../components/ui/sortable-list";
 import {
@@ -101,8 +105,10 @@ import {
 	revealAnchorWhenMounted,
 	SETTINGS_ANCHOR,
 } from "../lib/country-setup-copy";
+import { parseTopUpParam, type TopUpParam } from "../lib/credit-top-up";
 import { convexErrorMessage } from "../lib/format";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
+import { NOTE_LINK_HINT } from "../lib/linkify";
 import type { StatusLabels } from "../lib/orderStatus";
 import { normalizeMobileDigits, toNationalPhoneInput } from "../lib/phone";
 import { reorderByIds } from "../lib/reorder";
@@ -275,6 +281,7 @@ export const Route = createFileRoute("/app/settings")({
 		spot?: SettingsSpotlightKey;
 		autorenew?: "return";
 		paid?: "return";
+		topup?: TopUpParam;
 	} => {
 		const raw =
 			typeof search.tab === "string"
@@ -293,6 +300,10 @@ export const Route = createFileRoute("/app/settings")({
 		// registry, never a raw element id — and only a key whose card is on
 		// THIS page: a product-form key pasted here would scroll nowhere.
 		const spot = isSettingsSpotlightKey(search.spot) ? search.spot : undefined;
+		// Credits T2 (z8r3fdf8ht): `topup=1` opens the credit-pack picker
+		// (every "Top up" button links there), `topup=return` is HitPay sending
+		// the buyer back. See src/lib/credit-top-up.ts.
+		const topup = parseTopUpParam(search.topup);
 		return {
 			tab: SETTINGS_TAB_IDS.includes(raw as SettingsTab)
 				? (raw as SettingsTab)
@@ -306,6 +317,7 @@ export const Route = createFileRoute("/app/settings")({
 				? { autorenew: "return" as const }
 				: {}),
 			...(search.paid === "return" ? { paid: "return" as const } : {}),
+			...(topup ? { topup } : {}),
 		};
 	},
 	component: SettingsRoute,
@@ -380,7 +392,7 @@ function SettingsRoute() {
 	// "View billing" banner → ?tab=billing) actually switch the tab even when the
 	// settings page is already mounted. No tab at all = the grouped index on
 	// mobile; desktop always shows a section (defaulting to Store).
-	const { tab, fix, spot, autorenew, paid } = Route.useSearch();
+	const { tab, fix, spot, autorenew, paid, topup } = Route.useSearch();
 	const activeTab: SettingsTab = tab ?? "store";
 	// The Bookings tab exists only for stores selling the booking kind — a
 	// non-booking store never sees a calendar-feed section it has nothing to
@@ -402,6 +414,14 @@ function SettingsRoute() {
 				retailer ? { retailerId: retailer._id } : "skip",
 			),
 		).data === true;
+	// Marketplace card truth (z8r3fdkmyp): ON without a visible product isn't
+	// listed, so the card must know. `undefined` = loading, never "no".
+	const listingReadiness = useQuery(
+		convexQuery(
+			api.marketplace.myListingReadiness,
+			retailer && activeTab === "store" ? { retailerId: retailer._id } : "skip",
+		),
+	).data;
 	const visibleTabs = SETTINGS_TABS.filter(
 		(t) => t.id !== "bookings" || hasBookingListings,
 	);
@@ -410,12 +430,18 @@ function SettingsRoute() {
 		tabs: g.tabs.filter((id) => id !== "bookings" || hasBookingListings),
 	}));
 	const navigate = Route.useNavigate();
+	// A top-up request (`?topup=`) is consumed once by the dialog, then dropped
+	// from the URL without a history entry — a refresh never replays it.
+	const stripTopUpParam = useCallback(
+		() => navigate({ search: { tab: "billing" }, replace: true }),
+		[navigate],
+	);
 	const setActiveTab = (t: SettingsTab) => navigate({ search: { tab: t } });
 	const backToIndex = () => navigate({ search: { tab: undefined } });
 	const [newSlug, setNewSlug] = useState("");
 	const [saving, setSaving] = useState(false);
 
-	const availability = useSlugAvailability(newSlug);
+	const availability = useSlugAvailability(newSlug, "rename");
 
 	// Deep link to one card: scroll to it and ring it, instead of dropping the
 	// seller at the top of a long tab to hunt for it. Two senders, one shape —
@@ -754,6 +780,20 @@ function SettingsRoute() {
 									}
 								/>
 							</Card>
+							{/* Right under the description — the card the marketplace
+							    builds from is the card this section just wrote. */}
+							<Card
+								id={SPOTLIGHT_ANCHOR.store_listing.anchor}
+								highlight={ringFor(SPOTLIGHT_ANCHOR.store_listing.anchor)}
+							>
+								<MarketplaceCard
+									storeName={retailer.storeName}
+									unlisted={retailer.marketplaceUnlisted === true}
+									area={retailer.storeArea ?? ""}
+									readiness={listingReadiness}
+									onSave={(patch) => updateSettings(patch)}
+								/>
+							</Card>
 							<Card>
 								<StoreTypeForm
 									current={retailer.storeType}
@@ -812,22 +852,34 @@ function SettingsRoute() {
 				) : null}
 
 				{activeTab === "billing" ? (
-					<AreaGate area="billing">
-						<BillingTab
+					<>
+						<AreaGate area="billing">
+							<BillingTab
+								retailer={retailer}
+								target={cardTarget}
+								billingReturn={
+									autorenew === "return"
+										? "autorenew"
+										: paid === "return"
+											? "paid"
+											: undefined
+								}
+								onBillingReturnHandled={() =>
+									navigate({ search: { tab: "billing" }, replace: true })
+								}
+							/>
+						</AreaGate>
+						{/* Beside the gate, not inside it: buying credits is the
+						    CREDITS grant, and a teammate can hold credits write
+						    without billing read — inside, the gate would hide the
+						    only place they can buy. The dialog checks its own
+						    access (credits read to see, write to buy). */}
+						<CreditTopUpDialog
 							retailer={retailer}
-							target={cardTarget}
-							billingReturn={
-								autorenew === "return"
-									? "autorenew"
-									: paid === "return"
-										? "paid"
-										: undefined
-							}
-							onBillingReturnHandled={() =>
-								navigate({ search: { tab: "billing" }, replace: true })
-							}
+							request={topup}
+							onRequestHandled={stripTopUpParam}
 						/>
-					</AreaGate>
+					</>
 				) : null}
 
 				{activeTab === "whatsapp" ? (
@@ -2003,6 +2055,9 @@ function PaymentMethodsForm({
 						maxLength={500}
 						className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
 					/>
+					<span className="text-xs text-muted-foreground">
+						{NOTE_LINK_HINT}
+					</span>
 				</label>
 
 				<button
@@ -2237,6 +2292,7 @@ function LocaleForm({
 	current: Locale;
 	onSave: (locale: Locale) => Promise<unknown>;
 }) {
+	const localeSelectId = useId();
 	const [value, setValue] = useState<Locale>(current);
 	const dirty = value !== current;
 
@@ -2252,19 +2308,23 @@ function LocaleForm({
 
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
-			<label className="flex flex-col gap-2">
-				<span className="text-sm font-medium">Message language</span>
-				<select
+			<div className="flex flex-col gap-2">
+				<label htmlFor={localeSelectId} className="text-sm font-medium">
+					Message language
+				</label>
+				<Select
+					id={localeSelectId}
+					variant="field"
+					className="w-full"
 					value={value}
 					onChange={(e) => setValue(e.target.value as Locale)}
-					className="min-h-11 rounded-xl border border-input bg-background px-4 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
 				>
 					{LOCALE_OPTIONS.map((opt) => (
 						<option key={opt.value} value={opt.value}>
 							{opt.label}
 						</option>
 					))}
-				</select>
+				</Select>
 				{/* The field reaches further than its old "sent to shoppers" copy
 				    admitted: retailer email alerts have always rendered in it, and
 				    the WhatsApp order alerts (86eyhw9zy) now do too. */}
@@ -2272,7 +2332,7 @@ function LocaleForm({
 					Used for the order confirmation buyers receive and their order page —
 					and for the order alerts we send you on WhatsApp.
 				</span>
-			</label>
+			</div>
 
 			<Button type="submit" disabled={!dirty} className={SAVE_BTN_CLASS}>
 				Save language
