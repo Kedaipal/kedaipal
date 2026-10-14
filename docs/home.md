@@ -185,6 +185,13 @@ Two layout rules make it hold:
   the `lg:flex-1` row, while the stats and "Open full Insights" stay pinned to
   the foot by `mt-auto`. When the hero is the taller one, the rail's cards keep
   their own height and sit at the top. Desktop only: on a phone the two stack.
+  **Only a hero with a chart stretches.** The bars are the one part that can
+  take extra height. A gated (Starter) hero draws no chart (`bars.length <= 1`),
+  and stretched beside a full rail it was a 660px dark card with a 433px void
+  between the figures and the stats (PR #366 review). So it keeps its own
+  height, its "Open full Insights" sits at the foot beside the stats
+  (`lg:self-end`), and the space below it is plain page, not a hole inside a
+  dark card.
 
 ### Stale unpaid is a strict subset of unpaid
 

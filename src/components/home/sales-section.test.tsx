@@ -28,8 +28,18 @@ const state = {
 };
 
 vi.mock("@tanstack/react-router", () => ({
-	Link: ({ children, to }: { children: ReactNode; to?: string }) => (
-		<a href={to ?? "/"}>{children}</a>
+	Link: ({
+		children,
+		to,
+		className,
+	}: {
+		children: ReactNode;
+		to?: string;
+		className?: string;
+	}) => (
+		<a href={to ?? "/"} className={className}>
+			{children}
+		</a>
 	),
 }));
 // The adapter pair, never `convex/react` — docs/frontend-caching.md.
@@ -149,6 +159,17 @@ describe("a gated (Starter) store", () => {
 		// "you closed at RM 0.00" is a number we do not have.
 		expect(screen.queryByText(/last Monday/i)).toBeNull();
 		expect(screen.queryByText(/closed at/i)).toBeNull();
+	});
+
+	it("keeps its hero at its own height — no chart, nothing to absorb a stretch (PR #366 review)", () => {
+		renderSection();
+		const link = screen.getByRole("link", { name: /Open full Insights/ });
+		const hero = link.closest("section");
+		// Stretched beside a full rail, the chartless card was a dark slab with
+		// a 433px void between the figures and the stats.
+		expect(hero?.className).not.toContain("flex-1");
+		// …and its Insights link sits at the foot beside the stats.
+		expect(link.className).toContain("lg:self-end");
 	});
 
 	it("explains the gap with the Pro teaser instead of empty cards", () => {

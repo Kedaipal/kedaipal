@@ -56,9 +56,12 @@ export function SalesHero({
 	lastWeekdayEarned?: number | null;
 	insightsSearch: InsightsRangeSearch;
 	/** Layout from the board — the Home rail stretches the hero to its own
-	 * height (`lg:flex-1`). The card is built to grow: the bars are
-	 * `lg:flex-1` and the stats and the Insights link are `mt-auto`, so any
-	 * extra height lands as taller bars, never as a gap under the card. */
+	 * height (`lg:flex-1`), but ONLY when the chart is drawn. The chart is the
+	 * one part built to grow: its bar row is `lg:flex-1` and the stats and the
+	 * Insights link are `mt-auto`, so extra height lands as taller bars. Without
+	 * the chart (a gated store, `bars.length <= 1`) nothing can absorb it, and a
+	 * stretched card is a dark slab with a void between the figures and the
+	 * stats — so the board leaves that hero at its own height. */
 	className?: string;
 }) {
 	const { period, earned, collected, orderCount, aov, uncollected } = view;
@@ -252,10 +255,12 @@ export function SalesHero({
 					</Link>
 				</div>
 			) : (
+				// No chart: the link sits at the FOOT beside the stats, not centred
+				// against the figures, so it reads as the card's last line.
 				<Link
 					to="/app/insights"
 					search={insightsSearch}
-					className="relative -mb-1 flex min-h-11 items-center justify-between gap-2 text-sm font-bold text-accent hover:underline"
+					className="relative -mb-1 flex min-h-11 items-center justify-between gap-2 text-sm font-bold text-accent hover:underline lg:self-end"
 				>
 					Open full Insights
 					<ChevronRight className="size-4 shrink-0" aria-hidden="true" />

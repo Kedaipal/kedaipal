@@ -243,7 +243,13 @@ export function SalesSection({
 			    stopped at its own height left a hole beside a taller rail. The hero
 			    fills its column (`lg:flex-1`), so it is never shorter than the
 			    rail; when the hero is the taller one, the rail's cards keep their
-			    own height and sit at the top. */}
+			    own height and sit at the top.
+
+			    Only a hero WITH a chart stretches: the bars are the one thing in
+			    it that can take extra height. A gated (Starter) hero has no chart,
+			    and stretched it became a 660px dark card with a 433px void inside
+			    (PR #366 review). Space under a short card beats a void in a dark
+			    one, and the Pro teaser keeps the cards' slot below either way. */}
 			<div className="order-2 lg:order-none">
 				<PeriodChips
 					value={shownPeriod}
@@ -255,7 +261,7 @@ export function SalesSection({
 			<div className="contents lg:flex lg:flex-wrap lg:items-stretch lg:gap-4">
 				<div className="order-3 flex min-w-0 flex-col gap-3 lg:order-none lg:flex-[999_1_520px]">
 					<SalesHero
-						className="lg:flex-1"
+						className={bars.length > 1 ? "lg:flex-1" : undefined}
 						view={view}
 						currency={currency}
 						bars={bars}
