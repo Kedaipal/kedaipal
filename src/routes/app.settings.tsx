@@ -48,12 +48,7 @@ import {
 } from "../../convex/lib/delivery";
 import { STORE_NAME_MAX, STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
 import { STORE_DESCRIPTION_MAX } from "../../convex/lib/storeProfile";
-import {
-	defaultTemplate,
-	type Locale,
-	type MessageTemplates,
-	TEMPLATE_KEYS,
-} from "../../convex/lib/whatsappCopy";
+import type { Locale } from "../../convex/lib/whatsappCopy";
 import { AreaGate } from "../components/app/area-gate";
 import {
 	PageHeader,
@@ -73,6 +68,7 @@ import {
 } from "../components/settings/how-buyers-pay-card";
 import { IntegrationsTab } from "../components/settings/integrations-tab";
 import { MarketplaceCard } from "../components/settings/marketplace-card";
+import { MessageTemplatesForm } from "../components/settings/message-templates-form";
 import { OrderAlertsCard } from "../components/settings/order-alerts-card";
 import { OrderFlowsSection } from "../components/settings/order-flows-card";
 import {
@@ -127,7 +123,7 @@ import {
 } from "../lib/format";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
 import { NOTE_LINK_HINT } from "../lib/linkify";
-import { editableTemplates, TEMPLATE_LOCALES } from "../lib/message-templates";
+import { LOCALE_LABELS } from "../lib/message-templates";
 import type { StatusLabels } from "../lib/orderStatus";
 import { normalizeMobileDigits, toNationalPhoneInput } from "../lib/phone";
 import { reorderByIds } from "../lib/reorder";
@@ -156,14 +152,6 @@ const LOCALE_OPTIONS = [
 	{ value: "ms", label: "Bahasa Malaysia" },
 	{ value: "zh", label: "中文" },
 ] as const;
-
-// Shared display label for a locale, used by the language card, the WhatsApp
-// template tabs, and the locale-picker `<select>`s below.
-const LOCALE_LABELS: Record<Locale, string> = {
-	en: "English",
-	ms: "Bahasa Malaysia",
-	zh: "中文",
-};
 
 type SettingsTab =
 	| "store"
@@ -489,7 +477,7 @@ function useSettingsGlances(
 				? { text: `${methods} method${methods === 1 ? "" : "s"}` }
 				: { text: "Not set up", tone: "warn" },
 		fulfilment: deliveryOn
-			? { text: PRICING_MODE_UI[pricingModeOf(retailer.deliveryConfig)].title }
+			? { text: PRICING_MODE_UI[pricingModeOf(retailer.deliveryConfig)].short }
 			: pickupOn
 				? { text: "Pickup only" }
 				: { text: "Off", tone: "warn" },
@@ -2405,178 +2393,6 @@ function PaymentMethodsForm({
 						: "Save payment methods"}
 			</Button>
 		</form>
-	);
-}
-
-// The card earns its place on one narrow job: a buyer who types their order
-// number into the shared number gets this reply. The order's own confirmation is
-// a fixed Meta template and is NOT editable here — if TEMPLATE_KEYS ever empties
-// out, delete this card rather than shipping an editor that changes nothing.
-//
-// One collapsed row per language (86eye9xd4, 11A): the first line of what goes
-// out, and whether it's Kedaipal's default or the seller's own — the chip
-// answers "what have I changed?" without opening anything.
-function MessageTemplatesForm({
-	current,
-	onSave,
-}: {
-	current: MessageTemplates | undefined;
-	onSave: (templates: MessageTemplates) => Promise<unknown>;
-}) {
-	const saved = editableTemplates(current);
-	const [open, setOpen] = useState<Locale | null>(null);
-	const [value, setValue] = useState("");
-	const [saving, setSaving] = useState(false);
-	const key = TEMPLATE_KEYS[0];
-	const customisedCount = TEMPLATE_LOCALES.filter((loc) =>
-		Boolean(saved[loc]?.[key]),
-	).length;
-
-	function openRow(loc: Locale) {
-		setOpen(loc);
-		setValue(saved[loc]?.[key] ?? "");
-	}
-
-	async function save(loc: Locale, next: string) {
-		const rest = { ...saved };
-		const trimmed = next.trim();
-		rest[loc] = trimmed ? { ...(rest[loc] ?? {}), [key]: trimmed } : {};
-		setSaving(true);
-		try {
-			await onSave(editableTemplates(rest));
-			toast.success(
-				trimmed
-					? `${LOCALE_LABELS[loc]} reply saved.`
-					: `${LOCALE_LABELS[loc]} is back to the default reply.`,
-			);
-			setOpen(null);
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setSaving(false);
-		}
-	}
-
-	return (
-		<div className="flex flex-col gap-4">
-			<SectionHeading
-				title="Order-number reply"
-				description={
-					<>
-						What our shared number replies when a buyer sends their order number
-						(e.g. <code className="font-mono">ORD-1234</code>).
-					</>
-				}
-				glance={
-					customisedCount > 0 ? (
-						<Glance>Customised</Glance>
-					) : (
-						<Glance tone="grey">Default</Glance>
-					)
-				}
-			/>
-
-			<div className="flex flex-col">
-				{TEMPLATE_LOCALES.map((loc) => {
-					const custom = saved[loc]?.[key];
-					const preview = (custom ?? defaultTemplate(loc, key)).split("\n")[0];
-					const isOpen = open === loc;
-					return (
-						<div
-							key={loc}
-							className="flex flex-col border-t border-border/60 first:border-t-0"
-						>
-							<button
-								type="button"
-								aria-expanded={isOpen}
-								onClick={() => (isOpen ? setOpen(null) : openRow(loc))}
-								className="flex min-h-14 w-full items-center gap-3 py-2 text-left focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-							>
-								<span className="flex min-w-0 flex-1 flex-col">
-									<span className="text-sm font-semibold text-foreground">
-										{LOCALE_LABELS[loc]}
-									</span>
-									<span className="truncate text-xs text-muted-foreground">
-										{preview}
-									</span>
-								</span>
-								{custom ? (
-									<Glance>Customised</Glance>
-								) : (
-									<Glance tone="grey">Default</Glance>
-								)}
-								<ChevronDown
-									aria-hidden
-									className={cn(
-										"size-4 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none",
-										isOpen && "rotate-180",
-									)}
-								/>
-							</button>
-							{isOpen ? (
-								<div className="flex flex-col gap-3 pb-4">
-									<textarea
-										aria-label={`${LOCALE_LABELS[loc]} reply`}
-										value={value}
-										onChange={(e) => setValue(e.target.value)}
-										placeholder={defaultTemplate(loc, key)}
-										rows={3}
-										maxLength={1000}
-										className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-									/>
-									<p className="text-xs text-muted-foreground">
-										Leave blank to use the default shown.
-									</p>
-									<div className="flex flex-wrap gap-2">
-										<Button
-											type="button"
-											className="h-11"
-											isLoading={saving}
-											disabled={saving || value.trim() === (custom ?? "")}
-											onClick={() => void save(loc, value)}
-										>
-											Save reply
-										</Button>
-										{custom ? (
-											<Button
-												type="button"
-												variant="outline"
-												className="h-11"
-												disabled={saving}
-												onClick={() => void save(loc, "")}
-											>
-												Reset to default
-											</Button>
-										) : null}
-										<Button
-											type="button"
-											variant="ghost"
-											className="h-11"
-											onClick={() => setOpen(null)}
-										>
-											Cancel
-										</Button>
-									</div>
-								</div>
-							) : null}
-						</div>
-					);
-				})}
-			</div>
-
-			<InfoDisclosure summary="Why the confirmation can't be edited">
-				<HelperBullets
-					items={[
-						"The order confirmation is a fixed Meta-approved template — WhatsApp's rule for messaging someone who hasn't written first",
-						"This reply is what goes out when a buyer writes their order number to our shared number",
-						<>
-							Use <code className="font-mono">{"{shortId}"}</code> and{" "}
-							<code className="font-mono">{"{storeName}"}</code> as variables
-						</>,
-					]}
-				/>
-			</InfoDisclosure>
-		</div>
 	);
 }
 

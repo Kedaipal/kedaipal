@@ -23,6 +23,8 @@ export const PRICING_MODE_UI: Record<
 	PricingMode,
 	{
 		title: string;
+		/** A rail/index glance has ~14 characters before it truncates. */
+		short: string;
 		/** The row's honest one-liner on the pricing page. */
 		description: string;
 		/** Who runs it — the built-in / partner grammar (z8r3fdcx5k). */
@@ -31,28 +33,33 @@ export const PRICING_MODE_UI: Record<
 > = {
 	free: {
 		title: "Free",
+		short: "Free",
 		description: "No delivery charge",
 		source: "builtin",
 	},
 	flat: {
 		title: "Flat fee",
+		short: "Flat fee",
 		description:
 			"The same fee on every order, with an optional free-above threshold",
 		source: "builtin",
 	},
 	weight: {
 		title: "By weight & zone",
+		short: "Weight & zone",
 		description:
 			"Your courier's rate card — price by the buyer's state and the parcel's weight. You book the courier.",
 		source: "builtin",
 	},
 	radius: {
 		title: "By distance",
+		short: "By distance",
 		description: "Radius bands from your address — you deliver it yourself",
 		source: "builtin",
 	},
 	live: {
 		title: "Live courier price",
+		short: "Live price",
 		description:
 			"The real Lalamove or Delyva price at checkout and one-tap booking — on the account you connect under Integrations",
 		source: "partner",

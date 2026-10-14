@@ -14,7 +14,7 @@
  * the store's country (SG-lite, 86eyph341). Malaysia's copy is unchanged.
  */
 
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, FlaskConical } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import type { Country } from "../../../convex/lib/country";
@@ -161,10 +161,16 @@ export function OnlinePaymentsCard({
 							}
 						>
 							{hitpay?.mode === "sandbox" && !editingKeys ? (
-								<p className="text-xs text-amber-700 dark:text-amber-300">
-									This is a HitPay <strong>sandbox</strong> key — payments are
-									simulated, no real money moves. Swap in your live key before
-									telling buyers.
+								<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+									<FlaskConical
+										aria-hidden
+										className="mt-0.5 size-3.5 shrink-0"
+									/>
+									<span>
+										<span className="font-medium">No real money moves.</span>{" "}
+										This is a HitPay sandbox key, so payments are simulated.
+										Swap in your live key before telling buyers.
+									</span>
 								</p>
 							) : null}
 							{editingKeys ? (

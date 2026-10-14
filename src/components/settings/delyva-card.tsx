@@ -42,6 +42,7 @@ import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 import { Input } from "../ui/input";
+import { ModeButton } from "../ui/mode-button";
 import {
 	Glance,
 	SectionLabel,
@@ -109,6 +110,9 @@ export function DelyvaCard({
 	const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
 	const [address, setAddress] = useState<PickupAddressDraft | null>(null);
 	const [addressError, setAddressError] = useState<string | null>(null);
+	// A set address reads as one quiet row (86eye9xd4 5A); "change it" opens
+	// the editor, and a save or cancel folds it again.
+	const [editingPickup, setEditingPickup] = useState(false);
 
 	const connected = settings?.connected === true;
 
@@ -247,7 +251,10 @@ export function DelyvaCard({
 				}),
 			"Pickup address saved",
 		).then((ok) => {
-			if (ok) setAddress(null);
+			if (ok) {
+				setAddress(null);
+				setEditingPickup(false);
+			}
 		});
 	}
 
@@ -426,25 +433,51 @@ export function DelyvaCard({
 							n={2}
 							state={storedAddress ? "done" : "action"}
 							title="Pickup address"
-							detail={`Where couriers collect from. The ${postcodeRule(country).label.toLowerCase()} decides the price, so make it exact — and match what Delyva has on file for cold chain.`}
+							detail={
+								storedAddress && !editingPickup && !addressDirty ? (
+									<>
+										{[
+											storedAddress.address1,
+											storedAddress.address2,
+											`${storedAddress.postcode} ${storedAddress.city}`,
+										]
+											.filter(Boolean)
+											.join(", ")}{" "}
+										—{" "}
+										<button
+											type="button"
+											onClick={() => setEditingPickup(true)}
+											className="-my-2 py-2 font-medium text-accent-emphasis hover:underline"
+										>
+											change it
+										</button>
+									</>
+								) : (
+									`Where couriers collect from. The ${postcodeRule(country).label.toLowerCase()} decides the price, so make it exact — and match what Delyva has on file for cold chain.`
+								)
+							}
 						>
-							<PickupAddressFields
-								retailerId={retailerId}
-								country={country}
-								draft={addressDraft}
-								dirty={addressDirty}
-								disabled={busy}
-								error={addressError}
-								onChange={(patch) => {
-									setAddress({ ...addressDraft, ...patch });
-									setAddressError(null);
-								}}
-								onSave={saveAddress}
-								onCancel={() => {
-									setAddress(null);
-									setAddressError(null);
-								}}
-							/>
+							{storedAddress && !editingPickup && !addressDirty ? null : (
+								<PickupAddressFields
+									retailerId={retailerId}
+									country={country}
+									draft={addressDraft}
+									dirty={addressDirty}
+									opened={editingPickup}
+									disabled={busy}
+									error={addressError}
+									onChange={(patch) => {
+										setAddress({ ...addressDraft, ...patch });
+										setAddressError(null);
+									}}
+									onSave={saveAddress}
+									onCancel={() => {
+										setAddress(null);
+										setAddressError(null);
+										setEditingPickup(false);
+									}}
+								/>
+							)}
 						</SetupStep>
 
 						<SetupStep
@@ -481,47 +514,27 @@ export function DelyvaCard({
 							Default parcel type
 						</span>
 						<div className="grid grid-cols-3 gap-2">
-							{ITEM_TYPES.map((type) => {
-								const active = settings.defaultItemType === type.value;
-								return (
-									<button
-										key={type.value}
-										type="button"
-										disabled={busy}
-										aria-pressed={active}
-										onClick={() =>
-											void run(
-												() =>
-													updateSettings({
-														retailerId: actAsRetailerId,
-														defaultItemType: type.value,
-													}),
-												`Default parcel type set to ${type.label}`,
-											)
-										}
-										className={`relative flex min-h-[60px] flex-col items-start gap-0.5 rounded-xl border-2 py-2.5 pl-3 pr-9 text-left transition-colors ${
-											active
-												? "border-accent bg-accent/5"
-												: "border-border bg-card hover:border-accent/40"
-										}`}
-									>
-										<span className="text-sm font-semibold">{type.label}</span>
-										<span className="text-xs text-muted-foreground">
-											{type.hint}
-										</span>
-										<span
-											aria-hidden="true"
-											className={`absolute bottom-2.5 right-2.5 flex size-4 items-center justify-center rounded-full border-2 transition-colors ${
-												active ? "border-accent" : "border-border"
-											}`}
-										>
-											{active ? (
-												<span className="size-2 rounded-full bg-accent" />
-											) : null}
-										</span>
-									</button>
-								);
-							})}
+							{ITEM_TYPES.map((type) => (
+								// The house tile (ModeButton) — this was a hand-rolled copy
+								// of it, which is how two tiles drift apart.
+								<ModeButton
+									key={type.value}
+									active={settings.defaultItemType === type.value}
+									disabled={busy}
+									title={type.label}
+									subtitle={type.hint}
+									onClick={() =>
+										void run(
+											() =>
+												updateSettings({
+													retailerId: actAsRetailerId,
+													defaultItemType: type.value,
+												}),
+											`Default parcel type set to ${type.label}`,
+										)
+									}
+								/>
+							))}
 						</div>
 						<p className="text-xs text-muted-foreground">
 							Just the default — you can switch it per order when you book.
@@ -743,6 +756,7 @@ function PickupAddressFields({
 	onChange,
 	onSave,
 	onCancel,
+	opened = false,
 }: {
 	retailerId: Id<"retailers">;
 	country: Country;
@@ -753,6 +767,8 @@ function PickupAddressFields({
 	onChange: (patch: Partial<PickupAddressDraft>) => void;
 	onSave: () => void;
 	onCancel: () => void;
+	/** Opened from the collapsed row — Cancel folds it even before an edit. */
+	opened?: boolean;
 }) {
 	const postcode = postcodeRule(country);
 	return (
@@ -861,12 +877,13 @@ function PickupAddressFields({
 			{error ? (
 				<p className="text-xs font-medium text-destructive">{error}</p>
 			) : null}
-			{dirty ? (
+			{dirty || opened ? (
 				<div className="flex flex-wrap items-center gap-2">
 					<Button
 						type="button"
 						className="h-11"
 						isLoading={disabled}
+						disabled={!dirty}
 						onClick={onSave}
 					>
 						Save pickup address

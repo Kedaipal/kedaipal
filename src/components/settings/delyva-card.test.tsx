@@ -486,6 +486,29 @@ describe("connected settings", () => {
 	});
 });
 
+describe("pickup address — a set address is one quiet row (86eye9xd4)", () => {
+	it("folds to the address with change it, opens the editor, and Cancel folds it back", () => {
+		state.settings = settings();
+		render(card());
+		expect(
+			screen.getByText(/12 Jalan Ampang, 50450 Kuala Lumpur/),
+		).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "address search" })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "change it" }));
+		expect(screen.getByRole("button", { name: "address search" })).toBeTruthy();
+		// Opened but untouched: nothing to save, and Cancel is the way out.
+		expect(
+			(
+				screen.getByRole("button", {
+					name: "Save pickup address",
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(true);
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		expect(screen.queryByRole("button", { name: "address search" })).toBeNull();
+	});
+});
+
 describe("pickup address", () => {
 	beforeEach(() => {
 		state.settings = settings({ pickupAddress: undefined });

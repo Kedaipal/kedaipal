@@ -31,3 +31,11 @@ export function editableTemplates(
 	}
 	return out;
 }
+
+/** Shared display label for a locale — the language card, the reply rows and
+ * every locale picker. */
+export const LOCALE_LABELS: Record<Locale, string> = {
+	en: "English",
+	ms: "Bahasa Malaysia",
+	zh: "中文",
+};
