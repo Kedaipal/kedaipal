@@ -1,6 +1,8 @@
 import { useMutation } from "convex/react";
+import { CheckCircle2, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../../convex/_generated/api";
+import type { PhotoAutosaveStatus } from "../../hooks/usePhotoAutosave";
 import { convexErrorMessage } from "../../lib/format";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
 import { reorderByIds } from "../../lib/reorder";
@@ -21,12 +23,16 @@ export function ProductImagesField({
 	onChange,
 	onUploadingChange,
 	onError,
+	autosaveStatus,
 }: {
 	images: ProductImage[];
 	onChange: (next: ProductImage[]) => void;
 	/** Lets the parent disable its submit while an upload is in flight. */
 	onUploadingChange?: (uploading: boolean) => void;
 	onError: (message: string) => void;
+	/** Set when the photos save themselves (an existing product, z8r3fdtk82):
+	 * the grid then says, beside the count, whether they've landed. */
+	autosaveStatus?: PhotoAutosaveStatus;
 }) {
 	const generateUploadUrl = useMutation(api.products.generateUploadUrl);
 	const [uploading, setUploadingState] = useState(false);
@@ -96,6 +102,17 @@ export function ProductImagesField({
 						({images.length}/{MAX_IMAGES})
 					</span>
 				</span>
+				{autosaveStatus?.kind === "saving" ? (
+					<output className="mr-auto inline-flex items-center gap-1 text-xs text-muted-foreground">
+						<Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+						Saving…
+					</output>
+				) : autosaveStatus?.kind === "saved" ? (
+					<output className="mr-auto inline-flex items-center gap-1 text-xs font-medium text-accent-emphasis">
+						<CheckCircle2 className="size-3.5" aria-hidden="true" />
+						Saved
+					</output>
+				) : null}
 				{images.length > 1 ? (
 					<p className="text-xs text-muted-foreground">Drag to reorder</p>
 				) : null}
@@ -160,6 +177,12 @@ export function ProductImagesField({
 					</label>
 				) : null}
 			</div>
+			{autosaveStatus?.kind === "error" ? (
+				<p role="alert" className="text-xs text-destructive">
+					Couldn't save your photos ({autosaveStatus.message}). Tap Save changes
+					to try again.
+				</p>
+			) : null}
 		</div>
 	);
 }
