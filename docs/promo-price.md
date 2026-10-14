@@ -272,6 +272,21 @@ the review's Save names the limit before the seller gets there.
   Pro-gated**, so a downgraded store can always switch a sale off. No credit
   gate — the catalogue is paid for by the subscription
   (`creditLockCoverage.test.ts` lists `promotions` with `products`).
+- **× takes one product out, instantly, with an Undo.** A single product is
+  cheap to put back, so there's no confirm (End keeps its confirm: it puts a
+  whole sale back). The toast's Undo re-adds it at the prices this promotion
+  gave it (`addProducts`, so it's Pro — a store that can't set promotions gets
+  the toast without Undo). A taken-out member is stamped `removedAt`, so an
+  **ended** promotion's history and its **Run again** are the products it
+  *ended on*, not every product that ever passed through it. Without the
+  stamp, × and End both left `cleared` rows, and the ended page listed more
+  products than its own count.
+- **A running sale's start is stated, not asked.** Re-opening a promotion (or
+  a product's own sale) whose start has passed seeds `startMode: "started"`:
+  the terms show "It's already running — it started Wed 14 Oct, 8:30 pm" in
+  place of the Now / Schedule a start… chips, and saving keeps that start.
+  "Schedule a start…" with a past date was an invitation to move a sale that
+  was already selling.
 - **The product form can't fight it.** A grouped product's Promotion card
   reads "Part of **Happy Hour** · Edit promotion", edits only its own sale
   prices (`PromoFields terms="none"`), and sends no `promo` at all;

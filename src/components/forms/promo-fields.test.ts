@@ -215,17 +215,20 @@ describe("promoDraftFrom", () => {
 		expect(promoDraftFrom(undefined)).toEqual(EMPTY_PROMO_DRAFT);
 	});
 
-	test("a stored window re-opens as a SCHEDULED start, never as 'now'", () => {
+	test("a stored window still ahead re-opens as a SCHEDULED start, never as 'now'", () => {
 		// "Now" has already happened by the time the form is re-opened; showing
 		// it would offer to silently move a running sale's start.
-		const seeded = promoDraftFrom({
-			label: "Raya",
-			startsAt: new Date("2026-10-09T20:00:00").getTime(),
-			endsAt: new Date("2026-10-09T22:30:00").getTime(),
-			unitCap: 30,
-			maxPerOrder: 2,
-			payWithinMinutes: 60,
-		});
+		const seeded = promoDraftFrom(
+			{
+				label: "Raya",
+				startsAt: new Date("2026-10-09T20:00:00").getTime(),
+				endsAt: new Date("2026-10-09T22:30:00").getTime(),
+				unitCap: 30,
+				maxPerOrder: 2,
+				payWithinMinutes: 60,
+			},
+			NOW,
+		);
 		expect(seeded.on).toBe(true);
 		expect(seeded.startMode).toBe("schedule");
 		expect(seeded.startDate).toBe("2026-10-09");
@@ -235,6 +238,21 @@ describe("promoDraftFrom", () => {
 		expect(seeded.unitCap).toBe("30");
 		expect(seeded.maxPerOrder).toBe("2");
 		expect(seeded.payWithinMinutes).toBe(60);
+	});
+
+	test("a start that has PASSED re-opens as 'started' — stated, not offered (z8r3fducfd)", () => {
+		// Editing a running promotion offered "Schedule a start…" with the
+		// past start in it: an invitation to move a sale that is selling.
+		const startsAt = new Date("2026-10-09T08:00:00").getTime();
+		const endsAt = new Date("2026-10-09T22:00:00").getTime();
+		const seeded = promoDraftFrom({ startsAt, endsAt }, NOW);
+		expect(seeded.startMode).toBe("started");
+		// …and saving it keeps the start exactly where it was.
+		const value = promoSubmitValue(seeded, NOW);
+		expect(value?.startsAt).toBe(startsAt);
+		expect(value?.endsAt).toBe(endsAt);
+		expect(promoDraftIssue(seeded, NOW)).toBeUndefined();
+		expect(promoWindowSentence(seeded, NOW)).toMatch(/^Running since /);
 	});
 
 	test("a stored promotion with no end seeds the no-end-date mode", () => {

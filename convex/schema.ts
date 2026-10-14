@@ -3049,6 +3049,11 @@ export default defineSchema({
 		// touches the product while its promo is still this run — a product
 		// the seller has since re-priced by hand is left alone.
 		runId: v.optional(v.string()),
+		// Set when the seller took this product OUT with × — as opposed to
+		// the promotion ending, which clears every member the same way. An
+		// ended promotion's history and its "Run again" are the products it
+		// ENDED on, so a product taken out earlier is left out of both.
+		removedAt: v.optional(v.number()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})

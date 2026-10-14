@@ -50,6 +50,7 @@ function PromotionRoute() {
 	const setGate = usePromotionGate();
 	const end = useMutation(api.promotions.end);
 	const removeProducts = useMutation(api.promotions.removeProducts);
+	const addProducts = useMutation(api.promotions.addProducts);
 	const [confirmEnd, setConfirmEnd] = useState(false);
 	const [removing, setRemoving] = useState<string | null>(null);
 	const detail = useQuery(
@@ -89,14 +90,37 @@ function PromotionRoute() {
 		}
 	}
 
-	async function remove(productId: string, productName: string) {
-		setRemoving(productId);
+	// One tap, like End's confirm is not — a single product is cheap to put
+	// back, so × is instant and the toast carries an Undo that re-adds it at
+	// the prices this promotion gave it. Undo is adding to a promotion, which
+	// is Pro: a store that can't set promotions gets the plain toast.
+	async function remove(product: (typeof products)[number]) {
+		setRemoving(product.productId);
 		try {
 			await removeProducts({
 				promotionId: promotion._id,
-				productIds: [productId as Id<"products">],
+				productIds: [product.productId],
 			});
-			toast.success(`${productName} is back to its normal price`);
+			const message = `${product.name} is back to its normal price`;
+			if (setGate !== null || product.prices.length === 0) {
+				toast.success(message);
+				return;
+			}
+			toast.success(message, {
+				action: {
+					label: "Undo",
+					onClick: () => {
+						addProducts({
+							promotionId: promotion._id,
+							members: [
+								{ productId: product.productId, prices: product.prices },
+							],
+						})
+							.then(() => toast.success(`${product.name} is back in ${name}`))
+							.catch((err) => toast.error(convexErrorMessage(err)));
+					},
+				},
+			});
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -291,7 +315,7 @@ function PromotionRoute() {
 									{!ended ? (
 										<button
 											type="button"
-											onClick={() => remove(p.productId, p.name)}
+											onClick={() => remove(p)}
 											disabled={lockReason !== null || removing === p.productId}
 											aria-label={`Take ${p.name} out of ${name}`}
 											className={cn(
@@ -310,7 +334,8 @@ function PromotionRoute() {
 					<p className="text-xs text-muted-foreground">
 						Ending puts every product back to its normal price straight away.
 						Orders already placed keep the price they were placed at. Taking one
-						product out (×) does the same for just that product.
+						product out (×) does the same for just that product, and can be
+						undone straight after.
 					</p>
 				) : null}
 			</section>

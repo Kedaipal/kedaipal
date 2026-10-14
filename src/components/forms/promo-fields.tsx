@@ -31,9 +31,15 @@ export type PromoDraft = {
 	on: boolean;
 	/** Badge wording; blank falls back to `DEFAULT_PROMO_LABEL` on display. */
 	label: string;
-	/** "now" = starts when they save; "schedule" = the drop fields below. */
-	startMode: "now" | "schedule";
-	/** "YYYY-MM-DD" / "HH:MM" — only read when `startMode` is "schedule". */
+	/** "now" = starts when they save; "schedule" = the drop fields below;
+	 * "started" = a saved promotion re-opened after its start has passed. A
+	 * running sale's start is a FACT, so it is shown, never offered as a
+	 * choice — "Now" would silently restart it and "Schedule a start…" would
+	 * invite moving a sale that is already selling. Only `promoDraftFrom`
+	 * seeds it; nothing the seller taps can reach it. */
+	startMode: "now" | "schedule" | "started";
+	/** "YYYY-MM-DD" / "HH:MM" — read when `startMode` is "schedule" or
+	 * "started". */
 	startDate: string;
 	startTime: string;
 	/** How long it runs. `minutes` uses `durationMinutes`; `until` uses the
@@ -110,7 +116,9 @@ function positiveInt(raw: string): number | undefined {
 	return Number.isInteger(n) && n > 0 && String(n) === t ? n : undefined;
 }
 
-/** Seed from a saved product (or the empty draft when it has no promotion). */
+/** Seed from a saved product (or the empty draft when it has no promotion).
+ * `now` decides whether a stored start is still ahead ("schedule") or has
+ * already happened ("started"). */
 export function promoDraftFrom(
 	promo:
 		| {
@@ -122,6 +130,7 @@ export function promoDraftFrom(
 				payWithinMinutes?: number;
 		  }
 		| undefined,
+	now: number = Date.now(),
 ): PromoDraft {
 	if (!promo) return { ...EMPTY_PROMO_DRAFT };
 	const ymd = (ms: number) => {
@@ -137,10 +146,16 @@ export function promoDraftFrom(
 	return {
 		on: true,
 		label: promo.label ?? "",
-		// A stored start is always re-shown as a scheduled one: "now" has
-		// already happened by the time anyone re-opens the form, and offering
-		// to re-start it silently would move a running sale.
-		startMode: promo.startsAt !== undefined ? "schedule" : "now",
+		// A stored start is never re-shown as "now": that has already happened
+		// by the time anyone re-opens the form, and offering it would silently
+		// restart a running sale. One still ahead stays editable; one that has
+		// passed is the running sale's history, shown and not offered.
+		startMode:
+			promo.startsAt === undefined
+				? "now"
+				: promo.startsAt <= now
+					? "started"
+					: "schedule",
 		startDate: start?.date ?? "",
 		startTime: start?.time ?? "",
 		endMode: promo.endsAt !== undefined ? "until" : "open",
@@ -161,7 +176,7 @@ export function promoSubmitValue(
 ): PromoSubmitValue {
 	if (!draft.on) return null;
 	const startsAt =
-		draft.startMode === "schedule"
+		draft.startMode !== "now"
 			? epochFrom(draft.startDate, draft.startTime)
 			: undefined;
 	const endsAt =
@@ -254,10 +269,25 @@ export function promoWindowSentence(draft: PromoDraft, now: number): string {
 	const from =
 		value.startsAt === undefined
 			? "Runs from the moment you save"
-			: `Runs from ${when(value.startsAt)}`;
+			: draft.startMode === "started"
+				? `Running since ${when(value.startsAt)}`
+				: `Runs from ${when(value.startsAt)}`;
 	if (value.endsAt === undefined)
 		return `${from} until you turn it off — a plain discount, no countdown.`;
 	return `${from} until ${when(value.endsAt)}.`;
+}
+
+/** "Wed 14 Oct, 8:30 pm" — the start a running sale is shown with. */
+function startedLabel(date: string, time: string): string {
+	const ms = epochFrom(date, time);
+	if (ms === undefined) return "earlier";
+	return new Date(ms).toLocaleString(undefined, {
+		weekday: "short",
+		day: "numeric",
+		month: "short",
+		hour: "numeric",
+		minute: "2-digit",
+	});
 }
 
 /** One sellable line the promotion can price. */
@@ -526,48 +556,60 @@ export function PromoFields({
 								/>
 							</div>
 
-							{/* WHEN it starts — asked separately from how long it runs. */}
-							<div className="flex flex-col gap-2">
-								<span className="text-xs font-semibold">
-									When does it start?
-								</span>
-								<div className="flex flex-wrap gap-2">
-									<button
-										type="button"
-										onClick={() => set({ startMode: "now" })}
-										className={chip(draft.startMode === "now")}
-									>
-										Now
-									</button>
-									<button
-										type="button"
-										onClick={() => set({ startMode: "schedule" })}
-										className={chip(draft.startMode === "schedule")}
-									>
-										Schedule a start…
-									</button>
+							{/* WHEN it starts — asked separately from how long it runs.
+							    Not asked at all once it has: a running sale's start is
+							    stated, so the only questions left are about its end. */}
+							{draft.startMode === "started" ? (
+								<div className="flex flex-col gap-1">
+									<span className="text-xs font-semibold">Started</span>
+									<p className="text-sm text-muted-foreground">
+										It's already running — it started{" "}
+										{startedLabel(draft.startDate, draft.startTime)}.
+									</p>
 								</div>
-								{draft.startMode === "schedule" ? (
+							) : (
+								<div className="flex flex-col gap-2">
+									<span className="text-xs font-semibold">
+										When does it start?
+									</span>
 									<div className="flex flex-wrap gap-2">
-										<Input
-											aria-label="Promotion start date"
-											type="date"
-											variant="field"
-											className="w-44"
-											value={draft.startDate}
-											onChange={(e) => set({ startDate: e.target.value })}
-										/>
-										<Input
-											aria-label="Promotion start time"
-											type="time"
-											variant="field"
-											className="w-36"
-											value={draft.startTime}
-											onChange={(e) => set({ startTime: e.target.value })}
-										/>
+										<button
+											type="button"
+											onClick={() => set({ startMode: "now" })}
+											className={chip(draft.startMode === "now")}
+										>
+											Now
+										</button>
+										<button
+											type="button"
+											onClick={() => set({ startMode: "schedule" })}
+											className={chip(draft.startMode === "schedule")}
+										>
+											Schedule a start…
+										</button>
 									</div>
-								) : null}
-							</div>
+									{draft.startMode === "schedule" ? (
+										<div className="flex flex-wrap gap-2">
+											<Input
+												aria-label="Promotion start date"
+												type="date"
+												variant="field"
+												className="w-44"
+												value={draft.startDate}
+												onChange={(e) => set({ startDate: e.target.value })}
+											/>
+											<Input
+												aria-label="Promotion start time"
+												type="time"
+												variant="field"
+												className="w-36"
+												value={draft.startTime}
+												onChange={(e) => set({ startTime: e.target.value })}
+											/>
+										</div>
+									) : null}
+								</div>
+							)}
 
 							{/* HOW LONG it runs. */}
 							<div className="flex flex-col gap-2">

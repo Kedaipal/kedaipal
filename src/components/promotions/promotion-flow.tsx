@@ -442,9 +442,13 @@ export function PromotionFlow(props: Props) {
 				</>
 			) : null}
 
-			{/* Sticky CTA — the next step must never scroll away (mobile rule),
-			    and it says what it will do, with the reason beside it when off. */}
-			<div className="sticky bottom-20 z-10 flex flex-col gap-2 rounded-2xl bg-background/95 pt-2 backdrop-blur lg:static lg:bg-transparent lg:pt-0">
+			{/* Sticky CTA — the next step must never scroll away, and it says
+			    what it will do, with the reason beside it when off. Sticky on
+			    desktop too: a 60-product picker is far taller than a laptop
+			    screen, and a static footer left "Next" and the selected count
+			    a long scroll below the list (found hands-on). Mobile sits above
+			    the bottom nav; desktop has none, so it rests on the edge. */}
+			<div className="sticky bottom-20 z-10 flex flex-col gap-2 rounded-2xl bg-background/95 pt-2 backdrop-blur lg:bottom-0 lg:rounded-none lg:border-t lg:border-border lg:pb-4 lg:pt-3">
 				{step === "pick" && selected.size > 0 ? (
 					<div className="flex items-center justify-between text-[13px]">
 						<span className="text-muted-foreground">

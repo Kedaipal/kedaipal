@@ -436,6 +436,59 @@ describe("the Pro gate", () => {
 	});
 });
 
+describe("taking a product out (×)", () => {
+	test("an ended promotion's history and Run again leave it out — it left before the end", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const a = await seedProduct(t, retailer._id, "A", [2000]);
+		const b = await seedProduct(t, retailer._id, "B", [1000]);
+		const asUser = t.withIdentity({ subject: USER });
+		const promotionId = await asUser.mutation(api.promotions.create, {
+			retailerId: retailer._id,
+			percentOff: 20,
+			members: [twentyOff(a, [2000]), twentyOff(b, [1000])],
+		});
+		await asUser.mutation(api.promotions.removeProducts, {
+			promotionId,
+			productIds: [a.productId],
+		});
+		await asUser.mutation(api.promotions.end, { promotionId });
+
+		const detail = await asUser.query(api.promotions.get, { promotionId });
+		// Was: both, so the page said "2 products" under a count of 1.
+		expect(detail?.products.map((p) => p.name)).toEqual(["B"]);
+		expect(detail?.promotion.productCount).toBe(1);
+	});
+
+	test("can be undone — the product goes back in at the prices it had", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const a = await seedProduct(t, retailer._id, "A", [2000]);
+		const asUser = t.withIdentity({ subject: USER });
+		const promotionId = await asUser.mutation(api.promotions.create, {
+			retailerId: retailer._id,
+			percentOff: 20,
+			members: [twentyOff(a, [2000])],
+		});
+		await asUser.mutation(api.promotions.removeProducts, {
+			promotionId,
+			productIds: [a.productId],
+		});
+		expect((await variant(t, a.variantIds[0]))?.promoPrice).toBeUndefined();
+
+		// The Undo on the detail page's toast: the removed member row must not
+		// count as "already in this promotion".
+		await asUser.mutation(api.promotions.addProducts, {
+			promotionId,
+			members: [twentyOff(a, [2000])],
+		});
+		expect((await variant(t, a.variantIds[0]))?.promoPrice).toBe(1600);
+		const detail = await asUser.query(api.promotions.get, { promotionId });
+		expect(detail?.products.map((p) => p.name)).toEqual(["A"]);
+		expect(detail?.promotion.productCount).toBe(1);
+	});
+});
+
 describe("update — one edit re-prices every product", () => {
 	test("a window change starts a fresh run (fresh cap pool); a label edit keeps it", async () => {
 		const t = setup();

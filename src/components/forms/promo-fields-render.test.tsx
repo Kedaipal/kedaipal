@@ -7,6 +7,7 @@ import {
 	type PromoDraft,
 	PromoFields,
 	type PromoRow,
+	promoDraftFrom,
 } from "./promo-fields";
 
 /**
@@ -259,5 +260,39 @@ describe("a locked (Starter) store", () => {
 		expect(
 			screen.queryByRole("button", { name: "Clear sale prices & settings" }),
 		).toBeNull();
+	});
+});
+
+describe("a promotion that's already running", () => {
+	test("states its start instead of asking when it starts (z8r3fducfd)", () => {
+		const hourAgo = Date.now() - 60 * 60_000;
+		render(
+			<Harness
+				initialDraft={promoDraftFrom({
+					startsAt: hourAgo,
+					endsAt: hourAgo + 3 * 60 * 60_000,
+				})}
+				initialRows={ROWS.map((r) => ({ ...r, promoPrice: "5.00" }))}
+			/>,
+		);
+		expect(screen.getByText(/It's already running — it started/)).toBeTruthy();
+		expect(
+			screen.queryByRole("button", { name: "Schedule a start…" }),
+		).toBeNull();
+		expect(screen.queryByRole("button", { name: "Now" })).toBeNull();
+	});
+
+	test("one that hasn't started yet is still a schedule you can move", () => {
+		const tomorrow = Date.now() + 24 * 60 * 60_000;
+		render(
+			<Harness
+				initialDraft={promoDraftFrom({ startsAt: tomorrow })}
+				initialRows={ROWS.map((r) => ({ ...r, promoPrice: "5.00" }))}
+			/>,
+		);
+		expect(
+			screen.getByRole("button", { name: "Schedule a start…" }),
+		).toBeTruthy();
+		expect(screen.queryByText(/already running/)).toBeNull();
 	});
 });

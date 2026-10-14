@@ -666,6 +666,7 @@ export const removeProducts = mutation({
 			// Never applied: nothing of ours is on the product.
 			await ctx.db.patch(member._id, {
 				state: member.state === "applied" ? "clearing" : "cleared",
+				removedAt: now,
 				updatedAt: now,
 			});
 			removed++;
@@ -807,9 +808,12 @@ export const get = query({
 		const queue = await queueCounts(ctx, promotionId);
 		const ended =
 			promotion.endedAt !== undefined || !promotionIsOpen(promotion, Date.now());
-		// Ended: every product it ran on — `cleared` after "End now", still
+		// Ended: every product it ENDED on — `cleared` after "End now", still
 		// `applied` when its window simply ran out. `moved` ones left for
-		// another promotion and belong to that one's history instead.
+		// another promotion and belong to that one's history instead, and
+		// ones taken out with × (`removedAt`) had left before it ended — the
+		// detail page would otherwise list more products than its own count,
+		// and "Run again" would quietly put them back on sale.
 		const members = ended
 			? (
 					await ctx.db
@@ -818,7 +822,12 @@ export const get = query({
 							q.eq("promotionId", promotionId),
 						)
 						.collect()
-				).filter((m) => m.state !== "moved" && m.state !== "pending")
+				).filter(
+					(m) =>
+						m.state !== "moved" &&
+						m.state !== "pending" &&
+						m.removedAt === undefined,
+				)
 			: await openMembers(ctx, promotionId);
 		const products = await Promise.all(
 			members.map(async (member) => {
