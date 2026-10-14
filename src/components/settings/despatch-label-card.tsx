@@ -6,7 +6,7 @@
  * the parcel. (Pickup orders never get one — they have no address.)
  *
  * Presentational: config in, a patch out via `onSave`, so it unit-tests without
- * Convex (the `wa-order-alerts-card.tsx` posture). The card is the ONE place
+ * Convex (the `order-alerts-card.tsx` posture). The card is the ONE place
  * that tells a seller what this label is and — just as importantly — what it
  * is not: a Kedaipal despatch label, not a courier's official consignment note.
  */
