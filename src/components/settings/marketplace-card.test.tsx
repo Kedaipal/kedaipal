@@ -42,6 +42,7 @@ function renderCard(
 				hasVisibleProduct: true,
 				internal: false,
 				hidden: null,
+				offline: false,
 				featuredIn: [],
 			}}
 			onSave={onSave}
@@ -69,6 +70,7 @@ describe("MarketplaceCard — the switch line tells the truth", () => {
 				hasVisibleProduct: false,
 				internal: false,
 				hidden: null,
+				offline: false,
 				featuredIn: [],
 			},
 		});
@@ -93,6 +95,7 @@ describe("MarketplaceCard — the switch line tells the truth", () => {
 				hasVisibleProduct: true,
 				internal: false,
 				hidden: null,
+				offline: false,
 				featuredIn: [],
 			},
 		});
@@ -114,6 +117,7 @@ describe("MarketplaceCard — internal stores", () => {
 				hasVisibleProduct: true,
 				internal: true,
 				hidden: null,
+				offline: false,
 				featuredIn: [],
 			},
 		});
@@ -129,6 +133,7 @@ describe("MarketplaceCard — hidden by Kedaipal", () => {
 				hasVisibleProduct: true,
 				internal: false,
 				hidden: { note: "Add real product photos and we'll relist you." },
+				offline: false,
 				featuredIn: [],
 			},
 		});
@@ -153,6 +158,7 @@ describe("MarketplaceCard — hidden by Kedaipal", () => {
 				hasVisibleProduct: true,
 				internal: false,
 				hidden: {},
+				offline: false,
 				featuredIn: [],
 			},
 		});
@@ -170,6 +176,7 @@ describe("MarketplaceCard — hidden by Kedaipal", () => {
 				hasVisibleProduct: true,
 				internal: false,
 				hidden: {},
+				offline: false,
 				featuredIn: [],
 			},
 		});
@@ -230,6 +237,7 @@ describe("MarketplaceCard — the showcase card never promises a ticket buyers c
 		hasVisibleProduct: true,
 		internal: false,
 		hidden: null,
+		offline: false,
 		featuredIn: [campfest],
 	};
 
@@ -252,5 +260,32 @@ describe("MarketplaceCard — the showcase card never promises a ticket buyers c
 		cleanup();
 		renderCard({ readiness: { ...ready, hasVisibleProduct: false } });
 		expect(screen.getByText(/Add a product buyers can see/)).toBeTruthy();
+	});
+});
+
+describe("MarketplaceCard — an offline store is never 'shown'", () => {
+	test("Kedaipal took it offline: the switch line and the showcase card both say so", () => {
+		renderCard({
+			readiness: {
+				hasVisibleProduct: true,
+				internal: false,
+				hidden: null,
+				offline: true,
+				featuredIn: [
+					{
+						slug: "campfest",
+						title: "Malaysia Campfest 2026",
+						state: "live",
+					},
+				],
+			},
+		});
+		expect(screen.queryByText(/Shown in the directory/)).toBeNull();
+		expect(
+			screen.getByText(
+				/taken your store offline, so it isn't on the marketplace/,
+			),
+		).toBeTruthy();
+		expect(screen.getByText("In this showcase — not showing")).toBeTruthy();
 	});
 });

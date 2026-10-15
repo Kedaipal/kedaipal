@@ -246,6 +246,34 @@ describe("members obey the directory's listable rule", () => {
 		expect(admin?.members[0].notListed).toBe("hidden_by_admin");
 	});
 
+	test("a store Kedaipal took OFFLINE leaves the showcase too, named on the admin row", async () => {
+		// The directory drops an offline store (z8r3fdudf7); a showcase that
+		// kept it would put its ticket and cover on /stores anyway.
+		const t = setup();
+		const open = await seedListableStore(t, "user_sc_o1", "kedai-o1");
+		const offline = await seedListableStore(t, "user_sc_o2", "kedai-o2");
+		const { asAdmin, showcaseId } = await createShowcase(t);
+		await asAdmin.mutation(api.showcases.setMembers, {
+			showcaseId,
+			members: [{ retailerId: open }, { retailerId: offline }],
+		});
+		await asAdmin.mutation(api.showcases.publish, { showcaseId });
+		await t.run(async (ctx) => {
+			await ctx.db.insert("storeAvailability", {
+				retailerId: offline,
+				adminMode: "offline",
+				adminAt: Date.now(),
+				updatedAt: Date.now(),
+			});
+		});
+		const [pub] = await t.query(api.showcases.listShowcases);
+		expect(pub.members.map((m) => m.slug)).toEqual(["kedai-o1"]);
+		const admin = await asAdmin.query(api.showcases.getForAdmin, { showcaseId });
+		expect(admin?.members.find((m) => m.slug === "kedai-o2")?.notListed).toBe(
+			"offline",
+		);
+	});
+
 	test("a store with no visible product is named, not dropped silently", async () => {
 		const t = setup();
 		const asUser = t.withIdentity({ subject: "user_sc_np" });

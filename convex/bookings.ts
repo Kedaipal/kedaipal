@@ -16,6 +16,7 @@
  */
 
 import { ConvexError, v } from "convex/values";
+import { assertTakesBuyerOrders } from "./storeAvailability";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import {
@@ -79,7 +80,6 @@ import {
 import { assertOrderCreditAvailable } from "./creditLock";
 import { effectivePrice } from "./lib/promo";
 import { assertSubscriptionActive, getAccess } from "./subscriptions";
-import { orderingPausedMessage } from "./lib/seasonalHold";
 import { recordOrderCreated } from "./subscriptionUsage";
 
 /** Decline reasons are quoted verbatim in the guest's page (and, once the
@@ -313,8 +313,7 @@ export const requestBooking = mutation({
 		const retailer = await ctx.db.get(args.retailerId);
 		if (!retailer) throw new ConvexError("Store not found");
 		// Off-Season Hold (z8r3fday24): a paused store takes no booking requests.
-		if (retailer.orderingPausedAt !== undefined)
-			throw new ConvexError(orderingPausedMessage(retailer.storeName));
+		await assertTakesBuyerOrders(ctx, retailer);
 		const product = await loadBookableListing(ctx, args.productId);
 		if (!product || product.retailerId !== args.retailerId) {
 			throw new ConvexError("This listing isn't taking bookings right now");

@@ -1,4 +1,6 @@
 import { v } from "convex/values";
+import { takesBuyerOrders } from "./lib/storeAvailability";
+import { availabilityResolver, storeAvailabilityOf } from "./storeAvailability";
 import type { Doc, Id } from "./_generated/dataModel";
 import { type QueryCtx, query } from "./_generated/server";
 import { adminUserIds, requireRetailerAccess } from "./lib/auth";
@@ -140,6 +142,9 @@ export const myListingReadiness = query({
 		/** An admin took the store off /stores, with their optional note to
 		 * the seller — the card says so instead of "Shown in the directory". */
 		hidden: { note?: string } | null;
+		/** Kedaipal took the store offline (z8r3fdudf7) — off the directory
+		 * and every showcase, whatever the switch says. */
+		offline: boolean;
 		/** Published showcases this store is in (z8r3fdr6mv) — the seller is
 		 * TOLD, with the label Kedaipal gave them and the link to share. */
 		featuredIn: FeaturedIn[];
@@ -157,6 +162,7 @@ export const myListingReadiness = query({
 			hidden: retailer.marketplaceHidden
 				? { note: retailer.marketplaceHidden.note }
 				: null,
+			offline: (await storeAvailabilityOf(ctx, retailer)).state === "offline",
 			featuredIn: await featuredIn(ctx, retailerId, Date.now()),
 		};
 	},
@@ -172,6 +178,7 @@ export const myListingReadiness = query({
 export type NotListedReason =
 	| "internal"
 	| "hidden_by_admin"
+	| "offline"
 	| "opted_out"
 	| "purging"
 	| "no_visible_product";
@@ -184,6 +191,11 @@ export async function notListedReason(
 	const sub = await loadSubscription(ctx, row._id);
 	if (storeIsInternal(row, sub, adminIds)) return "internal";
 	if (row.marketplaceHidden !== undefined) return "hidden_by_admin";
+	// Kedaipal took the store offline (z8r3fdudf7) — `isListableRow` drops it
+	// from the directory, so a showcase must drop it too, or its ticket (and
+	// cover) would ride out on /stores while the store itself is gone.
+	if ((await storeAvailabilityOf(ctx, row)).state === "offline")
+		return "offline";
 	if (row.marketplaceUnlistedAt !== undefined) return "opted_out";
 	if (row.purgeStartedAt !== undefined) return "purging";
 	if (!(await hasVisibleProduct(ctx, row._id))) return "no_visible_product";
@@ -226,6 +238,7 @@ export const listStores = query({
 		const now = Date.now();
 		const adminIds = adminUserIds();
 		const rows = await ctx.db.query("retailers").collect();
+		const availabilityOf = await availabilityResolver(ctx);
 		const cards: Array<{ card: MarketplaceStoreCard; row: Doc<"retailers"> }> =
 			[];
 		for (const row of rows) {
@@ -239,6 +252,7 @@ export const listStores = query({
 					purgeStartedAt: row.purgeStartedAt,
 					internal: storeIsInternal(row, sub, adminIds),
 					hiddenByAdmin: row.marketplaceHidden !== undefined,
+					offline: availabilityOf(row).state === "offline",
 				})
 			)
 				continue;
@@ -278,7 +292,11 @@ export const listStores = query({
 					isFoundingMember: row.isFoundingMember,
 					foundingMemberRank: row.foundingMemberRank,
 					sponsored,
-					orderingPaused: row.orderingPausedAt !== undefined,
+					// Any pause (seller, hold, Kedaipal) reads "not taking orders"
+					// on the card, from the one resolver the order doors use.
+					orderingPaused: !takesBuyerOrders(
+						availabilityOf(row),
+					),
 					createdAt: row.createdAt,
 				},
 			});

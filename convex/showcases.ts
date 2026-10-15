@@ -7,6 +7,7 @@ import {
 	query,
 } from "./_generated/server";
 import { adminUserIds, logGlobalAdminAction, requireAdmin } from "./lib/auth";
+import { takesBuyerOrders } from "./lib/storeAvailability";
 import type { ClosedDateRange } from "./lib/closedDates";
 import type { OpeningHours } from "./lib/openingHours";
 import { type Country, countryValidator, DEFAULT_COUNTRY } from "./lib/country";
@@ -30,6 +31,7 @@ import {
 	notListedReason,
 	storeIsInternal,
 } from "./marketplace";
+import { storeAvailabilityOf } from "./storeAvailability";
 import { loadSubscription } from "./subscriptions";
 
 /**
@@ -258,7 +260,11 @@ async function toAdminShowcase(
 			coverImageUrl: await storageUrl(ctx, retailer.coverImageStorageId),
 			openingHours: retailer.openingHours,
 			closedDates: retailer.closedDates,
-			orderingPaused: retailer.orderingPausedAt !== undefined,
+			// Any pause (seller, hold, Kedaipal) — the resolver the order doors
+			// and the directory card use, never the raw hold stamp.
+			orderingPaused: !takesBuyerOrders(
+				await storeAvailabilityOf(ctx, retailer),
+			),
 			createdAt: retailer.createdAt,
 			offersDelivery: retailer.offerDelivery !== false,
 			notListed: await notListedReason(ctx, retailer, adminIds),

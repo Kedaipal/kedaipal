@@ -176,6 +176,25 @@ Two layout rules make it hold:
   desktop, where `lg:flex-row` stretches the chart column against the figures
   beside it. The row is now a fixed 84px at the base width and takes `lg:flex-1`
   only where there is space to grow into.
+- **The hero is never shorter than the rail beside it.** The rail's height
+  depends on what it carries (stale unpaid only, plus out of stock, plus Plan
+  ahead), and with the row aligned `lg:items-start` a full rail left the hero
+  ending 328px above it. The row is `lg:items-stretch` and the hero takes
+  `lg:flex-1` in its column (`SalesHero` takes a `className` for it), so the two
+  bottoms meet exactly. The extra height goes into the **bars**, since they're
+  the `lg:flex-1` row, while the stats and "Open full Insights" stay pinned to
+  the foot by `mt-auto`. When the hero is the taller one, the rail's cards keep
+  their own height and sit at the top. Desktop only: on a phone the two stack.
+  **Only a hero with a chart stretches.** The bars are the one part that can
+  take extra height. A gated (Starter) hero draws no chart (`bars.length <= 1`),
+  and stretched beside a full rail it was a 660px dark card with a 433px void
+  between the figures and the stats (PR #366 review). So it keeps its own
+  height, and its "Open full Insights" sits at the foot beside the stats
+  (`lg:self-end`). The room beside a tall rail goes to the **Pro teaser**,
+  which for a gated store renders in the hero's column, under the hero, not in
+  the cards' slot below (Zaki, 14 Oct 2026). Measured at 1180px beside a 660px
+  rail: hero 272 + teaser 390 = a 674px column. On a phone the column stacks
+  hero then teaser, the order it already had.
 
 ### Stale unpaid is a strict subset of unpaid
 

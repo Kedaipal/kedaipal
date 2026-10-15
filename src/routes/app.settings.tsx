@@ -79,6 +79,7 @@ import {
 	SAVE_BTN_CLASS,
 	SectionHeading,
 } from "../components/settings/settings-primitives";
+import { StoreStatusCard } from "../components/settings/store-status-card";
 import { TeamTab } from "../components/settings/team-tab";
 import { WaOrderAlertsCard } from "../components/settings/wa-order-alerts-card";
 import { AppImage } from "../components/ui/app-image";
@@ -726,6 +727,14 @@ function SettingsRoute() {
 				{activeTab === "store" ? (
 					<AreaGate area="store_settings">
 						<div className="flex flex-col gap-6 pt-2">
+							{/* FIRST on the tab (z8r3fdudf7): whether the store takes
+							    orders at all is the most consequential setting here. */}
+							<Card>
+								<StoreStatusCard
+									retailerId={retailer._id}
+									storeName={retailer.storeName}
+								/>
+							</Card>
 							<Card>
 								<StoreNameForm
 									current={retailer.storeName}

@@ -235,7 +235,24 @@ export function SalesSection({
 			{/* Mobile order is the Main board's: exceptions, then the Sales
 			    heading, the hero, the cards, and Plan ahead last. On `lg` every
 			    `order-*` resets and the DOM order takes over, which is the desktop
-			    board's: heading, then hero beside its rail, then the cards. */}
+			    board's: heading, then hero beside its rail, then the cards.
+
+			    Hero and rail share a row HEIGHT (`lg:items-stretch`, Zaki, 14 Oct
+			    2026): the rail grows and shrinks with whatever it carries (unpaid
+			    only, unpaid + out of stock, plus Plan ahead), and a hero that
+			    stopped at its own height left a hole beside a taller rail. The hero
+			    fills its column (`lg:flex-1`), so it is never shorter than the
+			    rail; when the hero is the taller one, the rail's cards keep their
+			    own height and sit at the top.
+
+			    Only a hero WITH a chart stretches: the bars are the one thing in
+			    it that can take extra height. A gated (Starter) hero has no chart,
+			    and stretched it became a 660px dark card with a 433px void inside
+			    (PR #366 review). So a gated store's Pro TEASER moves up into the
+			    hero's column instead (Zaki, 14 Oct 2026): the room beside a tall
+			    rail then says why there is no chart, rather than being a void in
+			    a dark card or blank page under a short one. On a phone the column
+			    stacks hero → teaser, which is the order it already had. */}
 			<div className="order-2 lg:order-none">
 				<PeriodChips
 					value={shownPeriod}
@@ -244,9 +261,10 @@ export function SalesSection({
 				/>
 			</div>
 
-			<div className="contents lg:flex lg:flex-wrap lg:items-start lg:gap-4">
+			<div className="contents lg:flex lg:flex-wrap lg:items-stretch lg:gap-4">
 				<div className="order-3 flex min-w-0 flex-col gap-3 lg:order-none lg:flex-[999_1_520px]">
 					<SalesHero
+						className={bars.length > 1 ? "lg:flex-1" : undefined}
 						view={view}
 						currency={currency}
 						bars={bars}
@@ -270,6 +288,7 @@ export function SalesSection({
 							currency={currency}
 						/>
 					) : null}
+					{gated ? <ProTeaserCard /> : null}
 				</div>
 
 				{exceptions || planAhead ? (
@@ -284,10 +303,9 @@ export function SalesSection({
 				) : null}
 			</div>
 
+			{/* Gated: the Pro teaser renders in the hero's column above. */}
 			<div className="order-4 lg:order-none">
-				{gated ? (
-					<ProTeaserCard />
-				) : !enough ? (
+				{gated ? null : !enough ? (
 					<InsightThreshold line={insightThresholdLine(view.orderCount)} />
 				) : (
 					// NOT `items-start`: the three cards share a row height, so their

@@ -28,8 +28,18 @@ const state = {
 };
 
 vi.mock("@tanstack/react-router", () => ({
-	Link: ({ children, to }: { children: ReactNode; to?: string }) => (
-		<a href={to ?? "/"}>{children}</a>
+	Link: ({
+		children,
+		to,
+		className,
+	}: {
+		children: ReactNode;
+		to?: string;
+		className?: string;
+	}) => (
+		<a href={to ?? "/"} className={className}>
+			{children}
+		</a>
 	),
 }));
 // The adapter pair, never `convex/react` — docs/frontend-caching.md.
@@ -151,9 +161,39 @@ describe("a gated (Starter) store", () => {
 		expect(screen.queryByText(/closed at/i)).toBeNull();
 	});
 
+	it("keeps its hero at its own height — no chart, nothing to absorb a stretch (PR #366 review)", () => {
+		renderSection();
+		const link = screen.getByRole("link", { name: /Open full Insights/ });
+		const hero = link.closest("section");
+		// Stretched beside a full rail, the chartless card was a dark slab with
+		// a 433px void between the figures and the stats.
+		expect(hero?.className).not.toContain("flex-1");
+		// …and its Insights link sits at the foot beside the stats.
+		expect(link.className).toContain("lg:self-end");
+	});
+
 	it("explains the gap with the Pro teaser instead of empty cards", () => {
 		renderSection();
 		expect(screen.getByText(/Insights/i)).toBeTruthy();
+	});
+
+	it("puts the Pro teaser in the hero's column, under the chartless hero (PR #366)", () => {
+		renderSection();
+		const hero = screen
+			.getByRole("link", { name: /Open full Insights/ })
+			.closest("section");
+		const teaser = screen
+			.getByText(/See what is really selling/)
+			.closest("section");
+		// Same column, teaser after the hero: it fills the room beside a tall
+		// rail on desktop and still follows the hero directly on a phone.
+		if (!hero || !teaser) throw new Error("hero and teaser must both render");
+		expect(teaser.parentElement).toBe(hero.parentElement);
+		expect(
+			hero.compareDocumentPosition(teaser) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		// Exactly one teaser — not also in the cards' slot below.
+		expect(screen.getAllByText(/See what is really selling/)).toHaveLength(1);
 	});
 });
 
@@ -314,5 +354,25 @@ describe("the bar row has a height on a phone", () => {
 		// The base width must not carry a zero flex-basis in a column.
 		expect(cls).not.toMatch(/(^|\s)flex-1(\s|$)/);
 		expect(cls).toContain("lg:flex-1");
+	});
+
+	/**
+	 * The hero is never shorter than the rail beside it (Zaki, 14 Oct 2026).
+	 * The rail's height depends on what it carries (unpaid only, + out of
+	 * stock, + Plan ahead), and a row aligned `items-start` left the hero
+	 * stopped 328px above a full rail. Measured in a real browser: with
+	 * `items-stretch` + the hero `lg:flex-1` the two bottoms meet exactly, the
+	 * extra height goes into the bars, and a taller hero leaves the rail's
+	 * cards at their own height. Pinned as the class contract, as above.
+	 */
+	it("stretches the hero to the rail's height on desktop only", () => {
+		renderOngated();
+		const hero = screen.getByRole("img").closest("section");
+		const row = hero?.parentElement?.parentElement;
+		expect(hero?.className).toContain("lg:flex-1");
+		// Phone stacks the hero; a base-width flex-1 would zero its height.
+		expect(hero?.className).not.toMatch(/(^|\s)flex-1(\s|$)/);
+		expect(row?.className).toContain("lg:items-stretch");
+		expect(row?.className).not.toContain("items-start");
 	});
 });

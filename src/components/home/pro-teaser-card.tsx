@@ -7,10 +7,12 @@ import { Button } from "../ui/button";
  * What Starter is missing, said in terms of what the seller would LEARN
  * (z8r3fdrgzj board 2) — not "unlock analytics".
  *
- * It replaces the three insight cards rather than sitting beside them, so the
- * page has the same shape on every plan and the seller can see exactly where
- * the answers would appear. The server is the real gate; this is the part that
- * makes the gate legible.
+ * It replaces the three insight cards rather than sitting beside them. It
+ * sits in the hero's column, under the chartless hero (PR #366, Zaki 14 Oct
+ * 2026): a gated hero has no chart to stretch beside a tall rail, so the
+ * teaser fills that room with the reason, and on a phone it still follows the
+ * hero directly. The server is the real gate; this is the part that makes the
+ * gate legible.
  */
 export function ProTeaserCard() {
 	return (

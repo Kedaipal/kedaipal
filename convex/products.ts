@@ -1,4 +1,5 @@
 import { ConvexError, v } from "convex/values";
+import { isStoreOffline, offlineStoreIds } from "./storeAvailability";
 import {
 	formatFulfilmentDate,
 	isMytMidnight,
@@ -68,6 +69,7 @@ import {
 	DEFAULT_PROMO_LABEL,
 } from "./lib/promo";
 import { tallyPromoUnits } from "./lib/promoTally";
+import { productPromotion } from "./promotions";
 import {
 	assertProductCap,
 	MAX_PRODUCTS_PER_RETAILER,
@@ -877,6 +879,8 @@ function byActiveThenSort(a: Doc<"products">, b: Doc<"products">): number {
 export const list = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }) => {
+		// Offline (Kedaipal took the store down): no public catalogue (z8r3fdudf7).
+		if (await isStoreOffline(ctx, retailerId)) return [];
 		const rows = await ctx.db
 			.query("products")
 			.withIndex("by_retailer_active", (q) =>
@@ -1748,6 +1752,15 @@ export const update = mutation({
 		// extras refused where capacity/seats already govern, judged on the
 		// POST-save event state so one save can't sneak both in.
 		if (fields.promo !== undefined) {
+			// A product inside a bulk promotion (z8r3fducfd) takes its window,
+			// label and flash extras from the PROMOTION — the product form
+			// shows them read-only and sends no promo at all. Only a stale tab
+			// gets here; it is told where the setting now lives.
+			const holder = await productPromotion(ctx, productId);
+			if (holder)
+				throw new ConvexError(
+					`This product is part of ${holder.label ?? "a promotion"} — change its dates, label or flash extras on the promotion, or remove the product from it.`,
+				);
 			if (fields.promo === null) {
 				updates.promo = undefined;
 			} else {
@@ -2931,6 +2944,8 @@ export const getPublicBySlug = query({
 	handler: async (ctx, { retailerId, slug }) => {
 		const normalized = slug.trim().toLowerCase();
 		if (normalized.length === 0) return null;
+		// Offline (Kedaipal took the store down): no public catalogue (z8r3fdudf7).
+		if (await isStoreOffline(ctx, retailerId)) return null;
 		const indexed = await ctx.db
 			.query("products")
 			.withIndex("by_retailer_slug", (q) =>
@@ -3049,7 +3064,11 @@ export const listForSitemap = query({
 	): Promise<
 		Array<{ storeSlug: string; productSlug: string; updatedAt: number }>
 	> => {
-		const retailers = await ctx.db.query("retailers").collect();
+		const offline = await offlineStoreIds(ctx);
+		const retailers = (await ctx.db.query("retailers").collect()).filter(
+			// An offline store's product pages are the "unavailable" screen.
+			(r) => !offline.has(r._id),
+		);
 		const out: Array<{
 			storeSlug: string;
 			productSlug: string;
@@ -3116,6 +3135,8 @@ export const popularProducts = query({
 		if (!isMytMidnight(since)) {
 			throw new ConvexError("since must be an MYT-midnight epoch");
 		}
+		// Offline (Kedaipal took the store down): no public catalogue (z8r3fdudf7).
+		if (await isStoreOffline(ctx, retailerId)) return [];
 		const recent = await ctx.db
 			.query("orders")
 			.withIndex("by_retailer", (q) =>

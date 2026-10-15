@@ -217,6 +217,7 @@ describe("marketplace.myListingReadiness — the seller card's truth", () => {
 			hasVisibleProduct: false,
 			internal: false,
 			hidden: null,
+			offline: false,
 			featuredIn: [],
 		});
 
@@ -236,6 +237,7 @@ describe("marketplace.myListingReadiness — the seller card's truth", () => {
 			hasVisibleProduct: true,
 			internal: false,
 			hidden: null,
+			offline: false,
 			featuredIn: [],
 		});
 
@@ -436,6 +438,7 @@ describe("comped stores ride Store highlights; internal stores never list", () =
 			hasVisibleProduct: true,
 			internal: true,
 			hidden: null,
+			offline: false,
 			featuredIn: [],
 		});
 
@@ -488,6 +491,7 @@ describe("admin hide from /stores — moderation over the seller's switch", () =
 			hasVisibleProduct: true,
 			internal: false,
 			hidden: { note: "Add real product photos and we'll relist you." },
+			offline: false,
 			featuredIn: [],
 		});
 		// …and the admin row carries it for the pill, menu and sheet.

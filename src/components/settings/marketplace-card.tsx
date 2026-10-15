@@ -40,6 +40,8 @@ type ListingReadiness = {
 	hasVisibleProduct: boolean;
 	internal: boolean;
 	hidden: { note?: string } | null;
+	/** Kedaipal took the store offline — never listed while it is. */
+	offline: boolean;
 	/** Published showcases this store is in (z8r3fdr6mv). */
 	featuredIn: FeaturedIn[];
 };
@@ -202,6 +204,13 @@ function ListingStatusLine({
 			<HiddenByKedaipal note={readiness.hidden.note} storeName={storeName} />
 		);
 	}
+	if (readiness?.offline) {
+		return (
+			<span className="text-xs text-muted-foreground">
+				Kedaipal has taken your store offline, so it isn't on the marketplace.
+			</span>
+		);
+	}
 	if (!listed) {
 		return (
 			<span className="text-xs text-muted-foreground">
@@ -294,13 +303,15 @@ export function featuredBlocker(
 	listed: boolean,
 	readiness: Pick<
 		ListingReadiness,
-		"internal" | "hidden" | "hasVisibleProduct"
+		"internal" | "hidden" | "offline" | "hasVisibleProduct"
 	>,
 ): string | null {
 	if (readiness.internal)
 		return "A Kedaipal or test store is never shown on /stores.";
 	if (readiness.hidden)
 		return "Kedaipal has taken your store off /stores, so it isn't shown here either.";
+	if (readiness.offline)
+		return "Kedaipal has taken your store offline, so it isn't shown here.";
 	if (!listed) return "Turn on “List my store” above to appear in it.";
 	if (!readiness.hasVisibleProduct)
 		return "Add a product buyers can see to appear in it.";

@@ -16,6 +16,7 @@ import {
 	Image as ImageIcon,
 	LayoutGrid,
 	List,
+	Lock,
 	Minus,
 	Pencil,
 	Phone,
@@ -102,6 +103,7 @@ import {
 	previewDiscount,
 	VoucherField,
 } from "../components/vouchers/voucher-field";
+import { useCounterClosedReason } from "../hooks/useCounterClosed";
 import {
 	useActAsRetailerId,
 	useDashboardRetailer,
@@ -160,6 +162,7 @@ function CounterCheckoutRoute() {
 	const [created, setCreated] = useState<CreatedOrder | null>(null);
 
 	const cancelSession = useMutation(api.counterCheckout.cancelCheckoutSession);
+	const closedReason = useCounterClosedReason();
 
 	const openSession = useCallback(
 		(id: string) => navigate({ search: { session: id } }),
@@ -212,9 +215,22 @@ function CounterCheckoutRoute() {
 					// (buyer scans), or the escape hatches for a buyer who won't/can't
 					// scan — manual phone entry or an anonymous cash sale. Management
 					// (rotate/print) lives on /app/poster.
-					<CounterCheckoutActions onStarted={openSession} />
+					<CounterCheckoutActions
+						onStarted={openSession}
+						closedReason={closedReason}
+					/>
 				)}
 			</header>
+
+			{/* A closed counter says so where the seller is about to ring up —
+			    not only as a refusal at the last tap. Open checkouts stay listed
+			    (they can still be cancelled); nothing can be placed. */}
+			{closedReason ? (
+				<div className="flex items-start gap-2.5 rounded-xl border border-border bg-muted/50 p-3 text-muted-foreground">
+					<Lock className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+					<p className="text-sm leading-relaxed">{closedReason}</p>
+				</div>
+			) : null}
 
 			{activeSessionId ? (
 				<ActiveSession
@@ -495,8 +511,12 @@ function EmptyCheckouts() {
  */
 function CounterCheckoutActions({
 	onStarted,
+	closedReason,
 }: {
 	onStarted: (sessionId: string) => void;
+	/** Set while the counter is closed — the menu can't open, and the note
+	 * under the header says why. */
+	closedReason: string | null;
 }) {
 	const actAsRetailerId = useActAsRetailerId();
 	// Store country is the manual bind's picker default (z8r3fdh274). It reads
@@ -586,7 +606,9 @@ function CounterCheckoutActions({
 				<DropdownMenuTrigger asChild>
 					<button
 						type="button"
-						className="flex h-10 w-full shrink-0 items-center justify-center gap-1.5 rounded-xl bg-accent px-3.5 text-sm font-semibold text-accent-foreground shadow-sm transition-colors hover:bg-accent/90 aria-expanded:bg-accent/90 sm:w-auto"
+						disabled={closedReason !== null}
+						title={closedReason ?? undefined}
+						className="flex h-10 w-full shrink-0 items-center justify-center gap-1.5 rounded-xl bg-accent px-3.5 text-sm font-semibold text-accent-foreground shadow-sm transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50 aria-expanded:bg-accent/90 sm:w-auto"
 					>
 						<Plus className="size-4" />
 						New order
@@ -1417,6 +1439,7 @@ function BuildOrderScreen({
 		convexQuery(api.products.listForCounter, { retailerId }),
 	).data;
 	const createOrder = useMutation(api.counterCheckout.createOrderFromSession);
+	const closedReason = useCounterClosedReason();
 	const saveDraft = useMutation(api.counterCheckout.saveSessionDraft);
 	const saveName = useMutation(api.counterCheckout.setSessionCustomerName);
 	const [query, setQuery] = useState("");
@@ -2552,6 +2575,7 @@ function BuildOrderScreen({
 								// `orders.create` rejects it at either door.
 								mixedRsvp,
 								unansweredQuestion,
+								closed: closedReason ?? undefined,
 								money: formatPrice(total, currency),
 								windowMinutes,
 								buyerName: buyer.displayName,

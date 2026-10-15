@@ -14,6 +14,7 @@ import {
 	Siren,
 	Sparkles,
 	Store,
+	Tag,
 	Ticket,
 	Users,
 } from "lucide-react";
@@ -42,6 +43,8 @@ export interface BottomNavProps {
 	// a "Pro" chip so the upgrade wall behind it is never a surprise.
 	crmLocked?: boolean;
 	vouchersLocked?: boolean;
+	// Promotions (bulk sale prices) are plan-locked (Starter).
+	promotionsLocked?: boolean;
 	// Insights is plan-locked (Starter) — same treatment on the Insights tab.
 	insightsLocked?: boolean;
 }
@@ -66,6 +69,8 @@ type Tab = {
 const MORE_ROUTES = [
 	"/app/products",
 	"/app/customers",
+	"/app/promotions",
+	"/app/vouchers",
 	"/app/settings",
 	"/app/poster",
 ] as const;
@@ -76,6 +81,7 @@ export function BottomNav({
 	hasStore,
 	crmLocked,
 	vouchersLocked,
+	promotionsLocked,
 	insightsLocked,
 }: BottomNavProps) {
 	// Team members (86exr91r4): a member's tabs are the areas they can read
@@ -174,6 +180,7 @@ export function BottomNav({
 						active={moreOpen || onMoreRoute}
 						crmLocked={crmLocked}
 						vouchersLocked={vouchersLocked}
+						promotionsLocked={promotionsLocked}
 					/>
 				) : null}
 			</div>
@@ -279,12 +286,14 @@ function MoreTab({
 	active,
 	crmLocked,
 	vouchersLocked,
+	promotionsLocked,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	active: boolean;
 	crmLocked?: boolean;
 	vouchersLocked?: boolean;
+	promotionsLocked?: boolean;
 }) {
 	const productsPerm = usePermission("products");
 	const customersPerm = usePermission("customers");
@@ -318,6 +327,16 @@ function MoreTab({
 							icon={Package}
 							label="Products"
 							sub="Catalog, stock & variants"
+							onNavigate={close}
+						/>
+					) : null}
+					{productsPerm.canRead ? (
+						<MoreRow
+							to="/app/promotions"
+							icon={Tag}
+							label="Promotions"
+							sub="Sale prices on many products"
+							pro={promotionsLocked}
 							onNavigate={close}
 						/>
 					) : null}

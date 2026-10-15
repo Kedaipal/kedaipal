@@ -23,6 +23,14 @@ import {
 	MAX_BUYER_QUESTIONS,
 } from "./lib/buyerQuestions";
 import { ConvexError, v } from "convex/values";
+import {
+	takesCounterOrders,
+	unavailableMessage,
+} from "./lib/storeAvailability";
+import {
+	assertTakesCounterOrders,
+	storeAvailabilityOf,
+} from "./storeAvailability";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
@@ -40,7 +48,6 @@ import {
 } from "./lib/buyerPhone";
 import { DEFAULT_COUNTRY } from "./lib/country";
 import { stampProductsOrdered } from "./lib/productOrdered";
-import { orderingPausedMessage } from "./lib/seasonalHold";
 import { recordOrderCreated } from "./subscriptionUsage";
 import {
 	logAdminAction,
@@ -143,11 +150,14 @@ function generatePairingCode(taken: ReadonlySet<string>): string {
  * caller's own store (strict 1:1 user↔retailer). Returns the access descriptor
  * so admin-on-behalf writes are attributable. See docs/admin-console.md.
  */
-/** Off-Season Hold (z8r3fday24): a paused store takes no orders through the
- * counter either — the cashier UI disables the flow with this same reason. */
-function assertOrderingNotPaused(retailer: Doc<"retailers">): void {
-	if (retailer.orderingPausedAt !== undefined)
-		throw new ConvexError(orderingPausedMessage(retailer.storeName));
+/** The counter's availability rule (z8r3fdudf7): an Off-Season Hold or
+ * Kedaipal's switch closes it; the seller's OWN pause doesn't — they paused
+ * online orders, not the till they're standing at. */
+async function assertOrderingNotPaused(
+	ctx: QueryCtx | MutationCtx,
+	retailer: Doc<"retailers">,
+): Promise<void> {
+	await assertTakesCounterOrders(ctx, retailer, "seller");
 }
 
 async function requireCounterRetailer(
@@ -434,7 +444,7 @@ export const bindSessionManualPhone = mutation({
 		const access = await requireCounterRetailer(ctx, retailerId);
 		await assertSubscriptionActive(ctx, access.retailer._id);
 		const retailer = access.retailer;
-		assertOrderingNotPaused(retailer);
+		await assertOrderingNotPaused(ctx, retailer);
 
 		// Only after the store-level gates above: a paused or lapsed store says so
 		// before any complaint about the number (pinned by seasonalHold.test.ts for the pause and counterCheckout.test.ts for the lapse).
@@ -538,7 +548,7 @@ export const startAnonymousSession = mutation({
 		const access = await requireCounterRetailer(ctx, retailerId);
 		await assertSubscriptionActive(ctx, access.retailer._id);
 		const retailer = access.retailer;
-		assertOrderingNotPaused(retailer);
+		await assertOrderingNotPaused(ctx, retailer);
 		const now = Date.now();
 		const openBound = await openBoundSessions(ctx, retailer._id, now);
 
@@ -838,7 +848,7 @@ export const createOrderFromSession = mutation({
 		const { session, access } = resolved;
 		await assertSubscriptionActive(ctx, session.retailerId);
 		const retailer = access.retailer;
-		assertOrderingNotPaused(retailer);
+		await assertOrderingNotPaused(ctx, retailer);
 		if (session.status !== "buyer_identified")
 			throw new ConvexError(
 				"Bind a buyer to this checkout before creating the order",
@@ -1545,6 +1555,10 @@ export type StoreQrStartResult =
 			reclaimed: boolean;
 	  }
 	| { result: "busy"; storeName: string; locale: Locale }
+	/** The counter is closed (hold or Kedaipal's switch, z8r3fdudf7) — the
+	 * buyer is told in the same neutral words the storefront would use, and
+	 * no session is opened that could never be rung up. */
+	| { result: "unavailable"; message: string }
 	| { result: "not_found" };
 
 /**
@@ -1575,6 +1589,12 @@ export const startSessionFromStoreQr = internalMutation({
 			.withIndex("by_counterQrToken", (q) => q.eq("counterQrToken", token))
 			.unique();
 		if (!retailer) return { result: "not_found" };
+		const availability = await storeAvailabilityOf(ctx, retailer);
+		if (!takesCounterOrders(availability))
+			return {
+				result: "unavailable",
+				message: unavailableMessage(availability, retailer.storeName),
+			};
 
 		const storeName = retailer.storeName;
 		const locale = pickLocale(retailer.locale);

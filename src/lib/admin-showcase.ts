@@ -295,6 +295,7 @@ export function rebaseDraft(
 export const NOT_LISTED_COPY: Record<NotListedReason, string> = {
 	internal: "Not shown: a Kedaipal or test store, never listed on /stores",
 	hidden_by_admin: "Not shown: hidden from /stores by Kedaipal",
+	offline: "Not shown: Kedaipal has taken this store offline",
 	opted_out: "Not shown: the seller turned off their /stores listing",
 	purging: "Not shown: this store is being deleted",
 	no_visible_product: "Not shown: no visible product yet",

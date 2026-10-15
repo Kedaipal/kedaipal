@@ -37,6 +37,10 @@ A store lists when ALL hold:
    20 active rows checked. An empty storefront is a dead end we don't route
    buyers into.
 4. **Not purging** (`purgeStartedAt` unset).
+   Separate from the hide: an admin can take the whole store **offline**
+   ([store-availability.md](./store-availability.md), `z8r3fdudf7`), which
+   also drops it from the directory and the sitemap, because its storefront
+   is gone. Hiding only moves the listing.
 
 **Billing state is deliberately absent** — the storefront never hides on
 subscription state (convex/subscriptions.ts invariant) and the directory
@@ -290,7 +294,8 @@ which `listStores` and the showcase functions both read.
   leaving the directory and the showcase payload catching up.
 - **The admin is told, never surprised:** `getForAdmin` names the reason on
   every member row (`NOT_LISTED_COPY`: opted out, hidden by Kedaipal,
-  internal, purging, no visible product), and the editor's preview says
+  taken offline by Kedaipal (the store on/off switch, z8r3fdudf7, read
+  through `storeAvailabilityOf`), internal, purging, no visible product), and the editor's preview says
   "6 of 8 stores show to buyers". A store hidden by Kedaipal or opted out
   is still addable — it can come back, the booth may open tomorrow — but
   its row says so. **A Kedaipal or test store can't be added**: it never

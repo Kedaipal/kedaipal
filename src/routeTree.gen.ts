@@ -32,9 +32,11 @@ import { Route as AppInsightsRouteImport } from './routes/app.insights'
 import { Route as AppCheckoutRouteImport } from './routes/app.checkout'
 import { Route as SlugCheckoutRouteImport } from './routes/$slug_.checkout'
 import { Route as AppVouchersIndexRouteImport } from './routes/app.vouchers.index'
+import { Route as AppPromotionsIndexRouteImport } from './routes/app.promotions.index'
 import { Route as AppProductsIndexRouteImport } from './routes/app.products.index'
 import { Route as AppOrdersIndexRouteImport } from './routes/app.orders.index'
 import { Route as AppCustomersIndexRouteImport } from './routes/app.customers.index'
+import { Route as AppPromotionsNewRouteImport } from './routes/app.promotions.new'
 import { Route as AppProductsNewRouteImport } from './routes/app.products.new'
 import { Route as AppProductsImportRouteImport } from './routes/app.products.import'
 import { Route as AppProductsCategoriesRouteImport } from './routes/app.products.categories'
@@ -47,7 +49,10 @@ import { Route as AppAdminSellersRouteImport } from './routes/app.admin.sellers'
 import { Route as AppAdminBillingRouteImport } from './routes/app.admin.billing'
 import { Route as SlugPProductSlugRouteImport } from './routes/$slug_.p.$productSlug'
 import { Route as SlugCCategorySlugRouteImport } from './routes/$slug_.c.$categorySlug'
+import { Route as AppPromotionsPromotionIdIndexRouteImport } from './routes/app.promotions.$promotionId.index'
 import { Route as AppAdminShowcasesIndexRouteImport } from './routes/app.admin.showcases.index'
+import { Route as AppPromotionsPromotionIdEditRouteImport } from './routes/app.promotions.$promotionId.edit'
+import { Route as AppPromotionsPromotionIdAddRouteImport } from './routes/app.promotions.$promotionId.add'
 import { Route as AppAdminShowcasesShowcaseIdRouteImport } from './routes/app.admin.showcases.$showcaseId'
 
 const TermsRoute = TermsRouteImport.update({
@@ -165,6 +170,11 @@ const AppVouchersIndexRoute = AppVouchersIndexRouteImport.update({
   path: '/vouchers/',
   getParentRoute: () => AppRoute,
 } as any)
+const AppPromotionsIndexRoute = AppPromotionsIndexRouteImport.update({
+  id: '/promotions/',
+  path: '/promotions/',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppProductsIndexRoute = AppProductsIndexRouteImport.update({
   id: '/products/',
   path: '/products/',
@@ -178,6 +188,11 @@ const AppOrdersIndexRoute = AppOrdersIndexRouteImport.update({
 const AppCustomersIndexRoute = AppCustomersIndexRouteImport.update({
   id: '/customers/',
   path: '/customers/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppPromotionsNewRoute = AppPromotionsNewRouteImport.update({
+  id: '/promotions/new',
+  path: '/promotions/new',
   getParentRoute: () => AppRoute,
 } as any)
 const AppProductsNewRoute = AppProductsNewRouteImport.update({
@@ -240,11 +255,29 @@ const SlugCCategorySlugRoute = SlugCCategorySlugRouteImport.update({
   path: '/$slug/c/$categorySlug',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppPromotionsPromotionIdIndexRoute =
+  AppPromotionsPromotionIdIndexRouteImport.update({
+    id: '/promotions/$promotionId/',
+    path: '/promotions/$promotionId/',
+    getParentRoute: () => AppRoute,
+  } as any)
 const AppAdminShowcasesIndexRoute = AppAdminShowcasesIndexRouteImport.update({
   id: '/admin/showcases/',
   path: '/admin/showcases/',
   getParentRoute: () => AppRoute,
 } as any)
+const AppPromotionsPromotionIdEditRoute =
+  AppPromotionsPromotionIdEditRouteImport.update({
+    id: '/promotions/$promotionId/edit',
+    path: '/promotions/$promotionId/edit',
+    getParentRoute: () => AppRoute,
+  } as any)
+const AppPromotionsPromotionIdAddRoute =
+  AppPromotionsPromotionIdAddRouteImport.update({
+    id: '/promotions/$promotionId/add',
+    path: '/promotions/$promotionId/add',
+    getParentRoute: () => AppRoute,
+  } as any)
 const AppAdminShowcasesShowcaseIdRoute =
   AppAdminShowcasesShowcaseIdRouteImport.update({
     id: '/admin/showcases/$showcaseId',
@@ -287,12 +320,17 @@ export interface FileRoutesByFullPath {
   '/app/products/categories': typeof AppProductsCategoriesRoute
   '/app/products/import': typeof AppProductsImportRoute
   '/app/products/new': typeof AppProductsNewRoute
+  '/app/promotions/new': typeof AppPromotionsNewRoute
   '/app/customers/': typeof AppCustomersIndexRoute
   '/app/orders/': typeof AppOrdersIndexRoute
   '/app/products/': typeof AppProductsIndexRoute
+  '/app/promotions/': typeof AppPromotionsIndexRoute
   '/app/vouchers/': typeof AppVouchersIndexRoute
   '/app/admin/showcases/$showcaseId': typeof AppAdminShowcasesShowcaseIdRoute
+  '/app/promotions/$promotionId/add': typeof AppPromotionsPromotionIdAddRoute
+  '/app/promotions/$promotionId/edit': typeof AppPromotionsPromotionIdEditRoute
   '/app/admin/showcases/': typeof AppAdminShowcasesIndexRoute
+  '/app/promotions/$promotionId/': typeof AppPromotionsPromotionIdIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -328,12 +366,17 @@ export interface FileRoutesByTo {
   '/app/products/categories': typeof AppProductsCategoriesRoute
   '/app/products/import': typeof AppProductsImportRoute
   '/app/products/new': typeof AppProductsNewRoute
+  '/app/promotions/new': typeof AppPromotionsNewRoute
   '/app/customers': typeof AppCustomersIndexRoute
   '/app/orders': typeof AppOrdersIndexRoute
   '/app/products': typeof AppProductsIndexRoute
+  '/app/promotions': typeof AppPromotionsIndexRoute
   '/app/vouchers': typeof AppVouchersIndexRoute
   '/app/admin/showcases/$showcaseId': typeof AppAdminShowcasesShowcaseIdRoute
+  '/app/promotions/$promotionId/add': typeof AppPromotionsPromotionIdAddRoute
+  '/app/promotions/$promotionId/edit': typeof AppPromotionsPromotionIdEditRoute
   '/app/admin/showcases': typeof AppAdminShowcasesIndexRoute
+  '/app/promotions/$promotionId': typeof AppPromotionsPromotionIdIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -371,12 +414,17 @@ export interface FileRoutesById {
   '/app/products/categories': typeof AppProductsCategoriesRoute
   '/app/products/import': typeof AppProductsImportRoute
   '/app/products/new': typeof AppProductsNewRoute
+  '/app/promotions/new': typeof AppPromotionsNewRoute
   '/app/customers/': typeof AppCustomersIndexRoute
   '/app/orders/': typeof AppOrdersIndexRoute
   '/app/products/': typeof AppProductsIndexRoute
+  '/app/promotions/': typeof AppPromotionsIndexRoute
   '/app/vouchers/': typeof AppVouchersIndexRoute
   '/app/admin/showcases/$showcaseId': typeof AppAdminShowcasesShowcaseIdRoute
+  '/app/promotions/$promotionId/add': typeof AppPromotionsPromotionIdAddRoute
+  '/app/promotions/$promotionId/edit': typeof AppPromotionsPromotionIdEditRoute
   '/app/admin/showcases/': typeof AppAdminShowcasesIndexRoute
+  '/app/promotions/$promotionId/': typeof AppPromotionsPromotionIdIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -415,12 +463,17 @@ export interface FileRouteTypes {
     | '/app/products/categories'
     | '/app/products/import'
     | '/app/products/new'
+    | '/app/promotions/new'
     | '/app/customers/'
     | '/app/orders/'
     | '/app/products/'
+    | '/app/promotions/'
     | '/app/vouchers/'
     | '/app/admin/showcases/$showcaseId'
+    | '/app/promotions/$promotionId/add'
+    | '/app/promotions/$promotionId/edit'
     | '/app/admin/showcases/'
+    | '/app/promotions/$promotionId/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -456,12 +509,17 @@ export interface FileRouteTypes {
     | '/app/products/categories'
     | '/app/products/import'
     | '/app/products/new'
+    | '/app/promotions/new'
     | '/app/customers'
     | '/app/orders'
     | '/app/products'
+    | '/app/promotions'
     | '/app/vouchers'
     | '/app/admin/showcases/$showcaseId'
+    | '/app/promotions/$promotionId/add'
+    | '/app/promotions/$promotionId/edit'
     | '/app/admin/showcases'
+    | '/app/promotions/$promotionId'
   id:
     | '__root__'
     | '/'
@@ -498,12 +556,17 @@ export interface FileRouteTypes {
     | '/app/products/categories'
     | '/app/products/import'
     | '/app/products/new'
+    | '/app/promotions/new'
     | '/app/customers/'
     | '/app/orders/'
     | '/app/products/'
+    | '/app/promotions/'
     | '/app/vouchers/'
     | '/app/admin/showcases/$showcaseId'
+    | '/app/promotions/$promotionId/add'
+    | '/app/promotions/$promotionId/edit'
     | '/app/admin/showcases/'
+    | '/app/promotions/$promotionId/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -691,6 +754,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppVouchersIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/app/promotions/': {
+      id: '/app/promotions/'
+      path: '/promotions'
+      fullPath: '/app/promotions/'
+      preLoaderRoute: typeof AppPromotionsIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/app/products/': {
       id: '/app/products/'
       path: '/products'
@@ -710,6 +780,13 @@ declare module '@tanstack/react-router' {
       path: '/customers'
       fullPath: '/app/customers/'
       preLoaderRoute: typeof AppCustomersIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/promotions/new': {
+      id: '/app/promotions/new'
+      path: '/promotions/new'
+      fullPath: '/app/promotions/new'
+      preLoaderRoute: typeof AppPromotionsNewRouteImport
       parentRoute: typeof AppRoute
     }
     '/app/products/new': {
@@ -796,11 +873,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SlugCCategorySlugRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/app/promotions/$promotionId/': {
+      id: '/app/promotions/$promotionId/'
+      path: '/promotions/$promotionId'
+      fullPath: '/app/promotions/$promotionId/'
+      preLoaderRoute: typeof AppPromotionsPromotionIdIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/app/admin/showcases/': {
       id: '/app/admin/showcases/'
       path: '/admin/showcases'
       fullPath: '/app/admin/showcases/'
       preLoaderRoute: typeof AppAdminShowcasesIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/promotions/$promotionId/edit': {
+      id: '/app/promotions/$promotionId/edit'
+      path: '/promotions/$promotionId/edit'
+      fullPath: '/app/promotions/$promotionId/edit'
+      preLoaderRoute: typeof AppPromotionsPromotionIdEditRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/promotions/$promotionId/add': {
+      id: '/app/promotions/$promotionId/add'
+      path: '/promotions/$promotionId/add'
+      fullPath: '/app/promotions/$promotionId/add'
+      preLoaderRoute: typeof AppPromotionsPromotionIdAddRouteImport
       parentRoute: typeof AppRoute
     }
     '/app/admin/showcases/$showcaseId': {
@@ -829,12 +927,17 @@ interface AppRouteChildren {
   AppProductsCategoriesRoute: typeof AppProductsCategoriesRoute
   AppProductsImportRoute: typeof AppProductsImportRoute
   AppProductsNewRoute: typeof AppProductsNewRoute
+  AppPromotionsNewRoute: typeof AppPromotionsNewRoute
   AppCustomersIndexRoute: typeof AppCustomersIndexRoute
   AppOrdersIndexRoute: typeof AppOrdersIndexRoute
   AppProductsIndexRoute: typeof AppProductsIndexRoute
+  AppPromotionsIndexRoute: typeof AppPromotionsIndexRoute
   AppVouchersIndexRoute: typeof AppVouchersIndexRoute
   AppAdminShowcasesShowcaseIdRoute: typeof AppAdminShowcasesShowcaseIdRoute
+  AppPromotionsPromotionIdAddRoute: typeof AppPromotionsPromotionIdAddRoute
+  AppPromotionsPromotionIdEditRoute: typeof AppPromotionsPromotionIdEditRoute
   AppAdminShowcasesIndexRoute: typeof AppAdminShowcasesIndexRoute
+  AppPromotionsPromotionIdIndexRoute: typeof AppPromotionsPromotionIdIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -853,12 +956,17 @@ const AppRouteChildren: AppRouteChildren = {
   AppProductsCategoriesRoute: AppProductsCategoriesRoute,
   AppProductsImportRoute: AppProductsImportRoute,
   AppProductsNewRoute: AppProductsNewRoute,
+  AppPromotionsNewRoute: AppPromotionsNewRoute,
   AppCustomersIndexRoute: AppCustomersIndexRoute,
   AppOrdersIndexRoute: AppOrdersIndexRoute,
   AppProductsIndexRoute: AppProductsIndexRoute,
+  AppPromotionsIndexRoute: AppPromotionsIndexRoute,
   AppVouchersIndexRoute: AppVouchersIndexRoute,
   AppAdminShowcasesShowcaseIdRoute: AppAdminShowcasesShowcaseIdRoute,
+  AppPromotionsPromotionIdAddRoute: AppPromotionsPromotionIdAddRoute,
+  AppPromotionsPromotionIdEditRoute: AppPromotionsPromotionIdEditRoute,
   AppAdminShowcasesIndexRoute: AppAdminShowcasesIndexRoute,
+  AppPromotionsPromotionIdIndexRoute: AppPromotionsPromotionIdIndexRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

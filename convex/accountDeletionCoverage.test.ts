@@ -73,7 +73,14 @@ const PHASE_TABLES: Record<string, readonly string[]> = {
 	// `deleteProductCascade` (lib/productDelete.ts) takes each product's
 	// variants and category junctions with it. (`productCategories` also has
 	// its own leftovers-sweep phase.)
-	products: ["products", "productVariants", "productCategories"],
+	products: [
+		"products",
+		"productVariants",
+		"productCategories",
+		"promotionMembers",
+	],
+	// Members are swept before the promotions they point at (`z8r3fducfd`).
+	promotions: ["promotions", "promotionMembers"],
 };
 
 /**

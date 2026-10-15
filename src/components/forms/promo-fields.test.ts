@@ -4,6 +4,7 @@ import {
 	type PromoDraft,
 	promoDraftFrom,
 	promoDraftIssue,
+	promoFieldsDirty,
 	promoSubmitValue,
 	promoWindowSentence,
 } from "./promo-fields";
@@ -159,22 +160,75 @@ describe("promoDraftIssue — every server refusal has a client twin", () => {
 	});
 });
 
+describe("promoDraftIssue — a switched-on promotion must put something on sale", () => {
+	const blank = [{ promoPrice: "" }, { promoPrice: "  " }];
+
+	test("on, with no line on sale, names the way out", () => {
+		expect(promoDraftIssue(draft(), NOW, blank)).toBe(
+			"Set a sale price on at least one line, or switch the promotion off.",
+		);
+	});
+
+	test("one line on sale is enough", () => {
+		expect(
+			promoDraftIssue(draft(), NOW, [...blank, { promoPrice: "5.00" }]),
+		).toBeUndefined();
+	});
+
+	test("off never asks for a price", () => {
+		expect(promoDraftIssue(draft({ on: false }), NOW, blank)).toBeUndefined();
+	});
+
+	test("without rows, only the server's twins apply", () => {
+		expect(promoDraftIssue(draft(), NOW)).toBeUndefined();
+	});
+});
+
+describe("promoFieldsDirty — whether Clear has anything to clear", () => {
+	const blankRows = [{ key: "0", label: "One", price: "10", promoPrice: "" }];
+
+	test("the default draft with no sale prices is clean, switched on or off", () => {
+		expect(promoFieldsDirty(draft(), blankRows)).toBe(false);
+		expect(promoFieldsDirty(draft({ on: false }), blankRows)).toBe(false);
+	});
+
+	test("a sale price on any line is something to clear", () => {
+		expect(
+			promoFieldsDirty(draft(), [{ ...blankRows[0], promoPrice: "5.00" }]),
+		).toBe(true);
+	});
+
+	test("any setting moved off its default is something to clear", () => {
+		expect(promoFieldsDirty(draft({ label: "Raya" }), blankRows)).toBe(true);
+		expect(promoFieldsDirty(draft({ endMode: "open" }), blankRows)).toBe(true);
+		expect(promoFieldsDirty(draft({ durationMinutes: 30 }), blankRows)).toBe(
+			true,
+		);
+		expect(promoFieldsDirty(draft({ payWithinMinutes: 15 }), blankRows)).toBe(
+			true,
+		);
+	});
+});
+
 describe("promoDraftFrom", () => {
 	test("no stored promotion seeds the empty draft, switched off", () => {
 		expect(promoDraftFrom(undefined)).toEqual(EMPTY_PROMO_DRAFT);
 	});
 
-	test("a stored window re-opens as a SCHEDULED start, never as 'now'", () => {
+	test("a stored window still ahead re-opens as a SCHEDULED start, never as 'now'", () => {
 		// "Now" has already happened by the time the form is re-opened; showing
 		// it would offer to silently move a running sale's start.
-		const seeded = promoDraftFrom({
-			label: "Raya",
-			startsAt: new Date("2026-10-09T20:00:00").getTime(),
-			endsAt: new Date("2026-10-09T22:30:00").getTime(),
-			unitCap: 30,
-			maxPerOrder: 2,
-			payWithinMinutes: 60,
-		});
+		const seeded = promoDraftFrom(
+			{
+				label: "Raya",
+				startsAt: new Date("2026-10-09T20:00:00").getTime(),
+				endsAt: new Date("2026-10-09T22:30:00").getTime(),
+				unitCap: 30,
+				maxPerOrder: 2,
+				payWithinMinutes: 60,
+			},
+			NOW,
+		);
 		expect(seeded.on).toBe(true);
 		expect(seeded.startMode).toBe("schedule");
 		expect(seeded.startDate).toBe("2026-10-09");
@@ -184,6 +238,21 @@ describe("promoDraftFrom", () => {
 		expect(seeded.unitCap).toBe("30");
 		expect(seeded.maxPerOrder).toBe("2");
 		expect(seeded.payWithinMinutes).toBe(60);
+	});
+
+	test("a start that has PASSED re-opens as 'started' — stated, not offered (z8r3fducfd)", () => {
+		// Editing a running promotion offered "Schedule a start…" with the
+		// past start in it: an invitation to move a sale that is selling.
+		const startsAt = new Date("2026-10-09T08:00:00").getTime();
+		const endsAt = new Date("2026-10-09T22:00:00").getTime();
+		const seeded = promoDraftFrom({ startsAt, endsAt }, NOW);
+		expect(seeded.startMode).toBe("started");
+		// …and saving it keeps the start exactly where it was.
+		const value = promoSubmitValue(seeded, NOW);
+		expect(value?.startsAt).toBe(startsAt);
+		expect(value?.endsAt).toBe(endsAt);
+		expect(promoDraftIssue(seeded, NOW)).toBeUndefined();
+		expect(promoWindowSentence(seeded, NOW)).toMatch(/^Running since /);
 	});
 
 	test("a stored promotion with no end seeds the no-end-date mode", () => {

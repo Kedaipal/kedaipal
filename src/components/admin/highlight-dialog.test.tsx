@@ -38,6 +38,7 @@ afterEach(cleanup);
 function seller(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 	return {
 		_id: "r_hl" as AdminSellerRow["_id"],
+		availability: { state: "open" },
 		storeName: "Kek Sayang",
 		slug: "kek-sayang",
 		ownerUserId: "u_owner",

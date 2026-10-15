@@ -225,10 +225,17 @@ function ClaimRoute() {
 	// Not a withdrawal: the seller didn't release this order, their whole shop
 	// is resting, so the copy points at the season rather than at the buyer.
 	if (store.orderingPaused && status !== "completed") {
+		// A hold is "a seasonal break"; Kedaipal's switch (z8r3fdudf7) is said
+		// neutrally — never why, and never a reason the buyer can't verify.
+		const seasonal = store.orderingPausedBy === "hold";
 		return (
 			<ClaimDeadEnd
 				store={store}
-				title={`${store.storeName} is on a seasonal break`}
+				title={
+					seasonal
+						? `${store.storeName} is on a seasonal break`
+						: `${store.storeName} isn't taking orders right now`
+				}
 				body={`Ordering is paused for now, so this link can't be completed — nothing was charged. Message them to find out when they're back.`}
 			/>
 		);
