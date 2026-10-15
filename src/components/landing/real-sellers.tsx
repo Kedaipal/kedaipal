@@ -207,24 +207,6 @@ export function RealSellers() {
 						>
 							{m.proof_heading()}
 						</h2>
-						{/* The directory, said as what it does for the seller: a free
-						    listing on /stores plus the showcases above it, nothing to
-						    sign up for, one switch in Settings → Store to leave. It is
-						    a claim about the headline, so it sits under it — the first
-						    cut boxed it in the right column, which stretched that column
-						    and left the heading dangling (Arif, 15 Oct). */}
-						<p className="mt-5 flex max-w-lg items-start gap-2.5 text-sm leading-relaxed text-muted-foreground">
-							<Store
-								aria-hidden
-								className="mt-1 size-4 shrink-0 text-accent-emphasis"
-							/>
-							<span>
-								<strong className="font-semibold text-foreground">
-									{m.proof_directory_strong()}
-								</strong>{" "}
-								{m.proof_directory_body()}
-							</span>
-						</p>
 					</div>
 					<div className="flex flex-col gap-4 lg:max-w-sm lg:items-end">
 						<p className="text-base leading-relaxed text-muted-foreground md:text-lg lg:text-right">
@@ -295,6 +277,27 @@ export function RealSellers() {
 							<CardGroup hidden />
 						</motion.div>
 					</div>
+					{/* The directory, said as what it does for the seller: a free
+					    listing on /stores plus the showcases above it, nothing to sign
+					    up for, one switch in Settings → Store to leave. A caption
+					    under the rail of stores it is about — the header keeps its
+					    two-column balance (heading left; paragraph, link, arrows
+					    right). Two earlier placements were rejected on sight (Arif,
+					    15 Oct): a boxed card in the right column stretched it and left
+					    the heading dangling, and a three-line paragraph under the
+					    heading read as a legal footnote. */}
+					<p className="mt-6 flex max-w-2xl items-start gap-2.5 text-sm leading-relaxed text-muted-foreground">
+						<Store
+							aria-hidden
+							className="mt-1 size-4 shrink-0 text-accent-emphasis"
+						/>
+						<span>
+							<strong className="font-semibold text-foreground">
+								{m.proof_directory_strong()}
+							</strong>{" "}
+							{m.proof_directory_body()}
+						</span>
+					</p>
 				</FadeIn>
 			</div>
 		</section>

@@ -296,13 +296,15 @@ state, so the frame is never blank.
   behind "See all", the pause question first among them.
 - **Real sellers**: the "10+ paying sellers" chip and its two keys are gone
   from `/` and the `/pricing` band (a hand-typed number nothing kept true;
-  the band leads with "Running on Kedaipal today." instead). Under the
-  heading, one line states the directory as a benefit: every store is listed
+  the band leads with "Running on Kedaipal today." instead). A caption
+  under the rail states the directory as a benefit: every store is listed
   free on kedaipal.com/stores, we feature shops in showcases above the list,
-  nothing to sign up for, switch it off in Settings → Store. (The canvas
-  boxed it in the right column with a "New" pill; rendered, that stretched
-  the column and left the heading dangling, so it moved under the headline
-  it is a claim about — Arif, 15 Oct.) The
+  nothing to sign up for, switch it off in Settings → Store. Two placements
+  were rejected on sight (Arif, 15 Oct): the canvas's boxed card with a
+  "New" pill in the right column stretched that column and left the heading
+  dangling, and a three-line paragraph under the heading read as a legal
+  footnote — so it sits under the stores it is about, and the header keeps
+  its two-column balance. The
   unsourced "Time to first 5: 20 days" stat is replaced by one the page can
   stand behind: "Meta verification · Not needed".
 - **Small fixes**: `SEO_TITLE` names Malaysia & Singapore; the JSON-LD
