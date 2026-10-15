@@ -217,3 +217,40 @@ describe("MarketplaceCard — area form", () => {
 		expect(link.getAttribute("href")).toBe("/stores");
 	});
 });
+
+describe("MarketplaceCard — the showcase card never promises a ticket buyers can't see", () => {
+	const campfest = {
+		slug: "malaysia-campfest-2026",
+		title: "Malaysia Campfest 2026",
+		label: "Booth B4",
+		endsAt: Date.UTC(2026, 9, 18, 16),
+		state: "live" as const,
+	};
+	const ready = {
+		hasVisibleProduct: true,
+		internal: false,
+		hidden: null,
+		featuredIn: [campfest],
+	};
+
+	test("listed: You're featured, with the booth", () => {
+		renderCard({ readiness: ready });
+		expect(screen.getByText("You're featured")).toBeTruthy();
+		expect(screen.getByText("Booth B4")).toBeTruthy();
+	});
+
+	test("switched off: not 'featured' — says it isn't showing and names the fix", () => {
+		renderCard({ unlisted: true, readiness: ready });
+		expect(screen.queryByText("You're featured")).toBeNull();
+		expect(screen.getByText("In this showcase — not showing")).toBeTruthy();
+		expect(screen.getByText(/Turn on “List my store”/)).toBeTruthy();
+	});
+
+	test("hidden by Kedaipal or no visible product: the reason is named", () => {
+		renderCard({ readiness: { ...ready, hidden: {} } });
+		expect(screen.getByText(/taken your store off \/stores/)).toBeTruthy();
+		cleanup();
+		renderCard({ readiness: { ...ready, hasVisibleProduct: false } });
+		expect(screen.getByText(/Add a product buyers can see/)).toBeTruthy();
+	});
+});

@@ -58,7 +58,7 @@ export function ShowcaseRow({
 				</div>
 				{compact ? null : (
 					<>
-						<span className="truncate text-xs text-muted-foreground">
+						<span className="line-clamp-2 text-xs text-muted-foreground sm:line-clamp-1">
 							{showcaseMetaLine(
 								showcase,
 								SHOWCASE_THEME_LABELS[showcase.theme],

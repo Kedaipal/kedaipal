@@ -77,6 +77,8 @@ export function ShowcaseStorePicker({
 		(s) => !alreadyIn.has(s._id) && !s.marketplace.internal,
 	);
 	const pickedHere = addable.filter((s) => picked.has(s._id)).length;
+	const inCount = candidates.filter((s) => alreadyIn.has(s._id)).length;
+	const blockedCount = candidates.length - addable.length - inCount;
 	const overCap = picked.size > capacityLeft;
 
 	function toggle(id: Id<"retailers">) {
@@ -138,7 +140,13 @@ export function ShowcaseStorePicker({
 					<p className="mt-1 text-xs text-muted-foreground">
 						{sellerList === undefined
 							? "Loading…"
-							: `${candidates.length} ${candidates.length === 1 ? "match" : "matches"}${candidates.length - addable.length > 0 ? ` · ${candidates.length - addable.length} can't be added` : ""}`}
+							: [
+									`${candidates.length} ${candidates.length === 1 ? "match" : "matches"}`,
+									inCount > 0 ? `${inCount} already in` : null,
+									blockedCount > 0 ? `${blockedCount} can't be added` : null,
+								]
+									.filter(Boolean)
+									.join(" · ")}
 					</p>
 					{addable.length > 1 ? (
 						<BulkSelectRow
@@ -218,7 +226,7 @@ function PickerRow({
 }) {
 	const blocked = !inShowcase && seller.marketplace.internal;
 	const warning = seller.marketplace.internal
-		? "A Kedaipal or test store — never shown on /stores, can't be added"
+		? "Kedaipal or test store — can't be added"
 		: seller.marketplace.hidden
 			? "Hidden from /stores by Kedaipal — won't show"
 			: seller.marketplace.unlistedAt !== undefined

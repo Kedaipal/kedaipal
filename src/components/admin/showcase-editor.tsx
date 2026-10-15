@@ -352,7 +352,10 @@ function EditorForm({ row }: { row: AdminShowcase }) {
 				<StatusPill tone={status.tone} label={status.label} />
 			</section>
 
-			<div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start">
+			{/* `grid-cols-1` = minmax(0, 1fr): an implicit `auto` column grew to
+				    the preview rail's full width (every ticket side by side, 2,000px+)
+				    and pushed the whole editor off a phone screen. */}
+			<div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start">
 				<div className="flex flex-col gap-4">
 					{/* Details */}
 					<EditorCard title="Details">

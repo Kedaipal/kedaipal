@@ -11,6 +11,7 @@ import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../../lib/contact";
 import { convexErrorMessage } from "../../lib/format";
 import { showcasePath } from "../../lib/showcase";
+import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { CopyButton } from "../ui/copy-button";
 import { Input } from "../ui/input";
@@ -141,7 +142,12 @@ export function MarketplaceCard({
 				/>
 			</div>
 			{readiness?.featuredIn.map((f) => (
-				<FeaturedCard key={f.slug} featured={f} storeName={storeName} />
+				<FeaturedCard
+					key={f.slug}
+					featured={f}
+					storeName={storeName}
+					notShowing={featuredBlocker(listed, readiness)}
+				/>
 			))}
 			<form onSubmit={handleAreaSubmit} className="flex flex-col gap-1.5">
 				<label htmlFor="marketplace-area" className="text-sm font-medium">
@@ -277,12 +283,39 @@ function HiddenByKedaipal({
  * being featured without knowing is the hidden behaviour the house rules
  * forbid. One card per showcase; drafts never reach here.
  */
+/**
+ * Why a featured store is NOT actually on the showcase right now — the same
+ * order the directory's listable rule checks (`notListedReason`), because a
+ * showcase only shows members the directory would list. Null when it shows.
+ * The first build said "You're featured" to a seller who had switched their
+ * listing off, while buyers saw no ticket.
+ */
+export function featuredBlocker(
+	listed: boolean,
+	readiness: Pick<
+		ListingReadiness,
+		"internal" | "hidden" | "hasVisibleProduct"
+	>,
+): string | null {
+	if (readiness.internal)
+		return "A Kedaipal or test store is never shown on /stores.";
+	if (readiness.hidden)
+		return "Kedaipal has taken your store off /stores, so it isn't shown here either.";
+	if (!listed) return "Turn on “List my store” above to appear in it.";
+	if (!readiness.hasVisibleProduct)
+		return "Add a product buyers can see to appear in it.";
+	return null;
+}
+
 function FeaturedCard({
 	featured,
 	storeName,
+	notShowing,
 }: {
 	featured: FeaturedIn;
 	storeName: string;
+	/** Why buyers don't see this store in the showcase, or null. */
+	notShowing: string | null;
 }) {
 	const supportWa = useSupportWaNumber();
 	const path = showcasePath(featured.slug);
@@ -298,12 +331,28 @@ function FeaturedCard({
 				? `until ${formatFulfilmentDate(featured.endsAt - 1, { weekday: false, year: false })}`
 				: "with no end date";
 	return (
-		<div className="flex flex-col gap-3 rounded-2xl border border-accent/30 bg-accent/5 p-4">
+		<div
+			className={cn(
+				"flex flex-col gap-3 rounded-2xl border p-4",
+				notShowing
+					? "border-amber-300/60 bg-amber-50 dark:border-amber-500/30 dark:bg-amber-950/20"
+					: "border-accent/30 bg-accent/5",
+			)}
+		>
 			<div className="flex flex-col gap-0.5">
-				<span className="text-[11px] font-bold uppercase tracking-wider text-accent-emphasis">
-					{featured.state === "scheduled"
-						? "You'll be featured"
-						: "You're featured"}
+				<span
+					className={cn(
+						"text-[11px] font-bold uppercase tracking-wider",
+						notShowing
+							? "text-amber-700 dark:text-amber-300"
+							: "text-accent-emphasis",
+					)}
+				>
+					{notShowing
+						? "In this showcase — not showing"
+						: featured.state === "scheduled"
+							? "You'll be featured"
+							: "You're featured"}
 				</span>
 				<span className="font-heading text-base font-extrabold">
 					{featured.title}
@@ -311,11 +360,17 @@ function FeaturedCard({
 				<span className="text-xs text-muted-foreground">
 					{featured.label ? (
 						<>
-							Shown as <b className="text-foreground">{featured.label}</b> ·{" "}
+							{notShowing ? "Booth label " : "Shown as "}
+							<b className="text-foreground">{featured.label}</b> ·{" "}
 						</>
 					) : null}
-					on /stores {when}
+					{notShowing ? `the showcase runs ${when}` : `on /stores ${when}`}
 				</span>
+				{notShowing ? (
+					<span className="mt-1 text-sm font-medium text-amber-800 dark:text-amber-200">
+						{notShowing}
+					</span>
+				) : null}
 			</div>
 			<div className="flex flex-wrap gap-2">
 				<CopyButton value={fullUrl} label="Copy showcase link" />

@@ -399,7 +399,12 @@ showcases this store is in (drafts stay private). The Settings → Store →
 Marketplace listing card shows a "You're featured in …" card per showcase
 with the booth label Kedaipal gave them, the link to copy, and a WhatsApp
 line to tell us the label is wrong — being featured without knowing is the
-hidden behaviour the house rules forbid.
+hidden behaviour the house rules forbid. The card never promises a ticket buyers
+can't see: a showcase only shows members the directory lists, so when the
+store isn't listed (`featuredBlocker` — the listable rule's order: internal,
+hidden by Kedaipal, switched off, no visible product) it turns amber, reads
+"In this showcase — not showing", and names the fix ("Turn on “List my
+store” above to appear in it").
 
 ## Tests
 
