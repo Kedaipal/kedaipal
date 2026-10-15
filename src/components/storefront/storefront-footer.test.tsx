@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { cleanup, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -61,7 +63,7 @@ describe("StorefrontFooter", () => {
 });
 
 describe("StorefrontFooter — Discover more stores (z8r3fdkmyp)", () => {
-	it("is OFF by default — checkout, claim and order pages never pull a buyer out", () => {
+	it("is OFF by default — checkout and claim pages never pull a buyer out", () => {
 		render(<StorefrontFooter slug="sweet-co" />);
 		expect(screen.queryByText(/Discover more stores/)).toBeNull();
 	});
@@ -76,5 +78,45 @@ describe("StorefrontFooter — Discover more stores (z8r3fdkmyp)", () => {
 		expect(links[links.length - 1].getAttribute("aria-label")).toBe(
 			"Powered by Kedaipal",
 		);
+	});
+
+	it("reads in Malay for a Malay store's order page", () => {
+		render(<StorefrontFooter slug="sweet-co" discover locale="ms" />);
+		expect(
+			screen.getByRole("link", { name: /Terokai lebih banyak kedai/ }),
+		).toBeTruthy();
+	});
+});
+
+/**
+ * Which pages open the door to other stores is a per-page decision, so it is
+ * pinned per page. The order page shows it in every state (Arif, 14 Oct 2026,
+ * z8r3fducgw); checkout and a claim page never do — the buyer hasn't placed
+ * the order yet. Read from the route source because the routes are too heavy
+ * to render here, and a quiet `discover` added to checkout is exactly the
+ * regression this guards.
+ */
+describe("StorefrontFooter — which pages open the door to other stores", () => {
+	const route = (file: string) =>
+		readFileSync(join(__dirname, "../../routes", file), "utf8");
+	const footers = (src: string) =>
+		src.match(/<StorefrontFooter\b[^>]*\/>/g) ?? [];
+
+	it.each([
+		"$slug_.checkout.tsx",
+		"claim.$token.tsx",
+	])("%s never passes discover", (file) => {
+		const found = footers(route(file));
+		expect(found.length).toBeGreaterThan(0);
+		for (const footer of found) expect(footer).not.toMatch(/discover/);
+	});
+
+	it("the order page passes it, gated on the store's directory listing", () => {
+		const found = footers(route("track.$token.tsx")).filter((f) =>
+			f.includes("order.retailerSlug"),
+		);
+		expect(found).toHaveLength(1);
+		expect(found[0]).toMatch(/discover=\{/);
+		expect(found[0]).toMatch(/order\.marketplaceUnlisted !== true/);
 	});
 });

@@ -148,12 +148,24 @@ the card's one geographic hint — the profile has no city field.
 - **Storefront footer** — "Discover more stores on Kedaipal →" above the
   Powered-by badge (`StorefrontFooter discover`). Opt-in per page and ON only
   where a buyer is browsing: store home, category, product, and the
-  store-not-found dead end. Never at checkout, a claim or an order page.
-  Hidden for a store that opted out (`marketplaceUnlisted` rides the by-slug
-  payload — public-safe). **Deliberately NOT a Kedaipal logo top-left**
+  store-not-found dead end — **plus the order page**. Never at checkout or a
+  claim page. Hidden for a store that opted out (`marketplaceUnlisted` rides
+  the by-slug payload — public-safe — and the order read). **Deliberately NOT a Kedaipal logo top-left**
   (considered, 1 Oct 2026): the top of a storefront is the seller's brand,
   and a header logo would walk a seller's own buyers to competitors — and to
   paid highlights — before they've bought.
+- **Order page** (`/track/<token>`, z8r3fducgw) — the same footer link, in
+  **every** order state, unpaid included. **Decision (Arif, 14 Oct 2026)**,
+  overriding the 1 Oct "never on an order page" rule for this page only:
+  Yap's buyers found the order page a dead end, its only exit our seller
+  landing. Trade-off accepted knowingly — more `/stores` traffic against some
+  risk of an unpaid buyer wandering off — and mitigated by placement: below
+  every payment card and below the page's own "Continue shopping at {store}"
+  row, so the seller's store is always the first way out and other stores
+  the second. **Revisit if the unpaid-order rate on stores with the link
+  rises.** Checkout and claim pages stay off, pinned per page by
+  `storefront-footer.test.tsx`. The link reads in Malay on a Malay store's
+  order page (the only buyer page that localises its chrome).
 - **Landing** — a "Browse their stores →" link on the Real-sellers proof
   section (the landing's one buyer-shaped door; the hero stays the seller
   pitch), and a footer **Explore** column (Browse stores · Blog). Both also
@@ -421,7 +433,8 @@ leak pin, sponsorship admin gate + audit), `src/lib/marketplace.test.ts`
 (the four status-line states incl. ON-but-not-shown + loading, area saves in
 the stored shape, discoverability link), `src/components/admin/highlight-dialog.test.tsx`
 (start / update-needs-a-change / end via its own mutation, inclusive end date, opted-out warning, comp switch, internal store), the directory pill in `app.admin.sellers.test.tsx`,
-`src/components/storefront/storefront-footer.test.tsx` (the discover link),
+`src/components/storefront/storefront-footer.test.tsx` (the discover link,
+and which pages may pass it: order page on, checkout and claim off),
 `parseMarketplaceSearch` cases for the URL state, and `src/lib/json-ld.test.ts`
 (escaping + the gate). Showcases (z8r3fdr6mv): `convex/lib/showcase.test.ts`
 (state machine incl. the exclusive end, sanitizers, slug + param parsing),

@@ -65,7 +65,11 @@ two switches.
 
 **Never affected:** orders already placed. Tracking pages, transactional
 messages, and the seller's progress, mark-paid and refund controls keep
-working whatever the state. Billing is never touched by a pause.
+working whatever the state. Billing is never touched by a pause. The one
+thing an offline store's order page loses is its **way back into the store**
+(the store-name link and "Continue shopping", `z8r3fducgw`): there is no
+storefront to go back to, so `orders.get` carries `storeOffline` and the page
+offers none. A paused store keeps both — its storefront still browses.
 
 ## What each side sees
 

@@ -1,6 +1,6 @@
 import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
-import { assertTakesBuyerOrders } from "./storeAvailability";
+import { assertTakesBuyerOrders, isStoreOffline } from "./storeAvailability";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
@@ -2167,9 +2167,20 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 	// store" CTA on the tracking page (buyers otherwise only ever hear from the
 	// shared Kedaipal WABA). `retailerWaPhone` undefined => the CTA is hidden.
 	storeName: string;
-	// The storefront slug — the tracking page's way back to the store (the
-	// declined/expired booking cards link "Try different dates" there).
+	// The storefront slug — the tracking page's way back to the store: the
+	// tappable store-name eyebrow, the "Continue shopping" foot button
+	// (z8r3fducgw) and the declined/expired request cards' own links.
 	retailerSlug?: string;
+	// Kedaipal took the store OFFLINE (z8r3fdudf7): its storefront is the
+	// neutral "isn't available" page, so the order page offers no way back
+	// into it. A PAUSED store still links back — it renders browse-only.
+	// Both this and the next are order-PAGE facts: the credit-gated seller
+	// early return omits them, as it omits everything it has no use for.
+	storeOffline?: boolean;
+	// The store opted out of /stores — the order page then hides "Discover
+	// more stores", same gate as the storefront's footer. The storefront
+	// already publishes this bit, so it is buyer-safe on this public read.
+	marketplaceUnlisted?: boolean;
 	retailerWaPhone?: string;
 	// The shared Kedaipal checkout number (same resolution as the storefront's
 	// getRetailerBySlug), included ONLY while the order is still `pending`: it
@@ -2419,6 +2430,8 @@ export const get = query({
 			retailerCountry: retailer?.country ?? DEFAULT_COUNTRY,
 			storeName: retailer?.storeName ?? "",
 			retailerSlug: retailer?.slug,
+			storeOffline: await isStoreOffline(ctx, order.retailerId),
+			marketplaceUnlisted: retailer?.marketplaceUnlistedAt !== undefined,
 			retailerWaPhone: retailer?.waPhone,
 			// Served while the order still needs (or benefits from) a path into the
 			// shared-number chat: pending = the legacy manual/auto Send card; a
