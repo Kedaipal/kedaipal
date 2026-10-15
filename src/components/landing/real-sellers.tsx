@@ -212,25 +212,6 @@ export function RealSellers() {
 						<p className="text-base leading-relaxed text-muted-foreground md:text-lg lg:text-right">
 							{m.proof_sub()}
 						</p>
-						{/* The directory, said as what it does for the seller: a free
-						    listing on /stores plus the showcases above it, nothing to
-						    sign up for, one switch in Settings → Store to leave. Sits
-						    beside the door into it. */}
-						<div className="flex items-start gap-3 rounded-2xl border border-border bg-muted/40 px-4 py-3 text-left">
-							<Store
-								aria-hidden
-								className="mt-0.5 size-[18px] shrink-0 text-accent-emphasis"
-							/>
-							<p className="text-[13px] leading-relaxed text-foreground">
-								<strong className="font-semibold">
-									{m.proof_directory_strong()}
-								</strong>{" "}
-								{m.proof_directory_body()}
-								<span className="ml-1.5 inline-block rounded-full bg-accent px-1.5 py-0.5 align-middle text-[9px] font-bold uppercase tracking-[0.08em] text-accent-foreground">
-									{m.proof_directory_new()}
-								</span>
-							</p>
-						</div>
 						{/* The proof's own next step: these are real stores, so let a
 						    visitor walk into them (z8r3fdkmyp). The landing's one
 						    buyer-shaped door — on the proof, not in the hero, which
@@ -296,6 +277,27 @@ export function RealSellers() {
 							<CardGroup hidden />
 						</motion.div>
 					</div>
+					{/* The directory, said as what it does for the seller: a free
+					    listing on /stores plus the showcases above it, nothing to sign
+					    up for, one switch in Settings → Store to leave. A caption
+					    under the rail of stores it is about — the header keeps its
+					    two-column balance (heading left; paragraph, link, arrows
+					    right). Two earlier placements were rejected on sight (Arif,
+					    15 Oct): a boxed card in the right column stretched it and left
+					    the heading dangling, and a three-line paragraph under the
+					    heading read as a legal footnote. */}
+					<p className="mt-6 flex max-w-2xl items-start gap-2.5 text-sm leading-relaxed text-muted-foreground">
+						<Store
+							aria-hidden
+							className="mt-1 size-4 shrink-0 text-accent-emphasis"
+						/>
+						<span>
+							<strong className="font-semibold text-foreground">
+								{m.proof_directory_strong()}
+							</strong>{" "}
+							{m.proof_directory_body()}
+						</span>
+					</p>
 				</FadeIn>
 			</div>
 		</section>
