@@ -3,6 +3,7 @@ import { Link, type LinkProps } from "@tanstack/react-router";
 import type { FunctionReturnType } from "convex/server";
 import {
 	ChevronLeft,
+	GalleryHorizontalEnd,
 	Home,
 	LineChart,
 	type LucideIcon,
@@ -12,7 +13,6 @@ import {
 	ShieldCheck,
 	ShoppingBag,
 	Siren,
-	Sparkles,
 	Store,
 	Tag,
 	Ticket,
@@ -107,7 +107,7 @@ export function Sidebar({
 			)}
 			aria-label="Dashboard navigation"
 		>
-			<div className="flex h-16 items-center gap-2.5 border-b border-border px-4">
+			<div className="flex h-16 shrink-0 items-center gap-2.5 border-b border-border px-4">
 				<Link
 					to={retailer ? "/app" : "/app/admin/sellers"}
 					onClick={retailer ? undefined : exitActAs}
@@ -149,7 +149,7 @@ export function Sidebar({
 				<div
 					inert={collapsed}
 					className={cn(
-						"overflow-hidden border-b border-border px-4",
+						"shrink-0 overflow-hidden border-b border-border px-4",
 						collapsed ? "max-h-0 py-0 opacity-0" : "max-h-12 py-2 opacity-100",
 						motion,
 					)}
@@ -163,7 +163,24 @@ export function Sidebar({
 				</div>
 			) : null}
 
-			<nav className="flex flex-1 flex-col gap-1 p-2">
+			{/* The ONE part of the rail that gives when the window is short: the
+			    header, tier pill and footer are `shrink-0`, the link list takes
+			    the squeeze and scrolls. Without this an admin's 14 links on a
+			    laptop-height window flex-shrank everything else — the
+			    overflow-hidden pill wrapper collapsed to a sliver and the footer
+			    was pushed off-screen. `*:shrink-0` because each link is
+			    overflow-hidden too, so it would squash to nothing rather than
+			    scroll. The 68px rail hides its scrollbar: a classic (always-shown)
+			    one would take ~15px and push every icon off-centre. "There's
+			    more" is the scroll shadow instead, in both states — a macOS
+			    overlay scrollbar is invisible until used, and a half-cut row
+			    says nothing when the cut lands on a gap (PR #372 review). */}
+			<nav
+				className={cn(
+					"flex min-h-0 flex-1 scroll-shadow-y flex-col gap-1 overflow-x-hidden overflow-y-auto overscroll-contain p-2 *:shrink-0",
+					collapsed ? "scrollbar-none" : "[scrollbar-width:thin]",
+				)}
+			>
 				{/* Seller nav — only when there's a store to operate (own or act-as).
 				    The act-as session holds globally, so these need no per-link handling. */}
 				{retailer ? (
@@ -340,7 +357,7 @@ export function Sidebar({
 						<SidebarLink
 							to="/app/admin/showcases"
 							onClick={exitActAs}
-							icon={Sparkles}
+							icon={GalleryHorizontalEnd}
 							label="Showcases"
 							collapsed={collapsed}
 							motion={motion}
@@ -362,7 +379,7 @@ export function Sidebar({
 			    right border. Anchoring to the footer rather than the aside means it
 			    sits on that junction in both states and never drifts as the nav
 			    list grows. */}
-			<div className="relative flex flex-col gap-1 border-t border-border p-2">
+			<div className="relative flex shrink-0 flex-col gap-1 border-t border-border p-2">
 				{/* Centred on the junction: `top-0 right-0` is that corner, and the
 				    two 50% translates put the button's middle exactly on it.
 				    Always visible rather than hover-revealed — this sidebar renders

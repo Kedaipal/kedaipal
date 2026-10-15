@@ -286,6 +286,11 @@ exception rows → Sales (chips + hero + three cards) → Plan ahead → Your st
   strip's own counts as rows. The exception rows now carry only what the strip
   *cannot* say: unpaid orders older than `STALE_UNPAID_DAYS`, and out-of-stock
   products. No row may duplicate a strip count.
+- **A strip tile wraps, it never overlaps.** From `sm` each tile is a row
+  (icon · words · figure) and three share the width, so a tile can be narrower
+  than "To collect" beside "RM 7,418.64". The row is `flex-wrap` with the words
+  on basis `auto`: when they don't fit side by side, the figure takes its own
+  line, right-aligned, instead of drawing over the label.
 - **One period control** governs the hero AND the three cards, so the page can
   never show a 30-day headline over a 7-day chart. It lives in the URL (`?p=`)
   and is omitted when it is the default, so the common URL stays clean while a
