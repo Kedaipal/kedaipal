@@ -60,11 +60,18 @@ vi.mock("../../hooks/useActAs", () => ({
 vi.mock("../../hooks/usePermission", () => ({
 	usePermission: () => ({ canRead: true, canWrite: true }),
 }));
+// The real pill is a Link and the real nav items are buttons — the stubs keep
+// the element TYPE, because what matters here is whether a hidden one can
+// still take focus.
 vi.mock("./tier-pill", () => ({
-	TierPill: () => <div data-slot="tier-pill" />,
+	TierPill: () => <a href="/app/settings">Pro</a>,
 }));
 vi.mock("./whats-new", () => ({
-	WhatsNewNavItem: () => <div data-slot="whats-new" />,
+	WhatsNewNavItem: ({ variant }: { variant: string }) => (
+		<button type="button" data-variant={variant}>
+			What's new
+		</button>
+	),
 }));
 vi.mock("./app-version-row", () => ({
 	AppVersionRow: () => <div data-slot="app-version" />,
@@ -165,5 +172,56 @@ describe("Sidebar collapse motion", () => {
 				(el) => (el.getAttribute("class") ?? "").includes("opacity-0"),
 			).length,
 		).toBe(0);
+	});
+
+	it("expanded renders no aria-hidden at all — the same markup as before the motion", () => {
+		collapsed = false;
+		const { container } = render(
+			<Sidebar retailer={null} newOrdersCount={0} isAdmin />,
+		);
+		expect(container.querySelectorAll('[aria-hidden="false"]').length).toBe(0);
+	});
+});
+
+const STORE = { storeName: "Kuih Lab", slug: "kuih-lab" } as never;
+
+describe("hidden controls are out of the focus order, not just invisible (PR #362 review)", () => {
+	it("the collapsed tier pill's link is inert — no invisible Tab stop to billing", () => {
+		collapsed = true;
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} isAdmin={false} />,
+		);
+		const pill = container.querySelector('a[href="/app/settings"]');
+		expect(pill?.textContent).toBe("Pro");
+		expect(pill?.closest("[inert]")).not.toBeNull();
+	});
+
+	it("expanded, the pill is an ordinary link again", () => {
+		collapsed = false;
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} isAdmin={false} />,
+		);
+		const pill = Array.from(container.querySelectorAll("a")).find(
+			(a) => a.textContent === "Pro",
+		);
+		expect(pill?.closest("[inert]")).toBeNull();
+	});
+
+	it("the bottom row keeps exactly one live What's-new control per state", () => {
+		const live = (container: HTMLElement) =>
+			Array.from(container.querySelectorAll("button[data-variant]"))
+				.filter((b) => b.closest("[inert]") === null)
+				.map((b) => b.getAttribute("data-variant"));
+		collapsed = true;
+		const rail = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} isAdmin={false} />,
+		);
+		expect(live(rail.container)).toEqual(["icon"]);
+		cleanup();
+		collapsed = false;
+		const open = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} isAdmin={false} />,
+		);
+		expect(live(open.container)).toEqual(["meta"]);
 	});
 });

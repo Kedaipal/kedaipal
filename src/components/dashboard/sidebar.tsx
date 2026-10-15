@@ -118,7 +118,7 @@ export function Sidebar({
 						priority
 					/>
 					<div
-						aria-hidden={collapsed}
+						aria-hidden={collapsed || undefined}
 						className={cn(
 							"flex min-w-0 flex-col overflow-hidden",
 							collapsed ? "max-w-0 opacity-0" : "max-w-40 opacity-100",
@@ -139,13 +139,15 @@ export function Sidebar({
 			    Hidden for a storeless admin (no subscription to show). Reads "Admin"
 			    on an admin's own store. */}
 			{retailer ? (
+				// `inert`, not just hidden: the pill is a link (billing / admin
+				// console), so a clipped, invisible copy would still be a Tab stop
+				// with no visible focus — `inert` takes it out of the focus order
+				// AND the accessibility tree in one attribute (PR #362 review).
 				<div
-					aria-hidden={collapsed}
+					inert={collapsed}
 					className={cn(
 						"overflow-hidden border-b border-border px-4",
-						collapsed
-							? "pointer-events-none max-h-0 py-0 opacity-0"
-							: "max-h-12 py-2 opacity-100",
+						collapsed ? "max-h-0 py-0 opacity-0" : "max-h-12 py-2 opacity-100",
 						motion,
 					)}
 				>
@@ -274,7 +276,7 @@ export function Sidebar({
 						)}
 					>
 						<span
-							aria-hidden={collapsed}
+							aria-hidden={collapsed || undefined}
 							className={cn(
 								"overflow-hidden px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground",
 								collapsed
@@ -346,7 +348,7 @@ export function Sidebar({
 					<UserButton />
 					{userName || userEmail ? (
 						<div
-							aria-hidden={collapsed}
+							aria-hidden={collapsed || undefined}
 							className={cn(
 								"flex min-w-0 flex-col overflow-hidden",
 								collapsed ? "max-w-0 opacity-0" : "max-w-44 opacity-100",
@@ -370,16 +372,43 @@ export function Sidebar({
 				    Collapsed, neither fits, so it degrades to the sparkle alone with
 				    its unseen dot; the version drops out because nobody reads a
 				    version off a 68px rail and expanding is one click. */}
-				{collapsed ? (
-					<div className="flex justify-center">
-						<WhatsNewNavItem variant="icon" />
+				{/* Both forms stay mounted and cross-fade, so this row glides with
+				    the rest of the rail instead of snapping at the end. Whichever
+				    form is hidden is `inert` — never a second, invisible button. */}
+				<div className="flex items-center justify-between px-2 py-0.5">
+					<div className="grid">
+						<div
+							inert={collapsed}
+							className={cn(
+								"overflow-hidden [grid-area:1/1]",
+								collapsed ? "max-w-0 opacity-0" : "max-w-40 opacity-100",
+								motion,
+							)}
+						>
+							<WhatsNewNavItem variant="meta" />
+						</div>
+						<div
+							inert={!collapsed}
+							className={cn(
+								"flex [grid-area:1/1]",
+								collapsed ? "opacity-100" : "opacity-0",
+								motion,
+							)}
+						>
+							<WhatsNewNavItem variant="icon" />
+						</div>
 					</div>
-				) : (
-					<div className="flex items-center justify-between gap-2 px-2 py-0.5">
-						<WhatsNewNavItem variant="meta" />
+					<div
+						inert={collapsed}
+						className={cn(
+							"overflow-hidden",
+							collapsed ? "max-w-0 opacity-0" : "max-w-28 opacity-100",
+							motion,
+						)}
+					>
 						<AppVersionRow compact />
 					</div>
-				)}
+				</div>
 			</div>
 		</aside>
 	);
@@ -459,7 +488,7 @@ function SidebarLink({
 						) : null}
 					</span>
 					<span
-						aria-hidden={collapsed}
+						aria-hidden={collapsed || undefined}
 						className={cn(
 							"flex min-w-0 flex-1 items-center gap-3 whitespace-nowrap",
 							collapsed ? "opacity-0" : "opacity-100",
