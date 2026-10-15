@@ -1774,33 +1774,38 @@ export const notifyStorefrontOrderCreated = internalAction({
 
 /**
  * Scheduled by counterCheckout.createOrderFromSession — the walk-in's ONE
- * WhatsApp (86eyd63r8), carrying the link to their order page. Paid-in-person
- * → a "done & paid" text; pay-later → the payment ask (transfer reference + an
+ * WhatsApp (86eyd63r8), carrying the link to their order page. It is THE SAME
+ * notification a storefront buyer gets: the approved
+ * `order_confirmation_utility` template (body shortId / store / total, URL
+ * button = the tracking token), sent exactly as notifyStorefrontOrderCreated
+ * sends it. One message shape for every checkout door, one Meta approval.
+ *
+ * Why a template and not the old free-form text: Meta delivers free-form
+ * ONLY inside a 24h window the BUYER opened by messaging us. A manual-phone
+ * walk-in never did, and a scan buyer whose checkout was resumed a day later
+ * has none left — Meta answered 131047, the action swallowed it as
+ * "best-effort", and the Done screen told the cashier the message had gone
+ * out: the "tracking link never arrived" bug. A template is delivered with no
+ * window at all. The outcome is stamped on the order (`confirmationPushStatus`
+ * via recordConfirmationPush) so the Done screen says what really happened and
+ * hands the cashier the link when it didn't; transient failures retry on the
+ * push schedule; a hard failure is reported as ours unless the number itself
+ * is unreachable.
+ *
+ * With no template configured (`WHATSAPP_ORDER_CONFIRM_TEMPLATE` unset — dev,
+ * legacy) the free-form confirmation is sent instead: paid-in-person → a
+ * "done & paid" text; pay-later → the payment ask (transfer reference + an
  * "I've paid" CTA into the order page's "How to pay"); RM0 → "no payment
  * needed". The receipt/invoice PDF is never messaged (Done screen + order page).
- *
- * Delivery is not assumed. Meta delivers free-form text ONLY inside a 24h
- * window the BUYER opened by messaging us; a manual-phone walk-in never did,
- * and a scan buyer whose checkout was resumed a day later has none left. That
- * rejection (131047) used to be swallowed as "best-effort" while the Done
- * screen told the cashier the message had gone out — the "tracking link never
- * arrived" bug. Now: free-form first (the richer copy, free inside a window),
- * and on 131047 the approved `order_confirmation_utility` template — the one
- * shape Meta delivers cold — with the tracking token on its button, exactly as
- * the storefront push sends it. The outcome is stamped on the order
- * (`confirmationPushStatus`, via recordConfirmationPush) so the Done screen can
- * say what really happened and hand the cashier the link when it didn't.
- * Transient failures retry on the storefront push's schedule; a hard failure
- * is reported as ours unless the number itself is unreachable.
  */
 export const notifyCounterOrderCreated = internalAction({
 	args: {
 		orderId: v.id("orders"),
-		// Append the PDPA notice-at-collection line to the confirmation. Set for a
-		// manual-phone bind (86ey8vqp6) — the buyer never scanned, so this is our
-		// first message to them. Scan buyers already got it in the connect ack.
-		// (The template fallback can't carry it — its body is fixed at approval;
-		// the order page it opens links the privacy notice.)
+		// Append the PDPA notice-at-collection line to the free-form confirmation.
+		// Set for a manual-phone bind (86ey8vqp6) — the buyer never scanned, so
+		// this is our first message to them. Scan buyers already got it in the
+		// connect ack. The template can't carry it (its body is fixed at
+		// approval); the order page it opens links the privacy notice.
 		includePrivacyNotice: v.optional(v.boolean()),
 		// 1-based; the scheduler passes attempt+1 when retrying a transient
 		// failure. Absent = first try (so existing scheduled jobs stay valid).
@@ -1889,8 +1894,8 @@ export const notifyCounterOrderCreated = internalAction({
 				throwOnFailure: true,
 			});
 		};
-		// The approved utility template — same name, params and button as the
-		// storefront push, so one Meta approval covers both doors.
+		// The approved utility template — the storefront buyer's notification,
+		// byte for byte: same name, params and button.
 		const sendTemplate = async (
 			templateName: string,
 		): Promise<SendReceipt | undefined> =>
@@ -1909,24 +1914,10 @@ export const notifyCounterOrderCreated = internalAction({
 			});
 
 		try {
-			let receipt: SendReceipt | undefined;
-			try {
-				receipt = await sendFreeForm();
-			} catch (err) {
-				const templateName = orderConfirmTemplateName();
-				if (
-					err instanceof WhatsAppSendError &&
-					err.metaCode === OUT_OF_WINDOW_META_CODE &&
-					templateName
-				) {
-					console.log("WA counter confirm: no open window → template", {
-						shortId: meta.shortId,
-					});
-					receipt = await sendTemplate(templateName);
-				} else {
-					throw err;
-				}
-			}
+			const templateName = orderConfirmTemplateName();
+			const receipt = templateName
+				? await sendTemplate(templateName)
+				: await sendFreeForm();
 			if (receipt?.blocked) {
 				// The WABA gateway suppressed it (opt-out, cap, pause). Transactional
 				// bypasses gating today, so this is defence in depth.
@@ -1944,9 +1935,9 @@ export const notifyCounterOrderCreated = internalAction({
 			});
 		} catch (err) {
 			// Retry a blip; give up at once on anything Meta rejects identically
-			// next time. 131047 with NO template configured lands here as a hard
-			// failure — reported as ours (the number is fine; we have no shape
-			// that reaches it), never as the buyer's typo.
+			// next time. 131047 (free-form with no open window — only reachable
+			// with no template configured) is reported as ours: the number is
+			// fine, we had no shape that reaches it. Never the buyer's typo.
 			const outcome = classifyPushFailure(
 				err instanceof WhatsAppSendError
 					? {

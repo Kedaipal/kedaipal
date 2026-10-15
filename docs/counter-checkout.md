@@ -303,7 +303,7 @@ yet; revisit (trim or gate it) alongside the WABA-protection / compliance work
 | `bindCheckoutSession` (internal, called by webhook) | `convex/counterCheckout.ts` |
 | `createOrderFromSession` (catalog-priced with optional seller adjustment, pay-in-person, completes session) | `convex/counterCheckout.ts` |
 | Inbound routing → bind + buyer reply | `convex/whatsapp.ts` (`handleInbound`) |
-| Buyer order confirmation + tracking link, template fallback when no window, outcome stamped on the order | `convex/whatsapp.ts` (`notifyCounterOrderCreated`) |
+| Buyer order confirmation + tracking link — the storefront's template, outcome stamped on the order | `convex/whatsapp.ts` (`notifyCounterOrderCreated`) |
 | Done screen — born-completed heading, LIVE WhatsApp outcome, Share/Copy link on failure | `src/components/counter/done-screen.tsx` (+ test) |
 | Expiry cron (every 5 min) | `convex/crons.ts` → `expireStaleSessions` |
 | Webhook observability (phone + pushname + text) | `convex/http.ts` |
@@ -729,27 +729,30 @@ to, not in the chat (`86eyd63r8`). **PDPA:** the buyer never scanned, so the con
 is our first message to them — it carries the same notice-at-collection line as the
 poster ack (`whatsappCopy.privacyNoticeLine`, threaded via `notifyCounterOrderCreated`'s
 `includePrivacyNotice`; scan buyers already got it at connect, so it's not repeated).
-**No open window → the template (fixed Oct 2026).** A manual-phone buyer never
-opened a 24h WhatsApp service window, and a scan buyer's window closes a day
-after the scan (a resumed session can be 3 days old) — Meta rejects free-form
-text to both with **131047**, and until this fix that rejection was swallowed as
-"best-effort" while the Done screen told the cashier the message had gone out:
-the buyer never got their order link. `notifyCounterOrderCreated` now sends
-free-form first (the richer copy, free inside a window) and on 131047 falls
-back to the approved **`order_confirmation_utility`** template — the same name,
-body params and tracking-token button as the storefront push, so one Meta
-approval covers both doors (`WHATSAPP_ORDER_CONFIRM_TEMPLATE`; unset ⇒ the
-failure is recorded as ours, never as the buyer's number). The outcome is
-stamped on the order through the same `recordConfirmationPush` the storefront
-uses (`sending` → `sent` + wamid / `failed` + kind; transient failures retry on
-the push schedule; every send kind now returns Meta's wamid, so the `statuses`
-webhook can flip a delivered-then-failed text too), and the **Done screen reads
-it live**: *Sending…* → *Aiman has their order link on WhatsApp* → an amber
-*WhatsApp couldn't reach Aiman* card with **Share link / Copy link** for the
-buyer's order page, while they are still at the counter. The pay-later CTA's
-plain-text retry is skipped on an unreachable code (it rejects identically).
-The template cannot carry the PDPA line (its body is fixed at approval); the
-order page it opens links the privacy notice.
+**The counter buyer gets the storefront buyer's notification (fixed Oct 2026).**
+`notifyCounterOrderCreated` sends the approved **`order_confirmation_utility`**
+template — the same name, body params (order / store / total) and tracking-token
+button as the storefront push, byte for byte — whenever
+`WHATSAPP_ORDER_CONFIRM_TEMPLATE` is set. One message shape for every checkout
+door, one Meta approval. Why not the old free-form text: Meta delivers
+free-form ONLY inside a 24h service window the BUYER opened by messaging us; a
+manual-phone buyer never did, and a scan buyer's window closes a day after the
+scan (a resumed session can be 3 days old). Both were rejected with **131047**,
+the action swallowed it as "best-effort", and the Done screen told the cashier
+the message had gone out: the buyer never got their order link. A template is
+delivered with no window at all. The outcome is stamped on the order through the
+same `recordConfirmationPush` the storefront uses (`sending` → `sent` + wamid /
+`failed` + kind; transient failures retry on the push schedule; every send kind
+now returns Meta's wamid, so the `statuses` webhook can flip a
+delivered-then-failed message too), and the **Done screen reads it live**:
+*Sending…* → *Aiman has their order link on WhatsApp* → an amber *WhatsApp
+couldn't reach Aiman* card with **Share link / Copy link** for the buyer's order
+page, while they are still at the counter. With the template env unset (dev,
+legacy) the free-form confirmation is sent instead, and a 131047 there is
+recorded as ours, never as the buyer's number; its pay-later CTA skips the
+plain-text retry on an unreachable code. The template cannot carry the PDPA
+line (its body is fixed at approval); the order page it opens links the
+privacy notice.
 **Payment details:** a manual-phone **pay-later** buyer (like every buyer now,
 post-86ey98ju1) gets the order-page link + **"Make payment"** button on the
 order-create message; the bank/QR details live on the order page's `How to pay`

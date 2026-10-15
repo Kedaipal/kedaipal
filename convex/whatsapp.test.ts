@@ -882,12 +882,14 @@ describe("counter order auto-send (notifyCounterOrderCreated)", () => {
 	});
 
 	// -----------------------------------------------------------------------
-	// Delivery outcome + the out-of-window fallback (the "tracking link never
-	// arrived" bug). Meta delivers free-form text ONLY inside a window the
-	// BUYER opened by messaging us in the last 24h. A manual-phone walk-in
-	// never did; a scan buyer whose session was resumed a day later no longer
-	// has one. Both got a silent 131047, swallowed as "best-effort", while the
-	// Done screen told the cashier the message had gone out.
+	// The counter buyer gets THE SAME notification as a storefront buyer: the
+	// approved template, whenever it is configured. Meta delivers free-form
+	// text ONLY inside a window the BUYER opened by messaging us in the last
+	// 24h — a manual-phone walk-in never did, a resumed scan session's has
+	// closed — and the old free-form send silently failed with 131047 while
+	// the Done screen told the cashier the message had gone out. The outcome
+	// is now stamped on the order either way. Free-form survives only as the
+	// no-template (dev / legacy) path.
 	// -----------------------------------------------------------------------
 
 	/** Graph responses scripted per call; the last step repeats. */
@@ -951,7 +953,7 @@ describe("counter order auto-send (notifyCounterOrderCreated)", () => {
 		delete process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE;
 	});
 
-	test("an in-window send stamps the order sent (+ wamid) — the cashier can see it went out", async () => {
+	test("no template configured: the free-form send stamps the order sent (+ wamid) — the cashier can see it went out", async () => {
 		const t = setup();
 		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
 		const shortId = await createPendingOrder(t, retailerId, productId);
@@ -975,7 +977,7 @@ describe("counter order auto-send (notifyCounterOrderCreated)", () => {
 		fetchMock.restore();
 	});
 
-	test("a buyer with no open window (131047) gets the approved template instead — never silence", async () => {
+	test("template configured: the counter sends the storefront buyer's notification, directly — one call, no window needed", async () => {
 		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = TEMPLATE;
 		const t = setup();
 		const { retailerId, productId } = await seedRetailerWithLocale(t, "ms");
@@ -984,16 +986,15 @@ describe("counter order auto-send (notifyCounterOrderCreated)", () => {
 		await t.run((ctx) =>
 			ctx.db.patch(orderId, { paymentStatus: "received" }),
 		);
-		const fetchMock = installScriptedFetch([OUT_OF_WINDOW, OK("wamid.TPL1")]);
+		const fetchMock = installScriptedFetch([OK("wamid.TPL1")]);
 
 		await t.action(internal.whatsapp.notifyCounterOrderCreated, { orderId });
 
 		const wa = fetchMock.waCalls();
-		// Free-form first (the richer copy, free inside a window) → rejected →
-		// the ONE shape Meta delivers with no window.
-		expect(wa).toHaveLength(2);
-		expect((wa[0].body as { type: string }).type).toBe("text");
-		const tpl = wa[1].body as TemplateBody;
+		// No free-form attempt at all — the template is delivered with or
+		// without an open window, so there is nothing to try first.
+		expect(wa).toHaveLength(1);
+		const tpl = wa[0].body as TemplateBody;
 		expect(tpl.type).toBe("template");
 		expect(tpl.template.name).toBe(TEMPLATE);
 		expect(tpl.template.language.code).toBe("ms"); // the STORE's language
@@ -1015,26 +1016,48 @@ describe("counter order auto-send (notifyCounterOrderCreated)", () => {
 		fetchMock.restore();
 	});
 
-	test("pay-later out of window: the payment ask's text retry is skipped (same rejection) and the template carries the link", async () => {
+	test("pay-later with the template configured: the same template, with the real total — no payment-ask text", async () => {
 		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = TEMPLATE;
 		const t = setup();
 		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
 		const shortId = await createPendingOrder(t, retailerId, productId);
 		const orderId = await orderIdOf(t, shortId);
-		const fetchMock = installScriptedFetch([OUT_OF_WINDOW, OK("wamid.TPL2")]);
+		const fetchMock = installScriptedFetch([OK("wamid.TPL2")]);
+
+		await t.action(internal.whatsapp.notifyCounterOrderCreated, { orderId });
+
+		const wa = fetchMock.waCalls();
+		expect(wa.map((c) => (c.body as { type: string }).type)).toEqual([
+			"template",
+		]);
+		const tpl = wa[0].body as TemplateBody;
+		expect(tpl.template.components[0].parameters[2].text).toBe("MYR 120.00");
+		expect((await pushOf(t, orderId)).status).toBe("sent");
+		fetchMock.restore();
+	});
+
+	test("pay-later with NO template: the payment ask's text retry is skipped on an unreachable code — it rejects identically", async () => {
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+		const fetchMock = installScriptedFetch([OUT_OF_WINDOW]);
 
 		await t.action(internal.whatsapp.notifyCounterOrderCreated, { orderId });
 
 		const wa = fetchMock.waCalls();
 		expect(wa.map((c) => (c.body as { type: string }).type)).toEqual([
 			"interactive",
-			"template",
 		]);
-		expect((await pushOf(t, orderId)).status).toBe("sent");
+		expect(await pushOf(t, orderId)).toEqual({
+			status: "failed",
+			kind: "system",
+			wamid: undefined,
+		});
 		fetchMock.restore();
 	});
 
-	test("131047 with no template configured is reported as OUR fault — the number is fine", async () => {
+	test("131047 on the free-form path (no template) is reported as OUR fault — the number is fine", async () => {
 		const t = setup();
 		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
 		const shortId = await createPendingOrder(t, retailerId, productId);
@@ -1095,7 +1118,7 @@ describe("counter order auto-send (notifyCounterOrderCreated)", () => {
 		fetchMock.restore();
 	});
 
-	test("a completed (handed-over) paid sale says the sale is complete, not merely confirmed", async () => {
+	test("no template: a completed (handed-over) paid sale says the sale is complete, not merely confirmed", async () => {
 		const t = setup();
 		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
 		const shortId = await createPendingOrder(t, retailerId, productId);

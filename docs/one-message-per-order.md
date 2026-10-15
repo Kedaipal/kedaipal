@@ -31,15 +31,14 @@ to hand the buyer a link to the page that carries the rest.
 
 Two paths keep a *different* single message, and both are still one:
 
-- **Counter checkout** — the walk-in's message is the free-form order
-  confirmation (`whatsapp.notifyCounterOrderCreated`) when their QR scan's
-  session window is still open, and **the same utility template as the
-  storefront push when it isn't** (Meta 131047 — a manual-phone buyer never
-  opened one). Still one message: the template is sent only after the free-form
-  was rejected. Its outcome is stamped on the order like the storefront's. (A
-  poster scan also earns a one-line ack with their pairing code — a reply to the
-  buyer's own message, not a proactive send, but see
-  [Known edges](#known-edges).) See
+- **Counter checkout** — since Oct 2026 the walk-in's message IS the
+  storefront's template (`whatsapp.notifyCounterOrderCreated` sends
+  `order_confirmation_utility` with the same params and button), so it no
+  longer depends on a session window Meta may have closed. Its outcome is
+  stamped on the order like the storefront's. The free-form confirmation
+  survives only where the template env is unset. (A poster scan also earns a
+  one-line ack with their pairing code — a reply to the buyer's own message,
+  not a proactive send, but see [Known edges](#known-edges).) See
   [`counter-checkout.md`](./counter-checkout.md).
 - **Legacy / no-template stores** (`WHATSAPP_ORDER_CONFIRM_TEMPLATE` unset, or a
   phone-less direct create) — the buyer sends their `ORD-XXXX` first and the
