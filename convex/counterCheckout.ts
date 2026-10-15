@@ -824,7 +824,8 @@ export const createOrderFromSession = mutation({
 				// authoritative catalog price is charged. Trusting it here is safe:
 				// this mutation is owner-or-admin only (requireSessionAccess), so the
 				// "client" IS the seller pricing their own order — a buyer never
-				// reaches this path. Validated as a positive integer, no upper cap
+				// reaches this path. Validated as a non-negative integer (RM0 is a
+				// free line), no upper cap
 				// (same rule as any product price).
 				unitPrice: v.optional(v.number()),
 				// Buyer-question answers the seller keyed for the walk-in
@@ -870,14 +871,12 @@ export const createOrderFromSession = mutation({
 				"Bind a buyer to this checkout before creating the order",
 			);
 		// A session with no phone is an ANONYMOUS walk-in (86ey8vqp6) — a cash sale
-		// with no buyer to message. That's a valid order, but a pay-later link would
-		// have no recipient, so it must be settled in person (the UI disables
-		// pay-later with this same reason).
+		// with no buyer to message. That's a valid order, but a pay-later link
+		// would have no recipient, so it must be settled in person (the UI
+		// disables pay-later with this same reason). Checked once the TOTAL is
+		// known, below: a free sale has no payment to take, and the client sends
+		// `paidInPerson: false` for one on purpose.
 		const anonymous = !session.waPhone;
-		if (anonymous && !args.paidInPerson)
-			throw new ConvexError(
-				"An anonymous sale must be paid in person — there's no buyer to send a payment link to.",
-			);
 		if (args.items.length === 0) throw new ConvexError("Add at least one item");
 		if (args.items.length > MAX_COUNTER_ITEMS)
 			throw new ConvexError(`Maximum ${MAX_COUNTER_ITEMS} items per order`);
@@ -977,15 +976,18 @@ export const createOrderFromSession = mutation({
 			let soldOnPromo = false;
 			let promoRunId: string | undefined;
 			if (variant.isCustom === true || item.unitPrice !== undefined) {
-				// A positive integer in sen — the SAME rule as any other price
-				// (products.ts). No artificial ceiling: we can't know the vendor's
-				// business (watches, renovations, B2B services can run six figures+),
-				// and the price is the vendor's own call with the buyer present.
+				// A non-negative integer in sen. No artificial ceiling: we can't
+				// know the vendor's business (watches, renovations, B2B services can
+				// run six figures+), and the price is the vendor's own call with the
+				// buyer present. RM0 is a real price at the counter — a comped item,
+				// a freebie with a purchase — and an all-free cart becomes a free
+				// order (`paidInPerson` below). The CLAIM door keeps refusing zero
+				// (orderClaims.sendClaim): a link exists to take a payment.
 				const entered = item.unitPrice;
 				if (
 					entered === undefined ||
 					!Number.isInteger(entered) ||
-					entered <= 0
+					entered < 0
 				)
 					throw new ConvexError(`Set a price for "${displayName}"`);
 				unitPrice = entered;
@@ -1160,6 +1162,12 @@ export const createOrderFromSession = mutation({
 		const { subtotal, discount, total } = computeOrderTotals(snapshotItems, {
 			voucher: voucherTerms,
 		});
+		// The anonymous rule, now that there is a total to protect. Before any
+		// write, so a refusal leaves stock and the session untouched.
+		if (anonymous && !args.paidInPerson && total > 0)
+			throw new ConvexError(
+				"An anonymous sale must be paid in person — there's no buyer to send a payment link to.",
+			);
 
 		// Reserve stock for hard-block variants (same OCC transaction).
 		for (const [variantId, { qty, block, onHand }] of requestedByVariant) {

@@ -196,9 +196,9 @@ price are agreed face-to-face — so the block is lifted:
   `mockupStatus` — there's nothing to approve, the buyer has it (or will collect).
   No image is required either.
 - **Price trust boundary.** `createOrderFromSession` takes a per-item
-  `unitPrice` (validated as a positive integer in sen — the **same rule as any
-  product price**, no upper cap, since the vendor's business could be high-value:
-  watches, renovations, B2B services). It is **required** on an `isCustom` line
+  `unitPrice` (validated as a **non-negative** integer in sen — RM0 is a free
+  line, see "Free lines" below — with no upper cap, since the vendor's business
+  could be high-value: watches, renovations, B2B services). It is **required** on an `isCustom` line
   (no catalog price exists) and **optional** on a standard line — see "Seller
   price adjustment" below. Trusting it is safe because this mutation is
   **owner-or-admin only** (`requireSessionAccess`): the caller is the
@@ -235,17 +235,58 @@ product.
 - **Wire format:** the client sends `unitPrice` only when the line is custom or
   adjusted; an absent `unitPrice` means "charge the catalog price". Adjustments
   autosave on the draft like custom prices, so a resume restores them.
-- **Server:** same validation as a custom price (positive integer sen, no cap).
-  The order item snapshot stores the charged price — same as custom lines, no
-  extra column.
+- **Server:** same validation as a custom price (non-negative integer sen, no
+  cap). The order item snapshot stores the charged price — same as custom lines,
+  no extra column.
+
+## Free lines — RM0 at the counter (2026-10-15)
+
+A seller comps things in person all the time — a freebie with a purchase, a
+goodwill replacement, a warranty redo — and the counter refused to record it:
+both price inputs and `createOrderFromSession` rejected anything at or below
+zero, so the only way to hand over a free item was to leave it off the order.
+**RM0 is now a real price at the counter**, on a custom line and as an
+adjustment on a standard one.
+
+- **Where the seller is told:** the line-edit sheet's hint reads
+  "Enter a price to save — RM 0.00 makes the line free" while the field is
+  blank, and "Free line — nothing to collect for it. An order of only free
+  lines is a free order." once it reads zero; the catalog's custom row says
+  "set the agreed price (RM 0.00 for a free line)". `rmToCents`
+  (`src/lib/counter-price.ts`, the one parser for both inputs) reads a blank
+  field as NaN, not RM0 — `Number("")` is 0, so without that guard the custom
+  row's **Add** would add a free line the seller never priced.
+- **What the order becomes:** `createOrderFromSession` already turned a zero
+  total into a free order (`paidInPerson = args.paidInPerson && total > 0`, for
+  free RSVPs): no payment is recorded whatever method the seller tapped, so the
+  order page shows "Free order — nothing to collect", not "Paid now · Cash".
+  A RM0 line beside a paid one is an ordinary paid order. The review modal
+  prints the RM0 line like any other, with the catalog price struck through
+  when it is an adjustment.
+- **The claim-link door still refuses zero** (`orderClaims.sendClaim`): a link
+  exists to take a payment within a runway, and a free claim has nothing to
+  take. The build screen's primary mirrors that in SEND mode — `freeLine`
+  (formerly `unpriced`, which could no longer occur: a line only enters the
+  cart with a parsed price) greys **Send link** with
+  `"<line>" is free — a link takes a payment, so ring it up at the counter`.
+  A free RSVP line is still named as an event first.
+- **The anonymous-sale rule now waits for the total.** `createOrderFromSession`
+  refused an anonymous (no-phone) sale sent without `paidInPerson`, and the
+  client sends `false` for a free total on purpose (no payment is recorded) —
+  so every free cash sale was a dead end with a toast about payment links.
+  Found by the hands-on pass. The rule is unchanged for a paid total and now
+  runs after `computeOrderTotals`, before any write, keyed on `total > 0`.
+- **The SEND reason names the LINE** (`Cempedak · Custom`), not the product:
+  with three Cempedak lines in the cart, "Cempedak is free" names nothing.
+- **Negative** and non-integer amounts are rejected as before.
 
 See [`custom-option.md`](./custom-option.md) and
 [`proof-approval.md`](./proof-approval.md).
 
 ## Review-before-create (no price ceiling)
 
-Counter prices have **no upper cap** — same rule as any product price (positive
-integer in sen); the vendor's business could legitimately be high-value (watches,
+Counter prices have **no upper cap** — same rule as any product price
+(non-negative integer in sen); the vendor's business could legitimately be high-value (watches,
 renovations, B2B services). The guard against a fat-fingered amount (an extra
 zero: RM 5M instead of RM 500k) is **not** an arbitrary limit but a **mandatory
 review step**: tapping **"Review order"** opens a confirm modal

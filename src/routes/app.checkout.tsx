@@ -113,6 +113,7 @@ import {
 	counterPrimaryAction,
 	showsSellerPaymentControls,
 } from "../lib/counter-panel";
+import { centsToRm, rmToCents } from "../lib/counter-price";
 import { newWalkInSince, walkInSessionIds } from "../lib/counter-scan";
 import {
 	canAddToCounterCart,
@@ -914,17 +915,6 @@ type SessionDraft = {
 	voucherCode?: string;
 };
 
-/** "2500" cents → "25.00" for the custom-price input. */
-function centsToRm(cents: number): string {
-	return (cents / 100).toFixed(2);
-}
-/** "25" / "25.50" → cents (integer). NaN when blank or not a positive amount. */
-function rmToCents(rm: string): number {
-	const n = Number(rm);
-	if (!Number.isFinite(n) || n <= 0) return Number.NaN;
-	return Math.round(n * 100);
-}
-
 type CounterProduct = FunctionReturnType<
 	typeof api.products.listForCounter
 >[number];
@@ -1086,7 +1076,8 @@ function ProductVariantRows({
 								<div className="min-w-0">
 									<p className="truncate text-sm">{label}</p>
 									<p className="text-xs text-muted-foreground">
-										Custom — set the agreed price
+										Custom — set the agreed price ({formatPrice(0, currency)}{" "}
+										for a free line)
 									</p>
 								</div>
 								{inCart ? (
@@ -2425,12 +2416,18 @@ function BuildOrderScreen({
 							const action = counterPrimaryAction({
 								mode: payMode,
 								empty: cartEntries.length === 0,
-								// A claim freezes prices at send, so an unpriced line
-								// would lock a zero.
-								unpriced: cartEntries.some(([, l]) => l.price <= 0),
+								// A claim link takes a payment and its door refuses a RM0
+								// line; the counter rings a free line up as a free order.
+								freeLine: (() => {
+									const l = cartEntries.find(([, l]) => l.price === 0)?.[1];
+									if (l === undefined) return undefined;
+									// The LINE's name, not the product's — "Cempedak" names
+									// nothing when three Cempedak lines sit in the cart.
+									return l.label ? `${l.name} · ${l.label}` : l.name;
+								})(),
 								// Blocks SEND with the event's own words (a claim lets the
-								// buyer pick a date and holds no seat) — outranks `unpriced`,
-								// or a free RSVP line reads as an unpriced custom item.
+								// buyer pick a date and holds no seat) — outranks `freeLine`,
+								// or a free RSVP line reads as a comped custom item.
 								eventName: cartEvent?.name,
 								// Refuses a mixed cart in BOTH modes (`z8r3fdhh45`) —
 								// `orders.create` rejects it at either door.
@@ -2787,9 +2784,18 @@ function CartLineEditDialog({
 								Agreed in person — no catalog price.
 							</span>
 						)}
+						{/* RM0 is a real price here (a comped item, a freebie with a
+						    purchase) — said where the seller is typing, so "can I make
+						    this free?" is answered before they try. */}
 						{!validPrice ? (
 							<span className="mt-1 block text-xs text-destructive">
-								Enter a price above {formatPrice(0, currency)} to save.
+								Enter a price to save — {formatPrice(0, currency)} makes the
+								line free.
+							</span>
+						) : cents === 0 ? (
+							<span className="mt-1 block text-xs text-muted-foreground">
+								Free line — nothing to collect for it. An order of only free
+								lines is a free order.
 							</span>
 						) : null}
 					</label>
