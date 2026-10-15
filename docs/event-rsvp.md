@@ -336,8 +336,8 @@ one concept, one word, rather than coining a third name for `isActive: false`.
   event moment back** ("Set by the event…") instead of offering the date
   editor, the confirm dialog names it, and the **Send-link mode refuses an
   event cart with the event's own reason** (share the storefront link instead)
-  — checked *before* "unpriced", or a free RSVP line would be misnamed a
-  custom item.
+  — checked *before* "freeLine", or a free RSVP line would be misnamed a
+  comped custom item.
 - **`isDefaultedCounterDate`** (`convex/lib/order.ts`) revises the old
   "counter orders never show a fulfilment-date badge" rule. That rule was
   right for the walk-in it described and wrong for the two counter orders
