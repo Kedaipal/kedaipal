@@ -840,11 +840,13 @@ function DoneScreen({
 	const [completed, setCompleted] = useState(false);
 	const [completing, setCompleting] = useState(false);
 
-	// Offer one-tap completion only for a paid-in-person sale — they've paid and
-	// taken the item, so the seller can close it out here instead of clicking
-	// through the status pipeline. Optional, not automatic: a paid deposit on an
-	// item that isn't ready yet is left as a normal confirmed order.
-	const canComplete = paidInPerson && !eventRsvp && !!orderId && !completed;
+	// Offer one-tap completion only when nothing is owed — a paid-in-person
+	// sale, or a FREE one (a comped line): they've taken the item, so the seller
+	// can close it out here instead of clicking through the status pipeline.
+	// Optional, not automatic: a paid deposit on an item that isn't ready yet
+	// is left as a normal confirmed order.
+	const canComplete =
+		(paidInPerson || free === true) && !eventRsvp && !!orderId && !completed;
 
 	// Say exactly what left the building. A counter order sends the buyer ONE
 	// WhatsApp (86eyd63r8) — the confirmation, carrying the link to their order
@@ -2557,7 +2559,13 @@ function BuildOrderScreen({
 								empty: cartEntries.length === 0,
 								// A claim link takes a payment and its door refuses a RM0
 								// line; the counter rings a free line up as a free order.
-								freeLine: cartEntries.find(([, l]) => l.price === 0)?.[1].name,
+								freeLine: (() => {
+									const l = cartEntries.find(([, l]) => l.price === 0)?.[1];
+									if (l === undefined) return undefined;
+									// The LINE's name, not the product's — "Cempedak" names
+									// nothing when three Cempedak lines sit in the cart.
+									return l.label ? `${l.name} · ${l.label}` : l.name;
+								})(),
 								// Blocks SEND with the event's own words (a claim lets the
 								// buyer pick a date and holds no seat) — outranks `freeLine`,
 								// or a free RSVP line reads as a comped custom item.

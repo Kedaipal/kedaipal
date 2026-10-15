@@ -260,6 +260,14 @@ adjustment on a standard one.
   cart with a parsed price) greys **Send link** with
   `"<line>" is free — a link takes a payment, so ring it up at the counter`.
   A free RSVP line is still named as an event first.
+- **The anonymous-sale rule now waits for the total.** `createOrderFromSession`
+  refused an anonymous (no-phone) sale sent without `paidInPerson`, and the
+  client sends `false` for a free total on purpose (no payment is recorded) —
+  so every free cash sale was a dead end with a toast about payment links.
+  Found by the hands-on pass. The rule is unchanged for a paid total and now
+  runs after `computeOrderTotals`, before any write, keyed on `total > 0`.
+- **The SEND reason names the LINE** (`Cempedak · Custom`), not the product:
+  with three Cempedak lines in the cart, "Cempedak is free" names nothing.
 - **Negative** and non-integer amounts are rejected as before.
 
 See [`custom-option.md`](./custom-option.md) and

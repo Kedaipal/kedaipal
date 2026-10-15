@@ -1275,6 +1275,33 @@ describe("counterCheckout — anonymous walk-in (86ey8vqp6)", () => {
 		).rejects.toThrow(/paid in person/i);
 	});
 
+	// A FREE cash sale (a comped line, an RM0 RSVP) has no payment to take, so
+	// "must be paid in person" has nothing to protect — and the client sends
+	// `paidInPerson: false` for a free total on purpose (no payment is
+	// recorded). Found by the hands-on pass: the rule fired before the total
+	// was known and every anonymous free order was a dead end.
+	test("a free anonymous sale is accepted without the paid-in-person flag", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, { price: 2000 });
+		const { sessionId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.startAnonymousSession, {});
+
+		const { orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1, unitPrice: 0 }],
+				paidInPerson: false,
+			});
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.total).toBe(0);
+		expect(order?.paymentStatus).toBe("unpaid");
+		expect(order?.paymentMethod).toBeUndefined();
+		expect(order?.customer.waPhone).toBeUndefined();
+	});
+
 	test("anonymous session creation is ownership-checked", async () => {
 		const t = setup();
 		await seedRetailer(t, USER_A);
