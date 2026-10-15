@@ -44,11 +44,22 @@ the route's decision, and the route already owns the navigate-after-save.
   still counts as unsaved until Save changes. A failed autosave leaves the
   baseline alone, so the photos stay dirty, the inline error says to tap
   Save, and the guard still warns.
-- **Removing a photo saves straight away, so it gets an Undo toast,** held
-  for 10 seconds rather than the 4-second default (the hands-on test ran out
-  of time reaching for it). Product image removal never deletes the stored
-  file (`products.update` only rewrites the ID list), so Undo is a real
-  restore.
+- **Throttled is not failed.** Autosave shares the `productWrite` limit (20
+  writes/min per user) with every other product write, and each new photo
+  now costs two (upload URL + autosave). When it trips, the card says "Lots
+  of changes — saving in 40s" and retries by itself with the newest list.
+  Changes made meanwhile join that one retry. It never says "tap Save",
+  because Save would be refused by the same limit. Leaving the page abandons
+  the retry (the guard has already asked).
+- **Removing a photo saves straight away, so each removal gets its own Undo
+  toast,** held for 10 seconds rather than the 4-second default (the hands-on
+  test ran out of time reaching for it). Undo puts back **only that photo**,
+  at its old position, into the list as it is now. It never restores a
+  snapshot, which would undo everything done since. Two quick removals keep
+  two Undos (one shared toast used to replace the first). Leaving the page
+  dismisses them, because an Undo fired elsewhere would write a list the form
+  no longer shows. Product image removal never deletes the stored file
+  (`products.update` only rewrites the ID list), so Undo is a real restore.
 - **Every product-photo picker clears itself after a pick**
   (`takePickedFiles`, `src/lib/file-input.ts`). A file input only fires
   `change` when its value changes, so without the reset, removing a photo and

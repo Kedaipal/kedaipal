@@ -51,7 +51,9 @@ export function UnsavedChangesGuard({ state }: { state: UnsavedState }) {
 	});
 
 	if (blocker.status !== "blocked") return null;
-	// Snapshot at block time: the dialog explains why THIS navigation stopped.
+	// Follows the live state: if an upload lands while the dialog is open, the
+	// copy moves from "still uploading" to "unsaved changes", which is then
+	// the true reason (PR #371 review).
 	const copy = COPY[state === "uploading" ? "uploading" : "changes"];
 	return (
 		<ConfirmDialog

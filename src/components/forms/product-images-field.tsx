@@ -1,5 +1,5 @@
 import { useMutation } from "convex/react";
-import { CheckCircle2, Loader2 } from "lucide-react";
+import { CheckCircle2, Clock, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { PhotoAutosaveStatus } from "../../hooks/usePhotoAutosave";
@@ -116,6 +116,13 @@ export function ProductImagesField({
 						<CheckCircle2 className="size-3.5" aria-hidden="true" />
 						Saved
 					</output>
+				) : autosaveStatus?.kind === "waiting" ? (
+					// Throttled: it saves by itself, so no "tap Save" here (Save
+					// would hit the same limit).
+					<output className="mr-auto inline-flex items-center gap-1 whitespace-nowrap text-xs text-muted-foreground">
+						<Clock className="size-3.5" aria-hidden="true" />
+						Lots of changes — saving in {autosaveStatus.wait}
+					</output>
 				) : null}
 				{images.length > 1 ? (
 					<p className="whitespace-nowrap text-xs text-muted-foreground">
@@ -185,8 +192,8 @@ export function ProductImagesField({
 			</div>
 			{autosaveStatus?.kind === "error" ? (
 				<p role="alert" className="text-xs text-destructive">
-					Couldn't save your photos ({autosaveStatus.message}). Tap Save changes
-					to try again.
+					Couldn't save your photos: {autosaveStatus.message.replace(/\.$/, "")}
+					. Tap Save changes to try again.
 				</p>
 			) : null}
 		</div>

@@ -129,7 +129,11 @@ import {
 import { submitThenFocusError } from "./focus-error";
 import { useAppForm } from "./form";
 import { PackageDayCounting, type StoreSchedule } from "./package-day-counting";
-import { type ProductImage, ProductImagesField } from "./product-images-field";
+import {
+	MAX_IMAGES,
+	type ProductImage,
+	ProductImagesField,
+} from "./product-images-field";
 import {
 	EMPTY_PROMO_DRAFT,
 	type PromoDraft,
@@ -1344,30 +1348,64 @@ export function ProductForm({
 				baselineRef.current = { ...baselineRef.current, images: saved };
 		},
 	});
+	// The photo list as of the latest change, for an Undo that fires later:
+	// it puts back ONE photo into whatever the list is by then, never a stale
+	// snapshot that would also undo everything done since.
+	const imagesRef = useRef(images);
+	imagesRef.current = images;
+	// Each removal's Undo toast, so leaving the page takes them with it: an
+	// Undo from another page would write a list this form no longer shows.
+	const undoToastIds = useRef(new Set<string>());
+	useEffect(() => {
+		const ids = undoToastIds.current;
+		return () => {
+			for (const id of ids) toast.dismiss(id);
+		};
+	}, []);
+
 	function changeImages(next: ProductImage[]) {
 		setServerError(null);
-		const removed = autosaveOn && next.length < images.length;
-		const before = images;
+		const before = imagesRef.current;
+		imagesRef.current = next;
 		setImages(next);
 		if (!autosaveOn) return;
 		photoAutosave.autosave(next);
-		// Removing saves at once too, so it gets a way back.
-		if (removed) {
+		// Removing saves at once too, so each removed photo gets its own way
+		// back. One shared toast meant a second removal replaced the first's
+		// Undo, and that photo could only come back by re-uploading it (PR
+		// #371 review).
+		before.forEach((photo, index) => {
+			if (next.some((i) => i.id === photo.id)) return;
+			const id = `product-photo-removed-${photo.id}`;
+			undoToastIds.current.add(id);
 			toast("Photo removed.", {
-				id: "product-photo-removed",
-				// Removing saved straight away, so Undo is the only way back.
-				// The 4s default ran out while a seller was still reaching for
-				// it (found in the hands-on test).
+				id,
+				// Undo is the only way back. The 4s default ran out while a
+				// seller was still reaching for it (found in the hands-on test).
 				duration: 10_000,
+				onAutoClose: () => undoToastIds.current.delete(id),
+				onDismiss: () => undoToastIds.current.delete(id),
 				action: {
 					label: "Undo",
-					onClick: () => {
-						setImages(before);
-						photoAutosave.autosave(before);
-					},
+					onClick: () => restorePhoto(photo, index),
 				},
 			});
+		});
+	}
+
+	function restorePhoto(photo: ProductImage, index: number) {
+		const now = imagesRef.current;
+		if (now.some((i) => i.id === photo.id)) return;
+		if (now.length >= MAX_IMAGES) {
+			toast.error(
+				`You already have ${MAX_IMAGES} photos. Remove one to bring this photo back.`,
+			);
+			return;
 		}
+		const next = [...now];
+		// Back where it was, or last if the list has since got shorter.
+		next.splice(Math.min(index, now.length), 0, photo);
+		changeImages(next);
 	}
 
 	const unsaved: UnsavedState = uploading

@@ -1,12 +1,18 @@
-import { useRef, useState } from "react";
+import { isRateLimitError } from "@convex-dev/rate-limiter";
+import { useEffect, useRef, useState } from "react";
 import type { ProductImage } from "../components/forms/product-images-field";
-import { convexErrorMessage } from "../lib/format";
+import { convexErrorMessage, retryWait } from "../lib/format";
 
 export type PhotoAutosaveStatus =
 	| { kind: "idle" }
 	| { kind: "saving" }
 	| { kind: "saved" }
+	/** Throttled: the photos save by themselves once the window reopens. */
+	| { kind: "waiting"; wait: string }
 	| { kind: "error"; message: string };
+
+/** A beat past `retryAfter`, so the retry lands after the window reopens. */
+const RETRY_MARGIN_MS = 500;
 
 /**
  * Saves an existing product's photos as soon as they change (z8r3fdtk82).
@@ -21,10 +27,16 @@ export type PhotoAutosaveStatus =
  * reorders becomes at most two writes, and photos can never land out of
  * order (an older list overwriting a newer one).
  *
+ * Throttled by the `productWrite` limit (shared with every other product
+ * write), it does NOT tell the seller to tap Save, because Save would be
+ * refused by the same limit. It says when it will try again, then retries by
+ * itself with the newest list. Changes made while it waits join that one
+ * retry instead of each hitting the limit again.
+ *
  * `onSaved` hands back the list the server now has, so the form can move its
- * "unchanged" baseline. A failed save leaves the baseline alone, so the
- * photos stay an unsaved change: Save changes still saves them, and the
- * leave guard still warns.
+ * "unchanged" baseline. A failed or waiting save leaves the baseline alone,
+ * so the photos stay an unsaved change: Save changes still saves them, and
+ * the leave guard still warns.
  */
 export function usePhotoAutosave({
 	save,
@@ -36,9 +48,19 @@ export function usePhotoAutosave({
 	const [status, setStatus] = useState<PhotoAutosaveStatus>({ kind: "idle" });
 	const inFlight = useRef(false);
 	const pending = useRef<ProductImage[] | null>(null);
+	const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+	// Leaving the page abandons a scheduled retry: the leave guard already
+	// asked, and the seller chose to discard.
+	useEffect(
+		() => () => {
+			if (retryTimer.current) clearTimeout(retryTimer.current);
+		},
+		[],
+	);
 
 	async function run(images: ProductImage[]): Promise<void> {
-		if (inFlight.current) {
+		if (inFlight.current || retryTimer.current) {
 			pending.current = images;
 			return;
 		}
@@ -51,6 +73,19 @@ export function usePhotoAutosave({
 			// once nothing is left waiting.
 			if (pending.current === null) setStatus({ kind: "saved" });
 		} catch (err) {
+			if (isRateLimitError(err)) {
+				// Keep the newest list and try once the window reopens.
+				pending.current = pending.current ?? images;
+				const after = err.data.retryAfter;
+				setStatus({ kind: "waiting", wait: retryWait(after) });
+				retryTimer.current = setTimeout(() => {
+					retryTimer.current = null;
+					const next = pending.current;
+					pending.current = null;
+					if (next) void run(next);
+				}, after + RETRY_MARGIN_MS);
+				return;
+			}
 			// Drop the queue too: it would hit the same refusal, and Save changes
 			// sends the current list anyway.
 			pending.current = null;

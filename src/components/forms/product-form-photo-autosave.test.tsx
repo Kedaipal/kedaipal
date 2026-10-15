@@ -42,10 +42,12 @@ vi.mock("../../lib/image-upload", () => ({
 	}),
 }));
 const toastFn = vi.fn();
+const toastDismiss = vi.fn();
 vi.mock("sonner", () => ({
 	toast: Object.assign((...args: unknown[]) => toastFn(...args), {
 		success: vi.fn(),
 		error: vi.fn(),
+		dismiss: (...args: unknown[]) => toastDismiss(...args),
 	}),
 }));
 
@@ -62,6 +64,7 @@ beforeEach(() => {
 	generateUploadUrl.mockReset();
 	generateUploadUrl.mockResolvedValue("https://upload.example/u");
 	toastFn.mockReset();
+	toastDismiss.mockReset();
 	vi.mocked(takePickedFiles).mockClear();
 	vi.stubGlobal(
 		"fetch",
@@ -80,12 +83,14 @@ afterEach(() => {
 function renderEdit({
 	onImagesAutosave,
 	saveLock,
+	images = ["s1"],
 }: {
 	onImagesAutosave?: (ids: string[]) => Promise<void>;
 	saveLock?: { reason: string; label: string };
+	images?: string[];
 } = {}) {
 	const unsaved: UnsavedState[] = [];
-	render(
+	const view = render(
 		<ProductForm
 			retailerId={"r1" as never}
 			categoriesLocked={false}
@@ -101,14 +106,18 @@ function renderEdit({
 			initialValues={{
 				name: "Tent wash",
 				kind: "physical",
-				imageStorageIds: ["s1"],
-				imageUrls: ["https://cdn/s1"],
+				imageStorageIds: images,
+				imageUrls: images.map((id) => `https://cdn/${id}`),
 				options: [],
 				variants: [{ optionValues: [], price: 3000, onHand: 5 }],
 			}}
 		/>,
 	);
-	return { unsaved, last: () => unsaved[unsaved.length - 1] };
+	return {
+		unsaved,
+		last: () => unsaved[unsaved.length - 1],
+		unmount: view.unmount,
+	};
 }
 
 function saveButton() {
@@ -199,6 +208,48 @@ describe("ProductForm edit — photo-only changes (z8r3fdtk82)", () => {
 		expect(
 			screen.getAllByRole("button", { name: "Remove image" }),
 		).toHaveLength(1);
+	});
+
+	it("two removals keep two Undos, and each puts back only its own photo, where it was (PR #371 review)", async () => {
+		const autosave = vi.fn().mockResolvedValue(undefined);
+		renderEdit({
+			onImagesAutosave: autosave,
+			images: ["s1", "s2", "s3"],
+		});
+		// Remove the FIRST photo, then the (new) first again — s1 then s2.
+		await act(async () => {
+			fireEvent.click(
+				screen.getAllByRole("button", { name: "Remove image" })[0],
+			);
+		});
+		await act(async () => {
+			fireEvent.click(
+				screen.getAllByRole("button", { name: "Remove image" })[0],
+			);
+		});
+		const removals = toastFn.mock.calls.filter(
+			(c) => c[0] === "Photo removed.",
+		);
+		expect(removals).toHaveLength(2);
+		// Distinct ids: the second toast no longer replaces the first's Undo.
+		expect(removals[0][1].id).not.toBe(removals[1][1].id);
+		// Undo the FIRST removal: s1 comes back at the front, s2 stays removed.
+		await act(async () => {
+			removals[0][1].action.onClick();
+		});
+		expect(autosave).toHaveBeenLastCalledWith(["s1", "s3"]);
+	});
+
+	it("leaving the page takes the Undo toasts with it", async () => {
+		const autosave = vi.fn().mockResolvedValue(undefined);
+		const { unmount } = renderEdit({ onImagesAutosave: autosave });
+		await act(async () => {
+			fireEvent.click(screen.getByRole("button", { name: "Remove image" }));
+		});
+		const id = toastFn.mock.calls[0][1].id;
+		unmount();
+		// An Undo from another page would write a list this form no longer shows.
+		expect(toastDismiss).toHaveBeenCalledWith(id);
 	});
 
 	it("a failed autosave keeps the photo as an unsaved change Save can still send", async () => {
