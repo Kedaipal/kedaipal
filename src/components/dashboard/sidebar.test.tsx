@@ -225,3 +225,43 @@ describe("hidden controls are out of the focus order, not just invisible (PR #36
 		expect(live(open.container)).toEqual(["meta"]);
 	});
 });
+
+// jsdom has no layout, so this pins the flex contract that makes a short
+// window work: on a laptop-height screen an admin's 14 links outgrow the rail,
+// and before this every overflow-hidden row flex-shrank instead — the tier
+// pill to a sliver, the links to 2px — while the footer fell off-screen.
+describe("a short window scrolls the link list; the chrome never squashes", () => {
+	it("header, tier pill and footer keep their height; only the nav gives", () => {
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} isAdmin />,
+		);
+		const rows = Array.from(asideOf(container).children) as HTMLElement[];
+		const nav = rows.find((el) => el.tagName === "NAV");
+		const chrome = rows.filter((el) => el !== nav);
+		expect(chrome).toHaveLength(3);
+		for (const row of chrome) expect(row.classList).toContain("shrink-0");
+
+		expect(nav?.classList).toContain("min-h-0");
+		expect(nav?.classList).toContain("overflow-y-auto");
+		// The links are overflow-hidden too — without this they squash, not scroll.
+		expect(nav?.classList).toContain("*:shrink-0");
+	});
+
+	it("the 68px rail hides its scrollbar so an always-shown one can't push icons off-centre", () => {
+		collapsed = true;
+		const rail = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} isAdmin />,
+		);
+		expect(rail.container.querySelector("nav")?.className).toContain(
+			"[scrollbar-width:none]",
+		);
+		cleanup();
+		collapsed = false;
+		const open = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} isAdmin />,
+		);
+		expect(open.container.querySelector("nav")?.className).toContain(
+			"[scrollbar-width:thin]",
+		);
+	});
+});
