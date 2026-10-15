@@ -145,4 +145,17 @@ describe("counterPrimaryAction", () => {
 			counterPrimaryAction({ ...base, mode: "counter" }).helper,
 		).toBeUndefined();
 	});
+
+	test("a CLOSED counter blocks both modes, outranks every cart reason, and is READ not hovered (z8r3fdudf7)", () => {
+		const closed =
+			"Kedaipal has paused ordering at your store, so the counter can't take orders either.";
+		for (const mode of ["counter", "send"] as const) {
+			// Even an empty cart: "add an item" would send them to do work
+			// that can't end in an order.
+			const a = counterPrimaryAction({ ...base, mode, empty: true, closed });
+			expect(a.disabled).toBe(true);
+			expect(a.reason).toBe(closed);
+			expect(a.helper).toBe(closed);
+		}
+	});
 });

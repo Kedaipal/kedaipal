@@ -13,6 +13,7 @@ import {
 	ShoppingBag,
 	Siren,
 	Store,
+	Tag,
 	Ticket,
 	Users,
 } from "lucide-react";
@@ -180,6 +181,26 @@ export function Sidebar({
 								label="Products"
 								collapsed={collapsed}
 								motion={motion}
+							/>
+						) : null}
+						{/* Promotions (z8r3fducfd) — bulk sale prices. Right after
+						    Products because it IS catalogue pricing (the `products`
+						    area), and its own entry rather than a tab of Vouchers: a
+						    sale price changes a product before checkout, a voucher is a
+						    code redeemed at it. SETTING one is Pro, so the badge marks
+						    the page — but the route is never walled: a downgraded store
+						    must still be able to see and end the sales it set. */}
+						{productsPerm.canRead ? (
+							<SidebarLink
+								to="/app/promotions"
+								icon={Tag}
+								label="Promotions"
+								collapsed={collapsed}
+								motion={motion}
+								pro={
+									!retailer.actingAsAdmin &&
+									!hasFeature(retailer.subscription, "promo")
+								}
 							/>
 						) : null}
 						{ordersPerm.canRead ? (

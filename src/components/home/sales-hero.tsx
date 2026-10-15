@@ -38,6 +38,7 @@ export function SalesHero({
 	lastWeekdayName,
 	lastWeekdayEarned,
 	insightsSearch,
+	className,
 }: {
 	view: HomeSalesView;
 	currency: string;
@@ -54,6 +55,14 @@ export function SalesHero({
 	lastWeekdayName?: string;
 	lastWeekdayEarned?: number | null;
 	insightsSearch: InsightsRangeSearch;
+	/** Layout from the board — the Home rail stretches the hero to its own
+	 * height (`lg:flex-1`), but ONLY when the chart is drawn. The chart is the
+	 * one part built to grow: its bar row is `lg:flex-1` and the stats and the
+	 * Insights link are `mt-auto`, so extra height lands as taller bars. Without
+	 * the chart (a gated store, `bars.length <= 1`) nothing can absorb it, and a
+	 * stretched card is a dark slab with a void between the figures and the
+	 * stats — so the board leaves that hero at its own height. */
+	className?: string;
 }) {
 	const { period, earned, collected, orderCount, aov, uncollected } = view;
 	const delta = deltaPercent({
@@ -85,7 +94,12 @@ export function SalesHero({
 		// two: the FIGURES on the left (what a seller reads first) and the chart
 		// beside them, wider, because a week of bars needs the room — stretched
 		// full width, six quiet days start looking like a broken axis.
-		<section className="relative flex flex-col gap-[18px] overflow-hidden rounded-3xl bg-foreground p-5 text-background lg:flex-row lg:flex-wrap lg:gap-7 lg:p-6">
+		<section
+			className={cn(
+				"relative flex flex-col gap-[18px] overflow-hidden rounded-3xl bg-foreground p-5 text-background lg:flex-row lg:flex-wrap lg:gap-7 lg:p-6",
+				className,
+			)}
+		>
 			<div
 				aria-hidden="true"
 				className="pointer-events-none absolute -right-12 -top-14 size-[200px] rounded-full bg-accent/30 blur-[44px]"
@@ -241,10 +255,12 @@ export function SalesHero({
 					</Link>
 				</div>
 			) : (
+				// No chart: the link sits at the FOOT beside the stats, not centred
+				// against the figures, so it reads as the card's last line.
 				<Link
 					to="/app/insights"
 					search={insightsSearch}
-					className="relative -mb-1 flex min-h-11 items-center justify-between gap-2 text-sm font-bold text-accent hover:underline"
+					className="relative -mb-1 flex min-h-11 items-center justify-between gap-2 text-sm font-bold text-accent hover:underline lg:self-end"
 				>
 					Open full Insights
 					<ChevronRight className="size-4 shrink-0" aria-hidden="true" />

@@ -121,8 +121,14 @@ function FeaturedProductInner({
 			    padding — the row sat 20px out of line with the search bar and
 			    grid. scroll-padding moves the snapport in to match. (The
 			    trailing edge was always fine; only the snapped rest position
-			    was wrong.) */}
-			<div className="-mx-5 mt-2 flex snap-x scroll-pl-5 gap-3 overflow-x-auto px-5 pb-1 [scrollbar-width:none] lg:-mx-8 lg:scroll-pl-8 lg:px-8 [&::-webkit-scrollbar]:hidden">
+			    was wrong.)
+
+			    `pt-3 pb-3` is load-bearing too: overflow-x: auto clips the Y axis
+			    as well, so a live flash-sale card's pulse (12px, styles.css
+			    kp-flash-glow) was cut off top and bottom and only breathed left
+			    and right. The negative margins give the room back to the layout:
+			    the cards still sit 8px under the heading and 4px above the grid. */}
+			<div className="-mx-5 -mt-1 -mb-2 flex snap-x scroll-pl-5 gap-3 overflow-x-auto px-5 pt-3 pb-3 [scrollbar-width:none] lg:-mx-8 lg:scroll-pl-8 lg:px-8 [&::-webkit-scrollbar]:hidden">
 				{featured.map((product, index) => (
 					<div
 						key={product._id}

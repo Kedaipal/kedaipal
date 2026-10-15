@@ -12,6 +12,11 @@ import {
 	ProductPageView,
 } from "../components/storefront/product-page";
 import { OrderingPausedProvider } from "../components/storefront/seasonal-break";
+import {
+	StoreUnavailable,
+	type StoreUnavailableLoaderData,
+	storeUnavailableHead,
+} from "../components/storefront/store-unavailable";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
@@ -59,7 +64,9 @@ interface ProductLoaderData {
  * routing trick as the category + checkout pages ($slug.tsx is a leaf).
  */
 export const Route = createFileRoute("/$slug_/p/$productSlug")({
-	loader: async ({ params }): Promise<ProductLoaderData | null> => {
+	loader: async ({
+		params,
+	}): Promise<ProductLoaderData | StoreUnavailableLoaderData | null> => {
 		const client = getConvexHttpClient();
 		const retailerRead = await ssrRead(() =>
 			client.query(api.retailers.getRetailerBySlug, { slug: params.slug }),
@@ -81,6 +88,11 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 		if (result.status === "notFound") {
 			throw notFound();
 		}
+		// Taken offline by Kedaipal (z8r3fdudf7): no store data to preload —
+		// the component renders the neutral unavailable page, and head()
+		// takes it out of search in the SSR HTML.
+		if (result.status === "unavailable")
+			return { unavailable: true, storeName: result.storeName };
 		const retailer = result.retailer;
 
 		// Unknown, archived, hidden or category-suppressed → 404, never a leak.
@@ -133,6 +145,8 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 	},
 	head: ({ loaderData }) => {
 		if (!loaderData) return {};
+		if ("unavailable" in loaderData)
+			return storeUnavailableHead(loaderData.storeName);
 		const {
 			storeName,
 			productName,
@@ -322,6 +336,9 @@ function ProductRoute() {
 	// The store/category pages deliberately DON'T gate on this: their CartBar
 	// degrades additively ("Empty" → filled), and holding the catalog on
 	// localStorage would be a worse trade.
+	if (result?.status === "unavailable") {
+		return <StoreUnavailable storeName={result.storeName} />;
+	}
 	if (!retailer || product === undefined || !cart.hydrated) {
 		return <ProductSkeleton />;
 	}
@@ -338,7 +355,10 @@ function ProductRoute() {
 		// bar publishes its measured height as --storefront-bar-h, so the
 		// reservation is exact rather than a guess with dead space under the
 		// badge. The fallback only applies for the frame before first measure.
-		<OrderingPausedProvider paused={retailer.orderingPaused === true}>
+		<OrderingPausedProvider
+			paused={retailer.orderingPaused === true}
+			pausedBy={retailer.orderingPausedBy}
+		>
 			<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-[var(--storefront-bar-h,12rem)] lg:pb-10">
 				<ProductPageView
 					product={product}

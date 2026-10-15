@@ -70,6 +70,14 @@ export function useAreaLock(
 		 * hasn't loaded yet never flashes disabled.
 		 */
 		creditOrder?: { creditSeq?: number; creditGated?: boolean } | null;
+		/**
+		 * The control stays live on a LAPSED (view-only) store — the permission
+		 * grant still applies. Only for a switch that winds the store DOWN: the
+		 * seller's "Accepting orders" toggle (Zaki, 15 Oct 2026), because a
+		 * lapsed store keeps taking orders and pausing is the way to stop that.
+		 * The server's `sellerLockCoverage.test.ts` entry is the other half.
+		 */
+		openWhenLapsed?: boolean;
 	},
 ): {
 	readOnly: boolean;
@@ -79,7 +87,8 @@ export function useAreaLock(
 	const store = useStoreLock();
 	const gate = useCreditGate();
 	const { canWrite, role } = usePermission(area);
-	if (store.readOnly) return { ...store, cause: "subscription" };
+	if (store.readOnly && !opts?.openWhenLapsed)
+		return { ...store, cause: "subscription" };
 	// The SUBSCRIPTION lock is checked first and wins: it is the store-wide
 	// fact, it blocks the owner too, and a seller whose plan lapsed must not be
 	// told to buy credits (the two gates compose without double-messaging —
@@ -103,7 +112,9 @@ export function useAreaLock(
 			reason: writeBlockReason(area),
 			cause: "permission",
 		};
-	return { ...store, cause: null };
+	// `readOnly: false` spelled out: with `openWhenLapsed` a lapsed store
+	// reaches here, and the store lock's own flag must not leak through.
+	return { ...store, readOnly: false, cause: null };
 }
 
 /** The few words a greyed-out primary control carries after its label
