@@ -88,6 +88,7 @@ import {
 	SettingsColumns,
 	SettingsSection,
 } from "../components/settings/settings-primitives";
+import { StoreStatusCard } from "../components/settings/store-status-card";
 import { TeamTab } from "../components/settings/team-tab";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
@@ -781,204 +782,219 @@ function SettingsRoute() {
 					</h2>
 					{activeTab === "store" ? (
 						<AreaGate area="store_settings">
-							{/* 10A: four sections ordered by how often they're touched.
-						    Identity + Brand on the left, the set-once account
-						    sections on the right (xl and up; one column below). */}
-							<SettingsColumns
-								left={
-									<>
-										<SettingsSection label="Identity">
-											<Card>
-												<StoreNameForm
-													current={retailer.storeName}
-													onSave={(storeName) => updateSettings({ storeName })}
-												/>
-											</Card>
-											{slugRenameForm}
-											<Card>
-												<SectionHeading
-													title="Description & store type"
-													description="What buyers read under your name, and the type new products start as."
-													glance={
-														<Glance tone="grey">
-															{[
-																retailer.storeDescription?.trim()
-																	? "Set"
-																	: "No description",
-																retailer.storeType
-																	? STORE_TYPE_SHORT[retailer.storeType]
-																	: null,
-															]
-																.filter(Boolean)
-																.join(" · ")}
-														</Glance>
-													}
-												/>
-												<StoreDescriptionForm
-													current={retailer.storeDescription ?? ""}
-													onSave={(storeDescription) =>
-														updateSettings({ storeDescription })
-													}
-												/>
-												<div className="border-t border-border/60 pt-4">
-													<StoreTypeForm
-														current={retailer.storeType}
-														onSave={(storeType) =>
-															updateSettings({ storeType })
+							<div className="flex flex-col gap-6">
+								{/* FIRST on the tab, full width above the columns
+								    (z8r3fdudf7): whether the store takes orders at all
+								    is the most consequential setting here. */}
+								<Card>
+									<StoreStatusCard
+										retailerId={retailer._id}
+										storeName={retailer.storeName}
+									/>
+								</Card>
+								{/* 10A: four sections ordered by how often they're touched.
+								    Identity + Brand on the left, the set-once account
+								    sections on the right (xl and up; one column below). */}
+								<SettingsColumns
+									left={
+										<>
+											<SettingsSection label="Identity">
+												<Card>
+													<StoreNameForm
+														current={retailer.storeName}
+														onSave={(storeName) =>
+															updateSettings({ storeName })
 														}
 													/>
-												</div>
-											</Card>
-											{/* The directory card is built from the name, description
-										    and area above — it belongs with them. */}
-											<Card
-												id={SPOTLIGHT_ANCHOR.store_listing.anchor}
-												highlight={ringFor(
-													SPOTLIGHT_ANCHOR.store_listing.anchor,
-												)}
-											>
-												<MarketplaceCard
-													storeName={retailer.storeName}
-													unlisted={retailer.marketplaceUnlisted === true}
-													area={retailer.storeArea ?? ""}
-													readiness={listingReadiness}
-													onSave={(patch) => updateSettings(patch)}
-												/>
-											</Card>
-										</SettingsSection>
-										<SettingsSection label="Brand">
-											<Card>
-												<SectionHeading
-													title="Logo & cover image"
-													description="How your storefront header looks — and the preview when you share your link."
-													glance={
-														retailer.logoUrl && retailer.coverImageUrl ? (
-															<Glance>Both set</Glance>
-														) : retailer.logoUrl || retailer.coverImageUrl ? (
+												</Card>
+												{slugRenameForm}
+												<Card>
+													<SectionHeading
+														title="Description & store type"
+														description="What buyers read under your name, and the type new products start as."
+														glance={
 															<Glance tone="grey">
-																{retailer.logoUrl ? "Logo only" : "Cover only"}
+																{[
+																	retailer.storeDescription?.trim()
+																		? "Set"
+																		: "No description",
+																	retailer.storeType
+																		? STORE_TYPE_SHORT[retailer.storeType]
+																		: null,
+																]
+																	.filter(Boolean)
+																	.join(" · ")}
 															</Glance>
-														) : (
-															<Glance tone="grey">Not set</Glance>
-														)
-													}
-												/>
-												<LogoForm
-													currentLogoUrl={retailer.logoUrl}
-													onSave={(logoStorageId) =>
-														updateSettings({ logoStorageId })
-													}
-												/>
-												<div className="border-t border-border/60 pt-4">
-													<CoverImageForm
-														currentCoverUrl={retailer.coverImageUrl}
-														onSave={(coverImageStorageId) =>
-															updateSettings({ coverImageStorageId })
 														}
 													/>
-												</div>
-											</Card>
-										</SettingsSection>
-									</>
-								}
-								right={
-									<>
-										{/* Every field here is owner-only on the server, so a
+													<StoreDescriptionForm
+														current={retailer.storeDescription ?? ""}
+														onSave={(storeDescription) =>
+															updateSettings({ storeDescription })
+														}
+													/>
+													<div className="border-t border-border/60 pt-4">
+														<StoreTypeForm
+															current={retailer.storeType}
+															onSave={(storeType) =>
+																updateSettings({ storeType })
+															}
+														/>
+													</div>
+												</Card>
+												{/* The directory card is built from the name, description
+										    and area above — it belongs with them. */}
+												<Card
+													id={SPOTLIGHT_ANCHOR.store_listing.anchor}
+													highlight={ringFor(
+														SPOTLIGHT_ANCHOR.store_listing.anchor,
+													)}
+												>
+													<MarketplaceCard
+														storeName={retailer.storeName}
+														unlisted={retailer.marketplaceUnlisted === true}
+														area={retailer.storeArea ?? ""}
+														readiness={listingReadiness}
+														onSave={(patch) => updateSettings(patch)}
+													/>
+												</Card>
+											</SettingsSection>
+											<SettingsSection label="Brand">
+												<Card>
+													<SectionHeading
+														title="Logo & cover image"
+														description="How your storefront header looks — and the preview when you share your link."
+														glance={
+															retailer.logoUrl && retailer.coverImageUrl ? (
+																<Glance>Both set</Glance>
+															) : retailer.logoUrl || retailer.coverImageUrl ? (
+																<Glance tone="grey">
+																	{retailer.logoUrl
+																		? "Logo only"
+																		: "Cover only"}
+																</Glance>
+															) : (
+																<Glance tone="grey">Not set</Glance>
+															)
+														}
+													/>
+													<LogoForm
+														currentLogoUrl={retailer.logoUrl}
+														onSave={(logoStorageId) =>
+															updateSettings({ logoStorageId })
+														}
+													/>
+													<div className="border-t border-border/60 pt-4">
+														<CoverImageForm
+															currentCoverUrl={retailer.coverImageUrl}
+															onSave={(coverImageStorageId) =>
+																updateSettings({ coverImageStorageId })
+															}
+														/>
+													</div>
+												</Card>
+											</SettingsSection>
+										</>
+									}
+									right={
+										<>
+											{/* Every field here is owner-only on the server, so a
 									    teammate reads it with the reason instead of
 									    meeting a refused save. */}
-										<SettingsSection label="Business & country">
-											<AreaGate area="store_settings" ownerOnly>
-												<div className="flex flex-col gap-4">
-													<Card
-														id={SPOTLIGHT_ANCHOR.business_details.anchor}
-														highlight={ringFor(
-															SPOTLIGHT_ANCHOR.business_details.anchor,
-														)}
-													>
-														<BusinessIdentityForm
-															current={retailer.businessIdentity}
-															country={retailer.country}
-															onSave={(businessIdentity) =>
-																updateSettings({ businessIdentity })
-															}
-														/>
-													</Card>
-													<Card
-														id={SPOTLIGHT_ANCHOR.store_country.anchor}
-														highlight={ringFor(
-															SPOTLIGHT_ANCHOR.store_country.anchor,
-														)}
-													>
-														<SectionHeading
-															title="Country & currency"
-															description="Where your store operates and the currency it prices in."
-															glance={
-																<Glance tone="grey">
-																	{retailer.country} ·{" "}
-																	{currencySymbol(retailer.currency)}
-																</Glance>
-															}
-														/>
-														<CountryForm
-															current={retailer.country}
-															currency={retailer.currency}
-															deliveryConfig={retailer.deliveryConfig}
-															deliveryBooking={retailer.deliveryBooking}
-															waPhone={retailer.waPhone}
-															notifyWaPhone={retailer.notifyWaPhone}
-															onSave={(patch) => updateSettings(patch)}
-														/>
-														{/* Directly under the picker, so "what did that just
-													    do?" is answered where the question was asked.
-													    Renders nothing for a store that never switched. */}
-														<CountrySetupPanel
-															onGoToFix={(tab, key) =>
-																navigate({ search: { tab, fix: key } })
-															}
-														/>
-														<div className="border-t border-border/60 pt-4">
-															<CurrencyForm
-																current={retailer.currency}
-																onSave={(currency) =>
-																	updateSettings({ currency })
+											<SettingsSection label="Business & country">
+												<AreaGate area="store_settings" ownerOnly>
+													<div className="flex flex-col gap-4">
+														<Card
+															id={SPOTLIGHT_ANCHOR.business_details.anchor}
+															highlight={ringFor(
+																SPOTLIGHT_ANCHOR.business_details.anchor,
+															)}
+														>
+															<BusinessIdentityForm
+																current={retailer.businessIdentity}
+																country={retailer.country}
+																onSave={(businessIdentity) =>
+																	updateSettings({ businessIdentity })
 																}
 															/>
-														</div>
-													</Card>
-												</div>
-											</AreaGate>
-										</SettingsSection>
-										<SettingsSection label="Alerts & defaults">
-											<Card
-												id={SETTINGS_ANCHOR.notify_wa_phone}
-												highlight={ringFor(SETTINGS_ANCHOR.notify_wa_phone)}
-											>
-												<OrderAlertsCard
-													whatsapp={
-														retailer.waOrderAlertsAvailable
-															? {
-																	enabled: retailer.orderWaAlerts === true,
-																	currentPhone: retailer.notifyWaPhone ?? "",
-																	fallbackPhone: retailer.waPhone ?? "",
-																	optedOut:
-																		retailer.notifyWaPhoneOptedOut === true,
-																	canUse: hasFeature(
-																		retailer.subscription,
-																		"waOrderAlerts",
-																	),
+														</Card>
+														<Card
+															id={SPOTLIGHT_ANCHOR.store_country.anchor}
+															highlight={ringFor(
+																SPOTLIGHT_ANCHOR.store_country.anchor,
+															)}
+														>
+															<SectionHeading
+																title="Country & currency"
+																description="Where your store operates and the currency it prices in."
+																glance={
+																	<Glance tone="grey">
+																		{retailer.country} ·{" "}
+																		{currencySymbol(retailer.currency)}
+																	</Glance>
 																}
-															: undefined
-													}
-													notifyEmail={retailer.notifyEmail ?? ""}
-													country={retailer.country}
-													canEditAccount={storePerm.role !== "member"}
-													onSave={(patch) => updateSettings(patch)}
-												/>
-											</Card>
-										</SettingsSection>
-									</>
-								}
-							/>
+															/>
+															<CountryForm
+																current={retailer.country}
+																currency={retailer.currency}
+																deliveryConfig={retailer.deliveryConfig}
+																deliveryBooking={retailer.deliveryBooking}
+																waPhone={retailer.waPhone}
+																notifyWaPhone={retailer.notifyWaPhone}
+																onSave={(patch) => updateSettings(patch)}
+															/>
+															{/* Directly under the picker, so "what did that just
+													    do?" is answered where the question was asked.
+													    Renders nothing for a store that never switched. */}
+															<CountrySetupPanel
+																onGoToFix={(tab, key) =>
+																	navigate({ search: { tab, fix: key } })
+																}
+															/>
+															<div className="border-t border-border/60 pt-4">
+																<CurrencyForm
+																	current={retailer.currency}
+																	onSave={(currency) =>
+																		updateSettings({ currency })
+																	}
+																/>
+															</div>
+														</Card>
+													</div>
+												</AreaGate>
+											</SettingsSection>
+											<SettingsSection label="Alerts & defaults">
+												<Card
+													id={SETTINGS_ANCHOR.notify_wa_phone}
+													highlight={ringFor(SETTINGS_ANCHOR.notify_wa_phone)}
+												>
+													<OrderAlertsCard
+														whatsapp={
+															retailer.waOrderAlertsAvailable
+																? {
+																		enabled: retailer.orderWaAlerts === true,
+																		currentPhone: retailer.notifyWaPhone ?? "",
+																		fallbackPhone: retailer.waPhone ?? "",
+																		optedOut:
+																			retailer.notifyWaPhoneOptedOut === true,
+																		canUse: hasFeature(
+																			retailer.subscription,
+																			"waOrderAlerts",
+																		),
+																	}
+																: undefined
+														}
+														notifyEmail={retailer.notifyEmail ?? ""}
+														country={retailer.country}
+														canEditAccount={storePerm.role !== "member"}
+														onSave={(patch) => updateSettings(patch)}
+													/>
+												</Card>
+											</SettingsSection>
+										</>
+									}
+								/>
+							</div>
 						</AreaGate>
 					) : null}
 

@@ -284,6 +284,13 @@ first**. Not a trial with a deadline: the order is the trigger, the day-14
 
 ### Off-Season Hold — pause between seasons for RM19 / S$9
 
+> **Not the only way to stop orders any more** (`z8r3fdudf7`). A seller who
+> just wants to close for a while uses Settings → Store → **Store status**,
+> which never touches billing and works on every plan, trials and comps
+> included. Kedaipal can pause a store or take it offline from the admin
+> console. The hold's `orderingPausedAt` is one of three stamps the
+> availability resolver reads. See [store-availability.md](./store-availability.md).
+
 A **subscription status (`on_hold`), never a Plan** (`HOLD_MONTHLY_PRICES` in
 `lib/plans.ts`; the `Plan` union, `PLANS` and the feature matrix are untouched).
 `plan` keeps the tier the seller resumes to.

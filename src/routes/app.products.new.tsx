@@ -6,6 +6,7 @@ import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { UnsavedChangesGuard } from "../components/app/unsaved-changes-guard";
 import { ViewOnlyNote } from "../components/app/view-only-note";
 import { PageHeader } from "../components/dashboard/page-header";
 import {
@@ -23,6 +24,7 @@ import { Button } from "../components/ui/button";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { lockLabel, useAreaLock } from "../hooks/useStoreLock";
 import { isKindCard, type KindCard } from "../lib/kind-card";
+import type { UnsavedState } from "../lib/product-form-dirty";
 import { hasFeature } from "../lib/subscription";
 
 /**
@@ -76,6 +78,12 @@ function NewProductRoute() {
 	// Set once the product row exists — makes a post-create failure (categories)
 	// retryable without minting a second product.
 	const createdProductId = useRef<Id<"products"> | null>(null);
+	// What leaving would lose, reported by whichever view is showing — one
+	// guard covers the wizard and the full form (z8r3fdtk82).
+	const [unsaved, setUnsaved] = useState<UnsavedState>("none");
+	// Whether the wizard draft handed to the full form held anything. A
+	// handoff is unsaved work only if the seller had typed something.
+	const [handoffDirty, setHandoffDirty] = useState(false);
 	// Can't create right now — view-only, out of credits (Credits T3), or a
 	// teammate with view on products. Unlike the cap wall below, the wizard
 	// and form stay usable: a lock can lift in minutes (a top-up), and a draft
@@ -150,11 +158,13 @@ function NewProductRoute() {
 		// is not always the obvious first row — "it saved" should not have to be
 		// inferred from spotting it.
 		toast.success("Product created.");
-		navigate({ to: "/app/products" });
+		// It's saved, so the leave guard has nothing to protect.
+		navigate({ to: "/app/products", ignoreBlocker: true });
 	}
 
 	function openFullForm(handoff: ReturnType<typeof wizardHandoff>) {
 		setWizardDraft(handoff);
+		setHandoffDirty(unsaved !== "none");
 		navigate({
 			to: "/app/products/new",
 			search: { form: "full" },
@@ -205,6 +215,7 @@ function NewProductRoute() {
 	if (form !== "full") {
 		return (
 			<div className="flex flex-col gap-4 lg:max-w-2xl">
+				<UnsavedChangesGuard state={unsaved} />
 				<ViewOnlyNote />
 				<ProductWizard
 					retailerId={retailer._id}
@@ -223,7 +234,9 @@ function NewProductRoute() {
 					onSubmit={handleCreate}
 					onSkipToFullForm={openFullForm}
 					onOpenFullForm={openFullForm}
-					onExit={() => navigate({ to: "/app/products" })}
+					// The wizard confirms a discard itself before calling this.
+					onExit={() => navigate({ to: "/app/products", ignoreBlocker: true })}
+					onUnsavedChange={setUnsaved}
 				/>
 			</div>
 		);
@@ -231,6 +244,7 @@ function NewProductRoute() {
 
 	return (
 		<div className="flex flex-col gap-4 lg:max-w-2xl">
+			<UnsavedChangesGuard state={unsaved} />
 			<PageHeader
 				title="New product"
 				back={{ to: "/app/products", label: "Products" }}
@@ -273,6 +287,8 @@ function NewProductRoute() {
 				}}
 				offerSelfCollect={retailer.offerSelfCollect !== false}
 				saveLock={saveLock}
+				startsDirty={handoffDirty}
+				onUnsavedChange={setUnsaved}
 				onSubmit={handleCreate}
 			/>
 		</div>

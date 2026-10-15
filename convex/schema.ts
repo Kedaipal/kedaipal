@@ -7,6 +7,7 @@ import {
 } from "./lib/buyerQuestions";
 import { countryValidator } from "./lib/country";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
+import { showcaseThemeValidator } from "./lib/showcase";
 import { memberPermissionsValidator } from "./lib/permissions";
 
 /**
@@ -1026,6 +1027,52 @@ export default defineSchema({
 		.index("by_user", ["userId"])
 		.index("by_email", ["email"])
 		.index("by_token", ["inviteTokenHash"]),
+
+	// --- Marketplace showcases (z8r3fdr6mv, docs/marketplace-home.md) ------
+	// An admin-curated, time-boxed section at the top of kedaipal.com/stores:
+	// "Malaysia Campfest 2026" with the stores at the event grouped under it.
+	// One row per showcase; its members ride along as a CAPPED array
+	// (SHOWCASE_MEMBER_CAP in lib/showcase.ts) — a bazaar with more Kedaipal
+	// stores than that is a second showcase, so the document stays bounded.
+	//
+	// The window is read-time (`lib/showcase.ts` showcaseState): no cron takes
+	// a showcase down, the next render after `endsAt` simply drops it.
+	// `publishedAt` unset = draft, never shown whatever the dates say. `slug` is
+	// the `/stores?showcase=` handle, derived from the title ONCE at create and
+	// never rewritten (a printed booth QR must survive a title edit). Member
+	// rows carry no listing state of their own: whether a member actually
+	// SHOWS still goes through the directory's one listable rule, joined by
+	// slug on the client, so nothing here can leak a store the directory hides.
+	marketplaceShowcases: defineTable({
+		slug: v.string(),
+		title: v.string(),
+		tagline: v.optional(v.string()),
+		country: countryValidator,
+		theme: showcaseThemeValidator,
+		// `#rrggbb` — the colour-wheel pick for the `custom` look. Kept when
+		// the admin switches to another look, so switching back restores it.
+		customColor: v.optional(v.string()),
+		// A Convex storage id (string, like retailers.coverImageStorageId);
+		// unset = the theme's own art carries the banner.
+		coverImageStorageId: v.optional(v.string()),
+		startsAt: v.optional(v.number()),
+		endsAt: v.optional(v.number()),
+		publishedAt: v.optional(v.number()),
+		// Position on /stores among the live showcases, ascending; the admin
+		// list's drag-to-reorder rewrites these.
+		sortOrder: v.number(),
+		members: v.array(
+			v.object({
+				retailerId: v.id("retailers"),
+				// "Booth B4" — the one per-store fact a showcase adds.
+				label: v.optional(v.string()),
+			}),
+		),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_slug", ["slug"])
+		.index("by_sortOrder", ["sortOrder"]),
 
 	slugHistory: defineTable({
 		oldSlug: v.string(),
@@ -3010,6 +3057,121 @@ export default defineSchema({
 		.index("by_retailer_status", ["retailerId", "status"])
 		// The list's default order (newest first) and the batch grouping.
 		.index("by_retailer_created", ["retailerId", "createdAt"]),
+
+	/**
+	 * A bulk promotion (`z8r3fducfd`) — ONE set of terms (percent off, window,
+	 * label, flash extras) applied to many products, edited and ended as one.
+	 *
+	 * The promotion is the GROUPING and EDIT handle, never a second pricing
+	 * path: its writes fan out to each member product's `products.promo` and
+	 * its variants' `promoPrice`, and `convex/lib/promo.ts` stays the one
+	 * read-time authority. Membership lives in `promotionMembers`, not as a
+	 * field on `products`, so a product row never carries anything a branch
+	 * without this feature doesn't declare (the shared-dev-deployment rule).
+	 * See docs/promo-price.md#promotions-bulk.
+	 */
+	promotions: defineTable({
+		retailerId: v.id("retailers"),
+		// Badge label; render-time default "Promo" (≤20 chars, sanitizePromo).
+		label: v.optional(v.string()),
+		// What the review step's prices were computed from. Display + the
+		// default for products added later; the stored per-variant prices on
+		// each member are what actually applies.
+		percentOff: v.number(),
+		// The shared window (ms epoch). Unset start = runs from when it was
+		// applied; unset end = a plain discount (no countdown).
+		startsAt: v.optional(v.number()),
+		endsAt: v.optional(v.number()),
+		// Flash extras, per PRODUCT (the unit cap is each product's own pool —
+		// the tally keys on productId + runId). Skipped on booking/event members.
+		unitCap: v.optional(v.number()),
+		maxPerOrder: v.optional(v.number()),
+		payWithinMinutes: v.optional(v.number()),
+		// Products it holds (or, once ended, ran on) — kept on the row so the
+		// Promotions list reads one document per promotion, never its members.
+		// +1 per product added; −1 per product removed or moved to another
+		// promotion. Ending keeps it: "ran on 12 products" is the history.
+		productCount: v.number(),
+		// Set by "End now". Members are then cleared in batches; the row is
+		// kept as history (and as the source for "Run again").
+		endedAt: v.optional(v.number()),
+		createdByUserId: v.optional(v.string()),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	}).index("by_retailer_created", ["retailerId", "createdAt"]),
+
+	/**
+	 * One product inside a promotion, and the work still owed to it.
+	 *
+	 * `state` is a small queue so a promotion of any size is applied and
+	 * cleared in batches that fit a transaction (200 products × up to 100
+	 * choices each is past a single mutation's write budget):
+	 *   pending  → its prices still have to be written     → applied
+	 *   clearing → the promotion ended / it was removed     → cleared
+	 *   moved    → it joined another promotion (terminal; the new one
+	 *              overwrites the product, so nothing is cleared)
+	 * `cleared` and `moved` rows are kept as history for "Run again".
+	 */
+	promotionMembers: defineTable({
+		promotionId: v.id("promotions"),
+		retailerId: v.id("retailers"),
+		productId: v.id("products"),
+		// The sale price per variant, as reviewed (sen). A variant not listed
+		// is "not on promo" and is written WITHOUT a sale price.
+		prices: v.array(
+			v.object({ variantId: v.id("productVariants"), promoPrice: v.number() }),
+		),
+		state: v.union(
+			v.literal("pending"),
+			v.literal("applied"),
+			v.literal("clearing"),
+			v.literal("cleared"),
+			v.literal("moved"),
+		),
+		// The `products.promo.runId` this promotion last wrote. Clearing only
+		// touches the product while its promo is still this run — a product
+		// the seller has since re-priced by hand is left alone.
+		runId: v.optional(v.string()),
+		// Set when the seller took this product OUT with × — as opposed to
+		// the promotion ending, which clears every member the same way. An
+		// ended promotion's history and its "Run again" are the products it
+		// ENDED on, so a product taken out earlier is left out of both.
+		removedAt: v.optional(v.number()),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_promotion_state", ["promotionId", "state"])
+		.index("by_product", ["productId"])
+		.index("by_retailer", ["retailerId"]),
+
+	/**
+	 * Store availability (`z8r3fdudf7`) — the seller's "Accepting orders"
+	 * switch and Kedaipal's pause / take-offline, ONE row per store that has
+	 * ever used either. Resolved with the Off-Season Hold stamp
+	 * (`retailers.orderingPausedAt`) by `convex/lib/storeAvailability.ts`,
+	 * the one author every order door and surface asks.
+	 *
+	 * Its own table rather than fields on `retailers`: a new field on that row
+	 * poisons the shared dev deployment for every branch without it the moment
+	 * one store uses the feature, and a patch to the retailer row re-runs
+	 * every open storefront subscription. A separate stamp per author (seller,
+	 * admin) so one can never clear the other's.
+	 */
+	storeAvailability: defineTable({
+		retailerId: v.id("retailers"),
+		// Seller pause: buyers browse, can't order; the counter stays open.
+		sellerPausedAt: v.optional(v.number()),
+		// Shown to buyers on the paused banner ("Back on 1 Nov"). ≤140 chars.
+		sellerPauseNote: v.optional(v.string()),
+		// Kedaipal moderation: `paused` = browse-only, counter closed too;
+		// `offline` = storefront gone (neutral unavailable page, off /stores,
+		// off the sitemap). The seller sees the note; buyers never do.
+		adminMode: v.optional(v.union(v.literal("paused"), v.literal("offline"))),
+		adminNote: v.optional(v.string()),
+		adminAt: v.optional(v.number()),
+		adminByUserId: v.optional(v.string()),
+		updatedAt: v.number(),
+	}).index("by_retailer", ["retailerId"]),
 
 	// --- Manual subscription billing (docs/manual-subscription.md) -----------
 	// Per-retailer subscription. One row per retailer (created in-transaction by

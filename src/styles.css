@@ -52,6 +52,17 @@
 	min-width: 2.75rem;
 }
 
+/* A swipe rail scrolls without painting a scrollbar. Phones already overlay
+   theirs; desktop browsers and devtools' phone emulation draw a permanent grey
+   bar under every chip row and card rail. The rail's peek (the next card cut
+   off at the edge) is what tells a buyer there's more, never the bar. */
+@utility scrollbar-none {
+	scrollbar-width: none;
+	&::-webkit-scrollbar {
+		display: none;
+	}
+}
+
 @utility safe-bottom {
 	padding-bottom: env(safe-area-inset-bottom);
 }
@@ -111,23 +122,48 @@
 }
 
 /* A product card on a LIVE flash sale (z8r3fdcw72). A slow mint heartbeat —
-   a halo that breathes out and fades, 2.4s, infinite — to pull the eye across
-   a grid without strobing it. Deliberately gentler and slower than
-   kp-spotlight above, which fires three times and stops: this one runs for as
-   long as the sale does, so it has to be something you can sit next to.
+   a halo that leaves the card and fades, then a beat of rest, 2.4s, infinite —
+   to pull the eye across a grid without strobing it. Deliberately gentler and
+   slower than kp-spotlight above, which fires three times and stops: this one
+   runs for as long as the sale does, so it has to be something you can sit
+   next to.
 
-   The RING is not part of the animation. box-shadow is a single property, so
-   an animation that owned it would erase the ring between pulses — and under
-   `prefers-reduced-motion`, where the animation is switched off entirely, the
-   ring is the whole indication that remains. Hence: ring utility on the
-   element, halo in the keyframes. */
+   OUTWARD ONLY (z8r3fdudm2). The halo's spread never shrinks inside a cycle:
+   it fades in on the ring (2px), travels out to 12px as it fades away, and
+   rests there invisible until the loop restarts. A there-and-back keyframe
+   (0 → 10px → 0) read as the ring being sucked back into the card. The
+   restart is invisible because the halo is fully transparent at both ends.
+
+   The RING is painted by the keyframes too, as kp-spotlight does. Tailwind's
+   `ring-2` is itself a box-shadow, and an animation owns the whole property,
+   so a halo-only keyframe erased the ring for as long as the sale ran. The
+   `ring-2 ring-accent/35` utility stays on the element for
+   `prefers-reduced-motion`, where the animation is off and the ring is the
+   whole indication that remains — this layer matches it exactly.
+
+   12px is a BUDGET, not a taste: it is the grid's `gap-3`, so a halo never
+   paints over the next card, and it is the vertical room the Popular shelf
+   leaves inside its scroller. A horizontal scroller clips on BOTH axes
+   (overflow-x: auto forces overflow-y to clip too), so a shelf with only its
+   side padding showed the pulse left and right and cut it off top and bottom.
+   Any scroller that holds a ProductCard must leave 12px on every side —
+   `flash-glow-keyframes.test.ts` holds the shelf to it. */
 @keyframes kp-flash-glow {
-	0%,
-	100% {
-		box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent) 45%, transparent);
+	0% {
+		box-shadow:
+			0 0 0 2px color-mix(in oklab, var(--accent) 35%, transparent),
+			0 0 0 2px color-mix(in oklab, var(--accent) 0%, transparent);
 	}
-	50% {
-		box-shadow: 0 0 0 10px color-mix(in oklab, var(--accent) 0%, transparent);
+	15% {
+		box-shadow:
+			0 0 0 2px color-mix(in oklab, var(--accent) 35%, transparent),
+			0 0 0 4px color-mix(in oklab, var(--accent) 40%, transparent);
+	}
+	70%,
+	100% {
+		box-shadow:
+			0 0 0 2px color-mix(in oklab, var(--accent) 35%, transparent),
+			0 0 0 12px color-mix(in oklab, var(--accent) 0%, transparent);
 	}
 }
 @utility animate-kp-flash-glow {
@@ -330,6 +366,174 @@
 	background-size: 200px 200px, auto, auto;
 	background-repeat: repeat, no-repeat, no-repeat;
 	background-color: hsl(0 0% 100%);
+}
+
+/* =============================================
+   Marketplace showcases (z8r3fdr6mv) — curated looks
+   =============================================
+   An admin picks a MOOD, never a colour: every theme is a dark ground with
+   light text, so the banner, the ticket's info panel and the compact band read
+   the same in light and dark mode with one text treatment. The palette lives
+   here, as variables on one class, so the components stay on semantic tokens
+   (`bg-[var(--sc-a)]`) and a new theme is one block in this file plus its id
+   in convex/lib/showcase.ts. The ticket "paper" is deliberately NOT a theme
+   variable and does not flip in dark mode — it is a cream ticket in every
+   theme, which is what makes the row read as one pile of tickets.
+   EVERY variable is defined by exactly one class: the base holds what no
+   look changes, each look holds its whole palette. Tailwind orders utilities
+   by how many declarations they carry, not by name, so a variable set in
+   both the base and a look is won by whichever the sort puts later — "No
+   tint" (more declarations) lost its neutral ground to the base's green.
+   `showcase.test.ts` fails if a variable is ever defined twice.
+   The cover scrim reads its strengths from `--sc-scrim-*` (defaults in
+   `bg-showcase-cover-scrim`), so a look can lighten it — "No tint" does. */
+@utility kp-showcase {
+	--sc-paper: hsl(40 100% 97%);
+	--sc-tear: hsl(39 45% 64%);
+	--sc-ink: hsl(28 100% 24%);
+	--sc-ink-soft: hsl(38 79% 34%);
+	--sc-text: hsl(0 0% 100%);
+}
+@utility kp-showcase-campfire {
+	--sc-a: hsl(160 58% 10%);
+	--sc-b: hsl(157 52% 15%);
+	--sc-accent: hsl(43 96% 56%);
+	--sc-accent-fg: hsl(35 100% 12%);
+	--sc-text-soft: hsl(214 32% 83%);
+}
+@utility kp-showcase-festive {
+	--sc-a: hsl(343 71% 17%);
+	--sc-b: hsl(344 66% 32%);
+	--sc-accent: hsl(43 86% 63%);
+	--sc-accent-fg: hsl(35 100% 12%);
+	--sc-text-soft: hsl(214 32% 83%);
+}
+@utility kp-showcase-ocean {
+	--sc-a: hsl(213 73% 16%);
+	--sc-b: hsl(209 70% 25%);
+	--sc-accent: hsl(199 95% 74%);
+	--sc-accent-fg: hsl(213 73% 12%);
+	--sc-text-soft: hsl(214 32% 83%);
+}
+@utility kp-showcase-sunset {
+	--sc-a: hsl(15 84% 19%);
+	--sc-b: hsl(21 90% 40%);
+	--sc-accent: hsl(48 96% 77%);
+	--sc-accent-fg: hsl(20 90% 14%);
+	--sc-text-soft: hsl(214 32% 83%);
+}
+@utility kp-showcase-midnight {
+	--sc-a: hsl(222 47% 11%);
+	--sc-b: hsl(263 83% 23%);
+	--sc-accent: hsl(255 92% 85%);
+	--sc-accent-fg: hsl(263 70% 16%);
+	--sc-text-soft: hsl(214 32% 83%);
+}
+@utility kp-showcase-kedaipal {
+	--sc-a: hsl(222 47% 11%);
+	--sc-b: hsl(160 84% 20%);
+	--sc-accent: hsl(160 84% 60%);
+	--sc-accent-fg: hsl(222 47% 11%);
+	--sc-text-soft: hsl(214 32% 83%);
+}
+/* "No tint": the admin's cover in its own colours. The ground is neutral
+   charcoal (what shows with no cover), and the cover's shade is neutral AND
+   lighter — only enough behind the words to keep white text readable. */
+@utility kp-showcase-plain {
+	--sc-a: hsl(0 0% 7%);
+	--sc-b: hsl(0 0% 16%);
+	--sc-accent: hsl(0 0% 98%);
+	--sc-accent-fg: hsl(0 0% 9%);
+	--sc-text-soft: hsl(0 0% 88%);
+	--sc-scrim-top: 72%;
+	--sc-scrim-mid: 36%;
+	--sc-scrim-foot: 55%;
+	--sc-scrim-left: 84%;
+	--sc-scrim-left-mid: 52%;
+	--sc-scrim-right: 0%;
+	--sc-scrim-edge: 0%;
+}
+/* The colour-wheel look. Its palette is set INLINE from the admin's pick
+   (`customShowcasePalette`, src/lib/showcase-color.ts, which pins the shade);
+   these are only the fallback should a row ever lack its colour. */
+@utility kp-showcase-custom {
+	--sc-a: hsl(160 58% 10%);
+	--sc-b: hsl(157 52% 15%);
+	--sc-accent: hsl(43 96% 56%);
+	--sc-accent-fg: hsl(35 100% 12%);
+	--sc-text-soft: hsl(214 32% 83%);
+}
+
+/* A showcase ticket's die-cut (z8r3fdr6mv): three REAL holes — top and
+   bottom where the stub's perforation meets the edge, and the left end of the
+   tear under the info panel. A mask, not painted circles: a painted notch is
+   only invisible on the one flat colour it was painted in, and the ticket sits
+   on gradients, glows and admin-uploaded cover photos. Each layer is "opaque
+   everywhere except one circle"; `intersect` keeps what every layer keeps.
+   The positions are the ticket's own geometry: the stub is 72px wide with a
+   2px dashed border (line centre 71px from the right), and the info panel is
+   84px tall above a 2px tear (centre at 85px). The shadow cannot be a
+   box-shadow (the mask clips it) — the wrapper casts a `drop-shadow`, which
+   follows the cut outline. */
+@utility kp-ticket-cut {
+	--cut-r: 9px;
+	--cut-x: calc(100% - 71px);
+	--cut-y: 85px;
+	--cut-hole: transparent calc(var(--cut-r) - 0.5px), #000 var(--cut-r);
+	-webkit-mask:
+		radial-gradient(circle var(--cut-r) at var(--cut-x) 0, var(--cut-hole)),
+		radial-gradient(circle var(--cut-r) at var(--cut-x) 100%, var(--cut-hole)),
+		radial-gradient(circle var(--cut-r) at 0 var(--cut-y), var(--cut-hole));
+	-webkit-mask-composite: source-in;
+	mask:
+		radial-gradient(circle var(--cut-r) at var(--cut-x) 0, var(--cut-hole)),
+		radial-gradient(circle var(--cut-r) at var(--cut-x) 100%, var(--cut-hole)),
+		radial-gradient(circle var(--cut-r) at 0 var(--cut-y), var(--cut-hole));
+	mask-composite: intersect;
+}
+
+/* The showcase's dark ground. */
+@utility bg-showcase {
+	background-image: linear-gradient(170deg, var(--sc-a) 0%, var(--sc-b) 100%);
+}
+
+/* A showcase's own cover photo under its title (z8r3fdr6mv). The admin is
+   told "we darken it so the title stays readable" — so the fade is weighted
+   to where the TEXT is: the top on a phone (title, tagline, then the ticket
+   rail), the left column on desktop. The first cut faded to fully
+   transparent mid-banner and a bright campsite photo erased the tagline. */
+@utility bg-showcase-cover-scrim {
+	background-image: linear-gradient(
+		180deg,
+		color-mix(in oklab, var(--sc-a) var(--sc-scrim-top, 88%), transparent) 0%,
+		color-mix(in oklab, var(--sc-a) var(--sc-scrim-mid, 70%), transparent) 45%,
+		color-mix(in oklab, var(--sc-b) var(--sc-scrim-foot, 82%), transparent) 100%
+	);
+}
+/* The desktop stage's fade (title column on the left). A separate utility
+   applied with `lg:`, not a media query inside the phone one: the admin
+   preview renders the PHONE stage on a desktop screen, and a viewport query
+   painted the desktop fade over the phone layout there. */
+@utility bg-showcase-cover-scrim-wide {
+	background-image: linear-gradient(
+		90deg,
+		color-mix(in oklab, var(--sc-a) var(--sc-scrim-left, 92%), transparent) 0%,
+		color-mix(in oklab, var(--sc-a) var(--sc-scrim-left-mid, 78%), transparent) 38%,
+		color-mix(in oklab, var(--sc-b) var(--sc-scrim-right, 45%), transparent) 70%,
+		color-mix(in oklab, var(--sc-b) var(--sc-scrim-edge, 30%), transparent) 100%
+	);
+}
+
+/* A store cover inside a ticket panel: dark fade from the left so the name
+   stays legible over any photo — a cover that already carries its own words
+   (an event banner) is the case this exists for. */
+@utility bg-showcase-scrim {
+	background-image: linear-gradient(
+		90deg,
+		hsl(215 30% 6% / 0.82) 0%,
+		hsl(215 30% 6% / 0.6) 55%,
+		hsl(215 30% 6% / 0.3) 100%
+	);
 }
 
 /* Final CTA mesh — mint glow on deep navy */

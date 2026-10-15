@@ -51,6 +51,9 @@ export interface MarketplaceListableRow {
 	internal: boolean;
 	/** `retailers.marketplaceHidden` is set — an admin took the store off. */
 	hiddenByAdmin: boolean;
+	/** Kedaipal took the whole store OFFLINE (`z8r3fdudf7`) — its storefront
+	 * is gone, so a directory card would lead nowhere. */
+	offline?: boolean;
 }
 
 /**
@@ -164,6 +167,7 @@ export function compHighlightEligible(
 export function isListableRow(row: MarketplaceListableRow): boolean {
 	if (row.internal) return false;
 	if (row.hiddenByAdmin) return false;
+	if (row.offline) return false;
 	if (row.marketplaceUnlistedAt !== undefined) return false;
 	if (row.purgeStartedAt !== undefined) return false;
 	return true;

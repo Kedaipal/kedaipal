@@ -73,6 +73,32 @@ describe("useAreaLock", () => {
 		expect(result.current.reason).not.toMatch(/edit access/i);
 	});
 
+	// "Accepting orders" (Zaki, 15 Oct 2026): a lapsed store still takes
+	// orders, so the switch that stops them stays live — for whoever holds
+	// the grant, and only them.
+	it("openWhenLapsed: a lapsed owner keeps the control", () => {
+		store.readOnly = true;
+		store.reason = "This store's subscription is past due.";
+		viewer.role = "owner";
+		viewer.canWrite = true;
+		const { result } = renderHook(() =>
+			useAreaLock("store_settings", { openWhenLapsed: true }),
+		);
+		expect(result.current.readOnly).toBe(false);
+		expect(result.current.cause).toBeNull();
+	});
+
+	it("openWhenLapsed still applies the grant: a member without edit is locked, with the grant reason", () => {
+		store.readOnly = true;
+		store.reason = "This store's subscription is past due.";
+		const { result } = renderHook(() =>
+			useAreaLock("store_settings", { openWhenLapsed: true }),
+		);
+		expect(result.current.readOnly).toBe(true);
+		expect(result.current.cause).toBe("permission");
+		expect(result.current.reason).toMatch(/edit access/i);
+	});
+
 	// Until the payload lands `role` is undefined — nothing must flash
 	// disabled for an owner on first paint.
 	it("does not lock while the viewer is still unknown", () => {
