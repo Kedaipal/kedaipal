@@ -6,12 +6,16 @@
  * doesn't match on-page content, and before this the mirror was a comment
  * asking the next editor to remember.
  *
- * Order is the argument the page makes: WhatsApp setup → payments → couriers
- * → the two "does it fit my shop" questions → data → who's behind it.
+ * Order is the argument the page makes: WhatsApp setup → payments → selling
+ * more (promotions, flash sales, vouchers — the one sell-more question, right
+ * after the money lands) → couriers → the "does it fit my shop" questions
+ * (a stall, custom-made, a helper without my bank details, Singapore or
+ * overseas buyers) → data → who's behind it.
  */
-export const FAQ_PRIMARY_IDS = [1, 3, 13, 12, 11, 7, 10] as const;
+export const FAQ_PRIMARY_IDS = [1, 3, 14, 13, 12, 11, 15, 16, 7, 10] as const;
 
-/** Revealed by "See all questions" — never in the structured data. */
+/** Revealed by "See all questions" — never in the structured data. The pause
+ * plan (9) leads it: a cost question, asked once a seller is already sold. */
 export const FAQ_SECONDARY_IDS = [9, 8, 2, 4, 5, 6] as const;
 
 export type FaqId =

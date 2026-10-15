@@ -1,5 +1,5 @@
 import { useInView, useReducedMotion } from "framer-motion";
-import { Snowflake, Truck, Zap } from "lucide-react";
+import { Check, Loader2, Snowflake, Truck, Zap } from "lucide-react";
 import { useRef } from "react";
 import {
 	BILLING_CURRENCY_FOR_COUNTRY,
@@ -40,7 +40,11 @@ import {
  * cold-chain footnote. Right: a mock of the real dispatch card
  * (`delyva-dispatch-card.tsx` — weight, parcel type, quote list with the
  * cheapest pre-selected and "buyer paid" beside it, then the book button),
- * looping quote → book → shipped so the section moves like the rest.
+ * looping quote → book → shipped so the section moves like the rest. The
+ * first beat is a STATE, not a gap (15 Oct 2026 canvas, artboard 3 + M3):
+ * skeleton rows hold the list's height while "20+ couriers" are asked and the
+ * book button is a disabled "Getting quotes…" — the old loop opened on an
+ * empty list under a button that already named a courier and a price.
  *
  * MY/SG share the page's one region (`LandingRegionProvider`): the toggle
  * here and the one in Pricing move the same state. For SG the Delyva tenant
@@ -62,10 +66,12 @@ import {
  * placeholders were exactly that, and the AC says local assets only).
  */
 
-/** Beat durations, ms: quoting → quotes in → cheapest chosen → booked → shipped → clear. */
+/** Beat durations, ms: asking → quotes in → cheapest chosen → booked → shipped → clear. */
 export const DISPATCH_BEATS = [1100, 1400, 1100, 1300, 2600, 450] as const;
 /** The beat that shows the booked courier as shipped (`delivery.test.tsx` drives to it). */
 export const SHIPPED_BEAT = 4;
+/** Skeleton rows on the asking beat — the real card's loading state, three deep. */
+const SKELETON_ROWS = 3;
 
 /**
  * The integration badge on the mock card follows the quoted row's provider.
@@ -115,6 +121,9 @@ function CourierChip({
 					alt={hidden || courier.borrowsMarkFrom ? "" : courier.name}
 					aspect={courier.markClass ?? "h-5 w-auto"}
 					fill={false}
+					// Eager: the mobile rail drifts, and a lazy mark would enter the
+					// viewport blank (same rule as the payment wall).
+					eager
 				/>
 			) : (
 				<span
@@ -201,22 +210,28 @@ function quoteMeta(courier: Courier): string {
 function DispatchPlay({
 	currency,
 	quotes,
+	parcelsLive,
 }: {
 	currency: BillingCurrency;
 	quotes: QuotedCourier[];
+	/** Whether the region has a parcel network to ask — SG asks one rider. */
+	parcelsLive: boolean;
 }) {
 	const stageRef = useRef<HTMLDivElement>(null);
 	const inView = useInView(stageRef, { margin: "-10% 0px" });
 	const reduced = useReducedMotion() ?? false;
 	const beat = useBeatLoop(!reduced && inView, DISPATCH_BEATS);
 
-	// Reduced motion: the whole story as one still — quotes in, cheapest
-	// chosen, booked.
+	// Reduced motion: the last story beat as one still — quotes in, cheapest
+	// chosen, booked and shipped.
 	const quotesIn = reduced || beat >= 1;
 	const chosen = reduced || beat >= 2;
 	const booked = reduced || beat >= 3;
-	const shipped = !reduced && beat === SHIPPED_BEAT;
+	const shipped = reduced || beat === SHIPPED_BEAT;
 	const cheapest = quotes[0];
+	// Row count is fixed per region so the asking beat holds the exact height
+	// the quotes will take; SG's one rider gets one skeleton, not three.
+	const rowCount = quotes.length > 0 ? quotes.length : SKELETON_ROWS;
 	const buyerPaid = cheapest ? cheapest.mockQuote * 1.15 : 800;
 	const badge = PROVIDER_BADGE[cheapest?.provider ?? "delyva"];
 	const rider = cheapest?.provider === "lalamove";
@@ -302,7 +317,11 @@ function DispatchPlay({
 
 			<div className="mt-4 flex items-baseline justify-between gap-2">
 				<span className="text-xs font-medium text-muted-foreground">
-					{m.delivery_quote_choose()}
+					{quotesIn
+						? m.delivery_quote_choose()
+						: parcelsLive
+							? m.delivery_quote_asking()
+							: m.delivery_quote_asking_rider()}
 				</span>
 				<span className="text-[11px] text-muted-foreground">
 					{m.delivery_quote_buyer_paid({
@@ -312,11 +331,42 @@ function DispatchPlay({
 			</div>
 			{/* Fixed height per row count, so the beats never resize the card. */}
 			<div
-				className="mt-2 flex flex-col gap-2"
+				className="relative mt-2 flex flex-col gap-2"
 				style={{
-					height: `${quotes.length * 4.25 + Math.max(quotes.length - 1, 0) * 0.5}rem`,
+					height: `${rowCount * 4.25 + Math.max(rowCount - 1, 0) * 0.5}rem`,
 				}}
 			>
+				{/* The asking beat: shimmering placeholders in the rows' own shape,
+				    fading out as the first quote lands. */}
+				<div
+					aria-hidden
+					data-testid="dispatch-skeleton"
+					className={cn(
+						"absolute inset-0 flex flex-col gap-2 transition-opacity duration-300 motion-reduce:transition-none",
+						quotesIn ? "opacity-0" : "opacity-100",
+					)}
+				>
+					{Array.from({ length: rowCount }, (_, i) => (
+						<div
+							// biome-ignore lint/suspicious/noArrayIndexKey: static placeholder rows, never reordered
+							key={i}
+							className="flex h-[4.25rem] items-center gap-2.5 rounded-2xl border-2 border-border bg-card p-2.5"
+						>
+							<span className="animate-kp-shimmer size-9 shrink-0 rounded-[10px]" />
+							<span className="flex grow flex-col gap-1.5">
+								<span
+									className="animate-kp-shimmer h-2.5 rounded-full"
+									style={{ width: `${[45, 55, 40][i % 3]}%` }}
+								/>
+								<span
+									className="animate-kp-shimmer h-2 rounded-full"
+									style={{ width: `${[30, 28, 34][i % 3]}%` }}
+								/>
+							</span>
+							<span className="animate-kp-shimmer h-2.5 w-12 shrink-0 rounded-full" />
+						</div>
+					))}
+				</div>
 				{quotes.map((courier, index) => {
 					const active = chosen && index === 0;
 					return (
@@ -367,23 +417,54 @@ function DispatchPlay({
 				})}
 			</div>
 
+			{/* The book button walks its four states; it never names a courier
+			    before a quote exists. Disabled grey while asking, mint to book,
+			    navy once booked (tick scales in), the truck slides in on shipped. */}
 			<div
+				data-testid="dispatch-button"
 				className={cn(
 					"mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-lg text-sm font-semibold transition-colors duration-500 motion-reduce:transition-none",
-					booked
-						? "bg-primary text-primary-foreground"
-						: "bg-accent text-accent-foreground",
+					!quotesIn || !cheapest
+						? "bg-muted text-muted-foreground"
+						: booked
+							? "bg-primary text-primary-foreground"
+							: "bg-accent text-accent-foreground",
 				)}
 			>
-				<Truck className="size-4" />
-				{cheapest
-					? shipped
-						? m.delivery_quote_shipped({ courier: cheapest.name })
-						: m.delivery_quote_book({
-								courier: cheapest.name,
-								price: formatPrice(cheapest.mockQuote, currency),
-							})
-					: m.delivery_quote_title()}
+				{!quotesIn || !cheapest ? (
+					<>
+						<Loader2 className="size-4 animate-spin motion-reduce:animate-none" />
+						{m.delivery_quote_getting()}
+					</>
+				) : shipped ? (
+					<>
+						<Truck
+							key="shipped"
+							className={cn("size-4", !reduced && "animate-kp-drive")}
+						/>
+						{m.delivery_quote_shipped({ courier: cheapest.name })}
+					</>
+				) : booked ? (
+					<>
+						<Check
+							key="booked"
+							strokeWidth={3}
+							className={cn(
+								"size-4 text-accent dark:text-current",
+								!reduced && "animate-kp-pop",
+							)}
+						/>
+						{m.delivery_quote_booked({ courier: cheapest.name })}
+					</>
+				) : (
+					<>
+						<Truck className="size-4" />
+						{m.delivery_quote_book({
+							courier: cheapest.name,
+							price: formatPrice(cheapest.mockQuote, currency),
+						})}
+					</>
+				)}
 			</div>
 			<p className="mt-2.5 text-xs text-muted-foreground">
 				{rider ? m.delivery_quote_note_rider() : m.delivery_quote_note()}
@@ -476,7 +557,11 @@ export function Delivery() {
 					</div>
 
 					<FadeIn delay={0.15}>
-						<DispatchPlay currency={currency} quotes={quotes} />
+						<DispatchPlay
+							currency={currency}
+							quotes={quotes}
+							parcelsLive={parcelsLive}
+						/>
 					</FadeIn>
 				</div>
 			</div>

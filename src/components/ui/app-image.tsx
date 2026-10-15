@@ -105,6 +105,14 @@ export interface AppImageProps {
 	aspect?: string;
 	/** Above-the-fold hint: skips the lazy-loading attribute and requests high fetch priority (LCP candidates — hero/cover images, first grid row). */
 	priority?: boolean;
+	/**
+	 * Skips the lazy-loading attribute at NORMAL fetch priority. For small marks
+	 * inside a drifting marquee (the payment wall, the courier rail): a lazy
+	 * image there only starts loading as its pill enters the viewport, so the
+	 * pill drifts in empty and paints mid-row. Not `priority` — forty logos
+	 * must never outrank the hero's LCP image.
+	 */
+	eager?: boolean;
 	/** Custom empty/error-state node. Defaults to a muted box + `ImageOff` icon + the alt text. */
 	fallback?: React.ReactNode;
 	/** Rounded-corner utility class for the wrapper, e.g. `"rounded-2xl"`. */
@@ -206,6 +214,7 @@ export function AppImage({
 	className,
 	aspect,
 	priority = false,
+	eager: eagerHint = false,
 	fallback,
 	rounded,
 	objectFit = "cover",
@@ -337,7 +346,7 @@ export function AppImage({
 		}, retryDelayMs(attempt));
 	};
 
-	const eager = priority || isLocalPreview;
+	const eager = priority || eagerHint || isLocalPreview;
 
 	return (
 		<span className={wrapperClassName}>

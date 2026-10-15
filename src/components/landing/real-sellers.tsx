@@ -6,7 +6,7 @@ import {
 	useMotionValue,
 	useReducedMotion,
 } from "framer-motion";
-import { ArrowLeft, ArrowRight, Star } from "lucide-react";
+import { ArrowLeft, ArrowRight, Star, Store } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
 import { m } from "../../paraglide/messages";
 import { FadeIn } from "./fade-in";
@@ -29,6 +29,12 @@ import { Eyebrow } from "./landing-ui";
  * Arrow buttons remain the keyboard path. One FadeIn wraps the whole rail
  * (the house peeking-slide rule). Reduced motion kills the drift; drag and
  * buttons survive, since both are user-initiated.
+ *
+ * The "10+ paying sellers" count chip came off on 15 Oct 2026 (Arif's call on
+ * the enhancement canvas, artboard 7): a hand-typed number that nothing kept
+ * true. In its place the section states the benefit the directory IS — every
+ * store is listed free on /stores, with showcases above the list — beside the
+ * "Browse their stores" door, since that is where a visitor meets it.
  */
 
 interface SellerCard {
@@ -201,22 +207,30 @@ export function RealSellers() {
 						>
 							{m.proof_heading()}
 						</h2>
-						{/* The trust anchor that replaced Founding 10 (86eye4wtb) — a real
-						    live count now that we're past that stage, not a spots-remaining
-						    countdown. */}
-						<div className="mt-5 inline-flex items-center gap-3 rounded-2xl border border-accent/25 bg-accent/5 px-5 py-3">
-							<span className="font-heading text-3xl font-extrabold text-accent md:text-4xl">
-								{m.proof_customer_count_number()}
-							</span>
-							<span className="text-sm font-semibold text-foreground/80 md:text-base">
-								{m.proof_customer_count_label()}
-							</span>
-						</div>
 					</div>
 					<div className="flex flex-col gap-4 lg:max-w-sm lg:items-end">
 						<p className="text-base leading-relaxed text-muted-foreground md:text-lg lg:text-right">
 							{m.proof_sub()}
 						</p>
+						{/* The directory, said as what it does for the seller: a free
+						    listing on /stores plus the showcases above it, nothing to
+						    sign up for, one switch in Settings → Store to leave. Sits
+						    beside the door into it. */}
+						<div className="flex items-start gap-3 rounded-2xl border border-border bg-muted/40 px-4 py-3 text-left">
+							<Store
+								aria-hidden
+								className="mt-0.5 size-[18px] shrink-0 text-accent-emphasis"
+							/>
+							<p className="text-[13px] leading-relaxed text-foreground">
+								<strong className="font-semibold">
+									{m.proof_directory_strong()}
+								</strong>{" "}
+								{m.proof_directory_body()}
+								<span className="ml-1.5 inline-block rounded-full bg-accent px-1.5 py-0.5 align-middle text-[9px] font-bold uppercase tracking-[0.08em] text-accent-foreground">
+									{m.proof_directory_new()}
+								</span>
+							</p>
+						</div>
 						{/* The proof's own next step: these are real stores, so let a
 						    visitor walk into them (z8r3fdkmyp). The landing's one
 						    buyer-shaped door — on the proof, not in the hero, which

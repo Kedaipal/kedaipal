@@ -52,11 +52,24 @@ const REMOVED_KEYS = [
 	"pricingpage_testimonial_quote",
 	"pricingpage_testimonial_attrib",
 	"pricingpage_testimonial_note",
+	// The "10+ paying sellers" count came off `/` and `/pricing` on 15 Oct
+	// 2026 (Arif, landing enhancement canvas): a hand-typed number nothing
+	// kept true. The proof section says what the directory does instead.
+	"proof_customer_count_number",
+	"proof_customer_count_label",
+	// The pre-August handshake mock: a chat bubble, a "✅ Payment received"
+	// WhatsApp and a receipt link that no longer exist (one message per
+	// order, 4 Aug 2026). The section now acts out the order page.
+	"handshake_chat_paid",
+	"handshake_card_badge",
+	"handshake_card_method",
+	"handshake_card_confirm",
+	"handshake_card_decline",
+	"handshake_chat_received",
+	"handshake_chat_receipt",
 ];
 
 const NEW_KEYS = [
-	"proof_customer_count_number",
-	"proof_customer_count_label",
 	"book_demo_cta",
 	"demo_wa_message",
 	// The MY/SG toggle. Detection moved from a time-zone guess to Cloudflare's
@@ -67,6 +80,27 @@ const NEW_KEYS = [
 	"region_my",
 	"region_sg",
 ];
+
+/**
+ * Nothing is sent to the buyer after the confirmation (one message per
+ * order, 4 Aug 2026): the receipt and the tracking number live on their order
+ * page. Any landing key that says a receipt or tracking number is SENT is the
+ * pre-August story coming back.
+ */
+describe("landing — nothing is sent after the confirmation", () => {
+	const sent =
+		/receipt (goes out|sent|is sent)|resit (dihantar|keluar)|收据已发送|tracking number sent|nombor penjejakan dihantar|追踪号已.*发送/i;
+	it("never says a receipt or tracking number was sent, in any locale", () => {
+		for (const [locale, catalog] of catalogs) {
+			const hits = Object.entries(catalog)
+				.filter(
+					([k, v]) => /^(hero_|handshake_)/.test(k) && sent.test(String(v)),
+				)
+				.map(([k]) => k);
+			expect(hits, `${locale}: ${hits.join(", ")}`).toEqual([]);
+		}
+	});
+});
 
 describe("landing redesign — Founding 10 off the landing page", () => {
 	it("removes every landing-only founding key from every locale", () => {

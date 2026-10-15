@@ -63,7 +63,9 @@ interface TeaserTier {
 	comingSoon: boolean;
 }
 
-/** "You + 2 teammates" — from the seat cap the server enforces (86exr91r4). */
+/** "You + 2 teammates — each sees only what you allow" — from the seat cap
+ * the server enforces (86exr91r4); the clause after the dash is the per-area
+ * grants, said where the seats are bought. */
 function teamLine(plan: Plan): string {
 	const cap = PLAN_CAPS[plan].userCap;
 	if (isUnlimited(cap)) return m.pricing_feat_team_unlimited();
@@ -104,12 +106,16 @@ function getTiers(): TeaserTier[] {
 			tagline: m.pricing_tier_pro_tagline(),
 			// Online payments + Lalamove lead here now that both are shipped — they
 			// are the two Pro capabilities a seller can picture immediately.
-			// Courier-quoted delivery rides the Pro `delivery` gate, so it is
-			// listed here, where it is bought.
+			// Promotions, flash sales and voucher codes are Pro-gated
+			// (`convex/vouchers.ts`, `docs/promo-price.md`) and are the page's one
+			// sell-MORE line, so they sit right under payments (15 Oct 2026 canvas,
+			// artboard 5). Courier-quoted delivery rides the Pro `delivery` gate,
+			// so it is listed here, where it is bought.
 			features: [
 				creditsLine("pro"),
 				{ label: m.pricing_feat_everything_starter() },
 				{ label: m.pricing_feat_online_payments() },
+				{ label: m.pricing_feat_promotions() },
 				{ label: m.pricing_feat_crm() },
 				{ label: m.pricing_feat_lalamove() },
 				{ label: m.pricing_feat_courier() },
@@ -122,7 +128,10 @@ function getTiers(): TeaserTier[] {
 		{
 			// Contact us, no public price (Credits T6, z8r3fdkp8h). What an
 			// Enterprise buyer gets TODAY is credits sized to their volume and
-			// the team; outlets and broadcasts aren't built, so they wear "Soon".
+			// the team. Several pickup points sharing one stock count already
+			// ships (the proof rail's multi-outlet card says so), so the "Soon"
+			// row names what is NOT built — per-outlet stock and reporting — and
+			// broadcasts wear "Soon" too.
 			id: "enterprise",
 			name: "Enterprise",
 			tagline: m.pricing_tier_enterprise_tagline({
