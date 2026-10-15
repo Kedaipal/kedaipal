@@ -1,6 +1,7 @@
 /**
- * Courier booking — Settings → Fulfilment → Delivery (86eyjpv6z IA rework,
- * 2 Sep, Zaki). Which booking tools this store has ARMED — not which one it
+ * Courier booking — on the Delivery pricing page (86eye9xd4, 3A: it rides
+ * along with pricing), reached from Settings → Fulfilment → Delivery's
+ * "Courier booking" row (86eyjpv6z IA rework, 2 Sep, Zaki). Which booking tools this store has ARMED — not which one it
  * must use: a seller may run Lalamove riders AND Delyva couriers side by
  * side and pick per order at dispatch (the one-active-job-per-order
  * reservation arbitrates a single order; the buyer's fee was already
@@ -33,6 +34,35 @@ import { convexErrorMessage } from "../../lib/format";
 import { ProBadge } from "../app/pro-gate";
 import { AppImage } from "../ui/app-image";
 import { ToggleSwitch } from "../ui/toggle-switch";
+
+/** The card's id on the Delivery pricing page — the Fulfilment row and the
+ * order page's "turn it on" hints land here (`#courier-booking`). */
+export const COURIER_BOOKING_ANCHOR = "courier-booking";
+
+/**
+ * What the Fulfilment row says about this section: the services ARMED, in
+ * the order the section lists them, or "Off". Lalamove live-quote pricing
+ * arms riders by itself (the toggle shows locked-on), so it counts.
+ */
+export function courierBookingGlance({
+	riderBookingAvailable,
+	lalamoveArmed,
+	lalamovePricing,
+	delyvaArmed,
+}: {
+	riderBookingAvailable: boolean;
+	lalamoveArmed: boolean;
+	lalamovePricing: boolean;
+	delyvaArmed: boolean;
+}): string {
+	const on = [
+		...(riderBookingAvailable && (lalamoveArmed || lalamovePricing)
+			? ["Lalamove riders"]
+			: []),
+		...(delyvaArmed ? ["Delyva"] : []),
+	];
+	return on.length > 0 ? on.join(" · ") : "Off";
+}
 
 export function CourierBookingSection({
 	deliveryBooking,

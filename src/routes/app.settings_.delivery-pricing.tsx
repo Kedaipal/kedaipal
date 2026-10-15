@@ -1,14 +1,17 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useLocation } from "@tanstack/react-router";
 import { ArrowLeft } from "lucide-react";
+import { useEffect } from "react";
 import { AreaGate } from "../components/app/area-gate";
 import {
 	PageHeader,
 	PageHeaderSkeleton,
 } from "../components/dashboard/page-header";
+import { COURIER_BOOKING_ANCHOR } from "../components/settings/courier-booking-section";
 import { DeliveryPricing } from "../components/settings/delivery-pricing";
 import { Glance } from "../components/settings/settings-primitives";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { revealAnchorWhenMounted } from "../lib/country-setup-copy";
 import { pricingSummary } from "../lib/delivery-modes";
 import { formatPrice } from "../lib/format";
 
@@ -25,6 +28,14 @@ export const Route = createFileRoute("/app/settings_/delivery-pricing")({
 
 function DeliveryPricingRoute() {
 	const retailer = useDashboardRetailer();
+	// `#courier-booking` (the Fulfilment row, the order page's "turn it on"
+	// hints): scroll to that card once it's on the page — it renders behind
+	// the skeleton until the store loads, so wait for IT, not a frame.
+	const hash = useLocation({ select: (l) => l.hash });
+	useEffect(() => {
+		if (hash.replace(/^#/, "") !== COURIER_BOOKING_ANCHOR) return;
+		return revealAnchorWhenMounted(COURIER_BOOKING_ANCHOR);
+	}, [hash]);
 
 	if (!retailer) {
 		return (

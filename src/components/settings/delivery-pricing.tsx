@@ -67,7 +67,10 @@ import { InputPrefixFrame } from "../ui/input-prefix-frame";
 import { ModeButton } from "../ui/mode-button";
 import { ModeRow, ModeRowGroup } from "../ui/mode-row";
 import { ToggleSwitch } from "../ui/toggle-switch";
-import { CourierBookingSection } from "./courier-booking-section";
+import {
+	COURIER_BOOKING_ANCHOR,
+	CourierBookingSection,
+} from "./courier-booking-section";
 import {
 	Card,
 	Glance,
@@ -1416,7 +1419,7 @@ export function DeliveryPricing({
 			{/* Rides along with pricing (3A): what a buyer pays and which couriers
 			    can be booked are decided side by side. Independent toggles, not
 			    a radio — a store may arm riders AND couriers and pick per order. */}
-			<Card>
+			<Card id={COURIER_BOOKING_ANCHOR}>
 				<CourierBookingSection
 					deliveryBooking={deliveryBooking}
 					chargeMode={config?.mode}

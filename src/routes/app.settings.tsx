@@ -1116,6 +1116,7 @@ function SettingsRoute() {
 								minOrderValue={retailer.minOrderValue}
 								awbConfig={retailer.awbConfig}
 								subscription={retailer.subscription}
+								deliveryBooking={retailer.deliveryBooking}
 							/>
 						</AreaGate>
 					) : null}
