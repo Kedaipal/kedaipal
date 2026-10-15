@@ -64,7 +64,10 @@ import {
 	normalizeOptionalCustomerName,
 	requireCustomerName,
 } from "./lib/customer";
-import { assertValidFulfilmentDate } from "./lib/fulfilmentDate";
+import {
+	assertValidFulfilmentDate,
+	todayMytMidnight,
+} from "./lib/fulfilmentDate";
 import {
 	seatsExhaustedMessage,
 	seatsRequested,
@@ -274,6 +277,11 @@ export const getCheckoutSession = query({
 		displayName: string | undefined;
 		isNewCustomer: boolean | undefined;
 		orderId: Id<"orders"> | undefined;
+		// The completed session's order, by its human id — the Done screen's
+		// seller read (`orders.get` by shortId) keys on it, so a session
+		// reopened from the list shows the same live status + WhatsApp outcome
+		// as the one that created it.
+		orderShortId: string | undefined;
 		// Lifetime history for a returning customer (null for new/anonymous).
 		customer: { orderCount: number; totalSpent: number; lastOrderAt: number } | null;
 		// Autosaved in-progress order, so a resume restores the cart + selections.
@@ -361,6 +369,8 @@ export const getCheckoutSession = query({
 				)
 			: 0;
 
+		const order = session.orderId ? await ctx.db.get(session.orderId) : null;
+
 		return {
 			status: effectiveStatus(session, now),
 			expiresAt: session.expiresAt,
@@ -368,6 +378,7 @@ export const getCheckoutSession = query({
 			displayName,
 			isNewCustomer: session.isNewCustomer,
 			orderId: session.orderId,
+			orderShortId: order?.shortId,
 			customer,
 			draft: session.draft,
 			acceptsVouchers: await storeShowsVoucherEntry(ctx, session.retailerId),
@@ -843,7 +854,12 @@ export const createOrderFromSession = mutation({
 	handler: async (
 		ctx,
 		args,
-	): Promise<{ shortId: string; orderId: Id<"orders"> }> => {
+	): Promise<{
+		shortId: string;
+		orderId: Id<"orders">;
+		/** Born COMPLETED — handed over at the counter (see `handedOverNow`). */
+		completed: boolean;
+	}> => {
 		const resolved = await requireSessionAccess(ctx, args.sessionId);
 		if (!resolved) throw new ConvexError("Session not found");
 		const { session, access } = resolved;
@@ -1182,6 +1198,19 @@ export const createOrderFromSession = mutation({
 		// unsettled price (customs are priced by the seller, no mockup gate), so
 		// zero here is a real zero (`isFreeOrder`'s counter shape).
 		const paidInPerson = args.paidInPerson && total > 0;
+		// Handed over NOW? A counter sale finishes at the counter — the buyer
+		// leaves with the goods — so the order that records it is born
+		// COMPLETED (`delivered`; a counter order reads "Completed"), not left
+		// for a "Mark as completed" tap nobody should need. The exceptions are
+		// the sales where nothing changes hands yet: a collection dated for
+		// later (a pre-order keyed at the counter), and an RSVP (the guest
+		// attends later; it completes at the event). Payment is its own axis —
+		// a pay-later walk-in still left with the goods, and settles from the
+		// link in their confirmation.
+		const handedOverNow =
+			eventLock === undefined &&
+			(sanitizedFulfilmentDate === undefined ||
+				sanitizedFulfilmentDate <= todayMytMidnight(now));
 		const orderId = await ctx.db.insert("orders", {
 			retailerId: retailer._id,
 			shortId,
@@ -1190,9 +1219,19 @@ export const createOrderFromSession = mutation({
 			subtotal,
 			total,
 			currency,
-			status: "confirmed", // seller-created with the buyer present
+			// Seller-created with the buyer present: confirmed at least, and
+			// completed when handed over on the spot (see above).
+			status: handedOverNow ? "delivered" : "confirmed",
 			channel: "whatsapp",
 			source: "counter",
+			// The buyer's one WhatsApp is in flight (scheduled below); its real
+			// outcome lands via recordConfirmationPush so the Done screen can say
+			// whether the link reached them. An anonymous sale sends nothing, so
+			// it carries no stamp.
+			confirmationPushStatus: session.waPhone ? "sending" : undefined,
+			// Rung up by the seller, so already seen — the push stamp would
+			// otherwise drop it into the inbox's New (unseen) bucket.
+			seenAt: session.waPhone ? now : undefined,
 			customer: { name: customerName, waPhone: session.waPhone },
 			deliveryMethod: "self_collect", // collected at the counter
 			// An RSVP freezes its venue (see the event branch above); a plain
@@ -1236,6 +1275,17 @@ export const createOrderFromSession = mutation({
 				orderId,
 				status: "confirmed",
 				note: `payment_received: in-person (${args.paymentMethod ?? "cash"})`,
+				actorUserId,
+				createdAt: now,
+			});
+		}
+		// The timeline reads confirmed → completed, as a seller tapping through
+		// would have left it — the handover is a real step, not a skipped one.
+		if (handedOverNow) {
+			await ctx.db.insert("orderEvents", {
+				orderId,
+				status: "delivered",
+				note: "counter_handover",
 				actorUserId,
 				createdAt: now,
 			});
@@ -1306,7 +1356,7 @@ export const createOrderFromSession = mutation({
 			"counterCheckout.createOrderFromSession",
 			orderId,
 		);
-		return { shortId, orderId };
+		return { shortId, orderId, completed: handedOverNow };
 	},
 });
 

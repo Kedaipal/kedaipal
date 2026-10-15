@@ -86,6 +86,20 @@ export const PUSH_MAX_ATTEMPTS = PUSH_RETRY_DELAYS_MS.length + 1;
  * the buyer's way forward is exactly a number from a country we can reach.
  */
 const UNREACHABLE_CODES = new Set([130497, 131026, 131030, 131047, 131051]);
+
+/**
+ * 131047 — a free-form message to a buyer with no open 24h service window.
+ * Unreachable for THAT shape only: the approved utility template is delivered
+ * with no window at all, so a sender holding one treats this code as "switch
+ * shape", not "give up". Counter confirmations do exactly that (a manual-phone
+ * walk-in never messaged us; a scan buyer's window closes a day later).
+ */
+export const OUT_OF_WINDOW_META_CODE = 131047;
+
+/** True for a Meta code no retry of the SAME message could ever get past. */
+export function isUnreachableMetaCode(code: number | undefined): boolean {
+	return code !== undefined && UNREACHABLE_CODES.has(code);
+}
 const TEMPLATE_CODES = new Set([
 	132000, 132001, 132005, 132007, 132012, 132015, 132016, 132068, 132069,
 ]);

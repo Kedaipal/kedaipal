@@ -231,7 +231,9 @@ export type SystemMessageKey =
 	| "storeQrConnected"
 	| "storeQrBusy"
 	| "counterOrderConfirmedPaid"
+	| "counterOrderCompletedPaid"
 	| "counterOrderConfirmedUnpaid"
+	| "counterOrderFree"
 	| "paymentReminderIntro"
 	| "rsvpFreeConfirm"
 	| "requestAwaitingApproval";
@@ -262,7 +264,15 @@ type SystemCopy = {
 	// messages carry the confirmed order + tracking link (paid vs pay-later branch)
 	// so the buyer never has to scan again to pay.
 	counterOrderConfirmedPaid: (v: CopyVars) => string;
+	// A counter sale handed over on the spot is born COMPLETED (Oct 2026): the
+	// buyer has paid and has the goods, so "confirmed" would under-state it.
+	// Carries the same order-page link — their receipt lives there.
+	counterOrderCompletedPaid: (v: CopyVars) => string;
 	counterOrderConfirmedUnpaid: (v: CopyVars) => string;
+	// RM0 at the counter (a free RSVP rung up in person): no payment ask, no
+	// "paid" — the Done screen promises "nothing to pay", so the message must
+	// say the same.
+	counterOrderFree: (v: CopyVars) => string;
 	// The ONE exception to "we only reply" in this catalog: the seller's manual
 	// "Send payment reminder" (order detail, day 11–14 only, once per 24h —
 	// docs/payment-reminder.md). Seller-initiated per tap, never automatic, and
@@ -309,6 +319,12 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`🧾 Thanks for your order at ${storeName}! Order ${shortId} is confirmed${
 				amount ? ` — total ${amount} to pay whenever you're ready` : ""
 			}. Pay and track everything here, no rush: ${trackingUrl}`,
+		counterOrderCompletedPaid: ({ shortId, storeName, amount, trackingUrl }) =>
+			`🧾 All done! Order ${shortId} at ${storeName} is complete and paid${
+				amount ? ` — total ${amount}` : ""
+			}. Thank you! Your receipt is here anytime: ${trackingUrl}`,
+		counterOrderFree: ({ shortId, storeName, trackingUrl }) =>
+			`🧾 All set! Order ${shortId} at ${storeName} is confirmed — no payment needed. Your order details are here anytime: ${trackingUrl}`,
 	paymentReminderIntro: ({ shortId, storeName, amount, trackingUrl }) =>
 			`👋 A reminder from ${storeName}: order ${shortId}${
 				amount ? ` (${amount})` : ""
@@ -351,6 +367,12 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`🧾 Terima kasih atas pesanan anda di ${storeName}! Pesanan ${shortId} telah disahkan${
 				amount ? ` — jumlah ${amount} untuk dibayar bila-bila anda sedia` : ""
 			}. Bayar & jejak pesanan di sini, tak perlu tergesa-gesa: ${trackingUrl}`,
+		counterOrderCompletedPaid: ({ shortId, storeName, amount, trackingUrl }) =>
+			`🧾 Selesai! Pesanan ${shortId} di ${storeName} telah selesai dan dibayar${
+				amount ? ` — jumlah ${amount}` : ""
+			}. Terima kasih! Resit anda ada di sini bila-bila masa: ${trackingUrl}`,
+		counterOrderFree: ({ shortId, storeName, trackingUrl }) =>
+			`🧾 Semua selesai! Pesanan ${shortId} di ${storeName} telah disahkan — tiada bayaran diperlukan. Butiran pesanan anda ada di sini bila-bila masa: ${trackingUrl}`,
 	paymentReminderIntro: ({ shortId, storeName, amount, trackingUrl }) =>
 			`👋 Peringatan daripada ${storeName}: pesanan ${shortId}${
 				amount ? ` (${amount})` : ""
@@ -393,6 +415,12 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`🧾 谢谢您在 ${storeName} 下单！订单 ${shortId} 已确认${
 				amount ? ` —— 总额 ${amount}，方便的时候付款就好` : ""
 			}。可以在这里付款和查看订单，不急：${trackingUrl}`,
+		counterOrderCompletedPaid: ({ shortId, storeName, amount, trackingUrl }) =>
+			`🧾 完成了！您在 ${storeName} 的订单 ${shortId} 已完成并付款${
+				amount ? ` —— 总额 ${amount}` : ""
+			}。谢谢惠顾！收据随时可以在这里查看：${trackingUrl}`,
+		counterOrderFree: ({ shortId, storeName, trackingUrl }) =>
+			`🧾 搞定了！您在 ${storeName} 的订单 ${shortId} 已确认 —— 无需付款。订单详情随时可以在这里查看：${trackingUrl}`,
 	paymentReminderIntro: ({ shortId, storeName, amount, trackingUrl }) =>
 			`👋 ${storeName} 的提醒：订单 ${shortId}${
 				amount ? `（${amount}）` : ""

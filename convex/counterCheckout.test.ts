@@ -7,6 +7,7 @@ import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 import { OPEN_SESSION_TTL_MS } from "./counterCheckout";
 import { UNKNOWN_DIAL_COUNTRY_MESSAGE } from "./lib/buyerPhone";
+import { DAY_MS, todayMytMidnight } from "./lib/fulfilmentDate";
 
 const modules = import.meta.glob("./**/*.ts");
 
@@ -237,7 +238,7 @@ async function boundSession(t: ReturnType<typeof setup>, retailerId: Id<"retaile
 }
 
 describe("counterCheckout — createOrderFromSession", () => {
-	test("creates a confirmed self-collect order, paid in person, and completes the session", async () => {
+	test("creates a COMPLETED self-collect order, paid in person, and completes the session", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const variantId = await seedVariant(t, USER_A, retailer._id, { price: 1500 });
@@ -254,7 +255,7 @@ describe("counterCheckout — createOrderFromSession", () => {
 		expect(shortId).toMatch(/^ORD-/);
 
 		const order = await t.run((ctx) => ctx.db.get(orderId));
-		expect(order?.status).toBe("confirmed");
+		expect(order?.status).toBe("delivered");
 		expect(order?.source).toBe("counter"); // stamped as a walk-in sale
 		expect(order?.deliveryMethod).toBe("self_collect");
 		expect(order?.paymentStatus).toBe("received");
@@ -398,7 +399,7 @@ describe("counterCheckout — createOrderFromSession", () => {
 				paymentMethod: "cash",
 			});
 		const order = await t.run((ctx) => ctx.db.get(orderId));
-		expect(order?.status).toBe("confirmed");
+		expect(order?.status).toBe("delivered");
 		expect(order?.items[0]?.price).toBe(3000);
 		expect(order?.mockupStatus).toBeUndefined(); // no gate — sold in person
 	});
@@ -493,7 +494,8 @@ describe("counterCheckout — createOrderFromSession", () => {
 		const order = await t.run((ctx) => ctx.db.get(orderId));
 		expect(order?.items[0]?.price).toBe(0);
 		expect(order?.total).toBe(0);
-		expect(order?.status).toBe("confirmed");
+		// Handed over now → born completed (a free sale changes hands like a paid one).
+		expect(order?.status).toBe("delivered");
 		expect(order?.paymentStatus).toBe("unpaid");
 		expect(order?.paymentMethod).toBeUndefined();
 		expect(order?.paymentReceivedAt).toBeUndefined();
@@ -1235,7 +1237,7 @@ describe("counterCheckout — anonymous walk-in (86ey8vqp6)", () => {
 			});
 
 		const order = await t.run((ctx) => ctx.db.get(orderId));
-		expect(order?.status).toBe("confirmed");
+		expect(order?.status).toBe("delivered");
 		expect(order?.source).toBe("counter");
 		expect(order?.customer.waPhone).toBeUndefined();
 		expect(order?.customer.name).toBeUndefined();
@@ -1473,7 +1475,7 @@ describe("counterCheckout — opening hours exemption (86eyp5rav)", () => {
 			});
 		const order = await t.run((ctx) => ctx.db.get(orderId));
 		expect(order?.fulfilmentDate).toBe(today);
-		expect(order?.status).toBe("confirmed");
+		expect(order?.status).toBe("delivered");
 	});
 });
 
@@ -1646,5 +1648,159 @@ describe("counterCheckout — manual phone from any country (z8r3fdh274)", () =>
 		);
 		const session = await t.run((ctx) => ctx.db.get(sessionId));
 		expect(session?.status).toBe("buyer_identified");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Born completed — a counter sale is handed over at the counter, so the order
+// that records it is already done. The exceptions are the sales where nothing
+// changed hands yet: a collection dated for later, and an RSVP (completes at
+// the event). Payment is its own axis — a pay-later sale is still handed over.
+// ---------------------------------------------------------------------------
+describe("counterCheckout — a sale handed over now is born completed", () => {
+	async function timeline(t: ReturnType<typeof setup>, orderId: Id<"orders">) {
+		const events = await t.run((ctx) =>
+			ctx.db
+				.query("orderEvents")
+				.withIndex("by_order", (q) => q.eq("orderId", orderId))
+				.collect(),
+		);
+		return events.map((e) => ({ status: e.status, note: e.note }));
+	}
+
+	test("paid now, collecting now → delivered, with a confirmed→delivered timeline the seller can read", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, { price: 1500 });
+		const sessionId = await boundSession(t, retailer._id);
+
+		const { orderId, completed } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				paidInPerson: true,
+				paymentMethod: "cash",
+				fulfilmentDate: todayMytMidnight(),
+			});
+		expect(completed).toBe(true);
+
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.status).toBe("delivered");
+		expect(order?.statusChangedAt).toBe(order?.createdAt);
+		expect(await timeline(t, orderId)).toEqual([
+			{ status: "confirmed", note: "counter_checkout" },
+			{ status: "confirmed", note: "payment_received: in-person (cash)" },
+			{ status: "delivered", note: "counter_handover" },
+		]);
+	});
+
+	test("pay-later is still handed over → delivered AND unpaid; the buyer's link is how they pay", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, { price: 1500 });
+		const sessionId = await boundSession(t, retailer._id);
+
+		const { orderId, completed } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				paidInPerson: false,
+			});
+		expect(completed).toBe(true);
+
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.status).toBe("delivered");
+		expect(order?.paymentStatus).toBe("unpaid");
+	});
+
+	test("a collection dated for later stays confirmed — nothing has been handed over yet", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, { price: 1500 });
+		const sessionId = await boundSession(t, retailer._id);
+
+		const { orderId, completed } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				paidInPerson: true,
+				paymentMethod: "cash",
+				fulfilmentDate: todayMytMidnight() + 2 * DAY_MS,
+			});
+		expect(completed).toBe(false);
+
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.status).toBe("confirmed");
+		expect(
+			(await timeline(t, orderId)).some((e) => e.status === "delivered"),
+		).toBe(false);
+	});
+
+	test("the buyer's confirmation is tracked on the order: 'sending' at create, and already seen by the seller who rang it up", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, { price: 1500 });
+		const sessionId = await boundSession(t, retailer._id);
+
+		const { orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				paidInPerson: true,
+			});
+
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.confirmationPushStatus).toBe("sending");
+		// Carrying the push stamp would otherwise drop it into the inbox's New
+		// (unseen) bucket — but the seller is the one who created it.
+		expect(order?.seenAt).toBeTypeOf("number");
+	});
+
+	test("a completed session names its order by shortId, so a reopened Done screen reads the live order", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, { price: 1500 });
+		const sessionId = await boundSession(t, retailer._id);
+		const asA = t.withIdentity({ subject: USER_A });
+		const before = await asA.query(api.counterCheckout.getCheckoutSession, {
+			sessionId,
+		});
+		expect(before?.orderShortId).toBeUndefined();
+
+		const { shortId } = await asA.mutation(
+			api.counterCheckout.createOrderFromSession,
+			{ sessionId, items: [{ variantId, quantity: 1 }], paidInPerson: true },
+		);
+		const after = await asA.query(api.counterCheckout.getCheckoutSession, {
+			sessionId,
+		});
+		expect(after?.status).toBe("completed");
+		expect(after?.orderShortId).toBe(shortId);
+	});
+
+	test("an anonymous cash sale carries no push stamp — there is no message to track", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, { price: 1500 });
+		const { sessionId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.startAnonymousSession, {});
+
+		const { orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				paidInPerson: true,
+			});
+
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.status).toBe("delivered");
+		expect(order?.confirmationPushStatus).toBeUndefined();
+		expect(order?.seenAt).toBeUndefined();
 	});
 });
