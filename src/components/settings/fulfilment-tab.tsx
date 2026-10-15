@@ -595,15 +595,17 @@ export function FulfilmentTab({
 							    the app depends on this row existing. */}
 							<SummaryRow
 								label="Courier booking"
+								// Plain like the rows beside it — the card's one pill is
+								// the Delivery heading's glance.
 								value={
 									!hasFeature(subscription, "delivery") ? (
 										<ProBadge />
+									) : courierBooking === "Off" ? (
+										<span className="font-normal text-muted-foreground">
+											Off
+										</span>
 									) : (
-										<Glance
-											tone={courierBooking === "Off" ? "grey" : undefined}
-										>
-											{courierBooking}
-										</Glance>
+										courierBooking
 									)
 								}
 								onClick={() =>
