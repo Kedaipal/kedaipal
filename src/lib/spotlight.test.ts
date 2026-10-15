@@ -145,6 +145,11 @@ describe("spotlight registry", () => {
 		expect(SPOTLIGHT_ANCHOR.pickup_points.anchor).toBe(
 			SETTINGS_ANCHOR.pickup_addresses,
 		);
+		// The keys fix sends the seller to Integrations, so it must ring the
+		// Lalamove card there — not a Fulfilment card that tab never renders.
+		expect(SPOTLIGHT_ANCHOR.lalamove.anchor).toBe(
+			SETTINGS_ANCHOR.delivery_booking,
+		);
 	});
 
 	test("spotlightHref carries the tab AND the key, from one source", () => {

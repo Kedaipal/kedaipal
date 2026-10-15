@@ -136,6 +136,7 @@ describe("FulfilmentTab act-as wiring", () => {
 					minOrderValue={undefined}
 					awbConfig={undefined}
 					subscription={undefined}
+					deliveryBooking={undefined}
 				/>
 			</ActAsProvider>,
 		);
@@ -252,6 +253,7 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 					minOrderValue={undefined}
 					awbConfig={undefined}
 					subscription={undefined}
+					deliveryBooking={undefined}
 				/>
 			</ActAsProvider>,
 		);
@@ -798,6 +800,7 @@ describe("SG delivery-charge modes (SG-lite, 86eynw29u)", () => {
 					minOrderValue={undefined}
 					awbConfig={undefined}
 					subscription={undefined}
+					deliveryBooking={undefined}
 				/>
 			</ActAsProvider>,
 		);
@@ -880,6 +883,7 @@ describe("SG delivery-charge modes (SG-lite, 86eynw29u)", () => {
 					minOrderValue={undefined}
 					awbConfig={undefined}
 					subscription={undefined}
+					deliveryBooking={undefined}
 				/>
 			</ActAsProvider>,
 		);
@@ -949,6 +953,7 @@ describe("Business address — unit / floor line (z8r3fdff8r test round)", () =>
 					minOrderValue={undefined}
 					awbConfig={undefined}
 					subscription={undefined}
+					deliveryBooking={undefined}
 				/>
 			</ActAsProvider>
 		);
@@ -1103,6 +1108,7 @@ describe("event-venue badge on pickup points (z8r3fdff9u round 5)", () => {
 					minOrderValue={undefined}
 					awbConfig={undefined}
 					subscription={undefined}
+					deliveryBooking={undefined}
 				/>
 			</ActAsProvider>,
 		);
@@ -1163,5 +1169,94 @@ describe("event-venue badge on pickup points (z8r3fdff9u round 5)", () => {
 		fireEvent.click(screen.getByRole("button", { name: /Show inactive/ }));
 		expect(screen.getByText(/Event venue: Card Check Camp/)).toBeTruthy();
 		expect(screen.queryByText(/aren't charged the fee/)).toBeNull();
+	});
+});
+
+describe("Courier booking row (settings exposure audit, 86eye9xd4)", () => {
+	// The arm switches moved onto the Delivery pricing page (3A). Without a row
+	// of their own here, the only way in was a row labelled "Pricing", and
+	// every "turn it on under Fulfilment → Courier booking" hint in the app
+	// pointed at a card that no longer existed.
+	const DELYVA = getFunctionName(api.delyva.getSettings);
+	let delyva: { connected: boolean; enabled: boolean } | undefined;
+
+	beforeEach(() => {
+		delyva = undefined;
+		navigate.mockReset();
+		vi.mocked(useQuery).mockImplementation(((opts: {
+			__fn: FunctionReference<"query">;
+		}) => {
+			const name = getFunctionName(opts.__fn);
+			if (name === NAME.listLocations) return { data: [], isPending: false };
+			if (name === DELYVA) return { data: delyva, isPending: false };
+			return { data: undefined, isPending: false };
+		}) as never);
+		vi.mocked(useMutation).mockImplementation((() =>
+			vi.fn().mockResolvedValue(undefined)) as never);
+	});
+
+	afterEach(() => {
+		cleanup();
+		window.sessionStorage.clear();
+	});
+
+	function renderTab(
+		over: {
+			deliveryBooking?: { enabled?: boolean };
+			subscription?: unknown;
+		} = {},
+	) {
+		return render(
+			<ActAsProvider>
+				<FulfilmentTab
+					retailerId={SELLER_ID as never}
+					country="MY"
+					currency="MYR"
+					offerSelfCollect={false}
+					offerDelivery={true}
+					deliveryConfig={undefined}
+					businessAddress={undefined}
+					minFulfilmentNoticeDays={undefined}
+					openingHours={undefined}
+					closedDates={undefined}
+					hasBookingListings={false}
+					minOrderValue={undefined}
+					awbConfig={undefined}
+					subscription={over.subscription as never}
+					deliveryBooking={over.deliveryBooking as never}
+				/>
+			</ActAsProvider>,
+		);
+	}
+
+	const row = () => screen.getByRole("button", { name: /^Courier booking: / });
+
+	it("says what's armed, and opens the switches on the pricing page", () => {
+		delyva = { connected: true, enabled: true };
+		renderTab({ deliveryBooking: { enabled: true } });
+		expect(row().getAttribute("aria-label")).toBe(
+			"Courier booking: Lalamove riders · Delyva",
+		);
+		fireEvent.click(row());
+		expect(navigate).toHaveBeenCalledWith({
+			to: "/app/settings/delivery-pricing",
+			hash: "courier-booking",
+		});
+	});
+
+	it("reads Off when nothing is armed — the row is still there to find", () => {
+		renderTab();
+		expect(row().getAttribute("aria-label")).toBe("Courier booking: Off");
+	});
+
+	it("a plan without delivery booking shows the Pro badge instead", () => {
+		renderTab({
+			subscription: {
+				plan: "starter",
+				status: "active",
+				features: { delivery: false },
+			},
+		});
+		expect(row().textContent).toMatch(/Pro/);
 	});
 });
