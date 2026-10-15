@@ -44,9 +44,16 @@ the route's decision, and the route already owns the navigate-after-save.
   still counts as unsaved until Save changes. A failed autosave leaves the
   baseline alone, so the photos stay dirty, the inline error says to tap
   Save, and the guard still warns.
-- **Removing a photo saves straight away, so it gets an Undo toast.**
-  Product image removal never deletes the stored file (`products.update` only
-  rewrites the ID list), so Undo is a real restore.
+- **Removing a photo saves straight away, so it gets an Undo toast,** held
+  for 10 seconds rather than the 4-second default (the hands-on test ran out
+  of time reaching for it). Product image removal never deletes the stored
+  file (`products.update` only rewrites the ID list), so Undo is a real
+  restore.
+- **Every product-photo picker clears itself after a pick**
+  (`takePickedFiles`, `src/lib/file-input.ts`). A file input only fires
+  `change` when its value changes, so without the reset, removing a photo and
+  picking the same file again did nothing at all. Covers the photo grid, the
+  wizard's per-choice cell and both variant-grid pickers.
 - **A wizard draft handed to the full form is unsaved from the first render**
   (`startsDirty`), but only if the wizard was dirty. A seller who taps
   "Skip, use the full form" without typing anything isn't asked about it.
@@ -58,9 +65,14 @@ the route's decision, and the route already owns the navigate-after-save.
   **Saved** beside the count, or an inline error if the save failed.
 - **Save button (edit):** reads **All changes saved** (disabled, with a check
   icon) when nothing is unsaved, and flips back to **Save changes** the moment
-  any field moves.
+  any field moves. The saved state is drawn solid and muted, not with the
+  usual half-transparent disabled look: on a phone the bar is sticky, and the
+  form showed through it.
 - **Leaving with unsaved work:** "Leave without saving?", or "A photo is still
-  uploading" when an upload is in flight.
+  uploading" when an upload is in flight. The wizard's own Cancel asks
+  "Discard this product?" with the same two answers, **Keep editing** /
+  **Discard changes**, so leaving reads the same whichever way the seller
+  leaves.
 
 ## Deliberately not covered
 

@@ -82,6 +82,7 @@ import {
 	type ProductSpotlightKey,
 	SPOTLIGHT_ANCHOR,
 } from "../../lib/spotlight";
+import { cn } from "../../lib/utils";
 import { cartesian, variantLabel } from "../../lib/variant";
 import { CreditLockCta, SaveLockNote } from "../credits/credit-lock-cta";
 import { Button } from "../ui/button";
@@ -1354,6 +1355,10 @@ export function ProductForm({
 		if (removed) {
 			toast("Photo removed.", {
 				id: "product-photo-removed",
+				// Removing saved straight away, so Undo is the only way back.
+				// The 4s default ran out while a seller was still reaching for
+				// it (found in the hands-on test).
+				duration: 10_000,
 				action: {
 					label: "Undo",
 					onClick: () => {
@@ -2302,7 +2307,15 @@ export function ProductForm({
 									saveLock !== undefined ||
 									nothingToSave
 								}
-								className="h-12 flex-1 shadow-lg shadow-accent/20 lg:shadow-none"
+								className={cn(
+									"h-12 flex-1 shadow-lg shadow-accent/20 lg:shadow-none",
+									// The resting state of every edit page, so it is not
+									// drawn as a half-transparent disabled button: on a phone
+									// the bar is sticky, and the form showed through it.
+									nothingToSave &&
+										!saveLock &&
+										"bg-muted text-muted-foreground shadow-none disabled:opacity-100",
+								)}
 							>
 								{nothingToSave && !saveLock ? (
 									<CheckCircle2 className="size-4" />

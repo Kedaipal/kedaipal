@@ -1262,6 +1262,8 @@ export function ProductWizard({
 		title: string;
 		description: string;
 		confirmLabel: string;
+		/** Defaults to "Cancel". */
+		cancelLabel?: string;
 		apply: () => void;
 	} | null>(null);
 	const [serverError, setServerError] = useState<string | null>(null);
@@ -1723,7 +1725,11 @@ export function ProductWizard({
 		setPendingConfirm({
 			title: "Discard this product?",
 			description: "Nothing has been saved — leaving loses the draft.",
-			confirmLabel: "Discard",
+			// The same two answers as the route's leave guard
+			// (UnsavedChangesGuard), so leaving reads the same whichever way
+			// the seller leaves: Cancel here, or the sidebar.
+			cancelLabel: "Keep editing",
+			confirmLabel: "Discard changes",
 			apply: onExit,
 		});
 	}
@@ -3691,6 +3697,7 @@ export function ProductWizard({
 				title={pendingConfirm?.title ?? ""}
 				description={pendingConfirm?.description}
 				confirmLabel={pendingConfirm?.confirmLabel ?? "Confirm"}
+				cancelLabel={pendingConfirm?.cancelLabel}
 				destructive
 				onConfirm={() => {
 					const apply = pendingConfirm?.apply;

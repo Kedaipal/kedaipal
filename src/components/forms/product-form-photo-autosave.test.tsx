@@ -49,6 +49,12 @@ vi.mock("sonner", () => ({
 	}),
 }));
 
+vi.mock("../../lib/file-input", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../lib/file-input")>();
+	return { takePickedFiles: vi.fn(actual.takePickedFiles) };
+});
+
+import { takePickedFiles } from "../../lib/file-input";
 import type { UnsavedState } from "../../lib/product-form-dirty";
 import { ProductForm } from "./product-form";
 
@@ -56,6 +62,7 @@ beforeEach(() => {
 	generateUploadUrl.mockReset();
 	generateUploadUrl.mockResolvedValue("https://upload.example/u");
 	toastFn.mockReset();
+	vi.mocked(takePickedFiles).mockClear();
 	vi.stubGlobal(
 		"fetch",
 		vi.fn(async () => ({
@@ -125,7 +132,18 @@ describe("ProductForm edit — photo-only changes (z8r3fdtk82)", () => {
 		const { last } = renderEdit();
 		expect(saveButton().textContent).toMatch(/all changes saved/i);
 		expect(saveButton().disabled).toBe(true);
+		// A solid resting state, not the half-transparent disabled look: the
+		// bar is sticky on a phone and the form showed through it.
+		expect(saveButton().className).toContain("disabled:opacity-100");
 		expect(last()).toBe("none");
+	});
+
+	it("reads the pick through takePickedFiles, which clears the picker so the same file can be picked again", async () => {
+		// jsdom never holds a value on a file input, so the reset itself is
+		// pinned in file-input.test.ts; this pins that the grid goes through it.
+		renderEdit();
+		await addPhoto();
+		expect(takePickedFiles).toHaveBeenCalledTimes(1);
 	});
 
 	it("without autosave, adding ONLY a photo enables Save and reports unsaved changes", async () => {
@@ -167,6 +185,9 @@ describe("ProductForm edit — photo-only changes (z8r3fdtk82)", () => {
 		expect(toastFn).toHaveBeenCalledWith(
 			"Photo removed.",
 			expect.objectContaining({
+				// Undo is the only way back from a removal that already saved,
+				// so it stays up longer than the 4s default.
+				duration: 10_000,
 				action: expect.objectContaining({ label: "Undo" }),
 			}),
 		);
