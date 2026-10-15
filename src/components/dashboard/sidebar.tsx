@@ -3,6 +3,7 @@ import { Link, type LinkProps } from "@tanstack/react-router";
 import type { FunctionReturnType } from "convex/server";
 import {
 	ChevronLeft,
+	GalleryHorizontalEnd,
 	Home,
 	LineChart,
 	type LucideIcon,
@@ -12,7 +13,6 @@ import {
 	ShieldCheck,
 	ShoppingBag,
 	Siren,
-	Sparkles,
 	Store,
 	Tag,
 	Ticket,
@@ -343,7 +343,7 @@ export function Sidebar({
 						<SidebarLink
 							to="/app/admin/showcases"
 							onClick={exitActAs}
-							icon={Sparkles}
+							icon={GalleryHorizontalEnd}
 							label="Showcases"
 							collapsed={collapsed}
 							motion={motion}

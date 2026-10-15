@@ -1,6 +1,7 @@
 import { Link, type LinkProps, useLocation } from "@tanstack/react-router";
 import {
 	ChevronRight,
+	GalleryHorizontalEnd,
 	Home,
 	LayoutGrid,
 	LineChart,
@@ -12,7 +13,6 @@ import {
 	ShieldCheck,
 	ShoppingBag,
 	Siren,
-	Sparkles,
 	Store,
 	Tag,
 	Ticket,
@@ -127,7 +127,11 @@ export function BottomNav({
 					: []),
 				{ to: "/app/admin/sellers", label: "Sellers", icon: Store },
 				{ to: "/app/admin/billing", label: "Billing", icon: ShieldCheck },
-				{ to: "/app/admin/showcases", label: "Showcases", icon: Sparkles },
+				{
+					to: "/app/admin/showcases",
+					label: "Showcases",
+					icon: GalleryHorizontalEnd,
+				},
 				{ to: "/app/admin/waba", label: "WABA", icon: Siren },
 			]
 		: [
