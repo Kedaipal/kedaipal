@@ -157,6 +157,7 @@ import type * as lib_seats from "../lib/seats.js";
 import type * as lib_sellerAlerts from "../lib/sellerAlerts.js";
 import type * as lib_sha256 from "../lib/sha256.js";
 import type * as lib_showcase from "../lib/showcase.js";
+import type * as lib_showcaseFeatured from "../lib/showcaseFeatured.js";
 import type * as lib_slug from "../lib/slug.js";
 import type * as lib_storeAvailability from "../lib/storeAvailability.js";
 import type * as lib_storeProfile from "../lib/storeProfile.js";
@@ -352,6 +353,7 @@ declare const fullApi: ApiFromModules<{
   "lib/sellerAlerts": typeof lib_sellerAlerts;
   "lib/sha256": typeof lib_sha256;
   "lib/showcase": typeof lib_showcase;
+  "lib/showcaseFeatured": typeof lib_showcaseFeatured;
   "lib/slug": typeof lib_slug;
   "lib/storeAvailability": typeof lib_storeAvailability;
   "lib/storeProfile": typeof lib_storeProfile;

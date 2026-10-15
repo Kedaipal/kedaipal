@@ -74,6 +74,7 @@ import { OrderFlowsSection } from "../components/settings/order-flows-card";
 import {
 	SettingsIndex,
 	SettingsRail,
+	storeGlance,
 	type TabGlance,
 } from "../components/settings/settings-nav";
 import {
@@ -420,6 +421,13 @@ function useSettingsGlances(
 	const delyva = useQuery(
 		convexQuery(api.delyva.getSettings, { retailerId: actAsRetailerId }),
 	).data;
+	// Same args as StoreStatusCard, so the card and the glance share one entry.
+	const storeStatus = useQuery(
+		convexQuery(
+			api.storeAvailability.forSeller,
+			retailer ? { retailerId: retailer._id } : "skip",
+		),
+	).data;
 	const feed = useQuery(
 		convexQuery(
 			api.calendarFeed.getCalendarFeed,
@@ -449,7 +457,7 @@ function useSettingsGlances(
 		) || (retailer.orderStages?.length ?? 0) > 0;
 
 	return {
-		store: { text: retailer.storeName },
+		store: storeGlance(retailer.storeName, storeStatus?.availability),
 		team:
 			seats === undefined
 				? undefined

@@ -229,6 +229,7 @@ export function Sidebar({
 								icon={Truck}
 								label="Deliveries"
 								collapsed={collapsed}
+								motion={motion}
 							/>
 						) : null}
 						{ordersPerm.canWrite ? (

@@ -1,4 +1,5 @@
 import { ChevronRight } from "lucide-react";
+import type { StoreAvailability } from "../../../convex/lib/storeAvailability";
 import { cn } from "../../lib/utils";
 import { SectionLabel } from "./settings-primitives";
 
@@ -21,6 +22,20 @@ export type TabGlance = {
 	/** `warn` = this tab needs the seller (amber), never decoration. */
 	tone?: "default" | "warn";
 };
+
+/** The Store row's glance. A store that isn't taking orders is the one thing
+ * on that tab the seller must not miss, so it outranks the name — from any
+ * other tab, the rail says the store is switched off (z8r3fdudf7). Still
+ * loading (`undefined`) reads as the name, never as a guess. */
+export function storeGlance(
+	storeName: string,
+	availability: StoreAvailability | undefined,
+): TabGlance {
+	if (availability?.state === "paused") return { text: "Paused", tone: "warn" };
+	if (availability?.state === "offline")
+		return { text: "Offline", tone: "warn" };
+	return { text: storeName };
+}
 
 export type NavTab<T extends string> = { id: T; label: string };
 
