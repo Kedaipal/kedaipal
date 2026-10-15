@@ -6,6 +6,7 @@ import {
 	internalAction,
 	internalQuery,
 } from "./_generated/server";
+import { courierProviderValidator } from "./lib/courierProviders";
 import { sendEmail } from "./lib/email";
 import {
 	type DeliveryMethod,
@@ -164,7 +165,7 @@ export const notifyDeliveryJobFailed = internalAction({
 		reason: v.optional(v.string()),
 		// Which booking provider failed (86eyjpv6z). Absent = "lalamove", so
 		// pre-Delyva scheduled sends keep rendering unchanged.
-		provider: v.optional(v.union(v.literal("lalamove"), v.literal("delyva"))),
+		provider: v.optional(courierProviderValidator),
 	},
 	handler: async (ctx, { orderId, reason, provider }): Promise<void> => {
 		let meta: {

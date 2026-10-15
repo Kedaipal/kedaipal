@@ -8,6 +8,10 @@
  */
 
 import { type Country, DEFAULT_COUNTRY } from "./country";
+import {
+	COURIER_PROVIDER_IDS,
+	type CourierProviderId,
+} from "./courierProviders";
 import { delyvaBookingAllowed, riderBookingAllowed } from "./delivery";
 import { resolveDelyvaCredentials } from "./delyva";
 
@@ -43,11 +47,26 @@ export function delyvaBookingArmed(retailer: CourierRetailer): boolean {
 }
 
 /**
+ * One armed predicate per provider — the registry shape (Record over
+ * `CourierProviderId`) is what turns "forgot to wire the new provider into
+ * the storefront's booksCouriers bit" into a compile error.
+ */
+const PROVIDER_BOOKING_ARMED: Record<
+	CourierProviderId,
+	(retailer: CourierRetailer) => boolean
+> = {
+	lalamove: lalamoveBookingArmed,
+	delyva: delyvaBookingArmed,
+};
+
+/**
  * Whether a delivery order at this store may be handed to a courier. Plan
  * gating is deliberately not read (it would cost the hot public storefront
  * read a subscription lookup); a lapsed store with booking still switched on
  * reads true, which only means a buyer sees a note that turns out moot.
  */
 export function storeBooksCouriers(retailer: CourierRetailer): boolean {
-	return lalamoveBookingArmed(retailer) || delyvaBookingArmed(retailer);
+	return COURIER_PROVIDER_IDS.some((id) =>
+		PROVIDER_BOOKING_ARMED[id](retailer),
+	);
 }

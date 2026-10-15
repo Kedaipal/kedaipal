@@ -34,7 +34,7 @@ describe("delyvaBlockCopy", () => {
 
 	it("country_unsupported names the way out, and no country (both book Delyva)", () => {
 		// It said "only available for Malaysian stores" while
-		// COUNTRY_DELYVA_BOOKING.SG was true — false on the day it was written.
+		// COUNTRY_COURIER_BOOKING.delyva.SG was true — false on the day it was written.
 		const copy = delyvaBlockCopy("country_unsupported");
 		expect(copy).toMatch(/your country/);
 		expect(copy).toMatch(/tracking number/);

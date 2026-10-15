@@ -29,7 +29,7 @@ const courier = (fee: number, currency = "MYR"): ProviderQuote => ({
 });
 
 const failed = (
-	provider: "lalamove" | "delyva",
+	provider: ProviderQuote["provider"],
 	status: "out_of_range" | "no_cold_service" | "store_unavailable" | "unavailable",
 ): ProviderQuote => ({ provider, status }) as ProviderQuote;
 

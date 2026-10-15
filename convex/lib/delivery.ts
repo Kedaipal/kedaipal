@@ -23,6 +23,10 @@
 
 import { MY_STATES } from "./address";
 import type { Country } from "./country";
+import {
+	courierBookingAllowed,
+	type CourierProviderId,
+} from "./courierProviders";
 
 export type DeliveryBand = {
 	/** Band upper bound in km, INCLUSIVE (distance == maxKm is inside). */
@@ -115,7 +119,7 @@ export type DeliveryConfig =
  * Delivery pricing modes a store COUNTRY may use (SG-lite, 86eynw29u).
  * "Free" is spelled as no config, so it's implicitly allowed everywhere.
  * SG stores are flat-fee-only for now: radius/weight zone geography and the
- * Lalamove integration (whose market gate is COUNTRY_RIDER_BOOKING) are all
+ * Lalamove integration (whose market gate is COUNTRY_COURIER_BOOKING) are all
  * Malaysia-shaped today, so
  * storing one of those modes on an SG store would strand every order as
  * fee-pending or block checkout outright. One author for three enforcement
@@ -145,21 +149,14 @@ export function deliveryModeAllowed(
 /**
  * Whether a store COUNTRY may run Lalamove RIDER BOOKING (`deliveryBooking`).
  *
- * Deliberately its own table rather than derived from `COUNTRY_DELIVERY_MODES`,
- * because pricing and booking are independent by design (a flat-fee store can
- * still dispatch riders — the `pricing ⊥ booking` rule). Derive one from the
- * other and the next country's decision gets made silently by a mode list.
- *
- * SG went TRUE with z8r3fdch3r. The blockers were ours, and each was closed
- * with evidence, not hope: the Market header now follows the store
- * (`lalamoveMarketForCountry`), `toLalamoveContactPhone` accepts each
- * market's own numbers, SGD's one-decimal amounts already parse correctly,
- * SG shares UTC+8 so the MYT helpers hold, and our two hardcoded
- * serviceTypes (MOTORCYCLE, CAR) appear verbatim in Lalamove's own published
- * SG catalogue (developers.lalamove.com specialRequests SG sheet — SG's full
- * set is MOTORCYCLE/CAR/MINIVAN/MPV/VAN/TRUCK330/TRUCK550). What remains
- * unproven is only a live end-to-end run on an SG key, and every failure on
- * that path already surfaces with named reasons rather than dead ends.
+ * Deliberately a per-provider decision rather than derived from
+ * `COUNTRY_DELIVERY_MODES`, because pricing and booking are independent by
+ * design (a flat-fee store can still dispatch riders — the `pricing ⊥
+ * booking` rule). Derive one from the other and the next country's decision
+ * gets made silently by a mode list. The decision itself lives in the
+ * courier provider registry (`COUNTRY_COURIER_BOOKING`,
+ * lib/courierProviders.ts), one row per provider, with each country's
+ * history recorded there.
  *
  * It is enforced in a different place from the mode list: the
  * country-switch guard in `retailers.updateSettings`. Without it an MY store on
@@ -168,48 +165,18 @@ export function deliveryModeAllowed(
  * (the 86eypncfy lesson: a broken Lalamove state must be visible BEFORE a
  * seller reaches for it, never after).
  */
-export const COUNTRY_RIDER_BOOKING: Record<Country, boolean> = {
-	MY: true,
-	SG: true,
-};
-
 export function riderBookingAllowed(country: Country): boolean {
-	return COUNTRY_RIDER_BOOKING[country];
+	return courierBookingAllowed("lalamove", country);
 }
 
 /**
  * Whether a store COUNTRY may connect Delyva courier booking (86eyjpv6z).
- * Its own table for the same reason as COUNTRY_RIDER_BOOKING above — booking
- * capabilities are decided per provider, never derived from a pricing-mode
- * list. The two providers have disagreed before (Lalamove was MY-only until
- * z8r3fdch3r opened SG) and may again; deriving either from the other would
- * make that impossible to express.
+ * Same registry row discipline as above — see `COUNTRY_COURIER_BOOKING` in
+ * lib/courierProviders.ts for Delyva's per-country record (including why SG
+ * reads true while shipping an empty service catalogue).
  */
-export const COUNTRY_DELYVA_BOOKING: Record<Country, boolean> = {
-	MY: true,
-	// SG is supported because the API takes SG addresses unchanged — verified
-	// 2 Sep 2026: a country:"SG" quote with a 6-digit postal code returns a
-	// well-formed 200.
-	//
-	// It is NOT, however, "the only courier automation an SG store can have" —
-	// the original justification here, now known to be wrong on both halves
-	// (corrected 4 Sep):
-	//   · Lalamove DOES serve Singapore (Market: "SG"); our own
-	//     COUNTRY_RIDER_BOOKING.SG gate is what hides it, not their coverage.
-	//     Un-hardcoding the MY market is ticket z8r3fdch3r — and since Lalamove
-	//     is intra-city and in Singapore the city IS the country, it would
-	//     cover every SG→SG delivery.
-	//   · Delyva SG is bring-your-own-courier in practice: the tenant is real
-	//     (sg.delyva.app, +65) but ships an EMPTY service catalogue, there is
-	//     no SG sandbox, and delyva.com/sg now redirects away. An SG store can
-	//     connect it and quote nothing.
-	// So this stays true — it costs nothing and works for a seller who brings
-	// their own courier — but no SG launch should depend on it.
-	SG: true,
-};
-
 export function delyvaBookingAllowed(country: Country): boolean {
-	return COUNTRY_DELYVA_BOOKING[country];
+	return courierBookingAllowed("delyva", country);
 }
 
 /**
@@ -288,10 +255,10 @@ export type DeliveryQuote =
 			chargeableKg?: number;
 			bandMaxKg?: number;
 			/** Live modes: which provider set the price, and everyone who bid. */
-			quoteProvider?: "lalamove" | "delyva";
+			quoteProvider?: CourierProviderId;
 			quoteServiceName?: string;
 			quotesConsidered?: Array<{
-				provider: "lalamove" | "delyva";
+				provider: CourierProviderId;
 				fee: number;
 				currency: string;
 			}>;
@@ -310,7 +277,7 @@ export type LiveProviderQuote = {
 	fee: number;
 	/** Which provider's price this is (z8r3fdbvdy). Absent on rows minted
 	 * before live pricing became provider-aware — those are Lalamove's. */
-	provider?: "lalamove" | "delyva";
+	provider?: CourierProviderId;
 	/** Lalamove binds its price to a 5-minute quotation id; Delyva's prices
 	 * are indicative and carry none, so both audit fields are optional. */
 	quotationId?: string;
@@ -321,7 +288,7 @@ export type LiveProviderQuote = {
 	/** Every quote that competed, winner included — the "why was I charged
 	 * this" trail, frozen onto the order at create. */
 	considered?: Array<{
-		provider: "lalamove" | "delyva";
+		provider: CourierProviderId;
 		fee: number;
 		currency: string;
 	}>;
