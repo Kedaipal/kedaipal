@@ -247,21 +247,22 @@ describe("a short window scrolls the link list; the chrome never squashes", () =
 		expect(nav?.classList).toContain("*:shrink-0");
 	});
 
-	it("the 68px rail hides its scrollbar so an always-shown one can't push icons off-centre", () => {
+	it("the 68px rail hides its scrollbar so an always-shown one can't push icons off-centre; both states shade the scroll edge", () => {
 		collapsed = true;
 		const rail = render(
 			<Sidebar retailer={STORE} newOrdersCount={0} isAdmin />,
 		);
-		expect(rail.container.querySelector("nav")?.className).toContain(
-			"[scrollbar-width:none]",
-		);
+		const railNav = rail.container.querySelector("nav");
+		expect(railNav?.classList).toContain("scrollbar-none");
+		// With no scrollbar, the shadow is the only "there's more".
+		expect(railNav?.classList).toContain("scroll-shadow-y");
 		cleanup();
 		collapsed = false;
 		const open = render(
 			<Sidebar retailer={STORE} newOrdersCount={0} isAdmin />,
 		);
-		expect(open.container.querySelector("nav")?.className).toContain(
-			"[scrollbar-width:thin]",
-		);
+		const openNav = open.container.querySelector("nav");
+		expect(openNav?.className).toContain("[scrollbar-width:thin]");
+		expect(openNav?.classList).toContain("scroll-shadow-y");
 	});
 });

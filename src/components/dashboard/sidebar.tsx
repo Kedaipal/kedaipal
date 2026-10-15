@@ -170,12 +170,14 @@ export function Sidebar({
 			    was pushed off-screen. `*:shrink-0` because each link is
 			    overflow-hidden too, so it would squash to nothing rather than
 			    scroll. The 68px rail hides its scrollbar: a classic (always-shown)
-			    one would take ~15px and push every icon off-centre, and the
-			    half-cut last row already says there's more. */}
+			    one would take ~15px and push every icon off-centre. "There's
+			    more" is the scroll shadow instead, in both states — a macOS
+			    overlay scrollbar is invisible until used, and a half-cut row
+			    says nothing when the cut lands on a gap (PR #372 review). */}
 			<nav
 				className={cn(
-					"flex min-h-0 flex-1 flex-col gap-1 overflow-x-hidden overflow-y-auto overscroll-contain p-2 *:shrink-0",
-					collapsed ? "[scrollbar-width:none]" : "[scrollbar-width:thin]",
+					"flex min-h-0 flex-1 scroll-shadow-y flex-col gap-1 overflow-x-hidden overflow-y-auto overscroll-contain p-2 *:shrink-0",
+					collapsed ? "scrollbar-none" : "[scrollbar-width:thin]",
 				)}
 			>
 				{/* Seller nav — only when there's a store to operate (own or act-as).
