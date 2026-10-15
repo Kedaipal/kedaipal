@@ -38,6 +38,7 @@ import {
 } from "../../../convex/lib/closedDates";
 import type { Country } from "../../../convex/lib/country";
 import type { DeliveryConfig } from "../../../convex/lib/delivery";
+import { riderBookingAllowed } from "../../../convex/lib/delivery";
 import {
 	DEFAULT_MIN_NOTICE_DAYS,
 	hhmmFromMinutes,
@@ -57,6 +58,8 @@ import {
 	WEEKDAY_NAMES,
 	WEEKDAY_NAMES_SHORT,
 } from "../../../convex/lib/openingHours";
+import type { DeliveryBookingSummary } from "../../../convex/retailers";
+import { useActAsRetailerId } from "../../hooks/useActAs";
 import { useChecklistStamp } from "../../hooks/useChecklistStamp";
 import { useUpdateSettings } from "../../hooks/useUpdateSettings";
 import { MASK_PII } from "../../lib/analytics-privacy";
@@ -83,6 +86,7 @@ import { deriveMapsUrl } from "../../lib/google-address";
 import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import { hasFeature, type SubscriptionView } from "../../lib/subscription";
 import { cn } from "../../lib/utils";
+import { ProBadge } from "../app/pro-gate";
 import {
 	GoogleAddressAutocomplete,
 	type GoogleSelectedAddress,
@@ -98,6 +102,10 @@ import { SortableList } from "../ui/sortable-list";
 import { TimePicker } from "../ui/time-picker";
 import { ToggleSwitch } from "../ui/toggle-switch";
 import { ClosedDatesCard } from "./closed-dates-card";
+import {
+	COURIER_BOOKING_ANCHOR,
+	courierBookingGlance,
+} from "./courier-booking-section";
 import type { BusinessAddress } from "./delivery-pricing";
 import { DespatchLabelCard } from "./despatch-label-card";
 import { PickupLocationEditDialog } from "./pickup-location-edit-dialog";
@@ -150,6 +158,8 @@ interface FulfilmentTabProps {
 	/** Resolved subscription — drives the Pro-gated pickup-fee input in the
 	 * edit dialog (client mirror only; the server gate is the real lock). */
 	subscription: SubscriptionView | undefined;
+	/** Lalamove connection + arm switch — the Courier booking row's glance. */
+	deliveryBooking: DeliveryBookingSummary | undefined;
 }
 
 /**
@@ -286,6 +296,7 @@ export function FulfilmentTab({
 	minOrderValue,
 	awbConfig,
 	subscription,
+	deliveryBooking,
 }: FulfilmentTabProps) {
 	const locations = useQuery(
 		convexQuery(api.pickupLocations.listForRetailer, { retailerId }),
@@ -295,6 +306,18 @@ export function FulfilmentTab({
 	const pricing = pricingSummary(deliveryConfig, (sen) =>
 		formatPrice(sen, currency),
 	);
+	// Same args as CourierBookingSection, so the row and the switch share one
+	// cache entry and can't disagree.
+	const actAsRetailerId = useActAsRetailerId();
+	const delyva = useQuery(
+		convexQuery(api.delyva.getSettings, { retailerId: actAsRetailerId }),
+	).data;
+	const courierBooking = courierBookingGlance({
+		riderBookingAvailable: riderBookingAllowed(country),
+		lalamoveArmed: deliveryBooking?.enabled === true,
+		lalamovePricing: deliveryConfig?.mode === "lalamove",
+		delyvaArmed: delyva?.connected === true && delyva.enabled === true,
+	});
 	/** Ring this card when it's the one the deep link sent the seller to.
 	 * Undefined on a normal visit. */
 	const ring = (anchor: string): FixHighlight | undefined =>
@@ -563,6 +586,35 @@ export function FulfilmentTab({
 								// The row reads "Pricing" inside the Delivery card; out of
 								// that context a screen reader needs the noun and the value.
 								ariaLabel={`Delivery pricing: ${pricing}`}
+							/>
+							{/* The arm switches live on the pricing page (3A: they ride
+							    along with pricing), but a seller looking to turn rider
+							    booking on looks for "Courier booking", not "Pricing" —
+							    so it gets its own row here, landing on that card. Every
+							    "turn it on under Fulfilment → Courier booking" hint in
+							    the app depends on this row existing. */}
+							<SummaryRow
+								label="Courier booking"
+								// Plain like the rows beside it — the card's one pill is
+								// the Delivery heading's glance.
+								value={
+									!hasFeature(subscription, "delivery") ? (
+										<ProBadge />
+									) : courierBooking === "Off" ? (
+										<span className="font-normal text-muted-foreground">
+											Off
+										</span>
+									) : (
+										courierBooking
+									)
+								}
+								onClick={() =>
+									void navigate({
+										to: "/app/settings/delivery-pricing",
+										hash: COURIER_BOOKING_ANCHOR,
+									})
+								}
+								ariaLabel={`Courier booking: ${courierBooking}`}
 							/>
 							<ExpandableRow
 								id={SETTINGS_ANCHOR.business_address}

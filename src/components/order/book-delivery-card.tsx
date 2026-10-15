@@ -391,11 +391,11 @@ export function BookDeliveryCard({
 				Book Lalamove riders in one tap from here — turn on{" "}
 				<b>Lalamove riders</b> under Courier booking in{" "}
 				<Link
-					to="/app/settings"
-					search={{ tab: "fulfilment" }}
+					to="/app/settings/delivery-pricing"
+					hash="courier-booking"
 					className="font-medium text-accent hover:underline"
 				>
-					Settings → Fulfilment
+					Settings → Delivery pricing
 				</Link>
 				.
 			</p>

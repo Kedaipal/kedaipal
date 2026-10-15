@@ -165,9 +165,11 @@ export function countrySetupHeadline(
  * letting them hunt is the difference between a checklist they act on and one
  * they close.
  *
- * Two pairs share a card on purpose: a pickup point's address and its manager
- * number are edited in the same place, as are the delivery-charge mode and the
- * Lalamove booking that rides it.
+ * One pair shares a card on purpose: a pickup point's address and its manager
+ * number are edited in the same place. `delivery_booking` is about the
+ * Lalamove KEYS, so it rings the Lalamove card on Integrations — the tab its
+ * own copy sends the seller to. It used to point at the delivery-charge card on
+ * Fulfilment, so the link opened Integrations and rang nothing.
  */
 export const SETTINGS_ANCHOR: Record<CountrySetupItemKey, string> = {
 	payment_methods: "settings-payment-methods",
@@ -176,7 +178,7 @@ export const SETTINGS_ANCHOR: Record<CountrySetupItemKey, string> = {
 	pickup_addresses: "settings-pickup",
 	delivery_mode: "settings-delivery-charge",
 	pickup_contacts: "settings-pickup",
-	delivery_booking: "settings-delivery-charge",
+	delivery_booking: "settings-lalamove",
 	wa_phone: "settings-wa-phone",
 	notify_wa_phone: "settings-wa-alerts",
 	message_copy: "settings-message-templates",
