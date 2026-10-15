@@ -16,6 +16,7 @@ import {
 	Store,
 	Tag,
 	Ticket,
+	Truck,
 	Users,
 } from "lucide-react";
 import {
@@ -218,6 +219,17 @@ export function Sidebar({
 								search={
 									newOrdersCount > 0 ? { bucket: ["new" as const] } : undefined
 								}
+							/>
+						) : null}
+						{/* Deliveries (86eye9xd4, 6A) sits right under Orders: it is
+						    the same orders, followed out the door. */}
+						{ordersPerm.canRead ? (
+							<SidebarLink
+								to="/app/deliveries"
+								icon={Truck}
+								label="Deliveries"
+								collapsed={collapsed}
+								motion={motion}
 							/>
 						) : null}
 						{ordersPerm.canWrite ? (

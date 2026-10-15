@@ -557,6 +557,14 @@ export default defineSchema({
 				deliveryDirection: v.optional(
 					v.union(v.literal("standard"), v.literal("collection")),
 				),
+				// When this store's Lalamove account is KNOWN to deliver its
+				// webhooks to us (86eye9xd4, 5A): stamped by our one-tap
+				// `PATCH /v3/webhook`, or by the first verified event for one of
+				// its jobs (proof a manual paste worked). Cleared when the key
+				// changes — a different account has its own webhook setting.
+				// Undefined = not known, which the setup checklist shows as the
+				// step still to do.
+				webhookRegisteredAt: v.optional(v.number()),
 			}),
 		),
 		// HitPay online payments (86eyb6z3a) — BYO-ONLY like deliveryBooking above:
@@ -2610,6 +2618,30 @@ export default defineSchema({
 	// failed/cancelled jobs stay as history and a rebook inserts a new row.
 	// `by_provider_order` is the webhook lookup; `by_retailer` keeps per-store
 	// range reads cheap.
+	// A seller's courier WALLET as the courier reports it (86eye9xd4, 6A).
+	// Lalamove pushes the balance on a WALLET_BALANCE_CHANGED webhook — there
+	// is no endpoint to poll — and that event carries no order, only the
+	// sender's API key. Stored keys are encrypted at rest (86eyn25gk), so the
+	// key can't be matched against them: `keyFingerprint` (SHA-256 of the
+	// plaintext key, stamped when the key is saved) is what attributes the
+	// event to a store, whose own secret then verifies it. Own table rather
+	// than fields on `retailers`: a balance moves on every booking, and a
+	// retailer patch re-runs every open storefront tab.
+	courierWallets: defineTable({
+		retailerId: v.id("retailers"),
+		provider: v.literal("lalamove"),
+		keyFingerprint: v.string(),
+		// Minor units (sen / cents) in `currency`, as of `balanceAt` — the
+		// courier's own event time, so a late event can't overwrite a newer one.
+		// Undefined until the first event arrives.
+		balance: v.optional(v.number()),
+		currency: v.optional(v.string()),
+		balanceAt: v.optional(v.number()),
+		updatedAt: v.number(),
+	})
+		.index("by_retailer_provider", ["retailerId", "provider"])
+		.index("by_fingerprint", ["keyFingerprint"]),
+
 	deliveryJobs: defineTable({
 		orderId: v.id("orders"),
 		retailerId: v.id("retailers"),
@@ -2639,6 +2671,10 @@ export default defineSchema({
 		// the buyer-paid orders.deliveryFee is expected (dispatch re-quotes) and
 		// lives HERE, never rewriting the order.
 		costActual: v.number(),
+		// Tip added while the booking waited for a rider (86eye9xd4) —
+		// Lalamove's priority fee, minor units, cumulative and ALREADY included
+		// in costActual. Undefined = no tip.
+		priorityFee: v.optional(v.number()),
 		// Lalamove: the 5-minute quotation the booking was placed against.
 		// Delyva: the service CODE picked in the dispatch dialog (their quotes
 		// are indicative, not id-bound — create re-prices), so this stays the

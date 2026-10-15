@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
+import type { DeliveryJobStatus } from "../../../convex/lib/deliveryJobs";
 import {
 	formatFulfilmentDateTime,
 	hhmmFromMinutes,
@@ -29,6 +30,11 @@ import {
 import type { LalamoveMarket } from "../../../convex/lib/lalamove";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import { formatCountdown } from "../../lib/countdown";
+import {
+	JOB_TONE_CLASS,
+	jobStatusLabel,
+	jobStatusTone,
+} from "../../lib/delivery-job-status";
 import {
 	dispatchBlockCopy,
 	riderContactFallbackCopy,
@@ -48,6 +54,7 @@ import {
 	DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { AddTipDialog, canTipMore } from "./add-tip-dialog";
 
 /** How long "Confirm & dispatch" stays inert after it appears (86eypjfuf).
  * Long enough that a tap already in flight — the one that opened the dialog,
@@ -134,6 +141,7 @@ export function BookDeliveryCard({
 	const prepareBooking = useAction(api.lalamove.prepareBooking);
 	const confirmBooking = useAction(api.lalamove.confirmBooking);
 	const cancelBooking = useAction(api.lalamove.cancelBooking);
+	const [tipOpen, setTipOpen] = useState(false);
 	// AC2 of the rebook fix (86eyp63xn): booking at a seller-picked moment can
 	// also move the ORDER's promise in the same action — see syncOrderTime.
 	const rescheduleFulfilment = useMutation(api.orders.rescheduleFulfilment);
@@ -721,9 +729,53 @@ export function BookDeliveryCard({
 								: "Finding a rider… this usually takes a few minutes. When one picks up, the order moves itself to Shipped and the live tracking link appears on the buyer's order page — nothing for you to do."}
 						</p>
 					)}
+					{/* A booking nobody accepts expires — the tip is the lever
+					    (86eye9xd4). Offered only while it's still finding a rider. */}
+					{activeJob.status === "assigning" &&
+					activeJob.providerOrderId !== undefined &&
+					!(
+						activeJob.scheduledAt !== undefined &&
+						activeJob.scheduledAt > Date.now()
+					) ? (
+						<div className="flex items-center gap-3 rounded-xl border border-border px-3 py-2.5">
+							<p className="min-w-0 flex-1 text-xs text-muted-foreground">
+								{(activeJob.priorityFee ?? 0) > 0
+									? `Tip of ${formatPrice(activeJob.priorityFee ?? 0, order.currency)} added. Still waiting?`
+									: "Taking a while? A tip helps a nearby rider take it sooner."}
+							</p>
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								className="tap-target shrink-0"
+								disabled={
+									!canTipMore(order.currency, activeJob.priorityFee ?? 0)
+								}
+								title={
+									canTipMore(order.currency, activeJob.priorityFee ?? 0)
+										? undefined
+										: "This booking has reached its tip limit"
+								}
+								onClick={() => setTipOpen(true)}
+							>
+								Add tip
+							</Button>
+							<AddTipDialog
+								open={tipOpen}
+								onOpenChange={setTipOpen}
+								shortId={order.shortId}
+								currency={order.currency}
+								fare={activeJob.costActual}
+								tipped={activeJob.priorityFee ?? 0}
+							/>
+						</div>
+					) : null}
 					<div className="flex items-center justify-between text-xs text-muted-foreground">
 						<span>
 							Booking cost {formatPrice(activeJob.costActual, order.currency)}
+							{(activeJob.priorityFee ?? 0) > 0
+								? ` (incl. ${formatPrice(activeJob.priorityFee ?? 0, order.currency)} tip)`
+								: ""}
 						</span>
 						{activeJob.shareLink ? (
 							<a
@@ -1320,34 +1372,17 @@ function JobStatusPill({
 	status,
 	collection,
 }: {
-	status: string;
+	status: DeliveryJobStatus;
 	collection: boolean;
 }) {
-	// Delivered is a terminal, settled state — match the order status badge's
-	// green rather than the in-progress mint. Collection trips end at the
-	// SELLER's outlet, so "Delivered" would misread — "Arrived" it is.
-	if (status === "completed") {
-		return (
-			<span className="rounded-full bg-green-100 px-2.5 py-1 text-xs font-medium text-green-800 dark:bg-green-950 dark:text-green-200">
-				{collection ? "Arrived" : "Delivered"}
-			</span>
-		);
-	}
-	const label =
-		status === "assigning"
-			? "Finding rider"
-			: status === "ongoing"
-				? collection
-					? "Heading to customer"
-					: "Rider on the way"
-				: status === "picked_up"
-					? collection
-						? "Collected"
-						: "Picked up"
-					: status;
+	// Delivered is a terminal, settled state — the order status badge's green
+	// rather than the in-progress mint. Words from the shared author, so this
+	// card and the Deliveries page never disagree.
 	return (
-		<span className="rounded-full bg-accent/15 px-2.5 py-1 text-xs font-medium text-accent-emphasis">
-			{label}
+		<span
+			className={`rounded-full px-2.5 py-1 text-xs font-medium ${JOB_TONE_CLASS[jobStatusTone(status)]}`}
+		>
+			{jobStatusLabel(status, { provider: "lalamove", collection })}
 		</span>
 	);
 }

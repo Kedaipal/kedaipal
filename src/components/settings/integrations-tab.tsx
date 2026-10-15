@@ -63,21 +63,27 @@ export function IntegrationsTab({
 	retailerId,
 	country,
 	deliveryBooking,
+	businessAddress,
 	hitpay,
 	subscription,
 	onSave,
+	onOpenPayments,
 }: {
 	/** Deep-link target — which card to ring, and how (see FulfilmentTab). */
 	target?: CardTarget;
 	retailerId: Doc<"retailers">["_id"];
 	country: Country;
 	deliveryBooking: DeliveryBookingSummary | undefined;
+	/** Lalamove's first setup step — riders are sent here. */
+	businessAddress: { label: string } | undefined;
 	hitpay: HitpaySummary | undefined;
 	subscription: SubscriptionView | undefined;
 	/** The act-as-aware settings mutation, threaded from the route (the
 	 * presentational cards patch through it; the Delyva card owns its own
 	 * Convex namespace and act-as internally). */
 	onSave: ReturnType<typeof useUpdateSettings>;
+	/** Payments → How buyers pay, where HitPay is switched on (86eye9xd4). */
+	onOpenPayments: () => void;
 }) {
 	const ring = (anchor: string): FixHighlight | undefined =>
 		target?.anchor === anchor ? target.highlight : undefined;
@@ -85,8 +91,9 @@ export function IntegrationsTab({
 		<div className="flex flex-col gap-6 pt-2">
 			<p className="px-1 text-xs text-muted-foreground">
 				Your own accounts with the services Kedaipal can drive. Connecting one
-				doesn&apos;t switch anything on by itself — delivery and booking
-				behaviour is chosen under Fulfilment, online payments under Payments.
+				doesn&apos;t switch anything on by itself — delivery pricing and courier
+				booking are chosen under Fulfilment → Delivery pricing, how buyers pay
+				under Payments.
 			</p>
 
 			<AccountCard
@@ -94,7 +101,9 @@ export function IntegrationsTab({
 				highlight={ring(SPOTLIGHT_ANCHOR.lalamove.anchor)}
 			>
 				<LalamoveIntegrationCard
+					retailerId={retailerId}
 					deliveryBooking={deliveryBooking}
+					businessAddress={businessAddress}
 					onSave={onSave}
 				/>
 			</AccountCard>
@@ -121,6 +130,7 @@ export function IntegrationsTab({
 					canUse={hasFeature(subscription, "onlinePayments")}
 					country={country}
 					onSave={onSave}
+					onChooseHowBuyersPay={onOpenPayments}
 				/>
 			</AccountCard>
 		</div>

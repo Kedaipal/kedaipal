@@ -147,6 +147,9 @@ export type OrderReceiptData = {
 	 * card is headed "Payment", not "How to pay", and the footer asks for no
 	 * transfer reference — there is nothing to transfer yet. */
 	paymentsPaused?: boolean;
+	/** Unpaid and payable through the seller's HitPay checkout (86eye9xd4):
+	 * the footer asks for no transfer reference — the gateway carries it. */
+	payOnline?: boolean;
 };
 
 export type SubscriptionInvoiceData = {
@@ -221,6 +224,8 @@ type OrderForReceipt = {
 	currency: string;
 	fulfilmentDate?: number;
 	customerNote?: string;
+	/** Set when the payment settled through the seller's HitPay checkout. */
+	gatewayPaymentId?: string;
 };
 
 type PaymentMethodForReceipt = {
@@ -318,6 +323,51 @@ export function paymentMethodsToBlocks(
 	return blocks;
 }
 
+/**
+ * The receipt's payment card — what the buyer is asked to do, or what they did.
+ * In order: a lapsed store's unpaid bill prints the paused notice; a payment
+ * that settled through HitPay names it rather than bank accounts the buyer
+ * never used; an unpaid order HitPay can take points at Pay now, since the
+ * manual details are withheld while it's on (86eye9xd4, 8A); everything else
+ * prints the seller's manual methods.
+ */
+function receiptPaymentBlocks(args: {
+	order: OrderForReceipt;
+	storeName: string;
+	paymentMethods: PaymentMethodForReceipt[];
+	paymentsPaused?: boolean;
+	payOnline?: boolean;
+	paid: boolean;
+}): PaymentBlock[] {
+	if (args.paymentsPaused && !args.paid) {
+		return [
+			{
+				label: PAYMENTS_PAUSED_HEADING,
+				lines: [paymentsPausedRefusal(printable(args.storeName))],
+			},
+		];
+	}
+	if (args.paid && args.order.gatewayPaymentId) {
+		return [
+			{
+				label: "Paid online",
+				lines: [`HitPay payment ${args.order.gatewayPaymentId}`],
+			},
+		];
+	}
+	if (args.payOnline && !args.paid) {
+		return [
+			{
+				label: "Pay online",
+				lines: [
+					"Open your order page and tap Pay now — your payment confirms automatically.",
+				],
+			},
+		];
+	}
+	return paymentMethodsToBlocks(args.paymentMethods);
+}
+
 export function orderToReceiptData(args: {
 	order: OrderForReceipt;
 	storeName: string;
@@ -333,8 +383,11 @@ export function orderToReceiptData(args: {
 	// notice in place of the bank details — a forwarded invoice is the same
 	// payment request the order page withholds.
 	paymentsPaused?: boolean;
+	// The store's HitPay checkout can take this order (86eye9xd4, 8A): the
+	// manual details are withheld, so the document points at Pay now instead.
+	payOnline?: boolean;
 }): OrderReceiptData {
-	const { order, storeName, paymentMethods } = args;
+	const { order, storeName } = args;
 	const status = order.paymentStatus ?? "unpaid";
 	const paid = isOrderDocPaid(status);
 	return {
@@ -395,15 +448,9 @@ export function orderToReceiptData(args: {
 		fulfilmentDate: order.fulfilmentDate,
 		customerNote: printable(order.customerNote),
 		paymentsPaused: args.paymentsPaused && !paid ? true : undefined,
-		paymentBlocks:
-			args.paymentsPaused && !paid
-				? [
-						{
-							label: PAYMENTS_PAUSED_HEADING,
-							lines: [paymentsPausedRefusal(printable(storeName))],
-						},
-					]
-				: paymentMethodsToBlocks(paymentMethods),
+		payOnline:
+			args.payOnline && !paid && !args.paymentsPaused ? true : undefined,
+		paymentBlocks: receiptPaymentBlocks({ ...args, paid }),
 	};
 }
 

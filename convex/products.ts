@@ -83,6 +83,7 @@ import {
 	POPULAR_TOP_CANDIDATES,
 	rankPopularProducts,
 } from "./lib/popularProducts";
+import { lacksParcelWeight } from "./lib/delivery";
 import { rateLimiter } from "./lib/rateLimiter";
 import { SLUG_MAX, SLUG_MIN, slugify } from "./lib/slug";
 import {
@@ -996,6 +997,54 @@ export const hasEventListings = query({
 			)
 			.collect();
 		return rows.some((p) => p.event !== undefined);
+	},
+});
+
+/** How many products a weight-priced checkout can't price, named. */
+export const MISSING_WEIGHT_NAMED_MAX = 5;
+
+/**
+ * The weight & zone readiness check (86eye9xd4, 4A): live, active, physical
+ * products with at least one live non-custom choice that has no parcel
+ * weight. Checkout refuses (or holds for WhatsApp) any cart holding one, so
+ * the delivery-pricing page names them up front instead of leaving the seller
+ * to find out from a stranded order.
+ *
+ * Bounded by the product cap (z8r3fdjmf4q): one indexed variant read per
+ * active product. Custom choices never count — their weight is unknowable by
+ * design, and the "When the weight can't be calculated" rule covers them.
+ */
+export const missingParcelWeights = query({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{
+		count: number;
+		named: Array<{ productId: Id<"products">; name: string }>;
+	}> => {
+		await requireRetailerOwnership(ctx, retailerId, "read");
+		const products = await ctx.db
+			.query("products")
+			.withIndex("by_retailer_active", (q) =>
+				q.eq("retailerId", retailerId).eq("active", true),
+			)
+			.collect();
+		const missing: Array<{ productId: Id<"products">; name: string }> = [];
+		for (const product of products) {
+			if (effectiveKind(product.kind) !== "physical") continue;
+			const variants = await ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", product._id))
+				.collect();
+			if (variants.some((v) => v.active && lacksParcelWeight(v))) {
+				missing.push({ productId: product._id, name: product.name });
+			}
+		}
+		return {
+			count: missing.length,
+			named: missing.slice(0, MISSING_WEIGHT_NAMED_MAX),
+		};
 	},
 });
 

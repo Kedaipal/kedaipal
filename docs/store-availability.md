@@ -101,7 +101,10 @@ door refuses. Kedaipal's switch is always **neutral** for buyers, never
 "suspended" or "unpaid" (the `lib/buyerPayments.ts` rule).
 
 **Seller.** Settings → Store opens with the **Store status** card. It comes
-first because it is the most consequential setting there. "Accepting orders"
+first because it is the most consequential setting there, full width above
+the tab's two columns, and while the store isn't taking orders the settings
+rail's Store row reads **Paused** / **Offline** in amber instead of the
+store name, so it shows from every other tab. "Accepting orders"
 saves on flip, with an optional buyer note (140 chars), and the helper line
 says the counter keeps working and billing continues (pointing at Off-Season
 Hold). Under a hold or Kedaipal's switch it is **disabled with its reason**:

@@ -174,7 +174,9 @@ The slot this section predicted is live: a HitPay webhook (or the
 redirect-return reconcile) flips `paymentStatus` to `received` through the
 same `applyPaymentReceived` core as the manual button — auto-confirm,
 activation stamp, and `notifyPaymentReceived` are byte-identical, and the
-manual claim/mark-received handshake keeps working beside it (buyers can
-still transfer; sellers without HitPay see zero change). Gateway orders also
+manual claim/mark-received handshake keeps working for every store on manual
+transfer. Since 86eye9xd4 a store that turns HitPay on makes it the **only**
+door for any order HitPay can take — the manual details are withheld, so this
+handshake only runs on the orders it can't (see [`hitpay-gateway.md`](./hitpay-gateway.md#hitpay-on-is-the-way-buyers-pay-86eye9xd4-8a)). Gateway orders also
 stamp a reliable `paymentMethod` (incl. the new `fpx`). Full design:
 [`hitpay-gateway.md`](./hitpay-gateway.md).

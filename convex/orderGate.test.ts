@@ -58,6 +58,10 @@ const SENTINEL = {
 	customerNote: "ZZSENTINELORDERNOTE",
 	productName: "ZZSENTINELPRODUCT",
 	paymentReference: "ZZSENTINELBANKREF",
+	// A consignment number is a code, not buyer text — but the courier's public
+	// tracking page resolves it to the consignee's area, so it is the same
+	// "leads back to the buyer" class (PR #367 review).
+	awb: "ZZSENTINELAWB",
 } as const;
 
 /** The one assertion this file exists for. */
@@ -181,6 +185,42 @@ async function placeOrder(
 // ---------------------------------------------------------------------------
 
 describe("a gated order is invisible to the seller, on every surface", () => {
+	test("Deliveries keeps the number and drops the destination (86eye9xd4)", async () => {
+		const t = setup();
+		const s = await seed(t);
+		await drain(t, s.retailerId);
+		const order = await placeOrder(t, s.retailerId, s.productId);
+		// A second gated order, packed with no booking yet: the To-ship queue.
+		const parcel = await placeOrder(t, s.retailerId, s.productId);
+		// The first is packed with a failed rider booking: Courier bookings.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(parcel._id, { status: "packed" });
+			await ctx.db.patch(order._id, { status: "packed" });
+			await ctx.db.insert("deliveryJobs", {
+				orderId: order._id,
+				retailerId: s.retailerId,
+				provider: "lalamove",
+				providerOrderId: "LLM-GATE",
+				status: "rejected",
+				costActual: 900,
+				quotationId: "q",
+				vehicleType: "MOTORCYCLE",
+				shareLink: `https://share.lalamove.com/?${SENTINEL.city}`,
+				awb: SENTINEL.awb,
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			});
+		});
+		const overview = await t
+			.withIdentity({ subject: OWNER })
+			.query(api.deliveries.overview, { retailerId: s.retailerId });
+		expectNoSentinels(overview, "deliveries.overview");
+		expect(overview.toShip.map((r) => [r.shortId, r.gated])).toEqual([
+			[parcel.shortId, true],
+		]);
+		expect(overview.jobs[0]).toMatchObject({ shortId: order.shortId, gated: true });
+	});
+
 	test("not one buyer field survives any seller read", async () => {
 		const t = setup();
 		const s = await seed(t);

@@ -5,6 +5,8 @@ import { Skeleton } from "../ui/skeleton";
 
 interface PageHeaderBack {
 	to: LinkProps["to"];
+	/** For a back target that is one tab of a page (Settings → Fulfilment). */
+	search?: LinkProps["search"];
 	label: string;
 }
 
@@ -27,6 +29,7 @@ export function PageHeader({
 				{back ? (
 					<Link
 						to={back.to}
+						search={back.search}
 						className="inline-flex w-fit items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
 					>
 						<ChevronLeft className="size-3.5" />

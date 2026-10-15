@@ -11,12 +11,13 @@
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { requireRetailerAccess } from "./lib/auth";
+import { requireRetailerAccess, resolveMyRetailer } from "./lib/auth";
 import {
 	action,
 	internalAction,
 	internalMutation,
 	internalQuery,
+	type MutationCtx,
 	query,
 	type QueryCtx,
 } from "./_generated/server";
@@ -44,6 +45,7 @@ import {
 	toLalamoveContactPhone,
 	toLalamovePhone,
 } from "./lib/lalamove";
+import { priorityFeeWire, TIP_OPTIONS } from "./lib/lalamoveTip";
 import { formatBusinessAddress } from "./lib/address";
 import { DEFAULT_COUNTRY } from "./lib/country";
 import { lalamoveBookingArmed } from "./lib/courierBooking";
@@ -464,6 +466,156 @@ export const getWebhookContext = internalQuery({
 	},
 });
 
+/** Mark the store's Lalamove webhook as known-good, unless it already is. */
+async function stampWebhookKnown(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+): Promise<void> {
+	const retailer = await ctx.db.get(retailerId);
+	const booking = retailer?.deliveryBooking;
+	if (!retailer || !booking || booking.webhookRegisteredAt !== undefined) return;
+	await ctx.db.patch(retailerId, {
+		deliveryBooking: { ...booking, webhookRegisteredAt: Date.now() },
+	});
+}
+
+// ---------------------------------------------------------------------------
+// One-tap webhook registration (86eye9xd4, 5A)
+// ---------------------------------------------------------------------------
+
+/** Integrations write + the stored key pair, for registering the webhook. */
+export const getWebhookRegistrationContext = internalQuery({
+	args: { retailerId: v.optional(v.id("retailers")) },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{
+		retailerId: Id<"retailers">;
+		credentials: LalamoveCredentials;
+	} | null> => {
+		let target = retailerId;
+		if (!target) {
+			const my = await resolveMyRetailer(ctx);
+			if (!my) throw new ConvexError("No store found");
+			target = my.retailer._id;
+		}
+		const access = await requireRetailerAccess(ctx, target, {
+			area: "integrations",
+			level: "write",
+		});
+		const credentials = resolveLalamoveCredentials(
+			access.retailer.deliveryBooking as BookingConfig | undefined,
+			access.retailer.country,
+		);
+		return credentials ? { retailerId: target, credentials } : null;
+	},
+});
+
+export const markWebhookRegistered = internalMutation({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }) => {
+		const retailer = await ctx.db.get(retailerId);
+		const booking = retailer?.deliveryBooking;
+		if (!retailer || !booking) return;
+		await ctx.db.patch(retailerId, {
+			deliveryBooking: { ...booking, webhookRegisteredAt: Date.now() },
+			updatedAt: Date.now(),
+		});
+	},
+});
+
+/**
+ * Stores whose webhook demonstrably works from BEFORE the setup checklist
+ * existed (86eye9xd4): a job with `lastEventAt` received a verified event
+ * (`applyWebhookEvent` only runs after the signature checks), so the
+ * checklist's webhook step must read done — not "Action needed" on an account
+ * that has been updating itself for months. Idempotent (stamped stores are
+ * skipped) and self-continuing; operator step, once per deployment.
+ *
+ * Run: `npx convex run lalamove:backfillWebhookKnown`
+ */
+export const backfillWebhookKnown = internalMutation({
+	args: { cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (ctx, { cursor }): Promise<{ stamped: number }> => {
+		const page = await ctx.db
+			.query("retailers")
+			.paginate({ numItems: 50, cursor: cursor ?? null });
+		let stamped = 0;
+		for (const retailer of page.page) {
+			const booking = retailer.deliveryBooking;
+			if (!booking?.apiKey || booking.webhookRegisteredAt !== undefined) continue;
+			const jobs = await ctx.db
+				.query("deliveryJobs")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.order("desc")
+				.take(50);
+			const heard = jobs.find(
+				(j) => j.provider === "lalamove" && j.lastEventAt !== undefined,
+			);
+			if (!heard?.lastEventAt) continue;
+			await ctx.db.patch(retailer._id, {
+				deliveryBooking: { ...booking, webhookRegisteredAt: heard.lastEventAt },
+			});
+			stamped++;
+		}
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(0, internal.lalamove.backfillWebhookKnown, {
+				cursor: page.continueCursor,
+			});
+		}
+		return { stamped };
+	},
+});
+
+/**
+ * Point the seller's Lalamove account at our webhook — `PATCH /v3/webhook`,
+ * free, so the Partner Portal copy-paste becomes one tap. Lalamove keeps ONE
+ * webhook URL per account, so this replaces whatever was there; the settings
+ * card says so before the tap. The manual paste stays as the fallback when
+ * Lalamove refuses (shown with the URL to copy).
+ */
+export const registerWebhook = action({
+	args: { retailerId: v.optional(v.id("retailers")) },
+	handler: async (
+		ctx,
+		args,
+	): Promise<{ ok: true } | { ok: false; message: string }> => {
+		const target = await ctx.runQuery(
+			internal.lalamove.getWebhookRegistrationContext,
+			{ retailerId: args.retailerId },
+		);
+		if (!target) return { ok: false, message: "Save your Lalamove keys first." };
+		await ctx.runQuery(internal.subscriptions.assertWritable, {
+			retailerId: target.retailerId,
+		});
+		const siteUrl = process.env.CONVEX_SITE_URL;
+		if (!siteUrl) {
+			return {
+				ok: false,
+				message: "The webhook address isn't available — paste it by hand below.",
+			};
+		}
+		try {
+			await callLalamove(target.credentials, "PATCH", "/v3/webhook", {
+				data: { url: `${siteUrl}/webhook/lalamove` },
+			});
+		} catch (err) {
+			console.warn("[lalamove] webhook registration failed", {
+				message: err instanceof Error ? err.message : String(err),
+			});
+			return {
+				ok: false,
+				message:
+					"Lalamove didn't accept the registration — paste the address in your Partner Portal instead.",
+			};
+		}
+		await ctx.runMutation(internal.lalamove.markWebhookRegistered, {
+			retailerId: target.retailerId,
+		});
+		return { ok: true };
+	},
+});
+
 /** Order statuses that may auto-advance from a rider event. `pending` is
  * deliberately absent — an unconfirmed order never ships itself. */
 const SHIPPABLE_FROM = new Set(["confirmed", "packed"]);
@@ -492,6 +644,11 @@ export const applyWebhookEvent = internalMutation({
 	handler: async (ctx, { jobId, eventType, data, eventTimestamp }) => {
 		const job = await ctx.db.get(jobId);
 		if (!job) return;
+		// A verified event is proof this store's webhook reaches us — however
+		// it was set up — so the Integrations checklist can tick it (86eye9xd4).
+		// Once only: a per-event retailer patch would re-run every open
+		// storefront tab for nothing.
+		await stampWebhookKnown(ctx, job.retailerId);
 		const payload = (data ?? {}) as Record<string, unknown>;
 		const orderData = (payload.order ?? {}) as Record<string, unknown>;
 		const eventAt = parseLalamoveEventTime(data, eventTimestamp);
@@ -1682,6 +1839,207 @@ export const cancelBooking = action({
 	},
 });
 
+// ---------------------------------------------------------------------------
+// Tip a booking that's waiting for a rider (86eye9xd4)
+// ---------------------------------------------------------------------------
+
+export type TipRefusal =
+	| "no_booking"
+	| "rider_found"
+	| "bad_amount"
+	| "over_cap";
+
+/** The active Lalamove booking a tip would land on, with what's been tipped. */
+export const getTipContext = internalQuery({
+	args: { shortId: v.string() },
+	handler: async (
+		ctx,
+		{ shortId },
+	): Promise<
+		| { ok: false; reason: TipRefusal }
+		| {
+				ok: true;
+				jobId: Id<"deliveryJobs">;
+				providerOrderId: string;
+				credentials: LalamoveCredentials;
+				market: LalamoveMarket;
+				tipped: number;
+		  }
+	> => {
+		const order = await resolveSharedOrder(ctx, { shortId });
+		if (!order) return { ok: false, reason: "no_booking" };
+		// Spending the store's money is orders WORK, not a read.
+		await requireRetailerAccess(ctx, order.retailerId, {
+			area: "orders",
+			level: "write",
+		});
+		const jobs = await ctx.db
+			.query("deliveryJobs")
+			.withIndex("by_order", (q) => q.eq("orderId", order._id))
+			.collect();
+		const active = jobs.find(
+			(j) => j.provider === "lalamove" && isActiveJobStatus(j.status),
+		);
+		if (!active || active.providerOrderId === undefined)
+			return { ok: false, reason: "no_booking" };
+		// Lalamove only takes a priority fee while it is still finding a rider.
+		if (active.status !== "assigning") return { ok: false, reason: "rider_found" };
+		const retailer = await ctx.db.get(order.retailerId);
+		const credentials = resolveLalamoveCredentials(
+			retailer?.deliveryBooking as BookingConfig | undefined,
+			retailer?.country,
+		);
+		if (!credentials) return { ok: false, reason: "no_booking" };
+		return {
+			ok: true,
+			jobId: active._id,
+			providerOrderId: active.providerOrderId,
+			credentials,
+			market: credentials.market,
+			tipped: active.priorityFee ?? 0,
+		};
+	},
+});
+
+/**
+ * A tip is RESERVED before Lalamove is called, then confirmed or released —
+ * the cap check and the count live in one transaction, so two tabs tipping at
+ * once can't both pass it (the action's own pre-check reads a snapshot). If the
+ * process dies between the reserve and the confirm, the tip stays counted:
+ * that blocks a further tip, which is the safe side — it can never let one
+ * overspend. `costActual` moves only on confirm, and Lalamove's
+ * `ORDER_AMOUNT_CHANGED` overwrites it with their own total anyway.
+ */
+export const reservePriorityFee = internalMutation({
+	args: { jobId: v.id("deliveryJobs"), amount: v.number(), cap: v.number() },
+	handler: async (
+		ctx,
+		{ jobId, amount, cap },
+	): Promise<{ ok: true } | { ok: false; reason: "rider_found" | "cap" }> => {
+		const job = await ctx.db.get(jobId);
+		if (!job || job.status !== "assigning")
+			return { ok: false, reason: "rider_found" };
+		const tipped = job.priorityFee ?? 0;
+		if (tipped + amount > cap) return { ok: false, reason: "cap" };
+		await ctx.db.patch(jobId, {
+			priorityFee: tipped + amount,
+			updatedAt: Date.now(),
+		});
+		return { ok: true };
+	},
+});
+
+/** Lalamove refused the tip — hand the reservation back. */
+export const releasePriorityFee = internalMutation({
+	args: { jobId: v.id("deliveryJobs"), amount: v.number() },
+	handler: async (ctx, { jobId, amount }) => {
+		const job = await ctx.db.get(jobId);
+		if (!job) return;
+		const left = (job.priorityFee ?? 0) - amount;
+		await ctx.db.patch(jobId, {
+			priorityFee: left > 0 ? left : undefined,
+			updatedAt: Date.now(),
+		});
+	},
+});
+
+/** Lalamove took the tip — it's now part of what the booking costs. */
+export const confirmPriorityFee = internalMutation({
+	args: { jobId: v.id("deliveryJobs"), amount: v.number() },
+	handler: async (ctx, { jobId, amount }) => {
+		const job = await ctx.db.get(jobId);
+		if (!job) return;
+		await ctx.db.patch(jobId, {
+			costActual: job.costActual + amount,
+			updatedAt: Date.now(),
+		});
+	},
+});
+
+/**
+ * Add a tip to a booking stuck finding a rider — Lalamove's priority fee
+ * (`POST /v3/orders/{id}/priority-fee`). A booking that nobody accepts
+ * EXPIRES; a tip is the lever that makes a nearby rider take it. Fixed steps
+ * and a per-booking cap (`TIP_OPTIONS`); charged to the seller's own
+ * Lalamove wallet; never undone.
+ */
+export const addPriorityFee = action({
+	args: { shortId: v.string(), amount: v.number() },
+	handler: async (
+		ctx,
+		{ shortId, amount },
+	): Promise<{ ok: true; tipped: number } | { ok: false; message: string }> => {
+		await ctx.runQuery(internal.subscriptions.assertWritableForOrder, {
+			shortId,
+		});
+		await ctx.runQuery(internal.creditLock.assertCreditsForOrder, {
+			shortId,
+		});
+		const target = await ctx.runQuery(internal.lalamove.getTipContext, {
+			shortId,
+		});
+		if (!target.ok) {
+			return {
+				ok: false,
+				message:
+					target.reason === "rider_found"
+						? "A rider has already taken this booking — no tip needed."
+						: "There's no Lalamove booking waiting for a rider on this order.",
+			};
+		}
+		const rule = TIP_OPTIONS[target.market];
+		if (!rule.amounts.includes(amount)) {
+			return { ok: false, message: "Pick one of the tip amounts shown." };
+		}
+		const LIMIT = "That's past the tip limit for one booking.";
+		// A fast answer from the snapshot; the reserve below is the real check.
+		if (target.tipped + amount > rule.cap) return { ok: false, message: LIMIT };
+		const reserved = await ctx.runMutation(
+			internal.lalamove.reservePriorityFee,
+			{ jobId: target.jobId, amount, cap: rule.cap },
+		);
+		if (!reserved.ok) {
+			return {
+				ok: false,
+				message:
+					reserved.reason === "cap"
+						? LIMIT
+						: "A rider has already taken this booking — no tip needed.",
+			};
+		}
+		try {
+			await callLalamove(
+				target.credentials,
+				"POST",
+				`/v3/orders/${target.providerOrderId}/priority-fee`,
+				{ data: { priorityFee: priorityFeeWire(amount) } },
+			);
+		} catch (err) {
+			console.warn("[lalamove] priority fee failed", {
+				shortId,
+				message: err instanceof Error ? err.message : String(err),
+			});
+			await ctx.runMutation(internal.lalamove.releasePriorityFee, {
+				jobId: target.jobId,
+				amount,
+			});
+			return {
+				ok: false,
+				message:
+					err instanceof LalamoveApiError &&
+					classifyBookingFailure(err.body) === "wallet"
+						? "Your Lalamove wallet doesn't have enough for the tip — top it up, then try again."
+						: "Lalamove didn't take the tip — the booking may have just been accepted. Check its status and try again if it's still waiting.",
+			};
+		}
+		await ctx.runMutation(internal.lalamove.confirmPriorityFee, {
+			jobId: target.jobId,
+			amount,
+		});
+		return { ok: true, tipped: target.tipped + amount };
+	},
+});
+
 export const getCancelContext = internalQuery({
 	args: { shortId: v.string() },
 	handler: async (
@@ -1758,6 +2116,8 @@ export type DeliveryJobView = {
 	 * lets the card say "Scheduled · 3:30 PM" instead of sitting on
 	 * "Finding rider" for hours. Unset = immediate booking. */
 	scheduledAt?: number;
+	/** Tips added while it waited for a rider — already inside costActual. */
+	priorityFee?: number;
 };
 
 /**
@@ -1887,6 +2247,7 @@ export const getDeliveryJob = query({
 						// which is exactly what those trips were.
 						deliveryDirection: latest.deliveryDirection ?? "standard",
 						scheduledAt: latest.scheduledAt,
+						priorityFee: latest.priorityFee,
 					}
 				: null,
 			blockReason,

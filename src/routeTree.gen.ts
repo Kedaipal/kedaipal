@@ -29,6 +29,7 @@ import { Route as ClaimTokenRouteImport } from './routes/claim.$token'
 import { Route as AppSettingsRouteImport } from './routes/app.settings'
 import { Route as AppPosterRouteImport } from './routes/app.poster'
 import { Route as AppInsightsRouteImport } from './routes/app.insights'
+import { Route as AppDeliveriesRouteImport } from './routes/app.deliveries'
 import { Route as AppCheckoutRouteImport } from './routes/app.checkout'
 import { Route as SlugCheckoutRouteImport } from './routes/$slug_.checkout'
 import { Route as AppVouchersIndexRouteImport } from './routes/app.vouchers.index'
@@ -36,6 +37,7 @@ import { Route as AppPromotionsIndexRouteImport } from './routes/app.promotions.
 import { Route as AppProductsIndexRouteImport } from './routes/app.products.index'
 import { Route as AppOrdersIndexRouteImport } from './routes/app.orders.index'
 import { Route as AppCustomersIndexRouteImport } from './routes/app.customers.index'
+import { Route as AppSettingsDeliveryPricingRouteImport } from './routes/app.settings_.delivery-pricing'
 import { Route as AppPromotionsNewRouteImport } from './routes/app.promotions.new'
 import { Route as AppProductsNewRouteImport } from './routes/app.products.new'
 import { Route as AppProductsImportRouteImport } from './routes/app.products.import'
@@ -155,6 +157,11 @@ const AppInsightsRoute = AppInsightsRouteImport.update({
   path: '/insights',
   getParentRoute: () => AppRoute,
 } as any)
+const AppDeliveriesRoute = AppDeliveriesRouteImport.update({
+  id: '/deliveries',
+  path: '/deliveries',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppCheckoutRoute = AppCheckoutRouteImport.update({
   id: '/checkout',
   path: '/checkout',
@@ -190,6 +197,12 @@ const AppCustomersIndexRoute = AppCustomersIndexRouteImport.update({
   path: '/customers/',
   getParentRoute: () => AppRoute,
 } as any)
+const AppSettingsDeliveryPricingRoute =
+  AppSettingsDeliveryPricingRouteImport.update({
+    id: '/settings_/delivery-pricing',
+    path: '/settings/delivery-pricing',
+    getParentRoute: () => AppRoute,
+  } as any)
 const AppPromotionsNewRoute = AppPromotionsNewRouteImport.update({
   id: '/promotions/new',
   path: '/promotions/new',
@@ -299,6 +312,7 @@ export interface FileRoutesByFullPath {
   '/terms': typeof TermsRoute
   '/$slug/checkout': typeof SlugCheckoutRoute
   '/app/checkout': typeof AppCheckoutRoute
+  '/app/deliveries': typeof AppDeliveriesRoute
   '/app/insights': typeof AppInsightsRoute
   '/app/poster': typeof AppPosterRoute
   '/app/settings': typeof AppSettingsRoute
@@ -321,6 +335,7 @@ export interface FileRoutesByFullPath {
   '/app/products/import': typeof AppProductsImportRoute
   '/app/products/new': typeof AppProductsNewRoute
   '/app/promotions/new': typeof AppPromotionsNewRoute
+  '/app/settings/delivery-pricing': typeof AppSettingsDeliveryPricingRoute
   '/app/customers/': typeof AppCustomersIndexRoute
   '/app/orders/': typeof AppOrdersIndexRoute
   '/app/products/': typeof AppProductsIndexRoute
@@ -345,6 +360,7 @@ export interface FileRoutesByTo {
   '/terms': typeof TermsRoute
   '/$slug/checkout': typeof SlugCheckoutRoute
   '/app/checkout': typeof AppCheckoutRoute
+  '/app/deliveries': typeof AppDeliveriesRoute
   '/app/insights': typeof AppInsightsRoute
   '/app/poster': typeof AppPosterRoute
   '/app/settings': typeof AppSettingsRoute
@@ -367,6 +383,7 @@ export interface FileRoutesByTo {
   '/app/products/import': typeof AppProductsImportRoute
   '/app/products/new': typeof AppProductsNewRoute
   '/app/promotions/new': typeof AppPromotionsNewRoute
+  '/app/settings/delivery-pricing': typeof AppSettingsDeliveryPricingRoute
   '/app/customers': typeof AppCustomersIndexRoute
   '/app/orders': typeof AppOrdersIndexRoute
   '/app/products': typeof AppProductsIndexRoute
@@ -393,6 +410,7 @@ export interface FileRoutesById {
   '/terms': typeof TermsRoute
   '/$slug_/checkout': typeof SlugCheckoutRoute
   '/app/checkout': typeof AppCheckoutRoute
+  '/app/deliveries': typeof AppDeliveriesRoute
   '/app/insights': typeof AppInsightsRoute
   '/app/poster': typeof AppPosterRoute
   '/app/settings': typeof AppSettingsRoute
@@ -415,6 +433,7 @@ export interface FileRoutesById {
   '/app/products/import': typeof AppProductsImportRoute
   '/app/products/new': typeof AppProductsNewRoute
   '/app/promotions/new': typeof AppPromotionsNewRoute
+  '/app/settings_/delivery-pricing': typeof AppSettingsDeliveryPricingRoute
   '/app/customers/': typeof AppCustomersIndexRoute
   '/app/orders/': typeof AppOrdersIndexRoute
   '/app/products/': typeof AppProductsIndexRoute
@@ -442,6 +461,7 @@ export interface FileRouteTypes {
     | '/terms'
     | '/$slug/checkout'
     | '/app/checkout'
+    | '/app/deliveries'
     | '/app/insights'
     | '/app/poster'
     | '/app/settings'
@@ -464,6 +484,7 @@ export interface FileRouteTypes {
     | '/app/products/import'
     | '/app/products/new'
     | '/app/promotions/new'
+    | '/app/settings/delivery-pricing'
     | '/app/customers/'
     | '/app/orders/'
     | '/app/products/'
@@ -488,6 +509,7 @@ export interface FileRouteTypes {
     | '/terms'
     | '/$slug/checkout'
     | '/app/checkout'
+    | '/app/deliveries'
     | '/app/insights'
     | '/app/poster'
     | '/app/settings'
@@ -510,6 +532,7 @@ export interface FileRouteTypes {
     | '/app/products/import'
     | '/app/products/new'
     | '/app/promotions/new'
+    | '/app/settings/delivery-pricing'
     | '/app/customers'
     | '/app/orders'
     | '/app/products'
@@ -535,6 +558,7 @@ export interface FileRouteTypes {
     | '/terms'
     | '/$slug_/checkout'
     | '/app/checkout'
+    | '/app/deliveries'
     | '/app/insights'
     | '/app/poster'
     | '/app/settings'
@@ -557,6 +581,7 @@ export interface FileRouteTypes {
     | '/app/products/import'
     | '/app/products/new'
     | '/app/promotions/new'
+    | '/app/settings_/delivery-pricing'
     | '/app/customers/'
     | '/app/orders/'
     | '/app/products/'
@@ -733,6 +758,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppInsightsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/app/deliveries': {
+      id: '/app/deliveries'
+      path: '/deliveries'
+      fullPath: '/app/deliveries'
+      preLoaderRoute: typeof AppDeliveriesRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/app/checkout': {
       id: '/app/checkout'
       path: '/checkout'
@@ -780,6 +812,13 @@ declare module '@tanstack/react-router' {
       path: '/customers'
       fullPath: '/app/customers/'
       preLoaderRoute: typeof AppCustomersIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/settings_/delivery-pricing': {
+      id: '/app/settings_/delivery-pricing'
+      path: '/settings/delivery-pricing'
+      fullPath: '/app/settings/delivery-pricing'
+      preLoaderRoute: typeof AppSettingsDeliveryPricingRouteImport
       parentRoute: typeof AppRoute
     }
     '/app/promotions/new': {
@@ -913,6 +952,7 @@ declare module '@tanstack/react-router' {
 
 interface AppRouteChildren {
   AppCheckoutRoute: typeof AppCheckoutRoute
+  AppDeliveriesRoute: typeof AppDeliveriesRoute
   AppInsightsRoute: typeof AppInsightsRoute
   AppPosterRoute: typeof AppPosterRoute
   AppSettingsRoute: typeof AppSettingsRoute
@@ -928,6 +968,7 @@ interface AppRouteChildren {
   AppProductsImportRoute: typeof AppProductsImportRoute
   AppProductsNewRoute: typeof AppProductsNewRoute
   AppPromotionsNewRoute: typeof AppPromotionsNewRoute
+  AppSettingsDeliveryPricingRoute: typeof AppSettingsDeliveryPricingRoute
   AppCustomersIndexRoute: typeof AppCustomersIndexRoute
   AppOrdersIndexRoute: typeof AppOrdersIndexRoute
   AppProductsIndexRoute: typeof AppProductsIndexRoute
@@ -942,6 +983,7 @@ interface AppRouteChildren {
 
 const AppRouteChildren: AppRouteChildren = {
   AppCheckoutRoute: AppCheckoutRoute,
+  AppDeliveriesRoute: AppDeliveriesRoute,
   AppInsightsRoute: AppInsightsRoute,
   AppPosterRoute: AppPosterRoute,
   AppSettingsRoute: AppSettingsRoute,
@@ -957,6 +999,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppProductsImportRoute: AppProductsImportRoute,
   AppProductsNewRoute: AppProductsNewRoute,
   AppPromotionsNewRoute: AppPromotionsNewRoute,
+  AppSettingsDeliveryPricingRoute: AppSettingsDeliveryPricingRoute,
   AppCustomersIndexRoute: AppCustomersIndexRoute,
   AppOrdersIndexRoute: AppOrdersIndexRoute,
   AppProductsIndexRoute: AppProductsIndexRoute,
