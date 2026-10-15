@@ -118,8 +118,18 @@ seller is keying it in person, so today is always valid regardless of the
 storefront `minFulfilmentNoticeDays` — and the per-product **prep time**
 (`z8r3fdff97`) doesn't apply either. Counter orders freeze no pickup note: the
 buyer is at the counter. See [`fulfilment-date.md`](./fulfilment-date.md).
-After a **paid-in-person** order is created, the success screen offers an
-optional **"Mark as completed"** button (one tap → `delivered`).
+**Born completed (Oct 2026).** A counter sale is handed over at the counter, so
+`createOrderFromSession` writes it as **`delivered`** (reads "Completed") the
+moment the cashier taps Create — there is no "Mark as completed" tap for the
+common case. The rule is `handedOverNow`: not an RSVP, and the collection date
+is absent or today. The two exceptions stay `confirmed` because nothing changed
+hands yet — a **collection dated for later** (the Done screen says
+"collecting Fri 17 Oct · stays open until it's handed over" and keeps the
+one-tap close with that reason) and an **RSVP** (completes at the event). Payment
+is its own axis: a **pay-later** walk-in still left with the goods, so it is
+`delivered` + `unpaid` and settles from the link in their confirmation. The
+timeline reads `confirmed` (counter_checkout) → `delivered` (counter_handover),
+as a seller tapping through would have left it.
 
 **`orders.source` — the checkout surface** ([`86ey8r734`](https://app.clickup.com/t/86ey8r734)):
 a first-class field on `orders`, `v.union("storefront","counter","claim")`,
@@ -293,7 +303,8 @@ yet; revisit (trim or gate it) alongside the WABA-protection / compliance work
 | `bindCheckoutSession` (internal, called by webhook) | `convex/counterCheckout.ts` |
 | `createOrderFromSession` (catalog-priced with optional seller adjustment, pay-in-person, completes session) | `convex/counterCheckout.ts` |
 | Inbound routing → bind + buyer reply | `convex/whatsapp.ts` (`handleInbound`) |
-| Buyer order confirmation + tracking link | `convex/whatsapp.ts` (`notifyCounterOrderCreated`) |
+| Buyer order confirmation + tracking link, template fallback when no window, outcome stamped on the order | `convex/whatsapp.ts` (`notifyCounterOrderCreated`) |
+| Done screen — born-completed heading, LIVE WhatsApp outcome, Share/Copy link on failure | `src/components/counter/done-screen.tsx` (+ test) |
 | Expiry cron (every 5 min) | `convex/crons.ts` → `expireStaleSessions` |
 | Webhook observability (phone + pushname + text) | `convex/http.ts` |
 | **iPad-first seller UI** (start → QR → live bind → catalog/cart → pay → done) | `src/routes/app.checkout.tsx` |
@@ -301,8 +312,12 @@ yet; revisit (trim or gate it) alongside the WABA-protection / compliance work
 | Nav entry ("Counter") | `sidebar.tsx`, `bottom-nav.tsx` |
 | Tests | `counterCheckout.test.ts`, `inboundIntent.test.ts`, `whatsapp.test.ts` |
 
-**Order shape:** a counter order is created `confirmed`, `deliveryMethod:
-self_collect` (collected at the counter), customer linked from the bound session.
+**Order shape:** a counter order is created `delivered` when handed over now
+(else `confirmed` — see "Born completed" above), `deliveryMethod:
+self_collect` (collected at the counter), customer linked from the bound session,
+and — when there is a buyer to message — `confirmationPushStatus: "sending"` +
+`seenAt: now` (the seller rang it up, so it never lands in the inbox's New
+bucket; `isUnseenOrder` keys on the push stamp).
 **Pay-in-person** → `paymentStatus: received` immediately + a structured
 `order.paymentMethod` (see below); **pay-later** → left `unpaid` and the buyer's
 WhatsApp confirmation carries a pay-&-track link (the normal handshake). Either
@@ -714,10 +729,27 @@ to, not in the chat (`86eyd63r8`). **PDPA:** the buyer never scanned, so the con
 is our first message to them — it carries the same notice-at-collection line as the
 poster ack (`whatsappCopy.privacyNoticeLine`, threaded via `notifyCounterOrderCreated`'s
 `includePrivacyNotice`; scan buyers already got it at connect, so it's not repeated).
-**Caveat (graceful degradation):** a manual-phone buyer never opened a 24h WhatsApp
-session window, so a free-form send may be rejected by Meta. Sends are best-effort
-(errors logged) so the order/CRM are always intact; full out-of-window Utility-template
-fallback is [`86ey1fgjw`](https://app.clickup.com/t/86ey1fgjw), a follow-up.
+**No open window → the template (fixed Oct 2026).** A manual-phone buyer never
+opened a 24h WhatsApp service window, and a scan buyer's window closes a day
+after the scan (a resumed session can be 3 days old) — Meta rejects free-form
+text to both with **131047**, and until this fix that rejection was swallowed as
+"best-effort" while the Done screen told the cashier the message had gone out:
+the buyer never got their order link. `notifyCounterOrderCreated` now sends
+free-form first (the richer copy, free inside a window) and on 131047 falls
+back to the approved **`order_confirmation_utility`** template — the same name,
+body params and tracking-token button as the storefront push, so one Meta
+approval covers both doors (`WHATSAPP_ORDER_CONFIRM_TEMPLATE`; unset ⇒ the
+failure is recorded as ours, never as the buyer's number). The outcome is
+stamped on the order through the same `recordConfirmationPush` the storefront
+uses (`sending` → `sent` + wamid / `failed` + kind; transient failures retry on
+the push schedule; every send kind now returns Meta's wamid, so the `statuses`
+webhook can flip a delivered-then-failed text too), and the **Done screen reads
+it live**: *Sending…* → *Aiman has their order link on WhatsApp* → an amber
+*WhatsApp couldn't reach Aiman* card with **Share link / Copy link** for the
+buyer's order page, while they are still at the counter. The pay-later CTA's
+plain-text retry is skipped on an unreachable code (it rejects identically).
+The template cannot carry the PDPA line (its body is fixed at approval); the
+order page it opens links the privacy notice.
 **Payment details:** a manual-phone **pay-later** buyer (like every buyer now,
 post-86ey98ju1) gets the order-page link + **"Make payment"** button on the
 order-create message; the bank/QR details live on the order page's `How to pay`

@@ -31,8 +31,11 @@ import {
 import {
 	type ConfirmationPushStatus,
 	classifyPushFailure,
+	isUnreachableMetaCode,
+	OUT_OF_WINDOW_META_CODE,
 	pushOwnsTheMessage,
 } from "./lib/confirmationPush";
+import type { SendReceipt } from "./lib/channels/types";
 import { formatFulfilmentDateTime } from "./lib/fulfilmentDate";
 import { formatEventMoment } from "./lib/productEvent";
 import { type GuardedSender, makeGuardedSender } from "./wabaProtection";
@@ -423,8 +426,12 @@ async function sendPaymentMessage(
 		// line in its place, and the button opens the order rather than
 		// promising a payment the page will refuse.
 		paymentsPaused?: boolean;
+		// Hand the final failure back instead of logging it away — for a caller
+		// that records the outcome on the order (the counter confirmation) and
+		// has a different message shape to fall back to.
+		throwOnFailure?: boolean;
 	},
-): Promise<void> {
+): Promise<SendReceipt | undefined> {
 	const {
 		introBody,
 		locale,
@@ -437,6 +444,7 @@ async function sendPaymentMessage(
 		currency,
 		footerLine = "",
 		paymentsPaused = false,
+		throwOnFailure = false,
 	} = args;
 	// Hard-coded, non-overridable: tells the shopper to use the order ID as the
 	// transfer reference — the only deterministic way to match a bank
@@ -471,7 +479,7 @@ async function sendPaymentMessage(
 	// (e.g. non-HTTPS APP_URL in dev). The button opens the buyer's order page,
 	// where "How to pay" + the "I've paid" confirm live.
 	try {
-		await wa.send(toPhone, {
+		return await wa.send(toPhone, {
 			kind: "cta",
 			body,
 			buttonText: paymentsPaused ? "View order" : "Make payment",
@@ -479,11 +487,25 @@ async function sendPaymentMessage(
 			imageUrl: brandImageUrl,
 		});
 	} catch (err) {
+		// The text fallback exists for the CTA *shape* being refused. A recipient
+		// Meta can't reach at all — no WhatsApp, no open service window (131047),
+		// a barred country — rejects the plain text identically, so that retry
+		// is only a second rejection in the log.
+		if (
+			err instanceof WhatsAppSendError &&
+			isUnreachableMetaCode(err.metaCode)
+		) {
+			if (throwOnFailure) throw err;
+			console.error("WA payment send failed", err);
+			return undefined;
+		}
 		console.error("WA payment send failed, falling back to text", err);
 		try {
-			await wa.send(toPhone, { kind: "text", body });
+			return await wa.send(toPhone, { kind: "text", body });
 		} catch (textErr) {
+			if (throwOnFailure) throw textErr;
 			console.error("WA payment send failed", textErr);
+			return undefined;
 		}
 	}
 }
@@ -1582,6 +1604,8 @@ export const getCounterOrderMeta = internalQuery({
 		total: number;
 		currency: string;
 		paymentStatus: "unpaid" | "claimed" | "received";
+		status: Doc<"orders">["status"];
+		confirmationPushStatus: Doc<"orders">["confirmationPushStatus"];
 	} | null> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) return null;
@@ -1600,6 +1624,8 @@ export const getCounterOrderMeta = internalQuery({
 				| "unpaid"
 				| "claimed"
 				| "received",
+			status: order.status,
+			confirmationPushStatus: order.confirmationPushStatus,
 		};
 	},
 });
@@ -1747,16 +1773,25 @@ export const notifyStorefrontOrderCreated = internalAction({
 });
 
 /**
- * Scheduled by counterCheckout.createOrderFromSession. The buyer scanned once, so
- * everything they need lands in that chat automatically — no rescan, no manual
- * seller step:
- *   - paid-in-person → a "confirmed & paid" text, then the RECEIPT PDF;
- *   - pay-later → the payment ask (transfer reference + an "I've paid" CTA that
- *     points to the order page's "How to pay", via the shared sendPaymentMessage),
- *     then the INVOICE PDF (whose "How to pay" block carries the actual details).
- * All sends are best-effort (errors logged) so the originating mutation never
- * fails on an outbound issue; the seller can resend the document from the Done
- * screen if needed.
+ * Scheduled by counterCheckout.createOrderFromSession — the walk-in's ONE
+ * WhatsApp (86eyd63r8), carrying the link to their order page. Paid-in-person
+ * → a "done & paid" text; pay-later → the payment ask (transfer reference + an
+ * "I've paid" CTA into the order page's "How to pay"); RM0 → "no payment
+ * needed". The receipt/invoice PDF is never messaged (Done screen + order page).
+ *
+ * Delivery is not assumed. Meta delivers free-form text ONLY inside a 24h
+ * window the BUYER opened by messaging us; a manual-phone walk-in never did,
+ * and a scan buyer whose checkout was resumed a day later has none left. That
+ * rejection (131047) used to be swallowed as "best-effort" while the Done
+ * screen told the cashier the message had gone out — the "tracking link never
+ * arrived" bug. Now: free-form first (the richer copy, free inside a window),
+ * and on 131047 the approved `order_confirmation_utility` template — the one
+ * shape Meta delivers cold — with the tracking token on its button, exactly as
+ * the storefront push sends it. The outcome is stamped on the order
+ * (`confirmationPushStatus`, via recordConfirmationPush) so the Done screen can
+ * say what really happened and hand the cashier the link when it didn't.
+ * Transient failures retry on the storefront push's schedule; a hard failure
+ * is reported as ours unless the number itself is unreachable.
  */
 export const notifyCounterOrderCreated = internalAction({
 	args: {
@@ -1764,9 +1799,18 @@ export const notifyCounterOrderCreated = internalAction({
 		// Append the PDPA notice-at-collection line to the confirmation. Set for a
 		// manual-phone bind (86ey8vqp6) — the buyer never scanned, so this is our
 		// first message to them. Scan buyers already got it in the connect ack.
+		// (The template fallback can't carry it — its body is fixed at approval;
+		// the order page it opens links the privacy notice.)
 		includePrivacyNotice: v.optional(v.boolean()),
+		// 1-based; the scheduler passes attempt+1 when retrying a transient
+		// failure. Absent = first try (so existing scheduled jobs stay valid).
+		attempt: v.optional(v.number()),
 	},
-	handler: async (ctx, { orderId, includePrivacyNotice }): Promise<void> => {
+	handler: async (
+		ctx,
+		{ orderId, includePrivacyNotice, attempt: attemptArg },
+	): Promise<void> => {
+		const attempt = attemptArg ?? 1;
 		const meta = await ctx
 			.runQuery(internal.whatsapp.getCounterOrderMeta, { orderId })
 			.catch((err) => {
@@ -1776,6 +1820,17 @@ export const notifyCounterOrderCreated = internalAction({
 		// No buyer phone → nothing to send. Belt-and-braces: an anonymous walk-in
 		// (86ey8vqp6) never schedules this action in the first place.
 		if (!meta || !meta.customerWaPhone) return;
+		const to = meta.customerWaPhone;
+		// Cancelled between create and send — a confirmation must never go out.
+		if (meta.status === "cancelled") return;
+		// A retry racing a send that landed, or a buyer who reached us another
+		// way meanwhile, must not produce a second message.
+		if (
+			meta.confirmationPushStatus === "sent" ||
+			meta.confirmationPushStatus === "recovered"
+		) {
+			return;
+		}
 
 		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
 		const trackingToken =
@@ -1784,61 +1839,147 @@ export const notifyCounterOrderCreated = internalAction({
 		if (!trackingToken) return;
 		const trackingUrl = `${appUrl}/track/${trackingToken}`;
 		const money = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
+		const free = meta.total <= 0;
 		const paid = meta.paymentStatus === "received";
+		// Born completed (handed over at the counter) vs a collection dated for
+		// later — the copy says which, so "confirmed" never under-states a sale
+		// the buyer already walked out with.
+		const completed = meta.status === "delivered";
 		const locale = pickLocale(meta.locale);
 		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");
 		// First-contact PDPA line for the manual-phone path (blank otherwise).
 		const privacy = includePrivacyNotice ? privacyNoticeLine(locale) : "";
+		const vars = {
+			shortId: meta.shortId,
+			storeName: meta.storeName,
+			amount: money,
+			trackingUrl,
+		};
 
-		if (paid) {
-			const body =
-				renderSystemMessage(locale, "counterOrderConfirmedPaid", {
-					shortId: meta.shortId,
-					storeName: meta.storeName,
-					amount: money,
-					trackingUrl,
-				}) + privacy;
-			try {
-				await wa.send(meta.customerWaPhone, { kind: "text", body });
-			} catch (err) {
-				console.error("WA counter-order notify failed", err);
+		const sendFreeForm = async (): Promise<SendReceipt | undefined> => {
+			if (free) {
+				const body = renderSystemMessage(locale, "counterOrderFree", vars) + privacy;
+				return await wa.send(to, { kind: "text", body });
 			}
-		} else {
-			// Pay-later: send the amount + transfer reference + "I've paid" CTA so the
-			// buyer can settle from that chat without ever scanning again (boss ask).
-			// Raw bank/QR details are never in chat (ticket 86ey98ju1) — the payment
-			// CTA points to the order page's "How to pay", and the invoice PDF below
-			// carries the details as the formal document.
-			const intro =
-				renderSystemMessage(locale, "counterOrderConfirmedUnpaid", {
-					shortId: meta.shortId,
-					storeName: meta.storeName,
-					amount: money,
-					trackingUrl,
-				}) + privacy;
+			if (paid) {
+				const body =
+					renderSystemMessage(
+						locale,
+						completed ? "counterOrderCompletedPaid" : "counterOrderConfirmedPaid",
+						vars,
+					) + privacy;
+				return await wa.send(to, { kind: "text", body });
+			}
+			// Pay-later: amount + transfer reference + "I've paid" CTA so the buyer
+			// settles from that chat without ever scanning again. Raw bank/QR
+			// details are never in chat (86ey98ju1) — the CTA opens the order
+			// page's "How to pay"; the invoice PDF there is the formal document.
+			return await sendPaymentMessage(wa, to, {
+				introBody:
+					renderSystemMessage(locale, "counterOrderConfirmedUnpaid", vars) +
+					privacy,
+				locale,
+				shortId: meta.shortId,
+				storeName: meta.storeName,
+				trackingUrl,
+				// Counter orders are collected at the counter — no pickup snapshot.
+				pickupSnapshot: undefined,
+				// No pickup block on this path, so no notes to carry.
+				pickupNotes: [],
+				throwOnFailure: true,
+			});
+		};
+		// The approved utility template — same name, params and button as the
+		// storefront push, so one Meta approval covers both doors.
+		const sendTemplate = async (
+			templateName: string,
+		): Promise<SendReceipt | undefined> =>
+			await wa.send(to, {
+				kind: "template",
+				templateName,
+				languageCode: TEMPLATE_LANGUAGE[locale],
+				bodyParams: [
+					meta.shortId,
+					templateParam(meta.storeName, "the store"),
+					free ? NO_PAYMENT_LABEL[locale] : money,
+				],
+				// The approved button URL is https://kedaipal.com/track/{{1}} — Meta
+				// appends ONLY this suffix (the tracking token, not the shortId).
+				urlButtonParam: trackingToken,
+			});
+
+		try {
+			let receipt: SendReceipt | undefined;
 			try {
-				await sendPaymentMessage(wa, meta.customerWaPhone, {
-					introBody: intro,
-					locale,
-					shortId: meta.shortId,
-					storeName: meta.storeName,
-					trackingUrl,
-					// Counter orders are collected at the counter — no pickup snapshot.
-					pickupSnapshot: undefined,
-					// No pickup block on this path, so no notes to carry.
-					pickupNotes: [],
+				receipt = await sendFreeForm();
+			} catch (err) {
+				const templateName = orderConfirmTemplateName();
+				if (
+					err instanceof WhatsAppSendError &&
+					err.metaCode === OUT_OF_WINDOW_META_CODE &&
+					templateName
+				) {
+					console.log("WA counter confirm: no open window → template", {
+						shortId: meta.shortId,
+					});
+					receipt = await sendTemplate(templateName);
+				} else {
+					throw err;
+				}
+			}
+			if (receipt?.blocked) {
+				// The WABA gateway suppressed it (opt-out, cap, pause). Transactional
+				// bypasses gating today, so this is defence in depth.
+				await ctx.runMutation(internal.orders.recordConfirmationPush, {
+					orderId,
+					status: "failed",
+					failureKind: "system",
 				});
-			} catch (err) {
-				console.error("WA counter-order payment ask failed", err);
+				return;
 			}
+			await ctx.runMutation(internal.orders.recordConfirmationPush, {
+				orderId,
+				status: "sent",
+				wamid: receipt?.providerMessageId,
+			});
+		} catch (err) {
+			// Retry a blip; give up at once on anything Meta rejects identically
+			// next time. 131047 with NO template configured lands here as a hard
+			// failure — reported as ours (the number is fine; we have no shape
+			// that reaches it), never as the buyer's typo.
+			const outcome = classifyPushFailure(
+				err instanceof WhatsAppSendError
+					? {
+							httpStatus: err.httpStatus,
+							metaCode: err.metaCode,
+							responded: err.responded,
+						}
+					: { responded: true },
+				attempt,
+			);
+			const ours =
+				err instanceof WhatsAppSendError &&
+				err.metaCode === OUT_OF_WINDOW_META_CODE;
+			console.error("WA counter-order notify failed", {
+				shortId: meta.shortId,
+				attempt,
+				outcome,
+				err,
+			});
+			if (outcome.retry) {
+				await ctx.scheduler.runAfter(
+					outcome.delayMs,
+					internal.whatsapp.notifyCounterOrderCreated,
+					{ orderId, includePrivacyNotice, attempt: attempt + 1 },
+				);
+				return;
+			}
+			await ctx.runMutation(internal.orders.recordConfirmationPush, {
+				orderId,
+				status: "failed",
+				failureKind: ours ? "system" : outcome.kind,
+			});
 		}
-
-		// The receipt/invoice PDF is NOT WhatsApp'd (86eyd63r8) — that was this
-		// order's second message, and a walk-in gets one like everyone else. The
-		// PDF is still one tap away in both places it's actually wanted: the
-		// cashier's Done screen (Download / Share, for handing it over there and
-		// then) and the buyer's own tracking page, whose link is in the message
-		// above.
 	},
 });
 

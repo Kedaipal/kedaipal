@@ -880,6 +880,239 @@ describe("counter order auto-send (notifyCounterOrderCreated)", () => {
 		expect(combined).not.toContain("1234567890");
 		fetchMock.restore();
 	});
+
+	// -----------------------------------------------------------------------
+	// Delivery outcome + the out-of-window fallback (the "tracking link never
+	// arrived" bug). Meta delivers free-form text ONLY inside a window the
+	// BUYER opened by messaging us in the last 24h. A manual-phone walk-in
+	// never did; a scan buyer whose session was resumed a day later no longer
+	// has one. Both got a silent 131047, swallowed as "best-effort", while the
+	// Done screen told the cashier the message had gone out.
+	// -----------------------------------------------------------------------
+
+	/** Graph responses scripted per call; the last step repeats. */
+	function installScriptedFetch(
+		script: Array<{ status: number; body: string }>,
+	) {
+		const calls: FetchCall[] = [];
+		const original = globalThis.fetch;
+		let i = 0;
+		globalThis.fetch = vi.fn(async (url: unknown, init?: RequestInit) => {
+			const body = init?.body ? JSON.parse(init.body as string) : null;
+			calls.push({ url: String(url), body });
+			if (String(url).includes("graph.facebook.com")) {
+				const step = script[Math.min(i++, script.length - 1)];
+				return new Response(step.body, { status: step.status });
+			}
+			return new Response("{}", { status: 200 });
+		}) as unknown as typeof fetch;
+		return {
+			waCalls: () => calls.filter((c) => c.url.includes("graph.facebook.com")),
+			restore: () => {
+				globalThis.fetch = original;
+			},
+		};
+	}
+	const OUT_OF_WINDOW = {
+		status: 400,
+		body: JSON.stringify({ error: { code: 131047 } }),
+	};
+	const OK = (wamid: string) => ({
+		status: 200,
+		body: JSON.stringify({ messages: [{ id: wamid }] }),
+	});
+	const TEMPLATE = "order_confirmation_utility";
+	type TemplateBody = {
+		type: string;
+		template: {
+			name: string;
+			language: { code: string };
+			components: Array<{ type: string; parameters: Array<{ text: string }> }>;
+		};
+	};
+	async function pushOf(t: ReturnType<typeof setup>, orderId: Id<"orders">) {
+		const o = await t.run((ctx) => ctx.db.get(orderId));
+		return {
+			status: o?.confirmationPushStatus,
+			kind: o?.confirmationPushFailureKind,
+			wamid: o?.confirmationPushWamid,
+		};
+	}
+	async function counterRetries(t: ReturnType<typeof setup>) {
+		const jobs = await t.run((ctx) =>
+			ctx.db.system.query("_scheduled_functions").collect(),
+		);
+		return jobs
+			.filter((j) => j.name.includes("notifyCounterOrderCreated"))
+			.map((j) => j.args[0] as { attempt?: number });
+	}
+
+	afterEach(() => {
+		delete process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE;
+	});
+
+	test("an in-window send stamps the order sent (+ wamid) — the cashier can see it went out", async () => {
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+		await t.run((ctx) =>
+			ctx.db.patch(orderId, {
+				paymentStatus: "received",
+				confirmationPushStatus: "sending",
+			}),
+		);
+		const fetchMock = installScriptedFetch([OK("wamid.COUNTER1")]);
+
+		await t.action(internal.whatsapp.notifyCounterOrderCreated, { orderId });
+
+		expect(fetchMock.waCalls()).toHaveLength(1);
+		expect(await pushOf(t, orderId)).toEqual({
+			status: "sent",
+			kind: undefined,
+			wamid: "wamid.COUNTER1",
+		});
+		fetchMock.restore();
+	});
+
+	test("a buyer with no open window (131047) gets the approved template instead — never silence", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = TEMPLATE;
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "ms");
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+		await t.run((ctx) =>
+			ctx.db.patch(orderId, { paymentStatus: "received" }),
+		);
+		const fetchMock = installScriptedFetch([OUT_OF_WINDOW, OK("wamid.TPL1")]);
+
+		await t.action(internal.whatsapp.notifyCounterOrderCreated, { orderId });
+
+		const wa = fetchMock.waCalls();
+		// Free-form first (the richer copy, free inside a window) → rejected →
+		// the ONE shape Meta delivers with no window.
+		expect(wa).toHaveLength(2);
+		expect((wa[0].body as { type: string }).type).toBe("text");
+		const tpl = wa[1].body as TemplateBody;
+		expect(tpl.type).toBe("template");
+		expect(tpl.template.name).toBe(TEMPLATE);
+		expect(tpl.template.language.code).toBe("ms"); // the STORE's language
+		expect(tpl.template.components[0].parameters.map((p) => p.text)).toEqual([
+			shortId,
+			"Test Outdoor",
+			"MYR 120.00",
+		]);
+		// Button param = the tracking TOKEN, so the link the template builds is
+		// the buyer's own order page — the whole point of the message.
+		expect(tpl.template.components[1].parameters[0].text).toBe(
+			await tk(t, shortId),
+		);
+		expect(await pushOf(t, orderId)).toEqual({
+			status: "sent",
+			kind: undefined,
+			wamid: "wamid.TPL1",
+		});
+		fetchMock.restore();
+	});
+
+	test("pay-later out of window: the payment ask's text retry is skipped (same rejection) and the template carries the link", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = TEMPLATE;
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+		const fetchMock = installScriptedFetch([OUT_OF_WINDOW, OK("wamid.TPL2")]);
+
+		await t.action(internal.whatsapp.notifyCounterOrderCreated, { orderId });
+
+		const wa = fetchMock.waCalls();
+		expect(wa.map((c) => (c.body as { type: string }).type)).toEqual([
+			"interactive",
+			"template",
+		]);
+		expect((await pushOf(t, orderId)).status).toBe("sent");
+		fetchMock.restore();
+	});
+
+	test("131047 with no template configured is reported as OUR fault — the number is fine", async () => {
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+		await t.run((ctx) =>
+			ctx.db.patch(orderId, { paymentStatus: "received" }),
+		);
+		const fetchMock = installScriptedFetch([OUT_OF_WINDOW]);
+
+		await t.action(internal.whatsapp.notifyCounterOrderCreated, { orderId });
+
+		expect(fetchMock.waCalls()).toHaveLength(1);
+		expect(await pushOf(t, orderId)).toEqual({
+			status: "failed",
+			kind: "system",
+			wamid: undefined,
+		});
+		expect(await counterRetries(t)).toEqual([]);
+		fetchMock.restore();
+	});
+
+	test("a transient 5xx is retried, not surfaced as a failure", async () => {
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+		await t.run((ctx) =>
+			ctx.db.patch(orderId, {
+				paymentStatus: "received",
+				confirmationPushStatus: "sending",
+			}),
+		);
+		const fetchMock = installScriptedFetch([{ status: 503, body: "boom" }]);
+
+		await t.action(internal.whatsapp.notifyCounterOrderCreated, {
+			orderId,
+			includePrivacyNotice: true,
+		});
+
+		expect((await pushOf(t, orderId)).status).toBe("sending");
+		const retries = await counterRetries(t);
+		expect(retries).toHaveLength(1);
+		expect(retries[0].attempt).toBe(2);
+		fetchMock.restore();
+	});
+
+	test("a cancelled order sends nothing", async () => {
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+		await t.run((ctx) => ctx.db.patch(orderId, { status: "cancelled" }));
+		const fetchMock = installScriptedFetch([OK("wamid.NEVER")]);
+
+		await t.action(internal.whatsapp.notifyCounterOrderCreated, { orderId });
+
+		expect(fetchMock.waCalls()).toHaveLength(0);
+		fetchMock.restore();
+	});
+
+	test("a completed (handed-over) paid sale says the sale is complete, not merely confirmed", async () => {
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+		await t.run((ctx) =>
+			ctx.db.patch(orderId, { status: "delivered", paymentStatus: "received" }),
+		);
+		const fetchMock = installScriptedFetch([OK("wamid.DONE")]);
+
+		await t.action(internal.whatsapp.notifyCounterOrderCreated, { orderId });
+
+		const text = waText(fetchMock.waCalls()[0].body);
+		expect(text).toMatch(/complete and paid/i);
+		expect(text).not.toContain("confirmed and paid");
+		expect(text).toContain(`/track/${await tk(t, shortId)}`);
+		fetchMock.restore();
+	});
 });
 
 describe("counter checkout — store QR scan (86ey5neg6 / 86ey98ju1)", () => {
