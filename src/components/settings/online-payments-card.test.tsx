@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OnlinePaymentsCard } from "./online-payments-card";
 
@@ -24,6 +30,7 @@ function renderCard(
 			canUse={true}
 			country="MY"
 			onSave={onSave}
+			onChooseHowBuyersPay={vi.fn()}
 			{...overrides}
 		/>,
 	);
@@ -96,5 +103,45 @@ describe("OnlinePaymentsCard — country-aware copy", () => {
 			document.querySelector('img[src="/img/payment/touchngo.svg"]'),
 		).toBeTruthy();
 		expect(screen.queryByText("PayNow")).toBeNull();
+	});
+});
+
+describe("OnlinePaymentsCard — the account, not the choice (86eye9xd4)", () => {
+	afterEach(() => {
+		cleanup();
+		vi.restoreAllMocks();
+	});
+
+	it("connecting stores the keys without switching buyers over", async () => {
+		const onSave = renderCard();
+		fireEvent.change(screen.getByLabelText(/API key/i), {
+			target: { value: "test_key_abcd" },
+		});
+		fireEvent.change(screen.getByLabelText(/Salt/i), {
+			target: { value: "salt_1234" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "Connect HitPay" }));
+		await waitFor(() =>
+			expect(onSave).toHaveBeenCalledWith({
+				hitpay: { enabled: false, apiKey: "test_key_abcd", salt: "salt_1234" },
+			}),
+		);
+		// …and says where the switch is, before the seller taps.
+		expect(document.body.textContent).toContain("Payments → How buyers pay");
+	});
+
+	it("a connected card points at How buyers pay instead of a second switch", () => {
+		const onChoose = vi.fn();
+		const onSave = renderCard({
+			hitpay: { enabled: false, hasCredentials: true, apiKeyHint: "abcd" },
+			onChooseHowBuyersPay: onChoose,
+		});
+		expect(screen.queryByRole("button", { name: /Pause|Resume/ })).toBeNull();
+		expect(screen.getByText("Not in use")).toBeTruthy();
+		fireEvent.click(
+			screen.getByRole("button", { name: "Choose how buyers pay" }),
+		);
+		expect(onChoose).toHaveBeenCalled();
+		expect(onSave).not.toHaveBeenCalled();
 	});
 });

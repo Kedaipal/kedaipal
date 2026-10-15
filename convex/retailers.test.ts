@@ -1293,7 +1293,21 @@ describe("retailers deleteUser (internal cascade)", () => {
 				triggeredByRetailerId: ids.retailerId,
 				createdAt: now,
 			});
+			// Kedaipal's own /stores curation (z8r3fdr6mv): the showcase
+			// survives, the deleted store leaves its member list.
+			const showcaseId = await ctx.db.insert("marketplaceShowcases", {
+				slug: "campfest-2026",
+				title: "Malaysia Campfest 2026",
+				country: "MY",
+				theme: "campfire",
+				sortOrder: 1,
+				publishedAt: now,
+				members: [{ retailerId: ids.retailerId, label: "Booth B4" }],
+				createdAt: now,
+				updatedAt: now,
+			});
 			return {
+				showcaseId,
 				buyerImgId,
 				mockupId,
 				pickupId,
@@ -1361,6 +1375,12 @@ describe("retailers deleteUser (internal cascade)", () => {
 			const optOut = await ctx.db.get(extra.optOutId);
 			expect(optOut).not.toBeNull();
 			expect(optOut?.triggeredByRetailerId).toBeUndefined();
+
+			// The showcase survives (it is Kedaipal's curation, not the tenant's
+			// data); the deleted store is no longer among its members.
+			const showcase = await ctx.db.get(extra.showcaseId);
+			expect(showcase).not.toBeNull();
+			expect(showcase?.members).toEqual([]);
 		});
 	});
 
@@ -3517,4 +3537,44 @@ describe("public booksCouriers bit (z8r3fdh274)", () => {
 		await t.run((ctx) => ctx.db.patch(retailerId, { delyva: connected }));
 		expect(await booksCouriers(t, "delyva-couriers")).toBe(true);
 	});
+});
+
+describe("rider options save without touching the arm switch (86eye9xd4)", () => {
+	// The delivery-pricing page saves vehicle / direction / prompt-to-book with
+	// live pricing. Before, a "live" store's save sent none of them (they were
+	// editable and silently dropped); sending them with a restated `enabled`
+	// could re-arm riders the seller had switched off. `enabled` omitted now
+	// means "keep what's stored", like its two sibling fields.
+	const originAddress = {
+		label: "12 Jln Kilang, Shah Alam",
+		latitude: 3.0,
+		longitude: 101.5,
+	};
+	const keys = { apiKey: "pk_test_abc", apiSecret: "sk_test_def" };
+
+	for (const armed of [true, false]) {
+		test(`rider options persist and riders stay ${armed ? "armed" : "off"}`, async () => {
+			const t = setup();
+			const asA = await seed(t, USER_A, `rider-opts-${armed ? "on" : "off"}`);
+			await asA.mutation(api.retailers.updateSettings, {
+				businessAddress: originAddress,
+				deliveryConfig: { mode: "flat", fee: 500 },
+				deliveryBooking: { enabled: armed, vehicleType: "MOTORCYCLE", ...keys },
+			});
+			await asA.mutation(api.retailers.updateSettings, {
+				deliveryBooking: {
+					vehicleType: "CAR",
+					promptBookOnPacked: true,
+					deliveryDirection: "collection",
+				},
+			});
+			const booking = (await asA.query(api.retailers.getMyRetailer))
+				?.deliveryBooking;
+			expect(booking?.enabled).toBe(armed);
+			expect(booking?.vehicleType).toBe("CAR");
+			expect(booking?.promptBookOnPacked).toBe(true);
+			expect(booking?.deliveryDirection).toBe("collection");
+			expect(booking?.hasCredentials).toBe(true);
+		});
+	}
 });

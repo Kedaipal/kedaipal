@@ -375,6 +375,35 @@ function SellerSheetBody({
 							) : null}
 						</div>
 					</Row>
+					{/* Store availability (z8r3fdudf7) — whether buyers can order
+					    at all, and whose switch says so. Changed from Manage. */}
+					<Row label="Store status">
+						<div className="flex min-w-0 flex-col">
+							<Plain muted={seller.availability.state !== "open"}>
+								{seller.availability.state === "open"
+									? "Taking orders"
+									: seller.availability.state === "offline"
+										? `Offline — taken down by Kedaipal${seller.adminAvailability?.at !== undefined ? ` ${formatShortDate(seller.adminAvailability.at)}` : ""}`
+										: seller.availability.by === "admin"
+											? `Paused by Kedaipal${seller.adminAvailability?.at !== undefined ? ` since ${formatShortDate(seller.adminAvailability.at)}` : ""}`
+											: seller.availability.by === "hold"
+												? "Paused — Off-Season Hold"
+												: "Paused by the seller"}
+							</Plain>
+							{seller.availability.state !== "open" &&
+							seller.availability.note ? (
+								<Plain muted>
+									{seller.availability.by === "seller"
+										? "Buyers see"
+										: "Note to seller"}
+									: {seller.availability.note}
+								</Plain>
+							) : null}
+							{seller.adminAvailability && seller.sellerPaused ? (
+								<Plain muted>Seller paused it too</Plain>
+							) : null}
+						</div>
+					</Row>
 					<Row label="Country · currency">
 						<Plain>
 							{/* currency-literal-ok: the store's currency SETTING (admin console) */}

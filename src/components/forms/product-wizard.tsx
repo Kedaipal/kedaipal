@@ -61,6 +61,7 @@ import {
 import type { KindCard } from "../../lib/kind-card";
 import { NOTE_LINK_HINT } from "../../lib/linkify";
 import { asPackageUnit } from "../../lib/package-unit";
+import type { UnsavedState } from "../../lib/product-form-dirty";
 import {
 	isSecurityDepositInRange,
 	securityDepositRangeMessage,
@@ -710,7 +711,7 @@ export function wizardStepIssues(
 	}
 	// A half-filled promotion can't pass the step that sets it either.
 	if (step === 3) {
-		const promoIssue = promoDraftIssue(state.promo, Date.now());
+		const promoIssue = promoDraftIssue(state.promo, Date.now(), rows);
 		if (promoIssue) issues.push({ field: "promo", message: promoIssue });
 	}
 	if (step === 4) {
@@ -1167,6 +1168,7 @@ export function ProductWizard({
 	linkedCard,
 	storeSchedule,
 	saveLock,
+	onUnsavedChange,
 }: {
 	/** Owning retailer — feeds the review step's category picker. */
 	retailerId: Id<"retailers">;
@@ -1192,8 +1194,12 @@ export function ProductWizard({
 	onSkipToFullForm: (handoff: ReturnType<typeof wizardHandoff>) => void;
 	/** Review-step handoff: open the full form on the same draft. */
 	onOpenFullForm: (handoff: ReturnType<typeof wizardHandoff>) => void;
-	/** Back from step 0 / Cancel — leave the wizard entirely. */
+	/** Back from step 0 / Cancel — leave the wizard entirely. Called only
+	 * after the wizard has confirmed any discard itself. */
 	onExit: () => void;
+	/** Reports what leaving right now would lose (z8r3fdtk82), so the route's
+	 * `UnsavedChangesGuard` can warn on a sidebar tap or a tab close. */
+	onUnsavedChange?: (state: UnsavedState) => void;
 	/** Restored draft from the full form's "switch back to guided setup" —
 	 * the wizard opens at the first unanswered step, every value in place. */
 	initialState?: WizardState;
@@ -1256,6 +1262,8 @@ export function ProductWizard({
 		title: string;
 		description: string;
 		confirmLabel: string;
+		/** Defaults to "Cancel". */
+		cancelLabel?: string;
 		apply: () => void;
 	} | null>(null);
 	const [serverError, setServerError] = useState<string | null>(null);
@@ -1700,6 +1708,15 @@ export function ProductWizard({
 		state.minQuantity.trim().length > 0 ||
 		state.minNoticeDays.trim().length > 0;
 
+	const unsaved: UnsavedState = uploading
+		? "uploading"
+		: isDirty
+			? "changes"
+			: "none";
+	useEffect(() => {
+		onUnsavedChange?.(unsaved);
+	}, [unsaved, onUnsavedChange]);
+
 	function cancelWizard() {
 		if (!isDirty) {
 			onExit();
@@ -1708,7 +1725,11 @@ export function ProductWizard({
 		setPendingConfirm({
 			title: "Discard this product?",
 			description: "Nothing has been saved — leaving loses the draft.",
-			confirmLabel: "Discard",
+			// The same two answers as the route's leave guard
+			// (UnsavedChangesGuard), so leaving reads the same whichever way
+			// the seller leaves: Cancel here, or the sidebar.
+			cancelLabel: "Keep editing",
+			confirmLabel: "Discard changes",
 			apply: onExit,
 		});
 	}
@@ -1753,8 +1774,10 @@ export function ProductWizard({
 	}
 
 	function goBack() {
+		// Back off the first step leaves the wizard, so it asks first exactly
+		// like Cancel does.
 		if (stepPos === 0) {
-			onExit();
+			cancelWizard();
 			return;
 		}
 		setIssues([]);
@@ -3674,6 +3697,7 @@ export function ProductWizard({
 				title={pendingConfirm?.title ?? ""}
 				description={pendingConfirm?.description}
 				confirmLabel={pendingConfirm?.confirmLabel ?? "Confirm"}
+				cancelLabel={pendingConfirm?.cancelLabel}
 				destructive
 				onConfirm={() => {
 					const apply = pendingConfirm?.apply;

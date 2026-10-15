@@ -57,7 +57,9 @@ const REDACTION_CALLS = [
  * write here may carry the gate. This list is the inverse of what it was
  * before T3.1, which is the whole point of having it.
  */
-const NEVER_GATED_MODULES = ["products", "categories"];
+// `promotions` (`z8r3fducfd`) is the catalogue too: a bulk promotion only
+// writes product prices, so it is paid for by the subscription like them.
+const NEVER_GATED_MODULES = ["products", "categories", "promotions"];
 
 /** Order-handling modules: every public write is classified below.
  *
@@ -89,6 +91,8 @@ const GATED_FUNCTIONS = [
 	"orders.waiveMockup",
 	"lalamove.prepareBooking",
 	"lalamove.confirmBooking",
+	// Tipping spends the store's money on THIS order's rider (86eye9xd4).
+	"lalamove.addPriorityFee",
 	"delyva.prepareBooking",
 	"delyva.confirmBooking",
 	// Chasing and documents.
@@ -169,6 +173,7 @@ const OPEN_FUNCTIONS: Record<string, string> = {
 	// Settings are always open.
 	"delyva.connect": "settings: connecting a courier account",
 	"delyva.resubscribeWebhooks": "settings: re-registers the courier webhooks",
+	"lalamove.registerWebhook": "settings: registers the rider webhook",
 	"delyva.refreshEnvironment": "settings: re-reads the courier account's mode",
 	"delyva.disconnect": "settings: removing a courier account is never trapped",
 	"delyva.updateSettings": "settings: courier defaults and preferences",
@@ -202,6 +207,8 @@ const OPEN_FUNCTIONS: Record<string, string> = {
 // had been sitting outside this sweep entirely — the same way `bookingBlocks`
 // and `closedDates` were, and for the same reason (nobody added the file).
 // `orderClaims` joined with it: its list grew an `order.total` read.
+// `deliveries` (86eye9xd4, 6A) lists bookings and parcels by order, with
+// destinations and tracking links that lead back to the buyer.
 const READ_MODULES = [
 	"orders",
 	"customers",
@@ -210,6 +217,7 @@ const READ_MODULES = [
 	"awb",
 	"vouchers",
 	"orderClaims",
+	"deliveries",
 ];
 
 const OPEN_READS: Record<string, string> = {

@@ -345,6 +345,90 @@ describe("orders.getPaymentMethods — gatewayAvailable", () => {
 	});
 });
 
+describe("HitPay on is THE way buyers pay (86eye9xd4, 8A)", () => {
+	const MAYBANK = {
+		type: "bank" as const,
+		label: "Maybank",
+		bankName: "Maybank",
+		bankAccountName: "Test Store",
+		bankAccountNumber: "5123 4567 8901",
+		sortOrder: 0,
+	};
+
+	async function seedManualAndHitpay(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.retailers.updateSettings, { paymentMethods: [MAYBANK] });
+		await connectHitpay(t, USER_A);
+		return { retailer, productId };
+	}
+
+	test("an order HitPay can take never sees the manual details", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedManualAndHitpay(t);
+		const { token } = await seedOrder(t, retailer._id, productId);
+		const info = await t.query(api.orders.getPaymentMethods, { token });
+		expect(info?.gatewayAvailable).toBe(true);
+		expect(info?.methods).toEqual([]);
+		expect(JSON.stringify(info)).not.toContain("5123 4567 8901");
+	});
+
+	test("switching back to manual brings them straight back — nothing was deleted", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedManualAndHitpay(t);
+		const { token } = await seedOrder(t, retailer._id, productId);
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.retailers.updateSettings, { hitpay: { enabled: false } });
+		const info = await t.query(api.orders.getPaymentMethods, { token });
+		expect(info?.gatewayAvailable).toBe(false);
+		expect(info?.methods.map((m) => m.label)).toEqual(["Maybank"]);
+	});
+
+	test("an order HitPay can't take keeps the manual details as its fallback", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedManualAndHitpay(t);
+		const { orderId, token } = await seedOrder(t, retailer._id, productId);
+		// Under HitPay's floor — the gateway refuses it, so manual is the door.
+		await t.run((ctx) => ctx.db.patch(orderId, { total: 20 }));
+		const info = await t.query(api.orders.getPaymentMethods, { token });
+		expect(info?.gatewayAvailable).toBe(false);
+		expect(info?.methods.map((m) => m.label)).toEqual(["Maybank"]);
+	});
+
+	test("the unpaid document points at Pay now instead of printing the account", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedManualAndHitpay(t);
+		const { token } = await seedOrder(t, retailer._id, productId);
+		const inputs = await t.query(internal.orders.receiptPdfInputs, { token });
+		expect(inputs?.data.paymentBlocks).toEqual([
+			{ label: "Pay online", lines: [expect.stringMatching(/Pay now/)] },
+		]);
+		expect(inputs?.data.payOnline).toBe(true);
+		expect(JSON.stringify(inputs?.data)).not.toContain("5123 4567 8901");
+	});
+
+	test("a receipt paid through HitPay names it, not the bank it didn't use", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedManualAndHitpay(t);
+		const { orderId, token } = await seedOrder(t, retailer._id, productId);
+		await t.run((ctx) =>
+			ctx.db.patch(orderId, {
+				paymentStatus: "received",
+				paymentReceivedAt: Date.now(),
+				gatewayPaymentId: "pay_abc123",
+			}),
+		);
+		const inputs = await t.query(internal.orders.receiptPdfInputs, { token });
+		expect(inputs?.data.paymentBlocks).toEqual([
+			{ label: "Paid online", lines: ["HitPay payment pay_abc123"] },
+		]);
+		expect(inputs?.data.payOnline).toBeUndefined();
+	});
+});
+
 describe("hitpay.createCheckout", () => {
 	test("mints a request, stores it on the order, and reuses it while fresh", async () => {
 		const t = setup();

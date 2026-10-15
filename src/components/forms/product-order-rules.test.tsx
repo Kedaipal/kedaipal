@@ -297,7 +297,12 @@ describe("Order rules — what the card submits", () => {
 			async () => {},
 		);
 		renderForm({ kind: "booking", onSubmit, initial: { prepMinutes: 120 } });
-		fireEvent.click(screen.getByRole("button", { name: "Save" }));
+		// Untouched edit form: Save is disabled ("All changes saved",
+		// z8r3fdtk82), so submit the form itself. The stored value's payload is
+		// what's under test.
+		const form = document.querySelector("form");
+		if (!form) throw new Error("no form");
+		fireEvent.submit(form);
 		await vi.waitFor(() => expect(onSubmit).toHaveBeenCalled());
 		const [values] = onSubmit.mock.lastCall ?? [];
 		if (!values) throw new Error("form never submitted");

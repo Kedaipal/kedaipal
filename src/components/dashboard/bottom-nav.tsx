@@ -1,6 +1,7 @@
 import { Link, type LinkProps, useLocation } from "@tanstack/react-router";
 import {
 	ChevronRight,
+	GalleryHorizontalEnd,
 	Home,
 	LayoutGrid,
 	LineChart,
@@ -13,7 +14,9 @@ import {
 	ShoppingBag,
 	Siren,
 	Store,
+	Tag,
 	Ticket,
+	Truck,
 	Users,
 } from "lucide-react";
 import { Dialog as MorePrimitive } from "radix-ui";
@@ -29,7 +32,7 @@ export interface BottomNavProps {
 	// counting the whole in-progress pipeline would only ever climb. Same count as
 	// the inbox "New" chip + the Home tile. See docs/order-inbox.md.
 	newOrdersCount: number;
-	// Show the admin tabs (Sellers / Billing / WABA) instead of the seller nav.
+	// Show the admin tabs (Sellers / Billing / Showcases / WABA) instead of the seller nav.
 	// True for a storeless admin (no seller store to manage) AND for any admin
 	// while they're on an /app/admin route — so an admin can move between ALL
 	// admin pages on mobile, not just land on Sellers. See ClickUp 86ey8r734.
@@ -41,6 +44,8 @@ export interface BottomNavProps {
 	// a "Pro" chip so the upgrade wall behind it is never a surprise.
 	crmLocked?: boolean;
 	vouchersLocked?: boolean;
+	// Promotions (bulk sale prices) are plan-locked (Starter).
+	promotionsLocked?: boolean;
 	// Insights is plan-locked (Starter) — same treatment on the Insights tab.
 	insightsLocked?: boolean;
 }
@@ -63,8 +68,11 @@ type Tab = {
  * list instead of fighting for a 7th tab. See docs/app-redesign.md.
  */
 const MORE_ROUTES = [
+	"/app/deliveries",
 	"/app/products",
 	"/app/customers",
+	"/app/promotions",
+	"/app/vouchers",
 	"/app/settings",
 	"/app/poster",
 ] as const;
@@ -75,6 +83,7 @@ export function BottomNav({
 	hasStore,
 	crmLocked,
 	vouchersLocked,
+	promotionsLocked,
 	insightsLocked,
 }: BottomNavProps) {
 	// Team members (86exr91r4): a member's tabs are the areas they can read
@@ -120,6 +129,11 @@ export function BottomNav({
 					: []),
 				{ to: "/app/admin/sellers", label: "Sellers", icon: Store },
 				{ to: "/app/admin/billing", label: "Billing", icon: ShieldCheck },
+				{
+					to: "/app/admin/showcases",
+					label: "Showcases",
+					icon: GalleryHorizontalEnd,
+				},
 				{ to: "/app/admin/waba", label: "WABA", icon: Siren },
 			]
 		: [
@@ -172,6 +186,7 @@ export function BottomNav({
 						active={moreOpen || onMoreRoute}
 						crmLocked={crmLocked}
 						vouchersLocked={vouchersLocked}
+						promotionsLocked={promotionsLocked}
 					/>
 				) : null}
 			</div>
@@ -277,13 +292,16 @@ function MoreTab({
 	active,
 	crmLocked,
 	vouchersLocked,
+	promotionsLocked,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	active: boolean;
 	crmLocked?: boolean;
 	vouchersLocked?: boolean;
+	promotionsLocked?: boolean;
 }) {
+	const ordersPerm = usePermission("orders");
 	const productsPerm = usePermission("products");
 	const customersPerm = usePermission("customers");
 	const vouchersPerm = usePermission("vouchers");
@@ -310,12 +328,32 @@ function MoreTab({
 					style={{ bottom: "calc(var(--app-bottomnav-h, 4.75rem) + 0.5rem)" }}
 				>
 					<MorePrimitive.Title className="sr-only">More</MorePrimitive.Title>
+					{/* First: it is the Orders tab's follow-through (86eye9xd4). */}
+					{ordersPerm.canRead ? (
+						<MoreRow
+							to="/app/deliveries"
+							icon={Truck}
+							label="Deliveries"
+							sub="Parcels to send & couriers on the road"
+							onNavigate={close}
+						/>
+					) : null}
 					{productsPerm.canRead ? (
 						<MoreRow
 							to="/app/products"
 							icon={Package}
 							label="Products"
 							sub="Catalog, stock & variants"
+							onNavigate={close}
+						/>
+					) : null}
+					{productsPerm.canRead ? (
+						<MoreRow
+							to="/app/promotions"
+							icon={Tag}
+							label="Promotions"
+							sub="Sale prices on many products"
+							pro={promotionsLocked}
 							onNavigate={close}
 						/>
 					) : null}

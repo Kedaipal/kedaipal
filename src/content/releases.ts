@@ -181,6 +181,99 @@ export interface Release {
  */
 export const RELEASES: Release[] = [
 	{
+		version: "2026.10.3",
+		date: "2026-10-15",
+		// Notable: something MOVED, and a buyer-facing rule changed. Despatch
+		// labels left the inbox for the new Deliveries page, delivery pricing
+		// left Fulfilment for a page of its own, and every settings card was
+		// regrouped. And switching HitPay on now hides the bank details buyers
+		// used to see beside it. A seller who reads nothing will go to print
+		// labels where they always did and find a pointer instead — or wonder
+		// why no buyer pays by transfer any more. The dot would not reach them
+		// before that morning.
+		notable: true,
+		entries: [
+			{
+				kind: "feature",
+				title: { en: "Every delivery in one place, on its own page" },
+				body: {
+					en: "Deliveries is a new page in your menu, right under Orders. Parcels waiting to go out sit at the top with what they still need — a rider booked or a consignment number added — then bookings on the road, any that failed and still need a rider, and what delivery cost you this month. Despatch labels print from here now, beside the parcels they're for. Home gets a Deliveries card, and a banner warns when your Lalamove wallet runs low. The page is on every plan; booking riders and printing labels are Pro.",
+				},
+				href: "/app/deliveries",
+				hrefLabel: { en: "Open Deliveries" },
+				icon: "truck",
+			},
+			{
+				kind: "feature",
+				title: { en: "Tip a rider when nobody takes your booking" },
+				body: {
+					// The tip steps and cap are fixed per market, not this store's money.
+					// currency-literal-ok: TIP_OPTIONS amounts, both markets named
+					en: "A Lalamove booking no rider accepts runs out in the end. While one is still finding a rider, its card on the order page and its row on Deliveries offer Add tip: pick RM 2, RM 5 or RM 10 (S$1, S$2 or S$5 in Singapore) and riders nearby see a better fare. The dialog shows the new trip total first. The tip comes out of your own Lalamove wallet, can't be taken back, and stops at RM 20 (S$10) a booking. Booking riders is on Pro.",
+				},
+				// No link: there is nothing to switch on. It reaches the seller on
+				// the next booking that sits in "Finding rider" — the v2026.10.2
+				// screenshot-proof posture.
+			},
+			{
+				kind: "enhancement",
+				title: { en: "Turn on HitPay and it's the one way buyers pay" },
+				body: {
+					en: "With HitPay on, buyers still saw your bank details and QR beside it, so some paid by hand and you were back to checking screenshots. Now HitPay is the only way to pay on any order it can take, and every payment confirms itself. Your bank and QR details stay saved for orders under HitPay's minimum, and switching back is one tap. Connecting HitPay no longer turns it on by itself — you choose under Payments → How buyers pay. On Pro.",
+				},
+				href: spotlightHref("how_buyers_pay"),
+				hrefLabel: { en: "Choose how buyers pay" },
+				icon: "wallet",
+			},
+			{
+				kind: "feature",
+				title: { en: "Put many products on one sale, and end it in one tap" },
+				body: {
+					en: "Promotions is a new page in your menu, right after Products. Pick the products — search, or filter to a category and take them all — set one percentage off and when it runs, check each sale price, and they go on sale together, flash-sale limits included. Edit it later and every product follows; end it and each goes back to its normal price, leaving alone any you've re-priced by hand since. A product's own Promotion card also gains Clear sale prices & settings. On Pro.",
+				},
+				href: "/app/promotions",
+				hrefLabel: { en: "Start a promotion" },
+				icon: "megaphone",
+			},
+			{
+				kind: "feature",
+				title: { en: "Pause your store when you need a break" },
+				body: {
+					en: 'Away for a few days, or sold out for the week? Settings → Store now opens with Accepting orders. Switch it off and your storefront stays up for browsing but stops taking orders, with an optional note for buyers like "Back on 1 Nov". Your counter keeps working, and your plan carries on as usual — Off-Season Hold is still the way to pause billing. Switch it back on whenever you\'re ready. On every plan.',
+				},
+				href: spotlightHref("store_status"),
+				hrefLabel: { en: "Find the switch" },
+			},
+			{
+				kind: "enhancement",
+				title: { en: "Settings, regrouped so you find things faster" },
+				body: {
+					en: "Settings now sits in three groups — Store, Selling and Connections — and on a computer a side rail shows each section's state at a glance, with anything that needs you in amber. Every card reads the same way: a title, one line on what it does, and its current value on the right. Delivery pricing has a page of its own, the three order-alert cards are now one, each connection shows a setup checklist, and Lalamove's webhook registers in one tap. On every plan.",
+				},
+				href: "/app/settings",
+				hrefLabel: { en: "Open Settings" },
+				icon: "settings",
+			},
+			{
+				kind: "enhancement",
+				title: { en: "See when Kedaipal features your shop" },
+				body: {
+					en: "We now run showcases on kedaipal.com/stores — short-lived sections for an event or a theme, picked by us, above the usual store cards. If your shop is in one, your Store listing card says which, links to it, and tells you if anything is keeping you out of view — say, List my store switched off. There's nothing to sign up for. On every plan.",
+				},
+				href: spotlightHref("store_listing"),
+				hrefLabel: { en: "Check your listing" },
+			},
+			{
+				kind: "fix",
+				title: { en: "Product photos save the moment you add them" },
+				body: {
+					en: "Adding, removing or reordering a product's photos used to wait for Save, so leaving the page first lost them. Photos now save themselves as you go — remove one by mistake and Undo brings it back — and leaving a product with other unsaved changes asks before throwing them away. On every plan.",
+				},
+				// No link: it reaches the seller the next time they edit a product.
+			},
+		],
+	},
+	{
 		version: "2026.10.2",
 		date: "2026-10-13",
 		// Notable on two triggers. Something MOVED: Home is rebuilt around

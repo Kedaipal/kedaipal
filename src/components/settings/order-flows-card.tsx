@@ -49,7 +49,8 @@ import { Input } from "../ui/input";
 import { SortableList } from "../ui/sortable-list";
 import {
 	Card,
-	InfoBanner,
+	HelperBullets,
+	InfoDisclosure,
 	SAVE_BTN_CLASS,
 	SectionHeading,
 } from "./settings-primitives";
@@ -112,48 +113,31 @@ export function OrderFlowsSection({
 
 	return (
 		<div className="flex flex-col gap-6 pt-2">
-			<InfoBanner title="How order stages work">
-				<p>
-					Build the steps your orders move through — name them however you work.
-					Buyers see them as a live timeline; you advance orders step-by-step
-					from the dashboard.
-				</p>
-				<p>
-					Every step maps to one of four built-in milestones via{" "}
-					<span className="font-medium text-foreground">“Counts as”</span>, so
-					payments, packing and tracking keep working:{" "}
-					<span className="font-medium text-foreground">Accepted</span> →{" "}
-					<span className="font-medium text-foreground">In production</span> →{" "}
-					<span className="font-medium text-foreground">Ready</span> →{" "}
-					<span className="font-medium text-foreground">Done</span>.
-				</p>
-				<p>
-					<span className="font-medium text-foreground">
-						Your first step should count as “Accepted”, your last as “Done”
-					</span>{" "}
-					— map the steps in between to whichever milestone fits. E.g. a cake
-					shop: “Order received” (Accepted) → “Baking” (In production) → “Ready
-					for pickup” (Ready) → “Collected” (Done).
-				</p>
-				{kinds.length > 1 ? (
-					<p>
-						<span className="font-medium text-foreground">
-							Each kind of order has its own steps.
-						</span>{" "}
-						Naming a step here changes that kind only — a delivery step never
-						shows up on a booking.
-					</p>
-				) : null}
-			</InfoBanner>
-
-			{/* Advancing a stage used to be able to fire a WhatsApp. It can't any
-			    more, so say what stages still do — otherwise a seller who relied on
-			    stage pings just sees the toggle gone. Stated once for the tab
-			    rather than once per card. */}
+			{/* The one-liner says what stages do and — since advancing one used
+			    to be able to fire a WhatsApp — what they no longer do. The model
+			    (milestones, "Counts as") sits one tap away (86eye9xd4, 1B). */}
 			<p className="text-xs text-muted-foreground leading-relaxed">
-				Stages name the steps on the buyer's order page. Advancing a stage
-				updates that page instantly, but doesn't send the buyer a WhatsApp.
+				The steps buyers see on their order page — advancing one updates that
+				page instantly, without sending a WhatsApp.
 			</p>
+			<InfoDisclosure summary="How order stages work">
+				<HelperBullets
+					items={[
+						"Name the steps however you work — buyers see them as a live timeline, and you advance orders step by step",
+						<>
+							Each step <b className="font-medium text-foreground">counts as</b>{" "}
+							a built-in milestone so payments, packing and tracking keep
+							working: Accepted → In production → Ready → Done
+						</>,
+						"Your first step counts as Accepted and your last as Done — e.g. “Order received” → “Baking” → “Ready for pickup” → “Collected”",
+						...(kinds.length > 1
+							? [
+									"Each kind of order has its own steps — a delivery step never shows up on a booking",
+								]
+							: []),
+					]}
+				/>
+			</InfoDisclosure>
 
 			{kinds.map((kind) => (
 				<OrderFlowCard

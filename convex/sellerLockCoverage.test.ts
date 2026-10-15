@@ -140,6 +140,11 @@ const UNLOCKED: Record<string, string> = {
 		"consumes a seat already promised before the lapse; the member lands in the same view-only store the owner sees, and every write they then try hits the lock",
 	"team.acceptPendingInvite":
 		"same as acceptInvite — the onboarding-banner variant of the same accept",
+
+	// 5. Winding down (Zaki, 15 Oct 2026). A lapsed store still takes orders
+	// by design, so the switch that STOPS them must stay reachable.
+	"storeAvailability.setAcceptingOrders":
+		"winding down: a lapsed store keeps taking orders, and pausing is the seller's only way to stop that; resuming only returns to that default. Store settings grant still required",
 };
 
 const CONVEX = __dirname;

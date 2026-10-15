@@ -1197,7 +1197,9 @@ describe("orderClaims — Off-Season Hold (z8r3fday24)", () => {
 			t
 				.withIdentity({ subject: USER_A })
 				.mutation(api.orderClaims.resendClaim, { claimId }),
-		).rejects.toThrow(/seasonal break/i);
+			// Resending is the SELLER's act (z8r3fdudf7): their sentence, not
+			// the buyer's "seasonal break".
+		).rejects.toThrow(/Off-Season Hold.*Billing/);
 		// Send count untouched — nothing was pushed to the buyer.
 		expect((await getClaim(t, claimId)).sentCount).toBe(1);
 	});

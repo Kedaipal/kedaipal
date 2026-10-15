@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { EventRsvpPanel } from "../components/app/event-rsvp-panel";
+import { UnsavedChangesGuard } from "../components/app/unsaved-changes-guard";
 import { ViewOnlyNote } from "../components/app/view-only-note";
 import {
 	PageHeader,
@@ -39,6 +40,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { lockLabel, useAreaLock } from "../hooks/useStoreLock";
 import { convexErrorMessage } from "../lib/format";
+import type { UnsavedState } from "../lib/product-form-dirty";
 import { draftPreviewOverlay } from "../lib/product-preview";
 import { type ProductStatus, productStatus } from "../lib/product-status";
 import {
@@ -160,6 +162,14 @@ function EditProductRoute() {
 			productId: productId as Id<"products">,
 		}),
 	).data;
+	// The bulk promotion holding this product (z8r3fducfd), or null. Awaited
+	// with the product: the Promotion card mounts once, and must know before
+	// it does whether its window is its own or the promotion's.
+	const groupedPromotion = useQuery(
+		convexQuery(api.promotions.forProduct, {
+			productId: productId as Id<"products">,
+		}),
+	).data;
 	const update = useMutation(api.products.update);
 	const saveVariantGrid = useMutation(api.products.saveVariantGrid);
 	const setProductCategories = useMutation(api.categories.setProductCategories);
@@ -168,6 +178,8 @@ function EditProductRoute() {
 	const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
 	const [whyCantDeleteOpen, setWhyCantDeleteOpen] = useState(false);
 	const [deleting, setDeleting] = useState(false);
+	// What leaving would lose, reported by the form — drives the leave guard.
+	const [unsaved, setUnsaved] = useState<UnsavedState>("none");
 	// Buyer-eye preview: mounts the REAL storefront detail sheet in-page (the
 	// same bottom sheet buyers get) — no new tab — rendered from the form's
 	// LIVE DRAFT so unsaved edits show exactly as buyers would see them after
@@ -188,7 +200,12 @@ function EditProductRoute() {
 		: undefined;
 	const locked = saveLock !== undefined;
 
-	if (product === undefined || categoryIds === undefined || !retailer) {
+	if (
+		product === undefined ||
+		categoryIds === undefined ||
+		groupedPromotion === undefined ||
+		!retailer
+	) {
 		return <ProductDetailSkeleton />;
 	}
 	if (product === null) {
@@ -250,6 +267,7 @@ function EditProductRoute() {
 
 	return (
 		<div className="flex flex-col gap-4 lg:max-w-2xl">
+			<UnsavedChangesGuard state={unsaved} />
 			<PageHeader
 				title="Edit product"
 				subtitle={product.name}
@@ -327,11 +345,19 @@ function EditProductRoute() {
 				retailerId={product.retailerId}
 				saveLock={saveLock}
 				draftRef={formDraftRef}
+				onUnsavedChange={setUnsaved}
+				// Photos save the moment they change — a seller who adds one and
+				// leaves (or whose phone drops the tab) keeps it (z8r3fdtk82).
+				// Only the image list is sent; every other field waits for Save.
+				onImagesAutosave={async (imageStorageIds) => {
+					await update({ productId: product._id, imageStorageIds });
+				}}
 				spotlight={spot}
 				categoriesLocked={
 					!retailer.actingAsAdmin &&
 					!hasFeature(retailer.subscription, "categories")
 				}
+				groupedPromotion={groupedPromotion}
 				promoLocked={
 					!retailer.actingAsAdmin && !hasFeature(retailer.subscription, "promo")
 				}
@@ -492,7 +518,8 @@ function EditProductRoute() {
 					// a toast, a silent product save read as the one that didn't
 					// land. Same confirmation as delete, which already had one.
 					toast.success("Product saved.");
-					navigate({ to: "/app/products" });
+					// Everything just saved, so the leave guard has nothing to protect.
+					navigate({ to: "/app/products", ignoreBlocker: true });
 				}}
 			/>
 
@@ -591,7 +618,8 @@ function EditProductRoute() {
 					try {
 						await deletePermanently({ productId: product._id });
 						toast.success("Product deleted.");
-						navigate({ to: "/app/products" });
+						// The product is gone, so there's no draft left to keep.
+						navigate({ to: "/app/products", ignoreBlocker: true });
 					} catch (err) {
 						toast.error(convexErrorMessage(err));
 						throw err; // keeps the dialog open so the seller can retry

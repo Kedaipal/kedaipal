@@ -165,7 +165,7 @@ function unwrapServerError(message: string): string {
  * and "try again in 5400s" is a number nobody converts under checkout stress.
  * Always rounds UP, so the message never invites a retry that will fail again.
  */
-function retryWait(retryAfterMs: number): string {
+export function retryWait(retryAfterMs: number): string {
 	const seconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
 	if (seconds < 90) return `${seconds}s`;
 	const minutes = Math.ceil(seconds / 60);

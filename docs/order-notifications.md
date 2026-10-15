@@ -204,13 +204,17 @@ follow-up ticket; until it lands, an opted-in seller gets both.
   message itself). **Enabling is Pro-gated** (`PLAN_FEATURES.waOrderAlerts`,
   admin act-as bypasses); disabling and clearing are un-gated (downgrade never
   traps). Clearing the number switches the toggle off with it.
-- Settings → Store → **"WhatsApp order alerts"** card
-  (`src/components/settings/wa-order-alerts-card.tsx`), grouped with the
-  browser + email notification cards. Renders only when
-  `retailer.waOrderAlertsAvailable` (template env set). Input prefills from
-  `waPhone`; copy names both events, the counter exclusion, the alert language,
-  and that email + browser alerts keep working alongside. Starter sees
-  disabled-with-reason + the Pro chip.
+- Settings → Store → Alerts & defaults → **"Order alerts"** card
+  (`src/components/settings/order-alerts-card.tsx`, 86eye9xd4 7A) — ONE card
+  for every channel, each a row with an On/Off chip and a switch: **WhatsApp**,
+  **this device**, **email**. The WhatsApp row renders only when
+  `retailer.waOrderAlertsAvailable` (template env set); switching it on uses
+  the store's own number in one tap, opening the number editor only when there
+  is none. Starter sees disabled-with-reason + the Pro chip; a STOP'd number
+  shows the reply-START fix. The header glance counts channels on ("2 of 3
+  on", warn "No alerts on"); "What triggers an alert" names both events and the
+  counter exclusion. A teammate can switch **this device** only — WhatsApp and
+  email are the owner's, and the card says so.
 - Deliberately **not** on the /pricing table yet — the feature is env-gated on
   Meta approval, and the table must never promise what a deployment can't do.
   Add the row when the templates are live in prod.
@@ -249,9 +253,9 @@ dashboard open.
 
 ### Settings surface (discoverability)
 
-Settings → Store → **"Order alerts on this device"** card
-(`src/components/settings/notifications-card.tsx`). Every permission state
-has a next step:
+Settings → Store → **"Order alerts"** card, *This device* row
+(`src/components/settings/order-alerts-card.tsx`, merged in 86eye9xd4). Every
+permission state has a next step:
 - unsupported browser (iOS Safari non-PWA) → explains Add-to-Home-Screen /
   desktop Chrome;
 - `default` → "Turn on order alerts" (permission prompt + test alert);

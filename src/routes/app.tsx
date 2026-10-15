@@ -15,6 +15,7 @@ import { ConsentBanner } from "../components/app/consent-banner";
 import { DashboardLoadError } from "../components/app/dashboard-load-error";
 import { RouteAreaGuard } from "../components/app/route-area-guard";
 import { SendingPausedBanner } from "../components/app/sending-paused-banner";
+import { StoreAvailabilityBanner } from "../components/app/store-availability-banner";
 import { SubscriptionBanner } from "../components/app/subscription-banner";
 import { BottomNav } from "../components/dashboard/bottom-nav";
 import { MobileHeader } from "../components/dashboard/mobile-header";
@@ -189,6 +190,12 @@ function AppShell() {
 					{/* Store-specific banners only when operating a store. */}
 					{retailer ? (
 						<div className="print:hidden">
+							{/* Not taking orders (z8r3fdudf7) — first: it is what the
+							    store's buyers are feeling right now. */}
+							<StoreAvailabilityBanner
+								retailerId={retailer._id}
+								storeName={retailer.storeName}
+							/>
 							<SendingPausedBanner
 								paused={retailer.sendingPaused}
 								reason={retailer.sendingPauseReason}
@@ -242,6 +249,11 @@ function AppShell() {
 							!!retailer &&
 							!retailer.actingAsAdmin &&
 							!hasFeature(retailer.subscription, "vouchers")
+						}
+						promotionsLocked={
+							!!retailer &&
+							!retailer.actingAsAdmin &&
+							!hasFeature(retailer.subscription, "promo")
 						}
 					/>
 				</div>

@@ -16,7 +16,6 @@ import {
 	Plus,
 	QrCode,
 	ReceiptText,
-	ShieldCheck,
 	Store,
 	Trash2,
 	UsersRound,
@@ -49,13 +48,7 @@ import {
 } from "../../convex/lib/delivery";
 import { STORE_NAME_MAX, STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
 import { STORE_DESCRIPTION_MAX } from "../../convex/lib/storeProfile";
-import {
-	defaultTemplate,
-	type Locale,
-	type MessageTemplates,
-	TEMPLATE_KEYS,
-	type TemplateKey,
-} from "../../convex/lib/whatsappCopy";
+import type { Locale } from "../../convex/lib/whatsappCopy";
 import { AreaGate } from "../components/app/area-gate";
 import {
 	PageHeader,
@@ -69,18 +62,35 @@ import { BookingsTab } from "../components/settings/bookings-tab";
 import { CountrySetupPanel } from "../components/settings/country-setup-panel";
 import { CreditTopUpDialog } from "../components/settings/credit-top-up-dialog";
 import { FulfilmentTab } from "../components/settings/fulfilment-tab";
+import {
+	HitpayAccountCard,
+	HowBuyersPayCard,
+} from "../components/settings/how-buyers-pay-card";
 import { IntegrationsTab } from "../components/settings/integrations-tab";
 import { MarketplaceCard } from "../components/settings/marketplace-card";
-import { NotificationsCard } from "../components/settings/notifications-card";
+import { MessageTemplatesForm } from "../components/settings/message-templates-form";
+import { OrderAlertsCard } from "../components/settings/order-alerts-card";
 import { OrderFlowsSection } from "../components/settings/order-flows-card";
 import {
+	SettingsIndex,
+	SettingsRail,
+	storeGlance,
+	type TabGlance,
+} from "../components/settings/settings-nav";
+import {
 	Card,
-	InfoBanner,
+	ExpandableRow,
+	Glance,
+	HelperBullets,
+	InfoDisclosure,
 	SAVE_BTN_CLASS,
 	SectionHeading,
+	SectionLabel,
+	SettingsColumns,
+	SettingsSection,
 } from "../components/settings/settings-primitives";
+import { StoreStatusCard } from "../components/settings/store-status-card";
 import { TeamTab } from "../components/settings/team-tab";
-import { WaOrderAlertsCard } from "../components/settings/wa-order-alerts-card";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -95,6 +105,7 @@ import {
 	useActAsRetailerId,
 	useDashboardRetailer,
 } from "../hooks/useDashboardRetailer";
+import { usePermission } from "../hooks/usePermission";
 import { useRevealOnAdd } from "../hooks/useRevealOnAdd";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { useUpdateSettings } from "../hooks/useUpdateSettings";
@@ -106,16 +117,19 @@ import {
 	SETTINGS_ANCHOR,
 } from "../lib/country-setup-copy";
 import { parseTopUpParam, type TopUpParam } from "../lib/credit-top-up";
-import { convexErrorMessage } from "../lib/format";
+import { PRICING_MODE_UI, pricingModeOf } from "../lib/delivery-modes";
+import {
+	convexErrorMessage,
+	currencySymbol,
+	formatMobile,
+} from "../lib/format";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
 import { NOTE_LINK_HINT } from "../lib/linkify";
+import { LOCALE_LABELS } from "../lib/message-templates";
 import type { StatusLabels } from "../lib/orderStatus";
 import { normalizeMobileDigits, toNationalPhoneInput } from "../lib/phone";
 import { reorderByIds } from "../lib/reorder";
-import {
-	settingsNotifyEmailFormSchema,
-	settingsWaPhoneFormSchema,
-} from "../lib/schemas";
+import { settingsWaPhoneFormSchema } from "../lib/schemas";
 import { validateStoreName } from "../lib/slug";
 import {
 	isSettingsSpotlightKey,
@@ -140,14 +154,6 @@ const LOCALE_OPTIONS = [
 	{ value: "ms", label: "Bahasa Malaysia" },
 	{ value: "zh", label: "中文" },
 ] as const;
-
-// Shared display label for a locale, used by the language card, the WhatsApp
-// template tabs, and the locale-picker `<select>`s below.
-const LOCALE_LABELS: Record<Locale, string> = {
-	en: "English",
-	ms: "Bahasa Malaysia",
-	zh: "中文",
-};
 
 type SettingsTab =
 	| "store"
@@ -242,8 +248,11 @@ const SETTINGS_TAB_IDS: ReadonlyArray<SettingsTab> = SETTINGS_TABS.map(
 	(t) => t.id,
 );
 
-// The mobile index groups sections by meaning: your store's identity/account
-// vs how you sell. Desktop keeps the flat tab grid (all destinations visible).
+// One structure for both navs (86eye9xd4, 14A): the mobile index and the
+// desktop rail show these groups, in this order. Split by rhythm, not by
+// topic — Store is who you are and what you pay us; Selling is the daily
+// levers; Connections is the accounts you paste in once. A ten-item "Selling"
+// pile mixed the two rhythms, and tab ten would have landed in it by default.
 const SETTINGS_GROUPS: ReadonlyArray<{
 	label: string;
 	tabs: SettingsTab[];
@@ -251,16 +260,21 @@ const SETTINGS_GROUPS: ReadonlyArray<{
 	{ label: "Store", tabs: ["store", "team", "billing"] },
 	{
 		label: "Selling",
-		tabs: [
-			"whatsapp",
-			"payments",
-			"fulfilment",
-			"integrations",
-			"bookings",
-			"order-status",
-		],
+		tabs: ["payments", "fulfilment", "order-status", "whatsapp"],
 	},
+	{ label: "Connections", tabs: ["integrations", "bookings"] },
 ];
+
+/** The store type as a glance word ("Set · Food & goods"). */
+const STORE_TYPE_SHORT: Record<"physical" | "service" | "booking", string> = {
+	physical: "Food & goods",
+	service: "Service",
+	booking: "Booking",
+};
+
+const SETTINGS_TAB_LABELS = Object.fromEntries(
+	SETTINGS_TABS.map((t) => [t.id, t.label]),
+) as Record<SettingsTab, string>;
 
 /**
  * `id` is the deep-link anchor: the post-switch checklist links to the exact
@@ -324,46 +338,167 @@ export const Route = createFileRoute("/app/settings")({
 });
 
 function SettingsSkeleton() {
+	// The shape of the page that loads into it: the grouped index on a phone,
+	// the section rail beside a column of cards from lg. Rows per group mirror
+	// SETTINGS_GROUPS itself, so nothing jumps when the real nav lands.
 	return (
-		<div className="flex flex-col gap-6 lg:max-w-2xl">
+		<div className="flex max-w-6xl flex-col gap-6">
 			<PageHeaderSkeleton hasSubtitle />
-			<section className="flex flex-col gap-2 lg:hidden">
-				<Skeleton className="h-7 w-24" />
-				<Skeleton className="h-4 w-48" />
-			</section>
 
-			{/* Tab bar */}
-			<div className="flex gap-1 border-b border-input">
-				{[64, 88, 80, 96].map((w) => (
-					<Skeleton
-						key={w}
-						className="h-11 rounded-none"
-						style={{ width: w }}
-					/>
+			{/* Mobile: the grouped index. */}
+			<div className="flex flex-col gap-4 lg:hidden">
+				<Skeleton className="h-16 w-full rounded-2xl" />
+				{SETTINGS_GROUPS.map((group) => (
+					<div key={group.label} className="flex flex-col gap-1.5">
+						<Skeleton className="h-3 w-16" />
+						<div className="flex flex-col divide-y divide-border rounded-2xl border border-border bg-card px-3.5">
+							{group.tabs.map((tab) => (
+								<div key={tab} className="flex min-h-[52px] items-center gap-3">
+									<Skeleton className="h-4 w-24" />
+									<Skeleton className="ml-auto h-4 w-16" />
+								</div>
+							))}
+						</div>
+					</div>
 				))}
 			</div>
 
-			{/* Form cards */}
-			<div className="flex flex-col gap-6 pt-2">
-				{[0, 1, 2].map((n) => (
-					<section
-						key={n}
-						className="flex flex-col gap-4 rounded-2xl border border-input bg-background p-4"
-					>
-						<div className="flex flex-col gap-1.5">
-							<Skeleton className="h-4 w-32" />
-							<Skeleton className="h-3 w-2/3" />
+			{/* Desktop: rail + content. */}
+			<div className="hidden lg:grid lg:grid-cols-[13rem_minmax(0,1fr)] lg:items-start lg:gap-8">
+				<div className="flex flex-col gap-5">
+					{SETTINGS_GROUPS.map((group) => (
+						<div key={group.label} className="flex flex-col gap-1">
+							<Skeleton className="mx-2 mb-1 h-3 w-14" />
+							{group.tabs.map((tab) => (
+								<Skeleton key={tab} className="h-10 w-full rounded-xl" />
+							))}
 						</div>
-						<div className="flex flex-col gap-2">
-							<Skeleton className="h-3 w-20" />
+					))}
+				</div>
+				<div className="flex flex-col gap-6">
+					<Skeleton className="h-7 w-32" />
+					{["first", "second"].map((n) => (
+						<section
+							key={n}
+							className="flex flex-col gap-4 rounded-2xl border bg-background p-6"
+						>
+							<div className="flex flex-col gap-1.5">
+								<Skeleton className="h-4 w-32" />
+								<Skeleton className="h-3 w-2/3" />
+							</div>
 							<Skeleton className="h-11 w-full rounded-xl" />
-						</div>
-						<Skeleton className="h-12 w-full rounded-md" />
-					</section>
-				))}
+							<Skeleton className="h-11 w-full rounded-xl" />
+						</section>
+					))}
+				</div>
 			</div>
 		</div>
 	);
+}
+
+/**
+ * Each tab's live state in a few words — the seam both navs read (the
+ * desktop rail's sublabel, the mobile index's right-hand value), so a tab
+ * never says one thing in one and another in the other. `warn` is reserved
+ * for "this needs you" (no contact number, nothing for buyers to pay with).
+ */
+function useSettingsGlances(
+	retailer: ReturnType<typeof useDashboardRetailer>,
+	{
+		adminOwnStore,
+		hasBookingListings,
+	}: { adminOwnStore: boolean; hasBookingListings: boolean },
+): Partial<Record<SettingsTab, TabGlance>> {
+	const actAsRetailerId = useActAsRetailerId();
+	const bookingsPerm = usePermission("bookings");
+	const team = useQuery(
+		convexQuery(
+			api.team.list,
+			retailer ? { retailerId: retailer._id } : "skip",
+		),
+	).data;
+	// Same args as the Fulfilment / Integrations callers, so it's one cache entry.
+	const delyva = useQuery(
+		convexQuery(api.delyva.getSettings, { retailerId: actAsRetailerId }),
+	).data;
+	// Same args as StoreStatusCard, so the card and the glance share one entry.
+	const storeStatus = useQuery(
+		convexQuery(
+			api.storeAvailability.forSeller,
+			retailer ? { retailerId: retailer._id } : "skip",
+		),
+	).data;
+	const feed = useQuery(
+		convexQuery(
+			api.calendarFeed.getCalendarFeed,
+			retailer && hasBookingListings && bookingsPerm.canRead
+				? { retailerId: retailer._id }
+				: "skip",
+		),
+	).data;
+	if (!retailer) return {};
+
+	const seats = team?.seats.activeCount;
+	const methods = retailer.paymentMethods?.length ?? 0;
+	const hitpayOn =
+		retailer.hitpay?.enabled === true && retailer.hitpay.hasCredentials;
+	const deliveryOn = retailer.offerDelivery !== false;
+	const pickupOn = retailer.offerSelfCollect === true;
+	// "Connected" counts accounts with keys stored; Delyva only counts where
+	// the store's country can book it at all.
+	const integrations = [
+		Boolean(retailer.deliveryBooking?.apiKeyHint),
+		Boolean(retailer.hitpay?.hasCredentials),
+		...(delyva?.countryAllowed ? [delyva.connected] : []),
+	];
+	const customisedFlows =
+		Object.values(retailer.orderFlows ?? {}).some(
+			(stages) => (stages?.length ?? 0) > 0,
+		) || (retailer.orderStages?.length ?? 0) > 0;
+
+	return {
+		store: storeGlance(retailer.storeName, storeStatus?.availability),
+		team:
+			seats === undefined
+				? undefined
+				: {
+						text:
+							seats === 0
+								? "Just you"
+								: `${seats} seat${seats === 1 ? "" : "s"}`,
+					},
+		billing: retailer.subscription
+			? {
+					text: tierPill(
+						retailer.subscription,
+						Date.now(),
+						undefined,
+						adminOwnStore,
+					).label,
+				}
+			: undefined,
+		whatsapp: retailer.waPhone?.trim()
+			? { text: "Connected" }
+			: { text: "Add number", tone: "warn" },
+		payments: hitpayOn
+			? { text: "HitPay" }
+			: methods > 0
+				? { text: `${methods} method${methods === 1 ? "" : "s"}` }
+				: { text: "Not set up", tone: "warn" },
+		fulfilment: deliveryOn
+			? { text: PRICING_MODE_UI[pricingModeOf(retailer.deliveryConfig)].short }
+			: pickupOn
+				? { text: "Pickup only" }
+				: { text: "Off", tone: "warn" },
+		"order-status": { text: customisedFlows ? "Customised" : "Default" },
+		integrations: {
+			text: `${integrations.filter(Boolean).length} of ${integrations.length}`,
+		},
+		bookings:
+			feed === undefined
+				? undefined
+				: { text: feed.token ? "Feed on" : "Not set up" },
+	};
 }
 
 function SettingsRoute() {
@@ -387,6 +522,9 @@ function SettingsRoute() {
 		[renameSlugMutation, actAsRetailerId],
 	);
 	const updateSettings = useUpdateSettings();
+	// A teammate can't change the account-level alert channels (owner-only on
+	// the server) — the alerts card disables those rows with the reason.
+	const storePerm = usePermission("store_settings");
 
 	// URL is the source of truth for the active tab, so deep links (e.g. the
 	// "View billing" banner → ?tab=billing) actually switch the tab even when the
@@ -422,13 +560,14 @@ function SettingsRoute() {
 			retailer && activeTab === "store" ? { retailerId: retailer._id } : "skip",
 		),
 	).data;
-	const visibleTabs = SETTINGS_TABS.filter(
-		(t) => t.id !== "bookings" || hasBookingListings,
-	);
 	const visibleGroups = SETTINGS_GROUPS.map((g) => ({
 		...g,
 		tabs: g.tabs.filter((id) => id !== "bookings" || hasBookingListings),
 	}));
+	const glances = useSettingsGlances(retailer, {
+		adminOwnStore,
+		hasBookingListings,
+	});
 	const navigate = Route.useNavigate();
 	// A top-up request (`?topup=`) is consumed once by the dialog, then dropped
 	// from the URL without a history entry — a refresh never replays it.
@@ -489,7 +628,8 @@ function SettingsRoute() {
 		<Card>
 			<SectionHeading
 				title="Storefront URL"
-				description="Rename your public storefront slug. Old links keep redirecting for 90 days."
+				description="Your public link — old links keep redirecting for 90 days after a rename."
+				glance={<Glance tone="grey">/{retailer.slug}</Glance>}
 			/>
 			<form onSubmit={onSubmit} className="flex flex-col gap-3">
 				<div className="flex items-center rounded-xl border border-input bg-background pl-4 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/50">
@@ -518,7 +658,7 @@ function SettingsRoute() {
 	);
 
 	return (
-		<div className="flex flex-col gap-6 lg:max-w-2xl">
+		<div className="flex max-w-6xl flex-col gap-6">
 			<PageHeader
 				title="Settings"
 				subtitle={
@@ -568,70 +708,12 @@ function SettingsRoute() {
 						/>
 					</div>
 
-					{visibleGroups.map((group) => (
-						<div key={group.label} className="flex flex-col gap-1.5">
-							<span className="pl-1 text-[11px] font-bold uppercase tracking-[0.08em] text-muted-foreground/80">
-								{group.label}
-							</span>
-							<div className="overflow-hidden rounded-2xl border border-border bg-card">
-								{group.tabs.map((id, i) => {
-									const t = SETTINGS_TABS.find((x) => x.id === id);
-									if (!t) return null;
-									// Status at a glance where we have live state — no tap
-									// needed to check health.
-									const subtitle =
-										t.id === "billing" && retailer.subscription
-											? tierPill(
-													retailer.subscription,
-													Date.now(),
-													// Keep the plain tier label here (founding rank stays
-													// on the header pill only); just fold in the admin case.
-													undefined,
-													adminOwnStore,
-												).label
-											: t.description;
-									const waConnected =
-										t.id === "whatsapp" && Boolean(retailer.waPhone?.trim());
-									return (
-										<button
-											key={t.id}
-											type="button"
-											onClick={() => setActiveTab(t.id)}
-											className={`flex min-h-[60px] w-full items-center gap-3 px-3.5 py-3 text-left transition-colors hover:bg-muted/50 ${
-												i > 0 ? "border-t border-border/60" : ""
-											}`}
-										>
-											<span
-												className={`flex size-9 shrink-0 items-center justify-center rounded-[10px] ${
-													waConnected
-														? "bg-accent/15 text-accent-emphasis"
-														: "bg-muted text-foreground"
-												}`}
-											>
-												{t.icon}
-											</span>
-											<span className="flex min-w-0 flex-1 flex-col">
-												<span className="text-sm font-semibold">{t.label}</span>
-												<span className="truncate text-xs text-muted-foreground">
-													{subtitle}
-												</span>
-											</span>
-											{waConnected ? (
-												<span className="shrink-0 rounded-full bg-accent/15 px-2 py-0.5 text-[11px] font-bold text-accent-emphasis">
-													Connected
-												</span>
-											) : (
-												<ChevronRight
-													className="size-4 shrink-0 text-muted-foreground/50"
-													aria-hidden="true"
-												/>
-											)}
-										</button>
-									);
-								})}
-							</div>
-						</div>
-					))}
+					<SettingsIndex
+						groups={visibleGroups}
+						labels={SETTINGS_TAB_LABELS}
+						glances={glances}
+						onSelect={setActiveTab}
+					/>
 
 					{/* Kedaipal admins: the console entry lives here on mobile (desktop
 					    has the sidebar Admin group). Once inside /app/admin/*, the
@@ -639,26 +721,21 @@ function SettingsRoute() {
 					    tab back to this store. See docs/admin-console.md. */}
 					{isAdmin ? (
 						<div className="flex flex-col gap-1.5">
-							<span className="pl-1 text-[11px] font-bold uppercase tracking-[0.08em] text-muted-foreground/80">
-								Admin
-							</span>
-							<div className="overflow-hidden rounded-2xl border border-border bg-card">
+							<SectionLabel>Admin</SectionLabel>
+							<div className="overflow-hidden rounded-2xl border border-border bg-card px-3.5">
 								<Link
 									to="/app/admin/sellers"
-									className="flex min-h-[60px] w-full items-center gap-3 px-3.5 py-3 text-left transition-colors hover:bg-muted/50"
+									className="flex min-h-[52px] w-full items-center gap-3 text-left focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50"
 								>
-									<span className="flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
-										<ShieldCheck className="size-4.5" aria-hidden="true" />
+									<span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+										Admin console
 									</span>
-									<span className="flex min-w-0 flex-1 flex-col">
-										<span className="text-sm font-semibold">Admin console</span>
-										<span className="truncate text-xs text-muted-foreground">
-											All sellers, billing &amp; WABA safety
-										</span>
+									<span className="max-w-[55%] truncate text-right text-sm font-semibold text-foreground">
+										Sellers &amp; billing
 									</span>
 									<ChevronRight
-										className="size-4 shrink-0 text-muted-foreground/50"
-										aria-hidden="true"
+										aria-hidden
+										className="size-4 shrink-0 text-muted-foreground/60"
 									/>
 								</Link>
 							</div>
@@ -672,7 +749,7 @@ function SettingsRoute() {
 						type="button"
 						onClick={backToIndex}
 						aria-label="Back to settings"
-						className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted"
+						className="flex size-11 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted"
 					>
 						<ArrowLeft className="size-5" />
 					</button>
@@ -682,373 +759,419 @@ function SettingsRoute() {
 				</div>
 			)}
 
-			{/* ---- Desktop: flat tab grid (all destinations visible at once). */}
-			<div className="hidden gap-2 lg:grid lg:grid-cols-3">
-				{visibleTabs.map((t) => (
-					<button
-						key={t.id}
-						type="button"
-						onClick={() => setActiveTab(t.id)}
-						className={`flex items-center gap-3 rounded-2xl border p-3 text-left transition-all ${
-							activeTab === t.id
-								? "border-accent bg-accent/10 text-foreground shadow-sm"
-								: "border-border bg-card text-muted-foreground hover:border-foreground/20 hover:text-foreground"
-						}`}
-					>
-						<span
-							className={`flex size-8 shrink-0 items-center justify-center rounded-xl ${
-								activeTab === t.id
-									? "bg-accent text-accent-foreground"
-									: "bg-muted text-muted-foreground"
-							}`}
-						>
-							{t.icon}
-						</span>
-						<span className="min-w-0">
-							<span className="block text-sm font-semibold leading-tight">
-								{t.label}
-							</span>
-							<span className="mt-0.5 hidden text-xs leading-snug text-muted-foreground sm:block">
-								{t.description}
-							</span>
-						</span>
-					</button>
-				))}
-			</div>
+			{/* ---- Desktop: the section rail beside the content (2A). Mobile keeps
+			     its grouped index above; the rail is the same groups and glances. */}
+			<div className="lg:grid lg:grid-cols-[13rem_minmax(0,1fr)] lg:items-start lg:gap-8">
+				<div className="hidden lg:block">
+					<SettingsRail
+						groups={visibleGroups}
+						labels={SETTINGS_TAB_LABELS}
+						glances={glances}
+						active={activeTab}
+						onSelect={setActiveTab}
+					/>
+				</div>
 
-			{/* Section content — hidden on mobile while the index is showing
-			    (desktop always renders the active section, defaulting to Store). */}
-			<div
-				className={
-					tab === undefined ? "hidden lg:flex lg:flex-col lg:gap-6" : "contents"
-				}
-			>
-				{activeTab === "store" ? (
-					<AreaGate area="store_settings">
-						<div className="flex flex-col gap-6 pt-2">
-							<Card>
-								<StoreNameForm
-									current={retailer.storeName}
-									onSave={(storeName) => updateSettings({ storeName })}
-								/>
-							</Card>
-							<Card
-								id={SPOTLIGHT_ANCHOR.business_details.anchor}
-								highlight={ringFor(SPOTLIGHT_ANCHOR.business_details.anchor)}
-							>
-								<BusinessIdentityForm
-									current={retailer.businessIdentity}
-									country={retailer.country}
-									onSave={(businessIdentity) =>
-										updateSettings({ businessIdentity })
-									}
-								/>
-							</Card>
-							<Card>
-								<NotificationsCard />
-							</Card>
-							{/* Notification surfaces live together: browser (above), WhatsApp,
-						    email (below). The WA card only mounts when the deployment has
-						    an approved seller template configured (86eyhw9zy). */}
-							{retailer.waOrderAlertsAvailable ? (
+				{/* Section content — hidden on mobile while the index is showing
+				    (desktop always renders the active section, defaulting to Store).
+				    Store and Fulfilment lay their cards out in two columns from xl;
+				    every other tab stays one readable column. */}
+				<div
+					className={cn(
+						"min-w-0 flex-col gap-6",
+						tab === undefined ? "hidden lg:flex" : "flex",
+						activeTab !== "store" &&
+							activeTab !== "fulfilment" &&
+							"lg:max-w-2xl",
+					)}
+				>
+					<h2 className="hidden font-heading text-xl font-extrabold leading-tight lg:block">
+						{SETTINGS_TAB_LABELS[activeTab]}
+					</h2>
+					{activeTab === "store" ? (
+						<AreaGate area="store_settings">
+							<div className="flex flex-col gap-6">
+								{/* FIRST on the tab, full width above the columns
+								    (z8r3fdudf7): whether the store takes orders at all
+								    is the most consequential setting here. */}
 								<Card
-									id={SETTINGS_ANCHOR.notify_wa_phone}
-									highlight={ringFor(SETTINGS_ANCHOR.notify_wa_phone)}
+									id={SPOTLIGHT_ANCHOR.store_status.anchor}
+									highlight={ringFor(SPOTLIGHT_ANCHOR.store_status.anchor)}
 								>
-									<WaOrderAlertsCard
-										enabled={retailer.orderWaAlerts === true}
-										currentPhone={retailer.notifyWaPhone ?? ""}
-										fallbackPhone={retailer.waPhone ?? ""}
-										optedOut={retailer.notifyWaPhoneOptedOut === true}
-										canUse={hasFeature(retailer.subscription, "waOrderAlerts")}
-										country={retailer.country}
-										onSave={(patch) => updateSettings(patch)}
+									<StoreStatusCard
+										retailerId={retailer._id}
+										storeName={retailer.storeName}
 									/>
 								</Card>
-							) : null}
-							<Card>
-								<NotifyEmailForm
-									current={retailer.notifyEmail ?? ""}
-									onSave={(notifyEmail) => updateSettings({ notifyEmail })}
-								/>
-							</Card>
-							<Card>
-								<StoreDescriptionForm
-									current={retailer.storeDescription ?? ""}
-									onSave={(storeDescription) =>
-										updateSettings({ storeDescription })
+								{/* 10A: four sections ordered by how often they're touched.
+								    Identity + Brand on the left, the set-once account
+								    sections on the right (xl and up; one column below). */}
+								<SettingsColumns
+									left={
+										<>
+											<SettingsSection label="Identity">
+												<Card>
+													<StoreNameForm
+														current={retailer.storeName}
+														onSave={(storeName) =>
+															updateSettings({ storeName })
+														}
+													/>
+												</Card>
+												{slugRenameForm}
+												<Card>
+													<SectionHeading
+														title="Description & store type"
+														description="What buyers read under your name, and the type new products start as."
+														glance={
+															<Glance tone="grey">
+																{[
+																	retailer.storeDescription?.trim()
+																		? "Set"
+																		: "No description",
+																	retailer.storeType
+																		? STORE_TYPE_SHORT[retailer.storeType]
+																		: null,
+																]
+																	.filter(Boolean)
+																	.join(" · ")}
+															</Glance>
+														}
+													/>
+													<StoreDescriptionForm
+														current={retailer.storeDescription ?? ""}
+														onSave={(storeDescription) =>
+															updateSettings({ storeDescription })
+														}
+													/>
+													<div className="border-t border-border/60 pt-4">
+														<StoreTypeForm
+															current={retailer.storeType}
+															onSave={(storeType) =>
+																updateSettings({ storeType })
+															}
+														/>
+													</div>
+												</Card>
+												{/* The directory card is built from the name, description
+										    and area above — it belongs with them. */}
+												<Card
+													id={SPOTLIGHT_ANCHOR.store_listing.anchor}
+													highlight={ringFor(
+														SPOTLIGHT_ANCHOR.store_listing.anchor,
+													)}
+												>
+													<MarketplaceCard
+														storeName={retailer.storeName}
+														unlisted={retailer.marketplaceUnlisted === true}
+														area={retailer.storeArea ?? ""}
+														readiness={listingReadiness}
+														onSave={(patch) => updateSettings(patch)}
+													/>
+												</Card>
+											</SettingsSection>
+											<SettingsSection label="Brand">
+												<Card>
+													<SectionHeading
+														title="Logo & cover image"
+														description="How your storefront header looks — and the preview when you share your link."
+														glance={
+															retailer.logoUrl && retailer.coverImageUrl ? (
+																<Glance>Both set</Glance>
+															) : retailer.logoUrl || retailer.coverImageUrl ? (
+																<Glance tone="grey">
+																	{retailer.logoUrl
+																		? "Logo only"
+																		: "Cover only"}
+																</Glance>
+															) : (
+																<Glance tone="grey">Not set</Glance>
+															)
+														}
+													/>
+													<LogoForm
+														currentLogoUrl={retailer.logoUrl}
+														onSave={(logoStorageId) =>
+															updateSettings({ logoStorageId })
+														}
+													/>
+													<div className="border-t border-border/60 pt-4">
+														<CoverImageForm
+															currentCoverUrl={retailer.coverImageUrl}
+															onSave={(coverImageStorageId) =>
+																updateSettings({ coverImageStorageId })
+															}
+														/>
+													</div>
+												</Card>
+											</SettingsSection>
+										</>
+									}
+									right={
+										<>
+											{/* Every field here is owner-only on the server, so a
+									    teammate reads it with the reason instead of
+									    meeting a refused save. */}
+											<SettingsSection label="Business & country">
+												<AreaGate area="store_settings" ownerOnly>
+													<div className="flex flex-col gap-4">
+														<Card
+															id={SPOTLIGHT_ANCHOR.business_details.anchor}
+															highlight={ringFor(
+																SPOTLIGHT_ANCHOR.business_details.anchor,
+															)}
+														>
+															<BusinessIdentityForm
+																current={retailer.businessIdentity}
+																country={retailer.country}
+																onSave={(businessIdentity) =>
+																	updateSettings({ businessIdentity })
+																}
+															/>
+														</Card>
+														<Card
+															id={SPOTLIGHT_ANCHOR.store_country.anchor}
+															highlight={ringFor(
+																SPOTLIGHT_ANCHOR.store_country.anchor,
+															)}
+														>
+															<SectionHeading
+																title="Country & currency"
+																description="Where your store operates and the currency it prices in."
+																glance={
+																	<Glance tone="grey">
+																		{retailer.country} ·{" "}
+																		{currencySymbol(retailer.currency)}
+																	</Glance>
+																}
+															/>
+															<CountryForm
+																current={retailer.country}
+																currency={retailer.currency}
+																deliveryConfig={retailer.deliveryConfig}
+																deliveryBooking={retailer.deliveryBooking}
+																waPhone={retailer.waPhone}
+																notifyWaPhone={retailer.notifyWaPhone}
+																onSave={(patch) => updateSettings(patch)}
+															/>
+															{/* Directly under the picker, so "what did that just
+													    do?" is answered where the question was asked.
+													    Renders nothing for a store that never switched. */}
+															<CountrySetupPanel
+																onGoToFix={(tab, key) =>
+																	navigate({ search: { tab, fix: key } })
+																}
+															/>
+															<div className="border-t border-border/60 pt-4">
+																<CurrencyForm
+																	current={retailer.currency}
+																	onSave={(currency) =>
+																		updateSettings({ currency })
+																	}
+																/>
+															</div>
+														</Card>
+													</div>
+												</AreaGate>
+											</SettingsSection>
+											<SettingsSection label="Alerts & defaults">
+												<Card
+													id={SETTINGS_ANCHOR.notify_wa_phone}
+													highlight={ringFor(SETTINGS_ANCHOR.notify_wa_phone)}
+												>
+													<OrderAlertsCard
+														whatsapp={
+															retailer.waOrderAlertsAvailable
+																? {
+																		enabled: retailer.orderWaAlerts === true,
+																		currentPhone: retailer.notifyWaPhone ?? "",
+																		fallbackPhone: retailer.waPhone ?? "",
+																		optedOut:
+																			retailer.notifyWaPhoneOptedOut === true,
+																		canUse: hasFeature(
+																			retailer.subscription,
+																			"waOrderAlerts",
+																		),
+																	}
+																: undefined
+														}
+														notifyEmail={retailer.notifyEmail ?? ""}
+														country={retailer.country}
+														canEditAccount={storePerm.role !== "member"}
+														onSave={(patch) => updateSettings(patch)}
+													/>
+												</Card>
+											</SettingsSection>
+										</>
 									}
 								/>
-							</Card>
-							{/* Right under the description — the card the marketplace
-							    builds from is the card this section just wrote. */}
-							<Card
-								id={SPOTLIGHT_ANCHOR.store_listing.anchor}
-								highlight={ringFor(SPOTLIGHT_ANCHOR.store_listing.anchor)}
-							>
-								<MarketplaceCard
-									storeName={retailer.storeName}
-									unlisted={retailer.marketplaceUnlisted === true}
-									area={retailer.storeArea ?? ""}
-									readiness={listingReadiness}
-									onSave={(patch) => updateSettings(patch)}
-								/>
-							</Card>
-							<Card>
-								<StoreTypeForm
-									current={retailer.storeType}
-									onSave={(storeType) => updateSettings({ storeType })}
-								/>
-							</Card>
-							{slugRenameForm}
-							<Card>
-								<LogoForm
-									currentLogoUrl={retailer.logoUrl}
-									onSave={(logoStorageId) => updateSettings({ logoStorageId })}
-								/>
-							</Card>
-							<Card>
-								<CoverImageForm
-									currentCoverUrl={retailer.coverImageUrl}
-									onSave={(coverImageStorageId) =>
-										updateSettings({ coverImageStorageId })
-									}
-								/>
-							</Card>
-							<Card
-								id={SPOTLIGHT_ANCHOR.store_country.anchor}
-								highlight={ringFor(SPOTLIGHT_ANCHOR.store_country.anchor)}
-							>
-								<CountryForm
-									current={retailer.country}
-									currency={retailer.currency}
-									deliveryConfig={retailer.deliveryConfig}
-									deliveryBooking={retailer.deliveryBooking}
-									waPhone={retailer.waPhone}
-									notifyWaPhone={retailer.notifyWaPhone}
-									onSave={(patch) => updateSettings(patch)}
-								/>
-								{/* Directly under the picker, so "what did that just do?"
-							    is answered where the question was asked. Renders
-							    nothing for a store that has never switched. */}
-								<CountrySetupPanel
-									onGoToFix={(tab, key) =>
-										navigate({ search: { tab, fix: key } })
-									}
-								/>
-							</Card>
-							<Card>
-								<CurrencyForm
-									current={retailer.currency}
-									onSave={(currency) => updateSettings({ currency })}
-								/>
-							</Card>
-						</div>
-					</AreaGate>
-				) : null}
-
-				{activeTab === "team" ? (
-					<TeamTab retailerId={retailer._id} storeName={retailer.storeName} />
-				) : null}
-
-				{activeTab === "billing" ? (
-					<>
-						<AreaGate area="billing">
-							<BillingTab
-								retailer={retailer}
-								target={cardTarget}
-								billingReturn={
-									autorenew === "return"
-										? "autorenew"
-										: paid === "return"
-											? "paid"
-											: undefined
-								}
-								onBillingReturnHandled={() =>
-									navigate({ search: { tab: "billing" }, replace: true })
-								}
-							/>
+							</div>
 						</AreaGate>
-						{/* Beside the gate, not inside it: buying credits is the
+					) : null}
+
+					{activeTab === "team" ? (
+						<TeamTab retailerId={retailer._id} storeName={retailer.storeName} />
+					) : null}
+
+					{activeTab === "billing" ? (
+						<>
+							<AreaGate area="billing">
+								<BillingTab
+									retailer={retailer}
+									target={cardTarget}
+									billingReturn={
+										autorenew === "return"
+											? "autorenew"
+											: paid === "return"
+												? "paid"
+												: undefined
+									}
+									onBillingReturnHandled={() =>
+										navigate({ search: { tab: "billing" }, replace: true })
+									}
+								/>
+							</AreaGate>
+							{/* Beside the gate, not inside it: buying credits is the
 						    CREDITS grant, and a teammate can hold credits write
 						    without billing read — inside, the gate would hide the
 						    only place they can buy. The dialog checks its own
 						    access (credits read to see, write to buy). */}
-						<CreditTopUpDialog
-							retailer={retailer}
-							request={topup}
-							onRequestHandled={stripTopUpParam}
-						/>
-					</>
-				) : null}
+							<CreditTopUpDialog
+								retailer={retailer}
+								request={topup}
+								onRequestHandled={stripTopUpParam}
+							/>
+						</>
+					) : null}
 
-				{activeTab === "whatsapp" ? (
-					<AreaGate area="store_settings" ownerOnly>
-						<div className="flex flex-col gap-6 pt-2">
-							<InfoBanner title="How WhatsApp works on Kedaipal">
-								<p>
-									Every order sends the buyer{" "}
-									<span className="font-medium text-foreground">
-										one WhatsApp message
-									</span>{" "}
-									— the confirmation — from{" "}
-									<span className="font-medium text-foreground">
-										Kedaipal's shared WhatsApp Business number
-									</span>{" "}
-									on your behalf, no Meta account needed.
-								</p>
-								<p>
-									That message links to the buyer's own order page, which
-									updates itself. Packing, shipping, payment and cancellation no
-									longer send a WhatsApp — the buyer sees them on that page.
-								</p>
-								<p>
-									Add your personal WhatsApp number below so buyers can reach
-									you directly. It appears as a tappable contact link on their
-									order page.
-								</p>
-							</InfoBanner>
+					{activeTab === "whatsapp" ? (
+						<AreaGate area="store_settings" ownerOnly>
+							<div className="flex flex-col gap-6 pt-2">
+								<InfoDisclosure summary="How WhatsApp works on Kedaipal">
+									<HelperBullets
+										items={[
+											"Each order sends the buyer one WhatsApp — the confirmation — from Kedaipal's shared number, on your behalf. No Meta account needed.",
+											"It links to the buyer's own order page, which updates itself as you pack, ship and get paid — those steps don't send a WhatsApp.",
+											"Your contact number below shows there as a tap-to-chat link.",
+										]}
+									/>
+								</InfoDisclosure>
 
-							<Card
-								id={SETTINGS_ANCHOR.wa_phone}
-								highlight={ringFor(SETTINGS_ANCHOR.wa_phone)}
-							>
-								<WaPhoneForm
-									current={retailer.waPhone ?? ""}
-									country={retailer.country}
-									onSave={(waPhone) => updateSettings({ waPhone })}
-								/>
-							</Card>
-							<Card>
-								<LocaleForm
-									current={retailer.locale}
-									onSave={(locale) => updateSettings({ locale })}
-								/>
-							</Card>
-							<Card
-								id={SETTINGS_ANCHOR.message_copy}
-								highlight={ringFor(SETTINGS_ANCHOR.message_copy)}
-							>
-								<MessageTemplatesForm
-									current={retailer.messageTemplates}
-									onSave={(messageTemplates) =>
-										updateSettings({ messageTemplates })
-									}
-								/>
-							</Card>
-						</div>
-					</AreaGate>
-				) : null}
-
-				{activeTab === "payments" ? (
-					<AreaGate area="payments_settings">
-						<div className="flex flex-col gap-6 pt-2">
-							<Card
-								id={SETTINGS_ANCHOR.payment_methods}
-								highlight={ringFor(SETTINGS_ANCHOR.payment_methods)}
-							>
-								<PaymentMethodsForm
-									current={retailer.paymentMethods ?? []}
-									country={retailer.country}
-									onSave={(paymentMethods) =>
-										updateSettings({ paymentMethods })
-									}
-								/>
-							</Card>
-							{/* HitPay moved to Settings → Integrations (2 Sep IA rework) —
-						    one home for every third-party account. The pointer keeps the
-						    old home from reading as "online payments are gone". */}
-							<p className="px-1 text-xs text-muted-foreground">
-								Online payments (HitPay) moved to{" "}
-								<button
-									type="button"
-									onClick={() => navigate({ search: { tab: "integrations" } })}
-									className="font-medium text-accent hover:underline"
+								<Card
+									id={SETTINGS_ANCHOR.wa_phone}
+									highlight={ringFor(SETTINGS_ANCHOR.wa_phone)}
 								>
-									Settings → Integrations
-								</button>
-								— connect your account there; buyers keep seeing Pay now on
-								their orders as before.
-							</p>
-							{/* Says plainly that nothing chases the buyer automatically, and
-						    names the one manual tool that exists — so the behaviour is
-						    discoverable without a seller assuming a nudge went out that
-						    didn't (docs/payment-reminder.md). */}
-							<p className="px-1 text-xs text-muted-foreground">
-								Kedaipal doesn't chase unpaid orders automatically. Each order
-								gets one WhatsApp — the confirmation — and it links the buyer to
-								their order page, where these payment details and the “I've
-								paid” button live. If an order is still unpaid on day 11, a
-								“Send payment reminder” button appears on its order page (once
-								per day, until day 14) — sending it is always your call.
-							</p>
-						</div>
-					</AreaGate>
-				) : null}
+									<WaPhoneForm
+										current={retailer.waPhone ?? ""}
+										country={retailer.country}
+										onSave={(waPhone) => updateSettings({ waPhone })}
+									/>
+								</Card>
+								<Card>
+									<LocaleForm
+										current={retailer.locale}
+										onSave={(locale) => updateSettings({ locale })}
+									/>
+								</Card>
+								<Card
+									id={SETTINGS_ANCHOR.message_copy}
+									highlight={ringFor(SETTINGS_ANCHOR.message_copy)}
+								>
+									<MessageTemplatesForm
+										current={retailer.messageTemplates}
+										onSave={(messageTemplates) =>
+											updateSettings({ messageTemplates })
+										}
+									/>
+								</Card>
+							</div>
+						</AreaGate>
+					) : null}
 
-				{activeTab === "fulfilment" ? (
-					<AreaGate area="fulfilment">
-						<FulfilmentTab
-							target={cardTarget}
-							currency={retailer.currency}
-							retailerId={retailer._id}
-							country={retailer.country}
-							offerSelfCollect={retailer.offerSelfCollect ?? false}
-							offerDelivery={retailer.offerDelivery ?? true}
-							deliveryConfig={retailer.deliveryConfig}
-							businessAddress={retailer.businessAddress}
-							deliveryBooking={retailer.deliveryBooking}
-							minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
-							openingHours={retailer.openingHours}
-							closedDates={retailer.closedDates}
-							hasBookingListings={hasBookingListings}
-							minOrderValue={retailer.minOrderValue}
-							awbConfig={retailer.awbConfig}
-							subscription={retailer.subscription}
-						/>
-					</AreaGate>
-				) : null}
+					{activeTab === "payments" ? (
+						<AreaGate area="payments_settings">
+							<PaymentsTabBody
+								retailer={retailer}
+								highlight={ringFor(SETTINGS_ANCHOR.payment_methods)}
+								buyersPayHighlight={ringFor(
+									SPOTLIGHT_ANCHOR.how_buyers_pay.anchor,
+								)}
+								onSave={updateSettings}
+								onOpenIntegrations={() =>
+									navigate({ search: { tab: "integrations" } })
+								}
+							/>
+						</AreaGate>
+					) : null}
 
-				{activeTab === "integrations" ? (
-					<AreaGate area="integrations">
-						<IntegrationsTab
-							target={cardTarget}
-							retailerId={retailer._id}
-							country={retailer.country}
-							deliveryBooking={retailer.deliveryBooking}
-							hitpay={retailer.hitpay}
-							subscription={retailer.subscription}
-							onSave={updateSettings}
-						/>
-					</AreaGate>
-				) : null}
+					{activeTab === "fulfilment" ? (
+						<AreaGate area="fulfilment">
+							<FulfilmentTab
+								target={cardTarget}
+								currency={retailer.currency}
+								retailerId={retailer._id}
+								country={retailer.country}
+								offerSelfCollect={retailer.offerSelfCollect ?? false}
+								offerDelivery={retailer.offerDelivery ?? true}
+								deliveryConfig={retailer.deliveryConfig}
+								businessAddress={retailer.businessAddress}
+								minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
+								openingHours={retailer.openingHours}
+								closedDates={retailer.closedDates}
+								hasBookingListings={hasBookingListings}
+								minOrderValue={retailer.minOrderValue}
+								awbConfig={retailer.awbConfig}
+								subscription={retailer.subscription}
+								deliveryBooking={retailer.deliveryBooking}
+							/>
+						</AreaGate>
+					) : null}
 
-				{activeTab === "bookings" ? (
-					<AreaGate area="bookings">
-						<div className="flex flex-col gap-6 pt-2">
-							<BookingsTab retailerId={retailer._id} />
-						</div>
-					</AreaGate>
-				) : null}
+					{activeTab === "integrations" ? (
+						<AreaGate area="integrations">
+							<IntegrationsTab
+								target={cardTarget}
+								retailerId={retailer._id}
+								country={retailer.country}
+								deliveryBooking={retailer.deliveryBooking}
+								businessAddress={retailer.businessAddress}
+								hitpay={retailer.hitpay}
+								subscription={retailer.subscription}
+								onSave={updateSettings}
+								onOpenPayments={() => navigate({ search: { tab: "payments" } })}
+							/>
+						</AreaGate>
+					) : null}
 
-				{activeTab === "order-status" ? (
-					<AreaGate area="store_settings">
-						<OrderFlowsSection
-							input={{
-								orderFlows: retailer.orderFlows,
-								orderStages: retailer.orderStages,
-								statusLabels: retailer.statusLabels as StatusLabels | undefined,
-								// Undefined reads as TRUE for delivery (legacy stores always had
-								// it) and as FALSE for pickup — same rule as the storefront.
-								offerDelivery: retailer.offerDelivery !== false,
-								offerSelfCollect: retailer.offerSelfCollect === true,
-								hasBookingListings,
-								hasEventListings,
-							}}
-							onSave={(orderFlows) => updateSettings({ orderFlows })}
-						/>
-					</AreaGate>
-				) : null}
+					{activeTab === "bookings" ? (
+						<AreaGate area="bookings">
+							<div className="flex flex-col gap-6 pt-2">
+								<BookingsTab retailerId={retailer._id} />
+							</div>
+						</AreaGate>
+					) : null}
+
+					{activeTab === "order-status" ? (
+						<AreaGate area="store_settings">
+							<OrderFlowsSection
+								input={{
+									orderFlows: retailer.orderFlows,
+									orderStages: retailer.orderStages,
+									statusLabels: retailer.statusLabels as
+										| StatusLabels
+										| undefined,
+									// Undefined reads as TRUE for delivery (legacy stores always had
+									// it) and as FALSE for pickup — same rule as the storefront.
+									offerDelivery: retailer.offerDelivery !== false,
+									offerSelfCollect: retailer.offerSelfCollect === true,
+									hasBookingListings,
+									hasEventListings,
+								}}
+								onSave={(orderFlows) => updateSettings({ orderFlows })}
+							/>
+						</AreaGate>
+					) : null}
+				</div>
 			</div>
 		</div>
 	);
@@ -1105,6 +1228,9 @@ function StoreNameForm({
 			<SectionHeading
 				title="Business name"
 				description="Shown on your storefront header and WhatsApp messages."
+				glance={
+					current.trim() ? <Glance tone="grey">{current}</Glance> : undefined
+				}
 			/>
 			<div className="flex flex-col gap-1.5">
 				<Input
@@ -1219,9 +1345,25 @@ function BusinessIdentityForm({
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
 			<SectionHeading
-				title="Business details"
-				description="Printed in the “From” section of the invoices and receipts your customers download — what a company's finance team needs to accept your invoice. Only the fields you fill in appear; leave everything blank to show just your store name."
+				title="Legal identity"
+				description="Printed in the “From” section of the invoices and receipts your customers download."
+				glance={
+					<Glance tone="grey">
+						{fields.some(([, saved]) => (saved ?? "").trim())
+							? "On invoices"
+							: "Store name only"}
+					</Glance>
+				}
 			/>
+			<InfoDisclosure summary="What to fill in">
+				<HelperBullets
+					items={[
+						"What a company's finance team needs before it accepts your invoice",
+						"Only the fields you fill in appear on the document",
+						"Leave everything blank to show just your store name",
+					]}
+				/>
+			</InfoDisclosure>
 			<div className="flex flex-col gap-3">
 				<label className="flex flex-col gap-1.5">
 					<span className={fieldLabel}>Registered business name</span>
@@ -1332,8 +1474,9 @@ function StoreDescriptionForm({
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
 			<SectionHeading
+				level="sub"
 				title="Store description"
-				description="A short line shown on your storefront under your store name — say what you sell, your lead time, or area. Leave blank to hide it."
+				description="Shown under your store name — what you sell, your lead time or area. Leave blank to hide it."
 			/>
 			<div className="flex flex-col gap-1.5">
 				<textarea
@@ -1417,9 +1560,18 @@ function StoreTypeForm({
 	return (
 		<div className="flex flex-col gap-4">
 			<SectionHeading
+				level="sub"
 				title="What does your store sell?"
-				description="Pre-selects the matching type when you add a new product — you can still pick a different type per product, and existing products never change. Tap again to clear."
+				description="Pre-selects the type when you add a product — tap the selected one again to clear."
 			/>
+			<InfoDisclosure summary="How store type works">
+				<HelperBullets
+					items={[
+						"Only a starting point — you can still pick another type on any product",
+						"Existing products never change",
+					]}
+				/>
+			</InfoDisclosure>
 			<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
 				{cards.map((card) => {
 					const selected = current === card.value;
@@ -1509,8 +1661,9 @@ function LogoForm({
 	return (
 		<div className="flex flex-col gap-4">
 			<SectionHeading
-				title="Store logo"
-				description="Square images work best. Shown on your storefront header and dashboard. Max ~2MB."
+				level="sub"
+				title="Logo"
+				description="Square works best — shown on your storefront header and dashboard. Max ~2MB."
 			/>
 
 			{previewUrl ? (
@@ -1615,8 +1768,9 @@ function CoverImageForm({
 	return (
 		<div className="flex flex-col gap-4">
 			<SectionHeading
+				level="sub"
 				title="Cover image"
-				description="Best size 1200 × 400 px (wide 3:1). Fills your storefront header and shows as the preview when you share your link. Max ~2MB."
+				description="1200 × 400 px (3:1) works best — it fills your header and previews when you share your link. Max ~2MB."
 			/>
 
 			{previewUrl ? (
@@ -1693,6 +1847,126 @@ function newDraft(type: "bank" | "qr"): MethodDraft {
 // Placeholder examples per store country (z8r3fdbmc9) — "Maybank / DuitNow /
 // Sdn Bhd" on a Singapore store reads as someone else's app. Examples only;
 // the fields stay free text.
+/**
+ * Settings → Payments (86eye9xd4, 8A + 1B). The decision first — how buyers
+ * pay — then the details that decision uses. While HitPay is the way buyers
+ * pay, the manual methods stay saved in a quieter dashed card: hidden from
+ * buyers on every order HitPay can take, still shown on one it can't (under
+ * its minimum), and one tap from coming back.
+ */
+function PaymentsTabBody({
+	retailer,
+	highlight,
+	buyersPayHighlight,
+	onSave,
+	onOpenIntegrations,
+}: {
+	retailer: NonNullable<ReturnType<typeof useDashboardRetailer>>;
+	highlight: FixHighlight | undefined;
+	/** A What's-new link to "How buyers pay" rings that card. */
+	buyersPayHighlight: FixHighlight | undefined;
+	onSave: ReturnType<typeof useUpdateSettings>;
+	onOpenIntegrations: () => void;
+}) {
+	const methods = retailer.paymentMethods ?? [];
+	const online =
+		retailer.hitpay?.hasCredentials === true && retailer.hitpay.enabled;
+	const methodNames = methods.map((m) => m.label);
+	const form = (
+		<PaymentMethodsForm
+			current={methods}
+			country={retailer.country}
+			onSave={(paymentMethods) => onSave({ paymentMethods })}
+		/>
+	);
+	return (
+		<div className="flex flex-col gap-6">
+			<HowBuyersPayCard
+				highlight={buyersPayHighlight}
+				hitpay={retailer.hitpay}
+				canUse={hasFeature(retailer.subscription, "onlinePayments")}
+				manualCount={methods.length}
+				onSave={onSave}
+				onOpenIntegrations={onOpenIntegrations}
+			/>
+			{online ? (
+				// A deep link to the methods lands on the editor row and opens it.
+				<Card dashed>
+					<SectionHeading
+						title="Manual methods"
+						description={
+							methods.length > 0
+								? `${listPhrase(methodNames)}. Kept for the day you switch back — and still shown on an order too small for HitPay.`
+								: "None saved. Add a bank or QR here before you switch back to manual transfer."
+						}
+						glance={<Glance tone="grey">Saved, hidden</Glance>}
+					/>
+					<ExpandableRow
+						id={SETTINGS_ANCHOR.payment_methods}
+						label="Edit methods"
+						value={
+							<span className="font-normal text-muted-foreground">
+								{methods.length} saved
+							</span>
+						}
+						highlight={highlight}
+					>
+						{form}
+					</ExpandableRow>
+				</Card>
+			) : (
+				<Card id={SETTINGS_ANCHOR.payment_methods} highlight={highlight}>
+					<SectionHeading
+						title="Payment methods"
+						description="What buyers use to pay you — shown on their private order page."
+						glance={
+							methods.length > 0 ? (
+								<Glance>
+									{methods.length} {methods.length === 1 ? "method" : "methods"}
+								</Glance>
+							) : (
+								<Glance tone="warn">None yet</Glance>
+							)
+						}
+					/>
+					<InfoDisclosure summary="How buyers see this">
+						<HelperBullets
+							items={[
+								"Never pasted into the WhatsApp chat — each buyer gets a private order-page link",
+								"Account numbers copy in one tap",
+								"Never shown on your public storefront",
+								"Drag the handle to reorder",
+							]}
+						/>
+					</InfoDisclosure>
+					{form}
+					{/* Says plainly that nothing chases the buyer automatically, and
+					    names the one manual tool that exists (docs/payment-reminder.md). */}
+					<InfoDisclosure summary="If a buyer hasn't paid">
+						<HelperBullets
+							items={[
+								"Kedaipal doesn't chase unpaid orders automatically — each order gets one WhatsApp, the confirmation, linking to the order page",
+								"From day 11 unpaid, a “Send payment reminder” button appears on the order page — once a day, until day 14",
+								"Sending it is always your call",
+							]}
+						/>
+					</InfoDisclosure>
+				</Card>
+			)}
+			<HitpayAccountCard
+				hitpay={retailer.hitpay}
+				onOpenIntegrations={onOpenIntegrations}
+			/>
+		</div>
+	);
+}
+
+/** "A", "A and B", "A, B and C" — the manual card's one-line inventory. */
+function listPhrase(items: string[]): string {
+	if (items.length <= 1) return items[0] ?? "";
+	return `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
+}
+
 const BANK_PLACEHOLDER: Record<Country, string> = {
 	MY: "Maybank",
 	SG: "DBS",
@@ -2076,11 +2350,6 @@ function PaymentMethodsForm({
 
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-6">
-			<SectionHeading
-				title="Payment methods"
-				description="Add your banks and QR codes. For your buyers' security, these are no longer pasted into the WhatsApp chat — instead the order confirmation links each buyer to their own order page, where all of them show with one-tap copy. Never shown on your public storefront. Drag the handle to reorder within each group."
-			/>
-
 			{/* Bank accounts — shown on the buyer's order page (linked from WhatsApp). */}
 			<div className="flex flex-col gap-3">
 				<div className="flex items-center justify-between gap-2">
@@ -2091,7 +2360,7 @@ function PaymentMethodsForm({
 					<Button
 						type="button"
 						variant="outline"
-						className="h-9"
+						className="h-11 lg:h-9"
 						onClick={() => addMethod("bank")}
 						disabled={atCap}
 					>
@@ -2124,7 +2393,7 @@ function PaymentMethodsForm({
 					<Button
 						type="button"
 						variant="outline"
-						className="h-9"
+						className="h-11 lg:h-9"
 						onClick={() => addMethod("qr")}
 						disabled={atCap}
 					>
@@ -2162,129 +2431,6 @@ function PaymentMethodsForm({
 	);
 }
 
-// Only the keys still in TEMPLATE_KEYS are editable — the status/fallback copy
-// no longer has a sender, so it has no label here either. Partial + fallback so
-// a key added back to TEMPLATE_KEYS renders instead of crashing.
-const TEMPLATE_LABELS: Partial<Record<TemplateKey, string>> = {
-	confirm: "Your reply",
-};
-
-// The card earns its place on one narrow job: a buyer who types their order
-// number into the shared number gets this reply. The order's own confirmation is
-// a fixed Meta template and is NOT editable here — if TEMPLATE_KEYS ever empties
-// out, delete this card rather than shipping an editor that changes nothing.
-function MessageTemplatesForm({
-	current,
-	onSave,
-}: {
-	current: MessageTemplates | undefined;
-	onSave: (templates: MessageTemplates) => Promise<unknown>;
-}) {
-	const [activeLocale, setActiveLocale] = useState<Locale>("en");
-	const [draft, setDraft] = useState<MessageTemplates>(() => current ?? {});
-
-	function setField(locale: Locale, key: TemplateKey, value: string) {
-		setDraft((prev) => ({
-			...prev,
-			[locale]: { ...(prev[locale] ?? {}), [key]: value },
-		}));
-	}
-
-	function resetField(locale: Locale, key: TemplateKey) {
-		setDraft((prev) => {
-			const next = { ...(prev[locale] ?? {}) };
-			delete next[key];
-			return { ...prev, [locale]: next };
-		});
-	}
-
-	async function handleSubmit(e: FormEvent) {
-		e.preventDefault();
-		try {
-			await onSave(draft);
-			toast.success("Templates saved.");
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		}
-	}
-
-	const locales: Locale[] = ["en", "ms", "zh"];
-
-	return (
-		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
-			<div className="flex flex-col gap-1">
-				<h3 className="text-sm font-semibold text-foreground">
-					Reply when a buyer messages their order number
-				</h3>
-				<p className="text-xs text-muted-foreground leading-relaxed">
-					The confirmation your buyers receive is a fixed Meta-approved template
-					— WhatsApp's rule for messaging someone who hasn't replied yet — so it
-					can't be customised. This copy is the reply sent when a buyer writes
-					their order number (e.g. <code className="font-mono">ORD-1234</code>)
-					to our shared number. Use{" "}
-					<code className="font-mono">{"{shortId}"}</code> and{" "}
-					<code className="font-mono">{"{storeName}"}</code> as variables. Leave
-					blank to use the default.
-				</p>
-			</div>
-
-			<div className="flex gap-2 border-b border-input">
-				{locales.map((loc) => (
-					<button
-						key={loc}
-						type="button"
-						onClick={() => setActiveLocale(loc)}
-						className={`min-h-11 px-4 text-sm font-medium ${
-							activeLocale === loc
-								? "border-b-2 border-primary text-primary"
-								: "text-muted-foreground"
-						}`}
-					>
-						{LOCALE_LABELS[loc]}
-					</button>
-				))}
-			</div>
-
-			<div className="flex flex-col gap-4">
-				{TEMPLATE_KEYS.map((key) => {
-					const value = draft[activeLocale]?.[key] ?? "";
-					const placeholder = defaultTemplate(activeLocale, key);
-					return (
-						<label key={key} className="flex flex-col gap-1">
-							<div className="flex items-center justify-between">
-								<span className="text-sm font-medium">
-									{TEMPLATE_LABELS[key] ?? key}
-								</span>
-								{value ? (
-									<button
-										type="button"
-										onClick={() => resetField(activeLocale, key)}
-										className="text-xs text-muted-foreground underline"
-									>
-										Reset to default
-									</button>
-								) : null}
-							</div>
-							<textarea
-								value={value}
-								onChange={(e) => setField(activeLocale, key, e.target.value)}
-								placeholder={placeholder}
-								rows={3}
-								maxLength={1000}
-								className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-							/>
-						</label>
-					);
-				})}
-			</div>
-
-			<Button type="submit" className={SAVE_BTN_CLASS}>
-				Save templates
-			</Button>
-		</form>
-	);
-}
-
 function LocaleForm({
 	current,
 	onSave,
@@ -2294,53 +2440,56 @@ function LocaleForm({
 }) {
 	const localeSelectId = useId();
 	const [value, setValue] = useState<Locale>(current);
+	const [saving, setSaving] = useState(false);
 	const dirty = value !== current;
 
 	async function handleSubmit(e: FormEvent) {
 		e.preventDefault();
+		setSaving(true);
 		try {
 			await onSave(value);
 			toast.success("Language saved.");
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
 		}
 	}
 
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
-			<div className="flex flex-col gap-2">
-				<label htmlFor={localeSelectId} className="text-sm font-medium">
-					Message language
-				</label>
-				<Select
-					id={localeSelectId}
-					variant="field"
-					className="w-full"
-					value={value}
-					onChange={(e) => setValue(e.target.value as Locale)}
-				>
-					{LOCALE_OPTIONS.map((opt) => (
-						<option key={opt.value} value={opt.value}>
-							{opt.label}
-						</option>
-					))}
-				</Select>
-				{/* The field reaches further than its old "sent to shoppers" copy
-				    admitted: retailer email alerts have always rendered in it, and
-				    the WhatsApp order alerts (86eyhw9zy) now do too. */}
-				<span className="text-xs text-muted-foreground">
-					Used for the order confirmation buyers receive and their order page —
-					and for the order alerts we send you on WhatsApp.
-				</span>
-			</div>
-
-			<Button type="submit" disabled={!dirty} className={SAVE_BTN_CLASS}>
-				Save language
+			{/* The language reaches further than "sent to shoppers": retailer
+			    email alerts have always rendered in it, and the WhatsApp order
+			    alerts (86eyhw9zy) do too. */}
+			<SectionHeading
+				title="Message language"
+				description="Used for the confirmation buyers receive, their order page, and the alerts we send you."
+				glance={<Glance tone="grey">{LOCALE_LABELS[current]}</Glance>}
+			/>
+			<Select
+				id={localeSelectId}
+				aria-label="Message language"
+				variant="field"
+				className="w-full"
+				value={value}
+				onChange={(e) => setValue(e.target.value as Locale)}
+			>
+				{LOCALE_OPTIONS.map((opt) => (
+					<option key={opt.value} value={opt.value}>
+						{opt.label}
+					</option>
+				))}
+			</Select>
+			<Button
+				type="submit"
+				disabled={!dirty || saving}
+				className={SAVE_BTN_CLASS}
+			>
+				{saving ? "Saving…" : "Save language"}
 			</Button>
 		</form>
 	);
 }
-
 function CountryForm({
 	current,
 	currency,
@@ -2398,7 +2547,7 @@ function CountryForm({
 						label="Store country"
 						options={COUNTRY_OPTIONS}
 						required
-						description="Where your store operates. Checkout accepts this country's phone numbers and addresses, and buyers see forms that match it."
+						description="Checkout accepts this country's phone numbers and addresses."
 					/>
 				)}
 			</form.AppField>
@@ -2527,11 +2676,20 @@ function CurrencyForm({
 						label="Storefront currency"
 						options={CURRENCY_OPTIONS}
 						required
-						// currency-literal-ok: the switch explainer names both currencies on purpose.
-						description="Used for product prices and order totals. Changing it switches every product to the new currency — amounts keep their numbers (RM 12 becomes S$ 12), so re-check your prices after switching. Orders already placed keep the currency they were placed in, but Insights and customer lifetime totals add those older amounts up as plain numbers, so totals that span the change won't convert."
+						description="Used for product prices and order totals."
 					/>
 				)}
 			</form.AppField>
+			<InfoDisclosure summary="Before you change currency">
+				<HelperBullets
+					items={[
+						// currency-literal-ok: the switch explainer names both currencies on purpose.
+						"Every product switches — amounts keep their numbers (RM 12 becomes S$ 12), so re-check your prices",
+						"Orders already placed keep the currency they were placed in",
+						"Insights and customer lifetime totals add older amounts up as plain numbers, so totals that span the change won't convert",
+					]}
+				/>
+			</InfoDisclosure>
 
 			<form.Subscribe
 				selector={(s) => ({
@@ -2557,77 +2715,12 @@ function CurrencyForm({
 	);
 }
 
-function NotifyEmailForm({
-	current,
-	onSave,
-}: {
-	current: string;
-	onSave: (notifyEmail: string) => Promise<unknown>;
-}) {
-	const form = useAppForm({
-		defaultValues: { notifyEmail: current },
-		validators: { onChange: settingsNotifyEmailFormSchema },
-		onSubmit: async ({ value }) => {
-			try {
-				await onSave(value.notifyEmail.trim());
-				toast.success("Notification email saved.");
-			} catch (err) {
-				toast.error(convexErrorMessage(err));
-			}
-		},
-	});
-
-	function handleSubmit(e: FormEvent) {
-		submitThenFocusError(form, e);
-	}
-
-	return (
-		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
-			<form.AppField name="notifyEmail">
-				{(field) => (
-					<field.TextField
-						label="Notification email"
-						placeholder="orders@yourstore.com"
-						type="email"
-						inputMode="email"
-						description="We'll email you here whenever a new order arrives or a buyer says they've paid. If WhatsApp order alerts are on, these arrive on WhatsApp instead — and this email is the backup if one can't be delivered. Leave blank to turn off email notifications."
-					/>
-				)}
-			</form.AppField>
-
-			<form.Subscribe
-				selector={(s) => ({
-					canSubmit: s.canSubmit,
-					isSubmitting: s.isSubmitting,
-					values: s.values,
-				})}
-			>
-				{({ canSubmit, isSubmitting, values }) => {
-					const dirty = values.notifyEmail.trim() !== current.trim();
-					return (
-						<Button
-							type="submit"
-							disabled={!dirty || !canSubmit || isSubmitting}
-							className={SAVE_BTN_CLASS}
-						>
-							{isSubmitting ? "Saving…" : "Save email"}
-						</Button>
-					);
-				}}
-			</form.Subscribe>
-		</form>
-	);
-}
-
-// The seller-contact description names the store's own mobile kind. The MY
-// line also names the Lalamove sender-contact role — Lalamove is MY-market, so
-// that sentence would be a false promise on an SG store.
-// An order sends the buyer exactly one WhatsApp (the confirmation), so this
-// number's real home is the buyer's order page — that's where they reach the
-// seller for the rest of the order's life. Don't promise "updates" here.
+// The field hint under the seller's contact number. Its card already says
+// where buyers see it; this names the number kind and the rider role (the
+// store's own number is the Lalamove sender contact in both markets).
 const WA_PHONE_DESCRIPTION: Record<Country, string> = {
-	MY: "Shown to buyers on their order page (and in the order confirmation) so they can message you directly. Malaysian mobile — it's also the sender contact when a rider collects from you.",
-	SG: "Shown to buyers on their order page (and in the order confirmation) so they can message you directly. Singapore mobile with WhatsApp.",
+	MY: "Malaysian mobile with WhatsApp — riders also call it when they collect from you.",
+	SG: "Singapore mobile with WhatsApp — riders also call it when they collect from you.",
 };
 
 function WaPhoneForm({
@@ -2662,10 +2755,21 @@ function WaPhoneForm({
 
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
+			<SectionHeading
+				title="Contact number"
+				description="Buyers tap it on their order page to message you directly."
+				glance={
+					current.trim() ? (
+						<Glance tone="grey">{formatMobile(current)}</Glance>
+					) : (
+						<Glance tone="warn">Not set</Glance>
+					)
+				}
+			/>
 			<form.AppField name="waPhone">
 				{(field) => (
 					<field.TextField
-						label="Your contact WhatsApp number"
+						label="Your WhatsApp number"
 						type="tel"
 						inputMode="tel"
 						autoComplete="tel"

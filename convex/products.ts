@@ -1,4 +1,5 @@
 import { ConvexError, v } from "convex/values";
+import { isStoreOffline, offlineStoreIds } from "./storeAvailability";
 import {
 	formatFulfilmentDate,
 	isMytMidnight,
@@ -68,6 +69,7 @@ import {
 	DEFAULT_PROMO_LABEL,
 } from "./lib/promo";
 import { tallyPromoUnits } from "./lib/promoTally";
+import { productPromotion } from "./promotions";
 import {
 	assertProductCap,
 	MAX_PRODUCTS_PER_RETAILER,
@@ -81,6 +83,7 @@ import {
 	POPULAR_TOP_CANDIDATES,
 	rankPopularProducts,
 } from "./lib/popularProducts";
+import { lacksParcelWeight } from "./lib/delivery";
 import { rateLimiter } from "./lib/rateLimiter";
 import { SLUG_MAX, SLUG_MIN, slugify } from "./lib/slug";
 import {
@@ -877,6 +880,8 @@ function byActiveThenSort(a: Doc<"products">, b: Doc<"products">): number {
 export const list = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }) => {
+		// Offline (Kedaipal took the store down): no public catalogue (z8r3fdudf7).
+		if (await isStoreOffline(ctx, retailerId)) return [];
 		const rows = await ctx.db
 			.query("products")
 			.withIndex("by_retailer_active", (q) =>
@@ -992,6 +997,54 @@ export const hasEventListings = query({
 			)
 			.collect();
 		return rows.some((p) => p.event !== undefined);
+	},
+});
+
+/** How many products a weight-priced checkout can't price, named. */
+export const MISSING_WEIGHT_NAMED_MAX = 5;
+
+/**
+ * The weight & zone readiness check (86eye9xd4, 4A): live, active, physical
+ * products with at least one live non-custom choice that has no parcel
+ * weight. Checkout refuses (or holds for WhatsApp) any cart holding one, so
+ * the delivery-pricing page names them up front instead of leaving the seller
+ * to find out from a stranded order.
+ *
+ * Bounded by the product cap (z8r3fdjmf4q): one indexed variant read per
+ * active product. Custom choices never count — their weight is unknowable by
+ * design, and the "When the weight can't be calculated" rule covers them.
+ */
+export const missingParcelWeights = query({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{
+		count: number;
+		named: Array<{ productId: Id<"products">; name: string }>;
+	}> => {
+		await requireRetailerOwnership(ctx, retailerId, "read");
+		const products = await ctx.db
+			.query("products")
+			.withIndex("by_retailer_active", (q) =>
+				q.eq("retailerId", retailerId).eq("active", true),
+			)
+			.collect();
+		const missing: Array<{ productId: Id<"products">; name: string }> = [];
+		for (const product of products) {
+			if (effectiveKind(product.kind) !== "physical") continue;
+			const variants = await ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", product._id))
+				.collect();
+			if (variants.some((v) => v.active && lacksParcelWeight(v))) {
+				missing.push({ productId: product._id, name: product.name });
+			}
+		}
+		return {
+			count: missing.length,
+			named: missing.slice(0, MISSING_WEIGHT_NAMED_MAX),
+		};
 	},
 });
 
@@ -1748,6 +1801,15 @@ export const update = mutation({
 		// extras refused where capacity/seats already govern, judged on the
 		// POST-save event state so one save can't sneak both in.
 		if (fields.promo !== undefined) {
+			// A product inside a bulk promotion (z8r3fducfd) takes its window,
+			// label and flash extras from the PROMOTION — the product form
+			// shows them read-only and sends no promo at all. Only a stale tab
+			// gets here; it is told where the setting now lives.
+			const holder = await productPromotion(ctx, productId);
+			if (holder)
+				throw new ConvexError(
+					`This product is part of ${holder.label ?? "a promotion"} — change its dates, label or flash extras on the promotion, or remove the product from it.`,
+				);
 			if (fields.promo === null) {
 				updates.promo = undefined;
 			} else {
@@ -2931,6 +2993,8 @@ export const getPublicBySlug = query({
 	handler: async (ctx, { retailerId, slug }) => {
 		const normalized = slug.trim().toLowerCase();
 		if (normalized.length === 0) return null;
+		// Offline (Kedaipal took the store down): no public catalogue (z8r3fdudf7).
+		if (await isStoreOffline(ctx, retailerId)) return null;
 		const indexed = await ctx.db
 			.query("products")
 			.withIndex("by_retailer_slug", (q) =>
@@ -3049,7 +3113,11 @@ export const listForSitemap = query({
 	): Promise<
 		Array<{ storeSlug: string; productSlug: string; updatedAt: number }>
 	> => {
-		const retailers = await ctx.db.query("retailers").collect();
+		const offline = await offlineStoreIds(ctx);
+		const retailers = (await ctx.db.query("retailers").collect()).filter(
+			// An offline store's product pages are the "unavailable" screen.
+			(r) => !offline.has(r._id),
+		);
 		const out: Array<{
 			storeSlug: string;
 			productSlug: string;
@@ -3116,6 +3184,8 @@ export const popularProducts = query({
 		if (!isMytMidnight(since)) {
 			throw new ConvexError("since must be an MYT-midnight epoch");
 		}
+		// Offline (Kedaipal took the store down): no public catalogue (z8r3fdudf7).
+		if (await isStoreOffline(ctx, retailerId)) return [];
 		const recent = await ctx.db
 			.query("orders")
 			.withIndex("by_retailer", (q) =>

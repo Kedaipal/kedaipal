@@ -147,6 +147,20 @@ export const SPOTLIGHT_ANCHOR = {
 		tab: "fulfilment",
 		anchor: "settings-event-venues",
 	},
+	// The store on/off switch (z8r3fdudf7) — FIRST on the Store tab, full
+	// width above the columns: whether the store takes orders at all.
+	store_status: {
+		page: "settings",
+		tab: "store",
+		anchor: "settings-store-status",
+	},
+	// "How buyers pay" (86eye9xd4, 8A) — the top of the Payments tab, where
+	// HitPay is switched on as the one way buyers pay, or off again.
+	how_buyers_pay: {
+		page: "settings",
+		tab: "payments",
+		anchor: "settings-how-buyers-pay",
+	},
 	// The Store listing card (z8r3fdkmyp), right under the store description the
 	// public directory builds its card from — where the area line is typed and
 	// where a seller takes the shop off /stores.

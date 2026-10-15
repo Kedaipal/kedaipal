@@ -1896,23 +1896,17 @@ function OrdersRoute() {
 			) : null}
 
 			{/* Despatch queue (86eyp63mp) — below the due-today banner because a
-			    deadline outranks a task you can finish whenever you like. Shown
-			    even at zero (with a disabled button + the reason): the count is how
-			    a seller learns the feature exists. Held back until the counts land,
-			    so it never claims an empty queue before it knows. Hidden for
-			    pickup-only stores, which have no parcels to label, and it rides the
-			    same Order Inbox plan gate as the bulk actions it sits with. */}
+			    deadline outranks a task you can finish whenever you like. Since
+			    86eye9xd4 it points at Deliveries, where the labels print beside
+			    the To-ship queue. Shown even at zero: the count is how a seller
+			    learns the queue exists. Held back until the counts land, so it
+			    never claims an empty queue before it knows. Hidden for
+			    pickup-only stores, which have no parcels to label. */}
 			{inboxEnabled &&
 			!loading &&
 			retailer &&
 			(retailer.offerDelivery ?? true) ? (
-				<ReadyToShipStrip
-					retailerId={retailer._id}
-					count={counts?.readyToShip ?? 0}
-					paperLabel={describeAwbPaper(
-						resolveAwbConfig(retailer.awbConfig).paperSize,
-					)}
-				/>
+				<ReadyToShipStrip count={counts?.readyToShip ?? 0} />
 			) : null}
 
 			{/* Select-mode hint — the persistent bottom bar carries the actions

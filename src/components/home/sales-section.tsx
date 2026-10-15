@@ -235,7 +235,24 @@ export function SalesSection({
 			{/* Mobile order is the Main board's: exceptions, then the Sales
 			    heading, the hero, the cards, and Plan ahead last. On `lg` every
 			    `order-*` resets and the DOM order takes over, which is the desktop
-			    board's: heading, then hero beside its rail, then the cards. */}
+			    board's: heading, then hero beside its rail, then the cards.
+
+			    Hero and rail share a row HEIGHT (`lg:items-stretch`, Zaki, 14 Oct
+			    2026): the rail grows and shrinks with whatever it carries (unpaid
+			    only, unpaid + out of stock, plus Plan ahead), and a hero that
+			    stopped at its own height left a hole beside a taller rail. The hero
+			    fills its column (`lg:flex-1`), so it is never shorter than the
+			    rail; when the hero is the taller one, the rail's cards keep their
+			    own height and sit at the top.
+
+			    Only a hero WITH a chart stretches: the bars are the one thing in
+			    it that can take extra height. A gated (Starter) hero has no chart,
+			    and stretched it became a 660px dark card with a 433px void inside
+			    (PR #366 review). So a gated store's Pro TEASER moves up into the
+			    hero's column instead (Zaki, 14 Oct 2026): the room beside a tall
+			    rail then says why there is no chart, rather than being a void in
+			    a dark card or blank page under a short one. On a phone the column
+			    stacks hero → teaser, which is the order it already had. */}
 			<div className="order-2 lg:order-none">
 				<PeriodChips
 					value={shownPeriod}
@@ -244,9 +261,10 @@ export function SalesSection({
 				/>
 			</div>
 
-			<div className="contents lg:flex lg:flex-wrap lg:items-start lg:gap-4">
+			<div className="contents lg:flex lg:flex-wrap lg:items-stretch lg:gap-4">
 				<div className="order-3 flex min-w-0 flex-col gap-3 lg:order-none lg:flex-[999_1_520px]">
 					<SalesHero
+						className={bars.length > 1 ? "lg:flex-1" : undefined}
 						view={view}
 						currency={currency}
 						bars={bars}
@@ -270,6 +288,7 @@ export function SalesSection({
 							currency={currency}
 						/>
 					) : null}
+					{gated ? <ProTeaserCard /> : null}
 				</div>
 
 				{exceptions || planAhead ? (
@@ -284,10 +303,9 @@ export function SalesSection({
 				) : null}
 			</div>
 
+			{/* Gated: the Pro teaser renders in the hero's column above. */}
 			<div className="order-4 lg:order-none">
-				{gated ? (
-					<ProTeaserCard />
-				) : !enough ? (
+				{gated ? null : !enough ? (
 					<InsightThreshold line={insightThresholdLine(view.orderCount)} />
 				) : (
 					// NOT `items-start`: the three cards share a row height, so their
@@ -323,6 +341,9 @@ export function SalesSection({
 	);
 }
 
+/** Axis ticks on the 30-day view fall on a WEEKLY cadence — see `buildBars`. */
+const AXIS_TICK_EVERY_DAYS = 7;
+
 /**
  * The hero's bars.
  *
@@ -330,6 +351,16 @@ export function SalesSection({
  * grid is one column, which is not a chart — so the six closed days of context
  * are drawn beside today's live column, which is what the board shows and what
  * makes a partial day legible at all.
+ *
+ * **The axis is not one label per bar.** Seven weekday names fit the hero's
+ * width; thirty do not — they rendered as an unbroken "TueWedThuFriSatSun"
+ * smear (Zaki, 14 Oct 2026). And over a month the weekday is the wrong UNIT
+ * anyway: "Tue" appears four times and names no particular day, so "Best: Thu"
+ * could not be looked up. The 30-day view therefore prints DATES on a weekly
+ * cadence, anchored to the most recent day so the right-hand end is always
+ * labelled; the shorter views keep a weekday on every bar, which is what the
+ * board draws. Every bar carries a `title` either way, so thinning the axis
+ * loses nothing on hover.
  */
 function buildBars(opts: {
 	period: HomePeriod;
@@ -338,19 +369,42 @@ function buildBars(opts: {
 	contextTrend: ReadonlyArray<{ start: number; earned: number }> | null;
 	todayStart: number;
 	todayEarned: number;
-}): { start: number; earned: number; label: string }[] {
-	const label = (start: number) =>
+}): {
+	start: number;
+	earned: number;
+	/** What the axis prints for this bar, and what "Best:" calls it. */
+	label: string;
+	/** The unabbreviated day, for the hover title — always present. */
+	title: string;
+	/** Whether the axis prints `label` here. */
+	tick: boolean;
+}[] {
+	const fmt = (start: number, opts_: Intl.DateTimeFormatOptions) =>
 		new Date(start).toLocaleDateString("en-GB", {
-			weekday: "short",
+			...opts_,
 			timeZone: "Asia/Kuala_Lumpur",
 		});
+	// Over a month a weekday names no particular day; over a week it is the
+	// clearest thing we can say in three characters.
+	const label = (start: number) =>
+		opts.period === "30d"
+			? fmt(start, { day: "numeric", month: "short" })
+			: fmt(start, { weekday: "short" });
+	const title = (start: number) =>
+		fmt(start, { weekday: "short", day: "numeric", month: "short" });
 
-	if (opts.period !== "today")
-		return opts.trend.map((b) => ({
+	if (opts.period !== "today") {
+		const last = opts.trend.length - 1;
+		return opts.trend.map((b, i) => ({
 			start: b.start,
 			earned: b.earned,
 			label: label(b.start),
+			title: title(b.start),
+			// Counted back from the LAST bar, so the most recent day always carries
+			// a label and the thinning eats into the old end instead.
+			tick: opts.period !== "30d" || (last - i) % AXIS_TICK_EVERY_DAYS === 0,
 		}));
+	}
 
 	// Gated: today's column alone. `SalesHero` draws the chart only at
 	// `bars.length > 1`, so one bar hides it — the figures stay, and the Pro
@@ -362,19 +416,29 @@ function buildBars(opts: {
 				start: opts.todayStart,
 				earned: opts.todayEarned,
 				label: label(opts.todayStart),
+				title: title(opts.todayStart),
+				tick: true,
 			},
 		];
 
 	const byStart = new Map(opts.contextTrend.map((b) => [b.start, b.earned]));
-	const out: { start: number; earned: number; label: string }[] = [];
+	const out: ReturnType<typeof buildBars> = [];
 	for (let i = 6; i >= 1; i--) {
 		const start = opts.todayStart - i * DAY_MS;
-		out.push({ start, earned: byStart.get(start) ?? 0, label: label(start) });
+		out.push({
+			start,
+			earned: byStart.get(start) ?? 0,
+			label: label(start),
+			title: title(start),
+			tick: true,
+		});
 	}
 	out.push({
 		start: opts.todayStart,
 		earned: opts.todayEarned,
 		label: label(opts.todayStart),
+		title: title(opts.todayStart),
+		tick: true,
 	});
 	return out;
 }

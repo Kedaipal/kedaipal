@@ -387,7 +387,7 @@ export function PageGallery({
 	return (
 		<>
 			{/* Mobile carousel — identical pattern to the detail sheet. */}
-			<div className="-mx-5 flex snap-x snap-mandatory gap-2 overflow-x-auto px-5 lg:hidden">
+			<div className="-mx-5 flex snap-x snap-mandatory gap-2 overflow-x-auto scrollbar-none px-5 lg:hidden">
 				{images.map((url, i) => (
 					<ZoomableImage
 						key={url}

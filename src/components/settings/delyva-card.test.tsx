@@ -342,7 +342,7 @@ describe("plan gate", () => {
 		state.settings = settings();
 		render(card({ canUse: false }));
 		expect(screen.getByRole("button", { name: /disconnect/i })).toBeTruthy();
-		expect(screen.getByRole("button", { name: /replace key/i })).toBeTruthy();
+		expect(screen.getByRole("button", { name: /^replace$/i })).toBeTruthy();
 	});
 });
 
@@ -465,16 +465,47 @@ describe("connected settings", () => {
 		const { container } = render(card());
 
 		expect(container.textContent).toContain("won't move to Shipped");
-		fireEvent.click(screen.getByRole("button", { name: /retry now/i }));
+		fireEvent.click(screen.getByRole("button", { name: /register again/i }));
 		await waitFor(() => expect(resubscribe).toHaveBeenCalled());
 	});
 
 	it("flags a missing pickup address before the first booking fails", () => {
 		state.settings = settings({ pickupAddress: undefined });
 		render(card());
+		// The checklist's pickup step needs action, and the header counts it.
+		expect(screen.getByText("Setup 2 of 3")).toBeTruthy();
+		expect(screen.getAllByText("(action needed)")).toHaveLength(1);
+	});
+
+	it("a fully set-up account reads as ticked steps and one chip (86eye9xd4)", () => {
+		state.settings = settings({ isDemo: false });
+		render(card());
+		expect(screen.getByText("Connected")).toBeTruthy();
+		expect(screen.queryByText("(action needed)")).toBeNull();
+		expect(screen.getAllByText("(done)")).toHaveLength(3);
+	});
+});
+
+describe("pickup address — a set address is one quiet row (86eye9xd4)", () => {
+	it("folds to the address with change it, opens the editor, and Cancel folds it back", () => {
+		state.settings = settings();
+		render(card());
 		expect(
-			screen.getByText(/Add this before your first booking/i),
+			screen.getByText(/12 Jalan Ampang, 50450 Kuala Lumpur/),
 		).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "address search" })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "change it" }));
+		expect(screen.getByRole("button", { name: "address search" })).toBeTruthy();
+		// Opened but untouched: nothing to save, and Cancel is the way out.
+		expect(
+			(
+				screen.getByRole("button", {
+					name: "Save pickup address",
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(true);
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		expect(screen.queryByRole("button", { name: "address search" })).toBeNull();
 	});
 });
 

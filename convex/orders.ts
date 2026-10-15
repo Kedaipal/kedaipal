@@ -1,5 +1,6 @@
 import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
+import { assertTakesBuyerOrders, isStoreOffline } from "./storeAvailability";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
@@ -94,7 +95,6 @@ import {
 } from "./lib/productEvent";
 import { closedDateIssue } from "./lib/closedDates";
 import { assertWithinOpeningHours } from "./lib/openingHours";
-import { orderingPausedMessage } from "./lib/seasonalHold";
 import { orderDocumentTitle } from "./lib/orderDocument";
 import { matchesBookingPeriod } from "./lib/bookingPeriod";
 import {
@@ -1017,8 +1017,9 @@ export const create = mutation({
 		if (!retailer) throw new ConvexError("Retailer not found");
 		// Off-Season Hold (z8r3fday24): the seller's own "ordering is paused"
 		// switch — a STORE setting like opening hours, never billing status.
-		if (retailer.orderingPausedAt !== undefined)
-			throw new ConvexError(orderingPausedMessage(retailer.storeName));
+		// Store availability (z8r3fdudf7) — the seller's pause, Kedaipal's
+		// pause/offline and Off-Season Hold, resolved in ONE place.
+		await assertTakesBuyerOrders(ctx, retailer);
 		const retailerCountry = retailer.country ?? DEFAULT_COUNTRY;
 
 		// Address shape follows the STORE's country — SG stores take 6-digit
@@ -2166,9 +2167,20 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 	// store" CTA on the tracking page (buyers otherwise only ever hear from the
 	// shared Kedaipal WABA). `retailerWaPhone` undefined => the CTA is hidden.
 	storeName: string;
-	// The storefront slug — the tracking page's way back to the store (the
-	// declined/expired booking cards link "Try different dates" there).
+	// The storefront slug — the tracking page's way back to the store: the
+	// tappable store-name eyebrow, the "Continue shopping" foot button
+	// (z8r3fducgw) and the declined/expired request cards' own links.
 	retailerSlug?: string;
+	// Kedaipal took the store OFFLINE (z8r3fdudf7): its storefront is the
+	// neutral "isn't available" page, so the order page offers no way back
+	// into it. A PAUSED store still links back — it renders browse-only.
+	// Both this and the next are order-PAGE facts: the credit-gated seller
+	// early return omits them, as it omits everything it has no use for.
+	storeOffline?: boolean;
+	// The store opted out of /stores — the order page then hides "Discover
+	// more stores", same gate as the storefront's footer. The storefront
+	// already publishes this bit, so it is buyer-safe on this public read.
+	marketplaceUnlisted?: boolean;
 	retailerWaPhone?: string;
 	// The shared Kedaipal checkout number (same resolution as the storefront's
 	// getRetailerBySlug), included ONLY while the order is still `pending`: it
@@ -2418,6 +2430,8 @@ export const get = query({
 			retailerCountry: retailer?.country ?? DEFAULT_COUNTRY,
 			storeName: retailer?.storeName ?? "",
 			retailerSlug: retailer?.slug,
+			storeOffline: await isStoreOffline(ctx, order.retailerId),
+			marketplaceUnlisted: retailer?.marketplaceUnlistedAt !== undefined,
 			retailerWaPhone: retailer?.waPhone,
 			// Served while the order still needs (or benefits from) a path into the
 			// shared-number chat: pending = the legacy manual/auto Send card; a
@@ -2456,12 +2470,18 @@ export const receiptPdfInputs = internalQuery({
 		if (!order) return null;
 		const retailer = await ctx.db.get(order.retailerId);
 		const paymentsPaused = await buyerPaymentsPaused(ctx, order.retailerId);
+		// The document asks for payment the same way the order page does: an
+		// order HitPay can take points at Pay now instead of printing the
+		// manual details (86eye9xd4, 8A).
+		const payOnline = retailer ? gatewayCanTake(retailer, order) : false;
 		return {
 			shortId: order.shortId,
 			data: orderToReceiptData({
 				order,
 				storeName: retailer?.storeName ?? "",
-				paymentMethods: retailer ? resolvePaymentMethods(retailer) : [],
+				paymentMethods:
+					retailer && !payOnline ? resolvePaymentMethods(retailer) : [],
+				payOnline,
 				// A lapsed store's unpaid bill prints the paused notice instead of
 				// the numbers (z8r3fdr6gg) — the seller's copy too: forwarded, it's
 				// the same payment request the order page withholds.
@@ -2602,6 +2622,25 @@ export const sendPaymentReminder = action({
 });
 
 /**
+ * Whether the seller's HitPay checkout can take THIS order's payment right
+ * now (86eyb6z3a) — connection on + credentials stored + payment still open +
+ * both price holds clear + total within HitPay's floor. The one author of the
+ * buyer's "Pay now" door and of the rule that hides the manual details while
+ * it's open (86eye9xd4); `hitpay.createCheckout` re-checks everything, so this
+ * is presentation, not authorization.
+ */
+function gatewayCanTake(retailer: Doc<"retailers">, order: Doc<"orders">) {
+	return (
+		hitpayCheckoutConfigured(retailer.hitpay) &&
+		order.status !== "cancelled" &&
+		(order.paymentStatus ?? "unpaid") === "unpaid" &&
+		!isMockupGateClosed(order) &&
+		order.deliveryFeePending !== true &&
+		order.total >= HITPAY_MIN_AMOUNT_SEN
+	);
+}
+
+/**
  * Public: resolve the seller's payment methods for the buyer's tracking page,
  * keyed by the tracking token (the capability). This page is the ONLY place a
  * buyer sees bank details — they left WhatsApp in 86ey98ju1, and the order's one
@@ -2642,15 +2681,13 @@ export const getPaymentMethods = query({
 			return { methods: [], gatewayAvailable: false, paymentsPaused: true };
 		}
 
-		const gatewayAvailable =
-			hitpayCheckoutConfigured(retailer.hitpay) &&
-			order.status !== "cancelled" &&
-			(order.paymentStatus ?? "unpaid") === "unpaid" &&
-			!isMockupGateClosed(order) &&
-			order.deliveryFeePending !== true &&
-			order.total >= HITPAY_MIN_AMOUNT_SEN;
+		const gatewayAvailable = gatewayCanTake(retailer, order);
 
-		const methods = resolvePaymentMethods(retailer);
+		// HitPay on means it is THE way buyers pay (86eye9xd4, 8A): an order
+		// the gateway can take never sees the manual details, so every payment
+		// confirms itself. Any order it can't take — under HitPay's minimum, a
+		// manual claim made before the switch — keeps them as the fallback.
+		const methods = gatewayAvailable ? [] : resolvePaymentMethods(retailer);
 		if (methods.length === 0 && !gatewayAvailable) return null;
 
 		const resolved: Array<PaymentMethod & { qrImageUrl?: string }> = [];
