@@ -813,7 +813,8 @@ export const createOrderFromSession = mutation({
 				// authoritative catalog price is charged. Trusting it here is safe:
 				// this mutation is owner-or-admin only (requireSessionAccess), so the
 				// "client" IS the seller pricing their own order — a buyer never
-				// reaches this path. Validated as a positive integer, no upper cap
+				// reaches this path. Validated as a non-negative integer (RM0 is a
+				// free line), no upper cap
 				// (same rule as any product price).
 				unitPrice: v.optional(v.number()),
 				// Buyer-question answers the seller keyed for the walk-in
@@ -961,15 +962,18 @@ export const createOrderFromSession = mutation({
 			let soldOnPromo = false;
 			let promoRunId: string | undefined;
 			if (variant.isCustom === true || item.unitPrice !== undefined) {
-				// A positive integer in sen — the SAME rule as any other price
-				// (products.ts). No artificial ceiling: we can't know the vendor's
-				// business (watches, renovations, B2B services can run six figures+),
-				// and the price is the vendor's own call with the buyer present.
+				// A non-negative integer in sen. No artificial ceiling: we can't
+				// know the vendor's business (watches, renovations, B2B services can
+				// run six figures+), and the price is the vendor's own call with the
+				// buyer present. RM0 is a real price at the counter — a comped item,
+				// a freebie with a purchase — and an all-free cart becomes a free
+				// order (`paidInPerson` below). The CLAIM door keeps refusing zero
+				// (orderClaims.sendClaim): a link exists to take a payment.
 				const entered = item.unitPrice;
 				if (
 					entered === undefined ||
 					!Number.isInteger(entered) ||
-					entered <= 0
+					entered < 0
 				)
 					throw new ConvexError(`Set a price for "${displayName}"`);
 				unitPrice = entered;

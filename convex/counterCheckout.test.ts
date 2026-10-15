@@ -463,13 +463,77 @@ describe("counterCheckout — createOrderFromSession", () => {
 		await expect(
 			asA.mutation(api.counterCheckout.createOrderFromSession, {
 				sessionId,
-				items: [{ variantId, quantity: 1, unitPrice: 0 }], // zero
+				items: [{ variantId, quantity: 1, unitPrice: -100 }], // negative
 				paidInPerson: true,
 			}),
 		).rejects.toThrow(/Set a price/);
 		// Session survives the rejections — the vendor can fix and retry.
 		const session = await t.run((ctx) => ctx.db.get(sessionId));
 		expect(session?.status).toBe("buyer_identified");
+	});
+
+	// RM0 is a real price at the counter (a comped item, a freebie with a
+	// purchase, a warranty redo). A custom line priced at zero makes a FREE
+	// order: no payment is recorded whatever the client sent, so the order
+	// page reads "Free order — nothing to collect" instead of "Paid now · Cash".
+	test("a custom line priced at RM0 creates a free order with no payment recorded", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedCustomVariant(t, USER_A, retailer._id);
+		const sessionId = await boundSession(t, retailer._id);
+
+		const { orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1, unitPrice: 0 }],
+				paidInPerson: true,
+				paymentMethod: "cash",
+			});
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.items[0]?.price).toBe(0);
+		expect(order?.total).toBe(0);
+		expect(order?.status).toBe("confirmed");
+		expect(order?.paymentStatus).toBe("unpaid");
+		expect(order?.paymentMethod).toBeUndefined();
+		expect(order?.paymentReceivedAt).toBeUndefined();
+		const events = await t.run((ctx) =>
+			ctx.db
+				.query("orderEvents")
+				.withIndex("by_order", (q) => q.eq("orderId", orderId))
+				.collect(),
+		);
+		expect(events.some((e) => e.note?.startsWith("payment_received"))).toBe(
+			false,
+		);
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.status).toBe("completed");
+	});
+
+	// A free line beside a paid one is still a paid order — the zero only
+	// makes the whole order free when every line is.
+	test("a RM0 line beside a paid line leaves the order paid in person", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const freeId = await seedCustomVariant(t, USER_A, retailer._id);
+		const paidId = await seedVariant(t, USER_A, retailer._id, { price: 1500 });
+		const sessionId = await boundSession(t, retailer._id);
+
+		const { orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [
+					{ variantId: freeId, quantity: 1, unitPrice: 0 },
+					{ variantId: paidId, quantity: 1 },
+				],
+				paidInPerson: true,
+				paymentMethod: "cash",
+			});
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.total).toBe(1500);
+		expect(order?.paymentStatus).toBe("received");
+		expect(order?.paymentMethod).toBe("cash");
 	});
 
 	// Seller price adjustment on a STANDARD line (Wagyu Walid's ask): the counter
@@ -517,6 +581,30 @@ describe("counterCheckout — createOrderFromSession", () => {
 		expect(order?.items[0]?.price).toBe(1200);
 	});
 
+	// Comping a catalog item: the seller adjusts a standard line down to RM0
+	// (free with purchase, a goodwill replacement). The snapshot keeps the
+	// catalog price struck through on the review, same as any adjustment.
+	test("a standard line adjusted to RM0 is charged nothing", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, {
+			price: 1200,
+		});
+		const sessionId = await boundSession(t, retailer._id);
+
+		const { orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 2, unitPrice: 0 }],
+				paidInPerson: true,
+			});
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.items[0]?.price).toBe(0);
+		expect(order?.total).toBe(0);
+		expect(order?.paymentStatus).toBe("unpaid");
+	});
+
 	test("an invalid adjusted price on a standard line is rejected", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
@@ -529,7 +617,7 @@ describe("counterCheckout — createOrderFromSession", () => {
 		await expect(
 			asA.mutation(api.counterCheckout.createOrderFromSession, {
 				sessionId,
-				items: [{ variantId, quantity: 1, unitPrice: 0 }], // zero
+				items: [{ variantId, quantity: 1, unitPrice: -1 }], // negative
 				paidInPerson: true,
 			}),
 		).rejects.toThrow(/Set a price/);

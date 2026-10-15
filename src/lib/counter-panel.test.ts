@@ -20,7 +20,6 @@ describe("showsSellerPaymentControls", () => {
 describe("counterPrimaryAction", () => {
 	const base = {
 		empty: false,
-		unpriced: false,
 		money: "RM 20.00",
 		windowMinutes: 15,
 		buyerName: "Zaki",
@@ -44,7 +43,7 @@ describe("counterPrimaryAction", () => {
 	});
 
 	test("a mixed RSVP cart blocks BOTH modes, naming the line to remove (z8r3fdhh45)", () => {
-		// Unlike `unpriced`, this one is not a send-path nicety: `orders.create`
+		// Unlike `freeLine`, this one is not a send-path nicety: `orders.create`
 		// refuses a mixed order at either door, so an enabled button in counter
 		// mode would be a lie that fails at submit.
 		for (const mode of ["counter", "send"] as const) {
@@ -83,29 +82,33 @@ describe("counterPrimaryAction", () => {
 		expect(a.reason).toBe("Add an item first");
 	});
 
-	test("an unpriced line blocks SEND only — a claim freezes prices at send", () => {
+	test("a free (RM0) line blocks SEND only — a claim link exists to take a payment", () => {
 		const send = counterPrimaryAction({
 			...base,
 			mode: "send",
-			unpriced: true,
+			freeLine: "Bespoke Cake",
 		});
 		expect(send.disabled).toBe(true);
-		expect(send.reason).toMatch(/price for every custom item/i);
-		// The counter path resolves price at create and reviews it in its own
-		// dialog, so it must not be blocked here.
+		expect(send.reason).toMatch(/"Bespoke Cake" is free/i);
+		expect(send.reason).toMatch(/counter/i);
+		// The counter rings a free line up as a free order (or as a RM0 line on
+		// a paid one) and reviews it in its own dialog, so it is never blocked.
 		expect(
-			counterPrimaryAction({ ...base, mode: "counter", unpriced: true })
-				.disabled,
+			counterPrimaryAction({
+				...base,
+				mode: "counter",
+				freeLine: "Bespoke Cake",
+			}).disabled,
 		).toBe(false);
 	});
 
-	test("an event line blocks SEND with the EVENT's reason, outranking 'unpriced'", () => {
+	test("an event line blocks SEND with the EVENT's reason, outranking 'freeLine'", () => {
 		// A free RSVP line is also RM0, so without the ordering this would read
-		// "set a price for every custom item" — misnaming what the seller sees.
+		// "is free — ring it up at the counter" — misnaming what the seller sees.
 		const send = counterPrimaryAction({
 			...base,
 			mode: "send",
-			unpriced: true,
+			freeLine: "BNI Breakfast",
 			eventName: "BNI Breakfast",
 		});
 		expect(send.disabled).toBe(true);
