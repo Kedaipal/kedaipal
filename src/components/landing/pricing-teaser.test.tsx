@@ -86,7 +86,7 @@ describe("PricingTeaser — credits, and Enterprise by conversation", () => {
 	it("carries the taglines, Enterprise's threshold read from the constant", () => {
 		render(<PricingTeaser />);
 		expect(screen.getByText("Take orders on WhatsApp")).toBeTruthy();
-		expect(screen.getByText("Orders and payments")).toBeTruthy();
+		expect(screen.getByText("Orders, payments and promotions")).toBeTruthy();
 		expect(
 			screen.getByText(
 				`Built for ${ENTERPRISE_FROM_ORDERS.toLocaleString("en")}+ orders a month`,
@@ -111,7 +111,12 @@ describe("PricingTeaser — credits, and Enterprise by conversation", () => {
 
 	it("marks Enterprise's unbuilt rows Soon, and its team row unlimited", () => {
 		render(<PricingTeaser />);
-		const outlets = screen.getByText("Multiple outlets").closest("li");
+		// Several pickup points on one stock count already ships (the proof
+		// rail says so) — the Soon row names what is NOT built.
+		const outlets = screen
+			.getByText("Per-outlet stock & reporting")
+			.closest("li");
+		expect(screen.queryByText("Multiple outlets")).toBeNull();
 		const broadcast = screen
 			.getByText("Broadcast to customer list")
 			.closest("li");
@@ -125,9 +130,25 @@ describe("PricingTeaser — credits, and Enterprise by conversation", () => {
 	it("says who's on the team the way /pricing does", () => {
 		render(<PricingTeaser />);
 		expect(screen.getByText("Just you")).toBeTruthy();
-		expect(screen.getByText("You + 2 teammates")).toBeTruthy();
+		expect(
+			screen.getByText("You + 2 teammates — each sees only what you allow"),
+		).toBeTruthy();
 		expect(screen.getByText("Unlimited teammates")).toBeTruthy();
 		expect(text()).not.toMatch(/\b\d users?\b/);
+	});
+
+	it("sells promotions, flash sales and vouchers on Pro only", () => {
+		render(<PricingTeaser />);
+		const row = screen
+			.getByText("Promotions, flash sales & voucher codes")
+			.closest("li");
+		expect(row).toBeTruthy();
+		expect(row?.textContent).not.toContain("Soon");
+		// The line sits in the Pro card — the plan that carries the gate.
+		const proCard = screen.getByText("Pro").closest("div");
+		expect(proCard?.textContent).toContain("Promotions, flash sales");
+		const starterCard = screen.getByText("Starter").closest("div");
+		expect(starterCard?.textContent).not.toContain("Promotions, flash sales");
 	});
 
 	it("switches every price to S$ for Singapore, with no ringgit left", () => {

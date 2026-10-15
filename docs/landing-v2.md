@@ -3,6 +3,10 @@
 Branch `claude/z8r3fdegej-landing-v2` · ClickUp [z8r3fdegej](https://app.clickup.com/t/z8r3fdegej) · dev
 Design: Claude Design project "Delyva Landing Page UI Mockups" → `Landing v2.dc.html`
 (+ the written `Landing Review` page), approved by Arif 12 Sep 2026.
+**Enhancement pass, 15 Oct 2026:** mocks + CSS-only motion studies on the
+[Landing enhancement canvas](https://claude.ai/artifact/HrgVLBtMX1EvHFsnBdsS67)
+(artboards 1–7, motion M1–M4), approved by Arif with his edits. Section order
+unchanged; what moved is below under *October 2026 enhancement pass*.
 
 The live `/` ran fourteen sections, still carried the pre-8-Sep hero copy,
 "14-day trial" in seven keys plus the meta description and JSON-LD, a hardcoded
@@ -19,7 +23,8 @@ positioning, with one new section.
 | Acted-out mocks' clock | [`src/hooks/useBeatLoop.ts`](../src/hooks/useBeatLoop.ts) (hero stage, dispatch card, payment handshake) |
 | FAQ ↔ JSON-LD mirror | [`src/lib/landing-faq.ts`](../src/lib/landing-faq.ts), `FAQ_MESSAGES` in [`faq.tsx`](../src/components/landing/faq.tsx) |
 | Copy (en / ms / zh) | `messages/*.json` — `hero_*`, `delivery_*`, `faq_q_13`, `nav_*`, the wave-2 pricing strings |
-| Tests | `couriers.test.ts`, `landing-faq.test.ts`, `useBeatLoop.test.tsx`, `delivery.test.tsx`, `hero-stage.test.tsx`, the `landing-redesign.test.ts` "cut sections stay cut" guard |
+| Payment handshake mock | [`payment-handshake.tsx`](../src/components/landing/payment-handshake.tsx) |
+| Tests | `couriers.test.ts`, `landing-faq.test.ts`, `useBeatLoop.test.tsx`, `delivery.test.tsx`, `hero-stage.test.tsx`, `payment-handshake.test.tsx`, the `landing-redesign.test.ts` "cut sections stay cut" + "nothing is sent after the confirmation" guards |
 
 ## Section order
 
@@ -53,23 +58,29 @@ the animation takes half the viewport"); the guarantee still rides the pricing
 teaser and the closing CTA, where a visitor is deciding.
 
 **The stage** (`hero-stage.tsx`) is a navy 16:9 frame that acts the order out
-twice, in six beats (~9 s, then a short fade and it loops):
+twice, in six story beats (~11 s, then a short fade and it loops):
 
 | Beat | WhatsApp alone (left) | Kedaipal (right) |
 |---|---|---|
 | 0 | Aina's order is the newest chat; 12 unread | inbox at rest, two settled orders |
 | 1 | a school group lands on top; 27 unread | the order **hands across** — a chip arcs from the chat into the inbox, the card slides in, *Pending*, toast "New order from Aina · RM 181" |
 | 2 | a supplier chat lands; Aina's row sinks and dims; 43 unread | *Buyer marked paid*, toast "Aina tapped I've paid" |
-| 3 | "Missed · RM 181" stamp slams on her row; 61 unread | *Confirmed · Paid*, toast "Payment confirmed · receipt sent" |
-| 4 | — | *Shipped · J&T* with the truck, toast "Tracking number sent on WhatsApp" |
-| 5 | fade | fade |
+| 3 | "Missed · RM 181" stamp slams on her row; 61 unread | *Confirmed · Paid*, toast "Payment confirmed · receipt on her order page" |
+| 4 | — | *Shipped · J&T* with the truck, toast "Tracking number on her order page" |
+| 5 | — | **Mira's flash-sale order** (ORD-0183, RM 96) lands ABOVE Aina's with a "Flash sale −20%" source tag, "New · 1" flips to "New · 2", toast "Flash sale · 14 of 30 sold · ends in 1h 52m" |
+| 6 | fade | fade |
 
-The chat list has a fixed height, so each arrival pushes the bottom of the
-inbox out of the frame — that is the burying. Statuses use the dashboard's own
-`status-badge.tsx` colours over `bottom-nav.tsx` tabs; the live card's slot
-opens from `0fr` to `1fr` so the settled rows slide down rather than jump.
+Beat 5 is the page's one sentence about promotions, flash sales and vouchers,
+acted rather than listed (Oct 2026). The toast is anchored above the tab bar
+and the list clips under it, so as cards land on top the settled rows at the
+bottom fall out of view — a real inbox. Statuses use the dashboard's own
+`status-badge.tsx` colours over `bottom-nav.tsx` tabs; each live card's slot
+opens from `0fr` to `1fr` so the rows below slide down rather than jump.
 RM 181 is the best seller's real average ticket (COMPANY_STATE, 8 Sep): one
-missed order costs more than the subscription.
+missed order costs more than the subscription. The toasts never say a receipt
+or tracking number was *sent*: nothing is, after the confirmation
+(`one-message-per-order.md`), and `landing-redesign.test.ts` fails any
+`hero_*`/`handshake_*` key that says so.
 
 Decisions:
 
@@ -82,9 +93,15 @@ Decisions:
 - **Container-query units.** Every size inside the stage is `em` off a root
   font-size set in `cqw`, so the composition scales with the stage instead of
   overflowing it at `md` — the phone sits fully inside the frame at 390 and
-  1280 (verified by screenshot). Below `md` the stage is 3:4 and shows the
-  Kedaipal inbox only, at ~2.5× the desktop scale, with the mint "After" pill
-  centred above the phone; the "Before" card is desktop-only.
+  1280 (verified by screenshot). On desktop the Before card and the phone
+  stand at ONE height on the stage floor, a fixed gap between them, each pill
+  label centred directly above its card (artboard 1). Below `md` the stage is
+  3:4 and the page's argument survives: a compact **Before strip** (the
+  "Before · WhatsApp alone" pill, the unread badge counting 12 → 27 → 43 → 61
+  with a scale bump per tick, Aina's row dimming, the "Missed · RM 181" stamp
+  with one red pulse) sits above the mint "After" pill and the phone, which
+  takes the stage's remaining height and runs off its bottom edge (artboard 2
+  / M2). The chat list and the hand-off chip stay desktop-only.
 - **Solid pills, not captions.** The first cut's labels were faint text on the
   navy ground behind the cards; they are white/mint pills on top now.
 - **The marquee stays** under the stage as the bridge into the demo, re-cut to
@@ -126,6 +143,16 @@ Delyva's label for Line Clear's FreshBox lane**, whose own FreshBox lockup is
 the mark. **Qxpress became TracX Logis in Nov 2024**, so the hidden SG row
 carries the new name. Marks are third-party trademarks used to state a fact
 ("you can book X"), never to imply endorsement.
+
+**The dispatch card's first beat is a state, not a gap** (Oct 2026, artboard 3
+/ M3): three shimmering skeleton rows (`animate-kp-shimmer`) hold the list's
+height — one row for SG, which asks one rider — the label reads "Asking 20+
+couriers…" ("Asking Lalamove for a quote…" where no parcel lane is live) and
+the book button is a disabled grey "Getting quotes…" with a spinner. Then the
+quotes stagger in, the cheapest highlights, and the button walks **Book →
+Booked** (tick scales in) **→ Shipped** (truck slides in). The button never
+names a courier before a quote exists; `delivery.test.tsx` pins the asking
+beat and the four button states. Reduced motion shows the shipped frame.
 
 **Catalogue:** grid on `md+`, one auto-scrolling rail below it (seventeen tiles
 two-up ran 1,300 px on a phone in the design review); a region with fewer than
@@ -200,7 +227,100 @@ Tests wrap the section in `LandingRegionProvider`.
   `trackSignupCta` placements: `hero`, `nav`, `nav-mobile`,
   `pricing-teaser-<tier>`, `final-cta`; `hero-secondary` retired with the link.
 
+## October 2026 enhancement pass
+
+Arif's 15 Oct review against everything shipped since mid-September (credits,
+the pause plan, team members, events, promotions, flash sales, vouchers, the
+store directory, Deliveries, HitPay as the one way to pay): the page only
+argued "lose fewer orders", two animated mocks opened on a blank beat, the
+before/after hero was desktop-only, and the handshake section still described
+messages deleted on 4 Aug 2026. Everything below was mocked on the
+[enhancement canvas](https://claude.ai/artifact/HrgVLBtMX1EvHFsnBdsS67) first.
+
+### The handshake section acts out the real flow
+
+The live section acted out a chat bubble ("Dah transfer ya kak"), a seller
+card and a "✅ Payment received" WhatsApp with a receipt link — the pre-August
+story. Since `86eyd63r8` the buyer is never messaged after checkout: they pay
+from **How to pay** on their `/track` order page, tap **I've paid**, attach the
+mandatory screenshot (`z8r3fdnpxf`) and submit; the seller's order flips to an
+amber **Payment claimed** card with the screenshot and reference (plus a
+WhatsApp to the SELLER on Pro, `86eyhw9zy`), the seller taps **Mark payment
+received**, and both sides flip to green — the buyer's page live, receipt PDF
+on it, no WhatsApp sent.
+
+`payment-handshake.tsx` is now that, as two panes (artboard 4 / M4): the
+buyer's phone beside the seller's order card, on `useBeatLoop` with CSS-only
+beats like the hero stage (the framer `AnimatePresence` stack is gone):
+
+| Beat | ms | Buyer · their order page | Seller · the order in Kedaipal |
+|---|---|---|---|
+| 0 | 1200 | **How to pay** — Maybank + Copy, DuitNow QR + Save QR, reference hint, mint **I've paid** | **Payment · Unpaid**, "Waiting for the buyer…", *Pending* |
+| 1 | 800 | tap (press + ring); the sheet slides up, screenshot field first, submit held with its reason | — |
+| 2 | 1200 | the screenshot lands (thumbnail, Replace), **Submit** goes live | — |
+| 3 | 1800 | tap; the sheet drops; **Waiting for Kek Sayang to confirm** · "This page updates by itself" | amber **Payment claimed** (breathing) with the screenshot, reference + Copy, method, "Check your bank app"; the Pro WhatsApp alert drops in: "Aina says they've paid · ORD-0042 · RM 76.00" |
+| 4 | 600 | — | tap on **Mark payment received** (press + ring); the alert lifts |
+| 5 | 1900 | **✓ Payment received · RM 76.00**, **Download receipt (PDF)**, Status: Confirmed | **✓ Payment received · auto-confirmed**, the customer's proof, "Receipt PDF generated · on the buyer's order page and in your exports", *Confirmed*, and the caption **"No WhatsApp sent to Aina. Her order page flipped by itself — one message per order."** |
+| 6 | 500 | fade | fade |
+
+The copy changed with it: `handshake_body_2` ("…their page flips to paid with
+the receipt on it — nothing to send") and `handshake_point_3` (receipt and
+invoice PDFs appear on the buyer's order page and in your exports); the
+heading stays. The seven `handshake_chat_*`/`handshake_card_*` keys are
+retired and pinned gone. Layout: side by side from a 30rem-wide column
+(`@container`, em = a clamped slice of the width), stacked below it — a 390
+phone can't hold both at a legible size; the mock column takes the wider half
+of the section grid. Reduced motion shows beat 5 as a still; beat 0 is a
+state, so the frame is never blank.
+
+### Pricing teaser, FAQ, proof
+
+- **Pro** gains "Promotions, flash sales & voucher codes" right under online
+  payments (Pro-gated: `convex/vouchers.ts`, `promo-price.md`), its tagline
+  becomes "Orders, payments and promotions", and the team line reads "You + 2
+  teammates — each sees only what you allow" (the per-area grants, said where
+  the seats are bought; the key is shared with `/pricing`). Enterprise's
+  "Multiple outlets — Soon" is "Per-outlet stock & reporting — Soon": several
+  pickup points sharing one stock count already ships (the proof rail says
+  so), and the row now names what doesn't.
+- **FAQ**: `faq_q_9/a_9` rewritten around the pause plan (RM 19 / S$9 a month,
+  everything kept, storefront says "on a break", resume in one tap — the price
+  is spelled in because FAQ answers render param-less for the FAQPage mirror,
+  and `landing-faq.test.ts` pins it to `HOLD_MONTHLY_PRICES` in every locale,
+  the way `faq_a_8` is pinned to the trial constants). Three new questions:
+  promotions/flash sales/vouchers (14), "Can my helper use it without seeing
+  my bank details?" (15), "I'm in Singapore, or my buyers are overseas" (16).
+  Primary order by the file's argument: setup → payments → **sell more (14)**
+  → couriers → the fit-my-shop questions (stall, custom-made, **helper (15)**,
+  **Singapore (16)**) → data → who; ten primary (all in the JSON-LD), six
+  behind "See all", the pause question first among them.
+- **Real sellers**: the "10+ paying sellers" chip and its two keys are gone
+  from `/` and the `/pricing` band (a hand-typed number nothing kept true;
+  the band leads with "Running on Kedaipal today." instead). Beside "Browse
+  their stores" a card states the directory as a benefit: every store is
+  listed free on kedaipal.com/stores, we feature shops in showcases above the
+  list, nothing to sign up for, switch it off in Settings → Store. The
+  unsourced "Time to first 5: 20 days" stat is replaced by one the page can
+  stand behind: "Meta verification · Not needed".
+- **Small fixes**: `SEO_TITLE` names Malaysia & Singapore; the JSON-LD
+  `AggregateOffer.offerCount` is derived from `PLAN_MONTHLY_PRICES` (2 listed
+  tiers, not 3 — Enterprise has no public price); the brand marks inside the
+  drifting marquees (payment wall, courier rail) load `eager` (a new
+  `AppImage` prop: no lazy attribute, normal priority — a lazy mark only
+  started loading as its pill entered the viewport, so pills drifted in empty).
+
+### Not done here
+
+- The hand-off chip's text stays "ORD-0182 · Aina · RM 181.00" (M1 drew
+  "RM 181 → order"); the arc itself already shipped in v2.
+- MS/ZH copy for every new and changed key is drafted, not reviewed — Arif
+  reads it before release.
+
 ## Verified
+
+Enhancement pass (15 Oct 2026): rendered signed-out at 390 and 1280 with the
+Playwright MCP (the in-app pane screenshots white when hidden), light + dark,
+reduced motion; typecheck, explicit-path lint, full vitest.
 
 Preview at 390 / 768 / 1280 (light + dark, reduced motion): eight sections and
 nothing else; the stage inside the first viewport at 1280 with the phone fully

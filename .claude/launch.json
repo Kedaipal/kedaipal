@@ -198,6 +198,32 @@
       ],
       "port": 3240,
       "autoPort": false
+    },
+    {
+      "name": "web-free-line-wt",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "exec",
+        "vite",
+        "dev",
+        "--port",
+        "3250"
+      ],
+      "port": 3250,
+      "autoPort": false
+    },
+    {
+      "name": "web-landing-oct-wt",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "exec",
+        "vite",
+        "dev",
+        "--port",
+        "3160"
+      ],
+      "port": 3160,
+      "autoPort": false
     }
   ]
 }

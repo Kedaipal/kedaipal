@@ -8,7 +8,6 @@ import {
 	BadgeCheck,
 	Banknote,
 	Check,
-	CheckCircle2,
 	ChevronDown,
 	ChevronRight,
 	Clock,
@@ -74,10 +73,10 @@ import {
 import { formatEventMoment } from "../../convex/lib/productEvent";
 import { ClaimsPanel } from "../components/claim/send-claim";
 import { WaitingOnBuyerScreen } from "../components/claim/waiting-on-buyer";
+import { DoneScreen } from "../components/counter/done-screen";
 import { ManualBindDialog } from "../components/counter/manual-bind-dialog";
 import { BRAND_GLYPHS } from "../components/dashboard/brand-icons";
 import { BuyerQuestionsFields } from "../components/order/buyer-questions-fields";
-import { OrderDocumentActions } from "../components/order/order-document-actions";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
@@ -114,6 +113,7 @@ import {
 	counterPrimaryAction,
 	showsSellerPaymentControls,
 } from "../lib/counter-panel";
+import { centsToRm, rmToCents } from "../lib/counter-price";
 import { newWalkInSince, walkInSessionIds } from "../lib/counter-scan";
 import {
 	canAddToCounterCart,
@@ -146,6 +146,9 @@ type CreatedOrder = {
 	shortId: string;
 	orderId: Id<"orders">;
 	paidInPerson: boolean;
+	/** Born completed — handed over at the counter (the server's answer, so
+	 * the Done screen's heading is right before its order query resolves). */
+	completed: boolean;
 	/** The order is an RSVP (`z8r3fdff9u`) — the done screen must not offer
 	 * "Mark as completed": the guest attends LATER; the RSVP completes at the
 	 * event ("Checked In"), not at the counter. */
@@ -285,9 +288,10 @@ function ActiveSession({
 	if (created || session.status === "completed")
 		return (
 			<DoneScreen
-				shortId={created?.shortId}
+				shortId={created?.shortId ?? session.orderShortId}
 				orderId={created?.orderId ?? session.orderId}
 				paidInPerson={created?.paidInPerson ?? false}
+				completed={created?.completed}
 				eventRsvp={created?.eventRsvp}
 				free={created?.free}
 				buyerName={session.displayName}
@@ -812,150 +816,6 @@ function ExpiredScreen({ onBackToList }: { onBackToList: () => void }) {
 	);
 }
 
-function DoneScreen({
-	shortId,
-	orderId,
-	paidInPerson,
-	eventRsvp,
-	free,
-	buyerName,
-	anonymous,
-	onBackToList,
-}: {
-	shortId: string | undefined;
-	orderId: Id<"orders"> | undefined;
-	paidInPerson: boolean;
-	/** RSVP — completion happens at the event, so the one-tap close is hidden. */
-	eventRsvp?: boolean;
-	/** Free order — the WhatsApp said "no payment needed", not "how to pay". */
-	free?: boolean;
-	buyerName: string | undefined;
-	// Anonymous cash sale — no buyer to notify (86ey8vqp6), so not even the one
-	// confirmation goes out and the document below is their only copy.
-	anonymous?: boolean;
-	onBackToList: () => void;
-}) {
-	const updateStatus = useMutation(api.orders.updateStatus);
-	const [completed, setCompleted] = useState(false);
-	const [completing, setCompleting] = useState(false);
-
-	// Offer one-tap completion only for a paid-in-person sale — they've paid and
-	// taken the item, so the seller can close it out here instead of clicking
-	// through the status pipeline. Optional, not automatic: a paid deposit on an
-	// item that isn't ready yet is left as a normal confirmed order.
-	const canComplete = paidInPerson && !eventRsvp && !!orderId && !completed;
-
-	// Say exactly what left the building. A counter order sends the buyer ONE
-	// WhatsApp (86eyd63r8) — the confirmation, carrying the link to their order
-	// page — and an anonymous cash sale sends nothing at all. The receipt/invoice
-	// PDF is never messaged; it's handed over below.
-	const sentSummary = anonymous
-		? "is confirmed. Cash sale with no contact, so nothing was sent."
-		: paidInPerson
-			? "is confirmed. We sent the buyer one WhatsApp with a link to their order."
-			: free
-				? "is confirmed. We sent the buyer one WhatsApp with a link to their order — nothing to pay."
-				: "is confirmed. We sent the buyer one WhatsApp with how to pay and a link to their order.";
-
-	async function markCompleted() {
-		if (!orderId) return;
-		setCompleting(true);
-		try {
-			await updateStatus({ orderId, status: "delivered" });
-			setCompleted(true);
-			toast.success("Order marked as completed.");
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setCompleting(false);
-		}
-	}
-
-	return (
-		<div className="mx-auto flex w-full max-w-2xl flex-col gap-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-5 shadow-sm sm:p-6">
-			<div className="flex items-start gap-4">
-				<span className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-600 text-white">
-					<CheckCircle2 className="size-7" />
-				</span>
-				<div className="min-w-0">
-					<p className="text-xs font-semibold uppercase tracking-widest text-emerald-700">
-						Checkout saved
-					</p>
-					<h2 className="mt-1 text-2xl font-bold text-emerald-950">
-						{completed ? "Order completed" : "Order created"}
-					</h2>
-					<p className="mt-1 text-sm text-emerald-800">
-						{shortId ? (
-							<>
-								Order <span className="font-mono font-semibold">{shortId}</span>{" "}
-								{completed ? "is marked completed." : sentSummary}
-							</>
-						) : completed ? (
-							"The order is marked completed."
-						) : anonymous ? (
-							"The order is confirmed — a cash sale with no contact, so nothing was sent."
-						) : (
-							// Resumed a completed session: we don't have the created order's
-							// paid state here, so stay on what's true either way.
-							"The order is confirmed. We sent the buyer one WhatsApp with a link to their order."
-						)}
-					</p>
-				</div>
-			</div>
-			{shortId ? (
-				<div className="rounded-xl border border-emerald-200 bg-white/70 p-4">
-					<p className="text-sm font-semibold text-emerald-950">
-						{paidInPerson ? "Receipt" : "Invoice"}
-					</p>
-					<OrderDocumentActions
-						shortId={shortId}
-						paid={paidInPerson}
-						buyerName={buyerName}
-						hasBuyer={!anonymous}
-						className="mt-3"
-					/>
-				</div>
-			) : null}
-			<div className="grid gap-2 sm:grid-cols-2">
-				{canComplete ? (
-					<Button
-						onClick={markCompleted}
-						isLoading={completing}
-						disabled={completing}
-						className="h-11 bg-emerald-600 text-white hover:bg-emerald-700 sm:col-span-2"
-					>
-						{completing ? "Completing…" : "Mark as completed"}
-					</Button>
-				) : null}
-				{completed ? (
-					<p className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-white/70 px-3 py-2 text-sm font-medium text-emerald-700 sm:col-span-2">
-						<CheckCircle2 className="size-4" />
-						Marked completed
-					</p>
-				) : null}
-				<Button
-					onClick={onBackToList}
-					variant={canComplete ? "outline" : "default"}
-					className="h-11"
-				>
-					Back to checkouts
-				</Button>
-				{shortId ? (
-					<Button asChild variant="outline" className="h-11">
-						<Link to="/app/orders/$shortId" params={{ shortId }}>
-							View order
-						</Link>
-					</Button>
-				) : orderId ? (
-					<Button asChild variant="outline" className="h-11">
-						<Link to="/app/orders">Go to orders</Link>
-					</Button>
-				) : null}
-			</div>
-		</div>
-	);
-}
-
 // ---------------------------------------------------------------------------
 // Build order (buyer bound) — catalog search → cart → pay → create
 // ---------------------------------------------------------------------------
@@ -1054,17 +914,6 @@ type SessionDraft = {
 	 * prices above, re-resolved at whichever door the session goes through. */
 	voucherCode?: string;
 };
-
-/** "2500" cents → "25.00" for the custom-price input. */
-function centsToRm(cents: number): string {
-	return (cents / 100).toFixed(2);
-}
-/** "25" / "25.50" → cents (integer). NaN when blank or not a positive amount. */
-function rmToCents(rm: string): number {
-	const n = Number(rm);
-	if (!Number.isFinite(n) || n <= 0) return Number.NaN;
-	return Math.round(n * 100);
-}
 
 type CounterProduct = FunctionReturnType<
 	typeof api.products.listForCounter
@@ -1227,7 +1076,8 @@ function ProductVariantRows({
 								<div className="min-w-0">
 									<p className="truncate text-sm">{label}</p>
 									<p className="text-xs text-muted-foreground">
-										Custom — set the agreed price
+										Custom — set the agreed price ({formatPrice(0, currency)}{" "}
+										for a free line)
 									</p>
 								</div>
 								{inCart ? (
@@ -1423,6 +1273,7 @@ function BuildOrderScreen({
 		shortId: string;
 		orderId: Id<"orders">;
 		paidInPerson: boolean;
+		completed: boolean;
 		eventRsvp?: boolean;
 		free?: boolean;
 	}) => void;
@@ -1769,7 +1620,7 @@ function BuildOrderScreen({
 			// A FREE order records no payment — the server enforces the same rule,
 			// this just keeps the client's story identical.
 			const effectivePaid = paid && total > 0;
-			const { shortId, orderId } = await createOrder({
+			const { shortId, orderId, completed } = await createOrder({
 				sessionId,
 				items: cartEntries.map(([variantId, l]) => ({
 					variantId: variantId as Id<"productVariants">,
@@ -1791,6 +1642,7 @@ function BuildOrderScreen({
 				shortId,
 				orderId,
 				paidInPerson: effectivePaid,
+				completed,
 				eventRsvp: cartEvent !== undefined || undefined,
 				free: total <= 0 || undefined,
 			});
@@ -2564,12 +2416,18 @@ function BuildOrderScreen({
 							const action = counterPrimaryAction({
 								mode: payMode,
 								empty: cartEntries.length === 0,
-								// A claim freezes prices at send, so an unpriced line
-								// would lock a zero.
-								unpriced: cartEntries.some(([, l]) => l.price <= 0),
+								// A claim link takes a payment and its door refuses a RM0
+								// line; the counter rings a free line up as a free order.
+								freeLine: (() => {
+									const l = cartEntries.find(([, l]) => l.price === 0)?.[1];
+									if (l === undefined) return undefined;
+									// The LINE's name, not the product's — "Cempedak" names
+									// nothing when three Cempedak lines sit in the cart.
+									return l.label ? `${l.name} · ${l.label}` : l.name;
+								})(),
 								// Blocks SEND with the event's own words (a claim lets the
-								// buyer pick a date and holds no seat) — outranks `unpriced`,
-								// or a free RSVP line reads as an unpriced custom item.
+								// buyer pick a date and holds no seat) — outranks `freeLine`,
+								// or a free RSVP line reads as a comped custom item.
 								eventName: cartEvent?.name,
 								// Refuses a mixed cart in BOTH modes (`z8r3fdhh45`) —
 								// `orders.create` rejects it at either door.
@@ -2926,9 +2784,18 @@ function CartLineEditDialog({
 								Agreed in person — no catalog price.
 							</span>
 						)}
+						{/* RM0 is a real price here (a comped item, a freebie with a
+						    purchase) — said where the seller is typing, so "can I make
+						    this free?" is answered before they try. */}
 						{!validPrice ? (
 							<span className="mt-1 block text-xs text-destructive">
-								Enter a price above {formatPrice(0, currency)} to save.
+								Enter a price to save — {formatPrice(0, currency)} makes the
+								line free.
+							</span>
+						) : cents === 0 ? (
+							<span className="mt-1 block text-xs text-muted-foreground">
+								Free line — nothing to collect for it. An order of only free
+								lines is a free order.
 							</span>
 						) : null}
 					</label>

@@ -361,8 +361,8 @@ async function postMessage(
 	}
 }
 
-export async function sendText(toPhone: string, body: string): Promise<void> {
-	await postMessage({
+export async function sendText(toPhone: string, body: string): Promise<string | undefined> {
+	return postMessage({
 		messaging_product: "whatsapp",
 		recipient_type: "individual",
 		to: toPhone,
@@ -375,8 +375,8 @@ export async function sendImage(
 	toPhone: string,
 	imageLink: string,
 	caption?: string,
-): Promise<void> {
-	await postMessage({
+): Promise<string | undefined> {
+	return postMessage({
 		messaging_product: "whatsapp",
 		recipient_type: "individual",
 		to: toPhone,
@@ -393,8 +393,8 @@ export async function sendDocument(
 	documentLink: string,
 	filename?: string,
 	caption?: string,
-): Promise<void> {
-	await postMessage({
+): Promise<string | undefined> {
+	return postMessage({
 		messaging_product: "whatsapp",
 		recipient_type: "individual",
 		to: toPhone,
@@ -412,8 +412,8 @@ export async function sendCtaUrlButton(
 	body: string,
 	buttonText: string,
 	url: string,
-): Promise<void> {
-	await postMessage({
+): Promise<string | undefined> {
+	return postMessage({
 		messaging_product: "whatsapp",
 		recipient_type: "individual",
 		to: toPhone,
@@ -435,8 +435,8 @@ export async function sendCtaUrlWithImage(
 	body: string,
 	buttonText: string,
 	url: string,
-): Promise<void> {
-	await postMessage({
+): Promise<string | undefined> {
+	return postMessage({
 		messaging_product: "whatsapp",
 		recipient_type: "individual",
 		to: toPhone,
