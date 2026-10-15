@@ -1,4 +1,5 @@
 import { convexQuery } from "@convex-dev/react-query";
+import { useStore } from "@tanstack/react-form";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
@@ -22,8 +23,10 @@ import {
 	type ReactNode,
 	useEffect,
 	useLayoutEffect,
+	useRef,
 	useState,
 } from "react";
+import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type {
@@ -52,6 +55,7 @@ import {
 	MAX_VARIANTS_PER_PRODUCT,
 	overCapMessage,
 } from "../../../convex/lib/variant";
+import { usePhotoAutosave } from "../../hooks/usePhotoAutosave";
 import { bookingSpanCounted, bookingSpanNoun } from "../../lib/booking-dates";
 import {
 	type FixHighlight,
@@ -65,6 +69,7 @@ import {
 	parsePriceInput,
 } from "../../lib/format";
 import { asPackageUnit } from "../../lib/package-unit";
+import { isDraftDirty, type UnsavedState } from "../../lib/product-form-dirty";
 import { PRODUCT_WEIGHT_MAX } from "../../lib/product-import";
 import {
 	describeProduct,
@@ -77,6 +82,7 @@ import {
 	type ProductSpotlightKey,
 	SPOTLIGHT_ANCHOR,
 } from "../../lib/spotlight";
+import { cn } from "../../lib/utils";
 import { cartesian, variantLabel } from "../../lib/variant";
 import { CreditLockCta, SaveLockNote } from "../credits/credit-lock-cta";
 import { Button } from "../ui/button";
@@ -123,7 +129,11 @@ import {
 import { submitThenFocusError } from "./focus-error";
 import { useAppForm } from "./form";
 import { PackageDayCounting, type StoreSchedule } from "./package-day-counting";
-import { type ProductImage, ProductImagesField } from "./product-images-field";
+import {
+	MAX_IMAGES,
+	type ProductImage,
+	ProductImagesField,
+} from "./product-images-field";
 import {
 	EMPTY_PROMO_DRAFT,
 	type PromoDraft,
@@ -448,6 +458,26 @@ interface ProductFormProps {
 	 * product) is a no-op — nothing to ring, so nothing rings.
 	 */
 	spotlight?: ProductSpotlightKey;
+	/**
+	 * Saves the product's photos the moment they change — edit mode only
+	 * (z8r3fdtk82), since a product that doesn't exist yet has nowhere to save
+	 * them. Absent, or while `saveLock` is set, photos are part of the draft
+	 * like every other field.
+	 */
+	onImagesAutosave?: (imageStorageIds: string[]) => Promise<void>;
+	/**
+	 * Reports what leaving right now would lose (z8r3fdtk82), so the route can
+	 * guard navigation with `UnsavedChangesGuard`. The form stays
+	 * router-agnostic: blocking a navigation is the route's call.
+	 */
+	onUnsavedChange?: (state: UnsavedState) => void;
+	/**
+	 * The form opens holding work that isn't saved anywhere yet: a wizard
+	 * draft handed to the full form. It counts as unsaved from the first
+	 * render, because the baseline it would be compared against is that same
+	 * draft.
+	 */
+	startsDirty?: boolean;
 }
 
 /** Seed the editor state from existing variants, or a single empty default row. */
@@ -942,6 +972,9 @@ export function ProductForm({
 	initialEditor,
 	spotlight,
 	saveLock,
+	onImagesAutosave,
+	onUnsavedChange,
+	startsDirty = false,
 }: ProductFormProps) {
 	// Editing an existing product vs creating a new one — the edit page leads
 	// with the summary strip; create keeps the readiness checklist. The wizard
@@ -1266,15 +1299,13 @@ export function ProductForm({
 		},
 	});
 
-	// Keep the draft getter fresh after every commit — the route reads it
-	// lazily on the "switch back to guided setup" / Preview click, never during
-	// render. Assigned in a layout effect (not the render body) so a discarded
-	// concurrent render can't publish its state through the ref.
-	useLayoutEffect(() => {
-		if (!draftRef) return;
-		draftRef.current = () => ({
-			name: form.state.values.name,
-			description: form.state.values.description ?? "",
+	// Subscribed (not read off `form.state`) so the dirty check below re-runs
+	// on every keystroke in the name or description.
+	const formValues = useStore(form.store, (s) => s.values);
+	function currentDraft(): ProductFormDraft {
+		return {
+			name: formValues.name,
+			description: formValues.description ?? "",
 			hidden,
 			kind,
 			capacityPerNight: capacityDraft,
@@ -1295,7 +1326,104 @@ export function ProductForm({
 			event: eventDraft,
 			promoDraft,
 			buyerQuestions: questionsDraft,
+		};
+	}
+	const draft = currentDraft();
+
+	// "Unchanged" = the draft the form opened with (z8r3fdtk82). Lazily
+	// seeded on the first render, so it holds exactly the state the inputs
+	// started from. A photo autosave moves only its images forward, so the
+	// photos stop counting as unsaved and every other field still does.
+	const baselineRef = useRef<ProductFormDraft | null>(null);
+	if (baselineRef.current === null) baselineRef.current = draft;
+	const dirty = startsDirty || isDraftDirty(baselineRef.current, draft);
+
+	// Photos save themselves on an existing product, unless saving is locked
+	// right now, in which case they wait in the draft like everything else.
+	const autosaveOn = onImagesAutosave !== undefined && saveLock === undefined;
+	const photoAutosave = usePhotoAutosave({
+		save: (ids) => onImagesAutosave?.(ids) ?? Promise.resolve(),
+		onSaved: (saved) => {
+			if (baselineRef.current)
+				baselineRef.current = { ...baselineRef.current, images: saved };
+		},
+	});
+	// The photo list as of the latest change, for an Undo that fires later:
+	// it puts back ONE photo into whatever the list is by then, never a stale
+	// snapshot that would also undo everything done since.
+	const imagesRef = useRef(images);
+	imagesRef.current = images;
+	// Each removal's Undo toast, so leaving the page takes them with it: an
+	// Undo from another page would write a list this form no longer shows.
+	const undoToastIds = useRef(new Set<string>());
+	useEffect(() => {
+		const ids = undoToastIds.current;
+		return () => {
+			for (const id of ids) toast.dismiss(id);
+		};
+	}, []);
+
+	function changeImages(next: ProductImage[]) {
+		setServerError(null);
+		const before = imagesRef.current;
+		imagesRef.current = next;
+		setImages(next);
+		if (!autosaveOn) return;
+		photoAutosave.autosave(next);
+		// Removing saves at once too, so each removed photo gets its own way
+		// back. One shared toast meant a second removal replaced the first's
+		// Undo, and that photo could only come back by re-uploading it (PR
+		// #371 review).
+		before.forEach((photo, index) => {
+			if (next.some((i) => i.id === photo.id)) return;
+			const id = `product-photo-removed-${photo.id}`;
+			undoToastIds.current.add(id);
+			toast("Photo removed.", {
+				id,
+				// Undo is the only way back. The 4s default ran out while a
+				// seller was still reaching for it (found in the hands-on test).
+				duration: 10_000,
+				onAutoClose: () => undoToastIds.current.delete(id),
+				onDismiss: () => undoToastIds.current.delete(id),
+				action: {
+					label: "Undo",
+					onClick: () => restorePhoto(photo, index),
+				},
+			});
 		});
+	}
+
+	function restorePhoto(photo: ProductImage, index: number) {
+		const now = imagesRef.current;
+		if (now.some((i) => i.id === photo.id)) return;
+		if (now.length >= MAX_IMAGES) {
+			toast.error(
+				`You already have ${MAX_IMAGES} photos. Remove one to bring this photo back.`,
+			);
+			return;
+		}
+		const next = [...now];
+		// Back where it was, or last if the list has since got shorter.
+		next.splice(Math.min(index, now.length), 0, photo);
+		changeImages(next);
+	}
+
+	const unsaved: UnsavedState = uploading
+		? "uploading"
+		: dirty
+			? "changes"
+			: "none";
+	useEffect(() => {
+		onUnsavedChange?.(unsaved);
+	}, [unsaved, onUnsavedChange]);
+
+	// Keep the draft getter fresh after every commit — the route reads it
+	// lazily on the "switch back to guided setup" / Preview click, never during
+	// render. Assigned in a layout effect (not the render body) so a discarded
+	// concurrent render can't publish its state through the ref.
+	useLayoutEffect(() => {
+		if (!draftRef) return;
+		draftRef.current = () => draft;
 		return () => {
 			draftRef.current = null;
 		};
@@ -1509,16 +1637,18 @@ export function ProductForm({
 				icon={<Camera className="size-5" />}
 				kicker="The product"
 				title="Photos"
-				description="Use the first image as the storefront cover. Extra images help shoppers compare angles, flavours, sizes, or packaging."
+				description={
+					autosaveOn
+						? "Photos save as soon as you add, remove or reorder them, so there's no need to tap Save. The first one is your storefront cover."
+						: "Use the first image as the storefront cover. Extra images help shoppers compare angles, flavours, sizes, or packaging."
+				}
 			>
 				<ProductImagesField
 					images={images}
-					onChange={(next) => {
-						setServerError(null);
-						setImages(next);
-					}}
+					onChange={changeImages}
 					onUploadingChange={setUploading}
 					onError={setServerError}
+					autosaveStatus={autosaveOn ? photoAutosave.status : undefined}
 				/>
 			</ProductStepCard>
 
@@ -2197,28 +2327,50 @@ export function ProductForm({
 					isSubmitting: s.isSubmitting,
 				})}
 			>
-				{({ canSubmit, isSubmitting }) => (
-					<div className="sticky bottom-20 z-10 flex gap-2 lg:static">
-						{stickyAction}
-						<Button
-							type="submit"
-							disabled={
-								!canSubmit ||
-								isSubmitting ||
-								uploading ||
-								saveLock !== undefined
-							}
-							className="h-12 flex-1 shadow-lg shadow-accent/20 lg:shadow-none"
-						>
-							<Save className="size-4" />
-							{isSubmitting
-								? "Saving…"
-								: saveLock
-									? `${submitLabel} — ${saveLock.label}`
-									: submitLabel}
-						</Button>
-					</div>
-				)}
+				{({ canSubmit, isSubmitting }) => {
+					// An existing product with nothing unsaved says so in the button
+					// itself (z8r3fdtk82), rather than offering a save that changes
+					// nothing. It flips back to Save the moment any field moves, and
+					// photos that just autosaved leave it reading "saved".
+					const nothingToSave = isEdit && !dirty && !isSubmitting;
+					return (
+						<div className="sticky bottom-20 z-10 flex gap-2 lg:static">
+							{stickyAction}
+							<Button
+								type="submit"
+								disabled={
+									!canSubmit ||
+									isSubmitting ||
+									uploading ||
+									saveLock !== undefined ||
+									nothingToSave
+								}
+								className={cn(
+									"h-12 flex-1 shadow-lg shadow-accent/20 lg:shadow-none",
+									// The resting state of every edit page, so it is not
+									// drawn as a half-transparent disabled button: on a phone
+									// the bar is sticky, and the form showed through it.
+									nothingToSave &&
+										!saveLock &&
+										"bg-muted text-muted-foreground shadow-none disabled:opacity-100",
+								)}
+							>
+								{nothingToSave && !saveLock ? (
+									<CheckCircle2 className="size-4" />
+								) : (
+									<Save className="size-4" />
+								)}
+								{isSubmitting
+									? "Saving…"
+									: saveLock
+										? `${submitLabel} — ${saveLock.label}`
+										: nothingToSave
+											? "All changes saved"
+											: submitLabel}
+							</Button>
+						</div>
+					);
+				}}
 			</form.Subscribe>
 		</form>
 	);

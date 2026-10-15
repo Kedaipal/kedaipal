@@ -19,6 +19,7 @@ import {
 	overCapMessage,
 } from "../../../convex/lib/variant";
 import { useRevealOnAdd } from "../../hooks/useRevealOnAdd";
+import { takePickedFiles } from "../../lib/file-input";
 import {
 	convexErrorMessage,
 	currencySymbol,
@@ -984,8 +985,8 @@ export function VariantEditor({
 		}
 	}
 
-	async function uploadCustomImage(files: FileList | null) {
-		if (!files || files.length === 0 || !customLine) return;
+	async function uploadCustomImage(files: readonly File[]) {
+		if (files.length === 0 || !customLine) return;
 		const file = files[0];
 		setUploadingCustom(true);
 		try {
@@ -1021,8 +1022,8 @@ export function VariantEditor({
 		}
 	}
 
-	async function uploadRowImage(index: number, files: FileList | null) {
-		if (!files || files.length === 0) return;
+	async function uploadRowImage(index: number, files: readonly File[]) {
+		if (files.length === 0) return;
 		const file = files[0];
 		setUploadingRow(index);
 		try {
@@ -1089,7 +1090,7 @@ export function VariantEditor({
 					type="file"
 					accept={IMAGE_ACCEPT}
 					disabled={uploadingRow !== null}
-					onChange={(e) => void uploadRowImage(i, e.target.files)}
+					onChange={(e) => void uploadRowImage(i, takePickedFiles(e.target))}
 					className="hidden"
 				/>
 			</label>
@@ -1734,7 +1735,7 @@ export function VariantEditor({
 														accept={IMAGE_ACCEPT}
 														disabled={uploadingCustom}
 														onChange={(e) =>
-															void uploadCustomImage(e.target.files)
+															void uploadCustomImage(takePickedFiles(e.target))
 														}
 														className="hidden"
 													/>

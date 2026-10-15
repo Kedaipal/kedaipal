@@ -3,6 +3,7 @@ import { ImagePlus, X } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
+import { takePickedFiles } from "../../lib/file-input";
 import { convexErrorMessage } from "../../lib/format";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
 import { cn } from "../../lib/utils";
@@ -33,8 +34,8 @@ export function VariantImageCell({
 	const generateUploadUrl = useMutation(api.products.generateUploadUrl);
 	const [uploading, setUploading] = useState(false);
 
-	async function handleFile(files: FileList | null) {
-		const file = files?.[0];
+	async function handleFile(files: readonly File[]) {
+		const file = files[0];
 		if (!file) return;
 		setUploading(true);
 		try {
@@ -91,7 +92,7 @@ export function VariantImageCell({
 				type="file"
 				accept={IMAGE_ACCEPT}
 				disabled={uploading}
-				onChange={(e) => void handleFile(e.target.files)}
+				onChange={(e) => void handleFile(takePickedFiles(e.target))}
 				className="hidden"
 				aria-label={`Add ${label}`}
 			/>
