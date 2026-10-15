@@ -354,9 +354,14 @@ which `listStores` and the showcase functions both read.
   "All stores" way back, and a Copy-link button. The loader reads the slug
   (`loaderDeps`) so the page's OG tags carry the showcase's title, tagline
   and cover — the link unfurls as the event in WhatsApp — while the
-  canonical stays the bare `/stores`. A slug that is not live (the event
-  ended, the QR outlived it) lands on the plain page with one line saying
-  so; `parseShowcaseSlugParam` degrades anything else to "no showcase".
+  canonical stays the bare `/stores`. A link to a live showcase in the OTHER
+  region opens it anyway: the showcase's `country` is this visit's region
+  (`resolveShowcaseFocus` — a roaming SG phone at a Malaysian fair must not
+  read "isn't on right now"), derived per visit and never written to the
+  visitor's stored pick, which also sets their pricing currency; picking the
+  other region from the link leaves the showcase. A slug that is not live
+  (the event ended, the QR outlived it) lands on the plain page with one
+  line saying so; `parseShowcaseSlugParam` degrades anything else to "no showcase".
 - **The compact header** (`StoresCompactHeader`): once the hero's chips
   scroll out above (one `IntersectionObserver` on a sentinel,
   `useScrolledPast`), a frosted bar takes over with the logo, a floating

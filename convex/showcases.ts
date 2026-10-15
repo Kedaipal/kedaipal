@@ -13,6 +13,7 @@ import type { OpeningHours } from "./lib/openingHours";
 import { type Country, countryValidator, DEFAULT_COUNTRY } from "./lib/country";
 import {
 	assertValidShowcaseWindow,
+	DEFAULT_SHOWCASE_THEME,
 	isShowcaseLive,
 	SHOWCASE_MEMBER_CAP,
 	SHOWCASE_SCAN_CAP,
@@ -133,61 +134,32 @@ export const listShowcases = query({
 	},
 });
 
+/**
+ * A cover's URL, or undefined. Never throws: the ids are `v.string()` (the
+ * retailers pattern), and one malformed id must cost one missing photo, not
+ * the public read for every buyer on /stores. `update` also refuses a bad id
+ * at the door (`normalizeId`).
+ */
 async function storageUrl(
 	ctx: QueryCtx,
 	storageId: string | undefined,
 ): Promise<string | undefined> {
 	if (!storageId) return undefined;
-	return (await ctx.storage.getUrl(storageId as Id<"_storage">)) ?? undefined;
-}
-
-// ---------------------------------------------------------------------------
-// Seller — "You're featured in …" (Settings → Store → Marketplace listing)
-// ---------------------------------------------------------------------------
-
-export type FeaturedIn = {
-	slug: string;
-	title: string;
-	label?: string;
-	endsAt?: number;
-	startsAt?: number;
-	/** `live` or `scheduled` — ended and draft showcases are not reported. */
-	state: "live" | "scheduled";
-};
-
-/**
- * The published showcases this store is in, for the seller's settings card:
- * the no-hidden-behaviour rule means a seller must be able to see that
- * Kedaipal put them in a showcase, with the label it gave them. Drafts stay
- * private to the admin — a half-built showcase is not a promise.
- */
-export async function featuredIn(
-	ctx: QueryCtx,
-	retailerId: Id<"retailers">,
-	now: number,
-): Promise<FeaturedIn[]> {
-	const rows = await ctx.db
-		.query("marketplaceShowcases")
-		.withIndex("by_sortOrder")
-		.order("asc")
-		.take(SHOWCASE_SCAN_CAP);
-	const out: FeaturedIn[] = [];
-	for (const row of rows) {
-		const state = showcaseState(row, now);
-		if (state !== "live" && state !== "scheduled") continue;
-		const member = row.members.find((m) => m.retailerId === retailerId);
-		if (!member) continue;
-		out.push({
-			slug: row.slug,
-			title: row.title,
-			label: member.label,
-			endsAt: row.endsAt,
-			startsAt: row.startsAt,
-			state,
-		});
+	const id = ctx.db.system.normalizeId("_storage", storageId);
+	if (id === null) return undefined;
+	try {
+		return (await ctx.storage.getUrl(id)) ?? undefined;
+	} catch {
+		return undefined;
 	}
-	return out;
 }
+
+// ---------------------------------------------------------------------------
+// Seller — "You're featured in …" lives in `lib/showcaseFeatured.ts`, so
+// `marketplace.ts` (which serves it) never imports this module back.
+// ---------------------------------------------------------------------------
+
+export type { FeaturedIn } from "./lib/showcaseFeatured";
 
 // ---------------------------------------------------------------------------
 // Admin
@@ -375,7 +347,7 @@ export const create = mutation({
 			slug: await uniqueSlug(ctx, title),
 			title,
 			country: args.country,
-			theme: "campfire",
+			theme: DEFAULT_SHOWCASE_THEME,
 			sortOrder: (last?.sortOrder ?? 0) + 1,
 			members: [],
 			createdAt: now,
@@ -446,6 +418,13 @@ export const update = mutation({
 		}
 		if (patch.coverImageStorageId !== undefined) {
 			const incoming = patch.coverImageStorageId ?? undefined;
+			if (
+				incoming !== undefined &&
+				(ctx.db.system.normalizeId("_storage", incoming) === null ||
+					(await ctx.storage.getUrl(incoming as Id<"_storage">)) === null)
+			) {
+				throw new ConvexError("That cover upload didn't finish — try again");
+			}
 			if (row.coverImageStorageId && row.coverImageStorageId !== incoming) {
 				try {
 					await ctx.storage.delete(row.coverImageStorageId as Id<"_storage">);

@@ -107,6 +107,33 @@ export function showcasesForRegion(
 }
 
 /**
+ * Which region a `/stores` visit shows, and whether a `?showcase=` link is
+ * truly gone. The SHOWCASE's own country is authoritative for its link: a
+ * booth QR at a Malaysian event scanned by an SG phone (roaming SIM, a VPN, an
+ * SG pick from an earlier visit) must open that showcase, not say "that
+ * showcase isn't on right now" over the SG directory — while its WhatsApp
+ * unfurl names the event. The override is for THIS visit only, derived, never
+ * written to the visitor's stored pick (which also sets their currency on the
+ * pricing pages). `missing` is reserved for a slug that matches no live
+ * showcase at all: ended, unpublished, or mistyped.
+ */
+export function resolveShowcaseFocus(
+	showcases: PublicShowcase[] | undefined,
+	focusedSlug: string | undefined,
+	region: Country,
+): { viewRegion: Country; overridden: boolean; missing: boolean } {
+	if (focusedSlug === undefined || showcases === undefined)
+		return { viewRegion: region, overridden: false, missing: false };
+	const live = showcases.find((s) => s.slug === focusedSlug);
+	if (!live) return { viewRegion: region, overridden: false, missing: true };
+	return {
+		viewRegion: live.country,
+		overridden: live.country !== region,
+		missing: false,
+	};
+}
+
+/**
  * Desktop stage: how many tickets stand on the grid before the rest go into
  * the pile. Five tickets + the pile cell fill a 2 × 3 grid exactly; a sixth
  * store on its own would leave the pile cell empty and the grid ragged.

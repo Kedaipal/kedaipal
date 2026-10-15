@@ -15,7 +15,7 @@ import {
 import { isUnclaimed } from "./lib/unclaimedStore";
 import type { OpeningHours } from "./lib/openingHours";
 import { hiddenFromStorefront } from "./lib/productEvent";
-import { type FeaturedIn, featuredIn } from "./showcases";
+import { type FeaturedIn, featuredIn } from "./lib/showcaseFeatured";
 import { loadSubscription } from "./subscriptions";
 
 /**

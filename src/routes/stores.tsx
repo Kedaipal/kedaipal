@@ -33,7 +33,11 @@ import {
 	partitionStores,
 	SEARCH_QUERY_MAX,
 } from "../lib/marketplace";
-import { joinShowcaseMembers, showcasesForRegion } from "../lib/showcase";
+import {
+	joinShowcaseMembers,
+	resolveShowcaseFocus,
+	showcasesForRegion,
+} from "../lib/showcase";
 import { ssrRead } from "../lib/ssr-read";
 
 /**
@@ -165,8 +169,12 @@ const RAIL_CLASS =
 function MarketplacePage() {
 	const cards = useQuery(convexQuery(api.marketplace.listStores, {})).data;
 	const showcases = useQuery(convexQuery(api.showcases.listShowcases, {})).data;
-	const [region, setRegion] = useLandingRegion();
+	const [storedRegion, setStoredRegion] = useLandingRegion();
 	const { q, filter, showcase: focusedSlug } = Route.useSearch();
+	// A `?showcase=` link shows its showcase's region for this visit (see
+	// `resolveShowcaseFocus`); everything below reads `region`.
+	const focus = resolveShowcaseFocus(showcases, focusedSlug, storedRegion);
+	const region = focus.viewRegion;
 	// The compact header takes over once the hero's chips scroll out above.
 	const [heroEndRef, scrolledPast] = useScrolledPast<HTMLDivElement>();
 	const navigate = Route.useNavigate();
@@ -238,12 +246,12 @@ function MarketplacePage() {
 	const focused = focusedSlug
 		? regionShowcases.find((s) => s.showcase.slug === focusedSlug)
 		: undefined;
-	// A focused link to a showcase that is no longer live (ended, unpublished,
-	// or in the other region) lands on the plain page with a one-line why —
-	// a printed QR outlives an event, and the buyer who scans it deserves a
-	// sentence, not a silently ordinary page.
-	const focusedMissing =
-		focusedSlug !== undefined && showcases !== undefined && !focused;
+	// A focused link to a showcase that is no longer live (ended, unpublished)
+	// lands on the plain page with a one-line why — a printed QR outlives an
+	// event, and the buyer who scans it deserves a sentence, not a silently
+	// ordinary page. One in the OTHER region is not missing: the page shows
+	// its region instead (above).
+	const focusedMissing = focus.missing;
 	const [stageShowcase, ...bandShowcases] = focused
 		? regionShowcases.filter((s) => s !== focused)
 		: regionShowcases;
@@ -252,6 +260,13 @@ function MarketplacePage() {
 			search: (prev) => ({ ...prev, showcase: undefined }),
 			replace: true,
 		});
+	}
+	// Picking the other region from a showcase link leaves the showcase: the
+	// showcase holds this visit's region, so otherwise the switch would do
+	// nothing visible.
+	function setRegion(next: Country) {
+		if (focusedSlug !== undefined && next !== region) leaveShowcase();
+		setStoredRegion(next);
 	}
 	// An empty REGION carries its own "be the first" CTA; the band below it
 	// would repeat the identical button, so it steps aside (one ask, once).

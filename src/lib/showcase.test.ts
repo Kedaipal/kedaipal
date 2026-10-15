@@ -8,6 +8,7 @@ import {
 	dateRange,
 	joinShowcaseMembers,
 	PILE_FAN_MAX,
+	resolveShowcaseFocus,
 	SHOWCASE_THEME_CLASS,
 	STAGE_GRID_TICKETS,
 	showcaseDaysLeft,
@@ -213,5 +214,42 @@ describe("showcaseLook — every surface wears the same look", () => {
 		expect(
 			showcaseLook({ theme: "festive", customColor: "#ff00aa" }).style,
 		).toBeUndefined();
+	});
+});
+
+describe("resolveShowcaseFocus — a booth link opens its showcase whatever the visitor's region", () => {
+	const campfestMy = showcase({ slug: "campfest-2026", country: "MY" });
+	test("an SG visitor on a MY showcase link sees MY for this visit — not 'missing'", () => {
+		// The PR review: a roaming SG phone scanned the Campfest QR and read
+		// "That showcase isn't on right now" over the SG directory.
+		expect(resolveShowcaseFocus([campfestMy], "campfest-2026", "SG")).toEqual({
+			viewRegion: "MY",
+			overridden: true,
+			missing: false,
+		});
+	});
+	test("same region: nothing overridden", () => {
+		expect(resolveShowcaseFocus([campfestMy], "campfest-2026", "MY")).toEqual({
+			viewRegion: "MY",
+			overridden: false,
+			missing: false,
+		});
+	});
+	test("missing only when no live showcase has the slug", () => {
+		expect(resolveShowcaseFocus([campfestMy], "raya-2025", "SG")).toEqual({
+			viewRegion: "SG",
+			overridden: false,
+			missing: true,
+		});
+	});
+	test("no link, or showcases still loading: the visitor's own region, never 'missing'", () => {
+		expect(resolveShowcaseFocus([campfestMy], undefined, "SG").viewRegion).toBe(
+			"SG",
+		);
+		expect(resolveShowcaseFocus(undefined, "campfest-2026", "SG")).toEqual({
+			viewRegion: "SG",
+			overridden: false,
+			missing: false,
+		});
 	});
 });

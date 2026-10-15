@@ -369,6 +369,33 @@ describe("a Kedaipal or test store can't be added", () => {
 	});
 });
 
+describe("a bad cover id", () => {
+	test("is refused at the door, and a malformed one already stored costs one photo, not the public read", async () => {
+		const t = setup();
+		const store = await seedListableStore(t, "user_sc_b1", "kedai-b1");
+		const { asAdmin, showcaseId } = await createShowcase(t);
+		await asAdmin.mutation(api.showcases.setMembers, {
+			showcaseId,
+			members: [{ retailerId: store }],
+		});
+		await asAdmin.mutation(api.showcases.publish, { showcaseId });
+		await expect(
+			asAdmin.mutation(api.showcases.update, {
+				showcaseId,
+				coverImageStorageId: "not-a-storage-id",
+			}),
+		).rejects.toThrow(/didn't finish/);
+		// A row written some other way (an old client, a hand edit) still
+		// carries a junk id: every buyer's /stores must keep loading.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(showcaseId, { coverImageStorageId: "junk" });
+		});
+		const [pub] = await t.query(api.showcases.listShowcases);
+		expect(pub.slug).toBe("malaysia-campfest-2026");
+		expect(pub.coverImageUrl).toBeUndefined();
+	});
+});
+
 describe("the custom look", () => {
 	test("custom needs a colour; a bad one is refused; buyers get it only on the custom look", async () => {
 		const t = setup();
