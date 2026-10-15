@@ -196,6 +196,44 @@ describe("Delivery", () => {
 		expect(container.textContent).not.toMatch(/RM\u00a0\d/);
 	});
 
+	it("opens on the asking beat — skeleton rows, a disabled button, no courier named yet", () => {
+		renderDelivery();
+		const button = screen.getByTestId("dispatch-button");
+		expect(button.textContent).toContain(m.delivery_quote_getting());
+		for (const q of mockQuotes("MY")) {
+			expect(button.textContent).not.toContain(q.name);
+		}
+		expect(screen.getByText(m.delivery_quote_asking())).toBeTruthy();
+		expect(screen.queryByText(m.delivery_quote_choose())).toBeNull();
+		const skeleton = screen.getByTestId("dispatch-skeleton");
+		expect(skeleton.className).toContain("opacity-100");
+		expect(skeleton.children).toHaveLength(mockQuotes("MY").length);
+		// SG asks one rider, so it says so and holds one row.
+		switchToSg();
+		expect(screen.getByText(m.delivery_quote_asking_rider())).toBeTruthy();
+		expect(screen.getByTestId("dispatch-skeleton").children).toHaveLength(
+			mockQuotes("SG").length,
+		);
+	});
+
+	it("walks the button Getting quotes → Book → Booked → Shipped", () => {
+		vi.useFakeTimers();
+		inView = true;
+		renderDelivery();
+		const button = () => screen.getByTestId("dispatch-button").textContent;
+		const my = mockQuotes("MY")[0];
+		expect(button()).toContain(m.delivery_quote_getting());
+		stepLoop(1);
+		expect(button()).toContain(`Book ${my.name}`);
+		expect(screen.getByTestId("dispatch-skeleton").className).toContain(
+			"opacity-0",
+		);
+		stepLoop(2);
+		expect(button()).toContain(m.delivery_quote_booked({ courier: my.name }));
+		stepLoop(1);
+		expect(button()).toContain(m.delivery_quote_shipped({ courier: my.name }));
+	});
+
 	it("ships the courier it booked, in both regions — never the hero's J&T", () => {
 		vi.useFakeTimers();
 		inView = true;

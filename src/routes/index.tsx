@@ -23,7 +23,8 @@ import { faqJsonLd } from "../lib/landing-faq";
  * shops all match it and none of them sell from home. Keep this and the
  * Organization description below on the pattern, never on a venue or vertical.
  */
-const SEO_TITLE = "Kedaipal — WhatsApp Order Hub for Malaysian Sellers";
+const SEO_TITLE =
+	"Kedaipal — WhatsApp Order Hub for Sellers in Malaysia & Singapore";
 /**
  * Mirrors the hero: the locked 8 Sep 2026 tagline, then the promise. Kept
  * under 155 chars — Google truncates around 155-160, so the structural
@@ -59,10 +60,13 @@ const DEMO_POSTER_URL = `${SITE_URL}${DEMO_VIDEO.landscape.poster}`;
  * The offer range is DERIVED from `PLAN_MONTHLY_PRICES`, never typed here —
  * a typed literal once outlived a reprice by weeks because nothing tied it to
  * the constant the teaser renders from. The listed tiers only: Enterprise has
- * no public price (T6), so it can't bound a published offer range.
+ * no public price (T6), so it can't bound a published offer range — and so
+ * it can't be counted in it either: `offerCount` is the number of listed
+ * tiers, read from the same constant.
  */
 const OFFER_LOW = String(PLAN_MONTHLY_PRICES.MYR.starter / 100);
 const OFFER_HIGH = String(PLAN_MONTHLY_PRICES.MYR.pro / 100);
+const OFFER_COUNT = String(Object.keys(PLAN_MONTHLY_PRICES.MYR).length);
 
 /**
  * FAQPage entries mirror the visible FAQ by construction: `faqJsonLd` reads
@@ -93,7 +97,7 @@ const jsonLd = [
 			priceCurrency: "MYR",
 			lowPrice: OFFER_LOW,
 			highPrice: OFFER_HIGH,
-			offerCount: "3",
+			offerCount: OFFER_COUNT,
 			description: "Free until your first order, no credit card required",
 		},
 	},
