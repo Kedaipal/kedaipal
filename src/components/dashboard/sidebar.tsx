@@ -331,6 +331,7 @@ export function Sidebar({
 							icon={Sparkles}
 							label="Showcases"
 							collapsed={collapsed}
+							motion={motion}
 						/>
 						<SidebarLink
 							to="/app/admin/waba"
