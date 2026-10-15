@@ -58,8 +58,12 @@ export function OrderStoreEyebrow({
 			to="/$slug"
 			params={{ slug }}
 			aria-label={ms ? `Ke kedai ${storeName}` : `Go to ${storeName}`}
-			// -my/py pair: a 44px hit area without moving the heading under it.
-			className="group -my-3.5 inline-flex max-w-full items-center gap-0.5 self-start rounded-md py-3.5 transition-colors hover:text-accent-emphasis focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+			// Negative-margin/padding pairs: a 44px hit area (16 + 16px text + 12)
+			// without moving anything. Lopsided on purpose — the heading sits
+			// 12px below (`mt-3`), so the bottom pad stops exactly where
+			// `#ORD-XXXX` starts: a buyer long-pressing to copy the order number
+			// must not land on this link. Above is the page's 40px top padding.
+			className="group -mt-4 -mb-3 inline-flex max-w-full items-center gap-0.5 self-start rounded-md pt-4 pb-3 transition-colors hover:text-accent-emphasis focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
 		>
 			<span className={textClass}>{storeName}</span>
 			<ChevronRight

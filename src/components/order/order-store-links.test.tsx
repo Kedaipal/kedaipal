@@ -70,6 +70,18 @@ describe("OrderStoreEyebrow", () => {
 		expect(link.textContent).toBe("Yap");
 	});
 
+	it("its tap area stops where the order number starts — 12px below, never into it", () => {
+		render(<OrderStoreEyebrow storeName="Yap" slug="yap" ms={false} />);
+		const cls = screen.getByRole("link").className;
+		// The heading sits `mt-3` (12px) under the eyebrow: a bottom pad over
+		// 12px would overlap `#ORD-XXXX`, where buyers long-press to copy it.
+		expect(cls).toMatch(/(^|\s)pb-3(\s|$)/);
+		expect(cls).toMatch(/(^|\s)-mb-3(\s|$)/);
+		// 16 + 16px text + 12 = the 44px minimum tap target.
+		expect(cls).toMatch(/(^|\s)pt-4(\s|$)/);
+		expect(cls).toMatch(/(^|\s)-mt-4(\s|$)/);
+	});
+
 	it("names the store in Malay for a Malay store", () => {
 		render(<OrderStoreEyebrow storeName="Yap" slug="yap" ms />);
 		expect(screen.getByRole("link", { name: "Ke kedai Yap" })).toBeTruthy();
