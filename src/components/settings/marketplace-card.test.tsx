@@ -38,7 +38,13 @@ function renderCard(
 			storeName="Kedai Mak Su"
 			unlisted={false}
 			area=""
-			readiness={{ hasVisibleProduct: true, internal: false, hidden: null }}
+			readiness={{
+				hasVisibleProduct: true,
+				internal: false,
+				hidden: null,
+				offline: false,
+				featuredIn: [],
+			}}
 			onSave={onSave}
 			{...props}
 		/>,
@@ -60,7 +66,13 @@ describe("MarketplaceCard — the switch line tells the truth", () => {
 
 	test("ON but no visible product: never claims to be shown, and points at the fix", () => {
 		renderCard({
-			readiness: { hasVisibleProduct: false, internal: false, hidden: null },
+			readiness: {
+				hasVisibleProduct: false,
+				internal: false,
+				hidden: null,
+				offline: false,
+				featuredIn: [],
+			},
 		});
 		expect(screen.queryByText(/Shown in the directory/)).toBeNull();
 		expect(screen.getByText(/not shown yet/)).toBeTruthy();
@@ -79,7 +91,13 @@ describe("MarketplaceCard — the switch line tells the truth", () => {
 	test("opted out: hidden, with the direct-link reassurance, whatever the products", () => {
 		renderCard({
 			unlisted: true,
-			readiness: { hasVisibleProduct: true, internal: false, hidden: null },
+			readiness: {
+				hasVisibleProduct: true,
+				internal: false,
+				hidden: null,
+				offline: false,
+				featuredIn: [],
+			},
 		});
 		expect(
 			screen.getByText(/buyers can still reach your direct link/i),
@@ -95,7 +113,13 @@ describe("MarketplaceCard — the switch line tells the truth", () => {
 describe("MarketplaceCard — internal stores", () => {
 	test("a Kedaipal/test store is told it's never listed, even with the switch on and products live", () => {
 		renderCard({
-			readiness: { hasVisibleProduct: true, internal: true, hidden: null },
+			readiness: {
+				hasVisibleProduct: true,
+				internal: true,
+				hidden: null,
+				offline: false,
+				featuredIn: [],
+			},
 		});
 		expect(screen.getByText(/never listed on the marketplace/)).toBeTruthy();
 		expect(screen.queryByText(/Shown in the directory/)).toBeNull();
@@ -109,6 +133,8 @@ describe("MarketplaceCard — hidden by Kedaipal", () => {
 				hasVisibleProduct: true,
 				internal: false,
 				hidden: { note: "Add real product photos and we'll relist you." },
+				offline: false,
+				featuredIn: [],
 			},
 		});
 		expect(screen.getByText(/Kedaipal has hidden your store/)).toBeTruthy();
@@ -128,7 +154,13 @@ describe("MarketplaceCard — hidden by Kedaipal", () => {
 	test("outranks the seller's own opt-out — flipping the switch would not list it", () => {
 		renderCard({
 			unlisted: true,
-			readiness: { hasVisibleProduct: true, internal: false, hidden: {} },
+			readiness: {
+				hasVisibleProduct: true,
+				internal: false,
+				hidden: {},
+				offline: false,
+				featuredIn: [],
+			},
 		});
 		expect(screen.getByText(/Kedaipal has hidden your store/)).toBeTruthy();
 		expect(
@@ -140,7 +172,13 @@ describe("MarketplaceCard — hidden by Kedaipal", () => {
 	test("the switch's toast says what the switch did, never that the store is shown", async () => {
 		const onSave = renderCard({
 			unlisted: true,
-			readiness: { hasVisibleProduct: true, internal: false, hidden: {} },
+			readiness: {
+				hasVisibleProduct: true,
+				internal: false,
+				hidden: {},
+				offline: false,
+				featuredIn: [],
+			},
 		});
 		fireEvent.click(screen.getByRole("switch", { name: /List my store/ }));
 		expect(onSave).toHaveBeenCalledWith({ marketplaceListed: true });
@@ -184,5 +222,70 @@ describe("MarketplaceCard — area form", () => {
 		renderCard();
 		const link = screen.getByRole("link", { name: /kedaipal\.com\/stores/ });
 		expect(link.getAttribute("href")).toBe("/stores");
+	});
+});
+
+describe("MarketplaceCard — the showcase card never promises a ticket buyers can't see", () => {
+	const campfest = {
+		slug: "malaysia-campfest-2026",
+		title: "Malaysia Campfest 2026",
+		label: "Booth B4",
+		endsAt: Date.UTC(2026, 9, 18, 16),
+		state: "live" as const,
+	};
+	const ready = {
+		hasVisibleProduct: true,
+		internal: false,
+		hidden: null,
+		offline: false,
+		featuredIn: [campfest],
+	};
+
+	test("listed: You're featured, with the booth", () => {
+		renderCard({ readiness: ready });
+		expect(screen.getByText("You're featured")).toBeTruthy();
+		expect(screen.getByText("Booth B4")).toBeTruthy();
+	});
+
+	test("switched off: not 'featured' — says it isn't showing and names the fix", () => {
+		renderCard({ unlisted: true, readiness: ready });
+		expect(screen.queryByText("You're featured")).toBeNull();
+		expect(screen.getByText("In this showcase — not showing")).toBeTruthy();
+		expect(screen.getByText(/Turn on “List my store”/)).toBeTruthy();
+	});
+
+	test("hidden by Kedaipal or no visible product: the reason is named", () => {
+		renderCard({ readiness: { ...ready, hidden: {} } });
+		expect(screen.getByText(/taken your store off \/stores/)).toBeTruthy();
+		cleanup();
+		renderCard({ readiness: { ...ready, hasVisibleProduct: false } });
+		expect(screen.getByText(/Add a product buyers can see/)).toBeTruthy();
+	});
+});
+
+describe("MarketplaceCard — an offline store is never 'shown'", () => {
+	test("Kedaipal took it offline: the switch line and the showcase card both say so", () => {
+		renderCard({
+			readiness: {
+				hasVisibleProduct: true,
+				internal: false,
+				hidden: null,
+				offline: true,
+				featuredIn: [
+					{
+						slug: "campfest",
+						title: "Malaysia Campfest 2026",
+						state: "live",
+					},
+				],
+			},
+		});
+		expect(screen.queryByText(/Shown in the directory/)).toBeNull();
+		expect(
+			screen.getByText(
+				/taken your store offline, so it isn't on the marketplace/,
+			),
+		).toBeTruthy();
+		expect(screen.getByText("In this showcase — not showing")).toBeTruthy();
 	});
 });

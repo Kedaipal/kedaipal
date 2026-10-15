@@ -128,7 +128,7 @@ function FeaturedProductInner({
 			    kp-flash-glow) was cut off top and bottom and only breathed left
 			    and right. The negative margins give the room back to the layout:
 			    the cards still sit 8px under the heading and 4px above the grid. */}
-			<div className="-mx-5 -mt-1 -mb-2 flex snap-x scroll-pl-5 gap-3 overflow-x-auto px-5 pt-3 pb-3 [scrollbar-width:none] lg:-mx-8 lg:scroll-pl-8 lg:px-8 [&::-webkit-scrollbar]:hidden">
+			<div className="-mx-5 -mt-1 -mb-2 flex snap-x scroll-pl-5 gap-3 overflow-x-auto px-5 pt-3 pb-3 scrollbar-none lg:-mx-8 lg:scroll-pl-8 lg:px-8">
 				{featured.map((product, index) => (
 					<div
 						key={product._id}

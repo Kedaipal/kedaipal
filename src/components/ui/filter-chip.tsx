@@ -115,7 +115,7 @@ export function FilterChipRow({
 	return (
 		<div
 			className={cn(
-				"-mx-5 flex gap-2 overflow-x-auto px-5 [scrollbar-width:none] lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0 [&::-webkit-scrollbar]:hidden",
+				"-mx-5 flex gap-2 overflow-x-auto px-5 scrollbar-none lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0",
 				className,
 			)}
 		>

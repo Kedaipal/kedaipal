@@ -7,6 +7,7 @@ import {
 } from "./lib/buyerQuestions";
 import { countryValidator } from "./lib/country";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
+import { showcaseThemeValidator } from "./lib/showcase";
 import { memberPermissionsValidator } from "./lib/permissions";
 
 /**
@@ -1018,6 +1019,52 @@ export default defineSchema({
 		.index("by_user", ["userId"])
 		.index("by_email", ["email"])
 		.index("by_token", ["inviteTokenHash"]),
+
+	// --- Marketplace showcases (z8r3fdr6mv, docs/marketplace-home.md) ------
+	// An admin-curated, time-boxed section at the top of kedaipal.com/stores:
+	// "Malaysia Campfest 2026" with the stores at the event grouped under it.
+	// One row per showcase; its members ride along as a CAPPED array
+	// (SHOWCASE_MEMBER_CAP in lib/showcase.ts) — a bazaar with more Kedaipal
+	// stores than that is a second showcase, so the document stays bounded.
+	//
+	// The window is read-time (`lib/showcase.ts` showcaseState): no cron takes
+	// a showcase down, the next render after `endsAt` simply drops it.
+	// `publishedAt` unset = draft, never shown whatever the dates say. `slug` is
+	// the `/stores?showcase=` handle, derived from the title ONCE at create and
+	// never rewritten (a printed booth QR must survive a title edit). Member
+	// rows carry no listing state of their own: whether a member actually
+	// SHOWS still goes through the directory's one listable rule, joined by
+	// slug on the client, so nothing here can leak a store the directory hides.
+	marketplaceShowcases: defineTable({
+		slug: v.string(),
+		title: v.string(),
+		tagline: v.optional(v.string()),
+		country: countryValidator,
+		theme: showcaseThemeValidator,
+		// `#rrggbb` — the colour-wheel pick for the `custom` look. Kept when
+		// the admin switches to another look, so switching back restores it.
+		customColor: v.optional(v.string()),
+		// A Convex storage id (string, like retailers.coverImageStorageId);
+		// unset = the theme's own art carries the banner.
+		coverImageStorageId: v.optional(v.string()),
+		startsAt: v.optional(v.number()),
+		endsAt: v.optional(v.number()),
+		publishedAt: v.optional(v.number()),
+		// Position on /stores among the live showcases, ascending; the admin
+		// list's drag-to-reorder rewrites these.
+		sortOrder: v.number(),
+		members: v.array(
+			v.object({
+				retailerId: v.id("retailers"),
+				// "Booth B4" — the one per-store fact a showcase adds.
+				label: v.optional(v.string()),
+			}),
+		),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_slug", ["slug"])
+		.index("by_sortOrder", ["sortOrder"]),
 
 	slugHistory: defineTable({
 		oldSlug: v.string(),

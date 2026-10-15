@@ -48,6 +48,12 @@ import {
 	type OrderBookingSpan,
 	OrderItemLine,
 } from "../components/order/order-item-line";
+import {
+	ContinueShoppingLink,
+	OrderStoreEyebrow,
+	requestCardLinksBack,
+	storeLinkSlug,
+} from "../components/order/order-store-links";
 import { PaymentDueCountdown } from "../components/order/payment-due-countdown";
 import { PickupNotes } from "../components/order/pickup-notes";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
@@ -513,6 +519,13 @@ function TrackingRoute() {
 				}
 			: undefined;
 	const ms = order.retailerLocale === "ms";
+	// Where "back to the store" goes (z8r3fducgw); undefined = nowhere to go.
+	const storeSlug = storeLinkSlug(order);
+	// The foot row, unless a declined/expired request card already links back.
+	const showContinueShopping =
+		storeSlug !== undefined &&
+		order.storeName !== "" &&
+		!requestCardLinksBack(order);
 	// Collection service (86eyg0n8e, frozen at order create): the rider picks
 	// up FROM this buyer's address — every "Deliver…" label flips to collection
 	// wording so the page never claims something is being sent to them.
@@ -692,11 +705,9 @@ function TrackingRoute() {
 			{/* Header — the STORE's name is the eyebrow. This is the seller's order
 			    page as far as the buyer is concerned (same as the storefront, where
 			    the store brand leads); Kedaipal's own mark is the powered-by badge
-			    at the foot of the page, so the platform isn't named twice. */}
-			<p className="truncate text-xs font-semibold uppercase tracking-widest text-accent">
-				{order.storeName ||
-					(order.retailerLocale === "ms" ? "Pesanan anda" : "Your order")}
-			</p>
+			    at the foot of the page, so the platform isn't named twice. It links
+			    back into the store (z8r3fducgw): one tap to keep shopping. */}
+			<OrderStoreEyebrow storeName={order.storeName} slug={storeSlug} ms={ms} />
 			<h1 className="mt-3 font-mono text-2xl font-bold tracking-tight">
 				#{order.shortId}
 			</h1>
@@ -801,10 +812,10 @@ function TrackingRoute() {
 					<p className="text-sm font-medium">
 						{ms ? "Tiada bayaran dibuat." : "Nothing was charged."}
 					</p>
-					{order.retailerSlug ? (
+					{storeSlug ? (
 						<Link
 							to="/$slug"
-							params={{ slug: order.retailerSlug }}
+							params={{ slug: storeSlug }}
 							className="mt-1 inline-flex h-11 w-fit items-center rounded-lg border border-border bg-background px-4 text-sm font-semibold transition-colors hover:bg-muted"
 						>
 							{ms
@@ -856,10 +867,10 @@ function TrackingRoute() {
 					<p className="text-sm font-medium">
 						{ms ? "Tiada bayaran dibuat." : "Nothing was charged."}
 					</p>
-					{order.retailerSlug ? (
+					{storeSlug ? (
 						<Link
 							to="/$slug"
-							params={{ slug: order.retailerSlug }}
+							params={{ slug: storeSlug }}
 							className="mt-1 inline-flex h-11 w-fit items-center rounded-lg border border-border bg-background px-4 text-sm font-semibold transition-colors hover:bg-muted"
 						>
 							{ms ? "Cuba tarikh lain" : "Try different dates"}
@@ -1912,25 +1923,41 @@ function TrackingRoute() {
 				</section>
 			) : null}
 
-			{/* Contact the store directly. Buyers otherwise only ever hear from the
-			    shared Kedaipal WABA — this opens a chat to the vendor's own number
-			    with the order ref pre-filled. Hidden when the store has no number. */}
-			{order.retailerWaPhone ? (
-				<a
-					href={`https://wa.me/${order.retailerWaPhone.replace(/\D/g, "")}?text=${encodeURIComponent(
-						order.retailerLocale === "ms"
-							? `Hai ${order.storeName}, saya ada pertanyaan tentang pesanan ${order.shortId}.`
-							: `Hi ${order.storeName}, I have a question about my order ${order.shortId}.`,
-					)}`}
-					target="_blank"
-					rel="noopener noreferrer"
-					className="mt-6 flex items-center justify-center gap-2 rounded-2xl border border-accent/40 bg-accent/5 px-4 py-3 text-sm font-semibold text-accent transition-colors hover:bg-accent/10"
-				>
-					<MessageCircle className="size-4" />
-					{order.retailerLocale === "ms"
-						? `Hubungi ${order.storeName || "kedai"}`
-						: `Message ${order.storeName || "the store"}`}
-				</a>
+			{/* The foot of the order: order help first, then the way back into
+			    the store. Exits sit together at the bottom, below every payment
+			    and status card, so neither competes with a Pay CTA. Other stores
+			    come after, in the footer (z8r3fducgw). */}
+			{order.retailerWaPhone || showContinueShopping ? (
+				<div className="mt-6 flex flex-col gap-3">
+					{/* Contact the store directly. Buyers otherwise only ever hear
+					    from the shared Kedaipal WABA — this opens a chat to the
+					    vendor's own number with the order ref pre-filled. Hidden
+					    when the store has no number. */}
+					{order.retailerWaPhone ? (
+						<a
+							href={`https://wa.me/${order.retailerWaPhone.replace(/\D/g, "")}?text=${encodeURIComponent(
+								order.retailerLocale === "ms"
+									? `Hai ${order.storeName}, saya ada pertanyaan tentang pesanan ${order.shortId}.`
+									: `Hi ${order.storeName}, I have a question about my order ${order.shortId}.`,
+							)}`}
+							target="_blank"
+							rel="noopener noreferrer"
+							className="flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-accent/40 bg-accent/5 px-4 py-3 text-sm font-semibold text-accent transition-colors hover:bg-accent/10"
+						>
+							<MessageCircle className="size-4" />
+							{order.retailerLocale === "ms"
+								? `Hubungi ${order.storeName || "kedai"}`
+								: `Message ${order.storeName || "the store"}`}
+						</a>
+					) : null}
+					{showContinueShopping && storeSlug ? (
+						<ContinueShoppingLink
+							storeName={order.storeName}
+							slug={storeSlug}
+							ms={ms}
+						/>
+					) : null}
+				</div>
 			) : null}
 
 			{/* PDPA notice companion (86ey5m3hx item 1): this page is the buyer's
@@ -1952,7 +1979,14 @@ function TrackingRoute() {
 			    surface EVERY order reaches (the confirmation message's only link),
 			    so it is the badge's highest-volume home. Direct flex child of the
 			    min-h-dvh column so `mt-auto` sinks it to the bottom. */}
-			<StorefrontFooter slug={order.retailerSlug} surface="track" />
+			<StorefrontFooter
+				slug={order.retailerSlug}
+				surface="track"
+				locale={order.retailerLocale}
+				discover={
+					order.retailerSlug !== undefined && order.marketplaceUnlisted !== true
+				}
+			/>
 		</main>
 	);
 }

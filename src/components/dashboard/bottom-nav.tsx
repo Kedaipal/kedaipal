@@ -12,6 +12,7 @@ import {
 	ShieldCheck,
 	ShoppingBag,
 	Siren,
+	Sparkles,
 	Store,
 	Tag,
 	Ticket,
@@ -30,7 +31,7 @@ export interface BottomNavProps {
 	// counting the whole in-progress pipeline would only ever climb. Same count as
 	// the inbox "New" chip + the Home tile. See docs/order-inbox.md.
 	newOrdersCount: number;
-	// Show the admin tabs (Sellers / Billing / WABA) instead of the seller nav.
+	// Show the admin tabs (Sellers / Billing / Showcases / WABA) instead of the seller nav.
 	// True for a storeless admin (no seller store to manage) AND for any admin
 	// while they're on an /app/admin route — so an admin can move between ALL
 	// admin pages on mobile, not just land on Sellers. See ClickUp 86ey8r734.
@@ -126,6 +127,7 @@ export function BottomNav({
 					: []),
 				{ to: "/app/admin/sellers", label: "Sellers", icon: Store },
 				{ to: "/app/admin/billing", label: "Billing", icon: ShieldCheck },
+				{ to: "/app/admin/showcases", label: "Showcases", icon: Sparkles },
 				{ to: "/app/admin/waba", label: "WABA", icon: Siren },
 			]
 		: [
