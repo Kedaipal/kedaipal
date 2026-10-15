@@ -67,7 +67,6 @@ export type DeliveryJobRow = {
 	 * credit-gated order drops them. */
 	shareLink?: string;
 	hasProof: boolean;
-	awb?: string;
 	/** Still finding a Lalamove rider, so a tip (priority fee) can help. */
 	tippable: boolean;
 	/** Tips already on it — inside `cost`. */
@@ -212,7 +211,6 @@ export const overview = query({
 				rebookable,
 				shareLink: gated ? undefined : job.shareLink,
 				hasProof: !gated && (job.podImageStorageIds?.length ?? 0) > 0,
-				awb: job.awb,
 				tippable:
 					!gated &&
 					job.provider === "lalamove" &&

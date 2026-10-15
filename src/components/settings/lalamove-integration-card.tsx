@@ -374,6 +374,13 @@ export function LalamoveIntegrationCard({
 							>
 								Register automatically
 							</Button>
+							{/* Lalamove keeps ONE webhook URL per account, and we can't
+							    put back what was there — say so before the tap, not
+							    after another app goes quiet (PR #367 review). */}
+							<p className="text-xs text-muted-foreground">
+								Replaces any webhook address already set on this Lalamove
+								account — another app using it would stop getting updates.
+							</p>
 							{showPaste ? (
 								<WebhookPaste />
 							) : (

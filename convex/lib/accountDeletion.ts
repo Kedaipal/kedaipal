@@ -261,7 +261,7 @@ export async function runDeletionPhase(
 			for (const wallet of rows) await ctx.db.delete(wallet._id);
 			return { processed: rows.length, done: rows.length < limit };
 		}
-				case "customers": {
+		case "customers": {
 			const rows = await ctx.db
 				.query("customers")
 				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))

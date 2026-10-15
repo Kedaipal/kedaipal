@@ -500,8 +500,9 @@ deployment URL: `https://qualified-chihuahua-441.convex.site/webhook/lalamove`.
 `assigning`, the rider card and its Deliveries row offer **Add tip** —
 Lalamove's priority fee (`POST /v3/orders/{id}/priority-fee`, body
 `{ data: { priorityFee: "5.00" } }`), fixed steps and a per-booking cap from
-`convex/lib/lalamoveTip.ts`, charged to the seller's wallet and added to the
-job's `priorityFee` + `costActual`. See
+`convex/lib/lalamoveTip.ts` (reserved against the cap in one transaction
+before the call, released if Lalamove refuses), charged to the seller's wallet
+and added to the job's `priorityFee` + `costActual`. See
 [`deliveries.md`](./deliveries.md#add-a-tip--a-booking-still-finding-a-rider).
 
 **Manual-advance gate while the rider drives (26 Jul hotfix; tightened

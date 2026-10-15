@@ -2449,6 +2449,39 @@ describe("addPriorityFee — tip a booking still finding a rider (86eye9xd4)", (
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
+	test("two tabs tipping at once can't both pass the cap (PR #367 review)", async () => {
+		// 1500 tipped, cap 2000: either 500 fits, both together don't. Each
+		// action's snapshot says "fits" — the reserve is what serialises them.
+		const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+		const t = setup();
+		const { shortId, jobId } = await stuckBooking(t, { priorityFee: 1500 });
+		const results = await Promise.all([
+			tip(t, shortId, 500),
+			tip(t, shortId, 500),
+		]);
+		expect(results.filter((r) => r.ok)).toHaveLength(1);
+		expect(results.find((r) => !r.ok)).toMatchObject({ message: /limit/ });
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		const job = await t.run((ctx) => ctx.db.get(jobId));
+		expect(job).toMatchObject({ priorityFee: 2000, costActual: 1420 });
+	});
+
+	test("a refused call hands its reservation back, so the seller can try again", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(new Response("bad", { status: 422 }))
+			.mockResolvedValueOnce(new Response("{}", { status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+		const t = setup();
+		const { shortId, jobId } = await stuckBooking(t, { priorityFee: 1500 });
+		expect(await tip(t, shortId, 500)).toMatchObject({ ok: false });
+		expect(await t.run((ctx) => ctx.db.get(jobId))).toMatchObject({
+			priorityFee: 1500,
+		});
+		expect(await tip(t, shortId, 500)).toEqual({ ok: true, tipped: 2000 });
+	});
+
 	test("a rider already on it needs no tip", async () => {
 		vi.stubGlobal("fetch", vi.fn());
 		const t = setup();

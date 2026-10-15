@@ -88,6 +88,19 @@ describe("LalamoveIntegrationCard — setup checklist", () => {
 		).toBeTruthy();
 	});
 
+	it("says the tap replaces the account's existing webhook BEFORE it's made", () => {
+		// Lalamove keeps one webhook URL per account and we can't restore what
+		// was there: an outward, irreversible effect is disclosed, never silent.
+		renderCard();
+		expect(
+			screen.getByText(/Replaces any webhook address already set/),
+		).toBeTruthy();
+		renderCard({ deliveryBooking: { ...KEYED, webhookRegisteredAt: 1 } });
+		expect(
+			screen.getAllByText(/Replaces any webhook address already set/),
+		).toHaveLength(1);
+	});
+
 	it("a fully set-up account reads as quiet rows and one Connected chip", () => {
 		renderCard({ deliveryBooking: { ...KEYED, webhookRegisteredAt: 1 } });
 		expect(screen.getByText("Connected")).toBeTruthy();

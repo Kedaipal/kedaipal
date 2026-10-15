@@ -28,7 +28,10 @@ removal and grant edits bite on the member's next call.
   { enabled }` alone is "How buyers pay" → `payments_settings`, and a
   `deliveryBooking` carrying only rider options (vehicle, collection,
   prompt-to-book) saves with live delivery pricing → `fulfilment`. Keys,
-  disconnect and the rider arm switch stay `integrations`.
+  disconnect and the rider arm switch stay `integrations` — so the pricing
+  page never sends `enabled` (live pricing only saves with a provider already
+  armed, so it could only ever be a re-send that turned a fulfilment
+  teammate's save into Forbidden).
 - **none / read / write** per area, write implies read, **deny-by-default**:
   an absent key is no access, and an area added later starts at "none" for
   every existing member automatically.

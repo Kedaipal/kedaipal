@@ -658,13 +658,16 @@ export function DeliveryPricing({
 			// "live" they were editable and silently dropped. `enabled` is
 			// OMITTED (the server keeps what's stored): arming or disarming
 			// riders is the Courier-booking toggle's job (Zaki, 6 Sep), never a
-			// side effect of saving pricing. The legacy mode keeps its old
-			// meaning — pricing on Lalamove keys implies booking.
+			// side effect of saving pricing. Nor for the legacy "lalamove" mode
+			// any more: this save already refuses unless a provider is ARMED, so
+			// `enabled: true` could only ever re-send what was stored — and an
+			// `enabled` key makes the server read the save as an Integrations
+			// write, so a fulfilment-only teammate was refused for a no-op (PR
+			// #367 review). The save also moves the mode on to "live".
 			const bookingPatch =
 				liveModeSelected && hasStoredKey
 					? {
 							deliveryBooking: {
-								...(config?.mode === "lalamove" ? { enabled: true } : {}),
 								vehicleType,
 								promptBookOnPacked: promptBook,
 								// Explicit both ways so switching collection OFF really

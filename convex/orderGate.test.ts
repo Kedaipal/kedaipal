@@ -58,6 +58,10 @@ const SENTINEL = {
 	customerNote: "ZZSENTINELORDERNOTE",
 	productName: "ZZSENTINELPRODUCT",
 	paymentReference: "ZZSENTINELBANKREF",
+	// A consignment number is a code, not buyer text — but the courier's public
+	// tracking page resolves it to the consignee's area, so it is the same
+	// "leads back to the buyer" class (PR #367 review).
+	awb: "ZZSENTINELAWB",
 } as const;
 
 /** The one assertion this file exists for. */
@@ -202,6 +206,7 @@ describe("a gated order is invisible to the seller, on every surface", () => {
 				quotationId: "q",
 				vehicleType: "MOTORCYCLE",
 				shareLink: `https://share.lalamove.com/?${SENTINEL.city}`,
+				awb: SENTINEL.awb,
 				createdAt: Date.now(),
 				updatedAt: Date.now(),
 			});

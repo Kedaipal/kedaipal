@@ -1901,13 +1901,55 @@ export const getTipContext = internalQuery({
 	},
 });
 
-export const recordPriorityFee = internalMutation({
+/**
+ * A tip is RESERVED before Lalamove is called, then confirmed or released —
+ * the cap check and the count live in one transaction, so two tabs tipping at
+ * once can't both pass it (the action's own pre-check reads a snapshot). If the
+ * process dies between the reserve and the confirm, the tip stays counted:
+ * that blocks a further tip, which is the safe side — it can never let one
+ * overspend. `costActual` moves only on confirm, and Lalamove's
+ * `ORDER_AMOUNT_CHANGED` overwrites it with their own total anyway.
+ */
+export const reservePriorityFee = internalMutation({
+	args: { jobId: v.id("deliveryJobs"), amount: v.number(), cap: v.number() },
+	handler: async (
+		ctx,
+		{ jobId, amount, cap },
+	): Promise<{ ok: true } | { ok: false; reason: "rider_found" | "cap" }> => {
+		const job = await ctx.db.get(jobId);
+		if (!job || job.status !== "assigning")
+			return { ok: false, reason: "rider_found" };
+		const tipped = job.priorityFee ?? 0;
+		if (tipped + amount > cap) return { ok: false, reason: "cap" };
+		await ctx.db.patch(jobId, {
+			priorityFee: tipped + amount,
+			updatedAt: Date.now(),
+		});
+		return { ok: true };
+	},
+});
+
+/** Lalamove refused the tip — hand the reservation back. */
+export const releasePriorityFee = internalMutation({
+	args: { jobId: v.id("deliveryJobs"), amount: v.number() },
+	handler: async (ctx, { jobId, amount }) => {
+		const job = await ctx.db.get(jobId);
+		if (!job) return;
+		const left = (job.priorityFee ?? 0) - amount;
+		await ctx.db.patch(jobId, {
+			priorityFee: left > 0 ? left : undefined,
+			updatedAt: Date.now(),
+		});
+	},
+});
+
+/** Lalamove took the tip — it's now part of what the booking costs. */
+export const confirmPriorityFee = internalMutation({
 	args: { jobId: v.id("deliveryJobs"), amount: v.number() },
 	handler: async (ctx, { jobId, amount }) => {
 		const job = await ctx.db.get(jobId);
 		if (!job) return;
 		await ctx.db.patch(jobId, {
-			priorityFee: (job.priorityFee ?? 0) + amount,
 			costActual: job.costActual + amount,
 			updatedAt: Date.now(),
 		});
@@ -1949,10 +1991,20 @@ export const addPriorityFee = action({
 		if (!rule.amounts.includes(amount)) {
 			return { ok: false, message: "Pick one of the tip amounts shown." };
 		}
-		if (target.tipped + amount > rule.cap) {
+		const LIMIT = "That's past the tip limit for one booking.";
+		// A fast answer from the snapshot; the reserve below is the real check.
+		if (target.tipped + amount > rule.cap) return { ok: false, message: LIMIT };
+		const reserved = await ctx.runMutation(
+			internal.lalamove.reservePriorityFee,
+			{ jobId: target.jobId, amount, cap: rule.cap },
+		);
+		if (!reserved.ok) {
 			return {
 				ok: false,
-				message: "That's past the tip limit for one booking.",
+				message:
+					reserved.reason === "cap"
+						? LIMIT
+						: "A rider has already taken this booking — no tip needed.",
 			};
 		}
 		try {
@@ -1967,6 +2019,10 @@ export const addPriorityFee = action({
 				shortId,
 				message: err instanceof Error ? err.message : String(err),
 			});
+			await ctx.runMutation(internal.lalamove.releasePriorityFee, {
+				jobId: target.jobId,
+				amount,
+			});
 			return {
 				ok: false,
 				message:
@@ -1976,7 +2032,7 @@ export const addPriorityFee = action({
 						: "Lalamove didn't take the tip — the booking may have just been accepted. Check its status and try again if it's still waiting.",
 			};
 		}
-		await ctx.runMutation(internal.lalamove.recordPriorityFee, {
+		await ctx.runMutation(internal.lalamove.confirmPriorityFee, {
 			jobId: target.jobId,
 			amount,
 		});

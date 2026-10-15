@@ -265,11 +265,19 @@ describe("Collection service toggle (86eyg0n8e)", () => {
 		save();
 		await waitFor(() => expect(updateSettings).toHaveBeenCalled());
 		expect(updateSettings.mock.calls[0][0].deliveryBooking).toMatchObject({
-			// A store still on the pre-migration `lalamove` mode is armed by its
-			// mode — the save keeps it that way.
-			enabled: true,
 			deliveryDirection: "collection",
 		});
+	});
+
+	it("a legacy-mode save never sends `enabled` — a fulfilment-only teammate can save it (PR #367 review)", async () => {
+		// Live pricing only saves with a provider armed, so `enabled: true` was
+		// always a re-send — and an `enabled` key reads as an Integrations write.
+		renderLalamove("standard");
+		save();
+		await waitFor(() => expect(updateSettings).toHaveBeenCalled());
+		expect(updateSettings.mock.calls[0][0].deliveryBooking).not.toHaveProperty(
+			"enabled",
+		);
 	});
 
 	it("a stored collection store renders the toggle ON and an unchanged save keeps it", async () => {

@@ -106,10 +106,14 @@ its row here (with how long it has waited: "Finding rider · 12 min").
   back; what's been added so far.
 - **Server is the lock** (`lalamove.addPriorityFee`): orders WRITE, the order's
   own credit gate, only while `assigning`, only a listed step, never past the
-  cap. A success adds the fee to `deliveryJobs.priorityFee` and `costActual`
-  (so the month's spend and "Booking cost … (incl. RM 5 tip)" include it); a
-  refusal records nothing and says why (a rider just took it, or the wallet
-  is short).
+  cap. **Reserve, then charge:** `reservePriorityFee` checks the cap and adds
+  the step to `deliveryJobs.priorityFee` in one transaction BEFORE Lalamove is
+  called, so two tabs tipping at once can't both pass it; a refused call
+  `releasePriorityFee`s it back, a taken one `confirmPriorityFee`s it into
+  `costActual` (so the month's spend and "Booking cost … (incl. RM 5 tip)"
+  include it). A crash between reserve and confirm leaves the tip counted —
+  it blocks a further tip, never allows an overspend. A refusal says why (a
+  rider just took it, or the wallet is short).
 
 ## Not built (named follow-ups)
 
