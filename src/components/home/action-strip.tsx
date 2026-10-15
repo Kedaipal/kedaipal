@@ -152,7 +152,7 @@ function Cell({
 		<Link
 			to={to}
 			search={search}
-			className="flex min-h-[104px] min-w-0 flex-col gap-1.5 rounded-[18px] border border-border bg-card p-3 shadow-[0_1px_2px_rgb(15_23_41/0.04)] transition-colors hover:bg-muted/40 sm:min-h-0 sm:flex-row sm:items-center sm:gap-3.5 sm:rounded-[20px] sm:px-[18px] sm:py-3.5"
+			className="flex min-h-[104px] min-w-0 flex-col gap-1.5 rounded-[18px] border border-border bg-card p-3 shadow-[0_1px_2px_rgb(15_23_41/0.04)] transition-colors hover:bg-muted/40 sm:min-h-0 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-3.5 sm:gap-y-1 sm:rounded-[20px] sm:px-[18px] sm:py-3.5"
 		>
 			<span
 				className={cn(
@@ -163,8 +163,13 @@ function Cell({
 				<Icon className="size-[15px] sm:size-5" aria-hidden="true" />
 			</span>
 			{/* On a phone this column carries the figure too; from `sm` the figure
-			    moves out to the right edge, so the column holds only the words. */}
-			<span className="flex min-w-0 flex-col gap-px sm:flex-1 sm:gap-0.5">
+			    moves out to the right edge, so the column holds only the words.
+			    The row WRAPS rather than squeezes: three tiles share the width,
+			    and "RM 7,418.64" beside "To collect" needs ~320px — narrower, and
+			    the words shrank to nothing and the figure drew over them. Basis
+			    `auto` (not flex-1's 0) is what lets the words claim their width,
+			    so the figure drops to its own line instead. */}
+			<span className="flex min-w-0 flex-col gap-px sm:flex-[1_1_auto] sm:gap-0.5">
 				{loading ? (
 					<Skeleton className="h-6 w-10 sm:hidden" />
 				) : (
@@ -188,12 +193,12 @@ function Cell({
 				</span>
 			</span>
 			{loading ? (
-				<Skeleton className="hidden h-7 w-12 shrink-0 sm:block" />
+				<Skeleton className="hidden h-7 w-12 shrink-0 sm:ml-auto sm:block" />
 			) : (
 				<span
 					title={valueTitle}
 					className={cn(
-						"hidden shrink-0 font-heading text-[26px] font-extrabold leading-none tabular-nums sm:block",
+						"hidden shrink-0 font-heading text-[26px] font-extrabold leading-none tabular-nums sm:ml-auto sm:block",
 						TONE_VALUE[tone],
 					)}
 				>

@@ -63,6 +63,33 @@
 	}
 }
 
+/* A scroll SHADOW: a soft shade at the top/bottom edge only while there's
+   more list that way, gone at the end. The `local` covers scroll with the
+   content and hide the `scroll`-attached shades once an edge is reached — pure
+   CSS, no listener. For a list that may hide its scrollbar (the collapsed
+   sidebar rail) or whose scrollbar overlays and stays invisible until used
+   (macOS), so "there's more" never rests on a half-cut row alone. Paints on
+   `--card`: use it on a scroller that sits on a card surface. */
+@utility scroll-shadow-y {
+	background:
+		linear-gradient(var(--card) 30%, transparent) top / 100% 2.5rem no-repeat
+			local,
+		linear-gradient(transparent, var(--card) 70%) bottom / 100% 2.5rem
+			no-repeat local,
+		radial-gradient(
+				farthest-side at 50% 0,
+				color-mix(in oklab, var(--foreground) 14%, transparent),
+				transparent
+			)
+			top / 100% 0.625rem no-repeat scroll,
+		radial-gradient(
+				farthest-side at 50% 100%,
+				color-mix(in oklab, var(--foreground) 14%, transparent),
+				transparent
+			)
+			bottom / 100% 0.625rem no-repeat scroll;
+}
+
 @utility safe-bottom {
 	padding-bottom: env(safe-area-inset-bottom);
 }
