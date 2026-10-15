@@ -39,7 +39,7 @@ export function BookingListingCards({
 	// the calendar auto-selects it.
 	if (listings.length <= 1) return null;
 	return (
-		<div className="-mx-4 flex snap-x snap-mandatory gap-2.5 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:px-0">
+		<div className="-mx-4 flex snap-x snap-mandatory gap-2.5 overflow-x-auto scrollbar-none px-4 pb-1 sm:mx-0 sm:flex-wrap sm:px-0">
 			{/* All listings LEADS. It is the overview and the default; appending it
 			    after the listings it summarises was placement by convenience. */}
 			<ListingCard

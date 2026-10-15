@@ -12,6 +12,7 @@ import {
 	ShieldCheck,
 	ShoppingBag,
 	Siren,
+	Sparkles,
 	Store,
 	Tag,
 	Ticket,
@@ -321,6 +322,14 @@ export function Sidebar({
 							onClick={exitActAs}
 							icon={ShieldCheck}
 							label="Billing"
+							collapsed={collapsed}
+							motion={motion}
+						/>
+						<SidebarLink
+							to="/app/admin/showcases"
+							onClick={exitActAs}
+							icon={Sparkles}
+							label="Showcases"
 							collapsed={collapsed}
 							motion={motion}
 						/>

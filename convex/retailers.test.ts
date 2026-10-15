@@ -1293,7 +1293,21 @@ describe("retailers deleteUser (internal cascade)", () => {
 				triggeredByRetailerId: ids.retailerId,
 				createdAt: now,
 			});
+			// Kedaipal's own /stores curation (z8r3fdr6mv): the showcase
+			// survives, the deleted store leaves its member list.
+			const showcaseId = await ctx.db.insert("marketplaceShowcases", {
+				slug: "campfest-2026",
+				title: "Malaysia Campfest 2026",
+				country: "MY",
+				theme: "campfire",
+				sortOrder: 1,
+				publishedAt: now,
+				members: [{ retailerId: ids.retailerId, label: "Booth B4" }],
+				createdAt: now,
+				updatedAt: now,
+			});
 			return {
+				showcaseId,
 				buyerImgId,
 				mockupId,
 				pickupId,
@@ -1361,6 +1375,12 @@ describe("retailers deleteUser (internal cascade)", () => {
 			const optOut = await ctx.db.get(extra.optOutId);
 			expect(optOut).not.toBeNull();
 			expect(optOut?.triggeredByRetailerId).toBeUndefined();
+
+			// The showcase survives (it is Kedaipal's curation, not the tenant's
+			// data); the deleted store is no longer among its members.
+			const showcase = await ctx.db.get(extra.showcaseId);
+			expect(showcase).not.toBeNull();
+			expect(showcase?.members).toEqual([]);
 		});
 	});
 

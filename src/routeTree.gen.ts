@@ -50,8 +50,10 @@ import { Route as AppAdminBillingRouteImport } from './routes/app.admin.billing'
 import { Route as SlugPProductSlugRouteImport } from './routes/$slug_.p.$productSlug'
 import { Route as SlugCCategorySlugRouteImport } from './routes/$slug_.c.$categorySlug'
 import { Route as AppPromotionsPromotionIdIndexRouteImport } from './routes/app.promotions.$promotionId.index'
+import { Route as AppAdminShowcasesIndexRouteImport } from './routes/app.admin.showcases.index'
 import { Route as AppPromotionsPromotionIdEditRouteImport } from './routes/app.promotions.$promotionId.edit'
 import { Route as AppPromotionsPromotionIdAddRouteImport } from './routes/app.promotions.$promotionId.add'
+import { Route as AppAdminShowcasesShowcaseIdRouteImport } from './routes/app.admin.showcases.$showcaseId'
 
 const TermsRoute = TermsRouteImport.update({
   id: '/terms',
@@ -259,6 +261,11 @@ const AppPromotionsPromotionIdIndexRoute =
     path: '/promotions/$promotionId/',
     getParentRoute: () => AppRoute,
   } as any)
+const AppAdminShowcasesIndexRoute = AppAdminShowcasesIndexRouteImport.update({
+  id: '/admin/showcases/',
+  path: '/admin/showcases/',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppPromotionsPromotionIdEditRoute =
   AppPromotionsPromotionIdEditRouteImport.update({
     id: '/promotions/$promotionId/edit',
@@ -269,6 +276,12 @@ const AppPromotionsPromotionIdAddRoute =
   AppPromotionsPromotionIdAddRouteImport.update({
     id: '/promotions/$promotionId/add',
     path: '/promotions/$promotionId/add',
+    getParentRoute: () => AppRoute,
+  } as any)
+const AppAdminShowcasesShowcaseIdRoute =
+  AppAdminShowcasesShowcaseIdRouteImport.update({
+    id: '/admin/showcases/$showcaseId',
+    path: '/admin/showcases/$showcaseId',
     getParentRoute: () => AppRoute,
   } as any)
 
@@ -313,8 +326,10 @@ export interface FileRoutesByFullPath {
   '/app/products/': typeof AppProductsIndexRoute
   '/app/promotions/': typeof AppPromotionsIndexRoute
   '/app/vouchers/': typeof AppVouchersIndexRoute
+  '/app/admin/showcases/$showcaseId': typeof AppAdminShowcasesShowcaseIdRoute
   '/app/promotions/$promotionId/add': typeof AppPromotionsPromotionIdAddRoute
   '/app/promotions/$promotionId/edit': typeof AppPromotionsPromotionIdEditRoute
+  '/app/admin/showcases/': typeof AppAdminShowcasesIndexRoute
   '/app/promotions/$promotionId/': typeof AppPromotionsPromotionIdIndexRoute
 }
 export interface FileRoutesByTo {
@@ -357,8 +372,10 @@ export interface FileRoutesByTo {
   '/app/products': typeof AppProductsIndexRoute
   '/app/promotions': typeof AppPromotionsIndexRoute
   '/app/vouchers': typeof AppVouchersIndexRoute
+  '/app/admin/showcases/$showcaseId': typeof AppAdminShowcasesShowcaseIdRoute
   '/app/promotions/$promotionId/add': typeof AppPromotionsPromotionIdAddRoute
   '/app/promotions/$promotionId/edit': typeof AppPromotionsPromotionIdEditRoute
+  '/app/admin/showcases': typeof AppAdminShowcasesIndexRoute
   '/app/promotions/$promotionId': typeof AppPromotionsPromotionIdIndexRoute
 }
 export interface FileRoutesById {
@@ -403,8 +420,10 @@ export interface FileRoutesById {
   '/app/products/': typeof AppProductsIndexRoute
   '/app/promotions/': typeof AppPromotionsIndexRoute
   '/app/vouchers/': typeof AppVouchersIndexRoute
+  '/app/admin/showcases/$showcaseId': typeof AppAdminShowcasesShowcaseIdRoute
   '/app/promotions/$promotionId/add': typeof AppPromotionsPromotionIdAddRoute
   '/app/promotions/$promotionId/edit': typeof AppPromotionsPromotionIdEditRoute
+  '/app/admin/showcases/': typeof AppAdminShowcasesIndexRoute
   '/app/promotions/$promotionId/': typeof AppPromotionsPromotionIdIndexRoute
 }
 export interface FileRouteTypes {
@@ -450,8 +469,10 @@ export interface FileRouteTypes {
     | '/app/products/'
     | '/app/promotions/'
     | '/app/vouchers/'
+    | '/app/admin/showcases/$showcaseId'
     | '/app/promotions/$promotionId/add'
     | '/app/promotions/$promotionId/edit'
+    | '/app/admin/showcases/'
     | '/app/promotions/$promotionId/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -494,8 +515,10 @@ export interface FileRouteTypes {
     | '/app/products'
     | '/app/promotions'
     | '/app/vouchers'
+    | '/app/admin/showcases/$showcaseId'
     | '/app/promotions/$promotionId/add'
     | '/app/promotions/$promotionId/edit'
+    | '/app/admin/showcases'
     | '/app/promotions/$promotionId'
   id:
     | '__root__'
@@ -539,8 +562,10 @@ export interface FileRouteTypes {
     | '/app/products/'
     | '/app/promotions/'
     | '/app/vouchers/'
+    | '/app/admin/showcases/$showcaseId'
     | '/app/promotions/$promotionId/add'
     | '/app/promotions/$promotionId/edit'
+    | '/app/admin/showcases/'
     | '/app/promotions/$promotionId/'
   fileRoutesById: FileRoutesById
 }
@@ -855,6 +880,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppPromotionsPromotionIdIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/app/admin/showcases/': {
+      id: '/app/admin/showcases/'
+      path: '/admin/showcases'
+      fullPath: '/app/admin/showcases/'
+      preLoaderRoute: typeof AppAdminShowcasesIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/app/promotions/$promotionId/edit': {
       id: '/app/promotions/$promotionId/edit'
       path: '/promotions/$promotionId/edit'
@@ -867,6 +899,13 @@ declare module '@tanstack/react-router' {
       path: '/promotions/$promotionId/add'
       fullPath: '/app/promotions/$promotionId/add'
       preLoaderRoute: typeof AppPromotionsPromotionIdAddRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/admin/showcases/$showcaseId': {
+      id: '/app/admin/showcases/$showcaseId'
+      path: '/admin/showcases/$showcaseId'
+      fullPath: '/app/admin/showcases/$showcaseId'
+      preLoaderRoute: typeof AppAdminShowcasesShowcaseIdRouteImport
       parentRoute: typeof AppRoute
     }
   }
@@ -894,8 +933,10 @@ interface AppRouteChildren {
   AppProductsIndexRoute: typeof AppProductsIndexRoute
   AppPromotionsIndexRoute: typeof AppPromotionsIndexRoute
   AppVouchersIndexRoute: typeof AppVouchersIndexRoute
+  AppAdminShowcasesShowcaseIdRoute: typeof AppAdminShowcasesShowcaseIdRoute
   AppPromotionsPromotionIdAddRoute: typeof AppPromotionsPromotionIdAddRoute
   AppPromotionsPromotionIdEditRoute: typeof AppPromotionsPromotionIdEditRoute
+  AppAdminShowcasesIndexRoute: typeof AppAdminShowcasesIndexRoute
   AppPromotionsPromotionIdIndexRoute: typeof AppPromotionsPromotionIdIndexRoute
 }
 
@@ -921,8 +962,10 @@ const AppRouteChildren: AppRouteChildren = {
   AppProductsIndexRoute: AppProductsIndexRoute,
   AppPromotionsIndexRoute: AppPromotionsIndexRoute,
   AppVouchersIndexRoute: AppVouchersIndexRoute,
+  AppAdminShowcasesShowcaseIdRoute: AppAdminShowcasesShowcaseIdRoute,
   AppPromotionsPromotionIdAddRoute: AppPromotionsPromotionIdAddRoute,
   AppPromotionsPromotionIdEditRoute: AppPromotionsPromotionIdEditRoute,
+  AppAdminShowcasesIndexRoute: AppAdminShowcasesIndexRoute,
   AppPromotionsPromotionIdIndexRoute: AppPromotionsPromotionIdIndexRoute,
 }
 

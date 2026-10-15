@@ -213,7 +213,13 @@ describe("marketplace.myListingReadiness — the seller card's truth", () => {
 			await asOwner.query(api.marketplace.myListingReadiness, {
 				retailerId: retailer._id,
 			}),
-		).toEqual({ hasVisibleProduct: false, internal: false, hidden: null });
+		).toEqual({
+			hasVisibleProduct: false,
+			internal: false,
+			hidden: null,
+			offline: false,
+			featuredIn: [],
+		});
 
 		await asOwner.mutation(api.products.create, {
 			retailerId: retailer._id,
@@ -227,7 +233,13 @@ describe("marketplace.myListingReadiness — the seller card's truth", () => {
 			await asOwner.query(api.marketplace.myListingReadiness, {
 				retailerId: retailer._id,
 			}),
-		).toEqual({ hasVisibleProduct: true, internal: false, hidden: null });
+		).toEqual({
+			hasVisibleProduct: true,
+			internal: false,
+			hidden: null,
+			offline: false,
+			featuredIn: [],
+		});
 
 		await expect(
 			t
@@ -422,7 +434,13 @@ describe("comped stores ride Store highlights; internal stores never list", () =
 			await asAdmin.query(api.marketplace.myListingReadiness, {
 				retailerId: adminOwned.retailerId,
 			}),
-		).toEqual({ hasVisibleProduct: true, internal: true, hidden: null });
+		).toEqual({
+			hasVisibleProduct: true,
+			internal: true,
+			hidden: null,
+			offline: false,
+			featuredIn: [],
+		});
 
 		const { sellers: rows } = await asAdmin.query(api.admin.listSellersForAdmin, {});
 		expect(
@@ -473,6 +491,8 @@ describe("admin hide from /stores — moderation over the seller's switch", () =
 			hasVisibleProduct: true,
 			internal: false,
 			hidden: { note: "Add real product photos and we'll relist you." },
+			offline: false,
+			featuredIn: [],
 		});
 		// …and the admin row carries it for the pill, menu and sheet.
 		const row = (await asAdmin.query(api.admin.listSellersForAdmin, {})).sellers.find(
