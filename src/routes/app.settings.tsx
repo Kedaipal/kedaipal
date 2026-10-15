@@ -794,7 +794,10 @@ function SettingsRoute() {
 								{/* FIRST on the tab, full width above the columns
 								    (z8r3fdudf7): whether the store takes orders at all
 								    is the most consequential setting here. */}
-								<Card>
+								<Card
+									id={SPOTLIGHT_ANCHOR.store_status.anchor}
+									highlight={ringFor(SPOTLIGHT_ANCHOR.store_status.anchor)}
+								>
 									<StoreStatusCard
 										retailerId={retailer._id}
 										storeName={retailer.storeName}
@@ -1090,6 +1093,9 @@ function SettingsRoute() {
 							<PaymentsTabBody
 								retailer={retailer}
 								highlight={ringFor(SETTINGS_ANCHOR.payment_methods)}
+								buyersPayHighlight={ringFor(
+									SPOTLIGHT_ANCHOR.how_buyers_pay.anchor,
+								)}
 								onSave={updateSettings}
 								onOpenIntegrations={() =>
 									navigate({ search: { tab: "integrations" } })
@@ -1850,11 +1856,14 @@ function newDraft(type: "bank" | "qr"): MethodDraft {
 function PaymentsTabBody({
 	retailer,
 	highlight,
+	buyersPayHighlight,
 	onSave,
 	onOpenIntegrations,
 }: {
 	retailer: NonNullable<ReturnType<typeof useDashboardRetailer>>;
 	highlight: FixHighlight | undefined;
+	/** A What's-new link to "How buyers pay" rings that card. */
+	buyersPayHighlight: FixHighlight | undefined;
 	onSave: ReturnType<typeof useUpdateSettings>;
 	onOpenIntegrations: () => void;
 }) {
@@ -1872,6 +1881,7 @@ function PaymentsTabBody({
 	return (
 		<div className="flex flex-col gap-6">
 			<HowBuyersPayCard
+				highlight={buyersPayHighlight}
 				hitpay={retailer.hitpay}
 				canUse={hasFeature(retailer.subscription, "onlinePayments")}
 				manualCount={methods.length}

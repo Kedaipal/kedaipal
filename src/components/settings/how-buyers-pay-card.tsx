@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { toast } from "sonner";
+import type { FixHighlight } from "../../lib/country-setup-copy";
 import { convexErrorMessage } from "../../lib/format";
+import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import { ProBadge } from "../app/pro-gate";
 import { ModeRow, ModeRowGroup } from "../ui/mode-row";
 import type { HitpaySummary } from "./online-payments-card";
@@ -22,12 +24,15 @@ import {
  * the manual methods stay saved either way, so switching back is one tap.
  */
 export function HowBuyersPayCard({
+	highlight,
 	hitpay,
 	canUse,
 	manualCount,
 	onSave,
 	onOpenIntegrations,
 }: {
+	/** Set when a deep link (`?spot=how_buyers_pay`) sent the seller here. */
+	highlight?: FixHighlight;
 	hitpay: HitpaySummary | undefined;
 	/** Client mirror of PLAN_FEATURES.onlinePayments (the server is the lock). */
 	canUse: boolean;
@@ -75,7 +80,7 @@ export function HowBuyersPayCard({
 	}
 
 	return (
-		<Card>
+		<Card id={SPOTLIGHT_ANCHOR.how_buyers_pay.anchor} highlight={highlight}>
 			<SectionHeading
 				title="How buyers pay"
 				description="The one way buyers pay you for an order."
