@@ -29,6 +29,12 @@ import { describe, expect, test } from "vitest";
  * `../subscriptions`) leaks it into any client file that imports the helper,
  * and a per-file check would call that clean.
  *
+ * `src` TEST files are scanned too, deliberately: a component test imports
+ * what the component imports, and a test that needs a real function module
+ * belongs beside it in `convex/` (convex-test), not in `src/`. If that ever
+ * stops being true, exclude `.test.` files from `FILES` — never loosen the
+ * matcher, which the self-test below pins.
+ *
  * Sibling gate: `convex-read-pattern.test.ts` (same scan-the-source shape).
  */
 
@@ -80,6 +86,7 @@ function resolveFile(fromFile: string, spec: string): string | null {
 		`${base}.tsx`,
 		`${base}.js`,
 		join(base, "index.ts"),
+		join(base, "index.tsx"),
 	];
 	return candidates.find((c) => existsSync(c) && statSync(c).isFile()) ?? null;
 }
@@ -135,6 +142,12 @@ describe("the client never loads a Convex function module", () => {
 	test("the matcher tells loads from erased type imports", () => {
 		// Guards the matcher in BOTH directions, so a regex edit that silently
 		// stops seeing loads (or starts flagging type imports) goes red here.
+		//
+		// The fixture paths are WRONG ON PURPOSE. This file is itself under
+		// `src/`, so the real scan below reads these strings as its own imports;
+		// from `src/lib/`, `../convex/…` resolves to a `src/convex/` that doesn't
+		// exist and is skipped. "Correcting" them to `../../convex/…` makes them
+		// resolve, and the gate then flags this file as a leak.
 		const src = [
 			'import { a } from "../convex/credits";',
 			'import {\n\tb,\n\tc,\n} from "../convex/orders";',
