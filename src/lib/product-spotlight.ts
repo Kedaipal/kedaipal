@@ -35,32 +35,31 @@ export const PRODUCT_SPOTLIGHT: Record<
 > = {
 	weekend_rate: {
 		title: "Weekend rate lives on each stay listing",
-		body: "Open a stay listing below and we'll take you straight to its Pricing & capacity card, where the weekend rate sits under the nightly price.",
+		body: "Open a stay listing below and we'll take you straight to its “Do weekend nights cost more?” question, open and ready to set.",
 		empty:
 			"You don't have a stay listing yet. + New product opens one on Booking, and the weekend rate is in its Pricing step.",
 		createCard: "booking",
-		// Every stay, packaged or not: a package's form shows the weekend
-		// rate's place with the reason it doesn't apply, which is the
-		// answer that seller came for.
+		// Every stay, packaged or not: a package's row says the weekend rate
+		// doesn't apply and why, which is the answer that seller came for.
 		applies: (product) => effectiveKind(product.kind) === "booking",
 	},
 	prep_time: {
 		title: "Prep time and the pickup note live on each product",
-		body: "Open a product below and we'll take you straight to its Order rules card, where prep time and the pickup note sit beside the minimum quantity.",
+		body: "Open a product below and we'll take you straight to its “Any rules on how it’s ordered?” question, where prep time sits beside the minimum quantity. The pickup note is the question right under it.",
 		empty:
-			"You don't have a product yet. Create one and both fields are in its Order rules card.",
-		// Everything but bookings: a booking listing's Order rules card carries
-		// only the lead-time rule — prep time and the pickup note never render
-		// there, so forwarding the key would ring a card missing the thing the
+			"You don't have a product yet. Create one, and both are questions under At checkout on its page.",
+		// Everything but bookings: a booking listing's notice row carries only
+		// the lead-time rule — prep time and the pickup note never render
+		// there, so forwarding the key would ring a row missing the thing the
 		// note announced.
 		applies: (product) => effectiveKind(product.kind) !== "booking",
 	},
 	promo: {
 		title: "A promotion runs on each product",
-		body: "Open a product below and we'll take you straight to its Promotion card, under the price, where the sale price, its dates and the flash-sale limits live.",
+		body: "Open a product below and we'll take you straight to its “Is it on sale right now?” question, under the price, where the sale price, its dates and the flash-sale limits live.",
 		empty:
-			"You don't have a product yet. Create one and its Promotion card sits right under the price.",
-		// Every kind: the card renders on all of them. A booking or an event
+			"You don't have a product yet. Create one and “Is it on sale right now?” sits right under the price.",
+		// Every kind: the row renders on all of them. A booking or an event
 		// shows the flash-sale extras' place with the reason they don't apply,
 		// and the sale price itself still works there.
 		applies: () => true,
