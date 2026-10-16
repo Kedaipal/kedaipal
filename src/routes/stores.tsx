@@ -563,7 +563,13 @@ function MarketplacePage() {
 										refined={refined}
 										onClear={() => {
 											setSearchBuffer("");
-											void navigate({ search: {}, replace: true });
+											// Clears what it names — search and chip. A booth-QR
+											// visitor stays on their showcase.
+											void navigate({
+												search: (prev) =>
+													prev.showcase ? { showcase: prev.showcase } : {},
+												replace: true,
+											});
 										}}
 									/>
 								) : (

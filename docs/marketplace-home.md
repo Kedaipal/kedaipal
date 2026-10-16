@@ -386,8 +386,10 @@ which `listStores` and the showcase functions both read.
   every store, as before. The banner art and tagline step aside in this
   layout so two matching showcases don't push the plain results off a
   phone's first screen. On the booth-QR view the compact header is the only
-  search box, so once the buyer refines it stays pinned. "See all" also
-  clears the page's search box, which never reads `?q=` back mid-typing.
+  search box, so once the buyer refines it stays pinned, and "Clear search
+  & filters" clears only what it names: a booth-QR visitor stays on their
+  showcase. "See all" also clears the page's search box, which never reads
+  `?q=` back mid-typing.
 - **The compact header** (`StoresCompactHeader`): once the hero's chips
   scroll out above (one `IntersectionObserver` on a sentinel,
   `useScrolledPast`), a frosted bar takes over with the logo, a floating
