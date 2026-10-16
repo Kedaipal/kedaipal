@@ -51,6 +51,7 @@ import {
 	EnterpriseContractPage,
 	type EnterpriseContractTemplate,
 } from "./enterprise-contract-page";
+import { ReferralDialog } from "./referral-dialog";
 import {
 	ContactLine,
 	CreditsText,
@@ -795,6 +796,7 @@ function SellerSheetBody({
 							<Plain muted>Direct — no tag, no referrer</Plain>
 						)}
 					</Row>
+					<ReferralRow seller={seller} now={now} />
 					{seller.foundingMemberRank !== undefined ? (
 						<Row label="Founding">
 							<Plain>Member #{seller.foundingMemberRank}</Plain>
@@ -827,6 +829,56 @@ function SellerSheetBody({
 				<SellerManageMenu seller={seller} purgeEnabled={purgeEnabled} />
 			</div>
 		</>
+	);
+}
+
+/**
+ * Who referred this store (z8r3fdetf5) — the `referrals` row the bonus
+ * credits key off, beside the signup source it's distinct from. The fix-up
+ * lives IN the row, where an admin reads the gap ("they said Siti sent them,
+ * but nobody's here"), and disappears with a reason once the first invoice is
+ * paid and the referral can no longer change.
+ */
+function ReferralRow({ seller, now }: { seller: AdminSellerRow; now: number }) {
+	const [open, setOpen] = useState(false);
+	const referral = seller.referral;
+	return (
+		<Row label="Referred by">
+			<div className="flex min-w-0 items-center justify-between gap-2">
+				{referral ? (
+					<Plain>
+						{referral.referrer
+							? `${referral.referrer.storeName} (/${referral.referrer.slug})`
+							: "A store since deleted"}
+						<Muted>
+							{" "}
+							· {referral.via === "link" ? "via their link" : "set by an admin"}{" "}
+							· {describeDays(referral.at, now)}
+						</Muted>
+					</Plain>
+				) : (
+					<Plain muted>Nobody</Plain>
+				)}
+				{seller.referralEditable ? (
+					<Button
+						type="button"
+						variant="ghost"
+						size="sm"
+						className="shrink-0"
+						onClick={() => setOpen(true)}
+					>
+						{referral ? "Change" : "Set referrer"}
+					</Button>
+				) : referral ? (
+					<span className="shrink-0 text-xs text-muted-foreground">
+						Locked — first invoice paid
+					</span>
+				) : null}
+			</div>
+			{open ? (
+				<ReferralDialog seller={seller} onClose={() => setOpen(false)} />
+			) : null}
+		</Row>
 	);
 }
 

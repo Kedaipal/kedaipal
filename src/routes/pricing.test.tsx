@@ -31,6 +31,11 @@ const state = vi.hoisted(() => ({
 	plan: undefined as SubscriptionView | null | undefined,
 }));
 
+// The referral invite (z8r3fdetf5) has its own tests; here no visitor holds
+// one, so the hero keeps its badge.
+vi.mock("../hooks/useReferralInvite", () => ({
+	useReferralInvite: () => null,
+}));
 vi.mock("@tanstack/react-router", () => ({
 	createFileRoute: () => (opts: Record<string, unknown>) => ({
 		...opts,

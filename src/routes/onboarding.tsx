@@ -12,7 +12,7 @@ import {
 	useNavigate,
 } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
-import { Sparkles } from "lucide-react";
+import { Gift, Sparkles } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
@@ -28,12 +28,16 @@ import {
 	MOBILE_MESSAGE,
 	otherCountryMobile,
 } from "../../convex/lib/slug";
+import type { ClaimRefusal } from "../../convex/lib/unclaimedStore";
 import { OnboardingTopBar } from "../components/onboarding/onboarding-top-bar";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { MyPhoneInput } from "../components/ui/my-phone-input";
+import { Skeleton } from "../components/ui/skeleton";
+import { clearStoredActAs } from "../hooks/useActAs";
 import { useLandingRegion } from "../hooks/useLandingRegion";
 import { useOnboardingStart } from "../hooks/useOnboardingStart";
+import { useReferralInvite } from "../hooks/useReferralInvite";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { convexErrorMessage } from "../lib/format";
 import { readGaClientId, trackEvent } from "../lib/ga-events";
@@ -45,8 +49,7 @@ import {
 	decodeOnboardingPrefill,
 	type OnboardingPrefill,
 } from "../lib/onboarding-link";
-import type { ClaimRefusal } from "../../convex/lib/unclaimedStore";
-import { clearStoredActAs } from "../hooks/useActAs";
+import { clearReferralCookie, readReferralSlug } from "../lib/referral-cookie";
 import { waPhoneCheckoutSchema } from "../lib/schemas";
 import { slugify, validateStoreName } from "../lib/slug";
 
@@ -120,6 +123,10 @@ function OnboardingForm() {
 	// "no store yet" — an already-onboarded seller landing here gets redirected
 	// below and must not count as a funnel entry.
 	useOnboardingStart(retailer);
+	// The referral this seller arrived through (z8r3fdetf5), when they hold
+	// one — said before they create the store, so the promise they followed
+	// the link for is visibly still in hand.
+	const invite = useReferralInvite();
 
 	const [storeName, setStoreName] = useState(prefill?.store ?? "");
 	const [slug, setSlug] = useState(prefill?.slug ?? "");
@@ -241,6 +248,9 @@ function OnboardingForm() {
 			// GA client id, so server-side key events (first_order/subscribe_paid)
 			// stitch to this browser's funnel — validated server-side, hint only.
 			const gaClientId = readGaClientId();
+			// The referral link (z8r3fdetf5), from its 30-day cookie — the server
+			// records it only when the store behind it can refer right now.
+			const referralSlug = readReferralSlug(document.cookie);
 			await createRetailer({
 				storeName: storeName.trim(),
 				slug,
@@ -252,7 +262,11 @@ function OnboardingForm() {
 				...(signupSource !== undefined ? { signupSource } : {}),
 				...(signupReferrerSlug !== undefined ? { signupReferrerSlug } : {}),
 				...(gaClientId !== undefined ? { gaClientId } : {}),
+				...(referralSlug !== undefined ? { referralSlug } : {}),
 			});
+			// Recorded — the cookie has nothing left to do, and must not decide
+			// anything this browser does next.
+			clearReferralCookie();
 			// The funnel's terminal key event — after the mutation succeeds, so a
 			// slug collision or validation error can't inflate conversions.
 			trackEvent("store_created");
@@ -296,6 +310,8 @@ function OnboardingForm() {
 					</span>
 				</p>
 			</header>
+
+			<ReferralInviteNote invite={invite} />
 
 			{assisted ? (
 				<div className="flex items-start gap-3 rounded-xl border border-accent/30 bg-accent/5 px-4 py-3 text-sm">
@@ -462,6 +478,51 @@ function OnboardingForm() {
 				</div>
 			</div>
 		</main>
+	);
+}
+
+/**
+ * The referral, restated where the store is born (z8r3fdetf5): who invited
+ * them, and the bonus they get when they pay their first invoice — the one
+ * moment it lands, so "when you start your plan" is never a surprise later.
+ * While the invite resolves (the cookie says one is coming) the same shell
+ * holds the place with skeleton bars, so the form below doesn't jump; nothing
+ * renders when there's no live invite. Same shape as the assisted-setup note
+ * beneath it, so the two read as one family of callouts.
+ */
+const INVITE_NOTE_CLASS =
+	"flex min-h-[6.25rem] items-start gap-3 rounded-xl border border-accent/30 bg-accent/5 px-4 py-3 text-sm sm:min-h-[5rem]";
+
+export function ReferralInviteNote({
+	invite,
+}: {
+	invite: ReturnType<typeof useReferralInvite>;
+}) {
+	if (invite === null) return null;
+	if (invite === undefined)
+		return (
+			<div aria-hidden className={INVITE_NOTE_CLASS}>
+				<Gift className="mt-0.5 size-4 shrink-0 text-accent" />
+				<div className="flex min-w-0 flex-1 flex-col gap-2 pt-0.5">
+					<Skeleton className="h-4 w-44" />
+					<Skeleton className="h-3 w-full" />
+					<Skeleton className="h-3 w-3/4 sm:hidden" />
+				</div>
+			</div>
+		);
+	return (
+		<div className={INVITE_NOTE_CLASS}>
+			<Gift className="mt-0.5 size-4 shrink-0 text-accent" />
+			<div className="flex min-w-0 flex-col gap-0.5">
+				<p className="font-medium text-foreground">
+					{invite.storeName} invited you
+				</p>
+				<p className="text-xs leading-snug text-muted-foreground">
+					Pay your first invoice and {invite.offer.pro} bonus credits land on
+					Pro, or {invite.offer.starter} on Starter. They last 12 months.
+				</p>
+			</div>
+		</div>
 	);
 }
 

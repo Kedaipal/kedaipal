@@ -786,6 +786,10 @@ const CSV_HEADER = [
 	"Last paid",
 	"Signup source",
 	"Referrer",
+	// The referral programme's row (z8r3fdetf5) — who gets bonus credits —
+	// distinct from "Referrer" above, the store whose badge or link brought
+	// the signup.
+	"Referred by",
 	"Joined",
 	"Last act-as",
 ];
@@ -829,6 +833,11 @@ function sellerToCsvRow(
 			: "",
 		row.signupSource ?? "",
 		row.signupReferrer ? `/${row.signupReferrer.slug}` : "",
+		row.referral
+			? row.referral.referrer
+				? `/${row.referral.referrer.slug}`
+				: "(deleted store)"
+			: "",
 		csvDate(row.createdAt),
 		csvDate(row.lastActAsAt),
 	];

@@ -1,18 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { PLAN_MONTHLY_PRICES } from "../../convex/lib/plans";
-import { Delivery } from "../components/landing/delivery";
-import { FAQ_MESSAGES, Faq } from "../components/landing/faq";
-import { FinalCta } from "../components/landing/final-cta";
-import { Footer } from "../components/landing/footer";
-import { Hero } from "../components/landing/hero";
-import { Nav } from "../components/landing/nav";
-import { PaymentHandshake } from "../components/landing/payment-handshake";
-import { PaymentMethods } from "../components/landing/payment-methods";
-import { PricingTeaser } from "../components/landing/pricing-teaser";
-import { RealSellers } from "../components/landing/real-sellers";
-import { VideoDemo } from "../components/landing/video-demo";
-import { LandingRegionProvider } from "../hooks/useLandingRegion";
-import { useMarketingLanding } from "../hooks/useMarketingLanding";
+import { FAQ_MESSAGES } from "../components/landing/faq";
+import { LandingPage } from "../components/landing/landing-page";
+import { useReferralInvite } from "../hooks/useReferralInvite";
 import { DEMO_DURATION_ISO, DEMO_VIDEO } from "../lib/demo-video";
 import { jsonLdScript } from "../lib/json-ld";
 import { faqJsonLd } from "../lib/landing-faq";
@@ -154,32 +144,11 @@ export const Route = createFileRoute("/")({
 });
 
 /**
- * Eight sections (landing v2, z8r3fdegej — design approved 12 Sep 2026):
- * the promise, the product moving, the proof, then the three things the
- * target tier is sold on (payment handshake, courier booking, payment rails),
- * then the price, the objections, the close. The problem strip, how-it-works
- * timeline, features bento and money-math block were cut: fourteen sections
- * was too long for a seller who already knows the pain, and the video says
- * "how it works" better than the timeline did.
+ * The landing page. A visitor holding a referral (z8r3fdetf5 — they opened a
+ * `/referral/<slug>` link in the last 30 days) sees the referrer's invite at
+ * the top of the hero; everyone else sees the page unchanged.
  */
 function Landing() {
-	// GA4 funnel entry (z8r3fdd1v0): capture ?src= + fire land_marketing.
-	useMarketingLanding();
-	return (
-		<LandingRegionProvider>
-			<main className="min-h-dvh bg-background text-foreground">
-				<Nav />
-				<Hero />
-				<VideoDemo />
-				<RealSellers />
-				<PaymentHandshake />
-				<Delivery />
-				<PaymentMethods />
-				<PricingTeaser />
-				<Faq />
-				<FinalCta />
-				<Footer />
-			</main>
-		</LandingRegionProvider>
-	);
+	const invite = useReferralInvite();
+	return <LandingPage invite={invite} />;
 }

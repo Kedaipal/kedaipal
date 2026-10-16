@@ -16,12 +16,14 @@ import {
 	PLAN_CREDIT_GRANT,
 	planPrice,
 } from "../../../convex/lib/plans";
+import type { MyReferral } from "../../../convex/referrals";
 import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
 import { includedCreditsLabel, planPickCreditLine } from "../../lib/credits-ui";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import type { SubscriptionView } from "../../lib/subscription";
 import { EnterpriseOffer } from "./enterprise-offer";
 import { OwnerOnlyNote } from "./owner-only-note";
+import { ReferralBonusNote } from "./referral-bonus-note";
 
 type Cycle = "monthly" | "annual";
 
@@ -62,6 +64,7 @@ export function PlanPickerCard({
 	ownerOnly = false,
 	onRedirectingChange,
 	balance,
+	referral,
 }: {
 	sub: SubscriptionView;
 	/** The store's slug — named in the Enterprise chat's opening line. */
@@ -90,6 +93,10 @@ export function PlanPickerCard({
 	 * picker can say what the chosen plan does to the balance before the tap.
 	 * Absent/null: the plans still state their allowance, nothing more. */
 	balance?: CreditBalanceView | null;
+	/** This store as a referee (z8r3fdetf5), when it was referred — each plan
+	 * row then says the bonus credits paying for it brings, since the bonus
+	 * depends on the tier picked. */
+	referral?: MyReferral | null;
 }) {
 	const subscribeSelf = useMutation(api.invoices.subscribeSelf);
 	const startAutoRenewSetup = useAction(
@@ -240,6 +247,11 @@ export function PlanPickerCard({
 						months.
 					</p>
 				) : null}
+				{referral && !referral.firstInvoicePaid ? (
+					<div className="mt-2">
+						<ReferralBonusNote referral={referral} />
+					</div>
+				) : null}
 				{foundingPricingLapsed ? (
 					<p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
 						{foundingBenefitsRevoked
@@ -302,6 +314,11 @@ export function PlanPickerCard({
 							<p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
 								{includedCreditsLabel(grantFor(p))}
 							</p>
+							{referral && !referral.firstInvoicePaid ? (
+								<p className="mt-0.5 text-xs font-medium text-accent-emphasis tabular-nums">
+									+{referral.offer[p]} bonus credits at first invoice
+								</p>
+							) : null}
 						</div>
 					);
 					// One plan on offer (a Founding Member) is a summary, not a

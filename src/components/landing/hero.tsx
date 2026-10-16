@@ -2,6 +2,7 @@ import { useAuth } from "@clerk/tanstack-react-start";
 import { Link } from "@tanstack/react-router";
 import { motion, useReducedMotion } from "framer-motion";
 import { ArrowRight } from "lucide-react";
+import type { ReferralInvite } from "../../../convex/referrals";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../../lib/contact";
 import { trackSignupCta } from "../../lib/ga-events";
@@ -9,6 +10,7 @@ import { m } from "../../paraglide/messages";
 import { WhatsAppIcon } from "../dashboard/brand-icons";
 import { HeroStage } from "./hero-stage";
 import { ctaPillClass, Marquee } from "./landing-ui";
+import { ReferralInvitePill } from "./referral-invite-pill";
 
 /**
  * Hero (landing v2, z8r3fdegej): the locked 8 Sep 2026 tagline, one line,
@@ -20,6 +22,11 @@ import { ctaPillClass, Marquee } from "./landing-ui";
  *
  * Exactly ONE primary button on the page (86eye3p6z §C): the mint pill here.
  * "Book a demo" is a text link, a rung below.
+ *
+ * A REFERRED visitor (z8r3fdetf5) gets one thing more, above the headline:
+ * who invited them and the bonus credits they get when they start. The badge
+ * slot the design review cleared stays clear for everyone else — the invite
+ * is the reason a referred seller is on the page, not more info on top.
  */
 
 const EASE = [0.22, 1, 0.36, 1] as const;
@@ -50,7 +57,13 @@ function getMarqueeItems(): string[] {
 const demoLinkClass =
 	"inline-flex min-h-11 items-center gap-1.5 text-sm font-semibold text-foreground underline-offset-4 transition-colors hover:text-accent-emphasis hover:underline";
 
-export function Hero() {
+export function Hero({
+	invite,
+}: {
+	/** The referral invite (`useReferralInvite`): `undefined` holds its
+	 * place while it resolves, `null` shows nothing. */
+	invite: ReferralInvite | null | undefined;
+}) {
 	const { isSignedIn } = useAuth();
 	const shouldReduceMotion = useReducedMotion();
 	const supportWa = useSupportWaNumber();
@@ -64,6 +77,14 @@ export function Hero() {
 					animate={shouldReduceMotion ? undefined : "visible"}
 					variants={staggerContainer}
 				>
+					{invite !== null ? (
+						<motion.div
+							variants={revealUp}
+							className="flex max-w-full justify-center"
+						>
+							<ReferralInvitePill invite={invite} />
+						</motion.div>
+					) : null}
 					{/* The tagline is two sentences; the design sets the first on its own
 					    line and the highlighted second across two. A hard break, not a
 					    width trick, so the split survives every locale's line lengths. */}

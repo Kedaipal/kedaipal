@@ -92,6 +92,17 @@ author, `convex/lib/poweredBy.ts` — see
 `referral-<member>`, `tiktok-live`, `directory`, `qr-poster`. Free-form tags
 sanitize and store verbatim.
 
+**Two loops, two meanings (z8r3fdetf5).** The BADGE loop (`powered-by*` +
+`store=`) says which store's buyer-facing surface a seller clicked through —
+attribution only, no reward. The REFERRAL loop is a seller's own link,
+`kedaipal.com/referral/<slug>`: the route hands the capture
+`src=referral-<slug>&store=<slug>` (the URL carries no query), and a valid
+invite is also kept in a 30-day `kp_referral` cookie so the referral survives
+a closed tab. The tag is analytics only — `referral-` + a 32-char slug
+truncates — and the reward keys off the `referrals` row, never off
+`signupSource`. A referral outranks a badge referrer as `signupReferrerId`.
+See [`referrals.md`](./referrals.md).
+
 **The badge also names its store (z8r3fdcwd0):** `?store=<slug>` is captured
 beside the tag (same last-touch rule, its own key — the pair is rewritten
 together, so a later tagged hit without `store=` clears a stale referrer),

@@ -27,6 +27,10 @@
  *    z8r3fdf8ht) — what the seller paid Kedaipal for top-up packs, the same
  *    kind of record as an invoice. Their `creditPurchases` PHASE doesn't
  *    delete them: it closes every still-pending checkout (below).
+ *  - `referrals` rows naming the tenant as REFERRER (z8r3fdetf5) — each is
+ *    the referee's record (and their reward stands), not the tenant's data.
+ *    Their `referrerId` dangles; surfaces read a missing referrer as "a
+ *    Kedaipal seller". The tenant's own row (as referee) IS deleted.
  *  - `adminAuditLog` rows — an audit trail must outlive the tenant it audited
  *    (`targetId`s are doc ids / last-4 only, never buyer PII).
  *  - `optOuts` rows are the buyer's standing suppression instruction, GLOBAL
@@ -65,6 +69,7 @@ export const DELETION_PHASES = [
 	"foundingMembers",
 	"retailerMembers",
 	"retailerSendingLimits",
+	"referrals",
 	"outboundMessageLog",
 	"slugHistory",
 	"optOuts",
@@ -385,6 +390,18 @@ export async function runDeletionPhase(
 				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 				.take(limit);
 			for (const limits of rows) await ctx.db.delete(limits._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "referrals": {
+			// The tenant's OWN referral (z8r3fdetf5) — the row saying who referred
+			// it. Rows where it was the REFERRER are not its data to erase: they
+			// are each referee's record, and their reward stands, so they stay
+			// with `referrerId` dangling (see RETAINED above).
+			const rows = await ctx.db
+				.query("referrals")
+				.withIndex("by_referee", (q) => q.eq("refereeId", retailerId))
+				.take(limit);
+			for (const row of rows) await ctx.db.delete(row._id);
 			return { processed: rows.length, done: rows.length < limit };
 		}
 		case "outboundMessageLog": {

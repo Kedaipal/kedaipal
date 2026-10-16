@@ -48,6 +48,7 @@ function row(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 		comped: false,
 		createdAt: at(-180),
 		unclaimed: false,
+		referralEditable: true,
 		purging: false,
 		marketplace: { internal: false },
 		country: "MY",
@@ -736,6 +737,7 @@ describe("a pre-built store reads as unclaimed everywhere (docs/prebuilt-stores.
 	it("once claimed it reads like any other seller again", () => {
 		const claimed = row({
 			unclaimed: false,
+			referralEditable: true,
 			claimedAt: at(-2),
 			subscriptionStatus: "trialing",
 			trialEndsAt: at(12),

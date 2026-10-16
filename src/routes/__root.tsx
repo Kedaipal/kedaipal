@@ -18,6 +18,7 @@ import { isBuyerRouteId } from "../lib/buyer-routes";
 import { getConvexClient, getQueryClient } from "../lib/convex";
 import { clientEnv } from "../lib/env";
 import { readVisitorRegion } from "../lib/geo-region";
+import { readReferralSlugOnServer } from "../lib/referral-cookie";
 import { getLocale } from "../paraglide/runtime";
 import appCss from "../styles.css?url";
 
@@ -32,7 +33,14 @@ export const Route = createRootRoute({
 	 * is a header lookup — no I/O — so authenticated `/app` renders that never
 	 * use it are not measurably slower for carrying it.
 	 */
-	loader: (): { region: Country | null } => ({ region: readVisitorRegion() }),
+	loader: (): { region: Country | null; referralSlug: string | null } => ({
+		region: readVisitorRegion(),
+		// The referral the visitor arrived with (z8r3fdetf5), when they hold
+		// the cookie — so the landing reserves the invite's place in the first
+		// paint rather than pushing the hero down when it resolves. A cookie
+		// read, no I/O, same cost posture as the region above.
+		referralSlug: readReferralSlugOnServer(),
+	}),
 	head: () => ({
 		meta: [
 			{ charSet: "utf-8" },

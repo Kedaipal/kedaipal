@@ -40,9 +40,11 @@ import {
 } from "../components/landing/landing-ui";
 import { MoneyMathRow } from "../components/landing/money-math";
 import { Nav } from "../components/landing/nav";
+import { ReferralInvitePill } from "../components/landing/referral-invite-pill";
 import { Button } from "../components/ui/button";
 import { useLandingRegion } from "../hooks/useLandingRegion";
 import { useMarketingLanding } from "../hooks/useMarketingLanding";
+import { useReferralInvite } from "../hooks/useReferralInvite";
 import { useSupportWaNumber } from "../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../lib/contact";
 import {
@@ -814,6 +816,7 @@ function PricingPage() {
 	useEffect(() => {
 		trackEvent("view_pricing");
 	}, []);
+	const invite = useReferralInvite();
 	const [cycle, setCycle] = useState<Cycle>("monthly");
 	const { isLoaded, isSignedIn } = useAuth();
 	// Only signed-in sellers need their plan; skip the query for visitors. A
@@ -848,10 +851,17 @@ function PricingPage() {
 			<section className="bg-hero-mesh">
 				<div className="mx-auto max-w-4xl px-5 pb-16 pt-28 text-center md:px-8 md:pb-24 md:pt-40">
 					<FadeIn>
-						<Sticker tone="outline" rotate={-1.5}>
-							<Sparkles className="size-3" />
-							{m.pricing_badge()}
-						</Sticker>
+						{/* A referred visitor (z8r3fdetf5) sees their invite where the
+						    badge sits — the price they're reading is the one their
+						    bonus credits ride on. Everyone else keeps the badge. */}
+						{invite !== null ? (
+							<ReferralInvitePill invite={invite} />
+						) : (
+							<Sticker tone="outline" rotate={-1.5}>
+								<Sparkles className="size-3" />
+								{m.pricing_badge()}
+							</Sticker>
+						)}
 						<h1
 							className="mt-5 text-4xl font-bold tracking-tight md:text-6xl"
 							style={{ letterSpacing: "-0.03em" }}
