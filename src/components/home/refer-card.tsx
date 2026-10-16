@@ -79,7 +79,7 @@ function LiveReferCard({
 	return (
 		<section className="flex flex-col gap-3" aria-labelledby="refer-heading">
 			<Heading id="refer-heading" />
-			<div className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-4 lg:max-w-2xl">
+			<div className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-4">
 				<p className="text-sm leading-relaxed">
 					Know another kedai that sells on WhatsApp? When they sign up through
 					your link and pay their first invoice, they get{" "}
@@ -115,14 +115,26 @@ function LiveReferCard({
 						<span className="shrink-0">kedaipal.com/referral/</span>
 						<span className="kp-highlight truncate">{card.slug}</span>
 					</span>
-					<div className="flex gap-2">
-						<Button onClick={copy} className="h-11 flex-1">
+					{/* Two equal columns, not two `flex-1`s: the labels differ in
+					    length, and flex-basis sizes from content, so "Copy link"
+					    came out visibly narrower than its sibling on a phone. */}
+					<div className="grid grid-cols-2 gap-2">
+						<Button onClick={copy} className="h-11">
 							{copied ? "Copied!" : "Copy link"}
 						</Button>
-						<Button asChild variant="outline" className="h-11 flex-1">
-							<a href={waUrl} target="_blank" rel="noopener noreferrer">
+						<Button asChild variant="outline" className="h-11 min-w-0">
+							{/* "Share on WhatsApp" needs ~173px; a phone column is ~156px.
+							    The icon + "WhatsApp" says the same thing there, and the
+							    accessible name stays whole at every width. */}
+							<a
+								href={waUrl}
+								target="_blank"
+								rel="noopener noreferrer"
+								aria-label="Share on WhatsApp"
+							>
 								<WhatsAppIcon className="size-4" />
-								Share on WhatsApp
+								<span className="sm:hidden">WhatsApp</span>
+								<span className="hidden sm:inline">Share on WhatsApp</span>
 							</a>
 						</Button>
 					</div>
@@ -173,7 +185,7 @@ function PausedReferCard({ reason }: { reason: "paused" | "lapsed" }) {
 	return (
 		<section className="flex flex-col gap-3">
 			<Heading />
-			<div className="flex items-start gap-3 rounded-2xl border border-border bg-card p-4 lg:max-w-2xl">
+			<div className="flex items-start gap-3 rounded-2xl border border-border bg-card p-4">
 				<PauseCircle
 					className="mt-0.5 size-5 shrink-0 text-muted-foreground"
 					aria-hidden="true"

@@ -190,6 +190,13 @@ Zero sign-ups is a sentence, not a row of zeros. The counts read
   store that can refer, so a prober can tell "on an active or comped plan"
   from "trial or lapsed". The invite never says why, and a public coupon was
   the worse alternative.
+- **The analytics tag and the referral can name different stores.** The
+  `signupSource` tag is session last-touch, but the referral is the cookie,
+  and a trial store's link doesn't overwrite a live one (it promised
+  nothing). So a visitor who opens Kuih Lab's link, then a trial store's,
+  signs up with tag `referral-<trial-store>` while "Referred by" (and the
+  reward) says Kuih Lab. The admin sheet shows both rows side by side; the
+  reward always follows "Referred by".
 - **Last referral link wins**, per browser. Two partners sharing one prospect
   is decided by whichever link the prospect opened last. An admin can change
   it before the first invoice.

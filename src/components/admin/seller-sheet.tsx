@@ -884,16 +884,19 @@ function ReferralRow({ seller, now }: { seller: AdminSellerRow; now: number }) {
 		<Row label="Referred by">
 			<div className="flex min-w-0 items-center justify-between gap-2">
 				{referral ? (
-					<Plain>
-						{referral.referrer
-							? `${referral.referrer.storeName} (/${referral.referrer.slug})`
-							: "A store since deleted"}
-						<Muted>
-							{" "}
-							· {referral.via === "link" ? "via their link" : "set by an admin"}{" "}
-							· {describeDays(referral.at, now)}
-						</Muted>
-					</Plain>
+					// Two lines, not one truncating one: the drawer is narrow, and
+					// the when + how is the part an admin checks before changing it.
+					<span className="flex min-w-0 flex-col">
+						<Plain>
+							{referral.referrer
+								? `${referral.referrer.storeName} (/${referral.referrer.slug})`
+								: "A store since deleted"}
+						</Plain>
+						<span className="text-xs text-muted-foreground">
+							{referral.via === "link" ? "Via their link" : "Set by an admin"} ·{" "}
+							{describeDays(referral.at, now)}
+						</span>
+					</span>
 				) : (
 					<Plain muted>Nobody</Plain>
 				)}

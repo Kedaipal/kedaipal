@@ -10,6 +10,7 @@ import type { ReferralInvite } from "../../convex/referrals";
 import { LandingPage } from "../components/landing/landing-page";
 import { useReferralInvite } from "../hooks/useReferralInvite";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
+import { SEO_DESC, SEO_TITLE } from "../lib/landing-seo";
 import { writeReferralCookie } from "../lib/referral-cookie";
 import { referralMeta } from "../lib/referral-meta";
 import { ssrRead } from "../lib/ssr-read";
@@ -38,9 +39,6 @@ interface ReferralLoaderData {
 }
 
 const OG_IMAGE = `${SITE_URL}/og-image.png`;
-const FALLBACK_TITLE = "Kedaipal — WhatsApp Order Hub for Malaysian Sellers";
-const FALLBACK_DESC =
-	"Sell on WhatsApp. Never lose an order or a payment. Orders, payments and couriers on one screen. Free until your first order, no Meta setup.";
 
 export const Route = createFileRoute("/referral/$slug")({
 	loader: async ({ params }): Promise<ReferralLoaderData> => {
@@ -56,7 +54,7 @@ export const Route = createFileRoute("/referral/$slug")({
 		const invite = loaderData?.invite;
 		const { title, description } = invite
 			? referralMeta(invite)
-			: { title: FALLBACK_TITLE, description: FALLBACK_DESC };
+			: { title: SEO_TITLE, description: SEO_DESC };
 		const url = `${SITE_URL}${referralPath(params.slug)}`;
 		return {
 			meta: [

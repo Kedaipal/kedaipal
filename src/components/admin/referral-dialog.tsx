@@ -58,9 +58,12 @@ export function ReferralDialog({
 		setError(null);
 		try {
 			await setReferrer({ refereeId: seller._id, referrerSlug: clean });
-			toast.success(`${seller.storeName} is now referred by /${clean}.`, {
+			// No sentence-final full stop after a seller-typed name: "Rimba
+			// Gear Co." would print "Co..". The description says what happens
+			// next without claiming the referrer earns — a comped one doesn't.
+			toast.success(`${seller.storeName} is now referred by /${clean}`, {
 				description:
-					"Both stores get their bonus credits when this store pays its first invoice.",
+					"Bonus credits land when this store pays its first invoice.",
 			});
 			onClose();
 		} catch (err) {
@@ -74,7 +77,7 @@ export function ReferralDialog({
 		setSaving(true);
 		try {
 			await clearReferral({ refereeId: seller._id });
-			toast.success(`Referral removed from ${seller.storeName}.`);
+			toast.success(`Referral removed from ${seller.storeName}`);
 			onClose();
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -89,7 +92,7 @@ export function ReferralDialog({
 			<Dialog open onOpenChange={(open) => (!open ? onClose() : undefined)}>
 				<DialogContent className="sm:max-w-md">
 					<DialogHeader>
-						<DialogTitle>Referred by — {seller.storeName}</DialogTitle>
+						<DialogTitle>Who referred {seller.storeName}?</DialogTitle>
 						<DialogDescription>
 							The store that referred {seller.storeName}. When{" "}
 							{seller.storeName} pays its first invoice it gets {offer.pro}{" "}
