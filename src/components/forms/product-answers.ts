@@ -46,10 +46,19 @@ function when(ms: number): string {
 
 /** What the sale prices add up to: one shared percentage ("20% off") when
  * every discounted line agrees, else how many lines are discounted. */
+/** A line a buyer can actually buy. `active` absent = on sale (row literals
+ * written before the flag mattered here). */
+type PricedRow = { price: string; promoPrice?: string; active?: boolean };
+const onSale = (r: PricedRow) => r.active !== false;
+
 function discountPhrase(
-	rows: readonly { price: string; promoPrice?: string }[],
+	allRows: readonly PricedRow[],
 	currency: string,
 ): string | null {
+	// Off-sale lines are neither sold nor policed by the save
+	// (`buildSubmitVariants` checks sale prices only `if (row.active)`), so a
+	// stale sale price on one must not count as a discount either.
+	const rows = allRows.filter(onSale);
 	const discounted = rows
 		.map((r) => ({
 			price: parsePriceInput(r.price.trim()),
@@ -82,11 +91,12 @@ function discountPhrase(
 }
 
 /** Lines whose typed sale price the save refuses — not a number, zero, or
- * not below the normal price. The same rule PromoFields shows inline. */
-export function invalidSalePrices(
-	rows: readonly { price: string; promoPrice?: string }[],
-): number {
+ * not below the normal price — counted ONLY on lines that are on sale, the
+ * exact scope `buildSubmitVariants` polices. An off-sale line's stale sale
+ * price saves fine, so it must never turn the row red. */
+export function invalidSalePrices(rows: readonly PricedRow[]): number {
 	return rows.filter((r) => {
+		if (!onSale(r)) return false;
 		const typed = (r.promoPrice ?? "").trim();
 		if (typed.length === 0) return false;
 		const sale = parsePriceInput(typed);
@@ -105,7 +115,7 @@ export function promoAnswer({
 	now,
 }: {
 	draft: PromoDraft;
-	rows: readonly { price: string; promoPrice?: string }[];
+	rows: readonly PricedRow[];
 	currency: string;
 	/** Promotions are a Pro feature this store doesn't have. */
 	locked: boolean;

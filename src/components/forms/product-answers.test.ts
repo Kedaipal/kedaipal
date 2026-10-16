@@ -87,6 +87,45 @@ describe("promoAnswer", () => {
 		expect(invalidSalePrices(rows(["20", ""], ["20", "16"]))).toBe(0);
 	});
 
+	it("ignores an off-sale line's sale price, exactly as the save does", () => {
+		// PR #384 review: the save polices sale prices only on lines that are
+		// on sale (`buildSubmitVariants`, `if (row.active)`), so a stale bad
+		// sale price on an off-sale line saves fine — and must neither turn the
+		// row red nor count as a discount.
+		const offSaleBad = [
+			{ price: "20", promoPrice: "99", active: false },
+			{ price: "20", promoPrice: "16", active: true },
+		];
+		expect(invalidSalePrices(offSaleBad)).toBe(0);
+		expect(promoAnswer({ ...base, draft: on, rows: offSaleBad })).toEqual({
+			text: "Yes · 20% off · no end date",
+			tone: "set",
+		});
+		// Counted against the lines a buyer can buy: 1 of 2, not 2 of 3.
+		expect(
+			promoAnswer({
+				...base,
+				draft: on,
+				rows: [
+					{ price: "20", promoPrice: "16", active: true },
+					{ price: "20", promoPrice: "10", active: false },
+					{ price: "30", promoPrice: "", active: true },
+				],
+			}).text,
+		).toBe("Yes · 20% off · no end date");
+		// Only off-sale lines discounted: nothing a buyer can buy is on sale.
+		expect(
+			promoAnswer({
+				...base,
+				draft: on,
+				rows: [
+					{ price: "20", promoPrice: "16", active: false },
+					{ price: "20", promoPrice: "", active: true },
+				],
+			}).tone,
+		).toBe("warn");
+	});
+
 	it("is amber when it is on but nothing is discounted", () => {
 		expect(
 			promoAnswer({ ...base, draft: on, rows: rows(["12"], ["18"]) }),

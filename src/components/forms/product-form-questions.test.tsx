@@ -242,6 +242,46 @@ describe("custom orders and mockup approval are questions, not Advanced checkbox
 	});
 });
 
+describe("the promo line agrees with the save about off-sale lines", () => {
+	it("a bad sale price on an off-sale line saves, and the row never turns red", async () => {
+		// PR #384 review: `invalidSalePrices` policed every line while the save
+		// polices only lines on sale, so this save succeeded under a red
+		// "Needs a fix" line that stayed after the toast.
+		const onSubmit = vi.fn<(v: ProductFormSubmitValues) => Promise<void>>(
+			async () => {},
+		);
+		renderForm(
+			{
+				options: [{ name: "Size", values: ["S", "M"] }],
+				promo: {},
+				variants: [
+					{
+						optionValues: ["S"],
+						price: 2000,
+						promoPrice: 1600,
+						onHand: 5,
+						active: true,
+					},
+					{
+						optionValues: ["M"],
+						price: 2000,
+						promoPrice: 9900,
+						onHand: 5,
+						active: false,
+					},
+				],
+			},
+			onSubmit,
+		);
+		const sale = row(/Is it on sale right now/);
+		expect(sale.textContent).not.toContain("needs fixing");
+		fireEvent.submit(document.querySelector("form") as HTMLFormElement);
+		await vi.waitFor(() => expect(onSubmit).toHaveBeenCalled());
+		expect(sale.textContent).not.toContain("Needs a fix");
+		expect(sale.textContent).toContain("20% off");
+	});
+});
+
 describe("a refused save inside a collapsed row", () => {
 	it("says so on the row's line and opens it", async () => {
 		const onSubmit = vi.fn(async () => {});

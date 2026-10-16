@@ -5,7 +5,6 @@ import {
 	highlightRingClass,
 } from "../../lib/country-setup-copy";
 import { cn } from "../../lib/utils";
-import { ProBadge } from "../app/pro-gate";
 
 /**
  * A setting asked as a QUESTION, collapsed to one line that carries its
@@ -80,7 +79,7 @@ export function QuestionRow({
 	question,
 	answer,
 	tone = "off",
-	pro = false,
+	badge,
 	defaultOpen = false,
 	highlight,
 	children,
@@ -90,12 +89,14 @@ export function QuestionRow({
 	icon: ReactNode;
 	/** The capability, asked the way a seller would ask it. */
 	question: string;
-	/** What it is set to right now, in plain words (src/lib/product-answers.ts). */
+	/** What it is set to right now, in plain words (src/components/forms/product-answers.ts). */
 	answer: string;
 	tone?: QuestionTone;
-	/** A plan feature this store can't turn on — the Pro pill shows on the
-	 * header, so the seller learns that without opening the row. */
-	pro?: boolean;
+	/** A short pill on the header — e.g. the app's Pro badge for a plan
+	 * feature this store can't turn on, so the seller learns it without
+	 * opening the row. A slot, so this `ui/` primitive depends on no app
+	 * component. */
+	badge?: ReactNode;
 	defaultOpen?: boolean;
 	highlight?: FixHighlight;
 	children: ReactNode;
@@ -166,7 +167,7 @@ export function QuestionRow({
 						{answer}
 					</span>
 				</span>
-				{pro ? <ProBadge className="shrink-0" /> : null}
+				{badge ? <span className="shrink-0">{badge}</span> : null}
 				<ChevronDown
 					aria-hidden="true"
 					className={cn(

@@ -68,8 +68,8 @@ describe("QuestionRow", () => {
 		expect(panel().hidden).toBe(false);
 	});
 
-	it("shows the Pro pill on the header, so a locked feature is visible closed", () => {
-		renderRow({ pro: true });
+	it("shows a badge on the header, so a locked feature is visible closed", () => {
+		renderRow({ badge: <span>Pro</span> });
 		expect(header().textContent).toContain("Pro");
 	});
 

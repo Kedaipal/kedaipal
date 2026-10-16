@@ -92,6 +92,7 @@ import {
 } from "../../lib/spotlight";
 import { cn } from "../../lib/utils";
 import { cartesian, variantLabel } from "../../lib/variant";
+import { ProBadge } from "../app/pro-gate";
 import { CreditLockCta, SaveLockNote } from "../credits/credit-lock-cta";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -1996,7 +1997,7 @@ export function ProductForm({
 					defaultOpen={spotlight === "promo"}
 					icon={<Tag />}
 					question="Is it on sale right now?"
-					pro={promoLocked && !groupedPromotion}
+					badge={promoLocked && !groupedPromotion ? <ProBadge /> : undefined}
 					{...rowAnswer(
 						promoAnswer({
 							draft: promoDraft,
@@ -2042,7 +2043,7 @@ export function ProductForm({
 					<QuestionRow
 						icon={<CalendarClock />}
 						question="Is it a fixed-date event?"
-						pro={eventsLocked}
+						badge={eventsLocked ? <ProBadge /> : undefined}
 						{...rowAnswer(
 							eventAnswer({
 								draft: eventDraft,

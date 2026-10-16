@@ -287,7 +287,10 @@ alone is an FAQ accordion; with its answer it is state.
   where a one-line cut would hide it on a phone.
 - **An answer never claims more than the save or the storefront will do**
   (found in the `/test-code` pass, 16 Oct): a sale price at or above the normal
-  price is not counted as a discount ("1 sale price needs fixing"); "Where does
+  price is not counted as a discount ("1 sale price needs fixing") — and,
+  like the save (`buildSubmitVariants`, `if (row.active)`), only lines that
+  are ON SALE are counted or policed, so a stale price on an off-sale line
+  neither turns the row red nor reads as a discount (PR #384 review); "Where does
   it show?" says **Off your storefront** for a past event or a product whose
   every category is hidden, whatever the visibility switch says; switching
   custom orders off and on again restores the seller's line (name, price,
@@ -298,7 +301,7 @@ alone is an FAQ accordion; with its answer it is state.
   shape per product is harder to learn); rows open independently; the switch
   lives INSIDE the panel, never on the header (one tap must not end a live
   sale whose terms you can't see); a Pro-gated row wears the Pro pill on its
-  header; the panel stays **mounted while closed** (`hidden`) so a half-typed
+  header (a `badge` slot, so the `ui/` primitive imports no app component); the panel stays **mounted while closed** (`hidden`) so a half-typed
   draft survives a collapse.
 - **"Take me to the error" opens the row.** `focusFirstInvalidField` checks
   whether the first invalid field sits inside a closed `[data-disclosure-panel]`;
