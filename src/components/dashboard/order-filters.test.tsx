@@ -348,7 +348,7 @@ describe("OrderFilters — the sheet (Direction A, 86eyrtz74)", () => {
 	const FACETS = {
 		statusLeaf: { packed: 6, delivered: 0 },
 		fulfilment: {},
-		category: { Cakes: 9 },
+		category: [{ name: "Cakes", count: 9 }],
 		source: { counter: 4 },
 		paymentStatus: { unpaid: 7 },
 		paymentMethod: { cash: 5, "": 4 },
@@ -529,7 +529,10 @@ describe("OrderFilters — select-all must not lie (PR #235 review)", () => {
 	const FACETS = {
 		statusLeaf: {},
 		fulfilment: {},
-		category: { Cakes: 9, "": 4 },
+		category: [
+			{ name: "Cakes", count: 9 },
+			{ name: "", count: 4 },
+		],
 		source: {},
 		paymentStatus: {},
 		// An MY store whose HitPay settled a GrabPay order. GrabPay is not an MY
@@ -668,7 +671,7 @@ describe("OrderFilters — Fulfilment", () => {
 	const facets = (fulfilment: Record<string, number>) => ({
 		statusLeaf: {},
 		fulfilment,
-		category: {},
+		category: [],
 		source: {},
 		paymentStatus: {},
 		paymentMethod: {},
