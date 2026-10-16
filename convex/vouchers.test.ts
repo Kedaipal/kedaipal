@@ -6,8 +6,7 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { DAY_MS, todayMytMidnight } from "./lib/fulfilmentDate";
 import schema from "./schema";
-import { VOUCHER_BATCH_MAX } from "./lib/vouchers";
-import { claimVoucherDiscount } from "./lib/voucherRedemption";
+import { claimVoucherDiscount, VOUCHER_BATCH_MAX } from "./lib/vouchers";
 
 /**
  * The voucher module (`z8r3fdr617`): issuing, voiding, the seller's list and

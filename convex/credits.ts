@@ -57,6 +57,7 @@ import {
 	storeIsMetered,
 	GRANT_LEVER_CONTRACT_REFUSAL,
 	UNMETERED_STORE_REFUSAL,
+	USAGE_PACE_DAYS,
 } from "./lib/credits";
 import {
 	type BillingCycle,
@@ -1291,10 +1292,6 @@ export const getBalance = query({
 		return balanceView(ctx, retailer._id, account, Date.now());
 	},
 });
-
-/** The pace window Home forecasts from — one week of real trading, long enough
- * to average over a quiet Monday and a heavy Saturday. */
-export const USAGE_PACE_DAYS = 7;
 
 /** Rows the pace scan will read, whatever `since` it is handed.
  *
