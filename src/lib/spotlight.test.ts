@@ -118,7 +118,7 @@ describe("spotlight registry", () => {
 		);
 		expect(PRODUCT_SPOTLIGHT.weekend_rate.applies({})).toBe(false); // legacy = physical
 		// prep_time is the mirror image: everything but a booking, because a
-		// booking's Order rules card renders neither field.
+		// booking's notice row renders neither field.
 		expect(PRODUCT_SPOTLIGHT.prep_time.applies({ kind: "physical" })).toBe(
 			true,
 		);

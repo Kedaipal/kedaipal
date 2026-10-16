@@ -2,6 +2,7 @@
 
 import type { FormEvent } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DISCLOSURE_PANEL_ATTR, REVEAL_EVENT } from "../ui/question-row";
 import { focusFirstInvalidField, submitThenFocusError } from "./focus-error";
 
 // jsdom doesn't implement scrollIntoView — stub it so the helper can call it.
@@ -54,6 +55,39 @@ describe("focusFirstInvalidField", () => {
 		`);
 		focusFirstInvalidField(form);
 		expect(document.activeElement?.id).toBe("a");
+	});
+
+	it("opens a collapsed question row instead of focusing inside it", () => {
+		// z8r3fdv1z2: the product form's capabilities collapse into rows whose
+		// panels stay mounted but hidden. A hidden field can't be scrolled to
+		// or focused, so the helper asks the row to open and reports "not yet"
+		// — the submit path's retry then lands on the field once it shows.
+		const form = mount(`
+			<div ${DISCLOSURE_PANEL_ATTR} hidden>
+				<input id="sale" aria-invalid="true" />
+			</div>
+		`);
+		const panel = form.querySelector("[hidden]") as HTMLElement;
+		const reveal = vi.fn(() => panel.removeAttribute("hidden"));
+		panel.addEventListener(REVEAL_EVENT, reveal);
+
+		expect(focusFirstInvalidField(form)).toBe(false);
+		expect(reveal).toHaveBeenCalledTimes(1);
+		expect(document.activeElement?.id).not.toBe("sale");
+
+		// Next look (the retry), the panel is open: focus lands normally.
+		expect(focusFirstInvalidField(form)).toBe(true);
+		expect(document.activeElement?.id).toBe("sale");
+	});
+
+	it("leaves an OPEN question row alone and focuses straight in", () => {
+		const form = mount(`
+			<div ${DISCLOSURE_PANEL_ATTR}>
+				<input id="sale" aria-invalid="true" />
+			</div>
+		`);
+		expect(focusFirstInvalidField(form)).toBe(true);
+		expect(document.activeElement?.id).toBe("sale");
 	});
 
 	it("is a no-op for a null form or no errors", () => {
