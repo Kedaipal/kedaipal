@@ -16,6 +16,12 @@
  * email comes back as the backup if a WhatsApp can't be delivered (86eyd63r8).
  * The "What triggers an alert" disclosure states that, so it isn't hidden
  * behaviour.
+ *
+ * WhatsApp is ON BY DEFAULT on every plan (z8r3fdv55f), so its switch and
+ * whether it is actually SENDING are two different things: a switched-on row
+ * with no number yet, or on a store whose subscription is paused, is not
+ * sending — the email is. The row's state chip and notice say which, so "On"
+ * never sits beside silence.
  */
 
 import { useState } from "react";
@@ -35,7 +41,6 @@ import {
 	waPhoneCheckoutSchema,
 } from "../../lib/schemas";
 import { cn } from "../../lib/utils";
-import { ProBadge } from "../app/pro-gate";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { MyPhoneInput } from "../ui/my-phone-input";
@@ -64,15 +69,17 @@ export function OrderAlertsCard({
 	 * channel doesn't exist there, so its row doesn't either. */
 	whatsapp:
 		| {
-				enabled: boolean;
+				/** The seller's switch with its default applied — absent = on. */
+				switchedOn: boolean;
 				/** retailer.notifyWaPhone (normalized "60…") or "". */
 				currentPhone: string;
-				/** retailer.waPhone — used when no alert number is saved yet. */
+				/** retailer.waPhone — offered when no alert number is saved yet. */
 				fallbackPhone: string;
 				/** The saved number holds a global STOP opt-out. */
 				optedOut: boolean;
-				/** Client mirror of PLAN_FEATURES.waOrderAlerts (server is the lock). */
-				canUse: boolean;
+				/** The subscription covers WhatsApp alerts right now
+				 * (retailer.waAlertsCovered; the server decides at send time). */
+				covered: boolean;
 		  }
 		| undefined;
 	notifyEmail: string;
@@ -88,7 +95,7 @@ export function OrderAlertsCard({
 		notificationsSupported() ? Notification.permission : null,
 	);
 	const deviceOn = prefs.enabled && permission === "granted";
-	const waOn = whatsapp?.enabled === true;
+	const waOn = whatsapp ? waSending(whatsapp) : false;
 	const emailOn = notifyEmail.trim().length > 0;
 	const channelsOn = [waOn, deviceOn, emailOn].filter(Boolean).length;
 	const channelCount = whatsapp ? 3 : 2;
@@ -146,7 +153,8 @@ export function OrderAlertsCard({
 					items={[
 						"A new storefront order lands — counter sales don't, you're already there",
 						"A buyer says they've paid, or an online payment lands in your HitPay account",
-						"While WhatsApp alerts are on they replace the email — if one can't be delivered, the email goes out as backup",
+						"WhatsApp alerts are on by default on every plan — they start the moment a number is saved",
+						"While WhatsApp alerts are sending they replace the email — if one can't be delivered, the email goes out as backup",
 						"This device needs a Kedaipal tab open somewhere, phone or computer — even in the background",
 						"WhatsApp alerts are written in your store's message language (WhatsApp tab)",
 					]}
@@ -170,6 +178,7 @@ function ChannelRow({
 	editLabel,
 	editing,
 	onEdit,
+	glance,
 	notice,
 	children,
 }: {
@@ -183,6 +192,9 @@ function ChannelRow({
 	editLabel?: string;
 	editing?: boolean;
 	onEdit?: () => void;
+	/** Overrides the plain On/Off chip when the switch alone doesn't say
+	 * whether the channel is working. */
+	glance?: { label: string; tone: "mint" | "grey" | "warn" };
 	notice?: React.ReactNode;
 	children?: React.ReactNode;
 }) {
@@ -207,7 +219,9 @@ function ChannelRow({
 						) : null}
 					</span>
 				</div>
-				<Glance tone={on ? "mint" : "grey"}>{on ? "On" : "Off"}</Glance>
+				<Glance tone={glance?.tone ?? (on ? "mint" : "grey")}>
+					{glance?.label ?? (on ? "On" : "Off")}
+				</Glance>
 				<ToggleSwitch
 					on={on}
 					label={toggleLabel}
@@ -223,25 +237,31 @@ function ChannelRow({
 	);
 }
 
+type WhatsAppState = NonNullable<
+	Parameters<typeof OrderAlertsCard>[0]["whatsapp"]
+>;
+
+/** Is the WhatsApp channel actually SENDING — switched on, a number to send
+ * to, the subscription covering it, and that number not STOP'd? Anything less
+ * and the email is what reaches the seller. */
+function waSending(wa: WhatsAppState): boolean {
+	return (
+		wa.switchedOn && wa.currentPhone.length > 0 && wa.covered && !wa.optedOut
+	);
+}
+
 function WhatsAppRow({
-	enabled,
-	currentPhone,
-	fallbackPhone,
-	optedOut,
-	canUse,
 	country,
 	canEdit,
 	onSave,
-}: {
-	enabled: boolean;
-	currentPhone: string;
-	fallbackPhone: string;
-	optedOut: boolean;
-	canUse: boolean;
+	...wa
+}: WhatsAppState & {
 	country: Country;
 	canEdit: boolean;
 	onSave: (patch: OrderAlertsPatch) => Promise<unknown>;
 }) {
+	const { switchedOn, currentPhone, fallbackPhone, optedOut, covered } = wa;
+	const hasNumber = currentPhone.length > 0;
 	const seedPhone = currentPhone || fallbackPhone;
 	const [phone, setPhone] = useState(toNationalPhoneInput(seedPhone, country));
 	const [phoneError, setPhoneError] = useState<string | null>(null);
@@ -274,60 +294,114 @@ function WhatsAppRow({
 		return parsed.data;
 	}
 
-	function onToggle(next: boolean) {
-		if (!next) {
-			void save({ orderWaAlerts: false }, "WhatsApp order alerts are off");
-			return;
-		}
-		// One tap when there's a number to send to — the alert number, or the
-		// store's own WhatsApp (which is who it is for most sellers). Otherwise
-		// open the field and ask for it.
-		const ready = seedPhone ? normalized(phone) : null;
-		if (!ready) {
-			setEditing(true);
-			return;
-		}
-		void save(
-			{ notifyWaPhone: ready, orderWaAlerts: true },
-			`WhatsApp order alerts are on — sent to ${formatMobile(ready)}`,
-		);
+	function openEditor() {
+		setPhone(toNationalPhoneInput(seedPhone, country));
+		setPhoneError(null);
+		setEditing(true);
 	}
 
-	const sub = enabled
+	function onToggle(next: boolean) {
+		if (!next) {
+			void save(
+				{ orderWaAlerts: false },
+				"WhatsApp order alerts are off — alerts go to your email",
+			);
+			return;
+		}
+		if (hasNumber) {
+			void save(
+				{ orderWaAlerts: true },
+				`WhatsApp order alerts are on — sent to ${formatMobile(currentPhone)}`,
+			);
+			return;
+		}
+		// One tap when the store's own WhatsApp is there to use — it's who the
+		// alert is for at most stores.
+		if (fallbackPhone) {
+			void save(
+				{ notifyWaPhone: fallbackPhone, orderWaAlerts: true },
+				`WhatsApp order alerts are on — sent to ${formatMobile(fallbackPhone)}`,
+			);
+			return;
+		}
+		// No number anywhere: the switch still turns on (it's the default state),
+		// and the field opens so the seller can finish the job.
+		void save(
+			{ orderWaAlerts: true },
+			"WhatsApp order alerts are on — add a number to start receiving them",
+		).then(openEditor);
+	}
+
+	const glance: { label: string; tone: "mint" | "grey" | "warn" } = !switchedOn
+		? { label: "Off", tone: "grey" }
+		: !hasNumber
+			? { label: "Needs a number", tone: "warn" }
+			: optedOut
+				? { label: "Blocked", tone: "warn" }
+				: !covered
+					? { label: "Paused", tone: "warn" }
+					: { label: "On", tone: "mint" };
+
+	const sub = hasNumber
 		? formatMobile(currentPhone)
-		: seedPhone
+		: !switchedOn && seedPhone
 			? `Will go to ${formatMobile(seedPhone)}`
-			: "Add the number that should get alerts";
+			: "No number yet";
 
 	return (
 		<ChannelRow
 			title="WhatsApp"
-			badge={!canUse ? <ProBadge /> : null}
 			sub={sub}
-			on={enabled}
+			on={switchedOn}
+			glance={glance}
 			toggleLabel="WhatsApp order alerts"
-			// Turning OFF is never plan-locked; turning on is Pro.
-			toggleDisabled={!canEdit || saving || (!enabled && !canUse)}
+			toggleDisabled={!canEdit || saving}
 			onToggle={onToggle}
-			editLabel={canEdit && (enabled || canUse) ? "Change number" : undefined}
+			editLabel={
+				canEdit ? (hasNumber ? "Change number" : "Add number") : undefined
+			}
 			editing={editing}
-			onEdit={() => {
-				setPhone(toNationalPhoneInput(seedPhone, country));
-				setEditing(true);
-			}}
+			onEdit={openEditor}
 			notice={
 				<>
-					{!canUse && !enabled ? (
-						<p className="text-xs text-muted-foreground">
-							A Pro feature — upgrade in Settings → Billing to turn it on.
-							Turning off is never locked.
-						</p>
+					{switchedOn && !hasNumber && !editing ? (
+						<div className="flex flex-col gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+							<p>
+								Add the WhatsApp number that should get alerts and they start
+								right away. Until then, alerts go to your email.
+							</p>
+							{canEdit && fallbackPhone ? (
+								<Button
+									type="button"
+									variant="outline"
+									className="h-11 self-start bg-background"
+									isLoading={saving}
+									disabled={saving}
+									onClick={() =>
+										void save(
+											{ notifyWaPhone: fallbackPhone },
+											`WhatsApp order alerts now go to ${formatMobile(fallbackPhone)}`,
+										)
+									}
+								>
+									Use {formatMobile(fallbackPhone)}
+								</Button>
+							) : null}
+						</div>
 					) : null}
-					{enabled && optedOut ? (
+					{switchedOn && hasNumber && optedOut ? (
 						<p className="rounded-lg bg-amber-100 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
 							This number replied <b>STOP</b> to Kedaipal&apos;s WhatsApp, so
-							alerts to it are suppressed. Reply <b>START</b> to Kedaipal&apos;s
-							number from that phone to get them again.
+							alerts to it are suppressed and go to your email instead. Reply{" "}
+							<b>START</b> to Kedaipal&apos;s number from that phone to get them
+							again.
+						</p>
+					) : null}
+					{switchedOn && hasNumber && !optedOut && !covered ? (
+						<p className="rounded-lg bg-amber-100 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+							Paused while your subscription isn&apos;t active — alerts go to
+							your email. WhatsApp picks up again once your plan is active
+							(Settings → Billing).
 						</p>
 					) : null}
 				</>
@@ -363,14 +437,16 @@ function WhatsAppRow({
 						const ready = normalized(phone);
 						if (!ready) return;
 						void save(
-							enabled
+							switchedOn
 								? { notifyWaPhone: ready }
 								: { notifyWaPhone: ready, orderWaAlerts: true },
-							enabled ? "Alert number updated" : "WhatsApp order alerts are on",
+							switchedOn
+								? `WhatsApp order alerts now go to ${formatMobile(ready)}`
+								: "WhatsApp order alerts are on",
 						);
 					}}
 				>
-					{enabled ? "Save number" : "Turn on WhatsApp alerts"}
+					{switchedOn ? "Save number" : "Turn on WhatsApp alerts"}
 				</Button>
 				<Button
 					type="button"

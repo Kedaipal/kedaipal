@@ -983,15 +983,14 @@ function SettingsRoute() {
 														whatsapp={
 															retailer.waOrderAlertsAvailable
 																? {
-																		enabled: retailer.orderWaAlerts === true,
+																		// Absent = on (z8r3fdv55f).
+																		switchedOn:
+																			retailer.orderWaAlerts !== false,
 																		currentPhone: retailer.notifyWaPhone ?? "",
 																		fallbackPhone: retailer.waPhone ?? "",
 																		optedOut:
 																			retailer.notifyWaPhoneOptedOut === true,
-																		canUse: hasFeature(
-																			retailer.subscription,
-																			"waOrderAlerts",
-																		),
+																		covered: retailer.waAlertsCovered === true,
 																	}
 																: undefined
 														}

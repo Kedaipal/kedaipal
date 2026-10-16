@@ -11,9 +11,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 /**
  * The merged Order alerts card (86eye9xd4, 7A). Carries over every behaviour
  * the old WhatsApp-alerts card pinned (normalized patch, inline phone error,
- * the +60 plate, Starter disabled-with-reason, STOP warning) and adds the two
+ * the +60 plate, STOP warning) and adds the two
  * channels that joined it — this device (per browser) and email — plus the
- * owner-only split a teammate sees.
+ * owner-only split a teammate sees. Since z8r3fdv55f the WhatsApp switch is
+ * on by default on every plan, so the row separates "switched on" from
+ * "actually sending" (no number yet / subscription paused).
  */
 
 const prefs = { enabled: false, sound: true };
@@ -37,18 +39,22 @@ vi.mock("sonner", () => ({
 import { OrderAlertsCard } from "./order-alerts-card";
 
 type Props = Parameters<typeof OrderAlertsCard>[0];
+type WhatsApp = NonNullable<Props["whatsapp"]>;
+
+const WA_OFF: WhatsApp = {
+	switchedOn: false,
+	currentPhone: "",
+	fallbackPhone: "",
+	optedOut: false,
+	covered: true,
+};
+const wa = (over: Partial<WhatsApp>): WhatsApp => ({ ...WA_OFF, ...over });
 
 function renderCard(overrides: Partial<Props> = {}) {
 	const onSave = vi.fn().mockResolvedValue({ ok: true });
 	render(
 		<OrderAlertsCard
-			whatsapp={{
-				enabled: false,
-				currentPhone: "",
-				fallbackPhone: "",
-				optedOut: false,
-				canUse: true,
-			}}
+			whatsapp={WA_OFF}
 			notifyEmail=""
 			country="MY"
 			canEditAccount
@@ -85,37 +91,50 @@ const toggle = (name: RegExp) =>
 	screen.getByRole("switch", { name }) as HTMLButtonElement;
 
 describe("OrderAlertsCard — WhatsApp row", () => {
-	it("turns on in ONE tap with the store's own number, saving the normalized form", async () => {
+	it("on by default with no number: says so, offers the store's number in one tap, and email is the live channel", async () => {
 		const onSave = renderCard({
-			whatsapp: {
-				enabled: false,
-				currentPhone: "",
-				fallbackPhone: "60198765432",
-				optedOut: false,
-				canUse: true,
-			},
+			notifyEmail: "orders@shop.my",
+			whatsapp: wa({ switchedOn: true, fallbackPhone: "60198765432" }),
 		});
-		fireEvent.click(toggle(/whatsapp order alerts/i));
+		expect(toggle(/whatsapp order alerts/i).getAttribute("aria-checked")).toBe(
+			"true",
+		);
+		expect(screen.getByText("Needs a number")).toBeDefined();
+		expect(
+			screen.getByText(/Until then, alerts go to your email/i),
+		).toBeDefined();
+		// The email isn't labelled a backup while WhatsApp can't send.
+		expect(screen.getByText("orders@shop.my")).toBeDefined();
+		expect(screen.queryByText(/backup while WhatsApp is on/i)).toBeNull();
+		expect(screen.getByText("1 of 3 on")).toBeDefined();
+		fireEvent.click(
+			screen.getByRole("button", { name: /use \+60 19-876 5432/i }),
+		);
 		await waitFor(() =>
-			expect(onSave).toHaveBeenCalledWith({
-				notifyWaPhone: "60198765432",
-				orderWaAlerts: true,
-			}),
+			expect(onSave).toHaveBeenCalledWith({ notifyWaPhone: "60198765432" }),
 		);
 	});
 
-	it("with no number to use, the switch asks for one instead of saving", async () => {
-		const onSave = renderCard();
-		fireEvent.click(toggle(/whatsapp order alerts/i));
-		expect(onSave).not.toHaveBeenCalled();
+	it("on by default with no number anywhere: Add number opens the field and saves only the number", async () => {
+		const onSave = renderCard({ whatsapp: wa({ switchedOn: true }) });
+		expect(screen.queryByRole("button", { name: /^use /i })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: /add number/i }));
 		// The editor opens behind the +60 plate, never a blank country code.
 		expect(screen.getByText("+60")).toBeDefined();
 		fireEvent.change(screen.getByPlaceholderText("12-345 6789"), {
 			target: { value: "019-876 5432" },
 		});
-		fireEvent.click(
-			screen.getByRole("button", { name: /turn on whatsapp alerts/i }),
+		fireEvent.click(screen.getByRole("button", { name: /save number/i }));
+		await waitFor(() =>
+			expect(onSave).toHaveBeenCalledWith({ notifyWaPhone: "60198765432" }),
 		);
+	});
+
+	it("switching back on uses the store's own number in ONE tap, saving the normalized form", async () => {
+		const onSave = renderCard({
+			whatsapp: wa({ fallbackPhone: "60198765432" }),
+		});
+		fireEvent.click(toggle(/whatsapp order alerts/i));
 		await waitFor(() =>
 			expect(onSave).toHaveBeenCalledWith({
 				notifyWaPhone: "60198765432",
@@ -124,48 +143,55 @@ describe("OrderAlertsCard — WhatsApp row", () => {
 		);
 	});
 
-	it("rejects a non-mobile number inline without calling onSave", async () => {
+	it("switching back on with no number anywhere still turns it on, then asks for one", async () => {
 		const onSave = renderCard();
 		fireEvent.click(toggle(/whatsapp order alerts/i));
+		await waitFor(() =>
+			expect(onSave).toHaveBeenCalledWith({ orderWaAlerts: true }),
+		);
+		expect(await screen.findByText("+60")).toBeDefined();
+	});
+
+	it("rejects a non-mobile number inline without calling onSave", async () => {
+		const onSave = renderCard({ whatsapp: wa({ switchedOn: true }) });
+		fireEvent.click(screen.getByRole("button", { name: /add number/i }));
 		fireEvent.change(screen.getByPlaceholderText("12-345 6789"), {
 			target: { value: "03-8888 1234" },
 		});
-		fireEvent.click(
-			screen.getByRole("button", { name: /turn on whatsapp alerts/i }),
-		);
+		fireEvent.click(screen.getByRole("button", { name: /save number/i }));
 		expect(await screen.findByText(/Malaysian mobile number/i)).toBeDefined();
 		expect(onSave).not.toHaveBeenCalled();
 	});
 
-	it("Starter sees the Pro chip and a disabled switch with its reason — never a dead click", () => {
-		const onSave = renderCard({
-			whatsapp: {
-				enabled: false,
-				currentPhone: "",
-				fallbackPhone: "60123456789",
-				optedOut: false,
-				canUse: false,
-			},
-		});
-		expect(screen.getByText("Pro")).toBeDefined();
-		expect(toggle(/whatsapp order alerts/i).disabled).toBe(true);
-		expect(screen.getByText(/Pro feature/i)).toBeDefined();
-		fireEvent.click(toggle(/whatsapp order alerts/i));
-		expect(onSave).not.toHaveBeenCalled();
-	});
-
-	it("turning OFF is never plan-locked, and saves only the switch", async () => {
-		const onSave = renderCard({
-			whatsapp: {
-				enabled: true,
-				currentPhone: "60198765432",
-				fallbackPhone: "",
-				optedOut: false,
-				canUse: false,
-			},
+	it("live: shows the number, On, and email becomes the backup", () => {
+		renderCard({
+			notifyEmail: "orders@shop.my",
+			whatsapp: wa({ switchedOn: true, currentPhone: "60198765432" }),
 		});
 		expect(screen.getByText("+60 19-876 5432")).toBeDefined();
-		expect(toggle(/whatsapp order alerts/i).disabled).toBe(false);
+		expect(screen.getAllByText("On").length).toBeGreaterThan(0);
+		expect(screen.getByText(/backup while WhatsApp is on/i)).toBeDefined();
+		expect(screen.queryByText("Pro")).toBeNull();
+	});
+
+	it("subscription not covering it: Paused, says email has it, and points at Billing", () => {
+		renderCard({
+			notifyEmail: "orders@shop.my",
+			whatsapp: wa({
+				switchedOn: true,
+				currentPhone: "60198765432",
+				covered: false,
+			}),
+		});
+		expect(screen.getByText("Paused")).toBeDefined();
+		expect(screen.getByText(/Settings → Billing/)).toBeDefined();
+		expect(screen.queryByText(/backup while WhatsApp is on/i)).toBeNull();
+	});
+
+	it("turning OFF saves only the switch", async () => {
+		const onSave = renderCard({
+			whatsapp: wa({ switchedOn: true, currentPhone: "60198765432" }),
+		});
 		fireEvent.click(toggle(/whatsapp order alerts/i));
 		await waitFor(() =>
 			expect(onSave).toHaveBeenCalledWith({ orderWaAlerts: false }),
@@ -174,14 +200,13 @@ describe("OrderAlertsCard — WhatsApp row", () => {
 
 	it("a STOP'd number shows the suppression warning with the START fix", () => {
 		renderCard({
-			whatsapp: {
-				enabled: true,
+			whatsapp: wa({
+				switchedOn: true,
 				currentPhone: "60198765432",
-				fallbackPhone: "",
 				optedOut: true,
-				canUse: true,
-			},
+			}),
 		});
+		expect(screen.getByText("Blocked")).toBeDefined();
 		expect(screen.getByText(/STOP/)).toBeDefined();
 		expect(screen.getByText(/START/)).toBeDefined();
 	});
@@ -261,13 +286,7 @@ describe("OrderAlertsCard — who can change what", () => {
 		renderCard({
 			canEditAccount: false,
 			notifyEmail: "orders@shop.my",
-			whatsapp: {
-				enabled: true,
-				currentPhone: "60198765432",
-				fallbackPhone: "",
-				optedOut: false,
-				canUse: true,
-			},
+			whatsapp: wa({ switchedOn: true, currentPhone: "60198765432" }),
 		});
 		expect(toggle(/whatsapp order alerts/i).disabled).toBe(true);
 		expect(toggle(/email order alerts/i).disabled).toBe(true);
