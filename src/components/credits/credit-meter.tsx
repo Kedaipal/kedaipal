@@ -2,12 +2,14 @@ import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import type { FunctionReturnType } from "convex/server";
-import { Award, Gauge } from "lucide-react";
+import { Award, Gauge, Lock, Sparkles } from "lucide-react";
 import type { ReactNode } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { CreditBalanceView } from "../../../convex/credits";
+import { USAGE_PACE_DAYS } from "../../../convex/credits";
 import { TOP_UP_VIEW_ONLY_MESSAGE } from "../../../convex/lib/creditPurchases";
-import { useCreditLockFor } from "../../hooks/useCreditLock";
+import { todayMytMidnight } from "../../../convex/lib/fulfilmentDate";
+import { useCreditGateFor } from "../../hooks/useCreditGate";
 import {
 	type FixHighlight,
 	highlightRingClass,
@@ -21,8 +23,10 @@ import {
 	creditTone,
 	lockCta,
 	ordersBalanceLabel,
+	ordersWaitingLabel,
 } from "../../lib/credits-ui";
 import { formatShortDate } from "../../lib/format";
+import { creditPaceLine } from "../../lib/home-copy";
 import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import { cn } from "../../lib/utils";
 import { NeedsAccessNote } from "../app/owner-only-note";
@@ -49,6 +53,12 @@ const TONE_BAR: Record<CreditTone, string> = {
  * (`full`, with the two balances, the rules and the top-up). Reads
  * `credits.getBalance`, gated on the Credits permission — a teammate without
  * it sees nothing here (the lock itself still reaches them via the banner).
+ * Null ALSO means the store is UNMETERED — an admin's own store (z8r3fdp4er)
+ * or a SPONSORED one (z8r3fdrph7) — which is how both meters disappear from
+ * it: one read answers "does this store have credits at all?" and every
+ * credit surface follows that answer. A sponsored seller is told their limits
+ * are off by the Sponsored card in Settings → Billing, not by this card's
+ * absence.
  *
  * The two balances are always shown apart (Zaki, 1 Oct 2026): MONTHLY credits
  * are used first and reset on the 1st; BOUGHT credits are used next and carry
@@ -80,7 +90,21 @@ export function CreditMeter({
 	const topUp = useQuery(
 		convexQuery(api.creditPurchases.topUpOptions, storeArgs),
 	).data;
-	const lock = useCreditLockFor(retailer);
+	const lock = useCreditGateFor(retailer);
+	// The burn rate behind "about N days of orders at this week's pace" (T2).
+	// `since` is a MYT midnight minus the window, never `Date.now()`, so the
+	// query is stable within a day and cacheable.
+	const pace = useQuery(
+		convexQuery(
+			api.credits.getUsagePace,
+			retailer
+				? {
+						retailerId: actingAsAdmin ? retailer._id : undefined,
+						since: todayMytMidnight() - USAGE_PACE_DAYS * 24 * 60 * 60 * 1000,
+					}
+				: "skip",
+		),
+	).data;
 
 	if (balance === undefined)
 		return variant === "card" ? (
@@ -105,8 +129,8 @@ export function CreditMeter({
 			: null;
 
 	// Top-up opens T2's pack picker: hidden where packs aren't sold AND for a
-	// store that can never be locked (an admin's own store, a sponsored one —
-	// nothing to top up; the state line says so), disabled WITH the reason
+	// store that can never be locked (a sponsored one — nothing to top up; the
+	// state line says so), disabled WITH the reason
 	// everywhere else — T2's own sentences (`topUpOptions`), so the meter and
 	// the picker can never disagree about who may buy.
 	const showTopUp = topUp?.available === true && exempt === null;
@@ -117,7 +141,7 @@ export function CreditMeter({
 	const canTopUp = topUpReason === null && !topUpNoWrite;
 
 	const stateLine = creditStateLine({
-		locked: lock.locked,
+		ordersWaiting: lock.ordersWaiting,
 		total: balance.total,
 		purchased: balance.purchased,
 		regime: balance.regime,
@@ -140,17 +164,44 @@ export function CreditMeter({
 					<Award className="size-3" aria-hidden="true" />
 					Founding · 300 a month
 				</span>
+			) : balance.regime === "trial" ? (
+				/* The board's tag. A trial balance behaves differently from a
+				   monthly one — it does not refresh, it runs out — so the card says
+				   which kind of balance this is before it says how much is left. */
+				<span className="inline-flex items-center gap-1 rounded-full bg-accent/15 px-2 py-0.5 text-[11px] font-medium text-accent-emphasis">
+					<Sparkles className="size-3" aria-hidden="true" />
+					Free trial
+				</span>
 			) : null}
 		</div>
 	);
 
 	const headline = (
-		<p
-			className={`text-2xl font-semibold tabular-nums ${TONE_TEXT[tone]}`}
-			data-testid="credit-balance"
-		>
-			{ordersBalanceLabel(balance.total)}
-		</p>
+		<div className="flex flex-col gap-0.5">
+			<p
+				className={`text-2xl font-semibold tabular-nums ${TONE_TEXT[tone]}`}
+				data-testid="credit-balance"
+			>
+				{ordersBalanceLabel(balance.total)}
+			</p>
+			{/* The gated-order count BESIDE the balance (Credits T3.1). "15 orders
+			    owed" is the ledger's answer; "3 waiting on credits" is the one the
+			    seller can act on, and the two are not the same number — a
+			    cancelled waiting order still owes its credit but nobody is waiting
+			    on it. Linked, because a count the seller can't click through to is
+			    a fact they can't act on. */}
+			{lock.ordersWaiting > 0 ? (
+				<Link
+					to="/app/orders"
+					search={{ creditGated: true }}
+					className="inline-flex w-fit items-center gap-1 text-xs font-medium text-muted-foreground underline-offset-2 hover:underline"
+					data-testid="credit-orders-waiting"
+				>
+					<Lock className="size-3" aria-hidden="true" />
+					{ordersWaitingLabel(lock.ordersWaiting)}
+				</Link>
+			) : null}
+		</div>
 	);
 
 	if (variant === "card") {
@@ -161,32 +212,50 @@ export function CreditMeter({
 		// switched off) left a store IN DEBT with no action button while a store
 		// merely running low got one: the urgency ladder upside down.
 		const cta =
-			lock.locked && lock.canAct
+			lock.anyWaiting && lock.canAct
 				? lockCta(lock.route)
-				: !lock.locked &&
+				: !lock.anyWaiting &&
 						(tone === "out" || tone === "low") &&
 						showTopUp &&
 						canTopUp
 					? { label: "Top up credits", search: TOP_UP_SEARCH }
 					: null;
+		// What sits between the headline and the bar, by tone — the boards' own
+		// order (z8r3fdrgzj). Out: the full lock sentence, because a seller who
+		// cannot accept orders needs to read WHY and what still works, not a
+		// four-word summary. Low: the pace forecast, which is the whole point of
+		// warning early. Otherwise nothing — a healthy balance needs no sentence.
+		const detail = lock.anyWaiting
+			? lock.reason
+			: tone === "low"
+				? creditPaceLine({
+						balance: balance.total,
+						perDay: pace?.perDay ?? 0,
+					})
+				: null;
 		return (
 			<section className="flex flex-col gap-3 rounded-2xl border border-input bg-background p-5">
 				{header}
 				<div className="flex flex-col gap-2">
 					{headline}
+					{detail ? (
+						<p className="text-xs leading-relaxed text-muted-foreground">
+							{detail}
+						</p>
+					) : null}
 					<MonthlyBar balance={balance} tone={tone} />
 					<p className="text-xs text-muted-foreground tabular-nums">
 						{monthlyFigure(balance)} {monthlyNoun(balance)} ·{" "}
 						{balance.purchased} bought
 					</p>
 				</div>
-				<p className="text-xs text-muted-foreground">
-					{lock.locked
-						? "Paused: accepting and updating orders, editing products."
-						: (refresh ??
-							(balance.regime === "trial"
-								? "Trial orders — pick a plan to keep going once they're used."
-								: "Monthly credits reset on the 1st."))}
+				<p className="text-xs leading-relaxed text-muted-foreground">
+					{/* `creditStateLine` already writes the board's trial sentence, out
+					    of `TRIAL_CREDIT_GRANT` rather than a literal — the card simply
+					    was not using it, and showed a generic one-liner instead. */}
+					{balance.regime === "trial"
+						? stateLine
+						: (refresh ?? "Monthly credits reset on the 1st.")}
 				</p>
 				<div className="flex flex-wrap gap-2">
 					{cta ? (
@@ -270,7 +339,7 @@ export function CreditMeter({
 			</div>
 			{stateLine ? (
 				<p
-					className={`text-sm ${lock.locked ? "font-medium text-foreground" : "text-muted-foreground"}`}
+					className={`text-sm ${lock.anyWaiting ? "font-medium text-foreground" : "text-muted-foreground"}`}
 				>
 					{stateLine}
 				</p>

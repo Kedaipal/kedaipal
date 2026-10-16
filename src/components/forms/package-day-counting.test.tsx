@@ -159,6 +159,7 @@ describe("ProductForm — the choice sits under a DAY package only", () => {
 				retailerId={"r1" as never}
 				categoriesLocked={false}
 				eventsLocked={false}
+				promoLocked={false}
 				currency="MYR"
 				submitLabel="Save"
 				onSubmit={vi.fn()}
@@ -211,6 +212,7 @@ describe("ProductForm — what it SUBMITS for the day-counting choice", () => {
 				retailerId={"r1" as never}
 				categoriesLocked={false}
 				eventsLocked={false}
+				promoLocked={false}
 				currency="MYR"
 				submitLabel="Save"
 				onSubmit={onSubmit}
@@ -227,7 +229,12 @@ describe("ProductForm — what it SUBMITS for the day-counting choice", () => {
 				}}
 			/>,
 		);
-		fireEvent.click(screen.getByRole("button", { name: "Save" }));
+		// Submit the form itself: the PAYLOAD of a stored product is under
+		// test, and on an untouched edit form Save reads "All changes saved"
+		// and is disabled (z8r3fdtk82).
+		const form = document.querySelector("form");
+		if (!form) throw new Error("no form");
+		fireEvent.submit(form);
 		await vi.waitFor(() => expect(onSubmit).toHaveBeenCalled());
 		const [values] = onSubmit.mock.lastCall ?? [];
 		if (!values) throw new Error("form never submitted");

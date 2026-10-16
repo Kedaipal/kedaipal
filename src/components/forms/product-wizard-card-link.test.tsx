@@ -34,10 +34,7 @@ vi.mock("@tanstack/react-router", () => ({
 		search?: Record<string, string>;
 		children: React.ReactNode;
 	}) => (
-		<a
-			href={search ? `${to}?${new URLSearchParams(search)}` : to}
-			{...rest}
-		>
+		<a href={search ? `${to}?${new URLSearchParams(search)}` : to} {...rest}>
 			{children}
 		</a>
 	),
@@ -76,6 +73,7 @@ function wizard({
 			retailerId={"r1" as never}
 			categoriesLocked={false}
 			eventsLocked={eventsLocked}
+			promoLocked={false}
 			currency={currency}
 			defaultKind={defaultKind}
 			linkedCard={linkedCard}

@@ -10,6 +10,7 @@ import {
 	highlightSource,
 } from "../../convex/lib/marketplaceListing";
 import { csvDate, toCsv } from "../../convex/lib/orderCsv";
+import type { StoreAvailability } from "../../convex/lib/storeAvailability";
 import { formatMobile, formatPrice, formatShortDate } from "./format";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -31,7 +32,11 @@ export type SellerBucket =
 	| "admin"
 	| "none";
 
-export type SellerFilter = "all" | SellerBucket | "wants_enterprise";
+export type SellerFilter =
+	| "all"
+	| SellerBucket
+	| "wants_enterprise"
+	| "unavailable";
 
 /** Chip order. Past due sits first after All — it is the urgent bucket, and
  * an urgent filter never sits last (CLAUDE.md, "own the structure"). Unclaimed
@@ -47,6 +52,10 @@ export const SELLER_FILTERS: readonly SellerFilter[] = [
 	"past_due",
 	"unclaimed",
 	"wants_enterprise",
+	// Paused / offline (z8r3fdudf7) — orthogonal to billing status like the
+	// lead filter, and in the front group: a store not taking orders is
+	// either something Kedaipal did or something to check on.
+	"unavailable",
 	"trialing",
 	"active",
 	"on_hold",
@@ -68,6 +77,7 @@ export const SELLER_FILTER_LABEL: Record<SellerFilter, string> = {
 	admin: "Admin",
 	none: "No subscription",
 	wants_enterprise: "Wants Enterprise",
+	unavailable: "Paused / offline",
 };
 
 /** The empty state's noun for a filter — "No {noun}{ match …}". The chip
@@ -76,6 +86,7 @@ export const SELLER_FILTER_LABEL: Record<SellerFilter, string> = {
  * phrase is owned here beside the labels. */
 export function sellerFilterEmptyNoun(filter: SellerFilter): string {
 	if (filter === "wants_enterprise") return "open Enterprise asks";
+	if (filter === "unavailable") return "paused or offline stores";
 	return `${SELLER_FILTER_LABEL[filter].toLowerCase()} sellers`;
 }
 
@@ -116,10 +127,12 @@ export function countSellerBuckets(
 		admin: 0,
 		none: 0,
 		wants_enterprise: 0,
+		unavailable: 0,
 	};
 	for (const row of rows) {
 		counts[sellerBucket(row)] += 1;
 		if (isEnterpriseLead(row)) counts.wants_enterprise += 1;
+		if (row.availability.state !== "open") counts.unavailable += 1;
 	}
 	return counts;
 }
@@ -242,7 +255,9 @@ export function filterSellers(
 				? true
 				: filter === "wants_enterprise"
 					? isEnterpriseLead(row)
-					: sellerBucket(row) === filter) && matchesSellerSearch(row, query),
+					: filter === "unavailable"
+						? row.availability.state !== "open"
+						: sellerBucket(row) === filter) && matchesSellerSearch(row, query),
 	);
 }
 
@@ -445,11 +460,33 @@ export function sellerExpiry(row: AdminSellerRow, now: number): SellerExpiry {
 
 /** Why the status is what it is, when the pill alone would leave the admin
  * guessing. Absent when the pill says it all. */
+/**
+ * The toast after "Reopen store" (`z8r3fdudf7`), from the state the server
+ * returns AFTER lifting Kedaipal's switch — the resolver's own answer, never
+ * a status proxy such as `subscriptionStatus === "on_hold"` (PR #369 review).
+ */
+export function reopenedToast(
+	storeName: string,
+	after: StoreAvailability,
+): string {
+	if (after.state === "open") return `${storeName} is open for orders again.`;
+	const stillOff =
+		after.by === "hold" ? "an Off-Season Hold" : "the seller's own pause";
+	return `Kedaipal's switch is off, but ${storeName} is still not taking orders — ${stillOff}.`;
+}
+
 export function sellerReason(row: AdminSellerRow): string | undefined {
 	if (row.unclaimed)
 		return row.pendingOwnerEmail
 			? "Built by us · waiting to be claimed"
 			: "Built by us · set a handover email";
+	// Not taking orders (z8r3fdudf7) — said before billing, because it is
+	// what the store's buyers are feeling right now.
+	const a = row.availability;
+	if (a.state === "offline") return "Offline · taken down by Kedaipal";
+	if (a.state === "paused" && a.by === "admin") return "Paused by Kedaipal";
+	if (a.state === "paused" && a.by === "seller")
+		return a.note ? `Paused by seller · “${a.note}”` : "Paused by seller";
 	if (row.ownerIsAdmin || row.comped) return undefined;
 	const failed = row.autoRenew?.failedAttempts ?? 0;
 	if (failed > 0) {
@@ -666,7 +703,7 @@ export interface SellerCredits {
 	detail: string;
 	tone: CreditsTone;
 	/** The total is at or below zero — the fact the seller lock keys off
-	 * (T3). Comped and admin stores can be out and are still never locked. */
+	 * (T3). A comped store can be out and is still never locked. */
 	out: boolean;
 	/** When the total reached zero (`exhaustedAt`) — "out since". */
 	outSince?: number;
@@ -674,11 +711,33 @@ export interface SellerCredits {
 	customGrant?: number;
 	/** plan + purchased, for sorting. Absent = no credit account yet. */
 	total?: number;
+	/** False when credits don't apply to this store at all (z8r3fdp4er). The
+	 * sheet reads it to drop the rows that would otherwise print a grant, an
+	 * out-of-credits verdict and a custom-grant line for a store that has
+	 * none — one helper answers "is this store metered?", so the directory row
+	 * and the sheet beside it can't tell different stories. */
+	metered: boolean;
 }
 
 /** A store's credits in one reading, shared by the table, the phone cards,
  * the sheet, the CSV and the copy-summary so they can't disagree. */
 export function sellerCredits(row: AdminSellerRow): SellerCredits {
+	// Unmetered (z8r3fdp4er + z8r3fdrph7): an admin's own store AND a SPONSORED
+	// one are outside the credit system — no account, no grant, no debit. Asked
+	// BEFORE the row's cached figures, which a store that was metered before
+	// the gate still carries: a comped store that was billed last month still
+	// holds "plan 200 · bought 0", and printing it here is the directory
+	// repeating the very claim this ticket removed from the seller's meter.
+	if (row.ownerIsAdmin || row.comped)
+		return {
+			headline: "—",
+			detail: row.ownerIsAdmin
+				? "Admin store — not metered"
+				: "Sponsored — not metered",
+			tone: "muted",
+			out: false,
+			metered: false,
+		};
 	const c = row.credits;
 	if (!c)
 		return {
@@ -686,10 +745,11 @@ export function sellerCredits(row: AdminSellerRow): SellerCredits {
 			detail: "No credit account yet",
 			tone: "muted",
 			out: false,
+			metered: true,
 		};
 	const total = c.plan + c.purchased;
 	const out = total <= 0;
-	const neverLocked = row.ownerIsAdmin || row.comped;
+	const neverLocked = row.comped;
 	const detail = [
 		`plan ${c.plan}`,
 		`bought ${c.purchased}`,
@@ -704,7 +764,20 @@ export function sellerCredits(row: AdminSellerRow): SellerCredits {
 		outSince: out ? c.exhaustedAt : undefined,
 		customGrant: c.customGrant,
 		total,
+		metered: true,
 	};
+}
+
+/**
+ * What the credit-ledger drawer says when credits don't apply to a store.
+ * One author for both sentences, because the two unmetered kinds owe the
+ * admin different next steps: an admin store is permanent, a comp is a toggle
+ * whose next state is "metered again".
+ */
+export function sellerUnmeteredNote(row: AdminSellerRow): string {
+	return row.ownerIsAdmin
+		? "Admin store — not metered. Credits apply to billed seller stores only: this one has no balance, takes no monthly grant and spends nothing per order."
+		: "Sponsored store — not metered. A comp grants what an admin's own store gets, which is no limits at all: no balance, no monthly grant, nothing spent per order. Turn the comp off and the store is metered again from that moment, starting with the month's grant.";
 }
 
 export const SELLER_STATUS_LABEL: Record<SellerBucket, string> = {

@@ -52,9 +52,19 @@ vi.mock("../forms/google-address-autocomplete", () => ({
 }));
 // The collection toggle's stage-editor tip renders a router Link — inert
 // anchor stub, same as book-delivery-card.test.tsx.
+const navigate = vi.hoisted(() => vi.fn());
 vi.mock("@tanstack/react-router", () => ({
 	Link: (props: Record<string, unknown>) => <a {...props} />,
+	useNavigate: () => navigate,
 }));
+
+/** Open one of the Fulfilment tab's in-place rows (9A) — its accessible name
+ * starts with the label, then the value it summarises. */
+function openRow(label: string) {
+	fireEvent.click(
+		screen.getByRole("button", { name: new RegExp(`^${label}`) }),
+	);
+}
 
 // Every test here renders the ENTIRE FulfilmentTab (cards, hours editor, DnD
 // list) in jsdom, and the OpeningHoursCard tests then drive radix-popper time
@@ -119,7 +129,6 @@ describe("FulfilmentTab act-as wiring", () => {
 					offerDelivery={true}
 					deliveryConfig={undefined}
 					businessAddress={undefined}
-					deliveryBooking={undefined}
 					minFulfilmentNoticeDays={undefined}
 					openingHours={undefined}
 					closedDates={undefined}
@@ -127,6 +136,7 @@ describe("FulfilmentTab act-as wiring", () => {
 					minOrderValue={undefined}
 					awbConfig={undefined}
 					subscription={undefined}
+					deliveryBooking={undefined}
 				/>
 			</ActAsProvider>,
 		);
@@ -135,6 +145,7 @@ describe("FulfilmentTab act-as wiring", () => {
 	/** Change the min-notice input and click the Save button in ITS card (the
 	 * tab has several Save buttons). */
 	function saveMinNotice() {
+		openRow("Advance notice");
 		const input = screen.getByLabelText("Minimum days' notice");
 		fireEvent.change(input, { target: { value: "3" } });
 		const card = input.closest("section");
@@ -177,106 +188,6 @@ describe("FulfilmentTab act-as wiring", () => {
 	});
 });
 
-describe("Collection service toggle (86eyg0n8e)", () => {
-	let updateSettings: ReturnType<typeof vi.fn>;
-
-	beforeEach(() => {
-		updateSettings = vi.fn().mockResolvedValue({ ok: true });
-		vi.mocked(useQuery).mockImplementation(((opts: {
-			__fn: FunctionReference<"query">;
-		}) => ({
-			data: getFunctionName(opts.__fn) === NAME.listLocations ? [] : undefined,
-			isPending: false,
-		})) as never);
-		vi.mocked(useMutation).mockImplementation(((
-			ref: FunctionReference<"mutation">,
-		) =>
-			getFunctionName(ref) === NAME.updateSettings
-				? updateSettings
-				: vi.fn().mockResolvedValue(undefined)) as never);
-	});
-
-	afterEach(() => {
-		cleanup();
-		window.sessionStorage.clear();
-	});
-
-	function renderLalamoveTab(
-		deliveryDirection: "standard" | "collection" = "standard",
-	) {
-		return render(
-			<ActAsProvider>
-				<FulfilmentTab
-					retailerId={SELLER_ID as never}
-					country="MY"
-					currency="MYR"
-					offerSelfCollect={false}
-					offerDelivery={true}
-					deliveryConfig={{ mode: "lalamove", onUnquotable: "block" }}
-					businessAddress={{
-						label: "Wash Bay HQ",
-						latitude: 3.1,
-						longitude: 101.6,
-					}}
-					deliveryBooking={{
-						enabled: true,
-						vehicleType: "MOTORCYCLE",
-						hasCredentials: true,
-						promptBookOnPacked: false,
-						deliveryDirection,
-						apiKeyHint: "abcd",
-					}}
-					minFulfilmentNoticeDays={undefined}
-					openingHours={undefined}
-					closedDates={undefined}
-					hasBookingListings={false}
-					minOrderValue={undefined}
-					awbConfig={undefined}
-					subscription={undefined}
-				/>
-			</ActAsProvider>,
-		);
-	}
-
-	function saveLalamoveCard() {
-		fireEvent.click(screen.getByRole("button", { name: "Save live pricing" }));
-	}
-
-	it("turning the toggle ON saves deliveryDirection: 'collection'", async () => {
-		renderLalamoveTab("standard");
-		const toggle = screen.getByRole("switch", { name: "Collection service" });
-		expect(toggle.getAttribute("aria-checked")).toBe("false");
-		fireEvent.click(toggle);
-		saveLalamoveCard();
-		await waitFor(() => expect(updateSettings).toHaveBeenCalled());
-		expect(updateSettings.mock.calls[0][0].deliveryBooking).toMatchObject({
-			enabled: true,
-			deliveryDirection: "collection",
-		});
-	});
-
-	it("a stored collection store renders the toggle ON and an unchanged save keeps it", async () => {
-		renderLalamoveTab("collection");
-		const toggle = screen.getByRole("switch", { name: "Collection service" });
-		expect(toggle.getAttribute("aria-checked")).toBe("true");
-		saveLalamoveCard();
-		await waitFor(() => expect(updateSettings).toHaveBeenCalled());
-		expect(
-			updateSettings.mock.calls[0][0].deliveryBooking.deliveryDirection,
-		).toBe("collection");
-	});
-
-	it("turning it OFF saves an explicit 'standard' (really clears, not merge-keeps)", async () => {
-		renderLalamoveTab("collection");
-		fireEvent.click(screen.getByRole("switch", { name: "Collection service" }));
-		saveLalamoveCard();
-		await waitFor(() => expect(updateSettings).toHaveBeenCalled());
-		expect(
-			updateSettings.mock.calls[0][0].deliveryBooking.deliveryDirection,
-		).toBe("standard");
-	});
-});
-
 describe("OpeningHoursCard (86eyp5rav)", () => {
 	let updateSettings: ReturnType<typeof vi.fn>;
 
@@ -308,7 +219,13 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 		window.sessionStorage.clear();
 	});
 
-	function renderWithHours(
+	function renderWithHours(...args: Parameters<typeof renderHoursTab>) {
+		const result = renderHoursTab(...args);
+		openRow("Opening hours");
+		return result;
+	}
+
+	function renderHoursTab(
 		openingHours:
 			| Array<{
 					open: number;
@@ -329,7 +246,6 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 					offerDelivery={true}
 					deliveryConfig={undefined}
 					businessAddress={undefined}
-					deliveryBooking={undefined}
 					minFulfilmentNoticeDays={undefined}
 					openingHours={openingHours}
 					closedDates={undefined}
@@ -337,6 +253,7 @@ describe("OpeningHoursCard (86eyp5rav)", () => {
 					minOrderValue={undefined}
 					awbConfig={undefined}
 					subscription={undefined}
+					deliveryBooking={undefined}
 				/>
 			</ActAsProvider>,
 		);
@@ -876,7 +793,6 @@ describe("SG delivery-charge modes (SG-lite, 86eynw29u)", () => {
 					offerDelivery={true}
 					deliveryConfig={deliveryConfig}
 					businessAddress={undefined}
-					deliveryBooking={undefined}
 					minFulfilmentNoticeDays={undefined}
 					openingHours={undefined}
 					closedDates={undefined}
@@ -884,51 +800,35 @@ describe("SG delivery-charge modes (SG-lite, 86eynw29u)", () => {
 					minOrderValue={undefined}
 					awbConfig={undefined}
 					subscription={undefined}
+					deliveryBooking={undefined}
 				/>
 			</ActAsProvider>,
 		);
 	}
 
-	it("an SG store sees Live + Free + Flat, with the MY-only pair explained", () => {
-		// Live pricing arrived with Lalamove SG (z8r3fdch3r) — only the
-		// geography-shaped modes stay Malaysian.
-		renderTab("SG");
-		expect(
-			screen.getByRole("button", { name: /live courier price/i }),
-		).toBeTruthy();
-		expect(screen.getByRole("button", { name: /Free/ })).toBeTruthy();
-		expect(screen.getByRole("button", { name: /Flat fee/ })).toBeTruthy();
-		expect(screen.queryByRole("button", { name: /By distance/ })).toBeNull();
-		expect(
-			screen.queryByRole("button", { name: /By weight & zone/ }),
-		).toBeNull();
-		// The missing cards are explained, never a mystery.
-		expect(screen.getByText(/Malaysia-only for now/)).toBeTruthy();
-	});
-
-	it("an MY store keeps all five mode cards and no SG reason line", () => {
-		renderTab("MY");
-		expect(screen.getByRole("button", { name: /By distance/ })).toBeTruthy();
-		expect(
-			screen.getByRole("button", { name: /By weight & zone/ }),
-		).toBeTruthy();
-		expect(screen.queryByText(/Malaysia-only for now/)).toBeNull();
-	});
-
-	it("an SG store's money fields wear S$, never RM (86eyqgujv)", () => {
-		// Zaki's report: a Singapore store's delivery + minimum-order fields
-		// still quoted Malaysian ringgit. The symbol now comes from the store's
-		// currency, so the flat-fee prefix and the min-order label follow it.
+	it("the Delivery card summarises pricing and opens its page (3A)", () => {
+		// Five modes outgrew a card inside a tab — the tab now carries the
+		// one-line summary and the page carries the editor.
 		renderTab("SG", { mode: "flat", fee: 500 });
-		expect(screen.getAllByText("S$").length).toBeGreaterThan(0);
-		expect(screen.queryByText("RM")).toBeNull();
+		expect(screen.queryByRole("radio", { name: /Flat fee/ })).toBeNull();
+		const row = screen.getByRole("button", { name: /^Delivery pricing/ });
+		expect(row.textContent).toContain("Flat fee");
+		expect(row.textContent).toContain("S$");
+		fireEvent.click(row);
+		expect(navigate).toHaveBeenCalledWith({
+			to: "/app/settings/delivery-pricing",
+		});
+	});
+
+	it("an SG store's minimum order wears S$, never RM (86eyqgujv)", () => {
+		renderTab("SG", { mode: "flat", fee: 500 });
+		openRow("Minimum order");
 		expect(screen.getByText(/Minimum subtotal \(S\$\)/)).toBeTruthy();
 	});
 
-	it("an MY store is untouched — the same fields still wear RM", () => {
+	it("an MY store is untouched — the same field still wears RM", () => {
 		renderTab("MY", { mode: "flat", fee: 500 });
-		expect(screen.getAllByText("RM").length).toBeGreaterThan(0);
-		expect(screen.queryByText("S$")).toBeNull();
+		openRow("Minimum order");
 		expect(screen.getByText(/Minimum subtotal \(RM\)/)).toBeTruthy();
 	});
 
@@ -936,33 +836,27 @@ describe("SG delivery-charge modes (SG-lite, 86eynw29u)", () => {
 		// The field used to render ONLY inside the radius and Lalamove mode
 		// panels, both Malaysia-only — so a Singapore store had no way to set a
 		// business address, and therefore no return address on any despatch
-		// label it printed. Its own always-visible card fixes that.
+		// label it printed. It's a row of the Delivery card in every mode.
 		renderTab("SG", { mode: "flat", fee: 500 });
-		expect(screen.getByText("Business address")).toBeTruthy();
-		expect(screen.getByText(/return address on despatch labels/i)).toBeTruthy();
+		openRow("Business address");
+		expect(screen.getByLabelText("address")).toBeTruthy();
 	});
 
-	it("MY keeps one editor too — the duplicated pickers are gone", () => {
-		// It was duplicated once in radius mode and once in Lalamove mode. One
-		// card, one save; the modes now reference it instead of owning a copy.
+	it("MY keeps one editor too — the pricing page only references it", () => {
 		renderTab("MY", {
 			mode: "radius",
 			bands: [{ maxKm: 5, fee: 500 }],
 			outOfRange: "arrange",
 		});
-		expect(screen.getAllByText("Business address")).toHaveLength(1);
+		openRow("Business address");
+		expect(screen.getAllByLabelText("address")).toHaveLength(1);
 	});
 
-	it("a mode that needs the address, without one, points at the card", () => {
-		renderTab("MY", {
-			mode: "radius",
-			bands: [{ maxKm: 5, fee: 500 }],
-			outOfRange: "arrange",
-		});
-		expect(screen.getByText(/Set your business address first/i)).toBeTruthy();
+	it("a missing address warns on its row before the seller opens it", () => {
+		renderTab("MY", { mode: "flat", fee: 500 });
 		expect(
-			screen.getByRole("button", { name: /Go to Business address/ }),
-		).toBeTruthy();
+			screen.getByRole("button", { name: /^Business address/ }).textContent,
+		).toContain("Not set");
 	});
 
 	it("a deep link rings the exact card, and only that card (86eyqgujv)", () => {
@@ -982,7 +876,6 @@ describe("SG delivery-charge modes (SG-lite, 86eynw29u)", () => {
 					offerDelivery={true}
 					deliveryConfig={{ mode: "flat", fee: 500 }}
 					businessAddress={undefined}
-					deliveryBooking={undefined}
 					minFulfilmentNoticeDays={undefined}
 					openingHours={undefined}
 					closedDates={undefined}
@@ -990,6 +883,7 @@ describe("SG delivery-charge modes (SG-lite, 86eynw29u)", () => {
 					minOrderValue={undefined}
 					awbConfig={undefined}
 					subscription={undefined}
+					deliveryBooking={undefined}
 				/>
 			</ActAsProvider>,
 		);
@@ -1005,248 +899,6 @@ describe("SG delivery-charge modes (SG-lite, 86eynw29u)", () => {
 	it("no deep link means no ring anywhere — never a permanent red border", () => {
 		const { container } = renderTab("SG", { mode: "flat", fee: 500 });
 		expect(container.querySelectorAll("[data-fix-highlight]")).toHaveLength(0);
-	});
-
-	it("an SG store stuck on a stored MY-only mode gets the amber repair note", () => {
-		renderTab("SG", {
-			mode: "radius",
-			bands: [{ maxKm: 5, fee: 500 }],
-			outOfRange: "arrange",
-		});
-		expect(screen.getByText(/uses a Malaysia-only mode/)).toBeTruthy();
-	});
-});
-
-describe("live courier pricing (z8r3fdbvdy)", () => {
-	let updateSettings: ReturnType<typeof vi.fn>;
-
-	beforeEach(() => {
-		updateSettings = vi.fn().mockResolvedValue({ ok: true });
-		vi.mocked(useQuery).mockImplementation(((opts: {
-			__fn: FunctionReference<"query">;
-		}) => ({
-			data: getFunctionName(opts.__fn) === NAME.listLocations ? [] : undefined,
-			isPending: false,
-		})) as never);
-		vi.mocked(useMutation).mockImplementation(((
-			ref: FunctionReference<"mutation">,
-		) =>
-			getFunctionName(ref) === NAME.updateSettings
-				? updateSettings
-				: vi.fn().mockResolvedValue(undefined)) as never);
-	});
-
-	afterEach(() => {
-		cleanup();
-		window.sessionStorage.clear();
-	});
-
-	// The mode used to be Lalamove's. It now prices across every armed
-	// provider, so the tile, the copy and the saved value all had to stop
-	// naming one of them.
-	function renderLive(
-		over: {
-			config?: { mode: "live" | "lalamove"; onUnquotable: "block" } | undefined;
-			hasKeys?: boolean;
-		} = {},
-	) {
-		return render(
-			<ActAsProvider>
-				<FulfilmentTab
-					retailerId={SELLER_ID as never}
-					country="MY"
-					currency="MYR"
-					offerSelfCollect={false}
-					offerDelivery={true}
-					deliveryConfig={over.config}
-					businessAddress={{
-						label: "HQ",
-						latitude: 3.1,
-						longitude: 101.6,
-					}}
-					deliveryBooking={
-						over.hasKeys === false
-							? undefined
-							: {
-									enabled: true,
-									vehicleType: "MOTORCYCLE",
-									hasCredentials: true,
-									promptBookOnPacked: false,
-									deliveryDirection: "standard",
-									apiKeyHint: "abcd",
-								}
-					}
-					minFulfilmentNoticeDays={undefined}
-					openingHours={undefined}
-					closedDates={undefined}
-					hasBookingListings={false}
-					minOrderValue={undefined}
-					awbConfig={undefined}
-					subscription={undefined}
-				/>
-			</ActAsProvider>,
-		);
-	}
-
-	it("saves the provider-aware mode, not the Lalamove one", async () => {
-		renderLive();
-		fireEvent.click(
-			screen.getByRole("button", { name: /live courier price/i }),
-		);
-		fireEvent.click(screen.getByRole("button", { name: "Save live pricing" }));
-		await waitFor(() => expect(updateSettings).toHaveBeenCalled());
-		expect(updateSettings.mock.calls[0][0].deliveryConfig).toEqual({
-			mode: "live",
-			onUnquotable: "block",
-		});
-	});
-
-	it("a store still on the pre-migration mode shows as selected", () => {
-		renderLive({ config: { mode: "lalamove", onUnquotable: "block" } });
-		expect(
-			screen
-				.getByRole("button", { name: /live courier price/i })
-				.getAttribute("aria-pressed"),
-		).toBe("true");
-	});
-
-	it("offers exactly one live-pricing tile — the mode grid, nothing else", () => {
-		renderLive();
-		expect(
-			screen.getAllByRole("button", { name: /live courier price/i }),
-		).toHaveLength(1);
-	});
-
-	it("names both providers on the tile — not just the rider one", () => {
-		const { container } = renderLive();
-		fireEvent.click(
-			screen.getByRole("button", { name: /live courier price/i }),
-		);
-		expect(container.querySelector('img[alt="Delyva"]')).toBeTruthy();
-		expect(container.querySelector('img[alt="Lalamove"]')).toBeTruthy();
-	});
-
-	it("says what will be quoted, and refuses when nothing is connected", () => {
-		const { container } = renderLive({ hasKeys: false });
-		fireEvent.click(
-			screen.getByRole("button", { name: /live courier price/i }),
-		);
-		expect(container.textContent).toContain("Nothing can quote yet");
-		expect(container.textContent).toContain("Integrations");
-	});
-
-	it("shows a status chip per provider, not a Lalamove-only section", () => {
-		const { container } = renderLive({ hasKeys: false });
-		fireEvent.click(
-			screen.getByRole("button", { name: /live courier price/i }),
-		);
-		// Both providers get a row and a chip even when unarmed — connection
-		// state was previously a Lalamove-only section a screen away.
-		expect(container.textContent).toContain("Riders");
-		expect(container.textContent).toContain("Couriers");
-		expect(screen.getAllByText("Not connected").length).toBe(2);
-	});
-
-	it("never shows the test-mode note for a store with NO Lalamove keys (Zaki's bug)", () => {
-		// The old banner keyed off env === "sandbox" alone, so a keyless row
-		// with a stale env stamp warned about Lalamove test keys on a store
-		// that only had Delyva.
-		const { container } = renderLive({ hasKeys: false });
-		fireEvent.click(
-			screen.getByRole("button", { name: /live courier price/i }),
-		);
-		expect(container.textContent).not.toContain("Test mode");
-	});
-
-	it("hides the rider-only controls when no rider bids", () => {
-		const { container } = renderLive({ hasKeys: false });
-		fireEvent.click(
-			screen.getByRole("button", { name: /live courier price/i }),
-		);
-		// The vehicle picker is a Lalamove setting — meaningless for a
-		// parcel-only store, and it used to render regardless.
-		expect(container.textContent).not.toContain("Default vehicle");
-	});
-
-	it("keeps the rider controls when Lalamove is connected", () => {
-		const { container } = renderLive();
-		fireEvent.click(
-			screen.getByRole("button", { name: /live courier price/i }),
-		);
-		expect(container.textContent).toContain("Default vehicle");
-	});
-});
-
-describe("live-mode saves respect the toggles (Zaki, 6 Sep)", () => {
-	let updateSettings: ReturnType<typeof vi.fn>;
-
-	beforeEach(() => {
-		updateSettings = vi.fn().mockResolvedValue({ ok: true });
-		vi.mocked(useQuery).mockImplementation(((opts: {
-			__fn: FunctionReference<"query">;
-		}) => ({
-			data: getFunctionName(opts.__fn) === NAME.listLocations ? [] : undefined,
-			isPending: false,
-		})) as never);
-		vi.mocked(useMutation).mockImplementation(((
-			ref: FunctionReference<"mutation">,
-		) =>
-			getFunctionName(ref) === NAME.updateSettings
-				? updateSettings
-				: vi.fn().mockResolvedValue(undefined)) as never);
-	});
-	afterEach(() => {
-		cleanup();
-		window.sessionStorage.clear();
-	});
-
-	function renderArmed(bookingEnabled: boolean) {
-		return render(
-			<ActAsProvider>
-				<FulfilmentTab
-					retailerId={SELLER_ID as never}
-					country="MY"
-					currency="MYR"
-					offerSelfCollect={false}
-					offerDelivery={true}
-					deliveryConfig={{ mode: "live", onUnquotable: "block" }}
-					businessAddress={{ label: "HQ", latitude: 3.1, longitude: 101.6 }}
-					deliveryBooking={{
-						enabled: bookingEnabled,
-						vehicleType: "MOTORCYCLE",
-						hasCredentials: true,
-						promptBookOnPacked: false,
-						deliveryDirection: "standard",
-						apiKeyHint: "abcd",
-					}}
-					minFulfilmentNoticeDays={undefined}
-					openingHours={undefined}
-					closedDates={undefined}
-					hasBookingListings={false}
-					minOrderValue={undefined}
-					awbConfig={undefined}
-					subscription={undefined}
-				/>
-			</ActAsProvider>,
-		);
-	}
-
-	it("saving live pricing never force-re-arms rider booking", async () => {
-		renderArmed(true);
-		fireEvent.click(screen.getByRole("button", { name: "Save live pricing" }));
-		await waitFor(() => expect(updateSettings).toHaveBeenCalled());
-		// The toggles own the bidders — a save must not overwrite them.
-		expect(updateSettings.mock.calls[0][0].deliveryBooking).toBeUndefined();
-	});
-
-	it("refuses the save when nothing is ARMED — keys alone don't bid", async () => {
-		const { container } = renderArmed(false);
-		fireEvent.click(screen.getByRole("button", { name: "Save live pricing" }));
-		await new Promise((r) => setTimeout(r, 10));
-		expect(updateSettings).not.toHaveBeenCalled();
-		expect(container.textContent).toContain(
-			"Turn on at least one service under Courier booking",
-		);
 	});
 });
 
@@ -1294,7 +946,6 @@ describe("Business address — unit / floor line (z8r3fdff8r test round)", () =>
 					offerDelivery={true}
 					deliveryConfig={undefined}
 					businessAddress={businessAddress}
-					deliveryBooking={undefined}
 					minFulfilmentNoticeDays={undefined}
 					openingHours={undefined}
 					closedDates={undefined}
@@ -1302,6 +953,7 @@ describe("Business address — unit / floor line (z8r3fdff8r test round)", () =>
 					minOrderValue={undefined}
 					awbConfig={undefined}
 					subscription={undefined}
+					deliveryBooking={undefined}
 				/>
 			</ActAsProvider>
 		);
@@ -1309,11 +961,17 @@ describe("Business address — unit / floor line (z8r3fdff8r test round)", () =>
 
 	const unitInput = () =>
 		screen.getByLabelText(/Unit \/ floor \/ building/) as HTMLInputElement;
+	/** The editor sits in the Delivery card's Business address row (9A). */
+	function renderOpen(node: ReturnType<typeof tab>) {
+		const result = render(node);
+		openRow("Business address");
+		return result;
+	}
 	const saveAddress = () =>
 		screen.getByRole("button", { name: "Save address" });
 
 	it("with no address yet, the unit waits and SAYS why, instead of silently refusing to save", () => {
-		render(tab(undefined));
+		renderOpen(tab(undefined));
 		expect(unitInput().disabled).toBe(true);
 		expect(
 			screen.getByText(
@@ -1323,7 +981,9 @@ describe("Business address — unit / floor line (z8r3fdff8r test round)", () =>
 	});
 
 	it("with an address, the unit is editable and its cap is stated up front", () => {
-		render(tab({ label: "12 Jln Tun Razak", latitude: 3.1, longitude: 101.6 }));
+		renderOpen(
+			tab({ label: "12 Jln Tun Razak", latitude: 3.1, longitude: 101.6 }),
+		);
 		expect(unitInput().disabled).toBe(false);
 		expect(screen.getByText(/Up to 80 characters\./)).toBeTruthy();
 		expect(saveAddress().hasAttribute("disabled")).toBe(true);
@@ -1335,7 +995,7 @@ describe("Business address — unit / floor line (z8r3fdff8r test round)", () =>
 			latitude: 3.1,
 			longitude: 101.6,
 		};
-		const { rerender } = render(tab(stored));
+		const { rerender } = renderOpen(tab(stored));
 		fireEvent.change(unitInput(), {
 			target: { value: "  Unit 3-1,    Block B  " },
 		});
@@ -1359,7 +1019,7 @@ describe("Business address — unit / floor line (z8r3fdff8r test round)", () =>
 	});
 
 	it("whitespace-only is a real change back to 'no unit', not a phantom edit", () => {
-		render(
+		renderOpen(
 			tab({
 				label: "12 Jln Tun Razak",
 				latitude: 3.1,
@@ -1441,7 +1101,6 @@ describe("event-venue badge on pickup points (z8r3fdff9u round 5)", () => {
 					offerDelivery={true}
 					deliveryConfig={undefined}
 					businessAddress={undefined}
-					deliveryBooking={undefined}
 					minFulfilmentNoticeDays={undefined}
 					openingHours={undefined}
 					closedDates={undefined}
@@ -1449,6 +1108,7 @@ describe("event-venue badge on pickup points (z8r3fdff9u round 5)", () => {
 					minOrderValue={undefined}
 					awbConfig={undefined}
 					subscription={undefined}
+					deliveryBooking={undefined}
 				/>
 			</ActAsProvider>,
 		);
@@ -1509,5 +1169,94 @@ describe("event-venue badge on pickup points (z8r3fdff9u round 5)", () => {
 		fireEvent.click(screen.getByRole("button", { name: /Show inactive/ }));
 		expect(screen.getByText(/Event venue: Card Check Camp/)).toBeTruthy();
 		expect(screen.queryByText(/aren't charged the fee/)).toBeNull();
+	});
+});
+
+describe("Courier booking row (settings exposure audit, 86eye9xd4)", () => {
+	// The arm switches moved onto the Delivery pricing page (3A). Without a row
+	// of their own here, the only way in was a row labelled "Pricing", and
+	// every "turn it on under Fulfilment → Courier booking" hint in the app
+	// pointed at a card that no longer existed.
+	const DELYVA = getFunctionName(api.delyva.getSettings);
+	let delyva: { connected: boolean; enabled: boolean } | undefined;
+
+	beforeEach(() => {
+		delyva = undefined;
+		navigate.mockReset();
+		vi.mocked(useQuery).mockImplementation(((opts: {
+			__fn: FunctionReference<"query">;
+		}) => {
+			const name = getFunctionName(opts.__fn);
+			if (name === NAME.listLocations) return { data: [], isPending: false };
+			if (name === DELYVA) return { data: delyva, isPending: false };
+			return { data: undefined, isPending: false };
+		}) as never);
+		vi.mocked(useMutation).mockImplementation((() =>
+			vi.fn().mockResolvedValue(undefined)) as never);
+	});
+
+	afterEach(() => {
+		cleanup();
+		window.sessionStorage.clear();
+	});
+
+	function renderTab(
+		over: {
+			deliveryBooking?: { enabled?: boolean };
+			subscription?: unknown;
+		} = {},
+	) {
+		return render(
+			<ActAsProvider>
+				<FulfilmentTab
+					retailerId={SELLER_ID as never}
+					country="MY"
+					currency="MYR"
+					offerSelfCollect={false}
+					offerDelivery={true}
+					deliveryConfig={undefined}
+					businessAddress={undefined}
+					minFulfilmentNoticeDays={undefined}
+					openingHours={undefined}
+					closedDates={undefined}
+					hasBookingListings={false}
+					minOrderValue={undefined}
+					awbConfig={undefined}
+					subscription={over.subscription as never}
+					deliveryBooking={over.deliveryBooking as never}
+				/>
+			</ActAsProvider>,
+		);
+	}
+
+	const row = () => screen.getByRole("button", { name: /^Courier booking: / });
+
+	it("says what's armed, and opens the switches on the pricing page", () => {
+		delyva = { connected: true, enabled: true };
+		renderTab({ deliveryBooking: { enabled: true } });
+		expect(row().getAttribute("aria-label")).toBe(
+			"Courier booking: Lalamove riders · Delyva",
+		);
+		fireEvent.click(row());
+		expect(navigate).toHaveBeenCalledWith({
+			to: "/app/settings/delivery-pricing",
+			hash: "courier-booking",
+		});
+	});
+
+	it("reads Off when nothing is armed — the row is still there to find", () => {
+		renderTab();
+		expect(row().getAttribute("aria-label")).toBe("Courier booking: Off");
+	});
+
+	it("a plan without delivery booking shows the Pro badge instead", () => {
+		renderTab({
+			subscription: {
+				plan: "starter",
+				status: "active",
+				features: { delivery: false },
+			},
+		});
+		expect(row().textContent).toMatch(/Pro/);
 	});
 });

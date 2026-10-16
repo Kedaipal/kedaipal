@@ -2,9 +2,9 @@ import { describe, expect, test } from "vitest";
 import {
 	type BuyerQuestionsDraft,
 	normalizeQuestionsDraft,
+	questionRowIssues,
 	questionsDraftFrom,
 	questionsDraftIssue,
-	questionRowIssues,
 	questionsSubmitValue,
 } from "./buyer-questions-card";
 

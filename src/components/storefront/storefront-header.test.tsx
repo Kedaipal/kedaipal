@@ -39,9 +39,7 @@ describe("StorefrontHeader", () => {
 
 	it("offers Share store only when it has the slug to share", () => {
 		render(<StorefrontHeader retailer={retailer} slug="dapur-nadia" />);
-		expect(
-			screen.getByRole("button", { name: /share store/i }),
-		).toBeTruthy();
+		expect(screen.getByRole("button", { name: /share store/i })).toBeTruthy();
 		cleanup();
 		render(<StorefrontHeader retailer={retailer} />);
 		expect(screen.queryByRole("button", { name: /share store/i })).toBeNull();

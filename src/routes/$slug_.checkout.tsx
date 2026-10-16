@@ -6,8 +6,10 @@ import {
 	notFound,
 	redirect,
 } from "@tanstack/react-router";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Zap } from "lucide-react";
+import { useMemo } from "react";
 import { api } from "../../convex/_generated/api";
+import type { Id } from "../../convex/_generated/dataModel";
 import { BookingCheckoutForm } from "../components/storefront/booking-checkout-form";
 import { CheckoutPage } from "../components/storefront/checkout-form";
 import { EventRsvpCheckoutForm } from "../components/storefront/event-rsvp-checkout-form";
@@ -15,12 +17,21 @@ import {
 	OrderingPausedProvider,
 	SeasonalBreakNotice,
 } from "../components/storefront/seasonal-break";
+import {
+	StoreUnavailable,
+	type StoreUnavailableLoaderData,
+	storeUnavailableHead,
+} from "../components/storefront/store-unavailable";
 import { StorefrontAppBar } from "../components/storefront/storefront-app-bar";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
+import { CountdownBand } from "../components/ui/countdown-strip";
 import { Skeleton } from "../components/ui/skeleton";
-import { useCart } from "../hooks/useCart";
+import { type UseCart, useCart } from "../hooks/useCart";
+import { usePromoClock } from "../hooks/usePromoClock";
 import { useCaptureAttribution } from "../hooks/useSourceAttribution";
+import { useCaptureVoucherParam } from "../hooks/useVoucherParam";
 import { getConvexHttpClient } from "../lib/convex-server";
+import type { PromoState } from "../lib/promo";
 import { ssrRead } from "../lib/ssr-read";
 
 interface CheckoutLoaderData {
@@ -49,16 +60,27 @@ export const Route = createFileRoute("/$slug_/checkout")({
 	// Mutually exclusive by construction — one page can only check one thing
 	// out — and `booking` wins a malformed URL carrying both, so the branch
 	// below and this validator can never disagree.
+	//
+	// ?voucher=<code> carries a seller-issued discount code (`z8r3fdr617`) — the
+	// "link" of the share sheet's code/QR/link trio, for a buyer who cannot scan
+	// their own screen. It rides the CART checkout only: a booking and an RSVP
+	// are standalone flows with their own totals, and vouchers are not offered
+	// on either in v1, so a code arriving on one of those URLs is dropped rather
+	// than silently ignored downstream.
 	validateSearch: (
 		search: Record<string, unknown>,
-	): { booking?: string; rsvp?: string } => {
+	): { booking?: string; rsvp?: string; voucher?: string } => {
 		if (typeof search.booking === "string" && search.booking.length > 0)
 			return { booking: search.booking };
 		if (typeof search.rsvp === "string" && search.rsvp.length > 0)
 			return { rsvp: search.rsvp };
-		return {};
+		return typeof search.voucher === "string" && search.voucher.length > 0
+			? { voucher: search.voucher }
+			: {};
 	},
-	loader: async ({ params }): Promise<CheckoutLoaderData | null> => {
+	loader: async ({
+		params,
+	}): Promise<CheckoutLoaderData | StoreUnavailableLoaderData | null> => {
 		const client = getConvexHttpClient();
 		const read = await ssrRead(() =>
 			client.query(api.retailers.getRetailerBySlug, { slug: params.slug }),
@@ -80,6 +102,11 @@ export const Route = createFileRoute("/$slug_/checkout")({
 		if (result.status === "notFound") {
 			throw notFound();
 		}
+		// Taken offline by Kedaipal (z8r3fdudf7): no store data to preload —
+		// the component renders the neutral unavailable page, and head()
+		// takes it out of search in the SSR HTML.
+		if (result.status === "unavailable")
+			return { unavailable: true, storeName: result.storeName };
 
 		return {
 			storeName: result.retailer.storeName,
@@ -88,6 +115,8 @@ export const Route = createFileRoute("/$slug_/checkout")({
 	},
 	head: ({ loaderData }) => {
 		if (!loaderData) return {};
+		if ("unavailable" in loaderData)
+			return storeUnavailableHead(loaderData.storeName);
 		return {
 			meta: [
 				{ title: `Checkout — ${loaderData.storeName} | Kedaipal` },
@@ -142,9 +171,12 @@ function CheckoutSkeleton() {
 
 function CheckoutRoute() {
 	const { slug } = Route.useParams();
-	const { booking, rsvp } = Route.useSearch();
+	const { booking, rsvp, voucher } = Route.useSearch();
 	// A tagged link can land straight on checkout — capture here too.
 	useCaptureAttribution(slug);
+	// A `?voucher=` link lands on an EMPTY cart, so the code has to survive the
+	// browsing that follows (`z8r3fdr617`) — same reason as the line above.
+	useCaptureVoucherParam(slug);
 	// Live query keeps the page reactive after the SSR'd loader response —
 	// same pattern as the store home and category pages.
 	const result = useQuery(
@@ -161,6 +193,9 @@ function CheckoutRoute() {
 	// Without the cart gate the first committed render shows the empty-cart
 	// panel — with a "Browse {store}" button that navigates away from checkout
 	// — before the buyer's items hydrate from localStorage.
+	if (result?.status === "unavailable") {
+		return <StoreUnavailable storeName={result.storeName} />;
+	}
 	if (!retailer || !cart.hydrated) {
 		return <CheckoutSkeleton />;
 	}
@@ -170,7 +205,7 @@ function CheckoutRoute() {
 	// kept (localStorage) for when the store reopens.
 	if (retailer.orderingPaused) {
 		return (
-			<OrderingPausedProvider paused>
+			<OrderingPausedProvider paused pausedBy={retailer.orderingPausedBy}>
 				<div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col pb-10">
 					<StorefrontAppBar retailer={retailer} slug={retailer.slug} />
 					<SeasonalBreakNotice storeName={retailer.storeName} />
@@ -179,9 +214,10 @@ function CheckoutRoute() {
 							Checkout
 						</h1>
 						<p className="mt-2 text-sm text-muted-foreground">
-							{retailer.storeName} isn't taking orders this season, so there's
-							nothing to check out yet. Your basket is saved for when they're
-							back.
+							{retailer.orderingPausedBy?.by === "hold"
+								? `${retailer.storeName} isn't taking orders this season, so there's nothing to check out yet.`
+								: `${retailer.storeName} isn't taking orders right now, so there's nothing to check out yet.`}{" "}
+							Your basket is saved for when they're back.
 						</p>
 						<Link
 							to="/$slug"
@@ -223,6 +259,7 @@ function CheckoutRoute() {
 							locale={retailer.locale}
 							country={retailer.country}
 							cartItemCount={cart.itemCount}
+							paymentsPaused={retailer.paymentsPaused}
 						/>
 					</div>
 				</div>
@@ -255,6 +292,7 @@ function CheckoutRoute() {
 							country={retailer.country}
 							confirmPushEnabled={retailer.confirmPushEnabled ?? false}
 							cartItemCount={cart.itemCount}
+							paymentsPaused={retailer.paymentsPaused}
 						/>
 					</div>
 				</div>
@@ -276,6 +314,12 @@ function CheckoutRoute() {
 			    belongs at the moment of ordering; the bar carries it AND owns
 			    "back", replacing the old round back button beside the heading. */}
 			<StorefrontAppBar retailer={retailer} slug={retailer.slug} />
+			{/* The countdown is ALWAYS the page's top band (z8r3fdr60v), under
+			    the store header — same component and same place as the product
+			    page and the claim checkout. Driven by the flash in this basket
+			    that ends SOONEST, since that is the one about to change what
+			    the buyer pays. */}
+			<CheckoutPromoBand retailerId={retailer._id} cart={cart} />
 
 			<div className="px-5 pt-4 lg:px-8 lg:pt-6">
 				{/* This page's own subject, so it owns the <h1>. */}
@@ -304,6 +348,9 @@ function CheckoutRoute() {
 						closedDates={retailer.closedDates}
 						minOrderValue={retailer.minOrderValue}
 						pickupLocations={pickupLocations ?? []}
+						voucherCode={voucher}
+						acceptsVouchers={retailer.acceptsVouchers ?? false}
+						paymentsPaused={retailer.paymentsPaused}
 					/>
 				</div>
 			</div>
@@ -312,5 +359,51 @@ function CheckoutRoute() {
 			    page — same placement as the store home and category pages. */}
 			<StorefrontFooter slug={slug} />
 		</div>
+	);
+}
+
+/**
+ * The scissors countdown over checkout, for the flash in the basket that ends
+ * first (z8r3fdcw72). Renders nothing when the basket holds no timed sale.
+ *
+ * Reads the catalogue the checkout form already reads, so the two can't
+ * disagree about which sale is running; the price the buyer PAYS is settled
+ * by the server's `expectedSubtotal` guard either way.
+ */
+function CheckoutPromoBand({
+	retailerId,
+	cart,
+}: {
+	retailerId: Id<"retailers">;
+	cart: UseCart;
+}) {
+	const listed = useQuery(convexQuery(api.products.list, { retailerId })).data;
+	const soonest = useMemo(() => {
+		const inCart = new Set(
+			cart.items.map((i: { productId: string }) => i.productId as string),
+		);
+		return (listed ?? [])
+			.filter(
+				(p) =>
+					inCart.has(p._id as string) &&
+					p.promoState?.phase === "live" &&
+					p.promoState.endsAt !== undefined,
+			)
+			.map((p) => p.promoState as PromoState)
+			.sort((a, b) => (a.endsAt ?? 0) - (b.endsAt ?? 0))[0];
+	}, [cart.items, listed]);
+	const clock = usePromoClock(soonest);
+	if (!soonest?.endsAt || soonest.endsAt <= clock) return null;
+	return (
+		<CountdownBand
+			expiresAt={soonest.endsAt}
+			totalMs={
+				soonest.startsAt !== undefined
+					? soonest.endsAt - soonest.startsAt
+					: Math.max(soonest.endsAt - clock, 60 * 60_000)
+			}
+			label={`${soonest.label} ends in`}
+			icon={Zap}
+		/>
 	);
 }

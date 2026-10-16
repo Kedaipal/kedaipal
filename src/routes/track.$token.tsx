@@ -27,6 +27,10 @@ import {
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
+import {
+	PAYMENTS_PAUSED_HEADING,
+	paymentsPausedOrderLine,
+} from "../../convex/lib/buyerPayments";
 import { isSafeTrackingUrl } from "../../convex/lib/couriers";
 import {
 	DAY_MS,
@@ -44,6 +48,12 @@ import {
 	type OrderBookingSpan,
 	OrderItemLine,
 } from "../components/order/order-item-line";
+import {
+	ContinueShoppingLink,
+	OrderStoreEyebrow,
+	requestCardLinksBack,
+	storeLinkSlug,
+} from "../components/order/order-store-links";
 import { PaymentDueCountdown } from "../components/order/payment-due-countdown";
 import { PickupNotes } from "../components/order/pickup-notes";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
@@ -439,6 +449,9 @@ function TrackingRoute() {
 	const gatewayMethodsLabel = describeGatewayMethods(
 		paymentInfo?.gatewayMethods,
 	);
+	// The store is lapsed (z8r3fdr6gg): the server sent no methods and no
+	// gateway, and the card says why in place of the Pay-now door.
+	const paymentsPaused = paymentInfo?.paymentsPaused === true;
 	const [editingAddress, setEditingAddress] = useState(false);
 	// The manual-payment sheet (methods + I've-paid proof in one door) — opened
 	// by the payment card's primary button on manual stores, the bank-transfer
@@ -506,6 +519,13 @@ function TrackingRoute() {
 				}
 			: undefined;
 	const ms = order.retailerLocale === "ms";
+	// Where "back to the store" goes (z8r3fducgw); undefined = nowhere to go.
+	const storeSlug = storeLinkSlug(order);
+	// The foot row, unless a declined/expired request card already links back.
+	const showContinueShopping =
+		storeSlug !== undefined &&
+		order.storeName !== "" &&
+		!requestCardLinksBack(order);
 	// Collection service (86eyg0n8e, frozen at order create): the rider picks
 	// up FROM this buyer's address — every "Deliver…" label flips to collection
 	// wording so the page never claims something is being sent to them.
@@ -685,11 +705,9 @@ function TrackingRoute() {
 			{/* Header — the STORE's name is the eyebrow. This is the seller's order
 			    page as far as the buyer is concerned (same as the storefront, where
 			    the store brand leads); Kedaipal's own mark is the powered-by badge
-			    at the foot of the page, so the platform isn't named twice. */}
-			<p className="truncate text-xs font-semibold uppercase tracking-widest text-accent">
-				{order.storeName ||
-					(order.retailerLocale === "ms" ? "Pesanan anda" : "Your order")}
-			</p>
+			    at the foot of the page, so the platform isn't named twice. It links
+			    back into the store (z8r3fducgw): one tap to keep shopping. */}
+			<OrderStoreEyebrow storeName={order.storeName} slug={storeSlug} ms={ms} />
 			<h1 className="mt-3 font-mono text-2xl font-bold tracking-tight">
 				#{order.shortId}
 			</h1>
@@ -742,6 +760,7 @@ function TrackingRoute() {
 						ms={order.retailerLocale === "ms"}
 						checkoutPhone={order.checkoutPhone}
 						free={isFreeOrder(order)}
+						paymentsPaused={paymentsPaused}
 					/>
 				) : null
 			) : null}
@@ -793,10 +812,10 @@ function TrackingRoute() {
 					<p className="text-sm font-medium">
 						{ms ? "Tiada bayaran dibuat." : "Nothing was charged."}
 					</p>
-					{order.retailerSlug ? (
+					{storeSlug ? (
 						<Link
 							to="/$slug"
-							params={{ slug: order.retailerSlug }}
+							params={{ slug: storeSlug }}
 							className="mt-1 inline-flex h-11 w-fit items-center rounded-lg border border-border bg-background px-4 text-sm font-semibold transition-colors hover:bg-muted"
 						>
 							{ms
@@ -848,10 +867,10 @@ function TrackingRoute() {
 					<p className="text-sm font-medium">
 						{ms ? "Tiada bayaran dibuat." : "Nothing was charged."}
 					</p>
-					{order.retailerSlug ? (
+					{storeSlug ? (
 						<Link
 							to="/$slug"
-							params={{ slug: order.retailerSlug }}
+							params={{ slug: storeSlug }}
 							className="mt-1 inline-flex h-11 w-fit items-center rounded-lg border border-border bg-background px-4 text-sm font-semibold transition-colors hover:bg-muted"
 						>
 							{ms ? "Cuba tarikh lain" : "Try different dates"}
@@ -906,7 +925,12 @@ function TrackingRoute() {
 			order.paymentDueAt !== undefined &&
 			paymentStatus === "unpaid" &&
 			!deliveryFeeHeld &&
-			!gatewayIssueUnresolved ? (
+			!gatewayIssueUnresolved &&
+			// No deadline runs while the buyer can't pay (the sweep lifts it) —
+			// and none is shown until the payment query has said which it is,
+			// or a lapsed store's countdown flashes before the paused card.
+			!paymentsPaused &&
+			!(showPaymentSection && paymentInfo === undefined) ? (
 				<PaymentDueCountdown dueAt={order.paymentDueAt} />
 			) : null}
 
@@ -1044,6 +1068,28 @@ function TrackingRoute() {
 									Checking with HitPay — this usually takes a few seconds.
 								</p>
 							</>
+						) : showPaymentSection && paymentInfo === undefined ? (
+							// Still asking the server how this order can be paid. Never
+							// fall through to a Pay-now that might not exist: on a
+							// lapsed store it flashed a live "Pay now" before the
+							// paused state arrived (z8r3fdr6gg test). `null` = nothing
+							// configured, which the manual branch below still handles.
+							<Button disabled isLoading className="h-12 w-full text-base">
+								Checking payment options…
+							</Button>
+						) : paymentsPaused ? (
+							// After the holds above (they're more specific, and the
+							// payment query is skipped while they stand) and after a
+							// HitPay return being verified — money that may already
+							// have moved is confirmed whatever the store's state.
+							<>
+								<Button disabled className="h-12 w-full text-base">
+									{PAYMENTS_PAUSED_HEADING}
+								</Button>
+								<p className="text-xs opacity-80">
+									{paymentsPausedOrderLine(order.storeName)}
+								</p>
+							</>
 						) : gatewayAvailable ? (
 							<>
 								<Button
@@ -1062,13 +1108,18 @@ function TrackingRoute() {
 									{order.storeName || "the store"}'s secure HitPay page — your
 									order confirms automatically.
 								</p>
-								<button
-									type="button"
-									onClick={() => setClaimingPayment(true)}
-									className="self-start text-sm font-medium underline-offset-2 hover:underline"
-								>
-									Paid by bank transfer instead? Tell the store
-								</button>
+								{/* Only while the store still offers its manual details for
+								    this order — a HitPay store withholds them (86eye9xd4),
+								    and a door to an empty sheet is a dead end. */}
+								{paymentMethods.length > 0 ? (
+									<button
+										type="button"
+										onClick={() => setClaimingPayment(true)}
+										className="self-start text-sm font-medium underline-offset-2 hover:underline"
+									>
+										Paid by bank transfer instead? Tell the store
+									</button>
+								) : null}
 							</>
 						) : (
 							<>
@@ -1078,9 +1129,13 @@ function TrackingRoute() {
 								>
 									Pay now · {formatPrice(order.total, order.currency)}
 								</Button>
+								{/* Says the screenshot is REQUIRED before the sheet opens
+								    (z8r3fdnpxf): a buyer who learns about a mandatory field
+								    only once they're inside the form has been ambushed by it. */}
 								<p className="text-xs opacity-80">
-									Bank transfer or QR — pay in your banking app, then attach the
-									receipt so {order.storeName || "the store"} can confirm it.
+									Bank transfer or QR — pay in your banking app, then attach
+									your receipt. {order.storeName || "The store"} needs the
+									screenshot to confirm your payment.
 								</p>
 							</>
 						)
@@ -1708,9 +1763,17 @@ function TrackingRoute() {
 				onClose={() => setClaimingPayment(false)}
 				token={token}
 				shortId={order.shortId}
-				storeName={order.storeName || "the store"}
+				storeName={order.storeName || (ms ? "kedai" : "the store")}
 				methods={paymentMethods}
 				hasExistingClaim={paymentStatus === "claimed"}
+				// Proof is mandatory on the FIRST claim only (z8r3fdnpxf) — once the
+				// seller has a screenshot, a reference-only fix doesn't demand it
+				// again. Same ORDER-level rule `claimPayment` enforces.
+				hasExistingProof={order.hasPaymentProof}
+				locale={order.retailerLocale}
+				// The way out of the mandatory attachment: the vendor's own chat,
+				// where they can mark the payment received by hand.
+				storeWaPhone={order.retailerWaPhone}
 			/>
 
 			{/* Items */}
@@ -1797,6 +1860,23 @@ function TrackingRoute() {
 						</span>
 					</div>
 				) : null}
+				{/* The voucher (`z8r3fdr617`) — the one SUBTRACTIVE line, so it is
+				    signed and accented rather than reading as another charge. Last
+				    of the adjustments, immediately above the total it reduces, and
+				    named by its code so the buyer can see which voucher did it. */}
+				{order.voucherDiscount && order.voucherDiscount > 0 ? (
+					<div className="flex items-center justify-between gap-3 px-3 text-sm text-accent-emphasis">
+						<span className="min-w-0 truncate">
+							{ms ? "Voucher" : "Voucher"}
+							{order.voucherSnapshot?.code
+								? ` · ${order.voucherSnapshot.code}`
+								: ""}
+						</span>
+						<span className="shrink-0 font-medium tabular-nums">
+							−{formatPrice(order.voucherDiscount, order.currency)}
+						</span>
+					</div>
+				) : null}
 				<div className="flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2.5 text-sm font-bold">
 					<span>Total</span>
 					<span className="tabular-nums">
@@ -1848,25 +1928,41 @@ function TrackingRoute() {
 				</section>
 			) : null}
 
-			{/* Contact the store directly. Buyers otherwise only ever hear from the
-			    shared Kedaipal WABA — this opens a chat to the vendor's own number
-			    with the order ref pre-filled. Hidden when the store has no number. */}
-			{order.retailerWaPhone ? (
-				<a
-					href={`https://wa.me/${order.retailerWaPhone.replace(/\D/g, "")}?text=${encodeURIComponent(
-						order.retailerLocale === "ms"
-							? `Hai ${order.storeName}, saya ada pertanyaan tentang pesanan ${order.shortId}.`
-							: `Hi ${order.storeName}, I have a question about my order ${order.shortId}.`,
-					)}`}
-					target="_blank"
-					rel="noopener noreferrer"
-					className="mt-6 flex items-center justify-center gap-2 rounded-2xl border border-accent/40 bg-accent/5 px-4 py-3 text-sm font-semibold text-accent transition-colors hover:bg-accent/10"
-				>
-					<MessageCircle className="size-4" />
-					{order.retailerLocale === "ms"
-						? `Hubungi ${order.storeName || "kedai"}`
-						: `Message ${order.storeName || "the store"}`}
-				</a>
+			{/* The foot of the order: order help first, then the way back into
+			    the store. Exits sit together at the bottom, below every payment
+			    and status card, so neither competes with a Pay CTA. Other stores
+			    come after, in the footer (z8r3fducgw). */}
+			{order.retailerWaPhone || showContinueShopping ? (
+				<div className="mt-6 flex flex-col gap-3">
+					{/* Contact the store directly. Buyers otherwise only ever hear
+					    from the shared Kedaipal WABA — this opens a chat to the
+					    vendor's own number with the order ref pre-filled. Hidden
+					    when the store has no number. */}
+					{order.retailerWaPhone ? (
+						<a
+							href={`https://wa.me/${order.retailerWaPhone.replace(/\D/g, "")}?text=${encodeURIComponent(
+								order.retailerLocale === "ms"
+									? `Hai ${order.storeName}, saya ada pertanyaan tentang pesanan ${order.shortId}.`
+									: `Hi ${order.storeName}, I have a question about my order ${order.shortId}.`,
+							)}`}
+							target="_blank"
+							rel="noopener noreferrer"
+							className="flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-accent/40 bg-accent/5 px-4 py-3 text-sm font-semibold text-accent transition-colors hover:bg-accent/10"
+						>
+							<MessageCircle className="size-4" />
+							{order.retailerLocale === "ms"
+								? `Hubungi ${order.storeName || "kedai"}`
+								: `Message ${order.storeName || "the store"}`}
+						</a>
+					) : null}
+					{showContinueShopping && storeSlug ? (
+						<ContinueShoppingLink
+							storeName={order.storeName}
+							slug={storeSlug}
+							ms={ms}
+						/>
+					) : null}
+				</div>
 			) : null}
 
 			{/* PDPA notice companion (86ey5m3hx item 1): this page is the buyer's
@@ -1888,7 +1984,14 @@ function TrackingRoute() {
 			    surface EVERY order reaches (the confirmation message's only link),
 			    so it is the badge's highest-volume home. Direct flex child of the
 			    min-h-dvh column so `mt-auto` sinks it to the bottom. */}
-			<StorefrontFooter slug={order.retailerSlug} surface="track" />
+			<StorefrontFooter
+				slug={order.retailerSlug}
+				surface="track"
+				locale={order.retailerLocale}
+				discover={
+					order.retailerSlug !== undefined && order.marketplaceUnlisted !== true
+				}
+			/>
 		</main>
 	);
 }
@@ -1991,11 +2094,15 @@ function ConfirmationSentCard({
 	ms,
 	checkoutPhone,
 	free,
+	paymentsPaused,
 }: {
 	ms: boolean;
 	checkoutPhone: string;
 	/** `isFreeOrder` — a free RSVP has no "how to pay" for this card to point at. */
 	free: boolean;
+	/** The store is lapsed (z8r3fdr6gg): the card below says payments are
+	 * paused, so this one mustn't promise "how to pay" is here right now. */
+	paymentsPaused: boolean;
 }) {
 	return (
 		<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-accent/40 bg-accent/5 p-4">
@@ -2016,10 +2123,14 @@ function ConfirmationSentCard({
 				{ms
 					? free
 						? "Tak perlu hantar apa-apa dan tiada bayaran diperlukan. Itulah satu-satunya mesej yang kami hantar — status terkini dan resit anda ada di sini. Simpan pautan ini."
-						: "Tak perlu hantar apa-apa. Itulah satu-satunya mesej yang kami hantar — selebihnya ada di sini: cara membayar, status terkini dan resit anda. Simpan pautan ini."
+						: paymentsPaused
+							? "Tak perlu hantar apa-apa. Itulah satu-satunya mesej yang kami hantar — status terkini dan resit anda ada di sini, dan cara membayar akan muncul di sini sebaik sahaja kedai menerima bayaran. Simpan pautan ini."
+							: "Tak perlu hantar apa-apa. Itulah satu-satunya mesej yang kami hantar — selebihnya ada di sini: cara membayar, status terkini dan resit anda. Simpan pautan ini."
 					: free
 						? "Nothing to send and nothing to pay. That's the only message we'll send you — your latest status and your receipt live here. Keep this link."
-						: "Nothing to send. That's the only message we'll send you — everything else is here: how to pay, your latest status, and your receipt. Keep this link."}
+						: paymentsPaused
+							? "Nothing to send. That's the only message we'll send you — your latest status and your receipt live here, and how to pay appears here once the store is taking payments. Keep this link."
+							: "Nothing to send. That's the only message we'll send you — everything else is here: how to pay, your latest status, and your receipt. Keep this link."}
 			</p>
 			<Button asChild variant="outline" className="h-11 w-full">
 				<a

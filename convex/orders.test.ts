@@ -23,6 +23,17 @@ function setup() {
 }
 
 /**
+ * A stored screenshot for a payment claim. Proof is mandatory on a first claim
+ * (z8r3fdnpxf), so a test about something else — the mockup gate, the token
+ * capability, a delivery charge — still has to attach one for the claim to land.
+ */
+async function storeProof(t: ReturnType<typeof setup>): Promise<string> {
+	return await t.run((ctx) =>
+		ctx.storage.store(new Blob(["png"], { type: "image/png" })),
+	);
+}
+
+/**
  * Resolve an order's high-entropy tracking token (the buyer capability) from its
  * human shortId, for buyer-facing endpoint calls. Returns a guaranteed-
  * non-matching sentinel when no order exists, so negative-path tests (unknown
@@ -1326,6 +1337,7 @@ describe("orders", () => {
 			await t.mutation(api.orders.claimPayment, {
 				token: await tk(t, shortId),
 				reference: "TXN-12345",
+				proofStorageId: await storeProof(t),
 			});
 
 			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
@@ -1377,7 +1389,11 @@ describe("orders", () => {
 			expect(order?.paymentStatus).toBe("claimed");
 		});
 
-		test("claimPayment without reference or proof still succeeds", async () => {
+		// Proof is MANDATORY (z8r3fdnpxf) — these three pin the whole rule.
+		// A claim with nothing attached used to succeed, which is how sellers
+		// ended up with "they say they paid" and went back to WhatsApp to ask
+		// for the receipt.
+		test("claimPayment rejects a first claim with no proof", async () => {
 			const t = setup();
 			const retailer = await seedRetailer(t, USER_A);
 			const productId = await seedProduct(t, USER_A, retailer._id);
@@ -1389,10 +1405,79 @@ describe("orders", () => {
 				customer,
 				deliveryAddress: validAddress,
 			});
-			await t.mutation(api.orders.claimPayment, { token: await tk(t, shortId) });
+
+			await expect(
+				t.mutation(api.orders.claimPayment, { token: await tk(t, shortId) }),
+			).rejects.toThrow(/Attach a screenshot/);
+
+			// Nothing moved: a refused claim must not leave the order looking
+			// claimed, or the seller gets the card without the image anyway.
 			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
-			expect(order?.paymentStatus).toBe("claimed");
-			expect(order?.paymentReference).toBeUndefined();
+			expect(order?.paymentStatus ?? "unpaid").toBe("unpaid");
+			expect(order?.paymentClaimedAt).toBeUndefined();
+		});
+
+		test("a reference is not a substitute for the screenshot", async () => {
+			const t = setup();
+			const retailer = await seedRetailer(t, USER_A);
+			const productId = await seedProduct(t, USER_A, retailer._id);
+			const { shortId } = await t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+			});
+
+			await expect(
+				t.mutation(api.orders.claimPayment, {
+					token: await tk(t, shortId),
+					reference: "TXN-12345",
+				}),
+			).rejects.toThrow(/Attach a screenshot/);
+			// An empty-string proof is no proof either — the guard reads the
+			// TRIMMED value, not merely "was the arg present".
+			await expect(
+				t.mutation(api.orders.claimPayment, {
+					token: await tk(t, shortId),
+					proofStorageId: "   ",
+				}),
+			).rejects.toThrow(/Attach a screenshot/);
+		});
+
+		// The rule is on the ORDER, not on each submission: the forgotten-reference
+		// fix must not demand the same image a second time.
+		test("a reference-only resubmit is allowed once a screenshot is on file", async () => {
+			const t = setup();
+			const retailer = await seedRetailer(t, USER_A);
+			const productId = await seedProduct(t, USER_A, retailer._id);
+			const { shortId } = await t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+			});
+			const png = await t.run((ctx) =>
+				ctx.storage.store(new Blob(["png"], { type: "image/png" })),
+			);
+			await t.mutation(api.orders.claimPayment, {
+				token: await tk(t, shortId),
+				proofStorageId: png,
+			});
+
+			await t.mutation(api.orders.claimPayment, {
+				token: await tk(t, shortId),
+				reference: "TXN-FORGOT",
+			});
+
+			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+			expect(order?.paymentReference).toBe("TXN-FORGOT");
+			// The screenshot survives the reference-only resubmit — it is still the
+			// thing the seller verifies against.
+			expect(order?.hasPaymentProof).toBe(true);
 		});
 
 		test("claimPayment is idempotent — second claim overwrites reference", async () => {
@@ -1411,7 +1496,10 @@ describe("orders", () => {
 			await t.mutation(api.orders.claimPayment, {
 				token: await tk(t, shortId),
 				reference: "first",
+				proofStorageId: await storeProof(t),
 			});
+			// The screenshot is already on file, so the fix is reference-only —
+			// exactly the resubmit the mandatory-proof rule has to keep legal.
 			await t.mutation(api.orders.claimPayment, {
 				token: await tk(t, shortId),
 				reference: "second",
@@ -2199,7 +2287,10 @@ describe("orders — mockup approval", () => {
 		});
 		await t.mutation(api.orders.approveMockup, { token: await tk(t, shortId) });
 
-		await t.mutation(api.orders.claimPayment, { token: await tk(t, shortId) });
+		await t.mutation(api.orders.claimPayment, {
+			token: await tk(t, shortId),
+			proofStorageId: await storeProof(t),
+		});
 		expect((await t.query(api.orders.get, { token: await tk(t, shortId) }))?.paymentStatus).toBe(
 			"claimed",
 		);
@@ -3243,11 +3334,20 @@ describe("orders — inbox search", () => {
 			dueToday: 0,
 			unpaid: 2,
 			unpaidAmount: o1.total + o2.total,
+			// Both unpaid orders were created just now, so neither has gone
+			// stale yet (z8r3fdrgzj — the 3-day boundary is pinned in its own
+			// describe below). `unpaidStaleOldestAt` is 0, never a stray epoch.
+			unpaidStale: 0,
+			unpaidStaleAmount: 0,
+			unpaidStaleOldestAt: 0,
 			// Nothing is packed AND paid here, so the despatch queue is empty
 			// (86eyp63mp — covered properly in convex/awb.test.ts).
 			readyToShip: 0,
 			// Nothing pinned (86eyrtz74 — pinning is covered below).
 			pinned: 0,
+			// This fixture's store is in credit, so no order is waiting on one
+			// (Credits T3.1 — the gate's own counts live in orderGate.test.ts).
+			creditGated: 0,
 			// No booking orders in this fixture (S8). The assertion is
 			// deliberately exhaustive: a new count field has to be accounted for
 			// here consciously, not absorbed silently.
@@ -4523,7 +4623,10 @@ describe("tracking-link capability (shortId hardening)", () => {
 		const { shortId, trackingToken } = await makeOrder(t);
 		// The shortId is no longer a valid arg for the buyer mutation — only the
 		// token is accepted, and confirming via the token works.
-		await t.mutation(api.orders.claimPayment, { token: trackingToken });
+		await t.mutation(api.orders.claimPayment, {
+			token: trackingToken,
+			proofStorageId: await storeProof(t),
+		});
 		const order = await t.query(api.orders.get, { token: trackingToken });
 		expect(order?.paymentStatus).toBe("claimed");
 		// A guessed shortId-shaped token doesn't resolve to the order.
@@ -5267,7 +5370,10 @@ describe("orders — delivery charge", () => {
 			shortId: created.shortId,
 		});
 		expect(sellerOrder?.deliverySnapshot).toEqual({ fee: 2500, mode: "manual" });
-		await t.mutation(api.orders.claimPayment, { token });
+		await t.mutation(api.orders.claimPayment, {
+			token,
+			proofStorageId: await storeProof(t),
+		});
 		order = await t.query(api.orders.get, { token });
 		expect(order?.paymentStatus).toBe("claimed");
 	});
@@ -5296,7 +5402,10 @@ describe("orders — delivery charge", () => {
 		expect(order?.total).toBe(12000);
 
 		// Buyer claims → the charge is frozen against further edits.
-		await t.mutation(api.orders.claimPayment, { token });
+		await t.mutation(api.orders.claimPayment, {
+			token,
+			proofStorageId: await storeProof(t),
+		});
 		await expect(
 			asUser.mutation(api.orders.setDeliveryFee, { orderId, fee: 900 }),
 		).rejects.toThrow(/already in motion/);
@@ -6258,6 +6367,9 @@ describe("orders — Lalamove rider gate on manual advances", () => {
 			skippedRiderManaged: 1,
 			skippedNoSuchStage: 0,
 			skippedCancelled: 0,
+			// In credit, so nothing is waiting on one (Credits T3.1 — the mixed
+			// selection is covered in creditLock.test.ts).
+			skippedCreditGated: 0,
 		});
 		expect((await t.run((ctx) => ctx.db.get(gated._id)))?.status).toBe("packed");
 		expect((await t.run((ctx) => ctx.db.get(plain._id)))?.status).toBe(
@@ -10299,7 +10411,13 @@ describe("orders — column header filters (86eyrtz74)", () => {
 			confirmed: 1,
 			packed: 2,
 		});
-		expect(res.facets.category).toEqual({ Cakes: 3, Drinks: 2 });
+		expect(res.facets.category).toEqual(
+			expect.arrayContaining([
+				{ name: "Cakes", count: 3 },
+				{ name: "Drinks", count: 2 },
+			]),
+		);
+		expect(res.facets.category).toHaveLength(2);
 		expect(res.availableCategories).toEqual(["Cakes", "Drinks"]);
 	});
 
@@ -10312,7 +10430,42 @@ describe("orders — column header filters (86eyrtz74)", () => {
 			bucket: "all",
 			categories: ["Cakes"],
 		});
-		expect(res.facets.category.Cakes).toBe(res.total);
+		expect(
+			res.facets.category.find((c) => c.name === "Cakes")?.count,
+		).toBe(res.total);
+	});
+
+	test("a category named with a symbol or emoji still crosses the wire (z8r3fdv1r4)", async () => {
+		// Convex refuses an OBJECT whose field name has a non-ASCII character, so
+		// a name-keyed tally threw on serialisation and took the whole inbox down
+		// for the one store that prefixed its categories with "✦" (prod, 16 Oct
+		// 2026). The tally is a list of {name, count} pairs for exactly this
+		// reason; keying it by name again would turn this test red.
+		const t = setup();
+		const { retailer, asA, a } = await seedForFilters(t);
+		const { categoryId } = await asA.mutation(api.categories.create, {
+			retailerId: retailer._id,
+			name: "✦ DRESSES 🐆",
+			slug: "dresses",
+		});
+		await asA.mutation(api.categories.setProductCategories, {
+			productId: a.items[0].productId,
+			categoryIds: [categoryId],
+		});
+		await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId: a.items[0].productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		expect(res.facets.category).toContainEqual({ name: "✦ DRESSES 🐆", count: 1 });
+		expect(res.availableCategories).toContain("✦ DRESSES 🐆");
 	});
 
 	test("filters and tallies by fulfilment, over the unfiltered window (z8r3fdfau9)", async () => {
@@ -11221,5 +11374,430 @@ describe("orders.getTimeline — the seller Activity card (86exr91r4)", () => {
 			actor: { you: true, isOwner: true },
 		});
 		expect(timeline[1].actor).toBeUndefined();
+	});
+});
+
+describe("countDueByDay — Plan ahead counts exactly what Due today counts", () => {
+	/** Create a real order, then set the three fields the forecast reads. */
+	async function dueOrder(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+		over: { fulfilmentDate?: number; status?: string; source?: string },
+	) {
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Test Buyer", waPhone: "60120000900" },
+			deliveryAddress: validAddress,
+		});
+		await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			if (!o) throw new Error("order not found");
+			await ctx.db.patch(o._id, {
+				fulfilmentDate: over.fulfilmentDate,
+				...(over.status ? { status: over.status as never } : {}),
+				...(over.source ? { source: over.source as never } : {}),
+			});
+		});
+	}
+
+	const ask = async (
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		fromMyt: number,
+		days = 7,
+	) =>
+		t
+			.withIdentity({ subject: USER_A })
+			.query(api.orders.countDueByDay, { retailerId, fromMyt, days });
+
+	test("every day in the window renders, including the empty ones", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const from = todayMytMidnight(Date.now());
+		const days = await ask(t, r._id, from);
+		expect(days).toHaveLength(7);
+		expect(days.map((d) => d.start)).toEqual(
+			Array.from({ length: 7 }, (_, i) => from + i * DAY_MS),
+		);
+		expect(days.every((d) => d.count === 0)).toBe(true);
+	});
+
+	test("an order lands in its own MYT day, not the one next door", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const from = todayMytMidnight(Date.now());
+		await dueOrder(t, r._id, p, { fulfilmentDate: from + 3 * DAY_MS });
+		const days = await ask(t, r._id, from);
+		expect(days[3].count).toBe(1);
+		expect(days.filter((d) => d.count > 0)).toHaveLength(1);
+	});
+
+	test("the first and last day of the window are inside it", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const from = todayMytMidnight(Date.now());
+		await dueOrder(t, r._id, p, { fulfilmentDate: from });
+		await dueOrder(t, r._id, p, { fulfilmentDate: from + 6 * DAY_MS });
+		const days = await ask(t, r._id, from);
+		expect(days[0].count).toBe(1);
+		expect(days[6].count).toBe(1);
+	});
+
+	test("the day AFTER the window is outside it", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const from = todayMytMidnight(Date.now());
+		await dueOrder(t, r._id, p, { fulfilmentDate: from + 7 * DAY_MS });
+		const days = await ask(t, r._id, from);
+		expect(days.every((d) => d.count === 0)).toBe(true);
+	});
+
+	test("yesterday is outside it", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const from = todayMytMidnight(Date.now());
+		await dueOrder(t, r._id, p, { fulfilmentDate: from - DAY_MS });
+		const days = await ask(t, r._id, from);
+		expect(days.every((d) => d.count === 0)).toBe(true);
+	});
+
+	test("COUNTER orders never count — their date is a receipt, not a promise", async () => {
+		// A counter sale stamps today at create; counting it would swamp every
+		// tile at a counter-heavy store (86ey8r734), exactly as it would have
+		// swamped the inbox's Due today chip.
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const from = todayMytMidnight(Date.now());
+		await dueOrder(t, r._id, p, { fulfilmentDate: from, source: "counter" });
+		const days = await ask(t, r._id, from);
+		expect(days[0].count).toBe(0);
+	});
+
+	test("finished and cancelled orders are not work left to do", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const from = todayMytMidnight(Date.now());
+		await dueOrder(t, r._id, p, {
+			fulfilmentDate: from + DAY_MS,
+			status: "delivered",
+		});
+		await dueOrder(t, r._id, p, {
+			fulfilmentDate: from + DAY_MS,
+			status: "cancelled",
+		});
+		await dueOrder(t, r._id, p, {
+			fulfilmentDate: from + DAY_MS,
+			status: "confirmed",
+		});
+		const days = await ask(t, r._id, from);
+		expect(days[1].count).toBe(1);
+	});
+
+	test("orders with no fulfilment date at all are not due on any day", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const from = todayMytMidnight(Date.now());
+		await dueOrder(t, r._id, p, { fulfilmentDate: undefined });
+		const days = await ask(t, r._id, from);
+		expect(days.every((d) => d.count === 0)).toBe(true);
+	});
+
+	test("another store's orders never appear", async () => {
+		const t = setup();
+		const mine = await seedRetailer(t, USER_A);
+		const theirs = await seedRetailer(t, USER_B);
+		const p = await seedProduct(t, USER_B, theirs._id);
+		const from = todayMytMidnight(Date.now());
+		await dueOrder(t, theirs._id, p, { fulfilmentDate: from });
+		const days = await ask(t, mine._id, from);
+		expect(days.every((d) => d.count === 0)).toBe(true);
+	});
+
+	test("the window must start at MYT midnight", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const from = todayMytMidnight(Date.now());
+		await expect(ask(t, r._id, from + 1)).rejects.toThrow(/MYT midnight/);
+	});
+
+	test("the span is bounded on both ends", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const from = todayMytMidnight(Date.now());
+		await expect(ask(t, r._id, from, 0)).rejects.toThrow(/1–14 days/);
+		await expect(ask(t, r._id, from, 15)).rejects.toThrow(/1–14 days/);
+	});
+});
+
+describe("searchOrders counts — unpaid that has gone stale", () => {
+	// The clock is FROZEN for this block. Staleness is a strict comparison
+	// against "now", and the handler samples its own `Date.now()` a beat after
+	// the test stamps `createdAt` — so an order aged to exactly the boundary
+	// reads as stale by however many milliseconds elapsed in between, and the
+	// "exactly three days" case is unobservable with a live clock. It passed
+	// until the handler got marginally slower, which is the definition of a
+	// test that was never really asserting its own boundary.
+	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.setSystemTime(Date.parse("2026-10-12T12:00:00+08:00"));
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	/** An order whose age and payment state we control. */
+	async function agedOrder(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+		over: { ageDays: number; paymentStatus?: string; status?: string },
+	) {
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Test Buyer", waPhone: "60120000901" },
+			deliveryAddress: validAddress,
+		});
+		await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			if (!o) throw new Error("order not found");
+			await ctx.db.patch(o._id, {
+				createdAt: Date.now() - over.ageDays * DAY_MS,
+				...(over.paymentStatus
+					? { paymentStatus: over.paymentStatus as never }
+					: {}),
+				...(over.status ? { status: over.status as never } : {}),
+			});
+		});
+		return shortId;
+	}
+
+	const counts = async (
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+	) =>
+		(
+			await t
+				.withIdentity({ subject: USER_A })
+				.query(api.orders.searchOrders, { retailerId, limit: 1 })
+		).counts;
+
+	test("an unpaid order older than three days is stale", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await agedOrder(t, r._id, p, { ageDays: 4, status: "confirmed" });
+		const c = await counts(t, r._id);
+		expect(c.unpaid).toBe(1);
+		expect(c.unpaidStale).toBe(1);
+		expect(c.unpaidStaleAmount).toBeGreaterThan(0);
+	});
+
+	test("stale is a STRICT SUBSET of unpaid, so '3 of 9' always reads true", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await agedOrder(t, r._id, p, { ageDays: 5, status: "confirmed" });
+		await agedOrder(t, r._id, p, { ageDays: 4, status: "confirmed" });
+		await agedOrder(t, r._id, p, { ageDays: 0, status: "confirmed" });
+		const c = await counts(t, r._id);
+		expect(c.unpaid).toBe(3);
+		expect(c.unpaidStale).toBe(2);
+		expect(c.unpaidStale).toBeLessThanOrEqual(c.unpaid);
+		expect(c.unpaidStaleAmount).toBeLessThanOrEqual(c.unpaidAmount);
+	});
+
+	test("exactly three days old is not yet stale — the bound is strict", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await agedOrder(t, r._id, p, { ageDays: 3, status: "confirmed" });
+		expect((await counts(t, r._id)).unpaidStale).toBe(0);
+	});
+
+	test("a CLAIMED payment still counts — somebody is waiting on a human", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await agedOrder(t, r._id, p, {
+			ageDays: 6,
+			status: "confirmed",
+			paymentStatus: "claimed",
+		});
+		expect((await counts(t, r._id)).unpaidStale).toBe(1);
+	});
+
+	test("money already received is never stale, however old", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await agedOrder(t, r._id, p, {
+			ageDays: 40,
+			status: "confirmed",
+			paymentStatus: "received",
+		});
+		const c = await counts(t, r._id);
+		expect(c.unpaid).toBe(0);
+		expect(c.unpaidStale).toBe(0);
+	});
+
+	test("a cancelled order is not money to chase", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await agedOrder(t, r._id, p, { ageDays: 10, status: "cancelled" });
+		expect((await counts(t, r._id)).unpaidStale).toBe(0);
+	});
+
+	test("the oldest stale order's date is reported, not just a count", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await agedOrder(t, r._id, p, { ageDays: 4, status: "confirmed" });
+		await agedOrder(t, r._id, p, { ageDays: 9, status: "confirmed" });
+		const c = await counts(t, r._id);
+		const ageDays = (Date.now() - c.unpaidStaleOldestAt) / DAY_MS;
+		expect(ageDays).toBeGreaterThan(8.9);
+		expect(ageDays).toBeLessThan(9.1);
+	});
+
+	test("no stale orders → zero and no date, never a stray epoch", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await agedOrder(t, r._id, p, { ageDays: 0, status: "confirmed" });
+		const c = await counts(t, r._id);
+		expect(c.unpaidStale).toBe(0);
+		expect(c.unpaidStaleOldestAt).toBe(0);
+	});
+});
+
+describe("searchOrders — the DUE window (what Plan ahead opens)", () => {
+	/** An order due on a given day, with a controllable status and source. */
+	async function dueOn(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+		over: { fulfilmentDate?: number; status?: string; source?: string },
+	) {
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Test Buyer", waPhone: "60120000902" },
+			deliveryAddress: validAddress,
+		});
+		await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			if (!o) throw new Error("order not found");
+			await ctx.db.patch(o._id, {
+				fulfilmentDate: over.fulfilmentDate,
+				...(over.status ? { status: over.status as never } : {}),
+				...(over.source ? { source: over.source as never } : {}),
+			});
+		});
+		return shortId;
+	}
+
+	const search = async (
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		args: Record<string, unknown>,
+	) =>
+		t
+			.withIdentity({ subject: USER_A })
+			.query(api.orders.searchOrders, { retailerId, ...args });
+
+	test("a due window returns the orders due in it, not the ones PLACED in it", async () => {
+		// The bug Home shipped with: a tile counting orders DUE today linked to
+		// `from`/`to`, which bound `createdAt`, so "2 due" opened a list of 6.
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const day = todayMytMidnight(Date.now()) + 3 * DAY_MS;
+		await dueOn(t, r._id, p, { fulfilmentDate: day });
+		await dueOn(t, r._id, p, { fulfilmentDate: day + DAY_MS });
+		// Placed today, due nowhere near the window.
+		await dueOn(t, r._id, p, { fulfilmentDate: undefined });
+
+		const res = await search(t, r._id, {
+			fulfilmentFrom: day,
+			fulfilmentTo: day,
+		});
+		expect(res.total).toBe(1);
+	});
+
+	test("an order with NO fulfilment date is never due", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await dueOn(t, r._id, p, { fulfilmentDate: undefined });
+		const day = todayMytMidnight(Date.now());
+		const res = await search(t, r._id, {
+			fulfilmentFrom: day,
+			fulfilmentTo: day + 6 * DAY_MS,
+		});
+		expect(res.total).toBe(0);
+	});
+
+	test("both bounds are inclusive", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const from = todayMytMidnight(Date.now());
+		const to = from + 6 * DAY_MS;
+		await dueOn(t, r._id, p, { fulfilmentDate: from });
+		await dueOn(t, r._id, p, { fulfilmentDate: to });
+		await dueOn(t, r._id, p, { fulfilmentDate: to + DAY_MS });
+		const res = await search(t, r._id, {
+			fulfilmentFrom: from,
+			fulfilmentTo: to,
+		});
+		expect(res.total).toBe(2);
+	});
+
+	test("the due window ANDs with the status and source filters, so a tile's list matches its count", async () => {
+		// Plan ahead counts OPEN, non-counter orders. The link carries both, or
+		// the list is wider than the number the seller tapped.
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const day = todayMytMidnight(Date.now());
+		await dueOn(t, r._id, p, { fulfilmentDate: day, status: "confirmed" });
+		await dueOn(t, r._id, p, { fulfilmentDate: day, status: "delivered" });
+		await dueOn(t, r._id, p, { fulfilmentDate: day, source: "counter" });
+
+		const res = await search(t, r._id, {
+			fulfilmentFrom: day,
+			fulfilmentTo: day,
+			// The leaves the `?bucket=new&bucket=in_progress` link folds into —
+			// "open", exactly as `countDueByDay` defines it.
+			statuses: [...BUCKET_LEAVES.new, ...BUCKET_LEAVES.in_progress],
+			sources: ["storefront", "claim"],
+		});
+		expect(res.total).toBe(1);
 	});
 });

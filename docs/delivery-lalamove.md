@@ -405,7 +405,7 @@ secrets → verify → act → ack. Lalamove-specific twists:
 | `ORDER_AMOUNT_CHANGED` | **after** matching/completion when the final charge differs from the quote — waiting-time fees, priority fee/tip added, toll adjustments | `costActual` updated on the job | the card's "Booking cost" updates reactively (the drift ledger vs buyer-paid fee) | nothing — buyer price is frozen |
 | `ORDER_REPLACED` | Lalamove's **cancel-and-clone**: for post-match adjustments THEY cancel the original and re-create it under a new orderId (sequence: CANCELED old → ORDER_REPLACED → clone's own events) | job repointed to the new id, **revived** to "assigning", stale failure cleared | card returns to active; if the clone-cancel briefly emailed a failure, the booking visibly recovers (rare, self-healing) | nothing |
 | `POD_STATUS_CHANGED` | rider uploaded the drop-off photo / signature | trigger only — the truth is read from `GET /v3/orders` by the idempotent `fetchPodImages` (also scheduled at COMPLETED, whichever lands first wins; the loser's blobs are cleaned) | photo thumbnails on the delivered dispatch card | **"Delivery photo" card on the order page** — page-only (`86eyd63r8`) |
-| `WALLET_BALANCE_CHANGED` | vendor wallet balance moved | logged only (proactive low-balance banner = named follow-up) | — | — |
+| `WALLET_BALANCE_CHANGED` | vendor wallet balance moved | stored on `courierWallets` (attributed by key fingerprint, verified by the store's secret) → the low-wallet banner + balance on Deliveries / Home / Integrations ([`deliveries.md`](./deliveries.md#the-courier-wallet)) | — | — |
 | `ORDER_CREATED` (undocumented but real) | at booking | logged only | — | — |
 
 **Proof of delivery (POD) — rider drop-off photo:** every placed order
@@ -474,15 +474,36 @@ Terminal failures email the seller (EN+BM `deliveryJobFailed` template),
 raise a browser alert on devices with order alerts on, leave the order
 untouched, and the card offers one-tap rebook.
 
-**Registration is per SELLER** (BYO-only): each vendor pastes OUR webhook
-URL into THEIR Partner Portal → Developers → Webhook URL (Version 3). The
-settings card surfaces the exact URL with a copy button and the vendor
-guide walks it (Step E5). Graceful degradation if a seller skips it:
+**Registration is per SELLER** (BYO-only), and since 86eye9xd4 (5A) it is
+**one tap**: the Integrations card's setup checklist (pickup address → API
+key → webhook) calls `lalamove.registerWebhook`, which sends Lalamove's free
+`PATCH /v3/webhook` with `{ data: { url: <CONVEX_SITE_URL>/webhook/lalamove } }`
+on the seller's own keys and stamps `deliveryBooking.webhookRegisteredAt`.
+Lalamove keeps ONE webhook URL per account, so this replaces whatever the
+account pointed at. The manual paste (Partner Portal → Developers → Webhook
+URL, Version 3; vendor guide Step E5) stays as the fallback the card opens
+when Lalamove refuses. A **verified event** for one of the store's jobs also
+stamps `webhookRegisteredAt` (once — `stampWebhookKnown` in
+`applyWebhookEvent`), so a hand-pasted webhook ticks the step too; **typing
+a new key clears it**, because a different account has its own webhook
+setting. Stores whose bookings heard back BEFORE the checklist existed are
+stamped by `npx convex run lalamove:backfillWebhookKnown` (operator step,
+once per deployment) — without it every working store would read "Action
+needed" after the deploy. Graceful degradation if a seller skips it:
 bookings still work, but shipped/delivered stop being automatic — the
 order stays where it is until the seller advances it by hand, which since
 3 Aug costs one confirm per transition while a booking is active (the
 "Update manually" escape; see the manual-advance gate below). Dev
 deployment URL: `https://qualified-chihuahua-441.convex.site/webhook/lalamove`.
+
+**Tip a booking stuck finding a rider (86eye9xd4):** while a job is
+`assigning`, the rider card and its Deliveries row offer **Add tip** —
+Lalamove's priority fee (`POST /v3/orders/{id}/priority-fee`, body
+`{ data: { priorityFee: "5.00" } }`), fixed steps and a per-booking cap from
+`convex/lib/lalamoveTip.ts` (reserved against the cap in one transaction
+before the call, released if Lalamove refuses), charged to the seller's wallet
+and added to the job's `priorityFee` + `costActual`. See
+[`deliveries.md`](./deliveries.md#add-a-tip--a-booking-still-finding-a-rider).
 
 **Manual-advance gate while the rider drives (26 Jul hotfix; tightened
 3 Aug; server-enforced 14 Aug, ClickUp `86eydum6y`):** while an order has
@@ -1074,8 +1095,6 @@ Full step table, credential rules + the POD injector: [`dev-scripts.md`](./dev-s
 
 ## Follow-ups (named, not built)
 
-- Low-balance banner from `WALLET_BALANCE_CHANGED` (store last-known
-  balance, warn before a booking ever fails).
 - Prompt to cancel the Lalamove job inside the order-cancel flow (today the
   job card's cancel button is the path).
 - Multi-outlet origin (per-dispatch origin picker) — dispatch already reads

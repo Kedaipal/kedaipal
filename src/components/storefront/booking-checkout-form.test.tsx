@@ -18,7 +18,11 @@ import {
 	vi,
 } from "vitest";
 import type { Id } from "../../../convex/_generated/dataModel";
-import type { Country } from "../../../convex/lib/country";
+import { COUNTRY_DIAL_CODE, type Country } from "../../../convex/lib/country";
+import {
+	phonePlateCode,
+	pickPhoneCountry,
+} from "../../lib/test/buyer-phone-picker";
 import { BookingCheckoutForm } from "./booking-checkout-form";
 
 // Reads go via `useQuery(convexQuery(api.x, args)).data` — mock the adapter
@@ -27,6 +31,7 @@ import { BookingCheckoutForm } from "./booking-checkout-form";
 const state = vi.hoisted(() => ({
 	request: vi.fn(),
 	availability: undefined as Record<string, unknown> | undefined,
+	product: undefined as Record<string, unknown> | undefined,
 }));
 vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
@@ -35,7 +40,7 @@ vi.mock("@tanstack/react-query", () => ({
 	keepPreviousData: (previous: unknown) => previous,
 	useQuery: ({ fn }: { fn: Parameters<typeof getFunctionName>[0] }) =>
 		getFunctionName(fn) === "products:getPublicBySlug"
-			? { data: PRODUCT }
+			? { data: state.product ?? PRODUCT }
 			: {
 					data: state.availability ?? AVAILABILITY,
 					isPlaceholderData: false,
@@ -89,6 +94,7 @@ afterEach(() => {
 	vi.useRealTimers();
 	vi.clearAllMocks();
 	state.availability = undefined;
+	state.product = undefined;
 });
 
 /**
@@ -98,9 +104,14 @@ afterEach(() => {
  * showed an MY-shaped placeholder. These pin the picker's reach to the
  * mutation, the inline reason, and the masked echo.
  */
-function renderForm(country: Country = "MY", locale?: "en" | "ms") {
+function renderForm(
+	country: Country = "MY",
+	locale?: "en" | "ms",
+	paymentsPaused?: boolean,
+) {
 	render(
 		<BookingCheckoutForm
+			paymentsPaused={paymentsPaused}
 			retailerId={"ret_1" as Id<"retailers">}
 			storeName="Lembah Riverside"
 			storeSlug="lembah-riverside"
@@ -112,10 +123,12 @@ function renderForm(country: Country = "MY", locale?: "en" | "ms") {
 	);
 }
 
-const picker = () =>
-	screen.getByRole("combobox", {
-		name: "Country of your WhatsApp number",
-	}) as HTMLSelectElement;
+const PICKER_LABEL = "Country of your WhatsApp number";
+/** The plate's control — a searchable sheet since z8r3fdm36y, driven
+ * through the shared helpers so this file holds no copy of its shape. */
+const plateCode = () => phonePlateCode(PICKER_LABEL);
+const pick = (name: string, query?: string) =>
+	pickPhoneCountry(name, { label: PICKER_LABEL, query });
 const phoneInput = () =>
 	screen.getByRole("textbox", { name: "WhatsApp number" }) as HTMLInputElement;
 
@@ -132,13 +145,13 @@ function tapDay(day: string) {
 	fireEvent.click(within(cell).getByRole("button"));
 }
 
-describe("BookingCheckoutForm — WhatsApp number", () => {
+describe("BookingCheckoutForm — WhatsApp number", async () => {
 	it.each([
 		["MY", "12-345 6789"],
 		["SG", "9123 4567"],
 	] as const)("opens on the store's country with its own example (%s)", (country, example) => {
 		renderForm(country);
-		expect(picker().value).toBe(country);
+		expect(plateCode()).toBe(`+${COUNTRY_DIAL_CODE[country]}`);
 		expect(phoneInput().getAttribute("placeholder")).toBe(example);
 	});
 
@@ -177,7 +190,7 @@ describe("BookingCheckoutForm — WhatsApp number", () => {
 		});
 		switchButton.focus();
 		fireEvent.click(switchButton);
-		expect(picker().value).toBe("SG");
+		expect(plateCode()).toBe("+65");
 		expect(
 			screen.queryByRole("button", { name: "Switch to Singapore (+65)" }),
 		).toBeNull();
@@ -201,7 +214,7 @@ describe("BookingCheckoutForm — WhatsApp number", () => {
 		fireEvent.change(screen.getByPlaceholderText("e.g. Aisyah"), {
 			target: { value: "Kenji Sato" },
 		});
-		fireEvent.change(picker(), { target: { value: "JP" } });
+		await pick("Japan");
 		typePhone("90-1234-5678");
 		fireEvent.click(
 			screen.getAllByRole("button", { name: "Request to book" })[0] as Element,
@@ -471,5 +484,23 @@ describe("stay summary — a long listing name wraps instead of truncating", () 
 		].find((s) => s.textContent === PRODUCT.name);
 		expect(label).toBeTruthy();
 		expect(label?.className).not.toContain("truncate");
+	});
+});
+
+describe("BookingCheckoutForm — a lapsed store's payments are paused (z8r3fdr6gg)", () => {
+	it("says so before the guest sends the request", () => {
+		renderForm("MY", undefined, true);
+		expect(screen.getAllByText("Payments paused").length).toBeGreaterThan(0);
+	});
+
+	it("says nothing while payments are open", () => {
+		renderForm();
+		expect(screen.queryByText("Payments paused")).toBeNull();
+	});
+
+	it("says nothing for a zero-rate listing with no deposit — nothing to pay", () => {
+		state.product = { ...PRODUCT, variants: [{ price: 0 }] };
+		renderForm("MY", undefined, true);
+		expect(screen.queryByText("Payments paused")).toBeNull();
 	});
 });

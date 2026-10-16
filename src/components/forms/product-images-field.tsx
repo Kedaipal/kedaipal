@@ -1,6 +1,9 @@
 import { useMutation } from "convex/react";
+import { CheckCircle2, Clock, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../../convex/_generated/api";
+import type { PhotoAutosaveStatus } from "../../hooks/usePhotoAutosave";
+import { takePickedFiles } from "../../lib/file-input";
 import { convexErrorMessage } from "../../lib/format";
 import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
 import { reorderByIds } from "../../lib/reorder";
@@ -21,12 +24,16 @@ export function ProductImagesField({
 	onChange,
 	onUploadingChange,
 	onError,
+	autosaveStatus,
 }: {
 	images: ProductImage[];
 	onChange: (next: ProductImage[]) => void;
 	/** Lets the parent disable its submit while an upload is in flight. */
 	onUploadingChange?: (uploading: boolean) => void;
 	onError: (message: string) => void;
+	/** Set when the photos save themselves (an existing product, z8r3fdtk82):
+	 * the grid then says, beside the count, whether they've landed. */
+	autosaveStatus?: PhotoAutosaveStatus;
 }) {
 	const generateUploadUrl = useMutation(api.products.generateUploadUrl);
 	const [uploading, setUploadingState] = useState(false);
@@ -36,8 +43,8 @@ export function ProductImagesField({
 		onUploadingChange?.(next);
 	}
 
-	async function handleFiles(files: FileList | null) {
-		if (!files || files.length === 0) return;
+	async function handleFiles(files: readonly File[]) {
+		if (files.length === 0) return;
 		if (images.length + files.length > MAX_IMAGES) {
 			onError(`Maximum ${MAX_IMAGES} images per product`);
 			return;
@@ -89,15 +96,38 @@ export function ProductImagesField({
 
 	return (
 		<div className="flex flex-col gap-3">
-			<div className="flex items-center justify-between gap-3">
-				<span className="text-sm font-medium">
+			{/* Wraps instead of squeezing: on a phone the count, the save status
+			    and the drag hint don't fit one line, and squeezed they broke
+			    mid-phrase ("Drag to / reorder"). */}
+			<div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+				<span className="whitespace-nowrap text-sm font-medium">
 					Product images{" "}
 					<span className="text-muted-foreground">
 						({images.length}/{MAX_IMAGES})
 					</span>
 				</span>
+				{autosaveStatus?.kind === "saving" ? (
+					<output className="mr-auto inline-flex items-center gap-1 whitespace-nowrap text-xs text-muted-foreground">
+						<Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+						Saving…
+					</output>
+				) : autosaveStatus?.kind === "saved" ? (
+					<output className="mr-auto inline-flex items-center gap-1 whitespace-nowrap text-xs font-medium text-accent-emphasis">
+						<CheckCircle2 className="size-3.5" aria-hidden="true" />
+						Saved
+					</output>
+				) : autosaveStatus?.kind === "waiting" ? (
+					// Throttled: it saves by itself, so no "tap Save" here (Save
+					// would hit the same limit).
+					<output className="mr-auto inline-flex items-center gap-1 whitespace-nowrap text-xs text-muted-foreground">
+						<Clock className="size-3.5" aria-hidden="true" />
+						Lots of changes — saving in {autosaveStatus.wait}
+					</output>
+				) : null}
 				{images.length > 1 ? (
-					<p className="text-xs text-muted-foreground">Drag to reorder</p>
+					<p className="whitespace-nowrap text-xs text-muted-foreground">
+						Drag to reorder
+					</p>
 				) : null}
 			</div>
 			<div className="grid grid-cols-3 gap-2">
@@ -154,12 +184,18 @@ export function ProductImagesField({
 							accept={IMAGE_ACCEPT}
 							multiple
 							disabled={uploading}
-							onChange={(e) => handleFiles(e.target.files)}
+							onChange={(e) => handleFiles(takePickedFiles(e.target))}
 							className="hidden"
 						/>
 					</label>
 				) : null}
 			</div>
+			{autosaveStatus?.kind === "error" ? (
+				<p role="alert" className="text-xs text-destructive">
+					Couldn't save your photos: {autosaveStatus.message.replace(/\.$/, "")}
+					. Tap Save changes to try again.
+				</p>
+			) : null}
 		</div>
 	);
 }

@@ -225,11 +225,12 @@ inside a single call:
 ```bash
 cd ~/Documents/Workspace/work/kedaipal-wt-release-<Y>-<M>-<N> \
   && grep '"version"' package.json \
-  && npx convex codegen && pnpm typecheck && pnpm lint && pnpm test
+  && npx convex codegen && pnpm typecheck && pnpm check && pnpm test
 ```
 
 The `grep` is the proof you gated the right tree: it must print the version the
-notes claim. Expect 3 pre-existing `noTemplateCurlyInString` lint warnings and
+notes claim. Expect 4 pre-existing Biome warnings (3 `noTemplateCurlyInString`, 1
+`noSuspiciousSemicolonInJsx`) — warnings never fail the gate — and
 occasional load-flaky timeouts that pass in isolation — re-run the named file
 alone rather than chasing them. Run `npx convex dev --once` from the worktree so
 the shared dev backend matches the branch.

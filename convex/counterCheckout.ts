@@ -23,6 +23,14 @@ import {
 	MAX_BUYER_QUESTIONS,
 } from "./lib/buyerQuestions";
 import { ConvexError, v } from "convex/values";
+import {
+	takesCounterOrders,
+	unavailableMessage,
+} from "./lib/storeAvailability";
+import {
+	assertTakesCounterOrders,
+	storeAvailabilityOf,
+} from "./storeAvailability";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
@@ -40,7 +48,6 @@ import {
 } from "./lib/buyerPhone";
 import { DEFAULT_COUNTRY } from "./lib/country";
 import { stampProductsOrdered } from "./lib/productOrdered";
-import { orderingPausedMessage } from "./lib/seasonalHold";
 import { recordOrderCreated } from "./subscriptionUsage";
 import {
 	logAdminAction,
@@ -49,13 +56,18 @@ import {
 	requireRetailerAccess,
 	tryRetailerAccess,
 } from "./lib/auth";
-import { assertSubscriptionActive } from "./subscriptions";
+import { assertSubscriptionActive, getAccess } from "./subscriptions";
+import { effectivePrice, isPromoActive, promoUnitsLeft } from "./lib/promo";
+import { tallyPromoUnits } from "./lib/promoTally";
 import {
 	getDisplayName,
 	normalizeOptionalCustomerName,
 	requireCustomerName,
 } from "./lib/customer";
-import { assertValidFulfilmentDate } from "./lib/fulfilmentDate";
+import {
+	assertValidFulfilmentDate,
+	todayMytMidnight,
+} from "./lib/fulfilmentDate";
 import {
 	seatsExhaustedMessage,
 	seatsRequested,
@@ -73,9 +85,22 @@ import {
 } from "./lib/orderClaims";
 import {
 	computeOrderTotals,
+	storedDiscount,
 	generateShortId,
 	generateTrackingToken,
 } from "./lib/order";
+import {
+	claimVoucherDiscount,
+	claimVoucherState,
+	redeemVoucher,
+	resolveVoucherOrThrow,
+	storeShowsVoucherEntry,
+} from "./lib/voucherRedemption";
+import {
+	normalizeVoucherCode,
+	type VoucherSnapshot,
+	type VoucherTerms,
+} from "./lib/vouchers";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 import type { PickupSnapshot } from "./lib/whatsappCopy";
 import { buildEventVenueSnapshot, resolveEventVenue } from "./orders";
@@ -128,11 +153,14 @@ function generatePairingCode(taken: ReadonlySet<string>): string {
  * caller's own store (strict 1:1 user↔retailer). Returns the access descriptor
  * so admin-on-behalf writes are attributable. See docs/admin-console.md.
  */
-/** Off-Season Hold (z8r3fday24): a paused store takes no orders through the
- * counter either — the cashier UI disables the flow with this same reason. */
-function assertOrderingNotPaused(retailer: Doc<"retailers">): void {
-	if (retailer.orderingPausedAt !== undefined)
-		throw new ConvexError(orderingPausedMessage(retailer.storeName));
+/** The counter's availability rule (z8r3fdudf7): an Off-Season Hold or
+ * Kedaipal's switch closes it; the seller's OWN pause doesn't — they paused
+ * online orders, not the till they're standing at. */
+async function assertOrderingNotPaused(
+	ctx: QueryCtx | MutationCtx,
+	retailer: Doc<"retailers">,
+): Promise<void> {
+	await assertTakesCounterOrders(ctx, retailer, "seller");
 }
 
 async function requireCounterRetailer(
@@ -249,10 +277,19 @@ export const getCheckoutSession = query({
 		displayName: string | undefined;
 		isNewCustomer: boolean | undefined;
 		orderId: Id<"orders"> | undefined;
+		// The completed session's order, by its human id — the Done screen's
+		// seller read (`orders.get` by shortId) keys on it, so a session
+		// reopened from the list shows the same live status + WhatsApp outcome
+		// as the one that created it.
+		orderShortId: string | undefined;
 		// Lifetime history for a returning customer (null for new/anonymous).
 		customer: { orderCount: number; totalSpent: number; lastOrderAt: number } | null;
 		// Autosaved in-progress order, so a resume restores the cart + selections.
 		draft: Doc<"counterCheckoutSessions">["draft"];
+		// Show the voucher field on this panel? (`z8r3fdr617`) Same bit the
+		// buyer's storefront uses, deliberately: the seller keying a code and
+		// the buyer typing one must not see different doors.
+		acceptsVouchers: boolean;
 		// A claim link that is still out (86eyq0epn). Non-null = this checkout is
 		// FROZEN: the screen renders the read-only "waiting on buyer" view and
 		// both edit mutations refuse. Carries the frozen snapshot rather than the
@@ -263,7 +300,13 @@ export const getCheckoutSession = query({
 			expiresAt: number;
 			windowMinutes: number;
 			currency: string;
-			itemsTotal: number;
+			/**
+			 * Net of the claim's voucher (`z8r3fdr617`) — this screen exists to
+			 * show the seller WHAT THE BUYER IS LOOKING AT, so a gross figure
+			 * here is the one number on it that wouldn't match. Always judged
+			 * live, since a live claim's voucher is by definition unspent.
+			 */
+			total: number;
 			lines: Array<{
 				name: string;
 				variantLabel: string | undefined;
@@ -313,6 +356,20 @@ export const getCheckoutSession = query({
 
 		const now = Date.now();
 		const claim = await liveClaimForSession(ctx, sessionId, now);
+		// Net of the claim's voucher, so the seller's frozen view matches the
+		// buyer's ticket to the sen (`z8r3fdr617`). A live claim's voucher is
+		// by definition unspent, so the live state is the right one to ask.
+		const claimItems =
+			claim?.lines.reduce((sum, l) => sum + l.price * l.quantity, 0) ?? 0;
+		const claimLiveTotal = claim
+			? claimItems -
+				claimVoucherDiscount(
+					await claimVoucherState(ctx, claim, now),
+					claimItems,
+				)
+			: 0;
+
+		const order = session.orderId ? await ctx.db.get(session.orderId) : null;
 
 		return {
 			status: effectiveStatus(session, now),
@@ -321,8 +378,10 @@ export const getCheckoutSession = query({
 			displayName,
 			isNewCustomer: session.isNewCustomer,
 			orderId: session.orderId,
+			orderShortId: order?.shortId,
 			customer,
 			draft: session.draft,
+			acceptsVouchers: await storeShowsVoucherEntry(ctx, session.retailerId),
 			liveClaim: claim
 				? {
 						claimId: claim._id,
@@ -330,10 +389,7 @@ export const getCheckoutSession = query({
 						expiresAt: claim.expiresAt,
 						windowMinutes: claim.windowMinutes,
 						currency: claim.currency,
-						itemsTotal: claim.lines.reduce(
-							(sum, l) => sum + l.price * l.quantity,
-							0,
-						),
+						total: claimLiveTotal,
 						lines: claim.lines.map((l) => ({
 							name: l.name,
 							variantLabel: l.variantLabel,
@@ -399,7 +455,7 @@ export const bindSessionManualPhone = mutation({
 		const access = await requireCounterRetailer(ctx, retailerId);
 		await assertSubscriptionActive(ctx, access.retailer._id);
 		const retailer = access.retailer;
-		assertOrderingNotPaused(retailer);
+		await assertOrderingNotPaused(ctx, retailer);
 
 		// Only after the store-level gates above: a paused or lapsed store says so
 		// before any complaint about the number (pinned by seasonalHold.test.ts for the pause and counterCheckout.test.ts for the lapse).
@@ -503,7 +559,7 @@ export const startAnonymousSession = mutation({
 		const access = await requireCounterRetailer(ctx, retailerId);
 		await assertSubscriptionActive(ctx, access.retailer._id);
 		const retailer = access.retailer;
-		assertOrderingNotPaused(retailer);
+		await assertOrderingNotPaused(ctx, retailer);
 		const now = Date.now();
 		const openBound = await openBoundSessions(ctx, retailer._id, now);
 
@@ -582,6 +638,13 @@ const draftValidator = v.object({
 	fulfilmentDate: v.optional(v.number()),
 	paidInPerson: v.optional(v.boolean()),
 	paymentMethod: v.optional(orderPaymentMethodValidator),
+	// Voucher code (`z8r3fdr617`) — a scratchpad value like the prices, kept
+	// only in its canonical spelling so the door that spends it doesn't have to
+	// re-parse whatever was typed. An unparseable code is DROPPED here rather
+	// than rejected: this is a debounced autosave running while the seller is
+	// mid-keystroke, and failing the save would lose the rest of the cart.
+	// The seller's live feedback comes from the code-check query instead.
+	voucherCode: v.optional(v.string()),
 });
 
 /**
@@ -632,7 +695,15 @@ export const saveSessionDraft = mutation({
 
 		const now = Date.now();
 		await ctx.db.patch(sessionId, {
-			draft: { ...draft, items },
+			draft: {
+				...draft,
+				items,
+				// Canonical spelling or nothing — see `draftValidator`.
+				voucherCode:
+					draft.voucherCode === undefined
+						? undefined
+						: (normalizeVoucherCode(draft.voucherCode) ?? undefined),
+			},
 			expiresAt: now + OPEN_SESSION_TTL_MS, // slide the idle window
 			updatedAt: now,
 		});
@@ -753,7 +824,8 @@ export const createOrderFromSession = mutation({
 				// authoritative catalog price is charged. Trusting it here is safe:
 				// this mutation is owner-or-admin only (requireSessionAccess), so the
 				// "client" IS the seller pricing their own order — a buyer never
-				// reaches this path. Validated as a positive integer, no upper cap
+				// reaches this path. Validated as a non-negative integer (RM0 is a
+				// free line), no upper cap
 				// (same rule as any product price).
 				unitPrice: v.optional(v.number()),
 				// Buyer-question answers the seller keyed for the walk-in
@@ -771,30 +843,40 @@ export const createOrderFromSession = mutation({
 		// person, so it's validated against a 0-day notice (today always allowed),
 		// ignoring the storefront buyer-notice setting. See convex/lib/fulfilmentDate.ts.
 		fulfilmentDate: v.optional(v.number()),
+		// The voucher the seller keyed (`z8r3fdr617`), passed EXPLICITLY like
+		// `items` rather than read off `session.draft`. The draft is a DEBOUNCED
+		// autosave, so reading it here would lose a code applied in the second
+		// before the seller tapped Create — after the panel had already shown
+		// the discount. The draft copy exists only to restore the field on a
+		// refresh; this argument is what the sale is priced on.
+		voucherCode: v.optional(v.string()),
 	},
 	handler: async (
 		ctx,
 		args,
-	): Promise<{ shortId: string; orderId: Id<"orders"> }> => {
+	): Promise<{
+		shortId: string;
+		orderId: Id<"orders">;
+		/** Born COMPLETED — handed over at the counter (see `handedOverNow`). */
+		completed: boolean;
+	}> => {
 		const resolved = await requireSessionAccess(ctx, args.sessionId);
 		if (!resolved) throw new ConvexError("Session not found");
 		const { session, access } = resolved;
 		await assertSubscriptionActive(ctx, session.retailerId);
 		const retailer = access.retailer;
-		assertOrderingNotPaused(retailer);
+		await assertOrderingNotPaused(ctx, retailer);
 		if (session.status !== "buyer_identified")
 			throw new ConvexError(
 				"Bind a buyer to this checkout before creating the order",
 			);
 		// A session with no phone is an ANONYMOUS walk-in (86ey8vqp6) — a cash sale
-		// with no buyer to message. That's a valid order, but a pay-later link would
-		// have no recipient, so it must be settled in person (the UI disables
-		// pay-later with this same reason).
+		// with no buyer to message. That's a valid order, but a pay-later link
+		// would have no recipient, so it must be settled in person (the UI
+		// disables pay-later with this same reason). Checked once the TOTAL is
+		// known, below: a free sale has no payment to take, and the client sends
+		// `paidInPerson: false` for one on purpose.
 		const anonymous = !session.waPhone;
-		if (anonymous && !args.paidInPerson)
-			throw new ConvexError(
-				"An anonymous sale must be paid in person — there's no buyer to send a payment link to.",
-			);
 		if (args.items.length === 0) throw new ConvexError("Add at least one item");
 		if (args.items.length > MAX_COUNTER_ITEMS)
 			throw new ConvexError(`Maximum ${MAX_COUNTER_ITEMS} items per order`);
@@ -830,12 +912,26 @@ export const createOrderFromSession = mutation({
 			name: string;
 			variantLabel?: string;
 			price: number;
+			/** List price, present ONLY when the line sold below it (z8r3fdcw72). */
+			listPrice?: number;
+			/** Promo run the line sold under — counter sales share the flash pool. */
+			promoRunId?: string;
 			quantity: number;
 			/** Whether this line reserved stock at create — frozen (86eypn8ye). */
 			stockReserved: boolean;
 			/** Buyer-question answers the seller keyed (z8r3fdkjek). */
 			answers?: FrozenAnswer[];
 		}[] = [];
+		// Promo context (z8r3fdcw72): the counter DEFAULTS to the effective
+		// price and its sale lines count against the same flash pool as the
+		// storefront ("one pool"). One bounded tally per distinct product. A
+		// seller price adjustment (or a custom line's agreed price) overrides
+		// the default and is NOT a promo sale — no runId, no pool unit.
+		const storePlan = (await getAccess(ctx, retailer._id)).plan;
+		const promoByProduct = new Map<
+			Id<"products">,
+			{ runId: string; unitsLeft: number | undefined } | null
+		>();
 		const requestedByVariant = new Map<
 			Id<"productVariants">,
 			{ qty: number; block: boolean; onHand: number }
@@ -877,21 +973,71 @@ export const createOrderFromSession = mutation({
 			// back to the authoritative variant price. See docs/custom-option.md +
 			// docs/counter-checkout.md ("Seller price adjustment").
 			let unitPrice: number;
+			let soldOnPromo = false;
+			let promoRunId: string | undefined;
 			if (variant.isCustom === true || item.unitPrice !== undefined) {
-				// A positive integer in sen — the SAME rule as any other price
-				// (products.ts). No artificial ceiling: we can't know the vendor's
-				// business (watches, renovations, B2B services can run six figures+),
-				// and the price is the vendor's own call with the buyer present.
+				// A non-negative integer in sen. No artificial ceiling: we can't
+				// know the vendor's business (watches, renovations, B2B services can
+				// run six figures+), and the price is the vendor's own call with the
+				// buyer present. RM0 is a real price at the counter — a comped item,
+				// a freebie with a purchase — and an all-free cart becomes a free
+				// order (`paidInPerson` below). The CLAIM door keeps refusing zero
+				// (orderClaims.sendClaim): a link exists to take a payment.
 				const entered = item.unitPrice;
 				if (
 					entered === undefined ||
 					!Number.isInteger(entered) ||
-					entered <= 0
+					entered < 0
 				)
 					throw new ConvexError(`Set a price for "${displayName}"`);
 				unitPrice = entered;
 			} else {
-				unitPrice = variant.price;
+				// Default = the effective price (promo-aware, z8r3fdcw72). Same
+				// helpers as the storefront + orders.create, so the counter can
+				// never quote a sale the storefront wouldn't.
+				let promoCtx = promoByProduct.get(variant.productId);
+				if (promoCtx === undefined) {
+					promoCtx = null;
+					const promo = product.promo;
+					if (
+						promo !== undefined &&
+						isPromoActive({ promo }, storePlan, now) &&
+						product.event === undefined
+					) {
+						const unitsLeft =
+							promo.unitCap !== undefined
+								? promoUnitsLeft(
+										promo.unitCap,
+										await tallyPromoUnits(ctx, {
+											retailerId: retailer._id,
+											productId: variant.productId,
+											runId: promo.runId,
+											startsAt: promo.startsAt ?? 0,
+											endsAt: promo.endsAt,
+										}),
+									)
+								: undefined;
+						promoCtx = { runId: promo.runId, unitsLeft };
+					}
+					promoByProduct.set(variant.productId, promoCtx);
+				}
+				// A line that would overshoot the remaining pool defaults to LIST
+				// (the storefront refuses the same straddle; here the seller is
+				// present and can still adjust the price by hand). Lines earlier
+				// in this same order drain the pool as they take sale units.
+				const straddlesCap =
+					promoCtx !== null &&
+					promoCtx.unitsLeft !== undefined &&
+					item.quantity > promoCtx.unitsLeft;
+				unitPrice = straddlesCap
+					? variant.price
+					: effectivePrice(variant, product, storePlan, now, promoCtx?.unitsLeft);
+				if (unitPrice < variant.price && promoCtx !== null) {
+					soldOnPromo = true;
+					promoRunId = promoCtx.runId;
+					if (promoCtx.unitsLeft !== undefined)
+						promoCtx.unitsLeft -= item.quantity;
+				}
 			}
 			if (product.event !== undefined) {
 				eventProducts.set(variant.productId, {
@@ -924,6 +1070,8 @@ export const createOrderFromSession = mutation({
 				name: product.name,
 				variantLabel: label || undefined,
 				price: unitPrice,
+				listPrice: soldOnPromo ? variant.price : undefined,
+				promoRunId,
 				quantity: item.quantity,
 				// The seller answers on the walk-in's behalf; required still
 				// enforced — the same rule as the storefront (z8r3fdkjek).
@@ -992,7 +1140,34 @@ export const createOrderFromSession = mutation({
 				throw new ConvexError(seatsExhaustedMessage(name, left));
 		}
 
-		const { subtotal, total } = computeOrderTotals(snapshotItems);
+		// The voucher the seller keyed (`z8r3fdr617`). Resolved authoritatively
+		// HERE — the panel's check was only for the tick, so one that lapsed or
+		// was spent elsewhere while the cart sat open is caught at this door. Refuses the sale rather than ringing it up at a
+		// price the seller didn't quote: the buyer is standing right there, and
+		// the seller can drop the code and take the money.
+		let voucherTerms: VoucherTerms | undefined;
+		let redeemedVoucherId: Id<"vouchers"> | undefined;
+		let voucherSnapshot: VoucherSnapshot | undefined;
+		if (args.voucherCode?.trim()) {
+			const { voucher, terms } = await resolveVoucherOrThrow(ctx, {
+				retailerId: retailer._id,
+				code: args.voucherCode,
+				now,
+			});
+			voucherTerms = terms;
+			redeemedVoucherId = voucher._id;
+			voucherSnapshot = { code: voucher.code, ...terms };
+		}
+
+		const { subtotal, discount, total } = computeOrderTotals(snapshotItems, {
+			voucher: voucherTerms,
+		});
+		// The anonymous rule, now that there is a total to protect. Before any
+		// write, so a refusal leaves stock and the session untouched.
+		if (anonymous && !args.paidInPerson && total > 0)
+			throw new ConvexError(
+				"An anonymous sale must be paid in person — there's no buyer to send a payment link to.",
+			);
 
 		// Reserve stock for hard-block variants (same OCC transaction).
 		for (const [variantId, { qty, block, onHand }] of requestedByVariant) {
@@ -1023,6 +1198,19 @@ export const createOrderFromSession = mutation({
 		// unsettled price (customs are priced by the seller, no mockup gate), so
 		// zero here is a real zero (`isFreeOrder`'s counter shape).
 		const paidInPerson = args.paidInPerson && total > 0;
+		// Handed over NOW? A counter sale finishes at the counter — the buyer
+		// leaves with the goods — so the order that records it is born
+		// COMPLETED (`delivered`; a counter order reads "Completed"), not left
+		// for a "Mark as completed" tap nobody should need. The exceptions are
+		// the sales where nothing changes hands yet: a collection dated for
+		// later (a pre-order keyed at the counter), and an RSVP (the guest
+		// attends later; it completes at the event). Payment is its own axis —
+		// a pay-later walk-in still left with the goods, and settles from the
+		// link in their confirmation.
+		const handedOverNow =
+			eventLock === undefined &&
+			(sanitizedFulfilmentDate === undefined ||
+				sanitizedFulfilmentDate <= todayMytMidnight(now));
 		const orderId = await ctx.db.insert("orders", {
 			retailerId: retailer._id,
 			shortId,
@@ -1031,9 +1219,19 @@ export const createOrderFromSession = mutation({
 			subtotal,
 			total,
 			currency,
-			status: "confirmed", // seller-created with the buyer present
+			// Seller-created with the buyer present: confirmed at least, and
+			// completed when handed over on the spot (see above).
+			status: handedOverNow ? "delivered" : "confirmed",
 			channel: "whatsapp",
 			source: "counter",
+			// The buyer's one WhatsApp is in flight (scheduled below); its real
+			// outcome lands via recordConfirmationPush so the Done screen can say
+			// whether the link reached them. An anonymous sale sends nothing, so
+			// it carries no stamp.
+			confirmationPushStatus: session.waPhone ? "sending" : undefined,
+			// Rung up by the seller, so already seen — the push stamp would
+			// otherwise drop it into the inbox's New (unseen) bucket.
+			seenAt: session.waPhone ? now : undefined,
 			customer: { name: customerName, waPhone: session.waPhone },
 			deliveryMethod: "self_collect", // collected at the counter
 			// An RSVP freezes its venue (see the event branch above); a plain
@@ -1050,10 +1248,19 @@ export const createOrderFromSession = mutation({
 			// Who rang this up (86exr91r4) — owner or team member at the counter;
 			// admin act-as stays in adminAuditLog, never on the order.
 			createdByUserId: access.role === "admin" ? undefined : access.userId,
+			// The voucher, frozen onto the order; the row flips just below.
+			voucherId: redeemedVoucherId,
+			voucherSnapshot,
+			voucherDiscount: storedDiscount(discount),
 			statusChangedAt: now,
 			createdAt: now,
 			updatedAt: now,
 		});
+
+		// Spend the code in the transaction that created the order (OCC makes the
+		// race safe — see lib/voucherRedemption.ts).
+		if (redeemedVoucherId)
+			await redeemVoucher(ctx, { voucherId: redeemedVoucherId, orderId, now });
 
 		const actorUserId = access.role === "admin" ? undefined : access.userId;
 		await ctx.db.insert("orderEvents", {
@@ -1068,6 +1275,17 @@ export const createOrderFromSession = mutation({
 				orderId,
 				status: "confirmed",
 				note: `payment_received: in-person (${args.paymentMethod ?? "cash"})`,
+				actorUserId,
+				createdAt: now,
+			});
+		}
+		// The timeline reads confirmed → completed, as a seller tapping through
+		// would have left it — the handover is a real step, not a skipped one.
+		if (handedOverNow) {
+			await ctx.db.insert("orderEvents", {
+				orderId,
+				status: "delivered",
+				note: "counter_handover",
 				actorUserId,
 				createdAt: now,
 			});
@@ -1138,7 +1356,7 @@ export const createOrderFromSession = mutation({
 			"counterCheckout.createOrderFromSession",
 			orderId,
 		);
-		return { shortId, orderId };
+		return { shortId, orderId, completed: handedOverNow };
 	},
 });
 
@@ -1395,6 +1613,10 @@ export type StoreQrStartResult =
 			reclaimed: boolean;
 	  }
 	| { result: "busy"; storeName: string; locale: Locale }
+	/** The counter is closed (hold or Kedaipal's switch, z8r3fdudf7) — the
+	 * buyer is told in the same neutral words the storefront would use, and
+	 * no session is opened that could never be rung up. */
+	| { result: "unavailable"; message: string }
 	| { result: "not_found" };
 
 /**
@@ -1425,6 +1647,12 @@ export const startSessionFromStoreQr = internalMutation({
 			.withIndex("by_counterQrToken", (q) => q.eq("counterQrToken", token))
 			.unique();
 		if (!retailer) return { result: "not_found" };
+		const availability = await storeAvailabilityOf(ctx, retailer);
+		if (!takesCounterOrders(availability))
+			return {
+				result: "unavailable",
+				message: unavailableMessage(availability, retailer.storeName),
+			};
 
 		const storeName = retailer.storeName;
 		const locale = pickLocale(retailer.locale);

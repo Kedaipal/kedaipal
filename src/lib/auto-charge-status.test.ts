@@ -1,14 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { AdminAutoChargeState } from "../../convex/lib/hitpayBilling";
-import {
-	describeAutoCharge,
-	IN_FLIGHT_GRACE_MS,
-} from "./auto-charge-status";
+import { describeAutoCharge, IN_FLIGHT_GRACE_MS } from "./auto-charge-status";
 
 const NOW = Date.UTC(2026, 8, 30, 3, 30);
 const HOUR = 60 * 60 * 1000;
 
-const state = (over: Partial<AdminAutoChargeState> = {}): AdminAutoChargeState => ({
+const state = (
+	over: Partial<AdminAutoChargeState> = {},
+): AdminAutoChargeState => ({
 	method: "card",
 	failedAttempts: 0,
 	...over,
@@ -118,7 +117,9 @@ describe("describeAutoCharge — one reading for both admin lists", () => {
 			NOW,
 		);
 		expect(retrying.pill).toBe("Auto-charge failed ×1");
-		expect(retrying.detail).toMatch(/^Last error: charge status: failed\. Next retry /);
+		expect(retrying.detail).toMatch(
+			/^Last error: charge status: failed\. Next retry /,
+		);
 
 		const exhausted = describeAutoCharge(state({ failedAttempts: 3 }), NOW);
 		expect(exhausted.detail).toBe(

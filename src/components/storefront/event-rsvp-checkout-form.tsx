@@ -27,17 +27,16 @@ import {
 	type DialIso,
 	parseBuyerWaPhone,
 } from "../../../convex/lib/buyerPhone";
-import type { Country } from "../../../convex/lib/country";
-import { type Locale, pickLocale } from "../../../convex/lib/locale";
 import {
 	answerPrompt,
 	answersForSubmit,
 	firstMissingRequired,
 	visibleQuestions,
 } from "../../../convex/lib/buyerQuestions";
+import type { Country } from "../../../convex/lib/country";
+import { type Locale, pickLocale } from "../../../convex/lib/locale";
 import { isEventPassed } from "../../../convex/lib/productEvent";
 import { readAttributionSource } from "../../hooks/useSourceAttribution";
-import { BuyerQuestionsFields } from "../order/buyer-questions-fields";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import { buyerPhoneRejection } from "../../lib/buyer-phone-rejection";
 import {
@@ -46,6 +45,7 @@ import {
 	formatPrice,
 } from "../../lib/format";
 import { variantLabel } from "../../lib/variant";
+import { BuyerQuestionsFields } from "../order/buyer-questions-fields";
 import { PickupNotes } from "../order/pickup-notes";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -53,6 +53,7 @@ import { BuyerPhoneCountrySwitch, BuyerPhoneInput } from "../ui/my-phone-input";
 import { Skeleton } from "../ui/skeleton";
 import { CheckoutSection } from "./checkout-form";
 import { EventMomentRow } from "./event-checkout";
+import { PaymentsPausedNotice } from "./payments-paused-notice";
 import { PickupSummaryCard } from "./pickup-location-options";
 import { OptionPills, useProductPurchase } from "./product-purchase";
 import {
@@ -71,6 +72,7 @@ export function EventRsvpCheckoutForm({
 	country,
 	confirmPushEnabled,
 	cartItemCount,
+	paymentsPaused,
 }: {
 	retailerId: Id<"retailers">;
 	storeName: string;
@@ -87,6 +89,9 @@ export function EventRsvpCheckoutForm({
 	confirmPushEnabled: boolean;
 	/** Lines in the buyer's cart — an RSVP never touches it, and says so. */
 	cartItemCount: number;
+	/** The store is lapsed, so this order can't be paid yet (z8r3fdr6gg) —
+	 * the summary says so before the buyer commits. */
+	paymentsPaused?: boolean;
 }) {
 	const navigate = useNavigate();
 	const createOrder = useMutation(api.orders.create);
@@ -357,6 +362,13 @@ export function EventRsvpCheckoutForm({
 
 	const summary = (
 		<>
+			{/* First, above the receipt — read before the commitment, the
+			    same place the cart checkout puts it (z8r3fdr6gg). */}
+			<PaymentsPausedNotice
+				paused={paymentsPaused}
+				storeName={storeName}
+				free={isFree}
+			/>
 			<div className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 				<h2 className="font-heading text-sm font-bold">Your RSVP</h2>
 				<div className="flex flex-col gap-2 border-t-2 border-dashed border-border pt-3 text-sm tabular-nums">
@@ -510,9 +522,11 @@ export function EventRsvpCheckoutForm({
 						<PickupSummaryCard
 							location={venue}
 							currency={product.currency}
-							// An event venue never charges its pickup fee, so the card
-							// must not advertise one — see buildEventVenueSnapshot.
-							hideFee
+							// Where the event happens — not a pickup option the guest
+							// chose. Drops the fee chip (never charged) and the
+							// self-collect/drop-off badge (describes order handover,
+							// which a guest attending isn't doing).
+							asEventVenue
 						/>
 						<p className="text-xs text-muted-foreground">
 							Where the event happens — set by the store, the same for every

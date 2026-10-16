@@ -46,6 +46,9 @@ export interface BulkSelectRowProps {
 	trailing?: React.ReactNode;
 	/** Screen-reader noun for what is being counted. */
 	unit?: string;
+	/** `touch` = a 44px row, for a full-screen list on a phone (the promotion
+	 * product picker). The default stays compact for dialogs and menus. */
+	size?: "default" | "touch";
 }
 
 export function BulkSelectRow({
@@ -56,12 +59,14 @@ export function BulkSelectRow({
 	tone = "group",
 	trailing,
 	unit = "options",
+	size = "default",
 }: BulkSelectRowProps) {
 	const state = bulkStateOf(total, selected);
 	return (
 		<label
 			className={cn(
 				"flex min-h-9 w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-muted has-[:focus-visible]:ring-3 has-[:focus-visible]:ring-ring/50",
+				size === "touch" && "min-h-11",
 				tone === "master" && "bg-muted/50 hover:bg-muted",
 			)}
 		>

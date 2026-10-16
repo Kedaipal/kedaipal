@@ -355,6 +355,57 @@ describe("member access through the gate", () => {
 		).rejects.toThrow(/Only the store owner/);
 	});
 
+	test("a credential field's non-credential choice follows where it's made (86eye9xd4)", async () => {
+		const t = setup();
+		const store = await seedStore(t);
+		await t.withIdentity(OWNER).mutation(api.retailers.updateSettings, {
+			hitpay: { enabled: true, apiKey: "test_key_abcd", salt: "salt_1234" },
+		});
+		await seedActiveMember(t, store._id, {
+			payments_settings: "write",
+			fulfilment: "write",
+		});
+		const asHelper = t.withIdentity(HELPER);
+		// "How buyers pay" is a payments decision — the switch alone passes.
+		await expect(
+			asHelper.mutation(api.retailers.updateSettings, {
+				retailerId: store._id,
+				hitpay: { enabled: false },
+			}),
+		).resolves.toMatchObject({ ok: true });
+		// The keys are still the account — integrations, and refused.
+		await expect(
+			asHelper.mutation(api.retailers.updateSettings, {
+				retailerId: store._id,
+				hitpay: { enabled: true, apiKey: "test_key_other", salt: "s" },
+			}),
+		).rejects.toThrow(/Settings → Team/);
+		await expect(
+			asHelper.mutation(api.retailers.updateSettings, {
+				retailerId: store._id,
+				hitpay: null,
+			}),
+		).rejects.toThrow(/Settings → Team/);
+		// Rider options save with live delivery pricing — fulfilment…
+		await expect(
+			asHelper.mutation(api.retailers.updateSettings, {
+				retailerId: store._id,
+				deliveryBooking: {
+					vehicleType: "CAR",
+					deliveryDirection: "standard",
+					promptBookOnPacked: true,
+				},
+			}),
+		).resolves.toMatchObject({ ok: true });
+		// …while arming riders stays with the account.
+		await expect(
+			asHelper.mutation(api.retailers.updateSettings, {
+				retailerId: store._id,
+				deliveryBooking: { vehicleType: "CAR", enabled: true },
+			}),
+		).rejects.toThrow(/Settings → Team/);
+	});
+
 	test("grant edits + removal take effect on the next request", async () => {
 		const t = setup();
 		const store = await seedStore(t);

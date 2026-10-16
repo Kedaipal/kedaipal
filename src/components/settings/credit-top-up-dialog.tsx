@@ -22,12 +22,16 @@ import {
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
-import { CREDIT_LOCK_ENABLED } from "../../../convex/lib/credits";
 import { useStoreRole } from "../../hooks/usePermission";
 import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../../lib/contact";
-import { afterTopUpLine, packOffers, wholePrice } from "../../lib/credit-packs";
+import {
+	afterTopUpLine,
+	opensLine,
+	packOffers,
+	wholePrice,
+} from "../../lib/credit-packs";
 import type { TopUpParam } from "../../lib/credit-top-up";
 import {
 	convexErrorMessage,
@@ -198,14 +202,19 @@ function PickerView({
 	// still latched — the Buy button would spin forever. See the hook.
 	useResetOnBfcache(useCallback(() => setPhase("idle"), []));
 
-	const header = (
+	/** The pitch describes a balance to top up, so a store that HAS none (an
+	 * UNMETERED admin store, z8r3fdp4er) takes its refusal as the description
+	 * instead: stacked, the two sentences contradict each other — "once your
+	 * monthly credits run out" above "they have no credit balance". The
+	 * dialog always carries a description, which is what Radix labels it by. */
+	const headerFor = (description: string) => (
 		<DialogHeader>
 			<DialogTitle>Top up credits</DialogTitle>
-			<DialogDescription>
-				1 credit = 1 order. Bought credits kick in once your monthly credits run
-				out, and carry over for 12 months — nothing goes to waste.
-			</DialogDescription>
+			<DialogDescription>{description}</DialogDescription>
 		</DialogHeader>
+	);
+	const header = headerFor(
+		"1 credit = 1 order. Bought credits kick in once your monthly credits run out, and carry over for 12 months — nothing goes to waste.",
 	);
 
 	if (options === undefined || balance === undefined)
@@ -222,6 +231,22 @@ function PickerView({
 				<DialogFooter>
 					<Button variant="outline" className="tap-target" onClick={onClose}>
 						Cancel
+					</Button>
+				</DialogFooter>
+			</>
+		);
+
+	// The store is UNMETERED (an admin's own, z8r3fdp4er): it has no balance,
+	// so the picker is unreachable from the meter — but a bookmarked
+	// `?topup=` lands here, and the reader is likely the admin who owns it.
+	// Say what's true instead of asking them for access they already hold.
+	if (balance === null && options?.refusalMessage)
+		return (
+			<>
+				{headerFor(options.refusalMessage)}
+				<DialogFooter>
+					<Button variant="outline" className="tap-target" onClick={onClose}>
+						Close
 					</Button>
 				</DialogFooter>
 			</>
@@ -427,18 +452,18 @@ function PickerView({
 			{canBuy && pack ? (
 				<p aria-live="polite" className="text-sm font-medium tabular-nums">
 					{afterTopUpLine(balance.total, pack.credits)}
-					{/* Out of credits now, above zero after: say the lock lifts
-					    (T3) — the moment it's paid, not after a refresh. Gated on
-					    CREDIT_LOCK_ENABLED because this reads off the BALANCE, not
-					    off `locked`: with the lock switched off it promised an
-					    unlock to a store that was never locked, on the checkout
-					    line. `afterTopUpLine` above already says the true and
-					    sufficient thing ("Covers the 15 owed and leaves 35 orders"). */}
-					{CREDIT_LOCK_ENABLED &&
-					balance.total <= 0 &&
-					balance.total + pack.credits > 0 &&
-					balance.lockExempt === null
-						? " Your store unlocks as soon as it's paid."
+					{/* What this pack OPENS, said on the checkout line (Credits
+					    T3.1). Reads off `ordersWaiting` — the orders actually being
+					    held — not off the balance: a store can be below zero with
+					    nothing waiting (an expired lot, or debt from before the
+					    gate), and promising an unlock to a store that was never
+					    gated is the mistake the previous release shipped. It also
+					    can't over-promise, because each credit frees exactly one
+					    order: a 50-pack on 80 waiting opens 50 of them.
+					    `afterTopUpLine` above already covers the balance itself
+					    ("Covers the 15 owed and leaves 35 orders"). */}
+					{balance.ordersWaiting > 0 && balance.lockExempt === null
+						? ` ${opensLine(balance.ordersWaiting, pack.credits, balance.waitingOffsets)}`
 						: null}
 				</p>
 			) : null}

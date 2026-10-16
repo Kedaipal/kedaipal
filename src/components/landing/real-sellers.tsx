@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import {
 	animate,
 	motion,
@@ -5,8 +6,7 @@ import {
 	useMotionValue,
 	useReducedMotion,
 } from "framer-motion";
-import { Link } from "@tanstack/react-router";
-import { ArrowLeft, ArrowRight, Star } from "lucide-react";
+import { ArrowLeft, ArrowRight, Star, Store } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
 import { m } from "../../paraglide/messages";
 import { FadeIn } from "./fade-in";
@@ -29,6 +29,12 @@ import { Eyebrow } from "./landing-ui";
  * Arrow buttons remain the keyboard path. One FadeIn wraps the whole rail
  * (the house peeking-slide rule). Reduced motion kills the drift; drag and
  * buttons survive, since both are user-initiated.
+ *
+ * The "10+ paying sellers" count chip came off on 15 Oct 2026 (Arif's call on
+ * the enhancement canvas, artboard 7): a hand-typed number that nothing kept
+ * true. In its place the section states the benefit the directory IS — every
+ * store is listed free on /stores, with showcases above the list — beside the
+ * "Browse their stores" door, since that is where a visitor meets it.
  */
 
 interface SellerCard {
@@ -41,15 +47,31 @@ const CARDS: SellerCard[] = [
 	{ label: m.proof_kind_1, body: m.proof_kind_1_body, image: "seller-lekor" },
 	{ label: m.proof_kind_12, body: m.proof_kind_12_body, image: "seller-live" },
 	{ label: m.proof_kind_8, body: m.proof_kind_8_body, image: "seller-fashion" },
-	{ label: m.proof_kind_2, body: m.proof_kind_2_body, image: "seller-tentwash" },
+	{
+		label: m.proof_kind_2,
+		body: m.proof_kind_2_body,
+		image: "seller-tentwash",
+	},
 	{ label: m.proof_kind_4, body: m.proof_kind_4_body, image: "seller-dessert" },
-	{ label: m.proof_kind_11, body: m.proof_kind_11_body, image: "seller-prints" },
+	{
+		label: m.proof_kind_11,
+		body: m.proof_kind_11_body,
+		image: "seller-prints",
+	},
 	{ label: m.proof_kind_3, body: m.proof_kind_3_body, image: "seller-fish" },
 	{ label: m.proof_kind_5, body: m.proof_kind_5_body, image: "seller-cake" },
 	{ label: m.proof_kind_6, body: m.proof_kind_6_body, image: "seller-meat" },
-	{ label: m.proof_kind_7, body: m.proof_kind_7_body, image: "seller-campsite" },
+	{
+		label: m.proof_kind_7,
+		body: m.proof_kind_7_body,
+		image: "seller-campsite",
+	},
 	{ label: m.proof_kind_9, body: m.proof_kind_9_body, image: "seller-fitness" },
-	{ label: m.proof_kind_10, body: m.proof_kind_10_body, image: "seller-frozen" },
+	{
+		label: m.proof_kind_10,
+		body: m.proof_kind_10_body,
+		image: "seller-frozen",
+	},
 ];
 
 /** One arrow-press advances roughly one card (width + gap). */
@@ -59,10 +81,7 @@ const DRIFT = 0.022;
 
 function CardGroup({ hidden = false }: { hidden?: boolean }) {
 	return (
-		<div
-			aria-hidden={hidden || undefined}
-			className="flex shrink-0 gap-5 pr-5"
-		>
+		<div aria-hidden={hidden || undefined} className="flex shrink-0 gap-5 pr-5">
 			{CARDS.map((card) => (
 				<article
 					key={card.image}
@@ -112,13 +131,17 @@ function CardGroup({ hidden = false }: { hidden?: boolean }) {
 						<span className="text-sm text-cta-mesh-foreground/65">
 							{m.proof_stat_1_label()}
 						</span>
-						<span className="text-base font-bold">{m.proof_stat_1_value()}</span>
+						<span className="text-base font-bold">
+							{m.proof_stat_1_value()}
+						</span>
 					</div>
 					<div className="flex items-center justify-between gap-2">
 						<span className="text-sm text-cta-mesh-foreground/65">
 							{m.proof_stat_2_label()}
 						</span>
-						<span className="text-base font-bold">{m.proof_stat_2_value()}</span>
+						<span className="text-base font-bold">
+							{m.proof_stat_2_value()}
+						</span>
 					</div>
 				</div>
 			</article>
@@ -184,17 +207,6 @@ export function RealSellers() {
 						>
 							{m.proof_heading()}
 						</h2>
-						{/* The trust anchor that replaced Founding 10 (86eye4wtb) — a real
-						    live count now that we're past that stage, not a spots-remaining
-						    countdown. */}
-						<div className="mt-5 inline-flex items-center gap-3 rounded-2xl border border-accent/25 bg-accent/5 px-5 py-3">
-							<span className="font-heading text-3xl font-extrabold text-accent md:text-4xl">
-								{m.proof_customer_count_number()}
-							</span>
-							<span className="text-sm font-semibold text-foreground/80 md:text-base">
-								{m.proof_customer_count_label()}
-							</span>
-						</div>
 					</div>
 					<div className="flex flex-col gap-4 lg:max-w-sm lg:items-end">
 						<p className="text-base leading-relaxed text-muted-foreground md:text-lg lg:text-right">
@@ -265,6 +277,27 @@ export function RealSellers() {
 							<CardGroup hidden />
 						</motion.div>
 					</div>
+					{/* The directory, said as what it does for the seller: a free
+					    listing on /stores plus the showcases above it, nothing to sign
+					    up for, one switch in Settings → Store to leave. A caption
+					    under the rail of stores it is about — the header keeps its
+					    two-column balance (heading left; paragraph, link, arrows
+					    right). Two earlier placements were rejected on sight (Arif,
+					    15 Oct): a boxed card in the right column stretched it and left
+					    the heading dangling, and a three-line paragraph under the
+					    heading read as a legal footnote. */}
+					<p className="mt-6 flex max-w-2xl items-start gap-2.5 text-sm leading-relaxed text-muted-foreground">
+						<Store
+							aria-hidden
+							className="mt-1 size-4 shrink-0 text-accent-emphasis"
+						/>
+						<span>
+							<strong className="font-semibold text-foreground">
+								{m.proof_directory_strong()}
+							</strong>{" "}
+							{m.proof_directory_body()}
+						</span>
+					</p>
 				</FadeIn>
 			</div>
 		</section>

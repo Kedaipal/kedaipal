@@ -401,7 +401,9 @@ describe("createTopUp — opening a checkout", () => {
 		// A sponsored store never locks — a pack would be money for nothing
 		// (Zaki, 1 Oct 2026). Refused whatever its status says.
 		await makeStore(t, { userId: "u_comped", status: "active", comped: true });
-		await expect(buy(t, "u_comped")).rejects.toThrow(/^.*Sponsored stores never run out/);
+		await expect(buy(t, "u_comped")).rejects.toThrow(
+			/^.*Sponsored stores aren't metered/,
+		);
 		const sponsored = await as(t, "u_comped").query(api.creditPurchases.topUpOptions, {});
 		expect(sponsored?.refusal).toBe("sponsored");
 
@@ -453,7 +455,7 @@ describe("createTopUp — opening a checkout", () => {
 		const t = setup();
 		installFetch();
 		await makeStore(t, { userId: ADMIN, status: "trialing" });
-		await expect(buy(t, ADMIN)).rejects.toThrow(/admin stores aren't billed/);
+		await expect(buy(t, ADMIN)).rejects.toThrow(/admin stores aren't metered/);
 		const options = await as(t, ADMIN).query(api.creditPurchases.topUpOptions, {});
 		expect(options?.refusal).toBe("admin_store");
 	});

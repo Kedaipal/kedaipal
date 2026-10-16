@@ -57,6 +57,7 @@ function renderForm({
 			retailerId={"r1" as never}
 			categoriesLocked={false}
 			eventsLocked={false}
+			promoLocked={false}
 			currency="MYR"
 			submitLabel="Save"
 			mode="edit"
@@ -68,9 +69,7 @@ function renderForm({
 				capacityPerNight: kind === "booking" ? "5" : undefined,
 				// A submittable product: the card under test is Order rules, but
 				// the FORM still needs a priced sellable unit to get that far.
-				variants: [
-					{ optionValues: [], price: 1200, onHand: 5, active: true },
-				],
+				variants: [{ optionValues: [], price: 1200, onHand: 5, active: true }],
 				...initial,
 			}}
 		/>,
@@ -101,7 +100,9 @@ describe("Order rules — prep time", () => {
 		fireEvent.click(twoHours);
 		expect(prepInput()?.value).toBe("120");
 		expect(
-			screen.getByRole("button", { name: "2 hours" }).getAttribute("aria-pressed"),
+			screen
+				.getByRole("button", { name: "2 hours" })
+				.getAttribute("aria-pressed"),
 		).toBe("true");
 
 		// A toggle, not a one-way door.
@@ -116,13 +117,17 @@ describe("Order rules — prep time", () => {
 		const input = prepInput() as HTMLInputElement;
 		fireEvent.change(input, { target: { value: "60" } });
 		expect(
-			screen.getByRole("button", { name: "1 hour" }).getAttribute("aria-pressed"),
+			screen
+				.getByRole("button", { name: "1 hour" })
+				.getAttribute("aria-pressed"),
 		).toBe("true");
 		// And a value that matches none of them lights none.
 		fireEvent.change(input, { target: { value: "45" } });
 		for (const label of ["30 min", "1 hour", "2 hours", "4 hours"]) {
 			expect(
-				screen.getByRole("button", { name: label }).getAttribute("aria-pressed"),
+				screen
+					.getByRole("button", { name: label })
+					.getAttribute("aria-pressed"),
 			).toBe("false");
 		}
 	});
@@ -164,8 +169,9 @@ describe("Order rules — prep time", () => {
 		// entirely, and prep only moves the clock WITHIN a day. Surfaced, not
 		// enforced — loosening notice back to 0 should find the prep still set.
 		renderForm({ initial: { minNoticeDays: 2, prepMinutes: 120 } });
-		expect(screen.getByText(/won't change anything until notice is back to 0/i))
-			.toBeTruthy();
+		expect(
+			screen.getByText(/won't change anything until notice is back to 0/i),
+		).toBeTruthy();
 		expect(prepInput()?.value).toBe("120");
 	});
 
@@ -247,8 +253,9 @@ describe("Order rules — pickup note", () => {
 	it("keeps a note already written when self-collect is switched off", () => {
 		// Turning delivery-only on must not quietly destroy the seller's copy;
 		// the field hides, the value survives, and turning it back on restores.
-		const onSubmit =
-			vi.fn<(v: ProductFormSubmitValues) => Promise<void>>(async () => {});
+		const onSubmit = vi.fn<(v: ProductFormSubmitValues) => Promise<void>>(
+			async () => {},
+		);
 		renderForm({
 			offerSelfCollect: false,
 			onSubmit,
@@ -261,12 +268,18 @@ describe("Order rules — pickup note", () => {
 });
 
 describe("Order rules — what the card submits", () => {
-	it("sends both fields, with 0 and \"\" as the clearing spellings", async () => {
-		const onSubmit =
-			vi.fn<(v: ProductFormSubmitValues) => Promise<void>>(async () => {});
-		renderForm({ onSubmit, initial: { prepMinutes: 120, pickupNote: "Side counter." } });
+	it('sends both fields, with 0 and "" as the clearing spellings', async () => {
+		const onSubmit = vi.fn<(v: ProductFormSubmitValues) => Promise<void>>(
+			async () => {},
+		);
+		renderForm({
+			onSubmit,
+			initial: { prepMinutes: 120, pickupNote: "Side counter." },
+		});
 
-		fireEvent.change(prepInput() as HTMLInputElement, { target: { value: "" } });
+		fireEvent.change(prepInput() as HTMLInputElement, {
+			target: { value: "" },
+		});
 		fireEvent.change(noteInput() as HTMLTextAreaElement, {
 			target: { value: "" },
 		});
@@ -280,10 +293,16 @@ describe("Order rules — what the card submits", () => {
 	});
 
 	it("a booking listing submits no prep window", async () => {
-		const onSubmit =
-			vi.fn<(v: ProductFormSubmitValues) => Promise<void>>(async () => {});
+		const onSubmit = vi.fn<(v: ProductFormSubmitValues) => Promise<void>>(
+			async () => {},
+		);
 		renderForm({ kind: "booking", onSubmit, initial: { prepMinutes: 120 } });
-		fireEvent.click(screen.getByRole("button", { name: "Save" }));
+		// Untouched edit form: Save is disabled ("All changes saved",
+		// z8r3fdtk82), so submit the form itself. The stored value's payload is
+		// what's under test.
+		const form = document.querySelector("form");
+		if (!form) throw new Error("no form");
+		fireEvent.submit(form);
 		await vi.waitFor(() => expect(onSubmit).toHaveBeenCalled());
 		const [values] = onSubmit.mock.lastCall ?? [];
 		if (!values) throw new Error("form never submitted");

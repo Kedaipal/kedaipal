@@ -19,6 +19,7 @@ import {
 	overCapMessage,
 } from "../../../convex/lib/variant";
 import { useRevealOnAdd } from "../../hooks/useRevealOnAdd";
+import { takePickedFiles } from "../../lib/file-input";
 import {
 	convexErrorMessage,
 	currencySymbol,
@@ -44,6 +45,11 @@ export type VariantRow = {
 	sku: string;
 	/** Major-unit price string as typed (e.g. "120.50"). */
 	price: string;
+	/** Major-unit SALE price as typed (z8r3fdcw72). Absent or "" = this line
+	 * is not on promotion, which is the overwhelming default — hence optional,
+	 * so every row literal that predates promotions stays valid. Edited in the
+	 * Promotion card, not the pricing grid: one substrate, two writers. */
+	promoPrice?: string;
 	/** Integer stock string as typed. */
 	stock: string;
 	/** Per-row deactivate — inactive variants are hidden from the storefront. */
@@ -98,7 +104,7 @@ export type VariantIssue = {
 	where: "row" | "option" | "custom";
 	/** Row index (rows), axis index (options); 0 for the custom line. */
 	index: number;
-	field: "price" | "stock" | "name" | "values" | "weight";
+	field: "price" | "promoPrice" | "stock" | "name" | "values" | "weight";
 	message: string;
 };
 
@@ -237,6 +243,7 @@ export function emptyRow(optionValues: string[]): VariantRow {
 		optionValues,
 		sku: "",
 		price: "",
+		promoPrice: "",
 		stock: "",
 		active: true,
 		// Default to hard-block (the common case: real stock items). Made-to-order
@@ -284,6 +291,7 @@ export function rebuildRows(
 			return {
 				...base,
 				price: seed.price,
+				promoPrice: seed.promoPrice,
 				stock: seed.stock,
 				blockWhenOutOfStock: seed.blockWhenOutOfStock,
 				requiresProof: seed.requiresProof,
@@ -977,8 +985,8 @@ export function VariantEditor({
 		}
 	}
 
-	async function uploadCustomImage(files: FileList | null) {
-		if (!files || files.length === 0 || !customLine) return;
+	async function uploadCustomImage(files: readonly File[]) {
+		if (files.length === 0 || !customLine) return;
 		const file = files[0];
 		setUploadingCustom(true);
 		try {
@@ -1014,8 +1022,8 @@ export function VariantEditor({
 		}
 	}
 
-	async function uploadRowImage(index: number, files: FileList | null) {
-		if (!files || files.length === 0) return;
+	async function uploadRowImage(index: number, files: readonly File[]) {
+		if (files.length === 0) return;
 		const file = files[0];
 		setUploadingRow(index);
 		try {
@@ -1082,7 +1090,7 @@ export function VariantEditor({
 					type="file"
 					accept={IMAGE_ACCEPT}
 					disabled={uploadingRow !== null}
-					onChange={(e) => void uploadRowImage(i, e.target.files)}
+					onChange={(e) => void uploadRowImage(i, takePickedFiles(e.target))}
 					className="hidden"
 				/>
 			</label>
@@ -1727,7 +1735,7 @@ export function VariantEditor({
 														accept={IMAGE_ACCEPT}
 														disabled={uploadingCustom}
 														onChange={(e) =>
-															void uploadCustomImage(e.target.files)
+															void uploadCustomImage(takePickedFiles(e.target))
 														}
 														className="hidden"
 													/>

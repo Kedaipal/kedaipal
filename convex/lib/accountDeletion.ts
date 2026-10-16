@@ -33,11 +33,28 @@
  *    Kedaipal seller". The tenant's own row (as referee) IS deleted.
  *  - `adminAuditLog` rows — an audit trail must outlive the tenant it audited
  *    (`targetId`s are doc ids / last-4 only, never buyer PII).
+ *  - `messageLogRollups` rows — the PERMANENT WhatsApp cost ledger (retailer ×
+ *    MYT month × category × status). `purgeExpiredOutboundLog` folds every
+ *    expiring `outboundMessageLog` row into its bucket precisely so aggregate
+ *    cost accounting survives the 90-day purge "forever" (lib/retention.ts),
+ *    and Meta bills us per send from Oct 2026 — so this is a record of what
+ *    Kedaipal was CHARGED for a seller's traffic, the same class as an
+ *    invoice. The rollup deliberately drops `toWaPhone`/`templateName`, so it
+ *    carries counts and no buyer PII. The raw per-send rows (which do carry
+ *    the buyer's number) ARE deleted, by the `outboundMessageLog` phase.
+ *    `retailerId` is left dangling rather than cleared: it is the ledger's
+ *    grouping key, and blanking it would merge a deleted tenant's months into
+ *    the tenant-less bucket and corrupt both.
  *  - `optOuts` rows are the buyer's standing suppression instruction, GLOBAL
  *    across every retailer on the shared WABA — deleting one would re-enable
  *    messages the buyer said stop to. The phase only clears
  *    `triggeredByRetailerId` on rows pointing at the deleted tenant, so no
  *    dangling ref remains while the suppression itself stands.
+ *  - `marketplaceShowcases` rows are Kedaipal's own curation of /stores
+ *    (z8r3fdr6mv), not the tenant's data — a showcase outlives any one store
+ *    in it. The phase only drops the deleted store from each showcase's
+ *    `members`, so no dangling ref remains and the admin's member count stays
+ *    honest. A showcase holds no PII (retailer ids + booth labels).
  *
  * Every phase is idempotent (take-a-batch-and-delete, or a cursor scan whose
  * matches are patched exactly once), so re-entry after a crash just resumes.
@@ -56,11 +73,17 @@ export const DELETION_PHASES = [
 	"products",
 	"productCategories",
 	"categories",
+	"bookingBlocks",
 	"deliveryJobs",
 	"deliveryQuotes",
+	"courierWallets",
 	"customers",
 	"pickupLocations",
 	"counterCheckoutSessions",
+	"orderClaims",
+	"vouchers",
+	"promotions",
+	"storeAvailability",
 	"subscriptions",
 	"subscriptionUsage",
 	"creditPurchases",
@@ -73,6 +96,7 @@ export const DELETION_PHASES = [
 	"outboundMessageLog",
 	"slugHistory",
 	"optOuts",
+	"marketplaceShowcases",
 	"retailer",
 ] as const;
 
@@ -91,6 +115,7 @@ export type DeletionPhase = (typeof DELETION_PHASES)[number];
 export const PAGINATED_PHASES: ReadonlySet<DeletionPhase> = new Set([
 	"slugHistory",
 	"optOuts",
+	"marketplaceShowcases",
 ]);
 
 /** Arg validator for the driver's continuation state. Built from
@@ -102,9 +127,9 @@ export const deletionPhaseValidator = v.union(
 export type DeletionPhaseResult = {
 	/**
 	 * Documents processed this call — deleted rows for the indexed phases,
-	 * SCANNED rows for the two full-table-scan phases (`slugHistory`,
-	 * `optOuts`), because scanning is what consumes the transaction budget
-	 * there even when nothing matches.
+	 * SCANNED rows for the full-table-scan phases (`slugHistory`, `optOuts`,
+	 * `marketplaceShowcases`), because scanning is what consumes the
+	 * transaction budget there even when nothing matches.
 	 */
 	processed: number;
 	/** True when this phase has nothing left for the tenant. */
@@ -194,6 +219,22 @@ export async function runDeletionPhase(
 			}
 			return { processed: rows.length, done: rows.length < limit };
 		}
+		case "bookingBlocks": {
+			// Availability windows the seller closed off ("Maintenance — river
+			// deck repair"). Tenant-owned calendar config: no buyer PII and no
+			// money, so nothing argues for keeping it once the store is gone.
+			// Grouped with the catalogue phases above rather than appended,
+			// because a block is a product's availability — the `productId` it
+			// may carry points at rows the `products` phase has already deleted.
+			// Index prefix: by_retailer_start with only the retailerId bound
+			// covers every window.
+			const rows = await ctx.db
+				.query("bookingBlocks")
+				.withIndex("by_retailer_start", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const block of rows) await ctx.db.delete(block._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
 		case "deliveryJobs": {
 			const rows = await ctx.db
 				.query("deliveryJobs")
@@ -213,6 +254,16 @@ export async function runDeletionPhase(
 				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 				.take(limit);
 			for (const quote of rows) await ctx.db.delete(quote._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "courierWallets": {
+			const rows = await ctx.db
+				.query("courierWallets")
+				.withIndex("by_retailer_provider", (q) =>
+					q.eq("retailerId", retailerId),
+				)
+				.take(limit);
+			for (const wallet of rows) await ctx.db.delete(wallet._id);
 			return { processed: rows.length, done: rows.length < limit };
 		}
 		case "customers": {
@@ -241,6 +292,80 @@ export async function runDeletionPhase(
 				.withIndex("by_retailer_status", (q) => q.eq("retailerId", retailerId))
 				.take(limit);
 			for (const session of rows) await ctx.db.delete(session._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "orderClaims": {
+			// DELETED, not retained (claim links, 86eyq0epn). A claim is an OFFER
+			// the seller sent a buyer — required `waPhone`, optional `buyerName`,
+			// plus the frozen line snapshot — and never a record of what Kedaipal
+			// CHARGED the seller, which is the one thing the header's retention
+			// block keeps. Nothing survives the tenant to justify holding a
+			// buyer's number, so the rows go.
+			//
+			// This phase is the doer the claim cron defers to: `purgeStaleClaims`
+			// sweeps `expired`/`cancelled` rows past CLAIM_RETENTION_MS and
+			// deliberately exempts `completed` ones, on the grounds that "order
+			// retention is the PDPA pack's job" (convex/lib/orderClaims.ts). That
+			// job had no doer here, so a completed claim kept its buyer's phone
+			// and name indefinitely after the store was erased.
+			//
+			// Index prefix: by_retailer_status with only the retailerId bound
+			// covers every status (same shape as counterCheckoutSessions above).
+			// No blobs to free — a claim holds no storage ids. Position is not
+			// load-bearing: rows are found by retailer, never through the
+			// `sessionId` the phase above has already deleted.
+			const rows = await ctx.db
+				.query("orderClaims")
+				.withIndex("by_retailer_status", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const claim of rows) await ctx.db.delete(claim._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "vouchers": {
+			// Seller-issued discount codes (`z8r3fdr617`). Deleted outright, not
+			// retained: unlike an invoice or a credit-ledger row, a voucher is
+			// not a record of money that changed hands — what the seller actually
+			// gave away is already in the ORDER's `voucherSnapshot` and
+			// `voucherDiscount`, and those orders go with the tenant. The
+			// `redeemedOrderId` refs dangle the moment the `orders` phase above
+			// has run, which is exactly why this phase follows it.
+			const rows = await ctx.db
+				.query("vouchers")
+				.withIndex("by_retailer_created", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const voucher of rows) await ctx.db.delete(voucher._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "promotions": {
+			// Bulk promotions (`z8r3fducfd`). Pure catalogue grouping — the
+			// prices they wrote lived on the products, already gone with the
+			// `products` phase, and an order keeps its own frozen line price.
+			// Members first (a product's own rows also go with its cascade;
+			// this sweeps the rest), then the promotions they pointed at.
+			const members = await ctx.db
+				.query("promotionMembers")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const member of members) await ctx.db.delete(member._id);
+			if (members.length === limit) return { processed: members.length, done: false };
+			const rows = await ctx.db
+				.query("promotions")
+				.withIndex("by_retailer_created", (q) => q.eq("retailerId", retailerId))
+				.take(limit - members.length);
+			for (const promotion of rows) await ctx.db.delete(promotion._id);
+			return {
+				processed: members.length + rows.length,
+				done: rows.length < limit - members.length,
+			};
+		}
+		case "storeAvailability": {
+			// The seller's pause / Kedaipal's switch (`z8r3fdudf7`) — one row
+			// per store at most; it describes a storefront that is going.
+			const rows = await ctx.db
+				.query("storeAvailability")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const row of rows) await ctx.db.delete(row._id);
 			return { processed: rows.length, done: rows.length < limit };
 		}
 		case "subscriptions": {
@@ -443,6 +568,31 @@ export async function runDeletionPhase(
 			for (const row of page.page) {
 				if (row.triggeredByRetailerId === retailerId) {
 					await ctx.db.patch(row._id, { triggeredByRetailerId: undefined });
+				}
+			}
+			return {
+				processed: page.page.length,
+				done: page.isDone,
+				cursor: page.continueCursor,
+			};
+		}
+		case "marketplaceShowcases": {
+			// NEVER deleted — a showcase is Kedaipal's curation of /stores and
+			// outlives any one store in it (z8r3fdr6mv). The deleted store is
+			// dropped from each showcase's member list so no ref dangles. Members
+			// are an array on the row, so no index can find "showcases holding
+			// this store" — paginated full-table scan over a table that holds a
+			// handful of rows by construction; patched rows keep their index
+			// position so the cursor walk is exact.
+			const page = await ctx.db
+				.query("marketplaceShowcases")
+				.paginate({ numItems: limit, cursor });
+			for (const row of page.page) {
+				if (row.members.some((m) => m.retailerId === retailerId)) {
+					await ctx.db.patch(row._id, {
+						members: row.members.filter((m) => m.retailerId !== retailerId),
+						updatedAt: Date.now(),
+					});
 				}
 			}
 			return {

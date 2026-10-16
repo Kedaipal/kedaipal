@@ -225,18 +225,25 @@ export const PENDING_TOTAL_LABEL: Record<Locale, string> = {
 
 export type SystemMessageKey =
 	| "transferReferenceLine"
+	| "paymentsPausedLine"
 	| "mockupPendingConfirm"
 	| "deliveryFeePendingConfirm"
 	| "storeQrConnected"
 	| "storeQrBusy"
 	| "counterOrderConfirmedPaid"
+	| "counterOrderCompletedPaid"
 	| "counterOrderConfirmedUnpaid"
+	| "counterOrderFree"
 	| "paymentReminderIntro"
 	| "rsvpFreeConfirm"
 	| "requestAwaitingApproval";
 
 type SystemCopy = {
 	transferReferenceLine: (v: CopyVars) => string;
+	// Replaces the transfer reference while the store's buyer payments are
+	// paused (z8r3fdr6gg): there is nothing to transfer yet, and the one line
+	// that keeps a buyer from paying off-platform belongs in the reply too.
+	paymentsPausedLine: (v: CopyVars) => string;
 	// Confirm reply for an order that still has a custom item awaiting buyer
 	// mockup approval — payment is intentionally deferred (no "I've paid" yet).
 	mockupPendingConfirm: (v: CopyVars) => string;
@@ -257,7 +264,15 @@ type SystemCopy = {
 	// messages carry the confirmed order + tracking link (paid vs pay-later branch)
 	// so the buyer never has to scan again to pay.
 	counterOrderConfirmedPaid: (v: CopyVars) => string;
+	// A counter sale handed over on the spot is born COMPLETED (Oct 2026): the
+	// buyer has paid and has the goods, so "confirmed" would under-state it.
+	// Carries the same order-page link — their receipt lives there.
+	counterOrderCompletedPaid: (v: CopyVars) => string;
 	counterOrderConfirmedUnpaid: (v: CopyVars) => string;
+	// RM0 at the counter (a free RSVP rung up in person): no payment ask, no
+	// "paid" — the Done screen promises "nothing to pay", so the message must
+	// say the same.
+	counterOrderFree: (v: CopyVars) => string;
 	// The ONE exception to "we only reply" in this catalog: the seller's manual
 	// "Send payment reminder" (order detail, day 11–14 only, once per 24h —
 	// docs/payment-reminder.md). Seller-initiated per tap, never automatic, and
@@ -280,6 +295,8 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 	en: {
 		transferReferenceLine: ({ shortId }) =>
 			`Use ${shortId} as your transfer reference so we can match it.`,
+		paymentsPausedLine: ({ storeName }) =>
+			`${storeName} isn't taking payments on Kedaipal right now — you can pay from your order page once they are. Please don't pay outside Kedaipal until then.`,
 		mockupPendingConfirm: ({ shortId, storeName, contactPhone, trackingUrl }) =>
 			`✅ Order ${shortId} received! It includes a custom item, so ${storeName} will prepare a design for you to approve first — no payment needed yet. The design, price and payment details will all be on your order page below, so keep this link.${
 				trackingUrl ? `\n\nTrack your order: ${trackingUrl}` : ""
@@ -302,6 +319,12 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`🧾 Thanks for your order at ${storeName}! Order ${shortId} is confirmed${
 				amount ? ` — total ${amount} to pay whenever you're ready` : ""
 			}. Pay and track everything here, no rush: ${trackingUrl}`,
+		counterOrderCompletedPaid: ({ shortId, storeName, amount, trackingUrl }) =>
+			`🧾 All done! Order ${shortId} at ${storeName} is complete and paid${
+				amount ? ` — total ${amount}` : ""
+			}. Thank you! Your receipt is here anytime: ${trackingUrl}`,
+		counterOrderFree: ({ shortId, storeName, trackingUrl }) =>
+			`🧾 All set! Order ${shortId} at ${storeName} is confirmed — no payment needed. Your order details are here anytime: ${trackingUrl}`,
 	paymentReminderIntro: ({ shortId, storeName, amount, trackingUrl }) =>
 			`👋 A reminder from ${storeName}: order ${shortId}${
 				amount ? ` (${amount})` : ""
@@ -320,6 +343,8 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 	ms: {
 		transferReferenceLine: ({ shortId }) =>
 			`Gunakan ${shortId} sebagai rujukan pemindahan supaya kami boleh padankan.`,
+		paymentsPausedLine: ({ storeName }) =>
+			`${storeName} tidak menerima bayaran di Kedaipal buat masa ini — anda boleh bayar dari halaman pesanan anda sebaik sahaja mereka menerimanya. Sila jangan bayar di luar Kedaipal sehingga itu.`,
 		mockupPendingConfirm: ({ shortId, storeName, contactPhone, trackingUrl }) =>
 			`✅ Pesanan ${shortId} diterima! Ia termasuk item custom, jadi ${storeName} akan sediakan reka bentuk untuk kelulusan anda dahulu — belum perlu bayar lagi. Reka bentuk, harga dan maklumat pembayaran semuanya ada di halaman pesanan anda di bawah, jadi simpan pautan ini.${
 				trackingUrl ? `\n\nJejak pesanan anda: ${trackingUrl}` : ""
@@ -342,6 +367,12 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`🧾 Terima kasih atas pesanan anda di ${storeName}! Pesanan ${shortId} telah disahkan${
 				amount ? ` — jumlah ${amount} untuk dibayar bila-bila anda sedia` : ""
 			}. Bayar & jejak pesanan di sini, tak perlu tergesa-gesa: ${trackingUrl}`,
+		counterOrderCompletedPaid: ({ shortId, storeName, amount, trackingUrl }) =>
+			`🧾 Selesai! Pesanan ${shortId} di ${storeName} telah selesai dan dibayar${
+				amount ? ` — jumlah ${amount}` : ""
+			}. Terima kasih! Resit anda ada di sini bila-bila masa: ${trackingUrl}`,
+		counterOrderFree: ({ shortId, storeName, trackingUrl }) =>
+			`🧾 Semua selesai! Pesanan ${shortId} di ${storeName} telah disahkan — tiada bayaran diperlukan. Butiran pesanan anda ada di sini bila-bila masa: ${trackingUrl}`,
 	paymentReminderIntro: ({ shortId, storeName, amount, trackingUrl }) =>
 			`👋 Peringatan daripada ${storeName}: pesanan ${shortId}${
 				amount ? ` (${amount})` : ""
@@ -360,6 +391,8 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 	zh: {
 		transferReferenceLine: ({ shortId }) =>
 			`转账时请填写 ${shortId} 作为备注，方便我们核对。`,
+		paymentsPausedLine: ({ storeName }) =>
+			`${storeName} 目前暂不通过 Kedaipal 收款 —— 恢复后您可以在订单页面付款。在此之前，请不要在 Kedaipal 以外付款。`,
 		mockupPendingConfirm: ({ shortId, storeName, contactPhone, trackingUrl }) =>
 			`✅ 订单 ${shortId} 已收到！里面有客制化商品，${storeName} 会先准备设计稿供您确认 —— 暂时不用付款。设计稿、价格和付款详情都会显示在下方的订单页面，请保存此链接。${
 				trackingUrl ? `\n\n查看订单状态：${trackingUrl}` : ""
@@ -382,6 +415,12 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`🧾 谢谢您在 ${storeName} 下单！订单 ${shortId} 已确认${
 				amount ? ` —— 总额 ${amount}，方便的时候付款就好` : ""
 			}。可以在这里付款和查看订单，不急：${trackingUrl}`,
+		counterOrderCompletedPaid: ({ shortId, storeName, amount, trackingUrl }) =>
+			`🧾 完成了！您在 ${storeName} 的订单 ${shortId} 已完成并付款${
+				amount ? ` —— 总额 ${amount}` : ""
+			}。谢谢惠顾！收据随时可以在这里查看：${trackingUrl}`,
+		counterOrderFree: ({ shortId, storeName, trackingUrl }) =>
+			`🧾 搞定了！您在 ${storeName} 的订单 ${shortId} 已确认 —— 无需付款。订单详情随时可以在这里查看：${trackingUrl}`,
 	paymentReminderIntro: ({ shortId, storeName, amount, trackingUrl }) =>
 			`👋 ${storeName} 的提醒：订单 ${shortId}${
 				amount ? `（${amount}）` : ""

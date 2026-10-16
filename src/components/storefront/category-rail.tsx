@@ -74,7 +74,7 @@ export function CategoryRail({
 			    under the screen edge, `scroll-pl-*` tracking `px-*` so the snapped
 			    rest position lines up with the search bar and grid (snap positions
 			    measure from the padding box, not the content box). */}
-			<div className="-mx-5 mt-2.5 flex snap-x scroll-pl-5 gap-3 overflow-x-auto px-5 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden lg:mx-0 lg:grid lg:grid-cols-4 lg:gap-3.5 lg:overflow-visible lg:px-0 lg:pb-0">
+			<div className="-mx-5 mt-2.5 flex snap-x scroll-pl-5 gap-3 overflow-x-auto px-5 pb-1 scrollbar-none lg:mx-0 lg:grid lg:grid-cols-4 lg:gap-3.5 lg:overflow-visible lg:px-0 lg:pb-0">
 				{categories.map((category) => {
 					return (
 						<Link
@@ -90,6 +90,7 @@ export function CategoryRail({
 									aspect="absolute inset-0"
 									// Fixed 124px tiles on mobile; a quarter-row on desktop.
 									sizes="(min-width: 1024px) 25vw, 124px"
+									frame="hairline"
 								/>
 							) : (
 								<div

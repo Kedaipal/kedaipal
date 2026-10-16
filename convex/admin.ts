@@ -53,16 +53,34 @@ import {
 import { loadCreditAccount } from "./credits";
 import { referralForReferee } from "./referrals";
 import { storeIsInternal } from "./marketplace";
+import { ADMIN_STORE_LIST_LIMIT } from "./lib/adminDirectory";
+import { contractForAdmin } from "./lib/enterprise";
 import { isUnclaimed } from "./lib/unclaimedStore";
+import {
+	cleanAvailabilityNote,
+	resolveStoreAvailability,
+	type StoreAvailability,
+} from "./lib/storeAvailability";
+import { loadAvailabilityRow, storeAvailabilityOf } from "./storeAvailability";
 import { loadSubscription, resolveAccess } from "./subscriptions";
 
 /** How many sellers the directory pulls. The Founding cohort is ~10 and the whole
- * book is small for a while yet; 500 is generous headroom without pagination. */
-const SELLER_LIMIT = 500;
+ * book is small for a while yet; 500 is generous headroom without pagination.
+ * Shared with the billing picker (`ADMIN_STORE_LIST_LIMIT`) — two lists of the
+ * same stores must not disagree about which ones exist. */
+const SELLER_LIMIT = ADMIN_STORE_LIST_LIMIT;
 /** Recent audit rows surfaced per store in the console. */
 const AUDIT_LIMIT = 50;
 
 export type AdminSellerRow = {
+	/** Store availability (`z8r3fdudf7`) — the resolved state, from the one
+	 * resolver the order doors use, plus Kedaipal's own switch and note so the
+	 * sheet can show and lift it. */
+	availability: StoreAvailability;
+	adminAvailability?: { mode: "paused" | "offline"; note?: string; at?: number };
+	/** The seller's own pause, which an admin switch on top hides from the
+	 * resolved state — so "Reopen" can say what will still be off. */
+	sellerPaused?: boolean;
 	_id: Id<"retailers">;
 	storeName: string;
 	slug: string;
@@ -337,15 +355,36 @@ async function loadLastActAs(
  */
 export const listSellersForAdmin = query({
 	args: {},
-	handler: async (ctx): Promise<AdminSellerRow[]> => {
+	handler: async (
+		ctx,
+	): Promise<{
+		sellers: AdminSellerRow[];
+		/** The book runs past the cap, so this list is the NEWEST
+		 * `ADMIN_STORE_LIST_LIMIT` stores and the oldest are missing. The
+		 * directory says so rather than letting "Showing 500 of 500" read as
+		 * the whole book (z8r3fdpm2p). */
+		capped: boolean;
+	}> => {
 		await requireAdmin(ctx);
 		const adminIds = new Set(adminUserIds());
-		const retailers = await ctx.db
+		// +1 to learn whether the book runs past the cap, the same shape
+		// `BUSINESS_REPORT_ORDER_SCAN_CAP` uses. The extra row never returns.
+		const scanned = await ctx.db
 			.query("retailers")
 			.order("desc")
-			.take(SELLER_LIMIT);
+			.take(SELLER_LIMIT + 1);
+		const capped = scanned.length > SELLER_LIMIT;
+		const retailers = scanned.slice(0, SELLER_LIMIT);
 		const rows: AdminSellerRow[] = [];
+		// One read of the (small) availability table, not one per store.
+		const availabilityRows = new Map(
+			(await ctx.db.query("storeAvailability").collect()).map((a) => [
+				a.retailerId as string,
+				a,
+			]),
+		);
 		for (const r of retailers) {
+			const availabilityRow = availabilityRows.get(r._id);
 			const sub = await loadSubscription(ctx, r._id);
 			// Dangling once the referrer is purged (no referential integrity) —
 			// a missing doc simply reads as "no referrer".
@@ -404,25 +443,15 @@ export const listSellersForAdmin = query({
 				foundingMemberRank: r.foundingMemberRank,
 				subscriptionStatus: sub?.status,
 				plan: sub?.plan,
+				// The WHOLE deal minus `setBy` — allowances included. They were
+				// once hand-listed here and the day they were left out,
+				// reopening a contract showed them blank: a fee typo-fix away
+				// from silently resetting a deal to unlimited seats (found
+				// hands-on, 2 Oct). `contractForAdmin` is a rest spread, so no
+				// future field can be dropped the same way; the admin.test.ts
+				// pin stays as the second guard.
 				enterprise: sub?.enterprise
-					? {
-							baseFeeMinor: sub.enterprise.baseFeeMinor,
-							currency: sub.enterprise.currency,
-							includedCredits: sub.enterprise.includedCredits,
-							overageRateMinor: sub.enterprise.overageRateMinor,
-							blockSize: sub.enterprise.blockSize,
-							// The per-deal allowances ride too — the edit form prefills
-							// from THIS row, and the day they were left out, reopening a
-							// contract showed them blank: a fee typo-fix away from
-							// silently resetting a deal to unlimited seats (found
-							// hands-on, 2 Oct). Optional fields slip through Omit<>
-							// typing, so the admin.test.ts pin is the guard.
-							teammates: sub.enterprise.teammates,
-							broadcastQuota: sub.enterprise.broadcastQuota,
-							contactName: sub.enterprise.contactName,
-							notes: sub.enterprise.notes,
-							setAt: sub.enterprise.setAt,
-						}
+					? contractForAdmin(sub.enterprise)
 					: undefined,
 				pendingPlanChange: sub?.pendingPlanChange,
 				enterpriseInterestAt: r.enterpriseInterestAt,
@@ -471,6 +500,19 @@ export const listSellersForAdmin = query({
 				handoverInviteSentAt: r.handoverInviteSentAt,
 				claimedAt: r.claimedAt,
 				purging: r.purgeStartedAt !== undefined,
+				availability: resolveStoreAvailability({
+					holdPausedAt: r.orderingPausedAt,
+					row: availabilityRow,
+				}),
+				adminAvailability:
+					availabilityRow?.adminMode !== undefined
+						? {
+								mode: availabilityRow.adminMode,
+								note: availabilityRow.adminNote,
+								at: availabilityRow.adminAt,
+							}
+						: undefined,
+				sellerPaused: availabilityRow?.sellerPausedAt !== undefined || undefined,
 				marketplace: {
 					unlistedAt: r.marketplaceUnlistedAt,
 					sponsoredUntil: r.marketplaceSponsoredUntil,
@@ -528,7 +570,7 @@ export const listSellersForAdmin = query({
 			if (rb !== undefined) return 1;
 			return b.createdAt - a.createdAt;
 		});
-		return rows;
+		return { sellers: rows, capped };
 	},
 });
 
@@ -690,6 +732,84 @@ export const showOnMarketplace = mutation({
 			targetId: retailerId,
 			ts: Date.now(),
 		});
+	},
+});
+
+/**
+ * Kedaipal switches a store off (`z8r3fdudf7`): `paused` keeps the storefront
+ * browse-only and closes every order door INCLUDING the counter; `offline`
+ * takes the storefront itself down (neutral unavailable page, off /stores and
+ * the sitemap). Its own stamp, so it never clears the seller's pause or an
+ * Off-Season Hold, and lifting it reveals whichever of those is still on.
+ * The note is shown to the SELLER ("Kedaipal paused this store: …") — never
+ * to buyers, who only ever see a neutral "isn't available right now".
+ * Existing orders are untouched: tracking pages, transactional messages and
+ * the seller's progress / refund controls all keep working.
+ */
+export const setStoreAvailability = mutation({
+	args: {
+		retailerId: v.id("retailers"),
+		mode: v.union(v.literal("paused"), v.literal("offline")),
+		note: v.optional(v.string()),
+	},
+	handler: async (ctx, { retailerId, mode, note }): Promise<void> => {
+		const adminUserId = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		const now = Date.now();
+		const fields = {
+			adminMode: mode,
+			adminNote: cleanAvailabilityNote(note),
+			adminAt: now,
+			adminByUserId: adminUserId,
+			updatedAt: now,
+		};
+		const row = await loadAvailabilityRow(ctx, retailerId);
+		if (row) await ctx.db.patch(row._id, fields);
+		else await ctx.db.insert("storeAvailability", { retailerId, ...fields });
+		await ctx.db.insert("adminAuditLog", {
+			adminUserId,
+			retailerId,
+			action: mode === "offline" ? "admin.takeStoreOffline" : "admin.pauseStore",
+			targetId: retailerId,
+			ts: now,
+		});
+	},
+});
+
+/** Lift Kedaipal's switch. The seller's own pause and a hold, if either is
+ * on, keep speaking — a reopen never silently reopens what someone else shut. */
+/**
+ * "Reopen store" — lifts Kedaipal's switch only. Returns the store's state
+ * AFTERWARDS from the resolver, so the admin toast says what still keeps
+ * orders off (a hold, the seller's own pause) from the same author every
+ * door uses, never from a status proxy (PR #369 review).
+ */
+export const clearStoreAvailability = mutation({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<StoreAvailability> => {
+		const adminUserId = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		const row = await loadAvailabilityRow(ctx, retailerId);
+		if (!row || row.adminMode === undefined)
+			return storeAvailabilityOf(ctx, retailer);
+		const now = Date.now();
+		await ctx.db.patch(row._id, {
+			adminMode: undefined,
+			adminNote: undefined,
+			adminAt: undefined,
+			adminByUserId: undefined,
+			updatedAt: now,
+		});
+		await ctx.db.insert("adminAuditLog", {
+			adminUserId,
+			retailerId,
+			action: "admin.reopenStore",
+			targetId: retailerId,
+			ts: now,
+		});
+		return storeAvailabilityOf(ctx, retailer);
 	},
 });
 

@@ -14,9 +14,11 @@ import {
 	isSellerFilter,
 	isSellerSort,
 	matchesSellerSearch,
+	reopenedToast,
 	SELLER_FILTERS,
 	sellerBucket,
 	sellerCompMenuItem,
+	sellerCredits,
 	sellerExpiry,
 	sellerFilterEmptyNoun,
 	sellerPlanLabel,
@@ -26,6 +28,7 @@ import {
 	sellerSeatsPhrase,
 	sellerSummaryText,
 	sellersToCsv,
+	sellerUnmeteredNote,
 	sortSellers,
 } from "./admin-seller-view";
 import { formatShortDate } from "./format";
@@ -38,6 +41,7 @@ const at = (days: number) => NOW + days * DAY;
 function row(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 	return {
 		_id: "r1" as AdminSellerRow["_id"],
+		availability: { state: "open" },
 		storeName: "Bearcamp Malaysia",
 		slug: "bearcamp-malaysia",
 		ownerUserId: "u1",
@@ -745,5 +749,108 @@ describe("a pre-built store reads as unclaimed everywhere (docs/prebuilt-stores.
 		expect(sellerBucket(claimed)).toBe("trialing");
 		expect(sellerReason(claimed)).toBeUndefined();
 		expect(sellerExpiry(claimed, NOW).headline).not.toBe("Not handed over");
+	});
+});
+
+describe("sellerCredits", () => {
+	const credits = {
+		plan: 180,
+		purchased: 20,
+		periodKey: "2026-10",
+		periodGrant: 200,
+	};
+
+	it("an admin's own store reads as not metered, whatever figures it still holds", () => {
+		// z8r3fdp4er: unmetered stores leave their old cached balances behind
+		// until the purge runs — printing "200 left" for one would be a credit
+		// state that nothing in the product honours any more.
+		const view = sellerCredits(row({ ownerIsAdmin: true, credits }));
+		expect(view.headline).toBe("—");
+		expect(view.detail).toBe("Admin store — not metered");
+		expect(view.out).toBe(false);
+		expect(view.total).toBeUndefined();
+		// What the sheet reads to drop "This month", "Out of credits" and
+		// "Custom grant" — rows that would print the stale cache.
+		expect(view.metered).toBe(false);
+	});
+
+	it("a metered store reads its balance", () => {
+		expect(sellerCredits(row({ credits })).headline).toBe("200 left");
+		expect(sellerCredits(row({ credits })).metered).toBe(true);
+		expect(sellerCredits(row()).metered).toBe(true);
+	});
+
+	it("a SPONSORED store reads 'not metered', never its stale cache (z8r3fdrph7)", () => {
+		// The row keeps whatever figures it carried while it was billed — the
+		// directory printing "plan 200 · bought 0" beside a comp is the admin
+		// console repeating the very "200" the seller's meter no longer shows.
+		const comped = sellerCredits(row({ comped: true, credits }));
+		expect(comped.metered).toBe(false);
+		expect(comped.headline).toBe("—");
+		expect(comped.detail).toBe("Sponsored — not metered");
+		expect(comped.tone).toBe("muted");
+		expect(comped.out).toBe(false);
+		// An admin's own store is told apart from it: the next step differs,
+		// since a comp is a toggle and an admin store is permanent.
+		expect(sellerCredits(row({ ownerIsAdmin: true, credits })).detail).toBe(
+			"Admin store — not metered",
+		);
+	});
+
+	it("the unmetered note names WHICH kind — a comp's next state is 'metered again'", () => {
+		expect(sellerUnmeteredNote(row({ ownerIsAdmin: true }))).toMatch(
+			/^Admin store — not metered/,
+		);
+		const sponsored = sellerUnmeteredNote(row({ comped: true }));
+		expect(sponsored).toMatch(/^Sponsored store — not metered/);
+		expect(sponsored).toMatch(/metered again/);
+	});
+
+	it("a store with no account yet says so", () => {
+		expect(sellerCredits(row()).detail).toBe("No credit account yet");
+	});
+});
+
+describe("store availability in the directory (z8r3fdudf7)", () => {
+	const paused = row({
+		availability: { state: "paused", by: "seller", note: "Back on 1 Nov" },
+	});
+	const offline = row({
+		_id: "r2" as AdminSellerRow["_id"],
+		availability: { state: "offline", by: "admin" },
+	});
+	const open = row({ _id: "r3" as AdminSellerRow["_id"] });
+
+	it("the status line says whose switch it is", () => {
+		expect(sellerReason(paused)).toBe("Paused by seller · “Back on 1 Nov”");
+		expect(sellerReason(offline)).toBe("Offline · taken down by Kedaipal");
+		expect(
+			sellerReason(row({ availability: { state: "paused", by: "admin" } })),
+		).toBe("Paused by Kedaipal");
+	});
+
+	it("'Paused / offline' counts and filters across every billing status", () => {
+		const rows = [paused, offline, open];
+		expect(countSellerBuckets(rows).unavailable).toBe(2);
+		expect(filterSellers(rows, "unavailable", "").map((r) => r._id)).toEqual([
+			paused._id,
+			offline._id,
+		]);
+	});
+});
+
+describe("reopenedToast — from the resolver's answer, never a status proxy (PR #369 review)", () => {
+	it("open: says so", () => {
+		expect(reopenedToast("Corks Out", { state: "open" })).toBe(
+			"Corks Out is open for orders again.",
+		);
+	});
+	it("names what still keeps orders off", () => {
+		expect(reopenedToast("Corks Out", { state: "paused", by: "hold" })).toMatch(
+			/still not taking orders — an Off-Season Hold\.$/,
+		);
+		expect(
+			reopenedToast("Corks Out", { state: "paused", by: "seller", note: "x" }),
+		).toMatch(/the seller's own pause\.$/);
 	});
 });

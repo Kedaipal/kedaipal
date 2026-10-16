@@ -23,7 +23,9 @@ vi.mock("@tanstack/react-router", () => ({
 	createFileRoute: () => () => ({}),
 	useNavigate: () => navigate,
 	useLocation: () => ({ href: "/onboarding" }),
-	Link: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
+	Link: ({ children }: { children?: React.ReactNode }) => (
+		<span>{children}</span>
+	),
 	RedirectToSignIn: () => null,
 	RedirectToSignUp: () => null,
 }));
@@ -104,7 +106,9 @@ describe("ClaimStoreScreen", () => {
 		fireEvent.click(consent);
 		fireEvent.click(button);
 		// The real effect, not a spy on a mocked setter.
-		await vi.waitFor(() => expect(sessionStorage.getItem(ACT_AS_KEY)).toBeNull());
+		await vi.waitFor(() =>
+			expect(sessionStorage.getItem(ACT_AS_KEY)).toBeNull(),
+		);
 	});
 
 	test("claiming passes the consent through and lands them in the dashboard", async () => {
@@ -114,7 +118,9 @@ describe("ClaimStoreScreen", () => {
 		await vi.waitFor(() =>
 			expect(claimStore).toHaveBeenCalledWith({ acceptedLegal: true }),
 		);
-		await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith({ to: "/app" }));
+		await vi.waitFor(() =>
+			expect(navigate).toHaveBeenCalledWith({ to: "/app" }),
+		);
 	});
 });
 
@@ -139,7 +145,9 @@ describe("HandoverBlockedBanner", () => {
 			/>,
 		);
 		expect(
-			screen.getByText(/mak cik kuih is waiting for you — but not on this login/i),
+			screen.getByText(
+				/mak cik kuih is waiting for you — but not on this login/i,
+			),
 		).toBeTruthy();
 		expect(screen.getByText(/already runs Their Own Shop/i)).toBeTruthy();
 	});

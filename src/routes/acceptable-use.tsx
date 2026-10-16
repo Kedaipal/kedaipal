@@ -145,8 +145,8 @@ function AcceptableUsePage() {
 					<li>Broadcasting to customers who have opted out (see Section 4).</li>
 					<li>
 						Sending the same or substantially similar message to more than 50
-						phone numbers within a 5-minute window, unless Kedaipal has agreed
-						a higher limit with you in writing, or in any pattern that triggers
+						phone numbers within a 5-minute window, unless Kedaipal has agreed a
+						higher limit with you in writing, or in any pattern that triggers
 						customer spam reports.
 					</li>
 				</ul>

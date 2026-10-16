@@ -1,18 +1,15 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import {
 	CalendarClock,
 	Clock,
 	ExternalLink,
-	FlaskConical,
 	MapPin,
 	Pencil,
 	Phone,
 	Plus,
-	Trash2,
-	Truck,
 	X,
 } from "lucide-react";
 import {
@@ -25,11 +22,9 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
-import { useChecklistStamp } from "../../hooks/useChecklistStamp";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import {
 	formatPickupAddress,
-	MY_STATES,
 	sanitizeUnitLine,
 	UNIT_LINE_MAX_LENGTH,
 } from "../../../convex/lib/address";
@@ -37,18 +32,13 @@ import {
 	resolveAwbConfig,
 	type StoredAwbConfig,
 } from "../../../convex/lib/awbConfig";
-import type { ClosedDateRange } from "../../../convex/lib/closedDates";
-import type { Country } from "../../../convex/lib/country";
-import type {
-	DeliveryConfig,
-	DeliveryZone,
-} from "../../../convex/lib/delivery";
 import {
-	DELIVERY_BANDS_MAX,
-	DELIVERY_ZONES_MAX,
-	deliveryModeAllowed,
-	riderBookingAllowed,
-} from "../../../convex/lib/delivery";
+	type ClosedDateRange,
+	upcomingClosures,
+} from "../../../convex/lib/closedDates";
+import type { Country } from "../../../convex/lib/country";
+import type { DeliveryConfig } from "../../../convex/lib/delivery";
+import { riderBookingAllowed } from "../../../convex/lib/delivery";
 import {
 	DEFAULT_MIN_NOTICE_DAYS,
 	hhmmFromMinutes,
@@ -68,75 +58,66 @@ import {
 	WEEKDAY_NAMES,
 	WEEKDAY_NAMES_SHORT,
 } from "../../../convex/lib/openingHours";
+import type { DeliveryBookingSummary } from "../../../convex/retailers";
 import { useActAsRetailerId } from "../../hooks/useActAs";
+import { useChecklistStamp } from "../../hooks/useChecklistStamp";
 import { useUpdateSettings } from "../../hooks/useUpdateSettings";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import {
 	type CardTarget,
 	type FixHighlight,
 	SETTINGS_ANCHOR,
-	scrollToAnchor,
 } from "../../lib/country-setup-copy";
 import { formatPhone } from "../../lib/customer";
 import {
+	PRICING_MODE_UI,
+	pricingModeOf,
+	pricingSummary,
+} from "../../lib/delivery-modes";
+import {
 	convexErrorMessage,
 	currencySymbol,
-	formatDraftPrice,
 	formatPrice,
 	normalizePriceInput,
 	parsePriceInput,
 } from "../../lib/format";
+import { hoursSummary, noticeSummary } from "../../lib/fulfilment-glance";
 import { deriveMapsUrl } from "../../lib/google-address";
 import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import { hasFeature, type SubscriptionView } from "../../lib/subscription";
 import { cn } from "../../lib/utils";
-import { jntSeedZones } from "../../lib/weight-zone-seed";
 import { ProBadge } from "../app/pro-gate";
 import {
 	GoogleAddressAutocomplete,
 	type GoogleSelectedAddress,
 } from "../forms/google-address-autocomplete";
 import { DayWindowsStacked, TimeRange } from "../hours/hours-text";
-import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { FilterChip } from "../ui/filter-chip";
 import { Input } from "../ui/input";
 import { LinkifiedText } from "../ui/linkified-text";
-import { ModeButton, ModeRadioDot } from "../ui/mode-button";
+import { ModeButton } from "../ui/mode-button";
 import { Skeleton } from "../ui/skeleton";
 import { SortableList } from "../ui/sortable-list";
 import { TimePicker } from "../ui/time-picker";
 import { ToggleSwitch } from "../ui/toggle-switch";
 import { ClosedDatesCard } from "./closed-dates-card";
-import { CourierBookingSection } from "./courier-booking-section";
+import {
+	COURIER_BOOKING_ANCHOR,
+	courierBookingGlance,
+} from "./courier-booking-section";
+import type { BusinessAddress } from "./delivery-pricing";
 import { DespatchLabelCard } from "./despatch-label-card";
 import { PickupLocationEditDialog } from "./pickup-location-edit-dialog";
-import { Card, SectionHeading } from "./settings-primitives";
-
-/** Owner-only business address (the radius-pricing origin) — mirrors the
- * retailers.businessAddress payload field. */
-type BusinessAddress = {
-	label: string;
-	latitude: number;
-	longitude: number;
-	placeId?: string;
-	/** Unit / floor / building line (z8r3fdff8r) — owner-only, like the rest
-	 * of this object. */
-	unit?: string;
-};
-
-/** Secret-free booking summary — mirrors retailers.DeliveryBookingSummary. */
-type DeliveryBookingSummary = {
-	enabled: boolean;
-	vehicleType: "MOTORCYCLE" | "CAR";
-	hasCredentials: boolean;
-	promptBookOnPacked: boolean;
-	deliveryDirection: "standard" | "collection";
-	apiKeyHint?: string;
-	/** Sandbox vs production, from the key prefix (86eypncfy). Undefined = a
-	 * row the backfill hasn't stamped — badge nothing rather than imply live. */
-	env?: "sandbox" | "production";
-};
+import {
+	Card,
+	ExpandableRow,
+	Glance,
+	HelperBullets,
+	InfoDisclosure,
+	SectionHeading,
+	SummaryRow,
+} from "./settings-primitives";
 
 interface FulfilmentTabProps {
 	retailerId: Id<"retailers">;
@@ -160,8 +141,6 @@ interface FulfilmentTabProps {
 	deliveryConfig: DeliveryConfig | undefined;
 	/** Business address — origin for distance-based pricing. */
 	businessAddress: BusinessAddress | undefined;
-	/** Lalamove booking summary (86eyb5hrf) — secrets never reach the client. */
-	deliveryBooking: DeliveryBookingSummary | undefined;
 	minFulfilmentNoticeDays: number | undefined;
 	/** Store opening hours (86eyp5rav) — undefined = open 24/7. Buyers can only
 	 * pick fulfilment dates/times inside them. See convex/lib/openingHours.ts. */
@@ -179,28 +158,124 @@ interface FulfilmentTabProps {
 	/** Resolved subscription — drives the Pro-gated pickup-fee input in the
 	 * edit dialog (client mirror only; the server gate is the real lock). */
 	subscription: SubscriptionView | undefined;
+	/** Lalamove connection + arm switch — the Courier booking row's glance. */
+	deliveryBooking: DeliveryBookingSummary | undefined;
+}
+
+/**
+ * The pickup-point list: drag-sorted active rows, a collapsible set of
+ * inactive ones, and a caller-supplied empty state.
+ *
+ * Shared by BOTH cards (pickup points and event venues, `z8r3fdm32x`) rather
+ * than copied, so the two can't drift into looking like different features —
+ * they are the same objects, filtered. Only the heading, the empty state and
+ * which segment a reorder writes differ.
+ */
+function LocationList({
+	loading,
+	active,
+	inactive,
+	currency,
+	emptyState,
+	showInactive,
+	onToggleShowInactive,
+	onReorder,
+	onEdit,
+	onToggleActive,
+	eventNamesByVenue,
+}: {
+	loading: boolean;
+	active: Doc<"pickupLocations">[];
+	inactive: Doc<"pickupLocations">[];
+	currency: string;
+	emptyState: React.ReactNode;
+	showInactive: boolean;
+	onToggleShowInactive: () => void;
+	onReorder: (orderedIds: string[]) => void;
+	onEdit: (location: Doc<"pickupLocations">) => void;
+	onToggleActive: (location: Doc<"pickupLocations">, next: boolean) => void;
+	eventNamesByVenue: Map<string, string[]>;
+}) {
+	return (
+		<>
+			{loading ? (
+				<LocationListSkeleton />
+			) : active.length === 0 ? (
+				emptyState
+			) : (
+				<SortableList
+					items={active}
+					getId={(loc) => loc._id}
+					onReorder={onReorder}
+					renderItem={(loc, handle, state) =>
+						state.isSorting ? (
+							// Collapsed one-line row while dragging (matches the
+							// order-status editor) — a tall list stays easy to rearrange.
+							<div
+								className={`flex items-center gap-2 rounded-xl border bg-background p-3 ${
+									state.isOverlay ? "border-accent shadow-lg" : "border-border"
+								}`}
+							>
+								{handle}
+								<MapPin
+									className="size-4 shrink-0 text-accent"
+									aria-hidden="true"
+								/>
+								<span className="truncate text-sm font-medium">
+									{loc.label}
+								</span>
+							</div>
+						) : (
+							<div className="flex flex-col gap-3 rounded-xl border border-border bg-background p-4">
+								<LocationRowBody
+									currency={currency}
+									location={loc}
+									onEdit={() => onEdit(loc)}
+									onToggleActive={(next) => onToggleActive(loc, next)}
+									dragHandle={handle}
+									eventNames={eventNamesByVenue.get(loc._id)}
+								/>
+							</div>
+						)
+					}
+				/>
+			)}
+
+			{inactive.length > 0 ? (
+				<div className="flex flex-col gap-2 border-t border-border pt-3">
+					<button
+						type="button"
+						onClick={onToggleShowInactive}
+						className="self-start text-xs font-medium text-muted-foreground underline-offset-2 hover:underline"
+					>
+						{showInactive
+							? `Hide inactive (${inactive.length})`
+							: `Show inactive (${inactive.length})`}
+					</button>
+					{showInactive ? (
+						<ul className="flex flex-col gap-2">
+							{inactive.map((loc) => (
+								<LocationRow
+									key={loc._id}
+									location={loc}
+									currency={currency}
+									onEdit={() => onEdit(loc)}
+									onToggleActive={(next) => onToggleActive(loc, next)}
+									eventNames={eventNamesByVenue.get(loc._id)}
+								/>
+							))}
+						</ul>
+					) : null}
+				</div>
+			) : null}
+		</>
+	);
 }
 
 function PickupKindBadge({ kind }: { kind: "self_collect" | "drop_off" }) {
 	return (
 		<span className="shrink-0 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
 			{kind === "drop_off" ? "Drop-off" : "Self-collect"}
-		</span>
-	);
-}
-
-/**
- * Inline toggle button styled as a switch — codebase has no Switch component
- * today and a single use doesn't justify a new shared primitive. Keeps the
- * component count flat per the wider settings module convention.
- */
-/** The currency symbol worn by a money input, positioned for the shared
- * `pl-9` inputs on this tab. One author so a new currency never leaves a
- * stray "RM" behind on a field. */
-function MoneyPrefix({ currency }: { currency: string }) {
-	return (
-		<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
-			{currencySymbol(currency)}
 		</span>
 	);
 }
@@ -214,7 +289,6 @@ export function FulfilmentTab({
 	offerDelivery,
 	deliveryConfig,
 	businessAddress,
-	deliveryBooking,
 	minFulfilmentNoticeDays,
 	openingHours,
 	closedDates,
@@ -222,11 +296,28 @@ export function FulfilmentTab({
 	minOrderValue,
 	awbConfig,
 	subscription,
+	deliveryBooking,
 }: FulfilmentTabProps) {
 	const locations = useQuery(
 		convexQuery(api.pickupLocations.listForRetailer, { retailerId }),
 	).data;
 	const updateSettings = useUpdateSettings();
+	const navigate = useNavigate();
+	const pricing = pricingSummary(deliveryConfig, (sen) =>
+		formatPrice(sen, currency),
+	);
+	// Same args as CourierBookingSection, so the row and the switch share one
+	// cache entry and can't disagree.
+	const actAsRetailerId = useActAsRetailerId();
+	const delyva = useQuery(
+		convexQuery(api.delyva.getSettings, { retailerId: actAsRetailerId }),
+	).data;
+	const courierBooking = courierBookingGlance({
+		riderBookingAvailable: riderBookingAllowed(country),
+		lalamoveArmed: deliveryBooking?.enabled === true,
+		lalamovePricing: deliveryConfig?.mode === "lalamove",
+		delyvaArmed: delyva?.connected === true && delyva.enabled === true,
+	});
 	/** Ring this card when it's the one the deep link sent the seller to.
 	 * Undefined on a normal visit. */
 	const ring = (anchor: string): FixHighlight | undefined =>
@@ -269,14 +360,30 @@ export function FulfilmentTab({
 		});
 	}, [markPickupSetupSeen]);
 
-	const [editing, setEditing] = useState<Doc<"pickupLocations"> | "new" | null>(
-		null,
-	);
+	// "new" and "new-venue" differ only in what the dialog pre-selects — both
+	// create a row in the same table.
+	const [editing, setEditing] = useState<
+		Doc<"pickupLocations"> | "new" | "new-venue" | null
+	>(null);
 	const [showInactive, setShowInactive] = useState(false);
+	const [showInactiveVenues, setShowInactiveVenues] = useState(false);
 	const [toggling, setToggling] = useState(false);
 
-	const active = locations?.filter((l) => l.isActive) ?? [];
-	const inactive = locations?.filter((l) => !l.isActive) ?? [];
+	// Two lists over ONE table (z8r3fdm32x). `eventsOnly` says a point hosts
+	// events and is never offered at checkout — so it must not count towards
+	// anything that asks "can a buyer collect here?", which is why the pickup
+	// splits below filter it out rather than the whole-table reads doing it.
+	const pickupPoints = locations?.filter((l) => l.eventsOnly !== true) ?? [];
+	const eventVenues = locations?.filter((l) => l.eventsOnly === true) ?? [];
+	const active = pickupPoints.filter((l) => l.isActive);
+	const inactive = pickupPoints.filter((l) => !l.isActive);
+	const activeVenues = eventVenues.filter((l) => l.isActive);
+	const inactiveVenues = eventVenues.filter((l) => !l.isActive);
+	// The venues section is shown to a store that can run events, and ALSO to
+	// one that already has a venue — a downgrade must never make configured
+	// data invisible (the per-kind order-flow posture).
+	const showEventVenues =
+		hasFeature(subscription, "events") || eventVenues.length > 0;
 
 	// Fulfilment invariant (mirrors the server guard in retailers.updateSettings):
 	// a storefront must keep ≥1 WORKING method. Self-collect only "works" with an
@@ -287,6 +394,26 @@ export function FulfilmentTab({
 	const deliveryIsLastMethod =
 		locations !== undefined && offerDelivery && !selfCollectWorking;
 	const selfCollectIsLastMethod = offerSelfCollect && !offerDelivery;
+	/**
+	 * Why "Only hosts events" can't be ticked for this point, or undefined.
+	 *
+	 * Mirrors the server guard in `pickupLocations.update`: flipping the last
+	 * CHOOSABLE point to events-only takes it out of the buyer's picker exactly
+	 * as deactivating it would, so a pickup-only store would be left accepting
+	 * nothing. The server is the real lock — this exists so the seller is told
+	 * before the tap, not by an error after the save (`z8r3fdm32x` review).
+	 */
+	const eventsOnlyLockReason = (
+		loc: Doc<"pickupLocations"> | undefined,
+	): string | undefined => {
+		if (!loc || offerDelivery || !loc.isActive || loc.eventsOnly === true) {
+			return undefined;
+		}
+		const othersLeft = active.some((l) => l._id !== loc._id);
+		return othersLeft
+			? undefined
+			: "Delivery is off and this is the only place buyers can collect from. Turn delivery back on, or add another pickup point, before making this events-only.";
+	};
 	const deliveryToggleDisabled = toggling || deliveryIsLastMethod;
 	const selfCollectToggleDisabled = toggling || selfCollectIsLastMethod;
 
@@ -353,7 +480,8 @@ export function FulfilmentTab({
 	// re-sync on every parent render, clobbering optimistic state between drop
 	// and mutation-ack and producing a visible "snap back, then re-jump"
 	// stutter.
-	const activeIds = active.map((l) => l._id);
+	// The whole active set, both segments — `reorder` is all-or-nothing.
+	const activeIds = [...active, ...activeVenues].map((l) => l._id);
 	const activeIdsKey = activeIds.join("|");
 	const [localOrder, setLocalOrder] =
 		useState<Array<Id<"pickupLocations">>>(activeIds);
@@ -365,15 +493,34 @@ export function FulfilmentTab({
 		setLocalOrder(activeIds);
 	}, [activeIdsKey]);
 
-	const orderedActive = useMemo(() => {
-		const byId = new Map(active.map((l) => [l._id, l]));
+	const orderBy = (rows: Doc<"pickupLocations">[]) => {
+		const byId = new Map(rows.map((l) => [l._id, l]));
 		return localOrder
 			.map((id) => byId.get(id))
 			.filter((l): l is Doc<"pickupLocations"> => l !== undefined);
-	}, [active, localOrder]);
+	};
+	// biome-ignore lint/correctness/useExhaustiveDependencies: orderBy is a stable closure over localOrder, which IS a dep.
+	const orderedActive = useMemo(() => orderBy(active), [active, localOrder]);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: see above.
+	const orderedVenues = useMemo(
+		() => orderBy(activeVenues),
+		[activeVenues, localOrder],
+	);
 
-	async function handleReorder(orderedIds: string[]) {
-		const next = orderedIds as Array<Id<"pickupLocations">>;
+	// `reorder` demands EVERY active row exactly once, so each card sends its
+	// own segment and we compose the whole list here — pickup points first,
+	// venues after. The other segment keeps its relative order, and the two
+	// stay contiguous in `sortOrder`, which is what the picker's groups read.
+	async function handleReorder(
+		segment: "pickup" | "venue",
+		orderedIds: string[],
+	) {
+		const ids = orderedIds as Array<Id<"pickupLocations">>;
+		const others = (segment === "pickup" ? activeVenues : active).map(
+			(l) => l._id,
+		);
+		const next =
+			segment === "pickup" ? [...ids, ...others] : [...others, ...ids];
 		const previous = localOrder;
 		setLocalOrder(next); // optimistic
 		try {
@@ -384,1679 +531,375 @@ export function FulfilmentTab({
 		}
 	}
 
+	const closures = upcomingClosures(closedDates);
+	const notice = minFulfilmentNoticeDays ?? DEFAULT_MIN_NOTICE_DAYS;
+	const hours = hoursSummary(openingHours);
+	const awb = resolveAwbConfig(awbConfig);
+
+	// One set of cards in two arrangements, never rendered twice: mobile reads
+	// them in 9A's order (Hours, Order rules, Delivery, Pickup); from xl the two
+	// `contents` wrappers become 2A's columns (Delivery, Order rules, Hours |
+	// Pickup, Event venues) and `xl:order-none` hands the order back to them.
 	return (
-		<div className="flex flex-col gap-6 pt-2">
-			<OpeningHoursCard
-				initial={openingHours}
-				highlight={ring(SPOTLIGHT_ANCHOR.opening_hours.anchor)}
-			/>
-			{/* Directly under the weekly hours: closed dates are that
-			    schedule's exceptions (z8r3fdhpm7). */}
-			<ClosedDatesCard
-				retailerId={retailerId}
-				closedDates={closedDates}
-				hasBookingListings={hasBookingListings}
-				highlight={ring(SPOTLIGHT_ANCHOR.closed_dates.anchor)}
-			/>
-			<MinNoticeCard initial={minFulfilmentNoticeDays} />
-			<MinOrderValueCard initial={minOrderValue} currency={currency} />
-			<BusinessAddressCard
-				country={country}
-				businessAddress={businessAddress}
-				highlight={ring(SETTINGS_ANCHOR.business_address)}
-			/>
-
-			<Card
-				id={SETTINGS_ANCHOR.delivery_mode}
-				highlight={ring(SETTINGS_ANCHOR.delivery_mode)}
-			>
-				<div className="flex items-start justify-between gap-4">
-					<SectionHeading
-						title="Delivery"
-						description="When on, buyers can enter a delivery address at checkout. No setup needed — they just type where their order should go."
-					/>
-					<ToggleSwitch
-						on={offerDelivery}
-						onChange={handleToggleDelivery}
-						disabled={deliveryToggleDisabled}
-						label="Offer delivery on the storefront"
-					/>
-				</div>
-				<div className="flex items-center gap-2 text-xs text-muted-foreground">
-					<Truck className="size-4 shrink-0 text-accent" aria-hidden="true" />
-					<span>The fast default — most F&amp;B sellers keep this on.</span>
-				</div>
-				{deliveryIsLastMethod ? (
-					<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-						Delivery is your storefront&apos;s only working way to receive
-						orders right now. Add an active pickup location (and keep
-						self-collect on) before switching to pickup-only.
-					</p>
-				) : null}
-
-				<div className="border-t border-border pt-4">
-					<DeliveryChargeSection
-						currency={currency}
-						// Remount when the saved config/address/keys change shape so
-						// local draft state re-seeds from the server truth after a save.
-						key={`${deliveryConfig?.mode ?? "free"}:${businessAddress?.label ?? ""}:${deliveryBooking?.apiKeyHint ?? ""}`}
-						country={country}
-						config={deliveryConfig}
-						businessAddress={businessAddress}
-						deliveryBooking={deliveryBooking}
-						canUseRadius={hasFeature(subscription, "radiusDelivery")}
-						canUseLalamove={hasFeature(subscription, "delivery")}
-					/>
-				</div>
-
-				{/* Second question inside the same card: the charge above decides
-				    what the BUYER pays; this decides how parcels physically leave.
-				    Independent toggles, not a radio — a seller may arm riders AND
-				    couriers and pick per order. Accounts are wired up under
-				    Settings → Integrations. 86eyjpv6z. */}
-				<div className="border-t border-border pt-4">
-					<CourierBookingSection
-						deliveryBooking={deliveryBooking}
-						chargeMode={deliveryConfig?.mode}
-						canUse={hasFeature(subscription, "delivery")}
-						riderBookingAvailable={riderBookingAllowed(country)}
-					/>
-				</div>
-			</Card>
-
-			{/* Directly after Delivery, and before Pickup, because that is what it
-			    configures: the paper that goes on a parcel once it's going out by
-			    courier. Pickup orders have no address, so they never get one. */}
-			<DespatchLabelCard
-				key={JSON.stringify(awbConfig ?? {})}
-				config={resolveAwbConfig(awbConfig)}
-				onSave={(patch) => updateSettings({ awbConfig: patch })}
-			/>
-
-			<Card
-				id={SETTINGS_ANCHOR.pickup_addresses}
-				highlight={ring(SETTINGS_ANCHOR.pickup_addresses)}
-			>
-				<div className="flex items-start justify-between gap-4">
-					<SectionHeading
-						title="Pickup"
-						description="When on, buyers can collect their order from a point you set below — your own place (self-collect) or an agreed meetup spot (drop-off). Needs at least one active point to show at checkout."
-					/>
-					<ToggleSwitch
-						on={offerSelfCollect}
-						onChange={handleToggleSelfCollect}
-						disabled={selfCollectToggleDisabled}
-						label="Offer pickup on the storefront"
-					/>
-				</div>
-				{selfCollectIsLastMethod ? (
-					<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-						Pickup is your storefront&apos;s only working way to receive orders
-						right now (delivery is off). Turn delivery back on before turning
-						this off.
-					</p>
-				) : offerSelfCollect && active.length === 0 ? (
-					<p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
-						Pickup is on but you have no active points yet — buyers won&apos;t
-						see the option until you add one.
-					</p>
-				) : null}
-
-				<div className="flex items-center justify-between gap-3 border-t border-border pt-4">
-					<SectionHeading
-						title="Pickup points"
-						description="Where buyers collect. Frozen onto each order, so editing or deactivating a point later never rewrites past orders."
-					/>
-					<Button
-						type="button"
-						onClick={() => setEditing("new")}
-						size="sm"
-						className="h-10 shrink-0 gap-1.5"
+		<div className="flex flex-col gap-6 pt-2 xl:grid xl:grid-cols-2 xl:items-start">
+			<div className="contents xl:flex xl:min-w-0 xl:flex-col xl:gap-6">
+				<div className="order-3 min-w-0 xl:order-none">
+					<Card
+						id={SETTINGS_ANCHOR.delivery_mode}
+						highlight={ring(SETTINGS_ANCHOR.delivery_mode)}
 					>
-						<Plus className="size-4" />
-						Add
-					</Button>
+						<div className="flex items-start justify-between gap-3">
+							<SectionHeading
+								title="Delivery"
+								description="Buyers enter a delivery address at checkout."
+								glance={
+									offerDelivery ? (
+										<Glance>
+											{PRICING_MODE_UI[pricingModeOf(deliveryConfig)].title}
+										</Glance>
+									) : (
+										<Glance tone="grey">Off</Glance>
+									)
+								}
+							/>
+							<ToggleSwitch
+								on={offerDelivery}
+								onChange={handleToggleDelivery}
+								disabled={deliveryToggleDisabled}
+								label="Offer delivery on the storefront"
+							/>
+						</div>
+						{deliveryIsLastMethod ? (
+							<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+								Delivery is your storefront&apos;s only working way to receive
+								orders right now. Add an active pickup point (and keep pickup
+								on) before switching it off.
+							</p>
+						) : null}
+						<div className="flex flex-col">
+							<SummaryRow
+								label="Pricing"
+								value={pricing}
+								onClick={() =>
+									void navigate({ to: "/app/settings/delivery-pricing" })
+								}
+								// The row reads "Pricing" inside the Delivery card; out of
+								// that context a screen reader needs the noun and the value.
+								ariaLabel={`Delivery pricing: ${pricing}`}
+							/>
+							{/* The arm switches live on the pricing page (3A: they ride
+							    along with pricing), but a seller looking to turn rider
+							    booking on looks for "Courier booking", not "Pricing" —
+							    so it gets its own row here, landing on that card. Every
+							    "turn it on under Fulfilment → Courier booking" hint in
+							    the app depends on this row existing. */}
+							<SummaryRow
+								label="Courier booking"
+								// Plain like the rows beside it — the card's one pill is
+								// the Delivery heading's glance.
+								value={
+									!hasFeature(subscription, "delivery") ? (
+										<ProBadge />
+									) : courierBooking === "Off" ? (
+										<span className="font-normal text-muted-foreground">
+											Off
+										</span>
+									) : (
+										courierBooking
+									)
+								}
+								onClick={() =>
+									void navigate({
+										to: "/app/settings/delivery-pricing",
+										hash: COURIER_BOOKING_ANCHOR,
+									})
+								}
+								ariaLabel={`Courier booking: ${courierBooking}`}
+							/>
+							<ExpandableRow
+								id={SETTINGS_ANCHOR.business_address}
+								highlight={ring(SETTINGS_ANCHOR.business_address)}
+								label="Business address"
+								value={
+									businessAddress ? (
+										<span className="max-w-[12rem] truncate font-normal text-muted-foreground">
+											{businessAddress.label}
+										</span>
+									) : (
+										<Glance tone="warn">Not set</Glance>
+									)
+								}
+							>
+								<BusinessAddressCard
+									country={country}
+									businessAddress={businessAddress}
+								/>
+							</ExpandableRow>
+							{/* The paper that goes on a parcel once it's going out by
+							    courier — delivery's, never pickup's (no address). */}
+							<ExpandableRow
+								label="Despatch labels"
+								value={
+									<span className="font-normal text-muted-foreground">
+										{awb.paperSize === "a6" ? "A6 roll" : "A4 · 4 per sheet"}
+									</span>
+								}
+							>
+								<DespatchLabelCard
+									key={JSON.stringify(awbConfig ?? {})}
+									config={awb}
+									onSave={(patch) => updateSettings({ awbConfig: patch })}
+								/>
+							</ExpandableRow>
+						</div>
+					</Card>
 				</div>
 
-				{locations === undefined ? (
-					<LocationListSkeleton />
-				) : active.length === 0 ? (
-					<EmptyState onAdd={() => setEditing("new")} />
-				) : (
-					<SortableList
-						items={orderedActive}
-						getId={(loc) => loc._id}
-						onReorder={handleReorder}
-						renderItem={(loc, handle, state) =>
-							state.isSorting ? (
-								// Collapsed one-line row while dragging (matches the order-status
-								// editor) — a tall list stays easy to rearrange.
-								<div
-									className={`flex items-center gap-2 rounded-xl border bg-background p-3 ${
-										state.isOverlay
-											? "border-accent shadow-lg"
-											: "border-border"
-									}`}
-								>
-									{handle}
-									<MapPin
-										className="size-4 shrink-0 text-accent"
-										aria-hidden="true"
-									/>
-									<span className="truncate text-sm font-medium">
-										{loc.label}
-									</span>
-								</div>
-							) : (
-								<div className="flex flex-col gap-3 rounded-xl border border-border bg-background p-4">
-									<LocationRowBody
-										currency={currency}
-										location={loc}
-										onEdit={() => setEditing(loc)}
-										onToggleActive={(next) => handleToggleActive(loc, next)}
-										dragHandle={handle}
-										eventNames={eventNamesByVenue.get(loc._id)}
-									/>
-								</div>
-							)
-						}
-					/>
-				)}
+				<div className="order-2 min-w-0 xl:order-none">
+					<Card>
+						<SectionHeading
+							title="Order rules"
+							description="How soon, and how much, a buyer can order."
+							glance={
+								<Glance tone="grey">
+									{noticeSummary(notice)}
+									{(minOrderValue ?? 0) > 0
+										? ` · ${formatPrice(minOrderValue ?? 0, currency)} min`
+										: ""}
+								</Glance>
+							}
+						/>
+						<div className="flex flex-col">
+							<ExpandableRow
+								label="Advance notice"
+								value={notice === 0 ? "Same-day" : noticeSummary(notice)}
+							>
+								<MinNoticeCard initial={minFulfilmentNoticeDays} />
+							</ExpandableRow>
+							<ExpandableRow
+								label="Minimum order"
+								value={
+									(minOrderValue ?? 0) > 0
+										? formatPrice(minOrderValue ?? 0, currency)
+										: "None"
+								}
+							>
+								<MinOrderValueCard
+									initial={minOrderValue}
+									currency={currency}
+								/>
+							</ExpandableRow>
+						</div>
+					</Card>
+				</div>
 
-				{inactive.length > 0 ? (
-					<div className="flex flex-col gap-2 border-t border-border pt-3">
-						<button
-							type="button"
-							onClick={() => setShowInactive((s) => !s)}
-							className="self-start text-xs font-medium text-muted-foreground underline-offset-2 hover:underline"
-						>
-							{showInactive
-								? `Hide inactive (${inactive.length})`
-								: `Show inactive (${inactive.length})`}
-						</button>
-						{showInactive ? (
-							<ul className="flex flex-col gap-2">
-								{inactive.map((loc) => (
-									<LocationRow
-										key={loc._id}
-										location={loc}
-										currency={currency}
-										onEdit={() => setEditing(loc)}
-										onToggleActive={(next) => handleToggleActive(loc, next)}
-										eventNames={eventNamesByVenue.get(loc._id)}
-									/>
-								))}
-							</ul>
+				<div className="order-1 min-w-0 xl:order-none">
+					<Card>
+						<SectionHeading
+							title="Hours"
+							description="When buyers can pick a delivery or pickup slot."
+							glance={<Glance>{hours.glance}</Glance>}
+						/>
+						<div className="flex flex-col">
+							<ExpandableRow
+								id={SPOTLIGHT_ANCHOR.opening_hours.anchor}
+								highlight={ring(SPOTLIGHT_ANCHOR.opening_hours.anchor)}
+								label="Opening hours"
+								value={
+									<span className="max-w-[14rem] truncate">{hours.row}</span>
+								}
+							>
+								<OpeningHoursCard initial={openingHours} />
+							</ExpandableRow>
+							{/* The weekly schedule's exceptions (z8r3fdhpm7). */}
+							<ExpandableRow
+								id={SPOTLIGHT_ANCHOR.closed_dates.anchor}
+								highlight={ring(SPOTLIGHT_ANCHOR.closed_dates.anchor)}
+								label="Closed dates"
+								value={
+									closures.length === 0 ? "None" : `${closures.length} upcoming`
+								}
+							>
+								<ClosedDatesCard
+									retailerId={retailerId}
+									closedDates={closedDates}
+									hasBookingListings={hasBookingListings}
+								/>
+							</ExpandableRow>
+						</div>
+					</Card>
+				</div>
+			</div>
+
+			<div className="contents xl:flex xl:min-w-0 xl:flex-col xl:gap-6">
+				<div className="order-4 min-w-0 xl:order-none">
+					<Card
+						id={SETTINGS_ANCHOR.pickup_addresses}
+						highlight={ring(SETTINGS_ANCHOR.pickup_addresses)}
+					>
+						<div className="flex items-start justify-between gap-3">
+							<SectionHeading
+								title="Pickup"
+								description="Buyers collect from a point you set."
+								glance={
+									!offerSelfCollect ? (
+										<Glance tone="grey">Off</Glance>
+									) : active.length === 0 ? (
+										<Glance tone="warn">No points</Glance>
+									) : (
+										<Glance>
+											{active.length} point{active.length === 1 ? "" : "s"}
+										</Glance>
+									)
+								}
+							/>
+							<ToggleSwitch
+								on={offerSelfCollect}
+								onChange={handleToggleSelfCollect}
+								disabled={selfCollectToggleDisabled}
+								label="Offer pickup on the storefront"
+							/>
+						</div>
+						{selfCollectIsLastMethod ? (
+							<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+								Pickup is your storefront&apos;s only working way to receive
+								orders right now (delivery is off). Turn delivery back on before
+								turning this off.
+							</p>
+						) : offerSelfCollect && active.length === 0 ? (
+							<p className="rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+								Pickup is on but you have no active points yet — buyers
+								won&apos;t see the option until you add one.
+							</p>
 						) : null}
+						<LocationList
+							loading={locations === undefined}
+							active={orderedActive}
+							inactive={inactive}
+							currency={currency}
+							emptyState={<EmptyState onAdd={() => setEditing("new")} />}
+							showInactive={showInactive}
+							onToggleShowInactive={() => setShowInactive((v) => !v)}
+							onReorder={(ids) => handleReorder("pickup", ids)}
+							onEdit={setEditing}
+							onToggleActive={handleToggleActive}
+							eventNamesByVenue={eventNamesByVenue}
+						/>
+						{pickupPoints.length > 0 ? (
+							<Button
+								type="button"
+								variant="outline"
+								className="h-11 gap-1.5"
+								onClick={() => setEditing("new")}
+							>
+								<Plus className="size-4" />
+								Add pickup point
+							</Button>
+						) : null}
+						<InfoDisclosure summary="How pickup points work">
+							<HelperBullets
+								items={[
+									"Self-collect is your own place; drop-off is an agreed meetup spot",
+									"Pickup shows at checkout once at least one point is active",
+									"Each order keeps the point it was placed with — editing or hiding a point later never rewrites past orders",
+								]}
+							/>
+						</InfoDisclosure>
+					</Card>
+				</div>
+
+				{/* After Pickup, NOT inside it: a store that runs events but never
+				    offers pickup would otherwise find its venues inside a
+				    switched-off section (z8r3fdm32x). */}
+				{showEventVenues ? (
+					<div className="order-5 min-w-0 xl:order-none">
+						<Card
+							id={SPOTLIGHT_ANCHOR.event_venues.anchor}
+							highlight={ring(SPOTLIGHT_ANCHOR.event_venues.anchor)}
+						>
+							<SectionHeading
+								title="Event venues"
+								description="Where your events happen — never offered as a pickup choice."
+								glance={
+									activeVenues.length > 0 ? (
+										<Glance tone="grey">
+											{activeVenues.length} venue
+											{activeVenues.length === 1 ? "" : "s"}
+										</Glance>
+									) : undefined
+								}
+							/>
+							<LocationList
+								loading={locations === undefined}
+								active={orderedVenues}
+								inactive={inactiveVenues}
+								currency={currency}
+								emptyState={
+									<div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border px-4 py-8 text-center">
+										<CalendarClock
+											className="size-5 text-muted-foreground"
+											aria-hidden="true"
+										/>
+										<p className="text-sm font-medium">No event venues yet</p>
+										<p className="max-w-sm text-xs leading-relaxed text-muted-foreground">
+											Add a hall, a studio or anywhere else you host events.
+											Guests are sent straight there.
+										</p>
+										<Button
+											type="button"
+											variant="outline"
+											className="mt-1 h-11 gap-1.5"
+											onClick={() => setEditing("new-venue")}
+										>
+											<Plus className="size-4" />
+											Add event venue
+										</Button>
+									</div>
+								}
+								showInactive={showInactiveVenues}
+								onToggleShowInactive={() => setShowInactiveVenues((v) => !v)}
+								onReorder={(ids) => handleReorder("venue", ids)}
+								onEdit={setEditing}
+								onToggleActive={handleToggleActive}
+								eventNamesByVenue={eventNamesByVenue}
+							/>
+							{eventVenues.length > 0 ? (
+								<Button
+									type="button"
+									variant="outline"
+									className="h-11 gap-1.5"
+									onClick={() => setEditing("new-venue")}
+								>
+									<Plus className="size-4" />
+									Add event venue
+								</Button>
+							) : null}
+						</Card>
 					</div>
 				) : null}
-			</Card>
+			</div>
 
 			<PickupLocationEditDialog
 				// Remount per edit target so the dialog's local state (kind, geo,
 				// fee, form defaults — all captured in initializers) can't leak
 				// from one location into the next.
-				key={editing === "new" ? "new" : (editing?._id ?? "closed")}
+				key={typeof editing === "string" ? editing : (editing?._id ?? "closed")}
 				open={editing !== null}
 				onClose={() => setEditing(null)}
-				location={editing === "new" ? undefined : (editing ?? undefined)}
+				location={
+					typeof editing === "string" ? undefined : (editing ?? undefined)
+				}
+				eventsOnlyLockReason={eventsOnlyLockReason(
+					typeof editing === "string" ? undefined : (editing ?? undefined),
+				)}
+				// Which card's Add was pressed. Only a default — the dialog's own
+				// control still lets the seller change their mind before saving.
+				defaultEventsOnly={editing === "new-venue"}
 				retailerId={retailerId}
 				currency={currency}
 				country={country}
 				canChargeFee={hasFeature(subscription, "chargeablePickup")}
 			/>
-		</div>
-	);
-}
-
-// --- Delivery charge (86extzdr8) --------------------------------------------
-
-// "live" is stored but not yet offered as a radio (z8r3fdbvdy ships the
-// engine before the switch) — the type accepts it so a store already on it
-// can't crash this tab.
-type ChargeMode = "free" | "flat" | "radius" | "weight" | "lalamove" | "live";
-
-type BandDraft = { maxKm: string; fee: string };
-
-function bandsFromConfig(config: DeliveryConfig | undefined): BandDraft[] {
-	if (config?.mode !== "radius") return [{ maxKm: "5", fee: "" }];
-	return config.bands.map((b) => ({
-		maxKm: String(b.maxKm),
-		fee: (b.fee / 100).toFixed(2),
-	}));
-}
-
-// Weight/zone drafts (86eyeea1n) — RM display strings; sen on the wire.
-type WeightBandDraft = { maxKg: string; fee: string };
-type ZoneDraft = {
-	name: string;
-	states: string[];
-	bands: WeightBandDraft[];
-	freeAbove: string;
-};
-
-/** Config/seed zones → editable drafts (one converter for both sources, so
- * the seed can never save differently from a stored card). */
-function zoneDraftsFromZones(
-	zones: Pick<DeliveryZone, "name" | "states" | "bands" | "freeAbove">[],
-): ZoneDraft[] {
-	return zones.map((z) => ({
-		name: z.name,
-		states: [...z.states],
-		bands: z.bands.map((b) => ({
-			maxKg: String(b.maxKg),
-			fee: (b.fee / 100).toFixed(2),
-		})),
-		freeAbove: z.freeAbove !== undefined ? (z.freeAbove / 100).toFixed(2) : "",
-	}));
-}
-
-function weightZonesFromConfig(
-	config: DeliveryConfig | undefined,
-): ZoneDraft[] {
-	// Empty = the template/blank chooser renders instead of an empty form.
-	if (config?.mode !== "weight") return [];
-	return zoneDraftsFromZones(config.zones);
-}
-
-/** A fresh zone draft — one starter band so the row structure is visible. */
-function blankZoneDraft(): ZoneDraft {
-	return {
-		name: "",
-		states: [],
-		bands: [{ maxKg: "3", fee: "" }],
-		freeAbove: "",
-	};
-}
-
-/** One provider line in the live-mode "Priced by" block: logo, name, a
- * five-word detail, and a STATUS CHIP instead of a paragraph. The chip is the
- * whole point — connection state used to live in a separate Lalamove-only
- * section a screen away, where its test-keys banner could show on a store
- * with no Lalamove keys while a Delyva demo got no warning at all. */
-function ProviderPricingRow({
-	logo,
-	logoHeight,
-	name,
-	detail,
-	status,
-}: {
-	logo: string;
-	logoHeight: string;
-	name: string;
-	detail: string;
-	status: "live" | "test" | "connected" | "paused" | "off";
-}) {
-	const chip = {
-		live: {
-			label: "Live",
-			cls: "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-200",
-		},
-		test: {
-			label: "Test keys",
-			cls: "bg-amber-100 text-amber-900 dark:bg-amber-950/60 dark:text-amber-200",
-		},
-		connected: {
-			label: "Connected",
-			cls: "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-200",
-		},
-		paused: {
-			label: "Paused",
-			cls: "bg-muted text-muted-foreground",
-		},
-		off: {
-			label: "Not connected",
-			cls: "bg-muted text-muted-foreground",
-		},
-	}[status];
-	return (
-		<div className="flex items-center justify-between gap-3">
-			<span className="flex min-w-0 items-center gap-2">
-				<AppImage
-					src={logo}
-					alt=""
-					aspect={`${logoHeight} w-auto`}
-					fill={false}
-					className="shrink-0"
-				/>
-				<span className="truncate text-sm">
-					{name}{" "}
-					<span className="hidden text-xs text-muted-foreground sm:inline">
-						· {detail}
-					</span>
-				</span>
-			</span>
-			<span className="flex shrink-0 items-center gap-2">
-				<span
-					className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${chip.cls}`}
-				>
-					{chip.label}
-				</span>
-				<Link
-					to="/app/settings"
-					search={{ tab: "integrations" }}
-					className="text-xs font-medium text-accent hover:underline"
-				>
-					{status === "off" ? "Connect" : "Manage"}
-				</Link>
-			</span>
-		</div>
-	);
-}
-
-/**
- * Delivery-charge configuration (86extzdr8) — lives inside the Delivery card
- * because it's pricing for that method (mirrors the fee input inside the
- * pickup-point dialog). Three modes: Free (default, today's behaviour), a
- * flat fee with optional free-above threshold (all-tier — a wrong total is a
- * correctness bug, not an upsell), and distance bands from the business
- * address (Pro). Distances are STRAIGHT-LINE — the copy says so, because a
- * seller who bands by road distance will undercharge.
- */
-function DeliveryChargeSection({
-	country,
-	config,
-	businessAddress,
-	deliveryBooking,
-	canUseRadius,
-	canUseLalamove,
-	currency,
-}: {
-	/** SG stores get only Free/Flat — the MY-only modes' cards don't render
-	 * and updateSettings refuses them (SG-lite, 86eynw29u). */
-	country: Country;
-	config: DeliveryConfig | undefined;
-	businessAddress: BusinessAddress | undefined;
-	/** Secret-free booking summary — Lalamove is set up INSIDE this section
-	 * (a delivery-pricing choice, not a separate feature). */
-	deliveryBooking: DeliveryBookingSummary | undefined;
-	canUseRadius: boolean;
-	canUseLalamove: boolean;
-	currency: string;
-}) {
-	const updateSettings = useUpdateSettings();
-	const actAsRetailerId = useActAsRetailerId();
-	const [mode, setMode] = useState<ChargeMode>(config?.mode ?? "free");
-	// Flat-mode drafts (RM display strings; sen on the wire).
-	const [flatFee, setFlatFee] = useState(
-		config?.mode === "flat" ? (config.fee / 100).toFixed(2) : "",
-	);
-	const [freeAbove, setFreeAbove] = useState(
-		config?.mode === "flat" && config.freeAbove !== undefined
-			? (config.freeAbove / 100).toFixed(2)
-			: "",
-	);
-	// Radius-mode drafts.
-	const [bands, setBands] = useState<BandDraft[]>(() =>
-		bandsFromConfig(config),
-	);
-	const [outOfRange, setOutOfRange] = useState<"block" | "arrange">(
-		config?.mode === "radius" ? config.outOfRange : "arrange",
-	);
-	// Weight-mode drafts (86eyeea1n). Both policies default to "arrange" — the
-	// radius posture: never lose an order to a rate-card gap by default.
-	const [zones, setZones] = useState<ZoneDraft[]>(() =>
-		weightZonesFromConfig(config),
-	);
-	const [onOutOfBands, setOnOutOfBands] = useState<"block" | "arrange">(
-		config?.mode === "weight" ? config.onOutOfBands : "arrange",
-	);
-	const [onUnpriceable, setOnUnpriceable] = useState<"block" | "arrange">(
-		config?.mode === "weight" ? config.onUnpriceable : "arrange",
-	);
-	// Lalamove drafts (mode "lalamove" only). Keys live in Settings →
-	// Integrations since the 2 Sep IA rework — this section only reads the
-	// connection summary and refuses to save live-quote pricing without one.
-	const [vehicleType, setVehicleType] = useState<"MOTORCYCLE" | "CAR">(
-		deliveryBooking?.vehicleType ?? "MOTORCYCLE",
-	);
-	const [promptBook, setPromptBook] = useState(
-		deliveryBooking?.promptBookOnPacked ?? false,
-	);
-	// Collection service (86eyg0n8e): riders collect FROM the customer and
-	// bring orders here (gear-wash / repair stores). Reverses dispatch, stops
-	// webhook auto-status, and flips buyer-facing copy to "collection".
-	const [collectionMode, setCollectionMode] = useState(
-		deliveryBooking?.deliveryDirection === "collection",
-	);
-	const [saving, setSaving] = useState(false);
-	const [error, setError] = useState<string | null>(null);
-	const hasStoredKey = !!deliveryBooking?.apiKeyHint;
-	// Live pricing quotes whatever is ARMED, so the mode needs at least one
-	// armed provider — a connected-but-paused Delyva doesn't bid, and picking
-	// the mode with nothing behind it would block every checkout.
-	const delyvaSettings = useQuery(
-		convexQuery(api.delyva.getSettings, { retailerId: actAsRetailerId }),
-	).data;
-	const delyvaArmed =
-		delyvaSettings?.connected === true && delyvaSettings.enabled === true;
-	// What actually BIDS at checkout is the Courier-booking toggle, not the
-	// mere presence of keys — liveQuote gates on deliveryBooking.enabled, so
-	// every surface here mirrors that or the panel lies about the quote.
-	const lalamoveArmed = hasStoredKey && deliveryBooking?.enabled === true;
-	// One tile covers both live modes: "lalamove" is the pre-migration
-	// spelling of the same choice, so a store still on it shows as selected
-	// rather than as nothing-picked.
-	const liveModeSelected = mode === "live" || mode === "lalamove";
-	const storedLiveMode = config?.mode === "live" || config?.mode === "lalamove";
-
-	// SG stores are flat-fee-only for now — the MY-only mode cards (distance /
-	// weight-zone / Lalamove) don't render and the server refuses storing them
-	// (convex/lib/delivery.ts COUNTRY_DELIVERY_MODES). The one-line reason
-	// below the grid says so, so the missing cards are never a mystery.
-	const myOnlyModesHidden = !deliveryModeAllowed(country, "radius");
-	// Gated separately from the MY-only pair: live pricing follows the
-	// booking providers (SG has Lalamove riders since z8r3fdch3r), while
-	// distance/weight-zone follow Malaysian geography.
-	const liveModeAvailable = deliveryModeAllowed(country, "live");
-	// Defensive: a stored MY-only mode on an SG store (pre-guard data) has no
-	// card to select — name the situation instead of showing nothing picked.
-	const storedModeUnavailable =
-		config !== undefined && !deliveryModeAllowed(country, config.mode);
-	// A downgraded seller sitting on a radius config can still view it and
-	// switch away (clearing is un-gated server-side) — they just can't edit it.
-	const radiusLocked = !canUseRadius;
-	const radiusEditable = mode === "radius" && canUseRadius;
-	const lalamoveLocked = !canUseLalamove;
-	// Weight-mode derived views: which zone owns each state (chips make a
-	// double-claim unrepresentable) and which states no zone covers.
-	const claimedStates = new Map<string, number>();
-	zones.forEach((z, zi) => {
-		for (const s of z.states) {
-			if (!claimedStates.has(s)) claimedStates.set(s, zi);
-		}
-	});
-	const uncoveredStates = MY_STATES.filter((s) => !claimedStates.has(s));
-	const patchZone = (i: number, patch: Partial<ZoneDraft>) =>
-		setZones((prev) => prev.map((z, j) => (j === i ? { ...z, ...patch } : z)));
-	// The stored address only — this section no longer edits it (86eyqgujv).
-	const effectiveAddress = businessAddress;
-
-	async function save() {
-		setError(null);
-		let nextConfig: DeliveryConfig | null;
-		if (mode === "free") {
-			nextConfig = null;
-		} else if (mode === "flat") {
-			const rm = parsePriceInput(flatFee);
-			if (rm === null || rm <= 0) {
-				setError("Enter the flat delivery fee — numbers only, e.g. 8.00");
-				return;
-			}
-			let freeAboveSen: number | undefined;
-			if (freeAbove.trim().length > 0) {
-				const threshold = parsePriceInput(freeAbove);
-				if (threshold === null || threshold <= 0) {
-					setError("Free-delivery threshold isn't a valid amount");
-					return;
-				}
-				freeAboveSen = Math.round(threshold * 100);
-			}
-			nextConfig = {
-				mode: "flat",
-				fee: Math.round(rm * 100),
-				freeAbove: freeAboveSen,
-			};
-		} else if (mode === "weight") {
-			// Mirrors sanitizeDeliveryConfig's weight rules so failures are a
-			// helpful inline message, not a thrown save. Cross-zone state clashes
-			// can't happen by construction (claimed chips are disabled), so only
-			// the per-zone rules need checking here.
-			if (zones.length === 0) {
-				setError(
-					"Add at least one delivery zone — or start from the J&T template above.",
-				);
-				return;
-			}
-			const seenNames = new Set<string>();
-			const parsedZones: DeliveryZone[] = [];
-			for (const zone of zones) {
-				const name = zone.name.trim();
-				if (name.length === 0) {
-					setError("Every zone needs a name — e.g. West Malaysia.");
-					return;
-				}
-				if (seenNames.has(name.toLowerCase())) {
-					setError(`Two zones are both named “${name}” — rename one.`);
-					return;
-				}
-				seenNames.add(name.toLowerCase());
-				if (zone.states.length === 0) {
-					setError(`Zone “${name}” needs at least one state.`);
-					return;
-				}
-				const parsedBands: DeliveryZone["bands"] = [];
-				for (const b of zone.bands) {
-					const kg = Number(b.maxKg);
-					const rm = parsePriceInput(b.fee.trim().length > 0 ? b.fee : "0");
-					if (!Number.isFinite(kg) || kg <= 0) {
-						setError(`Each band in “${name}” needs a weight greater than 0 kg`);
-						return;
-					}
-					if (rm === null || rm < 0) {
-						setError(
-							`A band fee in “${name}” isn't a valid amount — numbers only, e.g. 8.00`,
-						);
-						return;
-					}
-					parsedBands.push({ maxKg: kg, fee: Math.round(rm * 100) });
-				}
-				let freeAboveSen: number | undefined;
-				if (zone.freeAbove.trim().length > 0) {
-					const threshold = parsePriceInput(zone.freeAbove);
-					if (threshold === null || threshold <= 0) {
-						setError(
-							`The free-delivery threshold for “${name}” isn't a valid amount`,
-						);
-						return;
-					}
-					freeAboveSen = Math.round(threshold * 100);
-				}
-				parsedZones.push({
-					name,
-					states: zone.states,
-					bands: parsedBands,
-					freeAbove: freeAboveSen,
-				});
-			}
-			nextConfig = {
-				mode: "weight",
-				zones: parsedZones,
-				onOutOfBands,
-				onUnpriceable,
-			};
-		} else if (mode === "live" || mode === "lalamove") {
-			// Live provider quote (86eyb5hrf, provider-aware since z8r3fdbvdy) —
-			// `onUnquotable` is vestigial (strict since 27 Jul: no quote, no
-			// order; the sanitizer normalizes stored rows to "block"). Mirrors the
-			// server gates so the failure is a helpful message, not a thrown save.
-			if (!effectiveAddress) {
-				// Delyva-only stores never send a rider anywhere — their copy must
-				// not talk about one (PR #253 review FYI).
-				setError(
-					!lalamoveArmed && delyvaArmed
-						? "Set your business address above first — it anchors your store's delivery setup."
-						: collectionMode
-							? "Set your business address above first — it's where riders drop off what they collect."
-							: "Set your business address above first — it's the pickup point riders are sent to.",
-				);
-				return;
-			}
-			// At least ONE provider must be ARMED, or every checkout would block.
-			// Armed — not merely connected: the checkout quotes exactly what the
-			// Courier-booking toggles say (Zaki, 6 Sep — vendors choose their
-			// providers; the mode just needs one left on).
-			if (!lalamoveArmed && !delyvaArmed) {
-				setError(
-					hasStoredKey || delyvaSettings?.connected
-						? "Turn on at least one service under Courier booking below — live pricing quotes whatever is switched on."
-						: "Connect Lalamove or Delyva under Settings → Integrations first — live prices run on your own accounts.",
-				);
-				return;
-			}
-			nextConfig = {
-				mode: "live" as const,
-				onUnquotable: "block" as const,
-			};
-		} else {
-			if (!effectiveAddress) {
-				setError(
-					"Set your business address above first — distances are measured from it.",
-				);
-				return;
-			}
-			const parsedBands = [];
-			for (const b of bands) {
-				const km = Number(b.maxKm);
-				const rm = parsePriceInput(b.fee.trim().length > 0 ? b.fee : "0");
-				if (!Number.isFinite(km) || km <= 0) {
-					setError("Each band needs a distance greater than 0 km");
-					return;
-				}
-				if (rm === null || rm < 0) {
-					setError("A band fee isn't a valid amount — numbers only, e.g. 5.00");
-					return;
-				}
-				parsedBands.push({ maxKm: km, fee: Math.round(rm * 100) });
-			}
-			nextConfig = { mode: "radius", bands: parsedBands, outOfRange };
-		}
-		setSaving(true);
-		try {
-			// Live-quote pricing implies rider booking (the checkout quote runs on
-			// those credentials), so picking it arms booking too. Switching AWAY no
-			// longer disarms it (2 Sep IA rework): rider booking is its own toggle
-			// under Courier booking below, and a weight-priced store may keep
-			// riders armed beside Delyva. Keys never ride this save — they live in
-			// Settings → Integrations.
-			// Only the LEGACY single-provider mode arms rider booking as part of
-			// the save (pricing literally runs on those credentials). The live
-			// mode reads the toggles — re-arming Lalamove on every save would
-			// override a vendor who deliberately switched it off (Zaki, 6 Sep).
-			const bookingPatch =
-				mode === "lalamove" && hasStoredKey
-					? {
-							deliveryBooking: {
-								enabled: true,
-								vehicleType,
-								promptBookOnPacked: promptBook,
-								// Explicit both ways so turning the toggle OFF really
-								// clears it ("standard" normalizes to unset server-side).
-								deliveryDirection: collectionMode
-									? ("collection" as const)
-									: ("standard" as const),
-							},
-						}
-					: {};
-			await updateSettings({
-				deliveryConfig: nextConfig,
-				...bookingPatch,
-			});
-			toast.success(
-				mode === "free"
-					? "Delivery charge turned off — delivery is free."
-					: mode === "live" || mode === "lalamove"
-						? "Live courier pricing is on — buyers pay the real price for their address."
-						: "Delivery charge saved.",
-			);
-		} catch (err) {
-			setError(convexErrorMessage(err));
-		} finally {
-			setSaving(false);
-		}
-	}
-
-	return (
-		<div className="flex flex-col gap-4">
-			<SectionHeading
-				title="Delivery charge"
-				description="What buyers pay for delivery, added to their order total at checkout. Pickup orders are never charged this."
-			/>
-			{/* 2×2 grid, live pricing FIRST (86eyb5hrf) — it's a pricing choice
-			    like the others, but the promoted one: it carries the providers'
-			    own wordmarks so every tier SEES that real courier pricing
-			    exists. Both marks, because since z8r3fdbvdy the mode prices
-			    across every armed provider — a Lalamove-only tile would say
-			    the wrong thing to a store that ships parcels. For a locked
-			    Starter it stays full-colour with a Pro chip + upgrade line
-			    (disabled-with-reason, not a washed-out ghost). SG stores see
-			    Live + Free + Flat — distance and weight-zone stay MY-only, and
-			    the reason line below the grid names why. */}
-			<div className="grid grid-cols-2 gap-2">
-				{!liveModeAvailable ? null : (
-					<button
-						type="button"
-						onClick={() => setMode("live")}
-						disabled={lalamoveLocked && !storedLiveMode}
-						aria-pressed={liveModeSelected}
-						className={`relative flex flex-col items-start gap-1 rounded-xl border-2 py-2.5 pl-3 pr-9 text-left transition-colors ${
-							liveModeSelected
-								? "border-accent bg-accent/5"
-								: "border-border bg-card hover:border-accent/40"
-						} ${lalamoveLocked && !storedLiveMode ? "cursor-not-allowed" : ""}`}
-					>
-						<span className="flex items-center gap-1.5">
-							<span className="text-sm font-medium">Live courier price</span>
-							{lalamoveLocked ? <ProBadge /> : null}
-						</span>
-						<span className="flex items-center gap-2">
-							<AppImage
-								src="/img/lalamove-logo.svg"
-								alt="Lalamove"
-								aspect="h-3.5 w-auto"
-								fill={false}
-							/>
-							<AppImage
-								src="/img/delyva-logo.png"
-								alt="Delyva"
-								aspect="h-2.5 w-auto"
-								fill={false}
-							/>
-						</span>
-						<span className="text-xs text-muted-foreground">
-							{lalamoveLocked && !storedLiveMode
-								? "Real courier prices — upgrade to Pro to turn on"
-								: "Real price per address"}
-						</span>
-						<ModeRadioDot active={liveModeSelected} />
-					</button>
-				)}
-				<ModeButton
-					active={mode === "free"}
-					onClick={() => setMode("free")}
-					title="Free"
-					subtitle="No charge"
-				/>
-				<ModeButton
-					active={mode === "flat"}
-					onClick={() => setMode("flat")}
-					title="Flat fee"
-					subtitle="Same fee every order"
-				/>
-				{myOnlyModesHidden ? null : (
-					<ModeButton
-						active={mode === "radius"}
-						// A seller already ON radius keeps access to the tab so they can
-						// switch away; a locked seller can't switch INTO it.
-						disabled={radiusLocked && config?.mode !== "radius"}
-						onClick={() => setMode("radius")}
-						title="By distance"
-						subtitle="Radius bands — you deliver"
-						badge={radiusLocked ? <ProBadge /> : undefined}
-					/>
-				)}
-				{/* Weight/zone rate card (86eyeea1n) — all-tier: it's the correctness
-				    fix for outstation parcel sellers (J&T/DD/Ninja), with zero
-				    provider cost to Kedaipal. */}
-				{myOnlyModesHidden ? null : (
-					<ModeButton
-						active={mode === "weight"}
-						onClick={() => setMode("weight")}
-						title="By weight & zone"
-						subtitle="Courier rate card — you ship"
-					/>
-				)}
-			</div>
-			{myOnlyModesHidden ? (
-				<p className="text-xs text-muted-foreground">
-					Distance and weight-zone pricing are Malaysia-only for now — their
-					zone maps are Malaysia-shaped. Live courier price, Free and Flat all
-					work in Singapore.
-				</p>
-			) : null}
-			{storedModeUnavailable ? (
-				<p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
-					Your saved delivery pricing uses a Malaysia-only mode, so buyers
-					can&apos;t check out with delivery right now — pick Free or Flat fee
-					above and save.
-				</p>
-			) : null}
-
-			{liveModeSelected ? (
-				<div className="flex flex-col gap-4">
-					<p className="rounded-lg bg-accent/10 px-3 py-2 text-xs leading-relaxed text-accent-emphasis">
-						Buyers pay the <b>real courier price</b> for their address — an
-						address nobody can price can&apos;t check out, so you never work out
-						a charge yourself. Runs on your own courier accounts.
-					</p>
-
-					{/* WHO will be asked, and what happens when they disagree. Two
-					    armed providers is not an edge case — it is the reason this
-					    mode exists — and a seller who doesn't know both are quoted
-					    can't explain their own checkout prices to a buyer. */}
-					<div className="flex flex-col gap-2 rounded-xl border border-input p-3">
-						<span className="text-xs font-medium">Priced by</span>
-						<ProviderPricingRow
-							logo="/img/lalamove-logo.svg"
-							logoHeight="h-3.5"
-							name="Riders"
-							detail="Same-day, around your city"
-							status={
-								lalamoveArmed
-									? deliveryBooking?.env === "sandbox"
-										? "test"
-										: deliveryBooking?.env === "production"
-											? "live"
-											: "connected"
-									: hasStoredKey
-										? "paused"
-										: "off"
-							}
-						/>
-						<ProviderPricingRow
-							logo="/img/delyva-logo.png"
-							logoHeight="h-2.5"
-							name="Couriers"
-							detail="Nationwide parcels, cheapest service"
-							status={
-								delyvaArmed
-									? delyvaSettings?.isDemo
-										? "test"
-										: "live"
-									: delyvaSettings?.connected
-										? "paused"
-										: "off"
-							}
-						/>
-						<p className="text-xs leading-relaxed text-muted-foreground">
-							{lalamoveArmed && delyvaArmed ? (
-								<>
-									Both get quoted and the buyer pays the <b>higher</b> — book
-									the cheaper one and the difference is yours.
-								</>
-							) : lalamoveArmed || delyvaArmed ? (
-								<>
-									One provider quotes today. Arm the other under{" "}
-									<b>Courier booking</b> below and the buyer pays the higher of
-									the two.
-								</>
-							) : (
-								<>
-									Nothing can quote yet, so delivery checkout would be refused —
-									connect a provider in{" "}
-									<Link
-										to="/app/settings"
-										search={{ tab: "integrations" }}
-										className="font-medium text-accent hover:underline"
-									>
-										Integrations
-									</Link>{" "}
-									first.
-								</>
-							)}
-						</p>
-						{/* ONE test-mode note, owned by whichever provider is actually
-						    in test — the old version was a Lalamove-only banner that
-						    could show on a store with no Lalamove keys at all, while a
-						    Delyva demo account got no warning here (Zaki, 4 Sep). */}
-						{(lalamoveArmed && deliveryBooking?.env === "sandbox") ||
-						(delyvaArmed && delyvaSettings?.isDemo) ? (
-							<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
-								<FlaskConical className="mt-0.5 size-3.5 shrink-0" />
-								<span>
-									<b>Test mode</b> — bookings simulate and buyers see test
-									prices. Swap live keys in{" "}
-									<Link
-										to="/app/settings"
-										search={{ tab: "integrations" }}
-										className="font-medium underline underline-offset-2"
-									>
-										Integrations
-									</Link>{" "}
-									before telling buyers.
-								</span>
-							</p>
-						) : null}
-						{delyvaArmed &&
-						delyvaSettings?.defaultItemType &&
-						delyvaSettings.defaultItemType !== "PARCEL" ? (
-							/* A cold default is priced as cold, and Delyva quotes
-							   nothing when the account carries no cold-chain service —
-							   which blocks every delivery checkout. Never something to
-							   discover as orders quietly stopping. */
-							<p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-								Parcel type is{" "}
-								<b>
-									{delyvaSettings.defaultItemType === "FROZEN"
-										? "Frozen"
-										: "Chilled"}
-								</b>
-								, so only a cold-chain courier can price checkout — riders are
-								never substituted. No cold service on your Delyva account ={" "}
-								<b>delivery checkout refused</b>. Fix: ask Delyva to enable one,
-								or set the type to Parcel in Integrations.
-							</p>
-						) : null}
-					</div>
-					{/* Coverage education (27 Jul, measured live): city-zone limits are
-					    LALAMOVE's, they surprise vendors ("but Kajang is close!"), and
-					    the vehicle picker below must not read as a range picker. Shown
-					    only when riders actually bid — a parcel-only store has no city
-					    zone to learn about. */}
-					{hasStoredKey ? (
-						<p className="rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-							<b>Riders serve your city zone only</b> (~40–70&nbsp;km, never
-							cross-zone) — a buyer beyond it sees &quot;too far&quot; and
-							can&apos;t pick delivery.{" "}
-							{delyvaArmed
-								? "Beyond the zone your Delyva couriers still quote, so checkout keeps working — as a parcel."
-								: "Keep self-collect on as the fallback for far buyers."}
-						</p>
-					) : null}
-					{lalamoveLocked ? (
-						<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-							Live courier pricing is a Pro feature. Your setup still applies to
-							new orders — upgrade in Settings → Billing to change it, or switch
-							to Free / Flat fee (always allowed).
-						</p>
-					) : null}
-
-					{/* 1 · Pickup point — one editor, in the Business address card
-					    above. It used to be duplicated here and in radius mode,
-					    which is how a Singapore store ended up with no way to set
-					    one at all (86eyqgujv). Riders need the exact pin; Delyva
-					    collects from its own pickup address in Integrations. */}
-					{hasStoredKey ? (
-						<BusinessAddressReference
-							address={businessAddress}
-							present={
-								collectionMode
-									? "Riders bring collected orders to"
-									: "Riders collect from"
-							}
-							missing={
-								collectionMode
-									? "Set your business address first — it's where riders bring collected orders."
-									: "Set your business address first — it's the exact point riders are sent to."
-							}
-						/>
-					) : null}
-
-					{/* 2 · Vehicle — a rider setting, so it follows the rider. */}
-					{hasStoredKey ? (
-						<div className="flex flex-col gap-1.5">
-							<span className="text-xs font-medium text-muted-foreground">
-								Default vehicle
-							</span>
-							<div className="grid grid-cols-2 gap-2">
-								<ModeButton
-									active={vehicleType === "MOTORCYCLE"}
-									disabled={lalamoveLocked}
-									onClick={() => setVehicleType("MOTORCYCLE")}
-									title="Motorcycle"
-									subtitle="Most orders, cheapest"
-								/>
-								<ModeButton
-									active={vehicleType === "CAR"}
-									disabled={lalamoveLocked}
-									onClick={() => setVehicleType("CAR")}
-									title="Car"
-									subtitle="Bulky / fragile"
-								/>
-							</div>
-							<p className="text-xs text-muted-foreground">
-								Just the default — you can switch vehicle per order in the
-								booking dialog.
-							</p>
-						</div>
-					) : null}
-
-					{/* 4 · Collection service (86eyg0n8e, Bearcamp) — reverses the trip:
-					    riders collect FROM the customer's address and drop off at the
-					    business address. Sits ABOVE prompt-on-packed because it changes
-					    what the whole feature does, not just when it prompts. */}
-					<div className="flex flex-col gap-1.5 rounded-xl border border-input p-3">
-						<div className="flex items-start justify-between gap-4">
-							<div>
-								<p className="text-sm font-medium">Collection service</p>
-								<p className="mt-0.5 text-xs text-muted-foreground leading-relaxed">
-									{collectionMode
-										? 'On — riders collect from your customer\'s address and bring the order to your outlet (for cleaning, repair or laundry services). Checkout asks buyers for a collection address, and order statuses stay yours to advance — the rider\'s progress only moves the booking card, since "picked up" isn\'t "delivered to the customer" here. The return trip after your work is done is a separate order.'
-										: "Off — riders deliver from your outlet to the customer (the normal direction). Turn this on if your business collects items from customers instead, like a cleaning or repair service."}
-								</p>
-								{collectionMode !==
-								(deliveryBooking?.deliveryDirection === "collection") ? (
-									<p className="mt-1.5 text-xs text-amber-700 leading-relaxed dark:text-amber-400">
-										Applies to <span className="font-medium">new orders</span>.
-										Orders already placed keep the arrangement they promised
-										their buyer, so anything in flight is unaffected.
-									</p>
-								) : null}
-								{collectionMode ? (
-									<p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">
-										💡 Rename your order steps to match your workflow (e.g.
-										Collecting → Cleaning → Ready) in{" "}
-										<Link
-											to="/app/settings"
-											search={{ tab: "order-status" }}
-											className="font-medium text-accent hover:underline"
-										>
-											Settings → Order status
-										</Link>
-										— buyers see those names on their tracking page.
-									</p>
-								) : null}
-							</div>
-							<ToggleSwitch
-								on={collectionMode}
-								onChange={setCollectionMode}
-								disabled={lalamoveLocked}
-								label="Collection service"
-							/>
-						</div>
-					</div>
-
-					{/* 5 · Prompt-to-book on packed (opt-in) — NOT silent auto-book:
-					    marking a paid, due-today order Packed pops the confirm dialog
-					    with today's price, so the seller always sees the cost + taps
-					    to spend. */}
-					<div className="flex flex-col gap-1.5 rounded-xl border border-input p-3">
-						<div className="flex items-start justify-between gap-4">
-							<div>
-								<p className="text-sm font-medium">
-									Ask me to book a rider when I mark an order{" "}
-									<span className="font-semibold">Packed</span>
-								</p>
-								<p className="mt-0.5 text-xs text-muted-foreground leading-relaxed">
-									{promptBook
-										? "On — when you mark a paid, same-day delivery order Packed, the 'Book a rider?' dialog opens with today's price so you can confirm in one tap (or dismiss). Nothing is booked or charged until you confirm. Future-dated and unpaid orders don't prompt."
-										: "Off — you open the Book delivery button yourself when you're ready. Turn this on to be prompted the moment an order is packed."}
-								</p>
-							</div>
-							<ToggleSwitch
-								on={promptBook}
-								onChange={setPromptBook}
-								disabled={lalamoveLocked}
-								label="Prompt to book a rider on packed"
-							/>
-						</div>
-					</div>
-				</div>
-			) : null}
-
-			{mode === "flat" ? (
-				<div className="flex flex-col gap-3">
-					<div className="flex flex-wrap items-end gap-3">
-						<div className="flex flex-col gap-1.5">
-							<label
-								htmlFor="flat-delivery-fee"
-								className="text-xs font-medium text-muted-foreground"
-							>
-								Delivery fee
-							</label>
-							<div className="relative">
-								<MoneyPrefix currency={currency} />
-								<input
-									id="flat-delivery-fee"
-									type="text"
-									inputMode="decimal"
-									value={flatFee}
-									onChange={(e) => setFlatFee(e.target.value)}
-									onBlur={() => setFlatFee(normalizePriceInput(flatFee))}
-									placeholder="8.00"
-									className="h-11 w-32 rounded-lg border border-input bg-background pl-11 pr-3 text-sm"
-								/>
-							</div>
-						</div>
-						<div className="flex flex-col gap-1.5">
-							<label
-								htmlFor="free-above"
-								className="text-xs font-medium text-muted-foreground"
-							>
-								Free for orders above (optional)
-							</label>
-							<div className="relative">
-								<MoneyPrefix currency={currency} />
-								<input
-									id="free-above"
-									type="text"
-									inputMode="decimal"
-									value={freeAbove}
-									onChange={(e) => setFreeAbove(e.target.value)}
-									onBlur={() => setFreeAbove(normalizePriceInput(freeAbove))}
-									placeholder="100.00"
-									className="h-11 w-40 rounded-lg border border-input bg-background pl-11 pr-3 text-sm"
-								/>
-							</div>
-						</div>
-					</div>
-					<p className="text-xs text-muted-foreground leading-relaxed">
-						Buyers see the fee in their checkout total. An order that reaches
-						the threshold exactly ships free.
-					</p>
-				</div>
-			) : null}
-
-			{mode === "radius" ? (
-				<div className="flex flex-col gap-4">
-					{radiusLocked ? (
-						<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-							Distance-based pricing is a Pro feature. Your saved bands still
-							apply to new orders — upgrade in Settings → Billing to change
-							them, or switch to Free / Flat fee (always allowed).
-						</p>
-					) : null}
-					<BusinessAddressReference
-						address={businessAddress}
-						present="Distances are measured from"
-						missing="Set your business address first — distance pricing measures from it."
-					/>
-
-					<div className="flex flex-col gap-2">
-						<p className="text-xs font-medium text-muted-foreground">
-							Distance bands
-						</p>
-						{bands.map((band, i) => (
-							<div
-								// biome-ignore lint/suspicious/noArrayIndexKey: rows are positional drafts with no stable identity
-								key={i}
-								className="flex items-center gap-2"
-							>
-								<span className="text-xs text-muted-foreground">Up to</span>
-								<Input
-									type="number"
-									inputMode="decimal"
-									min={0.1}
-									step={0.1}
-									value={band.maxKm}
-									disabled={!radiusEditable}
-									onChange={(e) =>
-										setBands((prev) =>
-											prev.map((b, j) =>
-												j === i ? { ...b, maxKm: e.target.value } : b,
-											),
-										)
-									}
-									variant="field"
-									className="w-20"
-									aria-label={`Band ${i + 1} distance in km`}
-								/>
-								<span className="text-xs text-muted-foreground">km →</span>
-								<div className="relative">
-									<MoneyPrefix currency={currency} />
-									<input
-										type="text"
-										inputMode="decimal"
-										value={band.fee}
-										disabled={!radiusEditable}
-										onChange={(e) =>
-											setBands((prev) =>
-												prev.map((b, j) =>
-													j === i ? { ...b, fee: e.target.value } : b,
-												),
-											)
-										}
-										onBlur={() =>
-											setBands((prev) =>
-												prev.map((b, j) =>
-													j === i
-														? { ...b, fee: normalizePriceInput(b.fee) }
-														: b,
-												),
-											)
-										}
-										placeholder="5.00"
-										aria-label={`Band ${i + 1} fee`}
-										className="h-11 w-28 rounded-lg border border-input bg-background pl-11 pr-3 text-sm disabled:cursor-not-allowed disabled:opacity-50"
-									/>
-								</div>
-								{bands.length > 1 && radiusEditable ? (
-									<button
-										type="button"
-										onClick={() =>
-											setBands((prev) => prev.filter((_, j) => j !== i))
-										}
-										aria-label={`Remove band ${i + 1}`}
-										className="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-muted"
-									>
-										<Trash2 className="size-4" />
-									</button>
-								) : null}
-							</div>
-						))}
-						{radiusEditable && bands.length < DELIVERY_BANDS_MAX ? (
-							<Button
-								type="button"
-								variant="outline"
-								size="sm"
-								className="h-10 gap-1.5 self-start"
-								onClick={() =>
-									setBands((prev) => [...prev, { maxKm: "", fee: "" }])
-								}
-							>
-								<Plus className="size-4" />
-								Add band
-							</Button>
-						) : null}
-						<p className="text-xs text-muted-foreground leading-relaxed">
-							Distances are straight-line (&ldquo;as the crow flies&rdquo;) from
-							your business address, not driving routes — pad your bands a
-							little to cover real roads. A band fee of{" "}
-							{formatDraftPrice(0, currency)} means free within that distance.
-						</p>
-					</div>
-
-					<div className="flex flex-col gap-2 border-t border-border pt-4">
-						<SectionHeading title="Beyond your last band" />
-						<label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-border p-3">
-							<input
-								type="radio"
-								name="out-of-range"
-								checked={outOfRange === "arrange"}
-								disabled={!radiusEditable}
-								onChange={() => setOutOfRange("arrange")}
-								className="mt-0.5 size-4 shrink-0 accent-accent"
-							/>
-							<span className="flex flex-col gap-0.5">
-								<span className="text-sm font-medium">
-									Accept the order, arrange the charge on WhatsApp
-								</span>
-								<span className="text-xs text-muted-foreground">
-									The order comes in with the delivery charge pending, and the
-									buyer&apos;s WhatsApp confirmation waits with it — so message
-									them first. Agree the charge, set it on the order, and
-									that&apos;s when their confirmation goes out, with the charge
-									and the final total in it.
-								</span>
-							</span>
-						</label>
-						<label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-border p-3">
-							<input
-								type="radio"
-								name="out-of-range"
-								checked={outOfRange === "block"}
-								disabled={!radiusEditable}
-								onChange={() => setOutOfRange("block")}
-								className="mt-0.5 size-4 shrink-0 accent-accent"
-							/>
-							<span className="flex flex-col gap-0.5">
-								<span className="text-sm font-medium">
-									Don&apos;t accept the order
-								</span>
-								<span className="text-xs text-muted-foreground">
-									Buyers outside your bands see &ldquo;outside the delivery
-									area&rdquo; and can&apos;t check out with delivery.
-								</span>
-							</span>
-						</label>
-					</div>
-				</div>
-			) : null}
-
-			{mode === "weight" ? (
-				<div className="flex flex-col gap-4">
-					<p className="rounded-lg bg-accent/10 px-3 py-2 text-xs leading-relaxed text-accent-emphasis">
-						Sell nationwide with your parcel courier&apos;s own rate card (J&T,
-						DD Cold Chain, Ninja Cold…). Buyers pay by{" "}
-						<b>where the order goes</b> — their state&apos;s zone — and{" "}
-						<b>what it weighs</b>: each product&apos;s parcel weight × quantity.
-						You book the courier yourself as usual; Kedaipal prices the
-						checkout.
-					</p>
-					<p className="rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-						A band works like a box tier —{" "}
-						<b>&ldquo;up to 5 kg = {formatDraftPrice(30, currency)}&rdquo;</b>{" "}
-						(S 5 kg / M 10 kg / L 20 kg). Rates use <b>actual weight only</b>;
-						if your courier bills volumetric (size-based) weight, pick the safer
-						band when you copy your card over.
-					</p>
-
-					{zones.length === 0 ? (
-						<div className="flex flex-col gap-2.5 rounded-xl border border-dashed border-border p-4">
-							<p className="text-sm font-medium">Start your rate card</p>
-							<p className="text-xs leading-relaxed text-muted-foreground">
-								The template pre-fills West + East Malaysia with J&T&apos;s
-								published ambient rates (Aug 2026) — replace them with what you
-								actually pay your courier.
-							</p>
-							<div className="flex flex-wrap gap-2">
-								<Button
-									type="button"
-									size="sm"
-									className="h-10"
-									onClick={() => {
-										setZones(zoneDraftsFromZones(jntSeedZones()));
-										setError(null);
-									}}
-								>
-									Use the J&T template
-								</Button>
-								<Button
-									type="button"
-									size="sm"
-									variant="outline"
-									className="h-10"
-									onClick={() => setZones([blankZoneDraft()])}
-								>
-									Start blank
-								</Button>
-							</div>
-						</div>
-					) : (
-						<div className="flex flex-col gap-3">
-							{zones.map((zone, zi) => (
-								<WeightZoneCard
-									currency={currency}
-									// biome-ignore lint/suspicious/noArrayIndexKey: rows are positional drafts with no stable identity
-									key={zi}
-									zone={zone}
-									index={zi}
-									claimed={claimedStates}
-									onPatch={(patch) => patchZone(zi, patch)}
-									onRemove={() =>
-										setZones((prev) => prev.filter((_, j) => j !== zi))
-									}
-								/>
-							))}
-							{zones.length < DELIVERY_ZONES_MAX ? (
-								<Button
-									type="button"
-									variant="outline"
-									size="sm"
-									className="h-10 gap-1.5 self-start"
-									onClick={() =>
-										setZones((prev) => [...prev, blankZoneDraft()])
-									}
-								>
-									<Plus className="size-4" />
-									Add zone
-								</Button>
-							) : null}
-							{uncoveredStates.length > 0 ? (
-								<p className="rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-									<b>Not covered:</b> {uncoveredStates.join(", ")} — buyers
-									there{" "}
-									{onOutOfBands === "block"
-										? "see “not delivered to your state” and can't check out with delivery."
-										: "can still order; you confirm the delivery charge on WhatsApp."}
-								</p>
-							) : null}
-						</div>
-					)}
-
-					<div className="flex flex-col gap-2 border-t border-border pt-4">
-						<SectionHeading title="Outside your zones, or heavier than your bands" />
-						<label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-border p-3">
-							<input
-								type="radio"
-								name="weight-out-of-bands"
-								checked={onOutOfBands === "arrange"}
-								onChange={() => setOnOutOfBands("arrange")}
-								className="mt-0.5 size-4 shrink-0 accent-accent"
-							/>
-							<span className="flex flex-col gap-0.5">
-								<span className="text-sm font-medium">
-									Accept the order, arrange the charge on WhatsApp
-								</span>
-								<span className="text-xs text-muted-foreground">
-									The order comes in with the delivery charge pending — you
-									agree it with the buyer in chat, set it on the order, and the
-									payment request goes out with the final total.
-								</span>
-							</span>
-						</label>
-						<label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-border p-3">
-							<input
-								type="radio"
-								name="weight-out-of-bands"
-								checked={onOutOfBands === "block"}
-								onChange={() => setOnOutOfBands("block")}
-								className="mt-0.5 size-4 shrink-0 accent-accent"
-							/>
-							<span className="flex flex-col gap-0.5">
-								<span className="text-sm font-medium">
-									Don&apos;t accept the order
-								</span>
-								<span className="text-xs text-muted-foreground">
-									Buyers in a state you don&apos;t cover — or with an order
-									heavier than your last band — can&apos;t check out with
-									delivery.
-								</span>
-							</span>
-						</label>
-					</div>
-
-					<div className="flex flex-col gap-2 border-t border-border pt-4">
-						<SectionHeading title="When the weight can't be calculated" />
-						<p className="-mt-1 text-xs text-muted-foreground">
-							Happens when an item has no parcel weight set, or the order
-							includes a custom / quote-first item.
-						</p>
-						<label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-border p-3">
-							<input
-								type="radio"
-								name="weight-unpriceable"
-								checked={onUnpriceable === "arrange"}
-								onChange={() => setOnUnpriceable("arrange")}
-								className="mt-0.5 size-4 shrink-0 accent-accent"
-							/>
-							<span className="flex flex-col gap-0.5">
-								<span className="text-sm font-medium">
-									Accept the order, arrange the charge on WhatsApp
-								</span>
-								<span className="text-xs text-muted-foreground">
-									Recommended — a missing weight never costs you the order. The
-									charge comes in pending, like out-of-zone orders above.
-								</span>
-							</span>
-						</label>
-						<label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-border p-3">
-							<input
-								type="radio"
-								name="weight-unpriceable"
-								checked={onUnpriceable === "block"}
-								onChange={() => setOnUnpriceable("block")}
-								className="mt-0.5 size-4 shrink-0 accent-accent"
-							/>
-							<span className="flex flex-col gap-0.5">
-								<span className="text-sm font-medium">
-									Don&apos;t accept the order
-								</span>
-								<span className="text-xs text-muted-foreground">
-									Checkout is refused until every item in the cart has a parcel
-									weight.
-								</span>
-							</span>
-						</label>
-					</div>
-
-					<p className="rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-						<b>Weights come from your products:</b> every product choice has a
-						&ldquo;Parcel weight&rdquo; field in the product editor, and the
-						bulk-import sheet has a{" "}
-						<span className="font-mono">weight_grams</span> column. Items
-						without a weight follow the rule above.{" "}
-						<Link to="/app/products" className="font-medium underline">
-							Open Products
-						</Link>
-					</p>
-				</div>
-			) : null}
-
-			{error ? (
-				<p role="alert" className="text-sm text-destructive">
-					{error}
-				</p>
-			) : null}
-
-			<Button
-				type="button"
-				onClick={save}
-				disabled={
-					saving ||
-					(mode === "radius" && radiusLocked && config?.mode === "radius") ||
-					(liveModeSelected && lalamoveLocked && storedLiveMode)
-				}
-				isLoading={saving}
-				className="h-11 self-start"
-			>
-				{liveModeSelected ? "Save live pricing" : "Save delivery charge"}
-			</Button>
-		</div>
-	);
-}
-
-/**
- * One zone of the weight-mode rate card (86eyeea1n): name, member-state chips,
- * ascending weight bands and an optional per-zone free-above threshold. A
- * state already claimed by ANOTHER zone renders disabled — one state, one
- * zone; the sanitizer would reject the overlap, the chips make it
- * unrepresentable — with a one-line legend explaining the grey (visible on
- * mobile, where a hover tooltip isn't).
- */
-function WeightZoneCard({
-	zone,
-	currency,
-	index,
-	claimed,
-	onPatch,
-	onRemove,
-}: {
-	zone: ZoneDraft;
-	currency: string;
-	index: number;
-	/** state → owning zone index across the whole draft. */
-	claimed: Map<string, number>;
-	onPatch: (patch: Partial<ZoneDraft>) => void;
-	onRemove: () => void;
-}) {
-	const hasForeignClaims = MY_STATES.some((s) => {
-		const owner = claimed.get(s);
-		return owner !== undefined && owner !== index;
-	});
-	return (
-		<div className="flex flex-col gap-3.5 rounded-xl border border-border bg-card p-3.5">
-			<div className="flex items-center gap-2">
-				<Input
-					value={zone.name}
-					onChange={(e) => onPatch({ name: e.target.value })}
-					placeholder={index === 0 ? "West Malaysia" : "East Malaysia"}
-					aria-label={`Zone ${index + 1} name`}
-					variant="field"
-					className="flex-1 font-medium"
-				/>
-				<button
-					type="button"
-					onClick={onRemove}
-					aria-label={`Remove zone ${index + 1}`}
-					className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted"
-				>
-					<Trash2 className="size-4" />
-				</button>
-			</div>
-
-			<div className="flex flex-col gap-1.5">
-				<p className="text-xs font-medium text-muted-foreground">
-					States in this zone
-				</p>
-				<div className="flex flex-wrap gap-1.5">
-					{MY_STATES.map((state) => {
-						const owner = claimed.get(state);
-						const inThisZone = owner === index;
-						return (
-							<FilterChip
-								key={state}
-								tone="accent"
-								selected={inThisZone}
-								disabled={owner !== undefined && !inThisZone}
-								className="disabled:cursor-not-allowed disabled:opacity-40"
-								onClick={() =>
-									onPatch({
-										states: inThisZone
-											? zone.states.filter((s) => s !== state)
-											: [...zone.states, state],
-									})
-								}
-							>
-								{state}
-							</FilterChip>
-						);
-					})}
-				</div>
-				{hasForeignClaims ? (
-					<p className="text-xs text-muted-foreground">
-						Greyed-out states are already in another zone.
-					</p>
-				) : null}
-			</div>
-
-			<div className="flex flex-col gap-2">
-				<p className="text-xs font-medium text-muted-foreground">
-					Weight bands
-				</p>
-				{zone.bands.map((band, i) => (
-					<div
-						// biome-ignore lint/suspicious/noArrayIndexKey: rows are positional drafts with no stable identity
-						key={i}
-						className="flex items-center gap-2"
-					>
-						<span className="text-xs text-muted-foreground">Up to</span>
-						<Input
-							type="number"
-							inputMode="decimal"
-							min={0.1}
-							step={0.1}
-							value={band.maxKg}
-							onChange={(e) =>
-								onPatch({
-									bands: zone.bands.map((b, j) =>
-										j === i ? { ...b, maxKg: e.target.value } : b,
-									),
-								})
-							}
-							variant="field"
-							className="w-20"
-							aria-label={`Zone ${index + 1} band ${i + 1} weight in kg`}
-						/>
-						<span className="text-xs text-muted-foreground">kg →</span>
-						<div className="relative">
-							<MoneyPrefix currency={currency} />
-							<input
-								type="text"
-								inputMode="decimal"
-								value={band.fee}
-								onChange={(e) =>
-									onPatch({
-										bands: zone.bands.map((b, j) =>
-											j === i ? { ...b, fee: e.target.value } : b,
-										),
-									})
-								}
-								onBlur={() =>
-									onPatch({
-										bands: zone.bands.map((b, j) =>
-											j === i ? { ...b, fee: normalizePriceInput(b.fee) } : b,
-										),
-									})
-								}
-								placeholder="8.00"
-								aria-label={`Zone ${index + 1} band ${i + 1} fee`}
-								className="h-11 w-28 rounded-lg border border-input bg-background pl-11 pr-3 text-sm"
-							/>
-						</div>
-						{zone.bands.length > 1 ? (
-							<button
-								type="button"
-								onClick={() =>
-									onPatch({ bands: zone.bands.filter((_, j) => j !== i) })
-								}
-								aria-label={`Remove zone ${index + 1} band ${i + 1}`}
-								className="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-muted"
-							>
-								<Trash2 className="size-4" />
-							</button>
-						) : null}
-					</div>
-				))}
-				{zone.bands.length < DELIVERY_BANDS_MAX ? (
-					<Button
-						type="button"
-						variant="outline"
-						size="sm"
-						className="h-10 gap-1.5 self-start"
-						onClick={() =>
-							onPatch({ bands: [...zone.bands, { maxKg: "", fee: "" }] })
-						}
-					>
-						<Plus className="size-4" />
-						Add band
-					</Button>
-				) : null}
-				<p className="text-xs leading-relaxed text-muted-foreground">
-					An order at exactly a band&apos;s weight is inside it. Heavier than
-					your last band follows the rule below. A band fee of{" "}
-					{formatDraftPrice(0, currency)} means free up to that weight.
-				</p>
-			</div>
-
-			<div className="flex flex-col gap-1.5">
-				<label
-					htmlFor={`zone-${index}-free-above`}
-					className="text-xs font-medium text-muted-foreground"
-				>
-					Free delivery for orders above (optional)
-				</label>
-				<div className="relative self-start">
-					<MoneyPrefix currency={currency} />
-					<input
-						id={`zone-${index}-free-above`}
-						type="text"
-						inputMode="decimal"
-						value={zone.freeAbove}
-						onChange={(e) => onPatch({ freeAbove: e.target.value })}
-						onBlur={() =>
-							onPatch({ freeAbove: normalizePriceInput(zone.freeAbove) })
-						}
-						placeholder="150.00"
-						className="h-11 w-40 rounded-lg border border-input bg-background pl-11 pr-3 text-sm"
-					/>
-				</div>
-				<p className="text-xs leading-relaxed text-muted-foreground">
-					Orders to this zone at or above this amount ship free — whatever they
-					weigh. The marketplace move: fund it from the commission you&apos;re
-					not paying.
-				</p>
-			</div>
 		</div>
 	);
 }
@@ -2330,14 +1173,7 @@ function joinDayNames(indexes: number[]): string {
  * above the notice window. Default (unset) = open 24/7; the server normalizes
  * an all-24h week back to unset and rejects an all-closed one.
  */
-function OpeningHoursCard({
-	initial,
-	highlight,
-}: {
-	initial: OpeningHours | undefined;
-	/** Ring from a What's-new deep link (`?spot=opening_hours`). */
-	highlight?: FixHighlight;
-}) {
+function OpeningHoursCard({ initial }: { initial: OpeningHours | undefined }) {
 	const updateSettings = useUpdateSettings();
 	const [editing, setEditing] = useState(false);
 	const [draft, setDraft] = useState<DayDraft[]>(() => draftFromHours(initial));
@@ -2497,11 +1333,11 @@ function OpeningHoursCard({
 	);
 
 	return (
-		<Card id={SPOTLIGHT_ANCHOR.opening_hours.anchor} highlight={highlight}>
-			<SectionHeading
-				title="Opening hours"
-				description="When your store operates. Buyers can browse and place orders any time — but the delivery or pickup date and time they pick at checkout must fall inside these hours, and closed days can't be picked at all. Counter sales aren't affected."
-			/>
+		<div className="flex flex-col gap-4">
+			<p className="text-xs text-muted-foreground">
+				Buyers can order any time, but only pick a delivery or pickup slot
+				inside these hours. Counter sales aren&apos;t affected.
+			</p>
 			{!editing ? (
 				<>
 					{configured ? (
@@ -2800,7 +1636,7 @@ function OpeningHoursCard({
 					</div>
 				</>
 			)}
-		</Card>
+		</div>
 	);
 }
 
@@ -2840,11 +1676,12 @@ function MinNoticeCard({ initial }: { initial: number | undefined }) {
 	}
 
 	return (
-		<Card>
-			<SectionHeading
-				title="Order date notice"
-				description="How much notice you need before a buyer's chosen delivery or pickup date. Buyers can't pick a date sooner than this. Set 0 to take same-day orders — if an item needs hours rather than days, give it a prep time on the product instead."
-			/>
+		<div className="flex flex-col gap-4">
+			<p className="text-xs text-muted-foreground">
+				Buyers can&apos;t pick a delivery or pickup date sooner than this — 0
+				takes same-day orders. An item that needs hours, not days, takes a prep
+				time on the product instead.
+			</p>
 			<div className="flex items-end gap-3">
 				<div className="flex flex-col gap-1.5">
 					<label
@@ -2881,17 +1718,10 @@ function MinNoticeCard({ initial }: { initial: number | undefined }) {
 					Enter a whole number between 0 and {MAX_NOTICE_DAYS}.
 				</p>
 			) : null}
-		</Card>
+		</div>
 	);
 }
 
-/**
- * Store-wide minimum order value (86ey9unyx) — the item subtotal a storefront
- * order must reach before checkout. Sits with the other order rules (next to
- * the date-notice card). Counter checkout is exempt; orders with a custom /
- * price-on-quote line are exempt (their value is settled by the seller's
- * quote). Blank or 0 = no minimum.
- */
 /**
  * The store's own physical address — where parcels are sent FROM.
  *
@@ -2903,66 +1733,16 @@ function MinNoticeCard({ initial }: { initial: number | undefined }) {
  * modes are Malaysia-only and don't render there. An SG seller shipping
  * parcels therefore had no way to put a return address on a label (86eyqgujv).
  *
- * One editor, one save. The pricing modes read the stored value and link back
- * here rather than carrying a second copy of the picker.
+ * One editor, one save — a row in the Delivery card. The delivery-pricing
+ * page reads the stored value and links back here rather than carrying a
+ * second copy of the picker.
  */
-/**
- * How a pricing mode refers to the store's business address without owning a
- * second copy of the editor. Either states what the stored address is used for
- * here, or — when there isn't one — says so and takes the seller to the card
- * that sets it, rather than leaving them to find it (86eyqgujv).
- */
-function BusinessAddressReference({
-	address,
-	present,
-	missing,
-}: {
-	address: BusinessAddress | undefined;
-	/** Verb phrase for the set case, e.g. "Riders collect from". */
-	present: string;
-	/** Full sentence for the unset case, naming why it's needed here. */
-	missing: string;
-}) {
-	if (address) {
-		return (
-			<p className="flex items-start gap-1.5 text-xs text-muted-foreground">
-				<MapPin
-					className="mt-0.5 size-3 shrink-0 text-accent"
-					aria-hidden="true"
-				/>
-				<span>
-					{present}{" "}
-					<span className="font-medium text-foreground">{address.label}</span> —
-					change it in <b>Business address</b> above.
-				</span>
-			</p>
-		);
-	}
-	return (
-		<div className="flex flex-col gap-2 rounded-lg border border-amber-300 bg-amber-500/10 px-3 py-2.5 dark:border-amber-800">
-			<p className="text-xs leading-relaxed text-amber-800 dark:text-amber-300">
-				{missing}
-			</p>
-			<Button
-				type="button"
-				variant="outline"
-				onClick={() => scrollToAnchor(SETTINGS_ANCHOR.business_address)}
-				className="h-10 sm:w-auto sm:self-start sm:px-4"
-			>
-				Go to Business address
-			</Button>
-		</div>
-	);
-}
-
 function BusinessAddressCard({
 	country,
 	businessAddress,
-	highlight,
 }: {
 	country: Country;
 	businessAddress: BusinessAddress | undefined;
-	highlight?: FixHighlight;
 }) {
 	const updateSettings = useUpdateSettings();
 	const [picked, setPicked] = useState<GoogleSelectedAddress | null>(null);
@@ -3028,11 +1808,19 @@ function BusinessAddressCard({
 	}
 
 	return (
-		<Card id={SETTINGS_ANCHOR.business_address} highlight={highlight}>
-			<SectionHeading
-				title="Business address"
-				description="Where you send parcels from. It prints as the return address on despatch labels, riders are sent here to collect, and distance pricing measures from it. Buyers never see it."
-			/>
+		<div className="flex flex-col gap-4">
+			<p className="text-xs text-muted-foreground">
+				Where you send parcels from — buyers never see it.
+			</p>
+			<InfoDisclosure summary="Where it's used">
+				<HelperBullets
+					items={[
+						"The return address on your despatch labels",
+						"Where riders are sent to collect",
+						"Where distance pricing measures from",
+					]}
+				/>
+			</InfoDisclosure>
 			<div className="flex flex-col gap-1.5">
 				<GoogleAddressAutocomplete
 					country={country}
@@ -3111,10 +1899,17 @@ function BusinessAddressCard({
 			>
 				Save address
 			</Button>
-		</Card>
+		</div>
 	);
 }
 
+/**
+ * Store-wide minimum order value (86ey9unyx) — the item subtotal a storefront
+ * order must reach before checkout. Sits with the other order rules (next to
+ * the date-notice card). Counter checkout is exempt; orders with a custom /
+ * price-on-quote line are exempt (their value is settled by the seller's
+ * quote). Blank or 0 = no minimum.
+ */
 function MinOrderValueCard({
 	initial,
 	currency,
@@ -3153,11 +1948,19 @@ function MinOrderValueCard({
 	}
 
 	return (
-		<Card>
-			<SectionHeading
-				title="Minimum order value"
-				description="Buyers must reach this subtotal (before delivery or pickup fees) to check out — the storefront shows them exactly how much more to add. Counter checkout and custom price-on-quote orders are never blocked. Leave blank for no minimum."
-			/>
+		<div className="flex flex-col gap-4">
+			<p className="text-xs text-muted-foreground">
+				The subtotal a buyer must reach to check out, before delivery or pickup
+				fees. Leave blank for none.
+			</p>
+			<InfoDisclosure summary="How the minimum works">
+				<HelperBullets
+					items={[
+						"The storefront shows buyers exactly how much more to add",
+						"Counter checkout and custom price-on-quote orders are never blocked",
+					]}
+				/>
+			</InfoDisclosure>
 			<div className="flex items-end gap-3">
 				<div className="flex flex-col gap-1.5">
 					<label
@@ -3195,7 +1998,7 @@ function MinOrderValueCard({
 					leave blank for no minimum.
 				</p>
 			) : null}
-		</Card>
+		</div>
 	);
 }
 

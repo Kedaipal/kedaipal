@@ -400,6 +400,15 @@ function useFeatures(): Feature[] {
 			enterprise: true,
 		},
 		{
+			// Shipped (z8r3fdcw72) — PLAN_FEATURES.promo. A sale price with an
+			// end date, and the flash layer (unit cap, max per order, payment
+			// hold) on top of it.
+			label: m.pricingpage_feat_promo(),
+			starter: false,
+			pro: true,
+			enterprise: true,
+		},
+		{
 			// Shipped (86extzdr8) — PLAN_FEATURES.radiusDelivery.
 			label: m.pricingpage_feat_radius(),
 			starter: false,
@@ -972,11 +981,11 @@ function PricingPage() {
 			</section>
 
 			{/* Social-proof band — replaced the Founding 10 banner (86eye4wtb: the
-			    program filled; the landing now leads with the 10+ paying base and
-			    this page tells the same story). The demo link keeps the banner's
-			    mid-page conversation moment: a text link, not a pill — the tier
-			    cards and the closing CTA already carry this page's buttons
-			    (86eye3p6z §C). */}
+			    program filled). The hand-typed "10+" count came off with the
+			    landing's (15 Oct 2026); the band now leads with the proof heading
+			    the landing uses. The demo link keeps the banner's mid-page
+			    conversation moment: a text link, not a pill — the tier cards and
+			    the closing CTA already carry this page's buttons (86eye3p6z §C). */}
 			<section>
 				<div className="mx-auto max-w-4xl px-5 py-14 md:px-8">
 					<FadeIn>
@@ -985,15 +994,15 @@ function PricingPage() {
 								aria-hidden
 								className="pointer-events-none absolute -right-16 -top-16 size-[220px] rounded-full border border-white/[0.06]"
 							/>
-							<div className="flex size-16 shrink-0 items-center justify-center rounded-2xl bg-accent/15 font-heading text-2xl font-extrabold text-accent">
-								{m.proof_customer_count_number()}
+							<div className="flex size-16 shrink-0 items-center justify-center rounded-2xl bg-accent/15 text-accent">
+								<Sparkles aria-hidden className="size-7" />
 							</div>
 							<div className="relative flex-1">
 								<p className="text-xs font-semibold uppercase tracking-widest text-accent">
 									{m.proof_label()}
 								</p>
 								<h2 className="mt-1 text-xl font-bold md:text-2xl">
-									{m.proof_customer_count_label()}
+									{m.proof_heading()}
 								</h2>
 								<p className="mt-2 text-sm leading-relaxed text-cta-mesh-foreground/65">
 									{m.proof_sub()}

@@ -11,8 +11,10 @@ import {
 	FileSpreadsheet,
 	FolderOpen,
 	Search,
+	Tag,
 	Upload,
 	X,
+	Zap,
 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -20,13 +22,13 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import {
 	productCapBlockReason,
+	productCapExemption,
 	productCapState,
 } from "../../convex/lib/productCap";
 import { formatEventBadge, isEventPassed } from "../../convex/lib/productEvent";
 import { NeedsAccessNote } from "../components/app/owner-only-note";
 import { ProBadge } from "../components/app/pro-gate";
 import { ViewOnlyNote } from "../components/app/view-only-note";
-import { CreditLockNote } from "../components/credits/credit-lock-note";
 import { PageHeader } from "../components/dashboard/page-header";
 import {
 	StockAdjustDialog,
@@ -66,7 +68,14 @@ import { hasFeature } from "../lib/subscription";
 import { cn } from "../lib/utils";
 import { hasStartingPrice, variantLabel } from "../lib/variant";
 
-type StatusFilter = "all" | "active" | "archived";
+/**
+ * The list's one narrowing control. "Out of stock" joined it rather than
+ * arriving as a separate filter (z8r3fdrgzj): a seller narrowing the list is
+ * doing ONE thing, and a second control beside this one would be two ways to
+ * ask the same kind of question. It is also what Home's "N products are out of
+ * stock" row opens, so the row's count and this list are the same set.
+ */
+type StatusFilter = "all" | "active" | "archived" | "out_of_stock";
 
 type ProductListItem = FunctionReturnType<typeof api.products.listAll>[number];
 
@@ -79,8 +88,10 @@ export const Route = createFileRoute("/app/products/")({
 	// settings key pasted here) is dropped rather than forwarded.
 	validateSearch: (
 		search: Record<string, unknown>,
-	): { spot?: ProductSpotlightKey } =>
-		isProductSpotlightKey(search.spot) ? { spot: search.spot } : {},
+	): { spot?: ProductSpotlightKey; stock?: "out" } => ({
+		...(isProductSpotlightKey(search.spot) ? { spot: search.spot } : {}),
+		...(search.stock === "out" ? { stock: "out" as const } : {}),
+	}),
 	component: ProductsRoute,
 });
 
@@ -216,7 +227,7 @@ function CategoriesLink({
 
 function ProductsRoute() {
 	const retailer = useDashboardRetailer();
-	const { spot } = Route.useSearch();
+	const { spot, stock: stockParam } = Route.useSearch();
 	const navigate = useNavigate();
 	// Client mirror of the `categories` plan gate (server is the lock) — only
 	// used to badge the Categories link; admin act-as sees through it.
@@ -233,7 +244,12 @@ function ProductsRoute() {
 	).data;
 	const [rawQuery, setRawQuery] = useState("");
 	const [query, setQuery] = useState("");
-	const [status, setStatus] = useState<StatusFilter>("all");
+	// A link can open the list already narrowed; the chip row then SHOWS which
+	// position is on, so the seller can see why the list is short and clear it
+	// in one tap rather than wondering where their products went.
+	const [status, setStatus] = useState<StatusFilter>(
+		stockParam === "out" ? "out_of_stock" : "all",
+	);
 	const [exporting, setExporting] = useState<"csv" | "xlsx" | null>(null);
 
 	useEffect(() => {
@@ -241,27 +257,36 @@ function ProductsRoute() {
 		return () => clearTimeout(t);
 	}, [rawQuery]);
 
-	const counts = useMemo(() => {
-		if (!products) return { all: 0, active: 0, archived: 0 };
+	const counts = useMemo((): Record<StatusFilter, number> => {
+		if (!products) return { all: 0, active: 0, archived: 0, out_of_stock: 0 };
 		let active = 0;
-		for (const p of products) if (p.active) active++;
+		let outOfStock = 0;
+		for (const p of products) {
+			if (p.active) active++;
+			if (p.active && !p.inStock) outOfStock++;
+		}
 		return {
 			all: products.length,
 			active,
 			archived: products.length - active,
+			out_of_stock: outOfStock,
 		};
 	}, [products]);
 
 	// Product cap. `counts.all` is the right input by construction: `listAll`
 	// returns every row, active AND archived, which is exactly what the cap
-	// counts. Client mirror of the server gate (server is the lock) — admin
-	// act-as is exempt so a white-glove catalog can be stocked past the ceiling.
-	const cap = productCapState(counts.all, retailer?.actingAsAdmin === true);
+	// counts. Client mirror of the server gate (server is the lock) — exempt for
+	// admin act-as, so a white-glove catalog can be stocked past the ceiling,
+	// and for a FULL-ACCESS store (admin-owned or sponsored), which has no plan
+	// to cap. Both inputs ride on the retailer payload and the OR lives in
+	// `productCapExemption`, so this cannot disagree with what the save does.
+	const capExempt = productCapExemption({
+		actingAsAdmin: retailer?.actingAsAdmin === true,
+		fullAccess: retailer?.fullAccess === true,
+	});
+	const cap = productCapState(counts.all, capExempt);
 	// null while there's room — one source for the disabled button and its reason.
-	const capBlockReason = productCapBlockReason(
-		counts.all,
-		retailer?.actingAsAdmin === true,
-	);
+	const capBlockReason = productCapBlockReason(counts.all, capExempt);
 	// Team members (86exr91r4): a read-only grant must not be handed
 	// create/reorder/export affordances that the server will refuse.
 	const productsPerm = usePermission("products");
@@ -270,7 +295,7 @@ function ProductsRoute() {
 	// store lapsed (view-only), it ran out of credits (Credits T3), or this
 	// teammate holds view on products. One author for each sentence, shared
 	// with every other gated surface, so the words can't drift.
-	const productsLock = useAreaLock("products", { credits: true });
+	const productsLock = useAreaLock("products");
 	const writeBlockReason = productsLock.readOnly ? productsLock.reason : null;
 	// How many rows the spotlight key applies to — decides whether the banner
 	// says "open one below" or "you don't have one yet". Counted over every
@@ -298,6 +323,9 @@ function ProductsRoute() {
 		return products.filter((p) => {
 			if (status === "active" && !p.active) return false;
 			if (status === "archived" && p.active) return false;
+			// Identical to the card's own `outOfStock`, so the chip and the word on
+			// the card can never disagree about what sold out means.
+			if (status === "out_of_stock" && !(p.active && !p.inStock)) return false;
 			if (q && !p.name.toLowerCase().includes(q)) return false;
 			return true;
 		});
@@ -321,6 +349,7 @@ function ProductsRoute() {
 		{ key: "all", label: "All" },
 		{ key: "active", label: "Active" },
 		{ key: "archived", label: "Archived" },
+		{ key: "out_of_stock", label: "Out of stock" },
 	];
 
 	const clearFilters = () => {
@@ -460,7 +489,6 @@ function ProductsRoute() {
 			    greys out: a lapsed store, one out of credits (Credits T3), or a
 			    teammate with view on products. Each renders nothing otherwise. */}
 			<ViewOnlyNote />
-			<CreditLockNote scope="products" />
 			<NeedsAccessNote area="products" />
 
 			{spot && products !== undefined ? (
@@ -696,7 +724,22 @@ function ProductCard({
 						) : (
 							<>
 								{showFrom ? "From " : ""}
-								{formatPrice(p.priceFrom, p.currency)}
+								{/* The seller's own catalogue must show what buyers are
+								    actually being charged. It printed the LIST price with
+								    no hint a sale was running, so a seller scanning the
+								    list could not tell which products were discounted or
+								    at what — the one place they'd look to check
+								    (found by hand-testing). */}
+								{p.promoPriceFrom !== undefined ? (
+									<>
+										{formatPrice(p.promoPriceFrom, p.currency)}{" "}
+										<span className="font-normal text-muted-foreground line-through">
+											{formatPrice(p.priceFrom, p.currency)}
+										</span>
+									</>
+								) : (
+									formatPrice(p.priceFrom, p.currency)
+								)}
 							</>
 						)}
 					</span>
@@ -739,6 +782,29 @@ function ProductCard({
 				</span>
 			</div>
 			<div className="flex shrink-0 flex-col items-end gap-1">
+				{/* FIRST in this column, above the standing rules below it: a sale
+				    is the only thing here with a clock on it. Same two treatments
+				    the buyer's card uses — dark + bolt for a timed flash, mint +
+				    tag for a plain discount — so the seller recognises what the
+				    shopper is seeing instead of learning a second vocabulary. */}
+				{p.active && p.promoState !== undefined ? (
+					<span
+						className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+							p.promoState.endsAt !== undefined
+								? "bg-foreground text-background"
+								: "bg-accent/15 text-accent-emphasis"
+						}`}
+					>
+						{p.promoState.endsAt !== undefined ? (
+							<Zap className="size-3" aria-hidden />
+						) : (
+							<Tag className="size-3" aria-hidden />
+						)}
+						{p.promoState.phase === "scheduled"
+							? "Scheduled"
+							: p.promoState.label}
+					</span>
+				) : null}
 				{p.active && (p.minQuantity ?? 0) >= 2 ? (
 					// Minimum-order-quantity rule — flagged on the list so the seller
 					// can see at a glance which products carry it. See minOrderRules.

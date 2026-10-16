@@ -58,6 +58,14 @@ const UNLOCKED: Record<string, string> = {
 	"orders.updateDeliveryAddress": "buyer: edits their own delivery address",
 	"orders.updatePickupLocation": "buyer: changes where they collect",
 	"orders.claimPayment": "buyer: 'I've paid'",
+	// A voucher CHECK is a buyer-side read dressed as a mutation (it spends
+	// rate-limiter budget and nothing else — see convex/vouchers.ts). Buyer
+	// surfaces never vary with the seller's billing state, and a buyer holding
+	// a code must learn what it is worth even if the store has lapsed; the
+	// ORDER is what a lapsed store can't take, and `orders.create` is where
+	// that is decided. Issuing and voiding ARE guarded.
+	"vouchers.checkCode":
+		"buyer: asks what a code they were given is worth — no write, no order",
 	"orders.generateOrderProofUploadUrl": "buyer: uploads their payment proof",
 	"orders.generateCustomImageUploadUrl": "buyer: uploads a reference image",
 	"orders.approveMockup": "buyer: approves the seller's mockup",
@@ -132,6 +140,11 @@ const UNLOCKED: Record<string, string> = {
 		"consumes a seat already promised before the lapse; the member lands in the same view-only store the owner sees, and every write they then try hits the lock",
 	"team.acceptPendingInvite":
 		"same as acceptInvite — the onboarding-banner variant of the same accept",
+
+	// 5. Winding down (Zaki, 15 Oct 2026). A lapsed store still takes orders
+	// by design, so the switch that STOPS them must stay reachable.
+	"storeAvailability.setAcceptingOrders":
+		"winding down: a lapsed store keeps taking orders, and pausing is the seller's only way to stop that; resuming only returns to that default. Store settings grant still required",
 };
 
 const CONVEX = __dirname;

@@ -14,6 +14,17 @@ function setup() {
 	return t;
 }
 
+/**
+ * A stored screenshot for a payment claim. Proof is mandatory on a first claim
+ * (z8r3fdnpxf), so a test about something else — an email, a WhatsApp alert, a
+ * lock — still has to attach one for the claim to land at all.
+ */
+async function storeProof(t: ReturnType<typeof setup>): Promise<string> {
+	return await t.run((ctx) =>
+		ctx.storage.store(new Blob(["png"], { type: "image/png" })),
+	);
+}
+
 /** Resolve an order's buyer tracking token from its shortId (see orders.test.ts). */
 async function tk(
 	t: ReturnType<typeof setup>,
@@ -288,6 +299,7 @@ describe("email payment claimed alert", () => {
 		await t.mutation(api.orders.claimPayment, {
 			token: await tk(t, shortId),
 			reference: "TXN-9988",
+			proofStorageId: await storeProof(t),
 		});
 
 		await t.action(internal.email.notifyPaymentClaimed, { orderId });
@@ -320,7 +332,10 @@ describe("email payment claimed alert", () => {
 			retailerId,
 			productId,
 		);
-		await t.mutation(api.orders.claimPayment, { token: await tk(t, shortId) });
+		await t.mutation(api.orders.claimPayment, {
+			token: await tk(t, shortId),
+			proofStorageId: await storeProof(t),
+		});
 
 		await t.action(internal.email.notifyPaymentClaimed, { orderId });
 
@@ -345,7 +360,10 @@ describe("email payment claimed alert", () => {
 			retailerId,
 			productId,
 		);
-		await t.mutation(api.orders.claimPayment, { token: await tk(t, shortId) });
+		await t.mutation(api.orders.claimPayment, {
+			token: await tk(t, shortId),
+			proofStorageId: await storeProof(t),
+		});
 
 		await t.action(internal.email.notifyPaymentClaimed, { orderId });
 
@@ -368,6 +386,7 @@ describe("email payment claimed alert", () => {
 		await t.mutation(api.orders.claimPayment, {
 			token: await tk(t, shortId),
 			reference: "TXN-9988",
+			proofStorageId: await storeProof(t),
 		});
 
 		await t.action(internal.email.notifyPaymentClaimed, { orderId });

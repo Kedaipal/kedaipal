@@ -29,7 +29,7 @@ Reference doc for the retailer-facing email notification system. **Already imple
 | `convex/email.test.ts` | 5 tests — newOrder, orderConfirmed, skip-when-empty, MS locale, swallowed failure |
 | `convex/lib/slug.ts` | Added `assertValidEmail` validator |
 | `src/lib/schemas.ts` | Added `settingsNotifyEmailFormSchema` |
-| `src/routes/app.settings.tsx` | New `NotifyEmailForm` in the **Store** tab |
+| `src/components/settings/order-alerts-card.tsx` | The *Email* row of the Order alerts card (Store tab; was `NotifyEmailForm` until 86eye9xd4) — switching it off clears the address with Undo |
 
 ### Trigger points
 

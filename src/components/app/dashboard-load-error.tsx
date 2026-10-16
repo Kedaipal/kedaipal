@@ -62,8 +62,8 @@ export function DashboardLoadError({
 				}
 				detail={error.message}
 			>
-				The store you're acting as didn't load. Exit to the seller directory,
-				or reload to try again.
+				The store you're acting as didn't load. Exit to the seller directory, or
+				reload to try again.
 			</FullPageError>
 		);
 	}

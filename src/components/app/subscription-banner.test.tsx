@@ -83,11 +83,14 @@ function storeWith({
 	state.retailer = {
 		_id: "r_1",
 		actingAsAdmin,
-		creditLock: {
-			locked: false,
-			unlockRoute: route,
-			since: null,
+		// Credits T3.1: nothing waiting, so the "running low" banner is the one
+		// under test here. The waiting-orders banner has its own cases above.
+		creditGate: {
+			exempt: false,
+			fundedThrough: Number.POSITIVE_INFINITY,
+			creditsOwed: 0,
 			ordersWaiting: 0,
+			unlockRoute: route,
 		},
 	};
 }
@@ -190,9 +193,7 @@ describe("SubscriptionBanner — running low (the last 20% of the month)", () =>
 			/>,
 		);
 		expect(
-			screen.getByText(
-				/come off your first month's credits/,
-			),
+			screen.getByText(/come off your first month's credits/),
 		).toBeTruthy();
 		expect(screen.getByRole("link", { name: "See plans" })).toBeTruthy();
 		expect(screen.queryByRole("link", { name: "Top up credits" })).toBeNull();

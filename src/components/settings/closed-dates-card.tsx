@@ -43,9 +43,7 @@ import {
 	calendarDateFromMytEpoch,
 	mytEpochFromCalendarDate,
 } from "../../lib/booking-dates";
-import type { FixHighlight } from "../../lib/country-setup-copy";
 import { convexErrorMessage } from "../../lib/format";
-import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import { Button } from "../ui/button";
 import { Calendar } from "../ui/calendar";
 import { Input } from "../ui/input";
@@ -56,7 +54,7 @@ import {
 	SheetHeader,
 	SheetTitle,
 } from "../ui/sheet";
-import { Card, SectionHeading } from "./settings-primitives";
+import { HelperBullets, InfoDisclosure } from "./settings-primitives";
 
 function dayCount(days: number): string {
 	return `${days} day${days === 1 ? "" : "s"}`;
@@ -84,16 +82,12 @@ export function ClosedDatesCard({
 	retailerId,
 	closedDates,
 	hasBookingListings,
-	highlight,
 }: {
 	retailerId: Id<"retailers">;
 	closedDates: ClosedDateRange[] | undefined;
 	/** The store sells booking listings — the card then says what a closure
 	 * does to them. */
 	hasBookingListings: boolean;
-	/** Ring from a deep link (`?spot=closed_dates`) — the booking calendar's
-	 * "Manage closed dates" and a What's-new note both land here. */
-	highlight?: FixHighlight;
 }) {
 	const add = useMutation(api.closedDates.add);
 	const remove = useMutation(api.closedDates.remove);
@@ -134,15 +128,21 @@ export function ClosedDatesCard({
 	}
 
 	return (
-		<Card id={SPOTLIGHT_ANCHOR.closed_dates.anchor} highlight={highlight}>
-			<div className="flex items-start justify-between gap-4">
-				<SectionHeading
-					title="Closed dates"
-					description={`Days you're shut on top of your weekly hours — Raya, a balik-kampung week, a renovation. Buyers can't pick them for delivery or pickup, and your storefront shows the dates with your reason.${
-						hasBookingListings ? ` For bookings, ${BOOKINGS_CLAUSE}.` : ""
-					}`}
+		<div className="flex flex-col gap-4">
+			<p className="text-xs text-muted-foreground">
+				Days you&apos;re shut on top of your weekly hours — Raya, a
+				balik-kampung week, a renovation.
+			</p>
+			<InfoDisclosure summary="What a closed date does">
+				<HelperBullets
+					items={[
+						"Buyers can't pick it for delivery or pickup",
+						"Your storefront shows the dates with your reason",
+						"Orders already placed stay as they are",
+						...(hasBookingListings ? [`For bookings, ${BOOKINGS_CLAUSE}`] : []),
+					]}
 				/>
-			</div>
+			</InfoDisclosure>
 
 			{closures.length === 0 ? (
 				<div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border px-4 py-6 text-center">
@@ -221,7 +221,7 @@ export function ClosedDatesCard({
 				existing={closures}
 				hasBookingListings={hasBookingListings}
 			/>
-		</Card>
+		</div>
 	);
 }
 

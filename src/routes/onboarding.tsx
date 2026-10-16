@@ -111,8 +111,9 @@ function OnboardingForm() {
 	// waiting for this login? Read here, beside the "do I already have a store?"
 	// question, because the answer decides WHICH SCREEN this is — not a banner on
 	// top of a wizard the vendor must not use.
-	const claimable = useQuery(convexQuery(api.retailers.myClaimableStore, {}))
-		.data;
+	const claimable = useQuery(
+		convexQuery(api.retailers.myClaimableStore, {}),
+	).data;
 	const createRetailer = useMutation(api.retailers.createRetailer);
 	// Assisted = an admin-generated prefill link. Seed the fields, surface the WA
 	// number for review, and tell the client what's going on.
@@ -197,10 +198,7 @@ function OnboardingForm() {
 	// A dead end dressed as a choice is worse than no choice (CLAUDE.md).
 	if (claimable.state === "claimable") {
 		return (
-			<ClaimStoreScreen
-				storeName={claimable.storeName}
-				slug={claimable.slug}
-			/>
+			<ClaimStoreScreen storeName={claimable.storeName} slug={claimable.slug} />
 		);
 	}
 

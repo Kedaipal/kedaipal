@@ -136,6 +136,31 @@ export const SPOTLIGHT_ANCHOR = {
 		tab: "fulfilment",
 		anchor: "settings-pickup",
 	},
+	// The Event venues card (z8r3fdm32x), directly after Pickup and NOT inside
+	// it — a venue no longer masquerades as a deactivated pickup point, so it
+	// has a card of its own, and the v2026.10.2 note lands on it rather than
+	// on the Pickup card above. It renders on a plan with events or for a store
+	// that already has a venue; anywhere else the link opens Fulfilment with
+	// nothing to ring, and the note names the plan.
+	event_venues: {
+		page: "settings",
+		tab: "fulfilment",
+		anchor: "settings-event-venues",
+	},
+	// The store on/off switch (z8r3fdudf7) — FIRST on the Store tab, full
+	// width above the columns: whether the store takes orders at all.
+	store_status: {
+		page: "settings",
+		tab: "store",
+		anchor: "settings-store-status",
+	},
+	// "How buyers pay" (86eye9xd4, 8A) — the top of the Payments tab, where
+	// HitPay is switched on as the one way buyers pay, or off again.
+	how_buyers_pay: {
+		page: "settings",
+		tab: "payments",
+		anchor: "settings-how-buyers-pay",
+	},
 	// The Store listing card (z8r3fdkmyp), right under the store description the
 	// public directory builds its card from — where the area line is typed and
 	// where a seller takes the shop off /stores.
@@ -152,6 +177,9 @@ export const SPOTLIGHT_ANCHOR = {
 	// and the pickup note live there, beside the minimum quantity and notice
 	// rules they compose with.
 	prep_time: { page: "product", anchor: "product-order-rules" },
+	// The Promotion card (z8r3fdcw72), directly under the price on every kind
+	// of product — the sale price, its window and the flash-sale extras.
+	promo: { page: "product", anchor: "product-promo" },
 } as const satisfies Record<string, SpotlightTarget>;
 
 export type SpotlightKey = keyof typeof SPOTLIGHT_ANCHOR;

@@ -248,16 +248,23 @@ test("tapping the mode you are already in does not wipe typed counts", () => {
 	expect(screen.getByRole("button", { name: /^Apply/ })).toBeTruthy();
 
 	fireEvent.click(screen.getByRole("button", { name: "Set exact counts" }));
-	expect((screen.getByLabelText("Exact count for Original") as HTMLInputElement).value).toBe("17");
+	expect(
+		(screen.getByLabelText("Exact count for Original") as HTMLInputElement)
+			.value,
+	).toBe("17");
 });
 
 test("the mode toggle reports which mode is active", () => {
 	sheet(LINES(20, 8));
 	expect(
-		screen.getByRole("button", { name: "Adjust by" }).getAttribute("aria-pressed"),
+		screen
+			.getByRole("button", { name: "Adjust by" })
+			.getAttribute("aria-pressed"),
 	).toBe("true");
 	expect(
-		screen.getByRole("button", { name: "Set exact counts" }).getAttribute("aria-pressed"),
+		screen
+			.getByRole("button", { name: "Set exact counts" })
+			.getAttribute("aria-pressed"),
 	).toBe("false");
 });
 

@@ -14,7 +14,7 @@
  * the store's country (SG-lite, 86eyph341). Malaysia's copy is unchanged.
  */
 
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, FlaskConical } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import type { Country } from "../../../convex/lib/country";
@@ -24,9 +24,15 @@ import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 import { Input } from "../ui/input";
+import {
+	Glance,
+	SectionLabel,
+	SetupChecklist,
+	SetupStep,
+} from "./settings-primitives";
 
 /** Secret-free connection summary — mirrors retailers.HitpaySummary. */
-type HitpaySummary = {
+export type HitpaySummary = {
 	enabled: boolean;
 	hasCredentials: boolean;
 	mode?: "sandbox" | "production";
@@ -47,6 +53,7 @@ export function OnlinePaymentsCard({
 	canUse,
 	country,
 	onSave,
+	onChooseHowBuyersPay,
 }: {
 	hitpay: HitpaySummary | undefined;
 	/** Client mirror of PLAN_FEATURES.onlinePayments (server is the lock). */
@@ -54,6 +61,9 @@ export function OnlinePaymentsCard({
 	/** Store country — picks the pitched rails + the eligibility/settlement copy. */
 	country: Country;
 	onSave: (patch: HitpayPatch) => Promise<unknown>;
+	/** Opens Payments → How buyers pay, where HitPay is switched on or off
+	 * (86eye9xd4, 8A). This card owns the account; that one owns the choice. */
+	onChooseHowBuyersPay: () => void;
 }) {
 	const copy = COUNTRY_COPY[country];
 	const [apiKey, setApiKey] = useState("");
@@ -96,168 +106,178 @@ export function OnlinePaymentsCard({
 					/>
 					<h2 className="font-heading text-lg font-bold">HitPay</h2>
 					{!canUse ? <ProBadge /> : null}
+					<span className="ml-auto flex shrink-0">
+						{!connected ? (
+							<Glance tone="grey">Not connected</Glance>
+						) : hitpay?.methodsCheckedAt && !hitpay.paymentMethods?.length ? (
+							<Glance tone="warn">Key rejected</Glance>
+						) : hitpay?.mode === "sandbox" ? (
+							<Glance tone="warn">Test mode</Glance>
+						) : hitpay?.enabled ? (
+							<Glance>In use</Glance>
+						) : (
+							<Glance tone="grey">Not in use</Glance>
+						)}
+					</span>
 				</div>
 				<p className="text-sm text-muted-foreground">
-					Let buyers pay online through your own HitPay account. Your bank &amp;
-					QR details above stay as the manual fallback.
+					Let buyers pay online through your own HitPay account. While it&apos;s
+					how buyers pay, your bank &amp; QR details are hidden from them and
+					every payment confirms itself.
 				</p>
 			</div>
 
 			{connected ? (
 				<>
-					{/* Connected status */}
-					<div className="flex flex-col gap-2 rounded-xl border border-input p-3">
-						<div className="flex flex-wrap items-center justify-between gap-2">
-							<span className="text-sm">
-								Connected — key ending{" "}
-								<span className="font-mono">…{hitpay?.apiKeyHint}</span>
-							</span>
-							<div className="flex items-center gap-2">
-								{hitpay?.mode === "sandbox" ? (
-									<span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
-										Test mode
+					<SectionLabel>Setup</SectionLabel>
+					<SetupChecklist>
+						<SetupStep
+							n={1}
+							state="done"
+							title={
+								<>
+									API key &amp; salt
+									{hitpay?.mode === "sandbox" ? (
+										<Glance tone="warn">Sandbox</Glance>
+									) : null}
+								</>
+							}
+							detail={
+								editingKeys ? (
+									"Paste the pair from HitPay → Settings → API Keys."
+								) : (
+									<>
+										Key ends{" "}
+										<span className="font-mono">…{hitpay?.apiKeyHint}</span> ·{" "}
+										<button
+											type="button"
+											onClick={() => setEditingKeys(true)}
+											className="-my-2 py-2 font-medium text-accent-emphasis hover:underline"
+										>
+											Replace
+										</button>
+									</>
+								)
+							}
+						>
+							{hitpay?.mode === "sandbox" && !editingKeys ? (
+								<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+									<FlaskConical
+										aria-hidden
+										className="mt-0.5 size-3.5 shrink-0"
+									/>
+									<span>
+										<span className="font-medium">No real money moves.</span>{" "}
+										This is a HitPay sandbox key, so payments are simulated.
+										Swap in your live key before telling buyers.
 									</span>
-								) : null}
-								<span
-									className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-										hitpay?.enabled
-											? "bg-emerald-100 text-emerald-800"
-											: "bg-muted text-muted-foreground"
-									}`}
-								>
-									{hitpay?.enabled ? "On" : "Paused"}
-								</span>
-							</div>
-						</div>
-						<p className="text-xs text-muted-foreground">
-							{hitpay?.enabled
-								? "Buyers see a Pay now button on their order page. Payments confirm the order automatically and you're notified on WhatsApp-side as usual."
-								: "Paused — buyers don't see Pay now right now. Your keys are kept, so resuming is one tap."}
-						</p>
+								</p>
+							) : null}
+							{editingKeys ? (
+								<div className="mt-1 flex flex-col gap-2">
+									<KeyInputs
+										apiKey={apiKey}
+										salt={salt}
+										disabled={false}
+										onApiKey={setApiKey}
+										onSalt={setSalt}
+									/>
+									<div className="flex flex-wrap items-center gap-2">
+										<Button
+											type="button"
+											onClick={() =>
+												save(
+													{
+														hitpay: {
+															enabled: hitpay?.enabled ?? false,
+															apiKey: apiKey.trim(),
+															salt: salt.trim(),
+														},
+													},
+													"HitPay keys updated",
+												)
+											}
+											isLoading={saving}
+											disabled={!typedBothKeys || saving}
+											className="h-11"
+										>
+											Save new keys
+										</Button>
+										<Button
+											type="button"
+											variant="outline"
+											className="h-11"
+											onClick={() => {
+												setEditingKeys(false);
+												setApiKey("");
+												setSalt("");
+											}}
+										>
+											Keep the stored keys
+										</Button>
+									</div>
+								</div>
+							) : null}
+						</SetupStep>
+
 						{/* The account's ACTUAL rails (probed truth) — never a promise.
 						    checkedAt-with-no-list = HitPay rejected the key. */}
-						{hitpay?.paymentMethods?.length ? (
-							<div className="flex flex-col gap-1.5">
-								<p className="text-xs font-medium text-muted-foreground">
-									Buyers can pay with
-								</p>
+						<SetupStep
+							n={2}
+							state={
+								hitpay?.paymentMethods?.length
+									? "done"
+									: hitpay?.methodsCheckedAt
+										? "action"
+										: "todo"
+							}
+							title="Payment methods"
+							detail={
+								hitpay?.paymentMethods?.length
+									? "Buyers can pay with these — turn them on or off in your HitPay dashboard and this list follows."
+									: hitpay?.methodsCheckedAt
+										? "HitPay rejected this API key — replace it above, or buyers' payments will fail."
+										: "Checking which payment methods your HitPay account has enabled…"
+							}
+						>
+							{hitpay?.paymentMethods?.length ? (
 								<MethodLogos codes={hitpay.paymentMethods} />
-								<p className="text-[11px] text-muted-foreground">
-									Turn methods on or off in your HitPay dashboard — this list
-									follows it.
-								</p>
-							</div>
-						) : hitpay?.methodsCheckedAt ? (
-							<p className="text-xs font-medium text-amber-700">
-								HitPay rejected this API key — double-check it (Replace keys
-								below), or buyers' payments will fail.
-							</p>
-						) : (
-							<p className="text-xs text-muted-foreground">
-								Checking which payment methods your HitPay account has enabled…
-							</p>
-						)}
-						{hitpay?.mode === "sandbox" ? (
-							<p className="text-xs text-amber-700">
-								This is a HitPay <strong>sandbox</strong> key — payments are
-								simulated, no real money moves. Swap in your live key before
-								telling buyers.
-							</p>
-						) : null}
-					</div>
+							) : null}
+						</SetupStep>
 
-					{editingKeys ? (
-						<KeyInputs
-							apiKey={apiKey}
-							salt={salt}
-							disabled={false}
-							onApiKey={setApiKey}
-							onSalt={setSalt}
-						/>
-					) : null}
+						{/* Whether buyers pay through HitPay is decided in ONE place —
+						    Payments → How buyers pay — so it's a pointer here, not a
+						    second switch (86eye9xd4). */}
+						<SetupStep
+							n={3}
+							state={hitpay?.enabled ? "done" : "todo"}
+							title="Buyers pay with HitPay"
+							detail={
+								hitpay?.enabled
+									? "In use — buyers pay with Pay now and the order confirms itself. Your bank & QR details are hidden from them."
+									: "Not in use — buyers pay by manual transfer. Switching is one tap under Payments."
+							}
+						>
+							<Button
+								type="button"
+								variant={hitpay?.enabled ? "outline" : "default"}
+								className="mt-1 h-11 self-start"
+								onClick={onChooseHowBuyersPay}
+							>
+								Choose how buyers pay
+							</Button>
+						</SetupStep>
+					</SetupChecklist>
 
 					<div className="flex flex-wrap items-center gap-2">
-						{editingKeys ? (
-							<>
-								<Button
-									type="button"
-									onClick={() =>
-										save(
-											{
-												hitpay: {
-													enabled: hitpay?.enabled ?? true,
-													apiKey: apiKey.trim(),
-													salt: salt.trim(),
-												},
-											},
-											"HitPay keys updated",
-										)
-									}
-									isLoading={saving}
-									disabled={!typedBothKeys || saving}
-									className="h-11"
-								>
-									Save new keys
-								</Button>
-								<Button
-									type="button"
-									variant="outline"
-									className="h-11"
-									onClick={() => {
-										setEditingKeys(false);
-										setApiKey("");
-										setSalt("");
-									}}
-								>
-									Keep the stored keys
-								</Button>
-							</>
-						) : (
-							<>
-								{/* Pausing is never gated; RESUMING is enabling, so a
-								    downgraded seller gets disabled-with-reason instead of a
-								    button that fails server-side (house style). */}
-								<Button
-									type="button"
-									variant={hitpay?.enabled ? "outline" : "default"}
-									className="h-11"
-									isLoading={saving}
-									disabled={!hitpay?.enabled && !canUse}
-									onClick={() =>
-										save(
-											{ hitpay: { enabled: !(hitpay?.enabled ?? false) } },
-											hitpay?.enabled
-												? "Online payments paused"
-												: "Online payments on — buyers now see Pay now",
-										)
-									}
-								>
-									{hitpay?.enabled ? "Pause" : "Resume"}
-								</Button>
-								<Button
-									type="button"
-									variant="outline"
-									className="h-11"
-									onClick={() => setEditingKeys(true)}
-								>
-									Replace keys
-								</Button>
-								<button
-									type="button"
-									onClick={() => setConfirmingDisconnect(true)}
-									className="ml-auto text-sm font-medium text-destructive hover:underline"
-								>
-									Disconnect
-								</button>
-							</>
-						)}
+						<button
+							type="button"
+							onClick={() => setConfirmingDisconnect(true)}
+							className="ml-auto min-h-11 text-sm font-medium text-destructive hover:underline"
+						>
+							Disconnect
+						</button>
 					</div>
-					{!editingKeys && !hitpay?.enabled && !canUse ? (
-						<p className="text-xs text-muted-foreground">
-							Resuming online payments needs Pro — upgrade in Settings →
-							Billing. Your keys are kept meanwhile.
-						</p>
-					) : null}
 					<ConfirmDialog
 						open={confirmingDisconnect}
 						onOpenChange={setConfirmingDisconnect}
@@ -359,13 +379,16 @@ export function OnlinePaymentsCard({
 							onClick={() =>
 								save(
 									{
+										// Connecting stores the account; it doesn't change how
+										// buyers pay — that's chosen under Payments (86eye9xd4),
+										// like every other account on this tab.
 										hitpay: {
-											enabled: true,
+											enabled: false,
 											apiKey: apiKey.trim(),
 											salt: salt.trim(),
 										},
 									},
-									"HitPay connected — buyers now see Pay now on their orders",
+									"HitPay connected — switch buyers to it under Payments → How buyers pay",
 								)
 							}
 							isLoading={saving}
@@ -374,6 +397,11 @@ export function OnlinePaymentsCard({
 						>
 							Connect HitPay
 						</Button>
+						<p className="text-xs text-muted-foreground">
+							Connecting stores your keys. To take payments through HitPay,
+							choose it under Payments → How buyers pay — your bank &amp; QR
+							details are then hidden from buyers.
+						</p>
 						{locked ? (
 							<p className="text-xs text-muted-foreground">
 								Online payments is a Pro feature — upgrade in Settings → Billing
@@ -540,6 +568,7 @@ function KeyInputs({
 			<Input
 				type="text"
 				name="hitpay-api-key"
+				aria-label="HitPay API key"
 				autoComplete="off"
 				data-1p-ignore
 				data-lpignore="true"
@@ -553,6 +582,7 @@ function KeyInputs({
 			<Input
 				type="text"
 				name="hitpay-salt"
+				aria-label="HitPay salt"
 				autoComplete="off"
 				data-1p-ignore
 				data-lpignore="true"

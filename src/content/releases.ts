@@ -181,6 +181,201 @@ export interface Release {
  */
 export const RELEASES: Release[] = [
 	{
+		version: "2026.10.4",
+		date: "2026-10-16",
+		// Not notable: a hotfix for one failure. The seller it hit sees her
+		// orders come back when she next opens the page; nobody else saw
+		// anything change. A dot is enough.
+		notable: false,
+		entries: [
+			{
+				kind: "fix",
+				title: {
+					en: "Orders load again when a category name has a symbol in it",
+				},
+				body: {
+					en: "If one of your product categories had a symbol or emoji in its name — ✦ Dresses, 🐆 New in — the Orders page stopped loading the moment an order was placed for it. That's fixed: name your categories however you like, and the Orders page and its Categories filter show them as they are. On every plan.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open Orders" },
+			},
+		],
+	},
+	{
+		version: "2026.10.3",
+		date: "2026-10-15",
+		// Notable: something MOVED, and a buyer-facing rule changed. Despatch
+		// labels left the inbox for the new Deliveries page, delivery pricing
+		// left Fulfilment for a page of its own, and every settings card was
+		// regrouped. And switching HitPay on now hides the bank details buyers
+		// used to see beside it. A seller who reads nothing will go to print
+		// labels where they always did and find a pointer instead — or wonder
+		// why no buyer pays by transfer any more. The dot would not reach them
+		// before that morning.
+		notable: true,
+		entries: [
+			{
+				kind: "feature",
+				title: { en: "Every delivery in one place, on its own page" },
+				body: {
+					en: "Deliveries is a new page in your menu, right under Orders. Parcels waiting to go out sit at the top with what they still need — a rider booked or a consignment number added — then bookings on the road, any that failed and still need a rider, and what delivery cost you this month. Despatch labels print from here now, beside the parcels they're for. Home gets a Deliveries card, and a banner warns when your Lalamove wallet runs low. The page is on every plan; booking riders and printing labels are Pro.",
+				},
+				href: "/app/deliveries",
+				hrefLabel: { en: "Open Deliveries" },
+				icon: "truck",
+			},
+			{
+				kind: "feature",
+				title: { en: "Tip a rider when nobody takes your booking" },
+				body: {
+					// The tip steps and cap are fixed per market, not this store's money.
+					// currency-literal-ok: TIP_OPTIONS amounts, both markets named
+					en: "A Lalamove booking no rider accepts runs out in the end. While one is still finding a rider, its card on the order page and its row on Deliveries offer Add tip: pick RM 2, RM 5 or RM 10 (S$1, S$2 or S$5 in Singapore) and riders nearby see a better fare. The dialog shows the new trip total first. The tip comes out of your own Lalamove wallet, can't be taken back, and stops at RM 20 (S$10) a booking. Booking riders is on Pro.",
+				},
+				// No link: there is nothing to switch on. It reaches the seller on
+				// the next booking that sits in "Finding rider" — the v2026.10.2
+				// screenshot-proof posture.
+			},
+			{
+				kind: "enhancement",
+				title: { en: "Turn on HitPay and it's the one way buyers pay" },
+				body: {
+					en: "With HitPay on, buyers still saw your bank details and QR beside it, so some paid by hand and you were back to checking screenshots. Now HitPay is the only way to pay on any order it can take, and every payment confirms itself. Your bank and QR details stay saved for orders under HitPay's minimum, and switching back is one tap. Connecting HitPay no longer turns it on by itself — you choose under Payments → How buyers pay. On Pro.",
+				},
+				href: spotlightHref("how_buyers_pay"),
+				hrefLabel: { en: "Choose how buyers pay" },
+				icon: "wallet",
+			},
+			{
+				kind: "feature",
+				title: { en: "Put many products on one sale, and end it in one tap" },
+				body: {
+					en: "Promotions is a new page in your menu, right after Products. Pick the products — search, or filter to a category and take them all — set one percentage off and when it runs, check each sale price, and they go on sale together, flash-sale limits included. Edit it later and every product follows; end it and each goes back to its normal price, leaving alone any you've re-priced by hand since. A product's own Promotion card also gains Clear sale prices & settings. On Pro.",
+				},
+				href: "/app/promotions",
+				hrefLabel: { en: "Start a promotion" },
+				icon: "megaphone",
+			},
+			{
+				kind: "feature",
+				title: { en: "Pause your store when you need a break" },
+				body: {
+					en: 'Away for a few days, or sold out for the week? Settings → Store now opens with Accepting orders. Switch it off and your storefront stays up for browsing but stops taking orders, with an optional note for buyers like "Back on 1 Nov". Your counter keeps working, and your plan carries on as usual — Off-Season Hold is still the way to pause billing. Switch it back on whenever you\'re ready. On every plan.',
+				},
+				href: spotlightHref("store_status"),
+				hrefLabel: { en: "Find the switch" },
+			},
+			{
+				kind: "enhancement",
+				title: { en: "Settings, regrouped so you find things faster" },
+				body: {
+					en: "Settings now sits in three groups — Store, Selling and Connections — and on a computer a side rail shows each section's state at a glance, with anything that needs you in amber. Every card reads the same way: a title, one line on what it does, and its current value on the right. Delivery pricing has a page of its own, the three order-alert cards are now one, each connection shows a setup checklist, and Lalamove's webhook registers in one tap. On every plan.",
+				},
+				href: "/app/settings",
+				hrefLabel: { en: "Open Settings" },
+				icon: "settings",
+			},
+			{
+				kind: "enhancement",
+				title: { en: "See when Kedaipal features your shop" },
+				body: {
+					en: "We now run showcases on kedaipal.com/stores — short-lived sections for an event or a theme, picked by us, above the usual store cards. If your shop is in one, your Store listing card says which, links to it, and tells you if anything is keeping you out of view — say, List my store switched off. There's nothing to sign up for. On every plan.",
+				},
+				href: spotlightHref("store_listing"),
+				hrefLabel: { en: "Check your listing" },
+			},
+			{
+				kind: "fix",
+				title: { en: "Product photos save the moment you add them" },
+				body: {
+					en: "Adding, removing or reordering a product's photos used to wait for Save, so leaving the page first lost them. Photos now save themselves as you go — remove one by mistake and Undo brings it back — and leaving a product with other unsaved changes asks before throwing them away. On every plan.",
+				},
+				// No link: it reaches the seller the next time they edit a product.
+			},
+		],
+	},
+	{
+		version: "2026.10.2",
+		date: "2026-10-13",
+		// Notable on two triggers. Something MOVED: Home is rebuilt around
+		// sales, and the Recent orders list a seller opened every morning is
+		// gone from it. And the deciding one — the credit rule changes under the
+		// seller's feet. v2026.10.1 told them "run out and nothing stops"; from
+		// this release an order that arrives at zero lands with its buyer and
+		// items closed. A seller who reads nothing will one day see an inbox row
+		// with no name on it and think the order is broken or lost, on the very
+		// morning they most need to act on it. The dot would not reach them first.
+		notable: true,
+		entries: [
+			{
+				kind: "enhancement",
+				title: {
+					en: "Home leads with what you sold, and what needs you today",
+				},
+				body: {
+					en: "Home used to open on three counts and a list of recent orders. It now leads with what needs you today — new orders, what's due, money to collect — then this week's sales against last week's, your best seller, who came back and where your orders came from. Every number opens the orders it counted, and a week-ahead strip shows your busiest day coming. Recent orders live in Orders now. Today's sales are on every plan; the 7- and 30-day views and the insight cards are Pro.",
+				},
+				href: "/app",
+				hrefLabel: { en: "Open Home" },
+				icon: "chart",
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Orders that arrive after your credits run out wait to be opened",
+				},
+				body: {
+					en: "Until now, running out of credits changed nothing on your side. From this release, an order that lands once your balance is at zero still shows in your inbox, but its buyer and items stay closed until credits come in. Each credit opens one waiting order, oldest first — from a top-up, your monthly credits or a paid invoice. A banner counts what's waiting, and a Waiting on credits filter finds them. Orders you already have stay open, and cancelling a waiting one always gives its credit back. On every plan.",
+				},
+				href: spotlightHref("credit_balance"),
+				hrefLabel: { en: "See your balance" },
+				icon: "gauge",
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Put a product on sale, or run a flash sale with a countdown",
+				},
+				body: {
+					en: "Set a sale price on any product and pick how long it runs — it snaps back to the normal price by itself when time is up. Buyers see a badge and the old price struck through, plus a live countdown on a timed sale. For a flash sale, sell only the first so-many units at that price, cap how many go in one order, and have unpaid orders cancel themselves so the units go back on sale. The Promotion card sits under each product's price. On Pro.",
+				},
+				href: spotlightHref("promo"),
+				hrefLabel: { en: "Set up a promotion" },
+			},
+			{
+				kind: "feature",
+				title: { en: "Hand out single-use voucher codes" },
+				body: {
+					en: "Say sorry for a late order, thank a regular or run a giveaway. Vouchers, a new page in your menu, makes codes worth an amount or a percentage off, with an expiry if you want one — one at a time, or twenty at once under a batch name. Share each as a code, a QR for your counter or a link that opens checkout with it applied. A code works once, comes off the items after any sale price, and works again if its order is cancelled. On Pro.",
+				},
+				// The page itself, not a ring: Vouchers is a route of its own, and
+				// "New voucher" is the first thing on it.
+				href: "/app/vouchers",
+				hrefLabel: { en: "Create a voucher" },
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Event venues get a card of their own",
+				},
+				body: {
+					en: "A hall you only use for events had to be a pickup point you switched off, so it hid behind Show inactive. Venues now have their own card in Fulfilment, right under Pickup. Turn on Only hosts events and buyers never see it at checkout; leave it off and one place can be both your pickup point and your venue. A venue set up the old way still works — to move it across, open it, turn on Only hosts events, then switch it back on. Events are on Pro.",
+				},
+				href: spotlightHref("event_venues"),
+				hrefLabel: { en: "See your venues" },
+			},
+			{
+				kind: "enhancement",
+				title: { en: 'Every "I\'ve paid" now comes with the screenshot' },
+				body: {
+					en: "A buyer paying by bank transfer or QR could tap I've paid with nothing attached, and you were left scrolling the chat for proof. The payment screenshot is now the first thing their form asks for, and the button waits until it's attached — a buyer who really can't is told to message you on WhatsApp instead. When a buyer sends more than one, your order page shows the newest reference everywhere and says which submission it came from. On every plan.",
+				},
+				// No link: nothing to switch on. It reaches the seller on the next
+				// order a buyer marks paid — the v2026.09.8 overseas-number posture.
+			},
+		],
+	},
+	{
 		version: "2026.10.1",
 		date: "2026-10-02",
 		// Notable, and not a close call — all three triggers are lit at once.
@@ -203,7 +398,7 @@ export const RELEASES: Release[] = [
 					en: "Every order spends a credit, and the balance is on the page",
 				},
 				body: {
-					en: "Your plan's monthly allowance used to be a quiet line that counted up and did nothing much. It is now a balance you can act on: Starter comes with 100 credits a month, Pro with 200, Founding Pro with 300, and one order spends one. The meter sits right under your plan, and warns you once you are into the last fifth of the month. Run out and nothing stops: your storefront keeps taking orders and they come off your next credits, so a top-up or the 1st of the month clears the balance. Cancel an order nobody had started on and the credit comes back. On every plan.",
+					en: "Your plan's monthly allowance used to be a quiet line that counted up and did nothing much. It is now a balance you can act on: Starter comes with 100 credits a month, Pro with 200, Founding Pro with 300, and one order spends one. The meter sits right under your plan, and warns you once you are into the last fifth of the month. Run out and your storefront keeps taking orders, and they come off your next credits, so a top-up or the 1st of the month clears the balance. Cancel an order nobody had started on and the credit comes back. On every plan.",
 				},
 				href: spotlightHref("credit_balance"),
 				hrefLabel: { en: "See your balance" },

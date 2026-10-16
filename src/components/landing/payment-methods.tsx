@@ -39,7 +39,10 @@ function MethodChip({
 	if (!method.src) {
 		return (
 			<span
-				className={cn(logoPillClass, "h-11 px-4 text-sm font-bold text-slate-800")}
+				className={cn(
+					logoPillClass,
+					"h-11 px-4 text-sm font-bold text-slate-800",
+				)}
 			>
 				{method.name}
 			</span>
@@ -54,6 +57,10 @@ function MethodChip({
 				alt={hidden ? "" : method.name}
 				aspect={method.markClass ?? "h-5 w-auto"}
 				fill={false}
+				// Eager, not lazy: the row drifts, and a lazy mark only starts
+				// loading as its pill enters the viewport — so the pill drifts in
+				// blank. These are a few hundred bytes of SVG each.
+				eager
 			/>
 			{method.noteKey ? (
 				<span className="text-[11px] font-semibold text-slate-500">

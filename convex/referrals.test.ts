@@ -455,7 +455,7 @@ describe("admin seller row", () => {
 
 		const rows = await t
 			.withIdentity({ subject: ADMIN })
-			.query(api.admin.listSellersForAdmin, {});
+			.query(api.admin.listSellersForAdmin, {}).then((r) => r.sellers);
 		const row = rows.find((r) => r._id === refereeId);
 		expect(row?.referral).toMatchObject({
 			referrer: { slug: "siti-kitchen", storeName: "Store siti-kitchen" },
@@ -468,7 +468,7 @@ describe("admin seller row", () => {
 		await insertPaidInvoice(t, refereeId);
 		const after = await t
 			.withIdentity({ subject: ADMIN })
-			.query(api.admin.listSellersForAdmin, {});
+			.query(api.admin.listSellersForAdmin, {}).then((r) => r.sellers);
 		expect(after.find((r) => r._id === refereeId)?.referralEditable).toBe(
 			false,
 		);

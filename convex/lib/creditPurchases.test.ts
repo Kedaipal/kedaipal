@@ -28,15 +28,27 @@ describe("topUpRefusal — who may buy", () => {
 		expect(topUpRefusal({ ...base, status: "active" })).toBeNull();
 	});
 
-	test("a sponsored store can't — it never locks, so a pack would buy nothing", () => {
+	test("a sponsored store can't — it isn't metered, so a pack would buy nothing", () => {
 		expect(topUpRefusal({ ...base, status: "active", comped: true })).toBe(
 			"sponsored",
 		);
 		expect(topUpRefusal({ ...base, status: "past_due", comped: true })).toBe(
 			"sponsored",
 		);
-		// The missing-row fail-safe resolves as comped full access.
-		expect(topUpRefusal({ ...base, status: null })).toBe("sponsored");
+	});
+
+	test("the three un-toppable stores are told APART — the true sentence differs", () => {
+		// Collapsing them is what put "no monthly limit, no balance to run
+		// down" under a live "200 monthly" line for the fail-safe
+		// (/test-code, z8r3fdrph7). The fail-safe is METERED and keeps its own
+		// kind; the two unmetered ones keep theirs.
+		expect(topUpRefusal({ ...base, status: "active", comped: true })).toBe(
+			"sponsored",
+		);
+		expect(
+			topUpRefusal({ ...base, status: "active", ownerIsAdmin: true }),
+		).toBe("admin_store");
+		expect(topUpRefusal({ ...base, status: null })).toBe("never_locked");
 	});
 
 	test("every other status refuses, by name", () => {
@@ -88,13 +100,46 @@ describe("topUpRefusalMessage — every refusal names the way out", () => {
 
 	test("a sponsored store is told there's nothing to top up — the same words for everyone", () => {
 		const owner = topUpRefusalMessage("sponsored", { audience: "owner" });
-		expect(owner).toMatch(/^Sponsored stores never run out/);
+		expect(owner).toMatch(/^Sponsored stores aren't metered/);
 		expect(topUpRefusalMessage("sponsored", { audience: "member" })).toBe(owner);
+	});
+
+	test("no refusal claims a sponsored store's credits refresh — they don't exist (z8r3fdrph7)", () => {
+		// The old sentence said "credits refresh every month", which was true
+		// while a comp was metered and became a lie the moment it wasn't.
+		for (const audience of ["owner", "member"] as const)
+			expect(topUpRefusalMessage("sponsored", { audience })).not.toMatch(
+				/refresh/i,
+			);
+	});
+
+	test("the METERED fail-safe is never told it isn't metered (/test-code finding)", () => {
+		// A store with no subscription row keeps a real 200 grant and a real
+		// balance that moves, so the unmetered sentence is false for it — and
+		// it was being shown one anyway, 80px under its own "200 monthly" line.
+		const line = topUpRefusalMessage("never_locked", { audience: "owner" });
+		expect(line).not.toMatch(/aren't metered|not metered/i);
+		expect(line).not.toMatch(/no monthly limit|no balance/i);
+		// What IS true of it: it can't be locked, and its credits do refresh.
+		expect(line).toMatch(/never locked/i);
+		expect(line).toMatch(/refresh/i);
+		// Same words for a teammate — there is no way out for either to take.
+		expect(topUpRefusalMessage("never_locked", { audience: "member" })).toBe(
+			line,
+		);
 	});
 
 	test("never money-balance language — order counts only", () => {
 		const all = (
-			["trialing", "past_due", "on_hold", "cancelled", "admin_store", "sponsored"] as const
+			[
+				"trialing",
+				"past_due",
+				"on_hold",
+				"cancelled",
+				"admin_store",
+				"sponsored",
+				"never_locked",
+			] as const
 		)
 			.flatMap((r) => [
 				topUpRefusalMessage(r, { audience: "owner" }),

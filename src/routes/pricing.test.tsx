@@ -262,7 +262,7 @@ describe("/pricing — Enterprise is a conversation (T6, z8r3fdkp8h)", () => {
 		const card = within(enterpriseCard());
 		expect(card.getByText("Unlimited teammates")).toBeTruthy();
 		expect(
-			card.getByText("Multiple outlets").closest("li")?.textContent,
+			card.getByText("Per-outlet stock & reporting").closest("li")?.textContent,
 		).toContain("Soon");
 	});
 

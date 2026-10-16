@@ -30,6 +30,9 @@ export const FAQ_MESSAGES: FaqMessages = {
 	11: { q: m.faq_q_11, a: m.faq_a_11 },
 	12: { q: m.faq_q_12, a: m.faq_a_12 },
 	13: { q: m.faq_q_13, a: m.faq_a_13 },
+	14: { q: m.faq_q_14, a: m.faq_a_14 },
+	15: { q: m.faq_q_15, a: m.faq_a_15 },
+	16: { q: m.faq_q_16, a: m.faq_a_16 },
 };
 
 export function Faq() {
@@ -99,9 +102,7 @@ export function Faq() {
 											id={panelId}
 											aria-labelledby={buttonId}
 											initial={
-												shouldReduceMotion
-													? false
-													: { height: 0, opacity: 0 }
+												shouldReduceMotion ? false : { height: 0, opacity: 0 }
 											}
 											animate={{ height: "auto", opacity: 1 }}
 											exit={

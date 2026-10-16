@@ -1,4 +1,9 @@
 import { v } from "convex/values";
+import {
+	takesBuyerOrders,
+	takesCounterOrders,
+} from "./lib/storeAvailability";
+import { offlineStoreIds, storeAvailabilityOf } from "./storeAvailability";
 
 // One customisable key survives the one-message-per-order cut (86eyd63r8):
 // `confirm`, the write-in reply for a buyer who messages their ORD- reference
@@ -232,6 +237,7 @@ import {
 	type StoredAwbConfig,
 } from "./lib/awbConfig";
 import { sanitizeAttributionSource } from "./lib/attribution";
+import { isChoosablePickupPoint } from "./lib/pickupChoice";
 import { sanitizeUnitLine, UNIT_LINE_MAX_LENGTH } from "./lib/address";
 import { sanitizeReferrerSlug } from "./lib/poweredBy";
 import { referralSourceTag } from "./lib/referral";
@@ -254,12 +260,19 @@ import {
 	sanitizeOpeningHours,
 } from "./lib/openingHours";
 import { rateLimiter } from "./lib/rateLimiter";
-import { capsForPlan, DAY_MS, TRIAL_DAYS } from "./lib/plans";
+import { storeShowsVoucherEntry } from "./lib/voucherRedemption";
+import {
+	capsForPlan,
+	DAY_MS,
+	storeHasFullAccess,
+	TRIAL_DAYS,
+} from "./lib/plans";
 import {
 	type AccessState,
 	assertPlanFeature,
 	assertOwnStoreActive,
 	assertSubscriptionActive,
+	buyerPaymentsPaused,
 	insertSetupComp,
 	loadSubscription,
 	resolveAccess,
@@ -298,7 +311,7 @@ import {
 	sellerNewOrderTemplateName,
 } from "./lib/whatsapp";
 import { TEMPLATE_MAX_LENGTH } from "./lib/whatsappCopy";
-import { type CreditLockState, resolveCreditLock } from "./creditLock";
+import { type CreditGateState, resolveCreditGate } from "./creditLock";
 import { ensureCreditAccount } from "./credits";
 import { insertReferral, resolveSignupReferrer } from "./referrals";
 import {
@@ -320,7 +333,9 @@ import {
 	requireAdmin,
 	refusalMessage,
 	requireRetailerAccess,
+	storeOwnerIsAdmin,
 } from "./lib/auth";
+import { syncLalamoveWallet } from "./courierWallets";
 import {
 	hasPermission,
 	type MemberPermissions,
@@ -434,7 +449,12 @@ const deliveryConfigValidator = v.union(
 // env) and is Pro-gated. Secrets never leave the server — reads expose only
 // a summary (see DeliveryBookingSummary).
 const deliveryBookingValidator = v.object({
-	enabled: v.boolean(),
+	// undefined = keep the stored arm state (86eye9xd4). The delivery-pricing
+	// page saves rider options (vehicle, direction, prompt) with live pricing;
+	// arming or disarming riders is the Courier-booking toggle's job alone, so
+	// that save must be able to leave `enabled` untouched rather than restate a
+	// value that may already be stale.
+	enabled: v.optional(v.boolean()),
 	vehicleType: v.union(v.literal("MOTORCYCLE"), v.literal("CAR")),
 	apiKey: v.optional(v.string()),
 	apiSecret: v.optional(v.string()),
@@ -460,6 +480,8 @@ type DeliveryBooking = {
 	 * (86eypncfy) for the same reason as the hint — ciphertext has no prefix
 	 * to read. */
 	env?: "sandbox" | "production";
+	/** See schema — the account is known to send us its webhooks. */
+	webhookRegisteredAt?: number;
 };
 
 /** Owner-read summary of the booking config — the API secret NEVER crosses
@@ -481,6 +503,8 @@ export type DeliveryBookingSummary = {
 	 * rather than assuming production, because assuming wrong is exactly the
 	 * failure this field exists to stop. */
 	env?: "sandbox" | "production";
+	/** The webhook step of the Integrations setup checklist (86eye9xd4). */
+	webhookRegisteredAt?: number;
 };
 
 function summarizeDeliveryBooking(
@@ -509,6 +533,7 @@ function summarizeDeliveryBooking(
 			(booking.apiKey && !isEncrypted(booking.apiKey)
 				? inferLalamoveEnv(booking.apiKey)
 				: undefined),
+		webhookRegisteredAt: booking.webhookRegisteredAt,
 	};
 }
 
@@ -973,6 +998,22 @@ type RetailerPublic = {
 	// cart CTAs; every order-create path refuses with the same reason). A store
 	// setting, not billing state — the subscription itself stays owner-only.
 	orderingPaused?: boolean;
+	/** Why ordering is off (`z8r3fdudf7`), when it is: the storefront banner's
+	 * wording follows it. `note` is the SELLER's to their buyers ("Back on 1
+	 * Nov") and is never set for Kedaipal's switch — buyers only ever see a
+	 * neutral sentence for that. Unset = taking orders. */
+	orderingPausedBy?: { by: "seller" | "hold" | "admin"; note?: string };
+	// Buyer payments paused because the store is lapsed (z8r3fdr6gg) — the ONE
+	// public bit of billing state, set on the storefront payload only so every
+	// checkout can say "you can order, you'll pay later" before the buyer
+	// commits. Never the status or the reason; the rule is
+	// `subscriptions.buyerPaymentsPaused`.
+	paymentsPaused?: boolean;
+	// Does this store's checkout show a voucher field? (`z8r3fdr617`) True
+	// only when the store is on a plan that carries vouchers AND has issued at
+	// least one — otherwise the control could only ever refuse. Like
+	// `paymentsPaused`, a single derived bit: never the plan, never a count.
+	acceptsVouchers?: boolean;
 	// Outbound WhatsApp kill-switch state (OWNER-only, like `subscription`), read
 	// from `retailerSendingLimits`. When paused, the gateway blocks this seller's
 	// NON-transactional WhatsApp sends (order confirmations/status still flow); the
@@ -984,6 +1025,16 @@ type RetailerPublic = {
 	// (not the owner). Drives the persistent "Acting as {store}" dashboard banner.
 	// Only ever set by the admin act-as read path. See docs/admin-console.md.
 	actingAsAdmin?: boolean;
+	// "This store has NO LIMITS of any kind" — `storeHasFullAccess`
+	// (convex/lib/plans.ts): an admin's own store, or a SPONSORED (comped) one.
+	// ONE boolean rather than letting each surface re-derive admin-ness and the
+	// comp flag, because surfaces that re-derived it is how a sponsored seller
+	// came to read "200 of 200" while their own caps said unlimited
+	// (z8r3fdrph7). Today it lifts the 200-product cap client-side
+	// (`productCapExemption`); `subscription.caps` is NOT a substitute —
+	// Enterprise is unlimited too and is very much on a plan.
+	// Only ever set when true, so ordinary payloads are byte-identical.
+	fullAccess?: boolean;
 	// True while this store has no owner yet — an admin pre-built it and the
 	// vendor hasn't claimed it (docs/prebuilt-stores.md). Set on every payload
 	// rather than only the admin read: the act-as banner has to say WHICH kind
@@ -1008,12 +1059,17 @@ type RetailerPublic = {
 	// A MEMBER's per-area grants (deny-by-default; convex/lib/permissions.ts).
 	// Absent for owner/admin — they hold every grant implicitly.
 	permissions?: MemberPermissions;
-	// Credits T3 (z8r3fdf8hy): is the store out of credits, why, and how many
-	// orders have arrived since — what the lock banner and every disabled
-	// control read. Deliberately NO balance numbers: every teammate needs to
-	// know WHY a button is disabled, but the balance itself is `credits`-area
-	// data (credits.getBalance). Never on the storefront payload.
-	creditLock?: CreditLockState;
+	// Credits T3.1 (z8r3fdmg4h): the per-order gate's WATERMARK, plus how many
+	// orders are waiting on credits and the one way back. The watermark is what
+	// lets the dashboard answer "is this row gated?" for a whole inbox without a
+	// read per row — `isOrderGated(gate, order)` is one comparison.
+	//
+	// Deliberately NO balance numbers: every teammate needs to know WHY a
+	// control is disabled, but the balance itself is `credits`-area data
+	// (credits.getBalance). A debit SEQUENCE number is not a balance — it says
+	// nothing about money, only about queue position. Never on the storefront
+	// payload.
+	creditGate?: CreditGateState;
 };
 
 async function loadRetailerForUser(
@@ -1158,12 +1214,19 @@ async function buildRetailerPublic(
 		claimLinkSource: row.claimLinkSource,
 		isFoundingMember: row.isFoundingMember,
 		foundingMemberRank: row.foundingMemberRank,
-		orderingPaused: row.orderingPausedAt !== undefined,
+		// The dashboard's till question: is the COUNTER closed? (A seller's
+		// own pause closes online orders only — see storeAvailability.)
+		orderingPaused: !takesCounterOrders(await storeAvailabilityOf(ctx, row)),
+		fullAccess:
+			storeHasFullAccess({
+				ownerIsAdmin: storeOwnerIsAdmin(row),
+				comped: sub?.comped === true,
+			}) || undefined,
 		sendingPaused: !!sendingLimits?.pausedAt,
 		sendingPauseReason: sendingLimits?.pauseReason,
 		role: opts?.role,
 		permissions: opts?.permissions,
-		creditLock: await resolveCreditLock(ctx, row, Date.now()),
+		creditGate: await resolveCreditGate(ctx, row, Date.now()),
 	};
 }
 
@@ -1256,6 +1319,10 @@ export const getRetailerBySlug = query({
 		| { status: "ok"; retailer: RetailerPublic }
 		| { status: "redirect"; to: string }
 		| { status: "notFound" }
+		// Taken offline by Kedaipal (`z8r3fdudf7`): the store's NAME only, for
+		// the neutral "isn't available right now" page — no catalogue, no
+		// contact numbers, nothing to order from.
+		| { status: "unavailable"; storeName: string }
 	> => {
 		const normalized = slug.trim().toLowerCase();
 		if (normalized.length === 0) return { status: "notFound" };
@@ -1265,6 +1332,9 @@ export const getRetailerBySlug = query({
 			.withIndex("by_slug", (q) => q.eq("slug", normalized))
 			.first();
 		if (active) {
+			const availability = await storeAvailabilityOf(ctx, active);
+			if (availability.state === "offline")
+				return { status: "unavailable", storeName: active.storeName };
 			let logoUrl: string | undefined;
 			if (active.logoStorageId) {
 				const url = await ctx.storage.getUrl(active.logoStorageId);
@@ -1310,10 +1380,21 @@ export const getRetailerBySlug = query({
 					openingHours: active.openingHours,
 					closedDates: active.closedDates,
 					minOrderValue: active.minOrderValue,
-					// Founding badge is public-safe; subscription state is NOT included.
+					// Founding badge is public-safe; subscription state is NOT
+					// included — beyond the one `paymentsPaused` bit.
 					isFoundingMember: active.isFoundingMember,
 					foundingMemberRank: active.foundingMemberRank,
-					orderingPaused: active.orderingPausedAt !== undefined,
+					orderingPaused: !takesBuyerOrders(availability),
+					orderingPausedBy:
+						availability.state === "open"
+							? undefined
+							: {
+									by: availability.by,
+									note:
+										availability.by === "seller" ? availability.note : undefined,
+								},
+					paymentsPaused: await buyerPaymentsPaused(ctx, active._id),
+					acceptsVouchers: await storeShowsVoucherEntry(ctx, active._id),
 					marketplaceUnlisted: active.marketplaceUnlistedAt !== undefined,
 					// paymentInstructions intentionally omitted from the public
 					// storefront payload — only revealed in the WhatsApp confirm
@@ -2493,6 +2574,40 @@ const SETTINGS_FIELD_AREA: Record<
 };
 
 /**
+ * Two credential fields carry a non-credential choice, and that choice is
+ * decided where it's used, not where the keys live (86eye9xd4):
+ *  - `hitpay: { enabled }` alone is "How buyers pay" on the Payments tab —
+ *    payments_settings. Keys, or `null` (disconnect), stay integrations.
+ *  - `deliveryBooking` carrying only rider options (vehicle, collection,
+ *    prompt-to-book) saves with live delivery pricing — fulfilment. The arm
+ *    switch and keys stay integrations.
+ * Returns undefined for everything else, so the field map stands.
+ */
+const RIDER_OPTION_KEYS = new Set([
+	"vehicleType",
+	"promptBookOnPacked",
+	"deliveryDirection",
+]);
+function refinedSettingsArea(
+	key: string,
+	value: unknown,
+): PermissionArea | undefined {
+	if (value === null || typeof value !== "object") return undefined;
+	const keys = Object.keys(value).filter(
+		(k) => (value as Record<string, unknown>)[k] !== undefined,
+	);
+	if (key === "hitpay" && keys.length === 1 && keys[0] === "enabled")
+		return "payments_settings";
+	if (
+		key === "deliveryBooking" &&
+		keys.length > 0 &&
+		keys.every((k) => RIDER_OPTION_KEYS.has(k))
+	)
+		return "fulfilment";
+	return undefined;
+}
+
+/**
  * Enforce the field map for a MEMBER save: every field present in this call
  * must be editable under their grants; "owner" fields never are. Owner and
  * admin skip (the gate already admitted them for everything).
@@ -2510,8 +2625,9 @@ function assertSettingsFieldAccess(
 ): void {
 	if (access.role !== "member") return;
 	const grants = access.membership?.permissions ?? {};
-	for (const [key, area] of Object.entries(SETTINGS_FIELD_AREA)) {
+	for (const [key, fieldArea] of Object.entries(SETTINGS_FIELD_AREA)) {
 		if (args[key] === undefined) continue;
+		const area = refinedSettingsArea(key, args[key]) ?? fieldArea;
 		if (area === "owner")
 			throw new ConvexError(refusalMessage({ ownerOnly: true }));
 		if (!hasPermission(grants, area, "write"))
@@ -2903,11 +3019,14 @@ export const updateSettings = mutation({
 					// vehicle + origin) — require booking enabled in the effective
 					// state so a dead pricing mode (every order fee-pending) can't
 					// be stored. Same Pro gate as enabling booking itself.
-					const effectiveBooking =
-						args.deliveryBooking !== undefined
-							? args.deliveryBooking
-							: (retailer.deliveryBooking as DeliveryBooking | undefined);
-					if (!effectiveBooking?.enabled) {
+					const storedBooking = retailer.deliveryBooking as
+						| DeliveryBooking
+						| undefined;
+					const effectiveEnabled =
+						args.deliveryBooking === null
+							? false
+							: (args.deliveryBooking?.enabled ?? storedBooking?.enabled);
+					if (!effectiveEnabled) {
 						throw new ConvexError(
 							"Turn on Lalamove delivery booking first — live quotes use its credentials and vehicle type.",
 						);
@@ -2933,13 +3052,15 @@ export const updateSettings = mutation({
 					);
 				}
 				patch.deliveryBooking = undefined;
+				// No key, no wallet to report (86eye9xd4, 6A).
+				await syncLalamoveWallet(ctx, retailer._id, null);
 			} else {
 				// Key semantics mirror logoStorageId: `undefined` = keep the stored
 				// value (so toggling enable/vehicle never silently wipes keys),
 				// empty string = clear.
 				const prev = retailer.deliveryBooking as DeliveryBooking | undefined;
 				const clean: DeliveryBooking = {
-					enabled: args.deliveryBooking.enabled,
+					enabled: args.deliveryBooking.enabled ?? prev?.enabled ?? false,
 					vehicleType: args.deliveryBooking.vehicleType,
 					promptBookOnPacked:
 						args.deliveryBooking.promptBookOnPacked ??
@@ -2987,6 +3108,12 @@ export const updateSettings = mutation({
 							: args.deliveryBooking.apiKey.trim()
 								? inferLalamoveEnv(args.deliveryBooking.apiKey.trim())
 								: undefined,
+					// A typed key is a (possibly) different account, whose webhook
+					// setting we know nothing about — the checklist asks again.
+					webhookRegisteredAt:
+						args.deliveryBooking.apiKey === undefined
+							? prev?.webhookRegisteredAt
+							: undefined,
 				};
 				// A key without its secret (or vice versa) can never authenticate —
 				// refuse half a credential up front so the failure is at save time
@@ -3047,6 +3174,15 @@ export const updateSettings = mutation({
 					}
 				}
 				patch.deliveryBooking = clean;
+				// The plaintext key exists only in this call — stamp the wallet
+				// fingerprint now, before encryption replaces it (86eye9xd4, 6A).
+				if (args.deliveryBooking.apiKey !== undefined) {
+					await syncLalamoveWallet(
+						ctx,
+						retailer._id,
+						args.deliveryBooking.apiKey.trim() || null,
+					);
+				}
 			}
 		}
 		if (args.hitpay !== undefined) {
@@ -3215,13 +3351,19 @@ export const updateSettings = mutation({
 				args.offerSelfCollect ?? retailer.offerSelfCollect ?? false;
 			let selfCollectWorking = false;
 			if (nextOfferSelfCollect) {
-				const firstActive = await ctx.db
-					.query("pickupLocations")
-					.withIndex("by_retailer_active", (q) =>
-						q.eq("retailerId", retailer._id).eq("isActive", true),
-					)
-					.first();
-				selfCollectWorking = firstActive !== null;
+				// Event venues are active but are never offered at checkout, so
+				// they can't be what makes self-collect "work" — counting one
+				// would let a venue-only store switch to pickup-only and leave
+				// buyers with no way to order (z8r3fdm32x).
+				const choosable = (
+					await ctx.db
+						.query("pickupLocations")
+						.withIndex("by_retailer_active", (q) =>
+							q.eq("retailerId", retailer._id).eq("isActive", true),
+						)
+						.collect()
+				).some(isChoosablePickupPoint);
+				selfCollectWorking = choosable;
 			}
 			if (!nextOfferDelivery && !selfCollectWorking) {
 				// Tailor the message to what the seller was trying to do so the UI
@@ -3807,8 +3949,12 @@ export const listSlugsForSitemap = query({
 	args: {},
 	handler: async (ctx): Promise<Array<{ slug: string; updatedAt: number }>> => {
 		const rows = await ctx.db.query("retailers").collect();
+		const offline = await offlineStoreIds(ctx);
 		return (
 			rows
+				// Taken offline by Kedaipal (z8r3fdudf7): the page is a noindex
+				// "unavailable" screen — never hand it to a crawler.
+				.filter((r) => !offline.has(r._id))
 				// A pre-built store's storefront works by direct link — that is how
 				// an admin shows the vendor their shop before handover — but it is
 				// nobody's shop yet, so it must not be submitted to search engines.
@@ -3865,22 +4011,12 @@ const DELETE_USER_BATCH = 25;
  * passed by hand. Progress is logged per phase (counts + ids only, never
  * phone numbers or message bodies).
  *
- * Sweeps, in order (see DELETION_PHASES in convex/lib/accountDeletion.ts):
- * orders (+ events + buyer image / payment proof / mockup blobs via the shared
- * `orderBlobs` helper), products (shared `deleteProductCascade`: variants +
- * images + junctions), leftover junctions, categories (+ tile blobs),
- * deliveryJobs (+ POD blobs), deliveryQuotes, customers, pickupLocations
- * (manager name/phone), counterCheckoutSessions (buyer phone/pushname),
- * subscriptions, subscriptionUsage, foundingMembers, retailerSendingLimits,
- * outboundMessageLog (buyer phones), slugHistory, then optOuts attribution,
- * and finally the retailer's own blobs + row.
- *
- * RETAINED BY DECISION (not omissions): `invoices` rows + their frozen PDF
- * blobs (financial records of what Kedaipal charged the seller — no buyer
- * PII) and `adminAuditLog` rows (an audit trail must outlive the tenant it
- * audited). `optOuts` rows are the buyer's GLOBAL suppression instruction and
- * are never deleted — only their `triggeredByRetailerId` attribution is
- * cleared. Rationale lives in convex/lib/accountDeletion.ts + the doc below.
+ * WHAT it sweeps, and what it RETAINS BY DECISION, is deliberately not listed
+ * here. `DELETION_PHASES` in convex/lib/accountDeletion.ts is the list, and the
+ * header above it carries the reasoning for every retained table; this docstring
+ * used to re-enumerate both and had drifted out of date on both counts — a
+ * third copy of a list is a third thing to forget. Read the phase list there, or
+ * docs/account-deletion.md for the prose version.
  *
  * The retailer row is deleted in the FINAL phase, so every continuation batch
  * can re-resolve the tenant by userId; each phase is idempotent, so re-running

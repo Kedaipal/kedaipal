@@ -83,8 +83,8 @@ export function SecurityDepositCard({ order }: { order: DepositOrder }) {
 					<span className="font-bold">Deposit returned in full</span>
 					<span className="text-muted-foreground">
 						{" "}
-						— {formatPrice(deposit, order.currency)} back to the guest. They
-						see this on their order page.
+						— {formatPrice(deposit, order.currency)} back to the guest. They see
+						this on their order page.
 					</span>
 				</p>
 			</section>
@@ -102,7 +102,7 @@ export function SecurityDepositCard({ order }: { order: DepositOrder }) {
 					<span className="font-semibold text-foreground">
 						{formatPrice(deposit, order.currency)} refundable security deposit
 					</span>
-					 — settle the refund with them directly (their order page says the
+					— settle the refund with them directly (their order page says the
 					same).
 				</p>
 			</section>
@@ -115,8 +115,7 @@ export function SecurityDepositCard({ order }: { order: DepositOrder }) {
 
 	const parsedKeep = parsePriceInput(keptAmount.trim());
 	const keepSen = parsedKeep !== null ? Math.round(parsedKeep * 100) : null;
-	const keepValid =
-		keepSen !== null && keepSen > 0 && keepSen <= deposit;
+	const keepValid = keepSen !== null && keepSen > 0 && keepSen <= deposit;
 	const reasonValid = reason.trim().length > 0;
 
 	async function submit(keptSen: number, keptReason?: string) {
@@ -185,10 +184,10 @@ export function SecurityDepositCard({ order }: { order: DepositOrder }) {
 					<DialogHeader>
 						<DialogTitle>Keep part of the deposit</DialogTitle>
 						<DialogDescription>
-							For damage or losses from the stay. The guest sees the amount
-							and your reason word-for-word on their order page — the rest of
-							the {formatPrice(deposit, order.currency)} deposit is recorded
-							as returned.
+							For damage or losses from the stay. The guest sees the amount and
+							your reason word-for-word on their order page — the rest of the{" "}
+							{formatPrice(deposit, order.currency)} deposit is recorded as
+							returned.
 						</DialogDescription>
 					</DialogHeader>
 					<div className="flex flex-col gap-3">
@@ -209,9 +208,8 @@ export function SecurityDepositCard({ order }: { order: DepositOrder }) {
 							/>
 							{keptAmount.trim().length > 0 && !keepValid ? (
 								<span className="text-xs font-normal text-destructive">
-									Enter an amount up to{" "}
-									{formatPrice(deposit, order.currency)}. To return
-									everything, use &ldquo;Mark returned in full&rdquo;.
+									Enter an amount up to {formatPrice(deposit, order.currency)}.
+									To return everything, use &ldquo;Mark returned in full&rdquo;.
 								</span>
 							) : null}
 						</label>

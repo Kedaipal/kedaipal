@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	within,
+} from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -7,6 +13,7 @@ import {
 	parseBuyerWaPhone,
 } from "../../../convex/lib/buyerPhone";
 import { COUNTRIES, type Country } from "../../../convex/lib/country";
+import { flagEmoji, resetFlagEmojiSupportForTest } from "../../lib/flag-emoji";
 import { waPhoneCheckoutSchema } from "../../lib/schemas";
 import {
 	applyBuyerPhoneKeystroke,
@@ -118,7 +125,7 @@ describe("MyPhonePrefix", () => {
  * shows is what `parseBuyerWaPhone` judges by, and a typed `+CC` moves it —
  * plus the accessibility of a control that is two elements under one border.
  */
-describe("BuyerPhoneInput", () => {
+describe("BuyerPhoneInput", async () => {
 	afterEach(cleanup);
 
 	/** A controlled host, like every real caller: value + pick in state. */
@@ -152,19 +159,38 @@ describe("BuyerPhoneInput", () => {
 		);
 	}
 
-	const picker = () =>
-		screen.getByRole("combobox", {
-			name: "Country of your WhatsApp number",
-		}) as HTMLSelectElement;
+	/**
+	 * The plate's control. It used to be an invisible `<select>`; since
+	 * z8r3fdm36y it is a button opening a searchable sheet, so the queries
+	 * change shape — what each test is PROVING does not.
+	 */
+	const picker = (name = "Country of your WhatsApp number") =>
+		screen.getByRole("button", { name }) as HTMLButtonElement;
+
+	/** The dial code the plate is showing — this control's "value". Read it with
+	 * the sheet CLOSED: open, the list repeats every code. */
+	const plateCode = () =>
+		within(picker().parentElement as HTMLElement).getByText(/^\+\d+$/)
+			.textContent;
+
+	/** Open the sheet and pick a country by its row. */
+	async function pick(name: string, query?: string) {
+		fireEvent.click(picker());
+		const search = await screen.findByRole("combobox");
+		if (query !== undefined)
+			fireEvent.change(search, { target: { value: query } });
+		fireEvent.click(
+			await screen.findByRole("option", { name: new RegExp(name) }),
+		);
+	}
 
 	it.each([
 		["MY", "+60", "Malaysia"],
 		["SG", "+65", "Singapore"],
 	] as const)("opens on the store's country (%s)", (country, code, name) => {
 		render(<Host storeCountry={country} />);
-		expect(picker().value).toBe(country);
-		expect(screen.getByText(code)).toBeDefined();
-		// The flag is decoration beside a select that already announces the
+		expect(plateCode()).toBe(code);
+		// The flag is decoration beside a control that already announces the
 		// country — hidden from the accessibility tree, not read twice.
 		expect(screen.queryByRole("img", { name })).toBeNull();
 		expect(screen.getByRole("textbox").getAttribute("placeholder")).toBe(
@@ -184,25 +210,21 @@ describe("BuyerPhoneInput", () => {
 				countryLabel="Country of the buyer's WhatsApp number"
 			/>,
 		);
+		expect(picker("Country of the buyer's WhatsApp number")).toBeDefined();
 		expect(
-			screen.getByRole("combobox", {
-				name: "Country of the buyer's WhatsApp number",
-			}),
-		).toBeDefined();
-		expect(
-			screen.queryByRole("combobox", {
+			screen.queryByRole("button", {
 				name: "Country of your WhatsApp number",
 			}),
 		).toBeNull();
 	});
 
-	it("shows keyboard focus on the plate — the select itself is invisible", () => {
-		// A Tab onto an opacity-0 select would otherwise land nowhere visible.
+	it("shows keyboard focus on the plate — the trigger itself is invisible", () => {
+		// A Tab onto an opacity-0 trigger would otherwise land nowhere visible.
 		// The wash span right after it is its `peer`, and paints the ring.
 		render(<Host storeCountry="MY" />);
-		const select = picker();
-		expect(select.classList.contains("peer")).toBe(true);
-		const wash = select.nextElementSibling as HTMLElement;
+		const trigger = picker();
+		expect(trigger.classList.contains("peer")).toBe(true);
+		const wash = trigger.nextElementSibling as HTMLElement;
 		expect(wash.getAttribute("aria-hidden")).toBe("true");
 		for (const cls of [
 			"peer-focus-visible:bg-muted",
@@ -214,15 +236,41 @@ describe("BuyerPhoneInput", () => {
 		}
 	});
 
-	it("lists the store's country first", () => {
+	it("lists the store's country first", async () => {
 		render(<Host storeCountry="SG" />);
-		expect(picker().options[0]?.value).toBe("SG");
+		fireEvent.click(picker());
+		const options = await screen.findAllByRole("option");
+		expect(options[0]?.textContent).toContain("Singapore");
 	});
 
-	it("is one text input and one select — nothing else to tab through", () => {
+	it("searches by dial code — the one string the plate actually prints", async () => {
+		// The native <select> this replaced could only type-ahead the country
+		// NAME, so "+81" matched nothing at all. That is why it was replaced.
+		render(<Host storeCountry="MY" />);
+		fireEvent.click(picker());
+		fireEvent.change(await screen.findByRole("combobox"), {
+			target: { value: "+81" },
+		});
+		const options = await screen.findAllByRole("option");
+		expect(options[0]?.textContent).toContain("Japan");
+	});
+
+	it("says so when nothing matches, instead of an empty box", async () => {
+		render(<Host storeCountry="MY" />);
+		fireEvent.click(picker());
+		fireEvent.change(await screen.findByRole("combobox"), {
+			target: { value: "zzzzz" },
+		});
+		expect(await screen.findByText(/No country matches/)).toBeDefined();
+		expect(screen.queryAllByRole("option")).toHaveLength(0);
+	});
+
+	it("is one text input and one picker button — nothing else to tab through", () => {
 		const { container } = render(<Host storeCountry="MY" />);
 		expect(container.querySelectorAll("input")).toHaveLength(1);
-		expect(container.querySelectorAll("select")).toHaveLength(1);
+		// The 241-option <select> is gone; its replacement opens on demand.
+		expect(container.querySelectorAll("select")).toHaveLength(0);
+		expect(container.querySelectorAll("button")).toHaveLength(1);
 	});
 
 	it("marks the number invalid, never the picker", () => {
@@ -244,14 +292,14 @@ describe("BuyerPhoneInput", () => {
 		expect(picker().hasAttribute("aria-invalid")).toBe(false);
 	});
 
-	it("reports a pick from the select", () => {
+	it("reports a pick from the sheet", async () => {
 		const onDialCountryChange = vi.fn();
 		render(
 			<Host storeCountry="MY" onDialCountryChange={onDialCountryChange} />,
 		);
-		fireEvent.change(picker(), { target: { value: "BN" } });
+		await pick("Brunei", "brunei");
 		expect(onDialCountryChange).toHaveBeenCalledWith("BN");
-		expect(picker().value).toBe("BN");
+		expect(plateCode()).toBe("+673");
 	});
 
 	it("a typed or pasted +CC moves the picker and keeps only the national part", () => {
@@ -270,7 +318,7 @@ describe("BuyerPhoneInput", () => {
 		});
 		expect(onDialCountryChange).toHaveBeenCalledWith("JP");
 		expect(onChange).toHaveBeenCalledWith("90-1234-5678");
-		expect(picker().value).toBe("JP");
+		expect(plateCode()).toBe("+81");
 		expect((screen.getByRole("textbox") as HTMLInputElement).value).toBe(
 			"90-1234-5678",
 		);
@@ -289,7 +337,7 @@ describe("BuyerPhoneInput", () => {
 		expect(input.value).toBe("+4");
 		fireEvent.change(input, { target: { value: "+44" } });
 		expect(onDialCountryChange).toHaveBeenCalledWith("GB");
-		expect(picker().value).toBe("GB");
+		expect(plateCode()).toBe("+44");
 		// The code went to the plate; the box is left for the national number.
 		expect(input.value).toBe("");
 	});
@@ -298,7 +346,7 @@ describe("BuyerPhoneInput", () => {
 		render(<Host storeCountry="MY" initialValue="12-345" />);
 		const input = screen.getByRole("textbox") as HTMLInputElement;
 		fireEvent.change(input, { target: { value: "+81 90-1234-5678" } });
-		expect(picker().value).toBe("JP");
+		expect(plateCode()).toBe("+81");
 		expect(input.value).toBe("90-1234-5678");
 	});
 
@@ -316,7 +364,7 @@ describe("BuyerPhoneInput", () => {
 		const input = screen.getByRole("textbox") as HTMLInputElement;
 		fireEvent.change(input, { target: { value: "+12-345 6789" } });
 		expect(onDialCountryChange).not.toHaveBeenCalled();
-		expect(picker().value).toBe("MY");
+		expect(plateCode()).toBe("+60");
 		expect(input.value).toBe("+12-345 6789");
 	});
 
@@ -329,16 +377,16 @@ describe("BuyerPhoneInput", () => {
 			target: { value: "9123 4567" },
 		});
 		expect(onDialCountryChange).not.toHaveBeenCalled();
-		expect(picker().value).toBe("MY");
+		expect(plateCode()).toBe("+60");
 	});
 
-	it("a country without an inline flag shows its ISO badge and a neutral placeholder", () => {
+	it("a country without an inline flag shows its ISO badge and a neutral placeholder", async () => {
 		// No made-up example for 239 countries: a format the buyer then can't
 		// match would be worse than none.
 		render(<Host storeCountry="MY" />);
-		fireEvent.change(picker(), { target: { value: "JP" } });
+		await pick("Japan", "japan");
 		expect(screen.getByText("JP")).toBeDefined();
-		expect(screen.getByText("+81")).toBeDefined();
+		expect(plateCode()).toBe("+81");
 		expect(screen.getByRole("textbox").getAttribute("placeholder")).toBe(
 			"Mobile number",
 		);
@@ -497,5 +545,56 @@ describe("applyBuyerPhoneKeystroke — when a typed code moves the picker", () =
 		expect(
 			applyBuyerPhoneKeystroke("+12-345 6789", "MY", "12-345 6789"),
 		).toEqual({ value: "+12-345 6789", dialCountry: "MY" });
+	});
+});
+
+describe("the picker's flags (z8r3fdm36y follow-up)", () => {
+	afterEach(() => resetFlagEmojiSupportForTest(undefined));
+
+	function openList() {
+		render(
+			<BuyerPhoneInput
+				value=""
+				onChange={() => {}}
+				storeCountry="MY"
+				dialCountry="MY"
+				onDialCountryChange={() => {}}
+			/>,
+		);
+		fireEvent.click(
+			screen.getByRole("button", { name: "Country of your WhatsApp number" }),
+		);
+	}
+
+	it("gives EVERY row a flag, not just MY and SG", async () => {
+		// The complaint this fixes: MY/SG had inline SVGs (drawn for the seller's
+		// fixed plate and reused) while the other 239 countries got a letter
+		// badge, so two rows out of 248 looked different. Every row now draws the
+		// same way. Hand the list `flags` again and this goes red.
+		resetFlagEmojiSupportForTest(true);
+		openList();
+		const rows = await screen.findAllByRole("option");
+		const texts = rows.map((r) => r.textContent ?? "");
+		// A flag emoji on the Malaysia row, exactly as on a far-flung one.
+		expect(texts.find((t) => t.includes("Malaysia"))).toContain(
+			flagEmoji("MY"),
+		);
+		expect(texts.find((t) => t.includes("Japan"))).toContain(flagEmoji("JP"));
+		expect(texts.find((t) => t.includes("Afghanistan"))).toContain(
+			flagEmoji("AF"),
+		);
+	});
+
+	it("falls the WHOLE list back to badges where flags don't render", async () => {
+		// Windows has no flag glyphs. Mixing emoji and badges per row would be
+		// the same inconsistency in a new coat, so the device decides once.
+		resetFlagEmojiSupportForTest(false);
+		openList();
+		const rows = await screen.findAllByRole("option");
+		const texts = rows.map((r) => r.textContent ?? "");
+		expect(texts.some((t) => t.includes(flagEmoji("MY")))).toBe(false);
+		expect(texts.some((t) => t.includes(flagEmoji("JP")))).toBe(false);
+		// …and the badge is what's there instead.
+		expect(texts.find((t) => t.includes("Japan"))).toMatch(/JP/);
 	});
 });

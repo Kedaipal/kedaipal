@@ -50,6 +50,7 @@ function seller(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 		country: "MY",
 		currency: "MYR",
 		billingCurrency: "MYR",
+		availability: { state: "open" },
 		...overrides,
 	};
 }
