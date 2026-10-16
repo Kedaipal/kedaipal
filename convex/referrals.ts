@@ -10,27 +10,45 @@
  */
 
 import { ConvexError, v } from "convex/values";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
+	internalAction,
+	internalQuery,
 	type MutationCtx,
 	mutation,
 	type QueryCtx,
 	query,
 } from "./_generated/server";
+import { addPurchasedCredits } from "./credits";
 import {
 	requireAdmin,
 	requireRetailerAccess,
 	resolveMyRetailerFor,
 	storeOwnerIsAdmin,
 } from "./lib/auth";
-import type { ListedPlan } from "./lib/plans";
+import { billingPageUrl } from "./lib/billingUrl";
+import { sendEmail } from "./lib/email";
+import { pickLocale } from "./lib/locale";
+import {
+	type ListedPlan,
+	PURCHASED_CREDIT_LIFETIME_MONTHS,
+	type Plan,
+} from "./lib/plans";
 import { sanitizeReferrerSlug } from "./lib/poweredBy";
 import {
 	type ReferrerIneligibleReason,
 	type ReferrerStanding,
+	referralHref,
 	referralRefereeOffer,
+	referralRewardCredits,
 	referrerStanding,
 } from "./lib/referral";
+import {
+	type ReferralEmailKind,
+	renderReferralEmail,
+} from "./lib/referralEmailCopy";
+import { addMonthsMyt } from "./lib/usagePeriod";
 import { isUnclaimed } from "./lib/unclaimedStore";
 import { loadSubscription } from "./subscriptions";
 
@@ -197,6 +215,8 @@ export type MyReferral = {
 	/** Whether the referee has already paid their first plan invoice — the
 	 * moment the reward lands (T2). */
 	firstInvoicePaid: boolean;
+	/** The bonus that landed, once it has (T2). */
+	reward: { credits: number; at: number } | null;
 };
 
 /**
@@ -225,6 +245,10 @@ export const mine = query({
 			referrerName: referrer?.storeName ?? null,
 			offer: referralRefereeOffer(),
 			firstInvoicePaid: await hasPaidPlanInvoice(ctx, retailer._id),
+			reward:
+				row.rewardedAt !== undefined && row.refereeCredits !== undefined
+					? { credits: row.refereeCredits, at: row.rewardedAt }
+					: null,
 		};
 	},
 });
@@ -326,5 +350,241 @@ export const adminClearReferral = mutation({
 			targetId: existing.referrerId,
 			ts: Date.now(),
 		});
+	},
+});
+
+// ---------------------------------------------------------------------------
+// T2 (86ey82hke): the reward, at the referee's first paid plan invoice
+// ---------------------------------------------------------------------------
+
+/**
+ * Called from `invoices.settleInvoicePaid` — the ONE settle path every rail
+ * (Pay-now webhook, auto-charge, admin mark-paid) funnels into — when a
+ * store's FIRST plan invoice is paid. Lands both sides' bonus credits in the
+ * purchased bucket (12-month lots) and stamps the referral row, all in the
+ * settle transaction, so the stamp IS the idempotency guard: a second settle
+ * finds `rewardedAt` and does nothing.
+ *
+ *  - Referee: 30% of a month of the tier they paid for (`referralRewardCredits`).
+ *  - Referrer: 30% of a month of THEIR tier — unless they are unmetered
+ *    (comped or Kedaipal-owned: already unlimited) or deleted; the row says
+ *    which. Whether they could still refer TODAY doesn't matter: the referral
+ *    was valid when it was made, and that was the promise.
+ *
+ * No referral row ⇒ nothing (most stores). Returns what happened, for tests.
+ */
+export async function grantReferralRewards(
+	ctx: MutationCtx,
+	args: { refereeId: Id<"retailers">; paidPlan: Plan; now: number },
+): Promise<Doc<"referrals"> | null> {
+	const row = await referralForReferee(ctx, args.refereeId);
+	if (!row || row.rewardedAt !== undefined) return null;
+	const referee = await ctx.db.get(args.refereeId);
+	if (!referee) return null;
+	const referrer = await ctx.db.get(row.referrerId);
+
+	const refereeCredits = referralRewardCredits(args.paidPlan);
+	const landed = await addPurchasedCredits(ctx, {
+		retailerId: args.refereeId,
+		credits: refereeCredits,
+		source: "referral",
+		type: "grant",
+		reason: "referral_referee",
+		refId: row._id,
+		refLabel: referrer?.storeName,
+		createdBy: "system",
+		now: args.now,
+	});
+
+	let referrerCredits: number | undefined;
+	let referrerOutcome: NonNullable<Doc<"referrals">["referrerOutcome"]>;
+	if (!referrer) {
+		referrerOutcome = "deleted";
+	} else {
+		const standing = await standingOf(ctx, referrer);
+		const sub = await loadSubscription(ctx, referrer._id);
+		// Unmetered = comped or Kedaipal-owned. `standing` answers that for a
+		// store that can still refer; a lapsed paid store can't refer NOW but
+		// still earns for the referral it made while it could.
+		const unmetered =
+			(standing.canRefer && !standing.earnsReward) ||
+			sub?.comped === true ||
+			storeOwnerIsAdmin(referrer);
+		if (unmetered) {
+			referrerOutcome = "unmetered";
+		} else {
+			const credits = referralRewardCredits(sub?.plan ?? "pro");
+			const granted = await addPurchasedCredits(ctx, {
+				retailerId: referrer._id,
+				credits,
+				source: "referral",
+				type: "grant",
+				reason: "referral_referrer",
+				refId: row._id,
+				refLabel: referee.storeName,
+				createdBy: "system",
+				now: args.now,
+			});
+			referrerOutcome = granted ? "granted" : "unmetered";
+			if (granted) referrerCredits = credits;
+		}
+	}
+
+	const patch = {
+		rewardedAt: args.now,
+		...(landed ? { refereeCredits } : {}),
+		...(referrerCredits !== undefined ? { referrerCredits } : {}),
+		referrerOutcome,
+	};
+	await ctx.db.patch(row._id, patch);
+
+	const expiresAt = addMonthsMyt(args.now, PURCHASED_CREDIT_LIFETIME_MONTHS);
+	if (landed) {
+		await ctx.scheduler.runAfter(0, internal.referrals.sendRewardEmail, {
+			to: args.refereeId,
+			kind: "referee",
+			otherStoreId: row.referrerId,
+			credits: refereeCredits,
+			expiresAt,
+		});
+	}
+	if (referrerCredits !== undefined) {
+		await ctx.scheduler.runAfter(0, internal.referrals.sendRewardEmail, {
+			to: row.referrerId,
+			kind: "referrer",
+			otherStoreId: args.refereeId,
+			credits: referrerCredits,
+			expiresAt,
+		});
+	}
+	console.info("[referral] rewarded", {
+		referralId: row._id,
+		refereeCredits: landed ? refereeCredits : 0,
+		referrerOutcome,
+	});
+	return { ...row, ...patch };
+}
+
+export const rewardEmailContext = internalQuery({
+	args: { to: v.id("retailers"), otherStoreId: v.id("retailers") },
+	handler: async (ctx, { to, otherStoreId }) => {
+		const store = await ctx.db.get(to);
+		if (!store) return null;
+		const other = await ctx.db.get(otherStoreId);
+		return {
+			storeName: store.storeName,
+			slug: store.slug,
+			notifyEmail: store.notifyEmail,
+			locale: pickLocale(store.locale),
+			otherStoreName: other?.storeName ?? null,
+		};
+	},
+});
+
+/** The reward email — to the seller's `notifyEmail`, in their locale. A
+ * failure is logged, never retried into a second email: the credits and the
+ * Credit activity row already say it. */
+export const sendRewardEmail = internalAction({
+	args: {
+		to: v.id("retailers"),
+		kind: v.union(v.literal("referee"), v.literal("referrer")),
+		otherStoreId: v.id("retailers"),
+		credits: v.number(),
+		expiresAt: v.number(),
+	},
+	handler: async (ctx, args): Promise<void> => {
+		const meta = await ctx.runQuery(internal.referrals.rewardEmailContext, {
+			to: args.to,
+			otherStoreId: args.otherStoreId,
+		});
+		if (!meta?.notifyEmail) return;
+		const kind: ReferralEmailKind = args.kind;
+		const rendered = renderReferralEmail(meta.locale, kind, {
+			storeName: meta.storeName,
+			otherStoreName: meta.otherStoreName,
+			credits: args.credits,
+			expiresAt: args.expiresAt,
+			billingUrl: billingPageUrl(),
+			referralLink: kind === "referrer" ? referralHref(meta.slug) : undefined,
+		});
+		try {
+			await sendEmail(
+				meta.notifyEmail,
+				rendered.subject,
+				rendered.html,
+				rendered.text,
+			);
+		} catch (err) {
+			console.error("[referral] reward email failed", { ...args, err });
+		}
+	},
+});
+
+// ---------------------------------------------------------------------------
+// T3 (z8r3fdfp97): the "Refer a kedai" card
+// ---------------------------------------------------------------------------
+
+/** How many of a referrer's rows the card counts. A seller with more than
+ * this many referrals is a partner conversation, not a card. */
+const STATS_CAP = 500;
+
+export type MyReferralCard = {
+	slug: string;
+	link: string;
+	/** Whether this store's link counts right now, and why not. */
+	standing: ReferrerStanding;
+	/** What the referee gets, per tier. */
+	refereeOffer: Record<ListedPlan, number>;
+	/** What THIS store gets per referral that starts its plan — 0 when it
+	 * earns nothing (comped / Kedaipal-owned). */
+	referrerReward: number;
+	signedUp: number;
+	/** Referees who paid their first invoice (the reward moment). */
+	started: number;
+	/** Credits this store has earned from referrals so far. */
+	creditsEarned: number;
+	/** The count hit STATS_CAP. */
+	capped: boolean;
+};
+
+/**
+ * The caller's store as a REFERRER, for the Home card. Any member may read it:
+ * the link is public and the counts are counts — no referee is named. `null`
+ * when signed out or storeless.
+ */
+export const myCard = query({
+	args: { retailerId: v.optional(v.id("retailers")) },
+	handler: async (ctx, { retailerId }): Promise<MyReferralCard | null> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) return null;
+		const access = retailerId
+			? await requireRetailerAccess(ctx, retailerId, { anyMember: true })
+			: await resolveMyRetailerFor(ctx, { anyMember: true });
+		const retailer = access?.retailer ?? null;
+		if (!retailer) return null;
+		const standing = await standingOf(ctx, retailer);
+		const sub = await loadSubscription(ctx, retailer._id);
+		const rows = await ctx.db
+			.query("referrals")
+			.withIndex("by_referrer_created", (q) => q.eq("referrerId", retailer._id))
+			.take(STATS_CAP);
+		let started = 0;
+		let creditsEarned = 0;
+		for (const r of rows) {
+			if (r.rewardedAt !== undefined) started += 1;
+			creditsEarned += r.referrerCredits ?? 0;
+		}
+		const earns = standing.canRefer && standing.earnsReward;
+		return {
+			slug: retailer.slug,
+			link: referralHref(retailer.slug),
+			standing,
+			refereeOffer: referralRefereeOffer(),
+			referrerReward: earns ? referralRewardCredits(sub?.plan ?? "pro") : 0,
+			signedUp: rows.length,
+			started,
+			creditsEarned,
+			capped: rows.length >= STATS_CAP,
+		};
 	},
 });

@@ -11,6 +11,7 @@ const referral: MyReferral = {
 	referrerName: "Siti's Kitchen",
 	offer: referralRefereeOffer(),
 	firstInvoicePaid: false,
+	reward: null,
 };
 
 describe("ReferralBonusNote", () => {

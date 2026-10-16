@@ -73,6 +73,7 @@ import {
 	prepareCreditsForSettle,
 	writeGrantOverride,
 } from "./credits";
+import { grantReferralRewards } from "./referrals";
 import { getPaymentProvider, type PaymentRecord } from "./payments/provider";
 import { reserveFoundingRank, stampFoundingPaid } from "./foundingMembers";
 import { defaultCapsForPlan } from "./subscriptions";
@@ -382,6 +383,25 @@ async function settleInvoicePaid(
 			invoiceId: invoice._id,
 			err,
 		});
+	}
+
+	// 2d) Referral reward (86ey82hke): a store's FIRST paid plan invoice lands
+	//     both sides' bonus credits — the referee for the tier it just paid
+	//     for. After 2c so the plan bucket is settled first; a failure never
+	//     blocks the payment (the admin sheet shows the referral unrewarded).
+	if (firstTime && !isHold) {
+		try {
+			await grantReferralRewards(ctx, {
+				refereeId: invoice.retailerId,
+				paidPlan: billedPlan,
+				now,
+			});
+		} catch (err) {
+			console.error("[referral] reward failed — settle continues", {
+				invoiceId: invoice._id,
+				err,
+			});
+		}
 	}
 
 	// 3) Founding — the slot is reserved at onboard (signup). For the

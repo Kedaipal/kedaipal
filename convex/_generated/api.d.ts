@@ -151,6 +151,7 @@ import type * as lib_promoTally from "../lib/promoTally.js";
 import type * as lib_promotions from "../lib/promotions.js";
 import type * as lib_rateLimiter from "../lib/rateLimiter.js";
 import type * as lib_referral from "../lib/referral.js";
+import type * as lib_referralEmailCopy from "../lib/referralEmailCopy.js";
 import type * as lib_reservedSlugs from "../lib/reservedSlugs.js";
 import type * as lib_retention from "../lib/retention.js";
 import type * as lib_seasonalHold from "../lib/seasonalHold.js";
@@ -349,6 +350,7 @@ declare const fullApi: ApiFromModules<{
   "lib/promotions": typeof lib_promotions;
   "lib/rateLimiter": typeof lib_rateLimiter;
   "lib/referral": typeof lib_referral;
+  "lib/referralEmailCopy": typeof lib_referralEmailCopy;
   "lib/reservedSlugs": typeof lib_reservedSlugs;
   "lib/retention": typeof lib_retention;
   "lib/seasonalHold": typeof lib_seasonalHold;

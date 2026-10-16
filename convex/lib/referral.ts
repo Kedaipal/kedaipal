@@ -142,3 +142,15 @@ export function referrerStanding(args: {
 			return { canRefer: false, reason: "no_plan" };
 	}
 }
+
+/**
+ * The WhatsApp message the "Refer a kedai" card pre-fills (T3, z8r3fdfp97) —
+ * one author, so copy changes never touch the component. Says what Kedaipal
+ * fixes in the seller's own words, then the referee's offer and the link.
+ * The house register: "refer", "kedai", bonus credits — never "commission",
+ * "affiliate" or a money amount.
+ */
+export function referralShareMessage(link: string): string {
+	const offer = referralRefereeOffer();
+	return `I use Kedaipal for my WhatsApp orders — no more orders lost in the chat, and payments are tracked for me. Sign up through my link and you get ${offer.pro} bonus credits when you start Pro (${offer.starter} on Starter). 1 credit = 1 order:\n${link}`;
+}

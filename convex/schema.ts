@@ -3736,6 +3736,24 @@ export default defineSchema({
 		// "system" for the link; the admin's Clerk subject otherwise.
 		recordedBy: v.string(),
 		createdAt: v.number(),
+		// The reward (T2, 86ey82hke) — stamped ONCE, in the same transaction as
+		// the credits, when the referee's first plan invoice is paid. Set =
+		// done: the stamp is the idempotency guard, so a second settle path
+		// (webhook + manual mark-paid) can never pay twice.
+		rewardedAt: v.optional(v.number()),
+		// Credits each side received. `referrerCredits` is absent when the
+		// referrer got nothing — `referrerOutcome` says why.
+		refereeCredits: v.optional(v.number()),
+		referrerCredits: v.optional(v.number()),
+		// `granted`; `unmetered` (a comped or Kedaipal-owned referrer — already
+		// unlimited, so nothing to give); `deleted` (the referrer store is gone).
+		referrerOutcome: v.optional(
+			v.union(
+				v.literal("granted"),
+				v.literal("unmetered"),
+				v.literal("deleted"),
+			),
+		),
 	})
 		.index("by_referee", ["refereeId"])
 		.index("by_referrer_created", ["referrerId", "createdAt"]),

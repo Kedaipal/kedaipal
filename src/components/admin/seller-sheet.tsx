@@ -897,7 +897,16 @@ function ReferralRow({ seller, now }: { seller: AdminSellerRow; now: number }) {
 				) : (
 					<Plain muted>Nobody</Plain>
 				)}
-				{seller.referralEditable ? (
+				{referral?.reward ? (
+					<span className="shrink-0 text-xs text-muted-foreground">
+						Rewarded · +{referral.reward.refereeCredits} them
+						{referral.reward.referrerOutcome === "granted"
+							? ` · +${referral.reward.referrerCredits ?? 0} referrer`
+							: referral.reward.referrerOutcome === "unmetered"
+								? " · referrer on the house"
+								: " · referrer deleted"}
+					</span>
+				) : seller.referralEditable ? (
 					<Button
 						type="button"
 						variant="ghost"

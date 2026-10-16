@@ -7,6 +7,7 @@ import {
 	referralPath,
 	referralRefereeOffer,
 	referralRewardCredits,
+	referralShareMessage,
 	referralSourceTag,
 	referrerStanding,
 } from "./referral";
@@ -127,5 +128,15 @@ describe("referrerStanding", () => {
 		expect(
 			referrerStanding({ ...base, unclaimed: true, comped: true }),
 		).toEqual({ canRefer: false, reason: "unclaimed" });
+	});
+});
+
+describe("referral share message", () => {
+	test("carries the link and the referee's offer, never money or commission", () => {
+		const msg = referralShareMessage("https://kedaipal.com/referral/siti");
+		expect(msg).toContain("https://kedaipal.com/referral/siti");
+		expect(msg).toContain("60 bonus credits");
+		expect(msg).toContain("30 on Starter");
+		expect(msg).not.toMatch(/RM|commission|affiliate|earn/i);
 	});
 });

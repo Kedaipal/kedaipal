@@ -8,11 +8,11 @@ subscription discount anywhere**: rewards are credits only.
 | Ticket | Scope | Status |
 | --- | --- | --- |
 | [z8r3fdetf5](https://app.clickup.com/t/z8r3fdetf5) — T1 | The link, the durable capture, the `referrals` record, the referee's invite surfaces, the admin fix-up | **this doc** |
-| [86ey82hke](https://app.clickup.com/t/86ey82hke) — T2 | The two credit grants at the referee's first paid invoice, email + in-app notices | to build |
-| [z8r3fdfp97](https://app.clickup.com/t/z8r3fdfp97) — T3 | The "Refer a kedai" card: copy link, WhatsApp share, signed-up / started counts | to build |
+| [86ey82hke](https://app.clickup.com/t/86ey82hke) — T2 | The two credit grants at the referee's first paid invoice, the reward emails, the Credit activity rows | **this doc** |
+| [z8r3fdfp97](https://app.clickup.com/t/z8r3fdfp97) — T3 | The "Refer a kedai" Home card: copy link, WhatsApp share, signed-up / started / earned counts | **this doc** |
 
-The three ship as ONE release. T1 shows the referee the bonus they'll get, and
-T2 is what pays it, so **T1 must never reach production without T2.**
+The three ship as ONE release on one branch. T1 shows the referee the bonus
+they'll get and T2 is what pays it, so they must never ship apart.
 
 ## The terms (Zaki, 7 Oct 2026)
 
@@ -118,11 +118,59 @@ truncates. The referrer rides `store=` and lands on the row.
 The offer copy never says "you both get". A comped referrer earns nothing, so
 "both" would be false for a partner's referee.
 
+## The reward (T2)
+
+`invoices.settleInvoicePaid` — the ONE settle path every rail (Pay-now
+webhook, auto-charge, admin mark-paid) funnels into — calls
+`referrals.grantReferralRewards` when a store's **first** plan invoice is paid
+(`firstTime && !isHold`), right after the plan credits land:
+
+- **Referee:** `referralRewardCredits(paidPlan)` → a `referral` lot (12
+  months), ledger reason `referral_referee`, `refLabel` = the referrer's name.
+- **Referrer:** `referralRewardCredits(theirPlan)`, reason `referral_referrer`,
+  `refLabel` = the referee's name — **unless** the referrer is unmetered
+  (comped or Kedaipal-owned) or deleted. A referrer that LAPSED since still
+  earns: the referral was valid when it was made.
+- **Exactly once.** The `referrals` row is stamped (`rewardedAt`,
+  `refereeCredits`, `referrerCredits`, `referrerOutcome`) in the same
+  transaction as the credits, and a stamped row is a no-op — so a webhook and
+  a manual mark-paid racing each other can't pay twice. Pinned by a test that
+  calls the grant twice (and goes red when the guard is removed).
+- **A reward failure never blocks a payment** — it is caught and logged; the
+  admin sheet then shows the referral un-rewarded.
+
+**Telling both sides** (no WhatsApp): an email each, in the seller's locale
+(`lib/referralEmailCopy.ts`, en/ms/zh — names the other store, the credits and
+the expiry date; the referrer's carries their link to keep sharing), and a
+Credit activity row each ("Referral bonus — referred by Siti's Kitchen" /
+"Referral reward — New Kedai started their plan"). The referee's billing note
+goes quiet once the invoice is paid; `referrals.mine.reward` carries what
+landed.
+
+## The card (T3)
+
+`src/components/home/refer-card.tsx`, read from `referrals.myCard` (any
+member: the link is public and the card shows counts, never a referee's name).
+Its **own section at the foot of Home** — not inside the "Your store" card,
+which shares the store with buyers; this refers another seller, and it is
+never urgent.
+
+| Store | Card |
+| --- | --- |
+| Active paid | The offer both ways, the link, Copy + Share on WhatsApp (`referralShareMessage`, one author), and Signed up / Started their plan / Credits earned |
+| Comped / Kedaipal-owned | The same, minus earnings, with "your account is on the house — but every kedai you refer still gets their bonus" |
+| On hold / lapsed | **Paused**, saying why and linking to Billing — a link that silently stopped counting would be hidden behaviour |
+| Trial | Nothing (Zaki: refer once the plan is paid) |
+
+Zero sign-ups is a sentence, not a row of zeros. The counts read
+`referrals.by_referrer_created`, capped at 500 ("500+").
+
 ## Admin
 
 - **Sellers → a seller's sheet → "How they arrived" → Referred by** shows the
   referrer (or "A store since deleted"), whether it came via their link or was
-  set by an admin, and when.
+  set by an admin, and when — and once paid, what each side received
+  ("Rewarded · +60 them · +30 referrer" / "referrer on the house").
 - **Set referrer / Change** (`referrals.adminSetReferrer`) puts right a
   referral the link didn't capture: another browser, an off-link intro, or a
   pre-built store handed to a referred vendor. The link's own rules apply, and

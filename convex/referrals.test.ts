@@ -272,6 +272,7 @@ describe("referrals.mine (the referee's own view)", () => {
 			referrerName: "Store siti-kitchen",
 			offer: { starter: 30, pro: 60 },
 			firstInvoicePaid: false,
+			reward: null,
 		});
 	});
 
@@ -500,5 +501,258 @@ describe("store deletion", () => {
 			await runDeletionPhase(ctx, r, "referrals", 50, null);
 		});
 		expect(await referralOf(t, refereeId)).toBeNull();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// T2 (86ey82hke): the reward at the referee's first paid plan invoice — driven
+// through the real settle path (admin issue → mark paid), the same one every
+// payment rail funnels into.
+// ---------------------------------------------------------------------------
+
+async function payInvoice(
+	t: T,
+	retailerId: Id<"retailers">,
+	plan: "starter" | "pro" = "pro",
+): Promise<void> {
+	const asAdmin = t.withIdentity({ subject: ADMIN });
+	const { invoiceId } = await asAdmin.mutation(api.invoices.issueInvoice, {
+		retailerId,
+		plan,
+		billingCycle: "monthly",
+		founding: false,
+	});
+	await asAdmin.mutation(api.invoices.markPaid, {
+		invoiceId,
+		paymentMethod: "duitnow",
+	});
+}
+
+async function referralRows(t: T, retailerId: Id<"retailers">) {
+	return await t.run(async (ctx) => {
+		const rows = await ctx.db
+			.query("creditLedger")
+			.withIndex("by_retailer_created", (q) => q.eq("retailerId", retailerId))
+			.collect();
+		return rows.filter(
+			(r) =>
+				r.reason === "referral_referee" || r.reason === "referral_referrer",
+		);
+	});
+}
+
+async function referredPair(
+	t: T,
+	referrerPatch: Partial<Doc<"subscriptions">> = { status: "active" },
+) {
+	const referrerId = await createStore(t, REFERRER, "siti-kitchen");
+	await setSub(t, referrerId, { status: "active" });
+	const refereeId = await createStore(t, REFEREE, "new-kedai", {
+		referralSlug: "siti-kitchen",
+	});
+	await setSub(t, referrerId, referrerPatch);
+	return { referrerId, refereeId };
+}
+
+describe("referral reward at the first paid invoice (T2)", () => {
+	test("a referee paying Pro gets 60; an active Starter referrer gets 30", async () => {
+		const t = setup();
+		const { referrerId, refereeId } = await referredPair(t, {
+			status: "active",
+			plan: "starter",
+		});
+		await payInvoice(t, refereeId, "pro");
+
+		const refereeRows = await referralRows(t, refereeId);
+		expect(refereeRows).toHaveLength(1);
+		expect(refereeRows[0]).toMatchObject({
+			type: "grant",
+			bucket: "purchased",
+			amount: 60,
+			reason: "referral_referee",
+			refLabel: "Store siti-kitchen",
+		});
+		const referrerRows = await referralRows(t, referrerId);
+		expect(referrerRows).toHaveLength(1);
+		expect(referrerRows[0]).toMatchObject({
+			amount: 30,
+			reason: "referral_referrer",
+			refLabel: "Store new-kedai",
+		});
+		const row = await referralOf(t, refereeId);
+		expect(row).toMatchObject({
+			refereeCredits: 60,
+			referrerCredits: 30,
+			referrerOutcome: "granted",
+		});
+		expect(row?.rewardedAt).toBeTypeOf("number");
+		// Bought-credit lots, so they last 12 months.
+		const lots = await t.run((ctx) =>
+			ctx.db
+				.query("creditLots")
+				.withIndex("by_retailer_open_expiry", (q) =>
+					q.eq("retailerId", refereeId).eq("open", true),
+				)
+				.collect(),
+		);
+		expect(lots.map((l) => [l.source, l.credits])).toContainEqual([
+			"referral",
+			60,
+		]);
+	});
+
+	test("a referee paying Starter gets 30", async () => {
+		const t = setup();
+		const { refereeId } = await referredPair(t);
+		await payInvoice(t, refereeId, "starter");
+		expect((await referralRows(t, refereeId))[0]?.amount).toBe(30);
+	});
+
+	test("lands once — a second paid invoice grants nothing more", async () => {
+		const t = setup();
+		const { referrerId, refereeId } = await referredPair(t);
+		await payInvoice(t, refereeId, "pro");
+		await payInvoice(t, refereeId, "pro");
+		expect(await referralRows(t, refereeId)).toHaveLength(1);
+		expect(await referralRows(t, referrerId)).toHaveLength(1);
+	});
+
+	test("the reward stamp is the guard — a repeated grant call is a no-op", async () => {
+		const t = setup();
+		const { referrerId, refereeId } = await referredPair(t);
+		const { grantReferralRewards } = await import("./referrals");
+		await t.run(async (ctx) => {
+			const first = await grantReferralRewards(ctx, {
+				refereeId,
+				paidPlan: "pro",
+				now: Date.now(),
+			});
+			const second = await grantReferralRewards(ctx, {
+				refereeId,
+				paidPlan: "pro",
+				now: Date.now(),
+			});
+			expect(first).not.toBeNull();
+			expect(second).toBeNull();
+		});
+		expect(await referralRows(t, refereeId)).toHaveLength(1);
+		expect(await referralRows(t, referrerId)).toHaveLength(1);
+	});
+
+	test("a comped referrer earns nothing; their referee still does", async () => {
+		const t = setup();
+		const { referrerId, refereeId } = await referredPair(t, { comped: true });
+		await payInvoice(t, refereeId, "pro");
+		expect(await referralRows(t, refereeId)).toHaveLength(1);
+		expect(await referralRows(t, referrerId)).toHaveLength(0);
+		expect(await referralOf(t, refereeId)).toMatchObject({
+			referrerOutcome: "unmetered",
+		});
+	});
+
+	test("a referrer that lapsed since still earns for the referral it made", async () => {
+		const t = setup();
+		const { referrerId, refereeId } = await referredPair(t, {
+			status: "past_due",
+		});
+		await payInvoice(t, refereeId, "pro");
+		expect((await referralRows(t, referrerId))[0]?.amount).toBe(60);
+	});
+
+	test("a deleted referrer: the referee's bonus stands, labelled generically", async () => {
+		const t = setup();
+		const { referrerId, refereeId } = await referredPair(t);
+		await t.run((ctx) => ctx.db.delete(referrerId));
+		await payInvoice(t, refereeId, "pro");
+		const rows = await referralRows(t, refereeId);
+		expect(rows[0]).toMatchObject({ amount: 60 });
+		expect(rows[0]?.refLabel).toBeUndefined();
+		expect(await referralOf(t, refereeId)).toMatchObject({
+			referrerOutcome: "deleted",
+		});
+	});
+
+	test("an Enterprise referrer earns Pro's 60, never 30% of its contract", async () => {
+		const t = setup();
+		const { referrerId, refereeId } = await referredPair(t, {
+			plan: "enterprise",
+		});
+		await payInvoice(t, refereeId, "pro");
+		expect((await referralRows(t, referrerId))[0]?.amount).toBe(60);
+	});
+
+	test("a store nobody referred gets no referral credits", async () => {
+		const t = setup();
+		const plainId = await createStore(t, REFEREE, "plain-kedai");
+		await payInvoice(t, plainId, "pro");
+		expect(await referralRows(t, plainId)).toHaveLength(0);
+	});
+
+	test("the referee's own view reports the reward once it lands", async () => {
+		const t = setup();
+		const { refereeId } = await referredPair(t);
+		await payInvoice(t, refereeId, "pro");
+		const mine = await t
+			.withIdentity({ subject: REFEREE })
+			.query(api.referrals.mine, {});
+		expect(mine).toMatchObject({
+			firstInvoicePaid: true,
+			reward: { credits: 60 },
+		});
+	});
+});
+
+describe("referrals.myCard (T3)", () => {
+	test("an active store: its link, the offers, and the counts", async () => {
+		const t = setup();
+		const { referrerId, refereeId } = await referredPair(t, {
+			status: "active",
+			plan: "starter",
+		});
+		await createStore(t, OTHER, "second-kedai", { referralSlug: "siti-kitchen" });
+		await payInvoice(t, refereeId, "pro");
+		const card = await t
+			.withIdentity({ subject: REFERRER })
+			.query(api.referrals.myCard, {});
+		expect(card).toMatchObject({
+			slug: "siti-kitchen",
+			link: "https://kedaipal.com/referral/siti-kitchen",
+			standing: { canRefer: true, earnsReward: true },
+			refereeOffer: { starter: 30, pro: 60 },
+			referrerReward: 30,
+			signedUp: 2,
+			started: 1,
+			creditsEarned: 30,
+			capped: false,
+		});
+		expect(referrerId).toBeDefined();
+	});
+
+	test("a trial store is told its link doesn't count yet", async () => {
+		const t = setup();
+		await createStore(t, REFERRER, "siti-kitchen");
+		const card = await t
+			.withIdentity({ subject: REFERRER })
+			.query(api.referrals.myCard, {});
+		expect(card?.standing).toEqual({ canRefer: false, reason: "trial" });
+		expect(card?.referrerReward).toBe(0);
+	});
+
+	test("a comped partner can refer but earns nothing", async () => {
+		const t = setup();
+		const id = await createStore(t, REFERRER, "huff-puff");
+		await setSub(t, id, { comped: true });
+		const card = await t
+			.withIdentity({ subject: REFERRER })
+			.query(api.referrals.myCard, {});
+		expect(card).toMatchObject({
+			standing: { canRefer: true, earnsReward: false },
+			referrerReward: 0,
+		});
+	});
+
+	test("null when signed out", async () => {
+		const t = setup();
+		expect(await t.query(api.referrals.myCard, {})).toBeNull();
 	});
 });

@@ -151,6 +151,12 @@ export type AdminSellerRow = {
 		referrer: { slug: string; storeName: string } | null;
 		via: "link" | "admin";
 		at: number;
+		/** The reward (T2), once the store's first invoice was paid. */
+		reward?: {
+			refereeCredits: number;
+			referrerCredits?: number;
+			referrerOutcome: "granted" | "unmetered" | "deleted";
+		};
 	};
 	/** Whether an admin can still set, change or remove the referral: the
 	 * store hasn't paid its first plan invoice (the reward's moment). */
@@ -486,6 +492,15 @@ export const listSellersForAdmin = query({
 									: null,
 								via: referral.via,
 								at: referral.createdAt,
+								...(referral.rewardedAt !== undefined
+									? {
+											reward: {
+												refereeCredits: referral.refereeCredits ?? 0,
+												referrerCredits: referral.referrerCredits,
+												referrerOutcome: referral.referrerOutcome ?? "granted",
+											},
+										}
+									: {}),
 							},
 						}
 					: {}),
