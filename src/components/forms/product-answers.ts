@@ -55,15 +55,18 @@ function discountPhrase(
 			price: parsePriceInput(r.price.trim()),
 			promo: parsePriceInput((r.promoPrice ?? "").trim()),
 		}))
+		// Only a REAL discount counts: a sale price at or above the normal
+		// price is refused on save, so it must never read as "on sale".
 		.filter(
 			(r): r is { price: number; promo: number } =>
-				r.promo !== null && r.promo > 0,
+				r.promo !== null &&
+				r.promo > 0 &&
+				r.price !== null &&
+				r.promo < r.price,
 		);
 	if (discounted.length === 0) return null;
 	const percents = discounted.map((r) =>
-		r.price !== null && r.price > 0
-			? Math.round((1 - r.promo / r.price) * 100)
-			: null,
+		r.price > 0 ? Math.round((1 - r.promo / r.price) * 100) : null,
 	);
 	const first = percents[0];
 	if (
@@ -76,6 +79,20 @@ function discountPhrase(
 	}
 	if (rows.length === 1) return formatDraftPrice(discounted[0].promo, currency);
 	return `sale price on ${discounted.length} of ${rows.length}`;
+}
+
+/** Lines whose typed sale price the save refuses — not a number, zero, or
+ * not below the normal price. The same rule PromoFields shows inline. */
+export function invalidSalePrices(
+	rows: readonly { price: string; promoPrice?: string }[],
+): number {
+	return rows.filter((r) => {
+		const typed = (r.promoPrice ?? "").trim();
+		if (typed.length === 0) return false;
+		const sale = parsePriceInput(typed);
+		const list = parsePriceInput(r.price.trim());
+		return sale === null || list === null || sale <= 0 || sale >= list;
+	}).length;
 }
 
 export function promoAnswer({
@@ -114,6 +131,13 @@ export function promoAnswer({
 	}
 	if (!draft.on) return off(locked ? "Not on your plan" : "No");
 	if (locked) return warn("Paused · promotions are part of Pro");
+	const badLines = invalidSalePrices(rows);
+	if (badLines > 0)
+		return warn(
+			badLines === 1
+				? "1 sale price needs fixing"
+				: `${badLines} sale prices need fixing`,
+		);
 	const discount = discountPhrase(rows, currency);
 	if (discount === null) return warn("On, but nothing is on sale yet");
 	const value = promoSubmitValue(draft, now, { flashAllowed });
@@ -225,9 +249,8 @@ export function orderRulesAnswer({
 	prepMinutes: number;
 	/** An event ignores notice and prep — the fixed date decides both. */
 	isEvent: boolean;
-	/** A heads-up is showing inside (prep made inert by notice, a minimum the
-	 * stock can't reach) — worth amber on the collapsed line. */
-	heedsWarning: boolean;
+	/** A heads-up showing inside, said on the collapsed line in amber. */
+	heedsWarning: "prep_inert" | "stock_short" | null;
 }): Answer {
 	const parts: string[] = [];
 	if (minQuantity >= 2) parts.push(`Min ${minQuantity}`);
@@ -239,7 +262,11 @@ export function orderRulesAnswer({
 		parts.push(`${prepPhrase(prepMinutes)} prep`);
 	if (parts.length === 0) return off("None");
 	const text = parts.join(" · ");
-	return heedsWarning ? warn(`${text} · check the note inside`) : set(text);
+	if (heedsWarning === "prep_inert")
+		return warn(`${text} · prep has no effect while notice is on`);
+	if (heedsWarning === "stock_short")
+		return warn(`${text} · stock is below the minimum`);
+	return set(text);
 }
 
 export function pickupNoteAnswer(
@@ -256,14 +283,35 @@ export function whereAnswer({
 	hidden,
 	categoryNames,
 	storeHasCategories,
+	eventPassed = false,
+	allCategoriesHidden = false,
 }: {
 	hidden: boolean;
 	categoryNames: readonly string[];
 	storeHasCategories: boolean;
+	/** The event's date is behind it — the storefront drops it by itself
+	 * (`hiddenFromStorefront`), whatever the visibility switch says. */
+	eventPassed?: boolean;
+	/** Every category it is in is hidden — the storefront drops it
+	 * (`hiddenByCategory`). */
+	allCategoriesHidden?: boolean;
 }): Answer {
+	// The visibility switch is not the whole answer: two rules take a
+	// product off the storefront without it, and the line must not claim
+	// "On your storefront" for something buyers can't see.
 	const place = hidden
 		? "Hidden from your store · counter only"
-		: "On your storefront";
+		: eventPassed
+			? "Off your storefront · the event has passed"
+			: allCategoriesHidden
+				? "Off your storefront · its categories are hidden"
+				: "On your storefront";
+	if (eventPassed || allCategoriesHidden)
+		return warn(
+			storeHasCategories && categoryNames.length > 0
+				? `${place} · ${categoryNames.join(", ")}`
+				: place,
+		);
 	if (!storeHasCategories) return set(place);
 	return set(
 		`${place} · ${categoryNames.length > 0 ? categoryNames.join(", ") : "no category"}`,

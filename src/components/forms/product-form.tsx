@@ -51,6 +51,7 @@ import {
 	MAX_PICKUP_NOTE_LENGTH,
 	pickupNoteFits,
 } from "../../../convex/lib/pickupNote";
+import { isEventPassed } from "../../../convex/lib/productEvent";
 import {
 	DEFAULT_WEEKEND_DAYS,
 	MAX_CAPACITY_PER_NIGHT,
@@ -150,6 +151,7 @@ import {
 	depositAnswer,
 	eventAnswer,
 	instantBookAnswer,
+	invalidSalePrices,
 	mockupAnswer,
 	orderRulesAnswer,
 	pickupNoteAnswer,
@@ -1142,6 +1144,11 @@ export function ProductForm({
 	const [editor, setEditorState] = useState<VariantEditorState>(
 		() => initialEditor ?? initialEditorState(initialValues),
 	);
+	// The custom line as the seller last had it, kept while its question is
+	// switched off so switching it back on restores their name, price, prompt
+	// and photo — the way the event and promotion rows keep their drafts. It
+	// is NOT saved while off: the save sends `editor.customLine`, which is null.
+	const parkedCustomLine = useRef<CustomLineDraft | null>(null);
 	// Submit-time validation issues, addressed to the exact editor input (see
 	// VariantIssue). Any edit clears them — they re-validate on the next save.
 	const [editorIssues, setEditorIssues] = useState<VariantIssue[]>([]);
@@ -1590,6 +1597,10 @@ export function ProductForm({
 		Number.isInteger(noticeParsed) && noticeParsed > 0 ? noticeParsed : 0;
 	// Derived from the rows, never stored — the same read the price card uses.
 	const madeToOrder = isMadeToOrderOnly(editor);
+	// A past event leaves the storefront by itself (`hiddenFromStorefront`).
+	const eventValue = eventDraft.on ? eventSubmitValue(eventDraft) : null;
+	const eventPassedNow =
+		!isBooking && eventValue !== null && isEventPassed(eventValue);
 
 	/** A question row's collapsed line: its answer, unless a save was refused
 	 * for something inside it — then it says so, and `focusFirstInvalidField`
@@ -1996,8 +2007,9 @@ export function ProductForm({
 							flashAllowed: !isBooking && !eventDraft.on,
 							now: Date.now(),
 						}),
-						!groupedPromotion &&
-							!promoDraftValid(promoDraft, Date.now(), editor.rows),
+						invalidSalePrices(editor.rows) > 0 ||
+							(!groupedPromotion &&
+								!promoDraftValid(promoDraft, Date.now(), editor.rows)),
 					)}
 				>
 					{groupedPromotion ? (
@@ -2075,19 +2087,20 @@ export function ProductForm({
 							</div>
 							<ToggleSwitch
 								on={editor.customLine !== null}
-								onChange={(on) =>
+								onChange={(on) => {
+									if (!on) parkedCustomLine.current = editor.customLine;
 									setEditor({
 										...editor,
 										customLine: on
-											? {
+											? (parkedCustomLine.current ?? {
 													label: "",
 													price: "",
 													prompt: "",
 													imageStorageIds: [],
-												}
+												})
 											: null,
-									})
-								}
+									});
+								}}
 								label="Offer custom orders on this product"
 							/>
 						</div>
@@ -2218,7 +2231,11 @@ export function ProductForm({
 									noticeDays,
 									prepMinutes: prepParsed,
 									isEvent: eventDraft.on,
-									heedsWarning: minQtyStockShort || prepInertUnderNotice,
+									heedsWarning: minQtyStockShort
+										? "stock_short"
+										: !eventDraft.on && prepInertUnderNotice
+											? "prep_inert"
+											: null,
 								}),
 						!minQtyValid || (!isBooking && !eventDraft.on && !prepValid),
 					)}
@@ -2503,6 +2520,14 @@ export function ProductForm({
 								.filter((c) => categoryIds.includes(c._id))
 								.map((c) => c.name),
 							storeHasCategories: (storeCategories?.length ?? 0) > 0,
+							eventPassed: eventPassedNow,
+							allCategoriesHidden:
+								categoryIds.length > 0 &&
+								storeCategories !== undefined &&
+								categoryIds.every(
+									(id) =>
+										storeCategories.find((c) => c._id === id)?.hidden === true,
+								),
 						}),
 						false,
 					)}

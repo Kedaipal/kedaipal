@@ -149,10 +149,13 @@ export function QuestionRow({
 				</span>
 				<span className="flex min-w-0 flex-1 flex-col">
 					<span className="text-sm font-semibold leading-snug">{question}</span>
+					{/* Two lines, not one: an answer's warning ("prep has no effect
+					    while notice is on") comes LAST, exactly where a one-line
+					    truncation would cut it off on a phone. */}
 					<span
 						data-question-answer
 						className={cn(
-							"mt-0.5 truncate text-xs leading-snug",
+							"mt-0.5 line-clamp-2 text-xs leading-snug",
 							tone === "set" && "font-medium text-accent-emphasis",
 							tone === "warn" &&
 								"font-medium text-amber-700 dark:text-amber-400",

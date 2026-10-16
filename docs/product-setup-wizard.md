@@ -282,6 +282,17 @@ alone is an FAQ accordion; with its answer it is state.
   ended sale, a passed event date, prep made inert by notice, a minimum the
   stock can't reach). After a refused save a row with a problem inside reads
   "Needs a fix before you can save" in red (`rowAnswer` in the form).
+  Answers wrap to **two lines** rather than truncating, because a row's
+  warning comes last ("· prep has no effect while notice is on") — exactly
+  where a one-line cut would hide it on a phone.
+- **An answer never claims more than the save or the storefront will do**
+  (found in the `/test-code` pass, 16 Oct): a sale price at or above the normal
+  price is not counted as a discount ("1 sale price needs fixing"); "Where does
+  it show?" says **Off your storefront** for a past event or a product whose
+  every category is hidden, whatever the visibility switch says; switching
+  custom orders off and on again restores the seller's line (name, price,
+  prompt, photo) instead of a blank one, the way the event and promotion rows
+  keep their drafts.
 - **Rules the row owns:** collapsed by default **on every visit, even when on**
   (Zaki, 16 Oct — the answer already says what is on, and a page that changes
   shape per product is harder to learn); rows open independently; the switch

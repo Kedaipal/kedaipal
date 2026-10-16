@@ -7,6 +7,7 @@ import {
 	depositAnswer,
 	eventAnswer,
 	instantBookAnswer,
+	invalidSalePrices,
 	mockupAnswer,
 	orderRulesAnswer,
 	pickupNoteAnswer,
@@ -69,6 +70,21 @@ describe("promoAnswer", () => {
 				rows: rows(["12", "10"], ["18", "9"], ["28"]),
 			}).text,
 		).toBe("Yes · sale price on 2 of 3 · no end date");
+	});
+
+	it("never counts a sale price at or above the normal price as a discount", () => {
+		// Found in the hands-on test: RM 99 on an RM 20 line read "sale price
+		// on 6 of 6" in mint while the save refused it.
+		const a = promoAnswer({
+			...base,
+			draft: on,
+			rows: rows(["20", "99"], ["20", "16"]),
+		});
+		expect(a).toEqual({ text: "1 sale price needs fixing", tone: "warn" });
+		expect(
+			invalidSalePrices(rows(["20", "99"], ["20", "abc"], ["20", "16"])),
+		).toBe(2);
+		expect(invalidSalePrices(rows(["20", ""], ["20", "16"]))).toBe(0);
 	});
 
 	it("is amber when it is on but nothing is discounted", () => {
@@ -244,7 +260,7 @@ describe("orderRulesAnswer", () => {
 		noticeDays: 0,
 		prepMinutes: 0,
 		isEvent: false,
-		heedsWarning: false,
+		heedsWarning: null,
 	};
 	it("reads None with no rules", () => {
 		expect(orderRulesAnswer(base)).toEqual({ text: "None", tone: "off" });
@@ -270,10 +286,27 @@ describe("orderRulesAnswer", () => {
 			}).text,
 		).toBe("Min 10");
 	});
-	it("turns amber when a heads-up is showing inside", () => {
+	it("names the heads-up on the collapsed line, in amber", () => {
+		// Found in the hands-on test: "check the note inside" sent the seller
+		// hunting two fields down for a note it could simply have said.
 		expect(
-			orderRulesAnswer({ ...base, minQuantity: 20, heedsWarning: true }),
-		).toEqual({ text: "Min 20 · check the note inside", tone: "warn" });
+			orderRulesAnswer({
+				...base,
+				noticeDays: 2,
+				prepMinutes: 60,
+				heedsWarning: "prep_inert",
+			}),
+		).toEqual({
+			text: "2 days’ notice · 1 h prep · prep has no effect while notice is on",
+			tone: "warn",
+		});
+		expect(
+			orderRulesAnswer({
+				...base,
+				minQuantity: 20,
+				heedsWarning: "stock_short",
+			}).text,
+		).toBe("Min 20 · stock is below the minimum");
 	});
 	it("spells prep the way a seller says it", () => {
 		expect(prepPhrase(45)).toBe("45 min");
@@ -316,6 +349,43 @@ describe("whereAnswer", () => {
 			whereAnswer({ hidden: true, categoryNames: [], storeHasCategories: true })
 				.text,
 		).toBe("Hidden from your store · counter only · no category");
+	});
+});
+
+describe("whereAnswer — what the storefront actually does", () => {
+	it("a past event is off the storefront whatever the switch says", () => {
+		// Found in the hands-on test: an ended event read "On your storefront".
+		expect(
+			whereAnswer({
+				hidden: false,
+				categoryNames: [],
+				storeHasCategories: false,
+				eventPassed: true,
+			}),
+		).toEqual({
+			text: "Off your storefront · the event has passed",
+			tone: "warn",
+		});
+	});
+	it("a product whose every category is hidden is off the storefront", () => {
+		expect(
+			whereAnswer({
+				hidden: false,
+				categoryNames: ["Raya"],
+				storeHasCategories: true,
+				allCategoriesHidden: true,
+			}).text,
+		).toBe("Off your storefront · its categories are hidden · Raya");
+	});
+	it("the seller's own Hidden switch still reads as their choice", () => {
+		expect(
+			whereAnswer({
+				hidden: true,
+				categoryNames: [],
+				storeHasCategories: false,
+				eventPassed: true,
+			}).text,
+		).toBe("Hidden from your store · counter only");
 	});
 });
 

@@ -184,6 +184,34 @@ describe("custom orders and mockup approval are questions, not Advanced checkbox
 		expect(values?.variants.some((v) => v.isCustom)).toBe(true);
 	});
 
+	it("switching custom orders off and back on keeps the seller's line", () => {
+		// Found in the hands-on test: off-then-on wiped "BTO", its price and
+		// photo, where the event and promotion rows keep their drafts.
+		renderForm({
+			variants: [
+				{ optionValues: [], price: 1200, onHand: 5, active: true },
+				{
+					optionValues: [],
+					price: 4000,
+					onHand: 0,
+					active: true,
+					isCustom: true,
+					customLabel: "BTO",
+				},
+			],
+		});
+		const row0 = row(/Do you take custom requests on it/);
+		expect(row0.textContent).toContain("“BTO” · from RM");
+		fireEvent.click(row0);
+		const toggle = screen.getByRole("switch", {
+			name: "Offer custom orders on this product",
+		});
+		fireEvent.click(toggle);
+		expect(row0.textContent).toContain("No");
+		fireEvent.click(toggle);
+		expect(row0.textContent).toContain("“BTO” · from RM");
+	});
+
 	it("mockup approval is tri-state, with the per-choice list it summarises", () => {
 		renderForm(SIZES);
 		expect(row(/Does the buyer approve a mockup first/).textContent).toContain(

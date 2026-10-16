@@ -219,11 +219,11 @@ describe("Order rules — the row says what it holds", () => {
 		const row = screen.getByRole("button", {
 			name: /Any rules on how it.s ordered/,
 		});
-		// Notice ≥ 1 day makes prep inert, so the line asks for a look inside.
+		// Notice ≥ 1 day makes prep inert, and the line says so outright.
 		expect(row.textContent).toContain(
 			"Min 20 · 2 days’ notice · 1 h 30 min prep",
 		);
-		expect(row.textContent).toContain("check the note inside");
+		expect(row.textContent).toContain("prep has no effect while notice is on");
 	});
 
 	it("says how long a prep window may be, and where a longer one goes", () => {
