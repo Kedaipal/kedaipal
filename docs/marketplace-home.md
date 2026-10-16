@@ -129,7 +129,9 @@ month / Delivers) are client-side over the one payload (`filterStores`,
 unit-tested) but their STATE lives in the URL (`?q=`, `?filter=`,
 `parseMarketplaceSearch`), so Back from a storefront returns the buyer to the
 view they left; "all"/blank are the absence of a param, so bare `/stores`
-stays canonical. Refining collapses the shelves into a flat Results list.
+stays canonical. Refining collapses the shelves into a flat Results list —
+except a showcase's stores, which stay inside their showcase (see
+[Searching keeps showcases](#searching-keeps-a-stores-showcase)).
 Snapping rails carry `scroll-px-*` matching their gutter — without it
 `snap-start` pulls the first card flush to the screen edge. The one nav CTA
 is navy (the buyer's search owns mint on this page); the mesh band is
@@ -362,6 +364,30 @@ which `listStores` and the showcase functions both read.
   other region from the link leaves the showcase. A slug that is not live
   (the event ended, the QR outlived it) lands on the plain page with one
   line saying so; `parseShowcaseSlugParam` degrades anything else to "no showcase".
+- **Searching keeps a store's showcase.** <a id="searching-keeps-a-stores-showcase"></a>
+  A search or chip used to hide every showcase and list its stores as plain
+  rows, so a buyer at Campfest who searched "Bearcamp" found the store but
+  lost the booth label it was there for. Now (`matchShowcases`,
+  `src/lib/showcase.ts`, unit-tested) each showcase with a matching store
+  stays, as a `ShowcaseResults` container above the plain results: the
+  showcase's ground, time chip and title, and EVERY matching ticket laid out
+  (no rail, pile or band of faces, which would hide the store that was
+  searched for), with "2 of 14 stores match · See all 14 →" to its focused
+  view when the search left some out. The rules: a ticket matches on the
+  directory's own rule (`matchesSearch` + `matchesChip`, the same predicates
+  `filterStores` uses) **plus its booth label** ("A12" finds booth A12); a
+  showcase with **no** match is not shown at all; the focused showcase
+  leads, the rest keep admin order; a store in two showcases shows in
+  **both** (each ticket carries that event's booth); and every matched store
+  is **left out of the plain list**, which is headed "Other stores" when
+  showcases matched, so no store appears twice in one short list. The
+  "Results" heading counts every store that matched; "No stores match"
+  shows only when nothing matched anywhere. Unrefined, "All stores" keeps
+  every store, as before. The banner art and tagline step aside in this
+  layout so two matching showcases don't push the plain results off a
+  phone's first screen. On the booth-QR view the compact header is the only
+  search box, so once the buyer refines it stays pinned. "See all" also
+  clears the page's search box, which never reads `?q=` back mid-typing.
 - **The compact header** (`StoresCompactHeader`): once the hero's chips
   scroll out above (one `IntersectionObserver` on a sentinel,
   `useScrolledPast`), a frosted bar takes over with the logo, a floating

@@ -10,6 +10,11 @@ import { WEEKDAY_NAMES_SHORT } from "../../convex/lib/openingHours";
 import type { ShowcaseTheme } from "../../convex/lib/showcase";
 import type { MarketplaceStoreCard } from "../../convex/marketplace";
 import type { PublicShowcase } from "../../convex/showcases";
+import {
+	type MarketplaceChip,
+	matchesChip,
+	matchesSearch,
+} from "./marketplace";
 import { customShowcasePalette } from "./showcase-color";
 
 /**
@@ -95,6 +100,56 @@ export function joinShowcaseMembers(
 		});
 	}
 	return out;
+}
+
+/** A showcase that has stores matching the buyer's search/chip: its matching
+ * tickets, and how many it carries in all (for "2 of 14 stores match"). */
+export type ShowcaseMatch = {
+	showcase: PublicShowcase;
+	tickets: ShowcaseTicketData[];
+	total: number;
+};
+
+/**
+ * A refined `/stores` (search or chip) keeps each showcase's stores INSIDE
+ * their showcase — a buyer who searches "Bearcamp" during Campfest finds it
+ * on its Campfest ticket, booth label and all, not as a plain row that lost
+ * the reason it was there. The rule:
+ *
+ * - a ticket matches on the directory's own rule (`matchesSearch` +
+ *   `matchesChip`), plus its booth label, which only the ticket prints;
+ * - a showcase with no matching ticket is not shown at all (a banner over
+ *   nothing is a dead end);
+ * - the focused showcase (`?showcase=`) leads, the rest keep admin order;
+ * - a store in two showcases matches in BOTH — each ticket carries that
+ *   event's booth, which is real information, not a duplicate;
+ * - `slugs` is every matched store, which the plain Results list leaves out
+ *   so a store never appears twice in one short list. Only while refining:
+ *   the unrefined "All stores" keeps every store (`partitionStores`' rule).
+ */
+export function matchShowcases(
+	showcases: ReadonlyArray<{
+		showcase: PublicShowcase;
+		tickets: ShowcaseTicketData[];
+	}>,
+	opts: { chip: MarketplaceChip; search: string; now: number },
+	focusedSlug?: string,
+): { matches: ShowcaseMatch[]; slugs: Set<string> } {
+	const matches: ShowcaseMatch[] = [];
+	const slugs = new Set<string>();
+	for (const { showcase, tickets } of showcases) {
+		const hit = tickets.filter(
+			(t) =>
+				matchesSearch(t.card, opts.search, [t.label]) &&
+				matchesChip(t.card, opts.chip, opts.now),
+		);
+		if (hit.length === 0) continue;
+		for (const t of hit) slugs.add(t.card.slug);
+		const match = { showcase, tickets: hit, total: tickets.length };
+		if (showcase.slug === focusedSlug) matches.unshift(match);
+		else matches.push(match);
+	}
+	return { matches, slugs };
 }
 
 /** The showcases a buyer in this region should see — regions never blend,
