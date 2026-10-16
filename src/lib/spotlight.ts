@@ -169,16 +169,17 @@ export const SPOTLIGHT_ANCHOR = {
 		tab: "store",
 		anchor: "settings-marketplace",
 	},
-	// The Pricing & capacity card of a stay listing — where the weekend rate
-	// (S13, z8r3fddkp8) lives. The card, not the field: every spotlight rings
-	// a card, and the field is its third row, labelled "Weekend rate".
-	weekend_rate: { page: "product", anchor: "product-booking-pricing" },
-	// The Order rules card of a non-booking product (z8r3fdff97) — prep time
-	// and the pickup note live there, beside the minimum quantity and notice
-	// rules they compose with.
+	// Product-page anchors are QUESTION ROWS since z8r3fdv1z2: the form scrolls
+	// to the row, rings it and opens it, so the seller lands on the field.
+	// The "Do weekend nights cost more?" row of a stay listing (S13,
+	// z8r3fddkp8).
+	weekend_rate: { page: "product", anchor: "product-weekend-rate" },
+	// The "Any rules on how it's ordered?" row of a non-booking product
+	// (z8r3fdff97) — prep time beside the minimum quantity and notice rules it
+	// composes with; the pickup note is the row right under it.
 	prep_time: { page: "product", anchor: "product-order-rules" },
-	// The Promotion card (z8r3fdcw72), directly under the price on every kind
-	// of product — the sale price, its window and the flash-sale extras.
+	// "Is it on sale right now?" (z8r3fdcw72), directly under the price on
+	// every kind of product — the sale price, its window and the flash extras.
 	promo: { page: "product", anchor: "product-promo" },
 } as const satisfies Record<string, SpotlightTarget>;
 
