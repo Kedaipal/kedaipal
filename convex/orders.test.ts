@@ -10411,7 +10411,13 @@ describe("orders — column header filters (86eyrtz74)", () => {
 			confirmed: 1,
 			packed: 2,
 		});
-		expect(res.facets.category).toEqual({ Cakes: 3, Drinks: 2 });
+		expect(res.facets.category).toEqual(
+			expect.arrayContaining([
+				{ name: "Cakes", count: 3 },
+				{ name: "Drinks", count: 2 },
+			]),
+		);
+		expect(res.facets.category).toHaveLength(2);
 		expect(res.availableCategories).toEqual(["Cakes", "Drinks"]);
 	});
 
@@ -10424,7 +10430,42 @@ describe("orders — column header filters (86eyrtz74)", () => {
 			bucket: "all",
 			categories: ["Cakes"],
 		});
-		expect(res.facets.category.Cakes).toBe(res.total);
+		expect(
+			res.facets.category.find((c) => c.name === "Cakes")?.count,
+		).toBe(res.total);
+	});
+
+	test("a category named with a symbol or emoji still crosses the wire (z8r3fdv1r4)", async () => {
+		// Convex refuses an OBJECT whose field name has a non-ASCII character, so
+		// a name-keyed tally threw on serialisation and took the whole inbox down
+		// for the one store that prefixed its categories with "✦" (prod, 16 Oct
+		// 2026). The tally is a list of {name, count} pairs for exactly this
+		// reason; keying it by name again would turn this test red.
+		const t = setup();
+		const { retailer, asA, a } = await seedForFilters(t);
+		const { categoryId } = await asA.mutation(api.categories.create, {
+			retailerId: retailer._id,
+			name: "✦ DRESSES 🐆",
+			slug: "dresses",
+		});
+		await asA.mutation(api.categories.setProductCategories, {
+			productId: a.items[0].productId,
+			categoryIds: [categoryId],
+		});
+		await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId: a.items[0].productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		expect(res.facets.category).toContainEqual({ name: "✦ DRESSES 🐆", count: 1 });
+		expect(res.availableCategories).toContain("✦ DRESSES 🐆");
 	});
 
 	test("filters and tallies by fulfilment, over the unfiltered window (z8r3fdfau9)", async () => {

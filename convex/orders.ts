@@ -3463,7 +3463,15 @@ export const searchOrders = query({
 			// than Maps so they cross the wire.
 			facets: {
 				statusLeaf: Object.fromEntries(leafTally),
-				category: Object.fromEntries(categoryTally),
+				// A LIST of pairs, not a name-keyed object (z8r3fdv1r4). Convex
+				// refuses an object whose field name has a non-ASCII character,
+				// and category names are the seller's own words — one store
+				// prefixed theirs with "✦" and every inbox load threw on
+				// serialisation. The other tallies are keyed by enums we own.
+				category: [...categoryTally.entries()].map(([name, count]) => ({
+					name,
+					count,
+				})),
 				source: Object.fromEntries(checkoutSourceTally),
 				fulfilment: Object.fromEntries(fulfilmentTally),
 				paymentStatus: Object.fromEntries(paymentStatusTally),

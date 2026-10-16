@@ -725,7 +725,15 @@ WhatsApp.
     option showing `0` is the answer to "why is my list empty?". The picker
     never shrinks as it is used; one that did would read as orders vanishing.
     An order counts **once per category**, never once per line, so the number
-    beside an option is the number of rows it will show.
+    beside an option is the number of rows it will show. **The category facet
+    is a list of `{ name, count }` pairs, not a name-keyed object** (hotfix
+    [`z8r3fdv1r4`](https://app.clickup.com/t/z8r3fdv1r4), 16 Oct 2026): Convex
+    refuses to serialise an object whose field name has a non-ASCII character,
+    and category names are the seller's own words — Her Moolah Collective
+    prefixed theirs with `✦`, and the first order carrying one took the whole
+    inbox down for the store. The other six facets are keyed by enums we own,
+    so they stay objects; the client reads the category one through
+    `categoryCount(facets, name)`, never by index.
   - **Two new server dimensions.** `statuses` is the status axis, multi. It
     shipped as a *separate* dimension that ANDed with `bucket`, on the reasoning
     that a bucket is the coarse stage you navigate by while this is the precise

@@ -48,7 +48,7 @@ function filters(
  * offers all of them. */
 const ALL_FULFILMENTS = {
 	statusLeaf: {},
-	category: {},
+	category: [],
 	source: {},
 	fulfilment: {
 		delivery: 3,
