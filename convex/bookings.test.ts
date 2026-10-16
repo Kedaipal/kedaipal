@@ -27,13 +27,24 @@ import {
 	WEEKDAY_NIGHTS_LABEL,
 	weekendNightsLabel,
 } from "./lib/productKind";
+import { settleScheduled } from "./lib/convexTestSettle";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
 
+// Drain each test's scheduled work before the next test starts — see
+// `settleScheduled` for the convex-test hazard this closes.
+let current: ReturnType<typeof convexTest> | undefined;
+afterEach(async () => {
+	const t = current;
+	current = undefined;
+	if (t) await settleScheduled(t);
+});
+
 function setup() {
 	const t = convexTest(schema, modules);
 	registerRateLimiter(t);
+	current = t;
 	return t;
 }
 
@@ -1066,6 +1077,9 @@ describe("fixed-length packages + instant book (S7)", () => {
 
 		// A block still closes the day — unlimited means "no capacity ceiling",
 		// not "never unavailable".
+		// The requests above scheduled seller-alert work; let it finish before
+		// seeding, or the block can be lost to the harness (`settleScheduled`).
+		await settleScheduled(t);
 		await asOwner.mutation(api.bookingBlocks.blockDays, {
 			retailerId: retailer._id,
 			startDate: day(5),
