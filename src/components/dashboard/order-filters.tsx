@@ -38,6 +38,8 @@ import { Button } from "../ui/button";
 import { FilterChip } from "../ui/filter-chip";
 import { FilterOptionRow } from "../ui/filter-option-row";
 import {
+	CATEGORY_UNCATEGORIZED,
+	categoryCount,
 	fulfilmentChoicesFrom,
 	fulfilmentFilterApplies,
 	type OrderFilterFacets,
@@ -963,7 +965,7 @@ export function OrderFilters({
 												<FilterOptionRow
 													key={c}
 													label={c}
-													count={facets?.category[c] ?? 0}
+													count={categoryCount(facets, c)}
 													selected={value.categories.includes(c)}
 													onToggle={() =>
 														onChange({
@@ -980,7 +982,7 @@ export function OrderFilters({
 											<FilterOptionRow
 												label="Uncategorized"
 												muted
-												count={facets?.category[""] ?? 0}
+												count={categoryCount(facets, CATEGORY_UNCATEGORIZED)}
 												selected={value.categoriesUnspecified}
 												onToggle={() =>
 													onChange({

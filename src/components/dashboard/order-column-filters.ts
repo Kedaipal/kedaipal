@@ -68,11 +68,30 @@ export interface OrderColumnFilterState {
 	fulfilmentWindow?: FulfilmentWindow;
 }
 
+export interface CategoryFacet {
+	name: string;
+	count: number;
+}
+
+/** The count beside a category option; `CATEGORY_UNCATEGORIZED` for the
+ * orders carrying none. 0 when the facets haven't loaded or the name is
+ * absent from the window — the same answer every other facet gives. */
+export function categoryCount(
+	facets: OrderFilterFacets | undefined,
+	name: string,
+): number {
+	return facets?.category.find((c) => c.name === name)?.count ?? 0;
+}
+
 /** Per-option row counts over the UNFILTERED window, from `searchOrders`. */
 export interface OrderFilterFacets {
 	/** Keyed by status LEAF, not `orders.status` — see INBOX_LEAF_KEYS. */
 	statusLeaf: Record<string, number>;
-	category: Record<string, number>;
+	/** A list, not a name-keyed object: category names are the seller's own
+	 * words, and Convex can't serialise an object key with a non-ASCII
+	 * character in it (z8r3fdv1r4). `""` is the uncategorized count. Read it
+	 * through `categoryCount`. */
+	category: CategoryFacet[];
 	source: Record<string, number>;
 	/** Keyed by `fulfilmentKey`, so a count here is the count of rows whose
 	 * Fulfilment cell shows that word (z8r3fdfau9). */
@@ -223,8 +242,16 @@ export function buildOrderColumnFilters({
 	map.set("categories", {
 		label: "Categories",
 		options: [
-			...availableCategories.map((c) => opt(c, c, facets?.category)),
-			opt(CATEGORY_UNCATEGORIZED, "Uncategorized", facets?.category),
+			...availableCategories.map((c) => ({
+				value: c,
+				label: c,
+				count: categoryCount(facets, c),
+			})),
+			{
+				value: CATEGORY_UNCATEGORIZED,
+				label: "Uncategorized",
+				count: categoryCount(facets, CATEGORY_UNCATEGORIZED),
+			},
 		],
 		selected: state.categoriesUnspecified
 			? [...state.categories, CATEGORY_UNCATEGORIZED]

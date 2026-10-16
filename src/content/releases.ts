@@ -181,6 +181,27 @@ export interface Release {
  */
 export const RELEASES: Release[] = [
 	{
+		version: "2026.10.4",
+		date: "2026-10-16",
+		// Not notable: a hotfix for one failure. The seller it hit sees her
+		// orders come back when she next opens the page; nobody else saw
+		// anything change. A dot is enough.
+		notable: false,
+		entries: [
+			{
+				kind: "fix",
+				title: {
+					en: "Orders load again when a category name has a symbol in it",
+				},
+				body: {
+					en: "If one of your product categories had a symbol or emoji in its name — ✦ Dresses, 🐆 New in — the Orders page stopped loading the moment an order was placed for it. That's fixed: name your categories however you like, and the Orders page and its Categories filter show them as they are. On every plan.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open Orders" },
+			},
+		],
+	},
+	{
 		version: "2026.10.3",
 		date: "2026-10-15",
 		// Notable: something MOVED, and a buyer-facing rule changed. Despatch
