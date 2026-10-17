@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { MarketplaceStoreCard } from "../../../convex/marketplace";
 import type { PublicShowcase } from "../../../convex/showcases";
 import type { ShowcaseTicketData } from "../../lib/showcase";
-import { ShowcaseStage } from "./showcase-stage";
+import { ShowcaseResults, ShowcaseStage } from "./showcase-stage";
 import { ShowcaseTicket } from "./showcase-ticket";
 
 afterEach(cleanup);
@@ -231,6 +231,65 @@ describe("ShowcaseStage", () => {
 		expect(left).toBe(true);
 		expect(screen.queryByText(/more · See all/)).toBeNull();
 		expect(document.querySelectorAll('a[href="/s6"]').length).toBe(1);
+	});
+});
+
+describe("ShowcaseResults — a showcase while the buyer is searching", () => {
+	const tickets = (n: number): ShowcaseTicketData[] =>
+		Array.from({ length: n }, (_, i) => ({ card: card(`s${i}`) }));
+
+	it("some matched: every match laid out, the count says so, and 'See all N' leaves the search", async () => {
+		let cleared = false;
+		renderInRouter(
+			<ShowcaseResults
+				match={{ showcase, tickets: tickets(2), total: 14 }}
+				now={NOW}
+				onSeeAll={() => {
+					cleared = true;
+				}}
+			/>,
+		);
+		expect(
+			await screen.findByRole("heading", { name: "Malaysia Campfest 2026" }),
+		).toBeTruthy();
+		expect(screen.getByText("2 of 14 stores match")).toBeTruthy();
+		// Laid out, not a rail of one + dots, not a pile, not a band of faces.
+		expect(document.querySelectorAll('a[href="/s0"]').length).toBe(1);
+		expect(document.querySelectorAll('a[href="/s1"]').length).toBe(1);
+		const seeAll = screen.getByRole("link", { name: /See all 14/ });
+		expect(seeAll.getAttribute("href")).toBe("/stores?showcase=campfest-2026");
+		seeAll.click();
+		expect(cleared).toBe(true);
+	});
+
+	it("every store matched: just the count, no 'See all' leading to the same stores", async () => {
+		renderInRouter(
+			<ShowcaseResults
+				match={{ showcase, tickets: tickets(3), total: 3 }}
+				now={NOW}
+			/>,
+		);
+		await screen.findByRole("heading", { name: "Malaysia Campfest 2026" });
+		expect(screen.getByText("3 stores")).toBeTruthy();
+		expect(screen.queryByText(/See all/)).toBeNull();
+		expect(screen.queryByText(/match/)).toBeNull();
+	});
+
+	it("keeps the showcase's own time chip and booth stubs", async () => {
+		renderInRouter(
+			<ShowcaseResults
+				match={{
+					showcase,
+					tickets: [{ card: card("rimba"), label: "Booth B4" }],
+					total: 6,
+				}}
+				now={NOW}
+			/>,
+		);
+		await screen.findByRole("heading", { name: "Malaysia Campfest 2026" });
+		expect(screen.getByText("Until Mon")).toBeTruthy();
+		expect(screen.getByText("B4")).toBeTruthy();
+		expect(screen.getByText("1 of 6 stores match")).toBeTruthy();
 	});
 });
 

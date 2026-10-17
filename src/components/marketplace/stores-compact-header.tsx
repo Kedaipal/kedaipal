@@ -17,9 +17,16 @@ import { Button } from "../ui/button";
  *
  * On a phone an active filter rides inside the search pill as a removable
  * token, so the bar stays one row; desktop has the width for the chips.
+ *
+ * `docked` is the booth-QR view (`?showcase=`), where the hero — and its
+ * search — is not rendered: the bar IS the page header there, so it sits in
+ * the flow (sticky, nothing under it to cover) and never hides. Keying it on
+ * "has the buyer refined" instead slid the bar away the moment they cleared
+ * the last character, with the input still focused.
  */
 export function StoresCompactHeader({
 	visible,
+	docked = false,
 	search,
 	onSearch,
 	chip,
@@ -28,8 +35,11 @@ export function StoresCompactHeader({
 	region,
 	onRegion,
 	maxLength,
+	placeholder,
 }: {
 	visible: boolean;
+	/** The page's header, not a takeover: always shown, sticky in the flow. */
+	docked?: boolean;
 	search: string;
 	onSearch: (next: string) => void;
 	chip: MarketplaceChip;
@@ -38,23 +48,31 @@ export function StoresCompactHeader({
 	region: Country;
 	onRegion: (next: Country) => void;
 	maxLength: number;
+	/** The bar's hint — `storeSearchPlaceholder(...).compact`. */
+	placeholder: string;
 }) {
 	const activeChip = chips.find((c) => c.id === chip && c.id !== "all");
+	const shown = docked || visible;
 	return (
 		<div
-			aria-hidden={!visible}
+			aria-hidden={!shown}
 			className={cn(
-				"fixed inset-x-0 top-0 z-30 border-b border-border/80 bg-background/85 shadow-[0_8px_24px_-16px_color-mix(in_oklab,var(--foreground)_35%,transparent)] backdrop-blur-xl transition-[translate,opacity] duration-200 ease-out motion-reduce:transition-none",
-				visible
-					? "translate-y-0 opacity-100"
-					: "pointer-events-none -translate-y-full opacity-0",
+				"top-0 z-30 border-b border-border/80 bg-background/85 shadow-[0_8px_24px_-16px_color-mix(in_oklab,var(--foreground)_35%,transparent)] backdrop-blur-xl",
+				docked
+					? "sticky"
+					: cn(
+							"fixed inset-x-0 transition-[translate,opacity] duration-200 ease-out motion-reduce:transition-none",
+							visible
+								? "translate-y-0 opacity-100"
+								: "pointer-events-none -translate-y-full opacity-0",
+						),
 			)}
 		>
 			<div className="mx-auto flex w-full max-w-6xl items-center gap-2.5 px-3 py-2 lg:gap-5 lg:px-8 lg:py-2.5">
 				<Link
 					to="/"
 					aria-label="Kedaipal home"
-					tabIndex={visible ? undefined : -1}
+					tabIndex={shown ? undefined : -1}
 					className="flex size-11 shrink-0 items-center justify-center rounded-xl lg:size-auto lg:px-0"
 				>
 					<AppImage
@@ -84,17 +102,17 @@ export function StoresCompactHeader({
 							type="search"
 							value={search}
 							onChange={(e) => onSearch(e.target.value)}
-							placeholder="Search stores…"
+							placeholder={placeholder}
 							aria-label="Search stores"
 							maxLength={maxLength}
-							tabIndex={visible ? undefined : -1}
+							tabIndex={shown ? undefined : -1}
 							className="min-w-0 grow bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
 						/>
 						{activeChip ? (
 							<button
 								type="button"
 								onClick={() => onChip("all")}
-								tabIndex={visible ? undefined : -1}
+								tabIndex={shown ? undefined : -1}
 								aria-label={`Clear the ${activeChip.label} filter`}
 								className="flex h-8 shrink-0 items-center gap-1 rounded-full bg-primary pl-2.5 pr-1.5 text-[11.5px] font-bold text-primary-foreground lg:hidden"
 							>
@@ -116,7 +134,7 @@ export function StoresCompactHeader({
 								type="button"
 								aria-pressed={active}
 								onClick={() => onChip(c.id)}
-								tabIndex={visible ? undefined : -1}
+								tabIndex={shown ? undefined : -1}
 								className={cn(
 									"flex h-9 shrink-0 items-center rounded-full px-3.5 text-xs font-semibold transition-colors",
 									active
@@ -140,7 +158,7 @@ export function StoresCompactHeader({
 						asChild
 						className="tap-target hidden bg-primary px-4 font-bold text-primary-foreground hover:bg-primary/90 lg:inline-flex"
 					>
-						<Link to="/app" tabIndex={visible ? undefined : -1}>
+						<Link to="/app" tabIndex={shown ? undefined : -1}>
 							Open your store
 						</Link>
 					</Button>
