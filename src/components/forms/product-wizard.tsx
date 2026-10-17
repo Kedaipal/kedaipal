@@ -103,7 +103,11 @@ import {
 	type ProductFormInitialValues,
 	type ProductFormSubmitValues,
 } from "./product-form";
-import { type ProductImage, ProductImagesField } from "./product-images-field";
+import {
+	type PhotoUploadState,
+	type ProductImage,
+	ProductImagesField,
+} from "./product-images-field";
 import {
 	EMPTY_PROMO_DRAFT,
 	type PromoDraft,
@@ -1253,7 +1257,8 @@ export function ProductWizard({
 		revealRef.current?.scrollIntoView({ block: "nearest" });
 		setReveal(null);
 	}, [reveal]);
-	const [uploading, setUploading] = useState(false);
+	const [photoUploads, setPhotoUploads] = useState<PhotoUploadState>("idle");
+	const uploading = photoUploads === "uploading";
 	const [submitting, setSubmitting] = useState(false);
 	// The one destructive answer the wizard ever asks for — a type switch that
 	// drops typed prices, or leaving an unsaved draft. One piece of state, so
@@ -1708,9 +1713,11 @@ export function ProductWizard({
 		state.minQuantity.trim().length > 0 ||
 		state.minNoticeDays.trim().length > 0;
 
+	// A photo that didn't upload is still on screen waiting for Retry — leaving
+	// would lose it, so it counts as unsaved work (z8r3fdtk85).
 	const unsaved: UnsavedState = uploading
 		? "uploading"
-		: isDirty
+		: isDirty || photoUploads === "failed"
 			? "changes"
 			: "none";
 	useEffect(() => {
@@ -2165,7 +2172,7 @@ export function ProductWizard({
 						<ProductImagesField
 							images={state.images}
 							onChange={(images) => patch({ images })}
-							onUploadingChange={setUploading}
+							onUploadStateChange={setPhotoUploads}
 							onError={setServerError}
 						/>
 						{showDescription ? (

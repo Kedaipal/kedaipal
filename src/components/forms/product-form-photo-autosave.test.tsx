@@ -74,6 +74,7 @@ beforeEach(() => {
 		})),
 	);
 	URL.createObjectURL = vi.fn(() => "blob:preview");
+	URL.revokeObjectURL = vi.fn();
 });
 afterEach(() => {
 	cleanup();

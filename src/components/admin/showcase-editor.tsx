@@ -40,13 +40,14 @@ import {
 	windowError,
 } from "../../lib/admin-showcase";
 import { convexErrorMessage } from "../../lib/format";
-import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
+import { IMAGE_ACCEPT } from "../../lib/image-upload";
 import {
 	type ShowcaseTicketData,
 	showcaseLook,
 	showcasePath,
 } from "../../lib/showcase";
 import { normalizeHex } from "../../lib/showcase-color";
+import { uploadImage } from "../../lib/storage-upload";
 import { cn } from "../../lib/utils";
 import { PageHeader } from "../dashboard/page-header";
 import { ShowcaseStage } from "../marketplace/showcase-stage";
@@ -238,20 +239,13 @@ function EditorForm({ row }: { row: AdminShowcase }) {
 		if (!file) return;
 		setUploading(true);
 		try {
-			const prepared = await prepareImageUpload(file);
-			if (!prepared.ok) {
-				toast.error(prepared.message);
+			const upload = await uploadImage(file, () => generateCoverUploadUrl({}));
+			if (!upload.ok) {
+				toast.error(upload.message);
 				return;
 			}
-			const width = await imageWidth(prepared.blob);
-			const url = await generateCoverUploadUrl({});
-			const res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": prepared.contentType },
-				body: prepared.blob,
-			});
-			if (!res.ok) throw new Error("Upload failed");
-			const { storageId } = (await res.json()) as { storageId: string };
+			const width = await imageWidth(upload.blob);
+			const { storageId } = upload;
 			await update({ showcaseId: row._id, coverImageStorageId: storageId });
 			// Any photo is accepted — a soft cover beats none — but a small one
 			// is named at the moment it lands, not discovered on a laptop later.

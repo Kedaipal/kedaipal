@@ -162,6 +162,7 @@ import {
 } from "./product-answers";
 import {
 	MAX_IMAGES,
+	type PhotoUploadState,
 	type ProductImage,
 	ProductImagesField,
 } from "./product-images-field";
@@ -1035,7 +1036,8 @@ export function ProductForm({
 			url: initialValues?.imageUrls?.[i] ?? "",
 		})),
 	);
-	const [uploading, setUploading] = useState(false);
+	const [photoUploads, setPhotoUploads] = useState<PhotoUploadState>("idle");
+	const uploading = photoUploads === "uploading";
 	const [serverError, setServerError] = useState<string | null>(null);
 	// The credit lock's typed refusal, when that's what the save hit — its way
 	// back renders under the sentence (Credits T3).
@@ -1448,9 +1450,11 @@ export function ProductForm({
 		changeImages(next);
 	}
 
+	// A photo that didn't upload is still on screen waiting for Retry — leaving
+	// would lose it, so it counts as unsaved work (z8r3fdtk85).
 	const unsaved: UnsavedState = uploading
 		? "uploading"
-		: dirty
+		: dirty || photoUploads === "failed"
 			? "changes"
 			: "none";
 	useEffect(() => {
@@ -1716,7 +1720,7 @@ export function ProductForm({
 				<ProductImagesField
 					images={images}
 					onChange={changeImages}
-					onUploadingChange={setUploading}
+					onUploadStateChange={setPhotoUploads}
 					onError={setServerError}
 					autosaveStatus={autosaveOn ? photoAutosave.status : undefined}
 				/>
