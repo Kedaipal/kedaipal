@@ -20,13 +20,12 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { getAccess } from "../subscriptions";
 import {
+	type ClaimVoucherState,
 	normalizeVoucherCode,
 	refusalForVoucher,
-	voucherDiscountFor,
 	type VoucherRefusal,
 	voucherRefusalErrorData,
 	voucherRefusalMessage,
-	type VoucherSnapshot,
 	type VoucherTerms,
 } from "./vouchers";
 
@@ -195,50 +194,6 @@ export async function redeemVoucher(
 		redeemedAt: args.now,
 		updatedAt: args.now,
 	});
-}
-
-/**
- * The state of a CLAIM's frozen voucher, for the claim page's read and the
- * commit's maths — asked in both places so the price the buyer confirms is the
- * price the commit computes.
- *
- * `dropped` is the state that matters: the claim carries a voucher that can no
- * longer be spent (keyed at the counter meanwhile, voided, lapsed). The page
- * renders `message` above the ticket and prices without it; the commit then
- * agrees. The alternative — refusing the commit — would strand a buyer who did
- * nothing wrong, since only the seller can issue a new link.
- */
-export type ClaimVoucherState =
-	| { kind: "none" }
-	| {
-			kind: "applied";
-			voucherId: Id<"vouchers">;
-			snapshot: VoucherSnapshot;
-			terms: VoucherTerms;
-		}
-	| {
-			kind: "dropped";
-			snapshot: VoucherSnapshot;
-			refusal: VoucherRefusal;
-			message: string;
-		};
-
-/**
- * What a claim's voucher takes off, from its state alone (`z8r3fdr617`).
- *
- * Only an `applied` voucher discounts: a `dropped` one is exactly the case
- * where the buyer must be charged the full price and TOLD why, so it has to
- * return 0 here or the page would quote a discount the commit then refuses to
- * honour. Every surface that prices a claim asks this — the ticket, the
- * confirm button and the page header — so none of them can disagree.
- */
-export function claimVoucherDiscount(
-	voucher: ClaimVoucherState | undefined,
-	itemSubtotal: number,
-): number {
-	return voucher?.kind === "applied"
-		? voucherDiscountFor(voucher.terms, itemSubtotal)
-		: 0;
 }
 
 export async function claimVoucherState(

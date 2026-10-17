@@ -90,13 +90,13 @@ import {
 	generateTrackingToken,
 } from "./lib/order";
 import {
-	claimVoucherDiscount,
 	claimVoucherState,
 	redeemVoucher,
 	resolveVoucherOrThrow,
 	storeShowsVoucherEntry,
 } from "./lib/voucherRedemption";
 import {
+	claimVoucherDiscount,
 	normalizeVoucherCode,
 	type VoucherSnapshot,
 	type VoucherTerms,
