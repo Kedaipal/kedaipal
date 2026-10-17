@@ -265,12 +265,6 @@ export type PlanFeatures = {
 	 * RSVPs, the headcount keeps totalling and the buyer flow never varies by
 	 * seller plan, so a downgrade never strands guests mid-RSVP. */
 	events: boolean;
-	/** Seller WhatsApp order alerts (86eyhw9zy): a WA template to the seller's
-	 * own number on new order + payment claim. Pro because each alert is a
-	 * billable Meta send (absorbed into the plan — decided 7 Aug 2026, no
-	 * add-on SKU). Gates only ENABLING the toggle — disabling and clearing the
-	 * number stay un-gated so a downgraded seller is never trapped. */
-	waOrderAlerts: boolean;
 	/** Promo price + flash sale (z8r3fdcw72): SETTING a promo config on a
 	 * product. Gates only the seller configuring — an active promo on a
 	 * downgraded store stops APPLYING (effective price = list, badge reads
@@ -300,7 +294,6 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		delivery: false,
 		onlinePayments: false,
 		events: false,
-		waOrderAlerts: false,
 		promo: false,
 		vouchers: false,
 	},
@@ -314,7 +307,6 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		delivery: true,
 		onlinePayments: true,
 		events: true,
-		waOrderAlerts: true,
 		promo: true,
 		vouchers: true,
 	},
@@ -332,7 +324,6 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		delivery: true,
 		onlinePayments: true,
 		events: true,
-		waOrderAlerts: true,
 		promo: true,
 		vouchers: true,
 	},

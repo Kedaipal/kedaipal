@@ -429,9 +429,11 @@ function useFeatures(): Feature[] {
 			enterprise: true,
 		},
 		{
-			// Shipped (86eyhw9zy) — PLAN_FEATURES.waOrderAlerts.
+			// Shipped (86eyhw9zy). Every plan since z8r3fdv55f — the alert is the
+			// "never lose an order" promise, so it rides the subscription, not a
+			// tier: no PLAN_FEATURES entry.
 			label: m.pricingpage_feat_wa_alerts(),
-			starter: false,
+			starter: true,
 			pro: true,
 			enterprise: true,
 		},

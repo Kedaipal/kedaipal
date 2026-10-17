@@ -57,7 +57,6 @@ const FEATURE_LABEL: Record<string, string> = {
 	radiusDelivery: "distance-based delivery pricing",
 	delivery: "Lalamove booking",
 	onlinePayments: "online payments for your buyers",
-	waOrderAlerts: "WhatsApp order alerts",
 };
 
 function featuresLost(from: Plan, to: Plan): string[] {

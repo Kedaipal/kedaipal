@@ -24,6 +24,7 @@ import {
 	WhatsAppSendError,
 } from "./lib/whatsapp";
 import { storeOwnerIsAdmin } from "./lib/auth";
+import { sellerWaAlertsSwitchedOn } from "./lib/sellerAlerts";
 import {
 	describeClaimWindow,
 	effectiveClaimStatus,
@@ -68,7 +69,10 @@ import {
 	type PickupSnapshot,
 } from "./lib/whatsappCopy";
 import { classifyInbound } from "./lib/inboundIntent";
-import { buyerPaymentsPaused } from "./subscriptions";
+import {
+	buyerPaymentsPaused,
+	waAlertsCoveredBySubscription,
+} from "./subscriptions";
 
 /**
  * Internal mutation invoked by handleInbound when an ORD-XXXX is matched.
@@ -1226,7 +1230,9 @@ export const getOrderForSellerAlert = internalQuery({
 		fulfilmentDate: number | undefined;
 		fulfilmentTimeMinutes: number | undefined;
 		notifyWaPhone: string | undefined;
-		orderWaAlerts: boolean;
+		/** Switched on (absent = on) AND the subscription covers it — the
+		 * same two inputs the email's suppression predicate reads. */
+		waAlertsOn: boolean;
 		locale: Locale;
 	} | null> => {
 		const order = await ctx.db.get(orderId);
@@ -1253,7 +1259,9 @@ export const getOrderForSellerAlert = internalQuery({
 			fulfilmentDate: order.fulfilmentDate,
 			fulfilmentTimeMinutes: order.fulfilmentTimeMinutes,
 			notifyWaPhone: retailer.notifyWaPhone,
-			orderWaAlerts: retailer.orderWaAlerts === true,
+			waAlertsOn:
+				sellerWaAlertsSwitchedOn(retailer.orderWaAlerts) &&
+				(await waAlertsCoveredBySubscription(ctx, retailer)),
 			locale: (retailer.locale as Locale | undefined) ?? "en",
 		};
 	},
@@ -1261,8 +1269,9 @@ export const getOrderForSellerAlert = internalQuery({
 
 /**
  * Seller WhatsApp order alerts (86eyhw9zy): scheduled by orders.create beside
- * the retailer email alert. Sends the opted-in seller ONE utility template on
- * their own `notifyWaPhone` the moment a storefront order lands. Counter
+ * the retailer email alert. Sends the seller ONE utility template on their own
+ * `notifyWaPhone` the moment a storefront order lands — when the switch is on
+ * (absent = on) and the subscription covers it (z8r3fdv55f). Counter
  * orders are excluded — the seller (or their cashier) is standing there
  * creating them, the same posture as the min-order/notice exemptions. Sellers
  * rarely hold an open 24h service window with the shared WABA, so the message
@@ -1306,7 +1315,7 @@ export const notifySellerNewOrder = internalAction({
 			});
 			return;
 		}
-		if (!meta.orderWaAlerts || !meta.notifyWaPhone) return;
+		if (!meta.waAlertsOn || !meta.notifyWaPhone) return;
 		// Defence in depth: the create site never schedules this for counter
 		// orders in the first place.
 		if (meta.source === "counter") return;
@@ -1417,7 +1426,7 @@ export const notifySellerPaymentClaim = internalAction({
 			});
 			return;
 		}
-		if (!meta.orderWaAlerts || !meta.notifyWaPhone) return;
+		if (!meta.waAlertsOn || !meta.notifyWaPhone) return;
 		if (meta.status === "cancelled") return;
 
 		const money = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
@@ -1527,7 +1536,7 @@ export const notifySellerPaymentReceived = internalAction({
 			});
 			return;
 		}
-		if (!meta.orderWaAlerts || !meta.notifyWaPhone) return;
+		if (!meta.waAlertsOn || !meta.notifyWaPhone) return;
 
 		const money = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
 		const wa = makeGuardedSender(ctx, meta.retailerId, "utility_template");
@@ -2185,9 +2194,10 @@ export const getInvoiceForBillingAlert = internalQuery({
  * alert about a bill that doesn't exist.
  *
  * Deliberately NOT gated on `retailers.orderWaAlerts`. That toggle is order-
- * alert scope and defaults off, so hanging this off it would mean almost no
- * seller is told they lost access; and a billing lockout is no more opt-out-
- * able than the invoice email itself. The WABA global opt-out still applies —
+ * alert scope, and the order alerts stop for a locked store (`past_due` isn't
+ * covered — z8r3fdv55f), so hanging this off them would silence exactly this
+ * message; and a billing lockout is no more opt-out-able than the invoice
+ * email itself. The WABA global opt-out still applies —
  * that one is a standing legal instruction, not a preference — along with the
  * kill switch, per-seller caps and quality throttle, all via the gateway.
  *
