@@ -62,7 +62,7 @@ opt-in Pro feature; now:
 | `past_due` | **no** | The LOCK state (trial expired unpaid, or renewal unpaid past grace). It is view-only and indefinite (nothing moves a store out of it on its own), so the free email covers it. |
 | `on_hold` / `cancelled` | no | Ordering is off / the store has left. |
 | comped, or an admin's own store | yes | Full access means full access (`storeHasFullAccess`). |
-| no subscription row | no | Elsewhere a missing row fails OPEN; here the safe default is the free channel. |
+| no subscription row | yes | A data fault that `resolveAccess` fails OPEN as comped full access. Matching it keeps the alerts card from reading "Paused" beside a Billing tab that reports full access. |
 
 **Cost.** Every covered store's order now carries one billable Meta utility
 send to the seller once a number is saved. That was a Pro-absorbed cost

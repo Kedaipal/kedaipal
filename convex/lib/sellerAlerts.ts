@@ -55,17 +55,18 @@ export type SellerAlertSubscription = {
  *  - `on_hold` (ordering is off) / `cancelled` — no.
  *  - comped or an admin's own store — yes, whatever the status: full access
  *    means full access (`storeHasFullAccess`).
- *  - no subscription row — no. Elsewhere a missing row fails OPEN so nobody
- *    is locked out; here the safe default is the free channel, and the email
- *    covers the seller either way.
+ *  - no subscription row — yes. A missing row is a data fault that
+ *    `resolveAccess` fails OPEN as comped full access, and the Billing tab
+ *    says so; failing CLOSED here would put "Paused — subscription isn't
+ *    active" on the alerts card beside a Billing tab reporting full access.
+ *    One store, one answer (PR #387 review).
  */
 export function subscriptionCoversWaAlerts(
 	sub: SellerAlertSubscription | null,
 	ownerIsAdmin: boolean,
 ): boolean {
 	if (ownerIsAdmin) return true;
-	if (!sub) return false;
-	if (sub.comped === true) return true;
+	if (!sub || sub.comped === true) return true;
 	return sub.status === "trialing" || sub.status === "active";
 }
 

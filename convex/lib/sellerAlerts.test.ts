@@ -103,7 +103,9 @@ describe("subscriptionCoversWaAlerts — the alert rides the subscription, not a
 		expect(subscriptionCoversWaAlerts(null, true)).toBe(true);
 	});
 
-	test("a missing subscription row is NOT covered — the safe channel is the free one", () => {
-		expect(subscriptionCoversWaAlerts(null, false)).toBe(false);
+	test("a missing subscription row is covered — it resolves as comped full access everywhere else", () => {
+		// Failing closed here would show "Paused" on the alerts card while the
+		// Billing tab reports full access for the same store.
+		expect(subscriptionCoversWaAlerts(null, false)).toBe(true);
 	});
 });
