@@ -152,6 +152,24 @@ export function matchShowcases(
 	return { matches, slugs };
 }
 
+/**
+ * The search boxes' hint. A booth label is searchable (`matchShowcases`), and
+ * a buyer standing at the event knows the booth before the store's name — so
+ * while a live showcase here carries one, the boxes say so. Without a label
+ * anywhere, "or booths" would promise a search that can't match.
+ *
+ * `compact` is the floating bar's: on a 375px phone its input is ~143px and
+ * "Search stores or booths…" (~162px) was cut off mid-word. The bar already
+ * shows a magnifier, so the verb can go.
+ */
+export function storeSearchPlaceholder(
+	showcases: ReadonlyArray<{ tickets: ReadonlyArray<ShowcaseTicketData> }>,
+): { full: string; compact: string } {
+	return showcases.some((s) => s.tickets.some((t) => t.label?.trim()))
+		? { full: "Search stores or booths…", compact: "Stores or booths…" }
+		: { full: "Search stores…", compact: "Search stores…" };
+}
+
 /** The showcases a buyer in this region should see — regions never blend,
  * the directory's own rule. */
 export function showcasesForRegion(

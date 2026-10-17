@@ -28,6 +28,7 @@ export function StoresCompactHeader({
 	region,
 	onRegion,
 	maxLength,
+	placeholder,
 }: {
 	visible: boolean;
 	search: string;
@@ -38,6 +39,8 @@ export function StoresCompactHeader({
 	region: Country;
 	onRegion: (next: Country) => void;
 	maxLength: number;
+	/** The bar's hint — `storeSearchPlaceholder(...).compact`. */
+	placeholder: string;
 }) {
 	const activeChip = chips.find((c) => c.id === chip && c.id !== "all");
 	return (
@@ -84,7 +87,7 @@ export function StoresCompactHeader({
 							type="search"
 							value={search}
 							onChange={(e) => onSearch(e.target.value)}
-							placeholder="Search stores…"
+							placeholder={placeholder}
 							aria-label="Search stores"
 							maxLength={maxLength}
 							tabIndex={visible ? undefined : -1}

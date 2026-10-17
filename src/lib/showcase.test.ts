@@ -19,6 +19,7 @@ import {
 	showcaseThemeClass,
 	showcaseTimeFacts,
 	splitStage,
+	storeSearchPlaceholder,
 } from "./showcase";
 
 /** Sat 17 Oct 2026 12:00 MYT. */
@@ -344,5 +345,32 @@ describe("matchShowcases — a refined /stores keeps each store inside its showc
 		});
 		expect(matches).toEqual([]);
 		expect(slugs.size).toBe(0);
+	});
+});
+
+describe("storeSearchPlaceholder — the box only offers booths when one is searchable", () => {
+	test("a live showcase with a booth label: say booths are searchable", () => {
+		expect(
+			storeSearchPlaceholder([
+				{
+					tickets: [
+						{ card: card("a") },
+						{ card: card("b"), label: "Stall 12" },
+					],
+				},
+			]),
+		).toEqual({
+			full: "Search stores or booths…",
+			compact: "Stores or booths…",
+		});
+	});
+	test("no showcase, or none with a label (blank counts as none): stores only", () => {
+		const storesOnly = { full: "Search stores…", compact: "Search stores…" };
+		expect(storeSearchPlaceholder([])).toEqual(storesOnly);
+		expect(
+			storeSearchPlaceholder([
+				{ tickets: [{ card: card("a") }, { card: card("b"), label: "  " }] },
+			]),
+		).toEqual(storesOnly);
 	});
 });

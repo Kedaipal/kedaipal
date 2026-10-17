@@ -375,7 +375,12 @@ which `listStores` and the showcase functions both read.
   searched for), with "2 of 14 stores match · See all 14 →" to its focused
   view when the search left some out. The rules: a ticket matches on the
   directory's own rule (`matchesSearch` + `matchesChip`, the same predicates
-  `filterStores` uses) **plus its booth label** ("A12" finds booth A12); a
+  `filterStores` uses) **plus its booth label** ("A12" finds booth A12 — and
+  both search boxes say "Search stores or booths…" while a live showcase in
+  the region carries a label (the floating bar says "Stores or booths…" — its
+  input is ~143px on a 375px phone and the long form was cut off),
+  `storeSearchPlaceholder`, so the feature is discoverable and never
+  promised where it can't match); a
   showcase with **no** match is not shown at all; the focused showcase
   leads, the rest keep admin order; a store in two showcases shows in
   **both** (each ticket carries that event's booth); and every matched store

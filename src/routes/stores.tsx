@@ -39,6 +39,7 @@ import {
 	matchShowcases,
 	resolveShowcaseFocus,
 	showcasesForRegion,
+	storeSearchPlaceholder,
 } from "../lib/showcase";
 import { ssrRead } from "../lib/ssr-read";
 
@@ -269,6 +270,7 @@ function MarketplacePage() {
 		: matched;
 	const resultCount = visible.length + showcaseMatches.slugs.size;
 	const inShowcases = showcaseMatches.matches.length > 0;
+	const searchPlaceholder = storeSearchPlaceholder(regionShowcases);
 	// The booth-QR view hides the hero, so the compact bar is its only search
 	// box: once the buyer has refined, it stays pinned — a shrinking result
 	// list must never scroll the search they are typing in out from under them.
@@ -361,7 +363,7 @@ function MarketplacePage() {
 											type="search"
 											value={search}
 											onChange={(e) => setSearch(e.target.value)}
-											placeholder="Search stores…"
+											placeholder={searchPlaceholder.full}
 											aria-label="Search stores"
 											maxLength={SEARCH_QUERY_MAX}
 											className="min-w-0 grow bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
@@ -421,6 +423,7 @@ function MarketplacePage() {
 				region={region}
 				onRegion={setRegion}
 				maxLength={SEARCH_QUERY_MAX}
+				placeholder={searchPlaceholder.compact}
 			/>
 
 			<div className="mx-auto flex w-full max-w-6xl grow flex-col">
