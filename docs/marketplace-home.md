@@ -352,7 +352,8 @@ which `listStores` and the showcase functions both read.
   frustrating and needs a pause control.
 - **The focused view** (`/stores?showcase=<slug>`, mode `focused`) is the
   booth-QR landing: the hero's pitch, search and chips step aside, the
-  showcase is the first thing on screen with EVERY ticket laid out, an
+  compact header is DOCKED as the page's header (below), the
+  showcase is the first thing under it with EVERY ticket laid out, an
   "All stores" way back, and a Copy-link button. The loader reads the slug
   (`loaderDeps`) so the page's OG tags carry the showcase's title, tagline
   and cover — the link unfurls as the event in WhatsApp — while the
@@ -390,12 +391,17 @@ which `listStores` and the showcase functions both read.
   shows only when nothing matched anywhere. Unrefined, "All stores" keeps
   every store, as before. The banner art and tagline step aside in this
   layout so two matching showcases don't push the plain results off a
-  phone's first screen. On the booth-QR view the compact header is the only
-  search box, so once the buyer refines it stays pinned, and "Clear search
-  & filters" clears only what it names: a booth-QR visitor stays on their
-  showcase. "See all" also clears the page's search box, which never reads
+  phone's first screen. On the booth-QR view "Clear search & filters"
+  clears only what it names: a booth-QR visitor stays on their showcase. "See all" also clears the page's search box, which never reads
   `?q=` back mid-typing.
-- **The compact header** (`StoresCompactHeader`): once the hero's chips
+- **The compact header** (`StoresCompactHeader`) is **docked** on the
+  booth-QR view (`docked`): there is no hero there, so it is the page's
+  only search box and its header, rendered `sticky` in the flow, always
+  shown, with the static header not rendered (nothing under it left in the
+  tab order). The first cut kept the takeover and pinned it only while the
+  buyer had refined, and the PR review caught the hole: backspacing to
+  empty at `scrollY` 0 un-refined the page and slid the bar away under a
+  still-focused input. Everywhere else: once the hero's chips
   scroll out above (one `IntersectionObserver` on a sentinel,
   `useScrolledPast`), a frosted bar takes over with the logo, a floating
   search, the region switch — and on desktop the chips and the seller CTA.

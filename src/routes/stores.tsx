@@ -271,9 +271,10 @@ function MarketplacePage() {
 	const resultCount = visible.length + showcaseMatches.slugs.size;
 	const inShowcases = showcaseMatches.matches.length > 0;
 	const searchPlaceholder = storeSearchPlaceholder(regionShowcases);
-	// The booth-QR view hides the hero, so the compact bar is its only search
-	// box: once the buyer has refined, it stays pinned — a shrinking result
-	// list must never scroll the search they are typing in out from under them.
+	// A booth-QR landing (`?showcase=`) is about the EVENT: the hero's pitch,
+	// search and chips step aside and the showcase is the first thing on
+	// screen. Judged on the slug alone so the hero doesn't flash in while the
+	// showcases load, and returns if the slug turns out not to be live.
 	const heroHidden = focusedSlug !== undefined && !focusedMissing;
 	function leaveShowcase() {
 		void navigate({
@@ -295,126 +296,125 @@ function MarketplacePage() {
 	return (
 		<div className="flex min-h-dvh w-full flex-col bg-background">
 			{/* The landing's mint mesh runs edge to edge; the content inside it
-			    keeps the page column. Nav through chips ride it. */}
-			<div className="bg-hero-mesh pb-4">
-				<div className="mx-auto w-full max-w-6xl">
-					<header className="flex items-center justify-between gap-3 px-5 py-3.5 lg:px-8">
-						<Link to="/" aria-label="Kedaipal home">
-							<AppImage
-								src="/logo-3.svg"
-								alt="Kedaipal"
-								aspect="h-7 w-auto"
-								fill={false}
-								priority
-							/>
-						</Link>
-						<div className="flex items-center gap-2.5">
-							<RegionToggle region={region} onChange={setRegion} />
-							{/* One seller CTA up here — "learn" and "sign up" land on the
+			    keeps the page column. Nav through chips ride it. The booth-QR
+			    view has none of it: the docked compact bar below is its header. */}
+			{heroHidden ? null : (
+				<div className="bg-hero-mesh pb-4">
+					<div className="mx-auto w-full max-w-6xl">
+						<header className="flex items-center justify-between gap-3 px-5 py-3.5 lg:px-8">
+							<Link to="/" aria-label="Kedaipal home">
+								<AppImage
+									src="/logo-3.svg"
+									alt="Kedaipal"
+									aspect="h-7 w-auto"
+									fill={false}
+									priority
+								/>
+							</Link>
+							<div className="flex items-center gap-2.5">
+								<RegionToggle region={region} onChange={setRegion} />
+								{/* One seller CTA up here — "learn" and "sign up" land on the
 							    same funnel, so two adjacent buttons would be noise; the
 							    footer's "For sellers" is the quiet path to the pitch. Navy,
 							    not mint: on a buyer page the buyer's search owns the
 							    action colour and the seller ask sits a rung below. */}
-							<Button
-								asChild
-								className="tap-target hidden bg-primary px-4 font-bold text-primary-foreground hover:bg-primary/90 sm:inline-flex"
-							>
-								<Link to="/app">Open your store</Link>
-							</Button>
-						</div>
-					</header>
-
-					{/* A booth-QR landing (`?showcase=`) is about the EVENT: the hero's
-					    pitch, search and chips step aside and the showcase is the first
-					    thing on screen. "All stores" on the stage brings them back.
-					    Judged on the slug alone so the hero doesn't flash in while the
-					    showcases load, and returns if the slug turns out not to be live. */}
-					{heroHidden ? null : (
-						<>
-							<div className="flex flex-col items-center px-5 pt-5 text-center lg:pt-8">
-								<AppImage
-									src="/logo.svg"
-									alt=""
-									aspect="h-12 w-auto lg:h-14"
-									fill={false}
-									priority
-								/>
-								<h1 className="tracking-display mt-3 font-heading text-[25px] font-extrabold leading-tight lg:text-[2.6rem]">
-									Find your next{" "}
-									<span className="kp-highlight text-accent">
-										favourite store
-									</span>
-								</h1>
-								<p className="mt-2 max-w-md text-sm leading-relaxed text-muted-foreground lg:max-w-xl lg:text-[15px]">
-									Browse real sellers on Kedaipal — order on their store,
-									confirmed over WhatsApp.
-								</p>
-							</div>
-
-							{/* <search> is the semantic landmark; the inner form keeps Enter
-					    from navigating (search is live-as-you-type). */}
-							<search className="mt-4 flex justify-center px-5">
-								<form
-									className="flex w-full justify-center"
-									onSubmit={(e) => e.preventDefault()}
+								<Button
+									asChild
+									className="tap-target hidden bg-primary px-4 font-bold text-primary-foreground hover:bg-primary/90 sm:inline-flex"
 								>
-									<div className="flex h-12 w-full max-w-xl items-center gap-2.5 rounded-full border border-border bg-card pl-5 pr-1.5 shadow-sm transition-shadow focus-within:ring-3 focus-within:ring-ring/40">
-										<input
-											type="search"
-											value={search}
-											onChange={(e) => setSearch(e.target.value)}
-											placeholder={searchPlaceholder.full}
-											aria-label="Search stores"
-											maxLength={SEARCH_QUERY_MAX}
-											className="min-w-0 grow bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
-										/>
-										<button
-											type="submit"
-											aria-label="Search"
-											className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent text-accent-foreground transition-colors hover:bg-accent/90"
-										>
-											<Search className="size-4" />
-										</button>
-									</div>
-								</form>
-							</search>
-
-							<div className="mt-3.5 flex gap-2 overflow-x-auto scrollbar-none px-5 lg:justify-center">
-								{CHIPS.map(({ id, label, dot }) => {
-									const active = chip === id;
-									return (
-										<button
-											key={id}
-											type="button"
-											aria-pressed={active}
-											onClick={() => setChip(id)}
-											className={`tap-target flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-xs font-semibold transition-colors ${
-												active
-													? "bg-primary text-primary-foreground"
-													: "border border-border bg-card text-foreground hover:bg-muted"
-											}`}
-										>
-											{dot ? (
-												<span
-													aria-hidden
-													className="size-1.5 rounded-full bg-accent"
-												/>
-											) : null}
-											{label}
-										</button>
-									);
-								})}
+									<Link to="/app">Open your store</Link>
+								</Button>
 							</div>
-						</>
-					)}
+						</header>
+
+						<div className="flex flex-col items-center px-5 pt-5 text-center lg:pt-8">
+							<AppImage
+								src="/logo.svg"
+								alt=""
+								aspect="h-12 w-auto lg:h-14"
+								fill={false}
+								priority
+							/>
+							<h1 className="tracking-display mt-3 font-heading text-[25px] font-extrabold leading-tight lg:text-[2.6rem]">
+								Find your next{" "}
+								<span className="kp-highlight text-accent">
+									favourite store
+								</span>
+							</h1>
+							<p className="mt-2 max-w-md text-sm leading-relaxed text-muted-foreground lg:max-w-xl lg:text-[15px]">
+								Browse real sellers on Kedaipal — order on their store,
+								confirmed over WhatsApp.
+							</p>
+						</div>
+
+						{/* <search> is the semantic landmark; the inner form keeps Enter
+					    from navigating (search is live-as-you-type). */}
+						<search className="mt-4 flex justify-center px-5">
+							<form
+								className="flex w-full justify-center"
+								onSubmit={(e) => e.preventDefault()}
+							>
+								<div className="flex h-12 w-full max-w-xl items-center gap-2.5 rounded-full border border-border bg-card pl-5 pr-1.5 shadow-sm transition-shadow focus-within:ring-3 focus-within:ring-ring/40">
+									<input
+										type="search"
+										value={search}
+										onChange={(e) => setSearch(e.target.value)}
+										placeholder={searchPlaceholder.full}
+										aria-label="Search stores"
+										maxLength={SEARCH_QUERY_MAX}
+										className="min-w-0 grow bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
+									/>
+									<button
+										type="submit"
+										aria-label="Search"
+										className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent text-accent-foreground transition-colors hover:bg-accent/90"
+									>
+										<Search className="size-4" />
+									</button>
+								</div>
+							</form>
+						</search>
+
+						<div className="mt-3.5 flex gap-2 overflow-x-auto scrollbar-none px-5 lg:justify-center">
+							{CHIPS.map(({ id, label, dot }) => {
+								const active = chip === id;
+								return (
+									<button
+										key={id}
+										type="button"
+										aria-pressed={active}
+										onClick={() => setChip(id)}
+										className={`tap-target flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-xs font-semibold transition-colors ${
+											active
+												? "bg-primary text-primary-foreground"
+												: "border border-border bg-card text-foreground hover:bg-muted"
+										}`}
+									>
+										{dot ? (
+											<span
+												aria-hidden
+												className="size-1.5 rounded-full bg-accent"
+											/>
+										) : null}
+										{label}
+									</button>
+								);
+							})}
+						</div>
+					</div>
 				</div>
-			</div>
+			)}
 
 			{/* Zero-height sentinel: the compact header is live once this has
 			    scrolled out above the viewport. */}
 			<div ref={heroEndRef} aria-hidden className="h-px w-full" />
+			{/* Docked in the booth-QR view: with no hero there is no other search
+			    box, so the bar is the page's header there — always shown, in the
+			    flow, never sliding away under a buyer who is typing (or who just
+			    cleared their search). */}
 			<StoresCompactHeader
-				visible={scrolledPast || (heroHidden && refined)}
+				docked={heroHidden}
+				visible={scrolledPast}
 				search={search}
 				onSearch={setSearch}
 				chip={chip}
