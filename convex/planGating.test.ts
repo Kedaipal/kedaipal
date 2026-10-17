@@ -234,7 +234,6 @@ describe("plan gating — CRM (Pro+)", () => {
 			delivery: true,
 			onlinePayments: true,
 			events: true,
-			waOrderAlerts: true,
 			promo: true,
 			vouchers: true,
 		});
@@ -251,7 +250,6 @@ describe("plan gating — CRM (Pro+)", () => {
 			delivery: false,
 			onlinePayments: false,
 			events: false,
-			waOrderAlerts: false,
 			promo: false,
 			vouchers: false,
 		});
@@ -277,7 +275,6 @@ describe("plan gating — CRM (Pro+)", () => {
 		delivery: true,
 		onlinePayments: true,
 		events: true,
-		waOrderAlerts: true,
 			promo: true,
 		vouchers: true,
 		});
