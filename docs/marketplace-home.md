@@ -354,7 +354,8 @@ which `listStores` and the showcase functions both read.
   booth-QR landing: the hero's pitch, search and chips step aside, the
   compact header is DOCKED as the page's header (below), the
   showcase is the first thing under it with EVERY ticket laid out, an
-  "All stores" way back, and a Copy-link button. The loader reads the slug
+  "Back to all stores" way back (not "All stores", which is also the
+  filter chip's label in the docked header above it), and a Copy-link button. The loader reads the slug
   (`loaderDeps`) so the page's OG tags carry the showcase's title, tagline
   and cover — the link unfurls as the event in WhatsApp — while the
   canonical stays the bare `/stores`. A link to a live showcase in the OTHER

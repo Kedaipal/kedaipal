@@ -226,7 +226,9 @@ describe("ShowcaseStage", () => {
 				}}
 			/>,
 		);
-		const back = await screen.findByRole("button", { name: /All stores/ });
+		const back = await screen.findByRole("button", {
+			name: "Back to all stores",
+		});
 		back.click();
 		expect(left).toBe(true);
 		expect(screen.queryByText(/more · See all/)).toBeNull();

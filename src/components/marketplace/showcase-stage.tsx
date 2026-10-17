@@ -137,7 +137,9 @@ export function ShowcaseStage({
 							className="tap-target -ml-2 inline-flex w-fit items-center gap-1.5 rounded-full px-2 text-[13px] font-bold text-[var(--sc-accent)] hover:bg-white/10"
 						>
 							<ArrowLeft aria-hidden className="size-4" />
-							All stores
+							{/* Not "All stores": that is also the filter chip's label in
+							    the docked header right above it, which means "no filter". */}
+							Back to all stores
 						</button>
 					) : null}
 					<div className="flex flex-wrap gap-1.5">
