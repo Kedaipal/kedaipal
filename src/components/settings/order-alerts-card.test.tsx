@@ -174,6 +174,62 @@ describe("OrderAlertsCard — WhatsApp row", () => {
 		expect(screen.queryByText("Pro")).toBeNull();
 	});
 
+	it("Remove number clears it, leaves the switch alone, and Undo puts the same number back", async () => {
+		const onSave = renderCard({
+			whatsapp: wa({ switchedOn: true, currentPhone: "60198765432" }),
+		});
+		fireEvent.click(screen.getByRole("button", { name: /change number/i }));
+		fireEvent.click(screen.getByRole("button", { name: /remove number/i }));
+		await waitFor(() =>
+			expect(onSave).toHaveBeenCalledWith({ notifyWaPhone: "" }),
+		);
+		// Never `orderWaAlerts: false` — email covers it until a number returns.
+		expect(onSave).not.toHaveBeenCalledWith(
+			expect.objectContaining({ orderWaAlerts: false }),
+		);
+		const [message, options] = toastSuccess.mock.calls.at(-1) as [
+			string,
+			{ action: { onClick: () => void } },
+		];
+		expect(message).toMatch(/alerts go to your email/i);
+		options.action.onClick();
+		expect(onSave).toHaveBeenLastCalledWith({ notifyWaPhone: "60198765432" });
+	});
+
+	it("an emptied field says how to remove the number instead of a silent grey Save", () => {
+		renderCard({
+			whatsapp: wa({ switchedOn: true, currentPhone: "60198765432" }),
+		});
+		fireEvent.click(screen.getByRole("button", { name: /change number/i }));
+		fireEvent.change(screen.getByPlaceholderText("12-345 6789"), {
+			target: { value: "" },
+		});
+		expect(
+			(
+				screen.getByRole("button", {
+					name: /save number/i,
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(true);
+		expect(screen.getByText(/or remove this one/i)).toBeDefined();
+	});
+
+	it("with no number saved there is nothing to remove", () => {
+		renderCard({ whatsapp: wa({ switchedOn: true }) });
+		fireEvent.click(screen.getByRole("button", { name: /add number/i }));
+		expect(screen.queryByRole("button", { name: /remove number/i })).toBeNull();
+	});
+
+	it("the email's backup status is its own line, never truncated into the address", () => {
+		renderCard({
+			notifyEmail: "a-very-long-ops-inbox@some-shop-domain.com.my",
+			whatsapp: wa({ switchedOn: true, currentPhone: "60198765432" }),
+		});
+		const note = screen.getByText("Backup while WhatsApp is on");
+		expect(note.className).not.toMatch(/truncate/);
+		expect(note.textContent).not.toContain("@");
+	});
+
 	it("subscription not covering it: Paused, says email has it, and points at Billing", () => {
 		renderCard({
 			notifyEmail: "orders@shop.my",

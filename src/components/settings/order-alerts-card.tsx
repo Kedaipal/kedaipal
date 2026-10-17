@@ -171,6 +171,7 @@ function ChannelRow({
 	title,
 	badge,
 	sub,
+	subNote,
 	on,
 	toggleLabel,
 	toggleDisabled,
@@ -185,6 +186,9 @@ function ChannelRow({
 	title: string;
 	badge?: React.ReactNode;
 	sub: React.ReactNode;
+	/** A second, never-truncated line under `sub` — for a status that must
+	 * survive a phone-width row (an email address eats the first line). */
+	subNote?: React.ReactNode;
 	on: boolean;
 	toggleLabel: string;
 	toggleDisabled: boolean;
@@ -218,6 +222,9 @@ function ChannelRow({
 							</button>
 						) : null}
 					</span>
+					{subNote ? (
+						<span className="text-xs text-muted-foreground">{subNote}</span>
+					) : null}
 				</div>
 				<Glance tone={glance?.tone ?? (on ? "mint" : "grey")}>
 					{glance?.label ?? (on ? "On" : "Off")}
@@ -298,6 +305,34 @@ function WhatsAppRow({
 		setPhone(toNationalPhoneInput(seedPhone, country));
 		setPhoneError(null);
 		setEditing(true);
+	}
+
+	/** Clearing leaves the switch alone (z8r3fdv55f): the row drops to "Needs
+	 * a number" and email carries the alerts until a number is saved again.
+	 * Undo puts the same number straight back. */
+	function removeNumber() {
+		const previous = currentPhone;
+		setSaving(true);
+		onSave({ notifyWaPhone: "" })
+			.then(() => {
+				setEditing(false);
+				setPhoneError(null);
+				setPhone("");
+				toast.success("Alert number removed — alerts go to your email", {
+					action: {
+						label: "Undo",
+						onClick: () => {
+							void onSave({ notifyWaPhone: previous }).then(() =>
+								toast.success(
+									`WhatsApp order alerts now go to ${formatMobile(previous)}`,
+								),
+							);
+						},
+					},
+				});
+			})
+			.catch((err) => toast.error(convexErrorMessage(err)))
+			.finally(() => setSaving(false));
 	}
 
 	function onToggle(next: boolean) {
@@ -421,6 +456,12 @@ function WhatsAppRow({
 				/>
 				{phoneError ? (
 					<p className="text-xs font-medium text-destructive">{phoneError}</p>
+				) : hasNumber && phone.trim().length === 0 ? (
+					// Said where the seller is clicking, so an emptied field never
+					// reads as a broken Save: clearing isn't saving — Remove is.
+					<p className="text-xs text-muted-foreground">
+						Enter a new number, or remove this one and alerts go to your email.
+					</p>
 				) : (
 					<p className="text-xs text-muted-foreground">
 						{MOBILE_KIND[country]} with WhatsApp — usually your own number.
@@ -460,6 +501,17 @@ function WhatsAppRow({
 				>
 					Cancel
 				</Button>
+				{hasNumber ? (
+					<Button
+						type="button"
+						variant="ghost"
+						className="h-11 sm:ml-auto"
+						disabled={saving}
+						onClick={removeNumber}
+					>
+						Remove number
+					</Button>
+				) : null}
 			</div>
 		</ChannelRow>
 	);
@@ -668,13 +720,8 @@ function EmailRow({
 	return (
 		<ChannelRow
 			title="Email"
-			sub={
-				on
-					? whatsappOn
-						? `${current} · backup while WhatsApp is on`
-						: current
-					: "No email set"
-			}
+			sub={on ? current : "No email set"}
+			subNote={on && whatsappOn ? "Backup while WhatsApp is on" : undefined}
 			on={on}
 			toggleLabel="Email order alerts"
 			toggleDisabled={!canEdit || saving}

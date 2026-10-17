@@ -255,7 +255,13 @@ notification.
   at Billing), **Blocked** (STOP'd number, with the reply-START fix), or
   **Off**. Every non-live state says the email is carrying the alerts. The
   email row only reads "backup while WhatsApp is on" while WhatsApp is
-  actually sending. The header glance counts channels on ("2 of 3
+  actually sending. That status sits on its own line under the address, so
+  it survives a phone-width row instead of truncating into "backup while …".
+- **Remove number** lives in the WhatsApp number editor (only when one is
+  saved). It clears `notifyWaPhone` and leaves the switch alone, so the row
+  drops to "Needs a number" and email carries the alerts. The toast offers
+  Undo. An emptied field says "Enter a new number, or remove this one"
+  instead of leaving a silently greyed-out Save. The header glance counts channels on ("2 of 3
   on", warn "No alerts on"); "What triggers an alert" names both events and the
   counter exclusion. A teammate can switch **this device** only — WhatsApp and
   email are the owner's, and the card says so.
