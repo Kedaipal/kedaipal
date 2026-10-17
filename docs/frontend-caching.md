@@ -107,6 +107,25 @@ place a failed store read must become a screen, not a skeleton — reads the sib
 > list does. The gate test below now catches this class of drift instead of
 > relying on anyone remembering the distinction.
 
+## The client never loads a Convex function module
+
+A file directly under `convex/` (`credits.ts`, `orders.ts`, `subscriptions.ts`, …)
+registers queries and mutations when it is evaluated. Loaded in the browser, Convex logs
+_"Convex functions should not be imported in the browser"_ once per function, and a future
+Convex release turns that into a throw. Client code (`src/**`) may load only:
+
+- `convex/_generated/*` — `api` is a proxy of function references, no function code;
+- `convex/lib/*` — pure helpers shared by client and server, which must themselves never
+  value-import a function module (that leaks it into every client file using the helper);
+- anything via **`import type`** / **`export type`** — erased at compile time.
+
+`verbatimModuleSyntax` is on, so `import { type X } from "…"` is **not** erased: it compiles to
+`import {} from "…"` and still loads the module. Put `type` on the whole statement.
+
+A constant or pure function the browser needs goes in `convex/lib/`, and the server imports it
+from there too — never a re-export from the function module (z8r3fdv49m: `USAGE_PACE_DAYS` →
+`lib/credits.ts`, `claimVoucherDiscount` → `lib/vouchers.ts`).
+
 ## Tests
 
 - **`src/lib/convex-read-pattern.test.ts` — the gate that enforces the rule** (86eyqgxe1). Scans
@@ -119,6 +138,14 @@ place a failed store read must become a screen, not a skeleton — reads the sib
   It found a real violation on its first run (see the correction above), which is the argument
   for having it: the rule had been prose in `CLAUDE.md` for months, and prose doesn't fail a build.
   Precedent for the scan-the-source shape: `dependency-pins.test.ts`, `landing-funnel.test.ts`.
+- **`src/lib/convex-client-imports.test.ts` — the gate for the function-module rule above**
+  (z8r3fdv49m). Walks every `src/` file's runtime imports (static, side-effect, `export … from`,
+  dynamic `import()`; `import type` / `export type` / `typeof import()` excluded) and follows them
+  **transitively through `convex/lib`**, failing with the full chain
+  (`src/x.tsx → convex/lib/a.ts → convex/subscriptions.ts`). The transitive walk is not
+  belt-and-braces: on its first run it found the buyer claim page loading `subscriptions.ts`
+  through `lib/voucherRedemption.ts`, which a direct-import sweep called clean. A self-test pins
+  the matcher in both directions so a regex edit can't silently blind it.
 - `src/lib/convex.test.ts` — smoke test asserting `getQueryClient()` builds a singleton with the
   Convex `queryFn`/`queryKeyHashFn` defaults and `gcTime` of 10 min.
 - Component tests that render a migrated read mock the two adapter modules (pass-through

@@ -6,8 +6,8 @@ import { Award, Gauge, Lock, Sparkles } from "lucide-react";
 import type { ReactNode } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { CreditBalanceView } from "../../../convex/credits";
-import { USAGE_PACE_DAYS } from "../../../convex/credits";
 import { TOP_UP_VIEW_ONLY_MESSAGE } from "../../../convex/lib/creditPurchases";
+import { USAGE_PACE_DAYS } from "../../../convex/lib/credits";
 import { todayMytMidnight } from "../../../convex/lib/fulfilmentDate";
 import { useCreditGateFor } from "../../hooks/useCreditGate";
 import {

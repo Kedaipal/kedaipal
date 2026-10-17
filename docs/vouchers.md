@@ -304,7 +304,7 @@ file's own test).
 
 | Piece | Where |
 |---|---|
-| Code, value, status, refusal copy (pure) | `convex/lib/vouchers.ts` |
+| Code, value, status, refusal copy, `ClaimVoucherState` + `claimVoucherDiscount` (pure — the claim page loads it in the browser) | `convex/lib/vouchers.ts` |
 | Resolve / redeem / release / claim state (ctx) | `convex/lib/voucherRedemption.ts` |
 | Totals seam + `orderExtras` | `convex/lib/order.ts` |
 | Issue, rename-batch, void, void-batch, list, code check | `convex/vouchers.ts` |
@@ -404,7 +404,9 @@ withholds an order from the seller and never from the buyer who placed it.
   completed case red with `expected 3000 to be 2500`.
 
 - **`claimVoucherDiscount` is the one author of what a claim's voucher takes
-  off.** Only an `applied` voucher discounts — a `dropped` one must price at
+  off** (in the pure `convex/lib/vouchers.ts`, because the buyer's claim page
+  calls it in the browser — it moved out of `voucherRedemption.ts`, whose
+  `getAccess` import dragged `convex/subscriptions.ts` into the client, z8r3fdv49m). Only an `applied` voucher discounts — a `dropped` one must price at
   FULL and say why, which is the entire reason the claim degrades instead of
   refusing. The rule was briefly written twice (the ticket's maths, then the
   page header), and the second copy is exactly how the header came to print the
