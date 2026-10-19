@@ -44,7 +44,7 @@ describe("resolveTierCta", () => {
 	 * A store on a contract changes it by talking to us, so every OTHER tier
 	 * is "talk" for it too — never a billing-tab door that would refuse it.
 	 */
-	it("Enterprise is Talk to Arif — Current for a contract store, included for a comp", () => {
+	it("Enterprise is a quote chat — Current for a contract store, included for a comp", () => {
 		for (const plan of LISTED_PLANS)
 			expect(isPlanSelectable(plan), plan).toBe(true);
 		expect(isPlanSelectable("enterprise")).toBe(false);

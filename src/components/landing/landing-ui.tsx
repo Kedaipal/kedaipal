@@ -3,6 +3,7 @@ import useEmblaCarousel from "embla-carousel-react";
 import { ArrowRight, ShieldCheck } from "lucide-react";
 import type { ReactNode } from "react";
 import { COUNTRIES, type Country } from "../../../convex/lib/country";
+import type { BillingCycle } from "../../../convex/lib/plans";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../../lib/contact";
 import {
@@ -115,6 +116,64 @@ export function CommissionBadge({ className }: { className?: string }) {
 			<span aria-hidden className="size-2 rounded-full bg-accent" />
 			{m.commission_badge()}
 		</span>
+	);
+}
+
+/**
+ * Monthly / annual, the one control for it on `/` and `/pricing` (one idea,
+ * one control). The annual badge is "2 months free", never a percentage — a
+ * standing % badge reads as a markdown on a flat price (Arif, 28 Jul + 9 Aug
+ * 2026). The credits rule sits under it in BOTH positions so flipping the
+ * toggle moves nothing: credits stay monthly on annual, locked for the
+ * prepaid year.
+ */
+export function BillingCycleToggle({
+	cycle,
+	onChange,
+	className,
+}: {
+	cycle: BillingCycle;
+	onChange: (cycle: BillingCycle) => void;
+	className?: string;
+}) {
+	const pill = (active: boolean) =>
+		cn(
+			"relative min-h-10 rounded-full px-5 text-sm font-semibold transition-colors",
+			active
+				? "bg-primary text-primary-foreground"
+				: "text-muted-foreground hover:text-foreground",
+		);
+	return (
+		<div className={cn("flex flex-col items-center", className)}>
+			<div
+				role="group"
+				aria-label={m.pricingpage_toggle_label()}
+				className="inline-flex items-center rounded-full border border-border bg-card p-1.5 shadow-sm"
+			>
+				<button
+					type="button"
+					aria-pressed={cycle === "monthly"}
+					onClick={() => onChange("monthly")}
+					className={pill(cycle === "monthly")}
+				>
+					{m.pricingpage_toggle_monthly()}
+				</button>
+				<button
+					type="button"
+					aria-pressed={cycle === "annual"}
+					onClick={() => onChange("annual")}
+					className={pill(cycle === "annual")}
+				>
+					{m.pricingpage_toggle_annual()}
+					<span className="absolute -right-2 -top-2.5 whitespace-nowrap rounded-full bg-accent px-2 py-0.5 text-[9px] font-bold uppercase leading-none text-accent-foreground">
+						{m.pricingpage_annual_badge()}
+					</span>
+				</button>
+			</div>
+			<p className="mx-auto mt-3 max-w-sm text-center text-xs leading-relaxed text-muted-foreground">
+				{m.pricingpage_annual_credits_note()}
+			</p>
+		</div>
 	);
 }
 

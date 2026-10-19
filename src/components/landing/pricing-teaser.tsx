@@ -2,9 +2,12 @@ import { useAuth } from "@clerk/tanstack-react-start";
 import { Link } from "@tanstack/react-router";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ArrowRight, Check, Sparkles } from "lucide-react";
+import { useState } from "react";
 import {
+	annualQuote,
 	BILLING_CURRENCY_FOR_COUNTRY,
 	type BillingCurrency,
+	type BillingCycle,
 	COMPETITOR_MONTHLY_RANGE,
 	INVOICE_DUE_GRACE_DAYS,
 	isPlanSelectable,
@@ -29,6 +32,7 @@ import { m } from "../../paraglide/messages";
 import { Button } from "../ui/button";
 import { FadeIn } from "./fade-in";
 import {
+	BillingCycleToggle,
 	CenterSnapCarousel,
 	CommissionBadge,
 	centerSnapSlideClass,
@@ -164,6 +168,14 @@ export function PricingTeaser() {
 	// than the set Kedaipal invoices subscriptions in.
 	const currency: BillingCurrency = BILLING_CURRENCY_FOR_COUNTRY[region];
 	const symbol = CURRENCY_SYMBOL[currency];
+	// Monthly / annual, the same maths `/pricing` quotes from (`annualQuote`):
+	// the annual number is the effective monthly, with the year's total under
+	// it, so the two surfaces can never show two annuals.
+	const [cycle, setCycle] = useState<BillingCycle>("monthly");
+	const monthlyPrice = (id: ListedPlan) =>
+		cycle === "annual"
+			? Math.floor(annualQuote(id, false, currency).effectiveMonthly / 100)
+			: PLAN_MONTHLY_PRICES[currency][id] / 100;
 
 	return (
 		<section
@@ -207,8 +219,9 @@ export function PricingTeaser() {
 								perDay: `${symbol} ${starterPricePerDay(currency)}`,
 							})}
 						</div>
-						<div className="mt-6 flex justify-center">
+						<div className="mt-6 flex flex-wrap items-start justify-center gap-x-6 gap-y-5">
 							<RegionToggle region={region} onChange={setRegion} />
+							<BillingCycleToggle cycle={cycle} onChange={setCycle} />
 						</div>
 					</div>
 				</FadeIn>
@@ -280,7 +293,7 @@ export function PricingTeaser() {
 											<span className="overflow-hidden text-4xl font-bold tracking-tight">
 												<AnimatePresence mode="popLayout" initial={false}>
 													<motion.span
-														key={currency}
+														key={`${currency}-${cycle}`}
 														initial={
 															shouldReduceMotion ? false : { y: 14, opacity: 0 }
 														}
@@ -293,8 +306,7 @@ export function PricingTeaser() {
 														transition={{ duration: 0.22, ease: "easeOut" }}
 														className="inline-block"
 													>
-														{symbol}{" "}
-														{PLAN_MONTHLY_PRICES[currency][tier.id] / 100}
+														{symbol} {monthlyPrice(tier.id)}
 													</motion.span>
 												</AnimatePresence>
 											</span>
@@ -310,6 +322,18 @@ export function PricingTeaser() {
 											</span>
 										</div>
 									)}
+									{cycle === "annual" && tier.id !== "enterprise" ? (
+										<p
+											className={cn(
+												"mt-1 text-xs",
+												tier.popular ? "text-accent" : "text-accent-emphasis",
+											)}
+										>
+											{m.pricingpage_billed_annual({
+												total: `${symbol}${annualQuote(tier.id, false, currency).annualTotal / 100}`,
+											})}
+										</p>
+									) : null}
 									<p
 										className={cn(
 											"mt-1 text-xs",

@@ -332,16 +332,17 @@ export function SellerFlow() {
 								<span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground">
 									<WhatsAppIcon className="size-3 text-[#25D366]" />
 									{m.flow_bubble_label()}
-									{/* The clock stops while the pointer rests here — say so. */}
-									{hovered && !reduced ? (
-										<span className="ml-auto normal-case tracking-normal text-accent-emphasis">
-											{m.flow_pause_hint()}
-										</span>
-									) : null}
 								</span>
 								<span className="text-xs font-semibold leading-snug">
 									{bubbles[phase]}
 								</span>
+								{/* The clock stops while the pointer rests here — say so, on its
+								    own line under the message. */}
+								{hovered && !reduced ? (
+									<span className="mt-1 block text-[10px] font-semibold text-accent-emphasis">
+										{m.flow_pause_hint()}
+									</span>
+								) : null}
 							</div>
 						</div>
 						{/* The courier catalogue is information, not decoration, so it sits

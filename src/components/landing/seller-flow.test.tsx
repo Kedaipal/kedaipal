@@ -262,7 +262,10 @@ describe("SellerFlow", () => {
 		renderFlow();
 		expect(screen.queryByText(m.flow_pause_hint())).toBeNull();
 		fireEvent.pointerEnter(screen.getByTestId("flow-frame"));
-		expect(screen.getByText(m.flow_pause_hint())).toBeTruthy();
+		const hint = screen.getByText(m.flow_pause_hint());
+		// Its own line under the message, not squeezed onto the label row.
+		expect(hint.className).toContain("block");
+		expect(hint.parentElement?.lastElementChild).toBe(hint);
 		act(() => vi.advanceTimersByTime(60_000));
 		expect(stepButton(1).getAttribute("aria-current")).toBe("step");
 	});

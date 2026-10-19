@@ -232,6 +232,15 @@ sellers keep `Go to Dashboard` on every surface. Every demo link fires
 `demo_cta` with its placement — the two-week read is demo clicks per 100
 visits against sign-up clicks, and demo-booked → paid against sign-up → paid.
 
+**Pricing teaser, after the hands-on pass (19 Oct).** The monthly / annual
+toggle came to the teaser as the same control `/pricing` uses
+(`BillingCycleToggle` in `landing-ui.tsx`, "2 months free", credits-stay-
+monthly note under it); the annual number is `annualQuote`'s effective
+monthly with the year's total under it, so the two surfaces quote one annual.
+The Enterprise door reads "Get an Enterprise quote" (was "Talk to Arif"; the
+chat still lands with Arif). `/pricing`'s Pro card lost its mint pill — the
+demo is the one accent ask on that page too.
+
 **The walkthrough (T3).** One navy frame, three steps, the real UI: **01** the
 order lands in the Orders inbox (`AfterPhone`, beats 0–1), **02** the buyer's
 order page and the seller's order card walk the handshake (`HandshakePanes`,

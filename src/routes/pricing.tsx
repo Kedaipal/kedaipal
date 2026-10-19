@@ -30,6 +30,7 @@ import { MAX_VARIANTS_PER_PRODUCT } from "../../convex/lib/variant";
 import { FadeIn } from "../components/landing/fade-in";
 import { Footer } from "../components/landing/footer";
 import {
+	BillingCycleToggle,
 	CenterSnapCarousel,
 	CommissionBadge,
 	centerSnapSlideClass,
@@ -764,15 +765,18 @@ function TierCard({
 							: m.pricingpage_current_plan()}
 					</div>
 				) : (
+					// Outline on every card (demo-first, z8r3fdtpub T1): the page's one
+					// mint pill is the demo; a tier's door is a door, not the ask.
 					<Button
 						asChild
 						size="lg"
 						className={cn(
 							"h-11 w-full rounded-full",
-							!tier.popular &&
-								"border-border bg-background text-foreground hover:bg-muted",
+							tier.popular
+								? "border-primary-foreground/30 bg-transparent text-primary-foreground hover:bg-primary-foreground/10"
+								: "border-border bg-background text-foreground hover:bg-muted",
 						)}
-						variant={tier.popular ? "default" : "outline"}
+						variant="outline"
 					>
 						{cta === "trial" ? (
 							<Link
@@ -891,45 +895,11 @@ function PricingPage() {
 					    SHOW_ANNUAL_TOGGLE. */}
 					{SHOW_ANNUAL_TOGGLE && (
 						<FadeIn delay={0.1}>
-							<div className="mt-8 inline-flex items-center rounded-full border border-border bg-card p-1.5 shadow-sm">
-								<button
-									type="button"
-									onClick={() => setCycle("monthly")}
-									className={cn(
-										"rounded-full px-5 py-2 text-sm font-semibold transition-colors",
-										cycle === "monthly"
-											? "bg-primary text-primary-foreground"
-											: "text-muted-foreground hover:text-foreground",
-									)}
-								>
-									{m.pricingpage_toggle_monthly()}
-								</button>
-								<button
-									type="button"
-									onClick={() => setCycle("annual")}
-									className={cn(
-										"relative rounded-full px-5 py-2 text-sm font-semibold transition-colors",
-										cycle === "annual"
-											? "bg-primary text-primary-foreground"
-											: "text-muted-foreground hover:text-foreground",
-									)}
-								>
-									{m.pricingpage_toggle_annual()}
-									{/* Never a percentage — the saving is "2 months free"
-									    (Arif, 28 Jul + 9 Aug 2026). A standing % badge reads
-									    as a markdown on a flat price. */}
-									<span className="absolute -right-2 -top-2.5 whitespace-nowrap rounded-full bg-accent px-2 py-0.5 text-[9px] font-bold uppercase leading-none text-accent-foreground">
-										{m.pricingpage_annual_badge()}
-									</span>
-								</button>
-							</div>
-							{/* The annual credits rule, said under the toggle in BOTH
-							    positions (so flipping it moves nothing): credits stay
-							    monthly on annual — never twelve months upfront — and
-							    the grant is locked for the prepaid year. */}
-							<p className="mx-auto mt-3 max-w-sm text-xs leading-relaxed text-muted-foreground">
-								{m.pricingpage_annual_credits_note()}
-							</p>
+							<BillingCycleToggle
+								cycle={cycle}
+								onChange={setCycle}
+								className="mt-8"
+							/>
 						</FadeIn>
 					)}
 				</div>
