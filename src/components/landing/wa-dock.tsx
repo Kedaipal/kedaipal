@@ -13,8 +13,9 @@ import { DemoPill } from "./landing-ui";
  * The first cut copied docket.io's per-section question chips beside the
  * pill; three loose bubbles stacked bottom-right read as clutter (Arif, on
  * sight) and the hero already asks the one question that matters, so the
- * chips went. The dock stays quiet: a bottom bar on a phone, above the home
- * indicator; a single pill bottom-right on desktop.
+ * chips went. And from `md` up the fixed nav bar already carries the demo
+ * pill, so the dock would only double it: it renders below `md` alone, as a
+ * bottom bar above the home indicator — exactly where the nav has no pill.
  *
  * It appears once the hero (`#top`) has scrolled out and hides while the
  * final CTA (`#final`) or the footer (`#site-footer`) is on screen — it
@@ -48,12 +49,12 @@ export function WaDock() {
 					animate={{ opacity: 1, y: 0 }}
 					exit={reduced ? undefined : { opacity: 0, y: 16 }}
 					transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
-					className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/90 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur-lg sm:inset-x-auto sm:bottom-6 sm:right-6 sm:border-0 sm:bg-transparent sm:p-0 sm:backdrop-blur-none"
+					className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/90 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur-lg md:hidden"
 				>
 					<DemoPill
 						placement="dock"
 						long
-						className="min-h-12 w-full text-[15px] sm:w-auto sm:min-h-[52px] sm:shadow-xl sm:shadow-primary/20"
+						className="min-h-12 w-full text-[15px]"
 					/>
 				</motion.aside>
 			) : null}

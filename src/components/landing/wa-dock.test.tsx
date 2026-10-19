@@ -126,4 +126,10 @@ describe("WaDock", () => {
 		fireEvent.click(links[0]);
 		expect(trackDemoCta).toHaveBeenCalledWith("dock");
 	});
+
+	it("renders only below md — the nav bar carries the pill from md up", () => {
+		renderDock();
+		report("top", false);
+		expect(dock()?.className).toContain("md:hidden");
+	});
 });

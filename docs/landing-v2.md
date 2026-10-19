@@ -270,7 +270,7 @@ and an outline WhatsApp link for the unsure (`fit_wa_message`, its own ask).
 The RM2,000 floor is test-pinned in every locale.
 
 **The dock (T1).** One pill, "Book a demo on WhatsApp": a bottom bar on a
-phone above the home indicator, a single pill bottom-right on desktop. It
+phone above the home indicator, rendered below `md` only — from `md` up the fixed nav bar carries the pill. It
 appears once the hero has scrolled out, hides while the final CTA or the
 footer is on screen (a phone's footer is taller than the viewport, and the
 dock sat on its last lines), never shows to a signed-in seller (every other
