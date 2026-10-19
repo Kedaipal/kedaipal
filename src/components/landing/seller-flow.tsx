@@ -1,0 +1,324 @@
+import {
+	AnimatePresence,
+	motion,
+	useInView,
+	useReducedMotion,
+} from "framer-motion";
+import { useCallback, useRef, useState } from "react";
+import { BILLING_CURRENCY_FOR_COUNTRY } from "../../../convex/lib/plans";
+import { useTimeline } from "../../hooks/useBeatLoop";
+import { useLandingRegionContext } from "../../hooks/useLandingRegion";
+import { couriersFor, hasParcelCouriers, mockQuotes } from "../../lib/couriers";
+import { cn } from "../../lib/utils";
+import { m } from "../../paraglide/messages";
+import { WhatsAppIcon } from "../dashboard/brand-icons";
+import { CourierCatalogue, DispatchCard } from "./delivery";
+import { FadeIn } from "./fade-in";
+import { AfterPhone } from "./hero-stage";
+import { Eyebrow, RegionToggle } from "./landing-ui";
+import { HandshakePanes } from "./payment-handshake";
+import {
+	type FlowPhase,
+	firstStepOf,
+	lastStepOf,
+	stepAt,
+	TIMELINE_HOLDS,
+} from "./seller-flow-timeline";
+
+/**
+ * The seller-flow walkthrough (z8r3fdtpub T3, 19 Oct 2026): the order's
+ * life, acted out on the real UI in three steps — it lands in the inbox, the
+ * "dah transfer" becomes a matched payment, the courier is booked from the
+ * order. It replaces the Payment Handshake and Delivery SECTIONS (their mocks
+ * moved in here; `landing-v2.md`): fourteen screens of text had become two
+ * long sections a reader scrolled past, and the ask on this page is a demo,
+ * so the page's job is to show the product moving, not to describe it.
+ *
+ * One clock (`useTimeline` over `seller-flow-timeline.ts`) drives all three
+ * mocks, so a click on a step jumps the story there and the auto-advance
+ * resumes; hovering the frame pauses it (a reader is looking). The frame
+ * swaps phases with `AnimatePresence` — a fade and an 8px rise — and the
+ * mocks inside keep their own CSS beats. Reduced motion renders each phase's
+ * LAST beat as a still, never advances by itself, and the step buttons still
+ * page through. The frame mounts its mocks only once near the viewport (a
+ * story playing three screens above the reader is wasted paint) and is
+ * decorative (`aria-hidden`): the step copy carries the content.
+ *
+ * Region: the page's one `LandingRegionProvider`. Singapore has no parcel
+ * lane live, so phase 03's step copy, card, catalogue and note all switch to
+ * the rider-only story (`hasParcelCouriers`), exactly as the Delivery section
+ * did — honesty does not get lost in a redesign.
+ */
+
+const PHASES: readonly FlowPhase[] = [1, 2, 3];
+
+const SWAP = {
+	initial: { opacity: 0, y: 8 },
+	animate: { opacity: 1, y: 0 },
+	exit: { opacity: 0, y: -8 },
+} as const;
+
+function StepButton({
+	phase,
+	active,
+	title,
+	body,
+	onPick,
+}: {
+	phase: FlowPhase;
+	active: boolean;
+	title: string;
+	body: string;
+	onPick: (phase: FlowPhase) => void;
+}) {
+	return (
+		<button
+			type="button"
+			aria-current={active ? "step" : undefined}
+			aria-label={m.flow_step_label({ step: phase })}
+			onClick={() => onPick(phase)}
+			className={cn(
+				// The mobile pill and the desktop row are one control: a numeral and
+				// the title, the body only from `lg` where there is room to read it.
+				"group flex min-h-11 shrink-0 items-center gap-3 rounded-full border px-3 py-2 text-left transition-colors lg:w-full lg:items-start lg:gap-4 lg:rounded-2xl lg:border-transparent lg:px-4 lg:py-3.5",
+				active
+					? "border-accent bg-accent/5 lg:border-transparent"
+					: "border-border bg-card hover:bg-muted lg:bg-transparent",
+			)}
+		>
+			<span
+				className={cn(
+					"flex size-7 shrink-0 items-center justify-center rounded-full font-heading text-[11px] font-extrabold transition-colors lg:size-9 lg:text-[13px]",
+					active
+						? "bg-accent text-accent-foreground"
+						: "bg-muted text-muted-foreground",
+				)}
+			>
+				{String(phase).padStart(2, "0")}
+			</span>
+			<span className="flex min-w-0 flex-col gap-0.5">
+				<span
+					className={cn(
+						"whitespace-nowrap text-sm font-semibold lg:whitespace-normal lg:text-base",
+						active
+							? "text-foreground"
+							: "text-muted-foreground lg:text-foreground",
+					)}
+				>
+					{title}
+				</span>
+				<span className="hidden text-sm leading-relaxed text-muted-foreground lg:block">
+					{body}
+				</span>
+			</span>
+		</button>
+	);
+}
+
+export function SellerFlow() {
+	const [region, setRegion] = useLandingRegionContext();
+	const currency = BILLING_CURRENCY_FOR_COUNTRY[region];
+	const couriers = couriersFor(region);
+	const quotes = mockQuotes(region);
+	const parcelsLive = hasParcelCouriers(region);
+	const courier = quotes[0]?.name ?? "";
+
+	const reduced = Boolean(useReducedMotion());
+	const frameRef = useRef<HTMLDivElement>(null);
+	// `once`: the mocks mount the first time the frame comes near and stay —
+	// unmounting them on scroll-out would replay every entrance on return.
+	const near = useInView(frameRef, { margin: "400px 0px", once: true });
+	const playing = useInView(frameRef, { margin: "-10% 0px" });
+	const [hovered, setHovered] = useState(false);
+	const { beat: index, goTo } = useTimeline(
+		near && playing && !reduced && !hovered,
+		TIMELINE_HOLDS,
+	);
+	// Reduced motion: the clock never runs, so the phase is the reader's pick
+	// and the beat is that phase's last — a still, not a frozen first frame.
+	const [stillPhase, setStillPhase] = useState<FlowPhase>(1);
+	const step = reduced ? stepAt(lastStepOf(stillPhase)) : stepAt(index);
+	const { phase, beat } = step;
+
+	const pick = useCallback(
+		(next: FlowPhase) => {
+			if (reduced) setStillPhase(next);
+			else goTo(firstStepOf(next));
+		},
+		[goTo, reduced],
+	);
+
+	const titles: Record<FlowPhase, string> = {
+		1: m.flow_step_1_title(),
+		2: m.flow_step_2_title(),
+		3: m.flow_step_3_title(),
+	};
+	const bodies: Record<FlowPhase, string> = {
+		1: m.flow_step_1_body(),
+		2: m.flow_step_2_body(),
+		3: parcelsLive ? m.flow_step_3_body() : m.flow_step_3_body_rider(),
+	};
+	const bubbles: Record<FlowPhase, string> = {
+		1: m.flow_bubble_1(),
+		2: m.flow_bubble_2(),
+		3: m.flow_bubble_3({ courier }),
+	};
+
+	return (
+		<section
+			id="flow"
+			aria-labelledby="flow-heading"
+			className="border-t border-border bg-background"
+		>
+			<div className="mx-auto max-w-6xl px-5 py-20 md:px-8 md:py-28">
+				<div className="grid gap-10 lg:grid-cols-[0.9fr_1.1fr] lg:items-center lg:gap-16">
+					<div className="min-w-0">
+						<FadeIn>
+							<div className="flex flex-wrap items-center justify-between gap-3">
+								<Eyebrow>{m.flow_label()}</Eyebrow>
+								<RegionToggle region={region} onChange={setRegion} />
+							</div>
+							<h2
+								id="flow-heading"
+								className="mt-4 max-w-xl text-3xl font-bold leading-[1.08] md:text-5xl"
+								style={{ letterSpacing: "-0.02em" }}
+							>
+								{m.flow_heading()}
+							</h2>
+							<p className="mt-4 max-w-xl text-base leading-relaxed text-muted-foreground md:text-lg">
+								{m.flow_sub()}
+							</p>
+						</FadeIn>
+
+						<FadeIn delay={0.1}>
+							{/* Phone: a scrolling row of pills above the frame, the active
+							    step's body said once under it. Desktop: the three rows with
+							    their bodies, a column beside the frame. */}
+							<div className="-mx-5 mt-7 flex gap-2 overflow-x-auto px-5 scrollbar-none lg:mx-0 lg:mt-8 lg:flex-col lg:gap-1 lg:overflow-visible lg:px-0">
+								{PHASES.map((p) => (
+									<StepButton
+										key={p}
+										phase={p}
+										active={p === phase}
+										title={titles[p]}
+										body={bodies[p]}
+										onPick={pick}
+									/>
+								))}
+							</div>
+							<p className="mt-4 text-sm leading-relaxed text-muted-foreground lg:hidden">
+								{bodies[phase]}
+							</p>
+
+							<div className="mt-5 flex items-center gap-3 lg:mt-6">
+								<div className="h-1 flex-1 overflow-hidden rounded-full bg-border">
+									<div
+										className="h-full rounded-full bg-accent transition-[width] duration-500 ease-out motion-reduce:transition-none"
+										style={{ width: `${(phase / 3) * 100}%` }}
+									/>
+								</div>
+								<span className="whitespace-nowrap text-xs font-semibold text-muted-foreground">
+									{m.flow_progress({ step: phase })}
+								</span>
+							</div>
+						</FadeIn>
+					</div>
+
+					{/* The frame: the hero stage's navy ground and dot grid, one phase at
+					    a time. `min-h` holds the column so a phase swap never moves the
+					    page; the mocks inside are fixed-height already. */}
+					<FadeIn delay={0.15} className="min-w-0">
+						<div
+							ref={frameRef}
+							data-testid="flow-frame"
+							aria-hidden="true"
+							onPointerEnter={() => setHovered(true)}
+							onPointerLeave={() => setHovered(false)}
+							className="relative min-h-[30rem] overflow-hidden rounded-[2rem] bg-primary p-5 shadow-2xl shadow-primary/25 contain-inline-size sm:p-8 md:min-h-[34rem] md:rounded-[2.5rem]"
+						>
+							<div
+								aria-hidden
+								className="pointer-events-none absolute inset-0 [background-image:radial-gradient(hsl(0_0%_100%/0.07)_1px,transparent_1px)] [background-size:18px_18px]"
+							/>
+							<div
+								aria-hidden
+								className="pointer-events-none absolute -left-[10%] top-[10%] size-[55%] rounded-full bg-accent/10 blur-3xl"
+							/>
+							{near ? (
+								<AnimatePresence mode="wait" initial={false}>
+									<motion.div
+										key={phase}
+										{...SWAP}
+										transition={
+											reduced
+												? { duration: 0 }
+												: { duration: 0.35, ease: [0.22, 1, 0.36, 1] }
+										}
+										className="relative flex min-h-[26rem] flex-col items-center justify-center md:min-h-[30rem]"
+									>
+										{phase === 1 ? (
+											<div className="text-[11px] md:text-[12.5px]">
+												<AfterPhone
+													beat={beat}
+													still={reduced}
+													showLabel={false}
+												/>
+											</div>
+										) : null}
+										{phase === 2 ? (
+											<HandshakePanes beat={beat} still={reduced} />
+										) : null}
+										{phase === 3 ? (
+											<div className="flex w-full flex-col items-center gap-5">
+												<DispatchCard
+													beat={beat}
+													reduced={reduced}
+													currency={currency}
+													quotes={quotes}
+													parcelsLive={parcelsLive}
+												/>
+												<div className="hidden w-full max-w-md lg:block">
+													<CourierCatalogue couriers={couriers} />
+												</div>
+											</div>
+										) : null}
+									</motion.div>
+								</AnimatePresence>
+							) : (
+								<div className="min-h-[26rem] md:min-h-[30rem]" />
+							)}
+
+							{/* What the buyer gets at this step — the one WhatsApp per
+							    order, then the order page doing the rest. */}
+							<div
+								key={phase}
+								className={cn(
+									"pointer-events-none absolute bottom-4 right-4 flex max-w-[14rem] flex-col gap-0.5 rounded-2xl bg-card px-3.5 py-2.5 text-card-foreground shadow-2xl ring-1 ring-black/10 sm:bottom-6 sm:right-6",
+									!reduced && "animate-kp-toast-in",
+								)}
+							>
+								<span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground">
+									<WhatsAppIcon className="size-3 text-[#25D366]" />
+									{m.flow_bubble_label()}
+								</span>
+								<span className="text-xs font-semibold leading-snug">
+									{bubbles[phase]}
+								</span>
+							</div>
+						</div>
+						{/* The region's honest footnote, under the frame where the
+						    catalogue it qualifies sits (phone) or would sit (desktop). */}
+						{!parcelsLive ? (
+							<p className="mt-4 text-xs leading-relaxed text-muted-foreground">
+								{m.delivery_sg_note()}
+							</p>
+						) : null}
+						<div className="mt-6 lg:hidden">
+							{phase === 3 ? <CourierCatalogue couriers={couriers} /> : null}
+						</div>
+					</FadeIn>
+				</div>
+			</div>
+		</section>
+	);
+}
