@@ -4,7 +4,7 @@ import {
 	useInView,
 	useReducedMotion,
 } from "framer-motion";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { BILLING_CURRENCY_FOR_COUNTRY } from "../../../convex/lib/plans";
 import { useTimeline } from "../../hooks/useBeatLoop";
 import { useLandingRegionContext } from "../../hooks/useLandingRegion";
@@ -64,15 +64,32 @@ function StepButton({
 	title,
 	body,
 	onPick,
+	reduced,
 }: {
 	phase: FlowPhase;
 	active: boolean;
 	title: string;
 	body: string;
 	onPick: (phase: FlowPhase) => void;
+	reduced: boolean;
 }) {
+	const ref = useRef<HTMLButtonElement>(null);
+	// On a phone the pills scroll sideways: the row follows the active step so
+	// "Step 3 of 3" never points at a pill that is off the right edge. Only the
+	// ROW scrolls — `scrollIntoView` would also drag the page to the pill while
+	// the reader is looking at the frame below it.
+	useEffect(() => {
+		const el = ref.current;
+		const row = el?.parentElement;
+		if (!active || !el || !row || typeof row.scrollTo !== "function") return;
+		row.scrollTo({
+			left: Math.max(0, el.offsetLeft - 20),
+			behavior: reduced ? "auto" : "smooth",
+		});
+	}, [active, reduced]);
 	return (
 		<button
+			ref={ref}
 			type="button"
 			aria-current={active ? "step" : undefined}
 			aria-label={m.flow_step_label({ step: phase })}
@@ -203,6 +220,7 @@ export function SellerFlow() {
 										title={titles[p]}
 										body={bodies[p]}
 										onPick={pick}
+										reduced={reduced}
 									/>
 								))}
 							</div>
@@ -293,7 +311,7 @@ export function SellerFlow() {
 							<div
 								key={phase}
 								className={cn(
-									"pointer-events-none absolute bottom-4 right-4 flex max-w-[14rem] flex-col gap-0.5 rounded-2xl bg-card px-3.5 py-2.5 text-card-foreground shadow-2xl ring-1 ring-black/10 sm:bottom-6 sm:right-6",
+									"pointer-events-none absolute bottom-4 left-4 flex max-w-[14rem] flex-col gap-0.5 rounded-2xl bg-card px-3.5 py-2.5 text-card-foreground shadow-2xl ring-1 ring-black/10 sm:bottom-6 sm:left-6",
 									!reduced && "animate-kp-toast-in",
 								)}
 							>

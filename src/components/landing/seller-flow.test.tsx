@@ -190,6 +190,23 @@ describe("SellerFlow", () => {
 		expect(frame()).toContain(m.handshake_buyer_received_title());
 	});
 
+	it("scrolls the step row to the active pill as the story advances", () => {
+		vi.useFakeTimers();
+		const scrollTo = vi.fn();
+		Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+			configurable: true,
+			value: scrollTo,
+		});
+		renderFlow();
+		fireEvent.click(stepButton(3));
+		// The row scrolls sideways to the pill; the page itself is never
+		// scrolled (a `scrollIntoView` would drag the reader up the page).
+		expect(scrollTo).toHaveBeenCalled();
+		const call = scrollTo.mock.calls.at(-1)?.[0];
+		expect(call).toMatchObject({ left: expect.any(Number) });
+		expect(call).not.toHaveProperty("top");
+	});
+
 	it("the frame is decorative and the steps carry the content", () => {
 		renderFlow();
 		// The active step's body renders twice on purpose: in its row (desktop)
