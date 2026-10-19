@@ -1,9 +1,18 @@
+import { Link } from "@tanstack/react-router";
 import useEmblaCarousel from "embla-carousel-react";
-import { ShieldCheck } from "lucide-react";
+import { ArrowRight, ShieldCheck } from "lucide-react";
 import type { ReactNode } from "react";
 import { COUNTRIES, type Country } from "../../../convex/lib/country";
+import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
+import { buildWaContactLink } from "../../lib/contact";
+import {
+	type DemoPlacement,
+	trackDemoCta,
+	trackSignupCta,
+} from "../../lib/ga-events";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
+import { WhatsAppIcon } from "../dashboard/brand-icons";
 
 /**
  * Shared primitives for the landing page redesign. Everything uses the
@@ -26,6 +35,92 @@ export function ctaPillClass(
 			"border-2 border-border bg-background text-foreground hover:border-foreground/25 hover:bg-muted focus-visible:ring-ring/20",
 	} as const;
 	return cn(base, variants[variant]);
+}
+
+/**
+ * The page's ONE accent ask (demo-first, z8r3fdtpub T1, 19 Oct 2026): a
+ * WhatsApp link that opens a chat with Kedaipal, prefilled. Every payer to
+ * date closed on a demo or a referral, so this pill carries the mint
+ * everywhere it appears — hero, nav, final CTA, dock — and the self-serve
+ * sign-up is a text link beside it (`StartFreeLink`). The `ctaPillClass`
+ * accent variant is reserved for it: a second mint pill is a second ask.
+ *
+ * `chip` is a dock question that replaces the default demo message and rides
+ * the `demo_cta` event, so GA4 can say which question converts.
+ */
+export function DemoPill({
+	placement,
+	long = false,
+	chip,
+	className,
+}: {
+	placement: DemoPlacement;
+	/** "Book a demo on WhatsApp" rather than "Book a demo" — where the pill has the room. */
+	long?: boolean;
+	chip?: string;
+	className?: string;
+}) {
+	const supportWa = useSupportWaNumber();
+	return (
+		<a
+			href={buildWaContactLink(chip ?? m.demo_wa_message(), supportWa)}
+			target="_blank"
+			rel="noopener noreferrer"
+			className={cn(ctaPillClass("accent"), className)}
+			onClick={() => trackDemoCta(placement, chip)}
+		>
+			<WhatsAppIcon className="size-[1.1em] shrink-0" />
+			{long ? m.book_demo_cta_long() : m.book_demo_cta()}
+		</a>
+	);
+}
+
+/**
+ * The self-serve door, a rung below the demo: "Start free — pay when you
+ * sell" as a text link. Keeps its own `cta_signup_click` so the two asks
+ * stay comparable in GA4 (the two-week read the ticket calls for).
+ */
+export function StartFreeLink({
+	placement,
+	className,
+}: {
+	placement: string;
+	className?: string;
+}) {
+	return (
+		<Link
+			to="/sign-up/$"
+			params={{ _splat: "" }}
+			className={cn(
+				"group inline-flex min-h-11 items-center gap-1.5 text-sm font-semibold underline-offset-4 transition-colors hover:underline",
+				className,
+			)}
+			onClick={() => trackSignupCta(placement)}
+		>
+			{m.final_cta()}
+			<ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none" />
+		</Link>
+	);
+}
+
+/**
+ * "Flat fee. Never a cut of your sales." — the commission badge (Arif, 14 Oct
+ * 2026), in the hero and on the pricing surfaces. Credits are live (one per
+ * order), so the TRUE claim is "no cut of your sales": never "zero fees" or
+ * "free per order" (`pricing-copy.test.ts` guards the vocabulary).
+ */
+export function CommissionBadge({ className }: { className?: string }) {
+	return (
+		<span
+			className={cn(
+				"inline-flex w-fit items-center gap-2 rounded-full border border-foreground/80 px-3.5 py-1.5 text-xs font-semibold text-foreground",
+				className,
+			)}
+		>
+			<span aria-hidden className="size-2 rounded-full bg-accent" />
+			{m.commission_badge()}
+		</span>
+	);
 }
 
 /**

@@ -31,11 +31,13 @@ import { FadeIn } from "../components/landing/fade-in";
 import { Footer } from "../components/landing/footer";
 import {
 	CenterSnapCarousel,
+	CommissionBadge,
 	centerSnapSlideClass,
-	ctaPillClass,
+	DemoPill,
 	Eyebrow,
 	GuaranteeLine,
 	RegionToggle,
+	StartFreeLink,
 	Sticker,
 } from "../components/landing/landing-ui";
 import { MoneyMathRow } from "../components/landing/money-math";
@@ -44,7 +46,6 @@ import { Button } from "../components/ui/button";
 import { useLandingRegion } from "../hooks/useLandingRegion";
 import { useMarketingLanding } from "../hooks/useMarketingLanding";
 import { useSupportWaNumber } from "../hooks/useSupportWaNumber";
-import { buildWaContactLink } from "../lib/contact";
 import {
 	enterpriseFromOrdersLabel,
 	enterpriseTalkUrl,
@@ -863,6 +864,9 @@ function PricingPage() {
 							<Sparkles className="size-3" />
 							{m.pricing_badge()}
 						</Sticker>
+						<div className="mt-4 flex justify-center">
+							<CommissionBadge />
+						</div>
 						<h1
 							className="mt-5 text-4xl font-bold tracking-tight md:text-6xl"
 							style={{ letterSpacing: "-0.03em" }}
@@ -1001,15 +1005,10 @@ function PricingPage() {
 								</p>
 							</div>
 							<div className="relative shrink-0">
-								<a
-									href={buildWaContactLink(m.demo_wa_message(), supportWa)}
-									target="_blank"
-									rel="noopener noreferrer"
-									className="group inline-flex min-h-11 items-center gap-1.5 text-[15px] font-semibold text-accent underline-offset-4 hover:underline"
-								>
-									{m.book_demo_cta()}{" "}
-									<ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
-								</a>
+								<DemoPill
+									placement="pricing"
+									className="min-h-11 px-5 text-sm"
+								/>
 							</div>
 						</div>
 					</FadeIn>
@@ -1174,15 +1173,10 @@ function PricingPage() {
 							})}
 						</p>
 						<div className="mt-8 flex flex-col items-center gap-3.5">
-							<Link
-								to="/sign-up/$"
-								params={{ _splat: "" }}
-								className={ctaPillClass("accent")}
-								onClick={() => trackSignupCta("pricing-bottom")}
-							>
-								{m.pricingpage_cta_trial_btn()}{" "}
-								<ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
-							</Link>
+							{/* Demo-first here too (z8r3fdtpub T1): the pill is the demo,
+							    the trial a text link under it. */}
+							<DemoPill placement="pricing-bottom" long />
+							<StartFreeLink placement="pricing-bottom" />
 							<GuaranteeLine className="max-w-md text-[13px] leading-relaxed text-muted-foreground" />
 							<Link
 								to="/"

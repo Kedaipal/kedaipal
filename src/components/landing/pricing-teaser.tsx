@@ -30,6 +30,7 @@ import { Button } from "../ui/button";
 import { FadeIn } from "./fade-in";
 import {
 	CenterSnapCarousel,
+	CommissionBadge,
 	centerSnapSlideClass,
 	GuaranteeLine,
 	RegionToggle,
@@ -195,6 +196,10 @@ export function PricingTeaser() {
 						<p className="mx-auto mt-3 max-w-lg text-sm font-medium text-foreground/80">
 							{m.pricing_sub_credits()}
 						</p>
+						{/* The flat-fee badge (14 Oct 2026), beside the price it qualifies. */}
+						<div className="mt-4 flex justify-center">
+							<CommissionBadge />
+						</div>
 						<div className="mx-auto mt-5 max-w-xl rounded-2xl border-l-4 border-accent/40 bg-accent/5 px-5 py-3 text-left text-sm text-muted-foreground">
 							{m.pricing_anchor({
 								competitor: `${symbol} ${COMPETITOR_MONTHLY_RANGE[currency].min / 100}–${COMPETITOR_MONTHLY_RANGE[currency].max / 100}`,
@@ -374,15 +379,20 @@ export function PricingTeaser() {
 												{m.pricing_coming_soon()}
 											</div>
 										) : (
+											// Outline on every card (demo-first, z8r3fdtpub T1): the
+											// page's one accent pill is "Book a demo"; self-serve is a
+											// door, not the ask. Pro keeps its weight through the navy
+											// card, not through a mint button.
 											<Button
 												asChild
 												size="lg"
 												className={cn(
 													"h-11 w-full rounded-full",
-													!tier.popular &&
-														"border-border bg-background text-foreground hover:bg-muted",
+													tier.popular
+														? "border-primary-foreground/30 bg-transparent text-primary-foreground hover:bg-primary-foreground/10"
+														: "border-border bg-background text-foreground hover:bg-muted",
 												)}
-												variant={tier.popular ? "default" : "outline"}
+												variant="outline"
 											>
 												{isSignedIn ? (
 													<Link to="/app">
