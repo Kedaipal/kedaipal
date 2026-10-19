@@ -280,7 +280,9 @@ describe("/pricing — Enterprise is a conversation (T6, z8r3fdkp8h)", () => {
 		).toBe("/app/settings?tab=billing");
 		expect(screen.queryByRole("link", { name: /Upgrade/ })).toBeNull();
 		expect(
-			within(enterpriseCard()).getByRole("link", { name: /Get an Enterprise quote/ }),
+			within(enterpriseCard()).getByRole("link", {
+				name: /Get an Enterprise quote/,
+			}),
 		).toBeTruthy();
 	});
 
@@ -290,7 +292,9 @@ describe("/pricing — Enterprise is a conversation (T6, z8r3fdkp8h)", () => {
 		renderPage();
 		expect(screen.getAllByRole("link", { name: /^Subscribe/ })).toHaveLength(2);
 		expect(
-			within(enterpriseCard()).getByRole("link", { name: /Get an Enterprise quote/ }),
+			within(enterpriseCard()).getByRole("link", {
+				name: /Get an Enterprise quote/,
+			}),
 		).toBeTruthy();
 	});
 
@@ -301,9 +305,9 @@ describe("/pricing — Enterprise is a conversation (T6, z8r3fdkp8h)", () => {
 		expect(within(enterpriseCard()).getByText("Current plan")).toBeTruthy();
 		// A contract changes by talking to us — never a self-serve door the
 		// server would refuse.
-		expect(screen.getAllByRole("link", { name: /Get an Enterprise quote/ })).toHaveLength(
-			2,
-		);
+		expect(
+			screen.getAllByRole("link", { name: /Get an Enterprise quote/ }),
+		).toHaveLength(2);
 		expect(
 			screen.queryByRole("link", { name: /^Subscribe|Upgrade|Manage plan/ }),
 		).toBeNull();
@@ -318,7 +322,9 @@ describe("/pricing — Enterprise is a conversation (T6, z8r3fdkp8h)", () => {
 		state.auth = { isLoaded: true, isSignedIn: true };
 		state.plan = { plan: "pro", status: "active", comped: true };
 		renderPage();
-		expect(screen.queryByRole("link", { name: /Get an Enterprise quote/ })).toBeNull();
+		expect(
+			screen.queryByRole("link", { name: /Get an Enterprise quote/ }),
+		).toBeNull();
 		expect(
 			within(enterpriseCard()).queryByText(/Talk to Arif|Current plan/),
 		).toBeNull();

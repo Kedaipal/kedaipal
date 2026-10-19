@@ -486,7 +486,7 @@ export function HandshakePanes({
 	const storyBeat = still ? RECEIVED_BEAT : beat;
 	return (
 		<div className="@container w-full">
-			<div className="flex flex-col items-stretch gap-[1.6em] text-[10px] @[30rem]:flex-row @[30rem]:items-end @[30rem]:gap-[2.4em] @[30rem]:text-[clamp(8.5px,1.85cqw,11px)]">
+			<div className="flex flex-col items-stretch gap-[1.6em] text-[10px] @[30rem]:flex-row @[30rem]:items-end @[30rem]:gap-[2.4em] @[30rem]:text-[clamp(9px,2cqw,12px)]">
 				<BuyerPhone beat={storyBeat} still={still} />
 				<SellerCard beat={storyBeat} still={still} />
 			</div>

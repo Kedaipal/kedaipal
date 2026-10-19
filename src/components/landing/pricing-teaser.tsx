@@ -185,7 +185,12 @@ export function PricingTeaser() {
 		>
 			<div className="mx-auto max-w-6xl px-5 py-24 md:px-8 md:py-32">
 				<FadeIn>
-					<div className="text-center">
+					{/* The region switch is a page-level setting, so it sits where the
+					    walkthrough one screen up put it: top-right of the section header
+					    from md. On a phone it stacks above the cycle toggle instead —
+					    two pills side by side at 390 read as one broken control
+					    (Arif, 19 Oct 2026). */}
+					<div className="relative text-center">
 						<Sticker tone="outline" rotate={-1.5}>
 							<Sparkles className="size-3" />
 							{m.pricing_badge()}
@@ -219,8 +224,14 @@ export function PricingTeaser() {
 								perDay: `${symbol} ${starterPricePerDay(currency)}`,
 							})}
 						</div>
-						<div className="mt-6 flex flex-wrap items-start justify-center gap-x-6 gap-y-5">
-							<RegionToggle region={region} onChange={setRegion} />
+						<div className="mt-6 flex flex-col items-center gap-5">
+							{/* One element, two homes: in the stack on a phone, lifted to the
+							    header's top-right corner from md (the header is `relative`). */}
+							<RegionToggle
+								region={region}
+								onChange={setRegion}
+								className="md:absolute md:right-0 md:top-0"
+							/>
 							<BillingCycleToggle cycle={cycle} onChange={setCycle} />
 						</div>
 					</div>

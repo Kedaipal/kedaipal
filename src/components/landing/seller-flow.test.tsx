@@ -184,6 +184,23 @@ describe("SellerFlow", () => {
 		expect(wholeFrame()).toContain(m.flow_bubble_4({ courier }));
 	});
 
+	it("the bubble names who gets a message at each step — and that nobody does on 03 and 04", () => {
+		vi.useFakeTimers();
+		renderFlow();
+		// 01: the buyer's one message, the confirmation.
+		expect(wholeFrame()).toContain(m.flow_bubble_buyer_label());
+		// 02: the money landed — that alert goes to the SELLER.
+		fireEvent.click(stepButton(2));
+		expect(wholeFrame()).toContain(m.flow_bubble_seller_label());
+		expect(wholeFrame()).not.toContain(m.flow_bubble_buyer_label());
+		// 03 and 04: her order page flips; one message per order means no second.
+		fireEvent.click(stepButton(3));
+		expect(wholeFrame()).toContain(m.flow_bubble_none_label());
+		expect(wholeFrame()).toContain(m.flow_bubble_3());
+		fireEvent.click(stepButton(4));
+		expect(wholeFrame()).toContain(m.flow_bubble_none_label());
+	});
+
 	it("clicking a step jumps there", () => {
 		vi.useFakeTimers();
 		renderFlow();

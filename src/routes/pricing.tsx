@@ -862,7 +862,7 @@ function PricingPage() {
 
 			{/* Hero */}
 			<section className="bg-hero-mesh">
-				<div className="mx-auto max-w-4xl px-5 pb-16 pt-28 text-center md:px-8 md:pb-24 md:pt-40">
+				<div className="relative mx-auto max-w-4xl px-5 pb-16 pt-28 text-center md:px-8 md:pb-24 md:pt-40">
 					<FadeIn>
 						<Sticker tone="outline" rotate={-1.5}>
 							<Sparkles className="size-3" />
@@ -886,8 +886,15 @@ function PricingPage() {
 								orders: TRIAL_CREDIT_GRANT,
 							})}
 						</p>
-						<div className="mt-7 flex justify-center">
-							<RegionToggle region={region} onChange={setRegion} />
+						{/* Same placement as the landing teaser: one element, stacked above
+						    the cycle toggle on a phone, lifted to the hero's top-right corner
+						    from md (the hero block is `relative`). */}
+						<div className="mt-7 flex justify-center md:mt-0">
+							<RegionToggle
+								region={region}
+								onChange={setRegion}
+								className="md:absolute md:right-8 md:top-40"
+							/>
 						</div>
 					</FadeIn>
 
@@ -898,7 +905,7 @@ function PricingPage() {
 							<BillingCycleToggle
 								cycle={cycle}
 								onChange={setCycle}
-								className="mt-8"
+								className="mt-6 md:mt-8"
 							/>
 						</FadeIn>
 					)}

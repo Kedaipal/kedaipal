@@ -140,15 +140,14 @@ export function BillingCycleToggle({
 		cn(
 			"relative min-h-10 rounded-full px-5 text-sm font-semibold transition-colors",
 			active
-				? "bg-primary text-primary-foreground"
+				? "bg-segment text-segment-foreground"
 				: "text-muted-foreground hover:text-foreground",
 		);
 	return (
 		<div className={cn("flex flex-col items-center", className)}>
-			<div
-				role="group"
+			<fieldset
 				aria-label={m.pricingpage_toggle_label()}
-				className="inline-flex items-center rounded-full border border-border bg-card p-1.5 shadow-sm"
+				className="m-0 inline-flex items-center rounded-full border border-border bg-card p-1.5 shadow-sm"
 			>
 				<button
 					type="button"
@@ -169,7 +168,7 @@ export function BillingCycleToggle({
 						{m.pricingpage_annual_badge()}
 					</span>
 				</button>
-			</div>
+			</fieldset>
 			<p className="mx-auto mt-3 max-w-sm text-center text-xs leading-relaxed text-muted-foreground">
 				{m.pricingpage_annual_credits_note()}
 			</p>
@@ -350,7 +349,7 @@ export function RegionToggle({
 						// the first cut's min-h-9 (36px) failed the 29 Aug mobile audit.
 						"tap-target min-w-16 rounded-full px-4 text-sm font-semibold transition-colors",
 						region === c
-							? "bg-primary text-primary-foreground"
+							? "bg-segment text-segment-foreground"
 							: "text-muted-foreground hover:text-foreground",
 					)}
 				>

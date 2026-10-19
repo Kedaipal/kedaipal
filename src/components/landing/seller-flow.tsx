@@ -1,4 +1,5 @@
 import { motion, useInView, useReducedMotion } from "framer-motion";
+import { BellOff } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BILLING_CURRENCY_FOR_COUNTRY } from "../../../convex/lib/plans";
 import { useTimeline } from "../../hooks/useBeatLoop";
@@ -175,11 +176,35 @@ export function SellerFlow() {
 		3: m.flow_step_3_body(),
 		4: parcelsLive ? m.flow_step_4_body() : m.flow_step_4_body_rider(),
 	};
-	const bubbles: Record<FlowPhase, string> = {
-		1: m.flow_bubble_1(),
-		2: m.flow_bubble_2(),
-		3: m.flow_bubble_3(),
-		4: m.flow_bubble_4({ courier }),
+	// Who gets a message at this step — and that nobody does, when nobody
+	// does. One message per order (`docs/one-message-per-order.md`): the
+	// buyer's confirmation at 01, the seller's own payment-received alert at
+	// 02, and NOTHING to the buyer on confirmed or shipped — her order page
+	// carries those. The first cut sent Aina a WhatsApp on every step.
+	const bubbles: Record<
+		FlowPhase,
+		{ label: string; sent: boolean; body: string }
+	> = {
+		1: {
+			label: m.flow_bubble_buyer_label(),
+			sent: true,
+			body: m.flow_bubble_1(),
+		},
+		2: {
+			label: m.flow_bubble_seller_label(),
+			sent: true,
+			body: m.flow_bubble_2(),
+		},
+		3: {
+			label: m.flow_bubble_none_label(),
+			sent: false,
+			body: m.flow_bubble_3(),
+		},
+		4: {
+			label: m.flow_bubble_none_label(),
+			sent: false,
+			body: m.flow_bubble_4({ courier }),
+		},
 	};
 
 	return (
@@ -189,7 +214,7 @@ export function SellerFlow() {
 			className="border-t border-border bg-background"
 		>
 			<div className="mx-auto max-w-6xl px-5 py-20 md:px-8 md:py-28">
-				<div className="grid gap-10 lg:grid-cols-[0.9fr_1.1fr] lg:items-start lg:gap-16">
+				<div className="grid gap-10 lg:grid-cols-[0.85fr_1.15fr] lg:items-start lg:gap-14">
 					<div className="min-w-0">
 						<FadeIn>
 							<div className="flex flex-wrap items-center justify-between gap-3">
@@ -243,9 +268,11 @@ export function SellerFlow() {
 						</FadeIn>
 					</div>
 
-					{/* The frame: the hero stage's navy ground and dot grid. All three
+					{/* The frame: the hero stage's navy ground and dot grid. All four
 					    phases are stacked in one cell (below), so its height is the tallest
-					    phase's and never changes on a swap. */}
+					    phase's and never changes on a swap — and it HUGS that phase: a
+					    min-height taller than the mocks left a third of the frame as empty
+					    navy around phones a quarter of its width (Arif, 19 Oct). */}
 					<FadeIn delay={0.15} className="min-w-0">
 						<div
 							ref={frameRef}
@@ -253,7 +280,7 @@ export function SellerFlow() {
 							aria-hidden="true"
 							onPointerEnter={() => setHovered(true)}
 							onPointerLeave={() => setHovered(false)}
-							className="relative min-h-[30rem] overflow-hidden rounded-[2rem] bg-primary p-5 pb-28 shadow-2xl shadow-primary/25 contain-inline-size sm:p-8 sm:pb-28 md:min-h-[34rem] md:rounded-[2.5rem]"
+							className="relative overflow-hidden rounded-[2rem] bg-primary p-5 pb-32 shadow-2xl shadow-primary/25 contain-inline-size sm:p-8 sm:pb-32 md:rounded-[2.5rem]"
 						>
 							<div
 								aria-hidden
@@ -297,7 +324,7 @@ export function SellerFlow() {
 												)}
 											>
 												{p === 1 ? (
-													<div className="text-[11px] md:text-[12.5px]">
+													<div className="text-[11px] md:text-[13px]">
 														<AfterPhone
 															beat={phaseBeat}
 															still={still}
@@ -328,21 +355,25 @@ export function SellerFlow() {
 								<div className="min-h-[26rem] md:min-h-[30rem]" />
 							)}
 
-							{/* What the buyer gets at this step — the one WhatsApp per
-							    order, then the order page doing the rest. */}
+							{/* What goes out at this step — one WhatsApp per order, then the
+							    order page doing the rest; the label says who, or that no one. */}
 							<div
 								key={phase}
 								className={cn(
-									"pointer-events-none absolute bottom-4 left-4 flex max-w-[14rem] flex-col gap-0.5 rounded-2xl bg-card px-3.5 py-2.5 text-card-foreground shadow-2xl ring-1 ring-black/10 sm:bottom-6 sm:left-6",
+									"pointer-events-none absolute bottom-4 left-4 flex max-w-[17rem] flex-col gap-0.5 rounded-2xl bg-card px-3.5 py-2.5 text-card-foreground shadow-2xl ring-1 ring-black/10 sm:bottom-6 sm:left-6",
 									!reduced && "animate-kp-toast-in",
 								)}
 							>
 								<span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground">
-									<WhatsAppIcon className="size-3 text-[#25D366]" />
-									{m.flow_bubble_label()}
+									{bubbles[phase].sent ? (
+										<WhatsAppIcon className="size-3 text-[#25D366]" />
+									) : (
+										<BellOff className="size-3" />
+									)}
+									{bubbles[phase].label}
 								</span>
 								<span className="text-xs font-semibold leading-snug">
-									{bubbles[phase]}
+									{bubbles[phase].body}
 								</span>
 								{/* The clock stops while the pointer rests here — say so, on its
 								    own line under the message. */}

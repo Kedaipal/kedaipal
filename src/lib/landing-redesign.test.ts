@@ -253,6 +253,21 @@ const REMOVED_LANDING_V2_KEYS = [
 	"proof_rail_next",
 	"proof_directory_strong",
 	"proof_directory_body",
+	// Phase 02's first cut acted out a flow the product doesn't have (19 Oct
+	// 2026, Arif: "the mockup is wrong"): an in-page HitPay sheet, a bank-
+	// transfer door a HitPay store withholds, invented seller copy, and a
+	// WhatsApp to the buyer on paid/confirmed/shipped that one-message-per-
+	// order never sends. The keys that carried those claims stay gone.
+	"paynow_transfer_instead",
+	"paynow_powered",
+	"paynow_sheet_label",
+	"paynow_sheet_pay",
+	"paynow_paid_title",
+	"paynow_paid_body",
+	"paynow_seller_waiting",
+	"paynow_seller_paid_meta",
+	"paynow_seller_body",
+	"flow_bubble_label",
 ];
 
 describe("landing v2 — cut sections stay cut", () => {

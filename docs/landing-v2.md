@@ -243,15 +243,24 @@ demo is the one accent ask on that page too.
 
 **The walkthrough (T3).** One navy frame, four steps, the real UI: **01** the
 order lands in the Orders inbox (`AfterPhone`, beats 0–1), **02** the buyer
-taps Pay now, HitPay's checkout opens with the real rails, the QR is scanned
-and the order confirms ITSELF — the seller's card reads "Paid online via
-HitPay", nobody tapped (`PayNowPanes`, `PAYNOW_BEATS`; added 19 Oct at Arif's
-ask, "showcase our payment provider flow as well"), **03** the buyer's order
+taps Pay now and the phone LEAVES for HitPay's hosted page ("Opening secure
+checkout…"), picks DuitNow, scans the QR, and comes back CONFIRMING
+("Checking with HitPay — this usually takes a few seconds.") before both
+sides read paid — the buyer's "Payment Confirmed · Paid via DuitNow" with the
+HitPay reference, the seller's dashboard card "Payment received · Paid online
+via HitPay just now"; nobody tapped (`PayNowPanes`, `PAYNOW_BEATS`; added 19
+Oct at Arif's ask, "showcase our payment provider flow as well"). **The first
+cut of this phase was wrong and Arif caught it on sight:** it put HitPay in
+an in-page sheet (it is a redirect, `docs/hitpay-gateway.md`), kept a "paid
+by bank transfer instead?" door a HitPay store withholds (86eye9xd4), and
+invented both cards' copy. Every state in it is now a state the product has,
+and `pay-now.test.tsx` pins the confirming beat, the absent transfer door
+and the real rail names, **03** the buyer's order
 page and the seller's order card walk the handshake for buyers who still
 transfer (`HandshakePanes`, `HANDSHAKE_BEATS`), **04** the dispatch card
 quotes, books and ships (`DispatchCard`, `DISPATCH_BEATS`) with the courier
 catalogue under it. The four beat tables are flattened into ONE timeline
-(`TIMELINE`, 18 steps), so
+(`TIMELINE`, 19 steps), so
 the mocks stay the source of their own stories and the walkthrough cannot
 drift from them; the mocks' old reset beats went — the frame cross-fades
 between phases instead. **All three phases stay mounted in ONE grid cell**,
@@ -268,9 +277,12 @@ step copy (`flow_step_*`) carries the content, and each step button's
 accessible name is "Step N: title body" (a visually-hidden prefix — an
 `aria-label` would have replaced the copy and left the section silent to a
 screen reader). The courier catalogue sits OUTSIDE the frame on every
-breakpoint: it is information, not decoration. A WhatsApp bubble in the corner says
-what the buyer gets at each step — the one message per order, then the order
-page. Phase 04 follows the region: Singapore gets the rider-only step copy,
+breakpoint: it is information, not decoration. A bubble in the corner says who gets a
+message at each step — the buyer's one confirmation at 01, the seller's own
+payment-received alert at 02, and "No WhatsApp to Aina" at 03 and 04, because
+one message per order (`docs/one-message-per-order.md`) means her order page
+carries confirmed and shipped. (The first cut sent Aina a WhatsApp on every
+step — three messages the product never sends.) Phase 04 follows the region: Singapore gets the rider-only step copy,
 Lalamove on the card, no chilled or frozen pill, and the "being enabled"
 note, exactly as the Delivery section did. The hero's inbox, the handshake and the card now tell ONE order
 (ORD-0182 · Aina · RM 181 from Kedai Daging Amir — truth fix 4, pinned by
