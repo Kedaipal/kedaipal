@@ -88,13 +88,29 @@ function stepTo(index: number) {
 	}
 }
 
-/** The frame's text alone — the step copy beside it names the same words. */
+/**
+ * The ACTIVE phase's text alone — every phase stays mounted (the tallest
+ * sets the frame's height, so a swap never reflows the page) and only the
+ * active one is visible; the step copy beside it names the same words.
+ */
 function frame(): string {
+	const cells = screen
+		.getByTestId("flow-frame")
+		.querySelectorAll("[data-phase][data-active=true]");
+	expect(cells).toHaveLength(1);
+	return cells[0].textContent ?? "";
+}
+
+/** The whole frame's text — the WhatsApp bubble sits beside the phases. */
+function wholeFrame(): string {
 	return screen.getByTestId("flow-frame").textContent ?? "";
 }
 
+/** Buttons are named by their visible copy, "Step N: <title> <body>". */
 function stepButton(n: 1 | 2 | 3) {
-	return screen.getByRole("button", { name: m.flow_step_label({ step: n }) });
+	return screen.getByRole("button", {
+		name: new RegExp(`^${m.flow_step_label({ step: n })}`),
+	});
 }
 
 describe("SellerFlow", () => {
@@ -129,7 +145,7 @@ describe("SellerFlow", () => {
 		stepTo(1);
 		expect(frame()).toContain(m.hero_after_status_1());
 		expect(frame()).toContain(m.hero_after_toast_1());
-		expect(frame()).toContain(m.flow_bubble_1());
+		expect(wholeFrame()).toContain(m.flow_bubble_1());
 	});
 
 	it("phase 2 opens on How to pay", () => {
@@ -150,7 +166,7 @@ describe("SellerFlow", () => {
 		stepTo(TIMELINE_HOLDS.length - 1);
 		const courier = mockQuotes("MY")[0].name;
 		expect(frame()).toContain(m.delivery_quote_shipped({ courier }));
-		expect(frame()).toContain(m.flow_bubble_3({ courier }));
+		expect(wholeFrame()).toContain(m.flow_bubble_3({ courier }));
 	});
 
 	it("clicking a step jumps there", () => {
@@ -205,6 +221,50 @@ describe("SellerFlow", () => {
 		const call = scrollTo.mock.calls.at(-1)?.[0];
 		expect(call).toMatchObject({ left: expect.any(Number) });
 		expect(call).not.toHaveProperty("top");
+	});
+
+	it("keeps every phase mounted at its still, so the frame has one height", () => {
+		vi.useFakeTimers();
+		const { container } = renderFlow();
+		const cells = screen
+			.getByTestId("flow-frame")
+			.querySelectorAll("[data-phase]");
+		expect(cells).toHaveLength(3);
+		// The inactive phases render their last beat (a still), hidden.
+		const dispatch = [...cells].find(
+			(c) => c.getAttribute("data-phase") === "3",
+		);
+		expect(dispatch?.getAttribute("data-active")).toBe("false");
+		expect(dispatch?.getAttribute("aria-hidden")).toBe("true");
+		expect(dispatch?.textContent).toContain(
+			m.delivery_quote_shipped({ courier: mockQuotes("MY")[0].name }),
+		);
+		// The catalogue lives OUTSIDE the decorative frame — it is information.
+		expect(
+			screen.getByTestId("flow-frame").querySelector("ul[aria-label]"),
+		).toBeNull();
+		expect(
+			container.querySelector(
+				`ul[aria-label="${m.delivery_catalogue_label()}"]`,
+			),
+		).not.toBeNull();
+	});
+
+	it("names each step button by its copy, not a bare number", () => {
+		renderFlow();
+		const name = stepButton(2).getAttribute("aria-label");
+		expect(name).toBeNull();
+		expect(stepButton(2).textContent).toContain(m.flow_step_2_title());
+	});
+
+	it("says it is paused while the pointer rests on the frame", () => {
+		vi.useFakeTimers();
+		renderFlow();
+		expect(screen.queryByText(m.flow_pause_hint())).toBeNull();
+		fireEvent.pointerEnter(screen.getByTestId("flow-frame"));
+		expect(screen.getByText(m.flow_pause_hint())).toBeTruthy();
+		act(() => vi.advanceTimersByTime(60_000));
+		expect(stepButton(1).getAttribute("aria-current")).toBe("step");
 	});
 
 	it("the frame is decorative and the steps carry the content", () => {

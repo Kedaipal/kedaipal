@@ -24,8 +24,12 @@ import { WaDock } from "./wa-dock";
  * doubles an ask that is already in front of the reader.
  */
 
-const { trackDemoCta } = vi.hoisted(() => ({ trackDemoCta: vi.fn() }));
+const { trackDemoCta, authState } = vi.hoisted(() => ({
+	trackDemoCta: vi.fn(),
+	authState: { isSignedIn: false },
+}));
 vi.mock("../../lib/ga-events", () => ({ trackDemoCta }));
+vi.mock("@clerk/tanstack-react-start", () => ({ useAuth: () => authState }));
 vi.mock("../../hooks/useSupportWaNumber", () => ({
 	useSupportWaNumber: () => "60123456789",
 }));
@@ -101,6 +105,7 @@ function renderDock() {
 				<section id="flow" />
 				<section id="pricing" />
 				<section id="final" />
+				<footer id="site-footer" />
 			</div>
 			<WaDock />
 		</LandingRegionProvider>,
@@ -117,6 +122,7 @@ const demoLink = () =>
 describe("WaDock", () => {
 	beforeEach(() => {
 		observers.length = 0;
+		authState.isSignedIn = false;
 		trackDemoCta.mockClear();
 		installMatchMedia();
 		vi.stubGlobal("IntersectionObserver", FakeObserver);
@@ -143,6 +149,30 @@ describe("WaDock", () => {
 		expect(dock()).toBeNull();
 		report("final", false);
 		expect(dock()).not.toBeNull();
+	});
+
+	it("hides while the footer is on screen, so it never covers the page's last lines", () => {
+		renderDock();
+		report("top", false);
+		expect(dock()).not.toBeNull();
+		report("site-footer", true);
+		expect(dock()).toBeNull();
+	});
+
+	it("never shows a demo pill to a signed-in seller", () => {
+		authState.isSignedIn = true;
+		renderDock();
+		report("top", false);
+		expect(dock()).toBeNull();
+	});
+
+	it("keeps every chip at the 44px touch floor", () => {
+		renderDock();
+		report("top", false);
+		for (const chip of screen.getAllByRole("link")) {
+			if (chip.textContent?.includes(m.book_demo_cta_long())) continue;
+			expect(chip.className).toContain("min-h-11");
+		}
 	});
 
 	it("asks the section's question: fit at the top, a live store on the flow, the plan on pricing", () => {

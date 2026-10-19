@@ -227,6 +227,8 @@ const REMOVED_LANDING_V2_KEYS = [
 	"delivery_point_3",
 	"delivery_cold_note",
 	"nav_delivery",
+	// /pricing's bottom trial button became the shared StartFreeLink (final_cta).
+	"pricingpage_cta_trial_btn",
 ];
 
 describe("landing v2 — cut sections stay cut", () => {

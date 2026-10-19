@@ -238,17 +238,26 @@ order page and the seller's order card walk the handshake (`HandshakePanes`,
 (`DispatchCard`, `DISPATCH_BEATS`) with the courier catalogue under it. The
 three beat tables are flattened into ONE timeline (`TIMELINE`, 13 steps), so
 the mocks stay the source of their own stories and the walkthrough cannot
-drift from them; the mocks' old reset beats went — the frame fades between
-phases with `AnimatePresence` instead. `useTimeline` is `useBeatLoop` with a
-`goTo`: a click on a step jumps there and the auto-advance resumes; hovering
-the frame pauses it. Reduced motion renders each phase's LAST beat as a still,
-never advances by itself, and the step buttons still page through. The frame
-mounts its mocks only once near the viewport and is `aria-hidden`; the step
-copy (`flow_step_*`) carries the content. A WhatsApp bubble in the corner says
+drift from them; the mocks' old reset beats went — the frame cross-fades
+between phases instead. **All three phases stay mounted in ONE grid cell**,
+the inactive two `invisible` at their last beat: the tallest phase sets the
+frame's height, so a swap never reflows the section or the page (the first
+cut mounted one phase at a time and the fresh reviewer measured the heading
+jumping 159px and `#payments` 318px on every loop at 1440). `useTimeline` is
+`useBeatLoop` with a `goTo`: a click on a step jumps there and the
+auto-advance resumes; hovering the frame pauses it and the bubble says
+"Paused while you look". Reduced motion renders each phase's LAST beat as a
+still, never advances by itself, and the step buttons still page through. The
+frame mounts its mocks only once near the viewport and is `aria-hidden`; the
+step copy (`flow_step_*`) carries the content, and each step button's
+accessible name is "Step N: title body" (a visually-hidden prefix — an
+`aria-label` would have replaced the copy and left the section silent to a
+screen reader). The courier catalogue sits OUTSIDE the frame on every
+breakpoint: it is information, not decoration. A WhatsApp bubble in the corner says
 what the buyer gets at each step — the one message per order, then the order
 page. Phase 03 follows the region: Singapore gets the rider-only step copy,
-Lalamove on the card, and the "being enabled" note, exactly as the Delivery
-section did. The hero's inbox, the handshake and the card now tell ONE order
+Lalamove on the card, no chilled or frozen pill, and the "being enabled"
+note, exactly as the Delivery section did. The hero's inbox, the handshake and the card now tell ONE order
 (ORD-0182 · Aina · RM 181 from Kedai Daging Amir — truth fix 4, pinned by
 `landing-redesign.test.ts`). Not taken from the ticket's T3 list: the hero
 split-card chips, the count-ups, the pill shimmer and the comparison row —
@@ -261,8 +270,12 @@ and an outline WhatsApp link for the unsure (`fit_wa_message`, its own ask).
 The RM2,000 floor is test-pinned in every locale.
 
 **The dock (T1, from docket.io).** Appears once the hero has scrolled out,
-hides while the final CTA is on screen, never renders on SSR or first paint
-(`useSectionVisibility` is `null` until the observer reports). Two question
+hides while the final CTA or the footer is on screen (a phone's footer is
+taller than the viewport, and the dock sat on its last lines), never shows to
+a signed-in seller (every other surface gives them their dashboard door; the
+dock is a prospect's tool), and never renders on SSR or first paint
+(`useSectionVisibility` is `null` until the observer reports). Chips are 44px
+tall and wrap on a phone. Two question
 chips follow the section under the reader — fit at the top, "show me a live
 store" on the walkthrough, "which plan fits RM___ a month" (currency per
 region) on pricing — each a WhatsApp link prefilled with the question, carried

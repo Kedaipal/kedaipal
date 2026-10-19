@@ -1,9 +1,4 @@
-import {
-	AnimatePresence,
-	motion,
-	useInView,
-	useReducedMotion,
-} from "framer-motion";
+import { motion, useInView, useReducedMotion } from "framer-motion";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BILLING_CURRENCY_FOR_COUNTRY } from "../../../convex/lib/plans";
 import { useTimeline } from "../../hooks/useBeatLoop";
@@ -36,9 +31,10 @@ import {
  *
  * One clock (`useTimeline` over `seller-flow-timeline.ts`) drives all three
  * mocks, so a click on a step jumps the story there and the auto-advance
- * resumes; hovering the frame pauses it (a reader is looking). The frame
- * swaps phases with `AnimatePresence` — a fade and an 8px rise — and the
- * mocks inside keep their own CSS beats. Reduced motion renders each phase's
+ * resumes; hovering the frame pauses it (a reader is looking, and the bubble
+ * says so). The frame cross-fades phases — all three stay mounted in one
+ * grid cell so the tallest sets the height and a swap never reflows the
+ * page — and the mocks inside keep their own CSS beats. Reduced motion renders each phase's
  * LAST beat as a still, never advances by itself, and the step buttons still
  * page through. The frame mounts its mocks only once near the viewport (a
  * story playing three screens above the reader is wasted paint) and is
@@ -51,12 +47,6 @@ import {
  */
 
 const PHASES: readonly FlowPhase[] = [1, 2, 3];
-
-const SWAP = {
-	initial: { opacity: 0, y: 8 },
-	animate: { opacity: 1, y: 0 },
-	exit: { opacity: 0, y: -8 },
-} as const;
 
 function StepButton({
 	phase,
@@ -83,7 +73,7 @@ function StepButton({
 		const row = el?.parentElement;
 		if (!active || !el || !row || typeof row.scrollTo !== "function") return;
 		row.scrollTo({
-			left: Math.max(0, el.offsetLeft - 20),
+			left: Math.max(0, el.offsetLeft - row.offsetLeft - 20),
 			behavior: reduced ? "auto" : "smooth",
 		});
 	}, [active, reduced]);
@@ -92,7 +82,6 @@ function StepButton({
 			ref={ref}
 			type="button"
 			aria-current={active ? "step" : undefined}
-			aria-label={m.flow_step_label({ step: phase })}
 			onClick={() => onPick(phase)}
 			className={cn(
 				// The mobile pill and the desktop row are one control: a numeral and
@@ -103,7 +92,11 @@ function StepButton({
 					: "border-border bg-card hover:bg-muted lg:bg-transparent",
 			)}
 		>
+			{/* The numeral is decorative; the name a screen reader gets is "Step N:
+			    <title> <body>" — an `aria-label` here would REPLACE the copy. */}
+			<span className="sr-only">{m.flow_step_label({ step: phase })}: </span>
 			<span
+				aria-hidden
 				className={cn(
 					"flex size-7 shrink-0 items-center justify-center rounded-full font-heading text-[11px] font-extrabold transition-colors lg:size-9 lg:text-[13px]",
 					active
@@ -188,7 +181,7 @@ export function SellerFlow() {
 			className="border-t border-border bg-background"
 		>
 			<div className="mx-auto max-w-6xl px-5 py-20 md:px-8 md:py-28">
-				<div className="grid gap-10 lg:grid-cols-[0.9fr_1.1fr] lg:items-center lg:gap-16">
+				<div className="grid gap-10 lg:grid-cols-[0.9fr_1.1fr] lg:items-start lg:gap-16">
 					<div className="min-w-0">
 						<FadeIn>
 							<div className="flex flex-wrap items-center justify-between gap-3">
@@ -242,9 +235,9 @@ export function SellerFlow() {
 						</FadeIn>
 					</div>
 
-					{/* The frame: the hero stage's navy ground and dot grid, one phase at
-					    a time. `min-h` holds the column so a phase swap never moves the
-					    page; the mocks inside are fixed-height already. */}
+					{/* The frame: the hero stage's navy ground and dot grid. All three
+					    phases are stacked in one cell (below), so its height is the tallest
+					    phase's and never changes on a swap. */}
 					<FadeIn delay={0.15} className="min-w-0">
 						<div
 							ref={frameRef}
@@ -252,7 +245,7 @@ export function SellerFlow() {
 							aria-hidden="true"
 							onPointerEnter={() => setHovered(true)}
 							onPointerLeave={() => setHovered(false)}
-							className="relative min-h-[30rem] overflow-hidden rounded-[2rem] bg-primary p-5 shadow-2xl shadow-primary/25 contain-inline-size sm:p-8 md:min-h-[34rem] md:rounded-[2.5rem]"
+							className="relative min-h-[30rem] overflow-hidden rounded-[2rem] bg-primary p-5 pb-24 shadow-2xl shadow-primary/25 contain-inline-size sm:p-8 sm:pb-24 md:min-h-[34rem] md:rounded-[2.5rem]"
 						>
 							<div
 								aria-hidden
@@ -262,46 +255,64 @@ export function SellerFlow() {
 								aria-hidden
 								className="pointer-events-none absolute -left-[10%] top-[10%] size-[55%] rounded-full bg-accent/10 blur-3xl"
 							/>
+							{/* Every phase is mounted in the SAME grid cell and only the active
+							    one is visible: the tallest phase sets the frame's height, so a
+							    swap never reflows the section or the page (the reviewer measured
+							    +318px per loop with one phase mounted at a time). Inactive phases
+							    render their last beat as a still — no keyframes run off-screen. */}
 							{near ? (
-								<AnimatePresence mode="wait" initial={false}>
-									<motion.div
-										key={phase}
-										{...SWAP}
-										transition={
-											reduced
-												? { duration: 0 }
-												: { duration: 0.35, ease: [0.22, 1, 0.36, 1] }
-										}
-										className="relative flex min-h-[26rem] flex-col items-center justify-center md:min-h-[30rem]"
-									>
-										{phase === 1 ? (
-											<div className="text-[11px] md:text-[12.5px]">
-												<AfterPhone
-													beat={beat}
-													still={reduced}
-													showLabel={false}
-												/>
-											</div>
-										) : null}
-										{phase === 2 ? (
-											<HandshakePanes beat={beat} still={reduced} />
-										) : null}
-										{phase === 3 ? (
-											<div className="flex w-full flex-col items-center gap-5">
-												<DispatchCard
-													beat={beat}
-													reduced={reduced}
-													currency={currency}
-													quotes={quotes}
-													parcelsLive={parcelsLive}
-												/>
-												<div className="hidden w-full max-w-md lg:block">
-													<CourierCatalogue couriers={couriers} />
-												</div>
-											</div>
-										) : null}
-									</motion.div>
-								</AnimatePresence>
+								<div className="grid [grid-template-areas:'stage']">
+									{PHASES.map((p) => {
+										const active = p === phase;
+										const phaseBeat = active
+											? beat
+											: stepAt(lastStepOf(p)).beat;
+										const still = reduced || !active;
+										return (
+											<motion.div
+												key={p}
+												data-phase={p}
+												data-active={active}
+												aria-hidden={active ? undefined : true}
+												initial={false}
+												animate={
+													active ? { opacity: 1, y: 0 } : { opacity: 0, y: 8 }
+												}
+												transition={
+													reduced
+														? { duration: 0 }
+														: { duration: 0.35, ease: [0.22, 1, 0.36, 1] }
+												}
+												className={cn(
+													"relative flex flex-col items-center justify-center [grid-area:stage]",
+													!active && "pointer-events-none invisible",
+												)}
+											>
+												{p === 1 ? (
+													<div className="text-[11px] md:text-[12.5px]">
+														<AfterPhone
+															beat={phaseBeat}
+															still={still}
+															showLabel={false}
+														/>
+													</div>
+												) : null}
+												{p === 2 ? (
+													<HandshakePanes beat={phaseBeat} still={still} />
+												) : null}
+												{p === 3 ? (
+													<DispatchCard
+														beat={phaseBeat}
+														reduced={still}
+														currency={currency}
+														quotes={quotes}
+														parcelsLive={parcelsLive}
+													/>
+												) : null}
+											</motion.div>
+										);
+									})}
+								</div>
 							) : (
 								<div className="min-h-[26rem] md:min-h-[30rem]" />
 							)}
@@ -318,22 +329,30 @@ export function SellerFlow() {
 								<span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground">
 									<WhatsAppIcon className="size-3 text-[#25D366]" />
 									{m.flow_bubble_label()}
+									{/* The clock stops while the pointer rests here — say so. */}
+									{hovered && !reduced ? (
+										<span className="ml-auto normal-case tracking-normal text-accent-emphasis">
+											{m.flow_pause_hint()}
+										</span>
+									) : null}
 								</span>
 								<span className="text-xs font-semibold leading-snug">
 									{bubbles[phase]}
 								</span>
 							</div>
 						</div>
-						{/* The region's honest footnote, under the frame where the
-						    catalogue it qualifies sits (phone) or would sit (desktop). */}
+						{/* The courier catalogue is information, not decoration, so it sits
+						    OUTSIDE the aria-hidden frame on every breakpoint, always mounted
+						    (a row that appears on phase 03 would move the section). */}
+						<div className="mt-6">
+							<CourierCatalogue couriers={couriers} />
+						</div>
+						{/* The region's honest footnote, under the catalogue it qualifies. */}
 						{!parcelsLive ? (
 							<p className="mt-4 text-xs leading-relaxed text-muted-foreground">
 								{m.delivery_sg_note()}
 							</p>
 						) : null}
-						<div className="mt-6 lg:hidden">
-							{phase === 3 ? <CourierCatalogue couriers={couriers} /> : null}
-						</div>
 					</FadeIn>
 				</div>
 			</div>

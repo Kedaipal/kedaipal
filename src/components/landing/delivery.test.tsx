@@ -106,6 +106,17 @@ describe("DispatchCard", () => {
 		expect(screen.queryByText(m.delivery_quote_note())).toBeNull();
 	});
 
+	it("offers the chilled and frozen lanes only where a parcel network is live", () => {
+		renderCard("MY", 1);
+		expect(screen.getByText(m.delivery_quote_chilled())).toBeTruthy();
+		expect(screen.getByText(m.delivery_quote_frozen())).toBeTruthy();
+		cleanup();
+		renderCard("SG", 1);
+		expect(screen.queryByText(m.delivery_quote_chilled())).toBeNull();
+		expect(screen.queryByText(m.delivery_quote_frozen())).toBeNull();
+		expect(screen.getByText(m.delivery_quote_parcel())).toBeTruthy();
+	});
+
 	it("quotes in the region's currency", () => {
 		// `formatPrice` joins symbol and amount with a non-breaking space.
 		const my = renderCard("MY", 1);

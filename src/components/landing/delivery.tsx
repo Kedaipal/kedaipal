@@ -271,8 +271,14 @@ export function DispatchCard({
 					{(
 						[
 							["parcel", m.delivery_quote_parcel()],
-							["chilled", m.delivery_quote_chilled()],
-							["frozen", m.delivery_quote_frozen()],
+							// The cold lanes exist only where a parcel network is live —
+							// Singapore's one rider has no chilled or frozen option.
+							...(parcelsLive
+								? ([
+										["chilled", m.delivery_quote_chilled()],
+										["frozen", m.delivery_quote_frozen()],
+									] as const)
+								: []),
 						] as const
 					).map(([key, label]) => {
 						const active =
