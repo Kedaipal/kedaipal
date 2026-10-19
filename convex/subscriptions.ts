@@ -42,6 +42,7 @@ import { landCreditGrant } from "./credits";
 import { COMP_LABEL_MAX, COMP_NOTE_MAX, type CompKind } from "./lib/comp";
 import { ENTERPRISE_SELF_SERVE_REFUSAL } from "./lib/enterprise";
 import { rateLimiter } from "./lib/rateLimiter";
+import { subscriptionCoversWaAlerts } from "./lib/sellerAlerts";
 import {
 	autoChargeAllowed,
 	autoRenewMethodLabel,
@@ -305,6 +306,19 @@ export async function loadSubscription(
 		.query("subscriptions")
 		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 		.first();
+}
+
+/** Does this store's subscription cover seller WhatsApp order alerts right
+ * now (z8r3fdv55f)? The one DB-side author — the WA alert actions and the
+ * email suppression read it through their order lookups, so the two can never
+ * disagree about whether a WhatsApp alert is going out. The rule itself is
+ * `subscriptionCoversWaAlerts` (pure). */
+export async function waAlertsCoveredBySubscription(
+	ctx: AnyCtx,
+	retailer: Pick<Doc<"retailers">, "_id" | "userId">,
+): Promise<boolean> {
+	const sub = await loadSubscription(ctx, retailer._id);
+	return subscriptionCoversWaAlerts(sub, storeOwnerIsAdmin(retailer));
 }
 
 /** Resolve a retailer's access in one call. */
@@ -577,7 +591,6 @@ const FEATURE_LABEL: Record<PlanFeature, string> = {
 	delivery: "Lalamove delivery booking",
 	onlinePayments: "Online payments (HitPay)",
 	events: "Event RSVPs",
-	waOrderAlerts: "WhatsApp order alerts",
 	promo: "Promo and flash-sale prices",
 	vouchers: "Issuing voucher codes",
 };

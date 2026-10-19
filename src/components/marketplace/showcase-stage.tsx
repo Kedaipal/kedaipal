@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { PublicShowcase } from "../../../convex/showcases";
 import {
 	PILE_FAN_MAX,
+	type ShowcaseMatch,
 	type ShowcaseTicketData,
 	showcaseLook,
 	showcasePath,
@@ -136,7 +137,9 @@ export function ShowcaseStage({
 							className="tap-target -ml-2 inline-flex w-fit items-center gap-1.5 rounded-full px-2 text-[13px] font-bold text-[var(--sc-accent)] hover:bg-white/10"
 						>
 							<ArrowLeft aria-hidden className="size-4" />
-							All stores
+							{/* Not "All stores": that is also the filter chip's label in
+							    the docked header right above it, which means "no filter". */}
+							Back to all stores
 						</button>
 					) : null}
 					<div className="flex flex-wrap gap-1.5">
@@ -598,5 +601,81 @@ export function ShowcaseBand({
 				<ArrowRight aria-hidden className="size-3.5" />
 			</span>
 		</Link>
+	);
+}
+
+/**
+ * A showcase while the buyer is searching or filtering: its own ground and
+ * title, and EVERY matching ticket laid out — no rail, no pile, no band of
+ * faces, each of which would hide the very store that was searched for. The
+ * banner art and tagline step aside so two matching showcases don't push the
+ * plain results off the first screen. "See all N" leads to the showcase's
+ * focused view whenever the search left some of its stores out.
+ */
+export function ShowcaseResults({
+	match,
+	now,
+	onSeeAll,
+}: {
+	match: ShowcaseMatch;
+	now: number;
+	/** "See all" leaves the search: the page clears its own search box. */
+	onSeeAll?: () => void;
+}) {
+	const { showcase, tickets, total } = match;
+	const facts = showcaseTimeFacts(showcase, now);
+	const look = showcaseLook(showcase);
+	const headingId = `showcase-results-${showcase.slug}`;
+	const partial = tickets.length < total;
+	return (
+		<section
+			aria-labelledby={headingId}
+			style={look.style}
+			className={cn(
+				look.className,
+				"relative mx-3 overflow-hidden rounded-[22px] bg-showcase text-white lg:mx-8 lg:rounded-[28px]",
+			)}
+		>
+			<div className="flex items-end justify-between gap-3 px-4 pt-4 lg:px-6 lg:pt-5">
+				<div className="flex min-w-0 flex-col gap-1">
+					<span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-[var(--sc-accent)]">
+						<span
+							aria-hidden
+							className="size-1.5 rounded-full bg-[var(--sc-accent)]"
+						/>
+						<span suppressHydrationWarning>{facts.live}</span>
+					</span>
+					<h2
+						id={headingId}
+						className="truncate font-heading text-[19px] font-black tracking-[-0.02em] lg:text-[22px]"
+					>
+						{showcase.title}
+					</h2>
+					<p className="text-xs text-[var(--sc-text-soft)]">
+						{partial
+							? `${tickets.length} of ${total} stores match`
+							: `${total} ${total === 1 ? "store" : "stores"}`}
+					</p>
+				</div>
+				{partial ? (
+					<Link
+						to="/stores"
+						search={{ showcase: showcase.slug }}
+						onClick={onSeeAll}
+						className="tap-target inline-flex shrink-0 items-center gap-1 text-[13px] font-bold text-[var(--sc-accent)]"
+					>
+						See all {total}
+						<ArrowRight aria-hidden className="size-3.5" />
+					</Link>
+				) : null}
+			</div>
+			<ul className="grid grid-cols-1 gap-x-5 gap-y-5 px-4 pb-5 pt-4 sm:grid-cols-2 lg:grid-cols-3 lg:px-6 lg:pb-6">
+				{tickets.map((ticket) => (
+					<li key={ticket.card.slug}>
+						<ShowcaseTicket ticket={ticket} now={now} />
+					</li>
+				))}
+			</ul>
+		</section>
 	);
 }

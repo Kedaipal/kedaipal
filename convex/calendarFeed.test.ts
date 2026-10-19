@@ -7,16 +7,27 @@
  */
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 import { api, internal } from "./_generated/api";
 import { DAY_MS, todayMytMidnight } from "./lib/fulfilmentDate";
+import { settleScheduled } from "./lib/convexTestSettle";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
 
+// Drain each test's scheduled work before the next test starts — see
+// `settleScheduled` for the convex-test hazard this closes.
+let current: ReturnType<typeof convexTest> | undefined;
+afterEach(async () => {
+	const t = current;
+	current = undefined;
+	if (t) await settleScheduled(t);
+});
+
 function setup() {
 	const t = convexTest(schema, modules);
 	registerRateLimiter(t);
+	current = t;
 	return t;
 }
 
@@ -147,14 +158,19 @@ describe("calendarFeed content", () => {
 			orderId: declined._id,
 			reason: "Closed that week",
 		});
+		// The requests above scheduled seller-alert work; let it finish before
+		// seeding, or a write can be lost to the harness (`settleScheduled`).
+		await settleScheduled(ctx.t);
 		// A per-listing block with a note.
-		await ctx.asOwner.mutation(api.bookingBlocks.blockDays, {
+		const blockId = await ctx.asOwner.mutation(api.bookingBlocks.blockDays, {
 			retailerId: ctx.retailer._id,
 			productId: ctx.productId,
 			startDate: day(15),
 			endDate: day(16),
 			note: "Maintenance",
 		});
+		// Precondition, so a lost seed can't masquerade as a feed bug.
+		expect(await ctx.t.run((c) => c.db.get(blockId))).not.toBeNull();
 
 		const token = await ctx.asOwner.mutation(
 			api.calendarFeed.ensureCalendarFeedToken,

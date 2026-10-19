@@ -1754,6 +1754,38 @@ describe("seller WhatsApp order alerts (86eyhw9zy)", () => {
 		fetchMock.restore();
 	});
 
+	test("ON by default: a never-touched switch + a saved number sends; a lapsed subscription stops it (z8r3fdv55f)", async () => {
+		process.env.WHATSAPP_SELLER_NEW_ORDER_TEMPLATE = NEW_ORDER_TEMPLATE;
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		// Only the number — the switch is left exactly as a new store has it.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailerId, { notifyWaPhone: SELLER_PHONE });
+			const r = await ctx.db.get(retailerId);
+			expect(r?.orderWaAlerts).toBeUndefined();
+		});
+		const fetchMock = installFetchMock();
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+
+		await t.action(internal.whatsapp.notifySellerNewOrder, { orderId });
+		expect(fetchMock.waCalls()).toHaveLength(1);
+
+		// Locked store: the switch and the number are untouched, but the
+		// subscription no longer covers the alert — nothing goes to Meta.
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			if (!sub) throw new Error("no subscription row");
+			await ctx.db.patch(sub._id, { status: "past_due" });
+		});
+		await t.action(internal.whatsapp.notifySellerNewOrder, { orderId });
+		expect(fetchMock.waCalls()).toHaveLength(1);
+		fetchMock.restore();
+	});
+
 	test("no send when the template env is unset, the toggle is off, or the number is missing", async () => {
 		const t = setup();
 		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");

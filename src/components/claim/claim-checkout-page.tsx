@@ -34,7 +34,7 @@ import {
 } from "../../../convex/lib/openingHours";
 import { distinctPickupNotes } from "../../../convex/lib/pickupNote";
 import { slowestPrep } from "../../../convex/lib/prepFloor";
-import { claimVoucherDiscount } from "../../../convex/lib/voucherRedemption";
+import { claimVoucherDiscount } from "../../../convex/lib/vouchers";
 import type { ClaimPagePayload } from "../../../convex/orderClaims";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { displayAddressState } from "../../lib/address-display";

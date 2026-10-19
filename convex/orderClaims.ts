@@ -94,13 +94,15 @@ import {
 	generateTrackingToken,
 } from "./lib/order";
 import {
-	type ClaimVoucherState,
-	claimVoucherDiscount,
 	claimVoucherState,
 	redeemVoucher,
 	resolveVoucherOrThrow,
 } from "./lib/voucherRedemption";
-import type { VoucherSnapshot } from "./lib/vouchers";
+import {
+	type ClaimVoucherState,
+	claimVoucherDiscount,
+	type VoucherSnapshot,
+} from "./lib/vouchers";
 import { asksForTime, fulfilmentKind } from "./lib/fulfilmentShape";
 import type { OpeningHours } from "./lib/openingHours";
 import { type ClosedDateRange, closedDateIssue } from "./lib/closedDates";

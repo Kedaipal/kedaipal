@@ -280,6 +280,12 @@ export function lowCreditLine(periodGrant: number): number {
 	return Math.ceil(Math.max(0, periodGrant) * LOW_CREDIT_RATIO);
 }
 
+/** The pace window Home forecasts from — one week of real trading, long enough
+ * to average over a quiet Monday and a heavy Saturday. Lives here, not beside
+ * `getUsagePace`, because the browser reads it too (`credit-meter.tsx` builds
+ * the `since` arg from it) and the client must never load a function module. */
+export const USAGE_PACE_DAYS = 7;
+
 // ---------------------------------------------------------------------------
 // The gate is PER ORDER (Credits T3.1, ClickUp z8r3fdmg4h)
 // ---------------------------------------------------------------------------

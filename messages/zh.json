@@ -465,7 +465,7 @@
 	"handshake_seller_proof_meta": "ORD-0042 · 2 分钟前发送",
 	"handshake_seller_receipt_line": "收据 PDF 已生成 · 在买家的订单页面和您的导出文件中。",
 	"handshake_caption": "没有给 Aina 发任何 WhatsApp。她的订单页面自己更新了 —— 每笔订单只发一条消息。",
-	"handshake_alert_label": "WhatsApp · 发给您（Pro）",
+	"handshake_alert_label": "WhatsApp · 发给您",
 	"handshake_alert_body": "Aina 称已付款 · ORD-0042 · RM 76.00",
 	"pricing_feat_handshake": "付款确认机制 + 收据",
 	"pricing_feat_insights": "商家数据分析 + 报表",
