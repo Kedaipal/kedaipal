@@ -44,30 +44,25 @@ export function ctaPillClass(
  * everywhere it appears — hero, nav, final CTA, dock — and the self-serve
  * sign-up is a text link beside it (`StartFreeLink`). The `ctaPillClass`
  * accent variant is reserved for it: a second mint pill is a second ask.
- *
- * `chip` is a dock question that replaces the default demo message and rides
- * the `demo_cta` event, so GA4 can say which question converts.
  */
 export function DemoPill({
 	placement,
 	long = false,
-	chip,
 	className,
 }: {
 	placement: DemoPlacement;
 	/** "Book a demo on WhatsApp" rather than "Book a demo" — where the pill has the room. */
 	long?: boolean;
-	chip?: string;
 	className?: string;
 }) {
 	const supportWa = useSupportWaNumber();
 	return (
 		<a
-			href={buildWaContactLink(chip ?? m.demo_wa_message(), supportWa)}
+			href={buildWaContactLink(m.demo_wa_message(), supportWa)}
 			target="_blank"
 			rel="noopener noreferrer"
 			className={cn(ctaPillClass("accent"), className)}
-			onClick={() => trackDemoCta(placement, chip)}
+			onClick={() => trackDemoCta(placement)}
 		>
 			<WhatsAppIcon className="size-[1.1em] shrink-0" />
 			{long ? m.book_demo_cta_long() : m.book_demo_cta()}

@@ -47,10 +47,9 @@ export type FunnelEvent =
 	// `surface` says which card (pricing / teaser / billing).
 	| "enterprise_talk_clicked"
 	// Demo-first landing (z8r3fdtpub T1): a WhatsApp "Book a demo" link was
-	// tapped. `placement` names the surface; `chip` the dock's prefilled
-	// question, when it was one. The counterpart of `cta_signup_click` now
-	// that the demo is the page's primary ask — without it the flip can't be
-	// read in GA4.
+	// tapped; `placement` names the surface. The counterpart of
+	// `cta_signup_click` now that the demo is the page's primary ask —
+	// without it the flip can't be read in GA4.
 	| "demo_cta";
 
 let gaInitialized = false;
@@ -141,10 +140,7 @@ export type DemoPlacement =
 	| "fit"
 	| "dock";
 
-/**
- * A WhatsApp demo link was tapped. `chip` is the dock's prefilled question
- * (`dock_chip_*`), absent for the plain "Book a demo".
- */
-export function trackDemoCta(placement: DemoPlacement, chip?: string): void {
-	trackEvent("demo_cta", { placement, ...(chip ? { chip } : {}) });
+/** A WhatsApp demo link was tapped, on `placement`. */
+export function trackDemoCta(placement: DemoPlacement): void {
+	trackEvent("demo_cta", { placement });
 }

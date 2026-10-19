@@ -8,20 +8,13 @@ import {
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-	LandingRegionProvider,
-	useLandingRegionContext,
-} from "../../hooks/useLandingRegion";
 import { m } from "../../paraglide/messages";
-import { RegionToggle } from "./landing-ui";
 import { WaDock } from "./wa-dock";
 
 /**
- * The floating WhatsApp dock (z8r3fdtpub T1, after docket.io's persistent
- * "Talk to me"): a demo pill plus two question chips that change with the
- * section under the reader and prefill the chat. It appears once the hero
- * has scrolled out and hides while the final CTA is on screen, so it never
- * doubles an ask that is already in front of the reader.
+ * The floating WhatsApp dock (z8r3fdtpub T1): one "Book a demo" pill. It
+ * appears once the hero has scrolled out, hides while the final CTA or the
+ * footer is on screen, and never shows to a signed-in seller.
  */
 
 const { trackDemoCta, authState } = vi.hoisted(() => ({
@@ -33,15 +26,6 @@ vi.mock("@clerk/tanstack-react-start", () => ({ useAuth: () => authState }));
 vi.mock("../../hooks/useSupportWaNumber", () => ({
 	useSupportWaNumber: () => "60123456789",
 }));
-vi.mock("@tanstack/react-router", async (importOriginal) => {
-	const actual =
-		await importOriginal<typeof import("@tanstack/react-router")>();
-	return {
-		...actual,
-		useRouterState: ({ select }: { select: (s: unknown) => unknown }) =>
-			select({ matches: [{ loaderData: { region: "MY" } }] }),
-	};
-});
 vi.mock("framer-motion", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("framer-motion")>();
 	return {
@@ -76,66 +60,32 @@ function report(id: string, isIntersecting: boolean) {
 	}
 }
 
-function installMatchMedia() {
-	window.matchMedia = vi.fn().mockImplementation((query: string) => ({
-		matches: false,
-		media: query,
-		onchange: null,
-		addEventListener: vi.fn(),
-		removeEventListener: vi.fn(),
-		addListener: vi.fn(),
-		removeListener: vi.fn(),
-		dispatchEvent: vi.fn(),
-	}));
-}
-
-/** The page's toggle lives in other sections; the dock only reads the region. */
-function RegionSwitch() {
-	const [region, setRegion] = useLandingRegionContext();
-	return <RegionToggle region={region} onChange={setRegion} />;
-}
-
 function renderDock() {
 	return render(
-		<LandingRegionProvider>
-			<RegionSwitch />
+		<>
 			<div>
 				<section id="top" />
-				<section id="demo" />
-				<section id="flow" />
-				<section id="pricing" />
 				<section id="final" />
 				<footer id="site-footer" />
 			</div>
 			<WaDock />
-		</LandingRegionProvider>,
+		</>,
 	);
 }
 
 const dock = () =>
 	screen.queryByRole("complementary", { name: m.dock_label() });
-const demoLink = () =>
-	screen
-		.getAllByRole("link")
-		.filter((a) => /wa\.me/.test(a.getAttribute("href") ?? ""));
 
 describe("WaDock", () => {
 	beforeEach(() => {
 		observers.length = 0;
 		authState.isSignedIn = false;
 		trackDemoCta.mockClear();
-		installMatchMedia();
 		vi.stubGlobal("IntersectionObserver", FakeObserver);
-		vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions").mockReturnValue({
-			timeZone: "UTC",
-		} as Intl.ResolvedDateTimeFormatOptions);
-		// biome-ignore lint/suspicious/noDocumentCookie: jsdom keeps cookies across tests in a file; the region pick from one test must not leak into the next.
-		document.cookie = "kp_landing_region=; Max-Age=0; Path=/";
 	});
 	afterEach(() => {
 		cleanup();
 		vi.unstubAllGlobals();
-		vi.restoreAllMocks();
 	});
 
 	it("stays hidden until the hero scrolls out, and hides again on the final CTA", () => {
@@ -166,50 +116,14 @@ describe("WaDock", () => {
 		expect(dock()).toBeNull();
 	});
 
-	it("keeps every chip at the 44px touch floor", () => {
+	it("is one pill — the demo ask — that reports its placement", () => {
 		renderDock();
 		report("top", false);
-		for (const chip of screen.getAllByRole("link")) {
-			if (chip.textContent?.includes(m.book_demo_cta_long())) continue;
-			expect(chip.className).toContain("min-h-11");
-		}
-	});
-
-	it("asks the section's question: fit at the top, a live store on the flow, the plan on pricing", () => {
-		renderDock();
-		report("top", false);
-		report("demo", true);
-		expect(screen.getByText(m.dock_chip_fit())).toBeTruthy();
-		report("flow", true);
-		expect(screen.getByText(m.dock_chip_store())).toBeTruthy();
-		report("pricing", true);
-		expect(screen.getByText(m.dock_chip_plan({ currency: "RM" }))).toBeTruthy();
-	});
-
-	it("prefills the chat with the chip and reports which chip", () => {
-		renderDock();
-		report("top", false);
-		report("flow", true);
-		const chip = screen.getByText(m.dock_chip_store()).closest("a");
-		expect(chip?.getAttribute("href")).toContain(
-			encodeURIComponent(m.dock_chip_store()),
-		);
-		if (chip) fireEvent.click(chip);
-		expect(trackDemoCta).toHaveBeenCalledWith("dock", m.dock_chip_store());
-		// The pill itself is the plain demo ask.
-		const pill = demoLink().find((a) =>
-			a.textContent?.includes(m.book_demo_cta()),
-		);
-		expect(pill).toBeTruthy();
-		if (pill) fireEvent.click(pill);
-		expect(trackDemoCta).toHaveBeenCalledWith("dock", undefined);
-	});
-
-	it("quotes the plan question in the region's currency", () => {
-		renderDock();
-		report("top", false);
-		report("pricing", true);
-		fireEvent.click(screen.getByRole("button", { name: m.region_sg() }));
-		expect(screen.getByText(m.dock_chip_plan({ currency: "S$" }))).toBeTruthy();
+		const links = screen.getAllByRole("link");
+		expect(links).toHaveLength(1);
+		expect(links[0].textContent).toContain(m.book_demo_cta_long());
+		expect(links[0].getAttribute("href")).toContain("wa.me/60123456789");
+		fireEvent.click(links[0]);
+		expect(trackDemoCta).toHaveBeenCalledWith("dock");
 	});
 });

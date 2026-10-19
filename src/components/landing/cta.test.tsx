@@ -103,7 +103,7 @@ describe("hero — demo first", () => {
 	it("fires demo_cta with its placement, and the sign-up link its own", () => {
 		render(<Hero />);
 		fireEvent.click(demo()[0]);
-		expect(trackDemoCta).toHaveBeenCalledWith("hero", undefined);
+		expect(trackDemoCta).toHaveBeenCalledWith("hero");
 		fireEvent.click(signUp()[0]);
 		expect(trackSignupCta).toHaveBeenCalledWith("hero");
 	});
@@ -124,7 +124,7 @@ describe("final CTA — demo first", () => {
 		expect(signUp()[0].className).not.toContain("bg-accent");
 		expect(container.textContent).toContain(m.guarantee_line());
 		fireEvent.click(demo()[0]);
-		expect(trackDemoCta).toHaveBeenCalledWith("final", undefined);
+		expect(trackDemoCta).toHaveBeenCalledWith("final");
 	});
 
 	it("no longer promises a storefront in five minutes", () => {
@@ -139,7 +139,7 @@ describe("nav — demo first", () => {
 		expect(links(/^\/sign-in/).length).toBeGreaterThan(0);
 		expect(signUp()).toHaveLength(0);
 		fireEvent.click(demo()[0]);
-		expect(trackDemoCta).toHaveBeenCalledWith("nav", undefined);
+		expect(trackDemoCta).toHaveBeenCalledWith("nav");
 	});
 
 	it("opens the menu with the demo pill first, then Start free and Log in as outline rows", () => {

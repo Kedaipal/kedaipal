@@ -229,6 +229,11 @@ const REMOVED_LANDING_V2_KEYS = [
 	"nav_delivery",
 	// /pricing's bottom trial button became the shared StartFreeLink (final_cta).
 	"pricingpage_cta_trial_btn",
+	// The dock's per-section question chips (docket.io décor) were cut on
+	// sight: the dock is one pill.
+	"dock_chip_fit",
+	"dock_chip_store",
+	"dock_chip_plan",
 ];
 
 describe("landing v2 — cut sections stay cut", () => {

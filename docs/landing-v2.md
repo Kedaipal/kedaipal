@@ -214,10 +214,10 @@ link (y=381) and the pricing card (y=8,007).
 | The walkthrough | [`seller-flow.tsx`](../src/components/landing/seller-flow.tsx), its clock [`seller-flow-timeline.ts`](../src/components/landing/seller-flow-timeline.ts), `useTimeline` in [`useBeatLoop.ts`](../src/hooks/useBeatLoop.ts) |
 | The mocks it plays | `AfterPhone` ([`hero-stage.tsx`](../src/components/landing/hero-stage.tsx)), `HandshakePanes` ([`payment-handshake.tsx`](../src/components/landing/payment-handshake.tsx)), `DispatchCard` + `CourierCatalogue` ([`delivery.tsx`](../src/components/landing/delivery.tsx)) — all take `beat` from the walkthrough |
 | The fit check | [`fit-check.tsx`](../src/components/landing/fit-check.tsx) |
-| The dock | [`wa-dock.tsx`](../src/components/landing/wa-dock.tsx), [`useActiveSection.ts`](../src/hooks/useActiveSection.ts) |
-| Funnel event | `demo_cta` (`placement`, `chip`) — [`analytics.md`](./analytics.md) |
+| The dock | [`wa-dock.tsx`](../src/components/landing/wa-dock.tsx), [`useSectionVisibility.ts`](../src/hooks/useSectionVisibility.ts) |
+| Funnel event | `demo_cta` (`placement`) — [`analytics.md`](./analytics.md) |
 | Copy | `flow_*`, `fit_*`, `dock_*`, `commission_badge`, `book_demo_cta_long` in `messages/*.json` |
-| Tests | `seller-flow.test.tsx`, `seller-flow-timeline.test.ts`, `cta.test.tsx`, `wa-dock.test.tsx`, `useActiveSection.test.tsx`, `fit-check.test.tsx`, `real-sellers.test.tsx`, the rewritten `payment-handshake.test.tsx` and `delivery.test.tsx`, and new guards in `landing-redesign.test.ts` |
+| Tests | `seller-flow.test.tsx`, `seller-flow-timeline.test.ts`, `cta.test.tsx`, `wa-dock.test.tsx`, `useSectionVisibility.test.tsx`, `fit-check.test.tsx`, `real-sellers.test.tsx`, the rewritten `payment-handshake.test.tsx` and `delivery.test.tsx`, and new guards in `landing-redesign.test.ts` |
 
 **Demo-first (T1).** "Book a demo on WhatsApp" is the mint pill in the hero,
 the nav bar, the final CTA and `/pricing`'s close; "Start free — pay when you
@@ -269,18 +269,17 @@ as three cards before pricing, with the "not yet for you" row — the filter —
 and an outline WhatsApp link for the unsure (`fit_wa_message`, its own ask).
 The RM2,000 floor is test-pinned in every locale.
 
-**The dock (T1, from docket.io).** Appears once the hero has scrolled out,
-hides while the final CTA or the footer is on screen (a phone's footer is
-taller than the viewport, and the dock sat on its last lines), never shows to
-a signed-in seller (every other surface gives them their dashboard door; the
-dock is a prospect's tool), and never renders on SSR or first paint
-(`useSectionVisibility` is `null` until the observer reports). Chips are 44px
-tall and wrap on a phone. Two question
-chips follow the section under the reader — fit at the top, "show me a live
-store" on the walkthrough, "which plan fits RM___ a month" (currency per
-region) on pricing — each a WhatsApp link prefilled with the question, carried
-on `demo_cta` as `chip`. Bottom-right column on desktop, a bottom bar above
-the home indicator on a phone.
+**The dock (T1).** One pill, "Book a demo on WhatsApp": a bottom bar on a
+phone above the home indicator, a single pill bottom-right on desktop. It
+appears once the hero has scrolled out, hides while the final CTA or the
+footer is on screen (a phone's footer is taller than the viewport, and the
+dock sat on its last lines), never shows to a signed-in seller (every other
+surface gives them their dashboard door; the dock is a prospect's tool), and
+never renders on SSR or first paint (`useSectionVisibility` is `null` until
+the observer reports). The first cut copied docket.io's per-section question
+chips beside the pill; three loose bubbles stacked bottom-right read as
+clutter on sight (Arif, 19 Oct) and the hero already asks the one question
+that matters, so the chips, their copy and the section-tracking hook went.
 
 **Truth fixes that rode along (z8r3fdhj8p).** FAQ 1 and the final CTA stop
 promising "live in 5 minutes"; the guarantee line is the one time-to-live
