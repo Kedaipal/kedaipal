@@ -268,6 +268,10 @@ const REMOVED_LANDING_V2_KEYS = [
 	"paynow_seller_paid_meta",
 	"paynow_seller_body",
 	"flow_bubble_label",
+	// The handshake phone's "Status: Confirmed · pickup Sat" line: the status
+	// is a pill in the phone's header now and the pickup day is in the real
+	// page's "Pick up at" section, so the line said both twice.
+	"handshake_buyer_status",
 ];
 
 describe("landing v2 — cut sections stay cut", () => {

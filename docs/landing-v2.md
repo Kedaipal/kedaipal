@@ -257,7 +257,11 @@ invented both cards' copy. Every state in it is now a state the product has,
 and `pay-now.test.tsx` pins the confirming beat, the absent transfer door
 and the real rail names, **03** the buyer's order
 page and the seller's order card walk the handshake for buyers who still
-transfer (`HandshakePanes`, `HANDSHAKE_BEATS`), **04** the dispatch card
+transfer (`HandshakePanes`, `HANDSHAKE_BEATS`; its phone carries the same
+order line + status as 02 and, under the waiting and received states, the
+real page's next section — "Pick up at", with the point, address and
+hours — because a fixed-height phone showing an empty lower half
+read as unfinished, Arif 19 Oct), **04** the dispatch card
 quotes, books and ships (`DispatchCard`, `DISPATCH_BEATS`) with the courier
 catalogue under it. The four beat tables are flattened into ONE timeline
 (`TIMELINE`, 19 steps), so

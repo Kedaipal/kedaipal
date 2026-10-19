@@ -64,6 +64,21 @@ describe("HandshakePanes", () => {
 		expect(received).not.toContain(m.handshake_seller_claimed());
 	});
 
+	it("carries the real page's pickup point under every state, never an empty half", () => {
+		// The order page's next section (Pick up at) sits under each payment
+		// state — with the status line the pickup section now says, so it is
+		// not said twice.
+		for (const beat of [0, 3, RECEIVED_BEAT]) {
+			const text = textAt(beat);
+			expect(text).toContain(m.handshake_pickup_label());
+			expect(text).toContain(m.handshake_pickup_name());
+			expect(text).toContain(m.handshake_pickup_hours());
+		}
+		// The order's own line and status ride the phone's header, as in 02.
+		expect(textAt(0)).toContain(m.handshake_seller_pending());
+		expect(textAt(RECEIVED_BEAT)).toContain(m.handshake_seller_confirmed());
+	});
+
 	it("renders the received frame as a still", () => {
 		const text = textAt(0, true);
 		expect(text).toContain(m.handshake_buyer_received_title());
