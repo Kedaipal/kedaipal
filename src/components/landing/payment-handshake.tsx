@@ -56,7 +56,7 @@ function sellerStateAt(beat: number): SellerState {
 }
 
 /** A simulated tap: the button presses and a ring blooms off it. */
-function TapRing() {
+export function TapRing() {
 	return (
 		<span
 			aria-hidden
@@ -79,7 +79,7 @@ function ProofThumb({ className }: { className?: string }) {
 	);
 }
 
-function PaneLabel({ children }: { children: string }) {
+export function PaneLabel({ children }: { children: string }) {
 	return (
 		<span className="text-[0.8em] font-bold uppercase tracking-[0.1em] text-slate-500">
 			{children}

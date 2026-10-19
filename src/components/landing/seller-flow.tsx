@@ -11,6 +11,7 @@ import { CourierCatalogue, DispatchCard } from "./delivery";
 import { FadeIn } from "./fade-in";
 import { AfterPhone } from "./hero-stage";
 import { Eyebrow, RegionToggle } from "./landing-ui";
+import { PayNowPanes } from "./pay-now";
 import { HandshakePanes } from "./payment-handshake";
 import {
 	type FlowPhase,
@@ -22,9 +23,10 @@ import {
 
 /**
  * The seller-flow walkthrough (z8r3fdtpub T3, 19 Oct 2026): the order's
- * life, acted out on the real UI in three steps — it lands in the inbox, the
- * "dah transfer" becomes a matched payment, the courier is booked from the
- * order. It replaces the Payment Handshake and Delivery SECTIONS (their mocks
+ * life, acted out on the real UI in four steps — it lands in the inbox, the
+ * buyer pays online and the order confirms itself, a "dah transfer" becomes
+ * a matched payment for the buyers who still transfer, the courier is booked
+ * from the order. It replaces the Payment Handshake and Delivery SECTIONS (their mocks
  * moved in here; `landing-v2.md`): fourteen screens of text had become two
  * long sections a reader scrolled past, and the ask on this page is a demo,
  * so the page's job is to show the product moving, not to describe it.
@@ -46,7 +48,7 @@ import {
  * did — honesty does not get lost in a redesign.
  */
 
-const PHASES: readonly FlowPhase[] = [1, 2, 3];
+const PHASES: readonly FlowPhase[] = [1, 2, 3, 4];
 
 function StepButton({
 	phase,
@@ -165,16 +167,19 @@ export function SellerFlow() {
 		1: m.flow_step_1_title(),
 		2: m.flow_step_2_title(),
 		3: m.flow_step_3_title(),
+		4: m.flow_step_4_title(),
 	};
 	const bodies: Record<FlowPhase, string> = {
 		1: m.flow_step_1_body(),
 		2: m.flow_step_2_body(),
-		3: parcelsLive ? m.flow_step_3_body() : m.flow_step_3_body_rider(),
+		3: m.flow_step_3_body(),
+		4: parcelsLive ? m.flow_step_4_body() : m.flow_step_4_body_rider(),
 	};
 	const bubbles: Record<FlowPhase, string> = {
 		1: m.flow_bubble_1(),
 		2: m.flow_bubble_2(),
-		3: m.flow_bubble_3({ courier }),
+		3: m.flow_bubble_3(),
+		4: m.flow_bubble_4({ courier }),
 	};
 
 	return (
@@ -228,7 +233,7 @@ export function SellerFlow() {
 								<div className="h-1 flex-1 overflow-hidden rounded-full bg-border">
 									<div
 										className="h-full rounded-full bg-accent transition-[width] duration-500 ease-out motion-reduce:transition-none"
-										style={{ width: `${(phase / 3) * 100}%` }}
+										style={{ width: `${(phase / PHASES.length) * 100}%` }}
 									/>
 								</div>
 								<span className="whitespace-nowrap text-xs font-semibold text-muted-foreground">
@@ -301,9 +306,12 @@ export function SellerFlow() {
 													</div>
 												) : null}
 												{p === 2 ? (
-													<HandshakePanes beat={phaseBeat} still={still} />
+													<PayNowPanes beat={phaseBeat} still={still} />
 												) : null}
 												{p === 3 ? (
+													<HandshakePanes beat={phaseBeat} still={still} />
+												) : null}
+												{p === 4 ? (
 													<DispatchCard
 														beat={phaseBeat}
 														reduced={still}

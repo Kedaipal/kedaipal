@@ -213,12 +213,12 @@ link (y=381) and the pricing card (y=8,007).
 |---|---|
 | The one accent ask + the sign-up text link + the badge | `DemoPill`, `StartFreeLink`, `CommissionBadge` in [`landing-ui.tsx`](../src/components/landing/landing-ui.tsx) |
 | The walkthrough | [`seller-flow.tsx`](../src/components/landing/seller-flow.tsx), its clock [`seller-flow-timeline.ts`](../src/components/landing/seller-flow-timeline.ts), `useTimeline` in [`useBeatLoop.ts`](../src/hooks/useBeatLoop.ts) |
-| The mocks it plays | `AfterPhone` ([`hero-stage.tsx`](../src/components/landing/hero-stage.tsx)), `HandshakePanes` ([`payment-handshake.tsx`](../src/components/landing/payment-handshake.tsx)), `DispatchCard` + `CourierCatalogue` ([`delivery.tsx`](../src/components/landing/delivery.tsx)) — all take `beat` from the walkthrough |
+| The mocks it plays | `AfterPhone` ([`hero-stage.tsx`](../src/components/landing/hero-stage.tsx)), `PayNowPanes` ([`pay-now.tsx`](../src/components/landing/pay-now.tsx)), `HandshakePanes` ([`payment-handshake.tsx`](../src/components/landing/payment-handshake.tsx)), `DispatchCard` + `CourierCatalogue` ([`delivery.tsx`](../src/components/landing/delivery.tsx)) — all take `beat` from the walkthrough |
 | The fit check | [`fit-check.tsx`](../src/components/landing/fit-check.tsx) |
 | The dock | [`wa-dock.tsx`](../src/components/landing/wa-dock.tsx), [`useSectionVisibility.ts`](../src/hooks/useSectionVisibility.ts) |
 | Funnel event | `demo_cta` (`placement`) — [`analytics.md`](./analytics.md) |
-| Copy | `flow_*`, `fit_*`, `dock_*`, `commission_badge`, `book_demo_cta_long` in `messages/*.json` |
-| Tests | `seller-flow.test.tsx`, `seller-flow-timeline.test.ts`, `cta.test.tsx`, `wa-dock.test.tsx`, `useSectionVisibility.test.tsx`, `fit-check.test.tsx`, the rewritten `payment-handshake.test.tsx` and `delivery.test.tsx`, and new guards in `landing-redesign.test.ts` |
+| Copy | `flow_*`, `paynow_*`, `fit_*`, `dock_*`, `commission_badge`, `book_demo_cta_long` in `messages/*.json` |
+| Tests | `seller-flow.test.tsx`, `seller-flow-timeline.test.ts`, `pay-now.test.tsx`, `cta.test.tsx`, `wa-dock.test.tsx`, `useSectionVisibility.test.tsx`, `fit-check.test.tsx`, the rewritten `payment-handshake.test.tsx` and `delivery.test.tsx`, and new guards in `landing-redesign.test.ts` |
 
 **Demo-first (T1).** "Book a demo on WhatsApp" is the mint pill in the hero,
 the nav bar, the final CTA and `/pricing`'s close; "Start free — pay when you
@@ -241,12 +241,17 @@ The Enterprise door reads "Get an Enterprise quote" (was "Talk to Arif"; the
 chat still lands with Arif). `/pricing`'s Pro card lost its mint pill — the
 demo is the one accent ask on that page too.
 
-**The walkthrough (T3).** One navy frame, three steps, the real UI: **01** the
-order lands in the Orders inbox (`AfterPhone`, beats 0–1), **02** the buyer's
-order page and the seller's order card walk the handshake (`HandshakePanes`,
-`HANDSHAKE_BEATS`), **03** the dispatch card quotes, books and ships
-(`DispatchCard`, `DISPATCH_BEATS`) with the courier catalogue under it. The
-three beat tables are flattened into ONE timeline (`TIMELINE`, 13 steps), so
+**The walkthrough (T3).** One navy frame, four steps, the real UI: **01** the
+order lands in the Orders inbox (`AfterPhone`, beats 0–1), **02** the buyer
+taps Pay now, HitPay's checkout opens with the real rails, the QR is scanned
+and the order confirms ITSELF — the seller's card reads "Paid online via
+HitPay", nobody tapped (`PayNowPanes`, `PAYNOW_BEATS`; added 19 Oct at Arif's
+ask, "showcase our payment provider flow as well"), **03** the buyer's order
+page and the seller's order card walk the handshake for buyers who still
+transfer (`HandshakePanes`, `HANDSHAKE_BEATS`), **04** the dispatch card
+quotes, books and ships (`DispatchCard`, `DISPATCH_BEATS`) with the courier
+catalogue under it. The four beat tables are flattened into ONE timeline
+(`TIMELINE`, 18 steps), so
 the mocks stay the source of their own stories and the walkthrough cannot
 drift from them; the mocks' old reset beats went — the frame cross-fades
 between phases instead. **All three phases stay mounted in ONE grid cell**,
@@ -265,7 +270,7 @@ accessible name is "Step N: title body" (a visually-hidden prefix — an
 screen reader). The courier catalogue sits OUTSIDE the frame on every
 breakpoint: it is information, not decoration. A WhatsApp bubble in the corner says
 what the buyer gets at each step — the one message per order, then the order
-page. Phase 03 follows the region: Singapore gets the rider-only step copy,
+page. Phase 04 follows the region: Singapore gets the rider-only step copy,
 Lalamove on the card, no chilled or frozen pill, and the "being enabled"
 note, exactly as the Delivery section did. The hero's inbox, the handshake and the card now tell ONE order
 (ORD-0182 · Aina · RM 181 from Kedai Daging Amir — truth fix 4, pinned by

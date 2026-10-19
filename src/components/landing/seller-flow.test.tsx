@@ -107,7 +107,7 @@ function wholeFrame(): string {
 }
 
 /** Buttons are named by their visible copy, "Step N: <title> <body>". */
-function stepButton(n: 1 | 2 | 3) {
+function stepButton(n: 1 | 2 | 3 | 4) {
 	return screen.getByRole("button", {
 		name: new RegExp(`^${m.flow_step_label({ step: n })}`),
 	});
@@ -148,44 +148,59 @@ describe("SellerFlow", () => {
 		expect(wholeFrame()).toContain(m.flow_bubble_1());
 	});
 
-	it("phase 2 opens on How to pay", () => {
+	it("phase 2 opens on Pay now and ends paid online, by itself", () => {
 		vi.useFakeTimers();
 		const { container } = renderFlow();
 		stepTo(firstStepOf(2));
-		expect(frame()).toContain(m.handshake_how_to_pay());
-		expect(frame()).not.toContain(m.delivery_quote_title());
+		expect(frame()).toContain(
+			m.paynow_pay_now({ amount: m.handshake_amount() }),
+		);
+		expect(frame()).not.toContain(m.handshake_how_to_pay());
 		expect(container.textContent).toContain(m.flow_progress({ step: 2 }));
 		expect(stepButton(2).getAttribute("aria-current")).toBe("step");
+		stepTo(firstStepOf(3) - 1);
+		expect(frame()).toContain(m.paynow_seller_paid());
+		expect(wholeFrame()).toContain(m.flow_bubble_2());
 	});
 
-	it("phase 3 opens on the asking beat and ends shipped with the quoted courier", () => {
+	it("phase 3 opens on How to pay — the handshake for buyers who still transfer", () => {
+		vi.useFakeTimers();
+		const { container } = renderFlow();
+		stepTo(firstStepOf(3));
+		expect(frame()).toContain(m.handshake_how_to_pay());
+		expect(frame()).not.toContain(m.delivery_quote_title());
+		expect(container.textContent).toContain(m.flow_progress({ step: 3 }));
+		expect(stepButton(3).getAttribute("aria-current")).toBe("step");
+	});
+
+	it("phase 4 opens on the asking beat and ends shipped with the quoted courier", () => {
 		vi.useFakeTimers();
 		renderFlow();
-		stepTo(firstStepOf(3));
+		stepTo(firstStepOf(4));
 		expect(frame()).toContain(m.delivery_quote_getting());
 		stepTo(TIMELINE_HOLDS.length - 1);
 		const courier = mockQuotes("MY")[0].name;
 		expect(frame()).toContain(m.delivery_quote_shipped({ courier }));
-		expect(wholeFrame()).toContain(m.flow_bubble_3({ courier }));
+		expect(wholeFrame()).toContain(m.flow_bubble_4({ courier }));
 	});
 
 	it("clicking a step jumps there", () => {
 		vi.useFakeTimers();
 		renderFlow();
-		fireEvent.click(stepButton(3));
+		fireEvent.click(stepButton(4));
 		expect(frame()).toContain(m.delivery_quote_title());
-		expect(stepButton(3).getAttribute("aria-current")).toBe("step");
+		expect(stepButton(4).getAttribute("aria-current")).toBe("step");
 		expect(stepButton(1).getAttribute("aria-current")).toBeNull();
 	});
 
-	it("SG phase 03 is rider-only", () => {
+	it("SG phase 04 is rider-only", () => {
 		vi.useFakeTimers();
 		const { container } = renderFlow();
 		switchToSg();
-		fireEvent.click(stepButton(3));
+		fireEvent.click(stepButton(4));
 		const text = container.textContent ?? "";
-		expect(text).toContain(m.flow_step_3_body_rider());
-		expect(text).not.toContain(m.flow_step_3_body());
+		expect(text).toContain(m.flow_step_4_body_rider());
+		expect(text).not.toContain(m.flow_step_4_body());
 		expect(text).toContain(m.delivery_sg_note());
 		const grid = screen.getByRole("list", {
 			name: m.delivery_catalogue_label(),
@@ -202,7 +217,7 @@ describe("SellerFlow", () => {
 		expect(frame()).toContain(m.hero_after_status_1());
 		act(() => vi.advanceTimersByTime(60_000));
 		expect(frame()).not.toContain(m.handshake_how_to_pay());
-		fireEvent.click(stepButton(2));
+		fireEvent.click(stepButton(3));
 		expect(frame()).toContain(m.handshake_buyer_received_title());
 	});
 
@@ -229,10 +244,10 @@ describe("SellerFlow", () => {
 		const cells = screen
 			.getByTestId("flow-frame")
 			.querySelectorAll("[data-phase]");
-		expect(cells).toHaveLength(3);
+		expect(cells).toHaveLength(4);
 		// The inactive phases render their last beat (a still), hidden.
 		const dispatch = [...cells].find(
-			(c) => c.getAttribute("data-phase") === "3",
+			(c) => c.getAttribute("data-phase") === "4",
 		);
 		expect(dispatch?.getAttribute("data-active")).toBe("false");
 		expect(dispatch?.getAttribute("aria-hidden")).toBe("true");
@@ -277,6 +292,7 @@ describe("SellerFlow", () => {
 		expect(screen.getAllByText(m.flow_step_1_body()).length).toBeGreaterThan(0);
 		expect(screen.getByText(m.flow_step_2_body())).toBeTruthy();
 		expect(screen.getByText(m.flow_step_3_body())).toBeTruthy();
+		expect(screen.getByText(m.flow_step_4_body())).toBeTruthy();
 		expect(screen.getByTestId("flow-frame").getAttribute("aria-hidden")).toBe(
 			"true",
 		);
