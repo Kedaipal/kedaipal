@@ -241,7 +241,7 @@ describe("landing v2 — cut sections stay cut", () => {
 
 	// Prefixes = every section on `/`.
 	const onLanding =
-		/^(nav_|hero_|demo_video_|proof_|handshake_|delivery_|pay_|pricing_|faq_|final_|footer_|guarantee_|region_)/;
+		/^(nav_|hero_|demo_video_|proof_|handshake_|delivery_|flow_|fit_|dock_|commission_|pay_|pricing_|faq_|final_|footer_|guarantee_|region_)/;
 
 	it("never quotes the retired calendar trial or RM299 on a key the landing renders", () => {
 		// Start-when-you-sell replaced the calendar trial, and RM299 was Scale's
