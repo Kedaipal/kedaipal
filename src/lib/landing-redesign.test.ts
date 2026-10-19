@@ -348,3 +348,54 @@ describe("landing v2 — the walkthrough replaces Handshake and Delivery", () =>
 		expect(route).not.toMatch(/PaymentHandshake|<Delivery/);
 	});
 });
+
+/**
+ * One time-to-live story (truth fix 3, z8r3fdhj8p): the page used to claim
+ * "live in under 5 minutes" (FAQ), "live in 5 minutes" (final CTA) and "live
+ * in one demo, running by the weekend" (proof) at once. Demo-first keeps the
+ * one a demo can promise — the guarantee line — and nothing else on the
+ * landing names a time to live.
+ */
+describe("landing — one time-to-live claim", () => {
+	const onLanding =
+		/^(nav_|hero_|demo_video_|proof_|handshake_|delivery_|flow_|fit_|dock_|commission_|pay_|pricing_|faq_|final_|footer_|region_)/;
+	it("never promises five minutes, in any locale", () => {
+		const fiveMinutes = /\b5 ?min|5 分钟|5 minit/i;
+		for (const [locale, catalog] of catalogs) {
+			const hits = Object.entries(catalog)
+				.filter(([k, v]) => onLanding.test(k) && fiveMinutes.test(String(v)))
+				.map(([k]) => k);
+			expect(hits, `${locale}: ${hits.join(", ")}`).toEqual([]);
+		}
+	});
+
+	it("drops the founder-facing proof metrics and the seven surplus seller cards", () => {
+		const gone = [
+			"proof_stat_label",
+			"proof_stat_heading",
+			"proof_stat_body",
+			"proof_stat_1_label",
+			"proof_stat_1_value",
+			"proof_stat_2_label",
+			"proof_stat_2_value",
+			"proof_kind_1",
+			"proof_kind_1_body",
+			"proof_kind_2",
+			"proof_kind_2_body",
+			"proof_kind_3",
+			"proof_kind_3_body",
+			"proof_kind_4",
+			"proof_kind_4_body",
+			"proof_kind_6",
+			"proof_kind_6_body",
+			"proof_kind_9",
+			"proof_kind_9_body",
+			"proof_kind_11",
+			"proof_kind_11_body",
+		];
+		for (const [locale, catalog] of catalogs) {
+			const left = gone.filter((k) => k in catalog);
+			expect(left, `${locale}: ${left.join(", ")}`).toEqual([]);
+		}
+	});
+});

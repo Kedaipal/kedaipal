@@ -6,7 +6,7 @@ import {
 	useMotionValue,
 	useReducedMotion,
 } from "framer-motion";
-import { ArrowLeft, ArrowRight, Star, Store } from "lucide-react";
+import { ArrowLeft, ArrowRight, Store } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
 import { m } from "../../paraglide/messages";
 import { FadeIn } from "./fade-in";
@@ -18,9 +18,11 @@ import { Eyebrow } from "./landing-ui";
  * paying roster (prod Convex, via the MCP), deliberately anonymized — the
  * owner's pivot pulled customer names, logos and the paying/cohort badges
  * back off the page after briefly shipping them, so nothing here names a
- * brand, and the no-fabricated-quotes stance stands as ever. Six kinds ship
- * with photos; the remaining kind labels (`proof_kind_4/6/7/8`) stay in the
- * catalogs awaiting images (Higgsfield credits ran out mid-batch, 29 Aug).
+ * brand, and the no-fabricated-quotes stance stands as ever. Five cards, the
+ * five kinds in the demo video (19 Oct 2026, truth fix 8); the navy "why
+ * they switch" closer with its founder metrics went the same day (fix 9) —
+ * "Ad spend RM 0" means nothing to a seller. A named seller quote waits on
+ * the seller.
  *
  * Interaction: the rail DRIFTS continuously (the track renders two copies
  * and the rendered offset wraps modulo one copy's width — the infinite
@@ -43,35 +45,26 @@ interface SellerCard {
 	image: string;
 }
 
+/**
+ * The five kinds in the demo video (`demo_video_heading` promises five), in
+ * its order: a custom cake, frozen food, a live sale, a booking, apparel.
+ * Twelve cards under that heading was truth fix 8 (z8r3fdhj8p); the surplus
+ * kinds' copy left the catalogs with them.
+ */
 const CARDS: SellerCard[] = [
-	{ label: m.proof_kind_1, body: m.proof_kind_1_body, image: "seller-lekor" },
-	{ label: m.proof_kind_12, body: m.proof_kind_12_body, image: "seller-live" },
-	{ label: m.proof_kind_8, body: m.proof_kind_8_body, image: "seller-fashion" },
-	{
-		label: m.proof_kind_2,
-		body: m.proof_kind_2_body,
-		image: "seller-tentwash",
-	},
-	{ label: m.proof_kind_4, body: m.proof_kind_4_body, image: "seller-dessert" },
-	{
-		label: m.proof_kind_11,
-		body: m.proof_kind_11_body,
-		image: "seller-prints",
-	},
-	{ label: m.proof_kind_3, body: m.proof_kind_3_body, image: "seller-fish" },
 	{ label: m.proof_kind_5, body: m.proof_kind_5_body, image: "seller-cake" },
-	{ label: m.proof_kind_6, body: m.proof_kind_6_body, image: "seller-meat" },
-	{
-		label: m.proof_kind_7,
-		body: m.proof_kind_7_body,
-		image: "seller-campsite",
-	},
-	{ label: m.proof_kind_9, body: m.proof_kind_9_body, image: "seller-fitness" },
 	{
 		label: m.proof_kind_10,
 		body: m.proof_kind_10_body,
 		image: "seller-frozen",
 	},
+	{ label: m.proof_kind_12, body: m.proof_kind_12_body, image: "seller-live" },
+	{
+		label: m.proof_kind_7,
+		body: m.proof_kind_7_body,
+		image: "seller-campsite",
+	},
+	{ label: m.proof_kind_8, body: m.proof_kind_8_body, image: "seller-fashion" },
 ];
 
 /** One arrow-press advances roughly one card (width + gap). */
@@ -81,7 +74,11 @@ const DRIFT = 0.022;
 
 function CardGroup({ hidden = false }: { hidden?: boolean }) {
 	return (
-		<div aria-hidden={hidden || undefined} className="flex shrink-0 gap-5 pr-5">
+		<div
+			aria-hidden={hidden || undefined}
+			data-testid="seller-cards"
+			className="flex shrink-0 gap-5 pr-5"
+		>
 			{CARDS.map((card) => (
 				<article
 					key={card.image}
@@ -110,41 +107,6 @@ function CardGroup({ hidden = false }: { hidden?: boolean }) {
 					</div>
 				</article>
 			))}
-
-			{/* The closer: why they switch — the navy stat card ends each loop. */}
-			<article className="flex w-[280px] shrink-0 flex-col rounded-3xl bg-cta-mesh p-6 text-cta-mesh-foreground shadow-lg sm:w-[310px]">
-				<p className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-widest text-accent">
-					<Star className="size-3.5 fill-accent" aria-hidden />
-					{m.proof_stat_label()}
-				</p>
-				<h3
-					className="mt-4 text-xl font-bold"
-					style={{ letterSpacing: "-0.02em" }}
-				>
-					{m.proof_stat_heading()}
-				</h3>
-				<p className="mt-2 text-sm leading-relaxed text-cta-mesh-foreground/65">
-					{m.proof_stat_body()}
-				</p>
-				<div className="mt-auto space-y-3 border-t border-white/10 pt-5">
-					<div className="flex items-center justify-between gap-2">
-						<span className="text-sm text-cta-mesh-foreground/65">
-							{m.proof_stat_1_label()}
-						</span>
-						<span className="text-base font-bold">
-							{m.proof_stat_1_value()}
-						</span>
-					</div>
-					<div className="flex items-center justify-between gap-2">
-						<span className="text-sm text-cta-mesh-foreground/65">
-							{m.proof_stat_2_label()}
-						</span>
-						<span className="text-base font-bold">
-							{m.proof_stat_2_value()}
-						</span>
-					</div>
-				</div>
-			</article>
 		</div>
 	);
 }
