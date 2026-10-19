@@ -1,64 +1,44 @@
-import { useInView, useReducedMotion } from "framer-motion";
-import { Check, Loader2, Snowflake, Truck, Zap } from "lucide-react";
-import { useRef } from "react";
-import {
-	BILLING_CURRENCY_FOR_COUNTRY,
-	type BillingCurrency,
-} from "../../../convex/lib/plans";
-import { useBeatLoop } from "../../hooks/useBeatLoop";
-import { useLandingRegionContext } from "../../hooks/useLandingRegion";
-import {
-	type Courier,
-	type CourierProvider,
-	couriersFor,
-	hasParcelCouriers,
-	mockQuotes,
-	type QuotedCourier,
+import { Check, Loader2, Snowflake, Truck } from "lucide-react";
+import type { BillingCurrency } from "../../../convex/lib/plans";
+import type {
+	Courier,
+	CourierProvider,
+	QuotedCourier,
 } from "../../lib/couriers";
 import { formatPrice } from "../../lib/format";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 import { AppImage } from "../ui/app-image";
-import { FadeIn } from "./fade-in";
-import {
-	Eyebrow,
-	LogoMarqueeRow,
-	logoPillClass,
-	RegionToggle,
-} from "./landing-ui";
+import { LogoMarqueeRow, logoPillClass } from "./landing-ui";
 
 /**
- * Delivery — "Book the courier from the order. Cold chain included." (landing
- * v2, ClickUp z8r3fdegej). The section the target tier (Pro) is sold on: a
- * seller quotes their own Delyva couriers from the order, cheapest first,
- * parcel / chilled / frozen, and the buyer gets the tracking number on
- * WhatsApp. Lalamove covers the same-day rider case.
+ * Delivery — the courier catalogue and the dispatch-card mock, phase 03 of
+ * the seller-flow walkthrough (`seller-flow.tsx`, 19 Oct 2026; it was its own
+ * section, "Book the courier from the order. Cold chain included.", from
+ * landing v2 until then — the walkthrough's step copy carries the claim now).
+ * A seller quotes their own Delyva couriers from the order, cheapest first,
+ * parcel / chilled / frozen, and the buyer gets the tracking number on their
+ * order page. Lalamove covers the same-day rider case.
  *
- * Two halves. Left: the claim, three bullets, the courier catalogue
- * (`src/lib/couriers.ts` — a grid on md+, one auto-scrolling rail below it;
- * seventeen tiles two-up ran 1,300px on a phone in the design review) and the
- * cold-chain footnote. Right: a mock of the real dispatch card
- * (`delyva-dispatch-card.tsx` — weight, parcel type, quote list with the
- * cheapest pre-selected and "buyer paid" beside it, then the book button),
- * looping quote → book → shipped so the section moves like the rest. The
+ * The catalogue (`src/lib/couriers.ts`) is a grid on md+, one auto-scrolling
+ * rail below it (seventeen tiles two-up ran 1,300px on a phone in the design
+ * review). The card mocks the real dispatch card (`delyva-dispatch-card.tsx`
+ * — weight, parcel type, quote list with the cheapest pre-selected and
+ * "buyer paid" beside it, then the book button), quote → book → shipped. The
  * first beat is a STATE, not a gap (15 Oct 2026 canvas, artboard 3 + M3):
  * skeleton rows hold the list's height while "20+ couriers" are asked and the
  * book button is a disabled "Getting quotes…" — the old loop opened on an
  * empty list under a button that already named a courier and a price.
  *
- * MY/SG share the page's one region (`LandingRegionProvider`): the toggle
- * here and the one in Pricing move the same state. For SG the Delyva tenant
- * has no couriers enabled yet (docs/delivery-delyva.md, 3 Sep) — the
- * catalogue hides those rows, the rail shows what IS live (Lalamove), and a
- * one-line note says the rest is being enabled. Honest beats a logo wall for a
- * courier the seller can't book — and honesty runs all the way up: with no
- * parcel lane live (`hasParcelCouriers`) the heading, sub and first bullet
- * switch to their rider-only variants and the cold-chain bullet drops, so the
- * section never promises "20+ couriers, chilled or frozen" above a catalogue
- * of one. The mock card reads the provider off the quoted row the same way:
- * a Lalamove quote is booked on the seller's Lalamove wallet, not Delyva
- * credit (`docs/delivery-lalamove.md`), and its badge, note and shipped line
- * say so.
+ * The walkthrough passes the page's one region (`LandingRegionProvider`). For
+ * SG the Delyva tenant has no couriers enabled yet (docs/delivery-delyva.md,
+ * 3 Sep) — the catalogue hides those rows, the rail shows what IS live
+ * (Lalamove), and the walkthrough's note says the rest is being enabled.
+ * Honest beats a logo wall for a courier the seller can't book, and the
+ * step copy follows (`flow_step_3_body_rider` where no parcel lane is live).
+ * The card reads the provider off the quoted row the same way: a Lalamove
+ * quote is booked on the seller's Lalamove wallet, not Delyva credit
+ * (`docs/delivery-lalamove.md`), and its badge, note and shipped line say so.
  *
  * Every courier mark is a brand-approved SVG under `public/img/courier/` or a
  * name chip with the same initials avatar the real dispatch card uses for a
@@ -66,8 +46,9 @@ import {
  * placeholders were exactly that, and the AC says local assets only).
  */
 
-/** Beat durations, ms: asking → quotes in → cheapest chosen → booked → shipped → clear. */
-export const DISPATCH_BEATS = [1100, 1400, 1100, 1300, 2600, 450] as const;
+/** Beat holds, ms: asking → quotes in → cheapest chosen → booked → shipped. The
+ *  walkthrough's timeline reads these (`seller-flow-timeline.ts`). */
+export const DISPATCH_BEATS = [1100, 1400, 1100, 1300, 2600] as const;
 /** The beat that shows the booked courier as shipped (`delivery.test.tsx` drives to it). */
 export const SHIPPED_BEAT = 4;
 /** Skeleton rows on the asking beat — the real card's loading state, three deep. */
@@ -149,7 +130,7 @@ function CourierChip({
 /** Fewer chips than this and a looping rail just repeats one logo — show the grid. */
 const RAIL_MIN = 4;
 
-function CourierCatalogue({ couriers }: { couriers: Courier[] }) {
+export function CourierCatalogue({ couriers }: { couriers: Courier[] }) {
 	const rail = couriers.length >= RAIL_MIN;
 	return (
 		<>
@@ -157,7 +138,7 @@ function CourierCatalogue({ couriers }: { couriers: Courier[] }) {
 			    region has too few couriers for a rail to make sense). */}
 			<ul
 				className={cn("flex-wrap gap-2.5 md:flex", rail ? "hidden" : "flex")}
-				aria-label={m.delivery_label()}
+				aria-label={m.delivery_catalogue_label()}
 			>
 				{couriers.map((c) => (
 					<li key={c.id}>
@@ -203,25 +184,26 @@ function quoteMeta(courier: Courier): string {
 
 /**
  * The dispatch card, as a still that moves: the real card's weight → parcel
- * type → quote list → book flow (`delyva-dispatch-card.tsx`), looping. Decorative
- * (`aria-hidden`) — the copy column carries the content — and fixed-height so
- * the beats never shift the page.
+ * type → quote list → book flow (`delyva-dispatch-card.tsx`). Phase 03 of the
+ * seller-flow walkthrough, which owns the clock, the region and the
+ * `aria-hidden` frame; the beat comes in. Fixed-height so the beats never
+ * shift the page.
  */
-function DispatchPlay({
+export function DispatchCard({
+	beat,
+	reduced,
 	currency,
 	quotes,
 	parcelsLive,
 }: {
+	beat: number;
+	/** Reduced motion: the shipped frame as one still. */
+	reduced: boolean;
 	currency: BillingCurrency;
 	quotes: QuotedCourier[];
 	/** Whether the region has a parcel network to ask — SG asks one rider. */
 	parcelsLive: boolean;
 }) {
-	const stageRef = useRef<HTMLDivElement>(null);
-	const inView = useInView(stageRef, { margin: "-10% 0px" });
-	const reduced = useReducedMotion() ?? false;
-	const beat = useBeatLoop(!reduced && inView, DISPATCH_BEATS);
-
 	// Reduced motion: the last story beat as one still — quotes in, cheapest
 	// chosen, booked and shipped.
 	const quotesIn = reduced || beat >= 1;
@@ -238,8 +220,6 @@ function DispatchPlay({
 
 	return (
 		<div
-			ref={stageRef}
-			aria-hidden="true"
 			// `contain-inline-size`: the quote rows carry nowrap (truncated) meta
 			// lines whose full width would otherwise size the mobile grid column
 			// past the viewport — the card must take its width from the page,
@@ -470,101 +450,5 @@ function DispatchPlay({
 				{rider ? m.delivery_quote_note_rider() : m.delivery_quote_note()}
 			</p>
 		</div>
-	);
-}
-
-export function Delivery() {
-	const [region, setRegion] = useLandingRegionContext();
-	const currency = BILLING_CURRENCY_FOR_COUNTRY[region];
-	const couriers = couriersFor(region);
-	const quotes = mockQuotes(region);
-	const parcelsLive = hasParcelCouriers(region);
-	const riderLive = couriers.some((c) => c.group === "sameday");
-
-	return (
-		<section
-			id="delivery"
-			aria-labelledby="delivery-heading"
-			className="border-t border-border bg-background"
-		>
-			<div className="mx-auto max-w-6xl px-5 py-20 md:px-8 md:py-24">
-				<div className="grid gap-12 lg:grid-cols-[1.1fr_0.9fr] lg:items-center lg:gap-16">
-					{/* `min-w-0`: the mobile rail's track is thousands of px wide, and a
-					    grid item's automatic minimum would size the column to it — the
-					    whole page then scrolls sideways (caught at 390 in verification). */}
-					<div className="min-w-0">
-						<FadeIn>
-							<div className="flex flex-wrap items-center justify-between gap-3">
-								<Eyebrow>{m.delivery_label()}</Eyebrow>
-								<RegionToggle region={region} onChange={setRegion} />
-							</div>
-							<h2
-								id="delivery-heading"
-								className="mt-4 max-w-xl text-3xl font-bold leading-[1.1] md:text-5xl"
-								style={{ letterSpacing: "-0.02em" }}
-							>
-								{/* Rider-only regions (SG today) get the honest heading: no
-								    "cold chain included" above a one-courier catalogue. */}
-								{parcelsLive
-									? m.delivery_heading()
-									: m.delivery_heading_rider()}
-							</h2>
-							<p className="mt-4 max-w-xl text-base leading-relaxed text-muted-foreground md:text-lg">
-								{parcelsLive ? m.delivery_sub() : m.delivery_sub_rider()}
-							</p>
-							<ul className="mt-6 flex flex-col gap-3">
-								{(
-									[
-										// Whose account the seller books on — Delyva where parcels
-										// are live, Lalamove where only the rider is.
-										[
-											Truck,
-											parcelsLive
-												? m.delivery_point_1()
-												: m.delivery_point_1_rider(),
-										],
-										// The cold-chain bullet only where a cold lane is bookable.
-										...(parcelsLive
-											? [[Snowflake, m.delivery_point_2()] as const]
-											: []),
-										// The rider bullet only where a rider is actually bookable.
-										...(riderLive
-											? [[Zap, m.delivery_point_3()] as const]
-											: []),
-									] as const
-								).map(([Icon, text]) => (
-									<li
-										key={text}
-										className="flex items-start gap-3 text-sm md:text-base"
-									>
-										<span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-accent/15 text-accent-emphasis">
-											<Icon className="size-3.5" />
-										</span>
-										{text}
-									</li>
-								))}
-							</ul>
-						</FadeIn>
-
-						<FadeIn delay={0.1}>
-							<div className="mt-8">
-								<CourierCatalogue couriers={couriers} />
-							</div>
-							<p className="mt-4 text-xs leading-relaxed text-muted-foreground">
-								{parcelsLive ? m.delivery_cold_note() : m.delivery_sg_note()}
-							</p>
-						</FadeIn>
-					</div>
-
-					<FadeIn delay={0.15}>
-						<DispatchPlay
-							currency={currency}
-							quotes={quotes}
-							parcelsLive={parcelsLive}
-						/>
-					</FadeIn>
-				</div>
-			</div>
-		</section>
 	);
 }

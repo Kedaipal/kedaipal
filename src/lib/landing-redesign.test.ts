@@ -203,6 +203,28 @@ const REMOVED_LANDING_V2_KEYS = [
 	"pricing_feat_radius",
 	// The hero trust line's render site (TrustLine) went with the old hero.
 	"hero_trust",
+	// The Payment Handshake and Delivery SECTIONS folded into the seller-flow
+	// walkthrough (19 Oct 2026, z8r3fdtpub T3): their mocks moved, their copy
+	// columns did not — the walkthrough's `flow_*` step text carries the claim.
+	"handshake_label",
+	"handshake_heading",
+	"handshake_body_1",
+	"handshake_body_strong",
+	"handshake_body_2",
+	"handshake_point_1",
+	"handshake_point_2",
+	"handshake_point_3",
+	"handshake_note",
+	"delivery_label",
+	"delivery_heading",
+	"delivery_heading_rider",
+	"delivery_sub",
+	"delivery_sub_rider",
+	"delivery_point_1",
+	"delivery_point_1_rider",
+	"delivery_point_2",
+	"delivery_point_3",
+	"delivery_cold_note",
 ];
 
 describe("landing v2 — cut sections stay cut", () => {

@@ -1,17 +1,13 @@
-import { useInView, useReducedMotion } from "framer-motion";
 import { Check, Download, ImagePlus } from "lucide-react";
-import { useRef } from "react";
-import { useBeatLoop } from "../../hooks/useBeatLoop";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 import { WhatsAppIcon } from "../dashboard/brand-icons";
-import { FadeIn } from "./fade-in";
-import { Eyebrow } from "./landing-ui";
 
 /**
- * "The payment handshake" — the landing section for universal pain #2
- * (chasing "dah transfer" screenshots). Left: claim + proof bullets.
- * Right: the flow ACTED OUT on loop, as it really runs since 4 Aug 2026
+ * "The payment handshake" — phase 02 of the seller-flow walkthrough
+ * (`seller-flow.tsx`, 19 Oct 2026; it was its own section until then, with
+ * a copy column the walkthrough's step text now carries). The flow ACTED
+ * OUT, as it really runs since 4 Aug 2026
  * (docs/one-message-per-order.md, docs/payment-handshake.md): the buyer is
  * never messaged after checkout — they pay from **How to pay** on their order
  * page, tap **I've paid**, attach the (mandatory, z8r3fdnpxf) screenshot and
@@ -25,24 +21,24 @@ import { Eyebrow } from "./landing-ui";
  *
  * Two panes, buyer phone beside the seller's order card, side by side from a
  * 30rem-wide column and stacked below it (a 390 phone can't hold both at a
- * legible size). CSS only, like the hero stage: `useBeatLoop` flips a beat
- * index, keyed remounts replay the `kp-*` keyframes, `transition-*` classes
- * do the rest. The clock only runs on a visible tab with the mock in view;
- * reduced motion renders the LAST story beat as a still. Every pane has a
- * fixed height so beats never shift the page (the buried-chats lesson), and
- * the frame is never blank on beat 0 — the first beat IS a state. The mock is
- * decorative (`aria-hidden`); the copy column carries the content.
+ * legible size). CSS only, like the hero stage: the walkthrough's timeline
+ * flips a beat index, keyed remounts replay the `kp-*` keyframes,
+ * `transition-*` classes do the rest. Reduced motion renders the LAST story
+ * beat as a still. Every pane has a fixed height so beats never shift the
+ * page (the buried-chats lesson), and the frame is never blank on beat 0 —
+ * the first beat IS a state. The mock is decorative; the walkthrough's step
+ * copy carries the content.
  */
 
 /**
  * Beat holds, ms, on the M4 timeline: idle → tap "I've paid" (1.2 s) → the
  * screenshot lands (2.0 s) → Submit (3.2 s) → the seller taps (5.0 s) → both
- * sides flip (5.6 s) → fade (7.5 s), 8 s a loop.
+ * sides flip (5.6 s), 7.8 s a phase. The walkthrough's timeline reads these
+ * (`seller-flow-timeline.ts`); the fade between phases is the frame's.
  */
-export const HANDSHAKE_BEATS = [1200, 800, 1200, 1800, 600, 1900, 500] as const;
+export const HANDSHAKE_BEATS = [1200, 800, 1200, 1800, 600, 2200] as const;
 /** The beat both sides read "Payment received" (the reduced-motion still). */
 export const RECEIVED_BEAT = 5;
-const RESET_BEAT = 6;
 
 type BuyerState = "pay" | "waiting" | "received";
 type SellerState = "unpaid" | "claimed" | "received";
@@ -472,84 +468,28 @@ function SellerCard({ beat, still }: { beat: number; still: boolean }) {
 	);
 }
 
-function HandshakePlay() {
-	const shouldReduceMotion = useReducedMotion();
-	const stageRef = useRef<HTMLDivElement>(null);
-	const inView = useInView(stageRef, { margin: "-10% 0px" });
-	const beat = useBeatLoop(!shouldReduceMotion && inView, HANDSHAKE_BEATS);
-	const still = Boolean(shouldReduceMotion);
+/**
+ * The two panes, beat passed in: the seller-flow walkthrough owns the clock
+ * (phase 02) and the `aria-hidden` frame around them. `@container` so the
+ * panes size off the column they are given: side by side with em = a slice
+ * of the width from 30rem, stacked at a fixed em below it. Both panes are
+ * fixed-height, so the mock holds one height per layout and the beats never
+ * move the page. `still` renders the received frame (reduced motion).
+ */
+export function HandshakePanes({
+	beat,
+	still,
+}: {
+	beat: number;
+	still: boolean;
+}) {
 	const storyBeat = still ? RECEIVED_BEAT : beat;
-	const resetting = !still && beat === RESET_BEAT;
-
 	return (
-		// `@container` so the panes size off the column they are given: side by
-		// side with em = a slice of the width from 30rem, stacked at a fixed em
-		// below it. Both panes are fixed-height, so the mock holds one height per
-		// layout and the beats never move the page.
-		<div ref={stageRef} aria-hidden="true" className="@container w-full">
-			<div
-				className={cn(
-					"flex flex-col items-stretch gap-[1.6em] text-[10px] transition-opacity duration-300 motion-reduce:transition-none @[30rem]:flex-row @[30rem]:items-end @[30rem]:gap-[2.4em] @[30rem]:text-[clamp(8.5px,1.85cqw,11px)]",
-					resetting ? "opacity-0" : "opacity-100",
-				)}
-			>
+		<div className="@container w-full">
+			<div className="flex flex-col items-stretch gap-[1.6em] text-[10px] @[30rem]:flex-row @[30rem]:items-end @[30rem]:gap-[2.4em] @[30rem]:text-[clamp(8.5px,1.85cqw,11px)]">
 				<BuyerPhone beat={storyBeat} still={still} />
 				<SellerCard beat={storyBeat} still={still} />
 			</div>
 		</div>
-	);
-}
-
-export function PaymentHandshake() {
-	const points = [
-		m.handshake_point_1(),
-		m.handshake_point_2(),
-		m.handshake_point_3(),
-	];
-
-	return (
-		<section aria-labelledby="handshake-heading" className="bg-background">
-			<div className="mx-auto max-w-6xl px-5 py-20 md:px-8 md:py-32">
-				{/* The mock column gets the wider half: two panes need the room, and
-				    the copy column reads fine at 45%. */}
-				<div className="grid items-center gap-12 md:grid-cols-[0.9fr_1.1fr] md:gap-12 lg:gap-16">
-					<FadeIn>
-						<Eyebrow>{m.handshake_label()}</Eyebrow>
-						<h2
-							id="handshake-heading"
-							className="mt-4 text-3xl font-bold leading-[1.08] md:text-5xl"
-							style={{ letterSpacing: "-0.02em" }}
-						>
-							{m.handshake_heading()}
-						</h2>
-						<p className="mt-4 text-base leading-relaxed text-muted-foreground md:text-lg">
-							{m.handshake_body_1()}{" "}
-							<strong className="font-semibold text-foreground">
-								{m.handshake_body_strong()}
-							</strong>{" "}
-							{m.handshake_body_2()}
-						</p>
-						<ul className="mt-7 space-y-3.5">
-							{points.map((point) => (
-								<li
-									key={point}
-									className="flex gap-3 text-[15px] leading-relaxed text-foreground/80"
-								>
-									<Check className="mt-0.5 size-4 shrink-0 text-accent" />
-									{point}
-								</li>
-							))}
-						</ul>
-						<p className="mt-6 text-[13px] text-muted-foreground">
-							{m.handshake_note()}
-						</p>
-					</FadeIn>
-
-					<FadeIn delay={0.15}>
-						<HandshakePlay />
-					</FadeIn>
-				</div>
-			</div>
-		</section>
 	);
 }
