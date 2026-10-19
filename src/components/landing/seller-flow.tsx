@@ -86,7 +86,10 @@ function StepButton({
 			className={cn(
 				// The mobile pill and the desktop row are one control: a numeral and
 				// the title, the body only from `lg` where there is room to read it.
-				"group flex min-h-11 shrink-0 items-center gap-3 rounded-full border px-3 py-2 text-left transition-colors lg:w-full lg:items-start lg:gap-4 lg:rounded-2xl lg:border-transparent lg:px-4 lg:py-3.5",
+				// `relative`: the sr-only prefix is absolutely positioned, and without
+				// a positioned button it anchors to the document — a pill scrolled
+				// off the row's right edge then widened the whole page at 390.
+				"group relative flex min-h-11 shrink-0 items-center gap-3 rounded-full border px-3 py-2 text-left transition-colors lg:w-full lg:items-start lg:gap-4 lg:rounded-2xl lg:border-transparent lg:px-4 lg:py-3.5",
 				active
 					? "border-accent bg-accent/5 lg:border-transparent"
 					: "border-border bg-card hover:bg-muted lg:bg-transparent",
@@ -245,7 +248,7 @@ export function SellerFlow() {
 							aria-hidden="true"
 							onPointerEnter={() => setHovered(true)}
 							onPointerLeave={() => setHovered(false)}
-							className="relative min-h-[30rem] overflow-hidden rounded-[2rem] bg-primary p-5 pb-24 shadow-2xl shadow-primary/25 contain-inline-size sm:p-8 sm:pb-24 md:min-h-[34rem] md:rounded-[2.5rem]"
+							className="relative min-h-[30rem] overflow-hidden rounded-[2rem] bg-primary p-5 pb-28 shadow-2xl shadow-primary/25 contain-inline-size sm:p-8 sm:pb-28 md:min-h-[34rem] md:rounded-[2.5rem]"
 						>
 							<div
 								aria-hidden
