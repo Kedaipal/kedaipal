@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { PLAN_MONTHLY_PRICES } from "../../convex/lib/plans";
 import { FAQ_MESSAGES, Faq } from "../components/landing/faq";
 import { FinalCta } from "../components/landing/final-cta";
+import { FitCheck } from "../components/landing/fit-check";
 import { Footer } from "../components/landing/footer";
 import { Hero } from "../components/landing/hero";
 import { Nav } from "../components/landing/nav";
@@ -178,6 +179,7 @@ function Landing() {
 				<RealSellers />
 				<SellerFlow />
 				<PaymentMethods />
+				<FitCheck />
 				<PricingTeaser />
 				<Faq />
 				<FinalCta />
