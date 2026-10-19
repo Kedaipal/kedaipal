@@ -1186,7 +1186,7 @@ function PricingPage() {
 							<GuaranteeLine className="max-w-md text-[13px] leading-relaxed text-muted-foreground" />
 							<Link
 								to="/"
-								hash="how"
+								hash="flow"
 								className="inline-flex min-h-11 items-center text-sm font-medium text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline"
 							>
 								{m.pricingpage_cta_how()}

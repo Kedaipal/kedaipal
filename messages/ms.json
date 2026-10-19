@@ -1,6 +1,6 @@
 {
 	"$schema": "https://inlang.com/schema/inlang-message-format",
-	"nav_delivery": "Penghantaran",
+	"nav_flow": "Cara ia berfungsi",
 	"nav_payments": "Pembayaran",
 	"nav_pricing": "Harga",
 	"nav_faq": "Soalan Lazim",

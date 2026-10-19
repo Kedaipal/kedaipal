@@ -1,6 +1,6 @@
 {
 	"$schema": "https://inlang.com/schema/inlang-message-format",
-	"nav_delivery": "Delivery",
+	"nav_flow": "How it works",
 	"nav_payments": "Payments",
 	"nav_pricing": "Pricing",
 	"nav_faq": "FAQ",

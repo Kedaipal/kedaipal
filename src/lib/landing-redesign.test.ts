@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
 	INVOICE_DUE_GRACE_DAYS,
@@ -225,6 +226,7 @@ const REMOVED_LANDING_V2_KEYS = [
 	"delivery_point_2",
 	"delivery_point_3",
 	"delivery_cold_note",
+	"nav_delivery",
 ];
 
 describe("landing v2 — cut sections stay cut", () => {
@@ -328,5 +330,21 @@ describe("landing — one order through the page", () => {
 				.map(([k]) => k);
 			expect(hits, `${locale}: ${hits.join(", ")}`).toEqual([]);
 		}
+	});
+});
+
+/**
+ * The route composes the walkthrough, not the two sections it replaced. A
+ * source scan, like landing-seo.test.ts: the sections' components are gone,
+ * so a merge that resurrects an import is the only way they could come back.
+ */
+describe("landing v2 — the walkthrough replaces Handshake and Delivery", () => {
+	const route = readFileSync(
+		new URL("../routes/index.tsx", import.meta.url),
+		"utf8",
+	);
+	it("mounts SellerFlow and neither retired section", () => {
+		expect(route).toMatch(/<SellerFlow \/>/);
+		expect(route).not.toMatch(/PaymentHandshake|<Delivery/);
 	});
 });

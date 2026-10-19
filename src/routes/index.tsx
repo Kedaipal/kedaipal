@@ -1,15 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { PLAN_MONTHLY_PRICES } from "../../convex/lib/plans";
-import { Delivery } from "../components/landing/delivery";
 import { FAQ_MESSAGES, Faq } from "../components/landing/faq";
 import { FinalCta } from "../components/landing/final-cta";
 import { Footer } from "../components/landing/footer";
 import { Hero } from "../components/landing/hero";
 import { Nav } from "../components/landing/nav";
-import { PaymentHandshake } from "../components/landing/payment-handshake";
 import { PaymentMethods } from "../components/landing/payment-methods";
 import { PricingTeaser } from "../components/landing/pricing-teaser";
 import { RealSellers } from "../components/landing/real-sellers";
+import { SellerFlow } from "../components/landing/seller-flow";
 import { VideoDemo } from "../components/landing/video-demo";
 import { LandingRegionProvider } from "../hooks/useLandingRegion";
 import { useMarketingLanding } from "../hooks/useMarketingLanding";
@@ -158,13 +157,13 @@ export const Route = createFileRoute("/")({
 });
 
 /**
- * Eight sections (landing v2, z8r3fdegej — design approved 12 Sep 2026):
- * the promise, the product moving, the proof, then the three things the
- * target tier is sold on (payment handshake, courier booking, payment rails),
- * then the price, the objections, the close. The problem strip, how-it-works
- * timeline, features bento and money-math block were cut: fourteen sections
- * was too long for a seller who already knows the pain, and the video says
- * "how it works" better than the timeline did.
+ * Landing v2 (z8r3fdegej, 12 Sep 2026) trimmed fourteen sections to eight:
+ * the promise, the product moving, the proof, the three things the target
+ * tier is sold on, the price, the objections, the close. The 19 Oct 2026
+ * showcase pass (z8r3fdtpub) folded the Payment Handshake and Delivery
+ * sections into ONE seller-flow walkthrough — the order landing, paid,
+ * shipped, on the real UI — because the page's ask is a demo and its job is
+ * to show the product moving, not to describe it. See docs/landing-v2.md.
  */
 function Landing() {
 	// GA4 funnel entry (z8r3fdd1v0): capture ?src= + fire land_marketing.
@@ -176,8 +175,7 @@ function Landing() {
 				<Hero />
 				<VideoDemo />
 				<RealSellers />
-				<PaymentHandshake />
-				<Delivery />
+				<SellerFlow />
 				<PaymentMethods />
 				<PricingTeaser />
 				<Faq />

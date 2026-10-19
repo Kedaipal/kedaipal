@@ -1,6 +1,6 @@
 {
 	"$schema": "https://inlang.com/schema/inlang-message-format",
-	"nav_delivery": "配送",
+	"nav_flow": "怎么运作",
 	"nav_payments": "付款",
 	"nav_pricing": "价格",
 	"nav_faq": "常见问题",

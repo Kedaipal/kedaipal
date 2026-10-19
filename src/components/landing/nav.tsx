@@ -217,11 +217,12 @@ export function Nav() {
 		return () => window.removeEventListener("scroll", onScroll);
 	}, []);
 
-	// The design's link set (landing v2, z8r3fdegej): the two sections the
-	// target tier is sold on, then the objections. These are in-page anchors —
+	// The link set: the walkthrough (how an order moves — the two sections the
+	// target tier is sold on, folded into one, 19 Oct 2026), the payment rails,
+	// then the objections. These are in-page anchors —
 	// they only mean anything relative to `/`, which is why they stay `<a>`.
 	const navLinks = [
-		{ href: "/#delivery", label: m.nav_delivery() },
+		{ href: "/#flow", label: m.nav_flow() },
 		{ href: "/#payments", label: m.nav_payments() },
 		{ href: "/#faq", label: m.nav_faq() },
 	];
