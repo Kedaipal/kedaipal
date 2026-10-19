@@ -234,6 +234,25 @@ const REMOVED_LANDING_V2_KEYS = [
 	"dock_chip_fit",
 	"dock_chip_store",
 	"dock_chip_plan",
+	// The Real sellers section (five anonymised kind cards) was cut on 19 Oct
+	// 2026 (Arif): stock photos under "real sellers" proved nothing a buyer
+	// could check. Its one real proof — the door to /stores — moved under the
+	// video as `proof_browse_stores`; `proof_label/heading/sub` stay for the
+	// /pricing proof block.
+	"proof_kind_5",
+	"proof_kind_5_body",
+	"proof_kind_7",
+	"proof_kind_7_body",
+	"proof_kind_8",
+	"proof_kind_8_body",
+	"proof_kind_10",
+	"proof_kind_10_body",
+	"proof_kind_12",
+	"proof_kind_12_body",
+	"proof_rail_prev",
+	"proof_rail_next",
+	"proof_directory_strong",
+	"proof_directory_body",
 ];
 
 describe("landing v2 — cut sections stay cut", () => {
@@ -350,9 +369,9 @@ describe("landing v2 — the walkthrough replaces Handshake and Delivery", () =>
 		new URL("../routes/index.tsx", import.meta.url),
 		"utf8",
 	);
-	it("mounts SellerFlow and neither retired section", () => {
+	it("mounts SellerFlow and none of the retired sections", () => {
 		expect(route).toMatch(/<SellerFlow \/>/);
-		expect(route).not.toMatch(/PaymentHandshake|<Delivery/);
+		expect(route).not.toMatch(/PaymentHandshake|<Delivery|RealSellers/);
 	});
 });
 

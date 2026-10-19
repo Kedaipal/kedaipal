@@ -31,9 +31,10 @@ positioning, with one new section.
 **Since 19 Oct 2026 (z8r3fdtpub, the showcase pass — see
 [Demo-first and the seller-flow walkthrough](#demo-first-and-the-seller-flow-walkthrough-19-oct-2026)):**
 
-`Nav → Hero (+ marquee) → Video demo → Real sellers → **Seller flow
+`Nav → Hero (+ marquee) → Video demo (+ the door to /stores) → **Seller flow
 walkthrough** → Payment methods → **Fit check** → Pricing → FAQ → Final CTA →
-Footer`, plus the floating **WhatsApp dock**.
+Footer`, plus the phone-only **WhatsApp dock**. The Real sellers section was
+cut the same day (below).
 
 Landing v2 as shipped on 13 Sep 2026 (the Delivery and Handshake sections
 below are historical — their mocks live on inside the walkthrough):
@@ -217,7 +218,7 @@ link (y=381) and the pricing card (y=8,007).
 | The dock | [`wa-dock.tsx`](../src/components/landing/wa-dock.tsx), [`useSectionVisibility.ts`](../src/hooks/useSectionVisibility.ts) |
 | Funnel event | `demo_cta` (`placement`) — [`analytics.md`](./analytics.md) |
 | Copy | `flow_*`, `fit_*`, `dock_*`, `commission_badge`, `book_demo_cta_long` in `messages/*.json` |
-| Tests | `seller-flow.test.tsx`, `seller-flow-timeline.test.ts`, `cta.test.tsx`, `wa-dock.test.tsx`, `useSectionVisibility.test.tsx`, `fit-check.test.tsx`, `real-sellers.test.tsx`, the rewritten `payment-handshake.test.tsx` and `delivery.test.tsx`, and new guards in `landing-redesign.test.ts` |
+| Tests | `seller-flow.test.tsx`, `seller-flow-timeline.test.ts`, `cta.test.tsx`, `wa-dock.test.tsx`, `useSectionVisibility.test.tsx`, `fit-check.test.tsx`, the rewritten `payment-handshake.test.tsx` and `delivery.test.tsx`, and new guards in `landing-redesign.test.ts` |
 
 **Demo-first (T1).** "Book a demo on WhatsApp" is the mint pill in the hero,
 the nav bar, the final CTA and `/pricing`'s close; "Start free — pay when you
@@ -281,15 +282,25 @@ chips beside the pill; three loose bubbles stacked bottom-right read as
 clutter on sight (Arif, 19 Oct) and the hero already asks the one question
 that matters, so the chips, their copy and the section-tracking hook went.
 
+**The Real sellers section is gone (19 Oct, Arif: "do we even need this?").**
+Five anonymised kind cards with stock photos under "Real sellers, real
+orders" proved nothing a buyer could check — the ticket's item 9 said as
+much — and the video above already names the five kinds. Its one honest
+piece, the door to the real stores on `/stores`, moved under the video as an
+outline pill (`proof_browse_stores`, "Browse the stores running on
+Kedaipal"). The cards' copy, the rail controls, the directory caption and the
+twelve `seller-*` images left with it; `proof_label/heading/sub` stay for the
+`/pricing` proof block. A named seller quote, when one exists, gets a home of
+its own rather than a card wall.
+
 **Truth fixes that rode along (z8r3fdhj8p).** FAQ 1 and the final CTA stop
 promising "live in 5 minutes"; the guarantee line is the one time-to-live
 claim (test: no landing key says five minutes). FAQ 8 keeps the locked
 "pay when you sell" and states the day-15 invoice as the backstop it is —
 `docs/pricing.md`: a store with no order by day 15 gets its first invoice
 then — rather than leaving the two to read as a contradiction. The proof rail
-shows the five kinds the demo video names and drops the navy "why they
-switch" closer with its founder metrics; a named seller quote waits on the
-seller. The nav's first anchor is `/#flow` ("How it works").
+lost the navy "why they switch" closer with its founder metrics, then the
+section itself (above). The nav's first anchor is `/#flow` ("How it works").
 
 ## One region for the page
 

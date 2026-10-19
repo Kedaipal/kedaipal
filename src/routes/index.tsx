@@ -8,7 +8,6 @@ import { Hero } from "../components/landing/hero";
 import { Nav } from "../components/landing/nav";
 import { PaymentMethods } from "../components/landing/payment-methods";
 import { PricingTeaser } from "../components/landing/pricing-teaser";
-import { RealSellers } from "../components/landing/real-sellers";
 import { SellerFlow } from "../components/landing/seller-flow";
 import { VideoDemo } from "../components/landing/video-demo";
 import { WaDock } from "../components/landing/wa-dock";
@@ -176,7 +175,6 @@ function Landing() {
 				<Nav />
 				<Hero />
 				<VideoDemo />
-				<RealSellers />
 				<SellerFlow />
 				<PaymentMethods />
 				<FitCheck />

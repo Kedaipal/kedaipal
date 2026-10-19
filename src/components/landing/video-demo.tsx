@@ -1,5 +1,6 @@
+import { Link } from "@tanstack/react-router";
 import { useReducedMotion } from "framer-motion";
-import { Pause, Play, Volume2, VolumeX } from "lucide-react";
+import { ArrowRight, Pause, Play, Store, Volume2, VolumeX } from "lucide-react";
 import {
 	useCallback,
 	useEffect,
@@ -15,7 +16,7 @@ import {
 } from "../../lib/demo-video";
 import { m } from "../../paraglide/messages";
 import { FadeIn } from "./fade-in";
-import { Eyebrow } from "./landing-ui";
+import { ctaPillClass, Eyebrow } from "./landing-ui";
 
 /**
  * The 35-second product demo, in the Mobbin slot: directly under the hero,
@@ -363,6 +364,21 @@ export function VideoDemo() {
 							{m.demo_video_caption()}
 						</figcaption>
 					</figure>
+				</FadeIn>
+
+				{/* The proof the demo can't give: the stores are real, so a visitor can
+				    walk into one. The former "Real sellers" section's one honest piece
+				    (19 Oct 2026, Arif: the five anonymised kind cards proved nothing a
+				    buyer could check). An outline pill — the mint one stays the demo. */}
+				<FadeIn delay={0.2} className="mt-8 flex justify-center md:mt-10">
+					<Link
+						to="/stores"
+						className={`${ctaPillClass("outline")} w-full sm:w-fit`}
+					>
+						<Store className="size-4 text-accent-emphasis" />
+						{m.proof_browse_stores()}
+						<ArrowRight className="size-4 transition-transform group-hover:translate-x-1 motion-reduce:transition-none" />
+					</Link>
 				</FadeIn>
 			</div>
 		</section>
