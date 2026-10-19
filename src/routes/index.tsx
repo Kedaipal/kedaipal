@@ -10,6 +10,7 @@ import { PricingTeaser } from "../components/landing/pricing-teaser";
 import { RealSellers } from "../components/landing/real-sellers";
 import { SellerFlow } from "../components/landing/seller-flow";
 import { VideoDemo } from "../components/landing/video-demo";
+import { WaDock } from "../components/landing/wa-dock";
 import { LandingRegionProvider } from "../hooks/useLandingRegion";
 import { useMarketingLanding } from "../hooks/useMarketingLanding";
 import { DEMO_DURATION_ISO, DEMO_VIDEO } from "../lib/demo-video";
@@ -181,6 +182,7 @@ function Landing() {
 				<Faq />
 				<FinalCta />
 				<Footer />
+				<WaDock />
 			</main>
 		</LandingRegionProvider>
 	);

@@ -195,7 +195,11 @@ export function RealSellers() {
 	);
 
 	return (
-		<section aria-labelledby="proof-heading" className="bg-background">
+		<section
+			id="proof"
+			aria-labelledby="proof-heading"
+			className="bg-background"
+		>
 			<div className="mx-auto max-w-6xl px-5 py-20 md:px-8 md:py-28">
 				<div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between lg:gap-10">
 					<div className="lg:max-w-xl">
