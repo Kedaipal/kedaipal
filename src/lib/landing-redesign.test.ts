@@ -267,3 +267,44 @@ describe("landing v2 — cut sections stay cut", () => {
 		}
 	});
 });
+
+/**
+ * The hero's inbox, the handshake and the courier card tell ONE order, from
+ * one shop (truth fix 4, z8r3fdhj8p): a meat shop whose inbox listed a Muay
+ * Thai pack and a tent wash, beside a bakery's cake on the next section, read
+ * as three stock mocks. ORD-0182 · Aina · RM 181 from Kedai Daging Amir is the
+ * order on every surface; a key that names another is a stray.
+ */
+describe("landing — one order through the page", () => {
+	const strays =
+		/Muay Thai|Tent wash|Bearcamp|Kek Sayang|Brownie|cake|泰拳|帐篷|布朗尼|蛋糕|khemah|brownie|\bkek\b/i;
+	it("names ORD-0182 on every handshake key that names an order", () => {
+		for (const [locale, catalog] of catalogs) {
+			const wrong = Object.entries(catalog)
+				.filter(
+					([k, v]) =>
+						k.startsWith("handshake_") &&
+						/ORD-/.test(String(v)) &&
+						!String(v).includes("ORD-0182"),
+				)
+				.map(([k]) => k);
+			expect(wrong, `${locale}: ${wrong.join(", ")}`).toEqual([]);
+			expect(catalog.handshake_amount, locale).toBe(catalog.hero_after_amount);
+		}
+	});
+
+	it("keeps every hero and handshake line inside the one shop", () => {
+		for (const [locale, catalog] of catalogs) {
+			const hits = Object.entries(catalog)
+				.filter(
+					([k, v]) =>
+						/^(hero_|handshake_)/.test(k) &&
+						// The marquee lists the roster's KINDS of seller, not this shop's orders.
+						k !== "hero_marquee" &&
+						strays.test(String(v)),
+				)
+				.map(([k]) => k);
+			expect(hits, `${locale}: ${hits.join(", ")}`).toEqual([]);
+		}
+	});
+});
