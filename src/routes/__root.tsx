@@ -18,9 +18,9 @@ import { useThemeScope } from "../hooks/useTheme";
 import { isBuyerRouteId } from "../lib/buyer-routes";
 import { getConvexClient, getQueryClient } from "../lib/convex";
 import { clientEnv } from "../lib/env";
-import { THEME_INIT_SCRIPT } from "../lib/theme";
 import { readVisitorRegion } from "../lib/geo-region";
 import { readReferralSlugOnServer } from "../lib/referral-cookie";
+import { THEME_INIT_SCRIPT } from "../lib/theme";
 import { getLocale } from "../paraglide/runtime";
 import appCss from "../styles.css?url";
 

@@ -170,7 +170,9 @@ export function OpeningHoursLine({
 		/>
 	);
 	const pillClass = onCover
-		? "flex items-center gap-1.5 rounded-full border border-white/25 bg-white/15 px-2.5 py-1 text-xs font-medium text-white backdrop-blur transition-colors hover:bg-white/25"
+		? // dark-ok: over the cover photo's scrim, so white is right in both themes —
+			// the axis is the photo, not the theme. Without a cover it uses tokens.
+			"flex items-center gap-1.5 rounded-full border border-white/25 bg-white/15 px-2.5 py-1 text-xs font-medium text-white backdrop-blur transition-colors hover:bg-white/25"
 		: "flex items-center gap-1.5 rounded-full border border-border bg-muted/60 px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted";
 
 	// The island's lead word carries the state colour ("Open now" mint,

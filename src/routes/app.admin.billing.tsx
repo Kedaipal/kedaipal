@@ -483,7 +483,8 @@ function topUpTile(revenue: TopUpRevenue | undefined) {
 					? "No packs paid yet this month"
 					: `${packs} pack${packs === 1 ? "" : "s"} · ${credits.toLocaleString("en")} credits`,
 		icon: <ShoppingBag className="size-4" />,
-		className: "border-emerald-200 bg-emerald-50 text-emerald-800",
+		className:
+			"border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200",
 	};
 }
 
@@ -1414,7 +1415,7 @@ export function IssueInvoiceForm() {
 						</p>
 					) : null}
 					{foundingBill ? (
-						<p className="text-xs text-emerald-700">
+						<p className="text-xs text-emerald-700 dark:text-emerald-300">
 							{formatPrice(base, currency)} −{" "}
 							{formatPrice(base - total, currency)} founding discount
 						</p>
@@ -1449,7 +1450,9 @@ export function IssueInvoiceForm() {
 			    one is drafted. */}
 			{openBill ? (
 				replaceRefusal ? (
-					<p className="text-xs text-amber-700">{replaceRefusal}</p>
+					<p className="text-xs text-amber-700 dark:text-amber-400">
+						{replaceRefusal}
+					</p>
 				) : (
 					<p className="text-xs text-muted-foreground">
 						{openBill.invoiceNumber} is open for{" "}
@@ -1461,7 +1464,7 @@ export function IssueInvoiceForm() {
 				)
 			) : null}
 			{unclaimedStore ? (
-				<p className="text-xs text-amber-700">
+				<p className="text-xs text-amber-700 dark:text-amber-400">
 					Nobody owns this store yet, so there's nobody to bill — the server
 					refuses it and the daily renewal skips it.{" "}
 					{selected?.comped
@@ -1470,7 +1473,7 @@ export function IssueInvoiceForm() {
 				</p>
 			) : null}
 			{compedStore ? (
-				<p className="text-xs text-amber-700">
+				<p className="text-xs text-amber-700 dark:text-amber-400">
 					This store is on the house
 					{selected?.compLabel ? ` (${selected.compLabel})` : ""} — it can't be
 					billed. End the comp from Admin · Sellers first.

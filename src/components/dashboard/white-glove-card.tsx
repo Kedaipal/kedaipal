@@ -59,7 +59,7 @@ export function WhiteGloveCard({ slug }: { slug: string }) {
 					target="_blank"
 					rel="noopener noreferrer"
 					onClick={() => markScheduled({})}
-					className="inline-flex h-9 w-fit items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
+					className="inline-flex h-9 w-fit items-center rounded-lg bg-primary px-3.5 text-sm font-medium text-background dark:text-primary-foreground"
 				>
 					Schedule your call
 				</a>

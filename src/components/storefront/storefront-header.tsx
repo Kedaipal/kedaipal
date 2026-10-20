@@ -178,6 +178,8 @@ export function fulfilmentLabel(
 const COVER_ICON_BASE =
 	"flex size-11 items-center justify-center rounded-full transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none";
 const COVER_ICON_FROSTED =
+	// dark-ok: these icons only ever sit on the cover PHOTO (a frosted navy disc
+	// over it); the no-cover band uses the outline variant with tokens.
 	"bg-primary/45 text-white ring-1 ring-white/25 backdrop-blur hover:bg-primary/60";
 const COVER_ICON_OUTLINE =
 	"border border-border bg-card text-foreground shadow-sm hover:bg-muted";

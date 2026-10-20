@@ -82,6 +82,18 @@ const THEMED_COMPONENT_DIRS = [
 	"components/admin",
 	"components/app",
 	"components/ui",
+	// Added when staging caught up (Oct 2026): every one of these renders under
+	// /app, so a raw colour in them is a dark-mode bug like any other.
+	"components/counter",
+	"components/credits",
+	"components/deliveries",
+	"components/home",
+	"components/hours",
+	"components/orders",
+	"components/product",
+	"components/products",
+	"components/promotions",
+	"components/vouchers",
 ];
 
 const THEMED_ROUTE_RE = /^routes[/\\](app\.|\$slug|track\.|claim\.)/;
@@ -105,6 +117,27 @@ const EXEMPT_FILES: Record<string, string> = {
 
 /** Whole subtrees that never see the theme. */
 const EXEMPT_DIRS = ["components/poster"];
+
+/**
+ * Directories that never render under `.dark`, with the reason: the marketing
+ * site and the pre-sign-in flow are deliberately light (see lib/theme.ts), and
+ * `/stores` is not a themed route.
+ *
+ * Every directory under src/components must be in THIS map, in
+ * THEMED_COMPONENT_DIRS or in EXEMPT_DIRS — the test below fails otherwise.
+ * Without that, a new feature folder silently falls outside the scan, which is
+ * exactly how the list above went stale between August and October while
+ * `home/`, `promotions/`, `vouchers/` and seven others shipped unscanned.
+ */
+const UNTHEMED_COMPONENT_DIRS: Record<string, string> = {
+	"components/cost": "/cost calculator — marketing site, always light",
+	"components/landing": "landing page — marketing site, always light",
+	"components/legal": "legal pages — marketing site, always light",
+	"components/onboarding":
+		"pre-sign-in onboarding — light, the same scope line i18n draws",
+	"components/marketplace":
+		"/stores directory — not a themed route today (docs/dark-mode.md)",
+};
 
 const SKIP_DIRS = new Set(["paraglide", "node_modules"]);
 
@@ -303,6 +336,29 @@ if (process.env.KP_WRITE_DARK_BUDGET) {
 }
 
 describe("dark-mode colour coverage", () => {
+	test("every component directory is classified: themed, unthemed or exempt", () => {
+		const dirs = readdirSync(join(__dirname, "..", "components"), {
+			withFileTypes: true,
+		})
+			.filter((e) => e.isDirectory())
+			.map((e) => `components/${e.name}`);
+		const known = new Set([
+			...THEMED_COMPONENT_DIRS,
+			...EXEMPT_DIRS,
+			...Object.keys(UNTHEMED_COMPONENT_DIRS),
+		]);
+		expect(
+			dirs.filter((d) => !known.has(d)).sort(),
+			[
+				"New component directories must be classified before they ship, or",
+				"the dark-mode scan quietly stops covering them:",
+				"  - renders under /app or a buyer route → THEMED_COMPONENT_DIRS",
+				"  - marketing / pre-sign-in / an unthemed route → UNTHEMED_COMPONENT_DIRS, with the reason",
+				"  - a print or export surface → EXEMPT_DIRS",
+			].join("\n"),
+		).toEqual([]);
+	});
+
 	test("the scan actually walked the themed source tree", () => {
 		// A broken walk would make every assertion below vacuously pass, which is
 		// worse than no test: it also stops anyone writing a real one.

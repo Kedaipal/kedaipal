@@ -157,6 +157,7 @@ function VoucherShareBody({
 							and the code appears — no app needed.
 						</p>
 					</div>
+					{/* dark-ok: a QR on a dark plate does not scan — the mat stays white in both themes. */}
 					<div className="flex justify-center rounded-xl bg-white p-4 ring-1 ring-black/5">
 						<div ref={qrRef}>
 							{/* The PLAIN CODE as text, never a URL — see the file header. */}

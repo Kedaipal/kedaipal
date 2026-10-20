@@ -85,6 +85,7 @@ import { hoursSummary, noticeSummary } from "../../lib/fulfilment-glance";
 import { deriveMapsUrl } from "../../lib/google-address";
 import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import { hasFeature, type SubscriptionView } from "../../lib/subscription";
+import { TONE_CHIP } from "../../lib/tone";
 import { cn } from "../../lib/utils";
 import { ProBadge } from "../app/pro-gate";
 import {

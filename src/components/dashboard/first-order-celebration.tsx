@@ -47,7 +47,7 @@ export function FirstOrderCelebration({
 					<div className="flex flex-wrap items-center gap-2">
 						<Link
 							to="/app/orders"
-							className="inline-flex h-9 items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
+							className="inline-flex h-9 items-center rounded-lg bg-primary px-3.5 text-sm font-medium text-background dark:text-primary-foreground"
 						>
 							View your orders
 						</Link>

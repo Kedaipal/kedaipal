@@ -50,6 +50,20 @@ Two decisions worth knowing:
 - **A raw `<script>` in the shell, not `head({ scripts })`.** TanStack's supported head-scripts API re-appends and re-runs the script after hydration, which is wrong for a one-shot. The raw tag in `RootDocument` has no such effect, and `suppressHydrationWarning` was already on `<html>` — it covers extra attributes, which is exactly what the script adds.
 - **`useThemeScope` re-applies on every commit, in a layout effect.** Belt and braces for the case the script cannot cover: when hydration fails and React re-renders the root, it strips *every* attribute off `<html>`, class included, and a dark-mode seller would sit on a white page until they reloaded. The DOM write is idempotent, so this is free on the happy path.
 
+### Inverted surfaces — the softened recipe
+
+In light mode a handful of surfaces invert against the page: `bg-foreground text-background` on the sales hero, the welcome card, a promotion's header, the settings identity card, the primary action buttons, selected chips. Left alone, every one of them flips to a **near-white slab on a dark page**, which reads as a hole punched in the screen. Zaki's call (29 Aug 2026): soften, don't flip. Two recipes, chosen by what the surface IS:
+
+| Surface | Light (unchanged) | Dark |
+| --- | --- | --- |
+| **CTA button, selected chip, rank badge** — something you tap or that marks a choice | `bg-foreground text-background` → written as `bg-primary text-background` (byte-identical fill: `--primary` IS navy in light) | `dark:text-primary-foreground` — mint fill, navy text, the same as every other primary control |
+| **Emphasis panel** — a slab that carries content (hero, welcome card, identity card, promotion header) | unchanged | `dark:border dark:border-accent/30 dark:bg-accent/12 dark:text-foreground`, and every `text-background/NN` inside gets a `dark:text-foreground/NN` twin. Mint inside stays mint — it reads on the tinted panel as it did on navy |
+| **Avatar tile** | unchanged | `dark:bg-accent/15 dark:text-accent-emphasis` — the icon-tile pattern the app already uses |
+
+`text-background`, not `text-primary-foreground`, on the buttons: the two are not the same colour in light (`#fff` vs `hsl(210 40% 98%)`), and the rule is that adopting the recipe never repaints the theme every current user is in. The one sanctioned exception is `order-bulk-bar.tsx`: a transient floating toolbar is *supposed* to invert, and says so in its file.
+
+Progress-bar fills and dots that use `bg-foreground` as a neutral ink (`customers-card`, `sources-card`) are left alone: a near-white bar on a dark card is a legible neutral, not a slab.
+
 ## Scope: where dark mode applies
 
 `isThemedRouteId` decides, keyed on matched **route ids** (not pathnames) so the router's own precedence settles `/pricing` vs `/$slug` — the same reason [`buyer-routes.ts`](../src/lib/buyer-routes.ts) does. The shell emits the pre-paint script only on themed routes and actively strips the class everywhere else.
@@ -61,6 +75,7 @@ Two decisions worth knowing:
 | Order tracking (`/track/$token`), claim links (`/claim/$token`) | Yes, with their own toggle |
 | Marketing site (`/`, `/pricing`, `/cost`, legal) | **No** |
 | Sign-in / sign-up / onboarding | **No** |
+| Marketplace directory (`/stores`), team invites (`/join/$token`), referral landing (`/referral/$slug`) | **No** — not themed routes today; see Known gaps for the `/stores` seam |
 | Store poster, QR codes (preview and exported PNG) | **No** — theme-immune by construction, and a QR on a dark ground does not scan |
 
 The marketing site is out of scope by decision, not oversight: it is a designed brand surface with hardcoded mesh backgrounds (`bg-hero-mesh` is literally `hsl(0 0% 100%)`) and a `bg-primary` footer whose token flips hue to mint in dark. Doing it properly is its own ticket. `theme-routes.test.ts` pins all of the above.
@@ -81,6 +96,7 @@ Turning the storefront dark broke Kedaipal's own marks, which is easy to miss be
 
 - Deliberate one-off? `dark-ok` in a comment on or just above the line, **with the reason**.
 - Whole file legitimately invariant? `EXEMPT_FILES` in the test, also with the reason.
+- **New component directory?** It must appear in `THEMED_COMPONENT_DIRS`, `UNTHEMED_COMPONENT_DIRS` (with the reason) or `EXEMPT_DIRS`, or the suite fails. This guard exists because the themed list went quietly stale between August and October: `home/`, `promotions/`, `vouchers/`, `counter/` and six more shipped without ever being scanned, and the gate reported "clean" the whole time. A list that states a completeness it does not check is worse than no list.
 - Not worth a diff today? [`dark-mode-coverage-budget.ts`](../src/lib/dark-mode-coverage-budget.ts) records the remaining count per file. Counts are asserted **exactly**, so fixing a colour fails the test until you lower the number — that is the ratchet, and it only turns one way. Regenerate with:
 
 ```bash
@@ -89,6 +105,7 @@ KP_WRITE_DARK_BUDGET=1 pnpm vitest run src/lib/dark-mode-coverage.test.ts
 
 ## Known gaps
 
+- **`/stores` is light while the storefront that links to it may be dark.** Every buyer footer carries "Discover more stores", so a dark-mode buyer who taps it lands on a light directory. `/stores` is a public marketing-shaped page with no `dark:` work yet, so it is classified unthemed rather than half-themed. Theming it is a scoped follow-up, not a one-liner; until then the seam is known and deliberate.
 - The marketing site, sign-in and onboarding stay light (above).
 - `theme-color` meta and `site.webmanifest` stay pinned to `#0F172A`. It is a dark navy that reads correctly against both themes; splitting it per theme is churn for a 2%-lightness seam in the browser chrome.
 - The `/claim` dead-end screens (expired, already claimed, not found) carry no toggle — see the reasoning above. If a buyer ever needs one there, the same three lines drop in.

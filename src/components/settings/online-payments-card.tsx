@@ -19,7 +19,6 @@ import { useState } from "react";
 import { toast } from "sonner";
 import type { Country } from "../../../convex/lib/country";
 import { convexErrorMessage } from "../../lib/format";
-import { TONE_CHIP } from "../../lib/tone";
 import { ProBadge } from "../app/pro-gate";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";

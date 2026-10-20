@@ -62,7 +62,7 @@ export function BestSellersCard({
 									sizes="48px"
 									className="size-11 rounded-xl object-cover"
 								/>
-								<span className="absolute -bottom-1 -left-1 flex size-[18px] items-center justify-center rounded-full bg-foreground text-[10px] font-bold text-background">
+								<span className="absolute -bottom-1 -left-1 flex size-[18px] items-center justify-center rounded-full bg-primary text-[10px] font-bold text-background dark:text-primary-foreground">
 									{i + 1}
 								</span>
 							</span>

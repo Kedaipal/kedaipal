@@ -1210,6 +1210,10 @@ function SettingsRoute() {
 							/>
 						</AreaGate>
 					) : null}
+
+					{/* No AreaGate: this is a device preference, not store data — a
+					    teammate with no settings grant still picks their own theme. */}
+					{activeTab === "appearance" ? <AppearanceTab /> : null}
 				</div>
 			</div>
 		</div>
