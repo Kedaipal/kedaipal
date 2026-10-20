@@ -10,10 +10,12 @@
 import { type Country, DEFAULT_COUNTRY } from "./country";
 import {
 	COURIER_PROVIDER_IDS,
+	courierBookingAllowed,
 	type CourierProviderId,
 } from "./courierProviders";
 import { delyvaBookingAllowed, riderBookingAllowed } from "./delivery";
 import { resolveDelyvaCredentials } from "./delyva";
+import { resolveEasyparcelCredentials } from "./easyparcel";
 
 /** The slice of a retailer row the booking predicates read. */
 type CourierRetailer = {
@@ -24,6 +26,10 @@ type CourierRetailer = {
 		apiKey?: string;
 		apiSecret?: string;
 		customerId?: number;
+	};
+	easyparcel?: {
+		enabled?: boolean;
+		apiKey?: string;
 	};
 };
 
@@ -46,6 +52,17 @@ export function delyvaBookingArmed(retailer: CourierRetailer): boolean {
 	);
 }
 
+/** EasyParcel parcel booking is connected, switched on and allowed in the
+ * store's country — the same bit the EasyParcel card's `bookingEnabled`
+ * reports. */
+export function easyparcelBookingArmed(retailer: CourierRetailer): boolean {
+	return (
+		resolveEasyparcelCredentials(retailer.easyparcel) !== null &&
+		retailer.easyparcel?.enabled === true &&
+		courierBookingAllowed("easyparcel", retailer.country ?? DEFAULT_COUNTRY)
+	);
+}
+
 /**
  * One armed predicate per provider — the registry shape (Record over
  * `CourierProviderId`) is what turns "forgot to wire the new provider into
@@ -57,6 +74,7 @@ const PROVIDER_BOOKING_ARMED: Record<
 > = {
 	lalamove: lalamoveBookingArmed,
 	delyva: delyvaBookingArmed,
+	easyparcel: easyparcelBookingArmed,
 };
 
 /**

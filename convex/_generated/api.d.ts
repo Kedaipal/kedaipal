@@ -84,6 +84,7 @@ import type * as lib_delyva from "../lib/delyva.js";
 import type * as lib_dialCodes from "../lib/dialCodes.js";
 import type * as lib_dialCountryNames from "../lib/dialCountryNames.js";
 import type * as lib_dialMobilePatterns from "../lib/dialMobilePatterns.js";
+import type * as lib_easyparcel from "../lib/easyparcel.js";
 import type * as lib_email from "../lib/email.js";
 import type * as lib_emailCopy from "../lib/emailCopy.js";
 import type * as lib_enterprise from "../lib/enterprise.js";
@@ -285,6 +286,7 @@ declare const fullApi: ApiFromModules<{
   "lib/dialCodes": typeof lib_dialCodes;
   "lib/dialCountryNames": typeof lib_dialCountryNames;
   "lib/dialMobilePatterns": typeof lib_dialMobilePatterns;
+  "lib/easyparcel": typeof lib_easyparcel;
   "lib/email": typeof lib_email;
   "lib/emailCopy": typeof lib_emailCopy;
   "lib/enterprise": typeof lib_enterprise;

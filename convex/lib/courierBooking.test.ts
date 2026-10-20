@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, test } from "vitest";
 import {
 	delyvaBookingArmed,
+	easyparcelBookingArmed,
 	lalamoveBookingArmed,
 	storeBooksCouriers,
 } from "./courierBooking";
@@ -58,9 +59,12 @@ describe("lalamoveBookingArmed", () => {
 describe("delyvaBookingArmed", () => {
 	test("connected (key + customer id) and switched on in an allowed country", () => {
 		expect(delyvaBookingArmed({ delyva: DELYVA_CONNECTED })).toBe(true);
+		// SG reads FALSE from the registry since EasyParcel became the SG
+		// parcel lane (z8r3fdcje2 PR2) — the Delyva SG tenant ships an empty
+		// service catalogue, so the surface is retired there.
 		expect(
 			delyvaBookingArmed({ country: "SG", delyva: DELYVA_CONNECTED }),
-		).toBe(true);
+		).toBe(false);
 	});
 
 	test("switched on is not enough — it needs the credentials", () => {
@@ -84,13 +88,50 @@ describe("delyvaBookingArmed", () => {
 		expect(delyvaBookingArmed({})).toBe(false);
 	});
 
-	test("a country Delyva is closed in is not armed; no country reads as MY", () => {
-		COUNTRY_COURIER_BOOKING.delyva.SG = false;
+	test("the country gate is read live, not baked in; no country reads as MY", () => {
+		// Re-opening SG in the registry re-arms an SG store — proof the
+		// predicate reads the table rather than a snapshot.
+		COUNTRY_COURIER_BOOKING.delyva.SG = true;
 		expect(
 			delyvaBookingArmed({ country: "SG", delyva: DELYVA_CONNECTED }),
-		).toBe(false);
+		).toBe(true);
 		COUNTRY_COURIER_BOOKING.delyva.MY = false;
 		expect(delyvaBookingArmed({ delyva: DELYVA_CONNECTED })).toBe(false);
+	});
+});
+
+describe("easyparcelBookingArmed", () => {
+	const EASYPARCEL_CONNECTED = { enabled: true, apiKey: "enc.v1.ciphertext" };
+
+	test("connected and switched on, in SG only (MY is registry-closed)", () => {
+		expect(
+			easyparcelBookingArmed({ country: "SG", easyparcel: EASYPARCEL_CONNECTED }),
+		).toBe(true);
+		// MY is deliberately closed (frozen-prohibition finding, 29 Jul 2026);
+		// an MY store with a pasted key stays un-armed until the cross-border
+		// lane flips the registry.
+		expect(
+			easyparcelBookingArmed({ country: "MY", easyparcel: EASYPARCEL_CONNECTED }),
+		).toBe(false);
+		expect(easyparcelBookingArmed({ easyparcel: EASYPARCEL_CONNECTED })).toBe(
+			false,
+		);
+	});
+
+	test("switched on is not enough — it needs the key; off is off", () => {
+		expect(
+			easyparcelBookingArmed({
+				country: "SG",
+				easyparcel: { enabled: true, apiKey: "   " },
+			}),
+		).toBe(false);
+		expect(
+			easyparcelBookingArmed({
+				country: "SG",
+				easyparcel: { ...EASYPARCEL_CONNECTED, enabled: false },
+			}),
+		).toBe(false);
+		expect(easyparcelBookingArmed({ country: "SG" })).toBe(false);
 	});
 });
 
@@ -105,9 +146,15 @@ describe("storeBooksCouriers — either provider armed", () => {
 		).toBe(false);
 	});
 
-	test("Lalamove alone, Delyva alone, or both", () => {
+	test("any single provider armed is enough", () => {
 		expect(storeBooksCouriers({ deliveryBooking: LALAMOVE_ON })).toBe(true);
 		expect(storeBooksCouriers({ delyva: DELYVA_CONNECTED })).toBe(true);
+		expect(
+			storeBooksCouriers({
+				country: "SG",
+				easyparcel: { enabled: true, apiKey: "enc.v1.ciphertext" },
+			}),
+		).toBe(true);
 		expect(
 			storeBooksCouriers({
 				deliveryBooking: LALAMOVE_ON,

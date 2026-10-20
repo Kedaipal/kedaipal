@@ -57,12 +57,18 @@ const SKELETON_ROWS = 3;
 /**
  * The integration badge on the mock card follows the quoted row's provider.
  * Delyva's emblem is square and needs the name beside it; Lalamove's mark is a
- * wordmark and IS the name.
+ * wordmark and IS the name. No `src` = name-only pill — the honest state for
+ * a provider whose brand-approved mark isn't in `public/img/` yet (EasyParcel
+ * today; no landing row carries it until the SG rows go visible).
  */
 const PROVIDER_BADGE: Record<
 	CourierProvider,
-	{ name: string; src: string; markClass: string; wordmark: boolean }
+	{ name: string; src?: string; markClass?: string; wordmark: boolean }
 > = {
+	easyparcel: {
+		name: "EasyParcel",
+		wordmark: false,
+	},
 	delyva: {
 		name: "Delyva",
 		src: "/img/delyva-logo.png",
@@ -236,13 +242,15 @@ export function DispatchCard({
 					data-testid="dispatch-provider"
 					data-provider={cheapest?.provider ?? "delyva"}
 				>
-					<AppImage
-						src={badge.src}
-						alt=""
-						aspect={badge.markClass}
-						fill={false}
-					/>
-					{badge.wordmark ? null : badge.name}
+					{badge.src ? (
+						<AppImage
+							src={badge.src}
+							alt=""
+							aspect={badge.markClass}
+							fill={false}
+						/>
+					) : null}
+					{badge.wordmark && badge.src ? null : badge.name}
 				</span>
 			</div>
 
