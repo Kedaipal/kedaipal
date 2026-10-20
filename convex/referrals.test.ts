@@ -4,6 +4,7 @@ import { convexTest } from "convex-test";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { api } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
+import { settleScheduled } from "./lib/convexTestSettle";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -526,6 +527,9 @@ async function payInvoice(
 		invoiceId,
 		paymentMethod: "duitnow",
 	});
+	// The grant is a scheduled mutation of its own (atomic, never blocks the
+	// settle) — let it run before the test reads the ledger.
+	await settleScheduled(t);
 }
 
 async function referralRows(t: T, retailerId: Id<"retailers">) {

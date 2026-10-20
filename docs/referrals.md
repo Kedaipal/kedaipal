@@ -139,9 +139,14 @@ The offer copy never says "you both get". A comped referrer earns nothing, so
 ## The reward (T2)
 
 `invoices.settleInvoicePaid` — the ONE settle path every rail (Pay-now
-webhook, auto-charge, admin mark-paid) funnels into — calls
-`referrals.grantReferralRewards` when a store's **first** plan invoice is paid
-(`firstTime && !isHold`), right after the plan credits land:
+webhook, auto-charge, admin mark-paid) funnels into — **schedules**
+`referrals.grantForFirstInvoice` when a store's **first** plan invoice is paid
+(`firstTime && !isHold`). The grant runs in a transaction of its own, on
+purpose: a `try/catch` around several writes inside the settle would not have
+rolled them back, so a throw between the referee's credits and the row's stamp
+would have left a half-paid reward that never retries; and an uncaught throw
+would have failed a payment over a bonus. Scheduled, it is all-or-nothing and
+can never block the settle (PR #393 review). What it does:
 
 - **Referee:** `referralRewardCredits(paidPlan)` → a `referral` lot (12
   months), ledger reason `referral_referee`, `refLabel` = the referrer's name.
@@ -154,8 +159,10 @@ webhook, auto-charge, admin mark-paid) funnels into — calls
   transaction as the credits, and a stamped row is a no-op — so a webhook and
   a manual mark-paid racing each other can't pay twice. Pinned by a test that
   calls the grant twice (and goes red when the guard is removed).
-- **A reward failure never blocks a payment** — it is caught and logged; the
-  admin sheet then shows the referral un-rewarded.
+- **A reward failure never blocks a payment** — the grant is a separate
+  scheduled mutation; if it throws, none of its writes land and the admin
+  sheet shows the referral un-rewarded (the `rewardedAt` guard means a
+  re-run is safe).
 
 **Telling both sides:** an email each, in the seller's locale
 (`lib/referralEmailCopy.ts`, en/ms/zh — names the other store, the credits and

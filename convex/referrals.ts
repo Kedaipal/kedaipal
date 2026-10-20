@@ -14,6 +14,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
 	internalAction,
+	internalMutation,
 	internalQuery,
 	type MutationCtx,
 	mutation,
@@ -368,12 +369,18 @@ export const adminClearReferral = mutation({
 // ---------------------------------------------------------------------------
 
 /**
- * Called from `invoices.settleInvoicePaid` — the ONE settle path every rail
+ * Scheduled by `invoices.settleInvoicePaid` — the ONE settle path every rail
  * (Pay-now webhook, auto-charge, admin mark-paid) funnels into — when a
  * store's FIRST plan invoice is paid. Lands both sides' bonus credits in the
- * purchased bucket (12-month lots) and stamps the referral row, all in the
- * settle transaction, so the stamp IS the idempotency guard: a second settle
- * finds `rewardedAt` and does nothing.
+ * purchased bucket (12-month lots) and stamps the referral row in ONE
+ * transaction of its own (`grantForFirstInvoice`), so the stamp IS the
+ * idempotency guard — a second run finds `rewardedAt` and does nothing — and
+ * a throw anywhere in here rolls back every write together. It runs in its
+ * own mutation rather than inside the settle for exactly that reason: a
+ * caught error inside the settle would have swallowed a HALF-done grant
+ * (referee credited, row unstamped, never retried), and an uncaught one
+ * would have failed the payment over a bonus. Scheduled from the settle, it
+ * can do neither (PR #393 review).
  *
  * Both halves are sized by the tier the REFEREE paid for (Zaki, 20 Oct 2026):
  * 30% of a month of its list grant — Pro 60 / Starter 30 — to each side. The
@@ -481,6 +488,22 @@ export async function grantReferralRewards(
 	});
 	return { ...row, ...patch };
 }
+
+/** The transaction the settle schedules (see `grantReferralRewards`). A
+ * store with no referral row returns at once — most stores. */
+export const grantForFirstInvoice = internalMutation({
+	args: {
+		refereeId: v.id("retailers"),
+		paidPlan: v.union(
+			v.literal("starter"),
+			v.literal("pro"),
+			v.literal("enterprise"),
+		),
+	},
+	handler: async (ctx, { refereeId, paidPlan }): Promise<void> => {
+		await grantReferralRewards(ctx, { refereeId, paidPlan, now: Date.now() });
+	},
+});
 
 export const rewardEmailContext = internalQuery({
 	args: { to: v.id("retailers"), otherStoreId: v.id("retailers") },
