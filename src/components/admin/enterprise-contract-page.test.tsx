@@ -32,6 +32,7 @@ import {
 function seller(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 	return {
 		_id: "r_hsl" as AdminSellerRow["_id"],
+		availability: { state: "open" },
 		storeName: "Mama's Delights",
 		slug: "mamas-delights",
 		ownerUserId: "u_hsl",
@@ -44,6 +45,7 @@ function seller(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 		billingCycle: "monthly",
 		comped: false,
 		unclaimed: false,
+		referralEditable: true,
 		marketplace: { internal: false },
 		createdAt: 0,
 		purging: false,

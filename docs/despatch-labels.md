@@ -49,7 +49,7 @@ The ticket's three open questions were decided before the build:
 |---|---|---|---|
 | **One label** | Order detail — a `Print label` button *before* `Download receipt` (desktop header actions; mobile "More actions" panel) | Owner or admin act-as, by `shortId` | **All tier** |
 | **A selection** | Order inbox → select mode → the printer button on the bulk bar (carries the live count) → the print dialog | Owner or admin act-as | **Pro** (`orderInbox`) |
-| **Everything ready** | Order inbox → the **Ready to ship** strip → the print-queue modal (no prior selection) | Owner or admin act-as | **Pro** (`orderInbox`) |
+| **Everything ready** | **Deliveries → To ship → Print labels** → the print-queue modal (no prior selection); the inbox's *Ready to ship* strip points there (86eye9xd4) | Owner or admin act-as | **Pro** (`orderInbox`) |
 
 **Why single is all-tier and batch is Pro.** A seller shipping a parcel must
 always be able to put an address on it — that is correctness, not an upsell (the
@@ -390,7 +390,8 @@ the dialog.
 | `convex/awb.ts` | `generateAwbPdf` (single), `generateAwbBatchPdf` (batch), the paged input queries. |
 | `src/components/order/print-label-button.tsx` | Single-order print + `canPrintLabel`. |
 | `src/components/dashboard/print-labels-dialog.tsx` | Selection print: sort, count, disabled-with-reason. |
-| `src/components/dashboard/ready-to-ship-strip.tsx` | The one-click despatch run. |
+| `src/components/deliveries/deliveries-view.tsx` | The one-click despatch run, on Deliveries → To ship (86eye9xd4). |
+| `src/components/dashboard/ready-to-ship-strip.tsx` | The inbox's pointer to it, with the queue's count. |
 | `src/components/settings/despatch-label-card.tsx` | The template editor. |
 | `src/lib/awb-labels.ts` | Seller-facing copy for skips + sorts. |
 

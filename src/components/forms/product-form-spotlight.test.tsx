@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 /**
  * The second hop of a product-page spotlight: `/app/products/<id>?spot=`
- * hands the key to the form, which scrolls to the card that key names and
- * rings it. Pins that the ring lands on the Pricing & capacity card of a
- * stay listing, that it is the brand mint, that the scroll actually fires,
- * and that a form with no such card (a physical product) is a no-op.
+ * hands the key to the form, which scrolls to the question row that key
+ * names, opens it and rings it (z8r3fdv1z2: the weekend rate is its own
+ * "Do weekend nights cost more?" row). Pins that the ring lands on that row
+ * of a stay listing, that it is the brand mint, that the row opens so the
+ * field is in view, that the scroll actually fires, and that a form with no
+ * such row (a physical product) is a no-op.
  */
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -65,6 +67,7 @@ function renderForm({
 			retailerId={"r1" as never}
 			categoriesLocked={false}
 			eventsLocked={false}
+			promoLocked={false}
 			currency="MYR"
 			submitLabel="Save"
 			onSubmit={vi.fn()}
@@ -82,26 +85,33 @@ function renderForm({
 const anchor = SPOTLIGHT_ANCHOR.weekend_rate.anchor;
 
 describe("ProductForm — ?spot= spotlight", () => {
-	it("rings the Pricing & capacity card of a stay listing and scrolls to it", () => {
+	it("rings and opens the weekend-rate row of a stay listing, and scrolls to it", () => {
 		renderForm({ kind: "booking", spotlight: "weekend_rate" });
-		const card = document.getElementById(anchor);
-		expect(card, `no element with id ${anchor}`).not.toBeNull();
-		const cls = card?.className ?? "";
+		const row = document.getElementById(anchor);
+		expect(row, `no element with id ${anchor}`).not.toBeNull();
+		const cls = row?.className ?? "";
 		expect(cls).toMatch(/ring-accent/);
 		expect(cls).toMatch(/animate-kp-spotlight/);
 		expect(cls).not.toMatch(/destructive|amber/);
-		// The card, not the field: the weekend rate is a row of this card.
-		expect(card?.textContent).toContain("Pricing & capacity");
-		expect(card?.textContent).toContain("Weekend rate");
+		expect(row?.textContent).toContain("Do weekend nights cost more?");
+		// Opened, so the seller lands on the field rather than a closed row.
+		expect(row?.querySelector("button")?.getAttribute("aria-expanded")).toBe(
+			"true",
+		);
+		expect(
+			document.getElementById("booking-weekend")?.closest("[hidden]"),
+		).toBeNull();
 		expect(scrollIntoView).toHaveBeenCalledTimes(1);
 	});
 
-	it("without a spotlight the card keeps its plain border and nothing scrolls", () => {
+	it("without a spotlight the row stays plain and collapsed, and nothing scrolls", () => {
 		renderForm({ kind: "booking" });
-		const card = document.getElementById(anchor);
-		expect(card).not.toBeNull();
-		expect(card?.className).not.toMatch(/ring-accent|animate-kp-spotlight/);
-		expect(card?.className.split(" ")).toContain("border-border");
+		const row = document.getElementById(anchor);
+		expect(row).not.toBeNull();
+		expect(row?.className).not.toMatch(/ring-accent|animate-kp-spotlight/);
+		expect(row?.querySelector("button")?.getAttribute("aria-expanded")).toBe(
+			"false",
+		);
 		expect(scrollIntoView).not.toHaveBeenCalled();
 	});
 

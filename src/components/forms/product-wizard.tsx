@@ -61,6 +61,7 @@ import {
 import type { KindCard } from "../../lib/kind-card";
 import { NOTE_LINK_HINT } from "../../lib/linkify";
 import { asPackageUnit } from "../../lib/package-unit";
+import type { UnsavedState } from "../../lib/product-form-dirty";
 import {
 	isSecurityDepositInRange,
 	securityDepositRangeMessage,
@@ -92,6 +93,7 @@ import {
 	eventEndDateIssue,
 	eventSubmitValue,
 } from "./event-fields";
+import { focusAfterRender } from "./focus-error";
 import { PackageDayCounting, type StoreSchedule } from "./package-day-counting";
 import {
 	buildSubmitVariants,
@@ -101,7 +103,20 @@ import {
 	type ProductFormInitialValues,
 	type ProductFormSubmitValues,
 } from "./product-form";
-import { type ProductImage, ProductImagesField } from "./product-images-field";
+import {
+	failedPhotosLabel,
+	type PhotoUploadState,
+	type ProductImage,
+	ProductImagesField,
+} from "./product-images-field";
+import {
+	EMPTY_PROMO_DRAFT,
+	type PromoDraft,
+	PromoFields,
+	type PromoRow,
+	promoDraftIssue,
+	promoSubmitValue,
+} from "./promo-fields";
 import {
 	AXIS_PRESETS,
 	type CustomLineDraft,
@@ -214,6 +229,11 @@ export type WizardState = {
 	 * every product must answer, and "is this an event?" is a no for almost
 	 * every one of them. Never offered on a booking listing. */
 	event: EventDraft;
+	/** Promotion (z8r3fdcw72) — an OPTIONAL block at the foot of the Price
+	 * step, not a step of its own: a sale price is a price decision, and a
+	 * wizard step everyone taps past for a feature most products never use is
+	 * friction on every single create. Collapsed until the seller asks. */
+	promo: PromoDraft;
 	/** Review "More options" — buyer questions (`z8r3fdkjek`), as typed. In the
 	 * drawer for the event's reason: most products ask nothing. Never on a
 	 * booking listing. */
@@ -257,6 +277,7 @@ export function emptyWizardState(defaultKind?: ProductKind): WizardState {
 		prepMinutes: "",
 		pickupNote: "",
 		event: { ...EMPTY_EVENT_DRAFT },
+		promo: { ...EMPTY_PROMO_DRAFT },
 		buyerQuestions: [],
 	};
 }
@@ -681,8 +702,22 @@ export function wizardStepIssues(
 						message: issue.message,
 					});
 				}
+				// A sale price that doesn't undercut its own line stops the step
+				// too — the Promotion block lives here, so its refusals belong
+				// here (z8r3fdcw72).
+				if (issue.where === "row" && issue.field === "promoPrice") {
+					issues.push({
+						field: `promoPrice:${rowKey(rows[issue.index])}`,
+						message: issue.message,
+					});
+				}
 			}
 		}
+	}
+	// A half-filled promotion can't pass the step that sets it either.
+	if (step === 3) {
+		const promoIssue = promoDraftIssue(state.promo, Date.now(), rows);
+		if (promoIssue) issues.push({ field: "promo", message: promoIssue });
 	}
 	if (step === 4) {
 		if (!state.fulfilmentAnswered) {
@@ -812,6 +847,13 @@ export function buildWizardSubmitValues(
 				: undefined,
 		hidden: state.hidden,
 		kind,
+		// `null` when the block is switched off — the spelling that CLEARS a
+		// promotion, never `undefined` ("no change"). Flash extras are refused
+		// on booking and event listings server-side, so the draft never sends
+		// them there (`assertFlashFieldsAllowed`).
+		promo: promoSubmitValue(state.promo, Date.now(), {
+			flashAllowed: kind !== "booking" && !state.event.on,
+		}),
 		// Kind + booking config travel together (the server enforces the pairing).
 		booking:
 			kind === "booking"
@@ -961,6 +1003,7 @@ export function formDraftToWizardState(draft: ProductFormDraft): WizardState {
 		// round-trips as "Physical goods" (same stored kind, wizard-session
 		// affordance only; locked in 86eyj70z1).
 		kindCard: cardFromKind(draft.kind),
+		promo: draft.promoDraft ?? { ...EMPTY_PROMO_DRAFT },
 		capacityPerNight: draft.capacityPerNight,
 		packageLength: draft.packageLength ?? "",
 		packageUnit: draft.packageUnit ?? "month",
@@ -1119,6 +1162,7 @@ export function ProductWizard({
 	retailerId,
 	categoriesLocked,
 	eventsLocked,
+	promoLocked,
 	currency,
 	defaultKind,
 	onSubmit,
@@ -1129,6 +1173,7 @@ export function ProductWizard({
 	linkedCard,
 	storeSchedule,
 	saveLock,
+	onUnsavedChange,
 }: {
 	/** Owning retailer — feeds the review step's category picker. */
 	retailerId: Id<"retailers">;
@@ -1142,6 +1187,9 @@ export function ProductWizard({
 	/** Client mirror of the `events` plan gate — the toggle disables with the
 	 * Pro hint. Server enforces it too. */
 	eventsLocked: boolean;
+	/** Client mirror of the `promo` plan gate (z8r3fdcw72) — the toggle in
+	 * the Price step disables with the Pro hint. Server enforces it. */
+	promoLocked: boolean;
 	currency: string;
 	/** The store's `storeType`, when set — pre-answers step 0's kind card
 	 * ("Your store type" badge); the seller can still tap another. */
@@ -1151,8 +1199,12 @@ export function ProductWizard({
 	onSkipToFullForm: (handoff: ReturnType<typeof wizardHandoff>) => void;
 	/** Review-step handoff: open the full form on the same draft. */
 	onOpenFullForm: (handoff: ReturnType<typeof wizardHandoff>) => void;
-	/** Back from step 0 / Cancel — leave the wizard entirely. */
+	/** Back from step 0 / Cancel — leave the wizard entirely. Called only
+	 * after the wizard has confirmed any discard itself. */
 	onExit: () => void;
+	/** Reports what leaving right now would lose (z8r3fdtk82), so the route's
+	 * `UnsavedChangesGuard` can warn on a sidebar tap or a tab close. */
+	onUnsavedChange?: (state: UnsavedState) => void;
 	/** Restored draft from the full form's "switch back to guided setup" —
 	 * the wizard opens at the first unanswered step, every value in place. */
 	initialState?: WizardState;
@@ -1192,6 +1244,7 @@ export function ProductWizard({
 		initialState === undefined && linkedCard !== undefined ? linkedCard : null,
 	);
 	const revealRef = useRef<HTMLElement | null>(null);
+	const wizardRef = useRef<HTMLDivElement | null>(null);
 	// One callback ref for whichever element is the target (a card's wrapper
 	// or the event hint) — a RefObject would be typed to a single tag.
 	const setRevealTarget = (el: HTMLElement | null) => {
@@ -1205,7 +1258,11 @@ export function ProductWizard({
 		revealRef.current?.scrollIntoView({ block: "nearest" });
 		setReveal(null);
 	}, [reveal]);
-	const [uploading, setUploading] = useState(false);
+	const [photoUploads, setPhotoUploads] = useState<PhotoUploadState>({
+		kind: "idle",
+	});
+	const uploading = photoUploads.kind === "uploading";
+	const photosFailed = photoUploads.kind === "failed" ? photoUploads.count : 0;
 	const [submitting, setSubmitting] = useState(false);
 	// The one destructive answer the wizard ever asks for — a type switch that
 	// drops typed prices, or leaving an unsaved draft. One piece of state, so
@@ -1214,6 +1271,8 @@ export function ProductWizard({
 		title: string;
 		description: string;
 		confirmLabel: string;
+		/** Defaults to "Cancel". */
+		cancelLabel?: string;
 		apply: () => void;
 	} | null>(null);
 	const [serverError, setServerError] = useState<string | null>(null);
@@ -1354,6 +1413,27 @@ export function ProductWizard({
 
 	const issueFor = (field: string): string | undefined =>
 		issues.find((i) => i.field === field)?.message;
+
+	// The Promotion block edits sale prices on the SAME rows the price grid
+	// above it owns — one substrate, two writers, exactly as in the full form.
+	const promoRows: PromoRow[] = rows.map((row, index) => ({
+		key: String(index),
+		label: rowKey(row) || state.name.trim() || "This item",
+		price: row.price,
+		promoPrice: row.promoPrice ?? "",
+	}));
+	/** ONE patch for however many rows changed — `setRow` in a loop reads
+	 * `rows` from this render's closure, so N calls collapse to the last one
+	 * ("30% off" discounted only the final choice). Mirrors `fillAllPrices`
+	 * just below, which has always written the whole grid in one go. */
+	function setPromoPrices(next: Record<string, string>) {
+		patchEditor({
+			rows: rows.map((row, i) => {
+				const value = next[String(i)];
+				return value === undefined ? row : { ...row, promoPrice: value };
+			}),
+		});
+	}
 
 	// --- Editor manipulation (same semantics as the full editor) -------------
 	function setOptions(nextOptions: OptionAxis[]) {
@@ -1637,6 +1717,17 @@ export function ProductWizard({
 		state.minQuantity.trim().length > 0 ||
 		state.minNoticeDays.trim().length > 0;
 
+	// A photo that didn't upload is still on screen waiting for Retry — leaving
+	// would lose it, so it counts as unsaved work (z8r3fdtk85).
+	const unsaved: UnsavedState = uploading
+		? "uploading"
+		: isDirty || photosFailed > 0
+			? "changes"
+			: "none";
+	useEffect(() => {
+		onUnsavedChange?.(unsaved);
+	}, [unsaved, onUnsavedChange]);
+
 	function cancelWizard() {
 		if (!isDirty) {
 			onExit();
@@ -1645,7 +1736,11 @@ export function ProductWizard({
 		setPendingConfirm({
 			title: "Discard this product?",
 			description: "Nothing has been saved — leaving loses the draft.",
-			confirmLabel: "Discard",
+			// The same two answers as the route's leave guard
+			// (UnsavedChangesGuard), so leaving reads the same whichever way
+			// the seller leaves: Cancel here, or the sidebar.
+			cancelLabel: "Keep editing",
+			confirmLabel: "Discard changes",
 			apply: onExit,
 		});
 	}
@@ -1677,6 +1772,12 @@ export function ProductWizard({
 		});
 		if (found.length > 0) {
 			setIssues(found);
+			// Otherwise Continue is a button that does nothing, with the reason
+			// off-screen above — the stepper's own rule is that text problems
+			// surface ON Continue, which only works if the seller is taken to
+			// them (found by hand-testing: a sale price over list silently
+			// blocked the step).
+			focusAfterRender(wizardRef.current);
 			return;
 		}
 		setIssues([]);
@@ -1684,8 +1785,10 @@ export function ProductWizard({
 	}
 
 	function goBack() {
+		// Back off the first step leaves the wizard, so it asks first exactly
+		// like Cancel does.
 		if (stepPos === 0) {
-			onExit();
+			cancelWizard();
 			return;
 		}
 		setIssues([]);
@@ -1711,6 +1814,7 @@ export function ProductWizard({
 				setStep(s);
 				// A review-step issue lives inside the More-options disclosure.
 				if (s === REVIEW_STEP) setMoreOpen(true);
+				focusAfterRender(wizardRef.current);
 				return;
 			}
 		}
@@ -1864,7 +1968,7 @@ export function ProductWizard({
 	const revealMargin = "scroll-mb-56 lg:scroll-mb-0";
 
 	return (
-		<div className="flex flex-col gap-4">
+		<div ref={wizardRef} className="flex flex-col gap-4">
 			{/* Header: back + step title + progress dots + cancel. Four items on one
 			    narrow row, so the gap tightens on mobile and only the CURRENT dot
 			    widens — completed steps stay small (still accent-coloured, so
@@ -1873,8 +1977,28 @@ export function ProductWizard({
 				<button
 					type="button"
 					onClick={goBack}
-					aria-label={stepPos === 0 ? "Back to products" : "Previous step"}
-					className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted"
+					// Back unmounts the photo grid: an upload in flight would land
+					// with no tile to show it, a failed one would be dropped without
+					// a word. Held with the reason until the photos settle — the
+					// same reason Continue carries (PR #392 review).
+					disabled={uploading || photosFailed > 0}
+					aria-label={
+						uploading
+							? "Back — wait for the photo to finish uploading"
+							: photosFailed > 0
+								? `Back — ${failedPhotosLabel(photosFailed)}, retry or remove it first`
+								: stepPos === 0
+									? "Back to products"
+									: "Previous step"
+					}
+					title={
+						uploading
+							? "Wait for the photo to finish uploading"
+							: photosFailed > 0
+								? `${failedPhotosLabel(photosFailed)} — retry or remove it first`
+								: undefined
+					}
+					className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
 				>
 					<ChevronLeft className="size-5" />
 				</button>
@@ -2072,8 +2196,7 @@ export function ProductWizard({
 						<ProductImagesField
 							images={state.images}
 							onChange={(images) => patch({ images })}
-							onUploadingChange={setUploading}
-							onError={setServerError}
+							onUploadStateChange={setPhotoUploads}
 						/>
 						{showDescription ? (
 							<label className="flex flex-col gap-1.5 text-sm font-medium">
@@ -2671,6 +2794,25 @@ export function ProductWizard({
 								{showAxes ? "choice" : "item"}
 							</button>
 						)}
+						{/* Promotion (z8r3fdcw72) — here, at the foot of the step that
+						    sets the price, rather than as a step of its own: a sale
+						    price IS a price, and a wizard step everyone taps past for
+						    something most products never use is friction on every
+						    create. Collapsed until the seller flips the toggle, so it
+						    costs a line of text until it is wanted. */}
+						<div className="mt-2 border-t border-border pt-4">
+							<PromoFields
+								draft={state.promo}
+								onChange={(promo) => patch({ promo })}
+								rows={promoRows}
+								onPromoPrices={setPromoPrices}
+								currency={currency}
+								locked={promoLocked}
+								flashAllowed={!state.event.on}
+								flashBlockedReason="Flash-sale extras don't apply to an event — seats already cap it. The sale price still does."
+								now={Date.now()}
+							/>
+						</div>
 					</>
 				) : null}
 
@@ -3543,10 +3685,17 @@ export function ProductWizard({
 					<Button
 						type="button"
 						onClick={goNext}
-						disabled={!structurallyAnswered || uploading}
+						// A photo in "Didn't upload" would be left behind on this step
+						// and the product created without it — held, with the reason,
+						// until the seller retries or removes it (z8r3fdtk85).
+						disabled={!structurallyAnswered || uploading || photosFailed > 0}
 						className="h-12 w-full shadow-lg shadow-accent/20 lg:shadow-none"
 					>
-						{uploading ? "Uploading…" : "Continue"}
+						{uploading
+							? "Uploading…"
+							: photosFailed > 0
+								? failedPhotosLabel(photosFailed)
+								: "Continue"}
 					</Button>
 				) : (
 					<Button
@@ -3585,6 +3734,7 @@ export function ProductWizard({
 				title={pendingConfirm?.title ?? ""}
 				description={pendingConfirm?.description}
 				confirmLabel={pendingConfirm?.confirmLabel ?? "Confirm"}
+				cancelLabel={pendingConfirm?.cancelLabel}
 				destructive
 				onConfirm={() => {
 					const apply = pendingConfirm?.apply;

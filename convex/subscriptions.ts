@@ -7,10 +7,12 @@
 //  1. FAIL SAFE — a missing subscription row resolves to FULL access (comped),
 //     logged, never locked. So a backfill miss degrades to "works", not "locked
 //     out" (ticket launch-blocker EC).
-//  2. The storefront + order pipeline NEVER call this — they're public and stay
-//     live regardless of subscription status. The soft lock freezes the SELLER's
-//     dashboard and nothing else: a lapsed store is view-only, while its buyers
-//     browse, order, pay, track and edit their own orders exactly as before.
+//  2. The storefront + order pipeline NEVER call the guard — they're public and
+//     stay live regardless of subscription status. The soft lock freezes the
+//     SELLER's dashboard: a lapsed store is view-only, while its buyers browse,
+//     order, track and edit their own orders exactly as before. The one thing
+//     a buyer loses is PAYING (z8r3fdr6gg) — `buyerPaymentsPaused` below is
+//     the single read buyer payment paths make, and it never refuses an order.
 //
 // See docs/manual-subscription.md.
 
@@ -40,6 +42,7 @@ import { landCreditGrant } from "./credits";
 import { COMP_LABEL_MAX, COMP_NOTE_MAX, type CompKind } from "./lib/comp";
 import { ENTERPRISE_SELF_SERVE_REFUSAL } from "./lib/enterprise";
 import { rateLimiter } from "./lib/rateLimiter";
+import { subscriptionCoversWaAlerts } from "./lib/sellerAlerts";
 import {
 	autoChargeAllowed,
 	autoRenewMethodLabel,
@@ -305,6 +308,19 @@ export async function loadSubscription(
 		.first();
 }
 
+/** Does this store's subscription cover seller WhatsApp order alerts right
+ * now (z8r3fdv55f)? The one DB-side author — the WA alert actions and the
+ * email suppression read it through their order lookups, so the two can never
+ * disagree about whether a WhatsApp alert is going out. The rule itself is
+ * `subscriptionCoversWaAlerts` (pure). */
+export async function waAlertsCoveredBySubscription(
+	ctx: AnyCtx,
+	retailer: Pick<Doc<"retailers">, "_id" | "userId">,
+): Promise<boolean> {
+	const sub = await loadSubscription(ctx, retailer._id);
+	return subscriptionCoversWaAlerts(sub, storeOwnerIsAdmin(retailer));
+}
+
 /** Resolve a retailer's access in one call. */
 export async function getAccess(
 	ctx: AnyCtx,
@@ -317,6 +333,57 @@ export async function getAccess(
 		);
 	}
 	return resolveAccess(sub);
+}
+
+/**
+ * Buyer payments PAUSE while a store is lapsed (z8r3fdr6gg) — the ONE place
+ * that rule lives. A lapsed store (an overdue invoice, or an admin-ended comp:
+ * exactly `resolveAccess(...).frozen`) is view-only, so it cannot mark an
+ * order paid, advance it or fulfil it. A buyer who pays it gets an order
+ * nobody on the platform can act on, and Kedaipal would be lending its
+ * credibility to a payment request from a store that has stopped paying us.
+ * So while it lasts the buyer can still ORDER, but every payment door is shut:
+ * no bank/QR details, no HitPay checkout, no new "I've paid" claim, no "How to
+ * pay" block on the receipt, no claim-link payment deadline. It reopens on
+ * the same order page the moment the store is active again.
+ *
+ * Deliberately NOT paused: trialing (free period + first-invoice window),
+ * comped, on-hold, a missing row (fail open, like `resolveAccess`), and a
+ * store OWNED BY A KEDAIPAL ADMIN — dogfooded free for ever and never
+ * soft-locked, so pausing its buyers would have the two sides disagree
+ * (found by /test-code on IndoMart: no lock banner, yet buyers paused).
+ * Identity-blind on the owner (`storeOwnerIsAdmin`), like the free-period
+ * skip, because a buyer has no identity to check. A
+ * scammer on a fresh store never reaches `past_due`, so widening this to
+ * "never paid" is the open follow-up decision — change it HERE and every
+ * door follows.
+ *
+ * Read on public buyer paths, so it is a pure function of the row (no
+ * missing-row warning, unlike `getAccess`) and its public projection is one
+ * boolean — never the status or the reason.
+ *
+ * ANY new path that asks a buyer to pay — a reminder cron, a new channel —
+ * must ask this itself. The two existing payment asks it doesn't touch (the
+ * seller's manual reminder, counter pay-later) are safe only because they sit
+ * behind the seller soft-lock; an automated send has no seller in the loop.
+ */
+export function buyerPaymentsPausedFor(
+	sub: Doc<"subscriptions"> | null,
+	owner?: { userId: string } | null,
+): boolean {
+	if (!resolveAccess(sub).frozen) return false;
+	return !(owner && storeOwnerIsAdmin(owner));
+}
+
+/** `buyerPaymentsPausedFor`, loading the store's subscription — and its
+ * owner only when the subscription is frozen, so an open store pays one read. */
+export async function buyerPaymentsPaused(
+	ctx: AnyCtx,
+	retailerId: Id<"retailers">,
+): Promise<boolean> {
+	const sub = await loadSubscription(ctx, retailerId);
+	if (!buyerPaymentsPausedFor(sub)) return false;
+	return buyerPaymentsPausedFor(sub, await ctx.db.get(retailerId));
 }
 
 /**
@@ -417,8 +484,8 @@ export async function assertSubscriptionActive(
 			// A lock from a comp ending has no invoice behind it (z8r3fdeub2) —
 			// "pay your invoice" would send the seller hunting for a bill.
 			access.compEnded
-				? "Your sponsored access has ended, so your store is view-only. Choose a plan in Settings → Billing to start working again — your storefront stays live and buyers can still order in the meantime."
-				: "Your subscription is past due, so your store is view-only. Pay your invoice to start working again — your storefront stays live and buyers can still order in the meantime.",
+				? "Your sponsored access has ended, so your store is view-only. Choose a plan in Settings → Billing to start working again — your storefront stays live and buyers can still order in the meantime, but they can't pay you on Kedaipal until you do."
+				: "Your subscription is past due, so your store is view-only. Pay your invoice to start working again — your storefront stays live and buyers can still order in the meantime, but they can't pay you on Kedaipal until you do.",
 		);
 	}
 }
@@ -524,7 +591,8 @@ const FEATURE_LABEL: Record<PlanFeature, string> = {
 	delivery: "Lalamove delivery booking",
 	onlinePayments: "Online payments (HitPay)",
 	events: "Event RSVPs",
-	waOrderAlerts: "WhatsApp order alerts",
+	promo: "Promo and flash-sale prices",
+	vouchers: "Issuing voucher codes",
 };
 
 /**
@@ -834,7 +902,7 @@ export const setSeasonalHold = mutation({
  * The ONE comp-ending path (z8r3fdeub2): an admin turned the comp upgrade off,
  * and the store becomes an EXPIRED seller — `past_due` with no invoice, the
  * same lock a lapsed subscription is in. The storefront stays live and buyers
- * keep ordering (the order pipeline never reads subscription status);
+ * keep ordering, though they can't pay until it settles (`buyerPaymentsPaused`);
  * dashboard growth-writes are refused by `assertSubscriptionActive` until the
  * seller picks a plan and pays, which settles the row to `active` like any
  * renewal. No free period: a comped store already had its runway, and a trial

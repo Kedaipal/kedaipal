@@ -35,6 +35,8 @@ export type SummaryInput = {
 	rows: {
 		optionValues: string[];
 		price: string;
+		/** Sale price as typed; "" / absent = this line isn't on promotion. */
+		promoPrice?: string;
 		active: boolean;
 		blockWhenOutOfStock: boolean;
 		/** Needed to tell a **made-to-order** product (bespoke, quoted, mockup
@@ -265,6 +267,24 @@ export function describeProduct(
 	} else {
 		parts.push(
 			formatDraftPriceRange(Math.min(...prices), Math.max(...prices), currency),
+		);
+	}
+
+	// A configured sale price belongs in the one line that claims to summarise
+	// the product: the strip printed the LIST price beside a live promotion, so
+	// a seller opening the product to check their sale read the old number
+	// (found by hand-testing). Plain text, so it states the sale rather than
+	// striking the list — this strip has no markup.
+	const salePrices = activeRows
+		.map((r) => parsePriceInput((r.promoPrice ?? "").trim()))
+		.filter((v): v is number => v !== null && v > 0);
+	if (salePrices.length > 0) {
+		parts.push(
+			`Sale ${formatDraftPriceRange(
+				Math.min(...salePrices),
+				Math.max(...salePrices),
+				currency,
+			)}`,
 		);
 	}
 

@@ -14,6 +14,7 @@ import {
 	isSellerFilter,
 	isSellerSort,
 	matchesSellerSearch,
+	reopenedToast,
 	SELLER_FILTERS,
 	sellerBucket,
 	sellerCompMenuItem,
@@ -27,6 +28,7 @@ import {
 	sellerSeatsPhrase,
 	sellerSummaryText,
 	sellersToCsv,
+	sellerUnmeteredNote,
 	sortSellers,
 } from "./admin-seller-view";
 import { formatShortDate } from "./format";
@@ -39,6 +41,7 @@ const at = (days: number) => NOW + days * DAY;
 function row(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 	return {
 		_id: "r1" as AdminSellerRow["_id"],
+		availability: { state: "open" },
 		storeName: "Bearcamp Malaysia",
 		slug: "bearcamp-malaysia",
 		ownerUserId: "u1",
@@ -49,6 +52,7 @@ function row(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 		comped: false,
 		createdAt: at(-180),
 		unclaimed: false,
+		referralEditable: true,
 		purging: false,
 		marketplace: { internal: false },
 		country: "MY",
@@ -737,6 +741,7 @@ describe("a pre-built store reads as unclaimed everywhere (docs/prebuilt-stores.
 	it("once claimed it reads like any other seller again", () => {
 		const claimed = row({
 			unclaimed: false,
+			referralEditable: true,
 			claimedAt: at(-2),
 			subscriptionStatus: "trialing",
 			trialEndsAt: at(12),
@@ -769,19 +774,83 @@ describe("sellerCredits", () => {
 		expect(view.metered).toBe(false);
 	});
 
-	it("a metered store reads its balance; a comped one at zero is never locked", () => {
+	it("a metered store reads its balance", () => {
 		expect(sellerCredits(row({ credits })).headline).toBe("200 left");
 		expect(sellerCredits(row({ credits })).metered).toBe(true);
 		expect(sellerCredits(row()).metered).toBe(true);
-		const comped = sellerCredits(
-			row({ comped: true, credits: { ...credits, plan: 0, purchased: 0 } }),
-		);
-		expect(comped.out).toBe(true);
-		expect(comped.detail).toMatch(/never locked/);
+	});
+
+	it("a SPONSORED store reads 'not metered', never its stale cache (z8r3fdrph7)", () => {
+		// The row keeps whatever figures it carried while it was billed — the
+		// directory printing "plan 200 · bought 0" beside a comp is the admin
+		// console repeating the very "200" the seller's meter no longer shows.
+		const comped = sellerCredits(row({ comped: true, credits }));
+		expect(comped.metered).toBe(false);
+		expect(comped.headline).toBe("—");
+		expect(comped.detail).toBe("Sponsored — not metered");
 		expect(comped.tone).toBe("muted");
+		expect(comped.out).toBe(false);
+		// An admin's own store is told apart from it: the next step differs,
+		// since a comp is a toggle and an admin store is permanent.
+		expect(sellerCredits(row({ ownerIsAdmin: true, credits })).detail).toBe(
+			"Admin store — not metered",
+		);
+	});
+
+	it("the unmetered note names WHICH kind — a comp's next state is 'metered again'", () => {
+		expect(sellerUnmeteredNote(row({ ownerIsAdmin: true }))).toMatch(
+			/^Admin store — not metered/,
+		);
+		const sponsored = sellerUnmeteredNote(row({ comped: true }));
+		expect(sponsored).toMatch(/^Sponsored store — not metered/);
+		expect(sponsored).toMatch(/metered again/);
 	});
 
 	it("a store with no account yet says so", () => {
 		expect(sellerCredits(row()).detail).toBe("No credit account yet");
+	});
+});
+
+describe("store availability in the directory (z8r3fdudf7)", () => {
+	const paused = row({
+		availability: { state: "paused", by: "seller", note: "Back on 1 Nov" },
+	});
+	const offline = row({
+		_id: "r2" as AdminSellerRow["_id"],
+		availability: { state: "offline", by: "admin" },
+	});
+	const open = row({ _id: "r3" as AdminSellerRow["_id"] });
+
+	it("the status line says whose switch it is", () => {
+		expect(sellerReason(paused)).toBe("Paused by seller · “Back on 1 Nov”");
+		expect(sellerReason(offline)).toBe("Offline · taken down by Kedaipal");
+		expect(
+			sellerReason(row({ availability: { state: "paused", by: "admin" } })),
+		).toBe("Paused by Kedaipal");
+	});
+
+	it("'Paused / offline' counts and filters across every billing status", () => {
+		const rows = [paused, offline, open];
+		expect(countSellerBuckets(rows).unavailable).toBe(2);
+		expect(filterSellers(rows, "unavailable", "").map((r) => r._id)).toEqual([
+			paused._id,
+			offline._id,
+		]);
+	});
+});
+
+describe("reopenedToast — from the resolver's answer, never a status proxy (PR #369 review)", () => {
+	it("open: says so", () => {
+		expect(reopenedToast("Corks Out", { state: "open" })).toBe(
+			"Corks Out is open for orders again.",
+		);
+	});
+	it("names what still keeps orders off", () => {
+		expect(reopenedToast("Corks Out", { state: "paused", by: "hold" })).toMatch(
+			/still not taking orders — an Off-Season Hold\.$/,
+		);
+		expect(
+			reopenedToast("Corks Out", { state: "paused", by: "seller", note: "x" }),
+		).toMatch(/the seller's own pause\.$/);
 	});
 });

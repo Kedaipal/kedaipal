@@ -246,7 +246,7 @@ describe("pause — a paid seller paused through their paid period", () => {
 		expect(pub.status === "ok" && "subscription" in pub.retailer).toBe(false);
 	});
 
-	test("every order-create path refuses while paused, with the buyer-facing reason", async () => {
+	test("every order-create path refuses while paused — buyers with their reason, the counter with the seller's", async () => {
 		const t = setup();
 		const s = await seedPaidSeller(t, "u_refuse");
 		const asUser = t.withIdentity({ subject: s.userId });
@@ -291,11 +291,13 @@ describe("pause — a paid seller paused through their paid period", () => {
 					...phone,
 					name: "Walk-in",
 				}),
-			).rejects.toThrow(/seasonal break/);
+				// The SELLER is at the counter (z8r3fdudf7): told it's their hold
+				// and where to lift it, not "on a seasonal break" like a buyer.
+			).rejects.toThrow(/Off-Season Hold.*Billing/);
 		}
 		await expect(
 			asUser.mutation(api.counterCheckout.startAnonymousSession, {}),
-		).rejects.toThrow(/seasonal break/);
+		).rejects.toThrow(/Off-Season Hold.*Billing/);
 		// Editing the store stays live — the hold is not a soft-lock.
 		await expect(
 			asUser.mutation(api.retailers.updateSettings, {

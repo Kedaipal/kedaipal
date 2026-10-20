@@ -29,14 +29,15 @@ export interface PrimaryActionInput {
 	mode: CounterPayMode;
 	/** Cart is empty — nothing to sell either way. */
 	empty: boolean;
-	/** A line still has no price. Only blocks SEND: a claim freezes prices at
-	 * send, so an unpriced line would lock a zero. The counter path resolves
-	 * price at create and its own review dialog catches it. */
-	unpriced: boolean;
+	/** Name of a line priced at RM0, if any. Only blocks SEND: a claim link
+	 * exists to take a payment, and the claim door refuses a free line. The
+	 * counter rings a free line up — as a free order, or a RM0 line on a paid
+	 * one — and its own review dialog shows it. */
+	freeLine?: string;
 	/** Name of an EVENT product in the cart (`z8r3fdff9u`), if any. Blocks SEND
 	 * with the event's own reason — a claim lets the buyer pick a date and holds
-	 * no seat, both of which an RSVP forbids. Checked BEFORE `unpriced`: a free
-	 * event line is also RM0, and "set a price for every custom item" would
+	 * no seat, both of which an RSVP forbids. Checked BEFORE `freeLine`: a free
+	 * event line is also RM0, and "is free — ring it up at the counter" would
 	 * misname what the seller is looking at. */
 	eventName?: string;
 	/** Name of a NON-event line sharing the cart with an RSVP (`z8r3fdhh45`),
@@ -53,6 +54,10 @@ export interface PrimaryActionInput {
 	 * Blocks BOTH modes: every door refuses it, and a claim link must never be
 	 * dead on arrival over an answer only the seller can give. */
 	unansweredQuestion?: string;
+	/** Why the counter is closed (`useCounterClosedReason`) — an Off-Season
+	 * Hold or Kedaipal's switch. Outranks every other reason in BOTH modes:
+	 * nothing about this cart matters while no order can be placed. */
+	closed?: string;
 	/** Formatted money for the label, e.g. "RM 20.00". */
 	money: string;
 	windowMinutes: number;
@@ -77,24 +82,27 @@ export function counterPrimaryAction(input: PrimaryActionInput): PrimaryAction {
 	const {
 		mode,
 		empty,
-		unpriced,
+		freeLine,
 		money,
 		windowMinutes,
 		buyerName,
 		eventName,
 		mixedRsvp,
 		unansweredQuestion,
+		closed,
 	} = input;
 	if (mode === "send") {
-		const reason = empty
-			? "Add an item first"
-			: mixedRsvp !== undefined
-				? `An RSVP is its own order — remove "${mixedRsvp}" or ring it up separately`
-				: eventName !== undefined
-					? `"${eventName}" is an event — share its storefront link so guests RSVP to the fixed date`
-					: unpriced
-						? "Set a price for every custom item first"
-						: unansweredQuestion;
+		const reason = closed
+			? closed
+			: empty
+				? "Add an item first"
+				: mixedRsvp !== undefined
+					? `An RSVP is its own order — remove "${mixedRsvp}" or ring it up separately`
+					: eventName !== undefined
+						? `"${eventName}" is an event — share its storefront link so guests RSVP to the fixed date`
+						: freeLine !== undefined
+							? `"${freeLine}" is free — a link takes a payment, so ring it up at the counter`
+							: unansweredQuestion;
 		const runwayMinutes = Math.round(CLAIM_PAYMENT_RUNWAY_MS / 60_000);
 		return {
 			// Shows the MONEY, mirroring the counter primary: the price is what a
@@ -110,14 +118,19 @@ export function counterPrimaryAction(input: PrimaryActionInput): PrimaryAction {
 				`${buyerName ? `${buyerName} gets` : "They get"} the link on WhatsApp and ${buyerName ? "has" : "have"} ${describeClaimWindow(windowMinutes)} to complete it, then at least ${runwayMinutes} minutes to pay. Nothing is charged until they pay.`,
 		};
 	}
-	const counterReason = empty
-		? "Add an item first"
-		: mixedRsvp !== undefined
-			? `An RSVP is its own order — remove "${mixedRsvp}" or ring it up separately`
-			: unansweredQuestion;
+	const counterReason = closed
+		? closed
+		: empty
+			? "Add an item first"
+			: mixedRsvp !== undefined
+				? `An RSVP is its own order — remove "${mixedRsvp}" or ring it up separately`
+				: unansweredQuestion;
 	return {
 		label: `Review order · ${money}`,
 		disabled: counterReason !== undefined,
 		reason: counterReason,
+		// The counter path needs no sub-line — except a closed counter, whose
+		// reason must be READ, not hovered for.
+		helper: closed,
 	};
 }

@@ -11,6 +11,7 @@ import {
 	openNowStatus,
 	WEEKDAY_NAMES_SHORT,
 } from "../../convex/lib/openingHours";
+import { parseShowcaseSlugParam } from "../../convex/lib/showcase";
 import type { MarketplaceStoreCard } from "../../convex/marketplace";
 
 /**
@@ -42,6 +43,9 @@ export const SEARCH_QUERY_MAX = 80;
 export function parseMarketplaceSearch(search: Record<string, unknown>): {
 	q?: string;
 	filter?: Exclude<MarketplaceChip, "all">;
+	/** `?showcase=<slug>` (z8r3fdr6mv): the focused view of one showcase —
+	 * the link on a booth QR. An unknown slug renders the plain page. */
+	showcase?: string;
 } {
 	// Trim BEFORE the cap, so padding never spends the 80-char budget.
 	const q =
@@ -49,7 +53,12 @@ export function parseMarketplaceSearch(search: Record<string, unknown>): {
 			? search.q.trim().slice(0, SEARCH_QUERY_MAX) || undefined
 			: undefined;
 	const filter = FILTER_CHIPS.find((chip) => chip === search.filter);
-	return { ...(q ? { q } : {}), ...(filter ? { filter } : {}) };
+	const showcase = parseShowcaseSlugParam(search.showcase);
+	return {
+		...(q ? { q } : {}),
+		...(filter ? { filter } : {}),
+		...(showcase ? { showcase } : {}),
+	};
 }
 
 /**
@@ -97,13 +106,43 @@ export function cardOpenStatus(
 	return { open: false, label: "Closed" };
 }
 
-/** One store, one search: name, description and area all match. */
-function matchesSearch(card: MarketplaceStoreCard, query: string): boolean {
+/**
+ * One search, one rule: the query matches when any of these fields contains
+ * it. The store's name, description and area always count; a caller adds the
+ * text its own surface prints beside the store — a showcase ticket's booth
+ * label (`matchShowcases`), so "A12" finds the store at booth A12.
+ */
+export function matchesSearch(
+	card: MarketplaceStoreCard,
+	query: string,
+	extraFields: ReadonlyArray<string | undefined> = [],
+): boolean {
 	const q = query.trim().toLowerCase();
 	if (q.length === 0) return true;
-	return [card.storeName, card.storeDescription, card.storeArea].some((f) =>
-		f?.toLowerCase().includes(q),
-	);
+	return [
+		card.storeName,
+		card.storeDescription,
+		card.storeArea,
+		...extraFields,
+	].some((f) => f?.toLowerCase().includes(q));
+}
+
+/** The chip half of the rule — single-select, "all" lets everything by. */
+export function matchesChip(
+	card: MarketplaceStoreCard,
+	chip: MarketplaceChip,
+	now: number,
+): boolean {
+	switch (chip) {
+		case "open":
+			return cardOpenStatus(card, now).open;
+		case "new":
+			return isNewStore(card.createdAt, now);
+		case "delivers":
+			return card.offersDelivery;
+		default:
+			return true;
+	}
 }
 
 /**
@@ -115,20 +154,12 @@ export function filterStores(
 	cards: MarketplaceStoreCard[],
 	opts: { region: Country; chip: MarketplaceChip; search: string; now: number },
 ): MarketplaceStoreCard[] {
-	return cards.filter((card) => {
-		if (card.country !== opts.region) return false;
-		if (!matchesSearch(card, opts.search)) return false;
-		switch (opts.chip) {
-			case "open":
-				return cardOpenStatus(card, opts.now).open;
-			case "new":
-				return isNewStore(card.createdAt, opts.now);
-			case "delivers":
-				return card.offersDelivery;
-			default:
-				return true;
-		}
-	});
+	return cards.filter(
+		(card) =>
+			card.country === opts.region &&
+			matchesSearch(card, opts.search) &&
+			matchesChip(card, opts.chip, opts.now),
+	);
 }
 
 /**

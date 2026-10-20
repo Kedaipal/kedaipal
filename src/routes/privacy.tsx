@@ -195,7 +195,10 @@ function PrivacyPage() {
 				<p>
 					Some of the cookies and similar technologies we use are strictly
 					necessary to operate the Service, including authenticating retailer
-					sessions and remembering cart contents on the storefront.
+					sessions, remembering cart contents on the storefront, and — for 30
+					days after you open another seller's referral link — remembering which
+					seller referred you, so the referral bonus reaches you when you sign
+					up.
 				</p>
 				<p>
 					We also use analytics cookies set by Google Analytics and Microsoft

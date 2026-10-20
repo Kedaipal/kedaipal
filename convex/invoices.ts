@@ -384,6 +384,21 @@ async function settleInvoicePaid(
 		});
 	}
 
+	// 2d) Referral reward (86ey82hke): a store's FIRST paid plan invoice lands
+	//     both sides' bonus credits — the referee for the tier it just paid
+	//     for. SCHEDULED, not inline: the grant is several writes, and a
+	//     try/catch around them here would not roll them back — a throw
+	//     between the referee's credits and the row's stamp would leave a
+	//     half-paid reward that never retries. In its own transaction it is
+	//     all-or-nothing, and it can never fail this payment. The scheduler
+	//     is transactional, so it fires only if this settle commits.
+	if (firstTime && !isHold) {
+		await ctx.scheduler.runAfter(0, internal.referrals.grantForFirstInvoice, {
+			refereeId: invoice.retailerId,
+			paidPlan: billedPlan,
+		});
+	}
+
 	// 3) Founding — the slot is reserved at onboard (signup). For the
 	//    "promote a standard vendor" path (a founding invoice for someone not yet
 	//    reserved), reserve it now + welcome them. A plain (non-founding) invoice

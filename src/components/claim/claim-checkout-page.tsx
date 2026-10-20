@@ -34,6 +34,7 @@ import {
 } from "../../../convex/lib/openingHours";
 import { distinctPickupNotes } from "../../../convex/lib/pickupNote";
 import { slowestPrep } from "../../../convex/lib/prepFloor";
+import { claimVoucherDiscount } from "../../../convex/lib/vouchers";
 import type { ClaimPagePayload } from "../../../convex/orderClaims";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { displayAddressState } from "../../lib/address-display";
@@ -75,6 +76,7 @@ import { PickupNotes } from "../order/pickup-notes";
 import { AddressFieldset } from "../storefront/address-fieldset";
 import { sanitizeAddress } from "../storefront/checkout-form";
 import { CheckoutHint } from "../storefront/checkout-hint";
+import { PaymentsPausedNotice } from "../storefront/payments-paused-notice";
 import {
 	PickupLocationRadioList,
 	PickupSummaryCard,
@@ -694,7 +696,15 @@ export function ClaimCheckoutPage({
 		quoteForDelivery === undefined ||
 		quoteForDelivery.kind === "fee" ||
 		quoteForDelivery.kind === "free";
-	const displayTotal = open.itemsTotal + pickupFee + deliveryFee;
+	// The seller's voucher as the SERVER judges it right now (`z8r3fdr617`) —
+	// not as it was frozen at send. `applied` prices the ticket; `dropped` means
+	// the code was spent or voided in the meantime, and the notice below says so
+	// BEFORE the buyer fills the form. The commit recomputes from the same read,
+	// so the total confirmed here is the total charged.
+	const voucher = open.voucher;
+	const voucherDiscount = claimVoucherDiscount(voucher, open.itemsTotal);
+	const displayTotal =
+		open.itemsTotal + pickupFee + deliveryFee - voucherDiscount;
 
 	const feeNounShort = collectsFromCustomer ? "collection fee" : "delivery fee";
 	const deliveryBlockedLine = (() => {
@@ -765,6 +775,10 @@ export function ClaimCheckoutPage({
 			}
 			feeSettled={feeSettled}
 			displayTotal={displayTotal}
+			voucherDiscount={voucherDiscount}
+			voucherCode={
+				voucher?.kind === "applied" ? voucher.snapshot.code : undefined
+			}
 		/>
 	);
 
@@ -773,7 +787,34 @@ export function ClaimCheckoutPage({
 			<div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:gap-8">
 				{/* Desktop: sticky ticket right, sections left (storefront layout). */}
 				<div className="lg:order-2 lg:w-96 lg:shrink-0">
-					<div className="lg:sticky lg:top-16">{ticket}</div>
+					<div className="flex flex-col gap-3 lg:sticky lg:top-16">
+						{/* Above the ticket, as on every checkout (z8r3fdr6gg). */}
+						<PaymentsPausedNotice
+							paused={store.paymentsPaused}
+							storeName={storeName}
+							// A fee still to be quoted is a payment to come.
+							free={displayTotal === 0 && feeSettled}
+						/>
+						{/* A voucher that died between send and commit. Said HERE, on
+						    load, above the price it changes — the one thing this must
+						    never do is let the buyer confirm a total they were not
+						    shown. Refusing the commit instead would strand them: only
+						    the store can issue another link. */}
+						{voucher?.kind === "dropped" ? (
+							// `<output>` rather than a `<p role="status">`: it carries the
+							// implicit live-region role, so the notice is announced
+							// without the redundant attribute biome (rightly) rejects.
+							// `block` because output is inline by default.
+							<output className="block rounded-xl border border-dashed border-border bg-muted/40 px-3 py-2.5 text-xs text-muted-foreground">
+								<span className="font-semibold text-foreground">
+									The voucher on this link can't be used.
+								</span>{" "}
+								{voucher.message} The total below is what you'll pay — message{" "}
+								{storeName} if you think that's wrong.
+							</output>
+						) : null}
+						{ticket}
+					</div>
 				</div>
 
 				<div className="flex min-w-0 flex-1 flex-col gap-4 lg:order-1">
@@ -1152,9 +1193,9 @@ export function ClaimCheckoutPage({
 									: `Confirm order · ${formatPrice(displayTotal, store.currency)} + ${feeNounShort}`}
 						</Button>
 						<p className="text-center text-xs text-muted-foreground">
-							Nothing is charged yet — you pay on your order page next, online
-							or by bank transfer. Your price hold continues there until
-							payment.
+							{store.paymentsPaused
+								? "Nothing is charged — you'll pay on your order page once the store is taking payments again."
+								: "Nothing is charged yet — you pay on your order page next, online or by bank transfer. Your price hold continues there until payment."}
 						</p>
 					</div>
 				</div>
@@ -1184,8 +1225,9 @@ export function ClaimCheckoutPage({
 								: `Confirm order · ${formatPrice(displayTotal, store.currency)} + ${feeNounShort}`}
 					</Button>
 					<p className="text-center text-[11px] text-muted-foreground">
-						Nothing is charged yet — you pay next; the hold continues until
-						payment.
+						{store.paymentsPaused
+							? "Nothing is charged — you'll pay later, from your order page."
+							: "Nothing is charged yet — you pay next; the hold continues until payment."}
 					</p>
 				</div>
 			</div>

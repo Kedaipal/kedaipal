@@ -133,11 +133,11 @@ export function DelyvaDispatchCard({
 					Delyva booking is paused — turn <b>Delyva couriers</b> back on under
 					Courier booking in{" "}
 					<Link
-						to="/app/settings"
-						search={{ tab: "fulfilment" }}
+						to="/app/settings/delivery-pricing"
+						hash="courier-booking"
 						className="font-medium text-accent hover:underline"
 					>
-						Settings → Fulfilment
+						Settings → Delivery pricing
 					</Link>
 					.
 				</p>

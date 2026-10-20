@@ -224,7 +224,9 @@ claims via admin mark-paid, so a hand-crafted link grants nothing.
    public and **never call the subscription guard** — they stay live regardless of
    status. The lock (`past_due`) freezes **only** the seller's dashboard, which
    goes fully **view-only** (19 Sep 2026): they read everything and change
-   nothing, while their buyers browse, order, pay and track exactly as before.
+   nothing, while their buyers browse, order and track exactly as before. The
+   one thing a buyer loses is **paying** (8 Oct 2026, `z8r3fdr6gg`) — see
+   [Buyer payments pause](#buyer-payments-pause-while-a-store-is-lapsed-z8r3fdr6gg).
 
 ## Start-when-you-sell + Off-Season Hold (Sep 2026, ClickUp `z8r3fday24`)
 
@@ -281,6 +283,13 @@ first**. Not a trial with a deadline: the order is the trigger, the day-14
   start today, prefaced with "no rush".
 
 ### Off-Season Hold — pause between seasons for RM19 / S$9
+
+> **Not the only way to stop orders any more** (`z8r3fdudf7`). A seller who
+> just wants to close for a while uses Settings → Store → **Store status**,
+> which never touches billing and works on every plan, trials and comps
+> included. Kedaipal can pause a store or take it offline from the admin
+> console. The hold's `orderingPausedAt` is one of three stamps the
+> availability resolver reads. See [store-availability.md](./store-availability.md).
 
 A **subscription status (`on_hold`), never a Plan** (`HOLD_MONTHLY_PRICES` in
 `lib/plans.ts`; the `Plan` union, `PLANS` and the feature matrix are untouched).
@@ -465,8 +474,9 @@ lapsed subscription is in — and stamps `compEndedAt`. No second free period: a
 comped store already had its runway, and a trial would turn "off" into two more
 free weeks. What that means on each side:
 
-- **Buyers**: nothing changes. The storefront stays live and orders go through
-  (the order pipeline never reads subscription status).
+- **Buyers**: the storefront stays live and orders go through, but they can't
+  pay until the seller picks a plan — [buyer payments
+  pause](#buyer-payments-pause-while-a-store-is-lapsed-z8r3fdr6gg).
 - **Seller**: the store is **view-only** — `assertSubscriptionActive` refuses
   every seller write, including order status, with "Your sponsored access has
   ended, so your store is view-only. Choose a plan in Settings → Billing…".
@@ -794,7 +804,7 @@ either gate turns a test red.
 
 | Kind | Examples | Why |
 | --- | --- | --- |
-| Buyer | `orders.create`, `claimPayment`, `updateDeliveryAddress`, `approveMockup`, `bookings.requestBooking`, `orderClaims.commit` | the lock is pressure on the seller, never their customers |
+| Buyer | `orders.create`, `claimPayment`, `updateDeliveryAddress`, `approveMockup`, `bookings.requestBooking`, `orderClaims.commit` | the lock is pressure on the seller, never their customers (the payment doors close by a separate, buyer-side rule — [below](#buyer-payments-pause-while-a-store-is-lapsed-z8r3fdr6gg)) |
 | Billing | `subscribeSelf`, `changePlan`, `cancelAutoRenew`, invoice/receipt PDFs | locking the way out would trap the seller in the lock |
 | Account / view | `recordConsentAcceptance`, onboarding + dismissal markers, `orders.markSeen` (fires on page VIEW), `exportOrders`, `generateReceiptPdf`, the two `ensure*Token` view-enablers | none of them change the store or its orders |
 
@@ -806,14 +816,92 @@ nor listed with a reason — so a new mutation can't quietly ship unlocked.
 `orders.create`; `userCap`/`broadcastQuota` are hard (seller-side surfaces).
 
 **Seller-facing:** the app-shell banner is the primary surface ("Your
-subscription is past due. Your dashboard is view-only until you pay — your
-storefront stays live and buyers can still order"), and `ViewOnlyNote`
+subscription is past due. Your dashboard is view-only and buyers can't pay you
+on Kedaipal until you pay — your storefront stays live and they can still
+order"), and `ViewOnlyNote`
 (`src/components/app/view-only-note.tsx`, driven by `useStoreLock`) repeats it
 in place on the order detail and the inbox, where the seller is about to tap.
 The order detail's advance button reads `{stage} — view-only` and is disabled;
 the inbox's **Select** button (the door to every bulk action) is disabled with
 the reason. Export is deliberately left enabled — reading their own data is
 never withheld.
+
+## Buyer payments pause while a store is lapsed (`z8r3fdr6gg`)
+
+**Decision (Zaki, 8 Oct 2026).** A lapsed store is view-only, so it cannot
+mark an order paid, advance it or fulfil it — a buyer who pays one gets an
+order nobody on the platform can act on, and Kedaipal lends its verified
+number and tracking page to a payment request from a store that has stopped
+paying us. So while a store is lapsed its buyers can still **order**, but they
+**can't pay on Kedaipal**. Payment reopens on the same order page the moment
+the store is active again — no new link.
+
+**The rule is one predicate:** `buyerPaymentsPausedFor(sub)` /
+`buyerPaymentsPaused(ctx, retailerId)` in `convex/subscriptions.ts` =
+`resolveAccess(sub).frozen` (past due or comp ended, not comped). **Not
+paused:** trialing (the free period and the first-invoice window), comped,
+on hold, a missing row (fails open), and a store **owned by a Kedaipal admin**
+(`storeOwnerIsAdmin`) — never soft-locked, so pausing its buyers would have
+the seller's dashboard and the buyer's page disagree (found by `/test-code` on
+IndoMart). Change it there and every door follows.
+
+**The doors it closes** (each pinned in `convex/buyerPaymentsPaused.test.ts`;
+deleting any gate turns a test red):
+
+| Door | While paused |
+| --- | --- |
+| `orders.getPaymentMethods` (the only source of bank/QR details) | `{ methods: [], gatewayAvailable: false, paymentsPaused: true }` — the numbers never leave the server |
+| `hitpay.createCheckout` | refused **before** reusing a still-fresh link |
+| `orders.claimPayment` / `generateOrderProofUploadUrl` | a NEW claim refused; an order claimed before the pause can still update its proof |
+| Receipt/invoice PDF (`receiptPdfInputs`) | an unpaid document's card is headed "Payment" with a "Payments paused" block instead of "How to pay", and the footer asks for no transfer reference; a paid receipt is unchanged |
+| Payment deadlines (claim links + capped flash sales' "pay within") | `orderClaims.commit` and `orders.create` stamp none; `cancelUnpaidDueOrders` **lifts** a deadline that falls due during a pause instead of cancelling (a window the buyer can't pay inside is a trap) |
+| WhatsApp confirm reply (legacy wa.me path) | the transfer-reference line becomes the paused line; the button reads "View order" |
+| `orders.get` (buyer read) | never carries `gatewayCheckoutUrl` — the raw URL would bypass every check above |
+
+**A new payment ask must check it.** The seller's manual payment reminder and
+the counter's pay-later message don't call the predicate — they're unreachable
+while paused only because the seller soft-lock refuses them first. An
+**automated** ask (the roadmap's reminders cron, a new channel) has no seller
+in the loop, so it must call `buyerPaymentsPaused` itself.
+
+**A buyer who already paid** (a transfer just before the pause) gets
+`paymentsPausedClaimRefusal` — "keep your receipt, attach it once they're
+back" — not the generic "you can pay later", and the order page says the same.
+Claims stay closed on purpose: nobody can confirm one until the store returns.
+
+**Never paused:** placing the order (every order door), HitPay's webhook and
+`verifyCheckout` for a link minted before the pause (the money already moved),
+and the seller's own manual mark-received (they're view-only anyway).
+
+**What each side is told.** One public bit, `paymentsPaused`, rides
+`retailers.getRetailerBySlug` and `orderClaims.getByToken` — never the status
+or the reason. Buyer copy is one author, `convex/lib/buyerPayments.ts`, and is
+deliberately neutral (never "inactive": a buyer reads that as "closed" and
+abandons an order a real, one-day-late seller would have honoured), with an
+anti-scam line — *"Please don't pay the seller outside Kedaipal until then."*
+- **Checkout** (cart, booking, RSVP, claim link): `PaymentsPausedNotice` in
+  the summary column, beside the total — hidden for a free order.
+- **Order page**: the payment card's disabled "Payments paused" button + line,
+  after the more specific holds (mockup, delivery charge, a HitPay return
+  being verified); the claim-link countdown hides, and the "Order placed" card
+  stops promising "how to pay" is here. While `getPaymentMethods` is still
+  loading the card shows a disabled "Checking payment options…", never the
+  Pay-now it would otherwise fall through to (it flashed a live Pay now on a
+  lapsed store before the paused state arrived — found by `/test-code`).
+- **Seller**: the past-due / comp-ended banner, the billing tab, the overdue
+  and comp-ended emails (en/ms/zh), the lock error, and — the urgency lever —
+  the **invoice reminder** email now warns that buyers won't be able to pay
+  after the due date.
+
+**Known gaps, named.** The past-due **WhatsApp** (`notifyBillingPastDue`) is a
+Meta-approved template, so its copy still omits the payment pause until the
+template is re-submitted. A HitPay link a buyer already opened before the pause
+stays payable at HitPay until it expires — the payment is then applied as
+normal. **A fresh store that never pays is NOT covered**: it lives in
+`trialing` and never reaches `past_due`, which is exactly where a scammer
+operates. Widening the rule to "never paid" (or a cap from signup) is the open
+follow-up decision; it collides with start-when-you-sell and the planned PAYG
+tier, where "has paid" would mean "has bought credits".
 
 ## Plan-feature gating (Pro+) — CRM + Order Inbox (Jul 2026)
 

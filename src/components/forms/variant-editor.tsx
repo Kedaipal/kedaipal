@@ -9,7 +9,13 @@ import {
 	Plus,
 	X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+	type MutableRefObject,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
@@ -19,13 +25,15 @@ import {
 	overCapMessage,
 } from "../../../convex/lib/variant";
 import { useRevealOnAdd } from "../../hooks/useRevealOnAdd";
+import { takePickedFiles } from "../../lib/file-input";
 import {
 	convexErrorMessage,
 	currencySymbol,
 	normalizePriceInput,
 	sanitizeIntInput,
 } from "../../lib/format";
-import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
+import { IMAGE_ACCEPT } from "../../lib/image-upload";
+import { uploadImage as uploadToStorage } from "../../lib/storage-upload";
 import { cn } from "../../lib/utils";
 import {
 	cartesian,
@@ -44,6 +52,11 @@ export type VariantRow = {
 	sku: string;
 	/** Major-unit price string as typed (e.g. "120.50"). */
 	price: string;
+	/** Major-unit SALE price as typed (z8r3fdcw72). Absent or "" = this line
+	 * is not on promotion, which is the overwhelming default — hence optional,
+	 * so every row literal that predates promotions stays valid. Edited in the
+	 * Promotion card, not the pricing grid: one substrate, two writers. */
+	promoPrice?: string;
 	/** Integer stock string as typed. */
 	stock: string;
 	/** Per-row deactivate — inactive variants are hidden from the storefront. */
@@ -98,7 +111,7 @@ export type VariantIssue = {
 	where: "row" | "option" | "custom";
 	/** Row index (rows), axis index (options); 0 for the custom line. */
 	index: number;
-	field: "price" | "stock" | "name" | "values" | "weight";
+	field: "price" | "promoPrice" | "stock" | "name" | "values" | "weight";
 	message: string;
 };
 
@@ -140,6 +153,11 @@ interface VariantEditorProps {
 	 * store can't write products (view-only, out of credits, a view-only
 	 * teammate) every Adjust greys out with Save, not after a dialog. */
 	stockLocked?: boolean;
+	/** The host asks mockup approval and the custom line as questions of its
+	 * own (the full product form, z8r3fdv1z2), so Advanced keeps only what
+	 * describes the CHOICES: a second axis, per-choice SKU/photo/on-off and
+	 * parcel weight. The wizard leaves this off and keeps both in Advanced. */
+	capabilitiesOutside?: boolean;
 }
 
 /**
@@ -237,6 +255,7 @@ export function emptyRow(optionValues: string[]): VariantRow {
 		optionValues,
 		sku: "",
 		price: "",
+		promoPrice: "",
 		stock: "",
 		active: true,
 		// Default to hard-block (the common case: real stock items). Made-to-order
@@ -284,6 +303,7 @@ export function rebuildRows(
 			return {
 				...base,
 				price: seed.price,
+				promoPrice: seed.promoPrice,
 				stock: seed.stock,
 				blockWhenOutOfStock: seed.blockWhenOutOfStock,
 				requiresProof: seed.requiresProof,
@@ -605,10 +625,13 @@ function MockupApprovalToggle({
 	checked,
 	indeterminate = false,
 	onChange,
+	label,
 }: {
 	checked: boolean;
 	indeterminate?: boolean;
 	onChange: (next: boolean) => void;
+	/** Replaces the feature title where the host already asked the question. */
+	label?: string;
 }) {
 	return (
 		<label className="flex items-start gap-2.5 text-sm">
@@ -618,11 +641,14 @@ function MockupApprovalToggle({
 				ref={(el) => {
 					if (el) el.indeterminate = indeterminate;
 				}}
+				aria-checked={indeterminate ? "mixed" : checked}
 				onChange={(e) => onChange(e.target.checked)}
 				className="mt-0.5 size-4 shrink-0"
 			/>
 			<span>
-				<span className="font-medium">{MOCKUP_APPROVAL_COPY.title}</span>
+				<span className="font-medium">
+					{label ?? MOCKUP_APPROVAL_COPY.title}
+				</span>
 				<span className="block text-xs text-muted-foreground">
 					{MOCKUP_APPROVAL_COPY.body}
 					{indeterminate
@@ -643,6 +669,7 @@ export function VariantEditor({
 	liveStock,
 	productName = "This product",
 	stockLocked = false,
+	capabilitiesOutside = false,
 }: VariantEditorProps) {
 	const { options, rows, customLine } = value;
 	// Every price label wears the store's symbol ("RM", "S$") — `currency` is
@@ -670,7 +697,6 @@ export function VariantEditor({
 	);
 	const generateUploadUrl = useMutation(api.products.generateUploadUrl);
 	const [uploadingRow, setUploadingRow] = useState<number | null>(null);
-	const [uploadingCustom, setUploadingCustom] = useState(false);
 	// A newly added second axis appends inside Advanced — reveal + focus it.
 	const { markAdded, revealRef } = useRevealOnAdd();
 
@@ -690,9 +716,8 @@ export function VariantEditor({
 	// mode promotes it to its own block outside).
 	const [advOpen, setAdvOpen] = useState(
 		() =>
-			customLine !== null ||
+			(!capabilitiesOutside && (customLine !== null || someProof)) ||
 			options.length > 1 ||
-			someProof ||
 			rows.some(
 				(r) =>
 					r.sku.trim().length > 0 ||
@@ -704,14 +729,14 @@ export function VariantEditor({
 		if (
 			issues.some(
 				(i) =>
-					i.where === "custom" ||
+					(!capabilitiesOutside && i.where === "custom") ||
 					(i.where === "option" && i.index > 0) ||
 					(!weightMode && i.where === "row" && i.field === "weight"),
 			)
 		) {
 			setAdvOpen(true);
 		}
-	}, [issues, weightMode]);
+	}, [issues, weightMode, capabilitiesOutside]);
 
 	// Merge a partial into the full editor state — preserves sibling fields
 	// (notably `customLine`) that a given setter doesn't touch.
@@ -977,70 +1002,21 @@ export function VariantEditor({
 		}
 	}
 
-	async function uploadCustomImage(files: FileList | null) {
-		if (!files || files.length === 0 || !customLine) return;
-		const file = files[0];
-		setUploadingCustom(true);
-		try {
-			const prepared = await prepareImageUpload(file);
-			if (!prepared.ok) {
-				toast.error(prepared.message);
-				return;
-			}
-			const url = await generateUploadUrl();
-			const res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": prepared.contentType },
-				body: prepared.blob,
-			});
-			if (!res.ok) throw new Error("Upload failed");
-			const body = (await res.json()) as { storageId?: unknown };
-			if (typeof body.storageId !== "string")
-				throw new Error("Upload failed: unexpected response");
-			if (customLine.imageUrl?.startsWith("blob:")) {
-				URL.revokeObjectURL(customLine.imageUrl);
-				blobUrls.current.delete(customLine.imageUrl);
-			}
-			const previewUrl = URL.createObjectURL(prepared.blob);
-			blobUrls.current.add(previewUrl);
-			setCustomLine({
-				imageStorageIds: [body.storageId],
-				imageUrl: previewUrl,
-			});
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setUploadingCustom(false);
-		}
-	}
-
-	async function uploadRowImage(index: number, files: FileList | null) {
-		if (!files || files.length === 0) return;
+	async function uploadRowImage(index: number, files: readonly File[]) {
+		if (files.length === 0) return;
 		const file = files[0];
 		setUploadingRow(index);
 		try {
-			const prepared = await prepareImageUpload(file);
-			if (!prepared.ok) {
-				toast.error(prepared.message);
+			const result = await uploadToStorage(file, () => generateUploadUrl());
+			if (!result.ok) {
+				toast.error(result.message);
 				return;
 			}
-			const url = await generateUploadUrl();
-			const res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": prepared.contentType },
-				body: prepared.blob,
-			});
-			if (!res.ok) throw new Error("Upload failed");
-			// Validate the response shape before trusting it — an error body would
-			// otherwise store `undefined` as a storage id and surface server-side.
-			const body = (await res.json()) as { storageId?: unknown };
-			if (typeof body.storageId !== "string")
-				throw new Error("Upload failed: unexpected response");
 			revokeRowBlob(index); // drop the previous preview before replacing
-			const previewUrl = URL.createObjectURL(prepared.blob);
+			const previewUrl = URL.createObjectURL(result.blob);
 			blobUrls.current.add(previewUrl);
 			setRow(index, {
-				imageStorageIds: [body.storageId],
+				imageStorageIds: [result.storageId],
 				imageUrl: previewUrl,
 			});
 		} catch (err) {
@@ -1082,7 +1058,7 @@ export function VariantEditor({
 					type="file"
 					accept={IMAGE_ACCEPT}
 					disabled={uploadingRow !== null}
-					onChange={(e) => void uploadRowImage(i, e.target.files)}
+					onChange={(e) => void uploadRowImage(i, takePickedFiles(e.target))}
 					className="hidden"
 				/>
 			</label>
@@ -1202,9 +1178,15 @@ export function VariantEditor({
 	// Made-to-order has already answered both of the first two — approval is what
 	// the type IS, and a bespoke line on a bespoke product is the same offer
 	// twice — so neither is listed or rendered below.
-	const advancedTeaser = hasOptions
-		? `${MOCKUP_APPROVAL_COPY.teaser} · ${CUSTOM_LINE_COPY.teaser} · a second choice · per-choice SKUs & photos`
-		: `${MOCKUP_APPROVAL_COPY.teaser} · ${CUSTOM_LINE_COPY.teaser} · SKU`;
+	const advancedTeaser = capabilitiesOutside
+		? hasOptions
+			? "A second choice · per-choice SKUs, photos & on/off"
+			: weightMode
+				? "SKU (your own item code)"
+				: "SKU · parcel weight"
+		: hasOptions
+			? `${MOCKUP_APPROVAL_COPY.teaser} · ${CUSTOM_LINE_COPY.teaser} · a second choice · per-choice SKUs & photos`
+			: `${MOCKUP_APPROVAL_COPY.teaser} · ${CUSTOM_LINE_COPY.teaser} · SKU`;
 
 	return (
 		<div className="flex flex-col gap-4">
@@ -1651,143 +1633,51 @@ export function VariantEditor({
 
 					{advOpen ? (
 						<div className="flex flex-col gap-4 border-t border-border p-3">
-							<MockupApprovalToggle
-								checked={allProof}
-								indeterminate={someProof && !allProof}
-								onChange={(v) => bulkFillFlag("requiresProof", v)}
-							/>
-
-							{/* Custom / made-to-order line — sits OUTSIDE the grid, so a
-						    bespoke option shows up exactly once instead of multiplying
-						    across every size/flavour. See docs/custom-option.md.
-						    No border of its own: it sits inside the Advanced card, and
-						    the editor below it is already a tinted block — three nested
-						    outlines for one checkbox (86eyfq04j's card-in-card sweep).
-
-						    A made-to-order product never reaches here — the whole
-						    Advanced card is hidden for it, because that product already
-						    IS this line and offering to add one would be the same offer
-						    twice. */}
-							<div className="flex flex-col gap-3">
-								<label className="flex items-start gap-2.5 text-sm">
-									<input
-										type="checkbox"
-										checked={customLine !== null}
-										onChange={(e) => toggleCustomLine(e.target.checked)}
-										className="mt-0.5 size-4 shrink-0"
+							{capabilitiesOutside ? null : (
+								<>
+									<MockupApprovalToggle
+										checked={allProof}
+										indeterminate={someProof && !allProof}
+										onChange={(v) => bulkFillFlag("requiresProof", v)}
 									/>
-									<span>
-										<span className="font-medium">
-											{CUSTOM_LINE_COPY.title}
-										</span>
-										<span className="block text-xs text-muted-foreground">
-											{CUSTOM_LINE_COPY.body}
-										</span>
-									</span>
-								</label>
 
-								{customLine ? (
-									<div className="flex flex-col gap-3 rounded-lg bg-muted/40 p-3">
-										<div className="flex items-start gap-3">
-											{customLine.imageUrl ? (
-												<div className="relative size-14 shrink-0">
-													<AppImage
-														src={customLine.imageUrl}
-														alt=""
-														aspect="size-14"
-														rounded="rounded-lg"
-													/>
-													<button
-														type="button"
-														onClick={() => {
-															if (customLine.imageUrl?.startsWith("blob:")) {
-																URL.revokeObjectURL(customLine.imageUrl);
-																blobUrls.current.delete(customLine.imageUrl);
-															}
-															setCustomLine({
-																imageStorageIds: [],
-																imageUrl: undefined,
-															});
-														}}
-														className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-background text-xs shadow ring-1 ring-border"
-														aria-label="Remove custom image"
-													>
-														<X className="size-3" />
-													</button>
-												</div>
-											) : (
-												<label className="flex size-14 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-dashed border-border text-muted-foreground hover:border-ring">
-													{uploadingCustom ? (
-														<span className="text-[10px]">…</span>
-													) : (
-														<ImagePlus className="size-4" />
-													)}
-													<input
-														type="file"
-														accept={IMAGE_ACCEPT}
-														disabled={uploadingCustom}
-														onChange={(e) =>
-															void uploadCustomImage(e.target.files)
-														}
-														className="hidden"
-													/>
-												</label>
-											)}
-											<label className="flex flex-1 flex-col gap-1 text-sm font-medium">
-												Option name
-												<Input
-													value={customLine.label}
-													onChange={(e) =>
-														setCustomLine({ label: e.target.value })
-													}
-													placeholder="Custom"
-													maxLength={40}
-												/>
-											</label>
-										</div>
-
-										<label className="flex flex-col gap-1 text-sm font-medium">
-											Starting price ({moneySymbol}){" "}
-											<span className="font-normal text-muted-foreground">
-												(optional)
-											</span>
-											<PriceInput
-												value={customLine.price}
-												onChange={(v) => setCustomLine({ price: v })}
-												invalid={!!issueFor("custom", 0, "price")}
+									{/* Custom / made-to-order line — sits OUTSIDE the grid, so a
+									    bespoke option shows up exactly once instead of multiplying
+									    across every size/flavour. See docs/custom-option.md.
+									    Never reached by a made-to-order product: the whole Advanced
+									    card is hidden for it, because that product already IS this
+									    line. The full form asks this as its own question instead
+									    (`capabilitiesOutside`, z8r3fdv1z2). */}
+									<div className="flex flex-col gap-3">
+										<label className="flex items-start gap-2.5 text-sm">
+											<input
+												type="checkbox"
+												checked={customLine !== null}
+												onChange={(e) => toggleCustomLine(e.target.checked)}
+												className="mt-0.5 size-4 shrink-0"
 											/>
-											<IssueText message={issueFor("custom", 0, "price")} />
-											<span className="text-xs font-normal text-muted-foreground">
-												Buyers see “From {moneySymbol} …”, so they know the
-												final price comes with the mockup. Leave blank to show
-												“Price on quote” instead.
+											<span>
+												<span className="font-medium">
+													{CUSTOM_LINE_COPY.title}
+												</span>
+												<span className="block text-xs text-muted-foreground">
+													{CUSTOM_LINE_COPY.body}
+												</span>
 											</span>
 										</label>
 
-										<label className="flex flex-col gap-1 text-sm font-medium">
-											What should the buyer tell you?{" "}
-											<span className="font-normal text-muted-foreground">
-												(optional)
-											</span>
-											<textarea
-												value={customLine.prompt}
-												onChange={(e) =>
-													setCustomLine({ prompt: e.target.value })
-												}
-												rows={2}
-												maxLength={280}
-												placeholder="e.g. Tell us your design, flavour, size & date needed"
-												className="rounded-xl border border-input bg-background px-3 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+										{customLine ? (
+											<CustomLineFields
+												line={customLine}
+												onChange={(next) => update({ customLine: next })}
+												currency={currency}
+												priceIssue={issueFor("custom", 0, "price")}
+												blobUrls={blobUrls}
 											/>
-										</label>
-
-										<p className="text-xs text-muted-foreground">
-											🧑‍🍳 Made to order · ✅ buyer approves a mockup before you
-											start.
-										</p>
+										) : null}
 									</div>
-								) : null}
-							</div>
+								</>
+							)}
 
 							{/* Second axis (choices mode only) — Size × Flavour grids. */}
 							{hasOptions ? (
@@ -1876,18 +1766,20 @@ export function VariantEditor({
 														/>
 														On sale
 													</label>
-													<label className="flex items-center gap-1.5">
-														<input
-															type="checkbox"
-															checked={row.requiresProof}
-															onChange={(e) =>
-																setRow(i, { requiresProof: e.target.checked })
-															}
-															className="size-4"
-															aria-label={`Require mockup approval for ${variantLabel(row.optionValues)}`}
-														/>
-														Mockup approval
-													</label>
+													{capabilitiesOutside ? null : (
+														<label className="flex items-center gap-1.5">
+															<input
+																type="checkbox"
+																checked={row.requiresProof}
+																onChange={(e) =>
+																	setRow(i, { requiresProof: e.target.checked })
+																}
+																className="size-4"
+																aria-label={`Require mockup approval for ${variantLabel(row.optionValues)}`}
+															/>
+															Mockup approval
+														</label>
+													)}
 													{!weightMode ? (
 														<span className="flex items-center gap-1.5">
 															Parcel weight
@@ -1946,6 +1838,245 @@ export function VariantEditor({
 						: null
 				}
 			/>
+		</div>
+	);
+}
+
+/**
+ * The custom / made-to-order line's own fields — name + photo, starting
+ * price, and what the buyer should tell you. One author for both places it
+ * is edited: the variant editor's Advanced card (the wizard's path) and the
+ * full form's "Do you take custom requests on it?" question (z8r3fdv1z2).
+ *
+ * `blobUrls` lets a host that outlives this component own the preview-URL
+ * cleanup: Advanced unmounts its body when it collapses, and revoking the
+ * photo's URL then would blank a preview the line is still showing.
+ */
+export function CustomLineFields({
+	line,
+	onChange,
+	currency,
+	priceIssue,
+	blobUrls: hostBlobUrls,
+}: {
+	line: CustomLineDraft;
+	onChange: (next: CustomLineDraft) => void;
+	currency: string;
+	priceIssue?: string;
+	blobUrls?: MutableRefObject<Set<string>>;
+}) {
+	const moneySymbol = currencySymbol(currency);
+	const generateUploadUrl = useMutation(api.products.generateUploadUrl);
+	const [uploading, setUploading] = useState(false);
+	const ownBlobUrls = useRef<Set<string>>(new Set());
+	const blobUrls = hostBlobUrls ?? ownBlobUrls;
+	useEffect(() => {
+		if (hostBlobUrls) return;
+		const owned = ownBlobUrls.current;
+		return () => {
+			for (const u of owned) URL.revokeObjectURL(u);
+		};
+	}, [hostBlobUrls]);
+	// Both read through refs so an upload that resolves after more typing
+	// patches the line — and the host's state — as they are THEN, not as they
+	// were in the render the upload started from.
+	const lineRef = useRef(line);
+	lineRef.current = line;
+	const onChangeRef = useRef(onChange);
+	onChangeRef.current = onChange;
+	function patch(fields: Partial<CustomLineDraft>) {
+		onChangeRef.current({ ...lineRef.current, ...fields });
+	}
+
+	async function uploadImage(files: readonly File[]) {
+		if (files.length === 0) return;
+		const file = files[0];
+		setUploading(true);
+		try {
+			const result = await uploadToStorage(file, () => generateUploadUrl());
+			if (!result.ok) {
+				toast.error(result.message);
+				return;
+			}
+			const prev = lineRef.current.imageUrl;
+			if (prev?.startsWith("blob:")) {
+				URL.revokeObjectURL(prev);
+				blobUrls.current.delete(prev);
+			}
+			const previewUrl = URL.createObjectURL(result.blob);
+			blobUrls.current.add(previewUrl);
+			patch({ imageStorageIds: [result.storageId], imageUrl: previewUrl });
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setUploading(false);
+		}
+	}
+
+	return (
+		<div className="flex flex-col gap-3 rounded-lg bg-muted/40 p-3">
+			<div className="flex items-start gap-3">
+				{line.imageUrl ? (
+					<div className="relative size-14 shrink-0">
+						<AppImage
+							src={line.imageUrl}
+							alt=""
+							aspect="size-14"
+							rounded="rounded-lg"
+						/>
+						<button
+							type="button"
+							onClick={() => {
+								if (line.imageUrl?.startsWith("blob:")) {
+									URL.revokeObjectURL(line.imageUrl);
+									blobUrls.current.delete(line.imageUrl);
+								}
+								patch({
+									imageStorageIds: [],
+									imageUrl: undefined,
+								});
+							}}
+							className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-background text-xs shadow ring-1 ring-border"
+							aria-label="Remove custom image"
+						>
+							<X className="size-3" />
+						</button>
+					</div>
+				) : (
+					<label className="flex size-14 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-dashed border-border text-muted-foreground hover:border-ring">
+						{uploading ? (
+							<span className="text-[10px]">…</span>
+						) : (
+							<ImagePlus className="size-4" />
+						)}
+						<input
+							type="file"
+							accept={IMAGE_ACCEPT}
+							disabled={uploading}
+							onChange={(e) => void uploadImage(takePickedFiles(e.target))}
+							className="hidden"
+						/>
+					</label>
+				)}
+				<label className="flex flex-1 flex-col gap-1 text-sm font-medium">
+					Option name
+					<Input
+						value={line.label}
+						onChange={(e) => patch({ label: e.target.value })}
+						placeholder="Custom"
+						maxLength={40}
+					/>
+				</label>
+			</div>
+
+			<label className="flex flex-col gap-1 text-sm font-medium">
+				Starting price ({moneySymbol}){" "}
+				<span className="font-normal text-muted-foreground">(optional)</span>
+				<PriceInput
+					value={line.price}
+					onChange={(v) => patch({ price: v })}
+					invalid={!!priceIssue}
+				/>
+				<IssueText message={priceIssue} />
+				<span className="text-xs font-normal text-muted-foreground">
+					Buyers see “From {moneySymbol} …”, so they know the final price comes
+					with the mockup. Leave blank to show “Price on quote” instead.
+				</span>
+			</label>
+
+			<label className="flex flex-col gap-1 text-sm font-medium">
+				What should the buyer tell you?{" "}
+				<span className="font-normal text-muted-foreground">(optional)</span>
+				<textarea
+					value={line.prompt}
+					onChange={(e) => patch({ prompt: e.target.value })}
+					rows={2}
+					maxLength={280}
+					placeholder="e.g. Tell us your design, flavour, size & date needed"
+					className="rounded-xl border border-input bg-background px-3 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+				/>
+			</label>
+
+			<p className="text-xs text-muted-foreground">
+				🧑‍🍳 Made to order · ✅ buyer approves a mockup before you start.
+			</p>
+		</div>
+	);
+}
+
+/**
+ * Mockup approval as one place (z8r3fdv1z2): the product-level switch — a
+ * TRI-STATE checkbox, because it summarises per-choice flags — and, on a
+ * product with choices, the per-choice list it summarises, so "on for some"
+ * is fixable right where it is reported. The full form's "Does the buyer
+ * approve a mockup first?" question renders this; the per-choice checkboxes
+ * leave Advanced there (`capabilitiesOutside`) so the flag has one home.
+ */
+export function MockupApprovalFields({
+	value,
+	onChange,
+}: {
+	value: VariantEditorState;
+	onChange: (next: VariantEditorState) => void;
+}) {
+	const { options, rows } = value;
+	const allProof = rows.length > 0 && rows.every((r) => r.requiresProof);
+	const someProof = rows.some((r) => r.requiresProof);
+	const perChoice = options.length > 0 && cartesian(options).length > 1;
+	const fill = (on: boolean) =>
+		onChange({
+			...value,
+			rows: rows.map((r) => ({ ...r, requiresProof: on })),
+		});
+	return (
+		<div className="flex flex-col gap-3">
+			<MockupApprovalToggle
+				checked={allProof}
+				indeterminate={someProof && !allProof}
+				onChange={fill}
+				label={perChoice ? "Every choice" : undefined}
+			/>
+			{perChoice ? (
+				<ul
+					aria-label="Mockup approval per choice"
+					className="flex flex-col divide-y divide-border rounded-xl border border-border bg-card"
+				>
+					{rows.map((row, i) => {
+						const label = variantLabel(row.optionValues);
+						return (
+							<li key={label}>
+								<label className="flex min-h-11 items-center gap-3 px-3 text-sm">
+									<input
+										type="checkbox"
+										checked={row.requiresProof}
+										onChange={(e) =>
+											onChange({
+												...value,
+												rows: rows.map((r, j) =>
+													j === i
+														? { ...r, requiresProof: e.target.checked }
+														: r,
+												),
+											})
+										}
+										className="size-4 shrink-0"
+										aria-label={`Require mockup approval for ${label}`}
+									/>
+									<span
+										className={cn(
+											"min-w-0 flex-1 truncate",
+											!row.active && "text-muted-foreground",
+										)}
+									>
+										{label}
+										{!row.active ? " · off sale" : ""}
+									</span>
+								</label>
+							</li>
+						);
+					})}
+				</ul>
+			) : null}
 		</div>
 	);
 }

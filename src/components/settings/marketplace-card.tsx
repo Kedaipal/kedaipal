@@ -1,14 +1,19 @@
 import { Link } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
 import { toast } from "sonner";
+import { formatFulfilmentDate } from "../../../convex/lib/fulfilmentDate";
 import {
 	collapseStoreArea,
 	STORE_AREA_MAX,
 } from "../../../convex/lib/marketplaceListing";
+import type { FeaturedIn } from "../../../convex/showcases";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../../lib/contact";
 import { convexErrorMessage } from "../../lib/format";
+import { showcasePath } from "../../lib/showcase";
+import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
+import { CopyButton } from "../ui/copy-button";
 import { Input } from "../ui/input";
 import { ToggleSwitch } from "../ui/toggle-switch";
 import { SAVE_BTN_CLASS, SectionHeading } from "./settings-primitives";
@@ -35,6 +40,10 @@ type ListingReadiness = {
 	hasVisibleProduct: boolean;
 	internal: boolean;
 	hidden: { note?: string } | null;
+	/** Kedaipal took the store offline — never listed while it is. */
+	offline: boolean;
+	/** Published showcases this store is in (z8r3fdr6mv). */
+	featuredIn: FeaturedIn[];
 };
 
 export function MarketplaceCard({
@@ -134,6 +143,14 @@ export function MarketplaceCard({
 					label="List my store on the Kedaipal marketplace"
 				/>
 			</div>
+			{readiness?.featuredIn.map((f) => (
+				<FeaturedCard
+					key={f.slug}
+					featured={f}
+					storeName={storeName}
+					notShowing={featuredBlocker(listed, readiness)}
+				/>
+			))}
 			<form onSubmit={handleAreaSubmit} className="flex flex-col gap-1.5">
 				<label htmlFor="marketplace-area" className="text-sm font-medium">
 					Area shown on your card
@@ -185,6 +202,13 @@ function ListingStatusLine({
 	if (readiness?.hidden) {
 		return (
 			<HiddenByKedaipal note={readiness.hidden.note} storeName={storeName} />
+		);
+	}
+	if (readiness?.offline) {
+		return (
+			<span className="text-xs text-muted-foreground">
+				Kedaipal has taken your store offline, so it isn't on the marketplace.
+			</span>
 		);
 	}
 	if (!listed) {
@@ -258,5 +282,128 @@ function HiddenByKedaipal({
 				Ask us about it on WhatsApp
 			</a>
 		</span>
+	);
+}
+
+/**
+ * Kedaipal put this store in a showcase (z8r3fdr6mv) — a time-boxed section
+ * at the top of /stores. The seller is TOLD, with the booth label we gave
+ * them, the link they can share, and a way to tell us the label is wrong:
+ * being featured without knowing is the hidden behaviour the house rules
+ * forbid. One card per showcase; drafts never reach here.
+ */
+/**
+ * Why a featured store is NOT actually on the showcase right now — the same
+ * order the directory's listable rule checks (`notListedReason`), because a
+ * showcase only shows members the directory would list. Null when it shows.
+ * The first build said "You're featured" to a seller who had switched their
+ * listing off, while buyers saw no ticket.
+ */
+export function featuredBlocker(
+	listed: boolean,
+	readiness: Pick<
+		ListingReadiness,
+		"internal" | "hidden" | "offline" | "hasVisibleProduct"
+	>,
+): string | null {
+	if (readiness.internal)
+		return "A Kedaipal or test store is never shown on /stores.";
+	if (readiness.hidden)
+		return "Kedaipal has taken your store off /stores, so it isn't shown here either.";
+	if (readiness.offline)
+		return "Kedaipal has taken your store offline, so it isn't shown here.";
+	if (!listed) return "Turn on “List my store” above to appear in it.";
+	if (!readiness.hasVisibleProduct)
+		return "Add a product buyers can see to appear in it.";
+	return null;
+}
+
+function FeaturedCard({
+	featured,
+	storeName,
+	notShowing,
+}: {
+	featured: FeaturedIn;
+	storeName: string;
+	/** Why buyers don't see this store in the showcase, or null. */
+	notShowing: string | null;
+}) {
+	const supportWa = useSupportWaNumber();
+	const path = showcasePath(featured.slug);
+	const fullUrl = `https://kedaipal.com${path}`;
+	const askUrl = buildWaContactLink(
+		`Hi Kedaipal, about ${storeName} in the "${featured.title}" showcase on kedaipal.com/stores —`,
+		supportWa,
+	);
+	const when =
+		featured.state === "scheduled" && featured.startsAt !== undefined
+			? `from ${formatFulfilmentDate(featured.startsAt, { weekday: false, year: false })}`
+			: featured.endsAt !== undefined
+				? `until ${formatFulfilmentDate(featured.endsAt - 1, { weekday: false, year: false })}`
+				: "with no end date";
+	return (
+		<div
+			className={cn(
+				"flex flex-col gap-3 rounded-2xl border p-4",
+				notShowing
+					? "border-amber-300/60 bg-amber-50 dark:border-amber-500/30 dark:bg-amber-950/20"
+					: "border-accent/30 bg-accent/5",
+			)}
+		>
+			<div className="flex flex-col gap-0.5">
+				<span
+					className={cn(
+						"text-[11px] font-bold uppercase tracking-wider",
+						notShowing
+							? "text-amber-700 dark:text-amber-300"
+							: "text-accent-emphasis",
+					)}
+				>
+					{notShowing
+						? "In this showcase — not showing"
+						: featured.state === "scheduled"
+							? "You'll be featured"
+							: "You're featured"}
+				</span>
+				<span className="font-heading text-base font-extrabold">
+					{featured.title}
+				</span>
+				<span className="text-xs text-muted-foreground">
+					{featured.label ? (
+						<>
+							{notShowing ? "Booth label " : "Shown as "}
+							<b className="text-foreground">{featured.label}</b> ·{" "}
+						</>
+					) : null}
+					{notShowing ? `the showcase runs ${when}` : `on /stores ${when}`}
+				</span>
+				{notShowing ? (
+					<span className="mt-1 text-sm font-medium text-amber-800 dark:text-amber-200">
+						{notShowing}
+					</span>
+				) : null}
+			</div>
+			<div className="flex flex-wrap gap-2">
+				<CopyButton value={fullUrl} label="Copy showcase link" />
+				<Button asChild variant="outline" className="tap-target font-semibold">
+					<a href={path} target="_blank" rel="noreferrer">
+						View on /stores
+					</a>
+				</Button>
+			</div>
+			<span className="text-xs text-muted-foreground">
+				Kedaipal picked your store for this showcase.{" "}
+				{featured.label ? "Booth label wrong? " : ""}
+				<a
+					href={askUrl}
+					target="_blank"
+					rel="noreferrer"
+					className="font-medium text-accent-emphasis underline underline-offset-2"
+				>
+					Tell us on WhatsApp
+				</a>
+				.
+			</span>
+		</div>
 	);
 }

@@ -9,9 +9,10 @@ import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { convexErrorMessage } from "../../lib/format";
-import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
+import { IMAGE_ACCEPT } from "../../lib/image-upload";
 import { reorderByIds } from "../../lib/reorder";
 import { categorySlugSchema, slugify } from "../../lib/slug";
+import { uploadImage } from "../../lib/storage-upload";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -77,22 +78,15 @@ export function CategoryEditDialog({
 		setUploading(true);
 		setServerError(null);
 		try {
-			const prepared = await prepareImageUpload(file);
-			if (!prepared.ok) {
-				setServerError(prepared.message);
+			const upload = await uploadImage(file, () => generateUploadUrl());
+			if (!upload.ok) {
+				setServerError(upload.message);
 				return;
 			}
-			const url = await generateUploadUrl();
-			const res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": prepared.contentType },
-				body: prepared.blob,
-			});
-			if (!res.ok) throw new Error("Upload failed");
-			const { storageId } = (await res.json()) as { storageId: string };
+			const { storageId } = upload;
 			setStagedImage({
 				id: storageId,
-				previewUrl: URL.createObjectURL(prepared.blob),
+				previewUrl: URL.createObjectURL(upload.blob),
 			});
 		} catch (err) {
 			setServerError(convexErrorMessage(err));

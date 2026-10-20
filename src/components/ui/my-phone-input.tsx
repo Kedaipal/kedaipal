@@ -221,7 +221,6 @@ export function MyPhoneInput({
 				placeholder={placeholder ?? MOBILE_PLACEHOLDER[country]}
 				value={value}
 				onChange={(e) => onChange(e.target.value)}
-				className="min-h-11 px-3 text-base"
 				{...props}
 			/>
 		</InputPrefixFrame>
@@ -418,7 +417,6 @@ export function BuyerPhoneInput({
 						onDialCountryChange(next.dialCountry);
 					onChange(next.value);
 				}}
-				className="min-h-11 px-3 text-base"
 				{...props}
 			/>
 		</InputPrefixFrame>

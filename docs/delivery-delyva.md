@@ -273,7 +273,9 @@ courier price at the moment of choice. So the rule is now:
 
 - **Charge mode** (Fulfilment → Delivery charge) answers "what does the buyer
   pay". Lalamove live-quote remains one of those modes; Delyva never is.
-- **Courier booking** (Fulfilment → Courier booking) is **independent
+- **Courier booking** (Fulfilment → Delivery → *Courier booking* row, which
+  opens the card on the Delivery pricing page at `#courier-booking` and
+  glances what's armed — 86eye9xd4) is **independent
   toggles**, not a radio — a seller may arm Lalamove riders AND Delyva
   couriers and pick per order (rider across town today, parcel across the
   country tomorrow). Arranging your own courier is the ever-present baseline,

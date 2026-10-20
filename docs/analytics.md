@@ -67,10 +67,11 @@ root's pageview effect).
 | `view_pricing` | every `/pricing` mount | `pricing.tsx` |
 | `calc_used` | first calculator input change per visit | `cost.tsx` (`syncToUrl` choke point) |
 | `cta_signup_click` | every signup CTA click, `placement` param (`nav`, `nav-mobile`, `hero`, `hero-secondary (retired 13 Sep 2026 with the hero's secondary link — landing v2)`, `final-cta`, `pricing-teaser-<tier>`, `pricing-card-<tier>`, `pricing-bottom`) | landing components + `pricing.tsx` via `trackSignupCta` |
+| `demo_cta` | every WhatsApp "Book a demo" link click (demo-first landing, z8r3fdtpub T1, 19 Oct 2026) — `placement` = `hero` \| `nav` \| `nav-mobile` \| `final` \| `pricing` \| `pricing-bottom` \| `fit` \| `dock`. The counterpart of `cta_signup_click` now that the demo is the primary ask: the two-week read compares the two per 100 visits. **Operator step:** mark it a key event in the GA4 UI like `onboarding_start` | `DemoPill` in `landing-ui.tsx`, `wa-dock.tsx`, `fit-check.tsx` via `trackDemoCta` |
 | `onboarding_start` | signed-in seller reaches the store-creation form AND the retailer query resolved to "no store yet" — an already-onboarded seller hitting `/onboarding` gets redirected, never counted | `onboarding.tsx` via [`useOnboardingStart`](../src/hooks/useOnboardingStart.ts) |
 | `store_created` | `createRetailer` succeeded (never on validation failure) | `onboarding.tsx` |
 | `credits_topup_started` | a seller (or a teammate with credits write) submits the credit-pack picker — `pack_id`, `value` (major units), `currency`. Fired BEFORE the HitPay redirect; the paid half is the server-side `credits_topup_paid` below, so started ÷ paid is the checkout drop-off (Credits T2, z8r3fdf8ht) | `credit-top-up-dialog.tsx` |
-| `enterprise_talk_clicked` | someone taps **Talk to Arif** on an Enterprise card — `surface` = `pricing` \| `teaser` \| `billing`. Enterprise has no checkout, so this chat is its only door and this is its one lead signal (Credits T6, z8r3fdkp8h). Not a key event: a lead, not revenue — the contract is set by hand | `pricing.tsx`, `pricing-teaser.tsx`, `enterprise-offer.tsx` |
+| `enterprise_talk_clicked` | someone taps **Get an Enterprise quote** (formerly "Talk to Arif") on an Enterprise card — `surface` = `pricing` \| `teaser` \| `billing`. Enterprise has no checkout, so this chat is its only door and this is its one lead signal (Credits T6, z8r3fdkp8h). Not a key event: a lead, not revenue — the contract is set by hand | `pricing.tsx`, `pricing-teaser.tsx`, `enterprise-offer.tsx` |
 
 **Every event auto-carries the `src` param** when the session arrived tagged:
 [`src/lib/marketing-attribution.ts`](../src/lib/marketing-attribution.ts)
@@ -91,6 +92,17 @@ author, `convex/lib/poweredBy.ts` — see
 [`powered-by-badge.md`](./powered-by-badge.md)), `spotlight-<member>`,
 `referral-<member>`, `tiktok-live`, `directory`, `qr-poster`. Free-form tags
 sanitize and store verbatim.
+
+**Two loops, two meanings (z8r3fdetf5).** The BADGE loop (`powered-by*` +
+`store=`) says which store's buyer-facing surface a seller clicked through —
+attribution only, no reward. The REFERRAL loop is a seller's own link,
+`kedaipal.com/referral/<slug>`: the route hands the capture
+`src=referral-<slug>&store=<slug>` (the URL carries no query), and a valid
+invite is also kept in a 30-day `kp_referral` cookie so the referral survives
+a closed tab. The tag is analytics only — `referral-` + a 32-char slug
+truncates — and the reward keys off the `referrals` row, never off
+`signupSource`. A referral outranks a badge referrer as `signupReferrerId`.
+See [`referrals.md`](./referrals.md).
 
 **The badge also names its store (z8r3fdcwd0):** `?store=<slug>` is captured
 beside the tag (same last-touch rule, its own key — the pair is rewritten

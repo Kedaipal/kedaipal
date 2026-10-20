@@ -234,7 +234,8 @@ describe("plan gating — CRM (Pro+)", () => {
 			delivery: true,
 			onlinePayments: true,
 			events: true,
-			waOrderAlerts: true,
+			promo: true,
+			vouchers: true,
 		});
 
 		await setPlan(t, retailer._id, "starter");
@@ -249,7 +250,8 @@ describe("plan gating — CRM (Pro+)", () => {
 			delivery: false,
 			onlinePayments: false,
 			events: false,
-			waOrderAlerts: false,
+			promo: false,
+			vouchers: false,
 		});
 	});
 
@@ -273,7 +275,8 @@ describe("plan gating — CRM (Pro+)", () => {
 		delivery: true,
 		onlinePayments: true,
 		events: true,
-		waOrderAlerts: true,
+			promo: true,
+		vouchers: true,
 		});
 		// subscriptions.current (billing nav) resolves the same way.
 		const current = await asAdmin.query(api.subscriptions.current, {});

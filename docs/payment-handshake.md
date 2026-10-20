@@ -37,6 +37,8 @@ stateDiagram-v2
 
 ## Shopper flow — claim payment
 
+> **A lapsed store takes no payment** (`z8r3fdr6gg`): while the store is past due, `getPaymentMethods` returns no methods and `paymentsPaused: true`, the payment card shows a disabled "Payments paused" state, and `claimPayment` refuses a NEW claim (an order claimed before the pause can still update its proof). See [`manual-subscription.md`](./manual-subscription.md#buyer-payments-pause-while-a-store-is-lapsed-z8r3fdr6gg).
+
 On the tracking page (`/track/<token>`), the shopper taps **"I've paid"**. Trust model: knowing the high-entropy `orders.trackingToken` is the capability (the human `shortId` is NOT a secret — see [`infra-cost-scaling.md` §6](./infra-cost-scaling.md)).
 
 1. **Attach a screenshot — MANDATORY, and the first field** ([`z8r3fdnpxf`](https://app.clickup.com/t/z8r3fdnpxf)). `generateOrderProofUploadUrl(token)` mints a one-shot Convex storage upload URL. Rate-limited `proofUpload` (**10/min per token, burst 5**) — sized for one URL per file the buyer PICKS, because the sheet uploads on selection rather than on submit. Refused once `received`. See **Proof is mandatory** below.
@@ -172,7 +174,9 @@ The slot this section predicted is live: a HitPay webhook (or the
 redirect-return reconcile) flips `paymentStatus` to `received` through the
 same `applyPaymentReceived` core as the manual button — auto-confirm,
 activation stamp, and `notifyPaymentReceived` are byte-identical, and the
-manual claim/mark-received handshake keeps working beside it (buyers can
-still transfer; sellers without HitPay see zero change). Gateway orders also
+manual claim/mark-received handshake keeps working for every store on manual
+transfer. Since 86eye9xd4 a store that turns HitPay on makes it the **only**
+door for any order HitPay can take — the manual details are withheld, so this
+handshake only runs on the orders it can't (see [`hitpay-gateway.md`](./hitpay-gateway.md#hitpay-on-is-the-way-buyers-pay-86eye9xd4-8a)). Gateway orders also
 stamp a reliable `paymentMethod` (incl. the new `fpx`). Full design:
 [`hitpay-gateway.md`](./hitpay-gateway.md).

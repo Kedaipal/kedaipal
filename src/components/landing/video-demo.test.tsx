@@ -7,7 +7,26 @@ import {
 	screen,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@tanstack/react-router", () => ({
+	Link: ({
+		children,
+		to,
+		className,
+	}: {
+		children: ReactNode;
+		to: string;
+		className?: string;
+	}) => (
+		<a href={to} className={className}>
+			{children}
+		</a>
+	),
+}));
+
+import type { ReactNode } from "react";
 import { DEMO_VIDEO, PORTRAIT_MEDIA_QUERY } from "../../lib/demo-video";
+import { m } from "../../paraglide/messages";
 import { VideoDemo } from "./video-demo";
 
 /**
@@ -245,5 +264,13 @@ describe("VideoDemo", () => {
 		const { container } = render(<VideoDemo />);
 		const video = videoIn(container);
 		expect(video.getAttribute("preload")).toBe("none");
+	});
+
+	it("opens a prominent door to the real stores under the demo, outline not accent", () => {
+		render(<VideoDemo />);
+		const door = screen.getByRole("link", { name: m.proof_browse_stores() });
+		expect(door.getAttribute("href")).toBe("/stores");
+		expect(door.className).toContain("min-h-[52px]");
+		expect(door.className).not.toContain("bg-accent");
 	});
 });

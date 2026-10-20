@@ -265,12 +265,20 @@ export type PlanFeatures = {
 	 * RSVPs, the headcount keeps totalling and the buyer flow never varies by
 	 * seller plan, so a downgrade never strands guests mid-RSVP. */
 	events: boolean;
-	/** Seller WhatsApp order alerts (86eyhw9zy): a WA template to the seller's
-	 * own number on new order + payment claim. Pro because each alert is a
-	 * billable Meta send (absorbed into the plan — decided 7 Aug 2026, no
-	 * add-on SKU). Gates only ENABLING the toggle — disabling and clearing the
-	 * number stay un-gated so a downgraded seller is never trapped. */
-	waOrderAlerts: boolean;
+	/** Promo price + flash sale (z8r3fdcw72): SETTING a promo config on a
+	 * product. Gates only the seller configuring — an active promo on a
+	 * downgraded store stops APPLYING (effective price = list, badge reads
+	 * "Promo paused (Pro)") but the config is paused, never deleted, so an
+	 * upgrade revives it untouched. */
+	promo: boolean;
+	/** Vouchers (`z8r3fdr617`): issuing single-use discount codes. Pro because
+	 * it is a demand-generation lever, not part of taking an order — and it is
+	 * the one feature that gives money away, so it belongs with the paid tier's
+	 * marketing tools. Gates only ISSUING: voiding a voucher, and REDEEMING an
+	 * outstanding one, stay all-tier, so a store that downgrades neither traps
+	 * its seller nor strands a buyer holding a code it already sent. Already
+	 * -issued history stays readable on every plan (decided 8 Oct 2026). */
+	vouchers: boolean;
 };
 
 export type PlanFeature = keyof PlanFeatures;
@@ -286,7 +294,8 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		delivery: false,
 		onlinePayments: false,
 		events: false,
-		waOrderAlerts: false,
+		promo: false,
+		vouchers: false,
 	},
 	pro: {
 		crm: true,
@@ -298,7 +307,8 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		delivery: true,
 		onlinePayments: true,
 		events: true,
-		waOrderAlerts: true,
+		promo: true,
+		vouchers: true,
 	},
 	// Enterprise gets everything Pro has. Its extras are seats (above) and
 	// terms (the contract); multi-outlet and priority support are sold as
@@ -314,7 +324,8 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		delivery: true,
 		onlinePayments: true,
 		events: true,
-		waOrderAlerts: true,
+		promo: true,
+		vouchers: true,
 	},
 };
 
@@ -1050,11 +1061,42 @@ export function capsForPlan(plan: Plan): PlanCaps {
  * (z8r3fdeub2) — one definition, so the two can never drift. The top tier. */
 export const FULL_ACCESS_PLAN: Plan = "enterprise";
 
+/**
+ * Does this store get FULL ACCESS — every feature and no limits of any kind?
+ *
+ * THE one author of that question, so the entitlement caps
+ * (`fullAccessCaps` below), the credit gate (`storeIsMetered`,
+ * convex/lib/credits.ts) and the product cap (convex/lib/productCap.ts) can
+ * never disagree about which stores are uncapped. They disagreed once and it
+ * shipped: z8r3fdp4er took admin stores out of the credit system but left
+ * comped ones metered, so a sponsored seller read "200 of 200" over a bar
+ * while this module's own caps said unlimited (z8r3fdrph7).
+ *
+ * Two stores qualify, by Zaki's decision of 17 Sep 2026 — "a comp gets the
+ * same limit as admin":
+ *  - an admin's OWN store (dogfooding, never billed);
+ *  - a SPONSORED store (`subscriptions.comped`).
+ *
+ * The missing-subscription-row FAIL-SAFE also resolves to full access, but it
+ * does so in `resolveAccess`'s own `!sub` branch rather than here: it is a
+ * data fault, not a granted sponsorship, and the credit gate deliberately
+ * keeps it METERED (never locked) so its volume still leaves a record. Pass a
+ * store that has a row; one without is answered upstream.
+ */
+export function storeHasFullAccess(args: {
+	ownerIsAdmin: boolean;
+	comped: boolean;
+}): boolean {
+	return args.ownerIsAdmin || args.comped;
+}
+
 /** Entitlement caps for full access: no limits on anything — orders, seats or
  * broadcasts (Zaki, 17 Sep: a comp gets "the same limit as admin"). Resolved
  * at read time by `resolveAccess`, never stored, so turning full access off
- * needs no cap rewrite. When broadcasts ship, this is where their cost for
- * admin + comped stores gets decided. */
+ * needs no cap rewrite. The product cap follows the same answer via
+ * `storeHasFullAccess` (it is not a `PlanCaps` entry, because catalogue size
+ * is still not a tier lever — see convex/lib/productCap.ts). When broadcasts
+ * ship, this is where their cost for admin + comped stores gets decided. */
 export function fullAccessCaps(): PlanCaps {
 	return {
 		orderCap: UNLIMITED,

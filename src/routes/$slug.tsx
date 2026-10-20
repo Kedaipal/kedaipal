@@ -17,11 +17,17 @@ import {
 	OrderingPausedProvider,
 	SeasonalBreakNotice,
 } from "../components/storefront/seasonal-break";
+import {
+	StoreUnavailable,
+	type StoreUnavailableLoaderData,
+	storeUnavailableHead,
+} from "../components/storefront/store-unavailable";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { StorefrontHeader } from "../components/storefront/storefront-header";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
 import { useCaptureAttribution } from "../hooks/useSourceAttribution";
+import { useCaptureVoucherParam } from "../hooks/useVoucherParam";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
 import {
 	absoluteProxiedImageUrl,
@@ -55,7 +61,9 @@ interface StorefrontLoaderData {
 }
 
 export const Route = createFileRoute("/$slug")({
-	loader: async ({ params }): Promise<StorefrontLoaderData | null> => {
+	loader: async ({
+		params,
+	}): Promise<StorefrontLoaderData | StoreUnavailableLoaderData | null> => {
 		const client = getConvexHttpClient();
 		const read = await ssrRead(() =>
 			client.query(api.retailers.getRetailerBySlug, { slug: params.slug }),
@@ -77,6 +85,11 @@ export const Route = createFileRoute("/$slug")({
 		if (result.status === "notFound") {
 			throw notFound();
 		}
+		// Taken offline by Kedaipal (z8r3fdudf7): no store data to preload —
+		// the component renders the neutral unavailable page, and head()
+		// takes it out of search in the SSR HTML.
+		if (result.status === "unavailable")
+			return { unavailable: true, storeName: result.storeName };
 
 		const retailer = result.retailer;
 
@@ -128,6 +141,8 @@ export const Route = createFileRoute("/$slug")({
 	},
 	head: ({ loaderData }) => {
 		if (!loaderData) return {};
+		if ("unavailable" in loaderData)
+			return storeUnavailableHead(loaderData.storeName);
 		const {
 			storeName,
 			description,
@@ -246,14 +261,18 @@ function StoreNotFound() {
 function StorefrontSkeleton() {
 	return (
 		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-32">
-			{/* Mirrors the new hero shape — logo tile beside a name + blurb stack,
+			{/* Mirrors the island shape (z8r3fdvwcy) — a band, then the card
+			    floating over its edge with the tile beside a name + blurb stack,
 			    no Kedaipal mark (the footer carries "Powered by"). */}
-			<header className="flex flex-col justify-end bg-gradient-to-b from-accent/10 to-background px-5 pb-6 pt-9 lg:rounded-b-3xl lg:px-8">
-				<div className="flex items-end gap-3.5">
-					<Skeleton className="size-14 shrink-0 rounded-[18px]" />
-					<div className="flex flex-col gap-2">
-						<Skeleton className="h-6 w-40" />
-						<Skeleton className="h-4 w-48" />
+			<header>
+				<div className="h-44 bg-gradient-to-b from-accent/15 to-accent/5 lg:h-56 lg:rounded-b-3xl" />
+				<div className="relative -mt-18 mx-4 rounded-3xl bg-card p-4 ring-1 ring-foreground/5 lg:-mt-22 lg:mx-8 lg:px-7 lg:py-6 dark:ring-white/10">
+					<div className="flex items-start gap-3.5">
+						<Skeleton className="size-16 shrink-0 rounded-[18px] lg:size-21 lg:rounded-[22px]" />
+						<div className="flex flex-col gap-2 pt-1">
+							<Skeleton className="h-6 w-40" />
+							<Skeleton className="h-4 w-48" />
+						</div>
 					</div>
 				</div>
 			</header>
@@ -280,6 +299,9 @@ function StorefrontRoute() {
 	// Persist the visit's ?src=/utm_source tag for this session (86eyq0eq9) —
 	// checkout stamps it onto the order so Insights can report per-source.
 	useCaptureAttribution(slug);
+	// A `?voucher=` link lands on an EMPTY cart, so the code has to survive the
+	// browsing that follows (`z8r3fdr617`) — same reason as the line above.
+	useCaptureVoucherParam(slug);
 	// Live query keeps the catalog reactive after the SSR'd loader response.
 	const result = useQuery(
 		convexQuery(api.retailers.getRetailerBySlug, { slug }),
@@ -288,6 +310,9 @@ function StorefrontRoute() {
 		result && result.status === "ok" ? result.retailer._id : undefined,
 	);
 
+	if (result?.status === "unavailable") {
+		return <StoreUnavailable storeName={result.storeName} />;
+	}
 	if (result === undefined || result.status !== "ok") {
 		return <StorefrontSkeleton />;
 	}
@@ -295,7 +320,10 @@ function StorefrontRoute() {
 	const retailer = result.retailer;
 
 	return (
-		<OrderingPausedProvider paused={retailer.orderingPaused === true}>
+		<OrderingPausedProvider
+			paused={retailer.orderingPaused === true}
+			pausedBy={retailer.orderingPausedBy}
+		>
 			{/* pb-28 keeps ≥96px clear under the content for the floating cart
 			    pill (z8r3fdegb5) so it never sits on the footer. */}
 			<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-28">

@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 /**
- * The Order rules card, once prep time and the pickup note join it
- * (ClickUp `z8r3fdff97`).
+ * The order rules, once prep time and the pickup note join them (ClickUp
+ * `z8r3fdff97`). Since z8r3fdv1z2 they are the "Any rules on how it's
+ * ordered?" question row (min quantity · notice · prep) plus the pickup
+ * note's own "Anything to know when collecting?" row; both collapse, so the
+ * tests that click a control open the row first, the way a seller would.
  *
  * Three things these pin that the pure tests cannot: that a booking listing
  * never meets a prep field (request-to-book IS the preparation), that a
@@ -57,6 +60,7 @@ function renderForm({
 			retailerId={"r1" as never}
 			categoriesLocked={false}
 			eventsLocked={false}
+			promoLocked={false}
 			currency="MYR"
 			submitLabel="Save"
 			mode="edit"
@@ -75,6 +79,12 @@ function renderForm({
 	);
 }
 
+/** Open a collapsed question row by its question, as a seller taps it. */
+function openRow(question: RegExp) {
+	fireEvent.click(screen.getByRole("button", { name: question }));
+}
+const openRules = () => openRow(/Any rules on how it.s ordered/);
+
 const prepInput = () =>
 	document.getElementById("prep-minutes") as HTMLInputElement | null;
 const noteInput = () =>
@@ -83,6 +93,7 @@ const noteInput = () =>
 describe("Order rules — prep time", () => {
 	it("offers a minutes field with hour-shaped shortcuts", () => {
 		renderForm();
+		openRules();
 		expect(prepInput()).not.toBeNull();
 		// Minutes is what the floor arithmetic needs; hours is how a seller
 		// thinks. Both, or the seller does the arithmetic.
@@ -93,6 +104,7 @@ describe("Order rules — prep time", () => {
 
 	it("a preset SETS the field, and tapping the live one clears it", () => {
 		renderForm();
+		openRules();
 		const twoHours = screen.getByRole("button", { name: "2 hours" });
 		expect(twoHours.getAttribute("aria-pressed")).toBe("false");
 
@@ -113,6 +125,7 @@ describe("Order rules — prep time", () => {
 		// One control with two doors — if typing 60 left "1 hour" unlit, the
 		// row would be telling the seller something false.
 		renderForm();
+		openRules();
 		const input = prepInput() as HTMLInputElement;
 		fireEvent.change(input, { target: { value: "60" } });
 		expect(
@@ -136,6 +149,7 @@ describe("Order rules — prep time", () => {
 		// a SOLID bg-accent, invisible on bg-accent/10. `accent-emphasis` is the
 		// token defined for exactly this, and it is defined in BOTH themes.
 		renderForm({ initial: { prepMinutes: 120 } });
+		openRules();
 		const live = screen.getByRole("button", { name: "2 hours" });
 		expect(live.className).toContain("text-accent-emphasis");
 		expect(live.className).not.toContain("text-accent-foreground");
@@ -182,18 +196,34 @@ describe("Order rules — prep time", () => {
 	});
 });
 
-describe("Order rules — the card describes what it holds", () => {
-	// The card arrived with two fields and kept its two-field sentence when
-	// prep time and the pickup note joined it, so it told sellers to "leave
-	// both blank" beside four controls — and called a collection instruction a
-	// limit. Found by reading the card in a browser, not by a test.
-	it("names all four rules, and never says 'both'", () => {
+describe("Order rules — the row says what it holds", () => {
+	// The card once kept a two-field sentence ("leave both blank") beside four
+	// controls. As a question row the collapsed line IS the summary, so it
+	// must name each rule that is set — and say "None" when nothing is.
+	it("reads None on a product with no rules, collapsed", () => {
 		renderForm();
-		const card = screen.getByText("Order rules").closest("section");
-		const description = card?.textContent ?? "";
-		expect(description).not.toMatch(/both/i);
-		expect(description).toMatch(/how long you need to make it/i);
-		expect(description).toMatch(/when collecting/i);
+		const row = screen.getByRole("button", {
+			name: /Any rules on how it.s ordered/,
+		});
+		expect(row.getAttribute("aria-expanded")).toBe("false");
+		expect(row.textContent).toContain("None");
+		// Collapsed means the controls are out of the way, not gone.
+		expect(prepInput()).not.toBeNull();
+		expect(prepInput()?.closest("[hidden]")).not.toBeNull();
+	});
+
+	it("names every rule that is set, in the order the panel asks them", () => {
+		renderForm({
+			initial: { minQuantity: 20, minNoticeDays: 2, prepMinutes: 90 },
+		});
+		const row = screen.getByRole("button", {
+			name: /Any rules on how it.s ordered/,
+		});
+		// Notice ≥ 1 day makes prep inert, and the line says so outright.
+		expect(row.textContent).toContain(
+			"Min 20 · 2 days’ notice · 1 h 30 min prep",
+		);
+		expect(row.textContent).toContain("prep has no effect while notice is on");
 	});
 
 	it("says how long a prep window may be, and where a longer one goes", () => {
@@ -296,7 +326,12 @@ describe("Order rules — what the card submits", () => {
 			async () => {},
 		);
 		renderForm({ kind: "booking", onSubmit, initial: { prepMinutes: 120 } });
-		fireEvent.click(screen.getByRole("button", { name: "Save" }));
+		// Untouched edit form: Save is disabled ("All changes saved",
+		// z8r3fdtk82), so submit the form itself. The stored value's payload is
+		// what's under test.
+		const form = document.querySelector("form");
+		if (!form) throw new Error("no form");
+		fireEvent.submit(form);
 		await vi.waitFor(() => expect(onSubmit).toHaveBeenCalled());
 		const [values] = onSubmit.mock.lastCall ?? [];
 		if (!values) throw new Error("form never submitted");

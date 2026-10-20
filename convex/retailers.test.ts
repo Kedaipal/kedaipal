@@ -11,7 +11,7 @@ import {
 	vi,
 } from "vitest";
 import { api, internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { AUP_VERSION, PRIVACY_VERSION, TERMS_VERSION } from "./lib/legal";
 import { STORE_DESCRIPTION_MAX } from "./lib/storeProfile";
 import schema from "./schema";
@@ -1133,7 +1133,7 @@ describe("retailers deleteUser (internal cascade)", () => {
 	 * retained-by-DECISION tables, the optOut attribution clear, and all three
 	 * order blob kinds (the account cascade used to free only the proof).
 	 */
-	test("erases every previously-orphaned table, keeps the two retained by decision", async () => {
+	test("erases every previously-orphaned table, keeps the rows retained by decision", async () => {
 		vi.useFakeTimers();
 		const t = setup();
 		const ids = await seedFullTenant(t, USER_A, "orphan-sweep");
@@ -1179,6 +1179,48 @@ describe("retailers deleteUser (internal cascade)", () => {
 				createdAt: now,
 				updatedAt: now,
 			});
+			const claimId = await ctx.db.insert("orderClaims", {
+				retailerId: ids.retailerId,
+				// The session seeded above — a claim is sent FROM one, and the
+				// session row dies a phase earlier, so this ref dangled too.
+				sessionId,
+				sellerUserId: USER_A,
+				// `completed` deliberately, same reason as the session above: the
+				// daily purgeStaleClaims cron sweeps only expired / cancelled
+				// claims, so a completed one held the buyer's phone + name
+				// forever — with no phase here, "forever" outlived the store.
+				status: "completed",
+				waPhone: "60123456789",
+				buyerName: "Ali",
+				lines: [
+					{
+						productId: ids.productId,
+						variantId: ids.variantId,
+						name: "Kuih",
+						price: 500,
+						quantity: 1,
+					},
+				],
+				currency: "MYR",
+				token: "claim_testtoken0001",
+				expiresAt: now + 60_000,
+				windowMinutes: 15,
+				sentCount: 1,
+				lastSentAt: now,
+				orderId: ids.orderId,
+				createdAt: now,
+				updatedAt: now,
+			});
+			const blockId = await ctx.db.insert("bookingBlocks", {
+				retailerId: ids.retailerId,
+				productId: ids.productId,
+				startDate: now,
+				endDate: now + 2 * 24 * 60 * 60 * 1000,
+				// A seller's private note — no buyer PII and no money, so the
+				// block is tenant config that goes with the tenant.
+				note: "Maintenance — river deck repair",
+				createdAt: now,
+			});
 			const usageId = await ctx.db.insert("subscriptionUsage", {
 				retailerId: ids.retailerId,
 				monthStart: now,
@@ -1221,6 +1263,22 @@ describe("retailers deleteUser (internal cascade)", () => {
 				status: "paid",
 				createdAt: now,
 			});
+			// Retained by decision too, and the one that is easy to get wrong:
+			// messageLogRollups is the PERMANENT WhatsApp cost ledger
+			// (purgeExpiredOutboundLog folds every expiring raw row into it so
+			// aggregate cost accounting outlives the 90-day purge, and Meta
+			// bills per send). It deliberately carries no toWaPhone — counts
+			// only — so erasing it would destroy billing history to no
+			// privacy end. The RAW rows, which do hold the buyer's number, are
+			// deleted by the outboundMessageLog phase above.
+			const rollupId = await ctx.db.insert("messageLogRollups", {
+				retailerId: ids.retailerId,
+				month: "2026-10",
+				category: "transactional",
+				status: "sent",
+				count: 7,
+				updatedAt: now,
+			});
 			const auditId = await ctx.db.insert("adminAuditLog", {
 				adminUserId: "admin_user",
 				retailerId: ids.retailerId,
@@ -1235,15 +1293,32 @@ describe("retailers deleteUser (internal cascade)", () => {
 				triggeredByRetailerId: ids.retailerId,
 				createdAt: now,
 			});
+			// Kedaipal's own /stores curation (z8r3fdr6mv): the showcase
+			// survives, the deleted store leaves its member list.
+			const showcaseId = await ctx.db.insert("marketplaceShowcases", {
+				slug: "campfest-2026",
+				title: "Malaysia Campfest 2026",
+				country: "MY",
+				theme: "campfire",
+				sortOrder: 1,
+				publishedAt: now,
+				members: [{ retailerId: ids.retailerId, label: "Booth B4" }],
+				createdAt: now,
+				updatedAt: now,
+			});
 			return {
+				showcaseId,
 				buyerImgId,
 				mockupId,
 				pickupId,
 				sessionId,
+				claimId,
 				usageId,
 				foundingId,
 				limitsId,
 				logId,
+				blockId,
+				rollupId,
 				invoiceId,
 				auditId,
 				optOutId,
@@ -1268,10 +1343,12 @@ describe("retailers deleteUser (internal cascade)", () => {
 			// Previously orphaned — now all gone.
 			expect(await ctx.db.get(extra.pickupId)).toBeNull();
 			expect(await ctx.db.get(extra.sessionId)).toBeNull();
+			expect(await ctx.db.get(extra.claimId)).toBeNull();
 			expect(await ctx.db.get(extra.usageId)).toBeNull();
 			expect(await ctx.db.get(extra.foundingId)).toBeNull();
 			expect(await ctx.db.get(extra.limitsId)).toBeNull();
 			expect(await ctx.db.get(extra.logId)).toBeNull();
+			expect(await ctx.db.get(extra.blockId)).toBeNull();
 			expect(await ctx.db.get(extra.subscriptionId)).toBeNull();
 
 			// The two blobs the old cascade leaked, plus the one it did free.
@@ -1284,12 +1361,26 @@ describe("retailers deleteUser (internal cascade)", () => {
 			// a silent cascade addition.
 			expect(await ctx.db.get(extra.invoiceId)).not.toBeNull();
 			expect(await ctx.db.get(extra.auditId)).not.toBeNull();
+			// The WhatsApp cost ledger survives, and keeps its retailerId: that
+			// field is the ledger's grouping key, so blanking it would merge a
+			// deleted tenant's months into the tenant-less bucket and corrupt
+			// both. A dangling ref is the expected shape of a retained record.
+			const rollup = await ctx.db.get(extra.rollupId);
+			expect(rollup).not.toBeNull();
+			expect(rollup?.retailerId).toBe(ids.retailerId);
+			expect(rollup?.count).toBe(7);
 
 			// The opt-out itself survives (the buyer's standing instruction), with
 			// no dangling reference to the deleted store.
 			const optOut = await ctx.db.get(extra.optOutId);
 			expect(optOut).not.toBeNull();
 			expect(optOut?.triggeredByRetailerId).toBeUndefined();
+
+			// The showcase survives (it is Kedaipal's curation, not the tenant's
+			// data); the deleted store is no longer among its members.
+			const showcase = await ctx.db.get(extra.showcaseId);
+			expect(showcase).not.toBeNull();
+			expect(showcase?.members).toEqual([]);
 		});
 	});
 
@@ -1303,6 +1394,45 @@ describe("retailers deleteUser (internal cascade)", () => {
 		// Well past DELETE_USER_BATCH (25) so the cascade must self-chain.
 		await t.run(async (ctx) => {
 			const now = Date.now();
+			// The NEW phases get their own over-batch piles. A bounded phase that
+			// never drains is invisible on a small tenant — every row this
+			// branch's phases delete fits in one batch in the test above — so
+			// prove both chain past the limit, not just `orders`.
+			const sessionId = await ctx.db.insert("counterCheckoutSessions", {
+				retailerId: ids.retailerId,
+				sellerUserId: USER_A,
+				token: "KPS-bulktoken0001",
+				status: "completed",
+				waPhone: "60123456789",
+				expiresAt: now + 60_000,
+				createdAt: now,
+				updatedAt: now,
+			});
+			for (let i = 0; i < 40; i++) {
+				await ctx.db.insert("orderClaims", {
+					retailerId: ids.retailerId,
+					sessionId,
+					sellerUserId: USER_A,
+					status: "completed",
+					waPhone: "60123456789",
+					buyerName: `Bulk ${i}`,
+					lines: [],
+					currency: "MYR",
+					token: `claim_bulk_${i}`,
+					expiresAt: now + 60_000,
+					windowMinutes: 15,
+					sentCount: 1,
+					lastSentAt: now,
+					createdAt: now,
+					updatedAt: now,
+				});
+				await ctx.db.insert("bookingBlocks", {
+					retailerId: ids.retailerId,
+					startDate: now + i * 86_400_000,
+					endDate: now + i * 86_400_000 + 86_400_000,
+					createdAt: now,
+				});
+			}
 			for (let i = 0; i < 60; i++) {
 				const orderId = await ctx.db.insert("orders", {
 					retailerId: ids.retailerId,
@@ -1341,6 +1471,10 @@ describe("retailers deleteUser (internal cascade)", () => {
 			expect(orders).toHaveLength(0);
 			const events = await ctx.db.query("orderEvents").collect();
 			expect(events).toHaveLength(0);
+			// Both new phases drained across continuations, not just their first
+			// batch of 25.
+			expect(await ctx.db.query("orderClaims").collect()).toHaveLength(0);
+			expect(await ctx.db.query("bookingBlocks").collect()).toHaveLength(0);
 		});
 		vi.useRealTimers();
 	});
@@ -1905,31 +2039,26 @@ describe("seller WhatsApp order alerts config (86eyhw9zy)", () => {
 		).rejects.toThrow(/Kedaipal's own WhatsApp number/i);
 	});
 
-	test("enabling requires a number (same call or already saved)", async () => {
+	test("the switch is ON by default, needs no number, and is never written for the seller (z8r3fdv55f)", async () => {
 		const t = setup();
-		const asUser = await seed(t, USER_A, "wa-alerts-no-phone");
-		await expect(
-			asUser.mutation(api.retailers.updateSettings, { orderWaAlerts: true }),
-		).rejects.toThrow(/number/i);
-		// Number in the same call is enough (covered by the happy-path test);
-		// number saved earlier is too.
-		await asUser.mutation(api.retailers.updateSettings, {
-			notifyWaPhone: "0198765432",
-		});
+		const asUser = await seed(t, USER_A, "wa-alerts-default");
+		// A brand-new store has never touched the switch — absent reads as on.
+		let retailer = await asUser.query(api.retailers.getMyRetailer);
+		expect(retailer?.orderWaAlerts).toBeUndefined();
+		// Switching off and back on works with no number saved: the number is
+		// what makes an alert SEND, not what makes the switch legal.
+		await asUser.mutation(api.retailers.updateSettings, { orderWaAlerts: false });
 		await asUser.mutation(api.retailers.updateSettings, { orderWaAlerts: true });
-		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		retailer = await asUser.query(api.retailers.getMyRetailer);
 		expect(retailer?.orderWaAlerts).toBe(true);
+		expect(retailer?.notifyWaPhone).toBeUndefined();
 	});
 
-	test("Starter can't enable (Pro gate) but can always disable", async () => {
+	test("every plan can switch it on — Starter included — and off", async () => {
 		const t = setup();
 		const asUser = await seed(t, USER_A, "wa-alerts-starter");
 		const retailer = await asUser.query(api.retailers.getMyRetailer);
 		if (!retailer) throw new Error("seed failed");
-		// Saving the number alone is un-gated (it's inert without the toggle).
-		await asUser.mutation(api.retailers.updateSettings, {
-			notifyWaPhone: "0198765432",
-		});
 		await t.run(async (ctx) => {
 			const sub = await ctx.db
 				.query("subscriptions")
@@ -1937,22 +2066,21 @@ describe("seller WhatsApp order alerts config (86eyhw9zy)", () => {
 				.first();
 			if (!sub) throw new Error("no subscription row");
 			await ctx.db.patch(sub._id, { plan: "starter", status: "active" });
-		});
-		await expect(
-			asUser.mutation(api.retailers.updateSettings, { orderWaAlerts: true }),
-		).rejects.toThrow(/Pro plan/i);
-		// A downgraded seller with the toggle already on can still turn it off.
-		await t.run(async (ctx) => {
-			await ctx.db.patch(retailer._id, { orderWaAlerts: true });
+			await ctx.db.patch(retailer._id, { orderWaAlerts: false });
 		});
 		await asUser.mutation(api.retailers.updateSettings, {
-			orderWaAlerts: false,
+			notifyWaPhone: "0198765432",
+			orderWaAlerts: true,
 		});
-		const after = await asUser.query(api.retailers.getMyRetailer);
+		let after = await asUser.query(api.retailers.getMyRetailer);
+		expect(after?.orderWaAlerts).toBe(true);
+		expect(after?.waAlertsCovered).toBe(true);
+		await asUser.mutation(api.retailers.updateSettings, { orderWaAlerts: false });
+		after = await asUser.query(api.retailers.getMyRetailer);
 		expect(after?.orderWaAlerts).toBe(false);
 	});
 
-	test("clearing the number switches the alerts off with it", async () => {
+	test("clearing the number leaves the switch alone — saving a number again resumes WhatsApp", async () => {
 		const t = setup();
 		const asUser = await seed(t, USER_A, "wa-alerts-clear");
 		await asUser.mutation(api.retailers.updateSettings, {
@@ -1962,7 +2090,37 @@ describe("seller WhatsApp order alerts config (86eyhw9zy)", () => {
 		await asUser.mutation(api.retailers.updateSettings, { notifyWaPhone: "" });
 		const retailer = await asUser.query(api.retailers.getMyRetailer);
 		expect(retailer?.notifyWaPhone).toBeUndefined();
-		expect(retailer?.orderWaAlerts).toBe(false);
+		expect(retailer?.orderWaAlerts).toBe(true);
+	});
+
+	test("waAlertsCovered follows the subscription: trial + active yes, locked / held / cancelled no, comped yes", async () => {
+		const t = setup();
+		const asUser = await seed(t, USER_A, "wa-alerts-covered");
+		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		const setSub = (patch: Partial<Doc<"subscriptions">>) =>
+			t.run(async (ctx) => {
+				const sub = await ctx.db
+					.query("subscriptions")
+					.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+					.first();
+				if (!sub) throw new Error("no subscription row");
+				await ctx.db.patch(sub._id, patch);
+			});
+		const covered = async () =>
+			(await asUser.query(api.retailers.getMyRetailer))?.waAlertsCovered;
+		await setSub({ status: "trialing" });
+		expect(await covered()).toBe(true);
+		await setSub({ status: "active" });
+		expect(await covered()).toBe(true);
+		await setSub({ status: "past_due" });
+		expect(await covered()).toBe(false);
+		await setSub({ status: "on_hold" });
+		expect(await covered()).toBe(false);
+		await setSub({ status: "cancelled" });
+		expect(await covered()).toBe(false);
+		await setSub({ status: "past_due", comped: true });
+		expect(await covered()).toBe(true);
 	});
 
 	test("a STOP'd alert number is surfaced on the payload (and cleared by START)", async () => {
@@ -2567,7 +2725,7 @@ describe("country switch carries no wrong-country WhatsApp numbers (SG-lite inva
 		expect(mine?.waPhone).toBe("6591234567");
 	});
 
-	test("a stored notifyWaPhone is kept and listed; clearing it in-call still auto-disables alerts", async () => {
+	test("a stored notifyWaPhone is kept and listed; clearing it in-call leaves the switch untouched", async () => {
 		const t = setup();
 		const asA = await seed(t, USER_A, "switch-stale-notify");
 		await asA.mutation(api.retailers.updateSettings, {
@@ -2586,7 +2744,8 @@ describe("country switch carries no wrong-country WhatsApp numbers (SG-lite inva
 		const mine = await asA.query(api.retailers.getMyRetailer);
 		expect(mine?.country).toBe("SG");
 		expect(mine?.notifyWaPhone).toBeUndefined();
-		expect(mine?.orderWaAlerts).toBeFalsy();
+		// Never switched → still the default (on); with no number nothing sends.
+		expect(mine?.orderWaAlerts).toBeUndefined();
 	});
 
 	test("symmetric — SG→MY keeps a stored SG number and lists it too", async () => {
@@ -3402,5 +3561,145 @@ describe("public booksCouriers bit (z8r3fdh274)", () => {
 
 		await t.run((ctx) => ctx.db.patch(retailerId, { delyva: connected }));
 		expect(await booksCouriers(t, "delyva-couriers")).toBe(true);
+	});
+});
+
+describe("rider options save without touching the arm switch (86eye9xd4)", () => {
+	// The delivery-pricing page saves vehicle / direction / prompt-to-book with
+	// live pricing. Before, a "live" store's save sent none of them (they were
+	// editable and silently dropped); sending them with a restated `enabled`
+	// could re-arm riders the seller had switched off. `enabled` omitted now
+	// means "keep what's stored", like its two sibling fields.
+	const originAddress = {
+		label: "12 Jln Kilang, Shah Alam",
+		latitude: 3.0,
+		longitude: 101.5,
+	};
+	const keys = { apiKey: "pk_test_abc", apiSecret: "sk_test_def" };
+
+	for (const armed of [true, false]) {
+		test(`rider options persist and riders stay ${armed ? "armed" : "off"}`, async () => {
+			const t = setup();
+			const asA = await seed(t, USER_A, `rider-opts-${armed ? "on" : "off"}`);
+			await asA.mutation(api.retailers.updateSettings, {
+				businessAddress: originAddress,
+				deliveryConfig: { mode: "flat", fee: 500 },
+				deliveryBooking: { enabled: armed, vehicleType: "MOTORCYCLE", ...keys },
+			});
+			await asA.mutation(api.retailers.updateSettings, {
+				deliveryBooking: {
+					vehicleType: "CAR",
+					promptBookOnPacked: true,
+					deliveryDirection: "collection",
+				},
+			});
+			const booking = (await asA.query(api.retailers.getMyRetailer))
+				?.deliveryBooking;
+			expect(booking?.enabled).toBe(armed);
+			expect(booking?.vehicleType).toBe("CAR");
+			expect(booking?.promptBookOnPacked).toBe(true);
+			expect(booking?.deliveryDirection).toBe("collection");
+			expect(booking?.hasCredentials).toBe(true);
+		});
+	}
+});
+
+describe("storefront chat action (z8r3fdvwcy)", () => {
+	// The "Ask on WhatsApp" button on the store home is ON by default: the
+	// stamp is an opt-OUT, like the marketplace listing, so absent reads as on
+	// and nothing needs a backfill.
+	test("both reads say the chat action is on until the owner turns it off", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "chat-on");
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.storefrontChatEnabled).toBe(true);
+		const pub = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "chat-on",
+		});
+		expect(pub.status).toBe("ok");
+		if (pub.status !== "ok") return;
+		expect(pub.retailer.storefrontChatEnabled).toBe(true);
+
+		await asA.mutation(api.retailers.setStorefrontChat, {
+			retailerId: mine?._id as Id<"retailers">,
+			enabled: false,
+		});
+		expect(
+			(await asA.query(api.retailers.getMyRetailer))?.storefrontChatEnabled,
+		).toBe(false);
+		const off = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "chat-on",
+		});
+		if (off.status !== "ok") throw new Error("expected ok");
+		expect(off.retailer.storefrontChatEnabled).toBe(false);
+
+		await asA.mutation(api.retailers.setStorefrontChat, {
+			retailerId: mine?._id as Id<"retailers">,
+			enabled: true,
+		});
+		expect(
+			(await asA.query(api.retailers.getMyRetailer))?.storefrontChatEnabled,
+		).toBe(true);
+	});
+
+	test("turning it off twice keeps the first 'since when' stamp", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "chat-stamp");
+		const retailerId = (await asA.query(api.retailers.getMyRetailer))
+			?._id as Id<"retailers">;
+		await asA.mutation(api.retailers.setStorefrontChat, {
+			retailerId,
+			enabled: false,
+		});
+		const first = await t.run(
+			async (ctx) => (await ctx.db.get(retailerId))?.storefrontChatDisabledAt,
+		);
+		expect(typeof first).toBe("number");
+		await asA.mutation(api.retailers.setStorefrontChat, {
+			retailerId,
+			enabled: false,
+		});
+		const second = await t.run(
+			async (ctx) => (await ctx.db.get(retailerId))?.storefrontChatDisabledAt,
+		);
+		expect(second).toBe(first);
+	});
+
+	test("owner-only: a teammate with store_settings write is refused in the gate's words, a stranger is forbidden", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "chat-owner-only");
+		const retailerId = (await asA.query(api.retailers.getMyRetailer))
+			?._id as Id<"retailers">;
+		const helper = { subject: "user_helper_chat", email: "helper@example.com" };
+		const { memberId } = await asA.mutation(api.team.invite, {
+			retailerId,
+			email: helper.email,
+			permissions: { store_settings: "write" },
+		});
+		await t
+			.withIdentity(helper)
+			.mutation(api.team.acceptPendingInvite, { memberId });
+		await expect(
+			t
+				.withIdentity(helper)
+				.mutation(api.retailers.setStorefrontChat, {
+					retailerId,
+					enabled: false,
+				}),
+		).rejects.toThrow(/Only the store owner/);
+		await expect(
+			t
+				.withIdentity({ subject: USER_B })
+				.mutation(api.retailers.setStorefrontChat, {
+					retailerId,
+					enabled: false,
+				}),
+		).rejects.toThrow(/Forbidden/);
+		// The refusals changed nothing.
+		const pub = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "chat-owner-only",
+		});
+		if (pub.status !== "ok") throw new Error("expected ok");
+		expect(pub.retailer.storefrontChatEnabled).toBe(true);
 	});
 });

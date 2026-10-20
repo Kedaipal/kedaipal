@@ -8,11 +8,21 @@ import {
 	Minus,
 	Plus,
 	SlidersHorizontal,
+	Zap,
 } from "lucide-react";
 import type { api } from "../../../convex/_generated/api";
 import { formatEventBadge } from "../../../convex/lib/productEvent";
+import { usePromoClock } from "../../hooks/usePromoClock";
 import { bookingPriceSuffix, weekendRateSuffix } from "../../lib/booking-dates";
+import { formatTimeLeft } from "../../lib/countdown";
 import { formatPrice } from "../../lib/format";
+import {
+	effectivePriceFrom,
+	promoLive,
+	promoPercentOff,
+	promoTeasing,
+} from "../../lib/promo";
+import { cn } from "../../lib/utils";
 import { hasStartingPrice, minQuantityUnreachable } from "../../lib/variant";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
@@ -142,7 +152,37 @@ export function ProductCard({
 		: `Remove one ${product.name}`;
 	// Does the bottom-left overlay row render at all? Drives the no-photo
 	// placeholder's clearance — see the tile below.
-	const hasBottomChips = event !== undefined || hasCustom || minQuantity >= 2;
+	// Promotion (z8r3fdcw72). The card carries the whole sale story ON THE
+	// IMAGE — badge, countdown, units left — so a card on sale is exactly as
+	// tall as the one beside it and the grid never staggers. Deliberately NOT
+	// the scissors strip: at ~180px the blades and ghost text turn to mush.
+	const promoClock = usePromoClock(product.promoState);
+	const onPromo = promoLive(product.promoState, promoClock);
+	const salePriceFrom = effectivePriceFrom(product, promoClock);
+	const saleOn = onPromo && salePriceFrom < product.priceFrom;
+	const percentOff = saleOn
+		? promoPercentOff(product.priceFrom, salePriceFrom)
+		: null;
+	const teasing = promoTeasing(product.promoState, promoClock);
+	const promoEndsAt = product.promoState?.endsAt;
+	const promoStartsAt = product.promoState?.startsAt;
+	const countdownAt = teasing
+		? promoStartsAt
+		: saleOn
+			? promoEndsAt
+			: undefined;
+	const unitsLeft = saleOn ? product.promoState?.unitsLeft : undefined;
+	// A sale strip sits where the chips do, so it has to claim the same
+	// clearance on a photo-less tile or it paints over the product's name.
+	const hasSaleStrip = countdownAt !== undefined || unitsLeft !== undefined;
+	const hasBottomChips =
+		event !== undefined || hasCustom || minQuantity >= 2 || hasSaleStrip;
+	// A LIVE flash sale breathes (Zaki, 9 Oct) — a slow mint heartbeat that
+	// pulls the eye across a grid. Only a TIMED sale, never a plain discount:
+	// urgency you can't run out of isn't urgency, and a storefront where every
+	// card pulsed would read as decoration. The ring is separate from the
+	// animation so reduced motion still shows which card is on sale.
+	const flashGlow = saleOn && promoEndsAt !== undefined;
 	const pageLink = {
 		to: "/$slug/p/$productSlug",
 		params: { slug: storeSlug, productSlug: product.slug },
@@ -156,7 +196,14 @@ export function ProductCard({
 		// and the CTAs `mt-auto`, so filling is all that was missing.
 		// The photo is inset (`p-1.5` + its own radius) per the polish pass —
 		// the card reads as a tile holding a photo, not a photo with a caption.
-		<div className="group flex h-full flex-col overflow-hidden rounded-[18px] border border-border bg-card p-1.5 transition-shadow duration-200 hover:shadow-md">
+		<div
+			className={cn(
+				"group flex h-full flex-col overflow-hidden rounded-[18px] border bg-card p-1.5 transition-shadow duration-200 hover:shadow-md",
+				flashGlow
+					? "border-accent/50 ring-2 ring-accent/35 animate-kp-flash-glow motion-reduce:animate-none"
+					: "border-border",
+			)}
+		>
 			<Link
 				{...pageLink}
 				// The photo is decorative here — the name link right below is the
@@ -227,11 +274,68 @@ export function ProductCard({
 					<span className="absolute left-2 top-2 rounded-full bg-accent px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent-foreground shadow-sm">
 						Low stock
 					</span>
+				) : saleOn ? (
+					// Last in the chain on purpose: every badge above it is a reason
+					// the buyer may NOT be able to order, which outranks a reason to
+					// want to. Navy + bolt when the sale is timed, mint when it is a
+					// plain discount — two states of one idea, told apart at a glance.
+					<span
+						className={cn(
+							"absolute left-2 top-2 flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide shadow-sm",
+							promoEndsAt !== undefined
+								? "bg-primary text-primary-foreground"
+								: "bg-accent text-accent-foreground",
+						)}
+					>
+						{promoEndsAt !== undefined ? (
+							<Zap className="size-3" aria-hidden />
+						) : null}
+						{percentOff !== null
+							? `−${percentOff}%`
+							: (product.promoState?.label ?? "Sale")}
+					</span>
+				) : null}
+				{/* The sale strip — a full-width band across the foot of the image.
+				    Carries the countdown (to the drop when teasing, to the end when
+				    live) and the units left, so the card sells the urgency without
+				    adding a row to the text zone. */}
+				{hasSaleStrip ? (
+					<span className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 bg-primary/90 px-2 py-1 text-[11px] text-primary-foreground backdrop-blur-sm">
+						{countdownAt !== undefined ? (
+							<span className="flex items-center gap-1 font-semibold tabular-nums">
+								<Zap className="size-3 shrink-0" aria-hidden />
+								{teasing
+									? // Name the price it drops TO, not just when: "in 1h
+										// 11m" alone asks the buyer to come back for a number
+										// they were never told.
+										`${
+											product.promoPriceFrom !== undefined
+												? `${formatPrice(product.promoPriceFrom, product.currency)} `
+												: ""
+										}in ${formatTimeLeft(countdownAt - promoClock)}`
+									: formatTimeLeft(countdownAt - promoClock)}
+							</span>
+						) : (
+							<span className="font-medium">
+								{product.promoState?.label ?? "Sale"}
+							</span>
+						)}
+						{unitsLeft !== undefined ? (
+							<span className="font-medium">
+								{unitsLeft} of {product.promoState?.unitCap} left
+							</span>
+						) : null}
+					</span>
 				) : null}
 				{/* Overlaid on the image (not a text-zone row) so cards with chips
 				    stay exactly the same height as their neighbours. */}
 				{hasBottomChips ? (
-					<span className="absolute bottom-2 left-2 flex flex-wrap items-center gap-1">
+					<span
+						className={cn(
+							"absolute left-2 flex flex-wrap items-center gap-1",
+							hasSaleStrip ? "bottom-8" : "bottom-2",
+						)}
+					>
 						{event !== undefined ? (
 							// Accent, normal case, a size up: this is the headline fact,
 							// not a micro-rule. Overlaid on the image like its neighbours
@@ -283,7 +387,15 @@ export function ProductCard({
 									From{" "}
 								</span>
 							) : null}
-							{formatPrice(product.priceFrom, product.currency)}
+							{formatPrice(
+								saleOn ? salePriceFrom : product.priceFrom,
+								product.currency,
+							)}
+							{saleOn ? (
+								<span className="ml-1.5 text-xs font-medium text-muted-foreground line-through">
+									{formatPrice(product.priceFrom, product.currency)}
+								</span>
+							) : null}
 							{isBooking ? (
 								<span className="text-xs font-medium text-muted-foreground">
 									{bookingPriceSuffix(

@@ -242,7 +242,6 @@ describe("resolveBannerState", () => {
 				NOW,
 				undefined,
 				{
-					locked: true,
 					route: "topup",
 					ordersWaiting: 3,
 					total: -3,
@@ -458,7 +457,6 @@ describe("resolveBannerState", () => {
 				NOW,
 				undefined,
 				{
-					locked: false,
 					route: "resume",
 					ordersWaiting: 0,
 					total: 5,
@@ -481,18 +479,17 @@ describe("resolveBannerState", () => {
 		).toBe("pastDue");
 	});
 
-	test("credits (T3): out of credits outranks every deadline; running low is the lowest nudge", () => {
+	test("credits (T3.1): waiting orders outrank every deadline; running low is the lowest nudge", () => {
 		const s = sub({ plan: "starter", status: "active" });
-		const locked = {
-			locked: true,
+		const waiting = {
 			route: "topup" as const,
 			ordersWaiting: 4,
 			total: -4,
 			periodGrant: 100,
 		};
 		expect(
-			resolveBannerState(s, NOW + 2 * DAY, NOW, undefined, locked),
-		).toEqual({ kind: "creditsLocked", ordersWaiting: 4, route: "topup" });
+			resolveBannerState(s, NOW + 2 * DAY, NOW, undefined, waiting),
+		).toEqual({ kind: "creditsWaiting", ordersWaiting: 4, route: "topup" });
 		// …but a past-due store is view-only, which says more.
 		expect(
 			resolveBannerState(
@@ -500,11 +497,21 @@ describe("resolveBannerState", () => {
 				undefined,
 				NOW,
 				undefined,
-				locked,
+				waiting,
 			).kind,
 		).toBe("pastDue");
+		// A store can be BELOW ZERO with nothing waiting (Credits T3.1): every
+		// order it took was funded, and the debt came from an expired lot or
+		// from before the gate shipped. It still needs telling, so the low
+		// banner stays widened past "amber" — narrowing it is what left a store
+		// already into next month's credits with no banner at all.
+		expect(
+			resolveBannerState(s, undefined, NOW, undefined, {
+				...waiting,
+				ordersWaiting: 0,
+			}),
+		).toEqual({ kind: "creditsLow", total: -4 });
 		const low = {
-			locked: false,
 			route: "topup" as const,
 			ordersWaiting: 0,
 			periodGrant: 100,
@@ -532,7 +539,6 @@ describe("resolveBannerState", () => {
 		).toBe("none");
 		expect(
 			resolveBannerState(s, undefined, NOW, undefined, {
-				locked: false,
 				route: "topup",
 				ordersWaiting: 0,
 			}).kind,
@@ -577,7 +583,8 @@ describe("hasFeature (client plan gate)", () => {
 				delivery: false,
 				onlinePayments: false,
 				events: false,
-				waOrderAlerts: false,
+				promo: false,
+				vouchers: false,
 			},
 		});
 		expect(hasFeature(starter, "crm")).toBe(false);
@@ -587,7 +594,6 @@ describe("hasFeature (client plan gate)", () => {
 		expect(hasFeature(starter, "insights")).toBe(false);
 		expect(hasFeature(starter, "radiusDelivery")).toBe(false);
 		expect(hasFeature(starter, "onlinePayments")).toBe(false);
-		expect(hasFeature(starter, "waOrderAlerts")).toBe(false);
 		const pro = sub({
 			features: {
 				crm: true,
@@ -599,7 +605,8 @@ describe("hasFeature (client plan gate)", () => {
 				delivery: true,
 				onlinePayments: true,
 				events: true,
-				waOrderAlerts: true,
+				promo: true,
+				vouchers: true,
 			},
 		});
 		expect(hasFeature(pro, "crm")).toBe(true);
@@ -608,7 +615,6 @@ describe("hasFeature (client plan gate)", () => {
 		expect(hasFeature(pro, "insights")).toBe(true);
 		expect(hasFeature(pro, "radiusDelivery")).toBe(true);
 		expect(hasFeature(pro, "onlinePayments")).toBe(true);
-		expect(hasFeature(pro, "waOrderAlerts")).toBe(true);
 	});
 
 	test("fails open when the subscription/features are missing (loading, comped)", () => {
@@ -629,7 +635,8 @@ describe("isCrmLocked", () => {
 			delivery: false,
 			onlinePayments: false,
 			events: false,
-			waOrderAlerts: false,
+			promo: false,
+			vouchers: false,
 		},
 	});
 
@@ -672,7 +679,8 @@ describe("isOrderInboxLocked (order-detail 'Came from' drill-down, 86eyq0eq9)", 
 			delivery: false,
 			onlinePayments: false,
 			events: false,
-			waOrderAlerts: false,
+			promo: false,
+			vouchers: false,
 		},
 	});
 
@@ -716,7 +724,8 @@ describe("isOrderInboxLocked (order-detail 'Came from' drill-down, 86eyq0eq9)", 
 				delivery: false,
 				onlinePayments: false,
 				events: false,
-				waOrderAlerts: false,
+				promo: false,
+				vouchers: false,
 			},
 		});
 		expect(

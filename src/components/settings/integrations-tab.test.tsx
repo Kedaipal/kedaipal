@@ -23,9 +23,11 @@ function renderTab(target?: { anchor: string; highlight: "spotlight" }) {
 			retailerId={"r1" as never}
 			country="MY"
 			deliveryBooking={undefined}
+			businessAddress={undefined}
 			hitpay={undefined}
 			subscription={undefined}
 			onSave={vi.fn() as never}
+			onOpenPayments={vi.fn()}
 		/>,
 	);
 }

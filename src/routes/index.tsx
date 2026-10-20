@@ -1,44 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { PLAN_MONTHLY_PRICES } from "../../convex/lib/plans";
-import { Delivery } from "../components/landing/delivery";
-import { FAQ_MESSAGES, Faq } from "../components/landing/faq";
-import { FinalCta } from "../components/landing/final-cta";
-import { Footer } from "../components/landing/footer";
-import { Hero } from "../components/landing/hero";
-import { Nav } from "../components/landing/nav";
-import { PaymentHandshake } from "../components/landing/payment-handshake";
-import { PaymentMethods } from "../components/landing/payment-methods";
-import { PricingTeaser } from "../components/landing/pricing-teaser";
-import { RealSellers } from "../components/landing/real-sellers";
-import { VideoDemo } from "../components/landing/video-demo";
-import { LandingRegionProvider } from "../hooks/useLandingRegion";
-import { useMarketingLanding } from "../hooks/useMarketingLanding";
+import { FAQ_MESSAGES } from "../components/landing/faq";
+import { LandingPage } from "../components/landing/landing-page";
+import { useReferralInvite } from "../hooks/useReferralInvite";
 import { DEMO_DURATION_ISO, DEMO_VIDEO } from "../lib/demo-video";
 import { jsonLdScript } from "../lib/json-ld";
 import { faqJsonLd } from "../lib/landing-faq";
+import { SEO_DESC, SEO_TITLE } from "../lib/landing-seo";
 
-/**
- * "Home sellers" was the pre-Jul-2026 ICP. The feature-grounded cohort is a
- * behaviour, not a venue — multi-outlet stalls, central kitchens and service
- * shops all match it and none of them sell from home. Keep this and the
- * Organization description below on the pattern, never on a venue or vertical.
- */
-const SEO_TITLE = "Kedaipal — WhatsApp Order Hub for Malaysian Sellers";
-/**
- * Mirrors the hero: the locked 8 Sep 2026 tagline, then the promise. Kept
- * under 155 chars — Google truncates around 155-160, so the structural
- * differentiator ("no Meta setup") must sit inside the cut; a 173-char draft
- * put it at char 159 and `landing-seo.test.ts` now measures it. The regions
- * live in SEO_TITLE and the Organization description, not here — "for
- * Malaysia & Singapore" was the 20 chars that pushed the differentiator out.
- * "Free until your first order" is the start-when-you-sell framing (pricing
- * reset, 30 Aug), and still true under the 30 Sep trial model. This line never
- * names a trial length; the page states it once, in the FAQ answer, as "14
- * days or 200 orders" from the first order — the two bounds together
- * (landing-redesign.test.ts).
- */
-const SEO_DESC =
-	"Sell on WhatsApp. Never lose an order or a payment. Orders, payments and couriers on one screen. Free until your first order, no Meta setup.";
 const SITE_URL = "https://kedaipal.com";
 /**
  * The landing demo. `uploadDate` is the date the clip was cut, NOT "today" —
@@ -59,10 +28,13 @@ const DEMO_POSTER_URL = `${SITE_URL}${DEMO_VIDEO.landscape.poster}`;
  * The offer range is DERIVED from `PLAN_MONTHLY_PRICES`, never typed here —
  * a typed literal once outlived a reprice by weeks because nothing tied it to
  * the constant the teaser renders from. The listed tiers only: Enterprise has
- * no public price (T6), so it can't bound a published offer range.
+ * no public price (T6), so it can't bound a published offer range — and so
+ * it can't be counted in it either: `offerCount` is the number of listed
+ * tiers, read from the same constant.
  */
 const OFFER_LOW = String(PLAN_MONTHLY_PRICES.MYR.starter / 100);
 const OFFER_HIGH = String(PLAN_MONTHLY_PRICES.MYR.pro / 100);
+const OFFER_COUNT = String(Object.keys(PLAN_MONTHLY_PRICES.MYR).length);
 
 /**
  * FAQPage entries mirror the visible FAQ by construction: `faqJsonLd` reads
@@ -93,7 +65,7 @@ const jsonLd = [
 			priceCurrency: "MYR",
 			lowPrice: OFFER_LOW,
 			highPrice: OFFER_HIGH,
-			offerCount: "3",
+			offerCount: OFFER_COUNT,
 			description: "Free until your first order, no credit card required",
 		},
 	},
@@ -154,32 +126,11 @@ export const Route = createFileRoute("/")({
 });
 
 /**
- * Eight sections (landing v2, z8r3fdegej — design approved 12 Sep 2026):
- * the promise, the product moving, the proof, then the three things the
- * target tier is sold on (payment handshake, courier booking, payment rails),
- * then the price, the objections, the close. The problem strip, how-it-works
- * timeline, features bento and money-math block were cut: fourteen sections
- * was too long for a seller who already knows the pain, and the video says
- * "how it works" better than the timeline did.
+ * The landing page. A visitor holding a referral (z8r3fdetf5 — they opened a
+ * `/referral/<slug>` link in the last 30 days) sees the referrer's invite at
+ * the top of the hero; everyone else sees the page unchanged.
  */
 function Landing() {
-	// GA4 funnel entry (z8r3fdd1v0): capture ?src= + fire land_marketing.
-	useMarketingLanding();
-	return (
-		<LandingRegionProvider>
-			<main className="min-h-dvh bg-background text-foreground">
-				<Nav />
-				<Hero />
-				<VideoDemo />
-				<RealSellers />
-				<PaymentHandshake />
-				<Delivery />
-				<PaymentMethods />
-				<PricingTeaser />
-				<Faq />
-				<FinalCta />
-				<Footer />
-			</main>
-		</LandingRegionProvider>
-	);
+	const invite = useReferralInvite();
+	return <LandingPage invite={invite} />;
 }

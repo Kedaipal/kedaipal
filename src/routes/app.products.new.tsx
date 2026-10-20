@@ -6,8 +6,8 @@ import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { UnsavedChangesGuard } from "../components/app/unsaved-changes-guard";
 import { ViewOnlyNote } from "../components/app/view-only-note";
-import { CreditLockNote } from "../components/credits/credit-lock-note";
 import { PageHeader } from "../components/dashboard/page-header";
 import {
 	ProductForm,
@@ -24,6 +24,7 @@ import { Button } from "../components/ui/button";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { lockLabel, useAreaLock } from "../hooks/useStoreLock";
 import { isKindCard, type KindCard } from "../lib/kind-card";
+import type { UnsavedState } from "../lib/product-form-dirty";
 import { hasFeature } from "../lib/subscription";
 
 /**
@@ -77,12 +78,18 @@ function NewProductRoute() {
 	// Set once the product row exists — makes a post-create failure (categories)
 	// retryable without minting a second product.
 	const createdProductId = useRef<Id<"products"> | null>(null);
+	// What leaving would lose, reported by whichever view is showing — one
+	// guard covers the wizard and the full form (z8r3fdtk82).
+	const [unsaved, setUnsaved] = useState<UnsavedState>("none");
+	// Whether the wizard draft handed to the full form held anything. A
+	// handoff is unsaved work only if the seller had typed something.
+	const [handoffDirty, setHandoffDirty] = useState(false);
 	// Can't create right now — view-only, out of credits (Credits T3), or a
 	// teammate with view on products. Unlike the cap wall below, the wizard
 	// and form stay usable: a lock can lift in minutes (a top-up), and a draft
 	// built meanwhile publishes the moment it does. Only Publish/Create grey
 	// out, with the reason beside them.
-	const productsLock = useAreaLock("products", { credits: true });
+	const productsLock = useAreaLock("products");
 	const saveLock = productsLock.readOnly
 		? { reason: productsLock.reason, label: lockLabel(productsLock.cause) }
 		: undefined;
@@ -95,6 +102,10 @@ function NewProductRoute() {
 	// the Pro hint rather than erroring on save.
 	const eventsLocked =
 		!retailer.actingAsAdmin && !hasFeature(retailer.subscription, "events");
+	// Promotions (z8r3fdcw72) — same client mirror, same posture: the toggle
+	// disables with the Pro hint instead of erroring on save.
+	const promoLocked =
+		!retailer.actingAsAdmin && !hasFeature(retailer.subscription, "promo");
 
 	async function handleCreate(values: ProductFormSubmitValues) {
 		if (!retailer) return;
@@ -126,6 +137,10 @@ function NewProductRoute() {
 				// stayed green because they call the API directly. The payload scan
 				// test now pins it.)
 				event: values.event ?? undefined,
+				// Same null→undefined conversion as `event` directly above: the
+				// create validator takes an object or nothing, and there is no
+				// stored promotion to clear on a product that doesn't exist yet.
+				promo: values.promo ?? undefined,
 				buyerQuestions: values.buyerQuestions,
 				variants: values.variants,
 			}));
@@ -143,11 +158,13 @@ function NewProductRoute() {
 		// is not always the obvious first row — "it saved" should not have to be
 		// inferred from spotting it.
 		toast.success("Product created.");
-		navigate({ to: "/app/products" });
+		// It's saved, so the leave guard has nothing to protect.
+		navigate({ to: "/app/products", ignoreBlocker: true });
 	}
 
 	function openFullForm(handoff: ReturnType<typeof wizardHandoff>) {
 		setWizardDraft(handoff);
+		setHandoffDirty(unsaved !== "none");
 		navigate({
 			to: "/app/products/new",
 			search: { form: "full" },
@@ -198,13 +215,14 @@ function NewProductRoute() {
 	if (form !== "full") {
 		return (
 			<div className="flex flex-col gap-4 lg:max-w-2xl">
+				<UnsavedChangesGuard state={unsaved} />
 				<ViewOnlyNote />
-				<CreditLockNote scope="products" />
 				<ProductWizard
 					retailerId={retailer._id}
 					saveLock={saveLock}
 					categoriesLocked={categoriesLocked}
 					eventsLocked={eventsLocked}
+					promoLocked={promoLocked}
 					currency={retailer.currency}
 					defaultKind={retailer.storeType}
 					storeSchedule={{
@@ -216,7 +234,9 @@ function NewProductRoute() {
 					onSubmit={handleCreate}
 					onSkipToFullForm={openFullForm}
 					onOpenFullForm={openFullForm}
-					onExit={() => navigate({ to: "/app/products" })}
+					// The wizard confirms a discard itself before calling this.
+					onExit={() => navigate({ to: "/app/products", ignoreBlocker: true })}
+					onUnsavedChange={setUnsaved}
 				/>
 			</div>
 		);
@@ -224,6 +244,7 @@ function NewProductRoute() {
 
 	return (
 		<div className="flex flex-col gap-4 lg:max-w-2xl">
+			<UnsavedChangesGuard state={unsaved} />
 			<PageHeader
 				title="New product"
 				back={{ to: "/app/products", label: "Products" }}
@@ -238,7 +259,6 @@ function NewProductRoute() {
 			</div>
 			<h2 className="text-xl font-bold lg:hidden">New product</h2>
 			<ViewOnlyNote />
-			<CreditLockNote scope="products" />
 
 			{/* Way back to the guided setup — lossless (same draft substrate). */}
 			<button
@@ -253,6 +273,7 @@ function NewProductRoute() {
 				retailerId={retailer._id}
 				categoriesLocked={categoriesLocked}
 				eventsLocked={eventsLocked}
+				promoLocked={promoLocked}
 				initialValues={wizardDraft?.initialValues}
 				initialEditor={wizardDraft?.initialEditor}
 				mode="create"
@@ -266,6 +287,8 @@ function NewProductRoute() {
 				}}
 				offerSelfCollect={retailer.offerSelfCollect !== false}
 				saveLock={saveLock}
+				startsDirty={handoffDirty}
+				onUnsavedChange={setUnsaved}
 				onSubmit={handleCreate}
 			/>
 		</div>

@@ -4,6 +4,7 @@ import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { Clock, MessageCircle } from "lucide-react";
 import { useCallback, useState } from "react";
 import { api } from "../../convex/_generated/api";
+import { claimVoucherDiscount } from "../../convex/lib/vouchers";
 import type { ClaimPagePayload } from "../../convex/orderClaims";
 import { ClaimCheckoutPage } from "../components/claim/claim-checkout-page";
 import { ClaimTimerBar } from "../components/claim/claim-timer-bar";
@@ -224,10 +225,17 @@ function ClaimRoute() {
 	// Not a withdrawal: the seller didn't release this order, their whole shop
 	// is resting, so the copy points at the season rather than at the buyer.
 	if (store.orderingPaused && status !== "completed") {
+		// A hold is "a seasonal break"; Kedaipal's switch (z8r3fdudf7) is said
+		// neutrally — never why, and never a reason the buyer can't verify.
+		const seasonal = store.orderingPausedBy === "hold";
 		return (
 			<ClaimDeadEnd
 				store={store}
-				title={`${store.storeName} is on a seasonal break`}
+				title={
+					seasonal
+						? `${store.storeName} is on a seasonal break`
+						: `${store.storeName} isn't taking orders right now`
+				}
 				body={`Ordering is paused for now, so this link can't be completed — nothing was charged. Message them to find out when they're back.`}
 			/>
 		);
@@ -300,7 +308,13 @@ function ClaimRoute() {
 								<span {...MASK_PII}>{open.buyerName}</span>
 							</>
 						) : null}
-						{` · ${formatPrice(open.itemsTotal, store.currency)}`}
+						{/* NET of the voucher, not the items figure (`z8r3fdr617`).
+						    The voucher is locked at send, so it is knowable here —
+						    fees are not, since they depend on choices the buyer
+						    hasn't made yet, and they only ever ADD. Printing the
+						    gross put "RM 40.00" in the header directly above a
+						    ticket reading "TOTAL RM 32.00". */}
+						{` · ${formatPrice(open.itemsTotal - claimVoucherDiscount(open.voucher, open.itemsTotal), store.currency)}`}
 					</>
 				}
 			/>

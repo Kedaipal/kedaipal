@@ -57,7 +57,8 @@ describe("plans — feature entitlements", () => {
 			delivery: false,
 			onlinePayments: false,
 			events: false,
-			waOrderAlerts: false,
+			promo: false,
+			vouchers: false,
 		});
 	});
 
@@ -72,7 +73,8 @@ describe("plans — feature entitlements", () => {
 			delivery: true,
 			onlinePayments: true,
 			events: true,
-			waOrderAlerts: true,
+			promo: true,
+			vouchers: true,
 		});
 		expect(featuresForPlan("enterprise")).toEqual({
 			crm: true,
@@ -84,7 +86,8 @@ describe("plans — feature entitlements", () => {
 			delivery: true,
 			onlinePayments: true,
 			events: true,
-			waOrderAlerts: true,
+			promo: true,
+			vouchers: true,
 		});
 	});
 

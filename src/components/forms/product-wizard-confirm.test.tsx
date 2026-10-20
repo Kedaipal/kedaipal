@@ -54,6 +54,7 @@ function renderWizard(state: WizardState, onExit: () => void) {
 			retailerId={"r1" as never}
 			categoriesLocked={false}
 			eventsLocked={false}
+			promoLocked={false}
 			currency="MYR"
 			onSubmit={vi.fn()}
 			onSkipToFullForm={vi.fn()}
@@ -189,17 +190,17 @@ describe("wizard — discarding a draft", () => {
 		vi.unstubAllGlobals();
 	});
 
-	it("Cancel keeps the draft, Discard leaves", () => {
+	it("Keep editing keeps the draft, Discard changes leaves — the leave guard's own words", () => {
 		const onExit = vi.fn();
 		renderWizard(dirtyDraft(), onExit);
 
 		discard();
-		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
 		expect(screen.queryByText("Discard this product?")).toBeNull();
 		expect(onExit).not.toHaveBeenCalled();
 
 		discard();
-		fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+		fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
 		expect(onExit).toHaveBeenCalledTimes(1);
 	});
 

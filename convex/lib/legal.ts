@@ -32,7 +32,10 @@ export const TERMS_VERSION = "2026-09-30";
 // localStorage address autofill, named Kedaipal as data user for analytics +
 // the global opt-out list, added the SG PDPA line (SG-incorporated operator)
 // and the DPO designation, and dropped the never-populated acceptanceIp field.
-export const PRIVACY_VERSION = "2026-08-17";
+// 2026-10-20 (Referral, z8r3fdetf5): disclosed the 30-day first-party
+// `kp_referral` cookie that remembers which seller's referral link a visitor
+// opened, so the referral bonus reaches them at signup.
+export const PRIVACY_VERSION = "2026-10-20";
 // 2026-10-01 (Credits T6, z8r3fdkp8h): the 50-numbers-in-5-minutes rule
 // exempted "the Scale tier", retired before it went public (it exempted
 // nobody). A higher limit is now "agreed with you in writing" — how an

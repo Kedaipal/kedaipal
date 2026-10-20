@@ -16,6 +16,7 @@ import {
 } from "./lib/emailCopy";
 import { formatFulfilmentDateTime } from "./lib/fulfilmentDate";
 import { sellerWaAlertWillAttempt } from "./lib/sellerAlerts";
+import { waAlertsCoveredBySubscription } from "./subscriptions";
 import {
 	sellerNewOrderTemplateName,
 	sellerPaymentClaimTemplateName,
@@ -63,6 +64,7 @@ export const getOrderForRetailerEmail = internalQuery({
 		// applies sellerWaAlertWillAttempt with its own env check.
 		orderWaAlerts: boolean | undefined;
 		notifyWaPhone: string | undefined;
+		subscriptionCovers: boolean;
 		isCounterOrder: boolean;
 	} | null> => {
 		const order = await ctx.db.get(orderId);
@@ -94,6 +96,7 @@ export const getOrderForRetailerEmail = internalQuery({
 			deliveryFeePending: order.deliveryFeePending === true,
 			orderWaAlerts: retailer.orderWaAlerts,
 			notifyWaPhone: retailer.notifyWaPhone,
+			subscriptionCovers: await waAlertsCoveredBySubscription(ctx, retailer),
 			isCounterOrder: order.source === "counter",
 		};
 	},
@@ -273,6 +276,7 @@ export const notifyRetailerOrderAlert = internalAction({
 			// Seller-alert reach — drives the WhatsApp-first suppression below.
 			orderWaAlerts: boolean | undefined;
 			notifyWaPhone: string | undefined;
+			subscriptionCovers: boolean;
 			isCounterOrder: boolean;
 		} | null = null;
 		try {
@@ -396,6 +400,7 @@ export const notifyPaymentClaimed = internalAction({
 			// Seller-alert reach — drives the WhatsApp-first suppression below.
 			orderWaAlerts: boolean | undefined;
 			notifyWaPhone: string | undefined;
+			subscriptionCovers: boolean;
 			isCounterOrder: boolean;
 		} | null = null;
 		try {
@@ -505,6 +510,7 @@ export const notifyPaymentReceived = internalAction({
 			paymentReference: string | undefined;
 			orderWaAlerts: boolean | undefined;
 			notifyWaPhone: string | undefined;
+			subscriptionCovers: boolean;
 		} | null = null;
 		try {
 			meta = await ctx.runQuery(internal.email.getOrderForRetailerEmail, {

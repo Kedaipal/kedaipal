@@ -82,9 +82,10 @@ import {
 	formatPrice,
 	formatShortDate,
 } from "../lib/format";
-import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
+import { IMAGE_ACCEPT } from "../lib/image-upload";
 import { buildOnboardingInviteLink } from "../lib/onboarding-link";
 import { slugify, validateStoreName } from "../lib/slug";
+import { uploadImage } from "../lib/storage-upload";
 import { PLAN_LABEL } from "../lib/subscription";
 
 export const Route = createFileRoute("/app/admin/billing")({
@@ -2158,19 +2159,12 @@ function PaymentConfigForm() {
 		if (!file) return;
 		setUploading(true);
 		try {
-			const prepared = await prepareImageUpload(file);
-			if (!prepared.ok) {
-				toast.error(prepared.message);
+			const upload = await uploadImage(file, () => generateQrUploadUrl({}));
+			if (!upload.ok) {
+				toast.error(upload.message);
 				return;
 			}
-			const url = await generateQrUploadUrl({});
-			const res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": prepared.contentType },
-				body: prepared.blob,
-			});
-			if (!res.ok) throw new Error("Upload failed");
-			const { storageId } = (await res.json()) as { storageId: string };
+			const { storageId } = upload;
 			await update({ qrImageStorageId: storageId });
 			toast.success("QR updated");
 		} catch (err) {

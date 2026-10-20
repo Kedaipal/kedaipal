@@ -310,6 +310,20 @@ export type CartWeightSummary =
 	| { kind: "missing_weights" };
 
 /**
+ * A priceable (non-custom) item with no usable parcel weight — the one rule
+ * for "this can't be priced by weight". Checkout's `summarizeCartWeight` and
+ * the seller's readiness check (`products.missingParcelWeights`) both read it,
+ * so the settings warning can never disagree with what checkout refuses.
+ */
+export function lacksParcelWeight(item: {
+	parcelWeightG: number;
+	isCustom?: boolean;
+}): boolean {
+	if (item.isCustom) return false;
+	return !Number.isFinite(item.parcelWeightG) || item.parcelWeightG <= 0;
+}
+
+/**
  * Sum a cart's chargeable parcel weight (weight mode). NEVER silently
  * underweighs (86eyeea1n edge case): one custom line or one weightless
  * non-custom item makes the WHOLE cart unpriceable — a partial sum would
@@ -324,9 +338,7 @@ export function summarizeCartWeight(
 	if (items.some((i) => i.isCustom)) return { kind: "custom_item" };
 	let grams = 0;
 	for (const item of items) {
-		if (!Number.isFinite(item.parcelWeightG) || item.parcelWeightG <= 0) {
-			return { kind: "missing_weights" };
-		}
+		if (lacksParcelWeight(item)) return { kind: "missing_weights" };
 		// A non-positive quantity can't reach an order (create validates), but a
 		// defensive clamp keeps a malformed quote call from shrinking the sum.
 		grams += Math.round(item.parcelWeightG) * Math.max(0, item.quantity);

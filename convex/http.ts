@@ -20,8 +20,10 @@ import {
 	resolveBillingGatewayCredentials,
 	verifyEventSignature,
 } from "./lib/hitpayBilling";
+import { keyFingerprint, parseWalletBalance } from "./lib/courierWallet";
 import { extractWebhookOrderId } from "./lib/lalamove";
 import {
+	type LalamoveWebhookEnvelope,
 	parseLalamoveWebhookEnvelope,
 	verifyLalamoveWebhook,
 } from "./lib/lalamoveSignature";
@@ -188,6 +190,44 @@ http.route({
 });
 
 /**
+ * Apply a Lalamove WALLET_BALANCE_CHANGED event to every store whose saved key
+ * sent it and whose secret signs it (courierWallets, 86eye9xd4 6A). Never
+ * throws: a wallet event that can't be attributed or verified is logged and
+ * dropped — the balance is a convenience, never a reason to fail the route.
+ */
+async function recordLalamoveWallet(
+	ctx: ActionCtx,
+	args: { rawBody: string; envelope: LalamoveWebhookEnvelope; path: string },
+): Promise<void> {
+	const parsed = parseWalletBalance(args.envelope.data);
+	if (!parsed) {
+		console.warn("Lalamove wallet event: unreadable balance, ignoring");
+		return;
+	}
+	const wallets = await ctx.runQuery(internal.courierWallets.getWalletContext, {
+		fingerprint: await keyFingerprint(args.envelope.apiKey),
+	});
+	let applied = 0;
+	for (const wallet of wallets) {
+		const result = await verifyLalamoveWebhook({
+			rawBody: args.rawBody,
+			envelope: args.envelope,
+			path: args.path,
+			apiSecret: await decryptSecret(wallet.apiSecret),
+		});
+		if (!result.valid) continue;
+		await ctx.runMutation(internal.courierWallets.recordBalance, {
+			walletId: wallet.walletId,
+			balance: parsed.balance,
+			currency: parsed.currency,
+			at: args.envelope.timestamp,
+		});
+		applied++;
+	}
+	console.log("Lalamove wallet event", { matched: wallets.length, applied });
+}
+
+/**
  * Lalamove webhook (docs/delivery-lalamove.md, ClickUp 86eyb5hrf).
  *
  * Mirrors the WhatsApp route's control flow (raw body → secret guard →
@@ -236,6 +276,13 @@ http.route({
 			return new Response("server misconfigured", { status: 500 });
 		}
 		const path = new URL(req.url).pathname;
+		if (jobId === null && envelope.eventType === "WALLET_BALANCE_CHANGED") {
+			// No order on a wallet event — the sender key's fingerprint finds
+			// the store, and that store's own secret verifies it (86eye9xd4).
+			// Unattributable or unverifiable: ack and drop, never a retry storm.
+			await recordLalamoveWallet(ctx, { rawBody, envelope, path });
+			return new Response("ok", { status: 200 });
+		}
 		if (jobId === null) {
 			// Not ours to act on: bookings the seller made outside Kedaipal,
 			// wallet events, or an unknown sender. BYO-only means there is no

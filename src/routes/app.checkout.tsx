@@ -8,7 +8,6 @@ import {
 	BadgeCheck,
 	Banknote,
 	Check,
-	CheckCircle2,
 	ChevronDown,
 	ChevronRight,
 	Clock,
@@ -16,6 +15,7 @@ import {
 	Image as ImageIcon,
 	LayoutGrid,
 	List,
+	Lock,
 	Minus,
 	Pencil,
 	Phone,
@@ -73,10 +73,10 @@ import {
 import { formatEventMoment } from "../../convex/lib/productEvent";
 import { ClaimsPanel } from "../components/claim/send-claim";
 import { WaitingOnBuyerScreen } from "../components/claim/waiting-on-buyer";
+import { DoneScreen } from "../components/counter/done-screen";
 import { ManualBindDialog } from "../components/counter/manual-bind-dialog";
 import { BRAND_GLYPHS } from "../components/dashboard/brand-icons";
 import { BuyerQuestionsFields } from "../components/order/buyer-questions-fields";
-import { OrderDocumentActions } from "../components/order/order-document-actions";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
@@ -98,6 +98,12 @@ import {
 import { Input } from "../components/ui/input";
 import { Select } from "../components/ui/select";
 import {
+	type AppliedVoucher,
+	previewDiscount,
+	VoucherField,
+} from "../components/vouchers/voucher-field";
+import { useCounterClosedReason } from "../hooks/useCounterClosed";
+import {
 	useActAsRetailerId,
 	useDashboardRetailer,
 } from "../hooks/useDashboardRetailer";
@@ -107,6 +113,7 @@ import {
 	counterPrimaryAction,
 	showsSellerPaymentControls,
 } from "../lib/counter-panel";
+import { centsToRm, rmToCents } from "../lib/counter-price";
 import { newWalkInSince, walkInSessionIds } from "../lib/counter-scan";
 import {
 	canAddToCounterCart,
@@ -116,6 +123,7 @@ import {
 } from "../lib/counter-stock";
 import { convexErrorMessage, currencySymbol, formatPrice } from "../lib/format";
 import { priceDelta } from "../lib/price-delta";
+import { effectiveVariantPrice, type PromoState } from "../lib/promo";
 import { cn } from "../lib/utils";
 
 export const Route = createFileRoute("/app/checkout")({
@@ -138,6 +146,9 @@ type CreatedOrder = {
 	shortId: string;
 	orderId: Id<"orders">;
 	paidInPerson: boolean;
+	/** Born completed — handed over at the counter (the server's answer, so
+	 * the Done screen's heading is right before its order query resolves). */
+	completed: boolean;
 	/** The order is an RSVP (`z8r3fdff9u`) — the done screen must not offer
 	 * "Mark as completed": the guest attends LATER; the RSVP completes at the
 	 * event ("Checked In"), not at the counter. */
@@ -154,6 +165,7 @@ function CounterCheckoutRoute() {
 	const [created, setCreated] = useState<CreatedOrder | null>(null);
 
 	const cancelSession = useMutation(api.counterCheckout.cancelCheckoutSession);
+	const closedReason = useCounterClosedReason();
 
 	const openSession = useCallback(
 		(id: string) => navigate({ search: { session: id } }),
@@ -206,9 +218,22 @@ function CounterCheckoutRoute() {
 					// (buyer scans), or the escape hatches for a buyer who won't/can't
 					// scan — manual phone entry or an anonymous cash sale. Management
 					// (rotate/print) lives on /app/poster.
-					<CounterCheckoutActions onStarted={openSession} />
+					<CounterCheckoutActions
+						onStarted={openSession}
+						closedReason={closedReason}
+					/>
 				)}
 			</header>
+
+			{/* A closed counter says so where the seller is about to ring up —
+			    not only as a refusal at the last tap. Open checkouts stay listed
+			    (they can still be cancelled); nothing can be placed. */}
+			{closedReason ? (
+				<div className="flex items-start gap-2.5 rounded-xl border border-border bg-muted/50 p-3 text-muted-foreground">
+					<Lock className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+					<p className="text-sm leading-relaxed">{closedReason}</p>
+				</div>
+			) : null}
 
 			{activeSessionId ? (
 				<ActiveSession
@@ -263,9 +288,10 @@ function ActiveSession({
 	if (created || session.status === "completed")
 		return (
 			<DoneScreen
-				shortId={created?.shortId}
+				shortId={created?.shortId ?? session.orderShortId}
 				orderId={created?.orderId ?? session.orderId}
 				paidInPerson={created?.paidInPerson ?? false}
+				completed={created?.completed}
 				eventRsvp={created?.eventRsvp}
 				free={created?.free}
 				buyerName={session.displayName}
@@ -292,6 +318,7 @@ function ActiveSession({
 			<BuildOrderScreen
 				retailerId={retailer._id}
 				sessionId={sessionId}
+				acceptsVouchers={session.acceptsVouchers}
 				buyer={{
 					displayName: session.displayName,
 					waPhone: session.waPhone,
@@ -488,8 +515,12 @@ function EmptyCheckouts() {
  */
 function CounterCheckoutActions({
 	onStarted,
+	closedReason,
 }: {
 	onStarted: (sessionId: string) => void;
+	/** Set while the counter is closed — the menu can't open, and the note
+	 * under the header says why. */
+	closedReason: string | null;
 }) {
 	const actAsRetailerId = useActAsRetailerId();
 	// Store country is the manual bind's picker default (z8r3fdh274). It reads
@@ -579,7 +610,9 @@ function CounterCheckoutActions({
 				<DropdownMenuTrigger asChild>
 					<button
 						type="button"
-						className="flex h-10 w-full shrink-0 items-center justify-center gap-1.5 rounded-xl bg-accent px-3.5 text-sm font-semibold text-accent-foreground shadow-sm transition-colors hover:bg-accent/90 aria-expanded:bg-accent/90 sm:w-auto"
+						disabled={closedReason !== null}
+						title={closedReason ?? undefined}
+						className="flex h-10 w-full shrink-0 items-center justify-center gap-1.5 rounded-xl bg-accent px-3.5 text-sm font-semibold text-accent-foreground shadow-sm transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50 aria-expanded:bg-accent/90 sm:w-auto"
 					>
 						<Plus className="size-4" />
 						New order
@@ -783,150 +816,6 @@ function ExpiredScreen({ onBackToList }: { onBackToList: () => void }) {
 	);
 }
 
-function DoneScreen({
-	shortId,
-	orderId,
-	paidInPerson,
-	eventRsvp,
-	free,
-	buyerName,
-	anonymous,
-	onBackToList,
-}: {
-	shortId: string | undefined;
-	orderId: Id<"orders"> | undefined;
-	paidInPerson: boolean;
-	/** RSVP — completion happens at the event, so the one-tap close is hidden. */
-	eventRsvp?: boolean;
-	/** Free order — the WhatsApp said "no payment needed", not "how to pay". */
-	free?: boolean;
-	buyerName: string | undefined;
-	// Anonymous cash sale — no buyer to notify (86ey8vqp6), so not even the one
-	// confirmation goes out and the document below is their only copy.
-	anonymous?: boolean;
-	onBackToList: () => void;
-}) {
-	const updateStatus = useMutation(api.orders.updateStatus);
-	const [completed, setCompleted] = useState(false);
-	const [completing, setCompleting] = useState(false);
-
-	// Offer one-tap completion only for a paid-in-person sale — they've paid and
-	// taken the item, so the seller can close it out here instead of clicking
-	// through the status pipeline. Optional, not automatic: a paid deposit on an
-	// item that isn't ready yet is left as a normal confirmed order.
-	const canComplete = paidInPerson && !eventRsvp && !!orderId && !completed;
-
-	// Say exactly what left the building. A counter order sends the buyer ONE
-	// WhatsApp (86eyd63r8) — the confirmation, carrying the link to their order
-	// page — and an anonymous cash sale sends nothing at all. The receipt/invoice
-	// PDF is never messaged; it's handed over below.
-	const sentSummary = anonymous
-		? "is confirmed. Cash sale with no contact, so nothing was sent."
-		: paidInPerson
-			? "is confirmed. We sent the buyer one WhatsApp with a link to their order."
-			: free
-				? "is confirmed. We sent the buyer one WhatsApp with a link to their order — nothing to pay."
-				: "is confirmed. We sent the buyer one WhatsApp with how to pay and a link to their order.";
-
-	async function markCompleted() {
-		if (!orderId) return;
-		setCompleting(true);
-		try {
-			await updateStatus({ orderId, status: "delivered" });
-			setCompleted(true);
-			toast.success("Order marked as completed.");
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setCompleting(false);
-		}
-	}
-
-	return (
-		<div className="mx-auto flex w-full max-w-2xl flex-col gap-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-5 shadow-sm sm:p-6">
-			<div className="flex items-start gap-4">
-				<span className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-600 text-white">
-					<CheckCircle2 className="size-7" />
-				</span>
-				<div className="min-w-0">
-					<p className="text-xs font-semibold uppercase tracking-widest text-emerald-700">
-						Checkout saved
-					</p>
-					<h2 className="mt-1 text-2xl font-bold text-emerald-950">
-						{completed ? "Order completed" : "Order created"}
-					</h2>
-					<p className="mt-1 text-sm text-emerald-800">
-						{shortId ? (
-							<>
-								Order <span className="font-mono font-semibold">{shortId}</span>{" "}
-								{completed ? "is marked completed." : sentSummary}
-							</>
-						) : completed ? (
-							"The order is marked completed."
-						) : anonymous ? (
-							"The order is confirmed — a cash sale with no contact, so nothing was sent."
-						) : (
-							// Resumed a completed session: we don't have the created order's
-							// paid state here, so stay on what's true either way.
-							"The order is confirmed. We sent the buyer one WhatsApp with a link to their order."
-						)}
-					</p>
-				</div>
-			</div>
-			{shortId ? (
-				<div className="rounded-xl border border-emerald-200 bg-white/70 p-4">
-					<p className="text-sm font-semibold text-emerald-950">
-						{paidInPerson ? "Receipt" : "Invoice"}
-					</p>
-					<OrderDocumentActions
-						shortId={shortId}
-						paid={paidInPerson}
-						buyerName={buyerName}
-						hasBuyer={!anonymous}
-						className="mt-3"
-					/>
-				</div>
-			) : null}
-			<div className="grid gap-2 sm:grid-cols-2">
-				{canComplete ? (
-					<Button
-						onClick={markCompleted}
-						isLoading={completing}
-						disabled={completing}
-						className="h-11 bg-emerald-600 text-white hover:bg-emerald-700 sm:col-span-2"
-					>
-						{completing ? "Completing…" : "Mark as completed"}
-					</Button>
-				) : null}
-				{completed ? (
-					<p className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-white/70 px-3 py-2 text-sm font-medium text-emerald-700 sm:col-span-2">
-						<CheckCircle2 className="size-4" />
-						Marked completed
-					</p>
-				) : null}
-				<Button
-					onClick={onBackToList}
-					variant={canComplete ? "outline" : "default"}
-					className="h-11"
-				>
-					Back to checkouts
-				</Button>
-				{shortId ? (
-					<Button asChild variant="outline" className="h-11">
-						<Link to="/app/orders/$shortId" params={{ shortId }}>
-							View order
-						</Link>
-					</Button>
-				) : orderId ? (
-					<Button asChild variant="outline" className="h-11">
-						<Link to="/app/orders">Go to orders</Link>
-					</Button>
-				) : null}
-			</div>
-		</div>
-	);
-}
-
 // ---------------------------------------------------------------------------
 // Build order (buyer bound) — catalog search → cart → pay → create
 // ---------------------------------------------------------------------------
@@ -988,6 +877,29 @@ function PriceDeltaChip({
 	);
 }
 
+/**
+ * What a variant costs AT THE COUNTER right now (`z8r3fdcw72` × `z8r3fdr617`).
+ *
+ * The counter is a seller surface, so it reads `listForCounter`, which hands
+ * back `promoState` and the variants' `promoPrice` exactly as the storefront
+ * payload does — it simply never used them, while
+ * `counterCheckout.createOrderFromSession` has always resolved the promo
+ * server-side. The result was a panel quoting the LIST price and an order
+ * recording the PROMO one; with a voucher on top the two bases diverged
+ * further still. One helper, the same `effectiveVariantPrice` the storefront
+ * prices with, so the seller's number and the server's cannot drift again.
+ *
+ * `Date.now()` is read per call rather than held: a counter panel is open for
+ * minutes, and a sale that lapses mid-sale must stop discounting at the next
+ * render rather than at the next reload.
+ */
+function counterPrice(
+	variant: { price: number; promoPrice?: number },
+	product: { promoState?: PromoState },
+): number {
+	return effectiveVariantPrice(variant, product.promoState, Date.now());
+}
+
 type SessionDraft = {
 	items: Array<{
 		variantId: Id<"productVariants">;
@@ -998,18 +910,10 @@ type SessionDraft = {
 	fulfilmentDate?: number;
 	paidInPerson?: boolean;
 	paymentMethod?: OrderPaymentMethod;
+	/** Canonical voucher code (`z8r3fdr617`) — a scratchpad value like the
+	 * prices above, re-resolved at whichever door the session goes through. */
+	voucherCode?: string;
 };
-
-/** "2500" cents → "25.00" for the custom-price input. */
-function centsToRm(cents: number): string {
-	return (cents / 100).toFixed(2);
-}
-/** "25" / "25.50" → cents (integer). NaN when blank or not a positive amount. */
-function rmToCents(rm: string): number {
-	const n = Number(rm);
-	if (!Number.isFinite(n) || n <= 0) return Number.NaN;
-	return Math.round(n * 100);
-}
 
 type CounterProduct = FunctionReturnType<
 	typeof api.products.listForCounter
@@ -1088,8 +992,8 @@ function counterProductMeta(
 		nonCustom.length === 0
 			? "Custom price"
 			: (() => {
-					const lo = Math.min(...nonCustom.map((v) => v.price));
-					const hi = Math.max(...nonCustom.map((v) => v.price));
+					const lo = Math.min(...nonCustom.map((v) => counterPrice(v, p)));
+					const hi = Math.max(...nonCustom.map((v) => counterPrice(v, p)));
 					const base =
 						lo === hi
 							? formatPrice(lo, currency)
@@ -1172,7 +1076,8 @@ function ProductVariantRows({
 								<div className="min-w-0">
 									<p className="truncate text-sm">{label}</p>
 									<p className="text-xs text-muted-foreground">
-										Custom — set the agreed price
+										Custom — set the agreed price ({formatPrice(0, currency)}{" "}
+										for a free line)
 									</p>
 								</div>
 								{inCart ? (
@@ -1250,7 +1155,19 @@ function ProductVariantRows({
 						<div className="min-w-0">
 							<p className="truncate text-sm">{label || "Default"}</p>
 							<p className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
-								<span>{formatPrice(vr.price, currency)}</span>
+								{/* The PROMO price when one is live (z8r3fdcw72). The
+								    counter used to price from the list while
+								    `createOrderFromSession` resolved the promo, so the
+								    seller confirmed one number and the order recorded a
+								    lower one — on a cash sale, real money (found in the
+								    z8r3fdr617 /test-code pass). Same helper the
+								    storefront prices with. */}
+								<span>{formatPrice(counterPrice(vr, product), currency)}</span>
+								{counterPrice(vr, product) !== vr.price ? (
+									<span className="line-through opacity-60">
+										{formatPrice(vr.price, currency)}
+									</span>
+								) : null}
 								{stockNote ? (
 									<span
 										className={cn(
@@ -1284,9 +1201,12 @@ function ProductVariantRows({
 										{
 											name: product.name,
 											label,
-											price: vr.price,
+											price: counterPrice(vr, product),
 											qty: 0,
-											catalogPrice: vr.price,
+											// The price an unadjusted line is "at" — the promo
+											// price when one is live, so the adjusted-price
+											// badge compares against what is really charged.
+											catalogPrice: counterPrice(vr, product),
 										},
 										1,
 									)
@@ -1317,6 +1237,7 @@ function BuildOrderScreen({
 	currency,
 	country,
 	draft,
+	acceptsVouchers,
 	defaultClaimWindowMinutes,
 	defaultClaimSource,
 	onCreated,
@@ -1340,6 +1261,10 @@ function BuildOrderScreen({
 	 * offers (SG has no DuitNow/TnG/FPX). See lib/paymentMethod.ts. */
 	country: Country;
 	draft: SessionDraft | undefined;
+	/** Show the voucher field (`z8r3fdr617`) — false when the store is below
+	 * the plan carrying vouchers, or has never issued one, so no code the
+	 * seller could key would be accepted. */
+	acceptsVouchers: boolean;
 	/** Claim links (86eyq0epn): the store's remembered payment window. */
 	defaultClaimWindowMinutes: number | undefined;
 	/** Claim links: the store's remembered marketing origin (86eyq0eq9). */
@@ -1348,6 +1273,7 @@ function BuildOrderScreen({
 		shortId: string;
 		orderId: Id<"orders">;
 		paidInPerson: boolean;
+		completed: boolean;
 		eventRsvp?: boolean;
 		free?: boolean;
 	}) => void;
@@ -1364,6 +1290,7 @@ function BuildOrderScreen({
 		convexQuery(api.products.listForCounter, { retailerId }),
 	).data;
 	const createOrder = useMutation(api.counterCheckout.createOrderFromSession);
+	const closedReason = useCounterClosedReason();
 	const saveDraft = useMutation(api.counterCheckout.saveSessionDraft);
 	const saveName = useMutation(api.counterCheckout.setSessionCustomerName);
 	const [query, setQuery] = useState("");
@@ -1396,6 +1323,16 @@ function BuildOrderScreen({
 	const anonymous = !buyer.waPhone;
 	const paid = anonymous ? true : paidInPerson;
 	const [submitting, setSubmitting] = useState(false);
+	// The voucher the seller keyed off the buyer's QR (`z8r3fdr617`). Seeded
+	// from the draft so a refresh or a jump to another customer keeps it, and
+	// re-resolved authoritatively at whichever door this session goes through:
+	// `createOrderFromSession` spends it, `sendClaim` freezes it onto the claim.
+	const [voucher, setVoucher] = useState<AppliedVoucher | null>(null);
+	// Seed the FIELD from the draft's code. Only the code is stored (the draft
+	// is a scratchpad, not a validated row), so it is re-checked on mount —
+	// which is the right behaviour anyway: a code that lapsed while the cart sat
+	// open must show as refused here, not be honoured silently.
+	const draftVoucherCode = draft?.voucherCode;
 	// Final review modal — a deliberate last look at items/prices/total before the
 	// order is created, so a busy vendor can't fat-finger a price or quantity and
 	// only notice after the buyer has paid. (Counter-only: the storefront buyer
@@ -1468,6 +1405,8 @@ function BuildOrderScreen({
 				})),
 				windowMinutes,
 				attributionSource: claimSource,
+				// Explicit, for the same reason as the create path above.
+				voucherCode: voucher?.code,
 			});
 			toast.success(
 				`WhatsApp link sent to ${buyer.displayName ?? "the buyer"} — you'll see the order the moment they complete it.`,
@@ -1517,7 +1456,9 @@ function BuildOrderScreen({
 				lookup.set(vr._id, {
 					name: p.name,
 					label,
-					price: vr.price,
+					// Promo-aware, like the picker above: a draft resumed after a
+					// sale opened must not re-seed the list price.
+					price: counterPrice(vr, p),
 					isCustom: vr.isCustom === true,
 				});
 			}
@@ -1618,7 +1559,14 @@ function BuildOrderScreen({
 	}
 
 	const cartEntries = [...cart.entries()];
-	const total = cartEntries.reduce((s, [, l]) => s + l.price * l.qty, 0);
+	// Gross of the voucher — the figure the discount is computed FROM, and what
+	// the receipt's item lines sum to.
+	const itemsTotal = cartEntries.reduce((s, [, l]) => s + l.price * l.qty, 0);
+	const voucherDiscount = previewDiscount(voucher, itemsTotal);
+	// What the buyer actually pays. Everything downstream — the panel total, the
+	// review modal, the free-order rule that suppresses "Paid now · Cash" —
+	// reads this, so a voucher can't leave one of them quoting the old price.
+	const total = itemsTotal - voucherDiscount;
 
 	// Autosave the in-progress order to the session (debounced) so a refresh,
 	// reconnect, or jumping to another customer never loses it. We only start
@@ -1642,9 +1590,10 @@ function BuildOrderScreen({
 				fulfilmentDate: Number.isNaN(epoch) ? undefined : epoch,
 				paidInPerson: paid,
 				paymentMethod: paid ? method : undefined,
+				voucherCode: voucher?.code,
 			};
 		},
-		[fulfilmentDate, paid, method, lineAnswers],
+		[fulfilmentDate, paid, method, lineAnswers, voucher],
 	);
 	const draftPayload = useMemo<SessionDraft>(
 		() => buildDraftPayload(cart),
@@ -1671,7 +1620,7 @@ function BuildOrderScreen({
 			// A FREE order records no payment — the server enforces the same rule,
 			// this just keeps the client's story identical.
 			const effectivePaid = paid && total > 0;
-			const { shortId, orderId } = await createOrder({
+			const { shortId, orderId, completed } = await createOrder({
 				sessionId,
 				items: cartEntries.map(([variantId, l]) => ({
 					variantId: variantId as Id<"productVariants">,
@@ -1679,6 +1628,10 @@ function BuildOrderScreen({
 					unitPrice: l.isCustom || isAdjusted(l) ? l.price : undefined,
 					answers: lineAnswers(variantId, l),
 				})),
+				// Explicit, like `items` — the draft's copy is a DEBOUNCED
+				// autosave and would lose a code applied seconds ago, after the
+				// review modal had already shown the discount (`z8r3fdr617`).
+				voucherCode: voucher?.code,
 				paidInPerson: effectivePaid,
 				paymentMethod: effectivePaid ? method : undefined,
 				fulfilmentDate: Number.isNaN(fulfilmentEpoch)
@@ -1689,6 +1642,7 @@ function BuildOrderScreen({
 				shortId,
 				orderId,
 				paidInPerson: effectivePaid,
+				completed,
 				eventRsvp: cartEvent !== undefined || undefined,
 				free: total <= 0 || undefined,
 			});
@@ -2408,6 +2362,42 @@ function BuildOrderScreen({
 					</div>
 
 					<div className="shrink-0 border-t border-border bg-muted/20 p-4">
+						{/* The voucher, right above the total it changes (`z8r3fdr617`).
+						    Both pay modes take one: ringing it up spends the code, and
+						    SEND freezes it into the claim beside the line prices — so a
+						    seller never has to work out which path honours it. */}
+						{acceptsVouchers ? (
+							<div className="mb-3">
+								<VoucherField
+									retailerId={retailerId}
+									currency={currency}
+									itemSubtotal={itemsTotal}
+									applied={voucher}
+									onApply={setVoucher}
+									onRemove={() => setVoucher(null)}
+									initialCode={draftVoucherCode}
+									label="Add a voucher"
+								/>
+							</div>
+						) : null}
+						{voucherDiscount > 0 ? (
+							<div className="mb-1.5 flex items-center justify-between text-sm">
+								<span className="text-muted-foreground">Items</span>
+								<span className="tabular-nums text-muted-foreground">
+									{formatPrice(itemsTotal, currency)}
+								</span>
+							</div>
+						) : null}
+						{voucherDiscount > 0 ? (
+							<div className="mb-1.5 flex items-center justify-between text-sm">
+								<span className="truncate text-accent-emphasis">
+									Voucher · {voucher?.code}
+								</span>
+								<span className="shrink-0 tabular-nums font-medium text-accent-emphasis">
+									−{formatPrice(voucherDiscount, currency)}
+								</span>
+							</div>
+						) : null}
 						<div className="mb-3 flex items-center justify-between text-sm">
 							{/* Send mode is a price COMMITMENT, not a sum — and it is the
 							    items total, since the buyer's delivery is added on their
@@ -2426,17 +2416,24 @@ function BuildOrderScreen({
 							const action = counterPrimaryAction({
 								mode: payMode,
 								empty: cartEntries.length === 0,
-								// A claim freezes prices at send, so an unpriced line
-								// would lock a zero.
-								unpriced: cartEntries.some(([, l]) => l.price <= 0),
+								// A claim link takes a payment and its door refuses a RM0
+								// line; the counter rings a free line up as a free order.
+								freeLine: (() => {
+									const l = cartEntries.find(([, l]) => l.price === 0)?.[1];
+									if (l === undefined) return undefined;
+									// The LINE's name, not the product's — "Cempedak" names
+									// nothing when three Cempedak lines sit in the cart.
+									return l.label ? `${l.name} · ${l.label}` : l.name;
+								})(),
 								// Blocks SEND with the event's own words (a claim lets the
-								// buyer pick a date and holds no seat) — outranks `unpriced`,
-								// or a free RSVP line reads as an unpriced custom item.
+								// buyer pick a date and holds no seat) — outranks `freeLine`,
+								// or a free RSVP line reads as a comped custom item.
 								eventName: cartEvent?.name,
 								// Refuses a mixed cart in BOTH modes (`z8r3fdhh45`) —
 								// `orders.create` rejects it at either door.
 								mixedRsvp,
 								unansweredQuestion,
+								closed: closedReason ?? undefined,
 								money: formatPrice(total, currency),
 								windowMinutes,
 								buyerName: buyer.displayName,
@@ -2541,6 +2538,9 @@ function BuildOrderScreen({
 				}}
 				buyerName={buyer.displayName}
 				lines={cartEntries.map(([variantId, l]) => ({ variantId, line: l }))}
+				itemsTotal={itemsTotal}
+				voucherDiscount={voucherDiscount}
+				voucherCode={voucher?.code}
 				total={total}
 				currency={currency}
 				fulfilmentLabel={(() => {
@@ -2784,9 +2784,18 @@ function CartLineEditDialog({
 								Agreed in person — no catalog price.
 							</span>
 						)}
+						{/* RM0 is a real price here (a comped item, a freebie with a
+						    purchase) — said where the seller is typing, so "can I make
+						    this free?" is answered before they try. */}
 						{!validPrice ? (
 							<span className="mt-1 block text-xs text-destructive">
-								Enter a price above {formatPrice(0, currency)} to save.
+								Enter a price to save — {formatPrice(0, currency)} makes the
+								line free.
+							</span>
+						) : cents === 0 ? (
+							<span className="mt-1 block text-xs text-muted-foreground">
+								Free line — nothing to collect for it. An order of only free
+								lines is a free order.
 							</span>
 						) : null}
 					</label>
@@ -2858,6 +2867,9 @@ function ConfirmCheckoutDialog({
 	onOpenChange,
 	buyerName,
 	lines,
+	itemsTotal,
+	voucherDiscount,
+	voucherCode,
 	total,
 	currency,
 	fulfilmentLabel,
@@ -2869,6 +2881,15 @@ function ConfirmCheckoutDialog({
 	onOpenChange: (open: boolean) => void;
 	buyerName: string | undefined;
 	lines: Array<{ variantId: string; line: CartLine }>;
+	/** Σ lines, gross of the voucher. */
+	itemsTotal: number;
+	/** What the voucher takes off (`z8r3fdr617`), 0 for none. This dialog is
+	 * the seller's deliberate last look before the order exists, so a
+	 * subtotal→total gap it does not explain is the one thing it must never
+	 * show — found in its own /test-code pass, where it printed items RM50
+	 * over a total of RM45. */
+	voucherDiscount: number;
+	voucherCode?: string;
 	total: number;
 	currency: string;
 	fulfilmentLabel: string;
@@ -2928,6 +2949,24 @@ function ConfirmCheckoutDialog({
 					</ul>
 
 					<div className="flex flex-col gap-1.5 rounded-xl bg-muted/50 p-3 text-sm">
+						{voucherDiscount > 0 ? (
+							<>
+								<div className="flex items-center justify-between gap-3">
+									<span className="text-muted-foreground">Items</span>
+									<span className="tabular-nums text-muted-foreground">
+										{formatPrice(itemsTotal, currency)}
+									</span>
+								</div>
+								<div className="flex items-center justify-between gap-3">
+									<span className="min-w-0 truncate text-accent-emphasis">
+										Voucher{voucherCode ? ` · ${voucherCode}` : ""}
+									</span>
+									<span className="shrink-0 font-medium tabular-nums text-accent-emphasis">
+										−{formatPrice(voucherDiscount, currency)}
+									</span>
+								</div>
+							</>
+						) : null}
 						<div className="flex items-center justify-between gap-3">
 							<span className="text-muted-foreground">Collection</span>
 							<span className="font-medium">{fulfilmentLabel}</span>

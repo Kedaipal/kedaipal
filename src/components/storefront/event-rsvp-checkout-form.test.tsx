@@ -125,9 +125,10 @@ afterEach(() => {
 	state.venue = undefined;
 });
 
-function renderForm(cartItemCount = 0) {
+function renderForm(cartItemCount = 0, paymentsPaused?: boolean) {
 	render(
 		<EventRsvpCheckoutForm
+			paymentsPaused={paymentsPaused}
 			retailerId={"ret_1" as Id<"retailers">}
 			storeName="IndoMart"
 			storeSlug="indomart"
@@ -508,5 +509,26 @@ describe("buyer questions + approval (z8r3fdkjek)", () => {
 		expect(
 			screen.getAllByText(/you pay only after they approve/i)[0],
 		).toBeTruthy();
+	});
+});
+
+describe("EventRsvpCheckoutForm — a lapsed store's payments are paused (z8r3fdr6gg)", () => {
+	it("a paid event says so before the guest commits", () => {
+		renderForm(0, true);
+		// Mobile summary + desktop sticky column.
+		expect(screen.getAllByText("Payments paused").length).toBeGreaterThan(0);
+		expect(
+			screen.getAllByText(/IndoMart isn't taking payments on Kedaipal/).length,
+		).toBeGreaterThan(0);
+	});
+
+	it("a FREE event says nothing — there is nothing to pay", () => {
+		state.product = {
+			...PRODUCT,
+			priceFrom: 0,
+			variants: [{ ...PRODUCT.variants[0], price: 0 }],
+		};
+		renderForm(0, true);
+		expect(screen.queryByText("Payments paused")).toBeNull();
 	});
 });

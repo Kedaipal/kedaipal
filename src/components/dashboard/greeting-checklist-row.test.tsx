@@ -13,7 +13,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MessageCircle } from "lucide-react";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import type { ChecklistItem } from "../../routes/app.index";
+import type { ChecklistItem } from "../home/setup-checklist";
 
 const stamp = vi.fn(async () => undefined);
 const hook = { active: true };
@@ -29,6 +29,7 @@ const item: ChecklistItem = {
 	done: false,
 	icon: MessageCircle,
 	title: "Set your WhatsApp greeting",
+	shortTitle: "auto-reply",
 	why: "New chats get your store link automatically.",
 	time: "~2 min",
 	cta: "Set it up",

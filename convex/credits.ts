@@ -42,16 +42,22 @@ import {
 	type CreditRegime,
 	type CreditRegimeInputs,
 	cancelRefundDecision,
+	orderCreditFunded,
+	creditLockExempt,
 	creditLockExemption,
 	creditRegime,
 	debitBucket,
+	debitIsFunded,
+	fundingAdvance,
 	lowCreditLine,
 	monthlyCreditGrant,
+	ordersAwaitingCredit,
 	refreshedPlanBalance,
 	sellerRefundsLeft,
 	storeIsMetered,
 	GRANT_LEVER_CONTRACT_REFUSAL,
 	UNMETERED_STORE_REFUSAL,
+	USAGE_PACE_DAYS,
 } from "./lib/credits";
 import {
 	type BillingCycle,
@@ -94,21 +100,54 @@ export async function loadCreditAccount(
 		.first();
 }
 
-async function regimeInputs(
+/**
+ * The store's subscription row, or null — module-local, deliberately not
+ * `subscriptions.loadSubscription` (importing it here would close a cycle:
+ * subscriptions.ts already imports `landCreditGrant` from this file). It
+ * replaces the three inline copies of this same query this module carried,
+ * because credit code reads the row for two separate questions and must not
+ * fetch it twice per gate: is this store metered at all (`storeUnmetered`,
+ * which needs `comped`), and which grant regime does it earn (`creditRegime`,
+ * which needs `status`/`plan`).
+ */
+async function subscriptionRow(
 	ctx: AnyCtx,
+	retailerId: Id<"retailers">,
+): Promise<Doc<"subscriptions"> | null> {
+	return ctx.db
+		.query("subscriptions")
+		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+		.first();
+}
+
+/**
+ * Is this store outside the credit system entirely (z8r3fdp4er + z8r3fdrph7)?
+ *
+ * ONE call shape for every gate, so a new one cannot forget that a comp is
+ * unmetered too — forgetting exactly that is what put a "200 of 200" bar in
+ * front of sponsored sellers for four days. Takes the rows rather than the
+ * ctx so the caller that also needs the regime loads the subscription once.
+ */
+export function storeUnmetered(
 	retailer: Doc<"retailers">,
+	sub: Doc<"subscriptions"> | null,
+): boolean {
+	return !storeIsMetered({
+		ownerIsAdmin: storeOwnerIsAdmin(retailer),
+		comped: sub?.comped === true,
+	});
+}
+
+function regimeInputs(
+	retailer: Doc<"retailers">,
+	sub: Doc<"subscriptions"> | null,
 	account: Pick<Account, "grantOverride" | "annualGrant"> | null,
 	now: number,
-): Promise<CreditRegimeInputs> {
-	const sub = await ctx.db
-		.query("subscriptions")
-		.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
-		.first();
+): CreditRegimeInputs {
 	return {
 		status: sub?.status ?? null,
 		// The missing-row fail-safe resolves to Pro in `resolveAccess`.
 		plan: sub?.plan ?? "pro",
-		comped: sub?.comped === true,
 		foundingEligible: foundingPriceEligible({
 			isFoundingMember: retailer.isFoundingMember === true,
 			foundingIntent: sub?.foundingIntent === true,
@@ -127,14 +166,15 @@ async function regimeInputs(
  * How this store is granted plan credits — or `null` when the question does
  * not apply to it.
  *
- * `null` is THE gate for an unmetered store (`storeIsMetered`, z8r3fdp4er):
- * a Kedaipal admin's own store has no credit regime, so it grows no account
- * (`ensureCreditAccount`), spends nothing per order (`debitCreditForOrder`),
- * refreshes nothing at a month boundary (`rollPeriod`), reports no balance
- * (`projectedCredits` → `balanceView` → `getBalance` → every meter) and can
- * never be locked (`resolveCreditLock`). Every one of those already had a
- * `null` branch for a store that no longer exists, which is the other reason
- * this answers `null`. Delete the gate and the unmetered tests go red.
+ * `null` is THE gate for an unmetered store (`storeIsMetered`, z8r3fdp4er +
+ * z8r3fdrph7): an admin's own store and a SPONSORED (comped) one have no
+ * credit regime, so they grow no account (`ensureCreditAccount`), spend
+ * nothing per order (`debitCreditForOrder`), refresh nothing at a month
+ * boundary (`rollPeriod`), report no balance (`projectedCredits` →
+ * `balanceView` → `getBalance` → every meter) and can never be locked
+ * (`resolveCreditLock`). Every one of those already had a `null` branch for a
+ * store that no longer exists, which is the other reason this answers `null`.
+ * Delete the gate and the unmetered tests go red.
  */
 async function regimeFor(
 	ctx: AnyCtx,
@@ -144,9 +184,9 @@ async function regimeFor(
 ): Promise<CreditRegime | null> {
 	const retailer = await ctx.db.get(retailerId);
 	if (!retailer) return null;
-	if (!storeIsMetered({ ownerIsAdmin: storeOwnerIsAdmin(retailer) }))
-		return null;
-	return creditRegime(await regimeInputs(ctx, retailer, account, now));
+	const sub = await subscriptionRow(ctx, retailerId);
+	if (storeUnmetered(retailer, sub)) return null;
+	return creditRegime(regimeInputs(retailer, sub, account, now));
 }
 
 // ---------------------------------------------------------------------------
@@ -172,8 +212,11 @@ type EntryInput = {
  * Write one ledger row AND the cached balances it moves, in the same
  * mutation. Every balance change in the system goes through here — the
  * invariant `cache == Σ ledger` holds by construction. Also maintains
- * `exhaustedAt`: set when the total first reaches 0 or below, cleared the
- * moment it rises above 0 (by any route — refresh, top-up, upgrade, refund).
+ * `exhaustedAt` (set when the total first reaches 0 or below, cleared the
+ * moment it rises above 0 by any route — refresh, top-up, upgrade, refund)
+ * and the per-order gate's two counters, `debitSeq` / `fundedThrough`
+ * (Credits T3.1), which live here for exactly the reason the balances do:
+ * one write path, so the cache can never disagree with the ledger.
  */
 async function applyEntry(
 	ctx: MutationCtx,
@@ -199,6 +242,40 @@ async function applyEntry(
 		createdAt: now,
 	});
 	const total = planBalance + purchasedBalance;
+	// --- the per-order gate's queue (Credits T3.1, z8r3fdmg4h) --------------
+	// An ORDER DEBIT claims the next sequence number; `debitCreditForOrder`
+	// reads it back off the returned account and stamps it on the order.
+	// Anything else (a grant, a pack, a refund, an admin adjust, an expiry)
+	// leaves the sequence alone and only moves the watermark.
+	const isOrderDebit = entry.type === "debit" && entry.orderId !== undefined;
+	const prevSeq = account.debitSeq ?? 0;
+	const prevFunded = account.fundedThrough ?? 0;
+	const debitSeq = prevSeq + (isOrderDebit ? 1 : 0);
+	const fundedThrough = isOrderDebit
+		? debitIsFunded(total)
+			? // This debit left the total at or above zero, so it spent a real
+				// credit. The queue was necessarily EMPTY at that moment — credits
+				// and waiting orders cannot coexist, because `fundingAdvance` always
+				// takes the queue down by every credit that lands — so the watermark
+				// lands on this order. Were that invariant ever broken by drift, this
+				// funds the backlog rather than gating a paid-for order: the gate
+				// fails OPEN, and a seller never loses sight of a buyer over a
+				// bookkeeping fault. `creditSeqInvariant` (credits.test.ts) pins it.
+				debitSeq
+			: prevFunded
+		: // Credits LANDING move the queue: one credit in frees one waiting
+			// order, oldest first. A negative entry (an expired lot, an admin
+			// clawback) moves nothing — the watermark never falls, which is what
+			// makes "expiry never unfunds an order already worked" structural.
+			prevFunded +
+			fundingAdvance(
+				ordersAwaitingCredit(prevSeq, prevFunded),
+				Math.max(0, entry.amount),
+			);
+	const queue: Partial<Account> =
+		debitSeq === prevSeq && fundedThrough === prevFunded
+			? {}
+			: { debitSeq, fundedThrough };
 	const exhaustion: Partial<Account> =
 		total <= 0
 			? account.exhaustedAt === undefined
@@ -211,6 +288,7 @@ async function applyEntry(
 		planBalance,
 		purchasedBalance,
 		updatedAt: now,
+		...queue,
 		...exhaustion,
 		...extraPatch,
 	};
@@ -546,7 +624,7 @@ export async function debitCreditForOrder(
 			bucket = "plan";
 		}
 	}
-	await applyEntry(
+	const after = await applyEntry(
 		ctx,
 		account,
 		{
@@ -563,6 +641,83 @@ export async function debitCreditForOrder(
 		},
 		args.now,
 	);
+	// The order's place in the queue (Credits T3.1) — written here, from the
+	// number `applyEntry` just claimed, so an order can never carry a position
+	// the ledger didn't issue. Never rewritten afterwards: a position is for
+	// life, which is what makes "funded stays funded" structural.
+	//
+	// `updatedAt` is deliberately NOT touched: it drives the time-in-status
+	// badge, and spending a credit is not progress on the order (the same trap
+	// `markSeen` and `setPinned` document in schema.ts).
+	if (after.debitSeq !== undefined)
+		await ctx.db.patch(args.orderId, { creditSeq: after.debitSeq });
+}
+
+/**
+ * The lowest `creditSeq` among a customer's orders that are still live,
+ * ignoring `exceptOrderId` (the one being cancelled right now, which the
+ * caller already knows is going). `undefined` when nothing of theirs
+ * survives.
+ *
+ * One indexed read on a cancel path, not a hot one.
+ */
+async function oldestLiveOrderSeq(
+	ctx: MutationCtx,
+	customerId: Id<"customers">,
+	exceptOrderId: Id<"orders">,
+): Promise<number | undefined> {
+	let oldest: number | undefined;
+	for (const o of await ctx.db
+		.query("orders")
+		.withIndex("by_customer", (q) => q.eq("customerId", customerId))
+		.collect()) {
+		if (o._id === exceptOrderId) continue;
+		if (o.status === "cancelled") continue;
+		if (o.creditSeq === undefined) continue;
+		if (oldest === undefined || o.creditSeq < oldest) oldest = o.creditSeq;
+	}
+	return oldest;
+}
+
+/**
+ * Is this store's gate OPEN whatever its balance — the unmetered and
+ * fail-safe arms of `resolveCreditGate`, as a STORE-level fact.
+ *
+ * The write side needs this and the read side already had it, which is the
+ * asymmetry that made it necessary (PR #351 review). It was written for the
+ * COMPED store, which was then metered: `creditRegime` gave it the monthly
+ * grant, so once it ran past that grant its orders carried
+ * `creditSeq > fundedThrough` and the raw comparison called them gated — even
+ * though the seller saw and worked every one of them. Cancelling such an order
+ * refunded an accepted order against the late-cancel rule, told the seller
+ * "you were never able to open this one" about an order on their screen, and
+ * stamped `neverFunded` on data they legitimately had: a stamp dormant only
+ * while the comp lasted, with no clearing path afterwards.
+ *
+ * **z8r3fdrph7 removed that whole class of bug** rather than widening this
+ * check: a comped store is UNMETERED now, so it grows no account, its orders
+ * carry no `creditSeq` at all, and `orderCreditFunded` answers "funded" on the
+ * absent value. There is no over-grant state left for a comp to reach. This
+ * function still earns its keep for the two cases that remain — an UNMETERED
+ * store (admin-owned or comped) and the missing-subscription-row fail-safe,
+ * which stays metered-but-never-locked — and it is still what keeps the write
+ * side from stamping `neverFunded` on a store that was never denied anything.
+ *
+ * Deliberately NOT the admin-CALLER arm that `resolveCreditGate` checks first.
+ * That one is about who is looking; this is about whether the STORE was ever
+ * denied the order, which is what decides the refund and the stamp. An admin
+ * working a normal metered store still cancels a genuinely gated order.
+ */
+export async function storeGateExempt(
+	ctx: AnyCtx,
+	retailerId: Id<"retailers">,
+): Promise<boolean> {
+	const retailer = await ctx.db.get(retailerId);
+	// Fail OPEN on a missing store, like every other arm of the gate.
+	if (!retailer) return true;
+	const sub = await subscriptionRow(ctx, retailerId);
+	if (storeUnmetered(retailer, sub)) return true;
+	return creditLockExempt({ status: sub?.status ?? null });
 }
 
 /**
@@ -593,12 +748,72 @@ export async function refundCreditForOrder(
 		account.sellerRefunds?.periodKey === account.periodKey
 			? account.sellerRefunds.count
 			: 0;
+	// Waiting on credits at the moment it was cancelled — read off the account
+	// we already hold, so no extra read and no import from creditLock.ts
+	// (which imports THIS module).
+	// Exempt stores are never "gated" however the watermark reads — see
+	// `storeGateExempt`. Checked BEFORE the comparison, exactly as the
+	// read-side predicates do it.
+	const gated =
+		!(await storeGateExempt(ctx, order.retailerId)) &&
+		!orderCreditFunded(order.creditSeq, account.fundedThrough ?? 0);
 	const decision = cancelRefundDecision({
 		cause,
 		statusAtCancel: order.status,
 		sellerRefundsUsed: used,
+		gated,
 	});
 	if (!decision.refund) return;
+	// CLOSE IT FOR GOOD before the refund lands. The refund is a credit
+	// arriving, so `applyEntry` walks the watermark forward one position — and
+	// when this order held the oldest unfunded position, the watermark passes
+	// its own `creditSeq` and every seller surface un-redacts it. The seller
+	// would get the buyer's name, phone, items and tracking token back for an
+	// order they paid nothing for, which is the bypass the gate exists to
+	// stop, on demand and repeatable. See `orders.neverFunded` in schema.ts.
+	//
+	// Stamped for EVERY cause, not just a seller cancel: the unpaid-order
+	// sweep refunds too (`cause: "system"`, every minute), so without this a
+	// gated order reveals itself with no seller action at all.
+	//
+	// `updatedAt` is deliberately left alone, like every other credit patch —
+	// a credit moving is not progress on the order.
+	if (gated) {
+		await ctx.db.patch(order._id, { neverFunded: true });
+		// The buyer too, when this order is the one that created their record:
+		// the same watermark walk would otherwise expose the phone number.
+		//
+		// But only when it leaves them with NOTHING live. A buyer who placed
+		// two orders at zero credits, had the first cancelled (the unpaid
+		// sweep does this with no seller action) and whose second then gets
+		// funded is a buyer the seller HAS paid for — stamping would hide them
+		// from the Customer DB while their order page shows name, phone and
+		// items, which is two surfaces contradicting each other and breaks the
+		// "one funded order makes a buyer known for good" promise. So the
+		// record is re-pointed at their oldest surviving order instead, and
+		// THAT order's own funding decides — the same shape
+		// `linkOrderToCustomer` uses when a stamped buyer returns.
+		if (order.customerId !== undefined) {
+			const customer = await ctx.db.get(order.customerId);
+			if (
+				customer &&
+				customer.firstOrderCreditSeq !== undefined &&
+				customer.firstOrderCreditSeq === order.creditSeq
+			) {
+				const oldestLive = await oldestLiveOrderSeq(
+					ctx,
+					customer._id,
+					order._id,
+				);
+				await ctx.db.patch(
+					customer._id,
+					oldestLive === undefined
+						? { neverFunded: true }
+						: { firstOrderCreditSeq: oldestLive },
+				);
+			}
+		}
+	}
 	const last = debits[debits.length - 1];
 	let bucket = last.bucket;
 	let lotId = last.lotId;
@@ -722,7 +937,8 @@ export async function applyCreditsOnSettle(
 	if (!ensured) return;
 	let account = ensured.account;
 
-	const inputs = await regimeInputs(ctx, retailer, account, args.now);
+	const sub = await subscriptionRow(ctx, args.retailerId);
+	const inputs = regimeInputs(retailer, sub, account, args.now);
 	const unlockedGrant = monthlyCreditGrant({
 		...inputs,
 		annualGrant: undefined,
@@ -841,14 +1057,41 @@ export type CreditBalanceView = {
 	 * would read — a comped store sitting in `trialing` or `past_due` is never
 	 * asked to pay (T3 test round). An unmetered store has no view at all. */
 	lockExempt: CreditLockExemption | null;
+	/**
+	 * LIVE orders waiting on credits (Credits T3.1), capped at 99 — the number
+	 * every balance surface shows beside the balance itself.
+	 *
+	 * It rides HERE, on the balance, rather than being fetched by a hook: the
+	 * top-up picker needs it to say what a pack opens, and the picker renders
+	 * in tests and under admin act-as without the dashboard provider the gate
+	 * hook reads from. It is balance-adjacent data too, so sitting behind the
+	 * `credits` grant with the rest of it is where it belongs.
+	 *
+	 * Deliberately NOT derivable from `total`: a store can owe credits with
+	 * nothing waiting (an expired lot, or debt from before the gate shipped),
+	 * and a cancelled order still owes its credit while nobody waits on it.
+	 */
+	ordersWaiting: number;
+	/**
+	 * Where those waiting orders sit relative to the watermark, ascending
+	 * (`waitingOrderOffsets`). `[1, 2, 3]` is an unbroken queue; a gap means a
+	 * cancelled order still holds that position and a credit landing on it
+	 * opens nothing. The top-up picker needs this to say what a pack opens
+	 * without over-promising — the count alone can't tell the two apart.
+	 */
+	waitingOffsets: number[];
 };
 
 /**
  * The balance as it stands NOW — including a month boundary the 00:05 MYT
  * sweep hasn't rolled yet (a query can't write) and a store with no account
  * yet (opened at signup, by its first order, or by the backfill). The seller
- * lock reads this, so a store whose refresh brings it back above zero is
- * unlocked at its own midnight, not five minutes later.
+ * gate reads this, so a store whose refresh frees its waiting orders sees that
+ * at its own midnight, not five minutes later.
+ *
+ * The per-order gate's WATERMARK is projected through the same pending roll,
+ * for exactly that reason: a meter that reads "200 left" above an order still
+ * marked "waiting on credits" is the two halves of one answer disagreeing.
  */
 export async function projectedCredits(
 	ctx: AnyCtx,
@@ -862,6 +1105,10 @@ export async function projectedCredits(
 	periodKey: string;
 	periodGrant: number;
 	regime: CreditRegime;
+	/** Order debits this store has ever taken (Credits T3.1). */
+	debitSeq: number;
+	/** The gate's watermark, carried through any pending period roll. */
+	fundedThrough: number;
 } | null> {
 	const regime = await regimeFor(ctx, retailerId, account, now);
 	if (!regime) return null;
@@ -880,6 +1127,15 @@ export async function projectedCredits(
 		periodGrant = account.periodGrant;
 	}
 	const purchased = account?.purchasedBalance ?? 0;
+	const debitSeq = account?.debitSeq ?? 0;
+	const funded = account?.fundedThrough ?? 0;
+	// A pending roll lands `grantNow` plan credits, and credits landing move
+	// the queue by `fundingAdvance` — the same rule `applyEntry` applies when
+	// the roll actually writes, so the projection and the write agree.
+	const rollPending =
+		account !== null &&
+		account.periodKey < periodKey &&
+		regime.kind !== "trial";
 	return {
 		plan,
 		purchased,
@@ -887,7 +1143,75 @@ export async function projectedCredits(
 		periodKey,
 		periodGrant,
 		regime,
+		debitSeq,
+		fundedThrough: rollPending
+			? funded + fundingAdvance(ordersAwaitingCredit(debitSeq, funded), grantNow)
+			: funded,
 	};
+}
+
+/** Cap on the "orders waiting" count — surfaces say "99+" past it. */
+export const WAITING_COUNT_CAP = 99;
+
+/**
+ * LIVE orders above the gate's watermark, capped (Credits T3.1).
+ *
+ * A RANGE read on `by_retailer_credit_seq`, so it costs the backlog and not
+ * the table — and every caller checks `ordersAwaitingCredit` first, which for
+ * a store in credit is zero, so the common case does no read at all.
+ *
+ * Cancelled orders are skipped: they still hold a queue position (a watermark
+ * can only move from the oldest end, so there is no way to take one out of the
+ * middle) and the debt they left is real, but "3 orders waiting" must mean
+ * three orders the seller can actually be waiting on.
+ *
+ * Lives HERE rather than in creditLock.ts because `balanceView` needs it too,
+ * and creditLock.ts already imports from this module — putting it the other
+ * way round would make the two files circular.
+ */
+export async function countOrdersAwaitingCredit(
+	ctx: AnyCtx,
+	retailerId: Id<"retailers">,
+	fundedThrough: number,
+): Promise<number> {
+	return (await waitingOrderOffsets(ctx, retailerId, fundedThrough)).length;
+}
+
+/**
+ * How far past the watermark each LIVE waiting order sits — ascending, capped
+ * like the count. `[1, 2, 3]` is the ordinary queue; `[3, 4]` means the two
+ * nearest positions are held by cancelled orders.
+ *
+ * Those gaps are why the count alone can't answer "what does this pack open?"
+ * (Credits T3.1 review, 9 Oct 2026). The watermark advances over POSITIONS —
+ * `fundingAdvance` spends one credit per position, dead or alive — while the
+ * count deliberately reports only live orders. With 4 live orders behind 2
+ * cancelled ones the picker said "that opens all 4 orders" and a 4-pack
+ * opened 2, because the first two credits went to the gaps.
+ *
+ * A cancelled order keeps its position on purpose: the watermark only moves
+ * from the oldest end, so there is no way to lift one out of the middle, and
+ * the credit it spent is genuinely gone under the "accepted orders don't
+ * refund" rule. So the queue is honest and the PICKER does the arithmetic —
+ * `liveOrdersOpenedBy` counts the offsets a pack actually reaches.
+ */
+export async function waitingOrderOffsets(
+	ctx: AnyCtx,
+	retailerId: Id<"retailers">,
+	fundedThrough: number,
+): Promise<number[]> {
+	const offsets: number[] = [];
+	for await (const order of ctx.db
+		.query("orders")
+		.withIndex("by_retailer_credit_seq", (q) =>
+			q.eq("retailerId", retailerId).gt("creditSeq", fundedThrough),
+		)) {
+		if (order.status === "cancelled") continue;
+		// The index is ordered by `creditSeq`, so these come out ascending.
+		offsets.push((order.creditSeq as number) - fundedThrough);
+		if (offsets.length >= WAITING_COUNT_CAP) break;
+	}
+	return offsets;
 }
 
 async function balanceView(
@@ -910,10 +1234,11 @@ async function balanceView(
 			q.eq("retailerId", retailerId).eq("monthStart", monthStartMyt(now)),
 		)
 		.unique();
-	const sub = await ctx.db
-		.query("subscriptions")
-		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-		.first();
+	const sub = await subscriptionRow(ctx, retailerId);
+	const waitingOffsets =
+		ordersAwaitingCredit(projected.debitSeq, projected.fundedThrough) === 0
+			? []
+			: await waitingOrderOffsets(ctx, retailerId, projected.fundedThrough);
 	return {
 		plan,
 		purchased,
@@ -929,10 +1254,13 @@ async function balanceView(
 		sellerRefundsLeft: sellerRefundsLeft(refundsUsed),
 		customGrant: account?.grantOverride !== undefined,
 		ordersThisPeriod: usage?.orders ?? 0,
-		lockExempt: creditLockExemption({
-			status: sub?.status ?? null,
-			comped: sub?.comped === true,
-		}),
+		lockExempt: creditLockExemption({ status: sub?.status ?? null }),
+		// One extra read only when the arithmetic says something COULD be
+		// waiting, which for a store in credit is never. The offsets carry the
+		// count, so this is still ONE scan — the picker needs to know where the
+		// gaps are, not just how many orders sit past them.
+		ordersWaiting: waitingOffsets.length,
+		waitingOffsets,
 	};
 }
 
@@ -962,6 +1290,70 @@ export const getBalance = query({
 		if (!retailer) return null;
 		const account = await loadCreditAccount(ctx, retailer._id);
 		return balanceView(ctx, retailer._id, account, Date.now());
+	},
+});
+
+/** Rows the pace scan will read, whatever `since` it is handed.
+ *
+ * `since` comes from the client so the query stays cacheable, which means a
+ * hand-edited call could pass 0 and ask for the store's entire ledger. A week
+ * of trading is a few hundred rows at the top of the ICP, so this bound is far
+ * above any honest window and still turns "collect everything" into a constant.
+ */
+const USAGE_PACE_SCAN_CAP = 2_000;
+
+export type CreditUsagePace = {
+	/** Net credits consumed by orders over the window. */
+	consumed: number;
+	/** `consumed / USAGE_PACE_DAYS`, unrounded — the caller decides how to say it. */
+	perDay: number;
+	windowDays: number;
+};
+
+/**
+ * How fast this store is actually burning credits, so the low-balance card can
+ * say "about 3 days of orders at this week's pace" instead of a bare number the
+ * seller has to translate themselves.
+ *
+ * Counts ORDER CONSUMPTION only — debits that carry an `orderId`, net of the
+ * refunds that carry one. Grants, top-ups, expiries and admin adjusts all move
+ * the balance but say nothing about demand, and including them would make a
+ * monthly refresh read as a week of furious trading.
+ *
+ * `since` comes from the client (a MYT midnight minus the window) rather than
+ * `Date.now()` here, so the query is stable within a day and cacheable — the
+ * same discipline the Insights range uses.
+ *
+ * Never negative: a week of nothing but cancellations is "no pace", not a
+ * forecast that the balance is growing.
+ */
+export const getUsagePace = query({
+	args: { retailerId: v.optional(v.id("retailers")), since: v.number() },
+	handler: async (
+		ctx,
+		{ retailerId, since },
+	): Promise<CreditUsagePace | null> => {
+		const retailer = await creditsStore(ctx, retailerId);
+		if (!retailer) return null;
+		const rows = await ctx.db
+			.query("creditLedger")
+			.withIndex("by_retailer_created", (q) =>
+				q.eq("retailerId", retailer._id).gte("createdAt", since),
+			)
+			.take(USAGE_PACE_SCAN_CAP);
+		let consumed = 0;
+		for (const r of rows) {
+			if (r.orderId === undefined) continue;
+			// `amount` is signed against the balance: a debit is negative, its
+			// refund positive. Negating turns the pair into "credits consumed".
+			if (r.type === "debit" || r.type === "refund") consumed -= r.amount;
+		}
+		consumed = Math.max(0, consumed);
+		return {
+			consumed,
+			perDay: consumed / USAGE_PACE_DAYS,
+			windowDays: USAGE_PACE_DAYS,
+		};
 	},
 });
 
@@ -995,7 +1387,7 @@ export const listActivity = query({
 		if (!retailer) return { page: [], isDone: true, continueCursor: "" };
 		// Unmetered: nothing moves, and whatever legacy rows the table still
 		// holds are not this store's story any more (z8r3fdp4er).
-		if (!storeIsMetered({ ownerIsAdmin: storeOwnerIsAdmin(retailer) }))
+		if (storeUnmetered(retailer, await subscriptionRow(ctx, retailer._id)))
 			return { page: [], isDone: true, continueCursor: "" };
 		const result = await ctx.db
 			.query("creditLedger")
@@ -1049,7 +1441,7 @@ export const adminGetAccount = query({
 		// store is gone, or credits don't apply to it (z8r3fdp4er).
 		const unmetered =
 			retailer !== null &&
-			!storeIsMetered({ ownerIsAdmin: storeOwnerIsAdmin(retailer) });
+			storeUnmetered(retailer, await subscriptionRow(ctx, retailerId));
 		return { view, account, lots, unmetered };
 	},
 });
@@ -1107,7 +1499,7 @@ export const adminAdjust = mutation({
 		const adminSubject = await requireAdmin(ctx);
 		const retailer = await ctx.db.get(retailerId);
 		if (!retailer) throw new ConvexError("Store not found");
-		if (!storeIsMetered({ ownerIsAdmin: storeOwnerIsAdmin(retailer) }))
+		if (storeUnmetered(retailer, await subscriptionRow(ctx, retailerId)))
 			throw new ConvexError(UNMETERED_STORE_REFUSAL);
 		if (!Number.isInteger(amount) || amount === 0)
 			throw new ConvexError(
@@ -1276,24 +1668,22 @@ export const adminSetGrantOverride = mutation({
 		const adminSubject = await requireAdmin(ctx);
 		const retailer = await ctx.db.get(retailerId);
 		if (!retailer) throw new ConvexError("Store not found");
-		if (!storeIsMetered({ ownerIsAdmin: storeOwnerIsAdmin(retailer) }))
+		const sub = await subscriptionRow(ctx, retailerId);
+		// Unmetered stores have no allowance to set — an admin's own store, and
+		// since z8r3fdrph7 a SPONSORED one. The lever used to point admins AT a
+		// comp ("comp it if it's sponsored") precisely because a comp carried a
+		// grant; now a comp carries no limit at all, so this is the refusal a
+		// comped store gets and the copy below no longer offers that route.
+		if (storeUnmetered(retailer, sub))
 			throw new ConvexError(UNMETERED_STORE_REFUSAL);
 		const problem = grant === null ? null : grantOverrideProblem(grant);
 		if (problem) throw new ConvexError(problem);
-		const sub = await ctx.db
-			.query("subscriptions")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-			.first();
-		// SETTING a recurring allowance is reserved for a comp (sponsored) or a
-		// contract (where the branch below edits the contract's own number) —
-		// a list-price plan with a custom grant is a deal nothing recorded.
-		// CLEARING always works: a stale grant must never be trapped behind
-		// the rule that retired it.
-		if (
-			grant !== null &&
-			sub?.comped !== true &&
-			!(sub?.plan === "enterprise" && sub.enterprise)
-		)
+		// SETTING a recurring allowance is reserved for a CONTRACT (where the
+		// branch below edits the contract's own number) — a list-price plan
+		// with a custom grant is a deal nothing recorded. CLEARING always
+		// works: a stale grant must never be trapped behind the rule that
+		// retired it.
+		if (grant !== null && !(sub?.plan === "enterprise" && sub.enterprise))
 			throw new ConvexError(GRANT_LEVER_CONTRACT_REFUSAL);
 		if (sub?.plan === "enterprise" && sub.enterprise) {
 			if (grant === null)
@@ -1402,19 +1792,46 @@ export const adminCreditTotals = query({
  * store's meter right on the 1st too. Batched + self-rescheduling.
  */
 export const internalRollPeriods = internalMutation({
-	args: {},
-	handler: async (ctx): Promise<{ rolled: number }> => {
+	args: {
+		/** Where the previous pass stopped. Absent = start of the sweep; the
+		 * cron always calls it that way. */
+		cursor: v.optional(v.union(v.string(), v.null())),
+	},
+	handler: async (ctx, { cursor }): Promise<{ rolled: number }> => {
 		const now = Date.now();
 		const current = usagePeriodKey(now);
-		const stale = await ctx.db
+		// PAGINATED, not `.take(SWEEP_BATCH)` + "reschedule while the batch is
+		// full". `rollPeriod` returns an UNMETERED account untouched — it never
+		// patches `periodKey`, deliberately, because the stale key is what makes
+		// the first roll after a comp ends expire and re-grant. So such an
+		// account stays inside this `< current` range FOREVER, and the range is
+		// scanned oldest-first, which puts inert rows at the head of every
+		// batch. Re-taking them was merely wasteful at a handful; at
+		// SWEEP_BATCH of them the batch is always full and always makes no
+		// progress, so the sweep reschedules itself endlessly AND never reaches
+		// the metered stores behind them — quiet sellers' monthly grants simply
+		// stop landing. The cursor steps over what it cannot advance.
+		//
+		// Safe to paginate while mutating the same index: a rolled account's
+		// `periodKey` becomes `current`, which moves it OUT of this range, and
+		// only rows at or before the cursor are ever touched.
+		//
+		// z8r3fdp4er created the inert population (admin stores, where the
+		// purge is the documented hygiene); z8r3fdrph7 enlarged it with comped
+		// stores and deliberately will NOT purge those, because their bought
+		// lots have to survive the comp. Stepping over them is the remedy that
+		// works for both.
+		const page = await ctx.db
 			.query("creditAccounts")
 			.withIndex("by_period", (q) => q.lt("periodKey", current))
-			.take(SWEEP_BATCH);
-		for (const account of stale) await rollPeriod(ctx, account, now);
-		if (stale.length === SWEEP_BATCH) {
-			await ctx.scheduler.runAfter(0, internal.credits.internalRollPeriods, {});
+			.paginate({ numItems: SWEEP_BATCH, cursor: cursor ?? null });
+		for (const account of page.page) await rollPeriod(ctx, account, now);
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(0, internal.credits.internalRollPeriods, {
+				cursor: page.continueCursor,
+			});
 		}
-		return { rolled: stale.length };
+		return { rolled: page.page.length };
 	},
 });
 

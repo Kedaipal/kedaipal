@@ -2257,3 +2257,262 @@ describe("overseas buyer numbers (z8r3fdh274) — the rider calls the store", ()
 		});
 	});
 });
+
+describe("webhook setup state (86eye9xd4, 5A)", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		vi.unstubAllEnvs();
+	});
+
+	async function seedKeyedStore(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t);
+		await t.withIdentity({ subject: USER }).mutation(api.retailers.updateSettings, {
+			deliveryBooking: {
+				enabled: false,
+				vehicleType: "MOTORCYCLE",
+				apiKey: "pk_test_abcd",
+				apiSecret: "sk_test_abcd",
+			},
+		});
+		return retailer;
+	}
+
+	const summary = async (t: ReturnType<typeof setup>) =>
+		(await t.withIdentity({ subject: USER }).query(api.retailers.getMyRetailer))
+			?.deliveryBooking;
+
+	test("one tap PATCHes our URL into the account and ticks the step", async () => {
+		vi.stubEnv("CONVEX_SITE_URL", "https://kedai.convex.site");
+		const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+		const t = setup();
+		await seedKeyedStore(t);
+		expect((await summary(t))?.webhookRegisteredAt).toBeUndefined();
+
+		const result = await t
+			.withIdentity({ subject: USER })
+			.action(api.lalamove.registerWebhook, {});
+		expect(result).toEqual({ ok: true });
+		const [url, init] = fetchMock.mock.calls[0] as unknown as [
+			string,
+			RequestInit,
+		];
+		expect(url).toBe("https://rest.sandbox.lalamove.com/v3/webhook");
+		expect(init.method).toBe("PATCH");
+		expect(JSON.parse(String(init.body))).toEqual({
+			data: { url: "https://kedai.convex.site/webhook/lalamove" },
+		});
+		expect((await summary(t))?.webhookRegisteredAt).toBeTypeOf("number");
+	});
+
+	test("a refusal leaves the step open and says to paste by hand", async () => {
+		vi.stubEnv("CONVEX_SITE_URL", "https://kedai.convex.site");
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response("nope", { status: 401 })),
+		);
+		const t = setup();
+		await seedKeyedStore(t);
+		const result = await t
+			.withIdentity({ subject: USER })
+			.action(api.lalamove.registerWebhook, {});
+		expect(result).toMatchObject({ ok: false, message: /Partner Portal/ });
+		expect((await summary(t))?.webhookRegisteredAt).toBeUndefined();
+	});
+
+	test("the first verified event proves a hand-pasted webhook", async () => {
+		const t = setup();
+		const retailer = await seedKeyedStore(t);
+		const orderId = await seedOrder(t, retailer._id);
+		const jobId = await seedJob(t, retailer._id, orderId);
+		await t.mutation(internal.lalamove.applyWebhookEvent, {
+			jobId,
+			eventType: "ORDER_STATUS_CHANGED",
+			data: statusEvent("ON_GOING", "2026-10-14T03:00:00.000Z"),
+			eventTimestamp: Date.now(),
+		});
+		expect((await summary(t))?.webhookRegisteredAt).toBeTypeOf("number");
+	});
+
+	test("the backfill ticks a store whose bookings already heard back, and only it", async () => {
+		const t = setup();
+		const retailer = await seedKeyedStore(t);
+		const orderId = await seedOrder(t, retailer._id);
+		await seedJob(t, retailer._id, orderId, { lastEventAt: 1234 });
+		const first = await t.mutation(internal.lalamove.backfillWebhookKnown, {});
+		expect(first.stamped).toBe(1);
+		expect((await summary(t))?.webhookRegisteredAt).toBe(1234);
+		const again = await t.mutation(internal.lalamove.backfillWebhookKnown, {});
+		expect(again.stamped).toBe(0);
+	});
+
+	test("the backfill leaves a store that never heard back asking", async () => {
+		const t = setup();
+		const retailer = await seedKeyedStore(t);
+		const orderId = await seedOrder(t, retailer._id);
+		await seedJob(t, retailer._id, orderId);
+		const result = await t.mutation(internal.lalamove.backfillWebhookKnown, {});
+		expect(result.stamped).toBe(0);
+		expect((await summary(t))?.webhookRegisteredAt).toBeUndefined();
+	});
+
+	test("new keys are a new account — the step asks again", async () => {
+		const t = setup();
+		const retailer = await seedKeyedStore(t);
+		await t.run((ctx) =>
+			ctx.db.get(retailer._id).then((r) =>
+				ctx.db.patch(retailer._id, {
+					deliveryBooking: {
+						...(r?.deliveryBooking as NonNullable<
+							Doc<"retailers">["deliveryBooking"]
+						>),
+						webhookRegisteredAt: 1,
+					},
+				}),
+			),
+		);
+		const asUser = t.withIdentity({ subject: USER });
+		// A rider-option save keeps it…
+		await asUser.mutation(api.retailers.updateSettings, {
+			deliveryBooking: { vehicleType: "CAR" },
+		});
+		expect((await summary(t))?.webhookRegisteredAt).toBe(1);
+		// …a typed key clears it.
+		await asUser.mutation(api.retailers.updateSettings, {
+			deliveryBooking: {
+				vehicleType: "CAR",
+				apiKey: "pk_test_wxyz",
+				apiSecret: "sk_test_wxyz",
+			},
+		});
+		expect((await summary(t))?.webhookRegisteredAt).toBeUndefined();
+	});
+});
+
+describe("addPriorityFee — tip a booking still finding a rider (86eye9xd4)", () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	async function stuckBooking(
+		t: ReturnType<typeof setup>,
+		over: Partial<Doc<"deliveryJobs">> = {},
+	) {
+		const retailer = await seedRetailer(t);
+		await t.withIdentity({ subject: USER }).mutation(api.retailers.updateSettings, {
+			deliveryBooking: {
+				// A booking already out is what's being tipped — the arm switch
+				// only governs NEW bookings.
+				enabled: false,
+				vehicleType: "MOTORCYCLE",
+				apiKey: "pk_test_tip",
+				apiSecret: "sk_test_tip",
+			},
+		});
+		const orderId = await seedOrder(t, retailer._id, { status: "packed" });
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			status: "assigning",
+			costActual: 920,
+			...over,
+		});
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		return { shortId: order?.shortId ?? "", jobId };
+	}
+
+	const tip = (t: ReturnType<typeof setup>, shortId: string, amount: number) =>
+		t
+			.withIdentity({ subject: USER })
+			.action(api.lalamove.addPriorityFee, { shortId, amount });
+
+	test("adds the fee at Lalamove and onto what the booking cost", async () => {
+		const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+		const t = setup();
+		const { shortId, jobId } = await stuckBooking(t);
+		expect(await tip(t, shortId, 500)).toEqual({ ok: true, tipped: 500 });
+		const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+		expect(url).toBe("https://rest.sandbox.lalamove.com/v3/orders/LLM-1/priority-fee");
+		expect(init.method).toBe("POST");
+		expect(JSON.parse(String(init.body))).toEqual({ data: { priorityFee: "5.00" } });
+		const job = await t.run((ctx) => ctx.db.get(jobId));
+		expect(job).toMatchObject({ priorityFee: 500, costActual: 1420 });
+	});
+
+	test("only the amounts shown, and never past the per-booking cap", async () => {
+		const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+		const t = setup();
+		const { shortId } = await stuckBooking(t, { priorityFee: 1500 });
+		expect(await tip(t, shortId, 700)).toMatchObject({ ok: false });
+		expect(await tip(t, shortId, 1000)).toMatchObject({
+			ok: false,
+			message: /limit/,
+		});
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	test("two tabs tipping at once can't both pass the cap (PR #367 review)", async () => {
+		// 1500 tipped, cap 2000: either 500 fits, both together don't. Each
+		// action's snapshot says "fits" — the reserve is what serialises them.
+		const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+		const t = setup();
+		const { shortId, jobId } = await stuckBooking(t, { priorityFee: 1500 });
+		const results = await Promise.all([
+			tip(t, shortId, 500),
+			tip(t, shortId, 500),
+		]);
+		expect(results.filter((r) => r.ok)).toHaveLength(1);
+		expect(results.find((r) => !r.ok)).toMatchObject({ message: /limit/ });
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		const job = await t.run((ctx) => ctx.db.get(jobId));
+		expect(job).toMatchObject({ priorityFee: 2000, costActual: 1420 });
+	});
+
+	test("a refused call hands its reservation back, so the seller can try again", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(new Response("bad", { status: 422 }))
+			.mockResolvedValueOnce(new Response("{}", { status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+		const t = setup();
+		const { shortId, jobId } = await stuckBooking(t, { priorityFee: 1500 });
+		expect(await tip(t, shortId, 500)).toMatchObject({ ok: false });
+		expect(await t.run((ctx) => ctx.db.get(jobId))).toMatchObject({
+			priorityFee: 1500,
+		});
+		expect(await tip(t, shortId, 500)).toEqual({ ok: true, tipped: 2000 });
+	});
+
+	test("a rider already on it needs no tip", async () => {
+		vi.stubGlobal("fetch", vi.fn());
+		const t = setup();
+		const { shortId } = await stuckBooking(t, { status: "ongoing" });
+		expect(await tip(t, shortId, 500)).toMatchObject({
+			ok: false,
+			message: /already taken/,
+		});
+	});
+
+	test("a refusal records nothing, and says why", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response("bad", { status: 422 })),
+		);
+		const t = setup();
+		const { shortId, jobId } = await stuckBooking(t);
+		expect(await tip(t, shortId, 500)).toMatchObject({ ok: false });
+		const job = await t.run((ctx) => ctx.db.get(jobId));
+		expect(job?.priorityFee).toBeUndefined();
+		expect(job?.costActual).toBe(920);
+	});
+
+	test("another store's seller can't tip it", async () => {
+		vi.stubGlobal("fetch", vi.fn());
+		const t = setup();
+		const { shortId } = await stuckBooking(t);
+		await expect(
+			t
+				.withIdentity({ subject: "user_stranger" })
+				.action(api.lalamove.addPriorityFee, { shortId, amount: 500 }),
+		).rejects.toThrow();
+	});
+});

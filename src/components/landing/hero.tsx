@@ -2,24 +2,33 @@ import { useAuth } from "@clerk/tanstack-react-start";
 import { Link } from "@tanstack/react-router";
 import { motion, useReducedMotion } from "framer-motion";
 import { ArrowRight } from "lucide-react";
-import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
-import { buildWaContactLink } from "../../lib/contact";
-import { trackSignupCta } from "../../lib/ga-events";
+import type { ReferralInvite } from "../../../convex/referrals";
 import { m } from "../../paraglide/messages";
-import { WhatsAppIcon } from "../dashboard/brand-icons";
 import { HeroStage } from "./hero-stage";
-import { ctaPillClass, Marquee } from "./landing-ui";
+import {
+	CommissionBadge,
+	ctaPillClass,
+	DemoPill,
+	GuaranteeLine,
+	Marquee,
+	StartFreeLink,
+} from "./landing-ui";
+import { ReferralInvitePill } from "./referral-invite-pill";
 
 /**
  * Hero (landing v2, z8r3fdegej): the locked 8 Sep 2026 tagline, one line,
  * one button, one text link — then the before/after stage, then the seller
- * kinds marquee. The badge, the pain stickers, the trust row and the
- * guarantee line all left this section in the design review: "the text on top is too much info, make
- * it concise so the animation takes half the viewport". The guarantee still
- * rides the pricing teaser and the closing CTA, where a visitor is deciding.
+ * kinds marquee. The pain stickers and the trust row left this section in
+ * the design review ("the text on top is too much info, make it concise so
+ * the animation takes half the viewport").
  *
- * Exactly ONE primary button on the page (86eye3p6z §C): the mint pill here.
- * "Book a demo" is a text link, a rung below.
+ * Demo-first (z8r3fdtpub T1, 19 Oct 2026): the mint pill is **Book a demo
+ * on WhatsApp** and "Start free — pay when you sell" is the text link under
+ * it — every payer to date closed on a demo or a referral, so the page sells
+ * the first order, not the account. The guarantee came back under the CTA
+ * pair (it is what a demo promises), and the flat-fee badge (14 Oct) sits
+ * above the headline. 86eye3p6z §C still holds: one KIND of accent pill on
+ * the page, and it is this one.
  */
 
 const EASE = [0.22, 1, 0.36, 1] as const;
@@ -47,13 +56,21 @@ function getMarqueeItems(): string[] {
 		.filter(Boolean);
 }
 
-const demoLinkClass =
-	"inline-flex min-h-11 items-center gap-1.5 text-sm font-semibold text-foreground underline-offset-4 transition-colors hover:text-accent-emphasis hover:underline";
-
-export function Hero() {
+/**
+ * A REFERRED visitor (z8r3fdetf5) arrives with one more fact than anyone
+ * else — who invited them and the bonus they get when they start — so for
+ * them that fact takes the badge slot above the headline instead of the
+ * flat-fee badge. One slot, never two pills stacked: the no-commission line
+ * still meets them on `/pricing`, where the price decision is made.
+ * `undefined` holds the slot while the invite resolves; `null` = the badge.
+ */
+export function Hero({
+	invite,
+}: {
+	invite: ReferralInvite | null | undefined;
+}) {
 	const { isSignedIn } = useAuth();
 	const shouldReduceMotion = useReducedMotion();
-	const supportWa = useSupportWaNumber();
 
 	return (
 		<section id="top" className="relative overflow-hidden bg-hero-mesh">
@@ -64,6 +81,16 @@ export function Hero() {
 					animate={shouldReduceMotion ? undefined : "visible"}
 					variants={staggerContainer}
 				>
+					<motion.div
+						variants={revealUp}
+						className="flex max-w-full justify-center"
+					>
+						{invite !== null ? (
+							<ReferralInvitePill invite={invite} />
+						) : (
+							<CommissionBadge />
+						)}
+					</motion.div>
 					{/* The tagline is two sentences; the design sets the first on its own
 					    line and the highlighted second across two. A hard break, not a
 					    width trick, so the split survives every locale's line lengths. */}
@@ -99,24 +126,9 @@ export function Hero() {
 							</Link>
 						) : (
 							<>
-								<Link
-									to="/sign-up/$"
-									params={{ _splat: "" }}
-									className={`${ctaPillClass("accent")} w-full sm:w-fit`}
-									onClick={() => trackSignupCta("hero")}
-								>
-									{m.final_cta()}
-									<ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
-								</Link>
-								<a
-									href={buildWaContactLink(m.demo_wa_message(), supportWa)}
-									target="_blank"
-									rel="noopener noreferrer"
-									className={demoLinkClass}
-								>
-									<WhatsAppIcon className="size-4 text-[#25D366]" />
-									{m.book_demo_cta()}
-								</a>
+								<DemoPill placement="hero" long className="w-full sm:w-fit" />
+								<StartFreeLink placement="hero" />
+								<GuaranteeLine className="mt-1 max-w-md text-left text-[13px] leading-relaxed text-muted-foreground" />
 							</>
 						)}
 					</motion.div>

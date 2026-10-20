@@ -23,6 +23,8 @@ const AREA_BY_PREFIX: ReadonlyArray<{
 	level?: "read" | "write";
 }> = [
 	{ prefix: "/app/orders", area: "orders" },
+	// Deliveries lists orders' bookings and parcels — the Orders area's data.
+	{ prefix: "/app/deliveries", area: "orders" },
 	// The counter TAKES an order — there is nothing here for a view-only
 	// teammate to do, every button on it is a write the server refuses, and
 	// the nav already hides it at read (bottom-nav asks for write). Guarding

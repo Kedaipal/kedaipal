@@ -146,6 +146,26 @@ describe("renderSystemMessage", () => {
 		expect(out).toContain("https://kedaipal.test/track/tok");
 	});
 
+	test("counterOrderCompletedPaid says the sale is done, in every locale", () => {
+		const vars = {
+			shortId: "ORD-AB23",
+			storeName: "Acme",
+			amount: "MYR 25.00",
+			trackingUrl: "https://kedaipal.test/track/tok",
+		};
+		const en = renderSystemMessage("en", "counterOrderCompletedPaid", vars);
+		expect(en).toContain("complete and paid");
+		expect(en).not.toContain("confirmed");
+		expect(en).toContain("MYR 25.00");
+		expect(en).toContain("https://kedaipal.test/track/tok");
+		const ms = renderSystemMessage("ms", "counterOrderCompletedPaid", vars);
+		expect(ms).toContain("selesai dan dibayar");
+		expect(ms).toContain("https://kedaipal.test/track/tok");
+		const zh = renderSystemMessage("zh", "counterOrderCompletedPaid", vars);
+		expect(zh).toContain("已完成并付款");
+		expect(zh).toContain("https://kedaipal.test/track/tok");
+	});
+
 	test("counterOrderConfirmedUnpaid frames the total as still-to-pay (no rush)", () => {
 		const out = renderSystemMessage("ms", "counterOrderConfirmedUnpaid", {
 			shortId: "ORD-AB23",

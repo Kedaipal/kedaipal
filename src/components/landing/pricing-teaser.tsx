@@ -2,9 +2,12 @@ import { useAuth } from "@clerk/tanstack-react-start";
 import { Link } from "@tanstack/react-router";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ArrowRight, Check, Sparkles } from "lucide-react";
+import { useState } from "react";
 import {
+	annualQuote,
 	BILLING_CURRENCY_FOR_COUNTRY,
 	type BillingCurrency,
+	type BillingCycle,
 	COMPETITOR_MONTHLY_RANGE,
 	INVOICE_DUE_GRACE_DAYS,
 	isPlanSelectable,
@@ -29,7 +32,9 @@ import { m } from "../../paraglide/messages";
 import { Button } from "../ui/button";
 import { FadeIn } from "./fade-in";
 import {
+	BillingCycleToggle,
 	CenterSnapCarousel,
+	CommissionBadge,
 	centerSnapSlideClass,
 	GuaranteeLine,
 	RegionToggle,
@@ -63,7 +68,9 @@ interface TeaserTier {
 	comingSoon: boolean;
 }
 
-/** "You + 2 teammates" — from the seat cap the server enforces (86exr91r4). */
+/** "You + 2 teammates — each sees only what you allow" — from the seat cap
+ * the server enforces (86exr91r4); the clause after the dash is the per-area
+ * grants, said where the seats are bought. */
 function teamLine(plan: Plan): string {
 	const cap = PLAN_CAPS[plan].userCap;
 	if (isUnlimited(cap)) return m.pricing_feat_team_unlimited();
@@ -104,12 +111,16 @@ function getTiers(): TeaserTier[] {
 			tagline: m.pricing_tier_pro_tagline(),
 			// Online payments + Lalamove lead here now that both are shipped — they
 			// are the two Pro capabilities a seller can picture immediately.
-			// Courier-quoted delivery rides the Pro `delivery` gate, so it is
-			// listed here, where it is bought.
+			// Promotions, flash sales and voucher codes are Pro-gated
+			// (`convex/vouchers.ts`, `docs/promo-price.md`) and are the page's one
+			// sell-MORE line, so they sit right under payments (15 Oct 2026 canvas,
+			// artboard 5). Courier-quoted delivery rides the Pro `delivery` gate,
+			// so it is listed here, where it is bought.
 			features: [
 				creditsLine("pro"),
 				{ label: m.pricing_feat_everything_starter() },
 				{ label: m.pricing_feat_online_payments() },
+				{ label: m.pricing_feat_promotions() },
 				{ label: m.pricing_feat_crm() },
 				{ label: m.pricing_feat_lalamove() },
 				{ label: m.pricing_feat_courier() },
@@ -122,7 +133,10 @@ function getTiers(): TeaserTier[] {
 		{
 			// Contact us, no public price (Credits T6, z8r3fdkp8h). What an
 			// Enterprise buyer gets TODAY is credits sized to their volume and
-			// the team; outlets and broadcasts aren't built, so they wear "Soon".
+			// the team. Several pickup points sharing one stock count already
+			// ships (the proof rail's multi-outlet card says so), so the "Soon"
+			// row names what is NOT built — per-outlet stock and reporting — and
+			// broadcasts wear "Soon" too.
 			id: "enterprise",
 			name: "Enterprise",
 			tagline: m.pricing_tier_enterprise_tagline({
@@ -154,6 +168,14 @@ export function PricingTeaser() {
 	// than the set Kedaipal invoices subscriptions in.
 	const currency: BillingCurrency = BILLING_CURRENCY_FOR_COUNTRY[region];
 	const symbol = CURRENCY_SYMBOL[currency];
+	// Monthly / annual, the same maths `/pricing` quotes from (`annualQuote`):
+	// the annual number is the effective monthly, with the year's total under
+	// it, so the two surfaces can never show two annuals.
+	const [cycle, setCycle] = useState<BillingCycle>("monthly");
+	const monthlyPrice = (id: ListedPlan) =>
+		cycle === "annual"
+			? Math.floor(annualQuote(id, false, currency).effectiveMonthly / 100)
+			: PLAN_MONTHLY_PRICES[currency][id] / 100;
 
 	return (
 		<section
@@ -163,7 +185,12 @@ export function PricingTeaser() {
 		>
 			<div className="mx-auto max-w-6xl px-5 py-24 md:px-8 md:py-32">
 				<FadeIn>
-					<div className="text-center">
+					{/* The region switch is a page-level setting, so it sits where the
+					    walkthrough one screen up put it: top-right of the section header
+					    from md. On a phone it stacks above the cycle toggle instead —
+					    two pills side by side at 390 read as one broken control
+					    (Arif, 19 Oct 2026). */}
+					<div className="relative text-center">
 						<Sticker tone="outline" rotate={-1.5}>
 							<Sparkles className="size-3" />
 							{m.pricing_badge()}
@@ -186,6 +213,10 @@ export function PricingTeaser() {
 						<p className="mx-auto mt-3 max-w-lg text-sm font-medium text-foreground/80">
 							{m.pricing_sub_credits()}
 						</p>
+						{/* The flat-fee badge (14 Oct 2026), beside the price it qualifies. */}
+						<div className="mt-4 flex justify-center">
+							<CommissionBadge />
+						</div>
 						<div className="mx-auto mt-5 max-w-xl rounded-2xl border-l-4 border-accent/40 bg-accent/5 px-5 py-3 text-left text-sm text-muted-foreground">
 							{m.pricing_anchor({
 								competitor: `${symbol} ${COMPETITOR_MONTHLY_RANGE[currency].min / 100}–${COMPETITOR_MONTHLY_RANGE[currency].max / 100}`,
@@ -193,8 +224,15 @@ export function PricingTeaser() {
 								perDay: `${symbol} ${starterPricePerDay(currency)}`,
 							})}
 						</div>
-						<div className="mt-6 flex justify-center">
-							<RegionToggle region={region} onChange={setRegion} />
+						<div className="mt-6 flex flex-col items-center gap-5">
+							{/* One element, two homes: in the stack on a phone, lifted to the
+							    header's top-right corner from md (the header is `relative`). */}
+							<RegionToggle
+								region={region}
+								onChange={setRegion}
+								className="md:absolute md:right-0 md:top-0"
+							/>
+							<BillingCycleToggle cycle={cycle} onChange={setCycle} />
 						</div>
 					</div>
 				</FadeIn>
@@ -266,7 +304,7 @@ export function PricingTeaser() {
 											<span className="overflow-hidden text-4xl font-bold tracking-tight">
 												<AnimatePresence mode="popLayout" initial={false}>
 													<motion.span
-														key={currency}
+														key={`${currency}-${cycle}`}
 														initial={
 															shouldReduceMotion ? false : { y: 14, opacity: 0 }
 														}
@@ -279,8 +317,7 @@ export function PricingTeaser() {
 														transition={{ duration: 0.22, ease: "easeOut" }}
 														className="inline-block"
 													>
-														{symbol}{" "}
-														{PLAN_MONTHLY_PRICES[currency][tier.id] / 100}
+														{symbol} {monthlyPrice(tier.id)}
 													</motion.span>
 												</AnimatePresence>
 											</span>
@@ -296,6 +333,18 @@ export function PricingTeaser() {
 											</span>
 										</div>
 									)}
+									{cycle === "annual" && tier.id !== "enterprise" ? (
+										<p
+											className={cn(
+												"mt-1 text-xs",
+												tier.popular ? "text-accent" : "text-accent-emphasis",
+											)}
+										>
+											{m.pricingpage_billed_annual({
+												total: `${symbol}${annualQuote(tier.id, false, currency).annualTotal / 100}`,
+											})}
+										</p>
+									) : null}
 									<p
 										className={cn(
 											"mt-1 text-xs",
@@ -365,15 +414,20 @@ export function PricingTeaser() {
 												{m.pricing_coming_soon()}
 											</div>
 										) : (
+											// Outline on every card (demo-first, z8r3fdtpub T1): the
+											// page's one accent pill is "Book a demo"; self-serve is a
+											// door, not the ask. Pro keeps its weight through the navy
+											// card, not through a mint button.
 											<Button
 												asChild
 												size="lg"
 												className={cn(
 													"h-11 w-full rounded-full",
-													!tier.popular &&
-														"border-border bg-background text-foreground hover:bg-muted",
+													tier.popular
+														? "border-primary-foreground/30 bg-transparent text-primary-foreground hover:bg-primary-foreground/10"
+														: "border-border bg-background text-foreground hover:bg-muted",
 												)}
-												variant={tier.popular ? "default" : "outline"}
+												variant="outline"
 											>
 												{isSignedIn ? (
 													<Link to="/app">

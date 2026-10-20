@@ -99,7 +99,7 @@ export function ProductDetailSheet({
 
 					<div className="flex-1 overflow-y-auto px-5 py-4 sm:px-6">
 						{pp.images.length > 0 ? (
-							<div className="-mx-5 mb-4 flex snap-x snap-mandatory gap-2 overflow-x-auto px-5 sm:mx-0 sm:grid sm:grid-cols-2 sm:gap-3 sm:overflow-visible sm:px-0">
+							<div className="-mx-5 mb-4 flex snap-x snap-mandatory gap-2 overflow-x-auto scrollbar-none px-5 sm:mx-0 sm:grid sm:grid-cols-2 sm:gap-3 sm:overflow-visible sm:px-0">
 								{pp.images.map((url) => (
 									<ZoomableImage
 										key={url}

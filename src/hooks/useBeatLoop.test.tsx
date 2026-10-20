@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useBeatLoop } from "./useBeatLoop";
+import { useBeatLoop, useTimeline } from "./useBeatLoop";
 
 const BEATS = [100, 200, 300] as const;
 
@@ -44,5 +44,23 @@ describe("useBeatLoop", () => {
 		visibility = "visible";
 		act(() => vi.advanceTimersByTime(1000));
 		expect(result.current).toBe(1);
+	});
+
+	it("useTimeline: goTo jumps and re-arms the hold of the new beat", () => {
+		const { result } = renderHook(() => useTimeline(true, BEATS));
+		act(() => result.current.goTo(2));
+		expect(result.current.beat).toBe(2);
+		act(() => vi.advanceTimersByTime(299));
+		expect(result.current.beat).toBe(2);
+		act(() => vi.advanceTimersByTime(1));
+		expect(result.current.beat).toBe(0);
+	});
+
+	it("useTimeline: goTo clamps to the timeline", () => {
+		const { result } = renderHook(() => useTimeline(false, BEATS));
+		act(() => result.current.goTo(99));
+		expect(result.current.beat).toBe(2);
+		act(() => result.current.goTo(-1));
+		expect(result.current.beat).toBe(0);
 	});
 });

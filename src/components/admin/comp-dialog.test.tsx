@@ -36,6 +36,7 @@ afterEach(cleanup);
 function seller(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 	return {
 		_id: "r_comp" as AdminSellerRow["_id"],
+		availability: { state: "open" },
 		storeName: "Mak Kuih",
 		slug: "mak-kuih",
 		ownerUserId: "u_owner",
@@ -48,6 +49,7 @@ function seller(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 		comped: false,
 		createdAt: 0,
 		unclaimed: false,
+		referralEditable: true,
 		purging: false,
 		marketplace: { internal: false },
 		country: "MY",

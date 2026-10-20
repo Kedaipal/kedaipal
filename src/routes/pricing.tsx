@@ -30,21 +30,25 @@ import { MAX_VARIANTS_PER_PRODUCT } from "../../convex/lib/variant";
 import { FadeIn } from "../components/landing/fade-in";
 import { Footer } from "../components/landing/footer";
 import {
+	BillingCycleToggle,
 	CenterSnapCarousel,
+	CommissionBadge,
 	centerSnapSlideClass,
-	ctaPillClass,
+	DemoPill,
 	Eyebrow,
 	GuaranteeLine,
 	RegionToggle,
+	StartFreeLink,
 	Sticker,
 } from "../components/landing/landing-ui";
 import { MoneyMathRow } from "../components/landing/money-math";
 import { Nav } from "../components/landing/nav";
+import { ReferralInvitePill } from "../components/landing/referral-invite-pill";
 import { Button } from "../components/ui/button";
 import { useLandingRegion } from "../hooks/useLandingRegion";
 import { useMarketingLanding } from "../hooks/useMarketingLanding";
+import { useReferralInvite } from "../hooks/useReferralInvite";
 import { useSupportWaNumber } from "../hooks/useSupportWaNumber";
-import { buildWaContactLink } from "../lib/contact";
 import {
 	enterpriseFromOrdersLabel,
 	enterpriseTalkUrl,
@@ -398,6 +402,15 @@ function useFeatures(): Feature[] {
 			enterprise: true,
 		},
 		{
+			// Shipped (z8r3fdcw72) — PLAN_FEATURES.promo. A sale price with an
+			// end date, and the flash layer (unit cap, max per order, payment
+			// hold) on top of it.
+			label: m.pricingpage_feat_promo(),
+			starter: false,
+			pro: true,
+			enterprise: true,
+		},
+		{
 			// Shipped (86extzdr8) — PLAN_FEATURES.radiusDelivery.
 			label: m.pricingpage_feat_radius(),
 			starter: false,
@@ -420,9 +433,11 @@ function useFeatures(): Feature[] {
 			enterprise: true,
 		},
 		{
-			// Shipped (86eyhw9zy) — PLAN_FEATURES.waOrderAlerts.
+			// Shipped (86eyhw9zy). Every plan since z8r3fdv55f — the alert is the
+			// "never lose an order" promise, so it rides the subscription, not a
+			// tier: no PLAN_FEATURES entry.
 			label: m.pricingpage_feat_wa_alerts(),
-			starter: false,
+			starter: true,
 			pro: true,
 			enterprise: true,
 		},
@@ -752,15 +767,18 @@ function TierCard({
 							: m.pricingpage_current_plan()}
 					</div>
 				) : (
+					// Outline on every card (demo-first, z8r3fdtpub T1): the page's one
+					// mint pill is the demo; a tier's door is a door, not the ask.
 					<Button
 						asChild
 						size="lg"
 						className={cn(
 							"h-11 w-full rounded-full",
-							!tier.popular &&
-								"border-border bg-background text-foreground hover:bg-muted",
+							tier.popular
+								? "border-primary-foreground/30 bg-transparent text-primary-foreground hover:bg-primary-foreground/10"
+								: "border-border bg-background text-foreground hover:bg-muted",
 						)}
-						variant={tier.popular ? "default" : "outline"}
+						variant="outline"
 					>
 						{cta === "trial" ? (
 							<Link
@@ -814,6 +832,7 @@ function PricingPage() {
 	useEffect(() => {
 		trackEvent("view_pricing");
 	}, []);
+	const invite = useReferralInvite();
 	const [cycle, setCycle] = useState<Cycle>("monthly");
 	const { isLoaded, isSignedIn } = useAuth();
 	// Only signed-in sellers need their plan; skip the query for visitors. A
@@ -846,12 +865,23 @@ function PricingPage() {
 
 			{/* Hero */}
 			<section className="bg-hero-mesh">
-				<div className="mx-auto max-w-4xl px-5 pb-16 pt-28 text-center md:px-8 md:pb-24 md:pt-40">
+				<div className="relative mx-auto max-w-4xl px-5 pb-16 pt-28 text-center md:px-8 md:pb-24 md:pt-40">
 					<FadeIn>
-						<Sticker tone="outline" rotate={-1.5}>
-							<Sparkles className="size-3" />
-							{m.pricing_badge()}
-						</Sticker>
+						{/* A referred visitor (z8r3fdetf5) sees their invite where the
+						    badge sits — the price they're reading is the one their
+						    bonus credits ride on. Everyone else keeps the badge. The
+						    flat-fee line below stays for both. */}
+						{invite !== null ? (
+							<ReferralInvitePill invite={invite} />
+						) : (
+							<Sticker tone="outline" rotate={-1.5}>
+								<Sparkles className="size-3" />
+								{m.pricing_badge()}
+							</Sticker>
+						)}
+						<div className="mt-4 flex justify-center">
+							<CommissionBadge />
+						</div>
 						<h1
 							className="mt-5 text-4xl font-bold tracking-tight md:text-6xl"
 							style={{ letterSpacing: "-0.03em" }}
@@ -867,8 +897,15 @@ function PricingPage() {
 								orders: TRIAL_CREDIT_GRANT,
 							})}
 						</p>
-						<div className="mt-7 flex justify-center">
-							<RegionToggle region={region} onChange={setRegion} />
+						{/* Same placement as the landing teaser: one element, stacked above
+						    the cycle toggle on a phone, lifted to the hero's top-right corner
+						    from md (the hero block is `relative`). */}
+						<div className="mt-7 flex justify-center md:mt-0">
+							<RegionToggle
+								region={region}
+								onChange={setRegion}
+								className="md:absolute md:right-8 md:top-40"
+							/>
 						</div>
 					</FadeIn>
 
@@ -876,45 +913,11 @@ function PricingPage() {
 					    SHOW_ANNUAL_TOGGLE. */}
 					{SHOW_ANNUAL_TOGGLE && (
 						<FadeIn delay={0.1}>
-							<div className="mt-8 inline-flex items-center rounded-full border border-border bg-card p-1.5 shadow-sm">
-								<button
-									type="button"
-									onClick={() => setCycle("monthly")}
-									className={cn(
-										"rounded-full px-5 py-2 text-sm font-semibold transition-colors",
-										cycle === "monthly"
-											? "bg-primary text-primary-foreground"
-											: "text-muted-foreground hover:text-foreground",
-									)}
-								>
-									{m.pricingpage_toggle_monthly()}
-								</button>
-								<button
-									type="button"
-									onClick={() => setCycle("annual")}
-									className={cn(
-										"relative rounded-full px-5 py-2 text-sm font-semibold transition-colors",
-										cycle === "annual"
-											? "bg-primary text-primary-foreground"
-											: "text-muted-foreground hover:text-foreground",
-									)}
-								>
-									{m.pricingpage_toggle_annual()}
-									{/* Never a percentage — the saving is "2 months free"
-									    (Arif, 28 Jul + 9 Aug 2026). A standing % badge reads
-									    as a markdown on a flat price. */}
-									<span className="absolute -right-2 -top-2.5 whitespace-nowrap rounded-full bg-accent px-2 py-0.5 text-[9px] font-bold uppercase leading-none text-accent-foreground">
-										{m.pricingpage_annual_badge()}
-									</span>
-								</button>
-							</div>
-							{/* The annual credits rule, said under the toggle in BOTH
-							    positions (so flipping it moves nothing): credits stay
-							    monthly on annual — never twelve months upfront — and
-							    the grant is locked for the prepaid year. */}
-							<p className="mx-auto mt-3 max-w-sm text-xs leading-relaxed text-muted-foreground">
-								{m.pricingpage_annual_credits_note()}
-							</p>
+							<BillingCycleToggle
+								cycle={cycle}
+								onChange={setCycle}
+								className="mt-6 md:mt-8"
+							/>
 						</FadeIn>
 					)}
 				</div>
@@ -962,11 +965,11 @@ function PricingPage() {
 			</section>
 
 			{/* Social-proof band — replaced the Founding 10 banner (86eye4wtb: the
-			    program filled; the landing now leads with the 10+ paying base and
-			    this page tells the same story). The demo link keeps the banner's
-			    mid-page conversation moment: a text link, not a pill — the tier
-			    cards and the closing CTA already carry this page's buttons
-			    (86eye3p6z §C). */}
+			    program filled). The hand-typed "10+" count came off with the
+			    landing's (15 Oct 2026); the band now leads with the proof heading
+			    the landing uses. The demo link keeps the banner's mid-page
+			    conversation moment: a text link, not a pill — the tier cards and
+			    the closing CTA already carry this page's buttons (86eye3p6z §C). */}
 			<section>
 				<div className="mx-auto max-w-4xl px-5 py-14 md:px-8">
 					<FadeIn>
@@ -975,30 +978,25 @@ function PricingPage() {
 								aria-hidden
 								className="pointer-events-none absolute -right-16 -top-16 size-[220px] rounded-full border border-white/[0.06]"
 							/>
-							<div className="flex size-16 shrink-0 items-center justify-center rounded-2xl bg-accent/15 font-heading text-2xl font-extrabold text-accent">
-								{m.proof_customer_count_number()}
+							<div className="flex size-16 shrink-0 items-center justify-center rounded-2xl bg-accent/15 text-accent">
+								<Sparkles aria-hidden className="size-7" />
 							</div>
 							<div className="relative flex-1">
 								<p className="text-xs font-semibold uppercase tracking-widest text-accent">
 									{m.proof_label()}
 								</p>
 								<h2 className="mt-1 text-xl font-bold md:text-2xl">
-									{m.proof_customer_count_label()}
+									{m.proof_heading()}
 								</h2>
 								<p className="mt-2 text-sm leading-relaxed text-cta-mesh-foreground/65">
 									{m.proof_sub()}
 								</p>
 							</div>
 							<div className="relative shrink-0">
-								<a
-									href={buildWaContactLink(m.demo_wa_message(), supportWa)}
-									target="_blank"
-									rel="noopener noreferrer"
-									className="group inline-flex min-h-11 items-center gap-1.5 text-[15px] font-semibold text-accent underline-offset-4 hover:underline"
-								>
-									{m.book_demo_cta()}{" "}
-									<ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
-								</a>
+								<DemoPill
+									placement="pricing"
+									className="min-h-11 px-5 text-sm"
+								/>
 							</div>
 						</div>
 					</FadeIn>
@@ -1163,19 +1161,14 @@ function PricingPage() {
 							})}
 						</p>
 						<div className="mt-8 flex flex-col items-center gap-3.5">
-							<Link
-								to="/sign-up/$"
-								params={{ _splat: "" }}
-								className={ctaPillClass("accent")}
-								onClick={() => trackSignupCta("pricing-bottom")}
-							>
-								{m.pricingpage_cta_trial_btn()}{" "}
-								<ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
-							</Link>
+							{/* Demo-first here too (z8r3fdtpub T1): the pill is the demo,
+							    the trial a text link under it. */}
+							<DemoPill placement="pricing-bottom" long />
+							<StartFreeLink placement="pricing-bottom" />
 							<GuaranteeLine className="max-w-md text-[13px] leading-relaxed text-muted-foreground" />
 							<Link
 								to="/"
-								hash="how"
+								hash="flow"
 								className="inline-flex min-h-11 items-center text-sm font-medium text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline"
 							>
 								{m.pricingpage_cta_how()}
