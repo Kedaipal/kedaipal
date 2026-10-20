@@ -33,7 +33,6 @@ import { hasFeature } from "../../lib/subscription";
 import { cn } from "../../lib/utils";
 import { ProBadge } from "../app/pro-gate";
 import { AppImage } from "../ui/app-image";
-import { ThemeToggle } from "../ui/theme-toggle";
 import { AppVersionRow } from "./app-version-row";
 import { TierPill } from "./tier-pill";
 import { WhatsNewNavItem } from "./whats-new";
@@ -398,31 +397,6 @@ export function Sidebar({
 						strokeWidth={2.5}
 					/>
 				</button>
-				{/* Quick theme flip, the same control the storefront footer and the
-				    mobile header carry. The word fades with the rail like the user's
-				    name below; both words are in the DOM and CSS picks one, so SSR's
-				    light-first pass never prints the wrong verb for a frame. The
-				    three-way picker (match device) stays in Settings → App → Appearance. */}
-				<div
-					className={cn(
-						"flex items-center gap-2 rounded-lg py-1 pr-2",
-						collapsed ? "pl-3" : "pl-2",
-						motion,
-					)}
-				>
-					<ThemeToggle variant="ghost" />
-					<span
-						aria-hidden={collapsed || undefined}
-						className={cn(
-							"overflow-hidden whitespace-nowrap text-xs font-medium text-muted-foreground",
-							collapsed ? "max-w-0 opacity-0" : "max-w-44 opacity-100",
-							motion,
-						)}
-					>
-						<span className="dark:hidden">Dark mode</span>
-						<span className="hidden dark:inline">Light mode</span>
-					</span>
-				</div>
 				<div
 					className={cn(
 						"flex items-center gap-2 rounded-lg py-2 pr-2",
@@ -461,7 +435,10 @@ export function Sidebar({
 				    the rest of the rail instead of snapping at the end. Whichever
 				    form is hidden is `inert` — never a second, invisible button. */}
 				<div className="flex items-center justify-between px-2 py-0.5">
-					<div className="grid">
+					{/* `items-center`: both forms share one cell and the icon form is the
+					    taller, so without it the text form sat at the cell's top edge
+					    while the version pill sat on the row's centre line. */}
+					<div className="grid items-center">
 						<div
 							inert={collapsed}
 							className={cn(

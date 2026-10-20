@@ -82,7 +82,7 @@ const OPTIONS: ReadonlyArray<Option> = [
 	{
 		id: "system",
 		label: "Match device",
-		description: "Follows your phone's light/dark setting",
+		description: "Follows your device's light/dark setting",
 		icon: <Monitor className="size-4" aria-hidden="true" />,
 		preview: <Preview tone="split" />,
 	},
