@@ -32,7 +32,8 @@ import {
 	normalizePriceInput,
 	sanitizeIntInput,
 } from "../../lib/format";
-import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
+import { IMAGE_ACCEPT } from "../../lib/image-upload";
+import { uploadImage as uploadToStorage } from "../../lib/storage-upload";
 import { cn } from "../../lib/utils";
 import {
 	cartesian,
@@ -1006,28 +1007,16 @@ export function VariantEditor({
 		const file = files[0];
 		setUploadingRow(index);
 		try {
-			const prepared = await prepareImageUpload(file);
-			if (!prepared.ok) {
-				toast.error(prepared.message);
+			const result = await uploadToStorage(file, () => generateUploadUrl());
+			if (!result.ok) {
+				toast.error(result.message);
 				return;
 			}
-			const url = await generateUploadUrl();
-			const res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": prepared.contentType },
-				body: prepared.blob,
-			});
-			if (!res.ok) throw new Error("Upload failed");
-			// Validate the response shape before trusting it — an error body would
-			// otherwise store `undefined` as a storage id and surface server-side.
-			const body = (await res.json()) as { storageId?: unknown };
-			if (typeof body.storageId !== "string")
-				throw new Error("Upload failed: unexpected response");
 			revokeRowBlob(index); // drop the previous preview before replacing
-			const previewUrl = URL.createObjectURL(prepared.blob);
+			const previewUrl = URL.createObjectURL(result.blob);
 			blobUrls.current.add(previewUrl);
 			setRow(index, {
-				imageStorageIds: [body.storageId],
+				imageStorageIds: [result.storageId],
 				imageUrl: previewUrl,
 			});
 		} catch (err) {
@@ -1904,29 +1893,19 @@ export function CustomLineFields({
 		const file = files[0];
 		setUploading(true);
 		try {
-			const prepared = await prepareImageUpload(file);
-			if (!prepared.ok) {
-				toast.error(prepared.message);
+			const result = await uploadToStorage(file, () => generateUploadUrl());
+			if (!result.ok) {
+				toast.error(result.message);
 				return;
 			}
-			const url = await generateUploadUrl();
-			const res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": prepared.contentType },
-				body: prepared.blob,
-			});
-			if (!res.ok) throw new Error("Upload failed");
-			const body = (await res.json()) as { storageId?: unknown };
-			if (typeof body.storageId !== "string")
-				throw new Error("Upload failed: unexpected response");
 			const prev = lineRef.current.imageUrl;
 			if (prev?.startsWith("blob:")) {
 				URL.revokeObjectURL(prev);
 				blobUrls.current.delete(prev);
 			}
-			const previewUrl = URL.createObjectURL(prepared.blob);
+			const previewUrl = URL.createObjectURL(result.blob);
 			blobUrls.current.add(previewUrl);
-			patch({ imageStorageIds: [body.storageId], imageUrl: previewUrl });
+			patch({ imageStorageIds: [result.storageId], imageUrl: previewUrl });
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
